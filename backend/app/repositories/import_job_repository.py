@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 import json
 from typing import Dict, Any, Optional
-from backend.app.database import connect, rows
+from ..database import connect, rows
 
 class ImportJobRepository:
     def create_job(self, job_data: Dict[str, Any]) -> None:

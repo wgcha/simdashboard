@@ -3,17 +3,17 @@ import uuid
 import hashlib
 from typing import Dict, Any, List
 
-from backend.app.schemas.result_import import Manifest, ResultType
-from backend.app.parsers.manifest_parser import ManifestParser
-from backend.app.parsers.open_cell_parser import OpenCellParser
-from backend.app.parsers.chassis_rear_parser import ChassisRearParser
-from backend.app.parsers.generic_time_history_parser import GenericTimeHistoryParser
-from backend.app.parsers.scalar_result_parser import ScalarResultParser
-from backend.app.repositories.analysis_repository import AnalysisRepository
-from backend.app.repositories.result_repository import ResultRepository
-from backend.app.repositories.import_job_repository import ImportJobRepository
-from backend.app.services.result_validation_service import ResultValidationService
-from backend.app.services.verdict_service import VerdictService
+from ..schemas.result_import import Manifest, ResultType
+from ..parsers.manifest_parser import ManifestParser
+from ..parsers.open_cell_parser import OpenCellParser
+from ..parsers.chassis_rear_parser import ChassisRearParser
+from ..parsers.generic_time_history_parser import GenericTimeHistoryParser
+from ..parsers.scalar_result_parser import ScalarResultParser
+from ..repositories.analysis_repository import AnalysisRepository
+from ..repositories.result_repository import ResultRepository
+from ..repositories.import_job_repository import ImportJobRepository
+from ..services.result_validation_service import ResultValidationService
+from ..services.verdict_service import VerdictService
 
 class ResultImportService:
     def __init__(self, root_dir: str):

@@ -519,10 +519,9 @@ def preview_dashboard_command(payload: NaturalLanguageCommand) -> dict[str, Any]
     return {"recognized": True, "message": message, "proposal": {"action": "add_widget", "widget": widget}}
 
 
-from backend.app.schemas.result_import import ImportRequest
-from backend.app.schemas.result_response import ImportJobResponse
-from backend.app.services.result_import_service import ResultImportService
-from backend.app.database import connect, rows
+from .schemas.result_import import ImportRequest
+from .schemas.result_response import ImportJobResponse
+from .services.result_import_service import ResultImportService
 from pathlib import Path
 import os
 

@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from backend.app.schemas.result_import import Manifest
+from ..schemas.result_import import Manifest
 
 class ManifestParser:
     def __init__(self, root_dir: str):
