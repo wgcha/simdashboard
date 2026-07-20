@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="650" viewBox="0 0 1200 650">
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1"><stop stop-color="#08121f"/><stop offset="1" stop-color="#13263b"/></linearGradient>
+    <radialGradient id="stress"><stop offset="0" stop-color="#ff2b5c"/><stop offset=".3" stop-color="#ffbd45"/><stop offset=".58" stop-color="#43d9a3"/><stop offset=".82" stop-color="#2e7cf6"/><stop offset="1" stop-color="#152449"/></radialGradient>
+    <linearGradient id="legend" x1="0" y1="1" x2="0" y2="0"><stop stop-color="#152449"/><stop offset=".25" stop-color="#2e7cf6"/><stop offset=".5" stop-color="#43d9a3"/><stop offset=".72" stop-color="#ffbd45"/><stop offset="1" stop-color="#ff2b5c"/></linearGradient>
+  </defs>
+  <rect width="1200" height="650" fill="url(#bg)"/>
+  <text x="55" y="62" fill="#dcecff" font-family="Arial" font-size="24">Open Cell Maximum Principal Stress · Sample Contour</text>
+  <g transform="translate(120 125)">
+    <rect x="0" y="0" width="830" height="390" rx="16" fill="#162942" stroke="#5d789a" stroke-width="4"/>
+    <rect x="40" y="35" width="750" height="320" rx="8" fill="url(#stress)" opacity=".95"/>
+    <rect x="55" y="50" width="720" height="290" rx="6" fill="none" stroke="#d8efff" stroke-opacity=".7" stroke-width="3"/>
+    <circle cx="425" cy="195" r="52" fill="#ff315e" opacity=".55"/>
+    <path d="M60 320 Q250 250 425 305 T770 290" fill="none" stroke="#dffaff" stroke-opacity=".55" stroke-width="2"/>
+    <text x="18" y="382" fill="#ff8398" font-family="Arial" font-size="17">Peak 82.4 MPa · Bottom edge</text>
+  </g>
+  <g transform="translate(1010 145)">
+    <rect width="34" height="340" rx="8" fill="url(#legend)"/>
+    <g fill="#cde0f5" font-family="Arial" font-size="16">
+      <text x="48" y="14">85</text><text x="48" y="94">65</text><text x="48" y="178">45</text><text x="48" y="262">25</text><text x="48" y="340">0 MPa</text>
+    </g>
+  </g>
+</svg>
