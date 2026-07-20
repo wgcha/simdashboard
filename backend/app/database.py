@@ -95,6 +95,28 @@ def initialize_database() -> None:
                 executed_at TIMESTAMP NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS result_import_jobs (
+                id VARCHAR PRIMARY KEY,
+                analysis_run_id VARCHAR,
+                project_id VARCHAR NOT NULL,
+                request_id VARCHAR NOT NULL,
+                load_case_id VARCHAR NOT NULL,
+                manifest_path VARCHAR NOT NULL,
+                source_directory VARCHAR NOT NULL,
+                schema_version VARCHAR NOT NULL,
+                status VARCHAR NOT NULL,
+                overwrite_policy VARCHAR NOT NULL,
+                file_count INTEGER NOT NULL DEFAULT 0,
+                row_count BIGINT NOT NULL DEFAULT 0,
+                manifest_checksum VARCHAR NOT NULL,
+                source_checksum VARCHAR,
+                error_code VARCHAR,
+                error_message VARCHAR,
+                started_at TIMESTAMP,
+                completed_at TIMESTAMP,
+                imported_at TIMESTAMP NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS analysis_runs (
                 id VARCHAR PRIMARY KEY,
                 load_case_id VARCHAR NOT NULL,
@@ -103,7 +125,12 @@ def initialize_database() -> None:
                 solver VARCHAR,
                 status VARCHAR NOT NULL,
                 started_at TIMESTAMP,
-                completed_at TIMESTAMP
+                completed_at TIMESTAMP,
+                overall_verdict VARCHAR,
+                source_program VARCHAR,
+                source_program_version VARCHAR,
+                result_import_status VARCHAR,
+                last_imported_at TIMESTAMP
             );
 
             CREATE TABLE IF NOT EXISTS scalar_results (
