@@ -59,4 +59,15 @@ export const api = {
         body: JSON.stringify({ command }),
       }),
     ),
+  scanImports: () => json<{ manifests: string[] }>(fetch('/api/result-imports/scan', { method: 'POST' })),
+  importResult: (manifestPath: string) =>
+    json<any>(
+      fetch('/api/result-imports/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ manifest_path: manifestPath }),
+      }),
+    ),
+  loadCaseRuns: (loadCaseId: string) => json<any[]>(fetch(`/api/load-cases/${loadCaseId}/analysis-runs`)),
+  runResults: (runId: string) => json<any>(fetch(`/api/analysis-runs/${runId}/results`)),
 }

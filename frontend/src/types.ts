@@ -142,3 +142,19 @@ export type DashboardDefinition = {
   version?: number
   updated_at?: string
 }
+
+export type AnalysisRun = {
+  id: string
+  load_case_id: string
+  run_no: number
+  solver: string
+  status: string
+  started_at: string
+  completed_at: string
+  overall_verdict: string
+  source_program: string
+  source_program_version: string
+  result_import_status: string
+  last_imported_at: string
+}
+

@@ -38,11 +38,11 @@ import {
   YAxis,
 } from 'recharts'
 import { api } from './api'
-import type { AnalysisRequest, DashboardDefinition, DashboardWidget, LoadCase, Overview, Project, QualityThreshold, Workflow, WorkflowStep } from './types'
+import type { AnalysisRequest, DashboardDefinition, DashboardWidget, LoadCase, Overview, Project, QualityThreshold, Workflow, WorkflowStep, AnalysisRun } from './types'
 
 const ResponsiveGridLayout = WidthProvider(Responsive) as unknown as ComponentType<any>
 const SERIES_COLORS = ['#61d4ff', '#ff647d', '#70e0a8', '#ffbf57']
-type ActiveView = 'open_cell' | 'chassis' | 'workflow'
+type ActiveView = 'open_cell' | 'chassis' | 'workflow' | 'import'
 
 function App() {
   const [overview, setOverview] = useState<Overview | null>(null)
@@ -297,11 +297,12 @@ function App() {
 
         <section className="view-tabs">
           <button className={activeView === 'workflow' ? 'active' : ''} onClick={() => setActiveView('workflow')}><CircleDot /> 의뢰 진행 상태 <span>{workflowProgress}%</span></button>
-          <button className={activeView !== 'workflow' ? 'active' : ''} onClick={() => setActiveView(openCellAvailable ? 'open_cell' : 'chassis')}><LayoutDashboard /> 상세 분석 <span>{overview.load_case.analysis_type.replace('_', ' ')}</span></button>
+          <button className={activeView !== 'workflow' && activeView !== 'import' ? 'active' : ''} onClick={() => setActiveView(openCellAvailable ? 'open_cell' : 'chassis')}><LayoutDashboard /> 상세 분석 <span>{overview.load_case.analysis_type.replace('_', ' ')}</span></button>
+          <button className={activeView === 'import' ? 'active' : ''} onClick={() => setActiveView('import')}><Database /> 해석 결과 수집</button>
           <div className="tab-line" />
         </section>
 
-        {activeView !== 'workflow' && <section className="analysis-subtabs"><div><span>상세 분석</span><b>/</b><strong>{overview.load_case.request_title}</strong></div><nav aria-label="불량 분석 하위 탭">{openCellAvailable && <button className={activeView === 'open_cell' ? 'active' : ''} onClick={() => setActiveView('open_cell')}><Activity /> 오픈셀 파손 분석 <span>{overview.analysis_verdicts.open_cell}</span></button>}{chassisAvailable && <button className={activeView === 'chassis' ? 'active' : ''} onClick={() => setActiveView('chassis')}><BarChart3 /> Chassis Rear 영구변형 평가 <span>{overview.analysis_verdicts.chassis_rear}</span></button>}</nav>{activeView === 'open_cell' && <EdgeFilter selected={selectedEdges} setSelected={setSelectedEdges} />}</section>}
+        {activeView !== 'workflow' && activeView !== 'import' && <section className="analysis-subtabs"><div><span>상세 분석</span><b>/</b><strong>{overview.load_case.request_title}</strong></div><nav aria-label="불량 분석 하위 탭">{openCellAvailable && <button className={activeView === 'open_cell' ? 'active' : ''} onClick={() => setActiveView('open_cell')}><Activity /> 오픈셀 파손 분석 <span>{overview.analysis_verdicts.open_cell}</span></button>}{chassisAvailable && <button className={activeView === 'chassis' ? 'active' : ''} onClick={() => setActiveView('chassis')}><BarChart3 /> Chassis Rear 영구변형 평가 <span>{overview.analysis_verdicts.chassis_rear}</span></button>}</nav>{activeView === 'open_cell' && <EdgeFilter selected={selectedEdges} setSelected={setSelectedEdges} />}</section>}
 
         {editMode && (
           <div className="edit-banner"><GripVertical /><span><strong>편집 모드</strong> {activeView === 'open_cell' ? '위젯을 드래그하거나 모서리를 잡아 크기를 조절하세요.' : '단계 이름 입력란을 수정하면 즉시 저장됩니다.'}</span><button onClick={() => setEditMode(false)}>편집 취소</button></div>
@@ -327,6 +328,8 @@ function App() {
                 </div>
               ))}
             </ResponsiveGridLayout>
+          ) : activeView === 'import' ? (
+            <ResultImportSection loadCaseId={overview.load_case.id} />
           ) : activeView === 'chassis' ? (
             <ChassisRearDashboard overview={overview} threshold={chassisThreshold} onSaveThreshold={saveChassisThreshold} />
           ) : (
@@ -616,6 +619,86 @@ function WorkflowView({ workflows, editMode, onRename, onOpenAnalysis, activeReq
 function WorkflowStepItem({ step, last, editMode, onRename }: { step: WorkflowStep; last: boolean; editMode: boolean; onRename: (stepId: string, name: string) => void }) {
   const statusText = { COMPLETED: '완료', IN_PROGRESS: '진행 중', WAITING: '대기', BLOCKED: '차단', FAILED: '실패' }[step.status]
   return <div className={`workflow-step-horizontal ${step.status.toLowerCase()}`}><div className="step-track-horizontal"><span>{step.status === 'COMPLETED' ? <Check /> : step.sequence_no}</span>{!last && <i />}</div><div className="step-copy-horizontal">{editMode ? <input defaultValue={step.name} onBlur={(event) => onRename(step.id, event.target.value)} aria-label={`${step.name} 단계 이름`} /> : <strong>{step.name}</strong>}<span>{step.owner}</span>{step.is_optional && <em>선택</em>}</div><div className="step-progress-horizontal"><i><b style={{ width: `${step.progress}%` }} /></i><span>{step.progress}%</span></div><b className="status-badge">{statusText}</b></div>
+}
+
+function ResultImportSection({ loadCaseId }: { loadCaseId: string }) {
+  const [runs, setRuns] = useState<AnalysisRun[]>([])
+  const [manifests, setManifests] = useState<string[]>([])
+  const [loading, setLoading] = useState(false)
+
+  const loadData = async () => {
+    const data = await api.loadCaseRuns(loadCaseId)
+    setRuns(data)
+  }
+
+  useEffect(() => {
+    loadData()
+  }, [loadCaseId])
+
+  const scan = async () => {
+    setLoading(true)
+    try {
+      const res = await api.scanImports()
+      setManifests(res.manifests)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const importData = async (manifestPath: string) => {
+    setLoading(true)
+    try {
+      await api.importResult(manifestPath)
+      await loadData()
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return <div className="result-import-section" style={{ padding: '20px' }}>
+    <h2>해석 결과 수집</h2>
+    <div style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
+      <button onClick={scan} disabled={loading} className="primary-button">결과 폴더 스캔</button>
+      <button onClick={loadData} disabled={loading} className="ghost-button">결과 다시 불러오기</button>
+    </div>
+    
+    {manifests.length > 0 && <div style={{ marginBottom: '20px' }}>
+      <h3>발견된 Manifests</h3>
+      <ul>
+        {manifests.map(m => (
+          <li key={m}>
+            {m} <button onClick={() => importData(m)} disabled={loading}>수집</button>
+          </li>
+        ))}
+      </ul>
+    </div>}
+
+    <h3>실행 이력</h3>
+    {runs.length === 0 ? <p>등록된 실행(Run)이 없습니다.</p> : 
+      <table style={{ width: '100%', textAlign: 'left', borderCollapse: 'collapse' }}>
+        <thead>
+          <tr>
+            <th>Run 번호</th>
+            <th>Solver</th>
+            <th>수집 상태</th>
+            <th>판정</th>
+            <th>최종 수집일</th>
+          </tr>
+        </thead>
+        <tbody>
+          {runs.map(run => (
+            <tr key={run.id} style={{ borderBottom: '1px solid #333' }}>
+              <td>{run.run_no}</td>
+              <td>{run.solver}</td>
+              <td>{run.result_import_status || '미수집'}</td>
+              <td>{run.overall_verdict || '-'}</td>
+              <td>{run.last_imported_at ? new Date(run.last_imported_at).toLocaleString() : '-'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    }
+  </div>
 }
 
 export default App
