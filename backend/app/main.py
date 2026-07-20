@@ -517,3 +517,59 @@ def preview_dashboard_command(payload: NaturalLanguageCommand) -> dict[str, Any]
         }
 
     return {"recognized": True, "message": message, "proposal": {"action": "add_widget", "widget": widget}}
+
+
+from backend.app.schemas.result_import import ImportRequest
+from backend.app.schemas.result_response import ImportJobResponse
+from backend.app.services.result_import_service import ResultImportService
+from backend.app.database import connect, rows
+from pathlib import Path
+import os
+
+IMPORT_ROOT = os.environ.get("SIMDASH_IMPORT_ROOT", str(Path(__file__).resolve().parents[2] / "data" / "import"))
+
+def get_import_service():
+    return ResultImportService(IMPORT_ROOT)
+
+@app.post("/api/result-imports/scan")
+def scan_imports():
+    service = get_import_service()
+    return {"manifests": service.scan()}
+
+@app.post("/api/result-imports/import")
+def import_result(payload: ImportRequest):
+    service = get_import_service()
+    return service.import_result(payload.manifest_path)
+
+@app.get("/api/result-imports")
+def get_import_jobs():
+    with connect() as conn:
+        return rows(conn.execute("SELECT * FROM result_import_jobs ORDER BY imported_at DESC"))
+
+@app.get("/api/result-imports/{job_id}")
+def get_import_job(job_id: str):
+    with connect() as conn:
+        result = rows(conn.execute("SELECT * FROM result_import_jobs WHERE id = ?", [job_id]))
+        if not result:
+            raise HTTPException(404, "수집 이력을 찾을 수 없습니다.")
+        return result[0]
+
+@app.get("/api/analysis-runs/{run_id}/results")
+def get_run_results(run_id: str):
+    with connect() as conn:
+        scalars = rows(conn.execute("SELECT * FROM scalar_results WHERE analysis_run_id = ?", [run_id]))
+        timeseries = rows(conn.execute("SELECT * FROM time_series_results WHERE analysis_run_id = ?", [run_id]))
+        run_data = rows(conn.execute("SELECT overall_verdict, result_import_status FROM analysis_runs WHERE id = ?", [run_id]))
+        verdict = run_data[0]["overall_verdict"] if run_data else "NO_DATA"
+        status = run_data[0]["result_import_status"] if run_data else "NONE"
+        return {
+            "scalar_results": scalars,
+            "time_series_results": timeseries,
+            "overall_verdict": verdict,
+            "status": status
+        }
+
+@app.get("/api/load-cases/{load_case_id}/analysis-runs")
+def get_load_case_runs(load_case_id: str):
+    with connect() as conn:
+        return rows(conn.execute("SELECT * FROM analysis_runs WHERE load_case_id = ? ORDER BY run_no DESC", [load_case_id]))
