@@ -1,4 +1,6 @@
 import json
+import shutil
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -310,3 +312,64 @@ def test_create_project_request_and_load_case():
         if created_project:
             conn.execute("DELETE FROM product_information WHERE project_id = ?", [created_project])
             conn.execute("DELETE FROM projects WHERE id = ?", [created_project])
+
+
+def test_typed_folder_example_registers_scalars_curves_media_and_catalog():
+    initialize_database()
+    load_case_id = "loadcase-clamp-left-001"
+    with TestClient(app) as client:
+        response = client.post(f"/api/load-cases/{load_case_id}/folder-import/example")
+        assert response.status_code == 200, response.text
+        result = response.json()
+        assert result["summary"] == {"scalar_count": 5, "curve_count": 2, "media_count": 1}
+        overview = client.get(f"/api/load-cases/{load_case_id}/overview").json()
+        assert overview["run"] == result["run_id"]
+        assert len(overview["curves"]) == 2
+        assert any(item["value_integer"] == 428120 for item in overview["scalar_results"])
+        assert any(item["value_text"] for item in overview["scalar_results"])
+        assert overview["media"][0]["asset_url"].startswith("/api/assets/")
+        assert client.get(overview["media"][0]["asset_url"]).status_code == 200
+        catalog = client.get(f"/api/load-cases/{load_case_id}/variables").json()
+        assert {"FLOAT", "INTEGER", "TEXT", "CURVE", "IMAGE"} <= {item["data_type"] for item in catalog}
+
+    with connect() as conn:
+        asset_paths = [row[0] for row in conn.execute("SELECT file_path FROM media_assets WHERE analysis_run_id=?", [result["run_id"]]).fetchall()]
+        curve_ids = [row[0] for row in conn.execute("SELECT id FROM curve_results WHERE analysis_run_id=?", [result["run_id"]]).fetchall()]
+        for curve_id in curve_ids:
+            conn.execute("DELETE FROM curve_points WHERE curve_id=?", [curve_id])
+        conn.execute("DELETE FROM curve_results WHERE analysis_run_id=?", [result["run_id"]])
+        conn.execute("DELETE FROM media_assets WHERE analysis_run_id=?", [result["run_id"]])
+        conn.execute("DELETE FROM qualitative_notes WHERE analysis_run_id=?", [result["run_id"]])
+        conn.execute("DELETE FROM time_series_results WHERE analysis_run_id=?", [result["run_id"]])
+        conn.execute("DELETE FROM scalar_results WHERE analysis_run_id=?", [result["run_id"]])
+        conn.execute("DELETE FROM folder_import_jobs WHERE id=?", [result["job_id"]])
+        conn.execute("DELETE FROM analysis_runs WHERE id=?", [result["run_id"]])
+        for key in ("chassis_rear_top_edge_permanent_deformation_mm", "chassis_rear_corner_top_left_permanent_deformation_mm", "mesh_element_count", "analysis_judgement", "chassis_rear_verdict", "open_cell_top_edge_stress_curve", "chassis_rear_top_edge_deformation_curve", "open_cell_stress_contour"):
+            conn.execute("DELETE FROM variable_definitions WHERE load_case_id=? AND variable_key=?", [load_case_id, key])
+    for path in asset_paths:
+        asset_folder = Path(__file__).resolve().parents[1] / "assets" / Path(path).parent
+        if asset_folder.exists():
+            shutil.rmtree(asset_folder)
+
+
+def test_import_schema_crud_and_hierarchy_mapping():
+    payload = {
+        "name": "TV 폴더 규칙",
+        "description": "제품/의뢰/하중경우 계층",
+        "definition": {"context_mapping": {"mode": "folder_levels", "project_level": 0, "request_level": 1, "load_case_level": 2}, "mappings": []},
+        "updated_by": "테스트 관리자",
+    }
+    with TestClient(app) as client:
+        created_response = client.post("/api/import-schemas", json=payload)
+        assert created_response.status_code == 201, created_response.text
+        created = created_response.json()
+        assert created["definition"]["context_mapping"]["load_case_level"] == 2
+        updated_response = client.put(f"/api/import-schemas/{created['id']}", json={**payload, "name": "TV 폴더 규칙 수정"})
+        assert updated_response.status_code == 200, updated_response.text
+        assert updated_response.json()["definition"]["version"] == 2
+        assert any(item["name"] == "TV 폴더 규칙 수정" for item in client.get("/api/import-schemas").json())
+        assert client.delete(f"/api/import-schemas/{created['id']}").status_code == 200
+        assert all(item["id"] != created["id"] for item in client.get("/api/import-schemas").json())
+    with connect() as conn:
+        conn.execute("DELETE FROM import_schema_versions WHERE schema_id=?", [created["id"]])
+        conn.execute("DELETE FROM import_schemas WHERE id=?", [created["id"]])

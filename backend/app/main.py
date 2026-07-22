@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -10,9 +11,12 @@ from uuid import uuid4
 from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from .database import connect, initialize_database, json_value, rows
+from .folder_import import FolderImportError, scan_folder
+from .media_policy import validate_media_metadata
 from .result_import import CSV_TEMPLATE, JSON_TEMPLATE, ResultFormatError, parse_result_file
 from .repositories.portfolio import PortfolioRepository
 from .repositories.variable_catalog import VariableCatalogRepository
@@ -103,7 +107,7 @@ class ResultImportPayload(BaseModel):
 class VariableCreate(BaseModel):
     variable_key: str = Field(min_length=3, max_length=80, pattern=r"^[a-z][a-z0-9_]*$")
     display_name: str = Field(min_length=2, max_length=120)
-    data_type: Literal["NUMBER", "TIME_SERIES"]
+    data_type: Literal["NUMBER", "TIME_SERIES", "FLOAT", "INTEGER", "TEXT", "CURVE", "IMAGE", "VIDEO", "MODEL_3D", "VERDICT", "STATUS", "BOOLEAN"]
     unit: str = Field(min_length=1, max_length=30)
     description: str = Field(default="", max_length=500)
     filterable: bool = True
@@ -125,6 +129,12 @@ class VariableUpdate(BaseModel):
     result_group: Literal["OPEN_CELL", "CHASSIS_REAR", "CUSTOM"] = "CUSTOM"
     updated_by: str = Field(default="관리자", min_length=2, max_length=60)
 
+class ImportSchemaPayload(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+    description: str = Field(default="", max_length=500)
+    definition: dict[str, Any]
+    updated_by: str = Field(default="관리자", min_length=2, max_length=60)
+
 
 @app.get("/api/health")
 def health() -> dict[str, str]:
@@ -135,6 +145,65 @@ def health() -> dict[str, str]:
 def get_projects() -> list[dict[str, Any]]:
     with connect() as conn:
         return rows(conn.execute("SELECT * FROM projects ORDER BY created_at DESC"))
+
+
+@app.get("/api/import-schemas")
+def list_import_schemas() -> list[dict[str, Any]]:
+    with connect() as conn:
+        items = rows(conn.execute("SELECT * FROM import_schemas WHERE is_active=true ORDER BY updated_at DESC"))
+    for item in items:
+        item["definition"] = json_value(item.pop("definition_json"))
+    return items
+
+
+@app.post("/api/import-schemas", status_code=201)
+def create_import_schema(payload: ImportSchemaPayload) -> dict[str, Any]:
+    if not isinstance(payload.definition.get("mappings"), list):
+        raise HTTPException(422, "스키마 정의에는 mappings 배열이 필요합니다.")
+    schema_id, now = f"import-schema-{uuid4().hex[:12]}", datetime.now(timezone.utc).replace(tzinfo=None)
+    definition = {**payload.definition, "schema_id": payload.definition.get("schema_id") or schema_id, "version": 1}
+    encoded = json.dumps(definition, ensure_ascii=False)
+    with connect() as conn:
+        conn.execute("INSERT INTO import_schemas VALUES (?, ?, ?, ?, true, ?, ?, ?)", [schema_id, payload.name.strip(), payload.description.strip(), encoded, now, now, payload.updated_by.strip()])
+        conn.execute("INSERT INTO import_schema_versions VALUES (?, 1, ?, ?, ?)", [schema_id, encoded, now, payload.updated_by.strip()])
+    return {"id": schema_id, "name": payload.name.strip(), "description": payload.description.strip(), "definition": definition, "created_at": now, "updated_at": now, "updated_by": payload.updated_by.strip()}
+
+
+@app.put("/api/import-schemas/{schema_id}")
+def update_import_schema(schema_id: str, payload: ImportSchemaPayload) -> dict[str, Any]:
+    if not isinstance(payload.definition.get("mappings"), list):
+        raise HTTPException(422, "스키마 정의에는 mappings 배열이 필요합니다.")
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    with connect() as conn:
+        existing = conn.execute("SELECT definition_json, created_at FROM import_schemas WHERE id=? AND is_active=true", [schema_id]).fetchone()
+        if not existing:
+            raise HTTPException(404, "폴더 스키마를 찾을 수 없습니다.")
+        previous = json_value(existing[0]) or {}
+        version = int(previous.get("version") or 1) + 1
+        definition = {**payload.definition, "schema_id": previous.get("schema_id") or schema_id, "version": version}
+        encoded = json.dumps(definition, ensure_ascii=False)
+        conn.execute("BEGIN TRANSACTION")
+        try:
+            conn.execute("UPDATE import_schemas SET name=?, description=?, definition_json=?, updated_at=?, updated_by=? WHERE id=?", [payload.name.strip(), payload.description.strip(), encoded, now, payload.updated_by.strip(), schema_id])
+            conn.execute("INSERT INTO import_schema_versions VALUES (?, ?, ?, ?, ?)", [schema_id, version, encoded, now, payload.updated_by.strip()])
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    return {"id": schema_id, "name": payload.name.strip(), "description": payload.description.strip(), "definition": definition, "created_at": existing[1], "updated_at": now, "updated_by": payload.updated_by.strip()}
+
+
+@app.delete("/api/import-schemas/{schema_id}")
+def delete_import_schema(schema_id: str) -> dict[str, str]:
+    with connect() as conn:
+        existing = conn.execute("SELECT id FROM import_schemas WHERE id=? AND is_active=true", [schema_id]).fetchone()
+        if not existing:
+            raise HTTPException(404, "폴더 스키마를 찾을 수 없습니다.")
+        in_use = conn.execute("SELECT count(*) FROM folder_import_jobs WHERE schema_id=? AND status IN ('RUNNING','COMPLETED')", [schema_id]).fetchone()[0]
+        if in_use:
+            raise HTTPException(409, "적재 이력이 있는 스키마는 삭제할 수 없습니다. 비활성화 정책이 필요합니다.")
+        conn.execute("UPDATE import_schemas SET is_active=false, updated_at=? WHERE id=?", [datetime.now(timezone.utc).replace(tzinfo=None), schema_id])
+    return {"status": "DEACTIVATED", "id": schema_id}
 
 
 @app.get("/api/portfolio/overview")
@@ -349,6 +418,100 @@ def import_analysis_results(load_case_id: str, payload: ResultImportPayload) -> 
     return {"status": "IMPORTED", "run_id": run_id, "run_no": next_run_no, "filename": payload.filename, **parsed["summary"], "results": parsed["scalars"], "warnings": parsed["warnings"]}
 
 
+@app.post("/api/load-cases/{load_case_id}/folder-import/example")
+def import_typed_result_example(load_case_id: str) -> dict[str, Any]:
+    """Register the checked-in typed folder example through the same importer used by future uploads."""
+    example_root = Path(__file__).resolve().parents[2] / "examples" / "typed-results" / "tv-drop-chassis"
+    try:
+        parsed = scan_folder(example_root)
+    except FolderImportError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    job_id, run_id = f"folder-job-{uuid4().hex[:12]}", f"run-{uuid4().hex[:12]}"
+    with connect() as conn:
+        context = conn.execute(
+            """SELECT lc.id, lc.request_id, ar.project_id, lc.analysis_type
+               FROM load_cases lc JOIN analysis_requests ar ON ar.id=lc.request_id WHERE lc.id=?""",
+            [load_case_id],
+        ).fetchone()
+        if not context:
+            raise HTTPException(404, "하중경우를 찾을 수 없습니다.")
+        next_run_no = conn.execute("SELECT coalesce(max(run_no), 0) + 1 FROM analysis_runs WHERE load_case_id=?", [load_case_id]).fetchone()[0]
+        catalog = VariableCatalogRepository(conn)
+        conn.execute("BEGIN TRANSACTION")
+        try:
+            conn.execute(
+                "INSERT INTO folder_import_jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [job_id, load_case_id, run_id, parsed["schema_id"], parsed["schema_version"], str(example_root), "RUNNING", None, now],
+            )
+            for item in parsed["scalars"]:
+                if not catalog.get(load_case_id, item["variable_key"], include_inactive=True):
+                    catalog.create(load_case_id, {
+                        "variable_key": item["variable_key"], "display_name": item["display_name"], "data_type": item["data_type"],
+                        "unit": item["unit"] or "-", "description": f"폴더 적재: {item['source_file']}", "threshold": item["threshold"],
+                        "result_group": item["result_group"], "updated_by": "폴더 가져오기",
+                    })
+            for item in parsed["curves"]:
+                if not catalog.get(load_case_id, item["variable_key"], include_inactive=True):
+                    catalog.create(load_case_id, {
+                        "variable_key": item["variable_key"], "display_name": item["display_name"], "data_type": "CURVE",
+                        "unit": item["y_unit"] or "-", "description": f"폴더 커브: {item['source_file']}", "threshold": None,
+                        "result_group": item["result_group"], "updated_by": "폴더 가져오기",
+                    })
+            for item in parsed["media"]:
+                if not catalog.get(load_case_id, item["variable_key"], include_inactive=True):
+                    catalog.create(load_case_id, {
+                        "variable_key": item["variable_key"], "display_name": item["display_name"], "data_type": item["asset_type"],
+                        "unit": "-", "description": f"폴더 미디어: {item['source_file']}", "threshold": None,
+                        "result_group": item["result_group"], "updated_by": "폴더 가져오기",
+                    })
+            conn.execute("INSERT INTO analysis_runs VALUES (?, ?, ?, ?, ?, ?, ?, ?)", [run_id, load_case_id, None, next_run_no, parsed["solver"], "COMPLETED", now, now])
+            for item in parsed["scalars"]:
+                value_double = item["value"] if item["data_type"] == "FLOAT" else None
+                value_integer = item["value"] if item["data_type"] == "INTEGER" else None
+                value_text = str(item["value"]) if item["data_type"] not in {"FLOAT", "INTEGER"} else None
+                threshold = float(item["threshold"]) if item["threshold"] is not None else None
+                verdict = ("FAIL" if float(item["value"]) >= threshold else "PASS") if threshold is not None and item["data_type"] in {"FLOAT", "INTEGER"} else (str(item["value"]) if item["data_type"] == "VERDICT" else None)
+                conn.execute("INSERT INTO scalar_results VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [f"scalar-{uuid4().hex[:12]}", run_id, item["variable_key"], item["display_name"], value_double, value_integer, value_text, item["unit"], threshold, verdict])
+            for item in parsed["curves"]:
+                curve_id = f"curve-{uuid4().hex[:12]}"
+                conn.execute("INSERT INTO curve_results VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [curve_id, run_id, item["variable_key"], item["display_name"], item["series_key"], item["x_label"], item["x_unit"], item["y_label"], item["y_unit"], len(item["points"]), item["source_file"], item["source_checksum"], now])
+                for index, point in enumerate(item["points"]):
+                    conn.execute("INSERT INTO curve_points VALUES (?, ?, ?, ?)", [curve_id, index, point["x"], point["y"]])
+                    conn.execute("INSERT INTO time_series_results VALUES (?, ?, ?, ?, ?, ?, ?)", [run_id, item["variable_key"], item["display_name"], point["x"], point["y"], item["x_unit"], item["y_unit"]])
+            asset_root = Path(__file__).resolve().parents[1] / "assets" / "imports" / run_id
+            asset_root.mkdir(parents=True, exist_ok=True)
+            for item in parsed["media"]:
+                validate_media_metadata("CONTOUR_IMAGE" if item["asset_type"] == "IMAGE" else item["asset_type"], item["path"].name, item["path"].stat().st_size)
+                destination = asset_root / item["path"].name
+                shutil.copy2(item["path"], destination)
+                relative_path = f"imports/{run_id}/{destination.name}"
+                conn.execute("INSERT INTO media_assets VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", [f"media-{uuid4().hex[:12]}", run_id, item["asset_type"], item["display_name"], relative_path, item["mime_type"], destination.stat().st_size, item["source_checksum"], json.dumps({"variable_key": item["variable_key"], "source_file": item["source_file"]})])
+            if parsed["note"]:
+                conn.execute("INSERT INTO qualitative_notes VALUES (?, ?, ?, ?, ?)", [f"note-{uuid4().hex[:12]}", run_id, "폴더 가져오기", parsed["note"], now])
+            summary = {"scalar_count": len(parsed["scalars"]), "curve_count": len(parsed["curves"]), "media_count": len(parsed["media"])}
+            conn.execute("UPDATE folder_import_jobs SET status='COMPLETED', summary_json=?, analysis_run_id=? WHERE id=?", [json.dumps(summary, ensure_ascii=False), run_id, job_id])
+            conn.execute("UPDATE load_cases SET status='COMPLETED' WHERE id=?", [load_case_id])
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    return {"status": "IMPORTED", "job_id": job_id, "run_id": run_id, "run_no": next_run_no, "schema_id": parsed["schema_id"], "summary": summary}
+
+
+@app.get("/api/assets/{asset_id}")
+def get_result_asset(asset_id: str) -> FileResponse:
+    with connect() as conn:
+        item = conn.execute("SELECT file_path, mime_type FROM media_assets WHERE id=?", [asset_id]).fetchone()
+    if not item:
+        raise HTTPException(404, "결과 미디어를 찾을 수 없습니다.")
+    path = (Path(__file__).resolve().parents[1] / "assets" / item[0]).resolve()
+    assets_root = (Path(__file__).resolve().parents[1] / "assets").resolve()
+    if assets_root not in path.parents or not path.is_file():
+        raise HTTPException(404, "결과 미디어 파일을 찾을 수 없습니다.")
+    return FileResponse(path, media_type=item[1])
+
+
 @app.get("/api/load-cases/{load_case_id}/overview")
 def get_load_case_overview(load_case_id: str) -> dict[str, Any]:
     with connect() as conn:
@@ -392,6 +555,7 @@ def get_load_case_overview(load_case_id: str) -> dict[str, Any]:
                 "product_information": product_information,
                 "scalar_results": [],
                 "time_series": [],
+                "curves": [],
                 "result_locations": [],
                 "notes": [],
                 "media": [],
@@ -409,6 +573,7 @@ def get_load_case_overview(load_case_id: str) -> dict[str, Any]:
                 [run_id],
             )
         )
+        curves = rows(conn.execute("SELECT * FROM curve_results WHERE analysis_run_id = ? ORDER BY display_name, series_key", [run_id]))
         result_locations = rows(conn.execute("SELECT * FROM result_locations WHERE analysis_run_id = ? ORDER BY variable_key", [run_id]))
         notes = rows(conn.execute("SELECT * FROM qualitative_notes WHERE analysis_run_id = ? ORDER BY created_at DESC", [run_id]))
         media = rows(conn.execute("SELECT * FROM media_assets WHERE analysis_run_id = ?", [run_id]))
@@ -426,6 +591,7 @@ def get_load_case_overview(load_case_id: str) -> dict[str, Any]:
     load_case["parameters"] = json_value(load_case.pop("parameters_json"))
     for item in media:
         item["metadata"] = json_value(item.pop("metadata_json"))
+        item["asset_url"] = f"/api/assets/{item['id']}"
     for item in template:
         item["input"] = json_value(item.pop("input_json"))
         item["generated_model"] = json_value(item.pop("generated_model_json"))
@@ -452,6 +618,7 @@ def get_load_case_overview(load_case_id: str) -> dict[str, Any]:
         "product_information": product_information,
         "scalar_results": scalar_results,
         "time_series": time_series,
+        "curves": curves,
         "result_locations": result_locations,
         "notes": notes,
         "media": media,
@@ -662,9 +829,9 @@ def get_widget_catalog() -> list[dict[str, Any]]:
         {"type": "verdict", "label": "패스/실패 판정", "category": "요약", "allowed_data_types": ["VERDICT", "NUMBER"], "default_size": [3, 2]},
         {"type": "gauge", "label": "임계값 게이지", "category": "차트", "allowed_data_types": ["NUMBER"], "default_size": [4, 3]},
         {"type": "edge_bar", "label": "막대그래프", "category": "차트", "allowed_data_types": ["NUMBER"], "default_size": [6, 4]},
-        {"type": "time_series", "label": "시계열 그래프", "category": "차트", "allowed_data_types": ["TIME_SERIES"], "default_size": [8, 5]},
-        {"type": "scatter", "label": "산점도", "category": "차트", "allowed_data_types": ["NUMBER", "TIME_SERIES"], "default_size": [6, 4]},
-        {"type": "result_table", "label": "데이터 테이블", "category": "표", "allowed_data_types": ["NUMBER", "TIME_SERIES", "TEXT"], "default_size": [12, 4]},
+        {"type": "time_series", "label": "시계열 그래프", "category": "차트", "allowed_data_types": ["TIME_SERIES", "CURVE"], "default_size": [8, 5]},
+        {"type": "scatter", "label": "산점도", "category": "차트", "allowed_data_types": ["NUMBER", "FLOAT", "INTEGER", "TIME_SERIES", "CURVE"], "default_size": [6, 4]},
+        {"type": "result_table", "label": "데이터 테이블", "category": "표", "allowed_data_types": ["NUMBER", "FLOAT", "INTEGER", "TEXT", "TIME_SERIES", "CURVE", "IMAGE", "VIDEO", "MODEL_3D"], "default_size": [12, 4]},
         {"type": "contour", "label": "컨투어 이미지", "category": "미디어", "allowed_data_types": ["IMAGE"], "default_size": [4, 3]},
         {"type": "video", "label": "영상 플레이어", "category": "미디어", "allowed_data_types": ["VIDEO"], "default_size": [6, 4]},
         {"type": "model3d", "label": "경량 3D 뷰어", "category": "미디어", "allowed_data_types": ["MODEL_3D"], "default_size": [6, 5]},

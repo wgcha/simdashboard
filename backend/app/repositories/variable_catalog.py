@@ -10,8 +10,16 @@ from ..database import json_value, rows
 
 NUMBER_WIDGETS = {"kpi", "gauge", "edge_bar", "scatter", "result_table", "chassis_bar", "chassis_table"}
 SERIES_WIDGETS = {"time_series", "scatter", "result_table"}
+TEXT_WIDGETS = {"note", "result_table", "verdict"}
+MEDIA_WIDGETS = {"contour", "video", "model3d", "result_table"}
 NUMBER_AGGREGATIONS = {"MAX", "MIN", "AVG", "LATEST"}
 SERIES_AGGREGATIONS = {"RAW", "MAX_BY_TIME"}
+TEXT_AGGREGATIONS = {"LATEST"}
+MEDIA_AGGREGATIONS = {"LATEST"}
+
+SCALAR_TYPES = {"NUMBER", "FLOAT", "INTEGER", "TEXT", "VERDICT", "STATUS", "BOOLEAN"}
+CURVE_TYPES = {"TIME_SERIES", "CURVE"}
+MEDIA_TYPES = {"IMAGE", "VIDEO", "MODEL_3D"}
 
 
 class VariableCatalogRepository:
@@ -130,7 +138,23 @@ class VariableCatalogRepository:
         return references
 
     def _has_data(self, load_case_id: str, variable_key: str, data_type: str) -> bool:
-        table = "scalar_results" if data_type == "NUMBER" else "time_series_results"
+        if data_type in SCALAR_TYPES:
+            table = "scalar_results"
+        elif data_type in CURVE_TYPES:
+            table = "curve_results" if data_type == "CURVE" else "time_series_results"
+        elif data_type in MEDIA_TYPES:
+            result = self.conn.execute(
+                """
+                SELECT count(*) FROM media_assets result
+                JOIN analysis_runs run ON run.id = result.analysis_run_id
+                WHERE run.load_case_id = ?
+                  AND json_extract_string(result.metadata_json, '$.variable_key') = ?
+                """,
+                [load_case_id, variable_key],
+            ).fetchone()
+            return bool(result and result[0])
+        else:
+            return False
         result = self.conn.execute(
             f"""
             SELECT count(*) FROM {table} result
@@ -144,15 +168,23 @@ class VariableCatalogRepository:
     @staticmethod
     def _normalized(definition: dict[str, Any]) -> list[Any]:
         data_type = definition["data_type"]
-        allowed_widgets = definition.get("allowed_widgets") or sorted(NUMBER_WIDGETS if data_type == "NUMBER" else SERIES_WIDGETS)
-        allowed_aggregations = definition.get("allowed_aggregations") or sorted(NUMBER_AGGREGATIONS if data_type == "NUMBER" else SERIES_AGGREGATIONS)
-        valid_widgets = NUMBER_WIDGETS if data_type == "NUMBER" else SERIES_WIDGETS
-        valid_aggregations = NUMBER_AGGREGATIONS if data_type == "NUMBER" else SERIES_AGGREGATIONS
+        if data_type in SCALAR_TYPES:
+            valid_widgets, valid_aggregations, source = NUMBER_WIDGETS, NUMBER_AGGREGATIONS, "scalar_results"
+            if data_type in {"TEXT", "VERDICT", "STATUS"}:
+                valid_widgets, valid_aggregations = TEXT_WIDGETS, TEXT_AGGREGATIONS
+        elif data_type in CURVE_TYPES:
+            valid_widgets, valid_aggregations = SERIES_WIDGETS, SERIES_AGGREGATIONS
+            source = "curve_results" if data_type == "CURVE" else "time_series_results"
+        elif data_type in MEDIA_TYPES:
+            valid_widgets, valid_aggregations, source = MEDIA_WIDGETS, MEDIA_AGGREGATIONS, "media_assets"
+        else:
+            raise ValueError("INVALID_DATA_TYPE")
+        allowed_widgets = definition.get("allowed_widgets") or sorted(valid_widgets)
+        allowed_aggregations = definition.get("allowed_aggregations") or sorted(valid_aggregations)
         if not set(allowed_widgets) <= valid_widgets or not set(allowed_aggregations) <= valid_aggregations:
             raise ValueError("INVALID_CATALOG_OPTIONS")
         if data_type == "NUMBER" and definition.get("threshold") is None:
             raise ValueError("NUMBER_THRESHOLD_REQUIRED")
-        source = "scalar_results" if data_type == "NUMBER" else "time_series_results"
         return [
             definition["display_name"].strip(), data_type, definition["unit"].strip(),
             definition.get("description", "").strip(), bool(definition.get("filterable", True)), source,
