@@ -191,6 +191,28 @@ def initialize_database() -> None:
                 updated_at TIMESTAMP NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS variable_definitions (
+                id VARCHAR PRIMARY KEY,
+                load_case_id VARCHAR NOT NULL,
+                variable_key VARCHAR NOT NULL,
+                display_name VARCHAR NOT NULL,
+                data_type VARCHAR NOT NULL,
+                unit VARCHAR NOT NULL,
+                description VARCHAR,
+                filterable BOOLEAN NOT NULL DEFAULT true,
+                source VARCHAR NOT NULL,
+                threshold_double DOUBLE,
+                allowed_widgets_json JSON NOT NULL,
+                allowed_aggregations_json JSON NOT NULL,
+                analysis_type VARCHAR NOT NULL,
+                result_group VARCHAR NOT NULL DEFAULT 'CUSTOM',
+                is_active BOOLEAN NOT NULL DEFAULT true,
+                created_at TIMESTAMP NOT NULL,
+                updated_at TIMESTAMP NOT NULL,
+                updated_by VARCHAR NOT NULL,
+                UNIQUE(load_case_id, variable_key)
+            );
+
             CREATE TABLE IF NOT EXISTS dashboards (
                 id VARCHAR PRIMARY KEY,
                 project_id VARCHAR NOT NULL,
@@ -227,6 +249,7 @@ def initialize_database() -> None:
                 conn.execute("ROLLBACK")
                 raise
         ensure_sample_evolutions(conn)
+        ensure_variable_definitions(conn)
         conn.execute(
             """
             INSERT OR IGNORE INTO dashboard_versions
@@ -249,6 +272,65 @@ def initialize_database() -> None:
         now = _iso(datetime.now(timezone.utc))
         conn.execute("INSERT OR IGNORE INTO dashboards VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", [chassis_layout["id"], "project-tv-001", "request-drop-001", "loadcase-drop-bottom-001", chassis_layout["name"], chassis_layout["description"], 1, encoded_chassis, now])
         conn.execute("INSERT OR IGNORE INTO dashboard_versions VALUES (?, ?, ?, ?, ?, ?)", [chassis_layout["id"], 1, encoded_chassis, "system", now, True])
+
+
+def ensure_variable_definitions(conn: duckdb.DuckDBPyConnection) -> None:
+    """Backfill the editable semantic catalog from existing result tables."""
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    scalar_rows = conn.execute(
+        """
+        SELECT run.load_case_id, sr.variable_key, min(sr.display_name), min(sr.unit),
+               max(sr.threshold_double), min(lc.analysis_type)
+        FROM scalar_results sr
+        JOIN analysis_runs run ON run.id = sr.analysis_run_id
+        JOIN load_cases lc ON lc.id = run.load_case_id
+        GROUP BY run.load_case_id, sr.variable_key
+        """
+    ).fetchall()
+    for load_case_id, key, display_name, unit, threshold, analysis_type in scalar_rows:
+        result_group = "CHASSIS_REAR" if key.startswith("chassis_rear_") else "OPEN_CELL"
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO variable_definitions
+            VALUES (?, ?, ?, ?, 'NUMBER', ?, ?, true, 'scalar_results', ?, ?, ?, ?, ?, true, ?, ?, 'system')
+            """,
+            [
+                f"variable-{load_case_id}-{key}", load_case_id, key, display_name, unit or "",
+                f"{analysis_type} latest analysis result: {display_name}", threshold,
+                json.dumps(["kpi", "gauge", "edge_bar", "scatter", "result_table", "chassis_bar", "chassis_table"]),
+                json.dumps(["MAX", "MIN", "AVG", "LATEST"]), analysis_type, result_group, now, now,
+            ],
+        )
+    series_rows = conn.execute(
+        """
+        SELECT run.load_case_id, ts.variable_key, min(ts.display_name), min(ts.value_unit), min(lc.analysis_type)
+        FROM time_series_results ts
+        JOIN analysis_runs run ON run.id = ts.analysis_run_id
+        JOIN load_cases lc ON lc.id = run.load_case_id
+        GROUP BY run.load_case_id, ts.variable_key
+        """
+    ).fetchall()
+    for load_case_id, key, display_name, unit, analysis_type in series_rows:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO variable_definitions
+            VALUES (?, ?, ?, ?, 'TIME_SERIES', ?, ?, true, 'time_series_results', NULL, ?, ?, ?, 'OPEN_CELL', true, ?, ?, 'system')
+            """,
+            [
+                f"variable-{load_case_id}-{key}", load_case_id, key, display_name, unit or "",
+                f"{analysis_type} time history: {display_name}",
+                json.dumps(["time_series", "scatter", "result_table"]),
+                json.dumps(["RAW", "MAX_BY_TIME"]), analysis_type, now, now,
+            ],
+        )
+    conn.execute(
+        """
+        UPDATE variable_definitions
+        SET allowed_widgets_json = ?
+        WHERE data_type = 'NUMBER' AND updated_by = 'system'
+        """,
+        [json.dumps(["kpi", "gauge", "edge_bar", "scatter", "result_table", "chassis_bar", "chassis_table"])],
+    )
 
 
 def ensure_sample_evolutions(conn: duckdb.DuckDBPyConnection) -> None:

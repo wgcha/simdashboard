@@ -1,4 +1,4 @@
-import type { AnalysisRequest, AutomationTemplate, DashboardDefinition, DashboardSummary, DashboardVersion, LoadCase, Overview, PortfolioOverview, Project, QualityThreshold, VariableDefinition, WidgetCatalogItem, Workflow } from './types'
+import type { AnalysisRequest, AutomationTemplate, DashboardDefinition, DashboardSummary, DashboardVersion, LoadCase, Overview, PortfolioOverview, Project, QualityThreshold, VariableDefinition, VariableDefinitionInput, WidgetCatalogItem, Workflow } from './types'
 
 async function json<T>(response: Response | Promise<Response>): Promise<T> {
   response = await response
@@ -63,6 +63,12 @@ export const api = {
   dashboard: (id = 'dashboard-drop-default') => json<DashboardDefinition>(fetch(`/api/dashboards/${id}`)),
   dashboards: (projectId?: string) => json<DashboardSummary[]>(fetch(`/api/dashboards${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''}`)),
   variables: (loadCaseId: string) => json<VariableDefinition[]>(fetch(`/api/load-cases/${loadCaseId}/variables`)),
+  createVariable: (loadCaseId: string, payload: VariableDefinitionInput) =>
+    json<VariableDefinition>(fetch(`/api/load-cases/${loadCaseId}/variables`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })),
+  updateVariable: (loadCaseId: string, variableKey: string, payload: Omit<VariableDefinitionInput, 'variable_key' | 'data_type'>) =>
+    json<VariableDefinition>(fetch(`/api/load-cases/${loadCaseId}/variables/${encodeURIComponent(variableKey)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })),
+  deleteVariable: (loadCaseId: string, variableKey: string) =>
+    json<{ status: string; variable_key: string }>(fetch(`/api/load-cases/${loadCaseId}/variables/${encodeURIComponent(variableKey)}`, { method: 'DELETE' })),
   widgetCatalog: () => json<WidgetCatalogItem[]>(fetch('/api/widget-catalog')),
   automationTemplates: (projectId?: string) => json<AutomationTemplate[]>(fetch(`/api/automation-templates${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''}`)),
   dashboardVersions: (dashboardId: string) => json<DashboardVersion[]>(fetch(`/api/dashboards/${dashboardId}/versions`)),

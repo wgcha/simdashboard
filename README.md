@@ -38,6 +38,8 @@ Open Cell과 Chassis Rear는 각각 독립된 12열 그리드 레이아웃입니
 
 위젯 설정의 데이터 변수 목록도 이 카탈로그 API를 사용합니다.
 
+관리자는 카탈로그 화면에서 변수를 생성·수정·비활성화할 수 있습니다. 정의는 DuckDB의 `variable_definitions`에 저장되고 동일한 `variable_key`를 가진 숫자 또는 시간 이력 결과가 들어오면 대시보드 그래프에 자동 연결됩니다. SQL 구조, CRUD API와 PostgreSQL 이전 방법은 [`docs/backend-sql-integration-guide.md`](docs/backend-sql-integration-guide.md)를 참고하세요.
+
 ## 자동화 템플릿
 
 좌측 메뉴의 `자동화 템플릿`에서 DROP과 SIDE_CLAMP 모델링 자동화 실행 이력을 조회합니다.

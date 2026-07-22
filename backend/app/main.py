@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from .database import connect, initialize_database, json_value, rows
 from .result_import import CSV_TEMPLATE, JSON_TEMPLATE, ResultFormatError, parse_result_file
 from .repositories.portfolio import PortfolioRepository
+from .repositories.variable_catalog import VariableCatalogRepository
 
 
 @asynccontextmanager
@@ -97,6 +98,32 @@ class ResultImportPayload(BaseModel):
     content: str = Field(min_length=1, max_length=5_000_000)
     author: str = Field(default="해석 담당자", min_length=2, max_length=60)
     validate_only: bool = False
+
+
+class VariableCreate(BaseModel):
+    variable_key: str = Field(min_length=3, max_length=80, pattern=r"^[a-z][a-z0-9_]*$")
+    display_name: str = Field(min_length=2, max_length=120)
+    data_type: Literal["NUMBER", "TIME_SERIES"]
+    unit: str = Field(min_length=1, max_length=30)
+    description: str = Field(default="", max_length=500)
+    filterable: bool = True
+    threshold: float | None = None
+    allowed_widgets: list[str] = Field(default_factory=list, max_length=12)
+    allowed_aggregations: list[str] = Field(default_factory=list, max_length=8)
+    result_group: Literal["OPEN_CELL", "CHASSIS_REAR", "CUSTOM"] = "CUSTOM"
+    updated_by: str = Field(default="관리자", min_length=2, max_length=60)
+
+
+class VariableUpdate(BaseModel):
+    display_name: str = Field(min_length=2, max_length=120)
+    unit: str = Field(min_length=1, max_length=30)
+    description: str = Field(default="", max_length=500)
+    filterable: bool = True
+    threshold: float | None = None
+    allowed_widgets: list[str] = Field(default_factory=list, max_length=12)
+    allowed_aggregations: list[str] = Field(default_factory=list, max_length=8)
+    result_group: Literal["OPEN_CELL", "CHASSIS_REAR", "CUSTOM"] = "CUSTOM"
+    updated_by: str = Field(default="관리자", min_length=2, max_length=60)
 
 
 @app.get("/api/health")
@@ -271,8 +298,12 @@ def import_analysis_results(load_case_id: str, payload: ResultImportPayload) -> 
             [context[2]],
         ).fetchone()
         chassis_threshold = float(threshold_row[0]) if threshold_row else 5.0
+        catalog = {
+            item["id"]: item
+            for item in VariableCatalogRepository(conn).list_for_load_case(load_case_id)
+        }
         try:
-            parsed = parse_result_file(payload.filename, payload.content, chassis_threshold)
+            parsed = parse_result_file(payload.filename, payload.content, chassis_threshold, catalog)
         except ResultFormatError as exc:
             raise HTTPException(422, str(exc)) from exc
         if payload.validate_only:
@@ -551,35 +582,53 @@ def update_workflow_step(step_id: str, payload: WorkflowStepUpdate) -> dict[str,
 @app.get("/api/load-cases/{load_case_id}/variables")
 def get_variables(load_case_id: str) -> list[dict[str, Any]]:
     with connect() as conn:
-        result = rows(
-            conn.execute(
-                """
-                SELECT DISTINCT sr.variable_key AS id, sr.display_name, 'NUMBER' AS data_type,
-                       sr.unit, true AS filterable, 'scalar_results' AS source,
-                       sr.threshold_double AS threshold, sr.verdict,
-                       lc.analysis_type
-                FROM scalar_results sr
-                JOIN analysis_runs run ON run.id = sr.analysis_run_id
-                JOIN load_cases lc ON lc.id = run.load_case_id
-                WHERE run.load_case_id = ?
-                UNION ALL
-                SELECT DISTINCT ts.variable_key AS id, ts.display_name, 'TIME_SERIES' AS data_type,
-                       ts.value_unit AS unit, true AS filterable, 'time_series_results' AS source,
-                       NULL AS threshold, NULL AS verdict,
-                       lc.analysis_type
-                FROM time_series_results ts
-                JOIN analysis_runs run ON run.id = ts.analysis_run_id
-                JOIN load_cases lc ON lc.id = run.load_case_id
-                WHERE run.load_case_id = ?
-                """,
-                [load_case_id, load_case_id],
-            )
-        )
-    for item in result:
-        item["allowed_widgets"] = ["kpi", "gauge", "edge_bar", "scatter", "result_table"] if item["data_type"] == "NUMBER" else ["time_series", "scatter", "result_table"]
-        item["allowed_aggregations"] = ["MAX", "MIN", "AVG", "LATEST"] if item["data_type"] == "NUMBER" else ["RAW", "MAX_BY_TIME"]
-        item["description"] = f"{item['analysis_type']} 최신 해석 실행의 {item['display_name']}"
-    return result
+        if not conn.execute("SELECT 1 FROM load_cases WHERE id = ?", [load_case_id]).fetchone():
+            raise HTTPException(404, "하중 경우를 찾을 수 없습니다.")
+        return VariableCatalogRepository(conn).list_for_load_case(load_case_id)
+
+
+def _catalog_error(exc: Exception) -> HTTPException:
+    messages = {
+        "VARIABLE_EXISTS": (409, "같은 변수 키가 이미 존재합니다."),
+        "VARIABLE_NOT_FOUND": (404, "변수를 찾을 수 없습니다."),
+        "LOAD_CASE_NOT_FOUND": (404, "하중 경우를 찾을 수 없습니다."),
+        "INVALID_CATALOG_OPTIONS": (422, "데이터 유형에 허용되지 않은 위젯 또는 집계 방식입니다."),
+        "NUMBER_THRESHOLD_REQUIRED": (422, "숫자 변수에는 판정 기준값이 필요합니다."),
+    }
+    status, message = messages.get(str(exc), (422, str(exc)))
+    return HTTPException(status, message)
+
+
+@app.post("/api/load-cases/{load_case_id}/variables", status_code=201)
+def create_variable(load_case_id: str, payload: VariableCreate) -> dict[str, Any]:
+    with connect() as conn:
+        try:
+            return VariableCatalogRepository(conn).create(load_case_id, payload.model_dump())
+        except (ValueError, LookupError) as exc:
+            raise _catalog_error(exc) from exc
+
+
+@app.put("/api/load-cases/{load_case_id}/variables/{variable_key}")
+def update_variable(load_case_id: str, variable_key: str, payload: VariableUpdate) -> dict[str, Any]:
+    with connect() as conn:
+        try:
+            return VariableCatalogRepository(conn).update(load_case_id, variable_key, payload.model_dump())
+        except (ValueError, LookupError) as exc:
+            raise _catalog_error(exc) from exc
+
+
+@app.delete("/api/load-cases/{load_case_id}/variables/{variable_key}")
+def delete_variable(load_case_id: str, variable_key: str, updated_by: str = Query(default="관리자", min_length=2, max_length=60)) -> dict[str, Any]:
+    with connect() as conn:
+        repository = VariableCatalogRepository(conn)
+        references = repository.dashboard_references(load_case_id, variable_key)
+        if references:
+            raise HTTPException(409, detail={"message": "대시보드에서 사용 중인 변수는 삭제할 수 없습니다.", "dashboard_ids": references})
+        try:
+            repository.deactivate(load_case_id, variable_key, updated_by)
+        except LookupError as exc:
+            raise _catalog_error(exc) from exc
+    return {"status": "deactivated", "variable_key": variable_key}
 
 
 @app.get("/api/automation-templates")

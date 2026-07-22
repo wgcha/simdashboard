@@ -135,7 +135,8 @@ export type Workflow = {
 
 export type WidgetType = 'open_cell_map' | 'kpi' | 'verdict' | 'gauge' | 'edge_bar' | 'summary' | 'time_series' | 'scatter' | 'note' | 'result_table' | 'contour' | 'video' | 'model3d' | 'workflow' | 'chassis_summary' | 'chassis_diagram' | 'chassis_bar' | 'chassis_table'
 
-export type VariableDefinition = { id: string; display_name: string; data_type: string; unit: string; filterable: boolean; source: string; allowed_widgets: string[]; allowed_aggregations: string[]; description: string; threshold?: number; verdict?: string; analysis_type: string }
+export type VariableDefinition = { id: string; definition_id: string; variable_key: string; display_name: string; data_type: 'NUMBER' | 'TIME_SERIES'; unit: string; filterable: boolean; source: string; allowed_widgets: string[]; allowed_aggregations: string[]; description: string; threshold?: number | null; analysis_type: string; result_group: 'OPEN_CELL' | 'CHASSIS_REAR' | 'CUSTOM'; has_data: boolean; dashboard_usage_count: number; updated_at: string; updated_by: string }
+export type VariableDefinitionInput = { variable_key: string; display_name: string; data_type: 'NUMBER' | 'TIME_SERIES'; unit: string; description: string; filterable: boolean; threshold: number | null; allowed_widgets: string[]; allowed_aggregations: string[]; result_group: 'OPEN_CELL' | 'CHASSIS_REAR' | 'CUSTOM'; updated_by: string }
 export type WidgetCatalogItem = { type: WidgetType; label: string; category: string; allowed_data_types: string[]; default_size: [number, number] }
 export type DashboardVersion = { dashboard_id: string; version: number; created_by: string; created_at: string; is_valid: boolean }
 export type DashboardSummary = { id: string; project_id: string; request_id?: string; load_case_id?: string; name: string; description: string; version: number; updated_at: string }

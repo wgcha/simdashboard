@@ -145,6 +145,72 @@ def test_default_dashboard_has_persisted_widgets():
         assert {item["analysis_type"] for item in templates} >= {"DROP", "SIDE_CLAMP"}
 
 
+def test_variable_catalog_crud_persists_and_protects_dashboard_bindings():
+    initialize_database()
+    load_case_id = "loadcase-drop-bottom-001"
+    variable_key = "custom_frame_energy"
+    dashboard_id = "dashboard-variable-reference-test"
+    create_payload = {
+        "variable_key": variable_key,
+        "display_name": "프레임 흡수 에너지",
+        "data_type": "NUMBER",
+        "unit": "J",
+        "description": "사용자 정의 에너지 결과",
+        "threshold": 120.0,
+        "allowed_widgets": ["kpi", "edge_bar", "result_table"],
+        "allowed_aggregations": ["MAX", "AVG", "LATEST"],
+        "result_group": "CUSTOM",
+        "updated_by": "테스트 관리자",
+    }
+    with TestClient(app) as client:
+        created = client.post(f"/api/load-cases/{load_case_id}/variables", json=create_payload)
+        assert created.status_code == 201, created.text
+        assert created.json()["id"] == variable_key
+        assert created.json()["has_data"] is False
+
+        preview = client.post(
+            f"/api/load-cases/{load_case_id}/results/import",
+            json={
+                "filename": "custom-variable.csv",
+                "content": "record_type,variable_key,display_name,value,unit,threshold,time,time_unit,value_unit\nscalar,custom_frame_energy,프레임 흡수 에너지,96.4,J,120,,,,\n",
+                "author": "테스트 관리자",
+                "validate_only": True,
+            },
+        )
+        assert preview.status_code == 200, preview.text
+        assert preview.json()["results"][0]["variable_key"] == variable_key
+
+        updated = client.put(
+            f"/api/load-cases/{load_case_id}/variables/{variable_key}",
+            json={**{key: value for key, value in create_payload.items() if key not in {"variable_key", "data_type"}}, "display_name": "프레임 에너지", "threshold": 130.0},
+        )
+        assert updated.status_code == 200, updated.text
+        assert updated.json()["display_name"] == "프레임 에너지"
+        assert updated.json()["threshold"] == 130.0
+        assert any(item["id"] == variable_key for item in client.get(f"/api/load-cases/{load_case_id}/variables").json())
+
+        with connect() as conn:
+            stored = conn.execute(
+                "SELECT display_name, threshold_double, is_active FROM variable_definitions WHERE load_case_id=? AND variable_key=?",
+                [load_case_id, variable_key],
+            ).fetchone()
+            assert stored == ("프레임 에너지", 130.0, True)
+            definition = json.dumps({"id": dashboard_id, "name": "test", "description": "", "widgets": [{"id": "test-widget", "type": "kpi", "title": "test", "x": 0, "y": 0, "w": 3, "h": 2, "settings": {"variableId": variable_key}}]})
+            conn.execute("INSERT INTO dashboards VALUES (?, 'project-tv-001', 'request-drop-001', ?, 'test', '', 1, ?, now())", [dashboard_id, load_case_id, definition])
+
+        blocked = client.delete(f"/api/load-cases/{load_case_id}/variables/{variable_key}")
+        assert blocked.status_code == 409
+
+        with connect() as conn:
+            conn.execute("DELETE FROM dashboards WHERE id = ?", [dashboard_id])
+        deleted = client.delete(f"/api/load-cases/{load_case_id}/variables/{variable_key}")
+        assert deleted.status_code == 200
+        assert all(item["id"] != variable_key for item in client.get(f"/api/load-cases/{load_case_id}/variables").json())
+
+    with connect() as conn:
+        conn.execute("DELETE FROM variable_definitions WHERE load_case_id=? AND variable_key=?", [load_case_id, variable_key])
+
+
 def test_create_project_request_and_load_case():
     created_project = None
     created_request = None

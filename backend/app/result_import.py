@@ -77,7 +77,12 @@ def _raw_records(filename: str, content: str) -> tuple[dict[str, Any], list[dict
     raise ResultFormatError("CSV 또는 JSON 파일만 지원합니다.")
 
 
-def parse_result_file(filename: str, content: str, chassis_threshold: float = 5.0) -> dict[str, Any]:
+def parse_result_file(
+    filename: str,
+    content: str,
+    chassis_threshold: float = 5.0,
+    variable_definitions: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     if not content.strip():
         raise ResultFormatError("파일 내용이 비어 있습니다.")
     if filename.lower().endswith(".csv"):
@@ -88,6 +93,7 @@ def parse_result_file(filename: str, content: str, chassis_threshold: float = 5.
             except RadiossCsvError as exc:
                 raise ResultFormatError(str(exc)) from exc
     metadata, raw_scalars, raw_series = _raw_records(filename, content)
+    variable_definitions = variable_definitions or {}
     scalars: list[dict[str, Any]] = []
     series: list[dict[str, Any]] = []
     scalar_keys: set[str] = set()
@@ -101,6 +107,12 @@ def parse_result_file(filename: str, content: str, chassis_threshold: float = 5.
             display_name, unit, default_threshold, analysis = OPEN_CELL_SCALARS[key], "MPa", 75.0, "OPEN_CELL"
         elif key in CHASSIS_SCALARS:
             display_name, unit, default_threshold, analysis = CHASSIS_SCALARS[key], "mm", chassis_threshold, "CHASSIS_REAR"
+        elif key in variable_definitions and variable_definitions[key]["data_type"] == "NUMBER":
+            definition = variable_definitions[key]
+            display_name = definition["display_name"]
+            unit = definition["unit"]
+            default_threshold = definition["threshold"]
+            analysis = definition.get("result_group", "CUSTOM")
         else:
             raise ResultFormatError(f"지원하지 않는 실수형 변수입니다: {key or '(비어 있음)'}")
         if key in scalar_keys:
@@ -122,7 +134,8 @@ def parse_result_file(filename: str, content: str, chassis_threshold: float = 5.
         if not isinstance(item, dict):
             raise ResultFormatError(f"time_series {index}번째 항목은 객체여야 합니다.")
         key = str(item.get("variable_key", "")).strip()
-        if key not in OPEN_CELL_SERIES:
+        definition = variable_definitions.get(key)
+        if key not in OPEN_CELL_SERIES and not (definition and definition["data_type"] == "TIME_SERIES"):
             raise ResultFormatError(f"지원하지 않는 시간 이력 변수입니다: {key or '(비어 있음)'}")
         time_value = _number(item.get("time", item.get("time_value")), f"{key} time")
         value = _number(item.get("value"), f"{key} value")
@@ -132,11 +145,11 @@ def parse_result_file(filename: str, content: str, chassis_threshold: float = 5.
         series_points.add(point)
         series.append({
             "variable_key": key,
-            "display_name": str(item.get("display_name") or OPEN_CELL_SERIES[key]),
+            "display_name": str(item.get("display_name") or OPEN_CELL_SERIES.get(key) or definition["display_name"]),
             "time": time_value,
             "value": value,
             "time_unit": str(item.get("time_unit") or "ms"),
-            "value_unit": str(item.get("value_unit") or item.get("unit") or "MPa"),
+            "value_unit": str(item.get("value_unit") or item.get("unit") or (definition or {}).get("unit") or "MPa"),
         })
 
     if not scalars:
