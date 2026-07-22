@@ -1,58 +1,84 @@
 # Analysis Canvas
 
-해석 데이터베이스를 기반으로 사용자가 시각화 위젯과 레이아웃을 구성할 수 있는 대시보드 MVP입니다. 현재 실행 데이터베이스는 파일 기반 DuckDB이며, 저장소 계층을 분리해 PostgreSQL 전환을 준비합니다.
+Radioss 해석 결과를 파일 기반 DuckDB에 저장하고, 프로젝트와 의뢰별로 탐색·판정·편집하는 한국어 웹 대시보드 MVP입니다. 데이터 접근 계층은 UI와 분리되어 있으며 PostgreSQL 이전을 고려한 구조입니다.
 
-## 현재 구현 범위
+## 현재 구현 기능
 
-- TV 포장 낙하 시 Open Cell 상·하·좌·우 엣지 최대 응력
-- 엣지별 응력-시간 그래프와 75 MPa 기준선
-- 엣지별 및 전체 PASS/FAIL 판정
-- 수행자 의견과 상세 결과표
-- 컨투어 이미지용 미디어 메타데이터와 위젯
-- 해석 의뢰 작업 순서와 단계별 상태
-- 웹에서 프로젝트 → 의뢰 → 하중 경우를 순서대로 등록하는 운영 화면
-- 의뢰 등록 시 10단계 기본 작업 순서 자동 생성(Validation 선택 단계)
-- DROP 및 SIDE_CLAMP 하중 경우 등록 API와 파일 DB 영구 저장
-- Open Cell 파손 분석과 Chassis Rear 영구변형 평가 계층 탭
-- 드래그·리사이즈 대시보드 편집
-- DuckDB에 저장되는 버전형 레이아웃
-- 자연어 요청을 검증된 위젯 변경안으로 변환하는 MVP
-- 데스크톱 및 모바일 조회 화면
+- 프로젝트 → 의뢰작업 → 하중 경우(DROP, SIDE_CLAMP) 계층 탐색
+- 의뢰 진행 상태와 여러 의뢰의 동시 진행 현황
+- Open Cell 파손 분석: 상·하·좌·우 엣지 최대 응력, 응력-시간 그래프, 기준값 PASS/FAIL
+- Chassis Rear 영구변형 평가: 위·아래 엣지 직선 이격 및 모서리 영구변형, 최대 위치, 기준값 PASS/FAIL
+- DROP과 SIDE_CLAMP 모두 Open Cell 및 Chassis Rear 분석 제공
+- Radioss 노드·요소·요소별 응력 CSV 가져오기와 사전 검증
+- KPI, 기간 추이, 분포, 비교 차트, 필터, 검색, CSV 내보내기
+- 변수 카탈로그와 모델링 자동화 템플릿 실행 이력
+- 데스크톱·모바일 반응형 한국어 UI
+
+## 대시보드 편집
+
+Open Cell과 Chassis Rear는 각각 독립된 12열 그리드 레이아웃입니다.
+
+1. 상세 분석 화면에서 `대시보드 편집`을 누릅니다.
+2. 위젯 헤더를 끌어 위치를 변경합니다.
+3. 위젯 오른쪽 아래 핸들을 끌어 크기를 변경합니다.
+4. 톱니바퀴에서 제목, 시각화 유형, 데이터 변수, 집계 방식, 강조색, 기준선 표시를 바꿉니다.
+5. `레이아웃 저장`을 눌러 DuckDB에 버전으로 저장합니다.
+
+저장된 레이아웃은 다시 접속해도 복원됩니다. Open Cell과 Chassis Rear의 설정은 서로 영향을 주지 않습니다.
+
+## 변수 카탈로그
+
+좌측 메뉴의 `변수 카탈로그`에서 선택한 하중 경우의 실제 변수 메타데이터를 확인합니다.
+
+- 변수 ID, 이름, 설명, 데이터 형식, 단위
+- 분석 유형과 원천 데이터
+- 기준값과 판정
+- 허용 집계 방식과 허용 위젯 유형
+- 검색 및 데이터 형식 필터
+
+위젯 설정의 데이터 변수 목록도 이 카탈로그 API를 사용합니다.
+
+관리자는 카탈로그 화면에서 변수를 생성·수정·비활성화할 수 있습니다. 정의는 DuckDB의 `variable_definitions`에 저장되고 동일한 `variable_key`를 가진 숫자 또는 시간 이력 결과가 들어오면 대시보드 그래프에 자동 연결됩니다. SQL 구조, CRUD API와 PostgreSQL 이전 방법은 [`docs/backend-sql-integration-guide.md`](docs/backend-sql-integration-guide.md)를 참고하세요.
+
+## 자동화 템플릿
+
+좌측 메뉴의 `자동화 템플릿`에서 DROP과 SIDE_CLAMP 모델링 자동화 실행 이력을 조회합니다.
+
+- 템플릿명, 버전, 상태
+- 연결 프로젝트·의뢰·하중 경우
+- 입력 파라미터
+- 생성 모델 정보
+- 실행 시간
 
 ## 데이터 소유 관계
 
 ```text
 Project
-├─ ProductInformation
-│  ├─ CAD
-│  ├─ Material
-│  └─ Reliability
+├─ ProductInformation ─ CAD / Material / Reliability
 ├─ AnalysisRequest
 │  ├─ RequestStep
-│  └─ LoadCase
-│     ├─ DROP
-│     │  ├─ TemplateExecution
-│     │  └─ AnalysisRun → AnalysisResult / MediaAsset / Note
-│     └─ SIDE_CLAMP
-│        ├─ TemplateExecution
-│        └─ AnalysisRun → AnalysisResult / MediaAsset / Note
-└─ Validation
-   ├─ Reliability verdict
-   ├─ Sensor data
-   └─ AI analysis
+│  └─ LoadCase (DROP | SIDE_CLAMP)
+│     ├─ TemplateExecution
+│     └─ AnalysisRun
+│        ├─ AnalysisResult
+│        ├─ MediaAsset
+│        └─ Note
+└─ Validation ─ Reliability verdict / Sensor data / AI analysis
 ```
 
-모델링 자동화 템플릿 실행과 해석 결과는 프로젝트나 의뢰에 직접 귀속되지 않고 반드시 `LoadCase` 아래에 위치합니다. 실제 결과는 `AnalysisRun`과 연결되어 템플릿 버전, 입력값 및 재실행 이력을 추적할 수 있습니다.
+모델링 자동화 템플릿과 해석 결과는 반드시 하중 경우 아래에 저장됩니다. 경량 3D는 GLB 또는 glTF만 허용하며 원본 CAD/CAE 파일은 참조 경로와 메타데이터만 관리합니다.
 
-## 빠른 실행
+## 예제 데이터
 
-요구 사항:
+- 등록용 통합 예제: [`example/radioss_tv_result_example.csv`](example/radioss_tv_result_example.csv)
+- 생성 원본과 형식 설명: [`examples/radioss/README.md`](examples/radioss/README.md)
+- 계산 결과 검토: [`examples/radioss/REVIEW.md`](examples/radioss/REVIEW.md)
 
-- Python 3.11 이상
-- Node.js 20 이상
-- pnpm
+기본 판정값은 Open Cell 최대 응력 75 MPa, Chassis Rear 영구변형 5 mm이며 관리자 화면에서 변경할 수 있습니다. 값이 기준 이상이면 FAIL입니다.
 
-PowerShell에서 다음 명령을 실행합니다.
+## 실행
+
+요구 사항은 Python 3.11~3.13, Node.js 20 이상, pnpm입니다.
 
 ```powershell
 cd E:\simulation_dashboard
@@ -61,38 +87,16 @@ python -m venv .venv
 cd .\frontend
 pnpm install
 cd ..
-.\start.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\start.ps1
 ```
 
-브라우저에서 <http://127.0.0.1:5173>을 엽니다. API 문서는 <http://127.0.0.1:8000/docs>에서 확인할 수 있습니다.
-
-이미 설치가 완료된 현재 환경에서는 다음 명령만 실행하면 됩니다.
-
-```powershell
-cd E:\simulation_dashboard
-.\start.ps1
-```
+- 웹: <http://127.0.0.1:5173>
+- API 문서: <http://127.0.0.1:8000/docs>
 
 종료:
 
 ```powershell
-.\stop.ps1
-```
-
-## 수동 실행
-
-백엔드:
-
-```powershell
-cd E:\simulation_dashboard\backend
-..\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
-```
-
-프런트엔드:
-
-```powershell
-cd E:\simulation_dashboard\frontend
-pnpm run dev
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\stop.ps1
 ```
 
 ## 검증
@@ -108,39 +112,22 @@ pnpm run build
 ## 주요 경로
 
 - `backend/app/database.py`: DuckDB 스키마와 재현 가능한 샘플 데이터
-- `backend/app/main.py`: 프로젝트, 의뢰, 하중 경우, 결과, 워크플로 및 레이아웃 API
-- `backend/data/analysis_dashboard.duckdb`: 자동 생성되는 파일 DB
-- `frontend/src/App.tsx`: 대시보드, 편집기, 자연어 변경 미리보기
-- `frontend/src/styles.css`: 반응형 엔지니어링 UI
+- `backend/app/main.py`: 프로젝트, 의뢰, 하중 경우, 결과, 변수, 템플릿, 대시보드 API
+- `backend/app/repositories/`: 데이터 접근 계층
+- `backend/app/media_policy.py`: 이미지·영상·경량 3D 정책
+- `backend/data/analysis_dashboard.duckdb`: 자동 생성 파일 DB
+- `frontend/src/App.tsx`: 계층 탐색, 분석 화면, 편집기, 카탈로그, 템플릿
+- `frontend/src/PortfolioDashboard.tsx`: 운영 KPI와 필터 연동 화면
+- `frontend/src/styles.css`: 반응형 UI
 
-## 자연어 편집 MVP
+## PostgreSQL 전환 계획
 
-현재 다음 문장을 인식합니다.
+현재 기본값은 `ANALYSIS_DB_BACKEND=duckdb`이며 `ANALYSIS_DUCKDB_PATH`로 파일 위치를 지정합니다. 이후 `ANALYSIS_DB_BACKEND=postgresql`과 `DATABASE_URL`을 사용하도록 저장소 구현을 교체합니다.
 
-- `응력-시간 그래프를 추가해`
-- `상하좌우 최대 응력 막대그래프를 추가해`
-- `패스/실패 판정 카드를 추가해`
+1. 현재 테이블을 마이그레이션 도구가 관리하는 PostgreSQL 스키마로 옮깁니다.
+2. `repositories/`의 DuckDB SQL 실행부를 PostgreSQL 어댑터로 교체합니다.
+3. 대시보드 설정과 결과 메타데이터는 JSONB로 저장합니다.
+4. 파일 바이너리는 객체 저장소로 옮기고 DB에는 경로와 검증 메타데이터만 저장합니다.
+5. API 계약과 프런트엔드는 그대로 유지합니다.
 
-명령은 SQL이나 코드를 실행하지 않습니다. 백엔드가 허용된 위젯 명세로 변환하고, 프런트엔드에서 미리보기를 확인한 뒤에만 레이아웃에 적용합니다. 외부 AI 모델 연동 시에도 같은 명세 검증 경계를 유지해야 합니다.
-
-## 파일 및 3차원 결과 정책
-
-이미지, 영상, CAD 및 3차원 데이터는 DuckDB에 바이너리로 저장하지 않습니다. DB에는 경로, MIME 형식, 크기, 체크섬과 결과 메타데이터만 저장합니다.
-
-- 컨투어 이미지: PNG, JPEG, WebP
-- 영상: MP4, WebM
-- 브라우저 3D 가시화: GLB 또는 glTF만 허용
-- 원본 CAD/CAE 파일: 참조 및 변환 이력만 관리
-
-## PostgreSQL 전환
-
-현재 MVP는 DuckDB 연결을 사용합니다. PostgreSQL 단계에서는 다음 순서로 전환합니다.
-
-1. 현재 테이블을 마이그레이션 도구가 관리하는 스키마로 옮깁니다.
-2. 쿼리를 저장소 인터페이스 뒤로 이동시킵니다.
-3. 파일 경로는 로컬 경로 대신 객체 스토리지 키로 교체합니다.
-4. 대시보드 JSON 명세와 결과 메타데이터는 PostgreSQL JSONB를 사용합니다.
-5. 실행 이력과 결과 대량 적재에 트랜잭션 및 배치 적재를 적용합니다.
-6. DuckDB를 로컬 개발 및 읽기 전용 분석 모드로 유지합니다.
-
-자격증명은 코드에 저장하지 않고 환경변수 또는 시크릿 저장소에서 주입합니다.
+샘플 데이터는 합성이며 실제 제품 판정 근거로 사용하면 안 됩니다.

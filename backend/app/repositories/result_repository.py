@@ -1,6 +1,6 @@
 from typing import List, Dict, Any, Optional
 import uuid
-from backend.app.database import connect
+from ..database import connect
 
 class ResultRepository:
     def delete_results_for_run(self, run_id: str) -> None:
@@ -35,6 +35,6 @@ class ResultRepository:
             )
 
     def get_thresholds(self, project_id: str) -> List[Dict[str, Any]]:
-        from backend.app.database import rows
+        from ..database import rows
         with connect() as conn:
             return rows(conn.execute("SELECT * FROM quality_thresholds WHERE project_id = ?", [project_id]))

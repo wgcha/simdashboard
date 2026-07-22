@@ -1,7 +1,7 @@
 from typing import Optional, Dict, Any
 import json
 from datetime import datetime, timezone
-from backend.app.database import connect, rows
+from ..database import connect, rows
 
 class AnalysisRepository:
     def get_project(self, project_id: str) -> Optional[Dict[str, Any]]:

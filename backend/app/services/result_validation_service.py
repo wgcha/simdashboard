@@ -1,5 +1,5 @@
-from backend.app.schemas.result_import import Manifest
-from backend.app.repositories.analysis_repository import AnalysisRepository
+from ..schemas.result_import import Manifest
+from ..repositories.analysis_repository import AnalysisRepository
 from pathlib import Path
 
 class ResultValidationService:

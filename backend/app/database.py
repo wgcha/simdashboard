@@ -8,6 +8,8 @@ from typing import Any
 
 import duckdb
 
+from .config import database_settings
+
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / "data"
@@ -15,8 +17,11 @@ DB_PATH = DATA_DIR / "analysis_dashboard.duckdb"
 
 
 def connect() -> duckdb.DuckDBPyConnection:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    return duckdb.connect(str(DB_PATH))
+    settings = database_settings()
+    if settings.backend == "postgresql":
+        raise RuntimeError("PostgreSQL 어댑터는 운영 전환 단계에서 활성화합니다. 현재는 ANALYSIS_DB_BACKEND=duckdb를 사용하세요.")
+    settings.duckdb_path.parent.mkdir(parents=True, exist_ok=True)
+    return duckdb.connect(str(settings.duckdb_path))
 
 
 def rows(cursor: duckdb.DuckDBPyConnection) -> list[dict[str, Any]]:
@@ -95,28 +100,6 @@ def initialize_database() -> None:
                 executed_at TIMESTAMP NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS result_import_jobs (
-                id VARCHAR PRIMARY KEY,
-                analysis_run_id VARCHAR,
-                project_id VARCHAR NOT NULL,
-                request_id VARCHAR NOT NULL,
-                load_case_id VARCHAR NOT NULL,
-                manifest_path VARCHAR NOT NULL,
-                source_directory VARCHAR NOT NULL,
-                schema_version VARCHAR NOT NULL,
-                status VARCHAR NOT NULL,
-                overwrite_policy VARCHAR NOT NULL,
-                file_count INTEGER NOT NULL DEFAULT 0,
-                row_count BIGINT NOT NULL DEFAULT 0,
-                manifest_checksum VARCHAR NOT NULL,
-                source_checksum VARCHAR,
-                error_code VARCHAR,
-                error_message VARCHAR,
-                started_at TIMESTAMP,
-                completed_at TIMESTAMP,
-                imported_at TIMESTAMP NOT NULL
-            );
-
             CREATE TABLE IF NOT EXISTS analysis_runs (
                 id VARCHAR PRIMARY KEY,
                 load_case_id VARCHAR NOT NULL,
@@ -125,12 +108,7 @@ def initialize_database() -> None:
                 solver VARCHAR,
                 status VARCHAR NOT NULL,
                 started_at TIMESTAMP,
-                completed_at TIMESTAMP,
-                overall_verdict VARCHAR,
-                source_program VARCHAR,
-                source_program_version VARCHAR,
-                result_import_status VARCHAR,
-                last_imported_at TIMESTAMP
+                completed_at TIMESTAMP
             );
 
             CREATE TABLE IF NOT EXISTS scalar_results (
@@ -154,6 +132,19 @@ def initialize_database() -> None:
                 value DOUBLE NOT NULL,
                 time_unit VARCHAR NOT NULL,
                 value_unit VARCHAR NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS result_locations (
+                analysis_run_id VARCHAR NOT NULL,
+                variable_key VARCHAR NOT NULL,
+                entity_type VARCHAR NOT NULL,
+                entity_id VARCHAR NOT NULL,
+                x DOUBLE NOT NULL,
+                y DOUBLE NOT NULL,
+                z DOUBLE NOT NULL,
+                time_value DOUBLE NOT NULL,
+                time_unit VARCHAR NOT NULL,
+                method VARCHAR NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS qualitative_notes (
@@ -200,6 +191,28 @@ def initialize_database() -> None:
                 updated_at TIMESTAMP NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS variable_definitions (
+                id VARCHAR PRIMARY KEY,
+                load_case_id VARCHAR NOT NULL,
+                variable_key VARCHAR NOT NULL,
+                display_name VARCHAR NOT NULL,
+                data_type VARCHAR NOT NULL,
+                unit VARCHAR NOT NULL,
+                description VARCHAR,
+                filterable BOOLEAN NOT NULL DEFAULT true,
+                source VARCHAR NOT NULL,
+                threshold_double DOUBLE,
+                allowed_widgets_json JSON NOT NULL,
+                allowed_aggregations_json JSON NOT NULL,
+                analysis_type VARCHAR NOT NULL,
+                result_group VARCHAR NOT NULL DEFAULT 'CUSTOM',
+                is_active BOOLEAN NOT NULL DEFAULT true,
+                created_at TIMESTAMP NOT NULL,
+                updated_at TIMESTAMP NOT NULL,
+                updated_by VARCHAR NOT NULL,
+                UNIQUE(load_case_id, variable_key)
+            );
+
             CREATE TABLE IF NOT EXISTS dashboards (
                 id VARCHAR PRIMARY KEY,
                 project_id VARCHAR NOT NULL,
@@ -210,6 +223,16 @@ def initialize_database() -> None:
                 version INTEGER NOT NULL,
                 definition_json JSON NOT NULL,
                 updated_at TIMESTAMP NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS dashboard_versions (
+                dashboard_id VARCHAR NOT NULL,
+                version INTEGER NOT NULL,
+                definition_json JSON NOT NULL,
+                created_by VARCHAR NOT NULL,
+                created_at TIMESTAMP NOT NULL,
+                is_valid BOOLEAN NOT NULL DEFAULT true,
+                PRIMARY KEY (dashboard_id, version)
             );
             """
         )
@@ -226,10 +249,104 @@ def initialize_database() -> None:
                 conn.execute("ROLLBACK")
                 raise
         ensure_sample_evolutions(conn)
+        ensure_variable_definitions(conn)
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO dashboard_versions
+            SELECT id, version, definition_json, 'system', updated_at, true FROM dashboards
+            """
+        )
+        chassis_layout = {
+            "id": "dashboard-chassis-default",
+            "name": "Chassis Rear 영구변형 기본 분석",
+            "description": "엣지 이격과 모서리 영구변형 평가",
+            "widgets": [
+                {"id": "chassis-summary", "type": "chassis_summary", "title": "영구변형 판정 요약", "x": 0, "y": 0, "w": 12, "h": 2, "settings": {}},
+                {"id": "chassis-map", "type": "chassis_diagram", "title": "Chassis Rear 변형 위치", "x": 0, "y": 2, "w": 7, "h": 5, "settings": {}},
+                {"id": "chassis-bar", "type": "chassis_bar", "title": "엣지·모서리 영구변형 비교", "x": 7, "y": 2, "w": 5, "h": 5, "settings": {"showThreshold": True}},
+                {"id": "chassis-table", "type": "chassis_table", "title": "영구변형 상세 결과", "x": 0, "y": 7, "w": 8, "h": 4, "settings": {}},
+                {"id": "chassis-note", "type": "note", "title": "수행자 의견", "x": 8, "y": 7, "w": 4, "h": 3, "settings": {}},
+            ],
+        }
+        encoded_chassis = json.dumps(chassis_layout, ensure_ascii=False)
+        now = _iso(datetime.now(timezone.utc))
+        conn.execute("INSERT OR IGNORE INTO dashboards VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", [chassis_layout["id"], "project-tv-001", "request-drop-001", "loadcase-drop-bottom-001", chassis_layout["name"], chassis_layout["description"], 1, encoded_chassis, now])
+        conn.execute("INSERT OR IGNORE INTO dashboard_versions VALUES (?, ?, ?, ?, ?, ?)", [chassis_layout["id"], 1, encoded_chassis, "system", now, True])
+
+
+def ensure_variable_definitions(conn: duckdb.DuckDBPyConnection) -> None:
+    """Backfill the editable semantic catalog from existing result tables."""
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    scalar_rows = conn.execute(
+        """
+        SELECT run.load_case_id, sr.variable_key, min(sr.display_name), min(sr.unit),
+               max(sr.threshold_double), min(lc.analysis_type)
+        FROM scalar_results sr
+        JOIN analysis_runs run ON run.id = sr.analysis_run_id
+        JOIN load_cases lc ON lc.id = run.load_case_id
+        GROUP BY run.load_case_id, sr.variable_key
+        """
+    ).fetchall()
+    for load_case_id, key, display_name, unit, threshold, analysis_type in scalar_rows:
+        result_group = "CHASSIS_REAR" if key.startswith("chassis_rear_") else "OPEN_CELL"
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO variable_definitions
+            VALUES (?, ?, ?, ?, 'NUMBER', ?, ?, true, 'scalar_results', ?, ?, ?, ?, ?, true, ?, ?, 'system')
+            """,
+            [
+                f"variable-{load_case_id}-{key}", load_case_id, key, display_name, unit or "",
+                f"{analysis_type} latest analysis result: {display_name}", threshold,
+                json.dumps(["kpi", "gauge", "edge_bar", "scatter", "result_table", "chassis_bar", "chassis_table"]),
+                json.dumps(["MAX", "MIN", "AVG", "LATEST"]), analysis_type, result_group, now, now,
+            ],
+        )
+    series_rows = conn.execute(
+        """
+        SELECT run.load_case_id, ts.variable_key, min(ts.display_name), min(ts.value_unit), min(lc.analysis_type)
+        FROM time_series_results ts
+        JOIN analysis_runs run ON run.id = ts.analysis_run_id
+        JOIN load_cases lc ON lc.id = run.load_case_id
+        GROUP BY run.load_case_id, ts.variable_key
+        """
+    ).fetchall()
+    for load_case_id, key, display_name, unit, analysis_type in series_rows:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO variable_definitions
+            VALUES (?, ?, ?, ?, 'TIME_SERIES', ?, ?, true, 'time_series_results', NULL, ?, ?, ?, 'OPEN_CELL', true, ?, ?, 'system')
+            """,
+            [
+                f"variable-{load_case_id}-{key}", load_case_id, key, display_name, unit or "",
+                f"{analysis_type} time history: {display_name}",
+                json.dumps(["time_series", "scatter", "result_table"]),
+                json.dumps(["RAW", "MAX_BY_TIME"]), analysis_type, now, now,
+            ],
+        )
+    conn.execute(
+        """
+        UPDATE variable_definitions
+        SET allowed_widgets_json = ?
+        WHERE data_type = 'NUMBER' AND updated_by = 'system'
+        """,
+        [json.dumps(["kpi", "gauge", "edge_bar", "scatter", "result_table", "chassis_bar", "chassis_table"])],
+    )
 
 
 def ensure_sample_evolutions(conn: duckdb.DuckDBPyConnection) -> None:
     """Add non-destructive sample fields introduced after the first database seed."""
+    # Repair the single example registration created through a legacy PowerShell
+    # client that replaced Korean characters with question marks.
+    if conn.execute("SELECT count(*) FROM projects WHERE id = 'project-d2f8298b56ce'").fetchone()[0]:
+        conn.execute("UPDATE projects SET name = ?, description = ? WHERE id = ?", ["Radioss CSV 등록 검토", "example 폴더의 합성 Radioss CSV 대리 등록 및 검산", "project-d2f8298b56ce"])
+        conn.execute("UPDATE analysis_requests SET title = ?, owner = ?, overall_note = ? WHERE id = ?", ["TV 포장 낙하 예제 등록 검토", "Codex 검토", "합성 데이터 등록 흐름 검증", "request-babd3259f7fd"])
+        conn.execute("UPDATE request_steps SET owner = ? WHERE request_id = ?", ["Codex 검토", "request-babd3259f7fd"])
+        for row in [
+            ("product-demo-model", "project-d2f8298b56ce", "MODEL", "제품 모델명", "ORION-65-OLED Example", None, {"source": "example_registration"}),
+            ("product-demo-mfg", "project-d2f8298b56ce", "MANUFACTURER", "제조사", "NeoView Display", None, {"source": "example_registration"}),
+            ("product-demo-size", "project-d2f8298b56ce", "SPEC", "화면 크기", "65 inch", None, {"diagonal_inch": 65}),
+        ]:
+            conn.execute("INSERT OR IGNORE INTO product_information VALUES (?, ?, ?, ?, ?, ?, ?)", [*row[:6], json.dumps(row[6], ensure_ascii=False)])
     product_rows = [
         ("product-mfg-001", "project-tv-001", "MANUFACTURER", "제조사", "NeoView Display", None, {"country": "KR"}),
         ("product-model-001", "project-tv-001", "MODEL", "제품 모델명", "ORION-65-OLED-C", None, {"series": "ORION"}),

@@ -46,6 +46,18 @@ export type Overview = {
   }>
   scalar_results: ScalarResult[]
   time_series: TimeSeriesPoint[]
+  result_locations: Array<{
+    analysis_run_id: string
+    variable_key: string
+    entity_type: 'NODE' | 'ELEMENT'
+    entity_id: string
+    x: number
+    y: number
+    z: number
+    time_value: number
+    time_unit: string
+    method: string
+  }>
   notes: Array<{ id: string; author: string; body: string; created_at: string }>
   media: Array<{ id: string; title: string; file_path: string; mime_type: string }>
   template_execution: {
@@ -121,7 +133,27 @@ export type Workflow = {
   progress: number
 }
 
-export type WidgetType = 'open_cell_map' | 'verdict' | 'edge_bar' | 'summary' | 'time_series' | 'note' | 'result_table' | 'contour'
+export type WidgetType = 'open_cell_map' | 'kpi' | 'verdict' | 'gauge' | 'edge_bar' | 'summary' | 'time_series' | 'scatter' | 'note' | 'result_table' | 'contour' | 'video' | 'model3d' | 'workflow' | 'chassis_summary' | 'chassis_diagram' | 'chassis_bar' | 'chassis_table'
+
+export type VariableDefinition = { id: string; definition_id: string; variable_key: string; display_name: string; data_type: 'NUMBER' | 'TIME_SERIES'; unit: string; filterable: boolean; source: string; allowed_widgets: string[]; allowed_aggregations: string[]; description: string; threshold?: number | null; analysis_type: string; result_group: 'OPEN_CELL' | 'CHASSIS_REAR' | 'CUSTOM'; has_data: boolean; dashboard_usage_count: number; updated_at: string; updated_by: string }
+export type VariableDefinitionInput = { variable_key: string; display_name: string; data_type: 'NUMBER' | 'TIME_SERIES'; unit: string; description: string; filterable: boolean; threshold: number | null; allowed_widgets: string[]; allowed_aggregations: string[]; result_group: 'OPEN_CELL' | 'CHASSIS_REAR' | 'CUSTOM'; updated_by: string }
+export type WidgetCatalogItem = { type: WidgetType; label: string; category: string; allowed_data_types: string[]; default_size: [number, number] }
+export type DashboardVersion = { dashboard_id: string; version: number; created_by: string; created_at: string; is_valid: boolean }
+export type DashboardSummary = { id: string; project_id: string; request_id?: string; load_case_id?: string; name: string; description: string; version: number; updated_at: string }
+export type AutomationTemplate = { id: string; load_case_id: string; template_name: string; template_version: string; status: string; executed_at: string; load_case_name: string; analysis_type: string; request_id: string; request_title: string; project_id: string; project_name: string; input: Record<string, unknown>; generated_model: Record<string, unknown> }
+
+export type PortfolioOverview = {
+  grain: string
+  source: string
+  freshness: string | null
+  kpis: { load_cases: number; requests: number; in_progress: number; completed_runs: number; failed: number; pass_rate: number | null }
+  trend: Array<{ date: string; requests: number; completed: number; failed: number }>
+  status_distribution: Array<{ name: string; value: number }>
+  type_distribution: Array<{ name: string; value: number }>
+  quality_by_type: Array<{ type: string; pass: number; fail: number; no_data: number }>
+  records: Array<{ project_id: string; project_name: string; product_name: string; request_id: string; request_title: string; owner: string; request_status: string; requested_at: string; load_case_id: string; load_case_name: string; analysis_type: string; load_case_status: string; run_id: string | null; completed_at: string | null; verdict: string; result_count: number }>
+  filter_options: { projects: Array<{ id: string; name: string }>; analysis_types: string[]; statuses: string[] }
+}
 
 export type DashboardWidget = {
   id: string
@@ -142,19 +174,3 @@ export type DashboardDefinition = {
   version?: number
   updated_at?: string
 }
-
-export type AnalysisRun = {
-  id: string
-  load_case_id: string
-  run_no: number
-  solver: string
-  status: string
-  started_at: string
-  completed_at: string
-  overall_verdict: string
-  source_program: string
-  source_program_version: string
-  result_import_status: string
-  last_imported_at: string
-}
-
