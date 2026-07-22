@@ -1,4 +1,5 @@
 .venv/
+.venv-runtime/
 __pycache__/
 *.py[cod]
 .pytest_cache/
@@ -6,6 +7,7 @@ backend/data/*.duckdb
 backend/data/*.wal
 frontend/node_modules/
 frontend/dist/
+frontend/*.tsbuildinfo
 .env
 *.log
 .server-pids.json
