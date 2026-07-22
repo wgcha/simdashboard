@@ -13,4 +13,8 @@ def test_seeded_database_keys_integrity_and_domains():
         assert conn.execute("SELECT count(*) FROM scalar_results s LEFT JOIN analysis_runs run ON run.id=s.analysis_run_id WHERE run.id IS NULL").fetchone()[0] == 0
         assert conn.execute("SELECT count(*) FROM analysis_requests WHERE status NOT IN ('READY','IN_PROGRESS','COMPLETED','BLOCKED','FAILED')").fetchone()[0] == 0
         assert conn.execute("SELECT count(*) FROM load_cases WHERE analysis_type NOT IN ('DROP','SIDE_CLAMP')").fetchone()[0] == 0
-        assert conn.execute("SELECT count(*) FROM scalar_results WHERE unit IS NULL OR threshold_double IS NULL OR verdict NOT IN ('PASS','FAIL')").fetchone()[0] == 0
+        assert conn.execute("""
+            SELECT count(*) FROM scalar_results
+            WHERE (value_double IS NOT NULL OR value_integer IS NOT NULL)
+              AND (unit IS NULL OR (verdict IS NOT NULL AND verdict NOT IN ('PASS','FAIL')))
+        """).fetchone()[0] == 0

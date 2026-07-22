@@ -134,6 +134,31 @@ def initialize_database() -> None:
                 value_unit VARCHAR NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS curve_results (
+                id VARCHAR PRIMARY KEY,
+                analysis_run_id VARCHAR NOT NULL,
+                variable_key VARCHAR NOT NULL,
+                display_name VARCHAR NOT NULL,
+                series_key VARCHAR NOT NULL DEFAULT 'default',
+                x_label VARCHAR NOT NULL,
+                x_unit VARCHAR NOT NULL,
+                y_label VARCHAR NOT NULL,
+                y_unit VARCHAR NOT NULL,
+                point_count INTEGER NOT NULL,
+                source_file VARCHAR,
+                source_checksum VARCHAR,
+                created_at TIMESTAMP NOT NULL,
+                UNIQUE(analysis_run_id, variable_key, series_key)
+            );
+
+            CREATE TABLE IF NOT EXISTS curve_points (
+                curve_id VARCHAR NOT NULL,
+                point_index INTEGER NOT NULL,
+                x_value DOUBLE NOT NULL,
+                y_value DOUBLE NOT NULL,
+                PRIMARY KEY(curve_id, point_index)
+            );
+
             CREATE TABLE IF NOT EXISTS result_locations (
                 analysis_run_id VARCHAR NOT NULL,
                 variable_key VARCHAR NOT NULL,
@@ -165,6 +190,38 @@ def initialize_database() -> None:
                 file_size BIGINT,
                 checksum VARCHAR,
                 metadata_json JSON
+            );
+
+            CREATE TABLE IF NOT EXISTS folder_import_jobs (
+                id VARCHAR PRIMARY KEY,
+                load_case_id VARCHAR NOT NULL,
+                analysis_run_id VARCHAR,
+                schema_id VARCHAR NOT NULL,
+                schema_version INTEGER NOT NULL,
+                source_folder VARCHAR NOT NULL,
+                status VARCHAR NOT NULL,
+                summary_json JSON,
+                created_at TIMESTAMP NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS import_schemas (
+                id VARCHAR PRIMARY KEY,
+                name VARCHAR NOT NULL,
+                description VARCHAR,
+                definition_json JSON NOT NULL,
+                is_active BOOLEAN NOT NULL DEFAULT true,
+                created_at TIMESTAMP NOT NULL,
+                updated_at TIMESTAMP NOT NULL,
+                updated_by VARCHAR NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS import_schema_versions (
+                schema_id VARCHAR NOT NULL,
+                version INTEGER NOT NULL,
+                definition_json JSON NOT NULL,
+                created_at TIMESTAMP NOT NULL,
+                updated_by VARCHAR NOT NULL,
+                PRIMARY KEY(schema_id, version)
             );
 
             CREATE TABLE IF NOT EXISTS validations (

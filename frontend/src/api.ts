@@ -1,4 +1,4 @@
-import type { AnalysisRequest, AutomationTemplate, DashboardDefinition, DashboardSummary, DashboardVersion, LoadCase, Overview, PortfolioOverview, Project, QualityThreshold, VariableDefinition, VariableDefinitionInput, WidgetCatalogItem, Workflow } from './types'
+import type { AnalysisRequest, AutomationTemplate, DashboardDefinition, DashboardSummary, DashboardVersion, ImportSchema, ImportSchemaDefinition, LoadCase, Overview, PortfolioOverview, Project, QualityThreshold, VariableDefinition, VariableDefinitionInput, WidgetCatalogItem, Workflow } from './types'
 
 async function json<T>(response: Response | Promise<Response>): Promise<T> {
   response = await response
@@ -13,6 +13,12 @@ export const api = {
   portfolio: (params: URLSearchParams) => json<PortfolioOverview>(fetch(`/api/portfolio/overview?${params}`)),
   portfolioCsvUrl: (params: URLSearchParams) => `/api/portfolio/export.csv?${params}`,
   projects: () => json<Project[]>(fetch('/api/projects')),
+  importSchemas: () => json<ImportSchema[]>(fetch('/api/import-schemas')),
+  createImportSchema: (payload: { name: string; description: string; definition: ImportSchemaDefinition; updated_by: string }) =>
+    json<ImportSchema>(fetch('/api/import-schemas', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })),
+  updateImportSchema: (schemaId: string, payload: { name: string; description: string; definition: ImportSchemaDefinition; updated_by: string }) =>
+    json<ImportSchema>(fetch(`/api/import-schemas/${schemaId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })),
+  deleteImportSchema: (schemaId: string) => json<{ status: string; id: string }>(fetch(`/api/import-schemas/${schemaId}`, { method: 'DELETE' })),
   createProject: (payload: { name: string; product_name: string; description: string; manufacturer: string; display_size_inch: number | null }) =>
     json<Project>(fetch('/api/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })),
   requests: (projectId: string) => json<AnalysisRequest[]>(fetch(`/api/projects/${projectId}/requests`)),
@@ -41,6 +47,8 @@ export const api = {
       warnings: string[]
       results: Array<{ variable_key: string; display_name: string; value: number; unit: string; threshold: number; verdict: 'PASS' | 'FAIL'; analysis: string }>
     }>(fetch(`/api/load-cases/${loadCaseId}/results/import`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })),
+  importTypedFolderExample: (loadCaseId: string) =>
+    json<{ status: 'IMPORTED'; job_id: string; run_id: string; run_no: number; schema_id: string; summary: { scalar_count: number; curve_count: number; media_count: number } }>(fetch(`/api/load-cases/${loadCaseId}/folder-import/example`, { method: 'POST' })),
   overview: (loadCaseId: string) => json<Overview>(fetch(`/api/load-cases/${loadCaseId}/overview`)),
   workflows: () => json<Workflow[]>(fetch('/api/workflows')),
   qualityThresholds: (projectId: string) => json<QualityThreshold[]>(fetch(`/api/projects/${projectId}/quality-thresholds`)),

@@ -1,0 +1,17 @@
+{
+  "schema_id": "tv-drop-chassis-typed-results",
+  "version": 1,
+  "solver": "Radioss Explicit 2025",
+  "note": "예제 폴더에서 적재한 Open Cell 응력, Chassis Rear 영구변형 및 결과 미디어입니다.",
+  "context": {
+    "project": {"name": "ORION 65 물류 신뢰성", "product_name": "ORION-65-OLED-C", "manufacturer": "NeoView Display", "display_size_inch": 65},
+    "request": {"title": "TV 포장 낙하 Chassis Rear 영구변형 평가", "owner": "김해석", "overall_note": "폴더 manifest에서 자동 등록"},
+    "load_case": {"name": "Bottom Face 450 mm Drop", "analysis_type": "DROP", "parameters": {"drop_height_mm": 450, "impact_direction": "BOTTOM"}}
+  },
+  "mappings": [
+    { "kind": "typed_scalars", "path": "results/summary.json" },
+    { "kind": "curve_csv", "path": "curves/open_cell_top_stress.csv", "variable_key": "open_cell_top_edge_stress_curve", "display_name": "Open Cell 상단 엣지 응력-시간", "series_key": "top", "x_column": "time_ms", "y_column": "stress_mpa", "x_label": "시간", "x_unit": "ms", "y_label": "응력", "y_unit": "MPa", "result_group": "OPEN_CELL" },
+    { "kind": "curve_csv", "path": "curves/chassis_top_deformation.csv", "variable_key": "chassis_rear_top_edge_deformation_curve", "display_name": "Chassis Rear 상단 엣지 영구변형", "series_key": "top", "x_column": "time_ms", "y_column": "deformation_mm", "x_label": "시간", "x_unit": "ms", "y_label": "영구변형", "y_unit": "mm", "result_group": "CHASSIS_REAR" },
+    { "kind": "media", "path": "media/open_cell_stress_contour.svg", "variable_key": "open_cell_stress_contour", "display_name": "Open Cell 최대 응력 컨투어", "asset_type": "IMAGE", "mime_type": "image/svg+xml", "result_group": "OPEN_CELL" }
+  ]
+}

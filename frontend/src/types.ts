@@ -46,6 +46,7 @@ export type Overview = {
   }>
   scalar_results: ScalarResult[]
   time_series: TimeSeriesPoint[]
+  curves: Array<{ id: string; variable_key: string; display_name: string; series_key: string; x_label: string; x_unit: string; y_label: string; y_unit: string; point_count: number }>
   result_locations: Array<{
     analysis_run_id: string
     variable_key: string
@@ -59,7 +60,7 @@ export type Overview = {
     method: string
   }>
   notes: Array<{ id: string; author: string; body: string; created_at: string }>
-  media: Array<{ id: string; title: string; file_path: string; mime_type: string }>
+  media: Array<{ id: string; title: string; file_path: string; mime_type: string; asset_type?: 'IMAGE' | 'VIDEO' | 'MODEL_3D' | string; asset_url?: string; metadata?: Record<string, unknown> }>
   template_execution: {
     template_name: string
     template_version: string
@@ -135,12 +136,15 @@ export type Workflow = {
 
 export type WidgetType = 'open_cell_map' | 'kpi' | 'verdict' | 'gauge' | 'edge_bar' | 'summary' | 'time_series' | 'scatter' | 'note' | 'result_table' | 'contour' | 'video' | 'model3d' | 'workflow' | 'chassis_summary' | 'chassis_diagram' | 'chassis_bar' | 'chassis_table'
 
-export type VariableDefinition = { id: string; definition_id: string; variable_key: string; display_name: string; data_type: 'NUMBER' | 'TIME_SERIES'; unit: string; filterable: boolean; source: string; allowed_widgets: string[]; allowed_aggregations: string[]; description: string; threshold?: number | null; analysis_type: string; result_group: 'OPEN_CELL' | 'CHASSIS_REAR' | 'CUSTOM'; has_data: boolean; dashboard_usage_count: number; updated_at: string; updated_by: string }
-export type VariableDefinitionInput = { variable_key: string; display_name: string; data_type: 'NUMBER' | 'TIME_SERIES'; unit: string; description: string; filterable: boolean; threshold: number | null; allowed_widgets: string[]; allowed_aggregations: string[]; result_group: 'OPEN_CELL' | 'CHASSIS_REAR' | 'CUSTOM'; updated_by: string }
+export type VariableDataType = 'NUMBER' | 'TIME_SERIES' | 'FLOAT' | 'INTEGER' | 'TEXT' | 'CURVE' | 'IMAGE' | 'VIDEO' | 'MODEL_3D' | 'VERDICT' | 'STATUS' | 'BOOLEAN'
+export type VariableDefinition = { id: string; definition_id: string; variable_key: string; display_name: string; data_type: VariableDataType; unit: string; filterable: boolean; source: string; allowed_widgets: string[]; allowed_aggregations: string[]; description: string; threshold?: number | null; analysis_type: string; result_group: 'OPEN_CELL' | 'CHASSIS_REAR' | 'CUSTOM'; has_data: boolean; dashboard_usage_count: number; updated_at: string; updated_by: string }
+export type VariableDefinitionInput = { variable_key: string; display_name: string; data_type: VariableDataType; unit: string; description: string; filterable: boolean; threshold: number | null; allowed_widgets: string[]; allowed_aggregations: string[]; result_group: 'OPEN_CELL' | 'CHASSIS_REAR' | 'CUSTOM'; updated_by: string }
 export type WidgetCatalogItem = { type: WidgetType; label: string; category: string; allowed_data_types: string[]; default_size: [number, number] }
 export type DashboardVersion = { dashboard_id: string; version: number; created_by: string; created_at: string; is_valid: boolean }
 export type DashboardSummary = { id: string; project_id: string; request_id?: string; load_case_id?: string; name: string; description: string; version: number; updated_at: string }
 export type AutomationTemplate = { id: string; load_case_id: string; template_name: string; template_version: string; status: string; executed_at: string; load_case_name: string; analysis_type: string; request_id: string; request_title: string; project_id: string; project_name: string; input: Record<string, unknown>; generated_model: Record<string, unknown> }
+export type ImportSchemaDefinition = { schema_id?: string; version?: number; mappings: Array<Record<string, unknown>>; context_mapping?: { mode: 'folder_levels' | 'manifest'; project_level: number; request_level: number; load_case_level: number; sample_path?: string }; context?: Record<string, unknown>; [key: string]: unknown }
+export type ImportSchema = { id: string; name: string; description: string; definition: ImportSchemaDefinition; created_at: string; updated_at: string; updated_by: string }
 
 export type PortfolioOverview = {
   grain: string
