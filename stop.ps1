@@ -19,4 +19,4 @@ if (Test-Path -LiteralPath $PidFile) {
     Remove-Item -LiteralPath $PidFile
 }
 
-Write-Host 'Analysis Canvas 서버를 종료했습니다.'
+Write-Host 'Analysis Canvas server is stopped.'
