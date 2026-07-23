@@ -35,6 +35,6 @@ $frontendProcess = Start-Process -FilePath $pnpm -ArgumentList 'run', 'dev' `
     frontend = $frontendProcess.Id
 } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $Root '.server-pids.json') -Encoding UTF8
 
-Write-Host 'Analysis Canvas가 시작되었습니다.' -ForegroundColor Cyan
+Write-Host 'Analysis Canvas is started.' -ForegroundColor Cyan
 Write-Host 'Dashboard: http://127.0.0.1:5173'
 Write-Host 'API docs : http://127.0.0.1:8000/docs'
