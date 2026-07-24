@@ -1,5 +1,23 @@
 # Analysis Canvas
 
+## 다른 Windows PC에서 최초 설치
+
+GitHub에서 전체 저장소를 받은 뒤 프로젝트 최상위 폴더의
+`setup-windows.bat`을 실행한다. 배치파일은 다음 작업을 순서대로 수행한다.
+
+1. Python 3.12 확인
+2. `.venv` 가상환경 생성
+3. 백엔드 요구 패키지 설치
+4. Node.js 20 이상 확인
+5. `pnpm-lock.yaml` 기준 프런트엔드 패키지 설치
+6. 프런트엔드 프로덕션 빌드 검증
+
+설치 완료 후 다음 명령으로 서비스를 시작한다.
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\start.ps1
+```
+
 Radioss 해석 결과를 파일 기반 DuckDB에 저장하고, 프로젝트와 의뢰별로 탐색·판정·편집하는 한국어 웹 대시보드 MVP입니다. 데이터 접근 계층은 UI와 분리되어 있으며 PostgreSQL 이전을 고려한 구조입니다.
 
 ## 현재 구현 기능
