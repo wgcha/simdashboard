@@ -15,7 +15,7 @@ GitHub에서 전체 저장소를 받은 뒤 프로젝트 최상위 폴더의
 설치 완료 후 다음 명령으로 서비스를 시작한다.
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\start.ps1
+.\start.bat
 ```
 
 Radioss 해석 결과를 파일 기반 DuckDB에 저장하고, 프로젝트와 의뢰별로 탐색·판정·편집하는 한국어 웹 대시보드 MVP입니다. 데이터 접근 계층은 UI와 분리되어 있으며 PostgreSQL 이전을 고려한 구조입니다.
@@ -105,7 +105,7 @@ python -m venv .venv
 cd .\frontend
 pnpm install
 cd ..
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\start.ps1
+.\start.bat
 ```
 
 - 웹: <http://127.0.0.1:5173>
@@ -114,7 +114,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\start.ps1
 종료:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\stop.ps1
+.\stop.bat
 ```
 
 ## 검증

@@ -321,16 +321,19 @@ def test_typed_folder_example_registers_scalars_curves_media_and_catalog():
         response = client.post(f"/api/load-cases/{load_case_id}/folder-import/example")
         assert response.status_code == 200, response.text
         result = response.json()
-        assert result["summary"] == {"scalar_count": 5, "curve_count": 2, "media_count": 1}
+        assert result["summary"] == {"scalar_count": 13, "curve_count": 2, "media_count": 1}
         overview = client.get(f"/api/load-cases/{load_case_id}/overview").json()
         assert overview["run"] == result["run_id"]
         assert len(overview["curves"]) == 2
         assert any(item["value_integer"] == 428120 for item in overview["scalar_results"])
         assert any(item["value_text"] for item in overview["scalar_results"])
+        numeric = [item for item in overview["scalar_results"] if item["value_double"] is not None]
+        assert len([item for item in numeric if not item["variable_key"].startswith("chassis_rear_")]) == 4
+        assert len([item for item in numeric if item["variable_key"].startswith("chassis_rear_")]) == 6
         assert overview["media"][0]["asset_url"].startswith("/api/assets/")
         assert client.get(overview["media"][0]["asset_url"]).status_code == 200
         catalog = client.get(f"/api/load-cases/{load_case_id}/variables").json()
-        assert {"FLOAT", "INTEGER", "TEXT", "CURVE", "IMAGE"} <= {item["data_type"] for item in catalog}
+        assert {"NUMBER", "INTEGER", "TEXT", "CURVE", "IMAGE"} <= {item["data_type"] for item in catalog}
 
     with connect() as conn:
         asset_paths = [row[0] for row in conn.execute("SELECT file_path FROM media_assets WHERE analysis_run_id=?", [result["run_id"]]).fetchall()]
@@ -344,7 +347,7 @@ def test_typed_folder_example_registers_scalars_curves_media_and_catalog():
         conn.execute("DELETE FROM scalar_results WHERE analysis_run_id=?", [result["run_id"]])
         conn.execute("DELETE FROM folder_import_jobs WHERE id=?", [result["job_id"]])
         conn.execute("DELETE FROM analysis_runs WHERE id=?", [result["run_id"]])
-        for key in ("chassis_rear_top_edge_permanent_deformation_mm", "chassis_rear_corner_top_left_permanent_deformation_mm", "mesh_element_count", "analysis_judgement", "chassis_rear_verdict", "open_cell_top_edge_stress_curve", "chassis_rear_top_edge_deformation_curve", "open_cell_stress_contour"):
+        for key in ("mesh_element_count", "analysis_judgement", "chassis_rear_verdict", "open_cell_top_edge_stress_curve", "chassis_rear_top_edge_deformation_curve", "open_cell_stress_contour"):
             conn.execute("DELETE FROM variable_definitions WHERE load_case_id=? AND variable_key=?", [load_case_id, key])
     for path in asset_paths:
         asset_folder = Path(__file__).resolve().parents[1] / "assets" / Path(path).parent

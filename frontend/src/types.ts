@@ -159,6 +159,11 @@ export type PortfolioOverview = {
   filter_options: { projects: Array<{ id: string; name: string }>; analysis_types: string[]; statuses: string[] }
 }
 
+export type PortfolioLayout = {
+  fontSize: number
+  chartOrder: string[]
+}
+
 export type DashboardWidget = {
   id: string
   type: WidgetType
