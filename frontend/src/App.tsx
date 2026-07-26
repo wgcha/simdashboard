@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ComponentType, type FormEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type ComponentType, type CSSProperties, type FormEvent } from 'react'
 import {
   Activity,
   AlertTriangle,
@@ -42,11 +42,36 @@ import {
 } from 'recharts'
 import { api } from './api'
 import { PortfolioDashboard } from './PortfolioDashboard'
-import type { AnalysisRequest, AutomationTemplate, DashboardDefinition, DashboardSummary, DashboardVersion, DashboardWidget, ImportSchema, LoadCase, Overview, Project, QualityThreshold, VariableDefinition, VariableDefinitionInput, WidgetCatalogItem, Workflow, WorkflowStep } from './types'
+import type { ReportExportOptions, ReportScope } from './reportExport'
+import type { AnalysisRequest, AutomationTemplate, DashboardDefinition, DashboardSummary, DashboardVersion, DashboardWidget, ImportSchema, LoadCase, Overview, PortfolioLayout, Project, QualityThreshold, VariableDefinition, VariableDefinitionInput, WidgetCatalogItem, Workflow, WorkflowStep } from './types'
 
 const ResponsiveGridLayout = WidthProvider(Responsive) as unknown as ComponentType<any>
 const SERIES_COLORS = ['#61d4ff', '#ff647d', '#70e0a8', '#ffbf57']
 type ActiveView = 'open_cell' | 'chassis' | 'workflow'
+
+function hasNumericValue(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value)
+}
+
+const DEFAULT_PORTFOLIO_LAYOUT: PortfolioLayout = {
+  fontSize: 10,
+  chartOrder: ['trend', 'status', 'quality', 'type'],
+}
+
+function loadPortfolioLayout(): PortfolioLayout {
+  try {
+    const saved = JSON.parse(localStorage.getItem('analysis-canvas.portfolio-layout') ?? '{}') as Partial<PortfolioLayout>
+    const savedOrder = Array.isArray(saved.chartOrder) ? saved.chartOrder : []
+    const hasValidOrder = savedOrder.length === DEFAULT_PORTFOLIO_LAYOUT.chartOrder.length
+      && DEFAULT_PORTFOLIO_LAYOUT.chartOrder.every((id) => savedOrder.includes(id))
+    return {
+      fontSize: typeof saved.fontSize === 'number' ? Math.min(18, Math.max(8, saved.fontSize)) : DEFAULT_PORTFOLIO_LAYOUT.fontSize,
+      chartOrder: hasValidOrder ? savedOrder : DEFAULT_PORTFOLIO_LAYOUT.chartOrder,
+    }
+  } catch {
+    return DEFAULT_PORTFOLIO_LAYOUT
+  }
+}
 
 function App() {
   const [overview, setOverview] = useState<Overview | null>(null)
@@ -75,6 +100,21 @@ function App() {
   const [catalogVariable, setCatalogVariable] = useState('')
   const [savedDashboards, setSavedDashboards] = useState<DashboardSummary[]>([])
   const [selectedWidgetId, setSelectedWidgetId] = useState<string | null>(null)
+  const [reportDraft, setReportDraft] = useState<ReportExportOptions | null>(null)
+  const [reportOverview, setReportOverview] = useState<Overview | null>(null)
+  const [reportExporting, setReportExporting] = useState(false)
+  const [reportError, setReportError] = useState('')
+  const [portfolioLayout, setPortfolioLayout] = useState<PortfolioLayout>(loadPortfolioLayout)
+  const portfolioLayoutBeforeEdit = useRef<PortfolioLayout | null>(null)
+
+  useEffect(() => {
+    if (workspacePage !== 'portfolio' && portfolioLayoutBeforeEdit.current) {
+      setPortfolioLayout(portfolioLayoutBeforeEdit.current)
+      portfolioLayoutBeforeEdit.current = null
+    }
+    setEditMode(false)
+    setSelectedWidgetId(null)
+  }, [workspacePage])
 
   useEffect(() => {
     const bootstrap = async () => {
@@ -181,6 +221,14 @@ function App() {
   }
 
   const save = async () => {
+    if (workspacePage === 'portfolio') {
+      localStorage.setItem('analysis-canvas.portfolio-layout', JSON.stringify(portfolioLayout))
+      portfolioLayoutBeforeEdit.current = null
+      setEditMode(false)
+      setNotice('운영 대시보드 설정을 저장했습니다.')
+      setTimeout(() => setNotice(''), 2600)
+      return
+    }
     if (!dashboard) return
     if (activeView === 'workflow') {
       setEditMode(false)
@@ -197,6 +245,19 @@ function App() {
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '저장하지 못했습니다.')
     }
+  }
+
+  const beginEditing = () => {
+    if (workspacePage === 'portfolio') portfolioLayoutBeforeEdit.current = { ...portfolioLayout, chartOrder: [...portfolioLayout.chartOrder] }
+    setEditMode(true)
+  }
+
+  const cancelEditing = () => {
+    if (workspacePage === 'portfolio' && portfolioLayoutBeforeEdit.current) {
+      setPortfolioLayout(portfolioLayoutBeforeEdit.current)
+      portfolioLayoutBeforeEdit.current = null
+    }
+    setEditMode(false)
   }
 
   const previewCommand = async () => {
@@ -286,6 +347,37 @@ function App() {
     } catch (reason) { setError(reason instanceof Error ? reason.message : '판정 기준을 저장하지 못했습니다.') }
   }
 
+  const openReportExport = async (scope: ReportScope) => {
+    if (!overview) return
+    setReportError('')
+    const { createDefaultReportOptions, filterOverviewForReport } = await import('./reportExport')
+    const scopedOverview = filterOverviewForReport(overview, scope)
+    setReportOverview(scopedOverview)
+    setReportDraft(createDefaultReportOptions(scopedOverview))
+  }
+
+  const updateReportDraft = (field: keyof ReportExportOptions, value: string) => {
+    setReportDraft((current) => current ? { ...current, [field]: value } : current)
+  }
+
+  const downloadReport = async () => {
+    if (!reportDraft || !reportOverview) return
+    setReportExporting(true)
+    setReportError('')
+    try {
+      const { exportAnalysisReport } = await import('./reportExport')
+      const filename = await exportAnalysisReport(reportOverview, reportDraft)
+      setReportDraft(null)
+      setReportOverview(null)
+      setNotice(`${filename} 생성 완료`)
+      setTimeout(() => setNotice(''), 3200)
+    } catch (reason) {
+      setReportError(reason instanceof Error ? reason.message : 'PPTX 보고서를 생성하지 못했습니다.')
+    } finally {
+      setReportExporting(false)
+    }
+  }
+
   const openWorkflowAnalysis = async (workflow: Workflow) => {
     try {
       await loadContext(workflow.request.project_id, workflow.request.id, 'open_cell')
@@ -345,16 +437,16 @@ function App() {
           <div className="breadcrumb">{workspacePage === 'portfolio' ? <><span>운영</span><b>/</b><strong>해석 운영 현황</strong></> : workspacePage === 'data' ? <><span>운영</span><b>/</b><strong>해석 데이터 등록</strong></> : workspacePage === 'schemas' ? <><span>데이터 설계</span><b>/</b><strong>폴더 스키마</strong></> : workspacePage === 'variables' ? <><span>설계</span><b>/</b><strong>변수 카탈로그</strong></> : workspacePage === 'templates' ? <><span>자동화</span><b>/</b><strong>모델링 템플릿</strong></> : <><span>프로젝트</span><b>/</b><span>{overview.load_case.project_name}</span><b>/</b><strong>{overview.load_case.name}</strong></>}</div>
           <div className="top-actions">
             {workspacePage === 'dashboard' && <button className="ghost-button" onClick={() => setAssistantOpen(true)}><Sparkles /> 자연어로 개선</button>}
-            {workspacePage === 'dashboard' && (editMode ? (
-              <button className="primary-button" onClick={save}><Save /> {activeView === 'workflow' ? '편집 완료' : '레이아웃 저장'}</button>
+            {(workspacePage === 'dashboard' || workspacePage === 'portfolio') && (editMode ? (
+              <button className="primary-button" onClick={save}><Save /> {workspacePage === 'portfolio' ? '운영 설정 저장' : activeView === 'workflow' ? '편집 완료' : '레이아웃 저장'}</button>
             ) : (
-              <button className="edit-button" onClick={() => setEditMode(true)}><Settings2 /> 대시보드 편집</button>
+              <button className="edit-button" onClick={beginEditing}><Settings2 /> 대시보드 편집</button>
             ))}
             <div className="avatar">HK</div>
           </div>
         </header>
 
-        {workspacePage === 'portfolio' ? <PortfolioDashboard onOpen={(projectId, requestId, loadCaseId) => void openImportedResult(projectId, requestId, loadCaseId)} /> : workspacePage === 'schemas' ? <FolderSchemaWorkspace /> : workspacePage === 'variables' ? <VariableCatalogPage variables={variables} overview={overview} loadCaseId={selectedLoadCaseId} onChanged={(items) => { setVariables(items); setCatalogVariable((current) => items.some((item) => item.id === current) ? current : items[0]?.id ?? '') }} /> : workspacePage === 'templates' ? <AutomationTemplatesPage /> : workspacePage === 'data' ? (
+        {workspacePage === 'portfolio' ? <PortfolioDashboard editMode={editMode} layout={portfolioLayout} onLayoutChange={setPortfolioLayout} onCancelEdit={cancelEditing} onOpen={(projectId, requestId, loadCaseId) => void openImportedResult(projectId, requestId, loadCaseId)} /> : workspacePage === 'schemas' ? <FolderSchemaWorkspace /> : workspacePage === 'variables' ? <VariableCatalogPage variables={variables} overview={overview} loadCaseId={selectedLoadCaseId} onChanged={(items) => { setVariables(items); setCatalogVariable((current) => items.some((item) => item.id === current) ? current : items[0]?.id ?? '') }} /> : workspacePage === 'templates' ? <AutomationTemplatesPage /> : workspacePage === 'data' ? (
           <DataWorkspace projects={projects} initialProjectId={selectedProjectId} onDataChanged={refreshOperationalData} onOpenAnalysis={openImportedResult} />
         ) : <>
         <section className="content-head">
@@ -376,10 +468,13 @@ function App() {
           <div className="tab-line" />
         </section>
 
-        {activeView !== 'workflow' && <section className="analysis-subtabs"><div><span>상세 분석</span><b>/</b><strong>{overview.load_case.request_title}</strong></div><nav aria-label="불량 분석 하위 탭">{openCellAvailable && <button className={activeView === 'open_cell' ? 'active' : ''} onClick={() => setActiveView('open_cell')}><Activity /> 오픈셀 파손 분석 <span>{overview.analysis_verdicts.open_cell}</span></button>}{chassisAvailable && <button className={activeView === 'chassis' ? 'active' : ''} onClick={() => setActiveView('chassis')}><BarChart3 /> Chassis Rear 영구변형 평가 <span>{overview.analysis_verdicts.chassis_rear}</span></button>}</nav>{activeView === 'open_cell' && <EdgeFilter selected={selectedEdges} setSelected={setSelectedEdges} />}</section>}
+        {activeView !== 'workflow' && <section className="analysis-subtabs"><div><span>상세 분석</span><b>/</b><strong>{overview.load_case.request_title}</strong></div><nav aria-label="불량 분석 하위 탭">
+          {openCellAvailable && <div className="analysis-tab-group"><button className={`analysis-tab ${activeView === 'open_cell' ? 'active' : ''}`} onClick={() => setActiveView('open_cell')}><Activity /> 오픈셀 파손 평가 <span>{overview.analysis_verdicts.open_cell}</span></button><button className="inline-report-button" onClick={() => void openReportExport('open_cell')} aria-label="오픈셀 파손 평가 보고서 내보내기"><Download /> 보고서 내보내기</button></div>}
+          {chassisAvailable && <div className="analysis-tab-group"><button className={`analysis-tab ${activeView === 'chassis' ? 'active' : ''}`} onClick={() => setActiveView('chassis')}><BarChart3 /> Chassis rear 휨 평가 <span>{overview.analysis_verdicts.chassis_rear}</span></button><button className="inline-report-button" onClick={() => void openReportExport('chassis')} aria-label="Chassis rear 휨 평가 보고서 내보내기"><Download /> 보고서 내보내기</button></div>}
+        </nav>{activeView === 'open_cell' && <EdgeFilter selected={selectedEdges} setSelected={setSelectedEdges} />}</section>}
 
         {editMode && (
-          <div className="edit-banner"><GripVertical /><span><strong>편집 모드</strong> {activeView === 'workflow' ? '단계 이름 입력란을 수정하면 즉시 저장됩니다.' : '위젯을 드래그하거나 모서리를 잡아 크기를 조절하고 설정 버튼으로 그래프와 변수를 바꾸세요.'}</span><button onClick={() => setEditMode(false)}>편집 취소</button></div>
+          <div className="edit-banner"><GripVertical /><span><strong>편집 모드</strong> {activeView === 'workflow' ? '단계 이름 입력란을 수정하면 즉시 저장됩니다.' : '위젯을 드래그하거나 모서리를 잡아 크기를 조절하고 설정 버튼으로 그래프, 변수, 글자 크기를 바꾸세요.'}</span><button onClick={cancelEditing}>편집 취소</button></div>
         )}
 
         <section className="canvas-area">
@@ -438,6 +533,32 @@ function App() {
         </div>
       )}
       {selectedWidgetId && dashboard && <WidgetSettingsPanel widget={dashboard.widgets.find((item) => item.id === selectedWidgetId)!} variables={variables} onChange={(patch) => updateWidget(selectedWidgetId, patch)} onClose={() => setSelectedWidgetId(null)} />}
+      {reportDraft && reportOverview && (
+        <div className="drawer-backdrop report-backdrop" onMouseDown={() => { if (!reportExporting) { setReportDraft(null); setReportOverview(null) } }}>
+          <section className="report-export-dialog" role="dialog" aria-modal="true" aria-labelledby="report-export-title" onMouseDown={(event) => event.stopPropagation()}>
+            <header>
+              <div><span>POWERPOINT EXPORT</span><h2 id="report-export-title">{reportOverview.load_case.request_title} 보고서</h2><p>선택한 평가 데이터와 아래 문구로 편집 가능한 PPTX를 생성합니다.</p></div>
+              <button aria-label="닫기" onClick={() => { setReportDraft(null); setReportOverview(null) }} disabled={reportExporting}><X /></button>
+            </header>
+            <div className="report-export-grid">
+              <label><span>작성자 *</span><input value={reportDraft.author} onChange={(event) => updateReportDraft('author', event.target.value)} placeholder="홍길동" /></label>
+              <label><span>개발단계 *</span><input value={reportDraft.developmentStage} onChange={(event) => updateReportDraft('developmentStage', event.target.value)} placeholder="DV 1차" /></label>
+              <label><span>작성날짜 *</span><input value={reportDraft.reportDate} onChange={(event) => updateReportDraft('reportDate', event.target.value)} placeholder="2026.07.23." /></label>
+              <label><span>시뮬레이션 종류 *</span><input value={reportDraft.reliabilityName} onChange={(event) => updateReportDraft('reliabilityName', event.target.value)} placeholder="낙하 / Side Clamp / 적재" /></label>
+              <label className="wide"><span>검토 목적 *</span><input value={reportDraft.reviewPurpose} onChange={(event) => updateReportDraft('reviewPurpose', event.target.value)} placeholder="오픈셀 응력 평가" /></label>
+              <label><span>검토 사양 조건 *</span><textarea value={reportDraft.reviewConditions} onChange={(event) => updateReportDraft('reviewConditions', event.target.value)} /></label>
+              <label><span>검토 결과 *</span><textarea value={reportDraft.reviewResult} onChange={(event) => updateReportDraft('reviewResult', event.target.value)} /></label>
+              <label className="wide"><span>검토 결론 *</span><textarea value={reportDraft.reviewConclusion} onChange={(event) => updateReportDraft('reviewConclusion', event.target.value)} /></label>
+            </div>
+            <aside><strong>자동 포함 자료</strong><span>시간 이력 그래프 {new Set(reportOverview.time_series.map((item) => item.variable_key)).size}개 · 정량 결과 {reportOverview.scalar_results.length}개 · 이미지/미디어 {reportOverview.media.length}개</span><small>선택한 평가에 연결된 데이터만 포함합니다. 영상·애니메이션은 호환성을 위해 자산 정보 페이지로 생성됩니다.</small></aside>
+            {reportError && <div className="report-export-error"><AlertTriangle /> {reportError}</div>}
+            <footer>
+              <button onClick={() => { setReportDraft(null); setReportOverview(null) }} disabled={reportExporting}>취소</button>
+              <button className="primary" onClick={() => void downloadReport()} disabled={reportExporting || !reportDraft.author.trim()}>{reportExporting ? <LoaderCircle className="spin" /> : <Download />} PPTX 생성</button>
+            </footer>
+          </section>
+        </div>
+      )}
       {notice && <div className="toast"><Check /> {notice}</div>}
     </div>
   )
@@ -735,8 +856,13 @@ function SchemaCatalog({ schemas, onUpdate, onDelete }: { schemas: ImportSchema[
 }
 
 function WidgetCard({ widget, overview, selectedEdges, editMode, threshold, onSaveThreshold, onRemove, onConfigure }: { widget: DashboardWidget; overview: Overview; selectedEdges: string[]; editMode: boolean; threshold?: QualityThreshold; onSaveThreshold: (value: number) => void; onRemove: () => void; onConfigure: () => void }) {
+  const customFontSize = Number(widget.settings?.fontSize)
   return (
-    <article className={`widget-card widget-${widget.type} ${editMode ? 'editable' : ''}`}>
+    <article
+      className={`widget-card widget-${widget.type} ${editMode ? 'editable' : ''}`}
+      data-custom-font={Number.isFinite(customFontSize) ? 'true' : undefined}
+      style={Number.isFinite(customFontSize) ? { '--widget-font-size': `${customFontSize}px` } as CSSProperties : undefined}
+    >
       <header><div><span className="widget-kicker">{widget.type.replace('_', ' ')}</span><h3>{widget.title}</h3></div>{editMode ? <div className="widget-edit-actions"><button aria-label={`${widget.title} 설정`} onClick={onConfigure}><Settings2 /></button><button aria-label={`${widget.title} 삭제`} onClick={onRemove}><X /></button></div> : <button className="widget-menu">•••</button>}</header>
       <div className="widget-body"><WidgetContent widget={widget} overview={overview} selectedEdges={selectedEdges} threshold={threshold} onSaveThreshold={onSaveThreshold} /></div>
     </article>
@@ -746,19 +872,19 @@ function WidgetCard({ widget, overview, selectedEdges, editMode, threshold, onSa
 function WidgetContent({ widget, overview, selectedEdges, threshold, onSaveThreshold }: { widget: DashboardWidget; overview: Overview; selectedEdges: string[]; threshold?: QualityThreshold; onSaveThreshold: (value: number) => void }) {
   const type = widget.type
   const edgeOrder = ['top', 'bottom', 'left', 'right']
-  const openCellScalars = overview.scalar_results.filter((item) => !item.variable_key.startsWith('chassis_rear_'))
+  const openCellScalars = overview.scalar_results.filter((item) => !item.variable_key.startsWith('chassis_rear_') && hasNumericValue(item.value_double))
   const filteredScalars = openCellScalars
     .filter((item) => selectedEdges.some((edge) => item.variable_key.startsWith(edge)))
     .sort((a, b) => edgeOrder.indexOf(a.variable_key.split('_')[0]) - edgeOrder.indexOf(b.variable_key.split('_')[0]))
   const edgeLabel = (key: string) => ({ top: '상단', bottom: '하단', left: '좌측', right: '우측' }[key.split('_')[0]] ?? key)
-  const configuredScalars = widget.settings?.variableId ? overview.scalar_results.filter((item) => item.variable_key === widget.settings?.variableId) : filteredScalars
+  const configuredScalars = widget.settings?.variableId ? overview.scalar_results.filter((item) => item.variable_key === widget.settings?.variableId && hasNumericValue(item.value_double)) : filteredScalars
   const barData = configuredScalars.map((item) => ({ name: edgeLabel(item.variable_key), value: item.value_double, verdict: item.verdict }))
-  const openCellThreshold = openCellScalars[0]?.threshold_double ?? 75
+  const openCellThreshold = openCellScalars.find((item) => hasNumericValue(item.threshold_double))?.threshold_double ?? 75
   const openCellVerdict = openCellScalars.some((item) => item.verdict === 'FAIL') ? 'FAIL' : openCellScalars.length ? 'PASS' : 'NO_DATA'
   const resultLocation = (key: string) => overview.result_locations.find((item) => item.variable_key === key)
   const seriesData = useMemo(() => {
     const grouped = new Map<number, Record<string, number>>()
-    overview.time_series.filter((item) => widget.settings?.variableId ? item.variable_key === widget.settings.variableId : selectedEdges.some((edge) => item.variable_key.startsWith(edge))).forEach((item) => {
+    overview.time_series.filter((item) => hasNumericValue(item.time_value) && hasNumericValue(item.value) && (widget.settings?.variableId ? item.variable_key === widget.settings.variableId : selectedEdges.some((edge) => item.variable_key.startsWith(edge)))).forEach((item) => {
       const point = grouped.get(item.time_value) ?? { time: item.time_value }
       point[item.variable_key] = item.value
       grouped.set(item.time_value, point)
@@ -776,11 +902,11 @@ function WidgetContent({ widget, overview, selectedEdges, threshold, onSaveThres
   if (type === 'edge_bar') return <ResponsiveContainer width="100%" height="100%"><BarChart data={barData} margin={{ top: 12, right: 18, left: -12, bottom: 0 }}><CartesianGrid vertical={false} stroke="#26394c" strokeDasharray="3 3"/><XAxis dataKey="name" tick={{ fill: '#8fa6bb', fontSize: 12 }} axisLine={false} tickLine={false}/><YAxis domain={[0, 100]} tick={{ fill: '#6f879d', fontSize: 11 }} axisLine={false} tickLine={false} unit=""/><Tooltip contentStyle={{ background: '#102235', border: '1px solid #2d465c', borderRadius: 10 }} formatter={(value: number) => [`${value} MPa`, '최대 응력']}/><ReferenceLine y={openCellThreshold} stroke="#ffbf57" strokeDasharray="5 5" label={{ value: `기준 ${openCellThreshold}`, fill: '#ffbf57', fontSize: 11, position: 'insideTopRight' }}/><Bar dataKey="value" radius={[5,5,1,1]}>{barData.map((entry) => <Cell key={entry.name} fill={entry.verdict === 'FAIL' ? '#ff5d73' : '#4fd6a0'} />)}</Bar></BarChart></ResponsiveContainer>
   if (type === 'time_series') { const seriesKeys = widget.settings?.variableId ? [String(widget.settings.variableId)] : selectedEdges.map((edge) => `${edge}_edge_stress_time`); return <ResponsiveContainer width="100%" height="100%"><LineChart data={seriesData} margin={{ top: 10, right: 22, left: -8, bottom: 2 }}><CartesianGrid stroke="#24384b" strokeDasharray="3 3"/><XAxis dataKey="time" tick={{ fill: '#71899f', fontSize: 11 }} axisLine={{ stroke: '#31485b' }} tickLine={false} label={{ value: `TIME (${overview.time_series[0]?.time_unit ?? 'ms'})`, fill: '#6f879d', fontSize: 10, position: 'insideBottomRight', offset: -2 }}/><YAxis tick={{ fill: '#71899f', fontSize: 11 }} axisLine={false} tickLine={false}/><Tooltip contentStyle={{ background: '#102235', border: '1px solid #2d465c', borderRadius: 10 }}/><Legend wrapperStyle={{ fontSize: 11, paddingTop: 5 }}/>{widget.settings?.showThreshold !== false && <ReferenceLine y={openCellThreshold} stroke="#ffbf57" strokeDasharray="6 4"/>}{seriesKeys.map((key, index) => <Line key={key} type="monotone" dataKey={key} name={overview.time_series.find((item) => item.variable_key === key)?.display_name ?? edgeLabel(key)} dot={false} stroke={String(widget.settings?.color ?? SERIES_COLORS[index % SERIES_COLORS.length])} strokeWidth={2}/>)}</LineChart></ResponsiveContainer> }
   if (type === 'note') return <div className="note-block"><MessageSquareText /><blockquote>{overview.notes[0]?.body ?? '등록된 의견이 없습니다.'}</blockquote><footer><span>{overview.notes[0]?.author ?? '-'}</span><small>ANALYSIS ENGINEER</small></footer></div>
-  if (type === 'result_table') return <div className="result-table"><div className="table-head"><span>측정 위치</span><span>결과</span><span>허용 기준</span><span>여유율</span><span>판정</span></div>{configuredScalars.map((item) => { const location = resultLocation(item.variable_key); return <div className="table-row" key={item.id}><strong><i className={`edge-${item.variable_key.split('_')[0]}`} /><span>{item.display_name.replace(' 최대 응력','')}{location && <small>{location.entity_type} {location.entity_id} · ({location.x.toFixed(1)}, {location.y.toFixed(1)}, {location.z.toFixed(1)})</small>}</span></strong><span>{item.value_double.toFixed(1)} <small>{item.unit}</small></span><span>{item.threshold_double.toFixed(1)} <small>{item.unit}</small></span><span className={item.verdict === 'FAIL' ? 'negative' : 'positive'}>{((item.threshold_double - item.value_double) / item.threshold_double * 100).toFixed(1)}%</span><b className={item.verdict.toLowerCase()}>{item.verdict}</b></div> })}</div>
+  if (type === 'result_table') return <div className="result-table"><div className="table-head"><span>측정 위치</span><span>결과</span><span>허용 기준</span><span>여유율</span><span>판정</span></div>{configuredScalars.map((item) => { const location = resultLocation(item.variable_key); const hasThreshold = hasNumericValue(item.threshold_double) && item.threshold_double !== 0; return <div className="table-row" key={item.id}><strong><i className={`edge-${item.variable_key.split('_')[0]}`} /><span>{item.display_name.replace(' 최대 응력','')}{location && <small>{location.entity_type} {location.entity_id} · ({location.x.toFixed(1)}, {location.y.toFixed(1)}, {location.z.toFixed(1)})</small>}</span></strong><span>{item.value_double.toFixed(1)} <small>{item.unit}</small></span><span>{hasThreshold ? item.threshold_double.toFixed(1) : ''} <small>{hasThreshold ? item.unit : ''}</small></span><span className={item.verdict === 'FAIL' ? 'negative' : 'positive'}>{hasThreshold ? `${((item.threshold_double - item.value_double) / item.threshold_double * 100).toFixed(1)}%` : ''}</span><b className={item.verdict.toLowerCase()}>{item.verdict}</b></div> })}</div>
   if (type === 'contour') { const asset = overview.media.find((item) => item.asset_type === 'IMAGE') ?? overview.media[0]; return asset ? <div className="contour"><img src={asset.asset_url ?? `/assets/${asset.file_path}`} alt={asset.title} /></div> : <div className="empty-widget">등록된 컨투어 이미지가 없습니다.</div> }
   if (type === 'kpi' || type === 'gauge') {
-    const bound = overview.scalar_results.find((item) => item.variable_key === widget.settings?.variableId) ?? openCellScalars[0]
-    return bound ? <div className="verdict-card"><span>{bound.display_name}</span><strong>{bound.value_double.toFixed(1)} {bound.unit}</strong><small>기준 {bound.threshold_double.toFixed(1)} {bound.unit} · {bound.verdict}</small></div> : <div className="empty-widget">선택한 변수의 데이터가 없습니다.</div>
+    const bound = overview.scalar_results.find((item) => item.variable_key === widget.settings?.variableId && hasNumericValue(item.value_double)) ?? openCellScalars[0]
+    return bound ? <div className="verdict-card"><span>{bound.display_name}</span><strong>{bound.value_double.toFixed(1)} {bound.unit}</strong><small>{hasNumericValue(bound.threshold_double) ? `기준 ${bound.threshold_double.toFixed(1)} ${bound.unit} · ` : ''}{bound.verdict}</small></div> : <div className="empty-widget">선택한 변수의 데이터가 없습니다.</div>
   }
   if (type === 'scatter') return <ResponsiveContainer width="100%" height="100%"><LineChart data={barData}><CartesianGrid stroke="#193447" /><XAxis dataKey="name" /><YAxis /><Tooltip /><Line dataKey="value" stroke="#61d4ff" /></LineChart></ResponsiveContainer>
   if (type === 'video') { const asset = overview.media.find((item) => item.asset_type === 'VIDEO'); return asset ? <video controls className="result-video" src={asset.asset_url ?? `/assets/${asset.file_path}`} /> : <div className="empty-widget">등록된 안전한 영상 파일이 없습니다.</div> }
@@ -790,11 +916,11 @@ function WidgetContent({ widget, overview, selectedEdges, threshold, onSaveThres
 
 function OpenCellMap({ overview }: { overview: Overview }) {
   const productValue = (category: string) => overview.product_information.find((item) => item.category === category)?.value_text ?? '-'
-  const edgeResult = (edge: string) => overview.scalar_results.find((item) => item.variable_key.startsWith(`${edge}_`))
+  const edgeResult = (edge: string) => overview.scalar_results.find((item) => item.variable_key.startsWith(`${edge}_`) && hasNumericValue(item.value_double))
   const edgeLabels = { top: '상', bottom: '하', left: '좌', right: '우' }
   const isClamp = overview.load_case.analysis_type === 'SIDE_CLAMP'
   const scene = isClamp ? `SIDE CLAMP · ${overview.load_case.parameters.pressure_mpa ?? '-'} MPa` : `${overview.load_case.parameters.direction ?? '-'} FACE · ${overview.load_case.parameters.drop_height_mm ?? '-'} mm`
-  const threshold = overview.scalar_results.find((item) => !item.variable_key.startsWith('chassis_rear_'))?.threshold_double ?? 75
+  const threshold = overview.scalar_results.find((item) => !item.variable_key.startsWith('chassis_rear_') && hasNumericValue(item.threshold_double))?.threshold_double ?? 75
 
   return <div className="open-cell-layout">
     <div className="open-cell-visual">
@@ -822,7 +948,7 @@ function WidgetSettingsPanel({ widget, variables, onChange, onClose }: { widget:
   const currentVariable = variables.find((item) => item.id === widget.settings?.variableId)
   const compatibleVariables = variables.filter((item) => item.allowed_widgets.includes(widget.type) || item.id === currentVariable?.id)
   const aggregations = currentVariable?.allowed_aggregations ?? ['MAX','MIN','AVG','LATEST','RAW']
-  return <div className="drawer-backdrop" onMouseDown={onClose}><aside className="widget-settings-drawer" onMouseDown={(e)=>e.stopPropagation()}><header><div><span>WIDGET SETTINGS</span><h2>위젯 설정</h2></div><button onClick={onClose}><X/></button></header><label><span>제목</span><input value={widget.title} onChange={(e)=>onChange({title:e.target.value})}/></label><label><span>시각화 유형</span><select value={widget.type} onChange={(e)=>onChange({type:e.target.value as DashboardWidget['type']})}>{chartOptions.map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label><label><span>데이터 변수</span><select value={String(widget.settings?.variableId ?? '')} onChange={(e)=>onChange({settings:{variableId:e.target.value||undefined}})}><option value="">전체/위젯 기본 변수</option>{compatibleVariables.map((item)=><option key={item.id} value={item.id}>{item.display_name} ({item.unit}){item.has_data?'':' · 데이터 대기'}</option>)}</select></label><label><span>집계 방식</span><select value={String(widget.settings?.aggregation ?? aggregations[0])} onChange={(e)=>onChange({settings:{aggregation:e.target.value}})}>{aggregations.map((item)=><option key={item}>{item}</option>)}</select></label><label><span>강조 색상</span><div className="color-setting"><input type="color" value={String(widget.settings?.color ?? '#50d5ff')} onChange={(e)=>onChange({settings:{color:e.target.value}})}/><code>{String(widget.settings?.color ?? '#50d5ff')}</code></div></label><label className="check-setting"><input type="checkbox" checked={widget.settings?.showThreshold !== false} onChange={(e)=>onChange({settings:{showThreshold:e.target.checked}})}/><span>기준선 표시</span></label><div className="settings-note"><Lock/><p>카탈로그에 선언되고 현재 그래프에 허용된 변수만 표시됩니다. 변수 키로 실제 결과 테이블과 연결됩니다.</p></div><button className="primary-button" onClick={onClose}><Check/> 설정 완료</button></aside></div>
+  return <div className="drawer-backdrop" onMouseDown={onClose}><aside className="widget-settings-drawer" onMouseDown={(e)=>e.stopPropagation()}><header><div><span>WIDGET SETTINGS</span><h2>위젯 설정</h2></div><button onClick={onClose}><X/></button></header><label><span>제목</span><input value={widget.title} onChange={(e)=>onChange({title:e.target.value})}/></label><label><span>글자 크기 (px)</span><input type="number" min="8" max="24" step="1" value={Number(widget.settings?.fontSize ?? 10)} onChange={(e)=>onChange({settings:{fontSize:Math.min(24,Math.max(8,Number(e.target.value)||10))}})}/></label><label><span>시각화 유형</span><select value={widget.type} onChange={(e)=>onChange({type:e.target.value as DashboardWidget['type']})}>{chartOptions.map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label><label><span>데이터 변수</span><select value={String(widget.settings?.variableId ?? '')} onChange={(e)=>onChange({settings:{variableId:e.target.value||undefined}})}><option value="">전체/위젯 기본 변수</option>{compatibleVariables.map((item)=><option key={item.id} value={item.id}>{item.display_name} ({item.unit}){item.has_data?'':' · 데이터 대기'}</option>)}</select></label><label><span>집계 방식</span><select value={String(widget.settings?.aggregation ?? aggregations[0])} onChange={(e)=>onChange({settings:{aggregation:e.target.value}})}>{aggregations.map((item)=><option key={item}>{item}</option>)}</select></label><label><span>강조 색상</span><div className="color-setting"><input type="color" value={String(widget.settings?.color ?? '#50d5ff')} onChange={(e)=>onChange({settings:{color:e.target.value}})}/><code>{String(widget.settings?.color ?? '#50d5ff')}</code></div></label><label className="check-setting"><input type="checkbox" checked={widget.settings?.showThreshold !== false} onChange={(e)=>onChange({settings:{showThreshold:e.target.checked}})}/><span>기준선 표시</span></label><div className="settings-note"><Lock/><p>카탈로그에 선언되고 현재 그래프에 허용된 변수만 표시됩니다. 변수 키로 실제 결과 테이블과 연결됩니다.</p></div><button className="primary-button" onClick={onClose}><Check/> 설정 완료</button></aside></div>
 }
 
 function VariableCatalogPage({ variables, overview, loadCaseId, onChanged }: { variables: VariableDefinition[]; overview: Overview; loadCaseId: string; onChanged: (items: VariableDefinition[]) => void }) {
@@ -851,9 +977,9 @@ function AutomationTemplatesPage() {
 }
 
 function ChassisWidgetContent({ type, overview, threshold, onSaveThreshold, variableId }: { type: DashboardWidget['type']; overview: Overview; threshold?: QualityThreshold; onSaveThreshold: (value: number) => void; variableId: string }) {
-  const allResults = overview.scalar_results.filter((item) => item.variable_key.startsWith('chassis_rear_'))
+  const allResults = overview.scalar_results.filter((item) => item.variable_key.startsWith('chassis_rear_') && hasNumericValue(item.value_double))
   const results = variableId ? allResults.filter((item)=>item.variable_key===variableId) : allResults
-  const limit = threshold?.threshold_double ?? results[0]?.threshold_double ?? 5
+  const limit = threshold?.threshold_double ?? results.find((item) => hasNumericValue(item.threshold_double))?.threshold_double ?? 5
   const [draftLimit, setDraftLimit] = useState(limit)
   useEffect(() => setDraftLimit(limit), [limit])
   const verdict = results.some((item) => item.verdict === 'FAIL') ? 'FAIL' : results.length ? 'PASS' : 'NO_DATA'
@@ -867,13 +993,13 @@ function ChassisWidgetContent({ type, overview, threshold, onSaveThreshold, vari
   if (type === 'chassis_summary') return <div className="chassis-widget-summary"><div><span>전체 판정</span><strong className={verdict.toLowerCase()}>{verdict}</strong></div><div><span>최대 영구변형</span><strong>{maximum.toFixed(2)} mm</strong></div><label><span>관리 기준</span><div><input aria-label="Chassis Rear 영구변형 기준값" type="number" min="0.1" step="0.1" value={draftLimit} onChange={(e)=>setDraftLimit(Number(e.target.value))}/><button onClick={()=>onSaveThreshold(draftLimit)}>저장</button></div></label><p>최종 프레임의 영구변형만 사용하며 기준 이상은 FAIL입니다.</p></div>
   if (type === 'chassis_diagram') return <div className="chassis-diagram-body compact"><div className="chassis-shell"><div className="chassis-ribs"/><div className="chassis-center"><i/><i/><i/><i/></div>{results.map((item)=><div key={item.id} className={`chassis-marker ${markerClasses[item.variable_key] ?? ''} ${item.verdict.toLowerCase()}`}><span>{item.value_double.toFixed(1)} mm</span><small>{chartData.find((entry)=>entry.value===item.value_double)?.name}</small></div>)}</div><div className="chassis-legend"><span><i className="pass"/>기준 미만</span><span><i className="fail"/>기준 이상</span></div></div>
   if (type === 'chassis_bar') return <ResponsiveContainer width="100%" height="100%"><BarChart data={chartData} layout="vertical" margin={{top:8,right:24,left:8,bottom:4}}><CartesianGrid horizontal={false} stroke="#24384b"/><XAxis type="number" domain={[0,Math.max(8,limit+2)]}/><YAxis type="category" dataKey="name" width={60} tick={{fill:'#8fa6bb',fontSize:9}}/><Tooltip formatter={(value:number)=>[`${value} mm`,'영구변형']}/><ReferenceLine x={limit} stroke="#ffbf57" strokeDasharray="5 4"/><Bar dataKey="value">{chartData.map((entry)=><Cell key={entry.name} fill={entry.verdict==='FAIL'?'#ff5d73':'#4fd6a0'}/>)}</Bar></BarChart></ResponsiveContainer>
-  if (type === 'chassis_table') return <div className="chassis-result-table"><div className="chassis-result-head"><span>측정 위치</span><span>영구변형</span><span>기준</span><span>판정</span></div>{results.map((item)=>{const point=location(item.variable_key); return <div className="chassis-result-row" key={item.id}><strong>{item.display_name}{point&&<small>NODE {point.entity_id} · ({point.x.toFixed(1)}, {point.y.toFixed(1)}, {point.z.toFixed(1)})</small>}</strong><span>{item.value_double.toFixed(1)} mm</span><span>{item.threshold_double.toFixed(1)} mm</span><b className={item.verdict.toLowerCase()}>{item.verdict}</b></div>})}</div>
+  if (type === 'chassis_table') return <div className="chassis-result-table"><div className="chassis-result-head"><span>측정 위치</span><span>영구변형</span><span>기준</span><span>판정</span></div>{results.map((item)=>{const point=location(item.variable_key); return <div className="chassis-result-row" key={item.id}><strong>{item.display_name}{point&&<small>NODE {point.entity_id} · ({point.x.toFixed(1)}, {point.y.toFixed(1)}, {point.z.toFixed(1)})</small>}</strong><span>{item.value_double.toFixed(1)} mm</span><span>{hasNumericValue(item.threshold_double) ? `${item.threshold_double.toFixed(1)} mm` : ''}</span><b className={item.verdict.toLowerCase()}>{item.verdict}</b></div>})}</div>
   return <div className="empty-widget">지원하지 않는 Chassis 위젯입니다.</div>
 }
 
 function ChassisRearDashboard({ overview, threshold, onSaveThreshold }: { overview: Overview; threshold?: QualityThreshold; onSaveThreshold: (value: number) => void }) {
-  const results = overview.scalar_results.filter((item) => item.variable_key.startsWith('chassis_rear_'))
-  const limit = threshold?.threshold_double ?? results[0]?.threshold_double ?? 5
+  const results = overview.scalar_results.filter((item) => item.variable_key.startsWith('chassis_rear_') && hasNumericValue(item.value_double))
+  const limit = threshold?.threshold_double ?? results.find((item) => hasNumericValue(item.threshold_double))?.threshold_double ?? 5
   const [draftLimit, setDraftLimit] = useState(limit)
   useEffect(() => setDraftLimit(limit), [limit])
   const verdict = results.some((item) => item.verdict === 'FAIL') ? 'FAIL' : 'PASS'
@@ -901,7 +1027,7 @@ function ChassisRearDashboard({ overview, threshold, onSaveThreshold }: { overvi
       <article className="chassis-card chassis-diagram-card"><header><div><span className="widget-kicker">PERMANENT DEFORMATION MAP</span><h3>Chassis Rear 변형 위치</h3></div><span className="diagram-scene">{overview.load_case.analysis_type.replace('_', ' ')}</span></header><div className="chassis-diagram-body"><div className="chassis-shell"><div className="chassis-ribs"/><div className="chassis-center"><i/><i/><i/><i/></div>{results.map((item) => <div key={item.id} className={`chassis-marker ${markerClasses[item.variable_key] ?? ''} ${item.verdict.toLowerCase()}`}><span>{item.value_double.toFixed(1)} mm</span><small>{chartData.find((entry) => entry.value === item.value_double)?.name}</small></div>)}</div><div className="chassis-legend"><span><i className="pass"/>기준 미만</span><span><i className="fail"/>기준 이상</span><b>Open Cell 기준면 대비 거리 / 모서리 영구변형</b></div></div></article>
       <article className="chassis-card chassis-chart-card"><header><div><span className="widget-kicker">LOCATION COMPARISON</span><h3>위치별 영구변형</h3></div></header><div className="chassis-chart-body"><ResponsiveContainer width="100%" height="100%"><BarChart data={chartData} layout="vertical" margin={{ top: 7, right: 22, left: 10, bottom: 4 }}><CartesianGrid horizontal={false} stroke="#24384b"/><XAxis type="number" domain={[0, Math.max(8, limit + 2)]} tick={{ fill: '#71899f', fontSize: 9 }} axisLine={false} tickLine={false}/><YAxis type="category" dataKey="name" width={58} tick={{ fill: '#8fa6bb', fontSize: 9 }} axisLine={false} tickLine={false}/><Tooltip contentStyle={{ background: '#102235', border: '1px solid #2d465c', borderRadius: 8 }} formatter={(value: number) => [`${value} mm`, '영구변형']}/><ReferenceLine x={limit} stroke="#ffbf57" strokeDasharray="5 4" label={{ value: `기준 ${limit}`, fill: '#ffbf57', fontSize: 9 }}/><Bar dataKey="value" radius={[0,4,4,0]}>{chartData.map((entry) => <Cell key={entry.name} fill={entry.verdict === 'FAIL' ? '#ff5d73' : '#4fd6a0'}/>)}</Bar></BarChart></ResponsiveContainer></div></article>
       <article className="chassis-card threshold-card"><header><div><span className="widget-kicker">ADMIN CRITERION</span><h3>관리자 판정 기준</h3></div></header><div className="threshold-body"><label><span>목표값</span><div><input aria-label="Chassis Rear 영구변형 기준값" type="number" min="0.1" step="0.1" value={draftLimit} onChange={(event) => setDraftLimit(Number(event.target.value))}/><b>mm</b></div></label><button onClick={() => onSaveThreshold(draftLimit)} disabled={!Number.isFinite(draftLimit) || draftLimit <= 0}>기준값 저장</button><p>상·하 엣지 이격 및 네 모서리 영구변형에 동일 기준을 적용합니다.</p></div></article>
-      <article className="chassis-card chassis-result-card"><header><div><span className="widget-kicker">FAILURE JUDGEMENT 02</span><h3>Chassis Rear 상세 판정</h3></div></header><div className="chassis-result-table"><div className="chassis-result-head"><span>측정 위치</span><span>영구변형</span><span>기준</span><span>판정</span></div>{results.map((item) => { const location = resultLocation(item.variable_key); return <div className="chassis-result-row" key={item.id}><strong>{item.display_name}{location && <small>NODE {location.entity_id} · ({location.x.toFixed(1)}, {location.y.toFixed(1)}, {location.z.toFixed(1)})</small>}</strong><span>{item.value_double.toFixed(1)} mm</span><span>{item.threshold_double.toFixed(1)} mm</span><b className={item.verdict.toLowerCase()}>{item.verdict}</b></div> })}</div></article>
+      <article className="chassis-card chassis-result-card"><header><div><span className="widget-kicker">FAILURE JUDGEMENT 02</span><h3>Chassis Rear 상세 판정</h3></div></header><div className="chassis-result-table"><div className="chassis-result-head"><span>측정 위치</span><span>영구변형</span><span>기준</span><span>판정</span></div>{results.map((item) => { const location = resultLocation(item.variable_key); return <div className="chassis-result-row" key={item.id}><strong>{item.display_name}{location && <small>NODE {location.entity_id} · ({location.x.toFixed(1)}, {location.y.toFixed(1)}, {location.z.toFixed(1)})</small>}</strong><span>{item.value_double.toFixed(1)} mm</span><span>{hasNumericValue(item.threshold_double) ? `${item.threshold_double.toFixed(1)} mm` : ''}</span><b className={item.verdict.toLowerCase()}>{item.verdict}</b></div> })}</div></article>
     </div>
   </div>
 }
