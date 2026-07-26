@@ -1,4 +1,4 @@
-import type { AnalysisRequest, AutomationTemplate, DashboardDefinition, DashboardSummary, DashboardVersion, ImportSchema, ImportSchemaDefinition, LoadCase, Overview, PortfolioOverview, Project, QualityThreshold, VariableDefinition, VariableDefinitionInput, WidgetCatalogItem, Workflow } from './types'
+import type { AnalysisRequest, AutomationTemplate, DashboardDefinition, DashboardSummary, DashboardVersion, ImportSchema, ImportSchemaDefinition, LoadCase, Overview, PortfolioOverview, Project, QualityThreshold, ReportLayout, ReportLayoutDefinition, ReportLayoutVersion, ReportTemplateAsset, VariableDefinition, VariableDefinitionInput, WidgetCatalogItem, Workflow } from './types'
 
 async function json<T>(response: Response | Promise<Response>): Promise<T> {
   response = await response
@@ -7,6 +7,15 @@ async function json<T>(response: Response | Promise<Response>): Promise<T> {
     throw new Error(detail || `요청 실패 (${response.status})`)
   }
   return response.json() as Promise<T>
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer) {
+  const bytes = new Uint8Array(buffer)
+  let binary = ''
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, Math.min(offset + 0x8000, bytes.length)))
+  }
+  return btoa(binary)
 }
 
 export const api = {
@@ -79,6 +88,25 @@ export const api = {
     json<{ status: string; variable_key: string }>(fetch(`/api/load-cases/${loadCaseId}/variables/${encodeURIComponent(variableKey)}`, { method: 'DELETE' })),
   widgetCatalog: () => json<WidgetCatalogItem[]>(fetch('/api/widget-catalog')),
   automationTemplates: (projectId?: string) => json<AutomationTemplate[]>(fetch(`/api/automation-templates${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''}`)),
+  reportLayouts: () => json<ReportLayout[]>(fetch('/api/report-layouts')),
+  createReportLayout: (payload: { name: string; description: string; definition: ReportLayoutDefinition; updated_by: string }) =>
+    json<ReportLayout>(fetch('/api/report-layouts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })),
+  updateReportLayout: (layoutId: string, payload: { name: string; description: string; definition: ReportLayoutDefinition; updated_by: string }) =>
+    json<ReportLayout>(fetch(`/api/report-layouts/${layoutId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })),
+  deleteReportLayout: (layoutId: string) => json<{ status: string; id: string }>(fetch(`/api/report-layouts/${layoutId}`, { method: 'DELETE' })),
+  reportLayoutVersions: (layoutId: string) => json<ReportLayoutVersion[]>(fetch(`/api/report-layouts/${layoutId}/versions`)),
+  reportLayoutVersion: (layoutId: string, version: number) =>
+    json<{ layout_id: string; version: number; definition: ReportLayoutDefinition; created_by: string; created_at: string }>(fetch(`/api/report-layouts/${layoutId}/versions/${version}`)),
+  reportTemplates: () => json<ReportTemplateAsset[]>(fetch('/api/report-templates')),
+  uploadReportTemplate: async (name: string, file: File) => json<ReportTemplateAsset>(fetch('/api/report-templates', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, filename: file.name, content_base64: arrayBufferToBase64(await file.arrayBuffer()), updated_by: '보고서 편집자' }),
+  })),
+  deleteReportTemplate: (templateId: string) => json<{ status: string; id: string }>(fetch(`/api/report-templates/${templateId}`, { method: 'DELETE' })),
+  renderReportTemplate: async (templateId: string, replacements: Record<string, string>, filename: string) => {
+    const response = await fetch(`/api/report-templates/${templateId}/render`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ replacements, filename }) })
+    if (!response.ok) throw new Error(await response.text() || `요청 실패 (${response.status})`)
+    return response.blob()
+  },
   dashboardVersions: (dashboardId: string) => json<DashboardVersion[]>(fetch(`/api/dashboards/${dashboardId}/versions`)),
   cloneDashboard: (dashboardId: string, name: string, description: string) => json<{ id: string; version: number }>(fetch(`/api/dashboards/${dashboardId}/clone`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, description, created_by: '대시보드 사용자' }) })),
   restoreDashboard: (dashboardId: string, version: number) => json<{ version: number; restored_from: number }>(fetch(`/api/dashboards/${dashboardId}/restore/${version}`, { method: 'POST' })),

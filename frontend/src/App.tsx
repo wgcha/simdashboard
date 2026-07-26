@@ -3,6 +3,7 @@ import {
   Activity,
   AlertTriangle,
   BarChart3,
+  BookOpen,
   Check,
   ChevronDown,
   CircleDot,
@@ -21,6 +22,7 @@ import {
   Settings2,
   Sparkles,
   Upload,
+  Trash2,
   X,
 } from 'lucide-react'
 import { WidthProvider, Responsive, type Layout, type Layouts } from 'react-grid-layout'
@@ -43,7 +45,7 @@ import {
 import { api } from './api'
 import { PortfolioDashboard } from './PortfolioDashboard'
 import type { ReportExportOptions, ReportScope } from './reportExport'
-import type { AnalysisRequest, AutomationTemplate, DashboardDefinition, DashboardSummary, DashboardVersion, DashboardWidget, ImportSchema, LoadCase, Overview, PortfolioLayout, Project, QualityThreshold, VariableDefinition, VariableDefinitionInput, WidgetCatalogItem, Workflow, WorkflowStep } from './types'
+import type { AnalysisRequest, AutomationTemplate, DashboardDefinition, DashboardSummary, DashboardVersion, DashboardWidget, ImportSchema, LoadCase, Overview, PortfolioLayout, Project, QualityThreshold, ReportElementDefinition, ReportElementType, ReportLayout, ReportLayoutDefinition, ReportLayoutVersion, ReportSection, ReportSlideDefinition, ReportSlideKind, ReportTemplateAsset, VariableDefinition, VariableDefinitionInput, WidgetCatalogItem, Workflow, WorkflowStep } from './types'
 
 const ResponsiveGridLayout = WidthProvider(Responsive) as unknown as ComponentType<any>
 const SERIES_COLORS = ['#61d4ff', '#ff647d', '#70e0a8', '#ffbf57']
@@ -73,6 +75,21 @@ function loadPortfolioLayout(): PortfolioLayout {
   }
 }
 
+function reportVariables(overview: Overview) {
+  const items = new Map<string, string>()
+  overview.scalar_results.forEach((item) => items.set(item.variable_key, item.display_name))
+  overview.time_series.forEach((item) => items.set(item.variable_key, item.display_name))
+  return [...items].map(([key, name]) => ({ key, name }))
+}
+
+function withReportVariables(layout: ReportLayoutDefinition, overview: Overview): ReportLayoutDefinition {
+  if (layout.variablePlacements.length) return { ...layout, variablePlacements: [...layout.variablePlacements].sort((a, b) => a.order - b.order) }
+  return {
+    ...layout,
+    variablePlacements: reportVariables(overview).map((item, order) => ({ variableKey: item.key, presentation: 'both', order })),
+  }
+}
+
 function App() {
   const [overview, setOverview] = useState<Overview | null>(null)
   const [projects, setProjects] = useState<Project[]>([])
@@ -85,7 +102,7 @@ function App() {
   const [workflows, setWorkflows] = useState<Workflow[]>([])
   const [dashboard, setDashboard] = useState<DashboardDefinition | null>(null)
   const [activeView, setActiveView] = useState<ActiveView>('workflow')
-  const [workspacePage, setWorkspacePage] = useState<'portfolio' | 'dashboard' | 'data' | 'schemas' | 'variables' | 'templates'>('portfolio')
+  const [workspacePage, setWorkspacePage] = useState<'portfolio' | 'dashboard' | 'data' | 'schemas' | 'variables' | 'templates' | 'help'>('portfolio')
   const [editMode, setEditMode] = useState(false)
   const [assistantOpen, setAssistantOpen] = useState(false)
   const [command, setCommand] = useState('')
@@ -104,6 +121,11 @@ function App() {
   const [reportOverview, setReportOverview] = useState<Overview | null>(null)
   const [reportExporting, setReportExporting] = useState(false)
   const [reportError, setReportError] = useState('')
+  const [reportLayouts, setReportLayouts] = useState<ReportLayout[]>([])
+  const [reportLayoutDraft, setReportLayoutDraft] = useState<ReportLayoutDefinition | null>(null)
+  const [reportLayoutVersions, setReportLayoutVersions] = useState<ReportLayoutVersion[]>([])
+  const [reportTemplates, setReportTemplates] = useState<ReportTemplateAsset[]>([])
+  const [reportLayoutManaging, setReportLayoutManaging] = useState(false)
   const [portfolioLayout, setPortfolioLayout] = useState<PortfolioLayout>(loadPortfolioLayout)
   const portfolioLayoutBeforeEdit = useRef<PortfolioLayout | null>(null)
 
@@ -350,10 +372,22 @@ function App() {
   const openReportExport = async (scope: ReportScope) => {
     if (!overview) return
     setReportError('')
-    const { createDefaultReportOptions, filterOverviewForReport } = await import('./reportExport')
-    const scopedOverview = filterOverviewForReport(overview, scope)
-    setReportOverview(scopedOverview)
-    setReportDraft(createDefaultReportOptions(scopedOverview))
+    try {
+      const { createDefaultReportOptions, filterOverviewForReport, DEFAULT_REPORT_LAYOUT, normalizeReportLayout } = await import('./reportExport')
+      const scopedOverview = filterOverviewForReport(overview, scope)
+      const [layouts, templates] = await Promise.all([api.reportLayouts(), api.reportTemplates()])
+      const selected = layouts.find((item) => item.id === 'report-layout-standard')?.definition ?? layouts[0]?.definition ?? DEFAULT_REPORT_LAYOUT
+      const layoutVersions = layouts.length ? await api.reportLayoutVersions(selected.id) : []
+      setReportOverview(scopedOverview)
+      setReportDraft(createDefaultReportOptions(scopedOverview))
+      setReportLayouts(layouts)
+      setReportLayoutDraft(withReportVariables(normalizeReportLayout(selected), scopedOverview))
+      setReportLayoutVersions(layoutVersions)
+      setReportTemplates(templates)
+      setReportLayoutManaging(false)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '보고서 레이아웃을 불러오지 못했습니다.')
+    }
   }
 
   const updateReportDraft = (field: keyof ReportExportOptions, value: string) => {
@@ -361,20 +395,99 @@ function App() {
   }
 
   const downloadReport = async () => {
-    if (!reportDraft || !reportOverview) return
+    if (!reportDraft || !reportOverview || !reportLayoutDraft) return
     setReportExporting(true)
     setReportError('')
     try {
-      const { exportAnalysisReport } = await import('./reportExport')
-      const filename = await exportAnalysisReport(reportOverview, reportDraft)
+      const { exportAnalysisReport, createReportTemplateReplacements, reportFilename } = await import('./reportExport')
+      let filename: string
+      if (reportLayoutDraft.templateSource === 'pptx_upload' && reportLayoutDraft.templateAssetId) {
+        filename = reportFilename(reportOverview, reportDraft)
+        const blob = await api.renderReportTemplate(reportLayoutDraft.templateAssetId, createReportTemplateReplacements(reportOverview, reportDraft, reportLayoutDraft, reportTemplates.find((item) => item.id === reportLayoutDraft.templateAssetId)), filename)
+        const href = URL.createObjectURL(blob)
+        const anchor = document.createElement('a')
+        anchor.href = href; anchor.download = filename; document.body.appendChild(anchor); anchor.click(); anchor.remove()
+        setTimeout(() => URL.revokeObjectURL(href), 1000)
+      } else filename = await exportAnalysisReport(reportOverview, reportDraft, reportLayoutDraft)
       setReportDraft(null)
       setReportOverview(null)
+      setReportLayoutDraft(null)
       setNotice(`${filename} 생성 완료`)
       setTimeout(() => setNotice(''), 3200)
     } catch (reason) {
       setReportError(reason instanceof Error ? reason.message : 'PPTX 보고서를 생성하지 못했습니다.')
     } finally {
       setReportExporting(false)
+    }
+  }
+
+  const selectReportLayout = async (layoutId: string) => {
+    const selected = reportLayouts.find((item) => item.id === layoutId)
+    if (selected && reportOverview) {
+      const { normalizeReportLayout } = await import('./reportExport')
+      setReportLayoutDraft(withReportVariables(normalizeReportLayout(selected.definition), reportOverview))
+      setReportLayoutVersions(await api.reportLayoutVersions(layoutId))
+    }
+  }
+
+  const selectReportLayoutVersion = async (version: number) => {
+    if (!reportLayoutDraft || !reportOverview) return
+    try {
+      const stored = await api.reportLayoutVersion(reportLayoutDraft.id, version)
+      const { normalizeReportLayout } = await import('./reportExport')
+      setReportLayoutDraft(withReportVariables(normalizeReportLayout(stored.definition), reportOverview))
+    } catch (reason) {
+      setReportError(reason instanceof Error ? reason.message : '보고서 레이아웃 버전을 불러오지 못했습니다.')
+    }
+  }
+
+  const saveReportLayout = async (asNew: boolean) => {
+    if (!reportLayoutDraft) return
+    setReportError('')
+    try {
+      const payload = { name: reportLayoutDraft.name, description: reportLayoutDraft.description, definition: reportLayoutDraft, updated_by: '보고서 편집자' }
+      const saved = asNew ? await api.createReportLayout(payload) : await api.updateReportLayout(reportLayoutDraft.id, payload)
+      const layouts = await api.reportLayouts()
+      const layoutVersions = await api.reportLayoutVersions(saved.id)
+      setReportLayouts(layouts)
+      const { normalizeReportLayout } = await import('./reportExport')
+      setReportLayoutDraft(withReportVariables(normalizeReportLayout(saved.definition), reportOverview!))
+      setReportLayoutVersions(layoutVersions)
+      setNotice(`${saved.name} v${saved.version} 저장 완료`)
+      setTimeout(() => setNotice(''), 2800)
+    } catch (reason) {
+      setReportError(reason instanceof Error ? reason.message : '보고서 레이아웃을 저장하지 못했습니다.')
+    }
+  }
+
+  const uploadReportTemplate = async (file: File) => {
+    if (!reportLayoutDraft) return
+    setReportError('')
+    try {
+      const created = await api.uploadReportTemplate(file.name.replace(/\.pptx$/i, ''), file)
+      setReportTemplates((items) => [created, ...items])
+      setReportLayoutDraft({ ...reportLayoutDraft, templateSource: 'pptx_upload', templateAssetId: created.id, templateBindings: {} })
+      setNotice(`${created.name} 템플릿의 플레이스홀더 ${created.definition.placeholders.length}개를 인식했습니다.`)
+    } catch (reason) { setReportError(reason instanceof Error ? reason.message : 'PPTX 템플릿을 업로드하지 못했습니다.') }
+  }
+
+  const removeReportTemplate = async (templateId: string) => {
+    try {
+      await api.deleteReportTemplate(templateId)
+      setReportTemplates((items) => items.filter((item) => item.id !== templateId))
+      if (reportLayoutDraft?.templateAssetId === templateId) setReportLayoutDraft({ ...reportLayoutDraft, templateSource: 'native', templateAssetId: undefined, templateBindings: {} })
+    } catch (reason) { setReportError(reason instanceof Error ? reason.message : 'PPTX 템플릿을 삭제하지 못했습니다.') }
+  }
+
+  const removeReportLayout = async () => {
+    if (!reportLayoutDraft || reportLayoutDraft.id.startsWith('report-layout-standard') || reportLayouts.find((item) => item.id === reportLayoutDraft.id)?.is_system) return
+    try {
+      await api.deleteReportLayout(reportLayoutDraft.id)
+      const layouts = await api.reportLayouts()
+      setReportLayouts(layouts)
+      if (reportOverview && layouts[0]) setReportLayoutDraft(withReportVariables(layouts[0].definition, reportOverview))
+    } catch (reason) {
+      setReportError(reason instanceof Error ? reason.message : '보고서 레이아웃을 삭제하지 못했습니다.')
     }
   }
 
@@ -425,6 +538,7 @@ function App() {
           <button className={workspacePage === 'variables' ? 'active' : ''} onClick={() => setWorkspacePage('variables')}><BarChart3 /><span>변수 카탈로그</span></button>
           <button className={workspacePage === 'templates' ? 'active' : ''} onClick={() => setWorkspacePage('templates')}><Settings2 /><span>자동화 템플릿</span></button>
           <button className={workspacePage === 'schemas' ? 'active' : ''} onClick={() => setWorkspacePage('schemas')}><GripVertical /><span>폴더 스키마</span></button>
+          <button className={workspacePage === 'help' ? 'active' : ''} onClick={() => setWorkspacePage('help')}><BookOpen /><span>도움말</span></button>
         </nav>
         <div className="sidebar-foot">
           <div className="system-pill"><span className="live-dot" /> DUCKDB · LOCAL</div>
@@ -434,7 +548,7 @@ function App() {
 
       <main className="main-shell">
         <header className="topbar">
-          <div className="breadcrumb">{workspacePage === 'portfolio' ? <><span>운영</span><b>/</b><strong>해석 운영 현황</strong></> : workspacePage === 'data' ? <><span>운영</span><b>/</b><strong>해석 데이터 등록</strong></> : workspacePage === 'schemas' ? <><span>데이터 설계</span><b>/</b><strong>폴더 스키마</strong></> : workspacePage === 'variables' ? <><span>설계</span><b>/</b><strong>변수 카탈로그</strong></> : workspacePage === 'templates' ? <><span>자동화</span><b>/</b><strong>모델링 템플릿</strong></> : <><span>프로젝트</span><b>/</b><span>{overview.load_case.project_name}</span><b>/</b><strong>{overview.load_case.name}</strong></>}</div>
+          <div className="breadcrumb">{workspacePage === 'portfolio' ? <><span>운영</span><b>/</b><strong>해석 운영 현황</strong></> : workspacePage === 'data' ? <><span>운영</span><b>/</b><strong>해석 데이터 등록</strong></> : workspacePage === 'schemas' ? <><span>데이터 설계</span><b>/</b><strong>폴더 스키마</strong></> : workspacePage === 'variables' ? <><span>설계</span><b>/</b><strong>변수 카탈로그</strong></> : workspacePage === 'templates' ? <><span>자동화</span><b>/</b><strong>모델링 템플릿</strong></> : workspacePage === 'help' ? <><span>지원</span><b>/</b><strong>사용 시나리오 도움말</strong></> : <><span>프로젝트</span><b>/</b><span>{overview.load_case.project_name}</span><b>/</b><strong>{overview.load_case.name}</strong></>}</div>
           <div className="top-actions">
             {workspacePage === 'dashboard' && <button className="ghost-button" onClick={() => setAssistantOpen(true)}><Sparkles /> 자연어로 개선</button>}
             {(workspacePage === 'dashboard' || workspacePage === 'portfolio') && (editMode ? (
@@ -446,7 +560,7 @@ function App() {
           </div>
         </header>
 
-        {workspacePage === 'portfolio' ? <PortfolioDashboard editMode={editMode} layout={portfolioLayout} onLayoutChange={setPortfolioLayout} onCancelEdit={cancelEditing} onOpen={(projectId, requestId, loadCaseId) => void openImportedResult(projectId, requestId, loadCaseId)} /> : workspacePage === 'schemas' ? <FolderSchemaWorkspace /> : workspacePage === 'variables' ? <VariableCatalogPage variables={variables} overview={overview} loadCaseId={selectedLoadCaseId} onChanged={(items) => { setVariables(items); setCatalogVariable((current) => items.some((item) => item.id === current) ? current : items[0]?.id ?? '') }} /> : workspacePage === 'templates' ? <AutomationTemplatesPage /> : workspacePage === 'data' ? (
+        {workspacePage === 'portfolio' ? <PortfolioDashboard editMode={editMode} layout={portfolioLayout} onLayoutChange={setPortfolioLayout} onCancelEdit={cancelEditing} onOpen={(projectId, requestId, loadCaseId) => void openImportedResult(projectId, requestId, loadCaseId)} /> : workspacePage === 'schemas' ? <FolderSchemaWorkspace /> : workspacePage === 'variables' ? <VariableCatalogPage variables={variables} overview={overview} loadCaseId={selectedLoadCaseId} onChanged={(items) => { setVariables(items); setCatalogVariable((current) => items.some((item) => item.id === current) ? current : items[0]?.id ?? '') }} /> : workspacePage === 'templates' ? <AutomationTemplatesPage /> : workspacePage === 'help' ? <HelpCenter onNavigate={setWorkspacePage} /> : workspacePage === 'data' ? (
           <DataWorkspace projects={projects} initialProjectId={selectedProjectId} onDataChanged={refreshOperationalData} onOpenAnalysis={openImportedResult} />
         ) : <>
         <section className="content-head">
@@ -533,13 +647,19 @@ function App() {
         </div>
       )}
       {selectedWidgetId && dashboard && <WidgetSettingsPanel widget={dashboard.widgets.find((item) => item.id === selectedWidgetId)!} variables={variables} onChange={(patch) => updateWidget(selectedWidgetId, patch)} onClose={() => setSelectedWidgetId(null)} />}
-      {reportDraft && reportOverview && (
+      {reportDraft && reportOverview && reportLayoutDraft && (
         <div className="drawer-backdrop report-backdrop" onMouseDown={() => { if (!reportExporting) { setReportDraft(null); setReportOverview(null) } }}>
           <section className="report-export-dialog" role="dialog" aria-modal="true" aria-labelledby="report-export-title" onMouseDown={(event) => event.stopPropagation()}>
             <header>
               <div><span>POWERPOINT EXPORT</span><h2 id="report-export-title">{reportOverview.load_case.request_title} 보고서</h2><p>선택한 평가 데이터와 아래 문구로 편집 가능한 PPTX를 생성합니다.</p></div>
-              <button aria-label="닫기" onClick={() => { setReportDraft(null); setReportOverview(null) }} disabled={reportExporting}><X /></button>
+              <button aria-label="닫기" onClick={() => { setReportDraft(null); setReportOverview(null); setReportLayoutDraft(null) }} disabled={reportExporting}><X /></button>
             </header>
+            <div className="report-layout-toolbar">
+              <label><span>출력 레이아웃</span><select value={reportLayoutDraft.id} onChange={(event) => void selectReportLayout(event.target.value)}>{reportLayouts.map((item) => <option key={item.id} value={item.id}>{item.name} · v{item.version}</option>)}</select></label>
+              <label className="report-version-select"><span>출력 버전</span><select value={reportLayoutDraft.version} onChange={(event) => void selectReportLayoutVersion(Number(event.target.value))}>{reportLayoutVersions.map((item) => <option key={item.version} value={item.version}>v{item.version} · {new Date(item.created_at).toLocaleDateString('ko-KR')}</option>)}</select></label>
+              <button onClick={() => setReportLayoutManaging((value) => !value)}><Settings2 /> {reportLayoutManaging ? '편집 닫기' : '레이아웃 편집·관리'}</button>
+            </div>
+            {reportLayoutManaging && <ReportLayoutEditor layout={reportLayoutDraft} overview={reportOverview} templates={reportTemplates} isSystem={Boolean(reportLayouts.find((item) => item.id === reportLayoutDraft.id)?.is_system)} onChange={setReportLayoutDraft} onTemplateUpload={(file) => void uploadReportTemplate(file)} onTemplateDelete={(id) => void removeReportTemplate(id)} onSave={() => void saveReportLayout(false)} onSaveAs={() => void saveReportLayout(true)} onDelete={() => void removeReportLayout()} />}
             <div className="report-export-grid">
               <label><span>작성자 *</span><input value={reportDraft.author} onChange={(event) => updateReportDraft('author', event.target.value)} placeholder="홍길동" /></label>
               <label><span>개발단계 *</span><input value={reportDraft.developmentStage} onChange={(event) => updateReportDraft('developmentStage', event.target.value)} placeholder="DV 1차" /></label>
@@ -553,8 +673,8 @@ function App() {
             <aside><strong>자동 포함 자료</strong><span>시간 이력 그래프 {new Set(reportOverview.time_series.map((item) => item.variable_key)).size}개 · 정량 결과 {reportOverview.scalar_results.length}개 · 이미지/미디어 {reportOverview.media.length}개</span><small>선택한 평가에 연결된 데이터만 포함합니다. 영상·애니메이션은 호환성을 위해 자산 정보 페이지로 생성됩니다.</small></aside>
             {reportError && <div className="report-export-error"><AlertTriangle /> {reportError}</div>}
             <footer>
-              <button onClick={() => { setReportDraft(null); setReportOverview(null) }} disabled={reportExporting}>취소</button>
-              <button className="primary" onClick={() => void downloadReport()} disabled={reportExporting || !reportDraft.author.trim()}>{reportExporting ? <LoaderCircle className="spin" /> : <Download />} PPTX 생성</button>
+              <button onClick={() => { setReportDraft(null); setReportOverview(null); setReportLayoutDraft(null) }} disabled={reportExporting}>취소</button>
+              <button className="primary" onClick={() => void downloadReport()} disabled={reportExporting || !reportDraft.author.trim() || (reportLayoutDraft.templateSource === 'pptx_upload' && !reportLayoutDraft.templateAssetId)}>{reportExporting ? <LoaderCircle className="spin" /> : <Download />} PPTX 생성</button>
             </footer>
           </section>
         </div>
@@ -562,6 +682,134 @@ function App() {
       {notice && <div className="toast"><Check /> {notice}</div>}
     </div>
   )
+}
+
+function ReportLayoutEditor({ layout, overview, templates, isSystem, onChange, onTemplateUpload, onTemplateDelete, onSave, onSaveAs, onDelete }: {
+  layout: ReportLayoutDefinition
+  overview: Overview
+  templates: ReportTemplateAsset[]
+  isSystem: boolean
+  onChange: (layout: ReportLayoutDefinition) => void
+  onTemplateUpload: (file: File) => void
+  onTemplateDelete: (id: string) => void
+  onSave: () => void
+  onSaveAs: () => void
+  onDelete: () => void
+}) {
+  const slides = layout.slides ?? []
+  const variables = reportVariables(overview)
+  const [activeSlideId, setActiveSlideId] = useState(slides[0]?.id ?? '')
+  const [selectedElementId, setSelectedElementId] = useState<string | null>(null)
+  const [templateSlide, setTemplateSlide] = useState(1)
+  const activeSlide = slides.find((item) => item.id === activeSlideId) ?? slides[0]
+  const selectedElement = activeSlide?.elements.find((item) => item.id === selectedElementId)
+  const activeTemplate = templates.find((item) => item.id === layout.templateAssetId)
+  const selectedVariables = new Map(layout.variablePlacements.map((item) => [item.variableKey, item]))
+
+  useEffect(() => {
+    if (!slides.some((item) => item.id === activeSlideId)) setActiveSlideId(slides[0]?.id ?? '')
+  }, [layout.id, layout.version, slides.length, activeSlideId])
+
+  const updateSlide = (slideId: string, updater: (slide: ReportSlideDefinition) => ReportSlideDefinition) => {
+    onChange({ ...layout, slides: slides.map((slide) => slide.id === slideId ? updater(slide) : slide) })
+  }
+  const updateElement = (patch: Partial<ReportElementDefinition>) => {
+    if (!activeSlide || !selectedElement) return
+    updateSlide(activeSlide.id, (slide) => ({ ...slide, elements: slide.elements.map((item) => item.id === selectedElement.id ? { ...item, ...patch, style: { ...item.style, ...patch.style }, binding: patch.binding ?? item.binding } : item) }))
+  }
+  const addElement = (type: ReportElementType, variableKey?: string, position?: { x: number; y: number }) => {
+    if (!activeSlide) return
+    const size: Record<ReportElementType, [number, number]> = { title: [20, 2], text: [10, 5], verdict: [5, 2], 'scalar-card': [7, 4], chart: [16, 9], table: [13, 8], image: [16, 10] }
+    const [w, h] = size[type]
+    const element: ReportElementDefinition = {
+      id: `report-element-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`, type,
+      label: variableKey ? variables.find((item) => item.key === variableKey)?.name ?? variableKey : ({ title: '제목', text: '텍스트', verdict: '종합 판정', 'scalar-card': '결과 카드', chart: '차트', table: '결과표', image: '이미지' } as Record<ReportElementType, string>)[type],
+      x: Math.min(32 - w, Math.max(0, position?.x ?? 1)), y: Math.min(18 - h, Math.max(0, position?.y ?? 4)), w, h, z: activeSlide.elements.length + 1,
+      binding: variableKey ? { source: 'variable', variableKey, key: variableKey } : type === 'verdict' ? { source: 'field', key: 'verdict' } : { source: 'static' },
+      rules: { visibleWhenData: true },
+    }
+    updateSlide(activeSlide.id, (slide) => ({ ...slide, elements: [...slide.elements, element] }))
+    setSelectedElementId(element.id)
+  }
+  const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    if (!activeSlide) return
+    try {
+      const payload = JSON.parse(event.dataTransfer.getData('application/json')) as { type?: ReportElementType; variableKey?: string }
+      const rect = event.currentTarget.getBoundingClientRect()
+      addElement(payload.type ?? (payload.variableKey && overview.time_series.some((item) => item.variable_key === payload.variableKey) ? 'chart' : 'scalar-card'), payload.variableKey, { x: Math.floor((event.clientX - rect.left) / rect.width * 32), y: Math.floor((event.clientY - rect.top) / rect.height * 18) })
+    } catch { /* unsupported external drop */ }
+  }
+  const updateCanvasLayout = (items: Layout[]) => {
+    if (!activeSlide) return
+    updateSlide(activeSlide.id, (slide) => ({ ...slide, elements: slide.elements.map((element) => {
+      const item = items.find((entry) => entry.i === element.id)
+      return item ? { ...element, x: item.x, y: item.y, w: item.w, h: item.h } : element
+    }) }))
+  }
+  const duplicateSlide = () => {
+    if (!activeSlide) return
+    const id = `slide-${Date.now()}`
+    const copy = { ...activeSlide, id, name: `${activeSlide.name} 복사본`, kind: 'custom' as ReportSlideKind, repeat: 'none' as const, elements: activeSlide.elements.map((item) => ({ ...item, id: `${item.id}-${Date.now()}` })) }
+    const index = slides.indexOf(activeSlide)
+    onChange({ ...layout, slides: [...slides.slice(0, index + 1), copy, ...slides.slice(index + 1)] })
+    setActiveSlideId(id)
+  }
+  const addSlide = () => {
+    const id = `slide-custom-${Date.now()}`
+    const slide: ReportSlideDefinition = { id, name: '사용자 슬라이드', kind: 'custom', repeat: 'none', elements: [] }
+    onChange({ ...layout, slides: [...slides, slide] }); setActiveSlideId(id); setSelectedElementId(null)
+  }
+  const moveSlide = (index: number, direction: -1 | 1) => {
+    const target = index + direction
+    if (target < 0 || target >= slides.length) return
+    const next = [...slides]; [next[index], next[target]] = [next[target], next[index]]; onChange({ ...layout, slides: next })
+  }
+  const toggleVariable = (key: string) => {
+    const exists = selectedVariables.has(key)
+    onChange({ ...layout, variablePlacements: exists ? layout.variablePlacements.filter((item) => item.variableKey !== key) : [...layout.variablePlacements, { variableKey: key, presentation: 'both', order: layout.variablePlacements.length }] })
+  }
+  const fieldOptions = [
+    ['field:report_title', '보고서 제목'], ['field:project_name', '프로젝트명'], ['field:author_stage', '작성자 · 개발단계'], ['field:report_date', '작성날짜'], ['field:verdict', '종합 판정'], ['field:reliability_name', '시뮬레이션 종류'], ['field:review_purpose', '검토 목적'], ['field:review_conditions', '검토 사양 조건'], ['field:review_result', '검토 결과'], ['field:review_conclusion', '검토 결론'],
+  ]
+  const previewText = (element: ReportElementDefinition) => {
+    if (element.binding?.source === 'field') return fieldOptions.find(([value]) => value === `field:${element.binding?.key}`)?.[1] ?? element.label
+    if (element.binding?.source === 'variable') return variables.find((item) => item.key === element.binding?.variableKey)?.name ?? element.label
+    return element.label
+  }
+
+  return <section className="report-layout-editor visual-report-editor">
+    <div className="report-layout-fields">
+      <label><span>레이아웃 이름</span><input value={layout.name} onChange={(event) => onChange({ ...layout, name: event.target.value })} /></label>
+      <label><span>출력 원본</span><select value={layout.templateSource ?? 'native'} onChange={(event) => onChange({ ...layout, templateSource: event.target.value as 'native' | 'pptx_upload' })}><option value="native">시각적 레이아웃</option><option value="pptx_upload">업로드 PPTX</option></select></label>
+      <label><span>강조색</span><input type="color" value={`#${layout.accentColor}`} onChange={(event) => onChange({ ...layout, accentColor: event.target.value.slice(1).toUpperCase() })} /></label>
+      <label className="wide"><span>설명</span><input value={layout.description} onChange={(event) => onChange({ ...layout, description: event.target.value })} /></label>
+    </div>
+
+    {layout.templateSource === 'pptx_upload' ? <div className="pptx-template-editor">
+      <aside className="report-slide-list"><header><strong>업로드 템플릿</strong><label><Upload /> PPTX 추가<input type="file" accept=".pptx,application/vnd.openxmlformats-officedocument.presentationml.presentation" onChange={(event) => { const file = event.target.files?.[0]; if (file) onTemplateUpload(file); event.currentTarget.value = '' }} /></label></header>{templates.map((template) => <button key={template.id} className={template.id === layout.templateAssetId ? 'active' : ''} onClick={() => { onChange({ ...layout, templateAssetId: template.id, templateBindings: {} }); setTemplateSlide(1) }}><span>{template.name}</span><small>{template.slide_count}장 · 태그 {template.definition.placeholders.length}개</small></button>)}</aside>
+      <div className="pptx-preview-column"><div className="pptx-slide-tabs">{Array.from({ length: activeTemplate?.slide_count ?? 0 }, (_, index) => <button key={index} className={templateSlide === index + 1 ? 'active' : ''} onClick={() => setTemplateSlide(index + 1)}>{index + 1}</button>)}</div><div className="pptx-placeholder-canvas">{activeTemplate?.definition.placeholders.filter((item) => item.slideIndex === templateSlide).map((placeholder) => <div key={placeholder.id} className={`pptx-placeholder ${placeholder.kind}`} style={{ left: `${placeholder.x * 100}%`, top: `${placeholder.y * 100}%`, width: `${placeholder.w * 100}%`, height: `${placeholder.h * 100}%` }}><b>{placeholder.kind.toUpperCase()}</b><span>{placeholder.token}</span></div>)}{activeTemplate && !activeTemplate.definition.placeholders.some((item) => item.slideIndex === templateSlide) && <p>이 슬라이드에는 인식된 태그가 없습니다.</p>}</div></div>
+      <aside className="report-properties"><header><strong>태그 변수 연결</strong><small>PowerPoint의 도형 이름 또는 &#123;&#123;태그&#125;&#125;를 연결합니다.</small></header>{activeTemplate?.definition.placeholders.map((placeholder) => <label key={placeholder.id}><span>{placeholder.slideIndex}쪽 · {placeholder.shapeName}</span><code>{placeholder.token}</code><select value={layout.templateBindings?.[placeholder.id] ?? placeholder.token} onChange={(event) => onChange({ ...layout, templateBindings: { ...layout.templateBindings, [placeholder.id]: event.target.value } })}><option value={placeholder.token}>태그 기본 연결 · {placeholder.token}</option>{fieldOptions.filter(([value]) => value !== placeholder.token).map(([value, label]) => <option key={value} value={value}>{label}</option>)}{variables.map((variable) => <option key={variable.key} value={`variable:${variable.key}`}>{variable.name}</option>)}</select></label>)}{activeTemplate && <button className="danger" onClick={() => onTemplateDelete(activeTemplate.id)}><Trash2 /> 템플릿 삭제</button>}</aside>
+    </div> : <>
+      <div className="report-designer-toolbar"><span>32 × 18 그리드 · 16:9</span><button onClick={addSlide}><Plus /> 빈 슬라이드</button><button onClick={duplicateSlide} disabled={!activeSlide}><Plus /> 슬라이드 복제</button><label className="media-toggle"><input type="checkbox" checked={layout.includeMedia} onChange={(event) => onChange({ ...layout, includeMedia: event.target.checked })} /> 미디어 포함</label></div>
+      <div className="report-designer-grid">
+        <aside className="report-slide-list"><header><strong>슬라이드</strong><small>위아래로 출력 순서를 바꿉니다.</small></header>{slides.map((slide, index) => <div key={slide.id} className={slide.id === activeSlide?.id ? 'active' : ''} onClick={() => { setActiveSlideId(slide.id); setSelectedElementId(null) }}><span>{String(index + 1).padStart(2, '0')}</span><button>{slide.name}<small>{slide.kind}{slide.repeat !== 'none' ? ' · 반복' : ''}</small></button><nav><button onClick={(event) => { event.stopPropagation(); moveSlide(index, -1) }} disabled={index === 0}>↑</button><button onClick={(event) => { event.stopPropagation(); moveSlide(index, 1) }} disabled={index === slides.length - 1}>↓</button></nav></div>)}</aside>
+        <div className="report-canvas-column"><div className="report-widget-palette">{(['title', 'text', 'verdict', 'scalar-card', 'chart', 'table', 'image'] as ReportElementType[]).map((type) => <button key={type} draggable onDragStart={(event) => event.dataTransfer.setData('application/json', JSON.stringify({ type }))} onClick={() => addElement(type)}>{({ title: '제목', text: '텍스트', verdict: '판정', 'scalar-card': '결과 카드', chart: '차트', table: '표', image: '이미지' } as Record<ReportElementType, string>)[type]}</button>)}</div>{activeSlide && <div className="report-slide-canvas" onDragOver={(event) => event.preventDefault()} onDrop={handleDrop}><ResponsiveGridLayout className="report-slide-layout" layouts={{ lg: activeSlide.elements.map((item) => ({ i: item.id, x: item.x, y: item.y, w: item.w, h: item.h })) }} breakpoints={{ lg: 0 }} cols={{ lg: 32 }} rowHeight={20} margin={[0, 0]} containerPadding={[0, 0]} maxRows={18} compactType={null} preventCollision isDraggable isResizable onLayoutChange={updateCanvasLayout}>{activeSlide.elements.map((element) => <div key={element.id} className={`report-slide-widget ${element.type} ${selectedElementId === element.id ? 'selected' : ''}`} onMouseDown={() => setSelectedElementId(element.id)}><b>{element.label}</b><span>{previewText(element)}</span>{element.binding?.variableKey && <code>{element.binding.variableKey}</code>}</div>)}</ResponsiveGridLayout></div>}</div>
+        <aside className="report-properties"><header><strong>속성 · 변수</strong><small>변수를 끌어 캔버스에 놓을 수도 있습니다.</small></header>{selectedElement ? <div className="report-element-properties"><label><span>표시 이름</span><input value={selectedElement.label} onChange={(event) => updateElement({ label: event.target.value })} /></label><label><span>위젯 형식</span><select value={selectedElement.type} onChange={(event) => updateElement({ type: event.target.value as ReportElementType })}>{(['title', 'text', 'verdict', 'scalar-card', 'chart', 'table', 'image'] as ReportElementType[]).map((type) => <option key={type}>{type}</option>)}</select></label><label><span>데이터 연결</span><select value={selectedElement.binding?.source === 'variable' ? `variable:${selectedElement.binding.variableKey}` : selectedElement.binding?.source === 'field' ? `field:${selectedElement.binding.key}` : 'static:'} onChange={(event) => { const [source, key] = event.target.value.split(':'); updateElement({ binding: source === 'variable' ? { source: 'variable', key, variableKey: key } : source === 'field' ? { source: 'field', key } : { source: 'static' } }) }}><option value="static:">고정 라벨</option>{fieldOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}{variables.map((variable) => <option key={variable.key} value={`variable:${variable.key}`}>{variable.name}</option>)}</select></label><div className="report-property-row"><label><span>글자 크기</span><input type="number" min="7" max="40" value={selectedElement.style?.fontSize ?? 10} onChange={(event) => updateElement({ style: { fontSize: Number(event.target.value) } })} /></label><label><span>정렬</span><select value={selectedElement.style?.align ?? 'left'} onChange={(event) => updateElement({ style: { align: event.target.value as 'left' | 'center' | 'right' } })}><option value="left">왼쪽</option><option value="center">가운데</option><option value="right">오른쪽</option></select></label></div><button className="danger" onClick={() => { updateSlide(activeSlide.id, (slide) => ({ ...slide, elements: slide.elements.filter((item) => item.id !== selectedElement.id) })); setSelectedElementId(null) }}><Trash2 /> 위젯 삭제</button></div> : <p className="report-empty-properties">캔버스의 위젯을 선택하면 데이터와 스타일을 편집할 수 있습니다.</p>}<div className="report-variable-palette"><strong>변수 카탈로그</strong>{variables.map((variable) => { const placement = selectedVariables.get(variable.key); return <div key={variable.key} draggable onDragStart={(event) => event.dataTransfer.setData('application/json', JSON.stringify({ variableKey: variable.key }))}><label><input type="checkbox" checked={Boolean(placement)} onChange={() => toggleVariable(variable.key)} /><span>{variable.name}</span></label><code>{variable.key}</code>{placement && <select value={placement.presentation} onChange={(event) => onChange({ ...layout, variablePlacements: layout.variablePlacements.map((item) => item.variableKey === variable.key ? { ...item, presentation: event.target.value as 'chart' | 'table' | 'both' } : item) })}><option value="both">차트+표</option><option value="chart">차트</option><option value="table">표</option></select>}</div>})}</div></aside>
+      </div>
+    </>}
+    <footer><button onClick={onSave}><Save /> 현재 레이아웃 새 버전 저장</button><button onClick={onSaveAs}><Plus /> 다른 이름으로 저장</button><button className="danger" disabled={isSystem} title={isSystem ? '기본 레이아웃은 삭제할 수 없습니다.' : ''} onClick={onDelete}><Trash2 /> 삭제</button></footer>
+  </section>
+}
+
+function HelpCenter({ onNavigate }: { onNavigate: (page: 'portfolio' | 'dashboard' | 'data' | 'schemas' | 'variables' | 'templates' | 'help') => void }) {
+  const scenarios = [
+    { title: '새 해석 결과를 등록하고 확인하기', steps: ['해석 데이터에서 프로젝트·의뢰·하중 경우를 선택합니다.', 'CSV 또는 폴더 스키마 기반 결과를 검증 후 적재합니다.', '해석 상세에서 판정, 시간 이력, 위치별 결과를 확인합니다.'], action: 'data' as const, label: '해석 데이터 열기' },
+    { title: '폴더 결과를 변수와 대시보드에 연결하기', steps: ['폴더 스키마에서 파일 패턴과 variable_key 매핑을 정의합니다.', '변수 카탈로그에서 같은 variable_key의 표시 이름·단위·기준·허용 위젯을 선언합니다.', '대시보드 편집에서 변수를 위젯에 바인딩합니다. 값은 결과 테이블에서 조회됩니다.'], action: 'schemas' as const, label: '폴더 스키마 열기' },
+    { title: '편집 가능한 PPT 보고서 만들기', steps: ['해석 상세의 평가 탭 옆 보고서 내보내기를 누릅니다.', '레이아웃 편집·관리에서 슬라이드를 선택하고 위젯을 이동·크기 조절하거나 변수를 끌어 놓습니다.', '회사 PPTX를 사용하려면 도형 이름 또는 {{variable:key}} 태그를 지정해 업로드하고 변수를 연결합니다.', '레이아웃과 버전을 선택한 뒤 PPTX를 생성합니다.'], action: 'dashboard' as const, label: '해석 상세 열기' },
+    { title: '대시보드 레이아웃을 추가·복구하기', steps: ['해석 상세에서 대시보드 편집을 시작합니다.', '위젯을 추가하고 변수·집계·크기·위치를 설정합니다.', '레이아웃을 저장하거나 복제하고, 필요하면 정상 버전을 복구합니다.'], action: 'dashboard' as const, label: '대시보드 편집 열기' },
+  ]
+  return <section className="help-center"><header><span>SCENARIO GUIDE</span><h1>Analysis Canvas 사용 도움말</h1><p>하려는 작업을 기준으로 필요한 화면과 데이터 흐름을 안내합니다.</p></header><div className="help-flow"><strong>핵심 데이터 흐름</strong><div><span>폴더 스키마</span><b>→</b><span>결과 테이블</span><b>→</b><span>변수 카탈로그</span><b>→</b><span>대시보드·PPT</span></div><p>변수 카탈로그는 값을 저장하지 않습니다. 결과 테이블의 <code>variable_key</code>를 해석하고 표시하는 계약입니다.</p></div><div className="help-scenarios">{scenarios.map((scenario, index) => <article key={scenario.title}><span>0{index + 1}</span><h2>{scenario.title}</h2><ol>{scenario.steps.map((step) => <li key={step}>{step}</li>)}</ol><button onClick={() => onNavigate(scenario.action)}>{scenario.label}</button></article>)}</div><aside><AlertTriangle /><div><strong>PostgreSQL 전환 전 확인</strong><p>현재 실행 백엔드는 DuckDB입니다. PostgreSQL은 어댑터·Alembic migration·데이터 검증 CLI를 구현한 뒤 환경변수로 전환해야 하며, DB 접속 정보나 SQL을 프런트엔드에 노출하면 안 됩니다.</p></div></aside></section>
 }
 
 function DataWorkspace({ projects, initialProjectId, onDataChanged, onOpenAnalysis }: { projects: Project[]; initialProjectId: string; onDataChanged: () => Promise<void>; onOpenAnalysis: (projectId: string, requestId: string, loadCaseId: string) => Promise<void> }) {

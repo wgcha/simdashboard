@@ -1,5 +1,8 @@
 import json
+import base64
+import io
 import shutil
+import zipfile
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -45,6 +48,82 @@ def test_widget_catalog_and_dashboard_version_flows():
     with connect() as conn:
         conn.execute("DELETE FROM dashboard_versions WHERE dashboard_id = ?", [clone_id])
         conn.execute("DELETE FROM dashboards WHERE id = ?", [clone_id])
+
+
+def test_report_layout_crud_and_version_history():
+    initialize_database()
+    with TestClient(app) as client:
+        layouts = client.get("/api/report-layouts")
+        assert layouts.status_code == 200
+        assert len(layouts.json()) >= 3
+        assert {item["definition"]["coverVariant"] for item in layouts.json()} >= {"balanced", "executive", "evidence"}
+        payload = {
+            "name": "테스트 보고서",
+            "description": "변수 배치 회귀 검증",
+            "definition": {
+                "id": "client-placeholder",
+                "name": "테스트 보고서",
+                "description": "변수 배치 회귀 검증",
+                "version": 1,
+                "coverVariant": "balanced",
+                "accentColor": "1898D5",
+                "sectionOrder": ["scalar", "series", "media"],
+                "variablePlacements": [{"variableKey": "top_edge_max_stress", "presentation": "table", "order": 0}],
+                "includeMedia": False,
+                "canvas": {"columns": 32, "rows": 18, "widthInches": 13.333, "heightInches": 7.5},
+                "slides": [{"id": "cover", "name": "표지", "kind": "cover", "repeat": "none", "elements": [{"id": "title", "type": "title", "label": "제목", "x": 1, "y": 1, "w": 20, "h": 2, "z": 1, "binding": {"source": "field", "key": "report_title"}}]}],
+                "templateSource": "native",
+                "templateBindings": {},
+            },
+            "updated_by": "테스트 편집자",
+        }
+        created = client.post("/api/report-layouts", json=payload)
+        assert created.status_code == 201, created.text
+        layout_id = created.json()["id"]
+        payload["definition"]["accentColor"] = "FF9948"
+        saved = client.put(f"/api/report-layouts/{layout_id}", json=payload)
+        assert saved.status_code == 200
+        assert saved.json()["version"] == 2
+        versions = client.get(f"/api/report-layouts/{layout_id}/versions").json()
+        assert [item["version"] for item in versions] == [2, 1]
+        historical = client.get(f"/api/report-layouts/{layout_id}/versions/1")
+        assert historical.status_code == 200
+        assert historical.json()["definition"]["accentColor"] == "1898D5"
+        assert client.delete(f"/api/report-layouts/{layout_id}").status_code == 200
+        assert client.delete("/api/report-layouts/report-layout-standard").status_code == 409
+
+
+def _minimal_tagged_pptx() -> bytes:
+    buffer = io.BytesIO()
+    presentation = b'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:sldSz cx="12192000" cy="6858000"/></p:presentation>'''
+    slide = b'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree><p:sp><p:nvSpPr><p:cNvPr id="2" name="VAR:top_edge_max_stress"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="914400" y="914400"/><a:ext cx="3657600" cy="914400"/></a:xfrm></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>{{variable:top_edge_max_stress}}</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>'''
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>')
+        archive.writestr("ppt/presentation.xml", presentation)
+        archive.writestr("ppt/slides/slide1.xml", slide)
+    return buffer.getvalue()
+
+
+def test_pptx_template_upload_placeholder_inspection_and_render():
+    initialize_database()
+    template_id = None
+    with TestClient(app) as client:
+        response = client.post("/api/report-templates", json={"name": "태그 템플릿", "filename": "tagged.pptx", "content_base64": base64.b64encode(_minimal_tagged_pptx()).decode("ascii"), "updated_by": "테스트 편집자"})
+        assert response.status_code == 201, response.text
+        template = response.json()
+        template_id = template["id"]
+        assert template["slide_count"] == 1
+        assert template["definition"]["placeholders"][0]["token"] == "variable:top_edge_max_stress"
+        rendered = client.post(f"/api/report-templates/{template_id}/render", json={"replacements": {"variable:top_edge_max_stress": "72.50 MPa (PASS)"}, "filename": "해석 결과.pptx"})
+        assert rendered.status_code == 200
+        with zipfile.ZipFile(io.BytesIO(rendered.content)) as archive:
+            assert "72.50 MPa (PASS)" in archive.read("ppt/slides/slide1.xml").decode("utf-8")
+        assert client.delete(f"/api/report-templates/{template_id}").status_code == 200
+    if template_id:
+        with connect() as conn:
+            conn.execute("DELETE FROM report_template_assets WHERE id=?", [template_id])
 
 
 def test_media_metadata_policy_rejects_unsafe_paths_and_formats():
