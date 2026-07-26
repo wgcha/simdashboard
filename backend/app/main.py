@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import json
+import base64
+import io
+import re
 import shutil
+import zipfile
+from xml.etree import ElementTree as ET
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import quote
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Query, Response
@@ -134,6 +140,75 @@ class ImportSchemaPayload(BaseModel):
     description: str = Field(default="", max_length=500)
     definition: dict[str, Any]
     updated_by: str = Field(default="관리자", min_length=2, max_length=60)
+
+
+class ReportLayoutPayload(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+    description: str = Field(default="", max_length=500)
+    definition: dict[str, Any]
+    updated_by: str = Field(default="보고서 편집자", min_length=2, max_length=60)
+
+
+class ReportTemplateUploadPayload(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+    filename: str = Field(min_length=6, max_length=240)
+    content_base64: str = Field(min_length=8, max_length=36_000_000)
+    updated_by: str = Field(default="보고서 편집자", min_length=2, max_length=60)
+
+
+class ReportTemplateRenderPayload(BaseModel):
+    replacements: dict[str, str] = Field(default_factory=dict)
+    filename: str = Field(default="analysis-report.pptx", min_length=6, max_length=240)
+
+
+def _validated_report_layout(definition: dict[str, Any]) -> dict[str, Any]:
+    if definition.get("coverVariant") not in {"balanced", "executive", "evidence"}:
+        raise HTTPException(422, "지원하지 않는 표지 형식입니다.")
+    sections = definition.get("sectionOrder")
+    if not isinstance(sections, list) or len(sections) != 3 or set(sections) != {"series", "scalar", "media"}:
+        raise HTTPException(422, "근거 페이지 순서는 series, scalar, media를 한 번씩 포함해야 합니다.")
+    accent = str(definition.get("accentColor") or "")
+    if len(accent) != 6 or any(character not in "0123456789abcdefABCDEF" for character in accent):
+        raise HTTPException(422, "강조색은 6자리 HEX 색상이어야 합니다.")
+    placements = definition.get("variablePlacements")
+    if not isinstance(placements, list):
+        raise HTTPException(422, "variablePlacements 배열이 필요합니다.")
+    for placement in placements:
+        if not isinstance(placement, dict) or not placement.get("variableKey") or placement.get("presentation") not in {"chart", "table", "both"}:
+            raise HTTPException(422, "변수 배치에는 variableKey와 올바른 presentation이 필요합니다.")
+    slides = definition.get("slides")
+    if slides is not None:
+        if not isinstance(slides, list) or not slides or len(slides) > 32:
+            raise HTTPException(422, "slides는 1개 이상 32개 이하의 배열이어야 합니다.")
+        slide_ids: set[str] = set()
+        for slide in slides:
+            if not isinstance(slide, dict) or not slide.get("id") or slide.get("kind") not in {"cover", "series", "scalar", "media", "custom"}:
+                raise HTTPException(422, "각 슬라이드에는 고유 id와 올바른 kind가 필요합니다.")
+            if slide["id"] in slide_ids:
+                raise HTTPException(422, "슬라이드 id는 중복될 수 없습니다.")
+            slide_ids.add(slide["id"])
+            elements = slide.get("elements")
+            if not isinstance(elements, list) or len(elements) > 80:
+                raise HTTPException(422, "슬라이드 elements는 80개 이하의 배열이어야 합니다.")
+            element_ids: set[str] = set()
+            for element in elements:
+                if not isinstance(element, dict) or element.get("type") not in {"title", "text", "verdict", "scalar-card", "chart", "table", "image"}:
+                    raise HTTPException(422, "지원하지 않는 보고서 위젯 형식입니다.")
+                if not element.get("id") or element["id"] in element_ids:
+                    raise HTTPException(422, "슬라이드 안의 위젯 id는 고유해야 합니다.")
+                element_ids.add(element["id"])
+                for key, limit in (("x", 32), ("w", 32), ("y", 18), ("h", 18)):
+                    if not isinstance(element.get(key), (int, float)) or element[key] < 0 or element[key] > limit:
+                        raise HTTPException(422, f"위젯 {key} 좌표가 캔버스 범위를 벗어났습니다.")
+                if element["w"] <= 0 or element["h"] <= 0 or element["x"] + element["w"] > 32 or element["y"] + element["h"] > 18:
+                    raise HTTPException(422, "위젯 영역이 슬라이드 경계를 벗어났습니다.")
+    if definition.get("templateSource", "native") not in {"native", "pptx_upload"}:
+        raise HTTPException(422, "지원하지 않는 템플릿 원본 형식입니다.")
+    if definition.get("templateSource") == "pptx_upload" and not definition.get("templateAssetId"):
+        raise HTTPException(422, "업로드 PPTX 템플릿 ID가 필요합니다.")
+    if not isinstance(definition.get("templateBindings", {}), dict):
+        raise HTTPException(422, "templateBindings는 객체여야 합니다.")
+    return definition
 
 
 @app.get("/api/health")
@@ -838,6 +913,310 @@ def get_widget_catalog() -> list[dict[str, Any]]:
         {"type": "note", "label": "수행자 의견", "category": "텍스트", "allowed_data_types": ["TEXT"], "default_size": [4, 3]},
         {"type": "workflow", "label": "작업 흐름", "category": "프로세스", "allowed_data_types": ["STATUS"], "default_size": [12, 5]},
     ]
+
+
+def _report_layout_item(item: dict[str, Any]) -> dict[str, Any]:
+    definition = json_value(item.pop("definition_json")) or {}
+    definition.update({
+        "id": item["id"],
+        "name": item["name"],
+        "description": item.get("description") or "",
+        "version": item["version"],
+    })
+    return {
+        **item,
+        "definition": definition,
+    }
+
+
+@app.get("/api/report-layouts")
+def list_report_layouts() -> list[dict[str, Any]]:
+    with connect() as conn:
+        items = rows(conn.execute(
+            "SELECT * FROM report_layouts WHERE is_active=true ORDER BY is_system DESC, updated_at DESC, name"
+        ))
+    return [_report_layout_item(item) for item in items]
+
+
+@app.post("/api/report-layouts", status_code=201)
+def create_report_layout(payload: ReportLayoutPayload) -> dict[str, Any]:
+    layout_id = f"report-layout-{uuid4().hex[:12]}"
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    definition = _validated_report_layout({**payload.definition, "id": layout_id, "name": payload.name.strip(), "description": payload.description.strip(), "version": 1})
+    encoded = json.dumps(definition, ensure_ascii=False)
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO report_layouts VALUES (?, ?, ?, 1, ?, false, true, ?, ?, ?)",
+            [layout_id, payload.name.strip(), payload.description.strip(), encoded, now, now, payload.updated_by.strip()],
+        )
+        conn.execute(
+            "INSERT INTO report_layout_versions VALUES (?, 1, ?, ?, ?, true)",
+            [layout_id, encoded, payload.updated_by.strip(), now],
+        )
+    return {"id": layout_id, "name": payload.name.strip(), "description": payload.description.strip(), "version": 1, "definition": definition, "is_system": False, "updated_at": now, "updated_by": payload.updated_by.strip()}
+
+
+@app.put("/api/report-layouts/{layout_id}")
+def update_report_layout(layout_id: str, payload: ReportLayoutPayload) -> dict[str, Any]:
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    with connect() as conn:
+        existing = conn.execute("SELECT version, is_system FROM report_layouts WHERE id=? AND is_active=true", [layout_id]).fetchone()
+        if not existing:
+            raise HTTPException(404, "보고서 레이아웃을 찾을 수 없습니다.")
+        version = existing[0] + 1
+        definition = _validated_report_layout({**payload.definition, "id": layout_id, "name": payload.name.strip(), "description": payload.description.strip(), "version": version})
+        encoded = json.dumps(definition, ensure_ascii=False)
+        conn.execute("BEGIN TRANSACTION")
+        try:
+            conn.execute(
+                "UPDATE report_layouts SET name=?, description=?, version=?, definition_json=?, updated_at=?, updated_by=? WHERE id=?",
+                [payload.name.strip(), payload.description.strip(), version, encoded, now, payload.updated_by.strip(), layout_id],
+            )
+            conn.execute(
+                "INSERT INTO report_layout_versions VALUES (?, ?, ?, ?, ?, true)",
+                [layout_id, version, encoded, payload.updated_by.strip(), now],
+            )
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    return {"id": layout_id, "name": payload.name.strip(), "description": payload.description.strip(), "version": version, "definition": definition, "is_system": bool(existing[1]), "updated_at": now, "updated_by": payload.updated_by.strip()}
+
+
+@app.get("/api/report-layouts/{layout_id}/versions")
+def get_report_layout_versions(layout_id: str) -> list[dict[str, Any]]:
+    with connect() as conn:
+        return rows(conn.execute(
+            "SELECT layout_id, version, created_by, created_at, is_valid FROM report_layout_versions WHERE layout_id=? ORDER BY version DESC",
+            [layout_id],
+        ))
+
+
+@app.get("/api/report-layouts/{layout_id}/versions/{version}")
+def get_report_layout_version(layout_id: str, version: int) -> dict[str, Any]:
+    with connect() as conn:
+        stored = conn.execute(
+            "SELECT definition_json, created_by, created_at FROM report_layout_versions WHERE layout_id=? AND version=? AND is_valid=true",
+            [layout_id, version],
+        ).fetchone()
+    if not stored:
+        raise HTTPException(404, "보고서 레이아웃 버전을 찾을 수 없습니다.")
+    return {"layout_id": layout_id, "version": version, "definition": json_value(stored[0]), "created_by": stored[1], "created_at": stored[2]}
+
+
+@app.delete("/api/report-layouts/{layout_id}")
+def delete_report_layout(layout_id: str) -> dict[str, str]:
+    with connect() as conn:
+        existing = conn.execute("SELECT is_system FROM report_layouts WHERE id=? AND is_active=true", [layout_id]).fetchone()
+        if not existing:
+            raise HTTPException(404, "보고서 레이아웃을 찾을 수 없습니다.")
+        if existing[0]:
+            raise HTTPException(409, "기본 레이아웃은 삭제할 수 없습니다. 수정하면 새 버전으로 보존됩니다.")
+        conn.execute("UPDATE report_layouts SET is_active=false, updated_at=? WHERE id=?", [datetime.now(timezone.utc).replace(tzinfo=None), layout_id])
+    return {"status": "deactivated", "id": layout_id}
+
+
+PPTX_NS = {
+    "p": "http://schemas.openxmlformats.org/presentationml/2006/main",
+    "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
+}
+PPTX_TOKEN = re.compile(r"\{\{\s*([^{}]+?)\s*\}\}")
+PPTX_SHAPE_TAG = re.compile(r"^(VAR|TEXT|CHART|IMAGE):\s*(.+)$", re.IGNORECASE)
+REPORT_TEMPLATE_DIR = Path(__file__).resolve().parents[1] / "assets" / "report-templates"
+
+
+def _safe_pptx_archive(data: bytes) -> zipfile.ZipFile:
+    if len(data) > 25 * 1024 * 1024:
+        raise HTTPException(413, "PPTX 템플릿은 25MB 이하여야 합니다.")
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(data), "r")
+    except (zipfile.BadZipFile, ValueError) as exc:
+        raise HTTPException(422, "올바른 PPTX 압축 구조가 아닙니다.") from exc
+    infos = archive.infolist()
+    if len(infos) > 2500 or sum(item.file_size for item in infos) > 80 * 1024 * 1024:
+        archive.close()
+        raise HTTPException(422, "PPTX 압축 해제 크기 또는 파일 개수가 허용 범위를 초과합니다.")
+    names = {item.filename.replace("\\", "/") for item in infos}
+    if "[Content_Types].xml" not in names or "ppt/presentation.xml" not in names:
+        archive.close()
+        raise HTTPException(422, "PowerPoint 프레젠테이션 필수 파일이 없습니다.")
+    for name in names:
+        parts = name.split("/")
+        lowered = name.lower()
+        if name.startswith("/") or ".." in parts or lowered.endswith("vbaproject.bin") or "/embeddings/" in lowered or "oleobject" in lowered:
+            archive.close()
+            raise HTTPException(422, "매크로, OLE 또는 안전하지 않은 경로가 포함된 PPTX는 사용할 수 없습니다.")
+        if lowered.endswith(".rels"):
+            relation_xml = archive.read(name).decode("utf-8", errors="ignore").lower()
+            if 'targetmode="external"' in relation_xml:
+                archive.close()
+                raise HTTPException(422, "외부 링크 관계가 포함된 PPTX는 사용할 수 없습니다.")
+    return archive
+
+
+def _slide_number(name: str) -> int:
+    match = re.search(r"slide(\d+)\.xml$", name)
+    return int(match.group(1)) if match else 0
+
+
+def _shape_placeholder(shape: ET.Element) -> tuple[str, str] | None:
+    name_node = shape.find("./p:nvSpPr/p:cNvPr", PPTX_NS)
+    shape_name = name_node.attrib.get("name", "") if name_node is not None else ""
+    name_match = PPTX_SHAPE_TAG.match(shape_name)
+    if name_match:
+        prefix = name_match.group(1).lower()
+        token = name_match.group(2).strip()
+        kind = {"var": "variable", "text": "field", "chart": "chart", "image": "image"}[prefix]
+        return kind, f"{kind}:{token}"
+    text = "".join(node.text or "" for node in shape.findall(".//a:t", PPTX_NS))
+    token_match = PPTX_TOKEN.search(text)
+    if not token_match:
+        return None
+    token = token_match.group(1).strip()
+    prefix, separator, value = token.partition(":")
+    kind = prefix.lower() if separator and prefix.lower() in {"variable", "field", "text", "chart", "image"} else "text"
+    return kind, token if separator else f"text:{token}"
+
+
+def _inspect_pptx(data: bytes) -> dict[str, Any]:
+    with _safe_pptx_archive(data) as archive:
+        presentation = ET.fromstring(archive.read("ppt/presentation.xml"))
+        size = presentation.find("p:sldSz", PPTX_NS)
+        slide_width = int(size.attrib.get("cx", "12192000")) if size is not None else 12192000
+        slide_height = int(size.attrib.get("cy", "6858000")) if size is not None else 6858000
+        slide_names = sorted((name for name in archive.namelist() if re.fullmatch(r"ppt/slides/slide\d+\.xml", name)), key=_slide_number)
+        placeholders: list[dict[str, Any]] = []
+        for slide_index, slide_name in enumerate(slide_names, start=1):
+            root = ET.fromstring(archive.read(slide_name))
+            for shape_index, shape in enumerate(root.findall(".//p:sp", PPTX_NS), start=1):
+                placeholder = _shape_placeholder(shape)
+                if not placeholder:
+                    continue
+                name_node = shape.find("./p:nvSpPr/p:cNvPr", PPTX_NS)
+                shape_name = name_node.attrib.get("name", f"Shape {shape_index}") if name_node is not None else f"Shape {shape_index}"
+                transform = shape.find("./p:spPr/a:xfrm", PPTX_NS)
+                offset = transform.find("a:off", PPTX_NS) if transform is not None else None
+                extent = transform.find("a:ext", PPTX_NS) if transform is not None else None
+                x = int(offset.attrib.get("x", "0")) if offset is not None else 0
+                y = int(offset.attrib.get("y", "0")) if offset is not None else 0
+                w = int(extent.attrib.get("cx", str(slide_width))) if extent is not None else slide_width
+                h = int(extent.attrib.get("cy", str(slide_height))) if extent is not None else slide_height
+                kind, token = placeholder
+                placeholders.append({
+                    "id": f"slide-{slide_index}-shape-{shape_index}", "slideIndex": slide_index, "shapeName": shape_name,
+                    "token": token, "kind": kind, "x": x / slide_width, "y": y / slide_height, "w": w / slide_width, "h": h / slide_height,
+                })
+        return {"slideWidth": slide_width, "slideHeight": slide_height, "slideCount": len(slide_names), "placeholders": placeholders}
+
+
+def _report_template_item(item: dict[str, Any]) -> dict[str, Any]:
+    definition = json_value(item.pop("definition_json")) or {}
+    item.pop("file_path", None)
+    return {**item, "definition": definition}
+
+
+@app.get("/api/report-templates")
+def list_report_templates() -> list[dict[str, Any]]:
+    with connect() as conn:
+        items = rows(conn.execute("SELECT * FROM report_template_assets WHERE is_active=true ORDER BY updated_at DESC, name"))
+    return [_report_template_item(item) for item in items]
+
+
+@app.post("/api/report-templates", status_code=201)
+def upload_report_template(payload: ReportTemplateUploadPayload) -> dict[str, Any]:
+    if not payload.filename.lower().endswith(".pptx") or payload.filename.lower().endswith(".pptm"):
+        raise HTTPException(422, ".pptx 템플릿만 업로드할 수 있습니다.")
+    try:
+        data = base64.b64decode(payload.content_base64, validate=True)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(422, "PPTX Base64 데이터가 올바르지 않습니다.") from exc
+    inspected = _inspect_pptx(data)
+    if not inspected["slideCount"]:
+        raise HTTPException(422, "슬라이드가 없는 PPTX는 사용할 수 없습니다.")
+    template_id = f"report-template-{uuid4().hex[:12]}"
+    REPORT_TEMPLATE_DIR.mkdir(parents=True, exist_ok=True)
+    relative_path = f"report-templates/{template_id}.pptx"
+    target_path = REPORT_TEMPLATE_DIR / f"{template_id}.pptx"
+    target_path.write_bytes(data)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    definition = {"slideWidth": inspected["slideWidth"], "slideHeight": inspected["slideHeight"], "placeholders": inspected["placeholders"]}
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO report_template_assets VALUES (?, ?, ?, ?, ?, ?, true, ?, ?, ?)",
+            [template_id, payload.name.strip(), Path(payload.filename).name, relative_path, inspected["slideCount"], json.dumps(definition, ensure_ascii=False), now, now, payload.updated_by.strip()],
+        )
+    return {"id": template_id, "name": payload.name.strip(), "filename": Path(payload.filename).name, "slide_count": inspected["slideCount"], "definition": definition, "created_at": now, "updated_at": now, "updated_by": payload.updated_by.strip()}
+
+
+def _replacement_key(shape: ET.Element) -> str | None:
+    placeholder = _shape_placeholder(shape)
+    return placeholder[1] if placeholder else None
+
+
+def _render_pptx_template(data: bytes, replacements: dict[str, str]) -> bytes:
+    source = _safe_pptx_archive(data)
+    output_buffer = io.BytesIO()
+    with source, zipfile.ZipFile(output_buffer, "w", compression=zipfile.ZIP_DEFLATED) as output:
+        for item in source.infolist():
+            content = source.read(item.filename)
+            if re.fullmatch(r"ppt/slides/slide\d+\.xml", item.filename):
+                root = ET.fromstring(content)
+                changed = False
+                for shape in root.findall(".//p:sp", PPTX_NS):
+                    key = _replacement_key(shape)
+                    if not key:
+                        continue
+                    value = str(replacements.get(key, replacements.get(key.split(":", 1)[-1], "")))
+                    text_nodes = shape.findall(".//a:t", PPTX_NS)
+                    if not text_nodes:
+                        continue
+                    combined = "".join(node.text or "" for node in text_nodes)
+                    token_matches = list(PPTX_TOKEN.finditer(combined))
+                    if token_matches:
+                        for match in reversed(token_matches):
+                            raw = match.group(1).strip()
+                            normalized = raw if ":" in raw else f"text:{raw}"
+                            replacement = str(replacements.get(normalized, replacements.get(raw, "")))
+                            combined = combined[:match.start()] + replacement + combined[match.end():]
+                        text_nodes[0].text = combined
+                    else:
+                        text_nodes[0].text = value
+                    for node in text_nodes[1:]:
+                        node.text = ""
+                    changed = True
+                if changed:
+                    content = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+            output.writestr(item, content)
+    return output_buffer.getvalue()
+
+
+@app.post("/api/report-templates/{template_id}/render")
+def render_report_template(template_id: str, payload: ReportTemplateRenderPayload) -> Response:
+    with connect() as conn:
+        stored = conn.execute("SELECT file_path FROM report_template_assets WHERE id=? AND is_active=true", [template_id]).fetchone()
+    if not stored:
+        raise HTTPException(404, "PPTX 템플릿을 찾을 수 없습니다.")
+    source_path = Path(__file__).resolve().parents[1] / "assets" / stored[0]
+    if not source_path.is_file():
+        raise HTTPException(410, "PPTX 템플릿 파일이 없습니다.")
+    rendered = _render_pptx_template(source_path.read_bytes(), payload.replacements)
+    filename = re.sub(r"[^0-9A-Za-z가-힣._-]+", "_", Path(payload.filename).name)
+    ascii_filename = re.sub(r"[^0-9A-Za-z._-]+", "_", filename) or "analysis-report.pptx"
+    disposition = f'attachment; filename="{ascii_filename}"; filename*=UTF-8\'\'{quote(filename)}'
+    return Response(content=rendered, media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation", headers={"Content-Disposition": disposition})
+
+
+@app.delete("/api/report-templates/{template_id}")
+def delete_report_template(template_id: str) -> dict[str, str]:
+    with connect() as conn:
+        stored = conn.execute("SELECT file_path FROM report_template_assets WHERE id=? AND is_active=true", [template_id]).fetchone()
+        if not stored:
+            raise HTTPException(404, "PPTX 템플릿을 찾을 수 없습니다.")
+        conn.execute("UPDATE report_template_assets SET is_active=false, updated_at=? WHERE id=?", [datetime.now(timezone.utc).replace(tzinfo=None), template_id])
+    source_path = Path(__file__).resolve().parents[1] / "assets" / stored[0]
+    if source_path.is_file() and source_path.parent.resolve() == REPORT_TEMPLATE_DIR.resolve():
+        source_path.unlink()
+    return {"status": "deactivated", "id": template_id}
 
 
 @app.get("/api/dashboards/{dashboard_id}")

@@ -1,6 +1,6 @@
 # PostgreSQL 백엔드 전환·데이터 이전·프런트 호환 구현 사양서
 
-문서 버전: 1.0
+문서 버전: 1.2
 
 대상 프로젝트: Analysis Canvas / `simdashboard`
 
@@ -35,10 +35,11 @@ $env:DB_SSLMODE = "prefer"
 3. React 프런트엔드 코드는 데이터베이스 종류를 알 필요가 없다.
 4. 기존 DuckDB 데이터를 손실 없이 PostgreSQL로 복사한다.
 5. 대시보드 레이아웃 JSON과 변수 바인딩이 그대로 유지된다.
-6. 변수 카탈로그 CRUD가 PostgreSQL 트랜잭션으로 동작한다.
-7. 마이그레이션 전후 테이블별 행 수와 핵심 키를 자동 검증한다.
-8. 문제가 있으면 환경변수만 DuckDB로 되돌려 롤백할 수 있다.
-9. 동일한 Python 소스와 migration이 Windows와 Linux에서 동작한다.
+6. PPT 보고서 레이아웃 JSON과 버전 이력도 그대로 유지된다.
+7. 변수 카탈로그 CRUD가 PostgreSQL 트랜잭션으로 동작한다.
+8. 마이그레이션 전후 테이블별 행 수와 핵심 키를 자동 검증한다.
+9. 문제가 있으면 환경변수만 DuckDB로 되돌려 롤백할 수 있다.
+10. 동일한 Python 소스와 migration이 Windows와 Linux에서 동작한다.
 
 ## 2. 변경하면 안 되는 외부 계약
 
@@ -56,6 +57,8 @@ $env:DB_SSLMODE = "prefer"
 - `PUT/DELETE /api/load-cases/{load_case_id}/variables/{variable_key}`
 - `GET/PUT /api/dashboards/{dashboard_id}`
 - 대시보드 복제·버전·복구 API
+- `GET/POST/PUT/DELETE /api/report-layouts...`
+- `GET/POST/DELETE /api/report-templates...` 및 템플릿 렌더링 API
 - 운영 KPI, 워크플로, 임계값, 자동화 템플릿 API
 
 프런트엔드는 계속 상대 경로 `/api/...`만 호출한다. PostgreSQL 주소, 계정 또는 SQL은 프런트엔드에 노출하지 않는다.
@@ -69,6 +72,29 @@ variable_definitions.variable_key
 ```
 
 `variable_key`와 `data_type`은 생성 후 불변이다. 표시 이름, 설명, 단위, 기준값, 허용 위젯과 집계는 수정할 수 있다. 변수 삭제는 물리 삭제가 아니라 `is_active=false`다.
+
+### 폴더 스키마·결과 SQL·변수 카탈로그·화면의 역할
+
+권장 데이터 흐름은 다음과 같다.
+
+```text
+해석 결과 폴더
+  → import_schemas.definition_json의 파일 패턴·열 매핑 검증
+  → scalar_results / time_series_results / curve_results / media_assets 적재
+  → variable_definitions에서 같은 variable_key의 의미·단위·기준·허용 표현 조회
+  → dashboards.definition_json.widgets[].settings.variableId로 화면 배치
+  → report_layouts.definition_json.variablePlacements[].variableKey로 PPT 배치
+```
+
+중요한 구분:
+
+- 폴더 스키마는 어떤 파일의 어떤 열을 어떤 결과 테이블과 `variable_key`로 읽을지 선언한다.
+- 결과 테이블은 실제 측정값·해석값을 저장한다.
+- 변수 카탈로그는 실제 값을 복제 저장하지 않는다. `variable_key`의 표시·검증·판정·허용 위젯 계약을 저장한다.
+- 변수를 카탈로그에 선언했다고 대시보드에 자동으로 카드가 생기지는 않는다. 사용자가 대시보드 편집에서 위젯에 바인딩하거나, 사전에 정의된 레이아웃이 해당 키를 참조해야 한다.
+- 선언은 되어 있지만 결과 데이터가 아직 없으면 `데이터 대기` 상태로 표시하며 0이나 추정값을 만들지 않는다.
+- 폴더 적재 시 알 수 없는 `variable_key`는 기본적으로 검증 경고 또는 오류로 처리한다. 운영 정책에 따라 검토 대기 카탈로그 항목을 생성할 수 있으나 자동 활성화는 하지 않는다.
+- PostgreSQL 연결 정보와 SQL 실행은 백엔드에만 둔다. 프런트엔드는 카탈로그와 결과 API만 사용한다.
 
 ### 대시보드 JSON 계약
 
@@ -373,7 +399,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO simdashboard_app;
 
 ## 8. PostgreSQL 스키마 사양
 
-Alembic `0001` 마이그레이션은 현재 DuckDB의 다음 17개 테이블을 모두 생성해야 한다.
+Alembic `0001` 마이그레이션은 현재 DuckDB의 다음 25개 테이블을 모두 생성해야 한다.
 
 1. `projects`
 2. `product_information`
@@ -384,14 +410,22 @@ Alembic `0001` 마이그레이션은 현재 DuckDB의 다음 17개 테이블을 
 7. `analysis_runs`
 8. `scalar_results`
 9. `time_series_results`
-10. `result_locations`
-11. `qualitative_notes`
-12. `media_assets`
-13. `validations`
-14. `quality_thresholds`
-15. `variable_definitions`
-16. `dashboards`
-17. `dashboard_versions`
+10. `curve_results`
+11. `curve_points`
+12. `result_locations`
+13. `qualitative_notes`
+14. `media_assets`
+15. `folder_import_jobs`
+16. `import_schemas`
+17. `import_schema_versions`
+18. `validations`
+19. `quality_thresholds`
+20. `variable_definitions`
+21. `dashboards`
+22. `dashboard_versions`
+23. `report_layouts`
+24. `report_layout_versions`
+25. `report_template_assets`
 
 ### 형식 변환
 
@@ -407,10 +441,15 @@ Alembic `0001` 마이그레이션은 현재 DuckDB의 다음 17개 테이블을 
 
 현재 DuckDB의 시간값은 UTC로 간주하고 PostgreSQL 이전 시 UTC timezone을 붙인다. 프런트 API의 ISO 문자열 표현은 기존과 호환되게 유지한다.
 
+`report_template_assets.definition_json`도 JSONB로 이전한다. 실제 `.pptx` 바이트는 DB에 넣지 않고 서버의 관리형 자산 저장소에 유지하며, `file_path`는 자산 루트 기준 상대 경로만 저장한다. 다중 서버 운영에서는 같은 계약을 S3 호환 객체 저장소 어댑터로 교체하고, 이전 도구가 템플릿 파일의 존재·크기·SHA-256을 함께 검증해야 한다.
+
 ### 필수 키와 제약
 
 - 현재 `PRIMARY KEY`는 모두 유지한다.
 - `dashboard_versions`는 `(dashboard_id, version)` 복합 PK를 유지한다.
+- `report_layout_versions`는 `(layout_id, version)` 복합 PK를 유지한다.
+- `import_schema_versions`는 `(schema_id, version)` 복합 PK를 유지한다.
+- `curve_points`는 `(curve_id, point_index)` 복합 PK를 유지한다.
 - `variable_definitions`는 `(load_case_id, variable_key)` UNIQUE를 유지한다.
 - `time_series_results`에는 `(analysis_run_id, variable_key, time_value)` UNIQUE를 추가한다.
 - `result_locations`에는 `(analysis_run_id, variable_key)` UNIQUE를 추가한다.
@@ -448,6 +487,12 @@ ON dashboards(project_id, request_id, load_case_id);
 
 CREATE INDEX ix_dashboard_versions_dashboard
 ON dashboard_versions(dashboard_id, version DESC);
+
+CREATE INDEX ix_report_layout_versions_layout
+ON report_layout_versions(layout_id, version DESC);
+
+CREATE INDEX ix_report_templates_active
+ON report_template_assets(is_active, updated_at DESC);
 ```
 
 대시보드 JSONB 내부 검색이 실제 병목으로 확인되기 전에는 GIN 인덱스를 추가하지 않는다.
@@ -544,13 +589,21 @@ template_executions
 analysis_runs
 scalar_results
 time_series_results
+curve_results
+curve_points
 result_locations
 qualitative_notes
 media_assets
+folder_import_jobs
+import_schemas
+import_schema_versions
 quality_thresholds
 variable_definitions
 dashboards
 dashboard_versions
+report_layouts
+report_layout_versions
+report_template_assets
 validations
 ```
 
@@ -590,7 +643,7 @@ validations
 
 `verify_postgres_migration.py`는 DuckDB와 PostgreSQL을 동시에 읽어 다음을 비교한다.
 
-1. 17개 테이블별 행 수
+1. 25개 테이블별 행 수
 2. 모든 PK 또는 복합 PK 집합
 3. 프로젝트별 의뢰·하중 경우·해석 실행 수
 4. 실행별 scalar/time-series 행 수
@@ -792,7 +845,7 @@ Invoke-RestMethod http://127.0.0.1:8000/api/portfolio/overview
 - [ ] PostgreSQL 모드에서 `connect()` 차단 코드가 제거됐다.
 - [ ] 잘못된 URL/인증/SSL 오류가 명확하게 표시된다.
 - [ ] Alembic이 빈 DB를 최신 revision으로 만든다.
-- [ ] 17개 테이블과 필수 인덱스가 생성된다.
+- [ ] 25개 테이블과 필수 인덱스가 생성된다.
 - [ ] DuckDB 회귀 테스트가 통과한다.
 - [ ] PostgreSQL 통합 테스트가 통과한다.
 - [ ] 데이터 이전 dry-run이 통과한다.
@@ -818,7 +871,7 @@ Invoke-RestMethod http://127.0.0.1:8000/api/portfolio/overview
 작업 순서:
 1. 저장소 전체와 현재 DuckDB 스키마, API 테스트, 프런트 API 타입을 조사한다.
 2. 기존 DuckDB 동작을 보존하면서 PostgreSQL 어댑터, SQLAlchemy Core 기반 공통 실행 계층, psycopg 연결 풀을 구현한다.
-3. Alembic 초기 마이그레이션으로 문서에 명시된 17개 테이블, 제약과 인덱스를 만든다.
+3. Alembic 초기 마이그레이션으로 문서에 명시된 25개 테이블, 제약과 인덱스를 만든다.
 4. DuckDB 전용 SQL과 위치 파라미터를 안전한 이름 기반 바인딩과 PostgreSQL conflict 문법으로 전환한다.
 5. 원본 DuckDB를 읽기 전용으로 열어 PostgreSQL로 복사하는 dry-run/실행 CLI를 구현한다.
 6. 테이블별 행 수, PK, 대시보드 JSON 해시, 변수 키, 핵심 API를 비교하는 검증 보고서를 만든다.

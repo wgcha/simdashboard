@@ -141,6 +141,95 @@ export type VariableDefinition = { id: string; definition_id: string; variable_k
 export type VariableDefinitionInput = { variable_key: string; display_name: string; data_type: VariableDataType; unit: string; description: string; filterable: boolean; threshold: number | null; allowed_widgets: string[]; allowed_aggregations: string[]; result_group: 'OPEN_CELL' | 'CHASSIS_REAR' | 'CUSTOM'; updated_by: string }
 export type WidgetCatalogItem = { type: WidgetType; label: string; category: string; allowed_data_types: string[]; default_size: [number, number] }
 export type DashboardVersion = { dashboard_id: string; version: number; created_by: string; created_at: string; is_valid: boolean }
+export type ReportSection = 'series' | 'scalar' | 'media'
+export type ReportVariablePresentation = 'chart' | 'table' | 'both'
+export type ReportVariablePlacement = { variableKey: string; presentation: ReportVariablePresentation; order: number }
+export type ReportSlideKind = 'cover' | 'series' | 'scalar' | 'media' | 'custom'
+export type ReportElementType = 'title' | 'text' | 'verdict' | 'scalar-card' | 'chart' | 'table' | 'image'
+export type ReportElementBinding = {
+  source: 'field' | 'variable' | 'series' | 'scalar' | 'media' | 'static'
+  key?: string
+  variableKey?: string
+}
+export type ReportElementDefinition = {
+  id: string
+  type: ReportElementType
+  label: string
+  x: number
+  y: number
+  w: number
+  h: number
+  z: number
+  binding?: ReportElementBinding
+  style?: {
+    fontSize?: number
+    color?: string
+    fill?: string
+    align?: 'left' | 'center' | 'right'
+  }
+  rules?: {
+    visibleWhenData?: boolean
+    maxRows?: number
+  }
+}
+export type ReportSlideDefinition = {
+  id: string
+  name: string
+  kind: ReportSlideKind
+  repeat: 'none' | 'series-variable' | 'media-item'
+  elements: ReportElementDefinition[]
+}
+export type ReportTemplatePlaceholder = {
+  id: string
+  slideIndex: number
+  shapeName: string
+  token: string
+  kind: 'variable' | 'field' | 'text' | 'chart' | 'image'
+  x: number
+  y: number
+  w: number
+  h: number
+}
+export type ReportTemplateAsset = {
+  id: string
+  name: string
+  filename: string
+  slide_count: number
+  definition: {
+    slideWidth: number
+    slideHeight: number
+    placeholders: ReportTemplatePlaceholder[]
+  }
+  created_at: string
+  updated_by: string
+}
+export type ReportLayoutDefinition = {
+  id: string
+  name: string
+  description: string
+  version: number
+  coverVariant: 'balanced' | 'executive' | 'evidence'
+  accentColor: string
+  sectionOrder: ReportSection[]
+  variablePlacements: ReportVariablePlacement[]
+  includeMedia: boolean
+  canvas?: { columns: 32; rows: 18; widthInches: number; heightInches: number }
+  slides?: ReportSlideDefinition[]
+  templateSource?: 'native' | 'pptx_upload'
+  templateAssetId?: string
+  templateBindings?: Record<string, string>
+}
+export type ReportLayout = {
+  id: string
+  name: string
+  description: string
+  version: number
+  definition: ReportLayoutDefinition
+  is_system: boolean
+  updated_at: string
+  updated_by: string
+}
+export type ReportLayoutVersion = { layout_id: string; version: number; created_by: string; created_at: string; is_valid: boolean }
 export type DashboardSummary = { id: string; project_id: string; request_id?: string; load_case_id?: string; name: string; description: string; version: number; updated_at: string }
 export type AutomationTemplate = { id: string; load_case_id: string; template_name: string; template_version: string; status: string; executed_at: string; load_case_name: string; analysis_type: string; request_id: string; request_title: string; project_id: string; project_name: string; input: Record<string, unknown>; generated_model: Record<string, unknown> }
 export type ImportSchemaDefinition = { schema_id?: string; version?: number; mappings: Array<Record<string, unknown>>; context_mapping?: { mode: 'folder_levels' | 'manifest'; project_level: number; request_level: number; load_case_level: number; sample_path?: string }; context?: Record<string, unknown>; [key: string]: unknown }

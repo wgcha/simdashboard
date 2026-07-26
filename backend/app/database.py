@@ -291,6 +291,42 @@ def initialize_database() -> None:
                 is_valid BOOLEAN NOT NULL DEFAULT true,
                 PRIMARY KEY (dashboard_id, version)
             );
+
+            CREATE TABLE IF NOT EXISTS report_layouts (
+                id VARCHAR PRIMARY KEY,
+                name VARCHAR NOT NULL,
+                description VARCHAR,
+                version INTEGER NOT NULL,
+                definition_json JSON NOT NULL,
+                is_system BOOLEAN NOT NULL DEFAULT false,
+                is_active BOOLEAN NOT NULL DEFAULT true,
+                created_at TIMESTAMP NOT NULL,
+                updated_at TIMESTAMP NOT NULL,
+                updated_by VARCHAR NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS report_layout_versions (
+                layout_id VARCHAR NOT NULL,
+                version INTEGER NOT NULL,
+                definition_json JSON NOT NULL,
+                created_by VARCHAR NOT NULL,
+                created_at TIMESTAMP NOT NULL,
+                is_valid BOOLEAN NOT NULL DEFAULT true,
+                PRIMARY KEY (layout_id, version)
+            );
+
+            CREATE TABLE IF NOT EXISTS report_template_assets (
+                id VARCHAR PRIMARY KEY,
+                name VARCHAR NOT NULL,
+                filename VARCHAR NOT NULL,
+                file_path VARCHAR NOT NULL,
+                slide_count INTEGER NOT NULL,
+                definition_json JSON NOT NULL,
+                is_active BOOLEAN NOT NULL DEFAULT true,
+                created_at TIMESTAMP NOT NULL,
+                updated_at TIMESTAMP NOT NULL,
+                updated_by VARCHAR NOT NULL
+            );
             """
         )
 
@@ -313,6 +349,7 @@ def initialize_database() -> None:
             SELECT id, version, definition_json, 'system', updated_at, true FROM dashboards
             """
         )
+        ensure_report_layouts(conn)
         chassis_layout = {
             "id": "dashboard-chassis-default",
             "name": "Chassis Rear 영구변형 기본 분석",
@@ -329,6 +366,52 @@ def initialize_database() -> None:
         now = _iso(datetime.now(timezone.utc))
         conn.execute("INSERT OR IGNORE INTO dashboards VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", [chassis_layout["id"], "project-tv-001", "request-drop-001", "loadcase-drop-bottom-001", chassis_layout["name"], chassis_layout["description"], 1, encoded_chassis, now])
         conn.execute("INSERT OR IGNORE INTO dashboard_versions VALUES (?, ?, ?, ?, ?, ?)", [chassis_layout["id"], 1, encoded_chassis, "system", now, True])
+
+
+def ensure_report_layouts(conn: duckdb.DuckDBPyConnection) -> None:
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    layouts = [
+        {
+            "id": "report-layout-standard",
+            "name": "표준 검토 보고서",
+            "description": "요약, 시간 이력, 정량 결과, 미디어 순서의 기본 형식",
+            "coverVariant": "balanced",
+            "accentColor": "1898D5",
+            "sectionOrder": ["series", "scalar", "media"],
+            "variablePlacements": [],
+            "includeMedia": True,
+        },
+        {
+            "id": "report-layout-executive",
+            "name": "경영진 요약 보고서",
+            "description": "결론과 판정을 먼저 강조하는 간결한 형식",
+            "coverVariant": "executive",
+            "accentColor": "16B8D4",
+            "sectionOrder": ["scalar", "series", "media"],
+            "variablePlacements": [],
+            "includeMedia": True,
+        },
+        {
+            "id": "report-layout-evidence",
+            "name": "상세 근거 보고서",
+            "description": "변수별 시간 이력과 근거 자료를 먼저 배치하는 형식",
+            "coverVariant": "evidence",
+            "accentColor": "FF9948",
+            "sectionOrder": ["series", "media", "scalar"],
+            "variablePlacements": [],
+            "includeMedia": True,
+        },
+    ]
+    for layout in layouts:
+        encoded = json.dumps(layout, ensure_ascii=False)
+        conn.execute(
+            "INSERT OR IGNORE INTO report_layouts VALUES (?, ?, ?, 1, ?, true, true, ?, ?, 'system')",
+            [layout["id"], layout["name"], layout["description"], encoded, now, now],
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO report_layout_versions VALUES (?, 1, ?, 'system', ?, true)",
+            [layout["id"], encoded, now],
+        )
 
 
 def ensure_variable_definitions(conn: duckdb.DuckDBPyConnection) -> None:
