@@ -1,4 +1,4 @@
-import type { AnalysisRequest, AutomationTemplate, DashboardDefinition, DashboardSummary, DashboardVersion, ImportSchema, ImportSchemaDefinition, LoadCase, Overview, PortfolioOverview, Project, QualityThreshold, ReportLayout, ReportLayoutDefinition, ReportLayoutVersion, ReportTemplateAsset, VariableDefinition, VariableDefinitionInput, WidgetCatalogItem, Workflow } from './types'
+import type { AnalysisRequest, AnalysisRunSummary, AutomationTemplate, DashboardDefinition, DashboardSummary, DashboardVersion, FeatureExample, ImportSchema, ImportSchemaDefinition, LoadCase, Overview, PortfolioOverview, Project, QualityThreshold, ReportLayout, ReportLayoutDefinition, ReportLayoutVersion, ReportTemplateAsset, ReviewItem, RunComparison, RunTrust, VariableDefinition, VariableDefinitionInput, WidgetCatalogItem, Workflow, WorkflowStep } from './types'
 
 async function json<T>(response: Response | Promise<Response>): Promise<T> {
   response = await response
@@ -22,6 +22,7 @@ export const api = {
   portfolio: (params: URLSearchParams) => json<PortfolioOverview>(fetch(`/api/portfolio/overview?${params}`)),
   portfolioCsvUrl: (params: URLSearchParams) => `/api/portfolio/export.csv?${params}`,
   projects: () => json<Project[]>(fetch('/api/projects')),
+  featureExamples: () => json<FeatureExample[]>(fetch('/api/feature-examples')),
   importSchemas: () => json<ImportSchema[]>(fetch('/api/import-schemas')),
   createImportSchema: (payload: { name: string; description: string; definition: ImportSchemaDefinition; updated_by: string }) =>
     json<ImportSchema>(fetch('/api/import-schemas', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })),
@@ -59,6 +60,18 @@ export const api = {
   importTypedFolderExample: (loadCaseId: string) =>
     json<{ status: 'IMPORTED'; job_id: string; run_id: string; run_no: number; schema_id: string; summary: { scalar_count: number; curve_count: number; media_count: number } }>(fetch(`/api/load-cases/${loadCaseId}/folder-import/example`, { method: 'POST' })),
   overview: (loadCaseId: string) => json<Overview>(fetch(`/api/load-cases/${loadCaseId}/overview`)),
+  analysisRuns: (loadCaseId: string) => json<AnalysisRunSummary[]>(fetch(`/api/load-cases/${loadCaseId}/runs`)),
+  runComparison: (loadCaseId: string, baselineRunId: string, targetRunId: string, variableKey?: string) => {
+    const params = new URLSearchParams({ baseline_run_id: baselineRunId, target_run_id: targetRunId })
+    if (variableKey) params.set('variable_key', variableKey)
+    return json<RunComparison>(fetch(`/api/load-cases/${loadCaseId}/run-comparison?${params}`))
+  },
+  runTrust: (runId: string) => json<RunTrust>(fetch(`/api/analysis-runs/${runId}/trust`)),
+  reviewItems: (runId: string) => json<ReviewItem[]>(fetch(`/api/analysis-runs/${runId}/review-items`)),
+  createReviewItem: (runId: string, payload: { title: string; body: string; variable_key: string | null; time_value: number | null; entity_type: 'NODE' | 'ELEMENT' | null; entity_id: string | null; review_status: 'OPEN' | 'IN_REVIEW' | 'RESOLVED'; created_by: string }) =>
+    json<ReviewItem>(fetch(`/api/analysis-runs/${runId}/review-items`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })),
+  updateReviewItem: (annotationId: string, reviewStatus: 'OPEN' | 'IN_REVIEW' | 'RESOLVED', body?: string) =>
+    json<ReviewItem>(fetch(`/api/review-items/${annotationId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ review_status: reviewStatus, ...(body ? { body } : {}) }) })),
   workflows: () => json<Workflow[]>(fetch('/api/workflows')),
   qualityThresholds: (projectId: string) => json<QualityThreshold[]>(fetch(`/api/projects/${projectId}/quality-thresholds`)),
   updateQualityThreshold: (criterionKey: string, thresholdDouble: number) =>
@@ -69,14 +82,16 @@ export const api = {
         body: JSON.stringify({ threshold_double: thresholdDouble, updated_by: '관리자' }),
       }),
     ),
-  renameWorkflowStep: (stepId: string, name: string) =>
-    json<{ id: string; name: string; status: string }>(
+  updateWorkflowStep: (stepId: string, payload: { name: string; status: 'COMPLETED' | 'IN_PROGRESS' | 'WAITING' | 'BLOCKED' | 'FAILED'; owner: string; progress: number; is_optional: boolean; note: string }) =>
+    json<WorkflowStep>(
       fetch(`/api/workflow-steps/${stepId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name }),
+        body: JSON.stringify(payload),
       }),
     ),
+  replaceWorkflowSteps: (requestId: string, steps: Array<{ id: string | null; name: string; status: 'COMPLETED' | 'IN_PROGRESS' | 'WAITING' | 'BLOCKED' | 'FAILED'; owner: string; progress: number; is_optional: boolean; note: string }>) =>
+    json<WorkflowStep[]>(fetch(`/api/requests/${requestId}/workflow-steps`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ steps }) })),
   dashboard: (id = 'dashboard-drop-default') => json<DashboardDefinition>(fetch(`/api/dashboards/${id}`)),
   dashboards: (projectId?: string) => json<DashboardSummary[]>(fetch(`/api/dashboards${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''}`)),
   variables: (loadCaseId: string) => json<VariableDefinition[]>(fetch(`/api/load-cases/${loadCaseId}/variables`)),

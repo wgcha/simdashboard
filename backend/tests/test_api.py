@@ -50,6 +50,71 @@ def test_widget_catalog_and_dashboard_version_flows():
         conn.execute("DELETE FROM dashboards WHERE id = ?", [clone_id])
 
 
+def test_workflow_step_full_edit_and_validation():
+    initialize_database()
+    with TestClient(app) as client:
+        workflow = client.get("/api/workflows").json()[0]
+        original = workflow["steps"][0]
+        payload = {
+            "name": f'{original["name"]} 편집',
+            "status": "IN_PROGRESS",
+            "owner": "워크플로 편집자",
+            "progress": 55,
+            "is_optional": True,
+            "note": "편집 기능 회귀 검증",
+        }
+        try:
+            updated = client.patch(f'/api/workflow-steps/{original["id"]}', json=payload)
+            assert updated.status_code == 200, updated.text
+            assert all(updated.json()[key] == value for key, value in payload.items())
+            refreshed = client.get("/api/workflows").json()
+            saved = next(step for item in refreshed for step in item["steps"] if step["id"] == original["id"])
+            assert all(saved[key] == value for key, value in payload.items())
+            invalid = client.patch(f'/api/workflow-steps/{original["id"]}', json={**payload, "progress": 101})
+            assert invalid.status_code == 422
+        finally:
+            client.patch(f'/api/workflow-steps/{original["id"]}', json={
+                "name": original["name"],
+                "status": original["status"],
+                "owner": original["owner"],
+                "progress": original["progress"],
+                "is_optional": original["is_optional"],
+                "note": original.get("note") or "",
+            })
+
+
+def test_workflow_steps_replace_supports_add_delete_and_reorder():
+    initialize_database()
+    request_id = ""
+    with TestClient(app) as client:
+        project_id = client.get("/api/projects").json()[0]["id"]
+        created = client.post(f"/api/projects/{project_id}/requests", json={"title": "단계 편집 API 검증", "owner": "워크플로 편집자", "due_in_days": 7, "overall_note": "테스트 후 삭제"})
+        assert created.status_code == 201, created.text
+        request_id = created.json()["id"]
+        workflow = next(item for item in client.get("/api/workflows").json() if item["request"]["id"] == request_id)
+        first, second = workflow["steps"][:2]
+        payload = {"steps": [
+            {"id": second["id"], "name": "순서가 바뀐 두 번째 단계", "status": "IN_PROGRESS", "owner": "담당 B", "progress": 45, "is_optional": False, "note": "앞으로 이동"},
+            {"id": first["id"], "name": first["name"], "status": first["status"], "owner": first["owner"], "progress": first["progress"], "is_optional": first["is_optional"], "note": first.get("note") or ""},
+            {"id": None, "name": "새 승인 단계", "status": "WAITING", "owner": "담당 C", "progress": 0, "is_optional": True, "note": "신규 추가"},
+        ]}
+        try:
+            replaced = client.put(f"/api/requests/{request_id}/workflow-steps", json=payload)
+            assert replaced.status_code == 200, replaced.text
+            steps = replaced.json()
+            assert len(steps) == 3
+            assert [step["sequence_no"] for step in steps] == [1, 2, 3]
+            assert steps[0]["id"] == second["id"]
+            assert steps[2]["name"] == "새 승인 단계"
+            assert steps[2]["id"] not in {first["id"], second["id"]}
+            assert client.put(f"/api/requests/{request_id}/workflow-steps", json={"steps": []}).status_code == 422
+        finally:
+            if request_id:
+                with connect() as conn:
+                    conn.execute("DELETE FROM request_steps WHERE request_id = ?", [request_id])
+                    conn.execute("DELETE FROM analysis_requests WHERE id = ?", [request_id])
+
+
 def test_report_layout_crud_and_version_history():
     initialize_database()
     with TestClient(app) as client:
@@ -160,6 +225,64 @@ def test_health_and_seeded_overview():
         assert payload["analysis_verdicts"]["chassis_rear"] == "FAIL"
         chassis_results = [item for item in payload["scalar_results"] if item["variable_key"].startswith("chassis_rear_")]
         assert len(chassis_results) == 6
+
+
+def test_run_comparison_trust_and_review_are_additive():
+    initialize_database()
+    annotation_id = None
+    bookmark_id = None
+    with TestClient(app) as client:
+        runs = client.get("/api/load-cases/loadcase-drop-bottom-001/runs")
+        assert runs.status_code == 200, runs.text
+        run_ids = {item["id"] for item in runs.json()}
+        assert {"run-drop-baseline-001", "run-drop-001"} <= run_ids
+
+        comparison = client.get(
+            "/api/load-cases/loadcase-drop-bottom-001/run-comparison",
+            params={"baseline_run_id": "run-drop-baseline-001", "target_run_id": "run-drop-001", "variable_key": "bottom_edge_stress_time"},
+        )
+        assert comparison.status_code == 200, comparison.text
+        payload = comparison.json()
+        bottom = next(item for item in payload["scalar_comparison"] if item["variable_key"] == "bottom_edge_max_stress")
+        assert bottom["change"] == "REGRESSION"
+        assert bottom["baseline_verdict"] == "PASS"
+        assert bottom["target_verdict"] == "FAIL"
+        assert payload["summary"]["regression"] >= 1
+        assert payload["time_series"]["variable_key"] == "bottom_edge_stress_time"
+        assert payload["time_series"]["points"]
+
+        trust = client.get("/api/analysis-runs/run-drop-001/trust")
+        assert trust.status_code == 200, trust.text
+        trust_payload = trust.json()
+        assert trust_payload["metadata"]["source_checksum"]
+        assert trust_payload["coverage"]["result_variables"] >= 10
+        assert {item["code"] for item in trust_payload["checks"]} >= {"run_status", "source_trace", "catalog_mapping", "unit_consistency", "validation"}
+
+        created = client.post(
+            "/api/analysis-runs/run-drop-001/review-items",
+            json={
+                "title": "하단 엣지 회귀 확인",
+                "body": "기준 Run 대비 허용 응력을 초과했습니다.",
+                "variable_key": "bottom_edge_max_stress",
+                "time_value": 14.6,
+                "entity_type": None,
+                "entity_id": None,
+                "review_status": "OPEN",
+                "created_by": "테스트 검토자",
+            },
+        )
+        assert created.status_code == 201, created.text
+        annotation_id = created.json()["id"]
+        bookmark_id = created.json()["bookmark_id"]
+        assert created.json()["review_status"] == "OPEN"
+        assert any(item["id"] == annotation_id for item in client.get("/api/analysis-runs/run-drop-001/review-items").json())
+        resolved = client.patch(f"/api/review-items/{annotation_id}", json={"review_status": "RESOLVED"})
+        assert resolved.status_code == 200, resolved.text
+        assert resolved.json()["review_status"] == "RESOLVED"
+    if annotation_id and bookmark_id:
+        with connect() as conn:
+            conn.execute("DELETE FROM review_annotations WHERE id=?", [annotation_id])
+            conn.execute("DELETE FROM result_bookmarks WHERE id=?", [bookmark_id])
 
 
 def test_hierarchy_and_workflow():
@@ -455,3 +578,49 @@ def test_import_schema_crud_and_hierarchy_mapping():
     with connect() as conn:
         conn.execute("DELETE FROM import_schema_versions WHERE schema_id=?", [created["id"]])
         conn.execute("DELETE FROM import_schemas WHERE id=?", [created["id"]])
+
+
+def test_feature_example_gallery_covers_major_states():
+    initialize_database()
+    with TestClient(app) as client:
+        response = client.get("/api/feature-examples")
+        assert response.status_code == 200
+        examples = {item["id"]: item for item in response.json()}
+        assert len(examples) >= 12
+        assert {"run-comparison", "trust-ready", "trust-warning", "review-flow", "multi-type", "data-waiting", "workflow-states", "ppt-layout"} <= set(examples)
+        assert examples["run-comparison"]["data_profile"]["runs"] == 3
+        assert examples["review-flow"]["data_profile"]["reviews"] == 3
+        assert examples["multi-type"]["data_profile"]["curves"] == 1
+        assert examples["multi-type"]["data_profile"]["media"] == 1
+
+        comparison = client.get(
+            "/api/load-cases/loadcase-showcase-compare/run-comparison",
+            params={"baseline_run_id": "run-showcase-compare-2", "target_run_id": "run-showcase-compare-3"},
+        )
+        assert comparison.status_code == 200
+        assert comparison.json()["summary"] == {"regression": 1, "improved": 1, "unchanged": 2, "comparable": 4}
+
+        assert client.get("/api/analysis-runs/run-showcase-trust-2/trust").json()["trust_status"] == "TRUSTED"
+        warning = client.get("/api/analysis-runs/run-showcase-warning-2/trust").json()
+        assert warning["trust_status"] == "WARN"
+        assert "unmapped_hotspot" in warning["coverage"]["unmapped"]
+
+        reviews = client.get("/api/analysis-runs/run-showcase-review-2/review-items").json()
+        assert {item["review_status"] for item in reviews} == {"OPEN", "IN_REVIEW", "RESOLVED"}
+
+        waiting = client.get("/api/load-cases/loadcase-showcase-waiting/variables").json()
+        assert len(waiting) == 5
+        assert {item["data_type"] for item in waiting} == {"NUMBER", "TIME_SERIES", "IMAGE", "VIDEO", "MODEL_3D"}
+        assert all(item["has_data"] is False for item in waiting)
+
+        workflow = client.get("/api/requests/request-showcase-workflow/workflow").json()
+        assert {step["status"] for step in workflow["steps"]} >= {"COMPLETED", "IN_PROGRESS", "BLOCKED", "WAITING"}
+
+
+def test_feature_example_seed_is_idempotent():
+    initialize_database()
+    initialize_database()
+    with connect() as conn:
+        assert conn.execute("SELECT count(*) FROM projects WHERE id='project-feature-showcase'").fetchone()[0] == 1
+        assert conn.execute("SELECT count(*) FROM analysis_runs WHERE id='run-showcase-compare-3'").fetchone()[0] == 1
+        assert conn.execute("SELECT count(*) FROM result_locations WHERE analysis_run_id='run-showcase-warning-2' AND variable_key='unmapped_hotspot'").fetchone()[0] == 1

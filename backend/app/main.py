@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import base64
+import hashlib
 import io
 import re
 import shutil
@@ -75,6 +76,25 @@ class NaturalLanguageCommand(BaseModel):
 
 class WorkflowStepUpdate(BaseModel):
     name: str = Field(min_length=2, max_length=80)
+    status: Literal["COMPLETED", "IN_PROGRESS", "WAITING", "BLOCKED", "FAILED"] | None = None
+    owner: str | None = Field(default=None, min_length=1, max_length=80)
+    progress: int | None = Field(default=None, ge=0, le=100)
+    is_optional: bool | None = None
+    note: str | None = Field(default=None, max_length=500)
+
+
+class WorkflowStepDraft(BaseModel):
+    id: str | None = None
+    name: str = Field(min_length=2, max_length=80)
+    status: Literal["COMPLETED", "IN_PROGRESS", "WAITING", "BLOCKED", "FAILED"]
+    owner: str = Field(min_length=1, max_length=80)
+    progress: int = Field(ge=0, le=100)
+    is_optional: bool = False
+    note: str = Field(default="", max_length=500)
+
+
+class WorkflowStepsReplace(BaseModel):
+    steps: list[WorkflowStepDraft] = Field(min_length=1, max_length=50)
 
 
 class QualityThresholdUpdate(BaseModel):
@@ -161,6 +181,22 @@ class ReportTemplateRenderPayload(BaseModel):
     filename: str = Field(default="analysis-report.pptx", min_length=6, max_length=240)
 
 
+class ReviewItemCreate(BaseModel):
+    title: str = Field(min_length=2, max_length=160)
+    body: str = Field(min_length=2, max_length=2000)
+    variable_key: str | None = Field(default=None, max_length=120)
+    time_value: float | None = None
+    entity_type: Literal["NODE", "ELEMENT"] | None = None
+    entity_id: str | None = Field(default=None, max_length=120)
+    review_status: Literal["OPEN", "IN_REVIEW", "RESOLVED"] = "OPEN"
+    created_by: str = Field(default="검토자", min_length=2, max_length=60)
+
+
+class ReviewItemUpdate(BaseModel):
+    body: str | None = Field(default=None, min_length=2, max_length=2000)
+    review_status: Literal["OPEN", "IN_REVIEW", "RESOLVED"]
+
+
 def _validated_report_layout(definition: dict[str, Any]) -> dict[str, Any]:
     if definition.get("coverVariant") not in {"balanced", "executive", "evidence"}:
         raise HTTPException(422, "지원하지 않는 표지 형식입니다.")
@@ -214,6 +250,50 @@ def _validated_report_layout(definition: dict[str, Any]) -> dict[str, Any]:
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/api/feature-examples")
+def feature_examples() -> list[dict[str, Any]]:
+    """Return curated, stable entry points for exercising product capabilities."""
+    items = [
+        {"id": "run-comparison", "order": 1, "category": "분석 판단", "title": "Run 비교: 회귀와 개선", "summary": "세 설계 Run을 비교해 회귀·개선·유지 판정과 시계열 오버레이를 확인합니다.", "badge": "READY", "workspace_page": "dashboard", "preferred_view": "compare", "project_id": "project-feature-showcase", "request_id": "request-showcase-compare", "load_case_id": "loadcase-showcase-compare", "features": ["Run A/B/C", "회귀 1건", "개선 1건", "시계열 비교"], "checks": ["기준 Run과 대상 Run을 바꿉니다.", "REGRESSION·IMPROVED 필터를 확인합니다.", "상단 응력 시계열을 겹쳐 봅니다."]},
+        {"id": "trust-ready", "order": 2, "category": "신뢰·추적", "title": "신뢰도: 추적 가능한 폴더 Import", "summary": "원본·체크섬·스키마·파서·Validation·카탈로그 매핑이 갖춰진 TRUSTED 결과입니다.", "badge": "TRUSTED", "workspace_page": "dashboard", "preferred_view": "compare", "project_id": "project-feature-showcase", "request_id": "request-showcase-trust", "load_case_id": "loadcase-showcase-trust", "features": ["폴더 Import", "체크섬", "Validation PASS", "다중 결과형"], "checks": ["신뢰도 패널의 모든 점검을 펼칩니다.", "원본 폴더와 스키마 버전을 확인합니다.", "결과 변수의 카탈로그 매핑을 확인합니다."]},
+        {"id": "trust-warning", "order": 3, "category": "신뢰·추적", "title": "신뢰도: 의도적인 경고", "summary": "미등록 hotspot 위치와 Validation 부재를 넣어 WARN의 원인과 해소 방향을 보여줍니다.", "badge": "WARN", "workspace_page": "dashboard", "preferred_view": "compare", "project_id": "project-feature-showcase", "request_id": "request-showcase-warning", "load_case_id": "loadcase-showcase-warning", "features": ["미매핑 변수", "Validation 없음", "WARN 설명"], "checks": ["카탈로그 매핑 경고를 찾습니다.", "unmapped_hotspot 키를 확인합니다.", "Validation 경고와 FAIL의 차이를 봅니다."]},
+        {"id": "review-flow", "order": 4, "category": "협업", "title": "협업 검토: 상태별 코멘트", "summary": "OPEN·IN_REVIEW·RESOLVED 검토 항목을 실제 결과 변수와 위치에 연결한 예제입니다.", "badge": "3 ITEMS", "workspace_page": "dashboard", "preferred_view": "compare", "project_id": "project-feature-showcase", "request_id": "request-showcase-review", "load_case_id": "loadcase-showcase-review", "features": ["결과 북마크", "검토 코멘트", "상태 전환", "요소 위치"], "checks": ["세 가지 검토 상태를 필터링합니다.", "코멘트를 IN_REVIEW 또는 RESOLVED로 바꿉니다.", "새 검토 항목을 추가합니다."]},
+        {"id": "multi-type", "order": 5, "category": "데이터", "title": "다중 결과형: 수치·곡선·이미지", "summary": "한 Run에서 수치, 시간 이력, 하중-변위 곡선, hotspot 위치, 컨투어 이미지를 함께 확인합니다.", "badge": "5 TYPES", "workspace_page": "dashboard", "preferred_view": "open_cell", "project_id": "project-feature-showcase", "request_id": "request-showcase-multitype", "load_case_id": "loadcase-showcase-multitype", "features": ["NUMBER", "TIME_SERIES", "CURVE", "IMAGE", "LOCATION"], "checks": ["상세 분석의 수치·차트를 확인합니다.", "변수 카탈로그에서 데이터형을 비교합니다.", "보고서 편집기에서 변수 배치를 시도합니다."]},
+        {"id": "data-waiting", "order": 6, "category": "데이터", "title": "변수 카탈로그: 데이터 대기", "summary": "SQL/폴더 결과가 오기 전에 NUMBER·TIME_SERIES·IMAGE·VIDEO·MODEL_3D를 먼저 선언한 상태입니다.", "badge": "NO DATA", "workspace_page": "variables", "preferred_view": "open_cell", "project_id": "project-feature-showcase", "request_id": "request-showcase-waiting", "load_case_id": "loadcase-showcase-waiting", "features": ["사전 변수 선언", "데이터 대기", "5개 데이터형"], "checks": ["결과 데이터 대기 표시를 확인합니다.", "허용 위젯과 집계를 비교합니다.", "새 변수를 추가하고 수정합니다."]},
+        {"id": "workflow-states", "order": 7, "category": "운영", "title": "워크플로: 진행·차단·대기", "summary": "10단계 업무 흐름에 완료·진행·차단·대기 상태를 섞어 운영 화면을 재현합니다.", "badge": "BLOCKED", "workspace_page": "dashboard", "preferred_view": "workflow", "project_id": "project-feature-showcase", "request_id": "request-showcase-workflow", "load_case_id": "loadcase-showcase-workflow", "features": ["10단계", "진행률", "차단 사유", "담당자"], "checks": ["차단된 해석 실행 단계를 찾습니다.", "단계명을 편집해 봅니다.", "운영 대시보드 집계와 연결해 봅니다."]},
+        {"id": "folder-schema", "order": 8, "category": "데이터", "title": "폴더 스키마: 3단계 매핑", "summary": "project/request/loadcase 폴더 계층과 수치·곡선·미디어 규칙을 편집하는 예제입니다.", "badge": "SCHEMA", "workspace_page": "schemas", "features": ["폴더 계층", "파일 패턴", "버전 관리"], "checks": ["다중 결과형 폴더 예제를 선택합니다.", "context_mapping 3단계를 확인합니다.", "복제 후 패턴을 수정합니다."]},
+        {"id": "ppt-layout", "order": 9, "category": "보고서", "title": "PPT 시각적 레이아웃 편집", "summary": "실제 결과를 보고서로 열어 슬라이드 캔버스에서 요소 이동·크기·변수 배치·버전을 확인합니다.", "badge": "EDITOR", "workspace_page": "dashboard", "preferred_view": "open_cell", "project_id": "project-feature-showcase", "request_id": "request-showcase-multitype", "load_case_id": "loadcase-showcase-multitype", "features": ["슬라이드 캔버스", "드래그·리사이즈", "변수 바인딩", "레이아웃 버전"], "checks": ["상세 분석의 보고서 내보내기를 누릅니다.", "커스텀 슬라이드와 요소를 추가합니다.", "다른 이름으로 저장 후 버전을 비교합니다."], "action_hint": "상세 분석에서 ‘보고서 내보내기’를 누르세요."},
+        {"id": "automation", "order": 10, "category": "자동화", "title": "모델링 자동화 실행 이력", "summary": "템플릿 버전, 입력 파라미터, 생성 모델과 실행 상태를 카드별로 확인합니다.", "badge": "HISTORY", "workspace_page": "templates", "features": ["템플릿 버전", "입력 파라미터", "생성 모델", "실행 상태"], "checks": ["서로 다른 해석 유형을 비교합니다.", "입력과 생성 모델 메타데이터를 확인합니다."]},
+        {"id": "data-registration", "order": 11, "category": "데이터", "title": "수동·Radioss·폴더 결과 등록", "summary": "프로젝트부터 하중 경우까지 만들고 미리보기 검증 후 결과를 등록하는 전체 흐름입니다.", "badge": "IMPORT", "workspace_page": "data", "features": ["JSON/CSV", "Radioss", "검증 미리보기", "폴더 Import"], "checks": ["샘플 파일을 내려받습니다.", "검증만 실행해 오류를 먼저 확인합니다.", "등록 후 분석 열기로 이동합니다."]},
+        {"id": "help", "order": 12, "category": "안내", "title": "사용 시나리오 도움말", "summary": "처음 사용하는 사람이 업무 목적별로 필요한 화면과 순서를 찾아가는 웹 도움말입니다.", "badge": "GUIDE", "workspace_page": "help", "features": ["시나리오", "단계 안내", "화면 바로가기"], "checks": ["목적에 맞는 시나리오를 고릅니다.", "단계별 설명과 바로가기를 사용합니다."]},
+    ]
+    load_case_ids = [item.get("load_case_id") for item in items if item.get("load_case_id")]
+    if load_case_ids:
+        with connect() as conn:
+            for item in items:
+                load_case_id = item.get("load_case_id")
+                if not load_case_id:
+                    item["data_profile"] = {"runs": 0, "scalars": 0, "series": 0, "curves": 0, "media": 0, "reviews": 0}
+                    continue
+                counts = conn.execute(
+                    """
+                    SELECT count(DISTINCT r.id), count(DISTINCT s.id), count(DISTINCT ts.variable_key),
+                           count(DISTINCT c.id), count(DISTINCT m.id), count(DISTINCT a.id)
+                    FROM load_cases lc
+                    LEFT JOIN analysis_runs r ON r.load_case_id=lc.id
+                    LEFT JOIN scalar_results s ON s.analysis_run_id=r.id
+                    LEFT JOIN time_series_results ts ON ts.analysis_run_id=r.id
+                    LEFT JOIN curve_results c ON c.analysis_run_id=r.id
+                    LEFT JOIN media_assets m ON m.analysis_run_id=r.id
+                    LEFT JOIN review_annotations a ON a.analysis_run_id=r.id
+                    WHERE lc.id=?
+                    """,
+                    [load_case_id],
+                ).fetchone()
+                item["data_profile"] = dict(zip(["runs", "scalars", "series", "curves", "media", "reviews"], counts))
+    return items
 
 
 @app.get("/api/projects")
@@ -462,6 +542,15 @@ def import_analysis_results(load_case_id: str, payload: ResultImportPayload) -> 
                 "INSERT INTO analysis_runs VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 [run_id, load_case_id, None, next_run_no, parsed["solver"], "COMPLETED", now, now],
             )
+            conn.execute(
+                """
+                INSERT INTO analysis_run_metadata
+                    (analysis_run_id, source_type, source_name, source_checksum, schema_id, schema_version,
+                     parser_version, metadata_json, created_at)
+                VALUES (?, 'FILE_UPLOAD', ?, ?, NULL, NULL, 'result-import-v1', ?, ?)
+                """,
+                [run_id, payload.filename, hashlib.sha256(payload.content.encode("utf-8")).hexdigest(), json.dumps({"author": payload.author.strip()}, ensure_ascii=False), now],
+            )
             for item in parsed["scalars"]:
                 conn.execute(
                     "INSERT INTO scalar_results VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -541,6 +630,15 @@ def import_typed_result_example(load_case_id: str) -> dict[str, Any]:
                         "result_group": item["result_group"], "updated_by": "폴더 가져오기",
                     })
             conn.execute("INSERT INTO analysis_runs VALUES (?, ?, ?, ?, ?, ?, ?, ?)", [run_id, load_case_id, None, next_run_no, parsed["solver"], "COMPLETED", now, now])
+            conn.execute(
+                """
+                INSERT INTO analysis_run_metadata
+                    (analysis_run_id, source_type, source_name, source_checksum, schema_id, schema_version,
+                     parser_version, metadata_json, created_at)
+                VALUES (?, 'FOLDER_IMPORT', ?, NULL, ?, ?, 'folder-import-v1', ?, ?)
+                """,
+                [run_id, str(example_root), parsed["schema_id"], parsed["schema_version"], json.dumps({"job_id": job_id}, ensure_ascii=False), now],
+            )
             for item in parsed["scalars"]:
                 value_double = item["value"] if item["data_type"] == "FLOAT" else None
                 value_integer = item["value"] if item["data_type"] == "INTEGER" else None
@@ -700,6 +798,278 @@ def get_load_case_overview(load_case_id: str) -> dict[str, Any]:
     }
 
 
+def _run_result_keys(conn: Any, run_id: str) -> set[str]:
+    keys = {
+        row[0]
+        for row in conn.execute(
+            """
+            SELECT variable_key FROM scalar_results WHERE analysis_run_id=?
+            UNION SELECT variable_key FROM time_series_results WHERE analysis_run_id=?
+            UNION SELECT variable_key FROM curve_results WHERE analysis_run_id=?
+            UNION SELECT variable_key FROM result_locations WHERE analysis_run_id=?
+            """,
+            [run_id, run_id, run_id, run_id],
+        ).fetchall()
+    }
+    for (metadata_json,) in conn.execute("SELECT metadata_json FROM media_assets WHERE analysis_run_id=?", [run_id]).fetchall():
+        metadata = json_value(metadata_json) or {}
+        if isinstance(metadata, dict) and metadata.get("variable_key"):
+            keys.add(str(metadata["variable_key"]))
+    return keys
+
+
+def _run_trust_payload(conn: Any, run_id: str, expected_load_case_id: str | None = None) -> dict[str, Any]:
+    run_rows = rows(conn.execute("SELECT * FROM analysis_runs WHERE id=?", [run_id]))
+    if not run_rows or (expected_load_case_id and run_rows[0]["load_case_id"] != expected_load_case_id):
+        raise HTTPException(404, "해석 Run을 찾을 수 없습니다.")
+    run = run_rows[0]
+    latest = conn.execute("SELECT id FROM analysis_runs WHERE load_case_id=? ORDER BY run_no DESC LIMIT 1", [run["load_case_id"]]).fetchone()
+    metadata_rows = rows(conn.execute("SELECT * FROM analysis_run_metadata WHERE analysis_run_id=?", [run_id]))
+    metadata = metadata_rows[0] if metadata_rows else None
+    if metadata:
+        metadata["metadata"] = json_value(metadata.pop("metadata_json"))
+    import_rows = rows(conn.execute("SELECT * FROM folder_import_jobs WHERE analysis_run_id=? ORDER BY created_at DESC LIMIT 1", [run_id]))
+    import_job = import_rows[0] if import_rows else None
+    if import_job:
+        import_job["summary"] = json_value(import_job.pop("summary_json"))
+
+    counts = {
+        "scalar": conn.execute("SELECT count(*) FROM scalar_results WHERE analysis_run_id=?", [run_id]).fetchone()[0],
+        "time_series": conn.execute("SELECT count(*) FROM time_series_results WHERE analysis_run_id=?", [run_id]).fetchone()[0],
+        "curve": conn.execute("SELECT count(*) FROM curve_results WHERE analysis_run_id=?", [run_id]).fetchone()[0],
+        "media": conn.execute("SELECT count(*) FROM media_assets WHERE analysis_run_id=?", [run_id]).fetchone()[0],
+        "location": conn.execute("SELECT count(*) FROM result_locations WHERE analysis_run_id=?", [run_id]).fetchone()[0],
+    }
+    result_keys = _run_result_keys(conn, run_id)
+    catalog_rows = rows(conn.execute("SELECT variable_key, display_name, unit FROM variable_definitions WHERE load_case_id=? AND is_active=true", [run["load_case_id"]]))
+    catalog = {item["variable_key"]: item for item in catalog_rows}
+    unmapped = sorted(result_keys - set(catalog))
+    missing = sorted(set(catalog) - result_keys)
+
+    unit_rows = conn.execute(
+        """
+        SELECT variable_key, unit FROM scalar_results WHERE analysis_run_id=?
+        UNION SELECT variable_key, value_unit FROM time_series_results WHERE analysis_run_id=?
+        UNION SELECT variable_key, y_unit FROM curve_results WHERE analysis_run_id=?
+        """,
+        [run_id, run_id, run_id],
+    ).fetchall()
+    unit_mismatches: list[dict[str, str]] = []
+    for variable_key, actual_unit in unit_rows:
+        expected_unit = catalog.get(variable_key, {}).get("unit")
+        if expected_unit and expected_unit != "-" and actual_unit and expected_unit != actual_unit:
+            mismatch = {"variable_key": variable_key, "expected": expected_unit, "actual": actual_unit}
+            if mismatch not in unit_mismatches:
+                unit_mismatches.append(mismatch)
+
+    validations = rows(conn.execute("SELECT validation_type, verdict, created_at FROM validations WHERE analysis_run_id=? ORDER BY created_at DESC", [run_id]))
+    checks = [
+        {"code": "run_status", "label": "Run 완료 상태", "status": "PASS" if run["status"] == "COMPLETED" else "FAIL", "detail": run["status"]},
+        {"code": "source_trace", "label": "적재 출처 추적", "status": "PASS" if metadata or import_job else "WARN", "detail": metadata["source_name"] if metadata else import_job["source_folder"] if import_job else "출처 메타데이터 없음"},
+        {"code": "catalog_mapping", "label": "변수 카탈로그 연결", "status": "WARN" if unmapped else "PASS", "detail": f"미연결 {len(unmapped)}개" if unmapped else f"결과 변수 {len(result_keys)}개 연결"},
+        {"code": "catalog_coverage", "label": "선언 변수 커버리지", "status": "WARN" if missing else "PASS", "detail": f"이 Run에 없는 선언 변수 {len(missing)}개" if missing else "선언 변수 모두 존재"},
+        {"code": "unit_consistency", "label": "단위 일관성", "status": "WARN" if unit_mismatches else "PASS", "detail": f"불일치 {len(unit_mismatches)}개" if unit_mismatches else "불일치 없음"},
+        {"code": "validation", "label": "Validation", "status": "FAIL" if any(item["verdict"] == "FAIL" for item in validations) else "PASS" if validations else "WARN", "detail": f"검증 {len(validations)}건" if validations else "연결된 검증 없음"},
+    ]
+    trust_status = "FAIL" if any(item["status"] == "FAIL" for item in checks) else "WARN" if any(item["status"] == "WARN" for item in checks) else "TRUSTED"
+    completed_at = run["completed_at"]
+    age_days = None
+    if completed_at:
+        age_days = max(0, (datetime.now(timezone.utc).replace(tzinfo=None) - completed_at).days)
+    return {
+        "run": run,
+        "trust_status": trust_status,
+        "is_latest": bool(latest and latest[0] == run_id),
+        "age_days": age_days,
+        "metadata": metadata,
+        "import_job": import_job,
+        "counts": counts,
+        "coverage": {"result_variables": len(result_keys), "catalog_variables": len(catalog), "unmapped": unmapped, "missing": missing},
+        "unit_mismatches": unit_mismatches,
+        "validations": validations,
+        "checks": checks,
+    }
+
+
+@app.get("/api/load-cases/{load_case_id}/runs")
+def list_analysis_runs(load_case_id: str) -> list[dict[str, Any]]:
+    with connect() as conn:
+        run_rows = rows(conn.execute("SELECT * FROM analysis_runs WHERE load_case_id=? ORDER BY run_no DESC", [load_case_id]))
+        result: list[dict[str, Any]] = []
+        for run in run_rows:
+            verdicts = [row[0] for row in conn.execute("SELECT verdict FROM scalar_results WHERE analysis_run_id=? AND verdict IS NOT NULL", [run["id"]]).fetchall()]
+            trust = _run_trust_payload(conn, run["id"], load_case_id)
+            result.append({
+                **run,
+                "overall_verdict": "FAIL" if "FAIL" in verdicts else "PASS" if verdicts else "NO_DATA",
+                "scalar_count": trust["counts"]["scalar"],
+                "series_count": trust["counts"]["time_series"],
+                "trust_status": trust["trust_status"],
+                "is_latest": trust["is_latest"],
+            })
+        return result
+
+
+@app.get("/api/load-cases/{load_case_id}/run-comparison")
+def compare_analysis_runs(
+    load_case_id: str,
+    baseline_run_id: str = Query(min_length=3, max_length=120),
+    target_run_id: str = Query(min_length=3, max_length=120),
+    variable_key: str | None = Query(default=None, max_length=120),
+) -> dict[str, Any]:
+    if baseline_run_id == target_run_id:
+        raise HTTPException(422, "기준 Run과 대상 Run은 달라야 합니다.")
+    with connect() as conn:
+        run_rows = rows(conn.execute("SELECT * FROM analysis_runs WHERE load_case_id=? AND id IN (?, ?) ORDER BY run_no", [load_case_id, baseline_run_id, target_run_id]))
+        if len(run_rows) != 2:
+            raise HTTPException(404, "선택한 Run을 하중 경우에서 찾을 수 없습니다.")
+        run_map = {item["id"]: item for item in run_rows}
+        scalar_rows = rows(conn.execute("SELECT * FROM scalar_results WHERE analysis_run_id IN (?, ?)", [baseline_run_id, target_run_id]))
+        scalars = {run_id: {item["variable_key"]: item for item in scalar_rows if item["analysis_run_id"] == run_id} for run_id in (baseline_run_id, target_run_id)}
+        comparison: list[dict[str, Any]] = []
+        for key in sorted(set(scalars[baseline_run_id]) | set(scalars[target_run_id])):
+            baseline = scalars[baseline_run_id].get(key)
+            target = scalars[target_run_id].get(key)
+            baseline_value = (baseline or {}).get("value_double")
+            if baseline_value is None:
+                baseline_value = (baseline or {}).get("value_integer")
+            target_value = (target or {}).get("value_double")
+            if target_value is None:
+                target_value = (target or {}).get("value_integer")
+            comparable = bool(baseline and target and baseline_value is not None and target_value is not None and baseline.get("unit") == target.get("unit"))
+            delta = float(target_value - baseline_value) if comparable else None
+            delta_percent = (delta / abs(float(baseline_value)) * 100) if comparable and baseline_value not in (None, 0) else None
+            if baseline is None:
+                change = "ADDED"
+            elif target is None:
+                change = "REMOVED"
+            elif not comparable:
+                change = "NOT_COMPARABLE"
+            elif baseline.get("verdict") == "PASS" and target.get("verdict") == "FAIL":
+                change = "REGRESSION"
+            elif baseline.get("verdict") == "FAIL" and target.get("verdict") == "PASS":
+                change = "IMPROVED"
+            else:
+                change = "UNCHANGED"
+            comparison.append({
+                "variable_key": key,
+                "display_name": (target or baseline or {}).get("display_name", key),
+                "unit": (target or baseline or {}).get("unit"),
+                "baseline_value": baseline_value,
+                "target_value": target_value,
+                "baseline_verdict": (baseline or {}).get("verdict"),
+                "target_verdict": (target or {}).get("verdict"),
+                "delta": delta,
+                "delta_percent": delta_percent,
+                "change": change,
+                "comparable": comparable,
+            })
+
+        series_rows = rows(conn.execute(
+            """
+            SELECT variable_key, min(display_name) AS display_name, min(value_unit) AS value_unit,
+                   count(DISTINCT analysis_run_id) AS run_count
+            FROM time_series_results WHERE analysis_run_id IN (?, ?)
+            GROUP BY variable_key HAVING count(DISTINCT analysis_run_id)=2 ORDER BY variable_key
+            """,
+            [baseline_run_id, target_run_id],
+        ))
+        available_series = [{"variable_key": item["variable_key"], "display_name": item["display_name"], "unit": item["value_unit"]} for item in series_rows]
+        selected_key = variable_key if any(item["variable_key"] == variable_key for item in available_series) else available_series[0]["variable_key"] if available_series else None
+        series_payload = None
+        if selected_key:
+            points = rows(conn.execute("SELECT analysis_run_id, time_value, value, time_unit, value_unit FROM time_series_results WHERE analysis_run_id IN (?, ?) AND variable_key=? ORDER BY time_value", [baseline_run_id, target_run_id, selected_key]))
+            merged: dict[float, dict[str, Any]] = {}
+            for point in points:
+                item = merged.setdefault(float(point["time_value"]), {"time_value": point["time_value"], "time_unit": point["time_unit"], "baseline_value": None, "target_value": None})
+                item["baseline_value" if point["analysis_run_id"] == baseline_run_id else "target_value"] = point["value"]
+            descriptor = next(item for item in available_series if item["variable_key"] == selected_key)
+            series_payload = {**descriptor, "points": list(merged.values())}
+
+        summary = {status.lower(): sum(1 for item in comparison if item["change"] == status) for status in ("REGRESSION", "IMPROVED", "UNCHANGED")}
+        summary["comparable"] = sum(1 for item in comparison if item["comparable"])
+        return {
+            "baseline_run": run_map[baseline_run_id],
+            "target_run": run_map[target_run_id],
+            "summary": summary,
+            "scalar_comparison": comparison,
+            "available_series": available_series,
+            "time_series": series_payload,
+        }
+
+
+@app.get("/api/analysis-runs/{run_id}/trust")
+def get_analysis_run_trust(run_id: str) -> dict[str, Any]:
+    with connect() as conn:
+        return _run_trust_payload(conn, run_id)
+
+
+def _review_items(conn: Any, run_id: str, annotation_id: str | None = None) -> list[dict[str, Any]]:
+    conditions = "a.analysis_run_id=?"
+    parameters: list[Any] = [run_id]
+    if annotation_id:
+        conditions += " AND a.id=?"
+        parameters.append(annotation_id)
+    return rows(conn.execute(
+        f"""
+        SELECT a.id, a.bookmark_id, a.analysis_run_id, a.variable_key, b.title, b.time_value,
+               b.entity_type, b.entity_id, a.body, a.review_status, a.created_by, a.created_at, a.updated_at
+        FROM review_annotations a JOIN result_bookmarks b ON b.id=a.bookmark_id
+        WHERE {conditions} ORDER BY a.updated_at DESC
+        """,
+        parameters,
+    ))
+
+
+@app.get("/api/analysis-runs/{run_id}/review-items")
+def list_review_items(run_id: str) -> list[dict[str, Any]]:
+    with connect() as conn:
+        if not conn.execute("SELECT 1 FROM analysis_runs WHERE id=?", [run_id]).fetchone():
+            raise HTTPException(404, "해석 Run을 찾을 수 없습니다.")
+        return _review_items(conn, run_id)
+
+
+@app.post("/api/analysis-runs/{run_id}/review-items", status_code=201)
+def create_review_item(run_id: str, payload: ReviewItemCreate) -> dict[str, Any]:
+    with connect() as conn:
+        if not conn.execute("SELECT 1 FROM analysis_runs WHERE id=?", [run_id]).fetchone():
+            raise HTTPException(404, "해석 Run을 찾을 수 없습니다.")
+        if payload.variable_key and payload.variable_key not in _run_result_keys(conn, run_id):
+            raise HTTPException(422, "선택한 변수는 이 Run의 결과에 없습니다.")
+        if payload.entity_type and not payload.entity_id:
+            raise HTTPException(422, "엔티티 유형을 지정하면 엔티티 ID도 필요합니다.")
+        bookmark_id, annotation_id = f"bookmark-{uuid4().hex[:12]}", f"review-{uuid4().hex[:12]}"
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        conn.execute("BEGIN TRANSACTION")
+        try:
+            conn.execute(
+                "INSERT INTO result_bookmarks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [bookmark_id, run_id, payload.variable_key, payload.time_value, payload.entity_type, payload.entity_id, payload.title.strip(), payload.created_by.strip(), now],
+            )
+            conn.execute(
+                "INSERT INTO review_annotations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [annotation_id, bookmark_id, run_id, payload.variable_key, payload.body.strip(), payload.review_status, payload.created_by.strip(), now, now],
+            )
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+        return _review_items(conn, run_id, annotation_id)[0]
+
+
+@app.patch("/api/review-items/{annotation_id}")
+def update_review_item(annotation_id: str, payload: ReviewItemUpdate) -> dict[str, Any]:
+    with connect() as conn:
+        current = conn.execute("SELECT analysis_run_id, body FROM review_annotations WHERE id=?", [annotation_id]).fetchone()
+        if not current:
+            raise HTTPException(404, "검토 의견을 찾을 수 없습니다.")
+        conn.execute(
+            "UPDATE review_annotations SET body=?, review_status=?, updated_at=? WHERE id=?",
+            [payload.body.strip() if payload.body else current[1], payload.review_status, datetime.now(timezone.utc).replace(tzinfo=None), annotation_id],
+        )
+        return _review_items(conn, current[0], annotation_id)[0]
+
+
 @app.get("/api/projects/{project_id}/quality-thresholds")
 def get_quality_thresholds(project_id: str) -> list[dict[str, Any]]:
     with connect() as conn:
@@ -808,17 +1178,98 @@ def get_workflows() -> list[dict[str, Any]]:
     return result
 
 
+@app.put("/api/requests/{request_id}/workflow-steps")
+def replace_workflow_steps(request_id: str, payload: WorkflowStepsReplace) -> list[dict[str, Any]]:
+    with connect() as conn:
+        if not conn.execute("SELECT 1 FROM analysis_requests WHERE id = ?", [request_id]).fetchone():
+            raise HTTPException(404, "해석 의뢰를 찾을 수 없습니다.")
+        existing = rows(conn.execute("SELECT * FROM request_steps WHERE request_id = ?", [request_id]))
+        existing_by_id = {item["id"]: item for item in existing}
+        submitted_ids = [item.id for item in payload.steps if item.id]
+        if len(submitted_ids) != len(set(submitted_ids)):
+            raise HTTPException(400, "단계 ID가 중복되었습니다.")
+        unknown = [step_id for step_id in submitted_ids if step_id not in existing_by_id]
+        if unknown:
+            raise HTTPException(400, "다른 의뢰의 단계이거나 존재하지 않는 단계가 포함되어 있습니다.")
+        now = datetime.now(timezone.utc)
+        try:
+            conn.execute("BEGIN TRANSACTION")
+            if submitted_ids:
+                placeholders = ",".join("?" for _ in submitted_ids)
+                conn.execute(
+                    f"DELETE FROM request_steps WHERE request_id = ? AND id NOT IN ({placeholders})",
+                    [request_id, *submitted_ids],
+                )
+            else:
+                conn.execute("DELETE FROM request_steps WHERE request_id = ?", [request_id])
+            for sequence_no, step in enumerate(payload.steps, start=1):
+                name = step.name.strip()
+                owner = step.owner.strip()
+                if len(name) < 2 or not owner:
+                    raise HTTPException(400, "단계 이름과 담당자를 확인해 주세요.")
+                if step.id:
+                    conn.execute(
+                        """
+                        UPDATE request_steps
+                        SET sequence_no = ?, name = ?, status = ?, owner = ?, progress = ?, is_optional = ?, note = ?
+                        WHERE id = ? AND request_id = ?
+                        """,
+                        [sequence_no, name, step.status, owner, step.progress, step.is_optional, step.note.strip(), step.id, request_id],
+                    )
+                else:
+                    step_id = f"step-{uuid4().hex[:12]}"
+                    conn.execute(
+                        """
+                        INSERT INTO request_steps (
+                            id, request_id, sequence_no, name, status, owner, planned_start, planned_end,
+                            actual_start, actual_end, progress, blocked_reason, note, is_optional
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, NULL, ?, ?)
+                        """,
+                        [step_id, request_id, sequence_no, name, step.status, owner, now, now + timedelta(days=7), step.progress, step.note.strip(), step.is_optional],
+                    )
+            conn.execute("COMMIT")
+        except HTTPException:
+            conn.execute("ROLLBACK")
+            raise
+        except Exception as exc:
+            conn.execute("ROLLBACK")
+            raise HTTPException(500, f"진행 단계를 저장하지 못했습니다: {exc}") from exc
+        return rows(conn.execute("SELECT * FROM request_steps WHERE request_id = ? ORDER BY sequence_no", [request_id]))
+
+
 @app.patch("/api/workflow-steps/{step_id}")
 def update_workflow_step(step_id: str, payload: WorkflowStepUpdate) -> dict[str, Any]:
     name = payload.name.strip()
     if len(name) < 2:
         raise HTTPException(400, "단계 이름은 두 글자 이상이어야 합니다.")
     with connect() as conn:
-        existing = conn.execute("SELECT id FROM request_steps WHERE id = ?", [step_id]).fetchone()
+        existing = rows(conn.execute("SELECT * FROM request_steps WHERE id = ?", [step_id]))
         if not existing:
             raise HTTPException(404, "작업 단계를 찾을 수 없습니다.")
-        conn.execute("UPDATE request_steps SET name = ? WHERE id = ?", [name, step_id])
-    return {"id": step_id, "name": name, "status": "saved"}
+        current = existing[0]
+        owner = payload.owner.strip() if payload.owner is not None else current["owner"]
+        if not owner:
+            raise HTTPException(400, "담당자를 입력해야 합니다.")
+        conn.execute(
+            """
+            UPDATE request_steps
+            SET name = ?, status = ?, owner = ?, progress = ?, is_optional = ?, note = ?
+            WHERE id = ?
+            """,
+            [
+                name,
+                payload.status or current["status"],
+                owner,
+                payload.progress if payload.progress is not None else current["progress"],
+                payload.is_optional if payload.is_optional is not None else current["is_optional"],
+                payload.note.strip() if payload.note is not None else current["note"],
+                step_id,
+            ],
+        )
+        updated = rows(conn.execute("SELECT * FROM request_steps WHERE id = ?", [step_id]))
+    if not updated:
+        raise HTTPException(404, "작업 단계를 찾을 수 없습니다.")
+    return updated[0]
 
 
 @app.get("/api/load-cases/{load_case_id}/variables")
