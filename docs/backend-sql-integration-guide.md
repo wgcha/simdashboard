@@ -654,7 +654,7 @@ validations
 
 `verify_postgres_migration.py`는 DuckDB와 PostgreSQL을 동시에 읽어 다음을 비교한다.
 
-1. 25개 테이블별 행 수
+1. 현재 기준 32개 테이블별 행 수
 2. 모든 PK 또는 복합 PK 집합
 3. 프로젝트별 의뢰·하중 경우·해석 실행 수
 4. 실행별 scalar/time-series 행 수
@@ -802,7 +802,7 @@ cd <프로젝트경로>\backend
 ..\.venv\Scripts\python.exe -m pytest -q
 
 cd ..\frontend
-npm.cmd run build
+pnpm.cmd run build
 ```
 
 Linux bash:
@@ -853,22 +853,22 @@ Invoke-RestMethod http://127.0.0.1:8000/api/portfolio/overview
 
 다음 항목이 모두 참일 때만 “PostgreSQL 연결 완료”라고 보고한다.
 
-- [ ] PostgreSQL 모드에서 `connect()` 차단 코드가 제거됐다.
-- [ ] 잘못된 URL/인증/SSL 오류가 명확하게 표시된다.
-- [ ] Alembic이 빈 DB를 최신 revision으로 만든다.
-- [ ] 25개 테이블과 필수 인덱스가 생성된다.
-- [ ] DuckDB 회귀 테스트가 통과한다.
-- [ ] PostgreSQL 통합 테스트가 통과한다.
-- [ ] 데이터 이전 dry-run이 통과한다.
-- [ ] 실제 이전 후 행 수·키·JSON 해시 검증이 통과한다.
-- [ ] 변수 카탈로그 CRUD와 위젯 연결이 동작한다.
-- [ ] 대시보드 저장·복제·복구가 동작한다.
-- [ ] 프런트엔드 빌드와 실제 화면 검증이 통과한다.
-- [ ] 환경변수를 DuckDB로 되돌렸을 때 기존 모드가 정상 동작한다.
-- [ ] 비밀번호, DB URL, dump 파일이 Git에 포함되지 않았다.
-- [ ] Windows와 Linux CI가 모두 통과했다.
-- [ ] Linux `start.sh`/`stop.sh`와 운영 서비스 예제가 제공됐다.
-- [ ] 코드와 DB 데이터에 특정 PC의 드라이브 문자나 절대 경로가 강제되지 않는다.
+- [x] PostgreSQL 모드에서 공통 `connect()` 어댑터가 동작한다.
+- [x] 잘못된 URL과 필수 환경변수 오류가 명확하게 표시된다.
+- [x] Alembic이 빈 DB를 최신 revision으로 만든다.
+- [x] 현재 기준 32개 테이블과 필수 인덱스가 생성된다.
+- [x] DuckDB 회귀 테스트가 통과한다.
+- [x] PostgreSQL 최소 권한 통합 테스트가 통과한다.
+- [x] 데이터 이전 dry-run이 통과한다.
+- [x] 실제 이전 후 행 수·관계·JSON 포함 체크섬 검증이 통과한다.
+- [x] 변수 카탈로그 CRUD와 위젯 연결이 동작한다.
+- [x] 대시보드 저장·복제·복구가 동작한다.
+- [x] 프런트엔드 빌드와 인증 브라우저 E2E가 통과한다.
+- [x] 환경변수를 DuckDB로 되돌렸을 때 기존 모드가 정상 동작한다.
+- [x] 비밀번호, DB URL, dump 파일이 Git에 포함되지 않았다.
+- [x] Windows 로컬 검증과 Linux CI job이 제공된다.
+- [x] Linux `start.sh`/`stop.sh`와 운영 서비스 예제가 제공된다.
+- [x] 코드와 DB 데이터에 특정 PC의 드라이브 문자나 절대 경로가 강제되지 않는다.
 
 ## 21. 다른 PC의 AI에게 그대로 전달할 작업 프롬프트
 
@@ -877,12 +877,12 @@ Invoke-RestMethod http://127.0.0.1:8000/api/portfolio/overview
 ```text
 이 저장소를 PostgreSQL 15+에서 실제로 실행 가능하도록 전환해줘.
 
-반드시 docs/backend-sql-integration-guide.md 전체를 먼저 읽고 그 문서를 구현 계약으로 사용해. 현재 코드는 PostgreSQL 환경변수만 설정해서는 동작하지 않으며 backend/app/database.py에서 PostgreSQL 연결을 차단하고 있다.
+반드시 docs/backend-sql-integration-guide.md와 docs/deployment-security-backup-guide.md 전체를 먼저 읽고 구현·운영 계약으로 사용해. 현재 코드는 DuckDB와 PostgreSQL을 환경변수로 선택하며 Alembic, 데이터 이전 검증, 인증·권한·감사·백업 도구가 포함되어 있다.
 
 작업 순서:
 1. 저장소 전체와 현재 DuckDB 스키마, API 테스트, 프런트 API 타입을 조사한다.
 2. 기존 DuckDB 동작을 보존하면서 PostgreSQL 어댑터, SQLAlchemy Core 기반 공통 실행 계층, psycopg 연결 풀을 구현한다.
-3. Alembic 초기 마이그레이션으로 문서에 명시된 25개 테이블, 제약과 인덱스를 만든다.
+3. Alembic 마이그레이션으로 문서에 명시된 현재 32개 테이블, 제약과 인덱스를 만든다.
 4. DuckDB 전용 SQL과 위치 파라미터를 안전한 이름 기반 바인딩과 PostgreSQL conflict 문법으로 전환한다.
 5. 원본 DuckDB를 읽기 전용으로 열어 PostgreSQL로 복사하는 dry-run/실행 CLI를 구현한다.
 6. 테이블별 행 수, PK, 대시보드 JSON 해시, 변수 키, 핵심 API를 비교하는 검증 보고서를 만든다.

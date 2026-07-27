@@ -4,33 +4,22 @@ import json
 import hashlib
 import math
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any
 
 import duckdb
 
 from .config import database_settings
-
-
-ROOT = Path(__file__).resolve().parents[1]
-DATA_DIR = ROOT / "data"
-DB_PATH = DATA_DIR / "analysis_dashboard.duckdb"
-
-
-def connect() -> duckdb.DuckDBPyConnection:
-    settings = database_settings()
-    if settings.backend == "postgresql":
-        raise RuntimeError("PostgreSQL 어댑터는 운영 전환 단계에서 활성화합니다. 현재는 ANALYSIS_DB_BACKEND=duckdb를 사용하세요.")
-    settings.duckdb_path.parent.mkdir(parents=True, exist_ok=True)
-    return duckdb.connect(str(settings.duckdb_path))
-
-
-def rows(cursor: duckdb.DuckDBPyConnection) -> list[dict[str, Any]]:
-    columns = [column[0] for column in cursor.description]
-    return [dict(zip(columns, row)) for row in cursor.fetchall()]
+from .database_connection import connect, rows
 
 
 def initialize_database() -> None:
+    settings = database_settings()
+    if settings.backend == "postgresql":
+        with connect() as conn:
+            migrated = conn.execute("SELECT to_regclass('public.workspace_layouts')").fetchone()[0]
+            if migrated is None:
+                raise RuntimeError("PostgreSQL 스키마가 준비되지 않았습니다. 먼저 alembic upgrade head를 실행하세요.")
+        return
     with connect() as conn:
         conn.execute(
             """
@@ -329,6 +318,24 @@ def initialize_database() -> None:
                 PRIMARY KEY (dashboard_id, version)
             );
 
+            CREATE TABLE IF NOT EXISTS workspace_layouts (
+                layout_kind VARCHAR PRIMARY KEY,
+                version INTEGER NOT NULL,
+                definition_json JSON NOT NULL,
+                updated_by VARCHAR NOT NULL,
+                updated_at TIMESTAMP NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS workspace_layout_versions (
+                layout_kind VARCHAR NOT NULL,
+                version INTEGER NOT NULL,
+                definition_json JSON NOT NULL,
+                created_by VARCHAR NOT NULL,
+                created_at TIMESTAMP NOT NULL,
+                is_valid BOOLEAN NOT NULL DEFAULT true,
+                PRIMARY KEY (layout_kind, version)
+            );
+
             CREATE TABLE IF NOT EXISTS report_layouts (
                 id VARCHAR PRIMARY KEY,
                 name VARCHAR NOT NULL,
@@ -364,46 +371,101 @@ def initialize_database() -> None:
                 updated_at TIMESTAMP NOT NULL,
                 updated_by VARCHAR NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS users (
+                id VARCHAR PRIMARY KEY,
+                username VARCHAR NOT NULL UNIQUE,
+                password_hash VARCHAR NOT NULL,
+                display_name VARCHAR NOT NULL,
+                role VARCHAR NOT NULL,
+                is_active BOOLEAN NOT NULL DEFAULT true,
+                created_at TIMESTAMP NOT NULL,
+                updated_at TIMESTAMP NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS audit_events (
+                id VARCHAR PRIMARY KEY,
+                occurred_at TIMESTAMP NOT NULL,
+                user_id VARCHAR,
+                username VARCHAR,
+                role VARCHAR,
+                action VARCHAR NOT NULL,
+                method VARCHAR NOT NULL,
+                path VARCHAR NOT NULL,
+                status_code INTEGER NOT NULL,
+                request_id VARCHAR NOT NULL,
+                client_ip VARCHAR,
+                user_agent VARCHAR,
+                detail_json JSON
+            );
             """
         )
 
         conn.execute("ALTER TABLE request_steps ADD COLUMN IF NOT EXISTS is_optional BOOLEAN DEFAULT false")
 
-        count = conn.execute("SELECT count(*) FROM projects").fetchone()[0]
-        if count == 0:
-            conn.execute("BEGIN TRANSACTION")
-            try:
-                seed_database(conn)
-                conn.execute("COMMIT")
-            except Exception:
-                conn.execute("ROLLBACK")
-                raise
-        ensure_sample_evolutions(conn)
-        ensure_feature_examples(conn)
-        ensure_variable_definitions(conn)
+        ensure_default_content(conn)
+
+
+def seed_current_database() -> None:
+    with connect() as conn:
+        ensure_default_content(conn)
+
+
+def ensure_default_content(conn: Any) -> None:
+    count = conn.execute("SELECT count(*) FROM projects").fetchone()[0]
+    if count == 0:
+        conn.execute("BEGIN TRANSACTION")
+        try:
+            seed_database(conn)
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    ensure_sample_evolutions(conn)
+    ensure_feature_examples(conn)
+    ensure_variable_definitions(conn)
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO dashboard_versions
+        SELECT id, version, definition_json, 'system', updated_at, true FROM dashboards
+        """
+    )
+    ensure_report_layouts(conn)
+    ensure_workspace_layouts(conn)
+    chassis_layout = {
+        "id": "dashboard-chassis-default",
+        "name": "Chassis Rear 영구변형 기본 분석",
+        "description": "엣지 이격과 모서리 영구변형 평가",
+        "widgets": [
+            {"id": "chassis-summary", "type": "chassis_summary", "title": "영구변형 판정 요약", "x": 0, "y": 0, "w": 12, "h": 2, "settings": {}},
+            {"id": "chassis-map", "type": "chassis_diagram", "title": "Chassis Rear 변형 위치", "x": 0, "y": 2, "w": 7, "h": 5, "settings": {}},
+            {"id": "chassis-bar", "type": "chassis_bar", "title": "엣지·모서리 영구변형 비교", "x": 7, "y": 2, "w": 5, "h": 5, "settings": {"showThreshold": True}},
+            {"id": "chassis-table", "type": "chassis_table", "title": "영구변형 상세 결과", "x": 0, "y": 7, "w": 8, "h": 4, "settings": {}},
+            {"id": "chassis-note", "type": "note", "title": "수행자 의견", "x": 8, "y": 7, "w": 4, "h": 3, "settings": {}},
+        ],
+    }
+    encoded_chassis = json.dumps(chassis_layout, ensure_ascii=False)
+    now = _iso(datetime.now(timezone.utc))
+    conn.execute("INSERT OR IGNORE INTO dashboards VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", [chassis_layout["id"], "project-tv-001", "request-drop-001", "loadcase-drop-bottom-001", chassis_layout["name"], chassis_layout["description"], 1, encoded_chassis, now])
+    conn.execute("INSERT OR IGNORE INTO dashboard_versions VALUES (?, ?, ?, ?, ?, ?)", [chassis_layout["id"], 1, encoded_chassis, "system", now, True])
+
+
+def ensure_workspace_layouts(conn: duckdb.DuckDBPyConnection) -> None:
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    layouts = {
+        "portfolio": {"fontSize": 10, "chartOrder": ["trend", "status", "quality", "type"]},
+        "workflow": {"fontSize": 10, "accentColor": "#50d5ff", "items": []},
+    }
+    for kind, definition in layouts.items():
+        encoded = json.dumps(definition, ensure_ascii=False)
         conn.execute(
-            """
-            INSERT OR IGNORE INTO dashboard_versions
-            SELECT id, version, definition_json, 'system', updated_at, true FROM dashboards
-            """
+            "INSERT OR IGNORE INTO workspace_layouts VALUES (?, 1, ?, 'system', ?)",
+            [kind, encoded, now],
         )
-        ensure_report_layouts(conn)
-        chassis_layout = {
-            "id": "dashboard-chassis-default",
-            "name": "Chassis Rear 영구변형 기본 분석",
-            "description": "엣지 이격과 모서리 영구변형 평가",
-            "widgets": [
-                {"id": "chassis-summary", "type": "chassis_summary", "title": "영구변형 판정 요약", "x": 0, "y": 0, "w": 12, "h": 2, "settings": {}},
-                {"id": "chassis-map", "type": "chassis_diagram", "title": "Chassis Rear 변형 위치", "x": 0, "y": 2, "w": 7, "h": 5, "settings": {}},
-                {"id": "chassis-bar", "type": "chassis_bar", "title": "엣지·모서리 영구변형 비교", "x": 7, "y": 2, "w": 5, "h": 5, "settings": {"showThreshold": True}},
-                {"id": "chassis-table", "type": "chassis_table", "title": "영구변형 상세 결과", "x": 0, "y": 7, "w": 8, "h": 4, "settings": {}},
-                {"id": "chassis-note", "type": "note", "title": "수행자 의견", "x": 8, "y": 7, "w": 4, "h": 3, "settings": {}},
-            ],
-        }
-        encoded_chassis = json.dumps(chassis_layout, ensure_ascii=False)
-        now = _iso(datetime.now(timezone.utc))
-        conn.execute("INSERT OR IGNORE INTO dashboards VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", [chassis_layout["id"], "project-tv-001", "request-drop-001", "loadcase-drop-bottom-001", chassis_layout["name"], chassis_layout["description"], 1, encoded_chassis, now])
-        conn.execute("INSERT OR IGNORE INTO dashboard_versions VALUES (?, ?, ?, ?, ?, ?)", [chassis_layout["id"], 1, encoded_chassis, "system", now, True])
+        conn.execute(
+            "INSERT OR IGNORE INTO workspace_layout_versions VALUES (?, 1, ?, 'system', ?, true)",
+            [kind, encoded, now],
+        )
 
 
 def ensure_report_layouts(conn: duckdb.DuckDBPyConnection) -> None:

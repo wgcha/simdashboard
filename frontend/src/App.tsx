@@ -15,6 +15,7 @@ import {
   LayoutDashboard,
   LoaderCircle,
   Lock,
+  LogOut,
   MessageSquareText,
   Minus,
   PanelLeftClose,
@@ -47,6 +48,11 @@ import {
   YAxis,
 } from 'recharts'
 import { api } from './api'
+import { clearSession, saveSession, storedUser, type AuthUser } from './auth'
+import { useReportLayoutEditorState, useWorkspaceEditorCoordinator } from './editorState'
+import { DEFAULT_PORTFOLIO_LAYOUT, DEFAULT_WORKFLOW_DASHBOARD_LAYOUT, loadPortfolioLayout, loadWorkflowDashboardLayout } from './features/layouts/layoutDefaults'
+import { reportVariables, withReportVariables } from './features/reports/reportLayoutUtils'
+import { LoginScreen } from './features/auth/LoginScreen'
 import { PortfolioDashboard } from './PortfolioDashboard'
 import type { ReportExportOptions, ReportScope } from './reportExport'
 import type { AnalysisRequest, AnalysisRunSummary, AutomationTemplate, DashboardDefinition, DashboardSummary, DashboardVersion, DashboardWidget, FeatureExample, ImportSchema, LoadCase, Overview, PortfolioLayout, Project, QualityThreshold, ReportElementDefinition, ReportElementType, ReportLayout, ReportLayoutDefinition, ReportLayoutVersion, ReportSection, ReportSlideDefinition, ReportSlideKind, ReportTemplateAsset, ReviewItem, RunComparison, RunTrust, VariableDefinition, VariableDefinitionInput, WidgetCatalogItem, Workflow, WorkflowDashboardLayout, WorkflowStep } from './types'
@@ -60,61 +66,11 @@ function hasNumericValue(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
 }
 
-const DEFAULT_PORTFOLIO_LAYOUT: PortfolioLayout = {
-  fontSize: 10,
-  chartOrder: ['trend', 'status', 'quality', 'type'],
-}
-
-function loadPortfolioLayout(): PortfolioLayout {
-  try {
-    const saved = JSON.parse(localStorage.getItem('analysis-canvas.portfolio-layout') ?? '{}') as Partial<PortfolioLayout>
-    const savedOrder = Array.isArray(saved.chartOrder) ? saved.chartOrder : []
-    const hasValidOrder = savedOrder.length === DEFAULT_PORTFOLIO_LAYOUT.chartOrder.length
-      && DEFAULT_PORTFOLIO_LAYOUT.chartOrder.every((id) => savedOrder.includes(id))
-    return {
-      fontSize: typeof saved.fontSize === 'number' ? Math.min(18, Math.max(8, saved.fontSize)) : DEFAULT_PORTFOLIO_LAYOUT.fontSize,
-      chartOrder: hasValidOrder ? savedOrder : DEFAULT_PORTFOLIO_LAYOUT.chartOrder,
-    }
-  } catch {
-    return DEFAULT_PORTFOLIO_LAYOUT
-  }
-}
-
-const DEFAULT_WORKFLOW_DASHBOARD_LAYOUT: WorkflowDashboardLayout = {
-  fontSize: 10,
-  accentColor: '#50d5ff',
-  items: [],
-}
-
-function loadWorkflowDashboardLayout(): WorkflowDashboardLayout {
-  try {
-    const saved = JSON.parse(localStorage.getItem('analysis-canvas.workflow-dashboard-layout') ?? '{}') as Partial<WorkflowDashboardLayout>
-    return {
-      fontSize: typeof saved.fontSize === 'number' ? Math.min(18, Math.max(8, saved.fontSize)) : DEFAULT_WORKFLOW_DASHBOARD_LAYOUT.fontSize,
-      accentColor: typeof saved.accentColor === 'string' && /^#[0-9a-f]{6}$/i.test(saved.accentColor) ? saved.accentColor : DEFAULT_WORKFLOW_DASHBOARD_LAYOUT.accentColor,
-      items: Array.isArray(saved.items) ? saved.items.filter((item) => item && typeof item.requestId === 'string') : [],
-    }
-  } catch {
-    return { ...DEFAULT_WORKFLOW_DASHBOARD_LAYOUT, items: [] }
-  }
-}
-
-function reportVariables(overview: Overview) {
-  const items = new Map<string, string>()
-  overview.scalar_results.forEach((item) => items.set(item.variable_key, item.display_name))
-  overview.time_series.forEach((item) => items.set(item.variable_key, item.display_name))
-  return [...items].map(([key, name]) => ({ key, name }))
-}
-
-function withReportVariables(layout: ReportLayoutDefinition, overview: Overview): ReportLayoutDefinition {
-  if (layout.variablePlacements.length) return { ...layout, variablePlacements: [...layout.variablePlacements].sort((a, b) => a.order - b.order) }
-  return {
-    ...layout,
-    variablePlacements: reportVariables(overview).map((item, order) => ({ variableKey: item.key, presentation: 'both', order })),
-  }
-}
-
 function App() {
+  const [authReady, setAuthReady] = useState(false)
+  const [authRequired, setAuthRequired] = useState(false)
+  const [authUser, setAuthUser] = useState<AuthUser | null>(storedUser)
+  const [authError, setAuthError] = useState('')
   const [overview, setOverview] = useState<Overview | null>(null)
   const [projects, setProjects] = useState<Project[]>([])
   const [requests, setRequests] = useState<AnalysisRequest[]>([])
@@ -127,13 +83,15 @@ function App() {
   const [dashboard, setDashboard] = useState<DashboardDefinition | null>(null)
   const [activeView, setActiveView] = useState<ActiveView>('workflow')
   const [workspacePage, setWorkspacePage] = useState<WorkspacePage>('portfolio')
-  const [editMode, setEditMode] = useState(false)
+  const workspaceEditor = useWorkspaceEditorCoordinator()
+  const editMode = workspaceEditor.isEditing
   const [assistantOpen, setAssistantOpen] = useState(false)
   const [command, setCommand] = useState('')
   const [proposal, setProposal] = useState<Awaited<ReturnType<typeof api.previewCommand>> | null>(null)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
+  const [databaseBackend, setDatabaseBackend] = useState<'duckdb' | 'postgresql'>('duckdb')
   const [selectedEdges, setSelectedEdges] = useState<string[]>(['top', 'bottom', 'left', 'right'])
   const [widgetCatalog, setWidgetCatalog] = useState<WidgetCatalogItem[]>([])
   const [variables, setVariables] = useState<VariableDefinition[]>([])
@@ -149,14 +107,47 @@ function App() {
   const [reportLayoutDraft, setReportLayoutDraft] = useState<ReportLayoutDefinition | null>(null)
   const [reportLayoutVersions, setReportLayoutVersions] = useState<ReportLayoutVersion[]>([])
   const [reportTemplates, setReportTemplates] = useState<ReportTemplateAsset[]>([])
-  const [reportLayoutManaging, setReportLayoutManaging] = useState(false)
+  const reportLayoutEditor = useReportLayoutEditorState()
   const [portfolioLayout, setPortfolioLayout] = useState<PortfolioLayout>(loadPortfolioLayout)
   const [workflowDashboardLayout, setWorkflowDashboardLayout] = useState<WorkflowDashboardLayout>(loadWorkflowDashboardLayout)
-  const [workflowEditorMode, setWorkflowEditorMode] = useState<'stages' | 'layout' | null>(null)
+  const [portfolioLayoutVersion, setPortfolioLayoutVersion] = useState(1)
+  const [workflowLayoutVersion, setWorkflowLayoutVersion] = useState(1)
+  const workflowEditorMode = workspaceEditor.isWorkflowLayout ? 'layout' : workspaceEditor.isWorkflowStages ? 'stages' : null
   const portfolioLayoutBeforeEdit = useRef<PortfolioLayout | null>(null)
   const dashboardBeforeEdit = useRef<DashboardDefinition | null>(null)
   const workflowsBeforeEdit = useRef<Workflow[] | null>(null)
   const workflowLayoutBeforeEdit = useRef<WorkflowDashboardLayout | null>(null)
+
+  useEffect(() => {
+    const prepareAuthentication = async () => {
+      try {
+        const status = await api.authStatus()
+        setAuthRequired(status.authentication_required)
+        if (status.authentication_required && authUser) {
+          const verified = await api.me()
+          setAuthUser(verified)
+        } else if (!status.authentication_required) {
+          setAuthUser(null)
+        }
+      } catch (reason) {
+        clearSession()
+        setAuthUser(null)
+        setAuthError(reason instanceof Error ? reason.message : '인증 상태를 확인하지 못했습니다.')
+      } finally {
+        setAuthReady(true)
+      }
+    }
+    void prepareAuthentication()
+  }, [])
+
+  useEffect(() => {
+    const expired = () => {
+      setAuthUser(null)
+      setAuthError('로그인 세션이 만료되었습니다. 다시 로그인하세요.')
+    }
+    window.addEventListener('analysis-auth-expired', expired)
+    return () => window.removeEventListener('analysis-auth-expired', expired)
+  }, [])
 
   useEffect(() => {
     if (workspacePage !== 'portfolio' && portfolioLayoutBeforeEdit.current) {
@@ -175,16 +166,24 @@ function App() {
       setWorkflowDashboardLayout(workflowLayoutBeforeEdit.current)
       workflowLayoutBeforeEdit.current = null
     }
-    setEditMode(false)
-    setWorkflowEditorMode(null)
+    workspaceEditor.close()
     setSelectedWidgetId(null)
     setAssistantOpen(false)
   }, [workspacePage])
 
   useEffect(() => {
+    if (!authReady || (authRequired && !authUser)) return
     const bootstrap = async () => {
+      setLoading(true)
       try {
-        const [projectData, workflowData, dashboardData] = await Promise.all([api.projects(), api.workflows(), api.dashboard()])
+        const [health, projectData, workflowData, dashboardData, storedPortfolioLayout, storedWorkflowLayout] = await Promise.all([
+          api.health(),
+          api.projects(),
+          api.workflows(),
+          api.dashboard(),
+          api.workspaceLayout<PortfolioLayout>('portfolio'),
+          api.workspaceLayout<WorkflowDashboardLayout>('workflow'),
+        ])
         const project = projectData[0]
         if (!project) throw new Error('등록된 프로젝트가 없습니다.')
         const requestData = await api.requests(project.id)
@@ -195,6 +194,7 @@ function App() {
         if (!loadCase) throw new Error('등록된 하중 경우가 없습니다.')
         const overviewData = await api.overview(loadCase.id)
         setProjects(projectData)
+        setDatabaseBackend(health.database_backend)
         setRequests(requestData)
         setLoadCases(caseData)
         setThresholds(thresholdData)
@@ -204,6 +204,10 @@ function App() {
         setOverview(overviewData)
         setWorkflows(workflowData)
         setDashboard(dashboardData)
+        setPortfolioLayout(storedPortfolioLayout.definition)
+        setPortfolioLayoutVersion(storedPortfolioLayout.version)
+        setWorkflowDashboardLayout(storedWorkflowLayout.definition)
+        setWorkflowLayoutVersion(storedWorkflowLayout.version)
         setActiveView('workflow')
       } catch (reason) {
         setError(reason instanceof Error ? reason.message : '초기 데이터를 불러오지 못했습니다.')
@@ -212,7 +216,27 @@ function App() {
       }
     }
     bootstrap()
-  }, [])
+  }, [authReady, authRequired, authUser?.id])
+
+  const handleLogin = async (username: string, password: string) => {
+    setAuthError('')
+    try {
+      const result = await api.login(username, password)
+      saveSession(result.access_token, result.user)
+      setAuthUser(result.user)
+    } catch (reason) {
+      setAuthError(reason instanceof Error ? reason.message : '로그인하지 못했습니다.')
+      throw reason
+    }
+  }
+
+  const logout = async () => {
+    try { await api.logout() } catch { /* clear the local session even if the server is unavailable */ }
+    clearSession()
+    setAuthUser(null)
+    setOverview(null)
+    setLoading(true)
+  }
 
   useEffect(() => {
     if (activeView !== 'open_cell' && activeView !== 'chassis') return
@@ -291,10 +315,12 @@ function App() {
   const save = async () => {
     if (workspacePage === 'portfolio') {
       try {
-        localStorage.setItem('analysis-canvas.portfolio-layout', JSON.stringify(portfolioLayout))
+        const stored = await api.saveWorkspaceLayout('portfolio', portfolioLayout)
+        setPortfolioLayout(stored.definition)
+        setPortfolioLayoutVersion(stored.version)
         portfolioLayoutBeforeEdit.current = null
-        setEditMode(false)
-        setNotice('운영 대시보드 설정을 저장했습니다.')
+        workspaceEditor.close()
+        setNotice(`운영 대시보드 설정 v${stored.version}을 저장했습니다.`)
         setTimeout(() => setNotice(''), 2600)
       } catch (reason) {
         setError(reason instanceof Error ? reason.message : '운영 대시보드 설정을 저장하지 못했습니다.')
@@ -304,11 +330,12 @@ function App() {
     if (activeView === 'workflow') {
       if (workflowEditorMode === 'layout') {
         try {
-          localStorage.setItem('analysis-canvas.workflow-dashboard-layout', JSON.stringify(workflowDashboardLayout))
+          const stored = await api.saveWorkspaceLayout('workflow', workflowDashboardLayout)
+          setWorkflowDashboardLayout(stored.definition)
+          setWorkflowLayoutVersion(stored.version)
           workflowLayoutBeforeEdit.current = null
-          setWorkflowEditorMode(null)
-          setEditMode(false)
-          setNotice('진행 현황 대시보드 레이아웃을 저장했습니다.')
+          workspaceEditor.close()
+          setNotice(`진행 현황 대시보드 레이아웃 v${stored.version}을 저장했습니다.`)
           setTimeout(() => setNotice(''), 2600)
         } catch (reason) {
           setError(reason instanceof Error ? reason.message : '진행 현황 레이아웃을 저장하지 못했습니다.')
@@ -316,7 +343,7 @@ function App() {
         return
       }
       const original = workflowsBeforeEdit.current
-      if (!original) { setEditMode(false); return }
+      if (!original) { workspaceEditor.close(); return }
       const signature = (steps: WorkflowStep[]) => JSON.stringify(steps.map((step) => ({ id: step.id, name: step.name, status: step.status, owner: step.owner, progress: step.progress, is_optional: step.is_optional, note: step.note ?? '' })))
       const originalByRequest = new Map(original.map((workflow) => [workflow.request.id, workflow]))
       const changed = workflows.filter((workflow) => signature(workflow.steps) !== signature(originalByRequest.get(workflow.request.id)?.steps ?? []))
@@ -326,8 +353,7 @@ function App() {
         await Promise.all(changed.map((workflow) => api.replaceWorkflowSteps(workflow.request.id, workflow.steps.map((step) => ({ id: step.id.startsWith('draft-step-') ? null : step.id, name: step.name.trim(), status: step.status, owner: step.owner.trim(), progress: step.progress, is_optional: step.is_optional, note: step.note ?? '' })))))
         setWorkflows(await api.workflows())
         workflowsBeforeEdit.current = null
-        setWorkflowEditorMode(null)
-        setEditMode(false)
+        workspaceEditor.close()
         setNotice(changed.length ? `의뢰 ${changed.length}건의 진행 단계를 저장했습니다.` : '변경된 작업 단계가 없습니다.')
         setTimeout(() => setNotice(''), 2600)
       } catch (reason) {
@@ -342,7 +368,7 @@ function App() {
       dashboardBeforeEdit.current = null
       setNotice(`레이아웃 v${result.version} 저장 완료`)
       setTimeout(() => setNotice(''), 2600)
-      setEditMode(false)
+      workspaceEditor.close()
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '저장하지 못했습니다.')
     }
@@ -352,19 +378,17 @@ function App() {
     if (workspacePage === 'portfolio') portfolioLayoutBeforeEdit.current = { ...portfolioLayout, chartOrder: [...portfolioLayout.chartOrder] }
     if (workspacePage === 'dashboard' && activeView !== 'workflow' && dashboard) dashboardBeforeEdit.current = structuredClone(dashboard)
     setSelectedWidgetId(null)
-    setEditMode(true)
+    workspaceEditor.open(workspacePage === 'portfolio' ? 'portfolio-layout' : 'analysis-dashboard')
   }
 
   const beginWorkflowStageEditing = () => {
     workflowsBeforeEdit.current = structuredClone(workflows)
-    setWorkflowEditorMode('stages')
-    setEditMode(true)
+    workspaceEditor.open('workflow-stages')
   }
 
   const beginWorkflowLayoutEditing = () => {
     workflowLayoutBeforeEdit.current = structuredClone(workflowDashboardLayout)
-    setWorkflowEditorMode('layout')
-    setEditMode(true)
+    workspaceEditor.open('workflow-layout')
   }
 
   const cancelEditing = () => {
@@ -386,8 +410,7 @@ function App() {
     }
     setSelectedWidgetId(null)
     setAssistantOpen(false)
-    setWorkflowEditorMode(null)
-    setEditMode(false)
+    workspaceEditor.close()
   }
 
   const resetPortfolioLayout = () => {
@@ -426,6 +449,7 @@ function App() {
 
   const applyProposal = () => {
     if (!dashboard || !proposal?.proposal) return
+    if (!dashboardBeforeEdit.current) dashboardBeforeEdit.current = structuredClone(dashboard)
     if (proposal.proposal.action === 'add_widget') setDashboard({ ...dashboard, widgets: [...dashboard.widgets, proposal.proposal.widget] })
     else {
       const updates = proposal.proposal.updates
@@ -434,7 +458,7 @@ function App() {
     setProposal(null)
     setCommand('')
     setAssistantOpen(false)
-    setEditMode(true)
+    workspaceEditor.open('analysis-dashboard')
     setNotice('변경안을 적용했습니다. 저장하면 새 버전이 생성됩니다.')
     setTimeout(() => setNotice(''), 3000)
   }
@@ -451,11 +475,12 @@ function App() {
 
   const addCatalogWidget = (item: WidgetCatalogItem) => {
     if (!dashboard) return
+    if (!dashboardBeforeEdit.current) dashboardBeforeEdit.current = structuredClone(dashboard)
     const variable = variables.find((entry) => entry.id === catalogVariable)
     if (variable && !item.allowed_data_types.includes(variable.data_type)) { setNotice(`${variable.display_name}에는 ${item.label}을 사용할 수 없습니다.`); return }
     const [w, h] = item.default_size
     setDashboard({ ...dashboard, widgets: [...dashboard.widgets, { id: `${item.type}-${Date.now()}`, type: item.type, title: variable ? `${variable.display_name} · ${item.label}` : item.label, x: 0, y: 30, w, h, settings: { variableId: variable?.id } }] })
-    setEditMode(true); setNotice('위젯을 추가했습니다. 위치를 조정한 뒤 저장하세요.')
+    workspaceEditor.open('analysis-dashboard'); setNotice('위젯을 추가했습니다. 위치를 조정한 뒤 저장하세요.')
   }
 
   const cloneLayout = async () => {
@@ -539,7 +564,7 @@ function App() {
       setReportLayoutDraft(withReportVariables(normalizeReportLayout(selected), scopedOverview))
       setReportLayoutVersions(layoutVersions)
       setReportTemplates(templates)
-      setReportLayoutManaging(false)
+      reportLayoutEditor.close()
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '보고서 레이아웃을 불러오지 못했습니다.')
     }
@@ -682,6 +707,14 @@ function App() {
     }
   }
 
+  if (!authReady) {
+    return <div className="full-state"><LoaderCircle className="spin" /> 인증 설정을 확인하고 있습니다.</div>
+  }
+
+  if (authRequired && !authUser) {
+    return <LoginScreen error={authError} onLogin={handleLogin} />
+  }
+
   if (loading) {
     return <div className="full-state"><LoaderCircle className="spin" /> 데이터와 레이아웃을 준비하고 있습니다.</div>
   }
@@ -695,6 +728,7 @@ function App() {
   const chassisAvailable = overview.analysis_verdicts.chassis_rear !== 'NO_DATA'
   const workflowProgress = Math.round(projectWorkflows.reduce((sum, workflow) => sum + workflow.progress, 0) / Math.max(projectWorkflows.length, 1))
   const chassisThreshold = thresholds.find((item) => item.criterion_key === 'chassis_rear_permanent_deformation_mm')
+  const canEdit = !authRequired || authUser?.role === 'editor' || authUser?.role === 'admin'
 
   return (
     <div className="app-shell">
@@ -711,8 +745,9 @@ function App() {
           <button className={workspacePage === 'help' ? 'active' : ''} onClick={() => setWorkspacePage('help')}><BookOpen /><span>도움말</span></button>
         </nav>
         <div className="sidebar-foot">
-          <div className="system-pill"><span className="live-dot" /> DUCKDB · LOCAL</div>
-          <button><PanelLeftClose /> 메뉴 접기</button>
+          {authUser && <div className="signed-user"><strong>{authUser.display_name}</strong><span>{authUser.role.toUpperCase()}</span></div>}
+          <div className="system-pill"><span className="live-dot" /> {databaseBackend.toUpperCase()} · {databaseBackend === 'postgresql' ? 'SERVER' : 'LOCAL'}</div>
+          {authUser ? <button onClick={() => void logout()}><LogOut /> 로그아웃</button> : <button><PanelLeftClose /> 메뉴 접기</button>}
         </div>
       </aside>
 
@@ -720,20 +755,20 @@ function App() {
         <header className="topbar">
           <div className="breadcrumb">{workspacePage === 'portfolio' ? <><span>운영</span><b>/</b><strong>해석 운영 현황</strong></> : workspacePage === 'data' ? <><span>운영</span><b>/</b><strong>해석 데이터 등록</strong></> : workspacePage === 'schemas' ? <><span>데이터 설계</span><b>/</b><strong>폴더 스키마</strong></> : workspacePage === 'variables' ? <><span>설계</span><b>/</b><strong>변수 카탈로그</strong></> : workspacePage === 'templates' ? <><span>자동화</span><b>/</b><strong>모델링 템플릿</strong></> : workspacePage === 'examples' ? <><span>지원</span><b>/</b><strong>기능 예제 갤러리</strong></> : workspacePage === 'help' ? <><span>지원</span><b>/</b><strong>사용 시나리오 도움말</strong></> : <><span>프로젝트</span><b>/</b><span>{overview.load_case.project_name}</span><b>/</b><strong>{overview.load_case.name}</strong></>}</div>
           <div className="top-actions">
-            {workspacePage === 'dashboard' && activeView !== 'compare' && activeView !== 'workflow' && <button className="ghost-button" onClick={() => setAssistantOpen(true)}><Sparkles /> 자연어로 개선</button>}
-            {workspacePage === 'dashboard' && activeView === 'workflow' ? (editMode ? (
+            {canEdit && workspacePage === 'dashboard' && activeView !== 'compare' && activeView !== 'workflow' && <button className="ghost-button" onClick={() => setAssistantOpen(true)}><Sparkles /> 자연어로 개선</button>}
+            {canEdit && (workspacePage === 'dashboard' && activeView === 'workflow' ? (editMode ? (
               <button className="primary-button" onClick={save}><Save /> {workflowEditorMode === 'layout' ? '대시보드 레이아웃 저장' : '단계 변경 저장'}</button>
             ) : <div className="workflow-top-edit-actions">
               <button className="edit-button" onClick={beginWorkflowLayoutEditing}><LayoutDashboard /> 대시보드 편집</button>
               <button className="edit-button" onClick={beginWorkflowStageEditing}><Settings2 /> 진행 단계 편집</button>
             </div>) : ((workspacePage === 'dashboard' && activeView !== 'compare') || workspacePage === 'portfolio') && (editMode ? (
               <button className="primary-button" onClick={save}><Save /> {workspacePage === 'portfolio' ? '운영 설정 저장' : '레이아웃 저장'}</button>
-            ) : <button className="edit-button" onClick={beginEditing}><Settings2 /> 대시보드 편집</button>)}
-            <div className="avatar">HK</div>
+            ) : <button className="edit-button" onClick={beginEditing}><Settings2 /> 대시보드 편집</button>))}
+            <div className="avatar">{authUser ? authUser.display_name.slice(0, 2) : 'HK'}</div>
           </div>
         </header>
 
-        {workspacePage === 'portfolio' ? <PortfolioDashboard editMode={editMode} layout={portfolioLayout} onLayoutChange={setPortfolioLayout} onCancelEdit={cancelEditing} onResetLayout={resetPortfolioLayout} onOpen={(projectId, requestId, loadCaseId) => void openImportedResult(projectId, requestId, loadCaseId)} /> : workspacePage === 'schemas' ? <FolderSchemaWorkspace /> : workspacePage === 'variables' ? <VariableCatalogPage variables={variables} overview={overview} loadCaseId={selectedLoadCaseId} onChanged={(items) => { setVariables(items); setCatalogVariable((current) => items.some((item) => item.id === current) ? current : items[0]?.id ?? '') }} /> : workspacePage === 'templates' ? <AutomationTemplatesPage /> : workspacePage === 'examples' ? <FeatureExampleGallery onOpen={openFeatureExample} /> : workspacePage === 'help' ? <HelpCenter onNavigate={setWorkspacePage} /> : workspacePage === 'data' ? (
+        {workspacePage === 'portfolio' ? <PortfolioDashboard editMode={editMode} layout={portfolioLayout} layoutVersion={portfolioLayoutVersion} onLayoutChange={setPortfolioLayout} onCancelEdit={cancelEditing} onResetLayout={resetPortfolioLayout} onOpen={(projectId, requestId, loadCaseId) => void openImportedResult(projectId, requestId, loadCaseId)} /> : workspacePage === 'schemas' ? <FolderSchemaWorkspace /> : workspacePage === 'variables' ? <VariableCatalogPage variables={variables} overview={overview} loadCaseId={selectedLoadCaseId} onChanged={(items) => { setVariables(items); setCatalogVariable((current) => items.some((item) => item.id === current) ? current : items[0]?.id ?? '') }} /> : workspacePage === 'templates' ? <AutomationTemplatesPage /> : workspacePage === 'examples' ? <FeatureExampleGallery onOpen={openFeatureExample} /> : workspacePage === 'help' ? <HelpCenter onNavigate={setWorkspacePage} /> : workspacePage === 'data' ? (
           <DataWorkspace projects={projects} initialProjectId={selectedProjectId} onDataChanged={refreshOperationalData} onOpenAnalysis={openImportedResult} />
         ) : <>
         <section className="content-head">
@@ -762,7 +797,7 @@ function App() {
         </nav>{activeView === 'open_cell' && <EdgeFilter selected={selectedEdges} setSelected={setSelectedEdges} />}</section>}
 
         {editMode && (
-          <div className="edit-banner"><GripVertical /><span><strong>{activeView === 'workflow' && workflowEditorMode === 'layout' ? '대시보드 레이아웃 편집' : activeView === 'workflow' ? '진행 단계 편집' : '편집 모드'}</strong> {activeView === 'workflow' && workflowEditorMode === 'layout' ? '의뢰 위젯을 이동·리사이즈하고 색상과 글자 크기를 조절한 뒤 상단에서 저장하세요.' : activeView === 'workflow' ? '단계 내용·순서·추가·삭제를 편집한 뒤 상단의 단계 변경 저장을 누르세요.' : '위젯을 드래그하거나 모서리를 잡아 크기를 조절하고 설정 버튼으로 그래프, 변수, 글자 크기를 바꾸세요.'}</span><button onClick={cancelEditing}>편집 취소</button></div>
+          <div className="edit-banner" data-testid={workspaceEditor.mode ?? undefined}><GripVertical /><span><strong>{activeView === 'workflow' && workflowEditorMode === 'layout' ? '대시보드 레이아웃 편집' : activeView === 'workflow' ? '진행 단계 편집' : '편집 모드'}</strong> {activeView === 'workflow' && workflowEditorMode === 'layout' ? '의뢰 위젯을 이동·리사이즈하고 색상과 글자 크기를 조절한 뒤 상단에서 저장하세요.' : activeView === 'workflow' ? '단계 내용·순서·추가·삭제를 편집한 뒤 상단의 단계 변경 저장을 누르세요.' : '위젯을 드래그하거나 모서리를 잡아 크기를 조절하고 설정 버튼으로 그래프, 변수, 글자 크기를 바꾸세요.'}</span><button onClick={cancelEditing}>편집 취소</button></div>
         )}
         {editMode && activeView === 'workflow' && workflowEditorMode === 'layout' && <div className="workflow-layout-toolbar">
           <label><span>강조 색상</span><input aria-label="진행 현황 강조 색상" type="color" value={workflowDashboardLayout.accentColor} onChange={(event) => setWorkflowDashboardLayout({ ...workflowDashboardLayout, accentColor: event.target.value })}/><code>{workflowDashboardLayout.accentColor}</code></label>
@@ -800,7 +835,7 @@ function App() {
               ))}
             </ResponsiveGridLayout>
           ) : (
-            <WorkflowView workflows={projectWorkflows} stageEditMode={editMode && workflowEditorMode === 'stages'} layoutEditMode={editMode && workflowEditorMode === 'layout'} dashboardLayout={workflowDashboardLayout} onDashboardLayoutChange={setWorkflowDashboardLayout} onStepChange={updateWorkflowStepDraft} onAddStep={addWorkflowStepDraft} onDeleteStep={deleteWorkflowStepDraft} onMoveStep={moveWorkflowStepDraft} onOpenAnalysis={openWorkflowAnalysis} activeRequestId={selectedRequestId} />
+            <WorkflowView workflows={projectWorkflows} stageEditMode={editMode && workflowEditorMode === 'stages'} layoutEditMode={editMode && workflowEditorMode === 'layout'} dashboardLayout={workflowDashboardLayout} layoutVersion={workflowLayoutVersion} onDashboardLayoutChange={setWorkflowDashboardLayout} onStepChange={updateWorkflowStepDraft} onAddStep={addWorkflowStepDraft} onDeleteStep={deleteWorkflowStepDraft} onMoveStep={moveWorkflowStepDraft} onOpenAnalysis={openWorkflowAnalysis} activeRequestId={selectedRequestId} />
           )}
         </section>
         </>}
@@ -845,9 +880,9 @@ function App() {
             <div className="report-layout-toolbar">
               <label><span>출력 레이아웃</span><select value={reportLayoutDraft.id} onChange={(event) => void selectReportLayout(event.target.value)}>{reportLayouts.map((item) => <option key={item.id} value={item.id}>{item.name} · v{item.version}</option>)}</select></label>
               <label className="report-version-select"><span>출력 버전</span><select value={reportLayoutDraft.version} onChange={(event) => void selectReportLayoutVersion(Number(event.target.value))}>{reportLayoutVersions.map((item) => <option key={item.version} value={item.version}>v{item.version} · {new Date(item.created_at).toLocaleDateString('ko-KR')}</option>)}</select></label>
-              <button onClick={() => setReportLayoutManaging((value) => !value)}><Settings2 /> {reportLayoutManaging ? '편집 닫기' : '레이아웃 편집·관리'}</button>
+              <button onClick={reportLayoutEditor.toggle}><Settings2 /> {reportLayoutEditor.isEditing ? '편집 닫기' : '레이아웃 편집·관리'}</button>
             </div>
-            {reportLayoutManaging && <ReportLayoutEditor layout={reportLayoutDraft} overview={reportOverview} templates={reportTemplates} isSystem={Boolean(reportLayouts.find((item) => item.id === reportLayoutDraft.id)?.is_system)} onChange={setReportLayoutDraft} onTemplateUpload={(file) => void uploadReportTemplate(file)} onTemplateDelete={(id) => void removeReportTemplate(id)} onSave={() => void saveReportLayout(false)} onSaveAs={() => void saveReportLayout(true)} onDelete={() => void removeReportLayout()} />}
+            {reportLayoutEditor.isEditing && <div data-testid="ppt-layout-editor"><ReportLayoutEditor layout={reportLayoutDraft} overview={reportOverview} templates={reportTemplates} isSystem={Boolean(reportLayouts.find((item) => item.id === reportLayoutDraft.id)?.is_system)} onChange={setReportLayoutDraft} onTemplateUpload={(file) => void uploadReportTemplate(file)} onTemplateDelete={(id) => void removeReportTemplate(id)} onSave={() => void saveReportLayout(false)} onSaveAs={() => void saveReportLayout(true)} onDelete={() => void removeReportLayout()} /></div>}
             <div className="report-export-grid">
               <label><span>작성자 *</span><input value={reportDraft.author} onChange={(event) => updateReportDraft('author', event.target.value)} placeholder="홍길동" /></label>
               <label><span>개발단계 *</span><input value={reportDraft.developmentStage} onChange={(event) => updateReportDraft('developmentStage', event.target.value)} placeholder="DV 1차" /></label>
@@ -1024,7 +1059,7 @@ function HelpCenter({ onNavigate }: { onNavigate: (page: WorkspacePage) => void 
     { title: '이전 Run과 비교하고 검토 의견 남기기', steps: ['해석 상세에서 Run 비교·검토 탭을 엽니다.', '기준 Run과 대상 Run을 선택해 회귀·개선 및 공통 시계열을 확인합니다.', '데이터 신뢰도에서 출처·카탈로그·단위·검증 경고를 확인합니다.', '변수와 시점을 선택해 북마크·검토 의견을 저장하고 상태를 관리합니다.'], action: 'dashboard' as const, label: 'Run 비교 열기' },
     { title: '예제로 전체 기능 빠르게 둘러보기', steps: ['예제 갤러리에서 확인할 기능이나 상태를 고릅니다.', '카드의 기대 결과와 데이터 구성을 먼저 읽습니다.', '예제 열기로 이동해 확인 목록을 따라 기능을 직접 사용합니다.'], action: 'examples' as const, label: '예제 갤러리 열기' },
   ]
-  return <section className="help-center"><header><span>SCENARIO GUIDE</span><h1>Analysis Canvas 사용 도움말</h1><p>하려는 작업을 기준으로 필요한 화면과 데이터 흐름을 안내합니다.</p></header><div className="help-flow"><strong>핵심 데이터 흐름</strong><div><span>폴더 스키마</span><b>→</b><span>결과 테이블</span><b>→</b><span>변수 카탈로그</span><b>→</b><span>대시보드·PPT</span></div><p>변수 카탈로그는 값을 저장하지 않습니다. 결과 테이블의 <code>variable_key</code>를 해석하고 표시하는 계약입니다.</p></div><div className="help-scenarios">{scenarios.map((scenario, index) => <article key={scenario.title}><span>0{index + 1}</span><h2>{scenario.title}</h2><ol>{scenario.steps.map((step) => <li key={step}>{step}</li>)}</ol><button onClick={() => onNavigate(scenario.action)}>{scenario.label}</button></article>)}</div><aside><AlertTriangle /><div><strong>PostgreSQL 전환 전 확인</strong><p>현재 실행 백엔드는 DuckDB입니다. PostgreSQL은 어댑터·Alembic migration·데이터 검증 CLI를 구현한 뒤 환경변수로 전환해야 하며, DB 접속 정보나 SQL을 프런트엔드에 노출하면 안 됩니다.</p></div></aside></section>
+  return <section className="help-center"><header><span>SCENARIO GUIDE</span><h1>Analysis Canvas 사용 도움말</h1><p>하려는 작업을 기준으로 필요한 화면과 데이터 흐름을 안내합니다.</p></header><div className="help-flow"><strong>핵심 데이터 흐름</strong><div><span>폴더 스키마</span><b>→</b><span>결과 테이블</span><b>→</b><span>변수 카탈로그</span><b>→</b><span>대시보드·PPT</span></div><p>변수 카탈로그는 값을 저장하지 않습니다. 결과 테이블의 <code>variable_key</code>를 해석하고 표시하는 계약입니다.</p></div><div className="help-scenarios">{scenarios.map((scenario, index) => <article key={scenario.title}><span>0{index + 1}</span><h2>{scenario.title}</h2><ol>{scenario.steps.map((step) => <li key={step}>{step}</li>)}</ol><button onClick={() => onNavigate(scenario.action)}>{scenario.label}</button></article>)}</div><aside><AlertTriangle /><div><strong>외부 배포 전 확인</strong><p>PostgreSQL 어댑터·Alembic·데이터 검증·로그인·역할 권한·감사·백업 도구가 준비되어 있습니다. 외부 공개 시에는 HTTPS, <code>AUTH_MODE=password</code>, 별도 DB 역할과 복구 시험을 반드시 적용하세요.</p></div></aside></section>
 }
 
 function ComparisonWorkspace({ loadCaseId, currentRunId }: { loadCaseId: string; currentRunId: string }) {
@@ -1583,11 +1618,12 @@ function ChassisRearDashboard({ overview, threshold, onSaveThreshold }: { overvi
   </div>
 }
 
-function WorkflowView({ workflows, stageEditMode, layoutEditMode, dashboardLayout, onDashboardLayoutChange, onStepChange, onAddStep, onDeleteStep, onMoveStep, onOpenAnalysis, activeRequestId }: {
+function WorkflowView({ workflows, stageEditMode, layoutEditMode, dashboardLayout, layoutVersion, onDashboardLayoutChange, onStepChange, onAddStep, onDeleteStep, onMoveStep, onOpenAnalysis, activeRequestId }: {
   workflows: Workflow[]
   stageEditMode: boolean
   layoutEditMode: boolean
   dashboardLayout: WorkflowDashboardLayout
+  layoutVersion: number
   onDashboardLayoutChange: (layout: WorkflowDashboardLayout) => void
   onStepChange: (stepId: string, patch: Partial<WorkflowStep>) => void
   onAddStep: (requestId: string) => void
@@ -1632,7 +1668,7 @@ function WorkflowView({ workflows, stageEditMode, layoutEditMode, dashboardLayou
   </section>
 
   return <div className={`workflow-board ${layoutEditMode ? 'layout-editing' : ''}`} style={{ '--workflow-accent': dashboardLayout.accentColor, '--workflow-font-size': `${dashboardLayout.fontSize}px` } as CSSProperties}>
-    <section className="workflow-board-head"><div><span>CONCURRENT REQUEST BOARD</span><h2>의뢰 작업 진행 현황</h2><p>{workflows.length}개 의뢰 · {activeCount}개 동시 진행</p></div><label>정렬 기준<select value={sortKey} onChange={(event) => setSortKey(event.target.value as typeof sortKey)}><option value="project">프로젝트(제품)별</option><option value="category">의뢰별 카테고리</option><option value="product">제품 이름순</option><option value="owner">작업자 이름</option><option value="time">시간순</option></select></label></section>
+    <section className="workflow-board-head"><div><span>CONCURRENT REQUEST BOARD · LAYOUT v{layoutVersion}</span><h2>의뢰 작업 진행 현황</h2><p>{workflows.length}개 의뢰 · {activeCount}개 동시 진행</p></div><label>정렬 기준<select value={sortKey} onChange={(event) => setSortKey(event.target.value as typeof sortKey)}><option value="project">프로젝트(제품)별</option><option value="category">의뢰별 카테고리</option><option value="product">제품 이름순</option><option value="owner">작업자 이름</option><option value="time">시간순</option></select></label></section>
     <ResponsiveGridLayout className="workflow-dashboard-grid" layouts={{ lg: gridLayout }} breakpoints={{ lg: 900, md: 600, sm: 0 }} cols={{ lg: 12, md: 8, sm: 1 }} rowHeight={84} margin={[14, 14]} isDraggable={layoutEditMode} isResizable={layoutEditMode} draggableHandle=".workflow-lane-drag-handle" compactType="vertical" onLayoutChange={updateGridLayout}>
       {ordered.map((workflow) => <div key={workflow.request.id}>{renderLane(workflow)}</div>)}
     </ResponsiveGridLayout>
@@ -1641,7 +1677,7 @@ function WorkflowView({ workflows, stageEditMode, layoutEditMode, dashboardLayou
 
 function WorkflowStepItem({ step, last, editMode, onChange, onMove, onDelete }: { step: WorkflowStep; last: boolean; editMode: boolean; onChange: (patch: Partial<WorkflowStep>) => void; onMove: (offset: -1 | 1) => void; onDelete: () => void }) {
   const statusText = { COMPLETED: '완료', IN_PROGRESS: '진행 중', WAITING: '대기', BLOCKED: '차단', FAILED: '실패' }[step.status]
-  return <div className={`workflow-step-horizontal ${step.status.toLowerCase()} ${editMode ? 'editing' : ''}`}>
+  return <div className={`workflow-step-horizontal ${step.status.toLowerCase()} ${editMode ? 'editing' : ''}`} data-testid={step.id.startsWith('draft-step-') ? 'draft-workflow-step' : undefined}>
     <div className="step-track-horizontal"><span>{step.status === 'COMPLETED' ? <Check /> : step.sequence_no}</span>{!last && <i />}</div>
     {editMode ? <div className="workflow-step-editor">
       <div className="workflow-step-actions"><button aria-label={`${step.sequence_no}단계 앞으로 이동`} onClick={() => onMove(-1)} disabled={step.sequence_no === 1}><ArrowLeft /></button><button aria-label={`${step.sequence_no}단계 뒤로 이동`} onClick={() => onMove(1)} disabled={last}><ArrowRight /></button><button className="danger" aria-label={`${step.sequence_no}단계 삭제`} onClick={onDelete}><Trash2 /></button></div>

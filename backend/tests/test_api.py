@@ -1,6 +1,7 @@
 import json
 import base64
 import io
+import os
 import shutil
 import zipfile
 from pathlib import Path
@@ -10,6 +11,25 @@ from fastapi.testclient import TestClient
 from app.database import connect, initialize_database
 from app.main import app
 from app.media_policy import validate_media_metadata
+
+
+def test_workspace_layout_versions_are_persisted():
+    initialize_database()
+    with TestClient(app) as client:
+        initial = client.get("/api/workspace-layouts/portfolio")
+        assert initial.status_code == 200
+        original = initial.json()
+        changed_definition = {**original["definition"], "fontSize": 11 if original["definition"]["fontSize"] != 11 else 12}
+        try:
+            saved = client.put("/api/workspace-layouts/portfolio", json={"definition": changed_definition, "updated_by": "테스트 편집자"})
+            assert saved.status_code == 200, saved.text
+            assert saved.json()["version"] == original["version"] + 1
+            assert client.get("/api/workspace-layouts/portfolio").json()["definition"] == changed_definition
+            versions = client.get("/api/workspace-layouts/portfolio/versions").json()
+            assert versions[0]["version"] == saved.json()["version"]
+        finally:
+            restored = client.put("/api/workspace-layouts/portfolio", json={"definition": original["definition"], "updated_by": "테스트 복원"})
+            assert restored.status_code == 200
 
 
 def test_portfolio_metrics_filters_and_csv_reconcile():
@@ -209,7 +229,11 @@ def test_media_metadata_policy_rejects_unsafe_paths_and_formats():
 def test_health_and_seeded_overview():
     initialize_database()
     with TestClient(app) as client:
-        assert client.get("/api/health").json() == {"status": "ok"}
+        expected_backend = os.getenv("ANALYSIS_DB_BACKEND", "duckdb").strip().lower()
+        assert client.get("/api/health").json() == {"status": "ok", "database_backend": expected_backend}
+        asset = client.get("/api/assets/media-contour-001")
+        assert asset.status_code == 200
+        assert asset.headers["content-type"].startswith("image/svg+xml")
         response = client.get("/api/load-cases/loadcase-drop-bottom-001/overview")
         assert response.status_code == 200
         payload = response.json()

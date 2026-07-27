@@ -41,6 +41,83 @@ jobs:
           PYTHONPATH: .
         run: python -m pytest -q
 
+      - name: Verify PostgreSQL schema export is current
+        run: python scripts/export_postgres_schema.py
+
+      - name: Check generated PostgreSQL schema
+        working-directory: .
+        run: git diff --exit-code backend/migrations/schema.sql
+
+  postgres-integration:
+    name: PostgreSQL 18 integration
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres-test
+          POSTGRES_DB: simulation_dashboard_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d simulation_dashboard_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    defaults:
+      run:
+        working-directory: backend
+
+    env:
+      ANALYSIS_DB_BACKEND: postgresql
+      PYTHONPATH: .
+      POSTGRES_ADMIN_URL: postgresql://postgres:postgres-test@127.0.0.1:5432/postgres
+      SIM_DASH_DATABASE: simulation_dashboard_test
+      SIM_DASH_OWNER_ROLE: simdashboard_owner
+      SIM_DASH_APP_ROLE: simdashboard_app
+      SIM_DASH_OWNER_PASSWORD: owner-test-password
+      SIM_DASH_APP_PASSWORD: app-test-password
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Bootstrap least-privilege roles
+        run: python scripts/bootstrap_postgres.py
+
+      - name: Apply Alembic migrations
+        env:
+          DATABASE_URL: postgresql+psycopg://simdashboard_owner:owner-test-password@127.0.0.1:5432/simulation_dashboard_test
+        run: python -m alembic -c alembic.ini upgrade head
+
+      - name: Harden append-only audit privileges
+        env:
+          DATABASE_URL: postgresql+psycopg://simdashboard_owner:owner-test-password@127.0.0.1:5432/simulation_dashboard_test
+        run: python scripts/harden_postgres_privileges.py
+
+      - name: Seed PostgreSQL
+        env:
+          DATABASE_URL: postgresql+psycopg://simdashboard_app:app-test-password@127.0.0.1:5432/simulation_dashboard_test
+        run: python scripts/seed_database.py
+
+      - name: Run API tests on PostgreSQL
+        env:
+          DATABASE_URL: postgresql+psycopg://simdashboard_app:app-test-password@127.0.0.1:5432/simulation_dashboard_test
+        run: python -m pytest -q -p no:cacheprovider
+
   frontend-build:
     name: Frontend build
     runs-on: ubuntu-latest
@@ -71,3 +148,61 @@ jobs:
 
       - name: Build frontend
         run: pnpm run build
+
+  frontend-e2e:
+    name: Frontend editing E2E
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: python -m pip install -r backend/requirements.txt
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate OpenAPI client
+        working-directory: frontend
+        run: pnpm run generate:api
+
+      - name: Verify generated API contract is committed
+        run: git diff --exit-code frontend/openapi.json frontend/src/generated/openapi.ts
+
+      - name: Install Chromium
+        working-directory: frontend
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run editing E2E tests
+        working-directory: frontend
+        run: pnpm run test:e2e
+
+      - name: Upload Playwright traces and screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-test-results
+          path: frontend/test-results/
+          retention-days: 14

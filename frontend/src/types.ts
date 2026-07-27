@@ -348,6 +348,22 @@ export type WorkflowDashboardLayout = {
   items: Array<{ requestId: string; x: number; y: number; w: number; h: number }>
 }
 
+export type WorkspaceLayout<T extends PortfolioLayout | WorkflowDashboardLayout> = {
+  layout_kind: 'portfolio' | 'workflow'
+  version: number
+  definition: T
+  updated_by: string
+  updated_at: string
+}
+
+export type WorkspaceLayoutVersion = {
+  layout_kind: 'portfolio' | 'workflow'
+  version: number
+  created_by: string
+  created_at: string
+  is_valid: boolean
+}
+
 export type DashboardWidget = {
   id: string
   type: WidgetType

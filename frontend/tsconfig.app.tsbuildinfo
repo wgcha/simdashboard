@@ -1,1 +1,1 @@
-{"root":["./src/app.tsx","./src/portfoliodashboard.tsx","./src/api.ts","./src/main.tsx","./src/reportexport.ts","./src/types.ts"],"version":"5.7.3"}
+{"root":["./src/app.tsx","./src/portfoliodashboard.tsx","./src/api.ts","./src/auth.ts","./src/editorstate.ts","./src/main.tsx","./src/reportexport.ts","./src/types.ts","./src/features/auth/loginscreen.tsx","./src/features/layouts/layoutdefaults.ts","./src/features/reports/reportlayoututils.ts","./src/generated/client.ts","./src/generated/openapi.ts"],"version":"5.7.3"}
