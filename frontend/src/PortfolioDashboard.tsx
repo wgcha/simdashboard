@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
-import { AlertTriangle, BarChart3, CheckCircle2, Database, Download, GripVertical, LoaderCircle, Search, SlidersHorizontal } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, ArrowRight, BarChart3, CheckCircle2, Database, Download, GripVertical, LoaderCircle, Minus, Plus, RotateCcw, Search, SlidersHorizontal } from 'lucide-react'
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Legend, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { api } from './api'
 import type { PortfolioLayout, PortfolioOverview } from './types'
 
 const COLORS = ['#50d5ff', '#70e0a8', '#ffbf57', '#ff647d', '#8b9cff']
 const STATUS_LABEL: Record<string, string> = { READY: '대기', IN_PROGRESS: '진행 중', COMPLETED: '완료', BLOCKED: '차단', FAILED: '실패' }
+const CHART_LABELS: Record<string, string> = { trend: '의뢰·완료·실패 추이', status: '의뢰 상태 분포', quality: '해석 유형별 품질', type: '해석 유형 구성' }
 
-export function PortfolioDashboard({ editMode, layout, onLayoutChange, onCancelEdit, onOpen }: { editMode: boolean; layout: PortfolioLayout; onLayoutChange: (layout: PortfolioLayout) => void; onCancelEdit: () => void; onOpen: (projectId: string, requestId: string, loadCaseId: string) => void }) {
+export function PortfolioDashboard({ editMode, layout, onLayoutChange, onCancelEdit, onResetLayout, onOpen }: { editMode: boolean; layout: PortfolioLayout; onLayoutChange: (layout: PortfolioLayout) => void; onCancelEdit: () => void; onResetLayout: () => void; onOpen: (projectId: string, requestId: string, loadCaseId: string) => void }) {
   const [data, setData] = useState<PortfolioOverview | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
@@ -25,13 +26,23 @@ export function PortfolioDashboard({ editMode, layout, onLayoutChange, onCancelE
 
   const set = (key: keyof typeof filters, value: string) => setFilters((current) => ({ ...current, [key]: value }))
   const reset = () => setFilters({ date_from: '', date_to: '', project_id: '', analysis_type: '', status: '', search: '' })
-  const reorderChart = (target: string) => {
-    if (!draggedChart || draggedChart === target) return
-    const next = layout.chartOrder.filter((item) => item !== draggedChart)
-    next.splice(next.indexOf(target), 0, draggedChart)
+  const reorderChart = (target: string, source = draggedChart) => {
+    if (!source || source === target) return
+    const next = layout.chartOrder.filter((item) => item !== source)
+    const targetIndex = next.indexOf(target)
+    next.splice(targetIndex < 0 ? next.length : targetIndex, 0, source)
     onLayoutChange({ ...layout, chartOrder: next })
     setDraggedChart('')
   }
+  const moveChart = (id: string, offset: -1 | 1) => {
+    const index = layout.chartOrder.indexOf(id)
+    const target = index + offset
+    if (index < 0 || target < 0 || target >= layout.chartOrder.length) return
+    const next = [...layout.chartOrder]
+    ;[next[index], next[target]] = [next[target], next[index]]
+    onLayoutChange({ ...layout, chartOrder: next })
+  }
+  const changeFontSize = (value: number) => onLayoutChange({ ...layout, fontSize: Math.max(8, Math.min(18, value)) })
   if (!data && loading) return <div className="portfolio-state"><LoaderCircle className="spin" /> 운영 데이터를 집계하고 있습니다.</div>
   if (!data || error) return <div className="portfolio-state error"><AlertTriangle /> {error || '운영 현황을 표시할 수 없습니다.'}<button onClick={reset}>필터 초기화</button></div>
 
@@ -45,7 +56,13 @@ export function PortfolioDashboard({ editMode, layout, onLayoutChange, onCancelE
 
   return <div className="portfolio-page" data-custom-font="true" style={{ '--portfolio-font-size': `${layout.fontSize}px` } as CSSProperties}>
     <header className="portfolio-head"><div><span>ANALYSIS OPERATIONS</span><h1>해석 운영 현황</h1><p>프로젝트부터 최신 해석 판정까지 한 화면에서 추적합니다.</p></div><div><small>데이터 기준</small><strong>{data.grain.replaceAll('_', ' ')}</strong><span>최근 결과 {data.freshness ? new Date(data.freshness).toLocaleString('ko-KR') : '없음'}</span></div></header>
-    {editMode && <section className="portfolio-edit-toolbar"><GripVertical /><span><strong>운영 대시보드 편집</strong> 차트 카드를 끌어 순서를 바꾸고 글자 크기를 조절하세요.</span><label><span>글자 크기</span><input aria-label="운영 대시보드 글자 크기" type="range" min="8" max="18" step="1" value={layout.fontSize} onChange={(event)=>onLayoutChange({...layout,fontSize:Number(event.target.value)})}/><output>{layout.fontSize}px</output></label><button onClick={onCancelEdit}>편집 취소</button></section>}
+    {editMode && <section className="portfolio-edit-toolbar">
+      <GripVertical />
+      <span><strong>운영 대시보드 편집</strong> 카드의 이동 버튼이나 손잡이를 사용하고, 상단의 운영 설정 저장으로 확정하세요.</span>
+      <div className="portfolio-font-control"><span>글자 크기</span><button aria-label="글자 크기 줄이기" onClick={() => changeFontSize(layout.fontSize - 1)} disabled={layout.fontSize <= 8}><Minus /></button><input aria-label="운영 대시보드 글자 크기" type="range" min="8" max="18" step="1" value={layout.fontSize} onChange={(event)=>changeFontSize(Number(event.target.value))}/><button aria-label="글자 크기 늘리기" onClick={() => changeFontSize(layout.fontSize + 1)} disabled={layout.fontSize >= 18}><Plus /></button><output>{layout.fontSize}px</output></div>
+      <button className="portfolio-reset-button" onClick={onResetLayout}><RotateCcw /> 기본값</button>
+      <button onClick={onCancelEdit}>편집 취소</button>
+    </section>}
     <section className="portfolio-filters">
       <label className="portfolio-search"><Search /><input aria-label="상세 검색" value={filters.search} onChange={(e) => set('search', e.target.value)} placeholder="프로젝트, 제품, 의뢰, 작업자 검색" /></label>
       <label><span>시작일</span><input aria-label="시작일" type="date" value={filters.date_from} onChange={(e) => set('date_from', e.target.value)} /></label>
@@ -64,7 +81,14 @@ export function PortfolioDashboard({ editMode, layout, onLayoutChange, onCancelE
     </section>
     {data.records.length === 0 ? <div className="portfolio-empty"><Database /><h2>조건에 맞는 해석 데이터가 없습니다.</h2><p>기간이나 분류 필터를 넓혀 보세요.</p><button onClick={reset}>전체 데이터 보기</button></div> : <>
       <section className="portfolio-grid">
-        {layout.chartOrder.map((id) => <div key={id} className={editMode ? 'portfolio-chart-editable' : ''} draggable={editMode} onDragStart={()=>setDraggedChart(id)} onDragOver={(event)=>event.preventDefault()} onDrop={()=>reorderChart(id)}>{editMode && <span className="portfolio-drag-handle"><GripVertical /> 끌어서 이동</span>}{chartCards[id]}</div>)}
+        {layout.chartOrder.map((id, index) => <div key={id} className={editMode ? 'portfolio-chart-editable' : ''} onDragOver={(event)=>{ if (editMode) event.preventDefault() }} onDrop={(event)=>{ event.preventDefault(); reorderChart(id, event.dataTransfer.getData('text/plain') || draggedChart) }}>
+          {editMode && <div className="portfolio-card-controls">
+            <span className="portfolio-drag-handle" draggable onDragStart={(event)=>{ setDraggedChart(id); event.dataTransfer.setData('text/plain', id); event.dataTransfer.effectAllowed = 'move' }} onDragEnd={()=>setDraggedChart('')}><GripVertical /> 이동</span>
+            <button aria-label={`${CHART_LABELS[id]} 왼쪽으로 이동`} onClick={()=>moveChart(id,-1)} disabled={index===0}><ArrowLeft /></button>
+            <button aria-label={`${CHART_LABELS[id]} 오른쪽으로 이동`} onClick={()=>moveChart(id,1)} disabled={index===layout.chartOrder.length-1}><ArrowRight /></button>
+          </div>}
+          {chartCards[id]}
+        </div>)}
       </section>
       <section className="portfolio-table-card"><header><div><span>DETAIL RECORDS</span><h2>해석 의뢰 상세</h2></div><strong>{data.records.length}건</strong></header><div className="portfolio-table"><div className="portfolio-row table-header"><span>프로젝트 / 제품</span><span>의뢰 / 하중 경우</span><span>담당자</span><span>상태</span><span>유형</span><span>판정</span><span>접수일</span></div>{data.records.map((item) => <button className="portfolio-row" key={item.load_case_id} onClick={() => onOpen(item.project_id,item.request_id,item.load_case_id)}><span><strong>{item.project_name}</strong><small>{item.product_name}</small></span><span><strong>{item.request_title}</strong><small>{item.load_case_name}</small></span><span>{item.owner || '-'}</span><span><i className={`status-dot ${item.request_status.toLowerCase()}`} />{STATUS_LABEL[item.request_status] ?? item.request_status}</span><span>{item.analysis_type.replace('_',' ')}</span><span><b className={item.verdict.toLowerCase()}>{item.verdict}</b></span><span>{new Date(item.requested_at).toLocaleDateString('ko-KR')}</span></button>)}</div></section>
     </>}

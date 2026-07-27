@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -204,6 +205,18 @@ def initialize_database() -> None:
                 created_at TIMESTAMP NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS analysis_run_metadata (
+                analysis_run_id VARCHAR PRIMARY KEY,
+                source_type VARCHAR NOT NULL,
+                source_name VARCHAR,
+                source_checksum VARCHAR,
+                schema_id VARCHAR,
+                schema_version INTEGER,
+                parser_version VARCHAR NOT NULL,
+                metadata_json JSON,
+                created_at TIMESTAMP NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS import_schemas (
                 id VARCHAR PRIMARY KEY,
                 name VARCHAR NOT NULL,
@@ -235,6 +248,30 @@ def initialize_database() -> None:
                 sensor_json JSON,
                 ai_analysis_json JSON,
                 created_at TIMESTAMP NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS result_bookmarks (
+                id VARCHAR PRIMARY KEY,
+                analysis_run_id VARCHAR NOT NULL,
+                variable_key VARCHAR,
+                time_value DOUBLE,
+                entity_type VARCHAR,
+                entity_id VARCHAR,
+                title VARCHAR NOT NULL,
+                created_by VARCHAR NOT NULL,
+                created_at TIMESTAMP NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS review_annotations (
+                id VARCHAR PRIMARY KEY,
+                bookmark_id VARCHAR NOT NULL,
+                analysis_run_id VARCHAR NOT NULL,
+                variable_key VARCHAR,
+                body VARCHAR NOT NULL,
+                review_status VARCHAR NOT NULL,
+                created_by VARCHAR NOT NULL,
+                created_at TIMESTAMP NOT NULL,
+                updated_at TIMESTAMP NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS quality_thresholds (
@@ -342,6 +379,7 @@ def initialize_database() -> None:
                 conn.execute("ROLLBACK")
                 raise
         ensure_sample_evolutions(conn)
+        ensure_feature_examples(conn)
         ensure_variable_definitions(conn)
         conn.execute(
             """
@@ -511,6 +549,62 @@ def ensure_sample_evolutions(conn: duckdb.DuckDBPyConnection) -> None:
         ],
     )
 
+    target_started_row = conn.execute("SELECT started_at FROM analysis_runs WHERE id='run-drop-001'").fetchone()
+    baseline_started = (target_started_row[0] - timedelta(days=4)) if target_started_row and target_started_row[0] else now - timedelta(days=7)
+    conn.execute(
+        "INSERT OR IGNORE INTO analysis_runs VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            "run-drop-baseline-001", "loadcase-drop-bottom-001", None, 0, "Explicit Solver", "COMPLETED",
+            _iso(baseline_started), _iso(baseline_started + timedelta(hours=3)),
+        ],
+    )
+    conn.execute(
+        "UPDATE analysis_runs SET started_at=?, completed_at=? WHERE id='run-drop-baseline-001'",
+        [_iso(baseline_started), _iso(baseline_started + timedelta(hours=3))],
+    )
+    metadata_rows = [
+        ("run-drop-baseline-001", "SEED_SAMPLE", "orion65-drop-rev-b.json", "seed:orion65-drop-rev-b", "seed-v1", baseline_started + timedelta(hours=3)),
+        ("run-drop-001", "SEED_SAMPLE", "orion65-drop-rev-c.json", "seed:orion65-drop-rev-c", "seed-v1", now - timedelta(days=3, hours=21)),
+        ("run-clamp-001", "SEED_SAMPLE", "orion65-clamp-left.json", "seed:orion65-clamp-left", "seed-v1", now - timedelta(days=1, hours=20)),
+    ]
+    for run_id, source_type, source_name, checksum_seed, parser_version, created_at in metadata_rows:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO analysis_run_metadata
+                (analysis_run_id, source_type, source_name, source_checksum, schema_id, schema_version,
+                 parser_version, metadata_json, created_at)
+            VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?)
+            """,
+            [run_id, source_type, source_name, hashlib.sha256(checksum_seed.encode("utf-8")).hexdigest(), parser_version, json.dumps({"sample": True}), _iso(created_at)],
+        )
+
+    baseline_edge_values = {
+        "top": ("상단 엣지", 65.2, 11.4),
+        "bottom": ("하단 엣지", 72.1, 14.2),
+        "left": ("좌측 엣지", 67.8, 12.6),
+        "right": ("우측 엣지", 77.4, 13.3),
+    }
+    for index, (key, (label, maximum, peak_time)) in enumerate(baseline_edge_values.items(), start=1):
+        verdict = "FAIL" if maximum > 75.0 else "PASS"
+        conn.execute(
+            "INSERT OR IGNORE INTO scalar_results VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [f"scalar-baseline-{key}", "run-drop-baseline-001", f"{key}_edge_max_stress", f"{label} 최대 응력", maximum, None, None, "MPa", 75.0, verdict],
+        )
+        series_count = conn.execute(
+            "SELECT count(*) FROM time_series_results WHERE analysis_run_id=? AND variable_key=?",
+            ["run-drop-baseline-001", f"{key}_edge_stress_time"],
+        ).fetchone()[0]
+        if series_count == 0:
+            for point in range(101):
+                time_ms = point * 0.25
+                primary = maximum * math.exp(-((time_ms - peak_time) ** 2) / 8.5)
+                rebound = maximum * 0.22 * math.exp(-((time_ms - (peak_time + 5.0)) ** 2) / 5.8)
+                ripple = 1.1 * math.sin(time_ms * 1.7 + index) * math.exp(-time_ms / 16)
+                conn.execute(
+                    "INSERT INTO time_series_results VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    ["run-drop-baseline-001", f"{key}_edge_stress_time", label, time_ms, round(max(0.0, primary + rebound + ripple), 3), "ms", "MPa"],
+                )
+
     conn.execute(
         """
         INSERT OR IGNORE INTO template_executions VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -533,6 +627,14 @@ def ensure_sample_evolutions(conn: duckdb.DuckDBPyConnection) -> None:
     )
 
     chassis_results = {
+        "run-drop-baseline-001": [
+            ("top_edge_gap", "상단 엣지 Open Cell 이격 최대", 4.7),
+            ("bottom_edge_gap", "하단 엣지 Open Cell 이격 최대", 4.5),
+            ("corner_top_left", "좌상단 모서리 영구변형", 5.8),
+            ("corner_top_right", "우상단 모서리 영구변형", 3.9),
+            ("corner_bottom_left", "좌하단 모서리 영구변형", 4.6),
+            ("corner_bottom_right", "우하단 모서리 영구변형", 5.1),
+        ],
         "run-drop-001": [
             ("top_edge_gap", "상단 엣지 Open Cell 이격 최대", 5.8),
             ("bottom_edge_gap", "하단 엣지 Open Cell 이격 최대", 4.2),
@@ -698,6 +800,149 @@ def ensure_sample_evolutions(conn: duckdb.DuckDBPyConnection) -> None:
                 "UPDATE dashboards SET definition_json = ?, version = ?, updated_at = ? WHERE id = ?",
                 [json.dumps(definition, ensure_ascii=False), stored[1] + 1, _iso(datetime.now(timezone.utc)), "dashboard-drop-default"],
             )
+
+
+def ensure_feature_examples(conn: duckdb.DuckDBPyConnection) -> None:
+    """Seed an additive, idempotent gallery that demonstrates the major product flows."""
+    complete = (
+        conn.execute("SELECT count(*) FROM projects WHERE id='project-feature-showcase'").fetchone()[0] == 1
+        and conn.execute("SELECT count(*) FROM review_annotations WHERE analysis_run_id='run-showcase-review-2'").fetchone()[0] == 3
+        and conn.execute("SELECT count(*) FROM variable_definitions WHERE load_case_id='loadcase-showcase-waiting'").fetchone()[0] == 5
+        and conn.execute("SELECT count(*) FROM import_schemas WHERE id='import-schema-showcase-typed'").fetchone()[0] == 1
+    )
+    if complete:
+        return
+    now = datetime.now(timezone.utc)
+    project_id = "project-feature-showcase"
+    conn.execute(
+        "INSERT OR IGNORE INTO projects VALUES (?, ?, ?, ?, ?)",
+        [project_id, "Analysis Canvas 기능 예제 모음", "DEMO-65 Engineering TV", "비교·신뢰도·검토·결과형·데이터 대기·워크플로 기능을 안전하게 체험하는 예제 프로젝트", _iso(now - timedelta(days=40))],
+    )
+    for row in [
+        ("showcase-product-model", project_id, "MODEL", "제품 모델", "DEMO-65-SHOWCASE", None, {"sample": True}),
+        ("showcase-product-guide", project_id, "GUIDE", "예제 사용 안내", "예제 갤러리에서 확인할 기능을 선택하세요.", None, {"sample": True}),
+    ]:
+        conn.execute("INSERT OR IGNORE INTO product_information VALUES (?, ?, ?, ?, ?, ?, ?)", [*row[:6], json.dumps(row[6], ensure_ascii=False)])
+
+    examples = [
+        ("compare", "Run 비교: 회귀와 개선", "COMPLETED", "DROP", "낙하 설계안 A/B/C 비교", "COMPLETED"),
+        ("trust", "신뢰도: 추적 가능한 폴더 Import", "COMPLETED", "DROP", "추적성 완비 결과", "COMPLETED"),
+        ("warning", "신뢰도: 의도적인 경고", "IN_PROGRESS", "DROP", "카탈로그 매핑 누락 경고", "COMPLETED"),
+        ("review", "협업 검토: 상태별 코멘트", "IN_PROGRESS", "SIDE_CLAMP", "검토 항목 상태 전환", "COMPLETED"),
+        ("multitype", "다중 결과형: 수치·곡선·이미지", "COMPLETED", "SIDE_CLAMP", "혼합 결과형 시각화", "COMPLETED"),
+        ("waiting", "변수 카탈로그: 데이터 대기", "READY", "DROP", "선언 후 데이터 연결 대기", "READY"),
+        ("workflow", "워크플로: 진행·차단·대기", "IN_PROGRESS", "DROP", "실무 진행 상태 예제", "IN_PROGRESS"),
+    ]
+    step_names = ["요청 접수", "요구사항 검토", "모델 준비", "전처리", "해석 실행", "후처리", "결과 검토", "Validation", "승인", "완료"]
+    for example_index, (key, title, request_status, analysis_type, load_case_name, load_case_status) in enumerate(examples):
+        request_id = f"request-showcase-{key}"
+        load_case_id = f"loadcase-showcase-{key}"
+        requested_at = now - timedelta(days=30 - example_index)
+        conn.execute(
+            "INSERT OR IGNORE INTO analysis_requests VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            [request_id, project_id, title, request_status, "예제 운영자", _iso(requested_at), _iso(requested_at + timedelta(days=12)), f"{title} 기능을 확인하기 위한 비파괴 예제입니다."],
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO load_cases VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [load_case_id, request_id, load_case_name, analysis_type, load_case_status, json.dumps({"sample": True, "example": key, "drop_height_mm": 800 if analysis_type == "DROP" else None, "pressure_mpa": 0.35 if analysis_type == "SIDE_CLAMP" else None}, ensure_ascii=False), _iso(requested_at + timedelta(days=1))],
+        )
+        if conn.execute("SELECT count(*) FROM request_steps WHERE request_id=?", [request_id]).fetchone()[0] == 0:
+            for sequence_no, step_name in enumerate(step_names, start=1):
+                if key == "workflow":
+                    statuses = ["COMPLETED", "COMPLETED", "COMPLETED", "IN_PROGRESS", "BLOCKED", "WAITING", "WAITING", "WAITING", "WAITING", "WAITING"]
+                elif request_status == "COMPLETED":
+                    statuses = ["COMPLETED"] * 10
+                else:
+                    statuses = ["COMPLETED"] * 5 + ["IN_PROGRESS"] + ["WAITING"] * 4
+                status = statuses[sequence_no - 1]
+                progress = 100 if status == "COMPLETED" else 55 if status == "IN_PROGRESS" else 0
+                start = requested_at + timedelta(hours=(sequence_no - 1) * 18)
+                conn.execute(
+                    """
+                    INSERT INTO request_steps
+                        (id, request_id, sequence_no, name, status, owner, planned_start, planned_end,
+                         actual_start, actual_end, progress, blocked_reason, note, is_optional)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [f"step-showcase-{key}-{sequence_no:02d}", request_id, sequence_no, step_name, status, "예제 운영자", _iso(start), _iso(start + timedelta(hours=14)), _iso(start + timedelta(hours=1)) if status not in {"WAITING", "BLOCKED"} else None, _iso(start + timedelta(hours=12)) if status == "COMPLETED" else None, progress, "입력 모델 승인 대기" if status == "BLOCKED" else None, "서로 다른 상태와 진행률을 확인하세요." if key == "workflow" else None, False],
+                )
+
+    run_specs = {
+        "compare": [(1, 68.0, 82.0), (2, 70.0, 80.0), (3, 81.0, 72.0)],
+        "trust": [(1, 69.0, 73.0), (2, 66.0, 71.0)],
+        "warning": [(1, 62.0, 70.0), (2, 64.0, 72.0)],
+        "review": [(1, 68.0, 74.0), (2, 72.0, 78.0)],
+        "multitype": [(1, 60.0, 68.0), (2, 58.0, 65.0)],
+    }
+    for key, runs in run_specs.items():
+        load_case_id = f"loadcase-showcase-{key}"
+        for run_no, top_value, bottom_value in runs:
+            run_id = f"run-showcase-{key}-{run_no}"
+            started = now - timedelta(days=18 - run_no, hours=run_no)
+            conn.execute("INSERT OR IGNORE INTO analysis_runs VALUES (?, ?, NULL, ?, ?, 'COMPLETED', ?, ?)", [run_id, load_case_id, run_no, "Showcase Solver 2026.1", _iso(started), _iso(started + timedelta(hours=2))])
+            values = [("top_edge_max_stress", "상단 엣지 최대 응력", top_value), ("bottom_edge_max_stress", "하단 엣지 최대 응력", bottom_value), ("left_edge_max_stress", "좌측 엣지 최대 응력", 67.0 + run_no), ("right_edge_max_stress", "우측 엣지 최대 응력", 71.0)]
+            for value_index, (variable_key, display_name, value) in enumerate(values):
+                conn.execute("INSERT OR IGNORE INTO scalar_results VALUES (?, ?, ?, ?, ?, NULL, NULL, 'MPa', 75.0, ?)", [f"scalar-showcase-{key}-{run_no}-{value_index}", run_id, variable_key, display_name, value, "FAIL" if value > 75 else "PASS"])
+            if conn.execute("SELECT count(*) FROM time_series_results WHERE analysis_run_id=?", [run_id]).fetchone()[0] == 0:
+                for point in range(21):
+                    time_value = point * 0.5
+                    value = top_value * math.exp(-((time_value - 5.0) ** 2) / 3.5)
+                    conn.execute("INSERT INTO time_series_results VALUES (?, 'top_edge_stress_time', '상단 엣지 응력 이력', ?, ?, 'ms', 'MPa')", [run_id, time_value, round(value, 3)])
+            conn.execute(
+                "INSERT OR IGNORE INTO analysis_run_metadata VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [run_id, "FOLDER_IMPORT" if key in {"trust", "multitype"} else "SEED_SAMPLE", f"showcase/{key}/run-{run_no}", hashlib.sha256(run_id.encode()).hexdigest(), "import-schema-showcase-typed" if key in {"trust", "multitype"} else None, 1 if key in {"trust", "multitype"} else None, "showcase-parser-1.0", json.dumps({"example": key, "reproducible": True}), _iso(started + timedelta(hours=2))],
+            )
+
+    for key in ("compare", "trust", "review", "multitype"):
+        run_id = f"run-showcase-{key}-{len(run_specs[key])}"
+        conn.execute("INSERT OR IGNORE INTO validations VALUES (?, ?, ?, ?, ?, 'RESULT_QA', 'PASS', ?, ?, ?)", [f"validation-showcase-{key}", project_id, f"request-showcase-{key}", f"loadcase-showcase-{key}", run_id, json.dumps({"sample": True}), json.dumps({"summary": "예제 검증 통과"}, ensure_ascii=False), _iso(now - timedelta(days=3))])
+
+    schema_definition = {"schema_id": "import-schema-showcase-typed", "version": 1, "context_mapping": {"mode": "folder_levels", "project_level": 0, "request_level": 1, "load_case_level": 2, "sample_path": "project/request/loadcase/results"}, "mappings": [{"pattern": "summary.csv", "data_type": "NUMBER"}, {"pattern": "curves/*.csv", "data_type": "CURVE"}, {"pattern": "media/*", "data_type": "IMAGE"}]}
+    encoded_schema = json.dumps(schema_definition, ensure_ascii=False)
+    conn.execute("INSERT OR IGNORE INTO import_schemas VALUES (?, ?, ?, ?, true, ?, ?, ?)", ["import-schema-showcase-typed", "다중 결과형 폴더 예제", "수치·곡선·이미지를 한 번에 등록하는 3단계 폴더 규칙", encoded_schema, _iso(now - timedelta(days=10)), _iso(now - timedelta(days=2)), "system"])
+    conn.execute("INSERT OR IGNORE INTO import_schema_versions VALUES (?, 1, ?, ?, 'system')", ["import-schema-showcase-typed", encoded_schema, _iso(now - timedelta(days=10))])
+    for key in ("trust", "multitype"):
+        run_id = f"run-showcase-{key}-2"
+        conn.execute("INSERT OR IGNORE INTO folder_import_jobs VALUES (?, ?, ?, ?, 1, ?, 'COMPLETED', ?, ?)", [f"folder-job-showcase-{key}", f"loadcase-showcase-{key}", run_id, "import-schema-showcase-typed", f"examples/showcase/{key}", json.dumps({"scalar": 4, "series": 1, "curve": 1, "media": 1}), _iso(now - timedelta(days=3))])
+
+    for key in ("trust", "multitype"):
+        run_id = f"run-showcase-{key}-2"
+        curve_id = f"curve-showcase-{key}"
+        conn.execute("INSERT OR IGNORE INTO curve_results VALUES (?, ?, 'load_displacement_curve', '하중-변위 곡선', 'default', 'Displacement', 'mm', 'Load', 'N', 11, 'curve.csv', ?, ?)", [curve_id, run_id, hashlib.sha256(curve_id.encode()).hexdigest(), _iso(now - timedelta(days=3))])
+        for point in range(11):
+            conn.execute("INSERT OR IGNORE INTO curve_points VALUES (?, ?, ?, ?)", [curve_id, point, point * 0.5, round(120 * math.sin(point / 10 * math.pi), 3)])
+        conn.execute("INSERT OR IGNORE INTO media_assets VALUES (?, ?, 'IMAGE', '응력 컨투어 예제', 'sample-contour.svg', 'image/svg+xml', NULL, ?, ?)", [f"media-showcase-{key}", run_id, hashlib.sha256(f"media-{key}".encode()).hexdigest(), json.dumps({"variable_key": "stress_contour_image", "sample": True})])
+        if conn.execute("SELECT count(*) FROM result_locations WHERE analysis_run_id=? AND variable_key='top_edge_max_stress'", [run_id]).fetchone()[0] == 0:
+            conn.execute("INSERT INTO result_locations VALUES (?, 'top_edge_max_stress', 'ELEMENT', 'E-2048', 120.0, 5.0, 18.0, 5.0, 'ms', 'peak')", [run_id])
+        for variable_key, display_name, data_type, unit, source, widgets, aggregations in [
+            ("load_displacement_curve", "하중-변위 곡선", "CURVE", "N", "curve_results", ["time_series", "scatter", "result_table"], ["RAW", "MAX_BY_TIME"]),
+            ("stress_contour_image", "응력 컨투어 예제", "IMAGE", "-", "media_assets", ["contour", "result_table"], ["LATEST"]),
+        ]:
+            conn.execute("INSERT OR IGNORE INTO variable_definitions VALUES (?, ?, ?, ?, ?, ?, ?, true, ?, NULL, ?, ?, ?, 'CUSTOM', true, ?, ?, 'system')", [f"variable-{key}-{variable_key}", f"loadcase-showcase-{key}", variable_key, display_name, data_type, unit, "다중 결과형 예제 변수", source, json.dumps(widgets), json.dumps(aggregations), "DROP" if key == "trust" else "SIDE_CLAMP", _iso(now), _iso(now)])
+
+    warning_run = "run-showcase-warning-2"
+    if conn.execute("SELECT count(*) FROM result_locations WHERE analysis_run_id=? AND variable_key='unmapped_hotspot'", [warning_run]).fetchone()[0] == 0:
+        conn.execute("INSERT INTO result_locations VALUES (?, 'unmapped_hotspot', 'NODE', 'N-404', 0.0, 0.0, 0.0, 4.5, 'ms', 'intentional-warning')", [warning_run])
+
+    review_run = "run-showcase-review-2"
+    for index, (status, title, body, variable_key) in enumerate([
+        ("OPEN", "상단 피크 원인 확인", "접촉 조건과 메시 민감도를 확인해 주세요.", "top_edge_max_stress"),
+        ("IN_REVIEW", "하단 기준 초과 검토", "설계팀과 보강 리브 영향도를 검토 중입니다.", "bottom_edge_max_stress"),
+        ("RESOLVED", "좌측 결과 승인", "재계산 결과 차이가 허용 범위 이내입니다.", "left_edge_max_stress"),
+    ], start=1):
+        bookmark_id = f"bookmark-showcase-review-{index}"
+        conn.execute("INSERT OR IGNORE INTO result_bookmarks VALUES (?, ?, ?, ?, 'ELEMENT', ?, ?, '예제 검토자', ?)", [bookmark_id, review_run, variable_key, 5.0, f"E-{2000 + index}", title, _iso(now - timedelta(days=2, hours=index))])
+        conn.execute("INSERT OR IGNORE INTO review_annotations VALUES (?, ?, ?, ?, ?, ?, '예제 검토자', ?, ?)", [f"annotation-showcase-review-{index}", bookmark_id, review_run, variable_key, body, status, _iso(now - timedelta(days=2, hours=index)), _iso(now - timedelta(hours=index))])
+
+    waiting_variables = [
+        ("planned_peak_acceleration", "예정 최대 가속도", "NUMBER", "g", ["kpi", "gauge", "result_table"], ["MAX", "LATEST"]),
+        ("planned_acceleration_history", "예정 가속도 이력", "TIME_SERIES", "g", ["time_series", "scatter"], ["RAW", "MAX_BY_TIME"]),
+        ("planned_contour", "예정 컨투어", "IMAGE", "-", ["contour"], ["LATEST"]),
+        ("planned_motion", "예정 해석 동영상", "VIDEO", "-", ["video"], ["LATEST"]),
+        ("planned_model", "예정 3D 모델", "MODEL_3D", "-", ["model3d"], ["LATEST"]),
+    ]
+    for variable_key, display_name, data_type, unit, widgets, aggregations in waiting_variables:
+        conn.execute("INSERT OR IGNORE INTO variable_definitions VALUES (?, 'loadcase-showcase-waiting', ?, ?, ?, ?, '선언은 완료되었고 결과 파일 연결을 기다리는 예제', true, 'planned_sql_view', NULL, ?, ?, 'DROP', 'CUSTOM', true, ?, ?, 'system')", [f"variable-waiting-{variable_key}", variable_key, display_name, data_type, unit, json.dumps(widgets), json.dumps(aggregations), _iso(now), _iso(now)])
 
 
 def _iso(dt: datetime) -> str:

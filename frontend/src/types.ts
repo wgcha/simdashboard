@@ -75,6 +75,24 @@ export type Project = {
   description: string
 }
 
+export type FeatureExample = {
+  id: string
+  order: number
+  category: string
+  title: string
+  summary: string
+  badge: string
+  workspace_page: 'portfolio' | 'dashboard' | 'data' | 'schemas' | 'variables' | 'templates' | 'help'
+  preferred_view?: 'open_cell' | 'chassis' | 'workflow' | 'compare'
+  project_id?: string
+  request_id?: string
+  load_case_id?: string
+  features: string[]
+  checks: string[]
+  action_hint?: string
+  data_profile: { runs: number; scalars: number; series: number; curves: number; media: number; reviews: number }
+}
+
 export type AnalysisRequest = {
   id: string
   project_id: string
@@ -235,6 +253,77 @@ export type AutomationTemplate = { id: string; load_case_id: string; template_na
 export type ImportSchemaDefinition = { schema_id?: string; version?: number; mappings: Array<Record<string, unknown>>; context_mapping?: { mode: 'folder_levels' | 'manifest'; project_level: number; request_level: number; load_case_level: number; sample_path?: string }; context?: Record<string, unknown>; [key: string]: unknown }
 export type ImportSchema = { id: string; name: string; description: string; definition: ImportSchemaDefinition; created_at: string; updated_at: string; updated_by: string }
 
+export type AnalysisRunSummary = {
+  id: string
+  load_case_id: string
+  run_no: number
+  solver: string
+  status: string
+  started_at: string
+  completed_at: string
+  overall_verdict: 'PASS' | 'FAIL' | 'NO_DATA'
+  scalar_count: number
+  series_count: number
+  trust_status: 'TRUSTED' | 'WARN' | 'FAIL'
+  is_latest: boolean
+}
+
+export type RunComparison = {
+  baseline_run: AnalysisRunSummary
+  target_run: AnalysisRunSummary
+  summary: { regression: number; improved: number; unchanged: number; comparable: number }
+  scalar_comparison: Array<{
+    variable_key: string
+    display_name: string
+    unit: string | null
+    baseline_value: number | null
+    target_value: number | null
+    baseline_verdict: string | null
+    target_verdict: string | null
+    delta: number | null
+    delta_percent: number | null
+    change: 'REGRESSION' | 'IMPROVED' | 'UNCHANGED' | 'ADDED' | 'REMOVED' | 'NOT_COMPARABLE'
+    comparable: boolean
+  }>
+  available_series: Array<{ variable_key: string; display_name: string; unit: string }>
+  time_series: null | {
+    variable_key: string
+    display_name: string
+    unit: string
+    points: Array<{ time_value: number; time_unit: string; baseline_value: number | null; target_value: number | null }>
+  }
+}
+
+export type RunTrust = {
+  run: AnalysisRunSummary
+  trust_status: 'TRUSTED' | 'WARN' | 'FAIL'
+  is_latest: boolean
+  age_days: number | null
+  metadata: null | { source_type: string; source_name: string | null; source_checksum: string | null; schema_id: string | null; schema_version: number | null; parser_version: string; metadata: Record<string, unknown> }
+  import_job: null | { schema_id: string; schema_version: number; source_folder: string; status: string; summary: Record<string, unknown> }
+  counts: { scalar: number; time_series: number; curve: number; media: number; location: number }
+  coverage: { result_variables: number; catalog_variables: number; unmapped: string[]; missing: string[] }
+  unit_mismatches: Array<{ variable_key: string; expected: string; actual: string }>
+  validations: Array<{ validation_type: string; verdict: string; created_at: string }>
+  checks: Array<{ code: string; label: string; status: 'PASS' | 'WARN' | 'FAIL'; detail: string }>
+}
+
+export type ReviewItem = {
+  id: string
+  bookmark_id: string
+  analysis_run_id: string
+  variable_key: string | null
+  title: string
+  time_value: number | null
+  entity_type: 'NODE' | 'ELEMENT' | null
+  entity_id: string | null
+  body: string
+  review_status: 'OPEN' | 'IN_REVIEW' | 'RESOLVED'
+  created_by: string
+  created_at: string
+  updated_at: string
+}
+
 export type PortfolioOverview = {
   grain: string
   source: string
@@ -251,6 +340,12 @@ export type PortfolioOverview = {
 export type PortfolioLayout = {
   fontSize: number
   chartOrder: string[]
+}
+
+export type WorkflowDashboardLayout = {
+  fontSize: number
+  accentColor: string
+  items: Array<{ requestId: string; x: number; y: number; w: number; h: number }>
 }
 
 export type DashboardWidget = {

@@ -399,7 +399,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO simdashboard_app;
 
 ## 8. PostgreSQL 스키마 사양
 
-Alembic `0001` 마이그레이션은 현재 DuckDB의 다음 25개 테이블을 모두 생성해야 한다.
+Alembic `0001` 마이그레이션은 현재 DuckDB의 다음 28개 테이블을 모두 생성해야 한다.
 
 1. `projects`
 2. `product_information`
@@ -416,16 +416,19 @@ Alembic `0001` 마이그레이션은 현재 DuckDB의 다음 25개 테이블을 
 13. `qualitative_notes`
 14. `media_assets`
 15. `folder_import_jobs`
-16. `import_schemas`
-17. `import_schema_versions`
-18. `validations`
-19. `quality_thresholds`
-20. `variable_definitions`
-21. `dashboards`
-22. `dashboard_versions`
-23. `report_layouts`
-24. `report_layout_versions`
-25. `report_template_assets`
+16. `analysis_run_metadata`
+17. `import_schemas`
+18. `import_schema_versions`
+19. `validations`
+20. `result_bookmarks`
+21. `review_annotations`
+22. `quality_thresholds`
+23. `variable_definitions`
+24. `dashboards`
+25. `dashboard_versions`
+26. `report_layouts`
+27. `report_layout_versions`
+28. `report_template_assets`
 
 ### 형식 변환
 
@@ -453,6 +456,8 @@ Alembic `0001` 마이그레이션은 현재 DuckDB의 다음 25개 테이블을 
 - `variable_definitions`는 `(load_case_id, variable_key)` UNIQUE를 유지한다.
 - `time_series_results`에는 `(analysis_run_id, variable_key, time_value)` UNIQUE를 추가한다.
 - `result_locations`에는 `(analysis_run_id, variable_key)` UNIQUE를 추가한다.
+- `analysis_run_metadata.analysis_run_id`의 1:1 PK를 유지한다.
+- `review_annotations.review_status`에는 `OPEN`, `IN_REVIEW`, `RESOLVED` CHECK 제약을 추가한다.
 - 상태·판정 필드는 기존 데이터가 모두 이전된 후 CHECK 제약을 추가한다.
 - 초기 이전에서 `quality_thresholds.criterion_key`의 전역 PK 의미를 임의로 바꾸지 않는다. 프로젝트별 복합 키 전환은 별도 마이그레이션으로 수행한다.
 
@@ -475,6 +480,12 @@ ON scalar_results(analysis_run_id, variable_key);
 
 CREATE INDEX ix_time_series_run_variable_time
 ON time_series_results(analysis_run_id, variable_key, time_value);
+
+CREATE INDEX ix_result_bookmarks_run_created
+ON result_bookmarks(analysis_run_id, created_at DESC);
+
+CREATE INDEX ix_review_annotations_run_status
+ON review_annotations(analysis_run_id, review_status, updated_at DESC);
 
 CREATE INDEX ix_variable_definitions_active
 ON variable_definitions(load_case_id, is_active);
