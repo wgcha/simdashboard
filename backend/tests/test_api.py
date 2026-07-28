@@ -155,8 +155,9 @@ def test_report_layout_crud_and_version_history():
                 "sectionOrder": ["scalar", "series", "media"],
                 "variablePlacements": [{"variableKey": "top_edge_max_stress", "presentation": "table", "order": 0}],
                 "includeMedia": False,
+                "slideMaster": {"backgroundColor": "F4F8FB", "design": "header-band", "accentColor": "1898D5"},
                 "canvas": {"columns": 32, "rows": 18, "widthInches": 13.333, "heightInches": 7.5},
-                "slides": [{"id": "cover", "name": "표지", "kind": "cover", "repeat": "none", "elements": [{"id": "title", "type": "title", "label": "제목", "x": 1, "y": 1, "w": 20, "h": 2, "z": 1, "binding": {"source": "field", "key": "report_title"}}]}],
+                "slides": [{"id": "cover", "name": "표지", "kind": "cover", "repeat": "none", "style": {"useMaster": False, "backgroundColor": "FFFFFF", "design": "split", "accentColor": "FF9948"}, "elements": [{"id": "title", "type": "title", "label": "제목", "text": "직접 입력한 제목", "x": 1, "y": 1, "w": 20, "h": 2, "z": 1, "binding": {"source": "static"}}]}],
                 "templateSource": "native",
                 "templateBindings": {},
             },
@@ -169,6 +170,8 @@ def test_report_layout_crud_and_version_history():
         saved = client.put(f"/api/report-layouts/{layout_id}", json=payload)
         assert saved.status_code == 200
         assert saved.json()["version"] == 2
+        assert saved.json()["definition"]["slideMaster"]["design"] == "header-band"
+        assert saved.json()["definition"]["slides"][0]["elements"][0]["text"] == "직접 입력한 제목"
         versions = client.get(f"/api/report-layouts/{layout_id}/versions").json()
         assert [item["version"] for item in versions] == [2, 1]
         historical = client.get(f"/api/report-layouts/{layout_id}/versions/1")

@@ -114,6 +114,14 @@ def _validated_report_layout(definition: dict[str, Any]) -> dict[str, Any]:
     accent = str(definition.get("accentColor") or "")
     if len(accent) != 6 or any(character not in "0123456789abcdefABCDEF" for character in accent):
         raise HTTPException(422, "강조색은 6자리 HEX 색상이어야 합니다.")
+    slide_master = definition.get("slideMaster")
+    if slide_master is not None:
+        if not isinstance(slide_master, dict) or slide_master.get("design") not in {"plain", "frame", "header-band", "split"}:
+            raise HTTPException(422, "슬라이드 마스터에는 올바른 디자인이 필요합니다.")
+        for color_key in ("backgroundColor", "accentColor"):
+            color = str(slide_master.get(color_key) or "")
+            if len(color) != 6 or any(character not in "0123456789abcdefABCDEF" for character in color):
+                raise HTTPException(422, f"슬라이드 마스터 {color_key}은 6자리 HEX 색상이어야 합니다.")
     placements = definition.get("variablePlacements")
     if not isinstance(placements, list):
         raise HTTPException(422, "variablePlacements 배열이 필요합니다.")
@@ -131,6 +139,18 @@ def _validated_report_layout(definition: dict[str, Any]) -> dict[str, Any]:
             if slide["id"] in slide_ids:
                 raise HTTPException(422, "슬라이드 id는 중복될 수 없습니다.")
             slide_ids.add(slide["id"])
+            slide_style = slide.get("style")
+            if slide_style is not None:
+                if not isinstance(slide_style, dict) or not isinstance(slide_style.get("useMaster"), bool):
+                    raise HTTPException(422, "슬라이드 스타일에는 useMaster 불리언 값이 필요합니다.")
+                if slide_style.get("design") is not None and slide_style["design"] not in {"plain", "frame", "header-band", "split"}:
+                    raise HTTPException(422, "지원하지 않는 슬라이드 디자인입니다.")
+                for color_key in ("backgroundColor", "accentColor"):
+                    if slide_style.get(color_key) is None:
+                        continue
+                    color = str(slide_style[color_key])
+                    if len(color) != 6 or any(character not in "0123456789abcdefABCDEF" for character in color):
+                        raise HTTPException(422, f"슬라이드 {color_key}은 6자리 HEX 색상이어야 합니다.")
             elements = slide.get("elements")
             if not isinstance(elements, list) or len(elements) > 80:
                 raise HTTPException(422, "슬라이드 elements는 80개 이하의 배열이어야 합니다.")
@@ -141,6 +161,8 @@ def _validated_report_layout(definition: dict[str, Any]) -> dict[str, Any]:
                 if not element.get("id") or element["id"] in element_ids:
                     raise HTTPException(422, "슬라이드 안의 위젯 id는 고유해야 합니다.")
                 element_ids.add(element["id"])
+                if element.get("text") is not None and not isinstance(element["text"], str):
+                    raise HTTPException(422, "텍스트 상자 내용은 문자열이어야 합니다.")
                 for key, limit in (("x", 32), ("w", 32), ("y", 18), ("h", 18)):
                     if not isinstance(element.get(key), (int, float)) or element[key] < 0 or element[key] > limit:
                         raise HTTPException(422, f"위젯 {key} 좌표가 캔버스 범위를 벗어났습니다.")
