@@ -19,14 +19,39 @@ from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
 
 from .database import connect, initialize_database, json_value, rows
+from .config import database_settings, security_settings
 from .folder_import import FolderImportError, scan_folder
 from .media_policy import validate_media_metadata
 from .result_import import CSV_TEMPLATE, JSON_TEMPLATE, ResultFormatError, parse_result_file
 from .repositories.portfolio import PortfolioRepository
 from .repositories.variable_catalog import VariableCatalogRepository
+from .schemas.api import (
+    AnalysisRequestCreate,
+    DashboardClone,
+    DashboardDefinition,
+    ImportSchemaPayload,
+    LoadCaseCreate,
+    NaturalLanguageCommand,
+    ProjectCreate,
+    QualityThresholdUpdate,
+    ReportLayoutPayload,
+    ReportTemplateRenderPayload,
+    ReportTemplateUploadPayload,
+    ResultImportPayload,
+    ReviewItemCreate,
+    ReviewItemUpdate,
+    VariableCreate,
+    VariableUpdate,
+    WorkspaceLayoutResponse,
+    WorkspaceLayoutUpdate,
+    WorkspaceLayoutVersionResponse,
+    WorkflowStepUpdate,
+    WorkflowStepsReplace,
+)
+from .security import SecurityMiddleware
+from .routers.security import router as security_router
 
 
 @asynccontextmanager
@@ -36,165 +61,48 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Analysis Canvas API", version="0.1.0", lifespan=lifespan)
+app.add_middleware(SecurityMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=list(security_settings().cors_allowed_origins),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 app.mount("/assets", StaticFiles(directory=str(__import__("pathlib").Path(__file__).resolve().parents[1] / "assets")), name="assets")
+app.include_router(security_router)
 
 
-class Widget(BaseModel):
-    id: str
-    type: str
-    title: str
-    x: int = Field(ge=0)
-    y: int = Field(ge=0)
-    w: int = Field(ge=2, le=12)
-    h: int = Field(ge=2, le=12)
-    settings: dict[str, Any] = Field(default_factory=dict)
+WORKSPACE_LAYOUT_KINDS = {"portfolio", "workflow"}
 
 
-class DashboardDefinition(BaseModel):
-    id: str
-    name: str
-    description: str = ""
-    widgets: list[Widget]
-
-
-class DashboardClone(BaseModel):
-    name: str = Field(min_length=2, max_length=120)
-    description: str = Field(default="", max_length=500)
-    created_by: str = Field(default="대시보드 사용자", min_length=2, max_length=60)
-
-
-class NaturalLanguageCommand(BaseModel):
-    command: str = Field(min_length=2, max_length=500)
-
-
-class WorkflowStepUpdate(BaseModel):
-    name: str = Field(min_length=2, max_length=80)
-    status: Literal["COMPLETED", "IN_PROGRESS", "WAITING", "BLOCKED", "FAILED"] | None = None
-    owner: str | None = Field(default=None, min_length=1, max_length=80)
-    progress: int | None = Field(default=None, ge=0, le=100)
-    is_optional: bool | None = None
-    note: str | None = Field(default=None, max_length=500)
-
-
-class WorkflowStepDraft(BaseModel):
-    id: str | None = None
-    name: str = Field(min_length=2, max_length=80)
-    status: Literal["COMPLETED", "IN_PROGRESS", "WAITING", "BLOCKED", "FAILED"]
-    owner: str = Field(min_length=1, max_length=80)
-    progress: int = Field(ge=0, le=100)
-    is_optional: bool = False
-    note: str = Field(default="", max_length=500)
-
-
-class WorkflowStepsReplace(BaseModel):
-    steps: list[WorkflowStepDraft] = Field(min_length=1, max_length=50)
-
-
-class QualityThresholdUpdate(BaseModel):
-    threshold_double: float = Field(gt=0, le=1000)
-    updated_by: str = Field(default="관리자", min_length=2, max_length=40)
-
-
-class ProjectCreate(BaseModel):
-    name: str = Field(min_length=2, max_length=120)
-    product_name: str = Field(min_length=2, max_length=120)
-    description: str = Field(default="", max_length=500)
-    manufacturer: str = Field(default="", max_length=120)
-    display_size_inch: float | None = Field(default=None, gt=0, le=200)
-
-
-class AnalysisRequestCreate(BaseModel):
-    title: str = Field(min_length=2, max_length=160)
-    owner: str = Field(min_length=2, max_length=60)
-    due_in_days: int = Field(default=7, ge=1, le=365)
-    overall_note: str = Field(default="", max_length=500)
-
-
-class LoadCaseCreate(BaseModel):
-    name: str = Field(min_length=2, max_length=160)
-    analysis_type: Literal["DROP", "SIDE_CLAMP"]
-    parameters: dict[str, Any] = Field(default_factory=dict)
-
-
-class ResultImportPayload(BaseModel):
-    filename: str = Field(min_length=5, max_length=240)
-    content: str = Field(min_length=1, max_length=5_000_000)
-    author: str = Field(default="해석 담당자", min_length=2, max_length=60)
-    validate_only: bool = False
-
-
-class VariableCreate(BaseModel):
-    variable_key: str = Field(min_length=3, max_length=80, pattern=r"^[a-z][a-z0-9_]*$")
-    display_name: str = Field(min_length=2, max_length=120)
-    data_type: Literal["NUMBER", "TIME_SERIES", "FLOAT", "INTEGER", "TEXT", "CURVE", "IMAGE", "VIDEO", "MODEL_3D", "VERDICT", "STATUS", "BOOLEAN"]
-    unit: str = Field(min_length=1, max_length=30)
-    description: str = Field(default="", max_length=500)
-    filterable: bool = True
-    threshold: float | None = None
-    allowed_widgets: list[str] = Field(default_factory=list, max_length=12)
-    allowed_aggregations: list[str] = Field(default_factory=list, max_length=8)
-    result_group: Literal["OPEN_CELL", "CHASSIS_REAR", "CUSTOM"] = "CUSTOM"
-    updated_by: str = Field(default="관리자", min_length=2, max_length=60)
-
-
-class VariableUpdate(BaseModel):
-    display_name: str = Field(min_length=2, max_length=120)
-    unit: str = Field(min_length=1, max_length=30)
-    description: str = Field(default="", max_length=500)
-    filterable: bool = True
-    threshold: float | None = None
-    allowed_widgets: list[str] = Field(default_factory=list, max_length=12)
-    allowed_aggregations: list[str] = Field(default_factory=list, max_length=8)
-    result_group: Literal["OPEN_CELL", "CHASSIS_REAR", "CUSTOM"] = "CUSTOM"
-    updated_by: str = Field(default="관리자", min_length=2, max_length=60)
-
-class ImportSchemaPayload(BaseModel):
-    name: str = Field(min_length=2, max_length=120)
-    description: str = Field(default="", max_length=500)
-    definition: dict[str, Any]
-    updated_by: str = Field(default="관리자", min_length=2, max_length=60)
-
-
-class ReportLayoutPayload(BaseModel):
-    name: str = Field(min_length=2, max_length=120)
-    description: str = Field(default="", max_length=500)
-    definition: dict[str, Any]
-    updated_by: str = Field(default="보고서 편집자", min_length=2, max_length=60)
-
-
-class ReportTemplateUploadPayload(BaseModel):
-    name: str = Field(min_length=2, max_length=120)
-    filename: str = Field(min_length=6, max_length=240)
-    content_base64: str = Field(min_length=8, max_length=36_000_000)
-    updated_by: str = Field(default="보고서 편집자", min_length=2, max_length=60)
-
-
-class ReportTemplateRenderPayload(BaseModel):
-    replacements: dict[str, str] = Field(default_factory=dict)
-    filename: str = Field(default="analysis-report.pptx", min_length=6, max_length=240)
-
-
-class ReviewItemCreate(BaseModel):
-    title: str = Field(min_length=2, max_length=160)
-    body: str = Field(min_length=2, max_length=2000)
-    variable_key: str | None = Field(default=None, max_length=120)
-    time_value: float | None = None
-    entity_type: Literal["NODE", "ELEMENT"] | None = None
-    entity_id: str | None = Field(default=None, max_length=120)
-    review_status: Literal["OPEN", "IN_REVIEW", "RESOLVED"] = "OPEN"
-    created_by: str = Field(default="검토자", min_length=2, max_length=60)
-
-
-class ReviewItemUpdate(BaseModel):
-    body: str | None = Field(default=None, min_length=2, max_length=2000)
-    review_status: Literal["OPEN", "IN_REVIEW", "RESOLVED"]
+def _validated_workspace_layout(kind: str, definition: dict[str, Any]) -> dict[str, Any]:
+    if kind not in WORKSPACE_LAYOUT_KINDS:
+        raise HTTPException(404, "지원하지 않는 레이아웃 종류입니다.")
+    font_size = definition.get("fontSize")
+    if not isinstance(font_size, int) or not 8 <= font_size <= 18:
+        raise HTTPException(422, "레이아웃 글자 크기는 8~18 사이의 정수여야 합니다.")
+    if kind == "portfolio":
+        chart_order = definition.get("chartOrder")
+        expected = {"trend", "status", "quality", "type"}
+        if not isinstance(chart_order, list) or len(chart_order) != len(expected) or set(chart_order) != expected:
+            raise HTTPException(422, "운영 대시보드 차트 순서가 올바르지 않습니다.")
+        return {"fontSize": font_size, "chartOrder": chart_order}
+    accent = definition.get("accentColor")
+    if not isinstance(accent, str) or not re.fullmatch(r"#[0-9a-fA-F]{6}", accent):
+        raise HTTPException(422, "워크플로 강조 색상은 #을 포함한 6자리 HEX여야 합니다.")
+    items = definition.get("items")
+    if not isinstance(items, list):
+        raise HTTPException(422, "워크플로 레이아웃 items 배열이 필요합니다.")
+    normalized_items = []
+    for item in items:
+        if not isinstance(item, dict) or not isinstance(item.get("requestId"), str):
+            raise HTTPException(422, "워크플로 레이아웃 항목에는 requestId가 필요합니다.")
+        coordinates = {key: item.get(key) for key in ("x", "y", "w", "h")}
+        if any(not isinstance(value, int) for value in coordinates.values()):
+            raise HTTPException(422, "워크플로 레이아웃 위치와 크기는 정수여야 합니다.")
+        normalized_items.append({"requestId": item["requestId"], **coordinates})
+    return {"fontSize": font_size, "accentColor": accent, "items": normalized_items}
 
 
 def _validated_report_layout(definition: dict[str, Any]) -> dict[str, Any]:
@@ -206,6 +114,14 @@ def _validated_report_layout(definition: dict[str, Any]) -> dict[str, Any]:
     accent = str(definition.get("accentColor") or "")
     if len(accent) != 6 or any(character not in "0123456789abcdefABCDEF" for character in accent):
         raise HTTPException(422, "강조색은 6자리 HEX 색상이어야 합니다.")
+    slide_master = definition.get("slideMaster")
+    if slide_master is not None:
+        if not isinstance(slide_master, dict) or slide_master.get("design") not in {"plain", "frame", "header-band", "split"}:
+            raise HTTPException(422, "슬라이드 마스터에는 올바른 디자인이 필요합니다.")
+        for color_key in ("backgroundColor", "accentColor"):
+            color = str(slide_master.get(color_key) or "")
+            if len(color) != 6 or any(character not in "0123456789abcdefABCDEF" for character in color):
+                raise HTTPException(422, f"슬라이드 마스터 {color_key}은 6자리 HEX 색상이어야 합니다.")
     placements = definition.get("variablePlacements")
     if not isinstance(placements, list):
         raise HTTPException(422, "variablePlacements 배열이 필요합니다.")
@@ -223,6 +139,18 @@ def _validated_report_layout(definition: dict[str, Any]) -> dict[str, Any]:
             if slide["id"] in slide_ids:
                 raise HTTPException(422, "슬라이드 id는 중복될 수 없습니다.")
             slide_ids.add(slide["id"])
+            slide_style = slide.get("style")
+            if slide_style is not None:
+                if not isinstance(slide_style, dict) or not isinstance(slide_style.get("useMaster"), bool):
+                    raise HTTPException(422, "슬라이드 스타일에는 useMaster 불리언 값이 필요합니다.")
+                if slide_style.get("design") is not None and slide_style["design"] not in {"plain", "frame", "header-band", "split"}:
+                    raise HTTPException(422, "지원하지 않는 슬라이드 디자인입니다.")
+                for color_key in ("backgroundColor", "accentColor"):
+                    if slide_style.get(color_key) is None:
+                        continue
+                    color = str(slide_style[color_key])
+                    if len(color) != 6 or any(character not in "0123456789abcdefABCDEF" for character in color):
+                        raise HTTPException(422, f"슬라이드 {color_key}은 6자리 HEX 색상이어야 합니다.")
             elements = slide.get("elements")
             if not isinstance(elements, list) or len(elements) > 80:
                 raise HTTPException(422, "슬라이드 elements는 80개 이하의 배열이어야 합니다.")
@@ -233,6 +161,8 @@ def _validated_report_layout(definition: dict[str, Any]) -> dict[str, Any]:
                 if not element.get("id") or element["id"] in element_ids:
                     raise HTTPException(422, "슬라이드 안의 위젯 id는 고유해야 합니다.")
                 element_ids.add(element["id"])
+                if element.get("text") is not None and not isinstance(element["text"], str):
+                    raise HTTPException(422, "텍스트 상자 내용은 문자열이어야 합니다.")
                 for key, limit in (("x", 32), ("w", 32), ("y", 18), ("h", 18)):
                     if not isinstance(element.get(key), (int, float)) or element[key] < 0 or element[key] > limit:
                         raise HTTPException(422, f"위젯 {key} 좌표가 캔버스 범위를 벗어났습니다.")
@@ -249,7 +179,9 @@ def _validated_report_layout(definition: dict[str, Any]) -> dict[str, Any]:
 
 @app.get("/api/health")
 def health() -> dict[str, str]:
-    return {"status": "ok"}
+    with connect() as conn:
+        conn.execute("SELECT 1").fetchone()
+    return {"status": "ok", "database_backend": database_settings().backend}
 
 
 @app.get("/api/feature-examples")
@@ -678,8 +610,13 @@ def get_result_asset(asset_id: str) -> FileResponse:
         item = conn.execute("SELECT file_path, mime_type FROM media_assets WHERE id=?", [asset_id]).fetchone()
     if not item:
         raise HTTPException(404, "결과 미디어를 찾을 수 없습니다.")
-    path = (Path(__file__).resolve().parents[1] / "assets" / item[0]).resolve()
     assets_root = (Path(__file__).resolve().parents[1] / "assets").resolve()
+    relative_path = Path(item[0])
+    # Early seed data stored paths with an `assets/` prefix while imported
+    # media stores paths relative to the assets root. Accept both forms.
+    if relative_path.parts and relative_path.parts[0].lower() == "assets":
+        relative_path = Path(*relative_path.parts[1:])
+    path = (assets_root / relative_path).resolve()
     if assets_root not in path.parents or not path.is_file():
         raise HTTPException(404, "결과 미디어 파일을 찾을 수 없습니다.")
     return FileResponse(path, media_type=item[1])
@@ -1378,6 +1315,58 @@ def _report_layout_item(item: dict[str, Any]) -> dict[str, Any]:
         **item,
         "definition": definition,
     }
+
+
+@app.get("/api/workspace-layouts/{layout_kind}", response_model=WorkspaceLayoutResponse)
+def get_workspace_layout(layout_kind: Literal["portfolio", "workflow"]) -> dict[str, Any]:
+    if layout_kind not in WORKSPACE_LAYOUT_KINDS:
+        raise HTTPException(404, "지원하지 않는 레이아웃 종류입니다.")
+    with connect() as conn:
+        stored = conn.execute(
+            "SELECT layout_kind, version, definition_json, updated_by, updated_at FROM workspace_layouts WHERE layout_kind=?",
+            [layout_kind],
+        ).fetchone()
+    if not stored:
+        raise HTTPException(404, "저장된 레이아웃이 없습니다.")
+    return {"layout_kind": stored[0], "version": stored[1], "definition": json_value(stored[2]), "updated_by": stored[3], "updated_at": stored[4]}
+
+
+@app.put("/api/workspace-layouts/{layout_kind}", response_model=WorkspaceLayoutResponse)
+def save_workspace_layout(layout_kind: Literal["portfolio", "workflow"], payload: WorkspaceLayoutUpdate) -> dict[str, Any]:
+    definition = _validated_workspace_layout(layout_kind, payload.definition)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    encoded = json.dumps(definition, ensure_ascii=False)
+    with connect() as conn:
+        existing = conn.execute("SELECT version FROM workspace_layouts WHERE layout_kind=?", [layout_kind]).fetchone()
+        if not existing:
+            raise HTTPException(404, "저장된 레이아웃이 없습니다.")
+        version = int(existing[0]) + 1
+        conn.execute("BEGIN TRANSACTION")
+        try:
+            conn.execute(
+                "UPDATE workspace_layouts SET version=?, definition_json=?, updated_by=?, updated_at=? WHERE layout_kind=?",
+                [version, encoded, payload.updated_by.strip(), now, layout_kind],
+            )
+            conn.execute(
+                "INSERT INTO workspace_layout_versions VALUES (?, ?, ?, ?, ?, true)",
+                [layout_kind, version, encoded, payload.updated_by.strip(), now],
+            )
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    return {"layout_kind": layout_kind, "version": version, "definition": definition, "updated_by": payload.updated_by.strip(), "updated_at": now}
+
+
+@app.get("/api/workspace-layouts/{layout_kind}/versions", response_model=list[WorkspaceLayoutVersionResponse])
+def get_workspace_layout_versions(layout_kind: Literal["portfolio", "workflow"]) -> list[dict[str, Any]]:
+    if layout_kind not in WORKSPACE_LAYOUT_KINDS:
+        raise HTTPException(404, "지원하지 않는 레이아웃 종류입니다.")
+    with connect() as conn:
+        return rows(conn.execute(
+            "SELECT layout_kind, version, created_by, created_at, is_valid FROM workspace_layout_versions WHERE layout_kind=? ORDER BY version DESC",
+            [layout_kind],
+        ))
 
 
 @app.get("/api/report-layouts")

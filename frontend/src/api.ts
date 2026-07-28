@@ -1,9 +1,20 @@
-import type { AnalysisRequest, AnalysisRunSummary, AutomationTemplate, DashboardDefinition, DashboardSummary, DashboardVersion, FeatureExample, ImportSchema, ImportSchemaDefinition, LoadCase, Overview, PortfolioOverview, Project, QualityThreshold, ReportLayout, ReportLayoutDefinition, ReportLayoutVersion, ReportTemplateAsset, ReviewItem, RunComparison, RunTrust, VariableDefinition, VariableDefinitionInput, WidgetCatalogItem, Workflow, WorkflowStep } from './types'
+import type { AnalysisRequest, AnalysisRunSummary, AutomationTemplate, DashboardDefinition, DashboardSummary, DashboardVersion, FeatureExample, ImportSchema, ImportSchemaDefinition, LoadCase, Overview, PortfolioLayout, PortfolioOverview, Project, QualityThreshold, ReportLayout, ReportLayoutDefinition, ReportLayoutVersion, ReportTemplateAsset, ReviewItem, RunComparison, RunTrust, VariableDefinition, VariableDefinitionInput, WidgetCatalogItem, Workflow, WorkflowDashboardLayout, WorkflowStep, WorkspaceLayout, WorkspaceLayoutVersion } from './types'
+import { generatedApiClient } from './generated/client'
+import { authenticatedFetch, clearSession } from './auth'
+import type { AuthUser } from './auth'
+
+const fetch = authenticatedFetch
 
 async function json<T>(response: Response | Promise<Response>): Promise<T> {
   response = await response
   if (!response.ok) {
-    const detail = await response.text()
+    const body = await response.text()
+    let detail = body
+    try { detail = (JSON.parse(body) as { detail?: string }).detail ?? body } catch { /* plain-text response */ }
+    if (response.status === 401 && !response.url.endsWith('/api/auth/login')) {
+      clearSession()
+      window.dispatchEvent(new CustomEvent('analysis-auth-expired'))
+    }
     throw new Error(detail || `요청 실패 (${response.status})`)
   }
   return response.json() as Promise<T>
@@ -19,6 +30,13 @@ function arrayBufferToBase64(buffer: ArrayBuffer) {
 }
 
 export const api = {
+  authStatus: () => json<{ mode: 'disabled' | 'password'; authentication_required: boolean }>(fetch('/api/auth/status')),
+  login: (username: string, password: string) => json<{ access_token: string; token_type: 'bearer'; expires_at: number; user: AuthUser }>(fetch('/api/auth/login', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }),
+  })),
+  me: () => json<AuthUser>(fetch('/api/auth/me')),
+  logout: () => json<{ status: string }>(fetch('/api/auth/logout', { method: 'POST' })),
+  health: () => json<{ status: string; database_backend: 'duckdb' | 'postgresql' }>(fetch('/api/health')),
   portfolio: (params: URLSearchParams) => json<PortfolioOverview>(fetch(`/api/portfolio/overview?${params}`)),
   portfolioCsvUrl: (params: URLSearchParams) => `/api/portfolio/export.csv?${params}`,
   projects: () => json<Project[]>(fetch('/api/projects')),
@@ -73,6 +91,24 @@ export const api = {
   updateReviewItem: (annotationId: string, reviewStatus: 'OPEN' | 'IN_REVIEW' | 'RESOLVED', body?: string) =>
     json<ReviewItem>(fetch(`/api/review-items/${annotationId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ review_status: reviewStatus, ...(body ? { body } : {}) }) })),
   workflows: () => json<Workflow[]>(fetch('/api/workflows')),
+  workspaceLayout: async <T extends PortfolioLayout | WorkflowDashboardLayout>(kind: 'portfolio' | 'workflow') => {
+    const { data, error } = await generatedApiClient.GET('/api/workspace-layouts/{layout_kind}', { params: { path: { layout_kind: kind } } })
+    if (error || !data) throw new Error(JSON.stringify(error ?? '저장된 레이아웃을 불러오지 못했습니다.'))
+    return data as WorkspaceLayout<T>
+  },
+  saveWorkspaceLayout: async <T extends PortfolioLayout | WorkflowDashboardLayout>(kind: 'portfolio' | 'workflow', definition: T) => {
+    const { data, error } = await generatedApiClient.PUT('/api/workspace-layouts/{layout_kind}', {
+      params: { path: { layout_kind: kind } },
+      body: { definition: definition as unknown as Record<string, unknown>, updated_by: '대시보드 편집자' },
+    })
+    if (error || !data) throw new Error(JSON.stringify(error ?? '레이아웃을 저장하지 못했습니다.'))
+    return data as WorkspaceLayout<T>
+  },
+  workspaceLayoutVersions: async (kind: 'portfolio' | 'workflow') => {
+    const { data, error } = await generatedApiClient.GET('/api/workspace-layouts/{layout_kind}/versions', { params: { path: { layout_kind: kind } } })
+    if (error || !data) throw new Error(JSON.stringify(error ?? '레이아웃 버전을 불러오지 못했습니다.'))
+    return data as WorkspaceLayoutVersion[]
+  },
   qualityThresholds: (projectId: string) => json<QualityThreshold[]>(fetch(`/api/projects/${projectId}/quality-thresholds`)),
   updateQualityThreshold: (criterionKey: string, thresholdDouble: number) =>
     json<QualityThreshold>(

@@ -15,6 +15,7 @@ import {
   LayoutDashboard,
   LoaderCircle,
   Lock,
+  LogOut,
   MessageSquareText,
   Minus,
   PanelLeftClose,
@@ -47,6 +48,11 @@ import {
   YAxis,
 } from 'recharts'
 import { api } from './api'
+import { clearSession, saveSession, storedUser, type AuthUser } from './auth'
+import { useReportLayoutEditorState, useWorkspaceEditorCoordinator } from './editorState'
+import { DEFAULT_PORTFOLIO_LAYOUT, DEFAULT_WORKFLOW_DASHBOARD_LAYOUT, loadPortfolioLayout, loadWorkflowDashboardLayout } from './features/layouts/layoutDefaults'
+import { reportVariables, withReportVariables } from './features/reports/reportLayoutUtils'
+import { LoginScreen } from './features/auth/LoginScreen'
 import { PortfolioDashboard } from './PortfolioDashboard'
 import type { ReportExportOptions, ReportScope } from './reportExport'
 import type { AnalysisRequest, AnalysisRunSummary, AutomationTemplate, DashboardDefinition, DashboardSummary, DashboardVersion, DashboardWidget, FeatureExample, ImportSchema, LoadCase, Overview, PortfolioLayout, Project, QualityThreshold, ReportElementDefinition, ReportElementType, ReportLayout, ReportLayoutDefinition, ReportLayoutVersion, ReportSection, ReportSlideDefinition, ReportSlideKind, ReportTemplateAsset, ReviewItem, RunComparison, RunTrust, VariableDefinition, VariableDefinitionInput, WidgetCatalogItem, Workflow, WorkflowDashboardLayout, WorkflowStep } from './types'
@@ -60,61 +66,11 @@ function hasNumericValue(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
 }
 
-const DEFAULT_PORTFOLIO_LAYOUT: PortfolioLayout = {
-  fontSize: 10,
-  chartOrder: ['trend', 'status', 'quality', 'type'],
-}
-
-function loadPortfolioLayout(): PortfolioLayout {
-  try {
-    const saved = JSON.parse(localStorage.getItem('analysis-canvas.portfolio-layout') ?? '{}') as Partial<PortfolioLayout>
-    const savedOrder = Array.isArray(saved.chartOrder) ? saved.chartOrder : []
-    const hasValidOrder = savedOrder.length === DEFAULT_PORTFOLIO_LAYOUT.chartOrder.length
-      && DEFAULT_PORTFOLIO_LAYOUT.chartOrder.every((id) => savedOrder.includes(id))
-    return {
-      fontSize: typeof saved.fontSize === 'number' ? Math.min(18, Math.max(8, saved.fontSize)) : DEFAULT_PORTFOLIO_LAYOUT.fontSize,
-      chartOrder: hasValidOrder ? savedOrder : DEFAULT_PORTFOLIO_LAYOUT.chartOrder,
-    }
-  } catch {
-    return DEFAULT_PORTFOLIO_LAYOUT
-  }
-}
-
-const DEFAULT_WORKFLOW_DASHBOARD_LAYOUT: WorkflowDashboardLayout = {
-  fontSize: 10,
-  accentColor: '#50d5ff',
-  items: [],
-}
-
-function loadWorkflowDashboardLayout(): WorkflowDashboardLayout {
-  try {
-    const saved = JSON.parse(localStorage.getItem('analysis-canvas.workflow-dashboard-layout') ?? '{}') as Partial<WorkflowDashboardLayout>
-    return {
-      fontSize: typeof saved.fontSize === 'number' ? Math.min(18, Math.max(8, saved.fontSize)) : DEFAULT_WORKFLOW_DASHBOARD_LAYOUT.fontSize,
-      accentColor: typeof saved.accentColor === 'string' && /^#[0-9a-f]{6}$/i.test(saved.accentColor) ? saved.accentColor : DEFAULT_WORKFLOW_DASHBOARD_LAYOUT.accentColor,
-      items: Array.isArray(saved.items) ? saved.items.filter((item) => item && typeof item.requestId === 'string') : [],
-    }
-  } catch {
-    return { ...DEFAULT_WORKFLOW_DASHBOARD_LAYOUT, items: [] }
-  }
-}
-
-function reportVariables(overview: Overview) {
-  const items = new Map<string, string>()
-  overview.scalar_results.forEach((item) => items.set(item.variable_key, item.display_name))
-  overview.time_series.forEach((item) => items.set(item.variable_key, item.display_name))
-  return [...items].map(([key, name]) => ({ key, name }))
-}
-
-function withReportVariables(layout: ReportLayoutDefinition, overview: Overview): ReportLayoutDefinition {
-  if (layout.variablePlacements.length) return { ...layout, variablePlacements: [...layout.variablePlacements].sort((a, b) => a.order - b.order) }
-  return {
-    ...layout,
-    variablePlacements: reportVariables(overview).map((item, order) => ({ variableKey: item.key, presentation: 'both', order })),
-  }
-}
-
 function App() {
+  const [authReady, setAuthReady] = useState(false)
+  const [authRequired, setAuthRequired] = useState(false)
+  const [authUser, setAuthUser] = useState<AuthUser | null>(storedUser)
+  const [authError, setAuthError] = useState('')
   const [overview, setOverview] = useState<Overview | null>(null)
   const [projects, setProjects] = useState<Project[]>([])
   const [requests, setRequests] = useState<AnalysisRequest[]>([])
@@ -127,13 +83,15 @@ function App() {
   const [dashboard, setDashboard] = useState<DashboardDefinition | null>(null)
   const [activeView, setActiveView] = useState<ActiveView>('workflow')
   const [workspacePage, setWorkspacePage] = useState<WorkspacePage>('portfolio')
-  const [editMode, setEditMode] = useState(false)
+  const workspaceEditor = useWorkspaceEditorCoordinator()
+  const editMode = workspaceEditor.isEditing
   const [assistantOpen, setAssistantOpen] = useState(false)
   const [command, setCommand] = useState('')
   const [proposal, setProposal] = useState<Awaited<ReturnType<typeof api.previewCommand>> | null>(null)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
+  const [databaseBackend, setDatabaseBackend] = useState<'duckdb' | 'postgresql'>('duckdb')
   const [selectedEdges, setSelectedEdges] = useState<string[]>(['top', 'bottom', 'left', 'right'])
   const [widgetCatalog, setWidgetCatalog] = useState<WidgetCatalogItem[]>([])
   const [variables, setVariables] = useState<VariableDefinition[]>([])
@@ -149,14 +107,47 @@ function App() {
   const [reportLayoutDraft, setReportLayoutDraft] = useState<ReportLayoutDefinition | null>(null)
   const [reportLayoutVersions, setReportLayoutVersions] = useState<ReportLayoutVersion[]>([])
   const [reportTemplates, setReportTemplates] = useState<ReportTemplateAsset[]>([])
-  const [reportLayoutManaging, setReportLayoutManaging] = useState(false)
+  const reportLayoutEditor = useReportLayoutEditorState()
   const [portfolioLayout, setPortfolioLayout] = useState<PortfolioLayout>(loadPortfolioLayout)
   const [workflowDashboardLayout, setWorkflowDashboardLayout] = useState<WorkflowDashboardLayout>(loadWorkflowDashboardLayout)
-  const [workflowEditorMode, setWorkflowEditorMode] = useState<'stages' | 'layout' | null>(null)
+  const [portfolioLayoutVersion, setPortfolioLayoutVersion] = useState(1)
+  const [workflowLayoutVersion, setWorkflowLayoutVersion] = useState(1)
+  const workflowEditorMode = workspaceEditor.isWorkflowLayout ? 'layout' : workspaceEditor.isWorkflowStages ? 'stages' : null
   const portfolioLayoutBeforeEdit = useRef<PortfolioLayout | null>(null)
   const dashboardBeforeEdit = useRef<DashboardDefinition | null>(null)
   const workflowsBeforeEdit = useRef<Workflow[] | null>(null)
   const workflowLayoutBeforeEdit = useRef<WorkflowDashboardLayout | null>(null)
+
+  useEffect(() => {
+    const prepareAuthentication = async () => {
+      try {
+        const status = await api.authStatus()
+        setAuthRequired(status.authentication_required)
+        if (status.authentication_required && authUser) {
+          const verified = await api.me()
+          setAuthUser(verified)
+        } else if (!status.authentication_required) {
+          setAuthUser(null)
+        }
+      } catch (reason) {
+        clearSession()
+        setAuthUser(null)
+        setAuthError(reason instanceof Error ? reason.message : '인증 상태를 확인하지 못했습니다.')
+      } finally {
+        setAuthReady(true)
+      }
+    }
+    void prepareAuthentication()
+  }, [])
+
+  useEffect(() => {
+    const expired = () => {
+      setAuthUser(null)
+      setAuthError('로그인 세션이 만료되었습니다. 다시 로그인하세요.')
+    }
+    window.addEventListener('analysis-auth-expired', expired)
+    return () => window.removeEventListener('analysis-auth-expired', expired)
+  }, [])
 
   useEffect(() => {
     if (workspacePage !== 'portfolio' && portfolioLayoutBeforeEdit.current) {
@@ -175,16 +166,24 @@ function App() {
       setWorkflowDashboardLayout(workflowLayoutBeforeEdit.current)
       workflowLayoutBeforeEdit.current = null
     }
-    setEditMode(false)
-    setWorkflowEditorMode(null)
+    workspaceEditor.close()
     setSelectedWidgetId(null)
     setAssistantOpen(false)
   }, [workspacePage])
 
   useEffect(() => {
+    if (!authReady || (authRequired && !authUser)) return
     const bootstrap = async () => {
+      setLoading(true)
       try {
-        const [projectData, workflowData, dashboardData] = await Promise.all([api.projects(), api.workflows(), api.dashboard()])
+        const [health, projectData, workflowData, dashboardData, storedPortfolioLayout, storedWorkflowLayout] = await Promise.all([
+          api.health(),
+          api.projects(),
+          api.workflows(),
+          api.dashboard(),
+          api.workspaceLayout<PortfolioLayout>('portfolio'),
+          api.workspaceLayout<WorkflowDashboardLayout>('workflow'),
+        ])
         const project = projectData[0]
         if (!project) throw new Error('등록된 프로젝트가 없습니다.')
         const requestData = await api.requests(project.id)
@@ -195,6 +194,7 @@ function App() {
         if (!loadCase) throw new Error('등록된 하중 경우가 없습니다.')
         const overviewData = await api.overview(loadCase.id)
         setProjects(projectData)
+        setDatabaseBackend(health.database_backend)
         setRequests(requestData)
         setLoadCases(caseData)
         setThresholds(thresholdData)
@@ -204,6 +204,10 @@ function App() {
         setOverview(overviewData)
         setWorkflows(workflowData)
         setDashboard(dashboardData)
+        setPortfolioLayout(storedPortfolioLayout.definition)
+        setPortfolioLayoutVersion(storedPortfolioLayout.version)
+        setWorkflowDashboardLayout(storedWorkflowLayout.definition)
+        setWorkflowLayoutVersion(storedWorkflowLayout.version)
         setActiveView('workflow')
       } catch (reason) {
         setError(reason instanceof Error ? reason.message : '초기 데이터를 불러오지 못했습니다.')
@@ -212,7 +216,27 @@ function App() {
       }
     }
     bootstrap()
-  }, [])
+  }, [authReady, authRequired, authUser?.id])
+
+  const handleLogin = async (username: string, password: string) => {
+    setAuthError('')
+    try {
+      const result = await api.login(username, password)
+      saveSession(result.access_token, result.user)
+      setAuthUser(result.user)
+    } catch (reason) {
+      setAuthError(reason instanceof Error ? reason.message : '로그인하지 못했습니다.')
+      throw reason
+    }
+  }
+
+  const logout = async () => {
+    try { await api.logout() } catch { /* clear the local session even if the server is unavailable */ }
+    clearSession()
+    setAuthUser(null)
+    setOverview(null)
+    setLoading(true)
+  }
 
   useEffect(() => {
     if (activeView !== 'open_cell' && activeView !== 'chassis') return
@@ -291,10 +315,12 @@ function App() {
   const save = async () => {
     if (workspacePage === 'portfolio') {
       try {
-        localStorage.setItem('analysis-canvas.portfolio-layout', JSON.stringify(portfolioLayout))
+        const stored = await api.saveWorkspaceLayout('portfolio', portfolioLayout)
+        setPortfolioLayout(stored.definition)
+        setPortfolioLayoutVersion(stored.version)
         portfolioLayoutBeforeEdit.current = null
-        setEditMode(false)
-        setNotice('운영 대시보드 설정을 저장했습니다.')
+        workspaceEditor.close()
+        setNotice(`운영 대시보드 설정 v${stored.version}을 저장했습니다.`)
         setTimeout(() => setNotice(''), 2600)
       } catch (reason) {
         setError(reason instanceof Error ? reason.message : '운영 대시보드 설정을 저장하지 못했습니다.')
@@ -304,11 +330,12 @@ function App() {
     if (activeView === 'workflow') {
       if (workflowEditorMode === 'layout') {
         try {
-          localStorage.setItem('analysis-canvas.workflow-dashboard-layout', JSON.stringify(workflowDashboardLayout))
+          const stored = await api.saveWorkspaceLayout('workflow', workflowDashboardLayout)
+          setWorkflowDashboardLayout(stored.definition)
+          setWorkflowLayoutVersion(stored.version)
           workflowLayoutBeforeEdit.current = null
-          setWorkflowEditorMode(null)
-          setEditMode(false)
-          setNotice('진행 현황 대시보드 레이아웃을 저장했습니다.')
+          workspaceEditor.close()
+          setNotice(`진행 현황 대시보드 레이아웃 v${stored.version}을 저장했습니다.`)
           setTimeout(() => setNotice(''), 2600)
         } catch (reason) {
           setError(reason instanceof Error ? reason.message : '진행 현황 레이아웃을 저장하지 못했습니다.')
@@ -316,7 +343,7 @@ function App() {
         return
       }
       const original = workflowsBeforeEdit.current
-      if (!original) { setEditMode(false); return }
+      if (!original) { workspaceEditor.close(); return }
       const signature = (steps: WorkflowStep[]) => JSON.stringify(steps.map((step) => ({ id: step.id, name: step.name, status: step.status, owner: step.owner, progress: step.progress, is_optional: step.is_optional, note: step.note ?? '' })))
       const originalByRequest = new Map(original.map((workflow) => [workflow.request.id, workflow]))
       const changed = workflows.filter((workflow) => signature(workflow.steps) !== signature(originalByRequest.get(workflow.request.id)?.steps ?? []))
@@ -326,8 +353,7 @@ function App() {
         await Promise.all(changed.map((workflow) => api.replaceWorkflowSteps(workflow.request.id, workflow.steps.map((step) => ({ id: step.id.startsWith('draft-step-') ? null : step.id, name: step.name.trim(), status: step.status, owner: step.owner.trim(), progress: step.progress, is_optional: step.is_optional, note: step.note ?? '' })))))
         setWorkflows(await api.workflows())
         workflowsBeforeEdit.current = null
-        setWorkflowEditorMode(null)
-        setEditMode(false)
+        workspaceEditor.close()
         setNotice(changed.length ? `의뢰 ${changed.length}건의 진행 단계를 저장했습니다.` : '변경된 작업 단계가 없습니다.')
         setTimeout(() => setNotice(''), 2600)
       } catch (reason) {
@@ -342,7 +368,7 @@ function App() {
       dashboardBeforeEdit.current = null
       setNotice(`레이아웃 v${result.version} 저장 완료`)
       setTimeout(() => setNotice(''), 2600)
-      setEditMode(false)
+      workspaceEditor.close()
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '저장하지 못했습니다.')
     }
@@ -352,19 +378,17 @@ function App() {
     if (workspacePage === 'portfolio') portfolioLayoutBeforeEdit.current = { ...portfolioLayout, chartOrder: [...portfolioLayout.chartOrder] }
     if (workspacePage === 'dashboard' && activeView !== 'workflow' && dashboard) dashboardBeforeEdit.current = structuredClone(dashboard)
     setSelectedWidgetId(null)
-    setEditMode(true)
+    workspaceEditor.open(workspacePage === 'portfolio' ? 'portfolio-layout' : 'analysis-dashboard')
   }
 
   const beginWorkflowStageEditing = () => {
     workflowsBeforeEdit.current = structuredClone(workflows)
-    setWorkflowEditorMode('stages')
-    setEditMode(true)
+    workspaceEditor.open('workflow-stages')
   }
 
   const beginWorkflowLayoutEditing = () => {
     workflowLayoutBeforeEdit.current = structuredClone(workflowDashboardLayout)
-    setWorkflowEditorMode('layout')
-    setEditMode(true)
+    workspaceEditor.open('workflow-layout')
   }
 
   const cancelEditing = () => {
@@ -386,8 +410,7 @@ function App() {
     }
     setSelectedWidgetId(null)
     setAssistantOpen(false)
-    setWorkflowEditorMode(null)
-    setEditMode(false)
+    workspaceEditor.close()
   }
 
   const resetPortfolioLayout = () => {
@@ -426,6 +449,7 @@ function App() {
 
   const applyProposal = () => {
     if (!dashboard || !proposal?.proposal) return
+    if (!dashboardBeforeEdit.current) dashboardBeforeEdit.current = structuredClone(dashboard)
     if (proposal.proposal.action === 'add_widget') setDashboard({ ...dashboard, widgets: [...dashboard.widgets, proposal.proposal.widget] })
     else {
       const updates = proposal.proposal.updates
@@ -434,7 +458,7 @@ function App() {
     setProposal(null)
     setCommand('')
     setAssistantOpen(false)
-    setEditMode(true)
+    workspaceEditor.open('analysis-dashboard')
     setNotice('변경안을 적용했습니다. 저장하면 새 버전이 생성됩니다.')
     setTimeout(() => setNotice(''), 3000)
   }
@@ -451,11 +475,12 @@ function App() {
 
   const addCatalogWidget = (item: WidgetCatalogItem) => {
     if (!dashboard) return
+    if (!dashboardBeforeEdit.current) dashboardBeforeEdit.current = structuredClone(dashboard)
     const variable = variables.find((entry) => entry.id === catalogVariable)
     if (variable && !item.allowed_data_types.includes(variable.data_type)) { setNotice(`${variable.display_name}에는 ${item.label}을 사용할 수 없습니다.`); return }
     const [w, h] = item.default_size
     setDashboard({ ...dashboard, widgets: [...dashboard.widgets, { id: `${item.type}-${Date.now()}`, type: item.type, title: variable ? `${variable.display_name} · ${item.label}` : item.label, x: 0, y: 30, w, h, settings: { variableId: variable?.id } }] })
-    setEditMode(true); setNotice('위젯을 추가했습니다. 위치를 조정한 뒤 저장하세요.')
+    workspaceEditor.open('analysis-dashboard'); setNotice('위젯을 추가했습니다. 위치를 조정한 뒤 저장하세요.')
   }
 
   const cloneLayout = async () => {
@@ -539,7 +564,7 @@ function App() {
       setReportLayoutDraft(withReportVariables(normalizeReportLayout(selected), scopedOverview))
       setReportLayoutVersions(layoutVersions)
       setReportTemplates(templates)
-      setReportLayoutManaging(false)
+      reportLayoutEditor.close()
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '보고서 레이아웃을 불러오지 못했습니다.')
     }
@@ -682,6 +707,14 @@ function App() {
     }
   }
 
+  if (!authReady) {
+    return <div className="full-state"><LoaderCircle className="spin" /> 인증 설정을 확인하고 있습니다.</div>
+  }
+
+  if (authRequired && !authUser) {
+    return <LoginScreen error={authError} onLogin={handleLogin} />
+  }
+
   if (loading) {
     return <div className="full-state"><LoaderCircle className="spin" /> 데이터와 레이아웃을 준비하고 있습니다.</div>
   }
@@ -695,6 +728,7 @@ function App() {
   const chassisAvailable = overview.analysis_verdicts.chassis_rear !== 'NO_DATA'
   const workflowProgress = Math.round(projectWorkflows.reduce((sum, workflow) => sum + workflow.progress, 0) / Math.max(projectWorkflows.length, 1))
   const chassisThreshold = thresholds.find((item) => item.criterion_key === 'chassis_rear_permanent_deformation_mm')
+  const canEdit = !authRequired || authUser?.role === 'editor' || authUser?.role === 'admin'
 
   return (
     <div className="app-shell">
@@ -702,7 +736,7 @@ function App() {
         <div className="brand"><span className="brand-mark"><Activity /></span><span>ANALYSIS<br /><strong>CANVAS</strong></span></div>
         <nav className="nav-main">
           <button className={workspacePage === 'portfolio' ? 'active' : ''} onClick={() => setWorkspacePage('portfolio')}><LayoutDashboard /><span>운영 대시보드</span></button>
-          <button className={workspacePage === 'dashboard' ? 'active' : ''} onClick={openDashboardWorkspace}><Activity /><span>해석 상세</span></button>
+          <button className={workspacePage === 'dashboard' ? 'active' : ''} onClick={openDashboardWorkspace}><Activity /><span>해석 의뢰 현황</span></button>
           <button className={workspacePage === 'data' ? 'active' : ''} onClick={() => setWorkspacePage('data')}><Database /><span>해석 데이터</span></button>
           <button className={workspacePage === 'variables' ? 'active' : ''} onClick={() => setWorkspacePage('variables')}><BarChart3 /><span>변수 카탈로그</span></button>
           <button className={workspacePage === 'templates' ? 'active' : ''} onClick={() => setWorkspacePage('templates')}><Settings2 /><span>자동화 템플릿</span></button>
@@ -711,8 +745,9 @@ function App() {
           <button className={workspacePage === 'help' ? 'active' : ''} onClick={() => setWorkspacePage('help')}><BookOpen /><span>도움말</span></button>
         </nav>
         <div className="sidebar-foot">
-          <div className="system-pill"><span className="live-dot" /> DUCKDB · LOCAL</div>
-          <button><PanelLeftClose /> 메뉴 접기</button>
+          {authUser && <div className="signed-user"><strong>{authUser.display_name}</strong><span>{authUser.role.toUpperCase()}</span></div>}
+          <div className="system-pill"><span className="live-dot" /> {databaseBackend.toUpperCase()} · {databaseBackend === 'postgresql' ? 'SERVER' : 'LOCAL'}</div>
+          {authUser ? <button onClick={() => void logout()}><LogOut /> 로그아웃</button> : <button><PanelLeftClose /> 메뉴 접기</button>}
         </div>
       </aside>
 
@@ -720,20 +755,20 @@ function App() {
         <header className="topbar">
           <div className="breadcrumb">{workspacePage === 'portfolio' ? <><span>운영</span><b>/</b><strong>해석 운영 현황</strong></> : workspacePage === 'data' ? <><span>운영</span><b>/</b><strong>해석 데이터 등록</strong></> : workspacePage === 'schemas' ? <><span>데이터 설계</span><b>/</b><strong>폴더 스키마</strong></> : workspacePage === 'variables' ? <><span>설계</span><b>/</b><strong>변수 카탈로그</strong></> : workspacePage === 'templates' ? <><span>자동화</span><b>/</b><strong>모델링 템플릿</strong></> : workspacePage === 'examples' ? <><span>지원</span><b>/</b><strong>기능 예제 갤러리</strong></> : workspacePage === 'help' ? <><span>지원</span><b>/</b><strong>사용 시나리오 도움말</strong></> : <><span>프로젝트</span><b>/</b><span>{overview.load_case.project_name}</span><b>/</b><strong>{overview.load_case.name}</strong></>}</div>
           <div className="top-actions">
-            {workspacePage === 'dashboard' && activeView !== 'compare' && activeView !== 'workflow' && <button className="ghost-button" onClick={() => setAssistantOpen(true)}><Sparkles /> 자연어로 개선</button>}
-            {workspacePage === 'dashboard' && activeView === 'workflow' ? (editMode ? (
+            {canEdit && workspacePage === 'dashboard' && activeView !== 'compare' && activeView !== 'workflow' && <button className="ghost-button" onClick={() => setAssistantOpen(true)}><Sparkles /> 자연어로 개선</button>}
+            {canEdit && (workspacePage === 'dashboard' && activeView === 'workflow' ? (editMode ? (
               <button className="primary-button" onClick={save}><Save /> {workflowEditorMode === 'layout' ? '대시보드 레이아웃 저장' : '단계 변경 저장'}</button>
             ) : <div className="workflow-top-edit-actions">
               <button className="edit-button" onClick={beginWorkflowLayoutEditing}><LayoutDashboard /> 대시보드 편집</button>
               <button className="edit-button" onClick={beginWorkflowStageEditing}><Settings2 /> 진행 단계 편집</button>
             </div>) : ((workspacePage === 'dashboard' && activeView !== 'compare') || workspacePage === 'portfolio') && (editMode ? (
               <button className="primary-button" onClick={save}><Save /> {workspacePage === 'portfolio' ? '운영 설정 저장' : '레이아웃 저장'}</button>
-            ) : <button className="edit-button" onClick={beginEditing}><Settings2 /> 대시보드 편집</button>)}
-            <div className="avatar">HK</div>
+            ) : <button className="edit-button" onClick={beginEditing}><Settings2 /> 대시보드 편집</button>))}
+            <div className="avatar">{authUser ? authUser.display_name.slice(0, 2) : 'HK'}</div>
           </div>
         </header>
 
-        {workspacePage === 'portfolio' ? <PortfolioDashboard editMode={editMode} layout={portfolioLayout} onLayoutChange={setPortfolioLayout} onCancelEdit={cancelEditing} onResetLayout={resetPortfolioLayout} onOpen={(projectId, requestId, loadCaseId) => void openImportedResult(projectId, requestId, loadCaseId)} /> : workspacePage === 'schemas' ? <FolderSchemaWorkspace /> : workspacePage === 'variables' ? <VariableCatalogPage variables={variables} overview={overview} loadCaseId={selectedLoadCaseId} onChanged={(items) => { setVariables(items); setCatalogVariable((current) => items.some((item) => item.id === current) ? current : items[0]?.id ?? '') }} /> : workspacePage === 'templates' ? <AutomationTemplatesPage /> : workspacePage === 'examples' ? <FeatureExampleGallery onOpen={openFeatureExample} /> : workspacePage === 'help' ? <HelpCenter onNavigate={setWorkspacePage} /> : workspacePage === 'data' ? (
+        {workspacePage === 'portfolio' ? <PortfolioDashboard editMode={editMode} layout={portfolioLayout} layoutVersion={portfolioLayoutVersion} onLayoutChange={setPortfolioLayout} onCancelEdit={cancelEditing} onResetLayout={resetPortfolioLayout} onOpen={(projectId, requestId, loadCaseId) => void openImportedResult(projectId, requestId, loadCaseId)} /> : workspacePage === 'schemas' ? <FolderSchemaWorkspace /> : workspacePage === 'variables' ? <VariableCatalogPage variables={variables} overview={overview} loadCaseId={selectedLoadCaseId} onChanged={(items) => { setVariables(items); setCatalogVariable((current) => items.some((item) => item.id === current) ? current : items[0]?.id ?? '') }} /> : workspacePage === 'templates' ? <AutomationTemplatesPage /> : workspacePage === 'examples' ? <FeatureExampleGallery onOpen={openFeatureExample} /> : workspacePage === 'help' ? <HelpCenter onNavigate={setWorkspacePage} /> : workspacePage === 'data' ? (
           <DataWorkspace projects={projects} initialProjectId={selectedProjectId} onDataChanged={refreshOperationalData} onOpenAnalysis={openImportedResult} />
         ) : <>
         <section className="content-head">
@@ -762,7 +797,7 @@ function App() {
         </nav>{activeView === 'open_cell' && <EdgeFilter selected={selectedEdges} setSelected={setSelectedEdges} />}</section>}
 
         {editMode && (
-          <div className="edit-banner"><GripVertical /><span><strong>{activeView === 'workflow' && workflowEditorMode === 'layout' ? '대시보드 레이아웃 편집' : activeView === 'workflow' ? '진행 단계 편집' : '편집 모드'}</strong> {activeView === 'workflow' && workflowEditorMode === 'layout' ? '의뢰 위젯을 이동·리사이즈하고 색상과 글자 크기를 조절한 뒤 상단에서 저장하세요.' : activeView === 'workflow' ? '단계 내용·순서·추가·삭제를 편집한 뒤 상단의 단계 변경 저장을 누르세요.' : '위젯을 드래그하거나 모서리를 잡아 크기를 조절하고 설정 버튼으로 그래프, 변수, 글자 크기를 바꾸세요.'}</span><button onClick={cancelEditing}>편집 취소</button></div>
+          <div className="edit-banner" data-testid={workspaceEditor.mode ?? undefined}><GripVertical /><span><strong>{activeView === 'workflow' && workflowEditorMode === 'layout' ? '대시보드 레이아웃 편집' : activeView === 'workflow' ? '진행 단계 편집' : '편집 모드'}</strong> {activeView === 'workflow' && workflowEditorMode === 'layout' ? '의뢰 위젯을 이동·리사이즈하고 색상과 글자 크기를 조절한 뒤 상단에서 저장하세요.' : activeView === 'workflow' ? '단계 내용·순서·추가·삭제를 편집한 뒤 상단의 단계 변경 저장을 누르세요.' : '위젯을 드래그하거나 모서리를 잡아 크기를 조절하고 설정 버튼으로 그래프, 변수, 글자 크기를 바꾸세요.'}</span><button onClick={cancelEditing}>편집 취소</button></div>
         )}
         {editMode && activeView === 'workflow' && workflowEditorMode === 'layout' && <div className="workflow-layout-toolbar">
           <label><span>강조 색상</span><input aria-label="진행 현황 강조 색상" type="color" value={workflowDashboardLayout.accentColor} onChange={(event) => setWorkflowDashboardLayout({ ...workflowDashboardLayout, accentColor: event.target.value })}/><code>{workflowDashboardLayout.accentColor}</code></label>
@@ -800,7 +835,7 @@ function App() {
               ))}
             </ResponsiveGridLayout>
           ) : (
-            <WorkflowView workflows={projectWorkflows} stageEditMode={editMode && workflowEditorMode === 'stages'} layoutEditMode={editMode && workflowEditorMode === 'layout'} dashboardLayout={workflowDashboardLayout} onDashboardLayoutChange={setWorkflowDashboardLayout} onStepChange={updateWorkflowStepDraft} onAddStep={addWorkflowStepDraft} onDeleteStep={deleteWorkflowStepDraft} onMoveStep={moveWorkflowStepDraft} onOpenAnalysis={openWorkflowAnalysis} activeRequestId={selectedRequestId} />
+            <WorkflowView workflows={projectWorkflows} stageEditMode={editMode && workflowEditorMode === 'stages'} layoutEditMode={editMode && workflowEditorMode === 'layout'} dashboardLayout={workflowDashboardLayout} layoutVersion={workflowLayoutVersion} onDashboardLayoutChange={setWorkflowDashboardLayout} onStepChange={updateWorkflowStepDraft} onAddStep={addWorkflowStepDraft} onDeleteStep={deleteWorkflowStepDraft} onMoveStep={moveWorkflowStepDraft} onOpenAnalysis={openWorkflowAnalysis} activeRequestId={selectedRequestId} />
           )}
         </section>
         </>}
@@ -845,9 +880,9 @@ function App() {
             <div className="report-layout-toolbar">
               <label><span>출력 레이아웃</span><select value={reportLayoutDraft.id} onChange={(event) => void selectReportLayout(event.target.value)}>{reportLayouts.map((item) => <option key={item.id} value={item.id}>{item.name} · v{item.version}</option>)}</select></label>
               <label className="report-version-select"><span>출력 버전</span><select value={reportLayoutDraft.version} onChange={(event) => void selectReportLayoutVersion(Number(event.target.value))}>{reportLayoutVersions.map((item) => <option key={item.version} value={item.version}>v{item.version} · {new Date(item.created_at).toLocaleDateString('ko-KR')}</option>)}</select></label>
-              <button onClick={() => setReportLayoutManaging((value) => !value)}><Settings2 /> {reportLayoutManaging ? '편집 닫기' : '레이아웃 편집·관리'}</button>
+              <button onClick={reportLayoutEditor.toggle}><Settings2 /> {reportLayoutEditor.isEditing ? '편집 닫기' : '레이아웃 편집·관리'}</button>
             </div>
-            {reportLayoutManaging && <ReportLayoutEditor layout={reportLayoutDraft} overview={reportOverview} templates={reportTemplates} isSystem={Boolean(reportLayouts.find((item) => item.id === reportLayoutDraft.id)?.is_system)} onChange={setReportLayoutDraft} onTemplateUpload={(file) => void uploadReportTemplate(file)} onTemplateDelete={(id) => void removeReportTemplate(id)} onSave={() => void saveReportLayout(false)} onSaveAs={() => void saveReportLayout(true)} onDelete={() => void removeReportLayout()} />}
+            {reportLayoutEditor.isEditing && <div data-testid="ppt-layout-editor"><ReportLayoutEditor layout={reportLayoutDraft} overview={reportOverview} templates={reportTemplates} isSystem={Boolean(reportLayouts.find((item) => item.id === reportLayoutDraft.id)?.is_system)} onChange={setReportLayoutDraft} onTemplateUpload={(file) => void uploadReportTemplate(file)} onTemplateDelete={(id) => void removeReportTemplate(id)} onSave={() => void saveReportLayout(false)} onSaveAs={() => void saveReportLayout(true)} onDelete={() => void removeReportLayout()} /></div>}
             <div className="report-export-grid">
               <label><span>작성자 *</span><input value={reportDraft.author} onChange={(event) => updateReportDraft('author', event.target.value)} placeholder="홍길동" /></label>
               <label><span>개발단계 *</span><input value={reportDraft.developmentStage} onChange={(event) => updateReportDraft('developmentStage', event.target.value)} placeholder="DV 1차" /></label>
@@ -888,22 +923,53 @@ function ReportLayoutEditor({ layout, overview, templates, isSystem, onChange, o
   const variables = reportVariables(overview)
   const [activeSlideId, setActiveSlideId] = useState(slides[0]?.id ?? '')
   const [selectedElementId, setSelectedElementId] = useState<string | null>(null)
+  const [editingTextElementId, setEditingTextElementId] = useState<string | null>(null)
   const [templateSlide, setTemplateSlide] = useState(1)
   const activeSlide = slides.find((item) => item.id === activeSlideId) ?? slides[0]
   const selectedElement = activeSlide?.elements.find((item) => item.id === selectedElementId)
   const activeTemplate = templates.find((item) => item.id === layout.templateAssetId)
   const selectedVariables = new Map(layout.variablePlacements.map((item) => [item.variableKey, item]))
+  const master = layout.slideMaster ?? { backgroundColor: 'F8FBFD', design: 'frame' as const, accentColor: layout.accentColor }
+  const usesMaster = activeSlide?.style?.useMaster !== false
+  const activeSlideStyle = usesMaster ? master : {
+    backgroundColor: activeSlide?.style?.backgroundColor ?? master.backgroundColor,
+    design: activeSlide?.style?.design ?? master.design,
+    accentColor: activeSlide?.style?.accentColor ?? master.accentColor,
+  }
+  const assignedVariable = variables.find((item) => item.key === selectedElement?.binding?.variableKey)
 
   useEffect(() => {
     if (!slides.some((item) => item.id === activeSlideId)) setActiveSlideId(slides[0]?.id ?? '')
   }, [layout.id, layout.version, slides.length, activeSlideId])
+
+  useEffect(() => {
+    const selectOrEditDirectText = (event: MouseEvent) => {
+      const target = event.target instanceof Element ? event.target.closest('.report-slide-widget.direct-text') : null
+      const canvas = target?.closest('.report-slide-layout')
+      if (!target || !canvas || !activeSlide) return
+      const index = Array.from(canvas.querySelectorAll('.report-slide-widget')).indexOf(target)
+      const elementId = activeSlide.elements[index]?.id
+      if (!elementId) return
+      if (selectedElementId === elementId) {
+        event.preventDefault()
+        setEditingTextElementId(elementId)
+      }
+      setSelectedElementId(elementId)
+    }
+    document.addEventListener('mousedown', selectOrEditDirectText, true)
+    return () => document.removeEventListener('mousedown', selectOrEditDirectText, true)
+  }, [activeSlide, selectedElementId])
 
   const updateSlide = (slideId: string, updater: (slide: ReportSlideDefinition) => ReportSlideDefinition) => {
     onChange({ ...layout, slides: slides.map((slide) => slide.id === slideId ? updater(slide) : slide) })
   }
   const updateElement = (patch: Partial<ReportElementDefinition>) => {
     if (!activeSlide || !selectedElement) return
-    updateSlide(activeSlide.id, (slide) => ({ ...slide, elements: slide.elements.map((item) => item.id === selectedElement.id ? { ...item, ...patch, style: { ...item.style, ...patch.style }, binding: patch.binding ?? item.binding } : item) }))
+    updateElementById(selectedElement.id, patch)
+  }
+  const updateElementById = (elementId: string, patch: Partial<ReportElementDefinition>) => {
+    if (!activeSlide) return
+    updateSlide(activeSlide.id, (slide) => ({ ...slide, elements: slide.elements.map((item) => item.id === elementId ? { ...item, ...patch, style: { ...item.style, ...patch.style }, binding: patch.binding ?? item.binding } : item) }))
   }
   const addElement = (type: ReportElementType, variableKey?: string, position?: { x: number; y: number }) => {
     if (!activeSlide) return
@@ -913,6 +979,7 @@ function ReportLayoutEditor({ layout, overview, templates, isSystem, onChange, o
       id: `report-element-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`, type,
       label: variableKey ? variables.find((item) => item.key === variableKey)?.name ?? variableKey : ({ title: '제목', text: '텍스트', verdict: '종합 판정', 'scalar-card': '결과 카드', chart: '차트', table: '결과표', image: '이미지' } as Record<ReportElementType, string>)[type],
       x: Math.min(32 - w, Math.max(0, position?.x ?? 1)), y: Math.min(18 - h, Math.max(0, position?.y ?? 4)), w, h, z: activeSlide.elements.length + 1,
+      text: type === 'title' ? '제목을 입력하세요' : type === 'text' ? '텍스트를 입력하세요' : undefined,
       binding: variableKey ? { source: 'variable', variableKey, key: variableKey } : type === 'verdict' ? { source: 'field', key: 'verdict' } : { source: 'static' },
       rules: { visibleWhenData: true },
     }
@@ -962,7 +1029,8 @@ function ReportLayoutEditor({ layout, overview, templates, isSystem, onChange, o
   ]
   const previewText = (element: ReportElementDefinition) => {
     if (element.binding?.source === 'field') return fieldOptions.find(([value]) => value === `field:${element.binding?.key}`)?.[1] ?? element.label
-    if (element.binding?.source === 'variable') return variables.find((item) => item.key === element.binding?.variableKey)?.name ?? element.label
+    if (element.binding?.source === 'variable') return variables.find((item) => item.key === element.binding?.variableKey)?.preview ?? element.label
+    if (element.binding?.source === 'static') return element.text ?? element.label
     return element.label
   }
 
@@ -973,6 +1041,13 @@ function ReportLayoutEditor({ layout, overview, templates, isSystem, onChange, o
       <label><span>강조색</span><input type="color" value={`#${layout.accentColor}`} onChange={(event) => onChange({ ...layout, accentColor: event.target.value.slice(1).toUpperCase() })} /></label>
       <label className="wide"><span>설명</span><input value={layout.description} onChange={(event) => onChange({ ...layout, description: event.target.value })} /></label>
     </div>
+    {layout.templateSource !== 'pptx_upload' && <div className="report-master-toolbar">
+      <strong>슬라이드 마스터</strong><small>새 슬라이드와 마스터 사용 슬라이드에 공통 적용됩니다.</small>
+      <label><span>마스터 디자인</span><select aria-label="슬라이드 마스터 디자인" value={master.design} onChange={(event) => onChange({ ...layout, slideMaster: { ...master, design: event.target.value as typeof master.design } })}><option value="plain">배경만</option><option value="frame">프레임</option><option value="header-band">상단 띠</option><option value="split">분할 패널</option></select></label>
+      <label><span>배경색</span><input aria-label="슬라이드 마스터 배경색" type="color" value={`#${master.backgroundColor}`} onChange={(event) => onChange({ ...layout, slideMaster: { ...master, backgroundColor: event.target.value.slice(1).toUpperCase() } })} /></label>
+      <label><span>디자인 색상</span><input aria-label="슬라이드 마스터 디자인 색상" type="color" value={`#${master.accentColor}`} onChange={(event) => onChange({ ...layout, slideMaster: { ...master, accentColor: event.target.value.slice(1).toUpperCase() } })} /></label>
+      <button onClick={() => onChange({ ...layout, slides: slides.map((slide) => ({ ...slide, style: { ...slide.style, useMaster: true } })) })}>전체 슬라이드에 적용</button>
+    </div>}
 
     {layout.templateSource === 'pptx_upload' ? <div className="pptx-template-editor">
       <aside className="report-slide-list"><header><strong>업로드 템플릿</strong><label><Upload /> PPTX 추가<input type="file" accept=".pptx,application/vnd.openxmlformats-officedocument.presentationml.presentation" onChange={(event) => { const file = event.target.files?.[0]; if (file) onTemplateUpload(file); event.currentTarget.value = '' }} /></label></header>{templates.map((template) => <button key={template.id} className={template.id === layout.templateAssetId ? 'active' : ''} onClick={() => { onChange({ ...layout, templateAssetId: template.id, templateBindings: {} }); setTemplateSlide(1) }}><span>{template.name}</span><small>{template.slide_count}장 · 태그 {template.definition.placeholders.length}개</small></button>)}</aside>
@@ -980,10 +1055,11 @@ function ReportLayoutEditor({ layout, overview, templates, isSystem, onChange, o
       <aside className="report-properties"><header><strong>태그 변수 연결</strong><small>PowerPoint의 도형 이름 또는 &#123;&#123;태그&#125;&#125;를 연결합니다.</small></header>{activeTemplate?.definition.placeholders.map((placeholder) => <label key={placeholder.id}><span>{placeholder.slideIndex}쪽 · {placeholder.shapeName}</span><code>{placeholder.token}</code><select value={layout.templateBindings?.[placeholder.id] ?? placeholder.token} onChange={(event) => onChange({ ...layout, templateBindings: { ...layout.templateBindings, [placeholder.id]: event.target.value } })}><option value={placeholder.token}>태그 기본 연결 · {placeholder.token}</option>{fieldOptions.filter(([value]) => value !== placeholder.token).map(([value, label]) => <option key={value} value={value}>{label}</option>)}{variables.map((variable) => <option key={variable.key} value={`variable:${variable.key}`}>{variable.name}</option>)}</select></label>)}{activeTemplate && <button className="danger" onClick={() => onTemplateDelete(activeTemplate.id)}><Trash2 /> 템플릿 삭제</button>}</aside>
     </div> : <>
       <div className="report-designer-toolbar"><span>32 × 18 그리드 · 16:9</span><button onClick={addSlide}><Plus /> 빈 슬라이드</button><button onClick={duplicateSlide} disabled={!activeSlide}><Plus /> 슬라이드 복제</button><label className="media-toggle"><input type="checkbox" checked={layout.includeMedia} onChange={(event) => onChange({ ...layout, includeMedia: event.target.checked })} /> 미디어 포함</label></div>
+      {activeSlide && <div className="report-slide-style-toolbar"><label><input aria-label="현재 슬라이드에 마스터 사용" type="checkbox" checked={usesMaster} onChange={(event) => updateSlide(activeSlide.id, (slide) => ({ ...slide, style: { ...slide.style, useMaster: event.target.checked } }))} /> 현재 슬라이드에 마스터 사용</label>{!usesMaster && <><label><span>디자인</span><select aria-label="현재 슬라이드 디자인" value={activeSlideStyle.design} onChange={(event) => updateSlide(activeSlide.id, (slide) => ({ ...slide, style: { ...slide.style, useMaster: false, design: event.target.value as typeof master.design } }))}><option value="plain">배경만</option><option value="frame">프레임</option><option value="header-band">상단 띠</option><option value="split">분할 패널</option></select></label><label><span>배경색</span><input aria-label="현재 슬라이드 배경색" type="color" value={`#${activeSlideStyle.backgroundColor}`} onChange={(event) => updateSlide(activeSlide.id, (slide) => ({ ...slide, style: { ...slide.style, useMaster: false, backgroundColor: event.target.value.slice(1).toUpperCase() } }))} /></label><label><span>디자인 색상</span><input aria-label="현재 슬라이드 디자인 색상" type="color" value={`#${activeSlideStyle.accentColor}`} onChange={(event) => updateSlide(activeSlide.id, (slide) => ({ ...slide, style: { ...slide.style, useMaster: false, accentColor: event.target.value.slice(1).toUpperCase() } }))} /></label></>}</div>}
       <div className="report-designer-grid">
         <aside className="report-slide-list"><header><strong>슬라이드</strong><small>위아래로 출력 순서를 바꿉니다.</small></header>{slides.map((slide, index) => <div key={slide.id} className={slide.id === activeSlide?.id ? 'active' : ''} onClick={() => { setActiveSlideId(slide.id); setSelectedElementId(null) }}><span>{String(index + 1).padStart(2, '0')}</span><button>{slide.name}<small>{slide.kind}{slide.repeat !== 'none' ? ' · 반복' : ''}</small></button><nav><button onClick={(event) => { event.stopPropagation(); moveSlide(index, -1) }} disabled={index === 0}>↑</button><button onClick={(event) => { event.stopPropagation(); moveSlide(index, 1) }} disabled={index === slides.length - 1}>↓</button></nav></div>)}</aside>
-        <div className="report-canvas-column"><div className="report-widget-palette">{(['title', 'text', 'verdict', 'scalar-card', 'chart', 'table', 'image'] as ReportElementType[]).map((type) => <button key={type} draggable onDragStart={(event) => event.dataTransfer.setData('application/json', JSON.stringify({ type }))} onClick={() => addElement(type)}>{({ title: '제목', text: '텍스트', verdict: '판정', 'scalar-card': '결과 카드', chart: '차트', table: '표', image: '이미지' } as Record<ReportElementType, string>)[type]}</button>)}</div>{activeSlide && <div className="report-slide-canvas" onDragOver={(event) => event.preventDefault()} onDrop={handleDrop}><ResponsiveGridLayout className="report-slide-layout" layouts={{ lg: activeSlide.elements.map((item) => ({ i: item.id, x: item.x, y: item.y, w: item.w, h: item.h })) }} breakpoints={{ lg: 0 }} cols={{ lg: 32 }} rowHeight={20} margin={[0, 0]} containerPadding={[0, 0]} maxRows={18} compactType={null} preventCollision isDraggable isResizable onLayoutChange={updateCanvasLayout}>{activeSlide.elements.map((element) => <div key={element.id} className={`report-slide-widget ${element.type} ${selectedElementId === element.id ? 'selected' : ''}`} onMouseDown={() => setSelectedElementId(element.id)}><b>{element.label}</b><span>{previewText(element)}</span>{element.binding?.variableKey && <code>{element.binding.variableKey}</code>}</div>)}</ResponsiveGridLayout></div>}</div>
-        <aside className="report-properties"><header><strong>속성 · 변수</strong><small>변수를 끌어 캔버스에 놓을 수도 있습니다.</small></header>{selectedElement ? <div className="report-element-properties"><label><span>표시 이름</span><input value={selectedElement.label} onChange={(event) => updateElement({ label: event.target.value })} /></label><label><span>위젯 형식</span><select value={selectedElement.type} onChange={(event) => updateElement({ type: event.target.value as ReportElementType })}>{(['title', 'text', 'verdict', 'scalar-card', 'chart', 'table', 'image'] as ReportElementType[]).map((type) => <option key={type}>{type}</option>)}</select></label><label><span>데이터 연결</span><select value={selectedElement.binding?.source === 'variable' ? `variable:${selectedElement.binding.variableKey}` : selectedElement.binding?.source === 'field' ? `field:${selectedElement.binding.key}` : 'static:'} onChange={(event) => { const [source, key] = event.target.value.split(':'); updateElement({ binding: source === 'variable' ? { source: 'variable', key, variableKey: key } : source === 'field' ? { source: 'field', key } : { source: 'static' } }) }}><option value="static:">고정 라벨</option>{fieldOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}{variables.map((variable) => <option key={variable.key} value={`variable:${variable.key}`}>{variable.name}</option>)}</select></label><div className="report-property-row"><label><span>글자 크기</span><input type="number" min="7" max="40" value={selectedElement.style?.fontSize ?? 10} onChange={(event) => updateElement({ style: { fontSize: Number(event.target.value) } })} /></label><label><span>정렬</span><select value={selectedElement.style?.align ?? 'left'} onChange={(event) => updateElement({ style: { align: event.target.value as 'left' | 'center' | 'right' } })}><option value="left">왼쪽</option><option value="center">가운데</option><option value="right">오른쪽</option></select></label></div><button className="danger" onClick={() => { updateSlide(activeSlide.id, (slide) => ({ ...slide, elements: slide.elements.filter((item) => item.id !== selectedElement.id) })); setSelectedElementId(null) }}><Trash2 /> 위젯 삭제</button></div> : <p className="report-empty-properties">캔버스의 위젯을 선택하면 데이터와 스타일을 편집할 수 있습니다.</p>}<div className="report-variable-palette"><strong>변수 카탈로그</strong>{variables.map((variable) => { const placement = selectedVariables.get(variable.key); return <div key={variable.key} draggable onDragStart={(event) => event.dataTransfer.setData('application/json', JSON.stringify({ variableKey: variable.key }))}><label><input type="checkbox" checked={Boolean(placement)} onChange={() => toggleVariable(variable.key)} /><span>{variable.name}</span></label><code>{variable.key}</code>{placement && <select value={placement.presentation} onChange={(event) => onChange({ ...layout, variablePlacements: layout.variablePlacements.map((item) => item.variableKey === variable.key ? { ...item, presentation: event.target.value as 'chart' | 'table' | 'both' } : item) })}><option value="both">차트+표</option><option value="chart">차트</option><option value="table">표</option></select>}</div>})}</div></aside>
+        <div className="report-canvas-column"><div className="report-widget-palette">{(['title', 'text', 'verdict', 'scalar-card', 'chart', 'table', 'image'] as ReportElementType[]).map((type) => <button key={type} draggable onDragStart={(event) => event.dataTransfer.setData('application/json', JSON.stringify({ type }))} onClick={() => addElement(type)}>{({ title: '제목', text: '텍스트 상자', verdict: '판정', 'scalar-card': '결과 카드', chart: '차트', table: '표', image: '이미지' } as Record<ReportElementType, string>)[type]}</button>)}</div>{activeSlide && <div className={`report-slide-canvas design-${activeSlideStyle.design}`} style={{ '--slide-background': `#${activeSlideStyle.backgroundColor}`, '--slide-accent': `#${activeSlideStyle.accentColor}` } as CSSProperties} onDragOver={(event) => event.preventDefault()} onDrop={handleDrop}><div className="report-slide-design"/><ResponsiveGridLayout className="report-slide-layout" layouts={{ lg: activeSlide.elements.map((item) => ({ i: item.id, x: item.x, y: item.y, w: item.w, h: item.h })) }} breakpoints={{ lg: 0 }} cols={{ lg: 32 }} rowHeight={20} margin={[0, 0]} containerPadding={[0, 0]} maxRows={18} compactType={null} preventCollision isDraggable isResizable onLayoutChange={updateCanvasLayout}>{activeSlide.elements.map((element) => { const directText = ['title', 'text'].includes(element.type) && element.binding?.source === 'static'; return <div key={element.id} className={`report-slide-widget ${element.type} ${directText ? 'direct-text' : ''} ${selectedElementId === element.id ? 'selected' : ''}`} style={{ color: element.style?.color, backgroundColor: element.style?.fill, textAlign: element.style?.align, fontSize: element.style?.fontSize ? `${element.style.fontSize}px` : undefined }} onMouseDown={() => setSelectedElementId(element.id)} onDoubleClick={(event) => { if (!directText) return; event.stopPropagation(); setSelectedElementId(element.id); setEditingTextElementId(element.id) }}>{!directText && <b>{element.label}</b>}{editingTextElementId === element.id ? <textarea aria-label="슬라이드 텍스트 직접 편집" autoFocus value={element.text ?? element.label} onChange={(event) => updateElementById(element.id, { text: event.target.value })} onMouseDown={(event) => event.stopPropagation()} onBlur={() => setEditingTextElementId(null)} /> : <span className={directText ? 'direct-text-content' : ''}>{previewText(element)}</span>}{element.binding?.variableKey && <code>{element.binding.variableKey}</code>}</div> })}</ResponsiveGridLayout></div>}</div>
+        <aside className="report-properties"><header><strong>속성 · 변수</strong><small>변수를 끌어 캔버스에 놓거나 샘플값을 미리 볼 수 있습니다.</small></header>{selectedElement ? <div className="report-element-properties"><label><span>표시 이름</span><input value={selectedElement.label} onChange={(event) => updateElement({ label: event.target.value })} /></label>{['title', 'text'].includes(selectedElement.type) && selectedElement.binding?.source === 'static' && <label><span>텍스트 내용</span><textarea aria-label="텍스트 상자 내용" value={selectedElement.text ?? selectedElement.label} onChange={(event) => updateElement({ text: event.target.value })} /></label>}<label><span>위젯 형식</span><select value={selectedElement.type} onChange={(event) => updateElement({ type: event.target.value as ReportElementType })}>{(['title', 'text', 'verdict', 'scalar-card', 'chart', 'table', 'image'] as ReportElementType[]).map((type) => <option key={type}>{type}</option>)}</select></label><label><span>데이터 연결</span><select value={selectedElement.binding?.source === 'variable' ? `variable:${selectedElement.binding.variableKey}` : selectedElement.binding?.source === 'field' ? `field:${selectedElement.binding.key}` : 'static:'} onChange={(event) => { const [source, key] = event.target.value.split(':'); updateElement({ binding: source === 'variable' ? { source: 'variable', key, variableKey: key } : source === 'field' ? { source: 'field', key } : { source: 'static' } }) }}><option value="static:">고정 텍스트</option>{fieldOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}{variables.map((variable) => <option key={variable.key} value={`variable:${variable.key}`}>{variable.name} · {variable.kind === 'series' ? '시계열' : '정량'} · {variable.unit}</option>)}</select></label>{assignedVariable && <div className="report-binding-preview"><span><b>{assignedVariable.name}</b><em>{assignedVariable.kind === 'series' ? '시계열' : '정량'} · {assignedVariable.unit}</em></span><code>{assignedVariable.key}</code><strong>{assignedVariable.preview}</strong></div>}<div className="report-property-row"><label><span>글자 크기</span><input type="number" min="7" max="40" value={selectedElement.style?.fontSize ?? 10} onChange={(event) => updateElement({ style: { fontSize: Number(event.target.value) } })} /></label><label><span>정렬</span><select value={selectedElement.style?.align ?? 'left'} onChange={(event) => updateElement({ style: { align: event.target.value as 'left' | 'center' | 'right' } })}><option value="left">왼쪽</option><option value="center">가운데</option><option value="right">오른쪽</option></select></label></div><div className="report-property-row"><label><span>글자색</span><input type="color" value={selectedElement.style?.color ?? '#172033'} onChange={(event) => updateElement({ style: { color: event.target.value } })} /></label><label><span>채우기</span><input type="color" value={selectedElement.style?.fill ?? '#FFFFFF'} onChange={(event) => updateElement({ style: { fill: event.target.value } })} /></label></div><button className="danger" onClick={() => { updateSlide(activeSlide.id, (slide) => ({ ...slide, elements: slide.elements.filter((item) => item.id !== selectedElement.id) })); setSelectedElementId(null) }}><Trash2 /> 위젯 삭제</button></div> : <p className="report-empty-properties">캔버스의 위젯을 선택하면 데이터와 스타일을 편집할 수 있습니다.</p>}<div className="report-variable-palette"><strong>변수 카탈로그 · 현재 값 미리보기</strong>{variables.map((variable) => { const placement = selectedVariables.get(variable.key); return <div key={variable.key} draggable onDragStart={(event) => event.dataTransfer.setData('application/json', JSON.stringify({ variableKey: variable.key }))}><label><input type="checkbox" checked={Boolean(placement)} onChange={() => toggleVariable(variable.key)} /><span>{variable.name}</span><b>{variable.kind === 'series' ? '시계열' : '정량'} · {variable.unit}</b></label><code>{variable.key}</code><small>{variable.preview}</small>{placement && <select value={placement.presentation} onChange={(event) => onChange({ ...layout, variablePlacements: layout.variablePlacements.map((item) => item.variableKey === variable.key ? { ...item, presentation: event.target.value as 'chart' | 'table' | 'both' } : item) })}><option value="both">차트+표</option><option value="chart">차트</option><option value="table">표</option></select>}</div>})}</div></aside>
       </div>
     </>}
     <footer><button onClick={onSave}><Save /> 현재 레이아웃 새 버전 저장</button><button onClick={onSaveAs}><Plus /> 다른 이름으로 저장</button><button className="danger" disabled={isSystem} title={isSystem ? '기본 레이아웃은 삭제할 수 없습니다.' : ''} onClick={onDelete}><Trash2 /> 삭제</button></footer>
@@ -1024,7 +1100,7 @@ function HelpCenter({ onNavigate }: { onNavigate: (page: WorkspacePage) => void 
     { title: '이전 Run과 비교하고 검토 의견 남기기', steps: ['해석 상세에서 Run 비교·검토 탭을 엽니다.', '기준 Run과 대상 Run을 선택해 회귀·개선 및 공통 시계열을 확인합니다.', '데이터 신뢰도에서 출처·카탈로그·단위·검증 경고를 확인합니다.', '변수와 시점을 선택해 북마크·검토 의견을 저장하고 상태를 관리합니다.'], action: 'dashboard' as const, label: 'Run 비교 열기' },
     { title: '예제로 전체 기능 빠르게 둘러보기', steps: ['예제 갤러리에서 확인할 기능이나 상태를 고릅니다.', '카드의 기대 결과와 데이터 구성을 먼저 읽습니다.', '예제 열기로 이동해 확인 목록을 따라 기능을 직접 사용합니다.'], action: 'examples' as const, label: '예제 갤러리 열기' },
   ]
-  return <section className="help-center"><header><span>SCENARIO GUIDE</span><h1>Analysis Canvas 사용 도움말</h1><p>하려는 작업을 기준으로 필요한 화면과 데이터 흐름을 안내합니다.</p></header><div className="help-flow"><strong>핵심 데이터 흐름</strong><div><span>폴더 스키마</span><b>→</b><span>결과 테이블</span><b>→</b><span>변수 카탈로그</span><b>→</b><span>대시보드·PPT</span></div><p>변수 카탈로그는 값을 저장하지 않습니다. 결과 테이블의 <code>variable_key</code>를 해석하고 표시하는 계약입니다.</p></div><div className="help-scenarios">{scenarios.map((scenario, index) => <article key={scenario.title}><span>0{index + 1}</span><h2>{scenario.title}</h2><ol>{scenario.steps.map((step) => <li key={step}>{step}</li>)}</ol><button onClick={() => onNavigate(scenario.action)}>{scenario.label}</button></article>)}</div><aside><AlertTriangle /><div><strong>PostgreSQL 전환 전 확인</strong><p>현재 실행 백엔드는 DuckDB입니다. PostgreSQL은 어댑터·Alembic migration·데이터 검증 CLI를 구현한 뒤 환경변수로 전환해야 하며, DB 접속 정보나 SQL을 프런트엔드에 노출하면 안 됩니다.</p></div></aside></section>
+  return <section className="help-center"><header><span>SCENARIO GUIDE</span><h1>Analysis Canvas 사용 도움말</h1><p>하려는 작업을 기준으로 필요한 화면과 데이터 흐름을 안내합니다.</p></header><div className="help-flow"><strong>핵심 데이터 흐름</strong><div><span>폴더 스키마</span><b>→</b><span>결과 테이블</span><b>→</b><span>변수 카탈로그</span><b>→</b><span>대시보드·PPT</span></div><p>변수 카탈로그는 값을 저장하지 않습니다. 결과 테이블의 <code>variable_key</code>를 해석하고 표시하는 계약입니다.</p></div><div className="help-scenarios">{scenarios.map((scenario, index) => <article key={scenario.title}><span>0{index + 1}</span><h2>{scenario.title}</h2><ol>{scenario.steps.map((step) => <li key={step}>{step}</li>)}</ol><button onClick={() => onNavigate(scenario.action)}>{scenario.label}</button></article>)}</div><aside><AlertTriangle /><div><strong>외부 배포 전 확인</strong><p>PostgreSQL 어댑터·Alembic·데이터 검증·로그인·역할 권한·감사·백업 도구가 준비되어 있습니다. 외부 공개 시에는 HTTPS, <code>AUTH_MODE=password</code>, 별도 DB 역할과 복구 시험을 반드시 적용하세요.</p></div></aside></section>
 }
 
 function ComparisonWorkspace({ loadCaseId, currentRunId }: { loadCaseId: string; currentRunId: string }) {
@@ -1101,7 +1177,7 @@ function ComparisonWorkspace({ loadCaseId, currentRunId }: { loadCaseId: string;
       <div className="comparison-kpis"><article className={comparison.summary.regression ? 'danger' : ''}><span>REGRESSION</span><strong>{comparison.summary.regression}</strong><small>PASS → FAIL</small></article><article className="positive"><span>IMPROVED</span><strong>{comparison.summary.improved}</strong><small>FAIL → PASS</small></article><article><span>COMPARABLE</span><strong>{comparison.summary.comparable}</strong><small>동일 키·단위</small></article><article className={`trust-${trust?.trust_status.toLowerCase()}`}><span>DATA TRUST</span><strong>{trust?.trust_status ?? '-'}</strong><small>{trust?.is_latest ? '최신 Run' : '과거 Run'} · {trust?.age_days ?? '-'}일</small></article></div>
       <div className="comparison-grid">
         <article className="comparison-card scalar-diff"><header><div><span>SCALAR DIFFERENCE</span><h3>정량 결과 변화</h3></div><small>Δ = 대상 − 기준</small></header><div className="comparison-table"><div className="head"><span>변수</span><span>기준</span><span>대상</span><span>차이</span><span>판정 변화</span></div>{comparison.scalar_comparison.map((item) => <div key={item.variable_key}><span><strong>{item.display_name}</strong><code>{item.variable_key}</code></span><span>{valueLabel(item.baseline_value, item.unit)}<small>{item.baseline_verdict ?? '-'}</small></span><span>{valueLabel(item.target_value, item.unit)}<small>{item.target_verdict ?? '-'}</small></span><span>{item.delta == null ? '-' : `${item.delta >= 0 ? '+' : ''}${item.delta.toFixed(2)}`}<small>{item.delta_percent == null ? '' : `${item.delta_percent >= 0 ? '+' : ''}${item.delta_percent.toFixed(1)}%`}</small></span><span><b className={`change-${item.change.toLowerCase()}`}>{changeLabel[item.change]}</b></span></div>)}</div></article>
-        <article className="comparison-card series-diff"><header><div><span>SYNCED TIME SERIES</span><h3>공통 시계열 비교</h3></div><select value={seriesKey} onChange={(event) => setSeriesKey(event.target.value)}>{comparison.available_series.map((item) => <option key={item.variable_key} value={item.variable_key}>{item.display_name}</option>)}</select></header><div className="comparison-chart">{comparison.time_series ? <ResponsiveContainer width="100%" height="100%"><LineChart data={comparison.time_series.points} margin={{ top: 12, right: 18, left: -10, bottom: 2 }}><CartesianGrid vertical={false} stroke="#26394c" strokeDasharray="3 3"/><XAxis dataKey="time_value" tick={{ fill: '#70889d', fontSize: 9 }} axisLine={false}/><YAxis tick={{ fill: '#70889d', fontSize: 9 }} axisLine={false}/><Tooltip contentStyle={{ background: '#102235', border: '1px solid #2d465c', borderRadius: 8 }}/><Legend/><Line type="monotone" dataKey="baseline_value" name={`기준 Run ${comparison.baseline_run.run_no}`} stroke="#61d4ff" dot={false} strokeWidth={2}/><Line type="monotone" dataKey="target_value" name={`대상 Run ${comparison.target_run.run_no}`} stroke="#ff9948" dot={false} strokeWidth={2}/></LineChart></ResponsiveContainer> : <div className="comparison-empty">공통 시계열 변수가 없습니다.</div>}</div></article>
+        <article className="comparison-card series-diff"><header><div><span>SYNCED TIME SERIES</span><h3>공통 시계열 비교</h3></div><select value={seriesKey} onChange={(event) => setSeriesKey(event.target.value)}>{comparison.available_series.map((item) => <option key={item.variable_key} value={item.variable_key}>{item.display_name}</option>)}</select></header><div className="comparison-chart">{comparison.time_series ? <ResponsiveContainer width="100%" height="100%"><LineChart data={comparison.time_series.points} margin={{ top: 12, right: 18, left: -10, bottom: 2 }}><CartesianGrid vertical={false} stroke="#26394c" strokeDasharray="3 3"/><XAxis dataKey="time_value" tick={{ fill: '#70889d', fontSize: 10.8 }} axisLine={false}/><YAxis tick={{ fill: '#70889d', fontSize: 10.8 }} axisLine={false}/><Tooltip contentStyle={{ background: '#102235', border: '1px solid #2d465c', borderRadius: 8 }}/><Legend/><Line type="monotone" dataKey="baseline_value" name={`기준 Run ${comparison.baseline_run.run_no}`} stroke="#61d4ff" dot={false} strokeWidth={2}/><Line type="monotone" dataKey="target_value" name={`대상 Run ${comparison.target_run.run_no}`} stroke="#ff9948" dot={false} strokeWidth={2}/></LineChart></ResponsiveContainer> : <div className="comparison-empty">공통 시계열 변수가 없습니다.</div>}</div></article>
         {trust && <aside className="trust-card"><header><div><span>DATA TRUST</span><h3>대상 Run 신뢰도</h3></div><b className={`trust-${trust.trust_status.toLowerCase()}`}>{trust.trust_status}</b></header><div className="trust-source"><span>출처</span><strong>{trust.metadata?.source_name ?? trust.import_job?.source_folder ?? '추적 정보 없음'}</strong><code>{trust.metadata?.source_checksum ? trust.metadata.source_checksum.slice(0, 16) : 'NO CHECKSUM'}</code><small>{trust.metadata?.parser_version ?? '-'}{trust.metadata?.schema_id ? ` · ${trust.metadata.schema_id} v${trust.metadata.schema_version}` : ''}</small></div><div className="trust-counts"><span>정량 <b>{trust.counts.scalar}</b></span><span>시계열 <b>{trust.counts.time_series}</b></span><span>커브 <b>{trust.counts.curve}</b></span><span>미디어 <b>{trust.counts.media}</b></span></div><div className="trust-checks">{trust.checks.map((check) => <div key={check.code}><i className={check.status.toLowerCase()}>{check.status === 'PASS' ? <Check /> : <AlertTriangle />}</i><span><strong>{check.label}</strong><small>{check.detail}</small></span></div>)}</div></aside>}
       </div>
       <article className="review-card"><header><div><span>PINNED REVIEW</span><h3>결과 북마크·검토 의견</h3><p>대상 Run의 변수·시점·엔티티 문맥에 의견을 고정합니다.</p></div><strong>{reviews.filter((item) => item.review_status !== 'RESOLVED').length} OPEN</strong></header><div className="review-layout"><form onSubmit={submitReview}><label><span>제목</span><input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder="예: 하단 엣지 회귀 원인 확인" required /></label><label><span>결과 변수</span><select value={form.variableKey} onChange={(event) => setForm({ ...form, variableKey: event.target.value })}><option value="">Run 전체</option>{comparison.scalar_comparison.map((item) => <option key={item.variable_key} value={item.variable_key}>{item.display_name}</option>)}</select></label><div className="review-context"><label><span>시점</span><input type="number" step="any" value={form.timeValue} onChange={(event) => setForm({ ...form, timeValue: event.target.value })} placeholder="선택 사항" /></label><label><span>엔티티</span><select value={form.entityType} onChange={(event) => setForm({ ...form, entityType: event.target.value as '' | 'NODE' | 'ELEMENT' })}><option value="">없음</option><option value="NODE">NODE</option><option value="ELEMENT">ELEMENT</option></select></label><label><span>ID</span><input value={form.entityId} onChange={(event) => setForm({ ...form, entityId: event.target.value })} disabled={!form.entityType} /></label></div><label><span>검토 의견</span><textarea value={form.body} onChange={(event) => setForm({ ...form, body: event.target.value })} placeholder="관찰 내용과 후속 조치를 기록하세요." required /></label><button className="primary-button" type="submit"><Plus /> 북마크 저장</button></form><div className="review-list">{reviews.length ? reviews.map((item) => <article key={item.id}><header><span className={`review-status ${item.review_status.toLowerCase()}`}>{item.review_status}</span><small>{new Date(item.updated_at).toLocaleString('ko-KR')}</small></header><strong>{item.title}</strong><p>{item.body}</p><div><code>{item.variable_key ?? 'RUN'}</code>{item.time_value != null && <span>t={item.time_value}</span>}{item.entity_type && <span>{item.entity_type} {item.entity_id}</span>}</div><footer><span>{item.created_by}</span><select value={item.review_status} onChange={(event) => void updateReviewStatus(item, event.target.value as ReviewItem['review_status'])}><option value="OPEN">OPEN</option><option value="IN_REVIEW">IN REVIEW</option><option value="RESOLVED">RESOLVED</option></select></footer></article>) : <div className="comparison-empty">아직 저장된 검토 의견이 없습니다.</div>}</div></div></article>
@@ -1406,7 +1482,7 @@ function WidgetCard({ widget, overview, selectedEdges, editMode, threshold, onSa
     <article
       className={`widget-card widget-${widget.type} ${editMode ? 'editable' : ''}`}
       data-custom-font={Number.isFinite(customFontSize) ? 'true' : undefined}
-      style={Number.isFinite(customFontSize) ? { '--widget-font-size': `${customFontSize}px` } as CSSProperties : undefined}
+      style={Number.isFinite(customFontSize) ? { '--widget-font-size': `${customFontSize * 1.2}px` } as CSSProperties : undefined}
     >
       <header>
         <div className={editMode ? 'widget-drag-handle' : undefined} aria-label={editMode ? `${widget.title} 이동 손잡이` : undefined}>
@@ -1450,8 +1526,8 @@ function WidgetContent({ widget, overview, selectedEdges, threshold, onSaveThres
   if (type === 'open_cell_map') return <OpenCellMap overview={overview} />
   if (type === 'verdict') return <div className={`verdict-block ${openCellVerdict.toLowerCase()}`}><div className="verdict-icon">{openCellVerdict === 'PASS' ? <Check /> : <X />}</div><div><strong>{openCellVerdict}</strong><span>{openCellVerdict === 'PASS' ? '허용 기준 만족' : '기준 초과 감지'}</span></div><small>LIMIT {openCellThreshold} MPa</small></div>
   if (type === 'summary') return overview.load_case.analysis_type === 'SIDE_CLAMP' ? <div className="summary-grid"><div><span>클램프 압력</span><strong>{overview.load_case.parameters.pressure_mpa ?? overview.load_case.parameters.clamp_pressure_kpa ?? '-'}<em>MPa</em></strong></div><div><span>유지 시간</span><strong>{overview.load_case.parameters.hold_time_sec ?? overview.load_case.parameters.hold_time_s ?? '-'}<em>s</em></strong></div><div><span>클램프 면</span><strong>{Array.isArray(overview.load_case.parameters.faces) ? overview.load_case.parameters.faces.join(' / ') : 'LEFT / RIGHT'}</strong></div><div><span>요소 수</span><strong>{overview.template_execution?.generated_model.elements.toLocaleString() ?? '-'}</strong></div></div> : <div className="summary-grid"><div><span>낙하 높이</span><strong>{overview.load_case.parameters.drop_height_mm}<em>mm</em></strong></div><div><span>낙하 방향</span><strong>{overview.load_case.parameters.direction ?? overview.load_case.parameters.impact_direction ?? '-'}</strong></div><div><span>자동화 템플릿</span><strong>{overview.template_execution?.template_version ?? '-'}</strong></div><div><span>요소 수</span><strong>{overview.template_execution?.generated_model.elements.toLocaleString() ?? '-'}</strong></div></div>
-  if (type === 'edge_bar') return <ResponsiveContainer width="100%" height="100%"><BarChart data={barData} margin={{ top: 12, right: 18, left: -12, bottom: 0 }}><CartesianGrid vertical={false} stroke="#26394c" strokeDasharray="3 3"/><XAxis dataKey="name" tick={{ fill: '#8fa6bb', fontSize: 12 }} axisLine={false} tickLine={false}/><YAxis domain={[0, 100]} tick={{ fill: '#6f879d', fontSize: 11 }} axisLine={false} tickLine={false} unit=""/><Tooltip contentStyle={{ background: '#102235', border: '1px solid #2d465c', borderRadius: 10 }} formatter={(value: number) => [`${value} MPa`, '최대 응력']}/><ReferenceLine y={openCellThreshold} stroke="#ffbf57" strokeDasharray="5 5" label={{ value: `기준 ${openCellThreshold}`, fill: '#ffbf57', fontSize: 11, position: 'insideTopRight' }}/><Bar dataKey="value" radius={[5,5,1,1]}>{barData.map((entry) => <Cell key={entry.name} fill={entry.verdict === 'FAIL' ? '#ff5d73' : '#4fd6a0'} />)}</Bar></BarChart></ResponsiveContainer>
-  if (type === 'time_series') { const seriesKeys = widget.settings?.variableId ? [String(widget.settings.variableId)] : selectedEdges.map((edge) => `${edge}_edge_stress_time`); return <ResponsiveContainer width="100%" height="100%"><LineChart data={seriesData} margin={{ top: 10, right: 22, left: -8, bottom: 2 }}><CartesianGrid stroke="#24384b" strokeDasharray="3 3"/><XAxis dataKey="time" tick={{ fill: '#71899f', fontSize: 11 }} axisLine={{ stroke: '#31485b' }} tickLine={false} label={{ value: `TIME (${overview.time_series[0]?.time_unit ?? 'ms'})`, fill: '#6f879d', fontSize: 10, position: 'insideBottomRight', offset: -2 }}/><YAxis tick={{ fill: '#71899f', fontSize: 11 }} axisLine={false} tickLine={false}/><Tooltip contentStyle={{ background: '#102235', border: '1px solid #2d465c', borderRadius: 10 }}/><Legend wrapperStyle={{ fontSize: 11, paddingTop: 5 }}/>{widget.settings?.showThreshold !== false && <ReferenceLine y={openCellThreshold} stroke="#ffbf57" strokeDasharray="6 4"/>}{seriesKeys.map((key, index) => <Line key={key} type="monotone" dataKey={key} name={overview.time_series.find((item) => item.variable_key === key)?.display_name ?? edgeLabel(key)} dot={false} stroke={String(widget.settings?.color ?? SERIES_COLORS[index % SERIES_COLORS.length])} strokeWidth={2}/>)}</LineChart></ResponsiveContainer> }
+  if (type === 'edge_bar') return <ResponsiveContainer width="100%" height="100%"><BarChart data={barData} margin={{ top: 12, right: 18, left: -12, bottom: 0 }}><CartesianGrid vertical={false} stroke="#26394c" strokeDasharray="3 3"/><XAxis dataKey="name" tick={{ fill: '#8fa6bb', fontSize: 14.4 }} axisLine={false} tickLine={false}/><YAxis domain={[0, 100]} tick={{ fill: '#6f879d', fontSize: 13.2 }} axisLine={false} tickLine={false} unit=""/><Tooltip contentStyle={{ background: '#102235', border: '1px solid #2d465c', borderRadius: 10 }} formatter={(value: number) => [`${value} MPa`, '최대 응력']}/><ReferenceLine y={openCellThreshold} stroke="#ffbf57" strokeDasharray="5 5" label={{ value: `기준 ${openCellThreshold}`, fill: '#ffbf57', fontSize: 13.2, position: 'insideTopRight' }}/><Bar dataKey="value" radius={[5,5,1,1]}>{barData.map((entry) => <Cell key={entry.name} fill={entry.verdict === 'FAIL' ? '#ff5d73' : '#4fd6a0'} />)}</Bar></BarChart></ResponsiveContainer>
+  if (type === 'time_series') { const seriesKeys = widget.settings?.variableId ? [String(widget.settings.variableId)] : selectedEdges.map((edge) => `${edge}_edge_stress_time`); return <ResponsiveContainer width="100%" height="100%"><LineChart data={seriesData} margin={{ top: 10, right: 22, left: -8, bottom: 2 }}><CartesianGrid stroke="#24384b" strokeDasharray="3 3"/><XAxis dataKey="time" tick={{ fill: '#71899f', fontSize: 13.2 }} axisLine={{ stroke: '#31485b' }} tickLine={false} label={{ value: `TIME (${overview.time_series[0]?.time_unit ?? 'ms'})`, fill: '#6f879d', fontSize: 12, position: 'insideBottomRight', offset: -2 }}/><YAxis tick={{ fill: '#71899f', fontSize: 13.2 }} axisLine={false} tickLine={false}/><Tooltip contentStyle={{ background: '#102235', border: '1px solid #2d465c', borderRadius: 10 }}/><Legend wrapperStyle={{ fontSize: 13.2, paddingTop: 5 }}/>{widget.settings?.showThreshold !== false && <ReferenceLine y={openCellThreshold} stroke="#ffbf57" strokeDasharray="6 4"/>}{seriesKeys.map((key, index) => <Line key={key} type="monotone" dataKey={key} name={overview.time_series.find((item) => item.variable_key === key)?.display_name ?? edgeLabel(key)} dot={false} stroke={String(widget.settings?.color ?? SERIES_COLORS[index % SERIES_COLORS.length])} strokeWidth={2}/>)}</LineChart></ResponsiveContainer> }
   if (type === 'note') return <div className="note-block"><MessageSquareText /><blockquote>{overview.notes[0]?.body ?? '등록된 의견이 없습니다.'}</blockquote><footer><span>{overview.notes[0]?.author ?? '-'}</span><small>ANALYSIS ENGINEER</small></footer></div>
   if (type === 'result_table') return <div className="result-table"><div className="table-head"><span>측정 위치</span><span>결과</span><span>허용 기준</span><span>여유율</span><span>판정</span></div>{configuredScalars.map((item) => { const location = resultLocation(item.variable_key); const hasThreshold = hasNumericValue(item.threshold_double) && item.threshold_double !== 0; return <div className="table-row" key={item.id}><strong><i className={`edge-${item.variable_key.split('_')[0]}`} /><span>{item.display_name.replace(' 최대 응력','')}{location && <small>{location.entity_type} {location.entity_id} · ({location.x.toFixed(1)}, {location.y.toFixed(1)}, {location.z.toFixed(1)})</small>}</span></strong><span>{item.value_double.toFixed(1)} <small>{item.unit}</small></span><span>{hasThreshold ? item.threshold_double.toFixed(1) : ''} <small>{hasThreshold ? item.unit : ''}</small></span><span className={item.verdict === 'FAIL' ? 'negative' : 'positive'}>{hasThreshold ? `${((item.threshold_double - item.value_double) / item.threshold_double * 100).toFixed(1)}%` : ''}</span><b className={item.verdict.toLowerCase()}>{item.verdict}</b></div> })}</div>
   if (type === 'contour') { const asset = overview.media.find((item) => item.asset_type === 'IMAGE') ?? overview.media[0]; return asset ? <div className="contour"><img src={asset.asset_url ?? `/assets/${asset.file_path}`} alt={asset.title} /></div> : <div className="empty-widget">등록된 컨투어 이미지가 없습니다.</div> }
@@ -1543,7 +1619,7 @@ function ChassisWidgetContent({ type, overview, threshold, onSaveThreshold, vari
   if (!results.length) return <div className="empty-widget">Chassis Rear 결과가 없습니다.</div>
   if (type === 'chassis_summary') return <div className="chassis-widget-summary"><div><span>전체 판정</span><strong className={verdict.toLowerCase()}>{verdict}</strong></div><div><span>최대 영구변형</span><strong>{maximum.toFixed(2)} mm</strong></div><label><span>관리 기준</span><div><input aria-label="Chassis Rear 영구변형 기준값" type="number" min="0.1" step="0.1" value={draftLimit} onChange={(e)=>setDraftLimit(Number(e.target.value))}/><button onClick={()=>onSaveThreshold(draftLimit)}>저장</button></div></label><p>최종 프레임의 영구변형만 사용하며 기준 이상은 FAIL입니다.</p></div>
   if (type === 'chassis_diagram') return <div className="chassis-diagram-body compact"><div className="chassis-shell"><div className="chassis-ribs"/><div className="chassis-center"><i/><i/><i/><i/></div>{results.map((item)=><div key={item.id} className={`chassis-marker ${markerClasses[item.variable_key] ?? ''} ${item.verdict.toLowerCase()}`}><span>{item.value_double.toFixed(1)} mm</span><small>{chartData.find((entry)=>entry.value===item.value_double)?.name}</small></div>)}</div><div className="chassis-legend"><span><i className="pass"/>기준 미만</span><span><i className="fail"/>기준 이상</span></div></div>
-  if (type === 'chassis_bar') return <ResponsiveContainer width="100%" height="100%"><BarChart data={chartData} layout="vertical" margin={{top:8,right:24,left:8,bottom:4}}><CartesianGrid horizontal={false} stroke="#24384b"/><XAxis type="number" domain={[0,Math.max(8,limit+2)]}/><YAxis type="category" dataKey="name" width={60} tick={{fill:'#8fa6bb',fontSize:9}}/><Tooltip formatter={(value:number)=>[`${value} mm`,'영구변형']}/><ReferenceLine x={limit} stroke="#ffbf57" strokeDasharray="5 4"/><Bar dataKey="value">{chartData.map((entry)=><Cell key={entry.name} fill={entry.verdict==='FAIL'?'#ff5d73':'#4fd6a0'}/>)}</Bar></BarChart></ResponsiveContainer>
+  if (type === 'chassis_bar') return <ResponsiveContainer width="100%" height="100%"><BarChart data={chartData} layout="vertical" margin={{top:8,right:24,left:8,bottom:4}}><CartesianGrid horizontal={false} stroke="#24384b"/><XAxis type="number" domain={[0,Math.max(8,limit+2)]}/><YAxis type="category" dataKey="name" width={60} tick={{fill:'#8fa6bb',fontSize:10.8}}/><Tooltip formatter={(value:number)=>[`${value} mm`,'영구변형']}/><ReferenceLine x={limit} stroke="#ffbf57" strokeDasharray="5 4"/><Bar dataKey="value">{chartData.map((entry)=><Cell key={entry.name} fill={entry.verdict==='FAIL'?'#ff5d73':'#4fd6a0'}/>)}</Bar></BarChart></ResponsiveContainer>
   if (type === 'chassis_table') return <div className="chassis-result-table"><div className="chassis-result-head"><span>측정 위치</span><span>영구변형</span><span>기준</span><span>판정</span></div>{results.map((item)=>{const point=location(item.variable_key); return <div className="chassis-result-row" key={item.id}><strong>{item.display_name}{point&&<small>NODE {point.entity_id} · ({point.x.toFixed(1)}, {point.y.toFixed(1)}, {point.z.toFixed(1)})</small>}</strong><span>{item.value_double.toFixed(1)} mm</span><span>{hasNumericValue(item.threshold_double) ? `${item.threshold_double.toFixed(1)} mm` : ''}</span><b className={item.verdict.toLowerCase()}>{item.verdict}</b></div>})}</div>
   return <div className="empty-widget">지원하지 않는 Chassis 위젯입니다.</div>
 }
@@ -1576,18 +1652,19 @@ function ChassisRearDashboard({ overview, threshold, onSaveThreshold }: { overvi
     <section className="chassis-summary-strip"><div><span>CHASSIS REAR RESULT</span><strong className={verdict.toLowerCase()}>{verdict}</strong></div><div><span>최대 영구변형</span><strong>{maximum.toFixed(1)} <small>mm</small></strong></div><div><span>관리 기준값</span><strong>{limit.toFixed(1)} <small>mm</small></strong></div><p>해석 결과는 응력이 아닌 영구변형만 판정에 사용합니다. 측정값이 기준 이상이면 FAIL입니다.</p></section>
     <div className="chassis-dashboard-grid">
       <article className="chassis-card chassis-diagram-card"><header><div><span className="widget-kicker">PERMANENT DEFORMATION MAP</span><h3>Chassis Rear 변형 위치</h3></div><span className="diagram-scene">{overview.load_case.analysis_type.replace('_', ' ')}</span></header><div className="chassis-diagram-body"><div className="chassis-shell"><div className="chassis-ribs"/><div className="chassis-center"><i/><i/><i/><i/></div>{results.map((item) => <div key={item.id} className={`chassis-marker ${markerClasses[item.variable_key] ?? ''} ${item.verdict.toLowerCase()}`}><span>{item.value_double.toFixed(1)} mm</span><small>{chartData.find((entry) => entry.value === item.value_double)?.name}</small></div>)}</div><div className="chassis-legend"><span><i className="pass"/>기준 미만</span><span><i className="fail"/>기준 이상</span><b>Open Cell 기준면 대비 거리 / 모서리 영구변형</b></div></div></article>
-      <article className="chassis-card chassis-chart-card"><header><div><span className="widget-kicker">LOCATION COMPARISON</span><h3>위치별 영구변형</h3></div></header><div className="chassis-chart-body"><ResponsiveContainer width="100%" height="100%"><BarChart data={chartData} layout="vertical" margin={{ top: 7, right: 22, left: 10, bottom: 4 }}><CartesianGrid horizontal={false} stroke="#24384b"/><XAxis type="number" domain={[0, Math.max(8, limit + 2)]} tick={{ fill: '#71899f', fontSize: 9 }} axisLine={false} tickLine={false}/><YAxis type="category" dataKey="name" width={58} tick={{ fill: '#8fa6bb', fontSize: 9 }} axisLine={false} tickLine={false}/><Tooltip contentStyle={{ background: '#102235', border: '1px solid #2d465c', borderRadius: 8 }} formatter={(value: number) => [`${value} mm`, '영구변형']}/><ReferenceLine x={limit} stroke="#ffbf57" strokeDasharray="5 4" label={{ value: `기준 ${limit}`, fill: '#ffbf57', fontSize: 9 }}/><Bar dataKey="value" radius={[0,4,4,0]}>{chartData.map((entry) => <Cell key={entry.name} fill={entry.verdict === 'FAIL' ? '#ff5d73' : '#4fd6a0'}/>)}</Bar></BarChart></ResponsiveContainer></div></article>
+      <article className="chassis-card chassis-chart-card"><header><div><span className="widget-kicker">LOCATION COMPARISON</span><h3>위치별 영구변형</h3></div></header><div className="chassis-chart-body"><ResponsiveContainer width="100%" height="100%"><BarChart data={chartData} layout="vertical" margin={{ top: 7, right: 22, left: 10, bottom: 4 }}><CartesianGrid horizontal={false} stroke="#24384b"/><XAxis type="number" domain={[0, Math.max(8, limit + 2)]} tick={{ fill: '#71899f', fontSize: 10.8 }} axisLine={false} tickLine={false}/><YAxis type="category" dataKey="name" width={58} tick={{ fill: '#8fa6bb', fontSize: 10.8 }} axisLine={false} tickLine={false}/><Tooltip contentStyle={{ background: '#102235', border: '1px solid #2d465c', borderRadius: 8 }} formatter={(value: number) => [`${value} mm`, '영구변형']}/><ReferenceLine x={limit} stroke="#ffbf57" strokeDasharray="5 4" label={{ value: `기준 ${limit}`, fill: '#ffbf57', fontSize: 10.8 }}/><Bar dataKey="value" radius={[0,4,4,0]}>{chartData.map((entry) => <Cell key={entry.name} fill={entry.verdict === 'FAIL' ? '#ff5d73' : '#4fd6a0'}/>)}</Bar></BarChart></ResponsiveContainer></div></article>
       <article className="chassis-card threshold-card"><header><div><span className="widget-kicker">ADMIN CRITERION</span><h3>관리자 판정 기준</h3></div></header><div className="threshold-body"><label><span>목표값</span><div><input aria-label="Chassis Rear 영구변형 기준값" type="number" min="0.1" step="0.1" value={draftLimit} onChange={(event) => setDraftLimit(Number(event.target.value))}/><b>mm</b></div></label><button onClick={() => onSaveThreshold(draftLimit)} disabled={!Number.isFinite(draftLimit) || draftLimit <= 0}>기준값 저장</button><p>상·하 엣지 이격 및 네 모서리 영구변형에 동일 기준을 적용합니다.</p></div></article>
       <article className="chassis-card chassis-result-card"><header><div><span className="widget-kicker">FAILURE JUDGEMENT 02</span><h3>Chassis Rear 상세 판정</h3></div></header><div className="chassis-result-table"><div className="chassis-result-head"><span>측정 위치</span><span>영구변형</span><span>기준</span><span>판정</span></div>{results.map((item) => { const location = resultLocation(item.variable_key); return <div className="chassis-result-row" key={item.id}><strong>{item.display_name}{location && <small>NODE {location.entity_id} · ({location.x.toFixed(1)}, {location.y.toFixed(1)}, {location.z.toFixed(1)})</small>}</strong><span>{item.value_double.toFixed(1)} mm</span><span>{hasNumericValue(item.threshold_double) ? `${item.threshold_double.toFixed(1)} mm` : ''}</span><b className={item.verdict.toLowerCase()}>{item.verdict}</b></div> })}</div></article>
     </div>
   </div>
 }
 
-function WorkflowView({ workflows, stageEditMode, layoutEditMode, dashboardLayout, onDashboardLayoutChange, onStepChange, onAddStep, onDeleteStep, onMoveStep, onOpenAnalysis, activeRequestId }: {
+function WorkflowView({ workflows, stageEditMode, layoutEditMode, dashboardLayout, layoutVersion, onDashboardLayoutChange, onStepChange, onAddStep, onDeleteStep, onMoveStep, onOpenAnalysis, activeRequestId }: {
   workflows: Workflow[]
   stageEditMode: boolean
   layoutEditMode: boolean
   dashboardLayout: WorkflowDashboardLayout
+  layoutVersion: number
   onDashboardLayoutChange: (layout: WorkflowDashboardLayout) => void
   onStepChange: (stepId: string, patch: Partial<WorkflowStep>) => void
   onAddStep: (requestId: string) => void
@@ -1631,8 +1708,8 @@ function WorkflowView({ workflows, stageEditMode, layoutEditMode, dashboardLayou
     <div className={`workflow-horizontal ${stageEditMode ? 'editing' : ''}`}>{workflow.steps.map((step, index) => <WorkflowStepItem key={step.id} step={step} last={index === workflow.steps.length - 1} editMode={stageEditMode} onChange={(patch) => onStepChange(step.id, patch)} onMove={(offset) => onMoveStep(workflow.request.id, step.id, offset)} onDelete={() => onDeleteStep(workflow.request.id, step.id)} />)}</div>
   </section>
 
-  return <div className={`workflow-board ${layoutEditMode ? 'layout-editing' : ''}`} style={{ '--workflow-accent': dashboardLayout.accentColor, '--workflow-font-size': `${dashboardLayout.fontSize}px` } as CSSProperties}>
-    <section className="workflow-board-head"><div><span>CONCURRENT REQUEST BOARD</span><h2>의뢰 작업 진행 현황</h2><p>{workflows.length}개 의뢰 · {activeCount}개 동시 진행</p></div><label>정렬 기준<select value={sortKey} onChange={(event) => setSortKey(event.target.value as typeof sortKey)}><option value="project">프로젝트(제품)별</option><option value="category">의뢰별 카테고리</option><option value="product">제품 이름순</option><option value="owner">작업자 이름</option><option value="time">시간순</option></select></label></section>
+  return <div className={`workflow-board ${layoutEditMode ? 'layout-editing' : ''}`} style={{ '--workflow-accent': dashboardLayout.accentColor, '--workflow-font-size': `${dashboardLayout.fontSize * 1.2}px` } as CSSProperties}>
+    <section className="workflow-board-head"><div><span>CONCURRENT REQUEST BOARD · LAYOUT v{layoutVersion}</span><h2>의뢰 작업 진행 현황</h2><p>{workflows.length}개 의뢰 · {activeCount}개 동시 진행</p></div><label>정렬 기준<select value={sortKey} onChange={(event) => setSortKey(event.target.value as typeof sortKey)}><option value="project">프로젝트(제품)별</option><option value="category">의뢰별 카테고리</option><option value="product">제품 이름순</option><option value="owner">작업자 이름</option><option value="time">시간순</option></select></label></section>
     <ResponsiveGridLayout className="workflow-dashboard-grid" layouts={{ lg: gridLayout }} breakpoints={{ lg: 900, md: 600, sm: 0 }} cols={{ lg: 12, md: 8, sm: 1 }} rowHeight={84} margin={[14, 14]} isDraggable={layoutEditMode} isResizable={layoutEditMode} draggableHandle=".workflow-lane-drag-handle" compactType="vertical" onLayoutChange={updateGridLayout}>
       {ordered.map((workflow) => <div key={workflow.request.id}>{renderLane(workflow)}</div>)}
     </ResponsiveGridLayout>
@@ -1641,7 +1718,7 @@ function WorkflowView({ workflows, stageEditMode, layoutEditMode, dashboardLayou
 
 function WorkflowStepItem({ step, last, editMode, onChange, onMove, onDelete }: { step: WorkflowStep; last: boolean; editMode: boolean; onChange: (patch: Partial<WorkflowStep>) => void; onMove: (offset: -1 | 1) => void; onDelete: () => void }) {
   const statusText = { COMPLETED: '완료', IN_PROGRESS: '진행 중', WAITING: '대기', BLOCKED: '차단', FAILED: '실패' }[step.status]
-  return <div className={`workflow-step-horizontal ${step.status.toLowerCase()} ${editMode ? 'editing' : ''}`}>
+  return <div className={`workflow-step-horizontal ${step.status.toLowerCase()} ${editMode ? 'editing' : ''}`} data-testid={step.id.startsWith('draft-step-') ? 'draft-workflow-step' : undefined}>
     <div className="step-track-horizontal"><span>{step.status === 'COMPLETED' ? <Check /> : step.sequence_no}</span>{!last && <i />}</div>
     {editMode ? <div className="workflow-step-editor">
       <div className="workflow-step-actions"><button aria-label={`${step.sequence_no}단계 앞으로 이동`} onClick={() => onMove(-1)} disabled={step.sequence_no === 1}><ArrowLeft /></button><button aria-label={`${step.sequence_no}단계 뒤로 이동`} onClick={() => onMove(1)} disabled={last}><ArrowRight /></button><button className="danger" aria-label={`${step.sequence_no}단계 삭제`} onClick={onDelete}><Trash2 /></button></div>

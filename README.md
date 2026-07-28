@@ -125,7 +125,13 @@ cd E:\simulation_dashboard\backend
 
 cd E:\simulation_dashboard\frontend
 pnpm run build
+pnpm exec playwright install chromium
+pnpm run test:e2e
 ```
+
+E2E 테스트는 실행 중인 개발 서버와 충돌하지 않는 전용 포트와 `backend/data/e2e-playwright.duckdb`를 사용합니다. 운영·워크플로 레이아웃은 브라우저별 저장소가 아니라 백엔드 버전 저장 API를 사용합니다.
+
+FastAPI 계약을 변경한 뒤에는 프런트엔드에서 `pnpm run generate:api`를 실행합니다. 이 명령은 `openapi.json`과 타입 안전 클라이언트용 `src/generated/openapi.ts`를 함께 갱신합니다.
 
 ## 주요 경로
 
@@ -138,14 +144,18 @@ pnpm run build
 - `frontend/src/PortfolioDashboard.tsx`: 운영 KPI와 필터 연동 화면
 - `frontend/src/styles.css`: 반응형 UI
 
-## PostgreSQL 전환 계획
+## PostgreSQL·외부 배포
 
-현재 기본값은 `ANALYSIS_DB_BACKEND=duckdb`이며 `ANALYSIS_DUCKDB_PATH`로 파일 위치를 지정합니다. 이후 `ANALYSIS_DB_BACKEND=postgresql`과 `DATABASE_URL`을 사용하도록 저장소 구현을 교체합니다.
+기본 로컬 모드는 DuckDB입니다. PostgreSQL 운영 모드는 다음을 제공합니다.
 
-1. 현재 테이블을 마이그레이션 도구가 관리하는 PostgreSQL 스키마로 옮깁니다.
-2. `repositories/`의 DuckDB SQL 실행부를 PostgreSQL 어댑터로 교체합니다.
-3. 대시보드 설정과 결과 메타데이터는 JSONB로 저장합니다.
-4. 파일 바이너리는 객체 저장소로 옮기고 DB에는 경로와 검증 메타데이터만 저장합니다.
-5. API 계약과 프런트엔드는 그대로 유지합니다.
+- SQLAlchemy/psycopg 연결 어댑터와 Alembic migration
+- Windows/Linux 최초 구축 스크립트
+- DuckDB 읽기 전용 이관, 관계 검사, 행 수·체크섬 검증
+- DB 소유자와 최소 권한 앱 역할 분리
+- 비밀번호 로그인, Viewer/Editor/Admin 권한, HttpOnly 세션 쿠키
+- 변경·인증·권한 거절 감사 로그
+- 검증된 custom-format 백업과 빈 DB 복구 도구
+
+상세 절차는 [PostgreSQL 연동 가이드](docs/backend-sql-integration-guide.md)와 [배포 보안·백업 가이드](docs/deployment-security-backup-guide.md)를 참고하세요. 외부 공개 전에는 `AUTH_MODE=password`, HTTPS, 별도 백업 저장소를 반드시 사용해야 합니다.
 
 샘플 데이터는 합성이며 실제 제품 판정 근거로 사용하면 안 됩니다.

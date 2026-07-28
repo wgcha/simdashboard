@@ -1,6 +1,7 @@
 import json
 import base64
 import io
+import os
 import shutil
 import zipfile
 from pathlib import Path
@@ -10,6 +11,25 @@ from fastapi.testclient import TestClient
 from app.database import connect, initialize_database
 from app.main import app
 from app.media_policy import validate_media_metadata
+
+
+def test_workspace_layout_versions_are_persisted():
+    initialize_database()
+    with TestClient(app) as client:
+        initial = client.get("/api/workspace-layouts/portfolio")
+        assert initial.status_code == 200
+        original = initial.json()
+        changed_definition = {**original["definition"], "fontSize": 11 if original["definition"]["fontSize"] != 11 else 12}
+        try:
+            saved = client.put("/api/workspace-layouts/portfolio", json={"definition": changed_definition, "updated_by": "테스트 편집자"})
+            assert saved.status_code == 200, saved.text
+            assert saved.json()["version"] == original["version"] + 1
+            assert client.get("/api/workspace-layouts/portfolio").json()["definition"] == changed_definition
+            versions = client.get("/api/workspace-layouts/portfolio/versions").json()
+            assert versions[0]["version"] == saved.json()["version"]
+        finally:
+            restored = client.put("/api/workspace-layouts/portfolio", json={"definition": original["definition"], "updated_by": "테스트 복원"})
+            assert restored.status_code == 200
 
 
 def test_portfolio_metrics_filters_and_csv_reconcile():
@@ -135,8 +155,9 @@ def test_report_layout_crud_and_version_history():
                 "sectionOrder": ["scalar", "series", "media"],
                 "variablePlacements": [{"variableKey": "top_edge_max_stress", "presentation": "table", "order": 0}],
                 "includeMedia": False,
+                "slideMaster": {"backgroundColor": "F4F8FB", "design": "header-band", "accentColor": "1898D5"},
                 "canvas": {"columns": 32, "rows": 18, "widthInches": 13.333, "heightInches": 7.5},
-                "slides": [{"id": "cover", "name": "표지", "kind": "cover", "repeat": "none", "elements": [{"id": "title", "type": "title", "label": "제목", "x": 1, "y": 1, "w": 20, "h": 2, "z": 1, "binding": {"source": "field", "key": "report_title"}}]}],
+                "slides": [{"id": "cover", "name": "표지", "kind": "cover", "repeat": "none", "style": {"useMaster": False, "backgroundColor": "FFFFFF", "design": "split", "accentColor": "FF9948"}, "elements": [{"id": "title", "type": "title", "label": "제목", "text": "직접 입력한 제목", "x": 1, "y": 1, "w": 20, "h": 2, "z": 1, "binding": {"source": "static"}}]}],
                 "templateSource": "native",
                 "templateBindings": {},
             },
@@ -149,6 +170,8 @@ def test_report_layout_crud_and_version_history():
         saved = client.put(f"/api/report-layouts/{layout_id}", json=payload)
         assert saved.status_code == 200
         assert saved.json()["version"] == 2
+        assert saved.json()["definition"]["slideMaster"]["design"] == "header-band"
+        assert saved.json()["definition"]["slides"][0]["elements"][0]["text"] == "직접 입력한 제목"
         versions = client.get(f"/api/report-layouts/{layout_id}/versions").json()
         assert [item["version"] for item in versions] == [2, 1]
         historical = client.get(f"/api/report-layouts/{layout_id}/versions/1")
@@ -209,7 +232,11 @@ def test_media_metadata_policy_rejects_unsafe_paths_and_formats():
 def test_health_and_seeded_overview():
     initialize_database()
     with TestClient(app) as client:
-        assert client.get("/api/health").json() == {"status": "ok"}
+        expected_backend = os.getenv("ANALYSIS_DB_BACKEND", "duckdb").strip().lower()
+        assert client.get("/api/health").json() == {"status": "ok", "database_backend": expected_backend}
+        asset = client.get("/api/assets/media-contour-001")
+        assert asset.status_code == 200
+        assert asset.headers["content-type"].startswith("image/svg+xml")
         response = client.get("/api/load-cases/loadcase-drop-bottom-001/overview")
         assert response.status_code == 200
         payload = response.json()

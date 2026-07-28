@@ -163,6 +163,13 @@ export type ReportSection = 'series' | 'scalar' | 'media'
 export type ReportVariablePresentation = 'chart' | 'table' | 'both'
 export type ReportVariablePlacement = { variableKey: string; presentation: ReportVariablePresentation; order: number }
 export type ReportSlideKind = 'cover' | 'series' | 'scalar' | 'media' | 'custom'
+export type ReportSlideDesign = 'plain' | 'frame' | 'header-band' | 'split'
+export type ReportSlideStyle = {
+  useMaster: boolean
+  backgroundColor?: string
+  design?: ReportSlideDesign
+  accentColor?: string
+}
 export type ReportElementType = 'title' | 'text' | 'verdict' | 'scalar-card' | 'chart' | 'table' | 'image'
 export type ReportElementBinding = {
   source: 'field' | 'variable' | 'series' | 'scalar' | 'media' | 'static'
@@ -178,6 +185,7 @@ export type ReportElementDefinition = {
   w: number
   h: number
   z: number
+  text?: string
   binding?: ReportElementBinding
   style?: {
     fontSize?: number
@@ -195,6 +203,7 @@ export type ReportSlideDefinition = {
   name: string
   kind: ReportSlideKind
   repeat: 'none' | 'series-variable' | 'media-item'
+  style?: ReportSlideStyle
   elements: ReportElementDefinition[]
 }
 export type ReportTemplatePlaceholder = {
@@ -231,6 +240,11 @@ export type ReportLayoutDefinition = {
   sectionOrder: ReportSection[]
   variablePlacements: ReportVariablePlacement[]
   includeMedia: boolean
+  slideMaster?: {
+    backgroundColor: string
+    design: ReportSlideDesign
+    accentColor: string
+  }
   canvas?: { columns: 32; rows: 18; widthInches: number; heightInches: number }
   slides?: ReportSlideDefinition[]
   templateSource?: 'native' | 'pptx_upload'
@@ -346,6 +360,22 @@ export type WorkflowDashboardLayout = {
   fontSize: number
   accentColor: string
   items: Array<{ requestId: string; x: number; y: number; w: number; h: number }>
+}
+
+export type WorkspaceLayout<T extends PortfolioLayout | WorkflowDashboardLayout> = {
+  layout_kind: 'portfolio' | 'workflow'
+  version: number
+  definition: T
+  updated_by: string
+  updated_at: string
+}
+
+export type WorkspaceLayoutVersion = {
+  layout_kind: 'portfolio' | 'workflow'
+  version: number
+  created_by: string
+  created_at: string
+  is_valid: boolean
 }
 
 export type DashboardWidget = {

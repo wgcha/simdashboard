@@ -8,7 +8,7 @@ const COLORS = ['#50d5ff', '#70e0a8', '#ffbf57', '#ff647d', '#8b9cff']
 const STATUS_LABEL: Record<string, string> = { READY: '대기', IN_PROGRESS: '진행 중', COMPLETED: '완료', BLOCKED: '차단', FAILED: '실패' }
 const CHART_LABELS: Record<string, string> = { trend: '의뢰·완료·실패 추이', status: '의뢰 상태 분포', quality: '해석 유형별 품질', type: '해석 유형 구성' }
 
-export function PortfolioDashboard({ editMode, layout, onLayoutChange, onCancelEdit, onResetLayout, onOpen }: { editMode: boolean; layout: PortfolioLayout; onLayoutChange: (layout: PortfolioLayout) => void; onCancelEdit: () => void; onResetLayout: () => void; onOpen: (projectId: string, requestId: string, loadCaseId: string) => void }) {
+export function PortfolioDashboard({ editMode, layout, layoutVersion, onLayoutChange, onCancelEdit, onResetLayout, onOpen }: { editMode: boolean; layout: PortfolioLayout; layoutVersion: number; onLayoutChange: (layout: PortfolioLayout) => void; onCancelEdit: () => void; onResetLayout: () => void; onOpen: (projectId: string, requestId: string, loadCaseId: string) => void }) {
   const [data, setData] = useState<PortfolioOverview | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
@@ -46,7 +46,8 @@ export function PortfolioDashboard({ editMode, layout, onLayoutChange, onCancelE
   if (!data && loading) return <div className="portfolio-state"><LoaderCircle className="spin" /> 운영 데이터를 집계하고 있습니다.</div>
   if (!data || error) return <div className="portfolio-state error"><AlertTriangle /> {error || '운영 현황을 표시할 수 없습니다.'}<button onClick={reset}>필터 초기화</button></div>
 
-  const chartFontSize = Math.max(8, layout.fontSize)
+  const renderedFontSize = Math.max(8, layout.fontSize) * 1.2
+  const chartFontSize = renderedFontSize
   const chartCards: Record<string, ReactNode> = {
     trend: <ChartCard title="의뢰·완료·실패 추이" subtitle="의뢰 접수일 기준"><ResponsiveContainer width="100%" height="100%"><AreaChart data={data.trend}><CartesianGrid stroke="#20394d" vertical={false} /><XAxis dataKey="date" tick={{ fill:'#6f899b', fontSize:chartFontSize }} /><YAxis allowDecimals={false} tick={{ fill:'#6f899b', fontSize:chartFontSize }} /><Tooltip /><Legend /><Area dataKey="requests" name="하중 경우" stroke="#50d5ff" fill="#50d5ff22" /><Area dataKey="completed" name="결과 보유" stroke="#70e0a8" fill="#70e0a822" /><Area dataKey="failed" name="FAIL" stroke="#ff647d" fill="#ff647d22" /></AreaChart></ResponsiveContainer></ChartCard>,
     status: <ChartCard title="의뢰 상태 분포" subtitle="현재 상태"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={data.status_distribution} dataKey="value" nameKey="name" innerRadius="52%" outerRadius="76%" paddingAngle={3}>{data.status_distribution.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}</Pie><Tooltip formatter={(v, n) => [v, STATUS_LABEL[String(n)] ?? n]} /><Legend formatter={(v) => STATUS_LABEL[String(v)] ?? v} /></PieChart></ResponsiveContainer></ChartCard>,
@@ -54,11 +55,11 @@ export function PortfolioDashboard({ editMode, layout, onLayoutChange, onCancelE
     type: <ChartCard title="해석 유형 구성" subtitle="필터 적용 결과"><ResponsiveContainer width="100%" height="100%"><BarChart data={data.type_distribution} layout="vertical"><CartesianGrid stroke="#20394d" horizontal={false} /><XAxis type="number" allowDecimals={false} tick={{ fontSize:chartFontSize }} /><YAxis dataKey="name" type="category" width={90} tick={{ fill:'#7892a4', fontSize:chartFontSize }} /><Tooltip /><Bar dataKey="value" name="하중 경우" fill="#50d5ff" radius={[0,5,5,0]} /></BarChart></ResponsiveContainer></ChartCard>,
   }
 
-  return <div className="portfolio-page" data-custom-font="true" style={{ '--portfolio-font-size': `${layout.fontSize}px` } as CSSProperties}>
+  return <div className="portfolio-page" data-custom-font="true" style={{ '--portfolio-font-size': `${renderedFontSize}px` } as CSSProperties}>
     <header className="portfolio-head"><div><span>ANALYSIS OPERATIONS</span><h1>해석 운영 현황</h1><p>프로젝트부터 최신 해석 판정까지 한 화면에서 추적합니다.</p></div><div><small>데이터 기준</small><strong>{data.grain.replaceAll('_', ' ')}</strong><span>최근 결과 {data.freshness ? new Date(data.freshness).toLocaleString('ko-KR') : '없음'}</span></div></header>
-    {editMode && <section className="portfolio-edit-toolbar">
+    {editMode && <section className="portfolio-edit-toolbar" data-testid="portfolio-layout-editor">
       <GripVertical />
-      <span><strong>운영 대시보드 편집</strong> 카드의 이동 버튼이나 손잡이를 사용하고, 상단의 운영 설정 저장으로 확정하세요.</span>
+      <span><strong>운영 대시보드 편집 · v{layoutVersion}</strong> 카드의 이동 버튼이나 손잡이를 사용하고, 상단의 운영 설정 저장으로 새 버전을 만드세요.</span>
       <div className="portfolio-font-control"><span>글자 크기</span><button aria-label="글자 크기 줄이기" onClick={() => changeFontSize(layout.fontSize - 1)} disabled={layout.fontSize <= 8}><Minus /></button><input aria-label="운영 대시보드 글자 크기" type="range" min="8" max="18" step="1" value={layout.fontSize} onChange={(event)=>changeFontSize(Number(event.target.value))}/><button aria-label="글자 크기 늘리기" onClick={() => changeFontSize(layout.fontSize + 1)} disabled={layout.fontSize >= 18}><Plus /></button><output>{layout.fontSize}px</output></div>
       <button className="portfolio-reset-button" onClick={onResetLayout}><RotateCcw /> 기본값</button>
       <button onClick={onCancelEdit}>편집 취소</button>

@@ -101,6 +101,7 @@ export const DEFAULT_REPORT_LAYOUT: ReportLayoutDefinition = {
   sectionOrder: ['series', 'scalar', 'media'],
   variablePlacements: [],
   includeMedia: true,
+  slideMaster: { backgroundColor: 'F8FBFD', design: 'frame', accentColor: COLORS.blue },
   canvas: { columns: 32, rows: 18, widthInches: SLIDE_WIDTH, heightInches: SLIDE_HEIGHT },
   slides: createDefaultReportSlides(),
   templateSource: 'native',
@@ -108,11 +109,20 @@ export const DEFAULT_REPORT_LAYOUT: ReportLayoutDefinition = {
 }
 
 export function normalizeReportLayout(layout: ReportLayoutDefinition): ReportLayoutDefinition {
+  const master = {
+    ...DEFAULT_REPORT_LAYOUT.slideMaster!,
+    ...layout.slideMaster,
+    accentColor: layout.slideMaster?.accentColor ?? layout.accentColor ?? DEFAULT_REPORT_LAYOUT.accentColor,
+  }
   return {
     ...DEFAULT_REPORT_LAYOUT,
     ...layout,
     canvas: { columns: 32, rows: 18, widthInches: SLIDE_WIDTH, heightInches: SLIDE_HEIGHT },
-    slides: layout.slides?.length ? layout.slides : createDefaultReportSlides(layout.coverVariant, layout.sectionOrder),
+    slides: (layout.slides?.length ? layout.slides : createDefaultReportSlides(layout.coverVariant, layout.sectionOrder)).map((slide) => ({
+      ...slide,
+      style: { useMaster: slide.style?.useMaster ?? true, ...slide.style },
+    })),
+    slideMaster: master,
     templateSource: layout.templateSource ?? 'native',
     templateBindings: layout.templateBindings ?? {},
   }
@@ -561,7 +571,7 @@ function elementText(element: ReportElementDefinition, overview: Overview, optio
   const source = element.binding?.source
   const key = element.binding?.key
   if (source === 'field') return fieldValue(key, overview, options)
-  if (source === 'static') return element.label
+  if (source === 'static') return element.text ?? element.label
   if (source === 'variable') {
     const variableKey = element.binding?.variableKey ?? key
     const scalar = overview.scalar_results.find((item) => item.variable_key === variableKey)
@@ -588,6 +598,37 @@ function elementText(element: ReportElementDefinition, overview: Overview, optio
   return element.label
 }
 
+function pptColor(value: string | undefined, fallback: string) {
+  const normalized = value?.replace('#', '').toUpperCase()
+  return normalized && /^[0-9A-F]{6}$/.test(normalized) ? normalized : fallback
+}
+
+function resolvedSlideStyle(layout: ReportLayoutDefinition, slideDefinition: ReportSlideDefinition) {
+  const master = layout.slideMaster ?? DEFAULT_REPORT_LAYOUT.slideMaster!
+  const local = slideDefinition.style?.useMaster === false ? slideDefinition.style : undefined
+  return {
+    backgroundColor: pptColor(local?.backgroundColor, pptColor(master.backgroundColor, 'F8FBFD')),
+    design: local?.design ?? master.design,
+    accentColor: pptColor(local?.accentColor, pptColor(master.accentColor, layout.accentColor)),
+  }
+}
+
+function addSlideDesign(slide: pptxgen.Slide, page: number, layout: ReportLayoutDefinition, slideDefinition: ReportSlideDefinition) {
+  const style = resolvedSlideStyle(layout, slideDefinition)
+  slide.background = { color: style.backgroundColor }
+  if (style.design === 'frame') {
+    slide.addShape('rect', { x: 0.18, y: 0.16, w: 12.97, h: 7.16, fill: { color: style.backgroundColor, transparency: 100 }, line: { color: style.accentColor, width: 2 } })
+    slide.addShape('line', { x: 0.18, y: 7.08, w: 12.97, h: 0, line: { color: style.accentColor, width: 1.2 } })
+  } else if (style.design === 'header-band') {
+    slide.addShape('rect', { x: 0, y: 0, w: SLIDE_WIDTH, h: 0.22, fill: { color: style.accentColor }, line: { color: style.accentColor, transparency: 100 } })
+    slide.addShape('line', { x: 0.42, y: 7.08, w: 12.48, h: 0, line: { color: style.accentColor, width: 1 } })
+  } else if (style.design === 'split') {
+    slide.addShape('rect', { x: 0, y: 0, w: 0.28, h: SLIDE_HEIGHT, fill: { color: style.accentColor }, line: { color: style.accentColor, transparency: 100 } })
+    slide.addShape('rect', { x: 10.92, y: 0, w: 2.42, h: SLIDE_HEIGHT, fill: { color: style.accentColor, transparency: 91 }, line: { color: style.accentColor, transparency: 100 } })
+  }
+  slide.addText(String(page).padStart(2, '0'), { x: 12.25, y: 7.1, w: 0.55, h: 0.18, fontFace: 'Arial', fontSize: 7, color: COLORS.muted, align: 'right', margin: 0 })
+}
+
 function addEmptyElement(slide: pptxgen.Slide, element: ReportElementDefinition, message: string) {
   const { x, y, w, h } = gridRect(element)
   slide.addShape('rect', { x, y, w, h, fill: { color: 'F8FBFD', transparency: 100 }, line: { color: 'D6E4EC', width: 0.8 } })
@@ -596,14 +637,14 @@ function addEmptyElement(slide: pptxgen.Slide, element: ReportElementDefinition,
 
 async function renderTemplateSlide(pptx: pptxgen, slideDefinition: ReportSlideDefinition, overview: Overview, options: ReportExportOptions, layout: ReportLayoutDefinition, context: SlideRenderContext) {
   const slide = pptx.addSlide()
-  addFrame(slide, context.page, undefined, layout.accentColor)
+  addSlideDesign(slide, context.page, layout, slideDefinition)
   const verdictColor = overview.overall_verdict === 'PASS' ? COLORS.pass : overview.overall_verdict === 'FAIL' ? COLORS.fail : COLORS.amber
   for (const element of [...slideDefinition.elements].sort((a, b) => a.z - b.z)) {
     const { x, y, w, h } = gridRect(element)
     const style = element.style ?? {}
     const text = elementText(element, overview, options, context)
     if (element.type === 'title') {
-      slide.addText(text, { x, y, w, h, fontFace: 'Noto Sans KR', fontSize: style.fontSize ?? 20, bold: true, color: style.color ?? COLORS.ink, align: style.align ?? 'left', margin: 0, fit: 'shrink' })
+      slide.addText(text, { x, y, w, h, fontFace: 'Noto Sans KR', fontSize: style.fontSize ?? 20, bold: true, color: pptColor(style.color, COLORS.ink), fill: style.fill ? { color: pptColor(style.fill, COLORS.white) } : undefined, align: style.align ?? 'left', margin: 0, fit: 'shrink' })
       continue
     }
     if (element.type === 'verdict') {
@@ -612,8 +653,10 @@ async function renderTemplateSlide(pptx: pptxgen, slideDefinition: ReportSlideDe
       continue
     }
     if (element.type === 'text') {
-      if (['author_stage', 'report_date'].includes(element.binding?.key ?? '')) {
-        slide.addText(text, { x, y, w, h, fontFace: 'Noto Sans KR', fontSize: style.fontSize ?? 10, color: style.color ?? COLORS.muted, align: style.align ?? (element.binding?.key === 'report_date' ? 'right' : 'left'), margin: 0, fit: 'shrink' })
+      if (element.binding?.source === 'static') {
+        slide.addText(text, { x, y, w, h, fontFace: 'Noto Sans KR', fontSize: style.fontSize ?? 10, color: pptColor(style.color, COLORS.ink), fill: style.fill ? { color: pptColor(style.fill, COLORS.white) } : undefined, align: style.align ?? 'left', valign: 'top', margin: 0.08, breakLine: false, fit: 'shrink' })
+      } else if (['author_stage', 'report_date'].includes(element.binding?.key ?? '')) {
+        slide.addText(text, { x, y, w, h, fontFace: 'Noto Sans KR', fontSize: style.fontSize ?? 10, color: pptColor(style.color, COLORS.muted), align: style.align ?? (element.binding?.key === 'report_date' ? 'right' : 'left'), margin: 0, fit: 'shrink' })
       } else addTextBox(slide, element.label, text, x, y, w, h, element.binding?.key === 'review_conclusion' ? verdictColor : layout.accentColor)
       continue
     }
