@@ -4,7 +4,9 @@ import io
 import os
 import shutil
 import zipfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
@@ -54,8 +56,9 @@ def test_widget_catalog_and_dashboard_version_flows():
     initialize_database()
     with TestClient(app) as client:
         catalog = client.get("/api/widget-catalog").json()
-        assert {item["type"] for item in catalog} >= {"kpi", "gauge", "time_series", "video", "model3d", "workflow"}
+        assert {item["type"] for item in catalog} >= {"kpi", "gauge", "time_series", "video", "video_grid", "model3d", "workflow"}
         source = client.get("/api/dashboards/dashboard-drop-default").json()
+        assert any(item["type"] == "video_grid" for item in source["widgets"])
         clone = client.post("/api/dashboards/dashboard-drop-default/clone", json={"name": "테스트 복제본", "description": "회귀 검증"})
         assert clone.status_code == 201
         clone_id = clone.json()["id"]
@@ -70,10 +73,56 @@ def test_widget_catalog_and_dashboard_version_flows():
         conn.execute("DELETE FROM dashboards WHERE id = ?", [clone_id])
 
 
+def test_drop_video_example_adapter_is_scoped_paginated_and_safe():
+    initialize_database()
+    with TestClient(app) as client:
+        first_page = client.get(
+            "/api/load-cases/loadcase-drop-bottom-001/drop-videos",
+            params={"page": 1, "page_size": 7},
+        )
+        assert first_page.status_code == 200, first_page.text
+        payload = first_page.json()
+        assert payload["source"] == "EXAMPLE_ADAPTER"
+        assert payload["demo_only"] is True
+        assert payload["pagination"] == {
+            "page": 1,
+            "page_size": 7,
+            "total_items": 20,
+            "total_pages": 3,
+            "has_previous": False,
+            "has_next": True,
+        }
+        assert len(payload["videos"]) == 7
+        assert payload["videos"][0]["scene_name"] == "기준 낙하 해석"
+        assert payload["videos"][1]["scene_name"] == "낙하 비교 Scene 01"
+        assert payload["videos"][0]["drop_direction"] is None
+        assert payload["videos"][0]["drop_condition"] is None
+
+        last_page = client.get(
+            "/api/load-cases/loadcase-drop-bottom-001/drop-videos",
+            params={"page": 3, "page_size": 7},
+        ).json()
+        assert len(last_page["videos"]) == 6
+        assert last_page["pagination"]["has_previous"] is True
+        assert last_page["pagination"]["has_next"] is False
+
+        unrelated = client.get("/api/load-cases/loadcase-clamp-left-001/drop-videos").json()
+        assert unrelated["pagination"]["total_items"] == 0
+        assert unrelated["videos"] == []
+        assert client.get("/api/load-cases/missing/drop-videos").status_code == 404
+        assert client.get("/api/drop-videos/not-allowlisted/content").status_code == 404
+
+        content = client.get(payload["videos"][0]["video_url"], headers={"Range": "bytes=0-31"})
+        assert content.status_code == 206
+        assert content.headers["content-type"].startswith("video/mp4")
+        assert content.headers["content-range"].startswith("bytes 0-31/")
+        assert len(content.content) == 32
+
+
 def test_workflow_step_full_edit_and_validation():
     initialize_database()
     with TestClient(app) as client:
-        workflow = client.get("/api/workflows").json()[0]
+        workflow = next(item for item in client.get("/api/workflows").json() if item["work_plan"] is None and item["steps"])
         original = workflow["steps"][0]
         payload = {
             "name": f'{original["name"]} 편집',
@@ -105,12 +154,24 @@ def test_workflow_step_full_edit_and_validation():
 
 def test_workflow_steps_replace_supports_add_delete_and_reorder():
     initialize_database()
-    request_id = ""
+    request_id = f"request-legacy-replace-{uuid4().hex[:8]}"
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO analysis_requests VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            [request_id, "project-tv-001", "레거시 단계 편집 API 검증", "IN_PROGRESS", "워크플로 편집자", now, now + timedelta(days=7), "테스트 후 삭제"],
+        )
+        for sequence_no, name in enumerate(("레거시 첫 단계", "레거시 두 번째 단계"), start=1):
+            conn.execute(
+                """
+                INSERT INTO request_steps
+                    (id, request_id, sequence_no, name, status, owner, planned_start, planned_end,
+                     actual_start, actual_end, progress, blocked_reason, note, is_optional)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, NULL, ?, false)
+                """,
+                [f"step-{uuid4().hex[:12]}", request_id, sequence_no, name, "IN_PROGRESS" if sequence_no == 1 else "WAITING", "워크플로 편집자", now, now + timedelta(days=1), 10 if sequence_no == 1 else 0, "legacy"],
+            )
     with TestClient(app) as client:
-        project_id = client.get("/api/projects").json()[0]["id"]
-        created = client.post(f"/api/projects/{project_id}/requests", json={"title": "단계 편집 API 검증", "owner": "워크플로 편집자", "due_in_days": 7, "overall_note": "테스트 후 삭제"})
-        assert created.status_code == 201, created.text
-        request_id = created.json()["id"]
         workflow = next(item for item in client.get("/api/workflows").json() if item["request"]["id"] == request_id)
         first, second = workflow["steps"][:2]
         payload = {"steps": [
@@ -129,10 +190,9 @@ def test_workflow_steps_replace_supports_add_delete_and_reorder():
             assert steps[2]["id"] not in {first["id"], second["id"]}
             assert client.put(f"/api/requests/{request_id}/workflow-steps", json={"steps": []}).status_code == 422
         finally:
-            if request_id:
-                with connect() as conn:
-                    conn.execute("DELETE FROM request_steps WHERE request_id = ?", [request_id])
-                    conn.execute("DELETE FROM analysis_requests WHERE id = ?", [request_id])
+            with connect() as conn:
+                conn.execute("DELETE FROM request_steps WHERE request_id = ?", [request_id])
+                conn.execute("DELETE FROM analysis_requests WHERE id = ?", [request_id])
 
 
 def test_report_layout_crud_and_version_history():
@@ -319,11 +379,17 @@ def test_hierarchy_and_workflow():
         assert len(load_cases) == 1
         assert load_cases[0]["id"] == "loadcase-drop-bottom-001"
         workflow = client.get("/api/requests/request-drop-001/workflow").json()
-        assert len(workflow["steps"]) == 10
-        assert workflow["steps"][0]["name"] == "의뢰 접수"
-        assert workflow["steps"][3]["name"] == "해석 전처리 모델링"
-        assert workflow["steps"][5]["name"] == "후처리 작업"
-        assert workflow["steps"][7]["is_optional"] is True
+        assert [step["name"] for step in workflow["steps"]] == [
+            "CAD 작업",
+            "해석 모델링",
+            "HPC 수행",
+            "결과 후처리",
+            "해석 DB 저장",
+            "오픈셀 파손 및 CHR 휨 평가 분석",
+        ]
+        assert workflow["progress"] == 33
+        assert workflow["current_step"] == "HPC 수행"
+        assert workflow["work_plan"]["scenario_name"] == "설계 신뢰성 검증"
         workflows = client.get("/api/workflows").json()
         assert len(workflows) >= 2
         assert {"DROP", "SIDE_CLAMP"} <= {item["request"]["category"] for item in workflows}
@@ -459,7 +525,14 @@ def test_create_project_request_and_load_case():
         assert metadata == {"MODEL": "Test TV", "MANUFACTURER": "Test Display", "SPEC": "55 inch"}
         request_response = client.post(
             f"/api/projects/{created_project}/requests",
-            json={"title": "Side Clamp 검증 의뢰", "owner": "테스트", "due_in_days": 5},
+            json={
+                "title": "Side Clamp 검증 의뢰",
+                "owner": "테스트",
+                "due_in_days": 5,
+                "source_type": "DEPARTMENT_HEAD",
+                "source_reference": "시험해석팀",
+                "requested_by": "시험해석팀장",
+            },
         )
         assert request_response.status_code == 201
         created_request = request_response.json()["id"]
@@ -469,7 +542,10 @@ def test_create_project_request_and_load_case():
         )
         assert load_case_response.status_code == 201
         created_load_case = load_case_response.json()["id"]
-        assert len(client.get(f"/api/requests/{created_request}/workflow").json()["steps"]) == 10
+        created_workflow = client.get(f"/api/requests/{created_request}/workflow").json()
+        assert len(created_workflow["steps"]) == 6
+        assert created_workflow["current_step"] == "CAD 작업"
+        assert created_workflow["request"]["status"] == "READY"
         result_content = json.dumps({
             "solver": "Test Solver",
             "note": "업로드 검증 의견",
@@ -525,8 +601,9 @@ def test_create_project_request_and_load_case():
         assert locations["bottom_edge_max_stress"]["entity_id"] == "5001"
         assert locations["chassis_rear_top_edge_gap_permanent_deformation"]["entity_id"] == "2014"
         workflow = client.get(f"/api/requests/{created_request}/workflow").json()["steps"]
-        assert next(step for step in workflow if step["name"] == "후처리 작업")["status"] == "COMPLETED"
-        assert next(step for step in workflow if step["name"] == "결과 검토")["status"] == "IN_PROGRESS"
+        assert workflow[0]["name"] == "CAD 작업"
+        assert workflow[0]["status"] == "READY"
+        assert all(step["status"] == "WAITING" for step in workflow[1:])
     with connect() as conn:
         if created_run:
             conn.execute("DELETE FROM qualitative_notes WHERE analysis_run_id = ?", [created_run])
@@ -537,6 +614,9 @@ def test_create_project_request_and_load_case():
         if created_request:
             conn.execute("DELETE FROM request_steps WHERE request_id = ?", [created_request])
             conn.execute("DELETE FROM load_cases WHERE request_id = ?", [created_request])
+            conn.execute("DELETE FROM request_work_items WHERE request_id = ?", [created_request])
+            conn.execute("DELETE FROM request_work_plans WHERE request_id = ?", [created_request])
+            conn.execute("DELETE FROM analysis_request_type_assignments WHERE request_id = ?", [created_request])
             conn.execute("DELETE FROM analysis_requests WHERE id = ?", [created_request])
         if created_project:
             conn.execute("DELETE FROM product_information WHERE project_id = ?", [created_project])

@@ -19,6 +19,12 @@ def initialize_database() -> None:
             migrated = conn.execute("SELECT to_regclass('public.workspace_layouts')").fetchone()[0]
             if migrated is None:
                 raise RuntimeError("PostgreSQL 스키마가 준비되지 않았습니다. 먼저 alembic upgrade head를 실행하세요.")
+            workbench_migrated = conn.execute("SELECT to_regclass('public.task_type_versions')").fetchone()[0]
+            if workbench_migrated is None:
+                raise RuntimeError("워크벤치 스키마가 준비되지 않았습니다. alembic upgrade head를 실행하세요.")
+            from .repositories.workbench import ensure_default_workbench_catalog
+
+            ensure_default_workbench_catalog(conn)
         return
     with connect() as conn:
         conn.execute(
@@ -398,6 +404,127 @@ def initialize_database() -> None:
                 user_agent VARCHAR,
                 detail_json JSON
             );
+
+            CREATE TABLE IF NOT EXISTS task_type_versions (
+                id VARCHAR NOT NULL,
+                version INTEGER NOT NULL,
+                kind VARCHAR NOT NULL,
+                display_name VARCHAR NOT NULL,
+                description VARCHAR NOT NULL,
+                supports_standalone BOOLEAN NOT NULL DEFAULT true,
+                input_artifact_types_json JSON NOT NULL,
+                output_artifact_types_json JSON NOT NULL,
+                parameter_schema_json JSON NOT NULL,
+                demo_artifact_url VARCHAR NOT NULL,
+                is_active BOOLEAN NOT NULL DEFAULT true,
+                created_at TIMESTAMP NOT NULL,
+                PRIMARY KEY (id, version)
+            );
+
+            CREATE TABLE IF NOT EXISTS request_type_versions (
+                id VARCHAR NOT NULL,
+                version INTEGER NOT NULL,
+                display_name VARCHAR NOT NULL,
+                description VARCHAR NOT NULL,
+                allowed_task_types_json JSON NOT NULL,
+                default_workflow_json JSON NOT NULL,
+                match_rules_json JSON NOT NULL,
+                is_active BOOLEAN NOT NULL DEFAULT true,
+                created_at TIMESTAMP NOT NULL,
+                PRIMARY KEY (id, version)
+            );
+
+            CREATE TABLE IF NOT EXISTS analysis_request_type_assignments (
+                request_id VARCHAR PRIMARY KEY,
+                request_type_id VARCHAR NOT NULL,
+                request_type_version INTEGER NOT NULL,
+                source VARCHAR NOT NULL,
+                rule_snapshot_json JSON NOT NULL,
+                decided_by VARCHAR NOT NULL,
+                decided_at TIMESTAMP NOT NULL,
+                CHECK (source IN ('ADMIN', 'RULE', 'USER', 'DEFAULT'))
+            );
+
+            CREATE TABLE IF NOT EXISTS request_work_plans (
+                request_id VARCHAR PRIMARY KEY,
+                request_type_id VARCHAR NOT NULL,
+                request_type_version INTEGER NOT NULL,
+                scenario_name VARCHAR NOT NULL,
+                source_type VARCHAR NOT NULL,
+                source_reference VARCHAR NOT NULL,
+                requested_by VARCHAR NOT NULL,
+                definition_snapshot_json JSON NOT NULL,
+                assigned_by VARCHAR NOT NULL,
+                assigned_at TIMESTAMP NOT NULL,
+                CHECK (source_type IN ('EXTERNAL_SYSTEM', 'DEPARTMENT_HEAD'))
+            );
+
+            CREATE TABLE IF NOT EXISTS request_work_items (
+                id VARCHAR PRIMARY KEY,
+                request_id VARCHAR NOT NULL,
+                node_key VARCHAR NOT NULL,
+                task_type_id VARCHAR NOT NULL,
+                task_type_version INTEGER NOT NULL,
+                sequence_no INTEGER NOT NULL,
+                display_name VARCHAR NOT NULL,
+                status VARCHAR NOT NULL,
+                owner VARCHAR NOT NULL,
+                started_by VARCHAR,
+                started_at TIMESTAMP,
+                completed_by VARCHAR,
+                completed_at TIMESTAMP,
+                demo_run_id VARCHAR,
+                UNIQUE (request_id, sequence_no),
+                UNIQUE (request_id, node_key),
+                CHECK (status IN ('READY', 'IN_PROGRESS', 'WAITING', 'COMPLETED'))
+            );
+
+            CREATE TABLE IF NOT EXISTS workflow_runs (
+                id VARCHAR PRIMARY KEY,
+                name VARCHAR NOT NULL,
+                request_id VARCHAR,
+                request_type_id VARCHAR,
+                request_type_version INTEGER,
+                definition_json JSON NOT NULL,
+                execution_mode VARCHAR NOT NULL,
+                status VARCHAR NOT NULL,
+                progress INTEGER NOT NULL,
+                created_by VARCHAR NOT NULL,
+                created_at TIMESTAMP NOT NULL,
+                started_at TIMESTAMP NOT NULL,
+                completed_at TIMESTAMP,
+                CHECK (execution_mode = 'DEMO_ONLY'),
+                CHECK (progress BETWEEN 0 AND 100)
+            );
+
+            CREATE TABLE IF NOT EXISTS task_runs (
+                id VARCHAR PRIMARY KEY,
+                workflow_run_id VARCHAR NOT NULL,
+                node_key VARCHAR NOT NULL,
+                task_type_id VARCHAR NOT NULL,
+                task_type_version INTEGER NOT NULL,
+                status VARCHAR NOT NULL,
+                progress INTEGER NOT NULL,
+                depends_on_json JSON NOT NULL,
+                demo_artifact_url VARCHAR NOT NULL,
+                started_at TIMESTAMP NOT NULL,
+                completed_at TIMESTAMP,
+                UNIQUE (workflow_run_id, node_key),
+                CHECK (progress BETWEEN 0 AND 100)
+            );
+
+            CREATE TABLE IF NOT EXISTS task_run_events (
+                id VARCHAR PRIMARY KEY,
+                task_run_id VARCHAR NOT NULL,
+                event_index INTEGER NOT NULL,
+                event_type VARCHAR NOT NULL,
+                level VARCHAR NOT NULL,
+                message VARCHAR NOT NULL,
+                progress INTEGER NOT NULL,
+                occurred_at TIMESTAMP NOT NULL,
+                UNIQUE (task_run_id, event_index),
+                CHECK (progress BETWEEN 0 AND 100)
+            );
             """
         )
 
@@ -412,6 +539,8 @@ def seed_current_database() -> None:
 
 
 def ensure_default_content(conn: Any) -> None:
+    from .repositories.workbench import ensure_default_workbench_catalog, ensure_seed_request_work_plans
+
     count = conn.execute("SELECT count(*) FROM projects").fetchone()[0]
     if count == 0:
         conn.execute("BEGIN TRANSACTION")
@@ -422,6 +551,7 @@ def ensure_default_content(conn: Any) -> None:
             conn.execute("ROLLBACK")
             raise
     ensure_sample_evolutions(conn)
+    ensure_drop_video_widget(conn)
     ensure_feature_examples(conn)
     ensure_variable_definitions(conn)
     conn.execute(
@@ -432,6 +562,8 @@ def ensure_default_content(conn: Any) -> None:
     )
     ensure_report_layouts(conn)
     ensure_workspace_layouts(conn)
+    ensure_default_workbench_catalog(conn)
+    ensure_seed_request_work_plans(conn)
     chassis_layout = {
         "id": "dashboard-chassis-default",
         "name": "Chassis Rear 영구변형 기본 분석",
@@ -466,6 +598,51 @@ def ensure_workspace_layouts(conn: duckdb.DuckDBPyConnection) -> None:
             "INSERT OR IGNORE INTO workspace_layout_versions VALUES (?, 1, ?, 'system', ?, true)",
             [kind, encoded, now],
         )
+
+
+def ensure_drop_video_widget(conn: Any) -> None:
+    stored = conn.execute(
+        "SELECT definition_json, version FROM dashboards WHERE id = ?",
+        ["dashboard-drop-default"],
+    ).fetchone()
+    if not stored:
+        return
+    definition = json_value(stored[0]) or {}
+    widgets = definition.get("widgets", [])
+    if any(widget.get("type") == "video_grid" for widget in widgets):
+        return
+    history = conn.execute(
+        "SELECT definition_json FROM dashboard_versions WHERE dashboard_id = ?",
+        ["dashboard-drop-default"],
+    ).fetchall()
+    if any(
+        any(widget.get("type") == "video_grid" for widget in (json_value(item[0]) or {}).get("widgets", []))
+        for item in history
+    ):
+        return
+    widgets.append(
+        {
+            "id": "drop-video-grid",
+            "type": "video_grid",
+            "title": "낙하 해석 영상 비교",
+            "x": 0,
+            "y": 16,
+            "w": 12,
+            "h": 10,
+            "settings": {"pageSize": 20},
+        }
+    )
+    next_version = stored[1] + 1
+    now = _iso(datetime.now(timezone.utc))
+    encoded = json.dumps(definition, ensure_ascii=False)
+    conn.execute(
+        "UPDATE dashboards SET definition_json = ?, version = ?, updated_at = ? WHERE id = ?",
+        [encoded, next_version, now, "dashboard-drop-default"],
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO dashboard_versions VALUES (?, ?, ?, 'system-video-grid-backfill', ?, true)",
+        ["dashboard-drop-default", next_version, encoded, now],
+    )
 
 
 def ensure_report_layouts(conn: duckdb.DuckDBPyConnection) -> None:

@@ -13,6 +13,7 @@ async function waitForDashboard(page: Page, role: 'admin' | 'viewer' = 'admin') 
 async function openAnalysisWorkspace(page: Page) {
   await page.getByRole('button', { name: '해석 의뢰 현황', exact: true }).click()
   await expect(page.locator('.content-head')).toBeVisible()
+  await page.locator('.view-tabs').getByRole('button', { name: /상세 분석/ }).click()
 }
 
 test.beforeEach(async ({ page }, testInfo) => {
@@ -59,6 +60,9 @@ test('운영 대시보드 편집은 취소 복원과 백엔드 버전 저장을 
 test('의뢰 진행 상태의 레이아웃 편집과 단계 편집은 서로 독립적이다', async ({ page }) => {
   await openAnalysisWorkspace(page)
   await page.getByRole('button', { name: /의뢰 진행 상태/ }).click()
+  await page.getByLabel('프로젝트 선택').selectOption('project-feature-showcase')
+  await expect(page.getByLabel('의뢰 선택').locator('option[value="request-showcase-workflow"]')).toHaveCount(1)
+  await page.getByLabel('의뢰 선택').selectOption('request-showcase-workflow')
 
   await page.getByRole('button', { name: '대시보드 편집', exact: true }).click()
   await expect(page.getByTestId('workflow-layout')).toBeVisible()
@@ -66,6 +70,7 @@ test('의뢰 진행 상태의 레이아웃 편집과 단계 편집은 서로 독
   await expect(page.getByRole('button', { name: /단계 추가/ })).toHaveCount(0)
   await page.getByTestId('workflow-layout').getByRole('button', { name: '편집 취소' }).click()
 
+  await expect(page.getByRole('button', { name: '진행 단계 편집', exact: true })).toBeVisible()
   await page.getByRole('button', { name: '진행 단계 편집', exact: true }).click()
   await expect(page.getByTestId('workflow-stages')).toBeVisible()
   await expect(page.getByLabel('진행 현황 강조 색상')).toHaveCount(0)

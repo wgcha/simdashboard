@@ -20,5 +20,6 @@ frontend/*.tsbuildinfo
 transfer-bundles/
 backend/.transfer-assets-*/
 *.log
+!backend/assets/demo-execution.log
 .server-pids.json
 .server-pids.env

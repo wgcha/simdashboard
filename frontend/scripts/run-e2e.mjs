@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process'
+import { rmSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
@@ -71,6 +72,8 @@ function waitForExit(child) {
 }
 
 async function main() {
+  rmSync(e2eDatabase, { force: true })
+  rmSync(`${e2eDatabase}.wal`, { force: true })
   prepareUser('e2e-admin', 'E2E 관리자', 'admin')
   prepareUser('e2e-viewer', 'E2E 조회자', 'viewer')
   const backend = launch(python, [
@@ -103,6 +106,7 @@ async function main() {
 
   const playwright = launch(process.execPath, [
     path.join(frontendDir, 'node_modules', '@playwright', 'test', 'cli.js'), 'test',
+    ...process.argv.slice(2),
   ], { cwd: frontendDir })
   return await waitForExit(playwright)
 }

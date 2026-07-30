@@ -27,6 +27,8 @@ from .media_policy import validate_media_metadata
 from .result_import import CSV_TEMPLATE, JSON_TEMPLATE, ResultFormatError, parse_result_file
 from .repositories.portfolio import PortfolioRepository
 from .repositories.variable_catalog import VariableCatalogRepository
+from .repositories.workbench import WorkbenchRepository
+from .services.request_monitoring import request_monitoring_summary, sync_request_status
 from .schemas.api import (
     AnalysisRequestCreate,
     DashboardClone,
@@ -52,6 +54,7 @@ from .schemas.api import (
 )
 from .security import SecurityMiddleware
 from .routers.security import router as security_router
+from .routers.workbench import router as workbench_router
 
 
 @asynccontextmanager
@@ -71,9 +74,28 @@ app.add_middleware(
 )
 app.mount("/assets", StaticFiles(directory=str(__import__("pathlib").Path(__file__).resolve().parents[1] / "assets")), name="assets")
 app.include_router(security_router)
+app.include_router(workbench_router)
 
 
 WORKSPACE_LAYOUT_KINDS = {"portfolio", "workflow"}
+
+DROP_VIDEO_SOURCE_DIR = Path(__file__).resolve().parents[2] / "video_example"
+DEMO_DROP_VIDEO_LOAD_CASE_IDS = {"loadcase-drop-bottom-001"}
+DROP_VIDEO_ALLOWLIST = {
+    "drop-analysis": {
+        "filename": "tv_drop_analysis_simulation.mp4",
+        "scene_name": "기준 낙하 해석",
+        "sort_order": 1,
+    },
+    **{
+        f"drop-scene-{index:02d}": {
+            "filename": f"tv_drop_simulation_variant_{index:02d}.mp4",
+            "scene_name": f"낙하 비교 Scene {index:02d}",
+            "sort_order": index + 1,
+        }
+        for index in range(1, 20)
+    },
+}
 
 
 def _validated_workspace_layout(kind: str, definition: dict[str, Any]) -> dict[str, Any]:
@@ -363,35 +385,66 @@ def create_request(project_id: str, payload: AnalysisRequestCreate) -> dict[str,
     request_id = f"request-{uuid4().hex[:12]}"
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     due_at = now + timedelta(days=payload.due_in_days)
-    step_names = ["의뢰 접수", "요구사항 검토", "모델 준비", "해석 전처리 모델링", "해석 실행", "후처리 작업", "결과 검토", "Validation", "승인", "완료"]
     with connect() as conn:
         if conn.execute("SELECT id FROM projects WHERE id = ?", [project_id]).fetchone() is None:
             raise HTTPException(404, "프로젝트를 찾을 수 없습니다.")
+        repository = WorkbenchRepository(conn)
+        request_type = repository.get_request_type(payload.request_type_id, payload.request_type_version)
+        if not request_type or not request_type["is_active"]:
+            raise HTTPException(
+                404,
+                detail={
+                    "code": "REQUEST_TYPE_NOT_FOUND",
+                    "request_type_id": payload.request_type_id,
+                    "request_type_version": payload.request_type_version,
+                },
+            )
+        assigned_by = (payload.assigned_by or payload.owner).strip()
         conn.execute("BEGIN TRANSACTION")
         try:
             conn.execute(
                 "INSERT INTO analysis_requests VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 [request_id, project_id, payload.title.strip(), "READY", payload.owner.strip(), now, due_at, payload.overall_note.strip()],
             )
-            for index, name in enumerate(step_names, start=1):
-                planned_start = now + timedelta(hours=(index - 1) * 16)
-                conn.execute(
-                    """
-                    INSERT INTO request_steps
-                        (id, request_id, sequence_no, name, status, owner, planned_start, planned_end,
-                         actual_start, actual_end, progress, is_optional, blocked_reason, note)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    [
-                        f"step-{uuid4().hex[:12]}", request_id, index, name, "WAITING", payload.owner.strip(),
-                        planned_start, planned_start + timedelta(hours=12), None, None, 0, name == "Validation", None, None,
-                    ],
-                )
+            repository.assign_request_type(
+                request_id,
+                payload.request_type_id,
+                payload.request_type_version,
+                "ADMIN",
+                assigned_by,
+            )
+            repository.create_work_plan(
+                request_id,
+                request_type,
+                payload.owner.strip(),
+                assigned_by,
+                source_type=payload.source_type,
+                source_reference=payload.source_reference.strip(),
+                requested_by=payload.requested_by.strip(),
+            )
             conn.execute("COMMIT")
+        except (FileExistsError, PermissionError) as exc:
+            conn.execute("ROLLBACK")
+            raise HTTPException(409, detail={"code": str(exc), "request_id": request_id}) from exc
         except Exception:
             conn.execute("ROLLBACK")
             raise
-    return {"id": request_id, "project_id": project_id, "title": payload.title.strip(), "status": "READY", "owner": payload.owner.strip(), "requested_at": now, "due_at": due_at, "overall_note": payload.overall_note.strip()}
+    return {
+        "id": request_id,
+        "project_id": project_id,
+        "title": payload.title.strip(),
+        "status": "READY",
+        "owner": payload.owner.strip(),
+        "requested_at": now,
+        "due_at": due_at,
+        "overall_note": payload.overall_note.strip(),
+        "request_type_id": payload.request_type_id,
+        "request_type_version": payload.request_type_version,
+        "scenario_name": request_type["display_name"],
+        "source_type": payload.source_type,
+        "source_reference": payload.source_reference.strip(),
+        "requested_by": payload.requested_by.strip(),
+    }
 
 
 @app.get("/api/requests/{request_id}/load-cases")
@@ -406,6 +459,87 @@ def get_load_cases(request_id: str) -> list[dict[str, Any]]:
     for item in result:
         item["parameters"] = json_value(item.pop("parameters_json"))
     return result
+
+
+@app.get("/api/load-cases/{load_case_id}/drop-videos")
+def get_drop_videos(
+    load_case_id: str,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=20),
+) -> dict[str, Any]:
+    with connect() as conn:
+        context = conn.execute(
+            """
+            SELECT lc.id, lc.name, lc.analysis_type, ar.id, ar.title
+            FROM load_cases lc
+            JOIN analysis_requests ar ON ar.id = lc.request_id
+            WHERE lc.id = ?
+            """,
+            [load_case_id],
+        ).fetchone()
+    if context is None:
+        raise HTTPException(404, "하중 경우를 찾을 수 없습니다.")
+
+    videos: list[dict[str, Any]] = []
+    if load_case_id in DEMO_DROP_VIDEO_LOAD_CASE_IDS:
+        for video_id, definition in DROP_VIDEO_ALLOWLIST.items():
+            path = DROP_VIDEO_SOURCE_DIR / definition["filename"]
+            if not path.is_file():
+                continue
+            videos.append(
+                {
+                    "video_id": video_id,
+                    "scene_id": video_id,
+                    "scene_name": definition["scene_name"],
+                    "video_url": f"/api/drop-videos/{video_id}/content",
+                    "thumbnail_url": None,
+                    "duration": None,
+                    "file_size": path.stat().st_size,
+                    "format": "mp4",
+                    "codec": None,
+                    "sort_order": definition["sort_order"],
+                    "drop_direction": None,
+                    "drop_condition": None,
+                    "analysis_version": None,
+                }
+            )
+    videos.sort(key=lambda item: (item["sort_order"], item["scene_id"]))
+    total_items = len(videos)
+    total_pages = (total_items + page_size - 1) // page_size if total_items else 0
+    start = (page - 1) * page_size
+    page_videos = videos[start:start + page_size] if start < total_items else []
+    return {
+        "load_case": {
+            "load_case_id": context[0],
+            "load_case_name": context[1],
+            "analysis_type": context[2],
+            "request_id": context[3],
+            "request_name": context[4],
+        },
+        "source": "EXAMPLE_ADAPTER",
+        "demo_only": True,
+        "pagination": {
+            "page": page,
+            "page_size": page_size,
+            "total_items": total_items,
+            "total_pages": total_pages,
+            "has_previous": page > 1 and total_pages > 0,
+            "has_next": page < total_pages,
+        },
+        "videos": page_videos,
+    }
+
+
+@app.get("/api/drop-videos/{video_id}/content")
+def get_drop_video_content(video_id: str) -> FileResponse:
+    definition = DROP_VIDEO_ALLOWLIST.get(video_id)
+    if definition is None:
+        raise HTTPException(404, "허용된 예제 영상을 찾을 수 없습니다.")
+    source_root = DROP_VIDEO_SOURCE_DIR.resolve()
+    path = (source_root / definition["filename"]).resolve()
+    if path.parent != source_root or not path.is_file():
+        raise HTTPException(404, "예제 영상 파일을 찾을 수 없습니다.")
+    return FileResponse(path, media_type="video/mp4")
 
 
 @app.post("/api/requests/{request_id}/load-cases", status_code=201)
@@ -507,6 +641,7 @@ def import_analysis_results(load_case_id: str, payload: ResultImportPayload) -> 
             conn.execute("UPDATE analysis_requests SET status = 'IN_PROGRESS' WHERE id = ?", [context[1]])
             conn.execute("UPDATE request_steps SET status = 'COMPLETED', progress = 100, actual_end = ? WHERE request_id = ? AND name IN ('해석 실행', '후처리 작업')", [now, context[1]])
             conn.execute("UPDATE request_steps SET status = 'IN_PROGRESS', progress = greatest(progress, 20), actual_start = coalesce(actual_start, ?) WHERE request_id = ? AND name = '결과 검토'", [now, context[1]])
+            sync_request_status(conn, context[1])
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
@@ -1075,12 +1210,19 @@ def get_workflow(request_id: str) -> dict[str, Any]:
         request_data = rows(conn.execute("SELECT * FROM analysis_requests WHERE id = ?", [request_id]))
         if not request_data:
             raise HTTPException(404, "해석 의뢰를 찾을 수 없습니다.")
-        steps = rows(conn.execute("SELECT * FROM request_steps WHERE request_id = ? ORDER BY sequence_no", [request_id]))
-    progress = round(sum(step["progress"] for step in steps) / len(steps)) if steps else 0
+        monitoring = request_monitoring_summary(conn, request_id)
+    request_data[0]["status"] = monitoring["status"]
     return {
         "request": request_data[0],
-        "steps": steps,
-        "progress": progress,
+        "steps": monitoring["steps"],
+        "progress": monitoring["progress"],
+        "current_step": monitoring["current_step"],
+        "current_step_id": monitoring["current_step_id"],
+        "completed_count": monitoring["completed_count"],
+        "total_count": monitoring["total_count"],
+        "work_plan": monitoring["work_plan"],
+        "latest_demo_run": monitoring["latest_demo_run"],
+        "request_type_assignment": monitoring["request_type_assignment"],
     }
 
 
@@ -1104,14 +1246,22 @@ def get_workflows() -> list[dict[str, Any]]:
         )
         result = []
         for request in requests:
-            steps = rows(
-                conn.execute(
-                    "SELECT * FROM request_steps WHERE request_id = ? ORDER BY sequence_no",
-                    [request["id"]],
-                )
+            monitoring = request_monitoring_summary(conn, request["id"])
+            request["status"] = monitoring["status"]
+            result.append(
+                {
+                    "request": request,
+                    "steps": monitoring["steps"],
+                    "progress": monitoring["progress"],
+                    "current_step": monitoring["current_step"],
+                    "current_step_id": monitoring["current_step_id"],
+                    "completed_count": monitoring["completed_count"],
+                    "total_count": monitoring["total_count"],
+                    "work_plan": monitoring["work_plan"],
+                    "latest_demo_run": monitoring["latest_demo_run"],
+                    "request_type_assignment": monitoring["request_type_assignment"],
+                }
             )
-            progress = round(sum(step["progress"] for step in steps) / len(steps)) if steps else 0
-            result.append({"request": request, "steps": steps, "progress": progress})
     return result
 
 
@@ -1120,6 +1270,11 @@ def replace_workflow_steps(request_id: str, payload: WorkflowStepsReplace) -> li
     with connect() as conn:
         if not conn.execute("SELECT 1 FROM analysis_requests WHERE id = ?", [request_id]).fetchone():
             raise HTTPException(404, "해석 의뢰를 찾을 수 없습니다.")
+        if conn.execute("SELECT 1 FROM request_work_plans WHERE request_id = ?", [request_id]).fetchone():
+            raise HTTPException(
+                409,
+                detail={"code": "WORK_PLAN_IMMUTABLE", "request_id": request_id},
+            )
         existing = rows(conn.execute("SELECT * FROM request_steps WHERE request_id = ?", [request_id]))
         existing_by_id = {item["id"]: item for item in existing}
         submitted_ids = [item.id for item in payload.steps if item.id]
@@ -1164,6 +1319,8 @@ def replace_workflow_steps(request_id: str, payload: WorkflowStepsReplace) -> li
                         """,
                         [step_id, request_id, sequence_no, name, step.status, owner, now, now + timedelta(days=7), step.progress, step.note.strip(), step.is_optional],
                     )
+            updated_steps = rows(conn.execute("SELECT * FROM request_steps WHERE request_id = ? ORDER BY sequence_no", [request_id]))
+            sync_request_status(conn, request_id, updated_steps)
             conn.execute("COMMIT")
         except HTTPException:
             conn.execute("ROLLBACK")
@@ -1182,8 +1339,22 @@ def update_workflow_step(step_id: str, payload: WorkflowStepUpdate) -> dict[str,
     with connect() as conn:
         existing = rows(conn.execute("SELECT * FROM request_steps WHERE id = ?", [step_id]))
         if not existing:
+            planned_item = conn.execute(
+                "SELECT request_id FROM request_work_items WHERE id = ?",
+                [step_id],
+            ).fetchone()
+            if planned_item:
+                raise HTTPException(
+                    409,
+                    detail={"code": "WORK_PLAN_IMMUTABLE", "request_id": planned_item[0]},
+                )
             raise HTTPException(404, "작업 단계를 찾을 수 없습니다.")
         current = existing[0]
+        if conn.execute("SELECT 1 FROM request_work_plans WHERE request_id = ?", [current["request_id"]]).fetchone():
+            raise HTTPException(
+                409,
+                detail={"code": "WORK_PLAN_IMMUTABLE", "request_id": current["request_id"]},
+            )
         owner = payload.owner.strip() if payload.owner is not None else current["owner"]
         if not owner:
             raise HTTPException(400, "담당자를 입력해야 합니다.")
@@ -1204,6 +1375,7 @@ def update_workflow_step(step_id: str, payload: WorkflowStepUpdate) -> dict[str,
             ],
         )
         updated = rows(conn.execute("SELECT * FROM request_steps WHERE id = ?", [step_id]))
+        sync_request_status(conn, current["request_id"])
     if not updated:
         raise HTTPException(404, "작업 단계를 찾을 수 없습니다.")
     return updated[0]
@@ -1297,6 +1469,7 @@ def get_widget_catalog() -> list[dict[str, Any]]:
         {"type": "result_table", "label": "데이터 테이블", "category": "표", "allowed_data_types": ["NUMBER", "FLOAT", "INTEGER", "TEXT", "TIME_SERIES", "CURVE", "IMAGE", "VIDEO", "MODEL_3D"], "default_size": [12, 4]},
         {"type": "contour", "label": "컨투어 이미지", "category": "미디어", "allowed_data_types": ["IMAGE"], "default_size": [4, 3]},
         {"type": "video", "label": "영상 플레이어", "category": "미디어", "allowed_data_types": ["VIDEO"], "default_size": [6, 4]},
+        {"type": "video_grid", "label": "낙하 영상 비교", "category": "미디어", "allowed_data_types": ["VIDEO"], "default_size": [12, 10]},
         {"type": "model3d", "label": "경량 3D 뷰어", "category": "미디어", "allowed_data_types": ["MODEL_3D"], "default_size": [6, 5]},
         {"type": "note", "label": "수행자 의견", "category": "텍스트", "allowed_data_types": ["TEXT"], "default_size": [4, 3]},
         {"type": "workflow", "label": "작업 흐름", "category": "프로세스", "allowed_data_types": ["STATUS"], "default_size": [12, 5]},

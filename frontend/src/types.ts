@@ -100,6 +100,14 @@ export type AnalysisRequest = {
   status: string
   owner: string
   requested_at: string
+  due_at?: string
+  overall_note?: string
+  request_type_id?: 'design-reliability-validation' | 'design-doe-exploration'
+  request_type_version?: number
+  scenario_name?: string
+  source_type?: 'EXTERNAL_SYSTEM' | 'DEPARTMENT_HEAD'
+  source_reference?: string
+  requested_by?: string
 }
 
 export type LoadCase = {
@@ -126,12 +134,34 @@ export type WorkflowStep = {
   id: string
   sequence_no: number
   name: string
-  status: 'COMPLETED' | 'IN_PROGRESS' | 'WAITING' | 'BLOCKED' | 'FAILED'
+  status: 'READY' | 'COMPLETED' | 'IN_PROGRESS' | 'WAITING' | 'BLOCKED' | 'FAILED'
   owner: string
   progress: number
-  planned_end: string
+  planned_end?: string
   is_optional: boolean
   note?: string
+  node_key?: string
+  task_type_id?: string
+  task_type_version?: number
+  display_name?: string
+  started_by?: string | null
+  started_at?: string | null
+  completed_by?: string | null
+  completed_at?: string | null
+  demo_run_id?: string | null
+}
+
+export type RequestWorkPlan = {
+  request_id: string
+  request_type_id: 'design-reliability-validation' | 'design-doe-exploration' | string
+  request_type_version: number
+  scenario_name: string
+  source_type: 'EXTERNAL_SYSTEM' | 'DEPARTMENT_HEAD'
+  source_reference: string
+  requested_by: string
+  definition_snapshot: { nodes: Array<{ node_key: string; task_type_id: string; task_type_version: number; depends_on: string[]; display_name: string; sequence_no: number }> }
+  assigned_by: string
+  assigned_at: string
 }
 
 export type Workflow = {
@@ -150,14 +180,43 @@ export type Workflow = {
   }
   steps: WorkflowStep[]
   progress: number
+  current_step?: string | null
+  current_step_id?: string | null
+  completed_count?: number | null
+  total_count?: number | null
+  work_plan?: RequestWorkPlan | null
+  latest_demo_run?: { id: string; name: string; execution_mode: 'DEMO_ONLY'; status: string; progress: number; created_at: string; completed_at: string | null } | null
+  request_type_assignment?: { request_type_id: string; request_type_version: number; source: 'ADMIN' | 'RULE' | 'USER' | 'DEFAULT'; decided_by: string; decided_at: string } | null
 }
 
-export type WidgetType = 'open_cell_map' | 'kpi' | 'verdict' | 'gauge' | 'edge_bar' | 'summary' | 'time_series' | 'scatter' | 'note' | 'result_table' | 'contour' | 'video' | 'model3d' | 'workflow' | 'chassis_summary' | 'chassis_diagram' | 'chassis_bar' | 'chassis_table'
+export type WidgetType = 'open_cell_map' | 'kpi' | 'verdict' | 'gauge' | 'edge_bar' | 'summary' | 'time_series' | 'scatter' | 'note' | 'result_table' | 'contour' | 'video' | 'video_grid' | 'model3d' | 'workflow' | 'chassis_summary' | 'chassis_diagram' | 'chassis_bar' | 'chassis_table'
 
 export type VariableDataType = 'NUMBER' | 'TIME_SERIES' | 'FLOAT' | 'INTEGER' | 'TEXT' | 'CURVE' | 'IMAGE' | 'VIDEO' | 'MODEL_3D' | 'VERDICT' | 'STATUS' | 'BOOLEAN'
 export type VariableDefinition = { id: string; definition_id: string; variable_key: string; display_name: string; data_type: VariableDataType; unit: string; filterable: boolean; source: string; allowed_widgets: string[]; allowed_aggregations: string[]; description: string; threshold?: number | null; analysis_type: string; result_group: 'OPEN_CELL' | 'CHASSIS_REAR' | 'CUSTOM'; has_data: boolean; dashboard_usage_count: number; updated_at: string; updated_by: string }
 export type VariableDefinitionInput = { variable_key: string; display_name: string; data_type: VariableDataType; unit: string; description: string; filterable: boolean; threshold: number | null; allowed_widgets: string[]; allowed_aggregations: string[]; result_group: 'OPEN_CELL' | 'CHASSIS_REAR' | 'CUSTOM'; updated_by: string }
 export type WidgetCatalogItem = { type: WidgetType; label: string; category: string; allowed_data_types: string[]; default_size: [number, number] }
+export type DropVideoItem = {
+  video_id: string
+  scene_id: string
+  scene_name: string
+  video_url: string
+  thumbnail_url: string | null
+  duration: number | null
+  file_size: number
+  format: 'mp4' | 'webm'
+  codec: string | null
+  sort_order: number
+  drop_direction: string | null
+  drop_condition: string | null
+  analysis_version: string | null
+}
+export type DropVideoPage = {
+  load_case: { load_case_id: string; load_case_name: string; analysis_type: string; request_id: string; request_name: string }
+  source: 'EXAMPLE_ADAPTER'
+  demo_only: boolean
+  pagination: { page: number; page_size: number; total_items: number; total_pages: number; has_previous: boolean; has_next: boolean }
+  videos: DropVideoItem[]
+}
 export type DashboardVersion = { dashboard_id: string; version: number; created_by: string; created_at: string; is_valid: boolean }
 export type ReportSection = 'series' | 'scalar' | 'media'
 export type ReportVariablePresentation = 'chart' | 'table' | 'both'
@@ -347,7 +406,7 @@ export type PortfolioOverview = {
   status_distribution: Array<{ name: string; value: number }>
   type_distribution: Array<{ name: string; value: number }>
   quality_by_type: Array<{ type: string; pass: number; fail: number; no_data: number }>
-  records: Array<{ project_id: string; project_name: string; product_name: string; request_id: string; request_title: string; owner: string; request_status: string; requested_at: string; load_case_id: string; load_case_name: string; analysis_type: string; load_case_status: string; run_id: string | null; completed_at: string | null; verdict: string; result_count: number }>
+  records: Array<{ project_id: string; project_name: string; product_name: string; request_id: string; request_title: string; owner: string; request_status: string; request_progress: number; current_step: string | null; current_step_id?: string | null; completed_count?: number | null; total_count?: number | null; scenario_name?: string | null; work_plan?: RequestWorkPlan | null; latest_demo_run: { id: string; name: string; execution_mode: 'DEMO_ONLY'; status: string; progress: number; created_at: string; completed_at: string | null } | null; request_type_assignment: { request_type_id: string; request_type_version: number; source: 'ADMIN' | 'RULE' | 'USER' | 'DEFAULT'; decided_by: string; decided_at: string } | null; requested_at: string; load_case_id: string; load_case_name: string; analysis_type: string; load_case_status: string; run_id: string | null; completed_at: string | null; verdict: string; result_count: number }>
   filter_options: { projects: Array<{ id: string; name: string }>; analysis_types: string[]; statuses: string[] }
 }
 

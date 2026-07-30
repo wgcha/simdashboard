@@ -50,15 +50,11 @@ try {
         throw 'Could not read the PostgreSQL configuration.'
     }
 
-    Write-Host 'Checking the PostgreSQL connection and schema...' -ForegroundColor Cyan
-    & $Python 'scripts\check_postgres_connection.py'
-    if ($LASTEXITCODE -ne 0) {
-        exit $LASTEXITCODE
-    }
 }
 finally {
     Pop-Location
 }
 
-Write-Host 'PostgreSQL preflight check passed.' -ForegroundColor Green
+Write-Host 'PostgreSQL configuration found. Delegating migration, preflight, and readiness checks...' -ForegroundColor Cyan
 & $StartScript
+exit $LASTEXITCODE

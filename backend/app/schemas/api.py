@@ -57,7 +57,7 @@ class WorkspaceLayoutVersionResponse(BaseModel):
 
 class WorkflowStepUpdate(BaseModel):
     name: str = Field(min_length=2, max_length=80)
-    status: Literal["COMPLETED", "IN_PROGRESS", "WAITING", "BLOCKED", "FAILED"] | None = None
+    status: Literal["READY", "COMPLETED", "IN_PROGRESS", "WAITING", "BLOCKED", "FAILED"] | None = None
     owner: str | None = Field(default=None, min_length=1, max_length=80)
     progress: int | None = Field(default=None, ge=0, le=100)
     is_optional: bool | None = None
@@ -67,7 +67,7 @@ class WorkflowStepUpdate(BaseModel):
 class WorkflowStepDraft(BaseModel):
     id: str | None = None
     name: str = Field(min_length=2, max_length=80)
-    status: Literal["COMPLETED", "IN_PROGRESS", "WAITING", "BLOCKED", "FAILED"]
+    status: Literal["READY", "COMPLETED", "IN_PROGRESS", "WAITING", "BLOCKED", "FAILED"]
     owner: str = Field(min_length=1, max_length=80)
     progress: int = Field(ge=0, le=100)
     is_optional: bool = False
@@ -96,6 +96,12 @@ class AnalysisRequestCreate(BaseModel):
     owner: str = Field(min_length=2, max_length=60)
     due_in_days: int = Field(default=7, ge=1, le=365)
     overall_note: str = Field(default="", max_length=500)
+    source_type: Literal["EXTERNAL_SYSTEM", "DEPARTMENT_HEAD"]
+    source_reference: str = Field(min_length=2, max_length=160)
+    requested_by: str = Field(min_length=2, max_length=80)
+    request_type_id: Literal["design-reliability-validation", "design-doe-exploration"] = "design-reliability-validation"
+    request_type_version: int = Field(default=1, ge=1)
+    assigned_by: str | None = Field(default=None, min_length=2, max_length=80)
 
 
 class LoadCaseCreate(BaseModel):

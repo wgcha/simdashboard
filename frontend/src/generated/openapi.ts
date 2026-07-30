@@ -123,6 +123,178 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/workbench/task-types": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Task Types */
+        get: operations["list_task_types_api_workbench_task_types_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/workbench/task-types": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Task Type */
+        post: operations["create_task_type_api_admin_workbench_task_types_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/workbench/request-types": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Request Types */
+        get: operations["list_request_types_api_workbench_request_types_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/workbench/request-types": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Request Type */
+        post: operations["create_request_type_api_admin_workbench_request_types_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/workbench/requests/{request_id}/request-type": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Resolve Request Type */
+        get: operations["resolve_request_type_api_workbench_requests__request_id__request_type_get"];
+        /** Assign Request Type */
+        put: operations["assign_request_type_api_workbench_requests__request_id__request_type_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/workbench/demo-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Demo Runs */
+        get: operations["list_demo_runs_api_workbench_demo_runs_get"];
+        put?: never;
+        /** Create Demo Run */
+        post: operations["create_demo_run_api_workbench_demo_runs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/workbench/demo-runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Demo Run */
+        get: operations["get_demo_run_api_workbench_demo_runs__run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/workbench/requests/{request_id}/work-plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Request Work Plan */
+        get: operations["get_request_work_plan_api_workbench_requests__request_id__work_plan_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/workbench/work-items/{item_id}/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start Work Item */
+        post: operations["start_work_item_api_workbench_work_items__item_id__start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/workbench/work-items/{item_id}/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Complete Work Item */
+        post: operations["complete_work_item_api_workbench_work_items__item_id__complete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/health": {
         parameters: {
             query?: never;
@@ -278,6 +450,40 @@ export interface paths {
         put?: never;
         /** Create Load Case */
         post: operations["create_load_case_api_requests__request_id__load_cases_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/load-cases/{load_case_id}/drop-videos": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Drop Videos */
+        get: operations["get_drop_videos_api_load_cases__load_case_id__drop_videos_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/drop-videos/{video_id}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Drop Video Content */
+        get: operations["get_drop_video_content_api_drop_videos__video_id__content_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -910,6 +1116,28 @@ export interface components {
              * @default
              */
             overall_note: string;
+            /**
+             * Source Type
+             * @enum {string}
+             */
+            source_type: "EXTERNAL_SYSTEM" | "DEPARTMENT_HEAD";
+            /** Source Reference */
+            source_reference: string;
+            /** Requested By */
+            requested_by: string;
+            /**
+             * Request Type Id
+             * @default design-reliability-validation
+             * @enum {string}
+             */
+            request_type_id: "design-reliability-validation" | "design-doe-exploration";
+            /**
+             * Request Type Version
+             * @default 1
+             */
+            request_type_version: number;
+            /** Assigned By */
+            assigned_by?: string | null;
         };
         /** DashboardClone */
         DashboardClone: {
@@ -939,6 +1167,30 @@ export interface components {
             description: string;
             /** Widgets */
             widgets: components["schemas"]["Widget"][];
+        };
+        /** DemoRunCreate */
+        DemoRunCreate: {
+            /** Name */
+            name: string;
+            /** Request Id */
+            request_id?: string | null;
+            /** Request Type Id */
+            request_type_id?: string | null;
+            /** Request Type Version */
+            request_type_version?: number | null;
+            /**
+             * Execution Mode
+             * @default DEMO_ONLY
+             * @constant
+             */
+            execution_mode: "DEMO_ONLY";
+            /** Nodes */
+            nodes: components["schemas"]["WorkflowNodeDraft"][];
+            /**
+             * Created By
+             * @default 데모 사용자
+             */
+            created_by: string;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -1064,6 +1316,37 @@ export interface components {
              */
             updated_by: string;
         };
+        /** RequestTypeAssignmentInput */
+        RequestTypeAssignmentInput: {
+            /** Request Type Id */
+            request_type_id: string;
+            /** Request Type Version */
+            request_type_version: number;
+        };
+        /** RequestTypeVersionCreate */
+        RequestTypeVersionCreate: {
+            /** Id */
+            id: string;
+            /** Display Name */
+            display_name: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /** Allowed Task Types */
+            allowed_task_types: components["schemas"]["TaskTypeRef"][];
+            default_workflow: components["schemas"]["WorkflowDefinitionDraft"];
+            /** Match Rules */
+            match_rules?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Is Active
+             * @default true
+             */
+            is_active: boolean;
+        };
         /** ResultImportPayload */
         ResultImportPayload: {
             /** Filename */
@@ -1116,6 +1399,56 @@ export interface components {
              * @enum {string}
              */
             review_status: "OPEN" | "IN_REVIEW" | "RESOLVED";
+        };
+        /** TaskTypeRef */
+        TaskTypeRef: {
+            /** Id */
+            id: string;
+            /**
+             * Version
+             * @default 1
+             */
+            version: number;
+        };
+        /** TaskTypeVersionCreate */
+        TaskTypeVersionCreate: {
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "CAD_PREPARE" | "DOE_GENERATE" | "ANALYSIS_MODELING" | "HPC_SUBMIT" | "EXECUTION_MONITOR" | "RESULT_COLLECT" | "POST_PROCESS" | "ANALYSIS_DB_PUBLISH" | "TRAINING_DATASET_PUBLISH" | "PHYSICSAI_TRAIN_VALIDATE" | "MODEL_APPROVAL" | "REALTIME_PREDICT" | "DASHBOARD_VISUALIZE" | "RELIABILITY_EVALUATION" | "OPTIMIZATION_ANALYSIS" | "PERFORMANCE_RANKING";
+            /** Display Name */
+            display_name: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /**
+             * Supports Standalone
+             * @default true
+             */
+            supports_standalone: boolean;
+            /** Input Artifact Types */
+            input_artifact_types?: string[];
+            /** Output Artifact Types */
+            output_artifact_types?: string[];
+            /** Parameter Schema */
+            parameter_schema?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Demo Artifact Url
+             * @default /assets/demo-workbench.svg
+             */
+            demo_artifact_url: string;
+            /**
+             * Is Active
+             * @default true
+             */
+            is_active: boolean;
         };
         /** UserAccessUpdate */
         UserAccessUpdate: {
@@ -1232,6 +1565,37 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** WorkItemComplete */
+        WorkItemComplete: {
+            /** Completed By */
+            completed_by: string;
+            /** Demo Run Id */
+            demo_run_id?: string | null;
+        };
+        /** WorkItemStart */
+        WorkItemStart: {
+            /** Started By */
+            started_by: string;
+        };
+        /** WorkflowDefinitionDraft */
+        WorkflowDefinitionDraft: {
+            /** Nodes */
+            nodes: components["schemas"]["WorkflowNodeDraft"][];
+        };
+        /** WorkflowNodeDraft */
+        WorkflowNodeDraft: {
+            /** Node Key */
+            node_key: string;
+            /** Task Type Id */
+            task_type_id: string;
+            /**
+             * Task Type Version
+             * @default 1
+             */
+            task_type_version: number;
+            /** Depends On */
+            depends_on?: string[];
+        };
         /** WorkflowStepDraft */
         WorkflowStepDraft: {
             /** Id */
@@ -1242,7 +1606,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "COMPLETED" | "IN_PROGRESS" | "WAITING" | "BLOCKED" | "FAILED";
+            status: "READY" | "COMPLETED" | "IN_PROGRESS" | "WAITING" | "BLOCKED" | "FAILED";
             /** Owner */
             owner: string;
             /** Progress */
@@ -1263,7 +1627,7 @@ export interface components {
             /** Name */
             name: string;
             /** Status */
-            status?: ("COMPLETED" | "IN_PROGRESS" | "WAITING" | "BLOCKED" | "FAILED") | null;
+            status?: ("READY" | "COMPLETED" | "IN_PROGRESS" | "WAITING" | "BLOCKED" | "FAILED") | null;
             /** Owner */
             owner?: string | null;
             /** Progress */
@@ -1519,6 +1883,420 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_task_types_api_workbench_task_types_get: {
+        parameters: {
+            query?: {
+                all_versions?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_task_type_api_admin_workbench_task_types_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TaskTypeVersionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_request_types_api_workbench_request_types_get: {
+        parameters: {
+            query?: {
+                all_versions?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_request_type_api_admin_workbench_request_types_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RequestTypeVersionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resolve_request_type_api_workbench_requests__request_id__request_type_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    assign_request_type_api_workbench_requests__request_id__request_type_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RequestTypeAssignmentInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_demo_runs_api_workbench_demo_runs_get: {
+        parameters: {
+            query?: {
+                request_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_demo_run_api_workbench_demo_runs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DemoRunCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_demo_run_api_workbench_demo_runs__run_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_request_work_plan_api_workbench_requests__request_id__work_plan_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_work_item_api_workbench_work_items__item_id__start_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkItemStart"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    complete_work_item_api_workbench_work_items__item_id__complete_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkItemComplete"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -1961,6 +2739,73 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_drop_videos_api_load_cases__load_case_id__drop_videos_get: {
+        parameters: {
+            query?: {
+                page?: number;
+                page_size?: number;
+            };
+            header?: never;
+            path: {
+                load_case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_drop_video_content_api_drop_videos__video_id__content_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                video_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

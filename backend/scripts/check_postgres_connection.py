@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
 from app.database import initialize_database
 
@@ -39,8 +39,15 @@ def main() -> int:
             print("Check DATABASE_URL and the PostgreSQL server log.", file=sys.stderr)
         return 1
     except RuntimeError:
-        print("[ERROR] The PostgreSQL schema is not ready.", file=sys.stderr)
-        print("Run Alembic migrations with the database owner account first.", file=sys.stderr)
+        print("[ERROR] PostgreSQL application preflight failed: SCHEMA_NOT_READY.", file=sys.stderr)
+        print("Use start-postgresql.bat so pending migrations can use the protected owner credential.", file=sys.stderr)
+        return 1
+    except SQLAlchemyError:
+        print("[ERROR] PostgreSQL application preflight failed: APP_SCHEMA_ACCESS_FAILED.", file=sys.stderr)
+        print("The application role must keep runtime data access without DDL privileges.", file=sys.stderr)
+        return 1
+    except Exception:
+        print("[ERROR] PostgreSQL application preflight failed: UNEXPECTED_PREFLIGHT_ERROR.", file=sys.stderr)
         return 1
 
     print("PostgreSQL connection and schema check passed.")

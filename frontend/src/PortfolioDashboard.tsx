@@ -8,7 +8,7 @@ const COLORS = ['#50d5ff', '#70e0a8', '#ffbf57', '#ff647d', '#8b9cff']
 const STATUS_LABEL: Record<string, string> = { READY: '대기', IN_PROGRESS: '진행 중', COMPLETED: '완료', BLOCKED: '차단', FAILED: '실패' }
 const CHART_LABELS: Record<string, string> = { trend: '의뢰·완료·실패 추이', status: '의뢰 상태 분포', quality: '해석 유형별 품질', type: '해석 유형 구성' }
 
-export function PortfolioDashboard({ editMode, layout, layoutVersion, onLayoutChange, onCancelEdit, onResetLayout, onOpen }: { editMode: boolean; layout: PortfolioLayout; layoutVersion: number; onLayoutChange: (layout: PortfolioLayout) => void; onCancelEdit: () => void; onResetLayout: () => void; onOpen: (projectId: string, requestId: string, loadCaseId: string) => void }) {
+export function PortfolioDashboard({ refreshToken, editMode, layout, layoutVersion, onLayoutChange, onCancelEdit, onResetLayout, onOpen }: { refreshToken: number; editMode: boolean; layout: PortfolioLayout; layoutVersion: number; onLayoutChange: (layout: PortfolioLayout) => void; onCancelEdit: () => void; onResetLayout: () => void; onOpen: (projectId: string, requestId: string, loadCaseId: string) => void }) {
   const [data, setData] = useState<PortfolioOverview | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
@@ -22,7 +22,7 @@ export function PortfolioDashboard({ editMode, layout, layoutVersion, onLayoutCh
       api.portfolio(params).then(setData).catch((reason) => setError(reason instanceof Error ? reason.message : '운영 현황을 불러오지 못했습니다.')).finally(() => setLoading(false))
     }, 220)
     return () => window.clearTimeout(timer)
-  }, [params.toString()])
+  }, [params.toString(), refreshToken])
 
   const set = (key: keyof typeof filters, value: string) => setFilters((current) => ({ ...current, [key]: value }))
   const reset = () => setFilters({ date_from: '', date_to: '', project_id: '', analysis_type: '', status: '', search: '' })
@@ -91,7 +91,7 @@ export function PortfolioDashboard({ editMode, layout, layoutVersion, onLayoutCh
           {chartCards[id]}
         </div>)}
       </section>
-      <section className="portfolio-table-card"><header><div><span>DETAIL RECORDS</span><h2>해석 의뢰 상세</h2></div><strong>{data.records.length}건</strong></header><div className="portfolio-table"><div className="portfolio-row table-header"><span>프로젝트 / 제품</span><span>의뢰 / 하중 경우</span><span>담당자</span><span>상태</span><span>유형</span><span>판정</span><span>접수일</span></div>{data.records.map((item) => <button className="portfolio-row" key={item.load_case_id} onClick={() => onOpen(item.project_id,item.request_id,item.load_case_id)}><span><strong>{item.project_name}</strong><small>{item.product_name}</small></span><span><strong>{item.request_title}</strong><small>{item.load_case_name}</small></span><span>{item.owner || '-'}</span><span><i className={`status-dot ${item.request_status.toLowerCase()}`} />{STATUS_LABEL[item.request_status] ?? item.request_status}</span><span>{item.analysis_type.replace('_',' ')}</span><span><b className={item.verdict.toLowerCase()}>{item.verdict}</b></span><span>{new Date(item.requested_at).toLocaleDateString('ko-KR')}</span></button>)}</div></section>
+      <section className="portfolio-table-card"><header><div><span>DETAIL RECORDS · REQUEST MONITORING PROJECTION</span><h2>해석 의뢰 상세</h2></div><strong>{data.records.length}건</strong></header><div className="portfolio-table"><div className="portfolio-row table-header"><span>프로젝트 / 제품</span><span>의뢰 / 하중 경우</span><span>담당자</span><span>상태 / 현재 단계</span><span>유형</span><span>판정</span><span>접수일</span></div>{data.records.map((item) => <button className="portfolio-row" key={`${item.request_id}:${item.load_case_id || 'unassigned'}`} onClick={() => onOpen(item.project_id,item.request_id,item.load_case_id)}><span><strong>{item.project_name}</strong><small>{item.product_name}</small></span><span><strong>{item.request_title}</strong><small>{item.load_case_name}</small></span><span>{item.owner || '-'}</span><span className="portfolio-request-progress"><span><i className={`status-dot ${item.request_status.toLowerCase()}`} />{STATUS_LABEL[item.request_status] ?? item.request_status}<b>{item.request_progress}%</b></span><small>{item.current_step || '단계 미지정'}</small>{item.latest_demo_run && <em>DEMO · {item.latest_demo_run.status} {item.latest_demo_run.progress}%</em>}</span><span>{item.analysis_type.replace('_',' ')}</span><span><b className={item.verdict.toLowerCase()}>{item.verdict}</b></span><span>{new Date(item.requested_at).toLocaleDateString('ko-KR')}</span></button>)}</div></section>
     </>}
     {loading && <div className="portfolio-refresh"><LoaderCircle className="spin" /> 필터 적용 중</div>}
   </div>
