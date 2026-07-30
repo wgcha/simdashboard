@@ -1,13 +1,18 @@
 # 통합 해석 워크벤치 확장 계획
 
-- 문서 상태: 구현 전 검토안
-- 문서 버전: 0.3
-- 작성일: 2026-07-28
+- 문서 상태: DEMO_ONLY Foundation 1차 구현·운영자/관리자 UI 분리·검증 완료 · 실제 실행 정보 대기
+- 문서 버전: 0.8
+- 작성일: 2026-07-29
 - 대상 저장소: Analysis Canvas (`React + TypeScript + FastAPI + DuckDB/PostgreSQL`)
-- 구현 착수 여부: 미결정
-- 착수 전 메모: 실제 실행 명령·경로·로그 등 실행 관련 정보를 추후 보강한 뒤 착수한다.
+- 구현 착수 여부: 데모 기반 Foundation 1차 범위 착수 및 검증 완료
+- 실제 실행 전 메모: 실제 실행 명령·경로·로그·Scheduler·입출력 샘플은 아직 미정이며, 정보를 보강하기 전에는 어떤 실제 프로세스도 실행하지 않는다.
 - 0.2 변경 사항: 좌측 탭 명칭을 `해석 의뢰 현황`으로 반영하고, `의뢰 진행 상태`를 작업 모니터링 화면으로 통합했으며 운영 대시보드와의 상태 동기화 계약을 추가했다.
 - 0.3 변경 사항: 고정 순차 파이프라인 전제를 제거하고 업무를 독립 Task Type으로 정의했으며, 관리자/의뢰 정보 기반의 Request Type과 작업 조합 규칙을 추가했다.
+- 0.4 변경 사항: 외부 실행이 전혀 없는 `DEMO_ONLY` Foundation을 구현했다. 13개 독립 Task Type, Request Type 불변 버전, 단독·순차·병렬 조합, 데모 이미지/이벤트, `해석 작업 실행`, `의뢰 진행 상태`와 운영 대시보드의 공통 모니터링 정본 및 역할별 권한을 반영했다.
+- 0.5 변경 사항: 작업 목록은 고정 순서가 아니라는 점을 다시 명확히 하고, 의뢰 정보 규칙에 의한 Request Type 추천, 관리자·사용자의 명시적 유형 확정, 결정 출처와 불변 버전 저장, LoadCase 없는 단독 업무 의뢰의 운영 모니터링 계약을 추가했다. Foundation 전체가 아니라 현재 구현된 1차 범위와 후속 범위를 구분했다.
+- 0.6 변경 사항: 이미지가 필요하지 않은 Task도 작동 과정을 시연할 수 있도록 정적 실행 로그, 검증 리포트, 결과 요약 텍스트 fixture와 화면 내 텍스트 뷰어를 추가했다. 파일은 저장소 자산이며 실제 외부 실행 결과와 명확히 구분한다.
+- 0.7 변경 사항: 의뢰를 받은 수행자의 `해석 작업 실행` 화면과 관리자의 `작업 유형 관리` 화면을 분리했다. 수행자 화면은 받은 의뢰·관리자 허용 시나리오·실행 가능한 작업에 집중하며, 각 작업의 목적·필요 입력·받을 결과를 한국어로 안내한다. Request Type 작성·버전 저장은 관리자 화면에서만 수행한다.
+- 0.8 변경 사항: 좌측 `의뢰 접수` 탭, 외부 시스템/부서장 지시 출처, 2개의 승인 시나리오와 불변 작업 계획, 명시적 `의뢰 수령·작업 시작`/`작업 시작`/`작업 완료` 전이, 수행·의뢰 현황·운영 대시보드의 canonical 진행률 동기화를 반영했다. PostgreSQL `0004_request_work_plans` 실제 적용과 Windows 시작 인코딩 보정까지 검증했다.
 
 ## 1. 결론과 권고안
 
@@ -46,7 +51,7 @@ DOE 해석 의뢰: DOE 생성 ─┬→ 해석 모델링 → HPC 제출
 5. `의뢰 진행 상태`와 `운영 대시보드`에 함께 표시되는 의뢰 값은 동일한 서버 정본과 계산 규칙을 사용하며 한쪽 변경이 다른 쪽에도 갱신되어야 한다.
 6. 관리자는 Request Type과 사용 가능한 Task Type, 기본 Workflow 조합, 입력 Schema, 권한 및 승인 정책을 정의할 수 있어야 한다.
 7. 의뢰의 제품·해석 목적·LoadCase·보유 입력 아티팩트 같은 의뢰 정보로 Request Type과 기본 작업 조합을 추천 또는 자동 결정할 수 있어야 한다.
-8. 사용자는 관리자에게 허용된 범위에서 작업 유형 또는 조합을 선택하고, 실행 전 최종 계획을 확인한다.
+8. 의뢰 수행자는 관리자가 허용한 Request Type 또는 개별 Task 중 이번 의뢰에 필요한 작업을 선택하고 실행 전 계획을 확인한다. 이 선택은 해당 실행 계획일 뿐 새 Request Type을 작성하거나 조직 카탈로그에 저장하지 않는다. Request Type 작성·버전 저장·공유는 관리자만 수행한다.
 9. CAD, DOE, 모델링, HPC, 수집, 후처리, DB, ML, 예측, 시각화는 각각 독립 Task Type과 Adapter로 구현한다. 어느 구현도 고정된 전체 체인의 존재를 가정하지 않는다.
 10. 사용자가 실행 경로와 로그 파일을 지정할 수 있게 하되, 관리자가 등록한 **실행 프로파일의 허용 루트와 경로 템플릿 안에서만** 선택하도록 한다.
 11. UI에서 임의 셸 명령을 입력받지 않는다. 버전 관리되는 Application/Task Template과 검증된 파라미터만 실행한다.
@@ -164,6 +169,7 @@ CAD 작업은 두 수준으로 구분한다.
 | 운영 대시보드 | 기존 포트폴리오 현황 | 기존 유지 |
 | **해석 의뢰 현황** | 의뢰 진행 및 연결 작업 모니터링, 기존 결과 분석 | `의뢰 진행 상태`, 상세 분석, Run 비교·검토 |
 | **해석 작업 실행** | 새 Workflow Run 생성 | 템플릿 선택, 파라미터, DOE, 실행 프로파일, 사전 점검, 제출 |
+| **작업 유형 관리** *(Admin 전용)* | 수행자에게 제공할 유형과 허용 작업 정의 | Request Type 작성, Task 선택, 기본 조합, 불변 버전 저장 |
 | 해석 데이터 | 결과 수집·DB 발행 | 기존 기능 확장 |
 | **데이터·모델 자산** | CAD/Deck/결과/데이터셋/모델 계보 | 버전, 체크섬, 입력·출력 관계, 승인 상태 |
 | **PhysicsAI** | 데이터셋·학습·시험·예측 | 학습 실행, 지표, 모델 레지스트리, 예측 |
@@ -177,9 +183,9 @@ CAD 작업은 두 수준으로 구분한다.
 제출 흐름은 Wizard 형태가 적합하다.
 
 1. Project / AnalysisRequest / LoadCase 또는 새 작업 문맥 선택
-2. 의뢰 정보로 결정된 Request Type을 확인하거나 허용된 유형에서 선택
+2. 의뢰 정보로 결정된 Request Type을 확인하거나 관리자가 허용한 유형에서 선택
 3. 단일 Task Type 또는 Workflow Template의 고정 버전 선택
-4. 선택된 Task 노드, dependency, 병렬·분기·선택 조건을 확인하고 허용 범위에서 조합
+4. 선택된 Task 노드, dependency, 병렬·분기·선택 조건을 확인하고 이번 실행에 필요한 작업만 선택
 5. 각 Task가 요구하는 입력 CAD/Deck/이전 Run/결과/데이터셋 선택
 6. Task별 실행 프로파일, 작업 경로, 로그 프로파일과 리소스 요청 설정
 7. 사전 점검
@@ -195,7 +201,22 @@ CAD 작업은 두 수준으로 구분한다.
 
 #### 4.1.1 Request Type과 사용자 작업 유형 정의
 
-관리자는 설정 화면에서 사용자가 선택할 수 있는 의뢰 유형과 작업 유형을 정의한다.
+관리자는 수행자 화면과 분리된 `작업 유형 관리` 화면에서 사용자가 선택할 수 있는 의뢰 유형과 작업 유형을 정의한다. 일반 수행자에게는 이 작성 화면과 저장 기능을 노출하지 않는다.
+
+유형 정의는 두 층으로 나눈다.
+
+- **공유 Request Type**: 관리자가 조직 공통 유형, 노출 대상, 허용 Task, 기본 DAG, 매칭 규칙을 불변 버전으로 정의한다.
+- **의뢰 실행 계획**: 수행자가 해당 의뢰에 허용된 Task 중 필요한 작업을 단독·병렬·dependency 조합으로 선택한다. 이는 Run 생성 입력으로만 저장하며 Request Type 카탈로그를 생성·수정하지 않는다. 재사용 가능한 유형이 필요하면 관리자가 별도 Request Type 불변 버전을 작성한다.
+
+수행자용 `해석 작업 실행` 화면은 다음 세 단계로 단순화한다.
+
+1. 받은 의뢰 선택 및 프로젝트·분석 유형·현재 단계 확인
+2. 관리자 지정 또는 허용된 실행 시나리오 확인
+3. 작업별 `하는 일`, `필요 입력`, `받을 결과`를 비교하고 실행할 작업 선택
+
+관리자용 `작업 유형 관리` 화면은 유형 ID·표시명·설명·자동 추천 규칙·기본 실행 방식·허용 Task를 편집하고 새 불변 버전을 저장한다. 두 화면은 URL/워크스페이스 상태와 권한을 분리하며 Viewer에게 관리자 메뉴를 표시하지 않는다.
+
+의뢰 정보는 유형 자체를 임의 생성하는 실행 코드가 아니라, 관리자가 버전 관리한 Request Type 중 적합한 후보를 추천·결정하는 입력이다. 규칙 결과가 하나면 추천하고, 둘 이상이면 `REVIEW_REQUIRED`, 일치 항목이 없으면 `USER_SELECTION`으로 두어 사람의 선택 없이 자동 실행하지 않는다.
 
 Request Type 정의 항목:
 
@@ -226,6 +247,8 @@ Task Type 정의 항목:
 4. 시스템 기본 Request Type
 
 자동 결정 결과에는 적용한 규칙과 Request Type Version을 표시한다. 관리자가 유형 정의를 변경해도 이미 생성된 의뢰와 실행 계획은 당시 버전을 유지한다. 자동 결정이 모호하거나 여러 규칙이 같은 우선순위로 일치하면 자동 실행하지 않고 사용자 또는 관리자 선택을 요구한다.
+
+확정 레코드는 `request_id`, `request_type_id`, `request_type_version`, 결정 출처(`ADMIN`, `RULE`, `USER`, `DEFAULT`), 적용 규칙 snapshot, 결정자, 결정 시각을 보관한다. 관리자 지정은 일반 사용자가 덮어쓸 수 없다. `의뢰 진행 상태`와 운영 대시보드는 이 레코드를 동일한 모니터링 projection으로 조회한다.
 
 ### 4.2 해석 의뢰 현황 > 의뢰 진행 상태
 
@@ -1299,3 +1322,201 @@ DOE Study와 설계점을 독립적으로 생성·버전 관리한다.
 - 해당 Task에서 Scheduler 사용 여부
 - 허용 실행 루트와 결과 보존 위치
 - 해당 제품의 정확한 버전과 라이선스 조건
+
+## 20. DEMO_ONLY Foundation 1차 구현 결과
+
+### 20.1 구현 범위
+
+2026-07-29 기준 Foundation 중 다음 1차 범위를 구현하고 검증했다. 이 구현은 실제 CAD, Solver, HPC Scheduler, 로그 파일, PhysicsAI 프로세스를 호출하지 않는다.
+
+- 13개 독립 Task Type 불변 버전 카탈로그
+- 관리자용 Task Type/Request Type 버전 생성 API
+- 의뢰 정보의 `analysis_type` 등 승인된 필드를 이용한 Request Type 규칙 추천과 복수 일치 검토 상태
+- 관리자 지정과 의뢰 정보 규칙에 의한 Request Type 확정, 결정 출처·규칙 snapshot·불변 버전 저장
+- 결과 재처리, DOE 해석, PhysicsAI 학습, PhysicsAI 예측 기본 Request Type
+- 사용자 직접 Task 선택과 독립·병렬/선택 순서 조합
+- 단일 노드와 명시적 dependency DAG 검증, 중복·누락 dependency와 cycle 거부
+- `workflow_runs`, `task_runs`, `task_run_events`의 별도 실행 모델
+- 작업당 결정론적 데모 이벤트 3건과 정적 SVG 결과 이미지
+- 작업 상세에서 인증된 정적 파일로 조회하는 실행 로그·검증 리포트·결과 요약 텍스트 fixture
+- 수행자용 좌측 `해석 작업 실행` 화면과 의뢰별 실행 이력/결과/이벤트 표시
+- 관리자 전용 좌측 `작업 유형 관리` 화면에서 새 Request Type 불변 버전 저장
+- 수행자 작업 카드에 작업 목적·필요 입력·받을 결과를 표시하고 준비·설계/해석 실행/결과 활용/PhysicsAI로 분류
+- 구버전 백엔드로 Workbench API를 찾지 못할 때 원문 `Not Found` 대신 최신 백엔드 재기동이 필요하다는 운영 안내 표시
+- `해석 의뢰 현황` 진입 시 `의뢰 진행 상태`를 기본 모니터 화면으로 표시
+- `의뢰 진행 상태`의 최근 데모 실행과 운영 대시보드의 최근 실행 요약 연동
+- `request_steps` 기반 상태·현재 단계·진행률을 공통 계산하는 canonical monitoring projection
+- 운영 대시보드 행 선택 시 동일 의뢰 ID의 `의뢰 진행 상태`로 이동
+- LoadCase가 없는 CAD 준비·DOE 생성 같은 의뢰도 누락하지 않는 의뢰 단위 운영 모니터링
+- Viewer 조회 전용, Editor 데모 실행, Admin Request Type 정의 권한과 화면 분리
+- DuckDB 초기화, PostgreSQL schema, Alembic `0003_workbench_demo` 동기화
+
+기존 `request_steps`는 의뢰 업무 마일스톤이고, 신규 `task_runs`는 조합 가능한 실행 Task다. 두 진행률은 서로 덮어쓰지 않는다. 운영 대시보드의 의뢰 상태·현재 단계·진행률은 전자의 정본을 표시하며, `latest_demo_run`은 후자의 별도 요약을 표시한다.
+
+### 20.2 DEMO_ONLY 안전 계약
+
+현재 실행 API가 받는 값은 `request_id`, 선택한 Task Type 불변 버전, 명시적 dependency, 실행 이름뿐이다. 다음 값은 API Schema에 존재하지 않으며 전송 시 거부된다.
+
+- executable, command, argument
+- cwd, workdir, 실행 경로
+- log path, 결과 경로
+- environment variable, credential
+- Scheduler endpoint 또는 실제 실행 mode
+
+안전 계약은 세 계층에서 강제한다.
+
+1. Pydantic 모델은 `extra="forbid"`이며 `execution_mode`는 `DEMO_ONLY` Literal이다.
+2. 서비스에는 subprocess, shell, Scheduler, 네트워크, 사용자 경로 I/O가 없다.
+3. DB에는 `CHECK (execution_mode = 'DEMO_ONLY')`가 있다.
+
+화면의 모든 실행 결과에는 `DEMO ONLY`, `결정론적 데모 이벤트`, `실제 해석 결과 아님`을 표시한다. 데모 실행은 `analysis_runs`, 실제 결과 DB, 학습 Dataset, 승인 Model을 생성하거나 변경하지 않는다.
+
+이미지가 불필요하거나 로그·검증 과정이 중요한 Task는 다음 저장소 fixture를 텍스트 결과로 표시한다.
+
+- `backend/assets/demo-execution.log`: 외부 프로세스와 Scheduler 제출이 없었음을 포함한 결정론적 실행 로그
+- `backend/assets/demo-validation-report.txt`: 입력 계약·진행률·필수 출력 검사와 `OVERALL: PASS`
+- `backend/assets/demo-result-summary.txt`: 데모 KPI, 단위, 판정과 실제 DB/데이터셋 미발행 표시
+
+Run 상세 API는 각 Task에 `demo_text_artifacts` 메타데이터를 제공한다. 웹 화면은 사용자가 선택한 파일을 `/assets/...`에서 인증 세션으로 읽어 표시한다. 이 fixture의 존재나 `PASS` 문구는 실제 Solver 또는 PhysicsAI 실행 성공의 증거로 사용하지 않는다.
+
+### 20.3 구현 API
+
+| Method | Endpoint | 역할 |
+|---|---|---|
+| `GET` | `/api/workbench/task-types` | 최신 Task Type 버전 카탈로그 조회 |
+| `POST` | `/api/admin/workbench/task-types` | Admin 전용 Task Type 새 불변 버전 생성 |
+| `GET` | `/api/workbench/request-types` | 최신 Request Type 버전 조회 |
+| `POST` | `/api/admin/workbench/request-types` | Admin 전용 Request Type 새 불변 버전 생성 |
+| `GET` | `/api/workbench/requests/{request_id}/request-type` | 의뢰 정보 규칙의 추천·모호성 또는 확정 유형 조회 |
+| `PUT` | `/api/workbench/requests/{request_id}/request-type` | Editor 사용자 선택 또는 Admin 지정 유형을 불변 버전으로 확정 |
+| `POST` | `/api/workbench/demo-runs` | Editor 이상 DEMO_ONLY 실행 이력 생성 |
+| `GET` | `/api/workbench/demo-runs?request_id=...` | 의뢰별 실행 이력 조회 |
+| `GET` | `/api/workbench/demo-runs/{run_id}` | Task와 데모 이벤트를 포함한 실행 상세 조회 |
+
+`/api/workflows`, `/api/requests/{request_id}/workflow`, `/api/portfolio/overview`는 같은 요청 마일스톤 계산 정책을 사용한다. 각 응답의 `status`, `progress/request_progress`, `current_step`, `latest_demo_run`, `request_type_assignment`가 같은 의뢰 ID에서 일치해야 한다.
+
+### 20.4 검증 결과와 완수조건
+
+완료된 자동 검증은 다음과 같다.
+
+- Backend 전체 테스트: 42 passed
+- Workbench/공통 모니터링/권한 집중 테스트: 11 passed
+- Frontend TypeScript production build: 통과
+- Playwright 핵심 E2E: 9 passed
+- PostgreSQL schema portability, Python compile, Alembic offline SQL: 통과
+- 로컬 PostgreSQL Alembic: `0003_workbench_demo (head)` 적용 및 최신 백엔드 Workbench API 7개 로드 확인
+- 실제 브라우저 smoke test: 운영자 3단계 화면과 관리자 전용 유형 작성 화면에서 API 오류 없이 카탈로그 조회 확인
+
+DEMO_ONLY Foundation **1차 범위**의 완수조건은 충족했다.
+
+1. 13개 Task가 모두 독립 카탈로그 항목이며 단독 데모 실행 가능
+2. Task 배열 순서를 암묵 dependency로 사용하지 않고 dependency를 명시적으로 저장
+3. 단일·순차·병렬 조합 저장 및 cycle/미허용 Task 거부
+4. 관리자가 분리된 관리 화면에서 Request Type 새 버전을 저장 가능
+5. 수행자가 관리자 정의 유형 또는 허용 Task를 이번 실행 계획으로 선택 가능하며 유형 작성 UI에는 접근하지 않음
+6. 의뢰 정보 규칙이 유형을 추천하며 관리자·사용자 확정의 출처와 버전을 저장
+7. 실제 명령·경로 필드와 외부 실행 코드가 없음
+8. 의뢰 진행 상태와 운영 대시보드가 동일한 의뢰 값, 확정 유형, 최신 데모 Run을 표시
+9. LoadCase가 없는 독립 업무 의뢰도 운영 목록과 의뢰 모니터링에서 조회됨
+10. Viewer/Editor/Admin 권한 경계가 API와 UI 양쪽에서 동작
+11. 새로고침 이후에도 데모 실행 이력이 DB에서 재조회됨
+12. 기존 대시보드 편집, 의뢰 단계 편집, PPT 레이아웃 기능 회귀 없음
+
+### 20.5 Foundation 후속 구현 범위
+
+다음 항목은 전체 Foundation 사양에는 포함되지만 1차 DEMO_ONLY 구현의 완료 주장에는 포함하지 않는다.
+
+- 조건 분기, 선택 노드, fan-out/fan-in, 수동 승인 gate와 부분 실패 정책
+- 이벤트 재전송과 DB 발행을 위한 idempotency key 및 중복 처리 정책의 코드 구현
+- 관리자 Task Type 전체 속성 편집 UI와 사용자·그룹별 세부 노출/실행 정책
+- 규칙 우선순위, 태그·입력 아티팩트·다중 LoadCase를 포함한 확장 Request Type resolver
+- 수행자가 선택한 Run 계획을 관리자가 재사용 Request Type 초안으로 가져오는 선택적 승격 절차
+- Runner, Execution Profile, Scheduler, 로그 tail, 실제 아티팩트 계보
+- 배포 대상별 PostgreSQL 백업·migration 적용과 해당 환경 smoke test의 반복 가능한 운영 절차
+
+### 20.6 실제 실행 정보 수령 후 다음 작업
+
+다음 단계는 실제 실행 정보가 제공된 뒤 시작한다. 현재 로컬 PostgreSQL에는 추가형 migration `0003_workbench_demo`를 적용하고 최신 백엔드로 smoke test를 마쳤다. 다른 배포 환경에는 백업과 권한 검토 후 소유자 역할로 `alembic upgrade head`를 적용해야 한다. 애플리케이션 역할은 DDL 권한이 없으므로 migration에 사용할 수 없다.
+
+1. 첫 실제 Task Type 하나와 제품/도구 버전을 결정한다.
+2. 정상/실패 입력, 실제 명령 인자 계약, exit code, 로그와 필수 출력을 받는다.
+3. 허용 실행 루트, 작업 디렉터리 템플릿, 로그 경로 템플릿을 Execution Profile 불변 버전으로 추가한다.
+4. 실제 Adapter의 `plan/start/status/cancel/collect` 계약과 Runner 보안 경계를 구현한다.
+5. DEMO_ONLY와 실제 실행 데이터를 화면·DB·발행 경로에서 영구 구분한다.
+6. 실제 Task 하나의 단독 실행을 승인한 뒤 필요한 Request Type 조합에 명시적으로 연결한다.
+
+실제 Adapter를 추가해도 현재 Task Type/Request Type/Workflow Run 계약과 의뢰 모니터링 정본은 유지한다. 실제 경로나 로그 정보를 받기 전까지는 데모 외 실행을 활성화하지 않는다.
+
+## 21. 의뢰 접수·고정 시나리오·작업 피드백 확정 사양
+
+### 21.1 역할과 화면 경계
+
+- `의뢰 접수`: 외부 시스템에서 전달된 의뢰 또는 부서장 지시를 등록하고, 관리자가 승인한 시나리오를 확정하는 접수 화면이다.
+- `작업 유형 관리`: 관리자가 Task Type과 Request Type 불변 버전을 작성하는 화면이다.
+- `해석 작업 실행`: 수행자가 접수 시 확정된 작업만 순서대로 시작·완료하는 화면이다. 시나리오 작성, Task 추가·제거, 임의 순서 변경을 노출하지 않는다.
+- `해석 의뢰 현황 > 의뢰 진행 상태` 및 `운영 대시보드`: 수행 상태의 공통 조회 화면이다.
+
+접수 출처는 `EXTERNAL_SYSTEM`(외부 시스템 전달) 또는 `DEPARTMENT_HEAD`(부서장 지시)로 고정하고, 출처 상세, 요청자, 수행자, 접수자, 접수 시각을 추적한다.
+
+### 21.2 현재 승인 시나리오
+
+1. `설계 신뢰성 검증` — 6개 작업
+   - CAD 작업
+   - 해석 모델링
+   - HPC 수행
+   - 결과 후처리
+   - 해석 DB 저장
+   - 오픈셀 파손 및 CHR 휨 평가 분석
+2. `설계 DOE 탐색` — 7개 작업
+   - CAD 작업
+   - DOE 파일 생성
+   - HPC 수행
+   - 결과 후처리
+   - 최적화 분석
+   - 해석 DB 저장
+   - 설계 성능 순위 평가
+
+시나리오는 전체 업무의 절대적 고정 파이프라인이 아니다. 각 Task Type은 독립 구현하고, 관리자가 의뢰 유형별로 다른 조합을 추가 버전으로 정의할 수 있다. 다만 개별 의뢰가 접수되면 `request_work_plans.definition_snapshot_json` 및 순서화된 `request_work_items`로 확정하며 수행자가 변경할 수 없다.
+
+### 21.3 상태 전이와 진행률
+
+1. 신규 의뢰: 첫 작업 `READY`, 나머지 `WAITING`, 의뢰 `READY`, 진행률 `0%`.
+2. 첫 작업 `READY`: `의뢰 수령 · 작업 시작` 피드백으로 `IN_PROGRESS` 전이.
+3. 후속 작업 `READY`: `작업 시작` 피드백으로 `IN_PROGRESS` 전이.
+4. 현재 작업 `IN_PROGRESS`: `작업 완료` 피드백으로 `COMPLETED` 전이.
+5. 작업 완료 후 다음 항목만 `READY`로 열고 자동 시작하지 않는다. 마지막 작업 완료 시 의뢰를 `COMPLETED`로 전이한다.
+6. 선행 작업을 건너뛴 수 없고, 이미 시작·완료된 요청의 재호출은 시각·이벤트를 중복 생성하지 않는 멱등 응답을 반환한다.
+
+진행률은 `round(COMPLETED 작업 수 / 전체 작업 수 * 100)`을 유일한 계산식으로 사용한다.
+
+- 6개 작업: `0 → 17 → 33 → 50 → 67 → 83 → 100`
+- 7개 작업: `0 → 14 → 29 → 43 → 57 → 71 → 86 → 100`
+
+### 21.4 동기화 계약과 완수 조건
+
+`/api/requests/{request_id}/workflow`, `/api/workflows`, `/api/portfolio/overview`는 같은 모니터링 projection을 사용한다. 다음 값은 `해석 작업 실행`, `해석 의뢰 현황`, `운영 대시보드`에서 같아야 한다.
+
+- 의뢰 ID, 시나리오명, 접수 출처
+- 의뢰 상태, 현재 작업, 완료/전체 작업 수, 진행률
+- 각 작업의 순서, 상태, 수행자, 시작/완료 시각
+- 최근 DEMO_ONLY Run 요약과 로그·검증·결과 텍스트
+
+완수 조건은 다음과 같다.
+
+1. PostgreSQL Alembic head가 `0004_request_work_plans`이고 시작 스크립트가 pending migration을 소유자 계정으로 적용한다.
+2. 두 시나리오의 작업명·순서·개수가 본 장과 일치한다.
+3. 접수·시작·완료·순서 위반·멱등 재호출 자동 테스트가 통과한다.
+4. 같은 의뢰의 진행률과 현재 작업이 수행·의뢰 현황·운영 화면에서 일치한다.
+5. 수행자 화면에 관리자용 시나리오 작성/Task 조합 UI가 노출되지 않는다.
+6. `Not Found` 표시가 없고 데모 로그·검증 리포트·결과 요약을 화면에서 열 수 있다.
+7. 실제 실행 경로·명령·로그 파일 정보를 받기 전까지 `DEMO_ONLY` 경계를 유지한다.
+
+### 21.5 검증 기록 (2026-07-29)
+
+- 실제 PostgreSQL: `0004_request_work_plans (head)`, `/api/health` = `ok`, `database_backend` = `postgresql`.
+- 시드 신뢰성 의뢰: `2 / 6`, `33%`, `HPC 수행`.
+- 시드 DOE 의뢰: `1 / 7`, `14%`, `DOE 파일 생성`.
+- Backend 격리 DuckDB 전체 테스트: `58 passed`.
+- Frontend production build: 통과.
+- Playwright 전체 E2E: `7 passed`. 의뢰 접수 후 `0/7`, 시작·완료 후 `1/7 · 14%`, 의뢰 현황·운영 대시보드 값 일치를 포함한다.
+- 실제 브라우저: `의뢰 접수`, `해석 작업 실행`, `해석 의뢰 현황`, `운영 대시보드` 확인 및 console error/`Not Found` 없음.

@@ -29,6 +29,10 @@ def test_password_hash_and_role_policy():
     assert minimum_role("PUT", "/api/dashboards/example") == "editor"
     assert minimum_role("PUT", "/api/quality-thresholds/key") == "admin"
     assert minimum_role("DELETE", "/api/report-layouts/example") == "admin"
+    assert minimum_role("POST", "/api/workbench/demo-runs") == "editor"
+    assert minimum_role("POST", "/api/workbench/work-items/example/complete") == "editor"
+    assert minimum_role("PUT", "/api/workbench/requests/example/request-type") == "editor"
+    assert minimum_role("POST", "/api/admin/workbench/request-types") == "admin"
 
 
 def test_password_auth_rbac_and_audit(monkeypatch):
@@ -52,12 +56,40 @@ def test_password_auth_rbac_and_audit(monkeypatch):
             assert viewer_login.status_code == 200
             viewer_headers = {"Authorization": f"Bearer {viewer_login.json()['access_token']}"}
             assert client.get("/api/projects", headers=viewer_headers).status_code == 200
+            assert client.get("/api/workbench/task-types", headers=viewer_headers).status_code == 200
             assert client.get("/assets/sample-contour.svg").status_code == 200
             assert client.post("/api/dashboard-commands/preview", headers=viewer_headers, json={"command": "KPI 추가"}).status_code == 403
+            demo_payload = {
+                "name": "권한 검증 데모",
+                "execution_mode": "DEMO_ONLY",
+                "created_by": "클라이언트 위조 이름",
+                "nodes": [{"node_key": "cad", "task_type_id": "cad-prepare", "task_type_version": 1, "depends_on": []}],
+            }
+            assert client.post("/api/workbench/demo-runs", headers=viewer_headers, json=demo_payload).status_code == 403
+            assignment_payload = {"request_type_id": "design-reliability-validation", "request_type_version": 1}
+            assignment_request_id = "request-showcase-waiting"
+            assert client.put(f"/api/workbench/requests/{assignment_request_id}/request-type", headers=viewer_headers, json=assignment_payload).status_code == 403
+            current_work_item = next(
+                item
+                for item in client.get("/api/requests/request-drop-001/workflow", headers=viewer_headers).json()["steps"]
+                if item["status"] == "IN_PROGRESS"
+            )
+            assert client.post(
+                f"/api/workbench/work-items/{current_work_item['id']}/complete",
+                headers=viewer_headers,
+                json={"completed_by": "권한 없는 사용자"},
+            ).status_code == 403
 
             editor_login = client.post("/api/auth/login", json={"username": f"editor-{suffix}", "password": password}).json()
             editor_headers = {"Authorization": f"Bearer {editor_login['access_token']}"}
             assert client.post("/api/dashboard-commands/preview", headers=editor_headers, json={"command": "KPI 추가"}).status_code == 200
+            demo_run = client.post("/api/workbench/demo-runs", headers=editor_headers, json=demo_payload)
+            assert demo_run.status_code == 201
+            assert demo_run.json()["created_by"] == f"Editor-{suffix}".title()
+            assigned = client.put(f"/api/workbench/requests/{assignment_request_id}/request-type", headers=editor_headers, json=assignment_payload)
+            assert assigned.status_code == 200
+            assert assigned.json()["source"] == "USER"
+            assert client.post("/api/admin/workbench/request-types", headers=editor_headers, json={}).status_code == 403
             assert client.delete("/api/report-layouts/not-found", headers=editor_headers).status_code == 403
 
             admin_login = client.post("/api/auth/login", json={"username": f"admin-{suffix}", "password": password}).json()

@@ -30,7 +30,8 @@ exit /b 0
 :fail
 echo.
 echo [ERROR] Failed to start the servers with PostgreSQL.
-echo Check DATABASE_URL, PostgreSQL service, and Alembic migrations.
+echo Check the app DATABASE_URL, PostgreSQL service, and owner credential file.
+echo Pending migrations use .postgres-owner.env without granting DDL to the app role.
 echo See docs\deployment-security-backup-guide.md for setup instructions.
 echo.
 pause

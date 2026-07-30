@@ -1,0 +1,14 @@
+2026-07-29T09:00:00.000Z [INFO] DEMO_ONLY workflow accepted
+2026-07-29T09:00:00.120Z [INFO] execution adapter=DETERMINISTIC_TEXT_DEMO
+2026-07-29T09:00:00.240Z [INFO] external_process_started=false
+2026-07-29T09:00:00.360Z [INFO] scheduler_submission_performed=false
+2026-07-29T09:00:01.000Z [INFO] task phase=INPUT_CONTRACT progress=25
+2026-07-29T09:00:01.400Z [INFO] task phase=MODEL_CHECK progress=50
+2026-07-29T09:00:01.800Z [INFO] task phase=RESULT_PREVIEW progress=75
+2026-07-29T09:00:02.000Z [INFO] demo metric=max_displacement_mm value=1.842
+2026-07-29T09:00:02.100Z [INFO] demo metric=max_von_mises_mpa value=186.400
+2026-07-29T09:00:02.200Z [INFO] task status=SUCCEEDED progress=100
+2026-07-29T09:00:02.300Z [INFO] DEMO_ONLY workflow completed
+
+# This file is a static demonstration fixture.
+# No CAD, solver, HPC scheduler, shell command, or PhysicsAI process produced it.

@@ -9,8 +9,10 @@ import {
   Check,
   ChevronDown,
   CircleDot,
+  ClipboardPlus,
   Database,
   Download,
+  FlaskConical,
   GripVertical,
   LayoutDashboard,
   LoaderCircle,
@@ -53,6 +55,9 @@ import { useReportLayoutEditorState, useWorkspaceEditorCoordinator } from './edi
 import { DEFAULT_PORTFOLIO_LAYOUT, DEFAULT_WORKFLOW_DASHBOARD_LAYOUT, loadPortfolioLayout, loadWorkflowDashboardLayout } from './features/layouts/layoutDefaults'
 import { reportVariables, withReportVariables } from './features/reports/reportLayoutUtils'
 import { LoginScreen } from './features/auth/LoginScreen'
+import { RequestDemoRunSummary, SimulationWorkbench, WorkbenchTypeAdmin } from './features/workbench/SimulationWorkbench'
+import { RequestIntakePage } from './features/workbench/RequestIntakePage'
+import { DropVideoGrid } from './features/videos/DropVideoGrid'
 import { PortfolioDashboard } from './PortfolioDashboard'
 import type { ReportExportOptions, ReportScope } from './reportExport'
 import type { AnalysisRequest, AnalysisRunSummary, AutomationTemplate, DashboardDefinition, DashboardSummary, DashboardVersion, DashboardWidget, FeatureExample, ImportSchema, LoadCase, Overview, PortfolioLayout, Project, QualityThreshold, ReportElementDefinition, ReportElementType, ReportLayout, ReportLayoutDefinition, ReportLayoutVersion, ReportSection, ReportSlideDefinition, ReportSlideKind, ReportTemplateAsset, ReviewItem, RunComparison, RunTrust, VariableDefinition, VariableDefinitionInput, WidgetCatalogItem, Workflow, WorkflowDashboardLayout, WorkflowStep } from './types'
@@ -60,7 +65,7 @@ import type { AnalysisRequest, AnalysisRunSummary, AutomationTemplate, Dashboard
 const ResponsiveGridLayout = WidthProvider(Responsive) as unknown as ComponentType<any>
 const SERIES_COLORS = ['#61d4ff', '#ff647d', '#70e0a8', '#ffbf57']
 type ActiveView = 'open_cell' | 'chassis' | 'workflow' | 'compare'
-type WorkspacePage = 'portfolio' | 'dashboard' | 'data' | 'schemas' | 'variables' | 'templates' | 'examples' | 'help'
+type WorkspacePage = 'portfolio' | 'dashboard' | 'intake' | 'workbench' | 'workbench_admin' | 'data' | 'schemas' | 'variables' | 'templates' | 'examples' | 'help'
 
 function hasNumericValue(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
@@ -112,6 +117,7 @@ function App() {
   const [workflowDashboardLayout, setWorkflowDashboardLayout] = useState<WorkflowDashboardLayout>(loadWorkflowDashboardLayout)
   const [portfolioLayoutVersion, setPortfolioLayoutVersion] = useState(1)
   const [workflowLayoutVersion, setWorkflowLayoutVersion] = useState(1)
+  const [operationalRefreshToken, setOperationalRefreshToken] = useState(0)
   const workflowEditorMode = workspaceEditor.isWorkflowLayout ? 'layout' : workspaceEditor.isWorkflowStages ? 'stages' : null
   const portfolioLayoutBeforeEdit = useRef<PortfolioLayout | null>(null)
   const dashboardBeforeEdit = useRef<DashboardDefinition | null>(null)
@@ -184,14 +190,29 @@ function App() {
           api.workspaceLayout<PortfolioLayout>('portfolio'),
           api.workspaceLayout<WorkflowDashboardLayout>('workflow'),
         ])
-        const project = projectData[0]
-        if (!project) throw new Error('등록된 프로젝트가 없습니다.')
-        const requestData = await api.requests(project.id)
-        const request = requestData.find((item) => item.id === 'request-drop-001') ?? requestData[0]
-        if (!request) throw new Error('등록된 의뢰가 없습니다.')
-        const [caseData, thresholdData] = await Promise.all([api.loadCases(request.id), api.qualityThresholds(project.id)])
+        if (!projectData.length) throw new Error('등록된 프로젝트가 없습니다.')
+        const preferredProjects = [...projectData].sort((left, right) => Number(right.id === 'project-tv-001') - Number(left.id === 'project-tv-001'))
+        let project: Project | undefined
+        let requestData: AnalysisRequest[] = []
+        let request: AnalysisRequest | undefined
+        let caseData: LoadCase[] = []
+        for (const candidateProject of preferredProjects) {
+          const candidateRequests = await api.requests(candidateProject.id)
+          const preferredRequests = [...candidateRequests].sort((left, right) => Number(right.id === 'request-drop-001') - Number(left.id === 'request-drop-001'))
+          for (const candidateRequest of preferredRequests) {
+            const candidateCases = await api.loadCases(candidateRequest.id)
+            if (!candidateCases.length) continue
+            project = candidateProject
+            requestData = candidateRequests
+            request = candidateRequest
+            caseData = candidateCases
+            break
+          }
+          if (project) break
+        }
+        if (!project || !request) throw new Error('대시보드에서 열 수 있는 해석 의뢰가 없습니다.')
+        const thresholdData = await api.qualityThresholds(project.id)
         const loadCase = caseData[0]
-        if (!loadCase) throw new Error('등록된 하중 경우가 없습니다.')
         const overviewData = await api.overview(loadCase.id)
         setProjects(projectData)
         setDatabaseBackend(health.database_backend)
@@ -276,14 +297,30 @@ function App() {
     setActiveView(preferredView === 'chassis' && overviewData.analysis_verdicts.chassis_rear !== 'NO_DATA' ? 'chassis' : preferredView === 'open_cell' && overviewData.analysis_verdicts.open_cell !== 'NO_DATA' ? 'open_cell' : availableView)
   }
 
+  const loadMonitoringContext = async (projectId: string, requestId?: string) => {
+    setError('')
+    const requestData = await api.requests(projectId)
+    const request = requestData.find((item) => item.id === requestId) ?? requestData[0]
+    if (!request) throw new Error('선택한 프로젝트에 의뢰가 없습니다.')
+    const [caseData, thresholdData] = await Promise.all([api.loadCases(request.id), api.qualityThresholds(projectId)])
+    setRequests(requestData)
+    setLoadCases(caseData)
+    setThresholds(thresholdData)
+    setSelectedProjectId(projectId)
+    setSelectedRequestId(request.id)
+    setSelectedLoadCaseId(caseData[0]?.id ?? '')
+    if (caseData[0]) setOverview(await api.overview(caseData[0].id))
+    setActiveView('workflow')
+  }
+
   const handleProjectChange = async (projectId: string) => {
     if (editMode) cancelEditing()
-    try { await loadContext(projectId) } catch (reason) { setError(reason instanceof Error ? reason.message : '프로젝트를 변경하지 못했습니다.') }
+    try { await (activeView === 'workflow' ? loadMonitoringContext(projectId) : loadContext(projectId)) } catch (reason) { setError(reason instanceof Error ? reason.message : '프로젝트를 변경하지 못했습니다.') }
   }
 
   const handleRequestChange = async (requestId: string) => {
     if (editMode) cancelEditing()
-    try { await loadContext(selectedProjectId, requestId) } catch (reason) { setError(reason instanceof Error ? reason.message : '의뢰를 변경하지 못했습니다.') }
+    try { await (activeView === 'workflow' ? loadMonitoringContext(selectedProjectId, requestId) : loadContext(selectedProjectId, requestId)) } catch (reason) { setError(reason instanceof Error ? reason.message : '의뢰를 변경하지 못했습니다.') }
   }
 
   const handleLoadCaseChange = async (loadCaseId: string) => {
@@ -428,9 +465,7 @@ function App() {
   const openDashboardWorkspace = () => {
     if (editMode) cancelEditing()
     setWorkspacePage('dashboard')
-    if (activeView === 'workflow' || activeView === 'compare') {
-      setActiveView(overview?.analysis_verdicts.open_cell !== 'NO_DATA' ? 'open_cell' : 'chassis')
-    }
+    setActiveView('workflow')
   }
 
   const switchDashboardView = (view: ActiveView) => {
@@ -476,7 +511,7 @@ function App() {
   const addCatalogWidget = (item: WidgetCatalogItem) => {
     if (!dashboard) return
     if (!dashboardBeforeEdit.current) dashboardBeforeEdit.current = structuredClone(dashboard)
-    const variable = variables.find((entry) => entry.id === catalogVariable)
+    const variable = item.type === 'video_grid' ? undefined : variables.find((entry) => entry.id === catalogVariable)
     if (variable && !item.allowed_data_types.includes(variable.data_type)) { setNotice(`${variable.display_name}에는 ${item.label}을 사용할 수 없습니다.`); return }
     const [w, h] = item.default_size
     setDashboard({ ...dashboard, widgets: [...dashboard.widgets, { id: `${item.type}-${Date.now()}`, type: item.type, title: variable ? `${variable.display_name} · ${item.label}` : item.label, x: 0, y: 30, w, h, settings: { variableId: variable?.id } }] })
@@ -681,6 +716,21 @@ function App() {
     const [projectData, workflowData] = await Promise.all([api.projects(), api.workflows()])
     setProjects(projectData)
     setWorkflows(workflowData)
+    setOperationalRefreshToken((value) => value + 1)
+  }
+
+  const handleIntakeCreated = async (projectId: string, request: AnalysisRequest) => {
+    const [projectData, workflowData, requestData] = await Promise.all([api.projects(), api.workflows(), api.requests(projectId)])
+    setProjects(projectData); setWorkflows(workflowData); setRequests(requestData)
+    setSelectedProjectId(projectId); setSelectedRequestId(request.id); setLoadCases([]); setSelectedLoadCaseId('')
+    setOperationalRefreshToken((value) => value + 1)
+    setNotice(`${request.title} 의뢰를 접수했습니다.`)
+    setTimeout(() => setNotice(''), 2600)
+  }
+
+  const openIntakeWorkbench = (requestId: string) => {
+    setSelectedRequestId(requestId)
+    setWorkspacePage('workbench')
   }
 
   const openImportedResult = async (projectId: string, requestId: string, loadCaseId: string) => {
@@ -691,6 +741,15 @@ function App() {
     setSelectedProjectId(projectId); setSelectedRequestId(requestId); setSelectedLoadCaseId(loadCaseId); setOverview(overviewData)
     setActiveView(overviewData.analysis_verdicts.open_cell !== 'NO_DATA' ? 'open_cell' : 'chassis')
     setWorkspacePage('dashboard')
+  }
+
+  const openPortfolioRequest = async (projectId: string, requestId: string) => {
+    try {
+      await loadMonitoringContext(projectId, requestId)
+      setWorkspacePage('dashboard')
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '의뢰 진행 상태를 열지 못했습니다.')
+    }
   }
 
   const openFeatureExample = async (example: FeatureExample) => {
@@ -724,9 +783,13 @@ function App() {
   }
 
   const projectWorkflows = workflows.filter((workflow) => workflow.request.project_id === selectedProjectId)
+  const selectedWorkflow = workflows.find((workflow) => workflow.request.id === selectedRequestId)
   const openCellAvailable = overview.analysis_verdicts.open_cell !== 'NO_DATA'
   const chassisAvailable = overview.analysis_verdicts.chassis_rear !== 'NO_DATA'
-  const workflowProgress = Math.round(projectWorkflows.reduce((sum, workflow) => sum + workflow.progress, 0) / Math.max(projectWorkflows.length, 1))
+  // The monitoring tab is scoped to the request selected in the context
+  // controls.  Showing a project-wide average here made the same request read
+  // differently from its monitoring card and the operations dashboard.
+  const workflowProgress = selectedWorkflow?.progress ?? 0
   const chassisThreshold = thresholds.find((item) => item.criterion_key === 'chassis_rear_permanent_deformation_mm')
   const canEdit = !authRequired || authUser?.role === 'editor' || authUser?.role === 'admin'
 
@@ -737,6 +800,9 @@ function App() {
         <nav className="nav-main">
           <button className={workspacePage === 'portfolio' ? 'active' : ''} onClick={() => setWorkspacePage('portfolio')}><LayoutDashboard /><span>운영 대시보드</span></button>
           <button className={workspacePage === 'dashboard' ? 'active' : ''} onClick={openDashboardWorkspace}><Activity /><span>해석 의뢰 현황</span></button>
+          <button className={workspacePage === 'intake' ? 'active' : ''} onClick={() => setWorkspacePage('intake')}><ClipboardPlus /><span>의뢰 접수</span></button>
+          <button className={workspacePage === 'workbench' ? 'active' : ''} onClick={() => setWorkspacePage('workbench')}><FlaskConical /><span>해석 작업 실행</span></button>
+          {(!authRequired || authUser?.role === 'admin') && <button className={workspacePage === 'workbench_admin' ? 'active' : ''} onClick={() => setWorkspacePage('workbench_admin')}><Settings2 /><span>작업 유형 관리</span></button>}
           <button className={workspacePage === 'data' ? 'active' : ''} onClick={() => setWorkspacePage('data')}><Database /><span>해석 데이터</span></button>
           <button className={workspacePage === 'variables' ? 'active' : ''} onClick={() => setWorkspacePage('variables')}><BarChart3 /><span>변수 카탈로그</span></button>
           <button className={workspacePage === 'templates' ? 'active' : ''} onClick={() => setWorkspacePage('templates')}><Settings2 /><span>자동화 템플릿</span></button>
@@ -753,14 +819,14 @@ function App() {
 
       <main className="main-shell">
         <header className="topbar">
-          <div className="breadcrumb">{workspacePage === 'portfolio' ? <><span>운영</span><b>/</b><strong>해석 운영 현황</strong></> : workspacePage === 'data' ? <><span>운영</span><b>/</b><strong>해석 데이터 등록</strong></> : workspacePage === 'schemas' ? <><span>데이터 설계</span><b>/</b><strong>폴더 스키마</strong></> : workspacePage === 'variables' ? <><span>설계</span><b>/</b><strong>변수 카탈로그</strong></> : workspacePage === 'templates' ? <><span>자동화</span><b>/</b><strong>모델링 템플릿</strong></> : workspacePage === 'examples' ? <><span>지원</span><b>/</b><strong>기능 예제 갤러리</strong></> : workspacePage === 'help' ? <><span>지원</span><b>/</b><strong>사용 시나리오 도움말</strong></> : <><span>프로젝트</span><b>/</b><span>{overview.load_case.project_name}</span><b>/</b><strong>{overview.load_case.name}</strong></>}</div>
+          <div className="breadcrumb">{workspacePage === 'portfolio' ? <><span>운영</span><b>/</b><strong>해석 운영 현황</strong></> : workspacePage === 'intake' ? <><span>의뢰</span><b>/</b><strong>해석 의뢰 접수</strong></> : workspacePage === 'workbench' ? <><span>실행</span><b>/</b><strong>해석 작업 실행 · DEMO ONLY</strong></> : workspacePage === 'workbench_admin' ? <><span>관리</span><b>/</b><strong>작업 유형 관리</strong></> : workspacePage === 'data' ? <><span>운영</span><b>/</b><strong>해석 데이터 등록</strong></> : workspacePage === 'schemas' ? <><span>데이터 설계</span><b>/</b><strong>폴더 스키마</strong></> : workspacePage === 'variables' ? <><span>설계</span><b>/</b><strong>변수 카탈로그</strong></> : workspacePage === 'templates' ? <><span>자동화</span><b>/</b><strong>모델링 템플릿</strong></> : workspacePage === 'examples' ? <><span>지원</span><b>/</b><strong>기능 예제 갤러리</strong></> : workspacePage === 'help' ? <><span>지원</span><b>/</b><strong>사용 시나리오 도움말</strong></> : activeView === 'workflow' ? <><span>의뢰</span><b>/</b><span>{selectedWorkflow?.request.project_name ?? '프로젝트 미지정'}</span><b>/</b><strong>{selectedWorkflow?.request.title ?? '의뢰 선택'}</strong></> : <><span>프로젝트</span><b>/</b><span>{overview.load_case.project_name}</span><b>/</b><strong>{overview.load_case.name}</strong></>}</div>
           <div className="top-actions">
             {canEdit && workspacePage === 'dashboard' && activeView !== 'compare' && activeView !== 'workflow' && <button className="ghost-button" onClick={() => setAssistantOpen(true)}><Sparkles /> 자연어로 개선</button>}
             {canEdit && (workspacePage === 'dashboard' && activeView === 'workflow' ? (editMode ? (
               <button className="primary-button" onClick={save}><Save /> {workflowEditorMode === 'layout' ? '대시보드 레이아웃 저장' : '단계 변경 저장'}</button>
             ) : <div className="workflow-top-edit-actions">
               <button className="edit-button" onClick={beginWorkflowLayoutEditing}><LayoutDashboard /> 대시보드 편집</button>
-              <button className="edit-button" onClick={beginWorkflowStageEditing}><Settings2 /> 진행 단계 편집</button>
+              {!selectedWorkflow?.work_plan && <button className="edit-button" onClick={beginWorkflowStageEditing}><Settings2 /> 진행 단계 편집</button>}
             </div>) : ((workspacePage === 'dashboard' && activeView !== 'compare') || workspacePage === 'portfolio') && (editMode ? (
               <button className="primary-button" onClick={save}><Save /> {workspacePage === 'portfolio' ? '운영 설정 저장' : '레이아웃 저장'}</button>
             ) : <button className="edit-button" onClick={beginEditing}><Settings2 /> 대시보드 편집</button>))}
@@ -768,25 +834,25 @@ function App() {
           </div>
         </header>
 
-        {workspacePage === 'portfolio' ? <PortfolioDashboard editMode={editMode} layout={portfolioLayout} layoutVersion={portfolioLayoutVersion} onLayoutChange={setPortfolioLayout} onCancelEdit={cancelEditing} onResetLayout={resetPortfolioLayout} onOpen={(projectId, requestId, loadCaseId) => void openImportedResult(projectId, requestId, loadCaseId)} /> : workspacePage === 'schemas' ? <FolderSchemaWorkspace /> : workspacePage === 'variables' ? <VariableCatalogPage variables={variables} overview={overview} loadCaseId={selectedLoadCaseId} onChanged={(items) => { setVariables(items); setCatalogVariable((current) => items.some((item) => item.id === current) ? current : items[0]?.id ?? '') }} /> : workspacePage === 'templates' ? <AutomationTemplatesPage /> : workspacePage === 'examples' ? <FeatureExampleGallery onOpen={openFeatureExample} /> : workspacePage === 'help' ? <HelpCenter onNavigate={setWorkspacePage} /> : workspacePage === 'data' ? (
-          <DataWorkspace projects={projects} initialProjectId={selectedProjectId} onDataChanged={refreshOperationalData} onOpenAnalysis={openImportedResult} />
+        {workspacePage === 'portfolio' ? <PortfolioDashboard refreshToken={operationalRefreshToken} editMode={editMode} layout={portfolioLayout} layoutVersion={portfolioLayoutVersion} onLayoutChange={setPortfolioLayout} onCancelEdit={cancelEditing} onResetLayout={resetPortfolioLayout} onOpen={(projectId, requestId) => void openPortfolioRequest(projectId, requestId)} /> : workspacePage === 'intake' ? <RequestIntakePage projects={projects} createdBy={authUser?.display_name ?? '데모 사용자'} canCreate={canEdit} onCreated={handleIntakeCreated} onOpenWorkbench={openIntakeWorkbench} /> : workspacePage === 'workbench' ? <SimulationWorkbench workflows={workflows} initialRequestId={selectedRequestId} createdBy={authUser?.display_name ?? '데모 사용자'} canExecute={canEdit} onRequestSelected={setSelectedRequestId} onChanged={async (message) => { setWorkflows(await api.workflows()); setOperationalRefreshToken((value) => value + 1); setNotice(message); setTimeout(() => setNotice(''), 2600) }} /> : workspacePage === 'workbench_admin' ? <WorkbenchTypeAdmin /> : workspacePage === 'schemas' ? <FolderSchemaWorkspace /> : workspacePage === 'variables' ? <VariableCatalogPage variables={variables} overview={overview} loadCaseId={selectedLoadCaseId} onChanged={(items) => { setVariables(items); setCatalogVariable((current) => items.some((item) => item.id === current) ? current : items[0]?.id ?? '') }} /> : workspacePage === 'templates' ? <AutomationTemplatesPage /> : workspacePage === 'examples' ? <FeatureExampleGallery onOpen={openFeatureExample} /> : workspacePage === 'help' ? <HelpCenter onNavigate={setWorkspacePage} /> : workspacePage === 'data' ? (
+          <DataWorkspace projects={projects} initialProjectId={selectedProjectId} onDataChanged={refreshOperationalData} onOpenAnalysis={openImportedResult} onOpenIntake={() => setWorkspacePage('intake')} />
         ) : <>
         <section className="content-head">
           <div>
-            <div className="eyebrow"><span>PROJECT 24-071</span><span>•</span><span>{overview.load_case.analysis_type}</span></div>
-            <h1>{overview.load_case.product_name} 불량 분석</h1>
-            <p>{overview.load_case.request_title}</p>
+            <div className="eyebrow"><span>{activeView === 'workflow' ? 'REQUEST MONITORING' : 'PROJECT 24-071'}</span><span>•</span><span>{activeView === 'workflow' ? selectedWorkflow?.request.category ?? 'UNASSIGNED' : overview.load_case.analysis_type}</span></div>
+            <h1>{activeView === 'workflow' ? `${selectedWorkflow?.request.project_name ?? overview.load_case.project_name} 해석 의뢰 현황` : `${overview.load_case.product_name} 불량 분석`}</h1>
+            <p>{activeView === 'workflow' ? selectedWorkflow?.request.title ?? '의뢰를 선택하세요.' : overview.load_case.request_title}</p>
           </div>
           <div className="context-selectors">
             <label><span>프로젝트</span><select aria-label="프로젝트 선택" value={selectedProjectId} onChange={(event) => handleProjectChange(event.target.value)}>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
             <label><span>의뢰</span><select aria-label="의뢰 선택" value={selectedRequestId} onChange={(event) => handleRequestChange(event.target.value)}>{requests.map((request) => <option key={request.id} value={request.id}>{request.title}</option>)}</select></label>
-            <label><span>하중 경우</span><select aria-label="하중 경우 선택" value={selectedLoadCaseId} onChange={(event) => handleLoadCaseChange(event.target.value)}>{loadCases.map((loadCase) => <option key={loadCase.id} value={loadCase.id}>{loadCase.name}</option>)}</select></label>
+            <label><span>하중 경우</span><select aria-label="하중 경우 선택" value={selectedLoadCaseId} disabled={loadCases.length === 0} onChange={(event) => handleLoadCaseChange(event.target.value)}>{loadCases.length === 0 ? <option value="">미지정</option> : loadCases.map((loadCase) => <option key={loadCase.id} value={loadCase.id}>{loadCase.name}</option>)}</select></label>
           </div>
         </section>
 
         <section className="view-tabs">
-          <button className={activeView === 'workflow' ? 'active' : ''} onClick={() => switchDashboardView('workflow')}><CircleDot /> 의뢰 진행 상태 <span>{workflowProgress}%</span></button>
-          <button className={activeView !== 'workflow' ? 'active' : ''} onClick={() => switchDashboardView(openCellAvailable ? 'open_cell' : 'chassis')}><LayoutDashboard /> 상세 분석 <span>{overview.load_case.analysis_type.replace('_', ' ')}</span></button>
+          <button data-testid="selected-request-progress-tab" className={activeView === 'workflow' ? 'active' : ''} onClick={() => switchDashboardView('workflow')}><CircleDot /> 의뢰 진행 상태 <span>{workflowProgress}%</span></button>
+          <button className={activeView !== 'workflow' ? 'active' : ''} disabled={!selectedLoadCaseId} onClick={() => switchDashboardView(openCellAvailable ? 'open_cell' : 'chassis')}><LayoutDashboard /> 상세 분석 <span>{selectedLoadCaseId ? overview.load_case.analysis_type.replace('_', ' ') : '하중 경우 미지정'}</span></button>
           <div className="tab-line" />
         </section>
 
@@ -852,7 +918,7 @@ function App() {
             <div className="catalog-editor">
               <strong>위젯 카탈로그</strong>
               <select aria-label="위젯 변수" value={catalogVariable} onChange={(event) => setCatalogVariable(event.target.value)}>{variables.map((item) => <option key={item.id} value={item.id}>{item.display_name} ({item.unit})</option>)}</select>
-              <div>{widgetCatalog.filter((item) => ['kpi','verdict','gauge','edge_bar','time_series','scatter','result_table','contour','note'].includes(item.type)).map((item) => <button key={item.type} onClick={() => addCatalogWidget(item)}><Plus /> {item.label}</button>)}</div>
+              <div>{widgetCatalog.filter((item) => ['kpi','verdict','gauge','edge_bar','time_series','scatter','result_table','contour','video_grid','note'].includes(item.type)).map((item) => <button key={item.type} onClick={() => addCatalogWidget(item)}><Plus /> {item.label}</button>)}</div>
             </div>
             <textarea value={command} onChange={(event) => setCommand(event.target.value)} placeholder="예: 응력-시간 그래프에 기준선을 넣어줘" />
             <button className="assistant-submit" onClick={previewCommand} disabled={!command.trim()}><Sparkles /> 변경안 만들기</button>
@@ -1185,7 +1251,7 @@ function ComparisonWorkspace({ loadCaseId, currentRunId }: { loadCaseId: string;
   </section>
 }
 
-function DataWorkspace({ projects, initialProjectId, onDataChanged, onOpenAnalysis }: { projects: Project[]; initialProjectId: string; onDataChanged: () => Promise<void>; onOpenAnalysis: (projectId: string, requestId: string, loadCaseId: string) => Promise<void> }) {
+function DataWorkspace({ projects, initialProjectId, onDataChanged, onOpenAnalysis, onOpenIntake }: { projects: Project[]; initialProjectId: string; onDataChanged: () => Promise<void>; onOpenAnalysis: (projectId: string, requestId: string, loadCaseId: string) => Promise<void>; onOpenIntake: () => void }) {
   const [managedProjects, setManagedProjects] = useState(projects)
   const [projectId, setProjectId] = useState(initialProjectId || projects[0]?.id || '')
   const [requests, setRequests] = useState<AnalysisRequest[]>([])
@@ -1196,7 +1262,6 @@ function DataWorkspace({ projects, initialProjectId, onDataChanged, onOpenAnalys
   const [formError, setFormError] = useState('')
   const [busy, setBusy] = useState(false)
   const [projectForm, setProjectForm] = useState({ name: '', product_name: '', manufacturer: '', display_size_inch: 65 as number | null, description: '' })
-  const [requestForm, setRequestForm] = useState({ title: '', owner: '', due_in_days: 14, overall_note: '' })
   const [caseForm, setCaseForm] = useState({ name: '', analysis_type: 'DROP' as 'DROP' | 'SIDE_CLAMP', primary: '800', secondary: 'BOTTOM' })
   const [resultFile, setResultFile] = useState<{ filename: string; content: string } | null>(null)
   const [resultAuthor, setResultAuthor] = useState('해석 담당자')
@@ -1246,16 +1311,6 @@ function DataWorkspace({ projects, initialProjectId, onDataChanged, onOpenAnalys
     })
   }
 
-  const submitRequest = (event: FormEvent) => {
-    event.preventDefault()
-    if (!projectId) return
-    void complete('의뢰', async () => {
-      const created = await api.createRequest(projectId, requestForm)
-      setRequests((items) => [created, ...items]); setRequestId(created.id); setLoadCases([])
-      setRequestForm({ title: '', owner: '', due_in_days: 14, overall_note: '' })
-    })
-  }
-
   const submitLoadCase = (event: FormEvent) => {
     event.preventDefault()
     if (!requestId) return
@@ -1270,7 +1325,6 @@ function DataWorkspace({ projects, initialProjectId, onDataChanged, onOpenAnalys
     })
   }
 
-  const selectedProject = managedProjects.find((item) => item.id === projectId)
   const selectedRequest = requests.find((item) => item.id === requestId)
 
   const validateResultFile = async (selected: { filename: string; content: string }) => {
@@ -1326,19 +1380,20 @@ function DataWorkspace({ projects, initialProjectId, onDataChanged, onOpenAnalys
 
   return <section className="data-workspace">
     <header className="data-workspace-head">
-      <div><span>OPERATIONS / FILE DATABASE</span><h1>해석 데이터 등록</h1><p>프로젝트 → 의뢰 → 하중 경우 순서로 등록합니다. 의뢰 생성 시 기본 작업 순서가 자동으로 준비됩니다.</p></div>
+      <div><span>OPERATIONS / FILE DATABASE</span><h1>해석 데이터 등록</h1><p>프로젝트와 하중 경우를 구성하고, 완료된 해석 결과를 검증해 DB에 등록합니다.</p></div>
       <div className="data-count"><strong>{managedProjects.length}</strong><span>PROJECTS</span></div>
     </header>
 
     <div className="data-hierarchy-bar">
       <label><span>1 · 프로젝트</span><select aria-label="등록 프로젝트 선택" value={projectId} onChange={(event) => setProjectId(event.target.value)}>{managedProjects.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.product_name}</option>)}</select></label>
       <i>›</i>
-      <label><span>2 · 의뢰</span><select aria-label="등록 의뢰 선택" value={requestId} onChange={(event) => setRequestId(event.target.value)} disabled={!requests.length}>{requests.length ? requests.map((item) => <option key={item.id} value={item.id}>{item.title}</option>) : <option>의뢰를 먼저 등록하세요</option>}</select></label>
+      <label><span>2 · 접수된 의뢰</span><select aria-label="등록 의뢰 선택" value={requestId} onChange={(event) => setRequestId(event.target.value)} disabled={!requests.length}>{requests.length ? requests.map((item) => <option key={item.id} value={item.id}>{item.title}</option>) : <option>의뢰 접수 탭에서 먼저 접수하세요</option>}</select></label>
       <i>›</i>
       <label><span>3 · 하중 경우</span><select aria-label="등록 하중 경우 선택" value={loadCaseId} onChange={(event) => { setLoadCaseId(event.target.value); setResultFile(null); setImportPreview(null); setImported(false) }} disabled={!loadCases.length}>{loadCases.length ? loadCases.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.analysis_type}</option>) : <option value="">하중 경우 없음</option>}</select></label>
     </div>
 
     {(message || formError) && <div className={`data-message ${formError ? 'error' : ''}`}>{formError ? <AlertTriangle /> : <Check />}{formError || message}</div>}
+    <div className="data-intake-handoff"><ClipboardPlus /><span><strong>새 해석 의뢰는 별도 접수 절차를 사용합니다.</strong>외부 시스템 전달·부서장 지시와 작업 시나리오를 기록한 뒤 이 화면에서 하중 경우와 결과를 연결하세요.</span><button onClick={onOpenIntake}>의뢰 접수 열기 <ChevronDown /></button></div>
 
     <div className="data-form-grid">
       <article className="data-form-card"><header><span>01</span><div><h2>새 프로젝트</h2><p>제품 단위 최상위 분류</p></div></header><form onSubmit={submitProject}>
@@ -1350,14 +1405,7 @@ function DataWorkspace({ projects, initialProjectId, onDataChanged, onOpenAnalys
         <button className="data-submit" disabled={busy}><Plus /> 프로젝트 등록</button>
       </form></article>
 
-      <article className="data-form-card"><header><span>02</span><div><h2>새 의뢰</h2><p>{selectedProject?.name || '프로젝트를 선택하세요'}</p></div></header><form onSubmit={submitRequest}>
-        <label><span>의뢰 제목</span><input required disabled={!projectId} value={requestForm.title} onChange={(e) => setRequestForm({ ...requestForm, title: e.target.value })} placeholder="예: 포장 낙하 내구 해석" /></label>
-        <div className="data-form-row"><label><span>작업자</span><input required value={requestForm.owner} onChange={(e) => setRequestForm({ ...requestForm, owner: e.target.value })} placeholder="이름" /></label><label><span>기한 (일)</span><input type="number" min="1" value={requestForm.due_in_days} onChange={(e) => setRequestForm({ ...requestForm, due_in_days: Number(e.target.value) })} /></label></div>
-        <label><span>요청 사항</span><textarea value={requestForm.overall_note} onChange={(e) => setRequestForm({ ...requestForm, overall_note: e.target.value })} placeholder="해석 조건과 검토 요청을 입력하세요." /></label>
-        <button className="data-submit" disabled={busy || !projectId}><Plus /> 의뢰 및 작업 순서 생성</button>
-      </form></article>
-
-      <article className="data-form-card"><header><span>03</span><div><h2>새 하중 경우</h2><p>{selectedRequest?.title || '의뢰를 선택하세요'}</p></div></header><form onSubmit={submitLoadCase}>
+      <article className="data-form-card"><header><span>02</span><div><h2>새 하중 경우</h2><p>{selectedRequest?.title || '접수된 의뢰를 선택하세요'}</p></div></header><form onSubmit={submitLoadCase}>
         <label><span>하중 경우 이름</span><input required disabled={!requestId} value={caseForm.name} onChange={(e) => setCaseForm({ ...caseForm, name: e.target.value })} placeholder="예: Bottom Drop 800 mm" /></label>
         <label><span>해석 유형</span><select value={caseForm.analysis_type} onChange={(e) => { const type = e.target.value as 'DROP' | 'SIDE_CLAMP'; setCaseForm({ name: caseForm.name, analysis_type: type, primary: type === 'DROP' ? '800' : '25', secondary: type === 'DROP' ? 'BOTTOM' : '10' }) }}><option value="DROP">포장 낙하 (DROP)</option><option value="SIDE_CLAMP">Side Clamp</option></select></label>
         <div className="data-form-row"><label><span>{caseForm.analysis_type === 'DROP' ? '낙하 높이 (mm)' : '압력 (kPa)'}</span><input type="number" min="0" required value={caseForm.primary} onChange={(e) => setCaseForm({ ...caseForm, primary: e.target.value })} /></label><label><span>{caseForm.analysis_type === 'DROP' ? '충격 방향' : '유지 시간 (s)'}</span>{caseForm.analysis_type === 'DROP' ? <select value={caseForm.secondary} onChange={(e) => setCaseForm({ ...caseForm, secondary: e.target.value })}><option>BOTTOM</option><option>TOP</option><option>LEFT</option><option>RIGHT</option></select> : <input type="number" min="0" value={caseForm.secondary} onChange={(e) => setCaseForm({ ...caseForm, secondary: e.target.value })} />}</label></div>
@@ -1367,7 +1415,7 @@ function DataWorkspace({ projects, initialProjectId, onDataChanged, onOpenAnalys
 
     <article className="result-import-card">
       <header>
-        <div><span>04 · RESULT INGESTION</span><h2>해석 결과 가져오기</h2><p>선택한 하중 경우에 CSV 또는 JSON 결과를 검증한 뒤 새 Analysis Run으로 저장합니다.</p></div>
+        <div><span>03 · RESULT INGESTION</span><h2>해석 결과 가져오기</h2><p>선택한 하중 경우에 CSV 또는 JSON 결과를 검증한 뒤 새 Analysis Run으로 저장합니다.</p></div>
         <div className="template-links"><button onClick={() => void loadRadiossExample()} disabled={!loadCaseId || busy}><Play /> 예제로 검증</button><button onClick={() => void importTypedFolderExample()} disabled={!loadCaseId || busy}><Database /> 형식별 폴더 예제 등록</button><a href="/api/result-import/template/radioss-csv" download><Download /> Radioss CSV</a><a href="/api/result-import/template/csv" download><Download /> 요약 CSV</a><a href="/api/result-import/template/json" download><Download /> JSON</a></div>
       </header>
       <div className="result-import-body">
@@ -1536,6 +1584,7 @@ function WidgetContent({ widget, overview, selectedEdges, threshold, onSaveThres
     return bound ? <div className="verdict-card"><span>{bound.display_name}</span><strong>{bound.value_double.toFixed(1)} {bound.unit}</strong><small>{hasNumericValue(bound.threshold_double) ? `기준 ${bound.threshold_double.toFixed(1)} ${bound.unit} · ` : ''}{bound.verdict}</small></div> : <div className="empty-widget">선택한 변수의 데이터가 없습니다.</div>
   }
   if (type === 'scatter') return <ResponsiveContainer width="100%" height="100%"><LineChart data={barData}><CartesianGrid stroke="#193447" /><XAxis dataKey="name" /><YAxis /><Tooltip /><Line dataKey="value" stroke="#61d4ff" /></LineChart></ResponsiveContainer>
+  if (type === 'video_grid') return <DropVideoGrid loadCaseId={overview.load_case.id} pageSize={Number(widget.settings?.pageSize ?? 20)} />
   if (type === 'video') { const asset = overview.media.find((item) => item.asset_type === 'VIDEO'); return asset ? <video controls className="result-video" src={asset.asset_url ?? `/assets/${asset.file_path}`} /> : <div className="empty-widget">등록된 안전한 영상 파일이 없습니다.</div> }
   if (type === 'model3d') return <div className="empty-widget">GLB/glTF 경량 파일을 등록하면 여기에 표시됩니다.</div>
   return <div className="empty-widget">표시할 데이터가 없습니다.</div>
@@ -1571,7 +1620,7 @@ function OpenCellMap({ overview }: { overview: Overview }) {
 }
 
 function WidgetSettingsPanel({ widget, variables, onChange, onClose }: { widget: DashboardWidget; variables: VariableDefinition[]; onChange: (patch: Partial<DashboardWidget>) => void; onClose: () => void }) {
-  const chartOptions: Array<[DashboardWidget['type'],string]> = [['kpi','KPI 카드'],['verdict','패스/실패 카드'],['gauge','임계값 게이지'],['edge_bar','막대그래프'],['time_series','시계열 그래프'],['scatter','산점도'],['result_table','데이터 테이블'],['open_cell_map','Open Cell 맵'],['chassis_summary','Chassis 판정 요약'],['chassis_diagram','Chassis 위치도'],['chassis_bar','Chassis 비교 그래프'],['chassis_table','Chassis 상세 표'],['contour','컨투어 이미지'],['note','수행자 의견']]
+  const chartOptions: Array<[DashboardWidget['type'],string]> = [['kpi','KPI 카드'],['verdict','패스/실패 카드'],['gauge','임계값 게이지'],['edge_bar','막대그래프'],['time_series','시계열 그래프'],['scatter','산점도'],['result_table','데이터 테이블'],['open_cell_map','Open Cell 맵'],['chassis_summary','Chassis 판정 요약'],['chassis_diagram','Chassis 위치도'],['chassis_bar','Chassis 비교 그래프'],['chassis_table','Chassis 상세 표'],['contour','컨투어 이미지'],['video','영상 플레이어'],['video_grid','낙하 영상 비교'],['model3d','경량 3D 뷰어'],['note','수행자 의견']]
   const currentVariable = variables.find((item) => item.id === widget.settings?.variableId)
   const compatibleVariables = variables.filter((item) => item.allowed_widgets.includes(widget.type) || item.id === currentVariable?.id)
   const aggregations = currentVariable?.allowed_aggregations ?? ['MAX','MIN','AVG','LATEST','RAW']
@@ -1700,13 +1749,17 @@ function WorkflowView({ workflows, stageEditMode, layoutEditMode, dashboardLayou
     if (JSON.stringify(items) !== JSON.stringify(dashboardLayout.items)) onDashboardLayoutChange({ ...dashboardLayout, items })
   }
 
-  const renderLane = (workflow: Workflow) => <section className={`workflow-lane ${workflow.request.id === activeRequestId ? 'active-request' : ''}`}>
+  const renderLane = (workflow: Workflow) => {
+    const editableStages = stageEditMode && !workflow.work_plan
+    return <section className={`workflow-lane ${workflow.request.id === activeRequestId ? 'active-request' : ''}`}>
     <header>
-      <div>{layoutEditMode && <span className="workflow-lane-drag-handle"><GripVertical /> 위젯 이동</span>}<span className="workflow-category">{workflow.request.category}</span><h3>{workflow.request.title}</h3><p>{workflow.request.project_name} · {workflow.request.product_name}</p></div>
-      <div className="workflow-lane-meta"><span>{workflow.request.owner}</span><small>{new Date(workflow.request.requested_at).toLocaleDateString('ko-KR')}</small><b>{workflow.progress}%</b>{stageEditMode ? <button onClick={() => onAddStep(workflow.request.id)}><Plus /> 단계 추가</button> : <button onClick={() => onOpenAnalysis(workflow)}>상세 분석 열기</button>}</div>
+      <div>{layoutEditMode && <span className="workflow-lane-drag-handle"><GripVertical /> 위젯 이동</span>}<span className="workflow-category">{workflow.work_plan?.scenario_name ?? workflow.request.category}</span><h3>{workflow.request.title}</h3><p>{workflow.request.project_name} · {workflow.request.product_name}{workflow.work_plan ? ` · ${workflow.work_plan.source_type === 'EXTERNAL_SYSTEM' ? '외부 시스템' : '부서장 지시'}` : ''}</p></div>
+      <div className="workflow-lane-meta"><span>{workflow.request.owner}</span><small>{workflow.work_plan ? `${workflow.completed_count ?? 0} / ${workflow.total_count ?? workflow.steps.length} 작업 완료` : new Date(workflow.request.requested_at).toLocaleDateString('ko-KR')}</small><b>{workflow.progress}%</b>{editableStages ? <button onClick={() => onAddStep(workflow.request.id)}><Plus /> 단계 추가</button> : <button onClick={() => onOpenAnalysis(workflow)}>상세 분석 열기</button>}</div>
     </header>
-    <div className={`workflow-horizontal ${stageEditMode ? 'editing' : ''}`}>{workflow.steps.map((step, index) => <WorkflowStepItem key={step.id} step={step} last={index === workflow.steps.length - 1} editMode={stageEditMode} onChange={(patch) => onStepChange(step.id, patch)} onMove={(offset) => onMoveStep(workflow.request.id, step.id, offset)} onDelete={() => onDeleteStep(workflow.request.id, step.id)} />)}</div>
+    {!editableStages && <RequestDemoRunSummary run={workflow.latest_demo_run} />}
+    <div className={`workflow-horizontal ${editableStages ? 'editing' : ''}`}>{workflow.steps.map((step, index) => <WorkflowStepItem key={step.id} step={step} last={index === workflow.steps.length - 1} editMode={editableStages} onChange={(patch) => onStepChange(step.id, patch)} onMove={(offset) => onMoveStep(workflow.request.id, step.id, offset)} onDelete={() => onDeleteStep(workflow.request.id, step.id)} />)}</div>
   </section>
+  }
 
   return <div className={`workflow-board ${layoutEditMode ? 'layout-editing' : ''}`} style={{ '--workflow-accent': dashboardLayout.accentColor, '--workflow-font-size': `${dashboardLayout.fontSize * 1.2}px` } as CSSProperties}>
     <section className="workflow-board-head"><div><span>CONCURRENT REQUEST BOARD · LAYOUT v{layoutVersion}</span><h2>의뢰 작업 진행 현황</h2><p>{workflows.length}개 의뢰 · {activeCount}개 동시 진행</p></div><label>정렬 기준<select value={sortKey} onChange={(event) => setSortKey(event.target.value as typeof sortKey)}><option value="project">프로젝트(제품)별</option><option value="category">의뢰별 카테고리</option><option value="product">제품 이름순</option><option value="owner">작업자 이름</option><option value="time">시간순</option></select></label></section>
@@ -1717,7 +1770,7 @@ function WorkflowView({ workflows, stageEditMode, layoutEditMode, dashboardLayou
 }
 
 function WorkflowStepItem({ step, last, editMode, onChange, onMove, onDelete }: { step: WorkflowStep; last: boolean; editMode: boolean; onChange: (patch: Partial<WorkflowStep>) => void; onMove: (offset: -1 | 1) => void; onDelete: () => void }) {
-  const statusText = { COMPLETED: '완료', IN_PROGRESS: '진행 중', WAITING: '대기', BLOCKED: '차단', FAILED: '실패' }[step.status]
+  const statusText = { READY: '시작 대기', COMPLETED: '완료', IN_PROGRESS: '진행 중', WAITING: '대기', BLOCKED: '차단', FAILED: '실패' }[step.status]
   return <div className={`workflow-step-horizontal ${step.status.toLowerCase()} ${editMode ? 'editing' : ''}`} data-testid={step.id.startsWith('draft-step-') ? 'draft-workflow-step' : undefined}>
     <div className="step-track-horizontal"><span>{step.status === 'COMPLETED' ? <Check /> : step.sequence_no}</span>{!last && <i />}</div>
     {editMode ? <div className="workflow-step-editor">
@@ -1725,7 +1778,7 @@ function WorkflowStepItem({ step, last, editMode, onChange, onMove, onDelete }: 
       <label><span>단계명</span><input value={step.name} onChange={(event) => onChange({ name: event.target.value })} aria-label={`${step.sequence_no}단계 이름`} /></label>
       <label><span>담당자</span><input value={step.owner} onChange={(event) => onChange({ owner: event.target.value })} aria-label={`${step.sequence_no}단계 담당자`} /></label>
       <div>
-        <label><span>상태</span><select value={step.status} onChange={(event) => onChange({ status: event.target.value as WorkflowStep['status'] })} aria-label={`${step.sequence_no}단계 상태`}><option value="WAITING">대기</option><option value="IN_PROGRESS">진행 중</option><option value="BLOCKED">차단</option><option value="FAILED">실패</option><option value="COMPLETED">완료</option></select></label>
+        <label><span>상태</span><select value={step.status} onChange={(event) => onChange({ status: event.target.value as WorkflowStep['status'] })} aria-label={`${step.sequence_no}단계 상태`}><option value="READY">시작 대기</option><option value="WAITING">대기</option><option value="IN_PROGRESS">진행 중</option><option value="BLOCKED">차단</option><option value="FAILED">실패</option><option value="COMPLETED">완료</option></select></label>
         <label><span>진행률</span><input type="number" min="0" max="100" value={step.progress} onChange={(event) => onChange({ progress: Math.max(0, Math.min(100, Number(event.target.value))) })} aria-label={`${step.sequence_no}단계 진행률`} /></label>
       </div>
       <label className="workflow-optional"><input type="checkbox" checked={step.is_optional} onChange={(event) => onChange({ is_optional: event.target.checked })} /><span>선택 단계</span></label>

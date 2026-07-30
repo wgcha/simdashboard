@@ -1,0 +1,26 @@
+ANALYSIS CANVAS - DEMO VALIDATION REPORT
+========================================
+MODE: DEMO_ONLY
+FIXTURE: demo-validation-report.txt
+GENERATED_BY: repository static example
+
+[PASS] execution mode is DEMO_ONLY
+[PASS] external executable field is absent
+[PASS] working directory field is absent
+[PASS] scheduler endpoint field is absent
+[PASS] input contract preview is present
+[PASS] result summary values are parseable
+[PASS] progress is within 0..100
+[PASS] terminal status is SUCCEEDED
+
+CHECKS
+------
+max_displacement_mm = 1.842
+max_von_mises_mpa   = 186.400
+quality_gate        = PASS
+required_outputs    = 3/3
+
+OVERALL: PASS
+
+DISCLAIMER: This is deterministic sample text for UI and API verification.
+It is not evidence that a real engineering analysis was executed.

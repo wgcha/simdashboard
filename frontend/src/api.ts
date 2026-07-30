@@ -1,4 +1,4 @@
-import type { AnalysisRequest, AnalysisRunSummary, AutomationTemplate, DashboardDefinition, DashboardSummary, DashboardVersion, FeatureExample, ImportSchema, ImportSchemaDefinition, LoadCase, Overview, PortfolioLayout, PortfolioOverview, Project, QualityThreshold, ReportLayout, ReportLayoutDefinition, ReportLayoutVersion, ReportTemplateAsset, ReviewItem, RunComparison, RunTrust, VariableDefinition, VariableDefinitionInput, WidgetCatalogItem, Workflow, WorkflowDashboardLayout, WorkflowStep, WorkspaceLayout, WorkspaceLayoutVersion } from './types'
+import type { AnalysisRequest, AnalysisRunSummary, AutomationTemplate, DashboardDefinition, DashboardSummary, DashboardVersion, DropVideoPage, FeatureExample, ImportSchema, ImportSchemaDefinition, LoadCase, Overview, PortfolioLayout, PortfolioOverview, Project, QualityThreshold, ReportLayout, ReportLayoutDefinition, ReportLayoutVersion, ReportTemplateAsset, ReviewItem, RunComparison, RunTrust, VariableDefinition, VariableDefinitionInput, WidgetCatalogItem, Workflow, WorkflowDashboardLayout, WorkflowStep, WorkspaceLayout, WorkspaceLayoutVersion } from './types'
 import { generatedApiClient } from './generated/client'
 import { authenticatedFetch, clearSession } from './auth'
 import type { AuthUser } from './auth'
@@ -10,7 +10,11 @@ async function json<T>(response: Response | Promise<Response>): Promise<T> {
   if (!response.ok) {
     const body = await response.text()
     let detail = body
-    try { detail = (JSON.parse(body) as { detail?: string }).detail ?? body } catch { /* plain-text response */ }
+    try {
+      const parsed = JSON.parse(body) as { detail?: string | { code?: string; [key: string]: unknown } }
+      const value = parsed.detail
+      detail = typeof value === 'string' ? value : value?.code ? `${value.code}: ${JSON.stringify(value)}` : body
+    } catch { /* plain-text response */ }
     if (response.status === 401 && !response.url.endsWith('/api/auth/login')) {
       clearSession()
       window.dispatchEvent(new CustomEvent('analysis-auth-expired'))
@@ -50,9 +54,11 @@ export const api = {
   createProject: (payload: { name: string; product_name: string; description: string; manufacturer: string; display_size_inch: number | null }) =>
     json<Project>(fetch('/api/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })),
   requests: (projectId: string) => json<AnalysisRequest[]>(fetch(`/api/projects/${projectId}/requests`)),
-  createRequest: (projectId: string, payload: { title: string; owner: string; due_in_days: number; overall_note: string }) =>
+  createRequest: (projectId: string, payload: { title: string; owner: string; due_in_days: number; overall_note: string; source_type: 'EXTERNAL_SYSTEM' | 'DEPARTMENT_HEAD'; source_reference: string; requested_by: string; request_type_id: 'design-reliability-validation' | 'design-doe-exploration'; request_type_version: number; assigned_by?: string }) =>
     json<AnalysisRequest>(fetch(`/api/projects/${projectId}/requests`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })),
   loadCases: (requestId: string) => json<LoadCase[]>(fetch(`/api/requests/${requestId}/load-cases`)),
+  dropVideos: (loadCaseId: string, page = 1, pageSize = 20, signal?: AbortSignal) =>
+    json<DropVideoPage>(fetch(`/api/load-cases/${encodeURIComponent(loadCaseId)}/drop-videos?page=${page}&page_size=${pageSize}`, { signal })),
   createLoadCase: (requestId: string, payload: { name: string; analysis_type: 'DROP' | 'SIDE_CLAMP'; parameters: Record<string, string | number | string[]> }) =>
     json<LoadCase>(fetch(`/api/requests/${requestId}/load-cases`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })),
   importResults: (loadCaseId: string, payload: { filename: string; content: string; author: string; validate_only: boolean }) =>
@@ -118,7 +124,7 @@ export const api = {
         body: JSON.stringify({ threshold_double: thresholdDouble, updated_by: '관리자' }),
       }),
     ),
-  updateWorkflowStep: (stepId: string, payload: { name: string; status: 'COMPLETED' | 'IN_PROGRESS' | 'WAITING' | 'BLOCKED' | 'FAILED'; owner: string; progress: number; is_optional: boolean; note: string }) =>
+  updateWorkflowStep: (stepId: string, payload: { name: string; status: 'READY' | 'COMPLETED' | 'IN_PROGRESS' | 'WAITING' | 'BLOCKED' | 'FAILED'; owner: string; progress: number; is_optional: boolean; note: string }) =>
     json<WorkflowStep>(
       fetch(`/api/workflow-steps/${stepId}`, {
         method: 'PATCH',
@@ -126,7 +132,7 @@ export const api = {
         body: JSON.stringify(payload),
       }),
     ),
-  replaceWorkflowSteps: (requestId: string, steps: Array<{ id: string | null; name: string; status: 'COMPLETED' | 'IN_PROGRESS' | 'WAITING' | 'BLOCKED' | 'FAILED'; owner: string; progress: number; is_optional: boolean; note: string }>) =>
+  replaceWorkflowSteps: (requestId: string, steps: Array<{ id: string | null; name: string; status: 'READY' | 'COMPLETED' | 'IN_PROGRESS' | 'WAITING' | 'BLOCKED' | 'FAILED'; owner: string; progress: number; is_optional: boolean; note: string }>) =>
     json<WorkflowStep[]>(fetch(`/api/requests/${requestId}/workflow-steps`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ steps }) })),
   dashboard: (id = 'dashboard-drop-default') => json<DashboardDefinition>(fetch(`/api/dashboards/${id}`)),
   dashboards: (projectId?: string) => json<DashboardSummary[]>(fetch(`/api/dashboards${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''}`)),

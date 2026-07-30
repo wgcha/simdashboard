@@ -7,6 +7,7 @@ from datetime import date, datetime
 from typing import Any
 
 from ..database import rows
+from ..services.request_monitoring import request_monitoring_summary
 
 
 class PortfolioRepository:
@@ -43,19 +44,37 @@ class PortfolioRepository:
             SELECT p.id AS project_id, p.name AS project_name, p.product_name,
                    ar.id AS request_id, ar.title AS request_title, ar.owner,
                    ar.status AS request_status, ar.requested_at, ar.due_at,
-                   lc.id AS load_case_id, lc.name AS load_case_name,
-                   lc.analysis_type, lc.status AS load_case_status,
+                   COALESCE(lc.id, '') AS load_case_id,
+                   COALESCE(lc.name, '하중 경우 미지정') AS load_case_name,
+                   COALESCE(lc.analysis_type, 'UNASSIGNED') AS analysis_type,
+                   COALESCE(lc.status, 'UNASSIGNED') AS load_case_status,
                    lr.id AS run_id, lr.completed_at,
                    coalesce(v.verdict, 'NO_DATA') AS verdict,
                    coalesce(v.result_count, 0) AS result_count
             FROM projects p
             JOIN analysis_requests ar ON ar.project_id = p.id
-            JOIN load_cases lc ON lc.request_id = ar.id
+            LEFT JOIN load_cases lc ON lc.request_id = ar.id
             LEFT JOIN latest_run lr ON lr.load_case_id = lc.id AND lr.rn = 1
             LEFT JOIN verdicts v ON v.analysis_run_id = lr.id
             ORDER BY ar.requested_at DESC, p.name, ar.title, lc.name
             """
         ))
+        monitoring_by_request = {
+            request_id: request_monitoring_summary(self.conn, request_id)
+            for request_id in {item["request_id"] for item in raw}
+        }
+        for item in raw:
+            monitoring = monitoring_by_request[item["request_id"]]
+            item["request_status"] = monitoring["status"]
+            item["request_progress"] = monitoring["progress"]
+            item["current_step"] = monitoring["current_step"]
+            item["current_step_id"] = monitoring["current_step_id"]
+            item["completed_count"] = monitoring["completed_count"]
+            item["total_count"] = monitoring["total_count"]
+            item["work_plan"] = monitoring["work_plan"]
+            item["scenario_name"] = monitoring["work_plan"]["scenario_name"] if monitoring["work_plan"] else None
+            item["latest_demo_run"] = monitoring["latest_demo_run"]
+            item["request_type_assignment"] = monitoring["request_type_assignment"]
         query = (search or "").strip().casefold()
 
         def selected(item: dict[str, Any]) -> bool:
@@ -71,7 +90,8 @@ class PortfolioRepository:
             )
 
         records = [item for item in raw if selected(item)]
-        status_counts = Counter(item["request_status"] for item in records)
+        request_records = {item["request_id"]: item for item in records}
+        status_counts = Counter(item["request_status"] for item in request_records.values())
         type_counts = Counter(item["analysis_type"] for item in records)
         verdict_counts = Counter(item["verdict"] for item in records)
         trend: dict[str, dict[str, int]] = defaultdict(lambda: {"requests": 0, "completed": 0, "failed": 0})
@@ -85,16 +105,18 @@ class PortfolioRepository:
 
         judged = verdict_counts["PASS"] + verdict_counts["FAIL"]
         kpis = {
-            "load_cases": len(records),
-            "requests": len({item["request_id"] for item in records}),
-            "in_progress": sum(1 for item in records if item["request_status"] == "IN_PROGRESS"),
+            "load_cases": sum(1 for item in records if item["load_case_id"]),
+            "requests": len(request_records),
+            "in_progress": sum(1 for item in request_records.values() if item["request_status"] == "IN_PROGRESS"),
             "completed_runs": sum(1 for item in records if item["run_id"] is not None),
             "failed": verdict_counts["FAIL"],
             "pass_rate": round(verdict_counts["PASS"] / judged * 100, 1) if judged else None,
         }
         return {
+            # Keep the public identifier stable for existing dashboard clients.
+            # Requests without a load case are represented by one placeholder row.
             "grain": "LOAD_CASE_LATEST_RUN",
-            "source": "DuckDB · projects/analysis_requests/load_cases/latest analysis_run",
+            "source": "projects/analysis_requests/request_steps/load_cases/latest analysis_run · canonical request monitoring projection",
             "freshness": max((str(item["completed_at"]) for item in records if item["completed_at"]), default=None),
             "kpis": kpis,
             "trend": [{"date": key, **value} for key, value in sorted(trend.items())],

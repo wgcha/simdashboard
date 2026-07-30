@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+  <title id="title">통합 해석 워크벤치 데모 결과</title>
+  <desc id="desc">실제 CAD, HPC, PhysicsAI 실행 없이 표시하는 데모 아티팩트</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#07152b"/>
+      <stop offset="1" stop-color="#173d60"/>
+    </linearGradient>
+    <linearGradient id="part" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2dd4bf"/>
+      <stop offset="0.55" stop-color="#38bdf8"/>
+      <stop offset="1" stop-color="#a78bfa"/>
+    </linearGradient>
+  </defs>
+  <rect width="1280" height="720" rx="28" fill="url(#bg)"/>
+  <g opacity=".16" stroke="#8ed8ff">
+    <path d="M0 120h1280M0 240h1280M0 360h1280M0 480h1280M0 600h1280"/>
+    <path d="M160 0v720M320 0v720M480 0v720M640 0v720M800 0v720M960 0v720M1120 0v720"/>
+  </g>
+  <text x="64" y="82" fill="#e8f6ff" font-family="Segoe UI, sans-serif" font-size="34" font-weight="700">통합 해석 워크벤치 · DEMO ONLY</text>
+  <text x="65" y="120" fill="#9cc6df" font-family="Segoe UI, sans-serif" font-size="19">외부 프로세스, CAD, HPC, PhysicsAI를 실행하지 않은 안전한 미리보기</text>
+  <g transform="translate(92 182)">
+    <path d="M65 295L235 60l345 24 120 138-135 260-342-12z" fill="url(#part)" opacity=".82"/>
+    <path d="M235 60l85 165 260-141M320 225l245 257M320 225L65 295M700 222l-380 3M223 470l97-245" fill="none" stroke="#e6fbff" stroke-width="3" opacity=".65"/>
+    <circle cx="320" cy="225" r="38" fill="#07152b" stroke="#f8fdff" stroke-width="5"/>
+    <circle cx="320" cy="225" r="11" fill="#f8fdff"/>
+  </g>
+  <g transform="translate(850 190)" font-family="Segoe UI, sans-serif">
+    <rect width="350" height="390" rx="22" fill="#07152b" opacity=".76" stroke="#4e86aa"/>
+    <text x="28" y="48" fill="#f0f9ff" font-size="22" font-weight="700">결정적 데모 아티팩트</text>
+    <g fill="#bfe4f8" font-size="18">
+      <text x="28" y="102">● 계약 검증</text>
+      <text x="28" y="151">● 데모 이벤트 생성</text>
+      <text x="28" y="200">● 진행률 100%</text>
+      <text x="28" y="249">● 외부 실행 0건</text>
+    </g>
+    <rect x="28" y="292" width="294" height="54" rx="12" fill="#123e5d"/>
+    <text x="175" y="327" fill="#56f0ce" text-anchor="middle" font-size="18" font-weight="700">SAFE DEMO COMPLETE</text>
+  </g>
+  <text x="64" y="673" fill="#7fb0cc" font-family="Segoe UI, sans-serif" font-size="16">실제 실행 경로가 정의된 뒤 Adapter/Runner가 동일 계약의 별도 실행 모드로 추가됩니다.</text>
+</svg>

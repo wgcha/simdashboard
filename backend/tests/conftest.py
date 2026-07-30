@@ -33,8 +33,17 @@ def seeded_duckdb(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 @pytest.fixture(autouse=True)
 def isolated_database(tmp_path: Path, seeded_duckdb: Path, monkeypatch: pytest.MonkeyPatch):
-    """Give every DuckDB test a disposable copy; PostgreSQL CI keeps its configured DB."""
-    if os.getenv("ANALYSIS_DB_BACKEND", "duckdb").strip().lower() == "postgresql":
+    """Use a disposable DB unless PostgreSQL testing was explicitly enabled.
+
+    A developer may keep PostgreSQL selected in the shell while running the
+    ordinary unit suite. Requiring a second, test-specific opt-in prevents
+    those tests from mutating the configured application database by accident.
+    """
+    postgres_test_enabled = (
+        os.getenv("ANALYSIS_DB_BACKEND", "duckdb").strip().lower() == "postgresql"
+        and os.getenv("ANALYSIS_TEST_POSTGRES", "").strip() == "1"
+    )
+    if postgres_test_enabled:
         yield
         return
     database = tmp_path / "test.duckdb"
