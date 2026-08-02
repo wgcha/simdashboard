@@ -10,9 +10,11 @@ from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
+from app import main as main_module
 from app.database import connect, initialize_database
 from app.main import app
 from app.media_policy import validate_media_metadata
+from app.security import hash_password
 
 
 def test_workspace_layout_versions_are_persisted():
@@ -73,6 +75,308 @@ def test_widget_catalog_and_dashboard_version_flows():
         conn.execute("DELETE FROM dashboards WHERE id = ?", [clone_id])
 
 
+def test_custom_analysis_page_lifecycle_order_clone_restore_and_validation():
+    initialize_database()
+    load_case_id = "loadcase-drop-bottom-001"
+    created_ids: list[str] = []
+    clone_id: str | None = None
+    with TestClient(app) as client:
+        public_pages = client.get("/api/dashboard-pages", params={"load_case_id": load_case_id})
+        assert public_pages.status_code == 200, public_pages.text
+        assert [item["page"]["analysis_key"] for item in public_pages.json()[:2]] == ["open_cell", "chassis_rear"]
+        comparison_page = next(item for item in public_pages.json() if item["page"]["analysis_key"] == "run_comparison")
+        comparison_definition = client.get(f"/api/dashboards/{comparison_page['id']}").json()
+        assert comparison_definition["widgets"][0]["type"] == "run_comparison"
+
+        first = client.post(
+            "/api/admin/dashboard-pages",
+            json={"load_case_id": load_case_id, "name": "사용자 분석 A", "description": "첫 분석"},
+        )
+        assert first.status_code == 201, first.text
+        first_id = first.json()["id"]
+        created_ids.append(first_id)
+        assert first.json()["page"] == {
+            "kind": "analysis_page",
+            "analysis_key": "custom",
+            "status": "draft",
+            "display_order": 100,
+            "is_system": False,
+        }
+        assert first_id not in {item["id"] for item in client.get("/api/dashboard-pages", params={"load_case_id": load_case_id}).json()}
+        assert first_id in {item["id"] for item in client.get("/api/admin/dashboard-pages", params={"load_case_id": load_case_id}).json()}
+        duplicate = client.post(
+            "/api/admin/dashboard-pages",
+            json={"load_case_id": load_case_id, "name": " 사용자 분석 A ", "description": "중복"},
+        )
+        assert duplicate.status_code == 409
+        assert client.patch(f"/api/admin/dashboard-pages/{first_id}", json={"status": "published"}).status_code == 422
+
+        dashboard = client.get(f"/api/dashboards/{first_id}").json()
+        dashboard["widgets"] = [
+            {"id": "kpi-one", "type": "kpi", "title": "최대 응력", "x": 0, "y": 0, "w": 3, "h": 2, "settings": {"variableId": "top_edge_max_stress"}}
+        ]
+        saved = client.put(f"/api/dashboards/{first_id}", json=dashboard)
+        assert saved.status_code == 200, saved.text
+        widget_version = saved.json()["version"]
+
+        published = client.patch(
+            f"/api/admin/dashboard-pages/{first_id}",
+            json={"name": "사용자 분석 A 게시", "description": "게시 설명", "status": "published"},
+        )
+        assert published.status_code == 200, published.text
+        assert published.json()["page"]["status"] == "published"
+        assert first_id in {item["id"] for item in client.get("/api/dashboard-pages", params={"load_case_id": load_case_id}).json()}
+
+        immutable = client.get(f"/api/dashboards/{first_id}").json()
+        immutable["name"] = "일반 저장 이름 변경"
+        assert client.put(f"/api/dashboards/{first_id}", json=immutable).status_code == 409
+
+        changed = client.get(f"/api/dashboards/{first_id}").json()
+        changed["widgets"].append(
+            {"id": "note-one", "type": "note", "title": "의견", "x": 3, "y": 0, "w": 4, "h": 3, "settings": {}}
+        )
+        assert client.put(f"/api/dashboards/{first_id}", json=changed).status_code == 200
+        restored = client.post(f"/api/dashboards/{first_id}/restore/{widget_version}")
+        assert restored.status_code == 200, restored.text
+        restored_dashboard = client.get(f"/api/dashboards/{first_id}").json()
+        assert restored_dashboard["name"] == "사용자 분석 A 게시"
+        assert restored_dashboard["description"] == "게시 설명"
+        assert restored_dashboard["page"]["status"] == "published"
+        assert [item["id"] for item in restored_dashboard["widgets"]] == ["kpi-one"]
+
+        clone = client.post(f"/api/dashboards/{first_id}/clone", json={"name": "페이지 아닌 복제본", "description": "복제"})
+        assert clone.status_code == 201
+        clone_id = clone.json()["id"]
+        assert client.get(f"/api/dashboards/{clone_id}").json().get("page") is None
+        assert clone_id not in {item["id"] for item in client.get("/api/admin/dashboard-pages", params={"load_case_id": load_case_id}).json()}
+
+        second = client.post(
+            "/api/admin/dashboard-pages",
+            json={"load_case_id": load_case_id, "name": "사용자 분석 B", "description": "둘째"},
+        )
+        assert second.status_code == 201
+        second_id = second.json()["id"]
+        created_ids.append(second_id)
+        second_dashboard = client.get(f"/api/dashboards/{second_id}").json()
+        second_dashboard["widgets"] = [{"id": "table-one", "type": "result_table", "title": "결과", "x": 0, "y": 0, "w": 12, "h": 4, "settings": {}}]
+        assert client.put(f"/api/dashboards/{second_id}", json=second_dashboard).status_code == 200
+        assert client.patch(f"/api/admin/dashboard-pages/{second_id}", json={"status": "published"}).status_code == 200
+
+        active_custom_ids = [
+            item["id"]
+            for item in client.get("/api/admin/dashboard-pages", params={"load_case_id": load_case_id}).json()
+            if item["page"]["analysis_key"] == "custom"
+        ]
+        desired_order = list(reversed(active_custom_ids))
+        reordered = client.put("/api/admin/dashboard-pages/order", json={"load_case_id": load_case_id, "page_ids": desired_order})
+        assert reordered.status_code == 200, reordered.text
+        ordered = [
+            item["id"]
+            for item in client.get("/api/admin/dashboard-pages", params={"load_case_id": load_case_id}).json()
+            if item["page"]["analysis_key"] == "custom"
+        ]
+        assert ordered == desired_order
+
+        invalid = client.get(f"/api/dashboards/{second_id}").json()
+        invalid["widgets"] = [{"id": "bad", "type": "unknown-widget", "title": "오류", "x": 0, "y": 0, "w": 3, "h": 2}]
+        assert client.put(f"/api/dashboards/{second_id}", json=invalid).status_code == 422
+        invalid["widgets"] = [
+            {"id": "same", "type": "kpi", "title": "A", "x": 0, "y": 0, "w": 3, "h": 2},
+            {"id": "same", "type": "note", "title": "B", "x": 3, "y": 0, "w": 3, "h": 2},
+        ]
+        assert client.put(f"/api/dashboards/{second_id}", json=invalid).status_code == 422
+        invalid["widgets"] = [{"id": "overflow", "type": "kpi", "title": "오류", "x": 10, "y": 0, "w": 3, "h": 2}]
+        assert client.put(f"/api/dashboards/{second_id}", json=invalid).status_code == 422
+        invalid["widgets"] = [{"id": "workflow", "type": "workflow", "title": "업무 흐름", "x": 0, "y": 0, "w": 12, "h": 5}]
+        assert client.put(f"/api/dashboards/{second_id}", json=invalid).status_code == 422
+
+        assert client.patch("/api/admin/dashboard-pages/dashboard-drop-default", json={"status": "archived"}).status_code == 409
+        assert client.delete("/api/admin/dashboard-pages/dashboard-run-comparison-default", params={"load_case_id": load_case_id}).status_code == 409
+        assert client.delete(f"/api/admin/dashboard-pages/{clone_id}", params={"load_case_id": load_case_id}).status_code == 409
+        assert client.delete(f"/api/admin/dashboard-pages/{second_id}", params={"load_case_id": "loadcase-clamp-left-001"}).status_code == 409
+        assert client.patch(f"/api/admin/dashboard-pages/{first_id}", json={"status": "archived"}).status_code == 200
+        assert first_id not in {item["id"] for item in client.get("/api/dashboard-pages", params={"load_case_id": load_case_id}).json()}
+        archived = client.get("/api/admin/dashboard-pages", params={"load_case_id": load_case_id, "include_archived": True}).json()
+        assert next(item for item in archived if item["id"] == first_id)["page"]["status"] == "archived"
+        deleted = client.delete(f"/api/admin/dashboard-pages/{second_id}", params={"load_case_id": load_case_id})
+        assert deleted.status_code == 200
+        assert deleted.json() == {"status": "deleted", "id": second_id, "load_case_id": load_case_id}
+        with connect() as conn:
+            assert conn.execute("SELECT count(*) FROM dashboard_versions WHERE dashboard_id = ?", [second_id]).fetchone()[0] == 0
+            assert conn.execute("SELECT count(*) FROM dashboards WHERE id = ?", [second_id]).fetchone()[0] == 0
+        reused = client.post(
+            "/api/admin/dashboard-pages",
+            json={"load_case_id": load_case_id, "name": "사용자 분석 B", "description": "삭제 후 이름 재사용"},
+        )
+        assert reused.status_code == 201
+        created_ids.append(reused.json()["id"])
+
+    with connect() as conn:
+        if clone_id:
+            conn.execute("DELETE FROM dashboard_versions WHERE dashboard_id = ?", [clone_id])
+            conn.execute("DELETE FROM dashboards WHERE id = ?", [clone_id])
+        for dashboard_id in created_ids:
+            conn.execute("DELETE FROM dashboard_versions WHERE dashboard_id = ?", [dashboard_id])
+            conn.execute("DELETE FROM dashboards WHERE id = ?", [dashboard_id])
+
+
+def test_analysis_page_role_access_and_editor_published_widget_edit(monkeypatch):
+    initialize_database()
+    suffix = uuid4().hex[:8]
+    password = "correct-horse-battery-staple"
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    users = {
+        role: (f"user-{role}-{suffix}", f"{role}-{suffix}")
+        for role in ("viewer", "editor", "admin")
+    }
+    with connect() as conn:
+        for role, (user_id, username) in users.items():
+            conn.execute(
+                "INSERT INTO users VALUES (?, ?, ?, ?, ?, true, ?, ?)",
+                [user_id, username, hash_password(password), username, role, now, now],
+            )
+    monkeypatch.setenv("AUTH_MODE", "password")
+    monkeypatch.setenv("AUTH_SECRET_KEY", "test-secret-key-that-is-at-least-32-characters")
+    page_id: str | None = None
+    try:
+        with TestClient(app) as client:
+            headers = {}
+            for role, (_, username) in users.items():
+                login = client.post("/api/auth/login", json={"username": username, "password": password})
+                assert login.status_code == 200
+                headers[role] = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+            created = client.post(
+                "/api/admin/dashboard-pages",
+                headers=headers["admin"],
+                json={"load_case_id": "loadcase-drop-bottom-001", "name": f"권한 분석 {suffix}", "description": "권한 검증"},
+            )
+            assert created.status_code == 201
+            page_id = created.json()["id"]
+            assert client.get(f"/api/dashboards/{page_id}", headers=headers["viewer"]).status_code == 403
+            assert client.get(f"/api/dashboards/{page_id}/versions", headers=headers["viewer"]).status_code == 403
+            assert client.get(f"/api/dashboards/{page_id}/versions/1", headers=headers["editor"]).status_code == 403
+            assert client.get(f"/api/dashboards/{page_id}", headers=headers["admin"]).status_code == 200
+            assert client.get(f"/api/dashboards/{page_id}/versions/1", headers=headers["admin"]).status_code == 200
+
+            draft = client.get(f"/api/dashboards/{page_id}", headers=headers["admin"]).json()
+            draft["widgets"] = [{"id": "kpi", "type": "kpi", "title": "KPI", "x": 0, "y": 0, "w": 3, "h": 2, "settings": {}}]
+            assert client.put(f"/api/dashboards/{page_id}", headers=headers["editor"], json=draft).status_code == 403
+            assert client.put(f"/api/dashboards/{page_id}", headers=headers["admin"], json=draft).status_code == 200
+            assert client.patch(f"/api/admin/dashboard-pages/{page_id}", headers=headers["admin"], json={"status": "published"}).status_code == 200
+
+            published = client.get(f"/api/dashboards/{page_id}", headers=headers["editor"]).json()
+            assert client.get(f"/api/dashboards/{page_id}/versions", headers=headers["viewer"]).status_code == 200
+            published["widgets"][0]["title"] = "편집자 수정"
+            assert client.put(f"/api/dashboards/{page_id}", headers=headers["editor"], json=published).status_code == 200
+            assert client.put(f"/api/dashboards/{page_id}", headers=headers["viewer"], json=published).status_code == 403
+            assert client.patch(f"/api/admin/dashboard-pages/{page_id}", headers=headers["editor"], json={"name": "금지"}).status_code == 403
+            assert client.delete(f"/api/admin/dashboard-pages/{page_id}", headers=headers["editor"], params={"load_case_id": "loadcase-drop-bottom-001"}).status_code == 403
+            assert client.delete(f"/api/dashboards/{page_id}/versions/1", headers=headers["editor"]).status_code == 403
+    finally:
+        with connect() as conn:
+            if page_id:
+                conn.execute("DELETE FROM dashboard_versions WHERE dashboard_id = ?", [page_id])
+                conn.execute("DELETE FROM dashboards WHERE id = ?", [page_id])
+            conn.execute("DELETE FROM audit_events WHERE username LIKE ?", [f"%-{suffix}"])
+            conn.execute("DELETE FROM users WHERE username LIKE ?", [f"%-{suffix}"])
+
+
+def test_analysis_page_delete_rolls_back_versions_when_body_delete_fails(monkeypatch):
+    initialize_database()
+    load_case_id = "loadcase-drop-bottom-001"
+    with TestClient(app, raise_server_exceptions=False) as client:
+        created = client.post(
+            "/api/admin/dashboard-pages",
+            json={"load_case_id": load_case_id, "name": "삭제 롤백 검증", "description": "트랜잭션"},
+        )
+        assert created.status_code == 201
+        dashboard_id = created.json()["id"]
+
+        def fail_after_version_delete(conn, target_id: str):
+            conn.execute("DELETE FROM dashboard_versions WHERE dashboard_id = ?", [target_id])
+            raise RuntimeError("forced delete failure")
+
+        monkeypatch.setattr(main_module, "_delete_analysis_page_records", fail_after_version_delete)
+        response = client.delete(f"/api/admin/dashboard-pages/{dashboard_id}", params={"load_case_id": load_case_id})
+        assert response.status_code == 500
+        with connect() as conn:
+            assert conn.execute("SELECT count(*) FROM dashboards WHERE id = ?", [dashboard_id]).fetchone()[0] == 1
+            assert conn.execute("SELECT count(*) FROM dashboard_versions WHERE dashboard_id = ?", [dashboard_id]).fetchone()[0] == 1
+
+
+def test_dashboard_version_detail_logical_delete_protections_and_monotonic_numbering():
+    initialize_database()
+    clone_id: str | None = None
+    try:
+        with TestClient(app) as client:
+            cloned = client.post(
+                "/api/dashboards/dashboard-drop-default/clone",
+                json={"name": "버전 삭제 검증", "description": "논리 삭제와 단조 증가"},
+            )
+            assert cloned.status_code == 201, cloned.text
+            clone_id = cloned.json()["id"]
+
+            initial_versions = client.get(f"/api/dashboards/{clone_id}/versions")
+            assert initial_versions.status_code == 200
+            assert [item["version"] for item in initial_versions.json()] == [1]
+            first_detail = client.get(f"/api/dashboards/{clone_id}/versions/1")
+            assert first_detail.status_code == 200
+            assert first_detail.json()["definition"]["name"] == "버전 삭제 검증"
+            assert first_detail.json()["is_valid"] is True
+
+            for index in range(2, 5):
+                definition = client.get(f"/api/dashboards/{clone_id}").json()
+                definition["description"] = f"저장 버전 {index}"
+                saved = client.put(f"/api/dashboards/{clone_id}", json=definition)
+                assert saved.status_code == 200, saved.text
+                assert saved.json()["version"] == index
+
+            assert client.delete(f"/api/dashboards/{clone_id}/versions/4").status_code == 409
+            deleted = client.delete(f"/api/dashboards/{clone_id}/versions/2")
+            assert deleted.status_code == 200, deleted.text
+            assert deleted.json() == {"status": "invalidated", "dashboard_id": clone_id, "version": 2}
+
+            valid_versions = client.get(f"/api/dashboards/{clone_id}/versions").json()
+            assert [item["version"] for item in valid_versions] == [4, 3, 1]
+            all_versions = client.get(
+                f"/api/dashboards/{clone_id}/versions",
+                params={"include_invalid": True},
+            ).json()
+            assert [item["version"] for item in all_versions] == [4, 3, 2, 1]
+            assert next(item for item in all_versions if item["version"] == 2)["is_valid"] is False
+            assert client.get(f"/api/dashboards/{clone_id}/versions/2").status_code == 404
+            invalid_detail = client.get(
+                f"/api/dashboards/{clone_id}/versions/2",
+                params={"include_invalid": True},
+            )
+            assert invalid_detail.status_code == 200
+            assert invalid_detail.json()["is_valid"] is False
+            assert client.delete(f"/api/dashboards/{clone_id}/versions/2").status_code == 404
+
+            assert client.delete(f"/api/dashboards/{clone_id}/versions/3").status_code == 200
+            assert client.delete(f"/api/dashboards/{clone_id}/versions/1").status_code == 409
+            assert client.delete(f"/api/dashboards/{clone_id}/versions/999").status_code == 404
+            assert client.delete("/api/dashboards/dashboard-drop-default/versions/1").status_code == 409
+
+            current = client.get(f"/api/dashboards/{clone_id}").json()
+            with connect() as conn:
+                conn.execute(
+                    "INSERT INTO dashboard_versions VALUES (?, 9, ?, '삭제 이력', current_timestamp, false)",
+                    [clone_id, json.dumps(current, ensure_ascii=False)],
+                )
+            current["description"] = "삭제 번호를 건너뛴 저장"
+            monotonic = client.put(f"/api/dashboards/{clone_id}", json=current)
+            assert monotonic.status_code == 200, monotonic.text
+            assert monotonic.json()["version"] == 10
+            assert client.get(f"/api/dashboards/{clone_id}").json()["version"] == 10
+    finally:
+        if clone_id:
+            with connect() as conn:
+                conn.execute("DELETE FROM dashboard_versions WHERE dashboard_id = ?", [clone_id])
+                conn.execute("DELETE FROM dashboards WHERE id = ?", [clone_id])
+
+
 def test_drop_video_example_adapter_is_scoped_paginated_and_safe():
     initialize_database()
     with TestClient(app) as client:
@@ -84,6 +388,15 @@ def test_drop_video_example_adapter_is_scoped_paginated_and_safe():
         payload = first_page.json()
         assert payload["source"] == "EXAMPLE_ADAPTER"
         assert payload["demo_only"] is True
+        assert payload["evaluation_source"] == "SYNTHETIC_DEMO"
+        assert payload["contract_version"] == 1
+        assert payload["summary"] == {
+            "total_scenes": 20,
+            "pass_count": 9,
+            "fail_count": 11,
+            "open_cell": {"pass_count": 13, "fail_count": 7, "threshold": 75.0, "unit": "MPa"},
+            "chassis_rear": {"pass_count": 12, "fail_count": 8, "threshold": 5.0, "unit": "mm"},
+        }
         assert payload["pagination"] == {
             "page": 1,
             "page_size": 7,
@@ -95,19 +408,43 @@ def test_drop_video_example_adapter_is_scoped_paginated_and_safe():
         assert len(payload["videos"]) == 7
         assert payload["videos"][0]["scene_name"] == "기준 낙하 해석"
         assert payload["videos"][1]["scene_name"] == "낙하 비교 Scene 01"
+        assert all(item["codec"] == "h264" and item["fast_start"] is True for item in payload["videos"])
         assert payload["videos"][0]["drop_direction"] is None
         assert payload["videos"][0]["drop_condition"] is None
+        assert payload["videos"][0]["evaluation"]["overall_verdict"] == "PASS"
+        for video in payload["videos"]:
+            evaluation = video["evaluation"]
+            assert evaluation["overall_verdict"] == (
+                "PASS" if evaluation["open_cell"]["verdict"] == evaluation["chassis_rear"]["verdict"] == "PASS" else "FAIL"
+            )
+            for subsystem in ("open_cell", "chassis_rear"):
+                metric = evaluation[subsystem]
+                assert max(metric["metrics"].values()) == metric["critical_value"]
 
         last_page = client.get(
             "/api/load-cases/loadcase-drop-bottom-001/drop-videos",
             params={"page": 3, "page_size": 7},
         ).json()
         assert len(last_page["videos"]) == 6
+        assert last_page["summary"] == payload["summary"]
         assert last_page["pagination"]["has_previous"] is True
         assert last_page["pagination"]["has_next"] is False
 
+        boundary = next(item for item in first_page.json()["videos"] if item["sort_order"] == 7)
+        assert boundary["evaluation"]["open_cell"] | {"metrics": {}} == {
+            "critical_value": 75.0,
+            "threshold": 75.0,
+            "unit": "MPa",
+            "verdict": "PASS",
+            "metrics": {},
+        }
+        assert boundary["evaluation"]["chassis_rear"]["critical_value"] == 5.0
+        assert boundary["evaluation"]["chassis_rear"]["verdict"] == "FAIL"
+        assert boundary["evaluation"]["overall_verdict"] == "FAIL"
+
         unrelated = client.get("/api/load-cases/loadcase-clamp-left-001/drop-videos").json()
         assert unrelated["pagination"]["total_items"] == 0
+        assert unrelated["summary"]["total_scenes"] == 0
         assert unrelated["videos"] == []
         assert client.get("/api/load-cases/missing/drop-videos").status_code == 404
         assert client.get("/api/drop-videos/not-allowlisted/content").status_code == 404
@@ -239,6 +576,52 @@ def test_report_layout_crud_and_version_history():
         assert historical.json()["definition"]["accentColor"] == "1898D5"
         assert client.delete(f"/api/report-layouts/{layout_id}").status_code == 200
         assert client.delete("/api/report-layouts/report-layout-standard").status_code == 409
+
+
+def test_report_layout_accepts_more_than_32_content_slides():
+    initialize_database()
+    slides = [
+        {
+            "id": f"content-slide-{index}",
+            "name": f"콘텐츠 {index}",
+            "kind": "custom",
+            "repeat": "none",
+            "elements": [{
+                "id": f"content-element-{index}", "type": "text", "label": f"콘텐츠 {index}",
+                "x": 1, "y": 1, "w": 30, "h": 16, "z": 1,
+                "binding": {"source": "content", "contentId": f"widget:{index}", "key": "body"},
+            }],
+        }
+        for index in range(40)
+    ]
+    payload = {
+        "name": "40장 콘텐츠 보고서",
+        "description": "분석 페이지 위젯 수에 따른 슬라이드 제한 제거 검증",
+        "definition": {
+            "id": "client-placeholder", "name": "40장 콘텐츠 보고서", "description": "슬라이드 제한 검증", "version": 1,
+            "coverVariant": "balanced", "accentColor": "1898D5", "sectionOrder": ["series", "scalar", "media"],
+            "variablePlacements": [], "includeMedia": False,
+            "canvas": {"columns": 32, "rows": 18, "widthInches": 13.333, "heightInches": 7.5},
+            "slides": slides, "templateSource": "native", "templateBindings": {},
+            "sourceScope": {"kind": "analysis_page", "dashboardId": "dashboard-drop-default", "loadCaseId": "loadcase-drop-bottom-001"},
+            "contentMode": "one-per-slide",
+        },
+        "updated_by": "테스트 편집자",
+    }
+    layout_id = None
+    try:
+        with TestClient(app) as client:
+            created = client.post("/api/report-layouts", json=payload)
+            assert created.status_code == 201, created.text
+            layout_id = created.json()["id"]
+            assert len(created.json()["definition"]["slides"]) == 40
+            assert client.delete(f"/api/report-layouts/{layout_id}").status_code == 200
+            layout_id = None
+    finally:
+        if layout_id:
+            with connect() as conn:
+                conn.execute("DELETE FROM report_layout_versions WHERE layout_id = ?", [layout_id])
+                conn.execute("DELETE FROM report_layouts WHERE id = ?", [layout_id])
 
 
 def _minimal_tagged_pptx() -> bytes:

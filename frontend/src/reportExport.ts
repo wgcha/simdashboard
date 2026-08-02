@@ -1,5 +1,5 @@
 import pptxgen from 'pptxgenjs'
-import type { Overview, ReportElementDefinition, ReportLayoutDefinition, ReportSlideDefinition, ReportTemplateAsset, ReportVariablePresentation } from './types'
+import type { DashboardDefinition, Overview, ReportContentItem, ReportElementDefinition, ReportLayoutDefinition, ReportSlideDefinition, ReportSource, ReportTemplateAsset, ReportVariablePresentation, ReviewItem, RunComparison, RunTrust } from './types'
 
 export type ReportExportOptions = {
   author: string
@@ -128,6 +128,127 @@ export function normalizeReportLayout(layout: ReportLayoutDefinition): ReportLay
   }
 }
 
+type ContentSnapshot = {
+  text?: string
+  tableHeaders?: string[]
+  tableRows?: string[][]
+  chartSeries?: Array<{ name: string; labels: string[]; values: number[] }>
+  media?: Overview['media'][number]
+}
+
+const widgetPresentation: Record<string, ReportContentItem['defaultPresentation']> = {
+  edge_bar: 'chart', time_series: 'chart', scatter: 'chart', gauge: 'chart', chassis_bar: 'chart',
+  result_table: 'table', chassis_table: 'table', video_grid: 'table',
+  contour: 'image', video: 'image', model3d: 'image',
+  note: 'text',
+}
+
+function valueText(value: number | null | undefined, unit?: string | null) {
+  return value == null ? '-' : `${Number(value).toFixed(Math.abs(Number(value)) >= 100 ? 0 : 2)}${unit ? ` ${unit}` : ''}`
+}
+
+export function createDashboardReportContent(definition: DashboardDefinition, overview: Overview): ReportContentItem[] {
+  return [...definition.widgets]
+    .filter((widget) => widget.settings?.includeInReport !== false && widget.type !== 'run_comparison')
+    .sort((left, right) => left.y - right.y || left.x - right.x || left.id.localeCompare(right.id))
+    .map((widget) => {
+      const variableKey = typeof widget.settings?.variableId === 'string' ? widget.settings.variableId : undefined
+      const scalars = overview.scalar_results.filter((item) => !variableKey || item.variable_key === variableKey)
+      const series = overview.time_series.filter((item) => !variableKey || item.variable_key === variableKey)
+      const media = overview.media.find((item) => !variableKey || item.metadata?.variable_key === variableKey)
+      const snapshot: ContentSnapshot = {
+        text: widget.type === 'note'
+          ? overview.notes.map((item) => `${item.author}: ${item.body}`).join('\n') || '등록된 의견이 없습니다.'
+          : scalars.slice(0, 8).map((item) => `${item.display_name}: ${valueText(item.value_double, item.unit)} · ${item.verdict}`).join('\n') || `${widget.title}\n현재 선택한 하중 경우의 결과`,
+        tableHeaders: ['항목', '결과', '기준', '판정'],
+        tableRows: scalars.slice(0, 20).map((item) => [item.display_name, valueText(item.value_double, item.unit), valueText(item.threshold_double, item.unit), item.verdict]),
+        chartSeries: series.length ? [{
+          name: series[0].display_name,
+          labels: series.map((item) => String(item.time_value)),
+          values: series.map((item) => item.value),
+        }] : scalars.filter((item) => item.value_double != null).length ? [{
+          name: widget.title,
+          labels: scalars.filter((item) => item.value_double != null).map((item) => item.display_name),
+          values: scalars.filter((item) => item.value_double != null).map((item) => Number(item.value_double)),
+        }] : undefined,
+        media,
+      }
+      return {
+        contentId: `widget:${definition.id}:${widget.id}`,
+        kind: 'dashboard_widget' as const,
+        sourceKey: widget.id,
+        title: widget.title,
+        defaultPresentation: widgetPresentation[widget.type] ?? 'card',
+        data: snapshot,
+      }
+    })
+}
+
+export function createRunComparisonReportContent(comparison: RunComparison, trust: RunTrust, reviews: ReviewItem[]): ReportContentItem[] {
+  const runKey = `${comparison.baseline_run.id}:${comparison.target_run.id}`
+  const summary: ReportContentItem = {
+    contentId: `compare:${runKey}:summary`, kind: 'comparison_summary', sourceKey: runKey,
+    title: `Run ${comparison.baseline_run.run_no} ↔ Run ${comparison.target_run.run_no} 비교 요약`, defaultPresentation: 'card',
+    data: { text: [`회귀 ${comparison.summary.regression}`, `개선 ${comparison.summary.improved}`, `동일 ${comparison.summary.unchanged}`, `비교 가능 ${comparison.summary.comparable}`].join('\n') } satisfies ContentSnapshot,
+  }
+  const variables: ReportContentItem[] = comparison.scalar_comparison.map((item) => ({
+    contentId: `compare:${runKey}:scalar:${item.variable_key}`, kind: 'comparison_variable', sourceKey: item.variable_key,
+    title: `${item.display_name} 비교`, defaultPresentation: 'table',
+    data: {
+      text: `${item.display_name}: ${item.change}`,
+      tableHeaders: ['항목', '기준 Run', '대상 Run', '차이', '변화'],
+      tableRows: [[item.display_name, valueText(item.baseline_value, item.unit), valueText(item.target_value, item.unit), valueText(item.delta, item.unit), item.change]],
+    } satisfies ContentSnapshot,
+  }))
+  const comparablePoints = comparison.time_series?.points.filter((point) => point.baseline_value != null && point.target_value != null) ?? []
+  const missingPointCount = (comparison.time_series?.points.length ?? 0) - comparablePoints.length
+  const series: ReportContentItem[] = comparison.time_series ? [{
+    contentId: `compare:${runKey}:series:${comparison.time_series.variable_key}`, kind: 'comparison_series', sourceKey: comparison.time_series.variable_key,
+    title: `${comparison.time_series.display_name} 시간 이력 비교`, defaultPresentation: comparablePoints.length ? 'chart' : 'text',
+    data: {
+      chartSeries: comparablePoints.length ? [
+        { name: `기준 Run ${comparison.baseline_run.run_no}`, labels: comparablePoints.map((point) => String(point.time_value)), values: comparablePoints.map((point) => Number(point.baseline_value)) },
+        { name: `대상 Run ${comparison.target_run.run_no}`, labels: comparablePoints.map((point) => String(point.time_value)), values: comparablePoints.map((point) => Number(point.target_value)) },
+      ] : undefined,
+      text: `${comparablePoints.length}개 공통 시점 · ${comparison.time_series.unit}${missingPointCount ? `\n결측 ${missingPointCount}개 시점은 차트에서 제외` : ''}`,
+    } satisfies ContentSnapshot,
+  }] : []
+  const trustItem: ReportContentItem = {
+    contentId: `compare:${runKey}:trust`, kind: 'trust_summary', sourceKey: trust.run.id, title: `대상 Run 데이터 신뢰도 · ${trust.trust_status}`, defaultPresentation: 'table',
+    data: {
+      text: trust.checks.map((check) => `${check.status} · ${check.label}: ${check.detail}`).join('\n'),
+      tableHeaders: ['상태', '검사', '상세'], tableRows: trust.checks.map((check) => [check.status, check.label, check.detail]),
+    } satisfies ContentSnapshot,
+  }
+  const reviewItems: ReportContentItem[] = reviews.map((review) => ({
+    contentId: `compare:${runKey}:review:${review.id}`, kind: 'review_item', sourceKey: review.id, title: review.title, defaultPresentation: 'text',
+    data: { text: `${review.review_status} · ${review.created_by}\n${review.body}${review.variable_key ? `\n변수: ${review.variable_key}` : ''}` } satisfies ContentSnapshot,
+  }))
+  return [summary, ...variables, ...series, trustItem, ...reviewItems]
+}
+
+export function createContentReportSlides(contents: ReportContentItem[], coverVariant: ReportLayoutDefinition['coverVariant'] = 'balanced'): ReportSlideDefinition[] {
+  const cover = createDefaultReportSlides(coverVariant)[0]
+  return [cover, ...contents.map((content, index) => {
+    const elementType: ReportElementDefinition['type'] = content.defaultPresentation === 'card' ? 'scalar-card' : content.defaultPresentation
+    return {
+      id: `slide-content-${index + 1}-${content.contentId.replace(/[^a-zA-Z0-9_-]/g, '-')}`,
+      name: content.title, kind: 'custom' as const, repeat: 'none' as const,
+      elements: [
+        { ...reportElement(`content-title-${index}`, 'title', content.title, 1, 1, 30, 2, 'content'), binding: { source: 'content' as const, contentId: content.contentId, key: 'title' } },
+        { ...reportElement(`content-body-${index}`, elementType, content.title, 1, 4, 30, 12, 'content'), binding: { source: 'content' as const, contentId: content.contentId, key: 'body' } },
+      ],
+    }
+  })]
+}
+
+export function prepareContentReportLayout(layout: ReportLayoutDefinition, source: ReportSource, contents: ReportContentItem[], forceDefault = false): ReportLayoutDefinition {
+  const sameSource = JSON.stringify(layout.sourceScope) === JSON.stringify(source)
+  if (!forceDefault && !layout.contentMode) return layout
+  if (!forceDefault && layout.contentMode && sameSource) return { ...layout, sourceScope: source }
+  return { ...layout, sourceScope: source, contentMode: 'one-per-slide', slides: createContentReportSlides(contents, layout.coverVariant) }
+}
+
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
 }
@@ -220,6 +341,30 @@ export function filterOverviewForReport(overview: Overview, scope: ReportScope):
     time_series: overview.time_series.filter((item) => includeVariable(item.variable_key)),
     curves: overview.curves.filter((item) => includeVariable(item.variable_key)),
     result_locations: overview.result_locations.filter((item) => includeVariable(item.variable_key)),
+    media: overview.media.filter(includeMedia),
+  }
+}
+
+export function filterOverviewForVariables(overview: Overview, variableKeys: string[], pageTitle: string): Overview {
+  const selected = new Set(variableKeys)
+  const scalarResults = overview.scalar_results.filter((item) => selected.has(item.variable_key))
+  const overallVerdict = scalarResults.some((item) => item.verdict === 'FAIL')
+    ? 'FAIL'
+    : scalarResults.length
+      ? 'PASS'
+      : 'NO_DATA'
+  const includeMedia = (media: Overview['media'][number]) => {
+    const metadataKey = typeof media.metadata?.variable_key === 'string' ? media.metadata.variable_key : ''
+    return metadataKey ? selected.has(metadataKey) : true
+  }
+  return {
+    ...overview,
+    load_case: { ...overview.load_case, request_title: `${overview.load_case.project_name} ${pageTitle}` },
+    overall_verdict: overallVerdict,
+    scalar_results: scalarResults,
+    time_series: overview.time_series.filter((item) => selected.has(item.variable_key)),
+    curves: overview.curves.filter((item) => selected.has(item.variable_key)),
+    result_locations: overview.result_locations.filter((item) => selected.has(item.variable_key)),
     media: overview.media.filter(includeMedia),
   }
 }
@@ -529,6 +674,12 @@ type SlideRenderContext = {
   page: number
   seriesKey?: string
   media?: Overview['media'][number]
+  contentsById?: Map<string, ReportContentItem>
+}
+
+function contentForElement(element: ReportElementDefinition, context: SlideRenderContext) {
+  const contentId = element.binding?.source === 'content' ? element.binding.contentId : undefined
+  return contentId ? context.contentsById?.get(contentId) : undefined
 }
 
 function gridRect(element: ReportElementDefinition) {
@@ -570,6 +721,11 @@ function selectedScalars(overview: Overview, layout: ReportLayoutDefinition, var
 function elementText(element: ReportElementDefinition, overview: Overview, options: ReportExportOptions, context: SlideRenderContext) {
   const source = element.binding?.source
   const key = element.binding?.key
+  const content = contentForElement(element, context)
+  if (source === 'content' && content) {
+    if (key === 'title') return content.title
+    return (content.data as ContentSnapshot | undefined)?.text ?? content.title
+  }
   if (source === 'field') return fieldValue(key, overview, options)
   if (source === 'static') return element.text ?? element.label
   if (source === 'variable') {
@@ -642,6 +798,7 @@ async function renderTemplateSlide(pptx: pptxgen, slideDefinition: ReportSlideDe
   for (const element of [...slideDefinition.elements].sort((a, b) => a.z - b.z)) {
     const { x, y, w, h } = gridRect(element)
     const style = element.style ?? {}
+    const content = contentForElement(element, context)
     const text = elementText(element, overview, options, context)
     if (element.type === 'title') {
       slide.addText(text, { x, y, w, h, fontFace: 'Noto Sans KR', fontSize: style.fontSize ?? 20, bold: true, color: pptColor(style.color, COLORS.ink), fill: style.fill ? { color: pptColor(style.fill, COLORS.white) } : undefined, align: style.align ?? 'left', margin: 0, fit: 'shrink' })
@@ -665,6 +822,14 @@ async function renderTemplateSlide(pptx: pptxgen, slideDefinition: ReportSlideDe
       continue
     }
     if (element.type === 'chart') {
+      const contentSeries = element.binding?.source === 'content' ? (content?.data as ContentSnapshot | undefined)?.chartSeries : undefined
+      if (contentSeries?.length) {
+        slide.addChart(pptx.ChartType.line, contentSeries, {
+          x, y, w, h, showLegend: contentSeries.length > 1, showTitle: false, lineSize: 2.2,
+          chartColors: [layout.accentColor, COLORS.orange, COLORS.cyan], catAxisLabelFontSize: 8, valAxisLabelFontSize: 8,
+        })
+        continue
+      }
       const variableKey = element.binding?.variableKey ?? (element.binding?.source === 'variable' ? element.binding.key : undefined) ?? context.seriesKey
       const seriesPoints = downsample(overview.time_series.filter((item) => item.variable_key === variableKey).sort((a, b) => a.time_value - b.time_value))
       if (seriesPoints.length) {
@@ -681,6 +846,12 @@ async function renderTemplateSlide(pptx: pptxgen, slideDefinition: ReportSlideDe
       continue
     }
     if (element.type === 'table') {
+      const contentData = element.binding?.source === 'content' ? content?.data as ContentSnapshot | undefined : undefined
+      if (contentData?.tableRows?.length) {
+        const headers = contentData.tableHeaders ?? contentData.tableRows[0].map((_, index) => `열 ${index + 1}`)
+        slide.addTable([[...headers.map((text) => ({ text }))], ...contentData.tableRows.map((row) => row.map((text) => ({ text })))], { x, y, w, h, border: { type: 'solid', color: 'D6E4EC', pt: 0.6 }, fill: { color: COLORS.white }, color: COLORS.ink, fontFace: 'Noto Sans KR', fontSize: style.fontSize ?? 7.5, margin: 0.05, rowH: 0.38 })
+        continue
+      }
       const variableKey = element.binding?.variableKey ?? (element.binding?.source === 'variable' ? element.binding.key : undefined)
       const scalars = selectedScalars(overview, layout, variableKey)
       const rows = scalars.map((item) => [item.display_name, isFiniteNumber(item.value_double) ? `${formatNumber(item.value_double)} ${item.unit}` : '', isFiniteNumber(item.threshold_double) ? `${formatNumber(item.threshold_double)} ${item.unit}` : '', isFiniteNumber(item.value_double) ? item.verdict : ''].map((text) => ({ text })))
@@ -689,7 +860,7 @@ async function renderTemplateSlide(pptx: pptxgen, slideDefinition: ReportSlideDe
       continue
     }
     if (element.type === 'image') {
-      const media = context.media ?? overview.media.find((item) => item.metadata?.variable_key === element.binding?.variableKey) ?? overview.media[0]
+      const media = (element.binding?.source === 'content' ? (content?.data as ContentSnapshot | undefined)?.media : undefined) ?? context.media ?? overview.media.find((item) => item.metadata?.variable_key === element.binding?.variableKey) ?? overview.media[0]
       if (media && (media.asset_type === 'IMAGE' || media.mime_type.startsWith('image/')) && media.asset_url) {
         try {
           const response = await fetch(media.asset_url)
@@ -701,7 +872,7 @@ async function renderTemplateSlide(pptx: pptxgen, slideDefinition: ReportSlideDe
   }
 }
 
-export async function exportAnalysisReport(overview: Overview, options: ReportExportOptions, selectedLayout: ReportLayoutDefinition = DEFAULT_REPORT_LAYOUT) {
+export async function exportAnalysisReport(overview: Overview, options: ReportExportOptions, selectedLayout: ReportLayoutDefinition = DEFAULT_REPORT_LAYOUT, contents: ReportContentItem[] = []) {
   validateReportOptions(options)
   const layout: ReportLayoutDefinition = normalizeReportLayout({
     ...selectedLayout,
@@ -719,18 +890,19 @@ export async function exportAnalysisReport(overview: Overview, options: ReportEx
   }
 
   let page = 1
+  const contentsById = new Map(contents.map((item) => [item.contentId, item]))
   for (const slide of layout.slides ?? []) {
     if (slide.kind === 'cover' || slide.kind === 'custom') {
-      await renderTemplateSlide(pptx, slide, overview, options, layout, { page: page++ })
+      await renderTemplateSlide(pptx, slide, overview, options, layout, { page: page++, contentsById })
     } else if (slide.kind === 'series') {
       const keys = [...new Set(overview.time_series.map((item) => item.variable_key))]
         .filter((key) => ['chart', 'both'].includes(presentationFor(layout, key) ?? ''))
         .sort((a, b) => variableOrder(layout, a) - variableOrder(layout, b))
-      for (const seriesKey of keys) await renderTemplateSlide(pptx, slide, overview, options, layout, { page: page++, seriesKey })
+      for (const seriesKey of keys) await renderTemplateSlide(pptx, slide, overview, options, layout, { page: page++, seriesKey, contentsById })
     } else if (slide.kind === 'scalar' && selectedScalars(overview, layout).length) {
-      await renderTemplateSlide(pptx, slide, overview, options, layout, { page: page++ })
+      await renderTemplateSlide(pptx, slide, overview, options, layout, { page: page++, contentsById })
     } else if (slide.kind === 'media' && layout.includeMedia) {
-      for (const media of overview.media) await renderTemplateSlide(pptx, slide, overview, options, layout, { page: page++, media })
+      for (const media of overview.media) await renderTemplateSlide(pptx, slide, overview, options, layout, { page: page++, media, contentsById })
     }
   }
 

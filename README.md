@@ -2,21 +2,31 @@
 
 ## 다른 Windows PC에서 최초 설치
 
-GitHub에서 전체 저장소를 받은 뒤 프로젝트 최상위 폴더의
-`setup-windows.bat`을 실행한다. 배치파일은 다음 작업을 순서대로 수행한다.
+대상 PC에는 Python 3.12, Node.js 20 이상, 실행 중인 PostgreSQL 서비스가 필요하다.
 
-1. Python 3.12 확인
-2. `.venv` 가상환경 생성
-3. 백엔드 요구 패키지 설치
-4. Node.js 20 이상 확인
-5. `pnpm-lock.yaml` 기준 프런트엔드 패키지 설치
-6. 프런트엔드 프로덕션 빌드 검증
-
-설치 완료 후 다음 명령으로 서비스를 시작한다.
+1. GitHub에서 저장소 전체를 다운로드한다.
+2. VS Code에서 저장소의 최상위 폴더를 연다.
+3. VS Code 터미널에서 `setup.bat`을 실행한다.
+4. 회사 HTTP/HTTPS 프록시와 예외 주소를 입력한다. 프록시가 없으면 Enter를 누른다.
+5. PostgreSQL 처리 방식으로 새 DB 초기화(`Fresh`), 전송 번들 이관(`Transfer`), 기존 DB 유지(`Keep`) 중 하나를 선택한다.
+6. 설치와 연결 검증이 끝나면 `start-postgresql.bat`을 실행한다.
 
 ```powershell
-.\start.bat
+.\setup.bat
+.\start-postgresql.bat
 ```
+
+`setup.bat`은 Python/프런트엔드 의존성 설치와 프로덕션 빌드 검증도 함께 수행한다. 입력한 프록시는 Git에서 제외된 `.setup-proxy.env`에 저장되며 현재 Windows 사용자만 읽고 쓸 수 있다. 인증정보는 설치 출력에서 마스킹되고 TLS 인증서 검증은 끄지 않는다.
+
+자동 설치 시스템에서는 모드와 입력을 인자로 고정할 수 있다. 관리자 비밀번호가 포함된 URL은 명령행 대신 현재 프로세스의 `POSTGRES_ADMIN_URL` 환경변수로 전달한다.
+
+```powershell
+$env:POSTGRES_ADMIN_URL = 'postgresql://postgres:비밀번호@127.0.0.1:5432/postgres'
+.\setup.bat -NonInteractive -Mode Fresh -SeedMode Empty -ProxyUrl http://proxy.company.local:8080
+Remove-Item Env:POSTGRES_ADMIN_URL
+```
+
+기존 `setup-windows.bat`, `setup-postgresql.bat`, 개별 내보내기·가져오기 명령도 하위 호환을 위해 유지한다. PC 간 이관과 복구 절차는 [`docs/postgresql-pc-transfer-guide.md`](docs/postgresql-pc-transfer-guide.md)를 참고한다.
 
 Radioss 해석 결과를 파일 기반 DuckDB에 저장하고, 프로젝트와 의뢰별로 탐색·판정·편집하는 한국어 웹 대시보드 MVP입니다. 데이터 접근 계층은 UI와 분리되어 있으며 PostgreSQL 이전을 고려한 구조입니다.
 

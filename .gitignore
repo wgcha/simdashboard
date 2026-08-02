@@ -17,6 +17,9 @@ frontend/*.tsbuildinfo
 .env
 .postgres-owner.env
 .postgres-owner.env.tmp
+.setup-proxy.env
+.setup-proxy.env.*.tmp
+.setup-recovery-required.json
 transfer-bundles/
 backend/.transfer-assets-*/
 *.log

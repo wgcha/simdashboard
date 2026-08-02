@@ -6,8 +6,11 @@ from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
+import duckdb
 import pytest
 
+from app import database as app_database
+from app.repositories import workbench
 from scripts import upgrade_postgres_schema as startup
 from scripts.postgres_cli import parse_target
 
@@ -31,6 +34,68 @@ class _CatalogConnection:
             return _FakeResult((None if table == self.missing else f"public.{table}",))
         privileges = (True, True, False, True) if table == self.denied else (True, True, True, True)
         return _FakeResult(privileges)
+
+
+class _PostgresStartupConnection:
+    def execute(self, statement: str):
+        if "to_regclass('public.workspace_layouts')" in statement:
+            return _FakeResult(("public.workspace_layouts",))
+        if "to_regclass('public.task_type_versions')" in statement:
+            return _FakeResult(("public.task_type_versions",))
+        raise AssertionError(f"unexpected startup query: {statement}")
+
+
+def test_postgres_initialization_backfills_system_analysis_pages(monkeypatch: pytest.MonkeyPatch):
+    connection = _PostgresStartupConnection()
+    calls: list[tuple[str, object]] = []
+
+    @contextmanager
+    def fake_connect():
+        yield connection
+
+    monkeypatch.setattr(app_database, "database_settings", lambda: SimpleNamespace(backend="postgresql"))
+    monkeypatch.setattr(app_database, "connect", fake_connect)
+    monkeypatch.setattr(
+        workbench,
+        "ensure_default_workbench_catalog",
+        lambda conn: calls.append(("workbench", conn)),
+    )
+    monkeypatch.setattr(
+        app_database,
+        "ensure_system_analysis_page_metadata",
+        lambda conn: calls.append(("analysis_pages", conn)),
+    )
+
+    app_database.initialize_database()
+
+    assert calls == [("workbench", connection), ("analysis_pages", connection)]
+
+
+def test_system_analysis_page_backfill_creates_missing_run_comparison_idempotently():
+    connection = duckdb.connect(":memory:")
+    connection.execute("CREATE TABLE load_cases (id VARCHAR PRIMARY KEY)")
+    connection.execute(
+        "CREATE TABLE dashboards (id VARCHAR PRIMARY KEY, project_id VARCHAR, request_id VARCHAR, load_case_id VARCHAR, name VARCHAR, description VARCHAR, version INTEGER, definition_json JSON, updated_at TIMESTAMP)"
+    )
+    connection.execute(
+        "CREATE TABLE dashboard_versions (dashboard_id VARCHAR, version INTEGER, definition_json JSON, created_by VARCHAR, created_at TIMESTAMP, is_valid BOOLEAN, PRIMARY KEY (dashboard_id, version))"
+    )
+    connection.execute("INSERT INTO load_cases VALUES ('loadcase-drop-bottom-001')")
+
+    app_database.ensure_system_analysis_page_metadata(connection)
+    app_database.ensure_system_analysis_page_metadata(connection)
+
+    stored = connection.execute(
+        "SELECT version, definition_json FROM dashboards WHERE id = 'dashboard-run-comparison-default'"
+    ).fetchone()
+    assert stored is not None
+    definition = app_database.json_value(stored[1])
+    assert stored[0] == 1
+    assert definition["page"]["analysis_key"] == "run_comparison"
+    assert definition["widgets"][0]["type"] == "run_comparison"
+    assert connection.execute(
+        "SELECT COUNT(*) FROM dashboard_versions WHERE dashboard_id = 'dashboard-run-comparison-default'"
+    ).fetchone()[0] == 1
 
 
 def test_already_head_never_reads_owner_credentials(monkeypatch: pytest.MonkeyPatch):
@@ -183,6 +248,8 @@ def test_start_scripts_use_pending_migration_preflight_and_readiness_cleanup():
     root = Path(__file__).resolve().parents[2]
     postgres_start = (root / "start-postgresql.ps1").read_text(encoding="utf-8")
     general_start = (root / "start.ps1").read_text(encoding="utf-8")
+    stop_script = (root / "stop.ps1").read_text(encoding="utf-8")
+    postgres_batch = (root / "start-postgresql.bat").read_text(encoding="utf-8")
     migration_source = (root / "backend" / "scripts" / "upgrade_postgres_schema.py").read_text(encoding="utf-8")
 
     assert "& $StartScript" in postgres_start
@@ -195,9 +262,18 @@ def test_start_scripts_use_pending_migration_preflight_and_readiness_cleanup():
     assert "Test-LocalPortInUse -Port 8000" in general_start
     assert "Test-LocalPortInUse -Port 5173" in general_start
     assert "Get-NetTCPConnection" not in general_start
+    assert "Get-NetTCPConnection" in stop_script
+    assert "netstat.exe" in stop_script
+    assert "Test-IsAnalysisCanvasListener" in stop_script
+    assert "Test-IsAnalysisCanvasEndpoint" in stop_script
+    assert "Analysis Canvas API" in stop_script
+    assert "unverified listener is never terminated" in stop_script
+    assert "could not be verified as an Analysis Canvas server" in stop_script
+    assert "occupied" in postgres_batch and "port" in postgres_batch
     assert general_start.index("catch {") < general_start.index("Backend health database mismatch.")
     assert "process exited during readiness verification" in general_start
     assert "ANALYSIS_DATABASE_PREFLIGHT_COMPLETE" not in general_start
+    assert ".setup-recovery-required.json" in general_start
     assert "pg_advisory_lock" in migration_source
     assert "bootstrap_postgres" not in migration_source
     assert "setup_local_postgres" not in migration_source

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import os
 import sys
 from pathlib import Path
@@ -11,12 +12,13 @@ from app.database import initialize_database, seed_current_database
 from app.database_connection import connect
 
 
-def main() -> None:
+def main(mode: str = "demo") -> None:
     settings = database_settings()
     if settings.backend != "postgresql":
         raise RuntimeError("PostgreSQL seed는 ANALYSIS_DB_BACKEND=postgresql에서만 실행합니다.")
     initialize_database()
-    seed_current_database()
+    if mode == "demo":
+        seed_current_database()
     with connect() as conn:
         counts = {
             "projects": conn.execute("SELECT count(*) FROM projects").fetchone()[0],
@@ -24,9 +26,12 @@ def main() -> None:
             "load_cases": conn.execute("SELECT count(*) FROM load_cases").fetchone()[0],
             "runs": conn.execute("SELECT count(*) FROM analysis_runs").fetchone()[0],
         }
-    print("PostgreSQL seed 완료:", ", ".join(f"{key}={value}" for key, value in counts.items()))
+    print(f"PostgreSQL {mode} 초기화 완료:", ", ".join(f"{key}={value}" for key, value in counts.items()))
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Initialize PostgreSQL system content with optional demo data.")
+    parser.add_argument("--mode", choices=("empty", "demo"), default="demo")
+    arguments = parser.parse_args()
     os.environ.setdefault("ANALYSIS_DB_BACKEND", "postgresql")
-    main()
+    main(arguments.mode)

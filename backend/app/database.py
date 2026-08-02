@@ -25,6 +25,7 @@ def initialize_database() -> None:
             from .repositories.workbench import ensure_default_workbench_catalog
 
             ensure_default_workbench_catalog(conn)
+            ensure_system_analysis_page_metadata(conn)
         return
     with connect() as conn:
         conn.execute(
@@ -468,6 +469,9 @@ def initialize_database() -> None:
                 sequence_no INTEGER NOT NULL,
                 display_name VARCHAR NOT NULL,
                 status VARCHAR NOT NULL,
+                progress INTEGER NOT NULL DEFAULT 0,
+                progress_updated_by VARCHAR,
+                progress_updated_at TIMESTAMP,
                 owner VARCHAR NOT NULL,
                 started_by VARCHAR,
                 started_at TIMESTAMP,
@@ -525,10 +529,42 @@ def initialize_database() -> None:
                 UNIQUE (task_run_id, event_index),
                 CHECK (progress BETWEEN 0 AND 100)
             );
+
+            CREATE TABLE IF NOT EXISTS batch_path_profiles (
+                id VARCHAR PRIMARY KEY,
+                name VARCHAR NOT NULL,
+                solver_path VARCHAR NOT NULL,
+                working_directory VARCHAR NOT NULL,
+                arguments_template VARCHAR NOT NULL,
+                environment_json JSON NOT NULL,
+                task_type_ids_json JSON NOT NULL,
+                is_active BOOLEAN NOT NULL DEFAULT true,
+                updated_by VARCHAR NOT NULL,
+                created_at TIMESTAMP NOT NULL,
+                updated_at TIMESTAMP NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS batch_dispatches (
+                id VARCHAR PRIMARY KEY,
+                work_item_id VARCHAR NOT NULL,
+                workflow_run_id VARCHAR NOT NULL UNIQUE,
+                batch_profile_id VARCHAR NOT NULL,
+                profile_snapshot_json JSON NOT NULL,
+                command_preview VARCHAR NOT NULL,
+                status VARCHAR NOT NULL,
+                created_by VARCHAR NOT NULL,
+                created_at TIMESTAMP NOT NULL,
+                CHECK (status = 'RECORDED_DEMO')
+            );
             """
         )
 
         conn.execute("ALTER TABLE request_steps ADD COLUMN IF NOT EXISTS is_optional BOOLEAN DEFAULT false")
+        conn.execute("ALTER TABLE request_work_items ADD COLUMN IF NOT EXISTS progress INTEGER DEFAULT 0")
+        conn.execute("ALTER TABLE request_work_items ADD COLUMN IF NOT EXISTS progress_updated_by VARCHAR")
+        conn.execute("ALTER TABLE request_work_items ADD COLUMN IF NOT EXISTS progress_updated_at TIMESTAMP")
+        conn.execute("ALTER TABLE batch_path_profiles ADD COLUMN IF NOT EXISTS task_type_ids_json JSON DEFAULT '[]'")
+        conn.execute("UPDATE request_work_items SET progress=CASE WHEN status='COMPLETED' THEN 100 ELSE COALESCE(progress, 0) END")
 
         ensure_default_content(conn)
 
@@ -568,6 +604,13 @@ def ensure_default_content(conn: Any) -> None:
         "id": "dashboard-chassis-default",
         "name": "Chassis Rear 영구변형 기본 분석",
         "description": "엣지 이격과 모서리 영구변형 평가",
+        "page": {
+            "kind": "analysis_page",
+            "analysis_key": "chassis_rear",
+            "status": "published",
+            "display_order": 20,
+            "is_system": True,
+        },
         "widgets": [
             {"id": "chassis-summary", "type": "chassis_summary", "title": "영구변형 판정 요약", "x": 0, "y": 0, "w": 12, "h": 2, "settings": {}},
             {"id": "chassis-map", "type": "chassis_diagram", "title": "Chassis Rear 변형 위치", "x": 0, "y": 2, "w": 7, "h": 5, "settings": {}},
@@ -580,6 +623,100 @@ def ensure_default_content(conn: Any) -> None:
     now = _iso(datetime.now(timezone.utc))
     conn.execute("INSERT OR IGNORE INTO dashboards VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", [chassis_layout["id"], "project-tv-001", "request-drop-001", "loadcase-drop-bottom-001", chassis_layout["name"], chassis_layout["description"], 1, encoded_chassis, now])
     conn.execute("INSERT OR IGNORE INTO dashboard_versions VALUES (?, ?, ?, ?, ?, ?)", [chassis_layout["id"], 1, encoded_chassis, "system", now, True])
+    ensure_system_run_comparison_dashboard(conn)
+    ensure_system_analysis_page_metadata(conn)
+
+
+def _run_comparison_dashboard_definition() -> dict[str, Any]:
+    return {
+        "id": "dashboard-run-comparison-default",
+        "name": "Run 비교·검토",
+        "description": "기준 Run과 대상 Run의 결과 차이, 신뢰도와 검토 의견",
+        "page": {
+            "kind": "analysis_page",
+            "analysis_key": "run_comparison",
+            "status": "published",
+            "display_order": 30,
+            "is_system": True,
+        },
+        "widgets": [
+            {
+                "id": "run-comparison-panel",
+                "type": "run_comparison",
+                "title": "Run 비교·검토",
+                "x": 0,
+                "y": 0,
+                "w": 12,
+                "h": 12,
+                "settings": {"includeInReport": True},
+            }
+        ],
+    }
+
+
+def ensure_system_run_comparison_dashboard(conn: Any) -> None:
+    dashboard_id = "dashboard-run-comparison-default"
+    if conn.execute("SELECT 1 FROM dashboards WHERE id = ?", [dashboard_id]).fetchone():
+        return
+    if not conn.execute("SELECT 1 FROM load_cases WHERE id = ?", ["loadcase-drop-bottom-001"]).fetchone():
+        return
+    comparison_layout = _run_comparison_dashboard_definition()
+    encoded_comparison = json.dumps(comparison_layout, ensure_ascii=False)
+    now = _iso(datetime.now(timezone.utc))
+    conn.execute(
+        "INSERT OR IGNORE INTO dashboards (id, project_id, request_id, load_case_id, name, description, version, definition_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [dashboard_id, "project-tv-001", "request-drop-001", "loadcase-drop-bottom-001", comparison_layout["name"], comparison_layout["description"], 1, encoded_comparison, now],
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO dashboard_versions (dashboard_id, version, definition_json, created_by, created_at, is_valid) VALUES (?, ?, ?, ?, ?, ?)",
+        [dashboard_id, 1, encoded_comparison, "system", now, True],
+    )
+
+
+def ensure_system_analysis_page_metadata(conn: Any) -> None:
+    ensure_system_run_comparison_dashboard(conn)
+    page_definitions = {
+        "dashboard-drop-default": {
+            "kind": "analysis_page",
+            "analysis_key": "open_cell",
+            "status": "published",
+            "display_order": 10,
+            "is_system": True,
+        },
+        "dashboard-chassis-default": {
+            "kind": "analysis_page",
+            "analysis_key": "chassis_rear",
+            "status": "published",
+            "display_order": 20,
+            "is_system": True,
+        },
+        "dashboard-run-comparison-default": {
+            "kind": "analysis_page",
+            "analysis_key": "run_comparison",
+            "status": "published",
+            "display_order": 30,
+            "is_system": True,
+        },
+    }
+    for dashboard_id, page in page_definitions.items():
+        stored = conn.execute("SELECT definition_json, version FROM dashboards WHERE id = ?", [dashboard_id]).fetchone()
+        if not stored:
+            continue
+        definition = json_value(stored[0]) or {}
+        if definition.get("page") == page:
+            continue
+        definition["page"] = page
+        next_version = int(stored[1]) + 1
+        now = _iso(datetime.now(timezone.utc))
+        encoded = json.dumps(definition, ensure_ascii=False)
+        conn.execute(
+            "UPDATE dashboards SET definition_json = ?, version = ?, updated_at = ? WHERE id = ?",
+            [encoded, next_version, now, dashboard_id],
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO dashboard_versions VALUES (?, ?, ?, 'system-analysis-page-backfill', ?, true)",
+            [dashboard_id, next_version, encoded, now],
+        )
 
 
 def ensure_workspace_layouts(conn: duckdb.DuckDBPyConnection) -> None:
@@ -786,6 +923,38 @@ def ensure_sample_evolutions(conn: duckdb.DuckDBPyConnection) -> None:
             "chassis_rear_permanent_deformation_mm", "project-tv-001", "CHASSIS_REAR_PERMANENT_DEFORMATION",
             "Chassis Rear 영구변형 허용값", 5.0, "mm", "관리자", _iso(now),
         ],
+    )
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO quality_thresholds
+            (criterion_key, project_id, analysis_key, label, threshold_double, unit, updated_by, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            "open_cell_stress_mpa", "project-tv-001", "OPEN_CELL_STRESS",
+            "Open Cell 응력 허용값", 75.0, "MPa", "관리자", _iso(now),
+        ],
+    )
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO batch_path_profiles
+            (id, name, solver_path, working_directory, arguments_template,
+             environment_json, task_type_ids_json, is_active, updated_by, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, true, ?, ?, ?)
+        """,
+        [
+            "radioss-demo", "Radioss 배치 예시", "C:\\Altair\\hwsolvers\\radioss.exe",
+            "C:\\Simulation\\runs\\{request_id}", "-i {input} -nt {cores}",
+            json.dumps({"OMP_NUM_THREADS": "{cores}"}, ensure_ascii=False), json.dumps(["hpc-submit"]), "system", _iso(now), _iso(now),
+        ],
+    )
+    conn.execute(
+        """
+        UPDATE batch_path_profiles
+        SET task_type_ids_json=?
+        WHERE id='radioss-demo' AND CAST(task_type_ids_json AS VARCHAR)='[]'
+        """,
+        [json.dumps(["hpc-submit"])],
     )
 
     target_started_row = conn.execute("SELECT started_at FROM analysis_runs WHERE id='run-drop-001'").fetchone()
@@ -1021,6 +1190,17 @@ def ensure_sample_evolutions(conn: duckdb.DuckDBPyConnection) -> None:
     if stored:
         definition = json_value(stored[0])
         widgets = definition.get("widgets", [])
+        if not any(widget.get("type") == "open_cell_summary" for widget in widgets):
+            for widget in widgets:
+                widget["y"] = int(widget.get("y", 0)) + 2
+            widgets.insert(0, {"id": "open-cell-summary", "type": "open_cell_summary", "title": "Open Cell 판정 요약", "x": 0, "y": 0, "w": 12, "h": 2, "settings": {}})
+            next_version = int(stored[1]) + 1
+            encoded = json.dumps(definition, ensure_ascii=False)
+            conn.execute(
+                "UPDATE dashboards SET definition_json = ?, version = ?, updated_at = ? WHERE id = ?",
+                [encoded, next_version, _iso(datetime.now(timezone.utc)), "dashboard-drop-default"],
+            )
+            stored = (encoded, next_version)
         if not any(widget.get("type") == "open_cell_map" for widget in widgets):
             positions = {
                 "max-stress": (5, 0, 7, 4),
@@ -1407,6 +1587,13 @@ def seed_database(conn: duckdb.DuckDBPyConnection) -> None:
         "id": "dashboard-drop-default",
         "name": "TV 포장 낙하 기본 분석",
         "description": "Open Cell 엣지 응력 및 판정",
+        "page": {
+            "kind": "analysis_page",
+            "analysis_key": "open_cell",
+            "status": "published",
+            "display_order": 10,
+            "is_system": True,
+        },
         "widgets": [
             {"id": "open-cell", "type": "open_cell_map", "title": "Open Cell 엣지 맵", "x": 0, "y": 0, "w": 5, "h": 4},
             {"id": "max-stress", "type": "edge_bar", "title": "엣지별 최대 응력", "x": 5, "y": 0, "w": 7, "h": 4},

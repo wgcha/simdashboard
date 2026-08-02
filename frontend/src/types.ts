@@ -189,12 +189,25 @@ export type Workflow = {
   request_type_assignment?: { request_type_id: string; request_type_version: number; source: 'ADMIN' | 'RULE' | 'USER' | 'DEFAULT'; decided_by: string; decided_at: string } | null
 }
 
-export type WidgetType = 'open_cell_map' | 'kpi' | 'verdict' | 'gauge' | 'edge_bar' | 'summary' | 'time_series' | 'scatter' | 'note' | 'result_table' | 'contour' | 'video' | 'video_grid' | 'model3d' | 'workflow' | 'chassis_summary' | 'chassis_diagram' | 'chassis_bar' | 'chassis_table'
+export type WidgetType = 'open_cell_map' | 'open_cell_summary' | 'kpi' | 'verdict' | 'gauge' | 'edge_bar' | 'summary' | 'time_series' | 'scatter' | 'note' | 'result_table' | 'contour' | 'video' | 'video_grid' | 'model3d' | 'workflow' | 'chassis_summary' | 'chassis_diagram' | 'chassis_bar' | 'chassis_table' | 'run_comparison'
 
 export type VariableDataType = 'NUMBER' | 'TIME_SERIES' | 'FLOAT' | 'INTEGER' | 'TEXT' | 'CURVE' | 'IMAGE' | 'VIDEO' | 'MODEL_3D' | 'VERDICT' | 'STATUS' | 'BOOLEAN'
 export type VariableDefinition = { id: string; definition_id: string; variable_key: string; display_name: string; data_type: VariableDataType; unit: string; filterable: boolean; source: string; allowed_widgets: string[]; allowed_aggregations: string[]; description: string; threshold?: number | null; analysis_type: string; result_group: 'OPEN_CELL' | 'CHASSIS_REAR' | 'CUSTOM'; has_data: boolean; dashboard_usage_count: number; updated_at: string; updated_by: string }
 export type VariableDefinitionInput = { variable_key: string; display_name: string; data_type: VariableDataType; unit: string; description: string; filterable: boolean; threshold: number | null; allowed_widgets: string[]; allowed_aggregations: string[]; result_group: 'OPEN_CELL' | 'CHASSIS_REAR' | 'CUSTOM'; updated_by: string }
 export type WidgetCatalogItem = { type: WidgetType; label: string; category: string; allowed_data_types: string[]; default_size: [number, number] }
+export type DropVideoVerdict = 'PASS' | 'FAIL'
+export type DropVideoSubsystemEvaluation = {
+  critical_value: number
+  threshold: number
+  unit: string
+  verdict: DropVideoVerdict
+  metrics: Record<string, number>
+}
+export type DropVideoEvaluation = {
+  overall_verdict: DropVideoVerdict
+  open_cell: DropVideoSubsystemEvaluation
+  chassis_rear: DropVideoSubsystemEvaluation
+}
 export type DropVideoItem = {
   video_id: string
   scene_id: string
@@ -205,19 +218,31 @@ export type DropVideoItem = {
   file_size: number
   format: 'mp4' | 'webm'
   codec: string | null
+  fast_start: boolean | null
   sort_order: number
   drop_direction: string | null
   drop_condition: string | null
   analysis_version: string | null
+  evaluation: DropVideoEvaluation
 }
 export type DropVideoPage = {
   load_case: { load_case_id: string; load_case_name: string; analysis_type: string; request_id: string; request_name: string }
   source: 'EXAMPLE_ADAPTER'
   demo_only: boolean
+  evaluation_source: 'SYNTHETIC_DEMO'
+  contract_version: 1
+  summary: {
+    total_scenes: number
+    pass_count: number
+    fail_count: number
+    open_cell: { pass_count: number; fail_count: number; threshold: number; unit: string }
+    chassis_rear: { pass_count: number; fail_count: number; threshold: number; unit: string }
+  }
   pagination: { page: number; page_size: number; total_items: number; total_pages: number; has_previous: boolean; has_next: boolean }
   videos: DropVideoItem[]
 }
 export type DashboardVersion = { dashboard_id: string; version: number; created_by: string; created_at: string; is_valid: boolean }
+export type DashboardVersionDefinition = DashboardVersion & { definition: DashboardDefinition }
 export type ReportSection = 'series' | 'scalar' | 'media'
 export type ReportVariablePresentation = 'chart' | 'table' | 'both'
 export type ReportVariablePlacement = { variableKey: string; presentation: ReportVariablePresentation; order: number }
@@ -231,9 +256,21 @@ export type ReportSlideStyle = {
 }
 export type ReportElementType = 'title' | 'text' | 'verdict' | 'scalar-card' | 'chart' | 'table' | 'image'
 export type ReportElementBinding = {
-  source: 'field' | 'variable' | 'series' | 'scalar' | 'media' | 'static'
+  source: 'field' | 'variable' | 'series' | 'scalar' | 'media' | 'static' | 'content'
   key?: string
   variableKey?: string
+  contentId?: string
+}
+export type ReportSource =
+  | { kind: 'analysis_page'; dashboardId: string; loadCaseId: string; runId?: string }
+  | { kind: 'run_compare_review'; loadCaseId: string; baselineRunId: string; targetRunId: string }
+export type ReportContentItem = {
+  contentId: string
+  kind: 'dashboard_widget' | 'comparison_summary' | 'comparison_variable' | 'comparison_series' | 'trust_summary' | 'review_item'
+  sourceKey: string
+  title: string
+  defaultPresentation: 'card' | 'chart' | 'table' | 'image' | 'text'
+  data?: unknown
 }
 export type ReportElementDefinition = {
   id: string
@@ -309,6 +346,8 @@ export type ReportLayoutDefinition = {
   templateSource?: 'native' | 'pptx_upload'
   templateAssetId?: string
   templateBindings?: Record<string, string>
+  sourceScope?: ReportSource
+  contentMode?: 'one-per-slide' | 'manual'
 }
 export type ReportLayout = {
   id: string
@@ -322,6 +361,8 @@ export type ReportLayout = {
 }
 export type ReportLayoutVersion = { layout_id: string; version: number; created_by: string; created_at: string; is_valid: boolean }
 export type DashboardSummary = { id: string; project_id: string; request_id?: string; load_case_id?: string; name: string; description: string; version: number; updated_at: string }
+export type AnalysisPageMeta = { kind: 'analysis_page'; analysis_key: 'open_cell' | 'chassis_rear' | 'run_comparison' | 'custom'; status: 'draft' | 'published' | 'archived'; display_order: number; is_system: boolean }
+export type DashboardPageSummary = DashboardSummary & { page: AnalysisPageMeta }
 export type AutomationTemplate = { id: string; load_case_id: string; template_name: string; template_version: string; status: string; executed_at: string; load_case_name: string; analysis_type: string; request_id: string; request_title: string; project_id: string; project_name: string; input: Record<string, unknown>; generated_model: Record<string, unknown> }
 export type ImportSchemaDefinition = { schema_id?: string; version?: number; mappings: Array<Record<string, unknown>>; context_mapping?: { mode: 'folder_levels' | 'manifest'; project_level: number; request_level: number; load_case_level: number; sample_path?: string }; context?: Record<string, unknown>; [key: string]: unknown }
 export type ImportSchema = { id: string; name: string; description: string; definition: ImportSchemaDefinition; created_at: string; updated_at: string; updated_by: string }
@@ -453,6 +494,7 @@ export type DashboardDefinition = {
   name: string
   description: string
   widgets: DashboardWidget[]
+  page?: AnalysisPageMeta
   version?: number
   updated_at?: string
 }

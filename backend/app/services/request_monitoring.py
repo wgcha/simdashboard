@@ -48,7 +48,7 @@ def request_monitoring_summary(conn: Any, request_id: str) -> dict[str, Any]:
         work_items = rows(conn.execute("SELECT * FROM request_work_items WHERE request_id=? ORDER BY sequence_no", [request_id]))
         completed_count = sum(1 for item in work_items if item["status"] == "COMPLETED")
         total_count = len(work_items)
-        progress = round(completed_count / total_count * 100) if total_count else 0
+        progress = round(sum(int(item.get("progress") or (100 if item["status"] == "COMPLETED" else 0)) for item in work_items) / total_count) if total_count else 0
         if total_count and completed_count == total_count:
             status = "COMPLETED"
         elif any(item["status"] == "IN_PROGRESS" for item in work_items) or completed_count:
@@ -64,7 +64,7 @@ def request_monitoring_summary(conn: Any, request_id: str) -> dict[str, Any]:
             {
                 **item,
                 "name": item["display_name"],
-                "progress": 100 if item["status"] == "COMPLETED" else 0,
+                "progress": int(item.get("progress") or (100 if item["status"] == "COMPLETED" else 0)),
                 "is_optional": False,
                 "note": "",
                 "blocked_reason": None,

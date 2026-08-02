@@ -29,15 +29,18 @@ def main() -> None:
     admin_url = required_env("POSTGRES_ADMIN_URL")
     owner_password = required_env("SIM_DASH_OWNER_PASSWORD")
     app_password = required_env("SIM_DASH_APP_PASSWORD")
+    preserve_existing_roles = os.getenv("SIM_DASH_PRESERVE_EXISTING_ROLES") == "1"
     admin_parts = conninfo_to_dict(admin_url.replace("postgresql+psycopg://", "postgresql://"))
 
     with psycopg.connect(admin_url.replace("postgresql+psycopg://", "postgresql://"), autocommit=True) as admin:
         if role_exists(admin, args.owner_role):
-            admin.execute(sql.SQL("ALTER ROLE {} WITH LOGIN PASSWORD {}").format(sql.Identifier(args.owner_role), sql.Literal(owner_password)))
+            if not preserve_existing_roles:
+                admin.execute(sql.SQL("ALTER ROLE {} WITH LOGIN PASSWORD {}").format(sql.Identifier(args.owner_role), sql.Literal(owner_password)))
         else:
             admin.execute(sql.SQL("CREATE ROLE {} LOGIN PASSWORD {}").format(sql.Identifier(args.owner_role), sql.Literal(owner_password)))
         if role_exists(admin, args.app_role):
-            admin.execute(sql.SQL("ALTER ROLE {} WITH LOGIN PASSWORD {}").format(sql.Identifier(args.app_role), sql.Literal(app_password)))
+            if not preserve_existing_roles:
+                admin.execute(sql.SQL("ALTER ROLE {} WITH LOGIN PASSWORD {}").format(sql.Identifier(args.app_role), sql.Literal(app_password)))
         else:
             admin.execute(sql.SQL("CREATE ROLE {} LOGIN PASSWORD {}").format(sql.Identifier(args.app_role), sql.Literal(app_password)))
         database_exists = admin.execute("SELECT 1 FROM pg_database WHERE datname=%s", [args.database]).fetchone()
