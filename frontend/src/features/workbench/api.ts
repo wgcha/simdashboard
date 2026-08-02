@@ -1,6 +1,6 @@
 import { authenticatedFetch } from '../../auth'
 import type { Workflow } from '../../types'
-import type { CreateDemoRunInput, DemoRun, RequestTypeResolution, WorkbenchRequestType, WorkbenchTaskType } from './types'
+import type { BatchProfile, CreateDemoRunInput, DemoRun, RequestTypeResolution, WorkbenchRequestType, WorkbenchTaskType } from './types'
 
 async function readJson<T>(response: Response | Promise<Response>): Promise<T> {
   response = await response
@@ -44,6 +44,16 @@ export const workbenchApi = {
   })),
   completeWorkItem: (itemId: string, completedBy: string, demoRunId?: string) => readJson<Omit<Workflow, 'request'>>(authenticatedFetch(`/api/workbench/work-items/${encodeURIComponent(itemId)}/complete`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ completed_by: completedBy, ...(demoRunId ? { demo_run_id: demoRunId } : {}) }),
+  })),
+  updateWorkItemProgress: (itemId: string, progress: number, updatedBy: string) => readJson<Omit<Workflow, 'request'>>(authenticatedFetch(`/api/workbench/work-items/${encodeURIComponent(itemId)}/progress`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ progress, updated_by: updatedBy }),
+  })),
+  batchProfiles: (includeInactive = false) => readJson<BatchProfile[]>(authenticatedFetch(`/api/workbench/batch-profiles${includeInactive ? '?include_inactive=true' : ''}`)),
+  saveBatchProfile: (profile: Omit<BatchProfile, 'created_at' | 'updated_at'>) => readJson<BatchProfile>(authenticatedFetch(`/api/admin/workbench/batch-profiles/${encodeURIComponent(profile.id)}`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(profile),
+  })),
+  dispatchBatch: (itemId: string, batchProfileId: string, createdBy: string) => readJson<DemoRun>(authenticatedFetch(`/api/workbench/work-items/${encodeURIComponent(itemId)}/batch-dispatch`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ batch_profile_id: batchProfileId, created_by: createdBy }),
   })),
   createRequestType: (payload: Omit<WorkbenchRequestType, 'version' | 'created_at'>) => readJson<WorkbenchRequestType>(authenticatedFetch('/api/admin/workbench/request-types', {
     method: 'POST',

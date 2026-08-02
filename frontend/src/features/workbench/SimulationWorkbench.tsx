@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Activity, AlertTriangle, Check, ClipboardList, FileText, FlaskConical, Image, LoaderCircle, Play, Plus, RefreshCw, Save, Settings2, ShieldCheck } from 'lucide-react'
 import type { Workflow } from '../../types'
 import { workbenchApi } from './api'
-import type { DemoRun, DemoRunTask, WorkbenchNode, WorkbenchRequestType, WorkbenchTaskType } from './types'
+import type { BatchProfile, DemoRun, DemoRunTask, WorkbenchNode, WorkbenchRequestType, WorkbenchTaskType } from './types'
 
 type CompositionMode = 'parallel' | 'sequence'
 
@@ -68,11 +68,22 @@ export function SimulationWorkbench({ workflows, initialRequestId, createdBy, ca
   const [loadingRuns, setLoadingRuns] = useState(false)
   const [working, setWorking] = useState(false)
   const [error, setError] = useState('')
+  const [selectedWorkItemId, setSelectedWorkItemId] = useState('')
+  const [batchProfiles, setBatchProfiles] = useState<BatchProfile[]>([])
+  const [taskTypes, setTaskTypes] = useState<WorkbenchTaskType[]>([])
+  const [batchProfileId, setBatchProfileId] = useState('')
+  const [progressDraft, setProgressDraft] = useState(10)
 
   const requestId = assigned.some((item) => item.request.id === initialRequestId) ? initialRequestId : assigned[0]?.request.id ?? ''
   const workflow = assigned.find((item) => item.request.id === requestId)
   const currentItem = workflow?.steps.find((item) => item.status === 'IN_PROGRESS') ?? workflow?.steps.find((item) => item.status === 'READY') ?? null
   const activeTask = activeRun?.tasks.find((task) => task.id === activeTaskId) ?? activeRun?.tasks[0] ?? null
+  const selectedWorkItem = workflow?.steps.find((item) => item.id === selectedWorkItemId) ?? currentItem
+  const selectedTaskType = taskTypes.find((task) => task.id === selectedWorkItem?.task_type_id && task.version === selectedWorkItem?.task_type_version)
+  const selectedGuidance = selectedTaskType ? TASK_GUIDANCE[selectedTaskType.kind] : undefined
+  const selectedTaskTypeId = selectedWorkItem?.task_type_id ?? ''
+  const compatibleBatchProfiles = batchProfiles.filter((profile) => selectedTaskTypeId && profile.task_type_ids.includes(selectedTaskTypeId))
+  const selectedBatchProfile = compatibleBatchProfiles.find((profile) => profile.id === batchProfileId)
 
   const loadRuns = async (targetRequestId = requestId) => {
     if (!targetRequestId) return
@@ -87,6 +98,22 @@ export function SimulationWorkbench({ workflows, initialRequestId, createdBy, ca
   }
 
   useEffect(() => { void loadRuns(requestId) }, [requestId])
+  useEffect(() => {
+    Promise.all([workbenchApi.batchProfiles(), workbenchApi.taskTypes()])
+      .then(([profiles, tasks]) => {
+        setBatchProfiles(profiles)
+        setTaskTypes(tasks)
+      })
+      .catch((reason) => setError(friendlyWorkbenchError(reason)))
+  }, [])
+  useEffect(() => {
+    if (!selectedWorkItem) return
+    setSelectedWorkItemId(selectedWorkItem.id)
+    setProgressDraft(Math.min(99, Math.max(1, Number(selectedWorkItem.progress || 0) + 10)))
+  }, [selectedWorkItem?.id, selectedWorkItem?.progress])
+  useEffect(() => {
+    setBatchProfileId((current) => compatibleBatchProfiles.some((profile) => profile.id === current) ? current : compatibleBatchProfiles[0]?.id ?? '')
+  }, [selectedTaskTypeId, batchProfiles])
 
   const changeRequest = (nextRequestId: string) => {
     onRequestSelected(nextRequestId); setError(''); setActiveRun(null); setActiveTaskId('')
@@ -118,6 +145,28 @@ export function SimulationWorkbench({ workflows, initialRequestId, createdBy, ca
     finally { setWorking(false) }
   }
 
+  const updateSelectedProgress = async () => {
+    if (!selectedWorkItem || selectedWorkItem.status !== 'IN_PROGRESS') return
+    setWorking(true); setError('')
+    try {
+      await workbenchApi.updateWorkItemProgress(selectedWorkItem.id, progressDraft, createdBy)
+      await onChanged(`${selectedWorkItem.name} 진행도를 ${progressDraft}%로 갱신했습니다.`)
+    } catch (reason) { setError(friendlyWorkbenchError(reason)) }
+    finally { setWorking(false) }
+  }
+
+  const dispatchSelectedBatch = async () => {
+    if (!selectedWorkItem || selectedWorkItem.status !== 'IN_PROGRESS' || !batchProfileId) return
+    setWorking(true); setError('')
+    try {
+      const run = await workbenchApi.dispatchBatch(selectedWorkItem.id, batchProfileId, createdBy)
+      setRuns((items) => [run, ...items.filter((item) => item.id !== run.id)])
+      setActiveRun(run); setActiveTaskId(run.tasks[0]?.id ?? '')
+      await onChanged(`${selectedWorkItem.name} 배치 구성을 검증하고 DEMO_ONLY 실행 기록을 생성했습니다.`)
+    } catch (reason) { setError(friendlyWorkbenchError(reason)) }
+    finally { setWorking(false) }
+  }
+
   if (!workflow) return <div className="workbench-state"><ClipboardList /> 접수되어 배정된 작업 계획이 없습니다.</div>
 
   const firstReady = currentItem?.status === 'READY' && currentItem.sequence_no === 1 && workflow.completed_count === 0
@@ -133,8 +182,10 @@ export function SimulationWorkbench({ workflows, initialRequestId, createdBy, ca
     <section className="assigned-work-list"><header><div><span>SEQUENTIAL WORK ITEMS</span><h2>배정 작업 순서</h2></div><b>{currentItem ? `현재 · ${currentItem.name}` : '모든 작업 완료'}</b></header><div>{workflow.steps.map((item) => {
       const isCurrent = item.id === currentItem?.id
       const statusLabel = { READY: '시작 대기', IN_PROGRESS: '진행 중', COMPLETED: '완료', WAITING: '선행 작업 대기', BLOCKED: '차단', FAILED: '실패' }[item.status]
-      return <article key={item.id} className={`${item.status.toLowerCase()} ${isCurrent ? 'current' : ''}`}><i>{item.status === 'COMPLETED' ? <Check /> : item.sequence_no}</i><div><span>{item.task_type_id} · v{item.task_type_version}</span><strong>{item.name}</strong><small>{item.started_at ? `${item.started_by} 시작 · ${new Date(item.started_at).toLocaleString('ko-KR')}` : '아직 시작하지 않음'}</small></div><b>{statusLabel}</b>{isCurrent && item.status === 'READY' && <button data-testid="start-current-work" disabled={!canExecute || working} onClick={() => void startCurrent()}>{working ? <LoaderCircle className="spin" /> : <Play />}{firstReady ? '의뢰 수령 · 작업 시작' : '작업 시작'}</button>}{isCurrent && item.status === 'IN_PROGRESS' && <button data-testid="complete-current-work" disabled={!canExecute || working} onClick={() => void completeCurrent()}>{working ? <LoaderCircle className="spin" /> : <FlaskConical />} 작업 완료</button>}</article>
+      return <article key={item.id} role="button" tabIndex={0} aria-pressed={selectedWorkItem?.id === item.id} className={`${item.status.toLowerCase()} ${isCurrent ? 'current' : ''} ${selectedWorkItem?.id === item.id ? 'selected' : ''}`} onClick={() => setSelectedWorkItemId(item.id)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedWorkItemId(item.id) } }}><i>{item.status === 'COMPLETED' ? <Check /> : item.sequence_no}</i><div><span>{item.task_type_id} · v{item.task_type_version}</span><strong>{item.name}</strong><small>{item.started_at ? `${item.started_by} 시작 · ${new Date(item.started_at).toLocaleString('ko-KR')}` : '아직 시작하지 않음'}</small></div><b>{statusLabel} · {item.progress}%</b>{isCurrent && item.status === 'READY' && <button data-testid="start-current-work" disabled={!canExecute || working} onClick={(event) => { event.stopPropagation(); void startCurrent() }}>{working ? <LoaderCircle className="spin" /> : <Play />}{firstReady ? '의뢰 수령 · 작업 시작' : '작업 시작'}</button>}{isCurrent && item.status === 'IN_PROGRESS' && <button data-testid="complete-current-work" disabled={!canExecute || working} onClick={(event) => { event.stopPropagation(); void completeCurrent() }}>{working ? <LoaderCircle className="spin" /> : <FlaskConical />} 작업 완료</button>}</article>
     })}</div></section>
+
+    {selectedWorkItem && <section className="work-item-detail" data-testid="work-item-detail"><header><div><span>WORK ITEM DETAIL</span><h2>{selectedWorkItem.name}</h2><p>{selectedWorkItem.task_type_id} · v{selectedWorkItem.task_type_version}</p></div><b>{runStatusLabel(selectedWorkItem.status)} · {selectedWorkItem.progress}%</b></header>{selectedGuidance && <div className="work-item-guidance"><div><span>업무 목적</span><strong>{selectedGuidance.purpose}</strong></div><div><span>필요 입력</span><strong>{selectedGuidance.requires}</strong></div><div><span>예상 결과</span><strong>{selectedGuidance.result}</strong></div></div>}<div className="work-item-detail-grid"><article><h3>진행도 업데이트</h3><p>진행 중 작업의 진행도만 이전 값보다 크게 갱신할 수 있습니다.</p><label><span>새 진행도</span><input aria-label="작업 진행도" type="number" min={Math.min(99, selectedWorkItem.progress + 1)} max="99" value={progressDraft} disabled={selectedWorkItem.status !== 'IN_PROGRESS'} onChange={(event) => setProgressDraft(Number(event.target.value))}/><b>%</b></label><button disabled={!canExecute || working || selectedWorkItem.status !== 'IN_PROGRESS' || progressDraft <= selectedWorkItem.progress || progressDraft > 99} onClick={() => void updateSelectedProgress()}><RefreshCw /> 진행도 저장</button></article><article><h3>배치 실행 구성</h3><p>경로와 명령은 기록·미리보기 전용입니다. 서버는 외부 solver 프로세스를 실행하지 않습니다.</p>{compatibleBatchProfiles.length ? <><label><span>배치 경로 프로필</span><select aria-label="배치 경로 프로필" value={batchProfileId} onChange={(event) => setBatchProfileId(event.target.value)}>{compatibleBatchProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label>{selectedBatchProfile && <code>{`"${selectedBatchProfile.solver_path}" ${selectedBatchProfile.arguments_template}`}</code>}</> : <p className="batch-profile-empty">이 작업 유형에 연결된 활성 배치 경로가 없습니다. 작업 유형 관리에서 호환 작업을 지정하세요.</p>}<button className="batch-dispatch-button" disabled={!canExecute || working || selectedWorkItem.status !== 'IN_PROGRESS' || !selectedBatchProfile} onClick={() => void dispatchSelectedBatch()}><Play /> 배치 실행 기록 생성</button></article></div></section>}
 
     <section className="workbench-monitor"><div className="workbench-run-list"><header><div><span>실행 이력</span><h2>현재 의뢰의 데모 결과</h2></div><button aria-label="실행 이력 새로고침" disabled={loadingRuns} onClick={() => void loadRuns()}><RefreshCw className={loadingRuns ? 'spin' : ''} /></button></header>{runs.length === 0 ? <p className="workbench-empty">완료한 데모 작업이 없습니다.</p> : runs.map((run) => <button key={run.id} className={activeRun?.id === run.id ? 'active' : ''} onClick={() => { setActiveRun(run); setActiveTaskId(run.tasks[0]?.id ?? '') }}><span><strong>{run.name}</strong><small>{new Date(run.created_at).toLocaleString('ko-KR')}</small></span><b>{runStatusLabel(run.status)} · {run.progress}%</b></button>)}</div><div className="workbench-run-detail">{activeRun ? <><header><div><span>{activeRun.execution_mode}</span><h2>{activeRun.name}</h2><p>Run ID {activeRun.id}</p></div><strong>{runStatusLabel(activeRun.status)} · {activeRun.progress}%</strong></header><div className="workbench-run-progress"><i><b style={{ width: `${activeRun.progress}%` }} /></i><span>갱신 {new Date(activeRun.completed_at || activeRun.created_at).toLocaleString('ko-KR')}</span></div><div className="workbench-run-body"><nav>{activeRun.tasks.map((task) => <button key={task.id} className={activeTask?.id === task.id ? 'active' : ''} onClick={() => setActiveTaskId(task.id)}><Activity /><span><strong>{task.display_name}</strong><small>{runStatusLabel(task.status)} · {task.progress}%</small></span></button>)}</nav>{activeTask && <DemoTaskDetail task={activeTask} />}</div></> : <div className="workbench-empty-detail"><Image /><strong>로그·검증·결과 확인</strong><p>현재 작업을 완료하면 데모 실행 결과가 표시됩니다.</p></div>}</div></section>
   </div>
@@ -152,14 +203,17 @@ export function WorkbenchTypeAdmin() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [batchProfiles, setBatchProfiles] = useState<BatchProfile[]>([])
+  const [batchDraft, setBatchDraft] = useState<Omit<BatchProfile, 'created_at' | 'updated_at'>>({ id: 'radioss-local', name: 'Radioss 로컬 배치', solver_path: 'C:\\Altair\\hwsolvers\\radioss.exe', working_directory: 'C:\\Simulation\\runs\\{request_id}', arguments_template: '-i {input} -nt {cores}', environment: { OMP_NUM_THREADS: '{cores}' }, task_type_ids: ['hpc-submit'], is_active: true, updated_by: '관리자' })
 
   useEffect(() => {
-    Promise.all([workbenchApi.taskTypes(), workbenchApi.requestTypes()])
-      .then(([tasks, types]) => { setTaskTypes(tasks); setRequestTypes(types) })
+    Promise.all([workbenchApi.taskTypes(), workbenchApi.requestTypes(), workbenchApi.batchProfiles(true)])
+      .then(([tasks, types, profiles]) => { setTaskTypes(tasks); setRequestTypes(types); setBatchProfiles(profiles) })
       .catch((reason) => setError(friendlyWorkbenchError(reason)))
   }, [])
 
   const selectedTasks = taskTypes.filter((task) => selectedTaskKeys.includes(`${task.id}:${task.version}`))
+  const batchTaskTypes = taskTypes.filter((task, index, items) => items.findIndex((candidate) => candidate.id === task.id) === index)
   const toggle = (task: WorkbenchTaskType) => {
     const key = `${task.id}:${task.version}`
     setSelectedTaskKeys((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key])
@@ -179,6 +233,17 @@ export function WorkbenchTypeAdmin() {
       setSelectedTaskKeys([])
     } catch (reason) { setError(friendlyWorkbenchError(reason)) } finally { setSaving(false) }
   }
+  const saveBatchProfile = async () => {
+    if (!batchDraft.id || !batchDraft.name || !batchDraft.solver_path || !batchDraft.working_directory || !batchDraft.task_type_ids.length) return
+    setSaving(true); setError(''); setNotice('')
+    try {
+      const saved = await workbenchApi.saveBatchProfile(batchDraft)
+      setBatchProfiles((items) => [saved, ...items.filter((item) => item.id !== saved.id)])
+      setNotice(`${saved.name} 배치 경로 프로필을 저장했습니다.`)
+    } catch (reason) { setError(friendlyWorkbenchError(reason)) }
+    finally { setSaving(false) }
+  }
+  const editBatchProfile = (profile: BatchProfile) => setBatchDraft({ id: profile.id, name: profile.name, solver_path: profile.solver_path, working_directory: profile.working_directory, arguments_template: profile.arguments_template, environment: { ...profile.environment }, task_type_ids: [...profile.task_type_ids], is_active: profile.is_active, updated_by: '관리자' })
 
   return <div className="workbench-admin-page" data-testid="workbench-type-admin">
     <section className="workbench-admin-hero"><div><span><Settings2 /> ADMIN ONLY</span><h1>작업 유형 관리</h1><p>의뢰 수행자에게 보여 줄 실행 시나리오와 허용 작업, 기본 순서를 불변 버전으로 정의합니다.</p></div><aside><strong>{requestTypes.length}</strong><span>활성 의뢰 유형</span></aside></section>
@@ -189,6 +254,7 @@ export function WorkbenchTypeAdmin() {
       <div className="workbench-admin-task-picker"><header><span>ALLOWED TASKS</span><h2>수행자에게 허용할 작업</h2><p>카드를 선택한 순서가 기본 실행 순서가 됩니다.</p></header><div>{taskTypes.map((task) => { const selected = selectedTaskKeys.includes(`${task.id}:${task.version}`); const guidance = TASK_GUIDANCE[task.kind]; return <button key={`${task.id}:${task.version}`} className={selected ? 'selected' : ''} onClick={() => toggle(task)}><i>{selected ? <Check /> : <Plus />}</i><span><strong>{task.display_name}</strong><small>{guidance?.purpose ?? task.description}</small></span><b>v{task.version}</b></button> })}</div></div>
     </section>
     <section className="workbench-admin-types"><header><span>ACTIVE REQUEST TYPES</span><h2>현재 수행자에게 제공되는 시나리오</h2></header><div>{requestTypes.map((item) => <article key={`${item.id}:${item.version}`}><header><div><strong>{item.display_name}</strong><code>{item.id} · v{item.version}</code></div><b>{item.default_workflow.nodes.length}개 작업</b></header><p>{item.description}</p><div>{item.default_workflow.nodes.map((node, index) => <span key={node.node_key}>{index + 1}. {taskTypes.find((task) => task.id === node.task_type_id)?.display_name ?? node.task_type_id}</span>)}</div></article>)}</div></section>
+    <section className="batch-profile-admin"><header><div><span>HYPERSTUDY STYLE BATCH PATHS</span><h2>배치 경로 정의</h2><p>실행 파일·작업 폴더·인수 템플릿·환경 변수와 호환 작업 유형을 저장합니다. 실제 외부 프로세스는 실행하지 않습니다.</p></div><strong>{batchProfiles.length}개 프로필</strong></header><div className="batch-profile-layout"><form onSubmit={(event) => { event.preventDefault(); void saveBatchProfile() }}><label><span>프로필 ID</span><input value={batchDraft.id} onChange={(event) => setBatchDraft({ ...batchDraft, id: event.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, '-') })}/></label><label><span>이름</span><input value={batchDraft.name} onChange={(event) => setBatchDraft({ ...batchDraft, name: event.target.value })}/></label><label><span>Solver 실행 파일</span><input value={batchDraft.solver_path} onChange={(event) => setBatchDraft({ ...batchDraft, solver_path: event.target.value })}/></label><label><span>Working directory</span><input value={batchDraft.working_directory} onChange={(event) => setBatchDraft({ ...batchDraft, working_directory: event.target.value })}/></label><label><span>Arguments template</span><textarea value={batchDraft.arguments_template} onChange={(event) => setBatchDraft({ ...batchDraft, arguments_template: event.target.value })}/><small>{'{input}, {cores}, {request_id} 같은 자리표시자를 사용할 수 있습니다.'}</small></label><label><span>Environment (KEY=VALUE)</span><textarea value={Object.entries(batchDraft.environment).map(([key, value]) => `${key}=${value}`).join('\n')} onChange={(event) => setBatchDraft({ ...batchDraft, environment: Object.fromEntries(event.target.value.split(/\r?\n/).filter(Boolean).map((line) => { const index = line.indexOf('='); return index > 0 ? [line.slice(0, index).trim(), line.slice(index + 1).trim()] : [line.trim(), ''] })) })}/></label><fieldset className="batch-task-types"><legend>호환 작업 유형 *</legend>{batchTaskTypes.map((task) => <label key={task.id}><input type="checkbox" checked={batchDraft.task_type_ids.includes(task.id)} onChange={() => setBatchDraft((current) => ({ ...current, task_type_ids: current.task_type_ids.includes(task.id) ? current.task_type_ids.filter((id) => id !== task.id) : [...current.task_type_ids, task.id] }))}/><span>{task.display_name}</span><code>{task.id}</code></label>)}<small>선택한 작업의 상세 화면에서만 이 배치 프로필을 사용할 수 있습니다.</small></fieldset><label className="batch-active"><input type="checkbox" checked={batchDraft.is_active} onChange={(event) => setBatchDraft({ ...batchDraft, is_active: event.target.checked })}/><span>활성 프로필</span></label><button className="workbench-admin-save" disabled={saving || !batchDraft.task_type_ids.length}><Save /> 배치 경로 저장</button></form><div className="batch-profile-list">{batchProfiles.map((profile) => <button key={profile.id} className={batchDraft.id === profile.id ? 'active' : ''} onClick={() => editBatchProfile(profile)}><span><strong>{profile.name}</strong><code>{profile.id}</code></span><small>{profile.solver_path}</small><small>호환 · {profile.task_type_ids.map((id) => batchTaskTypes.find((task) => task.id === id)?.display_name ?? id).join(', ') || '미지정'}</small><b>{profile.is_active ? 'ACTIVE' : 'INACTIVE'}</b></button>)}</div></div></section>
   </div>
 }
 

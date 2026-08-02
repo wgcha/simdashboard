@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import Any
+from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from ..database_connection import connect, rows
 from ..repositories.workbench import WorkbenchRepository
-from ..schemas.workbench import DemoRunCreate, RequestTypeAssignmentInput, RequestTypeVersionCreate, TaskTypeVersionCreate, WorkItemComplete, WorkItemStart
+from ..schemas.workbench import BatchDispatchCreate, BatchProfileInput, DemoRunCreate, RequestTypeAssignmentInput, RequestTypeVersionCreate, TaskTypeVersionCreate, WorkItemComplete, WorkItemProgress, WorkItemStart
 from ..services.demo_runner import DemoRunnerService, WorkbenchValidationError, _topological_nodes
 from ..services.request_monitoring import request_monitoring_summary, sync_request_status
 
@@ -53,6 +55,73 @@ def create_request_type(payload: RequestTypeVersionCreate) -> dict[str, Any]:
         if missing:
             raise HTTPException(400, f"Task Type 버전을 찾을 수 없습니다: {', '.join(missing)}")
         return repository.create_request_type_version(payload.model_dump())
+
+
+@router.get("/workbench/batch-profiles")
+def list_batch_profiles(include_inactive: bool = Query(default=False)) -> list[dict[str, Any]]:
+    with connect() as conn:
+        return WorkbenchRepository(conn).list_batch_profiles(include_inactive=include_inactive)
+
+
+@router.put("/admin/workbench/batch-profiles/{profile_id}")
+def save_batch_profile(profile_id: str, payload: BatchProfileInput, request: Request) -> dict[str, Any]:
+    if profile_id != payload.id:
+        raise HTTPException(422, "경로의 프로필 ID와 본문의 ID가 일치해야 합니다.")
+    principal = getattr(request.state, "principal", None)
+    if principal:
+        payload = payload.model_copy(update={"updated_by": principal.display_name})
+    with connect() as conn:
+        return WorkbenchRepository(conn).upsert_batch_profile(payload.model_dump())
+
+
+@router.post("/workbench/work-items/{item_id}/batch-dispatch", status_code=201)
+def dispatch_batch_work_item(item_id: str, payload: BatchDispatchCreate, request: Request) -> dict[str, Any]:
+    principal = getattr(request.state, "principal", None)
+    created_by = principal.display_name if principal else payload.created_by.strip()
+    with connect() as conn:
+        repository = WorkbenchRepository(conn)
+        work_items = rows(conn.execute("SELECT * FROM request_work_items WHERE id=?", [item_id]))
+        if not work_items:
+            raise HTTPException(404, detail={"code": "WORK_ITEM_NOT_FOUND", "item_id": item_id})
+        work_item = work_items[0]
+        if work_item["status"] != "IN_PROGRESS":
+            raise HTTPException(409, detail={"code": "WORK_ITEM_NOT_IN_PROGRESS", "item_id": item_id})
+        profile = repository.get_batch_profile(payload.batch_profile_id)
+        if not profile or not profile["is_active"]:
+            raise HTTPException(404, detail={"code": "BATCH_PROFILE_NOT_FOUND", "batch_profile_id": payload.batch_profile_id})
+        if work_item["task_type_id"] not in profile["task_type_ids"]:
+            raise HTTPException(409, detail={"code": "BATCH_PROFILE_TASK_MISMATCH", "batch_profile_id": profile["id"], "task_type_id": work_item["task_type_id"]})
+        node = {
+            "node_key": work_item["node_key"],
+            "task_type_id": work_item["task_type_id"],
+            "task_type_version": int(work_item["task_type_version"]),
+            "depends_on": [],
+        }
+        demo_payload = DemoRunCreate(
+            name=f"{work_item['display_name']} 배치 기록",
+            request_id=work_item["request_id"],
+            execution_mode="DEMO_ONLY",
+            nodes=[node],
+            created_by=created_by,
+        )
+        try:
+            run = DemoRunnerService(repository).create_run(demo_payload)
+        except WorkbenchValidationError as exc:
+            raise _bad_request(exc) from exc
+        command_preview = f'"{profile["solver_path"]}" {profile["arguments_template"]}'.strip()
+        dispatch = {
+            "id": f"dispatch-{uuid4().hex[:12]}",
+            "work_item_id": item_id,
+            "workflow_run_id": run["id"],
+            "batch_profile_id": profile["id"],
+            "profile_snapshot_json": json.dumps(profile, ensure_ascii=False, default=str),
+            "command_preview": command_preview,
+            "status": "RECORDED_DEMO",
+            "created_by": created_by,
+            "created_at": datetime.now(timezone.utc).replace(tzinfo=None),
+        }
+        repository.insert_batch_dispatch(dispatch)
+        return DemoRunnerService(repository).get_run(run["id"])  # type: ignore[return-value]
 
 
 @router.get("/workbench/requests/{request_id}/request-type")
@@ -180,14 +249,45 @@ def start_work_item(item_id: str, payload: WorkItemStart) -> dict[str, Any]:
             conn.execute(
                 """
                 UPDATE request_work_items
-                SET status = 'IN_PROGRESS', started_by = ?, started_at = ?
+                SET status = 'IN_PROGRESS', progress = 1, progress_updated_by = ?, progress_updated_at = ?, started_by = ?, started_at = ?
                 WHERE id = ? AND status = 'READY'
                 """,
-                [payload.started_by.strip(), now, item_id],
+                [payload.started_by.strip(), now, payload.started_by.strip(), now, item_id],
             )
             summary = sync_request_status(conn, request_id)
             conn.execute("COMMIT")
             return {"request_id": request_id, **summary}
+        except HTTPException:
+            conn.execute("ROLLBACK")
+            raise
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+
+
+@router.patch("/workbench/work-items/{item_id}/progress")
+def update_work_item_progress(item_id: str, payload: WorkItemProgress, request: Request) -> dict[str, Any]:
+    principal = getattr(request.state, "principal", None)
+    updated_by = principal.display_name if principal else payload.updated_by.strip()
+    with connect() as conn:
+        conn.execute("BEGIN TRANSACTION")
+        try:
+            items = rows(conn.execute("SELECT request_id, status, progress FROM request_work_items WHERE id=?", [item_id]))
+            if not items:
+                raise HTTPException(404, detail={"code": "WORK_ITEM_NOT_FOUND", "item_id": item_id})
+            item = items[0]
+            if item["status"] != "IN_PROGRESS":
+                raise HTTPException(409, detail={"code": "WORK_ITEM_NOT_IN_PROGRESS", "item_id": item_id})
+            current = int(item.get("progress") or 0)
+            if payload.progress <= current:
+                raise HTTPException(409, detail={"code": "WORK_ITEM_PROGRESS_NOT_MONOTONIC", "current": current, "requested": payload.progress})
+            conn.execute(
+                "UPDATE request_work_items SET progress=?, progress_updated_by=?, progress_updated_at=? WHERE id=?",
+                [payload.progress, updated_by, datetime.now(timezone.utc).replace(tzinfo=None), item_id],
+            )
+            summary = sync_request_status(conn, item["request_id"])
+            conn.execute("COMMIT")
+            return {"request_id": item["request_id"], **summary}
         except HTTPException:
             conn.execute("ROLLBACK")
             raise
@@ -284,10 +384,10 @@ def complete_work_item(item_id: str, payload: WorkItemComplete) -> dict[str, Any
             conn.execute(
                 """
                 UPDATE request_work_items
-                SET status = 'COMPLETED', completed_by = ?, completed_at = ?, demo_run_id = ?
+                SET status = 'COMPLETED', progress = 100, progress_updated_by = ?, progress_updated_at = ?, completed_by = ?, completed_at = ?, demo_run_id = ?
                 WHERE id = ? AND status = 'IN_PROGRESS'
                 """,
-                [payload.completed_by.strip(), now, payload.demo_run_id, item_id],
+                [payload.completed_by.strip(), now, payload.completed_by.strip(), now, payload.demo_run_id, item_id],
             )
             next_row = conn.execute(
                 """

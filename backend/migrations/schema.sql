@@ -437,6 +437,9 @@ CREATE TABLE IF NOT EXISTS projects (
                 sequence_no INTEGER NOT NULL,
                 display_name VARCHAR NOT NULL,
                 status VARCHAR NOT NULL,
+                progress INTEGER NOT NULL DEFAULT 0,
+                progress_updated_by VARCHAR,
+                progress_updated_at TIMESTAMP,
                 owner VARCHAR NOT NULL,
                 started_by VARCHAR,
                 started_at TIMESTAMP,
@@ -493,6 +496,33 @@ CREATE TABLE IF NOT EXISTS projects (
                 occurred_at TIMESTAMP NOT NULL,
                 UNIQUE (task_run_id, event_index),
                 CHECK (progress BETWEEN 0 AND 100)
+            );
+
+            CREATE TABLE IF NOT EXISTS batch_path_profiles (
+                id VARCHAR PRIMARY KEY,
+                name VARCHAR NOT NULL,
+                solver_path VARCHAR NOT NULL,
+                working_directory VARCHAR NOT NULL,
+                arguments_template VARCHAR NOT NULL,
+                environment_json JSONB NOT NULL,
+                task_type_ids_json JSONB NOT NULL,
+                is_active BOOLEAN NOT NULL DEFAULT true,
+                updated_by VARCHAR NOT NULL,
+                created_at TIMESTAMP NOT NULL,
+                updated_at TIMESTAMP NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS batch_dispatches (
+                id VARCHAR PRIMARY KEY,
+                work_item_id VARCHAR NOT NULL,
+                workflow_run_id VARCHAR NOT NULL UNIQUE,
+                batch_profile_id VARCHAR NOT NULL,
+                profile_snapshot_json JSONB NOT NULL,
+                command_preview VARCHAR NOT NULL,
+                status VARCHAR NOT NULL,
+                created_by VARCHAR NOT NULL,
+                created_at TIMESTAMP NOT NULL,
+                CHECK (status = 'RECORDED_DEMO')
             );
 
 CREATE INDEX IF NOT EXISTS ix_product_information_project ON product_information(project_id);

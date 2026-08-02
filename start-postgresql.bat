@@ -30,9 +30,10 @@ exit /b 0
 :fail
 echo.
 echo [ERROR] Failed to start the servers with PostgreSQL.
-echo Check the app DATABASE_URL, PostgreSQL service, and owner credential file.
-echo Pending migrations use .postgres-owner.env without granting DDL to the app role.
-echo See docs\deployment-security-backup-guide.md for setup instructions.
+echo The detailed cause is shown above. Common causes include an occupied
+echo frontend/backend port, DATABASE_URL, PostgreSQL service, or credentials.
+echo For a port conflict, run stop.bat and review the reported PID before retrying.
+echo For database setup failures, see docs\deployment-security-backup-guide.md.
 echo.
 pause
 exit /b 1

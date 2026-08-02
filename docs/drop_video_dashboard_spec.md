@@ -1,6 +1,6 @@
 # 해석 결과 영상 비교 기능 간이 사양서
 
-> 상태: 2026-07-30 1차 PoC 구현 기준
+> 상태: 2026-08-01 synthetic Scene 평가 통합 구현 기준
 >
 > 이 문서의 **현재 프로그램 적용 사양**이 아래의 운영 목표 사양과 충돌하면 현재 프로그램 적용 사양을 우선한다. 운영 DB 연계 항목은 후속 전환 목표다.
 
@@ -12,33 +12,47 @@
 |---|---|
 | 화면 진입점 | 새 페이지를 만들지 않고 기존 상세 분석 대시보드에 `video_grid` 복합 위젯으로 추가 |
 | 레이아웃 | 기존 `DashboardWidget`·`react-grid-layout`·편집·저장·버전 체계를 그대로 재사용 |
-| 기본 배치 | `dashboard-drop-default`의 기존 위젯 좌표는 유지하고 맨 아래 `x=0, y=16, w=12, h=10`으로 추가 |
+| 기본 배치 | `dashboard-drop-default`의 기존 위젯 좌표는 유지하고 맨 아래 `x=0, y=16, w=12, h=10`으로 추가. 위젯 내부는 좌측 평가 요약·Scene 그래프, 우측 20개 영상의 2열 복합 배치 |
 | 조회 컨텍스트 | 기존 프로젝트·의뢰·하중 경우 선택기를 재사용하며 영상 위젯 안에 중복 선택기를 만들지 않음 |
 | 조회 키 | 현재 선택된 `load_case_id` |
-| 데이터 원천 | 1차는 루트 `video_example` 폴더의 읽기 전용 `EXAMPLE_ADAPTER`; DB 스키마 변경 없음 |
+| 데이터 원천 | 영상은 루트 `video_example`의 읽기 전용 `EXAMPLE_ADAPTER`; 평가는 실제 Solver/overview와 분리된 고정 `SYNTHETIC_DEMO` fixture. DB 스키마 변경 없음 |
 | 예제 연결 범위 | `loadcase-drop-bottom-001` 한 건만 명시적으로 허용. 다른 하중 경우는 `200`과 빈 목록 반환 |
 | 파일 제공 | `/api` 인증을 거치는 정확한 20개 파일 allowlist와 안전한 `FileResponse`; 별도 정적 mount 금지 |
 | 카드 메타데이터 | main은 `기준 낙하 해석`, variant는 `낙하 비교 Scene 01..19`; 파일명에서 방향·Face·Edge·Corner·조건을 추정하지 않음 |
 | 페이지 | API는 `page >= 1`, `1 <= page_size <= 20`; 현재 예제는 정확히 20개라 기본 설정에서 1페이지 |
 | 재생 | 개별 controls, 전체 재생·정지·처음부터·반복. 일괄 재생은 브라우저 정책에 맞게 muted 적용 |
 | 로딩 | `preload="metadata"`, `playsInline`; 페이지 변경·하중 경우 변경·unmount 때 기존 영상을 정지하고 요청 취소 |
+| 판정 표시 | overall PASS는 green 2px border, FAIL은 red 2px border와 텍스트 badge. 재생 실패는 평가 판정을 덮지 않고 영상 frame 내부 오류로만 표시 |
 | 실패 격리 | 한 카드의 파일·코덱 재생 실패를 카드 내부 오류로 표시하고 다른 영상과 전체 위젯은 계속 동작 |
 
 ### 0.2 현재 예제 파일 검토 결과
 
-- `video_example`의 현재 20개 MP4를 재검증한 결과 모두 `mp4v`이며 `faststart`가 적용되지 않았다.
-- 최신 Chromium/Edge 환경에서는 이 샘플이 재생되지 않을 수 있다. 이 경우 각 카드에 재생 불가 상태와 코덱 안내를 표시하는 것이 정상 동작이다.
-- 원본은 1차 구현에서 변환하거나 복제하지 않는다.
-- 운영 투입 전 입력 영상을 **MP4/H.264, yuv420p, faststart** 조건으로 변환하고 실제 배포 브라우저에서 재생·Range 요청을 검증해야 한다.
-- API의 `codec` 값은 서버가 실제 probe하지 않으므로 현재 PoC에서 `null`로 반환한다. 파일명만으로 코덱을 단정하지 않는다.
+- `video_example`의 현재 20개 MP4를 바이너리 구조와 SPS로 재검증한 결과 모두 `avc1` H.264 High Profile 3.1, 8-bit yuv420이다.
+- 20개 모두 top-level `moov` box가 `mdat`보다 앞선 fast-start이며 MPEG-4 Part 2 sample entry는 0개다.
+- Chromium 실제 검증에서 20개 모두 디코딩되고 재생 시간이 증가했으며, 인증·MIME·Range 요청도 정상 동작했다.
+- 서버는 외부 `ffprobe`에 의존하지 않는 bounded stdlib MP4 box probe로 `codec=h264`, `fast_start=true`를 응답한다. 파일 교체 시 size·mtime cache key가 probe 결과를 무효화한다.
+- 파일이 손상되거나 지원되지 않는 형식으로 교체될 가능성은 남으므로 카드별 playback 오류 격리는 계속 유지한다.
 
 ### 0.3 운영 전환 시 후속 범위
 
 - `media_assets` 또는 별도 영상 레코드와 하중 경우의 영속 관계 정의
-- 실제 파일 probe 결과(`duration`, `codec`, 해상도) 저장 및 검증
+- 실제 파일 probe 결과(`duration`, `codec`, fast-start, 해상도) 영속 저장 및 입수 단계 검증
 - DB 기반 전체 개수·정렬·페이지 조회로 `EXAMPLE_ADAPTER` 교체
-- 썸네일 생성, H.264 변환 파이프라인, 업로드/보존/권한 정책
+- 썸네일 생성, H.264 규격 검증·필요 시 변환 파이프라인, 업로드/보존/권한 정책
 - 운영 데이터로 최대 20개 동시 재생 성능과 브라우저 호환성 검증
+
+### 0.4 `20260730_223421` 참조 레이아웃 매핑
+
+`docs/layouts/20260730_223421.jpg`는 기능·배치 관계만 참고하고 외형을 그대로 복제하지 않는다.
+
+| 참조 화면 관찰 | 현재 프로그램 매핑 |
+|---|---|
+| 좌측의 결과 표·기준·재생 제어 | `video_grid` 내부 synthetic 판정 summary, subsystem 기준, 20 Scene compact graph, 선택 Scene 상세와 기존 일괄 재생 제어 |
+| 우측의 20 Scene 영상 4×5 배열 | 기존 `DashboardWidget` 안의 우측 20개 video card grid |
+| Scene별 색상 구분 | overall PASS/FAIL의 green/red 2px border와 텍스트 badge. 색상만으로 의미를 전달하지 않음 |
+| 개별 Scene 선택 | 카드 focus + Enter/Space 또는 좌측 Scene button으로 선택 상세 갱신 |
+
+기존 상세 분석 화면의 선택기, 위젯 shell, drag/resize, 저장·버전 뼈대는 변경하지 않는다.
 
 ## 1. 문서 목적
 
@@ -101,6 +115,8 @@
 
 | 구성 요소 | 세부 사양 | 우선순위 |
 |---|---|---:|
+| 좌측 평가 패널 | 전체 PASS/FAIL 수, subsystem 기준, 20 Scene compact 판정 그래프, 선택 Scene 상세 | 필수 |
+| 우측 영상 패널 | 데스크톱 4×5 영상 카드 그리드. 1200px 이하 3열, 900px 이하 2열, 620px 이하 1열 | 필수 |
 | 영상 카드 | 낙하 씬별 영상 1개당 카드 1개 | 필수 |
 | 카드 제목 | 낙하 씬명 또는 Scene ID | 필수 |
 | 영상 플레이어 | HTML5 `<video>` 사용 | 필수 |
@@ -108,6 +124,8 @@
 | 개별 정지 | 해당 영상만 일시정지 | 필수 |
 | 개별 초기화 | 해당 영상 시간을 0초로 이동 | 선택 |
 | 영상 상태 | 로딩, 재생 중, 정지, 오류 표시 | 권장 |
+| 평가 상태 | 카드별 Open Cell/Chassis mini bar, subsystem 판정, overall 판정 badge와 색상 border | 필수 |
+| 키보드 선택 | 카드에 focus 후 Enter 또는 Space로 선택 Scene 상세 변경 | 필수 |
 | 부가정보 | 방향, 조건, 높이, 해석 버전 등 표시 | 권장 |
 | 확대 보기 | 선택 영상을 모달 또는 상세 화면으로 확대 | 선택 |
 
@@ -138,16 +156,16 @@
 | 2개 | 2열 |
 | 3~4개 | 2열 |
 | 5~6개 | 3열 |
-| 7~12개 | 3~4열 |
-| 13~20개 | 4~5열 |
+| 7~12개 | 최대 4열 |
+| 13~20개 | 4열 |
 
-정확한 열 수는 고정값보다 CSS Grid의 자동 배치 방식을 우선 적용한다.
+현재 페이지 수가 4개 미만이면 불필요한 빈 열을 만들지 않고 1~3열을 사용한다. 4개 이상은 데스크톱에서 4열을 유지하고 화면 폭에 따라 3/2/1열로 줄인다.
 
 ```css
 .video-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
 }
 ```
 
@@ -155,11 +173,10 @@
 
 | 화면 폭 | 권장 열 수 |
 |---:|---:|
-| 1600px 이상 | 5열 |
-| 1200~1599px | 4열 |
-| 900~1199px | 3열 |
-| 600~899px | 2열 |
-| 599px 이하 | 1열 |
+| 1201px 이상 | 4열(좌측 평가 패널과 함께 표시) |
+| 901~1200px | 3열(평가 패널은 위로 배치) |
+| 621~900px | 2열 |
+| 620px 이하 | 1열 |
 
 ### 5.3 카드 표시 기준
 
@@ -216,11 +233,48 @@
 | `duration` | number 또는 null | 영상 길이, 초. probe 전에는 null |
 | `file_size` | integer | 파일 크기, byte |
 | `format` | string | `mp4` 또는 `webm` |
-| `codec` | string 또는 null | `h264`, `vp9` 등. 실제 probe 전에는 null |
+| `codec` | string 또는 null | stdlib MP4 probe 결과. 현재 fixture는 `h264` |
+| `fast_start` | boolean 또는 null | `moov`가 `mdat` 앞이면 true. box를 확인할 수 없으면 null |
 | `sort_order` | integer | 기본 표시 순서 |
 | `drop_direction` | string 또는 null | 낙하 방향. 근거 데이터가 있을 때만 표시 |
 | `drop_condition` | string 또는 null | 낙하 높이·속도·조건. 근거 데이터가 있을 때만 표시 |
 | `analysis_version` | string 또는 null | 해석 모델 또는 결과 버전 |
+| `evaluation.overall_verdict` | `PASS` 또는 `FAIL` | 두 subsystem이 모두 PASS일 때만 PASS |
+| `evaluation.open_cell` | object | `critical_value`, `threshold`, `unit`, `verdict`, `metrics` |
+| `evaluation.chassis_rear` | object | `critical_value`, `threshold`, `unit`, `verdict`, `metrics` |
+
+### 7.3 Synthetic demo 평가 계약
+
+- 응답 최상위에 `evaluation_source: "SYNTHETIC_DEMO"`, `contract_version: 1`, 전체 `summary`를 제공한다.
+- 이 값은 UI와 API 계약을 검증하기 위한 고정 fixture이며 실제 Solver 결과나 `/overview` 결과를 복제하지 않는다.
+- Open Cell은 `critical_value > 75.0 MPa`일 때 FAIL이다. 정확히 `75.0 MPa`는 PASS다.
+- Chassis Rear는 `critical_value >= 5.0 mm`일 때 FAIL이다. 정확히 `5.0 mm`는 FAIL이다.
+- 어느 subsystem이든 FAIL이면 overall FAIL이고, 두 subsystem이 모두 PASS일 때만 overall PASS다.
+
+| Scene | Open Cell (MPa) | OC | Chassis Rear (mm) | Chassis | Overall |
+|---:|---:|---|---:|---|---|
+| 01 | 68.2 | PASS | 4.2 | PASS | PASS |
+| 02 | 76.8 | FAIL | 4.4 | PASS | FAIL |
+| 03 | 70.1 | PASS | 5.3 | FAIL | FAIL |
+| 04 | 82.5 | FAIL | 5.7 | FAIL | FAIL |
+| 05 | 62.4 | PASS | 3.8 | PASS | PASS |
+| 06 | 73.9 | PASS | 4.9 | PASS | PASS |
+| 07 | 75.0 | PASS | 5.0 | FAIL | FAIL |
+| 08 | 79.1 | FAIL | 4.1 | PASS | FAIL |
+| 09 | 66.7 | PASS | 4.6 | PASS | PASS |
+| 10 | 71.8 | PASS | 5.2 | FAIL | FAIL |
+| 11 | 84.3 | FAIL | 6.1 | FAIL | FAIL |
+| 12 | 69.5 | PASS | 4.3 | PASS | PASS |
+| 13 | 74.6 | PASS | 4.8 | PASS | PASS |
+| 14 | 77.2 | FAIL | 4.7 | PASS | FAIL |
+| 15 | 64.9 | PASS | 5.5 | FAIL | FAIL |
+| 16 | 72.3 | PASS | 3.9 | PASS | PASS |
+| 17 | 80.6 | FAIL | 5.1 | FAIL | FAIL |
+| 18 | 67.4 | PASS | 4.0 | PASS | PASS |
+| 19 | 73.1 | PASS | 4.5 | PASS | PASS |
+| 20 | 78.0 | FAIL | 5.4 | FAIL | FAIL |
+
+합계는 overall PASS 9 / FAIL 11, Open Cell FAIL 7, Chassis Rear FAIL 8이다.
 
 ---
 
@@ -250,6 +304,15 @@ GET /api/drop-videos/{video_id}/content
   },
   "source": "EXAMPLE_ADAPTER",
   "demo_only": true,
+  "evaluation_source": "SYNTHETIC_DEMO",
+  "contract_version": 1,
+  "summary": {
+    "total_scenes": 20,
+    "pass_count": 9,
+    "fail_count": 11,
+    "open_cell": {"pass_count": 13, "fail_count": 7, "threshold": 75.0, "unit": "MPa"},
+    "chassis_rear": {"pass_count": 12, "fail_count": 8, "threshold": 5.0, "unit": "mm"}
+  },
   "pagination": {
     "page": 1,
     "page_size": 20,
@@ -266,13 +329,31 @@ GET /api/drop-videos/{video_id}/content
       "video_url": "/api/drop-videos/drop-analysis/content",
       "thumbnail_url": null,
       "duration": null,
-      "file_size": 2877689,
+      "file_size": 280714,
       "format": "mp4",
-      "codec": null,
+      "codec": "h264",
+      "fast_start": true,
       "sort_order": 1,
       "drop_direction": null,
       "drop_condition": null,
-      "analysis_version": null
+      "analysis_version": null,
+      "evaluation": {
+        "overall_verdict": "PASS",
+        "open_cell": {
+          "critical_value": 68.2,
+          "threshold": 75.0,
+          "unit": "MPa",
+          "verdict": "PASS",
+          "metrics": {"top_edge": 68.2, "bottom_edge": 57.29, "left_edge": 60.7, "right_edge": 63.43}
+        },
+        "chassis_rear": {
+          "critical_value": 4.2,
+          "threshold": 5.0,
+          "unit": "mm",
+          "verdict": "PASS",
+          "metrics": {"top_gap": 4.2, "bottom_gap": 3.53, "top_left_corner": 3.74, "top_right_corner": 3.91, "bottom_left_corner": 3.4, "bottom_right_corner": 3.65}
+        }
+      }
     }
   ]
 }
@@ -281,11 +362,14 @@ GET /api/drop-videos/{video_id}/content
 ### 8.3 API 처리 기준
 
 - 서버는 `load_case_id`, `page`, `page_size`를 기준으로 영상 목록을 반환한다.
+- Pydantic response model과 생성 OpenAPI가 `evaluation_source`, `contract_version`, `summary`, Scene 평가 계약을 명시한다.
 - 기본 `page_size`는 20이다.
 - 1차 어댑터는 allowlist에 있으면서 실제 존재하는 파일만 목록에 포함한다. 폴더 또는 일부 파일이 없어도 앱 시작은 실패하지 않는다.
 - 예제 허용 하중 경우 외의 정상 하중 경우는 `200`과 빈 `videos` 목록을 반환한다. 존재하지 않는 하중 경우만 `404`다.
 - 기본 정렬은 `sort_order`, 이후 `scene_id` 순으로 한다.
 - 파일명에서 방향·조건·분류·해석 버전을 추정하지 않는다.
+- 코덱과 fast-start는 파일명이나 확장자가 아니라 MP4 box probe로 판정한다.
+- `summary`는 페이지 slice가 아닌 해당 하중 경우 전체 영상 평가를 집계한다.
 - 페이지 단위 조회를 사용하여 전체 영상 링크를 한 번에 모두 내려보내지 않는다.
 - 운영 DB 전환 후에도 이 응답 구조를 유지하고 `source`, `demo_only`로 출처를 구분한다.
 
@@ -380,18 +464,23 @@ GET /api/drop-videos/{video_id}/content
 - 페이지당 최대 20개 표시
 - 영상 수 초과 시 페이지네이션
 - 현재 페이지 영상 개수에 따른 동적 그리드
+- 좌측 전체 판정 summary·20 Scene compact graph·선택 Scene 상세와 우측 4×5 영상 그리드
+- 고정 `SYNTHETIC_DEMO` 평가 fixture와 출처·계약 버전 고지
+- 카드별 Open Cell/Chassis Rear mini bar, overall PASS/FAIL badge와 green/red border
+- 키보드 Scene 선택
 - 개별 재생·정지
 - 전체 재생·정지
 - 전체 처음부터 재생
 - 반복 재생
 - 카드별 로딩·재생·정지·완료·오류 상태 표시
 - 페이지·하중 경우 변경 및 unmount 시 영상 정지, ref 정리, 목록 요청 취소
-- 현재 mp4v 샘플의 Chromium 재생 실패를 카드별로 격리
+- 실제 H.264/fast-start 20개 Chromium 재생과 Range 검증
+- 재생 오류를 평가 판정 border와 분리하여 카드별로 격리
 
 ### 13.2 2차 개선 범위
 
 - 운영 DB 영상 개수·링크·메타데이터 연동
-- MP4(H.264/yuv420p/faststart) 변환 및 검증 파이프라인
+- MP4(H.264/yuv420p/faststart) 입수 검증 및 필요 시 변환 파이프라인
 - WebM(VP9) 지원
 - WebP 포스터 이미지
 - 페이지당 영상 수 선택
@@ -453,6 +542,12 @@ GET /api/drop-videos/{video_id}/content
 10. `video_grid`를 기존 카탈로그에서 변수 바인딩 없이 추가하고 기존 레이아웃 버전으로 저장할 수 있다.
 11. 다른 정상 하중 경우는 예제 영상을 재사용하지 않고 `200`과 빈 목록을 표시한다.
 12. 콘텐츠 API는 allowlist 밖 ID와 누락 파일에 `404`를 반환하고 경로 이탈을 허용하지 않는다.
+13. 응답은 `SYNTHETIC_DEMO`와 contract v1을 고지하며 고정 20 Scene 결과를 overall PASS 9 / FAIL 11로 반환한다.
+14. Open Cell 75.0 MPa는 PASS이고 그 초과는 FAIL, Chassis Rear 5.0 mm는 FAIL이고 그 미만만 PASS다.
+15. 좌측 요약·Scene 판정 그래프·선택 상세와 우측 4×5 영상이 한 복합 위젯에 표시되고 3/2/1열로 반응한다.
+16. 각 카드의 두 mini bar와 텍스트 badge가 평가 근거를 표시하고 overall PASS/FAIL이 green/red 2px border를 결정한다.
+17. PASS 카드 영상 재생이 실패해도 green 평가 border를 유지하며 playback 오류는 frame 내부에만 표시된다.
+18. 실제 20개가 Chromium에서 decode·play되어 재생 시간이 증가하고 전체 정지·처음부터·반복 제어가 전달된다.
 
 ---
 
@@ -463,7 +558,9 @@ GET /api/drop-videos/{video_id}/content
 
 1차는 video_example 폴더의 정확한 20개 allowlist를 인증 적용 API로 제공하며 loadcase-drop-bottom-001에만 연결한다. 다른 하중 경우에는 200과 빈 목록을 반환한다. DB 스키마와 원본 파일은 변경하지 않는다.
 
-한 페이지에 최대 20개를 표시하고 CSS Grid가 화면 폭에 맞게 카드 수를 조절한다. 각 카드에는 근거가 있는 메타데이터만 표시하고 native controls, 상태, 독립 오류 UI를 둔다. 전체 재생·정지·처음부터·반복을 제공한다.
+한 페이지에 최대 20개를 표시한다. video_grid 내부는 좌측 synthetic 평가 summary/20 Scene graph/선택 상세와 우측 4×5 영상 그리드로 나누고 1200px 이하에서 3/2/1열로 반응한다. 각 카드에는 Open Cell/Chassis mini bar, overall badge, native controls, 상태, 독립 오류 UI를 둔다. 전체 재생·정지·처음부터·반복을 제공한다.
 
-preload="metadata", playsInline, muted를 적용한다. 페이지·하중 경우 변경 또는 unmount 때 기존 영상을 정지하고 AbortController와 video ref를 정리한다. 현재 mp4v/non-faststart 예제는 Chromium에서 재생 실패할 수 있으므로 카드 오류로 격리한다. 운영 전 H.264/yuv420p/faststart 변환과 브라우저 검증이 필요하다.
+평가는 `SYNTHETIC_DEMO`, contract v1 고정 fixture이며 실제 overview 결과와 분리한다. Open Cell은 75 MPa 초과, Chassis Rear는 5 mm 이상을 FAIL로 판정하고 subsystem 하나라도 FAIL이면 overall FAIL이다. 평가 border는 green/red로 유지하며 playback 오류가 판정 색상을 덮지 않게 한다.
+
+preload="metadata", playsInline, muted를 적용한다. 페이지·하중 경우 변경 또는 unmount 때 기존 영상을 정지하고 AbortController와 video ref를 정리한다. 현재 예제 20개는 H.264/yuv420p/faststart이며 stdlib MP4 probe와 Chromium 실재생으로 검증한다.
 ```

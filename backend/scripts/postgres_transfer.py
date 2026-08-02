@@ -12,7 +12,7 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import psycopg
 from alembic.config import Config
@@ -25,17 +25,32 @@ from sqlalchemy.engine import URL
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.postgres_cli import command_env, connection_args, parse_target
+from scripts.postgres_replacement import (
+    create_replacement_backup,
+    create_assets_backup,
+    database_identity,
+    database_name,
+    finalize_promoted_database,
+    rollback_database_swap,
+    swap_databases,
+    validate_dedicated_roles,
+    write_recovery_marker,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
 BACKEND = ROOT / "backend"
 ASSETS = BACKEND / "assets"
 ENV_FILE = ROOT / ".env"
+OWNER_ENV_FILE = ROOT / ".postgres-owner.env"
+RECOVERY_MARKER = ROOT / ".setup-recovery-required.json"
 PID_FILE = ROOT / ".server-pids.json"
 DATABASE = "simulation_dashboard"
 OWNER_ROLE = "simdashboard_owner"
 APP_ROLE = "simdashboard_app"
 FORMAT_VERSION = 1
+MAX_ASSETS_BYTES = 20 * 1024 * 1024 * 1024
+MAX_ASSET_FILES = 100_000
 
 
 def sha256(path: Path) -> str:
@@ -96,7 +111,7 @@ def find_pg_tool(name: str) -> str:
     raise RuntimeError(f"{name} was not found. Set POSTGRES_BIN to the PostgreSQL bin directory.")
 
 
-def service_url(parts: dict[str, str], role: str, password: str) -> str:
+def service_url(parts: dict[str, str], role: str, password: str, database: str = DATABASE) -> str:
     query = {key: value for key, value in parts.items() if key not in {"user", "password", "host", "port", "dbname"}}
     return URL.create(
         "postgresql+psycopg",
@@ -104,7 +119,7 @@ def service_url(parts: dict[str, str], role: str, password: str) -> str:
         password=password,
         host=parts.get("host"),
         port=int(parts["port"]) if parts.get("port") else None,
-        database=DATABASE,
+        database=database,
         query=query,
     ).render_as_string(hide_password=False)
 
@@ -248,6 +263,12 @@ def validate_bundle(bundle: Path) -> dict[str, Any]:
         raise RuntimeError("The transfer bundle database name is not supported.")
     if manifest.get("alembic_revision") != expected_alembic_head():
         raise RuntimeError("The transfer bundle and target code use different Alembic revisions.")
+    try:
+        bundle_id = UUID(str(manifest.get("bundle_id", "")))
+    except ValueError as error:
+        raise RuntimeError("The transfer bundle_id is not a valid UUID.") from error
+    if str(bundle_id) != str(manifest.get("bundle_id")):
+        raise RuntimeError("The transfer bundle_id must use canonical UUID form.")
     for section in ("database_dump", "assets_archive"):
         item = manifest.get(section) or {}
         file_name = safe_relative_path(str(item.get("file", "")))
@@ -259,6 +280,8 @@ def validate_bundle(bundle: Path) -> dict[str, Any]:
     asset_records = manifest.get("assets")
     if not isinstance(asset_records, list):
         raise RuntimeError("The asset manifest is missing.")
+    if len(asset_records) > MAX_ASSET_FILES:
+        raise RuntimeError("The transfer bundle contains too many asset files.")
     expected: dict[str, dict[str, Any]] = {}
     for item in asset_records:
         relative = safe_relative_path(str(item.get("path", ""))).as_posix()
@@ -266,6 +289,9 @@ def validate_bundle(bundle: Path) -> dict[str, Any]:
         if folded in expected:
             raise RuntimeError(f"Duplicate asset path in manifest: {relative}")
         expected[folded] = item
+    total_asset_bytes = sum(int(item.get("bytes", -1)) for item in asset_records)
+    if total_asset_bytes < 0 or total_asset_bytes > MAX_ASSETS_BYTES:
+        raise RuntimeError("The transfer bundle asset size is invalid or exceeds the safety limit.")
     archive_path = bundle / manifest["assets_archive"]["file"]
     seen: set[str] = set()
     with zipfile.ZipFile(archive_path) as archive:
@@ -277,13 +303,15 @@ def validate_bundle(bundle: Path) -> dict[str, Any]:
             if folded in seen or folded not in expected:
                 raise RuntimeError(f"Unexpected or duplicate asset in archive: {relative}")
             seen.add(folded)
+            record = expected[folded]
+            if member.file_size != record.get("bytes"):
+                raise RuntimeError(f"Asset size metadata mismatch: {relative}")
             digest = hashlib.sha256()
             size = 0
             with archive.open(member) as source:
                 for chunk in iter(lambda: source.read(1024 * 1024), b""):
                     size += len(chunk)
                     digest.update(chunk)
-            record = expected[folded]
             if size != record.get("bytes") or digest.hexdigest() != record.get("sha256"):
                 raise RuntimeError(f"Asset checksum failed: {relative}")
     if seen != set(expected):
@@ -298,6 +326,8 @@ def validate_bundle(bundle: Path) -> dict[str, Any]:
 
 def extract_assets(bundle: Path, manifest: dict[str, Any]) -> Path:
     stage = BACKEND / f".transfer-assets-{manifest['bundle_id']}"
+    if stage.resolve().parent != BACKEND.resolve():
+        raise RuntimeError("The transfer asset staging path escaped the backend directory.")
     if stage.exists():
         raise RuntimeError("An asset staging directory already exists from an earlier attempt.")
     stage.mkdir(parents=True)
@@ -325,16 +355,88 @@ def grant_runtime_privileges(owner_url: str) -> None:
         connection.execute(sql.SQL("GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO {}").format(sql.Identifier(APP_ROLE)))
 
 
-def import_bundle(bundle: Path, validate_only: bool) -> None:
+def _existing_service_passwords() -> tuple[str, str]:
+    service_values = dotenv_values(ENV_FILE)
+    owner_values = dotenv_values(OWNER_ENV_FILE)
+    app_url = service_values.get("DATABASE_URL")
+    owner_url = owner_values.get("POSTGRES_OWNER_URL")
+    if not app_url or not owner_url:
+        raise RuntimeError(
+            "Existing dedicated roles require the current .env and .postgres-owner.env credentials; replacement stopped."
+        )
+    app_parts = conninfo_to_dict(app_url.replace("postgresql+psycopg://", "postgresql://", 1))
+    owner_parts = conninfo_to_dict(owner_url.replace("postgresql+psycopg://", "postgresql://", 1))
+    if (
+        app_parts.get("user") != APP_ROLE
+        or owner_parts.get("user") != OWNER_ROLE
+        or app_parts.get("dbname") != DATABASE
+        or owner_parts.get("dbname") != DATABASE
+        or not app_parts.get("password")
+        or not owner_parts.get("password")
+    ):
+        raise RuntimeError("Stored PostgreSQL service credentials do not match the dedicated target roles.")
+    return owner_parts["password"], app_parts["password"]
+
+
+def _file_state(path: Path) -> bytes | None:
+    return path.read_bytes() if path.is_file() else None
+
+
+def _restore_file_state(path: Path, content: bytes | None) -> None:
+    if content is None:
+        path.unlink(missing_ok=True)
+        return
+    temporary = path.with_name(f".{path.name}.{uuid4().hex}.restore")
+    from scripts.setup_local_postgres import restrict_private_file
+    try:
+        temporary.write_bytes(content)
+        restrict_private_file(temporary)
+        os.replace(temporary, path)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def _activate_staged_assets(staged_assets: Path) -> Path | None:
+    previous = BACKEND / f".pre-transfer-assets-{uuid4().hex}"
+    moved_previous = False
+    try:
+        if ASSETS.exists():
+            os.replace(ASSETS, previous)
+            moved_previous = True
+        os.replace(staged_assets, ASSETS)
+    except Exception:
+        if moved_previous and previous.exists() and not ASSETS.exists():
+            os.replace(previous, ASSETS)
+        raise
+    return previous if moved_previous else None
+
+
+def _rollback_assets(previous: Path | None, failed: Path) -> None:
+    if ASSETS.exists():
+        os.replace(ASSETS, failed)
+    if previous and previous.exists():
+        os.replace(previous, ASSETS)
+
+
+def import_bundle(
+    bundle: Path,
+    validate_only: bool,
+    *,
+    replace_existing: bool = False,
+    backup_dir: Path | None = None,
+) -> None:
     require_stopped()
     bundle = bundle.expanduser().resolve()
     manifest = validate_bundle(bundle)
     if validate_only:
         print("Validation-only mode completed; no database or files were changed.")
         return
+    if RECOVERY_MARKER.is_file():
+        raise RuntimeError("A previous PostgreSQL replacement requires manual recovery; import is blocked.")
 
     values = dotenv_values(ENV_FILE)
-    configured_url = values.get("POSTGRES_ADMIN_URL") or values.get("DATABASE_URL") or os.getenv("POSTGRES_ADMIN_URL")
+    configured_url = os.getenv("POSTGRES_ADMIN_URL") or values.get("POSTGRES_ADMIN_URL") or values.get("DATABASE_URL")
     if not configured_url:
         raise RuntimeError("Set POSTGRES_ADMIN_URL in .env to the target PostgreSQL administrator connection.")
     admin_url = configured_url.replace("postgresql+psycopg://", "postgresql://", 1)
@@ -345,17 +447,50 @@ def import_bundle(bundle: Path, validate_only: bool) -> None:
             raise RuntimeError("The configured PostgreSQL account needs CREATEDB and CREATEROLE privileges.")
         database_exists = admin.execute("SELECT 1 FROM pg_database WHERE datname=%s", [DATABASE]).fetchone() is not None
         role_names = {row[0] for row in admin.execute("SELECT rolname FROM pg_roles WHERE rolname IN (%s, %s)", [OWNER_ROLE, APP_ROLE]).fetchall()}
-    if database_exists or role_names:
-        raise RuntimeError("The target database or application roles already exist. Import requires a fresh target.")
+    if database_exists and not replace_existing:
+        raise RuntimeError("The target database already exists. Re-run with --replace-existing after reviewing the backup policy.")
+    if role_names and not database_exists:
+        raise RuntimeError("Dedicated application roles exist without the target database; replacement stopped.")
+    if role_names:
+        validate_dedicated_roles(admin_url)
+        owner_password, app_password = _existing_service_passwords()
+    else:
+        owner_password = secrets.token_urlsafe(36)
+        app_password = secrets.token_urlsafe(36)
+    if database_exists and replace_existing and not role_state[2]:
+        raise RuntimeError("Replacing an existing database requires a PostgreSQL superuser administrator connection.")
 
-    owner_password = secrets.token_urlsafe(36)
-    app_password = secrets.token_urlsafe(36)
-    owner_url = service_url(admin_parts, OWNER_ROLE, owner_password)
-    app_url = service_url(admin_parts, APP_ROLE, app_password)
+    selected_backup_dir = (backup_dir or (BACKEND / "backups")).expanduser().resolve()
+    replacement_backup: Path | None = None
+    if database_exists:
+        replacement_backup = create_replacement_backup(
+            admin_url,
+            ASSETS,
+            selected_backup_dir,
+            find_pg_tool,
+        )
+        print(f"Verified pre-replacement backup: {replacement_backup}")
+    elif ASSETS.is_dir() and any(path.is_file() for path in ASSETS.rglob("*")):
+        replacement_backup = create_assets_backup(ASSETS, selected_backup_dir)
+        print(f"Verified pre-transfer assets backup: {replacement_backup}")
+
+    staging_database = database_name("simulation_dashboard_stage")
+    write_recovery_marker(
+        ROOT,
+        {
+            "status": "replacement-preparation-in-progress",
+            "backup": str(replacement_backup or ""),
+            "target_database": DATABASE,
+            "target_database_oid": database_identity(admin_url, DATABASE) if database_exists else "",
+            "staging_database": staging_database,
+        },
+    )
+    owner_url = service_url(admin_parts, OWNER_ROLE, owner_password, staging_database)
+    app_url = service_url(admin_parts, APP_ROLE, app_password, staging_database)
     environment = os.environ.copy()
     environment.update({
         "POSTGRES_ADMIN_URL": admin_url,
-        "SIM_DASH_DATABASE": DATABASE,
+        "SIM_DASH_DATABASE": staging_database,
         "SIM_DASH_OWNER_ROLE": OWNER_ROLE,
         "SIM_DASH_APP_ROLE": APP_ROLE,
         "SIM_DASH_OWNER_PASSWORD": owner_password,
@@ -363,6 +498,8 @@ def import_bundle(bundle: Path, validate_only: bool) -> None:
         "ANALYSIS_DB_BACKEND": "postgresql",
         "DATABASE_URL": owner_url,
     })
+    if role_names:
+        environment["SIM_DASH_PRESERVE_EXISTING_ROLES"] = "1"
     subprocess.run([sys.executable, str(BACKEND / "scripts" / "bootstrap_postgres.py")], cwd=BACKEND, env=environment, check=True)
     owner_target = parse_target(owner_url)
     restore = [
@@ -374,7 +511,7 @@ def import_bundle(bundle: Path, validate_only: bool) -> None:
     grant_runtime_privileges(owner_url)
     subprocess.run([sys.executable, str(BACKEND / "scripts" / "harden_postgres_privileges.py")], cwd=BACKEND, env=environment, check=True)
     restored = database_snapshot(app_url)
-    restored.pop("managed_asset_paths")
+    validate_managed_asset_paths(restored.pop("managed_asset_paths"), manifest["assets"])
     if restored["alembic_revision"] != expected_alembic_head() or restored["table_counts"] != manifest["table_counts"]:
         raise RuntimeError("Restored database verification failed. Do not start the application.")
 
@@ -383,16 +520,106 @@ def import_bundle(bundle: Path, validate_only: bool) -> None:
     verify_app_privileges(app_url)
 
     staged_assets = extract_assets(bundle, manifest)
-    backup_root = BACKEND / "backups"
-    backup_root.mkdir(parents=True, exist_ok=True)
-    previous_assets = backup_root / f"assets-pre-transfer-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
-    if ASSETS.exists():
-        os.replace(ASSETS, previous_assets)
-    os.replace(staged_assets, ASSETS)
-    write_owner_env(owner_url)
-    replace_service_env(app_url)
+    original_env = _file_state(ENV_FILE)
+    original_owner_env = _file_state(OWNER_ENV_FILE)
+    previous_database: str | None = None
+    previous_assets: Path | None = None
+    database_swapped = False
+    assets_swapped = False
+    failed_database = database_name("simulation_dashboard_failed")
+    failed_assets = BACKEND / f".failed-transfer-assets-{uuid4().hex}"
+    final_owner_url = service_url(admin_parts, OWNER_ROLE, owner_password)
+    final_app_url = service_url(admin_parts, APP_ROLE, app_password)
+    target_oid = database_identity(admin_url, DATABASE) if database_exists else ""
+    staging_oid = database_identity(admin_url, staging_database)
+    try:
+        marker_details = {
+            "status": "replacement-in-progress",
+            "backup": str(replacement_backup or ""),
+            "target_database": DATABASE,
+            "target_database_oid": target_oid,
+            "staging_database": staging_database,
+            "staging_database_oid": staging_oid,
+            "failed_database": failed_database,
+        }
+        write_recovery_marker(ROOT, marker_details)
+        previous_database = swap_databases(
+            admin_url,
+            staging_database,
+            expected_staging_oid=staging_oid,
+            expected_target_oid=target_oid or None,
+        )
+        database_swapped = True
+        previous_assets = _activate_staged_assets(staged_assets)
+        assets_swapped = True
+        write_owner_env(final_owner_url)
+        replace_service_env(final_app_url)
+        if database_identity(admin_url, DATABASE) != staging_oid:
+            raise RuntimeError("The promoted database identity verification failed.")
+        finalize_promoted_database(admin_url, staging_oid)
+        verify_app_privileges(final_app_url)
+        RECOVERY_MARKER.unlink(missing_ok=True)
+    except Exception as activation_error:
+        rollback_errors: list[str] = []
+        try:
+            _restore_file_state(ENV_FILE, original_env)
+            _restore_file_state(OWNER_ENV_FILE, original_owner_env)
+        except Exception as error:
+            rollback_errors.append(f"environment={type(error).__name__}")
+        if assets_swapped:
+            try:
+                _rollback_assets(previous_assets, failed_assets)
+            except Exception as error:
+                rollback_errors.append(f"assets={type(error).__name__}")
+        if database_swapped:
+            try:
+                rollback_database_swap(
+                    admin_url,
+                    previous_database,
+                    failed_database,
+                    expected_promoted_oid=staging_oid,
+                    expected_previous_oid=target_oid or None,
+                )
+            except Exception as error:
+                rollback_errors.append(f"database={type(error).__name__}")
+        if rollback_errors:
+            marker = write_recovery_marker(
+                ROOT,
+                {
+                    "status": "manual-recovery-required",
+                    "reason": type(activation_error).__name__,
+                    "rollback_errors": ",".join(rollback_errors),
+                    "backup": str(replacement_backup or ""),
+                    "previous_database": previous_database or "",
+                    "failed_database": failed_database,
+                    "failed_assets": str(failed_assets),
+                },
+            )
+            raise RuntimeError(f"Replacement activation failed and rollback is incomplete. See {marker.name}.") from activation_error
+        if not database_swapped or previous_database is None:
+            marker = write_recovery_marker(
+                ROOT,
+                {
+                    "status": "manual-recovery-required",
+                    "reason": type(activation_error).__name__,
+                    "backup": str(replacement_backup or ""),
+                    "target_database_oid": target_oid,
+                    "staging_database_oid": staging_oid,
+                    "failed_database": failed_database,
+                },
+            )
+            raise RuntimeError(f"Database cutover did not complete. Review {marker.name} before starting.") from activation_error
+        RECOVERY_MARKER.unlink(missing_ok=True)
+        raise RuntimeError("Replacement activation failed; the previous installation was restored.") from activation_error
+
+    if previous_assets and previous_assets.exists():
+        shutil.rmtree(previous_assets)
     print("PostgreSQL transfer import completed and service credentials were activated.")
     print(f"tables={len(restored['table_counts'])}, rows={sum(restored['table_counts'].values())}, assets={len(manifest['assets'])}")
+    if previous_database:
+        print(f"Previous database retained as: {previous_database}")
+    if replacement_backup:
+        print(f"Verified replacement backup retained at: {replacement_backup}")
 
 
 def main() -> int:
@@ -403,11 +630,18 @@ def main() -> int:
     import_parser = subparsers.add_parser("import")
     import_parser.add_argument("bundle", type=Path)
     import_parser.add_argument("--validate-only", action="store_true")
+    import_parser.add_argument("--replace-existing", action="store_true")
+    import_parser.add_argument("--backup-dir", type=Path)
     args = parser.parse_args()
     if args.command == "export":
         export_bundle(args.output_dir)
     else:
-        import_bundle(args.bundle, args.validate_only)
+        import_bundle(
+            args.bundle,
+            args.validate_only,
+            replace_existing=args.replace_existing,
+            backup_dir=args.backup_dir,
+        )
     return 0
 
 

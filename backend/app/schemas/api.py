@@ -3,13 +3,60 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+
+WidgetType = Literal[
+    "kpi",
+    "verdict",
+    "gauge",
+    "edge_bar",
+    "time_series",
+    "scatter",
+    "result_table",
+    "contour",
+    "video",
+    "video_grid",
+    "model3d",
+    "note",
+    "workflow",
+    "open_cell_map",
+    "open_cell_summary",
+    "summary",
+    "chassis_summary",
+    "chassis_diagram",
+    "chassis_bar",
+    "chassis_table",
+    "run_comparison",
+]
+
+ANALYSIS_PAGE_WIDGET_TYPES = {
+    "kpi",
+    "verdict",
+    "gauge",
+    "edge_bar",
+    "time_series",
+    "scatter",
+    "result_table",
+    "contour",
+    "video",
+    "video_grid",
+    "note",
+    "open_cell_map",
+    "open_cell_summary",
+    "summary",
+    "chassis_summary",
+    "chassis_diagram",
+    "chassis_bar",
+    "chassis_table",
+    "run_comparison",
+}
 
 
 class Widget(BaseModel):
-    id: str
-    type: str
-    title: str
+    id: str = Field(min_length=1, max_length=120)
+    type: WidgetType
+    title: str = Field(min_length=1, max_length=160)
     x: int = Field(ge=0)
     y: int = Field(ge=0)
     w: int = Field(ge=2, le=12)
@@ -17,11 +64,65 @@ class Widget(BaseModel):
     settings: dict[str, Any] = Field(default_factory=dict)
 
 
+class AnalysisPageMeta(BaseModel):
+    kind: Literal["analysis_page"] = "analysis_page"
+    analysis_key: Literal["open_cell", "chassis_rear", "run_comparison", "custom"]
+    status: Literal["draft", "published", "archived"]
+    display_order: int = Field(ge=0)
+    is_system: bool
+
+
 class DashboardDefinition(BaseModel):
-    id: str
-    name: str
-    description: str = ""
+    id: str = Field(min_length=1, max_length=120)
+    name: str = Field(min_length=2, max_length=120)
+    description: str = Field(default="", max_length=500)
     widgets: list[Widget]
+    page: AnalysisPageMeta | None = None
+
+    @model_validator(mode="after")
+    def validate_widget_layout(self) -> "DashboardDefinition":
+        widget_ids = [widget.id for widget in self.widgets]
+        if len(widget_ids) != len(set(widget_ids)):
+            raise ValueError("위젯 ID는 대시보드 안에서 중복될 수 없습니다.")
+        if any(widget.x + widget.w > 12 for widget in self.widgets):
+            raise ValueError("위젯은 12열 레이아웃을 벗어날 수 없습니다.")
+        if self.page and any(widget.type not in ANALYSIS_PAGE_WIDGET_TYPES for widget in self.widgets):
+            raise ValueError("분석 페이지에서 지원하지 않는 위젯 유형이 포함되어 있습니다.")
+        comparison_widgets = [widget for widget in self.widgets if widget.type == "run_comparison"]
+        if comparison_widgets and (not self.page or self.page.analysis_key != "run_comparison" or not self.page.is_system):
+            raise ValueError("Run 비교 위젯은 시스템 Run 비교 분석 페이지에서만 사용할 수 있습니다.")
+        if self.page and self.page.analysis_key == "run_comparison" and len(comparison_widgets) != 1:
+            raise ValueError("시스템 Run 비교 분석 페이지에는 Run 비교 위젯이 하나 필요합니다.")
+        return self
+
+
+class AnalysisPageCreate(BaseModel):
+    load_case_id: str = Field(min_length=1, max_length=120)
+    name: str = Field(min_length=2, max_length=120)
+    description: str = Field(default="", max_length=500)
+
+
+class AnalysisPageUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=2, max_length=120)
+    description: str | None = Field(default=None, max_length=500)
+    status: Literal["draft", "published", "archived"] | None = None
+
+
+class AnalysisPageOrderUpdate(BaseModel):
+    load_case_id: str = Field(min_length=1, max_length=120)
+    page_ids: list[str]
+
+
+class AnalysisPageSummary(BaseModel):
+    id: str
+    project_id: str
+    request_id: str | None
+    load_case_id: str | None
+    name: str
+    description: str
+    version: int
+    updated_at: datetime
+    page: AnalysisPageMeta
 
 
 class DashboardClone(BaseModel):
@@ -108,6 +209,81 @@ class LoadCaseCreate(BaseModel):
     name: str = Field(min_length=2, max_length=160)
     analysis_type: Literal["DROP", "SIDE_CLAMP"]
     parameters: dict[str, Any] = Field(default_factory=dict)
+
+
+class DropVideoSubsystemEvaluation(BaseModel):
+    critical_value: float = Field(ge=0)
+    threshold: float = Field(gt=0)
+    unit: str = Field(min_length=1, max_length=20)
+    verdict: Literal["PASS", "FAIL"]
+    metrics: dict[str, float] = Field(default_factory=dict, max_length=8)
+
+
+class DropVideoEvaluation(BaseModel):
+    overall_verdict: Literal["PASS", "FAIL"]
+    open_cell: DropVideoSubsystemEvaluation
+    chassis_rear: DropVideoSubsystemEvaluation
+
+
+class DropVideoItemResponse(BaseModel):
+    video_id: str
+    scene_id: str
+    scene_name: str
+    video_url: str
+    thumbnail_url: str | None
+    duration: float | None = Field(default=None, ge=0)
+    file_size: int = Field(ge=0)
+    format: Literal["mp4", "webm"]
+    codec: str | None
+    fast_start: bool | None
+    sort_order: int = Field(ge=1)
+    drop_direction: str | None
+    drop_condition: str | None
+    analysis_version: str | None
+    evaluation: DropVideoEvaluation
+
+
+class DropVideoLoadCaseResponse(BaseModel):
+    load_case_id: str
+    load_case_name: str
+    analysis_type: str
+    request_id: str
+    request_name: str
+
+
+class DropVideoPaginationResponse(BaseModel):
+    page: int = Field(ge=1)
+    page_size: int = Field(ge=1, le=20)
+    total_items: int = Field(ge=0)
+    total_pages: int = Field(ge=0)
+    has_previous: bool
+    has_next: bool
+
+
+class DropVideoSubsystemSummary(BaseModel):
+    pass_count: int = Field(ge=0)
+    fail_count: int = Field(ge=0)
+    threshold: float = Field(gt=0)
+    unit: str = Field(min_length=1, max_length=20)
+
+
+class DropVideoEvaluationSummary(BaseModel):
+    total_scenes: int = Field(ge=0)
+    pass_count: int = Field(ge=0)
+    fail_count: int = Field(ge=0)
+    open_cell: DropVideoSubsystemSummary
+    chassis_rear: DropVideoSubsystemSummary
+
+
+class DropVideoPageResponse(BaseModel):
+    load_case: DropVideoLoadCaseResponse
+    source: Literal["EXAMPLE_ADAPTER"]
+    demo_only: bool
+    evaluation_source: Literal["SYNTHETIC_DEMO"]
+    contract_version: Literal[1]
+    summary: DropVideoEvaluationSummary
+    pagination: DropVideoPaginationResponse
+    videos: list[DropVideoItemResponse]
 
 
 class ResultImportPayload(BaseModel):

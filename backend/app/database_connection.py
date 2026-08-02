@@ -56,22 +56,33 @@ def _postgres_engine(database_url: str) -> Engine:
 
 
 def _postgres_statement(statement: str) -> str:
-    # psycopg uses ``%`` for its parameter protocol even when SQLAlchemy's
-    # ``exec_driver_sql`` is used. Escape literal LIKE/modulo percent signs
-    # before converting the DuckDB-style positional placeholders.
-    translated = statement.replace("%", "%%").replace("?", "%s")
+    # 1. DuckDB 형태의 ? IS NULL 구문을 PostgreSQL이 이해하도록 CAST 구문으로 먼저 변경
+    translated = re.sub(
+        r"\?\s+IS\s+NULL",
+        "CAST(? AS text) IS NULL",
+        statement,
+        flags=re.IGNORECASE,
+    )
+    
+    # 2. % 이스케이프 및 ? -> %s 변환
+    translated = translated.replace("%", "%%").replace("?", "%s")
+
+    # 3. json_extract_string 변환
     translated = re.sub(
         r"json_extract_string\(\s*([A-Za-z_][A-Za-z0-9_.]*)\s*,\s*'\$\.([A-Za-z0-9_-]+)'\s*\)",
         r"(\1 ->> '\2')",
         translated,
         flags=re.IGNORECASE,
     )
+
+    # 4. INSERT OR IGNORE 변환
     if re.search(r"\bINSERT\s+OR\s+IGNORE\s+INTO\b", translated, flags=re.IGNORECASE):
         translated = re.sub(r"\bINSERT\s+OR\s+IGNORE\s+INTO\b", "INSERT INTO", translated, count=1, flags=re.IGNORECASE)
         stripped = translated.rstrip()
         suffix = ";" if stripped.endswith(";") else ""
         body = stripped[:-1].rstrip() if suffix else stripped
         translated = f"{body} ON CONFLICT DO NOTHING{suffix}"
+        
     return translated
 
 

@@ -1,4 +1,4 @@
-import type { AnalysisRequest, AnalysisRunSummary, AutomationTemplate, DashboardDefinition, DashboardSummary, DashboardVersion, DropVideoPage, FeatureExample, ImportSchema, ImportSchemaDefinition, LoadCase, Overview, PortfolioLayout, PortfolioOverview, Project, QualityThreshold, ReportLayout, ReportLayoutDefinition, ReportLayoutVersion, ReportTemplateAsset, ReviewItem, RunComparison, RunTrust, VariableDefinition, VariableDefinitionInput, WidgetCatalogItem, Workflow, WorkflowDashboardLayout, WorkflowStep, WorkspaceLayout, WorkspaceLayoutVersion } from './types'
+import type { AnalysisRequest, AnalysisRunSummary, AutomationTemplate, DashboardDefinition, DashboardPageSummary, DashboardSummary, DashboardVersion, DashboardVersionDefinition, DropVideoPage, FeatureExample, ImportSchema, ImportSchemaDefinition, LoadCase, Overview, PortfolioLayout, PortfolioOverview, Project, QualityThreshold, ReportLayout, ReportLayoutDefinition, ReportLayoutVersion, ReportTemplateAsset, ReviewItem, RunComparison, RunTrust, VariableDefinition, VariableDefinitionInput, WidgetCatalogItem, Workflow, WorkflowDashboardLayout, WorkflowStep, WorkspaceLayout, WorkspaceLayoutVersion } from './types'
 import { generatedApiClient } from './generated/client'
 import { authenticatedFetch, clearSession } from './auth'
 import type { AuthUser } from './auth'
@@ -83,7 +83,7 @@ export const api = {
     }>(fetch(`/api/load-cases/${loadCaseId}/results/import`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })),
   importTypedFolderExample: (loadCaseId: string) =>
     json<{ status: 'IMPORTED'; job_id: string; run_id: string; run_no: number; schema_id: string; summary: { scalar_count: number; curve_count: number; media_count: number } }>(fetch(`/api/load-cases/${loadCaseId}/folder-import/example`, { method: 'POST' })),
-  overview: (loadCaseId: string) => json<Overview>(fetch(`/api/load-cases/${loadCaseId}/overview`)),
+  overview: (loadCaseId: string, runId?: string) => json<Overview>(fetch(`/api/load-cases/${loadCaseId}/overview${runId ? `?run_id=${encodeURIComponent(runId)}` : ''}`)),
   analysisRuns: (loadCaseId: string) => json<AnalysisRunSummary[]>(fetch(`/api/load-cases/${loadCaseId}/runs`)),
   runComparison: (loadCaseId: string, baselineRunId: string, targetRunId: string, variableKey?: string) => {
     const params = new URLSearchParams({ baseline_run_id: baselineRunId, target_run_id: targetRunId })
@@ -136,6 +136,16 @@ export const api = {
     json<WorkflowStep[]>(fetch(`/api/requests/${requestId}/workflow-steps`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ steps }) })),
   dashboard: (id = 'dashboard-drop-default') => json<DashboardDefinition>(fetch(`/api/dashboards/${id}`)),
   dashboards: (projectId?: string) => json<DashboardSummary[]>(fetch(`/api/dashboards${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''}`)),
+  dashboardPages: (loadCaseId: string) => json<DashboardPageSummary[]>(fetch(`/api/dashboard-pages?load_case_id=${encodeURIComponent(loadCaseId)}`)),
+  adminDashboardPages: (loadCaseId: string, includeArchived = true) => json<DashboardPageSummary[]>(fetch(`/api/admin/dashboard-pages?load_case_id=${encodeURIComponent(loadCaseId)}&include_archived=${includeArchived}`)),
+  createDashboardPage: (payload: { load_case_id: string; name: string; description: string }) =>
+    json<DashboardDefinition>(fetch('/api/admin/dashboard-pages', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })),
+  updateDashboardPage: (dashboardId: string, payload: { name?: string; description?: string; status?: 'draft' | 'published' | 'archived' }) =>
+    json<DashboardDefinition>(fetch(`/api/admin/dashboard-pages/${dashboardId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })),
+  deleteDashboardPage: (dashboardId: string, loadCaseId: string) =>
+    json<{ status: 'deleted'; id: string; load_case_id: string }>(fetch(`/api/admin/dashboard-pages/${dashboardId}?load_case_id=${encodeURIComponent(loadCaseId)}`, { method: 'DELETE' })),
+  reorderDashboardPages: (loadCaseId: string, pageIds: string[]) =>
+    json<DashboardPageSummary[]>(fetch('/api/admin/dashboard-pages/order', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ load_case_id: loadCaseId, page_ids: pageIds }) })),
   variables: (loadCaseId: string) => json<VariableDefinition[]>(fetch(`/api/load-cases/${loadCaseId}/variables`)),
   createVariable: (loadCaseId: string, payload: VariableDefinitionInput) =>
     json<VariableDefinition>(fetch(`/api/load-cases/${loadCaseId}/variables`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })),
@@ -164,7 +174,12 @@ export const api = {
     if (!response.ok) throw new Error(await response.text() || `요청 실패 (${response.status})`)
     return response.blob()
   },
-  dashboardVersions: (dashboardId: string) => json<DashboardVersion[]>(fetch(`/api/dashboards/${dashboardId}/versions`)),
+  dashboardVersions: (dashboardId: string, includeInvalid = false) =>
+    json<DashboardVersion[]>(fetch(`/api/dashboards/${dashboardId}/versions?include_invalid=${includeInvalid}`)),
+  dashboardVersion: (dashboardId: string, version: number, includeInvalid = false) =>
+    json<DashboardVersionDefinition>(fetch(`/api/dashboards/${dashboardId}/versions/${version}?include_invalid=${includeInvalid}`)),
+  deleteDashboardVersion: (dashboardId: string, version: number) =>
+    json<{ status: 'invalidated'; dashboard_id: string; version: number }>(fetch(`/api/dashboards/${dashboardId}/versions/${version}`, { method: 'DELETE' })),
   cloneDashboard: (dashboardId: string, name: string, description: string) => json<{ id: string; version: number }>(fetch(`/api/dashboards/${dashboardId}/clone`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, description, created_by: '대시보드 사용자' }) })),
   restoreDashboard: (dashboardId: string, version: number) => json<{ version: number; restored_from: number }>(fetch(`/api/dashboards/${dashboardId}/restore/${version}`, { method: 'POST' })),
   saveDashboard: (definition: DashboardDefinition) =>

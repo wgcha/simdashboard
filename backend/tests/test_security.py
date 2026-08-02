@@ -29,6 +29,7 @@ def test_password_hash_and_role_policy():
     assert minimum_role("PUT", "/api/dashboards/example") == "editor"
     assert minimum_role("PUT", "/api/quality-thresholds/key") == "admin"
     assert minimum_role("DELETE", "/api/report-layouts/example") == "admin"
+    assert minimum_role("DELETE", "/api/dashboards/example/versions/1") == "admin"
     assert minimum_role("POST", "/api/workbench/demo-runs") == "editor"
     assert minimum_role("POST", "/api/workbench/work-items/example/complete") == "editor"
     assert minimum_role("PUT", "/api/workbench/requests/example/request-type") == "editor"
@@ -59,6 +60,7 @@ def test_password_auth_rbac_and_audit(monkeypatch):
             assert client.get("/api/workbench/task-types", headers=viewer_headers).status_code == 200
             assert client.get("/assets/sample-contour.svg").status_code == 200
             assert client.post("/api/dashboard-commands/preview", headers=viewer_headers, json={"command": "KPI 추가"}).status_code == 403
+            assert client.delete("/api/dashboards/dashboard-drop-default/versions/1", headers=viewer_headers).status_code == 403
             demo_payload = {
                 "name": "권한 검증 데모",
                 "execution_mode": "DEMO_ONLY",
@@ -91,12 +93,14 @@ def test_password_auth_rbac_and_audit(monkeypatch):
             assert assigned.json()["source"] == "USER"
             assert client.post("/api/admin/workbench/request-types", headers=editor_headers, json={}).status_code == 403
             assert client.delete("/api/report-layouts/not-found", headers=editor_headers).status_code == 403
+            assert client.delete("/api/dashboards/dashboard-drop-default/versions/1", headers=editor_headers).status_code == 403
 
             admin_login = client.post("/api/auth/login", json={"username": f"admin-{suffix}", "password": password}).json()
             admin_headers = {"Authorization": f"Bearer {admin_login['access_token']}"}
             assert client.get("/api/auth/me").status_code == 200  # HttpOnly login cookie
             me = client.get("/api/auth/me", headers=admin_headers)
             assert me.status_code == 200 and me.json()["role"] == "admin"
+            assert client.delete("/api/dashboards/dashboard-drop-default/versions/1", headers=admin_headers).status_code == 409
             events = client.get("/api/audit-events", headers=admin_headers)
             assert events.status_code == 200
             actions = {event["action"] for event in events.json()}

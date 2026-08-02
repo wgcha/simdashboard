@@ -191,6 +191,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/workbench/batch-profiles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Batch Profiles */
+        get: operations["list_batch_profiles_api_workbench_batch_profiles_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/workbench/batch-profiles/{profile_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Save Batch Profile */
+        put: operations["save_batch_profile_api_admin_workbench_batch_profiles__profile_id__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/workbench/work-items/{item_id}/batch-dispatch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Dispatch Batch Work Item */
+        post: operations["dispatch_batch_work_item_api_workbench_work_items__item_id__batch_dispatch_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/workbench/requests/{request_id}/request-type": {
         parameters: {
             query?: never;
@@ -276,6 +327,23 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/workbench/work-items/{item_id}/progress": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update Work Item Progress */
+        patch: operations["update_work_item_progress_api_workbench_work_items__item_id__progress_patch"];
         trace?: never;
     };
     "/api/workbench/work-items/{item_id}/complete": {
@@ -993,6 +1061,76 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/dashboard-pages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Public Dashboard Pages */
+        get: operations["list_public_dashboard_pages_api_dashboard_pages_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/dashboard-pages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Admin Dashboard Pages */
+        get: operations["list_admin_dashboard_pages_api_admin_dashboard_pages_get"];
+        put?: never;
+        /** Create Dashboard Page */
+        post: operations["create_dashboard_page_api_admin_dashboard_pages_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/dashboard-pages/{dashboard_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Dashboard Page */
+        delete: operations["delete_dashboard_page_api_admin_dashboard_pages__dashboard_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Dashboard Page */
+        patch: operations["update_dashboard_page_api_admin_dashboard_pages__dashboard_id__patch"];
+        trace?: never;
+    };
+    "/api/admin/dashboard-pages/order": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Reorder Dashboard Pages */
+        put: operations["reorder_dashboard_pages_api_admin_dashboard_pages_order_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/dashboards/{dashboard_id}": {
         parameters: {
             query?: never;
@@ -1040,6 +1178,24 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/dashboards/{dashboard_id}/versions/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Dashboard Version */
+        get: operations["get_dashboard_version_api_dashboards__dashboard_id__versions__version__get"];
+        put?: never;
+        post?: never;
+        /** Delete Dashboard Version */
+        delete: operations["delete_dashboard_version_api_dashboards__dashboard_id__versions__version__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1100,6 +1256,80 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AnalysisPageCreate */
+        AnalysisPageCreate: {
+            /** Load Case Id */
+            load_case_id: string;
+            /** Name */
+            name: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+        };
+        /** AnalysisPageMeta */
+        AnalysisPageMeta: {
+            /**
+             * Kind
+             * @default analysis_page
+             * @constant
+             */
+            kind: "analysis_page";
+            /**
+             * Analysis Key
+             * @enum {string}
+             */
+            analysis_key: "open_cell" | "chassis_rear" | "run_comparison" | "custom";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "draft" | "published" | "archived";
+            /** Display Order */
+            display_order: number;
+            /** Is System */
+            is_system: boolean;
+        };
+        /** AnalysisPageOrderUpdate */
+        AnalysisPageOrderUpdate: {
+            /** Load Case Id */
+            load_case_id: string;
+            /** Page Ids */
+            page_ids: string[];
+        };
+        /** AnalysisPageSummary */
+        AnalysisPageSummary: {
+            /** Id */
+            id: string;
+            /** Project Id */
+            project_id: string;
+            /** Request Id */
+            request_id: string | null;
+            /** Load Case Id */
+            load_case_id: string | null;
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            /** Version */
+            version: number;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            page: components["schemas"]["AnalysisPageMeta"];
+        };
+        /** AnalysisPageUpdate */
+        AnalysisPageUpdate: {
+            /** Name */
+            name?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Status */
+            status?: ("draft" | "published" | "archived") | null;
+        };
         /** AnalysisRequestCreate */
         AnalysisRequestCreate: {
             /** Title */
@@ -1139,6 +1369,48 @@ export interface components {
             /** Assigned By */
             assigned_by?: string | null;
         };
+        /** BatchDispatchCreate */
+        BatchDispatchCreate: {
+            /** Batch Profile Id */
+            batch_profile_id: string;
+            /**
+             * Created By
+             * @default 실행 담당자
+             */
+            created_by: string;
+        };
+        /** BatchProfileInput */
+        BatchProfileInput: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Solver Path */
+            solver_path: string;
+            /** Working Directory */
+            working_directory: string;
+            /**
+             * Arguments Template
+             * @default {input}
+             */
+            arguments_template: string;
+            /** Environment */
+            environment?: {
+                [key: string]: string;
+            };
+            /** Task Type Ids */
+            task_type_ids: string[];
+            /**
+             * Is Active
+             * @default true
+             */
+            is_active: boolean;
+            /**
+             * Updated By
+             * @default 관리자
+             */
+            updated_by: string;
+        };
         /** DashboardClone */
         DashboardClone: {
             /** Name */
@@ -1167,6 +1439,7 @@ export interface components {
             description: string;
             /** Widgets */
             widgets: components["schemas"]["Widget"][];
+            page?: components["schemas"]["AnalysisPageMeta"] | null;
         };
         /** DemoRunCreate */
         DemoRunCreate: {
@@ -1191,6 +1464,144 @@ export interface components {
              * @default 데모 사용자
              */
             created_by: string;
+        };
+        /** DropVideoEvaluation */
+        DropVideoEvaluation: {
+            /**
+             * Overall Verdict
+             * @enum {string}
+             */
+            overall_verdict: "PASS" | "FAIL";
+            open_cell: components["schemas"]["DropVideoSubsystemEvaluation"];
+            chassis_rear: components["schemas"]["DropVideoSubsystemEvaluation"];
+        };
+        /** DropVideoEvaluationSummary */
+        DropVideoEvaluationSummary: {
+            /** Total Scenes */
+            total_scenes: number;
+            /** Pass Count */
+            pass_count: number;
+            /** Fail Count */
+            fail_count: number;
+            open_cell: components["schemas"]["DropVideoSubsystemSummary"];
+            chassis_rear: components["schemas"]["DropVideoSubsystemSummary"];
+        };
+        /** DropVideoItemResponse */
+        DropVideoItemResponse: {
+            /** Video Id */
+            video_id: string;
+            /** Scene Id */
+            scene_id: string;
+            /** Scene Name */
+            scene_name: string;
+            /** Video Url */
+            video_url: string;
+            /** Thumbnail Url */
+            thumbnail_url: string | null;
+            /** Duration */
+            duration?: number | null;
+            /** File Size */
+            file_size: number;
+            /**
+             * Format
+             * @enum {string}
+             */
+            format: "mp4" | "webm";
+            /** Codec */
+            codec: string | null;
+            /** Fast Start */
+            fast_start: boolean | null;
+            /** Sort Order */
+            sort_order: number;
+            /** Drop Direction */
+            drop_direction: string | null;
+            /** Drop Condition */
+            drop_condition: string | null;
+            /** Analysis Version */
+            analysis_version: string | null;
+            evaluation: components["schemas"]["DropVideoEvaluation"];
+        };
+        /** DropVideoLoadCaseResponse */
+        DropVideoLoadCaseResponse: {
+            /** Load Case Id */
+            load_case_id: string;
+            /** Load Case Name */
+            load_case_name: string;
+            /** Analysis Type */
+            analysis_type: string;
+            /** Request Id */
+            request_id: string;
+            /** Request Name */
+            request_name: string;
+        };
+        /** DropVideoPageResponse */
+        DropVideoPageResponse: {
+            load_case: components["schemas"]["DropVideoLoadCaseResponse"];
+            /**
+             * Source
+             * @constant
+             */
+            source: "EXAMPLE_ADAPTER";
+            /** Demo Only */
+            demo_only: boolean;
+            /**
+             * Evaluation Source
+             * @constant
+             */
+            evaluation_source: "SYNTHETIC_DEMO";
+            /**
+             * Contract Version
+             * @constant
+             */
+            contract_version: 1;
+            summary: components["schemas"]["DropVideoEvaluationSummary"];
+            pagination: components["schemas"]["DropVideoPaginationResponse"];
+            /** Videos */
+            videos: components["schemas"]["DropVideoItemResponse"][];
+        };
+        /** DropVideoPaginationResponse */
+        DropVideoPaginationResponse: {
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
+            /** Total Items */
+            total_items: number;
+            /** Total Pages */
+            total_pages: number;
+            /** Has Previous */
+            has_previous: boolean;
+            /** Has Next */
+            has_next: boolean;
+        };
+        /** DropVideoSubsystemEvaluation */
+        DropVideoSubsystemEvaluation: {
+            /** Critical Value */
+            critical_value: number;
+            /** Threshold */
+            threshold: number;
+            /** Unit */
+            unit: string;
+            /**
+             * Verdict
+             * @enum {string}
+             */
+            verdict: "PASS" | "FAIL";
+            /** Metrics */
+            metrics?: {
+                [key: string]: number;
+            };
+        };
+        /** DropVideoSubsystemSummary */
+        DropVideoSubsystemSummary: {
+            /** Pass Count */
+            pass_count: number;
+            /** Fail Count */
+            fail_count: number;
+            /** Threshold */
+            threshold: number;
+            /** Unit */
+            unit: string;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -1548,8 +1959,11 @@ export interface components {
         Widget: {
             /** Id */
             id: string;
-            /** Type */
-            type: string;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "kpi" | "verdict" | "gauge" | "edge_bar" | "time_series" | "scatter" | "result_table" | "contour" | "video" | "video_grid" | "model3d" | "note" | "workflow" | "open_cell_map" | "open_cell_summary" | "summary" | "chassis_summary" | "chassis_diagram" | "chassis_bar" | "chassis_table" | "run_comparison";
             /** Title */
             title: string;
             /** X */
@@ -1571,6 +1985,13 @@ export interface components {
             completed_by: string;
             /** Demo Run Id */
             demo_run_id?: string | null;
+        };
+        /** WorkItemProgress */
+        WorkItemProgress: {
+            /** Progress */
+            progress: number;
+            /** Updated By */
+            updated_by: string;
         };
         /** WorkItemStart */
         WorkItemStart: {
@@ -2032,6 +2453,113 @@ export interface operations {
             };
         };
     };
+    list_batch_profiles_api_workbench_batch_profiles_get: {
+        parameters: {
+            query?: {
+                include_inactive?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_batch_profile_api_admin_workbench_batch_profiles__profile_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BatchProfileInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    dispatch_batch_work_item_api_workbench_work_items__item_id__batch_dispatch_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BatchDispatchCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     resolve_request_type_api_workbench_requests__request_id__request_type_get: {
         parameters: {
             query?: never;
@@ -2248,6 +2776,43 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["WorkItemStart"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_work_item_progress_api_workbench_work_items__item_id__progress_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkItemProgress"];
             };
         };
         responses: {
@@ -2772,9 +3337,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["DropVideoPageResponse"];
                 };
             };
             /** @description Validation Error */
@@ -2953,7 +3516,9 @@ export interface operations {
     };
     get_load_case_overview_api_load_cases__load_case_id__overview_get: {
         parameters: {
-            query?: never;
+            query?: {
+                run_id?: string | null;
+            };
             header?: never;
             path: {
                 load_case_id: string;
@@ -4008,6 +4573,205 @@ export interface operations {
             };
         };
     };
+    list_public_dashboard_pages_api_dashboard_pages_get: {
+        parameters: {
+            query: {
+                load_case_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalysisPageSummary"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_admin_dashboard_pages_api_admin_dashboard_pages_get: {
+        parameters: {
+            query: {
+                load_case_id: string;
+                include_archived?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalysisPageSummary"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_dashboard_page_api_admin_dashboard_pages_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AnalysisPageCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardDefinition"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_dashboard_page_api_admin_dashboard_pages__dashboard_id__delete: {
+        parameters: {
+            query: {
+                load_case_id: string;
+            };
+            header?: never;
+            path: {
+                dashboard_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_dashboard_page_api_admin_dashboard_pages__dashboard_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dashboard_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AnalysisPageUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardDefinition"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reorder_dashboard_pages_api_admin_dashboard_pages_order_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AnalysisPageOrderUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalysisPageSummary"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_dashboard_api_dashboards__dashboard_id__get: {
         parameters: {
             query?: never;
@@ -4113,7 +4877,9 @@ export interface operations {
     };
     get_dashboard_versions_api_dashboards__dashboard_id__versions_get: {
         parameters: {
-            query?: never;
+            query?: {
+                include_invalid?: boolean;
+            };
             header?: never;
             path: {
                 dashboard_id: string;
@@ -4131,6 +4897,76 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_dashboard_version_api_dashboards__dashboard_id__versions__version__get: {
+        parameters: {
+            query?: {
+                include_invalid?: boolean;
+            };
+            header?: never;
+            path: {
+                dashboard_id: string;
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_dashboard_version_api_dashboards__dashboard_id__versions__version__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dashboard_id: string;
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */

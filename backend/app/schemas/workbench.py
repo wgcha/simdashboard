@@ -99,3 +99,52 @@ class WorkItemComplete(StrictModel):
 
 class WorkItemStart(StrictModel):
     started_by: str = Field(min_length=2, max_length=80)
+
+
+class WorkItemProgress(StrictModel):
+    progress: int = Field(ge=1, le=99)
+    updated_by: str = Field(min_length=2, max_length=80)
+
+
+class BatchProfileInput(StrictModel):
+    id: str = Field(min_length=3, max_length=80, pattern=r"^[a-z][a-z0-9_-]*$")
+    name: str = Field(min_length=2, max_length=120)
+    solver_path: str = Field(min_length=2, max_length=500)
+    working_directory: str = Field(min_length=1, max_length=500)
+    arguments_template: str = Field(default="{input}", max_length=1000)
+    environment: dict[str, str] = Field(default_factory=dict)
+    task_type_ids: list[str] = Field(min_length=1, max_length=32)
+    is_active: bool = True
+    updated_by: str = Field(default="관리자", min_length=2, max_length=80)
+
+    @field_validator("solver_path", "working_directory", "arguments_template")
+    @classmethod
+    def reject_control_characters(cls, value: str) -> str:
+        if any(ord(character) < 32 and character not in "\t" for character in value):
+            raise ValueError("배치 경로와 인수에는 제어 문자를 사용할 수 없습니다.")
+        return value.strip()
+
+    @field_validator("environment")
+    @classmethod
+    def validate_environment(cls, value: dict[str, str]) -> dict[str, str]:
+        if len(value) > 40:
+            raise ValueError("환경 변수는 최대 40개까지 저장할 수 있습니다.")
+        for key, item in value.items():
+            if not key or len(key) > 80 or not key.replace("_", "A").isalnum():
+                raise ValueError(f"환경 변수 이름이 올바르지 않습니다: {key}")
+            if len(item) > 500 or any(ord(character) < 32 and character not in "\t" for character in item):
+                raise ValueError(f"환경 변수 값이 올바르지 않습니다: {key}")
+        return value
+
+    @field_validator("task_type_ids")
+    @classmethod
+    def validate_task_type_ids(cls, value: list[str]) -> list[str]:
+        normalized = list(dict.fromkeys(value))
+        if any(not item or len(item) > 80 or not item[0].isalpha() or any(character not in "abcdefghijklmnopqrstuvwxyz0123456789_-" for character in item) for item in normalized):
+            raise ValueError("작업 유형 ID 형식이 올바르지 않습니다.")
+        return normalized
+
+
+class BatchDispatchCreate(StrictModel):
+    batch_profile_id: str = Field(min_length=3, max_length=80, pattern=r"^[a-z][a-z0-9_-]*$")
+    created_by: str = Field(default="실행 담당자", min_length=2, max_length=80)

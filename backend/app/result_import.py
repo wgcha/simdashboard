@@ -82,6 +82,7 @@ def parse_result_file(
     content: str,
     chassis_threshold: float = 5.0,
     variable_definitions: dict[str, dict[str, Any]] | None = None,
+    open_cell_threshold: float = 75.0,
 ) -> dict[str, Any]:
     if not content.strip():
         raise ResultFormatError("파일 내용이 비어 있습니다.")
@@ -89,7 +90,7 @@ def parse_result_file(
         header = next(csv.reader(io.StringIO(content.lstrip("\ufeff"))), [])
         if {"node_id", "element_id", "part_name"}.issubset(set(header)):
             try:
-                return parse_radioss_mesh_csv(content, chassis_threshold)
+                return parse_radioss_mesh_csv(content, chassis_threshold, open_cell_threshold)
             except RadiossCsvError as exc:
                 raise ResultFormatError(str(exc)) from exc
     metadata, raw_scalars, raw_series = _raw_records(filename, content)
@@ -104,7 +105,7 @@ def parse_result_file(
             raise ResultFormatError(f"scalar_results {index}번째 항목은 객체여야 합니다.")
         key = str(item.get("variable_key", "")).strip()
         if key in OPEN_CELL_SCALARS:
-            display_name, unit, default_threshold, analysis = OPEN_CELL_SCALARS[key], "MPa", 75.0, "OPEN_CELL"
+            display_name, unit, default_threshold, analysis = OPEN_CELL_SCALARS[key], "MPa", open_cell_threshold, "OPEN_CELL"
         elif key in CHASSIS_SCALARS:
             display_name, unit, default_threshold, analysis = CHASSIS_SCALARS[key], "mm", chassis_threshold, "CHASSIS_REAR"
         elif key in variable_definitions and variable_definitions[key]["data_type"] == "NUMBER":

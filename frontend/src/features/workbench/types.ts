@@ -94,6 +94,33 @@ export type DemoRun = {
   started_at: string
   completed_at: string
   tasks: DemoRunTask[]
+  batch_dispatch?: BatchDispatch | null
+}
+
+export type BatchProfile = {
+  id: string
+  name: string
+  solver_path: string
+  working_directory: string
+  arguments_template: string
+  environment: Record<string, string>
+  task_type_ids: string[]
+  is_active: boolean
+  updated_by: string
+  created_at: string
+  updated_at: string
+}
+
+export type BatchDispatch = {
+  id: string
+  work_item_id: string
+  workflow_run_id: string
+  batch_profile_id: string
+  command_preview: string
+  status: 'RECORDED_DEMO'
+  created_by: string
+  created_at: string
+  profile_snapshot: BatchProfile
 }
 
 export type CreateDemoRunInput = {

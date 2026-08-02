@@ -244,6 +244,7 @@ class DemoRunnerService:
             task["events"] = self.repository.task_events(task["id"])
             task["demo_text_artifacts"] = [dict(item) for item in DEMO_TEXT_ARTIFACTS]
         run["tasks"] = tasks
+        run["batch_dispatch"] = self.repository.batch_dispatch_for_run(run_id)
         return run
 
     def list_runs(self, request_id: str | None = None) -> list[dict[str, Any]]:

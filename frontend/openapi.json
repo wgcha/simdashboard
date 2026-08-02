@@ -412,6 +412,162 @@
         }
       }
     },
+    "/api/workbench/batch-profiles": {
+      "get": {
+        "tags": [
+          "workbench-demo"
+        ],
+        "summary": "List Batch Profiles",
+        "operationId": "list_batch_profiles_api_workbench_batch_profiles_get",
+        "parameters": [
+          {
+            "name": "include_inactive",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Include Inactive"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "title": "Response List Batch Profiles Api Workbench Batch Profiles Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/workbench/batch-profiles/{profile_id}": {
+      "put": {
+        "tags": [
+          "workbench-demo"
+        ],
+        "summary": "Save Batch Profile",
+        "operationId": "save_batch_profile_api_admin_workbench_batch_profiles__profile_id__put",
+        "parameters": [
+          {
+            "name": "profile_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Profile Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchProfileInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Save Batch Profile Api Admin Workbench Batch Profiles  Profile Id  Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workbench/work-items/{item_id}/batch-dispatch": {
+      "post": {
+        "tags": [
+          "workbench-demo"
+        ],
+        "summary": "Dispatch Batch Work Item",
+        "operationId": "dispatch_batch_work_item_api_workbench_work_items__item_id__batch_dispatch_post",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Item Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchDispatchCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Dispatch Batch Work Item Api Workbench Work Items  Item Id  Batch Dispatch Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/workbench/requests/{request_id}/request-type": {
       "get": {
         "tags": [
@@ -730,6 +886,60 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Start Work Item Api Workbench Work Items  Item Id  Start Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workbench/work-items/{item_id}/progress": {
+      "patch": {
+        "tags": [
+          "workbench-demo"
+        ],
+        "summary": "Update Work Item Progress",
+        "operationId": "update_work_item_progress_api_workbench_work_items__item_id__progress_patch",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Item Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkItemProgress"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Update Work Item Progress Api Workbench Work Items  Item Id  Progress Patch"
                 }
               }
             }
@@ -1549,9 +1759,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Get Drop Videos Api Load Cases  Load Case Id  Drop Videos Get"
+                  "$ref": "#/components/schemas/DropVideoPageResponse"
                 }
               }
             }
@@ -1790,6 +1998,24 @@
             "schema": {
               "type": "string",
               "title": "Load Case Id"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 3,
+                  "maxLength": 120
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Run Id"
             }
           }
         ],
@@ -3218,6 +3444,285 @@
         }
       }
     },
+    "/api/dashboard-pages": {
+      "get": {
+        "summary": "List Public Dashboard Pages",
+        "operationId": "list_public_dashboard_pages_api_dashboard_pages_get",
+        "parameters": [
+          {
+            "name": "load_case_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120,
+              "title": "Load Case Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AnalysisPageSummary"
+                  },
+                  "title": "Response List Public Dashboard Pages Api Dashboard Pages Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/dashboard-pages": {
+      "get": {
+        "summary": "List Admin Dashboard Pages",
+        "operationId": "list_admin_dashboard_pages_api_admin_dashboard_pages_get",
+        "parameters": [
+          {
+            "name": "load_case_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120,
+              "title": "Load Case Id"
+            }
+          },
+          {
+            "name": "include_archived",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Include Archived"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AnalysisPageSummary"
+                  },
+                  "title": "Response List Admin Dashboard Pages Api Admin Dashboard Pages Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Create Dashboard Page",
+        "operationId": "create_dashboard_page_api_admin_dashboard_pages_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnalysisPageCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardDefinition"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/dashboard-pages/{dashboard_id}": {
+      "patch": {
+        "summary": "Update Dashboard Page",
+        "operationId": "update_dashboard_page_api_admin_dashboard_pages__dashboard_id__patch",
+        "parameters": [
+          {
+            "name": "dashboard_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Dashboard Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnalysisPageUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardDefinition"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Dashboard Page",
+        "operationId": "delete_dashboard_page_api_admin_dashboard_pages__dashboard_id__delete",
+        "parameters": [
+          {
+            "name": "dashboard_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Dashboard Id"
+            }
+          },
+          {
+            "name": "load_case_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120,
+              "title": "Load Case Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Delete Dashboard Page Api Admin Dashboard Pages  Dashboard Id  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/dashboard-pages/order": {
+      "put": {
+        "summary": "Reorder Dashboard Pages",
+        "operationId": "reorder_dashboard_pages_api_admin_dashboard_pages_order_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnalysisPageOrderUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AnalysisPageSummary"
+                  },
+                  "type": "array",
+                  "title": "Response Reorder Dashboard Pages Api Admin Dashboard Pages Order Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/dashboards/{dashboard_id}": {
       "get": {
         "summary": "Get Dashboard",
@@ -3372,6 +3877,16 @@
               "type": "string",
               "title": "Dashboard Id"
             }
+          },
+          {
+            "name": "include_invalid",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Include Invalid"
+            }
           }
         ],
         "responses": {
@@ -3386,6 +3901,114 @@
                     "additionalProperties": true
                   },
                   "title": "Response Get Dashboard Versions Api Dashboards  Dashboard Id  Versions Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dashboards/{dashboard_id}/versions/{version}": {
+      "get": {
+        "summary": "Get Dashboard Version",
+        "operationId": "get_dashboard_version_api_dashboards__dashboard_id__versions__version__get",
+        "parameters": [
+          {
+            "name": "dashboard_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Dashboard Id"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Version"
+            }
+          },
+          {
+            "name": "include_invalid",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Include Invalid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Dashboard Version Api Dashboards  Dashboard Id  Versions  Version  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Dashboard Version",
+        "operationId": "delete_dashboard_version_api_dashboards__dashboard_id__versions__version__delete",
+        "parameters": [
+          {
+            "name": "dashboard_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Dashboard Id"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Version"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Delete Dashboard Version Api Dashboards  Dashboard Id  Versions  Version  Delete"
                 }
               }
             }
@@ -3547,6 +4170,217 @@
   },
   "components": {
     "schemas": {
+      "AnalysisPageCreate": {
+        "properties": {
+          "load_case_id": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Load Case Id"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 2,
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 500,
+            "title": "Description",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "load_case_id",
+          "name"
+        ],
+        "title": "AnalysisPageCreate"
+      },
+      "AnalysisPageMeta": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "analysis_page",
+            "title": "Kind",
+            "default": "analysis_page"
+          },
+          "analysis_key": {
+            "type": "string",
+            "enum": [
+              "open_cell",
+              "chassis_rear",
+              "run_comparison",
+              "custom"
+            ],
+            "title": "Analysis Key"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "published",
+              "archived"
+            ],
+            "title": "Status"
+          },
+          "display_order": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Display Order"
+          },
+          "is_system": {
+            "type": "boolean",
+            "title": "Is System"
+          }
+        },
+        "type": "object",
+        "required": [
+          "analysis_key",
+          "status",
+          "display_order",
+          "is_system"
+        ],
+        "title": "AnalysisPageMeta"
+      },
+      "AnalysisPageOrderUpdate": {
+        "properties": {
+          "load_case_id": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Load Case Id"
+          },
+          "page_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Page Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "load_case_id",
+          "page_ids"
+        ],
+        "title": "AnalysisPageOrderUpdate"
+      },
+      "AnalysisPageSummary": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "project_id": {
+            "type": "string",
+            "title": "Project Id"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "load_case_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Load Case Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "page": {
+            "$ref": "#/components/schemas/AnalysisPageMeta"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "project_id",
+          "request_id",
+          "load_case_id",
+          "name",
+          "description",
+          "version",
+          "updated_at",
+          "page"
+        ],
+        "title": "AnalysisPageSummary"
+      },
+      "AnalysisPageUpdate": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120,
+                "minLength": 2
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "draft",
+                  "published",
+                  "archived"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "title": "AnalysisPageUpdate"
+      },
       "AnalysisRequestCreate": {
         "properties": {
           "title": {
@@ -3633,6 +4467,103 @@
         ],
         "title": "AnalysisRequestCreate"
       },
+      "BatchDispatchCreate": {
+        "properties": {
+          "batch_profile_id": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 3,
+            "pattern": "^[a-z][a-z0-9_-]*$",
+            "title": "Batch Profile Id"
+          },
+          "created_by": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 2,
+            "title": "Created By",
+            "default": "실행 담당자"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "batch_profile_id"
+        ],
+        "title": "BatchDispatchCreate"
+      },
+      "BatchProfileInput": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 3,
+            "pattern": "^[a-z][a-z0-9_-]*$",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 2,
+            "title": "Name"
+          },
+          "solver_path": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 2,
+            "title": "Solver Path"
+          },
+          "working_directory": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Working Directory"
+          },
+          "arguments_template": {
+            "type": "string",
+            "maxLength": 1000,
+            "title": "Arguments Template",
+            "default": "{input}"
+          },
+          "environment": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Environment"
+          },
+          "task_type_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 32,
+            "minItems": 1,
+            "title": "Task Type Ids"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active",
+            "default": true
+          },
+          "updated_by": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 2,
+            "title": "Updated By",
+            "default": "관리자"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "solver_path",
+          "working_directory",
+          "task_type_ids"
+        ],
+        "title": "BatchProfileInput"
+      },
       "DashboardClone": {
         "properties": {
           "name": {
@@ -3665,14 +4596,19 @@
         "properties": {
           "id": {
             "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
             "title": "Id"
           },
           "name": {
             "type": "string",
+            "maxLength": 120,
+            "minLength": 2,
             "title": "Name"
           },
           "description": {
             "type": "string",
+            "maxLength": 500,
             "title": "Description",
             "default": ""
           },
@@ -3682,6 +4618,16 @@
             },
             "type": "array",
             "title": "Widgets"
+          },
+          "page": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnalysisPageMeta"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -3768,6 +4714,406 @@
           "nodes"
         ],
         "title": "DemoRunCreate"
+      },
+      "DropVideoEvaluation": {
+        "properties": {
+          "overall_verdict": {
+            "type": "string",
+            "enum": [
+              "PASS",
+              "FAIL"
+            ],
+            "title": "Overall Verdict"
+          },
+          "open_cell": {
+            "$ref": "#/components/schemas/DropVideoSubsystemEvaluation"
+          },
+          "chassis_rear": {
+            "$ref": "#/components/schemas/DropVideoSubsystemEvaluation"
+          }
+        },
+        "type": "object",
+        "required": [
+          "overall_verdict",
+          "open_cell",
+          "chassis_rear"
+        ],
+        "title": "DropVideoEvaluation"
+      },
+      "DropVideoEvaluationSummary": {
+        "properties": {
+          "total_scenes": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Total Scenes"
+          },
+          "pass_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Pass Count"
+          },
+          "fail_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Fail Count"
+          },
+          "open_cell": {
+            "$ref": "#/components/schemas/DropVideoSubsystemSummary"
+          },
+          "chassis_rear": {
+            "$ref": "#/components/schemas/DropVideoSubsystemSummary"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total_scenes",
+          "pass_count",
+          "fail_count",
+          "open_cell",
+          "chassis_rear"
+        ],
+        "title": "DropVideoEvaluationSummary"
+      },
+      "DropVideoItemResponse": {
+        "properties": {
+          "video_id": {
+            "type": "string",
+            "title": "Video Id"
+          },
+          "scene_id": {
+            "type": "string",
+            "title": "Scene Id"
+          },
+          "scene_name": {
+            "type": "string",
+            "title": "Scene Name"
+          },
+          "video_url": {
+            "type": "string",
+            "title": "Video Url"
+          },
+          "thumbnail_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thumbnail Url"
+          },
+          "duration": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration"
+          },
+          "file_size": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "File Size"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "mp4",
+              "webm"
+            ],
+            "title": "Format"
+          },
+          "codec": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Codec"
+          },
+          "fast_start": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fast Start"
+          },
+          "sort_order": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Sort Order"
+          },
+          "drop_direction": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Drop Direction"
+          },
+          "drop_condition": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Drop Condition"
+          },
+          "analysis_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Analysis Version"
+          },
+          "evaluation": {
+            "$ref": "#/components/schemas/DropVideoEvaluation"
+          }
+        },
+        "type": "object",
+        "required": [
+          "video_id",
+          "scene_id",
+          "scene_name",
+          "video_url",
+          "thumbnail_url",
+          "file_size",
+          "format",
+          "codec",
+          "fast_start",
+          "sort_order",
+          "drop_direction",
+          "drop_condition",
+          "analysis_version",
+          "evaluation"
+        ],
+        "title": "DropVideoItemResponse"
+      },
+      "DropVideoLoadCaseResponse": {
+        "properties": {
+          "load_case_id": {
+            "type": "string",
+            "title": "Load Case Id"
+          },
+          "load_case_name": {
+            "type": "string",
+            "title": "Load Case Name"
+          },
+          "analysis_type": {
+            "type": "string",
+            "title": "Analysis Type"
+          },
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          },
+          "request_name": {
+            "type": "string",
+            "title": "Request Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "load_case_id",
+          "load_case_name",
+          "analysis_type",
+          "request_id",
+          "request_name"
+        ],
+        "title": "DropVideoLoadCaseResponse"
+      },
+      "DropVideoPageResponse": {
+        "properties": {
+          "load_case": {
+            "$ref": "#/components/schemas/DropVideoLoadCaseResponse"
+          },
+          "source": {
+            "type": "string",
+            "const": "EXAMPLE_ADAPTER",
+            "title": "Source"
+          },
+          "demo_only": {
+            "type": "boolean",
+            "title": "Demo Only"
+          },
+          "evaluation_source": {
+            "type": "string",
+            "const": "SYNTHETIC_DEMO",
+            "title": "Evaluation Source"
+          },
+          "contract_version": {
+            "type": "integer",
+            "const": 1,
+            "title": "Contract Version"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/DropVideoEvaluationSummary"
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/DropVideoPaginationResponse"
+          },
+          "videos": {
+            "items": {
+              "$ref": "#/components/schemas/DropVideoItemResponse"
+            },
+            "type": "array",
+            "title": "Videos"
+          }
+        },
+        "type": "object",
+        "required": [
+          "load_case",
+          "source",
+          "demo_only",
+          "evaluation_source",
+          "contract_version",
+          "summary",
+          "pagination",
+          "videos"
+        ],
+        "title": "DropVideoPageResponse"
+      },
+      "DropVideoPaginationResponse": {
+        "properties": {
+          "page": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Page"
+          },
+          "page_size": {
+            "type": "integer",
+            "maximum": 20.0,
+            "minimum": 1.0,
+            "title": "Page Size"
+          },
+          "total_items": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Total Items"
+          },
+          "total_pages": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Total Pages"
+          },
+          "has_previous": {
+            "type": "boolean",
+            "title": "Has Previous"
+          },
+          "has_next": {
+            "type": "boolean",
+            "title": "Has Next"
+          }
+        },
+        "type": "object",
+        "required": [
+          "page",
+          "page_size",
+          "total_items",
+          "total_pages",
+          "has_previous",
+          "has_next"
+        ],
+        "title": "DropVideoPaginationResponse"
+      },
+      "DropVideoSubsystemEvaluation": {
+        "properties": {
+          "critical_value": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Critical Value"
+          },
+          "threshold": {
+            "type": "number",
+            "exclusiveMinimum": 0.0,
+            "title": "Threshold"
+          },
+          "unit": {
+            "type": "string",
+            "maxLength": 20,
+            "minLength": 1,
+            "title": "Unit"
+          },
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "PASS",
+              "FAIL"
+            ],
+            "title": "Verdict"
+          },
+          "metrics": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "maxProperties": 8,
+            "title": "Metrics"
+          }
+        },
+        "type": "object",
+        "required": [
+          "critical_value",
+          "threshold",
+          "unit",
+          "verdict"
+        ],
+        "title": "DropVideoSubsystemEvaluation"
+      },
+      "DropVideoSubsystemSummary": {
+        "properties": {
+          "pass_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Pass Count"
+          },
+          "fail_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Fail Count"
+          },
+          "threshold": {
+            "type": "number",
+            "exclusiveMinimum": 0.0,
+            "title": "Threshold"
+          },
+          "unit": {
+            "type": "string",
+            "maxLength": 20,
+            "minLength": 1,
+            "title": "Unit"
+          }
+        },
+        "type": "object",
+        "required": [
+          "pass_count",
+          "fail_count",
+          "threshold",
+          "unit"
+        ],
+        "title": "DropVideoSubsystemSummary"
       },
       "HTTPValidationError": {
         "properties": {
@@ -4626,14 +5972,41 @@
         "properties": {
           "id": {
             "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
             "title": "Id"
           },
           "type": {
             "type": "string",
+            "enum": [
+              "kpi",
+              "verdict",
+              "gauge",
+              "edge_bar",
+              "time_series",
+              "scatter",
+              "result_table",
+              "contour",
+              "video",
+              "video_grid",
+              "model3d",
+              "note",
+              "workflow",
+              "open_cell_map",
+              "open_cell_summary",
+              "summary",
+              "chassis_summary",
+              "chassis_diagram",
+              "chassis_bar",
+              "chassis_table",
+              "run_comparison"
+            ],
             "title": "Type"
           },
           "title": {
             "type": "string",
+            "maxLength": 160,
+            "minLength": 1,
             "title": "Title"
           },
           "x": {
@@ -4704,6 +6077,29 @@
           "completed_by"
         ],
         "title": "WorkItemComplete"
+      },
+      "WorkItemProgress": {
+        "properties": {
+          "progress": {
+            "type": "integer",
+            "maximum": 99.0,
+            "minimum": 1.0,
+            "title": "Progress"
+          },
+          "updated_by": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 2,
+            "title": "Updated By"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "progress",
+          "updated_by"
+        ],
+        "title": "WorkItemProgress"
       },
       "WorkItemStart": {
         "properties": {

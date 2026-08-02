@@ -468,3 +468,64 @@ class WorkbenchRepository:
 
     def task_events(self, task_run_id: str) -> list[dict[str, Any]]:
         return rows(self.conn.execute("SELECT event_index, event_type, level, message, progress, occurred_at FROM task_run_events WHERE task_run_id=? ORDER BY event_index", [task_run_id]))
+
+    @staticmethod
+    def _batch_profile_item(item: dict[str, Any]) -> dict[str, Any]:
+        environment = _decoded(item.pop("environment_json")) or {}
+        task_type_ids = _decoded(item.pop("task_type_ids_json")) or []
+        return {**item, "environment": environment, "task_type_ids": task_type_ids}
+
+    def list_batch_profiles(self, *, include_inactive: bool = False) -> list[dict[str, Any]]:
+        sql = "SELECT * FROM batch_path_profiles"
+        if not include_inactive:
+            sql += " WHERE is_active=true"
+        sql += " ORDER BY name, id"
+        return [self._batch_profile_item(item) for item in rows(self.conn.execute(sql))]
+
+    def get_batch_profile(self, profile_id: str) -> dict[str, Any] | None:
+        items = rows(self.conn.execute("SELECT * FROM batch_path_profiles WHERE id=?", [profile_id]))
+        return self._batch_profile_item(items[0]) if items else None
+
+    def upsert_batch_profile(self, payload: dict[str, Any]) -> dict[str, Any]:
+        now = _utcnow()
+        existing = self.conn.execute("SELECT created_at FROM batch_path_profiles WHERE id=?", [payload["id"]]).fetchone()
+        if existing:
+            self.conn.execute(
+                """
+                UPDATE batch_path_profiles
+                SET name=?, solver_path=?, working_directory=?, arguments_template=?,
+                    environment_json=?, task_type_ids_json=?, is_active=?, updated_by=?, updated_at=?
+                WHERE id=?
+                """,
+                [payload["name"], payload["solver_path"], payload["working_directory"], payload["arguments_template"], json.dumps(payload["environment"], ensure_ascii=False), json.dumps(payload["task_type_ids"], ensure_ascii=False), payload["is_active"], payload["updated_by"], now, payload["id"]],
+            )
+        else:
+            self.conn.execute(
+                """
+                INSERT INTO batch_path_profiles
+                    (id, name, solver_path, working_directory, arguments_template,
+                     environment_json, task_type_ids_json, is_active, updated_by, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [payload["id"], payload["name"], payload["solver_path"], payload["working_directory"], payload["arguments_template"], json.dumps(payload["environment"], ensure_ascii=False), json.dumps(payload["task_type_ids"], ensure_ascii=False), payload["is_active"], payload["updated_by"], now, now],
+            )
+        return self.get_batch_profile(payload["id"])  # type: ignore[return-value]
+
+    def insert_batch_dispatch(self, item: dict[str, Any]) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO batch_dispatches
+                (id, work_item_id, workflow_run_id, batch_profile_id, profile_snapshot_json,
+                 command_preview, status, created_by, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [item[key] for key in ("id", "work_item_id", "workflow_run_id", "batch_profile_id", "profile_snapshot_json", "command_preview", "status", "created_by", "created_at")],
+        )
+
+    def batch_dispatch_for_run(self, run_id: str) -> dict[str, Any] | None:
+        items = rows(self.conn.execute("SELECT * FROM batch_dispatches WHERE workflow_run_id=?", [run_id]))
+        if not items:
+            return None
+        item = items[0]
+        item["profile_snapshot"] = _decoded(item.pop("profile_snapshot_json")) or {}
+        return item

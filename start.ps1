@@ -1,5 +1,10 @@
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
+$RecoveryMarker = Join-Path $Root '.setup-recovery-required.json'
+
+if (Test-Path -LiteralPath $RecoveryMarker) {
+    throw 'A previous PostgreSQL replacement needs manual recovery. Review .setup-recovery-required.json before starting.'
+}
 
 # Start-Process fails when the inherited Windows environment contains both
 # "Path" and "PATH" entries. Keep the effective value under one canonical key.
