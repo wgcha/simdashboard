@@ -62,13 +62,18 @@ def test_postgres_initialization_backfills_system_analysis_pages(monkeypatch: py
     )
     monkeypatch.setattr(
         app_database,
+        "ensure_project_quality_thresholds",
+        lambda conn: calls.append(("quality_thresholds", conn)),
+    )
+    monkeypatch.setattr(
+        app_database,
         "ensure_system_analysis_page_metadata",
         lambda conn: calls.append(("analysis_pages", conn)),
     )
 
     app_database.initialize_database()
 
-    assert calls == [("workbench", connection), ("analysis_pages", connection)]
+    assert calls == [("workbench", connection), ("quality_thresholds", connection), ("analysis_pages", connection)]
 
 
 def test_system_analysis_page_backfill_creates_missing_run_comparison_idempotently():

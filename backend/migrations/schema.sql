@@ -239,14 +239,15 @@ CREATE TABLE IF NOT EXISTS projects (
             );
 
             CREATE TABLE IF NOT EXISTS quality_thresholds (
-                criterion_key VARCHAR PRIMARY KEY,
+                criterion_key VARCHAR NOT NULL,
                 project_id VARCHAR NOT NULL,
                 analysis_key VARCHAR NOT NULL,
                 label VARCHAR NOT NULL,
                 threshold_double DOUBLE PRECISION NOT NULL,
                 unit VARCHAR NOT NULL,
                 updated_by VARCHAR NOT NULL,
-                updated_at TIMESTAMP NOT NULL
+                updated_at TIMESTAMP NOT NULL,
+                PRIMARY KEY (project_id, criterion_key)
             );
 
             CREATE TABLE IF NOT EXISTS variable_definitions (
@@ -448,7 +449,8 @@ CREATE TABLE IF NOT EXISTS projects (
                 demo_run_id VARCHAR,
                 UNIQUE (request_id, sequence_no),
                 UNIQUE (request_id, node_key),
-                CHECK (status IN ('READY', 'IN_PROGRESS', 'WAITING', 'COMPLETED'))
+                CHECK (status IN ('READY', 'IN_PROGRESS', 'WAITING', 'COMPLETED')),
+                CHECK (progress BETWEEN 0 AND 100)
             );
 
             CREATE TABLE IF NOT EXISTS workflow_runs (
@@ -500,6 +502,7 @@ CREATE TABLE IF NOT EXISTS projects (
 
             CREATE TABLE IF NOT EXISTS batch_path_profiles (
                 id VARCHAR PRIMARY KEY,
+                version INTEGER NOT NULL DEFAULT 1,
                 name VARCHAR NOT NULL,
                 solver_path VARCHAR NOT NULL,
                 working_directory VARCHAR NOT NULL,
@@ -510,6 +513,21 @@ CREATE TABLE IF NOT EXISTS projects (
                 updated_by VARCHAR NOT NULL,
                 created_at TIMESTAMP NOT NULL,
                 updated_at TIMESTAMP NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS batch_path_profile_versions (
+                id VARCHAR NOT NULL,
+                version INTEGER NOT NULL,
+                name VARCHAR NOT NULL,
+                solver_path VARCHAR NOT NULL,
+                working_directory VARCHAR NOT NULL,
+                arguments_template VARCHAR NOT NULL,
+                environment_json JSONB NOT NULL,
+                task_type_ids_json JSONB NOT NULL,
+                is_active BOOLEAN NOT NULL,
+                created_by VARCHAR NOT NULL,
+                created_at TIMESTAMP NOT NULL,
+                PRIMARY KEY (id, version)
             );
 
             CREATE TABLE IF NOT EXISTS batch_dispatches (
@@ -523,6 +541,42 @@ CREATE TABLE IF NOT EXISTS projects (
                 created_by VARCHAR NOT NULL,
                 created_at TIMESTAMP NOT NULL,
                 CHECK (status = 'RECORDED_DEMO')
+            );
+
+            CREATE TABLE IF NOT EXISTS batch_execution_attempts (
+                id VARCHAR PRIMARY KEY,
+                work_item_id VARCHAR NOT NULL,
+                workflow_run_id VARCHAR,
+                batch_profile_id VARCHAR NOT NULL,
+                batch_profile_version INTEGER NOT NULL,
+                profile_snapshot_json JSONB NOT NULL,
+                command_preview VARCHAR NOT NULL,
+                idempotency_key VARCHAR NOT NULL,
+                execution_mode VARCHAR NOT NULL,
+                status VARCHAR NOT NULL,
+                progress INTEGER NOT NULL,
+                last_message VARCHAR NOT NULL,
+                created_by VARCHAR NOT NULL,
+                created_at TIMESTAMP NOT NULL,
+                started_at TIMESTAMP,
+                completed_at TIMESTAMP,
+                UNIQUE (work_item_id, idempotency_key),
+                CHECK (execution_mode = 'DEMO_ONLY'),
+                CHECK (status IN ('PREFLIGHT', 'QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED', 'REJECTED')),
+                CHECK (progress BETWEEN 0 AND 100)
+            );
+
+            CREATE TABLE IF NOT EXISTS batch_execution_events (
+                id VARCHAR PRIMARY KEY,
+                attempt_id VARCHAR NOT NULL,
+                event_index INTEGER NOT NULL,
+                event_type VARCHAR NOT NULL,
+                level VARCHAR NOT NULL,
+                message VARCHAR NOT NULL,
+                progress INTEGER NOT NULL,
+                occurred_at TIMESTAMP NOT NULL,
+                UNIQUE (attempt_id, event_index),
+                CHECK (progress BETWEEN 0 AND 100)
             );
 
 CREATE INDEX IF NOT EXISTS ix_product_information_project ON product_information(project_id);
@@ -548,6 +602,11 @@ CREATE INDEX IF NOT EXISTS ix_request_work_plans_type ON request_work_plans(requ
 CREATE INDEX IF NOT EXISTS ix_request_work_items_request_status ON request_work_items(request_id, status, sequence_no);
 CREATE INDEX IF NOT EXISTS ix_task_runs_workflow ON task_runs(workflow_run_id, started_at);
 CREATE INDEX IF NOT EXISTS ix_task_run_events_task ON task_run_events(task_run_id, event_index);
+CREATE INDEX IF NOT EXISTS ix_batch_profile_versions_id ON batch_path_profile_versions(id, version DESC);
+CREATE INDEX IF NOT EXISTS ix_batch_attempts_work_item ON batch_execution_attempts(work_item_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS ix_batch_attempts_status ON batch_execution_attempts(status, created_at);
+CREATE INDEX IF NOT EXISTS ix_batch_events_attempt ON batch_execution_events(attempt_id, event_index);
+CREATE INDEX IF NOT EXISTS ix_batch_dispatches_work_item ON batch_dispatches(work_item_id, created_at DESC);
 
 ALTER TABLE product_information ADD CONSTRAINT fk_product_information_project FOREIGN KEY (project_id) REFERENCES projects(id);
 ALTER TABLE analysis_requests ADD CONSTRAINT fk_analysis_requests_project FOREIGN KEY (project_id) REFERENCES projects(id);
@@ -592,3 +651,10 @@ ALTER TABLE workflow_runs ADD CONSTRAINT fk_workflow_runs_request_type FOREIGN K
 ALTER TABLE task_runs ADD CONSTRAINT fk_task_runs_workflow FOREIGN KEY (workflow_run_id) REFERENCES workflow_runs(id);
 ALTER TABLE task_runs ADD CONSTRAINT fk_task_runs_type FOREIGN KEY (task_type_id, task_type_version) REFERENCES task_type_versions(id, version);
 ALTER TABLE task_run_events ADD CONSTRAINT fk_task_run_events_task FOREIGN KEY (task_run_id) REFERENCES task_runs(id);
+ALTER TABLE batch_dispatches ADD CONSTRAINT fk_batch_dispatches_work_item FOREIGN KEY (work_item_id) REFERENCES request_work_items(id);
+ALTER TABLE batch_dispatches ADD CONSTRAINT fk_batch_dispatches_workflow_run FOREIGN KEY (workflow_run_id) REFERENCES workflow_runs(id);
+ALTER TABLE batch_dispatches ADD CONSTRAINT fk_batch_dispatches_profile FOREIGN KEY (batch_profile_id) REFERENCES batch_path_profiles(id);
+ALTER TABLE batch_execution_attempts ADD CONSTRAINT fk_batch_attempts_work_item FOREIGN KEY (work_item_id) REFERENCES request_work_items(id);
+ALTER TABLE batch_execution_attempts ADD CONSTRAINT fk_batch_attempts_profile_version FOREIGN KEY (batch_profile_id, batch_profile_version) REFERENCES batch_path_profile_versions(id, version);
+ALTER TABLE batch_execution_attempts ADD CONSTRAINT fk_batch_attempts_workflow_run FOREIGN KEY (workflow_run_id) REFERENCES workflow_runs(id);
+ALTER TABLE batch_execution_events ADD CONSTRAINT fk_batch_events_attempt FOREIGN KEY (attempt_id) REFERENCES batch_execution_attempts(id);

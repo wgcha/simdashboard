@@ -2,6 +2,35 @@
 
 이 파일은 완료된 개발 작업을 누적 기록한다. 이후 작업은 완료 시 최신 항목을 문서 상단에 추가하며, 변경 범위·검증 결과·남은 확인 사항을 함께 남긴다.
 
+## 2026-08-09 — 보고서·판정·작업 배치 실행 미완료 범위 보완
+
+### 담당
+
+- Sol: 기존 구현과 사양 수용 기준 대조, 다중 프로젝트·결과 그룹·권한·보고서 snapshot·배치 이력 누락 감사
+- Luna: 작업 종류별 실행 위젯, 작업 담당자 권한 안내, attempt/event 타임라인, 배치 경로 내부 탭, 키보드·모바일 UI와 E2E 구현
+- 루트 통합: 프로젝트별 기준 스키마, 신규 프로젝트 seed, import 변수 의미 등록, preflight/멱등 attempt 제어면, 보안·migration·OpenAPI·보고서 범위·회귀 검증
+
+### 완료 범위
+
+- 일반 분석 보고서의 Run은 같은 하중 경우의 `<select>`로만 선택하며 `ReportSource.runId`를 필수화했다. 완료 Run이 없으면 내보내기를 열거나 생성할 수 없다.
+- `quality_thresholds` 정본을 `(project_id, criterion_key)` 복합 키로 전환했다. 기존 DuckDB는 멱등 재구성하고 PostgreSQL은 `0006_batch_attempts`에서 전환하며, 시작 시와 신규 프로젝트 생성 즉시 Chassis/Open Cell 기준 두 건을 보장한다.
+- 재판정·overview·위젯·보고서 snapshot은 변수 카탈로그 `result_group`까지 사용한다. Chassis는 `CHASSIS_REAR + permanent_deformation + mm`, Open Cell은 `OPEN_CELL + stress + MPa`만 포함하며 CUSTOM·타 단위는 제외한다.
+- Open Cell/Chassis 판정 요약은 적용 개수와 값 범위를 표시하고 admin만 기준을 편집한다. Chassis summary는 저장된 `variableId`가 있어도 모든 대상 영구변형 mm로 계산·보고한다.
+- 작업 행은 클릭/Enter/Space로 상세를 열고 16개 Task kind별 목적·입력·출력·실행 위젯을 제공한다. 선택 자체는 상태를 변경하지 않으며, 진행률·실행·배치는 admin 또는 해당 작업 담당자에게만 열린다.
+- `작업 유형 관리` 안에 ARIA 내부 탭 `배치 경로 정의`를 두었다. 프로필 저장 때마다 불변 `version`을 만들고 허용 placeholder·절대 로컬 경로·Task Type 호환성을 preflight한다.
+- 배치 클릭은 `idempotency_key`로 중복을 막고 profile version snapshot, `PREFLIGHT → QUEUED → SUCCEEDED/REJECTED/FAILED` attempt와 이벤트를 저장한다. 선택 작업 상세에서 상태·진행률·최근 이벤트를 조회한다.
+- 수행자/viewer 응답에서는 solver 절대경로, working directory, 환경값, command snapshot을 숨긴다. 실제 solver, subprocess, scheduler, 외부 네트워크는 호출하지 않고 `DEMO_ONLY`만 유지한다.
+- DuckDB 정본, Alembic `0006`, PostgreSQL `schema.sql`, OpenAPI JSON과 생성 TypeScript 계약을 동기화했다. downgrade는 프로젝트별 기준을 결정적으로 축약한 뒤 0005의 단일 키 계약을 복원한다.
+
+### 검증과 남은 운영 경계
+
+- 백엔드 전체 회귀: `80 passed` (pytest cache ACL 경고 2건만 발생)
+- 프런트엔드 TypeScript 및 Vite production build: 통과 (2257 modules, 기존 500 kB chunk 경고만 발생)
+- 새 DuckDB·backend·Vite를 자동 기동한 Playwright 전체 E2E: `15 passed`
+- 인앱 브라우저: 보고서 Run이 combobox 1개/textbox 0개, Chassis 적용 대상 6개·3.70~6.30 mm 범위, reliability 전용 위젯과 비활성 사유, 배치 내부 탭/form, 배치 attempt 영역, 콘솔 warn/error 0 확인. Luna의 390×844 점검에서도 세로 배치를 확인했다.
+- 실제 PostgreSQL DB에 `0006` upgrade/downgrade를 적용하는 검증은 이 세션에서 수행하지 못했다. 배포 전 owner 자격 증명으로 양방향 migration smoke test가 필요하다.
+- 운영 Runner 활성화에는 승인 application alias, 허용 root, secret reference, scheduler·취소·timeout·retry 정책이 추가로 필요하다. 그 전까지 외부 실행은 활성화하지 않는다.
+
 ## 2026-08-02 — 보고서 Run·판정 요약·작업 배치 실행 구현 완료
 
 ### 담당

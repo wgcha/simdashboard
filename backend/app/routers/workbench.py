@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from ..database_connection import connect, rows
 from ..repositories.workbench import WorkbenchRepository
 from ..schemas.workbench import BatchDispatchCreate, BatchProfileInput, DemoRunCreate, RequestTypeAssignmentInput, RequestTypeVersionCreate, TaskTypeVersionCreate, WorkItemComplete, WorkItemProgress, WorkItemStart
+from ..services.batch_execution import BatchPreflightError, preflight_batch_profile, validate_profile_definition
 from ..services.demo_runner import DemoRunnerService, WorkbenchValidationError, _topological_nodes
 from ..services.request_monitoring import request_monitoring_summary, sync_request_status
 
@@ -19,6 +20,42 @@ router = APIRouter(prefix="/api", tags=["workbench-demo"])
 
 def _bad_request(exc: ValueError) -> HTTPException:
     return HTTPException(status_code=400, detail=str(exc))
+
+
+def _is_admin(request: Request) -> bool:
+    return getattr(getattr(request.state, "principal", None), "role", None) == "admin"
+
+
+def _require_work_item_operator(request: Request, work_item: dict[str, Any]) -> None:
+    principal = getattr(request.state, "principal", None)
+    if principal and (principal.role == "admin" or (principal.role == "editor" and principal.display_name.strip().casefold() == str(work_item["owner"]).strip().casefold())):
+        return
+    raise HTTPException(403, detail={"code": "WORK_ITEM_NOT_ASSIGNED", "item_id": work_item["id"]})
+
+
+def _sanitize_batch_profile(profile: dict[str, Any], request: Request) -> dict[str, Any]:
+    if _is_admin(request):
+        return profile
+    return {**profile, "solver_path": "", "working_directory": "", "environment": {}}
+
+
+def _sanitize_batch_attempt(attempt: dict[str, Any], request: Request) -> dict[str, Any]:
+    if _is_admin(request):
+        return attempt
+    return {**attempt, "profile_snapshot": {}, "command_preview": "[관리자 전용]"}
+
+
+def _sanitize_demo_run(run: dict[str, Any], request: Request) -> dict[str, Any]:
+    sanitized = dict(run)
+    if isinstance(sanitized.get("batch_attempt"), dict):
+        sanitized["batch_attempt"] = _sanitize_batch_attempt(sanitized["batch_attempt"], request)
+    if isinstance(sanitized.get("batch_dispatch"), dict) and not _is_admin(request):
+        sanitized["batch_dispatch"] = {
+            **sanitized["batch_dispatch"],
+            "profile_snapshot": {},
+            "command_preview": "[관리자 전용]",
+        }
+    return sanitized
 
 
 @router.get("/workbench/task-types")
@@ -58,9 +95,16 @@ def create_request_type(payload: RequestTypeVersionCreate) -> dict[str, Any]:
 
 
 @router.get("/workbench/batch-profiles")
-def list_batch_profiles(include_inactive: bool = Query(default=False)) -> list[dict[str, Any]]:
+def list_batch_profiles(request: Request, include_inactive: bool = Query(default=False)) -> list[dict[str, Any]]:
     with connect() as conn:
-        return WorkbenchRepository(conn).list_batch_profiles(include_inactive=include_inactive)
+        profiles = WorkbenchRepository(conn).list_batch_profiles(include_inactive=include_inactive if _is_admin(request) else False)
+        return [_sanitize_batch_profile(profile, request) for profile in profiles]
+
+
+@router.get("/admin/workbench/batch-profiles/{profile_id}/versions")
+def list_batch_profile_versions(profile_id: str) -> list[dict[str, Any]]:
+    with connect() as conn:
+        return WorkbenchRepository(conn).list_batch_profile_versions(profile_id)
 
 
 @router.put("/admin/workbench/batch-profiles/{profile_id}")
@@ -70,27 +114,122 @@ def save_batch_profile(profile_id: str, payload: BatchProfileInput, request: Req
     principal = getattr(request.state, "principal", None)
     if principal:
         payload = payload.model_copy(update={"updated_by": principal.display_name})
+    try:
+        validate_profile_definition(payload.model_dump())
+    except BatchPreflightError as exc:
+        raise HTTPException(422, detail={"code": exc.code, "message": str(exc)}) from exc
     with connect() as conn:
-        return WorkbenchRepository(conn).upsert_batch_profile(payload.model_dump())
+        conn.execute("BEGIN TRANSACTION")
+        try:
+            saved = WorkbenchRepository(conn).upsert_batch_profile(payload.model_dump())
+            conn.execute("COMMIT")
+            return saved
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+
+
+@router.get("/workbench/work-items/{item_id}")
+def get_work_item_detail(item_id: str, request: Request) -> dict[str, Any]:
+    with connect() as conn:
+        repository = WorkbenchRepository(conn)
+        items = rows(conn.execute("SELECT * FROM request_work_items WHERE id=?", [item_id]))
+        if not items:
+            raise HTTPException(404, detail={"code": "WORK_ITEM_NOT_FOUND", "item_id": item_id})
+        item = items[0]
+        task_type = repository.get_task_type(item["task_type_id"], int(item["task_type_version"]))
+        profiles = [_sanitize_batch_profile(profile, request) for profile in repository.list_batch_profiles() if item["task_type_id"] in profile["task_type_ids"]]
+        return {
+            "work_item": item,
+            "task_type": task_type,
+            "compatible_profiles": profiles,
+            "attempts": [_sanitize_batch_attempt(attempt, request) for attempt in repository.list_batch_attempts(item_id)],
+        }
+
+
+@router.get("/workbench/work-items/{item_id}/batch-attempts")
+def list_batch_attempts(item_id: str, request: Request) -> list[dict[str, Any]]:
+    with connect() as conn:
+        if not conn.execute("SELECT 1 FROM request_work_items WHERE id=?", [item_id]).fetchone():
+            raise HTTPException(404, detail={"code": "WORK_ITEM_NOT_FOUND", "item_id": item_id})
+        return [_sanitize_batch_attempt(attempt, request) for attempt in WorkbenchRepository(conn).list_batch_attempts(item_id)]
 
 
 @router.post("/workbench/work-items/{item_id}/batch-dispatch", status_code=201)
 def dispatch_batch_work_item(item_id: str, payload: BatchDispatchCreate, request: Request) -> dict[str, Any]:
     principal = getattr(request.state, "principal", None)
-    created_by = principal.display_name if principal else payload.created_by.strip()
+    created_by = principal.display_name if principal and principal.user_id != "local-admin" else payload.created_by.strip()
     with connect() as conn:
         repository = WorkbenchRepository(conn)
         work_items = rows(conn.execute("SELECT * FROM request_work_items WHERE id=?", [item_id]))
         if not work_items:
             raise HTTPException(404, detail={"code": "WORK_ITEM_NOT_FOUND", "item_id": item_id})
         work_item = work_items[0]
+        _require_work_item_operator(request, work_item)
+        existing_attempt = repository.batch_attempt_by_key(item_id, payload.idempotency_key)
+        if existing_attempt:
+            if existing_attempt.get("workflow_run_id"):
+                existing_run = DemoRunnerService(repository).get_run(existing_attempt["workflow_run_id"])
+                if existing_run:
+                    return _sanitize_demo_run(existing_run, request)
+            raise HTTPException(409, detail={"code": "BATCH_ATTEMPT_ALREADY_REJECTED", "attempt": existing_attempt})
         if work_item["status"] != "IN_PROGRESS":
             raise HTTPException(409, detail={"code": "WORK_ITEM_NOT_IN_PROGRESS", "item_id": item_id})
         profile = repository.get_batch_profile(payload.batch_profile_id)
         if not profile or not profile["is_active"]:
             raise HTTPException(404, detail={"code": "BATCH_PROFILE_NOT_FOUND", "batch_profile_id": payload.batch_profile_id})
-        if work_item["task_type_id"] not in profile["task_type_ids"]:
-            raise HTTPException(409, detail={"code": "BATCH_PROFILE_TASK_MISMATCH", "batch_profile_id": profile["id"], "task_type_id": work_item["task_type_id"]})
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        attempt_id = f"attempt-{uuid4().hex[:12]}"
+        profile_snapshot_json = json.dumps(profile, ensure_ascii=False, default=str)
+        provisional_preview = f'"{profile["solver_path"]}" {profile["arguments_template"]}'.strip()
+        conn.execute("BEGIN TRANSACTION")
+        try:
+            repository.insert_batch_attempt({
+                "id": attempt_id,
+                "work_item_id": item_id,
+                "workflow_run_id": None,
+                "batch_profile_id": profile["id"],
+                "batch_profile_version": int(profile["version"]),
+                "profile_snapshot_json": profile_snapshot_json,
+                "command_preview": provisional_preview,
+                "idempotency_key": payload.idempotency_key,
+                "execution_mode": "DEMO_ONLY",
+                "status": "PREFLIGHT",
+                "progress": 0,
+                "last_message": "배치 프로필과 작업 호환성을 검증 중입니다.",
+                "created_by": created_by,
+                "created_at": now,
+                "started_at": now,
+                "completed_at": None,
+            })
+            repository.insert_batch_attempt_event({
+                "id": f"batch-event-{uuid4().hex[:12]}", "attempt_id": attempt_id, "event_index": 0,
+                "event_type": "PREFLIGHT", "level": "INFO", "message": "배치 프로필 snapshot을 고정했습니다.",
+                "progress": 0, "occurred_at": now,
+            })
+            try:
+                preflight = preflight_batch_profile(profile, work_item)
+            except BatchPreflightError as exc:
+                rejected_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                repository.update_batch_attempt(attempt_id, workflow_run_id=None, status="REJECTED", progress=0, message=str(exc), started_at=now, completed_at=rejected_at)
+                repository.insert_batch_attempt_event({
+                    "id": f"batch-event-{uuid4().hex[:12]}", "attempt_id": attempt_id, "event_index": 1,
+                    "event_type": "REJECTED", "level": "ERROR", "message": str(exc), "progress": 0, "occurred_at": rejected_at,
+                })
+                conn.execute("COMMIT")
+                raise HTTPException(409, detail={"code": exc.code, "message": str(exc), "attempt_id": attempt_id}) from exc
+            repository.update_batch_attempt(attempt_id, workflow_run_id=None, status="QUEUED", progress=10, message="DEMO_ONLY 실행 기록을 생성합니다.", started_at=now)
+            repository.insert_batch_attempt_event({
+                "id": f"batch-event-{uuid4().hex[:12]}", "attempt_id": attempt_id, "event_index": 1,
+                "event_type": "QUEUED", "level": "INFO", "message": "DEMO_ONLY 제어 plane에 등록했습니다.",
+                "progress": 10, "occurred_at": datetime.now(timezone.utc).replace(tzinfo=None),
+            })
+            conn.execute("COMMIT")
+        except HTTPException:
+            raise
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
         node = {
             "node_key": work_item["node_key"],
             "task_type_id": work_item["task_type_id"],
@@ -107,21 +246,47 @@ def dispatch_batch_work_item(item_id: str, payload: BatchDispatchCreate, request
         try:
             run = DemoRunnerService(repository).create_run(demo_payload)
         except WorkbenchValidationError as exc:
+            failed_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            conn.execute("BEGIN TRANSACTION")
+            repository.update_batch_attempt(attempt_id, workflow_run_id=None, status="FAILED", progress=10, message=str(exc), started_at=now, completed_at=failed_at)
+            repository.insert_batch_attempt_event({
+                "id": f"batch-event-{uuid4().hex[:12]}", "attempt_id": attempt_id, "event_index": 2,
+                "event_type": "FAILED", "level": "ERROR", "message": str(exc), "progress": 10, "occurred_at": failed_at,
+            })
+            conn.execute("COMMIT")
             raise _bad_request(exc) from exc
-        command_preview = f'"{profile["solver_path"]}" {profile["arguments_template"]}'.strip()
+        completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        conn.execute("BEGIN TRANSACTION")
+        repository.update_batch_attempt(attempt_id, workflow_run_id=run["id"], status="SUCCEEDED", progress=100, message="DEMO_ONLY 배치 실행 기록이 완료되었습니다.", started_at=now, completed_at=completed_at)
+        repository.insert_batch_attempt_event({
+            "id": f"batch-event-{uuid4().hex[:12]}", "attempt_id": attempt_id, "event_index": 2,
+            "event_type": "SUCCEEDED", "level": "INFO", "message": "외부 solver 호출 없이 DEMO_ONLY 실행 기록을 완료했습니다.",
+            "progress": 100, "occurred_at": completed_at,
+        })
         dispatch = {
             "id": f"dispatch-{uuid4().hex[:12]}",
             "work_item_id": item_id,
             "workflow_run_id": run["id"],
             "batch_profile_id": profile["id"],
             "profile_snapshot_json": json.dumps(profile, ensure_ascii=False, default=str),
-            "command_preview": command_preview,
+            "command_preview": preflight.command_preview,
             "status": "RECORDED_DEMO",
             "created_by": created_by,
-            "created_at": datetime.now(timezone.utc).replace(tzinfo=None),
+            "created_at": completed_at,
         }
         repository.insert_batch_dispatch(dispatch)
-        return DemoRunnerService(repository).get_run(run["id"])  # type: ignore[return-value]
+        conn.execute(
+            """
+            UPDATE request_work_items
+            SET progress=CASE WHEN progress < 90 THEN 90 ELSE progress END,
+                progress_updated_by=?, progress_updated_at=?
+            WHERE id=? AND status='IN_PROGRESS'
+            """,
+            [created_by, completed_at, item_id],
+        )
+        sync_request_status(conn, work_item["request_id"])
+        conn.execute("COMMIT")
+        return _sanitize_demo_run(DemoRunnerService(repository).get_run(run["id"]), request)  # type: ignore[arg-type]
 
 
 @router.get("/workbench/requests/{request_id}/request-type")
@@ -164,18 +329,18 @@ def create_demo_run(payload: DemoRunCreate, request: Request) -> dict[str, Any]:
 
 
 @router.get("/workbench/demo-runs")
-def list_demo_runs(request_id: str | None = Query(default=None, min_length=3, max_length=100)) -> list[dict[str, Any]]:
+def list_demo_runs(request: Request, request_id: str | None = Query(default=None, min_length=3, max_length=100)) -> list[dict[str, Any]]:
     with connect() as conn:
-        return DemoRunnerService(WorkbenchRepository(conn)).list_runs(request_id)
+        return [_sanitize_demo_run(run, request) for run in DemoRunnerService(WorkbenchRepository(conn)).list_runs(request_id)]
 
 
 @router.get("/workbench/demo-runs/{run_id}")
-def get_demo_run(run_id: str) -> dict[str, Any]:
+def get_demo_run(run_id: str, request: Request) -> dict[str, Any]:
     with connect() as conn:
         item = DemoRunnerService(WorkbenchRepository(conn)).get_run(run_id)
     if not item:
         raise HTTPException(404, "데모 실행을 찾을 수 없습니다.")
-    return item
+    return _sanitize_demo_run(item, request)
 
 
 @router.get("/workbench/requests/{request_id}/work-plan")
@@ -196,7 +361,9 @@ def get_request_work_plan(request_id: str) -> dict[str, Any]:
 
 
 @router.post("/workbench/work-items/{item_id}/start")
-def start_work_item(item_id: str, payload: WorkItemStart) -> dict[str, Any]:
+def start_work_item(item_id: str, payload: WorkItemStart, request: Request) -> dict[str, Any]:
+    principal = getattr(request.state, "principal", None)
+    started_by = principal.display_name if principal and principal.user_id != "local-admin" else payload.started_by.strip()
     with connect() as conn:
         conn.execute("BEGIN TRANSACTION")
         try:
@@ -207,6 +374,7 @@ def start_work_item(item_id: str, payload: WorkItemStart) -> dict[str, Any]:
                     detail={"code": "WORK_ITEM_NOT_FOUND", "item_id": item_id},
                 )
             item = items[0]
+            _require_work_item_operator(request, item)
             request_id = item["request_id"]
             if item["status"] in {"IN_PROGRESS", "COMPLETED"}:
                 summary = request_monitoring_summary(conn, request_id)
@@ -252,7 +420,7 @@ def start_work_item(item_id: str, payload: WorkItemStart) -> dict[str, Any]:
                 SET status = 'IN_PROGRESS', progress = 1, progress_updated_by = ?, progress_updated_at = ?, started_by = ?, started_at = ?
                 WHERE id = ? AND status = 'READY'
                 """,
-                [payload.started_by.strip(), now, payload.started_by.strip(), now, item_id],
+                [started_by, now, started_by, now, item_id],
             )
             summary = sync_request_status(conn, request_id)
             conn.execute("COMMIT")
@@ -268,18 +436,23 @@ def start_work_item(item_id: str, payload: WorkItemStart) -> dict[str, Any]:
 @router.patch("/workbench/work-items/{item_id}/progress")
 def update_work_item_progress(item_id: str, payload: WorkItemProgress, request: Request) -> dict[str, Any]:
     principal = getattr(request.state, "principal", None)
-    updated_by = principal.display_name if principal else payload.updated_by.strip()
+    updated_by = principal.display_name if principal and principal.user_id != "local-admin" else payload.updated_by.strip()
     with connect() as conn:
         conn.execute("BEGIN TRANSACTION")
         try:
-            items = rows(conn.execute("SELECT request_id, status, progress FROM request_work_items WHERE id=?", [item_id]))
+            items = rows(conn.execute("SELECT id, request_id, status, progress, owner FROM request_work_items WHERE id=?", [item_id]))
             if not items:
                 raise HTTPException(404, detail={"code": "WORK_ITEM_NOT_FOUND", "item_id": item_id})
             item = items[0]
+            _require_work_item_operator(request, item)
             if item["status"] != "IN_PROGRESS":
                 raise HTTPException(409, detail={"code": "WORK_ITEM_NOT_IN_PROGRESS", "item_id": item_id})
             current = int(item.get("progress") or 0)
-            if payload.progress <= current:
+            if payload.progress == current:
+                summary = request_monitoring_summary(conn, item["request_id"])
+                conn.execute("COMMIT")
+                return {"request_id": item["request_id"], **summary}
+            if payload.progress < current:
                 raise HTTPException(409, detail={"code": "WORK_ITEM_PROGRESS_NOT_MONOTONIC", "current": current, "requested": payload.progress})
             conn.execute(
                 "UPDATE request_work_items SET progress=?, progress_updated_by=?, progress_updated_at=? WHERE id=?",
@@ -297,7 +470,9 @@ def update_work_item_progress(item_id: str, payload: WorkItemProgress, request: 
 
 
 @router.post("/workbench/work-items/{item_id}/complete")
-def complete_work_item(item_id: str, payload: WorkItemComplete) -> dict[str, Any]:
+def complete_work_item(item_id: str, payload: WorkItemComplete, request: Request) -> dict[str, Any]:
+    principal = getattr(request.state, "principal", None)
+    completed_by = principal.display_name if principal and principal.user_id != "local-admin" else payload.completed_by.strip()
     with connect() as conn:
         conn.execute("BEGIN TRANSACTION")
         try:
@@ -313,6 +488,7 @@ def complete_work_item(item_id: str, payload: WorkItemComplete) -> dict[str, Any
                     detail={"code": "WORK_ITEM_NOT_FOUND", "item_id": item_id},
                 )
             item = items[0]
+            _require_work_item_operator(request, item)
             request_id = item["request_id"]
 
             if item["status"] == "COMPLETED":
@@ -387,7 +563,7 @@ def complete_work_item(item_id: str, payload: WorkItemComplete) -> dict[str, Any
                 SET status = 'COMPLETED', progress = 100, progress_updated_by = ?, progress_updated_at = ?, completed_by = ?, completed_at = ?, demo_run_id = ?
                 WHERE id = ? AND status = 'IN_PROGRESS'
                 """,
-                [payload.completed_by.strip(), now, payload.completed_by.strip(), now, payload.demo_run_id, item_id],
+                [completed_by, now, completed_by, now, payload.demo_run_id, item_id],
             )
             next_row = conn.execute(
                 """

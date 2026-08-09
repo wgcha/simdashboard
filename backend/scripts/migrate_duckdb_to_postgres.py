@@ -40,6 +40,12 @@ RELATIONSHIPS = [
     ("analysis_run_metadata", "analysis_run_id", "analysis_runs", "id", "warning"),
     ("analysis_run_metadata", "schema_id", "import_schemas", "id", "warning"),
     ("folder_import_jobs", "schema_id", "import_schemas", "id", "warning"),
+    ("batch_dispatches", "work_item_id", "request_work_items", "id", "hard"),
+    ("batch_dispatches", "workflow_run_id", "workflow_runs", "id", "hard"),
+    ("batch_dispatches", "batch_profile_id", "batch_path_profiles", "id", "hard"),
+    ("batch_execution_attempts", "work_item_id", "request_work_items", "id", "hard"),
+    ("batch_execution_attempts", "workflow_run_id", "workflow_runs", "id", "hard"),
+    ("batch_execution_events", "attempt_id", "batch_execution_attempts", "id", "hard"),
 ]
 
 

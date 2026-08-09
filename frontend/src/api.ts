@@ -116,9 +116,9 @@ export const api = {
     return data as WorkspaceLayoutVersion[]
   },
   qualityThresholds: (projectId: string) => json<QualityThreshold[]>(fetch(`/api/projects/${projectId}/quality-thresholds`)),
-  updateQualityThreshold: (criterionKey: string, thresholdDouble: number) =>
+  updateQualityThreshold: (projectId: string, criterionKey: string, thresholdDouble: number) =>
     json<QualityThreshold>(
-      fetch(`/api/quality-thresholds/${criterionKey}`, {
+      fetch(`/api/projects/${encodeURIComponent(projectId)}/quality-thresholds/${encodeURIComponent(criterionKey)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ threshold_double: thresholdDouble, updated_by: '관리자' }),

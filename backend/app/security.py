@@ -147,6 +147,8 @@ def minimum_role(method: str, path: str) -> Role:
         return "admin" if path.startswith("/api/admin/") or path.startswith("/api/audit-events") else "viewer"
     if method == "DELETE" or path.startswith(ADMIN_MUTATION_PREFIXES):
         return "admin"
+    if "/quality-thresholds/" in path and method in {"POST", "PUT", "PATCH"}:
+        return "admin"
     if "/variables" in path and method in {"POST", "PUT", "PATCH"}:
         return "admin"
     return "editor"

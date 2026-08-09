@@ -208,6 +208,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/workbench/batch-profiles/{profile_id}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Batch Profile Versions */
+        get: operations["list_batch_profile_versions_api_admin_workbench_batch_profiles__profile_id__versions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/workbench/batch-profiles/{profile_id}": {
         parameters: {
             query?: never;
@@ -218,6 +235,40 @@ export interface paths {
         get?: never;
         /** Save Batch Profile */
         put: operations["save_batch_profile_api_admin_workbench_batch_profiles__profile_id__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/workbench/work-items/{item_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Work Item Detail */
+        get: operations["get_work_item_detail_api_workbench_work_items__item_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/workbench/work-items/{item_id}/batch-attempts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Batch Attempts */
+        get: operations["list_batch_attempts_api_workbench_work_items__item_id__batch_attempts_get"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -749,6 +800,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{project_id}/quality-thresholds/{criterion_key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Update Project Quality Threshold */
+        put: operations["update_project_quality_threshold_api_projects__project_id__quality_thresholds__criterion_key__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/quality-thresholds/{criterion_key}": {
         parameters: {
             query?: never;
@@ -757,7 +825,10 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Update Quality Threshold */
+        /**
+         * Update Quality Threshold
+         * @deprecated
+         */
         put: operations["update_quality_threshold_api_quality_thresholds__criterion_key__put"];
         post?: never;
         delete?: never;
@@ -1373,6 +1444,8 @@ export interface components {
         BatchDispatchCreate: {
             /** Batch Profile Id */
             batch_profile_id: string;
+            /** Idempotency Key */
+            idempotency_key: string;
             /**
              * Created By
              * @default 실행 담당자
@@ -2486,6 +2559,39 @@ export interface operations {
             };
         };
     };
+    list_batch_profile_versions_api_admin_workbench_batch_profiles__profile_id__versions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     save_batch_profile_api_admin_workbench_batch_profiles__profile_id__put: {
         parameters: {
             query?: never;
@@ -2510,6 +2616,72 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_work_item_detail_api_workbench_work_items__item_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_batch_attempts_api_workbench_work_items__item_id__batch_attempts_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
                 };
             };
             /** @description Validation Error */
@@ -3779,6 +3951,44 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_project_quality_threshold_api_projects__project_id__quality_thresholds__criterion_key__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                criterion_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QualityThresholdUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */

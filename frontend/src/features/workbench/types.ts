@@ -99,6 +99,7 @@ export type DemoRun = {
 
 export type BatchProfile = {
   id: string
+  version: number
   name: string
   solver_path: string
   working_directory: string
@@ -120,7 +121,38 @@ export type BatchDispatch = {
   status: 'RECORDED_DEMO'
   created_by: string
   created_at: string
+  profile_snapshot: Partial<BatchProfile>
+}
+
+export type BatchExecutionEvent = {
+  id: string
+  attempt_id: string
+  event_index: number
+  event_type: string
+  level: 'INFO' | 'WARN' | 'ERROR' | string
+  message: string
+  progress: number
+  occurred_at: string
+}
+
+export type BatchExecutionAttempt = {
+  id: string
+  work_item_id: string
+  workflow_run_id: string | null
+  batch_profile_id: string
+  batch_profile_version: number
   profile_snapshot: BatchProfile
+  command_preview: string
+  idempotency_key: string
+  execution_mode: 'DEMO_ONLY'
+  status: 'PREFLIGHT' | 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'REJECTED' | 'FAILED' | 'CANCELLED'
+  progress: number
+  last_message: string
+  created_by: string
+  created_at: string
+  started_at: string | null
+  completed_at: string | null
+  events: BatchExecutionEvent[]
 }
 
 export type CreateDemoRunInput = {

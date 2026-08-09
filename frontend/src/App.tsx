@@ -21,6 +21,7 @@ import {
   MessageSquareText,
   Minus,
   PanelLeftClose,
+  PanelLeftOpen,
   Play,
   Plus,
   RotateCcw,
@@ -28,6 +29,8 @@ import {
   Search,
   Settings2,
   Sparkles,
+  Sun,
+  Moon,
   Upload,
   Trash2,
   X,
@@ -109,6 +112,12 @@ type RunComparisonReportContext = {
 }
 
 function App() {
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => window.localStorage.getItem('vd-workbench-theme') === 'light' ? 'light' : 'dark')
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => window.localStorage.getItem('vd-workbench-sidebar-collapsed') === 'true')
+  const [uiFontSize, setUiFontSize] = useState(() => {
+    const stored = Number(window.localStorage.getItem('vd-workbench-font-size-pt'))
+    return Number.isFinite(stored) && stored >= 11 && stored <= 18 ? stored : 14
+  })
   const [authReady, setAuthReady] = useState(false)
   const [authRequired, setAuthRequired] = useState(false)
   const [authUser, setAuthUser] = useState<AuthUser | null>(storedUser)
@@ -178,6 +187,20 @@ function App() {
     const timeout = window.setTimeout(() => setNotice((current) => current === notice ? '' : current), 4000)
     return () => window.clearTimeout(timeout)
   }, [notice])
+
+  useEffect(() => {
+    window.localStorage.setItem('vd-workbench-sidebar-collapsed', String(sidebarCollapsed))
+  }, [sidebarCollapsed])
+
+  useEffect(() => {
+    window.localStorage.setItem('vd-workbench-font-size-pt', String(uiFontSize))
+  }, [uiFontSize])
+
+  useEffect(() => {
+    window.localStorage.setItem('vd-workbench-theme', theme)
+    document.documentElement.dataset.theme = theme
+    document.documentElement.style.colorScheme = theme
+  }, [theme])
 
   useEffect(() => {
     const prepareAuthentication = async () => {
@@ -711,7 +734,7 @@ function App() {
     const criterion = thresholds.find((item) => item.criterion_key === 'chassis_rear_permanent_deformation_mm')
     if (!criterion || !overview) return
     try {
-      const updated = await api.updateQualityThreshold(criterion.criterion_key, value)
+      const updated = await api.updateQualityThreshold(overview.load_case.project_id, criterion.criterion_key, value)
       setThresholds((items) => items.map((item) => item.criterion_key === updated.criterion_key ? updated : item))
       setOverview(await api.overview(overview.load_case.id))
       setNotice(`관리자 판정 기준을 ${value.toFixed(1)} mm로 저장했습니다.`)
@@ -722,7 +745,7 @@ function App() {
     const criterion = thresholds.find((item) => item.criterion_key === 'open_cell_stress_mpa')
     if (!criterion || !overview) return
     try {
-      const updated = await api.updateQualityThreshold(criterion.criterion_key, value)
+      const updated = await api.updateQualityThreshold(overview.load_case.project_id, criterion.criterion_key, value)
       setThresholds((items) => items.map((item) => item.criterion_key === updated.criterion_key ? updated : item))
       setOverview(await api.overview(overview.load_case.id))
       setNotice(`Open Cell 응력 관리 기준을 ${value.toFixed(1)} MPa로 저장했습니다.`)
@@ -779,8 +802,9 @@ function App() {
         if (!selectedPage) throw new Error('내보낼 분석 페이지가 없습니다.')
         const reportData = await reportDataForPage(selectedPage.id)
         scopedOverview = reportData.scopedOverview
+        if (!scopedOverview.run) throw new Error('완료된 Run이 없어 보고서를 내보낼 수 없습니다.')
         contents = createDashboardReportContent(reportData.definition, reportData.contentOverview)
-        source = { kind: 'analysis_page', dashboardId: selectedPage.id, loadCaseId: selectedLoadCaseId, runId: overview.run ?? undefined }
+        source = { kind: 'analysis_page', dashboardId: selectedPage.id, loadCaseId: selectedLoadCaseId, runId: scopedOverview.run }
         pageId = selectedPage.id
       }
       setReportPageId(pageId)
@@ -803,11 +827,12 @@ function App() {
   const selectReportPage = async (pageId: string) => {
     setReportError('')
     try {
+      if (!reportRunId) throw new Error('보고서에 사용할 Run을 먼저 선택해 주세요.')
       const { createDashboardReportContent, createDefaultReportOptions, prepareContentReportLayout } = await import('./reportExport')
-      const selectedOverview = reportRunId ? await api.overview(selectedLoadCaseId, reportRunId) : overview
+      const selectedOverview = await api.overview(selectedLoadCaseId, reportRunId)
       const { scopedOverview, contentOverview, definition } = await reportDataForPage(pageId, selectedOverview)
       const contents = createDashboardReportContent(definition, contentOverview)
-      const source: ReportSource = { kind: 'analysis_page', dashboardId: pageId, loadCaseId: selectedLoadCaseId, runId: scopedOverview.run ?? undefined }
+      const source: ReportSource = { kind: 'analysis_page', dashboardId: pageId, loadCaseId: selectedLoadCaseId, runId: reportRunId }
       setReportPageId(pageId)
       setReportOverview(scopedOverview)
       setReportDraft(createDefaultReportOptions(scopedOverview))
@@ -1034,7 +1059,7 @@ function App() {
   }
 
   if (authRequired && !authUser) {
-    return <LoginScreen error={authError} onLogin={handleLogin} />
+    return <LoginScreen error={authError} onLogin={handleLogin} theme={theme} onThemeChange={setTheme} />
   }
 
   if (loading) {
@@ -1059,26 +1084,33 @@ function App() {
   const activeAnalysisPage = analysisPages.find((page) => page.id === activeDashboardId)
 
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand"><span className="brand-mark"><Activity /></span><span>ANALYSIS<br /><strong>CANVAS</strong></span></div>
+    <div className={`app-shell ${theme === 'light' ? 'light-theme' : 'dark-theme'} ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`} data-theme={theme} data-sidebar-collapsed={sidebarCollapsed} style={{ '--ui-font-size': `${uiFontSize}pt` } as CSSProperties}>
+      <aside className="sidebar" aria-label="주 메뉴">
+        <div className="brand" title="VD simulation workbench"><span className="brand-mark"><Activity /></span><span>VD simulation<br /><strong>workbench</strong></span></div>
         <nav className="nav-main">
-          <button className={workspacePage === 'portfolio' ? 'active' : ''} onClick={() => setWorkspacePage('portfolio')}><LayoutDashboard /><span>운영 대시보드</span></button>
-          <button className={workspacePage === 'dashboard' ? 'active' : ''} onClick={openDashboardWorkspace}><Activity /><span>해석 의뢰 현황</span></button>
-          <button className={workspacePage === 'intake' ? 'active' : ''} onClick={() => setWorkspacePage('intake')}><ClipboardPlus /><span>의뢰 접수</span></button>
-          <button className={workspacePage === 'workbench' ? 'active' : ''} onClick={() => setWorkspacePage('workbench')}><FlaskConical /><span>해석 작업 실행</span></button>
-          {(!authRequired || authUser?.role === 'admin') && <button className={workspacePage === 'workbench_admin' ? 'active' : ''} onClick={() => setWorkspacePage('workbench_admin')}><Settings2 /><span>작업 유형 관리</span></button>}
-          <button className={workspacePage === 'data' ? 'active' : ''} onClick={() => setWorkspacePage('data')}><Database /><span>해석 데이터</span></button>
-          <button className={workspacePage === 'variables' ? 'active' : ''} onClick={() => setWorkspacePage('variables')}><BarChart3 /><span>변수 카탈로그</span></button>
-          <button className={workspacePage === 'templates' ? 'active' : ''} onClick={() => setWorkspacePage('templates')}><Settings2 /><span>자동화 템플릿</span></button>
-          <button className={workspacePage === 'schemas' ? 'active' : ''} onClick={() => setWorkspacePage('schemas')}><GripVertical /><span>폴더 스키마</span></button>
-          <button className={workspacePage === 'examples' ? 'active' : ''} onClick={() => setWorkspacePage('examples')}><Play /><span>예제 갤러리</span></button>
-          <button className={workspacePage === 'help' ? 'active' : ''} onClick={() => setWorkspacePage('help')}><BookOpen /><span>도움말</span></button>
+          <button aria-label="운영 대시보드" title="운영 대시보드" className={workspacePage === 'portfolio' ? 'active' : ''} onClick={() => setWorkspacePage('portfolio')}><LayoutDashboard /><span>운영 대시보드</span></button>
+          <button aria-label="해석 의뢰 현황" title="해석 의뢰 현황" className={workspacePage === 'dashboard' ? 'active' : ''} onClick={openDashboardWorkspace}><Activity /><span>해석 의뢰 현황</span></button>
+          <button aria-label="의뢰 접수" title="의뢰 접수" className={workspacePage === 'intake' ? 'active' : ''} onClick={() => setWorkspacePage('intake')}><ClipboardPlus /><span>의뢰 접수</span></button>
+          <button aria-label="해석 작업 실행" title="해석 작업 실행" className={workspacePage === 'workbench' ? 'active' : ''} onClick={() => setWorkspacePage('workbench')}><FlaskConical /><span>해석 작업 실행</span></button>
+          {(!authRequired || authUser?.role === 'admin') && <button aria-label="작업 유형 관리" title="작업 유형 관리" className={workspacePage === 'workbench_admin' ? 'active' : ''} onClick={() => setWorkspacePage('workbench_admin')}><Settings2 /><span>작업 유형 관리</span></button>}
+          <button aria-label="해석 데이터" title="해석 데이터" className={workspacePage === 'data' ? 'active' : ''} onClick={() => setWorkspacePage('data')}><Database /><span>해석 데이터</span></button>
+          <button aria-label="변수 카탈로그" title="변수 카탈로그" className={workspacePage === 'variables' ? 'active' : ''} onClick={() => setWorkspacePage('variables')}><BarChart3 /><span>변수 카탈로그</span></button>
+          <button aria-label="자동화 템플릿" title="자동화 템플릿" className={workspacePage === 'templates' ? 'active' : ''} onClick={() => setWorkspacePage('templates')}><Settings2 /><span>자동화 템플릿</span></button>
+          <button aria-label="폴더 스키마" title="폴더 스키마" className={workspacePage === 'schemas' ? 'active' : ''} onClick={() => setWorkspacePage('schemas')}><GripVertical /><span>폴더 스키마</span></button>
+          <button aria-label="예제 갤러리" title="예제 갤러리" className={workspacePage === 'examples' ? 'active' : ''} onClick={() => setWorkspacePage('examples')}><Play /><span>예제 갤러리</span></button>
+          <button aria-label="도움말" title="도움말" className={workspacePage === 'help' ? 'active' : ''} onClick={() => setWorkspacePage('help')}><BookOpen /><span>도움말</span></button>
         </nav>
         <div className="sidebar-foot">
+          <div className="global-font-control" aria-label="전체 글자 크기 조절">
+            <span className="sidebar-label">글자 크기</span>
+            <button type="button" aria-label="전체 글자 크기 줄이기" onClick={() => setUiFontSize((value) => Math.max(11, value - 1))} disabled={uiFontSize <= 11}><Minus /></button>
+            <output>{uiFontSize}pt</output>
+            <button type="button" aria-label="전체 글자 크기 늘리기" onClick={() => setUiFontSize((value) => Math.min(18, value + 1))} disabled={uiFontSize >= 18}><Plus /></button>
+          </div>
           {authUser && <div className="signed-user"><strong>{authUser.display_name}</strong><span>{authUser.role.toUpperCase()}</span></div>}
           <div className="system-pill"><span className="live-dot" /> {databaseBackend.toUpperCase()} · {databaseBackend === 'postgresql' ? 'SERVER' : 'LOCAL'}</div>
-          {authUser ? <button onClick={() => void logout()}><LogOut /> 로그아웃</button> : <button><PanelLeftClose /> 메뉴 접기</button>}
+          <button type="button" className="sidebar-toggle" aria-label={sidebarCollapsed ? '메뉴 펼치기' : '메뉴 접기'} aria-expanded={!sidebarCollapsed} onClick={() => setSidebarCollapsed((value) => !value)}>{sidebarCollapsed ? <PanelLeftOpen /> : <PanelLeftClose />}<span>{sidebarCollapsed ? '메뉴 펼치기' : '메뉴 접기'}</span></button>
+          {authUser && <button onClick={() => void logout()}><LogOut /><span>로그아웃</span></button>}
         </div>
       </aside>
 
@@ -1086,7 +1118,8 @@ function App() {
         <header className="topbar">
           <div className="breadcrumb">{workspacePage === 'portfolio' ? <><span>운영</span><b>/</b><strong>해석 운영 현황</strong></> : workspacePage === 'intake' ? <><span>의뢰</span><b>/</b><strong>해석 의뢰 접수</strong></> : workspacePage === 'workbench' ? <><span>실행</span><b>/</b><strong>해석 작업 실행 · DEMO ONLY</strong></> : workspacePage === 'workbench_admin' ? <><span>관리</span><b>/</b><strong>작업 유형 관리</strong></> : workspacePage === 'data' ? <><span>운영</span><b>/</b><strong>해석 데이터 등록</strong></> : workspacePage === 'schemas' ? <><span>데이터 설계</span><b>/</b><strong>폴더 스키마</strong></> : workspacePage === 'variables' ? <><span>설계</span><b>/</b><strong>변수 카탈로그</strong></> : workspacePage === 'templates' ? <><span>자동화</span><b>/</b><strong>모델링 템플릿</strong></> : workspacePage === 'examples' ? <><span>지원</span><b>/</b><strong>기능 예제 갤러리</strong></> : workspacePage === 'help' ? <><span>지원</span><b>/</b><strong>사용 시나리오 도움말</strong></> : activeView === 'workflow' ? <><span>의뢰</span><b>/</b><span>{selectedWorkflow?.request.project_name ?? '프로젝트 미지정'}</span><b>/</b><strong>{selectedWorkflow?.request.title ?? '의뢰 선택'}</strong></> : <><span>프로젝트</span><b>/</b><span>{overview.load_case.project_name}</span><b>/</b><strong>{overview.load_case.name}</strong></>}</div>
           <div className="top-actions">
-            {workspacePage === 'dashboard' && activeView !== 'workflow' && <button className="ghost-button" disabled={!dashboardReady} onClick={() => void openReportExport()}><Download /> 보고서 내보내기</button>}
+            <div className="theme-switch" role="group" aria-label="화면 테마 선택"><button type="button" className={theme === 'light' ? 'active' : ''} aria-pressed={theme === 'light'} onClick={() => setTheme('light')}><Sun /><span>라이트</span></button><button type="button" className={theme === 'dark' ? 'active' : ''} aria-pressed={theme === 'dark'} onClick={() => setTheme('dark')}><Moon /><span>다크</span></button></div>
+            {workspacePage === 'dashboard' && activeView !== 'workflow' && <button className="ghost-button" title={!overview?.run && activeView !== 'compare' ? '완료된 Run이 있어야 보고서를 내보낼 수 있습니다.' : undefined} disabled={!dashboardReady || (!overview?.run && activeView !== 'compare')} onClick={() => void openReportExport()}><Download /> 보고서 내보내기</button>}
             {canEdit && workspacePage === 'dashboard' && activeView !== 'workflow' && <button className="ghost-button" disabled={!dashboardReady} onClick={() => setAssistantOpen(true)}><Sparkles /> 자연어로 개선</button>}
             {canEdit && (workspacePage === 'dashboard' && activeView === 'workflow' ? (editMode ? (
               <button className="primary-button" onClick={save}><Save /> {workflowEditorMode === 'layout' ? '대시보드 레이아웃 저장' : '단계 변경 저장'}</button>
@@ -1100,7 +1133,7 @@ function App() {
           </div>
         </header>
 
-        {workspacePage === 'portfolio' ? <PortfolioDashboard refreshToken={operationalRefreshToken} editMode={editMode} layout={portfolioLayout} layoutVersion={portfolioLayoutVersion} onLayoutChange={setPortfolioLayout} onCancelEdit={cancelEditing} onResetLayout={resetPortfolioLayout} onOpen={(projectId, requestId) => void openPortfolioRequest(projectId, requestId)} /> : workspacePage === 'intake' ? <RequestIntakePage projects={projects} createdBy={authUser?.display_name ?? '데모 사용자'} canCreate={canEdit} onCreated={handleIntakeCreated} onOpenWorkbench={openIntakeWorkbench} /> : workspacePage === 'workbench' ? <SimulationWorkbench workflows={workflows} initialRequestId={selectedRequestId} createdBy={authUser?.display_name ?? '데모 사용자'} canExecute={canEdit} onRequestSelected={setSelectedRequestId} onChanged={async (message) => { setWorkflows(await api.workflows()); setOperationalRefreshToken((value) => value + 1); setNotice(message) }} /> : workspacePage === 'workbench_admin' ? <WorkbenchTypeAdmin /> : workspacePage === 'schemas' ? <FolderSchemaWorkspace /> : workspacePage === 'variables' ? <VariableCatalogPage variables={variables} overview={overview} loadCaseId={selectedLoadCaseId} onChanged={(items) => { setVariables(items); setCatalogVariable((current) => items.some((item) => item.id === current) ? current : items[0]?.id ?? '') }} /> : workspacePage === 'templates' ? <AutomationTemplatesPage /> : workspacePage === 'examples' ? <FeatureExampleGallery onOpen={openFeatureExample} /> : workspacePage === 'help' ? <HelpCenter onNavigate={setWorkspacePage} /> : workspacePage === 'data' ? (
+        {workspacePage === 'portfolio' ? <PortfolioDashboard refreshToken={operationalRefreshToken} editMode={editMode} layout={portfolioLayout} layoutVersion={portfolioLayoutVersion} onLayoutChange={setPortfolioLayout} onCancelEdit={cancelEditing} onResetLayout={resetPortfolioLayout} onOpen={(projectId, requestId) => void openPortfolioRequest(projectId, requestId)} /> : workspacePage === 'intake' ? <RequestIntakePage projects={projects} createdBy={authUser?.display_name ?? '데모 사용자'} canCreate={canEdit} onCreated={handleIntakeCreated} onOpenWorkbench={openIntakeWorkbench} /> : workspacePage === 'workbench' ? <SimulationWorkbench workflows={workflows} initialRequestId={selectedRequestId} createdBy={authUser?.display_name ?? '데모 사용자'} canExecute={canEdit} isAdmin={!authRequired || authUser?.role === 'admin'} onRequestSelected={setSelectedRequestId} onChanged={async (message) => { setWorkflows(await api.workflows()); setOperationalRefreshToken((value) => value + 1); setNotice(message) }} /> : workspacePage === 'workbench_admin' ? <WorkbenchTypeAdmin /> : workspacePage === 'schemas' ? <FolderSchemaWorkspace /> : workspacePage === 'variables' ? <VariableCatalogPage variables={variables} overview={overview} loadCaseId={selectedLoadCaseId} onChanged={(items) => { setVariables(items); setCatalogVariable((current) => items.some((item) => item.id === current) ? current : items[0]?.id ?? '') }} /> : workspacePage === 'templates' ? <AutomationTemplatesPage /> : workspacePage === 'examples' ? <FeatureExampleGallery onOpen={openFeatureExample} /> : workspacePage === 'help' ? <HelpCenter onNavigate={setWorkspacePage} /> : workspacePage === 'data' ? (
           <DataWorkspace projects={projects} initialProjectId={selectedProjectId} onDataChanged={refreshOperationalData} onOpenAnalysis={openImportedResult} onOpenIntake={() => setWorkspacePage('intake')} />
         ) : <>
         <section className="content-head">
@@ -1158,7 +1191,7 @@ function App() {
               compactType="vertical"
               onLayoutChange={handleLayoutChange}
             >
-              {dashboard.widgets.map((widget) => <div key={widget.id} className="comparison-dashboard-widget"><header className="widget-head"><div>{editMode && <span className="widget-drag-handle"><GripVertical /> 이동</span>}<h3>{widget.title}</h3></div>{editMode && <button onClick={() => setSelectedWidgetId(widget.id)}><Settings2 /> 설정</button>}</header>{widget.type === 'run_comparison' ? <ComparisonWorkspace loadCaseId={selectedLoadCaseId} currentRunId={overview.run ?? ''} onContextChange={setComparisonReportContext} /> : <WidgetCard widget={widget} overview={overview} selectedEdges={selectedEdges} editMode={editMode} threshold={chassisThreshold} openCellThreshold={openCellThreshold} onSaveThreshold={saveChassisThreshold} onSaveOpenCellThreshold={saveOpenCellThreshold} onRemove={() => removeWidget(widget.id)} onConfigure={() => setSelectedWidgetId(widget.id)} />}</div>)}
+              {dashboard.widgets.map((widget) => <div key={widget.id} className="comparison-dashboard-widget"><header className="widget-head"><div>{editMode && <span className="widget-drag-handle"><GripVertical /> 이동</span>}<h3>{widget.title}</h3></div>{editMode && <button onClick={() => setSelectedWidgetId(widget.id)}><Settings2 /> 설정</button>}</header>{widget.type === 'run_comparison' ? <ComparisonWorkspace loadCaseId={selectedLoadCaseId} currentRunId={overview.run ?? ''} onContextChange={setComparisonReportContext} /> : <WidgetCard widget={widget} overview={overview} selectedEdges={selectedEdges} editMode={editMode} canManageThresholds={canManagePages} threshold={chassisThreshold} openCellThreshold={openCellThreshold} onSaveThreshold={saveChassisThreshold} onSaveOpenCellThreshold={saveOpenCellThreshold} onRemove={() => removeWidget(widget.id)} onConfigure={() => setSelectedWidgetId(widget.id)} />}</div>)}
             </ResponsiveGridLayout>
           ) : activeView === 'compare' ? (
             <div className="comparison-state"><LoaderCircle className="spin" /> Run 비교 대시보드를 불러오고 있습니다.</div>
@@ -1180,7 +1213,7 @@ function App() {
             >
               {dashboard.widgets.map((widget) => (
                 <div key={widget.id}>
-                  <WidgetCard widget={widget} overview={overview} selectedEdges={selectedEdges} editMode={editMode} threshold={chassisThreshold} openCellThreshold={openCellThreshold} onSaveThreshold={saveChassisThreshold} onSaveOpenCellThreshold={saveOpenCellThreshold} onRemove={() => removeWidget(widget.id)} onConfigure={() => setSelectedWidgetId(widget.id)} />
+                  <WidgetCard widget={widget} overview={overview} selectedEdges={selectedEdges} editMode={editMode} canManageThresholds={canManagePages} threshold={chassisThreshold} openCellThreshold={openCellThreshold} onSaveThreshold={saveChassisThreshold} onSaveOpenCellThreshold={saveOpenCellThreshold} onRemove={() => removeWidget(widget.id)} onConfigure={() => setSelectedWidgetId(widget.id)} />
                 </div>
               ))}
             </ResponsiveGridLayout>
@@ -1259,7 +1292,7 @@ function App() {
             {reportError && <div className="report-export-error"><AlertTriangle /> {reportError}</div>}
             <footer>
               <button onClick={() => { setReportDraft(null); setReportOverview(null); setReportLayoutDraft(null) }} disabled={reportExporting}>취소</button>
-              <button className="primary" onClick={() => void downloadReport()} disabled={reportExporting || !reportDraft.author.trim() || (reportLayoutDraft.templateSource === 'pptx_upload' && !reportLayoutDraft.templateAssetId)}>{reportExporting ? <LoaderCircle className="spin" /> : <Download />} PPTX 생성</button>
+              <button className="primary" onClick={() => void downloadReport()} disabled={reportExporting || !reportDraft.author.trim() || (reportSource.kind === 'analysis_page' && !reportRunId) || (reportLayoutDraft.templateSource === 'pptx_upload' && !reportLayoutDraft.templateAssetId)}>{reportExporting ? <LoaderCircle className="spin" /> : <Download />} PPTX 생성</button>
             </footer>
           </section>
         </div>
@@ -1500,7 +1533,7 @@ function HelpCenter({ onNavigate }: { onNavigate: (page: WorkspacePage) => void 
     { title: '이전 Run과 비교하고 검토 의견 남기기', steps: ['해석 상세에서 Run 비교·검토 탭을 엽니다.', '기준 Run과 대상 Run을 선택해 회귀·개선 및 공통 시계열을 확인합니다.', '데이터 신뢰도에서 출처·카탈로그·단위·검증 경고를 확인합니다.', '변수와 시점을 선택해 북마크·검토 의견을 저장하고 상태를 관리합니다.'], action: 'dashboard' as const, label: 'Run 비교 열기' },
     { title: '예제로 전체 기능 빠르게 둘러보기', steps: ['예제 갤러리에서 확인할 기능이나 상태를 고릅니다.', '카드의 기대 결과와 데이터 구성을 먼저 읽습니다.', '예제 열기로 이동해 확인 목록을 따라 기능을 직접 사용합니다.'], action: 'examples' as const, label: '예제 갤러리 열기' },
   ]
-  return <section className="help-center"><header><span>SCENARIO GUIDE</span><h1>Analysis Canvas 사용 도움말</h1><p>하려는 작업을 기준으로 필요한 화면과 데이터 흐름을 안내합니다.</p></header><div className="help-flow"><strong>핵심 데이터 흐름</strong><div><span>폴더 스키마</span><b>→</b><span>결과 테이블</span><b>→</b><span>변수 카탈로그</span><b>→</b><span>대시보드·PPT</span></div><p>변수 카탈로그는 값을 저장하지 않습니다. 결과 테이블의 <code>variable_key</code>를 해석하고 표시하는 계약입니다.</p></div><div className="help-scenarios">{scenarios.map((scenario, index) => <article key={scenario.title}><span>0{index + 1}</span><h2>{scenario.title}</h2><ol>{scenario.steps.map((step) => <li key={step}>{step}</li>)}</ol><button onClick={() => onNavigate(scenario.action)}>{scenario.label}</button></article>)}</div><aside><AlertTriangle /><div><strong>외부 배포 전 확인</strong><p>PostgreSQL 어댑터·Alembic·데이터 검증·로그인·역할 권한·감사·백업 도구가 준비되어 있습니다. 외부 공개 시에는 HTTPS, <code>AUTH_MODE=password</code>, 별도 DB 역할과 복구 시험을 반드시 적용하세요.</p></div></aside></section>
+  return <section className="help-center"><header><span>SCENARIO GUIDE</span><h1>VD simulation workbench 사용 도움말</h1><p>하려는 작업을 기준으로 필요한 화면과 데이터 흐름을 안내합니다.</p></header><div className="help-flow"><strong>핵심 데이터 흐름</strong><div><span>폴더 스키마</span><b>→</b><span>결과 테이블</span><b>→</b><span>변수 카탈로그</span><b>→</b><span>대시보드·PPT</span></div><p>변수 카탈로그는 값을 저장하지 않습니다. 결과 테이블의 <code>variable_key</code>를 해석하고 표시하는 계약입니다.</p></div><div className="help-scenarios">{scenarios.map((scenario, index) => <article key={scenario.title}><span>0{index + 1}</span><h2>{scenario.title}</h2><ol>{scenario.steps.map((step) => <li key={step}>{step}</li>)}</ol><button onClick={() => onNavigate(scenario.action)}>{scenario.label}</button></article>)}</div><aside><AlertTriangle /><div><strong>외부 배포 전 확인</strong><p>PostgreSQL 어댑터·Alembic·데이터 검증·로그인·역할 권한·감사·백업 도구가 준비되어 있습니다. 외부 공개 시에는 HTTPS, <code>AUTH_MODE=password</code>, 별도 DB 역할과 복구 시험을 반드시 적용하세요.</p></div></aside></section>
 }
 
 function ComparisonWorkspace({ loadCaseId, currentRunId, onContextChange }: { loadCaseId: string; currentRunId: string; onContextChange?: (context: RunComparisonReportContext | null) => void }) {
@@ -1864,7 +1897,7 @@ function SchemaCatalog({ schemas, onUpdate, onDelete }: { schemas: ImportSchema[
   return <section className="data-form-card"><header><div><span>SCHEMA LIBRARY</span><h2>저장된 폴더 스키마</h2></div><div className="catalog-row-actions"><button onClick={() => setEditing((value) => !value)}>{editing ? '편집 취소' : '편집'}</button><button className="danger" onClick={() => void remove()}>삭제</button></div></header><label><span>스키마 선택</span><select value={selected?.id ?? ''} onChange={(event) => setSelectedId(event.target.value)}>{schemas.map((item) => <option key={item.id} value={item.id}>{item.name} · v{item.definition.version ?? 1}</option>)}</select></label>{selected && <div className="result-preview"><div className="result-preview-head"><div><span>SCHEMA DETAIL</span><strong>{selected.name}</strong></div><small>{new Date(selected.updated_at).toLocaleString('ko-KR')}</small></div><div className="result-preview-kpis"><div><strong>{selected.definition.mappings.length}</strong><span>파일 매핑</span></div><div><strong>v{selected.definition.version ?? 1}</strong><span>스키마 버전</span></div></div>{editing ? <div className="schema-editor-fields"><label><span>이름</span><input value={editName} onChange={(event) => setEditName(event.target.value)}/></label><label><span>설명</span><input value={editDescription} onChange={(event) => setEditDescription(event.target.value)}/></label><label><span>스키마 JSON</span><textarea className="schema-json-editor" value={editJson} onChange={(event) => setEditJson(event.target.value)}/></label><button className="primary-button" onClick={() => void saveChanges()}><Save/> 변경 저장</button></div> : <><p>{selected.description || '설명 없음'}</p><pre className="schema-json">{JSON.stringify(selected.definition, null, 2)}</pre></>}{status && <p>{status}</p>}</div>}</section>
 }
 
-function WidgetCard({ widget, overview, selectedEdges, editMode, threshold, openCellThreshold, onSaveThreshold, onSaveOpenCellThreshold, onRemove, onConfigure }: { widget: DashboardWidget; overview: Overview; selectedEdges: string[]; editMode: boolean; threshold?: QualityThreshold; openCellThreshold?: QualityThreshold; onSaveThreshold: (value: number) => void; onSaveOpenCellThreshold: (value: number) => void; onRemove: () => void; onConfigure: () => void }) {
+function WidgetCard({ widget, overview, selectedEdges, editMode, canManageThresholds, threshold, openCellThreshold, onSaveThreshold, onSaveOpenCellThreshold, onRemove, onConfigure }: { widget: DashboardWidget; overview: Overview; selectedEdges: string[]; editMode: boolean; canManageThresholds: boolean; threshold?: QualityThreshold; openCellThreshold?: QualityThreshold; onSaveThreshold: (value: number) => void; onSaveOpenCellThreshold: (value: number) => void; onRemove: () => void; onConfigure: () => void }) {
   const customFontSize = Number(widget.settings?.fontSize)
   return (
     <article
@@ -1879,15 +1912,15 @@ function WidgetCard({ widget, overview, selectedEdges, editMode, threshold, open
         </div>
         {editMode ? <div className="widget-edit-actions"><button aria-label={`${widget.title} 설정`} onClick={onConfigure}><Settings2 /></button><button aria-label={`${widget.title} 삭제`} onClick={onRemove}><X /></button></div> : <button className="widget-menu">•••</button>}
       </header>
-      <div className="widget-body"><WidgetContent widget={widget} overview={overview} selectedEdges={selectedEdges} threshold={threshold} openCellThreshold={openCellThreshold} onSaveThreshold={onSaveThreshold} onSaveOpenCellThreshold={onSaveOpenCellThreshold} /></div>
+      <div className="widget-body"><WidgetContent widget={widget} overview={overview} selectedEdges={selectedEdges} canManageThresholds={canManageThresholds} threshold={threshold} openCellThreshold={openCellThreshold} onSaveThreshold={onSaveThreshold} onSaveOpenCellThreshold={onSaveOpenCellThreshold} /></div>
     </article>
   )
 }
 
-function WidgetContent({ widget, overview, selectedEdges, threshold, openCellThreshold, onSaveThreshold, onSaveOpenCellThreshold }: { widget: DashboardWidget; overview: Overview; selectedEdges: string[]; threshold?: QualityThreshold; openCellThreshold?: QualityThreshold; onSaveThreshold: (value: number) => void; onSaveOpenCellThreshold: (value: number) => void }) {
+function WidgetContent({ widget, overview, selectedEdges, canManageThresholds, threshold, openCellThreshold, onSaveThreshold, onSaveOpenCellThreshold }: { widget: DashboardWidget; overview: Overview; selectedEdges: string[]; canManageThresholds: boolean; threshold?: QualityThreshold; openCellThreshold?: QualityThreshold; onSaveThreshold: (value: number) => void; onSaveOpenCellThreshold: (value: number) => void }) {
   const type = widget.type
   const edgeOrder = ['top', 'bottom', 'left', 'right']
-  const openCellScalars = overview.scalar_results.filter((item) => item.unit.toLowerCase() === 'mpa' && item.variable_key.toLowerCase().includes('stress') && hasNumericValue(item.value_double))
+  const openCellScalars = overview.scalar_results.filter((item) => item.result_group === 'OPEN_CELL' && item.unit.toLowerCase() === 'mpa' && item.variable_key.toLowerCase().includes('stress') && hasNumericValue(item.value_double))
   const filteredScalars = openCellScalars
     .filter((item) => selectedEdges.some((edge) => item.variable_key.startsWith(edge)))
     .sort((a, b) => edgeOrder.indexOf(a.variable_key.split('_')[0]) - edgeOrder.indexOf(b.variable_key.split('_')[0]))
@@ -1912,12 +1945,12 @@ function WidgetContent({ widget, overview, selectedEdges, threshold, openCellThr
     return [...grouped.values()]
   }, [overview.time_series, selectedEdges, widget.settings?.variableId])
 
-  if (type.startsWith('chassis_')) return <ChassisWidgetContent type={type} overview={overview} threshold={threshold} onSaveThreshold={onSaveThreshold} variableId={String(widget.settings?.variableId ?? '')} />
+  if (type.startsWith('chassis_')) return <ChassisWidgetContent type={type} overview={overview} threshold={threshold} canManageThreshold={canManageThresholds} onSaveThreshold={onSaveThreshold} variableId={String(widget.settings?.variableId ?? '')} />
   if (widget.settings?.variableId && type === 'time_series' && !overview.time_series.some((item)=>item.variable_key===widget.settings?.variableId)) return <div className="widget-empty"><Database/><strong>선언된 변수에 결과 데이터가 없습니다.</strong><small>{String(widget.settings.variableId)} 키의 시간 이력을 가져오면 자동 표시됩니다.</small></div>
   if (widget.settings?.variableId && ['kpi','gauge','edge_bar','scatter','result_table'].includes(type) && !overview.scalar_results.some((item)=>item.variable_key===widget.settings?.variableId)) return <div className="widget-empty"><Database/><strong>선언된 변수에 결과 데이터가 없습니다.</strong><small>{String(widget.settings.variableId)} 키의 숫자 결과를 가져오면 자동 표시됩니다.</small></div>
 
   if (type === 'open_cell_map') return <OpenCellMap overview={overview} />
-  if (type === 'open_cell_summary') return <OpenCellSummary overview={overview} threshold={openCellThreshold} onSaveThreshold={onSaveOpenCellThreshold} />
+  if (type === 'open_cell_summary') return <OpenCellSummary overview={overview} threshold={openCellThreshold} canManageThreshold={canManageThresholds} onSaveThreshold={onSaveOpenCellThreshold} />
   if (type === 'verdict') return <div className={`verdict-block ${widgetVerdict.toLowerCase()}`}><div className="verdict-icon">{widgetVerdict === 'PASS' ? <Check /> : <X />}</div><div><strong>{widgetVerdict}</strong><span>{widgetVerdict === 'PASS' ? '허용 기준 만족' : widgetVerdict === 'FAIL' ? '기준 초과 감지' : '판정 데이터 없음'}</span></div><small>{widgetThreshold == null ? widgetUnit : `LIMIT ${widgetThreshold} ${widgetUnit}`}</small></div>
   if (type === 'summary') return overview.load_case.analysis_type === 'SIDE_CLAMP' ? <div className="summary-grid"><div><span>클램프 압력</span><strong>{overview.load_case.parameters.pressure_mpa ?? overview.load_case.parameters.clamp_pressure_kpa ?? '-'}<em>MPa</em></strong></div><div><span>유지 시간</span><strong>{overview.load_case.parameters.hold_time_sec ?? overview.load_case.parameters.hold_time_s ?? '-'}<em>s</em></strong></div><div><span>클램프 면</span><strong>{Array.isArray(overview.load_case.parameters.faces) ? overview.load_case.parameters.faces.join(' / ') : 'LEFT / RIGHT'}</strong></div><div><span>요소 수</span><strong>{overview.template_execution?.generated_model.elements.toLocaleString() ?? '-'}</strong></div></div> : <div className="summary-grid"><div><span>낙하 높이</span><strong>{overview.load_case.parameters.drop_height_mm}<em>mm</em></strong></div><div><span>낙하 방향</span><strong>{overview.load_case.parameters.direction ?? overview.load_case.parameters.impact_direction ?? '-'}</strong></div><div><span>자동화 템플릿</span><strong>{overview.template_execution?.template_version ?? '-'}</strong></div><div><span>요소 수</span><strong>{overview.template_execution?.generated_model.elements.toLocaleString() ?? '-'}</strong></div></div>
   if (type === 'edge_bar') return <ResponsiveContainer width="100%" height="100%"><BarChart data={barData} margin={{ top: 12, right: 18, left: -12, bottom: 0 }}><CartesianGrid vertical={false} stroke="#26394c" strokeDasharray="3 3"/><XAxis dataKey="name" tick={{ fill: '#8fa6bb', fontSize: 14.4 }} axisLine={false} tickLine={false}/><YAxis domain={[0, chartMaximum * 1.15]} tick={{ fill: '#6f879d', fontSize: 13.2 }} axisLine={false} tickLine={false} unit=""/><Tooltip contentStyle={{ background: '#102235', border: '1px solid #2d465c', borderRadius: 10 }} formatter={(value: number) => [`${value} ${widgetUnit}`, '결과']}/>{widget.settings?.showThreshold !== false && widgetThreshold != null && <ReferenceLine y={widgetThreshold} stroke="#ffbf57" strokeDasharray="5 5" label={{ value: `기준 ${widgetThreshold}`, fill: '#ffbf57', fontSize: 13.2, position: 'insideTopRight' }}/>}<Bar dataKey="value" radius={[5,5,1,1]}>{barData.map((entry) => <Cell key={entry.name} fill={entry.verdict === 'FAIL' ? '#ff5d73' : '#4fd6a0'} />)}</Bar></BarChart></ResponsiveContainer>
@@ -2089,31 +2122,33 @@ function AutomationTemplatesPage() {
   return <section className="template-page"><header><div><span>MODELING AUTOMATION</span><h1>자동화 템플릿</h1><p>하중 경우 아래의 모델링 자동화 버전·입력·실행 결과를 추적합니다.</p></div><strong>{items.length}개 실행 이력</strong></header>{error?<div className="portfolio-state error"><AlertTriangle/>{error}</div>:items.length?<div className="template-grid">{items.map((item)=><article key={item.id}><header><div><span>{item.analysis_type.replace('_',' ')}</span><h2>{item.template_name}</h2><p>{item.project_name} / {item.request_title}</p></div><b>{item.status}</b></header><div className="template-meta"><span>버전<strong>v{item.template_version}</strong></span><span>하중 경우<strong>{item.load_case_name}</strong></span><span>실행 일시<strong>{new Date(item.executed_at).toLocaleString('ko-KR')}</strong></span></div><section><div><h3>입력 파라미터</h3>{Object.entries(item.input).map(([key,value])=><p key={key}><code>{key}</code><span>{String(value)}</span></p>)}</div><div><h3>생성 모델</h3>{Object.entries(item.generated_model||{}).map(([key,value])=><p key={key}><code>{key}</code><span>{typeof value==='number'?value.toLocaleString():String(value)}</span></p>)}</div></section></article>)}</div>:<div className="portfolio-empty"><Settings2/><h2>선택 프로젝트의 자동화 실행 이력이 없습니다.</h2><p>하중 경우에 템플릿 실행을 연결하면 여기에 표시됩니다.</p></div>}</section>
 }
 
-function OpenCellSummary({ overview, threshold, onSaveThreshold }: { overview: Overview; threshold?: QualityThreshold; onSaveThreshold: (value: number) => void }) {
-  const results = overview.scalar_results.filter((item) => item.unit.toLowerCase() === 'mpa' && item.variable_key.toLowerCase().includes('stress') && hasNumericValue(item.value_double))
+function OpenCellSummary({ overview, threshold, canManageThreshold, onSaveThreshold }: { overview: Overview; threshold?: QualityThreshold; canManageThreshold: boolean; onSaveThreshold: (value: number) => void }) {
+  const results = overview.scalar_results.filter((item) => item.result_group === 'OPEN_CELL' && item.unit.toLowerCase() === 'mpa' && item.variable_key.toLowerCase().includes('stress') && hasNumericValue(item.value_double))
   const limit = threshold?.threshold_double ?? results.find((item) => hasNumericValue(item.threshold_double))?.threshold_double ?? 75
   const [draftLimit, setDraftLimit] = useState(limit)
   useEffect(() => setDraftLimit(limit), [limit])
   const maximum = Math.max(...results.map((item) => item.value_double), 0)
+  const minimum = results.length ? Math.min(...results.map((item) => item.value_double)) : 0
   const verdict = results.length ? (maximum >= limit ? 'FAIL' : 'PASS') : 'NO_DATA'
-  return <div className="chassis-widget-summary open-cell-widget-summary"><div><span>전체 판정</span><strong className={verdict.toLowerCase()}>{verdict}</strong></div><div><span>최대 응력</span><strong>{maximum.toFixed(2)} MPa</strong></div><label><span>응력 관리 기준</span><div><input aria-label="Open Cell 응력 기준값" type="number" min="0.1" step="0.1" value={draftLimit} onChange={(event) => setDraftLimit(Number(event.target.value))}/><button disabled={!Number.isFinite(draftLimit) || draftLimit <= 0} onClick={() => onSaveThreshold(draftLimit)}>저장</button></div></label><p>단위가 MPa인 응력 결과에만 적용하며 기준 이상은 FAIL입니다.</p></div>
+  return <div className="chassis-widget-summary open-cell-widget-summary"><div><span>전체 판정</span><strong className={verdict.toLowerCase()}>{verdict}</strong></div><div><span>최대 응력</span><strong>{maximum.toFixed(2)} MPa</strong></div>{canManageThreshold ? <label><span>응력 관리 기준</span><div><input aria-label="Open Cell 응력 기준값" type="number" min="0.1" step="0.1" value={draftLimit} onChange={(event) => setDraftLimit(Number(event.target.value))}/><button disabled={!Number.isFinite(draftLimit) || draftLimit <= 0} onClick={() => onSaveThreshold(draftLimit)}>저장</button></div></label> : <div><span>응력 관리 기준</span><strong>{limit.toFixed(1)} MPa</strong></div>}<p>적용 대상 {results.length}개 · MPa 범위 {minimum.toFixed(2)}~{maximum.toFixed(2)} · 기준 이상은 FAIL입니다.</p></div>
 }
 
-function ChassisWidgetContent({ type, overview, threshold, onSaveThreshold, variableId }: { type: DashboardWidget['type']; overview: Overview; threshold?: QualityThreshold; onSaveThreshold: (value: number) => void; variableId: string }) {
-  const allResults = overview.scalar_results.filter((item) => item.unit.toLowerCase() === 'mm' && item.variable_key.includes('permanent_deformation') && hasNumericValue(item.value_double))
-  const results = variableId ? allResults.filter((item)=>item.variable_key===variableId) : allResults
+function ChassisWidgetContent({ type, overview, threshold, canManageThreshold, onSaveThreshold, variableId }: { type: DashboardWidget['type']; overview: Overview; threshold?: QualityThreshold; canManageThreshold: boolean; onSaveThreshold: (value: number) => void; variableId: string }) {
+  const allResults = overview.scalar_results.filter((item) => item.result_group === 'CHASSIS_REAR' && item.unit.toLowerCase() === 'mm' && item.variable_key.includes('permanent_deformation') && hasNumericValue(item.value_double))
+  const results = type === 'chassis_summary' ? allResults : variableId ? allResults.filter((item)=>item.variable_key===variableId) : allResults
   const limit = threshold?.threshold_double ?? results.find((item) => hasNumericValue(item.threshold_double))?.threshold_double ?? 5
   const [draftLimit, setDraftLimit] = useState(limit)
   useEffect(() => setDraftLimit(limit), [limit])
   const verdict = results.some((item) => item.verdict === 'FAIL') ? 'FAIL' : results.length ? 'PASS' : 'NO_DATA'
   const maximum = Math.max(...results.map((item) => item.value_double), 0)
-  if (variableId && !results.length) return <div className="widget-empty"><Database/><strong>선언된 변수에 결과 데이터가 없습니다.</strong><small>{variableId} 키의 숫자 결과를 가져오면 자동 표시됩니다.</small></div>
+  const minimum = results.length ? Math.min(...results.map((item) => item.value_double)) : 0
+  if (type !== 'chassis_summary' && variableId && !results.length) return <div className="widget-empty"><Database/><strong>선언된 변수에 결과 데이터가 없습니다.</strong><small>{variableId} 키의 숫자 결과를 가져오면 자동 표시됩니다.</small></div>
   const markerClasses: Record<string, string> = { chassis_rear_top_edge_gap_permanent_deformation:'top-edge', chassis_rear_bottom_edge_gap_permanent_deformation:'bottom-edge', chassis_rear_corner_top_left_permanent_deformation:'top-left', chassis_rear_corner_top_right_permanent_deformation:'top-right', chassis_rear_corner_bottom_left_permanent_deformation:'bottom-left', chassis_rear_corner_bottom_right_permanent_deformation:'bottom-right' }
   const labels: Record<string,string> = { top_edge_gap:'상단 엣지', bottom_edge_gap:'하단 엣지', corner_top_left:'좌상단', corner_top_right:'우상단', corner_bottom_left:'좌하단', corner_bottom_right:'우하단' }
   const chartData = results.map((item) => ({ name: labels[item.variable_key.replace('chassis_rear_','').replace('_permanent_deformation','')] ?? item.display_name, value:item.value_double, verdict:item.verdict }))
   const location = (key:string) => overview.result_locations.find((item) => item.variable_key === key)
   if (!results.length) return <div className="empty-widget">Chassis Rear 결과가 없습니다.</div>
-  if (type === 'chassis_summary') return <div className="chassis-widget-summary"><div><span>전체 판정</span><strong className={verdict.toLowerCase()}>{verdict}</strong></div><div><span>최대 영구변형</span><strong>{maximum.toFixed(2)} mm</strong></div><label><span>관리 기준</span><div><input aria-label="Chassis Rear 영구변형 기준값" type="number" min="0.1" step="0.1" value={draftLimit} onChange={(e)=>setDraftLimit(Number(e.target.value))}/><button onClick={()=>onSaveThreshold(draftLimit)}>저장</button></div></label><p>최종 프레임의 영구변형만 사용하며 기준 이상은 FAIL입니다.</p></div>
+  if (type === 'chassis_summary') return <div className="chassis-widget-summary"><div><span>전체 판정</span><strong className={verdict.toLowerCase()}>{verdict}</strong></div><div><span>최대 영구변형</span><strong>{maximum.toFixed(2)} mm</strong></div>{canManageThreshold ? <label><span>관리 기준</span><div><input aria-label="Chassis Rear 영구변형 기준값" type="number" min="0.1" step="0.1" value={draftLimit} onChange={(e)=>setDraftLimit(Number(e.target.value))}/><button disabled={!Number.isFinite(draftLimit) || draftLimit <= 0} onClick={()=>onSaveThreshold(draftLimit)}>저장</button></div></label> : <div><span>관리 기준</span><strong>{limit.toFixed(1)} mm</strong></div>}<p>적용 대상 {results.length}개 · mm 범위 {minimum.toFixed(2)}~{maximum.toFixed(2)} · 기준 이상은 FAIL입니다.</p></div>
   if (type === 'chassis_diagram') return <div className="chassis-diagram-body compact"><div className="chassis-shell"><div className="chassis-ribs"/><div className="chassis-center"><i/><i/><i/><i/></div>{results.map((item)=><div key={item.id} className={`chassis-marker ${markerClasses[item.variable_key] ?? ''} ${item.verdict.toLowerCase()}`}><span>{item.value_double.toFixed(1)} mm</span><small>{chartData.find((entry)=>entry.value===item.value_double)?.name}</small></div>)}</div><div className="chassis-legend"><span><i className="pass"/>기준 미만</span><span><i className="fail"/>기준 이상</span></div></div>
   if (type === 'chassis_bar') return <ResponsiveContainer width="100%" height="100%"><BarChart data={chartData} layout="vertical" margin={{top:8,right:24,left:8,bottom:4}}><CartesianGrid horizontal={false} stroke="#24384b"/><XAxis type="number" domain={[0,Math.max(8,limit+2)]}/><YAxis type="category" dataKey="name" width={60} tick={{fill:'#8fa6bb',fontSize:10.8}}/><Tooltip formatter={(value:number)=>[`${value} mm`,'영구변형']}/><ReferenceLine x={limit} stroke="#ffbf57" strokeDasharray="5 4"/><Bar dataKey="value">{chartData.map((entry)=><Cell key={entry.name} fill={entry.verdict==='FAIL'?'#ff5d73':'#4fd6a0'}/>)}</Bar></BarChart></ResponsiveContainer>
   if (type === 'chassis_table') return <div className="chassis-result-table"><div className="chassis-result-head"><span>측정 위치</span><span>영구변형</span><span>기준</span><span>판정</span></div>{results.map((item)=>{const point=location(item.variable_key); return <div className="chassis-result-row" key={item.id}><strong>{item.display_name}{point&&<small>NODE {point.entity_id} · ({point.x.toFixed(1)}, {point.y.toFixed(1)}, {point.z.toFixed(1)})</small>}</strong><span>{item.value_double.toFixed(1)} mm</span><span>{hasNumericValue(item.threshold_double) ? `${item.threshold_double.toFixed(1)} mm` : ''}</span><b className={item.verdict.toLowerCase()}>{item.verdict}</b></div>})}</div>
@@ -2121,7 +2156,7 @@ function ChassisWidgetContent({ type, overview, threshold, onSaveThreshold, vari
 }
 
 function ChassisRearDashboard({ overview, threshold, onSaveThreshold }: { overview: Overview; threshold?: QualityThreshold; onSaveThreshold: (value: number) => void }) {
-  const results = overview.scalar_results.filter((item) => item.unit.toLowerCase() === 'mm' && item.variable_key.includes('permanent_deformation') && hasNumericValue(item.value_double))
+  const results = overview.scalar_results.filter((item) => item.result_group === 'CHASSIS_REAR' && item.unit.toLowerCase() === 'mm' && item.variable_key.includes('permanent_deformation') && hasNumericValue(item.value_double))
   const limit = threshold?.threshold_double ?? results.find((item) => hasNumericValue(item.threshold_double))?.threshold_double ?? 5
   const [draftLimit, setDraftLimit] = useState(limit)
   useEffect(() => setDraftLimit(limit), [limit])
@@ -2230,7 +2265,7 @@ function WorkflowStepItem({ step, last, editMode, onChange, onMove, onDelete }: 
       </div>
       <label className="workflow-optional"><input type="checkbox" checked={step.is_optional} onChange={(event) => onChange({ is_optional: event.target.checked })} /><span>선택 단계</span></label>
       <label><span>메모</span><textarea value={step.note ?? ''} onChange={(event) => onChange({ note: event.target.value })} aria-label={`${step.sequence_no}단계 메모`} /></label>
-    </div> : <><div className="step-copy-horizontal"><strong>{step.name}</strong><span>{step.owner}</span>{step.is_optional && <em>선택</em>}</div><div className="step-progress-horizontal"><i><b style={{ width: `${step.progress}%` }} /></i><span>{step.progress}%</span></div><b className="status-badge">{statusText}</b></>}
+    </div> : <><div className="step-copy-horizontal"><strong title={step.name}>{step.name}</strong><span>{step.owner}</span>{step.is_optional && <em>선택</em>}</div><div className="step-progress-horizontal"><i><b style={{ width: `${step.progress}%` }} /></i><span>{step.progress}%</span></div><b className="status-badge">{statusText}</b></>}
   </div>
 }
 
