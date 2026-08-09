@@ -25,6 +25,7 @@ def initialize_database() -> None:
             from .repositories.workbench import ensure_default_workbench_catalog
 
             ensure_default_workbench_catalog(conn)
+            ensure_project_quality_thresholds(conn)
             ensure_system_analysis_page_metadata(conn)
         return
     with connect() as conn:
@@ -271,14 +272,15 @@ def initialize_database() -> None:
             );
 
             CREATE TABLE IF NOT EXISTS quality_thresholds (
-                criterion_key VARCHAR PRIMARY KEY,
+                criterion_key VARCHAR NOT NULL,
                 project_id VARCHAR NOT NULL,
                 analysis_key VARCHAR NOT NULL,
                 label VARCHAR NOT NULL,
                 threshold_double DOUBLE NOT NULL,
                 unit VARCHAR NOT NULL,
                 updated_by VARCHAR NOT NULL,
-                updated_at TIMESTAMP NOT NULL
+                updated_at TIMESTAMP NOT NULL,
+                PRIMARY KEY (project_id, criterion_key)
             );
 
             CREATE TABLE IF NOT EXISTS variable_definitions (
@@ -480,7 +482,8 @@ def initialize_database() -> None:
                 demo_run_id VARCHAR,
                 UNIQUE (request_id, sequence_no),
                 UNIQUE (request_id, node_key),
-                CHECK (status IN ('READY', 'IN_PROGRESS', 'WAITING', 'COMPLETED'))
+                CHECK (status IN ('READY', 'IN_PROGRESS', 'WAITING', 'COMPLETED')),
+                CHECK (progress BETWEEN 0 AND 100)
             );
 
             CREATE TABLE IF NOT EXISTS workflow_runs (
@@ -532,6 +535,7 @@ def initialize_database() -> None:
 
             CREATE TABLE IF NOT EXISTS batch_path_profiles (
                 id VARCHAR PRIMARY KEY,
+                version INTEGER NOT NULL DEFAULT 1,
                 name VARCHAR NOT NULL,
                 solver_path VARCHAR NOT NULL,
                 working_directory VARCHAR NOT NULL,
@@ -542,6 +546,21 @@ def initialize_database() -> None:
                 updated_by VARCHAR NOT NULL,
                 created_at TIMESTAMP NOT NULL,
                 updated_at TIMESTAMP NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS batch_path_profile_versions (
+                id VARCHAR NOT NULL,
+                version INTEGER NOT NULL,
+                name VARCHAR NOT NULL,
+                solver_path VARCHAR NOT NULL,
+                working_directory VARCHAR NOT NULL,
+                arguments_template VARCHAR NOT NULL,
+                environment_json JSON NOT NULL,
+                task_type_ids_json JSON NOT NULL,
+                is_active BOOLEAN NOT NULL,
+                created_by VARCHAR NOT NULL,
+                created_at TIMESTAMP NOT NULL,
+                PRIMARY KEY (id, version)
             );
 
             CREATE TABLE IF NOT EXISTS batch_dispatches (
@@ -556,6 +575,42 @@ def initialize_database() -> None:
                 created_at TIMESTAMP NOT NULL,
                 CHECK (status = 'RECORDED_DEMO')
             );
+
+            CREATE TABLE IF NOT EXISTS batch_execution_attempts (
+                id VARCHAR PRIMARY KEY,
+                work_item_id VARCHAR NOT NULL,
+                workflow_run_id VARCHAR,
+                batch_profile_id VARCHAR NOT NULL,
+                batch_profile_version INTEGER NOT NULL,
+                profile_snapshot_json JSON NOT NULL,
+                command_preview VARCHAR NOT NULL,
+                idempotency_key VARCHAR NOT NULL,
+                execution_mode VARCHAR NOT NULL,
+                status VARCHAR NOT NULL,
+                progress INTEGER NOT NULL,
+                last_message VARCHAR NOT NULL,
+                created_by VARCHAR NOT NULL,
+                created_at TIMESTAMP NOT NULL,
+                started_at TIMESTAMP,
+                completed_at TIMESTAMP,
+                UNIQUE (work_item_id, idempotency_key),
+                CHECK (execution_mode = 'DEMO_ONLY'),
+                CHECK (status IN ('PREFLIGHT', 'QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED', 'REJECTED')),
+                CHECK (progress BETWEEN 0 AND 100)
+            );
+
+            CREATE TABLE IF NOT EXISTS batch_execution_events (
+                id VARCHAR PRIMARY KEY,
+                attempt_id VARCHAR NOT NULL,
+                event_index INTEGER NOT NULL,
+                event_type VARCHAR NOT NULL,
+                level VARCHAR NOT NULL,
+                message VARCHAR NOT NULL,
+                progress INTEGER NOT NULL,
+                occurred_at TIMESTAMP NOT NULL,
+                UNIQUE (attempt_id, event_index),
+                CHECK (progress BETWEEN 0 AND 100)
+            );
             """
         )
 
@@ -564,14 +619,80 @@ def initialize_database() -> None:
         conn.execute("ALTER TABLE request_work_items ADD COLUMN IF NOT EXISTS progress_updated_by VARCHAR")
         conn.execute("ALTER TABLE request_work_items ADD COLUMN IF NOT EXISTS progress_updated_at TIMESTAMP")
         conn.execute("ALTER TABLE batch_path_profiles ADD COLUMN IF NOT EXISTS task_type_ids_json JSON DEFAULT '[]'")
+        conn.execute("ALTER TABLE batch_path_profiles ADD COLUMN IF NOT EXISTS version INTEGER DEFAULT 1")
         conn.execute("UPDATE request_work_items SET progress=CASE WHEN status='COMPLETED' THEN 100 ELSE COALESCE(progress, 0) END")
 
+        ensure_quality_threshold_schema(conn)
         ensure_default_content(conn)
 
 
 def seed_current_database() -> None:
     with connect() as conn:
         ensure_default_content(conn)
+
+
+def ensure_quality_threshold_schema(conn: duckdb.DuckDBPyConnection) -> None:
+    """Upgrade legacy DuckDB databases from a global to a project-scoped key."""
+    columns = conn.execute("PRAGMA table_info('quality_thresholds')").fetchall()
+    primary_key_columns = {row[1] for row in columns if row[5]}
+    if primary_key_columns == {"project_id", "criterion_key"}:
+        return
+    conn.execute("BEGIN TRANSACTION")
+    try:
+        conn.execute(
+            """
+            CREATE TABLE quality_thresholds_project_scoped (
+                criterion_key VARCHAR NOT NULL,
+                project_id VARCHAR NOT NULL,
+                analysis_key VARCHAR NOT NULL,
+                label VARCHAR NOT NULL,
+                threshold_double DOUBLE NOT NULL,
+                unit VARCHAR NOT NULL,
+                updated_by VARCHAR NOT NULL,
+                updated_at TIMESTAMP NOT NULL,
+                PRIMARY KEY (project_id, criterion_key)
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO quality_thresholds_project_scoped
+            SELECT criterion_key, project_id, analysis_key, label, threshold_double,
+                   unit, updated_by, updated_at
+            FROM quality_thresholds
+            """
+        )
+        conn.execute("DROP TABLE quality_thresholds")
+        conn.execute("ALTER TABLE quality_thresholds_project_scoped RENAME TO quality_thresholds")
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+
+
+def ensure_project_quality_thresholds(conn: Any) -> None:
+    """Ensure both verdict criteria exist independently for every project."""
+    now = _iso(datetime.now(timezone.utc))
+    defaults = [
+        (
+            "chassis_rear_permanent_deformation_mm",
+            "CHASSIS_REAR_PERMANENT_DEFORMATION",
+            "Chassis Rear permanent deformation limit",
+            5.0,
+            "mm",
+        ),
+        ("open_cell_stress_mpa", "OPEN_CELL_STRESS", "Open Cell stress limit", 75.0, "MPa"),
+    ]
+    for criterion_key, analysis_key, label, threshold, unit in defaults:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO quality_thresholds
+                (criterion_key, project_id, analysis_key, label, threshold_double, unit, updated_by, updated_at)
+            SELECT ?, id, ?, ?, ?, ?, 'system', ?
+            FROM projects
+            """,
+            [criterion_key, analysis_key, label, threshold, unit, now],
+        )
 
 
 def ensure_default_content(conn: Any) -> None:
@@ -587,6 +708,7 @@ def ensure_default_content(conn: Any) -> None:
             conn.execute("ROLLBACK")
             raise
     ensure_sample_evolutions(conn)
+    ensure_project_quality_thresholds(conn)
     ensure_drop_video_widget(conn)
     ensure_feature_examples(conn)
     ensure_variable_definitions(conn)
@@ -955,6 +1077,16 @@ def ensure_sample_evolutions(conn: duckdb.DuckDBPyConnection) -> None:
         WHERE id='radioss-demo' AND CAST(task_type_ids_json AS VARCHAR)='[]'
         """,
         [json.dumps(["hpc-submit"])],
+    )
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO batch_path_profile_versions
+            (id, version, name, solver_path, working_directory, arguments_template,
+             environment_json, task_type_ids_json, is_active, created_by, created_at)
+        SELECT id, version, name, solver_path, working_directory, arguments_template,
+               environment_json, task_type_ids_json, is_active, updated_by, updated_at
+        FROM batch_path_profiles
+        """
     )
 
     target_started_row = conn.execute("SELECT started_at FROM analysis_runs WHERE id='run-drop-001'").fetchone()

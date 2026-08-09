@@ -20,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
-from .database import connect, initialize_database, json_value, rows
+from .database import connect, ensure_project_quality_thresholds, initialize_database, json_value, rows
 from .config import database_settings, security_settings
 from .folder_import import FolderImportError, scan_folder
 from .media_policy import validate_media_metadata
@@ -362,6 +362,7 @@ def create_project(payload: ProjectCreate) -> dict[str, Any]:
         for category, label, value, metadata in product_rows:
             if value:
                 conn.execute("INSERT INTO product_information VALUES (?, ?, ?, ?, ?, ?, ?)", [f"product-{uuid4().hex[:12]}", project_id, category, label, value, None, json.dumps(metadata, ensure_ascii=False)])
+        ensure_project_quality_thresholds(conn)
     return {"id": project_id, **payload.model_dump(), "created_at": now}
 
 
@@ -612,6 +613,32 @@ def import_analysis_results(load_case_id: str, payload: ResultImportPayload) -> 
         next_run_no = conn.execute("SELECT coalesce(max(run_no), 0) + 1 FROM analysis_runs WHERE load_case_id = ?", [load_case_id]).fetchone()[0]
         conn.execute("BEGIN TRANSACTION")
         try:
+            catalog_repository = VariableCatalogRepository(conn)
+            for item in parsed["scalars"]:
+                if not catalog_repository.get(load_case_id, item["variable_key"], include_inactive=True):
+                    catalog_repository.create(load_case_id, {
+                        "variable_key": item["variable_key"],
+                        "display_name": item["display_name"],
+                        "data_type": "NUMBER",
+                        "unit": item["unit"],
+                        "description": f"결과 파일 적재: {payload.filename}",
+                        "threshold": item["threshold"],
+                        "result_group": item.get("analysis", "CUSTOM"),
+                        "updated_by": payload.author.strip(),
+                    })
+            for item in parsed["time_series"]:
+                if not catalog_repository.get(load_case_id, item["variable_key"], include_inactive=True):
+                    result_group = "OPEN_CELL" if item["value_unit"].casefold() == "mpa" and "stress" in item["variable_key"].casefold() else "CUSTOM"
+                    catalog_repository.create(load_case_id, {
+                        "variable_key": item["variable_key"],
+                        "display_name": item["display_name"],
+                        "data_type": "TIME_SERIES",
+                        "unit": item["value_unit"],
+                        "description": f"결과 파일 적재: {payload.filename}",
+                        "threshold": None,
+                        "result_group": result_group,
+                        "updated_by": payload.author.strip(),
+                    })
             conn.execute(
                 "INSERT INTO analysis_runs VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 [run_id, load_case_id, None, next_run_no, parsed["solver"], "COMPLETED", now, now],
@@ -818,17 +845,38 @@ def get_load_case_overview(load_case_id: str, run_id: str | None = Query(default
         run_id = run[0]
         scalar_results = rows(
             conn.execute(
-                "SELECT * FROM scalar_results WHERE analysis_run_id = ? ORDER BY display_name",
-                [run_id],
+                """
+                SELECT sr.*, COALESCE(vd.result_group, 'CUSTOM') AS result_group
+                FROM scalar_results sr
+                LEFT JOIN variable_definitions vd
+                  ON vd.load_case_id = ? AND vd.variable_key = sr.variable_key
+                WHERE sr.analysis_run_id = ? ORDER BY sr.display_name
+                """,
+                [load_case_id, run_id],
             )
         )
         time_series = rows(
             conn.execute(
-                "SELECT * FROM time_series_results WHERE analysis_run_id = ? ORDER BY time_value, variable_key",
-                [run_id],
+                """
+                SELECT ts.*, COALESCE(vd.result_group, 'CUSTOM') AS result_group
+                FROM time_series_results ts
+                LEFT JOIN variable_definitions vd
+                  ON vd.load_case_id = ? AND vd.variable_key = ts.variable_key
+                WHERE ts.analysis_run_id = ? ORDER BY ts.time_value, ts.variable_key
+                """,
+                [load_case_id, run_id],
             )
         )
-        curves = rows(conn.execute("SELECT * FROM curve_results WHERE analysis_run_id = ? ORDER BY display_name, series_key", [run_id]))
+        curves = rows(conn.execute(
+            """
+            SELECT cr.*, COALESCE(vd.result_group, 'CUSTOM') AS result_group
+            FROM curve_results cr
+            LEFT JOIN variable_definitions vd
+              ON vd.load_case_id = ? AND vd.variable_key = cr.variable_key
+            WHERE cr.analysis_run_id = ? ORDER BY cr.display_name, cr.series_key
+            """,
+            [load_case_id, run_id],
+        ))
         result_locations = rows(conn.execute("SELECT * FROM result_locations WHERE analysis_run_id = ? ORDER BY variable_key", [run_id]))
         notes = rows(conn.execute("SELECT * FROM qualitative_notes WHERE analysis_run_id = ? ORDER BY created_at DESC", [run_id]))
         media = rows(conn.execute("SELECT * FROM media_assets WHERE analysis_run_id = ?", [run_id]))
@@ -852,8 +900,8 @@ def get_load_case_overview(load_case_id: str, run_id: str | None = Query(default
         item["generated_model"] = json_value(item.pop("generated_model_json"))
     for item in product_information:
         item["metadata"] = json_value(item.pop("metadata_json"))
-    open_cell_results = [item for item in scalar_results if str(item.get("unit", "")).casefold() == "mpa" and "stress" in str(item.get("variable_key", "")).casefold()]
-    chassis_results = [item for item in scalar_results if str(item.get("unit", "")).casefold() == "mm" and "permanent_deformation" in str(item.get("variable_key", "")).casefold()]
+    open_cell_results = [item for item in scalar_results if item.get("result_group") == "OPEN_CELL" and str(item.get("unit", "")).casefold() == "mpa" and "stress" in str(item.get("variable_key", "")).casefold()]
+    chassis_results = [item for item in scalar_results if item.get("result_group") == "CHASSIS_REAR" and str(item.get("unit", "")).casefold() == "mm" and "permanent_deformation" in str(item.get("variable_key", "")).casefold()]
     threshold = next((item["threshold_double"] for item in open_cell_results if item["threshold_double"] is not None), None)
     if threshold is None:
         threshold = next((item["threshold_double"] for item in chassis_results if item["threshold_double"] is not None), None)
@@ -1163,16 +1211,23 @@ def get_quality_thresholds(project_id: str) -> list[dict[str, Any]]:
         )
 
 
-@app.put("/api/quality-thresholds/{criterion_key}")
-def update_quality_threshold(criterion_key: str, payload: QualityThresholdUpdate) -> dict[str, Any]:
+def _update_quality_threshold(criterion_key: str, payload: QualityThresholdUpdate, expected_project_id: str | None = None) -> dict[str, Any]:
     with connect() as conn:
-        criterion = conn.execute(
-            "SELECT project_id, unit FROM quality_thresholds WHERE criterion_key = ?",
-            [criterion_key],
-        ).fetchone()
-        if not criterion:
+        if expected_project_id is not None:
+            criteria = conn.execute(
+                "SELECT project_id, unit FROM quality_thresholds WHERE project_id = ? AND criterion_key = ?",
+                [expected_project_id, criterion_key],
+            ).fetchall()
+        else:
+            criteria = conn.execute(
+                "SELECT project_id, unit FROM quality_thresholds WHERE criterion_key = ? ORDER BY project_id",
+                [criterion_key],
+            ).fetchall()
+        if not criteria:
             raise HTTPException(404, "품질 판정 기준을 찾을 수 없습니다.")
-        project_id, unit = criterion
+        if expected_project_id is None and len(criteria) > 1:
+            raise HTTPException(409, "프로젝트 범위 품질 기준 URL을 사용해야 합니다.")
+        project_id, unit = criteria[0]
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         conn.execute("BEGIN TRANSACTION")
         try:
@@ -1180,9 +1235,9 @@ def update_quality_threshold(criterion_key: str, payload: QualityThresholdUpdate
                 """
                 UPDATE quality_thresholds
                 SET threshold_double = ?, updated_by = ?, updated_at = ?
-                WHERE criterion_key = ?
+                WHERE project_id = ? AND criterion_key = ?
                 """,
-                [payload.threshold_double, payload.updated_by, now, criterion_key],
+                [payload.threshold_double, payload.updated_by, now, project_id, criterion_key],
             )
             if criterion_key == "chassis_rear_permanent_deformation_mm":
                 conn.execute(
@@ -1197,7 +1252,10 @@ def update_quality_threshold(criterion_key: str, payload: QualityThresholdUpdate
                           FROM analysis_runs run
                           JOIN load_cases lc ON lc.id = run.load_case_id
                           JOIN analysis_requests ar ON ar.id = lc.request_id
-                          WHERE ar.project_id = ?
+                          JOIN variable_definitions vd
+                            ON vd.load_case_id = lc.id
+                           AND vd.variable_key = scalar_results.variable_key
+                          WHERE ar.project_id = ? AND vd.result_group = 'CHASSIS_REAR'
                       )
                     """,
                     [payload.threshold_double, payload.threshold_double, project_id],
@@ -1215,17 +1273,35 @@ def update_quality_threshold(criterion_key: str, payload: QualityThresholdUpdate
                           FROM analysis_runs run
                           JOIN load_cases lc ON lc.id = run.load_case_id
                           JOIN analysis_requests ar ON ar.id = lc.request_id
-                          WHERE ar.project_id = ?
+                          JOIN variable_definitions vd
+                            ON vd.load_case_id = lc.id
+                           AND vd.variable_key = scalar_results.variable_key
+                          WHERE ar.project_id = ? AND vd.result_group = 'OPEN_CELL'
                       )
                     """,
                     [payload.threshold_double, payload.threshold_double, project_id],
                 )
             conn.execute("COMMIT")
-            updated_threshold = rows(conn.execute("SELECT * FROM quality_thresholds WHERE criterion_key=?", [criterion_key]))[0]
+            updated_threshold = rows(
+                conn.execute(
+                    "SELECT * FROM quality_thresholds WHERE project_id=? AND criterion_key=?",
+                    [project_id, criterion_key],
+                )
+            )[0]
         except Exception:
             conn.execute("ROLLBACK")
             raise
     return updated_threshold
+
+
+@app.put("/api/projects/{project_id}/quality-thresholds/{criterion_key}")
+def update_project_quality_threshold(project_id: str, criterion_key: str, payload: QualityThresholdUpdate) -> dict[str, Any]:
+    return _update_quality_threshold(criterion_key, payload, expected_project_id=project_id)
+
+
+@app.put("/api/quality-thresholds/{criterion_key}", deprecated=True)
+def update_quality_threshold(criterion_key: str, payload: QualityThresholdUpdate) -> dict[str, Any]:
+    return _update_quality_threshold(criterion_key, payload)
 
 
 @app.get("/api/requests/{request_id}/workflow")

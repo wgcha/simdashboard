@@ -559,15 +559,17 @@ GET  /api/workbench/batch-attempts/{attempt_id}/events
 - 다음 첫 수정 파일과 미완료 수용 기준 번호
 - 실제 실행을 활성화했는지 여부와 DEMO_ONLY 안전 상태
 
-## 13. 2026-08-02 구현 결과와 계획 대비 범위
+## 13. 2026-08-09 최종 구현 결과와 계획 대비 범위
 
 이번 구현은 사용자에게 바로 필요한 Run 선택, 판정 기준, master-detail, 진행률, 배치 경로 등록과 안전한 실행 기록을 완료했다. 실제 Runner 정보가 없는 환경이므로 4~8장의 운영용 완전 상태 머신은 활성화하지 않았고 다음의 축소 계약을 사용한다.
 
-- `batch_path_profiles`: 현재 프로필을 upsert하고 호환 `task_type_ids`를 필수 저장한다. 수행자 UI와 dispatch API가 현재 작업의 Task Type 포함 여부를 모두 검사한다.
-- `batch_dispatches`: 실행 시점 profile snapshot, command preview, 작업/워크플로 Run 참조와 `RECORDED_DEMO` 상태를 불변 기록한다.
+- `batch_path_profiles`: 현재 프로필을 upsert할 때마다 version을 증가시키고 `batch_path_profile_versions`에 불변 버전을 저장한다. 호환 `task_type_ids`는 필수이며 수행자 UI와 dispatch API가 현재 작업의 Task Type 포함 여부를 모두 검사한다.
+- `batch_execution_attempts`와 `batch_execution_events`: `idempotency_key`로 중복 클릭을 하나의 attempt로 수렴시키고 profile version snapshot, preflight, queued, 성공·거부·실패 이벤트를 기록한다. 선택 작업 상세에서 최근 이벤트를 조회한다.
+- `batch_dispatches`: 호환성 유지를 위해 실행 시점 profile snapshot, command preview, 작업/워크플로 Run 참조와 `RECORDED_DEMO` 상태를 함께 불변 기록한다.
 - `workflow_runs.execution_mode`: 기존 `DEMO_ONLY`만 유지한다. 외부 process, scheduler, network 호출 코드는 추가하지 않았다.
 - 진행률: `progress`, `progress_updated_by`, `progress_updated_at`을 저장하고 시작=1, 완료=100, 수동 1~99 단조 증가 규칙과 공통 평균 projection을 적용한다.
-- 판정 기준: 기존 프로젝트별 `quality_thresholds` 계약을 유지하면서 Chassis `mm + permanent_deformation`, Open Cell `MPa + stress` 교집합으로 갱신 범위를 제한한다.
-- Run 보고서: 일반 분석과 Run 비교 모두 같은 하중 경우의 AnalysisRun 드롭다운을 사용하며, 선택 결과로 overview·콘텐츠·source snapshot을 재생성한다.
+- 판정 기준: `(project_id, criterion_key)` 복합 키로 프로젝트별 독립 저장하며 Chassis `CHASSIS_REAR + mm + permanent_deformation`, Open Cell `OPEN_CELL + MPa + stress` 교집합으로 갱신 범위를 제한한다. 신규 프로젝트 생성과 시작 backfill 모두 두 기준을 보장한다.
+- Run 보고서: 일반 분석과 Run 비교 모두 같은 하중 경우의 AnalysisRun 드롭다운을 사용하며, 선택 결과로 overview·콘텐츠·source snapshot을 재생성한다. `ReportSource.runId`는 필수이고 무 Run 내보내기는 차단한다.
+- 권한과 비밀 노출: 기준 변경은 admin 전용이며, 진행률·작업·배치는 admin 또는 작업 담당자만 수행한다. 비관리자에게 물리 solver 경로, working directory, environment, command snapshot을 반환하지 않는다.
 
-운영 Batch를 후속 활성화할 때는 프로필 불변 version, 승인 application alias, 허용 root, tokenized argv, idempotency, preflight, cancel/retry, Runner 이중 검증을 4~8장 원안대로 추가해야 한다. 현재 UI의 command preview는 기록용이며 임의 명령 실행 권한을 부여하지 않는다.
+운영 Batch를 후속 활성화할 때는 승인 application alias, 허용 root, secret reference, cancel/retry/timeout, scheduler adapter와 Runner 측 이중 검증을 4~8장 원안대로 추가해야 한다. 현재 UI의 command preview는 관리자 기록용이며 임의 명령 실행 권한을 부여하지 않는다.

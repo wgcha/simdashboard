@@ -28,6 +28,7 @@ def test_password_hash_and_role_policy():
     assert minimum_role("GET", "/api/projects") == "viewer"
     assert minimum_role("PUT", "/api/dashboards/example") == "editor"
     assert minimum_role("PUT", "/api/quality-thresholds/key") == "admin"
+    assert minimum_role("PUT", "/api/projects/project-1/quality-thresholds/key") == "admin"
     assert minimum_role("DELETE", "/api/report-layouts/example") == "admin"
     assert minimum_role("DELETE", "/api/dashboards/example/versions/1") == "admin"
     assert minimum_role("POST", "/api/workbench/demo-runs") == "editor"
@@ -84,6 +85,17 @@ def test_password_auth_rbac_and_audit(monkeypatch):
 
             editor_login = client.post("/api/auth/login", json={"username": f"editor-{suffix}", "password": password}).json()
             editor_headers = {"Authorization": f"Bearer {editor_login['access_token']}"}
+            public_profiles = client.get("/api/workbench/batch-profiles", headers=editor_headers).json()
+            assert public_profiles and public_profiles[0]["solver_path"] == ""
+            assert public_profiles[0]["working_directory"] == ""
+            assert public_profiles[0]["environment"] == {}
+            not_assigned = client.patch(
+                f"/api/workbench/work-items/{current_work_item['id']}/progress",
+                headers=editor_headers,
+                json={"progress": max(1, current_work_item["progress"] + 1), "updated_by": "위조 담당자"},
+            )
+            assert not_assigned.status_code == 403
+            assert not_assigned.json()["detail"]["code"] == "WORK_ITEM_NOT_ASSIGNED"
             assert client.post("/api/dashboard-commands/preview", headers=editor_headers, json={"command": "KPI 추가"}).status_code == 200
             demo_run = client.post("/api/workbench/demo-runs", headers=editor_headers, json=demo_payload)
             assert demo_run.status_code == 201
@@ -97,6 +109,8 @@ def test_password_auth_rbac_and_audit(monkeypatch):
 
             admin_login = client.post("/api/auth/login", json={"username": f"admin-{suffix}", "password": password}).json()
             admin_headers = {"Authorization": f"Bearer {admin_login['access_token']}"}
+            admin_profiles = client.get("/api/workbench/batch-profiles", headers=admin_headers).json()
+            assert admin_profiles and admin_profiles[0]["solver_path"]
             assert client.get("/api/auth/me").status_code == 200  # HttpOnly login cookie
             me = client.get("/api/auth/me", headers=admin_headers)
             assert me.status_code == 200 and me.json()["role"] == "admin"

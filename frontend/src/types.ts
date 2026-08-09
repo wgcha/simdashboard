@@ -6,6 +6,7 @@ export type ScalarResult = {
   unit: string
   threshold_double: number
   verdict: 'PASS' | 'FAIL'
+  result_group?: 'OPEN_CELL' | 'CHASSIS_REAR' | 'CUSTOM'
 }
 
 export type TimeSeriesPoint = {
@@ -15,6 +16,7 @@ export type TimeSeriesPoint = {
   value: number
   time_unit: string
   value_unit: string
+  result_group?: 'OPEN_CELL' | 'CHASSIS_REAR' | 'CUSTOM'
 }
 
 export type Overview = {
@@ -46,7 +48,7 @@ export type Overview = {
   }>
   scalar_results: ScalarResult[]
   time_series: TimeSeriesPoint[]
-  curves: Array<{ id: string; variable_key: string; display_name: string; series_key: string; x_label: string; x_unit: string; y_label: string; y_unit: string; point_count: number }>
+  curves: Array<{ id: string; variable_key: string; display_name: string; series_key: string; x_label: string; x_unit: string; y_label: string; y_unit: string; point_count: number; result_group?: 'OPEN_CELL' | 'CHASSIS_REAR' | 'CUSTOM' }>
   result_locations: Array<{
     analysis_run_id: string
     variable_key: string
@@ -262,7 +264,7 @@ export type ReportElementBinding = {
   contentId?: string
 }
 export type ReportSource =
-  | { kind: 'analysis_page'; dashboardId: string; loadCaseId: string; runId?: string }
+  | { kind: 'analysis_page'; dashboardId: string; loadCaseId: string; runId: string }
   | { kind: 'run_compare_review'; loadCaseId: string; baselineRunId: string; targetRunId: string }
 export type ReportContentItem = {
   contentId: string

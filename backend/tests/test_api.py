@@ -790,7 +790,7 @@ def test_chassis_threshold_is_admin_configurable():
         thresholds = client.get("/api/projects/project-tv-001/quality-thresholds").json()
         assert thresholds[0]["criterion_key"] == "chassis_rear_permanent_deformation_mm"
         response = client.put(
-            "/api/quality-thresholds/chassis_rear_permanent_deformation_mm",
+            "/api/projects/project-tv-001/quality-thresholds/chassis_rear_permanent_deformation_mm",
             json={"threshold_double": 5.0, "updated_by": "관리자"},
         )
         assert response.status_code == 200
@@ -903,6 +903,11 @@ def test_create_project_request_and_load_case():
         )
         assert project_response.status_code == 201
         created_project = project_response.json()["id"]
+        thresholds = client.get(f"/api/projects/{created_project}/quality-thresholds").json()
+        assert {item["criterion_key"] for item in thresholds} == {
+            "chassis_rear_permanent_deformation_mm",
+            "open_cell_stress_mpa",
+        }
         with connect() as conn:
             metadata = {row[0]: row[1] for row in conn.execute("SELECT category, value_text FROM product_information WHERE project_id = ?", [created_project]).fetchall()}
         assert metadata == {"MODEL": "Test TV", "MANUFACTURER": "Test Display", "SPEC": "55 inch"}

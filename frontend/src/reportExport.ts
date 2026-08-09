@@ -147,13 +147,23 @@ function valueText(value: number | null | undefined, unit?: string | null) {
   return value == null ? '-' : `${Number(value).toFixed(Math.abs(Number(value)) >= 100 ? 0 : 2)}${unit ? ` ${unit}` : ''}`
 }
 
+function scalarsForWidget(widget: DashboardDefinition['widgets'][number], overview: Overview, variableKey?: string) {
+  if (widget.type === 'open_cell_summary') {
+    return overview.scalar_results.filter((item) => item.result_group === 'OPEN_CELL' && item.unit.toLowerCase() === 'mpa' && item.variable_key.toLowerCase().includes('stress'))
+  }
+  if (widget.type.startsWith('chassis_')) {
+    return overview.scalar_results.filter((item) => item.result_group === 'CHASSIS_REAR' && item.unit.toLowerCase() === 'mm' && item.variable_key.toLowerCase().includes('permanent_deformation') && (widget.type === 'chassis_summary' || !variableKey || item.variable_key === variableKey))
+  }
+  return overview.scalar_results.filter((item) => !variableKey || item.variable_key === variableKey)
+}
+
 export function createDashboardReportContent(definition: DashboardDefinition, overview: Overview): ReportContentItem[] {
   return [...definition.widgets]
     .filter((widget) => widget.settings?.includeInReport !== false && widget.type !== 'run_comparison')
     .sort((left, right) => left.y - right.y || left.x - right.x || left.id.localeCompare(right.id))
     .map((widget) => {
       const variableKey = typeof widget.settings?.variableId === 'string' ? widget.settings.variableId : undefined
-      const scalars = overview.scalar_results.filter((item) => !variableKey || item.variable_key === variableKey)
+      const scalars = scalarsForWidget(widget, overview, variableKey)
       const series = overview.time_series.filter((item) => !variableKey || item.variable_key === variableKey)
       const media = overview.media.find((item) => !variableKey || item.metadata?.variable_key === variableKey)
       const snapshot: ContentSnapshot = {
@@ -319,9 +329,9 @@ function isChassisVariable(variableKey: string) {
 }
 
 export function filterOverviewForReport(overview: Overview, scope: ReportScope): Overview {
-  const includeVariable = (variableKey: string) => scope === 'chassis'
-    ? isChassisVariable(variableKey)
-    : !isChassisVariable(variableKey)
+  const includeVariable = (variableKey: string, resultGroup?: string) => resultGroup
+    ? scope === 'chassis' ? resultGroup === 'CHASSIS_REAR' : resultGroup === 'OPEN_CELL'
+    : scope === 'chassis' ? isChassisVariable(variableKey) : !isChassisVariable(variableKey)
   const scopeTitle = scope === 'chassis' ? 'Chassis rear 휨 평가' : '오픈셀 파손 평가'
   const includeMedia = (media: Overview['media'][number]) => {
     const metadataKey = typeof media.metadata?.variable_key === 'string' ? media.metadata.variable_key : ''
@@ -337,9 +347,9 @@ export function filterOverviewForReport(overview: Overview, scope: ReportScope):
       request_title: `${overview.load_case.project_name} ${scopeTitle}`,
     },
     overall_verdict: scope === 'chassis' ? overview.analysis_verdicts.chassis_rear : overview.analysis_verdicts.open_cell,
-    scalar_results: overview.scalar_results.filter((item) => includeVariable(item.variable_key)),
-    time_series: overview.time_series.filter((item) => includeVariable(item.variable_key)),
-    curves: overview.curves.filter((item) => includeVariable(item.variable_key)),
+    scalar_results: overview.scalar_results.filter((item) => includeVariable(item.variable_key, item.result_group)),
+    time_series: overview.time_series.filter((item) => includeVariable(item.variable_key, item.result_group)),
+    curves: overview.curves.filter((item) => includeVariable(item.variable_key, item.result_group)),
     result_locations: overview.result_locations.filter((item) => includeVariable(item.variable_key)),
     media: overview.media.filter(includeMedia),
   }
@@ -883,7 +893,7 @@ export async function exportAnalysisReport(overview: Overview, options: ReportEx
   pptx.author = options.author
   pptx.subject = `${overview.load_case.project_name} 해석 결과`
   pptx.title = `${overview.load_case.project_name} 해석 결과 보고서`
-  pptx.company = 'Analysis Canvas'
+  pptx.company = 'VD simulation workbench'
   pptx.theme = {
     headFontFace: 'Noto Sans KR',
     bodyFontFace: 'Noto Sans KR',

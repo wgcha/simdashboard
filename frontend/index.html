@@ -4,7 +4,20 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#07111d" />
-    <title>Analysis Canvas</title>
+    <title>VD simulation workbench</title>
+    <script>
+      (() => {
+        try {
+          const savedTheme = localStorage.getItem('vd-workbench-theme');
+          const theme = savedTheme === 'light' ? 'light' : 'dark';
+          document.documentElement.dataset.theme = theme;
+          document.documentElement.style.colorScheme = theme;
+        } catch (_) {
+          document.documentElement.dataset.theme = 'dark';
+          document.documentElement.style.colorScheme = 'dark';
+        }
+      })();
+    </script>
     <script>globalThis.process = globalThis.process || { env: { NODE_ENV: 'development' } };</script>
   </head>
   <body>

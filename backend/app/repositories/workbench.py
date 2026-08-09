@@ -488,28 +488,42 @@ class WorkbenchRepository:
 
     def upsert_batch_profile(self, payload: dict[str, Any]) -> dict[str, Any]:
         now = _utcnow()
-        existing = self.conn.execute("SELECT created_at FROM batch_path_profiles WHERE id=?", [payload["id"]]).fetchone()
+        existing = self.conn.execute("SELECT version, created_at FROM batch_path_profiles WHERE id=?", [payload["id"]]).fetchone()
+        version = int(existing[0] or 1) + 1 if existing else 1
         if existing:
             self.conn.execute(
                 """
                 UPDATE batch_path_profiles
-                SET name=?, solver_path=?, working_directory=?, arguments_template=?,
+                SET version=?, name=?, solver_path=?, working_directory=?, arguments_template=?,
                     environment_json=?, task_type_ids_json=?, is_active=?, updated_by=?, updated_at=?
                 WHERE id=?
                 """,
-                [payload["name"], payload["solver_path"], payload["working_directory"], payload["arguments_template"], json.dumps(payload["environment"], ensure_ascii=False), json.dumps(payload["task_type_ids"], ensure_ascii=False), payload["is_active"], payload["updated_by"], now, payload["id"]],
+                [version, payload["name"], payload["solver_path"], payload["working_directory"], payload["arguments_template"], json.dumps(payload["environment"], ensure_ascii=False), json.dumps(payload["task_type_ids"], ensure_ascii=False), payload["is_active"], payload["updated_by"], now, payload["id"]],
             )
         else:
             self.conn.execute(
                 """
                 INSERT INTO batch_path_profiles
-                    (id, name, solver_path, working_directory, arguments_template,
+                    (id, version, name, solver_path, working_directory, arguments_template,
                      environment_json, task_type_ids_json, is_active, updated_by, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                [payload["id"], payload["name"], payload["solver_path"], payload["working_directory"], payload["arguments_template"], json.dumps(payload["environment"], ensure_ascii=False), json.dumps(payload["task_type_ids"], ensure_ascii=False), payload["is_active"], payload["updated_by"], now, now],
+                [payload["id"], version, payload["name"], payload["solver_path"], payload["working_directory"], payload["arguments_template"], json.dumps(payload["environment"], ensure_ascii=False), json.dumps(payload["task_type_ids"], ensure_ascii=False), payload["is_active"], payload["updated_by"], now, now],
             )
+        self.conn.execute(
+            """
+            INSERT INTO batch_path_profile_versions
+                (id, version, name, solver_path, working_directory, arguments_template,
+                 environment_json, task_type_ids_json, is_active, created_by, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [payload["id"], version, payload["name"], payload["solver_path"], payload["working_directory"], payload["arguments_template"], json.dumps(payload["environment"], ensure_ascii=False), json.dumps(payload["task_type_ids"], ensure_ascii=False), payload["is_active"], payload["updated_by"], now],
+        )
         return self.get_batch_profile(payload["id"])  # type: ignore[return-value]
+
+    def list_batch_profile_versions(self, profile_id: str) -> list[dict[str, Any]]:
+        items = rows(self.conn.execute("SELECT * FROM batch_path_profile_versions WHERE id=? ORDER BY version DESC", [profile_id]))
+        return [self._batch_profile_item(item) for item in items]
 
     def insert_batch_dispatch(self, item: dict[str, Any]) -> None:
         self.conn.execute(
@@ -529,3 +543,80 @@ class WorkbenchRepository:
         item = items[0]
         item["profile_snapshot"] = _decoded(item.pop("profile_snapshot_json")) or {}
         return item
+
+    @staticmethod
+    def _batch_attempt_item(item: dict[str, Any], events: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        item["profile_snapshot"] = _decoded(item.pop("profile_snapshot_json")) or {}
+        item["events"] = events or []
+        return item
+
+    def insert_batch_attempt(self, item: dict[str, Any]) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO batch_execution_attempts
+                (id, work_item_id, workflow_run_id, batch_profile_id, batch_profile_version,
+                 profile_snapshot_json, command_preview, idempotency_key, execution_mode,
+                 status, progress, last_message, created_by, created_at, started_at, completed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [item[key] for key in (
+                "id", "work_item_id", "workflow_run_id", "batch_profile_id", "batch_profile_version",
+                "profile_snapshot_json", "command_preview", "idempotency_key", "execution_mode",
+                "status", "progress", "last_message", "created_by", "created_at", "started_at", "completed_at",
+            )],
+        )
+
+    def update_batch_attempt(self, attempt_id: str, *, workflow_run_id: str | None, status: str, progress: int, message: str, started_at: Any = None, completed_at: Any = None) -> None:
+        self.conn.execute(
+            """
+            UPDATE batch_execution_attempts
+            SET workflow_run_id=?, status=?, progress=?, last_message=?, started_at=?, completed_at=?
+            WHERE id=?
+            """,
+            [workflow_run_id, status, progress, message, started_at, completed_at, attempt_id],
+        )
+
+    def insert_batch_attempt_event(self, item: dict[str, Any]) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO batch_execution_events
+                (id, attempt_id, event_index, event_type, level, message, progress, occurred_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [item[key] for key in ("id", "attempt_id", "event_index", "event_type", "level", "message", "progress", "occurred_at")],
+        )
+
+    def batch_attempt_by_key(self, work_item_id: str, idempotency_key: str) -> dict[str, Any] | None:
+        items = rows(self.conn.execute(
+            "SELECT * FROM batch_execution_attempts WHERE work_item_id=? AND idempotency_key=?",
+            [work_item_id, idempotency_key],
+        ))
+        if not items:
+            return None
+        events = rows(self.conn.execute("SELECT * FROM batch_execution_events WHERE attempt_id=? ORDER BY event_index", [items[0]["id"]]))
+        return self._batch_attempt_item(items[0], events)
+
+    def list_batch_attempts(self, work_item_id: str) -> list[dict[str, Any]]:
+        items = rows(self.conn.execute(
+            "SELECT * FROM batch_execution_attempts WHERE work_item_id=? ORDER BY created_at DESC, id DESC",
+            [work_item_id],
+        ))
+        if not items:
+            return []
+        attempt_ids = [item["id"] for item in items]
+        placeholders = ",".join("?" for _ in attempt_ids)
+        event_rows = rows(self.conn.execute(
+            f"SELECT * FROM batch_execution_events WHERE attempt_id IN ({placeholders}) ORDER BY attempt_id, event_index",
+            attempt_ids,
+        ))
+        events_by_attempt: dict[str, list[dict[str, Any]]] = {}
+        for event in event_rows:
+            events_by_attempt.setdefault(event["attempt_id"], []).append(event)
+        return [self._batch_attempt_item(item, events_by_attempt.get(item["id"], [])) for item in items]
+
+    def batch_attempt_for_run(self, run_id: str) -> dict[str, Any] | None:
+        items = rows(self.conn.execute("SELECT * FROM batch_execution_attempts WHERE workflow_run_id=?", [run_id]))
+        if not items:
+            return None
+        events = rows(self.conn.execute("SELECT * FROM batch_execution_events WHERE attempt_id=? ORDER BY event_index", [items[0]["id"]]))
+        return self._batch_attempt_item(items[0], events)

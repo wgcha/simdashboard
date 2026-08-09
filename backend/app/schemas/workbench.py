@@ -147,4 +147,5 @@ class BatchProfileInput(StrictModel):
 
 class BatchDispatchCreate(StrictModel):
     batch_profile_id: str = Field(min_length=3, max_length=80, pattern=r"^[a-z][a-z0-9_-]*$")
+    idempotency_key: str = Field(min_length=8, max_length=100, pattern=r"^[A-Za-z0-9._:-]+$")
     created_by: str = Field(default="실행 담당자", min_length=2, max_length=80)
