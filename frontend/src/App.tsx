@@ -58,6 +58,7 @@ import {
 import { api } from './api'
 import { clearSession, saveSession, type AuthUser } from './auth'
 import { useReportLayoutEditorState, useWorkspaceEditorCoordinator } from './editorState'
+import { BootstrapWorkspaceShell } from './features/bootstrap/BootstrapWorkspaceShell'
 import { DEFAULT_PORTFOLIO_LAYOUT, DEFAULT_WORKFLOW_DASHBOARD_LAYOUT, loadPortfolioLayout, loadWorkflowDashboardLayout } from './features/layouts/layoutDefaults'
 import { reportVariables, withReportVariables } from './features/reports/reportLayoutUtils'
 import { ApprovalPendingScreen, LoginScreen } from './features/auth/LoginScreen'
@@ -334,27 +335,42 @@ function App() {
           api.workflows(),
           api.menuPolicy().catch(() => null),
         ])
-        if (!projectData.length) throw new Error('등록된 프로젝트가 없습니다.')
+        setProjects(projectData)
+        setWorkflows(workflowData)
+        setMenuPolicy(policy)
+        setMenuPolicyReady(true)
+        setDatabaseBackend(health.database_backend)
+        setRequests([])
+        setLoadCases([])
+        setThresholds([])
+        setSelectedProjectId('')
+        setSelectedRequestId('')
+        setSelectedLoadCaseId('')
+        setOverview(null)
+        setDashboard(null)
+        setAnalysisPages([])
+        if (!projectData.length) return
+
         const preferredProjects = [...projectData].sort((left, right) => Number(right.id === 'project-tv-001') - Number(left.id === 'project-tv-001'))
-        let project: Project | undefined
-        let requestData: AnalysisRequest[] = []
-        let request: AnalysisRequest | undefined
-        let caseData: LoadCase[] = []
-        for (const candidateProject of preferredProjects) {
-          const candidateRequests = await api.requests(candidateProject.id)
-          const preferredRequests = [...candidateRequests].sort((left, right) => Number(right.id === 'request-drop-001') - Number(left.id === 'request-drop-001'))
-          for (const candidateRequest of preferredRequests) {
-            const candidateCases = await api.loadCases(candidateRequest.id)
-            if (!candidateCases.length) continue
-            project = candidateProject
-            requestData = candidateRequests
-            request = candidateRequest
-            caseData = candidateCases
-            break
-          }
-          if (project) break
+        const projectContexts = await Promise.all(preferredProjects.map(async (project) => ({
+          project,
+          requests: await api.requests(project.id),
+        })))
+        const requestContexts = await Promise.all(projectContexts.flatMap(({ project, requests: projectRequests }) => (
+          [...projectRequests]
+            .sort((left, right) => Number(right.id === 'request-drop-001') - Number(left.id === 'request-drop-001'))
+            .map(async (request) => ({ project, projectRequests, request, loadCases: await api.loadCases(request.id) }))
+        )))
+        const analyzable = requestContexts.find((context) => context.loadCases.length > 0)
+        if (!analyzable) {
+          const fallback = projectContexts[0]
+          const fallbackRequest = fallback.requests[0]
+          setSelectedProjectId(fallback.project.id)
+          setRequests(fallback.requests)
+          setSelectedRequestId(fallbackRequest?.id ?? '')
+          return
         }
-        if (!project || !request) throw new Error('대시보드에서 열 수 있는 해석 의뢰가 없습니다.')
+        const { project, projectRequests: requestData, request, loadCases: caseData } = analyzable
         const loadCase = caseData[0]
         const [thresholdData, overviewData, pageData, storedPortfolioLayout, storedWorkflowLayout] = await Promise.all([
           api.qualityThresholds(project.id),
@@ -365,11 +381,7 @@ function App() {
         ])
         const initialPage = preferredPage(pageData, overviewData)
         const dashboardId = initialPage?.id ?? (overviewData.analysis_verdicts.open_cell !== 'NO_DATA' ? 'dashboard-drop-default' : 'dashboard-chassis-default')
-        const dashboardData = await api.dashboard(dashboardId)
-        setProjects(projectData)
-        setMenuPolicy(policy)
-        setMenuPolicyReady(true)
-        setDatabaseBackend(health.database_backend)
+        const dashboardData = await api.dashboard(dashboardId).catch(() => null)
         setRequests(requestData)
         setLoadCases(caseData)
         setThresholds(thresholdData)
@@ -419,7 +431,7 @@ function App() {
   }
 
   useEffect(() => {
-    if (!activeDashboardId || !authReady || (authRequired && !authUser)) return
+    if (!activeDashboardId || !selectedLoadCaseId || !authReady || (authRequired && !authUser)) return
     const requestSequence = ++dashboardRequestSequence.current
     setDashboardLoading(true)
     api.dashboard(activeDashboardId)
@@ -427,7 +439,10 @@ function App() {
         if (requestSequence === dashboardRequestSequence.current && definition.id === activeDashboardId) setDashboard(definition)
       })
       .catch((reason) => {
-        if (requestSequence === dashboardRequestSequence.current) setError(reason instanceof Error ? reason.message : '분석 레이아웃을 불러오지 못했습니다.')
+        if (requestSequence === dashboardRequestSequence.current) {
+          setDashboard(null)
+          setNotice(reason instanceof Error ? reason.message : '분석 레이아웃을 불러오지 못했습니다.')
+        }
       })
       .finally(() => {
         if (requestSequence === dashboardRequestSequence.current) setDashboardLoading(false)
@@ -435,7 +450,7 @@ function App() {
     return () => {
       if (requestSequence === dashboardRequestSequence.current) dashboardRequestSequence.current += 1
     }
-  }, [activeDashboardId, authReady, authRequired, authUser?.id])
+  }, [activeDashboardId, selectedLoadCaseId, authReady, authRequired, authUser?.id])
 
   useEffect(() => {
     setComparisonReportContext(null)
@@ -470,7 +485,7 @@ function App() {
     if (!loadCase) throw new Error('선택한 의뢰에 하중 경우가 없습니다.')
     const [overviewData, pageData] = await Promise.all([api.overview(loadCase.id), api.dashboardPages(loadCase.id)])
     const selectedPage = preferredPage(pageData, overviewData, preferredView)
-    const dashboardData = selectedPage ? await api.dashboard(selectedPage.id) : null
+    const dashboardData = selectedPage ? await api.dashboard(selectedPage.id).catch(() => null) : null
     setRequests(requestData)
     setLoadCases(caseData)
     setThresholds(thresholdData)
@@ -1096,6 +1111,7 @@ function App() {
     const [projectData, workflowData] = await Promise.all([api.projects(), api.workflows()])
     setProjects(projectData)
     setWorkflows(workflowData)
+    setSelectedProjectId((current) => current || projectData[0]?.id || '')
     setOperationalRefreshToken((value) => value + 1)
   }
 
@@ -1163,8 +1179,31 @@ function App() {
     return <div className="full-state"><LoaderCircle className="spin" /> 데이터와 레이아웃을 준비하고 있습니다.</div>
   }
 
-  if (error || !overview || workflows.length === 0 || !dashboard) {
-    return <div className="full-state error"><AlertTriangle /> {error || '대시보드를 불러오지 못했습니다.'}</div>
+  if (error) {
+    return <div className="full-state error"><AlertTriangle /> {error}</div>
+  }
+
+  if (!overview || !dashboard) {
+    const canCreateProject = hasPermission(authUser, 'system.user.approve', selectedProjectId)
+    const canCreateRequest = hasPermission(authUser, 'request.create', selectedProjectId)
+    const canRegisterData = canCreateProject || hasPermission(authUser, 'result.import', selectedProjectId)
+    const setupPage = workspacePage === 'intake' && projects.length > 0 ? 'intake' : 'data'
+    return <BootstrapWorkspaceShell
+      theme={theme}
+      activePage={setupPage}
+      displayName={authUser?.display_name ?? '사용자'}
+      databaseBackend={databaseBackend}
+      canOpenIntake={projects.length > 0 && canCreateRequest}
+      onPageChange={setWorkspacePage}
+      onThemeChange={setTheme}
+      onLogout={() => void logout()}
+    >
+      {!canRegisterData && projects.length === 0 ? <div className="bootstrap-empty-access"><AlertTriangle /><h1>접근 가능한 프로젝트가 없습니다.</h1><p>전역 관리자에게 프로젝트 생성 또는 멤버십 할당을 요청하세요.</p></div> : setupPage === 'intake' ? (
+        <RequestIntakePage projects={projects} createdBy={authUser?.display_name ?? '사용자'} canCreate={canCreateRequest} onCreated={handleIntakeCreated} onOpenWorkbench={() => setWorkspacePage('data')} />
+      ) : (
+        <DataWorkspace canCreateProject={canCreateProject} projects={projects} initialProjectId={selectedProjectId} onDataChanged={refreshOperationalData} onOpenAnalysis={openImportedResult} onOpenIntake={() => setWorkspacePage('intake')} />
+      )}
+    </BootstrapWorkspaceShell>
   }
 
   if (!allowedPages.has(workspacePage)) {
@@ -1237,7 +1276,7 @@ function App() {
         </header>
 
         {workspacePage === 'portfolio' ? <PortfolioDashboard refreshToken={operationalRefreshToken} editMode={editMode} layout={portfolioLayout} layoutVersion={portfolioLayoutVersion} onLayoutChange={setPortfolioLayout} onCancelEdit={cancelEditing} onResetLayout={resetPortfolioLayout} onOpen={(projectId, requestId) => void openPortfolioRequest(projectId, requestId)} /> : workspacePage === 'intake' ? <RequestIntakePage projects={projects} createdBy={authUser?.display_name ?? '데모 사용자'} canCreate={hasPermission(authUser, 'request.create', selectedProjectId)} onCreated={handleIntakeCreated} onOpenWorkbench={openIntakeWorkbench} /> : workspacePage === 'workbench' ? <SimulationWorkbench workflows={workflows} initialRequestId={selectedRequestId} currentUserId={authUser?.id ?? ''} createdBy={authUser?.display_name ?? '데모 사용자'} canExecute={canExecuteAssigned || canExecuteAny} isAdmin={canExecuteAny} onRequestSelected={setSelectedRequestId} onChanged={async (message) => { setWorkflows(await api.workflows()); setOperationalRefreshToken((value) => value + 1); setNotice(message) }} /> : workspacePage === 'workbench_admin' ? <WorkbenchTypeAdmin /> : workspacePage === 'schemas' ? <FolderSchemaWorkspace /> : workspacePage === 'variables' ? <VariableCatalogPage variables={variables} overview={overview} loadCaseId={selectedLoadCaseId} onChanged={(items) => { setVariables(items); setCatalogVariable((current) => items.some((item) => item.id === current) ? current : items[0]?.id ?? '') }} /> : workspacePage === 'templates' ? <AutomationTemplatesPage /> : workspacePage === 'examples' ? <FeatureExampleGallery onOpen={openFeatureExample} /> : workspacePage === 'help' ? <HelpCenter onNavigate={setWorkspacePage} /> : workspacePage === 'access_admin' ? <AccessAdminPage projectId={selectedProjectId} canApproveUsers={hasPermission(authUser, 'system.user.approve', selectedProjectId)} onAccessChanged={refreshAccess} /> : workspacePage === 'menu_policy_admin' && menuPolicy ? <MenuPolicyAdminPage policy={menuPolicy} onPolicyChanged={setMenuPolicy} /> : workspacePage === 'audit_admin' ? <AuditAdminPage /> : workspacePage === 'data' ? (
-          <DataWorkspace projects={projects} initialProjectId={selectedProjectId} onDataChanged={refreshOperationalData} onOpenAnalysis={openImportedResult} onOpenIntake={() => setWorkspacePage('intake')} />
+          <DataWorkspace canCreateProject={hasPermission(authUser, 'system.user.approve', selectedProjectId)} projects={projects} initialProjectId={selectedProjectId} onDataChanged={refreshOperationalData} onOpenAnalysis={openImportedResult} onOpenIntake={() => setWorkspacePage('intake')} />
         ) : <>
         <section className="content-head">
           <div>
@@ -1727,7 +1766,7 @@ function ComparisonWorkspace({ loadCaseId, currentRunId, onContextChange }: { lo
   </section>
 }
 
-function DataWorkspace({ projects, initialProjectId, onDataChanged, onOpenAnalysis, onOpenIntake }: { projects: Project[]; initialProjectId: string; onDataChanged: () => Promise<void>; onOpenAnalysis: (projectId: string, requestId: string, loadCaseId: string) => Promise<void>; onOpenIntake: () => void }) {
+function DataWorkspace({ canCreateProject, projects, initialProjectId, onDataChanged, onOpenAnalysis, onOpenIntake }: { canCreateProject: boolean; projects: Project[]; initialProjectId: string; onDataChanged: () => Promise<void>; onOpenAnalysis: (projectId: string, requestId: string, loadCaseId: string) => Promise<void>; onOpenIntake: () => void }) {
   const [managedProjects, setManagedProjects] = useState(projects)
   const [projectId, setProjectId] = useState(initialProjectId || projects[0]?.id || '')
   const [requests, setRequests] = useState<AnalysisRequest[]>([])
@@ -1871,15 +1910,15 @@ function DataWorkspace({ projects, initialProjectId, onDataChanged, onOpenAnalys
     {(message || formError) && <div className={`data-message ${formError ? 'error' : ''}`}>{formError ? <AlertTriangle /> : <Check />}{formError || message}</div>}
     <div className="data-intake-handoff"><ClipboardPlus /><span><strong>새 해석 의뢰는 별도 접수 절차를 사용합니다.</strong>외부 시스템 전달·부서장 지시와 작업 시나리오를 기록한 뒤 이 화면에서 하중 경우와 결과를 연결하세요.</span><button onClick={onOpenIntake}>의뢰 접수 열기 <ChevronDown /></button></div>
 
-    <div className="data-form-grid">
-      <article className="data-form-card"><header><span>01</span><div><h2>새 프로젝트</h2><p>제품 단위 최상위 분류</p></div></header><form onSubmit={submitProject}>
+    <div className={`data-form-grid ${canCreateProject ? '' : 'single'}`}>
+      {canCreateProject && <article className="data-form-card"><header><span>01</span><div><h2>새 프로젝트</h2><p>제품 단위 최상위 분류</p></div></header><form onSubmit={submitProject}>
         <label><span>프로젝트 이름</span><input required value={projectForm.name} onChange={(e) => setProjectForm({ ...projectForm, name: e.target.value })} placeholder="예: 2026 OLED 신뢰성" /></label>
         <label><span>제품 모델명</span><input required value={projectForm.product_name} onChange={(e) => setProjectForm({ ...projectForm, product_name: e.target.value })} placeholder="예: OLED77X26" /></label>
         <label><span>제조사</span><input value={projectForm.manufacturer} onChange={(e) => setProjectForm({ ...projectForm, manufacturer: e.target.value })} placeholder="예: NeoView Display" /></label>
         <label><span>화면 크기 (inch)</span><input type="number" min="1" max="200" value={projectForm.display_size_inch ?? ''} onChange={(e) => setProjectForm({ ...projectForm, display_size_inch: e.target.value ? Number(e.target.value) : null })} /></label>
         <label><span>설명</span><textarea value={projectForm.description} onChange={(e) => setProjectForm({ ...projectForm, description: e.target.value })} placeholder="제품과 해석 목적을 입력하세요." /></label>
         <button className="data-submit" disabled={busy}><Plus /> 프로젝트 등록</button>
-      </form></article>
+      </form></article>}
 
       <article className="data-form-card"><header><span>02</span><div><h2>새 하중 경우</h2><p>{selectedRequest?.title || '접수된 의뢰를 선택하세요'}</p></div></header><form onSubmit={submitLoadCase}>
         <label><span>하중 경우 이름</span><input required disabled={!requestId} value={caseForm.name} onChange={(e) => setCaseForm({ ...caseForm, name: e.target.value })} placeholder="예: Bottom Drop 800 mm" /></label>
