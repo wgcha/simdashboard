@@ -18,8 +18,11 @@ def test_postgres_schema_export_is_current_and_portable():
     assert "INSERT OR IGNORE" not in stored
     assert "CREATE TABLE IF NOT EXISTS users" in stored
     assert "CREATE TABLE IF NOT EXISTS audit_events" in stored
-    assert "ck_users_role" in stored
-    assert len(table_order()) >= 30
+    assert "account_status IN ('PENDING', 'ACTIVE', 'SUSPENDED')" in stored
+    assert "CREATE TABLE IF NOT EXISTS project_memberships" in stored
+    assert "CREATE TABLE IF NOT EXISTS project_workspace_layouts" in stored
+    assert "uq_users_oidc_identity" in stored
+    assert len(table_order()) >= 50
 
 
 def test_postgres_sql_adapter_translates_parameters_and_conflict_policy():

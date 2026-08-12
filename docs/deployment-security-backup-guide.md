@@ -2,7 +2,8 @@
 
 ## 1. 배포 전제
 
-- 외부 배포는 PostgreSQL과 `AUTH_MODE=password`를 사용한다.
+- 사내 Windows VM 운영 배포는 PostgreSQL, `DEPLOYMENT_PROFILE=windows-vm-intranet`, `AUTH_MODE=oidc`, `DIRECTORY_MODE=http`를 사용한다.
+- `password`와 `local` 디렉터리는 가정용 Windows 개발·호환 테스트에만 사용하며 운영 설정 누락 시 자동 대체하지 않는다.
 - FastAPI는 HTTPS 리버스 프록시 뒤에서 실행하고 `AUTH_COOKIE_SECURE=true`로 설정한다.
 - 관리자, DB 소유자, 앱 역할의 비밀번호는 서로 다르게 만들고 `.env`를 Git에 추가하지 않는다.
 - `simdashboard_owner`는 Alembic·복구에만, `simdashboard_app`은 평상시 API에만 사용한다.
@@ -37,34 +38,61 @@ $env:POSTGRES_BIN='E:\PostgreSQL\18\bin'
 
 일반 시작은 빈 DB의 최초 구축, 역할 생성·비밀번호 변경, DuckDB 복사를 수행하지 않는다. `alembic_version`이 없거나 revision이 코드 계보와 다르면 최초 구축/복구 절차를 확인하도록 중단한다. 앱 계정에는 DB·스키마 `CREATE` 권한을 부여하지 않는다. owner 파일의 ACL을 완화하거나 owner URL을 `.env`, 콘솔, 로그에 복사하지 않는다.
 
-## 3. 인증과 역할
+## 3. Windows VM 사내 인증과 역할
 
 ```powershell
 $env:ANALYSIS_DB_BACKEND='postgresql'
 $env:DATABASE_URL='postgresql+psycopg://simdashboard_app:APP_PASSWORD@127.0.0.1:5432/simulation_dashboard'
-$env:AUTH_MODE='password'
+$env:DEPLOYMENT_PROFILE='windows-vm-intranet'
+$env:AUTH_MODE='oidc'
 $env:AUTH_SECRET_KEY='32자 이상의 암호학적 난수'
 $env:AUTH_TOKEN_TTL_MINUTES='480'
 $env:AUTH_COOKIE_SECURE='true'
 $env:CORS_ALLOWED_ORIGINS='https://dashboard.example.com'
+$env:OIDC_ISSUER_URL='https://idp.intranet.example'
+$env:OIDC_CLIENT_ID='analysis-canvas'
+$env:OIDC_CLIENT_SECRET='비밀 저장소에서 주입'
+$env:OIDC_REDIRECT_URI='https://dashboard.example.com/api/auth/oidc/callback'
+$env:DIRECTORY_MODE='http'
+$env:DIRECTORY_API_BASE_URL='https://directory.intranet.example'
+$env:DIRECTORY_API_TOKEN='비밀 저장소에서 주입'
 ```
 
 | 역할 | 허용 범위 |
 |---|---|
-| `viewer` | 조회, 차트·보고서 데이터 열람 |
-| `editor` | 조회와 일반 레이아웃·워크플로·검토 변경 |
-| `admin` | 변수·품질기준·Import 스키마·사용자 권한·삭제 |
+| 일반 사용자 | 운영/분석 대시보드 조회, 본인 배정 업무 실행, 보고서 내보내기 |
+| 파워 사용자 | 일반 기능 + 의뢰 생성·편집, 워크플로 편집, 결과 등록·검토 |
+| 프로젝트 관리자 | 파워 기능 + 프로젝트 대시보드·레이아웃·기준·변수·멤버 관리 |
+| 전역 관리자 | 모든 프로젝트 권한 + 계정 승인, 시스템 카탈로그, 메뉴 정책, 감사로그 |
 
-최초 관리자는 비밀번호를 명령 인자로 넘기지 않고 생성한다.
+최초 전역 관리자는 먼저 회사 SSO로 한 번 로그인해 `PENDING` 계정을 만든 다음, VM 콘솔에서 사용자 이름을 두 번 일치시켜 승인한다. 이 명령은 OIDC 계정만 허용하며 비밀번호나 토큰을 만들거나 출력하지 않는다.
 
 ```powershell
-$env:SIM_DASH_USER_PASSWORD='12자 이상의 초기 비밀번호'
-.\.venv-runtime\Scripts\python.exe .\backend\scripts\create_user.py `
-  --username admin --display-name '시스템 관리자' --role admin
-Remove-Item Env:SIM_DASH_USER_PASSWORD
+.\.venv-runtime\Scripts\python.exe .\backend\scripts\approve_oidc_global_admin.py `
+  --username e12345 --confirm-user e12345 --reason '최초 운영 전역 관리자 승인'
 ```
 
-로그인 토큰은 HMAC 서명되고, 브라우저에서는 HttpOnly SameSite 쿠키도 사용한다. 계정을 비활성화하면 아직 만료되지 않은 토큰도 다음 요청에서 거절된다.
+OIDC Authorization Code + S256 PKCE의 state·nonce·issuer·audience·서명·만료를 검증한다. OIDC 토큰은 저장하거나 감사로그에 남기지 않고 검증 후 애플리케이션 HttpOnly SameSite=Strict 세션 쿠키만 발급한다. 계정을 중지하면 아직 만료되지 않은 세션도 다음 요청에서 거절되고 쿠키가 제거된다.
+
+### 3.1 사내 이전 권한 preflight
+
+권한 기능은 분석 데이터 이관과 분리된 읽기 전용 검사를 제공한다. 운영 DB를 변경하지 않으며 결과는 자동화 도구가 읽을 수 있는 JSON이다.
+
+```powershell
+$env:ANALYSIS_DB_BACKEND='postgresql'
+$env:DATABASE_URL='postgresql+psycopg://simdashboard_app:APP_PASSWORD@127.0.0.1:5432/simulation_dashboard'
+.\.venv-runtime\Scripts\python.exe .\backend\scripts\access_migration_preflight.py `
+  | Set-Content -Encoding utf8 .\access-migration-preflight.json
+if ($LASTEXITCODE -ne 0) { throw '권한 이전 preflight 차단 항목을 해결하세요.' }
+```
+
+보고서는 다음을 구분한다.
+
+- `blockers`: 권한 스키마 누락, OIDC/사번/아이디 중복, 활성 프로젝트 관리자 누락, 메뉴 정책 상태 누락
+- `warnings`: 전역관리자 승인 필요, 기존 문자열 담당자의 `owner_user_id` 재배정 필요
+- `counts`: 사용자·프로젝트·멤버십·초대·메뉴 정책 버전 행 수
+
+`status=blocked` 또는 `status=error`이면 사내 OIDC 전환과 서비스 시작을 진행하지 않는다. 원본 `owner` 문자열은 보존되며, 불명확한 담당자를 임의 계정에 연결하지 않는다.
 
 ## 4. 감사 로그
 
@@ -102,11 +130,13 @@ $env:DATABASE_URL='postgresql+psycopg://simdashboard_owner:OWNER_PASSWORD@127.0.
 1. `alembic_version`이 최신 revision인지 확인한다.
 2. 프로젝트·Run·결과·사용자·감사 이벤트 행 수를 원본과 비교한다.
 3. `harden_postgres_privileges.py`를 다시 실행한다.
-4. Viewer 로그인, 관리자 변경, 감사 이벤트 기록을 smoke test한다.
+4. 일반 사용자 로그인·본인 업무 실행, 파워 사용자 의뢰 편집, 프로젝트 관리자 변경, 전역관리자 메뉴 정책 변경과 감사 이벤트 기록을 smoke test한다.
 
 ## 7. 배포 차단 조건
 
 - `AUTH_MODE=disabled`
+- `DEPLOYMENT_PROFILE`이 `windows-vm-intranet`이 아님
+- `AUTH_MODE=oidc` 또는 `DIRECTORY_MODE=http`가 아님
 - 기본 또는 공유 비밀번호 사용
 - `AUTH_SECRET_KEY` 32자 미만
 - HTTPS 없이 `AUTH_COOKIE_SECURE=true`를 사용할 수 없는 상태

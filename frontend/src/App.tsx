@@ -26,13 +26,16 @@ import {
   Plus,
   RotateCcw,
   Save,
+  ScrollText,
   Search,
   Settings2,
+  ShieldCheck,
   Sparkles,
   Sun,
   Moon,
   Upload,
   Trash2,
+  Users,
   X,
 } from 'lucide-react'
 import { WidthProvider, Responsive, type Layout, type Layouts } from 'react-grid-layout'
@@ -53,11 +56,14 @@ import {
   YAxis,
 } from 'recharts'
 import { api } from './api'
-import { clearSession, saveSession, storedUser, type AuthUser } from './auth'
+import { clearSession, saveSession, type AuthUser } from './auth'
 import { useReportLayoutEditorState, useWorkspaceEditorCoordinator } from './editorState'
 import { DEFAULT_PORTFOLIO_LAYOUT, DEFAULT_WORKFLOW_DASHBOARD_LAYOUT, loadPortfolioLayout, loadWorkflowDashboardLayout } from './features/layouts/layoutDefaults'
 import { reportVariables, withReportVariables } from './features/reports/reportLayoutUtils'
-import { LoginScreen } from './features/auth/LoginScreen'
+import { ApprovalPendingScreen, LoginScreen } from './features/auth/LoginScreen'
+import { firstAllowedWorkspacePage, hasPermission, visibleMenuItems, type MenuId, type MenuPolicy, type WorkspacePage } from './features/auth/access'
+import { MENU_REGISTRY_BY_ID } from './features/navigation/menuRegistry'
+import { AccessAdminPage, AuditAdminPage, MenuPolicyAdminPage } from './features/access/AccessAdministration'
 import { RequestDemoRunSummary, SimulationWorkbench, WorkbenchTypeAdmin } from './features/workbench/SimulationWorkbench'
 import { RequestIntakePage } from './features/workbench/RequestIntakePage'
 import { DropVideoGrid } from './features/videos/DropVideoGrid'
@@ -68,7 +74,23 @@ import type { AnalysisRequest, AnalysisRunSummary, AutomationTemplate, Dashboard
 const ResponsiveGridLayout = WidthProvider(Responsive) as unknown as ComponentType<any>
 const SERIES_COLORS = ['#61d4ff', '#ff647d', '#70e0a8', '#ffbf57']
 type ActiveView = 'open_cell' | 'chassis' | 'custom' | 'workflow' | 'compare'
-type WorkspacePage = 'portfolio' | 'dashboard' | 'intake' | 'workbench' | 'workbench_admin' | 'data' | 'schemas' | 'variables' | 'templates' | 'examples' | 'help'
+
+const MENU_ICONS: Record<MenuId, ComponentType<any>> = {
+  portfolio: LayoutDashboard,
+  dashboard: Activity,
+  intake: ClipboardPlus,
+  workbench: FlaskConical,
+  data: Database,
+  workbench_admin: Settings2,
+  variables: BarChart3,
+  templates: Settings2,
+  schemas: GripVertical,
+  examples: Play,
+  help: BookOpen,
+  access_admin: Users,
+  menu_policy_admin: ShieldCheck,
+  audit_admin: ScrollText,
+}
 
 const SPECIAL_WIDGET_CATALOG: WidgetCatalogItem[] = [
   { type: 'summary', label: '하중 조건 요약', category: '요약', allowed_data_types: [], default_size: [6, 2] },
@@ -120,7 +142,10 @@ function App() {
   })
   const [authReady, setAuthReady] = useState(false)
   const [authRequired, setAuthRequired] = useState(false)
-  const [authUser, setAuthUser] = useState<AuthUser | null>(storedUser)
+  const [authMode, setAuthMode] = useState<'disabled' | 'password' | 'oidc'>('disabled')
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null)
+  const [menuPolicy, setMenuPolicy] = useState<MenuPolicy | null>(null)
+  const [menuPolicyReady, setMenuPolicyReady] = useState(false)
   const [authError, setAuthError] = useState('')
   const [overview, setOverview] = useState<Overview | null>(null)
   const [projects, setProjects] = useState<Project[]>([])
@@ -181,6 +206,32 @@ function App() {
   const workflowLayoutBeforeEdit = useRef<WorkflowDashboardLayout | null>(null)
   const dashboardRequestSequence = useRef(0)
   const dashboardReady = Boolean(dashboard && !dashboardLoading && dashboard.id === activeDashboardId)
+  const visibleMenus = useMemo(() => {
+    const validated = menuPolicy ? {
+      ...menuPolicy,
+      menus: menuPolicy.menus.filter((menu) => {
+        const local = MENU_REGISTRY_BY_ID.get(menu.id)
+        return local?.requiredPermission === menu.required_permission && local.contextKind === menu.context_kind
+      }),
+    } : null
+    if (validated) return visibleMenuItems(validated, authUser, selectedProjectId)
+    if (menuPolicyReady && authUser?.account_status === 'ACTIVE' && authUser.is_global_admin) {
+      return (['menu_policy_admin', 'audit_admin'] as MenuId[]).map((id, index) => {
+        const local = MENU_REGISTRY_BY_ID.get(id)!
+        return { id, label: local.label, required_permission: local.requiredPermission, context_kind: local.contextKind, sequence_no: 900 + index, is_policy_editable: false, visibility: { general: false, power: false, admin: false } }
+      })
+    }
+    return []
+  }, [authUser, menuPolicy, menuPolicyReady, selectedProjectId])
+  const allowedPages = useMemo(() => new Set(visibleMenus.map((menu) => menu.id)), [visibleMenus])
+
+  useEffect(() => {
+    if (!authUser || authUser.account_status !== 'ACTIVE') return
+    if (!menuPolicyReady) return
+    if (allowedPages.has(workspacePage)) return
+    const fallback = firstAllowedWorkspacePage(menuPolicy, authUser, selectedProjectId) ?? visibleMenus[0]?.id
+    if (fallback) setWorkspacePage(fallback)
+  }, [allowedPages, authUser?.id, authUser?.account_status, menuPolicy?.version, menuPolicyReady, selectedProjectId, workspacePage])
 
   useEffect(() => {
     if (!notice) return
@@ -206,11 +257,13 @@ function App() {
     const prepareAuthentication = async () => {
       try {
         const status = await api.authStatus()
+        setAuthMode(status.mode)
         setAuthRequired(status.authentication_required)
-        if (status.authentication_required && authUser) {
+        try {
           const verified = await api.me()
           setAuthUser(verified)
-        } else if (!status.authentication_required) {
+        } catch {
+          if (!status.authentication_required) throw new Error('로컬 관리자 세션을 만들지 못했습니다.')
           setAuthUser(null)
         }
       } catch (reason) {
@@ -232,6 +285,20 @@ function App() {
     window.addEventListener('analysis-auth-expired', expired)
     return () => window.removeEventListener('analysis-auth-expired', expired)
   }, [])
+
+  const refreshAccess = async () => {
+    if (!authUser) return
+    const [verified, policy] = await Promise.all([api.me(), api.menuPolicy()])
+    setAuthUser(verified)
+    setMenuPolicy(policy)
+    setMenuPolicyReady(true)
+  }
+
+  useEffect(() => {
+    const changed = () => { void refreshAccess().catch(() => { setMenuPolicy(null); setMenuPolicyReady(true) }) }
+    window.addEventListener('analysis-access-changed', changed)
+    return () => window.removeEventListener('analysis-access-changed', changed)
+  }, [authUser?.id])
 
   useEffect(() => {
     if (workspacePage !== 'portfolio' && portfolioLayoutBeforeEdit.current) {
@@ -256,17 +323,16 @@ function App() {
   }, [workspacePage])
 
   useEffect(() => {
-    if (!authReady || (authRequired && !authUser)) return
+    if (!authReady || !authUser || authUser.account_status !== 'ACTIVE') return
     const bootstrap = async () => {
       setLoading(true)
       setError('')
       try {
-        const [health, projectData, workflowData, storedPortfolioLayout, storedWorkflowLayout] = await Promise.all([
+        const [health, projectData, workflowData, policy] = await Promise.all([
           api.health(),
           api.projects(),
           api.workflows(),
-          api.workspaceLayout<PortfolioLayout>('portfolio'),
-          api.workspaceLayout<WorkflowDashboardLayout>('workflow'),
+          api.menuPolicy().catch(() => null),
         ])
         if (!projectData.length) throw new Error('등록된 프로젝트가 없습니다.')
         const preferredProjects = [...projectData].sort((left, right) => Number(right.id === 'project-tv-001') - Number(left.id === 'project-tv-001'))
@@ -290,11 +356,19 @@ function App() {
         }
         if (!project || !request) throw new Error('대시보드에서 열 수 있는 해석 의뢰가 없습니다.')
         const loadCase = caseData[0]
-        const [thresholdData, overviewData, pageData] = await Promise.all([api.qualityThresholds(project.id), api.overview(loadCase.id), api.dashboardPages(loadCase.id)])
+        const [thresholdData, overviewData, pageData, storedPortfolioLayout, storedWorkflowLayout] = await Promise.all([
+          api.qualityThresholds(project.id),
+          api.overview(loadCase.id),
+          api.dashboardPages(loadCase.id),
+          api.workspaceLayout<PortfolioLayout>(project.id, 'portfolio'),
+          api.workspaceLayout<WorkflowDashboardLayout>(project.id, 'workflow'),
+        ])
         const initialPage = preferredPage(pageData, overviewData)
         const dashboardId = initialPage?.id ?? (overviewData.analysis_verdicts.open_cell !== 'NO_DATA' ? 'dashboard-drop-default' : 'dashboard-chassis-default')
         const dashboardData = await api.dashboard(dashboardId)
         setProjects(projectData)
+        setMenuPolicy(policy)
+        setMenuPolicyReady(true)
         setDatabaseBackend(health.database_backend)
         setRequests(requestData)
         setLoadCases(caseData)
@@ -319,14 +393,15 @@ function App() {
       }
     }
     bootstrap()
-  }, [authReady, authRequired, authUser?.id])
+  }, [authReady, authUser?.id, authUser?.account_status])
 
   const handleLogin = async (username: string, password: string) => {
     setAuthError('')
     try {
       const result = await api.login(username, password)
-      saveSession(result.access_token, result.user)
-      setAuthUser(result.user)
+      const verified = await api.me()
+      saveSession(result.access_token, verified)
+      setAuthUser(verified)
     } catch (reason) {
       setAuthError(reason instanceof Error ? reason.message : '로그인하지 못했습니다.')
       throw reason
@@ -337,6 +412,8 @@ function App() {
     try { await api.logout() } catch { /* clear the local session even if the server is unavailable */ }
     clearSession()
     setAuthUser(null)
+    setMenuPolicy(null)
+    setMenuPolicyReady(false)
     setOverview(null)
     setLoading(true)
   }
@@ -381,7 +458,11 @@ function App() {
 
   const loadContext = async (projectId: string, requestId?: string, preferredView?: ActiveView) => {
     setError('')
-    const requestData = await api.requests(projectId)
+    const [requestData, storedPortfolioLayout, storedWorkflowLayout] = await Promise.all([
+      api.requests(projectId),
+      api.workspaceLayout<PortfolioLayout>(projectId, 'portfolio'),
+      api.workspaceLayout<WorkflowDashboardLayout>(projectId, 'workflow'),
+    ])
     const request = requestData.find((item) => item.id === requestId) ?? requestData[0]
     if (!request) throw new Error('선택한 프로젝트에 의뢰가 없습니다.')
     const [caseData, thresholdData] = await Promise.all([api.loadCases(request.id), api.qualityThresholds(projectId)])
@@ -394,6 +475,10 @@ function App() {
     setLoadCases(caseData)
     setThresholds(thresholdData)
     setSelectedProjectId(projectId)
+    setPortfolioLayout(storedPortfolioLayout.definition)
+    setPortfolioLayoutVersion(storedPortfolioLayout.version)
+    setWorkflowDashboardLayout(storedWorkflowLayout.definition)
+    setWorkflowLayoutVersion(storedWorkflowLayout.version)
     setSelectedRequestId(request.id)
     setSelectedLoadCaseId(loadCase.id)
     setOverview(overviewData)
@@ -403,7 +488,11 @@ function App() {
 
   const loadMonitoringContext = async (projectId: string, requestId?: string) => {
     setError('')
-    const requestData = await api.requests(projectId)
+    const [requestData, storedPortfolioLayout, storedWorkflowLayout] = await Promise.all([
+      api.requests(projectId),
+      api.workspaceLayout<PortfolioLayout>(projectId, 'portfolio'),
+      api.workspaceLayout<WorkflowDashboardLayout>(projectId, 'workflow'),
+    ])
     const request = requestData.find((item) => item.id === requestId) ?? requestData[0]
     if (!request) throw new Error('선택한 프로젝트에 의뢰가 없습니다.')
     const [caseData, thresholdData] = await Promise.all([api.loadCases(request.id), api.qualityThresholds(projectId)])
@@ -411,6 +500,10 @@ function App() {
     setLoadCases(caseData)
     setThresholds(thresholdData)
     setSelectedProjectId(projectId)
+    setPortfolioLayout(storedPortfolioLayout.definition)
+    setPortfolioLayoutVersion(storedPortfolioLayout.version)
+    setWorkflowDashboardLayout(storedWorkflowLayout.definition)
+    setWorkflowLayoutVersion(storedWorkflowLayout.version)
     setSelectedRequestId(request.id)
     setSelectedLoadCaseId(caseData[0]?.id ?? '')
     if (caseData[0]) {
@@ -464,7 +557,7 @@ function App() {
   const save = async () => {
     if (workspacePage === 'portfolio') {
       try {
-        const stored = await api.saveWorkspaceLayout('portfolio', portfolioLayout)
+        const stored = await api.saveWorkspaceLayout(selectedProjectId, 'portfolio', portfolioLayout)
         setPortfolioLayout(stored.definition)
         setPortfolioLayoutVersion(stored.version)
         portfolioLayoutBeforeEdit.current = null
@@ -478,7 +571,7 @@ function App() {
     if (activeView === 'workflow') {
       if (workflowEditorMode === 'layout') {
         try {
-          const stored = await api.saveWorkspaceLayout('workflow', workflowDashboardLayout)
+          const stored = await api.saveWorkspaceLayout(selectedProjectId, 'workflow', workflowDashboardLayout)
           setWorkflowDashboardLayout(stored.definition)
           setWorkflowLayoutVersion(stored.version)
           workflowLayoutBeforeEdit.current = null
@@ -491,13 +584,13 @@ function App() {
       }
       const original = workflowsBeforeEdit.current
       if (!original) { workspaceEditor.close(); return }
-      const signature = (steps: WorkflowStep[]) => JSON.stringify(steps.map((step) => ({ id: step.id, name: step.name, status: step.status, owner: step.owner, progress: step.progress, is_optional: step.is_optional, note: step.note ?? '' })))
+      const signature = (steps: WorkflowStep[]) => JSON.stringify(steps.map((step) => ({ id: step.id, name: step.name, status: step.status, owner_user_id: step.owner_user_id, progress: step.progress, is_optional: step.is_optional, note: step.note ?? '' })))
       const originalByRequest = new Map(original.map((workflow) => [workflow.request.id, workflow]))
       const changed = workflows.filter((workflow) => signature(workflow.steps) !== signature(originalByRequest.get(workflow.request.id)?.steps ?? []))
       const invalid = changed.flatMap((workflow) => workflow.steps).find((step) => step.name.trim().length < 2 || !step.owner.trim() || step.progress < 0 || step.progress > 100)
       if (invalid) { setError('단계 이름은 두 글자 이상, 담당자는 필수이며 진행률은 0~100이어야 합니다.'); return }
       try {
-        await Promise.all(changed.map((workflow) => api.replaceWorkflowSteps(workflow.request.id, workflow.steps.map((step) => ({ id: step.id.startsWith('draft-step-') ? null : step.id, name: step.name.trim(), status: step.status, owner: step.owner.trim(), progress: step.progress, is_optional: step.is_optional, note: step.note ?? '' })))))
+        await Promise.all(changed.map((workflow) => api.replaceWorkflowSteps(workflow.request.id, workflow.steps.map((step) => ({ id: step.id.startsWith('draft-step-') ? null : step.id, name: step.name.trim(), status: step.status, owner_user_id: step.owner_user_id ?? workflow.request.owner_user_id ?? '', progress: step.progress, is_optional: step.is_optional, note: step.note ?? '' })))))
         setWorkflows(await api.workflows())
         workflowsBeforeEdit.current = null
         workspaceEditor.close()
@@ -704,7 +797,7 @@ function App() {
     setWorkflows((items) => items.map((workflow) => {
       if (workflow.request.id !== requestId) return workflow
       const sequence = workflow.steps.length + 1
-      const steps = [...workflow.steps, { id: `draft-step-${crypto.randomUUID()}`, sequence_no: sequence, name: '새 진행 단계', status: 'WAITING' as const, owner: workflow.request.owner || '미지정', progress: 0, planned_end: workflow.request.due_at, is_optional: false, note: '' }]
+      const steps = [...workflow.steps, { id: `draft-step-${crypto.randomUUID()}`, sequence_no: sequence, name: '새 진행 단계', status: 'WAITING' as const, owner: workflow.request.owner || '미지정', owner_user_id: workflow.request.owner_user_id ?? null, progress: 0, planned_end: workflow.request.due_at, is_optional: false, note: '' }]
       return { ...workflow, steps, progress: Math.round(steps.reduce((sum, step) => sum + step.progress, 0) / steps.length) }
     }))
   }
@@ -1059,7 +1152,11 @@ function App() {
   }
 
   if (authRequired && !authUser) {
-    return <LoginScreen error={authError} onLogin={handleLogin} theme={theme} onThemeChange={setTheme} />
+    return <LoginScreen mode={authMode === 'oidc' ? 'oidc' : 'password'} error={authError} onLogin={handleLogin} theme={theme} onThemeChange={setTheme} />
+  }
+
+  if (authUser?.account_status === 'PENDING') {
+    return <ApprovalPendingScreen displayName={authUser.display_name} onLogout={() => void logout()} />
   }
 
   if (loading) {
@@ -1070,6 +1167,13 @@ function App() {
     return <div className="full-state error"><AlertTriangle /> {error || '대시보드를 불러오지 못했습니다.'}</div>
   }
 
+  if (!allowedPages.has(workspacePage)) {
+    return <div className="full-state"><LoaderCircle className="spin" /> 허용된 첫 화면으로 이동하고 있습니다.</div>
+  }
+  if (workspacePage === 'menu_policy_admin' && !menuPolicy) {
+    return <div className="full-state error"><AlertTriangle /> 메뉴 정책을 불러오지 못했습니다. 감사로그와 서버 상태를 확인하세요.</div>
+  }
+
   const projectWorkflows = workflows.filter((workflow) => workflow.request.project_id === selectedProjectId)
   const selectedWorkflow = workflows.find((workflow) => workflow.request.id === selectedRequestId)
   // The monitoring tab is scoped to the request selected in the context
@@ -1078,8 +1182,13 @@ function App() {
   const workflowProgress = selectedWorkflow?.progress ?? 0
   const chassisThreshold = thresholds.find((item) => item.criterion_key === 'chassis_rear_permanent_deformation_mm')
   const openCellThreshold = thresholds.find((item) => item.criterion_key === 'open_cell_stress_mpa')
-  const canEdit = !authRequired || authUser?.role === 'editor' || authUser?.role === 'admin'
-  const canManagePages = !authRequired || authUser?.role === 'admin'
+  const canDashboardEdit = hasPermission(authUser, 'dashboard.edit', selectedProjectId)
+  const canWorkflowEdit = hasPermission(authUser, 'workflow.edit', selectedProjectId)
+  const canLayoutEdit = hasPermission(authUser, 'project.layout.edit', selectedProjectId)
+  const canEdit = workspacePage === 'portfolio' ? canLayoutEdit : activeView === 'workflow' ? canWorkflowEdit || canLayoutEdit : canDashboardEdit
+  const canManagePages = canDashboardEdit
+  const canExecuteAssigned = hasPermission(authUser, 'work.execute_assigned', selectedProjectId)
+  const canExecuteAny = hasPermission(authUser, 'work.execute_any', selectedProjectId)
   const analysisTabs = visiblePages(analysisPages, overview)
   const activeAnalysisPage = analysisPages.find((page) => page.id === activeDashboardId)
 
@@ -1088,17 +1197,11 @@ function App() {
       <aside className="sidebar" aria-label="주 메뉴">
         <div className="brand" title="VD simulation workbench"><span className="brand-mark"><Activity /></span><span>VD simulation<br /><strong>workbench</strong></span></div>
         <nav className="nav-main">
-          <button aria-label="운영 대시보드" title="운영 대시보드" className={workspacePage === 'portfolio' ? 'active' : ''} onClick={() => setWorkspacePage('portfolio')}><LayoutDashboard /><span>운영 대시보드</span></button>
-          <button aria-label="해석 의뢰 현황" title="해석 의뢰 현황" className={workspacePage === 'dashboard' ? 'active' : ''} onClick={openDashboardWorkspace}><Activity /><span>해석 의뢰 현황</span></button>
-          <button aria-label="의뢰 접수" title="의뢰 접수" className={workspacePage === 'intake' ? 'active' : ''} onClick={() => setWorkspacePage('intake')}><ClipboardPlus /><span>의뢰 접수</span></button>
-          <button aria-label="해석 작업 실행" title="해석 작업 실행" className={workspacePage === 'workbench' ? 'active' : ''} onClick={() => setWorkspacePage('workbench')}><FlaskConical /><span>해석 작업 실행</span></button>
-          {(!authRequired || authUser?.role === 'admin') && <button aria-label="작업 유형 관리" title="작업 유형 관리" className={workspacePage === 'workbench_admin' ? 'active' : ''} onClick={() => setWorkspacePage('workbench_admin')}><Settings2 /><span>작업 유형 관리</span></button>}
-          <button aria-label="해석 데이터" title="해석 데이터" className={workspacePage === 'data' ? 'active' : ''} onClick={() => setWorkspacePage('data')}><Database /><span>해석 데이터</span></button>
-          <button aria-label="변수 카탈로그" title="변수 카탈로그" className={workspacePage === 'variables' ? 'active' : ''} onClick={() => setWorkspacePage('variables')}><BarChart3 /><span>변수 카탈로그</span></button>
-          <button aria-label="자동화 템플릿" title="자동화 템플릿" className={workspacePage === 'templates' ? 'active' : ''} onClick={() => setWorkspacePage('templates')}><Settings2 /><span>자동화 템플릿</span></button>
-          <button aria-label="폴더 스키마" title="폴더 스키마" className={workspacePage === 'schemas' ? 'active' : ''} onClick={() => setWorkspacePage('schemas')}><GripVertical /><span>폴더 스키마</span></button>
-          <button aria-label="예제 갤러리" title="예제 갤러리" className={workspacePage === 'examples' ? 'active' : ''} onClick={() => setWorkspacePage('examples')}><Play /><span>예제 갤러리</span></button>
-          <button aria-label="도움말" title="도움말" className={workspacePage === 'help' ? 'active' : ''} onClick={() => setWorkspacePage('help')}><BookOpen /><span>도움말</span></button>
+          {visibleMenus.map((menu) => {
+            const Icon = MENU_ICONS[menu.id]
+            const navigate = menu.id === 'dashboard' ? openDashboardWorkspace : () => setWorkspacePage(menu.id)
+            return <button key={menu.id} aria-label={menu.label} title={menu.label} className={workspacePage === menu.id ? 'active' : ''} onClick={navigate}><Icon /><span>{menu.label}</span></button>
+          })}
         </nav>
         <div className="sidebar-foot">
           <div className="global-font-control" aria-label="전체 글자 크기 조절">
@@ -1107,7 +1210,7 @@ function App() {
             <output>{uiFontSize}pt</output>
             <button type="button" aria-label="전체 글자 크기 늘리기" onClick={() => setUiFontSize((value) => Math.min(18, value + 1))} disabled={uiFontSize >= 18}><Plus /></button>
           </div>
-          {authUser && <div className="signed-user"><strong>{authUser.display_name}</strong><span>{authUser.role.toUpperCase()}</span></div>}
+          {authUser && <div className="signed-user"><strong>{authUser.display_name}</strong><span>{authUser.is_global_admin ? 'GLOBAL ADMIN' : authUser.memberships.find((item) => item.project_id === selectedProjectId)?.role.toUpperCase() ?? 'NONMEMBER'}</span></div>}
           <div className="system-pill"><span className="live-dot" /> {databaseBackend.toUpperCase()} · {databaseBackend === 'postgresql' ? 'SERVER' : 'LOCAL'}</div>
           <button type="button" className="sidebar-toggle" aria-label={sidebarCollapsed ? '메뉴 펼치기' : '메뉴 접기'} aria-expanded={!sidebarCollapsed} onClick={() => setSidebarCollapsed((value) => !value)}>{sidebarCollapsed ? <PanelLeftOpen /> : <PanelLeftClose />}<span>{sidebarCollapsed ? '메뉴 펼치기' : '메뉴 접기'}</span></button>
           {authUser && <button onClick={() => void logout()}><LogOut /><span>로그아웃</span></button>}
@@ -1133,7 +1236,7 @@ function App() {
           </div>
         </header>
 
-        {workspacePage === 'portfolio' ? <PortfolioDashboard refreshToken={operationalRefreshToken} editMode={editMode} layout={portfolioLayout} layoutVersion={portfolioLayoutVersion} onLayoutChange={setPortfolioLayout} onCancelEdit={cancelEditing} onResetLayout={resetPortfolioLayout} onOpen={(projectId, requestId) => void openPortfolioRequest(projectId, requestId)} /> : workspacePage === 'intake' ? <RequestIntakePage projects={projects} createdBy={authUser?.display_name ?? '데모 사용자'} canCreate={canEdit} onCreated={handleIntakeCreated} onOpenWorkbench={openIntakeWorkbench} /> : workspacePage === 'workbench' ? <SimulationWorkbench workflows={workflows} initialRequestId={selectedRequestId} createdBy={authUser?.display_name ?? '데모 사용자'} canExecute={canEdit} isAdmin={!authRequired || authUser?.role === 'admin'} onRequestSelected={setSelectedRequestId} onChanged={async (message) => { setWorkflows(await api.workflows()); setOperationalRefreshToken((value) => value + 1); setNotice(message) }} /> : workspacePage === 'workbench_admin' ? <WorkbenchTypeAdmin /> : workspacePage === 'schemas' ? <FolderSchemaWorkspace /> : workspacePage === 'variables' ? <VariableCatalogPage variables={variables} overview={overview} loadCaseId={selectedLoadCaseId} onChanged={(items) => { setVariables(items); setCatalogVariable((current) => items.some((item) => item.id === current) ? current : items[0]?.id ?? '') }} /> : workspacePage === 'templates' ? <AutomationTemplatesPage /> : workspacePage === 'examples' ? <FeatureExampleGallery onOpen={openFeatureExample} /> : workspacePage === 'help' ? <HelpCenter onNavigate={setWorkspacePage} /> : workspacePage === 'data' ? (
+        {workspacePage === 'portfolio' ? <PortfolioDashboard refreshToken={operationalRefreshToken} editMode={editMode} layout={portfolioLayout} layoutVersion={portfolioLayoutVersion} onLayoutChange={setPortfolioLayout} onCancelEdit={cancelEditing} onResetLayout={resetPortfolioLayout} onOpen={(projectId, requestId) => void openPortfolioRequest(projectId, requestId)} /> : workspacePage === 'intake' ? <RequestIntakePage projects={projects} createdBy={authUser?.display_name ?? '데모 사용자'} canCreate={hasPermission(authUser, 'request.create', selectedProjectId)} onCreated={handleIntakeCreated} onOpenWorkbench={openIntakeWorkbench} /> : workspacePage === 'workbench' ? <SimulationWorkbench workflows={workflows} initialRequestId={selectedRequestId} currentUserId={authUser?.id ?? ''} createdBy={authUser?.display_name ?? '데모 사용자'} canExecute={canExecuteAssigned || canExecuteAny} isAdmin={canExecuteAny} onRequestSelected={setSelectedRequestId} onChanged={async (message) => { setWorkflows(await api.workflows()); setOperationalRefreshToken((value) => value + 1); setNotice(message) }} /> : workspacePage === 'workbench_admin' ? <WorkbenchTypeAdmin /> : workspacePage === 'schemas' ? <FolderSchemaWorkspace /> : workspacePage === 'variables' ? <VariableCatalogPage variables={variables} overview={overview} loadCaseId={selectedLoadCaseId} onChanged={(items) => { setVariables(items); setCatalogVariable((current) => items.some((item) => item.id === current) ? current : items[0]?.id ?? '') }} /> : workspacePage === 'templates' ? <AutomationTemplatesPage /> : workspacePage === 'examples' ? <FeatureExampleGallery onOpen={openFeatureExample} /> : workspacePage === 'help' ? <HelpCenter onNavigate={setWorkspacePage} /> : workspacePage === 'access_admin' ? <AccessAdminPage projectId={selectedProjectId} canApproveUsers={hasPermission(authUser, 'system.user.approve', selectedProjectId)} onAccessChanged={refreshAccess} /> : workspacePage === 'menu_policy_admin' && menuPolicy ? <MenuPolicyAdminPage policy={menuPolicy} onPolicyChanged={setMenuPolicy} /> : workspacePage === 'audit_admin' ? <AuditAdminPage /> : workspacePage === 'data' ? (
           <DataWorkspace projects={projects} initialProjectId={selectedProjectId} onDataChanged={refreshOperationalData} onOpenAnalysis={openImportedResult} onOpenIntake={() => setWorkspacePage('intake')} />
         ) : <>
         <section className="content-head">
@@ -1957,14 +2060,14 @@ function WidgetContent({ widget, overview, selectedEdges, canManageThresholds, t
   if (type === 'time_series') { const seriesKeys = widget.settings?.variableId ? [String(widget.settings.variableId)] : selectedEdges.map((edge) => `${edge}_edge_stress_time`); return <ResponsiveContainer width="100%" height="100%"><LineChart data={seriesData} margin={{ top: 10, right: 22, left: -8, bottom: 2 }}><CartesianGrid stroke="#24384b" strokeDasharray="3 3"/><XAxis dataKey="time" tick={{ fill: '#71899f', fontSize: 13.2 }} axisLine={{ stroke: '#31485b' }} tickLine={false} label={{ value: `TIME (${overview.time_series.find((item)=>seriesKeys.includes(item.variable_key))?.time_unit ?? 'ms'})`, fill: '#6f879d', fontSize: 12, position: 'insideBottomRight', offset: -2 }}/><YAxis tick={{ fill: '#71899f', fontSize: 13.2 }} axisLine={false} tickLine={false}/><Tooltip contentStyle={{ background: '#102235', border: '1px solid #2d465c', borderRadius: 10 }}/><Legend wrapperStyle={{ fontSize: 13.2, paddingTop: 5 }}/>{widget.settings?.showThreshold !== false && widgetThreshold != null && <ReferenceLine y={widgetThreshold} stroke="#ffbf57" strokeDasharray="6 4"/>}{seriesKeys.map((key, index) => <Line key={key} type="monotone" dataKey={key} name={overview.time_series.find((item) => item.variable_key === key)?.display_name ?? edgeLabel(key)} dot={false} stroke={String(widget.settings?.color ?? SERIES_COLORS[index % SERIES_COLORS.length])} strokeWidth={2}/>)}</LineChart></ResponsiveContainer> }
   if (type === 'note') return <div className="note-block"><MessageSquareText /><blockquote>{overview.notes[0]?.body ?? '등록된 의견이 없습니다.'}</blockquote><footer><span>{overview.notes[0]?.author ?? '-'}</span><small>ANALYSIS ENGINEER</small></footer></div>
   if (type === 'result_table') return <div className="result-table"><div className="table-head"><span>측정 위치</span><span>결과</span><span>허용 기준</span><span>여유율</span><span>판정</span></div>{configuredScalars.map((item) => { const location = resultLocation(item.variable_key); const hasThreshold = hasNumericValue(item.threshold_double) && item.threshold_double !== 0; return <div className="table-row" key={item.id}><strong><i className={`edge-${item.variable_key.split('_')[0]}`} /><span>{item.display_name.replace(' 최대 응력','')}{location && <small>{location.entity_type} {location.entity_id} · ({location.x.toFixed(1)}, {location.y.toFixed(1)}, {location.z.toFixed(1)})</small>}</span></strong><span>{item.value_double.toFixed(1)} <small>{item.unit}</small></span><span>{hasThreshold ? item.threshold_double.toFixed(1) : ''} <small>{hasThreshold ? item.unit : ''}</small></span><span className={item.verdict === 'FAIL' ? 'negative' : 'positive'}>{hasThreshold ? `${((item.threshold_double - item.value_double) / item.threshold_double * 100).toFixed(1)}%` : ''}</span><b className={item.verdict.toLowerCase()}>{item.verdict}</b></div> })}</div>
-  if (type === 'contour') { const variableId = String(widget.settings?.variableId ?? ''); const asset = overview.media.find((item) => item.asset_type === 'IMAGE' && (!variableId || item.metadata?.variable_key === variableId)) ?? overview.media.find((item) => item.asset_type === 'IMAGE'); return asset ? <div className="contour"><img src={asset.asset_url ?? `/assets/${asset.file_path}`} alt={asset.title} /></div> : <div className="empty-widget">등록된 컨투어 이미지가 없습니다.</div> }
+  if (type === 'contour') { const variableId = String(widget.settings?.variableId ?? ''); const asset = overview.media.find((item) => item.asset_type === 'IMAGE' && (!variableId || item.metadata?.variable_key === variableId)) ?? overview.media.find((item) => item.asset_type === 'IMAGE'); return asset?.asset_url ? <div className="contour"><img src={asset.asset_url} alt={asset.title} /></div> : <div className="empty-widget">등록된 컨투어 이미지가 없습니다.</div> }
   if (type === 'kpi' || type === 'gauge') {
     const bound = overview.scalar_results.find((item) => item.variable_key === widget.settings?.variableId && hasNumericValue(item.value_double)) ?? openCellScalars[0]
     return bound ? <div className="verdict-card"><span>{bound.display_name}</span><strong>{bound.value_double.toFixed(1)} {bound.unit}</strong><small>{hasNumericValue(bound.threshold_double) ? `기준 ${bound.threshold_double.toFixed(1)} ${bound.unit} · ` : ''}{bound.verdict}</small></div> : <div className="empty-widget">선택한 변수의 데이터가 없습니다.</div>
   }
   if (type === 'scatter') return <ResponsiveContainer width="100%" height="100%"><LineChart data={barData}><CartesianGrid stroke="#193447" /><XAxis dataKey="name" /><YAxis /><Tooltip /><Line dataKey="value" stroke="#61d4ff" /></LineChart></ResponsiveContainer>
   if (type === 'video_grid') return <DropVideoGrid loadCaseId={overview.load_case.id} pageSize={Number(widget.settings?.pageSize ?? 20)} />
-  if (type === 'video') { const variableId = String(widget.settings?.variableId ?? ''); const asset = overview.media.find((item) => item.asset_type === 'VIDEO' && (!variableId || item.metadata?.variable_key === variableId)) ?? overview.media.find((item) => item.asset_type === 'VIDEO'); return asset ? <video controls className="result-video" src={asset.asset_url ?? `/assets/${asset.file_path}`} /> : <div className="empty-widget">등록된 안전한 영상 파일이 없습니다.</div> }
+  if (type === 'video') { const variableId = String(widget.settings?.variableId ?? ''); const asset = overview.media.find((item) => item.asset_type === 'VIDEO' && (!variableId || item.metadata?.variable_key === variableId)) ?? overview.media.find((item) => item.asset_type === 'VIDEO'); return asset?.asset_url ? <video controls className="result-video" src={asset.asset_url} /> : <div className="empty-widget">등록된 안전한 영상 파일이 없습니다.</div> }
   if (type === 'model3d') return <div className="empty-widget">GLB/glTF 경량 파일을 등록하면 여기에 표시됩니다.</div>
   return <div className="empty-widget">표시할 데이터가 없습니다.</div>
 }
@@ -2258,7 +2361,7 @@ function WorkflowStepItem({ step, last, editMode, onChange, onMove, onDelete }: 
     {editMode ? <div className="workflow-step-editor">
       <div className="workflow-step-actions"><button aria-label={`${step.sequence_no}단계 앞으로 이동`} onClick={() => onMove(-1)} disabled={step.sequence_no === 1}><ArrowLeft /></button><button aria-label={`${step.sequence_no}단계 뒤로 이동`} onClick={() => onMove(1)} disabled={last}><ArrowRight /></button><button className="danger" aria-label={`${step.sequence_no}단계 삭제`} onClick={onDelete}><Trash2 /></button></div>
       <label><span>단계명</span><input value={step.name} onChange={(event) => onChange({ name: event.target.value })} aria-label={`${step.sequence_no}단계 이름`} /></label>
-      <label><span>담당자</span><input value={step.owner} onChange={(event) => onChange({ owner: event.target.value })} aria-label={`${step.sequence_no}단계 담당자`} /></label>
+      <label><span>담당자</span><input value={step.owner} readOnly aria-label={`${step.sequence_no}단계 담당자`} /><small>담당자 변경은 임직원 계정 기반 재배정 기능에서 수행합니다.</small></label>
       <div>
         <label><span>상태</span><select value={step.status} onChange={(event) => onChange({ status: event.target.value as WorkflowStep['status'] })} aria-label={`${step.sequence_no}단계 상태`}><option value="READY">시작 대기</option><option value="WAITING">대기</option><option value="IN_PROGRESS">진행 중</option><option value="BLOCKED">차단</option><option value="FAILED">실패</option><option value="COMPLETED">완료</option></select></label>
         <label><span>진행률</span><input type="number" min="0" max="100" value={step.progress} onChange={(event) => onChange({ progress: Math.max(0, Math.min(100, Number(event.target.value))) })} aria-label={`${step.sequence_no}단계 진행률`} /></label>

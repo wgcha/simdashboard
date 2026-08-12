@@ -30,7 +30,7 @@ test('DOE 의뢰를 접수하고 배정 작업을 명시적으로 시작·완료
   await page.getByLabel('의뢰 출처 상세').fill('E2E PLM Gateway')
   await page.locator('label').filter({ hasText: '요청자' }).locator('input').fill('E2E 요청자')
   await page.locator('label').filter({ hasText: '의뢰 제목' }).locator('input').fill(title)
-  await page.locator('label').filter({ hasText: '담당 수행자' }).locator('input').fill('E2E 수행자')
+  await expect(page.getByLabel('담당 수행자')).not.toHaveValue('')
   await page.getByTestId('submit-request-intake').click()
 
   const success = page.getByTestId('intake-success')
@@ -109,7 +109,7 @@ test('Viewer는 배정 작업과 진행 상태를 보되 시작·완료할 수 �
   const complete = page.getByTestId('complete-current-work')
   if (await start.count()) await expect(start).toBeDisabled()
   if (await complete.count()) await expect(complete).toBeDisabled()
-  await expect(page.getByText('실행 권한이 없어 작업을 수행할 수 없습니다.')).toBeVisible()
+  await expect(page.getByText(/작업 담당자\(.+\)만 실행할 수 있습니다\./)).toBeVisible()
   await expect(page.getByLabel('배치 명령 미리보기')).toHaveCount(0)
 })
 

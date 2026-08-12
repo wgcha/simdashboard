@@ -87,9 +87,10 @@ function friendlyWorkbenchError(reason: unknown) {
   return message || '작업 실행 정보를 불러오지 못했습니다.'
 }
 
-export function SimulationWorkbench({ workflows, initialRequestId, createdBy, canExecute, isAdmin, onChanged, onRequestSelected }: {
+export function SimulationWorkbench({ workflows, initialRequestId, currentUserId, createdBy, canExecute, isAdmin, onChanged, onRequestSelected }: {
   workflows: Workflow[]
   initialRequestId: string
+  currentUserId: string
   createdBy: string
   canExecute: boolean
   isAdmin: boolean
@@ -125,14 +126,14 @@ export function SimulationWorkbench({ workflows, initialRequestId, createdBy, ca
   const compatibleBatchProfiles = batchProfiles.filter((profile) => selectedTaskTypeId && profile.task_type_ids.includes(selectedTaskTypeId))
   const selectedBatchProfile = compatibleBatchProfiles.find((profile) => profile.id === batchProfileId)
   const selectedIsCurrent = selectedWorkItem?.id === currentItem?.id
-  const canOperateCurrent = Boolean(canExecute && currentItem && (isAdmin || currentItem.owner === createdBy))
-  const canOperateSelected = Boolean(canExecute && selectedWorkItem && (isAdmin || selectedWorkItem.owner === createdBy))
+  const canOperateCurrent = Boolean(canExecute && currentItem?.owner_user_id && (isAdmin || currentItem.owner_user_id === currentUserId))
+  const canOperateSelected = Boolean(canExecute && selectedWorkItem?.owner_user_id && (isAdmin || selectedWorkItem.owner_user_id === currentUserId))
   const progressIsValid = Boolean(selectedWorkItem && Number.isFinite(progressDraft) && progressDraft > selectedWorkItem.progress && progressDraft <= 99)
   const taskActionDisabled = !canOperateSelected || working || !selectedIsCurrent || !selectedWorkItem || !['READY', 'IN_PROGRESS'].includes(selectedWorkItem.status)
   const taskActionHelp = !canExecute
     ? '실행 권한이 없어 작업을 수행할 수 없습니다.'
-    : selectedWorkItem && !isAdmin && selectedWorkItem.owner !== createdBy
-      ? `작업 담당자(${selectedWorkItem.owner}) 또는 관리자만 실행할 수 있습니다.`
+    : selectedWorkItem && !isAdmin && selectedWorkItem.owner_user_id !== currentUserId
+      ? `작업 담당자(${selectedWorkItem.owner})만 실행할 수 있습니다.`
     : !selectedIsCurrent
       ? '현재 순서의 작업을 완료한 뒤 실행할 수 있습니다.'
       : selectedWorkItem?.status === 'READY'
@@ -275,13 +276,13 @@ export function SimulationWorkbench({ workflows, initialRequestId, createdBy, ca
           <h3>진행도 업데이트</h3><p>진행 중 작업의 진행도만 이전 값보다 크게 갱신할 수 있습니다.</p>
           <div className="progress-current"><span>현재 진행도</span><strong>{selectedWorkItem.progress}%</strong><progress aria-label={`${selectedWorkItem.name} 현재 진행도`} max="100" value={selectedWorkItem.progress}>{selectedWorkItem.progress}%</progress></div>
           <label><span>새 진행도</span><input aria-label="작업 진행도" aria-describedby="progress-update-help" aria-invalid={selectedWorkItem.status === 'IN_PROGRESS' && !progressIsValid} type="number" min={Math.min(99, selectedWorkItem.progress + 1)} max="99" value={progressDraft} disabled={selectedWorkItem.status !== 'IN_PROGRESS'} onChange={(event) => setProgressDraft(event.target.value === '' ? Number.NaN : Number(event.target.value))}/><b>%</b></label>
-          <small id="progress-update-help" role="status">{!canExecute ? '진행도를 수정할 실행 권한이 없습니다.' : !isAdmin && selectedWorkItem.owner !== createdBy ? `작업 담당자(${selectedWorkItem.owner}) 또는 관리자만 진행도를 수정할 수 있습니다.` : selectedWorkItem.status !== 'IN_PROGRESS' ? '진행 중인 작업에서만 수정할 수 있습니다.' : progressIsValid ? `${selectedWorkItem.progress + 1}~99 사이의 값을 저장할 수 있습니다.` : `현재 값 ${selectedWorkItem.progress}%보다 큰 ${Math.min(99, selectedWorkItem.progress + 1)}~99 사이의 값을 입력하세요.`}</small>
+          <small id="progress-update-help" role="status">{!canExecute ? '진행도를 수정할 실행 권한이 없습니다.' : !isAdmin && selectedWorkItem.owner_user_id !== currentUserId ? `작업 담당자(${selectedWorkItem.owner})만 진행도를 수정할 수 있습니다.` : selectedWorkItem.status !== 'IN_PROGRESS' ? '진행 중인 작업에서만 수정할 수 있습니다.' : progressIsValid ? `${selectedWorkItem.progress + 1}~99 사이의 값을 저장할 수 있습니다.` : `현재 값 ${selectedWorkItem.progress}%보다 큰 ${Math.min(99, selectedWorkItem.progress + 1)}~99 사이의 값을 입력하세요.`}</small>
           <button disabled={!canOperateSelected || working || selectedWorkItem.status !== 'IN_PROGRESS' || !progressIsValid} onClick={() => void updateSelectedProgress()}><RefreshCw aria-hidden="true" /> 진행도 저장</button>
         </article>
         <article className="batch-execution-card">
           <h3>배치 실행 구성</h3><p>경로와 명령은 기록·미리보기 전용입니다. 서버는 외부 solver 프로세스를 실행하지 않습니다.</p>
           {compatibleBatchProfiles.length ? <><label><span>배치 경로 프로필</span><select aria-label="배치 경로 프로필" value={batchProfileId} disabled={selectedWorkItem.status !== 'IN_PROGRESS' || !canOperateSelected} onChange={(event) => setBatchProfileId(event.target.value)}>{compatibleBatchProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label>{selectedBatchProfile?.solver_path ? <pre aria-label="배치 명령 미리보기"><code>{`"${selectedBatchProfile.solver_path}" ${selectedBatchProfile.arguments_template}`}</code></pre> : <p className="batch-profile-redacted" role="note">이 계정에는 실행 경로와 명령 미리보기가 표시되지 않습니다.</p>}</> : <p className="batch-profile-empty" role="status">이 작업 유형에 연결된 활성 배치 경로가 없습니다. 작업 유형 관리에서 호환 작업을 지정하세요.</p>}
-          <small id="batch-action-help" role="status">{!canExecute ? '실행 권한이 필요합니다.' : !isAdmin && selectedWorkItem.owner !== createdBy ? `작업 담당자(${selectedWorkItem.owner}) 또는 관리자만 배치 기록을 생성할 수 있습니다.` : selectedWorkItem.status !== 'IN_PROGRESS' ? '진행 중인 현재 작업에서만 배치 기록을 생성할 수 있습니다.' : !selectedBatchProfile ? '호환되는 활성 프로필이 필요합니다.' : 'DEMO_ONLY 배치 기록을 생성할 준비가 되었습니다.'}</small>
+          <small id="batch-action-help" role="status">{!canExecute ? '실행 권한이 필요합니다.' : !isAdmin && selectedWorkItem.owner_user_id !== currentUserId ? `작업 담당자(${selectedWorkItem.owner})만 배치 기록을 생성할 수 있습니다.` : selectedWorkItem.status !== 'IN_PROGRESS' ? '진행 중인 현재 작업에서만 배치 기록을 생성할 수 있습니다.' : !selectedBatchProfile ? '호환되는 활성 프로필이 필요합니다.' : 'DEMO_ONLY 배치 기록을 생성할 준비가 되었습니다.'}</small>
           <button className="batch-dispatch-button" aria-describedby="batch-action-help" disabled={!canOperateSelected || working || selectedWorkItem.status !== 'IN_PROGRESS' || !selectedBatchProfile} onClick={() => void dispatchSelectedBatch()}><Play aria-hidden="true" /> 배치 실행 기록 생성</button>
         </article>
       </div>

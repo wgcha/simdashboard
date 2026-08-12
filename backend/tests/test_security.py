@@ -7,7 +7,7 @@ from app.database import initialize_database
 from app.database_connection import connect
 from app.config import database_settings
 from app.main import app
-from app.security import hash_password, minimum_role, verify_password
+from app.security import hash_password, verify_password
 
 
 def _insert_user(username: str, role: str, password: str) -> str:
@@ -15,26 +15,32 @@ def _insert_user(username: str, role: str, password: str) -> str:
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     with connect() as conn:
         conn.execute(
-            "INSERT INTO users VALUES (?, ?, ?, ?, ?, true, ?, ?)",
-            [user_id, username, hash_password(password), username.title(), role, now, now],
+            """
+            INSERT INTO users
+                (id, username, password_hash, display_name, legacy_role, is_active,
+                 created_at, updated_at, account_status, is_global_admin)
+            VALUES (?, ?, ?, ?, ?, true, ?, ?, 'ACTIVE', ?)
+            """,
+            [user_id, username, hash_password(password), username.title(), role, now, now, role == "admin"],
         )
+        if role in {"viewer", "editor"}:
+            membership_role = "general" if role == "viewer" else "power"
+            conn.execute(
+                """
+                INSERT INTO project_memberships
+                    (id, project_id, user_id, role, created_by, created_at, updated_by, updated_at)
+                SELECT 'membership-' || substr(md5(id || ':' || ?), 1, 24),
+                       id, ?, ?, 'test', ?, 'test', ? FROM projects
+                """,
+                [user_id, user_id, membership_role, now, now],
+            )
     return user_id
 
 
-def test_password_hash_and_role_policy():
+def test_password_hash_policy():
     encoded = hash_password("a-strong-password")
     assert verify_password("a-strong-password", encoded)
     assert not verify_password("wrong-password", encoded)
-    assert minimum_role("GET", "/api/projects") == "viewer"
-    assert minimum_role("PUT", "/api/dashboards/example") == "editor"
-    assert minimum_role("PUT", "/api/quality-thresholds/key") == "admin"
-    assert minimum_role("PUT", "/api/projects/project-1/quality-thresholds/key") == "admin"
-    assert minimum_role("DELETE", "/api/report-layouts/example") == "admin"
-    assert minimum_role("DELETE", "/api/dashboards/example/versions/1") == "admin"
-    assert minimum_role("POST", "/api/workbench/demo-runs") == "editor"
-    assert minimum_role("POST", "/api/workbench/work-items/example/complete") == "editor"
-    assert minimum_role("PUT", "/api/workbench/requests/example/request-type") == "editor"
-    assert minimum_role("POST", "/api/admin/workbench/request-types") == "admin"
 
 
 def test_password_auth_rbac_and_audit(monkeypatch):
@@ -96,14 +102,14 @@ def test_password_auth_rbac_and_audit(monkeypatch):
             )
             assert not_assigned.status_code == 403
             assert not_assigned.json()["detail"]["code"] == "WORK_ITEM_NOT_ASSIGNED"
-            assert client.post("/api/dashboard-commands/preview", headers=editor_headers, json={"command": "KPI 추가"}).status_code == 200
+            assert client.post("/api/dashboard-commands/preview", headers=editor_headers, json={"command": "KPI 추가"}).status_code == 403
             demo_run = client.post("/api/workbench/demo-runs", headers=editor_headers, json=demo_payload)
             assert demo_run.status_code == 201
             assert demo_run.json()["created_by"] == f"Editor-{suffix}".title()
             assigned = client.put(f"/api/workbench/requests/{assignment_request_id}/request-type", headers=editor_headers, json=assignment_payload)
             assert assigned.status_code == 200
             assert assigned.json()["source"] == "USER"
-            assert client.post("/api/admin/workbench/request-types", headers=editor_headers, json={}).status_code == 403
+            assert client.get("/api/admin/workbench/batch-profiles/altair-default/versions", headers=editor_headers).status_code == 403
             assert client.delete("/api/report-layouts/not-found", headers=editor_headers).status_code == 403
             assert client.delete("/api/dashboards/dashboard-drop-default/versions/1", headers=editor_headers).status_code == 403
 

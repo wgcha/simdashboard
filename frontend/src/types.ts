@@ -62,7 +62,20 @@ export type Overview = {
     method: string
   }>
   notes: Array<{ id: string; author: string; body: string; created_at: string }>
-  media: Array<{ id: string; title: string; file_path: string; mime_type: string; asset_type?: 'IMAGE' | 'VIDEO' | 'MODEL_3D' | string; asset_url?: string; metadata?: Record<string, unknown> }>
+  media: Array<{
+    id: string
+    title: string
+    original_filename?: string
+    mime_type: string
+    file_size?: number
+    checksum?: string
+    asset_type?: 'IMAGE' | 'VIDEO' | 'MODEL_3D' | string
+    asset_url?: string
+    download_url?: string
+    /** @deprecated migration compatibility only */
+    file_path?: string
+    metadata?: Record<string, unknown>
+  }>
   template_execution: {
     template_name: string
     template_version: string
@@ -101,6 +114,7 @@ export type AnalysisRequest = {
   title: string
   status: string
   owner: string
+  owner_user_id?: string | null
   requested_at: string
   due_at?: string
   overall_note?: string
@@ -138,6 +152,7 @@ export type WorkflowStep = {
   name: string
   status: 'READY' | 'COMPLETED' | 'IN_PROGRESS' | 'WAITING' | 'BLOCKED' | 'FAILED'
   owner: string
+  owner_user_id?: string | null
   progress: number
   planned_end?: string
   is_optional: boolean
@@ -173,6 +188,7 @@ export type Workflow = {
     title: string
     status: string
     owner: string
+    owner_user_id?: string | null
     due_at: string
     requested_at: string
     project_name: string
@@ -215,6 +231,7 @@ export type DropVideoItem = {
   scene_id: string
   scene_name: string
   video_url: string
+  download_url?: string | null
   thumbnail_url: string | null
   duration: number | null
   file_size: number

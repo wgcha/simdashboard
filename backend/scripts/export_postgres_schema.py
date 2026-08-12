@@ -16,6 +16,9 @@ CREATE INDEX IF NOT EXISTS ix_scalar_results_run_variable ON scalar_results(anal
 CREATE INDEX IF NOT EXISTS ix_time_series_run_variable_time ON time_series_results(analysis_run_id, variable_key, time_value);
 CREATE INDEX IF NOT EXISTS ix_curve_results_run_variable ON curve_results(analysis_run_id, variable_key);
 CREATE INDEX IF NOT EXISTS ix_media_assets_run ON media_assets(analysis_run_id);
+CREATE INDEX IF NOT EXISTS ix_media_assets_blob_id ON media_assets(blob_id);
+CREATE INDEX IF NOT EXISTS ix_drop_video_assets_blob_id ON drop_video_assets(blob_id);
+CREATE INDEX IF NOT EXISTS ix_drop_video_assets_load_case ON drop_video_assets(load_case_id, sort_order);
 CREATE INDEX IF NOT EXISTS ix_folder_import_jobs_load_case ON folder_import_jobs(load_case_id);
 CREATE INDEX IF NOT EXISTS ix_validations_run ON validations(analysis_run_id);
 CREATE INDEX IF NOT EXISTS ix_review_annotations_run ON review_annotations(analysis_run_id);
@@ -35,6 +38,20 @@ CREATE INDEX IF NOT EXISTS ix_batch_attempts_work_item ON batch_execution_attemp
 CREATE INDEX IF NOT EXISTS ix_batch_attempts_status ON batch_execution_attempts(status, created_at);
 CREATE INDEX IF NOT EXISTS ix_batch_events_attempt ON batch_execution_events(attempt_id, event_index);
 CREATE INDEX IF NOT EXISTS ix_batch_dispatches_work_item ON batch_dispatches(work_item_id, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_users_employee_id ON users(employee_id) WHERE employee_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_users_oidc_identity ON users(oidc_issuer, oidc_subject) WHERE oidc_issuer IS NOT NULL AND oidc_subject IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_users_account_status ON users(account_status);
+CREATE INDEX IF NOT EXISTS idx_users_oidc_identity ON users(oidc_issuer, oidc_subject);
+CREATE INDEX IF NOT EXISTS idx_project_memberships_user_project ON project_memberships(user_id, project_id);
+CREATE INDEX IF NOT EXISTS idx_project_memberships_project_role ON project_memberships(project_id, role, user_id);
+CREATE INDEX IF NOT EXISTS idx_project_invitations_project_status ON project_invitations(project_id, status, invited_at DESC);
+CREATE INDEX IF NOT EXISTS idx_project_invitations_employee ON project_invitations(employee_id, status);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_project_invitations_open ON project_invitations(project_id, employee_id) WHERE status IN ('PENDING_ACCOUNT', 'PENDING_APPROVAL', 'READY');
+CREATE INDEX IF NOT EXISTS idx_analysis_requests_owner_user_id ON analysis_requests(owner_user_id);
+CREATE INDEX IF NOT EXISTS idx_request_steps_owner_user_id ON request_steps(owner_user_id);
+CREATE INDEX IF NOT EXISTS idx_request_work_items_owner_user_id ON request_work_items(owner_user_id);
+CREATE INDEX IF NOT EXISTS idx_project_workspace_layouts_project ON project_workspace_layouts(project_id, layout_kind);
+CREATE INDEX IF NOT EXISTS idx_project_workspace_layout_versions_project ON project_workspace_layout_versions(project_id, layout_kind, version DESC);
 """.strip()
 
 CONSTRAINTS = """
@@ -53,6 +70,10 @@ ALTER TABLE curve_points ADD CONSTRAINT fk_curve_points_curve FOREIGN KEY (curve
 ALTER TABLE result_locations ADD CONSTRAINT fk_result_locations_run FOREIGN KEY (analysis_run_id) REFERENCES analysis_runs(id);
 ALTER TABLE qualitative_notes ADD CONSTRAINT fk_qualitative_notes_run FOREIGN KEY (analysis_run_id) REFERENCES analysis_runs(id);
 ALTER TABLE media_assets ADD CONSTRAINT fk_media_assets_run FOREIGN KEY (analysis_run_id) REFERENCES analysis_runs(id);
+ALTER TABLE media_assets ADD CONSTRAINT fk_media_assets_blob FOREIGN KEY (blob_id) REFERENCES asset_blobs(id);
+ALTER TABLE asset_blob_chunks ADD CONSTRAINT fk_asset_blob_chunks_blob FOREIGN KEY (blob_id) REFERENCES asset_blobs(id) ON DELETE CASCADE;
+ALTER TABLE drop_video_assets ADD CONSTRAINT fk_drop_video_assets_load_case FOREIGN KEY (load_case_id) REFERENCES load_cases(id);
+ALTER TABLE drop_video_assets ADD CONSTRAINT fk_drop_video_assets_blob FOREIGN KEY (blob_id) REFERENCES asset_blobs(id) ON DELETE RESTRICT;
 ALTER TABLE validations ADD CONSTRAINT fk_validations_project FOREIGN KEY (project_id) REFERENCES projects(id);
 ALTER TABLE validations ADD CONSTRAINT fk_validations_request FOREIGN KEY (request_id) REFERENCES analysis_requests(id);
 ALTER TABLE validations ADD CONSTRAINT fk_validations_load_case FOREIGN KEY (load_case_id) REFERENCES load_cases(id);
@@ -67,8 +88,14 @@ ALTER TABLE dashboards ADD CONSTRAINT fk_dashboards_request FOREIGN KEY (request
 ALTER TABLE dashboards ADD CONSTRAINT fk_dashboards_load_case FOREIGN KEY (load_case_id) REFERENCES load_cases(id);
 ALTER TABLE dashboard_versions ADD CONSTRAINT fk_dashboard_versions_dashboard FOREIGN KEY (dashboard_id) REFERENCES dashboards(id);
 ALTER TABLE workspace_layout_versions ADD CONSTRAINT fk_workspace_layout_versions_layout FOREIGN KEY (layout_kind) REFERENCES workspace_layouts(layout_kind);
+ALTER TABLE project_workspace_layouts ADD CONSTRAINT fk_project_workspace_layouts_project FOREIGN KEY (project_id) REFERENCES projects(id);
+ALTER TABLE project_workspace_layout_versions ADD CONSTRAINT fk_project_workspace_layout_versions_project FOREIGN KEY (project_id) REFERENCES projects(id);
 ALTER TABLE report_layout_versions ADD CONSTRAINT fk_report_layout_versions_layout FOREIGN KEY (layout_id) REFERENCES report_layouts(id);
-ALTER TABLE users ADD CONSTRAINT ck_users_role CHECK (role IN ('viewer', 'editor', 'admin'));
+ALTER TABLE project_memberships ADD CONSTRAINT fk_project_memberships_project FOREIGN KEY (project_id) REFERENCES projects(id);
+ALTER TABLE project_memberships ADD CONSTRAINT fk_project_memberships_user FOREIGN KEY (user_id) REFERENCES users(id);
+ALTER TABLE project_invitations ADD CONSTRAINT fk_project_invitations_project FOREIGN KEY (project_id) REFERENCES projects(id);
+ALTER TABLE project_invitations ADD CONSTRAINT fk_project_invitations_user FOREIGN KEY (resolved_user_id) REFERENCES users(id);
+ALTER TABLE role_menu_policies ADD CONSTRAINT fk_role_menu_policies_menu FOREIGN KEY (menu_id) REFERENCES menu_definitions(id);
 ALTER TABLE workflow_runs ADD CONSTRAINT fk_workflow_runs_request FOREIGN KEY (request_id) REFERENCES analysis_requests(id);
 ALTER TABLE analysis_request_type_assignments ADD CONSTRAINT fk_request_type_assignments_request FOREIGN KEY (request_id) REFERENCES analysis_requests(id);
 ALTER TABLE analysis_request_type_assignments ADD CONSTRAINT fk_request_type_assignments_type FOREIGN KEY (request_type_id, request_type_version) REFERENCES request_type_versions(id, version);

@@ -1598,3 +1598,101 @@ button { color: inherit; }
 .light-theme .workflow-step-horizontal.in_progress .status-badge { color:#034ea2!important; border-color:#b8cce2!important; background:#e4effa!important; }
 .light-theme .workflow-step-horizontal.failed .status-badge,
 .light-theme .workflow-step-horizontal.blocked .status-badge { color:#b42318!important; border-color:#efb6bd!important; background:#fce8eb!important; }
+.access-admin-page {
+  display: grid;
+  gap: 18px;
+  padding: 24px;
+  overflow: auto;
+}
+
+.access-admin-card {
+  border: 1px solid var(--border, rgba(148, 163, 184, .22));
+  border-radius: 18px;
+  background: var(--panel, rgba(15, 23, 42, .72));
+  padding: 18px;
+}
+
+.access-admin-card > header,
+.access-admin-toolbar,
+.access-admin-table article {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.access-admin-card header span,
+.access-admin-table span,
+.menu-policy-grid small {
+  display: block;
+  color: var(--muted, #94a3b8);
+  font-size: .78rem;
+}
+
+.access-admin-toolbar {
+  margin: 16px 0;
+  flex-wrap: wrap;
+}
+
+.access-admin-toolbar label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 260px;
+}
+
+.access-admin-toolbar input,
+.access-policy-note input {
+  width: 100%;
+}
+
+.access-admin-table {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.access-admin-table article {
+  min-height: 58px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(148, 163, 184, .08);
+}
+
+.access-admin-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.menu-policy-grid {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) repeat(3, minmax(72px, 110px));
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(148, 163, 184, .14);
+}
+
+.menu-policy-grid.header {
+  color: var(--muted, #94a3b8);
+  font-size: .8rem;
+}
+
+.menu-policy-grid label {
+  text-align: center;
+}
+
+.access-policy-note {
+  display: grid;
+  grid-template-columns: 100px minmax(240px, 520px);
+  align-items: center;
+  gap: 12px;
+}
+
+@media (max-width: 760px) {
+  .access-admin-table article,
+  .access-admin-card > header,
+  .access-admin-toolbar { align-items: stretch; flex-direction: column; }
+  .menu-policy-grid { grid-template-columns: minmax(150px, 1fr) repeat(3, 54px); }
+}

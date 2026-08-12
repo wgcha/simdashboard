@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { AlertTriangle, Building2, Check, ChevronRight, ClipboardPlus, LoaderCircle, Network, UserRound } from 'lucide-react'
-import { api } from '../../api'
+import { api, type AssigneeCandidate } from '../../api'
 import type { AnalysisRequest, Project } from '../../types'
 import { workbenchApi } from './api'
 import type { WorkbenchRequestType } from './types'
@@ -20,7 +20,9 @@ export function RequestIntakePage({ projects, createdBy, canCreate, onCreated, o
   const [sourceReference, setSourceReference] = useState('')
   const [requestedBy, setRequestedBy] = useState('')
   const [title, setTitle] = useState('')
-  const [owner, setOwner] = useState('')
+  const [ownerUserId, setOwnerUserId] = useState('')
+  const [assignees, setAssignees] = useState<AssigneeCandidate[]>([])
+  const [assigneesLoading, setAssigneesLoading] = useState(false)
   const [dueInDays, setDueInDays] = useState(14)
   const [note, setNote] = useState('')
   const [requestTypeId, setRequestTypeId] = useState<'design-reliability-validation' | 'design-doe-exploration'>('design-reliability-validation')
@@ -40,6 +42,32 @@ export function RequestIntakePage({ projects, createdBy, canCreate, onCreated, o
     if (!projects.some((item) => item.id === projectId)) setProjectId(projects[0]?.id ?? '')
   }, [projectId, projects])
 
+  useEffect(() => {
+    let cancelled = false
+    if (!projectId || !canCreate) {
+      setAssignees([])
+      setOwnerUserId('')
+      return () => { cancelled = true }
+    }
+    setAssigneesLoading(true)
+    api.assigneeCandidates(projectId)
+      .then((items) => {
+        if (cancelled) return
+        setAssignees(items)
+        setOwnerUserId((current) => items.some((item) => item.user_id === current)
+          ? current
+          : items.find((item) => item.display_name === createdBy)?.user_id ?? items[0]?.user_id ?? '')
+      })
+      .catch((reason) => {
+        if (cancelled) return
+        setAssignees([])
+        setOwnerUserId('')
+        setError(reason instanceof Error ? reason.message : '담당자 후보를 불러오지 못했습니다.')
+      })
+      .finally(() => { if (!cancelled) setAssigneesLoading(false) })
+    return () => { cancelled = true }
+  }, [canCreate, createdBy, projectId])
+
   const selectedType = useMemo(() => requestTypes.find((item) => item.id === requestTypeId), [requestTypeId, requestTypes])
   const selectedProject = projects.find((item) => item.id === projectId)
 
@@ -49,9 +77,9 @@ export function RequestIntakePage({ projects, createdBy, canCreate, onCreated, o
     setSaving(true); setError(''); setCreated(null)
     try {
       const request = await api.createRequest(projectId, {
-        title: title.trim(), owner: owner.trim(), due_in_days: dueInDays, overall_note: note.trim(),
+        title: title.trim(), owner_user_id: ownerUserId, due_in_days: dueInDays, overall_note: note.trim(),
         source_type: sourceType, source_reference: sourceReference.trim(), requested_by: requestedBy.trim(),
-        request_type_id: requestTypeId, request_type_version: selectedType.version, assigned_by: createdBy,
+        request_type_id: requestTypeId, request_type_version: selectedType.version,
       })
       await onCreated(projectId, request)
       setCreated(request)
@@ -80,7 +108,7 @@ export function RequestIntakePage({ projects, createdBy, canCreate, onCreated, o
         <label><span>{sourceType === 'EXTERNAL_SYSTEM' ? '전달 시스템명' : '지시 부서장 또는 부서'}</span><input aria-label="의뢰 출처 상세" required minLength={2} value={sourceReference} onChange={(event) => setSourceReference(event.target.value)} placeholder={sourceType === 'EXTERNAL_SYSTEM' ? '예: PLM Gateway' : '예: 구조해석팀장'} /></label>
         <label><span>요청자</span><div className="intake-icon-input"><UserRound /><input required minLength={2} value={requestedBy} onChange={(event) => setRequestedBy(event.target.value)} placeholder="요청자 이름 또는 시스템 계정" /></div></label>
         <label><span>의뢰 제목</span><input required minLength={2} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="예: 신규 Bracket 설계 신뢰성 검증" /></label>
-        <div className="intake-form-row"><label><span>담당 수행자</span><input required minLength={2} value={owner} onChange={(event) => setOwner(event.target.value)} placeholder="수행자 이름" /></label><label><span>완료 기한</span><input type="number" min="1" max="365" required value={dueInDays} onChange={(event) => setDueInDays(Number(event.target.value))} /><small>접수일 기준 일수</small></label></div>
+        <div className="intake-form-row"><label><span>담당 수행자</span><select aria-label="담당 수행자" required value={ownerUserId} onChange={(event) => setOwnerUserId(event.target.value)} disabled={assigneesLoading || !assignees.length}><option value="">{assigneesLoading ? '담당자 불러오는 중' : '담당자를 선택하세요'}</option>{assignees.map((item) => <option key={item.user_id} value={item.user_id}>{item.display_name}{item.department ? ` · ${item.department}` : ''}{item.employee_id ? ` · ${item.employee_id}` : ''}</option>)}</select><small>현재 프로젝트의 활성 임직원만 선택할 수 있습니다.</small></label><label><span>완료 기한</span><input type="number" min="1" max="365" required value={dueInDays} onChange={(event) => setDueInDays(Number(event.target.value))} /><small>접수일 기준 일수</small></label></div>
         <label><span>요청 사항</span><textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="검증 조건, 설계 범위, 확인할 결과를 입력하세요." /></label>
       </section>
 
@@ -89,7 +117,7 @@ export function RequestIntakePage({ projects, createdBy, canCreate, onCreated, o
         <div className="intake-scenario-options">{requestTypes.map((item) => <button type="button" key={item.id} className={item.id === requestTypeId ? 'selected' : ''} onClick={() => setRequestTypeId(item.id as typeof requestTypeId)} aria-pressed={item.id === requestTypeId}><span>{item.id === 'design-reliability-validation' ? 'RELIABILITY' : 'DOE EXPLORATION'}</span><strong>{item.display_name}</strong><small>{item.default_workflow.nodes.length}개 순차 작업</small></button>)}</div>
         <ol className="intake-work-preview">{selectedType?.default_workflow.nodes.map((node, index) => <li key={node.node_key}><i>{index + 1}</i><span><strong>{node.display_name ?? node.task_type_id}</strong><small>{node.task_type_id} · v{node.task_type_version}</small></span>{index < selectedType.default_workflow.nodes.length - 1 && <ChevronRight />}</li>)}</ol>
         <div className="intake-summary"><span>접수 대상</span><strong>{selectedProject?.name ?? '프로젝트 미선택'}</strong><p>{selectedType?.display_name ?? '시나리오 미선택'} · 첫 작업 READY</p></div>
-        <button className="intake-submit" disabled={!canCreate || saving || !projectId || !selectedType} data-testid="submit-request-intake">{saving ? <LoaderCircle className="spin" /> : <ClipboardPlus />} {canCreate ? '해석 의뢰 접수' : '편집 권한이 필요합니다'}</button>
+        <button className="intake-submit" disabled={!canCreate || saving || !projectId || !selectedType || !ownerUserId} data-testid="submit-request-intake">{saving ? <LoaderCircle className="spin" /> : <ClipboardPlus />} {canCreate ? '해석 의뢰 접수' : '편집 권한이 필요합니다'}</button>
       </section>
     </form>
   </section>

@@ -1,8 +1,16 @@
 # Analysis Canvas
 
+## 권한 기능 문서
+
+- [구축 계획서](docs/access-control-and-menu-policy-plan.md): 제품 결정, 요구사항 ID와 완료 기준
+- [구현 수행서](docs/access-control-and-menu-policy-implementation-guide.md): Luna가 재현 가능한 단계별 구현·시험 절차
+- [기능 사양서](docs/access-control-functional-specification.md): 역할, permission, 메뉴, API, 데이터와 운영 계약
+- [변경 이력](docs/access-control-change-log.md): 실제 변경 범위, 마이그레이션, 검증 결과와 인수 조건
+- [배포·보안·백업 가이드](docs/deployment-security-backup-guide.md): Windows VM 운영과 복구 절차
+
 ## 다른 Windows PC에서 최초 설치
 
-대상 PC에는 Python 3.12, Node.js 20 이상, 실행 중인 PostgreSQL 서비스가 필요하다.
+최종 운영 대상은 사내 Windows VM이다. VM에는 Python 3.12, Node.js 20 이상, 실행 중인 PostgreSQL 서비스, HTTPS 리버스 프록시, 사내 OIDC/임직원 디렉터리 연결이 필요하다. 가정용 Windows PC는 개발·테스트 용도로 유지한다.
 
 1. GitHub에서 저장소 전체를 다운로드한다.
 2. VS Code에서 저장소의 최상위 폴더를 연다.
@@ -10,6 +18,8 @@
 4. 회사 HTTP/HTTPS 프록시와 예외 주소를 입력한다. 프록시가 없으면 Enter를 누른다.
 5. PostgreSQL 처리 방식으로 새 DB 초기화(`Fresh`), 전송 번들 이관(`Transfer`), 기존 DB 유지(`Keep`) 중 하나를 선택한다.
 6. 설치와 연결 검증이 끝나면 `start-postgresql.bat`을 실행한다.
+7. 운영 `.env`에 `DEPLOYMENT_PROFILE=windows-vm-intranet`, `AUTH_MODE=oidc`, `DIRECTORY_MODE=http`를 설정한다. 누락되면 시작 전 검사가 서버 기동을 차단한다.
+8. 사내 계정 연결 전 `backend\scripts\access_migration_preflight.py`의 JSON 결과가 `ready` 또는 승인된 `ready_with_warnings`인지 확인한다.
 
 ```powershell
 .\setup.bat

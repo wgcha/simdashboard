@@ -246,7 +246,11 @@ def test_request_type_is_recommended_from_request_info_then_fixed_to_an_immutabl
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     with connect() as conn:
         conn.execute(
-            "INSERT INTO analysis_requests VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            """
+            INSERT INTO analysis_requests
+                (id, project_id, title, status, owner, requested_at, due_at, overall_note)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
             [request_id, "project-tv-001", "규칙 추천 검증 의뢰", "READY", "규칙 담당자", now, now + timedelta(days=7), "legacy request"],
         )
         conn.execute(

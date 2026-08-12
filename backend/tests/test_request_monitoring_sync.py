@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from app.database_connection import connect
 from app.main import app
 
 
@@ -69,11 +70,22 @@ def test_request_without_load_case_remains_visible_in_operational_monitoring():
             json={"name": "CAD 단독 의뢰 프로젝트", "product_name": "Concept A", "manufacturer": "Demo", "display_size_inch": None, "description": "load case 없음"},
         )
         assert project.status_code == 201, project.text
+        with connect() as conn:
+            assignee = conn.execute(
+                """
+                SELECT users.id FROM users
+                JOIN project_memberships memberships ON memberships.user_id=users.id
+                WHERE memberships.project_id=? AND users.account_status='ACTIVE'
+                ORDER BY users.id LIMIT 1
+                """,
+                [project.json()["id"]],
+            ).fetchone()
+        assert assignee
         request = client.post(
             f"/api/projects/{project.json()['id']}/requests",
             json={
                 "title": "CAD 형상 준비만 수행",
-                "owner": "형상 담당자",
+                "owner_user_id": assignee[0],
                 "due_in_days": 3,
                 "overall_note": "CAD_ONLY",
                 "source_type": "EXTERNAL_SYSTEM",

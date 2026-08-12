@@ -24,6 +24,8 @@ class ConnectionLike(Protocol):
 
 _engine: Engine | None = None
 _engine_url: str | None = None
+_media_engine: Engine | None = None
+_media_engine_url: str | None = None
 _engine_lock = Lock()
 
 
@@ -37,10 +39,24 @@ def _sqlalchemy_url(database_url: str) -> str:
     raise RuntimeError("DATABASE_URL은 postgresql:// 또는 postgresql+psycopg:// 형식이어야 합니다.")
 
 
-def _postgres_engine(database_url: str) -> Engine:
-    global _engine, _engine_url
+def _postgres_engine(database_url: str, *, media: bool = False) -> Engine:
+    global _engine, _engine_url, _media_engine, _media_engine_url
     normalized = _sqlalchemy_url(database_url)
     with _engine_lock:
+        if media:
+            if _media_engine is None or _media_engine_url != normalized:
+                if _media_engine is not None:
+                    _media_engine.dispose()
+                _media_engine = create_engine(
+                    normalized,
+                    pool_pre_ping=True,
+                    pool_size=10,
+                    max_overflow=5,
+                    pool_timeout=10,
+                    pool_recycle=1800,
+                )
+                _media_engine_url = normalized
+            return _media_engine
         if _engine is None or _engine_url != normalized:
             if _engine is not None:
                 _engine.dispose()
@@ -129,6 +145,22 @@ def connect() -> duckdb.DuckDBPyConnection | PostgresConnection:
         if not settings.database_url:
             raise RuntimeError("ANALYSIS_DB_BACKEND=postgresql일 때 DATABASE_URL이 필요합니다.")
         return PostgresConnection(_postgres_engine(settings.database_url))
+    settings.duckdb_path.parent.mkdir(parents=True, exist_ok=True)
+    return duckdb.connect(str(settings.duckdb_path))
+
+
+def media_connect() -> duckdb.DuckDBPyConnection | PostgresConnection:
+    """Open the bounded read/write pool reserved for media work.
+
+    DuckDB has one embedded connection type, so it intentionally shares the
+    normal helper there. PostgreSQL uses a separate SQLAlchemy pool so a slow
+    video response cannot exhaust the ordinary request pool.
+    """
+    settings = database_settings()
+    if settings.backend == "postgresql":
+        if not settings.database_url:
+            raise RuntimeError("ANALYSIS_DB_BACKEND=postgresql일 때 DATABASE_URL이 필요합니다.")
+        return PostgresConnection(_postgres_engine(settings.database_url, media=True))
     settings.duckdb_path.parent.mkdir(parents=True, exist_ok=True)
     return duckdb.connect(str(settings.duckdb_path))
 

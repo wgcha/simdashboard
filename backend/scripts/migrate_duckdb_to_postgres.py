@@ -36,6 +36,8 @@ RELATIONSHIPS = [
     ("media_assets", "analysis_run_id", "analysis_runs", "id", "hard"),
     ("dashboard_versions", "dashboard_id", "dashboards", "id", "hard"),
     ("workspace_layout_versions", "layout_kind", "workspace_layouts", "layout_kind", "hard"),
+    ("project_workspace_layouts", "project_id", "projects", "id", "hard"),
+    ("project_workspace_layout_versions", "project_id", "projects", "id", "hard"),
     ("report_layout_versions", "layout_id", "report_layouts", "id", "hard"),
     ("analysis_run_metadata", "analysis_run_id", "analysis_runs", "id", "warning"),
     ("analysis_run_metadata", "schema_id", "import_schemas", "id", "warning"),
@@ -46,6 +48,14 @@ RELATIONSHIPS = [
     ("batch_execution_attempts", "work_item_id", "request_work_items", "id", "hard"),
     ("batch_execution_attempts", "workflow_run_id", "workflow_runs", "id", "hard"),
     ("batch_execution_events", "attempt_id", "batch_execution_attempts", "id", "hard"),
+    ("project_memberships", "project_id", "projects", "id", "hard"),
+    ("project_memberships", "user_id", "users", "id", "hard"),
+    ("project_invitations", "project_id", "projects", "id", "hard"),
+    ("project_invitations", "resolved_user_id", "users", "id", "warning"),
+    ("role_menu_policies", "menu_id", "menu_definitions", "id", "hard"),
+    ("analysis_requests", "owner_user_id", "users", "id", "warning"),
+    ("request_steps", "owner_user_id", "users", "id", "warning"),
+    ("request_work_items", "owner_user_id", "users", "id", "warning"),
 ]
 
 

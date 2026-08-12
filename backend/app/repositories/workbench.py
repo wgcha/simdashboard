@@ -158,6 +158,7 @@ def ensure_seed_request_work_plans(conn: Any) -> None:
             request_type,
             owner,
             "system",
+            owner_user_id="local-admin",
             source_type="DEPARTMENT_HEAD",
             source_reference="기존 데모 시드",
             requested_by="system",
@@ -358,6 +359,7 @@ class WorkbenchRepository:
         owner: str,
         assigned_by: str,
         *,
+        owner_user_id: str | None = None,
         source_type: str,
         source_reference: str,
         requested_by: str,
@@ -400,11 +402,11 @@ class WorkbenchRepository:
                 """
                 INSERT INTO request_work_items
                     (id, request_id, node_key, task_type_id, task_type_version, sequence_no,
-                     display_name, status, owner, started_by, started_at,
+                     display_name, status, owner, owner_user_id, started_by, started_at,
                      completed_by, completed_at, demo_run_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
                 """,
-                [f"work-item-{uuid4().hex[:12]}", request_id, node["node_key"], node["task_type_id"], node["task_type_version"], node["sequence_no"], node["display_name"], status, owner, "system" if started else None, now if started else None, "system" if completed else None, now if completed else None],
+                [f"work-item-{uuid4().hex[:12]}", request_id, node["node_key"], node["task_type_id"], node["task_type_version"], node["sequence_no"], node["display_name"], status, owner, owner_user_id, "system" if started else None, now if started else None, "system" if completed else None, now if completed else None],
             )
         return self.work_plan(request_id)  # type: ignore[return-value]
 

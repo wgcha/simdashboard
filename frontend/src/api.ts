@@ -1,7 +1,16 @@
 import type { AnalysisRequest, AnalysisRunSummary, AutomationTemplate, DashboardDefinition, DashboardPageSummary, DashboardSummary, DashboardVersion, DashboardVersionDefinition, DropVideoPage, FeatureExample, ImportSchema, ImportSchemaDefinition, LoadCase, Overview, PortfolioLayout, PortfolioOverview, Project, QualityThreshold, ReportLayout, ReportLayoutDefinition, ReportLayoutVersion, ReportTemplateAsset, ReviewItem, RunComparison, RunTrust, VariableDefinition, VariableDefinitionInput, WidgetCatalogItem, Workflow, WorkflowDashboardLayout, WorkflowStep, WorkspaceLayout, WorkspaceLayoutVersion } from './types'
-import { generatedApiClient } from './generated/client'
 import { authenticatedFetch, clearSession } from './auth'
-import type { AuthUser } from './auth'
+import type { AuthUser, ProjectRole } from './auth'
+import type { MenuPolicy } from './features/auth/access'
+
+export type AssigneeCandidate = {
+  user_id: string
+  display_name: string
+  employee_id: string | null
+  department: string | null
+  job_title: string | null
+  role: ProjectRole
+}
 
 const fetch = authenticatedFetch
 
@@ -19,6 +28,7 @@ async function json<T>(response: Response | Promise<Response>): Promise<T> {
       clearSession()
       window.dispatchEvent(new CustomEvent('analysis-auth-expired'))
     }
+    if (response.status === 403) window.dispatchEvent(new CustomEvent('analysis-access-changed'))
     throw new Error(detail || `요청 실패 (${response.status})`)
   }
   return response.json() as Promise<T>
@@ -34,11 +44,12 @@ function arrayBufferToBase64(buffer: ArrayBuffer) {
 }
 
 export const api = {
-  authStatus: () => json<{ mode: 'disabled' | 'password'; authentication_required: boolean }>(fetch('/api/auth/status')),
+  authStatus: () => json<{ mode: 'disabled' | 'password' | 'oidc'; authentication_required: boolean; oidc_start_url: string | null }>(fetch('/api/auth/status')),
   login: (username: string, password: string) => json<{ access_token: string; token_type: 'bearer'; expires_at: number; user: AuthUser }>(fetch('/api/auth/login', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }),
   })),
   me: () => json<AuthUser>(fetch('/api/auth/me')),
+  menuPolicy: () => json<MenuPolicy>(fetch('/api/navigation/menu-policy')),
   logout: () => json<{ status: string }>(fetch('/api/auth/logout', { method: 'POST' })),
   health: () => json<{ status: string; database_backend: 'duckdb' | 'postgresql' }>(fetch('/api/health')),
   portfolio: (params: URLSearchParams) => json<PortfolioOverview>(fetch(`/api/portfolio/overview?${params}`)),
@@ -54,7 +65,8 @@ export const api = {
   createProject: (payload: { name: string; product_name: string; description: string; manufacturer: string; display_size_inch: number | null }) =>
     json<Project>(fetch('/api/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })),
   requests: (projectId: string) => json<AnalysisRequest[]>(fetch(`/api/projects/${projectId}/requests`)),
-  createRequest: (projectId: string, payload: { title: string; owner: string; due_in_days: number; overall_note: string; source_type: 'EXTERNAL_SYSTEM' | 'DEPARTMENT_HEAD'; source_reference: string; requested_by: string; request_type_id: 'design-reliability-validation' | 'design-doe-exploration'; request_type_version: number; assigned_by?: string }) =>
+  assigneeCandidates: (projectId: string, query = '') => json<AssigneeCandidate[]>(fetch(`/api/projects/${encodeURIComponent(projectId)}/assignee-candidates${query.trim() ? `?q=${encodeURIComponent(query.trim())}` : ''}`)),
+  createRequest: (projectId: string, payload: { title: string; owner_user_id: string; due_in_days: number; overall_note: string; source_type: 'EXTERNAL_SYSTEM' | 'DEPARTMENT_HEAD'; source_reference: string; requested_by: string; request_type_id: 'design-reliability-validation' | 'design-doe-exploration'; request_type_version: number }) =>
     json<AnalysisRequest>(fetch(`/api/projects/${projectId}/requests`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })),
   loadCases: (requestId: string) => json<LoadCase[]>(fetch(`/api/requests/${requestId}/load-cases`)),
   dropVideos: (loadCaseId: string, page = 1, pageSize = 20, signal?: AbortSignal) =>
@@ -97,24 +109,28 @@ export const api = {
   updateReviewItem: (annotationId: string, reviewStatus: 'OPEN' | 'IN_REVIEW' | 'RESOLVED', body?: string) =>
     json<ReviewItem>(fetch(`/api/review-items/${annotationId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ review_status: reviewStatus, ...(body ? { body } : {}) }) })),
   workflows: () => json<Workflow[]>(fetch('/api/workflows')),
-  workspaceLayout: async <T extends PortfolioLayout | WorkflowDashboardLayout>(kind: 'portfolio' | 'workflow') => {
-    const { data, error } = await generatedApiClient.GET('/api/workspace-layouts/{layout_kind}', { params: { path: { layout_kind: kind } } })
-    if (error || !data) throw new Error(JSON.stringify(error ?? '저장된 레이아웃을 불러오지 못했습니다.'))
-    return data as WorkspaceLayout<T>
-  },
-  saveWorkspaceLayout: async <T extends PortfolioLayout | WorkflowDashboardLayout>(kind: 'portfolio' | 'workflow', definition: T) => {
-    const { data, error } = await generatedApiClient.PUT('/api/workspace-layouts/{layout_kind}', {
-      params: { path: { layout_kind: kind } },
-      body: { definition: definition as unknown as Record<string, unknown>, updated_by: '대시보드 편집자' },
-    })
-    if (error || !data) throw new Error(JSON.stringify(error ?? '레이아웃을 저장하지 못했습니다.'))
-    return data as WorkspaceLayout<T>
-  },
-  workspaceLayoutVersions: async (kind: 'portfolio' | 'workflow') => {
-    const { data, error } = await generatedApiClient.GET('/api/workspace-layouts/{layout_kind}/versions', { params: { path: { layout_kind: kind } } })
-    if (error || !data) throw new Error(JSON.stringify(error ?? '레이아웃 버전을 불러오지 못했습니다.'))
-    return data as WorkspaceLayoutVersion[]
-  },
+  workspaceLayout: <T extends PortfolioLayout | WorkflowDashboardLayout>(projectId: string, kind: 'portfolio' | 'workflow') =>
+    json<WorkspaceLayout<T>>(fetch(`/api/projects/${encodeURIComponent(projectId)}/workspace-layouts/${kind}`)),
+  saveWorkspaceLayout: <T extends PortfolioLayout | WorkflowDashboardLayout>(projectId: string, kind: 'portfolio' | 'workflow', definition: T) =>
+    json<WorkspaceLayout<T>>(fetch(`/api/projects/${encodeURIComponent(projectId)}/workspace-layouts/${kind}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ definition }),
+    })),
+  workspaceLayoutVersions: (projectId: string, kind: 'portfolio' | 'workflow') =>
+    json<WorkspaceLayoutVersion[]>(fetch(`/api/projects/${encodeURIComponent(projectId)}/workspace-layouts/${kind}/versions`)),
+  adminUsers: (params = new URLSearchParams()) => json<Array<{ id: string; username: string; display_name: string; employee_id: string | null; account_status: 'PENDING' | 'ACTIVE' | 'SUSPENDED'; is_global_admin: boolean; updated_at: string }>>(fetch(`/api/admin/users?${params}`)),
+  updateUserStatus: (userId: string, payload: { account_status: 'PENDING' | 'ACTIVE' | 'SUSPENDED'; expected_updated_at: string; reason: string }) =>
+    json<Record<string, unknown>>(fetch(`/api/admin/users/${encodeURIComponent(userId)}/status`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })),
+  updateGlobalAdmin: (userId: string, payload: { is_global_admin: boolean; expected_updated_at: string; reason: string }) =>
+    json<Record<string, unknown>>(fetch(`/api/admin/users/${encodeURIComponent(userId)}/global-admin`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })),
+  projectMembers: (projectId: string) => json<Array<{ user_id: string; username: string; display_name: string; employee_id: string | null; role: ProjectRole; updated_at: string }>>(fetch(`/api/projects/${encodeURIComponent(projectId)}/members`)),
+  updateProjectMember: (projectId: string, userId: string, role: ProjectRole, expectedUpdatedAt?: string) =>
+    json<Record<string, unknown>>(fetch(`/api/projects/${encodeURIComponent(projectId)}/members/${encodeURIComponent(userId)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ role, expected_updated_at: expectedUpdatedAt }) })),
+  deleteProjectMember: (projectId: string, userId: string) => json<Record<string, unknown>>(fetch(`/api/projects/${encodeURIComponent(projectId)}/members/${encodeURIComponent(userId)}`, { method: 'DELETE' })),
+  updateMenuPolicy: (payload: { expected_version: number; change_note: string; visibility: Partial<Record<ProjectRole, Record<string, boolean>>> }) =>
+    json<MenuPolicy>(fetch('/api/admin/menu-policy', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })),
+  menuPolicyVersions: () => json<Array<{ version: number; created_by: string; created_at: string; source_version: number | null; change_note: string | null }>>(fetch('/api/admin/menu-policy/versions')),
+  restoreMenuPolicy: (version: number) => json<MenuPolicy>(fetch(`/api/admin/menu-policy/versions/${version}/restore`, { method: 'POST' })),
+  auditEvents: (limit = 200) => json<Array<Record<string, unknown>>>(fetch(`/api/audit-events?limit=${limit}`)),
   qualityThresholds: (projectId: string) => json<QualityThreshold[]>(fetch(`/api/projects/${projectId}/quality-thresholds`)),
   updateQualityThreshold: (projectId: string, criterionKey: string, thresholdDouble: number) =>
     json<QualityThreshold>(
@@ -124,7 +140,7 @@ export const api = {
         body: JSON.stringify({ threshold_double: thresholdDouble, updated_by: '관리자' }),
       }),
     ),
-  updateWorkflowStep: (stepId: string, payload: { name: string; status: 'READY' | 'COMPLETED' | 'IN_PROGRESS' | 'WAITING' | 'BLOCKED' | 'FAILED'; owner: string; progress: number; is_optional: boolean; note: string }) =>
+  updateWorkflowStep: (stepId: string, payload: { name: string; status: 'READY' | 'COMPLETED' | 'IN_PROGRESS' | 'WAITING' | 'BLOCKED' | 'FAILED'; owner_user_id: string; progress: number; is_optional: boolean; note: string }) =>
     json<WorkflowStep>(
       fetch(`/api/workflow-steps/${stepId}`, {
         method: 'PATCH',
@@ -132,7 +148,7 @@ export const api = {
         body: JSON.stringify(payload),
       }),
     ),
-  replaceWorkflowSteps: (requestId: string, steps: Array<{ id: string | null; name: string; status: 'READY' | 'COMPLETED' | 'IN_PROGRESS' | 'WAITING' | 'BLOCKED' | 'FAILED'; owner: string; progress: number; is_optional: boolean; note: string }>) =>
+  replaceWorkflowSteps: (requestId: string, steps: Array<{ id: string | null; name: string; status: 'READY' | 'COMPLETED' | 'IN_PROGRESS' | 'WAITING' | 'BLOCKED' | 'FAILED'; owner_user_id: string; progress: number; is_optional: boolean; note: string }>) =>
     json<WorkflowStep[]>(fetch(`/api/requests/${requestId}/workflow-steps`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ steps }) })),
   dashboard: (id = 'dashboard-drop-default') => json<DashboardDefinition>(fetch(`/api/dashboards/${id}`)),
   dashboards: (projectId?: string) => json<DashboardSummary[]>(fetch(`/api/dashboards${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''}`)),

@@ -106,6 +106,10 @@ class WorkItemProgress(StrictModel):
     updated_by: str = Field(min_length=2, max_length=80)
 
 
+class WorkItemAssigneeUpdate(StrictModel):
+    owner_user_id: str = Field(min_length=3, max_length=120)
+
+
 class BatchProfileInput(StrictModel):
     id: str = Field(min_length=3, max_length=80, pattern=r"^[a-z][a-z0-9_-]*$")
     name: str = Field(min_length=2, max_length=120)

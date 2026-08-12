@@ -252,6 +252,6 @@ function DropVideoCard({ video, selected, loop, state, error, setRef, onSelect, 
       <MiniMetricBar label="OPEN CELL" metric={video.evaluation.open_cell} />
       <MiniMetricBar label="CHASSIS" metric={video.evaluation.chassis_rear} />
     </div>
-    <footer><span>{video.format.toUpperCase()} · {video.codec?.toUpperCase() ?? '코덱 미확인'}{video.fast_start ? ' · FAST START' : ''}</span><span>{fileSizeLabel(video.file_size)}</span>{video.drop_direction && <span>{video.drop_direction}</span>}{video.drop_condition && <span>{video.drop_condition}</span>}{video.analysis_version && <span>{video.analysis_version}</span>}</footer>
+    <footer><span>{video.format.toUpperCase()} · {video.codec?.toUpperCase() ?? '코덱 미확인'}{video.fast_start ? ' · FAST START' : ''}</span><span>{fileSizeLabel(video.file_size)}</span>{video.drop_direction && <span>{video.drop_direction}</span>}{video.drop_condition && <span>{video.drop_condition}</span>}{video.analysis_version && <span>{video.analysis_version}</span>}<a href={video.download_url ?? video.video_url} download onClick={(event) => event.stopPropagation()}>다운로드</a></footer>
   </article>
 }

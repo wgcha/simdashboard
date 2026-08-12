@@ -38,10 +38,9 @@ class _CatalogConnection:
 
 class _PostgresStartupConnection:
     def execute(self, statement: str):
-        if "to_regclass('public.workspace_layouts')" in statement:
-            return _FakeResult(("public.workspace_layouts",))
-        if "to_regclass('public.task_type_versions')" in statement:
-            return _FakeResult(("public.task_type_versions",))
+        if "to_regclass('public." in statement:
+            table = statement.split("to_regclass('public.", 1)[1].split("'", 1)[0]
+            return _FakeResult((f"public.{table}",))
         raise AssertionError(f"unexpected startup query: {statement}")
 
 

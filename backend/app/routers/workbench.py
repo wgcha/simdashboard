@@ -7,9 +7,20 @@ from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
+from ..modules.access_control import (
+    REQUEST_EDIT,
+    SYSTEM_CATALOG_MANAGE,
+    WORKFLOW_EDIT,
+    require_any_project_permission,
+    require_assigned_work_item,
+    require_permission,
+    require_resource_permission,
+    resolve_project_assignee,
+)
 from ..database_connection import connect, rows
 from ..repositories.workbench import WorkbenchRepository
-from ..schemas.workbench import BatchDispatchCreate, BatchProfileInput, DemoRunCreate, RequestTypeAssignmentInput, RequestTypeVersionCreate, TaskTypeVersionCreate, WorkItemComplete, WorkItemProgress, WorkItemStart
+from ..schemas.workbench import BatchDispatchCreate, BatchProfileInput, DemoRunCreate, RequestTypeAssignmentInput, RequestTypeVersionCreate, TaskTypeVersionCreate, WorkItemAssigneeUpdate, WorkItemComplete, WorkItemProgress, WorkItemStart
+from ..security import write_audit_event
 from ..services.batch_execution import BatchPreflightError, preflight_batch_profile, validate_profile_definition
 from ..services.demo_runner import DemoRunnerService, WorkbenchValidationError, _topological_nodes
 from ..services.request_monitoring import request_monitoring_summary, sync_request_status
@@ -18,19 +29,26 @@ from ..services.request_monitoring import request_monitoring_summary, sync_reque
 router = APIRouter(prefix="/api", tags=["workbench-demo"])
 
 
+def _audit_execution_override(request: Request, conn: Any, operation: str) -> None:
+    detail = getattr(request.state, "work_execution_override", None)
+    if not detail:
+        return
+    write_audit_event(
+        request=request,
+        principal=request.state.principal,
+        status_code=200,
+        action="WORK_EXECUTION_OVERRIDE",
+        detail={**detail, "operation": operation},
+        connection=conn,
+    )
+
+
 def _bad_request(exc: ValueError) -> HTTPException:
     return HTTPException(status_code=400, detail=str(exc))
 
 
 def _is_admin(request: Request) -> bool:
-    return getattr(getattr(request.state, "principal", None), "role", None) == "admin"
-
-
-def _require_work_item_operator(request: Request, work_item: dict[str, Any]) -> None:
-    principal = getattr(request.state, "principal", None)
-    if principal and (principal.role == "admin" or (principal.role == "editor" and principal.display_name.strip().casefold() == str(work_item["owner"]).strip().casefold())):
-        return
-    raise HTTPException(403, detail={"code": "WORK_ITEM_NOT_ASSIGNED", "item_id": work_item["id"]})
+    return bool(getattr(getattr(request.state, "principal", None), "is_global_admin", False))
 
 
 def _sanitize_batch_profile(profile: dict[str, Any], request: Request) -> dict[str, Any]:
@@ -65,7 +83,8 @@ def list_task_types(all_versions: bool = Query(default=False)) -> list[dict[str,
 
 
 @router.post("/admin/workbench/task-types", status_code=201)
-def create_task_type(payload: TaskTypeVersionCreate) -> dict[str, Any]:
+def create_task_type(payload: TaskTypeVersionCreate, request: Request) -> dict[str, Any]:
+    require_permission(request, SYSTEM_CATALOG_MANAGE)
     with connect() as conn:
         return WorkbenchRepository(conn).create_task_type_version(payload.model_dump())
 
@@ -77,7 +96,8 @@ def list_request_types(all_versions: bool = Query(default=False)) -> list[dict[s
 
 
 @router.post("/admin/workbench/request-types", status_code=201)
-def create_request_type(payload: RequestTypeVersionCreate) -> dict[str, Any]:
+def create_request_type(payload: RequestTypeVersionCreate, request: Request) -> dict[str, Any]:
+    require_permission(request, SYSTEM_CATALOG_MANAGE)
     try:
         _topological_nodes(payload.default_workflow.nodes)
     except WorkbenchValidationError as exc:
@@ -102,13 +122,15 @@ def list_batch_profiles(request: Request, include_inactive: bool = Query(default
 
 
 @router.get("/admin/workbench/batch-profiles/{profile_id}/versions")
-def list_batch_profile_versions(profile_id: str) -> list[dict[str, Any]]:
+def list_batch_profile_versions(profile_id: str, request: Request) -> list[dict[str, Any]]:
+    require_permission(request, SYSTEM_CATALOG_MANAGE)
     with connect() as conn:
         return WorkbenchRepository(conn).list_batch_profile_versions(profile_id)
 
 
 @router.put("/admin/workbench/batch-profiles/{profile_id}")
 def save_batch_profile(profile_id: str, payload: BatchProfileInput, request: Request) -> dict[str, Any]:
+    require_permission(request, SYSTEM_CATALOG_MANAGE)
     if profile_id != payload.id:
         raise HTTPException(422, "경로의 프로필 ID와 본문의 ID가 일치해야 합니다.")
     principal = getattr(request.state, "principal", None)
@@ -157,15 +179,15 @@ def list_batch_attempts(item_id: str, request: Request) -> list[dict[str, Any]]:
 
 @router.post("/workbench/work-items/{item_id}/batch-dispatch", status_code=201)
 def dispatch_batch_work_item(item_id: str, payload: BatchDispatchCreate, request: Request) -> dict[str, Any]:
-    principal = getattr(request.state, "principal", None)
-    created_by = principal.display_name if principal and principal.user_id != "local-admin" else payload.created_by.strip()
+    principal = request.state.principal
+    created_by = principal.display_name
     with connect() as conn:
         repository = WorkbenchRepository(conn)
         work_items = rows(conn.execute("SELECT * FROM request_work_items WHERE id=?", [item_id]))
         if not work_items:
             raise HTTPException(404, detail={"code": "WORK_ITEM_NOT_FOUND", "item_id": item_id})
         work_item = work_items[0]
-        _require_work_item_operator(request, work_item)
+        require_assigned_work_item(request, item_id, conn=conn)
         existing_attempt = repository.batch_attempt_by_key(item_id, payload.idempotency_key)
         if existing_attempt:
             if existing_attempt.get("workflow_run_id"):
@@ -184,6 +206,7 @@ def dispatch_batch_work_item(item_id: str, payload: BatchDispatchCreate, request
         provisional_preview = f'"{profile["solver_path"]}" {profile["arguments_template"]}'.strip()
         conn.execute("BEGIN TRANSACTION")
         try:
+            _audit_execution_override(request, conn, "batch_dispatch")
             repository.insert_batch_attempt({
                 "id": attempt_id,
                 "work_item_id": item_id,
@@ -301,8 +324,9 @@ def resolve_request_type(request_id: str) -> dict[str, Any]:
 @router.put("/workbench/requests/{request_id}/request-type")
 def assign_request_type(request_id: str, payload: RequestTypeAssignmentInput, request: Request) -> dict[str, Any]:
     principal = request.state.principal
-    source = "ADMIN" if principal.role == "admin" else "USER"
+    source = "ADMIN" if principal.is_global_admin else "USER"
     with connect() as conn:
+        require_resource_permission(request, REQUEST_EDIT, "request", request_id, conn=conn)
         if WorkbenchRepository(conn).work_plan(request_id):
             raise HTTPException(
                 409,
@@ -322,6 +346,12 @@ def create_demo_run(payload: DemoRunCreate, request: Request) -> dict[str, Any]:
     if principal:
         payload = payload.model_copy(update={"created_by": principal.display_name})
     with connect() as conn:
+        if payload.request_id:
+            require_resource_permission(request, WORKFLOW_EDIT, "request", payload.request_id, conn=conn)
+        else:
+            # Standalone demo runs do not mutate a project resource. Keep the
+            # existing API while requiring workflow-edit capability somewhere.
+            require_any_project_permission(request, WORKFLOW_EDIT, conn=conn)
         try:
             return DemoRunnerService(WorkbenchRepository(conn)).create_run(payload)
         except WorkbenchValidationError as exc:
@@ -360,10 +390,60 @@ def get_request_work_plan(request_id: str) -> dict[str, Any]:
         return {"request_id": request_id, **summary}
 
 
+@router.patch("/workbench/work-items/{item_id}/assignee")
+def reassign_work_item(item_id: str, payload: WorkItemAssigneeUpdate, request: Request) -> dict[str, Any]:
+    principal = request.state.principal
+    with connect() as conn:
+        conn.execute("BEGIN TRANSACTION")
+        try:
+            stored = rows(
+                conn.execute(
+                    """
+                    SELECT items.*, requests.project_id
+                    FROM request_work_items items
+                    JOIN analysis_requests requests ON requests.id=items.request_id
+                    WHERE items.id=?
+                    """,
+                    [item_id],
+                )
+            )
+            if not stored:
+                raise HTTPException(404, detail={"code": "WORK_ITEM_NOT_FOUND", "item_id": item_id})
+            item = stored[0]
+            require_resource_permission(request, WORKFLOW_EDIT, "work_item", item_id, conn=conn)
+            if item["status"] == "COMPLETED":
+                raise HTTPException(409, detail={"code": "WORK_ITEM_REASSIGNMENT_FINAL", "item_id": item_id})
+            assignee = resolve_project_assignee(conn, item["project_id"], payload.owner_user_id)
+            conn.execute(
+                "UPDATE request_work_items SET owner=?, owner_user_id=? WHERE id=?",
+                [assignee.display_name, assignee.user_id, item_id],
+            )
+            write_audit_event(
+                request=request,
+                principal=principal,
+                status_code=200,
+                action="WORK_ITEM_ASSIGNEE_CHANGED",
+                detail={
+                    "project_id": item["project_id"],
+                    "request_id": item["request_id"],
+                    "work_item_id": item_id,
+                    "old_owner_user_id": item.get("owner_user_id"),
+                    "new_owner_user_id": assignee.user_id,
+                },
+                connection=conn,
+            )
+            updated = rows(conn.execute("SELECT * FROM request_work_items WHERE id=?", [item_id]))[0]
+            conn.execute("COMMIT")
+            return updated
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+
+
 @router.post("/workbench/work-items/{item_id}/start")
 def start_work_item(item_id: str, payload: WorkItemStart, request: Request) -> dict[str, Any]:
-    principal = getattr(request.state, "principal", None)
-    started_by = principal.display_name if principal and principal.user_id != "local-admin" else payload.started_by.strip()
+    principal = request.state.principal
+    started_by = principal.display_name
     with connect() as conn:
         conn.execute("BEGIN TRANSACTION")
         try:
@@ -374,7 +454,8 @@ def start_work_item(item_id: str, payload: WorkItemStart, request: Request) -> d
                     detail={"code": "WORK_ITEM_NOT_FOUND", "item_id": item_id},
                 )
             item = items[0]
-            _require_work_item_operator(request, item)
+            require_assigned_work_item(request, item_id, conn=conn)
+            _audit_execution_override(request, conn, "start")
             request_id = item["request_id"]
             if item["status"] in {"IN_PROGRESS", "COMPLETED"}:
                 summary = request_monitoring_summary(conn, request_id)
@@ -435,8 +516,8 @@ def start_work_item(item_id: str, payload: WorkItemStart, request: Request) -> d
 
 @router.patch("/workbench/work-items/{item_id}/progress")
 def update_work_item_progress(item_id: str, payload: WorkItemProgress, request: Request) -> dict[str, Any]:
-    principal = getattr(request.state, "principal", None)
-    updated_by = principal.display_name if principal and principal.user_id != "local-admin" else payload.updated_by.strip()
+    principal = request.state.principal
+    updated_by = principal.display_name
     with connect() as conn:
         conn.execute("BEGIN TRANSACTION")
         try:
@@ -444,7 +525,8 @@ def update_work_item_progress(item_id: str, payload: WorkItemProgress, request: 
             if not items:
                 raise HTTPException(404, detail={"code": "WORK_ITEM_NOT_FOUND", "item_id": item_id})
             item = items[0]
-            _require_work_item_operator(request, item)
+            require_assigned_work_item(request, item_id, conn=conn)
+            _audit_execution_override(request, conn, "progress")
             if item["status"] != "IN_PROGRESS":
                 raise HTTPException(409, detail={"code": "WORK_ITEM_NOT_IN_PROGRESS", "item_id": item_id})
             current = int(item.get("progress") or 0)
@@ -471,8 +553,8 @@ def update_work_item_progress(item_id: str, payload: WorkItemProgress, request: 
 
 @router.post("/workbench/work-items/{item_id}/complete")
 def complete_work_item(item_id: str, payload: WorkItemComplete, request: Request) -> dict[str, Any]:
-    principal = getattr(request.state, "principal", None)
-    completed_by = principal.display_name if principal and principal.user_id != "local-admin" else payload.completed_by.strip()
+    principal = request.state.principal
+    completed_by = principal.display_name
     with connect() as conn:
         conn.execute("BEGIN TRANSACTION")
         try:
@@ -488,7 +570,8 @@ def complete_work_item(item_id: str, payload: WorkItemComplete, request: Request
                     detail={"code": "WORK_ITEM_NOT_FOUND", "item_id": item_id},
                 )
             item = items[0]
-            _require_work_item_operator(request, item)
+            require_assigned_work_item(request, item_id, conn=conn)
+            _audit_execution_override(request, conn, "complete")
             request_id = item["request_id"]
 
             if item["status"] == "COMPLETED":

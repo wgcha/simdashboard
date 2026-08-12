@@ -20,10 +20,32 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
-from .database import connect, ensure_project_quality_thresholds, initialize_database, json_value, rows
+from .modules.access_control import (
+    DASHBOARD_EDIT,
+    PROJECT_DATA_VIEW,
+    PROJECT_LAYOUT_EDIT,
+    PROJECT_THRESHOLD_MANAGE,
+    PROJECT_VARIABLE_MANAGE,
+    REPORT_EXPORT,
+    REQUEST_CREATE,
+    REQUEST_EDIT,
+    RESULT_IMPORT,
+    RESULT_REVIEW,
+    SYSTEM_CATALOG_MANAGE,
+    SYSTEM_USER_APPROVE,
+    WORKFLOW_EDIT,
+    has_permission,
+    require_permission,
+    require_resource_permission,
+    resolve_project_assignee,
+)
+from .database import connect, ensure_project_quality_thresholds, ensure_workspace_layouts, initialize_database, json_value, rows
 from .config import database_settings, security_settings
 from .folder_import import FolderImportError, scan_folder
 from .media_policy import validate_media_metadata
+from .repositories.media_repository import get_blob, get_drop_video, get_media_asset, list_drop_videos
+from .services.media_http import build_media_response
+from .services.media_storage_service import attach_stored_media, store_file
 from .result_import import CSV_TEMPLATE, JSON_TEMPLATE, ResultFormatError, parse_result_file
 from .repositories.portfolio import PortfolioRepository
 from .repositories.variable_catalog import VariableCatalogRepository
@@ -35,6 +57,7 @@ from .schemas.api import (
     AnalysisPageSummary,
     AnalysisPageUpdate,
     AnalysisRequestCreate,
+    AssigneeUpdate,
     DashboardClone,
     DashboardDefinition,
     DropVideoPageResponse,
@@ -57,8 +80,9 @@ from .schemas.api import (
     WorkflowStepUpdate,
     WorkflowStepsReplace,
 )
-from .security import SecurityMiddleware
+from .security import SecurityMiddleware, write_audit_event
 from .routers.security import router as security_router
+from .routers.access_control import router as access_control_router
 from .routers.workbench import router as workbench_router
 from .services.drop_video_demo import (
     DEMO_DROP_VIDEO_LOAD_CASE_IDS,
@@ -86,8 +110,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.mount("/assets", StaticFiles(directory=str(__import__("pathlib").Path(__file__).resolve().parents[1] / "assets")), name="assets")
+app.mount("/assets", StaticFiles(directory=str(__import__("pathlib").Path(__file__).resolve().parents[1] / "public_assets")), name="assets")
 app.include_router(security_router)
+app.include_router(access_control_router)
 app.include_router(workbench_router)
 
 
@@ -262,44 +287,74 @@ def list_import_schemas() -> list[dict[str, Any]]:
 
 
 @app.post("/api/import-schemas", status_code=201)
-def create_import_schema(payload: ImportSchemaPayload) -> dict[str, Any]:
+def create_import_schema(payload: ImportSchemaPayload, request: Request) -> dict[str, Any]:
     if not isinstance(payload.definition.get("mappings"), list):
         raise HTTPException(422, "스키마 정의에는 mappings 배열이 필요합니다.")
     schema_id, now = f"import-schema-{uuid4().hex[:12]}", datetime.now(timezone.utc).replace(tzinfo=None)
     definition = {**payload.definition, "schema_id": payload.definition.get("schema_id") or schema_id, "version": 1}
     encoded = json.dumps(definition, ensure_ascii=False)
+    principal = request.state.principal
     with connect() as conn:
-        conn.execute("INSERT INTO import_schemas VALUES (?, ?, ?, ?, true, ?, ?, ?)", [schema_id, payload.name.strip(), payload.description.strip(), encoded, now, now, payload.updated_by.strip()])
-        conn.execute("INSERT INTO import_schema_versions VALUES (?, 1, ?, ?, ?)", [schema_id, encoded, now, payload.updated_by.strip()])
-    return {"id": schema_id, "name": payload.name.strip(), "description": payload.description.strip(), "definition": definition, "created_at": now, "updated_at": now, "updated_by": payload.updated_by.strip()}
-
-
-@app.put("/api/import-schemas/{schema_id}")
-def update_import_schema(schema_id: str, payload: ImportSchemaPayload) -> dict[str, Any]:
-    if not isinstance(payload.definition.get("mappings"), list):
-        raise HTTPException(422, "스키마 정의에는 mappings 배열이 필요합니다.")
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
-    with connect() as conn:
-        existing = conn.execute("SELECT definition_json, created_at FROM import_schemas WHERE id=? AND is_active=true", [schema_id]).fetchone()
-        if not existing:
-            raise HTTPException(404, "폴더 스키마를 찾을 수 없습니다.")
-        previous = json_value(existing[0]) or {}
-        version = int(previous.get("version") or 1) + 1
-        definition = {**payload.definition, "schema_id": previous.get("schema_id") or schema_id, "version": version}
-        encoded = json.dumps(definition, ensure_ascii=False)
         conn.execute("BEGIN TRANSACTION")
         try:
-            conn.execute("UPDATE import_schemas SET name=?, description=?, definition_json=?, updated_at=?, updated_by=? WHERE id=?", [payload.name.strip(), payload.description.strip(), encoded, now, payload.updated_by.strip(), schema_id])
-            conn.execute("INSERT INTO import_schema_versions VALUES (?, ?, ?, ?, ?)", [schema_id, version, encoded, now, payload.updated_by.strip()])
+            require_permission(request, SYSTEM_CATALOG_MANAGE, conn=conn)
+            conn.execute(
+                """
+                INSERT INTO import_schemas
+                    (id, name, description, definition_json, is_active, created_at, updated_at, updated_by)
+                VALUES (?, ?, ?, ?, true, ?, ?, ?)
+                """,
+                [schema_id, payload.name.strip(), payload.description.strip(), encoded, now, now, principal.display_name],
+            )
+            conn.execute(
+                """
+                INSERT INTO import_schema_versions
+                    (schema_id, version, definition_json, created_at, updated_by)
+                VALUES (?, 1, ?, ?, ?)
+                """,
+                [schema_id, encoded, now, principal.display_name],
+            )
+            write_audit_event(request=request, principal=principal, status_code=201, action="IMPORT_SCHEMA_CREATED", detail={"schema_id": schema_id}, connection=conn)
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
             raise
-    return {"id": schema_id, "name": payload.name.strip(), "description": payload.description.strip(), "definition": definition, "created_at": existing[1], "updated_at": now, "updated_by": payload.updated_by.strip()}
+    return {"id": schema_id, "name": payload.name.strip(), "description": payload.description.strip(), "definition": definition, "created_at": now, "updated_at": now, "updated_by": principal.display_name}
+
+
+@app.put("/api/import-schemas/{schema_id}")
+def update_import_schema(schema_id: str, payload: ImportSchemaPayload, request: Request) -> dict[str, Any]:
+    if not isinstance(payload.definition.get("mappings"), list):
+        raise HTTPException(422, "스키마 정의에는 mappings 배열이 필요합니다.")
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    principal = request.state.principal
+    with connect() as conn:
+        conn.execute("BEGIN TRANSACTION")
+        try:
+            require_permission(request, SYSTEM_CATALOG_MANAGE, conn=conn)
+            existing = conn.execute("SELECT definition_json, created_at FROM import_schemas WHERE id=? AND is_active=true", [schema_id]).fetchone()
+            if not existing:
+                raise HTTPException(404, "폴더 스키마를 찾을 수 없습니다.")
+            previous = json_value(existing[0]) or {}
+            version = int(previous.get("version") or 1) + 1
+            definition = {**payload.definition, "schema_id": previous.get("schema_id") or schema_id, "version": version}
+            encoded = json.dumps(definition, ensure_ascii=False)
+            conn.execute("UPDATE import_schemas SET name=?, description=?, definition_json=?, updated_at=?, updated_by=? WHERE id=?", [payload.name.strip(), payload.description.strip(), encoded, now, principal.display_name, schema_id])
+            conn.execute(
+                "INSERT INTO import_schema_versions (schema_id, version, definition_json, created_at, updated_by) VALUES (?, ?, ?, ?, ?)",
+                [schema_id, version, encoded, now, principal.display_name],
+            )
+            write_audit_event(request=request, principal=principal, status_code=200, action="IMPORT_SCHEMA_UPDATED", detail={"schema_id": schema_id, "version": version}, connection=conn)
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    return {"id": schema_id, "name": payload.name.strip(), "description": payload.description.strip(), "definition": definition, "created_at": existing[1], "updated_at": now, "updated_by": principal.display_name}
 
 
 @app.delete("/api/import-schemas/{schema_id}")
-def delete_import_schema(schema_id: str) -> dict[str, str]:
+def delete_import_schema(schema_id: str, request: Request) -> dict[str, str]:
+    require_permission(request, SYSTEM_CATALOG_MANAGE)
     with connect() as conn:
         existing = conn.execute("SELECT id FROM import_schemas WHERE id=? AND is_active=true", [schema_id]).fetchone()
         if not existing:
@@ -346,9 +401,11 @@ def export_portfolio_csv(
 
 
 @app.post("/api/projects", status_code=201)
-def create_project(payload: ProjectCreate) -> dict[str, Any]:
+def create_project(payload: ProjectCreate, request: Request) -> dict[str, Any]:
+    require_permission(request, SYSTEM_USER_APPROVE)
     project_id = f"project-{uuid4().hex[:12]}"
     now = datetime.now(timezone.utc).replace(tzinfo=None)
+    principal = request.state.principal
     with connect() as conn:
         conn.execute(
             "INSERT INTO projects VALUES (?, ?, ?, ?, ?)",
@@ -363,6 +420,23 @@ def create_project(payload: ProjectCreate) -> dict[str, Any]:
             if value:
                 conn.execute("INSERT INTO product_information VALUES (?, ?, ?, ?, ?, ?, ?)", [f"product-{uuid4().hex[:12]}", project_id, category, label, value, None, json.dumps(metadata, ensure_ascii=False)])
         ensure_project_quality_thresholds(conn)
+        ensure_workspace_layouts(conn)
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO project_memberships
+                (id, project_id, user_id, role, created_by, created_at, updated_by, updated_at)
+            VALUES (?, ?, ?, 'admin', ?, ?, ?, ?)
+            """,
+            [f"membership-{uuid4().hex[:20]}", project_id, principal.user_id, principal.user_id, now, principal.user_id, now],
+        )
+        write_audit_event(
+            request=request,
+            principal=principal,
+            status_code=201,
+            action="PROJECT_CREATED",
+            detail={"project_id": project_id},
+            connection=conn,
+        )
     return {"id": project_id, **payload.model_dump(), "created_at": now}
 
 
@@ -378,30 +452,39 @@ def get_requests(project_id: str) -> list[dict[str, Any]]:
 
 
 @app.post("/api/projects/{project_id}/requests", status_code=201)
-def create_request(project_id: str, payload: AnalysisRequestCreate) -> dict[str, Any]:
+def create_request(project_id: str, payload: AnalysisRequestCreate, request: Request) -> dict[str, Any]:
     request_id = f"request-{uuid4().hex[:12]}"
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     due_at = now + timedelta(days=payload.due_in_days)
+    principal = request.state.principal
     with connect() as conn:
-        if conn.execute("SELECT id FROM projects WHERE id = ?", [project_id]).fetchone() is None:
-            raise HTTPException(404, "프로젝트를 찾을 수 없습니다.")
-        repository = WorkbenchRepository(conn)
-        request_type = repository.get_request_type(payload.request_type_id, payload.request_type_version)
-        if not request_type or not request_type["is_active"]:
-            raise HTTPException(
-                404,
-                detail={
-                    "code": "REQUEST_TYPE_NOT_FOUND",
-                    "request_type_id": payload.request_type_id,
-                    "request_type_version": payload.request_type_version,
-                },
-            )
-        assigned_by = (payload.assigned_by or payload.owner).strip()
         conn.execute("BEGIN TRANSACTION")
         try:
+            if conn.execute("SELECT id FROM projects WHERE id = ?", [project_id]).fetchone() is None:
+                raise HTTPException(404, "프로젝트를 찾을 수 없습니다.")
+            require_permission(request, REQUEST_CREATE, project_id, conn=conn)
+            assignee = resolve_project_assignee(conn, project_id, payload.owner_user_id)
+            repository = WorkbenchRepository(conn)
+            request_type = repository.get_request_type(payload.request_type_id, payload.request_type_version)
+            if not request_type or not request_type["is_active"]:
+                raise HTTPException(
+                    404,
+                    detail={
+                        "code": "REQUEST_TYPE_NOT_FOUND",
+                        "request_type_id": payload.request_type_id,
+                        "request_type_version": payload.request_type_version,
+                    },
+                )
+            assigned_by = principal.display_name
             conn.execute(
-                "INSERT INTO analysis_requests VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                [request_id, project_id, payload.title.strip(), "READY", payload.owner.strip(), now, due_at, payload.overall_note.strip()],
+                """
+                INSERT INTO analysis_requests
+                    (id, project_id, title, status, owner, owner_user_id,
+                     requested_at, due_at, overall_note)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [request_id, project_id, payload.title.strip(), "READY", assignee.display_name,
+                 assignee.user_id, now, due_at, payload.overall_note.strip()],
             )
             repository.assign_request_type(
                 request_id,
@@ -413,11 +496,24 @@ def create_request(project_id: str, payload: AnalysisRequestCreate) -> dict[str,
             repository.create_work_plan(
                 request_id,
                 request_type,
-                payload.owner.strip(),
+                assignee.display_name,
                 assigned_by,
+                owner_user_id=assignee.user_id,
                 source_type=payload.source_type,
                 source_reference=payload.source_reference.strip(),
-                requested_by=payload.requested_by.strip(),
+                requested_by=principal.display_name,
+            )
+            write_audit_event(
+                request=request,
+                principal=principal,
+                status_code=201,
+                action="ANALYSIS_REQUEST_CREATED",
+                detail={
+                    "project_id": project_id,
+                    "request_id": request_id,
+                    "owner_user_id": assignee.user_id,
+                },
+                connection=conn,
             )
             conn.execute("COMMIT")
         except (FileExistsError, PermissionError) as exc:
@@ -431,7 +527,8 @@ def create_request(project_id: str, payload: AnalysisRequestCreate) -> dict[str,
         "project_id": project_id,
         "title": payload.title.strip(),
         "status": "READY",
-        "owner": payload.owner.strip(),
+        "owner": assignee.display_name,
+        "owner_user_id": assignee.user_id,
         "requested_at": now,
         "due_at": due_at,
         "overall_note": payload.overall_note.strip(),
@@ -440,8 +537,45 @@ def create_request(project_id: str, payload: AnalysisRequestCreate) -> dict[str,
         "scenario_name": request_type["display_name"],
         "source_type": payload.source_type,
         "source_reference": payload.source_reference.strip(),
-        "requested_by": payload.requested_by.strip(),
+        "requested_by": principal.display_name,
     }
+
+
+@app.patch("/api/requests/{request_id}/assignee")
+def reassign_request(request_id: str, payload: AssigneeUpdate, request: Request) -> dict[str, Any]:
+    principal = request.state.principal
+    with connect() as conn:
+        conn.execute("BEGIN TRANSACTION")
+        try:
+            stored = rows(conn.execute("SELECT * FROM analysis_requests WHERE id=?", [request_id]))
+            if not stored:
+                raise HTTPException(404, detail={"code": "REQUEST_NOT_FOUND", "request_id": request_id})
+            current = stored[0]
+            require_permission(request, REQUEST_EDIT, current["project_id"], conn=conn)
+            assignee = resolve_project_assignee(conn, current["project_id"], payload.owner_user_id)
+            conn.execute(
+                "UPDATE analysis_requests SET owner=?, owner_user_id=? WHERE id=?",
+                [assignee.display_name, assignee.user_id, request_id],
+            )
+            write_audit_event(
+                request=request,
+                principal=principal,
+                status_code=200,
+                action="REQUEST_ASSIGNEE_CHANGED",
+                detail={
+                    "project_id": current["project_id"],
+                    "request_id": request_id,
+                    "old_owner_user_id": current.get("owner_user_id"),
+                    "new_owner_user_id": assignee.user_id,
+                },
+                connection=conn,
+            )
+            updated = rows(conn.execute("SELECT * FROM analysis_requests WHERE id=?", [request_id]))[0]
+            conn.execute("COMMIT")
+            return updated
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
 
 
 @app.get("/api/requests/{request_id}/load-cases")
@@ -461,6 +595,7 @@ def get_load_cases(request_id: str) -> list[dict[str, Any]]:
 @app.get("/api/load-cases/{load_case_id}/drop-videos", response_model=DropVideoPageResponse)
 def get_drop_videos(
     load_case_id: str,
+    request: Request,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=20),
 ) -> dict[str, Any]:
@@ -474,11 +609,43 @@ def get_drop_videos(
             """,
             [load_case_id],
         ).fetchone()
+        require_resource_permission(request, PROJECT_DATA_VIEW, "load_case", load_case_id, conn=conn)
+        stored_videos = list_drop_videos(conn, load_case_id)
     if context is None:
         raise HTTPException(404, "하중 경우를 찾을 수 없습니다.")
 
     videos: list[dict[str, Any]] = []
-    if load_case_id in DEMO_DROP_VIDEO_LOAD_CASE_IDS:
+    if stored_videos:
+        for item in stored_videos:
+            scene = DROP_VIDEO_DEMO_BY_ID.get(item["video_id"])
+            metadata = json_value(item.get("metadata_json")) or {}
+            path = DROP_VIDEO_SOURCE_DIR / str(item["original_filename"])
+            probe = probe_mp4(path) if path.is_file() else None
+            videos.append(
+                {
+                    "video_id": item["video_id"],
+                    "scene_id": item["video_id"],
+                    "scene_name": item["scene_name"],
+                    "video_url": f"/api/drop-videos/{item['video_id']}/content",
+                    "download_url": f"/api/drop-videos/{item['video_id']}/download",
+                    "thumbnail_url": None,
+                    "duration": None,
+                    "file_size": int(item["file_size"]),
+                    "format": "mp4" if str(item["mime_type"]) == "video/mp4" else "webm",
+                    "codec": probe.codec if probe else None,
+                    "fast_start": probe.fast_start if probe else None,
+                    "sort_order": int(item["sort_order"]),
+                    "drop_direction": metadata.get("drop_direction"),
+                    "drop_condition": metadata.get("drop_condition"),
+                    "analysis_version": metadata.get("analysis_version"),
+                    "evaluation": build_demo_evaluation(scene) if scene else {
+                        "overall_verdict": "PASS",
+                        "open_cell": {"critical_value": 0, "threshold": 75, "unit": "MPa", "verdict": "PASS", "metrics": {}},
+                        "chassis_rear": {"critical_value": 0, "threshold": 5, "unit": "mm", "verdict": "PASS", "metrics": {}},
+                    },
+                }
+            )
+    elif load_case_id in DEMO_DROP_VIDEO_LOAD_CASE_IDS:
         for scene in DROP_VIDEO_DEMO_SCENES:
             path = DROP_VIDEO_SOURCE_DIR / scene.filename
             if not path.is_file():
@@ -490,6 +657,7 @@ def get_drop_videos(
                     "scene_id": scene.video_id,
                     "scene_name": scene.scene_name,
                     "video_url": f"/api/drop-videos/{scene.video_id}/content",
+                    "download_url": f"/api/drop-videos/{scene.video_id}/download",
                     "thumbnail_url": None,
                     "duration": None,
                     "file_size": path.stat().st_size,
@@ -534,11 +702,44 @@ def get_drop_videos(
     }
 
 
-@app.get("/api/drop-videos/{video_id}/content")
-def get_drop_video_content(video_id: str) -> FileResponse:
+def _media_audit_callback(request: Request, action: str, bytes_yielded: int, status_code: int) -> None:
+    try:
+        with connect() as audit_connection:
+            write_audit_event(
+                request=request,
+                principal=getattr(request.state, "principal", None),
+                status_code=status_code,
+                action=f"MEDIA_STREAM_{action}",
+                detail={"bytes_yielded_to_asgi": bytes_yielded},
+                connection=audit_connection,
+            )
+    except Exception:
+        # Observability must not turn a successful media response into a 5xx.
+        return
+
+
+@app.get("/api/drop-videos/{video_id}/content", operation_id="get_drop_video_content")
+@app.head("/api/drop-videos/{video_id}/content", include_in_schema=False)
+def get_drop_video_content(video_id: str, request: Request) -> Response:
+    with connect() as conn:
+        stored = get_drop_video(conn, video_id)
+        if stored:
+            require_resource_permission(request, PROJECT_DATA_VIEW, "drop_video", video_id, conn=conn)
+            blob = get_blob(conn, str(stored["blob_id"]))
+            if blob is None:
+                raise HTTPException(404, "예제 영상 blob을 찾을 수 없습니다.")
+            return build_media_response(
+                request,
+                blob=blob,
+                mime_type=str(stored["mime_type"]),
+                filename=str(stored["original_filename"]),
+                audit=lambda action, yielded, status: _media_audit_callback(request, action, yielded, status),
+            )
     scene = DROP_VIDEO_DEMO_BY_ID.get(video_id)
     if scene is None:
         raise HTTPException(404, "허용된 예제 영상을 찾을 수 없습니다.")
+    with connect() as conn:
+        require_resource_permission(request, PROJECT_DATA_VIEW, "load_case", "loadcase-drop-bottom-001", conn=conn)
     source_root = DROP_VIDEO_SOURCE_DIR.resolve()
     path = (source_root / scene.filename).resolve()
     if path.parent != source_root or not path.is_file():
@@ -546,11 +747,42 @@ def get_drop_video_content(video_id: str) -> FileResponse:
     return FileResponse(path, media_type="video/mp4")
 
 
+@app.get("/api/drop-videos/{video_id}/download", operation_id="download_drop_video")
+@app.head("/api/drop-videos/{video_id}/download", include_in_schema=False)
+def download_drop_video(video_id: str, request: Request) -> Response:
+    with connect() as conn:
+        stored = get_drop_video(conn, video_id)
+        if stored:
+            require_resource_permission(request, PROJECT_DATA_VIEW, "drop_video", video_id, conn=conn)
+            blob = get_blob(conn, str(stored["blob_id"]))
+            if blob is None:
+                raise HTTPException(404, "예제 영상 blob을 찾을 수 없습니다.")
+            return build_media_response(
+                request,
+                blob=blob,
+                mime_type=str(stored["mime_type"]),
+                filename=str(stored["original_filename"]),
+                download=True,
+                audit=lambda action, yielded, status: _media_audit_callback(request, action, yielded, status),
+            )
+    scene = DROP_VIDEO_DEMO_BY_ID.get(video_id)
+    if scene is None:
+        raise HTTPException(404, "허용된 예제 영상을 찾을 수 없습니다.")
+    with connect() as conn:
+        require_resource_permission(request, PROJECT_DATA_VIEW, "load_case", "loadcase-drop-bottom-001", conn=conn)
+    source_root = DROP_VIDEO_SOURCE_DIR.resolve()
+    path = (source_root / scene.filename).resolve()
+    if path.parent != source_root or not path.is_file():
+        raise HTTPException(404, "예제 영상 파일을 찾을 수 없습니다.")
+    return FileResponse(path, media_type="video/mp4", filename=scene.filename)
+
+
 @app.post("/api/requests/{request_id}/load-cases", status_code=201)
-def create_load_case(request_id: str, payload: LoadCaseCreate) -> dict[str, Any]:
+def create_load_case(request_id: str, payload: LoadCaseCreate, request: Request) -> dict[str, Any]:
     load_case_id = f"loadcase-{uuid4().hex[:12]}"
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     with connect() as conn:
+        require_resource_permission(request, REQUEST_EDIT, "request", request_id, conn=conn)
         if conn.execute("SELECT id FROM analysis_requests WHERE id = ?", [request_id]).fetchone() is None:
             raise HTTPException(404, "해석 의뢰를 찾을 수 없습니다.")
         conn.execute(
@@ -574,8 +806,11 @@ def get_result_import_template(file_format: Literal["csv", "json", "radioss-csv"
 
 
 @app.post("/api/load-cases/{load_case_id}/results/import")
-def import_analysis_results(load_case_id: str, payload: ResultImportPayload) -> dict[str, Any]:
+def import_analysis_results(load_case_id: str, payload: ResultImportPayload, request: Request) -> dict[str, Any]:
     with connect() as conn:
+        require_resource_permission(request, RESULT_IMPORT, "load_case", load_case_id, conn=conn)
+        principal = request.state.principal
+        actor_name = principal.display_name
         context = conn.execute(
             """
             SELECT lc.id, lc.request_id, ar.project_id
@@ -624,7 +859,7 @@ def import_analysis_results(load_case_id: str, payload: ResultImportPayload) -> 
                         "description": f"결과 파일 적재: {payload.filename}",
                         "threshold": item["threshold"],
                         "result_group": item.get("analysis", "CUSTOM"),
-                        "updated_by": payload.author.strip(),
+                        "updated_by": actor_name,
                     })
             for item in parsed["time_series"]:
                 if not catalog_repository.get(load_case_id, item["variable_key"], include_inactive=True):
@@ -637,7 +872,7 @@ def import_analysis_results(load_case_id: str, payload: ResultImportPayload) -> 
                         "description": f"결과 파일 적재: {payload.filename}",
                         "threshold": None,
                         "result_group": result_group,
-                        "updated_by": payload.author.strip(),
+                        "updated_by": actor_name,
                     })
             conn.execute(
                 "INSERT INTO analysis_runs VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -650,7 +885,7 @@ def import_analysis_results(load_case_id: str, payload: ResultImportPayload) -> 
                      parser_version, metadata_json, created_at)
                 VALUES (?, 'FILE_UPLOAD', ?, ?, NULL, NULL, 'result-import-v1', ?, ?)
                 """,
-                [run_id, payload.filename, hashlib.sha256(payload.content.encode("utf-8")).hexdigest(), json.dumps({"author": payload.author.strip()}, ensure_ascii=False), now],
+                [run_id, payload.filename, hashlib.sha256(payload.content.encode("utf-8")).hexdigest(), json.dumps({"author_user_id": principal.user_id}, ensure_ascii=False), now],
             )
             for item in parsed["scalars"]:
                 conn.execute(
@@ -670,13 +905,21 @@ def import_analysis_results(load_case_id: str, payload: ResultImportPayload) -> 
             if parsed["note"]:
                 conn.execute(
                     "INSERT INTO qualitative_notes VALUES (?, ?, ?, ?, ?)",
-                    [f"note-{uuid4().hex[:12]}", run_id, payload.author.strip(), parsed["note"], now],
+                    [f"note-{uuid4().hex[:12]}", run_id, actor_name, parsed["note"], now],
                 )
             conn.execute("UPDATE load_cases SET status = 'COMPLETED' WHERE id = ?", [load_case_id])
             conn.execute("UPDATE analysis_requests SET status = 'IN_PROGRESS' WHERE id = ?", [context[1]])
             conn.execute("UPDATE request_steps SET status = 'COMPLETED', progress = 100, actual_end = ? WHERE request_id = ? AND name IN ('해석 실행', '후처리 작업')", [now, context[1]])
             conn.execute("UPDATE request_steps SET status = 'IN_PROGRESS', progress = greatest(progress, 20), actual_start = coalesce(actual_start, ?) WHERE request_id = ? AND name = '결과 검토'", [now, context[1]])
             sync_request_status(conn, context[1])
+            write_audit_event(
+                request=request,
+                principal=principal,
+                status_code=201,
+                action="RESULT_IMPORTED",
+                detail={"project_id": context[2], "load_case_id": load_case_id, "run_id": run_id},
+                connection=conn,
+            )
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
@@ -685,7 +928,7 @@ def import_analysis_results(load_case_id: str, payload: ResultImportPayload) -> 
 
 
 @app.post("/api/load-cases/{load_case_id}/folder-import/example")
-def import_typed_result_example(load_case_id: str) -> dict[str, Any]:
+def import_typed_result_example(load_case_id: str, request: Request) -> dict[str, Any]:
     """Register the checked-in typed folder example through the same importer used by future uploads."""
     example_root = Path(__file__).resolve().parents[2] / "examples" / "typed-results" / "tv-drop-chassis"
     try:
@@ -695,6 +938,7 @@ def import_typed_result_example(load_case_id: str) -> dict[str, Any]:
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     job_id, run_id = f"folder-job-{uuid4().hex[:12]}", f"run-{uuid4().hex[:12]}"
     with connect() as conn:
+        require_resource_permission(request, RESULT_IMPORT, "load_case", load_case_id, conn=conn)
         context = conn.execute(
             """SELECT lc.id, lc.request_id, ar.project_id, lc.analysis_type
                FROM load_cases lc JOIN analysis_requests ar ON ar.id=lc.request_id WHERE lc.id=?""",
@@ -754,14 +998,27 @@ def import_typed_result_example(load_case_id: str) -> dict[str, Any]:
                 for index, point in enumerate(item["points"]):
                     conn.execute("INSERT INTO curve_points VALUES (?, ?, ?, ?)", [curve_id, index, point["x"], point["y"]])
                     conn.execute("INSERT INTO time_series_results VALUES (?, ?, ?, ?, ?, ?, ?)", [run_id, item["variable_key"], item["display_name"], point["x"], point["y"], item["x_unit"], item["y_unit"]])
-            asset_root = Path(__file__).resolve().parents[1] / "assets" / "imports" / run_id
-            asset_root.mkdir(parents=True, exist_ok=True)
             for item in parsed["media"]:
                 validate_media_metadata("CONTOUR_IMAGE" if item["asset_type"] == "IMAGE" else item["asset_type"], item["path"].name, item["path"].stat().st_size)
-                destination = asset_root / item["path"].name
-                shutil.copy2(item["path"], destination)
-                relative_path = f"imports/{run_id}/{destination.name}"
-                conn.execute("INSERT INTO media_assets VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", [f"media-{uuid4().hex[:12]}", run_id, item["asset_type"], item["display_name"], relative_path, item["mime_type"], destination.stat().st_size, item["source_checksum"], json.dumps({"variable_key": item["variable_key"], "source_file": item["source_file"]})])
+                asset_id = f"media-{uuid4().hex[:12]}"
+                relative_path = f"imports/{run_id}/{item['path'].name}"
+                conn.execute(
+                    """
+                    INSERT INTO media_assets
+                        (id, analysis_run_id, asset_type, title, file_path, mime_type,
+                         file_size, checksum, metadata_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [asset_id, run_id, item["asset_type"], item["display_name"], relative_path, item["mime_type"], item["path"].stat().st_size, item["source_checksum"], json.dumps({"variable_key": item["variable_key"], "source_file": item["source_file"]})],
+                )
+                stored = store_file(
+                    conn,
+                    item["path"],
+                    filename=item["path"].name,
+                    mime_type=item["mime_type"],
+                    asset_type=item["asset_type"],
+                )
+                attach_stored_media(conn, asset_id, stored)
             if parsed["note"]:
                 conn.execute("INSERT INTO qualitative_notes VALUES (?, ?, ?, ?, ?)", [f"note-{uuid4().hex[:12]}", run_id, "폴더 가져오기", parsed["note"], now])
             summary = {"scalar_count": len(parsed["scalars"]), "curve_count": len(parsed["curves"]), "media_count": len(parsed["media"])}
@@ -774,22 +1031,50 @@ def import_typed_result_example(load_case_id: str) -> dict[str, Any]:
     return {"status": "IMPORTED", "job_id": job_id, "run_id": run_id, "run_no": next_run_no, "schema_id": parsed["schema_id"], "summary": summary}
 
 
-@app.get("/api/assets/{asset_id}")
-def get_result_asset(asset_id: str) -> FileResponse:
-    with connect() as conn:
-        item = conn.execute("SELECT file_path, mime_type FROM media_assets WHERE id=?", [asset_id]).fetchone()
-    if not item:
-        raise HTTPException(404, "결과 미디어를 찾을 수 없습니다.")
+def _legacy_asset_path(file_path: str) -> Path:
     assets_root = (Path(__file__).resolve().parents[1] / "assets").resolve()
-    relative_path = Path(item[0])
-    # Early seed data stored paths with an `assets/` prefix while imported
-    # media stores paths relative to the assets root. Accept both forms.
+    relative_path = Path(file_path)
     if relative_path.parts and relative_path.parts[0].lower() == "assets":
         relative_path = Path(*relative_path.parts[1:])
     path = (assets_root / relative_path).resolve()
     if assets_root not in path.parents or not path.is_file():
         raise HTTPException(404, "결과 미디어 파일을 찾을 수 없습니다.")
-    return FileResponse(path, media_type=item[1])
+    return path
+
+
+def _result_asset_response(asset_id: str, request: Request, *, download: bool) -> Response:
+    with connect() as conn:
+        item = get_media_asset(conn, asset_id)
+        if not item:
+            raise HTTPException(404, "결과 미디어를 찾을 수 없습니다.")
+        require_resource_permission(request, PROJECT_DATA_VIEW, "media_asset", asset_id, conn=conn)
+        if item.get("blob_id"):
+            blob = get_blob(conn, str(item["blob_id"]))
+            if blob is None:
+                raise HTTPException(404, "결과 미디어 blob을 찾을 수 없습니다.")
+            filename = item.get("original_filename") or Path(str(item.get("file_path") or "download")).name
+            return build_media_response(
+                request,
+                blob=blob,
+                mime_type=str(item.get("mime_type") or "application/octet-stream"),
+                filename=str(filename),
+                download=download,
+                audit=lambda action, yielded, status: _media_audit_callback(request, action, yielded, status),
+            )
+        path = _legacy_asset_path(str(item.get("file_path") or ""))
+        return FileResponse(path, media_type=str(item.get("mime_type") or "application/octet-stream"), filename=path.name if download else None)
+
+
+@app.get("/api/assets/{asset_id}", operation_id="get_result_asset")
+@app.head("/api/assets/{asset_id}", include_in_schema=False)
+def get_result_asset(asset_id: str, request: Request) -> Response:
+    return _result_asset_response(asset_id, request, download=False)
+
+
+@app.get("/api/assets/{asset_id}/download", operation_id="download_result_asset")
+@app.head("/api/assets/{asset_id}/download", include_in_schema=False)
+def download_result_asset(asset_id: str, request: Request) -> Response:
+    return _result_asset_response(asset_id, request, download=True)
 
 
 @app.get("/api/load-cases/{load_case_id}/overview")
@@ -895,6 +1180,7 @@ def get_load_case_overview(load_case_id: str, run_id: str | None = Query(default
     for item in media:
         item["metadata"] = json_value(item.pop("metadata_json"))
         item["asset_url"] = f"/api/assets/{item['id']}"
+        item["download_url"] = f"/api/assets/{item['id']}/download"
     for item in template:
         item["input"] = json_value(item.pop("input_json"))
         item["generated_model"] = json_value(item.pop("generated_model_json"))
@@ -1160,26 +1446,37 @@ def list_review_items(run_id: str) -> list[dict[str, Any]]:
 
 
 @app.post("/api/analysis-runs/{run_id}/review-items", status_code=201)
-def create_review_item(run_id: str, payload: ReviewItemCreate) -> dict[str, Any]:
+def create_review_item(run_id: str, payload: ReviewItemCreate, request: Request) -> dict[str, Any]:
+    principal = request.state.principal
     with connect() as conn:
-        if not conn.execute("SELECT 1 FROM analysis_runs WHERE id=?", [run_id]).fetchone():
-            raise HTTPException(404, "해석 Run을 찾을 수 없습니다.")
-        if payload.variable_key and payload.variable_key not in _run_result_keys(conn, run_id):
-            raise HTTPException(422, "선택한 변수는 이 Run의 결과에 없습니다.")
-        if payload.entity_type and not payload.entity_id:
-            raise HTTPException(422, "엔티티 유형을 지정하면 엔티티 ID도 필요합니다.")
         bookmark_id, annotation_id = f"bookmark-{uuid4().hex[:12]}", f"review-{uuid4().hex[:12]}"
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         conn.execute("BEGIN TRANSACTION")
         try:
+            context = require_resource_permission(request, RESULT_REVIEW, "run", run_id, conn=conn)
+            if not conn.execute("SELECT 1 FROM analysis_runs WHERE id=?", [run_id]).fetchone():
+                raise HTTPException(404, "해석 Run을 찾을 수 없습니다.")
+            if payload.variable_key and payload.variable_key not in _run_result_keys(conn, run_id):
+                raise HTTPException(422, "선택한 변수는 이 Run의 결과에 없습니다.")
+            if payload.entity_type and not payload.entity_id:
+                raise HTTPException(422, "엔티티 유형을 지정하면 엔티티 ID도 필요합니다.")
             conn.execute(
-                "INSERT INTO result_bookmarks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [bookmark_id, run_id, payload.variable_key, payload.time_value, payload.entity_type, payload.entity_id, payload.title.strip(), payload.created_by.strip(), now],
+                """
+                INSERT INTO result_bookmarks
+                    (id, analysis_run_id, variable_key, time_value, entity_type, entity_id, title, created_by, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [bookmark_id, run_id, payload.variable_key, payload.time_value, payload.entity_type, payload.entity_id, payload.title.strip(), principal.display_name, now],
             )
             conn.execute(
-                "INSERT INTO review_annotations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [annotation_id, bookmark_id, run_id, payload.variable_key, payload.body.strip(), payload.review_status, payload.created_by.strip(), now, now],
+                """
+                INSERT INTO review_annotations
+                    (id, bookmark_id, analysis_run_id, variable_key, body, review_status, created_by, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [annotation_id, bookmark_id, run_id, payload.variable_key, payload.body.strip(), payload.review_status, principal.display_name, now, now],
             )
+            write_audit_event(request=request, principal=principal, status_code=201, action="RESULT_REVIEW_CREATED", detail={"project_id": context.project_id, "run_id": run_id, "review_item_id": annotation_id}, connection=conn)
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
@@ -1188,16 +1485,26 @@ def create_review_item(run_id: str, payload: ReviewItemCreate) -> dict[str, Any]
 
 
 @app.patch("/api/review-items/{annotation_id}")
-def update_review_item(annotation_id: str, payload: ReviewItemUpdate) -> dict[str, Any]:
+def update_review_item(annotation_id: str, payload: ReviewItemUpdate, request: Request) -> dict[str, Any]:
+    principal = request.state.principal
     with connect() as conn:
-        current = conn.execute("SELECT analysis_run_id, body FROM review_annotations WHERE id=?", [annotation_id]).fetchone()
-        if not current:
-            raise HTTPException(404, "검토 의견을 찾을 수 없습니다.")
-        conn.execute(
-            "UPDATE review_annotations SET body=?, review_status=?, updated_at=? WHERE id=?",
-            [payload.body.strip() if payload.body else current[1], payload.review_status, datetime.now(timezone.utc).replace(tzinfo=None), annotation_id],
-        )
-        return _review_items(conn, current[0], annotation_id)[0]
+        conn.execute("BEGIN TRANSACTION")
+        try:
+            context = require_resource_permission(request, RESULT_REVIEW, "review_item", annotation_id, conn=conn)
+            current = conn.execute("SELECT analysis_run_id, body, review_status FROM review_annotations WHERE id=?", [annotation_id]).fetchone()
+            if not current:
+                raise HTTPException(404, "검토 의견을 찾을 수 없습니다.")
+            conn.execute(
+                "UPDATE review_annotations SET body=?, review_status=?, updated_at=? WHERE id=?",
+                [payload.body.strip() if payload.body else current[1], payload.review_status, datetime.now(timezone.utc).replace(tzinfo=None), annotation_id],
+            )
+            write_audit_event(request=request, principal=principal, status_code=200, action="RESULT_REVIEW_UPDATED", detail={"project_id": context.project_id, "run_id": current[0], "review_item_id": annotation_id, "old_status": current[2], "new_status": payload.review_status}, connection=conn)
+            result = _review_items(conn, current[0], annotation_id)[0]
+            conn.execute("COMMIT")
+            return result
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
 
 
 @app.get("/api/projects/{project_id}/quality-thresholds")
@@ -1211,23 +1518,30 @@ def get_quality_thresholds(project_id: str) -> list[dict[str, Any]]:
         )
 
 
-def _update_quality_threshold(criterion_key: str, payload: QualityThresholdUpdate, expected_project_id: str | None = None) -> dict[str, Any]:
+def _update_quality_threshold(
+    criterion_key: str,
+    payload: QualityThresholdUpdate,
+    request: Request,
+    expected_project_id: str | None = None,
+) -> dict[str, Any]:
     with connect() as conn:
         if expected_project_id is not None:
             criteria = conn.execute(
-                "SELECT project_id, unit FROM quality_thresholds WHERE project_id = ? AND criterion_key = ?",
+                "SELECT project_id, unit, threshold_double FROM quality_thresholds WHERE project_id = ? AND criterion_key = ?",
                 [expected_project_id, criterion_key],
             ).fetchall()
         else:
             criteria = conn.execute(
-                "SELECT project_id, unit FROM quality_thresholds WHERE criterion_key = ? ORDER BY project_id",
+                "SELECT project_id, unit, threshold_double FROM quality_thresholds WHERE criterion_key = ? ORDER BY project_id",
                 [criterion_key],
             ).fetchall()
         if not criteria:
             raise HTTPException(404, "품질 판정 기준을 찾을 수 없습니다.")
         if expected_project_id is None and len(criteria) > 1:
             raise HTTPException(409, "프로젝트 범위 품질 기준 URL을 사용해야 합니다.")
-        project_id, unit = criteria[0]
+        project_id, unit, old_threshold = criteria[0]
+        require_permission(request, PROJECT_THRESHOLD_MANAGE, project_id, conn=conn)
+        principal = request.state.principal
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         conn.execute("BEGIN TRANSACTION")
         try:
@@ -1237,7 +1551,7 @@ def _update_quality_threshold(criterion_key: str, payload: QualityThresholdUpdat
                 SET threshold_double = ?, updated_by = ?, updated_at = ?
                 WHERE project_id = ? AND criterion_key = ?
                 """,
-                [payload.threshold_double, payload.updated_by, now, project_id, criterion_key],
+                [payload.threshold_double, principal.display_name, now, project_id, criterion_key],
             )
             if criterion_key == "chassis_rear_permanent_deformation_mm":
                 conn.execute(
@@ -1281,6 +1595,14 @@ def _update_quality_threshold(criterion_key: str, payload: QualityThresholdUpdat
                     """,
                     [payload.threshold_double, payload.threshold_double, project_id],
                 )
+            write_audit_event(
+                request=request,
+                principal=principal,
+                status_code=200,
+                action="PROJECT_THRESHOLD_CHANGED",
+                detail={"project_id": project_id, "criterion_key": criterion_key, "old_value": old_threshold, "new_value": payload.threshold_double, "unit": unit},
+                connection=conn,
+            )
             conn.execute("COMMIT")
             updated_threshold = rows(
                 conn.execute(
@@ -1295,13 +1617,13 @@ def _update_quality_threshold(criterion_key: str, payload: QualityThresholdUpdat
 
 
 @app.put("/api/projects/{project_id}/quality-thresholds/{criterion_key}")
-def update_project_quality_threshold(project_id: str, criterion_key: str, payload: QualityThresholdUpdate) -> dict[str, Any]:
-    return _update_quality_threshold(criterion_key, payload, expected_project_id=project_id)
+def update_project_quality_threshold(project_id: str, criterion_key: str, payload: QualityThresholdUpdate, request: Request) -> dict[str, Any]:
+    return _update_quality_threshold(criterion_key, payload, request, expected_project_id=project_id)
 
 
 @app.put("/api/quality-thresholds/{criterion_key}", deprecated=True)
-def update_quality_threshold(criterion_key: str, payload: QualityThresholdUpdate) -> dict[str, Any]:
-    return _update_quality_threshold(criterion_key, payload)
+def update_quality_threshold(criterion_key: str, payload: QualityThresholdUpdate, request: Request) -> dict[str, Any]:
+    return _update_quality_threshold(criterion_key, payload, request)
 
 
 @app.get("/api/requests/{request_id}/workflow")
@@ -1338,7 +1660,7 @@ def get_workflows() -> list[dict[str, Any]]:
                 FROM analysis_requests ar
                 JOIN projects p ON p.id = ar.project_id
                 LEFT JOIN load_cases lc ON lc.request_id = ar.id
-                GROUP BY ar.id, ar.project_id, ar.title, ar.status, ar.owner, ar.requested_at,
+                GROUP BY ar.id, ar.project_id, ar.title, ar.status, ar.owner, ar.owner_user_id, ar.requested_at,
                          ar.due_at, ar.overall_note, p.name, p.product_name
                 ORDER BY ar.requested_at DESC
                 """
@@ -1366,10 +1688,13 @@ def get_workflows() -> list[dict[str, Any]]:
 
 
 @app.put("/api/requests/{request_id}/workflow-steps")
-def replace_workflow_steps(request_id: str, payload: WorkflowStepsReplace) -> list[dict[str, Any]]:
+def replace_workflow_steps(request_id: str, payload: WorkflowStepsReplace, request: Request) -> list[dict[str, Any]]:
     with connect() as conn:
-        if not conn.execute("SELECT 1 FROM analysis_requests WHERE id = ?", [request_id]).fetchone():
+        require_resource_permission(request, WORKFLOW_EDIT, "request", request_id, conn=conn)
+        request_row = conn.execute("SELECT project_id FROM analysis_requests WHERE id = ?", [request_id]).fetchone()
+        if not request_row:
             raise HTTPException(404, "해석 의뢰를 찾을 수 없습니다.")
+        project_id = str(request_row[0])
         if conn.execute("SELECT 1 FROM request_work_plans WHERE request_id = ?", [request_id]).fetchone():
             raise HTTPException(
                 409,
@@ -1396,31 +1721,43 @@ def replace_workflow_steps(request_id: str, payload: WorkflowStepsReplace) -> li
                 conn.execute("DELETE FROM request_steps WHERE request_id = ?", [request_id])
             for sequence_no, step in enumerate(payload.steps, start=1):
                 name = step.name.strip()
-                owner = step.owner.strip()
-                if len(name) < 2 or not owner:
+                assignee = resolve_project_assignee(conn, project_id, step.owner_user_id)
+                if len(name) < 2:
                     raise HTTPException(400, "단계 이름과 담당자를 확인해 주세요.")
                 if step.id:
                     conn.execute(
                         """
                         UPDATE request_steps
-                        SET sequence_no = ?, name = ?, status = ?, owner = ?, progress = ?, is_optional = ?, note = ?
+                        SET sequence_no = ?, name = ?, status = ?, owner = ?, owner_user_id = ?,
+                            progress = ?, is_optional = ?, note = ?
                         WHERE id = ? AND request_id = ?
                         """,
-                        [sequence_no, name, step.status, owner, step.progress, step.is_optional, step.note.strip(), step.id, request_id],
+                        [sequence_no, name, step.status, assignee.display_name, assignee.user_id,
+                         step.progress, step.is_optional, step.note.strip(), step.id, request_id],
                     )
                 else:
                     step_id = f"step-{uuid4().hex[:12]}"
                     conn.execute(
                         """
                         INSERT INTO request_steps (
-                            id, request_id, sequence_no, name, status, owner, planned_start, planned_end,
+                            id, request_id, sequence_no, name, status, owner, owner_user_id, planned_start, planned_end,
                             actual_start, actual_end, progress, blocked_reason, note, is_optional
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, NULL, ?, ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, NULL, ?, ?)
                         """,
-                        [step_id, request_id, sequence_no, name, step.status, owner, now, now + timedelta(days=7), step.progress, step.note.strip(), step.is_optional],
+                        [step_id, request_id, sequence_no, name, step.status, assignee.display_name,
+                         assignee.user_id, now, now + timedelta(days=7), step.progress,
+                         step.note.strip(), step.is_optional],
                     )
             updated_steps = rows(conn.execute("SELECT * FROM request_steps WHERE request_id = ? ORDER BY sequence_no", [request_id]))
             sync_request_status(conn, request_id, updated_steps)
+            write_audit_event(
+                request=request,
+                principal=request.state.principal,
+                status_code=200,
+                action="WORKFLOW_STEPS_REPLACED",
+                detail={"project_id": project_id, "request_id": request_id, "step_count": len(payload.steps)},
+                connection=conn,
+            )
             conn.execute("COMMIT")
         except HTTPException:
             conn.execute("ROLLBACK")
@@ -1432,7 +1769,7 @@ def replace_workflow_steps(request_id: str, payload: WorkflowStepsReplace) -> li
 
 
 @app.patch("/api/workflow-steps/{step_id}")
-def update_workflow_step(step_id: str, payload: WorkflowStepUpdate) -> dict[str, Any]:
+def update_workflow_step(step_id: str, payload: WorkflowStepUpdate, request: Request) -> dict[str, Any]:
     name = payload.name.strip()
     if len(name) < 2:
         raise HTTPException(400, "단계 이름은 두 글자 이상이어야 합니다.")
@@ -1444,38 +1781,60 @@ def update_workflow_step(step_id: str, payload: WorkflowStepUpdate) -> dict[str,
                 [step_id],
             ).fetchone()
             if planned_item:
+                require_resource_permission(request, WORKFLOW_EDIT, "work_item", step_id, conn=conn)
                 raise HTTPException(
                     409,
                     detail={"code": "WORK_PLAN_IMMUTABLE", "request_id": planned_item[0]},
                 )
             raise HTTPException(404, "작업 단계를 찾을 수 없습니다.")
+        require_resource_permission(request, WORKFLOW_EDIT, "workflow_step", step_id, conn=conn)
         current = existing[0]
         if conn.execute("SELECT 1 FROM request_work_plans WHERE request_id = ?", [current["request_id"]]).fetchone():
             raise HTTPException(
                 409,
                 detail={"code": "WORK_PLAN_IMMUTABLE", "request_id": current["request_id"]},
             )
-        owner = payload.owner.strip() if payload.owner is not None else current["owner"]
-        if not owner:
-            raise HTTPException(400, "담당자를 입력해야 합니다.")
-        conn.execute(
-            """
-            UPDATE request_steps
-            SET name = ?, status = ?, owner = ?, progress = ?, is_optional = ?, note = ?
-            WHERE id = ?
-            """,
-            [
-                name,
-                payload.status or current["status"],
-                owner,
-                payload.progress if payload.progress is not None else current["progress"],
-                payload.is_optional if payload.is_optional is not None else current["is_optional"],
-                payload.note.strip() if payload.note is not None else current["note"],
-                step_id,
-            ],
-        )
-        updated = rows(conn.execute("SELECT * FROM request_steps WHERE id = ?", [step_id]))
-        sync_request_status(conn, current["request_id"])
+        request_row = conn.execute(
+            "SELECT project_id FROM analysis_requests WHERE id=?",
+            [current["request_id"]],
+        ).fetchone()
+        owner, owner_user_id = current["owner"], current.get("owner_user_id")
+        if payload.owner_user_id is not None:
+            assignee = resolve_project_assignee(conn, str(request_row[0]), payload.owner_user_id)
+            owner, owner_user_id = assignee.display_name, assignee.user_id
+        conn.execute("BEGIN TRANSACTION")
+        try:
+            conn.execute(
+                """
+                UPDATE request_steps
+                SET name = ?, status = ?, owner = ?, owner_user_id = ?, progress = ?, is_optional = ?, note = ?
+                WHERE id = ?
+                """,
+                [
+                    name,
+                    payload.status or current["status"],
+                    owner,
+                    owner_user_id,
+                    payload.progress if payload.progress is not None else current["progress"],
+                    payload.is_optional if payload.is_optional is not None else current["is_optional"],
+                    payload.note.strip() if payload.note is not None else current["note"],
+                    step_id,
+                ],
+            )
+            write_audit_event(
+                request=request,
+                principal=request.state.principal,
+                status_code=200,
+                action="WORKFLOW_STEP_UPDATED",
+                detail={"project_id": str(request_row[0]), "request_id": current["request_id"], "step_id": step_id, "owner_user_id": owner_user_id},
+                connection=conn,
+            )
+            updated = rows(conn.execute("SELECT * FROM request_steps WHERE id = ?", [step_id]))
+            sync_request_status(conn, current["request_id"])
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
     if not updated:
         raise HTTPException(404, "작업 단계를 찾을 수 없습니다.")
     return updated[0]
@@ -1502,8 +1861,9 @@ def _catalog_error(exc: Exception) -> HTTPException:
 
 
 @app.post("/api/load-cases/{load_case_id}/variables", status_code=201)
-def create_variable(load_case_id: str, payload: VariableCreate) -> dict[str, Any]:
+def create_variable(load_case_id: str, payload: VariableCreate, request: Request) -> dict[str, Any]:
     with connect() as conn:
+        require_resource_permission(request, PROJECT_VARIABLE_MANAGE, "load_case", load_case_id, conn=conn)
         try:
             return VariableCatalogRepository(conn).create(load_case_id, payload.model_dump())
         except (ValueError, LookupError) as exc:
@@ -1511,8 +1871,9 @@ def create_variable(load_case_id: str, payload: VariableCreate) -> dict[str, Any
 
 
 @app.put("/api/load-cases/{load_case_id}/variables/{variable_key}")
-def update_variable(load_case_id: str, variable_key: str, payload: VariableUpdate) -> dict[str, Any]:
+def update_variable(load_case_id: str, variable_key: str, payload: VariableUpdate, request: Request) -> dict[str, Any]:
     with connect() as conn:
+        require_resource_permission(request, PROJECT_VARIABLE_MANAGE, "load_case", load_case_id, conn=conn)
         try:
             return VariableCatalogRepository(conn).update(load_case_id, variable_key, payload.model_dump())
         except (ValueError, LookupError) as exc:
@@ -1520,8 +1881,14 @@ def update_variable(load_case_id: str, variable_key: str, payload: VariableUpdat
 
 
 @app.delete("/api/load-cases/{load_case_id}/variables/{variable_key}")
-def delete_variable(load_case_id: str, variable_key: str, updated_by: str = Query(default="관리자", min_length=2, max_length=60)) -> dict[str, Any]:
+def delete_variable(
+    load_case_id: str,
+    variable_key: str,
+    request: Request,
+    updated_by: str = Query(default="관리자", min_length=2, max_length=60),
+) -> dict[str, Any]:
     with connect() as conn:
+        require_resource_permission(request, PROJECT_VARIABLE_MANAGE, "load_case", load_case_id, conn=conn)
         repository = VariableCatalogRepository(conn)
         references = repository.dashboard_references(load_case_id, variable_key)
         if references:
@@ -1590,55 +1957,140 @@ def _report_layout_item(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-@app.get("/api/workspace-layouts/{layout_kind}", response_model=WorkspaceLayoutResponse)
-def get_workspace_layout(layout_kind: Literal["portfolio", "workflow"]) -> dict[str, Any]:
+def _get_project_workspace_layout(
+    project_id: str,
+    layout_kind: Literal["portfolio", "workflow"],
+    request: Request,
+) -> dict[str, Any]:
     if layout_kind not in WORKSPACE_LAYOUT_KINDS:
         raise HTTPException(404, "지원하지 않는 레이아웃 종류입니다.")
     with connect() as conn:
+        if not conn.execute("SELECT 1 FROM projects WHERE id=?", [project_id]).fetchone():
+            raise HTTPException(404, "프로젝트를 찾을 수 없습니다.")
+        require_permission(request, PROJECT_DATA_VIEW, project_id, conn=conn)
         stored = conn.execute(
-            "SELECT layout_kind, version, definition_json, updated_by, updated_at FROM workspace_layouts WHERE layout_kind=?",
-            [layout_kind],
+            """
+            SELECT project_id, layout_kind, version, definition_json, updated_by, updated_at
+            FROM project_workspace_layouts WHERE project_id=? AND layout_kind=?
+            """,
+            [project_id, layout_kind],
         ).fetchone()
     if not stored:
         raise HTTPException(404, "저장된 레이아웃이 없습니다.")
-    return {"layout_kind": stored[0], "version": stored[1], "definition": json_value(stored[2]), "updated_by": stored[3], "updated_at": stored[4]}
+    return {"project_id": stored[0], "layout_kind": stored[1], "version": stored[2], "definition": json_value(stored[3]), "updated_by": stored[4], "updated_at": stored[5]}
 
 
-@app.put("/api/workspace-layouts/{layout_kind}", response_model=WorkspaceLayoutResponse)
-def save_workspace_layout(layout_kind: Literal["portfolio", "workflow"], payload: WorkspaceLayoutUpdate) -> dict[str, Any]:
+@app.get("/api/projects/{project_id}/workspace-layouts/{layout_kind}", response_model=WorkspaceLayoutResponse)
+def get_project_workspace_layout(
+    project_id: str,
+    layout_kind: Literal["portfolio", "workflow"],
+    request: Request,
+) -> dict[str, Any]:
+    return _get_project_workspace_layout(project_id, layout_kind, request)
+
+
+@app.get("/api/workspace-layouts/{layout_kind}", response_model=WorkspaceLayoutResponse, deprecated=True)
+def get_workspace_layout(
+    layout_kind: Literal["portfolio", "workflow"],
+    request: Request,
+    project_id: str = Query(min_length=3, max_length=120),
+) -> dict[str, Any]:
+    return _get_project_workspace_layout(project_id, layout_kind, request)
+
+
+def _save_project_workspace_layout(
+    project_id: str,
+    layout_kind: Literal["portfolio", "workflow"],
+    payload: WorkspaceLayoutUpdate,
+    request: Request,
+) -> dict[str, Any]:
     definition = _validated_workspace_layout(layout_kind, payload.definition)
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     encoded = json.dumps(definition, ensure_ascii=False)
+    principal = request.state.principal
     with connect() as conn:
-        existing = conn.execute("SELECT version FROM workspace_layouts WHERE layout_kind=?", [layout_kind]).fetchone()
-        if not existing:
-            raise HTTPException(404, "저장된 레이아웃이 없습니다.")
-        version = int(existing[0]) + 1
         conn.execute("BEGIN TRANSACTION")
         try:
+            if not conn.execute("SELECT 1 FROM projects WHERE id=?", [project_id]).fetchone():
+                raise HTTPException(404, "프로젝트를 찾을 수 없습니다.")
+            require_permission(request, PROJECT_LAYOUT_EDIT, project_id, conn=conn)
+            existing = conn.execute(
+                "SELECT version FROM project_workspace_layouts WHERE project_id=? AND layout_kind=?",
+                [project_id, layout_kind],
+            ).fetchone()
+            if not existing:
+                raise HTTPException(404, "저장된 레이아웃이 없습니다.")
+            version = int(existing[0]) + 1
             conn.execute(
-                "UPDATE workspace_layouts SET version=?, definition_json=?, updated_by=?, updated_at=? WHERE layout_kind=?",
-                [version, encoded, payload.updated_by.strip(), now, layout_kind],
+                """
+                UPDATE project_workspace_layouts
+                SET version=?, definition_json=?, updated_by=?, updated_at=?
+                WHERE project_id=? AND layout_kind=?
+                """,
+                [version, encoded, principal.display_name, now, project_id, layout_kind],
             )
             conn.execute(
-                "INSERT INTO workspace_layout_versions VALUES (?, ?, ?, ?, ?, true)",
-                [layout_kind, version, encoded, payload.updated_by.strip(), now],
+                """
+                INSERT INTO project_workspace_layout_versions
+                    (project_id, layout_kind, version, definition_json, created_by, created_at, is_valid)
+                VALUES (?, ?, ?, ?, ?, ?, true)
+                """,
+                [project_id, layout_kind, version, encoded, principal.display_name, now],
+            )
+            write_audit_event(
+                request=request,
+                principal=principal,
+                status_code=200,
+                action="PROJECT_WORKSPACE_LAYOUT_UPDATED",
+                detail={"project_id": project_id, "layout_kind": layout_kind, "version": version},
+                connection=conn,
             )
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
             raise
-    return {"layout_kind": layout_kind, "version": version, "definition": definition, "updated_by": payload.updated_by.strip(), "updated_at": now}
+    return {"project_id": project_id, "layout_kind": layout_kind, "version": version, "definition": definition, "updated_by": principal.display_name, "updated_at": now}
 
 
-@app.get("/api/workspace-layouts/{layout_kind}/versions", response_model=list[WorkspaceLayoutVersionResponse])
-def get_workspace_layout_versions(layout_kind: Literal["portfolio", "workflow"]) -> list[dict[str, Any]]:
+@app.put("/api/projects/{project_id}/workspace-layouts/{layout_kind}", response_model=WorkspaceLayoutResponse)
+def save_project_workspace_layout(
+    project_id: str,
+    layout_kind: Literal["portfolio", "workflow"],
+    payload: WorkspaceLayoutUpdate,
+    request: Request,
+) -> dict[str, Any]:
+    return _save_project_workspace_layout(project_id, layout_kind, payload, request)
+
+
+@app.put("/api/workspace-layouts/{layout_kind}", response_model=WorkspaceLayoutResponse, deprecated=True)
+def save_workspace_layout(
+    layout_kind: Literal["portfolio", "workflow"],
+    payload: WorkspaceLayoutUpdate,
+    request: Request,
+    project_id: str = Query(min_length=3, max_length=120),
+) -> dict[str, Any]:
+    return _save_project_workspace_layout(project_id, layout_kind, payload, request)
+
+
+@app.get("/api/projects/{project_id}/workspace-layouts/{layout_kind}/versions", response_model=list[WorkspaceLayoutVersionResponse])
+def get_workspace_layout_versions(
+    project_id: str,
+    layout_kind: Literal["portfolio", "workflow"],
+    request: Request,
+) -> list[dict[str, Any]]:
     if layout_kind not in WORKSPACE_LAYOUT_KINDS:
         raise HTTPException(404, "지원하지 않는 레이아웃 종류입니다.")
     with connect() as conn:
+        if not conn.execute("SELECT 1 FROM projects WHERE id=?", [project_id]).fetchone():
+            raise HTTPException(404, "프로젝트를 찾을 수 없습니다.")
+        require_permission(request, PROJECT_DATA_VIEW, project_id, conn=conn)
         return rows(conn.execute(
-            "SELECT layout_kind, version, created_by, created_at, is_valid FROM workspace_layout_versions WHERE layout_kind=? ORDER BY version DESC",
-            [layout_kind],
+            """
+            SELECT project_id, layout_kind, version, created_by, created_at, is_valid
+            FROM project_workspace_layout_versions
+            WHERE project_id=? AND layout_kind=? ORDER BY version DESC
+            """,
+            [project_id, layout_kind],
         ))
 
 
@@ -1652,25 +2104,38 @@ def list_report_layouts() -> list[dict[str, Any]]:
 
 
 @app.post("/api/report-layouts", status_code=201)
-def create_report_layout(payload: ReportLayoutPayload) -> dict[str, Any]:
+def create_report_layout(payload: ReportLayoutPayload, request: Request) -> dict[str, Any]:
+    require_permission(request, SYSTEM_CATALOG_MANAGE)
+    principal = request.state.principal
+    actor_name = principal.display_name
     layout_id = f"report-layout-{uuid4().hex[:12]}"
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     definition = _validated_report_layout({**payload.definition, "id": layout_id, "name": payload.name.strip(), "description": payload.description.strip(), "version": 1})
     encoded = json.dumps(definition, ensure_ascii=False)
     with connect() as conn:
-        conn.execute(
-            "INSERT INTO report_layouts VALUES (?, ?, ?, 1, ?, false, true, ?, ?, ?)",
-            [layout_id, payload.name.strip(), payload.description.strip(), encoded, now, now, payload.updated_by.strip()],
-        )
-        conn.execute(
-            "INSERT INTO report_layout_versions VALUES (?, 1, ?, ?, ?, true)",
-            [layout_id, encoded, payload.updated_by.strip(), now],
-        )
-    return {"id": layout_id, "name": payload.name.strip(), "description": payload.description.strip(), "version": 1, "definition": definition, "is_system": False, "updated_at": now, "updated_by": payload.updated_by.strip()}
+        conn.execute("BEGIN TRANSACTION")
+        try:
+            conn.execute(
+                "INSERT INTO report_layouts VALUES (?, ?, ?, 1, ?, false, true, ?, ?, ?)",
+                [layout_id, payload.name.strip(), payload.description.strip(), encoded, now, now, actor_name],
+            )
+            conn.execute(
+                "INSERT INTO report_layout_versions VALUES (?, 1, ?, ?, ?, true)",
+                [layout_id, encoded, actor_name, now],
+            )
+            write_audit_event(request=request, principal=principal, status_code=201, action="REPORT_LAYOUT_CREATED", detail={"layout_id": layout_id}, connection=conn)
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    return {"id": layout_id, "name": payload.name.strip(), "description": payload.description.strip(), "version": 1, "definition": definition, "is_system": False, "updated_at": now, "updated_by": actor_name}
 
 
 @app.put("/api/report-layouts/{layout_id}")
-def update_report_layout(layout_id: str, payload: ReportLayoutPayload) -> dict[str, Any]:
+def update_report_layout(layout_id: str, payload: ReportLayoutPayload, request: Request) -> dict[str, Any]:
+    require_permission(request, SYSTEM_CATALOG_MANAGE)
+    principal = request.state.principal
+    actor_name = principal.display_name
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     with connect() as conn:
         existing = conn.execute("SELECT version, is_system FROM report_layouts WHERE id=? AND is_active=true", [layout_id]).fetchone()
@@ -1683,17 +2148,18 @@ def update_report_layout(layout_id: str, payload: ReportLayoutPayload) -> dict[s
         try:
             conn.execute(
                 "UPDATE report_layouts SET name=?, description=?, version=?, definition_json=?, updated_at=?, updated_by=? WHERE id=?",
-                [payload.name.strip(), payload.description.strip(), version, encoded, now, payload.updated_by.strip(), layout_id],
+                [payload.name.strip(), payload.description.strip(), version, encoded, now, actor_name, layout_id],
             )
             conn.execute(
                 "INSERT INTO report_layout_versions VALUES (?, ?, ?, ?, ?, true)",
-                [layout_id, version, encoded, payload.updated_by.strip(), now],
+                [layout_id, version, encoded, actor_name, now],
             )
+            write_audit_event(request=request, principal=principal, status_code=200, action="REPORT_LAYOUT_UPDATED", detail={"layout_id": layout_id, "version": version}, connection=conn)
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
             raise
-    return {"id": layout_id, "name": payload.name.strip(), "description": payload.description.strip(), "version": version, "definition": definition, "is_system": bool(existing[1]), "updated_at": now, "updated_by": payload.updated_by.strip()}
+    return {"id": layout_id, "name": payload.name.strip(), "description": payload.description.strip(), "version": version, "definition": definition, "is_system": bool(existing[1]), "updated_at": now, "updated_by": actor_name}
 
 
 @app.get("/api/report-layouts/{layout_id}/versions")
@@ -1718,7 +2184,8 @@ def get_report_layout_version(layout_id: str, version: int) -> dict[str, Any]:
 
 
 @app.delete("/api/report-layouts/{layout_id}")
-def delete_report_layout(layout_id: str) -> dict[str, str]:
+def delete_report_layout(layout_id: str, request: Request) -> dict[str, str]:
+    require_permission(request, SYSTEM_CATALOG_MANAGE)
     with connect() as conn:
         existing = conn.execute("SELECT is_system FROM report_layouts WHERE id=? AND is_active=true", [layout_id]).fetchone()
         if not existing:
@@ -1836,7 +2303,10 @@ def list_report_templates() -> list[dict[str, Any]]:
 
 
 @app.post("/api/report-templates", status_code=201)
-def upload_report_template(payload: ReportTemplateUploadPayload) -> dict[str, Any]:
+def upload_report_template(payload: ReportTemplateUploadPayload, request: Request) -> dict[str, Any]:
+    require_permission(request, SYSTEM_CATALOG_MANAGE)
+    principal = request.state.principal
+    actor_name = principal.display_name
     if not payload.filename.lower().endswith(".pptx") or payload.filename.lower().endswith(".pptm"):
         raise HTTPException(422, ".pptx 템플릿만 업로드할 수 있습니다.")
     try:
@@ -1854,11 +2324,19 @@ def upload_report_template(payload: ReportTemplateUploadPayload) -> dict[str, An
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     definition = {"slideWidth": inspected["slideWidth"], "slideHeight": inspected["slideHeight"], "placeholders": inspected["placeholders"]}
     with connect() as conn:
-        conn.execute(
-            "INSERT INTO report_template_assets VALUES (?, ?, ?, ?, ?, ?, true, ?, ?, ?)",
-            [template_id, payload.name.strip(), Path(payload.filename).name, relative_path, inspected["slideCount"], json.dumps(definition, ensure_ascii=False), now, now, payload.updated_by.strip()],
-        )
-    return {"id": template_id, "name": payload.name.strip(), "filename": Path(payload.filename).name, "slide_count": inspected["slideCount"], "definition": definition, "created_at": now, "updated_at": now, "updated_by": payload.updated_by.strip()}
+        conn.execute("BEGIN TRANSACTION")
+        try:
+            conn.execute(
+                "INSERT INTO report_template_assets VALUES (?, ?, ?, ?, ?, ?, true, ?, ?, ?)",
+                [template_id, payload.name.strip(), Path(payload.filename).name, relative_path, inspected["slideCount"], json.dumps(definition, ensure_ascii=False), now, now, actor_name],
+            )
+            write_audit_event(request=request, principal=principal, status_code=201, action="REPORT_TEMPLATE_UPLOADED", detail={"template_id": template_id}, connection=conn)
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            target_path.unlink(missing_ok=True)
+            raise
+    return {"id": template_id, "name": payload.name.strip(), "filename": Path(payload.filename).name, "slide_count": inspected["slideCount"], "definition": definition, "created_at": now, "updated_at": now, "updated_by": actor_name}
 
 
 def _replacement_key(shape: ET.Element) -> str | None:
@@ -1904,7 +2382,8 @@ def _render_pptx_template(data: bytes, replacements: dict[str, str]) -> bytes:
 
 
 @app.post("/api/report-templates/{template_id}/render")
-def render_report_template(template_id: str, payload: ReportTemplateRenderPayload) -> Response:
+def render_report_template(template_id: str, payload: ReportTemplateRenderPayload, request: Request) -> Response:
+    require_permission(request, REPORT_EXPORT)
     with connect() as conn:
         stored = conn.execute("SELECT file_path FROM report_template_assets WHERE id=? AND is_active=true", [template_id]).fetchone()
     if not stored:
@@ -1920,7 +2399,8 @@ def render_report_template(template_id: str, payload: ReportTemplateRenderPayloa
 
 
 @app.delete("/api/report-templates/{template_id}")
-def delete_report_template(template_id: str) -> dict[str, str]:
+def delete_report_template(template_id: str, request: Request) -> dict[str, str]:
+    require_permission(request, SYSTEM_CATALOG_MANAGE)
     with connect() as conn:
         stored = conn.execute("SELECT file_path FROM report_template_assets WHERE id=? AND is_active=true", [template_id]).fetchone()
         if not stored:
@@ -1933,11 +2413,6 @@ def delete_report_template(template_id: str) -> dict[str, str]:
 
 
 SYSTEM_ANALYSIS_PAGE_IDS = {"dashboard-drop-default", "dashboard-chassis-default", "dashboard-run-comparison-default"}
-
-
-def _request_role(request: Request) -> str:
-    principal = getattr(request.state, "principal", None)
-    return getattr(principal, "role", "viewer")
 
 
 def _analysis_page_meta(definition: dict[str, Any]) -> dict[str, Any] | None:
@@ -2075,15 +2550,18 @@ def list_public_dashboard_pages(load_case_id: str = Query(min_length=1, max_leng
 
 @app.get("/api/admin/dashboard-pages", response_model=list[AnalysisPageSummary])
 def list_admin_dashboard_pages(
+    request: Request,
     load_case_id: str = Query(min_length=1, max_length=120),
     include_archived: bool = False,
 ) -> list[dict[str, Any]]:
     with connect() as conn:
+        project_id, _ = _require_load_case_context(conn, load_case_id)
+        require_permission(request, DASHBOARD_EDIT, project_id, conn=conn)
         return _list_analysis_pages(conn, load_case_id, include_private=True, include_archived=include_archived)
 
 
 @app.post("/api/admin/dashboard-pages", response_model=DashboardDefinition, status_code=201)
-def create_dashboard_page(payload: AnalysisPageCreate) -> dict[str, Any]:
+def create_dashboard_page(payload: AnalysisPageCreate, request: Request) -> dict[str, Any]:
     name = payload.name.strip()
     if len(name) < 2:
         raise HTTPException(422, "분석 페이지 이름은 두 글자 이상이어야 합니다.")
@@ -2091,6 +2569,7 @@ def create_dashboard_page(payload: AnalysisPageCreate) -> dict[str, Any]:
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     with connect() as conn:
         project_id, request_id = _require_load_case_context(conn, payload.load_case_id)
+        require_permission(request, DASHBOARD_EDIT, project_id, conn=conn)
         if _page_name_exists(conn, payload.load_case_id, name):
             raise HTTPException(409, "같은 하중 경우에 동일한 분석 페이지 이름이 이미 있습니다.")
         existing = rows(conn.execute("SELECT definition_json FROM dashboards WHERE load_case_id = ?", [payload.load_case_id]))
@@ -2124,8 +2603,9 @@ def create_dashboard_page(payload: AnalysisPageCreate) -> dict[str, Any]:
 
 
 @app.patch("/api/admin/dashboard-pages/{dashboard_id}", response_model=DashboardDefinition)
-def update_dashboard_page(dashboard_id: str, payload: AnalysisPageUpdate) -> dict[str, Any]:
+def update_dashboard_page(dashboard_id: str, payload: AnalysisPageUpdate, request: Request) -> dict[str, Any]:
     with connect() as conn:
+        require_resource_permission(request, DASHBOARD_EDIT, "dashboard", dashboard_id, conn=conn)
         stored_rows = rows(
             conn.execute(
                 "SELECT id, project_id, request_id, load_case_id, name, description, version, definition_json, updated_at FROM dashboards WHERE id = ?",
@@ -2164,9 +2644,11 @@ def update_dashboard_page(dashboard_id: str, payload: AnalysisPageUpdate) -> dic
 @app.delete("/api/admin/dashboard-pages/{dashboard_id}")
 def delete_dashboard_page(
     dashboard_id: str,
+    request: Request,
     load_case_id: str = Query(min_length=1, max_length=120),
 ) -> dict[str, str]:
     with connect() as conn:
+        require_resource_permission(request, DASHBOARD_EDIT, "dashboard", dashboard_id, conn=conn)
         stored = conn.execute("SELECT load_case_id, definition_json FROM dashboards WHERE id = ?", [dashboard_id]).fetchone()
         if not stored:
             raise HTTPException(404, "분석 페이지를 찾을 수 없습니다.")
@@ -2193,11 +2675,12 @@ def delete_dashboard_page(
 
 
 @app.put("/api/admin/dashboard-pages/order", response_model=list[AnalysisPageSummary])
-def reorder_dashboard_pages(payload: AnalysisPageOrderUpdate) -> list[dict[str, Any]]:
+def reorder_dashboard_pages(payload: AnalysisPageOrderUpdate, request: Request) -> list[dict[str, Any]]:
     if len(payload.page_ids) != len(set(payload.page_ids)):
         raise HTTPException(422, "분석 페이지 순서에 중복 ID가 있습니다.")
     with connect() as conn:
-        _require_load_case_context(conn, payload.load_case_id)
+        project_id, _ = _require_load_case_context(conn, payload.load_case_id)
+        require_permission(request, DASHBOARD_EDIT, project_id, conn=conn)
         stored = rows(
             conn.execute(
                 "SELECT id, version, definition_json FROM dashboards WHERE load_case_id = ?",
@@ -2224,16 +2707,16 @@ def reorder_dashboard_pages(payload: AnalysisPageOrderUpdate) -> list[dict[str, 
 def get_dashboard(dashboard_id: str, request: Request) -> dict[str, Any]:
     with connect() as conn:
         result = rows(conn.execute("SELECT * FROM dashboards WHERE id = ?", [dashboard_id]))
-    if not result:
-        raise HTTPException(404, "대시보드를 찾을 수 없습니다.")
-    item = result[0]
-    definition = json_value(item.pop("definition_json"))
-    page = _analysis_page_meta(definition)
-    if page and page.get("status") in {"draft", "archived"} and _request_role(request) != "admin":
-        raise HTTPException(403, "초안과 보관된 분석 페이지는 관리자만 조회할 수 있습니다.")
-    definition["version"] = item["version"]
-    definition["updated_at"] = item["updated_at"]
-    return definition
+        if not result:
+            raise HTTPException(404, "대시보드를 찾을 수 없습니다.")
+        item = result[0]
+        definition = json_value(item.pop("definition_json"))
+        page = _analysis_page_meta(definition)
+        if page and page.get("status") in {"draft", "archived"}:
+            require_permission(request, DASHBOARD_EDIT, item["project_id"], conn=conn)
+        definition["version"] = item["version"]
+        definition["updated_at"] = item["updated_at"]
+        return definition
 
 
 @app.get("/api/dashboards")
@@ -2243,14 +2726,18 @@ def list_dashboards(request: Request, project_id: str | None = None) -> list[dic
             stored = rows(conn.execute("SELECT id, project_id, request_id, load_case_id, name, description, version, definition_json, updated_at FROM dashboards WHERE project_id = ? ORDER BY updated_at DESC", [project_id]))
         else:
             stored = rows(conn.execute("SELECT id, project_id, request_id, load_case_id, name, description, version, definition_json, updated_at FROM dashboards ORDER BY updated_at DESC"))
-    result = []
-    for item in stored:
-        definition = json_value(item.pop("definition_json")) or {}
-        page = _analysis_page_meta(definition)
-        if page and page.get("status") in {"draft", "archived"} and _request_role(request) != "admin":
-            continue
-        result.append(item)
-    return result
+        result = []
+        for item in stored:
+            definition = json_value(item.pop("definition_json")) or {}
+            page = _analysis_page_meta(definition)
+            if (
+                page
+                and page.get("status") in {"draft", "archived"}
+                and not has_permission(request, DASHBOARD_EDIT, item["project_id"], conn=conn)
+            ):
+                continue
+            result.append(item)
+        return result
 
 
 @app.put("/api/dashboards/{dashboard_id}")
@@ -2258,6 +2745,7 @@ def save_dashboard(dashboard_id: str, definition: DashboardDefinition, request: 
     if dashboard_id != definition.id:
         raise HTTPException(400, "대시보드 ID가 일치하지 않습니다.")
     with connect() as conn:
+        require_resource_permission(request, DASHBOARD_EDIT, "dashboard", dashboard_id, conn=conn)
         existing = conn.execute("SELECT version, definition_json FROM dashboards WHERE id = ?", [dashboard_id]).fetchone()
         if not existing:
             raise HTTPException(404, "대시보드를 찾을 수 없습니다.")
@@ -2265,8 +2753,6 @@ def save_dashboard(dashboard_id: str, definition: DashboardDefinition, request: 
         stored_page = _analysis_page_meta(stored_definition)
         incoming = definition.model_dump()
         if stored_page:
-            if stored_page.get("status") in {"draft", "archived"} and _request_role(request) != "admin":
-                raise HTTPException(403, "초안과 보관된 분석 페이지는 관리자만 편집할 수 있습니다.")
             if (
                 incoming.get("name") != stored_definition.get("name")
                 or incoming.get("description", "") != stored_definition.get("description", "")
@@ -2288,8 +2774,8 @@ def get_dashboard_versions(
         if not current:
             raise HTTPException(404, "대시보드를 찾을 수 없습니다.")
         page = _analysis_page_meta(json_value(current[0]) or {})
-        if page and page.get("status") in {"draft", "archived"} and _request_role(request) != "admin":
-            raise HTTPException(403, "초안과 보관된 분석 페이지는 관리자만 조회할 수 있습니다.")
+        if page and page.get("status") in {"draft", "archived"}:
+            require_resource_permission(request, DASHBOARD_EDIT, "dashboard", dashboard_id, conn=conn)
         valid_filter = "" if include_invalid else " AND is_valid = true"
         return rows(
             conn.execute(
@@ -2311,8 +2797,8 @@ def get_dashboard_version(
         if not current:
             raise HTTPException(404, "대시보드를 찾을 수 없습니다.")
         page = _analysis_page_meta(json_value(current[0]) or {})
-        if page and page.get("status") in {"draft", "archived"} and _request_role(request) != "admin":
-            raise HTTPException(403, "초안과 보관된 분석 페이지는 관리자만 조회할 수 있습니다.")
+        if page and page.get("status") in {"draft", "archived"}:
+            require_resource_permission(request, DASHBOARD_EDIT, "dashboard", dashboard_id, conn=conn)
         valid_filter = "" if include_invalid else " AND is_valid = true"
         stored = conn.execute(
             f"SELECT definition_json, created_by, created_at, is_valid FROM dashboard_versions WHERE dashboard_id = ? AND version = ?{valid_filter}",
@@ -2333,14 +2819,13 @@ def get_dashboard_version(
 @app.delete("/api/dashboards/{dashboard_id}/versions/{version}")
 def delete_dashboard_version(dashboard_id: str, version: int, request: Request) -> dict[str, Any]:
     with connect() as conn:
+        require_resource_permission(request, DASHBOARD_EDIT, "dashboard", dashboard_id, conn=conn)
         current = conn.execute("SELECT version, definition_json FROM dashboards WHERE id = ?", [dashboard_id]).fetchone()
         if not current:
             raise HTTPException(404, "대시보드를 찾을 수 없습니다.")
         current_version = int(current[0])
         definition = json_value(current[1]) or {}
         page = _analysis_page_meta(definition)
-        if page and page.get("status") in {"draft", "archived"} and _request_role(request) != "admin":
-            raise HTTPException(403, "초안과 보관된 분석 페이지는 관리자만 변경할 수 있습니다.")
         if version == 1 and (dashboard_id in SYSTEM_ANALYSIS_PAGE_IDS or (page and page.get("is_system") is True)):
             raise HTTPException(409, "시스템 대시보드의 최초 기준 버전은 삭제할 수 없습니다.")
 
@@ -2372,25 +2857,25 @@ def delete_dashboard_version(dashboard_id: str, version: int, request: Request) 
 def clone_dashboard(dashboard_id: str, payload: DashboardClone, request: Request) -> dict[str, Any]:
     clone_id = f"dashboard-{uuid4().hex[:12]}"
     now = datetime.now(timezone.utc).replace(tzinfo=None)
+    principal = request.state.principal
     with connect() as conn:
+        require_resource_permission(request, DASHBOARD_EDIT, "dashboard", dashboard_id, conn=conn)
         source = conn.execute("SELECT project_id, request_id, load_case_id, definition_json FROM dashboards WHERE id = ?", [dashboard_id]).fetchone()
         if not source:
             raise HTTPException(404, "대시보드를 찾을 수 없습니다.")
         definition = json_value(source[3])
-        source_page = _analysis_page_meta(definition)
-        if source_page and source_page.get("status") in {"draft", "archived"} and _request_role(request) != "admin":
-            raise HTTPException(403, "초안과 보관된 분석 페이지는 관리자만 복제할 수 있습니다.")
         definition.pop("page", None)
         definition.update({"id": clone_id, "name": payload.name.strip(), "description": payload.description.strip()})
         encoded = json.dumps(definition, ensure_ascii=False)
         conn.execute("INSERT INTO dashboards VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", [clone_id, source[0], source[1], source[2], definition["name"], definition["description"], 1, encoded, now])
-        conn.execute("INSERT INTO dashboard_versions VALUES (?, ?, ?, ?, ?, ?)", [clone_id, 1, encoded, payload.created_by.strip(), now, True])
+        conn.execute("INSERT INTO dashboard_versions VALUES (?, ?, ?, ?, ?, ?)", [clone_id, 1, encoded, principal.user_id, now, True])
     return {"id": clone_id, "version": 1, "status": "cloned"}
 
 
 @app.post("/api/dashboards/{dashboard_id}/restore/{version}")
 def restore_dashboard(dashboard_id: str, version: int, request: Request) -> dict[str, Any]:
     with connect() as conn:
+        require_resource_permission(request, DASHBOARD_EDIT, "dashboard", dashboard_id, conn=conn)
         stored = conn.execute("SELECT definition_json FROM dashboard_versions WHERE dashboard_id = ? AND version = ? AND is_valid = true", [dashboard_id, version]).fetchone()
         current = conn.execute("SELECT version, definition_json FROM dashboards WHERE id = ?", [dashboard_id]).fetchone()
         if not stored or not current:
@@ -2399,8 +2884,6 @@ def restore_dashboard(dashboard_id: str, version: int, request: Request) -> dict
         current_definition = json_value(current[1]) or {}
         current_page = _analysis_page_meta(current_definition)
         if current_page:
-            if current_page.get("status") in {"draft", "archived"} and _request_role(request) != "admin":
-                raise HTTPException(403, "초안과 보관된 분석 페이지는 관리자만 복구할 수 있습니다.")
             if current_page.get("status") == "published" and not definition.get("widgets"):
                 raise HTTPException(422, "게시된 분석 페이지를 빈 위젯 버전으로 복구할 수 없습니다.")
             definition.update(
@@ -2417,7 +2900,12 @@ def restore_dashboard(dashboard_id: str, version: int, request: Request) -> dict
 
 
 @app.post("/api/dashboard-commands/preview")
-def preview_dashboard_command(payload: NaturalLanguageCommand) -> dict[str, Any]:
+def preview_dashboard_command(
+    payload: NaturalLanguageCommand,
+    request: Request,
+    project_id: str | None = Query(default=None),
+) -> dict[str, Any]:
+    require_permission(request, DASHBOARD_EDIT, project_id)
     text = payload.command.strip()
     compact = text.replace(" ", "").lower()
     widget: dict[str, Any] | None = None
