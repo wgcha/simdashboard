@@ -1,0 +1,36 @@
+:root {
+  --color-app-bg:#07111d;
+  --color-app-background:radial-gradient(circle at 42% -20%,#163555 0,#07111d 42%);
+  --color-surface-1:#0d1c2b;
+  --color-surface-2:#10263a;
+  --color-surface-3:#132c40;
+  --color-border:#213549;
+  --color-text:#e9f3fc;
+  --color-text-muted:#8198ad;
+  --color-accent:#51d3ff;
+  --color-danger:#ff5d73;
+  --color-success:#4fd6a0;
+  --color-warning:#ffbf57;
+}
+
+:root[data-theme='light'] {
+  --color-app-bg:#f4f7fb;
+  --color-app-background:#f4f7fb;
+  --color-surface-1:#ffffff;
+  --color-surface-2:#eef3f8;
+  --color-surface-3:#e5effb;
+  --color-border:#d7e0ea;
+  --color-text:#142033;
+  --color-text-muted:#536276;
+  --color-accent:#034ea2;
+  --color-danger:#d92d20;
+  --color-success:#16845b;
+  --color-warning:#9a5b00;
+}
+
+html,body,#root { min-height:100%; background:var(--color-app-bg); }
+body { color:var(--color-text); background:var(--color-app-background); }
+.app-shell,.main-shell,.full-state { color:var(--color-text); background:var(--color-app-background); }
+.app-shell :is(.canvas-area,.portfolio-page,.data-workspace,.catalog-page,.template-page,.feature-gallery,.example-gallery,.help-center,.workbench-page,.request-intake-page),
+.app-shell.light-theme :is(.canvas-area,.portfolio-page,.data-workspace,.catalog-page,.template-page,.feature-gallery,.example-gallery,.help-center,.workbench-page,.request-intake-page) { background-color:var(--color-app-bg); color:var(--color-text); }
+.data-form-grid.single { grid-template-columns:1fr; }
