@@ -136,6 +136,11 @@ pnpm --dir frontend run build
 
 목적: 배경색 하나를 바꾸면 모든 페이지 surface가 동일 토큰을 따르게 한다.
 
+상태: **기반 부분 완료**
+
+- 완료: `theme.css`의 dark/light semantic app·surface·text·border 토큰, page root 배경 계약, 실제 테마 토글 검증.
+- 잔여: 기존 feature 내부 raw color를 토큰으로 점진 이전, chart palette 분리, raw color 추가 방지 check.
+
 작업:
 
 - `shared/theme/tokens.css`에 semantic token을 정의한다: `--color-app-bg`, `--color-surface-1..3`, `--color-border`, `--color-text`, `--color-text-muted`, `--color-accent`, 상태색.
@@ -155,6 +160,11 @@ pnpm --dir frontend run build
 ### FE-020 — Bootstrap과 App Shell 분리
 
 목적: 데이터가 비어도 허용 메뉴와 등록 기능이 살아 있도록 한다.
+
+상태: **P0 부분 완료**
+
+- 완료: 빈 프로젝트와 dashboard 정의 누락을 치명 오류에서 분리, 초기 데이터 구성 shell 제공, 프로젝트 생성 권한의 서버 계약 반영, bootstrap request 병렬화.
+- 잔여: 전체 `AppShell`·`WorkspaceRouter` 추출, 독립 메뉴별 loader/error boundary, 다섯 bootstrap 상태의 자동화 특성화 테스트.
 
 작업:
 
