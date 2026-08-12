@@ -59,6 +59,8 @@ import { api } from './api'
 import { clearSession, saveSession, type AuthUser } from './auth'
 import { useReportLayoutEditorState, useWorkspaceEditorCoordinator } from './editorState'
 import { BootstrapWorkspaceShell } from './features/bootstrap/BootstrapWorkspaceShell'
+import { loadInitialWorkspace } from './features/bootstrap/loadInitialWorkspace'
+import { pageView, preferredPage, visiblePages, type ActiveView } from './features/analysis/pageSelection'
 import { DEFAULT_PORTFOLIO_LAYOUT, DEFAULT_WORKFLOW_DASHBOARD_LAYOUT, loadPortfolioLayout, loadWorkflowDashboardLayout } from './features/layouts/layoutDefaults'
 import { reportVariables, withReportVariables } from './features/reports/reportLayoutUtils'
 import { ApprovalPendingScreen, LoginScreen } from './features/auth/LoginScreen'
@@ -74,7 +76,6 @@ import type { AnalysisRequest, AnalysisRunSummary, AutomationTemplate, Dashboard
 
 const ResponsiveGridLayout = WidthProvider(Responsive) as unknown as ComponentType<any>
 const SERIES_COLORS = ['#61d4ff', '#ff647d', '#70e0a8', '#ffbf57']
-type ActiveView = 'open_cell' | 'chassis' | 'custom' | 'workflow' | 'compare'
 
 const MENU_ICONS: Record<MenuId, ComponentType<any>> = {
   portfolio: LayoutDashboard,
@@ -103,23 +104,6 @@ const SPECIAL_WIDGET_CATALOG: WidgetCatalogItem[] = [
   { type: 'chassis_table', label: 'Chassis 상세 표', category: '전용 평가', allowed_data_types: [], default_size: [8, 4] },
 ]
 const ANALYSIS_WIDGET_TYPES = new Set<DashboardWidget['type']>(['summary','open_cell_map','open_cell_summary','kpi','verdict','gauge','edge_bar','time_series','scatter','note','result_table','contour','video','video_grid','chassis_summary','chassis_diagram','chassis_bar','chassis_table'])
-
-function pageView(page: DashboardPageSummary): ActiveView {
-  return page.page.analysis_key === 'open_cell' ? 'open_cell' : page.page.analysis_key === 'chassis_rear' ? 'chassis' : page.page.analysis_key === 'run_comparison' ? 'compare' : 'custom'
-}
-
-function visiblePages(pages: DashboardPageSummary[], overview: Overview) {
-  return pages.filter((page) => page.page.analysis_key === 'custom'
-    || (page.page.analysis_key === 'open_cell' && overview.analysis_verdicts.open_cell !== 'NO_DATA')
-    || (page.page.analysis_key === 'chassis_rear' && overview.analysis_verdicts.chassis_rear !== 'NO_DATA')
-    || (page.page.analysis_key === 'run_comparison' && Boolean(overview.run)))
-}
-
-function preferredPage(pages: DashboardPageSummary[], overview: Overview, preferred?: ActiveView) {
-  const available = visiblePages(pages, overview)
-  const key = preferred === 'chassis' ? 'chassis_rear' : preferred === 'open_cell' ? 'open_cell' : preferred === 'compare' ? 'run_comparison' : preferred === 'custom' ? 'custom' : null
-  return (key ? available.find((page) => page.page.analysis_key === key) : undefined) ?? available[0] ?? pages[0]
-}
 
 function hasNumericValue(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
@@ -329,17 +313,12 @@ function App() {
       setLoading(true)
       setError('')
       try {
-        const [health, projectData, workflowData, policy] = await Promise.all([
-          api.health(),
-          api.projects(),
-          api.workflows(),
-          api.menuPolicy().catch(() => null),
-        ])
-        setProjects(projectData)
-        setWorkflows(workflowData)
-        setMenuPolicy(policy)
+        const initial = await loadInitialWorkspace()
+        setProjects(initial.projects)
+        setWorkflows(initial.workflows)
+        setMenuPolicy(initial.menuPolicy)
         setMenuPolicyReady(true)
-        setDatabaseBackend(health.database_backend)
+        setDatabaseBackend(initial.databaseBackend)
         setRequests([])
         setLoadCases([])
         setThresholds([])
@@ -349,54 +328,27 @@ function App() {
         setOverview(null)
         setDashboard(null)
         setAnalysisPages([])
-        if (!projectData.length) return
-
-        const preferredProjects = [...projectData].sort((left, right) => Number(right.id === 'project-tv-001') - Number(left.id === 'project-tv-001'))
-        const projectContexts = await Promise.all(preferredProjects.map(async (project) => ({
-          project,
-          requests: await api.requests(project.id),
-        })))
-        const requestContexts = await Promise.all(projectContexts.flatMap(({ project, requests: projectRequests }) => (
-          [...projectRequests]
-            .sort((left, right) => Number(right.id === 'request-drop-001') - Number(left.id === 'request-drop-001'))
-            .map(async (request) => ({ project, projectRequests, request, loadCases: await api.loadCases(request.id) }))
-        )))
-        const analyzable = requestContexts.find((context) => context.loadCases.length > 0)
-        if (!analyzable) {
-          const fallback = projectContexts[0]
-          const fallbackRequest = fallback.requests[0]
-          setSelectedProjectId(fallback.project.id)
-          setRequests(fallback.requests)
-          setSelectedRequestId(fallbackRequest?.id ?? '')
+        if (initial.kind === 'empty') return
+        if (initial.kind === 'setup') {
+          setSelectedProjectId(initial.selectedProjectId)
+          setRequests(initial.requests)
+          setSelectedRequestId(initial.selectedRequestId)
           return
         }
-        const { project, projectRequests: requestData, request, loadCases: caseData } = analyzable
-        const loadCase = caseData[0]
-        const [thresholdData, overviewData, pageData, storedPortfolioLayout, storedWorkflowLayout] = await Promise.all([
-          api.qualityThresholds(project.id),
-          api.overview(loadCase.id),
-          api.dashboardPages(loadCase.id),
-          api.workspaceLayout<PortfolioLayout>(project.id, 'portfolio'),
-          api.workspaceLayout<WorkflowDashboardLayout>(project.id, 'workflow'),
-        ])
-        const initialPage = preferredPage(pageData, overviewData)
-        const dashboardId = initialPage?.id ?? (overviewData.analysis_verdicts.open_cell !== 'NO_DATA' ? 'dashboard-drop-default' : 'dashboard-chassis-default')
-        const dashboardData = await api.dashboard(dashboardId).catch(() => null)
-        setRequests(requestData)
-        setLoadCases(caseData)
-        setThresholds(thresholdData)
-        setSelectedProjectId(project.id)
-        setSelectedRequestId(request.id)
-        setSelectedLoadCaseId(loadCase.id)
-        setOverview(overviewData)
-        setWorkflows(workflowData)
-        setDashboard(dashboardData)
-        setAnalysisPages(pageData)
-        setActiveDashboardId(dashboardId)
-        setPortfolioLayout(storedPortfolioLayout.definition)
-        setPortfolioLayoutVersion(storedPortfolioLayout.version)
-        setWorkflowDashboardLayout(storedWorkflowLayout.definition)
-        setWorkflowLayoutVersion(storedWorkflowLayout.version)
+        setRequests(initial.requests)
+        setLoadCases(initial.loadCases)
+        setThresholds(initial.thresholds)
+        setSelectedProjectId(initial.selectedProjectId)
+        setSelectedRequestId(initial.selectedRequestId)
+        setSelectedLoadCaseId(initial.selectedLoadCaseId)
+        setOverview(initial.overview)
+        setDashboard(initial.dashboard)
+        setAnalysisPages(initial.analysisPages)
+        setActiveDashboardId(initial.dashboardId)
+        setPortfolioLayout(initial.portfolioLayout.definition)
+        setPortfolioLayoutVersion(initial.portfolioLayout.version)
+        setWorkflowDashboardLayout(initial.workflowLayout.definition)
+        setWorkflowLayoutVersion(initial.workflowLayout.version)
         setActiveView('workflow')
       } catch (reason) {
         setError(reason instanceof Error ? reason.message : '초기 데이터를 불러오지 못했습니다.')
