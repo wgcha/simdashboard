@@ -52,6 +52,28 @@ chmod +x setup-wsl.sh start.sh stop.sh scripts/wsl/*.sh
 pnpm --dir frontend run build
 ```
 
+## 브라우저 E2E 환경
+
+Playwright E2E를 처음 실행할 때는 WSL 사용자용 Chromium과 Ubuntu 공유 라이브러리를 설치한다. 시스템 패키지 설치 때문에 이 단계에만 `sudo`가 필요하다.
+
+```bash
+./scripts/wsl/setup-e2e.sh --install-system-deps
+```
+
+이후 테스트 실행기는 `.venv-wsl/bin/python`을 자동으로 사용한다.
+
+```bash
+pnpm --dir frontend run test:e2e
+# 특정 시나리오만 실행
+node frontend/scripts/run-e2e.mjs bootstrap-empty-state.spec.ts
+```
+
+브라우저 바이너리만 갱신하거나 설치 상태를 재검사할 때는 `sudo` 없이 실행한다.
+
+```bash
+./scripts/wsl/setup-e2e.sh
+```
+
 ## 장애 처리
 
 - `pnpm was not found`: 새 WSL 셸을 열거나 `export PATH="$HOME/.local/bin:$PATH"` 후 doctor를 다시 실행한다.
@@ -59,3 +81,4 @@ pnpm --dir frontend run build
 - Vite 파일 변경 감지가 느림: 저장소를 `~/src` 아래로 옮긴다.
 - 포트가 이미 사용 중: `./stop.sh`를 먼저 실행하고 `.server-pids.env`의 소유 PID를 확인한다.
 - 설치 중 네트워크가 끊김: `./setup-wsl.sh`를 다시 실행한다. 이미 검증된 도구와 가상환경은 재사용된다.
+- Chromium 공유 라이브러리 오류: `./scripts/wsl/setup-e2e.sh --install-system-deps`를 다시 실행한다.

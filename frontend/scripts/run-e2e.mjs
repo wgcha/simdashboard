@@ -1,14 +1,15 @@
 import { spawn, spawnSync } from 'node:child_process'
-import { rmSync } from 'node:fs'
+import { existsSync, rmSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
 const frontendDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const workspaceDir = path.resolve(frontendDir, '..')
+const wslPython = path.join(workspaceDir, '.venv-wsl', 'bin', 'python')
 const python = process.env.E2E_PYTHON ?? (
   process.platform === 'win32'
     ? path.join(workspaceDir, '.venv-runtime', 'Scripts', 'python.exe')
-    : 'python'
+    : existsSync(wslPython) ? wslPython : 'python'
 )
 const children = []
 const e2eDatabase = path.join(workspaceDir, 'backend', 'data', 'e2e-playwright.duckdb')
