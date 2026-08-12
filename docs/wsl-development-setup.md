@@ -48,7 +48,7 @@ chmod +x setup-wsl.sh start.sh stop.sh scripts/wsl/*.sh
 개별 검증은 다음처럼 실행한다.
 
 ```bash
-.venv-wsl/bin/python -m pytest -q
+(cd backend && ../.venv-wsl/bin/python -m pytest -q)
 pnpm --dir frontend run build
 ```
 

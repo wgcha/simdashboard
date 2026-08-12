@@ -324,7 +324,7 @@ pnpm --dir frontend run build
 
 ```bash
 ./scripts/wsl/doctor.sh
-.venv-wsl/bin/python -m pytest -q
+(cd backend && ../.venv-wsl/bin/python -m pytest -q)
 pnpm --dir frontend run build
 ```
 
