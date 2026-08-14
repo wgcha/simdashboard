@@ -390,7 +390,7 @@ export type AnalysisRunSummary = {
   id: string
   load_case_id: string
   run_no: number
-  solver: string
+  solver: string | null
   status: string
   started_at: string
   completed_at: string

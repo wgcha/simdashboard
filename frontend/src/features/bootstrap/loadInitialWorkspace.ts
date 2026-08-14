@@ -94,8 +94,8 @@ export async function loadInitialWorkspace(client: BootstrapClient = api): Promi
     client.qualityThresholds(project.id),
     client.overview(loadCase.id),
     client.dashboardPages(loadCase.id),
-    client.workspaceLayout<PortfolioLayout>(project.id, 'portfolio'),
-    client.workspaceLayout<WorkflowDashboardLayout>(project.id, 'workflow'),
+    client.workspaceLayout(project.id, 'portfolio'),
+    client.workspaceLayout(project.id, 'workflow'),
   ])
   const initialPage = preferredPage(analysisPages, overview)
   const dashboardId = initialPage?.id ?? (overview.analysis_verdicts.open_cell !== 'NO_DATA' ? 'dashboard-drop-default' : 'dashboard-chassis-default')

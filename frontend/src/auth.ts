@@ -35,7 +35,3 @@ export function clearSession() {
   sessionStorage.removeItem('analysis-canvas-access-token')
   sessionStorage.removeItem(USER_KEY)
 }
-
-export function authenticatedFetch(input: RequestInfo | URL, init: RequestInit = {}) {
-  return globalThis.fetch(input, { ...init, credentials: 'same-origin' })
-}
