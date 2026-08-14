@@ -6,11 +6,11 @@
 - [구현 수행서](docs/access-control-and-menu-policy-implementation-guide.md): Luna가 재현 가능한 단계별 구현·시험 절차
 - [기능 사양서](docs/access-control-functional-specification.md): 역할, permission, 메뉴, API, 데이터와 운영 계약
 - [변경 이력](docs/access-control-change-log.md): 실제 변경 범위, 마이그레이션, 검증 결과와 인수 조건
-- [배포·보안·백업 가이드](docs/deployment-security-backup-guide.md): Windows VM 운영과 복구 절차
+- [배포·보안·백업 가이드](docs/deployment-security-backup-guide.md): Windows VM 이관·복구 절차
 
-## 다른 Windows PC에서 최초 설치
+## 운영 런타임과 Windows 이관
 
-최종 운영 대상은 사내 Windows VM이다. VM에는 Python 3.12, Node.js 20 이상, 실행 중인 PostgreSQL 서비스, HTTPS 리버스 프록시, 사내 OIDC/임직원 디렉터리 연결이 필요하다. 가정용 Windows PC는 개발·테스트 용도로 유지한다.
+최종 운영 대상은 Rocky Linux 8이다. Node.js는 [`.node-version`](.node-version)의 `v22.23.2`, Python은 [`.python-version`](.python-version)의 `3.12.13`, 데이터베이스는 PostgreSQL 18 계열을 사용한다. 세부 호환성·변경 조건은 [ADR 0001](docs/adr/0001-runtime-version-policy.md)을 따른다. Windows VM은 기존 지원 및 이관 경로로 유지하며, 아래 절차로 설치·복구할 수 있다.
 
 1. GitHub에서 저장소 전체를 다운로드한다.
 2. VS Code에서 저장소의 최상위 폴더를 연다.
@@ -116,7 +116,7 @@ Project
 
 ## 실행
 
-요구 사항은 Python 3.11~3.13, Node.js 20 이상, pnpm입니다.
+요구 사항은 `.python-version`의 Python, `.node-version`의 Node.js, pnpm 11.15.1입니다.
 
 ```powershell
 cd E:\simulation_dashboard
@@ -177,5 +177,7 @@ FastAPI 계약을 변경한 뒤에는 프런트엔드에서 `pnpm run generate:a
 - 검증된 custom-format 백업과 빈 DB 복구 도구
 
 상세 절차는 [PostgreSQL 연동 가이드](docs/backend-sql-integration-guide.md)와 [배포 보안·백업 가이드](docs/deployment-security-backup-guide.md)를 참고하세요. 외부 공개 전에는 `AUTH_MODE=password`, HTTPS, 별도 백업 저장소를 반드시 사용해야 합니다.
+
+Rocky Linux 8 운영에서는 PostgreSQL만 runtime DB로 사용합니다. Alembic migration은 owner 역할로, 앱 실행과 seed/preflight는 app 역할로 분리합니다. 구체적인 순서와 비권한 템플릿은 [Rocky 8 배포 runbook](docs/rocky8-deployment-runbook.md)을 따르세요. PostgreSQL 시작은 schema 확인만 수행하며, 현재 결정적 fixture 세트는 필요할 때만 `backend/scripts/seed_database.py --mode reference`로 명시 실행합니다. `reference`와 `demo`는 현재 동일 fixture의 별칭이므로 운영 업무 데이터로 간주하면 안 됩니다.
 
 샘플 데이터는 합성이며 실제 제품 판정 근거로 사용하면 안 됩니다.

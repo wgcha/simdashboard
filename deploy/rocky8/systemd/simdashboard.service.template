@@ -1,0 +1,27 @@
+[Unit]
+Description=Analysis Canvas API (__REPLACE_ENVIRONMENT__)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=__REPLACE_SERVICE_USER__
+Group=__REPLACE_SERVICE_GROUP__
+WorkingDirectory=__REPLACE_RELEASE_ROOT__/backend
+EnvironmentFile=__REPLACE_ENVIRONMENT_FILE__
+Environment=PYTHONUNBUFFERED=1
+Environment=ANALYSIS_DB_BACKEND=postgresql
+ExecStart=__REPLACE_RELEASE_ROOT__/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port __REPLACE_API_PORT__ --workers __REPLACE_UVICORN_WORKERS__ --proxy-headers --forwarded-allow-ips=127.0.0.1
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=45
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=__REPLACE_RUNTIME_DIRECTORY__
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target
