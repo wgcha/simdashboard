@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Activity, AlertTriangle, Check, ClipboardList, FileText, FlaskConical, Image, LoaderCircle, Play, Plus, RefreshCw, Save, Settings2, ShieldCheck } from 'lucide-react'
+import { Activity, AlertTriangle, Check, ClipboardList, FileText, FlaskConical, Image, LoaderCircle, Pencil, Play, Plus, RefreshCw, Save, Settings2, ShieldCheck, Tag, Trash2, X } from 'lucide-react'
 import type { Workflow } from '../../types'
 import { workbenchApi } from './api'
-import type { BatchExecutionAttempt, BatchProfile, DemoRun, DemoRunTask, WorkbenchNode, WorkbenchRequestType, WorkbenchTaskType } from './types'
+import { DEFAULT_REQUEST_TYPE_LABELS, requestTypeLabels, type BatchExecutionAttempt, type BatchProfile, type DemoRun, type DemoRunTask, type WorkbenchNode, type WorkbenchRequestType, type WorkbenchTaskType } from './types'
 
 type CompositionMode = 'parallel' | 'sequence'
 
@@ -61,6 +61,42 @@ const TASK_EXECUTION: Record<string, TaskExecution> = {
 
 const FALLBACK_TASK_EXECUTION: TaskExecution = {
   eyebrow: 'TASK EXECUTION', title: '관련 업무 실행 위젯', description: '선택한 작업 유형의 데모 실행 결과를 생성합니다.', startLabel: '작업 시작', runLabel: '업무 데모 실행·완료',
+}
+
+const REQUEST_TYPE_ID_PATTERN = /^[a-z][a-z0-9_-]{2,79}$/
+
+function sanitizeRequestTypeId(value: string) {
+  const compact = value
+    .normalize('NFKC')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/[-_]{2,}/g, '-')
+    .replace(/^[-_]+|[-_]+$/g, '')
+  if (!compact) return ''
+  const withLetterPrefix = /^[a-z]/.test(compact) ? compact : `type-${compact}`
+  return withLetterPrefix.slice(0, 80).replace(/[-_]+$/g, '')
+}
+
+function suggestRequestTypeId(displayName: string, analysisType: string) {
+  const domain = sanitizeRequestTypeId(analysisType)
+  const purpose = sanitizeRequestTypeId(displayName)
+  const meaningfulParts = [domain, purpose].filter((part, index, parts) => part && parts.indexOf(part) === index)
+  const suggestion = meaningfulParts.length > 1 ? meaningfulParts.join('-') : `${meaningfulParts[0] || 'custom'}-analysis`
+  return REQUEST_TYPE_ID_PATTERN.test(suggestion) ? suggestion : sanitizeRequestTypeId(`${suggestion}-analysis`)
+}
+
+function normalizeRequestTypeLabel(value: string) {
+  return value.normalize('NFKC').trim().replace(/^#+/, '').replace(/\s+/g, '-').replace(/[,#]/g, '').slice(0, 24)
+}
+
+function compositionModeFor(nodes: WorkbenchNode[]): CompositionMode {
+  if (nodes.length < 2) return 'sequence'
+  return nodes.every((node, index) => index === 0
+    ? node.depends_on.length === 0
+    : node.depends_on.length === 1 && node.depends_on[0] === nodes[index - 1].node_key)
+    ? 'sequence'
+    : 'parallel'
 }
 
 function runStatusLabel(status: string) {
@@ -311,6 +347,9 @@ export function WorkbenchTypeAdmin() {
   const [typeName, setTypeName] = useState('사용자 정의 해석')
   const [typeDescription, setTypeDescription] = useState('의뢰 수행자가 선택할 수 있는 작업 시나리오입니다.')
   const [matchAnalysisType, setMatchAnalysisType] = useState('')
+  const [typeLabels, setTypeLabels] = useState<string[]>([...DEFAULT_REQUEST_TYPE_LABELS])
+  const [labelDraft, setLabelDraft] = useState('')
+  const [editingTypeId, setEditingTypeId] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -323,25 +362,73 @@ export function WorkbenchTypeAdmin() {
       .catch((reason) => setError(friendlyWorkbenchError(reason)))
   }, [])
 
-  const selectedTasks = taskTypes.filter((task) => selectedTaskKeys.includes(`${task.id}:${task.version}`))
+  const selectedTasks = selectedTaskKeys.flatMap((key) => {
+    const task = taskTypes.find((candidate) => `${candidate.id}:${candidate.version}` === key)
+    return task ? [task] : []
+  })
   const batchTaskTypes = taskTypes.filter((task, index, items) => items.findIndex((candidate) => candidate.id === task.id) === index)
+  const normalizedTypeId = sanitizeRequestTypeId(typeId)
+  const typeIdIsValid = REQUEST_TYPE_ID_PATTERN.test(typeId)
+  const existingType = requestTypes.find((item) => item.id === typeId)
   const toggle = (task: WorkbenchTaskType) => {
     const key = `${task.id}:${task.version}`
     setSelectedTaskKeys((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key])
   }
+  const resetTypeDraft = () => {
+    setEditingTypeId(null)
+    setTypeId('custom-analysis')
+    setTypeName('사용자 정의 해석')
+    setTypeDescription('의뢰 수행자가 선택할 수 있는 작업 시나리오입니다.')
+    setMatchAnalysisType('')
+    setTypeLabels([...DEFAULT_REQUEST_TYPE_LABELS])
+    setLabelDraft('')
+    setSelectedTaskKeys([])
+    setCompositionMode('sequence')
+  }
+  const addLabel = () => {
+    const clean = normalizeRequestTypeLabel(labelDraft)
+    if (!clean || typeLabels.some((label) => label.localeCompare(clean, undefined, { sensitivity: 'accent' }) === 0)) return
+    setTypeLabels((current) => [...current, clean])
+    setLabelDraft('')
+  }
+  const editType = (requestType: WorkbenchRequestType) => {
+    setEditingTypeId(requestType.id)
+    setTypeId(requestType.id)
+    setTypeName(requestType.display_name)
+    setTypeDescription(requestType.description)
+    setMatchAnalysisType(typeof requestType.match_rules.analysis_type === 'string' ? requestType.match_rules.analysis_type : '')
+    setTypeLabels(requestTypeLabels(requestType))
+    setLabelDraft('')
+    setCompositionMode(compositionModeFor(requestType.default_workflow.nodes))
+    setSelectedTaskKeys(requestType.default_workflow.nodes.map((node) => `${node.task_type_id}:${node.task_type_version}`))
+    document.querySelector('.workbench-admin-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+  const deactivateType = async (requestType: WorkbenchRequestType) => {
+    if (!window.confirm(`${requestType.display_name} 작업 유형을 삭제할까요? 과거 의뢰 이력은 유지되고 신규 접수에서만 숨겨집니다.`)) return
+    setSaving(true); setError(''); setNotice('')
+    try {
+      await workbenchApi.deactivateRequestType(requestType.id)
+      setRequestTypes((current) => current.filter((item) => item.id !== requestType.id))
+      if (editingTypeId === requestType.id) resetTypeDraft()
+      setNotice(`${requestType.display_name} 작업 유형을 삭제했습니다. 과거 버전 이력은 보존됩니다.`)
+    } catch (reason) { setError(friendlyWorkbenchError(reason)) }
+    finally { setSaving(false) }
+  }
   const saveType = async () => {
-    if (!typeId.trim() || typeName.trim().length < 2 || !selectedTasks.length) return
+    const sanitizedTypeId = sanitizeRequestTypeId(typeId)
+    setTypeId(sanitizedTypeId)
+    if (!REQUEST_TYPE_ID_PATTERN.test(sanitizedTypeId) || typeName.trim().length < 2 || !selectedTasks.length || !typeLabels.length) return
     setSaving(true); setError(''); setNotice('')
     try {
       const created = await workbenchApi.createRequestType({
-        id: typeId.trim(), display_name: typeName.trim(), description: typeDescription.trim(),
+        id: sanitizedTypeId, display_name: typeName.trim(), description: typeDescription.trim(),
         allowed_task_types: selectedTasks.map((task) => ({ id: task.id, version: task.version })),
         default_workflow: { nodes: nodesFor(selectedTasks, compositionMode) },
-        match_rules: matchAnalysisType.trim() ? { analysis_type: matchAnalysisType.trim() } : {}, is_active: true,
+        match_rules: { ...(matchAnalysisType.trim() ? { analysis_type: matchAnalysisType.trim() } : {}), labels: typeLabels }, is_active: true,
       })
       setRequestTypes((current) => [created, ...current.filter((item) => item.id !== created.id)])
       setNotice(`${created.display_name} v${created.version}을 저장했습니다.`)
-      setSelectedTaskKeys([])
+      resetTypeDraft()
     } catch (reason) { setError(friendlyWorkbenchError(reason)) } finally { setSaving(false) }
   }
   const saveBatchProfile = async () => {
@@ -357,19 +444,43 @@ export function WorkbenchTypeAdmin() {
   const editBatchProfile = (profile: BatchProfile) => setBatchDraft({ id: profile.id, name: profile.name, solver_path: profile.solver_path, working_directory: profile.working_directory, arguments_template: profile.arguments_template, environment: { ...profile.environment }, task_type_ids: [...profile.task_type_ids], is_active: profile.is_active, updated_by: '관리자' })
 
   return <div className="workbench-admin-page" data-testid="workbench-type-admin">
-    <section className="workbench-admin-hero"><div><span><Settings2 /> ADMIN ONLY</span><h1>작업 유형 관리</h1><p>의뢰 수행자에게 보여 줄 실행 시나리오와 허용 작업, 기본 순서를 불변 버전으로 정의합니다.</p></div><aside><strong>{requestTypes.length}</strong><span>활성 의뢰 유형</span></aside></section>
-    {error && <div className="workbench-service-error"><AlertTriangle /><div><strong>관리 화면을 불러오지 못했습니다.</strong><p>{error}</p></div></div>}
-    {notice && <div className="workbench-admin-notice" role="status" aria-live="polite"><Check /> {notice}</div>}
+    <section className="workbench-admin-hero"><div><span><Settings2 /> ADMIN ONLY</span><h1>작업 유형 관리</h1><p>수행자에게 보여 줄 실행 시나리오와 라벨, 허용 작업, 기본 순서를 불변 버전으로 정의합니다.</p></div><aside><strong>{requestTypes.length}</strong><span>활성 작업 유형</span></aside></section>
+    {error && <div className="workbench-service-error" role="alert"><AlertTriangle aria-hidden="true" /><div><strong>관리 화면을 불러오지 못했습니다.</strong><p>{error}</p></div></div>}
+    {notice && <div className="workbench-admin-notice" role="status" aria-live="polite"><Check aria-hidden="true" /> {notice}</div>}
     <nav className="workbench-admin-tabs" role="tablist" aria-label="작업 유형 관리 내부 창">
-      <button id="request-types-tab" role="tab" aria-selected={adminView === 'request-types'} aria-controls="request-types-panel" tabIndex={adminView === 'request-types' ? 0 : -1} onClick={() => setAdminView('request-types')} onKeyDown={(event) => { if (event.key === 'ArrowRight' || event.key === 'ArrowDown') { event.preventDefault(); setAdminView('batch-paths'); (event.currentTarget.nextElementSibling as HTMLButtonElement | null)?.focus() } }}><ClipboardList aria-hidden="true" /><span><strong>의뢰·작업 유형</strong><small>시나리오와 기본 작업 순서</small></span></button>
-      <button id="batch-paths-tab" role="tab" aria-selected={adminView === 'batch-paths'} aria-controls="batch-paths-panel" tabIndex={adminView === 'batch-paths' ? 0 : -1} onClick={() => setAdminView('batch-paths')} onKeyDown={(event) => { if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') { event.preventDefault(); setAdminView('request-types'); (event.currentTarget.previousElementSibling as HTMLButtonElement | null)?.focus() } }}><Settings2 aria-hidden="true" /><span><strong>배치 경로 정의</strong><small>HyperStudy 스타일 실행 프로필</small></span></button>
+      <button type="button" id="request-types-tab" role="tab" aria-selected={adminView === 'request-types'} aria-controls="request-types-panel" tabIndex={adminView === 'request-types' ? 0 : -1} onClick={() => setAdminView('request-types')} onKeyDown={(event) => { if (event.key === 'ArrowRight' || event.key === 'ArrowDown') { event.preventDefault(); setAdminView('batch-paths'); (event.currentTarget.nextElementSibling as HTMLButtonElement | null)?.focus() } }}><ClipboardList aria-hidden="true" /><span><strong>작업 유형</strong><small>시나리오·라벨·기본 작업 순서</small></span></button>
+      <button type="button" id="batch-paths-tab" role="tab" aria-selected={adminView === 'batch-paths'} aria-controls="batch-paths-panel" tabIndex={adminView === 'batch-paths' ? 0 : -1} onClick={() => setAdminView('batch-paths')} onKeyDown={(event) => { if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') { event.preventDefault(); setAdminView('request-types'); (event.currentTarget.previousElementSibling as HTMLButtonElement | null)?.focus() } }}><Settings2 aria-hidden="true" /><span><strong>배치 경로 정의</strong><small>HyperStudy 스타일 실행 프로필</small></span></button>
     </nav>
     {adminView === 'request-types' && <div id="request-types-panel" className="workbench-admin-panel" role="tabpanel" aria-labelledby="request-types-tab" tabIndex={0}>
     <section className="workbench-admin-layout">
-      <div className="workbench-admin-form"><header><span>NEW IMMUTABLE VERSION</span><h2>새 의뢰 유형 작성</h2></header><label><span>유형 ID</span><input aria-label="관리 유형 ID" value={typeId} onChange={(event) => setTypeId(event.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, '-'))} /></label><label><span>수행자에게 보일 이름</span><input aria-label="관리 유형 표시 이름" value={typeName} onChange={(event) => setTypeName(event.target.value)} /></label><label><span>언제 사용하는 작업인지</span><textarea aria-label="관리 유형 설명" value={typeDescription} onChange={(event) => setTypeDescription(event.target.value)} /></label><label><span>자동 추천 분석 유형</span><input aria-label="관리 자동 추천 분석 유형" value={matchAnalysisType} onChange={(event) => setMatchAnalysisType(event.target.value)} placeholder="예: DROP · 비워두면 수동 선택" /></label><fieldset><legend>기본 실행 방식</legend><label><input type="radio" checked={compositionMode === 'sequence'} onChange={() => setCompositionMode('sequence')} /> 선택 순서대로</label><label><input type="radio" checked={compositionMode === 'parallel'} onChange={() => setCompositionMode('parallel')} /> 독립·병렬</label></fieldset><div className="workbench-type-plan"><strong>{selectedTasks.length}개 작업 선택</strong><p>{selectedTasks.map((task) => task.display_name).join(' → ') || '오른쪽에서 수행자에게 허용할 작업을 선택하세요.'}</p></div><button className="workbench-admin-save" disabled={saving || !selectedTasks.length || typeName.trim().length < 2} onClick={() => void saveType()}>{saving ? <LoaderCircle className="spin" /> : <Save />} 새 유형 버전 저장</button></div>
-      <div className="workbench-admin-task-picker"><header><span>ALLOWED TASKS</span><h2>수행자에게 허용할 작업</h2><p>카드를 선택한 순서가 기본 실행 순서가 됩니다.</p></header><div>{taskTypes.map((task) => { const selected = selectedTaskKeys.includes(`${task.id}:${task.version}`); const guidance = TASK_GUIDANCE[task.kind]; return <button key={`${task.id}:${task.version}`} className={selected ? 'selected' : ''} onClick={() => toggle(task)}><i>{selected ? <Check /> : <Plus />}</i><span><strong>{task.display_name}</strong><small>{guidance?.purpose ?? task.description}</small></span><b>v{task.version}</b></button> })}</div></div>
+      <form className="workbench-admin-form" aria-labelledby="request-type-form-heading" onSubmit={(event) => { event.preventDefault(); void saveType() }}>
+        <header>
+          <div><span>{editingTypeId ? 'EDIT AS NEW VERSION' : 'NEW IMMUTABLE VERSION'}</span><h2 id="request-type-form-heading">{editingTypeId ? '작업 유형 편집' : '새 작업 유형 작성'}</h2></div>
+          {editingTypeId && <button type="button" className="workbench-edit-cancel" onClick={resetTypeDraft}><X aria-hidden="true" /> 편집 취소</button>}
+        </header>
+        <div className="workbench-form-field"><label htmlFor="request-type-id">유형 ID</label><div className="workbench-id-input-row"><input id="request-type-id" name="requestTypeId" required disabled={Boolean(editingTypeId)} minLength={3} maxLength={80} pattern="[a-z][a-z0-9_-]{2,79}" aria-describedby="request-type-id-help request-type-id-status" aria-invalid={!typeIdIsValid} value={typeId} onChange={(event) => setTypeId(event.target.value.toLowerCase())} onBlur={() => setTypeId(normalizedTypeId)} /><button type="button" disabled={Boolean(editingTypeId)} onClick={() => setTypeId(suggestRequestTypeId(typeName, matchAnalysisType))}>ID 추천</button></div><small id="request-type-id-help">영문 소문자 kebab-case · 3–80자 · <code>{'{domain}-{purpose}'}</code> (예: <code>drop-reliability-validation</code>). ID는 유지하고 변경은 새 버전으로 관리합니다.</small><small id="request-type-id-status" className={typeIdIsValid ? 'valid' : 'error'}>{typeIdIsValid ? existingType ? `현재 v${existingType.version} · 저장 시 v${existingType.version + 1} 생성` : '사용 가능한 형식입니다.' : '영문 소문자로 시작하고 영문 소문자·숫자·하이픈(-)·밑줄(_)만 사용하세요.'}</small></div>
+        <label htmlFor="request-type-name"><span>수행자에게 보일 이름</span><input id="request-type-name" name="requestTypeName" required minLength={2} maxLength={120} aria-label="관리 유형 표시 이름" value={typeName} onChange={(event) => setTypeName(event.target.value)} /></label>
+        <label htmlFor="request-type-description"><span>시나리오 설명</span><textarea id="request-type-description" name="requestTypeDescription" maxLength={500} aria-label="관리 유형 설명" value={typeDescription} onChange={(event) => setTypeDescription(event.target.value)} /></label>
+        <div className="workbench-label-editor">
+          <label htmlFor="request-type-label">작업 유형 라벨 *</label>
+          <div className="workbench-label-chips" aria-label="선택된 작업 유형 라벨">{typeLabels.map((label) => <span key={label}><Tag aria-hidden="true" />#{label}<button type="button" aria-label={`${label} 라벨 삭제`} disabled={typeLabels.length === 1} onClick={() => setTypeLabels((current) => current.filter((item) => item !== label))}><X aria-hidden="true" /></button></span>)}</div>
+          <div className="workbench-label-input-row"><input id="request-type-label" value={labelDraft} maxLength={24} onChange={(event) => setLabelDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ',') { event.preventDefault(); addLabel() } }} placeholder="라벨 입력 후 Enter (예: 충돌해석)" /><button type="button" onClick={addLabel} disabled={!normalizeRequestTypeLabel(labelDraft)}>라벨 추가</button></div>
+          <small>최소 1개 · 기본값 #SPDM, #부서 · 라벨은 의뢰 접수 필터에 바로 표시됩니다.</small>
+        </div>
+        <label htmlFor="request-type-analysis"><span>자동 추천 분석 유형</span><input id="request-type-analysis" name="requestTypeAnalysis" aria-label="관리 자동 추천 분석 유형" value={matchAnalysisType} onChange={(event) => setMatchAnalysisType(event.target.value)} placeholder="예: DROP · 비워두면 수동 선택" /></label>
+        <fieldset className="workbench-composition-options"><legend>기본 실행 방식</legend><label><input type="radio" name="compositionMode" value="sequence" checked={compositionMode === 'sequence'} onChange={() => setCompositionMode('sequence')} /><span><strong>순차 실행</strong><small>선택한 순서대로, 이전 작업 완료 후 다음 작업을 시작합니다.</small></span></label><label><input type="radio" name="compositionMode" value="parallel" checked={compositionMode === 'parallel'} onChange={() => setCompositionMode('parallel')} /><span><strong>독립·병렬 실행</strong><small>선행 관계 없이 선택한 작업을 각각 시작할 수 있습니다.</small></span></label></fieldset>
+        <div className="workbench-type-plan"><strong>{selectedTasks.length}개 작업 선택</strong><p>{selectedTasks.map((task) => task.display_name).join(' → ') || '오른쪽에서 수행자에게 허용할 작업을 선택하세요.'}</p></div>
+        <button type="submit" className="workbench-admin-save" disabled={saving || !typeIdIsValid || !selectedTasks.length || !typeLabels.length || typeName.trim().length < 2}>{saving ? <LoaderCircle className="spin" aria-hidden="true" /> : <Save aria-hidden="true" />} {editingTypeId ? '변경 내용을 새 버전으로 저장' : '새 작업 유형 저장'}</button>
+      </form>
+      <div className="workbench-admin-task-picker"><header><span>ALLOWED TASKS</span><h2>수행자에게 허용할 작업</h2><p>카드를 선택한 순서가 기본 실행 순서가 됩니다.</p></header><div>{taskTypes.map((task) => { const selected = selectedTaskKeys.includes(`${task.id}:${task.version}`); const guidance = TASK_GUIDANCE[task.kind]; return <button type="button" key={`${task.id}:${task.version}`} className={selected ? 'selected' : ''} aria-pressed={selected} onClick={() => toggle(task)}><i>{selected ? <Check aria-hidden="true" /> : <Plus aria-hidden="true" />}</i><span><strong>{task.display_name}</strong><small>{guidance?.purpose ?? task.description}</small></span><b>v{task.version}</b></button> })}</div></div>
     </section>
-    <section className="workbench-admin-types"><header><span>ACTIVE REQUEST TYPES</span><h2>현재 수행자에게 제공되는 시나리오</h2></header><div>{requestTypes.map((item) => <article key={`${item.id}:${item.version}`}><header><div><strong>{item.display_name}</strong><code>{item.id} · v{item.version}</code></div><b>{item.default_workflow.nodes.length}개 작업</b></header><p>{item.description}</p><div>{item.default_workflow.nodes.map((node, index) => <span key={node.node_key}>{index + 1}. {taskTypes.find((task) => task.id === node.task_type_id)?.display_name ?? node.task_type_id}</span>)}</div></article>)}</div></section>
+    <section className="workbench-admin-types"><header><span>ACTIVE WORK TYPES</span><h2>정의된 작업 유형</h2></header><div>{requestTypes.map((item) => <article key={`${item.id}:${item.version}`} className={editingTypeId === item.id ? 'editing' : ''}>
+      <header><div><strong>{item.display_name}</strong><code>{item.id} · v{item.version}</code></div><b>{item.default_workflow.nodes.length}개 작업</b></header>
+      <div className="workbench-type-labels">{requestTypeLabels(item).map((label) => <span key={label}>#{label}</span>)}</div>
+      <p>{item.description}</p>
+      <div className="workbench-type-steps">{item.default_workflow.nodes.map((node, index) => <span key={node.node_key}>{index + 1}. {taskTypes.find((task) => task.id === node.task_type_id)?.display_name ?? node.task_type_id}</span>)}</div>
+      <footer><button type="button" onClick={() => editType(item)}><Pencil aria-hidden="true" /> 편집</button><button type="button" className="danger" disabled={saving} onClick={() => void deactivateType(item)}><Trash2 aria-hidden="true" /> 삭제</button></footer>
+    </article>)}</div></section>
     </div>}
     {adminView === 'batch-paths' && <section id="batch-paths-panel" className="batch-profile-admin workbench-admin-panel" role="tabpanel" aria-labelledby="batch-paths-tab" tabIndex={0}><header><div><span>HYPERSTUDY STYLE BATCH PATHS</span><h2>배치 경로 정의</h2><p>실행 파일·작업 폴더·인수 템플릿·환경 변수와 호환 작업 유형을 저장합니다. 실제 외부 프로세스는 실행하지 않습니다.</p></div><strong>{batchProfiles.length}개 프로필</strong></header><div className="batch-profile-layout"><form aria-label="배치 경로 프로필 편집" onSubmit={(event) => { event.preventDefault(); void saveBatchProfile() }}><label><span>프로필 ID</span><input required aria-label="배치 프로필 ID" value={batchDraft.id} onChange={(event) => setBatchDraft({ ...batchDraft, id: event.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, '-') })}/></label><label><span>이름</span><input required aria-label="배치 프로필 이름" value={batchDraft.name} onChange={(event) => setBatchDraft({ ...batchDraft, name: event.target.value })}/></label><label><span>Solver 실행 파일</span><input required aria-label="Solver 실행 파일" value={batchDraft.solver_path} onChange={(event) => setBatchDraft({ ...batchDraft, solver_path: event.target.value })}/></label><label><span>Working directory</span><input required aria-label="배치 작업 폴더" value={batchDraft.working_directory} onChange={(event) => setBatchDraft({ ...batchDraft, working_directory: event.target.value })}/></label><label><span>Arguments template</span><textarea aria-label="배치 인수 템플릿" value={batchDraft.arguments_template} onChange={(event) => setBatchDraft({ ...batchDraft, arguments_template: event.target.value })}/><small>{'{input}, {cores}, {request_id} 같은 자리표시자를 사용할 수 있습니다.'}</small></label><label><span>Environment (KEY=VALUE)</span><textarea aria-label="배치 환경 변수" value={Object.entries(batchDraft.environment).map(([key, value]) => `${key}=${value}`).join('\n')} onChange={(event) => setBatchDraft({ ...batchDraft, environment: Object.fromEntries(event.target.value.split(/\r?\n/).filter(Boolean).map((line) => { const index = line.indexOf('='); return index > 0 ? [line.slice(0, index).trim(), line.slice(index + 1).trim()] : [line.trim(), ''] })) })}/></label><fieldset className="batch-task-types"><legend>호환 작업 유형 *</legend>{batchTaskTypes.map((task) => <label key={task.id}><input type="checkbox" checked={batchDraft.task_type_ids.includes(task.id)} onChange={() => setBatchDraft((current) => ({ ...current, task_type_ids: current.task_type_ids.includes(task.id) ? current.task_type_ids.filter((id) => id !== task.id) : [...current.task_type_ids, task.id] }))}/><span>{task.display_name}</span><code>{task.id}</code></label>)}<small id="batch-task-types-help">선택한 작업의 상세 화면에서만 이 배치 프로필을 사용할 수 있습니다.</small></fieldset><label className="batch-active"><input type="checkbox" checked={batchDraft.is_active} onChange={(event) => setBatchDraft({ ...batchDraft, is_active: event.target.checked })}/><span>활성 프로필</span></label><button className="workbench-admin-save" aria-describedby="batch-task-types-help" disabled={saving || !batchDraft.task_type_ids.length}>{saving ? <LoaderCircle className="spin" aria-hidden="true" /> : <Save aria-hidden="true" />} 배치 경로 저장</button></form><div className="batch-profile-list" aria-label="저장된 배치 프로필">{batchProfiles.map((profile) => <button key={profile.id} aria-pressed={batchDraft.id === profile.id} className={batchDraft.id === profile.id ? 'active' : ''} onClick={() => editBatchProfile(profile)}><span><strong>{profile.name}</strong><code>{profile.id}</code></span><small>{profile.solver_path}</small><small>호환 · {profile.task_type_ids.map((id) => batchTaskTypes.find((task) => task.id === id)?.display_name ?? id).join(', ') || '미지정'}</small><b>{profile.is_active ? 'ACTIVE' : 'INACTIVE'}</b></button>)}</div></div></section>}
   </div>

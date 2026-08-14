@@ -10,7 +10,7 @@ async function login(page: Page, role: 'admin' | 'viewer') {
 }
 
 async function openAnalysis(page: Page) {
-  await page.getByRole('button', { name: '해석 의뢰 현황', exact: true }).click()
+  await page.getByRole('link', { name: '해석 의뢰 현황', exact: true }).click()
   await expect(page.locator('.content-head')).toBeVisible()
   await page.locator('.view-tabs').getByRole('button', { name: /상세 분석/ }).click()
   await expect(page.locator('.analysis-subtabs')).toBeVisible()

@@ -550,12 +550,11 @@ def get_drop_videos(
         raise HTTPException(404, "하중 경우를 찾을 수 없습니다.")
 
     videos: list[dict[str, Any]] = []
+    storage_source = "DATABASE" if stored_videos else "EXAMPLE_ADAPTER"
     if stored_videos:
         for item in stored_videos:
             scene = DROP_VIDEO_DEMO_BY_ID.get(item["video_id"])
             metadata = json_value(item.get("metadata_json")) or {}
-            path = DROP_VIDEO_SOURCE_DIR / str(item["original_filename"])
-            probe = probe_mp4(path) if path.is_file() else None
             videos.append(
                 {
                     "video_id": item["video_id"],
@@ -567,8 +566,8 @@ def get_drop_videos(
                     "duration": None,
                     "file_size": int(item["file_size"]),
                     "format": "mp4" if str(item["mime_type"]) == "video/mp4" else "webm",
-                    "codec": probe.codec if probe else None,
-                    "fast_start": probe.fast_start if probe else None,
+                    "codec": metadata.get("codec"),
+                    "fast_start": metadata.get("fast_start"),
                     "sort_order": int(item["sort_order"]),
                     "drop_direction": metadata.get("drop_direction"),
                     "drop_condition": metadata.get("drop_condition"),
@@ -620,7 +619,7 @@ def get_drop_videos(
             "request_id": context[3],
             "request_name": context[4],
         },
-        "source": "EXAMPLE_ADAPTER",
+        "source": storage_source,
         "demo_only": True,
         "evaluation_source": "SYNTHETIC_DEMO",
         "contract_version": 1,

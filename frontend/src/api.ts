@@ -288,7 +288,7 @@ export const api = {
     adaptProject(unwrapGenerated(await apiClient.POST('/api/projects', { body: payload }))),
   requests: async (projectId: string) => responseRecordArray(unwrapGenerated(await apiClient.GET('/api/projects/{project_id}/requests', { params: { path: { project_id: projectId } } })), 'requests').map(adaptRequest),
   assigneeCandidates: async (projectId: string, query = '') => adaptAssigneeCandidates(unwrapGenerated(await apiClient.GET('/api/projects/{project_id}/assignee-candidates', { params: { path: { project_id: projectId }, query: query.trim() ? { q: query.trim() } : {} } }))),
-  createRequest: async (projectId: string, payload: { title: string; owner_user_id: string; due_in_days: number; overall_note: string; source_type: 'EXTERNAL_SYSTEM' | 'DEPARTMENT_HEAD'; source_reference: string; requested_by: string; request_type_id: 'design-reliability-validation' | 'design-doe-exploration'; request_type_version: number }) =>
+  createRequest: async (projectId: string, payload: { title: string; owner_user_id: string; due_in_days: number; overall_note: string; source_type: 'EXTERNAL_SYSTEM' | 'DEPARTMENT_HEAD'; source_reference: string; requested_by: string; request_type_id: string; request_type_version: number }) =>
     adaptRequest(unwrapGenerated(await apiClient.POST('/api/projects/{project_id}/requests', { params: { path: { project_id: projectId } }, body: payload }))),
   loadCases: async (requestId: string) => responseRecordArray(unwrapGenerated(await apiClient.GET('/api/requests/{request_id}/load-cases', { params: { path: { request_id: requestId } } })), 'loadCases').map(adaptLoadCase),
   dropVideos: async (loadCaseId: string, page = 1, pageSize = 20, signal?: AbortSignal) =>

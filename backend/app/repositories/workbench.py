@@ -188,6 +188,7 @@ class WorkbenchRepository:
         allowed = _decoded(item.pop("allowed_task_types_json")) or []
         workflow = _decoded(item.pop("default_workflow_json")) or {"nodes": []}
         rules = _decoded(item.pop("match_rules_json")) or {}
+        rules.setdefault("labels", ["SPDM", "부서"])
         return {
             **item,
             "allowed_task_types": allowed,
@@ -255,6 +256,19 @@ class WorkbenchRepository:
         )
         return self.get_request_type(payload["id"], version)  # type: ignore[return-value]
 
+    def deactivate_request_type(self, request_type_id: str) -> bool:
+        exists = self.conn.execute(
+            "SELECT 1 FROM request_type_versions WHERE id=? LIMIT 1",
+            [request_type_id],
+        ).fetchone()
+        if not exists:
+            return False
+        self.conn.execute(
+            "UPDATE request_type_versions SET is_active=false WHERE id=?",
+            [request_type_id],
+        )
+        return True
+
     def analysis_request_exists(self, request_id: str) -> bool:
         return bool(self.conn.execute("SELECT 1 FROM analysis_requests WHERE id=?", [request_id]).fetchone())
 
@@ -280,22 +294,28 @@ class WorkbenchRepository:
     def _rule_matches(rules: dict[str, Any], context: dict[str, Any]) -> bool:
         if not rules:
             return False
+        matched_rule = False
         exact_keys = {"project_id", "status", "owner", "analysis_type", "product_name"}
         for key, expected in rules.items():
+            if key == "labels":
+                continue
             if key in exact_keys:
+                matched_rule = True
                 actual = str(context.get(key) or "")
                 accepted = expected if isinstance(expected, list) else [expected]
                 if actual.casefold() not in {str(value).casefold() for value in accepted}:
                     return False
             elif key == "title_contains":
+                matched_rule = True
                 if str(expected).casefold() not in str(context.get("title") or "").casefold():
                     return False
             elif key == "overall_note_contains":
+                matched_rule = True
                 if str(expected).casefold() not in str(context.get("overall_note") or "").casefold():
                     return False
             else:
                 return False
-        return True
+        return matched_rule
 
     def request_type_resolution(self, request_id: str) -> dict[str, Any]:
         context = self.request_context(request_id)

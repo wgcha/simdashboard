@@ -42,11 +42,23 @@ def test_demo_video_is_database_backed_and_supports_head_range_and_download():
         assert len(ranged.content) == 16
         assert ranged.headers["content-range"].startswith("bytes 0-15/")
         assert client.get("/api/drop-videos/drop-analysis/content", headers={"If-Range": '"different"', "Range": "bytes=0-15"}).status_code == 200
+        assert client.get("/api/drop-videos/drop-analysis/content", headers={"If-Range": f"W/{etag}", "Range": "bytes=0-15"}).status_code == 200
         assert client.get("/api/drop-videos/drop-analysis/content", headers={"If-None-Match": etag}).status_code == 304
+        invalid_range = client.get("/api/drop-videos/drop-analysis/content", headers={"Range": "bytes=1-0"})
+        assert invalid_range.status_code == 416
+        assert invalid_range.headers["content-length"] == "0"
         download = client.get("/api/drop-videos/drop-analysis/download")
         assert download.status_code == 200
         assert "attachment" in download.headers["content-disposition"]
         assert "tv_drop_analysis_simulation.mp4" in download.headers["content-disposition"]
+
+
+def test_svg_response_uses_a_sandboxed_content_security_policy():
+    initialize_database()
+    with TestClient(app) as client:
+        response = client.get("/api/assets/media-contour-001")
+        assert response.status_code == 200
+        assert response.headers["content-security-policy"].startswith("sandbox;")
 
 
 def test_duckdb_video_streaming_releases_connection_before_concurrent_requests():

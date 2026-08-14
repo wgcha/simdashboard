@@ -10,7 +10,7 @@ async function loginAndOpenVideoDashboard(page: Page) {
 }
 
 async function openVideoDashboard(page: Page) {
-  await page.getByRole('button', { name: '해석 의뢰 현황', exact: true }).click()
+  await page.getByRole('link', { name: '해석 의뢰 현황', exact: true }).click()
   await page.locator('.view-tabs').getByRole('button', { name: /상세 분석/ }).click()
   await expect(page.getByTestId('drop-video-grid')).toBeVisible()
 }

@@ -24,3 +24,22 @@ def test_windows_vm_profile_accepts_only_complete_intranet_contract(monkeypatch,
     monkeypatch.setattr(preflight, "directory_settings", lambda: SimpleNamespace(mode="http"))
     preflight.main()
     assert "DEPLOYMENT_PROFILE_OK profile=windows-vm-intranet" in capsys.readouterr().out
+
+
+def test_rocky8_profile_requires_postgres_authentication_and_secure_cookie(monkeypatch):
+    monkeypatch.setenv("DEPLOYMENT_PROFILE", "rocky8")
+    monkeypatch.setattr(preflight, "database_settings", lambda: SimpleNamespace(backend="duckdb"))
+    monkeypatch.setattr(preflight, "security_settings", lambda: SimpleNamespace(auth_mode="disabled", cookie_secure=False))
+    monkeypatch.setattr(preflight, "directory_settings", lambda: SimpleNamespace(mode="local"))
+    with pytest.raises(RuntimeError, match="POSTGRESQL_REQUIRED.*AUTH_REQUIRED.*SECURE_COOKIE_REQUIRED"):
+        preflight.main()
+
+
+@pytest.mark.parametrize("auth_mode", ["password", "oidc"])
+def test_rocky8_profile_accepts_supported_production_auth(monkeypatch, capsys, auth_mode):
+    monkeypatch.setenv("DEPLOYMENT_PROFILE", "rocky8")
+    monkeypatch.setattr(preflight, "database_settings", lambda: SimpleNamespace(backend="postgresql"))
+    monkeypatch.setattr(preflight, "security_settings", lambda: SimpleNamespace(auth_mode=auth_mode, cookie_secure=True))
+    monkeypatch.setattr(preflight, "directory_settings", lambda: SimpleNamespace(mode="local"))
+    preflight.main()
+    assert "DEPLOYMENT_PROFILE_OK profile=rocky8" in capsys.readouterr().out

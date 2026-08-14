@@ -1,4 +1,8 @@
-:root {
+:root,
+:root[data-theme='dark'],
+.app-shell[data-theme='dark'],
+.bootstrap-workspace[data-theme='dark'],
+.login-page:not(.light-login) {
   --color-app-bg:#07111d;
   --color-app-background:radial-gradient(circle at 42% -20%,#163555 0,#07111d 42%);
   --color-surface-1:#0d1c2b;
@@ -11,9 +15,27 @@
   --color-danger:#ff5d73;
   --color-success:#4fd6a0;
   --color-warning:#ffbf57;
+  --color-sidebar-bg:rgba(6,15,25,.96);
+  --color-topbar-bg:rgba(7,17,29,.82);
+  --color-surface-raised:#0d2031;
+  --color-surface-interactive:#10263a;
+  --color-surface-selected:#102c3f;
+  --color-text-strong:#f1f8ff;
+  --color-text-on-accent:#03141e;
+  --color-border-strong:#31536d;
+  --color-focus:#4dcffb;
+  --color-chart-grid:#26394c;
+  --color-chart-axis:#71899f;
+  --color-shadow:rgba(0,0,0,.16);
+  --color-accent-shadow:rgba(81,211,255,.22);
+  --color-danger-surface:#2a1720;
+  --color-success-surface:#0e2b25;
 }
 
-:root[data-theme='light'] {
+:root[data-theme='light'],
+.app-shell[data-theme='light'],
+.bootstrap-workspace[data-theme='light'],
+.login-page.light-login {
   --color-app-bg:#f4f7fb;
   --color-app-background:#f4f7fb;
   --color-surface-1:#ffffff;
@@ -26,6 +48,21 @@
   --color-danger:#d92d20;
   --color-success:#16845b;
   --color-warning:#9a5b00;
+  --color-sidebar-bg:rgba(255,255,255,.96);
+  --color-topbar-bg:rgba(255,255,255,.88);
+  --color-surface-raised:#ffffff;
+  --color-surface-interactive:#eef3f8;
+  --color-surface-selected:#e8f1fc;
+  --color-text-strong:#101d31;
+  --color-text-on-accent:#ffffff;
+  --color-border-strong:#b8cde5;
+  --color-focus:#034ea2;
+  --color-chart-grid:#d8e2ec;
+  --color-chart-axis:#5c6d80;
+  --color-shadow:rgba(25,52,80,.08);
+  --color-accent-shadow:rgba(3,78,162,.18);
+  --color-danger-surface:#fce8eb;
+  --color-success-surface:#e4f4ed;
 }
 
 html,body,#root { min-height:100%; background:var(--color-app-bg); }
@@ -34,3 +71,50 @@ body { color:var(--color-text); background:var(--color-app-background); }
 .app-shell :is(.canvas-area,.portfolio-page,.data-workspace,.catalog-page,.template-page,.feature-gallery,.example-gallery,.help-center,.workbench-page,.request-intake-page),
 .app-shell.light-theme :is(.canvas-area,.portfolio-page,.data-workspace,.catalog-page,.template-page,.feature-gallery,.example-gallery,.help-center,.workbench-page,.request-intake-page) { background-color:var(--color-app-bg); color:var(--color-text); }
 .data-form-grid.single { grid-template-columns:1fr; }
+
+
+/* Theme-owned workspace chrome: each mode supplies all surface, text, action,
+   and semantic roles instead of inheriting dark defaults into light mode. */
+:root { color:var(--color-text); }
+.app-shell .sidebar { background:var(--color-sidebar-bg); border-color:var(--color-border); }
+.app-shell .brand { color:var(--color-text-muted); }
+.app-shell .brand strong { color:var(--color-text-strong); }
+.app-shell .brand-mark { color:var(--color-text-on-accent); background:var(--color-accent); }
+.app-shell .nav-group-label { color:var(--color-text-muted); }
+.app-shell .nav-main .nav-link,.app-shell .sidebar-foot button { color:var(--color-text-muted); }
+.app-shell .nav-main .nav-link:hover,.app-shell .nav-main .nav-link.active { color:var(--color-text); background:var(--color-surface-interactive); }
+.app-shell .nav-main .nav-link.active { box-shadow:inset 3px 0 var(--color-accent); }
+.app-shell .nav-flow-order,.app-shell .system-pill { color:var(--color-text-muted); border-color:var(--color-border); background:var(--color-surface-interactive); }
+.app-shell .signed-user { color:var(--color-text); border-color:var(--color-border); background:var(--color-surface-raised); }
+.app-shell .signed-user strong { color:var(--color-text); }.app-shell .signed-user span { color:var(--color-accent); }
+.app-shell .topbar { background:var(--color-topbar-bg); border-color:var(--color-border); }
+.app-shell .breadcrumb { color:var(--color-text-muted); }.app-shell .breadcrumb b { color:var(--color-border-strong); }.app-shell .breadcrumb strong { color:var(--color-text); }
+.app-shell .ghost-button,.app-shell .edit-button { color:var(--color-text); border-color:var(--color-border-strong); background:var(--color-surface-raised); }
+.app-shell .ghost-button:hover { color:var(--color-accent); border-color:var(--color-focus); }
+.app-shell .primary-button,.app-shell .top-actions .primary-button { color:var(--color-text-on-accent); background:var(--color-accent); border-color:var(--color-accent); box-shadow:0 5px 14px var(--color-accent-shadow); }
+.app-shell .avatar { color:var(--color-text); background:var(--color-surface-interactive); }
+.app-shell .content-head { padding:34px 32px 22px; background:var(--color-app-bg); }
+.app-shell .content-head h1 { color:var(--color-text-strong); }.app-shell .content-head p { color:var(--color-text-muted); }
+.app-shell .context-selectors span { color:var(--color-text-muted); }
+.app-shell .context-selectors select,.app-shell .head-meta button { color:var(--color-text); border-color:var(--color-border); background:var(--color-surface-raised); }
+.app-shell .view-tabs { border-color:var(--color-border); background:var(--color-app-bg); }
+.app-shell .view-tabs>button { color:var(--color-text-muted); }.app-shell .view-tabs>button.active { color:var(--color-accent); border-bottom-color:var(--color-accent); }
+.app-shell .view-tabs>button span { color:var(--color-accent); background:var(--color-surface-selected); }
+.app-shell .analysis-subtabs { border-color:var(--color-border); background:var(--color-surface-raised); box-shadow:inset 3px 0 var(--color-accent); }
+.app-shell .analysis-subtabs nav button { color:var(--color-text-muted); border-color:var(--color-border); background:var(--color-surface-raised); }
+.app-shell .analysis-subtabs nav button.active { color:var(--color-accent); border-color:var(--color-border-strong); background:var(--color-surface-selected); box-shadow:inset 3px 0 var(--color-accent); }
+.app-shell .widget-card { border-color:var(--color-border); background:var(--color-surface-raised); box-shadow:0 10px 26px var(--color-shadow); }
+.app-shell .widget-card h3,.app-shell .summary-grid strong { color:var(--color-text-strong); }
+.app-shell .recharts-cartesian-grid line { stroke:var(--color-chart-grid)!important; }
+.app-shell .recharts-cartesian-axis-tick-value,.app-shell .recharts-label { fill:var(--color-chart-axis)!important; }
+.app-shell .recharts-default-tooltip { background:var(--color-surface-raised)!important; border-color:var(--color-border)!important; color:var(--color-text)!important; }
+
+/* Light workspace feature surfaces: retain the workflow layout while preventing
+   legacy dark component fills from escaping into page, panel, and control UI. */
+.app-shell[data-theme='light'] :is(.workbench-page,.workbench-admin-page,.request-intake-page,.help-center,.example-gallery,.feature-gallery,.data-workspace,.catalog-page,.template-page) { color:var(--color-text); background:var(--color-app-bg); }
+.app-shell[data-theme='light'] :is(.workbench-card,.workbench-run-list,.workbench-run-detail,.work-item-detail,.operator-step,.operator-task-card,.assigned-request-card,.assigned-work-list,.intake-form-card,.intake-scenario-card,.data-form-card,.data-preview-card,.result-preview,.catalog-page article,.template-page article,.feature-gallery article,.example-gallery article,.help-center article) { color:var(--color-text); border-color:var(--color-border); background:var(--color-surface-raised); box-shadow:0 5px 18px var(--color-shadow); }
+.app-shell[data-theme='light'] :is(.workbench-page,.workbench-admin-page,.request-intake-page,.help-center,.example-gallery,.feature-gallery,.data-workspace,.catalog-page,.template-page) :is(input,select,textarea) { color:var(--color-text); border-color:var(--color-border); background:var(--color-surface-raised); }
+.app-shell[data-theme='light'] :is(.workbench-page,.workbench-admin-page,.request-intake-page,.help-center,.example-gallery,.feature-gallery,.data-workspace,.catalog-page,.template-page) :is(input,select,textarea):focus { border-color:var(--color-focus); box-shadow:0 0 0 3px var(--color-accent-shadow); }
+.app-shell[data-theme='light'] :is(.workbench-page,.workbench-admin-page,.request-intake-page,.help-center,.example-gallery,.feature-gallery,.data-workspace,.catalog-page,.template-page) :is(button:not(.primary-button),a.button) { color:var(--color-text); border-color:var(--color-border-strong); background:var(--color-surface-raised); }
+.app-shell[data-theme='light'] :is(.workbench-page,.workbench-admin-page,.request-intake-page,.help-center,.example-gallery,.feature-gallery,.data-workspace,.catalog-page,.template-page) :is(.primary-button,.intake-submit,button.primary) { color:var(--color-text-on-accent)!important; border-color:var(--color-accent)!important; background:var(--color-accent)!important; }
+.app-shell[data-theme='light'] :is(.pass,.success,.completed) { color:var(--color-success); }.app-shell[data-theme='light'] :is(.fail,.danger,.failed,.blocked) { color:var(--color-danger); }

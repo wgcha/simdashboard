@@ -130,6 +130,41 @@ def test_request_creation_is_atomic_and_persists_an_immutable_snapshot(monkeypat
         assert conn.execute("SELECT count(*) FROM analysis_requests WHERE title = ?", [failed_title]).fetchone()[0] == 0
 
 
+def test_request_creation_accepts_an_admin_defined_active_scenario():
+    custom_id = f"custom-intake-{uuid4().hex[:8]}"
+    with TestClient(app) as client:
+        created_type = client.post(
+            "/api/admin/workbench/request-types",
+            json={
+                "id": custom_id,
+                "display_name": "사용자 정의 접수 시나리오",
+                "description": "관리자가 수행자에게 제공하는 접수 작업 유형",
+                "allowed_task_types": [{"id": "cad-prepare", "version": 1}],
+                "default_workflow": {
+                    "nodes": [
+                        {
+                            "node_key": "step-01-cad-prepare",
+                            "task_type_id": "cad-prepare",
+                            "task_type_version": 1,
+                            "depends_on": [],
+                        }
+                    ]
+                },
+                "match_rules": {},
+                "is_active": True,
+            },
+        )
+        assert created_type.status_code == 201, created_type.text
+
+        created = _create_request(client, custom_id)
+        assert created["request_type_id"] == custom_id
+        assert created["scenario_name"] == "사용자 정의 접수 시나리오"
+
+        workflow = client.get(f"/api/requests/{created['id']}/workflow").json()
+        assert workflow["work_plan"]["scenario_name"] == "사용자 정의 접수 시나리오"
+        assert [item["task_type_id"] for item in workflow["steps"]] == ["cad-prepare"]
+
+
 def test_work_item_completion_is_sequential_idempotent_and_canonical():
     with TestClient(app) as client:
         created = _create_request(client)

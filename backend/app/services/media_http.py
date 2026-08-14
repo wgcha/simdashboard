@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import tempfile
 from dataclasses import dataclass
 from typing import Any, BinaryIO, Callable, Iterator
@@ -62,8 +63,12 @@ def _etag_matches(value: str | None, etag: str) -> bool:
     return any(token.strip() in {etag, "*", f"W/{etag}"} for token in value.split(","))
 
 
+def _strong_etag_matches(value: str | None, etag: str) -> bool:
+    return value is not None and value.strip() == etag
+
+
 def safe_filename(value: str | None) -> str:
-    raw = (value or "download").replace("\r", "").replace("\n", "").replace("\x00", "").strip()
+    raw = re.sub(r"[\x00-\x1f\x7f]", "", value or "download").strip()
     raw = raw.replace("/", "_").replace("\\", "_").replace('"', "'")
     return raw[:240] or "download"
 
@@ -76,7 +81,7 @@ def content_disposition(filename: str, *, download: bool) -> str:
 
 
 def _base_headers(*, mime_type: str, size: int, etag: str, filename: str, download: bool) -> dict[str, str]:
-    return {
+    headers = {
         "Content-Type": mime_type,
         "Content-Length": str(size),
         "Accept-Ranges": "bytes",
@@ -85,6 +90,9 @@ def _base_headers(*, mime_type: str, size: int, etag: str, filename: str, downlo
         "Cache-Control": "private, max-age=0, must-revalidate, no-transform",
         "X-Content-Type-Options": "nosniff",
     }
+    if mime_type.casefold() == "image/svg+xml":
+        headers["Content-Security-Policy"] = "sandbox; default-src 'none'; style-src 'unsafe-inline'"
+    return headers
 
 
 def _materialize_duckdb_range(blob: BlobRecord, start: int, end: int) -> BinaryIO:
@@ -118,14 +126,14 @@ def build_media_response(
 
     byte_range: ByteRange | None = None
     range_header = request.headers.get("range")
-    if range_header and _etag_matches(request.headers.get("if-range"), etag) is False and request.headers.get("if-range"):
+    if range_header and request.headers.get("if-range") and not _strong_etag_matches(request.headers.get("if-range"), etag):
         range_header = None
     if range_header:
         try:
             byte_range = parse_single_range(range_header, blob.file_size)
         except ValueError:
             headers["Content-Range"] = f"bytes */{blob.file_size}"
-            headers.pop("Content-Length", None)
+            headers["Content-Length"] = "0"
             return Response(status_code=416, headers=headers)
 
     status = 206 if byte_range else 200

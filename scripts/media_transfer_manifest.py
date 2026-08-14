@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 
 from app.database import connect, initialize_database  # noqa: E402
+from app.repositories.media_repository import get_blob, validate_blob_chunks  # noqa: E402
 
 
 def build_manifest() -> dict[str, object]:
@@ -21,22 +22,27 @@ def build_manifest() -> dict[str, object]:
                 "SELECT count(*) FROM media_assets WHERE blob_id IS NOT NULL"
             ).fetchone()[0]
         ) + int(connection.execute("SELECT count(*) FROM drop_video_assets WHERE blob_id IS NOT NULL").fetchone()[0])
-    digest = hashlib.sha256()
-    total_bytes = 0
-    total_declared_chunks = 0
-    for blob_id, sha256, file_size, chunk_count in blobs:
-        digest.update(f"{blob_id}:{sha256}:{file_size}:{chunk_count}\n".encode("utf-8"))
-        total_bytes += int(file_size)
-        total_declared_chunks += int(chunk_count)
+        digest = hashlib.sha256()
+        total_bytes = 0
+        total_declared_chunks = 0
+        for blob_id, sha256, file_size, chunk_count in blobs:
+            blob = get_blob(connection, str(blob_id))
+            if blob is None:
+                raise RuntimeError(f"blob metadata disappeared during manifest creation: {blob_id}")
+            validate_blob_chunks(connection, blob)
+            digest.update(f"{blob_id}:{sha256}:{file_size}:{chunk_count}\n".encode("utf-8"))
+            total_bytes += int(file_size)
+            total_declared_chunks += int(chunk_count)
     return {
         "format": "analysis-canvas-media-manifest",
-        "format_version": 1,
+        "format_version": 2,
         "blob_count": len(blobs),
         "chunk_count": chunks,
         "declared_chunk_count": total_declared_chunks,
         "total_blob_bytes": total_bytes,
         "reference_count": references,
         "catalog_sha256": digest.hexdigest(),
+        "content_integrity_verified": True,
     }
 
 

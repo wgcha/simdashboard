@@ -1,30 +1,47 @@
 # Rocky Linux 8 deployment runbook
 
-This runbook describes the approved ordering. It does not grant authority to
-install packages, modify systemd, change nginx, or access production secrets.
-Use the reviewed templates under `deploy/rocky8` and the organisation's change
-process for those privileged actions.
+실행 명령과 상세 설정은 [`deploy/rocky8/README.md`](../deploy/rocky8/README.md)를
+따른다. 이 문서는 운영 변경 순서와 release gate를 정의한다.
 
-1. Build a release artifact with the pinned Python/Node runtimes and commit the
-   OpenAPI snapshot/client. Run `deploy/rocky8/validate-templates.sh` in CI.
-2. Render the systemd/nginx templates with an approved service identity,
-   immutable release path, TLS configuration, and root-readable EnvironmentFile.
-   The service EnvironmentFile contains only the app role `DATABASE_URL`; owner
-   credentials stay in the migration/restore secret path.
-3. With the owner role, execute `alembic upgrade head`, then run
-   `harden_postgres_privileges.py` as prescribed by the PostgreSQL setup guide.
-4. On a deliberate initial/reference install only, run
-   `seed_database.py --mode reference` with the app role. This is the current
-   deterministic fixture set; `--mode demo` is identical for compatibility and
-   is not production business seed data.
-5. With the app role, run `check_postgres_connection.py` and
-   `check_postgres_pool_budget.py` with `UVICORN_WORKERS`,
-   `POSTGRES_MAX_CONNECTIONS`, and reserved connections explicitly configured.
-6. Activate the reviewed release and use the nginx-routed `/api/health` check.
-   It must return `status=ok` and `database_backend=postgresql`.
-7. For application rollback, repoint only to a release compatible with the
-   current Alembic revision. Database downgrade/restore is a separate approved
-   recovery operation using an owner credential and verified backup.
+## 배포 전 승인 항목
 
-The production app must not use DuckDB. A missing PostgreSQL table or stale
-Alembic revision is a deployment failure, not a startup repair opportunity.
+1. 대상은 Rocky Linux 8이며 Python 3.12.13, PostgreSQL 18.x 정책을 만족한다.
+2. PostgreSQL admin/owner/app 역할을 분리하고 app 역할에는 DB/schema CREATE를 주지 않는다.
+3. 서비스 DNS, TLS 인증서와 키, 방화벽, SELinux 변경이 승인되어 있다.
+4. 운영 인증은 `password` 또는 `oidc`이고 secure cookie와 HTTPS를 사용한다.
+5. DB backup과 restore 시험이 완료되어 있다.
+6. 인터넷 차단망이면 같은 Rocky minor/CPU 아키텍처에서 `--with-wheels` 번들을 만들었다.
+
+## Release 절차
+
+1. 테스트가 끝난 commit에서 `deploy/rocky8/build-release.sh`를 실행한다.
+2. artifact와 `SHA256SUMS`를 변경관리 경로로 대상 서버에 전달한다.
+3. root 소유 mode `0600` 설정 파일을 작성한다. owner/admin credential은 서비스
+   EnvironmentFile에 복사하지 않는다.
+4. `install.sh --check`를 실행해 OS, 설정, 인증서와 artifact를 읽기 전용 검증한다.
+5. 배포 직전 custom-format PostgreSQL backup을 만들고 manifest를 검증한다.
+6. `install.sh`를 실행한다. installer는 migration → 권한 강화 → app preflight →
+   systemd/nginx 검증 → symlink 전환 → health check 순서를 강제한다.
+7. public HTTPS URL, 로그인, 역할별 권한, 결과 등록/조회, 감사 이벤트를 smoke test한다.
+
+`SEED_MODE=reference`는 명시적인 최초 예제 설치에서만 사용한다. `reference`와
+`demo`는 현재 동일한 결정적 fixture의 별칭이며 운영 업무 데이터가 아니다.
+
+## Release gate
+
+- `/api/health`: `status=ok`, `database_backend=postgresql`
+- DB server major: 18
+- app connection role: `simdashboard_app`(또는 승인된 `SIM_DASH_APP_ROLE`)
+- Alembic revision: code의 단일 head
+- app role: DB/schema CREATE 거부, 업무 테이블 CRUD, audit append-only
+- worker 수 × request/media pool budget: PostgreSQL usable connections 이내
+- nginx config와 systemd unit 검증 통과
+- SELinux enforcing 상태와 HTTPS firewalld 정책에서 접근 성공
+
+## 장애와 rollback
+
+서비스 health check 실패 시 installer는 이전 `current` symlink가 있으면 application
+code를 복원하고 서비스를 재시작한다. 이는 DB migration을 되돌리지 않는다. 이전
+release가 현재 Alembic revision과 호환되지 않으면 서비스를 중지하고 수정 release를
+배포한다. DB downgrade 또는 restore는 owner credential과 검증된 backup을 사용하는
+별도의 승인 작업이다.

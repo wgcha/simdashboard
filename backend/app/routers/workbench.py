@@ -114,6 +114,15 @@ def create_request_type(payload: RequestTypeVersionCreate, request: Request) -> 
         return repository.create_request_type_version(payload.model_dump())
 
 
+@router.delete("/admin/workbench/request-types/{request_type_id}")
+def deactivate_request_type(request_type_id: str, request: Request) -> dict[str, str]:
+    require_permission(request, SYSTEM_CATALOG_MANAGE)
+    with connect() as conn:
+        if not WorkbenchRepository(conn).deactivate_request_type(request_type_id):
+            raise HTTPException(404, "작업 유형을 찾을 수 없습니다.")
+    return {"id": request_type_id, "status": "INACTIVE"}
+
+
 @router.get("/workbench/batch-profiles")
 def list_batch_profiles(request: Request, include_inactive: bool = Query(default=False)) -> list[dict[str, Any]]:
     with connect() as conn:

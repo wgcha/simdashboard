@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from typing import Any, Iterator
 
@@ -87,8 +88,6 @@ def insert_blob(connection: Any, blob: BlobRecord) -> BlobRecord:
 
 
 def insert_chunk(connection: Any, blob_id: str, chunk_index: int, content: bytes) -> None:
-    import hashlib
-
     connection.execute(
         """
         INSERT INTO asset_blob_chunks
@@ -100,33 +99,45 @@ def insert_chunk(connection: Any, blob_id: str, chunk_index: int, content: bytes
 
 
 def validate_blob_chunks(connection: Any, blob: BlobRecord) -> None:
-    row = connection.execute(
+    if blob.chunk_size <= 0 or blob.chunk_size > CHUNK_SIZE:
+        raise ValueError("미디어 blob 청크 크기 metadata가 허용 범위를 벗어났습니다.")
+    expected_count = (blob.file_size + blob.chunk_size - 1) // blob.chunk_size if blob.file_size else 0
+    if blob.chunk_count != expected_count:
+        raise ValueError("미디어 blob 청크 개수 metadata가 파일 크기와 일치하지 않습니다.")
+
+    cursor = connection.execute(
         """
-        SELECT count(*), COALESCE(sum(content_length), 0), min(chunk_index), max(chunk_index)
-        FROM asset_blob_chunks WHERE blob_id=?
+        SELECT chunk_index, content, content_length, content_sha256
+        FROM asset_blob_chunks
+        WHERE blob_id=?
+        ORDER BY chunk_index
         """,
         [blob.id],
-    ).fetchone()
-    count, total, minimum, maximum = int(row[0]), int(row[1]), row[2], row[3]
-    if count != blob.chunk_count or total != blob.file_size:
+    )
+    digest = hashlib.sha256()
+    expected_index = 0
+    total = 0
+    while row := cursor.fetchone():
+        chunk_index, raw_content, content_length, content_sha256 = row
+        chunk_index = int(chunk_index)
+        content = bytes(raw_content)
+        content_length = int(content_length)
+        if chunk_index != expected_index:
+            raise ValueError("미디어 blob 청크 순서가 연속적이지 않습니다.")
+        if content_length != len(content) or content_length <= 0 or content_length > blob.chunk_size:
+            raise ValueError(f"미디어 blob 청크 길이 invariant가 깨졌습니다: {chunk_index}")
+        if chunk_index < blob.chunk_count - 1 and content_length != blob.chunk_size:
+            raise ValueError(f"미디어 blob 중간 청크 크기가 metadata와 일치하지 않습니다: {chunk_index}")
+        if hashlib.sha256(content).hexdigest() != str(content_sha256):
+            raise ValueError(f"미디어 blob 청크 checksum이 일치하지 않습니다: {chunk_index}")
+        digest.update(content)
+        total += content_length
+        expected_index += 1
+
+    if expected_index != blob.chunk_count or total != blob.file_size:
         raise ValueError("미디어 blob 청크 개수 또는 길이가 metadata와 일치하지 않습니다.")
-    if count == 0:
-        if blob.file_size != 0:
-            raise ValueError("비어 있지 않은 blob에 청크가 없습니다.")
-        return
-    if int(minimum) != 0 or int(maximum) != count - 1:
-        raise ValueError("미디어 blob 청크 순서가 연속적이지 않습니다.")
-    bad = connection.execute(
-        """
-        SELECT chunk_index FROM asset_blob_chunks
-        WHERE blob_id=? AND (content_length <> octet_length(content)
-          OR content_length <= 0 OR content_length > ?)
-        LIMIT 1
-        """,
-        [blob.id, CHUNK_SIZE],
-    ).fetchone()
-    if bad:
-        raise ValueError(f"미디어 blob 청크 invariant가 깨졌습니다: {bad[0]}")
+    if digest.hexdigest() != blob.sha256:
+        raise ValueError("미디어 blob 전체 checksum이 metadata와 일치하지 않습니다.")
 
 
 def attach_media_asset(
@@ -137,6 +148,7 @@ def attach_media_asset(
     original_filename: str,
     mime_type: str,
 ) -> None:
+    connection.execute("UPDATE asset_blobs SET orphaned_at=NULL WHERE id=?", [blob.id])
     connection.execute(
         """
         UPDATE media_assets
@@ -204,11 +216,13 @@ def iter_blob_range(connection: Any, blob_id: str, start: int, end: int) -> Iter
     blob = get_blob(connection, blob_id)
     if blob is None:
         raise FileNotFoundError(blob_id)
+    if start < 0 or end < start or end >= blob.file_size:
+        raise ValueError("미디어 blob 요청 범위가 유효하지 않습니다.")
     first_chunk = start // blob.chunk_size
     last_chunk = end // blob.chunk_size
     cursor = connection.execute(
         """
-        SELECT chunk_index, content, content_length
+        SELECT chunk_index, content, content_length, content_sha256
         FROM asset_blob_chunks
         WHERE blob_id=? AND chunk_index BETWEEN ? AND ?
         ORDER BY chunk_index
@@ -220,12 +234,14 @@ def iter_blob_range(connection: Any, blob_id: str, start: int, end: int) -> Iter
         row = cursor.fetchone()
         if row is None:
             break
-        chunk_index, raw_content, content_length = int(row[0]), row[1], int(row[2])
+        chunk_index, raw_content, content_length, content_sha256 = int(row[0]), row[1], int(row[2]), str(row[3])
         if chunk_index != expected:
             raise RuntimeError("미디어 blob 청크가 누락되었거나 순서가 바뀌었습니다.")
         content = bytes(raw_content)
         if len(content) != content_length:
             raise RuntimeError("미디어 blob 청크 길이가 손상되었습니다.")
+        if hashlib.sha256(content).hexdigest() != content_sha256:
+            raise RuntimeError("미디어 blob 청크 checksum이 손상되었습니다.")
         left = start - chunk_index * blob.chunk_size if chunk_index == first_chunk else 0
         right = end - chunk_index * blob.chunk_size + 1 if chunk_index == last_chunk else len(content)
         if right > left:

@@ -178,6 +178,6 @@ FastAPI 계약을 변경한 뒤에는 프런트엔드에서 `pnpm run generate:a
 
 상세 절차는 [PostgreSQL 연동 가이드](docs/backend-sql-integration-guide.md)와 [배포 보안·백업 가이드](docs/deployment-security-backup-guide.md)를 참고하세요. 외부 공개 전에는 `AUTH_MODE=password`, HTTPS, 별도 백업 저장소를 반드시 사용해야 합니다.
 
-Rocky Linux 8 운영에서는 PostgreSQL만 runtime DB로 사용합니다. Alembic migration은 owner 역할로, 앱 실행과 seed/preflight는 app 역할로 분리합니다. 구체적인 순서와 비권한 템플릿은 [Rocky 8 배포 runbook](docs/rocky8-deployment-runbook.md)을 따르세요. PostgreSQL 시작은 schema 확인만 수행하며, 현재 결정적 fixture 세트는 필요할 때만 `backend/scripts/seed_database.py --mode reference`로 명시 실행합니다. `reference`와 `demo`는 현재 동일 fixture의 별칭이므로 운영 업무 데이터로 간주하면 안 됩니다.
+Rocky Linux 8 운영에서는 PostgreSQL만 runtime DB로 사용합니다. Alembic migration은 owner 역할로, 앱 실행과 seed/preflight는 app 역할로 분리합니다. `deploy/rocky8/build-release.sh`로 배포 번들을 만들고, 대상 Rocky 8.10 서버에서는 root 전용 설정 파일과 `install.sh`로 설치합니다. 전체 선행 조건과 명령은 [Rocky 8 설치 안내](deploy/rocky8/README.md), 운영 순서는 [Rocky 8 배포 runbook](docs/rocky8-deployment-runbook.md)을 따르세요. PostgreSQL 시작은 schema 확인만 수행하며, 현재 결정적 fixture 세트는 필요할 때만 `backend/scripts/seed_database.py --mode reference`로 명시 실행합니다. `reference`와 `demo`는 현재 동일 fixture의 별칭이므로 운영 업무 데이터로 간주하면 안 됩니다.
 
 샘플 데이터는 합성이며 실제 제품 판정 근거로 사용하면 안 됩니다.

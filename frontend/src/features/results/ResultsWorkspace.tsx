@@ -1,8 +1,8 @@
 import type { ComponentType } from 'react'
 import { GripVertical, LayoutDashboard, LoaderCircle, Plus, Settings2 } from 'lucide-react'
 import { Responsive, WidthProvider, type Layout, type Layouts } from 'react-grid-layout'
-import type { DashboardDefinition, Overview, QualityThreshold } from '../../types'
-import { ComparisonWorkspace, type RunComparisonReportContext, WidgetCard } from './AnalysisWidgets'
+import type { DashboardDefinition, Overview, QualityThreshold, RunComparisonReportContext } from '../../types'
+import { ComparisonWorkspace, WidgetCard } from './AnalysisWidgets'
 
 const ResponsiveGridLayout = WidthProvider(Responsive) as unknown as ComponentType<any>
 

@@ -35,6 +35,15 @@ export type WorkbenchRequestType = {
   created_at: string
 }
 
+export const DEFAULT_REQUEST_TYPE_LABELS = ['SPDM', '부서'] as const
+
+export function requestTypeLabels(requestType: Pick<WorkbenchRequestType, 'match_rules'>): string[] {
+  const labels = requestType.match_rules.labels
+  if (!Array.isArray(labels)) return [...DEFAULT_REQUEST_TYPE_LABELS]
+  const cleanLabels = labels.filter((label): label is string => typeof label === 'string' && Boolean(label.trim()))
+  return cleanLabels.length ? cleanLabels : [...DEFAULT_REQUEST_TYPE_LABELS]
+}
+
 export type RequestTypeResolution = {
   resolution: 'ASSIGNED' | 'RECOMMENDED' | 'REVIEW_REQUIRED' | 'USER_SELECTION'
   request_id: string

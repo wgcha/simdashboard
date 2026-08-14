@@ -1127,6 +1127,10 @@ def ensure_access_control_schema(
                 menu.is_policy_editable,
             ],
         )
+        conn.execute(
+            "UPDATE menu_definitions SET sequence_no=? WHERE id=?",
+            [menu.sequence_no, menu.id],
+        )
     conn.execute(
         """
         INSERT OR IGNORE INTO menu_policy_state (id, version, updated_by, updated_at)
@@ -1411,7 +1415,7 @@ def ensure_demo_media_storage(conn: Any) -> None:
     referenced by the local seed or by the explicit demo allowlist. Production
     imports use the same storage service but do not depend on this helper.
     """
-    from .services.drop_video_demo import DROP_VIDEO_DEMO_SCENES, DROP_VIDEO_SOURCE_DIR
+    from .services.drop_video_demo import DROP_VIDEO_DEMO_SCENES, DROP_VIDEO_SOURCE_DIR, probe_mp4
     from .services.media_storage_service import attach_stored_media, store_file
 
     asset_root = Path(__file__).resolve().parents[1] / "assets"
@@ -1444,13 +1448,15 @@ def ensure_demo_media_storage(conn: Any) -> None:
         if source.parent != DROP_VIDEO_SOURCE_DIR.resolve() or not source.is_file():
             continue
         stored = store_file(conn, source, filename=scene.filename, mime_type="video/mp4", asset_type="VIDEO")
+        media_probe = probe_mp4(source)
+        conn.execute("UPDATE asset_blobs SET orphaned_at=NULL WHERE id=?", [stored.blob.id])
         conn.execute(
             """
             INSERT OR IGNORE INTO drop_video_assets
                 (video_id, load_case_id, blob_id, original_filename, mime_type, scene_name, sort_order, metadata_json)
             VALUES (?, 'loadcase-drop-bottom-001', ?, ?, 'video/mp4', ?, ?, ?)
             """,
-            [scene.video_id, stored.blob.id, scene.filename, scene.scene_name, scene.sort_order, json.dumps({"demo": True})],
+            [scene.video_id, stored.blob.id, scene.filename, scene.scene_name, scene.sort_order, json.dumps({"demo": True, "codec": media_probe.codec, "fast_start": media_probe.fast_start})],
         )
 
 

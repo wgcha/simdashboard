@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { AlertTriangle, Building2, Check, ChevronRight, ClipboardPlus, LoaderCircle, Network, UserRound } from 'lucide-react'
 import { api, type AssigneeCandidate } from '../../api'
 import type { AnalysisRequest, Project } from '../../types'
 import { workbenchApi } from './api'
-import type { WorkbenchRequestType } from './types'
+import { requestTypeLabels, type WorkbenchRequestType } from './types'
 
 type IntakeSource = 'EXTERNAL_SYSTEM' | 'DEPARTMENT_HEAD'
+type RequestTypeSelection = Pick<WorkbenchRequestType, 'id' | 'version'>
 
 export function RequestIntakePage({ projects, createdBy, canCreate, onCreated, onOpenWorkbench }: {
   projects: Project[]
@@ -25,17 +26,37 @@ export function RequestIntakePage({ projects, createdBy, canCreate, onCreated, o
   const [assigneesLoading, setAssigneesLoading] = useState(false)
   const [dueInDays, setDueInDays] = useState(14)
   const [note, setNote] = useState('')
-  const [requestTypeId, setRequestTypeId] = useState<'design-reliability-validation' | 'design-doe-exploration'>('design-reliability-validation')
+  const [requestTypeSelection, setRequestTypeSelection] = useState<RequestTypeSelection | null>(null)
+  const [selectedLabel, setSelectedLabel] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [created, setCreated] = useState<AnalysisRequest | null>(null)
 
   useEffect(() => {
+    let cancelled = false
+    setLoading(true)
     workbenchApi.requestTypes()
-      .then((items) => setRequestTypes(items.filter((item) => item.id === 'design-reliability-validation' || item.id === 'design-doe-exploration')))
-      .catch((reason) => setError(reason instanceof Error ? reason.message : '의뢰 시나리오를 불러오지 못했습니다.'))
-      .finally(() => setLoading(false))
+      .then((items) => {
+        if (cancelled) return
+        const activeItems = items.filter((item) => item.is_active)
+        setRequestTypes(activeItems)
+        setRequestTypeSelection((current) => {
+          if (current && activeItems.some((item) => item.id === current.id && item.version === current.version)) return current
+          const first = activeItems[0]
+          return first ? { id: first.id, version: first.version } : null
+        })
+      })
+      .catch((reason) => {
+        if (cancelled) return
+        setRequestTypes([])
+        setRequestTypeSelection(null)
+        setError(reason instanceof Error ? reason.message : '접수 가능한 업무 유형을 불러오지 못했습니다.')
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => { cancelled = true }
   }, [])
 
   useEffect(() => {
@@ -68,8 +89,22 @@ export function RequestIntakePage({ projects, createdBy, canCreate, onCreated, o
     return () => { cancelled = true }
   }, [canCreate, createdBy, projectId])
 
-  const selectedType = useMemo(() => requestTypes.find((item) => item.id === requestTypeId), [requestTypeId, requestTypes])
+  const selectedType = requestTypeSelection
+    ? requestTypes.find((item) => item.id === requestTypeSelection.id && item.version === requestTypeSelection.version)
+    : undefined
+  const declaredLabels = Array.from(new Set(requestTypes.flatMap(requestTypeLabels))).sort((left, right) => left.localeCompare(right, 'ko'))
+  const filteredRequestTypes = selectedLabel
+    ? requestTypes.filter((item) => requestTypeLabels(item).includes(selectedLabel))
+    : requestTypes
   const selectedProject = projects.find((item) => item.id === projectId)
+  const filterByLabel = (label: string | null) => {
+    setSelectedLabel(label)
+    const visibleTypes = label ? requestTypes.filter((item) => requestTypeLabels(item).includes(label)) : requestTypes
+    if (!requestTypeSelection || !visibleTypes.some((item) => item.id === requestTypeSelection.id && item.version === requestTypeSelection.version)) {
+      const first = visibleTypes[0]
+      setRequestTypeSelection(first ? { id: first.id, version: first.version } : null)
+    }
+  }
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
@@ -79,7 +114,7 @@ export function RequestIntakePage({ projects, createdBy, canCreate, onCreated, o
       const request = await api.createRequest(projectId, {
         title: title.trim(), owner_user_id: ownerUserId, due_in_days: dueInDays, overall_note: note.trim(),
         source_type: sourceType, source_reference: sourceReference.trim(), requested_by: requestedBy.trim(),
-        request_type_id: requestTypeId, request_type_version: selectedType.version,
+        request_type_id: selectedType.id, request_type_version: selectedType.version,
       })
       await onCreated(projectId, request)
       setCreated(request)
@@ -89,12 +124,12 @@ export function RequestIntakePage({ projects, createdBy, canCreate, onCreated, o
     } finally { setSaving(false) }
   }
 
-  if (loading) return <div className="intake-state"><LoaderCircle className="spin" /> 접수 가능한 작업 시나리오를 확인하고 있습니다.</div>
+  if (loading) return <div className="intake-state"><LoaderCircle className="spin" /> 접수 가능한 업무 유형을 확인하고 있습니다.</div>
 
   return <section className="request-intake-page" data-testid="request-intake-page">
     <header className="request-intake-hero">
-      <div><span><ClipboardPlus /> REQUEST INTAKE</span><h1>해석 의뢰 접수</h1><p>외부 시스템 전달 또는 부서장 지시를 수행 가능한 고정 작업 시나리오로 접수합니다.</p></div>
-      <aside><strong>2</strong><span>승인된 접수 시나리오</span><small>접수 후 첫 작업은 시작 대기 상태로 배정됩니다.</small></aside>
+      <div><span><ClipboardPlus /> REQUEST INTAKE</span><h1>해석 의뢰 접수</h1><p>외부 시스템 전달 또는 부서장 지시를 수행자에게 제공된 작업 유형으로 접수합니다.</p></div>
+      <aside><strong data-testid="active-request-type-count">{requestTypes.length}</strong><span>접수 가능한 활성 작업 유형</span><small>선택한 유형과 버전은 접수 시 작업계획으로 고정됩니다.</small></aside>
     </header>
 
     {error && <div className="intake-message error" role="alert"><AlertTriangle /><span><strong>접수 요청을 처리하지 못했습니다.</strong>{error}</span></div>}
@@ -113,10 +148,27 @@ export function RequestIntakePage({ projects, createdBy, canCreate, onCreated, o
       </section>
 
       <section className="intake-scenario-card">
-        <header><span>02 · WORK PLAN</span><h2>작업 시나리오 선택</h2><p>접수 후 변경되지 않는 작업 순서입니다.</p></header>
-        <div className="intake-scenario-options">{requestTypes.map((item) => <button type="button" key={item.id} className={item.id === requestTypeId ? 'selected' : ''} onClick={() => setRequestTypeId(item.id as typeof requestTypeId)} aria-pressed={item.id === requestTypeId}><span>{item.id === 'design-reliability-validation' ? 'RELIABILITY' : 'DOE EXPLORATION'}</span><strong>{item.display_name}</strong><small>{item.default_workflow.nodes.length}개 순차 작업</small></button>)}</div>
-        <ol className="intake-work-preview">{selectedType?.default_workflow.nodes.map((node, index) => <li key={node.node_key}><i>{index + 1}</i><span><strong>{node.display_name ?? node.task_type_id}</strong><small>{node.task_type_id} · v{node.task_type_version}</small></span>{index < selectedType.default_workflow.nodes.length - 1 && <ChevronRight />}</li>)}</ol>
-        <div className="intake-summary"><span>접수 대상</span><strong>{selectedProject?.name ?? '프로젝트 미선택'}</strong><p>{selectedType?.display_name ?? '시나리오 미선택'} · 첫 작업 READY</p></div>
+        <header><span>02 · WORK PLAN</span><h2>작업 유형 선택</h2><p>선언된 라벨로 필터한 뒤 수행자에게 제공된 활성 작업 유형을 선택합니다.</p></header>
+        {requestTypes.length ? <>
+          <div className="intake-label-filter" role="group" aria-label="작업 유형 라벨 필터"><span>선언된 라벨</span><div><button type="button" className={selectedLabel === null ? 'selected' : ''} aria-pressed={selectedLabel === null} onClick={() => filterByLabel(null)}>전체 <b>{requestTypes.length}</b></button>{declaredLabels.map((label) => { const count = requestTypes.filter((item) => requestTypeLabels(item).includes(label)).length; return <button type="button" key={label} className={selectedLabel === label ? 'selected' : ''} aria-pressed={selectedLabel === label} data-testid={`request-type-label-filter-${label}`} onClick={() => filterByLabel(label)}>#{label} <b>{count}</b></button> })}</div></div>
+          {filteredRequestTypes.length ? <div className="intake-scenario-options">{filteredRequestTypes.map((item) => {
+            const selected = item.id === requestTypeSelection?.id && item.version === requestTypeSelection.version
+            return <button
+              type="button"
+              key={`${item.id}-${item.version}`}
+              className={selected ? 'selected' : ''}
+              onClick={() => setRequestTypeSelection({ id: item.id, version: item.version })}
+              aria-pressed={selected}
+              data-testid={`request-type-option-${item.id}-${item.version}`}
+            ><span>WORK TYPE · v{item.version}</span><strong>{item.display_name}</strong><div className="request-type-option-labels">{requestTypeLabels(item).map((label) => <em key={label}>#{label}</em>)}</div><small>{item.default_workflow.nodes.length}개 세부 작업</small></button>
+          })}</div> : <div className="intake-filter-empty" role="status">#{selectedLabel} 라벨에 해당하는 활성 작업 유형이 없습니다.</div>}
+          <ol className="intake-work-preview">{selectedType?.default_workflow.nodes.map((node, index) => {
+            const nextNode = selectedType.default_workflow.nodes[index + 1]
+            const leadsToNext = nextNode?.depends_on.includes(node.node_key) ?? false
+            return <li key={node.node_key}><i>{index + 1}</i><span><strong>{node.display_name ?? node.task_type_id}</strong><small>{node.task_type_id} · v{node.task_type_version}{node.depends_on.length ? ` · 선행 ${node.depends_on.join(', ')}` : ' · 선행 없음'}</small></span>{leadsToNext && <ChevronRight />}</li>
+          })}</ol>
+        </> : <div className="intake-summary" data-testid="empty-request-types"><strong>접수 가능한 업무 유형이 없습니다.</strong><p>작업 유형 관리에서 활성 업무 유형을 먼저 제공해 주세요.</p></div>}
+        <div className="intake-summary"><span>접수 대상</span><strong>{selectedProject?.name ?? '프로젝트 미선택'}</strong><p>{selectedType ? `${selectedType.display_name} · v${selectedType.version} · 첫 작업 READY` : '작업 유형 미선택'}</p></div>
         <button className="intake-submit" disabled={!canCreate || saving || !projectId || !selectedType || !ownerUserId} data-testid="submit-request-intake">{saving ? <LoaderCircle className="spin" /> : <ClipboardPlus />} {canCreate ? '해석 의뢰 접수' : '편집 권한이 필요합니다'}</button>
       </section>
     </form>

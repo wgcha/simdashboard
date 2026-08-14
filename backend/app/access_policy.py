@@ -119,14 +119,14 @@ MENU_DEFINITIONS: Final[tuple[MenuDefinition, ...]] = (
     MenuDefinition("workbench", "해석 작업 실행", PROJECT_DATA_VIEW, "project", 40),
     MenuDefinition("data", "해석 데이터 등록", RESULT_IMPORT, "project", 50),
     MenuDefinition("workbench_admin", "작업 유형 관리", SYSTEM_CATALOG_MANAGE, "system", 60),
-    MenuDefinition("variables", "변수 카탈로그", PROJECT_VARIABLE_MANAGE, "project", 70),
-    MenuDefinition("templates", "자동화 템플릿", SYSTEM_CATALOG_MANAGE, "system", 80),
-    MenuDefinition("schemas", "폴더 스키마", SYSTEM_CATALOG_MANAGE, "system", 90),
-    MenuDefinition("examples", "예제 갤러리", PROJECT_DATA_VIEW, "company", 100),
-    MenuDefinition("help", "도움말", COMPANY_DASHBOARD_VIEW, "company", 110),
-    MenuDefinition("access_admin", "사용자·프로젝트 권한", PROJECT_MEMBER_MANAGE, "project", 120),
-    MenuDefinition("menu_policy_admin", "권한 및 메뉴 정책", SYSTEM_MENU_POLICY_MANAGE, "system", 130, False),
-    MenuDefinition("audit_admin", "감사로그", AUDIT_VIEW, "system", 140, False),
+    MenuDefinition("schemas", "폴더 스키마", SYSTEM_CATALOG_MANAGE, "system", 70),
+    MenuDefinition("variables", "변수 카탈로그", PROJECT_VARIABLE_MANAGE, "project", 80),
+    MenuDefinition("templates", "자동화 템플릿", SYSTEM_CATALOG_MANAGE, "system", 90),
+    MenuDefinition("access_admin", "사용자·프로젝트 권한", PROJECT_MEMBER_MANAGE, "project", 100),
+    MenuDefinition("menu_policy_admin", "권한 및 메뉴 정책", SYSTEM_MENU_POLICY_MANAGE, "system", 110, False),
+    MenuDefinition("audit_admin", "감사로그", AUDIT_VIEW, "system", 120, False),
+    MenuDefinition("examples", "예제 갤러리", PROJECT_DATA_VIEW, "company", 130),
+    MenuDefinition("help", "도움말", COMPANY_DASHBOARD_VIEW, "company", 140),
 )
 
 DEFAULT_MENU_VISIBILITY: Final[dict[ProjectRole, dict[str, bool]]] = {

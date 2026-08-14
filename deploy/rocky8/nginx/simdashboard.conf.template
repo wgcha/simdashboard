@@ -11,7 +11,8 @@ server {
 
     root __REPLACE_RELEASE_ROOT__/frontend/dist;
     index index.html;
-    client_max_body_size 64m;
+    # The application accepts video media up to 500 MiB; leave multipart room.
+    client_max_body_size 512m;
 
     location = /api/health {
         proxy_pass http://127.0.0.1:__REPLACE_API_PORT__;

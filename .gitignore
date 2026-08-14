@@ -16,6 +16,7 @@ frontend/dist/
 frontend/playwright-report/
 frontend/test-results/
 frontend/*.tsbuildinfo
+/dist/
 .env
 .postgres-owner.env
 .postgres-owner.env.tmp

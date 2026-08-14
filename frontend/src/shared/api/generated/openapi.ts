@@ -449,6 +449,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/workbench/request-types/{request_type_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Deactivate Request Type */
+        delete: operations["deactivate_request_type_api_admin_workbench_request_types__request_type_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/workbench/batch-profiles": {
         parameters: {
             query?: never;
@@ -1796,9 +1813,8 @@ export interface components {
             /**
              * Request Type Id
              * @default design-reliability-validation
-             * @enum {string}
              */
-            request_type_id: "design-reliability-validation" | "design-doe-exploration";
+            request_type_id: string;
             /**
              * Request Type Version
              * @default 1
@@ -1983,9 +1999,9 @@ export interface components {
             load_case: components["schemas"]["DropVideoLoadCaseResponse"];
             /**
              * Source
-             * @constant
+             * @enum {string}
              */
-            source: "EXAMPLE_ADAPTER";
+            source: "DATABASE" | "EXAMPLE_ADAPTER";
             /** Demo Only */
             demo_only: boolean;
             /**
@@ -3719,6 +3735,39 @@ export interface operations {
                 content: {
                     "application/json": {
                         [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    deactivate_request_type_api_admin_workbench_request_types__request_type_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_type_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
                     };
                 };
             };

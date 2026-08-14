@@ -636,7 +636,7 @@ async function addMediaSlides(pptx: pptxgen, overview: Overview, startPage: numb
     }
     addTextBox(slide, '자료 정보', [
       `유형: ${media.asset_type ?? media.mime_type}`,
-      `파일: ${media.original_filename ?? media.file_path ?? '원본 파일'}`,
+      `파일: ${media.original_filename ?? '원본 파일'}`,
       '용도: 해석 결과 근거 자료',
     ].join('\n'), 10.22, 1.05, 2.4, 2.2)
   }
@@ -666,7 +666,7 @@ function templateBindingValue(binding: string, overview: Overview, options: Repo
   }
   if (source === 'image') {
     const media = overview.media.find((item) => item.metadata?.variable_key === key) ?? overview.media[0]
-    return media ? `${media.title} (${media.original_filename ?? media.file_path ?? '원본 파일'})` : ''
+    return media ? `${media.title} (${media.original_filename ?? '원본 파일'})` : ''
   }
   return fieldValue(key || source, overview, options)
 }
@@ -759,7 +759,7 @@ function elementText(element: ReportElementDefinition, overview: Overview, optio
   if (source === 'scalar' && key === 'title') return '위치별 결과 — 기준 대비율'
   if (source === 'media') {
     if (key === 'title') return context.media?.title || '해석 스크린샷'
-    if (key === 'summary' && context.media) return [`유형: ${context.media.asset_type ?? context.media.mime_type}`, `파일: ${context.media.original_filename ?? context.media.file_path ?? '원본 파일'}`, '용도: 해석 결과 근거 자료'].join('\n')
+    if (key === 'summary' && context.media) return [`유형: ${context.media.asset_type ?? context.media.mime_type}`, `파일: ${context.media.original_filename ?? '원본 파일'}`, '용도: 해석 결과 근거 자료'].join('\n')
   }
   return element.label
 }

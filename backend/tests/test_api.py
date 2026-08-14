@@ -401,7 +401,7 @@ def test_drop_video_example_adapter_is_scoped_paginated_and_safe():
         )
         assert first_page.status_code == 200, first_page.text
         payload = first_page.json()
-        assert payload["source"] == "EXAMPLE_ADAPTER"
+        assert payload["source"] == "DATABASE"
         assert payload["demo_only"] is True
         assert payload["evaluation_source"] == "SYNTHETIC_DEMO"
         assert payload["contract_version"] == 1

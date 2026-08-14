@@ -64,7 +64,6 @@ export const workbenchApi = {
   dispatchBatch: async (itemId: string, batchProfileId: string, createdBy: string, idempotencyKey: string) => adaptDemoRun(unwrapGenerated(await apiClient.POST('/api/workbench/work-items/{item_id}/batch-dispatch', {
     params: { path: { item_id: itemId } }, body: { batch_profile_id: batchProfileId, idempotency_key: idempotencyKey, created_by: createdBy },
   }))),
-  createRequestType: async (payload: Omit<WorkbenchRequestType, 'version' | 'created_at'>) => adaptRequestType(unwrapGenerated(await apiClient.POST('/api/admin/workbench/request-types', {
-    body: payload,
-  }))),
+  createRequestType: async (payload: Omit<WorkbenchRequestType, 'version' | 'created_at'>) => adaptRequestType(unwrapGenerated(await apiClient.POST('/api/admin/workbench/request-types', { body: payload }))),
+  deactivateRequestType: async (requestTypeId: string) => { unwrapGenerated(await apiClient.DELETE('/api/admin/workbench/request-types/{request_type_id}', { params: { path: { request_type_id: requestTypeId } } })) },
 }

@@ -40,18 +40,20 @@ import { useWorkspaceBootstrap } from './features/bootstrap/useWorkspaceBootstra
 import { AppShell, AppShellMain, AppTopbar } from './app/shell/AppShell'
 import { AppSidebar } from './app/shell/AppSidebar'
 import { loadWorkspacePreferences, saveWorkspacePreference, type WorkspaceTheme } from './app/preferences/workspacePreferences'
+import { useWorkspaceNavigation } from './app/routing/useWorkspaceNavigation'
 import { pageView, preferredPage, visiblePages, type ActiveView } from './features/analysis/pageSelection'
 import { DEFAULT_PORTFOLIO_LAYOUT, DEFAULT_WORKFLOW_DASHBOARD_LAYOUT, loadPortfolioLayout, loadWorkflowDashboardLayout } from './features/layouts/layoutDefaults'
 import { ReportExportDialog } from './features/reports/ReportExportDialog'
 import { useReportExportController } from './features/reports/useReportExportController'
 import { ApprovalPendingScreen, LoginScreen } from './features/auth/LoginScreen'
-import { firstAllowedWorkspacePage, hasPermission, visibleMenuItems, type MenuId, type MenuPolicy, type WorkspacePage } from './features/auth/access'
+import { hasPermission, visibleMenuItems, type MenuId, type MenuPolicy } from './features/auth/access'
 import { WORKSPACE_ROUTES_BY_ID } from './features/navigation/workspaceRouteRegistry'
 import { AccessAdminPage, AuditAdminPage, MenuPolicyAdminPage, preloadWorkspaceRouteModule, SimulationWorkbench, WorkbenchTypeAdmin } from './app/routing/workspaceRouteModules'
 import { RequestIntakePage } from './features/workbench/RequestIntakePage'
 import { PortfolioDashboard } from './PortfolioDashboard'
-import type { RunComparisonReportContext } from './features/results/AnalysisWidgets'
-import type { AnalysisRequest, AnalysisRunSummary, AutomationTemplate, DashboardDefinition, DashboardPageSummary, DashboardSummary, DashboardVersion, DashboardWidget, FeatureExample, ImportSchema, LoadCase, Overview, PortfolioLayout, Project, QualityThreshold, ReportContentItem, ReportElementDefinition, ReportElementType, ReportLayout, ReportLayoutDefinition, ReportLayoutVersion, ReportSection, ReportSlideDefinition, ReportSlideKind, ReportSource, ReportTemplateAsset, ReviewItem, RunComparison, RunTrust, VariableDefinition, VariableDefinitionInput, WidgetCatalogItem, Workflow, WorkflowDashboardLayout, WorkflowStep } from './types'
+import { ResultsWorkspaceOverlays } from './features/results/ResultsWorkspaceOverlays'
+
+import type { AnalysisRequest, AnalysisRunSummary, AutomationTemplate, DashboardDefinition, DashboardPageSummary, DashboardSummary, DashboardVersion, DashboardWidget, FeatureExample, ImportSchema, LoadCase, Overview, PortfolioLayout, Project, QualityThreshold, ReportContentItem, ReportElementDefinition, ReportElementType, ReportLayout, ReportLayoutDefinition, ReportLayoutVersion, ReportSection, ReportSlideDefinition, ReportSlideKind, ReportSource, ReportTemplateAsset, ReviewItem, RunComparison, RunComparisonReportContext, RunTrust, VariableDefinition, VariableDefinitionInput, WidgetCatalogItem, Workflow, WorkflowDashboardLayout, WorkflowStep } from './types'
 
 const DataWorkspace = lazy(() => import('./features/data/DataWorkspace').then(({ DataWorkspace }) => ({ default: DataWorkspace })))
 const FolderSchemaWorkspace = lazy(() => import('./features/data/FolderSchemaWorkspace').then(({ FolderSchemaWorkspace }) => ({ default: FolderSchemaWorkspace })))
@@ -61,7 +63,6 @@ const FeatureExampleGallery = lazy(() => import('./features/examples/FeatureExam
 const HelpCenter = lazy(() => import('./features/help/HelpCenter').then(({ HelpCenter }) => ({ default: HelpCenter })))
 const WorkflowView = lazy(() => import('./features/requests/WorkflowView').then(({ WorkflowView }) => ({ default: WorkflowView })))
 const ResultsWorkspace = lazy(() => import('./features/results/ResultsWorkspace').then(({ ResultsWorkspace }) => ({ default: ResultsWorkspace })))
-const WidgetSettingsPanel = lazy(() => import('./features/results/AnalysisWidgets').then(({ WidgetSettingsPanel }) => ({ default: WidgetSettingsPanel })))
 const AnalysisPageManager = lazy(() => import('./features/analysis/AnalysisPageManager').then(({ AnalysisPageManager }) => ({ default: AnalysisPageManager })))
 
 function FeatureScreenFallback() {
@@ -77,7 +78,6 @@ const SPECIAL_WIDGET_CATALOG: WidgetCatalogItem[] = [
   { type: 'chassis_bar', label: 'Chassis 비교 그래프', category: '전용 평가', allowed_data_types: [], default_size: [5, 5] },
   { type: 'chassis_table', label: 'Chassis 상세 표', category: '전용 평가', allowed_data_types: [], default_size: [8, 4] },
 ]
-const ANALYSIS_WIDGET_TYPES = new Set<DashboardWidget['type']>(['summary','open_cell_map','open_cell_summary','kpi','verdict','gauge','edge_bar','time_series','scatter','note','result_table','contour','video','video_grid','chassis_summary','chassis_diagram','chassis_bar','chassis_table'])
 
 function App() {
   const [preferences] = useState(loadWorkspacePreferences)
@@ -105,9 +105,9 @@ function App() {
   const [analysisPages, setAnalysisPages] = useState<DashboardPageSummary[]>([])
   const [activeDashboardId, setActiveDashboardId] = useState('dashboard-drop-default')
   const [activeView, setActiveView] = useState<ActiveView>('workflow')
-  const [workspacePage, setWorkspacePage] = useState<WorkspacePage>('portfolio')
   const workspaceEditor = useWorkspaceEditorCoordinator()
   const editMode = workspaceEditor.isEditing
+  const cancelEditingRef = useRef<() => void>(() => {})
   const [assistantOpen, setAssistantOpen] = useState(false)
   const [command, setCommand] = useState('')
   const [proposal, setProposal] = useState<Awaited<ReturnType<typeof api.previewCommand>> | null>(null)
@@ -167,14 +167,18 @@ function App() {
     return []
   }, [authUser, menuPolicy, menuPolicyReady, selectedProjectId])
   const allowedPages = useMemo(() => new Set(visibleMenus.map((menu) => menu.id)), [visibleMenus])
-
-  useEffect(() => {
-    if (!authUser || authUser.account_status !== 'ACTIVE') return
-    if (!menuPolicyReady) return
-    if (allowedPages.has(workspacePage)) return
-    const fallback = firstAllowedWorkspacePage(menuPolicy, authUser, selectedProjectId) ?? visibleMenus[0]?.id
-    if (fallback) setWorkspacePage(fallback)
-  }, [allowedPages, authUser?.id, authUser?.account_status, menuPolicy?.version, menuPolicyReady, selectedProjectId, workspacePage])
+  const cancelEditing = useCallback(() => cancelEditingRef.current(), [])
+  const resetDashboardWorkspace = useCallback(() => setActiveView('workflow'), [])
+  const { isWorkspaceIndex, matchedWorkspaceRoute, navigateWorkspace, workspacePage } = useWorkspaceNavigation({
+    allowedPages,
+    authUser,
+    editMode,
+    menuPolicyReady,
+    onCancelEditing: cancelEditing,
+    onDashboardRoute: resetDashboardWorkspace,
+    onNotice: setNotice,
+    visibleMenus,
+  })
 
   useEffect(() => {
     if (!notice) return
@@ -552,7 +556,7 @@ function App() {
     workspaceEditor.open('workflow-layout')
   }
 
-  const cancelEditing = () => {
+  const cancelEditingImplementation = () => {
     if (workspacePage === 'portfolio' && portfolioLayoutBeforeEdit.current) {
       setPortfolioLayout(portfolioLayoutBeforeEdit.current)
       portfolioLayoutBeforeEdit.current = null
@@ -573,6 +577,7 @@ function App() {
     setAssistantOpen(false)
     workspaceEditor.close()
   }
+  cancelEditingRef.current = cancelEditingImplementation
 
   const resetPortfolioLayout = () => {
     setPortfolioLayout({ ...DEFAULT_PORTFOLIO_LAYOUT, chartOrder: [...DEFAULT_PORTFOLIO_LAYOUT.chartOrder] })
@@ -582,22 +587,6 @@ function App() {
   const resetWorkflowDashboardLayout = () => {
     setWorkflowDashboardLayout({ ...DEFAULT_WORKFLOW_DASHBOARD_LAYOUT, items: [] })
     setNotice('진행 현황 기본 레이아웃을 미리 적용했습니다. 저장하거나 취소할 수 있습니다.')
-  }
-
-  const openDashboardWorkspace = () => {
-    if (editMode) cancelEditing()
-    setWorkspacePage('dashboard')
-    setActiveView('workflow')
-  }
-
-  const navigateWorkspace = (menuId: MenuId) => {
-    const route = WORKSPACE_ROUTES_BY_ID.get(menuId)
-    if (!route) return
-    if (route.navigationKind === 'open-dashboard') {
-      openDashboardWorkspace()
-      return
-    }
-    setWorkspacePage(route.page)
   }
 
   const switchDashboardView = (view: ActiveView) => {
@@ -799,7 +788,7 @@ function App() {
 
   const openIntakeWorkbench = (requestId: string) => {
     setSelectedRequestId(requestId)
-    setWorkspacePage('workbench')
+    navigateWorkspace('workbench')
   }
 
   const openImportedResult = async (projectId: string, requestId: string, loadCaseId: string) => {
@@ -812,13 +801,13 @@ function App() {
     setSelectedProjectId(projectId); setSelectedRequestId(requestId); setSelectedLoadCaseId(loadCaseId); setOverview(overviewData)
     setAnalysisPages(pageData)
     if (selectedPage) { setActiveDashboardId(selectedPage.id); setActiveView(pageView(selectedPage)); if (dashboardData) setDashboard(dashboardData) }
-    setWorkspacePage('dashboard')
+    navigateWorkspace('dashboard', { dashboardEntry: 'preserve' })
   }
 
   const openPortfolioRequest = async (projectId: string, requestId: string) => {
     try {
       await loadMonitoringContext(projectId, requestId)
-      setWorkspacePage('dashboard')
+      navigateWorkspace('dashboard')
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '의뢰 진행 상태를 열지 못했습니다.')
     }
@@ -830,7 +819,7 @@ function App() {
         await loadContext(example.project_id, example.request_id, example.preferred_view)
       }
       if (example.preferred_view) setActiveView(example.preferred_view)
-      setWorkspacePage(example.workspace_page)
+      navigateWorkspace(example.workspace_page, { dashboardEntry: example.workspace_page === 'dashboard' && example.preferred_view ? 'preserve' : undefined })
       setNotice(`${example.title} 예제를 열었습니다.`)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '예제를 열지 못했습니다.')
@@ -861,6 +850,10 @@ function App() {
     return <div className="full-state error"><AlertTriangle /> {error}</div>
   }
 
+  if (!isWorkspaceIndex && !matchedWorkspaceRoute) {
+    return <div className="full-state error" data-testid="workspace-not-found"><AlertTriangle /><h1>페이지를 찾을 수 없습니다.</h1><p>요청한 작업공간 경로가 존재하지 않습니다.</p></div>
+  }
+
   if (!overview || !dashboard) {
     const canCreateProject = hasPermission(authUser, 'system.user.approve', selectedProjectId)
     const canCreateRequest = hasPermission(authUser, 'request.create', selectedProjectId)
@@ -872,14 +865,14 @@ function App() {
       displayName={authUser?.display_name ?? '사용자'}
       databaseBackend={databaseBackend}
       canOpenIntake={projects.length > 0 && canCreateRequest}
-      onPageChange={setWorkspacePage}
+      onPageChange={navigateWorkspace}
       onThemeChange={setTheme}
       onLogout={() => void logout()}
     >
       {!canRegisterData && projects.length === 0 ? <div className="bootstrap-empty-access"><AlertTriangle /><h1>접근 가능한 프로젝트가 없습니다.</h1><p>전역 관리자에게 프로젝트 생성 또는 멤버십 할당을 요청하세요.</p></div> : setupPage === 'intake' ? (
-        <RequestIntakePage projects={projects} createdBy={authUser?.display_name ?? '사용자'} canCreate={canCreateRequest} onCreated={handleIntakeCreated} onOpenWorkbench={() => setWorkspacePage('data')} />
+        <RequestIntakePage projects={projects} createdBy={authUser?.display_name ?? '사용자'} canCreate={canCreateRequest} onCreated={handleIntakeCreated} onOpenWorkbench={() => navigateWorkspace('data')} />
       ) : (
-        <Suspense fallback={<FeatureScreenFallback />}><DataWorkspace canCreateProject={canCreateProject} projects={projects} initialProjectId={selectedProjectId} onDataChanged={refreshOperationalData} onOpenAnalysis={openImportedResult} onOpenIntake={() => setWorkspacePage('intake')} /></Suspense>
+        <Suspense fallback={<FeatureScreenFallback />}><DataWorkspace canCreateProject={canCreateProject} projects={projects} initialProjectId={selectedProjectId} onDataChanged={refreshOperationalData} onOpenAnalysis={openImportedResult} onOpenIntake={() => navigateWorkspace('intake')} /></Suspense>
       )}
     </BootstrapWorkspaceShell>
   }
@@ -928,6 +921,7 @@ function App() {
         onLogout={() => void logout()}
         onNavigate={navigateWorkspace}
         onPreloadPage={preloadWorkspaceRouteModule}
+        workspacePathForMenu={(id) => WORKSPACE_ROUTES_BY_ID.get(id)?.path ?? '#'}
         onToggleCollapsed={() => setSidebarCollapsed((value) => !value)}
       />}
       sidebarCollapsed={sidebarCollapsed}
@@ -950,8 +944,8 @@ function App() {
             <div className="avatar">{authUser ? authUser.display_name.slice(0, 2) : 'HK'}</div>
           </>} />}>
 
-        {workspacePage === 'portfolio' ? <PortfolioDashboard refreshToken={operationalRefreshToken} editMode={editMode} layout={portfolioLayout} layoutVersion={portfolioLayoutVersion} onLayoutChange={setPortfolioLayout} onCancelEdit={cancelEditing} onResetLayout={resetPortfolioLayout} onOpen={(projectId, requestId) => void openPortfolioRequest(projectId, requestId)} /> : workspacePage === 'intake' ? <RequestIntakePage projects={projects} createdBy={authUser?.display_name ?? '데모 사용자'} canCreate={hasPermission(authUser, 'request.create', selectedProjectId)} onCreated={handleIntakeCreated} onOpenWorkbench={openIntakeWorkbench} /> : workspacePage === 'workbench' ? <Suspense fallback={<FeatureScreenFallback />}><SimulationWorkbench workflows={workflows} initialRequestId={selectedRequestId} currentUserId={authUser?.id ?? ''} createdBy={authUser?.display_name ?? '데모 사용자'} canExecute={canExecuteAssigned || canExecuteAny} isAdmin={canExecuteAny} onRequestSelected={setSelectedRequestId} onChanged={async (message) => { setWorkflows(await api.workflows()); setOperationalRefreshToken((value) => value + 1); setNotice(message) }} /></Suspense> : workspacePage === 'workbench_admin' ? <Suspense fallback={<FeatureScreenFallback />}><WorkbenchTypeAdmin /></Suspense> : workspacePage === 'schemas' ? <Suspense fallback={<FeatureScreenFallback />}><FolderSchemaWorkspace /></Suspense> : workspacePage === 'variables' ? <Suspense fallback={<FeatureScreenFallback />}><VariableCatalogPage variables={variables} overview={overview} loadCaseId={selectedLoadCaseId} onChanged={(items) => { setVariables(items); setCatalogVariable((current) => items.some((item) => item.id === current) ? current : items[0]?.id ?? '') }} /></Suspense> : workspacePage === 'templates' ? <Suspense fallback={<FeatureScreenFallback />}><AutomationTemplatesPage /></Suspense> : workspacePage === 'examples' ? <Suspense fallback={<FeatureScreenFallback />}><FeatureExampleGallery onOpen={openFeatureExample} /></Suspense> : workspacePage === 'help' ? <Suspense fallback={<FeatureScreenFallback />}><HelpCenter onNavigate={setWorkspacePage} /></Suspense> : workspacePage === 'access_admin' ? <Suspense fallback={<FeatureScreenFallback />}><AccessAdminPage projectId={selectedProjectId} canApproveUsers={hasPermission(authUser, 'system.user.approve', selectedProjectId)} onAccessChanged={refreshAccess} /></Suspense> : workspacePage === 'menu_policy_admin' && menuPolicy ? <Suspense fallback={<FeatureScreenFallback />}><MenuPolicyAdminPage policy={menuPolicy} onPolicyChanged={setMenuPolicy} /></Suspense> : workspacePage === 'audit_admin' ? <Suspense fallback={<FeatureScreenFallback />}><AuditAdminPage /></Suspense> : workspacePage === 'data' ? (
-          <Suspense fallback={<FeatureScreenFallback />}><DataWorkspace canCreateProject={hasPermission(authUser, 'system.user.approve', selectedProjectId)} projects={projects} initialProjectId={selectedProjectId} onDataChanged={refreshOperationalData} onOpenAnalysis={openImportedResult} onOpenIntake={() => setWorkspacePage('intake')} /></Suspense>
+        {workspacePage === 'portfolio' ? <PortfolioDashboard refreshToken={operationalRefreshToken} editMode={editMode} layout={portfolioLayout} layoutVersion={portfolioLayoutVersion} onLayoutChange={setPortfolioLayout} onCancelEdit={cancelEditing} onResetLayout={resetPortfolioLayout} onOpen={(projectId, requestId) => void openPortfolioRequest(projectId, requestId)} /> : workspacePage === 'intake' ? <RequestIntakePage projects={projects} createdBy={authUser?.display_name ?? '데모 사용자'} canCreate={hasPermission(authUser, 'request.create', selectedProjectId)} onCreated={handleIntakeCreated} onOpenWorkbench={openIntakeWorkbench} /> : workspacePage === 'workbench' ? <Suspense fallback={<FeatureScreenFallback />}><SimulationWorkbench workflows={workflows} initialRequestId={selectedRequestId} currentUserId={authUser?.id ?? ''} createdBy={authUser?.display_name ?? '데모 사용자'} canExecute={canExecuteAssigned || canExecuteAny} isAdmin={canExecuteAny} onRequestSelected={setSelectedRequestId} onChanged={async (message) => { setWorkflows(await api.workflows()); setOperationalRefreshToken((value) => value + 1); setNotice(message) }} /></Suspense> : workspacePage === 'workbench_admin' ? <Suspense fallback={<FeatureScreenFallback />}><WorkbenchTypeAdmin /></Suspense> : workspacePage === 'schemas' ? <Suspense fallback={<FeatureScreenFallback />}><FolderSchemaWorkspace /></Suspense> : workspacePage === 'variables' ? <Suspense fallback={<FeatureScreenFallback />}><VariableCatalogPage variables={variables} overview={overview} loadCaseId={selectedLoadCaseId} onChanged={(items) => { setVariables(items); setCatalogVariable((current) => items.some((item) => item.id === current) ? current : items[0]?.id ?? '') }} /></Suspense> : workspacePage === 'templates' ? <Suspense fallback={<FeatureScreenFallback />}><AutomationTemplatesPage /></Suspense> : workspacePage === 'examples' ? <Suspense fallback={<FeatureScreenFallback />}><FeatureExampleGallery onOpen={openFeatureExample} /></Suspense> : workspacePage === 'help' ? <Suspense fallback={<FeatureScreenFallback />}><HelpCenter onNavigate={navigateWorkspace} /></Suspense> : workspacePage === 'access_admin' ? <Suspense fallback={<FeatureScreenFallback />}><AccessAdminPage projectId={selectedProjectId} canApproveUsers={hasPermission(authUser, 'system.user.approve', selectedProjectId)} onAccessChanged={refreshAccess} /></Suspense> : workspacePage === 'menu_policy_admin' && menuPolicy ? <Suspense fallback={<FeatureScreenFallback />}><MenuPolicyAdminPage policy={menuPolicy} onPolicyChanged={setMenuPolicy} /></Suspense> : workspacePage === 'audit_admin' ? <Suspense fallback={<FeatureScreenFallback />}><AuditAdminPage /></Suspense> : workspacePage === 'data' ? (
+          <Suspense fallback={<FeatureScreenFallback />}><DataWorkspace canCreateProject={hasPermission(authUser, 'system.user.approve', selectedProjectId)} projects={projects} initialProjectId={selectedProjectId} onDataChanged={refreshOperationalData} onOpenAnalysis={openImportedResult} onOpenIntake={() => navigateWorkspace('intake')} /></Suspense>
         ) : <>
         <section className="content-head">
           <div>
@@ -1018,35 +1012,32 @@ function App() {
         </>}
       </AppShellMain>
 
-      {assistantOpen && (
-        <div className="drawer-backdrop" onMouseDown={() => setAssistantOpen(false)}>
-          <aside className="assistant-drawer" onMouseDown={(event) => event.stopPropagation()}>
-            <div className="drawer-head"><div><span><Sparkles /></span><div><strong>Canvas Copilot</strong><small>자연어 대시보드 편집</small></div></div><button onClick={() => setAssistantOpen(false)}><X /></button></div>
-            <div className="assistant-copy"><h2>어떤 시각화가 필요하세요?</h2><p>등록된 변수와 허용된 위젯만 사용해 안전한 변경안을 만듭니다. 적용 전 내용을 확인할 수 있습니다.</p></div>
-            <div className="suggestions">
-              {['응력-시간 그래프를 추가해', '상하좌우 최대 응력 막대그래프를 추가해', '패스/실패 판정 카드를 추가해'].map((text) => <button key={text} onClick={() => setCommand(text)}>{text}<Plus /></button>)}
-            </div>
-            <div className="catalog-editor">
-              <strong>위젯 카탈로그</strong>
-              <select aria-label="위젯 변수" value={catalogVariable} onChange={(event) => setCatalogVariable(event.target.value)}>{variables.map((item) => <option key={item.id} value={item.id}>{item.display_name} ({item.unit})</option>)}</select>
-              <div>{widgetCatalog.filter((item) => ANALYSIS_WIDGET_TYPES.has(item.type)).map((item) => <button key={item.type} onClick={() => addCatalogWidget(item)}><Plus /> {item.label}</button>)}</div>
-            </div>
-            <textarea value={command} onChange={(event) => setCommand(event.target.value)} placeholder="예: 응력-시간 그래프에 기준선을 넣어줘" />
-            <button className="assistant-submit" onClick={previewCommand} disabled={!command.trim()}><Sparkles /> 변경안 만들기</button>
-            {proposal && (
-              <div className={`proposal ${proposal.recognized ? 'recognized' : ''}`}>
-                <span>{proposal.recognized ? <Check /> : <AlertTriangle />}</span>
-                <div><strong>{proposal.recognized ? '적용 전 미리보기' : '요청 확인 필요'}</strong><p>{proposal.message}</p>{proposal.proposal && <code>{proposal.proposal.action === 'add_widget' ? `${proposal.proposal.widget.title} · ${proposal.proposal.widget.type}` : `${proposal.proposal.updates.length}개 위젯 설정 변경`}</code>}</div>
-                {proposal.recognized && <button onClick={applyProposal}>변경안 적용</button>}
-              </div>
-            )}
-            <div className="assistant-safe"><Lock /><span><strong>안전한 변경</strong>자연어 명령은 SQL이나 코드를 직접 실행하지 않습니다.</span></div>
-            <div className="layout-history"><button onClick={cloneLayout}>다른 이름으로 복제</button><button onClick={restorePrevious}>최근 정상 버전 복구</button><small>현재 v{dashboard.version ?? 1} · 유효 저장 이력 {versions.length}개</small><div className="dashboard-version-list">{versions.map((item) => <article key={item.version}><span><strong>v{item.version}</strong><small>{new Date(item.created_at).toLocaleString('ko-KR')} · {item.created_by}</small></span><button onClick={() => void loadDashboardVersionDraft(item.version)} disabled={item.version === dashboard.version}>초안으로 불러오기</button>{canManagePages && item.version !== dashboard.version && !(dashboard.page?.is_system && item.version === 1) && <button className="danger" aria-label={`v${item.version} 버전 삭제`} onClick={() => void removeDashboardVersion(item.version)}><Trash2 /> 삭제</button>}</article>)}</div></div>
-            <label className="saved-layouts"><span>저장된 레이아웃 불러오기</span><select value={dashboard.id} onChange={(event) => void loadSavedDashboard(event.target.value)}>{savedDashboards.map((item) => <option key={item.id} value={item.id}>{item.name} · v{item.version}</option>)}</select></label>
-          </aside>
-        </div>
-      )}
-      {selectedWidgetId && dashboard && <Suspense fallback={<FeatureScreenFallback />}><WidgetSettingsPanel widget={dashboard.widgets.find((item) => item.id === selectedWidgetId)!} variables={variables} onChange={(patch) => updateWidget(selectedWidgetId, patch)} onClose={() => setSelectedWidgetId(null)} /></Suspense>}
+      <ResultsWorkspaceOverlays
+        assistantOpen={assistantOpen}
+        canManagePages={canManagePages}
+        catalogVariable={catalogVariable}
+        command={command}
+        dashboard={dashboard}
+        proposal={proposal}
+        savedDashboards={savedDashboards}
+        selectedWidgetId={selectedWidgetId}
+        variables={variables}
+        versions={versions}
+        widgetCatalog={widgetCatalog}
+        onAddCatalogWidget={addCatalogWidget}
+        onApplyProposal={applyProposal}
+        onCloneLayout={() => void cloneLayout()}
+        onCloseAssistant={() => setAssistantOpen(false)}
+        onCloseWidgetSettings={() => setSelectedWidgetId(null)}
+        onCommandChange={setCommand}
+        onLoadSavedDashboard={(id) => void loadSavedDashboard(id)}
+        onLoadVersion={(version) => void loadDashboardVersionDraft(version)}
+        onPreviewCommand={() => void previewCommand()}
+        onRemoveVersion={(version) => void removeDashboardVersion(version)}
+        onRestorePrevious={() => void restorePrevious()}
+        onSelectCatalogVariable={setCatalogVariable}
+        onUpdateWidget={updateWidget}
+      />
       {pageManagerOpen && <Suspense fallback={null}><AnalysisPageManager loadCaseId={selectedLoadCaseId} activePageId={activeDashboardId} visiblePageIds={analysisTabs.map((page) => page.id)} onClose={() => setPageManagerOpen(false)} onPagesChanged={setAnalysisPages} onActiveDefinitionChanged={(definition) => setDashboard(definition)} onDeleted={(deletedId) => {
         reportExport.handlePageDeleted(deletedId)
         dashboardBeforeEdit.current = null; setSelectedWidgetId(null); setAssistantOpen(false)

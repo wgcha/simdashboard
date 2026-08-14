@@ -76,6 +76,30 @@ class RequestTypeVersionCreate(StrictModel):
     match_rules: dict[str, Any] = Field(default_factory=dict)
     is_active: bool = True
 
+    @field_validator("match_rules")
+    @classmethod
+    def validate_match_rules(cls, value: dict[str, Any]) -> dict[str, Any]:
+        normalized = dict(value)
+        labels = normalized.get("labels", ["SPDM", "부서"])
+        if not isinstance(labels, list) or not 1 <= len(labels) <= 12:
+            raise ValueError("작업 유형 라벨은 1개 이상 12개 이하로 지정해야 합니다.")
+        clean_labels: list[str] = []
+        seen: set[str] = set()
+        for label in labels:
+            if not isinstance(label, str):
+                raise ValueError("작업 유형 라벨은 문자열이어야 합니다.")
+            clean = label.strip().lstrip("#").replace(" ", "-")
+            if not 1 <= len(clean) <= 24 or any(character in clean for character in "#,"):
+                raise ValueError("작업 유형 라벨은 #·쉼표 없이 1~24자로 입력해야 합니다.")
+            key = clean.casefold()
+            if key not in seen:
+                seen.add(key)
+                clean_labels.append(clean)
+        if not clean_labels:
+            raise ValueError("작업 유형 라벨을 1개 이상 지정해야 합니다.")
+        normalized["labels"] = clean_labels
+        return normalized
+
 
 class RequestTypeAssignmentInput(StrictModel):
     request_type_id: str = Field(min_length=3, max_length=80, pattern=r"^[a-z][a-z0-9_-]*$")

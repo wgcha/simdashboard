@@ -11,6 +11,24 @@ from app.database_connection import connect
 from app.main import app
 
 
+EXPECTED_MENU_ORDER = [
+    ("portfolio", 10),
+    ("dashboard", 20),
+    ("intake", 30),
+    ("workbench", 40),
+    ("data", 50),
+    ("workbench_admin", 60),
+    ("schemas", 70),
+    ("variables", 80),
+    ("templates", 90),
+    ("access_admin", 100),
+    ("menu_policy_admin", 110),
+    ("audit_admin", 120),
+    ("examples", 130),
+    ("help", 140),
+]
+
+
 def test_menu_policy_update_validation_versions_and_restore():
     initialize_database()
     with TestClient(app) as client:
@@ -94,10 +112,35 @@ def test_frontend_menu_registry_matches_server_definitions_exactly():
         / "workspaceRouteRegistry.ts"
     ).read_text(encoding="utf-8")
     entries = re.findall(
-        r"\{ id: '([^']+)', page: '[^']+', label: '[^']+', breadcrumb: \{[^}]+\}, requiredPermission: '([^']+)', contextKind: '([^']+)', navigationKind: '[^']+' \}",
+        r"\{ id: '([^']+)', page: '[^']+', path: '[^']+', label: '[^']+', breadcrumb: \{[^}]+\}, requiredPermission: '([^']+)', contextKind: '([^']+)', navigationKind: '[^']+' \}",
         source,
     )
     assert entries == [
         (definition.id, definition.required_permission, definition.context_kind)
         for definition in MENU_DEFINITIONS
     ]
+
+
+def test_default_menu_order_follows_the_request_workflow():
+    assert [(definition.id, definition.sequence_no) for definition in MENU_DEFINITIONS] == EXPECTED_MENU_ORDER
+
+
+def test_duckdb_bootstrap_reconciles_menu_order_without_resetting_visibility():
+    initialize_database()
+    with connect() as conn:
+        conn.execute("UPDATE menu_definitions SET sequence_no=1000-sequence_no")
+        conn.execute(
+            "UPDATE role_menu_policies SET is_visible=false WHERE role='power' AND menu_id='data'"
+        )
+
+    initialize_database()
+
+    with connect() as conn:
+        stored_order = conn.execute(
+            "SELECT id, sequence_no FROM menu_definitions WHERE is_active=true ORDER BY sequence_no, id"
+        ).fetchall()
+        power_data_visibility = conn.execute(
+            "SELECT is_visible FROM role_menu_policies WHERE role='power' AND menu_id='data'"
+        ).fetchone()
+    assert stored_order == EXPECTED_MENU_ORDER
+    assert power_data_visibility == (False,)

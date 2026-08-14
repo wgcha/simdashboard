@@ -222,6 +222,86 @@ def test_admin_can_create_immutable_task_and_request_type_versions():
         assert run.json()["request_type_version"] == 1
 
 
+def test_admin_edits_request_type_labels_as_new_version_and_soft_deletes_history():
+    request_type_id = f"labeled-work-{uuid4().hex[:8]}"
+    base_payload = {
+        "id": request_type_id,
+        "display_name": "라벨 작업 유형",
+        "description": "초기 단일 작업 시나리오",
+        "allowed_task_types": [{"id": "cad-prepare", "version": 1}],
+        "default_workflow": {
+            "nodes": [
+                {
+                    "node_key": "prepare",
+                    "task_type_id": "cad-prepare",
+                    "task_type_version": 1,
+                    "depends_on": [],
+                }
+            ]
+        },
+        "match_rules": {},
+        "is_active": True,
+    }
+
+    with TestClient(app) as client:
+        created = client.post("/api/admin/workbench/request-types", json=base_payload)
+        assert created.status_code == 201, created.text
+        assert created.json()["match_rules"]["labels"] == ["SPDM", "부서"]
+
+        edited = client.post(
+            "/api/admin/workbench/request-types",
+            json={
+                **base_payload,
+                "description": "편집된 순차 작업 시나리오",
+                "allowed_task_types": [
+                    {"id": "cad-prepare", "version": 1},
+                    {"id": "doe-generate", "version": 1},
+                ],
+                "default_workflow": {
+                    "nodes": [
+                        {
+                            "node_key": "prepare",
+                            "task_type_id": "cad-prepare",
+                            "task_type_version": 1,
+                            "depends_on": [],
+                        },
+                        {
+                            "node_key": "doe",
+                            "task_type_id": "doe-generate",
+                            "task_type_version": 1,
+                            "depends_on": ["prepare"],
+                        },
+                    ]
+                },
+                "match_rules": {"labels": ["SPDM", "#충돌 해석", "spdm"]},
+            },
+        )
+        assert edited.status_code == 201, edited.text
+        assert edited.json()["version"] == 2
+        assert edited.json()["description"] == "편집된 순차 작업 시나리오"
+        assert edited.json()["match_rules"]["labels"] == ["SPDM", "충돌-해석"]
+        assert len(edited.json()["default_workflow"]["nodes"]) == 2
+
+        invalid_labels = client.post(
+            "/api/admin/workbench/request-types",
+            json={**base_payload, "match_rules": {"labels": []}},
+        )
+        assert invalid_labels.status_code == 422
+
+        deleted = client.delete(f"/api/admin/workbench/request-types/{request_type_id}")
+        assert deleted.status_code == 200, deleted.text
+        assert deleted.json() == {"id": request_type_id, "status": "INACTIVE"}
+        assert all(item["id"] != request_type_id for item in client.get("/api/workbench/request-types").json())
+
+        history = [
+            item
+            for item in client.get("/api/workbench/request-types", params={"all_versions": True}).json()
+            if item["id"] == request_type_id
+        ]
+        assert [item["version"] for item in history] == [2, 1]
+        assert all(not item["is_active"] for item in history)
+
+
 def test_request_type_is_recommended_from_request_info_then_fixed_to_an_immutable_version():
     request_type_payload = {
         "id": "drop-analysis-rule",

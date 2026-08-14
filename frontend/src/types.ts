@@ -118,7 +118,7 @@ export type AnalysisRequest = {
   requested_at: string
   due_at?: string
   overall_note?: string
-  request_type_id?: 'design-reliability-validation' | 'design-doe-exploration'
+  request_type_id?: string
   request_type_version?: number
   scenario_name?: string
   source_type?: 'EXTERNAL_SYSTEM' | 'DEPARTMENT_HEAD'
@@ -170,7 +170,7 @@ export type WorkflowStep = {
 
 export type RequestWorkPlan = {
   request_id: string
-  request_type_id: 'design-reliability-validation' | 'design-doe-exploration' | string
+  request_type_id: string
   request_type_version: number
   scenario_name: string
   source_type: 'EXTERNAL_SYSTEM' | 'DEPARTMENT_HEAD'
@@ -246,7 +246,7 @@ export type DropVideoItem = {
 }
 export type DropVideoPage = {
   load_case: { load_case_id: string; load_case_name: string; analysis_type: string; request_id: string; request_name: string }
-  source: 'EXAMPLE_ADAPTER'
+  source: 'DATABASE' | 'EXAMPLE_ADAPTER'
   demo_only: boolean
   evaluation_source: 'SYNTHETIC_DEMO'
   contract_version: 1
@@ -259,6 +259,15 @@ export type DropVideoPage = {
   }
   pagination: { page: number; page_size: number; total_items: number; total_pages: number; has_previous: boolean; has_next: boolean }
   videos: DropVideoItem[]
+}
+
+export type RunComparisonReportContext = {
+  loadCaseId: string
+  baselineRunId: string
+  targetRunId: string
+  comparison: RunComparison
+  trust: RunTrust
+  reviews: ReviewItem[]
 }
 export type DashboardVersion = { dashboard_id: string; version: number; created_by: string; created_at: string; is_valid: boolean }
 export type DashboardVersionDefinition = DashboardVersion & { definition: DashboardDefinition }

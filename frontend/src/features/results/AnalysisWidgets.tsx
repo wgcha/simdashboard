@@ -3,22 +3,13 @@ import { Activity, AlertTriangle, Check, Database, GripVertical, LayoutDashboard
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { api } from '../../api'
 import { DropVideoGrid } from './DropVideoGrid'
-import type { AnalysisRunSummary, DashboardWidget, Overview, QualityThreshold, ReviewItem, RunComparison, RunTrust, VariableDefinition } from '../../types'
+import type { AnalysisRunSummary, DashboardWidget, Overview, QualityThreshold, ReviewItem, RunComparison, RunComparisonReportContext, RunTrust, VariableDefinition } from '../../types'
 
 const SERIES_COLORS = ['#61d4ff', '#ff647d', '#70e0a8', '#ffbf57']
 
 function hasNumericValue(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
 }
-export type RunComparisonReportContext = {
-  loadCaseId: string
-  baselineRunId: string
-  targetRunId: string
-  comparison: RunComparison
-  trust: RunTrust
-  reviews: ReviewItem[]
-}
-
 export function ComparisonWorkspace({ loadCaseId, currentRunId, onContextChange }: { loadCaseId: string; currentRunId: string; onContextChange?: (context: RunComparisonReportContext | null) => void }) {
   const [runs, setRuns] = useState<AnalysisRunSummary[]>([])
   const [baselineRunId, setBaselineRunId] = useState('')

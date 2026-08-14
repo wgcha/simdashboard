@@ -1346,6 +1346,52 @@
         }
       }
     },
+    "/api/admin/workbench/request-types/{request_type_id}": {
+      "delete": {
+        "tags": [
+          "workbench-demo"
+        ],
+        "summary": "Deactivate Request Type",
+        "operationId": "deactivate_request_type_api_admin_workbench_request_types__request_type_id__delete",
+        "parameters": [
+          {
+            "name": "request_type_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Type Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Deactivate Request Type Api Admin Workbench Request Types  Request Type Id  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/workbench/batch-profiles": {
       "get": {
         "tags": [
@@ -5951,10 +5997,9 @@
           },
           "request_type_id": {
             "type": "string",
-            "enum": [
-              "design-reliability-validation",
-              "design-doe-exploration"
-            ],
+            "maxLength": 80,
+            "minLength": 3,
+            "pattern": "^[a-z][a-z0-9_-]*$",
             "title": "Request Type Id",
             "default": "design-reliability-validation"
           },
@@ -6511,7 +6556,10 @@
           },
           "source": {
             "type": "string",
-            "const": "EXAMPLE_ADAPTER",
+            "enum": [
+              "DATABASE",
+              "EXAMPLE_ADAPTER"
+            ],
             "title": "Source"
           },
           "demo_only": {

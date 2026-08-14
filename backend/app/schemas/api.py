@@ -208,7 +208,12 @@ class AnalysisRequestCreate(BaseModel):
     source_type: Literal["EXTERNAL_SYSTEM", "DEPARTMENT_HEAD"]
     source_reference: str = Field(min_length=2, max_length=160)
     requested_by: str | None = Field(default=None, min_length=2, max_length=80)
-    request_type_id: Literal["design-reliability-validation", "design-doe-exploration"] = "design-reliability-validation"
+    request_type_id: str = Field(
+        default="design-reliability-validation",
+        min_length=3,
+        max_length=80,
+        pattern=r"^[a-z][a-z0-9_-]*$",
+    )
     request_type_version: int = Field(default=1, ge=1)
     assigned_by: str | None = Field(default=None, min_length=2, max_length=80)
 
@@ -290,7 +295,7 @@ class DropVideoEvaluationSummary(BaseModel):
 
 class DropVideoPageResponse(BaseModel):
     load_case: DropVideoLoadCaseResponse
-    source: Literal["EXAMPLE_ADAPTER"]
+    source: Literal["DATABASE", "EXAMPLE_ADAPTER"]
     demo_only: bool
     evaluation_source: Literal["SYNTHETIC_DEMO"]
     contract_version: Literal[1]
