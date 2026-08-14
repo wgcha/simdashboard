@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import tempfile
 from dataclasses import dataclass
-from typing import Any, Callable, Iterator
+from typing import Any, BinaryIO, Callable, Iterator
 from urllib.parse import quote
 
 from fastapi import Request
 from fastapi.responses import Response, StreamingResponse
 
+from ..config import database_settings
 from ..database_connection import media_connect
 from ..repositories.media_repository import BlobRecord, iter_blob_range
 
@@ -85,6 +87,20 @@ def _base_headers(*, mime_type: str, size: int, etag: str, filename: str, downlo
     }
 
 
+def _materialize_duckdb_range(blob: BlobRecord, start: int, end: int) -> BinaryIO:
+    """Read a local blob under DuckDB's lock, then release it before ASGI yields."""
+    spool = tempfile.SpooledTemporaryFile(max_size=2 * blob.chunk_size, mode="w+b")
+    try:
+        with media_connect() as connection:
+            for chunk in iter_blob_range(connection, blob.id, start, end):
+                spool.write(chunk)
+        spool.seek(0)
+        return spool
+    except BaseException:
+        spool.close()
+        raise
+
+
 def build_media_response(
     request: Request,
     *,
@@ -122,6 +138,35 @@ def build_media_response(
     if request.method == "HEAD":
         return Response(status_code=status, headers=headers)
 
+    if database_settings().backend == "duckdb":
+        def stream_materialized() -> Iterator[bytes]:
+            yielded = 0
+            action = "STARTED"
+            spool: BinaryIO | None = None
+            try:
+                # Do not create a temporary file until ASGI actually starts
+                # consuming the body; an unstarted response owns no fd.
+                spool = _materialize_duckdb_range(blob, start, end)
+                if audit:
+                    audit(action, 0, status)
+                while chunk := spool.read(blob.chunk_size):
+                    yielded += len(chunk)
+                    yield chunk
+                action = "COMPLETED"
+            except GeneratorExit:
+                action = "ABORTED"
+                raise
+            except Exception:
+                action = "ABORTED"
+                raise
+            finally:
+                if spool is not None:
+                    spool.close()
+                if audit:
+                    audit(action, yielded, status)
+
+        return StreamingResponse(stream_materialized(), status_code=status, headers=headers, media_type=None)
+
     def stream() -> Iterator[bytes]:
         yielded = 0
         action = "STARTED"
@@ -131,12 +176,14 @@ def build_media_response(
             position = start
             while position <= end:
                 batch_end = min(end, position + blob.chunk_size - 1)
-                # Return the media connection after each bounded read. A slow
-                # client therefore cannot pin one pool slot for the full file.
+                # Materialize one bounded batch before yielding it. Yielding
+                # from inside this context would keep a pool slot checked out
+                # while a slow client consumes the response.
                 with media_connect() as connection:
-                    for chunk in iter_blob_range(connection, blob.id, position, batch_end):
-                        yielded += len(chunk)
-                        yield chunk
+                    chunks = tuple(iter_blob_range(connection, blob.id, position, batch_end))
+                for chunk in chunks:
+                    yielded += len(chunk)
+                    yield chunk
                 position = batch_end + 1
             action = "COMPLETED"
         except GeneratorExit:

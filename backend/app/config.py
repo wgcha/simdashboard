@@ -18,6 +18,20 @@ class DatabaseSettings:
     backend: str
     duckdb_path: Path
     database_url: str | None
+    postgres_pool: "PostgresPoolSettings"
+
+
+@dataclass(frozen=True)
+class PostgresPoolSettings:
+    """Bounded, deployment-configurable PostgreSQL pool budgets."""
+
+    request_pool_size: int
+    request_max_overflow: int
+    request_timeout_seconds: int
+    media_pool_size: int
+    media_max_overflow: int
+    media_timeout_seconds: int
+    recycle_seconds: int
 
 
 @dataclass(frozen=True)
@@ -60,7 +74,40 @@ def database_settings() -> DatabaseSettings:
         raise RuntimeError("ANALYSIS_DB_BACKEND은 duckdb 또는 postgresql이어야 합니다.")
     default_path = Path(__file__).resolve().parents[1] / "data" / "analysis_dashboard.duckdb"
     path = Path(os.getenv("ANALYSIS_DUCKDB_PATH", str(default_path))).expanduser().resolve()
-    return DatabaseSettings(backend=backend, duckdb_path=path, database_url=os.getenv("DATABASE_URL"))
+    return DatabaseSettings(
+        backend=backend,
+        duckdb_path=path,
+        database_url=os.getenv("DATABASE_URL"),
+        postgres_pool=_postgres_pool_settings(),
+    )
+
+
+def _bounded_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    raw = os.getenv(name, str(default))
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{name}은 정수여야 합니다.") from exc
+    if not minimum <= value <= maximum:
+        raise RuntimeError(f"{name}은 {minimum}~{maximum} 범위여야 합니다.")
+    return value
+
+
+def _postgres_pool_settings() -> PostgresPoolSettings:
+    """Read explicit pool knobs once per database settings lookup.
+
+    Defaults retain the existing 5+10 request and 10+5 media connection
+    budgets. Deployment profiles can reduce those numbers without code edits.
+    """
+    return PostgresPoolSettings(
+        request_pool_size=_bounded_int("POSTGRES_REQUEST_POOL_SIZE", 5, 1, 100),
+        request_max_overflow=_bounded_int("POSTGRES_REQUEST_MAX_OVERFLOW", 10, 0, 100),
+        request_timeout_seconds=_bounded_int("POSTGRES_REQUEST_POOL_TIMEOUT_SECONDS", 10, 1, 120),
+        media_pool_size=_bounded_int("POSTGRES_MEDIA_POOL_SIZE", 10, 1, 100),
+        media_max_overflow=_bounded_int("POSTGRES_MEDIA_MAX_OVERFLOW", 5, 0, 100),
+        media_timeout_seconds=_bounded_int("POSTGRES_MEDIA_POOL_TIMEOUT_SECONDS", 10, 1, 120),
+        recycle_seconds=_bounded_int("POSTGRES_POOL_RECYCLE_SECONDS", 1800, 60, 86400),
+    )
 
 
 def security_settings() -> SecuritySettings:

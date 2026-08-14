@@ -10,7 +10,6 @@ import duckdb
 import pytest
 
 from app import database as app_database
-from app.repositories import workbench
 from scripts import upgrade_postgres_schema as startup
 from scripts.postgres_cli import parse_target
 
@@ -44,9 +43,8 @@ class _PostgresStartupConnection:
         raise AssertionError(f"unexpected startup query: {statement}")
 
 
-def test_postgres_initialization_backfills_system_analysis_pages(monkeypatch: pytest.MonkeyPatch):
+def test_postgres_initialization_is_read_only_schema_preflight(monkeypatch: pytest.MonkeyPatch):
     connection = _PostgresStartupConnection()
-    calls: list[tuple[str, object]] = []
 
     @contextmanager
     def fake_connect():
@@ -54,25 +52,11 @@ def test_postgres_initialization_backfills_system_analysis_pages(monkeypatch: py
 
     monkeypatch.setattr(app_database, "database_settings", lambda: SimpleNamespace(backend="postgresql"))
     monkeypatch.setattr(app_database, "connect", fake_connect)
-    monkeypatch.setattr(
-        workbench,
-        "ensure_default_workbench_catalog",
-        lambda conn: calls.append(("workbench", conn)),
-    )
-    monkeypatch.setattr(
-        app_database,
-        "ensure_project_quality_thresholds",
-        lambda conn: calls.append(("quality_thresholds", conn)),
-    )
-    monkeypatch.setattr(
-        app_database,
-        "ensure_system_analysis_page_metadata",
-        lambda conn: calls.append(("analysis_pages", conn)),
-    )
 
     app_database.initialize_database()
 
-    assert calls == [("workbench", connection), ("quality_thresholds", connection), ("analysis_pages", connection)]
+    # _PostgresStartupConnection rejects every statement except to_regclass;
+    # success proves startup performs no INSERT/UPDATE/DDL/seed work.
 
 
 def test_system_analysis_page_backfill_creates_missing_run_comparison_idempotently():

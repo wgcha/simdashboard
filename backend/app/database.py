@@ -11,14 +11,21 @@ from typing import Any
 import duckdb
 
 from .config import database_settings
-from .database_connection import connect, rows
+from .database_connection import ConnectionLike, connect, rows
 
 
 def initialize_database() -> None:
+    """Verify the runtime database is usable without mutating PostgreSQL.
+
+    PostgreSQL schema ownership belongs to Alembic and reference/demo data is
+    installed by an explicit seed command.  The embedded DuckDB adapter keeps
+    its compatibility bootstrap for local development only.
+    """
     settings = database_settings()
     if settings.backend == "postgresql":
         with connect() as conn:
             required_tables = (
+                "alembic_version",
                 "workspace_layouts",
                 "task_type_versions",
                 "project_memberships",
@@ -38,12 +45,15 @@ def initialize_database() -> None:
                     "PostgreSQL 권한 스키마가 준비되지 않았습니다. "
                     f"누락: {', '.join(missing)}. 먼저 alembic upgrade head를 실행하세요."
                 )
-            from .repositories.workbench import ensure_default_workbench_catalog
-
-            ensure_default_workbench_catalog(conn)
-            ensure_project_quality_thresholds(conn)
-            ensure_system_analysis_page_metadata(conn)
         return
+
+    from .adapters.persistence.duckdb.bootstrap import initialize_duckdb_development_database
+
+    initialize_duckdb_development_database(_initialize_duckdb_legacy)
+
+
+def _initialize_duckdb_legacy() -> None:
+    """Legacy DDL/compatibility bootstrap retained for the DuckDB dev adapter."""
     with connect() as conn:
         conn.execute(
             """
@@ -799,6 +809,17 @@ def initialize_database() -> None:
 
 
 def seed_current_database() -> None:
+    """Compatibility alias for the explicit reference/demo seed command."""
+    seed_reference_database()
+
+
+def seed_reference_database() -> None:
+    """Install idempotent system/reference content after schema migration.
+
+    The historical fixture set still includes deterministic demo examples used
+    by the UI and contract tests. It is intentionally explicit and never runs
+    during PostgreSQL application startup.
+    """
     with connect() as conn:
         ensure_default_content(conn)
 
@@ -1336,7 +1357,7 @@ def ensure_system_analysis_page_metadata(conn: Any) -> None:
         )
 
 
-def ensure_workspace_layouts(conn: duckdb.DuckDBPyConnection) -> None:
+def ensure_workspace_layouts(conn: ConnectionLike) -> None:
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     layouts = {
         "portfolio": {"fontSize": 10, "chartOrder": ["trend", "status", "quality", "type"]},

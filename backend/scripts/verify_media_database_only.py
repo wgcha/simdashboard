@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.config import database_settings  # noqa: E402
 from app.database import connect, initialize_database  # noqa: E402
+from app.database_connection import postgres_connection_budget  # noqa: E402
 
 
 def _private_path(raw: str) -> Path:
@@ -63,9 +64,7 @@ def verify() -> dict[str, object]:
             raise RuntimeError(f"legacy media is reachable below public root: {raw}")
 
     workers = int(os.getenv("UVICORN_WORKERS", "1"))
-    app_pool = 5 + 10
-    media_pool = 10 + 5
-    connection_budget = workers * (app_pool + media_pool)
+    connection_budget = postgres_connection_budget(workers, settings.postgres_pool)
     configured_max = os.getenv("POSTGRES_MAX_CONNECTIONS")
     if configured_max and connection_budget >= int(configured_max):
         raise RuntimeError(f"connection budget {connection_budget} exceeds configured max_connections {configured_max}")

@@ -3,6 +3,7 @@ set -euo pipefail
 
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 python_bin="${project_root}/.venv-runtime/bin/python"
+if [[ -x "${project_root}/.venv-wsl/bin/python" ]]; then python_bin="${project_root}/.venv-wsl/bin/python"; fi
 if [[ ! -x "${python_bin}" ]]; then python_bin="${project_root}/.venv/bin/python"; fi
 if [[ ! -x "${python_bin}" ]]; then echo "Python virtual environment not found." >&2; exit 1; fi
 
@@ -19,7 +20,7 @@ export ANALYSIS_DB_BACKEND=postgresql
   if [[ -n "${MIGRATE_DUCKDB_SOURCE:-}" ]]; then
     "${python_bin}" scripts/migrate_duckdb_to_postgres.py --source "${MIGRATE_DUCKDB_SOURCE}" --target-url "${DATABASE_URL}" --execute
   else
-    "${python_bin}" scripts/seed_database.py
+    "${python_bin}" scripts/seed_database.py --mode reference
   fi
 )
 

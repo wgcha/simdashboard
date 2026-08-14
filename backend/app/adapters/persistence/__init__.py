@@ -1,0 +1,1 @@
+"""Database-backed adapter implementations."""
