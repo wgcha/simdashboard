@@ -5,6 +5,7 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+backend/.pytest-tmp/
 backend/data/*.duckdb
 backend/data/*.wal
 backend/data/migration-*.json
@@ -27,3 +28,4 @@ backend/.transfer-assets-*/
 !backend/assets/demo-execution.log
 .server-pids.json
 .server-pids.env
+*:Zone.Identifier

@@ -6,6 +6,8 @@ local_bin="${HOME}/.local/bin"
 tool_root="${HOME}/.local/share/analysis-canvas"
 uv_version="0.11.32"
 pnpm_version="11.15.1"
+export COREPACK_HOME="${XDG_CACHE_HOME:-${HOME}/.cache}/node/corepack"
+export COREPACK_DEFAULT_TO_LATEST=0
 
 log() { printf '\n[setup-wsl] %s\n' "$*"; }
 fail() { printf '\n[setup-wsl] ERROR: %s\n' "$*" >&2; exit 1; }
@@ -60,14 +62,20 @@ hash -r
 log "Activating pnpm ${pnpm_version} through Corepack"
 corepack enable --install-directory "${local_bin}"
 corepack prepare "pnpm@${pnpm_version}" --activate
+install -m 0755 "${project_root}/scripts/wsl/pnpm-wrapper.sh" "${local_bin}/pnpm"
+hash -r
 
 python_version="$(tr -d '[:space:]' < "${project_root}/.python-version")"
 log "Installing managed Python ${python_version} and creating .venv-wsl"
 uv python install "${python_version}"
-if [[ ! -x "${project_root}/.venv-wsl/bin/python" ]]; then
+venv_python="${project_root}/.venv-wsl/bin/python"
+if [[ -x "${venv_python}" ]]; then
+  installed_python_version="$("${venv_python}" -c 'import sys; print(".".join(map(str, sys.version_info[:3])))')"
+  [[ "${installed_python_version}" == "${python_version}" ]] || fail "Existing .venv-wsl uses Python ${installed_python_version}, but .python-version requires ${python_version}. Remove only this environment with 'rm -rf .venv-wsl' and rerun ./setup-wsl.sh, or explicitly update .python-version for an intentional runtime change."
+else
   uv venv --python "${python_version}" "${project_root}/.venv-wsl"
 fi
-uv pip install --python "${project_root}/.venv-wsl/bin/python" -r "${project_root}/backend/requirements.txt"
+uv pip sync --python "${venv_python}" "${project_root}/backend/requirements.lock"
 
 log "Installing frontend dependencies from the lockfile"
 CI=true pnpm --dir "${project_root}/frontend" install --frozen-lockfile

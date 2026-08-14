@@ -3,6 +3,8 @@ set -euo pipefail
 
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 export PATH="${HOME}/.local/bin:${PATH}"
+export COREPACK_HOME="${XDG_CACHE_HOME:-${HOME}/.cache}/node/corepack"
+export COREPACK_DEFAULT_TO_LATEST=0
 
 fail() { printf '[setup-e2e] ERROR: %s\n' "$*" >&2; exit 1; }
 

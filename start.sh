@@ -3,6 +3,8 @@ set -euo pipefail
 
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export PATH="${HOME}/.local/bin:${PATH}"
+export COREPACK_HOME="${XDG_CACHE_HOME:-${HOME}/.cache}/node/corepack"
+export COREPACK_DEFAULT_TO_LATEST=0
 python_bin="${project_root}/.venv-runtime/bin/python"
 [[ -x "${project_root}/.venv-wsl/bin/python" ]] && python_bin="${project_root}/.venv-wsl/bin/python"
 [[ -x "${python_bin}" ]] || python_bin="${project_root}/.venv/bin/python"
