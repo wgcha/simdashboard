@@ -77,6 +77,12 @@ from .schemas.api import (
     WorkflowStepUpdate,
     WorkflowStepsReplace,
 )
+from .schemas.reports import (
+    ReportLayoutDeactivationResponse,
+    ReportLayoutSavedResponse,
+    ReportLayoutVersionDetailResponse,
+    ReportLayoutVersionSummaryResponse,
+)
 from .security import SecurityMiddleware, write_audit_event
 from .routers.security import router as security_router
 from .routers.access_control import router as access_control_router
@@ -1971,7 +1977,7 @@ def get_workspace_layout_versions(
 app.include_router(reports_router)
 
 
-@app.post("/api/report-layouts", status_code=201)
+@app.post("/api/report-layouts", response_model=ReportLayoutSavedResponse, status_code=201)
 def create_report_layout(payload: ReportLayoutPayload, request: Request) -> dict[str, Any]:
     require_permission(request, SYSTEM_CATALOG_MANAGE)
     principal = request.state.principal
@@ -1999,7 +2005,7 @@ def create_report_layout(payload: ReportLayoutPayload, request: Request) -> dict
     return {"id": layout_id, "name": payload.name.strip(), "description": payload.description.strip(), "version": 1, "definition": definition, "is_system": False, "updated_at": now, "updated_by": actor_name}
 
 
-@app.put("/api/report-layouts/{layout_id}")
+@app.put("/api/report-layouts/{layout_id}", response_model=ReportLayoutSavedResponse)
 def update_report_layout(layout_id: str, payload: ReportLayoutPayload, request: Request) -> dict[str, Any]:
     require_permission(request, SYSTEM_CATALOG_MANAGE)
     principal = request.state.principal
@@ -2030,7 +2036,7 @@ def update_report_layout(layout_id: str, payload: ReportLayoutPayload, request: 
     return {"id": layout_id, "name": payload.name.strip(), "description": payload.description.strip(), "version": version, "definition": definition, "is_system": bool(existing[1]), "updated_at": now, "updated_by": actor_name}
 
 
-@app.get("/api/report-layouts/{layout_id}/versions")
+@app.get("/api/report-layouts/{layout_id}/versions", response_model=list[ReportLayoutVersionSummaryResponse])
 def get_report_layout_versions(layout_id: str) -> list[dict[str, Any]]:
     with connect() as conn:
         return rows(conn.execute(
@@ -2039,7 +2045,7 @@ def get_report_layout_versions(layout_id: str) -> list[dict[str, Any]]:
         ))
 
 
-@app.get("/api/report-layouts/{layout_id}/versions/{version}")
+@app.get("/api/report-layouts/{layout_id}/versions/{version}", response_model=ReportLayoutVersionDetailResponse)
 def get_report_layout_version(layout_id: str, version: int) -> dict[str, Any]:
     with connect() as conn:
         stored = conn.execute(
@@ -2051,7 +2057,7 @@ def get_report_layout_version(layout_id: str, version: int) -> dict[str, Any]:
     return {"layout_id": layout_id, "version": version, "definition": json_value(stored[0]), "created_by": stored[1], "created_at": stored[2]}
 
 
-@app.delete("/api/report-layouts/{layout_id}")
+@app.delete("/api/report-layouts/{layout_id}", response_model=ReportLayoutDeactivationResponse)
 def delete_report_layout(layout_id: str, request: Request) -> dict[str, str]:
     require_permission(request, SYSTEM_CATALOG_MANAGE)
     with connect() as conn:

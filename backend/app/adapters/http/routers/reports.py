@@ -6,12 +6,13 @@ from fastapi import APIRouter, Request
 
 from ....adapters.persistence.reports import SQLReportLayoutRepositoryProvider
 from ....application.reports.queries import list_report_layouts as list_report_layouts_query
+from ....schemas.reports import ReportLayoutCatalogResponse
 
 
 router = APIRouter()
 
 
-@router.get("/api/report-layouts")
+@router.get("/api/report-layouts", response_model=list[ReportLayoutCatalogResponse])
 def list_report_layouts(request: Request) -> list[dict[str, Any]]:
     # SecurityMiddleware authenticates every /api path. Accessing the principal
     # here keeps that boundary explicit without changing legacy permissions.

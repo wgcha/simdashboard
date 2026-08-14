@@ -4520,8 +4520,7 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "additionalProperties": true,
-                    "type": "object"
+                    "$ref": "#/components/schemas/ReportLayoutCatalogResponse"
                   },
                   "type": "array",
                   "title": "Response List Report Layouts Api Report Layouts Get"
@@ -4550,9 +4549,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Create Report Layout Api Report Layouts Post"
+                  "$ref": "#/components/schemas/ReportLayoutSavedResponse"
                 }
               }
             }
@@ -4601,9 +4598,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Update Report Layout Api Report Layouts  Layout Id  Put"
+                  "$ref": "#/components/schemas/ReportLayoutSavedResponse"
                 }
               }
             }
@@ -4640,11 +4635,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "title": "Response Delete Report Layout Api Report Layouts  Layout Id  Delete"
+                  "$ref": "#/components/schemas/ReportLayoutDeactivationResponse"
                 }
               }
             }
@@ -4685,8 +4676,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "type": "object",
-                    "additionalProperties": true
+                    "$ref": "#/components/schemas/ReportLayoutVersionSummaryResponse"
                   },
                   "title": "Response Get Report Layout Versions Api Report Layouts  Layout Id  Versions Get"
                 }
@@ -4736,9 +4726,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Get Report Layout Version Api Report Layouts  Layout Id  Versions  Version  Get"
+                  "$ref": "#/components/schemas/ReportLayoutVersionDetailResponse"
                 }
               }
             }
@@ -7243,6 +7231,162 @@
         ],
         "title": "QualityThresholdUpdate"
       },
+      "ReportLayoutCatalogResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "definition": {
+            "$ref": "#/components/schemas/ReportLayoutDefinition"
+          },
+          "is_system": {
+            "type": "boolean",
+            "title": "Is System"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "updated_by": {
+            "type": "string",
+            "title": "Updated By"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "description",
+          "version",
+          "definition",
+          "is_system",
+          "is_active",
+          "created_at",
+          "updated_at",
+          "updated_by"
+        ],
+        "title": "ReportLayoutCatalogResponse"
+      },
+      "ReportLayoutDeactivationResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "deactivated",
+            "title": "Status"
+          },
+          "id": {
+            "type": "string",
+            "title": "Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "id"
+        ],
+        "title": "ReportLayoutDeactivationResponse"
+      },
+      "ReportLayoutDefinition": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "coverVariant": {
+            "type": "string",
+            "enum": [
+              "balanced",
+              "executive",
+              "evidence"
+            ],
+            "title": "Covervariant"
+          },
+          "accentColor": {
+            "type": "string",
+            "title": "Accentcolor"
+          },
+          "sectionOrder": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "series",
+                "scalar",
+                "media"
+              ]
+            },
+            "type": "array",
+            "title": "Sectionorder"
+          },
+          "variablePlacements": {
+            "items": {
+              "$ref": "#/components/schemas/ReportVariablePlacement"
+            },
+            "type": "array",
+            "title": "Variableplacements"
+          },
+          "includeMedia": {
+            "type": "boolean",
+            "title": "Includemedia"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "description",
+          "version",
+          "coverVariant",
+          "accentColor",
+          "sectionOrder",
+          "variablePlacements",
+          "includeMedia"
+        ],
+        "title": "ReportLayoutDefinition",
+        "description": "Stored layout JSON remains an extensible document contract."
+      },
       "ReportLayoutPayload": {
         "properties": {
           "name": {
@@ -7282,6 +7426,121 @@
           "definition"
         ],
         "title": "ReportLayoutPayload"
+      },
+      "ReportLayoutSavedResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "definition": {
+            "$ref": "#/components/schemas/ReportLayoutDefinition"
+          },
+          "is_system": {
+            "type": "boolean",
+            "title": "Is System"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "updated_by": {
+            "type": "string",
+            "title": "Updated By"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "description",
+          "version",
+          "definition",
+          "is_system",
+          "updated_at",
+          "updated_by"
+        ],
+        "title": "ReportLayoutSavedResponse"
+      },
+      "ReportLayoutVersionDetailResponse": {
+        "properties": {
+          "layout_id": {
+            "type": "string",
+            "title": "Layout Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "definition": {
+            "$ref": "#/components/schemas/ReportLayoutDefinition"
+          },
+          "created_by": {
+            "type": "string",
+            "title": "Created By"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "layout_id",
+          "version",
+          "definition",
+          "created_by",
+          "created_at"
+        ],
+        "title": "ReportLayoutVersionDetailResponse"
+      },
+      "ReportLayoutVersionSummaryResponse": {
+        "properties": {
+          "layout_id": {
+            "type": "string",
+            "title": "Layout Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "created_by": {
+            "type": "string",
+            "title": "Created By"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "is_valid": {
+            "type": "boolean",
+            "title": "Is Valid"
+          }
+        },
+        "type": "object",
+        "required": [
+          "layout_id",
+          "version",
+          "created_by",
+          "created_at",
+          "is_valid"
+        ],
+        "title": "ReportLayoutVersionSummaryResponse"
       },
       "ReportTemplateRenderPayload": {
         "properties": {
@@ -7344,6 +7603,36 @@
           "content_base64"
         ],
         "title": "ReportTemplateUploadPayload"
+      },
+      "ReportVariablePlacement": {
+        "properties": {
+          "variableKey": {
+            "type": "string",
+            "title": "Variablekey"
+          },
+          "presentation": {
+            "type": "string",
+            "enum": [
+              "chart",
+              "table",
+              "both"
+            ],
+            "title": "Presentation"
+          },
+          "order": {
+            "type": "integer",
+            "title": "Order"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "variableKey",
+          "presentation",
+          "order"
+        ],
+        "title": "ReportVariablePlacement",
+        "description": "A stable variable placement while retaining layout-specific extensions."
       },
       "RequestTypeAssignmentInput": {
         "properties": {

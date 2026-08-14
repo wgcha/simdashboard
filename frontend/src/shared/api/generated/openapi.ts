@@ -2255,6 +2255,73 @@ export interface components {
             /** Updated By */
             updated_by?: string | null;
         };
+        /** ReportLayoutCatalogResponse */
+        ReportLayoutCatalogResponse: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description: string | null;
+            /** Version */
+            version: number;
+            definition: components["schemas"]["ReportLayoutDefinition"];
+            /** Is System */
+            is_system: boolean;
+            /** Is Active */
+            is_active: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Updated By */
+            updated_by: string;
+        };
+        /** ReportLayoutDeactivationResponse */
+        ReportLayoutDeactivationResponse: {
+            /**
+             * Status
+             * @constant
+             */
+            status: "deactivated";
+            /** Id */
+            id: string;
+        };
+        /**
+         * ReportLayoutDefinition
+         * @description Stored layout JSON remains an extensible document contract.
+         */
+        ReportLayoutDefinition: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            /** Version */
+            version: number;
+            /**
+             * Covervariant
+             * @enum {string}
+             */
+            coverVariant: "balanced" | "executive" | "evidence";
+            /** Accentcolor */
+            accentColor: string;
+            /** Sectionorder */
+            sectionOrder: ("series" | "scalar" | "media")[];
+            /** Variableplacements */
+            variablePlacements: components["schemas"]["ReportVariablePlacement"][];
+            /** Includemedia */
+            includeMedia: boolean;
+        } & {
+            [key: string]: unknown;
+        };
         /** ReportLayoutPayload */
         ReportLayoutPayload: {
             /** Name */
@@ -2270,6 +2337,58 @@ export interface components {
             };
             /** Updated By */
             updated_by?: string | null;
+        };
+        /** ReportLayoutSavedResponse */
+        ReportLayoutSavedResponse: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            /** Version */
+            version: number;
+            definition: components["schemas"]["ReportLayoutDefinition"];
+            /** Is System */
+            is_system: boolean;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Updated By */
+            updated_by: string;
+        };
+        /** ReportLayoutVersionDetailResponse */
+        ReportLayoutVersionDetailResponse: {
+            /** Layout Id */
+            layout_id: string;
+            /** Version */
+            version: number;
+            definition: components["schemas"]["ReportLayoutDefinition"];
+            /** Created By */
+            created_by: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** ReportLayoutVersionSummaryResponse */
+        ReportLayoutVersionSummaryResponse: {
+            /** Layout Id */
+            layout_id: string;
+            /** Version */
+            version: number;
+            /** Created By */
+            created_by: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Is Valid */
+            is_valid: boolean;
         };
         /** ReportTemplateRenderPayload */
         ReportTemplateRenderPayload: {
@@ -2293,6 +2412,23 @@ export interface components {
             content_base64: string;
             /** Updated By */
             updated_by?: string | null;
+        };
+        /**
+         * ReportVariablePlacement
+         * @description A stable variable placement while retaining layout-specific extensions.
+         */
+        ReportVariablePlacement: {
+            /** Variablekey */
+            variableKey: string;
+            /**
+             * Presentation
+             * @enum {string}
+             */
+            presentation: "chart" | "table" | "both";
+            /** Order */
+            order: number;
+        } & {
+            [key: string]: unknown;
         };
         /** RequestTypeAssignmentInput */
         RequestTypeAssignmentInput: {
@@ -5759,9 +5895,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    }[];
+                    "application/json": components["schemas"]["ReportLayoutCatalogResponse"][];
                 };
             };
         };
@@ -5785,9 +5919,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["ReportLayoutSavedResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5822,9 +5954,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["ReportLayoutSavedResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5855,9 +5985,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: string;
-                    };
+                    "application/json": components["schemas"]["ReportLayoutDeactivationResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5888,9 +6016,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    }[];
+                    "application/json": components["schemas"]["ReportLayoutVersionSummaryResponse"][];
                 };
             };
             /** @description Validation Error */
@@ -5922,9 +6048,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["ReportLayoutVersionDetailResponse"];
                 };
             };
             /** @description Validation Error */
