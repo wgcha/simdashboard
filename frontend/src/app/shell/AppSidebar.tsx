@@ -57,6 +57,7 @@ type AppSidebarProps = {
   onIncreaseFontSize: () => void
   onLogout: () => void
   onNavigate: (id: AppSidebarMenuId) => void
+  onPreloadPage: (id: AppSidebarMenuId) => void
   onToggleCollapsed: () => void
 }
 
@@ -73,6 +74,7 @@ export function AppSidebar({
   onIncreaseFontSize,
   onLogout,
   onNavigate,
+  onPreloadPage,
   onToggleCollapsed,
 }: AppSidebarProps) {
   return <aside className="sidebar" aria-label="주 메뉴">
@@ -80,7 +82,7 @@ export function AppSidebar({
     <nav className="nav-main">
       {menus.map((menu) => {
         const Icon = MENU_ICONS[menu.id]
-        return <button key={menu.id} aria-label={menu.label} title={menu.label} className={activePage === menu.id ? 'active' : ''} onClick={() => onNavigate(menu.id)}><Icon /><span>{menu.label}</span></button>
+        return <button key={menu.id} aria-label={menu.label} title={menu.label} className={activePage === menu.id ? 'active' : ''} onClick={() => onNavigate(menu.id)} onMouseEnter={() => onPreloadPage(menu.id)} onFocus={() => onPreloadPage(menu.id)}><Icon /><span>{menu.label}</span></button>
       })}
     </nav>
     <div className="sidebar-foot">

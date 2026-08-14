@@ -17,13 +17,17 @@ const lockedRawApiPathCeilings = {
 }
 
 const lockedSourceLineCeilings = {
-  'App.tsx': 1350,
+  'App.tsx': 1076,
+  'app/routing/workspaceRouteModules.tsx': 26,
   'api.ts': 393,
   'features/analysis/AnalysisPageManager.tsx': 95,
   'features/data/DataWorkspace.tsx': 189,
   'features/data/FolderSchemaWorkspace.tsx': 84,
   'features/data/VariableCatalogPage.tsx': 30,
   'features/reports/ReportLayoutEditor.tsx': 206,
+  'features/reports/ReportExportDialog.tsx': 32,
+  'features/reports/api.ts': 132,
+  'features/reports/useReportExportController.ts': 240,
   'features/requests/WorkflowView.tsx': 87,
   'features/results/AnalysisWidgets.tsx': 290,
   'features/results/DropVideoGrid.tsx': 257,

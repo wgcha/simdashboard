@@ -1,4 +1,4 @@
-import type { AnalysisRequest, AnalysisRunSummary, AutomationTemplate, DashboardDefinition, DashboardPageSummary, DashboardSummary, DashboardVersion, DashboardVersionDefinition, DropVideoPage, FeatureExample, ImportSchema, ImportSchemaDefinition, LoadCase, Overview, PortfolioLayout, PortfolioOverview, Project, QualityThreshold, ReportLayout, ReportLayoutDefinition, ReportLayoutVersion, ReportTemplateAsset, ReviewItem, RunComparison, RunTrust, VariableDefinition, VariableDefinitionInput, WidgetCatalogItem, Workflow, WorkflowDashboardLayout, WorkflowStep, WorkspaceLayout, WorkspaceLayoutVersion } from './types'
+import type { AnalysisRequest, AnalysisRunSummary, AutomationTemplate, DashboardDefinition, DashboardPageSummary, DashboardSummary, DashboardVersion, DashboardVersionDefinition, DropVideoPage, FeatureExample, ImportSchema, ImportSchemaDefinition, LoadCase, Overview, PortfolioLayout, PortfolioOverview, Project, QualityThreshold, ReportTemplateAsset, ReviewItem, RunComparison, RunTrust, VariableDefinition, VariableDefinitionInput, WidgetCatalogItem, Workflow, WorkflowDashboardLayout, WorkflowStep, WorkspaceLayout, WorkspaceLayoutVersion } from './types'
 import { apiFetch } from './shared/api/auth'
 import { requireStringField, responseRecord, responseRecordArray } from './shared/api/adapters'
 import { apiClient, unwrapGenerated } from './shared/api/client'
@@ -154,7 +154,6 @@ type FolderImportResponse = { status: 'IMPORTED'; job_id: string; run_id: string
 type AdminUser = { id: string; username: string; display_name: string; employee_id: string | null; account_status: 'PENDING' | 'ACTIVE' | 'SUSPENDED'; is_global_admin: boolean; updated_at: string }
 type ProjectMember = { user_id: string; username: string; display_name: string; employee_id: string | null; role: ProjectRole; updated_at: string }
 type MenuPolicyVersion = { version: number; created_by: string; created_at: string; source_version: number | null; change_note: string | null }
-type ReportLayoutVersionDefinition = { layout_id: string; version: number; definition: ReportLayoutDefinition; created_by: string; created_at: string }
 type DashboardMutation = { status: string; version: number; updated_at: string }
 type DashboardPreview = { recognized: boolean; message: string; proposal: null | ({ action: 'add_widget'; widget: DashboardDefinition['widgets'][number] } | { action: 'update_widgets'; updates: Array<{ widget_type: string; x?: number; y?: number; w?: number; h?: number; settings?: Record<string, unknown> }> }) }
 
@@ -198,10 +197,6 @@ function adaptWidgetCatalogItem(value: unknown): WidgetCatalogItem { return vali
 function adaptWidgetCatalog(value: unknown): WidgetCatalogItem[] { return responseRecordArray(value, 'widgetCatalog').map(adaptWidgetCatalogItem) }
 function adaptAutomationTemplate(value: unknown): AutomationTemplate { return validatedRecord(value, 'automationTemplate', ['id', 'template_name']) as unknown as AutomationTemplate }
 function adaptAutomationTemplates(value: unknown): AutomationTemplate[] { return responseRecordArray(value, 'automationTemplates').map(adaptAutomationTemplate) }
-function adaptReportLayout(value: unknown): ReportLayout { return validatedRecord(value, 'reportLayout', ['id', 'name']) as unknown as ReportLayout }
-function adaptReportLayouts(value: unknown): ReportLayout[] { return responseRecordArray(value, 'reportLayouts').map(adaptReportLayout) }
-function adaptReportLayoutVersions(value: unknown): ReportLayoutVersion[] { return validatedRecordArray(value, 'reportLayoutVersions', ['layout_id', 'created_by']) as unknown as ReportLayoutVersion[] }
-function adaptReportLayoutVersion(value: unknown): ReportLayoutVersionDefinition { return validatedRecord(value, 'reportLayoutVersion', ['layout_id', 'created_by', 'created_at'], ['version']) as unknown as ReportLayoutVersionDefinition }
 function adaptReportTemplate(value: unknown): ReportTemplateAsset { return validatedRecord(value, 'reportTemplate', ['id', 'name', 'filename']) as unknown as ReportTemplateAsset }
 function adaptReportTemplates(value: unknown): ReportTemplateAsset[] { return responseRecordArray(value, 'reportTemplates').map(adaptReportTemplate) }
 function adaptDashboardVersions(value: unknown): DashboardVersion[] { return validatedRecordArray(value, 'dashboardVersions', ['dashboard_id', 'created_by']) as unknown as DashboardVersion[] }
@@ -362,15 +357,6 @@ export const api = {
     adaptDeletedVariable(unwrapGenerated(await apiClient.DELETE('/api/load-cases/{load_case_id}/variables/{variable_key}', { params: { path: { load_case_id: loadCaseId, variable_key: variableKey } } }))),
   widgetCatalog: async () => adaptWidgetCatalog(unwrapGenerated(await apiClient.GET('/api/widget-catalog'))),
   automationTemplates: async (projectId?: string) => adaptAutomationTemplates(unwrapGenerated(await apiClient.GET('/api/automation-templates', { params: { query: { project_id: projectId } } }))),
-  reportLayouts: async () => adaptReportLayouts(unwrapGenerated(await apiClient.GET('/api/report-layouts'))),
-  createReportLayout: async (payload: { name: string; description: string; definition: ReportLayoutDefinition; updated_by: string }) =>
-    adaptReportLayout(unwrapGenerated(await apiClient.POST('/api/report-layouts', { body: payload }))),
-  updateReportLayout: async (layoutId: string, payload: { name: string; description: string; definition: ReportLayoutDefinition; updated_by: string }) =>
-    adaptReportLayout(unwrapGenerated(await apiClient.PUT('/api/report-layouts/{layout_id}', { params: { path: { layout_id: layoutId } }, body: payload }))),
-  deleteReportLayout: async (layoutId: string) => adaptStatusId(unwrapGenerated(await apiClient.DELETE('/api/report-layouts/{layout_id}', { params: { path: { layout_id: layoutId } } }))),
-  reportLayoutVersions: async (layoutId: string) => adaptReportLayoutVersions(unwrapGenerated(await apiClient.GET('/api/report-layouts/{layout_id}/versions', { params: { path: { layout_id: layoutId } } }))),
-  reportLayoutVersion: async (layoutId: string, version: number) =>
-    adaptReportLayoutVersion(unwrapGenerated(await apiClient.GET('/api/report-layouts/{layout_id}/versions/{version}', { params: { path: { layout_id: layoutId, version } } }))),
   reportTemplates: async () => adaptReportTemplates(unwrapGenerated(await apiClient.GET('/api/report-templates'))),
   uploadReportTemplate: async (name: string, file: File) => adaptReportTemplate(unwrapGenerated(await apiClient.POST('/api/report-templates', {
     body: { name, filename: file.name, content_base64: arrayBufferToBase64(await file.arrayBuffer()), updated_by: '보고서 편집자' },

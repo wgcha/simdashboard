@@ -33,7 +33,7 @@ import {
 import { type Layout, type Layouts } from 'react-grid-layout'
 import { api } from './api'
 import { clearSession, saveSession, type AuthUser } from './auth'
-import { useReportLayoutEditorState, useWorkspaceEditorCoordinator } from './editorState'
+import { useWorkspaceEditorCoordinator } from './editorState'
 import { BootstrapWorkspaceShell } from './features/bootstrap/BootstrapWorkspaceShell'
 import type { InitialWorkspace } from './features/bootstrap/loadInitialWorkspace'
 import { useWorkspaceBootstrap } from './features/bootstrap/useWorkspaceBootstrap'
@@ -42,16 +42,15 @@ import { AppSidebar } from './app/shell/AppSidebar'
 import { loadWorkspacePreferences, saveWorkspacePreference, type WorkspaceTheme } from './app/preferences/workspacePreferences'
 import { pageView, preferredPage, visiblePages, type ActiveView } from './features/analysis/pageSelection'
 import { DEFAULT_PORTFOLIO_LAYOUT, DEFAULT_WORKFLOW_DASHBOARD_LAYOUT, loadPortfolioLayout, loadWorkflowDashboardLayout } from './features/layouts/layoutDefaults'
-import { withReportVariables } from './features/reports/reportLayoutUtils'
+import { ReportExportDialog } from './features/reports/ReportExportDialog'
+import { useReportExportController } from './features/reports/useReportExportController'
 import { ApprovalPendingScreen, LoginScreen } from './features/auth/LoginScreen'
 import { firstAllowedWorkspacePage, hasPermission, visibleMenuItems, type MenuId, type MenuPolicy, type WorkspacePage } from './features/auth/access'
 import { WORKSPACE_ROUTES_BY_ID } from './features/navigation/workspaceRouteRegistry'
-import { AccessAdminPage, AuditAdminPage, MenuPolicyAdminPage } from './features/access/AccessAdministration'
-import { SimulationWorkbench, WorkbenchTypeAdmin } from './features/workbench/SimulationWorkbench'
+import { AccessAdminPage, AuditAdminPage, MenuPolicyAdminPage, preloadWorkspaceRouteModule, SimulationWorkbench, WorkbenchTypeAdmin } from './app/routing/workspaceRouteModules'
 import { RequestIntakePage } from './features/workbench/RequestIntakePage'
 import { PortfolioDashboard } from './PortfolioDashboard'
 import type { RunComparisonReportContext } from './features/results/AnalysisWidgets'
-import type { ReportExportOptions } from './reportExport'
 import type { AnalysisRequest, AnalysisRunSummary, AutomationTemplate, DashboardDefinition, DashboardPageSummary, DashboardSummary, DashboardVersion, DashboardWidget, FeatureExample, ImportSchema, LoadCase, Overview, PortfolioLayout, Project, QualityThreshold, ReportContentItem, ReportElementDefinition, ReportElementType, ReportLayout, ReportLayoutDefinition, ReportLayoutVersion, ReportSection, ReportSlideDefinition, ReportSlideKind, ReportSource, ReportTemplateAsset, ReviewItem, RunComparison, RunTrust, VariableDefinition, VariableDefinitionInput, WidgetCatalogItem, Workflow, WorkflowDashboardLayout, WorkflowStep } from './types'
 
 const DataWorkspace = lazy(() => import('./features/data/DataWorkspace').then(({ DataWorkspace }) => ({ default: DataWorkspace })))
@@ -63,7 +62,6 @@ const HelpCenter = lazy(() => import('./features/help/HelpCenter').then(({ HelpC
 const WorkflowView = lazy(() => import('./features/requests/WorkflowView').then(({ WorkflowView }) => ({ default: WorkflowView })))
 const ResultsWorkspace = lazy(() => import('./features/results/ResultsWorkspace').then(({ ResultsWorkspace }) => ({ default: ResultsWorkspace })))
 const WidgetSettingsPanel = lazy(() => import('./features/results/AnalysisWidgets').then(({ WidgetSettingsPanel }) => ({ default: WidgetSettingsPanel })))
-const ReportLayoutEditor = lazy(() => import('./features/reports/ReportLayoutEditor').then(({ ReportLayoutEditor }) => ({ default: ReportLayoutEditor })))
 const AnalysisPageManager = lazy(() => import('./features/analysis/AnalysisPageManager').then(({ AnalysisPageManager }) => ({ default: AnalysisPageManager })))
 
 function FeatureScreenFallback() {
@@ -123,20 +121,6 @@ function App() {
   const [catalogVariable, setCatalogVariable] = useState('')
   const [savedDashboards, setSavedDashboards] = useState<DashboardSummary[]>([])
   const [selectedWidgetId, setSelectedWidgetId] = useState<string | null>(null)
-  const [reportDraft, setReportDraft] = useState<ReportExportOptions | null>(null)
-  const [reportOverview, setReportOverview] = useState<Overview | null>(null)
-  const [reportPageId, setReportPageId] = useState('')
-  const [reportRuns, setReportRuns] = useState<AnalysisRunSummary[]>([])
-  const [reportRunId, setReportRunId] = useState('')
-  const [reportContents, setReportContents] = useState<ReportContentItem[]>([])
-  const [reportSource, setReportSource] = useState<ReportSource | null>(null)
-  const [reportExporting, setReportExporting] = useState(false)
-  const [reportError, setReportError] = useState('')
-  const [reportLayouts, setReportLayouts] = useState<ReportLayout[]>([])
-  const [reportLayoutDraft, setReportLayoutDraft] = useState<ReportLayoutDefinition | null>(null)
-  const [reportLayoutVersions, setReportLayoutVersions] = useState<ReportLayoutVersion[]>([])
-  const [reportTemplates, setReportTemplates] = useState<ReportTemplateAsset[]>([])
-  const reportLayoutEditor = useReportLayoutEditorState()
   const [portfolioLayout, setPortfolioLayout] = useState<PortfolioLayout>(loadPortfolioLayout)
   const [workflowDashboardLayout, setWorkflowDashboardLayout] = useState<WorkflowDashboardLayout>(loadWorkflowDashboardLayout)
   const [portfolioLayoutVersion, setPortfolioLayoutVersion] = useState(1)
@@ -144,6 +128,20 @@ function App() {
   const [operationalRefreshToken, setOperationalRefreshToken] = useState(0)
   const [pageManagerOpen, setPageManagerOpen] = useState(false)
   const [comparisonReportContext, setComparisonReportContext] = useState<RunComparisonReportContext | null>(null)
+  const reportablePages = overview ? visiblePages(analysisPages, overview).filter((page) => page.page.analysis_key !== 'run_comparison' && (page.page.is_system || page.page.status === 'published' || (page.id === activeDashboardId && hasPermission(authUser, 'dashboard.edit', selectedProjectId)))) : []
+  const reportExport = useReportExportController({
+    activeDashboardId,
+    comparisonReportContext,
+    dashboard,
+    dashboardReady: Boolean(dashboard && !dashboardLoading && dashboard.id === activeDashboardId),
+    mode: activeView === 'compare' ? 'comparison' : 'analysis',
+    onComparisonReportContextChanged: setComparisonReportContext,
+    onError: setError,
+    onNotice: setNotice,
+    overview,
+    reportablePages,
+    selectedLoadCaseId,
+  })
   const workflowEditorMode = workspaceEditor.isWorkflowLayout ? 'layout' : workspaceEditor.isWorkflowStages ? 'stages' : null
   const portfolioLayoutBeforeEdit = useRef<PortfolioLayout | null>(null)
   const dashboardBeforeEdit = useRef<DashboardDefinition | null>(null)
@@ -777,247 +775,6 @@ function App() {
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Open Cell 응력 기준을 저장하지 못했습니다.') }
   }
 
-  const reportDataForPage = async (pageId: string, sourceOverview?: Overview | null) => {
-    const dataOverview = sourceOverview ?? overview
-    if (!overview) throw new Error('선택한 하중 경우의 결과가 없습니다.')
-    const page = analysisPages.find((item) => item.id === pageId)
-    if (!page) throw new Error('내보낼 분석 페이지를 찾을 수 없습니다.')
-    const definition = dashboard?.id === pageId ? dashboard : await api.dashboard(pageId)
-    const { filterOverviewForReport, filterOverviewForVariables } = await import('./reportExport')
-    if (page.page.analysis_key === 'open_cell') {
-      const scopedOverview = filterOverviewForReport(dataOverview!, 'open_cell')
-      return { scopedOverview, contentOverview: scopedOverview, definition, page }
-    }
-    if (page.page.analysis_key === 'chassis_rear') {
-      const scopedOverview = filterOverviewForReport(dataOverview!, 'chassis')
-      return { scopedOverview, contentOverview: scopedOverview, definition, page }
-    }
-    const variableKeys = [...new Set(definition.widgets
-      .filter((widget) => widget.settings?.includeInReport !== false && typeof widget.settings?.variableId === 'string')
-      .map((widget) => String(widget.settings?.variableId)))]
-    return { scopedOverview: filterOverviewForVariables(dataOverview!, variableKeys, page.name), contentOverview: dataOverview!, definition, page }
-  }
-
-  const openReportExport = async () => {
-    if (!overview) return
-    if (!dashboardReady) { setError('현재 상세 분석 페이지를 불러온 뒤 보고서를 내보내 주세요.'); return }
-    setReportError('')
-    try {
-      const { createDashboardReportContent, createDefaultReportOptions, createRunComparisonReportContent, DEFAULT_REPORT_LAYOUT, normalizeReportLayout, prepareContentReportLayout } = await import('./reportExport')
-      const [layouts, templates, availableRuns] = await Promise.all([api.reportLayouts(), api.reportTemplates(), api.analysisRuns(selectedLoadCaseId)])
-      const selected = layouts.find((item) => item.id === 'report-layout-standard')?.definition ?? layouts[0]?.definition ?? DEFAULT_REPORT_LAYOUT
-      const layoutVersions = layouts.length ? await api.reportLayoutVersions(selected.id) : []
-      let scopedOverview = overview
-      let contents: ReportContentItem[]
-      let source: ReportSource
-      let pageId: string
-      if (activeView === 'compare') {
-        if (!comparisonReportContext || comparisonReportContext.loadCaseId !== selectedLoadCaseId) throw new Error('현재 하중 경우의 기준 Run과 대상 Run 비교가 준비된 뒤 보고서를 내보낼 수 있습니다.')
-        const [comparison, trust, reviews] = await Promise.all([
-          api.runComparison(comparisonReportContext.loadCaseId, comparisonReportContext.baselineRunId, comparisonReportContext.targetRunId),
-          api.runTrust(comparisonReportContext.targetRunId),
-          api.reviewItems(comparisonReportContext.targetRunId),
-        ])
-        contents = createRunComparisonReportContent(comparison, trust, reviews)
-        source = { kind: 'run_compare_review', loadCaseId: comparisonReportContext.loadCaseId, baselineRunId: comparisonReportContext.baselineRunId, targetRunId: comparisonReportContext.targetRunId }
-        pageId = activeDashboardId
-      } else {
-        const available = visiblePages(analysisPages, overview).filter((page) => page.page.analysis_key !== 'run_comparison' && (page.page.is_system || page.page.status === 'published' || (page.id === activeDashboardId && canManagePages)))
-        const selectedPage = available.find((page) => page.id === activeDashboardId) ?? available[0]
-        if (!selectedPage) throw new Error('내보낼 분석 페이지가 없습니다.')
-        const reportData = await reportDataForPage(selectedPage.id)
-        scopedOverview = reportData.scopedOverview
-        if (!scopedOverview.run) throw new Error('완료된 Run이 없어 보고서를 내보낼 수 없습니다.')
-        contents = createDashboardReportContent(reportData.definition, reportData.contentOverview)
-        source = { kind: 'analysis_page', dashboardId: selectedPage.id, loadCaseId: selectedLoadCaseId, runId: scopedOverview.run }
-        pageId = selectedPage.id
-      }
-      setReportPageId(pageId)
-      setReportRuns(availableRuns)
-      setReportRunId(scopedOverview.run ?? '')
-      setReportOverview(scopedOverview)
-      setReportDraft(createDefaultReportOptions(scopedOverview))
-      setReportContents(contents)
-      setReportSource(source)
-      setReportLayouts(layouts)
-      setReportLayoutDraft(prepareContentReportLayout(withReportVariables(normalizeReportLayout(selected), scopedOverview), source, contents, true))
-      setReportLayoutVersions(layoutVersions)
-      setReportTemplates(templates)
-      reportLayoutEditor.close()
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '보고서 레이아웃을 불러오지 못했습니다.')
-    }
-  }
-
-  const selectReportPage = async (pageId: string) => {
-    setReportError('')
-    try {
-      if (!reportRunId) throw new Error('보고서에 사용할 Run을 먼저 선택해 주세요.')
-      const { createDashboardReportContent, createDefaultReportOptions, prepareContentReportLayout } = await import('./reportExport')
-      const selectedOverview = await api.overview(selectedLoadCaseId, reportRunId)
-      const { scopedOverview, contentOverview, definition } = await reportDataForPage(pageId, selectedOverview)
-      const contents = createDashboardReportContent(definition, contentOverview)
-      const source: ReportSource = { kind: 'analysis_page', dashboardId: pageId, loadCaseId: selectedLoadCaseId, runId: reportRunId }
-      setReportPageId(pageId)
-      setReportOverview(scopedOverview)
-      setReportDraft(createDefaultReportOptions(scopedOverview))
-      setReportContents(contents)
-      setReportSource(source)
-      setReportLayoutDraft((current) => current ? prepareContentReportLayout(withReportVariables(current, scopedOverview), source, contents, true) : current)
-    } catch (reason) {
-      setReportError(reason instanceof Error ? reason.message : '분석 페이지를 보고서에 연결하지 못했습니다.')
-    }
-  }
-
-  const selectReportRun = async (runId: string) => {
-    if (!reportPageId || !runId) return
-    setReportError('')
-    try {
-      const { createDashboardReportContent, createDefaultReportOptions, prepareContentReportLayout } = await import('./reportExport')
-      const selectedOverview = await api.overview(selectedLoadCaseId, runId)
-      const { scopedOverview, contentOverview, definition } = await reportDataForPage(reportPageId, selectedOverview)
-      const contents = createDashboardReportContent(definition, contentOverview)
-      const source: ReportSource = { kind: 'analysis_page', dashboardId: reportPageId, loadCaseId: selectedLoadCaseId, runId }
-      setReportRunId(runId)
-      setReportOverview(scopedOverview)
-      setReportDraft(createDefaultReportOptions(scopedOverview))
-      setReportContents(contents)
-      setReportSource(source)
-      setReportLayoutDraft((current) => current ? prepareContentReportLayout(withReportVariables(current, scopedOverview), source, contents, true) : current)
-    } catch (reason) {
-      setReportError(reason instanceof Error ? reason.message : '선택한 Run을 보고서에 연결하지 못했습니다.')
-    }
-  }
-
-  const selectComparisonReportRun = async (side: 'baseline' | 'target', runId: string) => {
-    if (reportSource?.kind !== 'run_compare_review' || !runId) return
-    const baselineRunId = side === 'baseline' ? runId : reportSource.baselineRunId
-    const targetRunId = side === 'target' ? runId : reportSource.targetRunId
-    if (baselineRunId === targetRunId) return
-    setReportError('')
-    try {
-      const { createDefaultReportOptions, createRunComparisonReportContent, prepareContentReportLayout } = await import('./reportExport')
-      const [comparison, trust, reviews, targetOverview] = await Promise.all([
-        api.runComparison(reportSource.loadCaseId, baselineRunId, targetRunId),
-        api.runTrust(targetRunId),
-        api.reviewItems(targetRunId),
-        api.overview(reportSource.loadCaseId, targetRunId),
-      ])
-      const contents = createRunComparisonReportContent(comparison, trust, reviews)
-      const source: ReportSource = { kind: 'run_compare_review', loadCaseId: reportSource.loadCaseId, baselineRunId, targetRunId }
-      setComparisonReportContext({ loadCaseId: reportSource.loadCaseId, baselineRunId, targetRunId, comparison, trust, reviews })
-      setReportOverview(targetOverview)
-      setReportDraft(createDefaultReportOptions(targetOverview))
-      setReportContents(contents)
-      setReportSource(source)
-      setReportLayoutDraft((current) => current ? prepareContentReportLayout(withReportVariables(current, targetOverview), source, contents, true) : current)
-    } catch (reason) {
-      setReportError(reason instanceof Error ? reason.message : '선택한 Run 비교를 보고서에 연결하지 못했습니다.')
-    }
-  }
-
-  const updateReportDraft = (field: keyof ReportExportOptions, value: string) => {
-    setReportDraft((current) => current ? { ...current, [field]: value } : current)
-  }
-
-  const downloadReport = async () => {
-    if (!reportDraft || !reportOverview || !reportLayoutDraft) return
-    setReportExporting(true)
-    setReportError('')
-    try {
-      const { exportAnalysisReport, createReportTemplateReplacements, reportFilename } = await import('./reportExport')
-      let filename: string
-      if (reportLayoutDraft.templateSource === 'pptx_upload' && reportLayoutDraft.templateAssetId) {
-        if (reportContents.length) throw new Error('페이지별 위젯·Run 비교 콘텐츠는 시각적 레이아웃에서 내보내 주세요. 업로드 PPTX 바인딩은 아직 이 콘텐츠 형식을 지원하지 않습니다.')
-        filename = reportFilename(reportOverview, reportDraft)
-        const blob = await api.renderReportTemplate(reportLayoutDraft.templateAssetId, createReportTemplateReplacements(reportOverview, reportDraft, reportLayoutDraft, reportTemplates.find((item) => item.id === reportLayoutDraft.templateAssetId)), filename)
-        const href = URL.createObjectURL(blob)
-        const anchor = document.createElement('a')
-        anchor.href = href; anchor.download = filename; document.body.appendChild(anchor); anchor.click(); anchor.remove()
-        setTimeout(() => URL.revokeObjectURL(href), 1000)
-      } else filename = await exportAnalysisReport(reportOverview, reportDraft, reportLayoutDraft, reportContents)
-      setReportDraft(null)
-      setReportOverview(null)
-      setReportLayoutDraft(null)
-      setReportContents([])
-      setReportSource(null)
-      setNotice(`${filename} 생성 완료`)
-    } catch (reason) {
-      setReportError(reason instanceof Error ? reason.message : 'PPTX 보고서를 생성하지 못했습니다.')
-    } finally {
-      setReportExporting(false)
-    }
-  }
-
-  const selectReportLayout = async (layoutId: string) => {
-    const selected = reportLayouts.find((item) => item.id === layoutId)
-    if (selected && reportOverview && reportSource) {
-      const { normalizeReportLayout, prepareContentReportLayout } = await import('./reportExport')
-      setReportLayoutDraft(prepareContentReportLayout(withReportVariables(normalizeReportLayout(selected.definition), reportOverview), reportSource, reportContents))
-      setReportLayoutVersions(await api.reportLayoutVersions(layoutId))
-    }
-  }
-
-  const selectReportLayoutVersion = async (version: number) => {
-    if (!reportLayoutDraft || !reportOverview || !reportSource) return
-    try {
-      const stored = await api.reportLayoutVersion(reportLayoutDraft.id, version)
-      const { normalizeReportLayout, prepareContentReportLayout } = await import('./reportExport')
-      setReportLayoutDraft(prepareContentReportLayout(withReportVariables(normalizeReportLayout(stored.definition), reportOverview), reportSource, reportContents))
-    } catch (reason) {
-      setReportError(reason instanceof Error ? reason.message : '보고서 레이아웃 버전을 불러오지 못했습니다.')
-    }
-  }
-
-  const saveReportLayout = async (asNew: boolean) => {
-    if (!reportLayoutDraft) return
-    setReportError('')
-    try {
-      const payload = { name: reportLayoutDraft.name, description: reportLayoutDraft.description, definition: reportLayoutDraft, updated_by: '보고서 편집자' }
-      const saved = asNew ? await api.createReportLayout(payload) : await api.updateReportLayout(reportLayoutDraft.id, payload)
-      const layouts = await api.reportLayouts()
-      const layoutVersions = await api.reportLayoutVersions(saved.id)
-      setReportLayouts(layouts)
-      const { normalizeReportLayout } = await import('./reportExport')
-      setReportLayoutDraft(withReportVariables(normalizeReportLayout(saved.definition), reportOverview!))
-      setReportLayoutVersions(layoutVersions)
-      setNotice(`${saved.name} v${saved.version} 저장 완료`)
-    } catch (reason) {
-      setReportError(reason instanceof Error ? reason.message : '보고서 레이아웃을 저장하지 못했습니다.')
-    }
-  }
-
-  const uploadReportTemplate = async (file: File) => {
-    if (!reportLayoutDraft) return
-    setReportError('')
-    try {
-      const created = await api.uploadReportTemplate(file.name.replace(/\.pptx$/i, ''), file)
-      setReportTemplates((items) => [created, ...items])
-      setReportLayoutDraft({ ...reportLayoutDraft, templateSource: 'pptx_upload', templateAssetId: created.id, templateBindings: {} })
-      setNotice(`${created.name} 템플릿의 플레이스홀더 ${created.definition.placeholders.length}개를 인식했습니다.`)
-    } catch (reason) { setReportError(reason instanceof Error ? reason.message : 'PPTX 템플릿을 업로드하지 못했습니다.') }
-  }
-
-  const removeReportTemplate = async (templateId: string) => {
-    try {
-      await api.deleteReportTemplate(templateId)
-      setReportTemplates((items) => items.filter((item) => item.id !== templateId))
-      if (reportLayoutDraft?.templateAssetId === templateId) setReportLayoutDraft({ ...reportLayoutDraft, templateSource: 'native', templateAssetId: undefined, templateBindings: {} })
-    } catch (reason) { setReportError(reason instanceof Error ? reason.message : 'PPTX 템플릿을 삭제하지 못했습니다.') }
-  }
-
-  const removeReportLayout = async () => {
-    if (!reportLayoutDraft || reportLayoutDraft.id.startsWith('report-layout-standard') || reportLayouts.find((item) => item.id === reportLayoutDraft.id)?.is_system) return
-    try {
-      await api.deleteReportLayout(reportLayoutDraft.id)
-      const layouts = await api.reportLayouts()
-      setReportLayouts(layouts)
-      if (reportOverview && layouts[0]) setReportLayoutDraft(withReportVariables(layouts[0].definition, reportOverview))
-    } catch (reason) {
-      setReportError(reason instanceof Error ? reason.message : '보고서 레이아웃을 삭제하지 못했습니다.')
-    }
-  }
-
   const openWorkflowAnalysis = async (workflow: Workflow) => {
     try {
       await loadContext(workflow.request.project_id, workflow.request.id, 'open_cell')
@@ -1170,6 +927,7 @@ function App() {
         onIncreaseFontSize={() => setUiFontSize((value) => Math.min(18, value + 1))}
         onLogout={() => void logout()}
         onNavigate={navigateWorkspace}
+        onPreloadPage={preloadWorkspaceRouteModule}
         onToggleCollapsed={() => setSidebarCollapsed((value) => !value)}
       />}
       sidebarCollapsed={sidebarCollapsed}
@@ -1179,7 +937,7 @@ function App() {
 
       <AppShellMain topbar={<AppTopbar breadcrumb={breadcrumb} actions={<>
             <div className="theme-switch" role="group" aria-label="화면 테마 선택"><button type="button" className={theme === 'light' ? 'active' : ''} aria-pressed={theme === 'light'} onClick={() => setTheme('light')}><Sun /><span>라이트</span></button><button type="button" className={theme === 'dark' ? 'active' : ''} aria-pressed={theme === 'dark'} onClick={() => setTheme('dark')}><Moon /><span>다크</span></button></div>
-            {workspacePage === 'dashboard' && activeView !== 'workflow' && <button className="ghost-button" title={!overview?.run && activeView !== 'compare' ? '완료된 Run이 있어야 보고서를 내보낼 수 있습니다.' : undefined} disabled={!dashboardReady || (!overview?.run && activeView !== 'compare')} onClick={() => void openReportExport()}><Download /> 보고서 내보내기</button>}
+            {workspacePage === 'dashboard' && activeView !== 'workflow' && <button className="ghost-button" title={!overview?.run && activeView !== 'compare' ? '완료된 Run이 있어야 보고서를 내보낼 수 있습니다.' : undefined} disabled={!dashboardReady || (!overview?.run && activeView !== 'compare')} onClick={() => void reportExport.open()}><Download /> 보고서 내보내기</button>}
             {canEdit && workspacePage === 'dashboard' && activeView !== 'workflow' && <button className="ghost-button" disabled={!dashboardReady} onClick={() => setAssistantOpen(true)}><Sparkles /> 자연어로 개선</button>}
             {canEdit && (workspacePage === 'dashboard' && activeView === 'workflow' ? (editMode ? (
               <button className="primary-button" onClick={save}><Save /> {workflowEditorMode === 'layout' ? '대시보드 레이아웃 저장' : '단계 변경 저장'}</button>
@@ -1192,7 +950,7 @@ function App() {
             <div className="avatar">{authUser ? authUser.display_name.slice(0, 2) : 'HK'}</div>
           </>} />}>
 
-        {workspacePage === 'portfolio' ? <PortfolioDashboard refreshToken={operationalRefreshToken} editMode={editMode} layout={portfolioLayout} layoutVersion={portfolioLayoutVersion} onLayoutChange={setPortfolioLayout} onCancelEdit={cancelEditing} onResetLayout={resetPortfolioLayout} onOpen={(projectId, requestId) => void openPortfolioRequest(projectId, requestId)} /> : workspacePage === 'intake' ? <RequestIntakePage projects={projects} createdBy={authUser?.display_name ?? '데모 사용자'} canCreate={hasPermission(authUser, 'request.create', selectedProjectId)} onCreated={handleIntakeCreated} onOpenWorkbench={openIntakeWorkbench} /> : workspacePage === 'workbench' ? <SimulationWorkbench workflows={workflows} initialRequestId={selectedRequestId} currentUserId={authUser?.id ?? ''} createdBy={authUser?.display_name ?? '데모 사용자'} canExecute={canExecuteAssigned || canExecuteAny} isAdmin={canExecuteAny} onRequestSelected={setSelectedRequestId} onChanged={async (message) => { setWorkflows(await api.workflows()); setOperationalRefreshToken((value) => value + 1); setNotice(message) }} /> : workspacePage === 'workbench_admin' ? <WorkbenchTypeAdmin /> : workspacePage === 'schemas' ? <Suspense fallback={<FeatureScreenFallback />}><FolderSchemaWorkspace /></Suspense> : workspacePage === 'variables' ? <Suspense fallback={<FeatureScreenFallback />}><VariableCatalogPage variables={variables} overview={overview} loadCaseId={selectedLoadCaseId} onChanged={(items) => { setVariables(items); setCatalogVariable((current) => items.some((item) => item.id === current) ? current : items[0]?.id ?? '') }} /></Suspense> : workspacePage === 'templates' ? <Suspense fallback={<FeatureScreenFallback />}><AutomationTemplatesPage /></Suspense> : workspacePage === 'examples' ? <Suspense fallback={<FeatureScreenFallback />}><FeatureExampleGallery onOpen={openFeatureExample} /></Suspense> : workspacePage === 'help' ? <Suspense fallback={<FeatureScreenFallback />}><HelpCenter onNavigate={setWorkspacePage} /></Suspense> : workspacePage === 'access_admin' ? <AccessAdminPage projectId={selectedProjectId} canApproveUsers={hasPermission(authUser, 'system.user.approve', selectedProjectId)} onAccessChanged={refreshAccess} /> : workspacePage === 'menu_policy_admin' && menuPolicy ? <MenuPolicyAdminPage policy={menuPolicy} onPolicyChanged={setMenuPolicy} /> : workspacePage === 'audit_admin' ? <AuditAdminPage /> : workspacePage === 'data' ? (
+        {workspacePage === 'portfolio' ? <PortfolioDashboard refreshToken={operationalRefreshToken} editMode={editMode} layout={portfolioLayout} layoutVersion={portfolioLayoutVersion} onLayoutChange={setPortfolioLayout} onCancelEdit={cancelEditing} onResetLayout={resetPortfolioLayout} onOpen={(projectId, requestId) => void openPortfolioRequest(projectId, requestId)} /> : workspacePage === 'intake' ? <RequestIntakePage projects={projects} createdBy={authUser?.display_name ?? '데모 사용자'} canCreate={hasPermission(authUser, 'request.create', selectedProjectId)} onCreated={handleIntakeCreated} onOpenWorkbench={openIntakeWorkbench} /> : workspacePage === 'workbench' ? <Suspense fallback={<FeatureScreenFallback />}><SimulationWorkbench workflows={workflows} initialRequestId={selectedRequestId} currentUserId={authUser?.id ?? ''} createdBy={authUser?.display_name ?? '데모 사용자'} canExecute={canExecuteAssigned || canExecuteAny} isAdmin={canExecuteAny} onRequestSelected={setSelectedRequestId} onChanged={async (message) => { setWorkflows(await api.workflows()); setOperationalRefreshToken((value) => value + 1); setNotice(message) }} /></Suspense> : workspacePage === 'workbench_admin' ? <Suspense fallback={<FeatureScreenFallback />}><WorkbenchTypeAdmin /></Suspense> : workspacePage === 'schemas' ? <Suspense fallback={<FeatureScreenFallback />}><FolderSchemaWorkspace /></Suspense> : workspacePage === 'variables' ? <Suspense fallback={<FeatureScreenFallback />}><VariableCatalogPage variables={variables} overview={overview} loadCaseId={selectedLoadCaseId} onChanged={(items) => { setVariables(items); setCatalogVariable((current) => items.some((item) => item.id === current) ? current : items[0]?.id ?? '') }} /></Suspense> : workspacePage === 'templates' ? <Suspense fallback={<FeatureScreenFallback />}><AutomationTemplatesPage /></Suspense> : workspacePage === 'examples' ? <Suspense fallback={<FeatureScreenFallback />}><FeatureExampleGallery onOpen={openFeatureExample} /></Suspense> : workspacePage === 'help' ? <Suspense fallback={<FeatureScreenFallback />}><HelpCenter onNavigate={setWorkspacePage} /></Suspense> : workspacePage === 'access_admin' ? <Suspense fallback={<FeatureScreenFallback />}><AccessAdminPage projectId={selectedProjectId} canApproveUsers={hasPermission(authUser, 'system.user.approve', selectedProjectId)} onAccessChanged={refreshAccess} /></Suspense> : workspacePage === 'menu_policy_admin' && menuPolicy ? <Suspense fallback={<FeatureScreenFallback />}><MenuPolicyAdminPage policy={menuPolicy} onPolicyChanged={setMenuPolicy} /></Suspense> : workspacePage === 'audit_admin' ? <Suspense fallback={<FeatureScreenFallback />}><AuditAdminPage /></Suspense> : workspacePage === 'data' ? (
           <Suspense fallback={<FeatureScreenFallback />}><DataWorkspace canCreateProject={hasPermission(authUser, 'system.user.approve', selectedProjectId)} projects={projects} initialProjectId={selectedProjectId} onDataChanged={refreshOperationalData} onOpenAnalysis={openImportedResult} onOpenIntake={() => setWorkspacePage('intake')} /></Suspense>
         ) : <>
         <section className="content-head">
@@ -1290,7 +1048,7 @@ function App() {
       )}
       {selectedWidgetId && dashboard && <Suspense fallback={<FeatureScreenFallback />}><WidgetSettingsPanel widget={dashboard.widgets.find((item) => item.id === selectedWidgetId)!} variables={variables} onChange={(patch) => updateWidget(selectedWidgetId, patch)} onClose={() => setSelectedWidgetId(null)} /></Suspense>}
       {pageManagerOpen && <Suspense fallback={null}><AnalysisPageManager loadCaseId={selectedLoadCaseId} activePageId={activeDashboardId} visiblePageIds={analysisTabs.map((page) => page.id)} onClose={() => setPageManagerOpen(false)} onPagesChanged={setAnalysisPages} onActiveDefinitionChanged={(definition) => setDashboard(definition)} onDeleted={(deletedId) => {
-        if (reportPageId === deletedId) { setReportDraft(null); setReportOverview(null); setReportLayoutDraft(null); setReportPageId(''); reportLayoutEditor.close() }
+        reportExport.handlePageDeleted(deletedId)
         dashboardBeforeEdit.current = null; setSelectedWidgetId(null); setAssistantOpen(false)
       }} onActivate={(definition, startEditing = false) => {
         if (!definition.page) return
@@ -1300,39 +1058,7 @@ function App() {
         setDashboard(definition); setActiveDashboardId(definition.id); setActiveView(pageView(summary)); setPageManagerOpen(false)
         if (startEditing) { dashboardBeforeEdit.current = structuredClone(definition); workspaceEditor.open('analysis-dashboard'); setAssistantOpen(true) }
       }} /></Suspense>}
-      {reportDraft && reportOverview && reportLayoutDraft && reportSource && (
-        <div className="drawer-backdrop report-backdrop" onMouseDown={() => { if (!reportExporting) { setReportDraft(null); setReportOverview(null); setReportLayoutDraft(null); setReportContents([]); setReportSource(null) } }}>
-          <section className="report-export-dialog" role="dialog" aria-modal="true" aria-labelledby="report-export-title" onMouseDown={(event) => event.stopPropagation()}>
-            <header>
-              <div><span>POWERPOINT EXPORT</span><h2 id="report-export-title">{reportOverview.load_case.request_title} 보고서</h2><p>선택한 평가 데이터와 아래 문구로 편집 가능한 PPTX를 생성합니다.</p></div>
-              <button aria-label="닫기" onClick={() => { setReportDraft(null); setReportOverview(null); setReportLayoutDraft(null); setReportContents([]); setReportSource(null) }} disabled={reportExporting}><X /></button>
-            </header>
-            <div className="report-layout-toolbar">
-              {reportSource.kind === 'run_compare_review' ? <><label><span>기준 Run</span><select aria-label="보고서 기준 Run 선택" value={reportSource.baselineRunId} onChange={(event) => void selectComparisonReportRun('baseline', event.target.value)}>{reportRuns.filter((run) => run.id !== reportSource.targetRunId).map((run) => <option key={run.id} value={run.id}>{`Run ${run.run_no} · ${run.overall_verdict}`}</option>)}</select></label><label><span>대상 Run</span><select aria-label="보고서 대상 Run 선택" value={reportSource.targetRunId} onChange={(event) => void selectComparisonReportRun('target', event.target.value)}>{reportRuns.filter((run) => run.id !== reportSource.baselineRunId).map((run) => <option key={run.id} value={run.id}>{`Run ${run.run_no} · ${run.overall_verdict}`}</option>)}</select></label></> : <><label><span>분석 페이지</span><select aria-label="보고서 분석 페이지" value={reportPageId} onChange={(event) => void selectReportPage(event.target.value)}>{analysisTabs.filter((page) => page.page.analysis_key !== 'run_comparison' && (page.page.is_system || page.page.status === 'published' || (page.id === activeDashboardId && canManagePages))).map((page) => <option key={page.id} value={page.id}>{page.name}</option>)}</select></label><label><span>Run</span><select aria-label="보고서 Run 선택" value={reportRunId} onChange={(event) => void selectReportRun(event.target.value)}>{reportRuns.map((run) => <option key={run.id} value={run.id}>{`Run ${run.run_no} · ${run.overall_verdict} · ${run.completed_at ? new Date(run.completed_at).toLocaleString('ko-KR') : run.status}`}</option>)}</select></label></>}
-              <label><span>출력 레이아웃</span><select value={reportLayoutDraft.id} onChange={(event) => void selectReportLayout(event.target.value)}>{reportLayouts.map((item) => <option key={item.id} value={item.id}>{item.name} · v{item.version}</option>)}</select></label>
-              <label className="report-version-select"><span>출력 버전</span><select value={reportLayoutDraft.version} onChange={(event) => void selectReportLayoutVersion(Number(event.target.value))}>{reportLayoutVersions.map((item) => <option key={item.version} value={item.version}>v{item.version} · {new Date(item.created_at).toLocaleDateString('ko-KR')}</option>)}</select></label>
-              <button onClick={reportLayoutEditor.toggle}><Settings2 /> {reportLayoutEditor.isEditing ? '편집 닫기' : '레이아웃 편집·관리'}</button>
-            </div>
-            {reportLayoutEditor.isEditing && <div data-testid="ppt-layout-editor"><Suspense fallback={<FeatureScreenFallback />}><ReportLayoutEditor layout={reportLayoutDraft} overview={reportOverview} contents={reportContents} templates={reportTemplates} isSystem={Boolean(reportLayouts.find((item) => item.id === reportLayoutDraft.id)?.is_system)} onChange={setReportLayoutDraft} onTemplateUpload={(file) => void uploadReportTemplate(file)} onTemplateDelete={(id) => void removeReportTemplate(id)} onSave={() => void saveReportLayout(false)} onSaveAs={() => void saveReportLayout(true)} onDelete={() => void removeReportLayout()} /></Suspense></div>}
-            <div className="report-export-grid">
-              <label><span>작성자 *</span><input value={reportDraft.author} onChange={(event) => updateReportDraft('author', event.target.value)} placeholder="홍길동" /></label>
-              <label><span>개발단계 *</span><input value={reportDraft.developmentStage} onChange={(event) => updateReportDraft('developmentStage', event.target.value)} placeholder="DV 1차" /></label>
-              <label><span>작성날짜 *</span><input value={reportDraft.reportDate} onChange={(event) => updateReportDraft('reportDate', event.target.value)} placeholder="2026.07.23." /></label>
-              <label><span>시뮬레이션 종류 *</span><input value={reportDraft.reliabilityName} onChange={(event) => updateReportDraft('reliabilityName', event.target.value)} placeholder="낙하 / Side Clamp / 적재" /></label>
-              <label className="wide"><span>검토 목적 *</span><input value={reportDraft.reviewPurpose} onChange={(event) => updateReportDraft('reviewPurpose', event.target.value)} placeholder="오픈셀 응력 평가" /></label>
-              <label><span>검토 사양 조건 *</span><textarea value={reportDraft.reviewConditions} onChange={(event) => updateReportDraft('reviewConditions', event.target.value)} /></label>
-              <label><span>검토 결과 *</span><textarea value={reportDraft.reviewResult} onChange={(event) => updateReportDraft('reviewResult', event.target.value)} /></label>
-              <label className="wide"><span>검토 결론 *</span><textarea value={reportDraft.reviewConclusion} onChange={(event) => updateReportDraft('reviewConclusion', event.target.value)} /></label>
-            </div>
-            <aside><strong>자동 포함 자료</strong><span>시간 이력 그래프 {new Set(reportOverview.time_series.map((item) => item.variable_key)).size}개 · 정량 결과 {reportOverview.scalar_results.length}개 · 이미지/미디어 {reportOverview.media.length}개</span><small>선택한 평가에 연결된 데이터만 포함합니다. 영상·애니메이션은 호환성을 위해 자산 정보 페이지로 생성됩니다.</small></aside>
-            {reportError && <div className="report-export-error"><AlertTriangle /> {reportError}</div>}
-            <footer>
-              <button onClick={() => { setReportDraft(null); setReportOverview(null); setReportLayoutDraft(null) }} disabled={reportExporting}>취소</button>
-              <button className="primary" onClick={() => void downloadReport()} disabled={reportExporting || !reportDraft.author.trim() || (reportSource.kind === 'analysis_page' && !reportRunId) || (reportLayoutDraft.templateSource === 'pptx_upload' && !reportLayoutDraft.templateAssetId)}>{reportExporting ? <LoaderCircle className="spin" /> : <Download />} PPTX 생성</button>
-            </footer>
-          </section>
-        </div>
-      )}
+      <ReportExportDialog controller={reportExport} />
       {notice && <div className="toast" role="status"><Check /><span>{notice}</span><button aria-label="알림 닫기" onClick={() => setNotice('')}><X /></button></div>}
     </AppShell>
   )
