@@ -5,6 +5,9 @@ import pytest
 from scripts import check_deployment_profile as preflight
 
 
+pytestmark = pytest.mark.unit
+
+
 def test_windows_vm_profile_requires_postgres_oidc_secure_cookie_and_http_directory(monkeypatch):
     monkeypatch.setenv("DEPLOYMENT_PROFILE", "windows-vm-intranet")
     monkeypatch.setattr(preflight, "database_settings", lambda: SimpleNamespace(backend="duckdb"))

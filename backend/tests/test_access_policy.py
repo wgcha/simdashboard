@@ -37,6 +37,7 @@ def _request(principal: StubPrincipal) -> Request:
     return request
 
 
+@pytest.mark.unit
 def test_permission_sets_match_the_product_matrix_exactly():
     assert GENERAL_PERMISSIONS == {
         "company.dashboard.view",
@@ -74,6 +75,7 @@ def test_permission_sets_match_the_product_matrix_exactly():
     }
 
 
+@pytest.mark.unit
 def test_active_nonmember_keeps_company_read_permissions_only():
     principal = StubPrincipal("user-nonmember")
     assert permissions_for(principal, None) == COMPANY_PERMISSIONS
@@ -90,41 +92,47 @@ def test_project_role_and_assigned_work_use_user_id_not_display_name():
     owner_id = f"user-owner-{suffix}"
     same_name_id = f"user-same-name-{suffix}"
     item_id = f"item-owner-{suffix}"
-    with connect() as conn:
-        for user_id in (owner_id, same_name_id):
+    try:
+        with connect() as conn:
+            for user_id in (owner_id, same_name_id):
+                conn.execute(
+                    """
+                    INSERT INTO users
+                        (id, username, display_name, account_status, is_global_admin,
+                         is_active, created_at, updated_at)
+                    VALUES (?, ?, '동명이인', 'ACTIVE', false, true, ?, ?)
+                    """,
+                    [user_id, user_id, now, now],
+                )
+                conn.execute(
+                    """
+                    INSERT INTO project_memberships
+                        (id, project_id, user_id, role, created_by, created_at, updated_by, updated_at)
+                    VALUES (?, 'project-tv-001', ?, 'general', 'test', ?, 'test', ?)
+                    """,
+                    [f"membership-{user_id}", user_id, now, now],
+                )
             conn.execute(
                 """
-                INSERT INTO users
-                    (id, username, display_name, account_status, is_global_admin,
-                     is_active, created_at, updated_at)
-                VALUES (?, ?, '동명이인', 'ACTIVE', false, true, ?, ?)
+                INSERT INTO request_work_items
+                    (id, request_id, node_key, task_type_id, task_type_version, sequence_no,
+                     display_name, status, progress, owner, owner_user_id)
+                VALUES (?, 'request-drop-001', ?, 'cad-prepare', 1, 99,
+                        'ID 소유권 검증', 'READY', 0, '동명이인', ?)
                 """,
-                [user_id, user_id, now, now],
+                [item_id, f"node-{suffix}", owner_id],
             )
-            conn.execute(
-                """
-                INSERT INTO project_memberships
-                    (id, project_id, user_id, role, created_by, created_at, updated_by, updated_at)
-                VALUES (?, 'project-tv-001', ?, 'general', 'test', ?, 'test', ?)
-                """,
-                [f"membership-{user_id}", user_id, now, now],
-            )
-        conn.execute(
-            """
-            INSERT INTO request_work_items
-                (id, request_id, node_key, task_type_id, task_type_version, sequence_no,
-                 display_name, status, progress, owner, owner_user_id)
-            VALUES (?, 'request-drop-001', ?, 'cad-prepare', 1, 99,
-                    'ID 소유권 검증', 'READY', 0, '동명이인', ?)
-            """,
-            [item_id, f"node-{suffix}", owner_id],
-        )
-        assert project_role(conn, StubPrincipal(owner_id), "project-tv-001") == "general"
-        require_assigned_work_item(_request(StubPrincipal(owner_id)), item_id, conn=conn)
-        with pytest.raises(HTTPException) as exc_info:
-            require_assigned_work_item(_request(StubPrincipal(same_name_id)), item_id, conn=conn)
-        assert exc_info.value.status_code == 403
-        assert exc_info.value.detail["code"] == "WORK_ITEM_NOT_ASSIGNED"
+            assert project_role(conn, StubPrincipal(owner_id), "project-tv-001") == "general"
+            require_assigned_work_item(_request(StubPrincipal(owner_id)), item_id, conn=conn)
+            with pytest.raises(HTTPException) as exc_info:
+                require_assigned_work_item(_request(StubPrincipal(same_name_id)), item_id, conn=conn)
+            assert exc_info.value.status_code == 403
+            assert exc_info.value.detail["code"] == "WORK_ITEM_NOT_ASSIGNED"
+    finally:
+        with connect() as conn:
+            conn.execute("DELETE FROM request_work_items WHERE id=?", [item_id])
+            conn.execute("DELETE FROM project_memberships WHERE user_id IN (?, ?)", [owner_id, same_name_id])
+            conn.execute("DELETE FROM users WHERE id IN (?, ?)", [owner_id, same_name_id])
 
 
 def test_duckdb_legacy_upgrade_backfills_roles_owners_and_menu_seed(tmp_path):

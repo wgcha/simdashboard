@@ -32,14 +32,13 @@ from .modules.access_control import (
     RESULT_IMPORT,
     RESULT_REVIEW,
     SYSTEM_CATALOG_MANAGE,
-    SYSTEM_USER_APPROVE,
     WORKFLOW_EDIT,
     has_permission,
     require_permission,
     require_resource_permission,
     resolve_project_assignee,
 )
-from .database import connect, ensure_project_quality_thresholds, ensure_workspace_layouts, initialize_database, json_value, rows
+from .database import connect, initialize_database, json_value, rows
 from .config import database_settings, security_settings
 from .folder_import import FolderImportError, scan_folder
 from .media_policy import validate_media_metadata
@@ -57,14 +56,12 @@ from .schemas.api import (
     AnalysisPageSummary,
     AnalysisPageUpdate,
     AnalysisRequestCreate,
-    AssigneeUpdate,
     DashboardClone,
     DashboardDefinition,
     DropVideoPageResponse,
     ImportSchemaPayload,
     LoadCaseCreate,
     NaturalLanguageCommand,
-    ProjectCreate,
     QualityThresholdUpdate,
     ReportLayoutPayload,
     ReportTemplateRenderPayload,
@@ -85,6 +82,13 @@ from .routers.security import router as security_router
 from .routers.access_control import router as access_control_router
 from .routers.workbench import router as workbench_router
 from .routers.modeling_catalog import router as modeling_catalog_router
+from .adapters.http.routers.projects import router as projects_router
+from .adapters.http.routers.reports import router as reports_router
+from .adapters.http.routers.requests import router as requests_router
+from .adapters.persistence.products import SQLProductInformationRepositoryProvider
+from .application.products.queries import list_product_information
+from .adapters.persistence.results import SQLAnalysisRunSummaryRepositoryProvider
+from .application.results.queries import list_analysis_runs as list_analysis_runs_query
 from .services.drop_video_demo import (
     DEMO_DROP_VIDEO_LOAD_CASE_IDS,
     DROP_VIDEO_DEMO_BY_ID,
@@ -273,10 +277,7 @@ def feature_examples() -> list[dict[str, Any]]:
     return items
 
 
-@app.get("/api/projects")
-def get_projects() -> list[dict[str, Any]]:
-    with connect() as conn:
-        return rows(conn.execute("SELECT * FROM projects ORDER BY created_at DESC"))
+app.include_router(projects_router)
 
 
 @app.get("/api/import-schemas")
@@ -402,46 +403,6 @@ def export_portfolio_csv(
     return Response(PortfolioRepository.to_csv(payload["records"]), media_type="text/csv; charset=utf-8", headers={"Content-Disposition": 'attachment; filename="analysis-portfolio.csv"'})
 
 
-@app.post("/api/projects", status_code=201)
-def create_project(payload: ProjectCreate, request: Request) -> dict[str, Any]:
-    require_permission(request, SYSTEM_USER_APPROVE)
-    project_id = f"project-{uuid4().hex[:12]}"
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
-    principal = request.state.principal
-    with connect() as conn:
-        conn.execute(
-            "INSERT INTO projects VALUES (?, ?, ?, ?, ?)",
-            [project_id, payload.name.strip(), payload.product_name.strip(), payload.description.strip(), now],
-        )
-        product_rows = [
-            ("MODEL", "제품 모델명", payload.product_name.strip(), {"source": "project_registration"}),
-            ("MANUFACTURER", "제조사", payload.manufacturer.strip(), {"source": "project_registration"}),
-            ("SPEC", "화면 크기", f"{payload.display_size_inch:g} inch" if payload.display_size_inch else "", {"diagonal_inch": payload.display_size_inch}),
-        ]
-        for category, label, value, metadata in product_rows:
-            if value:
-                conn.execute("INSERT INTO product_information VALUES (?, ?, ?, ?, ?, ?, ?)", [f"product-{uuid4().hex[:12]}", project_id, category, label, value, None, json.dumps(metadata, ensure_ascii=False)])
-        ensure_project_quality_thresholds(conn)
-        ensure_workspace_layouts(conn)
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO project_memberships
-                (id, project_id, user_id, role, created_by, created_at, updated_by, updated_at)
-            VALUES (?, ?, ?, 'admin', ?, ?, ?, ?)
-            """,
-            [f"membership-{uuid4().hex[:20]}", project_id, principal.user_id, principal.user_id, now, principal.user_id, now],
-        )
-        write_audit_event(
-            request=request,
-            principal=principal,
-            status_code=201,
-            action="PROJECT_CREATED",
-            detail={"project_id": project_id},
-            connection=conn,
-        )
-    return {"id": project_id, **payload.model_dump(), "created_at": now}
-
-
 @app.get("/api/projects/{project_id}/requests")
 def get_requests(project_id: str) -> list[dict[str, Any]]:
     with connect() as conn:
@@ -543,41 +504,7 @@ def create_request(project_id: str, payload: AnalysisRequestCreate, request: Req
     }
 
 
-@app.patch("/api/requests/{request_id}/assignee")
-def reassign_request(request_id: str, payload: AssigneeUpdate, request: Request) -> dict[str, Any]:
-    principal = request.state.principal
-    with connect() as conn:
-        conn.execute("BEGIN TRANSACTION")
-        try:
-            stored = rows(conn.execute("SELECT * FROM analysis_requests WHERE id=?", [request_id]))
-            if not stored:
-                raise HTTPException(404, detail={"code": "REQUEST_NOT_FOUND", "request_id": request_id})
-            current = stored[0]
-            require_permission(request, REQUEST_EDIT, current["project_id"], conn=conn)
-            assignee = resolve_project_assignee(conn, current["project_id"], payload.owner_user_id)
-            conn.execute(
-                "UPDATE analysis_requests SET owner=?, owner_user_id=? WHERE id=?",
-                [assignee.display_name, assignee.user_id, request_id],
-            )
-            write_audit_event(
-                request=request,
-                principal=principal,
-                status_code=200,
-                action="REQUEST_ASSIGNEE_CHANGED",
-                detail={
-                    "project_id": current["project_id"],
-                    "request_id": request_id,
-                    "old_owner_user_id": current.get("owner_user_id"),
-                    "new_owner_user_id": assignee.user_id,
-                },
-                connection=conn,
-            )
-            updated = rows(conn.execute("SELECT * FROM analysis_requests WHERE id=?", [request_id]))[0]
-            conn.execute("COMMIT")
-            return updated
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
+app.include_router(requests_router)
 
 
 @app.get("/api/requests/{request_id}/load-cases")
@@ -1080,7 +1007,29 @@ def download_result_asset(asset_id: str, request: Request) -> Response:
 
 
 @app.get("/api/load-cases/{load_case_id}/overview")
-def get_load_case_overview(load_case_id: str, run_id: str | None = Query(default=None, min_length=3, max_length=120)) -> dict[str, Any]:
+def get_load_case_overview(
+    load_case_id: str,
+    request: Request,
+    run_id: str | None = Query(default=None, min_length=3, max_length=120),
+) -> dict[str, Any]:
+    def authorize_product_information() -> object:
+        try:
+            return require_resource_permission(
+                request,
+                PROJECT_DATA_VIEW,
+                "load_case",
+                load_case_id,
+            )
+        except HTTPException as error:
+            if error.status_code == 404:
+                raise HTTPException(404, "하중 경우를 찾을 수 없습니다.") from error
+            raise
+
+    product_information = list_product_information(
+        load_case_id,
+        authorize_product_information,
+        SQLProductInformationRepositoryProvider(),
+    )
     with connect() as conn:
         load_case_data = rows(
             conn.execute(
@@ -1098,12 +1047,6 @@ def get_load_case_overview(load_case_id: str, run_id: str | None = Query(default
         if not load_case_data:
             raise HTTPException(404, "하중 경우를 찾을 수 없습니다.")
         load_case = load_case_data[0]
-        product_information = rows(
-            conn.execute(
-                "SELECT category, name, value_text, file_path, metadata_json FROM product_information WHERE project_id = ? ORDER BY category, name",
-                [load_case["project_id"]],
-            )
-        )
         run = conn.execute(
             "SELECT id FROM analysis_runs WHERE load_case_id = ? AND (? IS NULL OR id = ?) ORDER BY run_no DESC LIMIT 1",
             [load_case_id, run_id, run_id],
@@ -1112,8 +1055,6 @@ def get_load_case_overview(load_case_id: str, run_id: str | None = Query(default
             raise HTTPException(404, "선택한 Run이 이 하중 경우에 존재하지 않습니다.")
         if run is None:
             load_case["parameters"] = json_value(load_case.pop("parameters_json"))
-            for item in product_information:
-                item["metadata"] = json_value(item.pop("metadata_json"))
             return {
                 "load_case": load_case,
                 "run": None,
@@ -1186,8 +1127,6 @@ def get_load_case_overview(load_case_id: str, run_id: str | None = Query(default
     for item in template:
         item["input"] = json_value(item.pop("input_json"))
         item["generated_model"] = json_value(item.pop("generated_model_json"))
-    for item in product_information:
-        item["metadata"] = json_value(item.pop("metadata_json"))
     open_cell_results = [item for item in scalar_results if item.get("result_group") == "OPEN_CELL" and str(item.get("unit", "")).casefold() == "mpa" and "stress" in str(item.get("variable_key", "")).casefold()]
     chassis_results = [item for item in scalar_results if item.get("result_group") == "CHASSIS_REAR" and str(item.get("unit", "")).casefold() == "mm" and "permanent_deformation" in str(item.get("variable_key", "")).casefold()]
     threshold = next((item["threshold_double"] for item in open_cell_results if item["threshold_double"] is not None), None)
@@ -1310,22 +1249,12 @@ def _run_trust_payload(conn: Any, run_id: str, expected_load_case_id: str | None
 
 
 @app.get("/api/load-cases/{load_case_id}/runs")
-def list_analysis_runs(load_case_id: str) -> list[dict[str, Any]]:
-    with connect() as conn:
-        run_rows = rows(conn.execute("SELECT * FROM analysis_runs WHERE load_case_id=? ORDER BY run_no DESC", [load_case_id]))
-        result: list[dict[str, Any]] = []
-        for run in run_rows:
-            verdicts = [row[0] for row in conn.execute("SELECT verdict FROM scalar_results WHERE analysis_run_id=? AND verdict IS NOT NULL", [run["id"]]).fetchall()]
-            trust = _run_trust_payload(conn, run["id"], load_case_id)
-            result.append({
-                **run,
-                "overall_verdict": "FAIL" if "FAIL" in verdicts else "PASS" if verdicts else "NO_DATA",
-                "scalar_count": trust["counts"]["scalar"],
-                "series_count": trust["counts"]["time_series"],
-                "trust_status": trust["trust_status"],
-                "is_latest": trust["is_latest"],
-            })
-        return result
+def list_analysis_runs(load_case_id: str, request: Request) -> list[dict[str, Any]]:
+    return list_analysis_runs_query(
+        load_case_id,
+        lambda: require_permission(request, PROJECT_DATA_VIEW),
+        SQLAnalysisRunSummaryRepositoryProvider(),
+    )
 
 
 @app.get("/api/load-cases/{load_case_id}/run-comparison")
@@ -1902,20 +1831,6 @@ def delete_variable(
     return {"status": "deactivated", "variable_key": variable_key}
 
 
-def _report_layout_item(item: dict[str, Any]) -> dict[str, Any]:
-    definition = json_value(item.pop("definition_json")) or {}
-    definition.update({
-        "id": item["id"],
-        "name": item["name"],
-        "description": item.get("description") or "",
-        "version": item["version"],
-    })
-    return {
-        **item,
-        "definition": definition,
-    }
-
-
 def _get_project_workspace_layout(
     project_id: str,
     layout_kind: Literal["portfolio", "workflow"],
@@ -2053,13 +1968,7 @@ def get_workspace_layout_versions(
         ))
 
 
-@app.get("/api/report-layouts")
-def list_report_layouts() -> list[dict[str, Any]]:
-    with connect() as conn:
-        items = rows(conn.execute(
-            "SELECT * FROM report_layouts WHERE is_active=true ORDER BY is_system DESC, updated_at DESC, name"
-        ))
-    return [_report_layout_item(item) for item in items]
+app.include_router(reports_router)
 
 
 @app.post("/api/report-layouts", status_code=201)

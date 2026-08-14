@@ -397,8 +397,17 @@ def require_resource_permission(
     resource_kind: str,
     resource_id: str,
     *,
-    conn: ConnectionLike,
+    conn: ConnectionLike | None = None,
 ) -> AccessContext:
+    if conn is None:
+        with connect() as connection:
+            return require_resource_permission(
+                request,
+                permission,
+                resource_kind,
+                resource_id,
+                conn=connection,
+            )
     return require_permission(
         request,
         permission,

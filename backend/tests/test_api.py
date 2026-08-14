@@ -8,15 +8,19 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app import main as main_module
+from app.config import database_settings
 from app.database import connect, initialize_database
 from app.main import app
 from app.media_policy import validate_media_metadata
 from app.security import hash_password
 
 
+@pytest.mark.contract
+@pytest.mark.duckdb_integration
 def test_workspace_layout_versions_are_persisted():
     initialize_database()
     with TestClient(app) as client:
@@ -287,7 +291,9 @@ def test_analysis_page_role_access_and_editor_published_widget_edit(monkeypatch)
             if page_id:
                 conn.execute("DELETE FROM dashboard_versions WHERE dashboard_id = ?", [page_id])
                 conn.execute("DELETE FROM dashboards WHERE id = ?", [page_id])
-            conn.execute("DELETE FROM audit_events WHERE username LIKE ?", [f"%-{suffix}"])
+            if database_settings().backend == "duckdb":
+                conn.execute("DELETE FROM audit_events WHERE username LIKE ?", [f"%-{suffix}"])
+            conn.execute("DELETE FROM project_memberships WHERE user_id IN (?, ?, ?)", [*(user_id for user_id, _ in users.values())])
             conn.execute("DELETE FROM users WHERE username LIKE ?", [f"%-{suffix}"])
 
 

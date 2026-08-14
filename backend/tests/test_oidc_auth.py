@@ -12,7 +12,7 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
 
-from app.config import security_settings
+from app.config import database_settings, security_settings
 from app.database import initialize_database
 from app.database_connection import connect
 from app.main import app
@@ -144,7 +144,9 @@ def test_oidc_state_pkce_pending_account_and_no_token_persistence(monkeypatch: p
         with connect() as conn:
             row = conn.execute("SELECT id FROM users WHERE oidc_subject=?", [f"subject-{suffix}"]).fetchone()
             if row:
-                conn.execute("DELETE FROM audit_events WHERE user_id=?", [row[0]])
+                if database_settings().backend == "duckdb":
+                    conn.execute("DELETE FROM audit_events WHERE user_id=?", [row[0]])
+                conn.execute("DELETE FROM project_memberships WHERE user_id=?", [row[0]])
                 conn.execute("DELETE FROM users WHERE id=?", [row[0]])
 
 
@@ -197,7 +199,9 @@ def test_oidc_identity_conflict_is_not_auto_merged(monkeypatch: pytest.MonkeyPat
             assert conn.execute("SELECT oidc_subject FROM users WHERE id=?", [user_id]).fetchone()[0] is None
     finally:
         with connect() as conn:
-            conn.execute("DELETE FROM audit_events WHERE user_id=? OR detail_json LIKE ?", [user_id, f"%{suffix}%"])
+            if database_settings().backend == "duckdb":
+                conn.execute("DELETE FROM audit_events WHERE user_id=? OR detail_json LIKE ?", [user_id, f"%{suffix}%"])
+            conn.execute("DELETE FROM project_memberships WHERE user_id=?", [user_id])
             conn.execute("DELETE FROM users WHERE id=?", [user_id])
 
 
@@ -240,7 +244,9 @@ def test_recovery_cli_approves_existing_oidc_account_without_password(monkeypatc
             ).fetchone()[0] == 1
     finally:
         with connect() as conn:
-            conn.execute("DELETE FROM audit_events WHERE user_id=?", [user_id])
+            if database_settings().backend == "duckdb":
+                conn.execute("DELETE FROM audit_events WHERE user_id=?", [user_id])
+            conn.execute("DELETE FROM project_memberships WHERE user_id=?", [user_id])
             conn.execute("DELETE FROM users WHERE id=?", [user_id])
 
 

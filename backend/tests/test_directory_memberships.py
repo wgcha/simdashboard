@@ -195,4 +195,5 @@ def test_local_directory_returns_active_users_only(monkeypatch):
         assert inactive and inactive.employment_status == "INACTIVE"
     finally:
         with connect() as conn:
+            conn.execute("DELETE FROM project_memberships WHERE user_id IN (?, ?)", [active_id, suspended_id])
             conn.execute("DELETE FROM users WHERE id IN (?, ?)", [active_id, suspended_id])

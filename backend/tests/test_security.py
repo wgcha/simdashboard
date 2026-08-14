@@ -131,4 +131,5 @@ def test_password_auth_rbac_and_audit(monkeypatch):
         with connect() as conn:
             if database_settings().backend == "duckdb":
                 conn.execute("DELETE FROM audit_events WHERE user_id IN (?, ?, ?) OR username LIKE ?", [viewer_id, editor_id, admin_id, f"%-{suffix}"])
+            conn.execute("DELETE FROM project_memberships WHERE user_id IN (?, ?, ?)", [viewer_id, editor_id, admin_id])
             conn.execute("DELETE FROM users WHERE id IN (?, ?, ?)", [viewer_id, editor_id, admin_id])
