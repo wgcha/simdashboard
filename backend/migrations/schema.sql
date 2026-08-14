@@ -170,7 +170,7 @@ CREATE TABLE IF NOT EXISTS projects (
                 created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 orphaned_at TIMESTAMP,
                 UNIQUE (sha256, file_size),
-                CHECK (regexp_matches(sha256, '^[0-9a-f]{64}$'))
+                CHECK (sha256 ~ '^[0-9a-f]{64}$')
             );
 
             CREATE TABLE IF NOT EXISTS asset_blob_chunks (
@@ -182,7 +182,7 @@ CREATE TABLE IF NOT EXISTS projects (
                 PRIMARY KEY (blob_id, chunk_index),
                 CHECK (content_length = octet_length(content)),
                 CHECK (content_length > 0 AND content_length <= 1048576),
-                CHECK (regexp_matches(content_sha256, '^[0-9a-f]{64}$'))
+                CHECK (content_sha256 ~ '^[0-9a-f]{64}$')
             );
 
             CREATE TABLE IF NOT EXISTS drop_video_assets (

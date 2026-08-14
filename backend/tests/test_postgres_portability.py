@@ -15,6 +15,8 @@ def test_postgres_schema_export_is_current_and_portable():
     assert generated == stored
     assert " JSONB" in stored
     assert " DOUBLE PRECISION" in stored
+    assert "regexp_matches" not in stored
+    assert "sha256 ~ '^[0-9a-f]{64}$'" in stored
     assert "INSERT OR IGNORE" not in stored
     assert "CREATE TABLE IF NOT EXISTS users" in stored
     assert "CREATE TABLE IF NOT EXISTS audit_events" in stored

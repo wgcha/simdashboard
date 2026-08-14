@@ -128,6 +128,11 @@ def extract_schema(source: Path) -> str:
             ddl = statement.value.strip()
             ddl = re.sub(r"\bJSON\b", "JSONB", ddl)
             ddl = re.sub(r"\bDOUBLE\b(?!\s+PRECISION)", "DOUBLE PRECISION", ddl)
+            ddl = re.sub(
+                r"regexp_matches\(([^,()]+),\s*('(?:[^']|'')*')\)",
+                r"\1 ~ \2",
+                ddl,
+            )
             return f"{ddl}\n\n{INDEXES}\n\n{CONSTRAINTS}\n"
     raise RuntimeError("database.py에서 기준 CREATE TABLE DDL을 찾지 못했습니다.")
 
