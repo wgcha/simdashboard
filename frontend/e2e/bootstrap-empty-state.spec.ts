@@ -23,12 +23,13 @@ const menuPolicy = {
 }
 
 test('빈 데이터에서도 전역 관리자는 초기 설정과 전역 테마를 사용할 수 있다', async ({ page }) => {
+  const bootstrapRequests = { health: 0, projects: 0, workflows: 0, menuPolicy: 0 }
   await page.route('**/api/auth/status', (route) => route.fulfill({ json: { mode: 'disabled', authentication_required: false, oidc_start_url: null } }))
   await page.route('**/api/auth/me', (route) => route.fulfill({ json: globalAdmin }))
-  await page.route('**/api/health', (route) => route.fulfill({ json: { status: 'ok', database_backend: 'postgresql' } }))
-  await page.route('**/api/projects', (route) => route.fulfill({ json: [] }))
-  await page.route('**/api/workflows', (route) => route.fulfill({ json: [] }))
-  await page.route('**/api/navigation/menu-policy', (route) => route.fulfill({ json: menuPolicy }))
+  await page.route('**/api/health', (route) => { bootstrapRequests.health += 1; return route.fulfill({ json: { status: 'ok', database_backend: 'postgresql' } }) })
+  await page.route('**/api/projects', (route) => { bootstrapRequests.projects += 1; return route.fulfill({ json: [] }) })
+  await page.route('**/api/workflows', (route) => { bootstrapRequests.workflows += 1; return route.fulfill({ json: [] }) })
+  await page.route('**/api/navigation/menu-policy', (route) => { bootstrapRequests.menuPolicy += 1; return route.fulfill({ json: menuPolicy }) })
 
   await page.goto('/')
 
@@ -36,6 +37,7 @@ test('빈 데이터에서도 전역 관리자는 초기 설정과 전역 테마�
   await expect(page.getByRole('heading', { name: '새 프로젝트' })).toBeVisible()
   await expect(page.getByRole('button', { name: '프로젝트 등록' })).toBeEnabled()
   await expect(page.getByRole('button', { name: '해석 의뢰 접수' })).toBeDisabled()
+  expect(bootstrapRequests).toEqual({ health: 1, projects: 1, workflows: 1, menuPolicy: 1 })
 
   await page.getByRole('button', { name: '라이트', exact: true }).click()
   await expect.poll(() => page.evaluate(() => ({

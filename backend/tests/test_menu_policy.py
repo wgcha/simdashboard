@@ -85,9 +85,16 @@ def test_menu_policy_update_validation_versions_and_restore():
 
 
 def test_frontend_menu_registry_matches_server_definitions_exactly():
-    source = (Path(__file__).resolve().parents[2] / "frontend" / "src" / "features" / "navigation" / "menuRegistry.ts").read_text(encoding="utf-8")
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "frontend"
+        / "src"
+        / "features"
+        / "navigation"
+        / "workspaceRouteRegistry.ts"
+    ).read_text(encoding="utf-8")
     entries = re.findall(
-        r"\{ id: '([^']+)', page: '[^']+', label: '[^']+', requiredPermission: '([^']+)', contextKind: '([^']+)' \}",
+        r"\{ id: '([^']+)', page: '[^']+', label: '[^']+', breadcrumb: \{[^}]+\}, requiredPermission: '([^']+)', contextKind: '([^']+)', navigationKind: '[^']+' \}",
         source,
     )
     assert entries == [

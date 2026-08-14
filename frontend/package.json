@@ -9,6 +9,10 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 0.0.0.0",
     "generate:api": "node scripts/generate-api-client.mjs",
+    "check:architecture": "node scripts/check-architecture.mjs",
+    "test:architecture": "node scripts/check-architecture-self-test.mjs",
+    "test:preferences": "node --experimental-strip-types scripts/workspace-preferences-self-test.mjs",
+    "test:api": "node --experimental-transform-types scripts/shared-api-self-test.mjs",
     "test:e2e": "node scripts/run-e2e.mjs",
     "test:e2e:ui": "playwright test --ui"
   },

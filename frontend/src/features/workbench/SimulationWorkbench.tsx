@@ -398,8 +398,3 @@ function DemoTaskDetail({ task }: { task: DemoRunTask }) {
     <section className="workbench-text-artifacts"><header><div><span>STATIC TEXT FIXTURES</span><strong><FileText /> 로그·검증·결과 텍스트</strong></div><b>DEMO ONLY · 저장소 예제 파일</b></header><nav aria-label="텍스트 데모 파일 선택">{task.demo_text_artifacts.map((artifact) => <button key={artifact.id} className={textArtifactUrl === artifact.url ? 'active' : ''} onClick={() => setTextArtifactUrl(artifact.url)}>{artifact.label}</button>)}</nav><pre aria-label="텍스트 데모 파일 내용">{textLoading ? '텍스트 파일을 불러오는 중입니다…' : textContent}</pre></section>
   </article>
 }
-
-export function RequestDemoRunSummary({ run }: { run: Workflow['latest_demo_run'] }) {
-  if (!run) return <div className="request-demo-summary empty"><FlaskConical /><span><strong>연결 실행 없음</strong><small>해석 작업 실행 탭에서 DEMO_ONLY 작업을 연결할 수 있습니다.</small></span></div>
-  return <div className="request-demo-summary"><img src="/assets/demo-workbench.svg" alt="최근 데모 실행 결과" /><span><strong>{run.name}</strong><small>DEMO_ONLY · {runStatusLabel(run.status)} · {run.progress}%</small></span><time>{new Date(run.completed_at || run.created_at).toLocaleString('ko-KR')}</time></div>
-}
