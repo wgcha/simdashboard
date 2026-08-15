@@ -3,11 +3,11 @@ import { AlertTriangle, Check, ChevronDown, ClipboardPlus, Database, Download, L
 import { api } from '../../api'
 import type { AnalysisRequest, LoadCase, Project } from '../../types'
 
-export function DataWorkspace({ canCreateProject, projects, initialProjectId, onDataChanged, onOpenAnalysis, onOpenIntake }: { canCreateProject: boolean; projects: Project[]; initialProjectId: string; onDataChanged: () => Promise<void>; onOpenAnalysis: (projectId: string, requestId: string, loadCaseId: string) => Promise<void>; onOpenIntake: () => void }) {
+export function DataWorkspace({ canCreateProject, projects, initialProjectId, initialRequestId, onDataChanged, onOpenAnalysis, onOpenIntake }: { canCreateProject: boolean; projects: Project[]; initialProjectId: string; initialRequestId?: string; onDataChanged: () => Promise<void>; onOpenAnalysis: (projectId: string, requestId: string, loadCaseId: string) => Promise<void>; onOpenIntake: () => void }) {
   const [managedProjects, setManagedProjects] = useState(projects)
   const [projectId, setProjectId] = useState(initialProjectId || projects[0]?.id || '')
   const [requests, setRequests] = useState<AnalysisRequest[]>([])
-  const [requestId, setRequestId] = useState('')
+  const [requestId, setRequestId] = useState(initialRequestId || '')
   const [loadCases, setLoadCases] = useState<LoadCase[]>([])
   const [loadCaseId, setLoadCaseId] = useState('')
   const [message, setMessage] = useState('')
@@ -29,9 +29,9 @@ export function DataWorkspace({ canCreateProject, projects, initialProjectId, on
     if (!projectId) return
     api.requests(projectId).then((items) => {
       setRequests(items)
-      setRequestId((current) => items.some((item) => item.id === current) ? current : items[0]?.id || '')
+      setRequestId((current) => items.some((item) => item.id === initialRequestId) ? initialRequestId || '' : items.some((item) => item.id === current) ? current : items[0]?.id || '')
     }).catch((reason) => setFormError(reason instanceof Error ? reason.message : '의뢰 목록을 불러오지 못했습니다.'))
-  }, [projectId])
+  }, [initialRequestId, projectId])
 
   useEffect(() => {
     if (!requestId) { setLoadCases([]); return }

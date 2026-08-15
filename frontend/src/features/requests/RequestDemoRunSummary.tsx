@@ -1,4 +1,4 @@
-import { FlaskConical } from 'lucide-react'
+import { Clock3 } from 'lucide-react'
 import type { Workflow } from '../../types'
 
 function runStatusLabel(status: string) {
@@ -6,6 +6,6 @@ function runStatusLabel(status: string) {
 }
 
 export function RequestDemoRunSummary({ run }: { run: Workflow['latest_demo_run'] }) {
-  if (!run) return <div className="request-demo-summary empty"><FlaskConical /><span><strong>연결 실행 없음</strong><small>해석 작업 실행 탭에서 DEMO_ONLY 작업을 연결할 수 있습니다.</small></span></div>
+  if (!run) return <div className="request-demo-summary empty"><Clock3 /><span><strong>결과 대기 중</strong><small>의뢰는 접수됐지만 아직 분석 실행 결과가 없습니다. 작업 실행 탭에서 최소 입력을 등록하면 결과가 표시됩니다.</small></span></div>
   return <div className="request-demo-summary"><img src="/assets/demo-workbench.svg" alt="최근 데모 실행 결과" /><span><strong>{run.name}</strong><small>DEMO_ONLY · {runStatusLabel(run.status)} · {run.progress}%</small></span><time>{new Date(run.completed_at || run.created_at).toLocaleString('ko-KR')}</time></div>
 }
