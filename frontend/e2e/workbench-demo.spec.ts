@@ -87,7 +87,7 @@ test('DOE 의뢰를 접수하고 배정 작업을 명시적으로 시작·완료
   await expect(page.locator('.assigned-work-list article.ready')).toContainText('HPC 수행')
   await page.getByTestId('start-current-work').click()
   await page.locator('.assigned-work-list article.in_progress').click()
-  await expect(page.getByLabel('배치 경로 프로필')).toBeVisible()
+  await expect(page.getByText('자동 연결된 배치 실행 정의')).toBeVisible()
   await page.getByRole('button', { name: '배치 실행 기록 생성' }).click()
 
   const attempt = page.locator('.batch-attempt-list article').first()
@@ -102,31 +102,21 @@ test('DOE 의뢰를 접수하고 배정 작업을 명시적으로 시작·완료
 test('관리자가 제공한 활성 업무 유형을 선택하고 선택 당시 버전으로 접수한다', async ({ page }) => {
   await login(page)
   const suffix = Date.now()
-  const requestTypeId = `custom-intake-e2e-${suffix}`
   const title = `E2E 사용자 정의 의뢰 ${suffix}`
   const requestType = {
-    id: requestTypeId,
     display_name: 'E2E 관리자 제공 검토',
     description: '수행자에게 제공하는 사용자 정의 검토 시나리오',
     allowed_task_types: [{ id: 'cad-prepare', version: 1 }],
-    default_workflow: {
-      nodes: [{
-        node_key: 'review-cad',
-        task_type_id: 'cad-prepare',
-        task_type_version: 1,
-        depends_on: [],
-      }],
-    },
+    default_workflow: { nodes: [{ node_key: 'review-cad', task_type_id: 'cad-prepare', task_type_version: 1, depends_on: [] }] },
     match_rules: {},
     is_active: true,
   }
   const versionOne = await page.request.post('/api/admin/workbench/request-types', { data: requestType })
   expect(versionOne.status(), await versionOne.text()).toBe(201)
+  const requestTypeId = (await versionOne.json()).id as string
 
   await page.getByRole('link', { name: '의뢰 접수', exact: true }).click()
   await expect(page.getByTestId('request-intake-page')).toBeVisible()
-  await expect(page.getByTestId('active-request-type-count')).toHaveText('3')
-
   const option = page.getByTestId(`request-type-option-${requestTypeId}-1`)
   await expect(option).toContainText('E2E 관리자 제공 검토')
   await expect(option).toContainText('WORK TYPE · v1')
@@ -135,9 +125,7 @@ test('관리자가 제공한 활성 업무 유형을 선택하고 선택 당시 
   await expect(page.locator('.intake-work-preview strong')).toHaveText(['cad-prepare'])
   await expect(page.locator('.intake-summary')).toContainText('E2E 관리자 제공 검토 · v1')
 
-  const versionTwo = await page.request.post('/api/admin/workbench/request-types', {
-    data: { ...requestType, display_name: 'E2E 관리자 제공 검토 변경본' },
-  })
+  const versionTwo = await page.request.put(`/api/admin/workbench/request-types/${requestTypeId}`, { data: { ...requestType, description: 'E2E 관리자 제공 검토 변경본' } })
   expect(versionTwo.status(), await versionTwo.text()).toBe(201)
   await expect(option).toHaveAttribute('aria-pressed', 'true')
 
@@ -188,30 +176,16 @@ test('작업 유형 관리에서 배치 경로 정의를 별도 내부 탭으로
   await expect(requestTypesTab).toHaveAttribute('aria-selected', 'true')
 })
 
-test('새 작업 유형 ID 규칙을 안내하고 기본 실행 방식을 읽기 쉽게 선택한다', async ({ page }) => {
+test('새 작업 유형은 ID를 서버에서 생성하고 기본 실행 방식을 읽기 쉽게 선택한다', async ({ page }) => {
   await login(page)
   await page.getByRole('link', { name: '작업 유형 관리', exact: true }).click()
 
   const form = page.getByRole('form', { name: '새 작업 유형 작성' })
-  const typeId = form.getByLabel('유형 ID')
-  await expect(form).toContainText('{domain}-{purpose}')
-  await expect(form).toContainText('drop-reliability-validation')
-
-  await typeId.fill('99 Crash / Safety ++')
-  await typeId.blur()
-  await expect(typeId).toHaveValue('type-99-crash-safety')
-  await expect(typeId).toHaveAttribute('aria-invalid', 'false')
-
-  await typeId.fill('ab')
-  await typeId.blur()
-  await expect(typeId).toHaveAttribute('aria-invalid', 'true')
-  await expect(form.getByRole('button', { name: '새 작업 유형 저장' })).toBeDisabled()
-
-  await form.getByLabel('관리 유형 표시 이름').fill('Reliability Validation')
-  await form.getByLabel('관리 자동 추천 분석 유형').fill('DROP')
-  await form.getByRole('button', { name: 'ID 추천' }).click()
-  await expect(typeId).toHaveValue('drop-reliability-validation')
-  await expect(typeId).toHaveAttribute('aria-invalid', 'false')
+  await expect(form.getByLabel('유형 ID')).toHaveCount(0)
+  await form.getByLabel('관리 유형 표시 이름').fill('E2E 서버 생성 작업 유형')
+  await page.locator('.workbench-admin-task-picker').getByRole('button', { name: /CAD\/형상 준비/ }).click()
+  await form.getByRole('button', { name: '새 작업 유형 저장' }).click()
+  await expect(page.locator('.workbench-admin-notice')).toContainText('시스템 ID는')
 
   await expect(form.getByRole('radio', { name: /순차 실행/ })).toBeChecked()
   await expect(form.getByText('이전 작업 완료 후 다음 작업을 시작합니다.')).toBeVisible()
@@ -222,12 +196,10 @@ test('새 작업 유형 ID 규칙을 안내하고 기본 실행 방식을 읽기
 test('작업 유형을 라벨과 시나리오로 편집하고 접수 필터에서 선택한 뒤 삭제한다', async ({ page }) => {
   await login(page)
   const suffix = Date.now()
-  const requestTypeId = `labeled-work-e2e-${suffix}`
   const displayName = `E2E 라벨 작업 ${suffix}`
 
   await page.getByRole('link', { name: '작업 유형 관리', exact: true }).click()
   const createForm = page.getByRole('form', { name: '새 작업 유형 작성' })
-  await createForm.getByLabel('유형 ID').fill(requestTypeId)
   await createForm.getByLabel('관리 유형 표시 이름').fill(displayName)
   await createForm.getByLabel('관리 유형 설명').fill('초기 단일 작업 시나리오')
   await createForm.getByLabel('작업 유형 라벨 *').fill('충돌해석')
@@ -237,13 +209,15 @@ test('작업 유형을 라벨과 시나리오로 편집하고 접수 필터에�
   await expect(page.locator('.workbench-admin-notice')).toContainText(`${displayName} v1`)
 
   let typeCard = page.locator('.workbench-admin-types article').filter({ hasText: displayName })
+  const requestTypeId = ((await typeCard.locator('code').textContent()) ?? '').split(' · ')[0]
+  expect(requestTypeId).toBeTruthy()
   await expect(typeCard).toContainText('#SPDM')
   await expect(typeCard).toContainText('#부서')
   await expect(typeCard).toContainText('#충돌해석')
   await typeCard.getByRole('button', { name: '편집', exact: true }).click()
 
   const editForm = page.getByRole('form', { name: '작업 유형 편집' })
-  await expect(editForm.getByLabel('유형 ID')).toBeDisabled()
+  await expect(editForm.getByLabel('유형 ID')).toHaveCount(0)
   await editForm.getByLabel('관리 유형 설명').fill('DOE 작업을 추가한 편집 시나리오')
   await editForm.getByRole('button', { name: '부서 라벨 삭제' }).click()
   await page.locator('.workbench-admin-task-picker').getByRole('button', { name: /DOE 생성/ }).click()
@@ -278,11 +252,10 @@ test('작업 유형을 라벨과 시나리오로 편집하고 접수 필터에�
 test('작업 유형 선택 카드를 3열 3행 이후 내부 스크롤로 탐색한다', async ({ page }) => {
   await login(page)
   const suffix = Date.now()
-  const ids = Array.from({ length: 10 }, (_, index) => `scroll-work-e2e-${suffix}-${index}`)
+  const ids: string[] = []
   for (const [index, id] of ids.entries()) {
     const response = await page.request.post('/api/admin/workbench/request-types', {
       data: {
-        id,
         display_name: `스크롤 검증 작업 ${index + 1}`,
         description: '3열 3행 스크롤 검증용 작업 유형',
         allowed_task_types: [{ id: 'cad-prepare', version: 1 }],
@@ -292,6 +265,7 @@ test('작업 유형 선택 카드를 3열 3행 이후 내부 스크롤로 탐색
       },
     })
     expect(response.status(), await response.text()).toBe(201)
+    ids.push((await response.json()).id as string)
   }
 
   await page.getByRole('link', { name: '의뢰 접수', exact: true }).click()

@@ -86,7 +86,35 @@ def list_task_types(all_versions: bool = Query(default=False)) -> list[dict[str,
 def create_task_type(payload: TaskTypeVersionCreate, request: Request) -> dict[str, Any]:
     require_permission(request, SYSTEM_CATALOG_MANAGE)
     with connect() as conn:
-        return WorkbenchRepository(conn).create_task_type_version(payload.model_dump())
+        data = payload.model_dump()
+        # IDs are server-owned.  Ignore the optional legacy field on create.
+        data["id"] = None
+        try:
+            return WorkbenchRepository(conn).create_task_type_version(data)
+        except Exception as exc:
+            if "unique" in str(exc).lower() or "duplicate" in str(exc).lower():
+                raise HTTPException(409, "수행 작업 유형 ID 생성이 충돌했습니다. 다시 시도해 주세요.") from exc
+            raise
+
+
+@router.put("/admin/workbench/task-types/{task_type_id}", status_code=201)
+def update_task_type(task_type_id: str, payload: TaskTypeVersionCreate, request: Request) -> dict[str, Any]:
+    require_permission(request, SYSTEM_CATALOG_MANAGE)
+    data = payload.model_dump()
+    data["id"] = task_type_id
+    with connect() as conn:
+        if not conn.execute("SELECT 1 FROM task_type_versions WHERE id=? LIMIT 1", [task_type_id]).fetchone():
+            raise HTTPException(404, "수행 작업 유형을 찾을 수 없습니다.")
+        return WorkbenchRepository(conn).create_task_type_version(data)
+
+
+@router.delete("/admin/workbench/task-types/{task_type_id}")
+def deactivate_task_type(task_type_id: str, request: Request) -> dict[str, str]:
+    require_permission(request, SYSTEM_CATALOG_MANAGE)
+    with connect() as conn:
+        if not WorkbenchRepository(conn).deactivate_task_type(task_type_id):
+            raise HTTPException(404, "수행 작업 유형을 찾을 수 없습니다.")
+    return {"id": task_type_id, "status": "INACTIVE"}
 
 
 @router.get("/workbench/request-types")
@@ -111,7 +139,38 @@ def create_request_type(payload: RequestTypeVersionCreate, request: Request) -> 
         missing = [f"{item.id} v{item.version}" for item in payload.allowed_task_types if not (task := repository.get_task_type(item.id, item.version)) or not task["is_active"]]
         if missing:
             raise HTTPException(400, f"Task Type 버전을 찾을 수 없습니다: {', '.join(missing)}")
-        return repository.create_request_type_version(payload.model_dump())
+        data = payload.model_dump()
+        # IDs are server-owned.  Ignore the optional legacy field on create.
+        data["id"] = None
+        try:
+            return repository.create_request_type_version(data)
+        except Exception as exc:
+            if "unique" in str(exc).lower() or "duplicate" in str(exc).lower():
+                raise HTTPException(409, "작업 유형 ID 생성이 충돌했습니다. 다시 시도해 주세요.") from exc
+            raise
+
+
+@router.put("/admin/workbench/request-types/{request_type_id}", status_code=201)
+def update_request_type(request_type_id: str, payload: RequestTypeVersionCreate, request: Request) -> dict[str, Any]:
+    require_permission(request, SYSTEM_CATALOG_MANAGE)
+    try:
+        _topological_nodes(payload.default_workflow.nodes)
+    except WorkbenchValidationError as exc:
+        raise _bad_request(exc) from exc
+    allowed = {(item.id, item.version) for item in payload.allowed_task_types}
+    for node in payload.default_workflow.nodes:
+        if (node.task_type_id, node.task_type_version) not in allowed:
+            raise HTTPException(400, f"기본 Workflow에 허용되지 않은 Task가 있습니다: {node.task_type_id}")
+    data = payload.model_dump()
+    data["id"] = request_type_id
+    with connect() as conn:
+        repository = WorkbenchRepository(conn)
+        missing = [f"{item.id} v{item.version}" for item in payload.allowed_task_types if not (task := repository.get_task_type(item.id, item.version)) or not task["is_active"]]
+        if missing:
+            raise HTTPException(400, f"Task Type 버전을 찾을 수 없습니다: {', '.join(missing)}")
+        if not conn.execute("SELECT 1 FROM request_type_versions WHERE id=? LIMIT 1", [request_type_id]).fetchone():
+            raise HTTPException(404, "작업 유형을 찾을 수 없습니다.")
+        return repository.create_request_type_version(data)
 
 
 @router.delete("/admin/workbench/request-types/{request_type_id}")
@@ -137,27 +196,61 @@ def list_batch_profile_versions(profile_id: str, request: Request) -> list[dict[
         return WorkbenchRepository(conn).list_batch_profile_versions(profile_id)
 
 
-@router.put("/admin/workbench/batch-profiles/{profile_id}")
-def save_batch_profile(profile_id: str, payload: BatchProfileInput, request: Request) -> dict[str, Any]:
-    require_permission(request, SYSTEM_CATALOG_MANAGE)
-    if profile_id != payload.id:
-        raise HTTPException(422, "경로의 프로필 ID와 본문의 ID가 일치해야 합니다.")
+def _save_batch_profile(payload: BatchProfileInput, request: Request, profile_id: str | None = None) -> dict[str, Any]:
     principal = getattr(request.state, "principal", None)
     if principal:
         payload = payload.model_copy(update={"updated_by": principal.display_name})
+    data = payload.model_dump()
+    if profile_id is not None:
+        if payload.id is not None and profile_id != payload.id:
+            raise HTTPException(422, "경로의 프로필 ID와 본문의 ID가 일치해야 합니다.")
+        data["id"] = profile_id
+    else:
+        # IDs are server-owned.  Ignore the optional legacy field on create.
+        data["id"] = None
     try:
-        validate_profile_definition(payload.model_dump())
+        # Validate path/template data before entering the transaction.
+        validate_profile_definition(data)
     except BatchPreflightError as exc:
         raise HTTPException(422, detail={"code": exc.code, "message": str(exc)}) from exc
     with connect() as conn:
+        if profile_id is not None and not conn.execute("SELECT 1 FROM batch_path_profiles WHERE id=? LIMIT 1", [profile_id]).fetchone():
+            raise HTTPException(404, "배치 실행 정의를 찾을 수 없습니다.")
         conn.execute("BEGIN TRANSACTION")
         try:
-            saved = WorkbenchRepository(conn).upsert_batch_profile(payload.model_dump())
+            saved = WorkbenchRepository(conn).upsert_batch_profile(data)
             conn.execute("COMMIT")
             return saved
-        except Exception:
+        except ValueError as exc:
             conn.execute("ROLLBACK")
+            raise HTTPException(409, str(exc)) from exc
+        except Exception as exc:
+            conn.execute("ROLLBACK")
+            message = str(exc).lower()
+            if "unique" in message or "duplicate" in message or "constraint" in message:
+                raise HTTPException(409, "동일한 작업 유형 버전에 이미 배치 실행 정의가 있습니다.") from exc
             raise
+
+
+@router.post("/admin/workbench/batch-profiles", status_code=201)
+def create_batch_profile(payload: BatchProfileInput, request: Request) -> dict[str, Any]:
+    require_permission(request, SYSTEM_CATALOG_MANAGE)
+    return _save_batch_profile(payload, request)
+
+
+@router.put("/admin/workbench/batch-profiles/{profile_id}")
+def save_batch_profile(profile_id: str, payload: BatchProfileInput, request: Request) -> dict[str, Any]:
+    require_permission(request, SYSTEM_CATALOG_MANAGE)
+    return _save_batch_profile(payload, request, profile_id)
+
+
+@router.delete("/admin/workbench/batch-profiles/{profile_id}")
+def deactivate_batch_profile(profile_id: str, request: Request) -> dict[str, str]:
+    require_permission(request, SYSTEM_CATALOG_MANAGE)
+    with connect() as conn:
+        if not WorkbenchRepository(conn).deactivate_batch_profile(profile_id):
+            raise HTTPException(404, "배치 실행 정의를 찾을 수 없습니다.")
+    return {"id": profile_id, "status": "INACTIVE"}
 
 
 @router.get("/workbench/work-items/{item_id}")
@@ -169,11 +262,13 @@ def get_work_item_detail(item_id: str, request: Request) -> dict[str, Any]:
             raise HTTPException(404, detail={"code": "WORK_ITEM_NOT_FOUND", "item_id": item_id})
         item = items[0]
         task_type = repository.get_task_type(item["task_type_id"], int(item["task_type_version"]))
-        profiles = [_sanitize_batch_profile(profile, request) for profile in repository.list_batch_profiles() if item["task_type_id"] in profile["task_type_ids"]]
+        profile = repository.get_batch_profile_for_task(item["task_type_id"], int(item["task_type_version"]))
+        sanitized_profile = _sanitize_batch_profile(profile, request) if profile else None
         return {
             "work_item": item,
             "task_type": task_type,
-            "compatible_profiles": profiles,
+            "execution_definition": sanitized_profile,
+            "compatible_profiles": [sanitized_profile] if sanitized_profile else [],
             "attempts": [_sanitize_batch_attempt(attempt, request) for attempt in repository.list_batch_attempts(item_id)],
         }
 
@@ -206,9 +301,13 @@ def dispatch_batch_work_item(item_id: str, payload: BatchDispatchCreate, request
             raise HTTPException(409, detail={"code": "BATCH_ATTEMPT_ALREADY_REJECTED", "attempt": existing_attempt})
         if work_item["status"] != "IN_PROGRESS":
             raise HTTPException(409, detail={"code": "WORK_ITEM_NOT_IN_PROGRESS", "item_id": item_id})
-        profile = repository.get_batch_profile(payload.batch_profile_id)
+        task_type_id = str(work_item["task_type_id"])
+        task_type_version = int(work_item["task_type_version"])
+        profile = repository.get_batch_profile_for_task(task_type_id, task_type_version)
+        if payload.batch_profile_id and (not profile or payload.batch_profile_id != profile["id"]):
+            raise HTTPException(409, detail={"code": "BATCH_PROFILE_TASK_MISMATCH", "task_type_id": task_type_id, "task_type_version": task_type_version})
         if not profile or not profile["is_active"]:
-            raise HTTPException(404, detail={"code": "BATCH_PROFILE_NOT_FOUND", "batch_profile_id": payload.batch_profile_id})
+            raise HTTPException(404, detail={"code": "BATCH_PROFILE_NOT_CONFIGURED", "task_type_id": task_type_id, "task_type_version": task_type_version})
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         attempt_id = f"attempt-{uuid4().hex[:12]}"
         profile_snapshot_json = json.dumps(profile, ensure_ascii=False, default=str)

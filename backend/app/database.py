@@ -712,6 +712,8 @@ def _initialize_duckdb_legacy() -> None:
                 working_directory VARCHAR NOT NULL,
                 arguments_template VARCHAR NOT NULL,
                 environment_json JSON NOT NULL,
+                task_type_id VARCHAR,
+                task_type_version INTEGER NOT NULL DEFAULT 1,
                 task_type_ids_json JSON NOT NULL,
                 is_active BOOLEAN NOT NULL DEFAULT true,
                 updated_by VARCHAR NOT NULL,
@@ -727,6 +729,8 @@ def _initialize_duckdb_legacy() -> None:
                 working_directory VARCHAR NOT NULL,
                 arguments_template VARCHAR NOT NULL,
                 environment_json JSON NOT NULL,
+                task_type_id VARCHAR,
+                task_type_version INTEGER NOT NULL DEFAULT 1,
                 task_type_ids_json JSON NOT NULL,
                 is_active BOOLEAN NOT NULL,
                 created_by VARCHAR NOT NULL,
@@ -793,6 +797,34 @@ def _initialize_duckdb_legacy() -> None:
         conn.execute("ALTER TABLE request_work_items ADD COLUMN IF NOT EXISTS progress_updated_by VARCHAR")
         conn.execute("ALTER TABLE request_work_items ADD COLUMN IF NOT EXISTS progress_updated_at TIMESTAMP")
         conn.execute("ALTER TABLE batch_path_profiles ADD COLUMN IF NOT EXISTS task_type_ids_json JSON DEFAULT '[]'")
+        conn.execute("ALTER TABLE batch_path_profiles ADD COLUMN IF NOT EXISTS task_type_id VARCHAR")
+        conn.execute("ALTER TABLE batch_path_profiles ADD COLUMN IF NOT EXISTS task_type_version INTEGER DEFAULT 1")
+        conn.execute("ALTER TABLE batch_path_profile_versions ADD COLUMN IF NOT EXISTS task_type_id VARCHAR")
+        conn.execute("ALTER TABLE batch_path_profile_versions ADD COLUMN IF NOT EXISTS task_type_version INTEGER DEFAULT 1")
+        # Only singleton legacy links are safe to normalize.  Ambiguous rows
+        # retain their JSON mapping and are quarantined from the 1:1 identity
+        # column so initialization cannot fail on duplicate legacy mappings.
+        conn.execute("UPDATE batch_path_profiles SET task_type_id=CAST(json_extract_string(task_type_ids_json, '$[0]') AS VARCHAR) WHERE task_type_id IS NULL AND json_array_length(task_type_ids_json)=1")
+        conn.execute("""
+            UPDATE batch_path_profiles AS duplicate
+            SET task_type_id=NULL
+            WHERE duplicate.task_type_id IS NOT NULL
+              AND EXISTS (
+                  SELECT 1 FROM batch_path_profiles AS keeper
+                  WHERE keeper.task_type_id=duplicate.task_type_id
+                    AND keeper.task_type_version=duplicate.task_type_version
+                    AND keeper.id < duplicate.id
+              )
+        """)
+        conn.execute("""
+            UPDATE batch_path_profile_versions AS version
+            SET task_type_id=profile.task_type_id, task_type_version=profile.task_type_version
+            FROM batch_path_profiles AS profile
+            WHERE version.id=profile.id
+        """)
+        # DuckDB has no partial indexes; nullable legacy rows remain allowed,
+        # while every normalized task/version pair is enforced as a singleton.
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_batch_profile_task_version ON batch_path_profiles(task_type_id, task_type_version)")
         conn.execute("ALTER TABLE batch_path_profiles ADD COLUMN IF NOT EXISTS version INTEGER DEFAULT 1")
         conn.execute("CREATE INDEX IF NOT EXISTS ix_media_assets_blob_id ON media_assets(blob_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS ix_drop_video_assets_blob_id ON drop_video_assets(blob_id)")
@@ -1662,13 +1694,13 @@ def ensure_sample_evolutions(conn: duckdb.DuckDBPyConnection) -> None:
         """
         INSERT OR IGNORE INTO batch_path_profiles
             (id, name, solver_path, working_directory, arguments_template,
-             environment_json, task_type_ids_json, is_active, updated_by, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, true, ?, ?, ?)
+             environment_json, task_type_id, task_type_version, task_type_ids_json, is_active, updated_by, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, true, ?, ?, ?)
         """,
         [
             "radioss-demo", "Radioss 배치 예시", "C:\\Altair\\hwsolvers\\radioss.exe",
             "C:\\Simulation\\runs\\{request_id}", "-i {input} -nt {cores}",
-            json.dumps({"OMP_NUM_THREADS": "{cores}"}, ensure_ascii=False), json.dumps(["hpc-submit"]), "system", _iso(now), _iso(now),
+            json.dumps({"OMP_NUM_THREADS": "{cores}"}, ensure_ascii=False), "hpc-submit", 1, json.dumps(["hpc-submit"]), "system", _iso(now), _iso(now),
         ],
     )
     conn.execute(
@@ -1683,9 +1715,9 @@ def ensure_sample_evolutions(conn: duckdb.DuckDBPyConnection) -> None:
         """
         INSERT OR IGNORE INTO batch_path_profile_versions
             (id, version, name, solver_path, working_directory, arguments_template,
-             environment_json, task_type_ids_json, is_active, created_by, created_at)
+             environment_json, task_type_id, task_type_version, task_type_ids_json, is_active, created_by, created_at)
         SELECT id, version, name, solver_path, working_directory, arguments_template,
-               environment_json, task_type_ids_json, is_active, updated_by, updated_at
+               environment_json, task_type_id, task_type_version, task_type_ids_json, is_active, updated_by, updated_at
         FROM batch_path_profiles
         """
     )

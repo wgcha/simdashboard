@@ -6,6 +6,7 @@ from typing import Any
 from uuid import uuid4
 
 from ..database_connection import rows
+from ..services.identifiers import slugify, unique_identifier
 
 
 DEMO_ARTIFACT_URL = "/assets/demo-workbench.svg"
@@ -196,6 +197,9 @@ class WorkbenchRepository:
             "match_rules": rules,
         }
 
+    def _next_identifier(self, prefix: str, seed: str, table: str) -> str:
+        return unique_identifier(self.conn, table, "id", slugify(f"{prefix}-{seed}", fallback=prefix))
+
     def list_task_types(self, *, all_versions: bool = False) -> list[dict[str, Any]]:
         sql = "SELECT * FROM task_type_versions"
         if not all_versions:
@@ -208,6 +212,8 @@ class WorkbenchRepository:
         return self._task_item(items[0]) if items else None
 
     def create_task_type_version(self, payload: dict[str, Any]) -> dict[str, Any]:
+        payload = dict(payload)
+        payload["id"] = payload.get("id") or self._next_identifier("task", f"{payload.get('kind', '')}-{payload.get('display_name', '')}", "task_type_versions")
         current = self.conn.execute("SELECT COALESCE(max(version), 0) FROM task_type_versions WHERE id=?", [payload["id"]]).fetchone()[0]
         version = int(current) + 1
         now = _utcnow()
@@ -222,6 +228,17 @@ class WorkbenchRepository:
             [payload["id"], version, payload["kind"], payload["display_name"], payload["description"], payload["supports_standalone"], json.dumps(payload["input_artifact_types"], ensure_ascii=False), json.dumps(payload["output_artifact_types"], ensure_ascii=False), json.dumps(payload["parameter_schema"], ensure_ascii=False), payload["demo_artifact_url"], payload["is_active"], now],
         )
         return self.get_task_type(payload["id"], version)  # type: ignore[return-value]
+
+    def deactivate_task_type(self, task_type_id: str) -> bool:
+        exists = self.conn.execute("SELECT 1 FROM task_type_versions WHERE id=? LIMIT 1", [task_type_id]).fetchone()
+        if not exists:
+            return False
+        self.conn.execute("UPDATE task_type_versions SET is_active=false WHERE id=?", [task_type_id])
+        # A task type without an active execution definition cannot be selected
+        # for new work, while historical profile snapshots remain intact.
+        self.conn.execute("UPDATE batch_path_profiles SET is_active=false WHERE task_type_id=?", [task_type_id])
+        return True
+
 
     def list_request_types(self, *, all_versions: bool = False) -> list[dict[str, Any]]:
         sql = "SELECT * FROM request_type_versions"
@@ -242,6 +259,8 @@ class WorkbenchRepository:
         return self.get_request_type(request_type_id, int(row[0])) if row and row[0] is not None else None
 
     def create_request_type_version(self, payload: dict[str, Any]) -> dict[str, Any]:
+        payload = dict(payload)
+        payload["id"] = payload.get("id") or self._next_identifier("request", payload.get("display_name", ""), "request_type_versions")
         current = self.conn.execute("SELECT COALESCE(max(version), 0) FROM request_type_versions WHERE id=?", [payload["id"]]).fetchone()[0]
         version = int(current) + 1
         now = _utcnow()
@@ -255,6 +274,7 @@ class WorkbenchRepository:
             [payload["id"], version, payload["display_name"], payload["description"], json.dumps(payload["allowed_task_types"], ensure_ascii=False), json.dumps(payload["default_workflow"], ensure_ascii=False), json.dumps(payload["match_rules"], ensure_ascii=False), payload["is_active"], now],
         )
         return self.get_request_type(payload["id"], version)  # type: ignore[return-value]
+
 
     def deactivate_request_type(self, request_type_id: str) -> bool:
         exists = self.conn.execute(
@@ -493,9 +513,15 @@ class WorkbenchRepository:
 
     @staticmethod
     def _batch_profile_item(item: dict[str, Any]) -> dict[str, Any]:
-        environment = _decoded(item.pop("environment_json")) or {}
-        task_type_ids = _decoded(item.pop("task_type_ids_json")) or []
-        return {**item, "environment": environment, "task_type_ids": task_type_ids}
+        environment = _decoded(item.pop("environment_json", None)) or {}
+        legacy_ids = _decoded(item.pop("task_type_ids_json", None)) or []
+        task_type_id = item.get("task_type_id")
+        task_type_version = int(item.get("task_type_version") or 1)
+        if not task_type_id and len(legacy_ids) == 1:
+            task_type_id = legacy_ids[0]
+        ids = [task_type_id] if task_type_id else list(legacy_ids)
+        migration_required = not task_type_id and bool(legacy_ids)
+        return {**item, "environment": environment, "task_type_id": task_type_id, "task_type_version": task_type_version, "task_type_ids": ids, "migration_required": migration_required}
 
     def list_batch_profiles(self, *, include_inactive: bool = False) -> list[dict[str, Any]]:
         sql = "SELECT * FROM batch_path_profiles"
@@ -508,38 +534,54 @@ class WorkbenchRepository:
         items = rows(self.conn.execute("SELECT * FROM batch_path_profiles WHERE id=?", [profile_id]))
         return self._batch_profile_item(items[0]) if items else None
 
+    def get_batch_profile_for_task(self, task_type_id: str, task_type_version: int, *, include_inactive: bool = False) -> dict[str, Any] | None:
+        sql = "SELECT * FROM batch_path_profiles WHERE task_type_id=? AND task_type_version=?"
+        if not include_inactive:
+            sql += " AND is_active=true"
+        items = rows(self.conn.execute(sql + " ORDER BY version DESC LIMIT 1", [task_type_id, task_type_version]))
+        return self._batch_profile_item(items[0]) if items else None
+
+    def deactivate_batch_profile(self, profile_id: str) -> bool:
+        updated = self.conn.execute("UPDATE batch_path_profiles SET is_active=false, updated_at=? WHERE id=?", [_utcnow(), profile_id])
+        return bool(getattr(updated, "rowcount", 0)) or bool(self.conn.execute("SELECT 1 FROM batch_path_profiles WHERE id=?", [profile_id]).fetchone())
+
     def upsert_batch_profile(self, payload: dict[str, Any]) -> dict[str, Any]:
+        payload = dict(payload)
+        legacy_ids = list(payload.get("task_type_ids") or [])
+        task_type_id = payload.get("task_type_id")
+        if task_type_id and legacy_ids and (len(legacy_ids) != 1 or legacy_ids[0] != task_type_id):
+            raise ValueError("배치 실행 정의는 하나의 작업 유형만 연결할 수 있습니다.")
+        if not task_type_id:
+            if len(legacy_ids) != 1:
+                raise ValueError("배치 실행 정의에는 task_type_id가 필요합니다.")
+            task_type_id = legacy_ids[0]
+        task_type_version = int(payload.get("task_type_version") or 1)
+        task_type = self.get_task_type(task_type_id, task_type_version)
+        if not task_type or not task_type["is_active"]:
+            raise ValueError(f"활성 Task Type 버전을 찾을 수 없습니다: {task_type_id} v{task_type_version}")
+        payload["task_type_id"] = task_type_id
+        payload["task_type_version"] = task_type_version
+        payload["task_type_ids"] = [task_type_id]
+        payload["id"] = payload.get("id") or self._next_identifier("batch", payload.get("name", ""), "batch_path_profiles")
+        conflict = self.conn.execute("SELECT id FROM batch_path_profiles WHERE task_type_id=? AND task_type_version=? AND id<>? LIMIT 1", [task_type_id, task_type_version, payload["id"]]).fetchone()
+        if conflict:
+            raise ValueError(f"작업 유형에 이미 배치 실행 정의가 연결되어 있습니다: {task_type_id} v{task_type_version}")
         now = _utcnow()
         existing = self.conn.execute("SELECT version, created_at FROM batch_path_profiles WHERE id=?", [payload["id"]]).fetchone()
         version = int(existing[0] or 1) + 1 if existing else 1
         if existing:
             self.conn.execute(
-                """
-                UPDATE batch_path_profiles
-                SET version=?, name=?, solver_path=?, working_directory=?, arguments_template=?,
-                    environment_json=?, task_type_ids_json=?, is_active=?, updated_by=?, updated_at=?
-                WHERE id=?
-                """,
-                [version, payload["name"], payload["solver_path"], payload["working_directory"], payload["arguments_template"], json.dumps(payload["environment"], ensure_ascii=False), json.dumps(payload["task_type_ids"], ensure_ascii=False), payload["is_active"], payload["updated_by"], now, payload["id"]],
+                """UPDATE batch_path_profiles SET version=?, name=?, solver_path=?, working_directory=?, arguments_template=?, environment_json=?, task_type_id=?, task_type_version=?, task_type_ids_json=?, is_active=?, updated_by=?, updated_at=? WHERE id=?""",
+                [version, payload["name"], payload["solver_path"], payload["working_directory"], payload["arguments_template"], json.dumps(payload["environment"], ensure_ascii=False), task_type_id, task_type_version, json.dumps([task_type_id], ensure_ascii=False), payload["is_active"], payload["updated_by"], now, payload["id"]],
             )
         else:
             self.conn.execute(
-                """
-                INSERT INTO batch_path_profiles
-                    (id, version, name, solver_path, working_directory, arguments_template,
-                     environment_json, task_type_ids_json, is_active, updated_by, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                [payload["id"], version, payload["name"], payload["solver_path"], payload["working_directory"], payload["arguments_template"], json.dumps(payload["environment"], ensure_ascii=False), json.dumps(payload["task_type_ids"], ensure_ascii=False), payload["is_active"], payload["updated_by"], now, now],
+                """INSERT INTO batch_path_profiles (id, version, name, solver_path, working_directory, arguments_template, environment_json, task_type_id, task_type_version, task_type_ids_json, is_active, updated_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                [payload["id"], version, payload["name"], payload["solver_path"], payload["working_directory"], payload["arguments_template"], json.dumps(payload["environment"], ensure_ascii=False), task_type_id, task_type_version, json.dumps([task_type_id], ensure_ascii=False), payload["is_active"], payload["updated_by"], now, now],
             )
         self.conn.execute(
-            """
-            INSERT INTO batch_path_profile_versions
-                (id, version, name, solver_path, working_directory, arguments_template,
-                 environment_json, task_type_ids_json, is_active, created_by, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            [payload["id"], version, payload["name"], payload["solver_path"], payload["working_directory"], payload["arguments_template"], json.dumps(payload["environment"], ensure_ascii=False), json.dumps(payload["task_type_ids"], ensure_ascii=False), payload["is_active"], payload["updated_by"], now],
+            """INSERT INTO batch_path_profile_versions (id, version, name, solver_path, working_directory, arguments_template, environment_json, task_type_id, task_type_version, task_type_ids_json, is_active, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [payload["id"], version, payload["name"], payload["solver_path"], payload["working_directory"], payload["arguments_template"], json.dumps(payload["environment"], ensure_ascii=False), task_type_id, task_type_version, json.dumps([task_type_id], ensure_ascii=False), payload["is_active"], payload["updated_by"], now],
         )
         return self.get_batch_profile(payload["id"])  # type: ignore[return-value]
 

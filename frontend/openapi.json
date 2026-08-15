@@ -1255,6 +1255,104 @@
         }
       }
     },
+    "/api/admin/workbench/task-types/{task_type_id}": {
+      "put": {
+        "tags": [
+          "workbench-demo"
+        ],
+        "summary": "Update Task Type",
+        "operationId": "update_task_type_api_admin_workbench_task_types__task_type_id__put",
+        "parameters": [
+          {
+            "name": "task_type_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Type Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskTypeVersionCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Update Task Type Api Admin Workbench Task Types  Task Type Id  Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "workbench-demo"
+        ],
+        "summary": "Deactivate Task Type",
+        "operationId": "deactivate_task_type_api_admin_workbench_task_types__task_type_id__delete",
+        "parameters": [
+          {
+            "name": "task_type_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Type Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Deactivate Task Type Api Admin Workbench Task Types  Task Type Id  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/workbench/request-types": {
       "get": {
         "tags": [
@@ -1347,6 +1445,58 @@
       }
     },
     "/api/admin/workbench/request-types/{request_type_id}": {
+      "put": {
+        "tags": [
+          "workbench-demo"
+        ],
+        "summary": "Update Request Type",
+        "operationId": "update_request_type_api_admin_workbench_request_types__request_type_id__put",
+        "parameters": [
+          {
+            "name": "request_type_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Type Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestTypeVersionCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Update Request Type Api Admin Workbench Request Types  Request Type Id  Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
       "delete": {
         "tags": [
           "workbench-demo"
@@ -1487,6 +1637,49 @@
         }
       }
     },
+    "/api/admin/workbench/batch-profiles": {
+      "post": {
+        "tags": [
+          "workbench-demo"
+        ],
+        "summary": "Create Batch Profile",
+        "operationId": "create_batch_profile_api_admin_workbench_batch_profiles_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchProfileInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Create Batch Profile Api Admin Workbench Batch Profiles Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/admin/workbench/batch-profiles/{profile_id}": {
       "put": {
         "tags": [
@@ -1524,6 +1717,50 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Save Batch Profile Api Admin Workbench Batch Profiles  Profile Id  Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "workbench-demo"
+        ],
+        "summary": "Deactivate Batch Profile",
+        "operationId": "deactivate_batch_profile_api_admin_workbench_batch_profiles__profile_id__delete",
+        "parameters": [
+          {
+            "name": "profile_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Profile Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Deactivate Batch Profile Api Admin Workbench Batch Profiles  Profile Id  Delete"
                 }
               }
             }
@@ -6050,10 +6287,17 @@
       "BatchDispatchCreate": {
         "properties": {
           "batch_profile_id": {
-            "type": "string",
-            "maxLength": 80,
-            "minLength": 3,
-            "pattern": "^[a-z][a-z0-9_-]*$",
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80,
+                "minLength": 3,
+                "pattern": "^[a-z][a-z0-9_-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Batch Profile Id"
           },
           "idempotency_key": {
@@ -6074,7 +6318,6 @@
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "batch_profile_id",
           "idempotency_key"
         ],
         "title": "BatchDispatchCreate"
@@ -6082,10 +6325,17 @@
       "BatchProfileInput": {
         "properties": {
           "id": {
-            "type": "string",
-            "maxLength": 80,
-            "minLength": 3,
-            "pattern": "^[a-z][a-z0-9_-]*$",
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80,
+                "minLength": 3,
+                "pattern": "^[a-z][a-z0-9_-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Id"
           },
           "name": {
@@ -6120,13 +6370,39 @@
             "title": "Environment"
           },
           "task_type_ids": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "maxItems": 32,
-            "minItems": 1,
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 32
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Task Type Ids"
+          },
+          "task_type_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80,
+                "minLength": 3,
+                "pattern": "^[a-z][a-z0-9_-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Type Id"
+          },
+          "task_type_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Task Type Version",
+            "default": 1
           },
           "is_active": {
             "type": "boolean",
@@ -6144,11 +6420,9 @@
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "id",
           "name",
           "solver_path",
-          "working_directory",
-          "task_type_ids"
+          "working_directory"
         ],
         "title": "BatchProfileInput"
       },
@@ -7708,10 +7982,17 @@
       "RequestTypeVersionCreate": {
         "properties": {
           "id": {
-            "type": "string",
-            "maxLength": 80,
-            "minLength": 3,
-            "pattern": "^[a-z][a-z0-9_-]*$",
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80,
+                "minLength": 3,
+                "pattern": "^[a-z][a-z0-9_-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Id"
           },
           "display_name": {
@@ -7752,7 +8033,6 @@
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "id",
           "display_name",
           "allowed_task_types",
           "default_workflow"
@@ -7951,10 +8231,17 @@
       "TaskTypeVersionCreate": {
         "properties": {
           "id": {
-            "type": "string",
-            "maxLength": 80,
-            "minLength": 3,
-            "pattern": "^[a-z][a-z0-9_-]*$",
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80,
+                "minLength": 3,
+                "pattern": "^[a-z][a-z0-9_-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Id"
           },
           "kind": {
@@ -8032,7 +8319,6 @@
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "id",
           "kind",
           "display_name"
         ],

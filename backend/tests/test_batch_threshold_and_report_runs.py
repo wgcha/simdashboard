@@ -103,20 +103,23 @@ def test_work_item_progress_and_safe_batch_dispatch_are_persistent():
         assert profiles and profiles[0]["environment"]
         assert current["task_type_id"] in profiles[0]["task_type_ids"]
         incompatible_profile = {
-            "id": "post-only-demo",
             "name": "후처리 전용 데모",
             "solver_path": "C:\\Demo\\post.exe",
             "working_directory": "C:\\Demo\\runs\\{request_id}",
             "arguments_template": "--input {input}",
             "environment": {},
+            "task_type_id": "post-process",
+            "task_type_version": 1,
             "task_type_ids": ["post-process"],
             "is_active": True,
             "updated_by": "테스트 관리자",
         }
-        assert client.put("/api/admin/workbench/batch-profiles/post-only-demo", json=incompatible_profile).status_code == 200
+        incompatible_created = client.post("/api/admin/workbench/batch-profiles", json=incompatible_profile)
+        assert incompatible_created.status_code == 201, incompatible_created.text
+        incompatible_profile_id = incompatible_created.json()["id"]
         incompatible_dispatch = client.post(
             f"/api/workbench/work-items/{current['id']}/batch-dispatch",
-            json={"batch_profile_id": "post-only-demo", "created_by": "실행 담당자", "idempotency_key": "test-incompatible-dispatch"},
+            json={"batch_profile_id": incompatible_profile_id, "created_by": "실행 담당자", "idempotency_key": "test-incompatible-dispatch"},
         )
         assert incompatible_dispatch.status_code == 409
         assert incompatible_dispatch.json()["detail"]["code"] == "BATCH_PROFILE_TASK_MISMATCH"

@@ -25,7 +25,16 @@ function adaptRequestTypeResolution(value: unknown): RequestTypeResolution { ret
 function adaptDemoRun(value: unknown): DemoRun { return validatedWorkbenchRecord(value, 'demoRun', ['id', 'name']) as unknown as DemoRun }
 function adaptDemoRuns(value: unknown): DemoRun[] { return responseRecordArray(value, 'demoRuns').map(adaptDemoRun) }
 function adaptWorkItem(value: unknown): Omit<Workflow, 'request'> { return validatedWorkbenchRecord(value, 'workItem') as unknown as Omit<Workflow, 'request'> }
-function adaptBatchProfile(value: unknown): BatchProfile { return validatedWorkbenchRecord(value, 'batchProfile', ['id', 'name']) as unknown as BatchProfile }
+function adaptBatchProfile(value: unknown): BatchProfile {
+  const item = validatedWorkbenchRecord(value, 'batchProfile', ['id', 'name']) as unknown as BatchProfile
+  const taskTypeIds = Array.isArray(item.task_type_ids) ? item.task_type_ids.filter((id): id is string => typeof id === 'string' && Boolean(id)) : []
+  // A legacy many-to-many row is not auto-assigned to the first task: it must
+  // be remediated by an administrator before it can participate in dispatch.
+  const taskTypeId = typeof item.task_type_id === 'string' && item.task_type_id
+    ? item.task_type_id
+    : taskTypeIds.length === 1 ? taskTypeIds[0] : undefined
+  return { ...item, task_type_id: taskTypeId, task_type_ids: taskTypeId ? [taskTypeId] : taskTypeIds }
+}
 function adaptBatchProfiles(value: unknown): BatchProfile[] { return responseRecordArray(value, 'batchProfiles').map(adaptBatchProfile) }
 function adaptBatchAttempt(value: unknown): BatchExecutionAttempt { return validatedWorkbenchRecord(value, 'batchAttempt', ['id', 'work_item_id']) as unknown as BatchExecutionAttempt }
 function adaptBatchAttempts(value: unknown): BatchExecutionAttempt[] { return responseRecordArray(value, 'batchAttempts').map(adaptBatchAttempt) }
@@ -34,6 +43,12 @@ async function readText(response: Response | Promise<Response>): Promise<string>
   response = await response
   if (!response.ok) throw await apiErrorFromResponse(response)
   return response.text()
+}
+
+async function jsonRequest<T>(url: string, method: 'POST' | 'PUT', body: unknown): Promise<T> {
+  const response = await apiFetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  if (!response.ok) throw await apiErrorFromResponse(response)
+  return response.json() as Promise<T>
 }
 
 export const workbenchApi = {
@@ -56,14 +71,24 @@ export const workbenchApi = {
   updateWorkItemProgress: async (itemId: string, progress: number, updatedBy: string) => adaptWorkItem(unwrapGenerated(await apiClient.PATCH('/api/workbench/work-items/{item_id}/progress', {
     params: { path: { item_id: itemId } }, body: { progress, updated_by: updatedBy },
   }))),
+  createTaskType: async (payload: Omit<WorkbenchTaskType, 'id' | 'version' | 'created_at'>) => adaptTaskType(await jsonRequest('/api/admin/workbench/task-types', 'POST', payload)),
+  updateTaskType: async (taskTypeId: string, payload: Omit<WorkbenchTaskType, 'id' | 'version' | 'created_at'>) => adaptTaskType(await jsonRequest(`/api/admin/workbench/task-types/${encodeURIComponent(taskTypeId)}`, 'PUT', payload)),
+  deactivateTaskType: async (taskTypeId: string) => {
+    const response = await apiFetch(`/api/admin/workbench/task-types/${encodeURIComponent(taskTypeId)}`, { method: 'DELETE' })
+    if (!response.ok) throw await apiErrorFromResponse(response)
+  },
   batchProfiles: async (includeInactive = false) => adaptBatchProfiles(unwrapGenerated(await apiClient.GET('/api/workbench/batch-profiles', { params: { query: { include_inactive: includeInactive } } }))),
+  createBatchProfile: async (profile: Omit<BatchProfile, 'id' | 'version' | 'created_at' | 'updated_at'>) => adaptBatchProfile(await jsonRequest('/api/admin/workbench/batch-profiles', 'POST', profile)),
   batchAttempts: async (itemId: string) => adaptBatchAttempts(unwrapGenerated(await apiClient.GET('/api/workbench/work-items/{item_id}/batch-attempts', { params: { path: { item_id: itemId } } }))),
-  saveBatchProfile: async (profile: Omit<BatchProfile, 'version' | 'created_at' | 'updated_at'>) => adaptBatchProfile(unwrapGenerated(await apiClient.PUT('/api/admin/workbench/batch-profiles/{profile_id}', {
-    params: { path: { profile_id: profile.id } }, body: profile,
+  saveBatchProfile: async (profileId: string, profile: Omit<BatchProfile, 'id' | 'version' | 'created_at' | 'updated_at'>) => adaptBatchProfile(await jsonRequest(`/api/admin/workbench/batch-profiles/${encodeURIComponent(profileId)}`, 'PUT', profile)),
+  deactivateBatchProfile: async (profileId: string) => {
+    const response = await apiFetch(`/api/admin/workbench/batch-profiles/${encodeURIComponent(profileId)}`, { method: 'DELETE' })
+    if (!response.ok) throw await apiErrorFromResponse(response)
+  },
+  dispatchBatch: async (itemId: string, createdBy: string, idempotencyKey: string) => adaptDemoRun(unwrapGenerated(await apiClient.POST('/api/workbench/work-items/{item_id}/batch-dispatch', {
+    params: { path: { item_id: itemId } }, body: { idempotency_key: idempotencyKey, created_by: createdBy } as never,
   }))),
-  dispatchBatch: async (itemId: string, batchProfileId: string, createdBy: string, idempotencyKey: string) => adaptDemoRun(unwrapGenerated(await apiClient.POST('/api/workbench/work-items/{item_id}/batch-dispatch', {
-    params: { path: { item_id: itemId } }, body: { batch_profile_id: batchProfileId, idempotency_key: idempotencyKey, created_by: createdBy },
-  }))),
-  createRequestType: async (payload: Omit<WorkbenchRequestType, 'version' | 'created_at'>) => adaptRequestType(unwrapGenerated(await apiClient.POST('/api/admin/workbench/request-types', { body: payload }))),
+  createRequestType: async (payload: Omit<WorkbenchRequestType, 'id' | 'version' | 'created_at'>) => adaptRequestType(unwrapGenerated(await apiClient.POST('/api/admin/workbench/request-types', { body: payload as never }))),
+  updateRequestType: async (requestTypeId: string, payload: Omit<WorkbenchRequestType, 'id' | 'version' | 'created_at'>) => adaptRequestType(await jsonRequest(`/api/admin/workbench/request-types/${encodeURIComponent(requestTypeId)}`, 'PUT', payload)),
   deactivateRequestType: async (requestTypeId: string) => { unwrapGenerated(await apiClient.DELETE('/api/admin/workbench/request-types/{request_type_id}', { params: { path: { request_type_id: requestTypeId } } })) },
 }

@@ -114,7 +114,12 @@ export type BatchProfile = {
   working_directory: string
   arguments_template: string
   environment: Record<string, string>
+  /** New 1:1 contract. */
+  task_type_id?: string
+  task_type_version?: number
+  /** Legacy API compatibility. */
   task_type_ids: string[]
+  migration_required?: boolean
   is_active: boolean
   updated_by: string
   created_at: string

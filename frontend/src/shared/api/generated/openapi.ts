@@ -415,6 +415,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/workbench/task-types/{task_type_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Update Task Type */
+        put: operations["update_task_type_api_admin_workbench_task_types__task_type_id__put"];
+        post?: never;
+        /** Deactivate Task Type */
+        delete: operations["deactivate_task_type_api_admin_workbench_task_types__task_type_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/workbench/request-types": {
         parameters: {
             query?: never;
@@ -457,7 +475,8 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        put?: never;
+        /** Update Request Type */
+        put: operations["update_request_type_api_admin_workbench_request_types__request_type_id__put"];
         post?: never;
         /** Deactivate Request Type */
         delete: operations["deactivate_request_type_api_admin_workbench_request_types__request_type_id__delete"];
@@ -500,6 +519,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/workbench/batch-profiles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Batch Profile */
+        post: operations["create_batch_profile_api_admin_workbench_batch_profiles_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/workbench/batch-profiles/{profile_id}": {
         parameters: {
             query?: never;
@@ -511,7 +547,8 @@ export interface paths {
         /** Save Batch Profile */
         put: operations["save_batch_profile_api_admin_workbench_batch_profiles__profile_id__put"];
         post?: never;
-        delete?: never;
+        /** Deactivate Batch Profile */
+        delete: operations["deactivate_batch_profile_api_admin_workbench_batch_profiles__profile_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1831,7 +1868,7 @@ export interface components {
         /** BatchDispatchCreate */
         BatchDispatchCreate: {
             /** Batch Profile Id */
-            batch_profile_id: string;
+            batch_profile_id?: string | null;
             /** Idempotency Key */
             idempotency_key: string;
             /**
@@ -1843,7 +1880,7 @@ export interface components {
         /** BatchProfileInput */
         BatchProfileInput: {
             /** Id */
-            id: string;
+            id?: string | null;
             /** Name */
             name: string;
             /** Solver Path */
@@ -1860,7 +1897,14 @@ export interface components {
                 [key: string]: string;
             };
             /** Task Type Ids */
-            task_type_ids: string[];
+            task_type_ids?: string[] | null;
+            /** Task Type Id */
+            task_type_id?: string | null;
+            /**
+             * Task Type Version
+             * @default 1
+             */
+            task_type_version: number;
             /**
              * Is Active
              * @default true
@@ -2456,7 +2500,7 @@ export interface components {
         /** RequestTypeVersionCreate */
         RequestTypeVersionCreate: {
             /** Id */
-            id: string;
+            id?: string | null;
             /** Display Name */
             display_name: string;
             /**
@@ -2537,7 +2581,7 @@ export interface components {
         /** TaskTypeVersionCreate */
         TaskTypeVersionCreate: {
             /** Id */
-            id: string;
+            id?: string | null;
             /**
              * Kind
              * @enum {string}
@@ -3681,6 +3725,76 @@ export interface operations {
             };
         };
     };
+    update_task_type_api_admin_workbench_task_types__task_type_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_type_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TaskTypeVersionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    deactivate_task_type_api_admin_workbench_task_types__task_type_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_type_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_request_types_api_workbench_request_types_get: {
         parameters: {
             query?: {
@@ -3719,6 +3833,43 @@ export interface operations {
             query?: never;
             header?: never;
             path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RequestTypeVersionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_request_type_api_admin_workbench_request_types__request_type_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_type_id: string;
+            };
             cookie?: never;
         };
         requestBody: {
@@ -3848,6 +3999,41 @@ export interface operations {
             };
         };
     };
+    create_batch_profile_api_admin_workbench_batch_profiles_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BatchProfileInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     save_batch_profile_api_admin_workbench_batch_profiles__profile_id__put: {
         parameters: {
             query?: never;
@@ -3871,6 +4057,39 @@ export interface operations {
                 content: {
                     "application/json": {
                         [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    deactivate_batch_profile_api_admin_workbench_batch_profiles__profile_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
                     };
                 };
             };
