@@ -52,9 +52,7 @@ import { AccessAdminPage, AuditAdminPage, MenuPolicyAdminPage, preloadWorkspaceR
 import { RequestIntakePage } from './features/workbench/RequestIntakePage'
 import { PortfolioDashboard } from './PortfolioDashboard'
 import { ResultsWorkspaceOverlays } from './features/results/ResultsWorkspaceOverlays'
-
 import type { AnalysisRequest, AnalysisRunSummary, AutomationTemplate, DashboardDefinition, DashboardPageSummary, DashboardSummary, DashboardVersion, DashboardWidget, FeatureExample, ImportSchema, LoadCase, Overview, PortfolioLayout, Project, QualityThreshold, ReportContentItem, ReportElementDefinition, ReportElementType, ReportLayout, ReportLayoutDefinition, ReportLayoutVersion, ReportSection, ReportSlideDefinition, ReportSlideKind, ReportSource, ReportTemplateAsset, ReviewItem, RunComparison, RunComparisonReportContext, RunTrust, VariableDefinition, VariableDefinitionInput, WidgetCatalogItem, Workflow, WorkflowDashboardLayout, WorkflowStep } from './types'
-
 const DataWorkspace = lazy(() => import('./features/data/DataWorkspace').then(({ DataWorkspace }) => ({ default: DataWorkspace })))
 const FolderSchemaWorkspace = lazy(() => import('./features/data/FolderSchemaWorkspace').then(({ FolderSchemaWorkspace }) => ({ default: FolderSchemaWorkspace })))
 const VariableCatalogPage = lazy(() => import('./features/data/VariableCatalogPage').then(({ VariableCatalogPage }) => ({ default: VariableCatalogPage })))
@@ -65,11 +63,9 @@ const WorkflowView = lazy(() => import('./features/requests/WorkflowView').then(
 const ResultsWorkspace = lazy(() => import('./features/results/ResultsWorkspace').then(({ ResultsWorkspace }) => ({ default: ResultsWorkspace })))
 const PendingAnalysisWorkspace = lazy(() => import('./features/results/PendingAnalysisWorkspace').then(({ PendingAnalysisWorkspace }) => ({ default: PendingAnalysisWorkspace })))
 const AnalysisPageManager = lazy(() => import('./features/analysis/AnalysisPageManager').then(({ AnalysisPageManager }) => ({ default: AnalysisPageManager })))
-
 function FeatureScreenFallback() {
   return <div className="full-state"><LoaderCircle className="spin" /> 화면을 준비하고 있습니다.</div>
 }
-
 const SPECIAL_WIDGET_CATALOG: WidgetCatalogItem[] = [
   { type: 'summary', label: '하중 조건 요약', category: '요약', allowed_data_types: [], default_size: [6, 2] },
   { type: 'open_cell_map', label: 'Open Cell 맵', category: '전용 평가', allowed_data_types: [], default_size: [5, 4] },
@@ -79,7 +75,6 @@ const SPECIAL_WIDGET_CATALOG: WidgetCatalogItem[] = [
   { type: 'chassis_bar', label: 'Chassis 비교 그래프', category: '전용 평가', allowed_data_types: [], default_size: [5, 5] },
   { type: 'chassis_table', label: 'Chassis 상세 표', category: '전용 평가', allowed_data_types: [], default_size: [8, 4] },
 ]
-
 function App() {
   const [preferences] = useState(loadWorkspacePreferences)
   const [theme, setTheme] = useState<WorkspaceTheme>(preferences.theme)
@@ -180,17 +175,14 @@ function App() {
     onNotice: setNotice,
     visibleMenus,
   })
-
   useEffect(() => {
     if (!notice) return
     const timeout = window.setTimeout(() => setNotice((current) => current === notice ? '' : current), 4000)
     return () => window.clearTimeout(timeout)
   }, [notice])
-
   useEffect(() => {
     saveWorkspacePreference('sidebarCollapsed', sidebarCollapsed)
   }, [sidebarCollapsed])
-
   useEffect(() => {
     saveWorkspacePreference('uiFontSize', uiFontSize)
   }, [uiFontSize])
