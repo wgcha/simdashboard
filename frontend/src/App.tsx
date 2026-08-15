@@ -63,6 +63,7 @@ const FeatureExampleGallery = lazy(() => import('./features/examples/FeatureExam
 const HelpCenter = lazy(() => import('./features/help/HelpCenter').then(({ HelpCenter }) => ({ default: HelpCenter })))
 const WorkflowView = lazy(() => import('./features/requests/WorkflowView').then(({ WorkflowView }) => ({ default: WorkflowView })))
 const ResultsWorkspace = lazy(() => import('./features/results/ResultsWorkspace').then(({ ResultsWorkspace }) => ({ default: ResultsWorkspace })))
+const PendingAnalysisWorkspace = lazy(() => import('./features/results/PendingAnalysisWorkspace').then(({ PendingAnalysisWorkspace }) => ({ default: PendingAnalysisWorkspace })))
 const AnalysisPageManager = lazy(() => import('./features/analysis/AnalysisPageManager').then(({ AnalysisPageManager }) => ({ default: AnalysisPageManager })))
 
 function FeatureScreenFallback() {
@@ -436,8 +437,14 @@ function App() {
       setOverview(overviewData)
       setAnalysisPages(pageData)
       if (selectedPage) { setActiveDashboardId(selectedPage.id); setDashboard(await api.dashboard(selectedPage.id)) }
+    } else {
+      setOverview(null)
+      setDashboard(null)
+      setAnalysisPages([])
+      setActiveDashboardId('pending-open-cell')
     }
     setActiveView('workflow')
+    return Boolean(caseData[0])
   }
 
   const handleProjectChange = async (projectId: string) => {
@@ -766,7 +773,9 @@ function App() {
 
   const openWorkflowAnalysis = async (workflow: Workflow) => {
     try {
-      await loadContext(workflow.request.project_id, workflow.request.id, 'open_cell')
+      const hasLoadCase = await loadMonitoringContext(workflow.request.project_id, workflow.request.id)
+      if (hasLoadCase) await loadContext(workflow.request.project_id, workflow.request.id, 'open_cell')
+      else setActiveView('open_cell')
     } catch (reason) { setError(reason instanceof Error ? reason.message : '상세 분석을 열지 못했습니다.') }
   }
 
@@ -855,8 +864,9 @@ function App() {
   }
 
   const isRequestMonitoring = workspacePage === 'dashboard' && activeView === 'workflow'
+  const pendingAnalysis = workspacePage === 'dashboard' && activeView !== 'workflow' && !selectedLoadCaseId && !overview && !dashboard
 
-  if ((!overview || !dashboard) && !isRequestMonitoring) {
+  if ((!overview || !dashboard) && !isRequestMonitoring && !pendingAnalysis) {
     const canCreateProject = hasPermission(authUser, 'system.user.approve', selectedProjectId)
     const canCreateRequest = hasPermission(authUser, 'request.create', selectedProjectId)
     const canRegisterData = canCreateProject || hasPermission(authUser, 'result.import', selectedProjectId)
@@ -897,16 +907,19 @@ function App() {
   const canDashboardEdit = hasPermission(authUser, 'dashboard.edit', selectedProjectId)
   const canWorkflowEdit = hasPermission(authUser, 'workflow.edit', selectedProjectId)
   const canLayoutEdit = hasPermission(authUser, 'project.layout.edit', selectedProjectId)
-  const canEdit = workspacePage === 'portfolio' ? canLayoutEdit : activeView === 'workflow' ? canWorkflowEdit || canLayoutEdit : canDashboardEdit
-  const canManagePages = canDashboardEdit
+  const canEdit = pendingAnalysis ? false : workspacePage === 'portfolio' ? canLayoutEdit : activeView === 'workflow' ? canWorkflowEdit || canLayoutEdit : canDashboardEdit
+  const canManagePages = canDashboardEdit && !pendingAnalysis
   const canExecuteAssigned = hasPermission(authUser, 'work.execute_assigned', selectedProjectId)
   const canExecuteAny = hasPermission(authUser, 'work.execute_any', selectedProjectId)
   const analysisTabs = overview ? visiblePages(analysisPages, overview) : []
   const activeAnalysisPage = analysisPages.find((page) => page.id === activeDashboardId)
   const workflowProjectName = selectedWorkflow?.request.project_name ?? projects.find((project) => project.id === selectedProjectId)?.name ?? '프로젝트 미지정'
   const workflowTitle = selectedWorkflow?.request.title ?? requests.find((request) => request.id === selectedRequestId)?.title ?? '결과 대기 중'
+  const analysisProjectName = overview?.load_case.project_name ?? workflowProjectName
+  const analysisTitle = overview?.load_case.request_title ?? workflowTitle
+  const analysisType = overview?.load_case.analysis_type ?? 'DROP'
   const staticBreadcrumb = WORKSPACE_ROUTES_BY_ID.get(workspacePage)?.breadcrumb
-  const breadcrumb = workspacePage === 'dashboard' ? activeView === 'workflow' ? <><span>의뢰</span><b>/</b><span>{workflowProjectName}</span><b>/</b><strong>{workflowTitle}</strong></> : <><span>프로젝트</span><b>/</b><span>{overview!.load_case.project_name}</span><b>/</b><strong>{overview!.load_case.name}</strong></> : <><span>{staticBreadcrumb?.section}</span><b>/</b><strong>{staticBreadcrumb?.title}</strong></>
+  const breadcrumb = workspacePage === 'dashboard' ? activeView === 'workflow' ? <><span>의뢰</span><b>/</b><span>{workflowProjectName}</span><b>/</b><strong>{workflowTitle}</strong></> : <><span>프로젝트</span><b>/</b><span>{analysisProjectName}</span><b>/</b><strong>{overview?.load_case.name ?? '하중 경우 설정 전'}</strong></> : <><span>{staticBreadcrumb?.section}</span><b>/</b><strong>{staticBreadcrumb?.title}</strong></>
 
   return (
     <AppShell
@@ -935,8 +948,8 @@ function App() {
 
       <AppShellMain topbar={<AppTopbar breadcrumb={breadcrumb} actions={<>
             <div className="theme-switch" role="group" aria-label="화면 테마 선택"><button type="button" className={theme === 'light' ? 'active' : ''} aria-pressed={theme === 'light'} onClick={() => setTheme('light')}><Sun /><span>라이트</span></button><button type="button" className={theme === 'dark' ? 'active' : ''} aria-pressed={theme === 'dark'} onClick={() => setTheme('dark')}><Moon /><span>다크</span></button></div>
-            {workspacePage === 'dashboard' && activeView !== 'workflow' && <button className="ghost-button" title={!overview?.run && activeView !== 'compare' ? '완료된 Run이 있어야 보고서를 내보낼 수 있습니다.' : undefined} disabled={!dashboardReady || (!overview?.run && activeView !== 'compare')} onClick={() => void reportExport.open()}><Download /> 보고서 내보내기</button>}
-            {canEdit && workspacePage === 'dashboard' && activeView !== 'workflow' && <button className="ghost-button" disabled={!dashboardReady} onClick={() => setAssistantOpen(true)}><Sparkles /> 자연어로 개선</button>}
+            {workspacePage === 'dashboard' && activeView !== 'workflow' && !pendingAnalysis && <button className="ghost-button" title={!overview?.run && activeView !== 'compare' ? '완료된 Run이 있어야 보고서를 내보낼 수 있습니다.' : undefined} disabled={!dashboardReady || (!overview?.run && activeView !== 'compare')} onClick={() => void reportExport.open()}><Download /> 보고서 내보내기</button>}
+            {canEdit && workspacePage === 'dashboard' && activeView !== 'workflow' && !pendingAnalysis && <button className="ghost-button" disabled={!dashboardReady} onClick={() => setAssistantOpen(true)}><Sparkles /> 자연어로 개선</button>}
             {canEdit && (workspacePage === 'dashboard' && activeView === 'workflow' ? (editMode ? (
               <button className="primary-button" onClick={save}><Save /> {workflowEditorMode === 'layout' ? '대시보드 레이아웃 저장' : '단계 변경 저장'}</button>
             ) : <div className="workflow-top-edit-actions">
@@ -953,9 +966,9 @@ function App() {
         ) : <>
         <section className="content-head">
           <div>
-            <div className="eyebrow"><span>{activeView === 'workflow' ? 'REQUEST MONITORING' : 'PROJECT 24-071'}</span><span>•</span><span>{activeView === 'workflow' ? selectedWorkflow?.request.category ?? 'UNASSIGNED' : overview!.load_case.analysis_type}</span></div>
-            <h1>{activeView === 'workflow' ? `${workflowProjectName} 해석 의뢰 현황` : `${overview!.load_case.product_name} 불량 분석`}</h1>
-            <p>{activeView === 'workflow' ? workflowTitle : overview!.load_case.request_title}</p>
+            <div className="eyebrow"><span>{activeView === 'workflow' ? 'REQUEST MONITORING' : 'PROJECT 24-071'}</span><span>•</span><span>{activeView === 'workflow' ? selectedWorkflow?.request.category ?? 'UNASSIGNED' : analysisType}</span></div>
+            <h1>{activeView === 'workflow' ? `${workflowProjectName} 해석 의뢰 현황` : `${analysisProjectName} 불량 분석`}</h1>
+            <p>{activeView === 'workflow' ? workflowTitle : analysisTitle}</p>
           </div>
           <div className="context-selectors">
             <label><span>프로젝트</span><select aria-label="프로젝트 선택" value={selectedProjectId} onChange={(event) => handleProjectChange(event.target.value)}>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
@@ -970,7 +983,7 @@ function App() {
           <div className="tab-line" />
         </section>
 
-        {activeView !== 'workflow' && <section className="analysis-subtabs"><div><span>상세 분석</span><b>/</b><strong>{overview!.load_case.request_title}</strong></div><nav aria-label="불량 분석 하위 탭">
+        {activeView !== 'workflow' && !pendingAnalysis && <section className="analysis-subtabs"><div><span>상세 분석</span><b>/</b><strong>{overview!.load_case.request_title}</strong></div><nav aria-label="불량 분석 하위 탭">
           {analysisTabs.map((page) => <div className="analysis-tab-group" key={page.id}><button className={`analysis-tab ${activeDashboardId === page.id ? 'active' : ''}`} onClick={() => switchAnalysisPage(page)}>{page.page.analysis_key === 'open_cell' ? <Activity /> : page.page.analysis_key === 'chassis_rear' ? <BarChart3 /> : page.page.analysis_key === 'run_comparison' ? <MessageSquareText /> : <LayoutDashboard />} {page.name} <span>{page.page.analysis_key === 'open_cell' ? overview!.analysis_verdicts.open_cell : page.page.analysis_key === 'chassis_rear' ? overview!.analysis_verdicts.chassis_rear : page.page.analysis_key === 'run_comparison' ? 'SYSTEM' : page.page.status.toUpperCase()}</span></button></div>)}
           <label className="analysis-page-jump"><span>페이지</span><select aria-label="상세 분석 페이지 선택" value={activeAnalysisPage?.id ?? analysisTabs[0]?.id ?? ''} onChange={(event) => { const page = analysisTabs.find((item) => item.id === event.target.value); if (page) switchAnalysisPage(page) }}>{analysisTabs.map((page) => <option key={page.id} value={page.id}>{page.name}</option>)}</select></label>
           {canManagePages && <button className="analysis-page-manage-button" onClick={() => setPageManagerOpen(true)}><Plus /> 분석 페이지 관리</button>}
@@ -991,7 +1004,7 @@ function App() {
           </div>
         )}
 
-        {activeView !== 'workflow' ? <Suspense fallback={<FeatureScreenFallback />}><ResultsWorkspace
+        {pendingAnalysis ? <Suspense fallback={<FeatureScreenFallback />}><PendingAnalysisWorkspace projectName={analysisProjectName} requestTitle={analysisTitle} onOpenData={() => navigateWorkspace('data')} /></Suspense> : activeView !== 'workflow' ? <Suspense fallback={<FeatureScreenFallback />}><ResultsWorkspace
           activeView={activeView}
           canEdit={canEdit}
           canManageThresholds={canManagePages}
