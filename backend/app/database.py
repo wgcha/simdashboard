@@ -55,6 +55,28 @@ def initialize_database() -> None:
 def _initialize_duckdb_legacy() -> None:
     """Legacy DDL/compatibility bootstrap retained for the DuckDB dev adapter."""
     with connect() as conn:
+        profile_exists = bool(conn.execute("SELECT 1 FROM information_schema.tables WHERE table_name='project_request_type_result_profiles'").fetchone())
+        profile_columns = _duckdb_columns(conn, "project_request_type_result_profiles") if profile_exists else {}
+        if profile_columns and "binding_version" not in profile_columns:
+            conn.execute("BEGIN")
+            try:
+                conn.execute("""CREATE TABLE project_request_type_result_profiles_revised (
+                    project_id VARCHAR NOT NULL, request_type_id VARCHAR NOT NULL,
+                    request_type_version INTEGER NOT NULL, binding_version INTEGER NOT NULL,
+                    template_id VARCHAR NOT NULL, template_version INTEGER NOT NULL,
+                    overrides_json JSON NOT NULL, required_data_contracts_json JSON NOT NULL,
+                    bound_by VARCHAR NOT NULL, bound_at TIMESTAMP NOT NULL,
+                    PRIMARY KEY (project_id, request_type_id, request_type_version, binding_version))""")
+                conn.execute("""INSERT INTO project_request_type_result_profiles_revised
+                    SELECT project_id, request_type_id, request_type_version, 1, template_id, template_version,
+                           overrides_json, required_data_contracts_json, bound_by, bound_at
+                    FROM project_request_type_result_profiles""")
+                conn.execute("DROP TABLE project_request_type_result_profiles")
+                conn.execute("ALTER TABLE project_request_type_result_profiles_revised RENAME TO project_request_type_result_profiles")
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS projects (
@@ -632,6 +654,59 @@ def _initialize_duckdb_legacy() -> None:
                 CHECK (source_type IN ('EXTERNAL_SYSTEM', 'DEPARTMENT_HEAD'))
             );
 
+            CREATE TABLE IF NOT EXISTS analysis_template_versions (
+                template_id VARCHAR NOT NULL,
+                version INTEGER NOT NULL,
+                scope_kind VARCHAR NOT NULL,
+                project_id VARCHAR,
+                display_name VARCHAR NOT NULL,
+                description VARCHAR NOT NULL,
+                lifecycle_status VARCHAR NOT NULL,
+                page_definitions_json JSON NOT NULL,
+                created_by VARCHAR NOT NULL,
+                created_at TIMESTAMP NOT NULL,
+                PRIMARY KEY (template_id, version),
+                CHECK (scope_kind IN ('SYSTEM', 'PROJECT')),
+                CHECK (lifecycle_status IN ('DRAFT', 'PUBLISHED', 'ARCHIVED'))
+            );
+
+            CREATE TABLE IF NOT EXISTS request_type_result_profiles (
+                request_type_id VARCHAR NOT NULL,
+                request_type_version INTEGER NOT NULL,
+                template_id VARCHAR NOT NULL,
+                template_version INTEGER NOT NULL,
+                overrides_json JSON NOT NULL,
+                required_data_contracts_json JSON NOT NULL,
+                PRIMARY KEY (request_type_id, request_type_version)
+            );
+
+            CREATE TABLE IF NOT EXISTS project_request_type_result_profiles (
+                project_id VARCHAR NOT NULL,
+                request_type_id VARCHAR NOT NULL,
+                request_type_version INTEGER NOT NULL,
+                binding_version INTEGER NOT NULL,
+                template_id VARCHAR NOT NULL,
+                template_version INTEGER NOT NULL,
+                overrides_json JSON NOT NULL,
+                required_data_contracts_json JSON NOT NULL,
+                bound_by VARCHAR NOT NULL,
+                bound_at TIMESTAMP NOT NULL,
+                PRIMARY KEY (project_id, request_type_id, request_type_version, binding_version)
+            );
+
+            CREATE TABLE IF NOT EXISTS request_result_layout_snapshots (
+                request_id VARCHAR PRIMARY KEY,
+                source_request_type_id VARCHAR NOT NULL,
+                source_request_type_version INTEGER NOT NULL,
+                source_template_id VARCHAR NOT NULL,
+                source_template_version INTEGER NOT NULL,
+                snapshot_json JSON NOT NULL,
+                snapshot_reason VARCHAR NOT NULL,
+                created_by VARCHAR NOT NULL,
+                created_at TIMESTAMP NOT NULL,
+                CHECK (snapshot_reason IN ('REQUEST_CREATED', 'LEGACY_ASSIGNED', 'MIGRATED'))
+            );
+
             CREATE TABLE IF NOT EXISTS request_work_items (
                 id VARCHAR PRIMARY KEY,
                 request_id VARCHAR NOT NULL,
@@ -827,6 +902,9 @@ def _initialize_duckdb_legacy() -> None:
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_batch_profile_task_version ON batch_path_profiles(task_type_id, task_type_version)")
         conn.execute("ALTER TABLE batch_path_profiles ADD COLUMN IF NOT EXISTS version INTEGER DEFAULT 1")
         conn.execute("CREATE INDEX IF NOT EXISTS ix_media_assets_blob_id ON media_assets(blob_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_analysis_template_versions_status ON analysis_template_versions(template_id, lifecycle_status, version DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_request_result_layout_snapshots_template ON request_result_layout_snapshots(source_template_id, source_template_version)")
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_project_result_profiles_latest ON project_request_type_result_profiles(project_id, request_type_id, request_type_version, binding_version DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS ix_drop_video_assets_blob_id ON drop_video_assets(blob_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS ix_drop_video_assets_load_case ON drop_video_assets(load_case_id, sort_order)")
         conn.execute("UPDATE request_work_items SET progress=CASE WHEN status='COMPLETED' THEN 100 ELSE COALESCE(progress, 0) END")
@@ -1246,7 +1324,7 @@ def ensure_local_development_identity(conn: Any) -> None:
 
 
 def ensure_default_content(conn: Any) -> None:
-    from .repositories.workbench import ensure_default_workbench_catalog, ensure_seed_request_work_plans
+    from .repositories.workbench import ensure_default_workbench_catalog, ensure_seed_legacy_result_layout_assignment, ensure_seed_request_work_plans
 
     count = conn.execute("SELECT count(*) FROM projects").fetchone()[0]
     if count == 0:
@@ -1274,6 +1352,7 @@ def ensure_default_content(conn: Any) -> None:
     ensure_workspace_layouts(conn)
     ensure_default_workbench_catalog(conn)
     ensure_seed_request_work_plans(conn)
+    ensure_seed_legacy_result_layout_assignment(conn)
     chassis_layout = {
         "id": "dashboard-chassis-default",
         "name": "Chassis Rear 영구변형 기본 분석",

@@ -8,6 +8,8 @@ from uuid import uuid4
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from ..modules.access_control import (
+    DASHBOARD_EDIT,
+    PROJECT_DATA_VIEW,
     REQUEST_EDIT,
     SYSTEM_CATALOG_MANAGE,
     WORKFLOW_EDIT,
@@ -19,7 +21,7 @@ from ..modules.access_control import (
 )
 from ..database_connection import connect, rows
 from ..repositories.workbench import WorkbenchRepository
-from ..schemas.workbench import BatchDispatchCreate, BatchProfileInput, DemoRunCreate, RequestTypeAssignmentInput, RequestTypeVersionCreate, TaskTypeVersionCreate, WorkItemAssigneeUpdate, WorkItemComplete, WorkItemProgress, WorkItemStart
+from ..schemas.workbench import AnalysisTemplateVersionCreate, BatchDispatchCreate, BatchProfileInput, DemoRunCreate, RequestTypeAssignmentInput, RequestTypeVersionCreate, ResultProfileInput, TaskTypeVersionCreate, WorkItemAssigneeUpdate, WorkItemComplete, WorkItemProgress, WorkItemStart
 from ..security import write_audit_event
 from ..services.batch_execution import BatchPreflightError, preflight_batch_profile, validate_profile_definition
 from ..services.demo_runner import DemoRunnerService, WorkbenchValidationError, _topological_nodes
@@ -45,6 +47,17 @@ def _audit_execution_override(request: Request, conn: Any, operation: str) -> No
 
 def _bad_request(exc: ValueError) -> HTTPException:
     return HTTPException(status_code=400, detail=str(exc))
+
+
+def _create_request_type_version_atomically(conn: Any, repository: WorkbenchRepository, data: dict[str, Any]) -> dict[str, Any]:
+    conn.execute("BEGIN TRANSACTION")
+    try:
+        saved = repository.create_request_type_version(data)
+        conn.execute("COMMIT")
+        return saved
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
 
 
 def _is_admin(request: Request) -> bool:
@@ -103,9 +116,10 @@ def update_task_type(task_type_id: str, payload: TaskTypeVersionCreate, request:
     data = payload.model_dump()
     data["id"] = task_type_id
     with connect() as conn:
-        if not conn.execute("SELECT 1 FROM task_type_versions WHERE id=? LIMIT 1", [task_type_id]).fetchone():
+        repository = WorkbenchRepository(conn)
+        if not repository.task_type_exists(task_type_id):
             raise HTTPException(404, "수행 작업 유형을 찾을 수 없습니다.")
-        return WorkbenchRepository(conn).create_task_type_version(data)
+        return repository.create_task_type_version(data)
 
 
 @router.delete("/admin/workbench/task-types/{task_type_id}")
@@ -121,6 +135,93 @@ def deactivate_task_type(task_type_id: str, request: Request) -> dict[str, str]:
 def list_request_types(all_versions: bool = Query(default=False)) -> list[dict[str, Any]]:
     with connect() as conn:
         return WorkbenchRepository(conn).list_request_types(all_versions=all_versions)
+
+
+@router.get("/workbench/analysis-templates")
+def list_analysis_templates(request: Request, all_versions: bool = Query(default=False), project_id: str | None = Query(default=None)) -> list[dict[str, Any]]:
+    with connect() as conn:
+        if project_id:
+            require_permission(
+                request,
+                DASHBOARD_EDIT if all_versions else PROJECT_DATA_VIEW,
+                project_id,
+                conn=conn,
+            )
+        elif all_versions:
+            require_permission(request, SYSTEM_CATALOG_MANAGE, conn=conn)
+        return WorkbenchRepository(conn).list_analysis_templates(
+            all_versions=all_versions,
+            project_id=project_id,
+        )
+
+
+@router.post("/admin/workbench/analysis-templates", status_code=201)
+def create_analysis_template(payload: AnalysisTemplateVersionCreate, request: Request) -> dict[str, Any]:
+    if payload.scope_kind == "PROJECT" and not payload.project_id:
+        raise HTTPException(422, "프로젝트 분석 템플릿에는 project_id가 필요합니다.")
+    with connect() as conn:
+        if payload.scope_kind == "PROJECT":
+            require_permission(request, DASHBOARD_EDIT, payload.project_id, conn=conn)
+        else:
+            require_permission(request, SYSTEM_CATALOG_MANAGE, conn=conn)
+        result = WorkbenchRepository(conn).create_analysis_template_version(payload.model_dump(), request.state.principal.display_name)
+        write_audit_event(request=request, principal=request.state.principal, status_code=201, action="ANALYSIS_TEMPLATE_VERSION_CREATED", detail={"template_id": result["template_id"], "version": result["version"]}, connection=conn)
+        return result
+
+
+@router.get("/workbench/request-types/{request_type_id}/{version}/result-profile")
+def get_result_profile(request_type_id: str, version: int, request: Request, project_id: str | None = Query(default=None)) -> dict[str, Any]:
+    with connect() as conn:
+        if project_id:
+            require_permission(request, PROJECT_DATA_VIEW, project_id, conn=conn)
+        else:
+            require_permission(request, SYSTEM_CATALOG_MANAGE, conn=conn)
+        repository = WorkbenchRepository(conn)
+        profile = repository.resolved_result_profile_for(project_id, request_type_id, version) if project_id else repository.result_profile_for(request_type_id, version)
+        return profile or {"request_type_id": request_type_id, "request_type_version": version, "status": "UNCONFIGURED"}
+
+
+@router.put("/projects/{project_id}/admin/workbench/request-types/{request_type_id}/{version}/result-profile", status_code=201)
+def save_project_result_profile(project_id: str, request_type_id: str, version: int, payload: ResultProfileInput, request: Request) -> dict[str, Any]:
+    with connect() as conn:
+        require_permission(request, DASHBOARD_EDIT, project_id, conn=conn)
+        try:
+            result = WorkbenchRepository(conn).save_project_result_profile(
+                project_id, request_type_id, version, payload.model_dump(), bound_by=request.state.principal.display_name
+            )
+        except PermissionError as exc:
+            raise HTTPException(403, detail={"code": str(exc)}) from exc
+        except LookupError as exc:
+            raise HTTPException(404, detail={"code": str(exc)}) from exc
+        except ValueError as exc:
+            raise _bad_request(exc) from exc
+        write_audit_event(request=request, principal=request.state.principal, status_code=201, action="PROJECT_RESULT_PROFILE_BOUND", detail={"project_id": project_id, "request_type_id": request_type_id, "request_type_version": version, "template_id": result["template_id"], "template_version": result["template_version"]}, connection=conn)
+        return result
+
+
+@router.get("/workbench/requests/{request_id}/result-layout")
+def get_request_result_layout(
+    request_id: str,
+    request: Request,
+    load_case_id: str | None = Query(default=None),
+) -> dict[str, Any]:
+    with connect() as conn:
+        repository = WorkbenchRepository(conn)
+        context = repository.request_context(request_id)
+        if not context:
+            raise HTTPException(404, detail={"code": "REQUEST_NOT_FOUND", "request_id": request_id})
+        require_permission(request, PROJECT_DATA_VIEW, context["project_id"], conn=conn)
+        if load_case_id and not repository.load_case_belongs_to_request(request_id, load_case_id):
+            raise HTTPException(404, detail={"code": "LOAD_CASE_NOT_FOUND", "load_case_id": load_case_id})
+        snapshot = repository.result_layout_snapshot(request_id)
+        if not snapshot:
+            return {"request_id": request_id, "status": "UNCONFIGURED", "message": "이 의뢰에는 결과 화면 구성이 지정되지 않았습니다."}
+        snapshot["bindings"] = repository.result_layout_bindings(request_id, load_case_id)
+        # No load-case/result heuristic is allowed here. Only a deliberately
+        # migrated LEGACY_ASSIGNED snapshot may retain its old domain route.
+        if snapshot.get("snapshot_reason") == "LEGACY_ASSIGNED":
+            snapshot["compatibility"] = {"route_kind": "DOMAIN", "renderer": "LEGACY_DOMAIN"}
+        return snapshot
 
 
 @router.post("/admin/workbench/request-types", status_code=201)
@@ -143,7 +244,9 @@ def create_request_type(payload: RequestTypeVersionCreate, request: Request) -> 
         # IDs are server-owned.  Ignore the optional legacy field on create.
         data["id"] = None
         try:
-            return repository.create_request_type_version(data)
+            return _create_request_type_version_atomically(conn, repository, data)
+        except (LookupError, ValueError) as exc:
+            raise _bad_request(exc) from exc
         except Exception as exc:
             if "unique" in str(exc).lower() or "duplicate" in str(exc).lower():
                 raise HTTPException(409, "작업 유형 ID 생성이 충돌했습니다. 다시 시도해 주세요.") from exc
@@ -168,9 +271,12 @@ def update_request_type(request_type_id: str, payload: RequestTypeVersionCreate,
         missing = [f"{item.id} v{item.version}" for item in payload.allowed_task_types if not (task := repository.get_task_type(item.id, item.version)) or not task["is_active"]]
         if missing:
             raise HTTPException(400, f"Task Type 버전을 찾을 수 없습니다: {', '.join(missing)}")
-        if not conn.execute("SELECT 1 FROM request_type_versions WHERE id=? LIMIT 1", [request_type_id]).fetchone():
+        if not repository.request_type_exists(request_type_id):
             raise HTTPException(404, "작업 유형을 찾을 수 없습니다.")
-        return repository.create_request_type_version(data)
+        try:
+            return _create_request_type_version_atomically(conn, repository, data)
+        except (LookupError, ValueError) as exc:
+            raise _bad_request(exc) from exc
 
 
 @router.delete("/admin/workbench/request-types/{request_type_id}")
@@ -214,11 +320,12 @@ def _save_batch_profile(payload: BatchProfileInput, request: Request, profile_id
     except BatchPreflightError as exc:
         raise HTTPException(422, detail={"code": exc.code, "message": str(exc)}) from exc
     with connect() as conn:
-        if profile_id is not None and not conn.execute("SELECT 1 FROM batch_path_profiles WHERE id=? LIMIT 1", [profile_id]).fetchone():
+        repository = WorkbenchRepository(conn)
+        if profile_id is not None and not repository.get_batch_profile(profile_id):
             raise HTTPException(404, "배치 실행 정의를 찾을 수 없습니다.")
         conn.execute("BEGIN TRANSACTION")
         try:
-            saved = WorkbenchRepository(conn).upsert_batch_profile(data)
+            saved = repository.upsert_batch_profile(data)
             conn.execute("COMMIT")
             return saved
         except ValueError as exc:
@@ -257,10 +364,9 @@ def deactivate_batch_profile(profile_id: str, request: Request) -> dict[str, str
 def get_work_item_detail(item_id: str, request: Request) -> dict[str, Any]:
     with connect() as conn:
         repository = WorkbenchRepository(conn)
-        items = rows(conn.execute("SELECT * FROM request_work_items WHERE id=?", [item_id]))
-        if not items:
+        item = repository.work_item(item_id)
+        if not item:
             raise HTTPException(404, detail={"code": "WORK_ITEM_NOT_FOUND", "item_id": item_id})
-        item = items[0]
         task_type = repository.get_task_type(item["task_type_id"], int(item["task_type_version"]))
         profile = repository.get_batch_profile_for_task(item["task_type_id"], int(item["task_type_version"]))
         sanitized_profile = _sanitize_batch_profile(profile, request) if profile else None

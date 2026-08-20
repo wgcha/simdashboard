@@ -1,3 +1,13 @@
+export type { AnalysisTemplateVersion, RequestResultLayout, ResultLayoutSnapshot, ResultProfile } from '../../shared/api/resultLayouts'
+
+export type ResultProfileInput = {
+  template_id: string
+  template_version: number
+  included_widget_ids: string[] | null
+  overrides: Record<string, unknown>
+  required_data_contracts: string[]
+}
+
 export type WorkbenchTaskRef = { id: string; version: number }
 
 export type WorkbenchTaskType = {
@@ -31,6 +41,7 @@ export type WorkbenchRequestType = {
   allowed_task_types: WorkbenchTaskRef[]
   default_workflow: { nodes: WorkbenchNode[] }
   match_rules: Record<string, unknown>
+  result_profile?: ResultProfileInput | null
   is_active: boolean
   created_at: string
 }

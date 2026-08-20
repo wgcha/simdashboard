@@ -186,8 +186,8 @@ def test_duckdb_legacy_upgrade_backfills_roles_owners_and_menu_seed(tmp_path):
         assert conn.execute("SELECT owner_user_id FROM request_steps WHERE id='ambiguous-owner'").fetchone()[0] is None
         assert conn.execute("SELECT owner_user_id FROM request_work_items WHERE id='username-owner'").fetchone()[0] == "viewer-a"
         assert conn.execute("SELECT version FROM menu_policy_state WHERE id='global'").fetchone()[0] == 1
-        assert conn.execute("SELECT count(*) FROM menu_definitions").fetchone()[0] == 14
-        assert conn.execute("SELECT count(*) FROM role_menu_policies").fetchone()[0] == 42
+        assert conn.execute("SELECT count(*) FROM menu_definitions").fetchone()[0] == 15
+        assert conn.execute("SELECT count(*) FROM role_menu_policies").fetchone()[0] == 45
 
         # The one-time data conversion must not re-promote or auto-grant
         # accounts and resources created after the 0007 marker.

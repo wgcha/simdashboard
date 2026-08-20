@@ -47,6 +47,48 @@ class WorkflowDefinitionDraft(StrictModel):
     nodes: list[WorkflowNodeDraft] = Field(min_length=1, max_length=32)
 
 
+class ResultProfileInput(StrictModel):
+    """Versioned selection and configuration for a published result template."""
+
+    template_id: str = Field(min_length=3, max_length=80, pattern=r"^[a-z][a-z0-9_-]*$")
+    template_version: int = Field(ge=1)
+    included_widget_ids: list[str] | None = Field(default=None, max_length=120)
+    overrides: dict[str, Any] = Field(default_factory=dict)
+    required_data_contracts: list[str] = Field(default_factory=list, max_length=32)
+
+
+class AnalysisTemplateVersionCreate(StrictModel):
+    # Page JSON is validated as DashboardDefinition so the existing 12-column
+    # dashboard model remains the single result-layout contract.
+    id: str | None = Field(default=None, min_length=3, max_length=80, pattern=r"^[a-z][a-z0-9_-]*$")
+    display_name: str = Field(min_length=2, max_length=120)
+    description: str = Field(default="", max_length=500)
+    page_definitions: list[dict[str, Any]] = Field(min_length=1, max_length=40)
+    lifecycle_status: Literal["DRAFT", "PUBLISHED", "ARCHIVED"] = "DRAFT"
+    scope_kind: Literal["SYSTEM", "PROJECT"] = "SYSTEM"
+    project_id: str | None = Field(default=None, min_length=1, max_length=120)
+
+    @field_validator("page_definitions")
+    @classmethod
+    def validate_pages(cls, pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        from .api import DashboardDefinition
+
+        identifiers: set[str] = set()
+        widget_identifiers: set[str] = set()
+        validated: list[dict[str, Any]] = []
+        for page in pages:
+            definition = DashboardDefinition.model_validate(page).model_dump()
+            if definition["id"] in identifiers:
+                raise ValueError("분석 템플릿 페이지 ID는 중복될 수 없습니다.")
+            identifiers.add(definition["id"])
+            for widget in definition["widgets"]:
+                if widget["id"] in widget_identifiers:
+                    raise ValueError("분석 템플릿 위젯 ID는 모든 페이지에서 고유해야 합니다.")
+                widget_identifiers.add(widget["id"])
+            validated.append(definition)
+        return validated
+
+
 class TaskTypeVersionCreate(StrictModel):
     # Optional for compatibility; new definitions receive a server-generated id.
     id: str | None = Field(default=None, min_length=3, max_length=80, pattern=r"^[a-z][a-z0-9_-]*$")
@@ -76,6 +118,7 @@ class RequestTypeVersionCreate(StrictModel):
     allowed_task_types: list[TaskTypeRef] = Field(min_length=1, max_length=32)
     default_workflow: WorkflowDefinitionDraft
     match_rules: dict[str, Any] = Field(default_factory=dict)
+    result_profile: ResultProfileInput | None = None
     is_active: bool = True
 
     @field_validator("match_rules")

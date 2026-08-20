@@ -10,6 +10,15 @@ from ..services.identifiers import slugify, unique_identifier
 
 
 DEMO_ARTIFACT_URL = "/assets/demo-workbench.svg"
+RESULT_PROFILE_OUTPUT_CONTRACTS: dict[str, frozenset[str]] = {
+    "LOAD_CASE": frozenset({"RESULT_MANIFEST", "POST_RESULT", "ANALYSIS_RUN_REFERENCE"}),
+    "RESULT_RUN": frozenset({"ANALYSIS_RUN_REFERENCE"}),
+    "SCALAR_RESULT": frozenset({"ANALYSIS_RUN_REFERENCE"}),
+    "TIME_SERIES": frozenset({"ANALYSIS_RUN_REFERENCE"}),
+    "CURVE": frozenset({"ANALYSIS_RUN_REFERENCE"}),
+    "MEDIA_ASSET": frozenset({"ANALYSIS_RUN_REFERENCE"}),
+}
+
 
 DEFAULT_TASK_TYPES: tuple[dict[str, Any], ...] = (
     {"id": "cad-prepare", "kind": "CAD_PREPARE", "display_name": "CAD/형상 준비", "inputs": ["CAD_SOURCE"], "outputs": ["CAD_GEOMETRY"]},
@@ -80,6 +89,32 @@ def _decoded(value: Any) -> Any:
         except json.JSONDecodeError:
             pass
     return value
+
+
+def _canonical_contracts(values: Any) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    return list(dict.fromkeys(
+        value.strip().upper()
+        for value in values
+        if isinstance(value, str) and value.strip()
+    ))
+
+
+def _canonicalize_page_contracts(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized_pages: list[dict[str, Any]] = []
+    for page in pages:
+        normalized_page = {**page}
+        normalized_widgets: list[dict[str, Any]] = []
+        for widget in page.get("widgets", []):
+            normalized_widget = dict(widget)
+            settings = normalized_widget.get("settings")
+            if isinstance(settings, dict) and isinstance(settings.get("data_contracts"), list):
+                normalized_widget["settings"] = {**settings, "data_contracts": _canonical_contracts(settings["data_contracts"])}
+            normalized_widgets.append(normalized_widget)
+        normalized_page["widgets"] = normalized_widgets
+        normalized_pages.append(normalized_page)
+    return normalized_pages
 
 
 def ensure_default_workbench_catalog(conn: Any) -> None:
@@ -167,6 +202,34 @@ def ensure_seed_request_work_plans(conn: Any) -> None:
         )
         conn.execute("UPDATE analysis_requests SET status='IN_PROGRESS' WHERE id=?", [request_id])
 
+def ensure_seed_legacy_result_layout_assignment(conn: Any) -> None:
+    """Persist the one known demo domain mapping; never infer it from result rows."""
+    repository = WorkbenchRepository(conn)
+    request_id = "request-drop-001"
+    if not repository.analysis_request_exists(request_id) or repository.result_layout_snapshot(request_id):
+        return
+    request_type = repository.get_request_type("design-reliability-validation", 1)
+    if not request_type:
+        return
+    snapshot = {
+        "template_id": "legacy-domain-dashboard",
+        "template_version": 1,
+        "template_name": "기존 낙하 상세 분석",
+        "request_type_id": request_type["id"],
+        "request_type_version": request_type["version"],
+        "pages": [],
+        "required_data_contracts": [],
+        "legacy_renderer": "LEGACY_DOMAIN",
+    }
+    conn.execute(
+        """INSERT INTO request_result_layout_snapshots
+            (request_id, source_request_type_id, source_request_type_version, source_template_id,
+             source_template_version, snapshot_json, snapshot_reason, created_by, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'LEGACY_ASSIGNED', ?, ?)""",
+        [request_id, request_type["id"], request_type["version"], "legacy-domain-dashboard", 1, json.dumps(snapshot, ensure_ascii=False), "seed-legacy-domain", _utcnow()],
+    )
+
+
 
 class WorkbenchRepository:
     def __init__(self, conn: Any):
@@ -197,6 +260,346 @@ class WorkbenchRepository:
             "match_rules": rules,
         }
 
+    @staticmethod
+    def _template_item(item: dict[str, Any]) -> dict[str, Any]:
+        return {**item, "page_definitions": _canonicalize_page_contracts(_decoded(item.pop("page_definitions_json")) or [])}
+
+    def list_analysis_templates(
+        self,
+        *,
+        all_versions: bool = False,
+        project_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        if all_versions:
+            if project_id:
+                sql = "SELECT * FROM analysis_template_versions WHERE (scope_kind='PROJECT' AND project_id=?) OR (scope_kind='SYSTEM' AND lifecycle_status='PUBLISHED')"
+                parameters: list[Any] = [project_id]
+            else:
+                sql = "SELECT * FROM analysis_template_versions WHERE scope_kind='SYSTEM'"
+                parameters = []
+            return [
+                self._template_item(item)
+                for item in rows(self.conn.execute(sql + " ORDER BY display_name, version DESC", parameters))
+            ]
+        scope_sql = "scope_kind='SYSTEM'"
+        scope_parameters: list[Any] = []
+        if project_id:
+            scope_sql = "(scope_kind='SYSTEM' OR (scope_kind='PROJECT' AND project_id=?))"
+            scope_parameters.append(project_id)
+        latest = (
+            "SELECT template_id, max(version) FROM analysis_template_versions "
+            f"WHERE lifecycle_status='PUBLISHED' AND {scope_sql} GROUP BY template_id"
+        )
+        sql = f"SELECT * FROM analysis_template_versions WHERE lifecycle_status='PUBLISHED' AND {scope_sql} AND (template_id, version) IN ({latest}) ORDER BY display_name, version DESC"
+        return [self._template_item(item) for item in rows(self.conn.execute(sql, scope_parameters * 2))]
+
+    def get_analysis_template(self, template_id: str, version: int) -> dict[str, Any] | None:
+        items = rows(self.conn.execute("SELECT * FROM analysis_template_versions WHERE template_id=? AND version=?", [template_id, version]))
+        return self._template_item(items[0]) if items else None
+
+    def create_analysis_template_version(self, payload: dict[str, Any], created_by: str) -> dict[str, Any]:
+        payload = dict(payload)
+        payload["id"] = payload.get("id") or unique_identifier(self.conn, "analysis_template_versions", "template_id", slugify(f"analysis-template-{payload['display_name']}", fallback="analysis-template"))
+        scope_kind = payload["scope_kind"]
+        project_id = payload.get("project_id")
+        if (scope_kind == "SYSTEM" and project_id is not None) or (scope_kind == "PROJECT" and not project_id):
+            raise ValueError("ANALYSIS_TEMPLATE_SCOPE_PROJECT_MISMATCH")
+        family = self.conn.execute("SELECT scope_kind, project_id FROM analysis_template_versions WHERE template_id=? ORDER BY version LIMIT 1", [payload["id"]]).fetchone()
+        if family and (family[0] != scope_kind or family[1] != project_id):
+            raise ValueError("ANALYSIS_TEMPLATE_FAMILY_SCOPE_IMMUTABLE")
+        payload["page_definitions"] = _canonicalize_page_contracts(payload["page_definitions"])
+        version = int(self.conn.execute("SELECT COALESCE(max(version), 0) FROM analysis_template_versions WHERE template_id=?", [payload["id"]]).fetchone()[0]) + 1
+        self.conn.execute(
+            """
+            INSERT INTO analysis_template_versions
+                (template_id, version, scope_kind, project_id, display_name, description,
+                 lifecycle_status, page_definitions_json, created_by, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [payload["id"], version, payload["scope_kind"], payload.get("project_id"), payload["display_name"], payload["description"], payload["lifecycle_status"], json.dumps(payload["page_definitions"], ensure_ascii=False), created_by, _utcnow()],
+        )
+        return self.get_analysis_template(payload["id"], version)  # type: ignore[return-value]
+
+    def _result_profile_item(
+        self, item: dict[str, Any], *, profile_scope: str, project_id: str | None
+    ) -> dict[str, Any] | None:
+        """Decode a profile record without widening a project template's scope."""
+        item = dict(item)
+        template = self.get_analysis_template(item["template_id"], int(item["template_version"]))
+        if not template:
+            return None
+        overrides = _decoded(item.pop("overrides_json")) or {}
+        return {
+            **item,
+            "template": template,
+            "included_widget_ids": overrides.get("included_widget_ids", []),
+            "overrides": overrides,
+            "required_data_contracts": _canonical_contracts(_decoded(item.pop("required_data_contracts_json")) or []),
+            "profile_scope": profile_scope,
+            "project_id": project_id,
+        }
+
+    def result_profile_for(self, request_type_id: str, request_type_version: int) -> dict[str, Any] | None:
+        records = rows(self.conn.execute("SELECT * FROM request_type_result_profiles WHERE request_type_id=? AND request_type_version=?", [request_type_id, request_type_version]))
+        return self._result_profile_item(records[0], profile_scope="SYSTEM_DEFAULT", project_id=None) if records else None
+
+    def project_result_profile_for(self, project_id: str, request_type_id: str, request_type_version: int) -> dict[str, Any] | None:
+        records = rows(self.conn.execute("SELECT * FROM project_request_type_result_profiles WHERE project_id=? AND request_type_id=? AND request_type_version=? ORDER BY binding_version DESC LIMIT 1", [project_id, request_type_id, request_type_version]))
+        return self._result_profile_item(records[0], profile_scope="PROJECT_OVERRIDE", project_id=project_id) if records else None
+
+    def resolved_result_profile_for(self, project_id: str, request_type_id: str, request_type_version: int) -> dict[str, Any] | None:
+        return self.project_result_profile_for(project_id, request_type_id, request_type_version) or self.result_profile_for(request_type_id, request_type_version)
+
+    @staticmethod
+    def _widget_data_contracts(template: dict[str, Any], included: set[str]) -> set[str]:
+        contracts: set[str] = set()
+        for page in template["page_definitions"]:
+            for widget in page.get("widgets", []):
+                if included and widget.get("id") not in included:
+                    continue
+                settings = widget.get("settings") if isinstance(widget.get("settings"), dict) else {}
+                for contract in settings.get("data_contracts", []):
+                    if isinstance(contract, str) and contract.strip():
+                        contracts.update(_canonical_contracts([contract]))
+        return contracts
+
+    def _workflow_output_contracts(self, nodes: list[dict[str, Any]]) -> set[str]:
+        outputs: set[str] = set()
+        for node in nodes:
+            task = self.get_task_type(
+                str(node.get("task_type_id", "")),
+                int(node.get("task_type_version", 0)),
+            )
+            if task:
+                outputs.update(_canonical_contracts(task["output_artifact_types"]))
+        return {
+            contract
+            for contract, artifacts in RESULT_PROFILE_OUTPUT_CONTRACTS.items()
+            if outputs.intersection(artifacts)
+        }
+
+    def _validate_result_profile(
+        self,
+        template: dict[str, Any],
+        payload: dict[str, Any],
+        workflow_nodes: list[dict[str, Any]],
+    ) -> list[str]:
+        available = {
+            str(widget["id"])
+            for page in template["page_definitions"]
+            for widget in page.get("widgets", [])
+        }
+        raw_included = payload.get("included_widget_ids")
+        included = (
+            sorted(available)
+            if raw_included is None
+            else list(dict.fromkeys(str(item) for item in raw_included))
+        )
+        if not included:
+            raise ValueError("RESULT_PROFILE_EMPTY_LAYOUT")
+        if not set(included) <= available:
+            raise ValueError("RESULT_PROFILE_UNKNOWN_WIDGET")
+        selected = set(included)
+        required = {
+            str(widget["id"])
+            for page in template["page_definitions"]
+            for widget in page.get("widgets", [])
+            if isinstance(widget.get("settings"), dict)
+            and (
+                widget["settings"].get("required") is True
+                or widget["settings"].get("required_widget") is True
+            )
+        }
+        if not required <= selected:
+            raise ValueError("RESULT_PROFILE_REQUIRED_WIDGET_MISSING")
+        requested = set(_canonical_contracts(payload.get("required_data_contracts") or []))
+        requested.update(self._widget_data_contracts(template, selected))
+        unknown = requested.difference(RESULT_PROFILE_OUTPUT_CONTRACTS)
+        if unknown:
+            raise ValueError(f"RESULT_PROFILE_UNKNOWN_DATA_CONTRACT:{','.join(sorted(unknown))}")
+        unavailable = requested.difference(self._workflow_output_contracts(workflow_nodes))
+        if unavailable:
+            raise ValueError(
+                "RESULT_PROFILE_WORKFLOW_OUTPUT_MISSING:"
+                f"{','.join(sorted(unavailable))}"
+            )
+        return included
+
+    def save_result_profile(self, request_type_id: str, request_type_version: int, payload: dict[str, Any]) -> dict[str, Any]:
+        template = self.get_analysis_template(payload["template_id"], int(payload["template_version"]))
+        if not template or template["lifecycle_status"] != "PUBLISHED":
+            raise LookupError("ANALYSIS_TEMPLATE_NOT_PUBLISHED")
+        if template["scope_kind"] != "SYSTEM":
+            raise ValueError("SYSTEM_RESULT_PROFILE_REQUIRES_SYSTEM_TEMPLATE")
+        request_type = self.get_request_type(request_type_id, request_type_version)
+        if not request_type:
+            raise LookupError("REQUEST_TYPE_NOT_FOUND")
+        included = self._validate_result_profile(
+            template,
+            payload,
+            request_type["default_workflow"].get("nodes", []),
+        )
+        overrides = {**payload.get("overrides", {}), "included_widget_ids": included}
+        required_contracts = _canonical_contracts(payload.get("required_data_contracts") or [])
+        self.conn.execute(
+            """INSERT INTO request_type_result_profiles
+                (request_type_id, request_type_version, template_id, template_version, overrides_json, required_data_contracts_json)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT (request_type_id, request_type_version) DO UPDATE SET
+                 template_id=excluded.template_id, template_version=excluded.template_version,
+                 overrides_json=excluded.overrides_json, required_data_contracts_json=excluded.required_data_contracts_json""",
+            [request_type_id, request_type_version, payload["template_id"], payload["template_version"], json.dumps(overrides, ensure_ascii=False), json.dumps(required_contracts, ensure_ascii=False)],
+        )
+        return self.result_profile_for(request_type_id, request_type_version)  # type: ignore[return-value]
+
+    def save_project_result_profile(self, project_id: str, request_type_id: str, request_type_version: int, payload: dict[str, Any], *, bound_by: str) -> dict[str, Any]:
+        if not self.conn.execute("SELECT 1 FROM projects WHERE id=?", [project_id]).fetchone():
+            raise LookupError("PROJECT_NOT_FOUND")
+        template = self.get_analysis_template(payload["template_id"], int(payload["template_version"]))
+        if not template or template["lifecycle_status"] != "PUBLISHED":
+            raise LookupError("ANALYSIS_TEMPLATE_NOT_PUBLISHED")
+        if template["scope_kind"] == "PROJECT" and template["project_id"] != project_id:
+            raise PermissionError("PROJECT_RESULT_TEMPLATE_SCOPE_MISMATCH")
+        request_type = self.get_request_type(request_type_id, request_type_version)
+        if not request_type:
+            raise LookupError("REQUEST_TYPE_NOT_FOUND")
+        included = self._validate_result_profile(template, payload, request_type["default_workflow"].get("nodes", []))
+        overrides = {**payload.get("overrides", {}), "included_widget_ids": included}
+        required_contracts = _canonical_contracts(payload.get("required_data_contracts") or [])
+        binding_version = int(self.conn.execute(
+            "SELECT COALESCE(max(binding_version), 0) + 1 FROM project_request_type_result_profiles WHERE project_id=? AND request_type_id=? AND request_type_version=?",
+            [project_id, request_type_id, request_type_version],
+        ).fetchone()[0])
+        self.conn.execute(
+            """INSERT INTO project_request_type_result_profiles
+                (project_id, request_type_id, request_type_version, binding_version, template_id, template_version,
+                 overrides_json, required_data_contracts_json, bound_by, bound_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [project_id, request_type_id, request_type_version, binding_version, payload["template_id"], payload["template_version"], json.dumps(overrides, ensure_ascii=False), json.dumps(required_contracts, ensure_ascii=False), bound_by, _utcnow()],
+        )
+        return self.project_result_profile_for(project_id, request_type_id, request_type_version)  # type: ignore[return-value]
+
+    def result_layout_snapshot(self, request_id: str) -> dict[str, Any] | None:
+        records = rows(self.conn.execute("SELECT * FROM request_result_layout_snapshots WHERE request_id=?", [request_id]))
+        if not records:
+            return None
+        item = records[0]
+        item["snapshot"] = _decoded(item.pop("snapshot_json")) or {}
+        return item
+
+    def load_case_belongs_to_request(self, request_id: str, load_case_id: str) -> bool:
+        return bool(
+            self.conn.execute(
+                """
+                SELECT 1
+                FROM load_cases lc
+                JOIN analysis_requests ar ON ar.id=lc.request_id
+                WHERE lc.id=? AND lc.request_id=?
+                """,
+                [load_case_id, request_id],
+            ).fetchone()
+        )
+
+    def result_layout_bindings(self, request_id: str, load_case_id: str | None = None) -> dict[str, Any]:
+        load_case_filter = " AND lc.id=?" if load_case_id else ""
+        parameters = [request_id, *([load_case_id] if load_case_id else [])]
+        load_cases = rows(
+            self.conn.execute(
+                """
+                SELECT lc.id, lc.name, lc.analysis_type, lc.status
+                FROM load_cases lc
+                WHERE lc.request_id=?
+                """ + load_case_filter + " ORDER BY lc.created_at",
+                parameters,
+            )
+        )
+        runs = rows(
+            self.conn.execute(
+                """
+                SELECT ar.id, ar.run_no, ar.solver, ar.status, ar.completed_at,
+                       lc.id AS load_case_id, lc.name AS load_case_name
+                FROM analysis_runs ar
+                JOIN load_cases lc ON lc.id=ar.load_case_id
+                WHERE lc.request_id=?
+                """ + load_case_filter + """
+                ORDER BY COALESCE(ar.completed_at, ar.started_at) DESC NULLS LAST, ar.run_no DESC
+                """,
+                parameters,
+            )
+        )
+        latest_run = runs[0] if runs else None
+        scalars: list[dict[str, Any]] = []
+        if latest_run:
+            scalar_rows = rows(
+                self.conn.execute(
+                    """
+                    SELECT variable_key, display_name, value_double, value_integer, value_text,
+                           unit, threshold_double, verdict
+                    FROM scalar_results WHERE analysis_run_id=?
+                    ORDER BY display_name, variable_key LIMIT 100
+                    """,
+                    [latest_run["id"]],
+                )
+            )
+            for item in scalar_rows:
+                value = item["value_double"]
+                if value is None:
+                    value = item["value_integer"]
+                if value is None:
+                    value = item["value_text"]
+                scalars.append(
+                    {
+                        "variable_key": item["variable_key"],
+                        "display_name": item["display_name"],
+                        "value": value,
+                        "unit": item["unit"],
+                        "threshold": item["threshold_double"],
+                        "verdict": item["verdict"],
+                    }
+                )
+        available: set[str] = set()
+        if load_cases:
+            available.add("LOAD_CASE")
+        if latest_run:
+            available.add("RESULT_RUN")
+        if scalars:
+            available.add("SCALAR_RESULT")
+        failed = latest_run and str(latest_run["status"]).upper() in {"FAILED", "ERROR"}
+        return {
+            "available_data_contracts": sorted(available),
+            "load_cases": load_cases,
+            "latest_result_run": latest_run,
+            "scalars": scalars,
+            "error": "최근 결과 실행이 실패했습니다." if failed else None,
+        }
+
+    def create_result_layout_snapshot(self, request_id: str, request_type: dict[str, Any], created_by: str) -> dict[str, Any] | None:
+        if self.result_layout_snapshot(request_id):
+            raise FileExistsError("REQUEST_RESULT_LAYOUT_SNAPSHOT_EXISTS")
+        project_row = self.conn.execute("SELECT project_id FROM analysis_requests WHERE id=?", [request_id]).fetchone()
+        if not project_row:
+            raise LookupError("REQUEST_NOT_FOUND")
+        profile = self.resolved_result_profile_for(str(project_row[0]), request_type["id"], int(request_type["version"]))
+        if not profile:
+            return None
+        included = set(profile.get("included_widget_ids") or [])
+        pages = []
+        for page in profile["template"]["page_definitions"]:
+            copied = {**page, "widgets": [dict(widget) for widget in page.get("widgets", []) if not included or widget["id"] in included]}
+            if copied["widgets"]:
+                pages.append(copied)
+        if not pages:
+            raise ValueError("RESULT_PROFILE_EMPTY_LAYOUT")
+        snapshot = {"template_id": profile["template_id"], "template_version": profile["template_version"], "template_name": profile["template"]["display_name"], "request_type_id": request_type["id"], "request_type_version": request_type["version"], "profile_scope": profile["profile_scope"], "profile_project_id": profile["project_id"], "profile_binding_version": profile.get("binding_version"), "pages": pages, "required_data_contracts": _canonical_contracts(profile["required_data_contracts"])}
+        self.conn.execute(
+            """INSERT INTO request_result_layout_snapshots
+                (request_id, source_request_type_id, source_request_type_version, source_template_id,
+                 source_template_version, snapshot_json, snapshot_reason, created_by, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, 'REQUEST_CREATED', ?, ?)""",
+            [request_id, request_type["id"], request_type["version"], profile["template_id"], profile["template_version"], json.dumps(snapshot, ensure_ascii=False), created_by, _utcnow()],
+        )
+        return self.result_layout_snapshot(request_id)
+
     def _next_identifier(self, prefix: str, seed: str, table: str) -> str:
         return unique_identifier(self.conn, table, "id", slugify(f"{prefix}-{seed}", fallback=prefix))
 
@@ -210,6 +613,9 @@ class WorkbenchRepository:
     def get_task_type(self, task_type_id: str, version: int) -> dict[str, Any] | None:
         items = rows(self.conn.execute("SELECT * FROM task_type_versions WHERE id=? AND version=?", [task_type_id, version]))
         return self._task_item(items[0]) if items else None
+
+    def task_type_exists(self, task_type_id: str) -> bool:
+        return bool(self.conn.execute("SELECT 1 FROM task_type_versions WHERE id=? LIMIT 1", [task_type_id]).fetchone())
 
     def create_task_type_version(self, payload: dict[str, Any]) -> dict[str, Any]:
         payload = dict(payload)
@@ -251,6 +657,9 @@ class WorkbenchRepository:
         items = rows(self.conn.execute("SELECT * FROM request_type_versions WHERE id=? AND version=?", [request_type_id, version]))
         return self._request_item(items[0]) if items else None
 
+    def request_type_exists(self, request_type_id: str) -> bool:
+        return bool(self.conn.execute("SELECT 1 FROM request_type_versions WHERE id=? LIMIT 1", [request_type_id]).fetchone())
+
     def latest_request_type(self, request_type_id: str) -> dict[str, Any] | None:
         row = self.conn.execute(
             "SELECT max(version) FROM request_type_versions WHERE id=? AND is_active=true",
@@ -263,6 +672,20 @@ class WorkbenchRepository:
         payload["id"] = payload.get("id") or self._next_identifier("request", payload.get("display_name", ""), "request_type_versions")
         current = self.conn.execute("SELECT COALESCE(max(version), 0) FROM request_type_versions WHERE id=?", [payload["id"]]).fetchone()[0]
         version = int(current) + 1
+        if payload.get("result_profile"):
+            template = self.get_analysis_template(
+                payload["result_profile"]["template_id"],
+                int(payload["result_profile"]["template_version"]),
+            )
+            if not template or template["lifecycle_status"] != "PUBLISHED":
+                raise LookupError("ANALYSIS_TEMPLATE_NOT_PUBLISHED")
+            if template["scope_kind"] != "SYSTEM":
+                raise ValueError("SYSTEM_RESULT_PROFILE_REQUIRES_SYSTEM_TEMPLATE")
+            self._validate_result_profile(
+                template,
+                payload["result_profile"],
+                payload["default_workflow"].get("nodes", []),
+            )
         now = _utcnow()
         self.conn.execute(
             """
@@ -273,6 +696,8 @@ class WorkbenchRepository:
             """,
             [payload["id"], version, payload["display_name"], payload["description"], json.dumps(payload["allowed_task_types"], ensure_ascii=False), json.dumps(payload["default_workflow"], ensure_ascii=False), json.dumps(payload["match_rules"], ensure_ascii=False), payload["is_active"], now],
         )
+        if payload.get("result_profile"):
+            self.save_result_profile(payload["id"], version, payload["result_profile"])
         return self.get_request_type(payload["id"], version)  # type: ignore[return-value]
 
 
@@ -391,6 +816,10 @@ class WorkbenchRepository:
 
     def work_items(self, request_id: str) -> list[dict[str, Any]]:
         return rows(self.conn.execute("SELECT * FROM request_work_items WHERE request_id=? ORDER BY sequence_no", [request_id]))
+
+    def work_item(self, item_id: str) -> dict[str, Any] | None:
+        items = rows(self.conn.execute("SELECT * FROM request_work_items WHERE id=?", [item_id]))
+        return items[0] if items else None
 
     def create_work_plan(
         self,

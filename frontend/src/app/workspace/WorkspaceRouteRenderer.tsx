@@ -5,7 +5,7 @@ import type { AuthUser } from '../../auth'
 import type { Layout, Layouts } from 'react-grid-layout'
 import { hasPermission, type MenuPolicy } from '../../features/auth/access'
 import { PortfolioRoute } from '../../features/portfolio/PortfolioRoute'
-import { AccessAdminPage, AuditAdminPage, MenuPolicyAdminPage, SimulationWorkbench, WorkbenchTypeAdmin } from '../routing/workspaceRouteModules'
+import { AccessAdminPage, AuditAdminPage, MenuPolicyAdminPage, ProjectResultProfileBinding, SimulationWorkbench, WorkbenchTypeAdmin } from '../routing/workspaceRouteModules'
 import { RequestIntakePage } from '../../features/workbench/RequestIntakePage'
 import type { ActiveView } from '../../features/analysis/pageSelection'
 import type { DashboardDefinition, DashboardPageSummary, FeatureExample, VariableDefinition, Workflow } from '../../types'
@@ -87,6 +87,7 @@ export function WorkspaceRouteRenderer({
   if (workspacePage === 'intake') return <RequestIntakePage projects={projects} createdBy={authUser?.display_name ?? '데모 사용자'} canCreate={hasPermission(authUser, 'request.create', selectedProjectId)} onCreated={handleIntakeCreated} onOpenWorkbench={onIntakeWorkbench} />
   if (workspacePage === 'workbench') return <Suspense fallback={<FeatureScreenFallback />}><SimulationWorkbench workflows={workflows} initialRequestId={selectedRequestId} currentUserId={authUser?.id ?? ''} createdBy={authUser?.display_name ?? '데모 사용자'} canExecute={hasPermission(authUser, 'work.execute_assigned', selectedProjectId) || hasPermission(authUser, 'work.execute_any', selectedProjectId)} isAdmin={hasPermission(authUser, 'work.execute_any', selectedProjectId)} onRequestSelected={setSelectedRequestId} onChanged={async (message) => { setWorkflows(await api.workflows()); }} /></Suspense>
   if (workspacePage === 'workbench_admin') return <Suspense fallback={<FeatureScreenFallback />}><WorkbenchTypeAdmin /></Suspense>
+  if (workspacePage === 'project_result_profiles') return <Suspense fallback={<FeatureScreenFallback />}><ProjectResultProfileBinding projectId={selectedProjectId} /></Suspense>
   if (workspacePage === 'schemas') return <Suspense fallback={<FeatureScreenFallback />}><FolderSchemaWorkspace /></Suspense>
   if (workspacePage === 'variables') return <Suspense fallback={<FeatureScreenFallback />}><VariableCatalogPage variables={variables} overview={overview!} loadCaseId={selectedLoadCaseId} onChanged={onWidgetCatalogVariablesChanged} /></Suspense>
   if (workspacePage === 'templates') return <Suspense fallback={<FeatureScreenFallback />}><AutomationTemplatesPage /></Suspense>

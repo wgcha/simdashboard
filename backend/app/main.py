@@ -410,8 +410,18 @@ def export_portfolio_csv(
 
 
 @app.get("/api/projects/{project_id}/requests")
-def get_requests(project_id: str) -> list[dict[str, Any]]:
+def get_requests(project_id: str, request: Request) -> list[dict[str, Any]]:
     with connect() as conn:
+        context = require_permission(request, PROJECT_DATA_VIEW, project_id, conn=conn)
+        if context.project_role is None:
+            detail = {
+                "code": "PROJECT_MEMBERSHIP_REQUIRED",
+                "message": "이 작업을 수행할 권한이 없습니다.",
+                "required_permission": PROJECT_DATA_VIEW,
+                "project_id": project_id,
+            }
+            request.state.authorization_detail = detail
+            raise HTTPException(403, detail)
         return rows(
             conn.execute(
                 "SELECT * FROM analysis_requests WHERE project_id = ? ORDER BY requested_at DESC",
@@ -472,6 +482,7 @@ def create_request(project_id: str, payload: AnalysisRequestCreate, request: Req
                 source_reference=payload.source_reference.strip(),
                 requested_by=principal.display_name,
             )
+            repository.create_result_layout_snapshot(request_id, request_type, principal.display_name)
             write_audit_event(
                 request=request,
                 principal=principal,

@@ -450,6 +450,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/workbench/analysis-templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Analysis Templates */
+        get: operations["list_analysis_templates_api_workbench_analysis_templates_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/workbench/analysis-templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Analysis Template */
+        post: operations["create_analysis_template_api_admin_workbench_analysis_templates_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/workbench/request-types/{request_type_id}/{version}/result-profile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Result Profile */
+        get: operations["get_result_profile_api_workbench_request_types__request_type_id___version__result_profile_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{project_id}/admin/workbench/request-types/{request_type_id}/{version}/result-profile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Save Project Result Profile */
+        put: operations["save_project_result_profile_api_projects__project_id__admin_workbench_request_types__request_type_id___version__result_profile_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/workbench/requests/{request_id}/result-layout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Request Result Layout */
+        get: operations["get_request_result_layout_api_workbench_requests__request_id__result_layout_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/workbench/request-types": {
         parameters: {
             query?: never;
@@ -1860,6 +1945,36 @@ export interface components {
             /** Assigned By */
             assigned_by?: string | null;
         };
+        /** AnalysisTemplateVersionCreate */
+        AnalysisTemplateVersionCreate: {
+            /** Id */
+            id?: string | null;
+            /** Display Name */
+            display_name: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /** Page Definitions */
+            page_definitions: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Lifecycle Status
+             * @default DRAFT
+             * @enum {string}
+             */
+            lifecycle_status: "DRAFT" | "PUBLISHED" | "ARCHIVED";
+            /**
+             * Scope Kind
+             * @default SYSTEM
+             * @enum {string}
+             */
+            scope_kind: "SYSTEM" | "PROJECT";
+            /** Project Id */
+            project_id?: string | null;
+        };
         /** AssigneeUpdate */
         AssigneeUpdate: {
             /** Owner User Id */
@@ -2515,6 +2630,7 @@ export interface components {
             match_rules?: {
                 [key: string]: unknown;
             };
+            result_profile?: components["schemas"]["ResultProfileInput"] | null;
             /**
              * Is Active
              * @default true
@@ -2534,6 +2650,24 @@ export interface components {
              * @default false
              */
             validate_only: boolean;
+        };
+        /**
+         * ResultProfileInput
+         * @description Versioned selection and configuration for a published result template.
+         */
+        ResultProfileInput: {
+            /** Template Id */
+            template_id: string;
+            /** Template Version */
+            template_version: number;
+            /** Included Widget Ids */
+            included_widget_ids?: string[] | null;
+            /** Overrides */
+            overrides?: {
+                [key: string]: unknown;
+            };
+            /** Required Data Contracts */
+            required_data_contracts?: string[];
         };
         /** ReviewItemCreate */
         ReviewItemCreate: {
@@ -3815,6 +3949,185 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_analysis_templates_api_workbench_analysis_templates_get: {
+        parameters: {
+            query?: {
+                all_versions?: boolean;
+                project_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_analysis_template_api_admin_workbench_analysis_templates_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AnalysisTemplateVersionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_result_profile_api_workbench_request_types__request_type_id___version__result_profile_get: {
+        parameters: {
+            query?: {
+                project_id?: string | null;
+            };
+            header?: never;
+            path: {
+                request_type_id: string;
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_project_result_profile_api_projects__project_id__admin_workbench_request_types__request_type_id___version__result_profile_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                request_type_id: string;
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResultProfileInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_request_result_layout_api_workbench_requests__request_id__result_layout_get: {
+        parameters: {
+            query?: {
+                load_case_id?: string | null;
+            };
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */

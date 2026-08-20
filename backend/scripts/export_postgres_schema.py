@@ -30,6 +30,10 @@ CREATE INDEX IF NOT EXISTS ix_audit_events_path ON audit_events(path, occurred_a
 CREATE INDEX IF NOT EXISTS ix_workflow_runs_request ON workflow_runs(request_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS ix_request_type_assignments_type ON analysis_request_type_assignments(request_type_id, request_type_version);
 CREATE INDEX IF NOT EXISTS ix_request_work_plans_type ON request_work_plans(request_type_id, request_type_version);
+CREATE INDEX IF NOT EXISTS ix_analysis_template_versions_status ON analysis_template_versions(template_id, lifecycle_status, version DESC);
+CREATE INDEX IF NOT EXISTS ix_request_result_layout_snapshots_template ON request_result_layout_snapshots(source_template_id, source_template_version);
+CREATE INDEX IF NOT EXISTS ix_project_result_profiles_template ON project_request_type_result_profiles(template_id, template_version);
+CREATE INDEX IF NOT EXISTS ix_project_result_profiles_latest ON project_request_type_result_profiles(project_id, request_type_id, request_type_version, binding_version DESC);
 CREATE INDEX IF NOT EXISTS ix_request_work_items_request_status ON request_work_items(request_id, status, sequence_no);
 CREATE INDEX IF NOT EXISTS ix_task_runs_workflow ON task_runs(workflow_run_id, started_at);
 CREATE INDEX IF NOT EXISTS ix_task_run_events_task ON task_run_events(task_run_id, event_index);
@@ -101,6 +105,13 @@ ALTER TABLE analysis_request_type_assignments ADD CONSTRAINT fk_request_type_ass
 ALTER TABLE analysis_request_type_assignments ADD CONSTRAINT fk_request_type_assignments_type FOREIGN KEY (request_type_id, request_type_version) REFERENCES request_type_versions(id, version);
 ALTER TABLE request_work_plans ADD CONSTRAINT fk_request_work_plans_request FOREIGN KEY (request_id) REFERENCES analysis_requests(id);
 ALTER TABLE request_work_plans ADD CONSTRAINT fk_request_work_plans_type FOREIGN KEY (request_type_id, request_type_version) REFERENCES request_type_versions(id, version);
+ALTER TABLE analysis_template_versions ADD CONSTRAINT fk_analysis_template_versions_project FOREIGN KEY (project_id) REFERENCES projects(id);
+ALTER TABLE request_type_result_profiles ADD CONSTRAINT fk_result_profiles_request_type FOREIGN KEY (request_type_id, request_type_version) REFERENCES request_type_versions(id, version);
+ALTER TABLE request_type_result_profiles ADD CONSTRAINT fk_result_profiles_template FOREIGN KEY (template_id, template_version) REFERENCES analysis_template_versions(template_id, version);
+ALTER TABLE project_request_type_result_profiles ADD CONSTRAINT fk_project_result_profiles_project FOREIGN KEY (project_id) REFERENCES projects(id);
+ALTER TABLE project_request_type_result_profiles ADD CONSTRAINT fk_project_result_profiles_request_type FOREIGN KEY (request_type_id, request_type_version) REFERENCES request_type_versions(id, version);
+ALTER TABLE project_request_type_result_profiles ADD CONSTRAINT fk_project_result_profiles_template FOREIGN KEY (template_id, template_version) REFERENCES analysis_template_versions(template_id, version);
+ALTER TABLE request_result_layout_snapshots ADD CONSTRAINT fk_result_layout_snapshots_request FOREIGN KEY (request_id) REFERENCES analysis_requests(id);
 ALTER TABLE request_work_items ADD CONSTRAINT fk_request_work_items_request FOREIGN KEY (request_id) REFERENCES request_work_plans(request_id);
 ALTER TABLE request_work_items ADD CONSTRAINT fk_request_work_items_type FOREIGN KEY (task_type_id, task_type_version) REFERENCES task_type_versions(id, version);
 ALTER TABLE request_work_items ADD CONSTRAINT fk_request_work_items_demo_run FOREIGN KEY (demo_run_id) REFERENCES workflow_runs(id);

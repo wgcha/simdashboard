@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from contextlib import contextmanager
@@ -32,6 +33,127 @@ CORE_WORKBENCH_TABLES = (
     "task_run_events",
 )
 MIGRATION_ADVISORY_LOCK_ID = 7_416_230_003
+ALEMBIC_FAILURE_RULES = (
+    ("OBJECT_OWNERSHIP_REQUIRED", ("must be owner of", "not owner of")),
+    ("INSUFFICIENT_PRIVILEGE", ("insufficientprivilege", "permission denied", "not permitted")),
+    ("LOCK_CONFLICT", ("locknotavailable", "lock timeout", "could not obtain lock", "deadlock detected", "deadlockdetected")),
+    ("CONNECTION_OR_AUTHENTICATION", ("operationalerror", "could not connect", "connection refused", "connection timed out", "password authentication failed", "no pg_hba.conf entry", "server closed the connection")),
+    ("DATABASE_OBJECT_ALREADY_EXISTS", ("duplicatecolumn", "duplicatetable", "duplicateobject", "already exists")),
+    ("DATABASE_OBJECT_MISSING", ("undefinedtable", "undefinedcolumn", "does not exist")),
+    ("DATA_CONSTRAINT_CONFLICT", ("integrityerror", "uniqueviolation", "notnullviolation", "foreignkeyviolation", "violates unique constraint", "violates foreign key constraint", "violates not-null constraint")),
+    ("DEPENDENT_OBJECTS_EXIST", ("dependentobjectsstillexist", "other objects depend on it")),
+    ("ALEMBIC_REVISION_ERROR", ("can't locate revision", "cannot locate revision", "multiple heads", "target database is not up to date")),
+    ("MIGRATION_SQL_INVALID", ("syntaxerror", "syntax error")),
+)
+ALEMBIC_EXCEPTION_CLASS_RULES = (
+    ("DATA_VALUE_TOO_LONG", ("stringdatarighttruncation",)),
+    ("CHECK_CONSTRAINT_VIOLATION", ("checkviolation",)),
+    ("INVALID_TABLE_DEFINITION", ("invalidtabledefinition",)),
+    ("DATATYPE_MISMATCH", ("datatypemismatch",)),
+)
+ALEMBIC_GENERIC_EXCEPTION_RULES = (
+    ("DATA_EXCEPTION", ("sqlalchemy.exc.dataerror", "psycopg.dataerror")),
+    ("DATABASE_PROGRAMMING_ERROR", ("sqlalchemy.exc.programmingerror", "psycopg.programmingerror")),
+)
+ALEMBIC_CLIENT_EXCEPTION_RULES = (
+    ("SQLALCHEMY_RESOURCE_CLOSED", ("sqlalchemy.exc.resourceclosederror",)),
+    ("SQLALCHEMY_PENDING_ROLLBACK", ("sqlalchemy.exc.pendingrollbackerror",)),
+    ("SQLALCHEMY_INVALID_REQUEST", ("sqlalchemy.exc.invalidrequesterror",)),
+    ("SQLALCHEMY_STATEMENT_ERROR", ("sqlalchemy.exc.statementerror",)),
+    ("SQLALCHEMY_DATABASE_ERROR", ("sqlalchemy.exc.databaseerror",)),
+    ("SQLALCHEMY_DBAPI_ERROR", ("sqlalchemy.exc.dbapierror",)),
+    ("SQLALCHEMY_ERROR", ("sqlalchemy.exc.sqlalchemyerror",)),
+    ("ALEMBIC_COMMAND_ERROR", ("alembic.util.exc.commanderror",)),
+    ("ALEMBIC_REVISION_CLIENT_ERROR", ("alembic.script.revision.revisionerror", "alembic.script.revision.resolutionerror")),
+    ("CLIENT_ASSERTION_ERROR", ("assertionerror",)),
+    ("CLIENT_ATTRIBUTE_ERROR", ("attributeerror",)),
+    ("CLIENT_TYPE_ERROR", ("typeerror",)),
+    ("CLIENT_VALUE_ERROR", ("valueerror",)),
+    ("CLIENT_KEY_ERROR", ("keyerror",)),
+    ("CLIENT_TEXT_ENCODING_ERROR", ("unicodedecodeerror", "unicodeencodeerror", "unicodeerror", "codec can't decode", "codec can't encode")),
+    ("CLIENT_PIPE_ERROR", ("brokenpipeerror",)),
+    ("CLIENT_OS_ERROR", ("connectionreseterror", "connectionabortederror", "timeouterror", "oserror", "ioerror")),
+    ("CLIENT_IMPORT_ERROR", ("modulenotfounderror", "importerror")),
+    ("CLIENT_MEMORY_ERROR", ("memoryerror",)),
+    ("CLIENT_RUNTIME_ERROR", ("runtimeerror",)),
+)
+SQLALCHEMY_INVALID_REQUEST_DETAIL_RULES = (
+    (
+        "TRANSACTION_ALREADY_BEGUN",
+        (
+            "a transaction is already begun on this session",
+            "has already initialized a sqlalchemy transaction() object via begin() or autobegin",
+            "can't call begin() here unless rollback() or commit() is called first",
+        ),
+    ),
+    (
+        "TRANSACTION_CLOSED_IN_CONTEXT",
+        (
+            "can't operate on closed transaction inside context manager",
+            "please complete the context manager before emitting further commands",
+        ),
+    ),
+    ("TRANSACTION_INACTIVE", ("this transaction is inactive", "this transaction is closed")),
+    ("CONNECTION_INVALIDATED", ("connection is invalidated", "can't reconnect until invalid transaction is rolled back")),
+    ("CONNECTION_CLOSED", ("this connection is closed", "connection is closed")),
+    ("EXECUTABLE_EXPECTED", ("not an executable object", "executable sql or text() construct expected")),
+    ("BIND_PARAMETER_REQUIRED", ("a value is required for bind parameter",)),
+    (
+        "AUTOBEGIN_CONFLICT",
+        ("autobegin is disabled on this session", "please call session.begin() to start a new transaction"),
+    ),
+)
+SQLSTATE_EXACT_CATEGORIES = {
+    "22001": "DATA_VALUE_TOO_LONG",
+    "23514": "CHECK_CONSTRAINT_VIOLATION",
+    "42804": "DATATYPE_MISMATCH",
+    "42P16": "INVALID_TABLE_DEFINITION",
+    "42501": "INSUFFICIENT_PRIVILEGE",
+    "42P01": "DATABASE_OBJECT_MISSING",
+    "42703": "DATABASE_OBJECT_MISSING",
+    "42701": "DATABASE_OBJECT_ALREADY_EXISTS",
+    "42P07": "DATABASE_OBJECT_ALREADY_EXISTS",
+    "42710": "DATABASE_OBJECT_ALREADY_EXISTS",
+    "23502": "DATA_CONSTRAINT_CONFLICT",
+    "23503": "DATA_CONSTRAINT_CONFLICT",
+    "23505": "DATA_CONSTRAINT_CONFLICT",
+    "40P01": "LOCK_CONFLICT",
+    "55P03": "LOCK_CONFLICT",
+}
+SQLSTATE_CLASS_CATEGORIES = {
+    "08": "CONNECTION_OR_AUTHENTICATION",
+    "22": "DATA_EXCEPTION",
+    "23": "DATA_CONSTRAINT_CONFLICT",
+    "28": "CONNECTION_OR_AUTHENTICATION",
+    "40": "TRANSACTION_ROLLBACK",
+    "42": "DATABASE_PROGRAMMING_ERROR",
+    "53": "DATABASE_RESOURCE_EXHAUSTED",
+    "55": "DATABASE_STATE_CONFLICT",
+    "57": "DATABASE_OPERATOR_INTERVENTION",
+    "58": "DATABASE_SYSTEM_ERROR",
+}
+SQLSTATE_PATTERN = re.compile(r"\b(?:sqlstate|sql\s+state|pgcode)(?:\s+code)?\s*[:=\[]?\s*['\"]?([0-9A-Z]{5})\b", re.IGNORECASE)
+KNOWN_MIGRATION_DIAGNOSTICS = {
+    "0011_result_layout_snapshot": "0011",
+    "0012_project_result_profiles": "0012",
+    "0013_project_result_profile_menu": "0013",
+    "0014_result_profile_revs": "0014",
+    "0015_legacy_drop_layout": "0015",
+}
+RUNNING_UPGRADE_PATTERN = re.compile(r"\brunning upgrade\s+\S+\s+->\s+([0-9a-z_]+)\b", re.IGNORECASE)
+KNOWN_MIGRATION_STEP_DIAGNOSTICS = {
+    "0011_ANALYSIS_TEMPLATES": "0011_ANALYSIS_TEMPLATES",
+    "0011_ANALYSIS_TEMPLATES_DONE": "0011_ANALYSIS_TEMPLATES_DONE",
+    "0011_REQUEST_TYPE_PROFILES": "0011_REQUEST_TYPE_PROFILES",
+    "0011_REQUEST_TYPE_PROFILES_DONE": "0011_REQUEST_TYPE_PROFILES_DONE",
+    "0011_SNAPSHOTS": "0011_SNAPSHOTS",
+    "0011_SNAPSHOTS_DONE": "0011_SNAPSHOTS_DONE",
+    "0011_ANALYSIS_TEMPLATE_STATUS_INDEX": "0011_ANALYSIS_TEMPLATE_STATUS_INDEX",
+    "0011_ANALYSIS_TEMPLATE_STATUS_INDEX_DONE": "0011_ANALYSIS_TEMPLATE_STATUS_INDEX_DONE",
+    "0011_SNAPSHOT_TEMPLATE_INDEX": "0011_SNAPSHOT_TEMPLATE_INDEX",
+    "0011_COMPLETE": "0011_COMPLETE",
+}
+MIGRATION_STEP_PATTERN = re.compile(r"^SIMDASH_MIGRATION_STEP=(0011_[A-Z0-9_]+)\r?$", re.MULTILINE)
 
 
 class StartupMigrationError(RuntimeError):
@@ -54,6 +176,46 @@ def _fail(code: str) -> None:
 
 def _psycopg_url(value: str) -> str:
     return value.replace("postgresql+psycopg://", "postgresql://", 1)
+
+
+def _safe_alembic_failure_code(stderr: str | None, returncode: int, *, stdout: str | None = None) -> str:
+    """Reduce both untrusted child streams to an allowlisted code; never return output text."""
+    if returncode < 0:
+        return "MIGRATION_COMMAND_FAILED_PROCESS_TERMINATED"
+    combined = "\n".join((stderr or "", stdout or ""))
+    normalized = combined.casefold()
+    for category, exception_classes in ALEMBIC_EXCEPTION_CLASS_RULES:
+        if any(exception_class in normalized for exception_class in exception_classes):
+            return f"MIGRATION_COMMAND_FAILED_{category}"
+    sqlstate_match = SQLSTATE_PATTERN.search(combined)
+    if sqlstate_match:
+        sqlstate = sqlstate_match.group(1).upper()
+        category = SQLSTATE_EXACT_CATEGORIES.get(sqlstate) or SQLSTATE_CLASS_CATEGORIES.get(sqlstate[:2])
+        if category:
+            return f"MIGRATION_COMMAND_FAILED_{category}"
+    for category, markers in ALEMBIC_FAILURE_RULES:
+        if any(marker in normalized for marker in markers):
+            return f"MIGRATION_COMMAND_FAILED_{category}"
+    for category, exception_classes in ALEMBIC_GENERIC_EXCEPTION_RULES:
+        if any(exception_class in normalized for exception_class in exception_classes):
+            return f"MIGRATION_COMMAND_FAILED_{category}"
+    if "sqlalchemy.exc.invalidrequesterror" in normalized:
+        for category, markers in SQLALCHEMY_INVALID_REQUEST_DETAIL_RULES:
+            if any(marker in normalized for marker in markers):
+                return f"MIGRATION_COMMAND_FAILED_SQLALCHEMY_INVALID_REQUEST_{category}"
+    for category, exception_classes in ALEMBIC_CLIENT_EXCEPTION_RULES:
+        if any(exception_class in normalized for exception_class in exception_classes):
+            return f"MIGRATION_COMMAND_FAILED_{category}"
+    for step_marker in reversed(MIGRATION_STEP_PATTERN.findall(combined)):
+        diagnostic_step = KNOWN_MIGRATION_STEP_DIAGNOSTICS.get(step_marker)
+        if diagnostic_step:
+            return f"MIGRATION_COMMAND_FAILED_AT_{diagnostic_step}"
+    revision_match = RUNNING_UPGRADE_PATTERN.search(combined)
+    if revision_match:
+        diagnostic_revision = KNOWN_MIGRATION_DIAGNOSTICS.get(revision_match.group(1).casefold())
+        if diagnostic_revision:
+            return f"MIGRATION_COMMAND_FAILED_AT_{diagnostic_revision}"
+    return "MIGRATION_COMMAND_FAILED_UNCLASSIFIED"
 
 
 def _script_directory() -> ScriptDirectory:
@@ -229,7 +391,7 @@ def _run_alembic_child(owner_url: str) -> None:
         check=False,
     )
     if result.returncode:
-        _fail("MIGRATION_COMMAND_FAILED")
+        _fail(_safe_alembic_failure_code(result.stderr, result.returncode, stdout=result.stdout))
 
 
 def upgrade_pending_schema(app_url: str, *, owner_env_file: Path = OWNER_ENV_FILE) -> bool:

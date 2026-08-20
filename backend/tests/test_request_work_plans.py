@@ -131,12 +131,10 @@ def test_request_creation_is_atomic_and_persists_an_immutable_snapshot(monkeypat
 
 
 def test_request_creation_accepts_an_admin_defined_active_scenario():
-    custom_id = f"custom-intake-{uuid4().hex[:8]}"
     with TestClient(app) as client:
         created_type = client.post(
             "/api/admin/workbench/request-types",
             json={
-                "id": custom_id,
                 "display_name": "사용자 정의 접수 시나리오",
                 "description": "관리자가 수행자에게 제공하는 접수 작업 유형",
                 "allowed_task_types": [{"id": "cad-prepare", "version": 1}],
@@ -155,6 +153,7 @@ def test_request_creation_accepts_an_admin_defined_active_scenario():
             },
         )
         assert created_type.status_code == 201, created_type.text
+        custom_id = created_type.json()["id"]
 
         created = _create_request(client, custom_id)
         assert created["request_type_id"] == custom_id

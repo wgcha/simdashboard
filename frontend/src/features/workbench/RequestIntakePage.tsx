@@ -3,7 +3,8 @@ import { AlertTriangle, Building2, Check, ChevronRight, ClipboardPlus, LoaderCir
 import { api, type AssigneeCandidate } from '../../api'
 import type { AnalysisRequest, Project } from '../../types'
 import { workbenchApi } from './api'
-import { requestTypeLabels, type WorkbenchRequestType } from './types'
+import { ExpectedResultsPreview } from './ExpectedResultsPreview'
+import { requestTypeLabels, type ResultProfile, type WorkbenchRequestType } from './types'
 
 type IntakeSource = 'EXTERNAL_SYSTEM' | 'DEPARTMENT_HEAD'
 type RequestTypeSelection = Pick<WorkbenchRequestType, 'id' | 'version'>
@@ -28,6 +29,8 @@ export function RequestIntakePage({ projects, createdBy, canCreate, onCreated, o
   const [note, setNote] = useState('')
   const [requestTypeSelection, setRequestTypeSelection] = useState<RequestTypeSelection | null>(null)
   const [selectedLabel, setSelectedLabel] = useState<string | null>(null)
+  const [resultProfile, setResultProfile] = useState<ResultProfile | null>(null)
+  const [resultProfileLoading, setResultProfileLoading] = useState(false)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -92,6 +95,22 @@ export function RequestIntakePage({ projects, createdBy, canCreate, onCreated, o
   const selectedType = requestTypeSelection
     ? requestTypes.find((item) => item.id === requestTypeSelection.id && item.version === requestTypeSelection.version)
     : undefined
+
+  useEffect(() => {
+    let cancelled = false
+    if (!selectedType) {
+      setResultProfile(null)
+      setResultProfileLoading(false)
+      return () => { cancelled = true }
+    }
+    setResultProfileLoading(true)
+    workbenchApi.resultProfile(selectedType.id, selectedType.version, projectId)
+      .then((profile) => { if (!cancelled) setResultProfile(profile) })
+      .catch(() => { if (!cancelled) setResultProfile(null) })
+      .finally(() => { if (!cancelled) setResultProfileLoading(false) })
+    return () => { cancelled = true }
+  }, [projectId, selectedType?.id, selectedType?.version])
+
   const declaredLabels = Array.from(new Set(requestTypes.flatMap(requestTypeLabels))).sort((left, right) => left.localeCompare(right, 'ko'))
   const filteredRequestTypes = selectedLabel
     ? requestTypes.filter((item) => requestTypeLabels(item).includes(selectedLabel))
@@ -162,6 +181,7 @@ export function RequestIntakePage({ projects, createdBy, canCreate, onCreated, o
               data-testid={`request-type-option-${item.id}-${item.version}`}
             ><span>WORK TYPE · v{item.version}</span><strong>{item.display_name}</strong><div className="request-type-option-labels">{requestTypeLabels(item).map((label) => <em key={label}>#{label}</em>)}</div><small>{item.default_workflow.nodes.length}개 세부 작업</small></button>
           })}</div> : <div className="intake-filter-empty" role="status">#{selectedLabel} 라벨에 해당하는 활성 작업 유형이 없습니다.</div>}
+          <ExpectedResultsPreview profile={resultProfile} loading={resultProfileLoading} />
           <ol className="intake-work-preview">{selectedType?.default_workflow.nodes.map((node, index) => {
             const nextNode = selectedType.default_workflow.nodes[index + 1]
             const leadsToNext = nextNode?.depends_on.includes(node.node_key) ?? false

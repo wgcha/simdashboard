@@ -12,7 +12,7 @@ async function loginAndOpenVideoDashboard(page: Page) {
 async function openVideoDashboard(page: Page) {
   await page.getByRole('link', { name: '해석 의뢰 현황', exact: true }).click()
   await page.locator('.view-tabs').getByRole('button', { name: /상세 분석/ }).click()
-  await expect(page.getByTestId('drop-video-grid')).toBeVisible()
+  await expect(page.getByTestId('drop-video-grid').first()).toBeVisible()
 }
 
 test('H.264 영상 20개를 실제 재생하고 synthetic 판정·일괄 제어·반응형 배치를 제공한다', async ({ page }) => {
@@ -147,7 +147,7 @@ test('video_grid를 카탈로그에서 추가해 이동·리사이즈·저장하
     expect(added.y).not.toBe(30)
 
     await page.reload()
-    await expect(page.locator('.portfolio-page')).toBeVisible()
+    await expect(page).toHaveURL(/\/workspace\/requests$/)
     await openVideoDashboard(page)
     await expect(page.locator('.widget-video_grid')).toHaveCount(2)
   } finally {

@@ -202,14 +202,297 @@ def test_alembic_child_receives_owner_url_without_mutating_parent_or_rendering_o
     assert "bootstrap_postgres.py" not in " ".join(captured["command"])
 
 
-def test_failed_child_raises_only_safe_code(monkeypatch: pytest.MonkeyPatch):
+def test_failed_child_raises_only_allowlisted_code_without_rendering_secrets(monkeypatch: pytest.MonkeyPatch):
+    owner_url = "postgresql://owner:owner-secret@private-db.internal/dashboard"
     monkeypatch.setattr(
         startup.subprocess,
         "run",
-        lambda *_args, **_kwargs: SimpleNamespace(returncode=1, stdout="postgresql://owner:secret@db/dashboard", stderr="secret"),
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=1, stdout=owner_url, stderr=f"unmapped failure {owner_url} password=owner-secret token=private-token"),
     )
-    with pytest.raises(startup.StartupMigrationError, match="^MIGRATION_COMMAND_FAILED$"):
-        startup._run_alembic_child("postgresql://owner:secret@db/dashboard")
+    with pytest.raises(startup.StartupMigrationError) as raised:
+        startup._run_alembic_child(owner_url)
+    message = str(raised.value)
+    assert message == "MIGRATION_COMMAND_FAILED_UNCLASSIFIED"
+    assert "owner-secret" not in message
+    assert "private-token" not in message
+    assert "private-db.internal" not in message
+
+
+@pytest.mark.parametrize(
+    ("stderr", "expected"),
+    [
+        ("psycopg.errors.InsufficientPrivilege: must be owner of table requests", "MIGRATION_COMMAND_FAILED_OBJECT_OWNERSHIP_REQUIRED"),
+        ("psycopg.errors.InsufficientPrivilege: permission denied for schema public", "MIGRATION_COMMAND_FAILED_INSUFFICIENT_PRIVILEGE"),
+        ("canceling statement due to lock timeout", "MIGRATION_COMMAND_FAILED_LOCK_CONFLICT"),
+        ("password authentication failed for user simdashboard_owner", "MIGRATION_COMMAND_FAILED_CONNECTION_OR_AUTHENTICATION"),
+        ("psycopg.errors.UndefinedColumn: column result_profile does not exist", "MIGRATION_COMMAND_FAILED_DATABASE_OBJECT_MISSING"),
+        ("FAILED: Can't locate revision identified by '0014'", "MIGRATION_COMMAND_FAILED_ALEMBIC_REVISION_ERROR"),
+    ],
+)
+def test_alembic_child_failure_classification_is_actionable_and_fixed(stderr: str, expected: str):
+    assert startup._safe_alembic_failure_code(f"{stderr}\npostgresql://owner:secret@private-db/dashboard", 1) == expected
+
+
+def test_terminated_alembic_child_has_fixed_safe_code():
+    assert startup._safe_alembic_failure_code("password=secret", -9) == "MIGRATION_COMMAND_FAILED_PROCESS_TERMINATED"
+
+
+@pytest.mark.parametrize(
+    ("stderr", "expected"),
+    [
+        ("sqlalchemy.exc.DataError: (psycopg.errors.StringDataRightTruncation) value too long", "MIGRATION_COMMAND_FAILED_DATA_VALUE_TOO_LONG"),
+        ("sqlalchemy.exc.IntegrityError: (psycopg.errors.CheckViolation) rejected", "MIGRATION_COMMAND_FAILED_CHECK_CONSTRAINT_VIOLATION"),
+        ("sqlalchemy.exc.ProgrammingError: (psycopg.errors.InvalidTableDefinition) invalid definition", "MIGRATION_COMMAND_FAILED_INVALID_TABLE_DEFINITION"),
+        ("sqlalchemy.exc.ProgrammingError: (psycopg.errors.DatatypeMismatch) incompatible types", "MIGRATION_COMMAND_FAILED_DATATYPE_MISMATCH"),
+        ("sqlalchemy.exc.ProgrammingError: guarded details unavailable", "MIGRATION_COMMAND_FAILED_DATABASE_PROGRAMMING_ERROR"),
+    ],
+)
+def test_alembic_exception_classes_map_to_fixed_diagnostics(stderr: str, expected: str):
+    diagnostic = startup._safe_alembic_failure_code(f"{stderr}\npostgresql://owner:secret@private-db/dashboard token=private-token", 1)
+    assert diagnostic == expected
+    assert all(secret not in diagnostic for secret in ("secret", "private-db", "private-token"))
+
+
+@pytest.mark.parametrize(
+    ("stderr", "expected"),
+    [
+        ("driver failure SQLSTATE: 22001", "MIGRATION_COMMAND_FAILED_DATA_VALUE_TOO_LONG"),
+        ("driver failure SQL state [23514]", "MIGRATION_COMMAND_FAILED_CHECK_CONSTRAINT_VIOLATION"),
+        ("driver failure pgcode='42804'", "MIGRATION_COMMAND_FAILED_DATATYPE_MISMATCH"),
+        ("driver failure SQLSTATE 42P16", "MIGRATION_COMMAND_FAILED_INVALID_TABLE_DEFINITION"),
+        ("driver failure SQLSTATE=42ZZZ", "MIGRATION_COMMAND_FAILED_DATABASE_PROGRAMMING_ERROR"),
+    ],
+)
+def test_sqlstate_maps_to_allowlisted_category_without_echoing_input(stderr: str, expected: str):
+    diagnostic = startup._safe_alembic_failure_code(f"{stderr} password=secret host=private-db", 1)
+    assert diagnostic == expected
+    assert "secret" not in diagnostic and "private-db" not in diagnostic and "42ZZZ" not in diagnostic
+
+
+def test_alembic_child_classifies_exception_from_stdout_without_exposing_either_stream(monkeypatch: pytest.MonkeyPatch):
+    owner_url = "postgresql://owner:owner-secret@private-db.internal/dashboard"
+    monkeypatch.setattr(
+        startup.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=1,
+            stdout=f"sqlalchemy.exc.DataError: psycopg.errors.StringDataRightTruncation password=stdout-secret {owner_url}",
+            stderr="token=stderr-secret host=internal-db",
+        ),
+    )
+    with pytest.raises(startup.StartupMigrationError) as raised:
+        startup._run_alembic_child(owner_url)
+    diagnostic = str(raised.value)
+    assert diagnostic == "MIGRATION_COMMAND_FAILED_DATA_VALUE_TOO_LONG"
+    assert all(secret not in diagnostic for secret in ("stdout-secret", "stderr-secret", "private-db", "internal-db"))
+
+
+def test_known_running_revision_is_safe_fallback_when_combined_stream_has_no_exception_class():
+    diagnostic = startup._safe_alembic_failure_code(
+        "stderr password=stderr-secret",
+        1,
+        stdout="INFO Running upgrade 0010_task_batch_identity -> 0011_result_layout_snapshot, add snapshot token=stdout-secret",
+    )
+    assert diagnostic == "MIGRATION_COMMAND_FAILED_AT_0011"
+    assert "secret" not in diagnostic and "result_layout_snapshot" not in diagnostic
+
+
+def test_arbitrary_running_revision_is_never_reflected_and_known_exception_wins_revision_fallback():
+    arbitrary = startup._safe_alembic_failure_code("", 1, stdout="Running upgrade base -> attacker_secret_revision password=secret")
+    classified = startup._safe_alembic_failure_code(
+        "psycopg.errors.DatatypeMismatch",
+        1,
+        stdout="Running upgrade 0010_task_batch_identity -> 0011_result_layout_snapshot",
+    )
+    assert arbitrary == "MIGRATION_COMMAND_FAILED_UNCLASSIFIED"
+    assert "attacker" not in arbitrary and "secret" not in arbitrary
+    assert classified == "MIGRATION_COMMAND_FAILED_DATATYPE_MISMATCH"
+
+
+@pytest.mark.parametrize(
+    "step",
+    [
+        "0011_ANALYSIS_TEMPLATES",
+        "0011_ANALYSIS_TEMPLATES_DONE",
+        "0011_REQUEST_TYPE_PROFILES",
+        "0011_REQUEST_TYPE_PROFILES_DONE",
+        "0011_SNAPSHOTS",
+        "0011_SNAPSHOTS_DONE",
+        "0011_ANALYSIS_TEMPLATE_STATUS_INDEX",
+        "0011_ANALYSIS_TEMPLATE_STATUS_INDEX_DONE",
+        "0011_SNAPSHOT_TEMPLATE_INDEX",
+        "0011_COMPLETE",
+    ],
+)
+def test_known_0011_step_marker_is_allowlisted_without_reflecting_stream(step: str):
+    diagnostic = startup._safe_alembic_failure_code(
+        "stderr password=stderr-secret",
+        1,
+        stdout=f"SIMDASH_MIGRATION_STEP={step}\nstdout token=stdout-secret host=private-db",
+    )
+    assert diagnostic == f"MIGRATION_COMMAND_FAILED_AT_{step}"
+    assert all(secret not in diagnostic for secret in ("stderr-secret", "stdout-secret", "private-db"))
+
+
+def test_latest_known_completion_step_wins_and_arbitrary_step_is_never_reflected():
+    diagnostic = startup._safe_alembic_failure_code(
+        "",
+        1,
+        stdout="\n".join((
+            "SIMDASH_MIGRATION_STEP=0011_ANALYSIS_TEMPLATES",
+            "SIMDASH_MIGRATION_STEP=0011_ANALYSIS_TEMPLATES_DONE",
+            "SIMDASH_MIGRATION_STEP=0011_ATTACKER_SECRET",
+        )),
+    )
+    assert diagnostic == "MIGRATION_COMMAND_FAILED_AT_0011_ANALYSIS_TEMPLATES_DONE"
+    assert "ATTACKER" not in diagnostic and "SECRET" not in diagnostic
+
+
+def test_final_index_start_and_post_operation_complete_are_distinct():
+    before = startup._safe_alembic_failure_code("", 1, stdout="SIMDASH_MIGRATION_STEP=0011_SNAPSHOT_TEMPLATE_INDEX")
+    after = startup._safe_alembic_failure_code(
+        "",
+        1,
+        stdout="SIMDASH_MIGRATION_STEP=0011_SNAPSHOT_TEMPLATE_INDEX\nSIMDASH_MIGRATION_STEP=0011_COMPLETE",
+    )
+    assert before == "MIGRATION_COMMAND_FAILED_AT_0011_SNAPSHOT_TEMPLATE_INDEX"
+    assert after == "MIGRATION_COMMAND_FAILED_AT_0011_COMPLETE"
+
+
+@pytest.mark.parametrize(
+    ("exception_class", "expected"),
+    [
+        ("AssertionError", "MIGRATION_COMMAND_FAILED_CLIENT_ASSERTION_ERROR"),
+        ("TypeError", "MIGRATION_COMMAND_FAILED_CLIENT_TYPE_ERROR"),
+        ("AttributeError", "MIGRATION_COMMAND_FAILED_CLIENT_ATTRIBUTE_ERROR"),
+        ("ValueError", "MIGRATION_COMMAND_FAILED_CLIENT_VALUE_ERROR"),
+        ("KeyError", "MIGRATION_COMMAND_FAILED_CLIENT_KEY_ERROR"),
+        ("UnicodeDecodeError", "MIGRATION_COMMAND_FAILED_CLIENT_TEXT_ENCODING_ERROR"),
+        ("BrokenPipeError", "MIGRATION_COMMAND_FAILED_CLIENT_PIPE_ERROR"),
+        ("OSError", "MIGRATION_COMMAND_FAILED_CLIENT_OS_ERROR"),
+        ("sqlalchemy.exc.StatementError", "MIGRATION_COMMAND_FAILED_SQLALCHEMY_STATEMENT_ERROR"),
+        ("sqlalchemy.exc.DatabaseError", "MIGRATION_COMMAND_FAILED_SQLALCHEMY_DATABASE_ERROR"),
+        ("sqlalchemy.exc.ResourceClosedError", "MIGRATION_COMMAND_FAILED_SQLALCHEMY_RESOURCE_CLOSED"),
+        ("alembic.util.exc.CommandError", "MIGRATION_COMMAND_FAILED_ALEMBIC_COMMAND_ERROR"),
+    ],
+)
+def test_client_exception_class_precedes_complete_marker_without_exposing_stream(exception_class: str, expected: str):
+    diagnostic = startup._safe_alembic_failure_code(
+        f"Traceback: {exception_class}: password=stderr-secret host=private-db",
+        1,
+        stdout="SIMDASH_MIGRATION_STEP=0011_COMPLETE\ntoken=stdout-secret",
+    )
+    assert diagnostic == expected
+    assert all(secret not in diagnostic for secret in ("stderr-secret", "stdout-secret", "private-db"))
+
+
+def test_run_child_reports_safe_client_exception_after_complete_without_raw_stream(monkeypatch: pytest.MonkeyPatch):
+    owner_url = "postgresql://owner:owner-secret@private-db.internal/dashboard"
+    monkeypatch.setattr(
+        startup.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=1,
+            stdout="SIMDASH_MIGRATION_STEP=0011_COMPLETE\ntoken=stdout-secret",
+            stderr=f"Traceback: AssertionError password=stderr-secret {owner_url}",
+        ),
+    )
+    with pytest.raises(startup.StartupMigrationError) as raised:
+        startup._run_alembic_child(owner_url)
+    diagnostic = str(raised.value)
+    assert diagnostic == "MIGRATION_COMMAND_FAILED_CLIENT_ASSERTION_ERROR"
+    assert all(secret not in diagnostic for secret in ("owner-secret", "stdout-secret", "stderr-secret", "private-db"))
+
+
+def test_unknown_client_exception_is_not_reflected_and_complete_fallback_remains_safe():
+    diagnostic = startup._safe_alembic_failure_code(
+        "SuperSecretCustomError password=secret",
+        1,
+        stdout="SIMDASH_MIGRATION_STEP=0011_COMPLETE",
+    )
+    assert diagnostic == "MIGRATION_COMMAND_FAILED_AT_0011_COMPLETE"
+    assert "SuperSecret" not in diagnostic and "secret" not in diagnostic
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        (
+            "A transaction is already begun on this Session.",
+            "MIGRATION_COMMAND_FAILED_SQLALCHEMY_INVALID_REQUEST_TRANSACTION_ALREADY_BEGUN",
+        ),
+        (
+            "Can't operate on closed transaction inside context manager. Please complete the context manager before emitting further commands.",
+            "MIGRATION_COMMAND_FAILED_SQLALCHEMY_INVALID_REQUEST_TRANSACTION_CLOSED_IN_CONTEXT",
+        ),
+        (
+            "This transaction is inactive",
+            "MIGRATION_COMMAND_FAILED_SQLALCHEMY_INVALID_REQUEST_TRANSACTION_INACTIVE",
+        ),
+        (
+            "Can't reconnect until invalid transaction is rolled back. Please rollback() fully before proceeding",
+            "MIGRATION_COMMAND_FAILED_SQLALCHEMY_INVALID_REQUEST_CONNECTION_INVALIDATED",
+        ),
+        (
+            "This Connection is closed",
+            "MIGRATION_COMMAND_FAILED_SQLALCHEMY_INVALID_REQUEST_CONNECTION_CLOSED",
+        ),
+        (
+            "Not an executable object: password=sql-secret",
+            "MIGRATION_COMMAND_FAILED_SQLALCHEMY_INVALID_REQUEST_EXECUTABLE_EXPECTED",
+        ),
+        (
+            "A value is required for bind parameter 'private_bind'",
+            "MIGRATION_COMMAND_FAILED_SQLALCHEMY_INVALID_REQUEST_BIND_PARAMETER_REQUIRED",
+        ),
+        (
+            "Autobegin is disabled on this Session; please call session.begin() to start a new transaction",
+            "MIGRATION_COMMAND_FAILED_SQLALCHEMY_INVALID_REQUEST_AUTOBEGIN_CONFLICT",
+        ),
+    ],
+)
+def test_invalid_request_detail_is_allowlisted_and_precedes_generic_category(message: str, expected: str):
+    diagnostic = startup._safe_alembic_failure_code(
+        f"sqlalchemy.exc.InvalidRequestError: {message} password=stderr-secret host=private-db",
+        1,
+        stdout="SIMDASH_MIGRATION_STEP=0011_COMPLETE\ntoken=stdout-secret",
+    )
+    assert diagnostic == expected
+    assert all(secret not in diagnostic for secret in ("stderr-secret", "stdout-secret", "private-db", "private_bind", "sql-secret"))
+
+
+def test_invalid_request_detail_marker_requires_invalid_request_class():
+    diagnostic = startup._safe_alembic_failure_code(
+        "Attacker text: A transaction is already begun on this Session. password=secret",
+        1,
+        stdout="SIMDASH_MIGRATION_STEP=0011_COMPLETE",
+    )
+    assert diagnostic == "MIGRATION_COMMAND_FAILED_AT_0011_COMPLETE"
+    assert "secret" not in diagnostic
+
+
+def test_unknown_invalid_request_message_uses_generic_safe_category_without_reflection():
+    diagnostic = startup._safe_alembic_failure_code(
+        "sqlalchemy.exc.InvalidRequestError: private-new-message password=secret",
+        1,
+        stdout="SIMDASH_MIGRATION_STEP=0011_COMPLETE",
+    )
+    assert diagnostic == "MIGRATION_COMMAND_FAILED_SQLALCHEMY_INVALID_REQUEST"
+    assert "private-new-message" not in diagnostic and "secret" not in diagnostic
+
+
+def test_0011_safe_markers_bracket_each_ddl_step_and_finish_after_final_index():
+    source = (Path(__file__).resolve().parents[1] / "migrations" / "versions" / "0011_request_result_layout_snapshots.py").read_text(encoding="utf-8")
+    steps = (
+        ("SIMDASH_MIGRATION_STEP=0011_ANALYSIS_TEMPLATES", "CREATE TABLE IF NOT EXISTS analysis_template_versions", "SIMDASH_MIGRATION_STEP=0011_ANALYSIS_TEMPLATES_DONE"),
+        ("SIMDASH_MIGRATION_STEP=0011_REQUEST_TYPE_PROFILES", "CREATE TABLE IF NOT EXISTS request_type_result_profiles", "SIMDASH_MIGRATION_STEP=0011_REQUEST_TYPE_PROFILES_DONE"),
+        ("SIMDASH_MIGRATION_STEP=0011_SNAPSHOTS", "CREATE TABLE IF NOT EXISTS request_result_layout_snapshots", "SIMDASH_MIGRATION_STEP=0011_SNAPSHOTS_DONE"),
+        ("SIMDASH_MIGRATION_STEP=0011_ANALYSIS_TEMPLATE_STATUS_INDEX", "CREATE INDEX IF NOT EXISTS ix_analysis_template_versions_status", "SIMDASH_MIGRATION_STEP=0011_ANALYSIS_TEMPLATE_STATUS_INDEX_DONE"),
+        ("SIMDASH_MIGRATION_STEP=0011_SNAPSHOT_TEMPLATE_INDEX", "CREATE INDEX IF NOT EXISTS ix_request_result_layout_snapshots_template", "SIMDASH_MIGRATION_STEP=0011_COMPLETE"),
+    )
+    positions = [(source.index(before), source.index(statement), source.index(after)) for before, statement, after in steps]
+    assert all(before_position < statement_position < after_position for before_position, statement_position, after_position in positions)
+    assert [before_position for before_position, _, _ in positions] == sorted(before_position for before_position, _, _ in positions)
 
 
 def test_code_graph_has_one_head_and_known_ancestors():

@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Activity, AlertTriangle, Check, ClipboardList, FileText, FlaskConical, Image, LoaderCircle, Pencil, Play, Plus, RefreshCw, Save, Settings2, ShieldCheck, Tag, Trash2, X } from 'lucide-react'
 import type { Workflow } from '../../types'
 import { workbenchApi } from './api'
-import { DEFAULT_REQUEST_TYPE_LABELS, requestTypeLabels, type BatchExecutionAttempt, type BatchProfile, type DemoRun, type DemoRunTask, type WorkbenchNode, type WorkbenchRequestType, type WorkbenchTaskType } from './types'
+import { ResultProfileConfiguration } from './ResultProfileConfiguration'
+import { resultProfileValidation, workflowDataContracts } from './resultProfileContracts'
+import { DEFAULT_REQUEST_TYPE_LABELS, requestTypeLabels, type AnalysisTemplateVersion, type BatchExecutionAttempt, type BatchProfile, type DemoRun, type DemoRunTask, type ResultProfile, type WorkbenchNode, type WorkbenchRequestType, type WorkbenchTaskType } from './types'
 
 type CompositionMode = 'parallel' | 'sequence'
 
@@ -319,6 +321,10 @@ export function WorkbenchTypeAdmin() {
   const [adminView, setAdminView] = useState<'request-types' | 'batch-paths'>('request-types')
   const [taskTypes, setTaskTypes] = useState<WorkbenchTaskType[]>([])
   const [requestTypes, setRequestTypes] = useState<WorkbenchRequestType[]>([])
+  const [analysisTemplates, setAnalysisTemplates] = useState<AnalysisTemplateVersion[]>([])
+  const [resultProfile, setResultProfile] = useState<ResultProfile | null>(null)
+  const [resultProfileLoading, setResultProfileLoading] = useState(false)
+  const resultProfileRequest = useRef(0)
   const [selectedTaskKeys, setSelectedTaskKeys] = useState<string[]>([])
   const [compositionMode, setCompositionMode] = useState<CompositionMode>('sequence')
   const [typeName, setTypeName] = useState('사용자 정의 해석')
@@ -334,9 +340,13 @@ export function WorkbenchTypeAdmin() {
   const [editingBatchProfileId, setEditingBatchProfileId] = useState('')
   const [batchDraft, setBatchDraft] = useState<Omit<BatchProfile, 'version' | 'created_at' | 'updated_at'>>({ id: '', name: 'Radioss 로컬 배치', solver_path: 'C:\\Altair\\hwsolvers\\radioss.exe', working_directory: 'C:\\Simulation\\runs\\{request_id}', arguments_template: '-i {input} -nt {cores}', environment: { OMP_NUM_THREADS: '{cores}' }, task_type_id: 'hpc-submit', task_type_version: 1, task_type_ids: ['hpc-submit'], is_active: true, updated_by: '관리자' })
 
+  useEffect(() => () => {
+    resultProfileRequest.current += 1
+  }, [])
+
   useEffect(() => {
-    Promise.all([workbenchApi.taskTypes(), workbenchApi.requestTypes(), workbenchApi.batchProfiles(true)])
-      .then(([tasks, types, profiles]) => { setTaskTypes(tasks); setRequestTypes(types); setBatchProfiles(profiles) })
+    Promise.all([workbenchApi.taskTypes(), workbenchApi.requestTypes(), workbenchApi.batchProfiles(true), workbenchApi.analysisTemplates(false)])
+      .then(([tasks, types, profiles, templates]) => { setTaskTypes(tasks); setRequestTypes(types); setBatchProfiles(profiles); setAnalysisTemplates(templates) })
       .catch((reason) => setError(friendlyWorkbenchError(reason)))
   }, [])
 
@@ -357,6 +367,9 @@ export function WorkbenchTypeAdmin() {
     setTypeLabels([...DEFAULT_REQUEST_TYPE_LABELS])
     setLabelDraft('')
     setSelectedTaskKeys([])
+    setResultProfile(null)
+    resultProfileRequest.current += 1
+    setResultProfileLoading(false)
     setCompositionMode('sequence')
   }
   const addLabel = () => {
@@ -374,6 +387,14 @@ export function WorkbenchTypeAdmin() {
     setLabelDraft('')
     setCompositionMode(compositionModeFor(requestType.default_workflow.nodes))
     setSelectedTaskKeys(requestType.default_workflow.nodes.map((node) => `${node.task_type_id}:${node.task_type_version}`))
+    setResultProfile(null)
+    const requestToken = resultProfileRequest.current + 1
+    resultProfileRequest.current = requestToken
+    setResultProfileLoading(true)
+    void workbenchApi.resultProfile(requestType.id, requestType.version)
+      .then((profile) => { if (resultProfileRequest.current === requestToken) setResultProfile(profile) })
+      .catch((reason) => { if (resultProfileRequest.current === requestToken) setError(friendlyWorkbenchError(reason)) })
+      .finally(() => { if (resultProfileRequest.current === requestToken) setResultProfileLoading(false) })
     document.querySelector('.workbench-admin-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
   const deactivateType = async (requestType: WorkbenchRequestType) => {
@@ -389,12 +410,27 @@ export function WorkbenchTypeAdmin() {
   }
   const saveType = async () => {
     if (typeName.trim().length < 2 || !selectedTasks.length || !typeLabels.length) return
+    const profileError = resultProfileValidation(resultProfile, selectedTasks)
+    if (resultProfileLoading || profileError) {
+      setError(profileError || '기존 결과 구성을 불러오는 동안 저장할 수 없습니다.')
+      return
+    }
+
     setSaving(true); setError(''); setNotice('')
     try {
+      resultProfileRequest.current += 1
       const payload = { display_name: typeName.trim(), description: typeDescription.trim(),
         allowed_task_types: selectedTasks.map((task) => ({ id: task.id, version: task.version })),
         default_workflow: { nodes: nodesFor(selectedTasks, compositionMode) },
-        match_rules: { ...(matchAnalysisType.trim() ? { analysis_type: matchAnalysisType.trim() } : {}), labels: typeLabels }, is_active: true }
+        match_rules: { ...(matchAnalysisType.trim() ? { analysis_type: matchAnalysisType.trim() } : {}), labels: typeLabels },
+        result_profile: resultProfile ? {
+          template_id: resultProfile.template_id,
+          template_version: resultProfile.template_version,
+          included_widget_ids: resultProfile.included_widget_ids,
+          overrides: resultProfile.overrides,
+          required_data_contracts: resultProfile.required_data_contracts,
+        } : undefined,
+        is_active: true }
       const saved = editingTypeId ? await workbenchApi.updateRequestType(editingTypeId, payload) : await workbenchApi.createRequestType(payload)
       setRequestTypes((current) => [saved, ...current.filter((item) => item.id !== saved.id)])
       setNotice(`${saved.display_name} v${saved.version}을 저장했습니다. 시스템 ID는 ${saved.id}입니다.`)
@@ -463,9 +499,10 @@ export function WorkbenchTypeAdmin() {
           <small>최소 1개 · 기본값 #SPDM, #부서 · 라벨은 의뢰 접수 필터에 바로 표시됩니다.</small>
         </div>
         <label htmlFor="request-type-analysis"><span>자동 추천 분석 유형</span><input id="request-type-analysis" name="requestTypeAnalysis" aria-label="관리 자동 추천 분석 유형" value={matchAnalysisType} onChange={(event) => setMatchAnalysisType(event.target.value)} placeholder="예: DROP · 비워두면 수동 선택" /></label>
+        <ResultProfileConfiguration templates={analysisTemplates} value={resultProfile} availableDataContracts={workflowDataContracts(selectedTasks)} validationTasks={selectedTasks} onChange={setResultProfile} />
         <fieldset className="workbench-composition-options"><legend>기본 실행 방식</legend><label><input type="radio" name="compositionMode" value="sequence" checked={compositionMode === 'sequence'} onChange={() => setCompositionMode('sequence')} /><span><strong>순차 실행</strong><small>선택한 순서대로, 이전 작업 완료 후 다음 작업을 시작합니다.</small></span></label><label><input type="radio" name="compositionMode" value="parallel" checked={compositionMode === 'parallel'} onChange={() => setCompositionMode('parallel')} /><span><strong>독립·병렬 실행</strong><small>선행 관계 없이 선택한 작업을 각각 시작할 수 있습니다.</small></span></label></fieldset>
         <div className="workbench-type-plan"><strong>{selectedTasks.length}개 작업 선택</strong><p>{selectedTasks.map((task) => task.display_name).join(' → ') || '오른쪽에서 수행자에게 허용할 작업을 선택하세요.'}</p></div>
-        <button type="submit" className="workbench-admin-save" disabled={saving || !selectedTasks.length || !typeLabels.length || typeName.trim().length < 2}>{saving ? <LoaderCircle className="spin" aria-hidden="true" /> : <Save aria-hidden="true" />} {editingTypeId ? '변경 내용을 새 버전으로 저장' : '새 작업 유형 저장'}</button>
+        <button type="submit" className="workbench-admin-save" disabled={saving || resultProfileLoading || Boolean(resultProfileValidation(resultProfile, selectedTasks)) || !selectedTasks.length || !typeLabels.length || typeName.trim().length < 2}>{saving ? <LoaderCircle className="spin" aria-hidden="true" /> : <Save aria-hidden="true" />} {editingTypeId ? '변경 내용을 새 버전으로 저장' : '새 작업 유형 저장'}</button>
       </form>
       <div className="workbench-admin-task-picker"><header><span>ALLOWED TASKS</span><h2>수행자에게 허용할 작업</h2><p>카드를 선택한 순서가 기본 실행 순서가 됩니다.</p></header><div>{taskTypes.map((task) => { const selected = selectedTaskKeys.includes(`${task.id}:${task.version}`); const guidance = TASK_GUIDANCE[task.kind]; return <button type="button" key={`${task.id}:${task.version}`} className={selected ? 'selected' : ''} aria-pressed={selected} onClick={() => toggle(task)}><i>{selected ? <Check aria-hidden="true" /> : <Plus aria-hidden="true" />}</i><span><strong>{task.display_name}</strong><small>{guidance?.purpose ?? task.description}</small></span><b>v{task.version}</b></button> })}</div></div>
     </section>

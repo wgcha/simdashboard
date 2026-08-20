@@ -22,7 +22,7 @@ export type Permission =
   | 'system.menu_policy.manage'
   | 'audit.view'
 
-export type MenuId = 'portfolio' | 'dashboard' | 'intake' | 'workbench' | 'data' | 'workbench_admin' | 'variables' | 'templates' | 'schemas' | 'examples' | 'help' | 'access_admin' | 'menu_policy_admin' | 'audit_admin'
+export type MenuId = 'portfolio' | 'dashboard' | 'intake' | 'workbench' | 'data' | 'workbench_admin' | 'project_result_profiles' | 'variables' | 'templates' | 'schemas' | 'examples' | 'help' | 'access_admin' | 'menu_policy_admin' | 'audit_admin'
 export type WorkspacePage = MenuId
 export type MenuContext = 'company' | 'project' | 'system'
 export type MenuPolicyItem = {

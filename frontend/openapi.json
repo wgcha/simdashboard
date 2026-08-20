@@ -1401,6 +1401,314 @@
         }
       }
     },
+    "/api/workbench/analysis-templates": {
+      "get": {
+        "tags": [
+          "workbench-demo"
+        ],
+        "summary": "List Analysis Templates",
+        "operationId": "list_analysis_templates_api_workbench_analysis_templates_get",
+        "parameters": [
+          {
+            "name": "all_versions",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "All Versions"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "title": "Response List Analysis Templates Api Workbench Analysis Templates Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/workbench/analysis-templates": {
+      "post": {
+        "tags": [
+          "workbench-demo"
+        ],
+        "summary": "Create Analysis Template",
+        "operationId": "create_analysis_template_api_admin_workbench_analysis_templates_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnalysisTemplateVersionCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Create Analysis Template Api Admin Workbench Analysis Templates Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workbench/request-types/{request_type_id}/{version}/result-profile": {
+      "get": {
+        "tags": [
+          "workbench-demo"
+        ],
+        "summary": "Get Result Profile",
+        "operationId": "get_result_profile_api_workbench_request_types__request_type_id___version__result_profile_get",
+        "parameters": [
+          {
+            "name": "request_type_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Type Id"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Version"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Result Profile Api Workbench Request Types  Request Type Id   Version  Result Profile Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{project_id}/admin/workbench/request-types/{request_type_id}/{version}/result-profile": {
+      "put": {
+        "tags": [
+          "workbench-demo"
+        ],
+        "summary": "Save Project Result Profile",
+        "operationId": "save_project_result_profile_api_projects__project_id__admin_workbench_request_types__request_type_id___version__result_profile_put",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "request_type_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Type Id"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Version"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResultProfileInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Save Project Result Profile Api Projects  Project Id  Admin Workbench Request Types  Request Type Id   Version  Result Profile Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workbench/requests/{request_id}/result-layout": {
+      "get": {
+        "tags": [
+          "workbench-demo"
+        ],
+        "summary": "Get Request Result Layout",
+        "operationId": "get_request_result_layout_api_workbench_requests__request_id__result_layout_get",
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
+            }
+          },
+          {
+            "name": "load_case_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Load Case Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Request Result Layout Api Workbench Requests  Request Id  Result Layout Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/admin/workbench/request-types": {
       "post": {
         "tags": [
@@ -6269,6 +6577,85 @@
         ],
         "title": "AnalysisRequestCreate"
       },
+      "AnalysisTemplateVersionCreate": {
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80,
+                "minLength": 3,
+                "pattern": "^[a-z][a-z0-9_-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "display_name": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 2,
+            "title": "Display Name"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 500,
+            "title": "Description",
+            "default": ""
+          },
+          "page_definitions": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "maxItems": 40,
+            "minItems": 1,
+            "title": "Page Definitions"
+          },
+          "lifecycle_status": {
+            "type": "string",
+            "enum": [
+              "DRAFT",
+              "PUBLISHED",
+              "ARCHIVED"
+            ],
+            "title": "Lifecycle Status",
+            "default": "DRAFT"
+          },
+          "scope_kind": {
+            "type": "string",
+            "enum": [
+              "SYSTEM",
+              "PROJECT"
+            ],
+            "title": "Scope Kind",
+            "default": "SYSTEM"
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "display_name",
+          "page_definitions"
+        ],
+        "title": "AnalysisTemplateVersionCreate"
+      },
       "AssigneeUpdate": {
         "properties": {
           "owner_user_id": {
@@ -8024,6 +8411,16 @@
             "type": "object",
             "title": "Match Rules"
           },
+          "result_profile": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResultProfileInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "is_active": {
             "type": "boolean",
             "title": "Is Active",
@@ -8078,6 +8475,58 @@
           "content"
         ],
         "title": "ResultImportPayload"
+      },
+      "ResultProfileInput": {
+        "properties": {
+          "template_id": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 3,
+            "pattern": "^[a-z][a-z0-9_-]*$",
+            "title": "Template Id"
+          },
+          "template_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Template Version"
+          },
+          "included_widget_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 120
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Included Widget Ids"
+          },
+          "overrides": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Overrides"
+          },
+          "required_data_contracts": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 32,
+            "title": "Required Data Contracts"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "template_id",
+          "template_version"
+        ],
+        "title": "ResultProfileInput",
+        "description": "Versioned selection and configuration for a published result template."
       },
       "ReviewItemCreate": {
         "properties": {

@@ -13,6 +13,7 @@ const expectedPaths = {
   workbench: '/workspace/execution',
   data: '/workspace/data',
   workbench_admin: '/workspace/admin/work-types',
+  project_result_profiles: '/workspace/project/result-layouts',
   schemas: '/workspace/catalog/schemas',
   variables: '/workspace/catalog/variables',
   templates: '/workspace/catalog/templates',

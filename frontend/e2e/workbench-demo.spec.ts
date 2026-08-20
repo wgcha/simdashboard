@@ -253,7 +253,7 @@ test('작업 유형 선택 카드를 3열 3행 이후 내부 스크롤로 탐색
   await login(page)
   const suffix = Date.now()
   const ids: string[] = []
-  for (const [index, id] of ids.entries()) {
+  for (const index of Array.from({ length: 10 }, (_, index) => index)) {
     const response = await page.request.post('/api/admin/workbench/request-types', {
       data: {
         display_name: `스크롤 검증 작업 ${index + 1}`,
