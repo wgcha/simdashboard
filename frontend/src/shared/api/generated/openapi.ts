@@ -535,6 +535,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/workbench/requests/{request_id}/result-layout/materialize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Materialize Request Result Layout */
+        post: operations["materialize_request_result_layout_api_workbench_requests__request_id__result_layout_materialize_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/workbench/request-types": {
         parameters: {
             query?: never;
@@ -856,6 +873,26 @@ export interface paths {
         get: operations["get_widget_catalog_api_widget_catalog_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/result-imports/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Refresh Master Result Folder
+         * @description Discover and import trusted result bundles; client paths are never accepted.
+         */
+        post: operations["refresh_master_result_folder_api_result_imports_refresh_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2286,6 +2323,44 @@ export interface components {
             /** Password */
             password: string;
         };
+        /**
+         * MasterResultRefreshItem
+         * @description The outcome for one manifest discovered below the configured root.
+         */
+        MasterResultRefreshItem: {
+            /**
+             * Manifest Path
+             * @description Path relative to SIMDASH_IMPORT_ROOT
+             */
+            manifest_path: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "IMPORTED" | "SKIPPED" | "FAILED";
+            /** Load Case Id */
+            load_case_id?: string | null;
+            /** Analysis Run Id */
+            analysis_run_id?: string | null;
+            /** Message */
+            message?: string | null;
+        };
+        /**
+         * MasterResultRefreshResponse
+         * @description A best-effort refresh summary; one bad bundle never stops its siblings.
+         */
+        MasterResultRefreshResponse: {
+            /** Scanned Count */
+            scanned_count: number;
+            /** Imported Count */
+            imported_count: number;
+            /** Skipped Count */
+            skipped_count: number;
+            /** Failed Count */
+            failed_count: number;
+            /** Items */
+            items: components["schemas"]["MasterResultRefreshItem"][];
+        };
         /** MenuPolicyItem */
         MenuPolicyItem: {
             /** Id */
@@ -2605,6 +2680,21 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /**
+         * RequestResultDefinition
+         * @description Result widgets authored with a request type, rather than a template.
+         */
+        RequestResultDefinition: {
+            /** Page Name */
+            page_name?: string | null;
+            /**
+             * Page Description
+             * @default
+             */
+            page_description: string;
+            /** Widgets */
+            widgets: components["schemas"]["ResultWidgetDefinition"][];
+        };
         /** RequestTypeAssignmentInput */
         RequestTypeAssignmentInput: {
             /** Request Type Id */
@@ -2631,6 +2721,7 @@ export interface components {
                 [key: string]: unknown;
             };
             result_profile?: components["schemas"]["ResultProfileInput"] | null;
+            result_definition?: components["schemas"]["RequestResultDefinition"] | null;
             /**
              * Is Active
              * @default true
@@ -2651,6 +2742,13 @@ export interface components {
              */
             validate_only: boolean;
         };
+        /** ResultLayoutMaterializeInput */
+        ResultLayoutMaterializeInput: {
+            /** Load Case Id */
+            load_case_id: string;
+            /** Page Id */
+            page_id?: string | null;
+        };
         /**
          * ResultProfileInput
          * @description Versioned selection and configuration for a published result template.
@@ -2668,6 +2766,30 @@ export interface components {
             };
             /** Required Data Contracts */
             required_data_contracts?: string[];
+        };
+        /**
+         * ResultWidgetDefinition
+         * @description A compact, authored result-widget tag for a request type.
+         */
+        ResultWidgetDefinition: {
+            /** Id */
+            id: string;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "kpi" | "verdict" | "gauge" | "edge_bar" | "time_series" | "scatter" | "result_table" | "contour" | "video" | "video_grid" | "model3d" | "note" | "workflow" | "open_cell_map" | "open_cell_summary" | "summary" | "chassis_summary" | "chassis_diagram" | "chassis_bar" | "chassis_table" | "run_comparison";
+            /** Title */
+            title: string;
+            /** Variable Key */
+            variable_key?: string | null;
+            /** Data Contracts */
+            data_contracts?: string[];
+            /**
+             * Required
+             * @default false
+             */
+            required: boolean;
         };
         /** ReviewItemCreate */
         ReviewItemCreate: {
@@ -4141,6 +4263,41 @@ export interface operations {
             };
         };
     };
+    materialize_request_result_layout_api_workbench_requests__request_id__result_layout_materialize_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResultLayoutMaterializeInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardDefinition"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     create_request_type_api_admin_workbench_request_types_post: {
         parameters: {
             query?: never;
@@ -4923,6 +5080,26 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     }[];
+                };
+            };
+        };
+    };
+    refresh_master_result_folder_api_result_imports_refresh_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MasterResultRefreshResponse"];
                 };
             };
         };

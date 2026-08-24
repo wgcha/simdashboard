@@ -3,14 +3,14 @@ import { AlertTriangle, Database, LayoutDashboard, LoaderCircle, RefreshCw } fro
 import { Responsive, WidthProvider } from 'react-grid-layout'
 
 import { api } from '../../api'
-import type { DashboardWidget, Overview, QualityThreshold } from '../../types'
+import type { DashboardDefinition, DashboardWidget, Overview, QualityThreshold } from '../../types'
 import type { RequestResultLayout, ResultLayoutBindings, ResultScalarBinding } from '../../shared/api/resultLayouts'
 import { ComparisonWorkspace, WidgetCard } from './AnalysisWidgets'
 import { DropVideoGrid } from './DropVideoGrid'
 import { resultLayoutPollDelay, resultWidgetMessage, resultWidgetState, shouldPollResultLayout } from './resultLayoutRuntime'
 
 const ResponsiveGridLayout = WidthProvider(Responsive) as unknown as ComponentType<any>
-const domainWidgetTypes = new Set<DashboardWidget['type']>(['open_cell_map', 'open_cell_summary', 'chassis_summary', 'chassis_diagram', 'chassis_bar', 'chassis_table', 'run_comparison'])
+const domainWidgetTypes = new Set<DashboardWidget['type']>(['edge_bar', 'time_series', 'scatter', 'contour', 'video', 'note', 'open_cell_map', 'open_cell_summary', 'chassis_summary', 'chassis_diagram', 'chassis_bar', 'chassis_table', 'run_comparison'])
 const noOp = () => {}
 
 function scalarForWidget(widget: DashboardWidget, bindings: ResultLayoutBindings) {
@@ -40,7 +40,7 @@ function SnapshotWidget({ widget, requiredDataContracts, bindings, overview, thr
   const state = resultWidgetState(widget, requiredDataContracts, bindings)
   const loadCaseId = bindings.load_cases[0]?.id ?? ''
   return <article className={`result-layout-widget state-${state.toLowerCase()}`} data-testid={`result-layout-widget-${widget.id}`}>
-    <header><div><small>{widget.type.replaceAll('_', ' ')}</small><h4>{widget.title}</h4></div><span className="result-layout-widget-state">{state}</span></header>
+    <header><div><small>{widget.type.replaceAll('_', ' ')}</small><h4>{widget.title}</h4></div><span className="result-layout-widget-state">{state === 'WAITING' ? '결과 대기' : state}</span></header>
     <Database aria-hidden="true" />
     {state !== 'READY' ? <p>{resultWidgetMessage(state)}</p>
       : widget.type === 'video_grid' && loadCaseId ? <DropVideoGrid loadCaseId={loadCaseId} pageSize={Number(widget.settings?.pageSize ?? 20)} />
@@ -54,7 +54,7 @@ function EmptyLayout({ canOpenData, onOpenData }: { canOpenData: boolean; onOpen
   return <section className="result-layout-empty" data-testid="result-layout-unconfigured"><LayoutDashboard aria-hidden="true" /><h2>결과 구성 미지정</h2><p>이 의뢰는 결과 레이아웃 없이 접수되었습니다. 특정 분석 유형을 추정하지 않으며, 하중 경우와 결과를 등록한 뒤 작업 유형의 결과 구성을 버전으로 지정할 수 있습니다.</p>{canOpenData ? <button type="button" onClick={onOpenData}>하중 경우·결과 설정</button> : null}</section>
 }
 
-export function GenericResultLayoutWorkspace({ projectId, projectName, requestId, requestTitle, selectedLoadCaseId, canOpenData = false, onOpenData, onLoadLayout }: { projectId: string; projectName: string; requestId: string; requestTitle: string; selectedLoadCaseId?: string; canOpenData?: boolean; onOpenData: () => void; onLoadLayout: (requestId: string, loadCaseId?: string) => Promise<RequestResultLayout> }) {
+export function GenericResultLayoutWorkspace({ projectId, projectName, requestId, requestTitle, selectedLoadCaseId, canOpenData = false, onOpenData, onLoadLayout, onSnapshotPageChange }: { projectId: string; projectName: string; requestId: string; requestTitle: string; selectedLoadCaseId?: string; canOpenData?: boolean; onOpenData: () => void; onLoadLayout: (requestId: string, loadCaseId?: string) => Promise<RequestResultLayout>; onSnapshotPageChange?: (page: DashboardDefinition) => void }) {
   const [layout, setLayout] = useState<RequestResultLayout | null>(null)
   const [activePageId, setActivePageId] = useState('')
   const [loading, setLoading] = useState(true)
@@ -108,6 +108,7 @@ export function GenericResultLayoutWorkspace({ projectId, projectName, requestId
   const snapshot = layout?.snapshot
   const activePage = snapshot?.pages.find((page) => page.id === activePageId) ?? snapshot?.pages[0]
   const bindings: ResultLayoutBindings = layout?.bindings ?? { available_data_contracts: [], load_cases: [], latest_result_run: null, scalars: [], error: null }
+  useEffect(() => { if (activePage) onSnapshotPageChange?.(activePage) }, [activePage, onSnapshotPageChange])
   const needsDomainRenderer = Boolean(activePage?.widgets.some((widget) => domainWidgetTypes.has(widget.type) && resultWidgetState(widget, snapshot?.required_data_contracts ?? [], bindings) === 'READY'))
   const domainLoadCaseId = bindings.load_cases[0]?.id ?? ''
 

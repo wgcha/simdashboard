@@ -1,15 +1,14 @@
 import { Check, LayoutDashboard, Save } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { resultLayoutApi, type AnalysisTemplateVersion, type ResultProfile } from '../../shared/api/resultLayouts'
 import { workbenchApi } from './api'
 import { ResultProfileConfiguration } from './ResultProfileConfiguration'
 import { resultProfileValidation } from './resultProfileContracts'
-import type { WorkbenchRequestType, WorkbenchTaskType } from './types'
+import type { WorkbenchRequestType } from './types'
 
 export function ProjectResultProfileBinding({ projectId }: { projectId: string }) {
   const [requestTypes, setRequestTypes] = useState<WorkbenchRequestType[]>([])
-  const [taskTypes, setTaskTypes] = useState<WorkbenchTaskType[]>([])
   const [templates, setTemplates] = useState<AnalysisTemplateVersion[]>([])
   const [requestTypeKey, setRequestTypeKey] = useState('')
   const [profile, setProfile] = useState<ResultProfile | null>(null)
@@ -21,14 +20,13 @@ export function ProjectResultProfileBinding({ projectId }: { projectId: string }
   const profileLoadToken = useRef(0)
 
   useEffect(() => {
-    Promise.all([workbenchApi.requestTypes(), workbenchApi.taskTypes(), resultLayoutApi.analysisTemplates(false, projectId)])
-      .then(([types, tasks, availableTemplates]) => { setRequestTypes(types); setTaskTypes(tasks); setTemplates(availableTemplates) })
+    Promise.all([workbenchApi.requestTypes(), resultLayoutApi.analysisTemplates(false, projectId)])
+      .then(([types, availableTemplates]) => { setRequestTypes(types); setTemplates(availableTemplates) })
       .catch((reason) => setError(reason instanceof Error ? reason.message : '결과 구성 정보를 불러오지 못했습니다.'))
   }, [projectId])
 
   const selectedType = requestTypes.find((item) => item.id + ":" + item.version === requestTypeKey) ?? null
   const selectedProfileKey = selectedType ? projectId + ":" + selectedType.id + ":" + selectedType.version : ""
-  const validationTasks = useMemo(() => selectedType?.default_workflow.nodes.flatMap((node) => taskTypes.filter((task) => task.id === node.task_type_id && task.version === node.task_type_version)) ?? [], [selectedType, taskTypes])
 
   useEffect(() => {
     const token = profileLoadToken.current + 1
@@ -51,7 +49,7 @@ export function ProjectResultProfileBinding({ projectId }: { projectId: string }
     return () => { cancelled = true }
   }, [selectedProfileKey])
 
-  const validationError = resultProfileValidation(profile, validationTasks)
+  const validationError = resultProfileValidation(profile, [])
 
   const save = async () => {
     if (!selectedType || !profile || profileKey !== selectedProfileKey || validationError || profileLoading) return
@@ -86,7 +84,7 @@ export function ProjectResultProfileBinding({ projectId }: { projectId: string }
     <section className="workbench-admin-form"><label><span>작업 유형 버전</span><select aria-label="프로젝트 결과 구성 작업 유형" value={requestTypeKey} onChange={(event) => { profileLoadToken.current += 1; setProfile(null); setNotice(''); setRequestTypeKey(event.target.value) }}><option value="">작업 유형을 선택하세요</option>{requestTypes.map((item) => <option key={`${item.id}:${item.version}`} value={`${item.id}:${item.version}`}>{item.display_name} · v{item.version}</option>)}</select></label>
       {profileLoading && <p role="status">선택한 작업 유형의 결과 구성을 불러오는 중입니다.</p>}
       {validationError && <p className="result-profile-validation" role="alert">{validationError}</p>}
-      {selectedType && <ResultProfileConfiguration templates={templates} value={profile} availableDataContracts={['LOAD_CASE', 'RESULT_RUN', 'SCALAR_RESULT', 'TIME_SERIES', 'CURVE', 'MEDIA_ASSET']} validationTasks={validationTasks} onChange={updateProfile} />}
+      {selectedType && <ResultProfileConfiguration templates={templates} value={profile} onChange={updateProfile} />}
       <button className="workbench-admin-save" disabled={!profile || profileKey !== selectedProfileKey || saving || profileLoading || Boolean(validationError)} onClick={() => void save()}><Save aria-hidden="true" /> {saving ? '저장 중…' : '프로젝트 결과 구성 저장'}</button>
     </section>
   </main>

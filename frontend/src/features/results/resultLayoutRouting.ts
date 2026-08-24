@@ -70,9 +70,9 @@ export function createWorkflowAnalysisOpener({ selectRequestContext, loadLayout,
     try {
       const route = detailedAnalysisRoute(await loadLayout(workflow.request.id))
       if (!isCurrentIntent(intent)) return
-      await selectRequestContext(workflow, route === 'DOMAIN' ? 'open_cell' : undefined)
+      const selectedDashboardId = await selectRequestContext(workflow, route === 'DOMAIN' ? 'open_cell' : undefined)
       if (!isCurrentIntent(intent)) return
-      if (route === 'DOMAIN') return
+      if ((typeof selectedDashboardId === 'string' && selectedDashboardId) || route === 'DOMAIN') return
       setActiveDashboardId(route === 'SNAPSHOT' ? 'request-result-layout' : 'pending-open-cell')
       setActiveView('custom')
     } catch (reason) { if (isCurrentIntent(intent)) setError(reason instanceof Error ? reason.message : '상세 분석을 열지 못했습니다.') }

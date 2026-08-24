@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from .api import WidgetType
 
 
 TaskKind = Literal[
@@ -55,6 +57,37 @@ class ResultProfileInput(StrictModel):
     included_widget_ids: list[str] | None = Field(default=None, max_length=120)
     overrides: dict[str, Any] = Field(default_factory=dict)
     required_data_contracts: list[str] = Field(default_factory=list, max_length=32)
+
+
+class ResultLayoutMaterializeInput(StrictModel):
+    load_case_id: str = Field(min_length=1, max_length=120)
+    page_id: str | None = Field(default=None, min_length=1, max_length=120)
+
+
+class ResultWidgetDefinition(StrictModel):
+    """A compact, authored result-widget tag for a request type."""
+
+    id: str = Field(min_length=1, max_length=120)
+    type: WidgetType
+    title: str = Field(min_length=1, max_length=160)
+    variable_key: str | None = Field(default=None, min_length=1, max_length=120)
+    data_contracts: list[str] = Field(default_factory=list, max_length=32)
+    required: bool = False
+
+
+class RequestResultDefinition(StrictModel):
+    """Result widgets authored with a request type, rather than a template."""
+
+    page_name: str | None = Field(default=None, min_length=2, max_length=120)
+    page_description: str = Field(default="", max_length=500)
+    widgets: list[ResultWidgetDefinition] = Field(min_length=1, max_length=120)
+
+    @model_validator(mode="after")
+    def validate_widget_ids(self) -> "RequestResultDefinition":
+        widget_ids = [widget.id for widget in self.widgets]
+        if len(widget_ids) != len(set(widget_ids)):
+            raise ValueError("요청 결과 위젯 ID는 중복될 수 없습니다.")
+        return self
 
 
 class AnalysisTemplateVersionCreate(StrictModel):
@@ -119,7 +152,14 @@ class RequestTypeVersionCreate(StrictModel):
     default_workflow: WorkflowDefinitionDraft
     match_rules: dict[str, Any] = Field(default_factory=dict)
     result_profile: ResultProfileInput | None = None
+    result_definition: RequestResultDefinition | None = None
     is_active: bool = True
+
+    @model_validator(mode="after")
+    def validate_result_configuration(self) -> "RequestTypeVersionCreate":
+        if self.result_profile is not None and self.result_definition is not None:
+            raise ValueError("result_profile과 result_definition은 함께 지정할 수 없습니다.")
+        return self
 
     @field_validator("match_rules")
     @classmethod

@@ -21,11 +21,13 @@ from ..modules.access_control import (
 )
 from ..database_connection import connect, rows
 from ..repositories.workbench import WorkbenchRepository
-from ..schemas.workbench import AnalysisTemplateVersionCreate, BatchDispatchCreate, BatchProfileInput, DemoRunCreate, RequestTypeAssignmentInput, RequestTypeVersionCreate, ResultProfileInput, TaskTypeVersionCreate, WorkItemAssigneeUpdate, WorkItemComplete, WorkItemProgress, WorkItemStart
+from ..schemas.api import DashboardDefinition
+from ..schemas.workbench import AnalysisTemplateVersionCreate, BatchDispatchCreate, BatchProfileInput, DemoRunCreate, RequestTypeAssignmentInput, RequestTypeVersionCreate, ResultLayoutMaterializeInput, ResultProfileInput, TaskTypeVersionCreate, WorkItemAssigneeUpdate, WorkItemComplete, WorkItemProgress, WorkItemStart
 from ..security import write_audit_event
 from ..services.batch_execution import BatchPreflightError, preflight_batch_profile, validate_profile_definition
 from ..services.demo_runner import DemoRunnerService, WorkbenchValidationError, _topological_nodes
 from ..services.request_monitoring import request_monitoring_summary, sync_request_status
+from ..services.request_result_dashboard import materialize_request_result_dashboard
 
 
 router = APIRouter(prefix="/api", tags=["workbench-demo"])
@@ -50,13 +52,13 @@ def _bad_request(exc: ValueError) -> HTTPException:
 
 
 def _create_request_type_version_atomically(conn: Any, repository: WorkbenchRepository, data: dict[str, Any]) -> dict[str, Any]:
-    conn.execute("BEGIN TRANSACTION")
+    repository.begin_transaction()
     try:
         saved = repository.create_request_type_version(data)
-        conn.execute("COMMIT")
+        repository.commit_transaction()
         return saved
     except Exception:
-        conn.execute("ROLLBACK")
+        repository.rollback_transaction()
         raise
 
 
@@ -224,6 +226,43 @@ def get_request_result_layout(
         return snapshot
 
 
+@router.post(
+    "/workbench/requests/{request_id}/result-layout/materialize",
+    response_model=DashboardDefinition,
+    status_code=201,
+)
+def materialize_request_result_layout(
+    request_id: str,
+    payload: ResultLayoutMaterializeInput,
+    request: Request,
+) -> dict[str, Any]:
+    with connect() as conn:
+        repository = WorkbenchRepository(conn)
+        context = repository.request_context(request_id)
+        if not context:
+            raise HTTPException(404, detail={"code": "REQUEST_NOT_FOUND", "request_id": request_id})
+        require_permission(request, DASHBOARD_EDIT, context["project_id"], conn=conn)
+        if not repository.load_case_belongs_to_request(request_id, payload.load_case_id):
+            raise HTTPException(404, detail={"code": "LOAD_CASE_NOT_FOUND", "load_case_id": payload.load_case_id})
+        repository.begin_transaction()
+        try:
+            dashboard = materialize_request_result_dashboard(
+                conn,
+                request_id=request_id,
+                load_case_id=payload.load_case_id,
+                page_id=payload.page_id,
+                created_by=request.state.principal.display_name,
+            )
+            repository.commit_transaction()
+            return dashboard
+        except LookupError as exc:
+            repository.rollback_transaction()
+            raise HTTPException(404, detail={"code": str(exc), "request_id": request_id}) from exc
+        except ValueError as exc:
+            repository.rollback_transaction()
+            raise _bad_request(exc) from exc
+
+
 @router.post("/admin/workbench/request-types", status_code=201)
 def create_request_type(payload: RequestTypeVersionCreate, request: Request) -> dict[str, Any]:
     require_permission(request, SYSTEM_CATALOG_MANAGE)
@@ -323,16 +362,16 @@ def _save_batch_profile(payload: BatchProfileInput, request: Request, profile_id
         repository = WorkbenchRepository(conn)
         if profile_id is not None and not repository.get_batch_profile(profile_id):
             raise HTTPException(404, "배치 실행 정의를 찾을 수 없습니다.")
-        conn.execute("BEGIN TRANSACTION")
+        repository.begin_transaction()
         try:
             saved = repository.upsert_batch_profile(data)
-            conn.execute("COMMIT")
+            repository.commit_transaction()
             return saved
         except ValueError as exc:
-            conn.execute("ROLLBACK")
+            repository.rollback_transaction()
             raise HTTPException(409, str(exc)) from exc
         except Exception as exc:
-            conn.execute("ROLLBACK")
+            repository.rollback_transaction()
             message = str(exc).lower()
             if "unique" in message or "duplicate" in message or "constraint" in message:
                 raise HTTPException(409, "동일한 작업 유형 버전에 이미 배치 실행 정의가 있습니다.") from exc
@@ -418,7 +457,7 @@ def dispatch_batch_work_item(item_id: str, payload: BatchDispatchCreate, request
         attempt_id = f"attempt-{uuid4().hex[:12]}"
         profile_snapshot_json = json.dumps(profile, ensure_ascii=False, default=str)
         provisional_preview = f'"{profile["solver_path"]}" {profile["arguments_template"]}'.strip()
-        conn.execute("BEGIN TRANSACTION")
+        repository.begin_transaction()
         try:
             _audit_execution_override(request, conn, "batch_dispatch")
             repository.insert_batch_attempt({
@@ -453,7 +492,7 @@ def dispatch_batch_work_item(item_id: str, payload: BatchDispatchCreate, request
                     "id": f"batch-event-{uuid4().hex[:12]}", "attempt_id": attempt_id, "event_index": 1,
                     "event_type": "REJECTED", "level": "ERROR", "message": str(exc), "progress": 0, "occurred_at": rejected_at,
                 })
-                conn.execute("COMMIT")
+                repository.commit_transaction()
                 raise HTTPException(409, detail={"code": exc.code, "message": str(exc), "attempt_id": attempt_id}) from exc
             repository.update_batch_attempt(attempt_id, workflow_run_id=None, status="QUEUED", progress=10, message="DEMO_ONLY 실행 기록을 생성합니다.", started_at=now)
             repository.insert_batch_attempt_event({
@@ -461,11 +500,11 @@ def dispatch_batch_work_item(item_id: str, payload: BatchDispatchCreate, request
                 "event_type": "QUEUED", "level": "INFO", "message": "DEMO_ONLY 제어 plane에 등록했습니다.",
                 "progress": 10, "occurred_at": datetime.now(timezone.utc).replace(tzinfo=None),
             })
-            conn.execute("COMMIT")
+            repository.commit_transaction()
         except HTTPException:
             raise
         except Exception:
-            conn.execute("ROLLBACK")
+            repository.rollback_transaction()
             raise
         node = {
             "node_key": work_item["node_key"],
@@ -484,16 +523,16 @@ def dispatch_batch_work_item(item_id: str, payload: BatchDispatchCreate, request
             run = DemoRunnerService(repository).create_run(demo_payload)
         except WorkbenchValidationError as exc:
             failed_at = datetime.now(timezone.utc).replace(tzinfo=None)
-            conn.execute("BEGIN TRANSACTION")
+            repository.begin_transaction()
             repository.update_batch_attempt(attempt_id, workflow_run_id=None, status="FAILED", progress=10, message=str(exc), started_at=now, completed_at=failed_at)
             repository.insert_batch_attempt_event({
                 "id": f"batch-event-{uuid4().hex[:12]}", "attempt_id": attempt_id, "event_index": 2,
                 "event_type": "FAILED", "level": "ERROR", "message": str(exc), "progress": 10, "occurred_at": failed_at,
             })
-            conn.execute("COMMIT")
+            repository.commit_transaction()
             raise _bad_request(exc) from exc
         completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
-        conn.execute("BEGIN TRANSACTION")
+        repository.begin_transaction()
         repository.update_batch_attempt(attempt_id, workflow_run_id=run["id"], status="SUCCEEDED", progress=100, message="DEMO_ONLY 배치 실행 기록이 완료되었습니다.", started_at=now, completed_at=completed_at)
         repository.insert_batch_attempt_event({
             "id": f"batch-event-{uuid4().hex[:12]}", "attempt_id": attempt_id, "event_index": 2,
@@ -608,7 +647,8 @@ def get_request_work_plan(request_id: str) -> dict[str, Any]:
 def reassign_work_item(item_id: str, payload: WorkItemAssigneeUpdate, request: Request) -> dict[str, Any]:
     principal = request.state.principal
     with connect() as conn:
-        conn.execute("BEGIN TRANSACTION")
+        repository = WorkbenchRepository(conn)
+        repository.begin_transaction()
         try:
             stored = rows(
                 conn.execute(
@@ -647,10 +687,10 @@ def reassign_work_item(item_id: str, payload: WorkItemAssigneeUpdate, request: R
                 connection=conn,
             )
             updated = rows(conn.execute("SELECT * FROM request_work_items WHERE id=?", [item_id]))[0]
-            conn.execute("COMMIT")
+            repository.commit_transaction()
             return updated
         except Exception:
-            conn.execute("ROLLBACK")
+            repository.rollback_transaction()
             raise
 
 
@@ -659,7 +699,8 @@ def start_work_item(item_id: str, payload: WorkItemStart, request: Request) -> d
     principal = request.state.principal
     started_by = principal.display_name
     with connect() as conn:
-        conn.execute("BEGIN TRANSACTION")
+        repository = WorkbenchRepository(conn)
+        repository.begin_transaction()
         try:
             items = rows(conn.execute("SELECT * FROM request_work_items WHERE id = ?", [item_id]))
             if not items:
@@ -673,7 +714,7 @@ def start_work_item(item_id: str, payload: WorkItemStart, request: Request) -> d
             request_id = item["request_id"]
             if item["status"] in {"IN_PROGRESS", "COMPLETED"}:
                 summary = request_monitoring_summary(conn, request_id)
-                conn.execute("COMMIT")
+                repository.commit_transaction()
                 return {"request_id": request_id, **summary}
 
             current_row = conn.execute(
@@ -718,13 +759,13 @@ def start_work_item(item_id: str, payload: WorkItemStart, request: Request) -> d
                 [started_by, now, started_by, now, item_id],
             )
             summary = sync_request_status(conn, request_id)
-            conn.execute("COMMIT")
+            repository.commit_transaction()
             return {"request_id": request_id, **summary}
         except HTTPException:
-            conn.execute("ROLLBACK")
+            repository.rollback_transaction()
             raise
         except Exception:
-            conn.execute("ROLLBACK")
+            repository.rollback_transaction()
             raise
 
 
@@ -733,7 +774,8 @@ def update_work_item_progress(item_id: str, payload: WorkItemProgress, request: 
     principal = request.state.principal
     updated_by = principal.display_name
     with connect() as conn:
-        conn.execute("BEGIN TRANSACTION")
+        repository = WorkbenchRepository(conn)
+        repository.begin_transaction()
         try:
             items = rows(conn.execute("SELECT id, request_id, status, progress, owner FROM request_work_items WHERE id=?", [item_id]))
             if not items:
@@ -746,7 +788,7 @@ def update_work_item_progress(item_id: str, payload: WorkItemProgress, request: 
             current = int(item.get("progress") or 0)
             if payload.progress == current:
                 summary = request_monitoring_summary(conn, item["request_id"])
-                conn.execute("COMMIT")
+                repository.commit_transaction()
                 return {"request_id": item["request_id"], **summary}
             if payload.progress < current:
                 raise HTTPException(409, detail={"code": "WORK_ITEM_PROGRESS_NOT_MONOTONIC", "current": current, "requested": payload.progress})
@@ -755,13 +797,13 @@ def update_work_item_progress(item_id: str, payload: WorkItemProgress, request: 
                 [payload.progress, updated_by, datetime.now(timezone.utc).replace(tzinfo=None), item_id],
             )
             summary = sync_request_status(conn, item["request_id"])
-            conn.execute("COMMIT")
+            repository.commit_transaction()
             return {"request_id": item["request_id"], **summary}
         except HTTPException:
-            conn.execute("ROLLBACK")
+            repository.rollback_transaction()
             raise
         except Exception:
-            conn.execute("ROLLBACK")
+            repository.rollback_transaction()
             raise
 
 
@@ -770,7 +812,8 @@ def complete_work_item(item_id: str, payload: WorkItemComplete, request: Request
     principal = request.state.principal
     completed_by = principal.display_name
     with connect() as conn:
-        conn.execute("BEGIN TRANSACTION")
+        repository = WorkbenchRepository(conn)
+        repository.begin_transaction()
         try:
             items = rows(
                 conn.execute(
@@ -790,7 +833,7 @@ def complete_work_item(item_id: str, payload: WorkItemComplete, request: Request
 
             if item["status"] == "COMPLETED":
                 summary = request_monitoring_summary(conn, request_id)
-                conn.execute("COMMIT")
+                repository.commit_transaction()
                 return {"request_id": request_id, **summary}
 
             current_row = conn.execute(
@@ -876,11 +919,11 @@ def complete_work_item(item_id: str, payload: WorkItemComplete, request: Request
                     [next_row[0]],
                 )
             summary = sync_request_status(conn, request_id)
-            conn.execute("COMMIT")
+            repository.commit_transaction()
             return {"request_id": request_id, **summary}
         except HTTPException:
-            conn.execute("ROLLBACK")
+            repository.rollback_transaction()
             raise
         except Exception:
-            conn.execute("ROLLBACK")
+            repository.rollback_transaction()
             raise

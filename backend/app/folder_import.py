@@ -8,9 +8,13 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .parsers.manifest_format import ManifestFormat, ManifestFormatError, load_manifest
+
 
 class FolderImportError(ValueError):
-    pass
+    def __init__(self, message: str, *, code: str | None = None):
+        self.code = code
+        super().__init__(message)
 
 
 def _checksum(path: Path) -> str:
@@ -38,10 +42,10 @@ def scan_folder(root: Path) -> dict[str, Any]:
     """Read a manifest and return validated, database-neutral typed records."""
     manifest_path = _safe_file(root, "manifest.json")
     try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise FolderImportError(f"manifest.json 형식 오류: {exc.msg}") from exc
-    if not isinstance(manifest, dict) or not isinstance(manifest.get("mappings"), list):
+        manifest = load_manifest(manifest_path, expected_format=ManifestFormat.CANONICAL_MAPPINGS).data
+    except ManifestFormatError as exc:
+        raise FolderImportError(str(exc), code=exc.code) from exc
+    if not isinstance(manifest.get("mappings"), list):
         raise FolderImportError("manifest.json에는 mappings 배열이 필요합니다.")
 
     scalars: list[dict[str, Any]] = []

@@ -1,10 +1,12 @@
 # 외부 배포 보안·권한·감사·백업 가이드
 
+> 운영 기준: canonical production target은 Rocky Linux 8 + nginx + systemd + PostgreSQL 18이다. 이 문서의 Windows VM 항목은 개발·DB 이관 compatibility profile의 보안 목표와 수동 preflight 절차다. HTTPS reverse proxy, Windows service, TLS binding, health rollback을 포함한 Windows one-command 운영 배포기는 아직 없다. 자동 설치가 구현된 운영 경로는 `deploy/rocky8/`이며 상세 결정은 [`adr/0004-canonical-production-deployment-target.md`](adr/0004-canonical-production-deployment-target.md)를 따른다.
+
 ## 1. 배포 전제
 
-- 사내 Windows VM 운영 배포는 PostgreSQL, `DEPLOYMENT_PROFILE=windows-vm-intranet`, `AUTH_MODE=oidc`, `DIRECTORY_MODE=http`를 사용한다.
+- Windows compatibility profile은 PostgreSQL, `DEPLOYMENT_PROFILE=windows-vm-intranet`, `AUTH_MODE=oidc`, `DIRECTORY_MODE=http`로 개발·DB 이관·사내 인증 preflight를 검증한다. 이 profile은 canonical production 배포 승인을 의미하지 않는다.
 - `password`와 `local` 디렉터리는 가정용 Windows 개발·호환 테스트에만 사용하며 운영 설정 누락 시 자동 대체하지 않는다.
-- FastAPI는 HTTPS 리버스 프록시 뒤에서 실행하고 `AUTH_COOKIE_SECURE=true`로 설정한다.
+- Windows에서 사내 compatibility를 수동 검증할 때도 FastAPI는 HTTPS 리버스 프록시 뒤에서 실행하고 `AUTH_COOKIE_SECURE=true`로 설정한다. canonical production은 Rocky의 nginx가 TLS 경계를 담당한다.
 - 관리자, DB 소유자, 앱 역할의 비밀번호는 서로 다르게 만들고 `.env`를 Git에 추가하지 않는다.
 - `simdashboard_owner`는 Alembic·복구에만, `simdashboard_app`은 평상시 API에만 사용한다.
 
@@ -38,7 +40,7 @@ $env:POSTGRES_BIN='E:\PostgreSQL\18\bin'
 
 일반 시작은 빈 DB의 최초 구축, 역할 생성·비밀번호 변경, DuckDB 복사를 수행하지 않는다. `alembic_version`이 없거나 revision이 코드 계보와 다르면 최초 구축/복구 절차를 확인하도록 중단한다. 앱 계정에는 DB·스키마 `CREATE` 권한을 부여하지 않는다. owner 파일의 ACL을 완화하거나 owner URL을 `.env`, 콘솔, 로그에 복사하지 않는다.
 
-## 3. Windows VM 사내 인증과 역할
+## 3. Windows compatibility profile의 사내 인증과 역할
 
 ```powershell
 $env:ANALYSIS_DB_BACKEND='postgresql'
@@ -57,6 +59,10 @@ $env:DIRECTORY_MODE='http'
 $env:DIRECTORY_API_BASE_URL='https://directory.intranet.example'
 $env:DIRECTORY_API_TOKEN='비밀 저장소에서 주입'
 ```
+
+위 `windows-vm-intranet` 설정은 호환성 검증과 DB 이관 전후 preflight를 위한
+수동 profile이다. Windows 운영 자동 배포·TLS binding·service rollback은
+구현 범위에 포함되지 않는다.
 
 | 역할 | 허용 범위 |
 |---|---|
@@ -132,11 +138,10 @@ $env:DATABASE_URL='postgresql+psycopg://simdashboard_owner:OWNER_PASSWORD@127.0.
 3. `harden_postgres_privileges.py`를 다시 실행한다.
 4. 일반 사용자 로그인·본인 업무 실행, 파워 사용자 의뢰 편집, 프로젝트 관리자 변경, 전역관리자 메뉴 정책 변경과 감사 이벤트 기록을 smoke test한다.
 
-## 7. 배포 차단 조건
+## 7. canonical production 배포 차단 조건
 
-- `AUTH_MODE=disabled`
-- `DEPLOYMENT_PROFILE`이 `windows-vm-intranet`이 아님
-- `AUTH_MODE=oidc` 또는 `DIRECTORY_MODE=http`가 아님
+- `AUTH_MODE`가 `password` 또는 `oidc`가 아님
+- `DEPLOYMENT_PROFILE`이 `rocky8`이 아님
 - 기본 또는 공유 비밀번호 사용
 - `AUTH_SECRET_KEY` 32자 미만
 - HTTPS 없이 `AUTH_COOKIE_SECURE=true`를 사용할 수 없는 상태

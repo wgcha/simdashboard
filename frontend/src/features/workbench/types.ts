@@ -1,3 +1,5 @@
+import type { WidgetType } from '../../types'
+
 export type { AnalysisTemplateVersion, RequestResultLayout, ResultLayoutSnapshot, ResultProfile } from '../../shared/api/resultLayouts'
 
 export type ResultProfileInput = {
@@ -6,6 +8,21 @@ export type ResultProfileInput = {
   included_widget_ids: string[] | null
   overrides: Record<string, unknown>
   required_data_contracts: string[]
+}
+
+export type RequestResultWidget = {
+  id: string
+  type: WidgetType
+  title: string
+  variable_key: string | null
+  data_contracts: string[]
+  required: boolean
+}
+
+export type RequestResultDefinition = {
+  page_name?: string
+  page_description?: string
+  widgets: RequestResultWidget[]
 }
 
 export type WorkbenchTaskRef = { id: string; version: number }
@@ -42,6 +59,7 @@ export type WorkbenchRequestType = {
   default_workflow: { nodes: WorkbenchNode[] }
   match_rules: Record<string, unknown>
   result_profile?: ResultProfileInput | null
+  result_definition?: RequestResultDefinition | null
   is_active: boolean
   created_at: string
 }

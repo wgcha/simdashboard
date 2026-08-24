@@ -4,7 +4,7 @@ import hashlib
 from typing import Dict, Any, List
 
 from ..schemas.result_import import Manifest, ResultType
-from ..parsers.manifest_parser import ManifestParser
+from ..parsers.manifest_parser import LegacyResultFilesManifestParser
 from ..parsers.open_cell_parser import OpenCellParser
 from ..parsers.chassis_rear_parser import ChassisRearParser
 from ..parsers.generic_time_history_parser import GenericTimeHistoryParser
@@ -55,7 +55,9 @@ class ResultImportService:
         }
 
         try:
-            parser = ManifestParser(str(self.root_dir))
+            # This service remains the explicit compatibility path for the
+            # pre-canonical result_files manifest contract.
+            parser = LegacyResultFilesManifestParser(str(self.root_dir))
             manifest = parser.parse(relative_manifest_path)
             
             job_data.update({

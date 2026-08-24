@@ -1,0 +1,49 @@
+{
+  "schema_id": "tv-drop-master-result-v1",
+  "version": 1,
+  "solver": "Radioss Explicit 2025",
+  "note": "Canonical 개발용 마스터 결과 예제: scalar, curve, contour image, glTF model.",
+  "context": {
+    "project_id": "project-tv-001",
+    "request_id": "request-drop-001",
+    "load_case_id": "loadcase-drop-bottom-001"
+  },
+  "mappings": [
+    {
+      "kind": "typed_scalars",
+      "path": "results/summary.json"
+    },
+    {
+      "kind": "curve_csv",
+      "path": "curves/open_cell_top_stress.csv",
+      "variable_key": "open_cell_top_edge_stress_curve",
+      "display_name": "Open Cell 상단 엣지 응력-시간",
+      "series_key": "top",
+      "x_column": "time_ms",
+      "y_column": "stress_mpa",
+      "x_label": "시간",
+      "x_unit": "ms",
+      "y_label": "응력",
+      "y_unit": "MPa",
+      "result_group": "OPEN_CELL"
+    },
+    {
+      "kind": "media",
+      "path": "media/open_cell_stress_contour.svg",
+      "variable_key": "open_cell_stress_contour",
+      "display_name": "Open Cell 최대 응력 컨투어",
+      "asset_type": "IMAGE",
+      "mime_type": "image/svg+xml",
+      "result_group": "OPEN_CELL"
+    },
+    {
+      "kind": "media",
+      "path": "media/chassis_sample.gltf",
+      "variable_key": "chassis_sample_model",
+      "display_name": "Chassis Rear 3D 결과 모델",
+      "asset_type": "MODEL_3D",
+      "mime_type": "model/gltf+json",
+      "result_group": "CHASSIS_REAR"
+    }
+  ]
+}

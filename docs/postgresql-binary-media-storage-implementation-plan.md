@@ -1,5 +1,7 @@
 # PostgreSQL 바이너리 미디어 저장 전환 구현 계획
 
+> 상태: 구현 계획 및 완료 배경 기록. 미디어 migration `0008_media_blob_storage` 이후 migration이 계속 추가되었으므로 이 문서의 당시 예상 head를 현재 head로 사용하지 않는다. 현재 저장·검증 계약은 `storage-folder-and-file-contract.md`, 실제 head는 Alembic revision graph를 따른다.
+
 ## 1. 문서 목적
 
 현재 애플리케이션은 이미지(JPEG, PNG 등)와 영상(MP4 등)을 파일 시스템에 저장하고 `media_assets.file_path`만 SQL에 기록한다. 이 문서는 비정형 파일의 원본 바이트를 PostgreSQL에 저장하고, 웹에서 안전한 스트리밍·다운로드로 제공하기 위한 구현 사양과 단계별 실행 계획이다.

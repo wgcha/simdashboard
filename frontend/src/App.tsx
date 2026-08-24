@@ -32,7 +32,7 @@ import {
 } from 'lucide-react'
 import { type Layout, type Layouts } from 'react-grid-layout'
 import { api } from './api'; import { workbenchApi } from './features/workbench/api'
-import { ResultLayoutDetailTab } from './features/results/ResultLayoutDetailTab'
+import { ResultLayoutDetailTab } from './features/results/ResultLayoutDetailTab'; import { useRequestResultSnapshot } from './features/results/useRequestResultSnapshot'
 import { createWorkflowAnalysisOpener, isPendingResultAnalysis, useResultAnalysisIntent } from './features/results/resultLayoutRouting'; import { explicitCustomAnalysisPage, preservesResultLayoutOnLoadCaseChange } from './features/results/resultLayoutRuntime'
 import { clearSession, saveSession, type AuthUser } from './auth'
 import { useWorkspaceEditorCoordinator } from './editorState'
@@ -126,20 +126,6 @@ function App() {
   const [operationalRefreshToken, setOperationalRefreshToken] = useState(0)
   const [pageManagerOpen, setPageManagerOpen] = useState(false)
   const [comparisonReportContext, setComparisonReportContext] = useState<RunComparisonReportContext | null>(null)
-  const reportablePages = overview ? visiblePages(analysisPages, overview).filter((page) => page.page.analysis_key !== 'run_comparison' && (page.page.is_system || page.page.status === 'published' || (page.id === activeDashboardId && hasPermission(authUser, 'dashboard.edit', selectedProjectId)))) : []
-  const reportExport = useReportExportController({
-    activeDashboardId,
-    comparisonReportContext,
-    dashboard,
-    dashboardReady: Boolean(dashboard && !dashboardLoading && dashboard.id === activeDashboardId),
-    mode: activeView === 'compare' ? 'comparison' : 'analysis',
-    onComparisonReportContextChanged: setComparisonReportContext,
-    onError: setError,
-    onNotice: setNotice,
-    overview,
-    reportablePages,
-    selectedLoadCaseId,
-  })
   const workflowEditorMode = workspaceEditor.isWorkflowLayout ? 'layout' : workspaceEditor.isWorkflowStages ? 'stages' : null
   const portfolioLayoutBeforeEdit = useRef<PortfolioLayout | null>(null)
   const dashboardBeforeEdit = useRef<DashboardDefinition | null>(null)
@@ -177,6 +163,20 @@ function App() {
     onNotice: setNotice,
     visibleMenus,
   }); const enterWorkspace = (...args: Parameters<typeof navigateWorkspace>) => { beginContextEntry(); navigateWorkspace(...args) }
+  const { snapshotDashboard, reportablePages, hydrateSnapshotDashboard, prepareEditableDashboard, openAssistant, clearSnapshotDashboard } = useRequestResultSnapshot({ activeDashboardId, selectedProjectId, selectedRequestId, selectedLoadCaseId, overview, analysisPages, visiblePages, dashboard, dashboardReady, shouldPrepareDashboard: workspacePage === 'dashboard' && activeView !== 'workflow', canEditActiveDashboard: hasPermission(authUser, 'dashboard.edit', selectedProjectId), setDashboard, setDashboardLoading, setAnalysisPages, setActiveDashboardId, setActiveView, setAssistantOpen, setError })
+  const reportExport = useReportExportController({
+    activeDashboardId,
+    comparisonReportContext,
+    dashboard: dashboard ?? snapshotDashboard,
+    dashboardReady: Boolean(dashboard && !dashboardLoading && dashboard.id === activeDashboardId) || Boolean(snapshotDashboard && activeDashboardId === 'request-result-layout'),
+    mode: activeView === 'compare' ? 'comparison' : 'analysis',
+    onComparisonReportContextChanged: setComparisonReportContext,
+    onError: setError,
+    onNotice: setNotice,
+    overview,
+    reportablePages,
+    selectedLoadCaseId,
+  })
   useEffect(() => {
     if (!notice) return
     const timeout = window.setTimeout(() => setNotice((current) => current === notice ? '' : current), 4000)
@@ -335,7 +335,7 @@ function App() {
   }
 
   useEffect(() => {
-    if (!activeDashboardId || !selectedLoadCaseId || !authReady || (authRequired && !authUser)) return
+    if (!activeDashboardId || !selectedLoadCaseId || !authReady || (authRequired && !authUser) || isPendingResultAnalysis(false, activeDashboardId)) return
     const requestSequence = ++dashboardRequestSequence.current
     setDashboardLoading(true)
     api.dashboard(activeDashboardId)
@@ -402,7 +402,7 @@ function App() {
     setSelectedLoadCaseId(loadCase?.id ?? '')
     setOverview(overviewData)
     setAnalysisPages(pageData)
-    if (selectedPage) { setActiveDashboardId(selectedPage.id); setActiveView(pageView(selectedPage)); if (dashboardData) setDashboard(dashboardData) } else { setDashboard(null); setActiveDashboardId('pending-open-cell'); setActiveView('custom') }
+    if (selectedPage) { setActiveDashboardId(selectedPage.id); setActiveView(pageView(selectedPage)); if (dashboardData) setDashboard(dashboardData) } else { setDashboard(null); setActiveDashboardId('pending-open-cell'); setActiveView('custom') }; return selectedPage?.id
   }
 
   const loadMonitoringContext = async (projectId: string, requestId?: string) => {
@@ -539,10 +539,10 @@ function App() {
     }
   }
 
-  const beginEditing = () => {
-    if (workspacePage === 'dashboard' && activeView !== 'workflow' && !dashboardReady) { setError('현재 상세 분석 페이지를 불러온 뒤 편집해 주세요.'); return }
+  const beginEditing = async () => {
+    const editableDashboard = await prepareEditableDashboard(); if (!editableDashboard && workspacePage !== 'portfolio') return
     if (workspacePage === 'portfolio') portfolioLayoutBeforeEdit.current = { ...portfolioLayout, chartOrder: [...portfolioLayout.chartOrder] }
-    if (workspacePage === 'dashboard' && activeView !== 'workflow' && dashboard) dashboardBeforeEdit.current = structuredClone(dashboard)
+    if (workspacePage === 'dashboard' && activeView !== 'workflow' && editableDashboard) dashboardBeforeEdit.current = structuredClone(editableDashboard)
     setSelectedWidgetId(null)
     workspaceEditor.open(workspacePage === 'portfolio' ? 'portfolio-layout' : 'analysis-dashboard')
   }
@@ -899,7 +899,7 @@ function App() {
   const canDashboardEdit = hasPermission(authUser, 'dashboard.edit', selectedProjectId)
   const canWorkflowEdit = hasPermission(authUser, 'workflow.edit', selectedProjectId)
   const canLayoutEdit = hasPermission(authUser, 'project.layout.edit', selectedProjectId)
-  const canEdit = pendingAnalysis ? false : workspacePage === 'portfolio' ? canLayoutEdit : activeView === 'workflow' ? canWorkflowEdit || canLayoutEdit : canDashboardEdit
+  const canEdit = pendingAnalysis ? canDashboardEdit : workspacePage === 'portfolio' ? canLayoutEdit : activeView === 'workflow' ? canWorkflowEdit || canLayoutEdit : canDashboardEdit
   const canManagePages = canDashboardEdit && !pendingAnalysis
   const canExecuteAssigned = hasPermission(authUser, 'work.execute_assigned', selectedProjectId)
   const canExecuteAny = hasPermission(authUser, 'work.execute_any', selectedProjectId)
@@ -940,8 +940,8 @@ function App() {
 
       <AppShellMain topbar={<AppTopbar breadcrumb={breadcrumb} actions={<>
             <div className="theme-switch" role="group" aria-label="화면 테마 선택"><button type="button" className={theme === 'light' ? 'active' : ''} aria-pressed={theme === 'light'} onClick={() => setTheme('light')}><Sun /><span>라이트</span></button><button type="button" className={theme === 'dark' ? 'active' : ''} aria-pressed={theme === 'dark'} onClick={() => setTheme('dark')}><Moon /><span>다크</span></button></div>
-            {workspacePage === 'dashboard' && activeView !== 'workflow' && !pendingAnalysis && <button className="ghost-button" title={!overview?.run && activeView !== 'compare' ? '완료된 Run이 있어야 보고서를 내보낼 수 있습니다.' : undefined} disabled={!dashboardReady || (!overview?.run && activeView !== 'compare')} onClick={() => void reportExport.open()}><Download /> 보고서 내보내기</button>}
-            {canEdit && workspacePage === 'dashboard' && activeView !== 'workflow' && !pendingAnalysis && <button className="ghost-button" disabled={!dashboardReady} onClick={() => setAssistantOpen(true)}><Sparkles /> 자연어로 개선</button>}
+            {workspacePage === 'dashboard' && activeView !== 'workflow' && <button className="ghost-button" title={!overview?.run && activeView !== 'compare' ? '완료된 Run이 있어야 보고서를 내보낼 수 있습니다.' : undefined} disabled={!dashboardReady || (!overview?.run && activeView !== 'compare')} onClick={() => void reportExport.open()}><Download /> 보고서 내보내기</button>}
+            {canEdit && workspacePage === 'dashboard' && activeView !== 'workflow' && <button className="ghost-button" disabled={activeDashboardId === 'request-result-layout' ? !selectedLoadCaseId : !dashboardReady} onClick={() => void openAssistant()}><Sparkles /> 자연어로 개선</button>}
             {canEdit && (workspacePage === 'dashboard' && activeView === 'workflow' ? (editMode ? (
               <button className="primary-button" onClick={save}><Save /> {workflowEditorMode === 'layout' ? '대시보드 레이아웃 저장' : '단계 변경 저장'}</button>
             ) : <div className="workflow-top-edit-actions">
@@ -949,7 +949,7 @@ function App() {
               {!selectedWorkflow?.work_plan && <button className="edit-button" onClick={beginWorkflowStageEditing}><Settings2 /> 진행 단계 편집</button>}
             </div>) : (workspacePage === 'dashboard' || workspacePage === 'portfolio') && (editMode ? (
               <button className="primary-button" onClick={save}><Save /> {workspacePage === 'portfolio' ? '운영 설정 저장' : '레이아웃 저장'}</button>
-            ) : <button className="edit-button" disabled={workspacePage === 'dashboard' && !dashboardReady} onClick={beginEditing}><Settings2 /> 대시보드 편집</button>))}
+            ) : <button className="edit-button" disabled={workspacePage === 'dashboard' && (activeDashboardId === 'request-result-layout' ? !selectedLoadCaseId : !dashboardReady)} onClick={beginEditing}><Settings2 /> 대시보드 편집</button>))}
             <div className="avatar">{authUser ? authUser.display_name.slice(0, 2) : 'HK'}</div>
           </>} />}>
 
@@ -971,7 +971,7 @@ function App() {
 
         <section className="view-tabs">
           <button data-testid="selected-request-progress-tab" className={activeView === 'workflow' ? 'active' : ''} onClick={() => switchDashboardView('workflow')}><CircleDot /> 의뢰 진행 상태 <span>{workflowProgress}%</span></button>
-          <ResultLayoutDetailTab requestId={selectedRequestId} requestContextLoading={requestContextLoading} analysisLabel={selectedLoadCaseId ? overview!.load_case.analysis_type.replace('_', ' ') : '하중 경우 미지정'} loadLayout={workbenchApi.requestResultLayout} onBeginOpen={beginContextEntry} isCurrentOpen={isCurrentContextEntry} onSnapshot={() => { setActiveDashboardId('request-result-layout'); setActiveView('custom') }} onDomain={() => { const page = analysisTabs[0]; if (page) switchAnalysisPage(page) }} onUnconfigured={() => { const page = explicitCustomAnalysisPage(analysisTabs); if (page) { switchAnalysisPage(page); return } setActiveDashboardId('pending-open-cell'); setActiveView('custom') }} onError={setError} />
+          <ResultLayoutDetailTab requestId={selectedRequestId} requestContextLoading={requestContextLoading} analysisLabel={selectedLoadCaseId ? overview!.load_case.analysis_type.replace('_', ' ') : '하중 경우 미지정'} loadLayout={workbenchApi.requestResultLayout} onBeginOpen={beginContextEntry} isCurrentOpen={isCurrentContextEntry} onSnapshot={() => { const page = explicitCustomAnalysisPage(analysisTabs, activeDashboardId); if (page) { switchAnalysisPage(page); return } clearSnapshotDashboard() }} onDomain={() => { const page = analysisTabs[0]; if (page) switchAnalysisPage(page) }} onUnconfigured={() => { const page = explicitCustomAnalysisPage(analysisTabs, activeDashboardId); if (page) { switchAnalysisPage(page); return } clearSnapshotDashboard() }} onError={setError} />
           <div className="tab-line" />
         </section>
 
@@ -996,7 +996,7 @@ function App() {
           </div>
         )}
 
-        {pendingAnalysis ? <Suspense fallback={<FeatureScreenFallback />}><PendingAnalysisWorkspace projectId={selectedProjectId} projectName={analysisProjectName} requestId={selectedRequestId} requestTitle={analysisTitle} selectedLoadCaseId={selectedLoadCaseId} canOpenData={hasPermission(authUser, 'result.import', selectedProjectId)} onOpenData={() => enterWorkspace('data')} onLoadLayout={workbenchApi.requestResultLayout} /></Suspense> : activeView !== 'workflow' ? <Suspense fallback={<FeatureScreenFallback />}><ResultsWorkspace
+        {pendingAnalysis && !editMode ? <Suspense fallback={<FeatureScreenFallback />}><PendingAnalysisWorkspace projectId={selectedProjectId} projectName={analysisProjectName} requestId={selectedRequestId} requestTitle={analysisTitle} selectedLoadCaseId={selectedLoadCaseId} canOpenData={hasPermission(authUser, 'result.import', selectedProjectId)} onOpenData={() => enterWorkspace('data')} onLoadLayout={workbenchApi.requestResultLayout} onSnapshotPageChange={hydrateSnapshotDashboard} /></Suspense> : activeView !== 'workflow' ? <Suspense fallback={<FeatureScreenFallback />}><ResultsWorkspace
           activeView={activeView}
           canEdit={canEdit}
           canManageThresholds={canManagePages}

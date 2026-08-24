@@ -6,6 +6,9 @@ import os
 import sys
 from pathlib import Path
 
+from alembic.config import Config
+from alembic.script import ScriptDirectory
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.config import database_settings  # noqa: E402
@@ -15,7 +18,28 @@ from app.repositories.media_repository import get_blob, validate_blob_chunks  # 
 from app.services.drop_video_demo import DROP_VIDEO_DEMO_SCENES  # noqa: E402
 
 
-EXPECTED_REVISION = "0009_menu_workflow_order"
+BACKEND = Path(__file__).resolve().parents[1]
+
+
+def _expected_revision() -> str:
+    """Return the single Alembic head from the checked-in migration graph.
+
+    This verifier used to carry a copied revision literal.  That made the
+    production database-only gate silently become stale whenever a migration
+    was added after that literal.  Alembic's version scripts are the migration
+    source of truth, so resolve the head from that graph at verification time
+    and fail closed if the graph ever develops multiple heads.
+    """
+    config = Config(str(BACKEND / "alembic.ini"))
+    heads = ScriptDirectory.from_config(config).get_heads()
+    if len(heads) != 1:
+        raise RuntimeError(f"Alembic migration head is invalid: {heads}")
+    return heads[0]
+
+
+def _revision_matches(*, backend: str, current: str | None, expected: str | None) -> bool:
+    """Require a current Alembic revision whenever PostgreSQL is selected."""
+    return backend != "postgresql" or current == expected
 
 
 def _private_path(raw: str) -> Path:
@@ -30,6 +54,7 @@ def _private_path(raw: str) -> Path:
 
 def verify() -> dict[str, object]:
     settings = database_settings()
+    expected_revision = _expected_revision() if settings.backend == "postgresql" else None
     raw_public_root = Path(__file__).resolve().parents[1] / "public_assets"
     raw_legacy_root = Path(__file__).resolve().parents[1] / "assets"
     if raw_public_root.is_symlink() or raw_legacy_root.is_symlink():
@@ -104,7 +129,7 @@ def verify() -> dict[str, object]:
     configured_max = os.getenv("POSTGRES_MAX_CONNECTIONS")
     if configured_max and connection_budget >= int(configured_max):
         raise RuntimeError(f"connection budget {connection_budget} exceeds configured max_connections {configured_max}")
-    if unbound or missing or inconsistent or demo_ids != expected_demo_ids or permission_failures or (revision and revision != EXPECTED_REVISION):
+    if unbound or missing or inconsistent or demo_ids != expected_demo_ids or permission_failures or not _revision_matches(backend=settings.backend, current=revision, expected=expected_revision):
         raise RuntimeError(json.dumps({
             "unbound": unbound,
             "missing": missing,
@@ -114,9 +139,10 @@ def verify() -> dict[str, object]:
             "missing_demo_ids": sorted(expected_demo_ids - demo_ids),
             "unexpected_demo_ids": sorted(demo_ids - expected_demo_ids),
             "revision": revision,
+            "expected_revision": expected_revision,
             "permission_failures": permission_failures,
         }))
-    return {"status": "database_only", "backend": settings.backend, "unbound": unbound, "missing": missing, "inconsistent": inconsistent, "demo_count": demo_count, "connection_budget": connection_budget, "revision": revision}
+    return {"status": "database_only", "backend": settings.backend, "unbound": unbound, "missing": missing, "inconsistent": inconsistent, "demo_count": demo_count, "connection_budget": connection_budget, "revision": revision, "expected_revision": expected_revision}
 
 
 def main() -> int:

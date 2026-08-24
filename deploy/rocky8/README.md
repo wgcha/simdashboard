@@ -31,6 +31,7 @@ Rocky 8 서버라면 PostgreSQL 외 OS 패키지를 미리 수동 설치할 필�
 
 인터넷이 차단된 대상 서버용 번들은 대상과 같은 Rocky 8/CPU 아키텍처에서 만든다.
 이 방식은 Python wheel을 번들에 포함하며, Node.js는 빌드 장비에만 필요하다.
+Rocky OS RPM, 조직 CA와 DNF 저장소까지 번들에 포함하는 것은 아니므로 완전한 폐쇄망에서는 승인된 내부 RPM mirror 또는 사전 설치된 OS 패키지가 별도로 필요하다.
 
 ```bash
 ./deploy/rocky8/build-release.sh --with-wheels
@@ -64,6 +65,29 @@ sudo vi /root/simdashboard-install.env
 - 명시적인 예제/기준 데이터 설치: `SEED_MODE=reference`
 - 사내 비밀번호 인증: `AUTH_MODE=password`, 필요 시 최초 관리자 설정
 - 사내 SSO: `AUTH_MODE=oidc`와 OIDC/directory 설정
+- Master Result Refresh: `SIMDASH_IMPORT_ROOT`를 기본값으로 사용하거나 승인된
+  읽기 전용 NAS/SMB/NFS mount로 바꾼다.
+
+`SIMDASH_IMPORT_ROOT`는 release 폴더 밖의 유일한 import root다. 기본값
+`/var/lib/simdashboard/import`은 설치 중 `root:simdashboard`, mode `0750`으로
+생성된다. systemd는 이 경로를 read-only로 mount하고, 환경값은
+`/etc/simdashboard/simdashboard.env`에만 전달한다. 외부 공유 경로를 지정할 때
+installer는 공유의 ownership/mode를 바꾸지 않는다. 대신 service user가 모든
+하위 디렉터리를 traverse하고 모든 파일을 읽을 수 있는지 검사한다. 공유 mount는
+설치 전 완료되어 있어야 하며 부팅 후에도 service 시작보다 먼저 준비되어야 한다.
+비기본 경로가 없으면 installer는 빈 로컬 디렉터리를 만들지 않고 실패한다.
+생성되는 systemd unit은 `RequiresMountsFor=SIMDASH_IMPORT_ROOT`를 사용해 fstab
+기반 mount가 준비된 뒤 API를 시작한다.
+
+`install.sh --check`는 비기본 import root가 실제 non-symlink directory인지
+fail-closed로 확인한다. 이미 service user가 있으면 동일한 재귀 읽기/traverse
+검사도 수행하며, 새 서버처럼 account가 아직 없으면 실제 설치가 account 생성 직후
+그 검사를 수행한다.
+
+SELinux enforcing 환경에서 기본 local root는 `var_lib_t`로 복원한다. 외부
+NFS/SMB mount는 조직의 mount context와 SELinux 정책을 유지하므로, 운영자는
+해당 mount에서 `simdashboard` service user의 읽기 권한을 별도로 승인·검증해야
+한다. nginx는 import root를 정적 제공하지 않는다.
 
 `POSTGRES_OWNER_URL`, `POSTGRES_ADMIN_URL`, 역할 비밀번호는 설치 단계에서만
 사용되고 systemd 서비스 환경파일에는 기록되지 않는다. 평상시 서비스에는
@@ -85,7 +109,8 @@ sudo ./install.sh --config /root/simdashboard-install.env
 3. `/opt/simdashboard/releases/<release-id>`에 immutable release와 전용 venv를 만든다.
 4. 필요 시 PostgreSQL 역할/DB를 만들고 owner 역할로 Alembic과 권한 강화를 수행한다.
 5. PostgreSQL 18, app 역할, 최신 revision, DDL 거부, pool budget을 검사한다.
-6. root 전용 EnvironmentFile, systemd, nginx, SELinux, firewalld를 설정한다.
+6. root 전용 EnvironmentFile, 읽기 전용 import root, systemd, nginx, SELinux,
+   firewalld를 설정한다.
 7. `current` symlink를 원자적으로 전환하고 API health check가 성공한 경우에만 완료한다.
 
 상태 확인:
@@ -107,4 +132,5 @@ sudo simdashboard-healthcheck
 설치 완료 후 staging 설정 파일에 admin/owner/초기 사용자 비밀번호가 남아 있다면
 조직의 비밀관리 정책에 따라 안전하게 회수한다. 서비스 설정은
 `/etc/simdashboard/simdashboard.env`, 가변 보고서 템플릿은
-`/var/lib/simdashboard/report-templates`에 보관된다.
+`/var/lib/simdashboard/report-templates`, Master Result import source는
+`SIMDASH_IMPORT_ROOT`에 보관된다.

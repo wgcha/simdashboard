@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { GripVertical, Save } from 'lucide-react'
 import { api } from '../../api'
-import type { ImportSchema } from '../../types'
+import type { ImportSchema } from '../../types'; import { MasterResultFolderRefresh } from './MasterResultFolderRefresh'
 
 type DiscoveredFolderFile = { path: string; kind: 'typed_scalars' | 'curve_csv' | 'media'; dataType: 'FLOAT' | 'CURVE' | 'IMAGE' | 'VIDEO' | 'MODEL_3D'; variableKey: string }
 
@@ -44,7 +44,7 @@ export function FolderSchemaWorkspace() {
   }
   const sampleParts = (files[0]?.path ?? '').split('/').filter(Boolean)
   return <section className="catalog-page">
-    <header><div><span>FOLDER INGESTION DESIGN</span><h1>폴더 스키마</h1><p>최상위 결과 폴더의 하위 파일을 탐색하고 변수 카탈로그로 연결할 규칙을 저장합니다.</p></div><div className="catalog-header-actions"><strong>{schemas.length}개 저장됨</strong></div></header>
+    <header><div><span>FOLDER INGESTION DESIGN</span><h1>폴더 스키마</h1><p>최상위 결과 폴더의 하위 파일을 탐색하고 변수 카탈로그로 연결할 규칙을 저장합니다.</p></div><div className="catalog-header-actions"><strong>{schemas.length}개 저장됨</strong></div></header><MasterResultFolderRefresh />
     <SchemaCatalog schemas={schemas} onUpdate={(updated) => setSchemas((current) => current.map((item) => item.id === updated.id ? updated : item))} onDelete={(schemaId) => setSchemas((current) => current.filter((item) => item.id !== schemaId))} />
     <div className="data-form-card"><header><div><span>HIERARCHY MAPPING</span><h2>프로젝트·의뢰·하중 경우 매핑</h2></div></header><label><span>메타데이터 출처</span><select value={contextMode} onChange={(event) => setContextMode(event.target.value as 'folder_levels' | 'manifest')}><option value="folder_levels">폴더 이름 단계</option><option value="manifest">manifest.json context</option></select></label>{contextMode === 'folder_levels' ? <><div className="data-form-row"><label><span>프로젝트(제품) 단계</span><input type="number" min="0" value={projectLevel} onChange={(event) => setProjectLevel(Number(event.target.value))}/></label><label><span>의뢰 단계</span><input type="number" min="0" value={requestLevel} onChange={(event) => setRequestLevel(Number(event.target.value))}/></label><label><span>하중 경우 단계</span><input type="number" min="0" value={loadCaseLevel} onChange={(event) => setLoadCaseLevel(Number(event.target.value))}/></label></div>{sampleParts.length > 0 && <div className="result-preview-kpis"><div><strong>{sampleParts[projectLevel] ?? '미지정'}</strong><span>프로젝트(제품)</span></div><div><strong>{sampleParts[requestLevel] ?? '미지정'}</strong><span>의뢰</span></div><div><strong>{sampleParts[loadCaseLevel] ?? '미지정'}</strong><span>하중 경우</span></div></div>}</> : <p>선택 폴더의 manifest.json 안 `context.project`, `context.request`, `context.load_case`를 사용합니다.</p>}<small>0은 선택한 최상위 폴더입니다. 예: 제품/의뢰/하중경우/results에서 0·1·2로 설정합니다.</small></div>
     <div className="data-form-card"><label><span>스키마 이름</span><input value={name} onChange={(event) => setName(event.target.value)} /></label><label><span>설명</span><input value={description} onChange={(event) => setDescription(event.target.value)} placeholder="TV 낙하 결과 폴더 v1" /></label><label><span>최상위 결과 폴더 선택</span><input ref={directoryInput} type="file" multiple onChange={(event) => discover(event.target.files)} /><small>브라우저가 선택한 폴더의 하위 파일 목록만 읽어 트리 규칙 초안을 만듭니다.</small></label></div>

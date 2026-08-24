@@ -48,6 +48,9 @@ config_mode="$(stat -c '%a' "${config_file}")"
 
 INSTALL_ROOT=/opt/simdashboard
 RUNTIME_DIRECTORY=/var/lib/simdashboard
+# Empty means the local default, derived from RUNTIME_DIRECTORY after the config
+# has been read. Keep an explicit value in install.env.example for operators.
+SIMDASH_IMPORT_ROOT=
 ENVIRONMENT_FILE=/etc/simdashboard/simdashboard.env
 SERVICE_USER=simdashboard
 SERVICE_GROUP=simdashboard
@@ -88,6 +91,11 @@ INSTALL_SOURCE_ROOT=
 # shellcheck disable=SC1090
 source "${config_file}"
 
+INSTALL_ROOT="${INSTALL_ROOT%/}"
+RUNTIME_DIRECTORY="${RUNTIME_DIRECTORY%/}"
+SIMDASH_IMPORT_ROOT="${SIMDASH_IMPORT_ROOT:-${RUNTIME_DIRECTORY}/import}"
+SIMDASH_IMPORT_ROOT="${SIMDASH_IMPORT_ROOT%/}"
+
 for boolean_name in BOOTSTRAP_DATABASE SIM_DASH_PRESERVE_EXISTING_ROLES MIGRATE_DATABASE \
   REQUIRE_EXACT_PYTHON INSTALL_OS_PACKAGES CONFIGURE_SELINUX CONFIGURE_FIREWALL START_SERVICES; do
   boolean_value="${!boolean_name}"
@@ -107,15 +115,30 @@ safe_name='^[A-Za-z_][A-Za-z0-9_-]*$'
 [[ "${SIM_DASH_APP_ROLE}" =~ ${safe_name} ]] || die 'SIM_DASH_APP_ROLE contains unsupported characters.'
 [[ "${SERVER_NAME:-}" =~ ^[A-Za-z0-9.-]+$ ]] || die 'SERVER_NAME must be a DNS host name.'
 
-for path_name in INSTALL_ROOT RUNTIME_DIRECTORY ENVIRONMENT_FILE TLS_CERTIFICATE TLS_CERTIFICATE_KEY; do
+for path_name in INSTALL_ROOT RUNTIME_DIRECTORY SIMDASH_IMPORT_ROOT ENVIRONMENT_FILE TLS_CERTIFICATE TLS_CERTIFICATE_KEY; do
   path_value="${!path_name:-}"
   [[ "${path_value}" == /* && "${path_value}" != / ]] || die "${path_name} must be an absolute, non-root path."
   [[ "${path_value}" != *$'\n'* && "${path_value}" != *$'\r'* ]] || die "${path_name} contains a newline."
 done
-INSTALL_ROOT="${INSTALL_ROOT%/}"
-RUNTIME_DIRECTORY="${RUNTIME_DIRECTORY%/}"
+[[ "${SIMDASH_IMPORT_ROOT}" != "${INSTALL_ROOT}" && "${SIMDASH_IMPORT_ROOT}" != "${INSTALL_ROOT}/"* ]] || \
+  die 'SIMDASH_IMPORT_ROOT must be outside INSTALL_ROOT so imports survive immutable release changes.'
+[[ "${SIMDASH_IMPORT_ROOT}" != *[[:space:]]* ]] || \
+  die 'SIMDASH_IMPORT_ROOT cannot contain whitespace because it is rendered into systemd paths.'
 [[ -r "${TLS_CERTIFICATE}" ]] || die "TLS certificate is not readable: ${TLS_CERTIFICATE}"
 [[ -r "${TLS_CERTIFICATE_KEY}" ]] || die "TLS private key is not readable: ${TLS_CERTIFICATE_KEY}"
+
+verify_import_root_access() {
+  local inaccessible_path
+  if ! runuser -u "${SERVICE_USER}" -- test -r "${SIMDASH_IMPORT_ROOT}" -a -x "${SIMDASH_IMPORT_ROOT}"; then
+    die "SIMDASH_IMPORT_ROOT is not readable/traversable by service user ${SERVICE_USER}: ${SIMDASH_IMPORT_ROOT}"
+  fi
+  inaccessible_path="$(
+    runuser -u "${SERVICE_USER}" -- find "${SIMDASH_IMPORT_ROOT}" \
+      \( -type d \( ! -readable -o ! -executable \) -o -type f ! -readable \) -print -quit
+  )" || die "SIMDASH_IMPORT_ROOT could not be traversed by service user ${SERVICE_USER}: ${SIMDASH_IMPORT_ROOT}"
+  [[ -z "${inaccessible_path}" ]] || \
+    die "SIMDASH_IMPORT_ROOT contains a path unreadable by service user ${SERVICE_USER}: ${inaccessible_path}"
+}
 
 [[ "${API_PORT}" =~ ^[0-9]+$ ]] && (( API_PORT >= 1024 && API_PORT <= 65535 )) || die 'API_PORT must be 1024-65535.'
 [[ "${UVICORN_WORKERS}" =~ ^[1-9][0-9]*$ ]] || die 'UVICORN_WORKERS must be a positive integer.'
@@ -186,6 +209,19 @@ release_root="${INSTALL_ROOT}/releases/${release_id}"
 [[ ! -e "${release_root}" ]] || die "Release already exists: ${release_root}"
 
 if [[ "${check_only}" == 1 ]]; then
+  # A fresh local default is created by a real installation. Any non-default
+  # root represents an operator-managed path (typically a mount) and must
+  # already be present so a missing share never looks like an empty import root.
+  if [[ "${SIMDASH_IMPORT_ROOT}" != "${RUNTIME_DIRECTORY}/import" ]]; then
+    [[ -d "${SIMDASH_IMPORT_ROOT}" && ! -L "${SIMDASH_IMPORT_ROOT}" ]] || \
+      die "Non-default SIMDASH_IMPORT_ROOT must be a mounted non-symlink directory: ${SIMDASH_IMPORT_ROOT}"
+    if getent passwd "${SERVICE_USER}" >/dev/null 2>&1; then
+      command -v runuser >/dev/null 2>&1 || die 'Import-root preflight requires runuser.'
+      verify_import_root_access
+    else
+      log "Service user ${SERVICE_USER} does not exist yet; import-root access will be checked during installation."
+    fi
+  fi
   log "Validation passed for release ${release_id}; no system changes were made."
   exit 0
 fi
@@ -194,7 +230,7 @@ if [[ "${INSTALL_OS_PACKAGES}" == 1 ]]; then
   log 'Installing Rocky Linux runtime packages (PostgreSQL is not installed or modified)'
   dnf -y install python3.12 python3.12-pip nginx curl ca-certificates tar findutils shadow-utils policycoreutils-python-utils firewalld
 fi
-for command_name in python3.12 nginx curl systemctl systemd-analyze useradd groupadd getent install find sed grep; do
+for command_name in python3.12 nginx curl systemctl systemd-analyze useradd groupadd getent install find sed grep runuser; do
   command -v "${command_name}" >/dev/null 2>&1 || die "Required command not found: ${command_name}"
 done
 if [[ "${CONFIGURE_SELINUX}" == 1 ]]; then
@@ -223,6 +259,20 @@ fi
 
 install -d -o root -g root -m 0755 "${INSTALL_ROOT}" "${INSTALL_ROOT}/releases"
 install -d -o "${SERVICE_USER}" -g "${SERVICE_GROUP}" -m 0750 "${RUNTIME_DIRECTORY}" "${RUNTIME_DIRECTORY}/report-templates"
+# The import source is intentionally separate from an immutable release.  Create
+# the default/local root with no service-user write access; an existing approved
+# NAS/SMB/NFS mount keeps its ownership and mode, but must already be readable by
+# the service account.
+if [[ ! -e "${SIMDASH_IMPORT_ROOT}" ]]; then
+  if [[ "${SIMDASH_IMPORT_ROOT}" == "${RUNTIME_DIRECTORY}/import" ]]; then
+    install -d -o root -g "${SERVICE_GROUP}" -m 0750 "${SIMDASH_IMPORT_ROOT}"
+  else
+    die "Non-default SIMDASH_IMPORT_ROOT is missing; mount or create it before installation: ${SIMDASH_IMPORT_ROOT}"
+  fi
+fi
+[[ -d "${SIMDASH_IMPORT_ROOT}" && ! -L "${SIMDASH_IMPORT_ROOT}" ]] || \
+  die "SIMDASH_IMPORT_ROOT must be an existing non-symlink directory: ${SIMDASH_IMPORT_ROOT}"
+verify_import_root_access
 install -d -o root -g root -m 0755 "${release_root}" "${release_root}/backend" "${release_root}/frontend"
 
 log "Copying immutable release ${release_id}"
@@ -290,6 +340,7 @@ runtime_environment=(
   POSTGRES_MEDIA_MAX_OVERFLOW="${POSTGRES_MEDIA_MAX_OVERFLOW}"
   POSTGRES_MEDIA_POOL_TIMEOUT_SECONDS="${POSTGRES_MEDIA_POOL_TIMEOUT_SECONDS}"
   POSTGRES_POOL_RECYCLE_SECONDS="${POSTGRES_POOL_RECYCLE_SECONDS}"
+  SIMDASH_IMPORT_ROOT="${SIMDASH_IMPORT_ROOT}"
 )
 for optional_name in OIDC_ISSUER_URL OIDC_CLIENT_ID OIDC_CLIENT_SECRET OIDC_REDIRECT_URI OIDC_SCOPES \
   OIDC_EMPLOYEE_ID_CLAIM OIDC_USERNAME_CLAIM OIDC_DISPLAY_NAME_CLAIM OIDC_DEPARTMENT_CLAIM \
@@ -402,7 +453,7 @@ environment_names=(
   SIM_DASH_APP_ROLE UVICORN_WORKERS POSTGRES_MAX_CONNECTIONS POSTGRES_RESERVED_CONNECTIONS
   POSTGRES_REQUEST_POOL_SIZE POSTGRES_REQUEST_MAX_OVERFLOW POSTGRES_REQUEST_POOL_TIMEOUT_SECONDS
   POSTGRES_MEDIA_POOL_SIZE POSTGRES_MEDIA_MAX_OVERFLOW POSTGRES_MEDIA_POOL_TIMEOUT_SECONDS
-  POSTGRES_POOL_RECYCLE_SECONDS
+  POSTGRES_POOL_RECYCLE_SECONDS SIMDASH_IMPORT_ROOT
 )
 ANALYSIS_DB_BACKEND=postgresql
 DEPLOYMENT_PROFILE=rocky8
@@ -455,7 +506,8 @@ render_template "${script_root}/systemd/simdashboard.service.template" \
   __REPLACE_ENVIRONMENT_FILE__ "${ENVIRONMENT_FILE}" \
   __REPLACE_API_PORT__ "${API_PORT}" \
   __REPLACE_UVICORN_WORKERS__ "${UVICORN_WORKERS}" \
-  __REPLACE_RUNTIME_DIRECTORY__ "${RUNTIME_DIRECTORY}"
+  __REPLACE_RUNTIME_DIRECTORY__ "${RUNTIME_DIRECTORY}" \
+  __REPLACE_IMPORT_ROOT__ "${SIMDASH_IMPORT_ROOT}"
 render_template "${script_root}/nginx/simdashboard.conf.template" \
   /etc/nginx/conf.d/simdashboard.conf \
   __REPLACE_SERVER_NAME__ "${SERVER_NAME}" \
@@ -502,6 +554,15 @@ if [[ "${CONFIGURE_SELINUX}" == 1 ]] && command -v getenforce >/dev/null 2>&1 &&
   semanage fcontext -a -t httpd_sys_content_t "${INSTALL_ROOT}/releases(/.*)?" 2>/dev/null || \
     semanage fcontext -m -t httpd_sys_content_t "${INSTALL_ROOT}/releases(/.*)?"
   restorecon -RF "${INSTALL_ROOT}/releases"
+  # The API reads imported result files directly; do not use httpd_sys_content_t
+  # because nginx never serves this source folder.  External mounts retain their
+  # mount-specific SELinux policy and are checked through the service account's
+  # ordinary filesystem access above.
+  if [[ "${SIMDASH_IMPORT_ROOT}" == "${RUNTIME_DIRECTORY}/import" ]]; then
+    semanage fcontext -a -t var_lib_t "${SIMDASH_IMPORT_ROOT}(/.*)?" 2>/dev/null || \
+      semanage fcontext -m -t var_lib_t "${SIMDASH_IMPORT_ROOT}(/.*)?"
+    restorecon -RF "${SIMDASH_IMPORT_ROOT}"
+  fi
 fi
 
 if [[ "${CONFIGURE_FIREWALL}" == 1 ]]; then

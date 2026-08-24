@@ -795,7 +795,7 @@ POST            /api/predictions
 GET             /api/predictions/{id}
 ```
 
-OpenAPI를 단일 원본으로 유지하고 변경 시 `frontend/src/generated`를 재생성한다.
+OpenAPI를 단일 원본으로 유지하고 변경 시 `frontend/src/shared/api/generated`를 재생성한다.
 
 ## 12. 권고 코드 뼈대
 

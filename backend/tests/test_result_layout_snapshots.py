@@ -483,6 +483,18 @@ def test_result_layout_bindings_are_scoped_to_the_selected_load_case() -> None:
             "INSERT INTO scalar_results VALUES (?, ?, 'case_metric', 'Case metric', 20.0, NULL, NULL, 'MPa', 100.0, 'PASS')",
             [f"result-layout-selected-scalar-{suffix}", selected_run],
         )
+        conn.execute(
+            "INSERT INTO time_series_results VALUES (?, 'case_time', 'Case time', 0.0, 20.0, 's', 'MPa')",
+            [selected_run],
+        )
+        conn.execute(
+            "INSERT INTO curve_results VALUES (?, ?, 'case_curve', 'Case curve', 'default', 'Time', 's', 'Stress', 'MPa', 2, NULL, NULL, ?)",
+            [f"result-layout-selected-curve-{suffix}", selected_run, now],
+        )
+        conn.execute(
+            "INSERT INTO media_assets (id, analysis_run_id, asset_type, title, file_path, mime_type) VALUES (?, ?, 'IMAGE', 'Case image', '/assets/demo-workbench.svg', 'image/svg+xml')",
+            [f"result-layout-selected-media-{suffix}", selected_run],
+        )
 
     with TestClient(app) as client:
         request_level = client.get("/api/workbench/requests/request-drop-001/result-layout")
@@ -509,6 +521,7 @@ def test_result_layout_bindings_are_scoped_to_the_selected_load_case() -> None:
         assert [item["id"] for item in selected_b.json()["bindings"]["load_cases"]] == [selected_load_case]
         assert selected_b.json()["bindings"]["latest_result_run"]["id"] == selected_run
         assert selected_b.json()["bindings"]["scalars"][0]["value"] == 20.0
+        assert {"TIME_SERIES", "CURVE", "MEDIA_ASSET"} <= set(selected_b.json()["bindings"]["available_data_contracts"])
 
         rejected = client.get(
             "/api/workbench/requests/request-drop-001/result-layout",

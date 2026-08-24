@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from ..database_connection import rows
 from ..services.identifiers import slugify, unique_identifier
+from ..services.request_result_definition import compile_request_result_definition
 
 
 DEMO_ARTIFACT_URL = "/assets/demo-workbench.svg"
@@ -235,6 +236,18 @@ class WorkbenchRepository:
     def __init__(self, conn: Any):
         self.conn = conn
 
+    def begin_transaction(self) -> None:
+        """Begin an explicit unit of work without exposing connection SQL."""
+        self.conn.execute("BEGIN TRANSACTION")
+
+    def commit_transaction(self) -> None:
+        """Commit an explicit unit of work."""
+        self.conn.execute("COMMIT")
+
+    def rollback_transaction(self) -> None:
+        """Roll back an explicit unit of work."""
+        self.conn.execute("ROLLBACK")
+
     @staticmethod
     def _task_item(item: dict[str, Any]) -> dict[str, Any]:
         input_types = _decoded(item.pop("input_artifact_types_json")) or []
@@ -363,26 +376,10 @@ class WorkbenchRepository:
                         contracts.update(_canonical_contracts([contract]))
         return contracts
 
-    def _workflow_output_contracts(self, nodes: list[dict[str, Any]]) -> set[str]:
-        outputs: set[str] = set()
-        for node in nodes:
-            task = self.get_task_type(
-                str(node.get("task_type_id", "")),
-                int(node.get("task_type_version", 0)),
-            )
-            if task:
-                outputs.update(_canonical_contracts(task["output_artifact_types"]))
-        return {
-            contract
-            for contract, artifacts in RESULT_PROFILE_OUTPUT_CONTRACTS.items()
-            if outputs.intersection(artifacts)
-        }
-
     def _validate_result_profile(
         self,
         template: dict[str, Any],
         payload: dict[str, Any],
-        workflow_nodes: list[dict[str, Any]],
     ) -> list[str]:
         available = {
             str(widget["id"])
@@ -417,12 +414,8 @@ class WorkbenchRepository:
         unknown = requested.difference(RESULT_PROFILE_OUTPUT_CONTRACTS)
         if unknown:
             raise ValueError(f"RESULT_PROFILE_UNKNOWN_DATA_CONTRACT:{','.join(sorted(unknown))}")
-        unavailable = requested.difference(self._workflow_output_contracts(workflow_nodes))
-        if unavailable:
-            raise ValueError(
-                "RESULT_PROFILE_WORKFLOW_OUTPUT_MISSING:"
-                f"{','.join(sorted(unavailable))}"
-            )
+        # Result contracts describe what folder refresh may upload later. They are
+        # intentionally independent from the workflow's declared task outputs.
         return included
 
     def save_result_profile(self, request_type_id: str, request_type_version: int, payload: dict[str, Any]) -> dict[str, Any]:
@@ -434,11 +427,7 @@ class WorkbenchRepository:
         request_type = self.get_request_type(request_type_id, request_type_version)
         if not request_type:
             raise LookupError("REQUEST_TYPE_NOT_FOUND")
-        included = self._validate_result_profile(
-            template,
-            payload,
-            request_type["default_workflow"].get("nodes", []),
-        )
+        included = self._validate_result_profile(template, payload)
         overrides = {**payload.get("overrides", {}), "included_widget_ids": included}
         required_contracts = _canonical_contracts(payload.get("required_data_contracts") or [])
         self.conn.execute(
@@ -463,7 +452,7 @@ class WorkbenchRepository:
         request_type = self.get_request_type(request_type_id, request_type_version)
         if not request_type:
             raise LookupError("REQUEST_TYPE_NOT_FOUND")
-        included = self._validate_result_profile(template, payload, request_type["default_workflow"].get("nodes", []))
+        included = self._validate_result_profile(template, payload)
         overrides = {**payload.get("overrides", {}), "included_widget_ids": included}
         required_contracts = _canonical_contracts(payload.get("required_data_contracts") or [])
         binding_version = int(self.conn.execute(
@@ -564,6 +553,18 @@ class WorkbenchRepository:
             available.add("RESULT_RUN")
         if scalars:
             available.add("SCALAR_RESULT")
+        if latest_run:
+            uploaded_contract_tables = {
+                "TIME_SERIES": "time_series_results",
+                "CURVE": "curve_results",
+                "MEDIA_ASSET": "media_assets",
+            }
+            for contract, table in uploaded_contract_tables.items():
+                if self.conn.execute(
+                    f"SELECT 1 FROM {table} WHERE analysis_run_id=? LIMIT 1",
+                    [latest_run["id"]],
+                ).fetchone():
+                    available.add(contract)
         failed = latest_run and str(latest_run["status"]).upper() in {"FAILED", "ERROR"}
         return {
             "available_data_contracts": sorted(available),
@@ -667,12 +668,31 @@ class WorkbenchRepository:
         ).fetchone()
         return self.get_request_type(request_type_id, int(row[0])) if row and row[0] is not None else None
 
-    def create_request_type_version(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def create_request_type_version(
+        self, payload: dict[str, Any], *, created_by: str = "request-type-definition"
+    ) -> dict[str, Any]:
         payload = dict(payload)
+        if payload.get("result_profile") and payload.get("result_definition"):
+            raise ValueError("RESULT_PROFILE_AND_DEFINITION_CONFLICT")
         payload["id"] = payload.get("id") or self._next_identifier("request", payload.get("display_name", ""), "request_type_versions")
         current = self.conn.execute("SELECT COALESCE(max(version), 0) FROM request_type_versions WHERE id=?", [payload["id"]]).fetchone()[0]
         version = int(current) + 1
-        if payload.get("result_profile"):
+        compiled_definition: dict[str, Any] | None = None
+        if payload.get("result_definition"):
+            compiled_definition = compile_request_result_definition(
+                payload["result_definition"],
+                request_type_id=payload["id"],
+                request_type_display_name=payload["display_name"],
+            )
+            self._validate_result_profile(
+                {"page_definitions": compiled_definition["template"]["page_definitions"]},
+                {
+                    **compiled_definition["profile"],
+                    "template_id": compiled_definition["template"]["id"],
+                    "template_version": 1,
+                },
+            )
+        elif payload.get("result_profile"):
             template = self.get_analysis_template(
                 payload["result_profile"]["template_id"],
                 int(payload["result_profile"]["template_version"]),
@@ -681,11 +701,7 @@ class WorkbenchRepository:
                 raise LookupError("ANALYSIS_TEMPLATE_NOT_PUBLISHED")
             if template["scope_kind"] != "SYSTEM":
                 raise ValueError("SYSTEM_RESULT_PROFILE_REQUIRES_SYSTEM_TEMPLATE")
-            self._validate_result_profile(
-                template,
-                payload["result_profile"],
-                payload["default_workflow"].get("nodes", []),
-            )
+            self._validate_result_profile(template, payload["result_profile"])
         now = _utcnow()
         self.conn.execute(
             """
@@ -696,7 +712,13 @@ class WorkbenchRepository:
             """,
             [payload["id"], version, payload["display_name"], payload["description"], json.dumps(payload["allowed_task_types"], ensure_ascii=False), json.dumps(payload["default_workflow"], ensure_ascii=False), json.dumps(payload["match_rules"], ensure_ascii=False), payload["is_active"], now],
         )
-        if payload.get("result_profile"):
+        if compiled_definition:
+            template = self.create_analysis_template_version(compiled_definition["template"], created_by)
+            self.save_result_profile(
+                payload["id"], version,
+                {**compiled_definition["profile"], "template_id": template["template_id"], "template_version": template["version"]},
+            )
+        elif payload.get("result_profile"):
             self.save_result_profile(payload["id"], version, payload["result_profile"])
         return self.get_request_type(payload["id"], version)  # type: ignore[return-value]
 

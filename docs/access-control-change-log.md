@@ -150,7 +150,7 @@
 | 이전·운영 도구 | `backend/scripts/access_migration_preflight.py`, `backend/scripts/approve_oidc_global_admin.py`, `backend/scripts/verify_postgres_0006_access_upgrade.py` | 사전 점검, 초기 관리자, 실제 PG 이전 검증 |
 | 프런트 권한 | `frontend/src/features/auth/access.ts`, `frontend/src/features/navigation/` | `/me` 기반 권한·메뉴 계산과 직접 진입 guard |
 | 관리 화면 | `frontend/src/features/access/` | 사용자·멤버십·초대·메뉴 정책·감사 UI |
-| 계약 | `frontend/openapi.json`, `frontend/src/generated/openapi.ts` | 서버 OpenAPI와 생성 클라이언트 |
+| 계약 | `frontend/openapi.json`, `frontend/src/shared/api/generated/openapi.ts` | 서버 OpenAPI와 생성 클라이언트 |
 | 배포 설정 | `.env.example`, `start.ps1`, `.github/workflows/ci.yml` | Windows VM 운영 프로필과 CI 회귀 검증 |
 
 ## 5. 검증 기록
@@ -192,4 +192,3 @@
 - 계정·권한 오설정은 감사로그로 변경자를 확인하고 명시적 관리 API 또는 초기 관리자 CLI로 복구한다.
 - 마지막 전역 관리자·마지막 프로젝트 admin 보호를 우회하는 직접 SQL은 표준 복구 절차로 사용하지 않는다.
 - 사내 이전 전후의 blocker와 warning은 `access_migration_preflight.py` JSON을 보관해 인수 증적으로 사용한다.
-

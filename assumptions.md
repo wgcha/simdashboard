@@ -1,5 +1,7 @@
 # 구현 가정
 
+> 상태: 초기 MVP 가정 기록. 현재 확정 계약은 `docs/current-architecture.md`와 `docs/storage-folder-and-file-contract.md`를 우선한다.
+
 - 첨부된 개정 Goal을 이 프로젝트의 최종 완료 기준으로 사용한다.
 - 기존 React/FastAPI/DuckDB 구현과 사용자가 이미 검토한 UI를 보존하며 점진적으로 확장한다.
 - `examples/`의 기존 자료는 보존하고, 사용자 요청에 따라 등록용 공식 샘플은 `example/`에도 정리한다.

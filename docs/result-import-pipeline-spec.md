@@ -1,5 +1,7 @@
 # 해석 후처리 결과 수집·DB 적재·가시화 상세 사양서
 
+> 상태: 초기 파이프라인 사양 및 배경 기록. 신규 마스터 Refresh의 실제 `mappings` manifest, ID 폴더 예제와 확장자 계약은 `storage-folder-and-file-contract.md`를 따른다. 이 문서의 `result_files` manifest는 compatibility 대상이다.
+
 ## 1. 문서 목적
 
 본 문서는 해석 솔버의 원본 결과 파일을 직접 처리하지 않고, 별도의 후처리 자동화 프로그램이 표준 형식으로 생성한 CSV/JSON 결과를 수집하여 SQL 기반 데이터베이스에 적재하고, 판정 로직과 대시보드 가시화로 연결하는 기능의 상세 구현 사양을 정의한다.

@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 380" role="img" aria-label="Open Cell stress contour sample">
+  <defs>
+    <linearGradient id="stress-gradient" x1="0" x2="1">
+      <stop stop-color="#2453a6" />
+      <stop offset=".36" stop-color="#35c8de" />
+      <stop offset=".68" stop-color="#ffe26e" />
+      <stop offset="1" stop-color="#e54d42" />
+    </linearGradient>
+  </defs>
+  <rect width="720" height="380" fill="#0d1f33" />
+  <rect x="90" y="55" width="540" height="270" rx="8" fill="url(#stress-gradient)" />
+  <path d="M90 126h540M90 198h540M90 270h540M225 55v270M360 55v270M495 55v270" stroke="#fff" stroke-opacity=".35" />
+  <circle cx="542" cy="115" r="36" fill="#e6403a" opacity=".8" />
+  <circle cx="542" cy="115" r="12" fill="#fff6b1" />
+  <text x="90" y="38" fill="#dbeafe" font-size="20" font-family="Arial">Open Cell Maximum Principal Stress</text>
+  <text x="90" y="355" fill="#dbeafe" font-size="15" font-family="Arial">0 MPa</text>
+  <text x="560" y="355" fill="#dbeafe" font-size="15" font-family="Arial">68.0 MPa</text>
+</svg>

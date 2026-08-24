@@ -10,7 +10,7 @@ const supportedTypes = new Set<DashboardWidget['type']>([
 
 const messages: Record<ResultWidgetState, string> = {
   UNCONFIGURED: '이 위젯의 결과 바인딩이 아직 구성되지 않았습니다.',
-  WAITING: '요청된 결과 데이터가 아직 연결되지 않았습니다.',
+  WAITING: '결과가 업로드되면 자동 표시됩니다.',
   EMPTY: '연결된 결과에서 표시할 값이 아직 없습니다.',
   PARTIAL: '일부 결과만 연결되어 있습니다. 수집이 완료되면 자동으로 갱신됩니다.',
   READY: '결과 데이터가 준비되었습니다.',
@@ -36,8 +36,8 @@ function normalizeContracts(values: unknown): string[] {
 function widgetContracts(widget: DashboardWidget, requiredDataContracts: string[], bindings: ResultLayoutBindings) {
   const runtimeContracts = bindings.widget_data_contracts?.[widget.id]
   const configured = Array.isArray(runtimeContracts) ? runtimeContracts : widget.settings?.data_contracts
-  const contracts = Array.isArray(configured) ? configured : []
-  return normalizeContracts([...requiredDataContracts, ...contracts])
+  const contracts = Array.isArray(configured) ? configured : requiredDataContracts
+  return normalizeContracts(contracts)
 }
 
 export function resultWidgetState(
@@ -84,6 +84,6 @@ export function preservesResultLayoutOnLoadCaseChange(activeDashboardId: string)
   return activeDashboardId === 'request-result-layout'
 }
 
-export function explicitCustomAnalysisPage<T extends { page: { analysis_key: string; is_system: boolean } }>(pages: T[]) {
-  return pages.find((page) => page.page.analysis_key === "custom" && !page.page.is_system)
+export function explicitCustomAnalysisPage<T extends { id: string; page: { analysis_key: string; is_system: boolean } }>(pages: T[], preferredPageId?: string) {
+  return (preferredPageId ? pages.find((page) => page.id === preferredPageId && page.page.analysis_key === "custom" && !page.page.is_system) : undefined) ?? pages.find((page) => page.page.analysis_key === "custom" && !page.page.is_system)
 }

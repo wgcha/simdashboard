@@ -2,6 +2,7 @@
 Description=Analysis Canvas API (__REPLACE_ENVIRONMENT__)
 After=network-online.target
 Wants=network-online.target
+RequiresMountsFor=__REPLACE_IMPORT_ROOT__
 
 [Service]
 Type=exec
@@ -26,6 +27,7 @@ ProtectKernelModules=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
 ReadWritePaths=__REPLACE_RUNTIME_DIRECTORY__
+ReadOnlyPaths=__REPLACE_IMPORT_ROOT__
 UMask=0027
 
 [Install]

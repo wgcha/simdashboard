@@ -3,6 +3,10 @@
 실행 명령과 상세 설정은 [`deploy/rocky8/README.md`](../deploy/rocky8/README.md)를
 따른다. 이 문서는 운영 변경 순서와 release gate를 정의한다.
 
+이 문서는 [`adr/0004-canonical-production-deployment-target.md`](adr/0004-canonical-production-deployment-target.md)에서
+확정한 유일한 canonical 운영 경로다. Windows 실행·PostgreSQL 이관 절차는
+이 runbook의 운영 release 인증 범위가 아니다.
+
 ## 배포 전 승인 항목
 
 1. 대상은 Rocky Linux 8이며 Python 3.12.13, PostgreSQL 18.x 정책을 만족한다.
@@ -11,6 +15,7 @@
 4. 운영 인증은 `password` 또는 `oidc`이고 secure cookie와 HTTPS를 사용한다.
 5. DB backup과 restore 시험이 완료되어 있다.
 6. 인터넷 차단망이면 같은 Rocky minor/CPU 아키텍처에서 `--with-wheels` 번들을 만들었다.
+7. 마스터 결과 Refresh를 사용하면 `SIMDASH_IMPORT_ROOT`, service user 읽기 권한, 공유 mount와 SELinux 정책이 승인되어 있다. installer는 이 값을 service EnvironmentFile과 systemd read-only path에 전달하고, `RequiresMountsFor`로 mount 준비 뒤 서비스를 시작하며 설치 시 service user의 재귀 읽기·traverse 권한을 검사한다.
 
 ## Release 절차
 
@@ -36,6 +41,7 @@
 - app role: DB/schema CREATE 거부, 업무 테이블 CRUD, audit append-only
 - worker 수 × request/media pool budget: PostgreSQL usable connections 이내
 - nginx config와 systemd unit 검증 통과
+- `SIMDASH_IMPORT_ROOT`가 release 외부에 있고 service user가 재귀적으로 읽을 수 있으며 systemd에는 read-only path로 설정됨
 - SELinux enforcing 상태와 HTTPS firewalld 정책에서 접근 성공
 
 ## 장애와 rollback

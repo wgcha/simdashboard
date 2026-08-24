@@ -1709,6 +1709,58 @@
         }
       }
     },
+    "/api/workbench/requests/{request_id}/result-layout/materialize": {
+      "post": {
+        "tags": [
+          "workbench-demo"
+        ],
+        "summary": "Materialize Request Result Layout",
+        "operationId": "materialize_request_result_layout_api_workbench_requests__request_id__result_layout_materialize_post",
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResultLayoutMaterializeInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardDefinition"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/admin/workbench/request-types": {
       "post": {
         "tags": [
@@ -2801,6 +2853,28 @@
                   },
                   "type": "array",
                   "title": "Response Get Widget Catalog Api Widget Catalog Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/result-imports/refresh": {
+      "post": {
+        "tags": [
+          "result-folder-refresh"
+        ],
+        "summary": "Refresh Master Result Folder",
+        "description": "Discover and import trusted result bundles; client paths are never accepted.",
+        "operationId": "refresh_master_result_folder_api_result_imports_refresh_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MasterResultRefreshResponse"
                 }
               }
             }
@@ -7541,6 +7615,101 @@
         ],
         "title": "LoginPayload"
       },
+      "MasterResultRefreshItem": {
+        "properties": {
+          "manifest_path": {
+            "type": "string",
+            "title": "Manifest Path",
+            "description": "Path relative to SIMDASH_IMPORT_ROOT"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "IMPORTED",
+              "SKIPPED",
+              "FAILED"
+            ],
+            "title": "Status"
+          },
+          "load_case_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Load Case Id"
+          },
+          "analysis_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Analysis Run Id"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "manifest_path",
+          "status"
+        ],
+        "title": "MasterResultRefreshItem",
+        "description": "The outcome for one manifest discovered below the configured root."
+      },
+      "MasterResultRefreshResponse": {
+        "properties": {
+          "scanned_count": {
+            "type": "integer",
+            "title": "Scanned Count"
+          },
+          "imported_count": {
+            "type": "integer",
+            "title": "Imported Count"
+          },
+          "skipped_count": {
+            "type": "integer",
+            "title": "Skipped Count"
+          },
+          "failed_count": {
+            "type": "integer",
+            "title": "Failed Count"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/MasterResultRefreshItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "scanned_count",
+          "imported_count",
+          "skipped_count",
+          "failed_count",
+          "items"
+        ],
+        "title": "MasterResultRefreshResponse",
+        "description": "A best-effort refresh summary; one bad bundle never stops its siblings."
+      },
       "MenuPolicyItem": {
         "properties": {
           "id": {
@@ -8343,6 +8512,45 @@
         "title": "ReportVariablePlacement",
         "description": "A stable variable placement while retaining layout-specific extensions."
       },
+      "RequestResultDefinition": {
+        "properties": {
+          "page_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120,
+                "minLength": 2
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page Name"
+          },
+          "page_description": {
+            "type": "string",
+            "maxLength": 500,
+            "title": "Page Description",
+            "default": ""
+          },
+          "widgets": {
+            "items": {
+              "$ref": "#/components/schemas/ResultWidgetDefinition"
+            },
+            "type": "array",
+            "maxItems": 120,
+            "minItems": 1,
+            "title": "Widgets"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "widgets"
+        ],
+        "title": "RequestResultDefinition",
+        "description": "Result widgets authored with a request type, rather than a template."
+      },
       "RequestTypeAssignmentInput": {
         "properties": {
           "request_type_id": {
@@ -8421,6 +8629,16 @@
               }
             ]
           },
+          "result_definition": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RequestResultDefinition"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "is_active": {
             "type": "boolean",
             "title": "Is Active",
@@ -8476,6 +8694,35 @@
         ],
         "title": "ResultImportPayload"
       },
+      "ResultLayoutMaterializeInput": {
+        "properties": {
+          "load_case_id": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Load Case Id"
+          },
+          "page_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "load_case_id"
+        ],
+        "title": "ResultLayoutMaterializeInput"
+      },
       "ResultProfileInput": {
         "properties": {
           "template_id": {
@@ -8527,6 +8774,84 @@
         ],
         "title": "ResultProfileInput",
         "description": "Versioned selection and configuration for a published result template."
+      },
+      "ResultWidgetDefinition": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Id"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "kpi",
+              "verdict",
+              "gauge",
+              "edge_bar",
+              "time_series",
+              "scatter",
+              "result_table",
+              "contour",
+              "video",
+              "video_grid",
+              "model3d",
+              "note",
+              "workflow",
+              "open_cell_map",
+              "open_cell_summary",
+              "summary",
+              "chassis_summary",
+              "chassis_diagram",
+              "chassis_bar",
+              "chassis_table",
+              "run_comparison"
+            ],
+            "title": "Type"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "variable_key": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Variable Key"
+          },
+          "data_contracts": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 32,
+            "title": "Data Contracts"
+          },
+          "required": {
+            "type": "boolean",
+            "title": "Required",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "type",
+          "title"
+        ],
+        "title": "ResultWidgetDefinition",
+        "description": "A compact, authored result-widget tag for a request type."
       },
       "ReviewItemCreate": {
         "properties": {

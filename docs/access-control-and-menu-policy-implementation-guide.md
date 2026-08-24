@@ -37,7 +37,7 @@
 - 백엔드 전체 pytest가 통과한다.
 - 프런트 TypeScript 빌드가 통과한다.
 - 네 역할 시나리오와 메뉴 정책 변경 Playwright E2E가 통과한다.
-- `frontend/openapi.json`, `frontend/src/generated/openapi.ts`가 최신 백엔드 계약과 일치한다.
+- `frontend/openapi.json`, `frontend/src/shared/api/generated/openapi.ts`가 최신 백엔드 계약과 일치한다.
 - 운영 설정 문서에 OIDC·디렉터리 환경변수와 첫 전역 관리자 복구 방법이 추가된다.
 - Windows와 Ubuntu Linux에서 동일한 권한·메뉴 동작을 검증하는 실행 경로가 존재한다.
 
@@ -970,7 +970,7 @@ PostgreSQL 전용 테스트 환경이 구성되어 있으면 migration upgrade�
 
 - 신규 schema를 Pydantic model로 선언하고 임의 dict 반환을 최소화한다.
 - API 변경 후 `backend/scripts/export_openapi.py` 또는 `pnpm run generate:api`의 기존 흐름을 따른다.
-- `frontend/openapi.json`, `frontend/src/generated/openapi.ts`, client wrapper를 갱신한다.
+- `frontend/openapi.json`, `frontend/src/shared/api/generated/openapi.ts`, client wrapper를 갱신한다.
 - 수동 타입과 generated 타입이 중복되면 generated 타입을 기준으로 정리한다.
 
 ### 14.2 운영 문서

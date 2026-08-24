@@ -1,5 +1,7 @@
 # 업무정의 기반 결과 위젯·상세분석 UI 설계
 
+> 2026-08-20 결정 변경: 시스템 작업 유형 작성자가 게시 템플릿을 먼저 선택하는 흐름은 더 이상 기본 UX가 아니다. 작업 유형의 요청 결과에서 위젯 태그를 직접 선택하고 내부 DashboardDefinition을 자동 생성하는 기준은 docs/work-type-request-results-and-master-refresh.md를 따른다. 이 문서의 snapshot·상세 분석 렌더링·프로젝트 override 원칙은 계속 유효하다.
+
 - 작성일: 2026-08-15
 - 대상 시스템: Simulation Dashboard
 - 상태: 구현 기준 설계 및 MVP 완료 기록

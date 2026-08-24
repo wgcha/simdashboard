@@ -1,0 +1,39 @@
+.request-result-widget-configuration { display:grid; gap:12px; padding:12px 0 2px; border-top:1px solid var(--color-border,#273e52); }
+.request-result-widget-configuration>header { display:flex; justify-content:space-between; gap:12px; }
+.request-result-widget-configuration header span { color:var(--color-accent,#8d7dec); font-size:8px; font-weight:800; letter-spacing:.14em; }
+.request-result-widget-configuration h3 { margin:4px 0 0; font-size:14px; }
+.request-result-widget-configuration p { margin:4px 0 0; color:var(--color-text-muted,#7c96a8); font-size:10px; line-height:1.45; }
+.request-result-page-fields { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.request-result-page-fields label,.request-result-widget-fields label { display:grid; gap:4px; color:var(--color-text-muted,#7c96a8); font-size:9px; font-weight:700; }
+.request-result-page-fields input,.request-result-widget-fields input { width:100%; padding:7px 8px; border:1px solid var(--color-border,#2b485d); border-radius:6px; color:var(--color-text,#d7e7f0); background:var(--color-surface,#081620); font:inherit; }
+.request-result-catalog { display:grid; gap:8px; }
+.request-result-catalog-group { display:grid; gap:5px; }
+.request-result-catalog-group>strong { color:var(--color-text-muted,#7c96a8); font-size:9px; }
+.request-result-catalog-group>div { display:flex; flex-wrap:wrap; gap:6px; }
+.request-result-catalog button { display:inline-flex; align-items:center; gap:5px; padding:6px 8px; border:1px solid var(--color-border,#2b485d); border-radius:999px; color:var(--color-text,#c6d7e2); background:var(--color-surface-raised,#102231); font:inherit; font-size:9px; cursor:pointer; }
+.request-result-catalog button:hover:not(:disabled) { border-color:var(--color-accent,#8d7dec); }
+.request-result-catalog button.selected { color:var(--color-accent,#b6a9ff); border-color:var(--color-accent,#8d7dec); opacity:.7; }
+.request-result-catalog button:disabled { cursor:default; }
+.request-result-catalog button svg { width:11px; }
+.request-result-catalog button small { color:var(--color-text-muted,#7c96a8); font-size:8px; }
+.request-result-selected { display:grid; gap:7px; }
+.request-result-selected>p { padding:9px; border:1px dashed var(--color-border,#2b485d); border-radius:7px; }
+.request-result-selected article { display:grid; gap:8px; padding:9px; border:1px solid var(--color-border,#273e52); border-radius:8px; background:var(--color-surface-raised,#0e2130); }
+.request-result-selected article.unavailable { border-color:#d86277; }
+.request-result-chip { display:flex; align-items:center; gap:6px; color:var(--color-text,#d7e7f0); }
+.request-result-chip svg { width:13px; color:var(--color-text-muted,#7c96a8); }
+.request-result-chip strong { font-size:10px; }
+.request-result-chip code { color:var(--color-text-muted,#7c96a8); font-size:8px; }
+.request-result-chip button { display:grid; place-items:center; margin-left:auto; border:0; color:var(--color-text-muted,#7c96a8); background:none; cursor:pointer; }
+.request-result-chip button svg { width:13px; }
+.request-result-widget-fields { display:grid; grid-template-columns:1fr 1fr auto; align-items:end; gap:7px; }
+.request-result-required { display:flex!important; align-items:center; gap:4px; padding-bottom:7px; white-space:nowrap; }
+.request-result-required input { width:auto; accent-color:var(--color-accent,#8d7dec); }
+.request-result-selected footer { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.request-result-contracts { color:var(--color-text-muted,#7c96a8); font-size:8px; }
+.request-result-selected footer>div { display:flex; gap:4px; }
+.request-result-selected footer button { display:inline-flex; align-items:center; gap:4px; padding:4px 6px; border:1px solid var(--color-border,#2b485d); border-radius:5px; color:var(--color-text-muted,#7c96a8); background:transparent; font:inherit; font-size:9px; cursor:pointer; }
+.request-result-selected footer button:disabled { opacity:.4; cursor:default; }
+.request-result-selected footer .request-result-remove { color:#e58a9b; }
+.request-result-validation { color:#e58a9b!important; }
+@media (max-width:680px) { .request-result-page-fields,.request-result-widget-fields { grid-template-columns:1fr; } .request-result-required { padding-bottom:0; } .request-result-selected footer { align-items:flex-start; flex-direction:column; } }

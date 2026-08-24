@@ -1,5 +1,7 @@
 # 해석 데이터베이스 기반 사용자 구성형 시각화 대시보드 MVP
 
+> 상태: 초기 MVP 목표 기록. 현재 구현 구조·DB 운영·개발 우선순위의 기준은 `docs/current-architecture.md`, `docs/storage-folder-and-file-contract.md`, `docs/program-consolidation-and-development-plan.md`를 따른다. 이 문서의 “향후 PostgreSQL”과 파일 기반 미디어 전제는 이후 구현으로 대체되었다.
+
 ## 목표
 
 Altair Panopticon과 같은 분석 대시보드의 사용 경험을 참고하되 특정 제품을 복제하지 않는다. 사용자는 준비된 데이터 변수와 시각화 위젯을 선택하고, 반응형 그리드에서 위치와 크기를 조절하고, 이름과 설명을 붙인 레이아웃을 저장·불러오기·복제·복구할 수 있어야 한다.

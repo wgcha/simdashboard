@@ -34,6 +34,12 @@ for required_installer_contract in \
   'scripts/check_postgres_connection.py' \
   'scripts/check_postgres_pool_budget.py' \
   'httpd_can_network_connect' \
+  'SIMDASH_IMPORT_ROOT must be outside INSTALL_ROOT' \
+  'SIMDASH_IMPORT_ROOT cannot contain whitespace' \
+  'SIMDASH_IMPORT_ROOT is not readable/traversable by service user' \
+  'Non-default SIMDASH_IMPORT_ROOT is missing' \
+  'Non-default SIMDASH_IMPORT_ROOT must be a mounted non-symlink directory' \
+  'SIMDASH_IMPORT_ROOT="${SIMDASH_IMPORT_ROOT}"' \
   'SHA256SUMS'; do
   grep -Fq "${required_installer_contract}" "${root}/install.sh" || {
     printf 'Rocky 8 installer contract is missing: %s\n' "${required_installer_contract}" >&2
@@ -43,4 +49,7 @@ done
 
 grep -Fq 'wheelhouse' "${root}/build-release.sh"
 grep -Fq 'AUTH_COOKIE_SECURE=true' "${root}/install.env.example"
+grep -Fq 'SIMDASH_IMPORT_ROOT=/var/lib/simdashboard/import' "${root}/install.env.example"
+grep -Fq 'RequiresMountsFor=__REPLACE_IMPORT_ROOT__' "${root}/systemd/simdashboard.service.template"
+grep -Fq 'ReadOnlyPaths=__REPLACE_IMPORT_ROOT__' "${root}/systemd/simdashboard.service.template"
 printf '%s\n' 'ROCKY8_DEPLOY_TEMPLATES_OK'

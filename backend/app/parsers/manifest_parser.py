@@ -1,17 +1,21 @@
-import json
 from pathlib import Path
-from ..schemas.result_import import Manifest
 
-class ManifestParser:
+from ..schemas.result_import import Manifest
+from .manifest_format import ManifestFormat, load_manifest, resolve_manifest_path
+
+
+class LegacyResultFilesManifestParser:
+    """Compatibility parser for the pre-canonical ``result_files`` contract."""
+
     def __init__(self, root_dir: str):
         self.root_dir = Path(root_dir)
 
     def parse(self, relative_path: str) -> Manifest:
-        manifest_path = self.root_dir / relative_path
-        if not manifest_path.is_file():
-            raise FileNotFoundError(f"Manifest not found: {manifest_path}")
-        
-        with open(manifest_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        
-        return Manifest(**data)
+        manifest_path = resolve_manifest_path(self.root_dir, relative_path)
+
+        loaded = load_manifest(manifest_path, expected_format=ManifestFormat.LEGACY_RESULT_FILES)
+        return Manifest(**loaded.data)
+
+
+# Keep the historical import name for callers outside this repository.
+ManifestParser = LegacyResultFilesManifestParser

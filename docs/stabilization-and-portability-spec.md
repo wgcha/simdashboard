@@ -25,8 +25,8 @@
    - 운영·워크플로 레이아웃 저장마다 새 버전을 만든다.
 5. OpenAPI 클라이언트
    - FastAPI OpenAPI JSON을 단일 원본으로 TypeScript 타입과 API 클라이언트를 생성한다.
-   - `pnpm run generate:api`가 `frontend/openapi.json`과 `src/generated/openapi.ts`를 갱신한다.
-   - `src/generated/client.ts`의 타입 안전 클라이언트를 신규·변경 API부터 적용한다.
+   - `pnpm run generate:api`가 `frontend/openapi.json`과 `src/shared/api/generated/openapi.ts`를 갱신한다.
+   - `src/shared/api/client.ts`의 타입 안전 클라이언트를 신규·변경 API부터 적용한다.
    - CI는 재생성 결과에 Git 차이가 생기면 API 계약 누락으로 실패한다.
 6. PostgreSQL
    - 마이그레이션, 연결 풀, DuckDB 복사·검증 CLI, Windows/Linux 실행 스크립트를 제공한다.

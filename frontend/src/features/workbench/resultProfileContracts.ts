@@ -1,4 +1,4 @@
-import type { ResultProfile, WorkbenchTaskType } from './types'
+import type { RequestResultDefinition, ResultProfile, WorkbenchTaskType } from './types'
 
 const OUTPUT_CONTRACTS: Record<string, readonly string[]> = {
   LOAD_CASE: ['RESULT_MANIFEST', 'POST_RESULT', 'ANALYSIS_RUN_REFERENCE'],
@@ -27,7 +27,14 @@ export function workflowDataContracts(tasks: WorkbenchTaskType[]) {
   return RESULT_DATA_CONTRACTS.filter((contract) => OUTPUT_CONTRACTS[contract].some((output) => outputs.has(output)))
 }
 
-export function resultProfileValidation(profile: ResultProfile | null, tasks: WorkbenchTaskType[]) {
+export function requestResultDefinitionValidation(definition: RequestResultDefinition | null, _tasks: WorkbenchTaskType[]) {
+  if (!definition || definition.widgets.length === 0) return ''
+  const requested = normalizeResultDataContracts(definition.widgets.flatMap((widget) => widget.data_contracts))
+  const unknown = requested.filter((contract) => !RESULT_DATA_CONTRACTS.includes(contract))
+  return unknown.length ? '지원하지 않는 결과 데이터 계약: ' + unknown.join(', ') : ''
+}
+
+export function resultProfileValidation(profile: ResultProfile | null, _tasks: WorkbenchTaskType[]) {
   if (!profile) return ''
   const widgets = profile.template.page_definitions.flatMap((page) => page.widgets)
   const allWidgetIds = widgets.map((widget) => widget.id)
@@ -36,8 +43,5 @@ export function resultProfileValidation(profile: ResultProfile | null, tasks: Wo
   if (!required.every((widgetId) => included.has(widgetId))) return '필수 결과 위젯은 결과 구성에서 제외할 수 없습니다.'
   const requested = normalizeResultDataContracts([...profile.required_data_contracts, ...widgetContracts(profile, included)])
   const unknown = requested.filter((contract) => !RESULT_DATA_CONTRACTS.includes(contract))
-  if (unknown.length) return `지원하지 않는 결과 데이터 계약: ${unknown.join(', ')}`
-  const available = workflowDataContracts(tasks)
-  const missing = requested.filter((contract) => !available.includes(contract))
-  return missing.length ? `선택한 Workflow 출력으로 만들 수 없는 결과 데이터 계약: ${missing.join(', ')}` : ''
+  return unknown.length ? '지원하지 않는 결과 데이터 계약: ' + unknown.join(', ') : ''
 }
