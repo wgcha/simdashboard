@@ -57,6 +57,10 @@ from .services.manual_result_ingestion_adapter import (
     ManualResultIngestionAdapterError,
     to_canonical_result_payload,
 )
+from .services.radioss_result_ingestion_adapter import (
+    RadiossResultIngestionAdapterError,
+    to_canonical_radioss_result_payload,
+)
 from .schemas.api import (
     AnalysisPageCreate,
     AnalysisPageOrderUpdate,
@@ -797,154 +801,78 @@ def import_analysis_results(load_case_id: str, payload: ResultImportPayload, req
         if payload.validate_only:
             return {"status": "VALID", "filename": payload.filename, **parsed["summary"], "results": parsed["scalars"], "warnings": parsed["warnings"]}
 
-        if parsed["summary"]["source_format"] == "SUMMARY_RESULT":
-            source_checksum = hashlib.sha256(payload.content.encode("utf-8")).hexdigest()
-            source_name = f"{load_case_id}/{payload.filename}"
-            try:
+        source_checksum = hashlib.sha256(payload.content.encode("utf-8")).hexdigest()
+        source_name = f"{load_case_id}/{payload.filename}"
+        source_format = parsed["summary"]["source_format"]
+        try:
+            if source_format == "SUMMARY_RESULT":
                 canonical_parsed = to_canonical_result_payload(
                     parsed,
                     source_file=payload.filename,
                     source_checksum=source_checksum,
                 )
-            except ManualResultIngestionAdapterError as exc:
-                raise HTTPException(422, str(exc)) from exc
-            try:
-                with bound_result_ingestion_transaction(
-                    conn,
-                    utc_identifier,
-                    authorize=lambda command, connection: require_resource_permission(
-                        request,
-                        RESULT_IMPORT,
-                        "load_case",
-                        command["load_case_id"],
-                        conn=connection,
-                    ),
-                ) as unit_of_work_provider:
-                    outcome = ingest_result_bundle(
-                        {
-                            "project_id": str(context[2]),
-                            "request_id": str(context[1]),
-                            "load_case_id": load_case_id,
-                            "source_type": "FILE_UPLOAD",
-                            "source_name": source_name,
-                            "source_checksum": source_checksum,
-                            "parser_version": "result-import-v1",
-                            "parsed": canonical_parsed,
-                            "actor": actor_name,
-                            "metadata": {
-                                "author_user_id": principal.user_id,
-                                "submitted_author": payload.author,
-                                "original_filename": payload.filename,
-                                "source_format": "SUMMARY_RESULT",
-                            },
-                        },
-                        unit_of_work_provider,
-                        lambda: datetime.now(timezone.utc).replace(tzinfo=None),
-                        utc_identifier,
-                    )
-                    if outcome["status"] == "IMPORTED":
-                        write_audit_event(
-                            request=request,
-                            principal=principal,
-                            status_code=200,
-                            action="RESULT_IMPORTED",
-                            detail={"project_id": context[2], "load_case_id": load_case_id, "run_id": outcome["analysis_run_id"]},
-                            connection=conn,
-                        )
-            except Exception:
-                raise
-            return {
-                "status": outcome["status"],
-                "run_id": outcome["analysis_run_id"],
-                "run_no": outcome["run_no"],
-                "filename": payload.filename,
-                **parsed["summary"],
-                "results": parsed["scalars"],
-                "warnings": parsed["warnings"],
-            }
+            elif source_format == "RADIOSS_MESH_CSV":
+                canonical_parsed = to_canonical_radioss_result_payload(
+                    parsed,
+                    source_file=payload.filename,
+                    source_checksum=source_checksum,
+                )
+            else:
+                raise ValueError(f"지원하지 않는 결과 형식입니다: {source_format}")
+        except (ManualResultIngestionAdapterError, RadiossResultIngestionAdapterError, ValueError) as exc:
+            raise HTTPException(422, str(exc)) from exc
 
-        run_id = f"run-{uuid4().hex[:12]}"
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
-        next_run_no = conn.execute("SELECT coalesce(max(run_no), 0) + 1 FROM analysis_runs WHERE load_case_id = ?", [load_case_id]).fetchone()[0]
-        conn.execute("BEGIN TRANSACTION")
-        try:
-            catalog_repository = VariableCatalogRepository(conn)
-            for item in parsed["scalars"]:
-                if not catalog_repository.get(load_case_id, item["variable_key"], include_inactive=True):
-                    catalog_repository.create(load_case_id, {
-                        "variable_key": item["variable_key"],
-                        "display_name": item["display_name"],
-                        "data_type": "NUMBER",
-                        "unit": item["unit"],
-                        "description": f"결과 파일 적재: {payload.filename}",
-                        "threshold": item["threshold"],
-                        "result_group": item.get("analysis", "CUSTOM"),
-                        "updated_by": actor_name,
-                    })
-            for item in parsed["time_series"]:
-                if not catalog_repository.get(load_case_id, item["variable_key"], include_inactive=True):
-                    result_group = "OPEN_CELL" if item["value_unit"].casefold() == "mpa" and "stress" in item["variable_key"].casefold() else "CUSTOM"
-                    catalog_repository.create(load_case_id, {
-                        "variable_key": item["variable_key"],
-                        "display_name": item["display_name"],
-                        "data_type": "TIME_SERIES",
-                        "unit": item["value_unit"],
-                        "description": f"결과 파일 적재: {payload.filename}",
-                        "threshold": None,
-                        "result_group": result_group,
-                        "updated_by": actor_name,
-                    })
-            conn.execute(
-                "INSERT INTO analysis_runs VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                [run_id, load_case_id, None, next_run_no, parsed["solver"], "COMPLETED", now, now],
+        with bound_result_ingestion_transaction(
+            conn,
+            utc_identifier,
+            authorize=lambda command, connection: require_resource_permission(
+                request,
+                RESULT_IMPORT,
+                "load_case",
+                command["load_case_id"],
+                conn=connection,
+            ),
+        ) as unit_of_work_provider:
+            outcome = ingest_result_bundle(
+                {
+                    "project_id": str(context[2]),
+                    "request_id": str(context[1]),
+                    "load_case_id": load_case_id,
+                    "source_type": "FILE_UPLOAD",
+                    "source_name": source_name,
+                    "source_checksum": source_checksum,
+                    "parser_version": "result-import-v1",
+                    "parsed": canonical_parsed,
+                    "actor": actor_name,
+                    "metadata": {
+                        "author_user_id": principal.user_id,
+                        "submitted_author": payload.author,
+                        "original_filename": payload.filename,
+                        "source_format": source_format,
+                    },
+                },
+                unit_of_work_provider,
+                lambda: datetime.now(timezone.utc).replace(tzinfo=None),
+                utc_identifier,
             )
-            conn.execute(
-                """
-                INSERT INTO analysis_run_metadata
-                    (analysis_run_id, source_type, source_name, source_checksum, schema_id, schema_version,
-                     parser_version, metadata_json, created_at)
-                VALUES (?, 'FILE_UPLOAD', ?, ?, NULL, NULL, 'result-import-v1', ?, ?)
-                """,
-                [run_id, payload.filename, hashlib.sha256(payload.content.encode("utf-8")).hexdigest(), json.dumps({"author_user_id": principal.user_id}, ensure_ascii=False), now],
-            )
-            for item in parsed["scalars"]:
-                conn.execute(
-                    "INSERT INTO scalar_results VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    [f"scalar-{uuid4().hex[:12]}", run_id, item["variable_key"], item["display_name"], item["value"], None, None, item["unit"], item["threshold"], item["verdict"]],
+            if outcome["status"] == "IMPORTED":
+                write_audit_event(
+                    request=request,
+                    principal=principal,
+                    status_code=200,
+                    action="RESULT_IMPORTED",
+                    detail={"project_id": context[2], "load_case_id": load_case_id, "run_id": outcome["analysis_run_id"]},
+                    connection=conn,
                 )
-            for item in parsed["time_series"]:
-                conn.execute(
-                    "INSERT INTO time_series_results VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    [run_id, item["variable_key"], item["display_name"], item["time"], item["value"], item["time_unit"], item["value_unit"]],
-                )
-            for item in parsed["locations"]:
-                conn.execute(
-                    "INSERT INTO result_locations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    [run_id, item["variable_key"], item["entity_type"], item["entity_id"], item["x"], item["y"], item["z"], item["time"], item["time_unit"], item["method"]],
-                )
-            if parsed["note"]:
-                conn.execute(
-                    "INSERT INTO qualitative_notes VALUES (?, ?, ?, ?, ?)",
-                    [f"note-{uuid4().hex[:12]}", run_id, actor_name, parsed["note"], now],
-                )
-            conn.execute("UPDATE load_cases SET status = 'COMPLETED' WHERE id = ?", [load_case_id])
-            conn.execute("UPDATE analysis_requests SET status = 'IN_PROGRESS' WHERE id = ?", [context[1]])
-            conn.execute("UPDATE request_steps SET status = 'COMPLETED', progress = 100, actual_end = ? WHERE request_id = ? AND name IN ('해석 실행', '후처리 작업')", [now, context[1]])
-            conn.execute("UPDATE request_steps SET status = 'IN_PROGRESS', progress = greatest(progress, 20), actual_start = coalesce(actual_start, ?) WHERE request_id = ? AND name = '결과 검토'", [now, context[1]])
-            sync_request_status(conn, context[1])
-            write_audit_event(
-                request=request,
-                principal=principal,
-                status_code=200,
-                action="RESULT_IMPORTED",
-                detail={"project_id": context[2], "load_case_id": load_case_id, "run_id": run_id},
-                connection=conn,
-            )
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
-    return {"status": "IMPORTED", "run_id": run_id, "run_no": next_run_no, "filename": payload.filename, **parsed["summary"], "results": parsed["scalars"], "warnings": parsed["warnings"]}
+        return {
+            "status": outcome["status"],
+            "run_id": outcome["analysis_run_id"],
+            "run_no": outcome["run_no"],
+            "filename": payload.filename,
+            **parsed["summary"],
+            "results": parsed["scalars"],
+            "warnings": parsed["warnings"],
+        }
 
 
 @app.post("/api/load-cases/{load_case_id}/folder-import/example")

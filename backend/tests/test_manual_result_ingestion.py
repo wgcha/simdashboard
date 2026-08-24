@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,6 +14,8 @@ from app.services.manual_result_ingestion_adapter import (
     ManualResultIngestionAdapterError,
     to_canonical_result_payload,
 )
+from app.result_import import parse_result_file
+from app.services.radioss_result_ingestion_adapter import to_canonical_radioss_result_payload
 
 
 pytestmark = pytest.mark.duckdb_integration
@@ -132,6 +135,7 @@ def _cleanup_manual_rows() -> None:
             conn.execute("DELETE FROM curve_results WHERE analysis_run_id=?", [run_id])
             conn.execute("DELETE FROM time_series_results WHERE analysis_run_id=?", [run_id])
             conn.execute("DELETE FROM scalar_results WHERE analysis_run_id=?", [run_id])
+            conn.execute("DELETE FROM result_locations WHERE analysis_run_id=?", [run_id])
             conn.execute("DELETE FROM qualitative_notes WHERE analysis_run_id=?", [run_id])
             conn.execute("DELETE FROM analysis_run_metadata WHERE analysis_run_id=?", [run_id])
             conn.execute("DELETE FROM analysis_runs WHERE id=?", [run_id])
@@ -234,6 +238,222 @@ def test_manual_summary_csv_uses_canonical_uow():
             ).fetchone()[0] == "manual-file-upload"
     finally:
         _cleanup_manual_rows()
+
+
+def test_radioss_adapter_preserves_parser_scalars_series_and_locations():
+    sample_path = Path(__file__).resolve().parents[2] / "examples" / "radioss" / "radioss_tv_result_example.csv"
+    content = sample_path.read_text(encoding="utf-8")
+    parsed = parse_result_file("radioss-example.csv", content)
+    checksum = "d" * 64
+    canonical = to_canonical_radioss_result_payload(parsed, source_file=sample_path.name, source_checksum=checksum)
+
+    expected_scalars = [
+        ("top_edge_max_stress", "상단 엣지 최대 응력", 74.4, "MPa", 75.0, "OPEN_CELL"),
+        ("bottom_edge_max_stress", "하단 엣지 최대 응력", 84.0, "MPa", 75.0, "OPEN_CELL"),
+        ("left_edge_max_stress", "좌측 엣지 최대 응력", 84.0, "MPa", 75.0, "OPEN_CELL"),
+        ("right_edge_max_stress", "우측 엣지 최대 응력", 82.95, "MPa", 75.0, "OPEN_CELL"),
+        ("chassis_rear_top_edge_gap_permanent_deformation", "상단 엣지 최대 이격", 6.401757571167466, "mm", 5.0, "CHASSIS_REAR"),
+        ("chassis_rear_bottom_edge_gap_permanent_deformation", "하단 엣지 최대 이격", 4.302615483633183, "mm", 5.0, "CHASSIS_REAR"),
+        ("chassis_rear_corner_top_left_permanent_deformation", "좌상단 모서리 영구변형", 5.2, "mm", 5.0, "CHASSIS_REAR"),
+        ("chassis_rear_corner_top_right_permanent_deformation", "우상단 모서리 영구변형", 3.1, "mm", 5.0, "CHASSIS_REAR"),
+        ("chassis_rear_corner_bottom_left_permanent_deformation", "좌하단 모서리 영구변형", 2.4, "mm", 5.0, "CHASSIS_REAR"),
+        ("chassis_rear_corner_bottom_right_permanent_deformation", "우하단 모서리 영구변형", 5.4, "mm", 5.0, "CHASSIS_REAR"),
+    ]
+    assert len(canonical["scalars"]) == len(expected_scalars)
+    for actual, (key, display_name, value, unit, threshold, result_group) in zip(canonical["scalars"], expected_scalars):
+        assert actual["variable_key"] == key
+        assert actual["display_name"] == display_name
+        assert actual["data_type"] == "FLOAT"
+        assert actual["value"] == pytest.approx(value)
+        assert actual["unit"] == unit
+        assert actual["threshold"] == threshold
+        assert actual["result_group"] == result_group
+        assert actual["source_file"] == sample_path.name
+        assert actual["source_checksum"] == checksum
+
+    expected_curves = [
+        {
+            "variable_key": "top_edge_stress_time",
+            "display_name": "상단 엣지",
+            "series_key": "default",
+            "catalog_data_type": "TIME_SERIES",
+            "x_label": "시간",
+            "x_unit": "ms",
+            "y_label": "상단 엣지",
+            "y_unit": "MPa",
+            "result_group": "OPEN_CELL",
+            "points": [{"x": 0.0, "y": 5.952}, {"x": 10.0, "y": 74.4}, {"x": 30.0, "y": 8.928}],
+            "source_file": sample_path.name,
+            "source_checksum": checksum,
+        },
+        {
+            "variable_key": "bottom_edge_stress_time",
+            "display_name": "하단 엣지",
+            "series_key": "default",
+            "catalog_data_type": "TIME_SERIES",
+            "x_label": "시간",
+            "x_unit": "ms",
+            "y_label": "하단 엣지",
+            "y_unit": "MPa",
+            "result_group": "OPEN_CELL",
+            "points": [{"x": 0.0, "y": 6.72}, {"x": 10.0, "y": 84.0}, {"x": 30.0, "y": 10.08}],
+            "source_file": sample_path.name,
+            "source_checksum": checksum,
+        },
+        {
+            "variable_key": "left_edge_stress_time",
+            "display_name": "좌측 엣지",
+            "series_key": "default",
+            "catalog_data_type": "TIME_SERIES",
+            "x_label": "시간",
+            "x_unit": "ms",
+            "y_label": "좌측 엣지",
+            "y_unit": "MPa",
+            "result_group": "OPEN_CELL",
+            "points": [{"x": 0.0, "y": 6.72}, {"x": 10.0, "y": 84.0}, {"x": 30.0, "y": 10.08}],
+            "source_file": sample_path.name,
+            "source_checksum": checksum,
+        },
+        {
+            "variable_key": "right_edge_stress_time",
+            "display_name": "우측 엣지",
+            "series_key": "default",
+            "catalog_data_type": "TIME_SERIES",
+            "x_label": "시간",
+            "x_unit": "ms",
+            "y_label": "우측 엣지",
+            "y_unit": "MPa",
+            "result_group": "OPEN_CELL",
+            "points": [{"x": 0.0, "y": 6.636}, {"x": 10.0, "y": 82.95}, {"x": 30.0, "y": 9.954}],
+            "source_file": sample_path.name,
+            "source_checksum": checksum,
+        },
+    ]
+    assert canonical["curves"] == expected_curves
+
+    expected_locations = [
+        {"variable_key": "top_edge_max_stress", "entity_type": "ELEMENT", "entity_id": "5016", "x": 1400.0, "y": 787.5, "z": 0.0, "time": 10.0, "time_unit": "ms", "method": "MAX_PRINCIPAL / 18% EDGE BAND"},
+        {"variable_key": "bottom_edge_max_stress", "entity_type": "ELEMENT", "entity_id": "5001", "x": 200.0, "y": 112.5, "z": 0.0, "time": 10.0, "time_unit": "ms", "method": "MAX_PRINCIPAL / 18% EDGE BAND"},
+        {"variable_key": "left_edge_max_stress", "entity_type": "ELEMENT", "entity_id": "5001", "x": 200.0, "y": 112.5, "z": 0.0, "time": 10.0, "time_unit": "ms", "method": "MAX_PRINCIPAL / 18% EDGE BAND"},
+        {"variable_key": "right_edge_max_stress", "entity_type": "ELEMENT", "entity_id": "5004", "x": 1400.0, "y": 112.5, "z": 0.0, "time": 10.0, "time_unit": "ms", "method": "MAX_PRINCIPAL / 18% EDGE BAND"},
+        {"variable_key": "chassis_rear_top_edge_gap_permanent_deformation", "entity_type": "NODE", "entity_id": "2014", "x": 800.0, "y": 960.15, "z": -28.6, "time": 30.0, "time_unit": "ms", "method": "MAX 3D DISTANCE TO DEFORMED ENDPOINT CHORD"},
+        {"variable_key": "chassis_rear_bottom_edge_gap_permanent_deformation", "entity_type": "NODE", "entity_id": "2005", "x": 800.0, "y": -59.85, "z": -30.7, "time": 30.0, "time_unit": "ms", "method": "MAX 3D DISTANCE TO DEFORMED ENDPOINT CHORD"},
+        {"variable_key": "chassis_rear_corner_top_left_permanent_deformation", "entity_type": "NODE", "entity_id": "2010", "x": -5.2, "y": 960.0, "z": -35.0, "time": 30.0, "time_unit": "ms", "method": "FINAL DISPLACEMENT MAGNITUDE"},
+        {"variable_key": "chassis_rear_corner_top_right_permanent_deformation", "entity_type": "NODE", "entity_id": "2018", "x": 1603.1, "y": 960.0, "z": -35.0, "time": 30.0, "time_unit": "ms", "method": "FINAL DISPLACEMENT MAGNITUDE"},
+        {"variable_key": "chassis_rear_corner_bottom_left_permanent_deformation", "entity_type": "NODE", "entity_id": "2001", "x": -2.4, "y": -60.0, "z": -35.0, "time": 30.0, "time_unit": "ms", "method": "FINAL DISPLACEMENT MAGNITUDE"},
+        {"variable_key": "chassis_rear_corner_bottom_right_permanent_deformation", "entity_type": "NODE", "entity_id": "2009", "x": 1605.4, "y": -60.0, "z": -35.0, "time": 30.0, "time_unit": "ms", "method": "FINAL DISPLACEMENT MAGNITUDE"},
+    ]
+    assert canonical["locations"] == expected_locations
+
+
+def test_radioss_canonical_uow_preserves_metadata_and_identical_retry_skips():
+    initialize_database()
+    _cleanup_manual_rows()
+    try:
+        with TestClient(app) as client:
+            sample = client.get("/api/result-import/template/radioss-csv").text
+            payload = {"filename": "radioss-uow.csv", "content": sample, "author": "Radioss 작성자"}
+            parsed = parse_result_file(payload["filename"], sample)
+            first = client.post(f"/api/load-cases/{LOAD_CASE_ID}/results/import", json=payload)
+            assert first.status_code == 200, first.text
+            assert first.json()["status"] == "IMPORTED"
+            assert first.json()["filename"] == payload["filename"]
+            assert first.json()["source_format"] == "RADIOSS_MESH_CSV"
+            assert first.json()["scalar_count"] == len(parsed["scalars"])
+            assert first.json()["time_series_count"] == len(parsed["time_series"])
+            run_id = first.json()["run_id"]
+            retry = client.post(f"/api/load-cases/{LOAD_CASE_ID}/results/import", json=payload)
+            assert retry.status_code == 200, retry.text
+            assert retry.json()["status"] == "SKIPPED"
+            with connect() as conn:
+                metadata = conn.execute(
+                    "SELECT source_name, source_checksum, schema_id, schema_version, metadata_json "
+                    "FROM analysis_run_metadata WHERE analysis_run_id=?",
+                    [run_id],
+                ).fetchone()
+                assert metadata[0] == f"{LOAD_CASE_ID}/radioss-uow.csv"
+                assert metadata[2:4] == ("radioss-mesh-csv", 1)
+                assert json.loads(metadata[4])["author_user_id"] == "local-admin"
+                assert conn.execute("SELECT count(*) FROM result_locations WHERE analysis_run_id=?", [run_id]).fetchone()[0] == 10
+                scalar_rows = conn.execute(
+                    "SELECT variable_key, display_name, value_double, value_integer, value_text, unit, threshold_double, verdict "
+                    "FROM scalar_results WHERE analysis_run_id=? ORDER BY variable_key",
+                    [run_id],
+                ).fetchall()
+                expected_scalars = sorted(parsed["scalars"], key=lambda item: item["variable_key"])
+                assert len(scalar_rows) == len(expected_scalars)
+                for row, expected in zip(scalar_rows, expected_scalars):
+                    assert row[0] == expected["variable_key"]
+                    assert row[1] == expected["display_name"]
+                    assert row[2] == pytest.approx(expected["value"])
+                    assert row[3] is None
+                    assert row[4] is None
+                    assert row[5] == expected["unit"]
+                    assert row[6] == expected["threshold"]
+                    assert row[7] == expected["verdict"]
+
+                time_series_rows = conn.execute(
+                    "SELECT variable_key, display_name, time_value, value, time_unit, value_unit "
+                    "FROM time_series_results WHERE analysis_run_id=? ORDER BY variable_key, time_value",
+                    [run_id],
+                ).fetchall()
+                expected_series = sorted(parsed["time_series"], key=lambda item: (item["variable_key"], item["time"]))
+                assert len(time_series_rows) == len(expected_series)
+                for row, expected in zip(time_series_rows, expected_series):
+                    assert row[0] == expected["variable_key"]
+                    assert row[1] == expected["display_name"]
+                    assert row[2] == pytest.approx(expected["time"])
+                    assert row[3] == pytest.approx(expected["value"])
+                    assert row[4] == expected["time_unit"]
+                    assert row[5] == expected["value_unit"]
+
+                location_rows = conn.execute(
+                    "SELECT variable_key, entity_type, entity_id, x, y, z, time_value, time_unit, method "
+                    "FROM result_locations WHERE analysis_run_id=? ORDER BY variable_key",
+                    [run_id],
+                ).fetchall()
+                expected_locations = sorted(parsed["locations"], key=lambda item: item["variable_key"])
+                assert len(location_rows) == len(expected_locations)
+                for row, expected in zip(location_rows, expected_locations):
+                    assert row[0] == expected["variable_key"]
+                    assert row[1] == expected["entity_type"]
+                    assert row[2] == expected["entity_id"]
+                    assert row[3] == pytest.approx(expected["x"])
+                    assert row[4] == pytest.approx(expected["y"])
+                    assert row[5] == pytest.approx(expected["z"])
+                    assert row[6] == pytest.approx(expected["time"])
+                    assert row[7] == expected["time_unit"]
+                    assert row[8] == expected["method"]
+
+                assert conn.execute("SELECT count(*) FROM folder_import_jobs WHERE source_folder=?", [metadata[0]]).fetchone()[0] == 2
+                assert conn.execute("SELECT count(*) FROM analysis_run_metadata WHERE source_checksum=?", [metadata[1]]).fetchone()[0] == 1
+                assert conn.execute("SELECT count(*) FROM audit_events WHERE action='RESULT_IMPORTED' AND detail_json LIKE ?", [f"%{run_id}%"]).fetchone()[0] == 1
+    finally:
+        _cleanup_manual_rows()
+
+
+def test_radioss_canonical_uow_rolls_back_locations_job_run_and_audit(monkeypatch):
+    initialize_database()
+    _cleanup_manual_rows()
+    sample_path = Path(__file__).resolve().parents[2] / "examples" / "radioss" / "radioss_tv_result_example.csv"
+    payload = {"filename": "radioss-rollback.csv", "content": sample_path.read_text(encoding="utf-8")}
+    original_add_results = SQLResultIngestionUnitOfWork.add_results
+
+    def fail_after_persist(unit_of_work, *args, **kwargs):
+        original_add_results(unit_of_work, *args, **kwargs)
+        raise RuntimeError("injected Radioss persistence failure")
+
+    monkeypatch.setattr(SQLResultIngestionUnitOfWork, "add_results", fail_after_persist)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post(f"/api/load-cases/{LOAD_CASE_ID}/results/import", json=payload)
+    assert response.status_code == 500
+    with connect() as conn:
+        assert conn.execute("SELECT count(*) FROM analysis_runs WHERE load_case_id=? AND id IN (SELECT analysis_run_id FROM analysis_run_metadata WHERE source_name=?)", [LOAD_CASE_ID, f"{LOAD_CASE_ID}/radioss-rollback.csv"]).fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM analysis_run_metadata WHERE source_name=?", [f"{LOAD_CASE_ID}/radioss-rollback.csv"]).fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM result_locations WHERE analysis_run_id IN (SELECT analysis_run_id FROM analysis_run_metadata WHERE source_name=?)", [f"{LOAD_CASE_ID}/radioss-rollback.csv"]).fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM folder_import_jobs WHERE source_folder=?", [f"{LOAD_CASE_ID}/radioss-rollback.csv"]).fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM audit_events WHERE action='RESULT_IMPORTED' AND path LIKE '%results/import'").fetchone()[0] == 0
+    _cleanup_manual_rows()
 
 
 def test_manual_validate_only_does_not_mutate_and_rechecks_authorization(monkeypatch):

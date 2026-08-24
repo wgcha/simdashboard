@@ -1,6 +1,6 @@
 # 현재 구현 아키텍처
 
-- 기준일: 2026-08-24
+- 기준일: 2026-08-25
 - 상태: 현재 코드 기준
 - 대상: `backend/app`, `frontend/src`, DB migration, API 계약, 테스트 경계
 
@@ -204,12 +204,12 @@ canonical `mappings`는 `scan_folder`와 Master Refresh로, legacy
 공통 SQL UoW를 제공한다. Master Refresh와 `/folder-import/example`은 이 UoW를
 공유한다.
 
-일반 수동 `SUMMARY_RESULT` JSON/CSV upload도 같은 normalized payload와 UoW를
-사용한다. target-qualified `source_name`과 content checksum으로 재시도를
-`SKIPPED`하고, write transaction 안에서 `result.import` 권한을 재확인하며
-`RESULT_IMPORTED` audit event를 원자적으로 기록한다. `Radioss` mesh CSV는
-`result_locations` 저장이 canonical UoW에 아직 포함되지 않아 기존 direct-SQL
-경로에 남아 있다.
+일반 수동 `SUMMARY_RESULT` JSON/CSV와 `Radioss` mesh CSV upload도 같은 normalized
+payload와 UoW를 사용한다. target-qualified `source_name`과 content checksum으로
+재시도를 `SKIPPED`하고, write transaction 안에서 `result.import` 권한을 재확인하며
+`RESULT_IMPORTED` audit event를 원자적으로 기록한다. Radioss 전용 adapter는
+scalar, time-series/curve, `result_locations`를 canonical contract로 변환해 같은
+single-connection transaction에 저장한다.
 
 구형 `result_files` 기반 `ResultImportService` persistence는 별도 legacy 경로다.
 legacy repository가 현재 schema에 없는 `result_import_jobs`와 `analysis_runs`
@@ -220,8 +220,11 @@ PostgreSQL canonical ingestion은 load case별 namespaced 64-bit transaction
 advisory lock으로 `run_no` 할당을 직렬화하고, non-null exact identity
 `(source_type, source_name, source_checksum)`를 migration `0016`의
 `canonical_result_ingestion_sources` primary key로 예약한다. 실패한 transaction은
-예약도 rollback한다. 현재 검증은 SQL 호출 순서·migration·PK를 확인하는 unit/contract
-범위이며, live PostgreSQL concurrent ingestion test는 아직 없다.
+예약도 rollback한다. `backend/tests/test_postgres_result_ingestion_concurrency.py`는
+독립 PostgreSQL 연결 두 개로 동일 exact source의 한 건 import/한 건 skip과 서로
+다른 source의 고유 `run_no`를 검증한다. 이 test는 `ANALYSIS_TEST_POSTGRES=1`,
+`ANALYSIS_TEST_POSTGRES_DATABASE`와 실제 `current_database()` 일치를 요구하는
+opt-in test다. 현재 작업 환경에는 전용 test DB가 없어 live 실행하지 않았다.
 
 실제 ID 계층·JSON·CSV·SVG·glTF 예제는 `examples/master-results/`에 있으며 backend 통합 테스트가 이를 직접 import한다.
 
@@ -266,13 +269,13 @@ FastAPI app.openapi()
 | 브라우저 | `frontend/e2e`, `pnpm run test:e2e` | 실제 권한·편집·결과·routing 흐름 |
 | PostgreSQL opt-in | `postgres_integration` marker와 preflight script | Alembic head, app-role 권한, 양 DB 호환 |
 
-결과 수집 focused 검증은 현재 collection 기준 71개 test case다. canonical/legacy
+결과 수집 focused 검증은 현재 collection 기준 **76개** test case다. canonical/legacy
 manifest 경계, fingerprint idempotency와 mapping 변경 감지, 공통 UoW atomic
 rollback, manual `SUMMARY_RESULT` JSON/CSV의 target-qualified source·retry
-`SKIPPED`·audit/auth 재확인, scalar/curve/media/blob/catalog 저장, 모든 media
+`SKIPPED`·audit/auth 재확인, Radioss scalar/curve/location atomic 저장, 모든 media
 extension fixture의 정상/MIME mismatch/corrupt signature, PostgreSQL reservation
-SQL/migration contract와 endpoint wiring을 포함한다. 이 collection에는 live
-PostgreSQL concurrent ingestion test가 포함되지 않는다.
+SQL/migration contract와 endpoint wiring을 포함한다. PostgreSQL 동시성 test는
+아래 opt-in collection에 별도로 두며, 기본 suite에서는 안전하게 skip된다.
 
 ```bash
 cd backend
@@ -285,9 +288,20 @@ cd backend
   tests/test_manual_result_ingestion.py \
   tests/test_media_policy_fixtures.py \
   tests/test_result_ingestion_idempotency.py \
-  tests/test_api.py::test_typed_folder_example_registers_scalars_curves_media_and_catalog
-# 71 collected; live PostgreSQL concurrent test는 별도 미제공
+  tests/test_api.py::test_typed_folder_example_registers_scalars_curves_media_and_catalog \
+  tests/test_postgres_result_ingestion_concurrency.py
+# 76 collected (2026-08-25); PostgreSQL concurrency cases are opt-in at runtime.
+
+# dedicated migrated test database only; this command was not live-run in the current workspace
+ANALYSIS_DB_BACKEND=postgresql \
+ANALYSIS_TEST_POSTGRES=1 \
+ANALYSIS_TEST_POSTGRES_DATABASE=<dedicated_test_db> \
+DATABASE_URL='postgresql+psycopg://<test_app_role>:<test_password>@<test_host>:5432/<dedicated_test_db>' \
+../.venv-wsl/bin/python -m pytest -q tests/test_postgres_result_ingestion_concurrency.py
 ```
+
+`DATABASE_URL`은 명령에서 명시한 전용 test DB여야 하며 `.env`의 현재
+`simulation_dashboard` 연결은 이 test에 사용하지 않는다.
 
 Architecture ceiling은 목표 수치가 아니라 부채가 늘지 않게 하는 상한이다. 파일을 나누었다는 이유만으로 경계가 개선되었다고 보지 않는다.
 

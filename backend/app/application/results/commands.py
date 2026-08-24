@@ -90,6 +90,8 @@ def _summary(parsed: dict[str, Any], command: ResultIngestionCommand) -> dict[st
         "curve_count": len(parsed["curves"]),
         "media_count": len(parsed["media"]),
     }
+    if "locations" in parsed:
+        summary["location_count"] = len(parsed["locations"])
     for key in ("manifest_checksum", "bundle_fingerprint"):
         value = command["metadata"].get(key)
         if value is not None:

@@ -1,8 +1,8 @@
 """Adapt the ordinary manual result-file parser to the canonical payload.
 
-Radioss mesh uploads intentionally remain on the legacy HTTP persistence path
-until the canonical UoW grows location persistence.  This adapter therefore
-handles only ``SUMMARY_RESULT`` payloads and has no database or HTTP concerns.
+This adapter handles ``SUMMARY_RESULT`` payloads and has no database or HTTP
+concerns. Radioss mesh payloads use their dedicated adapter because they also
+carry entity locations.
 """
 
 from __future__ import annotations

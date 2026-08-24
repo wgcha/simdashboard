@@ -1,6 +1,6 @@
 # 프로그램 정리 및 개발 계획
 
-- 기준일: 2026-08-24
+- 기준일: 2026-08-25
 - 상태: 실행 계획
 - 범위: 구조 정리, DB·결과 수집, 확장자, proxy, 사내 배포, 기술 우선순위
 
@@ -38,8 +38,8 @@
 |---|---|---|---|
 | DOC-01 | 현재 문서와 과거 plan이 같은 디렉터리에 혼재 | 개발자가 낡은 경로·명령을 사용 | P0 |
 | DB-01 | migration head를 코드 graph에서 동적으로 읽고 PostgreSQL의 누락·stale revision을 fail-closed하도록 verifier와 회귀 테스트를 반영 | 구현 완료, 실제 운영 DB release gate 검증 필요 | P0 완료 |
-| IMP-01 | 중앙 format detector/loader와 normalized contract를 사용하고 canonical Master Refresh·typed folder example·일반 manual `SUMMARY_RESULT` JSON/CSV를 공통 UoW로 적재 | Radioss mesh `result_locations` direct-SQL 경로와 legacy persistence는 잔여 | P1 진행 |
-| IMP-02 | bundle fingerprint, load-case advisory lock, migration 0016 exact source reservation 구현 | 동일 `run_id` replace·live PostgreSQL concurrency test·TOCTOU snapshot은 잔여 | P1 진행 |
+| IMP-01 | 중앙 format detector/loader와 normalized contract를 사용하고 canonical Master Refresh·typed folder example·수동 `SUMMARY_RESULT` JSON/CSV·Radioss mesh CSV를 공통 UoW로 적재 | legacy `ResultImportService` persistence와 run replace 정책은 잔여 | P1 진행 |
+| IMP-02 | bundle fingerprint, load-case advisory lock, migration 0016 exact source reservation과 opt-in PostgreSQL 동시성 테스트 구현 | 동일 `run_id` replace·TOCTOU snapshot·전용 PostgreSQL test DB에서의 실제 실행은 잔여 | P1 진행 |
 | DEP-01 | Rocky install env·service EnvironmentFile·systemd read-only path에 `SIMDASH_IMPORT_ROOT` wiring과 외부 mount/read preflight를 반영 | 구현 완료, 실제 Rocky host release gate 검증 필요 | P0 진행 |
 | DEP-02 | Rocky 8 + nginx + systemd + PostgreSQL을 canonical target으로 ADR 확정하고 Windows를 compatibility profile로 명시 | 문서 결정 완료 | P0 완료 |
 | DEP-03 | Windows는 설치/개발 실행과 DB 이관 호환성은 있으나 HTTPS reverse proxy·service·TLS·rollback 운영 자동화 없음 | Windows one-command 운영 배포는 지원 범위에서 제외 | 범위 제외 |
@@ -50,18 +50,19 @@
 
 ## 3. GitHub Issues 병합 상태
 
-요청된 `https://github.com/wgcha/simdashboard/issues`는 private 저장소로 확인되며 현재 자동화 환경의 비인증 GitHub API와 웹 요청에서 404가 반환되었다. 이슈 내용을 추측해서 번호나 결정을 만들지 않는다.
+private GitHub Issues는 요구사항의 출처이고, 이 저장소 문서와 자동 테스트는
+실행 계약의 정본이다. 아래 이슈의 사실을 반영했지만, upstream 디렉터리·확장자
+목록을 곧바로 import 허용 목록이나 배포 구현으로 해석하지 않는다.
 
-이슈 export를 확보하면 다음 표에 실제 번호와 링크를 추가한다.
+| 추적 키 | 이슈 | 주제 | 현재 반영과 경계 | 반영 문서 |
+|---|---|---|---|---|
+| GH-SPDM-FOLDER | [#13](https://github.com/wgcha/simdashboard/issues/13) | SPDM 폴더 구조 | SPDM은 upstream 의뢰 발견용 폴더 스키마다. 현재 실행 가능한 결과 import root/manifest와 별개이며 직접 import하지 않는다. | `storage-folder-and-file-contract.md`, `work-type-request-results-and-master-refresh.md` |
+| GH-EXTENSIONS | [#14](https://github.com/wgcha/simdashboard/issues/14) | source/solver/result/report 확장자·명명 inventory | inventory는 producer/보관 기준이다. 현재 parser/upload 허용 확장자는 코드의 좁은 allowlist만 따른다. | `storage-folder-and-file-contract.md` |
+| GH-LINUX-PROXY | [#15](https://github.com/wgcha/simdashboard/issues/15) | Linux 사내 proxy·조직 CA 요구사항 | `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`와 조직 CA를 입력 요구사항으로 정규화했다. Rocky proxy/CA 설치 자동화는 아직 없다. | 이 문서, `development-workflow.md` |
 
-| 추적 키 | 이슈 번호 | 주제 | 현재 로컬 근거 | 반영 문서 |
-|---|---:|---|---|---|
-| GH-DB-FOLDER | 확인 필요 | DB/결과 폴더 구조 | `master_result_refresh.py`, 기존 import 문서 | `storage-folder-and-file-contract.md` |
-| GH-EXTENSIONS | 확인 필요 | 저장 확장자·MIME | `media_policy.py`, `media_storage_service.py` | `storage-folder-and-file-contract.md` |
-| GH-DEV-PROXY | 확인 필요 | 개발 적용 proxy | `vite.config.ts`, `setup.ps1` | 이 문서, `development-workflow.md` |
-| GH-DEPLOY | 확인 필요 | 사내 일괄 deploy | `deploy/rocky8`, Windows script | 이 문서, 배포 runbook |
-
-private 이슈에만 운영 계약을 남기지 않는다. 확정된 내용은 저장소 문서·환경 예제·자동 테스트에도 복제한다.
+이슈에만 운영 계약을 남기지 않는다. 확정된 내용은 저장소 문서·환경 예제·자동
+테스트에도 복제한다. 자격 증명, 프록시 URL의 사용자 정보, 인증서 private key는
+이슈 본문·문서·Git에 넣지 않는다.
 
 ## 4. 목표 구조
 
@@ -103,7 +104,7 @@ URL은 route registry, 서버 계약은 `shared/api`, 공용 UI만 `shared/ui`�
 
 - `docs/README.md`에서 현재 기준/기능 기록/과거 계획을 구분한다.
 - 실제 구조, 개발 절차, 저장 계약을 canonical 문서로 지정한다.
-- GitHub 이슈 export를 확보해 GH 추적 표를 채운다.
+- [완료] GitHub Issues #13~#15의 추적 표와 적용/미적용 경계를 기준 문서에 반영한다.
 - `GOAL.md`와 과거 roadmap에는 historical banner를 추가한다.
 - 오래된 `frontend/src/generated` 경로를 `frontend/src/shared/api/generated`로 수정한다.
 
@@ -130,11 +131,11 @@ canonical Master Refresh와 `/folder-import/example`은
 공통 validation, persistence, status sync를 하나의 single-connection transaction으로
 처리한다. malformed legacy parser output은 normalized contract에서 fail-closed한다.
 
-일반 수동 `SUMMARY_RESULT` JSON/CSV upload는 target-qualified `source_name`과
-content checksum을 사용해 공통 UoW로 이관되었다. 재시도는 `SKIPPED`하고 write
-transaction 안에서 권한을 재확인하며 `RESULT_IMPORTED` audit event를 함께
-기록한다. `Radioss` mesh CSV는 `result_locations` persistence가 canonical UoW에
-아직 포함되지 않아 direct-SQL 경로에 남아 있다.
+일반 수동 `SUMMARY_RESULT` JSON/CSV와 `Radioss` mesh CSV upload는
+target-qualified `source_name`과 content checksum을 사용해 공통 UoW로 이관되었다.
+재시도는 `SKIPPED`하고 write transaction 안에서 권한을 재확인하며
+`RESULT_IMPORTED` audit event를 함께 기록한다. Radioss adapter는 scalar,
+time-series/curve, `result_locations`를 동일 transaction에 전달한다.
 
 legacy `ResultImportService` persistence는 canonical schema에 없는
 `result_import_jobs` 테이블과 `analysis_runs` 확장 컬럼을 참조하므로 비운영
@@ -181,16 +182,16 @@ compatibility 경로로 유지한다.
 
 #### P1-01 canonical ingestion service
 
-상태: 부분 완료. canonical Master Refresh, typed folder-import example, 일반
-manual `SUMMARY_RESULT` JSON/CSV의 공통 command/domain port/application
-orchestration/SQL UoW 이관은 완료했다. Radioss mesh `result_locations`와 legacy
-persistence 이관은 남아 있다.
+상태: 부분 완료. canonical Master Refresh, typed folder-import example, 수동
+`SUMMARY_RESULT` JSON/CSV와 Radioss mesh CSV의 공통 command/domain
+port/application orchestration/SQL UoW 이관은 완료했다. legacy persistence 이관은
+남아 있다.
 
 - P0에서 고정한 중앙 manifest detector/loader를 canonical importer와 legacy
   adapter가 명시적으로 사용한다.
 - discovery/preflight/parser와 persistence/status sync를 command/UoW 경계로 분리했다.
 - typed folder import와 Master Refresh가 같은 validation·persistence UoW를 사용한다.
-- Radioss mesh `result_locations`를 canonical UoW result contract로 이관한다.
+- Radioss parser adapter는 scalar, time-series/curve, `result_locations`를 canonical UoW result contract로 전달한다.
 - legacy `ResultImportService` persistence는 현행 schema에 맞는 run identity와
   replace 정책을 정한 뒤 같은 UoW로 이관한다.
 - parser adapter만 결과 형식별로 교체한다.
@@ -198,8 +199,8 @@ persistence 이관은 남아 있다.
 
 #### P1-02 bundle fingerprint와 Run identity
 
-상태: fingerprint와 PostgreSQL duplicate reservation 기초 구현 완료, identity
-정책과 live concurrency 검증은 잔여.
+상태: fingerprint와 PostgreSQL duplicate reservation, opt-in live concurrency test
+구현 완료. identity 정책과 전용 PostgreSQL test DB에서의 실제 실행은 잔여다.
 
 - manifest와 매핑 파일의 checksum/size를 canonical 정렬해 fingerprint를 만든다.
 - 동일 fingerprint는 skip하고, 현재 다른 fingerprint는 새 Run으로 처리한다.
@@ -210,8 +211,9 @@ persistence 이관은 남아 있다.
   `canonical_result_ingestion_sources` PK로 예약하고 실패 transaction에서 rollback한다.
 - `run_id`, `run_no`, overwrite policy를 계약에 추가한다.
 - 실패/재시도/부분 성공의 감사 이벤트를 표준화한다.
-- live PostgreSQL concurrent ingestion test를 추가한다. 현재는 SQL/migration
-  contract test만 있다.
+- `backend/tests/test_postgres_result_ingestion_concurrency.py`가 독립 연결 두 개로
+  동일 source의 `IMPORTED`/`SKIPPED`, 서로 다른 source의 고유 `run_no`를 검증한다.
+  `ANALYSIS_TEST_POSTGRES=1`과 일치하는 전용 test DB가 있어야 실행되며, 이번 기준선에서는 전용 DB가 없어 live 실행하지 않았다.
 - 결과 producer의 임시 폴더 생성 후 atomic rename과 importer snapshot/rehash로
   fingerprint 계산 바이트와 실제 parse·media 저장 바이트의 일치를 보장한다.
 
@@ -232,10 +234,11 @@ persistence 이관은 남아 있다.
 MIME/extension mismatch 거부, corrupt signature 거부를 검증한다. 영구 canonical
 folder example은 JSON/CSV/SVG/glTF만 유지한다.
 
-현재 결과 수집 focused 검증은 collection 기준 71개 test case다. manifest 경계,
+현재 결과 수집 focused 검증은 collection 기준 **76개** test case다. manifest 경계,
 fingerprint/mapping 변경, 공통 UoW rollback, manual SUMMARY_RESULT JSON/CSV,
 media fixture matrix, PostgreSQL reservation SQL/migration contract와 endpoint
-wiring을 포함하며 live PostgreSQL concurrent ingestion test는 포함하지 않는다.
+wiring, Radioss canonical UoW를 포함한다. PostgreSQL 동시성 test는 opt-in marker라
+전용 test DB가 없는 기본 suite에서는 skip된다.
 
 ### Phase 2 — 기능별 V2 구조 전환(P1)
 
@@ -275,10 +278,30 @@ wiring을 포함하며 live PostgreSQL concurrent ingestion test는 포함하지
 
 서로 다른 proxy를 같은 환경변수나 문서 단락으로 섞지 않는다.
 
+[#15](https://github.com/wgcha/simdashboard/issues/15)의 Linux 사내망 요구사항은
+다음처럼 정규화한다.
+
+- site proxy 입력: `http://168.219.61.252:8080` (인증정보 없음). runtime/package
+  용 `HTTP_PROXY`, `HTTPS_PROXY`에 넣을 후보 값이며 Vite/nginx reverse proxy와는 별개다.
+- bypass source 입력: loopback/localhost, `10.*`, `165.213.*`, `168.219.*`,
+  `202.20.*`, `112.107.220.*`, `samsung.net`. 이 wildcard 표기는 consumer마다
+  `NO_PROXY` 지원 문법이 다르므로 그대로 복사하지 않고 대상 도구별로 정규화·검증한다.
+- trust source 입력: `/usr/share/ca-certificates/samsung/DigitalCity.crt`와 Debian의
+  `dpkg-reconfigure`/`update-ca-certificates` 절차
+- 비밀 입력: proxy 인증정보와 CA private key는 secret store 또는 root-only file로 제공
+
+현재 `.env.example`과 Windows `setup.ps1`은 proxy 입력 형식과 로그 마스킹을
+지원한다. #15의 Debian CA 경로와 갱신 절차는 source 환경의 입력이며, 그 이슈에
+언급된 `/etc/ssl/cert` 경로로 수동 복제하지 않는다. canonical target인 Rocky 8에는
+trust-store 경로와 갱신 절차를 별도로 구현해야 하며, DNF, Python/Node, systemd에
+proxy/CA를 설치·갱신하는 자동화는 아직 없다. `NO_PROXY` assignment에는 단일 `=`만
+사용한다.
+
 #### P3-02 Rocky one-command deploy
 
 - signed release bundle 또는 조직 artifact repository를 사용한다.
 - Python wheel뿐 아니라 OS RPM/internal repo/CA 전제를 preflight한다.
+- #15의 proxy/CA 입력을 Rocky installer와 서비스 EnvironmentFile에 안전하게 반영하고, DNF·runtime·health smoke를 실제 사내망에서 검증한다.
 - nginx forwarded header를 신뢰 경계에서 덮어쓰고 trusted host·HSTS·CSP를 검토한다.
 - upload/download timeout, buffering, 최대 body, media Range를 검증한다.
 - migration → service → nginx → health → smoke → rollback 순서를 자동화한다.
@@ -369,10 +392,10 @@ wiring을 포함하며 live PostgreSQL concurrent ingestion test는 포함하지
 
 ## 10. 다음 실행 순서
 
-1. canonical 예제와 import 검증을 병합한다.
-2. GitHub Issues export를 받아 GH 추적 표를 확정한다.
+1. canonical 예제와 import 검증을 유지하고 #13 SPDM discovery layout을 결과 import와 분리한다.
+2. GitHub Issues #13~#15 추적 표와 실행/계획 경계를 유지한다. (완료)
 3. migration verifier와 이후 migration head 처리 방식을 고친다. (완료)
 4. 운영 target ADR과 `SIMDASH_IMPORT_ROOT` 배포 연결을 구현한다. (구현 완료, Rocky host release validation 남음)
-5. Radioss mesh locations와 legacy persistence를 공통 UoW로 이관하고 run identity/replace 정책을 확정한다.
-6. live PostgreSQL concurrent ingestion test와 producer snapshot/rehash를 추가한다.
+5. Radioss mesh locations 공통 UoW 이관을 유지하고 legacy persistence의 run identity/replace 정책을 확정한다.
+6. opt-in PostgreSQL concurrent ingestion test를 전용 migrated test DB에서 실행하고 producer snapshot/rehash를 추가한다.
 7. result ingestion부터 V2 vertical slice 전환을 시작한다.

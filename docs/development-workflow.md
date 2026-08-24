@@ -1,6 +1,6 @@
 # 개발 작업 절차
 
-- 기준일: 2026-08-24
+- 기준일: 2026-08-25
 - 상태: 현재 코드 기준
 
 이 문서는 기능을 추가하거나 구조를 변경할 때 따라야 하는 공통 절차다. 구조의 실제 책임은 [`current-architecture.md`](current-architecture.md), 우선순위는 [`program-consolidation-and-development-plan.md`](program-consolidation-and-development-plan.md)를 따른다.
@@ -80,7 +80,11 @@ pnpm run generate:api
 - 빈 PostgreSQL과 기존 revision PostgreSQL에서 upgrade를 검증한다.
 - app 역할의 DDL 거부와 owner/app 자격 증명 분리를 유지한다.
 - DuckDB와 PostgreSQL에서 placeholder, JSON, upsert, transaction 동작을 모두 테스트한다.
-- 현재 local suite에는 SQL/migration contract 검증만 있고 live PostgreSQL concurrent ingestion test는 없다.
+- `backend/tests/test_postgres_result_ingestion_concurrency.py`는 실제 PostgreSQL에서
+  독립 연결 두 개를 사용한다. `ANALYSIS_TEST_POSTGRES=1`과
+  `ANALYSIS_TEST_POSTGRES_DATABASE`를 모두 지정하고 `current_database()`가 일치할
+  때만 실행되므로, 일반 개발 DB에는 실행하지 않는다. 현재 기준선에서는 전용 test
+  DB가 없어 live 실행하지 않았다.
 
 ### 3.5 결과 폴더와 확장자
 
@@ -92,13 +96,14 @@ pnpm run generate:api
 - 예제 파일은 README 전용 장식이 아니라 실제 parser/import 통합 테스트로 읽는다.
 - 같은 bundle을 다시 처리했을 때의 `SKIPPED`, 새 Run, replace 정책을 명시한다.
 
-수동 결과 upload는 형식을 나누어 검토한다. 일반 `SUMMARY_RESULT` JSON/CSV는
+수동 결과 upload는 형식을 나누어 검토한다. `SUMMARY_RESULT` JSON/CSV와
+`Radioss` mesh CSV는
 정규화 adapter와 공통 UoW를 사용하고, `source_name`은
 `{load_case_id}/{filename}`으로 target을 포함한다. content checksum으로 동일
 재시도를 `SKIPPED`하며 write transaction 안에서 권한을 재확인하고 audit event를
-함께 기록한다. `Radioss` mesh CSV는 `result_locations` 저장이 canonical UoW에
-편입될 때까지 direct-SQL compatibility 경로다. 구형 `ResultImportService`는
-현재 schema와 맞지 않는 비운영 parser/persistence compatibility 경로다.
+함께 기록한다. Radioss adapter는 scalar, time-series/curve, `result_locations`를
+하나의 UoW transaction으로 저장한다. 구형 `ResultImportService`는 현재 schema와
+맞지 않는 비운영 parser/persistence compatibility 경로다.
 
 ### 3.6 Proxy와 배포
 
@@ -109,7 +114,15 @@ pnpm run generate:api
 운영: Browser → HTTPS nginx :443 → FastAPI 127.0.0.1:8000
 ```
 
-회사 outbound proxy(`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`)와 애플리케이션 reverse proxy는 다른 개념이다. 인증정보를 Git이나 로그에 남기지 않는다.
+회사 outbound proxy(`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`)와 애플리케이션 reverse proxy는 다른 개념이다. [#15](https://github.com/wgcha/simdashboard/issues/15)의 Linux 사내 proxy·조직 CA 요구사항은 다음 절차로 적용한다.
+
+1. site proxy input은 `http://168.219.61.252:8080`이고, `HTTP_PROXY`/`HTTPS_PROXY`에만 적용한다. 인증정보는 없다.
+2. #15 bypass source scope는 loopback/localhost, `10.*`, `165.213.*`, `168.219.*`, `202.20.*`, `112.107.220.*`, `samsung.net`이다. wildcard 표현은 consumer별 지원 문법이 다르므로 그대로 복사하지 않고 `NO_PROXY`에 맞게 정규화·검증한다.
+3. 사이트 제공 `DigitalCity.crt`는 Git에 넣지 않는다. source Debian 경로는 `/usr/share/ca-certificates/samsung/DigitalCity.crt`이고 `dpkg-reconfigure`/`update-ca-certificates` 절차를 기록한다. 이슈의 `/etc/ssl/cert` 언급으로 수동 복제하지 않으며 Rocky target의 trust-store/갱신 절차는 별도 구현 대상이다.
+4. 대상 Rocky host에서 DNF, Python/Node package retrieval, systemd runtime 각각의 proxy/CA trust를 preflight한다.
+5. proxy URL의 인증정보와 CA private key를 로그·문서·명령행에 남기지 않는다.
+
+현재 `.env.example`과 Windows `setup.ps1`은 proxy 입력 형식과 로그 마스킹을 제공한다. Rocky 8의 proxy/CA 설치·갱신 자동화는 아직 없으므로, #15는 구현 완료가 아니라 배포 P1 요구사항이다.
 
 ## 4. 검증 명령
 
@@ -141,6 +154,21 @@ pnpm run build
 pnpm run test:e2e
 ```
 
+전용으로 migration한 PostgreSQL test DB가 준비된 경우에만 동시성 test를 별도로
+실행한다. 이 명령은 개발·운영 DB에 사용하지 않는다.
+
+```bash
+cd backend
+ANALYSIS_DB_BACKEND=postgresql \
+ANALYSIS_TEST_POSTGRES=1 \
+ANALYSIS_TEST_POSTGRES_DATABASE=<dedicated_test_db> \
+DATABASE_URL='postgresql+psycopg://<test_app_role>:<test_password>@<test_host>:5432/<dedicated_test_db>' \
+../.venv-wsl/bin/python -m pytest -q tests/test_postgres_result_ingestion_concurrency.py
+```
+
+명령의 `DATABASE_URL`은 반드시 전용 test DB를 가리켜야 한다. `.env`에 설정된
+현재 `simulation_dashboard` 연결은 prod-like 대상으로 간주하며 이 test에 사용하지 않는다.
+
 Playwright Chromium을 처음 준비할 때는 `./scripts/wsl/setup-e2e.sh --install-system-deps`를 사용한다.
 
 DuckDB 통합 테스트는 session seed를 복사해 테스트별 `test.duckdb`를 사용하고,
@@ -157,7 +185,7 @@ DuckDB 통합 테스트는 session seed를 복사해 테스트별 `test.duckdb`�
 | Alembic migration | blank/upgrade PostgreSQL + app-role preflight |
 | 인증·권한 | 허용/거부/project-scope test + 감사 이벤트 |
 | route·navigation | routing self-test + 관련 Playwright |
-| 결과 parser/import | canonical folder + SUMMARY_RESULT JSON/CSV + 잘못된 확장자/MIME/path + idempotency + auth/audit transaction |
+| 결과 parser/import | canonical folder + SUMMARY_RESULT JSON/CSV + Radioss mesh CSV location + 잘못된 확장자/MIME/path + idempotency + auth/audit transaction |
 | 미디어 | magic/MIME/크기 + DB blob + Range/HEAD/download |
 | 배포 template | template validation + bundle check + 실제 target smoke |
 

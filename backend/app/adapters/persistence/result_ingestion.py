@@ -358,6 +358,22 @@ class SQLResultIngestionUnitOfWork(ResultIngestionUnitOfWork):
                         item["y_unit"],
                     ],
                 )
+        for item in parsed.get("locations", []):
+            self._connection.execute(
+                "INSERT INTO result_locations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    run_id,
+                    item["variable_key"],
+                    item["entity_type"],
+                    item["entity_id"],
+                    item["x"],
+                    item["y"],
+                    item["z"],
+                    item["time"],
+                    item["time_unit"],
+                    item["method"],
+                ],
+            )
         for item in parsed["media"]:
             path = Path(item["path"])
             validate_media_metadata(

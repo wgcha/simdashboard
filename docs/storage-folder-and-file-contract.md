@@ -1,10 +1,10 @@
 # DB·결과 폴더·파일 확장자 계약
 
-- 기준일: 2026-08-24
+- 기준일: 2026-08-25
 - 상태: 현재 구현 기준 + 잔여 개선 항목
 - 관련 코드: `backend/app/config.py`, `database_connection.py`, `folder_import.py`, `parsers/manifest_format.py`, `parsers/manifest_parser.py`, `media_policy.py`, `services/bundle_fingerprint.py`, `services/master_result_refresh.py`, `application/results/commands.py`, `adapters/persistence/result_ingestion.py`, `services/media_storage_service.py`
 
-이 문서는 DB 실행 위치, 결과 수집 폴더, manifest mapping, 허용 확장자와 실제 저장 방식을 하나의 기준으로 정리한다.
+이 문서는 DB 실행 위치, 결과 수집 폴더, manifest mapping, 허용 확장자와 실제 저장 방식을 하나의 기준으로 정리한다. GitHub [#13](https://github.com/wgcha/simdashboard/issues/13), [#14](https://github.com/wgcha/simdashboard/issues/14)의 upstream 요구사항은 아래 실행 계약과 구분해 기록한다.
 
 ## 1. DB 실행 계약
 
@@ -25,7 +25,43 @@ backend/backups/
 transfer-bundles/
 ```
 
-## 2. 마스터 결과 폴더
+## 2. 폴더 구조의 적용 범위
+
+| 구분 | 출처·용도 | 현재 처리 |
+|---|---|---|
+| canonical 결과 import layout | 이 문서와 `examples/master-results/` | 실행 가능. `SIMDASH_IMPORT_ROOT` 아래 canonical `manifest.json`과 `mappings`를 실제 parser/UoW가 처리한다. |
+| SPDM discovery layout | [#13](https://github.com/wgcha/simdashboard/issues/13)의 상위 SPDM 폴더 구조 | 의뢰 발견·변경 감지용 설계 입력이다. 감시 schema를 확정·구현하기 전에는 `manifest.json` 결과 import 또는 DB 저장 형식으로 직접 해석하지 않는다. |
+| DB 저장 | DuckDB 파일 또는 PostgreSQL schema | import folder hierarchy가 DB table hierarchy를 만들지 않는다. DB 연결은 검증한 manifest context ID로만 한다. |
+
+SPDM upstream 폴더를 결과로 쓰려면 별도 adapter가 (1) 허용 root, (2) 프로젝트·의뢰
+매핑, (3) 안정화/atomic-publish 판정, (4) canonical manifest 생성 또는 명시적 API
+command를 제공해야 한다. 이 adapter는 현재 구현 범위가 아니다.
+
+[#13](https://github.com/wgcha/simdashboard/issues/13)의 대표 discovery 구조는 다음과
+같다. 이 tree는 upstream 관찰/의뢰 분류용 참고이며 **현재 실행 가능한 import tree가
+아니다**. 실제 수집은 다음 절의 `SIMDASH_IMPORT_ROOT`와 canonical manifest만 쓴다.
+
+```text
+Project_.../
+├─ INPUT/
+│  └─ OriginalCAD/{Set,Cushion,Stand}/
+├─ WR_0001_SimType1/  (사용 환경)
+│  ├─ SimCAD_Type1/
+│  ├─ 보고서/
+│  ├─ TEST/
+│  └─ CAE/
+│     ├─ Assy_Model.../{CMS,Modal,2kgfPush}/
+│     ├─ Set_Model.../{Deflection,CMS,Modal,2kgfPush,Stiffness}/
+│     ├─ Assy_RES.../{Settle,Wobble,Horizontal_Force_Angle,Slope_Angle}/
+│     └─ ChRear/Stiffness/
+└─ WR_0001_SimType2/  (유통 환경)
+   ├─ SimCAD_Type1/
+   ├─ 보고서/
+   ├─ TEST/
+   └─ CAE/Assy_Set.../{Drop,Clamping}/.../{INDIVIDUAL,CUMULATIVE}/
+```
+
+## 3. 마스터 결과 폴더
 
 서버가 읽을 수 있는 최상위 폴더는 `SIMDASH_IMPORT_ROOT` 하나다. 클라이언트는 절대 경로나 서버 경로를 API로 전달하지 않는다.
 
@@ -50,7 +86,7 @@ transfer-bundles/
 
 현재 구현은 root 아래의 모든 `manifest.json`을 탐색하고 실제 DB 연결은 `manifest.context`의 ID로 결정한다. 위 폴더명은 운영 convention이며, 현재 코드는 네 단계 폴더명의 ID가 manifest ID와 같은지 강제하지 않는다. 폴더명 일치가 필수 요구라면 별도 validation으로 추가해야 한다.
 
-## 3. 현재 canonical manifest
+## 4. 현재 canonical manifest
 
 중앙 `backend/app/parsers/manifest_format.py`가 manifest format을 먼저 식별한다.
 `mappings`와 `result_files` 중 정확히 하나만 선택되며, 둘을 함께 가진 mixed
@@ -117,11 +153,11 @@ Master Refresh와 versioned folder-import example은 공통
 transaction으로 결과를 저장한다. parser별 차이는 adapter와 normalized contract
 안에서만 허용한다.
 
-일반 수동 `SUMMARY_RESULT` JSON/CSV upload는 공통 UoW로 이관되어 target-qualified
-`source_name`과 content checksum을 사용한다. 동일 파일 재시도는 `SKIPPED`하며,
-write transaction 안에서 권한을 재확인하고 `RESULT_IMPORTED` audit event를 함께
-기록한다. 다만 `Radioss` mesh CSV는 `result_locations` persistence가 canonical
-UoW에 아직 포함되지 않아 기존 direct-SQL 경로에 남아 있다.
+일반 수동 `SUMMARY_RESULT` JSON/CSV와 `Radioss` mesh CSV upload는 공통 UoW를
+사용한다. `source_name`은 target-qualified이고 content checksum으로 동일 재시도를
+`SKIPPED`한다. write transaction 안에서 권한을 재확인하고 `RESULT_IMPORTED` audit
+event를 함께 기록한다. Radioss adapter는 scalar, time-series/curve,
+`result_locations`를 같은 transaction으로 전달하므로 부분 위치 행을 남기지 않는다.
 
 구형 `result_files` 기반 `ResultImportService` persistence는 별도 legacy 경로다.
 이 repository는 현재 canonical schema에 없는 `result_import_jobs` 테이블과
@@ -129,14 +165,31 @@ UoW에 아직 포함되지 않아 기존 direct-SQL 경로에 남아 있다.
 compatibility 경로다. legacy run identity/replace 정책과 verdict threshold 경계
 통일은 P1 잔여 범위다.
 
-## 4. 허용 확장자와 MIME
+## 5. 허용 확장자와 MIME
+
+[#14](https://github.com/wgcha/simdashboard/issues/14)의 source/solver/result/report
+확장자와 명명 inventory는 producer와 보관·연계 범위를 식별하는 목록이다. 이것은
+현재 upload/import allowlist가 아니다. 현재 애플리케이션은 아래 표의 JSON/CSV와
+미디어 형식만 manifest mapping 또는 수동 결과 등록에서 처리한다. inventory에 있는
+새 형식은 parser, MIME·signature 정책, size limit, 예제, 정상/실패 테스트를 함께
+추가한 뒤에만 허용한다.
+
+| #14 inventory 범주 | 대표 확장자·명명 | 현재 import 의미 |
+|---|---|---|
+| CAD source | `.prt`, `.x_t` | upstream 원본. 현재 parser/upload allowlist 아님 |
+| model | `.hm`, `.mdl` | solver 전 모델. 현재 allowlist 아님 |
+| solver input | `.fem`, `.rad`, `.xml` | solver 입력. 현재 allowlist 아님 |
+| solver result | `.h3d` | solver native 결과. 현재 allowlist 아님 |
+| document output | `.csv`, `.ppt`, `.pdf`, `.json` | `.csv`/`.json`은 canonical mapping 또는 수동 parser 계약에 맞을 때만 가능; `.ppt`/`.pdf`는 현재 결과 import 불가 |
+| vibration output | `.txt`, `.pkl`, `.png` | `.png`만 media policy와 manifest MIME 계약에 맞을 때 가능; 나머지는 현재 allowlist 아님 |
+| naming token | `Deflection`, `CMS`, `StandFailure`, `Stiffness_ChRear`, `1st`, `2nd`, `result` | 파일 발견/분류 후보일 뿐 parser 선택·권한·DB mapping을 우회하지 않음 |
 
 ### 구조화 결과
 
 | 용도 | 확장자 | 형식 |
 |---|---|---|
 | manifest·typed scalar | `.json` | UTF-8 JSON |
-| curve·time series·Radioss 중간 결과 | `.csv` | UTF-8 또는 UTF-8 BOM CSV |
+| curve·time series·Radioss mesh 결과 | `.csv` | UTF-8 또는 UTF-8 BOM CSV |
 
 ### 미디어
 
@@ -160,7 +213,7 @@ signature/hash 수락, 확장자·MIME 불일치 거부, corrupt signature 거�
 확인한다. 이 fixture는 임시 파일이며, 영구 canonical folder example은
 JSON/CSV/SVG/glTF만 유지한다.
 
-## 5. 경로와 보안
+## 6. 경로와 보안
 
 - mapping 경로는 bundle 내부 상대 경로만 허용한다.
 - 절대 경로와 `..` traversal을 거부한다.
@@ -170,7 +223,7 @@ JSON/CSV/SVG/glTF만 유지한다.
 - 파일 하나의 실패가 다른 manifest import를 중단시키지 않는다.
 - 신규 결과는 한 manifest 단위 transaction으로 저장한다.
 
-## 6. 미디어 저장 방식
+## 7. 미디어 저장 방식
 
 현재 신규 import 미디어의 정본은 DB blob이다. 파일 바이트는 최대 1 MiB 청크로 `asset_blob_chunks`에 저장하고 `asset_blobs`가 전체 SHA-256, 크기, 청크 수를 가진다. 같은 `(sha256, file_size)`는 deduplicate한다.
 
@@ -184,7 +237,7 @@ HTTP는 `asset_id`로 접근하며 서버 파일 경로를 노출하지 않는�
 - 원본 filename download
 - `nosniff`, SVG CSP
 
-## 7. 중복과 변경 감지
+## 8. 중복과 변경 감지
 
 현재 canonical Master Refresh는 manifest와 모든 canonical mapping 파일을 포함한
 bundle fingerprint로 이미 완료된 import를 `SKIPPED`한다. fingerprint 항목은
@@ -209,11 +262,15 @@ bundle 내부 상대 경로, 파일 크기, 파일 내용의 SHA-256이며 상�
 잔여 정책:
 
 8. 동일 `run_id` 충돌과 replace 정책을 명시한다.
-9. live PostgreSQL concurrent ingestion test를 운영 release gate에 추가한다.
+9. `backend/tests/test_postgres_result_ingestion_concurrency.py`는 전용 PostgreSQL
+   test DB에서 독립 연결 두 개를 써서 동일 identity의 `IMPORTED`/`SKIPPED`, 다른
+   identity의 고유 `run_no`를 검증한다. `ANALYSIS_TEST_POSTGRES=1` 및
+   `ANALYSIS_TEST_POSTGRES_DATABASE`가 일치할 때만 실행하며, 현재 전용 DB가 없어
+   live 실행 결과는 없다.
 10. producer atomic publish와 importer snapshot/rehash를 도입해 fingerprint 이후
    파일 교체가 parse·media 저장 provenance를 바꾸지 못하게 한다.
 
-## 8. 실제 예제와 검증
+## 9. 실제 예제와 검증
 
 canonical 예제:
 
@@ -232,7 +289,7 @@ examples/master-results/
 - JSON scalar와 CSV curve parsing
 - 미디어 MIME·magic·크기 검증
 - 모든 허용 미디어 확장자의 generated `tmp_path` fixture 수락·MIME 불일치·corrupt signature 거부
-- `scalar_results`, `curve_results`, `curve_points`, `media_assets` 저장
+- `scalar_results`, `curve_results`, `curve_points`, `result_locations`, `media_assets` 저장
 - media `blob_id`와 blob chunk 생성
 - 두 번째 Refresh의 idempotent `SKIPPED`
 - manifest는 같고 mapping 파일만 변경된 Refresh의 새 Run 생성
@@ -240,9 +297,9 @@ examples/master-results/
 - traversal, symlink, 잘못된 MIME/확장자 거부
 - mixed/unknown manifest와 잘못된 importer 선택 거부
 - 공통 UoW의 transaction failure injection 시 부분 Run/job/result 행 미생성
-- manual `SUMMARY_RESULT` JSON/CSV의 공통 UoW 저장·target-qualified source·재시도 `SKIPPED`·audit/auth 재확인
+- manual `SUMMARY_RESULT` JSON/CSV와 Radioss mesh CSV의 공통 UoW 저장·target-qualified source·재시도 `SKIPPED`·audit/auth 재확인·rollback
 
-## 9. 운영 배치
+## 10. 운영 배치
 
 `SIMDASH_IMPORT_ROOT`는 애플리케이션 release 디렉터리 밖의 지속 저장소다. 권장 예시는 `/var/lib/simdashboard/import` 또는 승인된 사내 공유 경로다.
 

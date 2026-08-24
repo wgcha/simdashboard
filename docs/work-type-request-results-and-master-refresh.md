@@ -1,6 +1,7 @@
 # 작업 유형 요청 결과와 마스터 폴더 Refresh 설계
 
 - 작성일: 2026-08-20
+- 기준일: 2026-08-25
 - 상태: 구현 기준
 - 대상: 작업 유형 관리, 의뢰 결과 계약, 결과 폴더 수집, 상세 분석 갱신
 - 관련 문서:
@@ -169,6 +170,12 @@
 
 실행 가능한 기준 예제는 `examples/master-results/`에 있다. 현재 구현은 root 아래의 manifest를 재귀적으로 찾고 context ID를 정본으로 사용하므로, 폴더명의 ID 일치 강제는 별도 개선 항목이다. 확장자·MIME·DB blob 저장의 현재 계약은 `docs/storage-folder-and-file-contract.md`를 따른다.
 
+[#13](https://github.com/wgcha/simdashboard/issues/13)의 SPDM 폴더 구조는 upstream
+의뢰 발견·변경 감지 구조다. 이 Refresh의 canonical 결과 폴더, `manifest.json`,
+`mappings`와 혼용하지 않으며 현재 SPDM folder를 직접 결과 import하지 않는다.
+SPDM watcher가 구현될 때에도 검증된 context mapping과 별도의 canonical manifest
+생성/command 경계를 거쳐야 한다.
+
 ### 6.2 Refresh 동작
 
 `POST /api/result-imports/refresh`는 다음을 수행한다.
@@ -176,7 +183,7 @@
 1. root 아래 `manifest.json` 탐색
 2. manifest별 독립 검증과 수집 작업 생성
 3. manifest와 mapping 파일의 크기·SHA-256으로 계산한 bundle fingerprint와 완료 이력으로 중복 판정
-4. normalized command를 공통 single-connection UoW에 전달해 신규 결과를 Run, scalar, time-series, curve, media 저장소에 원자적으로 적재
+4. normalized command를 공통 single-connection UoW에 전달해 신규 결과를 Run, scalar, time-series, curve, location, media 저장소에 원자적으로 적재
 5. Run 및 하중 경우 상태 갱신
 6. 가능한 경우 의뢰·수행 작업 상태 동기화
 7. manifest별 `IMPORTED`, `SKIPPED`, `FAILED` 결과 반환
@@ -190,8 +197,7 @@ PostgreSQL에서는 load case별 namespaced 64-bit transaction advisory lock으�
 `run_no` 할당을 직렬화하고, non-null exact
 `(source_type, source_name, source_checksum)`를 migration `0016`의
 `canonical_result_ingestion_sources` PK로 예약한다. 실패 transaction은 claim도
-rollback한다. 현재는 SQL/migration contract 검증까지이며 live PostgreSQL
-concurrent ingestion test는 없다.
+rollback한다. opt-in live test는 `backend/tests/test_postgres_result_ingestion_concurrency.py`에 있다. 두 독립 연결로 동일 source는 `IMPORTED`/`SKIPPED`, 서로 다른 source는 고유 `run_no`를 검증한다. `ANALYSIS_TEST_POSTGRES=1`과 일치하는 전용 migrated test DB가 필요하며, 현재 작업 환경에서는 전용 DB가 없어 실행하지 않았다.
 
 ### 6.3 결과 화면 갱신
 
@@ -230,7 +236,7 @@ application/results/commands.py
   └─ ResultIngestionCommand와 공통 ingestion orchestration
 
 domains/results/{models,ports}.py
-  └─ DB 독립 command/outcome와 ResultIngestionUnitOfWork port
+  └─ DB 독립 command/outcome와 ResultIngestionUnitOfWork port (scalar/curve/location/media)
 
 adapters/persistence/result_ingestion.py
   └─ DuckDB/PostgreSQL single-connection SQL UoW
@@ -240,11 +246,11 @@ routers/result_folder_refresh.py
 ```
 
 파서, 저장소, 상태 동기화 코드는 Refresh 서비스에 복제하지 않고 공통 UoW와
-normalized contract를 사용한다. 일반 수동 `SUMMARY_RESULT` JSON/CSV upload도
-target-qualified source와 content checksum으로 같은 UoW를 사용하며, 재시도는
-`SKIPPED`, 권한 재확인과 `RESULT_IMPORTED` audit는 write transaction 안에서
-원자적으로 처리한다. `Radioss` mesh CSV는 `result_locations` 저장이 canonical
-UoW에 포함될 때까지 direct-SQL compatibility 경로다.
+normalized contract를 사용한다. 일반 수동 `SUMMARY_RESULT` JSON/CSV와 `Radioss`
+mesh CSV upload도 target-qualified source와 content checksum으로 같은 UoW를
+사용하며, 재시도는 `SKIPPED`, 권한 재확인과 `RESULT_IMPORTED` audit는 write
+transaction 안에서 원자적으로 처리한다. Radioss adapter는 parser output의 scalar,
+time-series/curve, `result_locations`를 canonical contract로 변환한다.
 
 구형 `result_files` 기반 `ResultImportService` persistence는 현재 schema에 없는
 `result_import_jobs`와 `analysis_runs` 확장 컬럼을 참조하므로 parser/manifest

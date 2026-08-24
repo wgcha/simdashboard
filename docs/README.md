@@ -1,6 +1,6 @@
 # 개발 문서 지도
 
-- 기준일: 2026-08-24
+- 기준일: 2026-08-25
 - 목적: 현재 구현, 운영 절차, 기능 계약, 과거 계획 문서를 구분한다.
 
 문서 제목에 `plan`, `roadmap`, `spec`이 포함되어 있어도 현재 구현 완료를 뜻하지 않는다. 코드와 문서가 다르면 아래 우선순위를 적용하고, 같은 변경에서 기준 문서를 갱신한다.
@@ -94,9 +94,12 @@ GitHub Issues는 요구사항과 논의의 출처이고, 저장소 문서는 확
 - 계획 항목에는 이슈 번호, 결정, 담당 모듈, 완료조건을 기록한다.
 - 이슈에서 확정된 DB 폴더·확장자·proxy 결정은 기준 문서에도 반영한다.
 - private issue에 접근할 수 없는 자동화 환경을 위해 필요한 계약은 이슈에만 남기지 않는다.
-- 이슈와 코드가 다르면 임의로 추측하지 않고 `확정 필요`로 표시한다.
+- 이슈와 코드가 다르면 임의로 추측하지 않고 적용 범위와 잔여 구현을 분리해 표시한다.
 
-현재 자동화 환경에서는 private Issues URL이 인증 없이 404를 반환했다. 이슈 번호별 매핑은 인증된 export를 확보한 뒤 [`program-consolidation-and-development-plan.md`](program-consolidation-and-development-plan.md)의 추적 표에 추가한다.
+현재 기준 문서는 [#13](https://github.com/wgcha/simdashboard/issues/13)의 SPDM
+discovery folder, [#14](https://github.com/wgcha/simdashboard/issues/14)의
+source/solver/result/report extension inventory, [#15](https://github.com/wgcha/simdashboard/issues/15)의 Linux corporate proxy·CA 요구사항을
+[`program-consolidation-and-development-plan.md`](program-consolidation-and-development-plan.md)에 추적한다. 이슈의 upstream 요구사항과 현재 executable 계약의 차이는 각 기준 문서에 명시한다.
 
 ## 문서 변경 체크리스트
 
