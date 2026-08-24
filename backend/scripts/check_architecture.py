@@ -25,7 +25,7 @@ FORBIDDEN_DOMAIN_MODULE_PREFIXES = (
     "app.repositories",
 )
 DEFAULT_EXECUTE_CALL_CEILINGS = {
-    "app/main.py": 204,
+    "app/main.py": 189,
     "app/routers/access_control.py": 46,
     "app/routers/modeling_catalog.py": 1,
     "app/routers/security.py": 7,

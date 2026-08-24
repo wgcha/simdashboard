@@ -131,9 +131,9 @@ function validatedRecordArray(value: unknown, label: string, stringFields: reado
 }
 
 type ImportResultsResponse = {
-  status: 'VALID' | 'IMPORTED'
-  run_id?: string
-  run_no?: number
+  status: 'VALID' | 'IMPORTED' | 'SKIPPED'
+  run_id?: string | null
+  run_no?: number | null
   filename: string
   source_format: 'SUMMARY_RESULT' | 'RADIOSS_MESH_CSV'
   node_count: number

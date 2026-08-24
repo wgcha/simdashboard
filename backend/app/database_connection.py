@@ -18,6 +18,9 @@ class CursorLike(Protocol):
 
 
 class ConnectionLike(Protocol):
+    @property
+    def backend(self) -> str: ...
+
     def execute(self, statement: str, parameters: Any | None = None) -> CursorLike: ...
     def __enter__(self) -> "ConnectionLike": ...
     def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None: ...
@@ -88,6 +91,8 @@ _duckdb_manager = _SerializedDuckDBManager()
 
 
 class SerializedDuckDBConnection:
+    backend = "duckdb"
+
     def __init__(self, path: Path):
         self._path = path
         self._connection: duckdb.DuckDBPyConnection | None = None
@@ -211,6 +216,8 @@ def _postgres_statement(statement: str) -> str:
 
 
 class PostgresConnection:
+    backend = "postgresql"
+
     def __init__(self, engine: Engine):
         self._engine = engine
         self._connection: Connection | None = None

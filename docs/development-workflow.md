@@ -76,9 +76,11 @@ pnpm run generate:api
 
 - PostgreSQL schema 변경은 새 Alembic revision으로만 수행한다.
 - `backend/migrations/schema.sql`, DuckDB compatibility DDL과 관련 이관 script를 함께 검토한다.
+- canonical result ingestion의 PostgreSQL source reservation은 migration `0016`의 non-null exact identity PK와 load-case별 namespaced 64-bit transaction advisory lock을 사용한다. 실패 transaction은 claim을 rollback한다.
 - 빈 PostgreSQL과 기존 revision PostgreSQL에서 upgrade를 검증한다.
 - app 역할의 DDL 거부와 owner/app 자격 증명 분리를 유지한다.
 - DuckDB와 PostgreSQL에서 placeholder, JSON, upsert, transaction 동작을 모두 테스트한다.
+- 현재 local suite에는 SQL/migration contract 검증만 있고 live PostgreSQL concurrent ingestion test는 없다.
 
 ### 3.5 결과 폴더와 확장자
 
@@ -86,8 +88,17 @@ pnpm run generate:api
 - 서버는 `SIMDASH_IMPORT_ROOT` 아래 상대 경로만 읽는다.
 - `manifest.json`의 ID와 DB의 Project/Request/LoadCase 관계를 확인한다.
 - 확장자뿐 아니라 MIME, magic bytes, 크기, checksum, symlink와 traversal을 검사한다.
+- 허용 media extension 전체(`.png`, `.jpg`, `.jpeg`, `.webp`, `.svg`, `.mp4`, `.webm`, `.glb`, `.gltf`)는 `backend/tests/test_media_policy_fixtures.py`의 generated minimal `tmp_path` fixture로 정상 signature, MIME/extension mismatch, corrupt signature를 검증한다. 영구 canonical folder example은 JSON/CSV/SVG/glTF만 유지한다.
 - 예제 파일은 README 전용 장식이 아니라 실제 parser/import 통합 테스트로 읽는다.
 - 같은 bundle을 다시 처리했을 때의 `SKIPPED`, 새 Run, replace 정책을 명시한다.
+
+수동 결과 upload는 형식을 나누어 검토한다. 일반 `SUMMARY_RESULT` JSON/CSV는
+정규화 adapter와 공통 UoW를 사용하고, `source_name`은
+`{load_case_id}/{filename}`으로 target을 포함한다. content checksum으로 동일
+재시도를 `SKIPPED`하며 write transaction 안에서 권한을 재확인하고 audit event를
+함께 기록한다. `Radioss` mesh CSV는 `result_locations` 저장이 canonical UoW에
+편입될 때까지 direct-SQL compatibility 경로다. 구형 `ResultImportService`는
+현재 schema와 맞지 않는 비운영 parser/persistence compatibility 경로다.
 
 ### 3.6 Proxy와 배포
 
@@ -132,6 +143,10 @@ pnpm run test:e2e
 
 Playwright Chromium을 처음 준비할 때는 `./scripts/wsl/setup-e2e.sh --install-system-deps`를 사용한다.
 
+DuckDB 통합 테스트는 session seed를 복사해 테스트별 `test.duckdb`를 사용하고,
+각 테스트 종료 시 해당 DB와 WAL만 즉시 제거한다. session seed와 실패 진단
+파일은 보존하므로 전체 suite가 `/tmp` 용량을 누적 소모하지 않는다.
+
 ## 5. 변경 유형별 필수 검증
 
 | 변경 | 최소 검증 |
@@ -142,7 +157,7 @@ Playwright Chromium을 처음 준비할 때는 `./scripts/wsl/setup-e2e.sh --ins
 | Alembic migration | blank/upgrade PostgreSQL + app-role preflight |
 | 인증·권한 | 허용/거부/project-scope test + 감사 이벤트 |
 | route·navigation | routing self-test + 관련 Playwright |
-| 결과 parser/import | 정상 예제 + 잘못된 확장자/MIME/path + idempotency |
+| 결과 parser/import | canonical folder + SUMMARY_RESULT JSON/CSV + 잘못된 확장자/MIME/path + idempotency + auth/audit transaction |
 | 미디어 | magic/MIME/크기 + DB blob + Range/HEAD/download |
 | 배포 template | template validation + bundle check + 실제 target smoke |
 

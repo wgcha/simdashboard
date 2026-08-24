@@ -52,3 +52,20 @@ def test_pytest_owns_tmp_path_cleanup_lifecycle() -> None:
     assert "tmp_path_retention_count = 0" in settings
     assert "config.option.basetemp" not in conftest_source
     assert "shutil.rmtree(run_directory" not in conftest_source
+
+
+@pytest.mark.unit
+def test_disposable_duckdb_cleanup_removes_database_and_wal_only(tmp_path: Path) -> None:
+    database = tmp_path / "test.duckdb"
+    wal = tmp_path / "test.duckdb.wal"
+    diagnostics = tmp_path / "failure-output.txt"
+    seed = tmp_path / "seed.duckdb"
+    for path in (database, wal, diagnostics, seed):
+        path.write_text(path.name, encoding="utf-8")
+
+    conftest._cleanup_disposable_duckdb(database)
+
+    assert not database.exists()
+    assert not wal.exists()
+    assert diagnostics.read_text(encoding="utf-8") == diagnostics.name
+    assert seed.read_text(encoding="utf-8") == seed.name

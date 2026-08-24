@@ -183,11 +183,13 @@ snapshot은 기대 결과 화면이고 Analysis Run은 실제 데이터다. 데�
 SIMDASH_IMPORT_ROOT
   → manifest.json 탐색
   → root/symlink/context/파일 검증
-  → checksum 기반 중복 판정
-  → 기존 parser와 media storage 사용
-  → AnalysisRun + 유형별 결과 원자적 저장
+  → manifest + mapping 파일 bundle fingerprint 기반 중복 판정
+  → normalized parser payload
+  → ResultIngestionCommand
+  → ResultIngestionUnitOfWork/provider의 single-connection transaction
+  → AnalysisRun + 유형별 결과 + media blob 원자적 저장
   → request/work status 동기화
-  → manifest별 IMPORTED/SKIPPED/FAILED 응답과 감사 이벤트
+  → manifest별 IMPORTED/SKIPPED/FAILED 응답과 Refresh 집계 감사 이벤트
 ```
 
 클라이언트는 서버 경로를 넘기지 않는다. 잘못된 manifest 하나는 다른 정상 bundle의 처리를 중단시키지 않는다.
@@ -196,8 +198,30 @@ SIMDASH_IMPORT_ROOT
 canonical `mappings`는 `scan_folder`와 Master Refresh로, legacy
 `result_files`는 `ResultImportService`와 기존 `ManifestParser` alias로 명시적으로
 분기한다. mixed/unknown manifest, 잘못된 importer, root escape와 symlink는 각
-경계에서 fail-closed한다. 다만 두 경로의 결과 validation·persistence·idempotency
-정책은 아직 통합되지 않았으며 P1 canonical ingestion service의 잔여 과제다.
+경계에서 fail-closed한다. `backend/app/application/results/commands.py`가
+정규화된 canonical command를 orchestration하고,
+`backend/app/adapters/persistence/result_ingestion.py`가 현재 DuckDB/PostgreSQL
+공통 SQL UoW를 제공한다. Master Refresh와 `/folder-import/example`은 이 UoW를
+공유한다.
+
+일반 수동 `SUMMARY_RESULT` JSON/CSV upload도 같은 normalized payload와 UoW를
+사용한다. target-qualified `source_name`과 content checksum으로 재시도를
+`SKIPPED`하고, write transaction 안에서 `result.import` 권한을 재확인하며
+`RESULT_IMPORTED` audit event를 원자적으로 기록한다. `Radioss` mesh CSV는
+`result_locations` 저장이 canonical UoW에 아직 포함되지 않아 기존 direct-SQL
+경로에 남아 있다.
+
+구형 `result_files` 기반 `ResultImportService` persistence는 별도 legacy 경로다.
+legacy repository가 현재 schema에 없는 `result_import_jobs`와 `analysis_runs`
+확장 컬럼을 참조하므로 parser/manifest 호환을 위한 비운영 compatibility 경로다.
+legacy run identity/replace와 verdict threshold 경계 통일은 잔여 과제다.
+
+PostgreSQL canonical ingestion은 load case별 namespaced 64-bit transaction
+advisory lock으로 `run_no` 할당을 직렬화하고, non-null exact identity
+`(source_type, source_name, source_checksum)`를 migration `0016`의
+`canonical_result_ingestion_sources` primary key로 예약한다. 실패한 transaction은
+예약도 rollback한다. 현재 검증은 SQL 호출 순서·migration·PK를 확인하는 unit/contract
+범위이며, live PostgreSQL concurrent ingestion test는 아직 없다.
 
 실제 ID 계층·JSON·CSV·SVG·glTF 예제는 `examples/master-results/`에 있으며 backend 통합 테스트가 이를 직접 import한다.
 
@@ -242,6 +266,29 @@ FastAPI app.openapi()
 | 브라우저 | `frontend/e2e`, `pnpm run test:e2e` | 실제 권한·편집·결과·routing 흐름 |
 | PostgreSQL opt-in | `postgres_integration` marker와 preflight script | Alembic head, app-role 권한, 양 DB 호환 |
 
+결과 수집 focused 검증은 현재 collection 기준 71개 test case다. canonical/legacy
+manifest 경계, fingerprint idempotency와 mapping 변경 감지, 공통 UoW atomic
+rollback, manual `SUMMARY_RESULT` JSON/CSV의 target-qualified source·retry
+`SKIPPED`·audit/auth 재확인, scalar/curve/media/blob/catalog 저장, 모든 media
+extension fixture의 정상/MIME mismatch/corrupt signature, PostgreSQL reservation
+SQL/migration contract와 endpoint wiring을 포함한다. 이 collection에는 live
+PostgreSQL concurrent ingestion test가 포함되지 않는다.
+
+```bash
+cd backend
+../.venv-wsl/bin/python -m pytest --collect-only -q \
+  tests/test_master_result_refresh.py \
+  tests/test_master_result_folder_example.py \
+  tests/test_result_ingestion_atomicity.py \
+  tests/test_result_import_contract.py \
+  tests/test_manifest_format.py \
+  tests/test_manual_result_ingestion.py \
+  tests/test_media_policy_fixtures.py \
+  tests/test_result_ingestion_idempotency.py \
+  tests/test_api.py::test_typed_folder_example_registers_scalars_curves_media_and_catalog
+# 71 collected; live PostgreSQL concurrent test는 별도 미제공
+```
+
 Architecture ceiling은 목표 수치가 아니라 부채가 늘지 않게 하는 상한이다. 파일을 나누었다는 이유만으로 경계가 개선되었다고 보지 않는다.
 
 ## 9. 현재 구조에서 지켜야 할 규칙
@@ -267,5 +314,8 @@ Architecture ceiling은 목표 수치가 아니라 부채가 늘지 않게 하�
 - demo와 reference seed가 같은 fixture alias다.
 - 외부 NAS/NFS/SMB `SIMDASH_IMPORT_ROOT`의 부팅 순서, mount context, 용량과
   재처리 운영 절차는 각 사내 인프라 환경에서 승인해야 한다.
+- Master Refresh는 신뢰된 read-only root를 전제로 하지만 아직 bundle bytes를
+  immutable snapshot으로 고정하지 않는다. producer atomic publish와 importer
+  rehash/snapshot으로 fingerprint와 실제 parse bytes의 TOCTOU를 닫아야 한다.
 
 우선순위와 완료 기준은 [`program-consolidation-and-development-plan.md`](program-consolidation-and-development-plan.md)에 정리한다.

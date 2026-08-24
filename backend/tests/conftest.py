@@ -103,6 +103,12 @@ def seeded_duckdb(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return database
 
 
+def _cleanup_disposable_duckdb(database: Path) -> None:
+    """Remove only the per-test DuckDB files, leaving test diagnostics intact."""
+    for artifact in (database, database.with_name(f"{database.name}.wal")):
+        artifact.unlink(missing_ok=True)
+
+
 @pytest.fixture(autouse=True)
 def isolated_database(request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Use a disposable DB unless PostgreSQL testing was explicitly enabled.
@@ -124,7 +130,10 @@ def isolated_database(request: pytest.FixtureRequest, tmp_path: Path, monkeypatc
         return
     seeded_duckdb = request.getfixturevalue("seeded_duckdb")
     database = tmp_path / "test.duckdb"
-    shutil.copy2(seeded_duckdb, database)
-    monkeypatch.setenv("ANALYSIS_DB_BACKEND", "duckdb")
-    monkeypatch.setenv("ANALYSIS_DUCKDB_PATH", str(database))
-    yield
+    try:
+        shutil.copy2(seeded_duckdb, database)
+        monkeypatch.setenv("ANALYSIS_DB_BACKEND", "duckdb")
+        monkeypatch.setenv("ANALYSIS_DUCKDB_PATH", str(database))
+        yield
+    finally:
+        _cleanup_disposable_duckdb(database)

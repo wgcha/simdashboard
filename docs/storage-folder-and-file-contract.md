@@ -1,8 +1,8 @@
 # DB·결과 폴더·파일 확장자 계약
 
 - 기준일: 2026-08-24
-- 상태: 현재 구현 기준 + 명시된 개선 항목
-- 관련 코드: `backend/app/config.py`, `database_connection.py`, `folder_import.py`, `parsers/manifest_format.py`, `parsers/manifest_parser.py`, `media_policy.py`, `services/master_result_refresh.py`, `services/media_storage_service.py`
+- 상태: 현재 구현 기준 + 잔여 개선 항목
+- 관련 코드: `backend/app/config.py`, `database_connection.py`, `folder_import.py`, `parsers/manifest_format.py`, `parsers/manifest_parser.py`, `media_policy.py`, `services/bundle_fingerprint.py`, `services/master_result_refresh.py`, `application/results/commands.py`, `adapters/persistence/result_ingestion.py`, `services/media_storage_service.py`
 
 이 문서는 DB 실행 위치, 결과 수집 폴더, manifest mapping, 허용 확장자와 실제 저장 방식을 하나의 기준으로 정리한다.
 
@@ -43,8 +43,7 @@ transfer-bundles/
             ├─ curves/
             │  └─ stress-time.csv
             ├─ media/
-            │  ├─ contour.svg
-            │  └─ animation.mp4
+            │  └─ contour.svg
             └─ models/
                └─ result.gltf
 ```
@@ -112,11 +111,23 @@ scalar `data_type`은 `FLOAT`, `INTEGER`, `TEXT`, `VERDICT`, `STATUS`, `BOOLEAN`
 canonical importer가 legacy manifest를 읽거나 legacy importer가 canonical
 manifest를 읽는 경우 모두 fail-closed한다.
 
-이 중앙 detector/loader는 format과 manifest 경계만 통일한다. canonical
-`scan_folder`/Master Refresh와 legacy `ResultImportService`의 결과 validation,
-persistence, transaction, overwrite/idempotency 정책은 아직 분리되어 있다.
-두 경로를 하나의 ingestion service와 repository 계약으로 통합하는 작업은
-P1 canonical ingestion 단계의 잔여 범위다.
+이 중앙 detector/loader는 format과 manifest 경계를 통일한다. canonical
+Master Refresh와 versioned folder-import example은 공통
+`ResultIngestionCommand`/`ResultIngestionUnitOfWork`를 통해 같은 single-connection
+transaction으로 결과를 저장한다. parser별 차이는 adapter와 normalized contract
+안에서만 허용한다.
+
+일반 수동 `SUMMARY_RESULT` JSON/CSV upload는 공통 UoW로 이관되어 target-qualified
+`source_name`과 content checksum을 사용한다. 동일 파일 재시도는 `SKIPPED`하며,
+write transaction 안에서 권한을 재확인하고 `RESULT_IMPORTED` audit event를 함께
+기록한다. 다만 `Radioss` mesh CSV는 `result_locations` persistence가 canonical
+UoW에 아직 포함되지 않아 기존 direct-SQL 경로에 남아 있다.
+
+구형 `result_files` 기반 `ResultImportService` persistence는 별도 legacy 경로다.
+이 repository는 현재 canonical schema에 없는 `result_import_jobs` 테이블과
+`analysis_runs` 확장 컬럼을 참조하므로 parser/manifest 형식 호환을 위한 비운영
+compatibility 경로다. legacy run identity/replace 정책과 verdict threshold 경계
+통일은 P1 잔여 범위다.
 
 ## 4. 허용 확장자와 MIME
 
@@ -141,6 +152,13 @@ P1 canonical ingestion 단계의 잔여 범위다.
 |  | `.gltf` | `model/gltf+json` | 100 MiB |
 
 확장자와 manifest의 MIME이 일치해야 한다. 추가로 PNG/JPEG/WebP signature, MP4 `ftyp`, WebM EBML, GLB `glTF`, glTF JSON 구조를 검사한다. SVG는 script, event handler, iframe/object/embed, 외부 URL과 active data URL을 거부한다.
+
+허용된 모든 미디어 확장자(`.png`, `.jpg`, `.jpeg`, `.webp`, `.svg`, `.mp4`,
+`.webm`, `.glb`, `.gltf`)는 [`backend/tests/test_media_policy_fixtures.py`](../backend/tests/test_media_policy_fixtures.py)의
+generated minimal `tmp_path` fixture matrix로 검증한다. 각 확장자는 정상
+signature/hash 수락, 확장자·MIME 불일치 거부, corrupt signature 거부를 각각
+확인한다. 이 fixture는 임시 파일이며, 영구 canonical folder example은
+JSON/CSV/SVG/glTF만 유지한다.
 
 ## 5. 경로와 보안
 
@@ -168,15 +186,32 @@ HTTP는 `asset_id`로 접근하며 서버 파일 경로를 노출하지 않는�
 
 ## 7. 중복과 변경 감지
 
-현재 마스터 Refresh는 `manifest.json`의 SHA-256과 상대 경로를 기준으로 이미 완료된 import를 `SKIPPED`한다. manifest가 같고 참조 결과 파일만 바뀌면 변경을 놓칠 수 있다.
+현재 canonical Master Refresh는 manifest와 모든 canonical mapping 파일을 포함한
+bundle fingerprint로 이미 완료된 import를 `SKIPPED`한다. fingerprint 항목은
+bundle 내부 상대 경로, 파일 크기, 파일 내용의 SHA-256이며 상대 경로 순으로
+정렬한다. `analysis_run_metadata.source_checksum`에는 fingerprint를 저장하고,
+`metadata_json` 및 job summary에는 원래 manifest checksum과 fingerprint를 모두
+보존한다.
 
-개선 계약:
+현재 계약:
 
-1. 각 mapping 파일의 SHA-256과 크기를 canonical 순서로 계산한다.
-2. manifest checksum과 파일 checksum을 합친 bundle fingerprint를 저장한다.
+1. manifest와 각 mapping 파일의 SHA-256과 크기를 canonical 순서로 계산한다.
+2. 파일 항목을 직렬화한 bundle fingerprint를 저장하고 manifest checksum은 별도 metadata로 보존한다.
 3. 동일 fingerprint는 `SKIPPED`한다.
-4. 다른 fingerprint는 새 Run 또는 명시된 replace 정책으로 처리한다.
-5. 동일 `run_id` 충돌 정책을 manifest version에 포함한다.
+4. 다른 fingerprint는 새 Run으로 처리한다.
+
+현재 PostgreSQL 보호:
+
+5. canonical ingestion은 load case별 namespaced 64-bit transaction advisory lock으로 `run_no` 할당을 직렬화한다.
+6. non-null exact identity `(source_type, source_name, source_checksum)`는 migration `0016`의 `canonical_result_ingestion_sources` primary key로 예약한다.
+7. 실패한 PostgreSQL transaction은 source reservation도 함께 rollback한다.
+
+잔여 정책:
+
+8. 동일 `run_id` 충돌과 replace 정책을 명시한다.
+9. live PostgreSQL concurrent ingestion test를 운영 release gate에 추가한다.
+10. producer atomic publish와 importer snapshot/rehash를 도입해 fingerprint 이후
+   파일 교체가 parse·media 저장 provenance를 바꾸지 못하게 한다.
 
 ## 8. 실제 예제와 검증
 
@@ -196,11 +231,16 @@ examples/master-results/
 
 - JSON scalar와 CSV curve parsing
 - 미디어 MIME·magic·크기 검증
+- 모든 허용 미디어 확장자의 generated `tmp_path` fixture 수락·MIME 불일치·corrupt signature 거부
 - `scalar_results`, `curve_results`, `curve_points`, `media_assets` 저장
 - media `blob_id`와 blob chunk 생성
 - 두 번째 Refresh의 idempotent `SKIPPED`
+- manifest는 같고 mapping 파일만 변경된 Refresh의 새 Run 생성
+- metadata의 manifest checksum과 bundle fingerprint 보존
 - traversal, symlink, 잘못된 MIME/확장자 거부
 - mixed/unknown manifest와 잘못된 importer 선택 거부
+- 공통 UoW의 transaction failure injection 시 부분 Run/job/result 행 미생성
+- manual `SUMMARY_RESULT` JSON/CSV의 공통 UoW 저장·target-qualified source·재시도 `SKIPPED`·audit/auth 재확인
 
 ## 9. 운영 배치
 

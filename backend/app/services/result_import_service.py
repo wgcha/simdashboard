@@ -3,26 +3,25 @@ import uuid
 import hashlib
 from typing import Dict, Any, List
 
-from ..schemas.result_import import Manifest, ResultType
+from ..schemas.result_import import ResultType
 from ..parsers.manifest_parser import LegacyResultFilesManifestParser
-from ..parsers.open_cell_parser import OpenCellParser
-from ..parsers.chassis_rear_parser import ChassisRearParser
-from ..parsers.generic_time_history_parser import GenericTimeHistoryParser
-from ..parsers.scalar_result_parser import ScalarResultParser
 from ..repositories.analysis_repository import AnalysisRepository
 from ..repositories.result_repository import ResultRepository
 from ..repositories.import_job_repository import ImportJobRepository
 from ..services.result_validation_service import ResultValidationService
 from ..services.verdict_service import VerdictService
+from .result_import_adapter import LegacyResultParserAdapter
+from .result_import_contract import NormalizedResultPayload
 
 class ResultImportService:
     def __init__(self, root_dir: str):
-        self.root_dir = Path(root_dir)
+        self.root_dir = Path(root_dir).resolve()
         self.analysis_repo = AnalysisRepository()
         self.result_repo = ResultRepository()
         self.job_repo = ImportJobRepository()
         self.validator = ResultValidationService(self.analysis_repo)
         self.verdict_service = VerdictService()
+        self.parser_adapter = LegacyResultParserAdapter()
 
     def _calc_checksum(self, file_path: Path) -> str:
         h = hashlib.sha256()
@@ -88,34 +87,43 @@ class ResultImportService:
                     self.result_repo.delete_results_for_run(manifest.run_id)
             
             # Parse files
-            all_scalars = []
-            all_time_series = []
+            normalized_results = NormalizedResultPayload()
             
             manifest_dir = manifest_path.parent
             for rf in manifest.result_files:
                 file_path = (manifest_dir / rf.path).resolve()
                 if not file_path.exists(): continue
+                # Media is a valid manifest entry, but the legacy result
+                # service never persisted media.  Leave that established
+                # behavior to the media-specific import path.
+                if rf.type == ResultType.MEDIA_ASSET:
+                    continue
                 
-                if rf.type == ResultType.OPEN_CELL_STRESS:
-                    res = OpenCellParser().parse(file_path)
-                    all_time_series.extend(res["time_series"])
-                    all_scalars.extend(res["scalars"])
-                elif rf.type == ResultType.CHASSIS_REAR_DEFORMATION:
-                    all_scalars.extend(ChassisRearParser().parse(file_path))
-                elif rf.type == ResultType.GENERIC_TIME_HISTORY:
-                    all_time_series.extend(GenericTimeHistoryParser().parse(file_path))
-                elif rf.type == ResultType.SCALAR_RESULTS:
-                    all_scalars.extend(ScalarResultParser().parse(file_path))
+                normalized_results = normalized_results.extend(
+                    self.parser_adapter.parse_file(
+                        rf,
+                        file_path,
+                        source_path=str(file_path.relative_to(self.root_dir)),
+                    )
+                )
 
             # Verdicts
             thresholds = self.result_repo.get_thresholds(manifest.project_id)
-            for scalar in all_scalars:
-                scalar["verdict"] = self.verdict_service.evaluate_scalar(scalar, thresholds)
+            scalars = tuple(
+                scalar.with_verdict(self.verdict_service.evaluate_scalar(scalar.for_verdict(), thresholds))
+                for scalar in normalized_results.scalars
+            )
+            normalized_results = NormalizedResultPayload(
+                scalars=scalars,
+                time_series=normalized_results.time_series,
+            )
+            all_scalars = [scalar.for_verdict() for scalar in normalized_results.scalars]
+            all_time_series = normalized_results.time_series_persistence_rows()
                 
             overall_verdict = self.verdict_service.determine_overall_verdict(all_scalars)
             
             # Save
-            self.result_repo.save_scalar_results(manifest.run_id, all_scalars)
+            self.result_repo.save_scalar_results(manifest.run_id, normalized_results.scalar_persistence_rows())
             self.result_repo.save_time_series_results(manifest.run_id, all_time_series)
             
             self.analysis_repo.update_run_import_status(manifest.run_id, "COMPLETED", overall_verdict)

@@ -1,12 +1,19 @@
 # 해석 후처리 결과 수집·DB 적재·가시화 상세 사양서
 
-> 상태: 초기 파이프라인 사양 및 배경 기록. 신규 마스터 Refresh의 실제 `mappings` manifest, ID 폴더 예제와 확장자 계약은 `storage-folder-and-file-contract.md`를 따른다. 이 문서의 `result_files` manifest는 compatibility 대상이다.
+> 상태: **historical/실행 금지** 초기 파이프라인 사양 및 배경 기록이다. 이 문서의 SQL과 legacy repository 예시는 현재 migration에 적용하거나 운영 경로로 호출하지 않는다. 현재 canonical 결과 수집은 `mappings` manifest를 사용하는 Master Refresh와 typed folder-import example이며, 실제 폴더·확장자·blob 계약은 `storage-folder-and-file-contract.md`를 따른다. 이 문서의 `result_files` manifest와 parser는 비운영 compatibility 대상이다.
 
 ## 1. 문서 목적
 
 본 문서는 해석 솔버의 원본 결과 파일을 직접 처리하지 않고, 별도의 후처리 자동화 프로그램이 표준 형식으로 생성한 CSV/JSON 결과를 수집하여 SQL 기반 데이터베이스에 적재하고, 판정 로직과 대시보드 가시화로 연결하는 기능의 상세 구현 사양을 정의한다.
 
-현재 MVP는 DuckDB를 사용하지만, 향후 PostgreSQL로 전환할 수 있도록 결과 수집, 스키마 검증, 판정, 저장소 접근, API, 프런트엔드 가시화를 계층화한다.
+현재 개발은 DuckDB, canonical 운영은 PostgreSQL 18을 사용한다. 공통
+`ResultIngestionCommand`/`ResultIngestionUnitOfWork`가 Master Refresh와 typed
+folder-import example의 검증된 payload를 하나의 connection transaction으로
+저장한다. 일반 수동 `SUMMARY_RESULT` JSON/CSV도 target-qualified source name,
+content checksum, retry `SKIPPED`, write-transaction auth recheck와 atomic audit를
+사용해 이 경계로 이관되었다. `Radioss` mesh CSV는 `result_locations` 저장이
+canonical UoW에 포함될 때까지 direct-SQL compatibility 경로다. 구형
+`ResultImportService` persistence만 아직 현행 schema에 맞지 않는 비운영 경로다.
 
 이 문서의 범위는 다음 기능을 포함한다.
 
@@ -56,10 +63,10 @@ DuckDB 또는 PostgreSQL 적재
 3. 모든 결과는 반드시 `AnalysisRun`에 귀속한다.
 4. 파일명만으로 결과 유형을 판단하지 않는다.
 5. `manifest.json`의 결과 유형 선언과 실제 데이터 컬럼을 함께 검증한다.
-6. 원본 결과 파일 전체를 DB BLOB으로 저장하지 않는다.
+6. 구조화 JSON/CSV 원본 전체는 DB BLOB으로 저장하지 않는다. 단, 검증된 canonical media asset은 `asset_blobs`/`asset_blob_chunks`에 저장한다.
 7. 원본 파일 경로, 체크섬, 스키마 버전, 수집 이력은 보존한다.
 8. 수집·변환·판정·저장·API 계층을 분리한다.
-9. 현재 DuckDB 구현이 PostgreSQL 전환 시 재사용 가능해야 한다.
+9. DuckDB 개발과 PostgreSQL 운영이 같은 application/domain/port 계약을 사용해야 한다.
 10. 결과가 없는 신규 하중 경우는 오류가 아니라 `NO_DATA`로 처리한다.
 
 ---
@@ -78,7 +85,7 @@ Project
          ├─ TimeSeriesResult
          ├─ MediaAsset
          ├─ QualitativeNote
-         └─ ResultImportJob
+         └─ folder_import_jobs + analysis_run_metadata
 ```
 
 ### 3.1 데이터 귀속 원칙
@@ -90,7 +97,14 @@ Project
 - 최대값, 영구변형, 판정값: `scalar_results`
 - 시간 이력: `time_series_results`
 - 이미지, 영상, 3D 결과 메타데이터: `media_assets`
-- 결과 수집 기록: `result_import_jobs`
+- canonical 결과 수집 기록: `folder_import_jobs`, fingerprint/run provenance: `analysis_run_metadata`
+
+이 문서의 `result_import_jobs` 및 `analysis_runs` 확장 제안은 historical 설계다.
+현재 schema에는 해당 table과 `source_program`, `source_program_version`,
+`result_import_status`, `overall_verdict`, `last_imported_at` 컬럼이 없다. 이를
+참조하는 legacy `ResultImportService`/repository는 parser 호환 확인용 비운영
+경로이며, 현행 공통 UoW import API로 사용하지 않는다. 일반
+`SUMMARY_RESULT` upload는 이 legacy 설명에 포함되지 않는다.
 
 동일한 하중 조건을 여러 번 재실행하면 `AnalysisRun`을 분리한다.
 
@@ -129,7 +143,8 @@ LoadCase: DROP_BOTTOM_450MM
 - H3D, ODB, D3PLOT, BINOUT 직접 처리
 - 브라우저에서 사용자가 임의 절대경로를 전달하는 기능
 - 임의 SQL 실행
-- DB에 원본 대용량 파일을 BLOB으로 저장
+- 구조화 결과 원본 대용량 파일을 DB BLOB으로 저장
+- canonical media의 검증된 바이트 저장은 `asset_blobs` 계약으로 처리
 - 외부 AI가 검증 없이 결과 컬럼을 추론하는 기능
 
 ---
@@ -366,9 +381,14 @@ panel_max_displacement,Panel 최대 변위,12.2,mm,15.0,panel_max_displacement_m
 
 ---
 
-## 8. DB 스키마 확장
+## 8. DB 스키마 확장 (historical proposal — 실행 금지)
 
-### 8.1 `result_import_jobs`
+아래 SQL은 과거 설계 초안이며 현재 `backend/migrations/` 또는 DuckDB bootstrap과
+일치하지 않는다. 현재 canonical table은 `folder_import_jobs`와
+`analysis_run_metadata`다. schema 변경은 반드시 Alembic revision과 현재 storage
+contract를 함께 갱신한다.
+
+### 8.1 제안된 `result_import_jobs` (현재 미존재)
 
 ```sql
 CREATE TABLE IF NOT EXISTS result_import_jobs (
@@ -404,7 +424,7 @@ FAILED
 SKIPPED
 ```
 
-### 8.2 `analysis_runs` 확장 권고
+### 8.2 제안된 `analysis_runs` 확장 (현재 미적용)
 
 ```sql
 ALTER TABLE analysis_runs ADD COLUMN IF NOT EXISTS overall_verdict VARCHAR;
@@ -503,6 +523,13 @@ backend/app/
 ---
 
 ## 11. 판정 로직
+
+아래 threshold 식은 legacy 설계 기준이다. 현재 canonical Master Refresh는
+`value >= threshold`를 `FAIL`로 처리하고 legacy `VerdictService`는
+`value <= threshold`를 `PASS`로 처리하므로 경계값에서 계약이 다르다. 공통
+ingestion으로 legacy를 승격하기 전에 하나의 판정 정책으로 통일하고
+`value == threshold` 회귀 테스트를 추가해야 한다. 이 절의 식을 현재 운영
+계약으로 사용하지 않는다.
 
 ### 11.1 Open Cell 응력
 
@@ -693,9 +720,9 @@ SIMDASH_AUTO_IMPORT_ENABLED=false
 11. 숫자 오류 거부
 12. import root 밖 경로 차단
 13. 누락 파일 거부
-14. 중복 checksum 차단
+14. bundle fingerprint 중복 차단
 15. REJECT 정책
-16. REPLACE 정책
+16. REPLACE 정책 (잔여 정책)
 17. 트랜잭션 롤백
 18. 결과 없는 run의 NO_DATA
 19. 필수 결과 일부 누락의 PARTIAL
@@ -712,6 +739,31 @@ SIMDASH_AUTO_IMPORT_ENABLED=false
 - 기존 화면 유지
 - 콘솔 오류 없음
 
+현재 구현의 결과 수집 focused 검증은 collection 기준 71개 test case로 별도
+관리한다. canonical/legacy manifest, bundle fingerprint, common UoW, manual
+SUMMARY_RESULT JSON/CSV, media extension fixture matrix, PostgreSQL reservation
+SQL/migration contract와 typed folder API contract를 포함한다. live PostgreSQL
+concurrent ingestion test는 제공되지 않는다.
+
+```bash
+cd backend
+../.venv-wsl/bin/python -m pytest --collect-only -q \
+  tests/test_master_result_refresh.py \
+  tests/test_master_result_folder_example.py \
+  tests/test_result_ingestion_atomicity.py \
+  tests/test_result_import_contract.py \
+  tests/test_manifest_format.py \
+  tests/test_manual_result_ingestion.py \
+  tests/test_media_policy_fixtures.py \
+  tests/test_result_ingestion_idempotency.py \
+  tests/test_api.py::test_typed_folder_example_registers_scalars_curves_media_and_catalog
+# 71 collected; live PostgreSQL concurrent test는 별도 미제공
+```
+
+이 71개는 현재 제공된 focused 검증 범위다. legacy `ResultImportService` 저장,
+Radioss mesh locations UoW 이관, PostgreSQL live concurrency, legacy run
+identity/replace, threshold 경계 통일이 완료됐다는 뜻은 아니다.
+
 ---
 
 ## 19. 구현 단계
@@ -726,11 +778,11 @@ SIMDASH_AUTO_IMPORT_ENABLED=false
 
 ### 단계 2. DB와 Repository
 
-- `result_import_jobs`
-- `analysis_runs` 확장
+- (historical) `result_import_jobs`
+- (historical) `analysis_runs` 확장
 - batch insert
-- 중복 제어
-- 트랜잭션
+- bundle fingerprint 중복 제어
+- 공통 UoW transaction
 
 ### 단계 3. Service와 API
 

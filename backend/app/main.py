@@ -41,15 +41,22 @@ from .modules.access_control import (
 from .database import connect, initialize_database, json_value, rows
 from .config import database_settings, security_settings
 from .folder_import import FolderImportError, scan_folder
-from .media_policy import validate_media_metadata
 from .repositories.media_repository import get_blob, get_drop_video, get_media_asset, list_drop_videos
 from .services.media_http import build_media_response
-from .services.media_storage_service import attach_stored_media, store_file
 from .result_import import CSV_TEMPLATE, JSON_TEMPLATE, ResultFormatError, parse_result_file
 from .repositories.portfolio import PortfolioRepository
 from .repositories.variable_catalog import VariableCatalogRepository
 from .repositories.workbench import WorkbenchRepository
 from .services.request_monitoring import request_monitoring_summary, sync_request_status
+from .adapters.persistence.result_ingestion import (
+    SQLResultIngestionUnitOfWorkProvider,
+    bound_result_ingestion_transaction,
+)
+from .application.results.commands import ingest_result_bundle, utc_identifier
+from .services.manual_result_ingestion_adapter import (
+    ManualResultIngestionAdapterError,
+    to_canonical_result_payload,
+)
 from .schemas.api import (
     AnalysisPageCreate,
     AnalysisPageOrderUpdate,
@@ -790,6 +797,72 @@ def import_analysis_results(load_case_id: str, payload: ResultImportPayload, req
         if payload.validate_only:
             return {"status": "VALID", "filename": payload.filename, **parsed["summary"], "results": parsed["scalars"], "warnings": parsed["warnings"]}
 
+        if parsed["summary"]["source_format"] == "SUMMARY_RESULT":
+            source_checksum = hashlib.sha256(payload.content.encode("utf-8")).hexdigest()
+            source_name = f"{load_case_id}/{payload.filename}"
+            try:
+                canonical_parsed = to_canonical_result_payload(
+                    parsed,
+                    source_file=payload.filename,
+                    source_checksum=source_checksum,
+                )
+            except ManualResultIngestionAdapterError as exc:
+                raise HTTPException(422, str(exc)) from exc
+            try:
+                with bound_result_ingestion_transaction(
+                    conn,
+                    utc_identifier,
+                    authorize=lambda command, connection: require_resource_permission(
+                        request,
+                        RESULT_IMPORT,
+                        "load_case",
+                        command["load_case_id"],
+                        conn=connection,
+                    ),
+                ) as unit_of_work_provider:
+                    outcome = ingest_result_bundle(
+                        {
+                            "project_id": str(context[2]),
+                            "request_id": str(context[1]),
+                            "load_case_id": load_case_id,
+                            "source_type": "FILE_UPLOAD",
+                            "source_name": source_name,
+                            "source_checksum": source_checksum,
+                            "parser_version": "result-import-v1",
+                            "parsed": canonical_parsed,
+                            "actor": actor_name,
+                            "metadata": {
+                                "author_user_id": principal.user_id,
+                                "submitted_author": payload.author,
+                                "original_filename": payload.filename,
+                                "source_format": "SUMMARY_RESULT",
+                            },
+                        },
+                        unit_of_work_provider,
+                        lambda: datetime.now(timezone.utc).replace(tzinfo=None),
+                        utc_identifier,
+                    )
+                    if outcome["status"] == "IMPORTED":
+                        write_audit_event(
+                            request=request,
+                            principal=principal,
+                            status_code=200,
+                            action="RESULT_IMPORTED",
+                            detail={"project_id": context[2], "load_case_id": load_case_id, "run_id": outcome["analysis_run_id"]},
+                            connection=conn,
+                        )
+            except Exception:
+                raise
+            return {
+                "status": outcome["status"],
+                "run_id": outcome["analysis_run_id"],
+                "run_no": outcome["run_no"],
+                "filename": payload.filename,
+                **parsed["summary"],
+                "results": parsed["scalars"],
+                "warnings": parsed["warnings"],
+            }
+
         run_id = f"run-{uuid4().hex[:12]}"
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         next_run_no = conn.execute("SELECT coalesce(max(run_no), 0) + 1 FROM analysis_runs WHERE load_case_id = ?", [load_case_id]).fetchone()[0]
@@ -862,7 +935,7 @@ def import_analysis_results(load_case_id: str, payload: ResultImportPayload, req
             write_audit_event(
                 request=request,
                 principal=principal,
-                status_code=201,
+                status_code=200,
                 action="RESULT_IMPORTED",
                 detail={"project_id": context[2], "load_case_id": load_case_id, "run_id": run_id},
                 connection=conn,
@@ -882,100 +955,49 @@ def import_typed_result_example(load_case_id: str, request: Request) -> dict[str
         parsed = scan_folder(example_root)
     except FolderImportError as exc:
         raise HTTPException(422, str(exc)) from exc
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
-    job_id, run_id = f"folder-job-{uuid4().hex[:12]}", f"run-{uuid4().hex[:12]}"
     with connect() as conn:
         require_resource_permission(request, RESULT_IMPORT, "load_case", load_case_id, conn=conn)
         context = conn.execute(
-            """SELECT lc.id, lc.request_id, ar.project_id, lc.analysis_type
+            """SELECT lc.id, lc.request_id, ar.project_id
                FROM load_cases lc JOIN analysis_requests ar ON ar.id=lc.request_id WHERE lc.id=?""",
             [load_case_id],
         ).fetchone()
         if not context:
             raise HTTPException(404, "하중경우를 찾을 수 없습니다.")
-        next_run_no = conn.execute("SELECT coalesce(max(run_no), 0) + 1 FROM analysis_runs WHERE load_case_id=?", [load_case_id]).fetchone()[0]
-        catalog = VariableCatalogRepository(conn)
-        conn.execute("BEGIN TRANSACTION")
-        try:
-            conn.execute(
-                "INSERT INTO folder_import_jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [job_id, load_case_id, run_id, parsed["schema_id"], parsed["schema_version"], str(example_root), "RUNNING", None, now],
-            )
-            for item in parsed["scalars"]:
-                if not catalog.get(load_case_id, item["variable_key"], include_inactive=True):
-                    catalog.create(load_case_id, {
-                        "variable_key": item["variable_key"], "display_name": item["display_name"], "data_type": item["data_type"],
-                        "unit": item["unit"] or "-", "description": f"폴더 적재: {item['source_file']}", "threshold": item["threshold"],
-                        "result_group": item["result_group"], "updated_by": "폴더 가져오기",
-                    })
-            for item in parsed["curves"]:
-                if not catalog.get(load_case_id, item["variable_key"], include_inactive=True):
-                    catalog.create(load_case_id, {
-                        "variable_key": item["variable_key"], "display_name": item["display_name"], "data_type": "CURVE",
-                        "unit": item["y_unit"] or "-", "description": f"폴더 커브: {item['source_file']}", "threshold": None,
-                        "result_group": item["result_group"], "updated_by": "폴더 가져오기",
-                    })
-            for item in parsed["media"]:
-                if not catalog.get(load_case_id, item["variable_key"], include_inactive=True):
-                    catalog.create(load_case_id, {
-                        "variable_key": item["variable_key"], "display_name": item["display_name"], "data_type": item["asset_type"],
-                        "unit": "-", "description": f"폴더 미디어: {item['source_file']}", "threshold": None,
-                        "result_group": item["result_group"], "updated_by": "폴더 가져오기",
-                    })
-            conn.execute("INSERT INTO analysis_runs VALUES (?, ?, ?, ?, ?, ?, ?, ?)", [run_id, load_case_id, None, next_run_no, parsed["solver"], "COMPLETED", now, now])
-            conn.execute(
-                """
-                INSERT INTO analysis_run_metadata
-                    (analysis_run_id, source_type, source_name, source_checksum, schema_id, schema_version,
-                     parser_version, metadata_json, created_at)
-                VALUES (?, 'FOLDER_IMPORT', ?, NULL, ?, ?, 'folder-import-v1', ?, ?)
-                """,
-                [run_id, str(example_root), parsed["schema_id"], parsed["schema_version"], json.dumps({"job_id": job_id}, ensure_ascii=False), now],
-            )
-            for item in parsed["scalars"]:
-                value_double = item["value"] if item["data_type"] == "FLOAT" else None
-                value_integer = item["value"] if item["data_type"] == "INTEGER" else None
-                value_text = str(item["value"]) if item["data_type"] not in {"FLOAT", "INTEGER"} else None
-                threshold = float(item["threshold"]) if item["threshold"] is not None else None
-                verdict = ("FAIL" if float(item["value"]) >= threshold else "PASS") if threshold is not None and item["data_type"] in {"FLOAT", "INTEGER"} else (str(item["value"]) if item["data_type"] == "VERDICT" else None)
-                conn.execute("INSERT INTO scalar_results VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [f"scalar-{uuid4().hex[:12]}", run_id, item["variable_key"], item["display_name"], value_double, value_integer, value_text, item["unit"], threshold, verdict])
-            for item in parsed["curves"]:
-                curve_id = f"curve-{uuid4().hex[:12]}"
-                conn.execute("INSERT INTO curve_results VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [curve_id, run_id, item["variable_key"], item["display_name"], item["series_key"], item["x_label"], item["x_unit"], item["y_label"], item["y_unit"], len(item["points"]), item["source_file"], item["source_checksum"], now])
-                for index, point in enumerate(item["points"]):
-                    conn.execute("INSERT INTO curve_points VALUES (?, ?, ?, ?)", [curve_id, index, point["x"], point["y"]])
-                    conn.execute("INSERT INTO time_series_results VALUES (?, ?, ?, ?, ?, ?, ?)", [run_id, item["variable_key"], item["display_name"], point["x"], point["y"], item["x_unit"], item["y_unit"]])
-            for item in parsed["media"]:
-                validate_media_metadata("CONTOUR_IMAGE" if item["asset_type"] == "IMAGE" else item["asset_type"], item["path"].name, item["path"].stat().st_size)
-                asset_id = f"media-{uuid4().hex[:12]}"
-                relative_path = f"imports/{run_id}/{item['path'].name}"
-                conn.execute(
-                    """
-                    INSERT INTO media_assets
-                        (id, analysis_run_id, asset_type, title, file_path, mime_type,
-                         file_size, checksum, metadata_json)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    [asset_id, run_id, item["asset_type"], item["display_name"], relative_path, item["mime_type"], item["path"].stat().st_size, item["source_checksum"], json.dumps({"variable_key": item["variable_key"], "source_file": item["source_file"]})],
-                )
-                stored = store_file(
-                    conn,
-                    item["path"],
-                    filename=item["path"].name,
-                    mime_type=item["mime_type"],
-                    asset_type=item["asset_type"],
-                )
-                attach_stored_media(conn, asset_id, stored)
-            if parsed["note"]:
-                conn.execute("INSERT INTO qualitative_notes VALUES (?, ?, ?, ?, ?)", [f"note-{uuid4().hex[:12]}", run_id, "폴더 가져오기", parsed["note"], now])
-            summary = {"scalar_count": len(parsed["scalars"]), "curve_count": len(parsed["curves"]), "media_count": len(parsed["media"])}
-            conn.execute("UPDATE folder_import_jobs SET status='COMPLETED', summary_json=?, analysis_run_id=? WHERE id=?", [json.dumps(summary, ensure_ascii=False), run_id, job_id])
-            conn.execute("UPDATE load_cases SET status='COMPLETED' WHERE id=?", [load_case_id])
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
-    return {"status": "IMPORTED", "job_id": job_id, "run_id": run_id, "run_no": next_run_no, "schema_id": parsed["schema_id"], "summary": summary}
+    outcome = ingest_result_bundle(
+        {
+            "project_id": str(context[2]),
+            "request_id": str(context[1]),
+            "load_case_id": load_case_id,
+            "source_type": "FOLDER_IMPORT",
+            "source_name": str(example_root),
+            "source_checksum": None,
+            "parser_version": "folder-import-v1",
+            "parsed": parsed,
+            "actor": "폴더 가져오기",
+            "metadata": {},
+        },
+        SQLResultIngestionUnitOfWorkProvider(
+            utc_identifier,
+            authorize=lambda command, connection: require_resource_permission(
+                request,
+                RESULT_IMPORT,
+                "load_case",
+                command["load_case_id"],
+                conn=connection,
+            ),
+        ),
+        lambda: datetime.now(timezone.utc).replace(tzinfo=None),
+        utc_identifier,
+    )
+    return {
+        "status": outcome["status"],
+        "job_id": outcome["job_id"],
+        "run_id": outcome["analysis_run_id"],
+        "run_no": outcome["run_no"],
+        "schema_id": outcome["schema_id"],
+        "summary": outcome["summary"],
+    }
 
 
 def _legacy_asset_path(file_path: str) -> Path:

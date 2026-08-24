@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal, TypedDict
+from typing import Any, Literal, TypedDict
 
 
 class AnalysisRun(TypedDict):
@@ -38,3 +38,28 @@ class AnalysisRunSummary(AnalysisRun):
     series_count: int
     trust_status: Literal["TRUSTED", "WARN", "FAIL"]
     is_latest: bool
+
+
+class ResultIngestionCommand(TypedDict):
+    """Database-independent canonical result payload plus its provenance."""
+
+    project_id: str
+    request_id: str
+    load_case_id: str
+    source_type: str
+    source_name: str
+    source_checksum: str | None
+    parser_version: str
+    parsed: dict[str, Any]
+    actor: str
+    metadata: dict[str, Any]
+
+
+class ResultIngestionOutcome(TypedDict):
+    status: Literal["IMPORTED", "SKIPPED"]
+    job_id: str
+    load_case_id: str
+    analysis_run_id: str | None
+    run_no: int | None
+    schema_id: str
+    summary: dict[str, Any]

@@ -122,7 +122,7 @@ export function DataWorkspace({ canCreateProject, projects, initialProjectId, in
     try {
       const result = await api.importResults(loadCaseId, { ...resultFile, author: resultAuthor, validate_only: false })
       setImportPreview(result); setImported(true)
-      setMessage(`Run #${result.run_no} 결과를 등록했습니다. 결과 검토 단계가 시작되었습니다.`)
+      setMessage(result.status === 'SKIPPED' ? '동일한 결과 파일이 이미 등록되어 있습니다. 기존 결과를 표시합니다.' : `Run #${result.run_no} 결과를 등록했습니다. 결과 검토 단계가 시작되었습니다.`)
       await onDataChanged()
     } catch (reason) { setFormError(reason instanceof Error ? reason.message : '해석 결과 등록에 실패했습니다.') }
     finally { setBusy(false) }

@@ -33,7 +33,9 @@
         ↓ 수행자가 의뢰 폴더에 결과 생성
 마스터 폴더 Refresh
         ↓
-탐색 → 검증 → 중복 판정 → DB 적재 → 상태 동기화
+탐색 → 검증 → bundle fingerprint 중복 판정
+→ normalized command → 공통 single-connection UoW 적재
+→ 상태 동기화
         ↓
 상세 분석 위젯 WAITING/PARTIAL/READY 갱신
 ```
@@ -173,13 +175,23 @@
 
 1. root 아래 `manifest.json` 탐색
 2. manifest별 독립 검증과 수집 작업 생성
-3. 체크섬과 완료 이력으로 중복 판정
-4. 신규 결과를 Run, scalar, time-series, curve, media 저장소에 적재
+3. manifest와 mapping 파일의 크기·SHA-256으로 계산한 bundle fingerprint와 완료 이력으로 중복 판정
+4. normalized command를 공통 single-connection UoW에 전달해 신규 결과를 Run, scalar, time-series, curve, media 저장소에 원자적으로 적재
 5. Run 및 하중 경우 상태 갱신
 6. 가능한 경우 의뢰·수행 작업 상태 동기화
 7. manifest별 `IMPORTED`, `SKIPPED`, `FAILED` 결과 반환
 
-하나의 manifest 실패가 전체 Refresh를 중단시키지 않는다. 동일한 완료 manifest를 다시 Refresh하면 DB 중복 없이 `SKIPPED`되어야 한다.
+하나의 manifest 실패가 전체 Refresh를 중단시키지 않는다. 동일한 완료 bundle을
+다시 Refresh하면 DB 중복 없이 `SKIPPED`되어야 한다. 동일 manifest라도 참조
+mapping 파일이 변경되면 fingerprint가 달라지므로 새 Run을 생성한다. manifest
+checksum은 fingerprint와 별도로 metadata/job summary에 보존한다.
+
+PostgreSQL에서는 load case별 namespaced 64-bit transaction advisory lock으로
+`run_no` 할당을 직렬화하고, non-null exact
+`(source_type, source_name, source_checksum)`를 migration `0016`의
+`canonical_result_ingestion_sources` PK로 예약한다. 실패 transaction은 claim도
+rollback한다. 현재는 SQL/migration contract 검증까지이며 live PostgreSQL
+concurrent ingestion test는 없다.
 
 ### 6.3 결과 화면 갱신
 
@@ -212,13 +224,31 @@ schemas/result_folder_refresh.py
   └─ Refresh 응답 계약
 
 services/master_result_refresh.py
-  └─ root 탐색, manifest별 오케스트레이션, idempotency
+  └─ root 탐색, fingerprint·command 생성, manifest별 실패 격리
+
+application/results/commands.py
+  └─ ResultIngestionCommand와 공통 ingestion orchestration
+
+domains/results/{models,ports}.py
+  └─ DB 독립 command/outcome와 ResultIngestionUnitOfWork port
+
+adapters/persistence/result_ingestion.py
+  └─ DuckDB/PostgreSQL single-connection SQL UoW
 
 routers/result_folder_refresh.py
   └─ 권한, 감사, HTTP 변환
 ```
 
-파서, 저장소, 상태 동기화 코드는 Refresh 서비스에 복제하지 않고 기존 기능을 호출한다.
+파서, 저장소, 상태 동기화 코드는 Refresh 서비스에 복제하지 않고 공통 UoW와
+normalized contract를 사용한다. 일반 수동 `SUMMARY_RESULT` JSON/CSV upload도
+target-qualified source와 content checksum으로 같은 UoW를 사용하며, 재시도는
+`SKIPPED`, 권한 재확인과 `RESULT_IMPORTED` audit는 write transaction 안에서
+원자적으로 처리한다. `Radioss` mesh CSV는 `result_locations` 저장이 canonical
+UoW에 포함될 때까지 direct-SQL compatibility 경로다.
+
+구형 `result_files` 기반 `ResultImportService` persistence는 현재 schema에 없는
+`result_import_jobs`와 `analysis_runs` 확장 컬럼을 참조하므로 parser/manifest
+호환을 위한 비운영 compatibility 경로다.
 
 ### Frontend
 
@@ -240,6 +270,8 @@ features/workbench/SimulationWorkbench.tsx
 - 시스템 작업 유형 작성: `system.catalog.manage`
 - 프로젝트 override: `dashboard.edit`
 - 전체 마스터 root Refresh: 전역 관리자
+- typed folder example 적재: `result.import`를 요청 경계와 write UoW transaction 안에서 재확인
+- manual SUMMARY_RESULT JSON/CSV: 동일 `result.import` 권한을 write transaction 안에서 재확인
 - 개별 결과 데이터 조회: 기존 `project.data.view`
 
 최소 감사 이벤트:
@@ -248,7 +280,12 @@ features/workbench/SimulationWorkbench.tsx
 - 마스터 폴더 Refresh 실행과 집계
 - manifest별 수집 성공·실패
 
-감사로그에는 결과 파일 내용이나 비밀 경로를 기록하지 않고 상대 manifest 경로, ID, 체크섬, 상태만 기록한다.
+Refresh 감사 이벤트에는 파일 내용·서버 경로를 넣지 않고 전체
+scanned/imported/skipped/failed 집계만 기록한다. manifest별 상대 경로·상태와
+manifest checksum·bundle fingerprint는 `folder_import_jobs` 요약과
+`analysis_run_metadata`에 보존한다. manual SUMMARY_RESULT 성공은
+`RESULT_IMPORTED` audit event를 결과 write와 같은 transaction에 기록하며,
+재시도 `SKIPPED`에는 새 Run audit를 만들지 않는다.
 
 ## 9. 호환성과 마이그레이션
 

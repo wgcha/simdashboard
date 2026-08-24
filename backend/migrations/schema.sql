@@ -221,6 +221,14 @@ CREATE TABLE IF NOT EXISTS projects (
                 created_at TIMESTAMP NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS canonical_result_ingestion_sources (
+                source_type VARCHAR NOT NULL,
+                source_name VARCHAR NOT NULL,
+                source_checksum VARCHAR NOT NULL,
+                claimed_at TIMESTAMP NOT NULL,
+                PRIMARY KEY (source_type, source_name, source_checksum)
+            );
+
             CREATE TABLE IF NOT EXISTS import_schemas (
                 id VARCHAR PRIMARY KEY,
                 name VARCHAR NOT NULL,

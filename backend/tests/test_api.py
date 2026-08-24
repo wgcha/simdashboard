@@ -1053,12 +1053,41 @@ def test_create_project_request_and_load_case():
             conn.execute("DELETE FROM projects WHERE id = ?", [created_project])
 
 
-def test_typed_folder_example_registers_scalars_curves_media_and_catalog():
+def test_typed_folder_example_registers_scalars_curves_media_and_catalog(monkeypatch):
     initialize_database()
     load_case_id = "loadcase-clamp-left-001"
+    authorization_connections = []
+    original_authorize = main_module.require_resource_permission
+
+    def track_result_import_authorization(
+        request,
+        permission,
+        resource_type,
+        resource_id,
+        *,
+        conn=None,
+    ):
+        if permission == main_module.RESULT_IMPORT and resource_type == "load_case":
+            authorization_connections.append(conn)
+        return original_authorize(
+            request,
+            permission,
+            resource_type,
+            resource_id,
+            conn=conn,
+        )
+
+    monkeypatch.setattr(
+        main_module,
+        "require_resource_permission",
+        track_result_import_authorization,
+    )
     with TestClient(app) as client:
         response = client.post(f"/api/load-cases/{load_case_id}/folder-import/example")
         assert response.status_code == 200, response.text
+        assert len(authorization_connections) == 2
+        assert all(connection is not None for connection in authorization_connections)
+        assert authorization_connections[0] is not authorization_connections[1]
         result = response.json()
         assert result["summary"] == {"scalar_count": 13, "curve_count": 2, "media_count": 1}
         overview = client.get(f"/api/load-cases/{load_case_id}/overview").json()
@@ -1085,6 +1114,7 @@ def test_typed_folder_example_registers_scalars_curves_media_and_catalog():
         conn.execute("DELETE FROM time_series_results WHERE analysis_run_id=?", [result["run_id"]])
         conn.execute("DELETE FROM scalar_results WHERE analysis_run_id=?", [result["run_id"]])
         conn.execute("DELETE FROM folder_import_jobs WHERE id=?", [result["job_id"]])
+        conn.execute("DELETE FROM analysis_run_metadata WHERE analysis_run_id=?", [result["run_id"]])
         conn.execute("DELETE FROM analysis_runs WHERE id=?", [result["run_id"]])
         for key in ("mesh_element_count", "analysis_judgement", "chassis_rear_verdict", "open_cell_top_edge_stress_curve", "chassis_rear_top_edge_deformation_curve", "open_cell_stress_contour"):
             conn.execute("DELETE FROM variable_definitions WHERE load_case_id=? AND variable_key=?", [load_case_id, key])
@@ -1092,6 +1122,10 @@ def test_typed_folder_example_registers_scalars_curves_media_and_catalog():
         asset_folder = Path(__file__).resolve().parents[1] / "assets" / Path(path).parent
         if asset_folder.exists():
             shutil.rmtree(asset_folder)
+    with connect() as conn:
+        assert conn.execute(
+            "SELECT count(*) FROM analysis_run_metadata WHERE source_type='FOLDER_IMPORT' AND source_name LIKE '%typed-results%tv-drop-chassis'"
+        ).fetchone()[0] == 0
 
 
 def test_import_schema_crud_and_hierarchy_mapping():

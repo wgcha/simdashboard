@@ -1,9 +1,11 @@
 """Orchestration for importing result bundles from a trusted server folder.
 
-This module deliberately owns discovery and persistence orchestration only.  The
-versioned-folder parser remains :func:`app.folder_import.scan_folder`; callers
-never supply a filesystem path.  A bundle is associated to an existing load case
-through IDs in ``manifest.json`` before any result rows are written:
+This module owns trusted-root discovery, path checks, bundle fingerprinting and
+per-manifest failure isolation. Persistence is delegated to the canonical result
+ingestion application/UoW boundary. The versioned-folder parser remains
+:func:`app.folder_import.scan_folder`; callers never supply a filesystem path. A
+bundle is associated to an existing load case through IDs in ``manifest.json``
+before any result rows are written:
 
 .. code-block:: json
 
@@ -23,13 +25,13 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
-from ..database_connection import ConnectionLike, connect
+from ..adapters.persistence.result_ingestion import SQLResultIngestionUnitOfWorkProvider
+from ..application.results.commands import ingest_result_bundle, utc_identifier
+from ..domains.results.models import ResultIngestionCommand
+from ..database_connection import connect
 from ..folder_import import FolderImportError, scan_folder
-from ..media_policy import validate_media_metadata
 from ..parsers.manifest_format import ManifestFormat, load_manifest
-from ..repositories.variable_catalog import VariableCatalogRepository
-from ..services.media_storage_service import attach_stored_media, store_file
-from ..services.request_monitoring import sync_request_status
+from ..services.bundle_fingerprint import FingerprintFile, calculate_bundle_fingerprint
 
 
 RefreshStatus = Literal["IMPORTED", "SKIPPED", "FAILED"]
@@ -83,21 +85,44 @@ class MasterResultRefreshService:
     def _refresh_manifest(self, manifest_path: Path) -> RefreshItem:
         relative = self._relative_manifest_path(manifest_path)
         if relative is None or manifest_path.is_symlink():
-            return RefreshItem(relative or "manifest.json", "FAILED", message="마스터 폴더 밖 또는 심볼릭 링크 manifest는 허용되지 않습니다.")
+            return RefreshItem(
+                relative or "manifest.json",
+                "FAILED",
+                message="마스터 폴더 밖 또는 심볼릭 링크 manifest는 허용되지 않습니다.",
+            )
         try:
             manifest_checksum = _checksum(manifest_path)
             raw_manifest = _read_manifest(manifest_path)
-            _validate_bundle_paths(self.root, manifest_path.parent, raw_manifest)
+            mapping_files = _validate_bundle_paths(self.root, manifest_path.parent, raw_manifest)
+            bundle_fingerprint = calculate_bundle_fingerprint(
+                self.root,
+                [FingerprintFile("manifest.json", manifest_path), *mapping_files],
+            )
             target = _manifest_target(raw_manifest)
-            if self._already_imported(relative, manifest_checksum):
-                self._record_skip(target, relative, manifest_checksum)
-                return RefreshItem(relative, "SKIPPED", target[2], message="동일한 manifest가 이미 완료되었습니다.")
             parsed = scan_folder(manifest_path.parent)
-            return self._persist_import(relative, manifest_checksum, target, parsed, manifest_path.parent)
+            outcome = ingest_result_bundle(
+                _ingestion_command(relative, manifest_checksum, bundle_fingerprint, target, parsed),
+                SQLResultIngestionUnitOfWorkProvider(utc_identifier),
+                _now,
+                utc_identifier,
+            )
+            if outcome["status"] == "SKIPPED":
+                return RefreshItem(
+                    relative,
+                    "SKIPPED",
+                    target[2],
+                    message="동일한 결과 bundle이 이미 완료되었습니다.",
+                )
+            return RefreshItem(relative, "IMPORTED", target[2], outcome["analysis_run_id"])
         except Exception as exc:
             target = _safe_manifest_target(manifest_path)
             self._record_failure(target, relative or "manifest.json", str(exc))
-            return RefreshItem(relative or "manifest.json", "FAILED", target[2] if target else None, message=_safe_error_message(exc))
+            return RefreshItem(
+                relative or "manifest.json",
+                "FAILED",
+                target[2] if target else None,
+                message=_safe_error_message(exc),
+            )
 
     def _relative_manifest_path(self, manifest_path: Path) -> str | None:
         try:
@@ -105,29 +130,6 @@ class MasterResultRefreshService:
             return resolved.relative_to(self.root).as_posix()
         except (OSError, ValueError):
             return None
-
-    def _already_imported(self, relative_path: str, checksum: str) -> bool:
-        with connect() as conn:
-            row = conn.execute(
-                """
-                SELECT 1 FROM analysis_run_metadata
-                WHERE source_type=? AND source_name=? AND source_checksum=?
-                LIMIT 1
-                """,
-                [SOURCE_TYPE, relative_path, checksum],
-            ).fetchone()
-            return row is not None
-
-    def _record_skip(self, target: tuple[str, str, str], relative: str, checksum: str) -> None:
-        with connect() as conn:
-            now = _now()
-            conn.execute(
-                """INSERT INTO folder_import_jobs VALUES (?, ?, NULL, ?, ?, ?, 'SKIPPED', ?, ?)""",
-                [
-                    f"folder-refresh-{uuid4().hex[:12]}", target[2], "master-folder", 1,
-                    relative, json.dumps({"manifest_checksum": checksum, "reason": "IDENTICAL_COMPLETED"}, ensure_ascii=False), now,
-                ],
-            )
 
     def _record_failure(self, target: tuple[str, str, str] | None, relative: str, message: str) -> None:
         # The legacy table requires a load case.  Unassociated malformed
@@ -137,82 +139,24 @@ class MasterResultRefreshService:
         try:
             with connect() as conn:
                 conn.execute(
-                    """INSERT INTO folder_import_jobs VALUES (?, ?, NULL, ?, ?, ?, 'FAILED', ?, ?)""",
+                    """
+                    INSERT INTO folder_import_jobs
+                    VALUES (?, ?, NULL, ?, ?, ?, 'FAILED', ?, ?)
+                    """,
                     [
-                        f"folder-refresh-{uuid4().hex[:12]}", target[2], "master-folder", 1,
-                        relative, json.dumps({"error": _safe_error_message(message)}, ensure_ascii=False), _now(),
+                        f"folder-refresh-{uuid4().hex[:12]}",
+                        target[2],
+                        "master-folder",
+                        1,
+                        relative,
+                        json.dumps({"error": _safe_error_message(message)}, ensure_ascii=False),
+                        _now(),
                     ],
                 )
         except Exception:
             # A failed diagnostic record must not mask the original import
             # failure or stop refresh of other bundles.
             return
-
-    def _persist_import(
-        self,
-        relative: str,
-        manifest_checksum: str,
-        target: tuple[str, str, str],
-        parsed: dict[str, Any],
-        bundle_root: Path,
-    ) -> RefreshItem:
-        project_id, request_id, load_case_id = target
-        job_id = f"folder-refresh-{uuid4().hex[:12]}"
-        run_id = f"run-{uuid4().hex[:12]}"
-        now = _now()
-        with connect() as conn:
-            actual = conn.execute(
-                """
-                SELECT ar.project_id, lc.request_id
-                FROM load_cases lc JOIN analysis_requests ar ON ar.id=lc.request_id
-                WHERE lc.id=?
-                """,
-                [load_case_id],
-            ).fetchone()
-            if actual is None or str(actual[0]) != project_id or str(actual[1]) != request_id:
-                raise FolderImportError("manifest의 project_id, request_id, load_case_id 연결이 존재하지 않거나 일치하지 않습니다.")
-            next_run_no = conn.execute(
-                "SELECT coalesce(max(run_no), 0) + 1 FROM analysis_runs WHERE load_case_id=?", [load_case_id]
-            ).fetchone()[0]
-            catalog = VariableCatalogRepository(conn)
-            conn.execute("BEGIN TRANSACTION")
-            try:
-                conn.execute(
-                    "INSERT INTO folder_import_jobs VALUES (?, ?, ?, ?, ?, ?, 'RUNNING', NULL, ?)",
-                    [job_id, load_case_id, run_id, parsed["schema_id"], parsed["schema_version"], relative, now],
-                )
-                _ensure_catalog_definitions(catalog, load_case_id, parsed)
-                conn.execute(
-                    "INSERT INTO analysis_runs VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    [run_id, load_case_id, None, next_run_no, parsed["solver"], "COMPLETED", now, now],
-                )
-                conn.execute(
-                    """
-                    INSERT INTO analysis_run_metadata
-                        (analysis_run_id, source_type, source_name, source_checksum, schema_id, schema_version,
-                         parser_version, metadata_json, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    [
-                        run_id, SOURCE_TYPE, relative, manifest_checksum, parsed["schema_id"], parsed["schema_version"],
-                        PARSER_VERSION, json.dumps({"job_id": job_id, "project_id": project_id, "request_id": request_id}, ensure_ascii=False), now,
-                    ],
-                )
-                _persist_results(conn, run_id, parsed)
-                summary = {
-                    "scalar_count": len(parsed["scalars"]), "curve_count": len(parsed["curves"]),
-                    "media_count": len(parsed["media"]), "manifest_checksum": manifest_checksum,
-                }
-                conn.execute(
-                    "UPDATE folder_import_jobs SET status='COMPLETED', summary_json=?, analysis_run_id=? WHERE id=?",
-                    [json.dumps(summary, ensure_ascii=False), run_id, job_id],
-                )
-                _sync_import_status(conn, request_id, load_case_id, now)
-                conn.execute("COMMIT")
-            except Exception:
-                conn.execute("ROLLBACK")
-                raise
-        return RefreshItem(relative, "IMPORTED", load_case_id, run_id)
 
 
 def _manifest_target(raw_manifest: dict[str, Any]) -> tuple[str, str, str]:
@@ -223,7 +167,13 @@ def _manifest_target(raw_manifest: dict[str, Any]) -> tuple[str, str, str]:
     def value(name: str) -> str:
         direct = context.get(name)
         nested = context.get(name.removesuffix("_id"))
-        candidate = direct if isinstance(direct, str) else nested.get("id") if isinstance(nested, dict) else None
+        candidate = (
+            direct
+            if isinstance(direct, str)
+            else nested.get("id")
+            if isinstance(nested, dict)
+            else None
+        )
         if not isinstance(candidate, str) or not candidate.strip():
             raise FolderImportError(f"manifest.context.{name}가 필요합니다.")
         return candidate.strip()
@@ -245,13 +195,14 @@ def _read_manifest(path: Path) -> dict[str, Any]:
         raise FolderImportError(str(exc)) from exc
 
 
-def _validate_bundle_paths(master_root: Path, bundle_root: Path, manifest: dict[str, Any]) -> None:
+def _validate_bundle_paths(master_root: Path, bundle_root: Path, manifest: dict[str, Any]) -> list[FingerprintFile]:
     """Reject every mapping that can traverse, or hide traversal behind, a link."""
     mappings = manifest.get("mappings")
     if not isinstance(mappings, list):
         raise FolderImportError("manifest.json에는 mappings 배열이 필요합니다.")
     if bundle_root.is_symlink():
         raise FolderImportError("심볼릭 링크 결과 폴더는 허용되지 않습니다.")
+    validated: list[FingerprintFile] = []
     for mapping in mappings:
         if not isinstance(mapping, dict) or not isinstance(mapping.get("path"), str):
             raise FolderImportError("mappings 항목에 안전한 path가 필요합니다.")
@@ -269,6 +220,9 @@ def _validate_bundle_paths(master_root: Path, bundle_root: Path, manifest: dict[
             raise FolderImportError("결과 파일이 허용된 마스터 폴더 밖에 있습니다.") from exc
         if not resolved.is_file():
             raise FolderImportError("결과 파일을 찾을 수 없습니다.")
+        bundle_relative = resolved.relative_to(bundle_root.resolve(strict=True)).as_posix()
+        validated.append(FingerprintFile(bundle_relative, resolved))
+    return validated
 
 
 def _path_parts(root: Path, candidate: Path) -> list[Path]:
@@ -284,90 +238,33 @@ def _path_parts(root: Path, candidate: Path) -> list[Path]:
     return parts
 
 
-def _ensure_catalog_definitions(catalog: VariableCatalogRepository, load_case_id: str, parsed: dict[str, Any]) -> None:
-    for item in parsed["scalars"]:
-        if not catalog.get(load_case_id, item["variable_key"], include_inactive=True):
-            catalog.create(load_case_id, {
-                "variable_key": item["variable_key"], "display_name": item["display_name"], "data_type": item["data_type"],
-                "unit": item["unit"] or "-", "description": f"마스터 폴더 적재: {item['source_file']}",
-                "threshold": item["threshold"], "result_group": item["result_group"], "updated_by": "마스터 폴더 새로고침",
-            })
-    for item in parsed["curves"]:
-        if not catalog.get(load_case_id, item["variable_key"], include_inactive=True):
-            catalog.create(load_case_id, {
-                "variable_key": item["variable_key"], "display_name": item["display_name"], "data_type": "CURVE",
-                "unit": item["y_unit"] or "-", "description": f"마스터 폴더 커브: {item['source_file']}",
-                "threshold": None, "result_group": item["result_group"], "updated_by": "마스터 폴더 새로고침",
-            })
-    for item in parsed["media"]:
-        if not catalog.get(load_case_id, item["variable_key"], include_inactive=True):
-            catalog.create(load_case_id, {
-                "variable_key": item["variable_key"], "display_name": item["display_name"], "data_type": item["asset_type"],
-                "unit": "-", "description": f"마스터 폴더 미디어: {item['source_file']}",
-                "threshold": None, "result_group": item["result_group"], "updated_by": "마스터 폴더 새로고침",
-            })
-
-
-def _persist_results(conn: ConnectionLike, run_id: str, parsed: dict[str, Any]) -> None:
-    for item in parsed["scalars"]:
-        value_double = item["value"] if item["data_type"] == "FLOAT" else None
-        value_integer = item["value"] if item["data_type"] == "INTEGER" else None
-        value_text = str(item["value"]) if item["data_type"] not in {"FLOAT", "INTEGER"} else None
-        threshold = float(item["threshold"]) if item["threshold"] is not None else None
-        verdict = (
-            "FAIL" if float(item["value"]) >= threshold else "PASS"
-        ) if threshold is not None and item["data_type"] in {"FLOAT", "INTEGER"} else (str(item["value"]) if item["data_type"] == "VERDICT" else None)
-        conn.execute(
-            "INSERT INTO scalar_results VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [f"scalar-{uuid4().hex[:12]}", run_id, item["variable_key"], item["display_name"], value_double, value_integer, value_text, item["unit"], threshold, verdict],
-        )
-    for item in parsed["curves"]:
-        curve_id = f"curve-{uuid4().hex[:12]}"
-        now = _now()
-        conn.execute(
-            "INSERT INTO curve_results VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [curve_id, run_id, item["variable_key"], item["display_name"], item["series_key"], item["x_label"], item["x_unit"], item["y_label"], item["y_unit"], len(item["points"]), item["source_file"], item["source_checksum"], now],
-        )
-        for index, point in enumerate(item["points"]):
-            conn.execute("INSERT INTO curve_points VALUES (?, ?, ?, ?)", [curve_id, index, point["x"], point["y"]])
-            conn.execute(
-                "INSERT INTO time_series_results VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [run_id, item["variable_key"], item["display_name"], point["x"], point["y"], item["x_unit"], item["y_unit"]],
-            )
-    for item in parsed["media"]:
-        validate_media_metadata("CONTOUR_IMAGE" if item["asset_type"] == "IMAGE" else item["asset_type"], item["path"].name, item["path"].stat().st_size)
-        asset_id = f"media-{uuid4().hex[:12]}"
-        conn.execute(
-            """
-            INSERT INTO media_assets (id, analysis_run_id, asset_type, title, file_path, mime_type, file_size, checksum, metadata_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            [
-                asset_id, run_id, item["asset_type"], item["display_name"], f"imports/{run_id}/{item['path'].name}", item["mime_type"],
-                item["path"].stat().st_size, item["source_checksum"],
-                json.dumps({"variable_key": item["variable_key"], "source_file": item["source_file"]}),
-            ],
-        )
-        attach_stored_media(conn, asset_id, store_file(conn, item["path"], filename=item["path"].name, mime_type=item["mime_type"], asset_type=item["asset_type"]))
-    if parsed["note"]:
-        conn.execute("INSERT INTO qualitative_notes VALUES (?, ?, ?, ?, ?)", [f"note-{uuid4().hex[:12]}", run_id, "마스터 폴더 새로고침", parsed["note"], _now()])
-
-
-def _sync_import_status(conn: ConnectionLike, request_id: str, load_case_id: str, now: datetime) -> None:
-    conn.execute("UPDATE load_cases SET status='COMPLETED' WHERE id=?", [load_case_id])
-    conn.execute("UPDATE analysis_requests SET status='IN_PROGRESS' WHERE id=?", [request_id])
-    conn.execute(
-        "UPDATE request_steps SET status='COMPLETED', progress=100, actual_end=? WHERE request_id=? AND name IN ('해석 실행', '후처리 작업')",
-        [now, request_id],
-    )
-    conn.execute(
-        "UPDATE request_steps SET status='IN_PROGRESS', progress=greatest(progress, 20), actual_start=coalesce(actual_start, ?) WHERE request_id=? AND name='결과 검토'",
-        [now, request_id],
-    )
-    sync_request_status(conn, request_id)
+def _ingestion_command(
+    relative: str,
+    manifest_checksum: str,
+    bundle_fingerprint: str,
+    target: tuple[str, str, str],
+    parsed: dict[str, Any],
+) -> ResultIngestionCommand:
+    project_id, request_id, load_case_id = target
+    return {
+        "project_id": project_id,
+        "request_id": request_id,
+        "load_case_id": load_case_id,
+        "source_type": SOURCE_TYPE,
+        "source_name": relative,
+        "source_checksum": bundle_fingerprint,
+        "parser_version": PARSER_VERSION,
+        "parsed": parsed,
+        "actor": "마스터 폴더 새로고침",
+        "metadata": {
+            "manifest_checksum": manifest_checksum,
+            "bundle_fingerprint": bundle_fingerprint,
+        },
+    }
 
 
 def _checksum(path: Path) -> str:
+    """Return the manifest checksum retained separately from the bundle fingerprint."""
     digest = hashlib.sha256()
     with path.open("rb") as source:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):

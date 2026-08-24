@@ -38,8 +38,8 @@
 |---|---|---|---|
 | DOC-01 | 현재 문서와 과거 plan이 같은 디렉터리에 혼재 | 개발자가 낡은 경로·명령을 사용 | P0 |
 | DB-01 | migration head를 코드 graph에서 동적으로 읽고 PostgreSQL의 누락·stale revision을 fail-closed하도록 verifier와 회귀 테스트를 반영 | 구현 완료, 실제 운영 DB release gate 검증 필요 | P0 완료 |
-| IMP-01 | 중앙 format detector/loader가 `mappings`와 `result_files`를 명시적으로 분리하고 mixed/unknown/잘못된 importer/root escape/symlink를 fail-closed; 기존 `ManifestParser` alias 유지 | format 경계는 부분 완료했지만 validation·persistence·idempotency 정책은 두 경로에 아직 분리됨 | P0 경계 완료 / P1 잔여 |
-| IMP-02 | 중복 판정이 manifest checksum 중심 | manifest가 같고 결과 파일만 변경되면 놓칠 수 있음 | P1 |
+| IMP-01 | 중앙 format detector/loader와 normalized contract를 사용하고 canonical Master Refresh·typed folder example·일반 manual `SUMMARY_RESULT` JSON/CSV를 공통 UoW로 적재 | Radioss mesh `result_locations` direct-SQL 경로와 legacy persistence는 잔여 | P1 진행 |
+| IMP-02 | bundle fingerprint, load-case advisory lock, migration 0016 exact source reservation 구현 | 동일 `run_id` replace·live PostgreSQL concurrency test·TOCTOU snapshot은 잔여 | P1 진행 |
 | DEP-01 | Rocky install env·service EnvironmentFile·systemd read-only path에 `SIMDASH_IMPORT_ROOT` wiring과 외부 mount/read preflight를 반영 | 구현 완료, 실제 Rocky host release gate 검증 필요 | P0 진행 |
 | DEP-02 | Rocky 8 + nginx + systemd + PostgreSQL을 canonical target으로 ADR 확정하고 Windows를 compatibility profile로 명시 | 문서 결정 완료 | P0 완료 |
 | DEP-03 | Windows는 설치/개발 실행과 DB 이관 호환성은 있으나 HTTPS reverse proxy·service·TLS·rollback 운영 자동화 없음 | Windows one-command 운영 배포는 지원 범위에서 제외 | 범위 제외 |
@@ -125,10 +125,20 @@ URL은 route registry, 서버 계약은 `shared/api`, 공용 UI만 `shared/ui`�
 - extension/MIME/크기/magic/checksum/path 표를 코드와 일치시킨다.
 
 현재 P0 완료 범위는 manifest format과 경로 경계를 고정하는 데까지다.
-canonical `scan_folder`/Master Refresh와 legacy `ResultImportService`의
-validation, persistence, transaction, overwrite/idempotency 정책은 아직
-분리되어 있으며, 이를 하나의 ingestion service로 통합하는 작업은 P1-01의
-잔여 범위다.
+canonical Master Refresh와 `/folder-import/example`은
+`ResultIngestionCommand`와 `ResultIngestionUnitOfWork`를 통해 normalized payload,
+공통 validation, persistence, status sync를 하나의 single-connection transaction으로
+처리한다. malformed legacy parser output은 normalized contract에서 fail-closed한다.
+
+일반 수동 `SUMMARY_RESULT` JSON/CSV upload는 target-qualified `source_name`과
+content checksum을 사용해 공통 UoW로 이관되었다. 재시도는 `SKIPPED`하고 write
+transaction 안에서 권한을 재확인하며 `RESULT_IMPORTED` audit event를 함께
+기록한다. `Radioss` mesh CSV는 `result_locations` persistence가 canonical UoW에
+아직 포함되지 않아 direct-SQL 경로에 남아 있다.
+
+legacy `ResultImportService` persistence는 canonical schema에 없는
+`result_import_jobs` 테이블과 `analysis_runs` 확장 컬럼을 참조하므로 비운영
+compatibility 경로로 유지한다.
 
 완료조건:
 
@@ -171,20 +181,39 @@ validation, persistence, transaction, overwrite/idempotency 정책은 아직
 
 #### P1-01 canonical ingestion service
 
-- P0에서 고정한 중앙 manifest detector/loader를 두 importer가 공통으로
-  사용하되, 결과 validation·persistence·idempotency를 하나의 정책 경계로
-  통합한다.
-- discovery/preflight/parser/persistence/status sync를 application service로 분리한다.
-- 수동 upload, 폴더 import, master Refresh가 같은 validation과 repository를 사용한다.
+상태: 부분 완료. canonical Master Refresh, typed folder-import example, 일반
+manual `SUMMARY_RESULT` JSON/CSV의 공통 command/domain port/application
+orchestration/SQL UoW 이관은 완료했다. Radioss mesh `result_locations`와 legacy
+persistence 이관은 남아 있다.
+
+- P0에서 고정한 중앙 manifest detector/loader를 canonical importer와 legacy
+  adapter가 명시적으로 사용한다.
+- discovery/preflight/parser와 persistence/status sync를 command/UoW 경계로 분리했다.
+- typed folder import와 Master Refresh가 같은 validation·persistence UoW를 사용한다.
+- Radioss mesh `result_locations`를 canonical UoW result contract로 이관한다.
+- legacy `ResultImportService` persistence는 현행 schema에 맞는 run identity와
+  replace 정책을 정한 뒤 같은 UoW로 이관한다.
 - parser adapter만 결과 형식별로 교체한다.
 - 파일·행·포인트·manifest 개수 제한을 설정한다.
 
 #### P1-02 bundle fingerprint와 Run identity
 
+상태: fingerprint와 PostgreSQL duplicate reservation 기초 구현 완료, identity
+정책과 live concurrency 검증은 잔여.
+
 - manifest와 매핑 파일의 checksum/size를 canonical 정렬해 fingerprint를 만든다.
-- 동일 fingerprint는 skip, 변경 fingerprint는 새 Run 또는 명시적 replace로 처리한다.
+- 동일 fingerprint는 skip하고, 현재 다른 fingerprint는 새 Run으로 처리한다.
+- metadata와 job summary에 manifest checksum과 bundle fingerprint를 함께 보존한다.
+- PostgreSQL에서는 load case별 namespaced 64-bit transaction advisory lock으로
+  `run_no` 할당을 직렬화한다.
+- non-null exact `(source_type, source_name, source_checksum)`는 migration `0016`
+  `canonical_result_ingestion_sources` PK로 예약하고 실패 transaction에서 rollback한다.
 - `run_id`, `run_no`, overwrite policy를 계약에 추가한다.
 - 실패/재시도/부분 성공의 감사 이벤트를 표준화한다.
+- live PostgreSQL concurrent ingestion test를 추가한다. 현재는 SQL/migration
+  contract test만 있다.
+- 결과 producer의 임시 폴더 생성 후 atomic rename과 importer snapshot/rehash로
+  fingerprint 계산 바이트와 실제 parse·media 저장 바이트의 일치를 보장한다.
 
 #### P1-03 database-only media 마감
 
@@ -195,15 +224,24 @@ validation, persistence, transaction, overwrite/idempotency 정책은 아직
 
 완료조건:
 
-- 모든 import 경로가 같은 malformed input을 같은 코드로 거부
+- 공통 UoW를 사용하는 import 경로가 같은 malformed input을 같은 코드로 거부
 - 동일 bundle 반복 실행이 중복 Run을 만들지 않음
 - 신규 `media_assets.blob_id IS NULL` 0건
+
+모든 허용 media extension은 generated minimal `tmp_path` fixture로 정상 수락,
+MIME/extension mismatch 거부, corrupt signature 거부를 검증한다. 영구 canonical
+folder example은 JSON/CSV/SVG/glTF만 유지한다.
+
+현재 결과 수집 focused 검증은 collection 기준 71개 test case다. manifest 경계,
+fingerprint/mapping 변경, 공통 UoW rollback, manual SUMMARY_RESULT JSON/CSV,
+media fixture matrix, PostgreSQL reservation SQL/migration contract와 endpoint
+wiring을 포함하며 live PostgreSQL concurrent ingestion test는 포함하지 않는다.
 
 ### Phase 2 — 기능별 V2 구조 전환(P1)
 
 #### Backend 순서
 
-1. `result_ingestion`: Refresh·parser·media·status sync
+1. `result_ingestion`: Refresh·parser·media·status sync (공통 UoW 기반)
 2. `workbench`: 업무 유형·작업계획·배치 실행·결과 snapshot
 3. `access`: permission/project scope/audit transaction
 4. `reports`: report context·layout·template
@@ -321,6 +359,9 @@ validation, persistence, transaction, overwrite/idempotency 정책은 아직
 - 빈 DB→Alembic head와 기존 DB upgrade
 - app-role DDL 거부, connection budget
 - canonical 결과 예제 import와 재실행 skip
+- manual SUMMARY_RESULT JSON/CSV import와 재시도 skip, audit/auth transaction
+- 모든 허용 media extension fixture의 정상·MIME mismatch·corrupt signature 검증
+- PostgreSQL advisory lock·migration 0016 reservation contract 검증
 - 모든 신규 media blob 연결·checksum 검증
 - nginx config, TLS, forwarded header, SPA/API/assets/Range smoke
 - backup→빈 DB restore rehearsal
@@ -332,5 +373,6 @@ validation, persistence, transaction, overwrite/idempotency 정책은 아직
 2. GitHub Issues export를 받아 GH 추적 표를 확정한다.
 3. migration verifier와 이후 migration head 처리 방식을 고친다. (완료)
 4. 운영 target ADR과 `SIMDASH_IMPORT_ROOT` 배포 연결을 구현한다. (구현 완료, Rocky host release validation 남음)
-5. canonical ingestion service와 bundle fingerprint를 개발한다.
-6. result ingestion부터 V2 vertical slice 전환을 시작한다.
+5. Radioss mesh locations와 legacy persistence를 공통 UoW로 이관하고 run identity/replace 정책을 확정한다.
+6. live PostgreSQL concurrent ingestion test와 producer snapshot/rehash를 추가한다.
+7. result ingestion부터 V2 vertical slice 전환을 시작한다.

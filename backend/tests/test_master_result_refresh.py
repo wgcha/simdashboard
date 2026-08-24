@@ -88,6 +88,55 @@ def test_master_refresh_imports_typed_bundle_and_second_refresh_is_idempotent(tm
     with connect() as conn:
         assert conn.execute("SELECT count(*) FROM analysis_run_metadata WHERE source_type='MASTER_FOLDER_REFRESH'").fetchone()[0] == 1
         assert conn.execute("SELECT count(*) FROM folder_import_jobs WHERE source_folder='bundle-success/manifest.json'").fetchone()[0] == 2
+        metadata = conn.execute(
+            "SELECT source_checksum, metadata_json FROM analysis_run_metadata WHERE source_type='MASTER_FOLDER_REFRESH'"
+        ).fetchone()
+        assert metadata[0]
+        metadata_json = json.loads(metadata[1])
+        assert metadata_json["manifest_checksum"]
+        assert metadata_json["bundle_fingerprint"] == metadata[0]
+        skip_summary = conn.execute(
+            "SELECT summary_json FROM folder_import_jobs WHERE source_folder='bundle-success/manifest.json' AND status='SKIPPED'"
+        ).fetchone()[0]
+        assert json.loads(skip_summary)["bundle_fingerprint"] == metadata[0]
+
+
+def test_master_refresh_reimports_when_mapping_file_changes_with_same_manifest(tmp_path: Path):
+    bundle = _write_bundle(tmp_path, "bundle-content-change")
+
+    first = MasterResultRefreshService(tmp_path).refresh()
+    assert [(item.status, item.load_case_id) for item in first] == [("IMPORTED", LOAD_CASE_ID)]
+
+    # Keep manifest bytes unchanged while changing the referenced canonical file.
+    (bundle / "scalar-results.json").write_text(json.dumps([
+        {
+            "variable_key": "top_edge_max_stress",
+            "display_name": "상단 최대 응력",
+            "data_type": "FLOAT",
+            "value": 43.5,
+            "unit": "MPa",
+            "threshold": 75.0,
+            "result_group": "OPEN_CELL",
+        }
+    ]), encoding="utf-8")
+
+    second = MasterResultRefreshService(tmp_path).refresh()
+    assert [(item.status, item.load_case_id) for item in second] == [("IMPORTED", LOAD_CASE_ID)]
+    assert second[0].analysis_run_id != first[0].analysis_run_id
+
+    with connect() as conn:
+        metadata = conn.execute(
+            "SELECT source_checksum, metadata_json FROM analysis_run_metadata "
+            "WHERE source_type='MASTER_FOLDER_REFRESH' ORDER BY created_at"
+        ).fetchall()
+        assert len(metadata) == 2
+        first_metadata, second_metadata = [json.loads(row[1]) for row in metadata]
+        assert first_metadata["manifest_checksum"] == second_metadata["manifest_checksum"]
+        assert first_metadata["bundle_fingerprint"] != second_metadata["bundle_fingerprint"]
+        assert [row[0] for row in metadata] == [
+            first_metadata["bundle_fingerprint"],
+            second_metadata["bundle_fingerprint"],
+        ]
 
 
 def test_master_refresh_isolates_invalid_bundle_from_valid_bundle(tmp_path: Path):

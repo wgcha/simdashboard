@@ -130,7 +130,7 @@ pnpm run generate:api
   → 검토·버전 편집·PPTX 보고서
 ```
 
-마스터 폴더 Refresh는 서버가 설정한 `SIMDASH_IMPORT_ROOT`만 탐색하며 클라이언트가 임의 경로를 전달할 수 없습니다. 폴더·확장자·DB 저장 계약은 [`docs/storage-folder-and-file-contract.md`](docs/storage-folder-and-file-contract.md), 기능 흐름은 [`docs/work-type-request-results-and-master-refresh.md`](docs/work-type-request-results-and-master-refresh.md)를 따릅니다. 실제 import 예제는 [`examples/master-results/`](examples/master-results/)에 있습니다.
+마스터 폴더 Refresh는 서버가 설정한 `SIMDASH_IMPORT_ROOT`만 탐색하며 클라이언트가 임의 경로를 전달할 수 없습니다. canonical `mappings` manifest와 normalized payload는 공통 `ResultIngestionUnitOfWork`의 single-connection transaction으로 Run·결과·media blob을 함께 저장합니다. 일반 수동 `SUMMARY_RESULT` JSON/CSV upload도 target-qualified source와 content checksum을 사용해 같은 UoW로 저장하고, 동일 재시도는 `SKIPPED`되며 write transaction 안에서 권한 재확인과 audit를 수행합니다. `Radioss` mesh CSV는 `result_locations` canonical contract 편입 전까지 direct-SQL compatibility 경로입니다. 구형 `result_files` 기반 `ResultImportService` persistence는 현재 schema에 없는 legacy table/column을 참조하므로 비운영 compatibility 경로입니다. 폴더·확장자·DB 저장 계약은 [`docs/storage-folder-and-file-contract.md`](docs/storage-folder-and-file-contract.md), 기능 흐름은 [`docs/work-type-request-results-and-master-refresh.md`](docs/work-type-request-results-and-master-refresh.md)를 따릅니다. 실제 import 예제는 [`examples/master-results/`](examples/master-results/)에 있습니다.
 
 ## 배포
 
