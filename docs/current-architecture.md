@@ -256,6 +256,34 @@ legacy 경로는 `name:<source_name>` slot에 `LEGACY_APPEND` revision을 쌓는
 `SOURCE_RUN_CONFLICT`를 반환하며, Master Refresh는 producer `REPLACE`를 fail-closed하고
 형제 manifest를 계속 처리한다.
 
+### 5.3 결과 등록 이력·상태·재시도
+
+`folder_import_jobs`는 Refresh가 생성하는 결과 수집 이력의 정본이다. 성공뿐 아니라
+검증된 target의 실패도 source type/checksum, producer `source_run_id`, conflict policy,
+reason code와 완료 시각을 함께 남긴다. 이력 조회는 V2 source-version ledger를
+`analysis_run_id`로 read-only join해 source revision과 교체된 run을 운영자에게
+보여준다.
+
+- `GET /api/load-cases/{load_case_id}/result-imports?status=&limit=25&offset=0`은 해당
+  load case의 `RESULT_IMPORT` resource scope를 요구한다. 응답은
+  `{items,total,counts}`이며, item에는 상태·source 정보·policy·`operation`·reason·기존/
+  교체 run·source revision·생성/완료 시각·`retryable`이 포함된다. `counts`는 상태
+  필터와 무관하게 해당 load case 전체 이력의 상태별 수다.
+- `POST /api/result-imports/{job_id}/retry`는 전역 `SYSTEM_CATALOG_MANAGE`와 그 job의
+  load case에 대한 `RESULT_IMPORT`을 모두 요구한다. body나 client path를 받지 않고,
+  DB에 남은 Master manifest 상대경로만 다시 사용한다. `FAILED`/`REJECTED` Master job만
+  대상이며 그 밖의 경우 고정 HTTP 409 `RESULT_IMPORT_NOT_RETRYABLE`을 반환한다.
+  원 job의 project/request/load case target에 고정해 manifest의 target drift는
+  `RESULT_IMPORT_RETRY_TARGET_MISMATCH`로 실패시킨다. missing manifest나 snapshot 초기
+  실패도 원 load case에 새 `FAILED` attempt를 남기며 원 job은 변경하지 않는다.
+  재시도와 전체 Refresh는 **동일 worker process 안에서만** process-local refresh lock을
+  공유한다. multi-worker 간 lock/quota는 아직 운영 release gate다.
+- 프런트의 `features/data/ResultImportHistory.tsx`는 DataWorkspace의 선택 load case에
+  이력, 상태 필터, 새로고침, loading/error/empty 상태를 표시한다. 재시도 버튼은
+  서버 `retryable` 값과 전역 권한이 모두 충족될 때만 보이며, 결과 뒤 이력을 다시
+  조회한다. 현재 UI는 필터/새로고침을 포함한 최근 25건만 표시하며 페이지 이동은
+  다음 개선 범위다.
+
 `backend/tests/test_postgres_result_ingestion_concurrency.py` 등 opt-in 검증은
 `ANALYSIS_TEST_POSTGRES=1`, `ANALYSIS_TEST_POSTGRES_DATABASE`와 실제
 `current_database()` 일치를 요구한다. 2026-08-25에는 loopback 55433의 disposable
@@ -267,7 +295,7 @@ app-role DDL 거부, pool budget, reference seed와 동시성 test **2 passed**�
 
 실제 ID 계층·JSON·CSV·SVG·glTF 예제는 `examples/master-results/`에 있으며 backend 통합 테스트가 이를 직접 import한다.
 
-### 5.3 대시보드와 보고서
+### 5.4 대시보드와 보고서
 
 - dashboard definition과 version은 서버에 저장한다.
 - 프로젝트/의뢰/하중 경우 context와 권한을 서버가 다시 검증한다.
@@ -349,6 +377,15 @@ DATABASE_URL='postgresql+psycopg://<test_app_role>:<test_password>@<test_host>:5
 `DATABASE_URL`은 명령에서 명시한 전용 test DB여야 하며 `.env`의 현재
 `simulation_dashboard` 연결은 이 test에 사용하지 않는다.
 
+import history/status/retry slice는 focused backend 7건과 연계 P1 master
+Refresh/atomicity/identity 24건, frontend architecture/build/api, Playwright 1건을
+통과했다. full backend는 `479 passed, 5 skipped in 352.00s`를 통과했다.
+PostgreSQL 18.6 disposable `127.0.0.1:55434`의
+`simulation_dashboard_test_history`에서 blank Alembic head `0017`, app
+privilege/DDL denial, history list/filter/pagination/counts, V2 revision join, GET,
+missing retry `FAILED` append, target drift mismatch/no foreign run도 PASS했고
+cluster/port를 정리했다.
+
 Architecture ceiling은 목표 수치가 아니라 부채가 늘지 않게 하는 상한이다. 파일을 나누었다는 이유만으로 경계가 개선되었다고 보지 않는다.
 
 ## 9. 현재 구조에서 지켜야 할 규칙
@@ -375,9 +412,10 @@ Architecture ceiling은 목표 수치가 아니라 부채가 늘지 않게 하�
 - 외부 NAS/NFS/SMB `SIMDASH_IMPORT_ROOT`의 부팅 순서, mount context, 용량과
   재처리 운영 절차는 각 사내 인프라 환경에서 승인해야 한다.
 - Master Refresh는 importer private snapshot/rehash와 parser workload limits로
-  fingerprint·parse·media 저장 bytes를 고정한다. 다음 잔여 release gate는 import
-  history/status/retry UI이며, 그 뒤 producer atomic publish/readiness, snapshot temp
-  mount quota와 multi-worker 동시 refresh budget이다. native Windows handle
-  adapter/target wheel offline smoke도 운영 profile release gate로 남아 있다.
+  fingerprint·parse·media 저장 bytes를 고정한다. import history/status/retry는 구현 및
+  focused·full regression·PG history query 검증을 마쳤다. 다음 개발은 producer atomic
+  publish/readiness, snapshot temp mount quota와 multi-worker 동시 refresh lock/budget이다.
+  native Windows handle adapter/target wheel offline smoke도 운영 profile release gate로
+  남아 있다.
 
 우선순위와 완료 기준은 [`program-consolidation-and-development-plan.md`](program-consolidation-and-development-plan.md)에 정리한다.

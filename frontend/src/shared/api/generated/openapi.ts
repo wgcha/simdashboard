@@ -899,6 +899,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/load-cases/{load_case_id}/result-imports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Result Import History
+         * @description List every import attempt visible to a load-case result importer.
+         */
+        get: operations["list_result_import_history_api_load_cases__load_case_id__result_imports_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/result-imports/{job_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry Result Import
+         * @description Retry one eligible master-folder manifest without accepting a client path.
+         */
+        post: operations["retry_result_import_api_result_imports__job_id__retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/health": {
         parameters: {
             query?: never;
@@ -2737,6 +2777,61 @@ export interface components {
              * @default true
              */
             is_active: boolean;
+        };
+        /**
+         * ResultImportHistoryItem
+         * @description One persisted import attempt, including no-op and rejected attempts.
+         */
+        ResultImportHistoryItem: {
+            /** Id */
+            id: string;
+            /** Load Case Id */
+            load_case_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "RUNNING" | "COMPLETED" | "SKIPPED" | "REJECTED" | "FAILED";
+            /** Source Type */
+            source_type?: string | null;
+            /** Source Folder */
+            source_folder: string;
+            /** Source Checksum */
+            source_checksum?: string | null;
+            /** Source Run Id */
+            source_run_id?: string | null;
+            /** Conflict Policy */
+            conflict_policy?: string | null;
+            /** Outcome Reason */
+            outcome_reason?: string | null;
+            /** Operation */
+            operation?: ("CREATED" | "NOOP" | "REPLACED" | "REJECTED") | null;
+            /** Analysis Run Id */
+            analysis_run_id?: string | null;
+            /** Replaced Analysis Run Id */
+            replaced_analysis_run_id?: string | null;
+            /** Source Revision */
+            source_revision?: number | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Completed At */
+            completed_at?: string | null;
+            /** Retryable */
+            retryable: boolean;
+        };
+        /** ResultImportHistoryResponse */
+        ResultImportHistoryResponse: {
+            /** Items */
+            items: components["schemas"]["ResultImportHistoryItem"][];
+            /** Total */
+            total: number;
+            /** Counts */
+            counts: {
+                [key: string]: number;
+            };
         };
         /** ResultImportPayload */
         ResultImportPayload: {
@@ -5208,6 +5303,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MasterResultRefreshResponse"];
+                };
+            };
+        };
+    };
+    list_result_import_history_api_load_cases__load_case_id__result_imports_get: {
+        parameters: {
+            query?: {
+                status?: ("RUNNING" | "COMPLETED" | "SKIPPED" | "REJECTED" | "FAILED") | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                load_case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResultImportHistoryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retry_result_import_api_result_imports__job_id__retry_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MasterResultRefreshItem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

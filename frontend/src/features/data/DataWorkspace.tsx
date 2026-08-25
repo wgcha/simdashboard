@@ -2,8 +2,8 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { AlertTriangle, Check, ChevronDown, ClipboardPlus, Database, Download, LayoutDashboard, Play, Plus, Upload } from 'lucide-react'
 import { api } from '../../api'
 import type { AnalysisRequest, LoadCase, Project } from '../../types'
-
-export function DataWorkspace({ canCreateProject, projects, initialProjectId, initialRequestId, onDataChanged, onOpenAnalysis, onOpenIntake }: { canCreateProject: boolean; projects: Project[]; initialProjectId: string; initialRequestId?: string; onDataChanged: () => Promise<void>; onOpenAnalysis: (projectId: string, requestId: string, loadCaseId: string) => Promise<void>; onOpenIntake: () => void }) {
+import { ResultImportHistory } from './ResultImportHistory'
+export function DataWorkspace({ canCreateProject, canRetryImports, projects, initialProjectId, initialRequestId, onDataChanged, onOpenAnalysis, onOpenIntake }: { canCreateProject: boolean; canRetryImports: boolean; projects: Project[]; initialProjectId: string; initialRequestId?: string; onDataChanged: () => Promise<void>; onOpenAnalysis: (projectId: string, requestId: string, loadCaseId: string) => Promise<void>; onOpenIntake: () => void }) {
   const [managedProjects, setManagedProjects] = useState(projects)
   const [projectId, setProjectId] = useState(initialProjectId || projects[0]?.id || '')
   const [requests, setRequests] = useState<AnalysisRequest[]>([])
@@ -19,12 +19,11 @@ export function DataWorkspace({ canCreateProject, projects, initialProjectId, in
   const [resultAuthor, setResultAuthor] = useState('해석 담당자')
   const [importPreview, setImportPreview] = useState<Awaited<ReturnType<typeof api.importResults>> | null>(null)
   const [imported, setImported] = useState(false)
-
+  const [historyRefreshToken, setHistoryRefreshToken] = useState(0)
   useEffect(() => {
     setManagedProjects(projects)
     if (!projectId && projects[0]) setProjectId(initialProjectId || projects[0].id)
   }, [projects, initialProjectId, projectId])
-
   useEffect(() => {
     if (!projectId) return
     api.requests(projectId).then((items) => {
@@ -32,7 +31,6 @@ export function DataWorkspace({ canCreateProject, projects, initialProjectId, in
       setRequestId((current) => items.some((item) => item.id === initialRequestId) ? initialRequestId || '' : items.some((item) => item.id === current) ? current : items[0]?.id || '')
     }).catch((reason) => setFormError(reason instanceof Error ? reason.message : '의뢰 목록을 불러오지 못했습니다.'))
   }, [initialRequestId, projectId])
-
   useEffect(() => {
     if (!requestId) { setLoadCases([]); return }
     api.loadCases(requestId).then((items) => {
@@ -41,7 +39,6 @@ export function DataWorkspace({ canCreateProject, projects, initialProjectId, in
       setResultFile(null); setImportPreview(null); setImported(false)
     }).catch((reason) => setFormError(reason instanceof Error ? reason.message : '하중 경우 목록을 불러오지 못했습니다.'))
   }, [requestId])
-
   const complete = async (label: string, action: () => Promise<void>) => {
     setBusy(true); setFormError(''); setMessage('')
     try {
@@ -110,6 +107,7 @@ export function DataWorkspace({ canCreateProject, projects, initialProjectId, in
     try {
       const result = await api.importTypedFolderExample(loadCaseId)
       setImported(true)
+      setHistoryRefreshToken((value) => value + 1)
       setMessage(`예제 폴더 스키마(${result.schema_id})를 적용해 실수·정수·텍스트 ${result.summary.scalar_count}개, 커브 ${result.summary.curve_count}개, 미디어 ${result.summary.media_count}개를 Run #${result.run_no}로 등록했습니다.`)
       await onDataChanged()
     } catch (reason) { setFormError(reason instanceof Error ? reason.message : '예제 폴더를 등록하지 못했습니다.') }
@@ -125,7 +123,7 @@ export function DataWorkspace({ canCreateProject, projects, initialProjectId, in
       setMessage(result.status === 'SKIPPED' ? '동일한 결과 파일이 이미 등록되어 있습니다. 기존 결과를 표시합니다.' : `Run #${result.run_no} 결과를 등록했습니다. 결과 검토 단계가 시작되었습니다.`)
       await onDataChanged()
     } catch (reason) { setFormError(reason instanceof Error ? reason.message : '해석 결과 등록에 실패했습니다.') }
-    finally { setBusy(false) }
+    finally { setHistoryRefreshToken((value) => value + 1); setBusy(false) }
   }
 
   return <section className="data-workspace">
@@ -185,5 +183,6 @@ export function DataWorkspace({ canCreateProject, projects, initialProjectId, in
       </div>
       <footer><div><strong>판정 규칙</strong><span>Open Cell 응력 및 Chassis Rear 영구변형 모두 값이 기준 이상이면 FAIL</span></div>{imported ? <button className="open-result-button" onClick={() => void onOpenAnalysis(projectId, requestId, loadCaseId)}><LayoutDashboard /> 분석 대시보드에서 확인</button> : <button className="data-submit import-button" onClick={() => void submitResultImport()} disabled={!importPreview || !resultFile || busy}><Upload /> 검증된 결과 등록</button>}</footer>
     </article>
+    <ResultImportHistory loadCaseId={loadCaseId} canRetryImports={canRetryImports} refreshToken={historyRefreshToken} />
   </section>
 }

@@ -194,12 +194,37 @@ mapping 파일이 변경되면 fingerprint가 달라지므로 새 Run을 생성�
 checksum은 fingerprint와 별도로 metadata/job summary에 보존한다.
 
 PostgreSQL에서는 load case별 namespaced 64-bit transaction advisory lock으로
-`run_no` 할당을 직렬화하고, non-null exact
-`(source_type, source_name, source_checksum)`를 migration `0016`의
-`canonical_result_ingestion_sources` PK로 예약한다. 실패 transaction은 claim도
-rollback한다. opt-in live test는 `backend/tests/test_postgres_result_ingestion_concurrency.py`에 있다. 두 독립 연결로 동일 source는 `IMPORTED`/`SKIPPED`, 서로 다른 source는 고유 `run_no`를 검증한다. `ANALYSIS_TEST_POSTGRES=1`과 일치하는 전용 migrated test DB가 필요하며, 현재 작업 환경에서는 전용 DB가 없어 실행하지 않았다.
+`run_no` 할당을 직렬화한다. migration `0017_run_identity_v2`의
+`canonical_result_ingestion_source_versions`가 scoped source revision과 server run,
+immutable supersede 관계를 보존하며, 이전 `0016` 예약은 historical backfill 입력이다.
+opt-in live 검증에는 `ANALYSIS_TEST_POSTGRES=1`과 일치하는 전용 migrated test DB가
+필요하다.
 
-### 6.3 결과 화면 갱신
+### 6.3 이력 조회와 제한 재시도
+
+선택한 load case의 import operator는
+`GET /api/load-cases/{load_case_id}/result-imports?status=&limit=25&offset=0`으로
+`{items,total,counts}`를 조회한다. 이 endpoint는 해당 load case의 `RESULT_IMPORT`
+resource scope를 요구한다. item은 status, source/policy, `operation`, reason,
+analysis run·replaced run, source revision, 생성/완료 시각과 `retryable`을 포함한다.
+
+`POST /api/result-imports/{job_id}/retry`는 전역 `SYSTEM_CATALOG_MANAGE`와 해당
+load case의 `RESULT_IMPORT`를 모두 요구한다. body와 client-provided path는 허용하지
+않으며 DB에 저장된 Master manifest 상대경로를 검증해 사용한다. `FAILED`/`REJECTED`
+Master job만 재시도할 수 있고, 그 외 대상은 고정 HTTP 409
+`RESULT_IMPORT_NOT_RETRYABLE`이다. 재시도는 원 job의 project/request/load case target에
+고정한다. manifest target drift는 `RESULT_IMPORT_RETRY_TARGET_MISMATCH`로 실패하며,
+missing manifest·snapshot 초기 실패도 원 load case의 새 `FAILED` attempt로 기록하고
+원 job은 변경하지 않는다. 재시도와 전체 Refresh는 같은 worker process 안의
+process-local refresh lock을 공유한다. multi-worker lock/quota/budget은 다음 단계다.
+
+이력/재시도 slice는 full backend `479 passed, 5 skipped in 352.00s`와 PostgreSQL
+18.6 disposable `127.0.0.1:55434`의 `simulation_dashboard_test_history` live gate를
+통과했다. 이 gate는 blank Alembic head `0017`, app privilege/DDL denial, history
+list/filter/pagination/counts, V2 revision join, GET, missing retry `FAILED` append,
+target drift mismatch/no foreign run을 확인한 뒤 cluster/port를 정리했다.
+
+### 6.4 결과 화면 갱신
 
 상세 분석 화면은 저장된 snapshot을 유지하고 result-layout binding만 다시 조회한다.
 
@@ -232,6 +257,9 @@ schemas/result_folder_refresh.py
 services/master_result_refresh.py
   └─ root 탐색, fingerprint·command 생성, manifest별 실패 격리
 
+adapters/persistence/result_import_history.py
+  └─ `folder_import_jobs` read model과 V2 source revision enrichment
+
 application/results/commands.py
   └─ ResultIngestionCommand와 공통 ingestion orchestration
 
@@ -242,7 +270,7 @@ adapters/persistence/result_ingestion.py
   └─ DuckDB/PostgreSQL single-connection SQL UoW
 
 routers/result_folder_refresh.py
-  └─ 권한, 감사, HTTP 변환
+  └─ Refresh·이력 조회·재시도 권한, 감사, HTTP 변환
 ```
 
 파서, 저장소, 상태 동기화 코드는 Refresh 서비스에 복제하지 않고 공통 UoW와
@@ -268,6 +296,9 @@ features/workbench/RequestResultWidgetConfiguration.tsx
 
 features/workbench/SimulationWorkbench.tsx
   └─ 작업 유형 작성 상태와 저장 오케스트레이션
+
+features/data/ResultImportHistory.tsx
+  └─ 선택 load case의 최근 25건 이력, 상태 필터·새로고침과 조건부 재시도 UI
 ```
 
 프로젝트 override용 `ResultProfileConfiguration`은 별도 기능으로 유지한다.
@@ -277,6 +308,8 @@ features/workbench/SimulationWorkbench.tsx
 - 시스템 작업 유형 작성: `system.catalog.manage`
 - 프로젝트 override: `dashboard.edit`
 - 전체 마스터 root Refresh: 전역 관리자
+- import 이력 조회: 해당 load case `result.import`
+- import 재시도: 전역 `system.catalog.manage` + 해당 load case `result.import`
 - typed folder example 적재: `result.import`를 요청 경계와 write UoW transaction 안에서 재확인
 - manual SUMMARY_RESULT JSON/CSV: 동일 `result.import` 권한을 write transaction 안에서 재확인
 - 개별 결과 데이터 조회: 기존 `project.data.view`
@@ -292,7 +325,8 @@ scanned/imported/skipped/failed 집계만 기록한다. manifest별 상대 경�
 manifest checksum·bundle fingerprint는 `folder_import_jobs` 요약과
 `analysis_run_metadata`에 보존한다. manual SUMMARY_RESULT 성공은
 `RESULT_IMPORTED` audit event를 결과 write와 같은 transaction에 기록하며,
-재시도 `SKIPPED`에는 새 Run audit를 만들지 않는다.
+재시도 `SKIPPED`에는 새 Run audit를 만들지 않는다. 개별 재시도 감사 이벤트에는
+job/load case ID와 outcome만 기록하며 client 경로나 파일 내용은 기록하지 않는다.
 
 ## 9. 호환성과 마이그레이션
 
@@ -319,6 +353,10 @@ manifest checksum·bundle fingerprint는 `folder_import_jobs` 요약과
 - 정상 manifest와 오류 manifest가 함께 있을 때 정상 건은 성공한다.
 - root 밖 파일과 임의 절대경로를 처리하지 않는다.
 - 적재 후 기존 상세 분석 API에서 새 Run과 결과를 조회할 수 있다.
+- 선택 load case의 이력 API가 상태 필터·페이지네이션과 상태별 count를 반환한다.
+- 서버가 `retryable`로 판정한 실패/거부 Master job만 경로 입력 없이 재시도한다.
+- 재시도는 원 job target과 manifest target이 일치할 때만 실행하고, 실패 재시도도
+  새 이력 attempt로 남긴다.
 
 ### Frontend
 
@@ -328,3 +366,5 @@ manifest checksum·bundle fingerprint는 `folder_import_jobs` 요약과
 - 의뢰 접수 미리보기와 상세 분석 snapshot 렌더링은 유지된다.
 - 모든 상세 분석에서 보고서·자연어 개선·대시보드 편집 진입점을 제공한다.
 - 사용자 편집본은 snapshot과 분리된 custom dashboard 버전으로 저장한다.
+- DataWorkspace가 선택 load case의 결과 등록 이력을 표시하고, 권한이 있는 경우에만
+  재시도 버튼을 제공한다. 현재 UI 범위는 필터·새로고침을 포함한 최근 25건이다.

@@ -107,6 +107,29 @@ Project
 현행 runtime 결과 쓰기는 공통 UoW import API로만 수행한다. 일반
 `SUMMARY_RESULT` upload는 이 legacy 설명에 포함되지 않는다.
 
+### 3.2 현재 import 이력 조회와 제한 재시도 계약
+
+현재 runtime의 수집 이력은 `folder_import_jobs`에 저장한다. 이력 item은 상태와
+source 정보뿐 아니라 conflict policy, outcome reason, 결과/교체 run, V2 ledger의
+source revision, 생성·완료 시각과 재시도 가능 여부를 보존·표시한다. 검증된 manifest를
+읽은 뒤 실패한 경우에도 source checksum, producer run ID, policy, reason과 완료
+시각을 가능한 범위에서 기록한다.
+
+- `GET /api/load-cases/{load_case_id}/result-imports?status=&limit=25&offset=0`은
+  `RESULT_IMPORT` resource scope로 제한한다. `{items,total,counts}`를 반환하며
+  `status`는 `RUNNING`, `COMPLETED`, `SKIPPED`, `REJECTED`, `FAILED` 중 하나다.
+- `POST /api/result-imports/{job_id}/retry`는 `SYSTEM_CATALOG_MANAGE`와 해당 job의
+  load case `RESULT_IMPORT`를 모두 요구한다. client path/body를 받지 않고 DB에
+  저장된 Master manifest 상대경로만 사용한다. 유효 대상은 `FAILED`/`REJECTED`
+  Master job뿐이며, 그 외에는 HTTP 409 `RESULT_IMPORT_NOT_RETRYABLE`이다.
+- 재시도는 원 job의 project/request/load case target을 사용한다. 변경된 manifest가
+  다른 target을 가리키면 `RESULT_IMPORT_RETRY_TARGET_MISMATCH`로 거부한다. missing
+  manifest나 snapshot 초기 실패도 원 load case의 새 `FAILED` attempt로 남기며,
+  과거 job은 불변이다.
+- 재시도와 전체 Master Refresh는 같은 worker process의 process-local refresh lock을
+  공유한다. 따라서 한 worker 안에서는 동시에 import root를 처리하지 않지만,
+  multi-worker lock·snapshot quota·budget은 다음 운영 단계다.
+
 동일한 하중 조건을 여러 번 재실행하면 `AnalysisRun`을 분리한다.
 
 ```text
@@ -798,6 +821,14 @@ cd backend
 schema와 맞지 않던 legacy persistence는 제거됐다. producer atomic publish/readiness,
 snapshot 임시 저장소 quota와 multi-worker budget은 아직 운영 release gate다.
 
+import history/status/retry slice는 focused backend 7건과 연계 P1 master
+Refresh/atomicity/identity 24건, frontend architecture/build/api, Playwright 1건을
+통과했다. full backend는 `479 passed, 5 skipped in 352.00s`를 통과했다. PostgreSQL
+18.6 disposable `127.0.0.1:55434`의 `simulation_dashboard_test_history`에서 blank
+Alembic head `0017`, app privilege/DDL denial, history list/filter/pagination/counts,
+V2 revision join, GET, missing retry `FAILED` append, target drift mismatch/no foreign
+run도 PASS했고 cluster/port를 정리했다.
+
 ---
 
 ## 19. 구현 단계
@@ -824,7 +855,7 @@ snapshot 임시 저장소 quota와 multi-worker budget은 아직 운영 release 
 - 단일 import
 - Run Identity V2 결과(`operation`, `reason_code`, 기존/교체 run, revision) 반환
 - 수동 conflict의 commit 후 HTTP 409/audit
-- **다음 개발:** import history/status/retry API와 UI
+- import history/status/retry API와 UI 구현, target-fixed retry와 새 실패 attempt 기록
 
 ### 단계 4. 프런트엔드
 
@@ -832,7 +863,7 @@ snapshot 임시 저장소 quota와 multi-worker budget은 아직 운영 release 
 - 스캔 및 수집
 - 상태·오류·판정
 - 대시보드 연결
-- **다음 개발:** import history/status/retry UI
+- 선택 load case의 최근 25건 이력, 상태 필터·새로고침과 조건부 재시도 UI
 
 ### 단계 5. 운영 안정화
 
@@ -840,8 +871,8 @@ snapshot 임시 저장소 quota와 multi-worker budget은 아직 운영 release 
 - 감사 로그
 - PostgreSQL repository
 - 자동 watcher
-- producer atomic publish/readiness
-- snapshot temp quota와 multi-worker refresh budget
+- **다음 개발:** producer atomic publish/readiness
+- 그 다음 snapshot temp quota와 multi-worker refresh lock/budget
 
 ---
 

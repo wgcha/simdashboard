@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -9,6 +10,7 @@ from pydantic import BaseModel, Field
 
 RefreshItemStatus = Literal["IMPORTED", "SKIPPED", "FAILED"]
 RefreshOperation = Literal["CREATED", "NOOP", "REPLACED", "REJECTED"]
+ImportJobStatus = Literal["RUNNING", "COMPLETED", "SKIPPED", "REJECTED", "FAILED"]
 
 
 class MasterResultRefreshItem(BaseModel):
@@ -34,3 +36,30 @@ class MasterResultRefreshResponse(BaseModel):
     skipped_count: int
     failed_count: int
     items: list[MasterResultRefreshItem]
+
+
+class ResultImportHistoryItem(BaseModel):
+    """One persisted import attempt, including no-op and rejected attempts."""
+
+    id: str
+    load_case_id: str
+    status: ImportJobStatus
+    source_type: str | None = None
+    source_folder: str
+    source_checksum: str | None = None
+    source_run_id: str | None = None
+    conflict_policy: str | None = None
+    outcome_reason: str | None = None
+    operation: RefreshOperation | None = None
+    analysis_run_id: str | None = None
+    replaced_analysis_run_id: str | None = None
+    source_revision: int | None = None
+    created_at: datetime
+    completed_at: datetime | None = None
+    retryable: bool
+
+
+class ResultImportHistoryResponse(BaseModel):
+    items: list[ResultImportHistoryItem]
+    total: int
+    counts: dict[str, int]
