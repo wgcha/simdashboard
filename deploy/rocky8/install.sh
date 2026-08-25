@@ -52,6 +52,11 @@ RUNTIME_DIRECTORY=/var/lib/simdashboard
 # has been read. Keep an explicit value in install.env.example for operators.
 SIMDASH_IMPORT_ROOT=
 SIMDASH_IMPORT_READINESS_POLICY=required
+SIMDASH_IMPORT_SNAPSHOT_ROOT=/var/lib/simdashboard/snapshots
+SIMDASH_IMPORT_SNAPSHOT_RESERVE_BYTES=1073741824
+SIMDASH_IMPORT_SNAPSHOT_MIN_FREE_BYTES=536870912
+SIMDASH_IMPORT_SNAPSHOT_STALE_SECONDS=86400
+SIMDASH_IMPORT_REFRESH_MAX_CONCURRENT=1
 ENVIRONMENT_FILE=/etc/simdashboard/simdashboard.env
 SERVICE_USER=simdashboard
 SERVICE_GROUP=simdashboard
@@ -96,6 +101,7 @@ INSTALL_ROOT="${INSTALL_ROOT%/}"
 RUNTIME_DIRECTORY="${RUNTIME_DIRECTORY%/}"
 SIMDASH_IMPORT_ROOT="${SIMDASH_IMPORT_ROOT:-${RUNTIME_DIRECTORY}/import}"
 SIMDASH_IMPORT_ROOT="${SIMDASH_IMPORT_ROOT%/}"
+SIMDASH_IMPORT_SNAPSHOT_ROOT="${SIMDASH_IMPORT_SNAPSHOT_ROOT%/}"
 
 # A Rocky service must never silently fall back to legacy discovery.  The
 # producer is responsible for creating the sibling staging directory, marker,
@@ -122,7 +128,7 @@ safe_name='^[A-Za-z_][A-Za-z0-9_-]*$'
 [[ "${SIM_DASH_APP_ROLE}" =~ ${safe_name} ]] || die 'SIM_DASH_APP_ROLE contains unsupported characters.'
 [[ "${SERVER_NAME:-}" =~ ^[A-Za-z0-9.-]+$ ]] || die 'SERVER_NAME must be a DNS host name.'
 
-for path_name in INSTALL_ROOT RUNTIME_DIRECTORY SIMDASH_IMPORT_ROOT ENVIRONMENT_FILE TLS_CERTIFICATE TLS_CERTIFICATE_KEY; do
+for path_name in INSTALL_ROOT RUNTIME_DIRECTORY SIMDASH_IMPORT_ROOT SIMDASH_IMPORT_SNAPSHOT_ROOT ENVIRONMENT_FILE TLS_CERTIFICATE TLS_CERTIFICATE_KEY; do
   path_value="${!path_name:-}"
   [[ "${path_value}" == /* && "${path_value}" != / ]] || die "${path_name} must be an absolute, non-root path."
   [[ "${path_value}" != *$'\n'* && "${path_value}" != *$'\r'* ]] || die "${path_name} contains a newline."
@@ -131,6 +137,16 @@ done
   die 'SIMDASH_IMPORT_ROOT must be outside INSTALL_ROOT so imports survive immutable release changes.'
 [[ "${SIMDASH_IMPORT_ROOT}" != *[[:space:]]* ]] || \
   die 'SIMDASH_IMPORT_ROOT cannot contain whitespace because it is rendered into systemd paths.'
+[[ "${SIMDASH_IMPORT_SNAPSHOT_ROOT}" != *[[:space:]]* ]] || \
+  die 'SIMDASH_IMPORT_SNAPSHOT_ROOT cannot contain whitespace because it is rendered into the service environment.'
+[[ "${SIMDASH_IMPORT_SNAPSHOT_ROOT}" != "${INSTALL_ROOT}" && "${SIMDASH_IMPORT_SNAPSHOT_ROOT}" != "${INSTALL_ROOT}/"* ]] || \
+  die 'SIMDASH_IMPORT_SNAPSHOT_ROOT must be outside INSTALL_ROOT so private workspaces never enter immutable releases.'
+[[ "${SIMDASH_IMPORT_SNAPSHOT_ROOT}" == "${RUNTIME_DIRECTORY}/"* ]] || \
+  die 'SIMDASH_IMPORT_SNAPSHOT_ROOT must be inside RUNTIME_DIRECTORY so systemd grants it writable runtime access.'
+[[ "${SIMDASH_IMPORT_SNAPSHOT_ROOT}" != "${SIMDASH_IMPORT_ROOT}" && \
+  "${SIMDASH_IMPORT_SNAPSHOT_ROOT}" != "${SIMDASH_IMPORT_ROOT}/"* && \
+  "${SIMDASH_IMPORT_ROOT}" != "${SIMDASH_IMPORT_SNAPSHOT_ROOT}/"* ]] || \
+  die 'SIMDASH_IMPORT_SNAPSHOT_ROOT must not overlap SIMDASH_IMPORT_ROOT.'
 [[ -r "${TLS_CERTIFICATE}" ]] || die "TLS certificate is not readable: ${TLS_CERTIFICATE}"
 [[ -r "${TLS_CERTIFICATE_KEY}" ]] || die "TLS private key is not readable: ${TLS_CERTIFICATE_KEY}"
 
@@ -149,6 +165,21 @@ verify_import_root_access() {
 
 [[ "${API_PORT}" =~ ^[0-9]+$ ]] && (( API_PORT >= 1024 && API_PORT <= 65535 )) || die 'API_PORT must be 1024-65535.'
 [[ "${UVICORN_WORKERS}" =~ ^[1-9][0-9]*$ ]] || die 'UVICORN_WORKERS must be a positive integer.'
+[[ "${SIMDASH_IMPORT_SNAPSHOT_RESERVE_BYTES}" =~ ^[1-9][0-9]*$ ]] && \
+  (( SIMDASH_IMPORT_SNAPSHOT_RESERVE_BYTES >= 1073741824 )) && \
+  (( SIMDASH_IMPORT_SNAPSHOT_RESERVE_BYTES <= 17179869184 )) || \
+  die 'SIMDASH_IMPORT_SNAPSHOT_RESERVE_BYTES must be 1073741824-17179869184 bytes.'
+[[ "${SIMDASH_IMPORT_SNAPSHOT_MIN_FREE_BYTES}" =~ ^[0-9]+$ ]] && \
+  (( SIMDASH_IMPORT_SNAPSHOT_MIN_FREE_BYTES <= 17179869184 )) || \
+  die 'SIMDASH_IMPORT_SNAPSHOT_MIN_FREE_BYTES must be 0-17179869184 bytes.'
+[[ "${SIMDASH_IMPORT_SNAPSHOT_STALE_SECONDS}" =~ ^[1-9][0-9]*$ ]] && \
+  (( SIMDASH_IMPORT_SNAPSHOT_STALE_SECONDS >= 60 )) && \
+  (( SIMDASH_IMPORT_SNAPSHOT_STALE_SECONDS <= 7776000 )) || \
+  die 'SIMDASH_IMPORT_SNAPSHOT_STALE_SECONDS must be 60-7776000 seconds.'
+[[ "${SIMDASH_IMPORT_REFRESH_MAX_CONCURRENT}" =~ ^[1-9][0-9]*$ ]] || \
+  die 'SIMDASH_IMPORT_REFRESH_MAX_CONCURRENT must be a positive integer.'
+[[ "${SIMDASH_IMPORT_REFRESH_MAX_CONCURRENT}" == 1 ]] || \
+  die 'Rocky production requires SIMDASH_IMPORT_REFRESH_MAX_CONCURRENT=1.'
 for number_name in POSTGRES_MAX_CONNECTIONS POSTGRES_RESERVED_CONNECTIONS POSTGRES_REQUEST_POOL_SIZE \
   POSTGRES_REQUEST_MAX_OVERFLOW POSTGRES_REQUEST_POOL_TIMEOUT_SECONDS POSTGRES_MEDIA_POOL_SIZE \
   POSTGRES_MEDIA_MAX_OVERFLOW POSTGRES_MEDIA_POOL_TIMEOUT_SECONDS POSTGRES_POOL_RECYCLE_SECONDS; do
@@ -266,6 +297,14 @@ fi
 
 install -d -o root -g root -m 0755 "${INSTALL_ROOT}" "${INSTALL_ROOT}/releases"
 install -d -o "${SERVICE_USER}" -g "${SERVICE_GROUP}" -m 0750 "${RUNTIME_DIRECTORY}" "${RUNTIME_DIRECTORY}/report-templates"
+# Private importer snapshots must remain under the service-writable runtime
+# directory, separate from both immutable releases and the read-only import
+# source. This is an application capacity/reserve gate, not a kernel quota.
+if [[ -e "${SIMDASH_IMPORT_SNAPSHOT_ROOT}" || -L "${SIMDASH_IMPORT_SNAPSHOT_ROOT}" ]]; then
+  [[ -d "${SIMDASH_IMPORT_SNAPSHOT_ROOT}" && ! -L "${SIMDASH_IMPORT_SNAPSHOT_ROOT}" ]] || \
+    die "SIMDASH_IMPORT_SNAPSHOT_ROOT must be a non-symlink directory: ${SIMDASH_IMPORT_SNAPSHOT_ROOT}"
+fi
+install -d -o "${SERVICE_USER}" -g "${SERVICE_GROUP}" -m 0700 "${SIMDASH_IMPORT_SNAPSHOT_ROOT}"
 # The import source is intentionally separate from an immutable release.  Create
 # the default/local root with no service-user write access; an existing approved
 # NAS/SMB/NFS mount keeps its ownership and mode, but must already be readable by
@@ -349,6 +388,11 @@ runtime_environment=(
   POSTGRES_POOL_RECYCLE_SECONDS="${POSTGRES_POOL_RECYCLE_SECONDS}"
   SIMDASH_IMPORT_ROOT="${SIMDASH_IMPORT_ROOT}"
   SIMDASH_IMPORT_READINESS_POLICY="${SIMDASH_IMPORT_READINESS_POLICY}"
+  SIMDASH_IMPORT_SNAPSHOT_ROOT="${SIMDASH_IMPORT_SNAPSHOT_ROOT}"
+  SIMDASH_IMPORT_SNAPSHOT_RESERVE_BYTES="${SIMDASH_IMPORT_SNAPSHOT_RESERVE_BYTES}"
+  SIMDASH_IMPORT_SNAPSHOT_MIN_FREE_BYTES="${SIMDASH_IMPORT_SNAPSHOT_MIN_FREE_BYTES}"
+  SIMDASH_IMPORT_SNAPSHOT_STALE_SECONDS="${SIMDASH_IMPORT_SNAPSHOT_STALE_SECONDS}"
+  SIMDASH_IMPORT_REFRESH_MAX_CONCURRENT="${SIMDASH_IMPORT_REFRESH_MAX_CONCURRENT}"
 )
 for optional_name in OIDC_ISSUER_URL OIDC_CLIENT_ID OIDC_CLIENT_SECRET OIDC_REDIRECT_URI OIDC_SCOPES \
   OIDC_EMPLOYEE_ID_CLAIM OIDC_USERNAME_CLAIM OIDC_DISPLAY_NAME_CLAIM OIDC_DEPARTMENT_CLAIM \
@@ -462,6 +506,9 @@ environment_names=(
   POSTGRES_REQUEST_POOL_SIZE POSTGRES_REQUEST_MAX_OVERFLOW POSTGRES_REQUEST_POOL_TIMEOUT_SECONDS
   POSTGRES_MEDIA_POOL_SIZE POSTGRES_MEDIA_MAX_OVERFLOW POSTGRES_MEDIA_POOL_TIMEOUT_SECONDS
   POSTGRES_POOL_RECYCLE_SECONDS SIMDASH_IMPORT_ROOT SIMDASH_IMPORT_READINESS_POLICY
+  SIMDASH_IMPORT_SNAPSHOT_ROOT SIMDASH_IMPORT_SNAPSHOT_RESERVE_BYTES
+  SIMDASH_IMPORT_SNAPSHOT_MIN_FREE_BYTES SIMDASH_IMPORT_SNAPSHOT_STALE_SECONDS
+  SIMDASH_IMPORT_REFRESH_MAX_CONCURRENT
 )
 ANALYSIS_DB_BACKEND=postgresql
 DEPLOYMENT_PROFILE=rocky8

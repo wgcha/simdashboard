@@ -137,7 +137,7 @@ def _sqlalchemy_url(database_url: str) -> str:
 
 
 def postgres_connection_budget(workers: int, pool: PostgresPoolSettings) -> int:
-    """Worst-case checked-out PostgreSQL connections for this application."""
+    """Worst-case PostgreSQL connections, including one import gate per worker."""
     if workers < 1:
         raise ValueError("workers must be at least one")
     per_worker = (
@@ -145,8 +145,33 @@ def postgres_connection_budget(workers: int, pool: PostgresPoolSettings) -> int:
         + pool.request_max_overflow
         + pool.media_pool_size
         + pool.media_max_overflow
+        # A refresh advisory lock deliberately uses a dedicated psycopg
+        # session. It must not consume either request or media pool capacity.
+        + 1
     )
     return workers * per_worker
+
+
+def connect_postgres_import_gate_session() -> Any:
+    """Open the unpooled PostgreSQL session reserved for an import gate.
+
+    Advisory locks are session-scoped. Reusing a request/media pool connection
+    would let a later unrelated request inherit the lock, so this intentionally
+    uses psycopg directly and its caller must always close it.
+    """
+    settings = database_settings()
+    if settings.backend != "postgresql" or not settings.database_url:
+        raise RuntimeError("결과 import 실행 gate에는 PostgreSQL DATABASE_URL이 필요합니다.")
+    try:
+        import psycopg
+    except ImportError as exc:  # pragma: no cover - dependency is production-pinned
+        raise RuntimeError("결과 import 실행 gate PostgreSQL 드라이버를 불러올 수 없습니다.") from exc
+    # Reuse the established accepted URL contract (including ``postgres://``)
+    # before converting SQLAlchemy's explicit driver dialect back to psycopg's
+    # native URL spelling.
+    sqlalchemy_url = _sqlalchemy_url(settings.database_url)
+    psycopg_url = "postgresql://" + sqlalchemy_url.removeprefix("postgresql+psycopg://")
+    return psycopg.connect(psycopg_url, autocommit=True)
 
 
 def _postgres_engine(database_url: str, pool: PostgresPoolSettings, *, media: bool = False) -> Engine:

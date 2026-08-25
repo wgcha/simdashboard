@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -12,8 +13,13 @@ from app.main import app
 from app.config import import_bundle_limits
 from app.services.bundle_snapshot import capture_bundle
 from app.services.canonical_result_bundle import READY_MARKER_NAME, build_ready_marker, serialize_ready_marker
+from app.services.import_snapshot_workspace import ImportSnapshotWorkspaceError
+from app.services.result_import_execution_gate import (
+    RESULT_IMPORT_REFRESH_BUSY,
+    ResultImportExecutionGateError,
+)
 from app.services import master_result_refresh
-from app.services.master_result_refresh import MasterResultRefreshError, MasterResultRefreshService
+from app.services.master_result_refresh import RefreshItem, MasterResultRefreshError, MasterResultRefreshService
 
 
 PROJECT_ID = "project-tv-001"
@@ -249,6 +255,15 @@ def test_readiness_policy_uses_config_only_when_constructor_policy_is_unspecifie
         MasterResultRefreshService(tmp_path)
 
 
+@pytest.mark.parametrize("value", ["0", "2", "invalid"])
+def test_refresh_max_concurrent_currently_requires_exactly_one(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, value: str
+):
+    monkeypatch.setenv("SIMDASH_IMPORT_REFRESH_MAX_CONCURRENT", value)
+    with pytest.raises(MasterResultRefreshError, match="SIMDASH_IMPORT_REFRESH_MAX_CONCURRENT"):
+        MasterResultRefreshService(tmp_path)
+
+
 def test_master_refresh_reimports_when_mapping_file_changes_with_same_manifest(tmp_path: Path):
     bundle = _write_bundle(tmp_path, "bundle-content-change")
 
@@ -362,6 +377,126 @@ def test_master_refresh_rejects_process_contention(monkeypatch, tmp_path: Path):
         master_result_refresh._refresh_lock.release()
 
 
+class _RecordingWorkspace:
+    def __init__(self, root: Path, events: list[str], *, fail_prune: bool = False) -> None:
+        self.root = root
+        self.events = events
+        self.fail_prune = fail_prune
+
+    def prune_stale(self) -> None:
+        self.events.append("prune")
+        if self.fail_prune:
+            raise ImportSnapshotWorkspaceError("BUNDLE_SNAPSHOT_WORKSPACE_UNSAFE")
+
+
+class _RecordingGate:
+    def __init__(self, events: list[str], *, error: ResultImportExecutionGateError | None = None) -> None:
+        self.events = events
+        self.error = error
+
+    @contextmanager
+    def acquire(self, root: Path):
+        self.events.append(f"gate:{root}")
+        if self.error is not None:
+            raise self.error
+        try:
+            yield
+        finally:
+            self.events.append("gate-release")
+
+
+def test_refresh_and_retry_share_gate_then_prune_before_work(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    events: list[str] = []
+    workspace = _RecordingWorkspace(tmp_path, events)
+    service = MasterResultRefreshService(
+        tmp_path,
+        workspace=workspace,  # type: ignore[arg-type]
+        execution_gate=_RecordingGate(events),
+    )
+    monkeypatch.setattr(service, "_refresh_locked", lambda: events.append("refresh") or [])
+    monkeypatch.setattr(
+        service,
+        "_refresh_manifest",
+        lambda *_args, **_kwargs: events.append("retry") or RefreshItem("bundle/manifest.json", "FAILED"),
+    )
+
+    assert service.refresh() == []
+    assert service.retry_manifest("bundle/manifest.json").status == "FAILED"
+    assert events == [
+        f"gate:{tmp_path}", "prune", "refresh", "gate-release",
+        f"gate:{tmp_path}", "prune", "retry", "gate-release",
+    ]
+
+
+def test_global_workspace_prune_failure_is_not_converted_to_a_manifest_item(tmp_path: Path):
+    events: list[str] = []
+    service = MasterResultRefreshService(
+        tmp_path,
+        workspace=_RecordingWorkspace(tmp_path, events, fail_prune=True),  # type: ignore[arg-type]
+        execution_gate=_RecordingGate(events),
+    )
+
+    with pytest.raises(MasterResultRefreshError) as error:
+        service.refresh()
+    assert error.value.code == "BUNDLE_SNAPSHOT_WORKSPACE_UNSAFE"
+    assert events == [f"gate:{tmp_path}", "prune", "gate-release"]
+
+
+def test_cross_worker_gate_busy_is_a_stable_refresh_api_503(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    from app.routers import result_folder_refresh
+
+    events: list[str] = []
+    service = MasterResultRefreshService(
+        tmp_path,
+        workspace=_RecordingWorkspace(tmp_path, events),  # type: ignore[arg-type]
+        execution_gate=_RecordingGate(
+            events,
+            error=ResultImportExecutionGateError(RESULT_IMPORT_REFRESH_BUSY),
+        ),
+    )
+    monkeypatch.setattr(result_folder_refresh, "MasterResultRefreshService", lambda: service)
+    with TestClient(app) as client:
+        response = client.post("/api/result-imports/refresh")
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == RESULT_IMPORT_REFRESH_BUSY
+
+
+def test_workspace_capacity_failure_isolated_and_recorded_with_expected_target(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    bundle = _write_bundle(tmp_path, "bundle-capacity")
+    manifest = json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))
+    events: list[str] = []
+    workspace = _RecordingWorkspace(tmp_path, events)
+
+    def capacity_failure(*_args, **kwargs):
+        assert kwargs["workspace"] is workspace
+        raise master_result_refresh.BundleSnapshotError(
+            "BUNDLE_SNAPSHOT_RESERVE_UNAVAILABLE",
+            "capacity unavailable",
+            manifest=manifest,
+        )
+
+    monkeypatch.setattr(master_result_refresh, "capture_bundle", capacity_failure)
+    item = MasterResultRefreshService(
+        tmp_path,
+        workspace=workspace,  # type: ignore[arg-type]
+        execution_gate=_RecordingGate(events),
+    )._refresh_manifest("bundle-capacity/manifest.json")
+
+    assert item.status == "FAILED"
+    assert item.reason_code == "BUNDLE_SNAPSHOT_RESERVE_UNAVAILABLE"
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT load_case_id, outcome_reason FROM folder_import_jobs WHERE source_folder=?",
+            ["bundle-capacity/manifest.json"],
+        ).fetchone()
+    assert row == (LOAD_CASE_ID, "BUNDLE_SNAPSHOT_RESERVE_UNAVAILABLE")
+
+
 def test_refresh_endpoint_returns_503_for_process_contention(monkeypatch, tmp_path: Path):
     _write_bundle(tmp_path, "bundle-lock-endpoint")
     monkeypatch.setenv("SIMDASH_IMPORT_ROOT", str(tmp_path))
@@ -373,7 +508,8 @@ def test_refresh_endpoint_returns_503_for_process_contention(monkeypatch, tmp_pa
         master_result_refresh._refresh_lock.release()
 
     assert response.status_code == 503
-    assert "새로고침이 진행 중" in response.json()["detail"]
+    assert response.json()["detail"]["code"] == "RESULT_IMPORT_REFRESH_BUSY"
+    assert "새로고침이 진행 중" in response.json()["detail"]["message"]
 
 
 def test_refresh_failure_job_rejects_mismatched_target_relationship(tmp_path: Path):
@@ -430,3 +566,18 @@ def test_refresh_endpoint_returns_503_for_invalid_bundle_limit_config(
 
     assert response.status_code == 503
     assert "SIMDASH_IMPORT_MAX_MAPPING_COUNT" in response.json()["detail"]
+
+
+def test_refresh_endpoint_returns_legacy_string_503_for_invalid_snapshot_workspace_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("SIMDASH_IMPORT_ROOT", str(tmp_path))
+    monkeypatch.setenv("SIMDASH_IMPORT_SNAPSHOT_ROOT", "relative-workspace")
+
+    with TestClient(app) as client:
+        response = client.post("/api/result-imports/refresh")
+
+    assert response.status_code == 503
+    assert isinstance(response.json()["detail"], str)
+    assert "SIMDASH_IMPORT_SNAPSHOT_ROOT" in response.json()["detail"]

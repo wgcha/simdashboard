@@ -23,17 +23,28 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
-from typing import Any, Literal
+from typing import Any, Callable, Literal, TypeVar
 from uuid import uuid4
 
 from ..adapters.persistence.result_ingestion import SQLResultIngestionUnitOfWorkProvider
 from ..application.results.commands import ingest_result_bundle, utc_identifier
-from ..config import import_bundle_limits, import_readiness_policy
+from ..config import import_bundle_limits, import_readiness_policy, import_refresh_max_concurrent
 from ..domains.results.models import ResultIngestionCommand
-from ..database_connection import connect
+from ..database_connection import connect, database_settings
 from ..folder_import import FolderImportError, scan_folder
 from ..services.bundle_snapshot import BundleSnapshotError, capture_bundle, capture_published_bundle
 from ..services.canonical_result_bundle import READY_MARKER_NAME, STAGING_DIRECTORY_PREFIX
+from ..services.import_snapshot_workspace import (
+    ImportSnapshotWorkspace,
+    ImportSnapshotWorkspaceError,
+    prepare_import_snapshot_workspace,
+)
+from ..services.result_import_execution_gate import (
+    RESULT_IMPORT_REFRESH_BUSY,
+    ResultImportExecutionGate,
+    ResultImportExecutionGateError,
+    ResultImportExecutionGateProtocol,
+)
 
 
 RefreshStatus = Literal["IMPORTED", "SKIPPED", "FAILED"]
@@ -43,10 +54,15 @@ PARSER_VERSION = "master-folder-refresh-v1"
 RETRY_TARGET_MISMATCH = "RESULT_IMPORT_RETRY_TARGET_MISMATCH"
 _refresh_lock = Lock()
 logger = logging.getLogger(__name__)
+_OperationResult = TypeVar("_OperationResult")
 
 
 class MasterResultRefreshError(RuntimeError):
-    """A configuration error which prevents discovery entirely."""
+    """A global configuration, workspace, or execution-gate refresh failure."""
+
+    def __init__(self, message: str, *, code: str | None = None) -> None:
+        self.code = code
+        super().__init__(message)
 
 
 @dataclass(frozen=True)
@@ -90,12 +106,18 @@ class MasterResultRefreshService:
         root: Path | None = None,
         *,
         readiness_policy: Literal["legacy", "required"] | None = None,
+        workspace: ImportSnapshotWorkspace | None = None,
+        execution_gate: ResultImportExecutionGateProtocol | None = None,
     ):
         self.root = configured_import_root() if root is None else _normalize_import_root(root)
         try:
             self.limits = import_bundle_limits()
         except RuntimeError as exc:
             raise MasterResultRefreshError(f"결과 bundle 제한 설정이 올바르지 않습니다: {exc}") from exc
+        try:
+            self.refresh_max_concurrent = import_refresh_max_concurrent()
+        except RuntimeError as exc:
+            raise MasterResultRefreshError(f"결과 새로고침 동시성 설정이 올바르지 않습니다: {exc}") from exc
         if readiness_policy is None:
             try:
                 readiness_policy = import_readiness_policy()
@@ -104,15 +126,34 @@ class MasterResultRefreshService:
         self.readiness_policy = readiness_policy
         if self.readiness_policy not in {"legacy", "required"}:
             raise MasterResultRefreshError("결과 bundle 준비 정책이 올바르지 않습니다.")
+        try:
+            self.workspace = workspace or prepare_import_snapshot_workspace(self.root, limits=self.limits)
+        except ImportSnapshotWorkspaceError as exc:
+            raise MasterResultRefreshError(str(exc), code=exc.code) from exc
+        except RuntimeError as exc:
+            # Snapshot workspace settings are ordinary operator config errors,
+            # so preserve the legacy string-only 503 detail contract rather
+            # than exposing them as an internal constructor failure.
+            raise MasterResultRefreshError(f"결과 snapshot workspace 설정이 올바르지 않습니다: {exc}") from exc
+        if execution_gate is not None:
+            self.execution_gate = execution_gate
+        else:
+            try:
+                self.execution_gate = ResultImportExecutionGate(database_settings().backend, self.root)
+            except RuntimeError as exc:
+                raise MasterResultRefreshError(f"결과 실행 gate 설정이 올바르지 않습니다: {exc}") from exc
 
     def refresh(self) -> list[RefreshItem]:
-        # A snapshot can consume the complete per-bundle temporary-storage
-        # allowance. Serialize refreshes within this worker process so two
-        # requests never allocate independent snapshots concurrently.
+        # The local lock avoids duplicate work inside this worker; the
+        # execution gate below additionally serializes all workers sharing the
+        # configured import root.
         if not _refresh_lock.acquire(blocking=False):
-            raise MasterResultRefreshError("다른 마스터 결과 폴더 새로고침이 진행 중입니다.")
+            raise MasterResultRefreshError(
+                "다른 마스터 결과 폴더 새로고침이 진행 중입니다.",
+                code=RESULT_IMPORT_REFRESH_BUSY,
+            )
         try:
-            return self._refresh_locked()
+            return self._run_under_execution_gate(self._refresh_locked)
         finally:
             _refresh_lock.release()
 
@@ -122,7 +163,7 @@ class MasterResultRefreshService:
         *,
         expected_target: ResultTarget | None = None,
     ) -> RefreshItem:
-        """Retry one previously recorded manifest under the process-local refresh lock.
+        """Retry one manifest under the shared local and cross-worker refresh leases.
 
         The caller supplies only a database-stored discovery-relative path.
         This method still validates it before handing it to the descriptor-
@@ -132,11 +173,35 @@ class MasterResultRefreshService:
         normalized = _stored_manifest_relative(relative)
         expected_target = _validated_expected_target(expected_target)
         if not _refresh_lock.acquire(blocking=False):
-            raise MasterResultRefreshError("다른 마스터 결과 폴더 새로고침이 진행 중입니다.")
+            raise MasterResultRefreshError(
+                "다른 마스터 결과 폴더 새로고침이 진행 중입니다.",
+                code=RESULT_IMPORT_REFRESH_BUSY,
+            )
         try:
-            return self._refresh_manifest(normalized, expected_target=expected_target)
+            return self._run_under_execution_gate(
+                lambda: self._refresh_manifest(normalized, expected_target=expected_target)
+            )
         finally:
             _refresh_lock.release()
+
+    def _run_under_execution_gate(self, operation: Callable[[], _OperationResult]) -> _OperationResult:
+        """Hold the cross-worker lease before workspace cleanup/discovery."""
+        try:
+            with self.execution_gate.acquire(self.workspace.root):
+                self.workspace.prune_stale()
+                return operation()
+        except ResultImportExecutionGateError as exc:
+            raise MasterResultRefreshError(str(exc), code=exc.code) from exc
+        except ImportSnapshotWorkspaceError as exc:
+            raise MasterResultRefreshError(str(exc), code=exc.code) from exc
+        except MasterResultRefreshError:
+            raise
+        except Exception as exc:
+            # Workspace/gate setup is global, unlike a captured bundle. Do
+            # not turn it into an arbitrary per-manifest diagnostic or leak
+            # filesystem/provider details through this administrative route.
+            logger.exception("Unexpected global result import refresh environment failure")
+            raise MasterResultRefreshError("결과 가져오기 실행 환경을 사용할 수 없습니다.") from exc
 
     def _refresh_locked(self) -> list[RefreshItem]:
         # os.walk never follows directory links. A final manifest link is
@@ -209,9 +274,9 @@ class MasterResultRefreshService:
                 if _marker_lexists(self.root, marker_candidate):
                     marker_relative = marker_candidate
             capture = (
-                capture_published_bundle(self.root, relative, self.limits)
+                capture_published_bundle(self.root, relative, self.limits, workspace=self.workspace)
                 if marker_relative is not None
-                else capture_bundle(self.root, relative, self.limits)
+                else capture_bundle(self.root, relative, self.limits, workspace=self.workspace)
             )
             with capture as captured:
                 captured_manifest = captured.manifest

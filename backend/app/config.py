@@ -89,6 +89,59 @@ class ImportBundleLimits:
     max_curve_points: int = 100_000
 
 
+@dataclass(frozen=True)
+class ImportSnapshotSettings:
+    """Private snapshot workspace and disk-reservation policy."""
+
+    root: Path
+    reserve_bytes: int
+    min_free_bytes: int
+    stale_seconds: int
+
+
+def import_snapshot_settings(
+    limits: ImportBundleLimits | None = None,
+) -> ImportSnapshotSettings:
+    """Read bounded private snapshot workspace settings.
+
+    On POSIX the default is deliberately a native ``/tmp`` child, avoiding
+    environment-selected temporary directories which may be mounted on a
+    non-POSIX filesystem under WSL.
+    """
+
+    limits = import_bundle_limits() if limits is None else limits
+    default_root = Path("/tmp/simdashboard-import-snapshots") if os.name == "posix" else Path(os.getenv("TEMP", str(ROOT / "tmp"))) / "simdashboard-import-snapshots"
+    raw_root = os.getenv("SIMDASH_IMPORT_SNAPSHOT_ROOT")
+    root = Path(raw_root).expanduser() if raw_root else default_root
+    if not root.is_absolute():
+        raise RuntimeError("SIMDASH_IMPORT_SNAPSHOT_ROOT는 절대 경로여야 합니다.")
+    reserve_default = limits.max_total_bytes
+    reserve = _bounded_int(
+        "SIMDASH_IMPORT_SNAPSHOT_RESERVE_BYTES",
+        reserve_default,
+        reserve_default,
+        16 * 1024 * 1024 * 1024,
+    )
+    min_free = _bounded_int(
+        "SIMDASH_IMPORT_SNAPSHOT_MIN_FREE_BYTES",
+        64 * 1024 * 1024,
+        0,
+        16 * 1024 * 1024 * 1024,
+    )
+    stale = _bounded_int(
+        "SIMDASH_IMPORT_SNAPSHOT_STALE_SECONDS",
+        24 * 60 * 60,
+        60,
+        90 * 24 * 60 * 60,
+    )
+    return ImportSnapshotSettings(
+        root=root,
+        reserve_bytes=reserve,
+        min_free_bytes=min_free,
+        stale_seconds=stale,
+    )
+
+
 def import_readiness_policy() -> str:
     """Return the import policy for bundles which do not have a READY marker."""
 
@@ -96,6 +149,11 @@ def import_readiness_policy() -> str:
     if policy not in {"legacy", "required"}:
         raise RuntimeError("SIMDASH_IMPORT_READINESS_POLICY는 legacy 또는 required여야 합니다.")
     return policy
+
+
+def import_refresh_max_concurrent() -> int:
+    """Read the refresh concurrency contract (currently serialized at one)."""
+    return _bounded_int("SIMDASH_IMPORT_REFRESH_MAX_CONCURRENT", 1, 1, 1)
 
 
 def database_settings() -> DatabaseSettings:

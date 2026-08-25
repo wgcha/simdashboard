@@ -31,6 +31,7 @@ from .canonical_result_bundle import (
     parse_ready_marker_bytes,
     verify_ready_marker,
 )
+from .import_snapshot_workspace import ImportSnapshotWorkspace, ImportSnapshotWorkspaceError
 
 
 _COPY_CHUNK_BYTES = 1024 * 1024
@@ -76,6 +77,8 @@ def capture_bundle(
     import_root: Path,
     manifest_relative_path: str,
     limits: ImportBundleLimits,
+    *,
+    workspace: ImportSnapshotWorkspace | None = None,
 ) -> CapturedBundle:
     """Securely copy one canonical bundle and return its private snapshot.
 
@@ -86,13 +89,21 @@ def capture_bundle(
     snapshot is removed after parsing and persistence complete.
     """
 
-    return _capture_bundle(import_root, manifest_relative_path, limits, require_ready_marker=False)
+    return _capture_bundle(
+        import_root,
+        manifest_relative_path,
+        limits,
+        require_ready_marker=False,
+        workspace=workspace,
+    )
 
 
 def capture_published_bundle(
     import_root: Path,
     manifest_relative_path: str,
     limits: ImportBundleLimits,
+    *,
+    workspace: ImportSnapshotWorkspace | None = None,
 ) -> CapturedBundle:
     """Capture only a completed, canonically published result bundle.
 
@@ -102,7 +113,13 @@ def capture_published_bundle(
     idempotency.
     """
 
-    return _capture_bundle(import_root, manifest_relative_path, limits, require_ready_marker=True)
+    return _capture_bundle(
+        import_root,
+        manifest_relative_path,
+        limits,
+        require_ready_marker=True,
+        workspace=workspace,
+    )
 
 
 def _capture_bundle(
@@ -111,6 +128,7 @@ def _capture_bundle(
     limits: ImportBundleLimits,
     *,
     require_ready_marker: bool,
+    workspace: ImportSnapshotWorkspace | None,
 ) -> CapturedBundle:
     _require_secure_traversal()
     manifest_parts = _relative_parts(manifest_relative_path, "BUNDLE_MANIFEST_PATH_INVALID")
@@ -120,7 +138,14 @@ def _capture_bundle(
             "발견된 결과 manifest 경로가 올바르지 않습니다.",
         )
 
-    temporary_directory = TemporaryDirectory(prefix="simdashboard-result-bundle-")
+    try:
+        temporary_directory = (
+            workspace.create_temporary_directory()
+            if workspace is not None
+            else TemporaryDirectory(prefix="simdashboard-result-bundle-")
+        )
+    except ImportSnapshotWorkspaceError as exc:
+        raise BundleSnapshotError(exc.code, str(exc), manifest=None) from exc
     try:
         snapshot_root = Path(temporary_directory.name)
         with _open_import_root(import_root) as root_fd:
@@ -180,6 +205,15 @@ def _capture_bundle(
                         "manifest.mappings는 배열이어야 합니다.",
                         manifest=manifest,
                     )
+                if workspace is not None:
+                    try:
+                        workspace.ensure_capacity(manifest)
+                    except ImportSnapshotWorkspaceError as exc:
+                        raise BundleSnapshotError(
+                            exc.code,
+                            str(exc),
+                            manifest=exc.manifest or manifest,
+                        ) from exc
                 total_bytes = manifest_entry.size
                 entries: list[FingerprintEntry] = [manifest_entry]
                 captured_by_path: dict[str, FingerprintEntry] = {}
@@ -420,8 +454,13 @@ def _copy_relative_file(
                     target.write(chunk)
                     digest.update(chunk)
         except OSError as exc:
+            code = (
+                "BUNDLE_SNAPSHOT_RESERVE_UNAVAILABLE"
+                if exc.errno in {errno.ENOSPC, errno.EDQUOT}
+                else "BUNDLE_SNAPSHOT_WRITE_FAILED"
+            )
             raise BundleSnapshotError(
-                "BUNDLE_SNAPSHOT_WRITE_FAILED",
+                code,
                 "결과 bundle 임시 snapshot을 저장할 수 없습니다.",
                 manifest=manifest,
             ) from exc

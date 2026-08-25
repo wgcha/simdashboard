@@ -126,9 +126,11 @@ source revision, 생성·완료 시각과 재시도 가능 여부를 보존·표
   다른 target을 가리키면 `RESULT_IMPORT_RETRY_TARGET_MISMATCH`로 거부한다. missing
   manifest나 snapshot 초기 실패도 원 load case의 새 `FAILED` attempt로 남기며,
   과거 job은 불변이다.
-- 재시도와 전체 Master Refresh는 같은 worker process의 process-local refresh lock을
-  공유한다. 따라서 한 worker 안에서는 동시에 import root를 처리하지 않지만,
-  multi-worker lock·snapshot quota·budget은 다음 운영 단계다.
+- 재시도와 전체 Master Refresh는 process-local lock 뒤 동일한 cross-worker execution
+  gate를 공유한다. `SIMDASH_IMPORT_REFRESH_MAX_CONCURRENT=1`만 허용한다. DuckDB/local은
+  POSIX nonblocking `flock`, PostgreSQL은 request/media pool 밖 전용 session의
+  import-root keyed advisory lock을 사용한다. busy는 `RESULT_IMPORT_REFRESH_BUSY`,
+  gate 불능은 `RESULT_IMPORT_REFRESH_LOCK_UNAVAILABLE`이다.
 
 동일한 하중 조건을 여러 번 재실행하면 `AnalysisRun`을 분리한다.
 
@@ -532,10 +534,10 @@ backend/app/
 
 ### 10.1 폴더 스캔
 
-1. import root 확인
-2. root 아래 `manifest.json` 검색
-3. 완료 checksum 조회
-4. 미처리 manifest 선별
+1. process-local lock과 global execution gate 획득
+2. gate 안에서 strict stale private snapshot만 정리
+3. import root 확인과 root 아래 `manifest.json` 검색
+4. 완료 checksum 조회와 미처리 manifest 선별
 5. 수정 시간 또는 경로 기준 정렬
 
 ### 10.2 단일 manifest 수집
@@ -544,25 +546,26 @@ backend/app/
 1. 상대경로 정규화
 2. import root 내부 경로 검증
 3. manifest 파싱
-4. schema_version 검증
-5. 필수 필드 검증
-6. 폴더 ID와 manifest ID 비교
-7. Project 존재 확인
-8. Request 소유관계 확인
-9. LoadCase 소유관계 확인
-10. 결과 파일 존재 확인
-11. checksum 계산
-12. 결과 유형별 스키마 검증
-13. AnalysisRun 생성 또는 확인
-14. 트랜잭션 시작
-15. overwrite 정책 적용
-16. scalar_results 적재
-17. time_series_results 적재
-18. media_assets 적재
-19. 전체 판정 계산
-20. AnalysisRun 갱신
-21. import job 완료 기록
-22. 커밋
+4. 전용 service-owned `0700` snapshot root의 reserve+min-free capacity 확인
+5. schema_version 검증
+6. 필수 필드 검증
+7. 폴더 ID와 manifest ID 비교
+8. Project 존재 확인
+9. Request 소유관계 확인
+10. LoadCase 소유관계 확인
+11. 결과 파일 존재 확인
+12. checksum 계산
+13. 결과 유형별 스키마 검증
+14. AnalysisRun 생성 또는 확인
+15. 트랜잭션 시작
+16. overwrite 정책 적용
+17. scalar_results 적재
+18. time_series_results 적재
+19. media_assets 적재
+20. 전체 판정 계산
+21. AnalysisRun 갱신
+22. import job 완료 기록
+23. 커밋
 ```
 
 오류 발생 시 전체 롤백한다.
@@ -742,6 +745,9 @@ ENTITY_RELATION_MISMATCH
 DUPLICATE_IMPORT
 OVERWRITE_REJECTED
 DATABASE_ERROR
+BUNDLE_SNAPSHOT_RESERVE_UNAVAILABLE
+RESULT_IMPORT_REFRESH_BUSY
+RESULT_IMPORT_REFRESH_LOCK_UNAVAILABLE
 ```
 
 보안 요구사항:
@@ -754,6 +760,7 @@ DATABASE_ERROR
 6. 서비스 계정 최소 권한
 7. 비밀정보 로그 금지
 8. 인증 전 외부 인터넷 공개 금지
+9. private snapshot root는 import root와 중첩·symlink일 수 없고 service-owned `0700`이어야 한다.
 
 ---
 
@@ -780,8 +787,17 @@ SIMDASH_MAX_IMPORT_ROWS=2000000
 SIMDASH_ALLOWED_SCHEMA_VERSIONS=1.0
 SIMDASH_DEFAULT_OVERWRITE_POLICY=REJECT
 SIMDASH_AUTO_IMPORT_ENABLED=false
+SIMDASH_IMPORT_SNAPSHOT_ROOT=/absolute/private/snapshot-root
+SIMDASH_IMPORT_SNAPSHOT_RESERVE_BYTES=1073741824
+SIMDASH_IMPORT_SNAPSHOT_MIN_FREE_BYTES=536870912
+SIMDASH_IMPORT_SNAPSHOT_STALE_SECONDS=86400
+SIMDASH_IMPORT_REFRESH_MAX_CONCURRENT=1
 ```
 
+snapshot reserve/min-free는 app capacity gate이며 kernel/filesystem quota가 아니다.
+`ENOSPC`/`EDQUOT` 복사 실패도 `BUNDLE_SNAPSHOT_RESERVE_UNAVAILABLE`로 정규화한다.
+Rocky installer는 core와 같은 범위로 reserve `1073741824..17179869184` bytes,
+min-free `0..17179869184` bytes, stale `60..7776000` seconds를 fail-fast 검증한다.
 초기 MVP는 API 수동 스캔을 우선하며 watcher는 후속 단계로 둔다.
 
 ---
@@ -844,22 +860,23 @@ cd backend
 ```
 
 이 historical collection 이후 Radioss mesh locations는 canonical UoW로 이관됐고
-schema와 맞지 않던 legacy persistence는 제거됐다. producer atomic publish/readiness와
-local `legacy`/Rocky `required` marker policy는 AP-1 WSL 코드·검증을 완료했다.
-integrated focused `122 passed in 77.07s`, full backend `533 passed, 5 skipped in
-366.02s`, architecture/OpenAPI/Rocky template/compileall 및 strict checked-in example
-marker import가 통과했다. 이 slice에서 새
-PostgreSQL live gate를 실행한 것은 아니며,
-기존 PG18 identity/history 사실은 별도 검증 기록으로 유지한다. 실제 Rocky host와
-NFS/SMB mount capability 검증, snapshot workspace quota와 multi-worker budget은 남아 있다.
+schema와 맞지 않던 legacy persistence는 제거됐다. AP-1 producer atomic publication과
+local `legacy`/Rocky `required` marker policy, AP-2 private workspace/capacity/gate는
+코드와 focused 계약 검증으로 반영됐다. AP-2 PostgreSQL gate는 disposable 18.6
+`127.0.0.1:55436`에서 두 전용 session BUSY, unlock/close 뒤 재획득, explicit unlock
+없이 session close 뒤 재획득까지 확인하고 cluster 및 `/tmp` data/log를 정리했다.
+기존 5432/`.env` DB는 사용하지 않았다. 실제 Rocky host, NFS/SMB mount capability와
+filesystem quota는 release gate다.
 
-import history/status/retry slice는 당시 focused backend 7건과 연계 P1 master
-Refresh/atomicity/identity 24건, frontend architecture/build/api, Playwright 1건을
-통과했다. 당시 full backend baseline은 `479 passed, 5 skipped in 352.00s`였다. PostgreSQL
-18.6 disposable `127.0.0.1:55434`의 `simulation_dashboard_test_history`에서 blank
+**2026-08-25 AP-2 검증 기록:** focused 통합 `126 passed in 87.32s`, full backend
+`573 passed, 5 skipped in 382.12s`; backend architecture/OpenAPI/compileall, Rocky
+validator, frontend architecture/API self-test/build도 통과했다.
+
+import history/status/retry slice의 별도 PostgreSQL 18.6 disposable
+`127.0.0.1:55434` `simulation_dashboard_test_history` 기록은 blank
 Alembic head `0017`, app privilege/DDL denial, history list/filter/pagination/counts,
 V2 revision join, GET, missing retry `FAILED` append, target drift mismatch/no foreign
-run도 PASS했고 cluster/port를 정리했다.
+run도 확인한 뒤 cluster/port를 정리했다.
 
 ---
 
@@ -904,7 +921,8 @@ run도 PASS했고 cluster/port를 정리했다.
 - PostgreSQL repository
 - 자동 watcher
 - **완료(WSL 검증):** producer atomic publish/readiness AP-1
-- **다음(AP-2):** snapshot workspace quota와 cross-worker refresh lock/budget
+- **완료(코드·focused 계약 검증):** AP-2 snapshot workspace, capacity gate와
+  cross-worker refresh lock/budget. 실제 target host capability 검증은 release gate.
 
 ---
 

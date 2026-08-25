@@ -41,7 +41,7 @@ def refresh_master_result_folder(request: Request) -> MasterResultRefreshRespons
     try:
         items = MasterResultRefreshService().refresh()
     except MasterResultRefreshError as exc:
-        raise HTTPException(503, str(exc)) from exc
+        raise HTTPException(503, _refresh_error_detail(exc)) from exc
 
     response = MasterResultRefreshResponse(
         scanned_count=len(items),
@@ -123,7 +123,7 @@ def retry_result_import(job_id: str, request: Request) -> MasterResultRefreshIte
             expected_target=expected_target,
         )
     except MasterResultRefreshError as exc:
-        raise HTTPException(503, str(exc)) from exc
+        raise HTTPException(503, _refresh_error_detail(exc)) from exc
     response = MasterResultRefreshItem(**item.__dict__)
     with connect() as conn:
         write_audit_event(
@@ -149,3 +149,10 @@ def _is_stored_manifest_relative(value: object) -> bool:
         return False
     parts = value.split("/")
     return parts[-1] == "manifest.json" and all(part not in {"", ".", ".."} for part in parts)
+
+
+def _refresh_error_detail(error: MasterResultRefreshError) -> str | dict[str, str]:
+    """Preserve legacy configuration text while exposing stable gate codes."""
+    if error.code is None:
+        return str(error)
+    return {"code": error.code, "message": str(error)}

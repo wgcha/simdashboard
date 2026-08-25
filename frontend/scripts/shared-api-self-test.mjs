@@ -11,6 +11,11 @@ if (!apiErrorMessage(coded, '요청 실패').startsWith('REQUEST_NOT_FOUND:')) {
   throw new Error('coded API error lost its code prefix')
 }
 
+const codedMessage = { code: 'RESULT_BUNDLE_ROOTS_OVERLAP', message: '결과 경로가 겹칩니다.' }
+if (apiErrorMessage(codedMessage, '요청 실패') !== 'RESULT_BUNDLE_ROOTS_OVERLAP: 결과 경로가 겹칩니다.') {
+  throw new Error('coded API error did not prefer its readable message')
+}
+
 if (apiErrorMessage({ detail: '정확한 오류' }, '요청 실패') !== '정확한 오류') {
   throw new Error('nested detail string was not preserved')
 }

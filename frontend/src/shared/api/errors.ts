@@ -14,6 +14,17 @@ export function apiErrorMessage(detail: unknown, fallback: string): string {
   if (detail && typeof detail === 'object' && 'detail' in detail) {
     return apiErrorMessage(detail.detail, fallback)
   }
+  if (
+    detail &&
+    typeof detail === 'object' &&
+    'code' in detail &&
+    typeof detail.code === 'string' &&
+    'message' in detail &&
+    typeof detail.message === 'string' &&
+    detail.message
+  ) {
+    return `${detail.code}: ${detail.message}`
+  }
   if (detail && typeof detail === 'object' && 'code' in detail && typeof detail.code === 'string') {
     return `${detail.code}: ${JSON.stringify(detail)}`
   }

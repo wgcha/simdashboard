@@ -181,8 +181,10 @@ snapshot은 기대 결과 화면이고 Analysis Run은 실제 데이터다. 데�
 
 ```text
 SIMDASH_IMPORT_ROOT
-  → manifest.json 탐색
+  → process-local lock + cross-worker execution gate 획득
+  → strict stale snapshot 정리와 manifest.json 탐색
   → root/symlink/context/파일 검증
+  → 전용 0700 private snapshot root에서 manifest parse 뒤 capacity 확인
   → private snapshot (kind별 structured/media ceiling, unsupported kind open 전 거부)
   → manifest + mapping 파일 bundle fingerprint 기반 중복 판정
   → normalized parser payload
@@ -197,11 +199,27 @@ SIMDASH_IMPORT_ROOT
 실패 bundle은 검증된 target이 있을 때만 DB failure job을 기록하고, target을 안전하게
 확인할 수 없으면 job을 만들지 않은 채 sanitized `RefreshItem` 오류로 반환한다.
 
-Master Refresh의 private snapshot은 POSIX `dir_fd` 상대 open과 `O_NOFOLLOW`로
-경로·symlink를 fail-closed하며, canonical WSL 개발 환경과 Rocky Linux 운영
-경로를 지원한다. native Windows compatibility profile은 Windows handle 기반
-safe traversal adapter가 준비될 때까지 이 endpoint를 fail-closed한다. 수동
-upload와 다른 compatibility 기능은 이 제한과 독립적으로 동작한다.
+Master Refresh의 private snapshot workspace는 import root와 물리적으로 중첩될 수
+없고, symlink가 아닌 service-owned `0700` directory여야 한다. POSIX
+`dir_fd` 상대 open과 `O_NOFOLLOW`로 경로·symlink를 fail-closed한다. manifest를
+파싱한 뒤 per-bundle reserve와 min-free를 확인하며, 이 app capacity gate는
+kernel/filesystem quota가 아니다. 부족하거나 `ENOSPC`/`EDQUOT`가 발생하면
+`BUNDLE_SNAPSHOT_RESERVE_UNAVAILABLE`로 안정적으로 실패한다. native Windows
+compatibility profile은 POSIX secure traversal과 flock이 없으므로 이 endpoint를
+`RESULT_IMPORT_REFRESH_LOCK_UNAVAILABLE`로 fail-closed한다. 수동 upload와 다른
+compatibility 기능은 이 제한과 독립적으로 동작한다.
+
+Refresh와 retry는 모두 process-local lock 뒤 동일한 global execution gate를
+획득하고, 그 안에서만 strict stale snapshot을 정리한다. DuckDB/local은 private
+workspace의 안전한 lock file에 POSIX nonblocking `flock`을 사용하고, PostgreSQL은
+request/media pool 밖의 전용 session에서 import-root keyed advisory lock을 사용한다.
+따라서 현재 계약은 `SIMDASH_IMPORT_REFRESH_MAX_CONCURRENT=1`의 단일 refresh다.
+gate 경합은 `RESULT_IMPORT_REFRESH_BUSY`, 획득·해제 불능은
+`RESULT_IMPORT_REFRESH_LOCK_UNAVAILABLE`로 반환한다.
+AP-2 PostgreSQL gate는 2026-08-25 disposable PostgreSQL 18.6 `127.0.0.1:55436`에서
+두 전용 session의 BUSY, 정상 unlock/close 뒤 재획득, unlock 없이 session close한 뒤
+재획득을 확인했다. 기존 5432/`.env` DB는 사용하지 않았고 cluster와 `/tmp` data/log를
+정리했다.
 
 `backend/app/services/canonical_result_bundle.py`가 marker v1과 canonical publication
 path 계약을, `services/result_bundle_publisher.py`가 producer source→final no-replace
@@ -279,8 +297,9 @@ reason code와 완료 시각을 함께 남긴다. 이력 조회는 V2 source-ver
   원 job의 project/request/load case target에 고정해 manifest의 target drift는
   `RESULT_IMPORT_RETRY_TARGET_MISMATCH`로 실패시킨다. missing manifest나 snapshot 초기
   실패도 원 load case에 새 `FAILED` attempt를 남기며 원 job은 변경하지 않는다.
-  재시도와 전체 Refresh는 **동일 worker process 안에서만** process-local refresh lock을
-  공유한다. multi-worker 간 lock/quota는 아직 운영 release gate다.
+  재시도와 전체 Refresh는 process-local lock과 동일 cross-worker execution gate를
+  공유한다. 따라서 backend/DB 종류와 무관하게 한 번에 하나만 실행하며, stale cleanup도
+  gate 획득 뒤에만 수행한다.
 - 프런트의 `features/data/ResultImportHistory.tsx`는 DataWorkspace의 선택 load case에
   이력, 상태 필터, 새로고침, loading/error/empty 상태를 표시한다. 재시도 버튼은
   서버 `retryable` 값과 전역 권한이 모두 충족될 때만 보이며, 결과 뒤 이력을 다시
@@ -339,7 +358,7 @@ FastAPI app.openapi()
 | 브라우저 | `frontend/e2e`, `pnpm run test:e2e` | 실제 권한·편집·결과·routing 흐름 |
 | PostgreSQL opt-in | `postgres_integration` marker와 preflight script | Alembic head, app-role 권한, 양 DB 호환 |
 
-결과 수집 focused 검증은 현재 collection 기준 **256개** test case다. canonical/legacy
+결과 수집의 focused 계약 검증은 canonical/legacy
 manifest 경계, fingerprint idempotency와 mapping 변경 감지, 공통 UoW atomic
 rollback, manual `SUMMARY_RESULT` JSON/CSV의 target-qualified source·retry
 `SKIPPED`·audit/auth 재확인, Radioss scalar/curve/location atomic 저장, streaming
@@ -372,8 +391,6 @@ cd backend
   tests/test_run_identity_contracts.py \
   tests/test_run_identity_migration.py \
   tests/test_run_identity_v2.py
-# 256 collected (2026-08-25): bundle snapshot 29, readiness 24; PostgreSQL concurrency cases are opt-in at runtime.
-
 # dedicated migrated disposable test database only; never use the regular 5432 DB
 ANALYSIS_DB_BACKEND=postgresql \
 ANALYSIS_TEST_POSTGRES=1 \
@@ -387,10 +404,8 @@ DATABASE_URL='postgresql+psycopg://<test_app_role>:<test_password>@<test_host>:5
 `DATABASE_URL`은 명령에서 명시한 전용 test DB여야 하며 `.env`의 현재
 `simulation_dashboard` 연결은 이 test에 사용하지 않는다.
 
-import history/status/retry slice는 당시 focused backend 7건과 연계 P1 master
-Refresh/atomicity/identity 24건, frontend architecture/build/api, Playwright 1건을
-통과했다. 당시 full backend baseline은 `479 passed, 5 skipped in 352.00s`다.
-PostgreSQL 18.6 disposable `127.0.0.1:55434`의
+import history/status/retry slice의 별도 검증 기록에는 PostgreSQL 18.6 disposable
+`127.0.0.1:55434`의
 `simulation_dashboard_test_history`에서 blank Alembic head `0017`, app
 privilege/DDL denial, history list/filter/pagination/counts, V2 revision join, GET,
 missing retry `FAILED` append, target drift mismatch/no foreign run도 PASS했고
@@ -422,19 +437,19 @@ Architecture ceiling은 목표 수치가 아니라 부채가 늘지 않게 하�
 - 외부 NAS/NFS/SMB `SIMDASH_IMPORT_ROOT`의 부팅 순서, mount context, 용량과
   재처리 운영 절차는 각 사내 인프라 환경에서 승인해야 한다.
 - Master Refresh는 importer private snapshot/rehash와 parser workload limits로
-  fingerprint·parse·media 저장 bytes를 고정한다. producer는 sibling staging → payload
-  fsync → marker v1 last → `renameat2(RENAME_NOREPLACE)` → parent fsync로 publication하고,
-  app service import root는 read-only다. local/default `legacy`와 Rocky `required` marker
-  정책, full-scan/retry strict 동작, WSL/Rocky ext4/XFS 한정과 Windows/EXDEV/NFS/SMB
-  fail-closed/미승인 범위는 storage contract에 따른다. AP-1은 WSL에서 integrated
-  focused `122 passed in 77.07s`, full backend `533 passed, 5 skipped in 366.02s`,
-  architecture/OpenAPI/Rocky template/compileall과 strict example marker import를
-  통과했다. 이는 Rocky host deploy 또는
-  NFS/SMB mount capability 검증을 뜻하지 않는다.
-  import history/status/retry는 구현 및 focused·full regression·PG history query 검증을
-  마쳤다. 다음 개발은 AP-2 snapshot workspace quota와 multi-worker 동시 refresh
-  lock/budget이다.
-  native Windows handle adapter/target wheel offline smoke도 운영 profile release gate로
-  남아 있다.
+  fingerprint·parse·media 저장 bytes를 고정한다. AP-2는 dedicated `0700` workspace,
+  import-root 비중첩·symlink·소유권 검증, reserve+min-free app capacity gate,
+  cross-worker single-refresh gate와 retry/full-refresh 공유를 코드·focused 계약
+  검증으로 반영했다. PostgreSQL connection budget은 gate 전용 session을 worker당
+  하나 포함하므로 기본 2 worker에서 62다. producer는 sibling staging → payload fsync
+  → marker v1 last → `renameat2(RENAME_NOREPLACE)` → parent fsync로 publication하고,
+  app service import root는 read-only다. local/default `legacy`와 Rocky `required`
+  marker 정책, full-scan/retry strict 동작, WSL/Rocky ext4/XFS 한정과
+  Windows/EXDEV/NFS/SMB fail-closed·미승인 범위는 storage contract에 따른다.
+  실제 Rocky host deploy, NFS/SMB mount capability, filesystem quota 적용과 native
+  Windows adapter/target wheel smoke는 release gate로 남아 있다.
+- **2026-08-25 AP-2 검증 기록:** focused 통합은 `126 passed in 87.32s`, full backend는
+  `573 passed, 5 skipped in 382.12s`였다. backend architecture/OpenAPI/compileall,
+  Rocky validator, frontend architecture/API self-test/build도 통과했다.
 
 우선순위와 완료 기준은 [`program-consolidation-and-development-plan.md`](program-consolidation-and-development-plan.md)에 정리한다.

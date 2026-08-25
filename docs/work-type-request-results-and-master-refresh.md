@@ -167,7 +167,7 @@
             └─ media/
 ```
 
-폴더명은 탐색 보조 정보이며 실제 DB 연결은 검증된 `manifest.json`의 ID를 사용한다. root 탈출, 심볼릭 링크 탈출, 존재하지 않는 프로젝트·의뢰·하중 경우 조합은 거부한다.
+폴더명은 탐색 보조 정보이며 실제 DB 연결은 검증된 `manifest.json`의 ID를 사용한다. root 탈출, 심볼릭 링크 탈출, 존재하지 않는 프로젝트·의뢰·하중 경우 조합은 거부한다. private snapshot workspace는 import root와 물리적으로 중첩될 수 없고 symlink가 아닌 service-owned `0700` directory여야 한다.
 
 실행 가능한 기준 예제는 `examples/master-results/`에 있다. strict readiness에서는
 marker가 있는 canonical physical path와 context ID를 함께 검증하고, local legacy
@@ -199,13 +199,14 @@ SPDM watcher가 구현될 때에도 검증된 context mapping과 별도의 canon
 
 `POST /api/result-imports/refresh`는 다음을 수행한다.
 
-1. root 아래 `manifest.json` 탐색
-2. manifest별 독립 검증과 수집 작업 생성
-3. manifest와 mapping 파일의 크기·SHA-256으로 계산한 bundle fingerprint와 완료 이력으로 중복 판정
-4. normalized command를 공통 single-connection UoW에 전달해 신규 결과를 Run, scalar, time-series, curve, location, media 저장소에 원자적으로 적재
-5. Run 및 하중 경우 상태 갱신
-6. 가능한 경우 의뢰·수행 작업 상태 동기화
-7. manifest별 `IMPORTED`, `SKIPPED`, `FAILED` 결과 반환
+1. process-local lock 뒤 DuckDB/local POSIX `flock` 또는 PostgreSQL 전용-session advisory global gate 획득
+2. gate 안에서 strict stale snapshot 정리 후 root 아래 `manifest.json` 탐색
+3. manifest별 독립 검증, manifest parse 뒤 reserve+min-free capacity 확인과 수집 작업 생성
+4. manifest와 mapping 파일의 크기·SHA-256으로 계산한 bundle fingerprint와 완료 이력으로 중복 판정
+5. normalized command를 공통 single-connection UoW에 전달해 신규 결과를 Run, scalar, time-series, curve, location, media 저장소에 원자적으로 적재
+6. Run 및 하중 경우 상태 갱신
+7. 가능한 경우 의뢰·수행 작업 상태 동기화
+8. manifest별 `IMPORTED`, `SKIPPED`, `FAILED` 결과 반환
 
 하나의 manifest 실패가 전체 Refresh를 중단시키지 않는다. 동일한 완료 bundle을
 다시 Refresh하면 DB 중복 없이 `SKIPPED`되어야 한다. 동일 manifest라도 참조
@@ -234,19 +235,20 @@ Master job만 재시도할 수 있고, 그 외 대상은 고정 HTTP 409
 `RESULT_IMPORT_NOT_RETRYABLE`이다. 재시도는 원 job의 project/request/load case target에
 고정한다. manifest target drift는 `RESULT_IMPORT_RETRY_TARGET_MISMATCH`로 실패하며,
 missing manifest·snapshot 초기 실패도 원 load case의 새 `FAILED` attempt로 기록하고
-원 job은 변경하지 않는다. 재시도와 전체 Refresh는 같은 worker process 안의
-process-local refresh lock을 공유한다. multi-worker lock/quota/budget은 다음 단계다.
+원 job은 변경하지 않는다. 재시도와 전체 Refresh는 같은 process-local lock과 global
+execution gate를 공유하며 현재 최대 동시성은 정확히 1이다. workspace capacity는
+kernel/filesystem quota가 아닌 app reserve gate이고, 부족 또는 `ENOSPC`/`EDQUOT`는
+`BUNDLE_SNAPSHOT_RESERVE_UNAVAILABLE`로 실패한다. gate 경합은
+`RESULT_IMPORT_REFRESH_BUSY`, gate 불능은 `RESULT_IMPORT_REFRESH_LOCK_UNAVAILABLE`이다.
+AP-2 PostgreSQL advisory gate는 disposable PostgreSQL 18.6 `127.0.0.1:55436`에서
+두 전용 session BUSY, 정상 unlock/close 뒤 재획득, explicit unlock 없이 session
+close 뒤 재획득까지 확인했다. 기존 5432/`.env` DB는 사용하지 않았고 cluster와 `/tmp`
+data/log를 정리했다. 실제 Rocky host deploy, NFS/SMB mount capability와 filesystem
+quota 적용은 release gate로 남아 있다. native Windows Refresh는 POSIX secure
+traversal/flock 부재로 fail-closed다.
 
-AP-1은 WSL에서 atomic publisher/marker와 strict example import, integrated focused
-`122 passed in 77.07s`, full backend `533 passed, 5 skipped in 366.02s`,
-architecture/OpenAPI/Rocky template/compileall 검증을 통과했다. 이 결과는 실제 Rocky
-host deploy나 NFS/SMB mount capability를 검증한 것은 아니며, 다음 AP-2에서 dedicated
-snapshot workspace quota와 cross-worker refresh lock/budget을 다룬다.
-
-이력/재시도 slice의 당시 full backend baseline은 `479 passed, 5 skipped in 352.00s`였고,
-PostgreSQL
-18.6 disposable `127.0.0.1:55434`의 `simulation_dashboard_test_history` live gate를
-통과했다. 이 gate는 blank Alembic head `0017`, app privilege/DDL denial, history
+이력/재시도 slice의 PostgreSQL 18.6 disposable `127.0.0.1:55434`
+`simulation_dashboard_test_history` live gate 기록은 blank Alembic head `0017`, app privilege/DDL denial, history
 list/filter/pagination/counts, V2 revision join, GET, missing retry `FAILED` append,
 target drift mismatch/no foreign run을 확인한 뒤 cluster/port를 정리했다.
 
@@ -288,6 +290,12 @@ services/canonical_result_bundle.py
 
 services/bundle_snapshot.py
   └─ descriptor-relative immutable capture와 marker/payload byte 대조
+
+services/import_snapshot_workspace.py
+  └─ import-root 비중첩, service-owned 0700 workspace, stale cleanup와 capacity gate
+
+services/result_import_execution_gate.py
+  └─ DuckDB/local flock 또는 PostgreSQL 전용-session advisory cross-worker lease
 
 services/result_bundle_publisher.py
   └─ producer source→final sibling staging, marker-last, no-replace publication

@@ -39,8 +39,8 @@
 | DOC-01 | 현재 문서와 과거 plan이 같은 디렉터리에 혼재 | 개발자가 낡은 경로·명령을 사용 | P0 |
 | DB-01 | migration head를 코드 graph에서 동적으로 읽고 PostgreSQL의 누락·stale revision을 fail-closed하도록 verifier와 회귀 테스트를 반영 | 구현 완료, 실제 운영 DB release gate 검증 필요 | P0 완료 |
 | IMP-01 | 중앙 format detector/loader와 normalized contract를 사용하고 canonical Master Refresh·typed folder example·수동 `SUMMARY_RESULT` JSON/CSV·Radioss mesh CSV를 공통 UoW로 적재 | schema와 맞지 않던 legacy `result_files` persistence service/repository를 제거하고 parser compatibility만 유지 | P1 진행 |
-| IMP-02 | bundle fingerprint, load-case advisory lock, importer snapshot/rehash·workload limits와 Run Identity V2 구현 | `0017_run_identity_v2`, scoped source-version ledger, exact existing identity, `SKIP`/`REJECT`/immutable `REPLACE`, legacy append과 Master `REPLACE` fail-closed를 반영했다. AP-1 atomic publisher/marker·local legacy/Rocky required 정책은 WSL 코드·검증 완료(`122 passed in 77.07s`, full backend `533 passed, 5 skipped in 366.02s`)다. Rocky host와 NFS/SMB mount capability는 미검증이고, 전용 quota-limited snapshot workspace·multi-worker budget(AP-2)은 잔여 | P1 진행 |
-| IMP-03 | load case별 import history/status/retry API와 DataWorkspace UI 구현 | `folder_import_jobs` 이력, V2 revision/run enrichment, resource-scoped 조회, target-fixed 관리자 재시도 및 process-local worker lock을 반영했다. 당시 focused backend 7건·연계 P1 24건, frontend architecture/build/api, Playwright 1건, full backend `479 passed, 5 skipped`, disposable PostgreSQL history gate를 통과했다 | P1 완료 |
+| IMP-02 | bundle fingerprint, load-case advisory lock, importer snapshot/rehash·workload limits와 Run Identity V2 구현 | `0017_run_identity_v2`, scoped source-version ledger, exact existing identity, `SKIP`/`REJECT`/immutable `REPLACE`, legacy append과 Master `REPLACE` fail-closed를 반영했다. AP-1 atomic publisher/marker와 AP-2 dedicated `0700` snapshot workspace, reserve+min-free app capacity gate, cross-worker single-refresh gate를 코드·focused 계약 검증으로 반영했다. AP-2 PostgreSQL 18.6 disposable live gate도 전용 2-session BUSY/reacquire/close-release로 확인했다. Rocky host/NFS·SMB mount와 filesystem quota 적용은 release gate다. | P1 진행 |
+| IMP-03 | load case별 import history/status/retry API와 DataWorkspace UI 구현 | `folder_import_jobs` 이력, V2 revision/run enrichment, resource-scoped 조회, target-fixed 관리자 재시도 및 process-local worker lock을 반영했다. disposable PostgreSQL history gate 기록을 유지한다. | P1 완료 |
 | DEP-01 | Rocky install env·service EnvironmentFile·systemd read-only path에 `SIMDASH_IMPORT_ROOT` wiring과 외부 mount/read preflight를 반영 | 구현 완료, 실제 Rocky host release gate 검증 필요 | P0 진행 |
 | DEP-02 | Rocky 8 + nginx + systemd + PostgreSQL을 canonical target으로 ADR 확정하고 Windows를 compatibility profile로 명시 | 문서 결정 완료 | P0 완료 |
 | DEP-03 | Windows는 설치/개발 실행과 DB 이관 호환성은 있으나 HTTPS reverse proxy·service·TLS·rollback 운영 자동화 없음 | Windows one-command 운영 배포는 지원 범위에서 제외 | 범위 제외 |
@@ -198,15 +198,20 @@ port/application orchestration/SQL UoW 이관은 완료했다. schema와 맞지 
 - parser adapter만 결과 형식별로 교체한다.
 - importer의 private snapshot/rehash와 파일·행·포인트·manifest 개수 제한은 구현했다.
 - `ijson==3.5.1` bounded manifest/scalar stream의 cap+1·checksum workload limit을 구현했다. manifest 전체 event ceiling은 `256 + 64 * max_mapping_count`, scalar 단일 item ceiling은 64 event이며, 둘 다 `ObjectBuilder` materialization 전에 적용한다. typed scalar/curve mapping snapshot은 structured byte ceiling, media mapping은 file byte ceiling을 copy 전에 적용하고 unsupported kind는 open 전에 거부한다. 최종 normalized scalar 최대 100,000개 list materialization과 Windows/Rocky actual wheel/offline smoke는 별도 release gate다.
-- atomic publisher/readiness는 AP-1 WSL 코드·검증을 완료했다. snapshot workspace
-  quota와 multi-worker 동시 refresh budget은 AP-2 운영 승인·검증 항목이다.
+- atomic publisher/readiness AP-1과 AP-2 snapshot workspace/gate 코드는 완료했다.
+  AP-2는 service-owned `0700` workspace와 import root 비중첩·symlink·ownership
+  검증, manifest parse 뒤 reserve+min-free capacity 확인, single refresh gate를
+  포함한다. 이는 kernel quota가 아니며 실제 filesystem quota, Rocky host와 NFS/SMB는
+  운영 승인·검증 항목이다. PostgreSQL advisory gate는 disposable 18.6 `127.0.0.1:55436`
+  전용 session live gate로 BUSY·unlock/close 후 재획득을 확인했다.
 
 #### P1-02 bundle fingerprint와 Run identity
 
 상태: **Run Identity V2 코드·계약·PostgreSQL live gate 완료**. fingerprint,
 PostgreSQL advisory lock, importer snapshot/rehash와 workload limits에 더해
 `0017_run_identity_v2`와 API/provider 계약을 반영했다. 운영 전환 전 producer
-publish/readiness는 AP-1 WSL 코드·검증을 완료했고 quota·multi-worker AP-2 release gate는 남아 있다.
+publish/readiness AP-1과 workspace/gate AP-2 코드는 완료했고, host capability와
+filesystem quota 적용을 확인하는 AP-2 release gate는 남아 있다.
 
 - manifest와 매핑 파일의 checksum/size를 canonical 정렬해 fingerprint를 만든다.
 - 동일 fingerprint 또는 동일 source checksum은 `SKIPPED/NOOP`으로 처리하고 기존
@@ -240,8 +245,11 @@ publish/readiness는 AP-1 WSL 코드·검증을 완료했고 quota·multi-worker
   cluster·DB·로그를 제거해 residue 0을 확인했으며 기존 5432 DB와 `.env` 연결은
   사용하지 않았다.
 - importer snapshot/rehash로 fingerprint 계산 바이트와 실제 parse·media 저장
-  바이트의 일치를 보장한다. producer의 임시 sibling directory + atomic rename,
-  readiness 표식, snapshot temp quota와 multi-worker budget은 운영 요구사항이다.
+  바이트의 일치를 보장한다. AP-2는 manifest parse 뒤 `reserve + min-free`를
+  확인하고 `ENOSPC`/`EDQUOT`를 `BUNDLE_SNAPSHOT_RESERVE_UNAVAILABLE`로 정규화한다.
+  DuckDB/local은 POSIX `flock`, PostgreSQL은 pool 밖 전용 session advisory lock으로
+  full refresh와 retry를 함께 직렬화한다. 기본 2 worker PostgreSQL budget은 gate
+  session worker당 +1을 포함해 62다.
 
 #### P1-03 database-only media 마감
 
@@ -292,7 +300,7 @@ cd backend
   tests/test_run_identity_contracts.py \
   tests/test_run_identity_migration.py \
   tests/test_run_identity_v2.py
-# 256 collected (2026-08-25): bundle snapshot 29, readiness 24; PostgreSQL concurrency cases are opt-in at runtime.
+# PostgreSQL concurrency cases are opt-in at runtime; collection size is expected to change with focused coverage.
 ```
 
 ### Phase 2 — 기능별 V2 구조 전환(P1)
@@ -441,6 +449,10 @@ proxy/CA를 설치·갱신하는 자동화는 아직 없다. `NO_PROXY` assignme
 - 모든 허용 media extension fixture의 정상·MIME mismatch·corrupt signature 검증
 - PostgreSQL advisory lock·migration `0017_run_identity_v2` source-version,
   privilege·connection budget·live concurrency 검증
+- AP-2 workspace `0700`/비중첩·symlink·ownership, reserve failure와 `ENOSPC`/`EDQUOT`,
+  retry/full-refresh gate, PostgreSQL gate session budget 검증
+- Rocky host install, NFS/SMB mount probe·승인과 dedicated filesystem quota는 실제
+  target에서 별도 확인
 - 모든 신규 media blob 연결·checksum 검증
 - nginx config, TLS, forwarded header, SPA/API/assets/Range smoke
 - backup→빈 DB restore rehearsal
@@ -456,13 +468,14 @@ proxy/CA를 설치·갱신하는 자동화는 아직 없다. `NO_PROXY` assignme
 6. import history/status/retry UI를 구현했다. 선택 load case의 상태별 이력과
    `operation`, reason, 기존/교체 run, source revision을 조회하며 조건을 만족하는
    Master 실패/거부 job만 재시도한다. 원 job target drift는 거부하고 실패 재시도도 새
-   attempt로 남긴다. 당시 focused backend 7건·연계 P1 24건, frontend architecture/build/api,
-   Playwright 1건, full backend `479 passed, 5 skipped in 352.00s`, disposable
-   PostgreSQL history gate를 통과했다. (완료)
-7. **완료(WSL 검증):** producer atomic publish/readiness, local `legacy`/Rocky
-   `required` deployment gate와 example marker를 정합화했다. integrated focused
-   `122 passed in 77.07s`, full backend `533 passed, 5 skipped in 366.02s`,
-   architecture/OpenAPI/Rocky template/compileall을 통과했다. 실제 Rocky host와
-   NFS/SMB mount capability 검증은 release gate로 남는다.
-8. **다음(AP-2):** dedicated snapshot workspace quota와 cross-worker refresh
-   lock/budget을 구현하고 quota/load test로 운영 한계를 확정한다.
+   attempt로 남긴다. 별도 disposable PostgreSQL history gate 기록을 유지한다. (완료)
+7. **완료(코드·focused 계약 검증):** AP-1 producer atomic publish/readiness와 local
+   `legacy`/Rocky `required` policy, AP-2 dedicated `0700` snapshot workspace,
+   manifest parse 뒤 capacity gate, retry/full-refresh 공용 cross-worker gate를
+   정합화했다. 현재 구현은 `SIMDASH_IMPORT_REFRESH_MAX_CONCURRENT=1`만 허용한다.
+   **2026-08-25 AP-2 검증 기록:** focused 통합 `126 passed in 87.32s`, full backend
+   `573 passed, 5 skipped in 382.12s`; backend architecture/OpenAPI/compileall,
+   Rocky validator, frontend architecture/API self-test/build도 통과했다.
+8. **다음 release gate:** 실제 Rocky host install, NFS/SMB mount probe·승인,
+   filesystem quota와 capacity/load 한계를 target 환경에서 검증한다. native Windows
+   Refresh는 계속 fail-closed다.

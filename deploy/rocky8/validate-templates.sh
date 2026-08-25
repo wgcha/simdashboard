@@ -41,7 +41,20 @@ for required_installer_contract in \
   'Non-default SIMDASH_IMPORT_ROOT must be a mounted non-symlink directory' \
   'SIMDASH_IMPORT_ROOT="${SIMDASH_IMPORT_ROOT}"' \
   'SIMDASH_IMPORT_READINESS_POLICY="${SIMDASH_IMPORT_READINESS_POLICY}"' \
+  'SIMDASH_IMPORT_SNAPSHOT_ROOT="${SIMDASH_IMPORT_SNAPSHOT_ROOT}"' \
+  'SIMDASH_IMPORT_SNAPSHOT_RESERVE_BYTES="${SIMDASH_IMPORT_SNAPSHOT_RESERVE_BYTES}"' \
+  'SIMDASH_IMPORT_SNAPSHOT_MIN_FREE_BYTES="${SIMDASH_IMPORT_SNAPSHOT_MIN_FREE_BYTES}"' \
+  'SIMDASH_IMPORT_SNAPSHOT_STALE_SECONDS="${SIMDASH_IMPORT_SNAPSHOT_STALE_SECONDS}"' \
+  'SIMDASH_IMPORT_REFRESH_MAX_CONCURRENT="${SIMDASH_IMPORT_REFRESH_MAX_CONCURRENT}"' \
   'Rocky production requires SIMDASH_IMPORT_READINESS_POLICY=required.' \
+  'SIMDASH_IMPORT_SNAPSHOT_ROOT cannot contain whitespace' \
+  'SIMDASH_IMPORT_SNAPSHOT_ROOT must be outside INSTALL_ROOT' \
+  'SIMDASH_IMPORT_SNAPSHOT_ROOT must be inside RUNTIME_DIRECTORY' \
+  'SIMDASH_IMPORT_SNAPSHOT_ROOT must not overlap SIMDASH_IMPORT_ROOT.' \
+  'SIMDASH_IMPORT_SNAPSHOT_RESERVE_BYTES must be 1073741824-17179869184 bytes.' \
+  'SIMDASH_IMPORT_SNAPSHOT_MIN_FREE_BYTES must be 0-17179869184 bytes.' \
+  'SIMDASH_IMPORT_SNAPSHOT_STALE_SECONDS must be 60-7776000 seconds.' \
+  'Rocky production requires SIMDASH_IMPORT_REFRESH_MAX_CONCURRENT=1.' \
   'SIMDASH_IMPORT_READINESS_POLICY' \
   'SHA256SUMS'; do
   grep -Fq "${required_installer_contract}" "${root}/install.sh" || {
@@ -54,6 +67,11 @@ grep -Fq 'wheelhouse' "${root}/build-release.sh"
 grep -Fq 'AUTH_COOKIE_SECURE=true' "${root}/install.env.example"
 grep -Fq 'SIMDASH_IMPORT_ROOT=/var/lib/simdashboard/import' "${root}/install.env.example"
 grep -Fq 'SIMDASH_IMPORT_READINESS_POLICY=required' "${root}/install.env.example"
+grep -Fq 'SIMDASH_IMPORT_SNAPSHOT_ROOT=/var/lib/simdashboard/snapshots' "${root}/install.env.example"
+grep -Fq 'SIMDASH_IMPORT_SNAPSHOT_RESERVE_BYTES=1073741824' "${root}/install.env.example"
+grep -Fq 'SIMDASH_IMPORT_SNAPSHOT_MIN_FREE_BYTES=536870912' "${root}/install.env.example"
+grep -Fq 'SIMDASH_IMPORT_SNAPSHOT_STALE_SECONDS=86400' "${root}/install.env.example"
+grep -Fq 'SIMDASH_IMPORT_REFRESH_MAX_CONCURRENT=1' "${root}/install.env.example"
 grep -Fq 'RequiresMountsFor=__REPLACE_IMPORT_ROOT__' "${root}/systemd/simdashboard.service.template"
 grep -Fq 'ReadOnlyPaths=__REPLACE_IMPORT_ROOT__' "${root}/systemd/simdashboard.service.template"
 printf '%s\n' 'ROCKY8_DEPLOY_TEMPLATES_OK'

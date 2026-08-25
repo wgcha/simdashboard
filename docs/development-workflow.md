@@ -113,6 +113,20 @@ pnpm run generate:api
 - readiness/immutable publication 경계는 `services/canonical_result_bundle.py`, secure
   capture는 `services/bundle_snapshot.py`, source→final publication은
   `services/result_bundle_publisher.py`와 `scripts/publish_result_bundle.py`가 담당한다.
+- Master Refresh의 private snapshot은 import root와 비중첩인 service-owned `0700`
+  workspace에만 만든다. manifest parse 뒤 `reserve + min-free` app capacity gate를
+  확인하며 이는 kernel/filesystem quota가 아니다. `ENOSPC`/`EDQUOT`는
+  `BUNDLE_SNAPSHOT_RESERVE_UNAVAILABLE`로 정규화한다.
+- Refresh와 retry는 같은 process-local lock과 cross-worker execution gate를 쓴다.
+  DuckDB/local은 POSIX nonblocking `flock`, PostgreSQL은 request/media pool 밖의
+  전용 session advisory lock을 사용하며 현재
+  `SIMDASH_IMPORT_REFRESH_MAX_CONCURRENT=1`만 허용한다. gate 획득 뒤에만 strict stale
+  workspace를 정리한다. native Windows Refresh는 fail-closed다.
+- PostgreSQL pool budget에는 gate 전용 session worker당 +1을 포함한다. 기본 2 worker
+  값은 62다. AP-2 PostgreSQL advisory gate는 disposable 18.6 `127.0.0.1:55436`의
+  두 전용 session으로 BUSY·unlock/close 뒤 재획득·close-release 뒤 재획득을 확인했고,
+  기존 5432/`.env` DB를 사용하지 않은 뒤 cluster와 `/tmp` data/log를 정리했다. Rocky/
+  NFS/SMB host 검증과 filesystem quota 적용은 release gate로 남는다.
 
 수동 결과 upload는 형식을 나누어 검토한다. `SUMMARY_RESULT` JSON/CSV와
 `Radioss` mesh CSV는
@@ -205,7 +219,7 @@ DuckDB 통합 테스트는 session seed를 복사해 테스트별 `test.duckdb`�
 | Alembic migration | blank/upgrade PostgreSQL + app-role preflight |
 | 인증·권한 | 허용/거부/project-scope test + 감사 이벤트 |
 | route·navigation | routing self-test + 관련 Playwright |
-| 결과 parser/import | canonical folder + SUMMARY_RESULT JSON/CSV + Radioss mesh CSV location + 잘못된 확장자/MIME/path + idempotency + auth/audit transaction |
+| 결과 parser/import | canonical folder + snapshot workspace 0700/비중첩·capacity/ENOSPC·EDQUOT + retry/full-refresh gate + SUMMARY_RESULT JSON/CSV + Radioss mesh CSV location + 잘못된 확장자/MIME/path + idempotency + auth/audit transaction |
 | 미디어 | magic/MIME/크기 + DB blob + Range/HEAD/download |
 | 배포 template | template validation + bundle check + 실제 target smoke |
 
