@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,9 @@ from fastapi.testclient import TestClient
 
 from app.database import connect, initialize_database
 from app.main import app
+from app.config import import_bundle_limits
+from app.services.bundle_snapshot import capture_bundle
+from app.services.canonical_result_bundle import READY_MARKER_NAME, build_ready_marker, serialize_ready_marker
 from app.services import master_result_refresh
 from app.services.master_result_refresh import MasterResultRefreshError, MasterResultRefreshService
 
@@ -46,12 +50,31 @@ def _write_bundle(root: Path, name: str, *, value: float = 42.5, invalid: bool =
     return bundle
 
 
+def _publish_bundle(root: Path, publication_id: str, *, value: float = 42.5) -> tuple[Path, str]:
+    """Create a strict-ready bundle without relying on checked-in examples."""
+    relative = "/".join((PROJECT_ID, REQUEST_ID, LOAD_CASE_ID, publication_id, "manifest.json"))
+    bundle = _write_bundle(root, relative.removesuffix("/manifest.json"), value=value)
+    with capture_bundle(root, relative, import_bundle_limits()) as captured:
+        marker = build_ready_marker(
+            bundle_path=relative.removesuffix("/manifest.json"),
+            manifest_checksum=captured.manifest_checksum,
+            bundle_fingerprint=captured.bundle_fingerprint,
+            entry_count=len(captured.entries),
+            published_at="2026-08-25T00:00:00Z",
+        )
+    (bundle / READY_MARKER_NAME).write_bytes(serialize_ready_marker(marker))
+    return bundle, relative
+
+
 def _clean_master_refresh_records() -> None:
     with connect() as conn:
         run_ids = [row[0] for row in conn.execute(
             "SELECT analysis_run_id FROM analysis_run_metadata WHERE source_type='MASTER_FOLDER_REFRESH'"
         ).fetchall()]
-        conn.execute("DELETE FROM folder_import_jobs WHERE source_folder LIKE 'bundle-%'")
+        # Strict-ready bundles use their canonical project/request/load-case
+        # path, so source-folder prefixes are not sufficient for cleanup.
+        # Source type is the stable ownership boundary for this test module.
+        conn.execute("DELETE FROM folder_import_jobs WHERE source_type='MASTER_FOLDER_REFRESH'")
         for run_id in run_ids:
             conn.execute("DELETE FROM media_assets WHERE analysis_run_id=?", [run_id])
             conn.execute("DELETE FROM qualitative_notes WHERE analysis_run_id=?", [run_id])
@@ -106,6 +129,124 @@ def test_master_refresh_imports_typed_bundle_and_second_refresh_is_idempotent(tm
             "SELECT summary_json FROM folder_import_jobs WHERE source_folder='bundle-success/manifest.json' AND status='SKIPPED'"
         ).fetchone()[0]
         assert json.loads(skip_summary)["bundle_fingerprint"] == metadata[0]
+
+
+def test_required_readiness_imports_only_valid_marker_bundles_and_is_idempotent(tmp_path: Path):
+    _published, published_relative = _publish_bundle(tmp_path, "ready-refresh")
+    _write_bundle(tmp_path, "unmarked-refresh")
+    _write_bundle(tmp_path / ".simdashboard-staging-producer", "unpublished-refresh")
+
+    first = MasterResultRefreshService(tmp_path, readiness_policy="required").refresh()
+    assert [(item.manifest_path, item.status) for item in first] == [(published_relative, "IMPORTED")]
+
+    second = MasterResultRefreshService(tmp_path, readiness_policy="required").refresh()
+    assert [(item.manifest_path, item.status) for item in second] == [(published_relative, "SKIPPED")]
+
+
+def test_legacy_marker_is_strict_and_invalid_marker_isolated_from_valid_sibling(tmp_path: Path):
+    _published, published_relative = _publish_bundle(tmp_path, "ready-sibling")
+    invalid_bundle = _write_bundle(
+        tmp_path,
+        f"{PROJECT_ID}/{REQUEST_ID}/{LOAD_CASE_ID}/invalid-sibling",
+    )
+    (invalid_bundle / READY_MARKER_NAME).write_text("not json", encoding="utf-8")
+
+    items = MasterResultRefreshService(tmp_path, readiness_policy="legacy").refresh()
+    by_path = {item.manifest_path: item for item in items}
+    assert by_path[published_relative].status == "IMPORTED"
+    invalid_relative = f"{PROJECT_ID}/{REQUEST_ID}/{LOAD_CASE_ID}/invalid-sibling/manifest.json"
+    assert by_path[invalid_relative].reason_code == "BUNDLE_READY_MARKER_MALFORMED"
+    with connect() as conn:
+        assert conn.execute(
+            "SELECT count(*) FROM analysis_run_metadata WHERE source_name=?",
+            [invalid_relative],
+        ).fetchone()[0] == 0
+
+
+def test_required_invalid_marker_isolated_from_valid_marker_sibling(tmp_path: Path):
+    _published, published_relative = _publish_bundle(tmp_path, "required-valid-sibling")
+    invalid_bundle = _write_bundle(
+        tmp_path,
+        f"{PROJECT_ID}/{REQUEST_ID}/{LOAD_CASE_ID}/required-invalid-sibling",
+    )
+    (invalid_bundle / READY_MARKER_NAME).write_text("not json", encoding="utf-8")
+
+    items = MasterResultRefreshService(tmp_path, readiness_policy="required").refresh()
+    by_path = {item.manifest_path: item for item in items}
+    assert by_path[published_relative].status == "IMPORTED"
+    invalid_relative = f"{PROJECT_ID}/{REQUEST_ID}/{LOAD_CASE_ID}/required-invalid-sibling/manifest.json"
+    assert by_path[invalid_relative].reason_code == "BUNDLE_READY_MARKER_MALFORMED"
+    with connect() as conn:
+        assert conn.execute(
+            "SELECT count(*) FROM analysis_run_metadata WHERE source_name=?",
+            [invalid_relative],
+        ).fetchone()[0] == 0
+
+
+def test_required_retry_missing_marker_appends_failure_to_expected_target(tmp_path: Path):
+    relative = f"{PROJECT_ID}/{REQUEST_ID}/{LOAD_CASE_ID}/missing-ready/manifest.json"
+    _write_bundle(tmp_path, relative.removesuffix("/manifest.json"))
+
+    item = MasterResultRefreshService(tmp_path, readiness_policy="required").retry_manifest(
+        relative,
+        expected_target=(PROJECT_ID, REQUEST_ID, LOAD_CASE_ID),
+    )
+
+    assert item.status == "FAILED"
+    assert item.reason_code == "BUNDLE_READY_MARKER_MISSING"
+    with connect() as conn:
+        assert conn.execute(
+            "SELECT load_case_id, outcome_reason FROM folder_import_jobs WHERE source_folder=?",
+            [relative],
+        ).fetchone() == (LOAD_CASE_ID, "BUNDLE_READY_MARKER_MISSING")
+
+
+@pytest.mark.parametrize("marker_kind", ["directory", "fifo", "symlink"])
+def test_required_discovers_nonregular_markers_and_fails_closed(
+    tmp_path: Path, marker_kind: str
+):
+    relative = f"{PROJECT_ID}/{REQUEST_ID}/{LOAD_CASE_ID}/special-marker/manifest.json"
+    bundle = _write_bundle(tmp_path, relative.removesuffix("/manifest.json"))
+    marker = bundle / READY_MARKER_NAME
+    if marker_kind == "directory":
+        marker.mkdir()
+    elif marker_kind == "fifo":
+        if not hasattr(os, "mkfifo"):
+            pytest.skip("FIFO tests require os.mkfifo")
+        try:
+            os.mkfifo(marker)
+        except (OSError, NotImplementedError) as exc:
+            pytest.skip(f"FIFO unavailable on this filesystem: {exc}")
+    else:
+        target = bundle / "marker-target.json"
+        target.write_text("{}", encoding="utf-8")
+        try:
+            marker.symlink_to(target)
+        except (OSError, NotImplementedError) as exc:
+            pytest.skip(f"symlink unavailable: {exc}")
+
+    items = MasterResultRefreshService(tmp_path, readiness_policy="required").refresh()
+
+    assert [(item.manifest_path, item.status, item.reason_code) for item in items] == [
+        (relative, "FAILED", "BUNDLE_READY_MARKER_FILE_UNSAFE")
+    ]
+    with connect() as conn:
+        assert conn.execute(
+            "SELECT count(*) FROM analysis_run_metadata WHERE source_name=?",
+            [relative],
+        ).fetchone()[0] == 0
+
+
+def test_readiness_policy_uses_config_only_when_constructor_policy_is_unspecified(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    monkeypatch.setenv("SIMDASH_IMPORT_READINESS_POLICY", "required")
+    assert MasterResultRefreshService(tmp_path).readiness_policy == "required"
+    with pytest.raises(MasterResultRefreshError, match="준비 정책"):
+        MasterResultRefreshService(tmp_path, readiness_policy="")
+    monkeypatch.setenv("SIMDASH_IMPORT_READINESS_POLICY", "invalid")
+    with pytest.raises(MasterResultRefreshError, match="준비 정책 설정"):
+        MasterResultRefreshService(tmp_path)
 
 
 def test_master_refresh_reimports_when_mapping_file_changes_with_same_manifest(tmp_path: Path):

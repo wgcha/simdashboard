@@ -89,6 +89,15 @@ class ImportBundleLimits:
     max_curve_points: int = 100_000
 
 
+def import_readiness_policy() -> str:
+    """Return the import policy for bundles which do not have a READY marker."""
+
+    policy = os.getenv("SIMDASH_IMPORT_READINESS_POLICY", "legacy").strip().lower()
+    if policy not in {"legacy", "required"}:
+        raise RuntimeError("SIMDASH_IMPORT_READINESS_POLICY는 legacy 또는 required여야 합니다.")
+    return policy
+
+
 def database_settings() -> DatabaseSettings:
     backend = os.getenv("ANALYSIS_DB_BACKEND", "duckdb").strip().lower()
     if backend not in {"duckdb", "postgresql"}:

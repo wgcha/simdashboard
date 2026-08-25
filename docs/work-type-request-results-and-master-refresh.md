@@ -161,6 +161,7 @@
       └─ {load_case_id}/
          └─ {run_id}/
             ├─ manifest.json
+            ├─ .simdashboard-ready.json
             ├─ scalar_results.csv
             ├─ time_history.csv
             └─ media/
@@ -168,7 +169,25 @@
 
 폴더명은 탐색 보조 정보이며 실제 DB 연결은 검증된 `manifest.json`의 ID를 사용한다. root 탈출, 심볼릭 링크 탈출, 존재하지 않는 프로젝트·의뢰·하중 경우 조합은 거부한다.
 
-실행 가능한 기준 예제는 `examples/master-results/`에 있다. 현재 구현은 root 아래의 manifest를 재귀적으로 찾고 context ID를 정본으로 사용하므로, 폴더명의 ID 일치 강제는 별도 개선 항목이다. 확장자·MIME·DB blob 저장의 현재 계약은 `docs/storage-folder-and-file-contract.md`를 따른다.
+실행 가능한 기준 예제는 `examples/master-results/`에 있다. strict readiness에서는
+marker가 있는 canonical physical path와 context ID를 함께 검증하고, local legacy
+compatibility에서는 unmarked 기존 manifest를 계속 읽는다. 확장자·MIME·DB blob 저장의
+현재 계약은 `docs/storage-folder-and-file-contract.md`를 따른다.
+
+운영 producer는 source bundle에서 다음 명령으로 final path를 생성한다. application
+service 계정은 `SIMDASH_IMPORT_ROOT`에 쓰지 않으며 읽기 전용 import만 한다.
+
+```bash
+PYTHONPATH=backend python backend/scripts/publish_result_bundle.py \
+  --source-bundle /srv/solver-output/run-42 \
+  --import-root /var/lib/simdashboard/import \
+  --publication-id run-42
+```
+
+source는 producer 소유의 완료된 directory이고 final은 manifest context와
+publication ID로 계산한 import-root 내부 canonical path다. SPDM #13 layout 또는 #14
+확장자 inventory가 source에 존재한다는 사실만으로는 canonical publisher input으로
+자동 허용되지 않는다.
 
 [#13](https://github.com/wgcha/simdashboard/issues/13)의 SPDM 폴더 구조는 upstream
 의뢰 발견·변경 감지 구조다. 이 Refresh의 canonical 결과 폴더, `manifest.json`,
@@ -218,7 +237,14 @@ missing manifest·snapshot 초기 실패도 원 load case의 새 `FAILED` attemp
 원 job은 변경하지 않는다. 재시도와 전체 Refresh는 같은 worker process 안의
 process-local refresh lock을 공유한다. multi-worker lock/quota/budget은 다음 단계다.
 
-이력/재시도 slice는 full backend `479 passed, 5 skipped in 352.00s`와 PostgreSQL
+AP-1은 WSL에서 atomic publisher/marker와 strict example import, integrated focused
+`122 passed in 77.07s`, full backend `533 passed, 5 skipped in 366.02s`,
+architecture/OpenAPI/Rocky template/compileall 검증을 통과했다. 이 결과는 실제 Rocky
+host deploy나 NFS/SMB mount capability를 검증한 것은 아니며, 다음 AP-2에서 dedicated
+snapshot workspace quota와 cross-worker refresh lock/budget을 다룬다.
+
+이력/재시도 slice의 당시 full backend baseline은 `479 passed, 5 skipped in 352.00s`였고,
+PostgreSQL
 18.6 disposable `127.0.0.1:55434`의 `simulation_dashboard_test_history` live gate를
 통과했다. 이 gate는 blank Alembic head `0017`, app privilege/DDL denial, history
 list/filter/pagination/counts, V2 revision join, GET, missing retry `FAILED` append,
@@ -256,6 +282,18 @@ schemas/result_folder_refresh.py
 
 services/master_result_refresh.py
   └─ root 탐색, fingerprint·command 생성, manifest별 실패 격리
+
+services/canonical_result_bundle.py
+  └─ canonical publication path와 readiness marker v1 생성·검증 계약
+
+services/bundle_snapshot.py
+  └─ descriptor-relative immutable capture와 marker/payload byte 대조
+
+services/result_bundle_publisher.py
+  └─ producer source→final sibling staging, marker-last, no-replace publication
+
+scripts/publish_result_bundle.py
+  └─ producer-only publication CLI 경계
 
 adapters/persistence/result_import_history.py
   └─ `folder_import_jobs` read model과 V2 source revision enrichment

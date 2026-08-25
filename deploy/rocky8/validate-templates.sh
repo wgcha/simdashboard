@@ -40,6 +40,9 @@ for required_installer_contract in \
   'Non-default SIMDASH_IMPORT_ROOT is missing' \
   'Non-default SIMDASH_IMPORT_ROOT must be a mounted non-symlink directory' \
   'SIMDASH_IMPORT_ROOT="${SIMDASH_IMPORT_ROOT}"' \
+  'SIMDASH_IMPORT_READINESS_POLICY="${SIMDASH_IMPORT_READINESS_POLICY}"' \
+  'Rocky production requires SIMDASH_IMPORT_READINESS_POLICY=required.' \
+  'SIMDASH_IMPORT_READINESS_POLICY' \
   'SHA256SUMS'; do
   grep -Fq "${required_installer_contract}" "${root}/install.sh" || {
     printf 'Rocky 8 installer contract is missing: %s\n' "${required_installer_contract}" >&2
@@ -50,6 +53,7 @@ done
 grep -Fq 'wheelhouse' "${root}/build-release.sh"
 grep -Fq 'AUTH_COOKIE_SECURE=true' "${root}/install.env.example"
 grep -Fq 'SIMDASH_IMPORT_ROOT=/var/lib/simdashboard/import' "${root}/install.env.example"
+grep -Fq 'SIMDASH_IMPORT_READINESS_POLICY=required' "${root}/install.env.example"
 grep -Fq 'RequiresMountsFor=__REPLACE_IMPORT_ROOT__' "${root}/systemd/simdashboard.service.template"
 grep -Fq 'ReadOnlyPaths=__REPLACE_IMPORT_ROOT__' "${root}/systemd/simdashboard.service.template"
 printf '%s\n' 'ROCKY8_DEPLOY_TEMPLATES_OK'

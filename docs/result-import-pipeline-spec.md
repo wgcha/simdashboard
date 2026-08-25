@@ -183,7 +183,9 @@ LoadCase: DROP_BOTTOM_450MM
 backend/data/import/
 ```
 
-운영 환경에서는 환경변수로 변경 가능하게 한다.
+운영 환경에서는 환경변수로 변경 가능하게 한다. local/default는 migration compatibility를
+위해 `SIMDASH_IMPORT_READINESS_POLICY=legacy`이며 Rocky production installer/profile은
+`SIMDASH_IMPORT_READINESS_POLICY=required`만 허용한다.
 
 ```text
 SIMDASH_IMPORT_ROOT=D:\simulation_results\import
@@ -198,6 +200,7 @@ backend/data/import/
       └─ {load_case_id}/
          └─ {run_id}/
             ├─ manifest.json
+            ├─ .simdashboard-ready.json
             ├─ open_cell_stress.csv
             ├─ chassis_rear_deformation.csv
             ├─ time_history.csv
@@ -213,6 +216,29 @@ backend/data/import/
 - 폴더 ID와 manifest ID가 다르면 수집 실패 처리한다.
 - import root 밖의 경로 참조는 금지한다.
 - 심볼릭 링크를 통한 root 탈출도 차단한다.
+
+### 5.4 Atomic publication과 readiness marker
+
+producer는 source bundle을 application service가 읽는 final folder에 in-place로 쓰지
+않는다. final path의 parent 아래 sibling staging directory에서 canonical payload를
+완성하고 file/directory `fsync` 후, captured payload bytes에서 marker v1을 만든다.
+marker `.simdashboard-ready.json`은 payload 뒤 마지막으로 write+`fsync`하고 staging
+directory `fsync` 뒤 Linux `renameat2(RENAME_NOREPLACE)`로 final path를 한 번에
+공개한다. commit 뒤 parent directory도 `fsync`한다. 이미 존재하는 final path는
+replace하지 않는다.
+
+marker v1의 정확한 fields는 `schema_id`, `version`, `state=READY`, `bundle_path`,
+`manifest_checksum`, `bundle_fingerprint`, `entry_count`, `published_at`이다. importer는
+동일 descriptor-relative capture bytes와 marker 값을 비교하고 marker 자신은
+fingerprint에서 제외한다. WSL/Rocky ext4/XFS가 1차 지원이며 native Windows,
+`EXDEV`, `renameat2`/NOREPLACE 미지원은 fallback 없이 fail-closed한다. NFS/SMB는
+mount probe와 운영 승인 전에는 미지원이다.
+
+full refresh에서 `required`는 marker sibling이 있는 bundle만 scan하고 unmarked
+manifest는 보이지 않는다. `legacy`는 unmarked legacy manifest를 scan하되, marker가
+존재하면 strict marker capture만 사용한다. retry는 DB-stored relative manifest path로
+한 건을 다시 capture하며, strict profile의 missing/invalid marker는 원 target에 새
+FAILED attempt로 남긴다.
 
 ---
 
@@ -818,12 +844,18 @@ cd backend
 ```
 
 이 historical collection 이후 Radioss mesh locations는 canonical UoW로 이관됐고
-schema와 맞지 않던 legacy persistence는 제거됐다. producer atomic publish/readiness,
-snapshot 임시 저장소 quota와 multi-worker budget은 아직 운영 release gate다.
+schema와 맞지 않던 legacy persistence는 제거됐다. producer atomic publish/readiness와
+local `legacy`/Rocky `required` marker policy는 AP-1 WSL 코드·검증을 완료했다.
+integrated focused `122 passed in 77.07s`, full backend `533 passed, 5 skipped in
+366.02s`, architecture/OpenAPI/Rocky template/compileall 및 strict checked-in example
+marker import가 통과했다. 이 slice에서 새
+PostgreSQL live gate를 실행한 것은 아니며,
+기존 PG18 identity/history 사실은 별도 검증 기록으로 유지한다. 실제 Rocky host와
+NFS/SMB mount capability 검증, snapshot workspace quota와 multi-worker budget은 남아 있다.
 
-import history/status/retry slice는 focused backend 7건과 연계 P1 master
+import history/status/retry slice는 당시 focused backend 7건과 연계 P1 master
 Refresh/atomicity/identity 24건, frontend architecture/build/api, Playwright 1건을
-통과했다. full backend는 `479 passed, 5 skipped in 352.00s`를 통과했다. PostgreSQL
+통과했다. 당시 full backend baseline은 `479 passed, 5 skipped in 352.00s`였다. PostgreSQL
 18.6 disposable `127.0.0.1:55434`의 `simulation_dashboard_test_history`에서 blank
 Alembic head `0017`, app privilege/DDL denial, history list/filter/pagination/counts,
 V2 revision join, GET, missing retry `FAILED` append, target drift mismatch/no foreign
@@ -871,8 +903,8 @@ run도 PASS했고 cluster/port를 정리했다.
 - 감사 로그
 - PostgreSQL repository
 - 자동 watcher
-- **다음 개발:** producer atomic publish/readiness
-- 그 다음 snapshot temp quota와 multi-worker refresh lock/budget
+- **완료(WSL 검증):** producer atomic publish/readiness AP-1
+- **다음(AP-2):** snapshot workspace quota와 cross-worker refresh lock/budget
 
 ---
 

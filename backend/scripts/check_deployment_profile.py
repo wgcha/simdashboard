@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.config import database_settings, directory_settings, security_settings
+from app.config import database_settings, directory_settings, import_readiness_policy, security_settings
 
 
 def main() -> None:
@@ -16,6 +16,7 @@ def main() -> None:
     database = database_settings()
     security = security_settings()
     directory = directory_settings()
+    readiness_policy = import_readiness_policy()
     if profile == "windows-vm-intranet":
         failures: list[str] = []
         if database.backend != "postgresql":
@@ -36,9 +37,14 @@ def main() -> None:
             failures.append("AUTH_REQUIRED")
         if not security.cookie_secure:
             failures.append("SECURE_COOKIE_REQUIRED")
+        if readiness_policy != "required":
+            failures.append("READINESS_MARKER_REQUIRED")
         if failures:
             raise RuntimeError("ROCKY8_PROFILE_INVALID:" + ",".join(failures))
-    print(f"DEPLOYMENT_PROFILE_OK profile={profile} database={database.backend} auth={security.auth_mode} directory={directory.mode}")
+    print(
+        f"DEPLOYMENT_PROFILE_OK profile={profile} database={database.backend} "
+        f"auth={security.auth_mode} directory={directory.mode} readiness={readiness_policy}"
+    )
 
 
 if __name__ == "__main__":

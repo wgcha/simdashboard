@@ -1,6 +1,8 @@
 {
   "schema_id": "tv-drop-master-result-v1",
   "version": 1,
+  "source_run_id": "tv-drop-run-example-001",
+  "conflict_policy": "SKIP",
   "solver": "Radioss Explicit 2025",
   "note": "Canonical 개발용 마스터 결과 예제: scalar, curve, contour image, glTF model.",
   "context": {

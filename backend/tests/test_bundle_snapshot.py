@@ -15,6 +15,7 @@ from app.folder_import import scan_folder
 import app.services.bundle_snapshot as bundle_snapshot_module
 from app.services.bundle_fingerprint import FingerprintEntry, calculate_bundle_fingerprint
 from app.services.bundle_snapshot import BundleSnapshotError, capture_bundle
+from app.services.canonical_result_bundle import READY_MARKER_NAME
 
 
 pytestmark = pytest.mark.unit
@@ -217,8 +218,9 @@ def test_capture_rejects_duplicate_mapping_paths(tmp_path: Path) -> None:
     assert error.value.code == "BUNDLE_MAPPING_PATH_DUPLICATE"
 
 
-def test_capture_rejects_reserved_manifest_mapping(tmp_path: Path) -> None:
-    _write_bundle(tmp_path, mapping_paths=["manifest.json"])
+@pytest.mark.parametrize("reserved_path", ["manifest.json", READY_MARKER_NAME])
+def test_capture_rejects_reserved_bundle_metadata_mapping(tmp_path: Path, reserved_path: str) -> None:
+    _write_bundle(tmp_path, mapping_paths=[reserved_path])
 
     with pytest.raises(BundleSnapshotError) as error:
         _capture(tmp_path)

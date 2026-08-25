@@ -22,6 +22,15 @@ from typing import Any, Iterator
 from ..config import ImportBundleLimits
 from ..parsers.manifest_format import ManifestFormat, ManifestFormatError, load_manifest
 from .bundle_fingerprint import FingerprintEntry, calculate_bundle_fingerprint
+from .canonical_result_bundle import (
+    READY_MARKER_MAX_BYTES,
+    READY_MARKER_NAME,
+    ReadyMarkerError,
+    ReadyMarkerV1,
+    canonical_bundle_relative,
+    parse_ready_marker_bytes,
+    verify_ready_marker,
+)
 
 
 _COPY_CHUNK_BYTES = 1024 * 1024
@@ -77,6 +86,32 @@ def capture_bundle(
     snapshot is removed after parsing and persistence complete.
     """
 
+    return _capture_bundle(import_root, manifest_relative_path, limits, require_ready_marker=False)
+
+
+def capture_published_bundle(
+    import_root: Path,
+    manifest_relative_path: str,
+    limits: ImportBundleLimits,
+) -> CapturedBundle:
+    """Capture only a completed, canonically published result bundle.
+
+    The readiness marker is copied and parsed from the same already-open
+    bundle descriptor as the manifest and mapping bytes.  It is intentionally
+    not a fingerprint entry: publishing metadata must not change result-byte
+    idempotency.
+    """
+
+    return _capture_bundle(import_root, manifest_relative_path, limits, require_ready_marker=True)
+
+
+def _capture_bundle(
+    import_root: Path,
+    manifest_relative_path: str,
+    limits: ImportBundleLimits,
+    *,
+    require_ready_marker: bool,
+) -> CapturedBundle:
     _require_secure_traversal()
     manifest_parts = _relative_parts(manifest_relative_path, "BUNDLE_MANIFEST_PATH_INVALID")
     if manifest_parts[-1] != "manifest.json":
@@ -90,6 +125,24 @@ def capture_bundle(
         snapshot_root = Path(temporary_directory.name)
         with _open_import_root(import_root) as root_fd:
             with _open_directory_at(root_fd, manifest_parts[:-1]) as bundle_fd:
+                ready_marker: ReadyMarkerV1 | None = None
+                if require_ready_marker:
+                    _copy_relative_file(
+                        bundle_fd,
+                        (READY_MARKER_NAME,),
+                        snapshot_root,
+                        READY_MARKER_MAX_BYTES,
+                        READY_MARKER_MAX_BYTES,
+                        0,
+                        code_prefix="READY_MARKER",
+                        missing_code="BUNDLE_READY_MARKER_MISSING",
+                    )
+                    try:
+                        ready_marker = parse_ready_marker_bytes(
+                            (snapshot_root / READY_MARKER_NAME).read_bytes()
+                        )
+                    except ReadyMarkerError as exc:
+                        raise BundleSnapshotError(exc.code, str(exc)) from exc
                 manifest_entry = _copy_relative_file(
                     bundle_fd,
                     (manifest_parts[-1],),
@@ -140,10 +193,10 @@ def capture_bundle(
                     relative_path = str(mapping["path"])
                     mapping_parts = _relative_parts(relative_path, "BUNDLE_MAPPING_PATH_INVALID", manifest=manifest)
                     normalized_relative = "/".join(mapping_parts)
-                    if normalized_relative == "manifest.json":
+                    if normalized_relative in {"manifest.json", READY_MARKER_NAME}:
                         raise BundleSnapshotError(
                             "BUNDLE_MAPPING_PATH_RESERVED",
-                            "manifest.json은 결과 mapping으로 사용할 수 없습니다.",
+                            "manifest.json과 readiness marker는 결과 mapping으로 사용할 수 없습니다.",
                             manifest=manifest,
                         )
                     if normalized_relative in captured_by_path:
@@ -183,11 +236,31 @@ def capture_bundle(
                     total_bytes += entry.size
                     entries.append(entry)
 
+        bundle_fingerprint = calculate_bundle_fingerprint(entries)
+        if ready_marker is not None:
+            try:
+                physical_bundle_path = "/".join(manifest_parts[:-1])
+                canonical_bundle_path = canonical_bundle_relative(manifest, manifest_parts[-2])
+                if physical_bundle_path != canonical_bundle_path:
+                    raise ReadyMarkerError(
+                        "BUNDLE_READY_MARKER_PATH_MISMATCH",
+                        "발견된 bundle 경로가 manifest 대상과 canonical 경로로 일치하지 않습니다.",
+                    )
+                verify_ready_marker(
+                    ready_marker,
+                    bundle_path=physical_bundle_path,
+                    manifest_checksum=manifest_entry.sha256,
+                    bundle_fingerprint=bundle_fingerprint,
+                    entry_count=len(entries),
+                )
+            except ReadyMarkerError as exc:
+                raise BundleSnapshotError(exc.code, str(exc), manifest=manifest) from exc
+
         return CapturedBundle(
             bundle_root=snapshot_root,
             manifest=manifest,
             manifest_checksum=manifest_entry.sha256,
-            bundle_fingerprint=calculate_bundle_fingerprint(entries),
+            bundle_fingerprint=bundle_fingerprint,
             entries=tuple(entries),
             _temporary_directory=temporary_directory,
         )
@@ -289,6 +362,7 @@ def _copy_relative_file(
     total_before: int,
     *,
     code_prefix: str,
+    missing_code: str | None = None,
     manifest: dict[str, Any] | None = None,
 ) -> FingerprintEntry:
     with _open_directory_at(
@@ -301,7 +375,7 @@ def _copy_relative_file(
             file_fd = os.open(parts[-1], _file_flags(), dir_fd=parent_fd)
         except OSError as exc:
             raise BundleSnapshotError(
-                f"BUNDLE_{code_prefix}_FILE_UNSAFE",
+                missing_code if exc.errno == errno.ENOENT and missing_code else f"BUNDLE_{code_prefix}_FILE_UNSAFE",
                 "결과 파일 심볼릭 링크는 허용되지 않습니다."
                 if exc.errno == errno.ELOOP
                 else "결과 파일을 안전하게 열 수 없습니다.",

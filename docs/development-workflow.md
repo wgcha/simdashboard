@@ -76,15 +76,22 @@ pnpm run generate:api
 
 - PostgreSQL schema 변경은 새 Alembic revision으로만 수행한다.
 - `backend/migrations/schema.sql`, DuckDB compatibility DDL과 관련 이관 script를 함께 검토한다.
-- canonical result ingestion의 PostgreSQL source reservation은 migration `0016`의 non-null exact identity PK와 load-case별 namespaced 64-bit transaction advisory lock을 사용한다. 실패 transaction은 claim을 rollback한다.
+- canonical result ingestion은 load case별 namespaced 64-bit transaction advisory lock과
+  migration `0017_run_identity_v2`의 source-version ledger
+  `(load_case_id, source_type, source_key, source_revision)`를 사용한다. checksum,
+  server-assigned run 및 immutable supersede 관계를 ledger에 보존하고, 이전 `0016`
+  reservation은 historical backfill 입력일 뿐 runtime identity 정본이 아니다. 실패
+  transaction은 source-version reservation과 결과 write를 함께 rollback한다.
 - 빈 PostgreSQL과 기존 revision PostgreSQL에서 upgrade를 검증한다.
 - app 역할의 DDL 거부와 owner/app 자격 증명 분리를 유지한다.
 - DuckDB와 PostgreSQL에서 placeholder, JSON, upsert, transaction 동작을 모두 테스트한다.
 - `backend/tests/test_postgres_result_ingestion_concurrency.py`는 실제 PostgreSQL에서
   독립 연결 두 개를 사용한다. `ANALYSIS_TEST_POSTGRES=1`과
   `ANALYSIS_TEST_POSTGRES_DATABASE`를 모두 지정하고 `current_database()`가 일치할
-  때만 실행되므로, 일반 개발 DB에는 실행하지 않는다. 현재 기준선에서는 전용 test
-  DB가 없어 live 실행하지 않았다.
+  때만 실행되므로 일반 개발 DB에는 실행하지 않는다. 2026-08-25 disposable
+  PostgreSQL 18.6 live gate에서 blank `0001→0017`, `0016→0017` backfill, app-role
+  DDL 거부, pool budget, reference seed와 concurrency cases를 통과했고 cluster/DB/port를
+  정리했다.
 
 ### 3.5 결과 폴더와 확장자
 
@@ -95,6 +102,17 @@ pnpm run generate:api
 - 허용 media extension 전체(`.png`, `.jpg`, `.jpeg`, `.webp`, `.svg`, `.mp4`, `.webm`, `.glb`, `.gltf`)는 `backend/tests/test_media_policy_fixtures.py`의 generated minimal `tmp_path` fixture로 정상 signature, MIME/extension mismatch, corrupt signature를 검증한다. 영구 canonical folder example은 JSON/CSV/SVG/glTF만 유지한다.
 - 예제 파일은 README 전용 장식이 아니라 실제 parser/import 통합 테스트로 읽는다.
 - 같은 bundle을 다시 처리했을 때의 `SKIPPED`, 새 Run, replace 정책을 명시한다.
+- local/default `SIMDASH_IMPORT_READINESS_POLICY=legacy`는 marker 없는 호환 bundle을
+  읽고, Rocky profile은 `required`로 valid `.simdashboard-ready.json` v1 bundle만 읽는다.
+- producer는 source bundle과 final import root를 분리하고
+  `backend/scripts/publish_result_bundle.py --source-bundle … --import-root … --publication-id …`
+  로 publish한다. app service는 import root에 write 권한을 받지 않는다.
+- publication은 sibling staging, payload `fsync`, marker last, no-replace rename, parent
+  `fsync` 순서다. WSL/Rocky ext4/XFS 외 플랫폼, `EXDEV`, unsupported rename은
+  fail-closed이며 NFS/SMB는 mount probe/승인 전까지 사용하지 않는다.
+- readiness/immutable publication 경계는 `services/canonical_result_bundle.py`, secure
+  capture는 `services/bundle_snapshot.py`, source→final publication은
+  `services/result_bundle_publisher.py`와 `scripts/publish_result_bundle.py`가 담당한다.
 
 수동 결과 upload는 형식을 나누어 검토한다. `SUMMARY_RESULT` JSON/CSV와
 `Radioss` mesh CSV는

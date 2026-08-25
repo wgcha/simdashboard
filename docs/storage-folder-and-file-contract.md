@@ -2,7 +2,7 @@
 
 - 기준일: 2026-08-25
 - 상태: 현재 구현 기준 + 잔여 개선 항목
-- 관련 코드: `backend/app/config.py`, `database_connection.py`, `folder_import.py`, `parsers/manifest_format.py`, `parsers/manifest_parser.py`, `media_policy.py`, `services/bundle_fingerprint.py`, `services/master_result_refresh.py`, `application/results/commands.py`, `adapters/persistence/result_ingestion.py`, `services/media_storage_service.py`
+- 관련 코드: `backend/app/config.py`, `database_connection.py`, `folder_import.py`, `parsers/manifest_format.py`, `parsers/manifest_parser.py`, `media_policy.py`, `services/bundle_fingerprint.py`, `services/canonical_result_bundle.py`, `services/bundle_snapshot.py`, `services/result_bundle_publisher.py`, `scripts/publish_result_bundle.py`, `services/master_result_refresh.py`, `application/results/commands.py`, `adapters/persistence/result_ingestion.py`, `services/media_storage_service.py`
 
 이 문서는 DB 실행 위치, 결과 수집 폴더, manifest mapping, 허용 확장자와 실제 저장 방식을 하나의 기준으로 정리한다. GitHub [#13](https://github.com/wgcha/simdashboard/issues/13), [#14](https://github.com/wgcha/simdashboard/issues/14)의 upstream 요구사항은 아래 실행 계약과 구분해 기록한다.
 
@@ -74,6 +74,7 @@ Project_.../
       └─ {load_case_id}/
          └─ {run_id}/
             ├─ manifest.json
+            ├─ .simdashboard-ready.json
             ├─ results/
             │  └─ scalar-results.json
             ├─ curves/
@@ -84,7 +85,11 @@ Project_.../
                └─ result.gltf
 ```
 
-현재 구현은 root 아래의 모든 `manifest.json`을 탐색하고 실제 DB 연결은 `manifest.context`의 ID로 결정한다. 위 폴더명은 운영 convention이며, 현재 코드는 네 단계 폴더명의 ID가 manifest ID와 같은지 강제하지 않는다. 폴더명 일치가 필수 요구라면 별도 validation으로 추가해야 한다.
+실제 DB 연결은 `manifest.context`의 ID로 결정한다. readiness `required`에서는 marker가
+있는 bundle만 full scan 후보가 되며, marker 검증은 physical 네 segment path와
+`manifest.context`/publication ID가 일치하는지도 확인한다. `legacy`에서는 marker 없는
+기존 manifest도 호환 discovery 대상이지만, marker가 관찰된 bundle은 항상 strict
+검증으로 승격되어 손상 marker를 legacy로 우회하지 않는다.
 
 ## 4. 현재 canonical manifest
 
@@ -106,6 +111,8 @@ runtime 결과 쓰기를 수행하지 않는다.
 {
   "schema_id": "master-results-v1",
   "version": 1,
+  "source_run_id": "producer-stable-run-id",
+  "conflict_policy": "SKIP",
   "solver": "Radioss",
   "context": {
     "project_id": "project-tv-001",
@@ -254,24 +261,30 @@ bundle 내부 상대 경로, 파일 크기, 파일 내용의 SHA-256이며 상�
 3. 동일 fingerprint는 `SKIPPED`한다.
 4. 다른 fingerprint는 새 Run으로 처리한다.
 
-현재 PostgreSQL 보호:
+현재 PostgreSQL 보호와 검증:
 
 5. canonical ingestion은 load case별 namespaced 64-bit transaction advisory lock으로 `run_no` 할당을 직렬화한다.
-6. non-null exact identity `(source_type, source_name, source_checksum)`는 migration `0016`의 `canonical_result_ingestion_sources` primary key로 예약한다.
-7. 실패한 PostgreSQL transaction은 source reservation도 함께 rollback한다.
-
-잔여 정책:
-
-8. 동일 `run_id` 충돌과 replace 정책을 명시한다.
-9. `backend/tests/test_postgres_result_ingestion_concurrency.py`는 전용 PostgreSQL
-   test DB에서 독립 연결 두 개를 써서 동일 identity의 `IMPORTED`/`SKIPPED`, 다른
-   identity의 고유 `run_no`를 검증한다. `ANALYSIS_TEST_POSTGRES=1` 및
-   `ANALYSIS_TEST_POSTGRES_DATABASE`가 일치할 때만 실행하며, 현재 전용 DB가 없어
-   live 실행 결과는 없다.
-10. importer private snapshot/rehash와 parser workload limits는 구현되어 fingerprint
-   이후 파일 교체가 parse·media 저장 provenance를 바꾸지 못하게 한다. producer
-   atomic publish/readiness, snapshot temp quota와 multi-worker budget은 운영 잔여
-   요구사항이다.
+6. migration `0017_run_identity_v2`의 `canonical_result_ingestion_source_versions`가
+   `(load_case_id, source_type, source_key, source_revision)`별 checksum, server-assigned
+   run, immutable `supersedes_analysis_run_id`를 정본으로 보존한다. 이전 `0016`
+   `canonical_result_ingestion_sources`는 historical backfill 입력이며 runtime identity
+   reservation 정본이 아니다.
+7. 명시적 `source_run_id`의 변경 checksum은 `SKIP`, `REJECT`, immutable `REPLACE`로
+   처리한다. Master manifest의 `REPLACE`는 fail-closed이며 실패 transaction은 source
+   version reservation과 결과 write를 함께 rollback한다.
+8. `backend/tests/test_postgres_result_ingestion_concurrency.py`는 전용 PostgreSQL
+   test DB의 독립 연결로 exact NOOP, `SKIP`/`REJECT`/immutable `REPLACE`와 고유 `run_no`를
+   검증한다. 2026-08-25 disposable PostgreSQL 18.6 live gate에서 blank `0001→0017`,
+   `0016→0017` backfill, app-role DDL 거부, pool budget, reference seed 및 concurrency
+   cases를 통과했고 cluster/DB/port를 정리했다.
+9. importer private snapshot/rehash와 parser workload limits는 구현되어 fingerprint
+   이후 파일 교체가 parse·media 저장 provenance를 바꾸지 못하게 한다. producer atomic
+   publish/readiness와 local `legacy`/Rocky `required` marker policy는 AP-1 코드·WSL
+   검증을 완료했다. integrated focused `122 passed in 77.07s`, full backend
+   `533 passed, 5 skipped in 366.02s`, strict checked-in example marker import,
+   architecture/OpenAPI/Rocky template/compileall도 통과했다. 실제 Rocky host deploy와
+   NFS/SMB mount capability 검증은 아직 운영 release gate다. 다음 단계는 dedicated
+   snapshot workspace quota와 cross-worker refresh lock/budget(AP-2)이다.
 
 ### 8.1 Producer snapshot과 import limits
 
@@ -338,9 +351,29 @@ error code를 남기며, target을 검증할 수 없는 경우에는 DB job을 �
 sanitized refresh item 오류로 반환한다. snapshot은 하나의
 import가 정확히 어떤 bytes를 읽었는지는 고정하지만, producer가 여러 파일을
 서로 다른 시점에 쓰는 상황에서 논리적으로 일관된 generation을 보장하지는 않는다.
-producer는 결과 파일을 in-place로 쓰지 말고 임시 sibling 디렉터리에서 완료한 뒤
-atomic rename으로 publish해야 하며, 필요하면 별도의 readiness/완료 표식 정책을
-사용해야 한다.
+producer는 결과 파일을 in-place로 쓰지 않는다. Linux 지원 filesystem에서는 final
+directory와 같은 부모 아래 private sibling staging directory에 payload를 완성하고 각
+payload file 및 디렉터리를 `fsync`한다. 그 뒤 실제 bytes에서 marker v1을 만들고
+`.simdashboard-ready.json`을 **마지막**으로 write+`fsync`, staging directory를
+`fsync`한 뒤 `renameat2(..., RENAME_NOREPLACE)`로 final publication path에 commit하고
+마지막으로 parent directory를 `fsync`한다. marker는 `schema_id`, `version`, `state`,
+`bundle_path`, `manifest_checksum`, `bundle_fingerprint`, `entry_count`, `published_at`
+필드를 정확히 가진다. marker는 idempotency fingerprint entry에 포함하지 않는다.
+`RESULT_BUNDLE_PARENT_FSYNC_FAILED`는 final directory가 이미 visible해진 뒤 parent
+directory durability 확인이 실패한 경우다. publisher는 이 final을 삭제·교체하지 않으므로
+운영자는 blind retry 대신 marker/final 내용과 filesystem durability를 확인해야 한다.
+
+`SIMDASH_IMPORT_READINESS_POLICY=legacy`는 local/default compatibility이며 marker
+없는 기존 manifest도 full scan한다. `required`는 marker 없는 manifest를 full scan에서
+완전히 무시한다. DB에 이미 기록된 failed/REJECTED Master job의 retry는 stored relative
+manifest path만 재사용하고 `required` capture를 적용하므로 missing/invalid marker도
+원 target에 새 FAILED attempt로 남는다. Rocky installer와 deployment preflight는
+반드시 `required`만 허용한다.
+
+지원 1차 대상은 WSL과 Rocky Linux의 local ext4/XFS다. native Windows, cross-device
+`EXDEV`, `renameat2`/`RENAME_NOREPLACE` 미지원은 copy/replace fallback 없이
+fail-closed한다. NFS/SMB는 mount capability probe와 조직 승인 전에는 production
+publication target으로 승인되지 않는다.
 
 ## 9. 실제 예제와 검증
 
@@ -384,9 +417,15 @@ examples/master-results/
 - backup 대상인지, 재생성 가능한 source인지
 - 실패 파일 격리와 재처리 운영 절차
 
-Rocky installer는 `SIMDASH_IMPORT_ROOT`를 root 전용 service EnvironmentFile에
+Rocky installer는 `SIMDASH_IMPORT_ROOT`와 `SIMDASH_IMPORT_READINESS_POLICY=required`를 root 전용 service EnvironmentFile에
 전달하고 systemd `ReadOnlyPaths`와 `RequiresMountsFor`로 보호한다. 기본 local root는
 `/var/lib/simdashboard/import`이며 `root:simdashboard`, mode `0750`, SELinux
 `var_lib_t`를 사용한다. 외부 NAS/NFS/SMB root는 installer가 ownership/mode를
 변경하지 않으므로, mount 완료·서비스 계정의 재귀 읽기/실행 권한·조직 SELinux
 정책을 배포 전 승인해야 한다.
+
+publisher는 application service 계정이 아닌 별도 producer/root 계정에서 실행한다.
+application service는 `SIMDASH_IMPORT_ROOT`를 systemd `ReadOnlyPaths`로 열고 import만
+수행한다. #13 SPDM directory tree와 #14 source/result extension inventory는 publisher
+input을 자동 허용하지 않는다. producer가 canonical `manifest.json`, 허용 mapping,
+안정 `source_run_id`, `conflict_policy`를 생성·검증한 경우에만 publication한다.

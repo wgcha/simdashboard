@@ -203,7 +203,10 @@ Master Refresh의 private snapshot은 POSIX `dir_fd` 상대 open과 `O_NOFOLLOW`
 safe traversal adapter가 준비될 때까지 이 endpoint를 fail-closed한다. 수동
 upload와 다른 compatibility 기능은 이 제한과 독립적으로 동작한다.
 
-`backend/app/parsers/manifest_format.py`가 공통 format detector/loader 경계다.
+`backend/app/services/canonical_result_bundle.py`가 marker v1과 canonical publication
+path 계약을, `services/result_bundle_publisher.py`가 producer source→final no-replace
+publication을, `services/bundle_snapshot.py`가 importer의 descriptor-relative immutable
+capture를 맡는다. `backend/app/parsers/manifest_format.py`가 공통 format detector/loader 경계다.
 canonical `mappings`는 `scan_folder`와 Master Refresh로, legacy
 `result_files`는 parser schema와 기존 `ManifestParser` alias로만 명시적으로
 분기한다. mixed/unknown manifest, 잘못된 importer, root escape와 symlink는 각
@@ -336,7 +339,7 @@ FastAPI app.openapi()
 | 브라우저 | `frontend/e2e`, `pnpm run test:e2e` | 실제 권한·편집·결과·routing 흐름 |
 | PostgreSQL opt-in | `postgres_integration` marker와 preflight script | Alembic head, app-role 권한, 양 DB 호환 |
 
-결과 수집 focused 검증은 현재 collection 기준 **179개** test case다. canonical/legacy
+결과 수집 focused 검증은 현재 collection 기준 **256개** test case다. canonical/legacy
 manifest 경계, fingerprint idempotency와 mapping 변경 감지, 공통 UoW atomic
 rollback, manual `SUMMARY_RESULT` JSON/CSV의 target-qualified source·retry
 `SKIPPED`·audit/auth 재확인, Radioss scalar/curve/location atomic 저장, streaming
@@ -361,8 +364,15 @@ cd backend
   tests/test_streaming_json.py \
   tests/test_folder_import_limits.py \
   tests/test_import_bundle_limits.py \
-  tests/test_bundle_snapshot.py
-# 179 collected (2026-08-25); PostgreSQL concurrency cases are opt-in at runtime.
+  tests/test_bundle_snapshot.py \
+  tests/test_result_bundle_readiness.py \
+  tests/test_result_bundle_publisher.py \
+  tests/test_publish_result_bundle_cli.py \
+  tests/test_result_import_history.py \
+  tests/test_run_identity_contracts.py \
+  tests/test_run_identity_migration.py \
+  tests/test_run_identity_v2.py
+# 256 collected (2026-08-25): bundle snapshot 29, readiness 24; PostgreSQL concurrency cases are opt-in at runtime.
 
 # dedicated migrated disposable test database only; never use the regular 5432 DB
 ANALYSIS_DB_BACKEND=postgresql \
@@ -377,9 +387,9 @@ DATABASE_URL='postgresql+psycopg://<test_app_role>:<test_password>@<test_host>:5
 `DATABASE_URL`은 명령에서 명시한 전용 test DB여야 하며 `.env`의 현재
 `simulation_dashboard` 연결은 이 test에 사용하지 않는다.
 
-import history/status/retry slice는 focused backend 7건과 연계 P1 master
+import history/status/retry slice는 당시 focused backend 7건과 연계 P1 master
 Refresh/atomicity/identity 24건, frontend architecture/build/api, Playwright 1건을
-통과했다. full backend는 `479 passed, 5 skipped in 352.00s`를 통과했다.
+통과했다. 당시 full backend baseline은 `479 passed, 5 skipped in 352.00s`다.
 PostgreSQL 18.6 disposable `127.0.0.1:55434`의
 `simulation_dashboard_test_history`에서 blank Alembic head `0017`, app
 privilege/DDL denial, history list/filter/pagination/counts, V2 revision join, GET,
@@ -412,9 +422,18 @@ Architecture ceiling은 목표 수치가 아니라 부채가 늘지 않게 하�
 - 외부 NAS/NFS/SMB `SIMDASH_IMPORT_ROOT`의 부팅 순서, mount context, 용량과
   재처리 운영 절차는 각 사내 인프라 환경에서 승인해야 한다.
 - Master Refresh는 importer private snapshot/rehash와 parser workload limits로
-  fingerprint·parse·media 저장 bytes를 고정한다. import history/status/retry는 구현 및
-  focused·full regression·PG history query 검증을 마쳤다. 다음 개발은 producer atomic
-  publish/readiness, snapshot temp mount quota와 multi-worker 동시 refresh lock/budget이다.
+  fingerprint·parse·media 저장 bytes를 고정한다. producer는 sibling staging → payload
+  fsync → marker v1 last → `renameat2(RENAME_NOREPLACE)` → parent fsync로 publication하고,
+  app service import root는 read-only다. local/default `legacy`와 Rocky `required` marker
+  정책, full-scan/retry strict 동작, WSL/Rocky ext4/XFS 한정과 Windows/EXDEV/NFS/SMB
+  fail-closed/미승인 범위는 storage contract에 따른다. AP-1은 WSL에서 integrated
+  focused `122 passed in 77.07s`, full backend `533 passed, 5 skipped in 366.02s`,
+  architecture/OpenAPI/Rocky template/compileall과 strict example marker import를
+  통과했다. 이는 Rocky host deploy 또는
+  NFS/SMB mount capability 검증을 뜻하지 않는다.
+  import history/status/retry는 구현 및 focused·full regression·PG history query 검증을
+  마쳤다. 다음 개발은 AP-2 snapshot workspace quota와 multi-worker 동시 refresh
+  lock/budget이다.
   native Windows handle adapter/target wheel offline smoke도 운영 profile release gate로
   남아 있다.
 

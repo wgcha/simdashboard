@@ -41,6 +41,10 @@ def test_rocky8_installer_is_fail_closed_and_keeps_owner_secret_out_of_service_e
     assert "POSTGRES_OWNER_URL" not in environment_block
     assert "POSTGRES_ADMIN_URL" not in environment_block
     assert "SIM_DASH_OWNER_PASSWORD" not in environment_block
+    assert "SIMDASH_IMPORT_READINESS_POLICY" in environment_block
+    assert 'SIMDASH_IMPORT_READINESS_POLICY="${SIMDASH_IMPORT_READINESS_POLICY}"' in installer
+    assert '[[ "${SIMDASH_IMPORT_READINESS_POLICY}" == required ]]' in installer
+    assert "SIMDASH_IMPORT_READINESS_POLICY=required" in (deploy / "install.env.example").read_text(encoding="utf-8")
 
 
 def test_rocky8_bundle_builder_packages_built_frontend_and_checksums() -> None:

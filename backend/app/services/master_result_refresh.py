@@ -28,11 +28,12 @@ from uuid import uuid4
 
 from ..adapters.persistence.result_ingestion import SQLResultIngestionUnitOfWorkProvider
 from ..application.results.commands import ingest_result_bundle, utc_identifier
-from ..config import import_bundle_limits
+from ..config import import_bundle_limits, import_readiness_policy
 from ..domains.results.models import ResultIngestionCommand
 from ..database_connection import connect
 from ..folder_import import FolderImportError, scan_folder
-from ..services.bundle_snapshot import BundleSnapshotError, capture_bundle
+from ..services.bundle_snapshot import BundleSnapshotError, capture_bundle, capture_published_bundle
+from ..services.canonical_result_bundle import READY_MARKER_NAME, STAGING_DIRECTORY_PREFIX
 
 
 RefreshStatus = Literal["IMPORTED", "SKIPPED", "FAILED"]
@@ -84,12 +85,25 @@ def _normalize_import_root(root: Path) -> Path:
 class MasterResultRefreshService:
     """Best-effort importer for all ``manifest.json`` files under one trusted root."""
 
-    def __init__(self, root: Path | None = None):
+    def __init__(
+        self,
+        root: Path | None = None,
+        *,
+        readiness_policy: Literal["legacy", "required"] | None = None,
+    ):
         self.root = configured_import_root() if root is None else _normalize_import_root(root)
         try:
             self.limits = import_bundle_limits()
         except RuntimeError as exc:
             raise MasterResultRefreshError(f"결과 bundle 제한 설정이 올바르지 않습니다: {exc}") from exc
+        if readiness_policy is None:
+            try:
+                readiness_policy = import_readiness_policy()
+            except RuntimeError as exc:
+                raise MasterResultRefreshError(f"결과 bundle 준비 정책 설정이 올바르지 않습니다: {exc}") from exc
+        self.readiness_policy = readiness_policy
+        if self.readiness_policy not in {"legacy", "required"}:
+            raise MasterResultRefreshError("결과 bundle 준비 정책이 올바르지 않습니다.")
 
     def refresh(self) -> list[RefreshItem]:
         # A snapshot can consume the complete per-bundle temporary-storage
@@ -128,29 +142,78 @@ class MasterResultRefreshService:
         # os.walk never follows directory links. A final manifest link is
         # retained as a discovery-relative item and rejected by snapshot
         # capture, while linked directories are intentionally not explored.
-        manifests: list[str] = []
+        manifests: set[str] = set()
+        ready_markers: dict[str, str] = {}
         for directory, dirnames, filenames in os.walk(self.root, followlinks=False):
             directory_path = Path(directory)
-            dirnames[:] = [name for name in dirnames if not (directory_path / name).is_symlink()]
             directory_relative = directory_path.relative_to(self.root)
-            manifests.extend(
-                (directory_relative / name).as_posix()
-                for name in filenames
-                if name == "manifest.json"
-            )
-        return [self._refresh_manifest(relative) for relative in sorted(manifests)]
+
+            # Producer staging directories must never become discoverable
+            # bundles, including when the directory is a symlink.  Marker
+            # directories are candidates too, but are pruned after recording
+            # them so a malicious marker cannot contain nested bundles.
+            retained_directories: list[str] = []
+            for name in dirnames:
+                candidate = directory_path / name
+                if name.startswith(STAGING_DIRECTORY_PREFIX):
+                    continue
+                if name == READY_MARKER_NAME:
+                    marker_relative = (directory_relative / name).as_posix()
+                    ready_markers.setdefault(_sibling_manifest_path(marker_relative), marker_relative)
+                    continue
+                if candidate.is_symlink():
+                    continue
+                retained_directories.append(name)
+            dirnames[:] = retained_directories
+            for name in filenames:
+                relative = (directory_relative / name).as_posix()
+                if name == "manifest.json":
+                    manifests.add(relative)
+                elif name == READY_MARKER_NAME:
+                    ready_markers.setdefault(_sibling_manifest_path(relative), relative)
+
+        if self.readiness_policy == "required":
+            # A manifest alone is intentionally invisible: the producer has
+            # not atomically published this bundle yet.
+            return [
+                self._refresh_manifest(relative, ready_marker_relative=ready_markers[relative])
+                for relative in sorted(ready_markers)
+            ]
+
+        # Legacy installations retain unmarked manifests, while an observed
+        # marker upgrades that same bundle to strict publication capture.
+        return [
+            self._refresh_manifest(relative, ready_marker_relative=ready_markers.get(relative))
+            for relative in sorted(manifests | set(ready_markers))
+        ]
 
     def _refresh_manifest(
         self,
         relative: str,
         *,
         expected_target: ResultTarget | None = None,
+        ready_marker_relative: str | None = None,
     ) -> RefreshItem:
         captured_target: ResultTarget | None = None
         captured_manifest: dict[str, Any] | None = None
         captured_source_checksum: str | None = None
         try:
-            with capture_bundle(self.root, relative, self.limits) as captured:
+            marker_relative = ready_marker_relative
+            if marker_relative is None and self.readiness_policy == "required":
+                marker_relative = _ready_marker_for_manifest(relative)
+            # In legacy mode, a marker changes the producer contract too: do
+            # not accept an invalid/incomplete published bundle by falling
+            # back to the permissive capture path.
+            if marker_relative is None:
+                marker_candidate = _ready_marker_for_manifest(relative)
+                if _marker_lexists(self.root, marker_candidate):
+                    marker_relative = marker_candidate
+            capture = (
+                capture_published_bundle(self.root, relative, self.limits)
+                if marker_relative is not None
+                else capture_bundle(self.root, relative, self.limits)
+            )
+            with capture as captured:
                 captured_manifest = captured.manifest
                 captured_source_checksum = captured.bundle_fingerprint
                 captured_target = _manifest_target(captured.manifest)
@@ -433,6 +496,28 @@ def _stored_manifest_relative(relative: str) -> str:
     if parts[-1] != "manifest.json" or any(part in {"", ".", ".."} for part in parts):
         raise MasterResultRefreshError("저장된 결과 manifest 경로가 올바르지 않습니다.")
     return "/".join(parts)
+
+
+def _ready_marker_for_manifest(manifest_relative: str) -> str:
+    """Return the fixed sibling readiness-marker path for one manifest."""
+    parts = manifest_relative.split("/")
+    return "/".join((*parts[:-1], READY_MARKER_NAME))
+
+
+def _sibling_manifest_path(marker_relative: str) -> str:
+    """Map a discovered fixed-name marker to its canonical manifest sibling."""
+    parts = marker_relative.split("/")
+    return "/".join((*parts[:-1], "manifest.json"))
+
+
+def _marker_lexists(root: Path, marker_relative: str) -> bool:
+    """Treat every directory entry, including a broken symlink, as a marker.
+
+    ``Path.exists`` follows links and would incorrectly allow legacy capture
+    to bypass a broken marker.  The strict snapshot owns final type and
+    safety validation; this check only selects that fail-closed boundary.
+    """
+    return os.path.lexists(root / Path(*marker_relative.split("/")))
 
 
 def _validated_expected_target(target: ResultTarget | None) -> ResultTarget | None:
