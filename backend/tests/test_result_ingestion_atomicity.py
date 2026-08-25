@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app.adapters.persistence import result_ingestion as result_ingestion_adapter
+from app.adapters.persistence.result_ingestion import SQLResultIngestionUnitOfWork
 from app.database import connect, initialize_database
 from app.main import app
-from app.adapters.persistence.result_ingestion import SQLResultIngestionUnitOfWork
 from app.services.master_result_refresh import MasterResultRefreshService
 
 
@@ -17,7 +19,7 @@ REQUEST_ID = "request-drop-001"
 LOAD_CASE_ID = "loadcase-drop-bottom-001"
 
 
-def _write_bundle(root: Path, name: str = "bundle-atomic") -> None:
+def _write_bundle(root: Path, name: str = "bundle-atomic", *, include_media: bool = False) -> None:
     bundle = root / name
     bundle.mkdir()
     (bundle / "scalar-results.json").write_text(
@@ -36,6 +38,23 @@ def _write_bundle(root: Path, name: str = "bundle-atomic") -> None:
         ),
         encoding="utf-8",
     )
+    mappings = [{"kind": "typed_scalars", "path": "scalar-results.json"}]
+    if include_media:
+        media = bundle / "media.svg"
+        media.write_text(
+            f'<svg xmlns="http://www.w3.org/2000/svg"><text>{root.name}</text></svg>',
+            encoding="utf-8",
+        )
+        mappings.append(
+            {
+                "kind": "media",
+                "path": "media.svg",
+                "variable_key": "atomic_contour",
+                "display_name": "Atomic contour",
+                "asset_type": "IMAGE",
+                "mime_type": "image/svg+xml",
+            }
+        )
     (bundle / "manifest.json").write_text(
         json.dumps(
             {
@@ -47,7 +66,7 @@ def _write_bundle(root: Path, name: str = "bundle-atomic") -> None:
                     "request_id": REQUEST_ID,
                     "load_case_id": LOAD_CASE_ID,
                 },
-                "mappings": [{"kind": "typed_scalars", "path": "scalar-results.json"}],
+                "mappings": mappings,
             }
         ),
         encoding="utf-8",
@@ -115,6 +134,41 @@ def test_canonical_ingestion_rolls_back_all_result_rows_when_persistence_fails(m
         assert conn.execute(
             "SELECT count(*) FROM folder_import_jobs WHERE source_folder='bundle-atomic/manifest.json' AND status='FAILED'"
         ).fetchone()[0] == 1
+
+
+def test_canonical_media_stores_blob_before_asset_and_rolls_back_both(monkeypatch, tmp_path: Path):
+    _write_bundle(tmp_path, "bundle-media-atomic", include_media=True)
+    with connect() as conn:
+        baseline_media = conn.execute("SELECT count(*) FROM media_assets").fetchone()[0]
+        baseline_blobs = conn.execute("SELECT count(*) FROM asset_blobs").fetchone()[0]
+        baseline_chunks = conn.execute("SELECT count(*) FROM asset_blob_chunks").fetchone()[0]
+
+    original_store_file = result_ingestion_adapter.store_file
+    original_add_results = SQLResultIngestionUnitOfWork.add_results
+    observed_media_counts: list[int] = []
+
+    def store_after_empty_asset_rows(connection, path, **kwargs):
+        observed_media_counts.append(connection.execute("SELECT count(*) FROM media_assets").fetchone()[0])
+        return original_store_file(connection, path, **kwargs)
+
+    def fail_after_persist(unit_of_work, *args, **kwargs):
+        original_add_results(unit_of_work, *args, **kwargs)
+        raise RuntimeError("injected media persistence failure")
+
+    monkeypatch.setattr(result_ingestion_adapter, "store_file", store_after_empty_asset_rows)
+    monkeypatch.setattr(SQLResultIngestionUnitOfWork, "add_results", fail_after_persist)
+
+    result = MasterResultRefreshService(tmp_path).refresh()
+
+    assert result[0].status == "FAILED"
+    assert observed_media_counts == [baseline_media]
+    media_bytes = (tmp_path / "bundle-media-atomic" / "media.svg").read_bytes()
+    media_checksum = hashlib.sha256(media_bytes).hexdigest()
+    with connect() as conn:
+        assert conn.execute("SELECT count(*) FROM media_assets").fetchone()[0] == baseline_media
+        assert conn.execute("SELECT count(*) FROM asset_blobs").fetchone()[0] == baseline_blobs
+        assert conn.execute("SELECT count(*) FROM asset_blob_chunks").fetchone()[0] == baseline_chunks
+        assert conn.execute("SELECT count(*) FROM asset_blobs WHERE sha256=?", [media_checksum]).fetchone()[0] == 0
 
 
 def test_master_refresh_and_typed_example_routes_remain_registered():

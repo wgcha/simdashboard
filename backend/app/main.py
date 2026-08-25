@@ -20,6 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
+from . import config as app_config
 from .modules.access_control import (
     DASHBOARD_EDIT,
     PROJECT_DATA_VIEW,
@@ -141,6 +142,12 @@ app.include_router(access_control_router)
 app.include_router(workbench_router)
 app.include_router(modeling_catalog_router)
 app.include_router(result_folder_refresh_router)
+
+
+def media_storage_mode() -> app_config.MediaStorageMode:
+    """Read media cutover policy at request time and keep it patchable."""
+
+    return app_config.media_storage_mode()
 
 
 WORKSPACE_LAYOUT_KINDS = {"portfolio", "workflow"}
@@ -576,7 +583,8 @@ def get_drop_videos(
         raise HTTPException(404, "하중 경우를 찾을 수 없습니다.")
 
     videos: list[dict[str, Any]] = []
-    storage_source = "DATABASE" if stored_videos else "EXAMPLE_ADAPTER"
+    database_only = media_storage_mode() == "database-only"
+    storage_source = "DATABASE" if stored_videos or database_only else "EXAMPLE_ADAPTER"
     if stored_videos:
         for item in stored_videos:
             scene = DROP_VIDEO_DEMO_BY_ID.get(item["video_id"])
@@ -605,7 +613,7 @@ def get_drop_videos(
                     },
                 }
             )
-    elif load_case_id in DEMO_DROP_VIDEO_LOAD_CASE_IDS:
+    elif not database_only and load_case_id in DEMO_DROP_VIDEO_LOAD_CASE_IDS:
         for scene in DROP_VIDEO_DEMO_SCENES:
             path = DROP_VIDEO_SOURCE_DIR / scene.filename
             if not path.is_file():
@@ -695,6 +703,8 @@ def get_drop_video_content(video_id: str, request: Request) -> Response:
                 filename=str(stored["original_filename"]),
                 audit=lambda action, yielded, status: _media_audit_callback(request, action, yielded, status),
             )
+    if media_storage_mode() == "database-only":
+        raise HTTPException(404, "예제 영상 blob을 찾을 수 없습니다.")
     scene = DROP_VIDEO_DEMO_BY_ID.get(video_id)
     if scene is None:
         raise HTTPException(404, "허용된 예제 영상을 찾을 수 없습니다.")
@@ -725,6 +735,8 @@ def download_drop_video(video_id: str, request: Request) -> Response:
                 download=True,
                 audit=lambda action, yielded, status: _media_audit_callback(request, action, yielded, status),
             )
+    if media_storage_mode() == "database-only":
+        raise HTTPException(404, "예제 영상 blob을 찾을 수 없습니다.")
     scene = DROP_VIDEO_DEMO_BY_ID.get(video_id)
     if scene is None:
         raise HTTPException(404, "허용된 예제 영상을 찾을 수 없습니다.")
@@ -1014,6 +1026,8 @@ def _result_asset_response(asset_id: str, request: Request, *, download: bool) -
                 download=download,
                 audit=lambda action, yielded, status: _media_audit_callback(request, action, yielded, status),
             )
+        if media_storage_mode() == "database-only":
+            raise HTTPException(404, "결과 미디어 blob을 찾을 수 없습니다.")
         path = _legacy_asset_path(str(item.get("file_path") or ""))
         return FileResponse(path, media_type=str(item.get("mime_type") or "application/octet-stream"), filename=path.name if download else None)
 

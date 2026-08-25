@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal, cast
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
@@ -97,6 +98,18 @@ class ImportSnapshotSettings:
     reserve_bytes: int
     min_free_bytes: int
     stale_seconds: int
+
+
+MediaStorageMode = Literal["dual-read", "database-only"]
+
+
+def media_storage_mode() -> MediaStorageMode:
+    """Return the media read policy for the current request boundary."""
+
+    mode = os.getenv("SIMDASH_MEDIA_STORAGE_MODE", "dual-read").strip().lower()
+    if mode not in {"dual-read", "database-only"}:
+        raise RuntimeError("SIMDASH_MEDIA_STORAGE_MODE는 dual-read 또는 database-only여야 합니다.")
+    return cast(MediaStorageMode, mode)
 
 
 def import_snapshot_settings(

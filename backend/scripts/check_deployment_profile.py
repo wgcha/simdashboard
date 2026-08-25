@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.config import database_settings, directory_settings, import_readiness_policy, security_settings
+from app.config import database_settings, directory_settings, import_readiness_policy, media_storage_mode, security_settings
 
 
 def main() -> None:
@@ -17,6 +17,7 @@ def main() -> None:
     security = security_settings()
     directory = directory_settings()
     readiness_policy = import_readiness_policy()
+    storage_mode = media_storage_mode()
     if profile == "windows-vm-intranet":
         failures: list[str] = []
         if database.backend != "postgresql":
@@ -43,7 +44,8 @@ def main() -> None:
             raise RuntimeError("ROCKY8_PROFILE_INVALID:" + ",".join(failures))
     print(
         f"DEPLOYMENT_PROFILE_OK profile={profile} database={database.backend} "
-        f"auth={security.auth_mode} directory={directory.mode} readiness={readiness_policy}"
+        f"auth={security.auth_mode} directory={directory.mode} readiness={readiness_policy} "
+        f"media_storage={storage_mode}"
     )
 
 

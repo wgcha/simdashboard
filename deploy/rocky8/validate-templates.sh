@@ -33,6 +33,7 @@ for required_installer_contract in \
   'DEPLOYMENT_PROFILE=rocky8' \
   'scripts/check_postgres_connection.py' \
   'scripts/check_postgres_pool_budget.py' \
+  'scripts/check_media_storage_preflight.py' \
   'httpd_can_network_connect' \
   'SIMDASH_IMPORT_ROOT must be outside INSTALL_ROOT' \
   'SIMDASH_IMPORT_ROOT cannot contain whitespace' \
@@ -67,6 +68,7 @@ grep -Fq 'wheelhouse' "${root}/build-release.sh"
 grep -Fq 'AUTH_COOKIE_SECURE=true' "${root}/install.env.example"
 grep -Fq 'SIMDASH_IMPORT_ROOT=/var/lib/simdashboard/import' "${root}/install.env.example"
 grep -Fq 'SIMDASH_IMPORT_READINESS_POLICY=required' "${root}/install.env.example"
+grep -Fq 'SIMDASH_MEDIA_STORAGE_MODE=database-only' "${root}/install.env.example"
 grep -Fq 'SIMDASH_IMPORT_SNAPSHOT_ROOT=/var/lib/simdashboard/snapshots' "${root}/install.env.example"
 grep -Fq 'SIMDASH_IMPORT_SNAPSHOT_RESERVE_BYTES=1073741824' "${root}/install.env.example"
 grep -Fq 'SIMDASH_IMPORT_SNAPSHOT_MIN_FREE_BYTES=536870912' "${root}/install.env.example"
@@ -74,4 +76,6 @@ grep -Fq 'SIMDASH_IMPORT_SNAPSHOT_STALE_SECONDS=86400' "${root}/install.env.exam
 grep -Fq 'SIMDASH_IMPORT_REFRESH_MAX_CONCURRENT=1' "${root}/install.env.example"
 grep -Fq 'RequiresMountsFor=__REPLACE_IMPORT_ROOT__' "${root}/systemd/simdashboard.service.template"
 grep -Fq 'ReadOnlyPaths=__REPLACE_IMPORT_ROOT__' "${root}/systemd/simdashboard.service.template"
+grep -Fq 'check_media_storage_preflight.py' "${root}/systemd/simdashboard.service.template"
+grep -Fq 'TimeoutStartSec=300' "${root}/systemd/simdashboard.service.template"
 printf '%s\n' 'ROCKY8_DEPLOY_TEMPLATES_OK'

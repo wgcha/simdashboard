@@ -23,7 +23,9 @@ def test_windows_vm_profile_accepts_only_complete_intranet_contract(monkeypatch,
     monkeypatch.setattr(preflight, "security_settings", lambda: SimpleNamespace(auth_mode="oidc", cookie_secure=True))
     monkeypatch.setattr(preflight, "directory_settings", lambda: SimpleNamespace(mode="http"))
     preflight.main()
-    assert "DEPLOYMENT_PROFILE_OK profile=windows-vm-intranet" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "DEPLOYMENT_PROFILE_OK profile=windows-vm-intranet" in output
+    assert "media_storage=dual-read" in output
 
 
 def test_rocky8_profile_requires_postgres_authentication_and_secure_cookie(monkeypatch):

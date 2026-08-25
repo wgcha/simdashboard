@@ -1,10 +1,20 @@
 # PostgreSQL 바이너리 미디어 저장 전환 구현 계획
 
-> 상태: 구현 계획 및 완료 배경 기록. 미디어 migration `0008_media_blob_storage` 이후 migration이 계속 추가되었으므로 이 문서의 당시 예상 head를 현재 head로 사용하지 않는다. 현재 저장·검증 계약은 `storage-folder-and-file-contract.md`, 실제 head는 Alembic revision graph를 따른다.
+> 상태: 구현 계획과 완료 배경 기록. `0008_media_blob_storage`의 blob 저장 계층과
+> blob-first 신규 canonical/seed write, streaming/Range, dynamic-head verifier, legacy
+> migration dry-run/preflight/idempotent 실행 도구, strict shared media inventory와
+> backup/restore 연결은 구현 범위에 들어와 있다. legacy `file_path` dual-read fallback은
+> 아직 유지한다. database-only cutover, Rocky restore rehearsal과 부하·startup timeout
+> 적정성은 완료로 기록하지 않는다. 현재 저장 계약은
+> [`storage-folder-and-file-contract.md`](storage-folder-and-file-contract.md), backup
+> 운영 계약은 [`deployment-security-backup-guide.md`](deployment-security-backup-guide.md),
+> 실제 head는 Alembic revision graph를 따른다.
 
 ## 1. 문서 목적
 
-현재 애플리케이션은 이미지(JPEG, PNG 등)와 영상(MP4 등)을 파일 시스템에 저장하고 `media_assets.file_path`만 SQL에 기록한다. 이 문서는 비정형 파일의 원본 바이트를 PostgreSQL에 저장하고, 웹에서 안전한 스트리밍·다운로드로 제공하기 위한 구현 사양과 단계별 실행 계획이다.
+이 문서는 비정형 파일의 원본 바이트를 DB blob으로 저장하고, 웹에서 안전한
+스트리밍·다운로드로 제공하기 위한 구현 사양과 전환 release gate를 기록한다. 초기
+계획의 파일시스템-only 기준선은 더 이상 현재 구조를 설명하지 않는다.
 
 이 계획은 다음 요구를 모두 포함한다.
 
@@ -22,14 +32,23 @@
 
 - 백엔드: FastAPI, SQLAlchemy/psycopg, PostgreSQL 18.x 및 DuckDB 호환 계층
 - 프런트엔드: React/Vite
-- `media_assets`는 기존 `file_path`를 통해 파일 시스템의 `FileResponse`를 반환한다.
-- 드롭 비디오 20개는 현재 `video_example`에서 파일 응답으로 제공된다.
-- `/assets` 정적 마운트와 DB 경로 기반 URL이 존재한다.
+- 신규 canonical import의 `media_assets`는 blob/chunk에 저장하고 `blob_id`를 연결한다.
+- `asset_blobs`/`asset_blob_chunks`는 전체 및 chunk SHA-256, 크기, 순서를 검증하며
+  `(sha256, file_size)`로 deduplicate한다.
+- DB에 이미 저장된 demo video는 blob streaming으로 제공한다. 다만 기존 asset과 DB에
+  없는 allowlisted demo는 transition 중 `file_path`/filesystem fallback을 유지한다.
+- `verify_media_database_only.py`는 current Alembic head, unbound reference,
+  blob/chunk 무결성, reference demo load case가 있을 때 exact allowlist 20개(없으면
+  expected/actual 0개), PostgreSQL 권한·connection budget을 검사한다.
+- `scripts/media_transfer_manifest.py`는 strict shared media inventory/checksum을
+  생성·비교한다. backup은 pg_dump와 같은 exported snapshot에서 inventory를 만들고,
+  restore는 app-role exact comparison 뒤 database-only verifier를 실행한다. 이 기능은
+  코드·disposable 자동검증까지 완료했지만 실제 production rehearsal은 별도 gate다.
 - 기존 작업 트리에 사용자 변경사항이 있으므로 구현자는 관련 없는 diff를 되돌리거나 덮어쓰지 않는다.
 
 ### 2.2 포함 범위
 
-- 등록 이미지·영상 및 데모 MP4 20개
+- 등록 이미지·영상 및 reference fixture의 데모 MP4 20개(빈 production 설치는 0개)
 - PostgreSQL 스키마, Alembic 마이그레이션, 저장소/서비스/HTTP 계층
 - 기존 데이터·파일 마이그레이션과 롤백/재실행
 - Range 요청, 캐시 검증, 다운로드 파일명 처리
@@ -54,7 +73,12 @@
 
 ### 3.1 정본과 호환성
 
-새로운 데이터의 정본은 PostgreSQL의 `asset_blobs`와 `asset_blob_chunks`다. `media_assets.file_path`는 전환 기간의 legacy 참조로만 남기며, database-only 운영 게이트를 통과한 뒤에는 새 행에 사용하지 않는다.
+새로운 canonical 데이터와 reference/seed write의 정본은 `asset_blobs`와
+`asset_blob_chunks`다. `media_assets.file_path`는 전환 기간의 legacy 참조로만 남으며,
+현재는 DB blob을 우선하는 `SIMDASH_MEDIA_STORAGE_MODE=dual-read` 상태다.
+`database-only`에서는 blob이 없을 때 filesystem fallback을 사용하지 않는다. Rocky
+설치 기본은 `database-only`이고 설치 후 및 systemd startup app-role preflight가 이를
+검증한다. database-only 운영 gate가 승인되기 전에는 legacy 원본을 삭제하지 않는다.
 
 원본 파일은 다음 메타데이터와 함께 저장한다.
 
@@ -170,15 +194,29 @@ SVG는 script, event handler, 외부 리소스, active URL을 거부하고 응�
 
 ### 4.3 레거시 파일 이전
 
-`migrate_media_to_database.py`는 기본적으로 dry-run으로 실행한다.
+`scripts/migrate_media_to_database.py`는 기본적으로 dry-run으로 실행하며, source
+symlink/path·MIME·size·SHA-256 preflight, 재검사, idempotent blob attach와 explicit
+20-file demo allowlist를 제공한다. `--execute`에는 덮어쓰지 않는 `--receipt PATH`가
+필수이며 migration/cleanup 성공·실패 상태를 O_EXCL 예약형 no-overwrite `PENDING`→
+`COMPLETED`/`FAILED` recoverable journal evidence로 남긴다. 이는 production data
+migration 실행 기록이 아니다. `scripts/cleanup_migrated_media_files.py`는
+`--migration-receipt`, 실제 `--backup BACKUP.dump`, `--backup-manifest`,
+`--approval-id`를 항상 요구하고, 삭제 시 `--execute --confirm --migration-id ID
+--cleanup-receipt PATH`를 추가로 요구한다. manifest 단독은 충분하지 않으며 regular
+non-symlink dump의 filename·bytes·streamed SHA-256과 `pg_restore --list` archive parse를
+DB 접근 및 삭제 전에 manifest와 exact comparison한다. 7-day backup age, DB inventory, source checksum과 receipt 증적을
+다시 확인하는 evidence-gated 비자동 도구다.
 
 - 대상 파일, 크기, MIME, 전체 SHA-256을 사전 계산한다.
 - 모든 대상의 preflight가 통과한 뒤에만 DB 쓰기를 시작한다.
 - 기존 `media_assets` 및 드롭 비디오 참조를 blob에 연결한다.
 - 실패 시 현재 파일과 DB 참조를 보존하고 재실행 가능하도록 한다.
-- 데모 MP4는 명시적 allowlist만 사용하고 정확히 20/20개인지 확인한다.
+- reference demo load case가 있는 경우에만 명시적 allowlist 20/20개인지 확인하고,
+  fresh `SEED_MODE=empty` production DB에서는 demo 0/0을 확인한다.
 
-이전 원본은 검증된 백업이 존재하고 database-only 게이트가 통과한 뒤 7일 동안 보존한다. `cleanup_migrated_media_files.py`는 자동 삭제하지 않고 명시적 실행 및 사전 확인을 요구한다.
+이전 원본은 검증된 backup과 database-only gate가 통과한 뒤 최소 7일 동안 보존한다.
+`cleanup_migrated_media_files.py`는 자동 삭제하지 않고 운영자의 명시적 승인 및
+사전 확인을 요구한다. 승인 증적 없이 source를 삭제하는 것은 허용하지 않는다.
 
 ### 4.4 안전한 public/static 분리
 
@@ -305,27 +343,37 @@ type MediaAsset = {
 
 ## 9. 백업·복원 및 운영 게이트
 
-백업 transfer v2는 다음을 포함한다.
+P1-03의 backup→restore 구현·검증 계약은 다음을 포함한다. backup은 `pg_dump`와 같은
+exported snapshot에서 strict shared inventory를 생성해 manifest에 넣고, restore는
+`--verify-database-url APP_ROLE_URL`로 app-role exact comparison과
+`verify_media_database_only.py`를 실행한다. transfer bundle v2는 blob-bound media
+asset을 ZIP에 중복 포함하지 않으며 v1은 fail-closed한다. 이는 **코드·disposable
+자동검증 완료, 운영 증적 대기**이며 실제 Rocky production restore rehearsal 완료를
+뜻하지 않는다.
 
 - `pg_dump`에 `asset_blobs`, `asset_blob_chunks`, 참조 테이블 포함
 - manifest에 blob 수, 청크 수, 총 바이트, 참조 수, 전체 checksum 기록
 - `assets.zip`에는 DB에 없는 정적/legacy 파일만 포함
-- 복원 후 모든 blob/chunk checksum·길이·참조 무결성 재검증
+- 복원 후 app-role 관점에서 manifest와 모든 blob/chunk checksum·길이·참조 무결성을
+  exact 비교하고 database-only verifier 재검증
 
-`database_only` startup gate는 다음을 모두 확인한다.
+`database-only` startup gate는 다음을 모두 확인한다.
 
 1. unbound `media_assets`가 0개
 2. 모든 참조 blob이 존재하고 크기·checksum·chunk_count가 일치
-3. 데모 MP4가 정확히 20/20개 연결
+3. reference demo load case가 있으면 데모 MP4가 정확히 20/20개, fresh empty
+   production DB면 expected/actual 0/0개 연결
 4. 애플리케이션 role에 필요한 CRUD 권한 존재
 5. connection budget 검증 통과
-6. Alembic head가 기대 revision(계획상 `0008_media_blob_storage`)과 일치
+6. Alembic head가 고정 `0008`이 아니라 현재 revision graph의 단일 head와 일치
 7. public/static과 legacy 경로 교집합·symlink 없음
-8. 복원 rehearsal 및 checksum 검증 완료
+8. 실제 복원 rehearsal 및 checksum 검증 완료(운영 release gate)
 
-## 10. Alembic 및 스키마 호환성
+## 10. Alembic 및 스키마 호환성 (historical implementation note)
 
-새 마이그레이션 revision은 `0008_media_blob_storage`로 추가하고 현재 head인 `0007_access_control_menu_policy`를 `down_revision`으로 사용한다.
+`0008_media_blob_storage`는 당시 `0007_access_control_menu_policy`를
+`down_revision`으로 하여 추가됐다. 현재 검증은 이 historical revision을 고정 head로
+사용하지 않고 Alembic revision graph의 현재 단일 head를 사용한다.
 
 - 이미 존재하는 테이블·컬럼·인덱스에 대해 존재성 검사를 고려한다.
 - 현재 `0001`이 canonical `schema.sql`을 읽는 구조이므로 schema.sql, DuckDB DDL, export/import 스크립트를 함께 갱신한다.
@@ -341,14 +389,14 @@ type MediaAsset = {
 - public/static 및 legacy 경로 inventory 작성
 - 이 문서를 구현 spec으로 고정
 
-### Phase 1 — 스키마·저장 계층
+### Phase 1 — 스키마·저장 계층 (구현 범위)
 
 - `0008_media_blob_storage` 작성
 - `asset_blobs`, `asset_blob_chunks`, 참조 컬럼·인덱스 추가
 - repository와 storage service 구현
 - MIME·checksum·chunk invariant 단위 테스트 작성
 
-### Phase 2 — HTTP·권한·감사
+### Phase 2 — HTTP·권한·감사 (구현 범위)
 
 - media router와 streaming generator 구현
 - GET/HEAD, Range, ETag, If-Range, 304/416 처리
@@ -356,23 +404,26 @@ type MediaAsset = {
 - 프로젝트 resource resolver와 IDOR 테스트
 - media pool 및 connection lifecycle 적용
 
-### Phase 3 — 마이그레이션·GC·백업
+### Phase 3 — 마이그레이션·GC·백업 (코드 구현, 운영 증적 잔여)
 
-- legacy 및 demo dry-run/execute 도구 구현
-- preflight, rollback, 재실행, 20/20 gate 구현
+- legacy 및 demo dry-run/execute 도구와 media inventory helper 구현
+- preflight, 재실행, 20/20 allowlist 구현; production 실행 기록과 rollback rehearsal은
+  별도 release gate
 - two-sweep GC 및 lock/recheck 구현
-- transfer v2 manifest·복원 checksum 검증 구현
+- backup/restore의 exported-snapshot inventory, app-role exact comparison과
+  database-only verifier 연결을 검증; 실제 Rocky 빈 DB restore rehearsal은 release gate
 
-### Phase 4 — 프런트엔드
+### Phase 4 — 프런트엔드 (부분 구현, fallback 제거는 미완료)
 
 - API 타입·OpenAPI 갱신
 - inline 미디어 URL과 다운로드 링크 연결
 - file_path fallback 제거
 - 브라우저 이미지 표시, 영상 seek, 원본 다운로드 테스트
 
-### Phase 5 — 전환
+### Phase 5 — 전환 (외부 release gate)
 
-- dual-read 기간에 DB blob 우선, 검증된 legacy fallback만 허용
+- `SIMDASH_MEDIA_STORAGE_MODE=dual-read` 기간에 DB blob 우선, 검증된 legacy fallback만
+  허용; Rocky 설치 기본은 `database-only`이며 app-role preflight를 설치/startup에 실행
 - 모든 기존 참조 migrate
 - database-only startup gate 통과
 - 최소 7일 원본 보존 후 운영자가 별도 cleanup 실행
@@ -409,7 +460,7 @@ type MediaAsset = {
 - checksum 및 원본 byte round trip 통과
 - 권한/IDOR 테스트 통과
 - 복원 rehearsal 통과
-- 20개 데모 영상 gate 통과
+- reference load case면 데모 영상 20/20 gate, empty production이면 0/0 gate 통과
 - 부하 기준 통과
 - 미디어 파일 전체 메모리 적재가 없음을 코드 리뷰와 프로파일링으로 확인
 - 별도 Sol 검증자가 P0/P1 결함 없음 판정

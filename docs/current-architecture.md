@@ -90,6 +90,15 @@ Browser
 
 PostgreSQL에서는 `initialize_database()`가 필수 table을 읽기 전용으로 확인할 뿐 schema를 생성하거나 변경하지 않는다. PostgreSQL schema 변경의 유일한 원본은 `backend/migrations/versions/`의 Alembic revision이다.
 
+미디어는 신규 canonical import와 reference/seed write 모두 `asset_blobs`/
+`asset_blob_chunks`에 chunk 단위로 먼저 저장한 뒤 같은 transaction에서
+`media_assets.blob_id`로 연결한다. `SIMDASH_MEDIA_STORAGE_MODE`는 명시적
+`dual-read`(기본) 또는 `database-only`이며, dual-read에서만 blob이 없는 기존 asset과
+허용 demo video에 내부 filesystem fallback을 허용한다. Rocky 설치 profile은
+`database-only`를 기본으로 고정하고 설치 후와 systemd 시작 시 app-role preflight를
+실행한다. 실제 Rocky/NFS·quota, 빈 DB restore rehearsal, 부하와 startup timeout
+적정성은 별도 release gate로 남아 있다.
+
 ### 3.4 핵심 데이터 관계
 
 ```text
@@ -208,6 +217,24 @@ kernel/filesystem quota가 아니다. 부족하거나 `ENOSPC`/`EDQUOT`가 발�
 compatibility profile은 POSIX secure traversal과 flock이 없으므로 이 endpoint를
 `RESULT_IMPORT_REFRESH_LOCK_UNAVAILABLE`로 fail-closed한다. 수동 upload와 다른
 compatibility 기능은 이 제한과 독립적으로 동작한다.
+
+P1-03은 **코드·disposable 자동검증 완료, 운영 증적 대기** 상태다. 현재 Alembic
+revision graph를 읽는 media verifier와 strict shared inventory를 사용하며, reference
+demo load case(`loadcase-drop-bottom-001`)가 있을 때만 exact allowlist 20개를
+검증하고 fresh `SEED_MODE=empty` production DB에서는 expected/actual demo 0개를
+허용한다. backup은
+`pg_dump`와 같은 exported snapshot에서 inventory를 만들고 restore는 app-role exact
+comparison 뒤 database-only verifier를 실행한다. transfer bundle v2는 blob-bound
+media asset을 ZIP에 중복 포함하지 않고 v1은 fail-closed한다. migration/cleanup
+receipt/evidence는 O_EXCL 예약형 no-overwrite `PENDING`에서 `COMPLETED` 또는 `FAILED`로
+남는 recoverable journal이다. cleanup은 migration receipt·실제 regular non-symlink backup
+dump·backup manifest·approval/confirmation receipt와 7-day 보존 조건을 모두 확인하는
+evidence-gated 명시 실행이다. manifest 단독은 허용하지 않으며 dump의 filename·bytes·
+streamed SHA-256을 대조하고 private 0700 staging 사본의 동일 bytes에 `pg_restore --list`
+archive parse를 DB 접근 및 삭제 전에 수행한다. 삭제 시에는 same-parent private quarantine으로 원자 rename한 뒤 inode와
+hash가 같은 파일만 unlink하고, 불일치 대상은 quarantine에 보존한다.
+실제 Rocky/NFS·quota, production backup→빈 DB restore rehearsal, 500 MiB/50 stream
+부하와 5분 startup timeout 적정성, PowerShell 실실행은 외부 release gate다.
 
 Refresh와 retry는 모두 process-local lock 뒤 동일한 global execution gate를
 획득하고, 그 안에서만 strict stale snapshot을 정리한다. DuckDB/local은 private

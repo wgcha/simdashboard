@@ -1569,6 +1569,95 @@ def ensure_workspace_layouts(conn: ConnectionLike) -> None:
     )
 
 
+def _ensure_seed_media_asset(
+    conn: Any,
+    *,
+    asset_id: str,
+    analysis_run_id: str,
+    asset_type: str,
+    title: str,
+    file_path: str,
+    mime_type: str,
+    metadata_json: str,
+    source: Path,
+    filename: str,
+    own_transaction: bool = False,
+) -> None:
+    """Store one known reference asset before creating/linking its row.
+
+    Known reference contour assets are the only callers that create rows.
+    Existing rows are limited to the supplied seed ID and may be repaired when
+    a previous seed stopped after the legacy file_path-only insert.
+    """
+    existing = conn.execute(
+        "SELECT blob_id FROM media_assets WHERE id=?",
+        [asset_id],
+    ).fetchone()
+    if existing is not None and existing[0] is not None:
+        return
+
+    from .services.media_storage_service import store_file
+
+    owns_transaction = own_transaction and getattr(conn, "backend", None) == "duckdb"
+    if owns_transaction:
+        conn.execute("BEGIN TRANSACTION")
+    try:
+        if not source.is_file():
+            raise FileNotFoundError(f"seed media source is missing: {source}")
+        stored = store_file(
+            conn,
+            source,
+            filename=filename,
+            mime_type=mime_type,
+            asset_type=asset_type,
+        )
+        if existing is None:
+            conn.execute(
+                """
+                INSERT INTO media_assets
+                    (id, analysis_run_id, asset_type, title, file_path, mime_type,
+                     file_size, checksum, metadata_json, blob_id, original_filename)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    asset_id,
+                    analysis_run_id,
+                    asset_type,
+                    title,
+                    file_path,
+                    stored.mime_type,
+                    stored.blob.file_size,
+                    stored.blob.sha256,
+                    metadata_json,
+                    stored.blob.id,
+                    stored.original_filename,
+                ],
+            )
+        else:
+            conn.execute("UPDATE asset_blobs SET orphaned_at=NULL WHERE id=?", [stored.blob.id])
+            conn.execute(
+                """
+                UPDATE media_assets
+                SET blob_id=?, original_filename=?, mime_type=?, file_size=?, checksum=?
+                WHERE id=?
+                """,
+                [
+                    stored.blob.id,
+                    stored.original_filename,
+                    stored.mime_type,
+                    stored.blob.file_size,
+                    stored.blob.sha256,
+                    asset_id,
+                ],
+            )
+        if owns_transaction:
+            conn.execute("COMMIT")
+    except BaseException:
+        if owns_transaction:
+            conn.execute("ROLLBACK")
+        raise
+
+
 def ensure_demo_media_storage(conn: Any) -> None:
     """Backfill local fixtures into the chunk store without rewriting bytes.
 
@@ -1577,30 +1666,37 @@ def ensure_demo_media_storage(conn: Any) -> None:
     imports use the same storage service but do not depend on this helper.
     """
     from .services.drop_video_demo import DROP_VIDEO_DEMO_SCENES, DROP_VIDEO_SOURCE_DIR, probe_mp4
-    from .services.media_storage_service import attach_stored_media, store_file
+    from .services.media_storage_service import store_file
 
     asset_root = Path(__file__).resolve().parents[1] / "assets"
+    seed_asset_ids = (
+        "media-contour-001",
+        "media-showcase-trust",
+        "media-showcase-multitype",
+    )
     media_rows = conn.execute(
-        "SELECT id, file_path, mime_type, asset_type, original_filename, blob_id FROM media_assets WHERE blob_id IS NULL"
+        """
+        SELECT id, analysis_run_id, asset_type, title, file_path, mime_type,
+               metadata_json, original_filename
+        FROM media_assets
+        WHERE blob_id IS NULL AND id IN (?, ?, ?)
+        """,
+        list(seed_asset_ids),
     ).fetchall()
-    for asset_id, file_path, mime_type, asset_type, original_filename, _ in media_rows:
-        raw_path = str(file_path or "")
-        parts = Path(raw_path).parts
-        relative = Path(*parts[1:]) if parts and parts[0].lower() == "assets" else Path(raw_path)
-        source = (asset_root / relative).resolve()
-        if asset_root not in source.parents or not source.is_file():
-            continue
-        try:
-            stored = store_file(
-                conn,
-                source,
-                filename=str(original_filename or source.name),
-                mime_type=str(mime_type),
-                asset_type=str(asset_type),
-            )
-        except (OSError, ValueError):
-            continue
-        attach_stored_media(conn, str(asset_id), stored)
+    for asset_id, analysis_run_id, asset_type, title, file_path, mime_type, metadata_json, original_filename in media_rows:
+        _ensure_seed_media_asset(
+            conn,
+            asset_id=str(asset_id),
+            analysis_run_id=str(analysis_run_id),
+            asset_type=str(asset_type),
+            title=str(title),
+            file_path=str(file_path),
+            mime_type=str(mime_type),
+            metadata_json=str(metadata_json or "{}"),
+            source=asset_root / "sample-contour.svg",
+            filename=str(original_filename or "sample-contour.svg"),
+            own_transaction=True,
+        )
 
     for scene in DROP_VIDEO_DEMO_SCENES:
         if conn.execute("SELECT 1 FROM drop_video_assets WHERE video_id=?", [scene.video_id]).fetchone():
@@ -2242,13 +2338,18 @@ def ensure_feature_examples(conn: duckdb.DuckDBPyConnection) -> None:
         conn.execute("INSERT OR IGNORE INTO curve_results VALUES (?, ?, 'load_displacement_curve', '하중-변위 곡선', 'default', 'Displacement', 'mm', 'Load', 'N', 11, 'curve.csv', ?, ?)", [curve_id, run_id, hashlib.sha256(curve_id.encode()).hexdigest(), _iso(now - timedelta(days=3))])
         for point in range(11):
             conn.execute("INSERT OR IGNORE INTO curve_points VALUES (?, ?, ?, ?)", [curve_id, point, point * 0.5, round(120 * math.sin(point / 10 * math.pi), 3)])
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO media_assets
-                (id, analysis_run_id, asset_type, title, file_path, mime_type, file_size, checksum, metadata_json)
-            VALUES (?, ?, 'IMAGE', '응력 컨투어 예제', 'sample-contour.svg', 'image/svg+xml', NULL, ?, ?)
-            """,
-            [f"media-showcase-{key}", run_id, hashlib.sha256(f"media-{key}".encode()).hexdigest(), json.dumps({"variable_key": "stress_contour_image", "sample": True})],
+        _ensure_seed_media_asset(
+            conn,
+            asset_id=f"media-showcase-{key}",
+            analysis_run_id=run_id,
+            asset_type="IMAGE",
+            title="응력 컨투어 예제",
+            file_path="sample-contour.svg",
+            mime_type="image/svg+xml",
+            metadata_json=json.dumps({"variable_key": "stress_contour_image", "sample": True}),
+            source=Path(__file__).resolve().parents[1] / "assets" / "sample-contour.svg",
+            filename="sample-contour.svg",
+            own_transaction=True,
         )
         if conn.execute("SELECT count(*) FROM result_locations WHERE analysis_run_id=? AND variable_key='top_edge_max_stress'", [run_id]).fetchone()[0] == 0:
             conn.execute("INSERT INTO result_locations VALUES (?, 'top_edge_max_stress', 'ELEMENT', 'E-2048', 120.0, 5.0, 18.0, 5.0, 'ms', 'peak')", [run_id])
@@ -2494,23 +2595,17 @@ def seed_database(conn: duckdb.DuckDBPyConnection) -> None:
             _iso(now - timedelta(days=3, hours=20)),
         ],
     )
-    conn.execute(
-        """
-        INSERT INTO media_assets
-            (id, analysis_run_id, asset_type, title, file_path, mime_type, file_size, checksum, metadata_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        [
-            "media-contour-001",
-            "run-drop-001",
-            "CONTOUR_IMAGE",
-            "Open Cell 최대주응력 컨투어",
-            "assets/sample-contour.svg",
-            "image/svg+xml",
-            None,
-            None,
-            json.dumps({"result": "maximum_principal_stress", "unit": "MPa"}),
-        ],
+    _ensure_seed_media_asset(
+        conn,
+        asset_id="media-contour-001",
+        analysis_run_id="run-drop-001",
+        asset_type="CONTOUR_IMAGE",
+        title="Open Cell 최대주응력 컨투어",
+        file_path="assets/sample-contour.svg",
+        mime_type="image/svg+xml",
+        metadata_json=json.dumps({"result": "maximum_principal_stress", "unit": "MPa"}),
+        source=Path(__file__).resolve().parents[1] / "assets" / "sample-contour.svg",
+        filename="sample-contour.svg",
     )
 
     layout = {

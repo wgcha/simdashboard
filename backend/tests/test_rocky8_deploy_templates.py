@@ -38,13 +38,17 @@ def test_rocky8_installer_is_fail_closed_and_keeps_owner_secret_out_of_service_e
     assert "PostgreSQL 18.x is required" in installer
     assert "scripts/check_postgres_connection.py" in installer
     assert "scripts/check_postgres_pool_budget.py" in installer
+    assert "scripts/check_media_storage_preflight.py" in installer
     assert "POSTGRES_OWNER_URL" not in environment_block
     assert "POSTGRES_ADMIN_URL" not in environment_block
     assert "SIM_DASH_OWNER_PASSWORD" not in environment_block
     assert "SIMDASH_IMPORT_READINESS_POLICY" in environment_block
+    assert "SIMDASH_MEDIA_STORAGE_MODE" in environment_block
     assert 'SIMDASH_IMPORT_READINESS_POLICY="${SIMDASH_IMPORT_READINESS_POLICY}"' in installer
+    assert 'SIMDASH_MEDIA_STORAGE_MODE="${SIMDASH_MEDIA_STORAGE_MODE}"' in installer
     assert '[[ "${SIMDASH_IMPORT_READINESS_POLICY}" == required ]]' in installer
     assert "SIMDASH_IMPORT_READINESS_POLICY=required" in (deploy / "install.env.example").read_text(encoding="utf-8")
+    assert "SIMDASH_MEDIA_STORAGE_MODE=database-only" in (deploy / "install.env.example").read_text(encoding="utf-8")
     for name in (
         "SIMDASH_IMPORT_SNAPSHOT_ROOT",
         "SIMDASH_IMPORT_SNAPSHOT_RESERVE_BYTES",
@@ -75,6 +79,9 @@ def test_rocky8_installer_is_fail_closed_and_keeps_owner_secret_out_of_service_e
     assert "SIMDASH_IMPORT_SNAPSHOT_RESERVE_BYTES must be 1073741824-17179869184 bytes." in installer
     assert "SIMDASH_IMPORT_SNAPSHOT_MIN_FREE_BYTES must be 0-17179869184 bytes." in installer
     assert "SIMDASH_IMPORT_SNAPSHOT_STALE_SECONDS must be 60-7776000 seconds." in installer
+    service = (deploy / "systemd" / "simdashboard.service.template").read_text(encoding="utf-8")
+    assert "check_media_storage_preflight.py" in service
+    assert "TimeoutStartSec=300" in service
 
 
 def test_rocky8_bundle_builder_packages_built_frontend_and_checksums() -> None:
@@ -88,3 +95,13 @@ def test_rocky8_bundle_builder_packages_built_frontend_and_checksums() -> None:
     assert '"${output}.sha256"' in builder
     assert "--with-wheels" in builder
     assert '== imports' in builder
+
+
+def test_postgres_restore_wrappers_forward_explicit_app_role_verify_url() -> None:
+    root = Path(__file__).resolve().parents[2]
+    shell = (root / "scripts" / "postgres" / "restore-postgres.sh").read_text(encoding="utf-8")
+    powershell = (root / "scripts" / "postgres" / "restore-postgres.ps1").read_text(encoding="utf-8")
+    assert "--verify-database-url" in shell
+    assert "SIMDASH_APP_DATABASE_URL" in shell
+    assert "--verify-database-url" in powershell
+    assert "$AppRoleVerifyUrl" in powershell

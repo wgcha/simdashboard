@@ -233,11 +233,57 @@ JSON/CSV/SVG/glTF만 유지한다.
 
 ## 7. 미디어 저장 방식
 
-현재 신규 import 미디어의 정본은 DB blob이다. 파일 바이트는 최대 1 MiB 청크로 `asset_blob_chunks`에 저장하고 `asset_blobs`가 전체 SHA-256, 크기, 청크 수를 가진다. 같은 `(sha256, file_size)`는 deduplicate한다.
+현재 신규 canonical import와 reference/seed write의 정본은 DB blob이다. 파일 바이트는
+최대 1 MiB 청크로 `asset_blob_chunks`에 먼저 저장하고 `asset_blobs`가 전체 SHA-256,
+크기, 청크 수를 가지며, 같은 `(sha256, file_size)`는 deduplicate한다. media row는
+같은 transaction에서 `blob_id`, `original_filename`, `mime_type`과 실제 size/hash를
+연결한다.
 
-`media_assets.file_path`는 논리 경로와 legacy fallback을 위해 남아 있다. `blob_id`, `original_filename`, `mime_type`이 신규 경로의 실제 계약이다. PostgreSQL과 DuckDB 개발 DB 모두 같은 repository/service 계약을 사용한다.
+`blob_id`, `original_filename`, `mime_type`이 신규 canonical write의 실제 계약이다.
+PostgreSQL과 DuckDB 개발 DB 모두 같은 repository/service 계약을 사용한다.
 
-HTTP는 `asset_id`로 접근하며 서버 파일 경로를 노출하지 않는다.
+현재 서비스 mode는 `SIMDASH_MEDIA_STORAGE_MODE=dual-read`(기본) 또는
+`database-only`로 명시한다. dual-read에서만 `media_assets.file_path`와 허용 demo의
+검증된 내부 filesystem fallback을 사용하며, database-only에서는 blob/DB row가 없을
+때 404 또는 빈 DB catalog로 fail-closed한다. Rocky 설치 기본은 database-only이고
+설치 후 및 systemd startup app-role preflight를 실행한다. HTTP 응답은 언제나
+`asset_id` 또는 `video_id`로 접근하고 서버 파일 경로를 노출하지 않는다.
+
+P1-03의 구현·검증 범위는 blob-first canonical/seed write, 현재 Alembic head를
+따르는 database-only verifier, migration dry-run/preflight/idempotent 실행 도구,
+그리고 `scripts/media_transfer_manifest.py`의 strict shared inventory다. verifier는
+unbound `media_assets`, blob/chunk checksum·길이·참조, reference demo load case가
+있을 때 exact allowlist 20개(없으면 expected/actual 0개), PostgreSQL app role·connection
+budget을 확인한다. backup은 pg_dump와 같은 exported
+snapshot에서 inventory를 만들고 restore는 app-role exact comparison 뒤 verifier를
+실행한다. transfer bundle v2는 blob-bound media asset을 ZIP에 중복 포함하지 않고
+v1은 fail-closed한다. migration/cleanup receipt는 O_EXCL 예약형 no-overwrite
+`PENDING`→
+`COMPLETED`/`FAILED` recoverable journal이며 cleanup은
+receipt·실제 regular non-symlink backup dump·backup manifest·approval/confirmation과
+7-day 조건을 묶는 evidence-gated 명시 실행이다. manifest만으로는 충분하지 않고 dump의
+filename·bytes·streamed SHA-256 및 `pg_restore --list`가 DB 접근 전에 정확히 일치해야
+한다. 삭제는 same-parent private quarantine으로 원자 rename한 뒤 inode/hash 재검증을
+통과한 파일만 수행하고 불일치는 quarantine에 보존한다. 이는 **코드·disposable 자동검증 완료, 운영 증적 대기**이며 실제 Rocky
+data migration·빈 DB restore rehearsal·부하 검증을 대신하지 않는다.
+
+database-only cutover는 다음 운영 release gate가 모두 충족된 뒤에만 별도 승인한다.
+
+1. Rocky 운영 데이터의 사전검사와 idempotent migration이 완료되고 모든 참조가 blob에 연결된다.
+2. 분리된 빈 PostgreSQL restore에서 backup media inventory와 전체 blob/chunk checksum,
+   reference demo backup이면 exact 20개 demo MP4, fresh `SEED_MODE=empty` production
+   backup이면 expected/actual 0개 및 verifier 결과가 일치한다.
+3. 검증된 backup과 gate 통과 뒤 legacy 원본을 최소 7일 보존하고, migration receipt,
+   실제 `--backup BACKUP.dump`, backup manifest, approval ID와 `--execute --confirm
+   --migration-id ID --cleanup-receipt PATH` confirmation을 포함한 비자동 cleanup을
+   실행한다. manifest만으로는 충분하지 않고 dump의 filename·bytes·SHA-256을 stream
+   검증한다.
+4. 운영 DB volume에서 500 MiB/동시 50 stream/10분 Range·seek 부하와 recovery 절차를
+   기록한다. 실제 Rocky/NFS·quota, production backup→빈 DB restore rehearsal,
+   PowerShell 실실행과 5분 startup timeout 적정성은 외부 release gate다.
+
+backup 및 restore의 운영 절차와 필요한 증적은
+[`deployment-security-backup-guide.md`](deployment-security-backup-guide.md)를 따른다.
 
 - `GET`/`HEAD`
 - 단일 byte Range와 `206`/`416`

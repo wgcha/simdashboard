@@ -253,16 +253,55 @@ filesystem quota 적용을 확인하는 AP-2 release gate는 남아 있다.
 
 #### P1-03 database-only media 마감
 
-- 신규 media는 항상 blob에 연결한다.
-- legacy `file_path` fallback의 종료 조건과 보존 기간을 정한다.
-- database-only verifier를 현재 migration head와 동기화한다.
-- backup/restore 후 blob/chunk checksum과 20개 demo MP4를 확인한다.
+상태: **코드·disposable 자동검증 완료, 운영 증적 대기**. canonical import와
+reference/seed write는 blob-first이며, 현재 Alembic head를 읽는 database-only
+verifier와 strict shared inventory를 사용한다. `SIMDASH_MEDIA_STORAGE_MODE`는
+`dual-read`(개발 기본)와 `database-only`만 허용하고 Rocky 설치 기본은
+`database-only`다. 설치 후와 systemd startup에서 app-role preflight를 실행한다.
 
-완료조건:
+- 신규 canonical import media는 `asset_blobs`/`asset_blob_chunks`에 원자적으로
+  저장하고 `media_assets.blob_id`를 연결한다.
+- verifier는 unbound 참조, blob/chunk checksum·길이·참조 무결성, reference demo load
+  case가 있을 때 exact allowlist 20개(없으면 expected/actual 0개), app role·connection
+  budget·현재 migration head를 확인하는 계약을 가진다.
+- backup은 `pg_dump`와 같은 exported snapshot에서 strict shared inventory를
+  생성하고, restore는 app-role exact comparison 뒤 database-only verifier를 실행한다.
+  transfer bundle v2는 blob-bound media asset을 ZIP에 중복 포함하지 않고 v1은
+  fail-closed한다. migration/cleanup receipt는 O_EXCL 예약형 no-overwrite `PENDING`→
+  `COMPLETED`/`FAILED` recoverable journal이고 cleanup은 migration
+  receipt·실제 regular non-symlink backup dump·backup manifest·approval ID·confirmation
+  receipt와 7-day 조건을 묶는 evidence-gated 명시 실행이다. manifest만으로는 충분하지
+  않으며 dump의 filename·bytes·streamed SHA-256이 manifest와 정확히 일치하고
+  `pg_restore --list`가 archive를 DB 접근 전에 parse해야 한다.
+- `dual-read`에서는 `media_assets.file_path` 및 허용 demo filesystem fallback을
+  호환성 경로로 유지하고, `database-only`에서는 blob/DB row가 없으면 fail-closed한다.
+  database-only 전환 승인은 이 코드 상태와 별도의 운영 release gate다.
 
-- 공통 UoW를 사용하는 import 경로가 같은 malformed input을 같은 코드로 거부
-- 동일 bundle 반복 실행이 중복 Run을 만들지 않음
-- 신규 `media_assets.blob_id IS NULL` 0건
+다음은 코드 검증과 별도로 실제 운영 환경에서만 닫을 수 있는 release gate다.
+
+- Rocky 운영 데이터의 전체 preflight·idempotent migration과 누락/손상 source의
+  운영자 정정
+- reference/demo 데이터를 포함한 backup이면 분리된 빈 PostgreSQL에 restore한 뒤
+  media inventory, 전체 blob/chunk checksum, exact 20개 demo MP4를 확인하고, Rocky
+  기본 `SEED_MODE=empty` production backup이면 expected/actual demo 0개를 확인하는
+  rehearsal
+- 검증된 backup과 database-only gate 이후 최소 7일 legacy 원본 보존, migration
+  receipt·실제 backup dump·backup manifest·approval ID·confirmation receipt를 포함한
+  명시적 evidence-gated 비자동 cleanup (manifest 단독은 불충분)
+- Rocky DB volume에서 500 MiB media, 동시 50 stream, 10분 Range/seek 부하의 RSS,
+  p95, 5xx, pool-timeout 측정 및 5분 startup timeout 적정성 확인
+
+**2026-08-25 로컬 통합 증적:** disposable PostgreSQL 18.6
+(`127.0.0.1:55439`)에서 reference source의 21 blobs/21 chunks,
+2,509,278 bytes, 23 refs와 catalog SHA prefix `d89c…`를 확인했다. 동일 exported
+snapshot으로 생성한 2,929,899-byte backup dump를 분리된 빈 DB에 restore한 뒤 exact
+inventory match, app-role verifier, Alembic `0017`, reference demo 20/20을 통과했고,
+app-role audit 권한도 `SELECT`/`INSERT` 허용 및 `UPDATE`/`DELETE` 거부를 확인했다.
+별도 schema-only empty DB의 database-only startup preflight도 blob/demo 0/0으로
+통과했다. 이 증적은 코드·local integration 검증이며 기존 5432와 `.env` 연결을
+사용하지 않았다. 실제 Rocky/NFS/quota, production backup→빈 DB restore rehearsal,
+500 MiB/50-stream 부하와 startup timeout 적정성, PowerShell 실실행은 여전히 운영
+release gate다.
 
 모든 허용 media extension은 generated minimal `tmp_path` fixture로 정상 수락,
 MIME/extension mismatch 거부, corrupt signature 거부를 검증한다. 영구 canonical
@@ -453,9 +492,13 @@ proxy/CA를 설치·갱신하는 자동화는 아직 없다. `NO_PROXY` assignme
   retry/full-refresh gate, PostgreSQL gate session budget 검증
 - Rocky host install, NFS/SMB mount probe·승인과 dedicated filesystem quota는 실제
   target에서 별도 확인
-- 모든 신규 media blob 연결·checksum 검증
+- P1-03 blob-first canonical/seed write, media verifier, exported-snapshot
+  backup→restore inventory/checksum, app-role exact comparison, transfer v2/v1
+  fail-closed와 cleanup receipt 계약의 코드·disposable 자동검증
 - nginx config, TLS, forwarded header, SPA/API/assets/Range smoke
-- backup→빈 DB restore rehearsal
+- 실제 backup→빈 DB restore rehearsal의 media inventory/blob-chunk checksum·reference
+  demo 20/20 또는 empty production 0/0 검증, 7일 보존 뒤 승인 cleanup, Rocky media
+  streaming 부하 측정, PowerShell 실실행 (운영 release gate)
 - 문서 링크와 환경 예제 정합성
 
 ## 10. 다음 실행 순서
@@ -476,6 +519,9 @@ proxy/CA를 설치·갱신하는 자동화는 아직 없다. `NO_PROXY` assignme
    **2026-08-25 AP-2 검증 기록:** focused 통합 `126 passed in 87.32s`, full backend
    `573 passed, 5 skipped in 382.12s`; backend architecture/OpenAPI/compileall,
    Rocky validator, frontend architecture/API self-test/build도 통과했다.
-8. **다음 release gate:** 실제 Rocky host install, NFS/SMB mount probe·승인,
-   filesystem quota와 capacity/load 한계를 target 환경에서 검증한다. native Windows
-   Refresh는 계속 fail-closed다.
+8. **다음 권장 release gate 우선순위:** (1) 실제 Rocky host install과 app-role
+   startup preflight, NFS/SMB mount probe·승인 및 filesystem quota/capacity 확인,
+   (2) production backup을 분리된 빈 DB에 복구하고 exported-snapshot inventory와
+   app-role verifier를 대조, (3) 500 MiB/50 stream 부하와 5분 startup timeout 적정성,
+   (4) PowerShell restore/backup 실실행과 7-day evidence-gated cleanup을 검증한다.
+   native Windows Refresh는 계속 fail-closed다.

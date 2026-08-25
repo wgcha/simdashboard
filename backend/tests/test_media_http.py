@@ -7,6 +7,8 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.requests import Request
 
+from app import main as main_module
+from app.config import media_storage_mode
 from app.database import initialize_database
 from app.database_connection import connect
 from app.main import app
@@ -26,6 +28,18 @@ def _stored_demo_blob():
 
 def _media_request() -> Request:
     return Request({"type": "http", "method": "GET", "headers": [], "query_string": b"", "path": "/media"})
+
+
+def test_media_storage_mode_is_bounded_and_request_read(monkeypatch):
+    monkeypatch.delenv("SIMDASH_MEDIA_STORAGE_MODE", raising=False)
+    assert media_storage_mode() == "dual-read"
+    monkeypatch.setenv("SIMDASH_MEDIA_STORAGE_MODE", "database-only")
+    assert media_storage_mode() == "database-only"
+    monkeypatch.setenv("SIMDASH_MEDIA_STORAGE_MODE", "invalid")
+    with pytest.raises(RuntimeError):
+        media_storage_mode()
+    with TestClient(app, raise_server_exceptions=False) as client:
+        assert client.get("/api/load-cases/loadcase-drop-bottom-001/drop-videos").status_code == 500
 
 
 def test_demo_video_is_database_backed_and_supports_head_range_and_download():
@@ -51,6 +65,49 @@ def test_demo_video_is_database_backed_and_supports_head_range_and_download():
         assert download.status_code == 200
         assert "attachment" in download.headers["content-disposition"]
         assert "tv_drop_analysis_simulation.mp4" in download.headers["content-disposition"]
+
+
+def test_media_storage_mode_controls_legacy_asset_and_drop_video_fallbacks(monkeypatch):
+    initialize_database()
+    legacy_asset_id = "media-mode-legacy-test"
+    try:
+        with TestClient(app) as client:
+            # Insert after the app lifespan's seed/backfill pass so this row
+            # remains a genuinely legacy file_path-only asset.
+            with connect() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO media_assets
+                        (id, analysis_run_id, asset_type, title, file_path, mime_type, file_size, checksum, metadata_json)
+                    VALUES (?, 'run-drop-001', 'IMAGE', 'Legacy mode test', 'assets/sample-contour.svg', 'image/svg+xml', NULL, NULL, '{}')
+                    """,
+                    [legacy_asset_id],
+                )
+            monkeypatch.setattr(main_module, "media_storage_mode", lambda: "dual-read")
+            assert client.get(f"/api/assets/{legacy_asset_id}").status_code == 200
+
+            monkeypatch.setattr(main_module, "media_storage_mode", lambda: "database-only")
+            assert client.get(f"/api/assets/{legacy_asset_id}").status_code == 404
+
+            monkeypatch.setattr(main_module, "list_drop_videos", lambda _connection, _load_case_id: [])
+            catalog = client.get("/api/load-cases/loadcase-drop-bottom-001/drop-videos").json()
+            assert catalog["source"] == "DATABASE"
+            assert catalog["videos"] == []
+            assert catalog["pagination"]["total_items"] == 0
+
+            monkeypatch.setattr(main_module, "media_storage_mode", lambda: "dual-read")
+            fallback_catalog = client.get("/api/load-cases/loadcase-drop-bottom-001/drop-videos").json()
+            assert fallback_catalog["source"] == "EXAMPLE_ADAPTER"
+            assert fallback_catalog["pagination"]["total_items"] == 20
+
+            monkeypatch.setattr(main_module, "get_drop_video", lambda _connection, _video_id: None)
+            assert client.get("/api/drop-videos/drop-analysis/content").status_code == 200
+            monkeypatch.setattr(main_module, "media_storage_mode", lambda: "database-only")
+            assert client.get("/api/drop-videos/drop-analysis/content").status_code == 404
+            assert client.get("/api/drop-videos/drop-analysis/download").status_code == 404
+    finally:
+        with connect() as connection:
+            connection.execute("DELETE FROM media_assets WHERE id=?", [legacy_asset_id])
 
 
 def test_svg_response_uses_a_sandboxed_content_security_policy():

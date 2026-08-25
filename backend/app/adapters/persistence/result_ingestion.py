@@ -504,31 +504,8 @@ class SQLResultIngestionUnitOfWork(ResultIngestionUnitOfWork):
                 path.name,
                 path.stat().st_size,
             )
-            asset_id = self._id_factory("media")
-            self._connection.execute(
-                """
-                INSERT INTO media_assets
-                    (id, analysis_run_id, asset_type, title, file_path, mime_type,
-                     file_size, checksum, metadata_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                [
-                    asset_id,
-                    run_id,
-                    item["asset_type"],
-                    item["display_name"],
-                    f"imports/{run_id}/{path.name}",
-                    item["mime_type"],
-                    path.stat().st_size,
-                    item["source_checksum"],
-                    json.dumps(
-                        {
-                            "variable_key": item["variable_key"],
-                            "source_file": item["source_file"],
-                        }
-                    ),
-                ],
-            )
+            # Store the content first, in this transaction, so a media row is
+            # never committed without the blob identity it references.
             stored = store_file(
                 self._connection,
                 path,
@@ -536,6 +513,35 @@ class SQLResultIngestionUnitOfWork(ResultIngestionUnitOfWork):
                 mime_type=item["mime_type"],
                 asset_type=item["asset_type"],
             )
+            asset_id = self._id_factory("media")
+            self._connection.execute(
+                """
+                INSERT INTO media_assets
+                    (id, analysis_run_id, asset_type, title, file_path, mime_type,
+                     file_size, checksum, metadata_json, blob_id, original_filename)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    asset_id,
+                    run_id,
+                    item["asset_type"],
+                    item["display_name"],
+                    f"imports/{run_id}/{path.name}",
+                    stored.mime_type,
+                    stored.blob.file_size,
+                    stored.blob.sha256,
+                    json.dumps(
+                        {
+                            "variable_key": item["variable_key"],
+                            "source_file": item["source_file"],
+                        }
+                    ),
+                    stored.blob.id,
+                    stored.original_filename,
+                ],
+            )
+            # Retain the repository's orphan lifecycle handling after the
+            # row has been inserted with its blob_id.
             attach_stored_media(self._connection, asset_id, stored)
         if parsed["note"]:
             self._connection.execute(

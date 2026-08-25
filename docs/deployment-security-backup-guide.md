@@ -116,7 +116,13 @@ $env:POSTGRES_BIN='E:\PostgreSQL\18\bin'
 .\scripts\postgres\backup-postgres.ps1 -OutputDir 'D:\simulation-backups'
 ```
 
-백업 도구는 PostgreSQL custom-format dump를 만든 뒤 `pg_restore --list`로 구조를 검증하고 SHA-256 manifest를 함께 기록한다. DB 비밀번호는 프로세스 인자나 manifest에 기록하지 않는다.
+백업 도구는 PostgreSQL custom-format dump를 만들 때 dump와 같은 exported
+repeatable-read snapshot에서 strict shared media inventory를 계산하고, `pg_restore
+--list`와 archive SHA-256 manifest에 함께 기록한다. restore는 `--single-transaction`
+과 `--exit-on-error`로 실행하며 `--create`를 사용하지 않아 `--clean`도 같은
+transaction 경계에서 fail-closed한다. DB 비밀번호는 프로세스 인자나
+manifest에 기록하지 않는다. archive SHA-256만으로는 부족하므로 restore는 manifest의
+inventory를 app-role exact comparison하고 database-only verifier까지 실행한다.
 
 권장 운영 주기는 일 1회, 배포 직전 1회이며 백업 파일과 manifest를 DB 서버와 다른 저장소에 함께 보관한다.
 
@@ -126,17 +132,95 @@ $env:POSTGRES_BIN='E:\PostgreSQL\18\bin'
 
 ```powershell
 $env:DATABASE_URL='postgresql+psycopg://simdashboard_owner:OWNER_PASSWORD@127.0.0.1:5432/simulation_dashboard_restore'
+$env:SIMDASH_APP_DATABASE_URL='postgresql+psycopg://simdashboard_app:APP_PASSWORD@127.0.0.1:5432/simulation_dashboard_restore'
 .\scripts\postgres\restore-postgres.ps1 `
   -Backup 'D:\simulation-backups\analysis-canvas-YYYYMMDDTHHMMSSZ.dump' `
-  -ConfirmDatabase 'simulation_dashboard_restore'
+  -ConfirmDatabase 'simulation_dashboard_restore' `
+  -AppRoleVerifyUrl $env:SIMDASH_APP_DATABASE_URL
+```
+
+```bash
+# POSIX wrapper: the app-role URL is required for the same post-restore checks.
+export DATABASE_URL='postgresql+psycopg://simdashboard_owner:OWNER_PASSWORD@127.0.0.1:5432/simulation_dashboard_restore'
+export SIMDASH_APP_DATABASE_URL='postgresql+psycopg://simdashboard_app:APP_PASSWORD@127.0.0.1:5432/simulation_dashboard_restore'
+./scripts/postgres/restore-postgres.sh \
+  /var/backups/analysis-canvas-YYYYMMDDTHHMMSSZ.dump \
+  simulation_dashboard_restore \
+  --verify-database-url "$SIMDASH_APP_DATABASE_URL"
 ```
 
 기존 DB를 덮어쓰는 복구는 사전 백업 후에만 `-Clean`을 명시한다. 복구 후 다음을 확인한다.
 
 1. `alembic_version`이 최신 revision인지 확인한다.
 2. 프로젝트·Run·결과·사용자·감사 이벤트 행 수를 원본과 비교한다.
-3. `harden_postgres_privileges.py`를 다시 실행한다.
+3. restore script가 `pg_restore` 직후 owner URL로 `harden_postgres_privileges.py`를
+   자동 재적용하므로, 운영자는 결과 권한을 확인한다.
 4. 일반 사용자 로그인·본인 업무 실행, 파워 사용자 의뢰 편집, 프로젝트 관리자 변경, 전역관리자 메뉴 정책 변경과 감사 이벤트 기록을 smoke test한다.
+
+### 6.1 P1-03 media inventory와 database-only 전환
+
+`scripts/media_transfer_manifest.py`는 strict shared blob/chunk inventory와 checksum을
+생성·비교하며, migration 도구는 dry-run/preflight/idempotent execute와 O_EXCL 예약형
+no-overwrite `PENDING`→`COMPLETED`/`FAILED` recoverable receipt journal을 지원한다.
+`backend/scripts/backup_postgres.py`의 `--label`은
+경로가 아닌 bounded safe ID만 허용하며, 기존 dump·manifest 또는 symlink target을
+덮어쓰지 않는다. 실패한 run의 충돌 없는 partial은 진단을 위해 보존한다. backup은 pg_dump와
+같은 exported snapshot을 사용하고, `restore_postgres.py`는 app-role URL로 exact
+inventory comparison과 `verify_media_database_only.py`를 실행한다. transfer bundle
+v2는 blob-bound media asset을 ZIP에 중복 포함하지 않으며 v1 입력은 fail-closed한다.
+이 상태는 **코드·disposable 자동검증 완료, 운영 증적 대기**다.
+
+database-only 전환 승인은 실제 Rocky 운영 환경에서 다음 증적을 모두 남긴 뒤에만
+가능하다.
+
+1. 분리된 빈 PostgreSQL에 production backup을 restore하고, blob 수·chunk 수·총
+   바이트·참조·checksum inventory가 backup 증적과 일치함을 확인한다.
+2. 전체 blob/chunk checksum·길이·참조 무결성과 demo 정책을 verifier로 확인한다.
+   reference demo load case(`loadcase-drop-bottom-001`)를 사용하는 DB는 exact
+   allowlist 20개를, Rocky 기본 `SEED_MODE=empty` fresh production DB는 expected/
+   actual 0개를 확인한다.
+3. legacy source는 검증된 backup과 위 gate 통과 뒤 최소 7일 보존한다. cleanup은
+   자동 작업이 아니며, migration receipt·실제 regular non-symlink backup dump·backup
+   manifest·approval ID와 `--cleanup-receipt`/`--migration-id` confirmation을 포함한
+   명시적 실행만 허용한다. manifest만으로는 충분하지 않다. 도구는 DB 접근이나 삭제 전에
+   dump의 filename·bytes·streamed SHA-256을 manifest와 대조하고, private 0700 staging
+   사본의 동일 bytes에 `pg_restore --list`를 실행해 실제 custom-format archive 구조를
+   DB 접근 전에 확인한다. 이어 현재 DB inventory,
+   receipt와 source checksum을 다시 확인한 뒤 삭제 evidence를 남긴다.
+4. 500 MiB media와 동시 50 stream/10분 Range·seek 부하, DB volume recovery 절차를
+   Rocky target에서 기록한다.
+
+Rocky 기본 모드는 `SIMDASH_MEDIA_STORAGE_MODE=database-only`이며 설치 후와 systemd
+startup에서 app-role preflight를 실행한다. 개발 기본은 `dual-read`이고 요청 시점에
+mode를 해석한다. 실제 Rocky host/NFS·quota, production backup→빈 DB restore
+rehearsal, 500 MiB/50 stream 부하와 5분 startup timeout 적정성, PowerShell 실실행은
+외부 release gate다. 이 증적 전에는 legacy 파일 삭제나 database-only 완료 선언을 하지
+않는다.
+
+이관과 cleanup의 운영 명령은 receipt와 증적 경로를 생략하지 않는다.
+
+```bash
+PYTHONPATH=backend .venv/bin/python scripts/migrate_media_to_database.py \
+  --execute --receipt /var/lib/simdashboard/evidence/migration-<ID>.json
+
+PYTHONPATH=backend .venv/bin/python scripts/cleanup_migrated_media_files.py \
+  --migration-receipt /var/lib/simdashboard/evidence/migration-<ID>.json \
+  --backup /var/backups/analysis-canvas-<STAMP>.dump \
+  --backup-manifest /var/backups/analysis-canvas-<STAMP>.manifest.json \
+  --approval-id ops-<APPROVAL-ID> \
+  --execute --confirm --migration-id <MIGRATION-ID> \
+  --cleanup-receipt /var/lib/simdashboard/evidence/cleanup-<ID>.json
+```
+
+transfer bundle은 `backend/scripts/postgres_transfer.py export --output-dir
+transfer-bundles`로 database dump와 media inventory를 같은 exported snapshot에서
+묶어 v2를 생성하며, import는 `import BUNDLE --validate-only`로 먼저 검증한다.
+blob-bound media asset은 `assets.zip`에 중복 저장하지 않고 v1 bundle은 fail-closed한다.
+
+archive copy·SHA-256과 legacy cleanup fingerprint는 고정 크기 block으로 streaming하여
+content memory를 파일 크기에 비례해 늘리지 않는다. `media_inventory()`의 aggregate
+metadata 조회/list 구조 최적화는 별도 LOW 우선순위이며, 이 계약은 content payload
+memory 경계만 보장한다.
 
 ## 7. canonical production 배포 차단 조건
 

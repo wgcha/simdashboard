@@ -12,10 +12,10 @@ from alembic.script import ScriptDirectory
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.config import database_settings  # noqa: E402
-from app.database import connect, initialize_database  # noqa: E402
+from app.database import connect  # noqa: E402
 from app.database_connection import postgres_connection_budget  # noqa: E402
-from app.repositories.media_repository import get_blob, validate_blob_chunks  # noqa: E402
-from app.services.drop_video_demo import DROP_VIDEO_DEMO_SCENES  # noqa: E402
+from app.services.media_integrity import MediaIntegrityError, media_inventory, require_media_integrity  # noqa: E402
+from scripts.check_postgres_pool_budget import check_budget  # noqa: E402
 
 
 BACKEND = Path(__file__).resolve().parents[1]
@@ -42,6 +42,16 @@ def _revision_matches(*, backend: str, current: str | None, expected: str | None
     return backend != "postgresql" or current == expected
 
 
+def _single_revision(rows: list[object]) -> str | None:
+    """Return the only populated version row; reject corrupt multi-row state."""
+    if len(rows) != 1:
+        return None
+    row = rows[0]
+    if not row or not row[0]:
+        return None
+    return str(row[0])
+
+
 def _private_path(raw: str) -> Path:
     root = (Path(__file__).resolve().parents[1] / "assets").resolve()
     parts = Path(raw).parts
@@ -65,49 +75,24 @@ def verify() -> dict[str, object]:
         raise RuntimeError("public/static and legacy roots overlap")
 
     with connect() as connection:
-        unbound = int(connection.execute("SELECT count(*) FROM media_assets WHERE blob_id IS NULL").fetchone()[0])
-        missing = int(
-            connection.execute(
-                """
-                SELECT count(*) FROM media_assets m
-                LEFT JOIN asset_blobs b ON b.id=m.blob_id
-                WHERE m.blob_id IS NOT NULL AND b.id IS NULL
-                """
-            ).fetchone()[0]
-        )
-        missing += int(
-            connection.execute(
-                """
-                SELECT count(*) FROM drop_video_assets d
-                LEFT JOIN asset_blobs b ON b.id=d.blob_id
-                WHERE b.id IS NULL
-                """
-            ).fetchone()[0]
-        )
-        corrupt_blob_ids: list[str] = []
-        for (blob_id,) in connection.execute("SELECT id FROM asset_blobs ORDER BY id").fetchall():
-            blob = get_blob(connection, str(blob_id))
-            try:
-                if blob is None:
-                    raise ValueError("blob metadata missing")
-                validate_blob_chunks(connection, blob)
-            except (RuntimeError, ValueError):
-                corrupt_blob_ids.append(str(blob_id))
-        inconsistent = len(corrupt_blob_ids)
-        demo_ids = {
-            str(row[0])
+        report = media_inventory(connection)
+        legacy_paths = [
+            row[0]
             for row in connection.execute(
-                "SELECT video_id FROM drop_video_assets WHERE load_case_id='loadcase-drop-bottom-001'"
+                "SELECT file_path FROM media_assets WHERE blob_id IS NULL AND file_path IS NOT NULL"
             ).fetchall()
-        }
-        expected_demo_ids = {scene.video_id for scene in DROP_VIDEO_DEMO_SCENES}
-        demo_count = len(demo_ids)
-        legacy_paths = [row[0] for row in connection.execute("SELECT file_path FROM media_assets WHERE blob_id IS NULL AND file_path IS NOT NULL").fetchall()]
+        ]
         revision = None
+        revision_row_count = None
         permission_failures: list[str] = []
         if settings.backend == "postgresql":
-            revision_row = connection.execute("SELECT version_num FROM alembic_version").fetchone()
-            revision = str(revision_row[0]) if revision_row else None
+            revision_rows = connection.execute("SELECT version_num FROM alembic_version ORDER BY version_num").fetchall()
+            revision_row_count = len(revision_rows)
+            revision = _single_revision(revision_rows)
+            current_user = str(connection.execute("SELECT current_user").fetchone()[0])
+            expected_role = os.getenv("SIM_DASH_APP_ROLE", "simdashboard_app")
+            if current_user != expected_role:
+                permission_failures.append("current_user:unexpected_role")
             required_privileges = {
                 "asset_blobs": "SELECT,INSERT,UPDATE,DELETE",
                 "asset_blob_chunks": "SELECT,INSERT,UPDATE,DELETE",
@@ -127,30 +112,44 @@ def verify() -> dict[str, object]:
     workers = int(os.getenv("UVICORN_WORKERS", "1"))
     connection_budget = postgres_connection_budget(workers, settings.postgres_pool)
     configured_max = os.getenv("POSTGRES_MAX_CONNECTIONS")
-    if configured_max and connection_budget >= int(configured_max):
-        raise RuntimeError(f"connection budget {connection_budget} exceeds configured max_connections {configured_max}")
-    if unbound or missing or inconsistent or demo_ids != expected_demo_ids or permission_failures or not _revision_matches(backend=settings.backend, current=revision, expected=expected_revision):
+    if settings.backend == "postgresql" and configured_max:
+        # Keep this operational gate identical to the canonical pool checker,
+        # including reserved capacity and the dedicated import-gate session.
+        connection_budget = check_budget(
+            workers,
+            int(configured_max),
+            int(os.getenv("POSTGRES_RESERVED_CONNECTIONS", "10")),
+        )
+    revision_valid = _revision_matches(backend=settings.backend, current=revision, expected=expected_revision)
+    try:
+        require_media_integrity(report)
+    except MediaIntegrityError as error:
+        media_error = str(error)
+    else:
+        media_error = None
+    if media_error or permission_failures or not revision_valid:
         raise RuntimeError(json.dumps({
-            "unbound": unbound,
-            "missing": missing,
-            "inconsistent": inconsistent,
-            "corrupt_blob_ids": corrupt_blob_ids[:20],
-            "demo_count": demo_count,
-            "missing_demo_ids": sorted(expected_demo_ids - demo_ids),
-            "unexpected_demo_ids": sorted(demo_ids - expected_demo_ids),
+            "media_inventory": report,
+            "media_error": media_error,
             "revision": revision,
             "expected_revision": expected_revision,
+            "revision_row_count": revision_row_count,
             "permission_failures": permission_failures,
-        }))
-    return {"status": "database_only", "backend": settings.backend, "unbound": unbound, "missing": missing, "inconsistent": inconsistent, "demo_count": demo_count, "connection_budget": connection_budget, "revision": revision, "expected_revision": expected_revision}
+        }, ensure_ascii=False, sort_keys=True))
+    return {
+        "status": "database_only",
+        "backend": settings.backend,
+        **report,
+        "connection_budget": connection_budget,
+        "revision": revision,
+        "expected_revision": expected_revision,
+        "revision_row_count": revision_row_count,
+    }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Verify the database-only media storage gate.")
-    parser.add_argument("--initialize", action="store_true", help="run the normal local initialization before checking")
-    args = parser.parse_args()
-    if args.initialize:
-        initialize_database()
+    parser.parse_args()
     print(json.dumps(verify(), ensure_ascii=False, indent=2))
     return 0
 
