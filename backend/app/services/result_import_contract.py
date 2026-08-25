@@ -54,7 +54,7 @@ class ScalarResultPayload:
         return replace(self, verdict=verdict)
 
     def for_verdict(self) -> dict[str, Any]:
-        """Return the narrow legacy shape accepted by ``VerdictService``."""
+        """Return the narrow scalar shape used by compatibility evaluators."""
 
         return {
             "variable_key": self.variable_key,
@@ -89,7 +89,7 @@ class TimeSeriesResultPayload:
             "time_value": self.time_value,
             "value_double": self.value_double,
         }
-        # Keep the legacy repository defaults for parsers that did not emit
+        # Keep the compatibility defaults for parsers that did not emit
         # units (open-cell history historically defaults time to seconds).
         if self.time_unit is not None:
             row["time_unit"] = self.time_unit

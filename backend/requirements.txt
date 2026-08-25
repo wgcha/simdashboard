@@ -8,3 +8,4 @@ SQLAlchemy==2.0.41
 psycopg[binary]==3.2.9
 alembic==1.16.1
 PyJWT[crypto]==2.13.0
+ijson==3.5.1

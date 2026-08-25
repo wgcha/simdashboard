@@ -47,7 +47,7 @@ PowerShell 또는 명령 프롬프트에서 다음을 실행합니다.
 .\start.bat
 ```
 
-Windows 실행은 개발·호환성 검증과 DuckDB→PostgreSQL DB 이관을 위한 profile입니다. PostgreSQL 프로필을 사용할 때는 `start-postgresql.bat`을 사용합니다. 새 DB 구축, 기존 DB 유지, 전송 번들 이관은 [`docs/backend-sql-integration-guide.md`](docs/backend-sql-integration-guide.md)와 [`docs/postgresql-pc-transfer-guide.md`](docs/postgresql-pc-transfer-guide.md)를 따릅니다. Windows one-command 운영 배포는 지원하지 않습니다.
+Windows 실행은 개발·호환성 검증과 DuckDB→PostgreSQL DB 이관을 위한 profile입니다. PostgreSQL 프로필을 사용할 때는 `start-postgresql.bat`을 사용합니다. 새 DB 구축, 기존 DB 유지, 전송 번들 이관은 [`docs/backend-sql-integration-guide.md`](docs/backend-sql-integration-guide.md)와 [`docs/postgresql-pc-transfer-guide.md`](docs/postgresql-pc-transfer-guide.md)를 따릅니다. Windows one-command 운영 배포는 지원하지 않습니다. Master Refresh endpoint는 POSIX snapshot traversal을 사용하는 canonical WSL/Rocky 경로에서만 지원하며, native Windows에서는 Windows handle 기반 adapter가 준비될 때까지 fail-closed합니다. 수동 upload와 다른 compatibility 기능은 계속 사용할 수 있습니다.
 
 ## 실행 프로필
 
@@ -130,7 +130,7 @@ pnpm run generate:api
   → 검토·버전 편집·PPTX 보고서
 ```
 
-마스터 폴더 Refresh는 서버가 설정한 `SIMDASH_IMPORT_ROOT`만 탐색하며 클라이언트가 임의 경로를 전달할 수 없습니다. canonical `mappings` manifest와 normalized payload는 공통 `ResultIngestionUnitOfWork`의 single-connection transaction으로 Run·결과·media blob을 함께 저장합니다. 일반 수동 `SUMMARY_RESULT` JSON/CSV upload도 target-qualified source와 content checksum을 사용해 같은 UoW로 저장하고, 동일 재시도는 `SKIPPED`되며 write transaction 안에서 권한 재확인과 audit를 수행합니다. `Radioss` mesh CSV는 `result_locations` canonical contract 편입 전까지 direct-SQL compatibility 경로입니다. 구형 `result_files` 기반 `ResultImportService` persistence는 현재 schema에 없는 legacy table/column을 참조하므로 비운영 compatibility 경로입니다. 폴더·확장자·DB 저장 계약은 [`docs/storage-folder-and-file-contract.md`](docs/storage-folder-and-file-contract.md), 기능 흐름은 [`docs/work-type-request-results-and-master-refresh.md`](docs/work-type-request-results-and-master-refresh.md)를 따릅니다. 실제 import 예제는 [`examples/master-results/`](examples/master-results/)에 있습니다.
+마스터 폴더 Refresh는 서버가 설정한 `SIMDASH_IMPORT_ROOT`만 탐색하며 클라이언트가 임의 경로를 전달할 수 없습니다. canonical `mappings` manifest와 normalized payload는 공통 `ResultIngestionUnitOfWork`의 single-connection transaction으로 Run·결과·media blob을 함께 저장합니다. 일반 수동 `SUMMARY_RESULT` JSON/CSV와 `Radioss` mesh CSV도 target-qualified source와 content checksum을 사용해 같은 UoW로 저장하고, 동일 재시도는 `SKIPPED`되며 write transaction 안에서 권한 재확인과 audit를 수행합니다. Radioss의 `result_locations`도 같은 canonical contract에 포함된다. schema와 맞지 않던 구형 `result_files` persistence service/repository는 제거했으며 legacy manifest schema, `ManifestParser` alias와 normalized parser adapter만 compatibility 전용으로 남는다. 폴더·확장자·DB 저장 계약은 [`docs/storage-folder-and-file-contract.md`](docs/storage-folder-and-file-contract.md), 기능 흐름은 [`docs/work-type-request-results-and-master-refresh.md`](docs/work-type-request-results-and-master-refresh.md)를 따릅니다. 실제 import 예제는 [`examples/master-results/`](examples/master-results/)에 있습니다.
 
 ## 배포
 

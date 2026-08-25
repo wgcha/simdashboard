@@ -102,8 +102,10 @@ pnpm run generate:api
 `{load_case_id}/{filename}`으로 target을 포함한다. content checksum으로 동일
 재시도를 `SKIPPED`하며 write transaction 안에서 권한을 재확인하고 audit event를
 함께 기록한다. Radioss adapter는 scalar, time-series/curve, `result_locations`를
-하나의 UoW transaction으로 저장한다. 구형 `ResultImportService`는 현재 schema와
-맞지 않는 비운영 parser/persistence compatibility 경로다.
+하나의 UoW transaction으로 저장한다. schema와 맞지 않아 동작하지 않던 구형
+`result_files` persistence service/repository는 제거했다. legacy manifest schema,
+`ManifestParser` alias와 normalized parser adapter만 compatibility 전용으로 남기며,
+운영 결과 쓰기는 모두 공통 UoW를 통한다.
 
 ### 3.6 Proxy와 배포
 

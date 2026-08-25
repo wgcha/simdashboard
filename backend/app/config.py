@@ -68,6 +68,27 @@ class DirectorySettings:
     allow_insecure_localhost: bool
 
 
+@dataclass(frozen=True)
+class ImportBundleLimits:
+    """Hard ceilings for one captured canonical result bundle.
+
+    These limits apply before a master-folder bundle is parsed or written to
+    the database.  They bound private snapshot disk usage as well as parser
+    work, so each knob is intentionally finite even when configured through
+    the environment. ``max_curve_points`` is intentionally both the per-curve
+    and cumulative bundle point ceiling.
+    """
+
+    max_manifest_bytes: int
+    max_mapping_count: int
+    max_file_bytes: int
+    max_total_bytes: int
+    max_structured_bytes: int = 8 * 1024 * 1024
+    max_scalar_records: int = 100_000
+    max_curves: int = 128
+    max_curve_points: int = 100_000
+
+
 def database_settings() -> DatabaseSettings:
     backend = os.getenv("ANALYSIS_DB_BACKEND", "duckdb").strip().lower()
     if backend not in {"duckdb", "postgresql"}:
@@ -91,6 +112,53 @@ def _bounded_int(name: str, default: int, minimum: int, maximum: int) -> int:
     if not minimum <= value <= maximum:
         raise RuntimeError(f"{name}은 {minimum}~{maximum} 범위여야 합니다.")
     return value
+
+
+def import_bundle_limits() -> ImportBundleLimits:
+    """Read bounded canonical result-bundle capture limits.
+
+    Defaults are deliberately generous enough for the checked-in fixtures and
+    bound snapshot/parser work. Manifest and typed-scalar JSON use bounded
+    ``ijson`` streaming; each scalar item is still materialized within its
+    fixed 64-event complexity budget, and the validated scalar list remains
+    materialized up to ``max_scalar_records`` for the current UoW contract.
+    Operators must therefore size overrides for the worker memory budget
+    rather than treating these limits as an absolute exhaustion guard.
+    """
+
+    limits = ImportBundleLimits(
+        max_manifest_bytes=_bounded_int(
+            "SIMDASH_IMPORT_MAX_MANIFEST_BYTES",
+            1 * 1024 * 1024,
+            1024,
+            16 * 1024 * 1024,
+        ),
+        max_mapping_count=_bounded_int("SIMDASH_IMPORT_MAX_MAPPING_COUNT", 128, 1, 10_000),
+        max_file_bytes=_bounded_int(
+            "SIMDASH_IMPORT_MAX_FILE_BYTES",
+            512 * 1024 * 1024,
+            1024,
+            4 * 1024 * 1024 * 1024,
+        ),
+        max_total_bytes=_bounded_int(
+            "SIMDASH_IMPORT_MAX_TOTAL_BYTES",
+            1 * 1024 * 1024 * 1024,
+            1024,
+            16 * 1024 * 1024 * 1024,
+        ),
+        max_structured_bytes=_bounded_int(
+            "SIMDASH_IMPORT_MAX_STRUCTURED_BYTES",
+            8 * 1024 * 1024,
+            1024,
+            64 * 1024 * 1024,
+        ),
+        max_scalar_records=_bounded_int("SIMDASH_IMPORT_MAX_SCALAR_RECORDS", 100_000, 1, 1_000_000),
+        max_curves=_bounded_int("SIMDASH_IMPORT_MAX_CURVES", 128, 1, 10_000),
+        max_curve_points=_bounded_int("SIMDASH_IMPORT_MAX_CURVE_POINTS", 100_000, 1, 10_000_000),
+    )
+    if limits.max_structured_bytes > limits.max_file_bytes:
+        raise RuntimeError("SIMDASH_IMPORT_MAX_STRUCTURED_BYTES는 SIMDASH_IMPORT_MAX_FILE_BYTES 이하여야 합니다.")
+    return limits
 
 
 def _postgres_pool_settings() -> PostgresPoolSettings:

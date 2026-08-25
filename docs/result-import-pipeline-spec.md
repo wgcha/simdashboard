@@ -1,6 +1,6 @@
 # 해석 후처리 결과 수집·DB 적재·가시화 상세 사양서
 
-> 상태: **historical/실행 금지** 초기 파이프라인 사양 및 배경 기록이다. 이 문서의 SQL과 legacy repository 예시는 현재 migration에 적용하거나 운영 경로로 호출하지 않는다. 현재 canonical 결과 수집은 `mappings` manifest를 사용하는 Master Refresh와 typed folder-import example이며, 실제 폴더·확장자·blob 계약은 `storage-folder-and-file-contract.md`를 따른다. 이 문서의 `result_files` manifest와 parser는 비운영 compatibility 대상이다.
+> 상태: **historical/실행 금지** 초기 파이프라인 사양 및 배경 기록이다. 이 문서의 SQL과 legacy repository 예시는 현재 migration에 적용하거나 운영 경로로 호출하지 않는다. schema와 맞지 않던 legacy `result_files` persistence service/repository는 제거됐다. legacy manifest schema, `ManifestParser` alias와 normalized parser adapter만 compatibility 전용으로 남고, runtime 결과 쓰기는 canonical `ResultIngestionUnitOfWork`를 사용한다. 실제 폴더·확장자·blob 계약은 `storage-folder-and-file-contract.md`를 따른다.
 
 ## 1. 문서 목적
 
@@ -11,9 +11,9 @@
 folder-import example의 검증된 payload를 하나의 connection transaction으로
 저장한다. 일반 수동 `SUMMARY_RESULT` JSON/CSV도 target-qualified source name,
 content checksum, retry `SKIPPED`, write-transaction auth recheck와 atomic audit를
-사용해 이 경계로 이관되었다. `Radioss` mesh CSV는 `result_locations` 저장이
-canonical UoW에 포함될 때까지 direct-SQL compatibility 경로다. 구형
-`ResultImportService` persistence만 아직 현행 schema에 맞지 않는 비운영 경로다.
+사용해 이 경계로 이관되었다. `Radioss` mesh CSV도 `result_locations`를 포함해
+canonical UoW로 저장한다. schema와 맞지 않던 구형 `ResultImportService`
+persistence service/repository는 제거됐다.
 
 이 문서의 범위는 다음 기능을 포함한다.
 
@@ -102,8 +102,9 @@ Project
 이 문서의 `result_import_jobs` 및 `analysis_runs` 확장 제안은 historical 설계다.
 현재 schema에는 해당 table과 `source_program`, `source_program_version`,
 `result_import_status`, `overall_verdict`, `last_imported_at` 컬럼이 없다. 이를
-참조하는 legacy `ResultImportService`/repository는 parser 호환 확인용 비운영
-경로이며, 현행 공통 UoW import API로 사용하지 않는다. 일반
+참조하던 legacy persistence service/repository는 제거됐다. legacy manifest schema,
+`ManifestParser` alias와 normalized parser adapter만 parser 호환 전용으로 남으며,
+현행 runtime 결과 쓰기는 공통 UoW import API로만 수행한다. 일반
 `SUMMARY_RESULT` upload는 이 legacy 설명에 포함되지 않는다.
 
 동일한 하중 조건을 여러 번 재실행하면 `AnalysisRun`을 분리한다.
@@ -436,7 +437,10 @@ ALTER TABLE analysis_runs ADD COLUMN IF NOT EXISTS last_imported_at TIMESTAMP;
 
 ---
 
-## 9. 백엔드 모듈 구조
+## 9. 과거 제안 백엔드 모듈 구조 (현재 제거됨)
+
+아래 tree는 초기 설계 기록이며 현재 파일 구조가 아니다. 표시된 legacy
+repository/service는 제거됐고, 현재 구조는 `current-architecture.md`를 따른다.
 
 ```text
 backend/app/
@@ -760,9 +764,10 @@ cd backend
 # 71 collected; live PostgreSQL concurrent test는 별도 미제공
 ```
 
-이 71개는 현재 제공된 focused 검증 범위다. legacy `ResultImportService` 저장,
-Radioss mesh locations UoW 이관, PostgreSQL live concurrency, legacy run
-identity/replace, threshold 경계 통일이 완료됐다는 뜻은 아니다.
+이 historical 71개 collection은 당시 제공된 focused 검증 범위다. 이후 Radioss
+mesh locations는 canonical UoW로 이관됐고 schema와 맞지 않던 legacy persistence는
+제거됐다. PostgreSQL 동시성 test의 실제 전용 test DB 실행, producer snapshot/rehash,
+파일·행·포인트·manifest 제한은 별도 완료 조건으로 남아 있다.
 
 ---
 

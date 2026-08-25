@@ -44,6 +44,8 @@ idna==3.18
     # via
     #   anyio
     #   httpx
+ijson==3.5.1
+    # via -r backend/requirements.txt
 iniconfig==2.3.0
     # via pytest
 mako==1.4.1

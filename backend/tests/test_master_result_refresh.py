@@ -4,10 +4,12 @@ import json
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 
 from app.database import connect, initialize_database
 from app.main import app
-from app.services.master_result_refresh import MasterResultRefreshService
+from app.services import master_result_refresh
+from app.services.master_result_refresh import MasterResultRefreshError, MasterResultRefreshService
 
 
 PROJECT_ID = "project-tv-001"
@@ -152,6 +154,100 @@ def test_master_refresh_isolates_invalid_bundle_from_valid_bundle(tmp_path: Path
         assert conn.execute("SELECT count(*) FROM folder_import_jobs WHERE source_folder='bundle-bad/manifest.json' AND status='FAILED'").fetchone()[0] == 1
 
 
+def test_master_refresh_records_captured_target_failure_without_live_reread(tmp_path: Path):
+    bundle = _write_bundle(tmp_path, "bundle-captured-target")
+    # The manifest is discovered, but its declared source disappears before
+    # capture. The captured manifest still supplies the target IDs for the
+    # diagnostic job; no live source reread can manufacture a result.
+    (bundle / "scalar-results.json").unlink()
+
+    items = MasterResultRefreshService(tmp_path).refresh()
+
+    assert [(item.status, item.load_case_id) for item in items] == [("FAILED", LOAD_CASE_ID)]
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT status, summary_json FROM folder_import_jobs "
+            "WHERE source_folder='bundle-captured-target/manifest.json'"
+        ).fetchone()
+    assert row[0] == "FAILED"
+    assert json.loads(row[1])["error_code"] == "BUNDLE_MAPPING_FILE_UNSAFE"
+
+
+def test_master_refresh_categorizes_nul_mapping_and_keeps_captured_target(tmp_path: Path):
+    bundle = _write_bundle(tmp_path, "bundle-nul-path")
+    manifest_path = bundle / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["mappings"][0]["path"] = "summary\x00.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    items = MasterResultRefreshService(tmp_path).refresh()
+
+    assert [(item.status, item.load_case_id) for item in items] == [("FAILED", LOAD_CASE_ID)]
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT status, summary_json FROM folder_import_jobs "
+            "WHERE source_folder='bundle-nul-path/manifest.json'"
+        ).fetchone()
+    assert row[0] == "FAILED"
+    assert json.loads(row[1])["error_code"] == "BUNDLE_MAPPING_PATH_INVALID"
+
+
+def test_master_refresh_redacts_unexpected_oserror_to_fixed_message(monkeypatch, tmp_path: Path):
+    _write_bundle(tmp_path, "bundle-os-error")
+
+    def fail_capture(*_args, **_kwargs):
+        raise OSError("/srv/private/simulation-results/secret.csv")
+
+    monkeypatch.setattr(master_result_refresh, "capture_bundle", fail_capture)
+    item = MasterResultRefreshService(tmp_path)._refresh_manifest("bundle-os-error/manifest.json")
+
+    assert item.status == "FAILED"
+    assert item.message == "결과 bundle 가져오기 중 내부 오류가 발생했습니다. 관리자에게 문의하세요."
+    assert "/srv/private" not in (item.message or "")
+
+
+def test_master_refresh_rejects_process_contention(monkeypatch, tmp_path: Path):
+    _write_bundle(tmp_path, "bundle-lock-contention")
+    assert master_result_refresh._refresh_lock.acquire(blocking=False)
+    try:
+        with pytest.raises(MasterResultRefreshError, match="새로고침이 진행 중"):
+            MasterResultRefreshService(tmp_path).refresh()
+    finally:
+        master_result_refresh._refresh_lock.release()
+
+
+def test_refresh_endpoint_returns_503_for_process_contention(monkeypatch, tmp_path: Path):
+    _write_bundle(tmp_path, "bundle-lock-endpoint")
+    monkeypatch.setenv("SIMDASH_IMPORT_ROOT", str(tmp_path))
+    assert master_result_refresh._refresh_lock.acquire(blocking=False)
+    try:
+        with TestClient(app) as client:
+            response = client.post("/api/result-imports/refresh")
+    finally:
+        master_result_refresh._refresh_lock.release()
+
+    assert response.status_code == 503
+    assert "새로고침이 진행 중" in response.json()["detail"]
+
+
+def test_refresh_failure_job_rejects_mismatched_target_relationship(tmp_path: Path):
+    service = MasterResultRefreshService(tmp_path)
+    source_folder = "bundle-mismatched-target/manifest.json"
+
+    service._record_failure(
+        ("project-does-not-match", REQUEST_ID, LOAD_CASE_ID),
+        source_folder,
+        "safe diagnostic",
+        "TEST_TARGET_MISMATCH",
+    )
+
+    with connect() as conn:
+        assert conn.execute(
+            "SELECT count(*) FROM folder_import_jobs WHERE source_folder=?",
+            [source_folder],
+        ).fetchone()[0] == 0
+
+
 def test_master_refresh_rejects_manifest_symlink_outside_configured_root(tmp_path: Path):
     outside = tmp_path.parent / f"outside-{tmp_path.name}"
     _write_bundle(outside, "escaped")
@@ -174,3 +270,17 @@ def test_refresh_endpoint_is_registered_without_a_client_path_parameter():
     route = next(route for route in app.routes if getattr(route, "path", None) == "/api/result-imports/refresh")
     assert "POST" in route.methods
     assert not route.dependant.query_params
+
+
+def test_refresh_endpoint_returns_503_for_invalid_bundle_limit_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("SIMDASH_IMPORT_ROOT", str(tmp_path))
+    monkeypatch.setenv("SIMDASH_IMPORT_MAX_MAPPING_COUNT", "0")
+
+    with TestClient(app) as client:
+        response = client.post("/api/result-imports/refresh")
+
+    assert response.status_code == 503
+    assert "SIMDASH_IMPORT_MAX_MAPPING_COUNT" in response.json()["detail"]

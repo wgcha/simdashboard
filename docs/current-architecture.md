@@ -183,6 +183,7 @@ snapshot은 기대 결과 화면이고 Analysis Run은 실제 데이터다. 데�
 SIMDASH_IMPORT_ROOT
   → manifest.json 탐색
   → root/symlink/context/파일 검증
+  → private snapshot (kind별 structured/media ceiling, unsupported kind open 전 거부)
   → manifest + mapping 파일 bundle fingerprint 기반 중복 판정
   → normalized parser payload
   → ResultIngestionCommand
@@ -193,16 +194,38 @@ SIMDASH_IMPORT_ROOT
 ```
 
 클라이언트는 서버 경로를 넘기지 않는다. 잘못된 manifest 하나는 다른 정상 bundle의 처리를 중단시키지 않는다.
+실패 bundle은 검증된 target이 있을 때만 DB failure job을 기록하고, target을 안전하게
+확인할 수 없으면 job을 만들지 않은 채 sanitized `RefreshItem` 오류로 반환한다.
+
+Master Refresh의 private snapshot은 POSIX `dir_fd` 상대 open과 `O_NOFOLLOW`로
+경로·symlink를 fail-closed하며, canonical WSL 개발 환경과 Rocky Linux 운영
+경로를 지원한다. native Windows compatibility profile은 Windows handle 기반
+safe traversal adapter가 준비될 때까지 이 endpoint를 fail-closed한다. 수동
+upload와 다른 compatibility 기능은 이 제한과 독립적으로 동작한다.
 
 `backend/app/parsers/manifest_format.py`가 공통 format detector/loader 경계다.
 canonical `mappings`는 `scan_folder`와 Master Refresh로, legacy
-`result_files`는 `ResultImportService`와 기존 `ManifestParser` alias로 명시적으로
+`result_files`는 parser schema와 기존 `ManifestParser` alias로만 명시적으로
 분기한다. mixed/unknown manifest, 잘못된 importer, root escape와 symlink는 각
 경계에서 fail-closed한다. `backend/app/application/results/commands.py`가
 정규화된 canonical command를 orchestration하고,
 `backend/app/adapters/persistence/result_ingestion.py`가 현재 DuckDB/PostgreSQL
 공통 SQL UoW를 제공한다. Master Refresh와 `/folder-import/example`은 이 UoW를
 공유한다.
+
+`streaming_json.py`와 incremental manifest loader는 `ijson==3.5.1`
+(`backend/requirements.txt`/`requirements.lock`)로 manifest mapping·scalar record
+cap+1과 bounded checksum stream을 구현한다. canonical manifest에는
+`256 + 64 * max_mapping_count` 전체 event ceiling이 있고, typed scalar 한 item에는
+64 event ceiling이 있어 `ObjectBuilder` materialization 전에 복잡도를 제한한다.
+private snapshot은 `typed_scalars`/`curve_csv`에 `max_structured_bytes`, media에
+`max_file_bytes`를 copy 전에 적용하며, 지원하지 않는 mapping kind는 파일을 열기 전에
+거부한다. 최종 normalized scalar 최대 100,000개 list는 여전히 메모리에
+materialize된다. raw bounded stream은 unpaired Unicode surrogate escape를
+backend-independent하게 거부하고 valid surrogate pair와 direct UTF-8은 유지하며,
+ijson backend별 예외 진단은 공개 error taxonomy를 거쳐 importer의 고정 오류 코드로
+정규화한다. Windows/Rocky wheel 설치 호환성은 target release gate에서 별도로 actual
+wheel/offline smoke로 확인한다.
 
 일반 수동 `SUMMARY_RESULT` JSON/CSV와 `Radioss` mesh CSV upload도 같은 normalized
 payload와 UoW를 사용한다. target-qualified `source_name`과 content checksum으로
@@ -211,10 +234,10 @@ payload와 UoW를 사용한다. target-qualified `source_name`과 content checks
 scalar, time-series/curve, `result_locations`를 canonical contract로 변환해 같은
 single-connection transaction에 저장한다.
 
-구형 `result_files` 기반 `ResultImportService` persistence는 별도 legacy 경로다.
-legacy repository가 현재 schema에 없는 `result_import_jobs`와 `analysis_runs`
-확장 컬럼을 참조하므로 parser/manifest 호환을 위한 비운영 compatibility 경로다.
-legacy run identity/replace와 verdict threshold 경계 통일은 잔여 과제다.
+구형 `result_files` 기반 persistence service/repository는 현재 schema에 없는
+`result_import_jobs`와 `analysis_runs` 확장 컬럼을 참조해 동작하지 않았으므로
+제거했다. legacy manifest schema, `ManifestParser` alias와 normalized parser adapter는
+parser/manifest 호환 전용으로 남고, runtime 결과 쓰기는 canonical UoW만 사용한다.
 
 PostgreSQL canonical ingestion은 load case별 namespaced 64-bit transaction
 advisory lock으로 `run_no` 할당을 직렬화하고, non-null exact identity
@@ -269,13 +292,14 @@ FastAPI app.openapi()
 | 브라우저 | `frontend/e2e`, `pnpm run test:e2e` | 실제 권한·편집·결과·routing 흐름 |
 | PostgreSQL opt-in | `postgres_integration` marker와 preflight script | Alembic head, app-role 권한, 양 DB 호환 |
 
-결과 수집 focused 검증은 현재 collection 기준 **76개** test case다. canonical/legacy
+결과 수집 focused 검증은 현재 collection 기준 **179개** test case다. canonical/legacy
 manifest 경계, fingerprint idempotency와 mapping 변경 감지, 공통 UoW atomic
 rollback, manual `SUMMARY_RESULT` JSON/CSV의 target-qualified source·retry
-`SKIPPED`·audit/auth 재확인, Radioss scalar/curve/location atomic 저장, 모든 media
-extension fixture의 정상/MIME mismatch/corrupt signature, PostgreSQL reservation
-SQL/migration contract와 endpoint wiring을 포함한다. PostgreSQL 동시성 test는
-아래 opt-in collection에 별도로 두며, 기본 suite에서는 안전하게 skip된다.
+`SKIPPED`·audit/auth 재확인, Radioss scalar/curve/location atomic 저장, streaming
+JSON·folder import·bundle snapshot limits, 모든 media extension fixture의 정상/
+MIME mismatch/corrupt signature, PostgreSQL reservation SQL/migration contract와
+endpoint wiring을 포함한다. PostgreSQL 동시성 test는 아래 collection에 포함되지만
+실행 시 opt-in marker라 기본 suite에서는 안전하게 skip된다.
 
 ```bash
 cd backend
@@ -289,8 +313,12 @@ cd backend
   tests/test_media_policy_fixtures.py \
   tests/test_result_ingestion_idempotency.py \
   tests/test_api.py::test_typed_folder_example_registers_scalars_curves_media_and_catalog \
-  tests/test_postgres_result_ingestion_concurrency.py
-# 76 collected (2026-08-25); PostgreSQL concurrency cases are opt-in at runtime.
+  tests/test_postgres_result_ingestion_concurrency.py \
+  tests/test_streaming_json.py \
+  tests/test_folder_import_limits.py \
+  tests/test_import_bundle_limits.py \
+  tests/test_bundle_snapshot.py
+# 179 collected (2026-08-25); PostgreSQL concurrency cases are opt-in at runtime.
 
 # dedicated migrated test database only; this command was not live-run in the current workspace
 ANALYSIS_DB_BACKEND=postgresql \
@@ -328,8 +356,10 @@ Architecture ceiling은 목표 수치가 아니라 부채가 늘지 않게 하�
 - demo와 reference seed가 같은 fixture alias다.
 - 외부 NAS/NFS/SMB `SIMDASH_IMPORT_ROOT`의 부팅 순서, mount context, 용량과
   재처리 운영 절차는 각 사내 인프라 환경에서 승인해야 한다.
-- Master Refresh는 신뢰된 read-only root를 전제로 하지만 아직 bundle bytes를
-  immutable snapshot으로 고정하지 않는다. producer atomic publish와 importer
-  rehash/snapshot으로 fingerprint와 실제 parse bytes의 TOCTOU를 닫아야 한다.
+- Master Refresh는 importer private snapshot/rehash와 parser workload limits로
+  fingerprint·parse·media 저장 bytes를 고정한다. producer atomic publish/readiness,
+  snapshot temp mount quota와 multi-worker 동시 refresh budget은 운영 환경에서
+  별도 승인·검증해야 한다. 또한 전용 PostgreSQL에서의 실제 동시성 실행과
+  native Windows handle adapter가 남은 release gate다.
 
 우선순위와 완료 기준은 [`program-consolidation-and-development-plan.md`](program-consolidation-and-development-plan.md)에 정리한다.

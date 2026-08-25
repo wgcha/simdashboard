@@ -252,9 +252,10 @@ mesh CSV upload도 target-qualified source와 content checksum으로 같은 UoW�
 transaction 안에서 원자적으로 처리한다. Radioss adapter는 parser output의 scalar,
 time-series/curve, `result_locations`를 canonical contract로 변환한다.
 
-구형 `result_files` 기반 `ResultImportService` persistence는 현재 schema에 없는
-`result_import_jobs`와 `analysis_runs` 확장 컬럼을 참조하므로 parser/manifest
-호환을 위한 비운영 compatibility 경로다.
+구형 `result_files` 기반 persistence service/repository는 현재 schema에 없는
+`result_import_jobs`와 `analysis_runs` 확장 컬럼을 참조해 동작하지 않았으므로
+제거했다. legacy manifest schema, `ManifestParser` alias와 normalized parser adapter는
+parser/manifest 호환 전용으로 남고, runtime 결과 쓰기는 공통 UoW만 사용한다.
 
 ### Frontend
 

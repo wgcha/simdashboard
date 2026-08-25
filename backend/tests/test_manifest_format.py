@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import app.parsers.manifest_format as manifest_format_module
 from app.folder_import import FolderImportError, scan_folder
 from app.parsers.manifest_format import (
     ManifestFormat,
@@ -14,6 +15,7 @@ from app.parsers.manifest_format import (
     resolve_manifest_path,
 )
 from app.parsers.manifest_parser import LegacyResultFilesManifestParser, ManifestParser
+from app.parsers.streaming_json import StreamingJsonComplexityLimitError
 
 
 pytestmark = pytest.mark.unit
@@ -67,6 +69,133 @@ def test_canonical_loader_rejects_legacy_manifest(tmp_path: Path) -> None:
     with pytest.raises(ManifestFormatError, match="MANIFEST_FORMAT_UNEXPECTED") as error:
         load_manifest(path, expected_format=ManifestFormat.CANONICAL_MAPPINGS)
     assert error.value.code == "MANIFEST_FORMAT_UNEXPECTED"
+
+
+def test_canonical_incremental_loader_stops_at_mapping_cap_and_keeps_context(tmp_path: Path) -> None:
+    path = _write_manifest(
+        tmp_path,
+        {
+            "schema_id": "streaming",
+            "context": {
+                "project_id": "project-streaming",
+                "request_id": "request-streaming",
+                "load_case_id": "loadcase-streaming",
+            },
+            "mappings": [
+                {"kind": "typed_scalars", "path": "summary-a.json", "display_name": "A"},
+                {"kind": "typed_scalars", "path": "summary-b.json", "display_name": "B"},
+                {"kind": "typed_scalars", "path": "summary-c.json", "display_name": "C"},
+            ],
+        },
+    )
+
+    with pytest.raises(ManifestFormatError) as error:
+        load_manifest(
+            path,
+            expected_format=ManifestFormat.CANONICAL_MAPPINGS,
+            max_bytes=path.stat().st_size,
+            max_mapping_count=2,
+        )
+
+    assert error.value.code == "MANIFEST_MAPPING_COUNT_LIMIT"
+    assert error.value.data is not None
+    assert error.value.data["context"]["load_case_id"] == "loadcase-streaming"
+    assert len(error.value.data["mappings"]) == 2
+
+
+def test_canonical_incremental_loader_does_not_consume_after_cap_plus_one_event(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "manifest.json"
+    events = [
+        ("", "start_map", None),
+        ("", "map_key", "mappings"),
+        ("mappings", "start_array", None),
+        ("mappings.item", "start_map", None),
+        ("mappings.item", "end_map", None),
+        ("mappings.item", "start_map", None),
+        ("mappings.item", "end_map", None),
+        ("mappings.item", "start_map", None),
+    ]
+
+    def synthetic_events(_path: Path, *, max_bytes: int, max_events: int | None = None):
+        del max_bytes, max_events
+        for event in events:
+            yield event
+        raise AssertionError("the parser consumed events after the cap+1 item")
+
+    monkeypatch.setattr(manifest_format_module, "iter_json_events", synthetic_events)
+
+    with pytest.raises(ManifestFormatError) as error:
+        load_manifest(
+            path,
+            expected_format=ManifestFormat.CANONICAL_MAPPINGS,
+            max_bytes=1,
+            max_mapping_count=2,
+        )
+
+    assert error.value.code == "MANIFEST_MAPPING_COUNT_LIMIT"
+
+
+def test_canonical_incremental_loader_stops_dense_context_at_event_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    max_mapping_count = 2
+    expected_budget = 256 + 64 * max_mapping_count
+    observed: dict[str, int] = {}
+
+    class DenseContextEvents:
+        def __init__(self, max_events: int):
+            self.max_events = max_events
+            self.index = 0
+            self.closed = False
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            if self.index >= self.max_events:
+                raise StreamingJsonComplexityLimitError("manifest event budget exceeded")
+            index = self.index
+            self.index += 1
+            if index == 0:
+                return "", "start_map", None
+            if index == 1:
+                return "", "map_key", "context"
+            if index == 2:
+                return "context", "start_map", None
+            if index % 2:
+                return "context", "map_key", f"padding_{index}"
+            return f"context.padding_{index}", "string", "x"
+
+        def close(self):
+            self.closed = True
+
+    stream: DenseContextEvents | None = None
+
+    def synthetic_events(_path: Path, *, max_bytes: int, max_events: int | None = None):
+        del max_bytes
+        nonlocal stream
+        assert max_events == expected_budget
+        observed["max_events"] = max_events or 0
+        stream = DenseContextEvents(max_events or 0)
+        return stream
+
+    monkeypatch.setattr(manifest_format_module, "iter_json_events", synthetic_events)
+
+    with pytest.raises(ManifestFormatError) as error:
+        load_manifest(
+            tmp_path / "manifest.json",
+            expected_format=ManifestFormat.CANONICAL_MAPPINGS,
+            max_bytes=1,
+            max_mapping_count=max_mapping_count,
+        )
+
+    assert error.value.code == "MANIFEST_COMPLEXITY_LIMIT"
+    assert observed["max_events"] == expected_budget
+    assert stream is not None and stream.closed
 
 
 def test_canonical_folder_import_rejects_legacy_manifest(tmp_path: Path) -> None:

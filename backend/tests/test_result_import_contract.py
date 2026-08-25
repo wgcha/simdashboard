@@ -11,7 +11,6 @@ from app.services.result_import_contract import (
     ResultProvenance,
     normalize_parser_output,
 )
-from app.services.result_import_service import ResultImportService
 
 
 def _provenance(result_type: ResultType) -> ResultProvenance:
@@ -42,8 +41,8 @@ def test_scalar_and_series_legacy_shapes_share_typed_contract():
         "criterion_key": None,
         "verdict": None,
     }
-    # Missing units intentionally remain absent so ResultRepository retains
-    # its historical defaults.
+    # Missing units intentionally remain absent so the persistence adapter can
+    # apply its compatibility defaults.
     assert series.time_series_persistence_rows()[0] == {
         "variable_key": "history",
         "display_name": "History",
@@ -68,12 +67,9 @@ def test_malformed_parser_output_fails_closed(raw, result_type):
 
 
 @pytest.mark.unit
-def test_legacy_adapter_adds_parser_provenance(tmp_path, monkeypatch):
+def test_legacy_adapter_adds_parser_provenance(tmp_path):
     path = tmp_path / "history.csv"
     path.write_text("time,variable_key,value,display_name\n0.0,history,1.5,History\n", encoding="utf-8")
-    monkeypatch.chdir(tmp_path.parent)
-    legacy_service = ResultImportService(tmp_path.name)
-    assert legacy_service.root_dir == tmp_path.resolve()
 
     payload = LegacyResultParserAdapter().parse_file(
         ResultFile(
@@ -81,7 +77,7 @@ def test_legacy_adapter_adds_parser_provenance(tmp_path, monkeypatch):
             path="history.csv",
         ),
         path,
-        source_path=str(path.relative_to(legacy_service.root_dir)),
+        source_path=str(path.relative_to(tmp_path)),
     )
 
     assert payload.time_series[0].provenance.parser == "GenericTimeHistoryParser"

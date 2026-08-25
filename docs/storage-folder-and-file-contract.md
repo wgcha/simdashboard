@@ -95,9 +95,10 @@ fail-closed로 거부한다.
 
 마스터 Refresh와 versioned folder importer는
 `load_manifest(..., expected_format=ManifestFormat.CANONICAL_MAPPINGS)`를 사용하고,
-legacy `ResultImportService`는
+legacy `result_files`는
 `load_manifest(..., expected_format=ManifestFormat.LEGACY_RESULT_FILES)`를 사용하는
-명시적 compatibility 경로다.
+parser compatibility 경로다. 이 형식의 persistence service/repository는 제거되어
+runtime 결과 쓰기를 수행하지 않는다.
 
 마스터 Refresh가 읽는 canonical 형식은 `mappings` 기반 manifest다.
 
@@ -159,11 +160,11 @@ transaction으로 결과를 저장한다. parser별 차이는 adapter와 normali
 event를 함께 기록한다. Radioss adapter는 scalar, time-series/curve,
 `result_locations`를 같은 transaction으로 전달하므로 부분 위치 행을 남기지 않는다.
 
-구형 `result_files` 기반 `ResultImportService` persistence는 별도 legacy 경로다.
-이 repository는 현재 canonical schema에 없는 `result_import_jobs` 테이블과
-`analysis_runs` 확장 컬럼을 참조하므로 parser/manifest 형식 호환을 위한 비운영
-compatibility 경로다. legacy run identity/replace 정책과 verdict threshold 경계
-통일은 P1 잔여 범위다.
+구형 `result_files` 기반 persistence service/repository는 현재 canonical schema에
+없는 `result_import_jobs` 테이블과 `analysis_runs` 확장 컬럼을 참조해 동작하지
+않았으므로 제거했다. legacy manifest schema, `ManifestParser` alias와 normalized
+parser adapter는 parser/manifest 형식 호환 전용으로 남는다. runtime 결과 쓰기는
+공통 `ResultIngestionUnitOfWork`만 사용한다.
 
 ## 5. 허용 확장자와 MIME
 
@@ -267,8 +268,79 @@ bundle 내부 상대 경로, 파일 크기, 파일 내용의 SHA-256이며 상�
    identity의 고유 `run_no`를 검증한다. `ANALYSIS_TEST_POSTGRES=1` 및
    `ANALYSIS_TEST_POSTGRES_DATABASE`가 일치할 때만 실행하며, 현재 전용 DB가 없어
    live 실행 결과는 없다.
-10. producer atomic publish와 importer snapshot/rehash를 도입해 fingerprint 이후
-   파일 교체가 parse·media 저장 provenance를 바꾸지 못하게 한다.
+10. importer private snapshot/rehash와 parser workload limits는 구현되어 fingerprint
+   이후 파일 교체가 parse·media 저장 provenance를 바꾸지 못하게 한다. producer
+   atomic publish/readiness, snapshot temp quota와 multi-worker budget은 운영 잔여
+   요구사항이다.
+
+### 8.1 Producer snapshot과 import limits
+
+Refresh는 live manifest를 먼저 private snapshot으로 복사하고, 복사된 manifest를
+검증한 뒤 그 manifest가 선언한 파일을 private snapshot으로 이어서 캡처·parse한다.
+fingerprint와 parser는 동일한 captured bytes를 사용해야 한다. 원본 파일이 캡처
+이후 교체·삭제되더라도 해당 import의 provenance와 결과는 캡처 시점의 bytes에
+고정된다. 캡처 대상은 regular file만 허용하며 manifest와 mapping 경로는
+absolute/traversal/backslash/dot/duplicate path 및 중간·최종 symlink를 거부한다.
+
+Master Refresh의 secure snapshot traversal은 POSIX `dir_fd` 상대 open과
+`O_NOFOLLOW`를 사용하며 canonical WSL 개발 환경과 Rocky Linux 운영 경로를
+지원한다. native Windows compatibility profile에서는 Windows handle 기반의
+동등한 safe traversal adapter가 제공되기 전까지 이 endpoint를 fail-closed한다.
+이 제한은 수동 upload나 다른 compatibility 기능에는 적용되지 않는다.
+
+다음 환경변수는 snapshot capture와 parser workload를 함께 제한한다. 기본값은
+`.env.example`에 있으며 운영 환경에서는 저장소 용량과 producer 계약에 맞게
+명시적으로 조정한다.
+
+```text
+SIMDASH_IMPORT_MAX_MANIFEST_BYTES    # manifest.json 최대 bytes
+SIMDASH_IMPORT_MAX_MAPPING_COUNT     # bundle mapping 최대 개수
+SIMDASH_IMPORT_MAX_FILE_BYTES        # mapping 파일 1개 최대 bytes
+SIMDASH_IMPORT_MAX_TOTAL_BYTES       # manifest + mapping 전체 최대 bytes
+SIMDASH_IMPORT_MAX_STRUCTURED_BYTES  # typed_scalars/curve_csv 1개 최대 bytes (기본 8MiB, hard max 64MiB; snapshot copy 전 적용)
+SIMDASH_IMPORT_MAX_SCALAR_RECORDS    # bundle 전체 scalar record 최대 개수
+SIMDASH_IMPORT_MAX_CURVES            # bundle 전체 curve 최대 개수
+SIMDASH_IMPORT_MAX_CURVE_POINTS      # curve 1개 및 bundle 전체 point 최대 개수
+```
+
+standalone `scan_folder()` 경로도 Master Refresh와 동일하게 media 파일에
+`SIMDASH_IMPORT_MAX_FILE_BYTES`를 적용한다.
+
+Master Refresh private snapshot은 mapping `kind`를 먼저 확인한다. `typed_scalars`와
+`curve_csv`는 `SIMDASH_IMPORT_MAX_STRUCTURED_BYTES`, `media`는
+`SIMDASH_IMPORT_MAX_FILE_BYTES`를 각각 snapshot copy 전에 적용한다. 지원하지 않는
+kind는 파일을 열기 전에 거부한다. manifest 자체와 bundle 전체에는 별도의 manifest·total
+byte ceiling도 적용한다.
+
+canonical manifest와 typed scalar JSON은 `backend/requirements.txt`와
+`backend/requirements.lock`에 `ijson==3.5.1`로 고정한 public bounded event
+parser를 사용한다. manifest는 mapping cap+1에서 중단하며, 전체 parser event도
+`256 + 64 * SIMDASH_IMPORT_MAX_MAPPING_COUNT` ceiling을 넘기기 전에 거부한다.
+scalar stream은 record cap+1에서 중단하고 단일 scalar item은 64 event ceiling을
+넘기기 전에 `ObjectBuilder`로 전달하지 않는다. scalar checksum도 같은 bounded
+stream이 읽은 bytes에서 계산한다. raw bounded stream은 unpaired Unicode surrogate
+escape를 backend-independent하게 거부하고 valid surrogate pair와 direct UTF-8은
+유지하며, ijson backend별 예외 진단은 공개 error taxonomy를 거쳐 importer의 고정
+오류 코드로 정규화한다.
+
+다만 최종 normalized scalar 최대 100,000개 list는 메모리에 materialize된다. 기본
+`SIMDASH_IMPORT_MAX_STRUCTURED_BYTES`는 8MiB이고 설정 가능한 hard max는 64MiB이므로,
+운영자는 worker 수와 동시 refresh를 포함한 메모리 예산 안에서 override해야 하며 이
+한도를 절대적인 메모리 고갈 방지로 해석해서는 안 된다. requirements lock은 버전을
+고정할 뿐 Windows compatibility profile과 Rocky 운영 target의 wheel 설치 가능성을
+증명하지 않으므로, 해당 target의 actual wheel/offline 설치 smoke는 별도 release gate로
+남긴다.
+
+fingerprint는 live path를 다시 읽어 계산하지 않고 captured metadata/bytes에서
+생성해야 한다. 캡처 또는 fingerprint 단계에서 실패한 bundle은 결과 Run을 만들지
+않는다. 안전하게 검증된 target이 있는 경우에만 실패 job에 제한 위반·경로·snapshot
+error code를 남기며, target을 검증할 수 없는 경우에는 DB job을 만들지 않고
+sanitized refresh item 오류로 반환한다. snapshot은 하나의
+import가 정확히 어떤 bytes를 읽었는지는 고정하지만, producer가 여러 파일을
+서로 다른 시점에 쓰는 상황에서 논리적으로 일관된 generation을 보장하지는 않는다.
+producer는 결과 파일을 in-place로 쓰지 말고 임시 sibling 디렉터리에서 완료한 뒤
+atomic rename으로 publish해야 하며, 필요하면 별도의 readiness/완료 표식 정책을
+사용해야 한다.
 
 ## 9. 실제 예제와 검증
 

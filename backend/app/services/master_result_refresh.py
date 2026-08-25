@@ -1,11 +1,11 @@
 """Orchestration for importing result bundles from a trusted server folder.
 
-This module owns trusted-root discovery, path checks, bundle fingerprinting and
-per-manifest failure isolation. Persistence is delegated to the canonical result
-ingestion application/UoW boundary. The versioned-folder parser remains
-:func:`app.folder_import.scan_folder`; callers never supply a filesystem path. A
-bundle is associated to an existing load case through IDs in ``manifest.json``
-before any result rows are written:
+This module owns trusted-root discovery, private bundle snapshots and
+per-manifest failure isolation. Persistence is delegated to the canonical
+result-ingestion application/UoW boundary. The versioned-folder parser reads
+only the captured private snapshot; callers never supply a filesystem path. A
+bundle is associated to an existing load case through IDs in its captured
+``manifest.json`` before any result rows are written:
 
 .. code-block:: json
 
@@ -16,27 +16,30 @@ Nested ``project.id``, ``request.id`` and ``load_case.id`` are accepted too.
 
 from __future__ import annotations
 
-import hashlib
 import json
+import logging
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Lock
 from typing import Any, Literal
 from uuid import uuid4
 
 from ..adapters.persistence.result_ingestion import SQLResultIngestionUnitOfWorkProvider
 from ..application.results.commands import ingest_result_bundle, utc_identifier
+from ..config import import_bundle_limits
 from ..domains.results.models import ResultIngestionCommand
 from ..database_connection import connect
 from ..folder_import import FolderImportError, scan_folder
-from ..parsers.manifest_format import ManifestFormat, load_manifest
-from ..services.bundle_fingerprint import FingerprintFile, calculate_bundle_fingerprint
+from ..services.bundle_snapshot import BundleSnapshotError, capture_bundle
 
 
 RefreshStatus = Literal["IMPORTED", "SKIPPED", "FAILED"]
 SOURCE_TYPE = "MASTER_FOLDER_REFRESH"
 PARSER_VERSION = "master-folder-refresh-v1"
+_refresh_lock = Lock()
+logger = logging.getLogger(__name__)
 
 
 class MasterResultRefreshError(RuntimeError):
@@ -53,109 +56,165 @@ class RefreshItem:
 
 
 def configured_import_root() -> Path:
-    """Return the only permitted discovery root, resolving its configured link once."""
+    """Return the only permitted discovery root, normalized once."""
     configured = os.getenv("SIMDASH_IMPORT_ROOT", "").strip()
     if not configured:
         raise MasterResultRefreshError("SIMDASH_IMPORT_ROOT가 설정되지 않았습니다.")
+    return _normalize_import_root(Path(configured))
+
+
+def _normalize_import_root(root: Path) -> Path:
+    """Resolve both configured and explicit roots before discovery/capture."""
     try:
-        root = Path(configured).expanduser().resolve(strict=True)
+        normalized = root.expanduser().resolve(strict=True)
     except OSError as exc:
         raise MasterResultRefreshError("SIMDASH_IMPORT_ROOT를 확인할 수 없습니다.") from exc
-    if not root.is_dir():
+    if not normalized.is_dir():
         raise MasterResultRefreshError("SIMDASH_IMPORT_ROOT는 디렉터리여야 합니다.")
-    return root
+    return normalized
 
 
 class MasterResultRefreshService:
     """Best-effort importer for all ``manifest.json`` files under one trusted root."""
 
     def __init__(self, root: Path | None = None):
-        self.root = root or configured_import_root()
+        self.root = configured_import_root() if root is None else _normalize_import_root(root)
+        try:
+            self.limits = import_bundle_limits()
+        except RuntimeError as exc:
+            raise MasterResultRefreshError(f"결과 bundle 제한 설정이 올바르지 않습니다: {exc}") from exc
 
     def refresh(self) -> list[RefreshItem]:
-        # os.walk never follows directory links.  We still report a linked
-        # manifest as a failed item rather than silently treating it as trusted.
-        manifests: list[Path] = []
+        # A snapshot can consume the complete per-bundle temporary-storage
+        # allowance. Serialize refreshes within this worker process so two
+        # requests never allocate independent snapshots concurrently.
+        if not _refresh_lock.acquire(blocking=False):
+            raise MasterResultRefreshError("다른 마스터 결과 폴더 새로고침이 진행 중입니다.")
+        try:
+            return self._refresh_locked()
+        finally:
+            _refresh_lock.release()
+
+    def _refresh_locked(self) -> list[RefreshItem]:
+        # os.walk never follows directory links. A final manifest link is
+        # retained as a discovery-relative item and rejected by snapshot
+        # capture, while linked directories are intentionally not explored.
+        manifests: list[str] = []
         for directory, dirnames, filenames in os.walk(self.root, followlinks=False):
             directory_path = Path(directory)
             dirnames[:] = [name for name in dirnames if not (directory_path / name).is_symlink()]
-            manifests.extend(directory_path / name for name in filenames if name == "manifest.json")
-        return [self._refresh_manifest(path) for path in sorted(manifests)]
+            directory_relative = directory_path.relative_to(self.root)
+            manifests.extend(
+                (directory_relative / name).as_posix()
+                for name in filenames
+                if name == "manifest.json"
+            )
+        return [self._refresh_manifest(relative) for relative in sorted(manifests)]
 
-    def _refresh_manifest(self, manifest_path: Path) -> RefreshItem:
-        relative = self._relative_manifest_path(manifest_path)
-        if relative is None or manifest_path.is_symlink():
-            return RefreshItem(
-                relative or "manifest.json",
-                "FAILED",
-                message="마스터 폴더 밖 또는 심볼릭 링크 manifest는 허용되지 않습니다.",
-            )
+    def _refresh_manifest(self, relative: str) -> RefreshItem:
+        captured_target: tuple[str, str, str] | None = None
         try:
-            manifest_checksum = _checksum(manifest_path)
-            raw_manifest = _read_manifest(manifest_path)
-            mapping_files = _validate_bundle_paths(self.root, manifest_path.parent, raw_manifest)
-            bundle_fingerprint = calculate_bundle_fingerprint(
-                self.root,
-                [FingerprintFile("manifest.json", manifest_path), *mapping_files],
-            )
-            target = _manifest_target(raw_manifest)
-            parsed = scan_folder(manifest_path.parent)
-            outcome = ingest_result_bundle(
-                _ingestion_command(relative, manifest_checksum, bundle_fingerprint, target, parsed),
-                SQLResultIngestionUnitOfWorkProvider(utc_identifier),
-                _now,
-                utc_identifier,
-            )
-            if outcome["status"] == "SKIPPED":
-                return RefreshItem(
-                    relative,
-                    "SKIPPED",
-                    target[2],
-                    message="동일한 결과 bundle이 이미 완료되었습니다.",
+            with capture_bundle(self.root, relative, self.limits) as captured:
+                captured_target = _manifest_target(captured.manifest)
+                parsed = scan_folder(captured.bundle_root, limits=self.limits)
+                outcome = ingest_result_bundle(
+                    _ingestion_command(
+                        relative,
+                        captured.manifest_checksum,
+                        captured.bundle_fingerprint,
+                        captured_target,
+                        parsed,
+                    ),
+                    SQLResultIngestionUnitOfWorkProvider(utc_identifier),
+                    _now,
+                    utc_identifier,
                 )
-            return RefreshItem(relative, "IMPORTED", target[2], outcome["analysis_run_id"])
+                if outcome["status"] == "SKIPPED":
+                    return RefreshItem(
+                        relative,
+                        "SKIPPED",
+                        captured_target[2],
+                        message="동일한 결과 bundle이 이미 완료되었습니다.",
+                    )
+                return RefreshItem(relative, "IMPORTED", captured_target[2], outcome["analysis_run_id"])
         except Exception as exc:
-            target = _safe_manifest_target(manifest_path)
-            self._record_failure(target, relative or "manifest.json", str(exc))
+            is_controlled_error = isinstance(exc, (BundleSnapshotError, FolderImportError))
+            if captured_target is None and isinstance(exc, BundleSnapshotError) and exc.manifest is not None:
+                try:
+                    captured_target = _manifest_target(exc.manifest)
+                except Exception:
+                    captured_target = None
+            if not is_controlled_error:
+                logger.exception("Unexpected master result refresh failure for %s", relative)
+            error_code = getattr(exc, "code", None) if is_controlled_error else None
+            safe_message = _safe_error_message(exc)
+            self._record_failure(
+                captured_target,
+                relative,
+                safe_message,
+                error_code or "BUNDLE_IMPORT_FAILED",
+            )
             return RefreshItem(
-                relative or "manifest.json",
+                relative,
                 "FAILED",
-                target[2] if target else None,
-                message=_safe_error_message(exc),
+                captured_target[2] if captured_target else None,
+                message=safe_message,
             )
 
-    def _relative_manifest_path(self, manifest_path: Path) -> str | None:
-        try:
-            resolved = manifest_path.resolve(strict=True)
-            return resolved.relative_to(self.root).as_posix()
-        except (OSError, ValueError):
-            return None
-
-    def _record_failure(self, target: tuple[str, str, str] | None, relative: str, message: str) -> None:
-        # The legacy table requires a load case.  Unassociated malformed
-        # manifests are still returned in the response (and included in audit).
+    def _record_failure(
+        self,
+        target: tuple[str, str, str] | None,
+        relative: str,
+        message: str,
+        error_code: str,
+    ) -> None:
+        # folder_import_jobs requires a load case. Do not record a failure
+        # against an arbitrary case when captured context IDs do not form the
+        # same project/request/load-case relationship in the current database.
+        # Unassociated malformed manifests remain visible in the response.
         if target is None:
             return
         try:
             with connect() as conn:
                 conn.execute(
                     """
-                    INSERT INTO folder_import_jobs
-                    VALUES (?, ?, NULL, ?, ?, ?, 'FAILED', ?, ?)
+                    INSERT INTO folder_import_jobs (
+                        id,
+                        load_case_id,
+                        analysis_run_id,
+                        schema_id,
+                        schema_version,
+                        source_folder,
+                        status,
+                        summary_json,
+                        created_at
+                    )
+                    SELECT ?, lc.id, NULL, ?, ?, ?, 'FAILED', ?, ?
+                    FROM load_cases lc
+                    JOIN analysis_requests ar ON ar.id=lc.request_id
+                    WHERE lc.id=?
+                      AND lc.request_id=?
+                      AND ar.project_id=?
                     """,
                     [
                         f"folder-refresh-{uuid4().hex[:12]}",
-                        target[2],
                         "master-folder",
                         1,
                         relative,
-                        json.dumps({"error": _safe_error_message(message)}, ensure_ascii=False),
+                        json.dumps(
+                            {"error_code": error_code, "error": message},
+                            ensure_ascii=False,
+                        ),
                         _now(),
+                        target[2],
+                        target[1],
+                        target[0],
                     ],
                 )
         except Exception:
             # A failed diagnostic record must not mask the original import
             # failure or stop refresh of other bundles.
+            logger.exception("Could not record master result refresh failure")
             return
 
 
@@ -179,63 +238,6 @@ def _manifest_target(raw_manifest: dict[str, Any]) -> tuple[str, str, str]:
         return candidate.strip()
 
     return value("project_id"), value("request_id"), value("load_case_id")
-
-
-def _safe_manifest_target(manifest_path: Path) -> tuple[str, str, str] | None:
-    try:
-        return _manifest_target(_read_manifest(manifest_path))
-    except Exception:
-        return None
-
-
-def _read_manifest(path: Path) -> dict[str, Any]:
-    try:
-        return load_manifest(path, expected_format=ManifestFormat.CANONICAL_MAPPINGS).data
-    except ValueError as exc:
-        raise FolderImportError(str(exc)) from exc
-
-
-def _validate_bundle_paths(master_root: Path, bundle_root: Path, manifest: dict[str, Any]) -> list[FingerprintFile]:
-    """Reject every mapping that can traverse, or hide traversal behind, a link."""
-    mappings = manifest.get("mappings")
-    if not isinstance(mappings, list):
-        raise FolderImportError("manifest.json에는 mappings 배열이 필요합니다.")
-    if bundle_root.is_symlink():
-        raise FolderImportError("심볼릭 링크 결과 폴더는 허용되지 않습니다.")
-    validated: list[FingerprintFile] = []
-    for mapping in mappings:
-        if not isinstance(mapping, dict) or not isinstance(mapping.get("path"), str):
-            raise FolderImportError("mappings 항목에 안전한 path가 필요합니다.")
-        relative = Path(mapping["path"])
-        if relative.is_absolute() or ".." in relative.parts:
-            raise FolderImportError("결과 파일 경로는 결과 폴더 내부의 상대 경로여야 합니다.")
-        candidate = bundle_root / relative
-        if any(part.is_symlink() for part in _path_parts(bundle_root, candidate)):
-            raise FolderImportError("결과 파일 심볼릭 링크는 허용되지 않습니다.")
-        try:
-            resolved = candidate.resolve(strict=True)
-            resolved.relative_to(bundle_root.resolve(strict=True))
-            resolved.relative_to(master_root)
-        except (OSError, ValueError) as exc:
-            raise FolderImportError("결과 파일이 허용된 마스터 폴더 밖에 있습니다.") from exc
-        if not resolved.is_file():
-            raise FolderImportError("결과 파일을 찾을 수 없습니다.")
-        bundle_relative = resolved.relative_to(bundle_root.resolve(strict=True)).as_posix()
-        validated.append(FingerprintFile(bundle_relative, resolved))
-    return validated
-
-
-def _path_parts(root: Path, candidate: Path) -> list[Path]:
-    try:
-        relative = candidate.relative_to(root)
-    except ValueError:
-        return [candidate]
-    current = root
-    parts: list[Path] = []
-    for part in relative.parts:
-        current = current / part
-        parts.append(current)
-    return parts
 
 
 def _ingestion_command(
@@ -263,19 +265,12 @@ def _ingestion_command(
     }
 
 
-def _checksum(path: Path) -> str:
-    """Return the manifest checksum retained separately from the bundle fingerprint."""
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _now() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-def _safe_error_message(error: Exception | str) -> str:
-    # Do not expose server absolute paths in an administrative API response.
-    return str(error).replace(str(Path.cwd()), "[workspace]")[:500]
+def _safe_error_message(error: Exception) -> str:
+    """Return only messages explicitly controlled by the import boundaries."""
+    if isinstance(error, (BundleSnapshotError, FolderImportError)):
+        return str(error)[:500]
+    return "결과 bundle 가져오기 중 내부 오류가 발생했습니다. 관리자에게 문의하세요."

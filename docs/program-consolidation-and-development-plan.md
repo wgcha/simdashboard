@@ -38,8 +38,8 @@
 |---|---|---|---|
 | DOC-01 | 현재 문서와 과거 plan이 같은 디렉터리에 혼재 | 개발자가 낡은 경로·명령을 사용 | P0 |
 | DB-01 | migration head를 코드 graph에서 동적으로 읽고 PostgreSQL의 누락·stale revision을 fail-closed하도록 verifier와 회귀 테스트를 반영 | 구현 완료, 실제 운영 DB release gate 검증 필요 | P0 완료 |
-| IMP-01 | 중앙 format detector/loader와 normalized contract를 사용하고 canonical Master Refresh·typed folder example·수동 `SUMMARY_RESULT` JSON/CSV·Radioss mesh CSV를 공통 UoW로 적재 | legacy `ResultImportService` persistence와 run replace 정책은 잔여 | P1 진행 |
-| IMP-02 | bundle fingerprint, load-case advisory lock, migration 0016 exact source reservation과 opt-in PostgreSQL 동시성 테스트 구현 | 동일 `run_id` replace·TOCTOU snapshot·전용 PostgreSQL test DB에서의 실제 실행은 잔여 | P1 진행 |
+| IMP-01 | 중앙 format detector/loader와 normalized contract를 사용하고 canonical Master Refresh·typed folder example·수동 `SUMMARY_RESULT` JSON/CSV·Radioss mesh CSV를 공통 UoW로 적재 | schema와 맞지 않던 legacy `result_files` persistence service/repository를 제거하고 parser compatibility만 유지 | P1 진행 |
+| IMP-02 | bundle fingerprint, load-case advisory lock, migration 0016 exact source reservation, importer snapshot/rehash·workload limits와 opt-in PostgreSQL 동시성 테스트 구현 | kind별 snapshot ceiling·unsupported kind open 전 거부·streaming complexity ceiling까지 구현. 동일 `run_id` replace·전용 PostgreSQL test DB에서의 실제 실행, producer atomic publish/readiness·전용 quota-limited temp mount·multi-worker budget은 잔여 | P1 진행 |
 | DEP-01 | Rocky install env·service EnvironmentFile·systemd read-only path에 `SIMDASH_IMPORT_ROOT` wiring과 외부 mount/read preflight를 반영 | 구현 완료, 실제 Rocky host release gate 검증 필요 | P0 진행 |
 | DEP-02 | Rocky 8 + nginx + systemd + PostgreSQL을 canonical target으로 ADR 확정하고 Windows를 compatibility profile로 명시 | 문서 결정 완료 | P0 완료 |
 | DEP-03 | Windows는 설치/개발 실행과 DB 이관 호환성은 있으나 HTTPS reverse proxy·service·TLS·rollback 운영 자동화 없음 | Windows one-command 운영 배포는 지원 범위에서 제외 | 범위 제외 |
@@ -137,9 +137,10 @@ target-qualified `source_name`과 content checksum을 사용해 공통 UoW로 �
 `RESULT_IMPORTED` audit event를 함께 기록한다. Radioss adapter는 scalar,
 time-series/curve, `result_locations`를 동일 transaction에 전달한다.
 
-legacy `ResultImportService` persistence는 canonical schema에 없는
-`result_import_jobs` 테이블과 `analysis_runs` 확장 컬럼을 참조하므로 비운영
-compatibility 경로로 유지한다.
+canonical schema에 없는 `result_import_jobs` 테이블과 `analysis_runs` 확장 컬럼을
+참조하던 legacy `ResultImportService` persistence와 repository는 제거했다. legacy
+`result_files` manifest schema, `ManifestParser` alias와 normalized parser adapter는
+호환 전용으로 유지하고, 결과 쓰기는 canonical UoW로 한정한다.
 
 완료조건:
 
@@ -184,23 +185,26 @@ compatibility 경로로 유지한다.
 
 상태: 부분 완료. canonical Master Refresh, typed folder-import example, 수동
 `SUMMARY_RESULT` JSON/CSV와 Radioss mesh CSV의 공통 command/domain
-port/application orchestration/SQL UoW 이관은 완료했다. legacy persistence 이관은
-남아 있다.
+port/application orchestration/SQL UoW 이관은 완료했다. schema와 맞지 않던 legacy
+`result_files` persistence service/repository는 제거하고 parser compatibility만
+유지한다.
 
 - P0에서 고정한 중앙 manifest detector/loader를 canonical importer와 legacy
   adapter가 명시적으로 사용한다.
 - discovery/preflight/parser와 persistence/status sync를 command/UoW 경계로 분리했다.
 - typed folder import와 Master Refresh가 같은 validation·persistence UoW를 사용한다.
 - Radioss parser adapter는 scalar, time-series/curve, `result_locations`를 canonical UoW result contract로 전달한다.
-- legacy `ResultImportService` persistence는 현행 schema에 맞는 run identity와
-  replace 정책을 정한 뒤 같은 UoW로 이관한다.
 - parser adapter만 결과 형식별로 교체한다.
-- 파일·행·포인트·manifest 개수 제한을 설정한다.
+- importer의 private snapshot/rehash와 파일·행·포인트·manifest 개수 제한은 구현했다.
+- `ijson==3.5.1` bounded manifest/scalar stream의 cap+1·checksum workload limit을 구현했다. manifest 전체 event ceiling은 `256 + 64 * max_mapping_count`, scalar 단일 item ceiling은 64 event이며, 둘 다 `ObjectBuilder` materialization 전에 적용한다. typed scalar/curve mapping snapshot은 structured byte ceiling, media mapping은 file byte ceiling을 copy 전에 적용하고 unsupported kind는 open 전에 거부한다. 최종 normalized scalar 최대 100,000개 list materialization과 Windows/Rocky actual wheel/offline smoke는 별도 release gate다.
+- producer atomic publish/readiness, snapshot 임시 저장소의 quota와 multi-worker
+  동시 refresh budget은 운영 환경에서 별도로 승인·검증한다.
 
 #### P1-02 bundle fingerprint와 Run identity
 
-상태: fingerprint와 PostgreSQL duplicate reservation, opt-in live concurrency test
-구현 완료. identity 정책과 전용 PostgreSQL test DB에서의 실제 실행은 잔여다.
+상태: fingerprint, PostgreSQL duplicate reservation/advisory lock, importer
+snapshot/rehash와 workload limits 구현 완료. identity 정책과 전용 PostgreSQL
+test DB에서의 실제 실행은 잔여다.
 
 - manifest와 매핑 파일의 checksum/size를 canonical 정렬해 fingerprint를 만든다.
 - 동일 fingerprint는 skip하고, 현재 다른 fingerprint는 새 Run으로 처리한다.
@@ -214,8 +218,9 @@ port/application orchestration/SQL UoW 이관은 완료했다. legacy persistenc
 - `backend/tests/test_postgres_result_ingestion_concurrency.py`가 독립 연결 두 개로
   동일 source의 `IMPORTED`/`SKIPPED`, 서로 다른 source의 고유 `run_no`를 검증한다.
   `ANALYSIS_TEST_POSTGRES=1`과 일치하는 전용 test DB가 있어야 실행되며, 이번 기준선에서는 전용 DB가 없어 live 실행하지 않았다.
-- 결과 producer의 임시 폴더 생성 후 atomic rename과 importer snapshot/rehash로
-  fingerprint 계산 바이트와 실제 parse·media 저장 바이트의 일치를 보장한다.
+- importer snapshot/rehash로 fingerprint 계산 바이트와 실제 parse·media 저장
+  바이트의 일치를 보장한다. producer의 임시 sibling directory + atomic rename,
+  readiness 표식, snapshot temp quota와 multi-worker budget은 운영 요구사항이다.
 
 #### P1-03 database-only media 마감
 
@@ -234,11 +239,33 @@ port/application orchestration/SQL UoW 이관은 완료했다. legacy persistenc
 MIME/extension mismatch 거부, corrupt signature 거부를 검증한다. 영구 canonical
 folder example은 JSON/CSV/SVG/glTF만 유지한다.
 
-현재 결과 수집 focused 검증은 collection 기준 **76개** test case다. manifest 경계,
+현재 결과 수집 focused 검증은 collection 기준 **179개** test case다. manifest 경계,
 fingerprint/mapping 변경, 공통 UoW rollback, manual SUMMARY_RESULT JSON/CSV,
-media fixture matrix, PostgreSQL reservation SQL/migration contract와 endpoint
-wiring, Radioss canonical UoW를 포함한다. PostgreSQL 동시성 test는 opt-in marker라
-전용 test DB가 없는 기본 suite에서는 skip된다.
+streaming JSON·folder import·bundle snapshot limits, media fixture matrix,
+PostgreSQL reservation SQL/migration contract와 endpoint wiring, Radioss canonical
+UoW를 포함한다. PostgreSQL 동시성 test는 collection에는 포함되지만 opt-in marker라
+전용 test DB가 없는 기본 suite에서는 skip된다. 수집 수는 테스트가 추가되면 함께
+변할 수 있으므로 아래 통합 collection 명령을 기준으로 확인한다.
+
+```bash
+cd backend
+../.venv-wsl/bin/python -m pytest --collect-only -q \
+  tests/test_master_result_refresh.py \
+  tests/test_master_result_folder_example.py \
+  tests/test_result_ingestion_atomicity.py \
+  tests/test_result_import_contract.py \
+  tests/test_manifest_format.py \
+  tests/test_manual_result_ingestion.py \
+  tests/test_media_policy_fixtures.py \
+  tests/test_result_ingestion_idempotency.py \
+  tests/test_api.py::test_typed_folder_example_registers_scalars_curves_media_and_catalog \
+  tests/test_postgres_result_ingestion_concurrency.py \
+  tests/test_streaming_json.py \
+  tests/test_folder_import_limits.py \
+  tests/test_import_bundle_limits.py \
+  tests/test_bundle_snapshot.py
+# 179 collected (2026-08-25); PostgreSQL concurrency cases are opt-in at runtime.
+```
 
 ### Phase 2 — 기능별 V2 구조 전환(P1)
 
@@ -396,6 +423,9 @@ proxy/CA를 설치·갱신하는 자동화는 아직 없다. `NO_PROXY` assignme
 2. GitHub Issues #13~#15 추적 표와 실행/계획 경계를 유지한다. (완료)
 3. migration verifier와 이후 migration head 처리 방식을 고친다. (완료)
 4. 운영 target ADR과 `SIMDASH_IMPORT_ROOT` 배포 연결을 구현한다. (구현 완료, Rocky host release validation 남음)
-5. Radioss mesh locations 공통 UoW 이관을 유지하고 legacy persistence의 run identity/replace 정책을 확정한다.
-6. opt-in PostgreSQL concurrent ingestion test를 전용 migrated test DB에서 실행하고 producer snapshot/rehash를 추가한다.
+5. legacy `result_files` parser compatibility를 유지하면서 Radioss mesh locations 공통 UoW 이관을 검증한다. (완료)
+6. opt-in PostgreSQL concurrent ingestion test를 전용 migrated test DB에서 실행하고,
+   producer atomic publish/readiness와 snapshot temp quota·multi-worker budget을
+   Rocky 운영 release gate에 추가한다. Windows Master Refresh는 native handle adapter
+   구현·target wheel/offline smoke 전까지 fail-closed compatibility 범위를 유지한다.
 7. result ingestion부터 V2 vertical slice 전환을 시작한다.
