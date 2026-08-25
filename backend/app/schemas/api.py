@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 WidgetType = Literal[
@@ -309,6 +309,66 @@ class ResultImportPayload(BaseModel):
     content: str = Field(min_length=1, max_length=5_000_000)
     author: str | None = Field(default=None, min_length=2, max_length=60)
     validate_only: bool = False
+    source_run_id: str | None = None
+    conflict_policy: Literal["SKIP", "REJECT", "REPLACE"] = "SKIP"
+
+    @field_validator("source_run_id", mode="before")
+    @classmethod
+    def normalize_source_run_id(cls, value: object) -> object:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("source_run_id는 문자열이어야 합니다.")
+        normalized = value.strip()
+        if not normalized or len(normalized) > 120 or not normalized.isprintable():
+            raise ValueError("source_run_id 형식이 올바르지 않습니다.")
+        return normalized
+
+
+class ResultImportResponse(BaseModel):
+    """Stable response contract for manual result imports."""
+
+    status: Literal["VALID", "IMPORTED", "SKIPPED", "REJECTED"]
+    run_id: str | None = None
+    run_no: int | None = None
+    filename: str
+    # ``summary`` is additive for clients that prefer a grouped shape.  The
+    # flattened counters/source_format below remain for existing consumers.
+    summary: dict[str, Any] | None = None
+    scalar_count: int | None = None
+    node_count: int | None = None
+    element_count: int | None = None
+    frame_count: int | None = None
+    final_time: float | None = None
+    time_series_count: int | None = None
+    open_cell_count: int | None = None
+    chassis_rear_count: int | None = None
+    fail_count: int | None = None
+    overall_verdict: Literal["PASS", "FAIL"] | None = None
+    source_format: str | None = None
+    results: list[Any] = Field(default_factory=list)
+    warnings: list[Any] = Field(default_factory=list)
+    operation: Literal["CREATED", "NOOP", "REPLACED", "REJECTED"] | None = None
+    reason_code: str | None = None
+    existing_run_id: str | None = None
+    replaced_run_id: str | None = None
+    source_revision: int | None = None
+
+
+class TypedResultExampleResponse(BaseModel):
+    """Named response contract for the checked-in typed example importer."""
+
+    status: Literal["IMPORTED", "SKIPPED", "REJECTED"]
+    job_id: str
+    run_id: str | None = None
+    run_no: int | None = None
+    schema_id: str
+    summary: dict[str, Any]
+    operation: Literal["CREATED", "NOOP", "REPLACED", "REJECTED"] | None = None
+    reason_code: str | None = None
+    existing_run_id: str | None = None
+    replaced_run_id: str | None = None
+    source_revision: int | None = None
 
 
 class VariableCreate(BaseModel):

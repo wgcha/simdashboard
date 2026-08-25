@@ -1,6 +1,6 @@
 # 해석 후처리 결과 수집·DB 적재·가시화 상세 사양서
 
-> 상태: **historical/실행 금지** 초기 파이프라인 사양 및 배경 기록이다. 이 문서의 SQL과 legacy repository 예시는 현재 migration에 적용하거나 운영 경로로 호출하지 않는다. schema와 맞지 않던 legacy `result_files` persistence service/repository는 제거됐다. legacy manifest schema, `ManifestParser` alias와 normalized parser adapter만 compatibility 전용으로 남고, runtime 결과 쓰기는 canonical `ResultIngestionUnitOfWork`를 사용한다. 실제 폴더·확장자·blob 계약은 `storage-folder-and-file-contract.md`를 따른다.
+> 상태: **historical/실행 금지** 초기 파이프라인 사양 및 배경 기록이다. 이 문서의 SQL과 legacy repository 예시는 현재 migration에 적용하거나 운영 경로로 호출하지 않는다. schema와 맞지 않던 legacy `result_files` persistence service/repository는 제거됐다. legacy manifest schema, `ManifestParser` alias와 normalized parser adapter만 compatibility 전용으로 남고, runtime 결과 쓰기는 canonical `ResultIngestionUnitOfWork`를 사용한다. 아래 Run Identity V2 단락과 구현 현황은 현재 계약을 보충한다. 실제 폴더·확장자·blob 계약은 `storage-folder-and-file-contract.md`를 따른다.
 
 ## 1. 문서 목적
 
@@ -211,7 +211,9 @@ backend/data/import/
 | `source_program` | string | Y | 후처리 프로그램 이름 |
 | `source_program_version` | string | N | 후처리 프로그램 버전 |
 | `result_files` | array | Y | 결과 파일 목록 |
-| `overwrite_policy` | enum | Y | `REJECT`, `REPLACE`, `APPEND` |
+| `overwrite_policy` | enum | Y | **historical** legacy manifest 필드. 현재 canonical 경로는 `conflict_policy`를 사용한다. |
+| `source_run_id` | string | N | producer가 부여한 안정적 실행 식별자(1~120 printable). 없으면 legacy append 호환 |
+| `conflict_policy` | enum | N | source identity가 있을 때 `SKIP`(기본), `REJECT`, `REPLACE`; Master manifest는 `REPLACE` 금지 |
 | `metadata` | object | N | 추가 메타데이터 |
 
 ### 6.2 결과 파일 객체
@@ -516,13 +518,41 @@ backend/app/
 
 오류 발생 시 전체 롤백한다.
 
-### 10.3 overwrite 정책
+### 10.3 overwrite 정책 — historical
 
 - `REJECT`: 기존 결과가 있으면 실패
 - `REPLACE`: 기존 결과 삭제 후 교체
 - `APPEND`: 충돌하지 않는 신규 결과만 추가
 
-운영 기본값은 `REJECT`이다.
+이 절은 초기 설계의 historical 정책이며 현재 runtime에 적용하지 않는다. 특히
+`REPLACE`의 “기존 결과 삭제” 동작은 구현 계약이 아니다.
+
+### 10.4 현재 계약 — Run Identity V2
+
+현재 runtime은 Alembic `0017_run_identity_v2`의
+`canonical_result_ingestion_source_versions`를 source identity 정본으로 사용한다.
+ledger는 load case별 `source_type`·`source_key`·`source_revision`으로 범위화하고,
+source checksum, server-assigned `analysis_run_id`, `run_no`, conflict policy와
+`supersedes_analysis_run_id`를 보존한다. `(load_case_id, run_no)`는 unique이며 기존
+run의 결과·검토·미디어 행을 수정하거나 삭제하지 않는다.
+
+- 동일 checksum은 `SKIPPED/NOOP`이며 기존 `analysis_run_id`와 `run_no`를 반환한다.
+- 명시적 `source_run_id`의 변경 checksum은 `SKIP`이면 기존 run 반환,
+  `REJECT`이면 terminal import job을 남기고 거부, `REPLACE`이면 새 run을 추가하고
+  이전 run을 `supersedes_analysis_run_id`로 연결한다.
+- `source_run_id`가 없는 경로는 `name:<source_name>`의 `LEGACY_APPEND` revision으로
+  기존 호환 동작을 유지한다. checksum이 없으면 ledger를 기록하지 않는다.
+- 수동 upload의 `REJECT`는 job과 audit를 commit한 뒤 HTTP 409
+  `SOURCE_RUN_CONFLICT`를 반환한다. Master Refresh는 manifest의 `SKIP`/`REJECT`만
+  허용하고 producer `REPLACE`는 fail-closed한다. Master의 reject는 형제 manifest를
+  중단하지 않고 `FAILED/SOURCE_RUN_CONFLICT` item으로 반환한다.
+
+2026-08-25 disposable PostgreSQL 18.6 live gate에서는 loopback 55433의 별도
+test DB로 빈 DB `0001→0017`, 기존 `0016→0017` backfill, app-role DDL 거부,
+pool budget, reference seed와 동시성 test **2 passed**를 확인했다. 실제 SQL
+provider의 CREATED/exact NOOP/SKIP/REJECT/immutable REPLACE와 revision/supersedes도
+검증했다. 종료 후 cluster·DB·로그를 제거해 잔여 파일 0과 port 종료를 확인했으며
+기존 5432 `simulation_dashboard`와 `.env`는 건드리지 않았다.
 
 ---
 
@@ -726,7 +756,7 @@ SIMDASH_AUTO_IMPORT_ENABLED=false
 13. 누락 파일 거부
 14. bundle fingerprint 중복 차단
 15. REJECT 정책
-16. REPLACE 정책 (잔여 정책)
+16. Run Identity V2 `SKIP`/`REJECT`/immutable `REPLACE` 정책
 17. 트랜잭션 롤백
 18. 결과 없는 run의 NO_DATA
 19. 필수 결과 일부 누락의 PARTIAL
@@ -743,11 +773,11 @@ SIMDASH_AUTO_IMPORT_ENABLED=false
 - 기존 화면 유지
 - 콘솔 오류 없음
 
-현재 구현의 결과 수집 focused 검증은 collection 기준 71개 test case로 별도
-관리한다. canonical/legacy manifest, bundle fingerprint, common UoW, manual
-SUMMARY_RESULT JSON/CSV, media extension fixture matrix, PostgreSQL reservation
-SQL/migration contract와 typed folder API contract를 포함한다. live PostgreSQL
-concurrent ingestion test는 제공되지 않는다.
+이 문서의 원래 71개 collection은 historical 검증 범위다. 현재 focused 검증은
+canonical/legacy manifest, bundle fingerprint, common UoW, manual SUMMARY_RESULT
+JSON/CSV, media fixture matrix, `0017` migration/Run Identity contract, typed folder
+API, PostgreSQL source-version과 endpoint wiring을 포함한다. PostgreSQL
+concurrency test는 opt-in이며 disposable 0017 V2 live gate에서 통과했다.
 
 ```bash
 cd backend
@@ -761,13 +791,12 @@ cd backend
   tests/test_media_policy_fixtures.py \
   tests/test_result_ingestion_idempotency.py \
   tests/test_api.py::test_typed_folder_example_registers_scalars_curves_media_and_catalog
-# 71 collected; live PostgreSQL concurrent test는 별도 미제공
+# historical collection reference; current collection also includes Run Identity V2 tests
 ```
 
-이 historical 71개 collection은 당시 제공된 focused 검증 범위다. 이후 Radioss
-mesh locations는 canonical UoW로 이관됐고 schema와 맞지 않던 legacy persistence는
-제거됐다. PostgreSQL 동시성 test의 실제 전용 test DB 실행, producer snapshot/rehash,
-파일·행·포인트·manifest 제한은 별도 완료 조건으로 남아 있다.
+이 historical collection 이후 Radioss mesh locations는 canonical UoW로 이관됐고
+schema와 맞지 않던 legacy persistence는 제거됐다. producer atomic publish/readiness,
+snapshot 임시 저장소 quota와 multi-worker budget은 아직 운영 release gate다.
 
 ---
 
@@ -793,8 +822,9 @@ mesh locations는 canonical UoW로 이관됐고 schema와 맞지 않던 legacy p
 
 - 폴더 스캔
 - 단일 import
-- 이력 API
-- 결과 조회 API
+- Run Identity V2 결과(`operation`, `reason_code`, 기존/교체 run, revision) 반환
+- 수동 conflict의 commit 후 HTTP 409/audit
+- **다음 개발:** import history/status/retry API와 UI
 
 ### 단계 4. 프런트엔드
 
@@ -802,6 +832,7 @@ mesh locations는 canonical UoW로 이관됐고 schema와 맞지 않던 legacy p
 - 스캔 및 수집
 - 상태·오류·판정
 - 대시보드 연결
+- **다음 개발:** import history/status/retry UI
 
 ### 단계 5. 운영 안정화
 
@@ -809,6 +840,8 @@ mesh locations는 canonical UoW로 이관됐고 schema와 맞지 않던 legacy p
 - 감사 로그
 - PostgreSQL repository
 - 자동 watcher
+- producer atomic publish/readiness
+- snapshot temp quota와 multi-worker refresh budget
 
 ---
 

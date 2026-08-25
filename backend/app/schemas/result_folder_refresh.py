@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 
 RefreshItemStatus = Literal["IMPORTED", "SKIPPED", "FAILED"]
+RefreshOperation = Literal["CREATED", "NOOP", "REPLACED", "REJECTED"]
 
 
 class MasterResultRefreshItem(BaseModel):
@@ -18,6 +19,11 @@ class MasterResultRefreshItem(BaseModel):
     load_case_id: str | None = None
     analysis_run_id: str | None = None
     message: str | None = None
+    operation: RefreshOperation | None = None
+    reason_code: str | None = None
+    existing_analysis_run_id: str | None = None
+    replaced_analysis_run_id: str | None = None
+    source_revision: int | None = None
 
 
 class MasterResultRefreshResponse(BaseModel):

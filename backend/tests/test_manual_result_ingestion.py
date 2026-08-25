@@ -128,6 +128,7 @@ def _cleanup_manual_rows() -> None:
                 "SELECT analysis_run_id FROM analysis_run_metadata WHERE source_type='FILE_UPLOAD'"
             ).fetchall()
         ]
+        conn.execute("DELETE FROM folder_import_jobs WHERE source_folder LIKE 'loadcase-drop-bottom-001/%'")
         for run_id in run_ids:
             curve_ids = [row[0] for row in conn.execute("SELECT id FROM curve_results WHERE analysis_run_id=?", [run_id]).fetchall()]
             for curve_id in curve_ids:
@@ -137,9 +138,13 @@ def _cleanup_manual_rows() -> None:
             conn.execute("DELETE FROM scalar_results WHERE analysis_run_id=?", [run_id])
             conn.execute("DELETE FROM result_locations WHERE analysis_run_id=?", [run_id])
             conn.execute("DELETE FROM qualitative_notes WHERE analysis_run_id=?", [run_id])
+            conn.execute(
+                "DELETE FROM canonical_result_ingestion_source_versions "
+                "WHERE analysis_run_id=? OR supersedes_analysis_run_id=?",
+                [run_id, run_id],
+            )
             conn.execute("DELETE FROM analysis_run_metadata WHERE analysis_run_id=?", [run_id])
             conn.execute("DELETE FROM analysis_runs WHERE id=?", [run_id])
-        conn.execute("DELETE FROM folder_import_jobs WHERE source_folder LIKE 'loadcase-drop-bottom-001/%'")
         conn.execute("DELETE FROM variable_definitions WHERE load_case_id=? AND variable_key='custom_manual_series'", [LOAD_CASE_ID])
 
 
@@ -203,7 +208,7 @@ def test_manual_summary_json_uses_canonical_uow_and_retry_skips():
             retry = client.post(f"/api/load-cases/{LOAD_CASE_ID}/results/import", json=payload)
             assert retry.status_code == 200, retry.text
             assert retry.json()["status"] == "SKIPPED"
-            assert retry.json()["run_id"] is None
+            assert retry.json()["run_id"] == run_id
             with connect() as conn:
                 assert conn.execute("SELECT count(*) FROM analysis_runs WHERE id=?", [run_id]).fetchone()[0] == 1
                 assert conn.execute("SELECT count(*) FROM analysis_run_metadata WHERE source_type='FILE_UPLOAD'").fetchone()[0] == 1

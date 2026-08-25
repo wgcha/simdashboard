@@ -2344,6 +2344,16 @@ export interface components {
             analysis_run_id?: string | null;
             /** Message */
             message?: string | null;
+            /** Operation */
+            operation?: ("CREATED" | "NOOP" | "REPLACED" | "REJECTED") | null;
+            /** Reason Code */
+            reason_code?: string | null;
+            /** Existing Analysis Run Id */
+            existing_analysis_run_id?: string | null;
+            /** Replaced Analysis Run Id */
+            replaced_analysis_run_id?: string | null;
+            /** Source Revision */
+            source_revision?: number | null;
         };
         /**
          * MasterResultRefreshResponse
@@ -2741,6 +2751,71 @@ export interface components {
              * @default false
              */
             validate_only: boolean;
+            /** Source Run Id */
+            source_run_id?: string | null;
+            /**
+             * Conflict Policy
+             * @default SKIP
+             * @enum {string}
+             */
+            conflict_policy: "SKIP" | "REJECT" | "REPLACE";
+        };
+        /**
+         * ResultImportResponse
+         * @description Stable response contract for manual result imports.
+         */
+        ResultImportResponse: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "VALID" | "IMPORTED" | "SKIPPED" | "REJECTED";
+            /** Run Id */
+            run_id?: string | null;
+            /** Run No */
+            run_no?: number | null;
+            /** Filename */
+            filename: string;
+            /** Summary */
+            summary?: {
+                [key: string]: unknown;
+            } | null;
+            /** Scalar Count */
+            scalar_count?: number | null;
+            /** Node Count */
+            node_count?: number | null;
+            /** Element Count */
+            element_count?: number | null;
+            /** Frame Count */
+            frame_count?: number | null;
+            /** Final Time */
+            final_time?: number | null;
+            /** Time Series Count */
+            time_series_count?: number | null;
+            /** Open Cell Count */
+            open_cell_count?: number | null;
+            /** Chassis Rear Count */
+            chassis_rear_count?: number | null;
+            /** Fail Count */
+            fail_count?: number | null;
+            /** Overall Verdict */
+            overall_verdict?: ("PASS" | "FAIL") | null;
+            /** Source Format */
+            source_format?: string | null;
+            /** Results */
+            results?: unknown[];
+            /** Warnings */
+            warnings?: unknown[];
+            /** Operation */
+            operation?: ("CREATED" | "NOOP" | "REPLACED" | "REJECTED") | null;
+            /** Reason Code */
+            reason_code?: string | null;
+            /** Existing Run Id */
+            existing_run_id?: string | null;
+            /** Replaced Run Id */
+            replaced_run_id?: string | null;
+            /** Source Revision */
+            source_revision?: number | null;
         };
         /** ResultLayoutMaterializeInput */
         ResultLayoutMaterializeInput: {
@@ -2873,6 +2948,39 @@ export interface components {
              * @default true
              */
             is_active: boolean;
+        };
+        /**
+         * TypedResultExampleResponse
+         * @description Named response contract for the checked-in typed example importer.
+         */
+        TypedResultExampleResponse: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "IMPORTED" | "SKIPPED" | "REJECTED";
+            /** Job Id */
+            job_id: string;
+            /** Run Id */
+            run_id?: string | null;
+            /** Run No */
+            run_no?: number | null;
+            /** Schema Id */
+            schema_id: string;
+            /** Summary */
+            summary: {
+                [key: string]: unknown;
+            };
+            /** Operation */
+            operation?: ("CREATED" | "NOOP" | "REPLACED" | "REJECTED") | null;
+            /** Reason Code */
+            reason_code?: string | null;
+            /** Existing Run Id */
+            existing_run_id?: string | null;
+            /** Replaced Run Id */
+            replaced_run_id?: string | null;
+            /** Source Revision */
+            source_revision?: number | null;
         };
         /** ValidationError */
         ValidationError: {
@@ -5731,9 +5839,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["ResultImportResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5764,9 +5870,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["TypedResultExampleResponse"];
                 };
             };
             /** @description Validation Error */

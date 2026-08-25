@@ -1040,6 +1040,13 @@ def test_create_project_request_and_load_case():
             conn.execute("DELETE FROM result_locations WHERE analysis_run_id = ?", [created_run])
             conn.execute("DELETE FROM time_series_results WHERE analysis_run_id = ?", [created_run])
             conn.execute("DELETE FROM scalar_results WHERE analysis_run_id = ?", [created_run])
+            conn.execute(
+                "DELETE FROM canonical_result_ingestion_source_versions "
+                "WHERE analysis_run_id=? OR supersedes_analysis_run_id=?",
+                [created_run, created_run],
+            )
+            conn.execute("DELETE FROM folder_import_jobs WHERE analysis_run_id = ?", [created_run])
+            conn.execute("DELETE FROM analysis_run_metadata WHERE analysis_run_id = ?", [created_run])
             conn.execute("DELETE FROM analysis_runs WHERE id = ?", [created_run])
         if created_request:
             conn.execute("DELETE FROM request_steps WHERE request_id = ?", [created_request])
@@ -1114,6 +1121,11 @@ def test_typed_folder_example_registers_scalars_curves_media_and_catalog(monkeyp
         conn.execute("DELETE FROM time_series_results WHERE analysis_run_id=?", [result["run_id"]])
         conn.execute("DELETE FROM scalar_results WHERE analysis_run_id=?", [result["run_id"]])
         conn.execute("DELETE FROM folder_import_jobs WHERE id=?", [result["job_id"]])
+        conn.execute(
+            "DELETE FROM canonical_result_ingestion_source_versions "
+            "WHERE analysis_run_id=? OR supersedes_analysis_run_id=?",
+            [result["run_id"], result["run_id"]],
+        )
         conn.execute("DELETE FROM analysis_run_metadata WHERE analysis_run_id=?", [result["run_id"]])
         conn.execute("DELETE FROM analysis_runs WHERE id=?", [result["run_id"]])
         for key in ("mesh_element_count", "analysis_judgement", "chassis_rear_verdict", "open_cell_top_edge_stress_curve", "chassis_rear_top_edge_deformation_curve", "open_cell_stress_contour"):

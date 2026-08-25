@@ -10,7 +10,12 @@ from pathlib import Path
 from typing import Any
 
 from ...database_connection import ConnectionLike, connect
-from ...domains.results.models import ResultIngestionCommand
+from ...domains.results.models import (
+    ResultIngestionCommand,
+    SourceConflictDecision,
+    SourceRunRecord,
+    source_key_for,
+)
 from ...domains.results.ports import ResultIngestionUnitOfWork
 from ...media_policy import validate_media_metadata
 from ...repositories.variable_catalog import VariableCatalogRepository
@@ -28,6 +33,16 @@ def _allow_ingestion(
     """Default authorization for non-HTTP callers already checked at their boundary."""
 
 
+def _source_run_record(row: object | None) -> SourceRunRecord | None:
+    if row is None:
+        return None
+    return {
+        "analysis_run_id": str(row[0]),  # type: ignore[index]
+        "run_no": int(row[1]),  # type: ignore[index]
+        "source_revision": int(row[2]) if row[2] is not None else None,  # type: ignore[index]
+    }
+
+
 class SQLResultIngestionUnitOfWork(ResultIngestionUnitOfWork):
     def __init__(
         self,
@@ -39,15 +54,64 @@ class SQLResultIngestionUnitOfWork(ResultIngestionUnitOfWork):
         self._id_factory = id_factory
         self._authorize = authorize
 
-    def source_completed(self, command: ResultIngestionCommand) -> bool:
-        return self._connection.execute(
+    def find_exact_source_run(self, command: ResultIngestionCommand) -> SourceRunRecord | None:
+        """Find an identical immutable run in its load-case/source scope."""
+        row = self._connection.execute(
             """
-            SELECT 1 FROM analysis_run_metadata
-            WHERE source_type=? AND source_name=? AND source_checksum=?
+            SELECT version.analysis_run_id, run.run_no, version.source_revision
+            FROM canonical_result_ingestion_source_versions version
+            JOIN analysis_runs run ON run.id=version.analysis_run_id
+            WHERE version.load_case_id=? AND version.source_type=?
+              AND version.source_key=? AND version.source_checksum=?
             LIMIT 1
             """,
-            [command["source_type"], command["source_name"], command["source_checksum"]],
-        ).fetchone() is not None
+            [
+                command["load_case_id"],
+                command["source_type"],
+                source_key_for(command),
+                command["source_checksum"],
+            ],
+        ).fetchone()
+        record = _source_run_record(row)
+        if record is not None:
+            return record
+
+        # Existing records predate the version ledger. Keep the legacy exact
+        # lookup compatible while fixing its former global source identity.
+        if command.get("source_run_id"):
+            return None
+        row = self._connection.execute(
+            """
+            SELECT metadata.analysis_run_id, run.run_no, NULL
+            FROM analysis_run_metadata metadata
+            JOIN analysis_runs run ON run.id=metadata.analysis_run_id
+            WHERE run.load_case_id=? AND metadata.source_type=?
+              AND metadata.source_name=? AND metadata.source_checksum=?
+            ORDER BY run.run_no DESC, run.id DESC
+            LIMIT 1
+            """,
+            [
+                command["load_case_id"],
+                command["source_type"],
+                command["source_name"],
+                command["source_checksum"],
+            ],
+        ).fetchone()
+        return _source_run_record(row)
+
+    def find_latest_source_run(self, command: ResultIngestionCommand) -> SourceRunRecord | None:
+        row = self._connection.execute(
+            """
+            SELECT version.analysis_run_id, run.run_no, version.source_revision
+            FROM canonical_result_ingestion_source_versions version
+            JOIN analysis_runs run ON run.id=version.analysis_run_id
+            WHERE version.load_case_id=? AND version.source_type=? AND version.source_key=?
+            ORDER BY version.source_revision DESC
+            LIMIT 1
+            """,
+            [command["load_case_id"], command["source_type"], source_key_for(command)],
+        ).fetchone()
+        return _source_run_record(row)
 
     def lock_load_case_ingestion(self, load_case_id: str) -> None:
         """Serialize PostgreSQL canonical imports before allocating ``run_no``.
@@ -63,35 +127,6 @@ class SQLResultIngestionUnitOfWork(ResultIngestionUnitOfWork):
             "SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
             [f"simdashboard:canonical-result-ingestion:load-case:{load_case_id}"],
         )
-
-    def claim_source_identity(
-        self,
-        command: ResultIngestionCommand,
-        claimed_at: datetime,
-    ) -> bool:
-        """Reserve a PostgreSQL source identity for this transaction.
-
-        DuckDB intentionally retains its existing preflight-only behavior.  In
-        PostgreSQL the primary key serializes competing canonical imports; a
-        failed ingestion rolls the reservation back with the rest of the UoW.
-        """
-        if command["source_checksum"] is None or getattr(self._connection, "backend", "duckdb") != "postgresql":
-            return True
-        return self._connection.execute(
-            """
-            INSERT INTO canonical_result_ingestion_sources
-                (source_type, source_name, source_checksum, claimed_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT DO NOTHING
-            RETURNING source_checksum
-            """,
-            [
-                command["source_type"],
-                command["source_name"],
-                command["source_checksum"],
-                claimed_at,
-            ],
-        ).fetchone() is not None
 
     def validate_target(self, command: ResultIngestionCommand) -> None:
         actual = self._connection.execute(
@@ -128,17 +163,54 @@ class SQLResultIngestionUnitOfWork(ResultIngestionUnitOfWork):
         command: ResultIngestionCommand,
         summary: dict[str, Any],
         created_at: datetime,
+        decision: SourceConflictDecision,
+    ) -> None:
+        self._add_terminal_job(job_id, command, summary, created_at, decision, "SKIPPED")
+
+    def add_rejected_job(
+        self,
+        job_id: str,
+        command: ResultIngestionCommand,
+        summary: dict[str, Any],
+        created_at: datetime,
+        decision: SourceConflictDecision,
+    ) -> None:
+        self._add_terminal_job(job_id, command, summary, created_at, decision, "REJECTED")
+
+    def _add_terminal_job(
+        self,
+        job_id: str,
+        command: ResultIngestionCommand,
+        summary: dict[str, Any],
+        created_at: datetime,
+        decision: SourceConflictDecision,
+        status: str,
     ) -> None:
         parsed = command["parsed"]
         self._connection.execute(
-            "INSERT INTO folder_import_jobs VALUES (?, ?, NULL, ?, ?, ?, 'SKIPPED', ?, ?)",
+            """
+            INSERT INTO folder_import_jobs
+                (id, load_case_id, analysis_run_id, schema_id, schema_version, source_folder,
+                 status, summary_json, created_at, source_type, source_checksum, source_run_id,
+                 conflict_policy, outcome_reason, replaced_analysis_run_id, completed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
             [
                 job_id,
                 command["load_case_id"],
+                decision["existing_analysis_run_id"],
                 parsed["schema_id"],
                 parsed["schema_version"],
                 command["source_name"],
+                status,
                 json.dumps(summary, ensure_ascii=False),
+                created_at,
+                command["source_type"],
+                command["source_checksum"],
+                command.get("source_run_id"),
+                command.get("conflict_policy", "SKIP") if command.get("source_run_id") else "LEGACY_APPEND",
+                decision["reason_code"],
+                decision["replaced_analysis_run_id"],
                 created_at,
             ],
         )
@@ -149,10 +221,17 @@ class SQLResultIngestionUnitOfWork(ResultIngestionUnitOfWork):
         run_id: str,
         command: ResultIngestionCommand,
         created_at: datetime,
+        decision: SourceConflictDecision,
     ) -> None:
         parsed = command["parsed"]
         self._connection.execute(
-            "INSERT INTO folder_import_jobs VALUES (?, ?, ?, ?, ?, ?, 'RUNNING', NULL, ?)",
+            """
+            INSERT INTO folder_import_jobs
+                (id, load_case_id, analysis_run_id, schema_id, schema_version, source_folder,
+                 status, summary_json, created_at, source_type, source_checksum, source_run_id,
+                 conflict_policy, outcome_reason, replaced_analysis_run_id, completed_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'RUNNING', NULL, ?, ?, ?, ?, ?, ?, ?, NULL)
+            """,
             [
                 job_id,
                 command["load_case_id"],
@@ -161,6 +240,12 @@ class SQLResultIngestionUnitOfWork(ResultIngestionUnitOfWork):
                 parsed["schema_version"],
                 command["source_name"],
                 created_at,
+                command["source_type"],
+                command["source_checksum"],
+                command.get("source_run_id"),
+                command.get("conflict_policy", "SKIP") if command.get("source_run_id") else "LEGACY_APPEND",
+                decision["reason_code"],
+                decision["replaced_analysis_run_id"],
             ],
         )
 
@@ -241,7 +326,11 @@ class SQLResultIngestionUnitOfWork(ResultIngestionUnitOfWork):
         created_at: datetime,
     ) -> None:
         self._connection.execute(
-            "INSERT INTO analysis_runs VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            """
+            INSERT INTO analysis_runs
+                (id, load_case_id, template_execution_id, run_no, solver, status, started_at, completed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
             [
                 run_id,
                 command["load_case_id"],
@@ -284,6 +373,40 @@ class SQLResultIngestionUnitOfWork(ResultIngestionUnitOfWork):
                 parsed["schema_version"],
                 command["parser_version"],
                 json.dumps(metadata, ensure_ascii=False),
+                created_at,
+            ],
+        )
+
+    def record_source_version(
+        self,
+        run_id: str,
+        command: ResultIngestionCommand,
+        decision: SourceConflictDecision,
+        created_at: datetime,
+    ) -> None:
+        """Append an immutable producer-source revision for V2 commands."""
+        source_revision = decision["source_revision"]
+        if source_revision is None:
+            return
+        self._connection.execute(
+            """
+            INSERT INTO canonical_result_ingestion_source_versions
+                (load_case_id, source_type, source_key, source_run_id, source_name,
+                 source_checksum, source_revision, analysis_run_id, conflict_policy,
+                 supersedes_analysis_run_id, claimed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                command["load_case_id"],
+                command["source_type"],
+                source_key_for(command),
+                command.get("source_run_id"),
+                command["source_name"],
+                command["source_checksum"],
+                source_revision,
+                run_id,
+                command.get("conflict_policy", "SKIP") if command.get("source_run_id") else "LEGACY_APPEND",
+                decision["replaced_analysis_run_id"],
                 created_at,
             ],
         )
@@ -420,10 +543,20 @@ class SQLResultIngestionUnitOfWork(ResultIngestionUnitOfWork):
                 [self._id_factory("note"), run_id, command["actor"], parsed["note"], created_at],
             )
 
-    def complete_job(self, job_id: str, run_id: str, summary: dict[str, Any]) -> None:
+    def complete_job(
+        self,
+        job_id: str,
+        run_id: str,
+        summary: dict[str, Any],
+        completed_at: datetime,
+    ) -> None:
         self._connection.execute(
-            "UPDATE folder_import_jobs SET status='COMPLETED', summary_json=?, analysis_run_id=? WHERE id=?",
-            [json.dumps(summary, ensure_ascii=False), run_id, job_id],
+            """
+            UPDATE folder_import_jobs
+            SET status='COMPLETED', summary_json=?, analysis_run_id=?, completed_at=?
+            WHERE id=?
+            """,
+            [json.dumps(summary, ensure_ascii=False), run_id, completed_at, job_id],
         )
 
     def sync_status(self, command: ResultIngestionCommand, completed_at: datetime) -> None:

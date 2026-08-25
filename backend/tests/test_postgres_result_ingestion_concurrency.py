@@ -103,6 +103,10 @@ def _cleanup_ingestion_target(target: dict[str, str]) -> None:
                 else f"DELETE FROM {table} WHERE {column} IN ({run_ids})"
             )
             connection.execute(statement, [target["load_case_id"]])
+        connection.execute(
+            "DELETE FROM canonical_result_ingestion_source_versions WHERE load_case_id=?",
+            [target["load_case_id"]],
+        )
         connection.execute("DELETE FROM folder_import_jobs WHERE load_case_id=?", [target["load_case_id"]])
         connection.execute("DELETE FROM variable_definitions WHERE load_case_id=?", [target["load_case_id"]])
         connection.execute("DELETE FROM analysis_runs WHERE load_case_id=?", [target["load_case_id"]])
@@ -231,10 +235,15 @@ def test_postgres_identical_source_identity_creates_one_canonical_run(ingestion_
         ).fetchone()[0] == 1
         assert connection.execute(
             """
-            SELECT count(*) FROM canonical_result_ingestion_sources
-            WHERE source_type=? AND source_name=? AND source_checksum=?
+            SELECT count(*) FROM canonical_result_ingestion_source_versions
+            WHERE load_case_id=? AND source_type=? AND source_key=? AND source_checksum=?
             """,
-            [ingestion_target["source_type"], ingestion_target["source_name"], ingestion_target["source_checksum"]],
+            [
+                ingestion_target["load_case_id"],
+                ingestion_target["source_type"],
+                f"name:{ingestion_target['source_name']}",
+                ingestion_target["source_checksum"],
+            ],
         ).fetchone()[0] == 1
         statuses = connection.execute(
             "SELECT status FROM folder_import_jobs WHERE load_case_id=? ORDER BY status",
@@ -273,15 +282,16 @@ def test_postgres_distinct_sources_allocate_unique_run_numbers(ingestion_target:
         ).fetchone()[0] == 2
         assert connection.execute(
             """
-            SELECT count(*) FROM canonical_result_ingestion_sources
-            WHERE source_type=?
-              AND ((source_name=? AND source_checksum=?) OR (source_name=? AND source_checksum=?))
+            SELECT count(*) FROM canonical_result_ingestion_source_versions
+            WHERE load_case_id=? AND source_type=?
+              AND ((source_key=? AND source_checksum=?) OR (source_key=? AND source_checksum=?))
             """,
             [
+                ingestion_target["load_case_id"],
                 ingestion_target["source_type"],
-                ingestion_target["source_name"],
+                f"name:{ingestion_target['source_name']}",
                 ingestion_target["source_checksum"],
-                ingestion_target["alternate_source_name"],
+                f"name:{ingestion_target['alternate_source_name']}",
                 ingestion_target["alternate_source_checksum"],
             ],
         ).fetchone()[0] == 2

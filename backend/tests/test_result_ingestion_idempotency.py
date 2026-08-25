@@ -53,25 +53,6 @@ def _command(*, checksum: str | None = "bundle-sha256"):
     }
 
 
-def test_postgres_source_claim_uses_primary_key_conflict_guard():
-    connection = _RecordingPostgresConnection(("bundle-sha256",))
-    unit_of_work = SQLResultIngestionUnitOfWork(connection, lambda prefix: prefix)
-    claimed_at = datetime(2026, 8, 24, 12, 0, 0)
-
-    assert unit_of_work.claim_source_identity(_command(), claimed_at) is True
-
-    statement, parameters = connection.calls[0]
-    assert "INSERT INTO canonical_result_ingestion_sources" in statement
-    assert "ON CONFLICT DO NOTHING" in statement
-    assert "RETURNING source_checksum" in statement
-    assert parameters == [
-        "MASTER_FOLDER_REFRESH",
-        "case-1/manifest.json",
-        "bundle-sha256",
-        claimed_at,
-    ]
-
-
 def test_postgres_load_case_lock_precedes_run_number_allocation():
     connection = _RecordingPostgresConnection(None)
     unit_of_work = SQLResultIngestionUnitOfWork(connection, lambda prefix: prefix)
@@ -86,28 +67,55 @@ def test_postgres_load_case_lock_precedes_run_number_allocation():
     ]
 
 
-def test_postgres_source_claim_reports_an_already_committed_identity():
-    connection = _RecordingPostgresConnection(None)
+def test_source_version_lookup_is_scoped_by_load_case_and_namespaced_source_key():
+    connection = _RecordingPostgresConnection(("run-scoped", 3, 1))
     unit_of_work = SQLResultIngestionUnitOfWork(connection, lambda prefix: prefix)
+    command = _command()
+    command["source_run_id"] = "producer-run-1"
 
-    assert unit_of_work.claim_source_identity(_command(), datetime(2026, 8, 24)) is False
+    result = unit_of_work.find_exact_source_run(command)
+
+    assert result == {
+        "analysis_run_id": "run-scoped",
+        "run_no": 3,
+        "source_revision": 1,
+    }
+    statement, parameters = connection.calls[0]
+    assert "version.load_case_id=?" in statement
+    assert parameters == [
+        "case-1",
+        "MASTER_FOLDER_REFRESH",
+        "run:producer-run-1",
+        "bundle-sha256",
+    ]
 
 
-def test_duckdb_source_claim_is_a_noop_and_null_checksums_are_not_claimed():
-    class _DuckDBConnection:
-        backend = "duckdb"
+def test_pre_ledger_exact_fallback_selects_the_latest_historical_run_deterministically():
+    class _SequentialConnection:
+        backend = "postgresql"
+
+        def __init__(self):
+            self.rows = iter([None, ("run-newest", 9, None)])
+            self.calls: list[tuple[str, list[object]]] = []
 
         def execute(self, statement: str, parameters: list[object]):
-            raise AssertionError(f"DuckDB must not execute a source claim: {statement}")
+            self.calls.append((statement, parameters))
+            return _Cursor(next(self.rows))
 
-    unit_of_work = SQLResultIngestionUnitOfWork(_DuckDBConnection(), lambda prefix: prefix)
+    connection = _SequentialConnection()
+    unit_of_work = SQLResultIngestionUnitOfWork(connection, lambda prefix: prefix)
 
-    unit_of_work.lock_load_case_ingestion("case-1")
-    assert unit_of_work.claim_source_identity(_command(), datetime(2026, 8, 24)) is True
-    assert unit_of_work.claim_source_identity(_command(checksum=None), datetime(2026, 8, 24)) is True
+    result = unit_of_work.find_exact_source_run(_command())
+
+    assert result == {
+        "analysis_run_id": "run-newest",
+        "run_no": 9,
+        "source_revision": None,
+    }
+    assert "ORDER BY run.run_no DESC, run.id DESC" in connection.calls[1][0]
 
 
-def test_lost_postgres_claim_is_reported_as_existing_source_before_any_run_write():
+def test_exact_source_lookup_is_reported_before_any_run_write():
     class _UnitOfWork:
         def __init__(self):
             self.calls: list[str] = []
@@ -118,16 +126,16 @@ def test_lost_postgres_claim_is_reported_as_existing_source_before_any_run_write
         def authorize(self, command):
             self.calls.append("authorize")
 
-        def source_completed(self, command):
-            self.calls.append("source_completed")
-            return False
-
         def lock_load_case_ingestion(self, load_case_id):
             self.calls.append("lock_load_case_ingestion")
 
-        def claim_source_identity(self, command, claimed_at):
-            self.calls.append("claim_source_identity")
-            return False
+        def find_exact_source_run(self, command):
+            self.calls.append("find_exact_source_run")
+            return {"analysis_run_id": "run-existing", "run_no": 7, "source_revision": 1}
+
+        def find_latest_source_run(self, command):
+            self.calls.append("find_latest_source_run")
+            return {"analysis_run_id": "run-existing", "run_no": 7, "source_revision": 1}
 
         def add_skipped_job(self, *args):
             self.calls.append("add_skipped_job")
@@ -149,12 +157,14 @@ def test_lost_postgres_claim_is_reported_as_existing_source_before_any_run_write
     )
 
     assert outcome["status"] == "SKIPPED"
+    assert outcome["analysis_run_id"] == "run-existing"
+    assert outcome["run_no"] == 7
     assert unit_of_work.calls == [
         "validate_target",
         "authorize",
         "lock_load_case_ingestion",
-        "source_completed",
-        "claim_source_identity",
+        "find_exact_source_run",
+        "find_latest_source_run",
         "add_skipped_job",
     ]
 
@@ -221,7 +231,7 @@ def test_source_claim_migration_is_the_current_alembic_head():
     migration = script.get_revision("0016_result_ingestion_sources")
 
     assert migration and migration.down_revision == "0015_legacy_drop_layout"
-    assert tuple(script.get_heads()) == ("0016_result_ingestion_sources",)
+    assert tuple(script.get_heads()) == ("0017_run_identity_v2",)
 
 
 def test_source_claim_migration_has_a_three_part_primary_key(monkeypatch: pytest.MonkeyPatch):

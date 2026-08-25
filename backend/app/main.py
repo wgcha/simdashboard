@@ -78,8 +78,10 @@ from .schemas.api import (
     ReportTemplateRenderPayload,
     ReportTemplateUploadPayload,
     ResultImportPayload,
+    ResultImportResponse,
     ReviewItemCreate,
     ReviewItemUpdate,
+    TypedResultExampleResponse,
     VariableCreate,
     VariableUpdate,
     WorkspaceLayoutResponse,
@@ -763,8 +765,8 @@ def get_result_import_template(file_format: Literal["csv", "json", "radioss-csv"
     return Response(content, media_type="application/json", headers={"Content-Disposition": 'attachment; filename="analysis-result-template.json"'})
 
 
-@app.post("/api/load-cases/{load_case_id}/results/import")
-def import_analysis_results(load_case_id: str, payload: ResultImportPayload, request: Request) -> dict[str, Any]:
+@app.post("/api/load-cases/{load_case_id}/results/import", response_model=ResultImportResponse)
+def import_analysis_results(load_case_id: str, payload: ResultImportPayload, request: Request) -> ResultImportResponse:
     with connect() as conn:
         require_resource_permission(request, RESULT_IMPORT, "load_case", load_case_id, conn=conn)
         principal = request.state.principal
@@ -799,7 +801,16 @@ def import_analysis_results(load_case_id: str, payload: ResultImportPayload, req
         except ResultFormatError as exc:
             raise HTTPException(422, str(exc)) from exc
         if payload.validate_only:
-            return {"status": "VALID", "filename": payload.filename, **parsed["summary"], "results": parsed["scalars"], "warnings": parsed["warnings"]}
+            return ResultImportResponse(
+                status="VALID",
+                filename=payload.filename,
+                summary=parsed["summary"],
+                **parsed["summary"],
+                results=parsed["scalars"],
+                warnings=parsed["warnings"],
+                operation="NOOP",
+                reason_code="VALIDATION_ONLY",
+            )
 
         source_checksum = hashlib.sha256(payload.content.encode("utf-8")).hexdigest()
         source_name = f"{load_case_id}/{payload.filename}"
@@ -833,8 +844,7 @@ def import_analysis_results(load_case_id: str, payload: ResultImportPayload, req
                 conn=connection,
             ),
         ) as unit_of_work_provider:
-            outcome = ingest_result_bundle(
-                {
+            command: dict[str, Any] = {
                     "project_id": str(context[2]),
                     "request_id": str(context[1]),
                     "load_case_id": load_case_id,
@@ -850,33 +860,74 @@ def import_analysis_results(load_case_id: str, payload: ResultImportPayload, req
                         "original_filename": payload.filename,
                         "source_format": source_format,
                     },
-                },
+            }
+            # Preserve legacy append semantics when no producer identity was
+            # supplied.  In particular, do not pass the payload's default
+            # SKIP policy without a source_run_id.
+            if payload.source_run_id is not None:
+                command["source_run_id"] = payload.source_run_id
+                command["conflict_policy"] = payload.conflict_policy
+            outcome = ingest_result_bundle(
+                command,  # type: ignore[arg-type]
                 unit_of_work_provider,
                 lambda: datetime.now(timezone.utc).replace(tzinfo=None),
                 utc_identifier,
             )
-            if outcome["status"] == "IMPORTED":
-                write_audit_event(
-                    request=request,
-                    principal=principal,
-                    status_code=200,
-                    action="RESULT_IMPORTED",
-                    detail={"project_id": context[2], "load_case_id": load_case_id, "run_id": outcome["analysis_run_id"]},
-                    connection=conn,
-                )
-        return {
-            "status": outcome["status"],
-            "run_id": outcome["analysis_run_id"],
-            "run_no": outcome["run_no"],
-            "filename": payload.filename,
+            audit_action = {
+                "IMPORTED": "RESULT_IMPORTED",
+                "SKIPPED": "RESULT_IMPORT_SKIPPED",
+                "REJECTED": "RESULT_IMPORT_REJECTED",
+            }[outcome["status"]]
+            if outcome["operation"] == "REPLACED":
+                audit_action = "RESULT_IMPORT_REPLACED"
+            write_audit_event(
+                request=request,
+                principal=principal,
+                status_code=409 if outcome["status"] == "REJECTED" else 200,
+                action=audit_action,
+                detail={
+                    "project_id": context[2],
+                    "load_case_id": load_case_id,
+                    "run_id": outcome["analysis_run_id"],
+                    "status": outcome["status"],
+                    "operation": outcome["operation"],
+                    "reason_code": outcome["reason_code"],
+                    "existing_run_id": outcome["existing_analysis_run_id"],
+                    "replaced_run_id": outcome["replaced_analysis_run_id"],
+                    "source_revision": outcome["source_revision"],
+                },
+                connection=conn,
+            )
+        if outcome["status"] == "REJECTED":
+            # The UoW and audit have committed.  Raising inside the transaction
+            # would roll back the rejected job and violate the conflict audit.
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "SOURCE_RUN_CONFLICT",
+                    "existing_run_id": outcome["existing_analysis_run_id"],
+                    "source_revision": outcome["source_revision"],
+                },
+            )
+        return ResultImportResponse(
+            status=outcome["status"],
+            run_id=outcome["analysis_run_id"],
+            run_no=outcome["run_no"],
+            filename=payload.filename,
+            summary=parsed["summary"],
             **parsed["summary"],
-            "results": parsed["scalars"],
-            "warnings": parsed["warnings"],
-        }
+            results=parsed["scalars"],
+            warnings=parsed["warnings"],
+            operation=outcome["operation"],
+            reason_code=outcome["reason_code"],
+            existing_run_id=outcome["existing_analysis_run_id"],
+            replaced_run_id=outcome["replaced_analysis_run_id"],
+            source_revision=outcome["source_revision"],
+        )
 
 
-@app.post("/api/load-cases/{load_case_id}/folder-import/example")
-def import_typed_result_example(load_case_id: str, request: Request) -> dict[str, Any]:
+@app.post("/api/load-cases/{load_case_id}/folder-import/example", response_model=TypedResultExampleResponse)
+def import_typed_result_example(load_case_id: str, request: Request) -> TypedResultExampleResponse:
     """Register the checked-in typed folder example through the same importer used by future uploads."""
     example_root = Path(__file__).resolve().parents[2] / "examples" / "typed-results" / "tv-drop-chassis"
     try:
@@ -918,14 +969,19 @@ def import_typed_result_example(load_case_id: str, request: Request) -> dict[str
         lambda: datetime.now(timezone.utc).replace(tzinfo=None),
         utc_identifier,
     )
-    return {
-        "status": outcome["status"],
-        "job_id": outcome["job_id"],
-        "run_id": outcome["analysis_run_id"],
-        "run_no": outcome["run_no"],
-        "schema_id": outcome["schema_id"],
-        "summary": outcome["summary"],
-    }
+    return TypedResultExampleResponse(
+        status=outcome["status"],
+        job_id=outcome["job_id"],
+        run_id=outcome["analysis_run_id"],
+        run_no=outcome["run_no"],
+        schema_id=outcome["schema_id"],
+        summary=outcome["summary"],
+        operation=outcome["operation"],
+        reason_code=outcome["reason_code"],
+        existing_run_id=outcome["existing_analysis_run_id"],
+        replaced_run_id=outcome["replaced_analysis_run_id"],
+        source_revision=outcome["source_revision"],
+    )
 
 
 def _legacy_asset_path(file_path: str) -> Path:

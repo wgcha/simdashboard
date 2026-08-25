@@ -53,6 +53,11 @@ class RefreshItem:
     load_case_id: str | None = None
     analysis_run_id: str | None = None
     message: str | None = None
+    operation: Literal["CREATED", "NOOP", "REPLACED", "REJECTED"] | None = None
+    reason_code: str | None = None
+    existing_analysis_run_id: str | None = None
+    replaced_analysis_run_id: str | None = None
+    source_revision: int | None = None
 
 
 def configured_import_root() -> Path:
@@ -124,6 +129,7 @@ class MasterResultRefreshService:
                         captured.bundle_fingerprint,
                         captured_target,
                         parsed,
+                        captured.manifest,
                     ),
                     SQLResultIngestionUnitOfWorkProvider(utc_identifier),
                     _now,
@@ -134,9 +140,41 @@ class MasterResultRefreshService:
                         relative,
                         "SKIPPED",
                         captured_target[2],
+                        outcome["analysis_run_id"],
                         message="동일한 결과 bundle이 이미 완료되었습니다.",
+                        operation=outcome["operation"],
+                        reason_code=outcome["reason_code"],
+                        existing_analysis_run_id=outcome["existing_analysis_run_id"],
+                        replaced_analysis_run_id=outcome["replaced_analysis_run_id"],
+                        source_revision=outcome["source_revision"],
                     )
-                return RefreshItem(relative, "IMPORTED", captured_target[2], outcome["analysis_run_id"])
+                if outcome["status"] == "REJECTED":
+                    # A rejected job is already committed by the canonical
+                    # UoW.  Master refresh keeps its historical status enum
+                    # and exposes the stable adapter reason code.
+                    return RefreshItem(
+                        relative,
+                        "FAILED",
+                        captured_target[2],
+                        outcome["analysis_run_id"],
+                        message="동일한 source run이 이미 존재하여 결과 bundle을 거부했습니다.",
+                        operation="REJECTED",
+                        reason_code="SOURCE_RUN_CONFLICT",
+                        existing_analysis_run_id=outcome["existing_analysis_run_id"],
+                        replaced_analysis_run_id=outcome["replaced_analysis_run_id"],
+                        source_revision=outcome["source_revision"],
+                    )
+                return RefreshItem(
+                    relative,
+                    "IMPORTED",
+                    captured_target[2],
+                    outcome["analysis_run_id"],
+                    operation=outcome["operation"],
+                    reason_code=outcome["reason_code"],
+                    existing_analysis_run_id=outcome["existing_analysis_run_id"],
+                    replaced_analysis_run_id=outcome["replaced_analysis_run_id"],
+                    source_revision=outcome["source_revision"],
+                )
         except Exception as exc:
             is_controlled_error = isinstance(exc, (BundleSnapshotError, FolderImportError))
             if captured_target is None and isinstance(exc, BundleSnapshotError) and exc.manifest is not None:
@@ -159,6 +197,8 @@ class MasterResultRefreshService:
                 "FAILED",
                 captured_target[2] if captured_target else None,
                 message=safe_message,
+                operation="REJECTED" if error_code == "SOURCE_RUN_CONFLICT" else None,
+                reason_code=error_code or "BUNDLE_IMPORT_FAILED",
             )
 
     def _record_failure(
@@ -246,9 +286,10 @@ def _ingestion_command(
     bundle_fingerprint: str,
     target: tuple[str, str, str],
     parsed: dict[str, Any],
+    manifest: dict[str, Any] | None = None,
 ) -> ResultIngestionCommand:
     project_id, request_id, load_case_id = target
-    return {
+    command: ResultIngestionCommand = {
         "project_id": project_id,
         "request_id": request_id,
         "load_case_id": load_case_id,
@@ -263,6 +304,41 @@ def _ingestion_command(
             "bundle_fingerprint": bundle_fingerprint,
         },
     }
+    source_run_id, conflict_policy = _manifest_source_identity(manifest or {})
+    if source_run_id is not None:
+        command["source_run_id"] = source_run_id
+        command["conflict_policy"] = conflict_policy
+    return command
+
+
+def _manifest_source_identity(raw_manifest: dict[str, Any]) -> tuple[str | None, Literal["SKIP", "REJECT"] | None]:
+    """Validate the producer identity subset accepted by master refresh.
+
+    The master adapter deliberately does not allow producer ``REPLACE``.  A
+    replacement must be an explicit API operation so a filesystem producer
+    cannot silently append a new immutable run over an existing source.
+    """
+    source_value = raw_manifest.get("source_run_id")
+    if source_value is None:
+        return None, None
+    if not isinstance(source_value, str):
+        raise FolderImportError(
+            "manifest.source_run_id는 문자열이어야 합니다.",
+            code="SOURCE_RUN_ID_INVALID",
+        )
+    source_run_id = source_value.strip()
+    if not source_run_id or len(source_run_id) > 120 or not source_run_id.isprintable():
+        raise FolderImportError(
+            "manifest.source_run_id 형식이 올바르지 않습니다.",
+            code="SOURCE_RUN_ID_INVALID",
+        )
+    policy = raw_manifest.get("conflict_policy", "SKIP")
+    if not isinstance(policy, str) or policy not in {"SKIP", "REJECT"}:
+        raise FolderImportError(
+            "마스터 manifest에서는 conflict_policy REPLACE를 사용할 수 없습니다.",
+            code="SOURCE_CONFLICT_POLICY_UNSUPPORTED",
+        )
+    return source_run_id, policy
 
 
 def _now() -> datetime:

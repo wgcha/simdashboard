@@ -240,14 +240,30 @@ single-connection transaction에 저장한다.
 parser/manifest 호환 전용으로 남고, runtime 결과 쓰기는 canonical UoW만 사용한다.
 
 PostgreSQL canonical ingestion은 load case별 namespaced 64-bit transaction
-advisory lock으로 `run_no` 할당을 직렬화하고, non-null exact identity
-`(source_type, source_name, source_checksum)`를 migration `0016`의
-`canonical_result_ingestion_sources` primary key로 예약한다. 실패한 transaction은
-예약도 rollback한다. `backend/tests/test_postgres_result_ingestion_concurrency.py`는
-독립 PostgreSQL 연결 두 개로 동일 exact source의 한 건 import/한 건 skip과 서로
-다른 source의 고유 `run_no`를 검증한다. 이 test는 `ANALYSIS_TEST_POSTGRES=1`,
-`ANALYSIS_TEST_POSTGRES_DATABASE`와 실제 `current_database()` 일치를 요구하는
-opt-in test다. 현재 작업 환경에는 전용 test DB가 없어 live 실행하지 않았다.
+advisory lock으로 `run_no` 할당을 직렬화하고, migration `0017_run_identity_v2`의
+`canonical_result_ingestion_source_versions`를 source identity 정본으로 사용한다.
+ledger는 `(load_case_id, source_type, source_key, source_revision)`으로 범위화되며
+checksum, producer `source_run_id`, server-assigned `analysis_run_id`, conflict policy와
+immutable `supersedes_analysis_run_id`를 보존한다. `(load_case_id, run_no)`는 unique다.
+이전 migration `0016` 예약 테이블은 backfill 입력인 historical compatibility일 뿐
+runtime reservation의 정본이 아니다.
+
+동일 checksum은 기존 run의 id/no를 반환하는 `SKIPPED/NOOP`이다. 명시적
+`source_run_id`의 변경 checksum은 `SKIP`, `REJECT`, `REPLACE`를 적용한다. `REPLACE`도
+기존 결과를 삭제하거나 변경하지 않고 새 immutable run을 만든다. source ID가 없는
+legacy 경로는 `name:<source_name>` slot에 `LEGACY_APPEND` revision을 쌓는다.
+수동 import의 `REJECT`는 terminal job과 audit를 commit한 뒤 HTTP 409
+`SOURCE_RUN_CONFLICT`를 반환하며, Master Refresh는 producer `REPLACE`를 fail-closed하고
+형제 manifest를 계속 처리한다.
+
+`backend/tests/test_postgres_result_ingestion_concurrency.py` 등 opt-in 검증은
+`ANALYSIS_TEST_POSTGRES=1`, `ANALYSIS_TEST_POSTGRES_DATABASE`와 실제
+`current_database()` 일치를 요구한다. 2026-08-25에는 loopback 55433의 disposable
+PostgreSQL 18.6 test DB에서 빈 DB `0001→0017`, 기존 `0016→0017` backfill,
+app-role DDL 거부, pool budget, reference seed와 동시성 test **2 passed**를 확인했다.
+실제 SQL provider로 CREATED/exact NOOP/SKIP/REJECT/immutable REPLACE revision도
+검증했다. 종료 후 cluster·DB·로그를 제거하고 residue 0과 port 종료를 확인했으며,
+기존 5432 DB와 `.env` 연결은 사용하지 않았다.
 
 실제 ID 계층·JSON·CSV·SVG·glTF 예제는 `examples/master-results/`에 있으며 backend 통합 테스트가 이를 직접 import한다.
 
@@ -320,12 +336,14 @@ cd backend
   tests/test_bundle_snapshot.py
 # 179 collected (2026-08-25); PostgreSQL concurrency cases are opt-in at runtime.
 
-# dedicated migrated test database only; this command was not live-run in the current workspace
+# dedicated migrated disposable test database only; never use the regular 5432 DB
 ANALYSIS_DB_BACKEND=postgresql \
 ANALYSIS_TEST_POSTGRES=1 \
 ANALYSIS_TEST_POSTGRES_DATABASE=<dedicated_test_db> \
 DATABASE_URL='postgresql+psycopg://<test_app_role>:<test_password>@<test_host>:5432/<dedicated_test_db>' \
-../.venv-wsl/bin/python -m pytest -q tests/test_postgres_result_ingestion_concurrency.py
+../.venv-wsl/bin/python -m pytest -q \
+  tests/test_postgres_result_ingestion_concurrency.py \
+  tests/test_run_identity_v2.py
 ```
 
 `DATABASE_URL`은 명령에서 명시한 전용 test DB여야 하며 `.env`의 현재
@@ -357,9 +375,9 @@ Architecture ceiling은 목표 수치가 아니라 부채가 늘지 않게 하�
 - 외부 NAS/NFS/SMB `SIMDASH_IMPORT_ROOT`의 부팅 순서, mount context, 용량과
   재처리 운영 절차는 각 사내 인프라 환경에서 승인해야 한다.
 - Master Refresh는 importer private snapshot/rehash와 parser workload limits로
-  fingerprint·parse·media 저장 bytes를 고정한다. producer atomic publish/readiness,
-  snapshot temp mount quota와 multi-worker 동시 refresh budget은 운영 환경에서
-  별도 승인·검증해야 한다. 또한 전용 PostgreSQL에서의 실제 동시성 실행과
-  native Windows handle adapter가 남은 release gate다.
+  fingerprint·parse·media 저장 bytes를 고정한다. 다음 잔여 release gate는 import
+  history/status/retry UI이며, 그 뒤 producer atomic publish/readiness, snapshot temp
+  mount quota와 multi-worker 동시 refresh budget이다. native Windows handle
+  adapter/target wheel offline smoke도 운영 profile release gate로 남아 있다.
 
 우선순위와 완료 기준은 [`program-consolidation-and-development-plan.md`](program-consolidation-and-development-plan.md)에 정리한다.

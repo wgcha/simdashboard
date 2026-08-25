@@ -295,8 +295,11 @@ export const api = {
     adaptDropVideoPage(unwrapGenerated(await apiClient.GET('/api/load-cases/{load_case_id}/drop-videos', { params: { path: { load_case_id: loadCaseId }, query: { page, page_size: pageSize } }, signal }))),
   createLoadCase: async (requestId: string, payload: { name: string; analysis_type: 'DROP' | 'SIDE_CLAMP'; parameters: Record<string, string | number | string[]> }) =>
     adaptLoadCase(unwrapGenerated(await apiClient.POST('/api/requests/{request_id}/load-cases', { params: { path: { request_id: requestId } }, body: payload }))),
-  importResults: async (loadCaseId: string, payload: { filename: string; content: string; author: string; validate_only: boolean }) =>
-    adaptImportResults(unwrapGenerated(await apiClient.POST('/api/load-cases/{load_case_id}/results/import', { params: { path: { load_case_id: loadCaseId } }, body: payload }))),
+  importResults: async (loadCaseId: string, payload: { filename: string; content: string; author: string; validate_only: boolean; source_run_id?: string | null; conflict_policy?: 'SKIP' | 'REJECT' | 'REPLACE' }) =>
+    adaptImportResults(unwrapGenerated(await apiClient.POST('/api/load-cases/{load_case_id}/results/import', {
+      params: { path: { load_case_id: loadCaseId } },
+      body: { ...payload, conflict_policy: payload.conflict_policy ?? 'SKIP' },
+    }))),
   resultImportTemplateUrl: (format: 'csv' | 'json' | 'radioss-csv') => apiUrl('/api/result-import/template/{file_format}', { file_format: format }),
   resultImportTemplate: (format: 'csv' | 'json' | 'radioss-csv') => generatedText(apiUrl('/api/result-import/template/{file_format}', { file_format: format })),
   importTypedFolderExample: async (loadCaseId: string) =>

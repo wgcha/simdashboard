@@ -1,7 +1,7 @@
 # 프로그램 정리 및 개발 계획
 
 - 기준일: 2026-08-25
-- 상태: 실행 계획
+- 상태: 실행 계획 + Run Identity V2 기준선 반영
 - 범위: 구조 정리, DB·결과 수집, 확장자, proxy, 사내 배포, 기술 우선순위
 
 ## 1. 결론
@@ -39,7 +39,7 @@
 | DOC-01 | 현재 문서와 과거 plan이 같은 디렉터리에 혼재 | 개발자가 낡은 경로·명령을 사용 | P0 |
 | DB-01 | migration head를 코드 graph에서 동적으로 읽고 PostgreSQL의 누락·stale revision을 fail-closed하도록 verifier와 회귀 테스트를 반영 | 구현 완료, 실제 운영 DB release gate 검증 필요 | P0 완료 |
 | IMP-01 | 중앙 format detector/loader와 normalized contract를 사용하고 canonical Master Refresh·typed folder example·수동 `SUMMARY_RESULT` JSON/CSV·Radioss mesh CSV를 공통 UoW로 적재 | schema와 맞지 않던 legacy `result_files` persistence service/repository를 제거하고 parser compatibility만 유지 | P1 진행 |
-| IMP-02 | bundle fingerprint, load-case advisory lock, migration 0016 exact source reservation, importer snapshot/rehash·workload limits와 opt-in PostgreSQL 동시성 테스트 구현 | kind별 snapshot ceiling·unsupported kind open 전 거부·streaming complexity ceiling까지 구현. 동일 `run_id` replace·전용 PostgreSQL test DB에서의 실제 실행, producer atomic publish/readiness·전용 quota-limited temp mount·multi-worker budget은 잔여 | P1 진행 |
+| IMP-02 | bundle fingerprint, load-case advisory lock, importer snapshot/rehash·workload limits와 Run Identity V2 구현 | migration `0017_run_identity_v2`, scoped source-version ledger, exact existing run identity 반환, `SKIP`/`REJECT`/immutable `REPLACE`, legacy append, manual conflict audit/HTTP 409, master `REPLACE` fail-closed와 disposable PostgreSQL 18.6 blank/backfill/concurrency/provider gate까지 통과. producer atomic publish/readiness·전용 quota-limited temp mount·multi-worker budget은 잔여 | P1 진행 |
 | DEP-01 | Rocky install env·service EnvironmentFile·systemd read-only path에 `SIMDASH_IMPORT_ROOT` wiring과 외부 mount/read preflight를 반영 | 구현 완료, 실제 Rocky host release gate 검증 필요 | P0 진행 |
 | DEP-02 | Rocky 8 + nginx + systemd + PostgreSQL을 canonical target으로 ADR 확정하고 Windows를 compatibility profile로 명시 | 문서 결정 완료 | P0 완료 |
 | DEP-03 | Windows는 설치/개발 실행과 DB 이관 호환성은 있으나 HTTPS reverse proxy·service·TLS·rollback 운영 자동화 없음 | Windows one-command 운영 배포는 지원 범위에서 제외 | 범위 제외 |
@@ -202,22 +202,42 @@ port/application orchestration/SQL UoW 이관은 완료했다. schema와 맞지 
 
 #### P1-02 bundle fingerprint와 Run identity
 
-상태: fingerprint, PostgreSQL duplicate reservation/advisory lock, importer
-snapshot/rehash와 workload limits 구현 완료. identity 정책과 전용 PostgreSQL
-test DB에서의 실제 실행은 잔여다.
+상태: **Run Identity V2 코드·계약·PostgreSQL live gate 완료**. fingerprint,
+PostgreSQL advisory lock, importer snapshot/rehash와 workload limits에 더해
+`0017_run_identity_v2`와 API/provider 계약을 반영했다. 운영 전환 전 producer
+publish/readiness와 quota·multi-worker release gate는 남아 있다.
 
 - manifest와 매핑 파일의 checksum/size를 canonical 정렬해 fingerprint를 만든다.
-- 동일 fingerprint는 skip하고, 현재 다른 fingerprint는 새 Run으로 처리한다.
+- 동일 fingerprint 또는 동일 source checksum은 `SKIPPED/NOOP`으로 처리하고 기존
+  서버 할당 `analysis_run_id`와 `run_no`를 그대로 반환한다.
 - metadata와 job summary에 manifest checksum과 bundle fingerprint를 함께 보존한다.
 - PostgreSQL에서는 load case별 namespaced 64-bit transaction advisory lock으로
   `run_no` 할당을 직렬화한다.
-- non-null exact `(source_type, source_name, source_checksum)`는 migration `0016`
-  `canonical_result_ingestion_sources` PK로 예약하고 실패 transaction에서 rollback한다.
-- `run_id`, `run_no`, overwrite policy를 계약에 추가한다.
-- 실패/재시도/부분 성공의 감사 이벤트를 표준화한다.
+- migration `0017_run_identity_v2`의
+  `canonical_result_ingestion_source_versions`가
+  `(load_case_id, source_type, source_key, source_revision)`을 범위화하고,
+  checksum·server run·supersedes를 보존한다. `run_no`는
+  `(load_case_id, run_no)` unique로 고정한다. 이전 `0016` 예약은 historical
+  backfill 입력이며 runtime identity의 정본이 아니다.
+- 명시적 `source_run_id`의 checksum 변경은 `SKIP`(기존 run 반환), `REJECT`(기록 후
+  거부), `REPLACE`(기존 run을 삭제·변경하지 않고 새 immutable run을 만들고
+  `supersedes_analysis_run_id`로 연결) 정책을 따른다.
+- `source_run_id`가 없는 기존 producer는 checksum을 가진 경우에도
+  `name:<source_name>` slot의 legacy append revision으로 호환한다. checksum이
+  없으면 ledger를 쓰지 않고 append한다.
+- 수동 import의 `REJECT`는 job/audit를 transaction 안에서 commit한 뒤 HTTP 409
+  `SOURCE_RUN_CONFLICT`를 반환한다. Master manifest는 `SKIP`/`REJECT`만 허용하며
+  producer `REPLACE`는 fail-closed한다.
 - `backend/tests/test_postgres_result_ingestion_concurrency.py`가 독립 연결 두 개로
   동일 source의 `IMPORTED`/`SKIPPED`, 서로 다른 source의 고유 `run_no`를 검증한다.
-  `ANALYSIS_TEST_POSTGRES=1`과 일치하는 전용 test DB가 있어야 실행되며, 이번 기준선에서는 전용 DB가 없어 live 실행하지 않았다.
+  `ANALYSIS_TEST_POSTGRES=1`과 일치하는 전용 test DB가 있어야 실행된다.
+  2026-08-25 disposable PostgreSQL 18.6 cluster(127.0.0.1:55433,
+  `simulation_dashboard_test_v2`)에서 빈 DB `0001→0017`, 별도 DB의
+  `0016→0017` legacy backfill, app-role DDL 거부, pool budget, reference seed와
+  동시성 test **2 passed**를 확인했다. 실제 SQL provider로 CREATED/exact
+  NOOP/SKIP/REJECT/immutable REPLACE와 revision/supersedes 저장도 검증했다. 종료 후
+  cluster·DB·로그를 제거해 residue 0을 확인했으며 기존 5432 DB와 `.env` 연결은
+  사용하지 않았다.
 - importer snapshot/rehash로 fingerprint 계산 바이트와 실제 parse·media 저장
   바이트의 일치를 보장한다. producer의 임시 sibling directory + atomic rename,
   readiness 표식, snapshot temp quota와 multi-worker budget은 운영 요구사항이다.
@@ -411,7 +431,8 @@ proxy/CA를 설치·갱신하는 자동화는 아직 없다. `NO_PROXY` assignme
 - canonical 결과 예제 import와 재실행 skip
 - manual SUMMARY_RESULT JSON/CSV import와 재시도 skip, audit/auth transaction
 - 모든 허용 media extension fixture의 정상·MIME mismatch·corrupt signature 검증
-- PostgreSQL advisory lock·migration 0016 reservation contract 검증
+- PostgreSQL advisory lock·migration `0017_run_identity_v2` source-version,
+  privilege·connection budget·live concurrency 검증
 - 모든 신규 media blob 연결·checksum 검증
 - nginx config, TLS, forwarded header, SPA/API/assets/Range smoke
 - backup→빈 DB restore rehearsal
@@ -424,8 +445,11 @@ proxy/CA를 설치·갱신하는 자동화는 아직 없다. `NO_PROXY` assignme
 3. migration verifier와 이후 migration head 처리 방식을 고친다. (완료)
 4. 운영 target ADR과 `SIMDASH_IMPORT_ROOT` 배포 연결을 구현한다. (구현 완료, Rocky host release validation 남음)
 5. legacy `result_files` parser compatibility를 유지하면서 Radioss mesh locations 공통 UoW 이관을 검증한다. (완료)
-6. opt-in PostgreSQL concurrent ingestion test를 전용 migrated test DB에서 실행하고,
-   producer atomic publish/readiness와 snapshot temp quota·multi-worker budget을
-   Rocky 운영 release gate에 추가한다. Windows Master Refresh는 native handle adapter
-   구현·target wheel/offline smoke 전까지 fail-closed compatibility 범위를 유지한다.
-7. result ingestion부터 V2 vertical slice 전환을 시작한다.
+6. **다음:** import history/status/retry UI를 구현하고 `operation`, `reason_code`,
+   기존/교체 run, source revision을 화면에서 조회·재시도 가능하게 한다.
+7. 그 다음 producer atomic publish/readiness, snapshot temp quota와
+   multi-worker refresh budget을 구현·검증한다. Windows Master Refresh는 native
+   handle adapter 구현·target wheel/offline smoke 전까지 fail-closed compatibility
+   범위를 유지한다.
+8. 이후 producer readiness/atomic publish와 quota 계약을 운영 release gate에
+   반영하고, 마지막으로 multi-worker quota·load test를 완료한다.

@@ -3846,9 +3846,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Import Analysis Results Api Load Cases  Load Case Id  Results Import Post"
+                  "$ref": "#/components/schemas/ResultImportResponse"
                 }
               }
             }
@@ -3888,9 +3886,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Import Typed Result Example Api Load Cases  Load Case Id  Folder Import Example Post"
+                  "$ref": "#/components/schemas/TypedResultExampleResponse"
                 }
               }
             }
@@ -7663,6 +7659,67 @@
               }
             ],
             "title": "Message"
+          },
+          "operation": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "CREATED",
+                  "NOOP",
+                  "REPLACED",
+                  "REJECTED"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "existing_analysis_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Existing Analysis Run Id"
+          },
+          "replaced_analysis_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replaced Analysis Run Id"
+          },
+          "source_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Revision"
           }
         },
         "type": "object",
@@ -8685,6 +8742,27 @@
             "type": "boolean",
             "title": "Validate Only",
             "default": false
+          },
+          "source_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Run Id"
+          },
+          "conflict_policy": {
+            "type": "string",
+            "enum": [
+              "SKIP",
+              "REJECT",
+              "REPLACE"
+            ],
+            "title": "Conflict Policy",
+            "default": "SKIP"
           }
         },
         "type": "object",
@@ -8693,6 +8771,261 @@
           "content"
         ],
         "title": "ResultImportPayload"
+      },
+      "ResultImportResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "VALID",
+              "IMPORTED",
+              "SKIPPED",
+              "REJECTED"
+            ],
+            "title": "Status"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "run_no": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run No"
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
+          },
+          "scalar_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scalar Count"
+          },
+          "node_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Node Count"
+          },
+          "element_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Element Count"
+          },
+          "frame_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frame Count"
+          },
+          "final_time": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Final Time"
+          },
+          "time_series_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time Series Count"
+          },
+          "open_cell_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Open Cell Count"
+          },
+          "chassis_rear_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chassis Rear Count"
+          },
+          "fail_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fail Count"
+          },
+          "overall_verdict": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "PASS",
+                  "FAIL"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Overall Verdict"
+          },
+          "source_format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Format"
+          },
+          "results": {
+            "items": {},
+            "type": "array",
+            "title": "Results"
+          },
+          "warnings": {
+            "items": {},
+            "type": "array",
+            "title": "Warnings"
+          },
+          "operation": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "CREATED",
+                  "NOOP",
+                  "REPLACED",
+                  "REJECTED"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "existing_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Existing Run Id"
+          },
+          "replaced_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replaced Run Id"
+          },
+          "source_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Revision"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "filename"
+        ],
+        "title": "ResultImportResponse",
+        "description": "Stable response contract for manual result imports."
       },
       "ResultLayoutMaterializeInput": {
         "properties": {
@@ -9097,6 +9430,124 @@
           "display_name"
         ],
         "title": "TaskTypeVersionCreate"
+      },
+      "TypedResultExampleResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "IMPORTED",
+              "SKIPPED",
+              "REJECTED"
+            ],
+            "title": "Status"
+          },
+          "job_id": {
+            "type": "string",
+            "title": "Job Id"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "run_no": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run No"
+          },
+          "schema_id": {
+            "type": "string",
+            "title": "Schema Id"
+          },
+          "summary": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Summary"
+          },
+          "operation": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "CREATED",
+                  "NOOP",
+                  "REPLACED",
+                  "REJECTED"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "existing_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Existing Run Id"
+          },
+          "replaced_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replaced Run Id"
+          },
+          "source_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Revision"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "job_id",
+          "schema_id",
+          "summary"
+        ],
+        "title": "TypedResultExampleResponse",
+        "description": "Named response contract for the checked-in typed example importer."
       },
       "ValidationError": {
         "properties": {

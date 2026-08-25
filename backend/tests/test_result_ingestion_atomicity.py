@@ -62,6 +62,7 @@ def _cleanup() -> None:
                 "SELECT analysis_run_id FROM analysis_run_metadata WHERE source_type='MASTER_FOLDER_REFRESH'"
             ).fetchall()
         ]
+        conn.execute("DELETE FROM folder_import_jobs WHERE source_folder LIKE 'bundle-%/manifest.json'")
         for run_id in run_ids:
             conn.execute("DELETE FROM media_assets WHERE analysis_run_id=?", [run_id])
             conn.execute("DELETE FROM qualitative_notes WHERE analysis_run_id=?", [run_id])
@@ -71,9 +72,9 @@ def _cleanup() -> None:
             conn.execute("DELETE FROM curve_results WHERE analysis_run_id=?", [run_id])
             conn.execute("DELETE FROM time_series_results WHERE analysis_run_id=?", [run_id])
             conn.execute("DELETE FROM scalar_results WHERE analysis_run_id=?", [run_id])
+            conn.execute("DELETE FROM canonical_result_ingestion_source_versions WHERE analysis_run_id=? OR supersedes_analysis_run_id=?", [run_id, run_id])
             conn.execute("DELETE FROM analysis_run_metadata WHERE analysis_run_id=?", [run_id])
             conn.execute("DELETE FROM analysis_runs WHERE id=?", [run_id])
-        conn.execute("DELETE FROM folder_import_jobs WHERE source_folder LIKE 'bundle-%/manifest.json'")
         conn.execute("DELETE FROM variable_definitions WHERE load_case_id=? AND variable_key='atomic_peak'", [LOAD_CASE_ID])
 
 

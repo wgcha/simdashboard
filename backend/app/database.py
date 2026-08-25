@@ -287,7 +287,14 @@ def _initialize_duckdb_legacy() -> None:
                 source_folder VARCHAR NOT NULL,
                 status VARCHAR NOT NULL,
                 summary_json JSON,
-                created_at TIMESTAMP NOT NULL
+                created_at TIMESTAMP NOT NULL,
+                source_type VARCHAR,
+                source_checksum VARCHAR,
+                source_run_id VARCHAR,
+                conflict_policy VARCHAR,
+                outcome_reason VARCHAR,
+                replaced_analysis_run_id VARCHAR,
+                completed_at TIMESTAMP
             );
 
             CREATE TABLE IF NOT EXISTS analysis_run_metadata (
@@ -308,6 +315,23 @@ def _initialize_duckdb_legacy() -> None:
                 source_checksum VARCHAR NOT NULL,
                 claimed_at TIMESTAMP NOT NULL,
                 PRIMARY KEY (source_type, source_name, source_checksum)
+            );
+
+            CREATE TABLE IF NOT EXISTS canonical_result_ingestion_source_versions (
+                load_case_id VARCHAR NOT NULL,
+                source_type VARCHAR NOT NULL,
+                source_key VARCHAR NOT NULL,
+                source_run_id VARCHAR,
+                source_name VARCHAR NOT NULL,
+                source_checksum VARCHAR NOT NULL,
+                source_revision INTEGER NOT NULL CHECK (source_revision > 0),
+                analysis_run_id VARCHAR NOT NULL,
+                conflict_policy VARCHAR NOT NULL,
+                supersedes_analysis_run_id VARCHAR,
+                claimed_at TIMESTAMP NOT NULL,
+                PRIMARY KEY (load_case_id, source_type, source_key, source_revision),
+                UNIQUE (load_case_id, source_type, source_key, source_checksum),
+                UNIQUE (analysis_run_id)
             );
 
             CREATE TABLE IF NOT EXISTS import_schemas (
@@ -884,6 +908,18 @@ def _initialize_duckdb_legacy() -> None:
         conn.execute("ALTER TABLE batch_path_profiles ADD COLUMN IF NOT EXISTS task_type_version INTEGER DEFAULT 1")
         conn.execute("ALTER TABLE batch_path_profile_versions ADD COLUMN IF NOT EXISTS task_type_id VARCHAR")
         conn.execute("ALTER TABLE batch_path_profile_versions ADD COLUMN IF NOT EXISTS task_type_version INTEGER DEFAULT 1")
+        # Run Identity V2 is additive for existing local DuckDB files.  The
+        # nullable history fields intentionally do not reinterpret old jobs.
+        for column_name, definition in (
+            ("source_type", "VARCHAR"),
+            ("source_checksum", "VARCHAR"),
+            ("source_run_id", "VARCHAR"),
+            ("conflict_policy", "VARCHAR"),
+            ("outcome_reason", "VARCHAR"),
+            ("replaced_analysis_run_id", "VARCHAR"),
+            ("completed_at", "TIMESTAMP"),
+        ):
+            conn.execute(f"ALTER TABLE folder_import_jobs ADD COLUMN IF NOT EXISTS {column_name} {definition}")
         # Only singleton legacy links are safe to normalize.  Ambiguous rows
         # retain their JSON mapping and are quarantined from the 1:1 identity
         # column so initialization cannot fail on duplicate legacy mappings.
@@ -915,6 +951,12 @@ def _initialize_duckdb_legacy() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS ix_project_result_profiles_latest ON project_request_type_result_profiles(project_id, request_type_id, request_type_version, binding_version DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS ix_drop_video_assets_blob_id ON drop_video_assets(blob_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS ix_drop_video_assets_load_case ON drop_video_assets(load_case_id, sort_order)")
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_folder_import_jobs_source_identity ON folder_import_jobs(source_type, source_checksum)")
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_folder_import_jobs_source_run ON folder_import_jobs(source_run_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_folder_import_jobs_replaced_run ON folder_import_jobs(replaced_analysis_run_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_canonical_result_ingestion_source_versions_lookup ON canonical_result_ingestion_source_versions(load_case_id, source_type, source_key, source_run_id, source_revision DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_canonical_result_ingestion_source_versions_supersedes_run ON canonical_result_ingestion_source_versions(supersedes_analysis_run_id)")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_analysis_runs_load_case_run_no ON analysis_runs(load_case_id, run_no)")
         conn.execute("UPDATE request_work_items SET progress=CASE WHEN status='COMPLETED' THEN 100 ELSE COALESCE(progress, 0) END")
 
         ensure_quality_threshold_schema(conn)
@@ -2178,7 +2220,21 @@ def ensure_feature_examples(conn: duckdb.DuckDBPyConnection) -> None:
     conn.execute("INSERT OR IGNORE INTO import_schema_versions VALUES (?, 1, ?, ?, 'system')", ["import-schema-showcase-typed", encoded_schema, _iso(now - timedelta(days=10))])
     for key in ("trust", "multitype"):
         run_id = f"run-showcase-{key}-2"
-        conn.execute("INSERT OR IGNORE INTO folder_import_jobs VALUES (?, ?, ?, ?, 1, ?, 'COMPLETED', ?, ?)", [f"folder-job-showcase-{key}", f"loadcase-showcase-{key}", run_id, "import-schema-showcase-typed", f"examples/showcase/{key}", json.dumps({"scalar": 4, "series": 1, "curve": 1, "media": 1}), _iso(now - timedelta(days=3))])
+        conn.execute(
+            """INSERT OR IGNORE INTO folder_import_jobs
+                (id, load_case_id, analysis_run_id, schema_id, schema_version,
+                 source_folder, status, summary_json, created_at)
+                VALUES (?, ?, ?, ?, 1, ?, 'COMPLETED', ?, ?)""",
+            [
+                f"folder-job-showcase-{key}",
+                f"loadcase-showcase-{key}",
+                run_id,
+                "import-schema-showcase-typed",
+                f"examples/showcase/{key}",
+                json.dumps({"scalar": 4, "series": 1, "curve": 1, "media": 1}),
+                _iso(now - timedelta(days=3)),
+            ],
+        )
 
     for key in ("trust", "multitype"):
         run_id = f"run-showcase-{key}-2"

@@ -206,7 +206,14 @@ CREATE TABLE IF NOT EXISTS projects (
                 source_folder VARCHAR NOT NULL,
                 status VARCHAR NOT NULL,
                 summary_json JSONB,
-                created_at TIMESTAMP NOT NULL
+                created_at TIMESTAMP NOT NULL,
+                source_type VARCHAR,
+                source_checksum VARCHAR,
+                source_run_id VARCHAR,
+                conflict_policy VARCHAR,
+                outcome_reason VARCHAR,
+                replaced_analysis_run_id VARCHAR,
+                completed_at TIMESTAMP
             );
 
             CREATE TABLE IF NOT EXISTS analysis_run_metadata (
@@ -227,6 +234,23 @@ CREATE TABLE IF NOT EXISTS projects (
                 source_checksum VARCHAR NOT NULL,
                 claimed_at TIMESTAMP NOT NULL,
                 PRIMARY KEY (source_type, source_name, source_checksum)
+            );
+
+            CREATE TABLE IF NOT EXISTS canonical_result_ingestion_source_versions (
+                load_case_id VARCHAR NOT NULL,
+                source_type VARCHAR NOT NULL,
+                source_key VARCHAR NOT NULL,
+                source_run_id VARCHAR,
+                source_name VARCHAR NOT NULL,
+                source_checksum VARCHAR NOT NULL,
+                source_revision INTEGER NOT NULL CHECK (source_revision > 0),
+                analysis_run_id VARCHAR NOT NULL,
+                conflict_policy VARCHAR NOT NULL,
+                supersedes_analysis_run_id VARCHAR,
+                claimed_at TIMESTAMP NOT NULL,
+                PRIMARY KEY (load_case_id, source_type, source_key, source_revision),
+                UNIQUE (load_case_id, source_type, source_key, source_checksum),
+                UNIQUE (analysis_run_id)
             );
 
             CREATE TABLE IF NOT EXISTS import_schemas (
@@ -802,6 +826,12 @@ CREATE INDEX IF NOT EXISTS ix_media_assets_blob_id ON media_assets(blob_id);
 CREATE INDEX IF NOT EXISTS ix_drop_video_assets_blob_id ON drop_video_assets(blob_id);
 CREATE INDEX IF NOT EXISTS ix_drop_video_assets_load_case ON drop_video_assets(load_case_id, sort_order);
 CREATE INDEX IF NOT EXISTS ix_folder_import_jobs_load_case ON folder_import_jobs(load_case_id);
+CREATE INDEX IF NOT EXISTS ix_folder_import_jobs_source_identity ON folder_import_jobs(source_type, source_checksum);
+CREATE INDEX IF NOT EXISTS ix_folder_import_jobs_source_run ON folder_import_jobs(source_run_id);
+CREATE INDEX IF NOT EXISTS ix_folder_import_jobs_replaced_run ON folder_import_jobs(replaced_analysis_run_id);
+CREATE INDEX IF NOT EXISTS ix_canonical_result_ingestion_source_versions_lookup ON canonical_result_ingestion_source_versions(load_case_id, source_type, source_key, source_run_id, source_revision DESC);
+CREATE INDEX IF NOT EXISTS ix_canonical_result_ingestion_source_versions_supersedes_run ON canonical_result_ingestion_source_versions(supersedes_analysis_run_id);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_analysis_runs_load_case_run_no ON analysis_runs(load_case_id, run_no);
 CREATE INDEX IF NOT EXISTS ix_validations_run ON validations(analysis_run_id);
 CREATE INDEX IF NOT EXISTS ix_review_annotations_run ON review_annotations(analysis_run_id);
 CREATE INDEX IF NOT EXISTS ix_variable_definitions_load_case ON variable_definitions(load_case_id, variable_key);
@@ -847,6 +877,10 @@ ALTER TABLE load_cases ADD CONSTRAINT fk_load_cases_request FOREIGN KEY (request
 ALTER TABLE template_executions ADD CONSTRAINT fk_template_executions_load_case FOREIGN KEY (load_case_id) REFERENCES load_cases(id);
 ALTER TABLE analysis_runs ADD CONSTRAINT fk_analysis_runs_load_case FOREIGN KEY (load_case_id) REFERENCES load_cases(id);
 ALTER TABLE analysis_runs ADD CONSTRAINT fk_analysis_runs_template FOREIGN KEY (template_execution_id) REFERENCES template_executions(id);
+ALTER TABLE folder_import_jobs ADD CONSTRAINT fk_folder_import_jobs_replaced_run FOREIGN KEY (replaced_analysis_run_id) REFERENCES analysis_runs(id);
+ALTER TABLE canonical_result_ingestion_source_versions ADD CONSTRAINT fk_canonical_result_ingestion_source_versions_load_case FOREIGN KEY (load_case_id) REFERENCES load_cases(id);
+ALTER TABLE canonical_result_ingestion_source_versions ADD CONSTRAINT fk_canonical_result_ingestion_source_versions_run FOREIGN KEY (analysis_run_id) REFERENCES analysis_runs(id);
+ALTER TABLE canonical_result_ingestion_source_versions ADD CONSTRAINT fk_canonical_result_ingestion_source_versions_supersedes_run FOREIGN KEY (supersedes_analysis_run_id) REFERENCES analysis_runs(id);
 ALTER TABLE scalar_results ADD CONSTRAINT fk_scalar_results_run FOREIGN KEY (analysis_run_id) REFERENCES analysis_runs(id);
 ALTER TABLE time_series_results ADD CONSTRAINT fk_time_series_results_run FOREIGN KEY (analysis_run_id) REFERENCES analysis_runs(id);
 ALTER TABLE curve_results ADD CONSTRAINT fk_curve_results_run FOREIGN KEY (analysis_run_id) REFERENCES analysis_runs(id);

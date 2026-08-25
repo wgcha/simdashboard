@@ -8,7 +8,13 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
-from ...domains.results.models import ResultIngestionCommand, ResultIngestionOutcome
+from ...domains.results.models import (
+    ResultIngestionCommand,
+    ResultIngestionOutcome,
+    SourceConflictDecision,
+    SourceRunRecord,
+    decide_source_conflict,
+)
 from ...domains.results.ports import ResultIngestionUnitOfWork
 
 
@@ -35,6 +41,7 @@ def ingest_result_bundle(
     boundary owns the authoritative database relationship check and source
     idempotency.
     """
+    command = _normalize_command(command)
     parsed = command["parsed"]
     schema_id = str(parsed["schema_id"])
     summary = _summary(parsed, command)
@@ -43,35 +50,36 @@ def ingest_result_bundle(
         unit_of_work.validate_target(command)
         unit_of_work.authorize(command)
         unit_of_work.lock_load_case_ingestion(command["load_case_id"])
-        source_already_ingested = command["source_checksum"] is not None and (
-            unit_of_work.source_completed(command)
-            or not unit_of_work.claim_source_identity(command, clock())
-        )
-        if source_already_ingested:
+        created_at = clock()
+        decision = _decide_ingestion(unit_of_work, command)
+        if decision["status"] == "SKIPPED":
             unit_of_work.add_skipped_job(
                 job_id,
                 command,
-                {**summary, "reason": "IDENTICAL_COMPLETED"},
-                clock(),
+                {**summary, "reason": decision["reason_code"]},
+                created_at,
+                decision,
             )
-            return {
-                "status": "SKIPPED",
-                "job_id": job_id,
-                "load_case_id": command["load_case_id"],
-                "analysis_run_id": None,
-                "run_no": None,
-                "schema_id": schema_id,
-                "summary": summary,
-            }
+            return _terminal_outcome(job_id, command, schema_id, summary, decision)
+        if decision["status"] == "REJECTED":
+            unit_of_work.add_rejected_job(
+                job_id,
+                command,
+                {**summary, "reason": decision["reason_code"]},
+                created_at,
+                decision,
+            )
+            return _terminal_outcome(job_id, command, schema_id, summary, decision)
         run_id = id_factory("run")
         run_no = unit_of_work.next_run_no(command["load_case_id"])
-        created_at = clock()
-        unit_of_work.add_running_job(job_id, run_id, command, created_at)
+        unit_of_work.add_running_job(job_id, run_id, command, created_at, decision)
         unit_of_work.ensure_catalog(command)
         unit_of_work.add_run(run_id, run_no, command, created_at)
         unit_of_work.add_metadata(run_id, job_id, command, created_at)
+        if command["source_checksum"] is not None:
+            unit_of_work.record_source_version(run_id, command, decision, created_at)
         unit_of_work.add_results(run_id, command, created_at)
-        unit_of_work.complete_job(job_id, run_id, summary)
+        unit_of_work.complete_job(job_id, run_id, summary, created_at)
         unit_of_work.sync_status(command, created_at)
     return {
         "status": "IMPORTED",
@@ -81,6 +89,91 @@ def ingest_result_bundle(
         "run_no": run_no,
         "schema_id": schema_id,
         "summary": summary,
+        "operation": decision["operation"],
+        "reason_code": decision["reason_code"],
+        "existing_analysis_run_id": decision["existing_analysis_run_id"],
+        "replaced_analysis_run_id": decision["replaced_analysis_run_id"],
+        "source_revision": decision["source_revision"],
+    }
+
+
+def _decide_ingestion(
+    unit_of_work: ResultIngestionUnitOfWork,
+    command: ResultIngestionCommand,
+) -> SourceConflictDecision:
+    """Lookup and decide after the load-case lock has been acquired."""
+    if command["source_checksum"] is None:
+        return {
+            "status": "IMPORTED",
+            "operation": "CREATED",
+            "reason_code": "CHECKSUM_UNAVAILABLE_APPEND",
+            "existing_analysis_run_id": None,
+            "existing_run_no": None,
+            "replaced_analysis_run_id": None,
+            "source_revision": None,
+        }
+
+    exact = _find_exact(unit_of_work, command)
+    latest = _find_latest(unit_of_work, command)
+    return decide_source_conflict(command, exact, latest)
+
+
+def _normalize_command(command: ResultIngestionCommand) -> ResultIngestionCommand:
+    """Validate producer identity without accepting any server run identity."""
+    normalized = dict(command)
+    source_run_id = normalized.get("source_run_id")
+    if source_run_id is not None:
+        if not isinstance(source_run_id, str):
+            raise ValueError("source_run_id는 문자열이어야 합니다.")
+        source_run_id = source_run_id.strip()
+        if not source_run_id:
+            normalized.pop("source_run_id", None)
+        elif len(source_run_id) > 120 or not source_run_id.isprintable():
+            raise ValueError("source_run_id 형식이 올바르지 않습니다.")
+        else:
+            normalized["source_run_id"] = source_run_id
+    policy = normalized.get("conflict_policy")
+    if policy is not None and (not isinstance(policy, str) or policy not in {"SKIP", "REJECT", "REPLACE"}):
+        raise ValueError("지원하지 않는 conflict_policy입니다.")
+    if normalized.get("source_run_id") and policy is None:
+        normalized["conflict_policy"] = "SKIP"
+    return normalized
+
+
+def _find_exact(
+    unit_of_work: ResultIngestionUnitOfWork,
+    command: ResultIngestionCommand,
+) -> SourceRunRecord | None:
+    return unit_of_work.find_exact_source_run(command)
+
+
+def _find_latest(
+    unit_of_work: ResultIngestionUnitOfWork,
+    command: ResultIngestionCommand,
+) -> SourceRunRecord | None:
+    return unit_of_work.find_latest_source_run(command)
+
+
+def _terminal_outcome(
+    job_id: str,
+    command: ResultIngestionCommand,
+    schema_id: str,
+    summary: dict[str, Any],
+    decision: SourceConflictDecision,
+) -> ResultIngestionOutcome:
+    return {
+        "status": decision["status"],
+        "job_id": job_id,
+        "load_case_id": command["load_case_id"],
+        "analysis_run_id": decision["existing_analysis_run_id"],
+        "run_no": decision["existing_run_no"],
+        "schema_id": schema_id,
+        "summary": summary,
+        "operation": decision["operation"],
+        "reason_code": decision["reason_code"],
+        "existing_analysis_run_id": decision["existing_analysis_run_id"],
+        "replaced_analysis_run_id": decision["replaced_analysis_run_id"],
+        "source_revision": decision["source_revision"],
     }
 
 
