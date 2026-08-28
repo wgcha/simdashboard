@@ -4,6 +4,7 @@ import ast
 from pathlib import Path
 
 from app.main import app
+from app.application.results import ingestion
 from app.routers import result_ingestion
 from scripts.check_openapi_contract import check_contract
 
@@ -26,6 +27,22 @@ def test_main_has_no_result_ingestion_decorators_and_router_has_no_sql_execute()
 
     tree = ast.parse(Path(result_ingestion.__file__).read_text())
     assert not any(isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "execute" for node in ast.walk(tree))
+
+
+def test_result_ingestion_application_service_stays_framework_free_and_owns_orchestration():
+    source = Path(ingestion.__file__).read_text()
+    forbidden_imports = ("fastapi", "starlette", "Request", "HTTPException", "database_connection", "security")
+    assert not any(token in source for token in forbidden_imports)
+
+    router_tree = ast.parse(Path(result_ingestion.__file__).read_text())
+    called_names = {
+        node.func.id
+        for node in ast.walk(router_tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert "parse_result_file" not in called_names
+    assert "ingest_result_bundle" not in called_names
+    assert {"run_manual_import", "run_typed_example"} <= called_names
 
 
 def test_result_ingestion_extraction_preserves_the_checked_in_openapi_contract():

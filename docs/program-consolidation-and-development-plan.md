@@ -352,10 +352,13 @@ cd backend
 4. `reports`: report context·layout·template
 5. 남은 `main.py` endpoint
 
-`result_ingestion`의 1차 HTTP 추출은 코드와 계약 검증을 완료했다. 결과-import template, 수동 결과
-import, 예제 폴더 import endpoint를 독립 router로 옮기고 OpenAPI·권한·atomic write/audit 계약을
-유지한다. 기존 application orchestration과 persistence UoW의 재배치는 후속 단계이며, media asset
-endpoint는 공유 media 정책을 먼저 분리한 별도 slice로 다룬다.
+`result_ingestion`은 첫 HTTP 추출과 두 번째 application orchestration 추출을 완료했다. 결과-import
+template, 수동 결과 import, 예제 폴더 import endpoint는 독립 router에 두고, parser·canonical command·
+ingestion orchestration은 framework-neutral application use case로 이동했다. OpenAPI·권한·atomic
+write/audit 계약과 기존 persistence UoW/SQL facade는 유지한다. media asset endpoint와 persistence UoW
+자체의 재배치는 후속 slice로 다룬다. 현재 router는 `connect()`와 `ResultIngestionRepository`로
+context·threshold·catalog read facade를 조립하며, 이 read port/application query 이동은 다음
+`result_ingestion` 소단위로 남아 있다.
 
 각 slice는 `HTTP → application → domain port → adapter`를 갖고 router `.execute()`를 0으로 유지한다.
 
