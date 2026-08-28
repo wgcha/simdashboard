@@ -12,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import main as main_module
+from app.routers import result_ingestion as result_ingestion_module
 from app.config import database_settings
 from app.database import connect, initialize_database
 from app.main import app
@@ -1064,7 +1065,7 @@ def test_typed_folder_example_registers_scalars_curves_media_and_catalog(monkeyp
     initialize_database()
     load_case_id = "loadcase-clamp-left-001"
     authorization_connections = []
-    original_authorize = main_module.require_resource_permission
+    original_authorize = result_ingestion_module.require_resource_permission
 
     def track_result_import_authorization(
         request,
@@ -1074,7 +1075,7 @@ def test_typed_folder_example_registers_scalars_curves_media_and_catalog(monkeyp
         *,
         conn=None,
     ):
-        if permission == main_module.RESULT_IMPORT and resource_type == "load_case":
+        if permission == result_ingestion_module.RESULT_IMPORT and resource_type == "load_case":
             authorization_connections.append(conn)
         return original_authorize(
             request,
@@ -1085,7 +1086,7 @@ def test_typed_folder_example_registers_scalars_curves_media_and_catalog(monkeyp
         )
 
     monkeypatch.setattr(
-        main_module,
+        result_ingestion_module,
         "require_resource_permission",
         track_result_import_authorization,
     )

@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app import main as main_module
+from app.routers import result_ingestion as result_ingestion_module
 from app.adapters.persistence.result_ingestion import SQLResultIngestionUnitOfWork
 from app.database import connect, initialize_database
 from app.main import app
@@ -473,13 +473,13 @@ def test_manual_validate_only_does_not_mutate_and_rechecks_authorization(monkeyp
     with TestClient(app) as client:
         _create_time_series_catalog(client)
     authorization_connections = []
-    original_authorize = main_module.require_resource_permission
+    original_authorize = result_ingestion_module.require_resource_permission
 
     def track_authorization(*args, **kwargs):
         authorization_connections.append(kwargs.get("conn"))
         return original_authorize(*args, **kwargs)
 
-    monkeypatch.setattr(main_module, "require_resource_permission", track_authorization)
+    monkeypatch.setattr(result_ingestion_module, "require_resource_permission", track_authorization)
     try:
         with TestClient(app) as client:
             with connect() as conn:
@@ -527,7 +527,7 @@ def test_manual_summary_authorization_is_rechecked_in_write_transaction_and_roll
         "content": json.dumps({"scalar_results": [{"variable_key": "top_edge_max_stress", "value": 20}]}),
     }
     authorization_connections = []
-    original_authorize = main_module.require_resource_permission
+    original_authorize = result_ingestion_module.require_resource_permission
     original_add_results = SQLResultIngestionUnitOfWork.add_results
 
     def track_authorization(*args, **kwargs):
@@ -538,7 +538,7 @@ def test_manual_summary_authorization_is_rechecked_in_write_transaction_and_roll
         original_add_results(unit_of_work, *args, **kwargs)
         raise RuntimeError("injected manual persistence failure")
 
-    monkeypatch.setattr(main_module, "require_resource_permission", track_authorization)
+    monkeypatch.setattr(result_ingestion_module, "require_resource_permission", track_authorization)
     monkeypatch.setattr(SQLResultIngestionUnitOfWork, "add_results", fail_after_persist)
     with TestClient(app, raise_server_exceptions=False) as client:
         response = client.post(f"/api/load-cases/{LOAD_CASE_ID}/results/import", json=payload)

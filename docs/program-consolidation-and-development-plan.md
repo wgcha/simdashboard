@@ -352,6 +352,11 @@ cd backend
 4. `reports`: report context·layout·template
 5. 남은 `main.py` endpoint
 
+`result_ingestion`의 1차 HTTP 추출은 코드와 계약 검증을 완료했다. 결과-import template, 수동 결과
+import, 예제 폴더 import endpoint를 독립 router로 옮기고 OpenAPI·권한·atomic write/audit 계약을
+유지한다. 기존 application orchestration과 persistence UoW의 재배치는 후속 단계이며, media asset
+endpoint는 공유 media 정책을 먼저 분리한 별도 slice로 다룬다.
+
 각 slice는 `HTTP → application → domain port → adapter`를 갖고 router `.execute()`를 0으로 유지한다.
 
 #### Frontend 순서

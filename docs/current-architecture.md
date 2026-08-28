@@ -56,10 +56,15 @@ Browser
 
 등록된 router는 두 계열이다.
 
-- `backend/app/routers/`: 인증, 접근 제어, workbench, 모델링 카탈로그, 마스터 결과 Refresh
+- `backend/app/routers/`: 인증, 접근 제어, workbench, 모델링 카탈로그, 마스터 결과 Refresh, 수동 결과 import·예제 폴더 import를 소유하는 `result_ingestion`
 - `backend/app/adapters/http/routers/`: `projects`, `requests`, `reports`의 대표 vertical slice HTTP adapter
 
 새 기능은 가능한 한 얇은 router에서 입력/권한/응답 변환만 처리하고, orchestration과 SQL을 아래 계층으로 넘긴다.
+
+Phase 2의 첫 HTTP 추출로 `routers/result_ingestion.py`가 결과-import template, 수동 결과 import,
+예제 폴더 import endpoint를 `main.py`에서 분리했다. 기존 application command와 persistence UoW,
+권한·transaction·audit 계약은 그대로 사용한다. HTTP 외 orchestration 이동과 media asset endpoint
+분리는 후속 단계다.
 
 ### 3.2 비즈니스 로직과 데이터 접근
 
