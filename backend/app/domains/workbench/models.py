@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal, TypedDict
 
@@ -74,3 +75,32 @@ class RequestWorkPlanRead(TypedDict):
 
     status: RequestWorkPlanReadStatus
     summary: WorkPlanMonitoringSummaryRead | None
+
+
+RequestTypeAssignmentSource = Literal["ADMIN", "USER"]
+
+
+@dataclass(frozen=True)
+class RequestTypeAssignmentCommand:
+    """Actor-owned inputs for assigning an immutable request-type version."""
+
+    request_type_id: str
+    request_type_version: int
+    source: RequestTypeAssignmentSource
+    decided_by: str
+
+
+class RequestWorkPlanImmutableError(Exception):
+    """The request already has its immutable work-plan snapshot."""
+
+    def __init__(self, request_id: str) -> None:
+        self.request_id = request_id
+        super().__init__(request_id)
+
+
+class RequestTypeAssignmentLockedError(Exception):
+    """A non-admin actor attempted to replace an admin-fixed assignment."""
+
+
+class RequestTypeAssignmentTargetNotFoundError(Exception):
+    """The request or active immutable request-type version does not exist."""

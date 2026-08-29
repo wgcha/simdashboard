@@ -2,12 +2,16 @@ from __future__ import annotations
 
 from datetime import datetime
 
+import pytest
+
 from app.adapters.persistence import workbench as workbench_persistence
 from app.adapters.persistence.workbench import (
     SQLWorkbenchCatalogQuery,
+    SQLWorkbenchRequestTypeAssignmentCommand,
     SQLWorkbenchRequestWorkPlanQuery,
     SQLWorkbenchRequestTypeResolutionQuery,
 )
+from app.application.workbench.commands import assign_workbench_request_type
 from app.application.workbench.queries import (
     get_workbench_request_work_plan,
     list_workbench_request_types,
@@ -15,9 +19,13 @@ from app.application.workbench.queries import (
     resolve_workbench_request_type,
 )
 from app.domains.workbench.models import (
+    RequestTypeAssignmentCommand,
+    RequestTypeAssignmentLockedError,
+    RequestTypeAssignmentTargetNotFoundError,
     RequestTypeResolution,
     RequestTypeResolutionRead,
     RequestTypeVersionRead,
+    RequestWorkPlanImmutableError,
     TaskTypeVersionRead,
     WorkPlanMonitoringSummaryRead,
 )
@@ -233,3 +241,118 @@ def test_sql_request_work_plan_query_uses_one_connection_and_the_monitoring_proj
     assert query.analysis_request_exists("request-1") is True
     assert query.request_monitoring_summary("request-1") == summary
     assert calls == [("exists", connection, "request-1"), ("summary", connection, "request-1")]
+
+
+def _assignment_command() -> RequestTypeAssignmentCommand:
+    return RequestTypeAssignmentCommand(
+        request_type_id="request-1",
+        request_type_version=1,
+        source="ADMIN",
+        decided_by="관리자",
+    )
+
+
+class _RequestTypeAssignmentCommandPort:
+    def __init__(self, *, has_work_plan: bool, resolution: RequestTypeResolutionRead) -> None:
+        self.has_work_plan_value = has_work_plan
+        self.resolution = resolution
+        self.events: list[str] = []
+
+    def has_work_plan(self, request_id: str) -> bool:
+        assert request_id == "request-1"
+        self.events.append("has_work_plan")
+        return self.has_work_plan_value
+
+    def assign_request_type(
+        self,
+        request_id: str,
+        command: RequestTypeAssignmentCommand,
+    ) -> RequestTypeResolutionRead:
+        assert request_id == "request-1"
+        assert command == _assignment_command()
+        self.events.append("assign")
+        return self.resolution
+
+
+def test_request_type_assignment_command_guards_immutable_plan_before_repository_assignment() -> None:
+    port = _RequestTypeAssignmentCommandPort(
+        has_work_plan=True,
+        resolution=_resolution("ASSIGNED"),
+    )
+
+    with pytest.raises(RequestWorkPlanImmutableError) as exc_info:
+        assign_workbench_request_type(port, "request-1", _assignment_command())
+
+    assert exc_info.value.request_id == "request-1"
+    assert port.events == ["has_work_plan"]
+
+
+def test_request_type_assignment_command_delegates_after_the_work_plan_guard() -> None:
+    expected = _resolution("ASSIGNED")
+    port = _RequestTypeAssignmentCommandPort(has_work_plan=False, resolution=expected)
+
+    assert assign_workbench_request_type(port, "request-1", _assignment_command()) == expected
+    assert port.events == ["has_work_plan", "assign"]
+
+
+def test_sql_request_type_assignment_command_uses_the_supplied_connection_and_repository_delegate(monkeypatch) -> None:
+    connection = object()
+    calls: list[tuple[object, ...]] = []
+    expected = _resolution("ASSIGNED")
+
+    class _Repository:
+        def __init__(self, actual_connection: object) -> None:
+            assert actual_connection is connection
+
+        def work_plan(self, request_id: str) -> None:
+            calls.append(("has_work_plan", request_id))
+            return None
+
+        def assign_request_type(
+            self,
+            request_id: str,
+            request_type_id: str,
+            version: int,
+            source: str,
+            decided_by: str,
+        ) -> RequestTypeResolutionRead:
+            calls.append(("assign", request_id, request_type_id, version, source, decided_by))
+            return expected
+
+    monkeypatch.setattr(workbench_persistence, "WorkbenchRepository", _Repository)
+    adapter = SQLWorkbenchRequestTypeAssignmentCommand(connection)  # type: ignore[arg-type]
+
+    assert adapter.has_work_plan("request-1") is False
+    assert adapter.assign_request_type("request-1", _assignment_command()) == expected
+    assert calls == [
+        ("has_work_plan", "request-1"),
+        ("assign", "request-1", "request-1", 1, "ADMIN", "관리자"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("repository_error", "domain_error"),
+    [
+        (PermissionError(), RequestTypeAssignmentLockedError),
+        (LookupError(), RequestTypeAssignmentTargetNotFoundError),
+    ],
+)
+def test_sql_request_type_assignment_command_translates_repository_errors(
+    monkeypatch,
+    repository_error: Exception,
+    domain_error: type[Exception],
+) -> None:
+    class _Repository:
+        def __init__(self, _connection: object) -> None:
+            pass
+
+        def assign_request_type(self, *_args: object) -> RequestTypeResolutionRead:
+            raise repository_error
+
+    monkeypatch.setattr(workbench_persistence, "WorkbenchRepository", _Repository)
+    adapter = SQLWorkbenchRequestTypeAssignmentCommand(object())  # type: ignore[arg-type]
+
+    with pytest.raises(domain_error) as exc_info:
+        adapter.assign_request_type("request-1", _assignment_command())
+
+    assert exc_info.value.__cause__ is repository_error

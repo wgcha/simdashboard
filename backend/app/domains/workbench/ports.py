@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from .models import (
+    RequestTypeAssignmentCommand,
     RequestTypeResolutionRead,
     RequestTypeVersionRead,
     TaskTypeVersionRead,
@@ -30,3 +31,15 @@ class WorkbenchRequestWorkPlanQueryPort(Protocol):
     def analysis_request_exists(self, request_id: str) -> bool: ...
 
     def request_monitoring_summary(self, request_id: str) -> WorkPlanMonitoringSummaryRead: ...
+
+
+class WorkbenchRequestTypeAssignmentCommandPort(Protocol):
+    """Command port for the existing request-type assignment persistence flow."""
+
+    def has_work_plan(self, request_id: str) -> bool: ...
+
+    def assign_request_type(
+        self,
+        request_id: str,
+        command: RequestTypeAssignmentCommand,
+    ) -> RequestTypeResolutionRead: ...

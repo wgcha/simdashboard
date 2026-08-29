@@ -370,7 +370,10 @@ context → assignment → assigned type 또는 active catalog rule 순서, 네 
 무인증 read를 보존했다. 이어서 단일 request work-plan GET은 request 존재 확인 → canonical monitoring summary
 순서와 두 not-found 상태, 성공 payload를 framework-neutral outcome/port로 명시했다. monitoring 계산은 기존
 service에 남겨 shared projection의 single source of truth를 유지한다. batch 실행, 결과 snapshot과 변경 endpoint는
-후속 단위다.
+후속 단위다. 단, request-type assignment `PUT`은 별도 command port/use case/SQL adapter로 옮겼다. router는
+principal source·`REQUEST_EDIT`·HTTP 오류 응답을 유지하며, application은 동일 connection의 work-plan immutable
+guard 후 기존 repository assignment를 호출한다. persistence adapter는 repository의 admin lock과 target-not-found를
+domain error로 번역해 기존 HTTP status/detail을 보존한다.
 
 각 slice는 `HTTP → application → domain port → adapter`를 갖고 router `.execute()`를 0으로 유지한다.
 

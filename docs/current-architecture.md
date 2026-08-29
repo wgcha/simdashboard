@@ -79,7 +79,10 @@ shape와 route/OpenAPI 계약을 유지하면서 framework-neutral catalog query
 model/port, SQL adapter로 이동했다. 이어서 `GET /api/workbench/requests/{request_id}/request-type`도 같은
 경계로 이동해 repository의 context → assignment → assigned type 또는 active catalog rule 순서를 한 연결에서
 그대로 사용한다. 네 resolution payload와 missing-request 404, 무인증 read 계약은 유지한다. 작업 계획 변경,
-실행 정의, batch 실행과 다른 변경 endpoint는 다음 단위에 남긴다. `GET /api/workbench/requests/{request_id}/work-plan`도
+실행 정의, batch 실행과 다른 변경 endpoint는 다음 단위에 남긴다. request-type assignment `PUT`은 router가
+principal source와 `REQUEST_EDIT` 권한, HTTP mapping을 유지하고 application command가 같은 connection에서
+immutable work-plan guard → repository assignment 순서를 소유한다. repository의 request/type/admin-lock/upsert/
+resolution SQL은 persistence adapter가 위임해 유지한다. `GET /api/workbench/requests/{request_id}/work-plan`도
 같은 query boundary에서 request 존재 확인 후 기존 canonical monitoring projection을 같은 연결로 호출한다.
 두 not-found 상태와 성공 payload는 HTTP adapter에서 기존 계약으로 변환하며, monitoring 계산 자체는 service의
 single source of truth로 남긴다.

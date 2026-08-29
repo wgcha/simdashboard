@@ -9,14 +9,22 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from ..adapters.persistence.workbench import (
     SQLWorkbenchCatalogQuery,
+    SQLWorkbenchRequestTypeAssignmentCommand,
     SQLWorkbenchRequestWorkPlanQuery,
     SQLWorkbenchRequestTypeResolutionQuery,
 )
+from ..application.workbench.commands import assign_workbench_request_type
 from ..application.workbench.queries import (
     list_workbench_request_types,
     list_workbench_task_types,
     get_workbench_request_work_plan,
     resolve_workbench_request_type,
+)
+from ..domains.workbench.models import (
+    RequestTypeAssignmentCommand,
+    RequestTypeAssignmentLockedError,
+    RequestTypeAssignmentTargetNotFoundError,
+    RequestWorkPlanImmutableError,
 )
 from ..modules.access_control import (
     DASHBOARD_EDIT,
@@ -591,16 +599,26 @@ def assign_request_type(request_id: str, payload: RequestTypeAssignmentInput, re
     source = "ADMIN" if principal.is_global_admin else "USER"
     with connect() as conn:
         require_resource_permission(request, REQUEST_EDIT, "request", request_id, conn=conn)
-        if WorkbenchRepository(conn).work_plan(request_id):
+        command = RequestTypeAssignmentCommand(
+            request_type_id=payload.request_type_id,
+            request_type_version=payload.request_type_version,
+            source=source,
+            decided_by=principal.display_name,
+        )
+        try:
+            return assign_workbench_request_type(
+                SQLWorkbenchRequestTypeAssignmentCommand(conn),
+                request_id,
+                command,
+            )
+        except RequestWorkPlanImmutableError as exc:
             raise HTTPException(
                 409,
                 detail={"code": "WORK_PLAN_IMMUTABLE", "request_id": request_id},
-            )
-        try:
-            return WorkbenchRepository(conn).assign_request_type(request_id, payload.request_type_id, payload.request_type_version, source, principal.display_name)
-        except PermissionError as exc:
+            ) from exc
+        except RequestTypeAssignmentLockedError as exc:
             raise HTTPException(409, "관리자가 고정한 의뢰 유형은 관리자만 변경할 수 있습니다.") from exc
-        except LookupError as exc:
+        except RequestTypeAssignmentTargetNotFoundError as exc:
             raise HTTPException(404, "해석 의뢰 또는 Request Type 버전을 찾을 수 없습니다.") from exc
 
 
