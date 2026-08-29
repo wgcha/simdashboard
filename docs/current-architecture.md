@@ -61,13 +61,13 @@ Browser
 
 새 기능은 가능한 한 얇은 router에서 입력/권한/응답 변환만 처리하고, orchestration과 SQL을 아래 계층으로 넘긴다.
 
-Phase 2의 `result_ingestion`은 두 안전 단위로 정리했다. 첫 단위는 결과-import template, 수동 결과
+Phase 2의 `result_ingestion`은 세 안전 단위로 정리했다. 첫 단위는 결과-import template, 수동 결과
 import, 예제 폴더 import endpoint를 `main.py`에서 `routers/result_ingestion.py`로 분리했다. 두 번째
 단위는 framework-neutral `application/results/ingestion.py`가 parser·canonical command·ingestion
 orchestration을 소유하고, router가 Request·connection·권한 재검증·audit sink·HTTP 응답만 조립하게
-했다. 기존 persistence UoW와 SQL facade는 유지하며 media asset 분리는 후속 단계다. 현재 router는
-`connect()`와 `ResultIngestionRepository`로 context·threshold·catalog read facade를 조립하고,
-이 read port/application query 이동은 다음 `result_ingestion` 소단위로 남아 있다.
+했다. 세 번째 단위는 framework-neutral query port/use case를 도입해 typed target-only read와
+manual context·threshold·catalog read를 분리했다. 기존 persistence UoW/SQL facade, 권한·연결 수명과
+query 순서는 유지하며 media asset 분리는 후속 단계다.
 
 ### 3.2 비즈니스 로직과 데이터 접근
 

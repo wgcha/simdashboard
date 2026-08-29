@@ -1,4 +1,4 @@
-"""SQL adapter for the atomic canonical result-ingestion write port."""
+"""SQL adapters for result-ingestion read queries and atomic canonical writes."""
 
 from __future__ import annotations
 
@@ -12,18 +12,41 @@ from typing import Any
 from ...database_connection import ConnectionLike, connect
 from ...domains.results.models import (
     ResultIngestionCommand,
+    ResultIngestionTargetRead,
     SourceConflictDecision,
     SourceRunRecord,
     source_key_for,
 )
 from ...domains.results.ports import ResultIngestionUnitOfWork
 from ...media_policy import validate_media_metadata
+from ...repositories.result_ingestion import ResultIngestionRepository
 from ...repositories.variable_catalog import VariableCatalogRepository
 from ...services.media_storage_service import attach_stored_media, store_file
 from ...services.request_monitoring import sync_request_status
 
 
 AuthorizationCallback = Callable[[ResultIngestionCommand, ConnectionLike], object]
+
+
+class SQLResultIngestionQuery:
+    """SQL implementation of the framework-neutral result-ingestion read port."""
+
+    def __init__(self, connection: ConnectionLike) -> None:
+        self._repository = ResultIngestionRepository(connection)
+
+    def get_result_ingestion_target(self, load_case_id: str) -> ResultIngestionTargetRead | None:
+        row = self._repository.get_load_case_context(load_case_id)
+        if row is None:
+            return None
+        return ResultIngestionTargetRead(
+            project_id=str(row[2]), request_id=str(row[1]), load_case_id=load_case_id
+        )
+
+    def get_quality_threshold(self, project_id: Any, criterion_key: str, default: float) -> float:
+        return self._repository.get_quality_threshold(project_id, criterion_key, default)
+
+    def list_catalog(self, load_case_id: str) -> dict[str, dict[str, Any]]:
+        return self._repository.list_catalog(load_case_id)
 
 
 def _allow_ingestion(

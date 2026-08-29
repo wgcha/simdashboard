@@ -8,6 +8,7 @@ from typing import Any, Literal, Mapping
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from ..adapters.persistence.result_ingestion import (
+    SQLResultIngestionQuery,
     SQLResultIngestionUnitOfWorkProvider,
     bound_result_ingestion_transaction,
 )
@@ -21,10 +22,13 @@ from ..application.results.ingestion import (
     run_manual_import,
     run_typed_example,
 )
+from ..application.results.queries import (
+    get_manual_result_import_context,
+    get_result_ingestion_target,
+)
 from ..database_connection import connect
 from ..folder_import import FolderImportError
 from ..modules.access_control import RESULT_IMPORT, require_resource_permission
-from ..repositories.result_ingestion import ResultIngestionRepository
 from ..result_import import CSV_TEMPLATE, JSON_TEMPLATE
 from ..schemas.api import ResultImportPayload, ResultImportResponse, TypedResultExampleResponse
 from ..security import write_audit_event
@@ -66,11 +70,10 @@ def import_analysis_results(
     with connect() as conn:
         require_resource_permission(request, RESULT_IMPORT, "load_case", load_case_id, conn=conn)
         principal = request.state.principal
-        repository = ResultIngestionRepository(conn)
-        context = repository.get_load_case_context(load_case_id)
+        context = get_manual_result_import_context(SQLResultIngestionQuery(conn), load_case_id)
         if context is None:
             raise HTTPException(404, "하중 경우를 찾을 수 없습니다.")
-        target = ResultIngestionTarget(str(context[2]), str(context[1]), load_case_id)
+        target = ResultIngestionTarget(context.project_id, context.request_id, load_case_id)
         import_input = ManualResultImportInput(
             target=target,
             filename=payload.filename,
@@ -80,13 +83,9 @@ def import_analysis_results(
             actor_name=principal.display_name,
             source_run_id=payload.source_run_id,
             conflict_policy=payload.conflict_policy,
-            chassis_threshold=repository.get_quality_threshold(
-                context[2], "chassis_rear_permanent_deformation_mm", 5.0
-            ),
-            open_cell_threshold=repository.get_quality_threshold(
-                context[2], "open_cell_stress_mpa", 75.0
-            ),
-            catalog=repository.list_catalog(load_case_id),
+            chassis_threshold=context.chassis_threshold,
+            open_cell_threshold=context.open_cell_threshold,
+            catalog=context.catalog,
             validate_only=payload.validate_only,
         )
         try:
@@ -142,12 +141,12 @@ def import_typed_result_example(load_case_id: str, request: Request) -> TypedRes
         raise HTTPException(422, str(exc)) from exc
     with connect() as conn:
         require_resource_permission(request, RESULT_IMPORT, "load_case", load_case_id, conn=conn)
-        context = ResultIngestionRepository(conn).get_load_case_context(load_case_id)
-        if not context:
+        context = get_result_ingestion_target(SQLResultIngestionQuery(conn), load_case_id)
+        if context is None:
             raise HTTPException(404, "하중경우를 찾을 수 없습니다.")
     outcome = run_typed_example(
         example_root=example_root,
-        target=ResultIngestionTarget(str(context[2]), str(context[1]), load_case_id),
+        target=ResultIngestionTarget(context.project_id, context.request_id, load_case_id),
         parsed=parsed,
         provider=SQLResultIngestionUnitOfWorkProvider(
             utc_identifier,

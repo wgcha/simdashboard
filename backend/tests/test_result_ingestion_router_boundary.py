@@ -3,8 +3,11 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from app.main import app
-from app.application.results import ingestion
+from app.application.results import ingestion, queries
+from app.domains.results.models import ResultIngestionTargetRead
 from app.routers import result_ingestion
 from scripts.check_openapi_contract import check_contract
 
@@ -43,6 +46,44 @@ def test_result_ingestion_application_service_stays_framework_free_and_owns_orch
     assert "parse_result_file" not in called_names
     assert "ingest_result_bundle" not in called_names
     assert {"run_manual_import", "run_typed_example"} <= called_names
+    query_source = Path(queries.__file__).read_text()
+    assert not any(token in query_source for token in forbidden_imports + ("repositories.", "adapters.persistence"))
+
+
+@pytest.mark.unit
+def test_result_ingestion_router_uses_query_port_and_preserves_read_order():
+    router_source = Path(result_ingestion.__file__).read_text()
+    assert "ResultIngestionRepository" not in router_source
+    assert "get_manual_result_import_context" in router_source
+    assert "get_result_ingestion_target" in router_source
+
+    class Query:
+        def __init__(self):
+            self.calls = []
+
+        def get_result_ingestion_target(self, load_case_id):
+            self.calls.append(("target", load_case_id))
+            return ResultIngestionTargetRead("project", "request", load_case_id)
+
+        def get_quality_threshold(self, project_id, criterion_key, default):
+            self.calls.append(("threshold", criterion_key))
+            return default
+
+        def list_catalog(self, load_case_id):
+            self.calls.append(("catalog", load_case_id))
+            return {"x": {"id": "x"}}
+
+    query = Query()
+    assert queries.get_manual_result_import_context(query, "load-case") is not None
+    assert query.calls == [
+        ("target", "load-case"),
+        ("threshold", "chassis_rear_permanent_deformation_mm"),
+        ("threshold", "open_cell_stress_mpa"),
+        ("catalog", "load-case"),
+    ]
+    target_query = Query()
+    assert queries.get_result_ingestion_target(target_query, "load-case") is not None
+    assert target_query.calls == [("target", "load-case")]
 
 
 def test_result_ingestion_extraction_preserves_the_checked_in_openapi_contract():

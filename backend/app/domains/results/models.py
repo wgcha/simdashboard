@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal, NotRequired, TypedDict
 
@@ -7,6 +8,13 @@ from typing import Any, Literal, NotRequired, TypedDict
 ConflictPolicy = Literal["SKIP", "REJECT", "REPLACE"]
 IngestionStatus = Literal["IMPORTED", "SKIPPED", "REJECTED"]
 IngestionOperation = Literal["CREATED", "NOOP", "REPLACED", "REJECTED"]
+
+
+@dataclass(frozen=True)
+class ResultIngestionTargetRead:
+    project_id: str
+    request_id: str
+    load_case_id: str
 
 
 class AnalysisRun(TypedDict):

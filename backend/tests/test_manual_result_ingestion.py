@@ -7,7 +7,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.routers import result_ingestion as result_ingestion_module
-from app.adapters.persistence.result_ingestion import SQLResultIngestionUnitOfWork
+from app.adapters.persistence.result_ingestion import (
+    SQLResultIngestionQuery,
+    SQLResultIngestionUnitOfWork,
+)
 from app.database import connect, initialize_database
 from app.main import app
 from app.services.manual_result_ingestion_adapter import (
@@ -527,24 +530,37 @@ def test_manual_summary_authorization_is_rechecked_in_write_transaction_and_roll
         "content": json.dumps({"scalar_results": [{"variable_key": "top_edge_max_stress", "value": 20}]}),
     }
     authorization_connections = []
+    query_connections = []
+    events = []
     original_authorize = result_ingestion_module.require_resource_permission
+    original_target_query = SQLResultIngestionQuery.get_result_ingestion_target
     original_add_results = SQLResultIngestionUnitOfWork.add_results
 
     def track_authorization(*args, **kwargs):
+        events.append("authorize")
         authorization_connections.append(kwargs.get("conn"))
         return original_authorize(*args, **kwargs)
+
+    def track_target_query(query, *args, **kwargs):
+        events.append("query")
+        query_connections.append(query._repository.conn)
+        return original_target_query(query, *args, **kwargs)
 
     def fail_after_persist(unit_of_work, *args, **kwargs):
         original_add_results(unit_of_work, *args, **kwargs)
         raise RuntimeError("injected manual persistence failure")
 
     monkeypatch.setattr(result_ingestion_module, "require_resource_permission", track_authorization)
+    monkeypatch.setattr(SQLResultIngestionQuery, "get_result_ingestion_target", track_target_query)
     monkeypatch.setattr(SQLResultIngestionUnitOfWork, "add_results", fail_after_persist)
     with TestClient(app, raise_server_exceptions=False) as client:
         response = client.post(f"/api/load-cases/{LOAD_CASE_ID}/results/import", json=payload)
     assert response.status_code == 500
     assert len(authorization_connections) == 2
     assert authorization_connections[0] is authorization_connections[1]
+    assert events[:3] == ["authorize", "query", "authorize"]
+    assert len(query_connections) == 1
+    assert query_connections[0] is authorization_connections[0]
     with connect() as conn:
         assert conn.execute("SELECT count(*) FROM analysis_run_metadata WHERE source_type='FILE_UPLOAD'").fetchone()[0] == 0
         assert conn.execute("SELECT count(*) FROM folder_import_jobs WHERE source_folder=?", [f"{LOAD_CASE_ID}/manual-rollback.json"]).fetchone()[0] == 0

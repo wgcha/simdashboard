@@ -5,14 +5,28 @@ from typing import Any, Protocol
 
 from .models import (
     ResultIngestionCommand,
+    ResultIngestionTargetRead,
+    RunSummaryReadData,
     SourceConflictDecision,
     SourceRunRecord,
-    RunSummaryReadData,
 )
 
 
 class AnalysisRunSummaryRepository(Protocol):
     def read_for_load_case(self, load_case_id: str) -> RunSummaryReadData: ...
+
+
+class ResultIngestionQueryPort(Protocol):
+    def get_result_ingestion_target(self, load_case_id: str) -> ResultIngestionTargetRead | None: ...
+
+    def get_quality_threshold(
+        self,
+        project_id: Any,
+        criterion_key: str,
+        default: float,
+    ) -> float: ...
+
+    def list_catalog(self, load_case_id: str) -> dict[str, dict[str, Any]]: ...
 
 
 class ResultIngestionUnitOfWork(Protocol):

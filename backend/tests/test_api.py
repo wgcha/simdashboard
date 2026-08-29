@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from app import main as main_module
 from app.routers import result_ingestion as result_ingestion_module
+from app.adapters.persistence.result_ingestion import SQLResultIngestionQuery
 from app.config import database_settings
 from app.database import connect, initialize_database
 from app.main import app
@@ -1065,7 +1066,10 @@ def test_typed_folder_example_registers_scalars_curves_media_and_catalog(monkeyp
     initialize_database()
     load_case_id = "loadcase-clamp-left-001"
     authorization_connections = []
+    query_connections = []
+    events = []
     original_authorize = result_ingestion_module.require_resource_permission
+    original_target_query = SQLResultIngestionQuery.get_result_ingestion_target
 
     def track_result_import_authorization(
         request,
@@ -1076,6 +1080,7 @@ def test_typed_folder_example_registers_scalars_curves_media_and_catalog(monkeyp
         conn=None,
     ):
         if permission == result_ingestion_module.RESULT_IMPORT and resource_type == "load_case":
+            events.append("authorize")
             authorization_connections.append(conn)
         return original_authorize(
             request,
@@ -1085,17 +1090,26 @@ def test_typed_folder_example_registers_scalars_curves_media_and_catalog(monkeyp
             conn=conn,
         )
 
+    def track_target_query(query, *args, **kwargs):
+        events.append("query")
+        query_connections.append(query._repository.conn)
+        return original_target_query(query, *args, **kwargs)
+
     monkeypatch.setattr(
         result_ingestion_module,
         "require_resource_permission",
         track_result_import_authorization,
     )
+    monkeypatch.setattr(SQLResultIngestionQuery, "get_result_ingestion_target", track_target_query)
     with TestClient(app) as client:
         response = client.post(f"/api/load-cases/{load_case_id}/folder-import/example")
         assert response.status_code == 200, response.text
         assert len(authorization_connections) == 2
         assert all(connection is not None for connection in authorization_connections)
         assert authorization_connections[0] is not authorization_connections[1]
+        assert events[:3] == ["authorize", "query", "authorize"]
+        assert len(query_connections) == 1
+        assert query_connections[0] is authorization_connections[0]
         result = response.json()
         assert result["summary"] == {"scalar_count": 13, "curve_count": 2, "media_count": 1}
         overview = client.get(f"/api/load-cases/{load_case_id}/overview").json()
