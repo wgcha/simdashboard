@@ -8,10 +8,14 @@ from ...domains.workbench.models import (
     RequestTypeAssignmentCommand,
     RequestTypeResolutionRead,
     RequestWorkPlanImmutableError,
+    DemoRunInvalidError,
+    WorkItemCompleteCommand,
     WorkItemLifecycleResult,
     WorkItemNotFoundError,
     WorkItemNotInProgressError,
+    WorkItemNotCurrentError,
     WorkItemNotReadyError,
+    WorkItemNotStartedError,
     WorkItemPrerequisiteIncompleteError,
     WorkItemProgressCommand,
     WorkItemProgressNotMonotonicError,
@@ -19,6 +23,7 @@ from ...domains.workbench.models import (
 )
 from ...domains.workbench.ports import (
     WorkbenchRequestTypeAssignmentCommandPort,
+    WorkbenchWorkItemCompleteCommandPort,
     WorkbenchWorkItemProgressCommandPort,
     WorkbenchWorkItemStartCommandPort,
 )
@@ -102,6 +107,50 @@ def start_workbench_work_item(
         raise WorkItemPrerequisiteIncompleteError(item_id)
 
     command_port.start_work_item(item_id, command)
+    return WorkItemLifecycleResult(
+        request_id=request_id,
+        summary=command_port.sync_request_status(request_id),
+        changed=True,
+    )
+
+
+def complete_workbench_work_item(
+    command_port: WorkbenchWorkItemCompleteCommandPort,
+    item_id: str,
+    command: WorkItemCompleteCommand,
+    *,
+    authorize: Callable[[], None],
+    audit: Callable[[], None],
+) -> WorkItemLifecycleResult:
+    """Preserve the current-item, demo-run, completion, and next-ready sequence."""
+    item = command_port.work_item(item_id)
+    if item is None:
+        raise WorkItemNotFoundError(item_id)
+
+    authorize()
+    audit()
+    request_id = item.request_id
+    if item.status == "COMPLETED":
+        return WorkItemLifecycleResult(
+            request_id=request_id,
+            summary=command_port.request_monitoring_summary(request_id),
+            changed=False,
+        )
+
+    current_item_id = command_port.current_work_item_id(request_id)
+    if item.status == "READY" and current_item_id == item_id:
+        raise WorkItemNotStartedError(item_id=item_id, current_item_id=current_item_id)
+    if current_item_id != item_id:
+        raise WorkItemNotCurrentError(item_id=item_id, current_item_id=current_item_id)
+    if command_port.incomplete_prior_count(request_id, item.sequence_no):
+        raise WorkItemPrerequisiteIncompleteError(item_id)
+    if command.demo_run_id and not command_port.demo_run_is_succeeded_for_request(command.demo_run_id, request_id):
+        raise DemoRunInvalidError(item_id=item_id, demo_run_id=command.demo_run_id)
+
+    command_port.complete_work_item(item_id, command)
+    next_item_id = command_port.next_waiting_work_item_id(request_id, item.sequence_no)
+    if next_item_id:
+        command_port.mark_work_item_ready(next_item_id)
     return WorkItemLifecycleResult(
         request_id=request_id,
         summary=command_port.sync_request_status(request_id),

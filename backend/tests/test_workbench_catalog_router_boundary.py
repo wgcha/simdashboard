@@ -12,11 +12,14 @@ from fastapi.testclient import TestClient
 from app.database_connection import connect
 from app.main import app
 from app.domains.workbench.models import (
+    DemoRunInvalidError,
     RequestTypeAssignmentLockedError,
     RequestTypeAssignmentTargetNotFoundError,
     WorkItemNotFoundError,
     WorkItemNotInProgressError,
+    WorkItemNotCurrentError,
     WorkItemNotReadyError,
+    WorkItemNotStartedError,
     WorkItemPrerequisiteIncompleteError,
     WorkItemProgressNotMonotonicError,
     WorkItemLifecycleResult,
@@ -290,6 +293,121 @@ def test_work_item_start_router_uses_the_principal_actor_not_the_payload_actor(m
 
     assert response.status_code == 200
     assert response.json() == {"request_id": "request-1", "status": "IN_PROGRESS", "progress": 42}
+    assert events == ["begin", "commit"]
+
+
+def test_work_item_complete_boundary_delegates_without_direct_sql_or_repository() -> None:
+    tree = ast.parse(inspect.getsource(workbench.complete_work_item))
+    assert not any(isinstance(node, ast.Attribute) and node.attr == "execute" for node in ast.walk(tree))
+    assert "WorkbenchRepository" not in inspect.getsource(workbench.complete_work_item)
+    assert (
+        app.openapi()["paths"]["/api/workbench/work-items/{item_id}/complete"]["post"]["operationId"]
+        == "complete_work_item_api_workbench_work_items__item_id__complete_post"
+    )
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_status", "expected_detail"),
+    [
+        (WorkItemNotFoundError("item-1"), 404, {"code": "WORK_ITEM_NOT_FOUND", "item_id": "item-1"}),
+        (
+            WorkItemNotStartedError(item_id="item-1", current_item_id="item-1"),
+            409,
+            {"code": "WORK_ITEM_NOT_STARTED", "item_id": "item-1", "current_item_id": "item-1"},
+        ),
+        (
+            WorkItemNotCurrentError(item_id="item-1", current_item_id="current-item"),
+            409,
+            {"code": "WORK_ITEM_NOT_CURRENT", "item_id": "item-1", "current_item_id": "current-item"},
+        ),
+        (
+            WorkItemPrerequisiteIncompleteError("item-1"),
+            409,
+            {"code": "WORK_ITEM_PREREQUISITE_INCOMPLETE", "item_id": "item-1"},
+        ),
+        (
+            DemoRunInvalidError(item_id="item-1", demo_run_id="run-1"),
+            409,
+            {"code": "DEMO_RUN_INVALID", "item_id": "item-1", "demo_run_id": "run-1"},
+        ),
+    ],
+)
+def test_work_item_complete_router_preserves_error_mapping_and_rollback(
+    monkeypatch,
+    error: Exception,
+    expected_status: int,
+    expected_detail: object,
+) -> None:
+    events: list[str] = []
+
+    class _Adapter:
+        def __init__(self, _connection: object) -> None:
+            pass
+
+        def begin_transaction(self) -> None:
+            events.append("begin")
+
+        def commit_transaction(self) -> None:
+            events.append("commit")
+
+        def rollback_transaction(self) -> None:
+            events.append("rollback")
+
+    def _raise(*_args: object, **_kwargs: object) -> WorkItemLifecycleResult:
+        raise error
+
+    monkeypatch.setattr(workbench, "SQLWorkbenchWorkItemCompleteCommand", _Adapter)
+    monkeypatch.setattr(workbench, "complete_workbench_work_item", _raise)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/workbench/work-items/item-1/complete",
+            json={"completed_by": "payload actor", "demo_run_id": "run-1"},
+        )
+
+    assert response.status_code == expected_status
+    assert response.json() == {"detail": expected_detail}
+    assert events == ["begin", "rollback"]
+
+
+def test_work_item_complete_router_uses_the_principal_actor_not_the_payload_actor(monkeypatch) -> None:
+    events: list[str] = []
+
+    class _Adapter:
+        def __init__(self, _connection: object) -> None:
+            pass
+
+        def begin_transaction(self) -> None:
+            events.append("begin")
+
+        def commit_transaction(self) -> None:
+            events.append("commit")
+
+        def rollback_transaction(self) -> None:
+            events.append("rollback")
+
+    def _success(_port: object, item_id: str, command: object, **_kwargs: object) -> WorkItemLifecycleResult:
+        assert item_id == "item-1"
+        assert getattr(command, "completed_by") == "로컬 관리자"
+        assert getattr(command, "completed_by") != "payload actor"
+        assert getattr(command, "demo_run_id") == "run-1"
+        return WorkItemLifecycleResult(
+            request_id="request-1",
+            summary={"status": "COMPLETED", "progress": 100},  # type: ignore[typeddict-item]
+            changed=True,
+        )
+
+    monkeypatch.setattr(workbench, "SQLWorkbenchWorkItemCompleteCommand", _Adapter)
+    monkeypatch.setattr(workbench, "complete_workbench_work_item", _success)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/workbench/work-items/item-1/complete",
+            json={"completed_by": "payload actor", "demo_run_id": "run-1"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"request_id": "request-1", "status": "COMPLETED", "progress": 100}
     assert events == ["begin", "commit"]
 
 

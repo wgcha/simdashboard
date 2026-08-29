@@ -93,7 +93,10 @@ permission과 override audit, HTTP 오류 및 transaction commit/rollback만 유
 `POST /api/workbench/work-items/{item_id}/start`도 같은 private lifecycle adapter 기반으로 분리했다. application은
 item read → authorize → audit → idempotent monitoring 또는 current ready item → prior-incomplete → READY-to-IN_PROGRESS
 transition → canonical status sync 순서를 소유한다. router의 principal actor, HTTP mapping 및 commit/rollback은 유지한다.
-complete/reassign/batch는 후속이다.
+`POST /api/workbench/work-items/{item_id}/complete`도 같은 lifecycle UoW/monitoring facade에서 별도 complete
+port/use case/SQL adapter로 옮겼다. application은 completed idempotency, current/started/prerequisite guard, optional
+same-request succeeded demo-run 검증, principal-owned completion 기록, 다음 WAITING의 READY 승격과 canonical sync 순서를
+유지한다. router는 기존 404/409 payload와 audit/transaction 경계를 유지한다. reassign/batch는 후속이다.
 
 ### 3.2 비즈니스 로직과 데이터 접근
 

@@ -181,3 +181,38 @@ class WorkItemPrerequisiteIncompleteError(Exception):
     def __init__(self, item_id: str) -> None:
         self.item_id = item_id
         super().__init__(item_id)
+
+
+@dataclass(frozen=True)
+class WorkItemCompleteCommand:
+    """Principal-owned request to complete the current running work item."""
+
+    completed_by: str
+    demo_run_id: str | None
+
+
+class WorkItemNotStartedError(Exception):
+    """The current READY item must be started before it can complete."""
+
+    def __init__(self, *, item_id: str, current_item_id: str | None) -> None:
+        self.item_id = item_id
+        self.current_item_id = current_item_id
+        super().__init__(item_id)
+
+
+class WorkItemNotCurrentError(Exception):
+    """Only the current running work item can be completed."""
+
+    def __init__(self, *, item_id: str, current_item_id: str | None) -> None:
+        self.item_id = item_id
+        self.current_item_id = current_item_id
+        super().__init__(item_id)
+
+
+class DemoRunInvalidError(Exception):
+    """The requested demo run is absent, belongs to another request, or did not succeed."""
+
+    def __init__(self, *, item_id: str, demo_run_id: str) -> None:
+        self.item_id = item_id
+        self.demo_run_id = demo_run_id
+        super().__init__(demo_run_id)

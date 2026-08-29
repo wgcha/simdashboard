@@ -14,6 +14,7 @@ from ...domains.workbench.models import (
     RequestTypeResolutionRead,
     RequestTypeVersionRead,
     TaskTypeVersionRead,
+    WorkItemCompleteCommand,
     WorkItemLifecycleState,
     WorkItemProgressCommand,
     WorkItemStartCommand,
@@ -192,20 +193,6 @@ class _SQLWorkbenchWorkItemLifecycleAdapter:
     def sync_request_status(self, request_id: str) -> WorkPlanMonitoringSummaryRead:
         return _work_plan_monitoring_summary_read(sync_request_status(self._connection, request_id))
 
-
-class SQLWorkbenchWorkItemProgressCommand(_SQLWorkbenchWorkItemLifecycleAdapter):
-    """Persist a monotonic progress update on the lifecycle connection."""
-
-    def update_work_item_progress(self, item_id: str, command: WorkItemProgressCommand) -> None:
-        self._connection.execute(
-            "UPDATE request_work_items SET progress=?, progress_updated_by=?, progress_updated_at=? WHERE id=?",
-            [command.progress, command.updated_by, _utcnow_naive(), item_id],
-        )
-
-
-class SQLWorkbenchWorkItemStartCommand(_SQLWorkbenchWorkItemLifecycleAdapter):
-    """Persist the existing sequential READY-to-IN_PROGRESS start transition."""
-
     def current_work_item_id(self, request_id: str) -> str | None:
         row = self._connection.execute(
             """
@@ -229,6 +216,20 @@ class SQLWorkbenchWorkItemStartCommand(_SQLWorkbenchWorkItemLifecycleAdapter):
             ).fetchone()[0]
         )
 
+
+class SQLWorkbenchWorkItemProgressCommand(_SQLWorkbenchWorkItemLifecycleAdapter):
+    """Persist a monotonic progress update on the lifecycle connection."""
+
+    def update_work_item_progress(self, item_id: str, command: WorkItemProgressCommand) -> None:
+        self._connection.execute(
+            "UPDATE request_work_items SET progress=?, progress_updated_by=?, progress_updated_at=? WHERE id=?",
+            [command.progress, command.updated_by, _utcnow_naive(), item_id],
+        )
+
+
+class SQLWorkbenchWorkItemStartCommand(_SQLWorkbenchWorkItemLifecycleAdapter):
+    """Persist the existing sequential READY-to-IN_PROGRESS start transition."""
+
     def start_work_item(self, item_id: str, command: WorkItemStartCommand) -> None:
         now = _utcnow_naive()
         self._connection.execute(
@@ -238,4 +239,43 @@ class SQLWorkbenchWorkItemStartCommand(_SQLWorkbenchWorkItemLifecycleAdapter):
             WHERE id = ? AND status = 'READY'
             """,
             [command.started_by, now, command.started_by, now, item_id],
+        )
+
+
+class SQLWorkbenchWorkItemCompleteCommand(_SQLWorkbenchWorkItemLifecycleAdapter):
+    """Persist completion, optional demo-run link, and the next READY transition."""
+
+    def demo_run_is_succeeded_for_request(self, demo_run_id: str, request_id: str) -> bool:
+        run = self._connection.execute(
+            "SELECT request_id, status FROM workflow_runs WHERE id = ?",
+            [demo_run_id],
+        ).fetchone()
+        return bool(run and run[0] == request_id and run[1] == "SUCCEEDED")
+
+    def complete_work_item(self, item_id: str, command: WorkItemCompleteCommand) -> None:
+        now = _utcnow_naive()
+        self._connection.execute(
+            """
+            UPDATE request_work_items
+            SET status = 'COMPLETED', progress = 100, progress_updated_by = ?, progress_updated_at = ?, completed_by = ?, completed_at = ?, demo_run_id = ?
+            WHERE id = ? AND status = 'IN_PROGRESS'
+            """,
+            [command.completed_by, now, command.completed_by, now, command.demo_run_id, item_id],
+        )
+
+    def next_waiting_work_item_id(self, request_id: str, sequence_no: int) -> str | None:
+        row = self._connection.execute(
+            """
+            SELECT id FROM request_work_items
+            WHERE request_id = ? AND sequence_no > ? AND status = 'WAITING'
+            ORDER BY sequence_no LIMIT 1
+            """,
+            [request_id, sequence_no],
+        ).fetchone()
+        return str(row[0]) if row else None
+
+    def mark_work_item_ready(self, item_id: str) -> None:
+        self._connection.execute(
+            "UPDATE request_work_items SET status = 'READY' WHERE id = ? AND status = 'WAITING'",
+            [item_id],
         )
