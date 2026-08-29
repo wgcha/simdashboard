@@ -377,7 +377,10 @@ domain error로 번역해 기존 HTTP status/detail을 보존한다. 첫 lifecyc
 `PATCH /api/workbench/work-items/{item_id}/progress`는 typed command/state/error, framework-neutral use case,
 command port와 same-connection SQL adapter로 분리했다. router는 principal actor·assigned permission·override audit·HTTP
 mapping·transaction boundary를 유지하고, use case는 item read → authorize → audit → running-state/no-op/monotonic
-check → UPDATE → canonical status sync 순서를 보존한다. start/complete/reassign/batch는 이 slice에 포함하지 않는다.
+check → UPDATE → canonical status sync 순서를 보존한다. 다음 `POST /api/workbench/work-items/{item_id}/start`는 같은
+private lifecycle adapter/UoW·monitoring facade를 재사용해 typed start command/state/error와 use case로 분리했다.
+기존 idempotent monitoring, current-item priority, prior-incomplete guard, principal timestamped READY-to-IN_PROGRESS
+transition 및 status sync 순서를 유지한다. complete/reassign/batch는 이 slice에 포함하지 않는다.
 
 각 slice는 `HTTP → application → domain port → adapter`를 갖고 router `.execute()`를 0으로 유지한다.
 

@@ -115,18 +115,19 @@ class WorkItemProgressCommand:
 
 
 @dataclass(frozen=True)
-class WorkItemProgressState:
-    """Minimal persisted state needed by the progress transition."""
+class WorkItemLifecycleState:
+    """Minimal persisted state shared by work-item lifecycle transitions."""
 
     id: str
     request_id: str
     status: str
     progress: int
+    sequence_no: int
 
 
 @dataclass(frozen=True)
-class WorkItemProgressResult:
-    """Canonical request monitoring projection after a progress command."""
+class WorkItemLifecycleResult:
+    """Canonical request monitoring projection after a lifecycle command."""
 
     request_id: str
     summary: WorkPlanMonitoringSummaryRead
@@ -156,3 +157,27 @@ class WorkItemProgressNotMonotonicError(Exception):
         self.current = current
         self.requested = requested
         super().__init__(f"{current}->{requested}")
+
+
+@dataclass(frozen=True)
+class WorkItemStartCommand:
+    """Principal-owned request to start the next ready work item."""
+
+    started_by: str
+
+
+class WorkItemNotReadyError(Exception):
+    """The requested item is not the ready item eligible to start."""
+
+    def __init__(self, *, item_id: str, current_item_id: str | None) -> None:
+        self.item_id = item_id
+        self.current_item_id = current_item_id
+        super().__init__(item_id)
+
+
+class WorkItemPrerequisiteIncompleteError(Exception):
+    """An earlier work item remains incomplete."""
+
+    def __init__(self, item_id: str) -> None:
+        self.item_id = item_id
+        super().__init__(item_id)

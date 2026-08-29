@@ -7,8 +7,9 @@ from .models import (
     RequestTypeResolutionRead,
     RequestTypeVersionRead,
     TaskTypeVersionRead,
+    WorkItemLifecycleState,
     WorkItemProgressCommand,
-    WorkItemProgressState,
+    WorkItemStartCommand,
     WorkPlanMonitoringSummaryRead,
 )
 
@@ -50,7 +51,7 @@ class WorkbenchRequestTypeAssignmentCommandPort(Protocol):
 class WorkbenchWorkItemProgressCommandPort(Protocol):
     """Same-connection persistence operations for progress updates."""
 
-    def work_item(self, item_id: str) -> WorkItemProgressState | None: ...
+    def work_item(self, item_id: str) -> WorkItemLifecycleState | None: ...
 
     def request_monitoring_summary(self, request_id: str) -> WorkPlanMonitoringSummaryRead: ...
 
@@ -59,5 +60,21 @@ class WorkbenchWorkItemProgressCommandPort(Protocol):
         item_id: str,
         command: WorkItemProgressCommand,
     ) -> None: ...
+
+    def sync_request_status(self, request_id: str) -> WorkPlanMonitoringSummaryRead: ...
+
+
+class WorkbenchWorkItemStartCommandPort(Protocol):
+    """Same-connection persistence operations for the start transition."""
+
+    def work_item(self, item_id: str) -> WorkItemLifecycleState | None: ...
+
+    def request_monitoring_summary(self, request_id: str) -> WorkPlanMonitoringSummaryRead: ...
+
+    def current_work_item_id(self, request_id: str) -> str | None: ...
+
+    def incomplete_prior_count(self, request_id: str, sequence_no: int) -> int: ...
+
+    def start_work_item(self, item_id: str, command: WorkItemStartCommand) -> None: ...
 
     def sync_request_status(self, request_id: str) -> WorkPlanMonitoringSummaryRead: ...

@@ -12,7 +12,7 @@ from app.domains.workbench.models import (
     WorkItemNotInProgressError,
     WorkItemProgressCommand,
     WorkItemProgressNotMonotonicError,
-    WorkItemProgressState,
+    WorkItemLifecycleState,
     WorkPlanMonitoringSummaryRead,
 )
 
@@ -40,11 +40,11 @@ def _command(progress: int = 60) -> WorkItemProgressCommand:
 
 
 class _ProgressPort:
-    def __init__(self, item: WorkItemProgressState | None) -> None:
+    def __init__(self, item: WorkItemLifecycleState | None) -> None:
         self.item = item
         self.events: list[str] = []
 
-    def work_item(self, item_id: str) -> WorkItemProgressState | None:
+    def work_item(self, item_id: str) -> WorkItemLifecycleState | None:
         assert item_id == "item-1"
         self.events.append("read")
         return self.item
@@ -65,8 +65,8 @@ class _ProgressPort:
         return _summary()
 
 
-def _in_progress(progress: int = 40) -> WorkItemProgressState:
-    return WorkItemProgressState("item-1", "request-1", "IN_PROGRESS", progress)
+def _in_progress(progress: int = 40) -> WorkItemLifecycleState:
+    return WorkItemLifecycleState("item-1", "request-1", "IN_PROGRESS", progress, 1)
 
 
 def test_work_item_progress_command_preserves_read_authorize_audit_update_sync_order() -> None:
@@ -135,11 +135,11 @@ def test_work_item_progress_stops_after_authorization_failure_before_audit_or_wr
     ("item", "command", "error", "events"),
     [
         (_in_progress(), _command(30), WorkItemProgressNotMonotonicError, ["read", "authorize", "audit"]),
-        (WorkItemProgressState("item-1", "request-1", "READY", 0), _command(), WorkItemNotInProgressError, ["read", "authorize", "audit"]),
+        (WorkItemLifecycleState("item-1", "request-1", "READY", 0, 1), _command(), WorkItemNotInProgressError, ["read", "authorize", "audit"]),
     ],
 )
 def test_work_item_progress_rejects_invalid_state_before_any_summary_or_update(
-    item: WorkItemProgressState,
+    item: WorkItemLifecycleState,
     command: WorkItemProgressCommand,
     error: type[Exception],
     events: list[str],
@@ -182,7 +182,7 @@ def test_sql_progress_adapter_uses_one_connection_for_uow_read_update_and_monito
 
         def work_item(self, item_id: str) -> dict[str, object]:
             calls.append(("read", item_id))
-            return {"id": item_id, "request_id": "request-1", "status": "IN_PROGRESS", "progress": 40}
+            return {"id": item_id, "request_id": "request-1", "status": "IN_PROGRESS", "progress": 40, "sequence_no": 1}
 
     monkeypatch.setattr(workbench_persistence, "WorkbenchRepository", _Repository)
     monkeypatch.setattr(workbench_persistence, "_utcnow_naive", lambda: datetime(2026, 8, 30, 10, 0, 0))

@@ -14,8 +14,9 @@ from ...domains.workbench.models import (
     RequestTypeResolutionRead,
     RequestTypeVersionRead,
     TaskTypeVersionRead,
+    WorkItemLifecycleState,
     WorkItemProgressCommand,
-    WorkItemProgressState,
+    WorkItemStartCommand,
     WorkPlanMonitoringSummaryRead,
 )
 from ...repositories.workbench import WorkbenchRepository
@@ -157,8 +158,8 @@ class SQLWorkbenchRequestTypeAssignmentCommand:
         return _request_type_resolution_read(stored)
 
 
-class SQLWorkbenchWorkItemProgressCommand:
-    """Keep the legacy work-item read/UoW and monitoring services on one connection."""
+class _SQLWorkbenchWorkItemLifecycleAdapter:
+    """Shared same-connection repository UoW and monitoring facade for lifecycle commands."""
 
     def __init__(self, connection: ConnectionLike) -> None:
         self._connection = connection
@@ -173,19 +174,27 @@ class SQLWorkbenchWorkItemProgressCommand:
     def rollback_transaction(self) -> None:
         self._repository.rollback_transaction()
 
-    def work_item(self, item_id: str) -> WorkItemProgressState | None:
+    def work_item(self, item_id: str) -> WorkItemLifecycleState | None:
         stored = self._repository.work_item(item_id)
         if stored is None:
             return None
-        return WorkItemProgressState(
+        return WorkItemLifecycleState(
             id=str(stored["id"]),
             request_id=str(stored["request_id"]),
             status=str(stored["status"]),
             progress=int(stored.get("progress") or 0),
+            sequence_no=int(stored["sequence_no"]),
         )
 
     def request_monitoring_summary(self, request_id: str) -> WorkPlanMonitoringSummaryRead:
         return _work_plan_monitoring_summary_read(request_monitoring_summary(self._connection, request_id))
+
+    def sync_request_status(self, request_id: str) -> WorkPlanMonitoringSummaryRead:
+        return _work_plan_monitoring_summary_read(sync_request_status(self._connection, request_id))
+
+
+class SQLWorkbenchWorkItemProgressCommand(_SQLWorkbenchWorkItemLifecycleAdapter):
+    """Persist a monotonic progress update on the lifecycle connection."""
 
     def update_work_item_progress(self, item_id: str, command: WorkItemProgressCommand) -> None:
         self._connection.execute(
@@ -193,5 +202,40 @@ class SQLWorkbenchWorkItemProgressCommand:
             [command.progress, command.updated_by, _utcnow_naive(), item_id],
         )
 
-    def sync_request_status(self, request_id: str) -> WorkPlanMonitoringSummaryRead:
-        return _work_plan_monitoring_summary_read(sync_request_status(self._connection, request_id))
+
+class SQLWorkbenchWorkItemStartCommand(_SQLWorkbenchWorkItemLifecycleAdapter):
+    """Persist the existing sequential READY-to-IN_PROGRESS start transition."""
+
+    def current_work_item_id(self, request_id: str) -> str | None:
+        row = self._connection.execute(
+            """
+            SELECT id FROM request_work_items
+            WHERE request_id = ? AND status IN ('IN_PROGRESS', 'READY')
+            ORDER BY CASE WHEN status = 'IN_PROGRESS' THEN 0 ELSE 1 END, sequence_no
+            LIMIT 1
+            """,
+            [request_id],
+        ).fetchone()
+        return str(row[0]) if row else None
+
+    def incomplete_prior_count(self, request_id: str, sequence_no: int) -> int:
+        return int(
+            self._connection.execute(
+                """
+                SELECT count(*) FROM request_work_items
+                WHERE request_id = ? AND sequence_no < ? AND status <> 'COMPLETED'
+                """,
+                [request_id, sequence_no],
+            ).fetchone()[0]
+        )
+
+    def start_work_item(self, item_id: str, command: WorkItemStartCommand) -> None:
+        now = _utcnow_naive()
+        self._connection.execute(
+            """
+            UPDATE request_work_items
+            SET status = 'IN_PROGRESS', progress = 1, progress_updated_by = ?, progress_updated_at = ?, started_by = ?, started_at = ?
+            WHERE id = ? AND status = 'READY'
+            """,
+            [command.started_by, now, command.started_by, now, item_id],
+        )

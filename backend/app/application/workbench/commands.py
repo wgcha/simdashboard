@@ -8,15 +8,19 @@ from ...domains.workbench.models import (
     RequestTypeAssignmentCommand,
     RequestTypeResolutionRead,
     RequestWorkPlanImmutableError,
+    WorkItemLifecycleResult,
     WorkItemNotFoundError,
     WorkItemNotInProgressError,
+    WorkItemNotReadyError,
+    WorkItemPrerequisiteIncompleteError,
     WorkItemProgressCommand,
     WorkItemProgressNotMonotonicError,
-    WorkItemProgressResult,
+    WorkItemStartCommand,
 )
 from ...domains.workbench.ports import (
     WorkbenchRequestTypeAssignmentCommandPort,
     WorkbenchWorkItemProgressCommandPort,
+    WorkbenchWorkItemStartCommandPort,
 )
 
 
@@ -38,7 +42,7 @@ def update_workbench_work_item_progress(
     *,
     authorize: Callable[[], None],
     audit: Callable[[], None],
-) -> WorkItemProgressResult:
+) -> WorkItemLifecycleResult:
     """Preserve the work-item read, authorization, audit, and sync order."""
     item = command_port.work_item(item_id)
     if item is None:
@@ -49,7 +53,7 @@ def update_workbench_work_item_progress(
     if item.status != "IN_PROGRESS":
         raise WorkItemNotInProgressError(item_id)
     if command.progress == item.progress:
-        return WorkItemProgressResult(
+        return WorkItemLifecycleResult(
             request_id=item.request_id,
             summary=command_port.request_monitoring_summary(item.request_id),
             changed=False,
@@ -61,8 +65,45 @@ def update_workbench_work_item_progress(
         )
 
     command_port.update_work_item_progress(item_id, command)
-    return WorkItemProgressResult(
+    return WorkItemLifecycleResult(
         request_id=item.request_id,
         summary=command_port.sync_request_status(item.request_id),
+        changed=True,
+    )
+
+
+def start_workbench_work_item(
+    command_port: WorkbenchWorkItemStartCommandPort,
+    item_id: str,
+    command: WorkItemStartCommand,
+    *,
+    authorize: Callable[[], None],
+    audit: Callable[[], None],
+) -> WorkItemLifecycleResult:
+    """Preserve the existing sequential ready-to-running start transition."""
+    item = command_port.work_item(item_id)
+    if item is None:
+        raise WorkItemNotFoundError(item_id)
+
+    authorize()
+    audit()
+    request_id = item.request_id
+    if item.status in {"IN_PROGRESS", "COMPLETED"}:
+        return WorkItemLifecycleResult(
+            request_id=request_id,
+            summary=command_port.request_monitoring_summary(request_id),
+            changed=False,
+        )
+
+    current_item_id = command_port.current_work_item_id(request_id)
+    if item.status != "READY" or current_item_id != item_id:
+        raise WorkItemNotReadyError(item_id=item_id, current_item_id=current_item_id)
+    if command_port.incomplete_prior_count(request_id, item.sequence_no):
+        raise WorkItemPrerequisiteIncompleteError(item_id)
+
+    command_port.start_work_item(item_id, command)
+    return WorkItemLifecycleResult(
+        request_id=request_id,
+        summary=command_port.sync_request_status(request_id),
         changed=True,
     )

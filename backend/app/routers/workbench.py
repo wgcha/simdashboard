@@ -13,9 +13,11 @@ from ..adapters.persistence.workbench import (
     SQLWorkbenchRequestWorkPlanQuery,
     SQLWorkbenchRequestTypeResolutionQuery,
     SQLWorkbenchWorkItemProgressCommand,
+    SQLWorkbenchWorkItemStartCommand,
 )
 from ..application.workbench.commands import (
     assign_workbench_request_type,
+    start_workbench_work_item,
     update_workbench_work_item_progress,
 )
 from ..application.workbench.queries import (
@@ -33,6 +35,9 @@ from ..domains.workbench.models import (
     WorkItemNotInProgressError,
     WorkItemProgressCommand,
     WorkItemProgressNotMonotonicError,
+    WorkItemNotReadyError,
+    WorkItemPrerequisiteIncompleteError,
+    WorkItemStartCommand,
 )
 from ..modules.access_control import (
     DASHBOARD_EDIT,
@@ -738,73 +743,42 @@ def start_work_item(item_id: str, payload: WorkItemStart, request: Request) -> d
     principal = request.state.principal
     started_by = principal.display_name
     with connect() as conn:
-        repository = WorkbenchRepository(conn)
-        repository.begin_transaction()
+        command_port = SQLWorkbenchWorkItemStartCommand(conn)
+        command_port.begin_transaction()
         try:
-            items = rows(conn.execute("SELECT * FROM request_work_items WHERE id = ?", [item_id]))
-            if not items:
-                raise HTTPException(
-                    404,
-                    detail={"code": "WORK_ITEM_NOT_FOUND", "item_id": item_id},
-                )
-            item = items[0]
-            require_assigned_work_item(request, item_id, conn=conn)
-            _audit_execution_override(request, conn, "start")
-            request_id = item["request_id"]
-            if item["status"] in {"IN_PROGRESS", "COMPLETED"}:
-                summary = request_monitoring_summary(conn, request_id)
-                repository.commit_transaction()
-                return {"request_id": request_id, **summary}
-
-            current_row = conn.execute(
-                """
-                SELECT id FROM request_work_items
-                WHERE request_id = ? AND status IN ('IN_PROGRESS', 'READY')
-                ORDER BY CASE WHEN status = 'IN_PROGRESS' THEN 0 ELSE 1 END, sequence_no
-                LIMIT 1
-                """,
-                [request_id],
-            ).fetchone()
-            current_item_id = current_row[0] if current_row else None
-            if item["status"] != "READY" or current_item_id != item_id:
-                raise HTTPException(
-                    409,
-                    detail={
-                        "code": "WORK_ITEM_NOT_READY",
-                        "item_id": item_id,
-                        "current_item_id": current_item_id,
-                    },
-                )
-            incomplete_prior = conn.execute(
-                """
-                SELECT count(*) FROM request_work_items
-                WHERE request_id = ? AND sequence_no < ? AND status <> 'COMPLETED'
-                """,
-                [request_id, item["sequence_no"]],
-            ).fetchone()[0]
-            if incomplete_prior:
-                raise HTTPException(
-                    409,
-                    detail={"code": "WORK_ITEM_PREREQUISITE_INCOMPLETE", "item_id": item_id},
-                )
-
-            now = datetime.now(timezone.utc).replace(tzinfo=None)
-            conn.execute(
-                """
-                UPDATE request_work_items
-                SET status = 'IN_PROGRESS', progress = 1, progress_updated_by = ?, progress_updated_at = ?, started_by = ?, started_at = ?
-                WHERE id = ? AND status = 'READY'
-                """,
-                [started_by, now, started_by, now, item_id],
+            result = start_workbench_work_item(
+                command_port,
+                item_id,
+                WorkItemStartCommand(started_by=started_by),
+                authorize=lambda: require_assigned_work_item(request, item_id, conn=conn),
+                audit=lambda: _audit_execution_override(request, conn, "start"),
             )
-            summary = sync_request_status(conn, request_id)
-            repository.commit_transaction()
-            return {"request_id": request_id, **summary}
+            command_port.commit_transaction()
+            return {"request_id": result.request_id, **result.summary}
+        except WorkItemNotFoundError as exc:
+            command_port.rollback_transaction()
+            raise HTTPException(404, detail={"code": "WORK_ITEM_NOT_FOUND", "item_id": exc.item_id}) from exc
+        except WorkItemNotReadyError as exc:
+            command_port.rollback_transaction()
+            raise HTTPException(
+                409,
+                detail={
+                    "code": "WORK_ITEM_NOT_READY",
+                    "item_id": exc.item_id,
+                    "current_item_id": exc.current_item_id,
+                },
+            ) from exc
+        except WorkItemPrerequisiteIncompleteError as exc:
+            command_port.rollback_transaction()
+            raise HTTPException(
+                409,
+                detail={"code": "WORK_ITEM_PREREQUISITE_INCOMPLETE", "item_id": exc.item_id},
+            ) from exc
         except HTTPException:
-            repository.rollback_transaction()
+            command_port.rollback_transaction()
             raise
         except Exception:
-            repository.rollback_transaction()
+            command_port.rollback_transaction()
             raise
 
 

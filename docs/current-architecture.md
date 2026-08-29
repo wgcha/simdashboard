@@ -89,7 +89,11 @@ single source of truth로 남긴다. 첫 lifecycle command 단위인 `PATCH /api
 typed command/state/error와 command port/use case/SQL adapter로 옮겼다. router는 principal actor, assigned-work
 permission과 override audit, HTTP 오류 및 transaction commit/rollback만 유지한다. application은 item read → authorize
 → audit → IN_PROGRESS → no-op monitoring 또는 monotonic UPDATE → canonical status sync 순서를 소유하며, adapter는
-기존 work-item read/UoW와 monitoring service를 같은 connection으로 감싼다. start/complete/reassign/batch는 후속이다.
+기존 work-item read/UoW와 monitoring service를 같은 connection으로 감싼다. 이어서
+`POST /api/workbench/work-items/{item_id}/start`도 같은 private lifecycle adapter 기반으로 분리했다. application은
+item read → authorize → audit → idempotent monitoring 또는 current ready item → prior-incomplete → READY-to-IN_PROGRESS
+transition → canonical status sync 순서를 소유한다. router의 principal actor, HTTP mapping 및 commit/rollback은 유지한다.
+complete/reassign/batch는 후속이다.
 
 ### 3.2 비즈니스 로직과 데이터 접근
 
