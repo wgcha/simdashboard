@@ -10,8 +10,10 @@ from ...domains.workbench.models import (
     RequestTypeResolutionRead,
     RequestTypeVersionRead,
     TaskTypeVersionRead,
+    WorkPlanMonitoringSummaryRead,
 )
 from ...repositories.workbench import WorkbenchRepository
+from ...services.request_monitoring import request_monitoring_summary
 
 
 def _task_type_read(item: dict[str, Any]) -> TaskTypeVersionRead:
@@ -78,3 +80,36 @@ class SQLWorkbenchRequestTypeResolutionQuery:
             "decided_by": str(stored["decided_by"]) if stored["decided_by"] is not None else None,
             "decided_at": stored["decided_at"],
         }
+
+
+def _work_plan_monitoring_summary_read(stored: dict[str, Any]) -> WorkPlanMonitoringSummaryRead:
+    return {
+        "status": str(stored["status"]),
+        "progress": int(stored["progress"]),
+        "current_step": str(stored["current_step"]) if stored["current_step"] is not None else None,
+        "current_step_id": str(stored["current_step_id"]) if stored["current_step_id"] is not None else None,
+        "completed_count": int(stored["completed_count"]) if stored["completed_count"] is not None else None,
+        "total_count": int(stored["total_count"]) if stored["total_count"] is not None else None,
+        "work_plan": dict(stored["work_plan"]) if stored["work_plan"] is not None else None,
+        "steps": [dict(item) for item in stored["steps"]],
+        "latest_demo_run": dict(stored["latest_demo_run"]) if stored["latest_demo_run"] is not None else None,
+        "request_type_assignment": (
+            dict(stored["request_type_assignment"])
+            if stored["request_type_assignment"] is not None
+            else None
+        ),
+    }
+
+
+class SQLWorkbenchRequestWorkPlanQuery:
+    """Adapt the existing request check and canonical monitoring projection."""
+
+    def __init__(self, connection: ConnectionLike) -> None:
+        self._connection = connection
+        self._repository = WorkbenchRepository(connection)
+
+    def analysis_request_exists(self, request_id: str) -> bool:
+        return self._repository.analysis_request_exists(request_id)
+
+    def request_monitoring_summary(self, request_id: str) -> WorkPlanMonitoringSummaryRead:
+        return _work_plan_monitoring_summary_read(request_monitoring_summary(self._connection, request_id))

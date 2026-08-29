@@ -49,3 +49,28 @@ class RequestTypeResolutionRead(TypedDict):
     candidates: list[RequestTypeVersionRead]
     decided_by: str | None
     decided_at: datetime | None
+
+
+class WorkPlanMonitoringSummaryRead(TypedDict):
+    """Canonical monitoring projection shared by workbench and portfolio reads."""
+
+    status: str
+    progress: int
+    current_step: str | None
+    current_step_id: str | None
+    completed_count: int | None
+    total_count: int | None
+    work_plan: dict[str, Any] | None
+    steps: list[dict[str, Any]]
+    latest_demo_run: dict[str, Any] | None
+    request_type_assignment: dict[str, Any] | None
+
+
+RequestWorkPlanReadStatus = Literal["FOUND", "REQUEST_NOT_FOUND", "WORK_PLAN_NOT_FOUND"]
+
+
+class RequestWorkPlanRead(TypedDict):
+    """Transport-neutral outcome for the request work-plan read."""
+
+    status: RequestWorkPlanReadStatus
+    summary: WorkPlanMonitoringSummaryRead | None

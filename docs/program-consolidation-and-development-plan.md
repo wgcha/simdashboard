@@ -367,7 +367,10 @@ read-only 단위로 업무 유형·의뢰 유형 catalog GET 두 개를 framewor
 read model/port, SQL adapter로 옮겼다. `all_versions` 선택, active/latest 및 history 정렬, decoded JSON
 응답과 기존 route/OpenAPI 순서는 유지한다. 다음으로 단일 request-type resolution GET을 같은 경계로 옮겨
 context → assignment → assigned type 또는 active catalog rule 순서, 네 상태 응답, missing-request 404와
-무인증 read를 보존했다. request work-plan, batch 실행, 결과 snapshot과 변경 endpoint는 후속 단위다.
+무인증 read를 보존했다. 이어서 단일 request work-plan GET은 request 존재 확인 → canonical monitoring summary
+순서와 두 not-found 상태, 성공 payload를 framework-neutral outcome/port로 명시했다. monitoring 계산은 기존
+service에 남겨 shared projection의 single source of truth를 유지한다. batch 실행, 결과 snapshot과 변경 endpoint는
+후속 단위다.
 
 각 slice는 `HTTP → application → domain port → adapter`를 갖고 router `.execute()`를 0으로 유지한다.
 

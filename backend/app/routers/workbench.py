@@ -9,11 +9,13 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from ..adapters.persistence.workbench import (
     SQLWorkbenchCatalogQuery,
+    SQLWorkbenchRequestWorkPlanQuery,
     SQLWorkbenchRequestTypeResolutionQuery,
 )
 from ..application.workbench.queries import (
     list_workbench_request_types,
     list_workbench_task_types,
+    get_workbench_request_work_plan,
     resolve_workbench_request_type,
 )
 from ..modules.access_control import (
@@ -638,17 +640,19 @@ def get_demo_run(run_id: str, request: Request) -> dict[str, Any]:
 @router.get("/workbench/requests/{request_id}/work-plan")
 def get_request_work_plan(request_id: str) -> dict[str, Any]:
     with connect() as conn:
-        if not WorkbenchRepository(conn).analysis_request_exists(request_id):
+        result = get_workbench_request_work_plan(SQLWorkbenchRequestWorkPlanQuery(conn), request_id)
+        if result["status"] == "REQUEST_NOT_FOUND":
             raise HTTPException(
                 404,
                 detail={"code": "REQUEST_NOT_FOUND", "request_id": request_id},
             )
-        summary = request_monitoring_summary(conn, request_id)
-        if not summary["work_plan"]:
+        if result["status"] == "WORK_PLAN_NOT_FOUND":
             raise HTTPException(
                 404,
                 detail={"code": "WORK_PLAN_NOT_FOUND", "request_id": request_id},
             )
+        summary = result["summary"]
+        assert summary is not None
         return {"request_id": request_id, **summary}
 
 

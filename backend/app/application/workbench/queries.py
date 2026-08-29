@@ -5,10 +5,12 @@ from __future__ import annotations
 from ...domains.workbench.models import (
     RequestTypeResolutionRead,
     RequestTypeVersionRead,
+    RequestWorkPlanRead,
     TaskTypeVersionRead,
 )
 from ...domains.workbench.ports import (
     WorkbenchCatalogQueryPort,
+    WorkbenchRequestWorkPlanQueryPort,
     WorkbenchRequestTypeResolutionQueryPort,
 )
 
@@ -37,3 +39,16 @@ def resolve_workbench_request_type(
 ) -> RequestTypeResolutionRead:
     """Resolve through the established repository query and decision sequence."""
     return query.request_type_resolution(request_id)
+
+
+def get_workbench_request_work_plan(
+    query: WorkbenchRequestWorkPlanQueryPort,
+    request_id: str,
+) -> RequestWorkPlanRead:
+    """Preserve the legacy existence check before the canonical monitoring read."""
+    if not query.analysis_request_exists(request_id):
+        return {"status": "REQUEST_NOT_FOUND", "summary": None}
+    summary = query.request_monitoring_summary(request_id)
+    if not summary["work_plan"]:
+        return {"status": "WORK_PLAN_NOT_FOUND", "summary": None}
+    return {"status": "FOUND", "summary": summary}

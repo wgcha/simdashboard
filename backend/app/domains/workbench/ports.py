@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from .models import RequestTypeResolutionRead, RequestTypeVersionRead, TaskTypeVersionRead
+from .models import (
+    RequestTypeResolutionRead,
+    RequestTypeVersionRead,
+    TaskTypeVersionRead,
+    WorkPlanMonitoringSummaryRead,
+)
 
 
 class WorkbenchCatalogQueryPort(Protocol):
@@ -17,3 +22,11 @@ class WorkbenchRequestTypeResolutionQueryPort(Protocol):
     """Read port for resolving one request to its immutable type version."""
 
     def request_type_resolution(self, request_id: str) -> RequestTypeResolutionRead: ...
+
+
+class WorkbenchRequestWorkPlanQueryPort(Protocol):
+    """Read port for request existence and its canonical monitoring projection."""
+
+    def analysis_request_exists(self, request_id: str) -> bool: ...
+
+    def request_monitoring_summary(self, request_id: str) -> WorkPlanMonitoringSummaryRead: ...
