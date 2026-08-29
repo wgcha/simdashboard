@@ -7,6 +7,8 @@ from .models import (
     RequestTypeResolutionRead,
     RequestTypeVersionRead,
     TaskTypeVersionRead,
+    WorkItemProgressCommand,
+    WorkItemProgressState,
     WorkPlanMonitoringSummaryRead,
 )
 
@@ -43,3 +45,19 @@ class WorkbenchRequestTypeAssignmentCommandPort(Protocol):
         request_id: str,
         command: RequestTypeAssignmentCommand,
     ) -> RequestTypeResolutionRead: ...
+
+
+class WorkbenchWorkItemProgressCommandPort(Protocol):
+    """Same-connection persistence operations for progress updates."""
+
+    def work_item(self, item_id: str) -> WorkItemProgressState | None: ...
+
+    def request_monitoring_summary(self, request_id: str) -> WorkPlanMonitoringSummaryRead: ...
+
+    def update_work_item_progress(
+        self,
+        item_id: str,
+        command: WorkItemProgressCommand,
+    ) -> None: ...
+
+    def sync_request_status(self, request_id: str) -> WorkPlanMonitoringSummaryRead: ...

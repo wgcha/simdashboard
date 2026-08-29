@@ -104,3 +104,55 @@ class RequestTypeAssignmentLockedError(Exception):
 
 class RequestTypeAssignmentTargetNotFoundError(Exception):
     """The request or active immutable request-type version does not exist."""
+
+
+@dataclass(frozen=True)
+class WorkItemProgressCommand:
+    """Actor-owned progress update for an already-started work item."""
+
+    progress: int
+    updated_by: str
+
+
+@dataclass(frozen=True)
+class WorkItemProgressState:
+    """Minimal persisted state needed by the progress transition."""
+
+    id: str
+    request_id: str
+    status: str
+    progress: int
+
+
+@dataclass(frozen=True)
+class WorkItemProgressResult:
+    """Canonical request monitoring projection after a progress command."""
+
+    request_id: str
+    summary: WorkPlanMonitoringSummaryRead
+    changed: bool
+
+
+class WorkItemNotFoundError(Exception):
+    """The requested work item does not exist."""
+
+    def __init__(self, item_id: str) -> None:
+        self.item_id = item_id
+        super().__init__(item_id)
+
+
+class WorkItemNotInProgressError(Exception):
+    """Manual progress is valid only while the item is running."""
+
+    def __init__(self, item_id: str) -> None:
+        self.item_id = item_id
+        super().__init__(item_id)
+
+
+class WorkItemProgressNotMonotonicError(Exception):
+    """A progress update attempted to decrease an existing value."""
+
+    def __init__(self, *, current: int, requested: int) -> None:
+        self.current = current
+        self.requested = requested
+        super().__init__(f"{current}->{requested}")

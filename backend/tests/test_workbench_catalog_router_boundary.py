@@ -14,6 +14,10 @@ from app.main import app
 from app.domains.workbench.models import (
     RequestTypeAssignmentLockedError,
     RequestTypeAssignmentTargetNotFoundError,
+    WorkItemNotFoundError,
+    WorkItemNotInProgressError,
+    WorkItemProgressNotMonotonicError,
+    WorkItemProgressResult,
 )
 from app.routers import workbench
 from scripts.check_openapi_contract import check_contract
@@ -75,6 +79,109 @@ def test_workbench_boundary_handlers_delegate_to_use_cases() -> None:
     assert "WorkbenchRepository" not in inspect.getsource(workbench.resolve_request_type)
     assert "WorkbenchRepository" not in inspect.getsource(workbench.assign_request_type)
     assert "WorkbenchRepository" not in inspect.getsource(workbench.get_request_work_plan)
+
+
+def test_work_item_progress_boundary_delegates_without_direct_sql_or_repository() -> None:
+    tree = ast.parse(inspect.getsource(workbench.update_work_item_progress))
+    assert not any(
+        isinstance(node, ast.Attribute) and node.attr == "execute"
+        for node in ast.walk(tree)
+    )
+    assert "WorkbenchRepository" not in inspect.getsource(workbench.update_work_item_progress)
+    assert (
+        app.openapi()["paths"]["/api/workbench/work-items/{item_id}/progress"]["patch"]["operationId"]
+        == "update_work_item_progress_api_workbench_work_items__item_id__progress_patch"
+    )
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_status", "expected_detail"),
+    [
+        (WorkItemNotFoundError("item-1"), 404, {"code": "WORK_ITEM_NOT_FOUND", "item_id": "item-1"}),
+        (WorkItemNotInProgressError("item-1"), 409, {"code": "WORK_ITEM_NOT_IN_PROGRESS", "item_id": "item-1"}),
+        (
+            WorkItemProgressNotMonotonicError(current=40, requested=30),
+            409,
+            {"code": "WORK_ITEM_PROGRESS_NOT_MONOTONIC", "current": 40, "requested": 30},
+        ),
+    ],
+)
+def test_work_item_progress_router_preserves_error_mapping_and_rollback(
+    monkeypatch,
+    error: Exception,
+    expected_status: int,
+    expected_detail: object,
+) -> None:
+    events: list[str] = []
+
+    class _Adapter:
+        def __init__(self, _connection: object) -> None:
+            pass
+
+        def begin_transaction(self) -> None:
+            events.append("begin")
+
+        def commit_transaction(self) -> None:
+            events.append("commit")
+
+        def rollback_transaction(self) -> None:
+            events.append("rollback")
+
+    def _raise(*_args: object, **_kwargs: object) -> WorkItemProgressResult:
+        raise error
+
+    monkeypatch.setattr(workbench, "SQLWorkbenchWorkItemProgressCommand", _Adapter)
+    monkeypatch.setattr(workbench, "update_workbench_work_item_progress", _raise)
+
+    with TestClient(app) as client:
+        response = client.patch(
+            "/api/workbench/work-items/item-1/progress",
+            json={"progress": 30, "updated_by": "payload actor"},
+        )
+
+    assert response.status_code == expected_status
+    assert response.json() == {"detail": expected_detail}
+    assert events == ["begin", "rollback"]
+
+
+def test_work_item_progress_router_uses_the_principal_actor_not_the_payload_actor(monkeypatch) -> None:
+    events: list[str] = []
+
+    class _Adapter:
+        def __init__(self, _connection: object) -> None:
+            pass
+
+        def begin_transaction(self) -> None:
+            events.append("begin")
+
+        def commit_transaction(self) -> None:
+            events.append("commit")
+
+        def rollback_transaction(self) -> None:
+            events.append("rollback")
+
+    def _success(_port: object, item_id: str, command: object, **_kwargs: object) -> WorkItemProgressResult:
+        assert item_id == "item-1"
+        assert getattr(command, "updated_by") == "로컬 관리자"
+        assert getattr(command, "updated_by") != "payload actor"
+        return WorkItemProgressResult(
+            request_id="request-1",
+            summary={"status": "IN_PROGRESS", "progress": 42},  # type: ignore[typeddict-item]
+            changed=True,
+        )
+
+    monkeypatch.setattr(workbench, "SQLWorkbenchWorkItemProgressCommand", _Adapter)
+    monkeypatch.setattr(workbench, "update_workbench_work_item_progress", _success)
+
+    with TestClient(app) as client:
+        response = client.patch(
+            "/api/workbench/work-items/item-1/progress",
+            json={"progress": 42, "updated_by": "payload actor"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"request_id": "request-1", "status": "IN_PROGRESS", "progress": 42}
+    assert events == ["begin", "commit"]
 
 
 def test_request_type_resolution_keeps_the_existing_missing_request_response_without_authentication() -> None:

@@ -373,7 +373,11 @@ service에 남겨 shared projection의 single source of truth를 유지한다. b
 후속 단위다. 단, request-type assignment `PUT`은 별도 command port/use case/SQL adapter로 옮겼다. router는
 principal source·`REQUEST_EDIT`·HTTP 오류 응답을 유지하며, application은 동일 connection의 work-plan immutable
 guard 후 기존 repository assignment를 호출한다. persistence adapter는 repository의 admin lock과 target-not-found를
-domain error로 번역해 기존 HTTP status/detail을 보존한다.
+domain error로 번역해 기존 HTTP status/detail을 보존한다. 첫 lifecycle command slice인
+`PATCH /api/workbench/work-items/{item_id}/progress`는 typed command/state/error, framework-neutral use case,
+command port와 same-connection SQL adapter로 분리했다. router는 principal actor·assigned permission·override audit·HTTP
+mapping·transaction boundary를 유지하고, use case는 item read → authorize → audit → running-state/no-op/monotonic
+check → UPDATE → canonical status sync 순서를 보존한다. start/complete/reassign/batch는 이 slice에 포함하지 않는다.
 
 각 slice는 `HTTP → application → domain port → adapter`를 갖고 router `.execute()`를 0으로 유지한다.
 

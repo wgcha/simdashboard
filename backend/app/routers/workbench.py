@@ -12,8 +12,12 @@ from ..adapters.persistence.workbench import (
     SQLWorkbenchRequestTypeAssignmentCommand,
     SQLWorkbenchRequestWorkPlanQuery,
     SQLWorkbenchRequestTypeResolutionQuery,
+    SQLWorkbenchWorkItemProgressCommand,
 )
-from ..application.workbench.commands import assign_workbench_request_type
+from ..application.workbench.commands import (
+    assign_workbench_request_type,
+    update_workbench_work_item_progress,
+)
 from ..application.workbench.queries import (
     list_workbench_request_types,
     list_workbench_task_types,
@@ -25,6 +29,10 @@ from ..domains.workbench.models import (
     RequestTypeAssignmentLockedError,
     RequestTypeAssignmentTargetNotFoundError,
     RequestWorkPlanImmutableError,
+    WorkItemNotFoundError,
+    WorkItemNotInProgressError,
+    WorkItemProgressCommand,
+    WorkItemProgressNotMonotonicError,
 )
 from ..modules.access_control import (
     DASHBOARD_EDIT,
@@ -805,36 +813,42 @@ def update_work_item_progress(item_id: str, payload: WorkItemProgress, request: 
     principal = request.state.principal
     updated_by = principal.display_name
     with connect() as conn:
-        repository = WorkbenchRepository(conn)
-        repository.begin_transaction()
+        command_port = SQLWorkbenchWorkItemProgressCommand(conn)
+        command_port.begin_transaction()
         try:
-            items = rows(conn.execute("SELECT id, request_id, status, progress, owner FROM request_work_items WHERE id=?", [item_id]))
-            if not items:
-                raise HTTPException(404, detail={"code": "WORK_ITEM_NOT_FOUND", "item_id": item_id})
-            item = items[0]
-            require_assigned_work_item(request, item_id, conn=conn)
-            _audit_execution_override(request, conn, "progress")
-            if item["status"] != "IN_PROGRESS":
-                raise HTTPException(409, detail={"code": "WORK_ITEM_NOT_IN_PROGRESS", "item_id": item_id})
-            current = int(item.get("progress") or 0)
-            if payload.progress == current:
-                summary = request_monitoring_summary(conn, item["request_id"])
-                repository.commit_transaction()
-                return {"request_id": item["request_id"], **summary}
-            if payload.progress < current:
-                raise HTTPException(409, detail={"code": "WORK_ITEM_PROGRESS_NOT_MONOTONIC", "current": current, "requested": payload.progress})
-            conn.execute(
-                "UPDATE request_work_items SET progress=?, progress_updated_by=?, progress_updated_at=? WHERE id=?",
-                [payload.progress, updated_by, datetime.now(timezone.utc).replace(tzinfo=None), item_id],
+            result = update_workbench_work_item_progress(
+                command_port,
+                item_id,
+                WorkItemProgressCommand(
+                    progress=payload.progress,
+                    updated_by=updated_by,
+                ),
+                authorize=lambda: require_assigned_work_item(request, item_id, conn=conn),
+                audit=lambda: _audit_execution_override(request, conn, "progress"),
             )
-            summary = sync_request_status(conn, item["request_id"])
-            repository.commit_transaction()
-            return {"request_id": item["request_id"], **summary}
+            command_port.commit_transaction()
+            return {"request_id": result.request_id, **result.summary}
+        except WorkItemNotFoundError as exc:
+            command_port.rollback_transaction()
+            raise HTTPException(404, detail={"code": "WORK_ITEM_NOT_FOUND", "item_id": exc.item_id}) from exc
+        except WorkItemNotInProgressError as exc:
+            command_port.rollback_transaction()
+            raise HTTPException(409, detail={"code": "WORK_ITEM_NOT_IN_PROGRESS", "item_id": exc.item_id}) from exc
+        except WorkItemProgressNotMonotonicError as exc:
+            command_port.rollback_transaction()
+            raise HTTPException(
+                409,
+                detail={
+                    "code": "WORK_ITEM_PROGRESS_NOT_MONOTONIC",
+                    "current": exc.current,
+                    "requested": exc.requested,
+                },
+            ) from exc
         except HTTPException:
-            repository.rollback_transaction()
+            command_port.rollback_transaction()
             raise
         except Exception:
-            repository.rollback_transaction()
+            command_port.rollback_transaction()
             raise
 
 

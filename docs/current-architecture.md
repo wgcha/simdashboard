@@ -85,7 +85,11 @@ immutable work-plan guard → repository assignment 순서를 소유한다. repo
 resolution SQL은 persistence adapter가 위임해 유지한다. `GET /api/workbench/requests/{request_id}/work-plan`도
 같은 query boundary에서 request 존재 확인 후 기존 canonical monitoring projection을 같은 연결로 호출한다.
 두 not-found 상태와 성공 payload는 HTTP adapter에서 기존 계약으로 변환하며, monitoring 계산 자체는 service의
-single source of truth로 남긴다.
+single source of truth로 남긴다. 첫 lifecycle command 단위인 `PATCH /api/workbench/work-items/{item_id}/progress`는
+typed command/state/error와 command port/use case/SQL adapter로 옮겼다. router는 principal actor, assigned-work
+permission과 override audit, HTTP 오류 및 transaction commit/rollback만 유지한다. application은 item read → authorize
+→ audit → IN_PROGRESS → no-op monitoring 또는 monotonic UPDATE → canonical status sync 순서를 소유하며, adapter는
+기존 work-item read/UoW와 monitoring service를 같은 connection으로 감싼다. start/complete/reassign/batch는 후속이다.
 
 ### 3.2 비즈니스 로직과 데이터 접근
 

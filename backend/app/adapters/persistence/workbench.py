@@ -1,7 +1,8 @@
-"""SQL adapter for immutable workbench catalog reads."""
+"""SQL adapters for isolated workbench query and command boundaries."""
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, cast
 
 from ...database_connection import ConnectionLike
@@ -13,10 +14,16 @@ from ...domains.workbench.models import (
     RequestTypeResolutionRead,
     RequestTypeVersionRead,
     TaskTypeVersionRead,
+    WorkItemProgressCommand,
+    WorkItemProgressState,
     WorkPlanMonitoringSummaryRead,
 )
 from ...repositories.workbench import WorkbenchRepository
-from ...services.request_monitoring import request_monitoring_summary
+from ...services.request_monitoring import request_monitoring_summary, sync_request_status
+
+
+def _utcnow_naive() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _task_type_read(item: dict[str, Any]) -> TaskTypeVersionRead:
@@ -148,3 +155,43 @@ class SQLWorkbenchRequestTypeAssignmentCommand:
         except LookupError as exc:
             raise RequestTypeAssignmentTargetNotFoundError() from exc
         return _request_type_resolution_read(stored)
+
+
+class SQLWorkbenchWorkItemProgressCommand:
+    """Keep the legacy work-item read/UoW and monitoring services on one connection."""
+
+    def __init__(self, connection: ConnectionLike) -> None:
+        self._connection = connection
+        self._repository = WorkbenchRepository(connection)
+
+    def begin_transaction(self) -> None:
+        self._repository.begin_transaction()
+
+    def commit_transaction(self) -> None:
+        self._repository.commit_transaction()
+
+    def rollback_transaction(self) -> None:
+        self._repository.rollback_transaction()
+
+    def work_item(self, item_id: str) -> WorkItemProgressState | None:
+        stored = self._repository.work_item(item_id)
+        if stored is None:
+            return None
+        return WorkItemProgressState(
+            id=str(stored["id"]),
+            request_id=str(stored["request_id"]),
+            status=str(stored["status"]),
+            progress=int(stored.get("progress") or 0),
+        )
+
+    def request_monitoring_summary(self, request_id: str) -> WorkPlanMonitoringSummaryRead:
+        return _work_plan_monitoring_summary_read(request_monitoring_summary(self._connection, request_id))
+
+    def update_work_item_progress(self, item_id: str, command: WorkItemProgressCommand) -> None:
+        self._connection.execute(
+            "UPDATE request_work_items SET progress=?, progress_updated_by=?, progress_updated_at=? WHERE id=?",
+            [command.progress, command.updated_by, _utcnow_naive(), item_id],
+        )
+
+    def sync_request_status(self, request_id: str) -> WorkPlanMonitoringSummaryRead:
+        return _work_plan_monitoring_summary_read(sync_request_status(self._connection, request_id))
