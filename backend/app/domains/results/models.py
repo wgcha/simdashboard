@@ -17,6 +17,28 @@ class ResultIngestionTargetRead:
     load_case_id: str
 
 
+@dataclass(frozen=True)
+class ResultMediaAssetRead:
+    """Persistence-independent metadata needed to serve one result media asset."""
+
+    id: str
+    file_path: str | None
+    mime_type: str | None
+    blob_id: str | None
+    original_filename: str | None
+
+
+@dataclass(frozen=True)
+class ResultMediaBlobRead:
+    """Immutable blob metadata needed for HTTP cache and range handling."""
+
+    id: str
+    sha256: str
+    file_size: int
+    chunk_size: int
+    chunk_count: int
+
+
 class AnalysisRun(TypedDict):
     id: str
     load_case_id: str

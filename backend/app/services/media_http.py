@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import tempfile
 from dataclasses import dataclass
-from typing import Any, BinaryIO, Callable, Iterator
+from typing import Any, BinaryIO, Callable, Iterator, Protocol
 from urllib.parse import quote
 
 from fastapi import Request
@@ -11,7 +11,7 @@ from fastapi.responses import Response, StreamingResponse
 
 from ..config import database_settings
 from ..database_connection import media_connect
-from ..repositories.media_repository import BlobRecord, iter_blob_range
+from ..repositories.media_repository import iter_blob_range
 
 
 @dataclass(frozen=True)
@@ -22,6 +22,16 @@ class ByteRange:
     @property
     def length(self) -> int:
         return self.end - self.start + 1
+
+
+class MediaBlobRead(Protocol):
+    """Blob metadata required by the HTTP transport, independent of its reader."""
+
+    id: str
+    sha256: str
+    file_size: int
+    chunk_size: int
+    chunk_count: int
 
 
 def parse_single_range(value: str | None, size: int) -> ByteRange | None:
@@ -95,7 +105,7 @@ def _base_headers(*, mime_type: str, size: int, etag: str, filename: str, downlo
     return headers
 
 
-def _materialize_duckdb_range(blob: BlobRecord, start: int, end: int) -> BinaryIO:
+def _materialize_duckdb_range(blob: MediaBlobRead, start: int, end: int) -> BinaryIO:
     """Read a local blob under DuckDB's lock, then release it before ASGI yields."""
     spool = tempfile.SpooledTemporaryFile(max_size=2 * blob.chunk_size, mode="w+b")
     try:
@@ -112,7 +122,7 @@ def _materialize_duckdb_range(blob: BlobRecord, start: int, end: int) -> BinaryI
 def build_media_response(
     request: Request,
     *,
-    blob: BlobRecord,
+    blob: MediaBlobRead,
     mime_type: str,
     filename: str,
     download: bool = False,

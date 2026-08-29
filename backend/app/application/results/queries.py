@@ -7,8 +7,17 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Any
 
-from ...domains.results.models import AnalysisRunSummary, ResultIngestionTargetRead
-from ...domains.results.ports import AnalysisRunSummaryRepository, ResultIngestionQueryPort
+from ...domains.results.models import (
+    AnalysisRunSummary,
+    ResultIngestionTargetRead,
+    ResultMediaAssetRead,
+    ResultMediaBlobRead,
+)
+from ...domains.results.ports import (
+    AnalysisRunSummaryRepository,
+    ResultIngestionQueryPort,
+    ResultMediaQueryPort,
+)
 from ...domains.results.policies import summarize_run
 
 AuthorizationCheck = Callable[[], object]
@@ -25,6 +34,36 @@ class ResultIngestionContext:
     chassis_threshold: float
     open_cell_threshold: float
     catalog: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class ResultMediaReadContext:
+    """An authorized result-media asset with its optional stored blob."""
+
+    asset: ResultMediaAssetRead
+    blob: ResultMediaBlobRead | None
+
+
+ResultMediaAuthorizationCheck = Callable[[ResultMediaAssetRead], object]
+
+
+def get_result_media_read(
+    query: ResultMediaQueryPort,
+    asset_id: str,
+    authorize: ResultMediaAuthorizationCheck,
+) -> ResultMediaReadContext | None:
+    """Load one asset in the established metadata → permission → blob order.
+
+    The missing-asset result remains data so the HTTP adapter can retain the
+    existing 404 response.  The caller binds the query adapter and authorization
+    callback to one connection so all three steps share the same scope.
+    """
+    asset = query.get_result_media_asset(asset_id)
+    if asset is None:
+        return None
+    authorize(asset)
+    blob = query.get_result_media_blob(asset.blob_id) if asset.blob_id else None
+    return ResultMediaReadContext(asset=asset, blob=blob)
 
 
 def get_result_ingestion_target(

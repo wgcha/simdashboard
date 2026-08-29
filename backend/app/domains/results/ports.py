@@ -6,6 +6,8 @@ from typing import Any, Protocol
 from .models import (
     ResultIngestionCommand,
     ResultIngestionTargetRead,
+    ResultMediaAssetRead,
+    ResultMediaBlobRead,
     RunSummaryReadData,
     SourceConflictDecision,
     SourceRunRecord,
@@ -27,6 +29,14 @@ class ResultIngestionQueryPort(Protocol):
     ) -> float: ...
 
     def list_catalog(self, load_case_id: str) -> dict[str, dict[str, Any]]: ...
+
+
+class ResultMediaQueryPort(Protocol):
+    """Read-side port for one result media asset and its optional DB blob."""
+
+    def get_result_media_asset(self, asset_id: str) -> ResultMediaAssetRead | None: ...
+
+    def get_result_media_blob(self, blob_id: str) -> ResultMediaBlobRead | None: ...
 
 
 class ResultIngestionUnitOfWork(Protocol):

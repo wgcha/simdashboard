@@ -356,11 +356,14 @@ cd backend
 template, 수동 결과 import, 예제 폴더 import endpoint는 독립 router에 두고, parser·canonical command·
 ingestion orchestration은 framework-neutral application use case로 이동했다. OpenAPI·권한·atomic
 write/audit 계약과 기존 persistence UoW/SQL facade는 유지한다. 결과 미디어 read 전용 `/api/assets/*`
-조회·다운로드·Range 경계도 `routers/media.py`로 분리했다. DB blob ETag/Range/HEAD/download,
-project scope와 audit, 기존 route/OpenAPI 순서는 유지하며 media write/import/storage mode와 persistence UoW
-자체의 재배치는 후속 slice로 다룬다. 현재 result-ingestion router는 같은 연결에서 framework-neutral query use case와
+조회·다운로드·Range 경계도 `routers/media.py`로 분리했다. result-media metadata/blob read도 typed domain
+read model·query port·application use case·SQL adapter로 옮겨 같은 연결의 metadata → project scope
+authorization → blob 순서를 보존한다. DB blob ETag/Range/HEAD/download, audit, 기존 route/OpenAPI 순서는
+유지하며 media write/import/storage mode와 persistence UoW 자체의 재배치는 후속 slice로 다룬다. 현재 result-ingestion router는 같은 연결에서 framework-neutral query use case와
 SQL read adapter를 조립하며, typed는 target-only read, manual은 context→chassis threshold→open-cell
 threshold→catalog 순서를 유지한다.
+운영 환경 검증이 필요한 media write/storage-mode 변경은 release gate로 남기고, 다음 안전
+구조 단위는 `workbench`의 read-only 업무 유형·작업 계획 조회 경계부터 시작한다.
 
 각 slice는 `HTTP → application → domain port → adapter`를 갖고 router `.execute()`를 0으로 유지한다.
 

@@ -49,6 +49,10 @@ def test_main_no_longer_owns_media_read_handlers_and_router_has_no_direct_sql_ex
         isinstance(node, ast.Attribute) and node.attr == "execute"
         for node in ast.walk(tree)
     )
+    assert not any(
+        isinstance(node, ast.ImportFrom) and (node.module or "").endswith("repositories.media_repository")
+        for node in ast.walk(tree)
+    )
 
 
 def test_legacy_media_path_stays_inside_the_backend_assets_root() -> None:

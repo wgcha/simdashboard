@@ -8,9 +8,10 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 
 from .. import config as app_config
+from ..adapters.persistence.media import SQLResultMediaQuery
+from ..application.results.queries import get_result_media_read
 from ..database_connection import connect
 from ..modules.access_control import PROJECT_DATA_VIEW, require_resource_permission
-from ..repositories.media_repository import get_blob, get_media_asset
 from ..services.media_http import build_media_response
 from ..security import write_audit_event
 
@@ -57,21 +58,29 @@ def _legacy_asset_path(file_path: str) -> Path:
 
 def _result_asset_response(asset_id: str, request: Request, *, download: bool) -> Response:
     with connect() as conn:
-        item = get_media_asset(conn, asset_id)
-        if not item:
+        media = get_result_media_read(
+            SQLResultMediaQuery(conn),
+            asset_id,
+            authorize=lambda _asset: require_resource_permission(
+                request,
+                PROJECT_DATA_VIEW,
+                "media_asset",
+                asset_id,
+                conn=conn,
+            ),
+        )
+        if media is None:
             raise HTTPException(404, "결과 미디어를 찾을 수 없습니다.")
-        require_resource_permission(request, PROJECT_DATA_VIEW, "media_asset", asset_id, conn=conn)
-        if item.get("blob_id"):
-            blob = get_blob(conn, str(item["blob_id"]))
-            if blob is None:
+        if media.asset.blob_id:
+            if media.blob is None:
                 raise HTTPException(404, "결과 미디어 blob을 찾을 수 없습니다.")
-            filename = item.get("original_filename") or Path(
-                str(item.get("file_path") or "download")
+            filename = media.asset.original_filename or Path(
+                media.asset.file_path or "download"
             ).name
             return build_media_response(
                 request,
-                blob=blob,
-                mime_type=str(item.get("mime_type") or "application/octet-stream"),
+                blob=media.blob,
+                mime_type=media.asset.mime_type or "application/octet-stream",
                 filename=str(filename),
                 download=download,
                 audit=lambda action, yielded, status: _media_audit_callback(
@@ -83,10 +92,10 @@ def _result_asset_response(asset_id: str, request: Request, *, download: bool) -
             )
         if media_storage_mode() == "database-only":
             raise HTTPException(404, "결과 미디어 blob을 찾을 수 없습니다.")
-        path = _legacy_asset_path(str(item.get("file_path") or ""))
+        path = _legacy_asset_path(media.asset.file_path or "")
         return FileResponse(
             path,
-            media_type=str(item.get("mime_type") or "application/octet-stream"),
+            media_type=media.asset.mime_type or "application/octet-stream",
             filename=path.name if download else None,
         )
 
