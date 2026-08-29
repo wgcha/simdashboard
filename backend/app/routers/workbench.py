@@ -7,6 +7,11 @@ from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
+from ..adapters.persistence.workbench import SQLWorkbenchCatalogQuery
+from ..application.workbench.queries import (
+    list_workbench_request_types,
+    list_workbench_task_types,
+)
 from ..modules.access_control import (
     DASHBOARD_EDIT,
     PROJECT_DATA_VIEW,
@@ -94,7 +99,7 @@ def _sanitize_demo_run(run: dict[str, Any], request: Request) -> dict[str, Any]:
 @router.get("/workbench/task-types")
 def list_task_types(all_versions: bool = Query(default=False)) -> list[dict[str, Any]]:
     with connect() as conn:
-        return WorkbenchRepository(conn).list_task_types(all_versions=all_versions)
+        return list_workbench_task_types(SQLWorkbenchCatalogQuery(conn), all_versions=all_versions)
 
 
 @router.post("/admin/workbench/task-types", status_code=201)
@@ -136,7 +141,7 @@ def deactivate_task_type(task_type_id: str, request: Request) -> dict[str, str]:
 @router.get("/workbench/request-types")
 def list_request_types(all_versions: bool = Query(default=False)) -> list[dict[str, Any]]:
     with connect() as conn:
-        return WorkbenchRepository(conn).list_request_types(all_versions=all_versions)
+        return list_workbench_request_types(SQLWorkbenchCatalogQuery(conn), all_versions=all_versions)
 
 
 @router.get("/workbench/analysis-templates")

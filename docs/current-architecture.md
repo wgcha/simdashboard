@@ -73,12 +73,17 @@ typed domain read model/port, SQL persistence adapter를 통해 같은 연결에
 authorization → blob 순서를 유지한다. DB blob의 ETag/Range/stream/download와 기존 audit 동작은
 보존하고, media write/import/storage mode 전환은 후속 단계다.
 
+`workbench`의 첫 read-only 단위는 업무 유형과 의뢰 유형 catalog(`GET /api/workbench/task-types`,
+`GET /api/workbench/request-types`)다. 두 endpoint는 기존 `all_versions` 선택, 응답의 decoded JSON
+shape와 route/OpenAPI 계약을 유지하면서 framework-neutral catalog query use case, typed domain read
+model/port, SQL adapter로 이동했다. 작업 계획, 실행 정의, batch 실행과 변경 endpoint는 다음 단위에 남긴다.
+
 ### 3.2 비즈니스 로직과 데이터 접근
 
 | 경로 | 사용 방식 |
 |---|---|
 | `backend/app/services/` | import, media, monitoring, verdict, OIDC, 배치 실행, 요청 결과 구성 같은 절차형 orchestration |
-| `backend/app/application/` | `projects`, `products`, `requests`, `results`, `reports`의 명시적 command/query use case |
+| `backend/app/application/` | `projects`, `products`, `requests`, `results`, `reports`, `workbench`의 명시적 command/query use case |
 | `backend/app/domains/` | 같은 대표 slice의 프레임워크 독립 model, policy, repository port |
 | `backend/app/repositories/` | 아직 이전되지 않은 기능의 SQL repository |
 | `backend/app/adapters/persistence/` | 대표 vertical slice의 SQL repository provider/adapter |

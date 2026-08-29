@@ -362,8 +362,11 @@ authorization → blob 순서를 보존한다. DB blob ETag/Range/HEAD/download,
 유지하며 media write/import/storage mode와 persistence UoW 자체의 재배치는 후속 slice로 다룬다. 현재 result-ingestion router는 같은 연결에서 framework-neutral query use case와
 SQL read adapter를 조립하며, typed는 target-only read, manual은 context→chassis threshold→open-cell
 threshold→catalog 순서를 유지한다.
-운영 환경 검증이 필요한 media write/storage-mode 변경은 release gate로 남기고, 다음 안전
-구조 단위는 `workbench`의 read-only 업무 유형·작업 계획 조회 경계부터 시작한다.
+운영 환경 검증이 필요한 media write/storage-mode 변경은 release gate로 남긴다. `workbench`의 첫
+read-only 단위로 업무 유형·의뢰 유형 catalog GET 두 개를 framework-neutral query use case, typed domain
+read model/port, SQL adapter로 옮겼다. `all_versions` 선택, active/latest 및 history 정렬, decoded JSON
+응답과 기존 route/OpenAPI 순서는 유지한다. request work-plan, batch 실행, 결과 snapshot과 변경 endpoint는
+후속 단위다.
 
 각 slice는 `HTTP → application → domain port → adapter`를 갖고 router `.execute()`를 0으로 유지한다.
 
