@@ -40,7 +40,7 @@ from .modules.access_control import (
 )
 from .database import connect, initialize_database, json_value, rows
 from .config import database_settings, security_settings
-from .repositories.media_repository import get_blob, get_drop_video, get_media_asset, list_drop_videos
+from .repositories.media_repository import get_blob, get_drop_video, list_drop_videos
 from .services.media_http import build_media_response
 from .repositories.portfolio import PortfolioRepository
 from .repositories.variable_catalog import VariableCatalogRepository
@@ -85,6 +85,7 @@ from .routers.workbench import router as workbench_router
 from .routers.modeling_catalog import router as modeling_catalog_router
 from .routers.result_folder_refresh import router as result_folder_refresh_router
 from .routers.result_ingestion import router as result_ingestion_router
+from .routers.media import router as media_router
 from .adapters.http.routers.projects import router as projects_router
 from .adapters.http.routers.reports import router as reports_router
 from .adapters.http.routers.requests import router as requests_router
@@ -747,54 +748,7 @@ def create_load_case(request_id: str, payload: LoadCaseCreate, request: Request)
 
 
 app.include_router(result_ingestion_router)
-
-
-def _legacy_asset_path(file_path: str) -> Path:
-    assets_root = (Path(__file__).resolve().parents[1] / "assets").resolve()
-    relative_path = Path(file_path)
-    if relative_path.parts and relative_path.parts[0].lower() == "assets":
-        relative_path = Path(*relative_path.parts[1:])
-    path = (assets_root / relative_path).resolve()
-    if assets_root not in path.parents or not path.is_file():
-        raise HTTPException(404, "결과 미디어 파일을 찾을 수 없습니다.")
-    return path
-
-
-def _result_asset_response(asset_id: str, request: Request, *, download: bool) -> Response:
-    with connect() as conn:
-        item = get_media_asset(conn, asset_id)
-        if not item:
-            raise HTTPException(404, "결과 미디어를 찾을 수 없습니다.")
-        require_resource_permission(request, PROJECT_DATA_VIEW, "media_asset", asset_id, conn=conn)
-        if item.get("blob_id"):
-            blob = get_blob(conn, str(item["blob_id"]))
-            if blob is None:
-                raise HTTPException(404, "결과 미디어 blob을 찾을 수 없습니다.")
-            filename = item.get("original_filename") or Path(str(item.get("file_path") or "download")).name
-            return build_media_response(
-                request,
-                blob=blob,
-                mime_type=str(item.get("mime_type") or "application/octet-stream"),
-                filename=str(filename),
-                download=download,
-                audit=lambda action, yielded, status: _media_audit_callback(request, action, yielded, status),
-            )
-        if media_storage_mode() == "database-only":
-            raise HTTPException(404, "결과 미디어 blob을 찾을 수 없습니다.")
-        path = _legacy_asset_path(str(item.get("file_path") or ""))
-        return FileResponse(path, media_type=str(item.get("mime_type") or "application/octet-stream"), filename=path.name if download else None)
-
-
-@app.get("/api/assets/{asset_id}", operation_id="get_result_asset")
-@app.head("/api/assets/{asset_id}", include_in_schema=False)
-def get_result_asset(asset_id: str, request: Request) -> Response:
-    return _result_asset_response(asset_id, request, download=False)
-
-
-@app.get("/api/assets/{asset_id}/download", operation_id="download_result_asset")
-@app.head("/api/assets/{asset_id}/download", include_in_schema=False)
-def download_result_asset(asset_id: str, request: Request) -> Response:
-    return _result_asset_response(asset_id, request, download=True)
+app.include_router(media_router)
 
 
 @app.get("/api/load-cases/{load_case_id}/overview")

@@ -355,8 +355,10 @@ cd backend
 `result_ingestion`은 첫 HTTP 추출, 두 번째 application orchestration, 세 번째 query port 추출을 완료했다. 결과-import
 template, 수동 결과 import, 예제 폴더 import endpoint는 독립 router에 두고, parser·canonical command·
 ingestion orchestration은 framework-neutral application use case로 이동했다. OpenAPI·권한·atomic
-write/audit 계약과 기존 persistence UoW/SQL facade는 유지한다. media asset endpoint와 persistence UoW
-자체의 재배치는 후속 slice로 다룬다. 현재 router는 같은 연결에서 framework-neutral query use case와
+write/audit 계약과 기존 persistence UoW/SQL facade는 유지한다. 결과 미디어 read 전용 `/api/assets/*`
+조회·다운로드·Range 경계도 `routers/media.py`로 분리했다. DB blob ETag/Range/HEAD/download,
+project scope와 audit, 기존 route/OpenAPI 순서는 유지하며 media write/import/storage mode와 persistence UoW
+자체의 재배치는 후속 slice로 다룬다. 현재 result-ingestion router는 같은 연결에서 framework-neutral query use case와
 SQL read adapter를 조립하며, typed는 target-only read, manual은 context→chassis threshold→open-cell
 threshold→catalog 순서를 유지한다.
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -12,6 +13,7 @@ from app.config import media_storage_mode
 from app.database import initialize_database
 from app.database_connection import connect
 from app.main import app
+from app.routers import media as media_router
 from app.repositories.media_repository import get_blob, get_drop_video
 from app.services import media_http
 from app.services.media_http import build_media_response
@@ -83,9 +85,10 @@ def test_media_storage_mode_controls_legacy_asset_and_drop_video_fallbacks(monke
                     """,
                     [legacy_asset_id],
                 )
-            monkeypatch.setattr(main_module, "media_storage_mode", lambda: "dual-read")
+            monkeypatch.setattr(media_router, "media_storage_mode", lambda: "dual-read")
             assert client.get(f"/api/assets/{legacy_asset_id}").status_code == 200
 
+            monkeypatch.setattr(media_router, "media_storage_mode", lambda: "database-only")
             monkeypatch.setattr(main_module, "media_storage_mode", lambda: "database-only")
             assert client.get(f"/api/assets/{legacy_asset_id}").status_code == 404
 
@@ -96,6 +99,7 @@ def test_media_storage_mode_controls_legacy_asset_and_drop_video_fallbacks(monke
             assert catalog["pagination"]["total_items"] == 0
 
             monkeypatch.setattr(main_module, "media_storage_mode", lambda: "dual-read")
+            monkeypatch.setattr(media_router, "media_storage_mode", lambda: "dual-read")
             fallback_catalog = client.get("/api/load-cases/loadcase-drop-bottom-001/drop-videos").json()
             assert fallback_catalog["source"] == "EXAMPLE_ADAPTER"
             assert fallback_catalog["pagination"]["total_items"] == 20
@@ -116,6 +120,27 @@ def test_svg_response_uses_a_sandboxed_content_security_policy():
         response = client.get("/api/assets/media-contour-001")
         assert response.status_code == 200
         assert response.headers["content-security-policy"].startswith("sandbox;")
+
+
+def test_result_asset_stream_records_started_and_completed_audit_rows():
+    initialize_database()
+    asset_path = "/api/assets/media-contour-001"
+    with TestClient(app) as client:
+        response = client.get(asset_path)
+        assert response.status_code == 200
+
+    with connect() as connection:
+        rows = connection.execute(
+            "SELECT action, status_code, detail_json FROM audit_events "
+            "WHERE path=? AND action LIKE 'MEDIA_STREAM_%' ORDER BY occurred_at",
+            [asset_path],
+        ).fetchall()
+    assert [(row[0], row[1]) for row in rows] == [
+        ("MEDIA_STREAM_STARTED", 200),
+        ("MEDIA_STREAM_COMPLETED", 200),
+    ]
+    assert json.loads(rows[0][2]) == {"bytes_yielded_to_asgi": 0}
+    assert json.loads(rows[1][2])["bytes_yielded_to_asgi"] == len(response.content)
 
 
 def test_duckdb_video_streaming_releases_connection_before_concurrent_requests():

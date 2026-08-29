@@ -67,7 +67,10 @@ import, 예제 폴더 import endpoint를 `main.py`에서 `routers/result_ingesti
 orchestration을 소유하고, router가 Request·connection·권한 재검증·audit sink·HTTP 응답만 조립하게
 했다. 세 번째 단위는 framework-neutral query port/use case를 도입해 typed target-only read와
 manual context·threshold·catalog read를 분리했다. 기존 persistence UoW/SQL facade, 권한·연결 수명과
-query 순서는 유지하며 media asset 분리는 후속 단계다.
+query 순서는 유지한다. 결과 미디어 read 전용 HTTP(`GET/HEAD /api/assets/{asset_id}` 및
+`/download`)는 `routers/media.py`로 분리했으며, 기존 repository facade를 통해 DB 조회를 유지한다.
+DB blob의 ETag/Range/stream/download와 기존 project-scope authorization/audit 동작은 보존하고,
+media write/import/storage mode 전환은 후속 단계다.
 
 ### 3.2 비즈니스 로직과 데이터 접근
 
