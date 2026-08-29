@@ -76,7 +76,10 @@ authorization → blob 순서를 유지한다. DB blob의 ETag/Range/stream/down
 `workbench`의 첫 read-only 단위는 업무 유형과 의뢰 유형 catalog(`GET /api/workbench/task-types`,
 `GET /api/workbench/request-types`)다. 두 endpoint는 기존 `all_versions` 선택, 응답의 decoded JSON
 shape와 route/OpenAPI 계약을 유지하면서 framework-neutral catalog query use case, typed domain read
-model/port, SQL adapter로 이동했다. 작업 계획, 실행 정의, batch 실행과 변경 endpoint는 다음 단위에 남긴다.
+model/port, SQL adapter로 이동했다. 이어서 `GET /api/workbench/requests/{request_id}/request-type`도 같은
+경계로 이동해 repository의 context → assignment → assigned type 또는 active catalog rule 순서를 한 연결에서
+그대로 사용한다. 네 resolution payload와 missing-request 404, 무인증 read 계약은 유지한다. 작업 계획,
+실행 정의, batch 실행과 변경 endpoint는 다음 단위에 남긴다.
 
 ### 3.2 비즈니스 로직과 데이터 접근
 

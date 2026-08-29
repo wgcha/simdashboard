@@ -7,10 +7,14 @@ from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
-from ..adapters.persistence.workbench import SQLWorkbenchCatalogQuery
+from ..adapters.persistence.workbench import (
+    SQLWorkbenchCatalogQuery,
+    SQLWorkbenchRequestTypeResolutionQuery,
+)
 from ..application.workbench.queries import (
     list_workbench_request_types,
     list_workbench_task_types,
+    resolve_workbench_request_type,
 )
 from ..modules.access_control import (
     DASHBOARD_EDIT,
@@ -574,7 +578,7 @@ def dispatch_batch_work_item(item_id: str, payload: BatchDispatchCreate, request
 def resolve_request_type(request_id: str) -> dict[str, Any]:
     with connect() as conn:
         try:
-            return WorkbenchRepository(conn).request_type_resolution(request_id)
+            return resolve_workbench_request_type(SQLWorkbenchRequestTypeResolutionQuery(conn), request_id)
         except LookupError as exc:
             raise HTTPException(404, "해석 의뢰를 찾을 수 없습니다.") from exc
 

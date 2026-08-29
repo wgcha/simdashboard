@@ -365,8 +365,9 @@ threshold→catalog 순서를 유지한다.
 운영 환경 검증이 필요한 media write/storage-mode 변경은 release gate로 남긴다. `workbench`의 첫
 read-only 단위로 업무 유형·의뢰 유형 catalog GET 두 개를 framework-neutral query use case, typed domain
 read model/port, SQL adapter로 옮겼다. `all_versions` 선택, active/latest 및 history 정렬, decoded JSON
-응답과 기존 route/OpenAPI 순서는 유지한다. request work-plan, batch 실행, 결과 snapshot과 변경 endpoint는
-후속 단위다.
+응답과 기존 route/OpenAPI 순서는 유지한다. 다음으로 단일 request-type resolution GET을 같은 경계로 옮겨
+context → assignment → assigned type 또는 active catalog rule 순서, 네 상태 응답, missing-request 404와
+무인증 read를 보존했다. request work-plan, batch 실행, 결과 snapshot과 변경 endpoint는 후속 단위다.
 
 각 slice는 `HTTP → application → domain port → adapter`를 갖고 router `.execute()`를 0으로 유지한다.
 

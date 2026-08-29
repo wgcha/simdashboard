@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from ...database_connection import ConnectionLike
-from ...domains.workbench.models import RequestTypeVersionRead, TaskTypeVersionRead
+from ...domains.workbench.models import (
+    RequestTypeResolution,
+    RequestTypeResolutionRead,
+    RequestTypeVersionRead,
+    TaskTypeVersionRead,
+)
 from ...repositories.workbench import WorkbenchRepository
 
 
@@ -51,3 +56,25 @@ class SQLWorkbenchCatalogQuery:
 
     def list_request_types(self, *, all_versions: bool) -> list[RequestTypeVersionRead]:
         return [_request_type_read(item) for item in self._repository.list_request_types(all_versions=all_versions)]
+
+
+class SQLWorkbenchRequestTypeResolutionQuery:
+    """Adapt the repository's existing context/assignment/rule query sequence."""
+
+    def __init__(self, connection: ConnectionLike) -> None:
+        self._repository = WorkbenchRepository(connection)
+
+    def request_type_resolution(self, request_id: str) -> RequestTypeResolutionRead:
+        stored = self._repository.request_type_resolution(request_id)
+        request_type = stored["request_type"]
+        candidates = stored["candidates"]
+        return {
+            "resolution": cast(RequestTypeResolution, stored["resolution"]),
+            "request_id": str(stored["request_id"]),
+            "source": str(stored["source"]) if stored["source"] is not None else None,
+            "reason": str(stored["reason"]),
+            "request_type": _request_type_read(request_type) if request_type is not None else None,
+            "candidates": [_request_type_read(item) for item in candidates],
+            "decided_by": str(stored["decided_by"]) if stored["decided_by"] is not None else None,
+            "decided_at": stored["decided_at"],
+        }
