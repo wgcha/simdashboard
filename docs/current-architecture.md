@@ -96,7 +96,12 @@ transition → canonical status sync 순서를 소유한다. router의 principal
 `POST /api/workbench/work-items/{item_id}/complete`도 같은 lifecycle UoW/monitoring facade에서 별도 complete
 port/use case/SQL adapter로 옮겼다. application은 completed idempotency, current/started/prerequisite guard, optional
 same-request succeeded demo-run 검증, principal-owned completion 기록, 다음 WAITING의 READY 승격과 canonical sync 순서를
-유지한다. router는 기존 404/409 payload와 audit/transaction 경계를 유지한다. reassign/batch는 후속이다.
+유지한다. router는 기존 404/409 payload와 audit/transaction 경계를 유지한다. batch는 후속이다.
+`PATCH /api/workbench/work-items/{item_id}/assignee`도 typed reassignment command/state/assignee read와 command
+port/use case/SQL adapter로 분리했다. application은 joined item/request context read → workflow-edit authorization →
+completed guard → canonical active project-member resolution → owner update → audit callback → response reread 순서를
+소유한다. membership/account-state의 기존 422 payload와 reassignment audit detail, single rollback과 response shape은
+router/adapter 경계에서 유지하며 batch는 후속이다.
 
 ### 3.2 비즈니스 로직과 데이터 접근
 

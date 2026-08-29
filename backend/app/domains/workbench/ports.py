@@ -11,6 +11,8 @@ from .models import (
     WorkItemLifecycleState,
     WorkItemProgressCommand,
     WorkItemStartCommand,
+    WorkItemReassignmentState,
+    ProjectAssigneeRead,
     WorkPlanMonitoringSummaryRead,
 )
 
@@ -101,3 +103,15 @@ class WorkbenchWorkItemCompleteCommandPort(Protocol):
     def mark_work_item_ready(self, item_id: str) -> None: ...
 
     def sync_request_status(self, request_id: str) -> WorkPlanMonitoringSummaryRead: ...
+
+
+class WorkbenchWorkItemReassignmentCommandPort(Protocol):
+    """Same-connection persistence operations for reassignment and its response projection."""
+
+    def reassignment_state(self, item_id: str) -> WorkItemReassignmentState | None: ...
+
+    def resolve_project_assignee(self, project_id: str, owner_user_id: str) -> ProjectAssigneeRead: ...
+
+    def update_work_item_assignee(self, item_id: str, assignee: ProjectAssigneeRead) -> None: ...
+
+    def reassigned_work_item(self, item_id: str) -> dict[str, object]: ...

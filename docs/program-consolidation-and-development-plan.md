@@ -383,7 +383,11 @@ private lifecycle adapter/UoW·monitoring facade를 재사용해 typed start com
 transition 및 status sync 순서를 유지한다. `POST /api/workbench/work-items/{item_id}/complete`도 typed completion command,
 port/use case와 same-connection SQL adapter로 분리했다. completed idempotency → current/started/prerequisite guard → optional
 succeeded demo-run validation → completion update → next WAITING READY promotion → canonical sync, 그리고 기존 404/409
-detail·audit·rollback 계약을 보존한다. reassign/batch는 이 slice에 포함하지 않는다.
+detail·audit·rollback 계약을 보존한다. batch는 이 slice에 포함하지 않는다.
+`PATCH /api/workbench/work-items/{item_id}/assignee`도 별도 typed reassignment command/state/assignee read, application
+use case, same-connection SQL adapter로 분리했다. joined projection read → workflow-edit authorize → completed guard →
+active project-member validation/resolution → update → audit → reread 순서를 보존하고, 기존 final 409 및 membership/account
+422 detail, single rollback, raw work-item response는 그대로 유지한다. batch는 이 slice에 포함하지 않는다.
 
 각 slice는 `HTTP → application → domain port → adapter`를 갖고 router `.execute()`를 0으로 유지한다.
 

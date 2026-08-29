@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, cast
 
-from ...database_connection import ConnectionLike
+from ...database_connection import ConnectionLike, rows
 from ...domains.workbench.models import (
     RequestTypeAssignmentCommand,
     RequestTypeAssignmentLockedError,
@@ -14,12 +14,17 @@ from ...domains.workbench.models import (
     RequestTypeResolutionRead,
     RequestTypeVersionRead,
     TaskTypeVersionRead,
+    ProjectAssigneeRead,
     WorkItemCompleteCommand,
+    WorkItemAssigneeAccountNotActiveError,
+    WorkItemAssigneeMembershipRequiredError,
     WorkItemLifecycleState,
     WorkItemProgressCommand,
+    WorkItemReassignmentState,
     WorkItemStartCommand,
     WorkPlanMonitoringSummaryRead,
 )
+from ...modules.access_control import resolve_project_assignee
 from ...repositories.workbench import WorkbenchRepository
 from ...services.request_monitoring import request_monitoring_summary, sync_request_status
 
@@ -279,3 +284,70 @@ class SQLWorkbenchWorkItemCompleteCommand(_SQLWorkbenchWorkItemLifecycleAdapter)
             "UPDATE request_work_items SET status = 'READY' WHERE id = ? AND status = 'WAITING'",
             [item_id],
         )
+
+
+class SQLWorkbenchWorkItemReassignmentCommand:
+    """Same-connection SQL adapter for a work-item ownership change and response projection."""
+
+    def __init__(self, connection: ConnectionLike) -> None:
+        self._connection = connection
+        self._repository = WorkbenchRepository(connection)
+
+    def begin_transaction(self) -> None:
+        self._repository.begin_transaction()
+
+    def commit_transaction(self) -> None:
+        self._repository.commit_transaction()
+
+    def rollback_transaction(self) -> None:
+        self._repository.rollback_transaction()
+
+    def reassignment_state(self, item_id: str) -> WorkItemReassignmentState | None:
+        stored = rows(
+            self._connection.execute(
+                """
+                SELECT items.*, requests.project_id
+                FROM request_work_items items
+                JOIN analysis_requests requests ON requests.id=items.request_id
+                WHERE items.id=?
+                """,
+                [item_id],
+            )
+        )
+        if not stored:
+            return None
+        item = stored[0]
+        return WorkItemReassignmentState(
+            id=str(item["id"]),
+            request_id=str(item["request_id"]),
+            project_id=str(item["project_id"]),
+            status=str(item["status"]),
+            owner_user_id=str(item["owner_user_id"]) if item["owner_user_id"] is not None else None,
+        )
+
+    def resolve_project_assignee(self, project_id: str, owner_user_id: str) -> ProjectAssigneeRead:
+        try:
+            assignee = resolve_project_assignee(self._connection, project_id, owner_user_id)
+        except Exception as exc:
+            detail = getattr(exc, "detail", None)
+            if isinstance(detail, dict) and detail.get("code") == "ASSIGNEE_PROJECT_MEMBERSHIP_REQUIRED":
+                raise WorkItemAssigneeMembershipRequiredError(
+                    project_id=project_id,
+                    owner_user_id=owner_user_id,
+                ) from exc
+            if isinstance(detail, dict) and detail.get("code") == "ASSIGNEE_ACCOUNT_NOT_ACTIVE":
+                raise WorkItemAssigneeAccountNotActiveError(
+                    project_id=project_id,
+                    owner_user_id=owner_user_id,
+                ) from exc
+            raise
+        return ProjectAssigneeRead(user_id=assignee.user_id, display_name=assignee.display_name)
+
+    def update_work_item_assignee(self, item_id: str, assignee: ProjectAssigneeRead) -> None:
+        self._connection.execute(
+            "UPDATE request_work_items SET owner=?, owner_user_id=? WHERE id=?",
+            [assignee.display_name, assignee.user_id, item_id],
+        )
+
+    def reassigned_work_item(self, item_id: str) -> dict[str, object]:
+        return dict(rows(self._connection.execute("SELECT * FROM request_work_items WHERE id=?", [item_id]))[0])

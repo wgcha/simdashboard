@@ -14,11 +14,13 @@ from ..adapters.persistence.workbench import (
     SQLWorkbenchRequestTypeResolutionQuery,
     SQLWorkbenchWorkItemCompleteCommand,
     SQLWorkbenchWorkItemProgressCommand,
+    SQLWorkbenchWorkItemReassignmentCommand,
     SQLWorkbenchWorkItemStartCommand,
 )
 from ..application.workbench.commands import (
     assign_workbench_request_type,
     complete_workbench_work_item,
+    reassign_workbench_work_item,
     start_workbench_work_item,
     update_workbench_work_item_progress,
 )
@@ -34,6 +36,8 @@ from ..domains.workbench.models import (
     RequestTypeAssignmentTargetNotFoundError,
     RequestWorkPlanImmutableError,
     DemoRunInvalidError,
+    WorkItemAssigneeAccountNotActiveError,
+    WorkItemAssigneeMembershipRequiredError,
     WorkItemCompleteCommand,
     WorkItemNotFoundError,
     WorkItemNotInProgressError,
@@ -43,6 +47,8 @@ from ..domains.workbench.models import (
     WorkItemNotReadyError,
     WorkItemNotStartedError,
     WorkItemPrerequisiteIncompleteError,
+    WorkItemReassignmentCommand,
+    WorkItemReassignmentFinalError,
     WorkItemStartCommand,
 )
 from ..modules.access_control import (
@@ -55,7 +61,6 @@ from ..modules.access_control import (
     require_assigned_work_item,
     require_permission,
     require_resource_permission,
-    resolve_project_assignee,
 )
 from ..database_connection import connect, rows
 from ..repositories.workbench import WorkbenchRepository
@@ -697,50 +702,65 @@ def get_request_work_plan(request_id: str) -> dict[str, Any]:
 def reassign_work_item(item_id: str, payload: WorkItemAssigneeUpdate, request: Request) -> dict[str, Any]:
     principal = request.state.principal
     with connect() as conn:
-        repository = WorkbenchRepository(conn)
-        repository.begin_transaction()
+        command_port = SQLWorkbenchWorkItemReassignmentCommand(conn)
+        command_port.begin_transaction()
         try:
-            stored = rows(
-                conn.execute(
-                    """
-                    SELECT items.*, requests.project_id
-                    FROM request_work_items items
-                    JOIN analysis_requests requests ON requests.id=items.request_id
-                    WHERE items.id=?
-                    """,
-                    [item_id],
-                )
+            updated = reassign_workbench_work_item(
+                command_port,
+                item_id,
+                WorkItemReassignmentCommand(owner_user_id=payload.owner_user_id),
+                authorize=lambda _item: require_resource_permission(
+                    request,
+                    WORKFLOW_EDIT,
+                    "work_item",
+                    item_id,
+                    conn=conn,
+                ),
+                audit=lambda item, assignee: write_audit_event(
+                    request=request,
+                    principal=principal,
+                    status_code=200,
+                    action="WORK_ITEM_ASSIGNEE_CHANGED",
+                    detail={
+                        "project_id": item.project_id,
+                        "request_id": item.request_id,
+                        "work_item_id": item_id,
+                        "old_owner_user_id": item.owner_user_id,
+                        "new_owner_user_id": assignee.user_id,
+                    },
+                    connection=conn,
+                ),
             )
-            if not stored:
-                raise HTTPException(404, detail={"code": "WORK_ITEM_NOT_FOUND", "item_id": item_id})
-            item = stored[0]
-            require_resource_permission(request, WORKFLOW_EDIT, "work_item", item_id, conn=conn)
-            if item["status"] == "COMPLETED":
-                raise HTTPException(409, detail={"code": "WORK_ITEM_REASSIGNMENT_FINAL", "item_id": item_id})
-            assignee = resolve_project_assignee(conn, item["project_id"], payload.owner_user_id)
-            conn.execute(
-                "UPDATE request_work_items SET owner=?, owner_user_id=? WHERE id=?",
-                [assignee.display_name, assignee.user_id, item_id],
-            )
-            write_audit_event(
-                request=request,
-                principal=principal,
-                status_code=200,
-                action="WORK_ITEM_ASSIGNEE_CHANGED",
-                detail={
-                    "project_id": item["project_id"],
-                    "request_id": item["request_id"],
-                    "work_item_id": item_id,
-                    "old_owner_user_id": item.get("owner_user_id"),
-                    "new_owner_user_id": assignee.user_id,
-                },
-                connection=conn,
-            )
-            updated = rows(conn.execute("SELECT * FROM request_work_items WHERE id=?", [item_id]))[0]
-            repository.commit_transaction()
+            command_port.commit_transaction()
             return updated
+        except WorkItemNotFoundError as exc:
+            command_port.rollback_transaction()
+            raise HTTPException(404, detail={"code": "WORK_ITEM_NOT_FOUND", "item_id": exc.item_id}) from exc
+        except WorkItemReassignmentFinalError as exc:
+            command_port.rollback_transaction()
+            raise HTTPException(409, detail={"code": "WORK_ITEM_REASSIGNMENT_FINAL", "item_id": exc.item_id}) from exc
+        except WorkItemAssigneeMembershipRequiredError as exc:
+            command_port.rollback_transaction()
+            raise HTTPException(
+                422,
+                detail={
+                    "code": "ASSIGNEE_PROJECT_MEMBERSHIP_REQUIRED",
+                    "project_id": exc.project_id,
+                    "owner_user_id": exc.owner_user_id,
+                },
+            ) from exc
+        except WorkItemAssigneeAccountNotActiveError as exc:
+            command_port.rollback_transaction()
+            raise HTTPException(
+                422,
+                detail={
+                    "code": "ASSIGNEE_ACCOUNT_NOT_ACTIVE",
+                    "project_id": exc.project_id,
+                    "owner_user_id": exc.owner_user_id,
+                },
+            ) from exc
         except Exception:
-            repository.rollback_transaction()
+            command_port.rollback_transaction()
             raise
 
 

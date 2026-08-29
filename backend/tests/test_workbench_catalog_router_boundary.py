@@ -15,6 +15,8 @@ from app.domains.workbench.models import (
     DemoRunInvalidError,
     RequestTypeAssignmentLockedError,
     RequestTypeAssignmentTargetNotFoundError,
+    WorkItemAssigneeAccountNotActiveError,
+    WorkItemAssigneeMembershipRequiredError,
     WorkItemNotFoundError,
     WorkItemNotInProgressError,
     WorkItemNotCurrentError,
@@ -22,6 +24,7 @@ from app.domains.workbench.models import (
     WorkItemNotStartedError,
     WorkItemPrerequisiteIncompleteError,
     WorkItemProgressNotMonotonicError,
+    WorkItemReassignmentFinalError,
     WorkItemLifecycleResult,
 )
 from app.routers import workbench
@@ -200,6 +203,71 @@ def test_work_item_start_boundary_delegates_without_direct_sql_or_repository() -
         app.openapi()["paths"]["/api/workbench/work-items/{item_id}/start"]["post"]["operationId"]
         == "start_work_item_api_workbench_work_items__item_id__start_post"
     )
+
+
+def test_work_item_reassignment_boundary_delegates_without_direct_sql_or_repository() -> None:
+    tree = ast.parse(inspect.getsource(workbench.reassign_work_item))
+    assert not any(isinstance(node, ast.Attribute) and node.attr == "execute" for node in ast.walk(tree))
+    assert "WorkbenchRepository" not in inspect.getsource(workbench.reassign_work_item)
+    assert (
+        app.openapi()["paths"]["/api/workbench/work-items/{item_id}/assignee"]["patch"]["operationId"]
+        == "reassign_work_item_api_workbench_work_items__item_id__assignee_patch"
+    )
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_status", "expected_detail"),
+    [
+        (WorkItemNotFoundError("item-1"), 404, {"code": "WORK_ITEM_NOT_FOUND", "item_id": "item-1"}),
+        (WorkItemReassignmentFinalError("item-1"), 409, {"code": "WORK_ITEM_REASSIGNMENT_FINAL", "item_id": "item-1"}),
+        (
+            WorkItemAssigneeMembershipRequiredError(project_id="project-1", owner_user_id="owner-new"),
+            422,
+            {"code": "ASSIGNEE_PROJECT_MEMBERSHIP_REQUIRED", "project_id": "project-1", "owner_user_id": "owner-new"},
+        ),
+        (
+            WorkItemAssigneeAccountNotActiveError(project_id="project-1", owner_user_id="owner-new"),
+            422,
+            {"code": "ASSIGNEE_ACCOUNT_NOT_ACTIVE", "project_id": "project-1", "owner_user_id": "owner-new"},
+        ),
+    ],
+)
+def test_work_item_reassignment_router_preserves_error_mapping_and_single_rollback(
+    monkeypatch,
+    error: Exception,
+    expected_status: int,
+    expected_detail: object,
+) -> None:
+    events: list[str] = []
+
+    class _Adapter:
+        def __init__(self, _connection: object) -> None:
+            pass
+
+        def begin_transaction(self) -> None:
+            events.append("begin")
+
+        def commit_transaction(self) -> None:
+            events.append("commit")
+
+        def rollback_transaction(self) -> None:
+            events.append("rollback")
+
+    def _raise(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise error
+
+    monkeypatch.setattr(workbench, "SQLWorkbenchWorkItemReassignmentCommand", _Adapter)
+    monkeypatch.setattr(workbench, "reassign_workbench_work_item", _raise)
+
+    with TestClient(app) as client:
+        response = client.patch(
+            "/api/workbench/work-items/item-1/assignee",
+            json={"owner_user_id": "owner-new"},
+        )
+
+    assert response.status_code == expected_status
+    assert response.json() == {"detail": expected_detail}
+    assert events == ["begin", "rollback"]
 
 
 @pytest.mark.parametrize(

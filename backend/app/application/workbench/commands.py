@@ -20,12 +20,17 @@ from ...domains.workbench.models import (
     WorkItemProgressCommand,
     WorkItemProgressNotMonotonicError,
     WorkItemStartCommand,
+    WorkItemReassignmentCommand,
+    WorkItemReassignmentFinalError,
+    WorkItemReassignmentState,
+    ProjectAssigneeRead,
 )
 from ...domains.workbench.ports import (
     WorkbenchRequestTypeAssignmentCommandPort,
     WorkbenchWorkItemCompleteCommandPort,
     WorkbenchWorkItemProgressCommandPort,
     WorkbenchWorkItemStartCommandPort,
+    WorkbenchWorkItemReassignmentCommandPort,
 )
 
 
@@ -156,3 +161,25 @@ def complete_workbench_work_item(
         summary=command_port.sync_request_status(request_id),
         changed=True,
     )
+
+
+def reassign_workbench_work_item(
+    command_port: WorkbenchWorkItemReassignmentCommandPort,
+    item_id: str,
+    command: WorkItemReassignmentCommand,
+    *,
+    authorize: Callable[[WorkItemReassignmentState], None],
+    audit: Callable[[WorkItemReassignmentState, ProjectAssigneeRead], None],
+) -> dict[str, object]:
+    """Preserve reassignment read, permission, owner-resolution, audit, and response order."""
+    item = command_port.reassignment_state(item_id)
+    if item is None:
+        raise WorkItemNotFoundError(item_id)
+
+    authorize(item)
+    if item.status == "COMPLETED":
+        raise WorkItemReassignmentFinalError(item_id)
+    assignee = command_port.resolve_project_assignee(item.project_id, command.owner_user_id)
+    command_port.update_work_item_assignee(item_id, assignee)
+    audit(item, assignee)
+    return command_port.reassigned_work_item(item_id)

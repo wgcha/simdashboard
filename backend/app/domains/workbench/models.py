@@ -216,3 +216,55 @@ class DemoRunInvalidError(Exception):
         self.item_id = item_id
         self.demo_run_id = demo_run_id
         super().__init__(demo_run_id)
+
+
+@dataclass(frozen=True)
+class WorkItemReassignmentCommand:
+    """Target user identifier for changing an unfinished work item's owner."""
+
+    owner_user_id: str
+
+
+@dataclass(frozen=True)
+class WorkItemReassignmentState:
+    """Existing owner and project context needed by the reassignment flow."""
+
+    id: str
+    request_id: str
+    project_id: str
+    status: str
+    owner_user_id: str | None
+
+
+@dataclass(frozen=True)
+class ProjectAssigneeRead:
+    """Canonical active project member resolved for ownership."""
+
+    user_id: str
+    display_name: str
+
+
+class WorkItemReassignmentFinalError(Exception):
+    """Completed work items cannot be assigned again."""
+
+    def __init__(self, item_id: str) -> None:
+        self.item_id = item_id
+        super().__init__(item_id)
+
+
+class WorkItemAssigneeMembershipRequiredError(Exception):
+    """The requested assignee is not a valid member of the work item's project."""
+
+    def __init__(self, *, project_id: str, owner_user_id: str) -> None:
+        self.project_id = project_id
+        self.owner_user_id = owner_user_id
+        super().__init__(owner_user_id)
+
+
+class WorkItemAssigneeAccountNotActiveError(Exception):
+    """The requested project member is not active."""
+
+    def __init__(self, *, project_id: str, owner_user_id: str) -> None:
+        self.project_id = project_id
+        self.owner_user_id = owner_user_id
+        super().__init__(owner_user_id)
