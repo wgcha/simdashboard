@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+from types import SimpleNamespace
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -12,6 +13,7 @@ from fastapi.testclient import TestClient
 from app.database_connection import connect
 from app.main import app
 from app.domains.workbench.models import (
+    BatchAttemptAlreadyRejectedError,
     DemoRunInvalidError,
     RequestTypeAssignmentLockedError,
     RequestTypeAssignmentTargetNotFoundError,
@@ -213,6 +215,72 @@ def test_work_item_reassignment_boundary_delegates_without_direct_sql_or_reposit
         app.openapi()["paths"]["/api/workbench/work-items/{item_id}/assignee"]["patch"]["operationId"]
         == "reassign_work_item_api_workbench_work_items__item_id__assignee_patch"
     )
+
+
+def test_batch_dispatch_boundary_delegates_without_direct_sql_or_repository() -> None:
+    tree = ast.parse(inspect.getsource(workbench.dispatch_batch_work_item))
+    assert not any(isinstance(node, ast.Attribute) and node.attr == "execute" for node in ast.walk(tree))
+    assert "WorkbenchRepository" not in inspect.getsource(workbench.dispatch_batch_work_item)
+    assert (
+        app.openapi()["paths"]["/api/workbench/work-items/{item_id}/batch-dispatch"]["post"]["operationId"]
+        == "dispatch_batch_work_item_api_workbench_work_items__item_id__batch_dispatch_post"
+    )
+
+
+def test_batch_attempt_duplicate_detail_sanitizes_sensitive_profile_for_non_admin_only() -> None:
+    attempt = {"profile_snapshot": {"solver_path": "C:/secret/solver.exe"}, "command_preview": "secret --input a"}
+    non_admin_request = SimpleNamespace(state=SimpleNamespace(principal=SimpleNamespace(is_global_admin=False)))
+    admin_request = SimpleNamespace(state=SimpleNamespace(principal=SimpleNamespace(is_global_admin=True)))
+
+    assert workbench._sanitize_batch_attempt(attempt, non_admin_request) == {
+        "profile_snapshot": {},
+        "command_preview": "[관리자 전용]",
+    }
+    assert workbench._sanitize_batch_attempt(attempt, admin_request) == attempt
+
+
+@pytest.mark.parametrize(
+    ("is_admin", "expected_snapshot", "expected_preview"),
+    [
+        (False, {}, "[관리자 전용]"),
+        (True, {"solver_path": "C:/secret/solver.exe"}, "secret --input a"),
+    ],
+)
+def test_batch_duplicate_error_mapping_redacts_non_admin_detail(
+    monkeypatch,
+    is_admin: bool,
+    expected_snapshot: dict[str, str],
+    expected_preview: str,
+) -> None:
+    attempt = {
+        "id": "attempt-1",
+        "profile_snapshot": {"solver_path": "C:/secret/solver.exe"},
+        "command_preview": "secret --input a",
+    }
+
+    monkeypatch.setattr(workbench, "SQLWorkbenchBatchDispatchCommand", lambda _connection: object())
+    monkeypatch.setattr(
+        workbench,
+        "dispatch_workbench_batch",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(BatchAttemptAlreadyRejectedError(attempt)),
+    )
+    monkeypatch.setattr(workbench, "_is_admin", lambda _request: is_admin)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/workbench/work-items/item-1/batch-dispatch",
+            json={
+                "batch_profile_id": "profile-1",
+                "idempotency_key": "duplicate-key",
+                "created_by": "payload actor",
+            },
+        )
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["code"] == "BATCH_ATTEMPT_ALREADY_REJECTED"
+    assert detail["attempt"]["profile_snapshot"] == expected_snapshot
+    assert detail["attempt"]["command_preview"] == expected_preview
 
 
 @pytest.mark.parametrize(

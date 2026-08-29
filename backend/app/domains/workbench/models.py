@@ -268,3 +268,87 @@ class WorkItemAssigneeAccountNotActiveError(Exception):
         self.project_id = project_id
         self.owner_user_id = owner_user_id
         super().__init__(owner_user_id)
+
+
+@dataclass(frozen=True)
+class BatchDispatchCommand:
+    batch_profile_id: str | None
+    idempotency_key: str
+    created_by: str
+
+
+@dataclass(frozen=True)
+class BatchDispatchContext:
+    """Immutable values fixed before the first batch-dispatch transaction."""
+
+    work_item: dict[str, Any]
+    profile: dict[str, Any]
+    attempt_id: str
+    started_at: datetime
+    profile_snapshot_json: str
+    initial_command_preview: str
+
+
+@dataclass(frozen=True)
+class BatchDispatchPreflight:
+    """Safe, validated preview returned by batch-profile preflight."""
+
+    command_preview: str
+    working_directory_preview: str
+
+
+@dataclass(frozen=True)
+class BatchDispatchResult:
+    """The already-projected demo run returned by a dispatch or replay."""
+
+    run: dict[str, object]
+
+
+class BatchDispatchError(Exception):
+    def __init__(self, code: str, detail: dict[str, Any]):
+        self.code = code
+        self.detail = detail
+        super().__init__(code)
+
+
+class BatchAttemptAlreadyRejectedError(BatchDispatchError):
+    def __init__(self, attempt: dict[str, Any]):
+        super().__init__("BATCH_ATTEMPT_ALREADY_REJECTED", {"attempt": attempt})
+
+
+class BatchWorkItemNotInProgressError(BatchDispatchError):
+    def __init__(self, item_id: str):
+        super().__init__("WORK_ITEM_NOT_IN_PROGRESS", {"item_id": item_id})
+
+
+class BatchProfileTaskMismatchError(BatchDispatchError):
+    def __init__(self, task_type_id: str, task_type_version: int):
+        super().__init__(
+            "BATCH_PROFILE_TASK_MISMATCH",
+            {"task_type_id": task_type_id, "task_type_version": task_type_version},
+        )
+
+
+class BatchProfileNotConfiguredError(BatchDispatchError):
+    def __init__(self, task_type_id: str, task_type_version: int):
+        super().__init__(
+            "BATCH_PROFILE_NOT_CONFIGURED",
+            {"task_type_id": task_type_id, "task_type_version": task_type_version},
+        )
+
+
+class BatchPreflightRejectedError(BatchDispatchError):
+    def __init__(self, code: str, message: str, attempt_id: str):
+        super().__init__(code, {"message": message, "attempt_id": attempt_id})
+
+
+class BatchPreflightFailedError(ValueError):
+    """A profile failed validation before a runner record was created."""
+
+    def __init__(self, code: str, message: str):
+        self.code = code
+        super().__init__(message)
+
+
+class BatchDemoRunValidationError(ValueError):
+    """The DEMO_ONLY runner rejected the current work-item projection."""

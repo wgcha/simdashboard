@@ -102,6 +102,16 @@ port/use case/SQL adapter로 분리했다. application은 joined item/request co
 completed guard → canonical active project-member resolution → owner update → audit callback → response reread 순서를
 소유한다. membership/account-state의 기존 422 payload와 reassignment audit detail, single rollback과 response shape은
 router/adapter 경계에서 유지하며 batch는 후속이다.
+`POST /api/workbench/work-items/{item_id}/batch-dispatch`는 마지막 execution slice로 command/port/application boundary를
+도입했다. application은 item read 직후 router가 제공한 assigned-execution permission callback을 호출하고, idempotency replay,
+profile/version guard, PREFLIGHT와 QUEUED commit, 독립 DEMO_ONLY run 생성, FAILED 또는 SUCCEEDED finalization의 세 단계
+순서를 명시적으로 조정한다.
+adapter는 같은 connection에서 단계별 query/persistence, preflight 및 기존 demo-run service를 제공한다. preflight rejection
+record commit과 runner의 독립 transaction은 기존 실행 계약으로 보존하며, router는 permission/audit callback, sensitive run
+projection sanitization과 HTTP mapping을 소유한다.
+Duplicate idempotency-key가 과거 rejection record를 가리킬 때도 non-admin 409 detail의 attempt snapshot과 command preview는
+`_sanitize_batch_attempt`로 비공개 처리하며, admin은 기존 원문을 유지한다. idempotency check/insert 경쟁과
+QUEUED→runner→finalization 복구는 현재 계약을 바꾸지 않는 후속 reliability slice로 남긴다.
 
 ### 3.2 비즈니스 로직과 데이터 접근
 

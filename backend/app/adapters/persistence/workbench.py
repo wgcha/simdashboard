@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import Any, cast
+from uuid import uuid4
 
 from ...database_connection import ConnectionLike, rows
 from ...domains.workbench.models import (
@@ -15,6 +17,11 @@ from ...domains.workbench.models import (
     RequestTypeVersionRead,
     TaskTypeVersionRead,
     ProjectAssigneeRead,
+    BatchDispatchCommand,
+    BatchDispatchContext,
+    BatchDispatchPreflight,
+    BatchDemoRunValidationError,
+    BatchPreflightFailedError,
     WorkItemCompleteCommand,
     WorkItemAssigneeAccountNotActiveError,
     WorkItemAssigneeMembershipRequiredError,
@@ -27,6 +34,9 @@ from ...domains.workbench.models import (
 from ...modules.access_control import resolve_project_assignee
 from ...repositories.workbench import WorkbenchRepository
 from ...services.request_monitoring import request_monitoring_summary, sync_request_status
+from ...services.batch_execution import BatchPreflightError, preflight_batch_profile
+from ...services.demo_runner import DemoRunnerService, WorkbenchValidationError
+from ...schemas.workbench import DemoRunCreate
 
 
 def _utcnow_naive() -> datetime:
@@ -351,3 +361,135 @@ class SQLWorkbenchWorkItemReassignmentCommand:
 
     def reassigned_work_item(self, item_id: str) -> dict[str, object]:
         return dict(rows(self._connection.execute("SELECT * FROM request_work_items WHERE id=?", [item_id]))[0])
+
+
+class SQLWorkbenchBatchDispatchCommand:
+    """SQL implementation of the discrete three-phase batch-dispatch port."""
+
+    def __init__(self, connection: ConnectionLike) -> None:
+        self._connection = connection
+        self._repository = WorkbenchRepository(connection)
+
+    def work_item(self, item_id: str) -> dict[str, Any] | None:
+        items = rows(self._connection.execute("SELECT * FROM request_work_items WHERE id=?", [item_id]))
+        return items[0] if items else None
+
+    def existing_attempt(self, item_id: str, idempotency_key: str) -> dict[str, Any] | None:
+        return self._repository.batch_attempt_by_key(item_id, idempotency_key)
+
+    def batch_profile(self, task_type_id: str, task_type_version: int) -> dict[str, Any] | None:
+        return self._repository.get_batch_profile_for_task(task_type_id, task_type_version)
+
+    def load_run(self, run_id: str) -> dict[str, object] | None:
+        return DemoRunnerService(self._repository).get_run(run_id)
+
+    def begin_transaction(self) -> None:
+        self._repository.begin_transaction()
+
+    def commit_transaction(self) -> None:
+        self._repository.commit_transaction()
+
+    def rollback_transaction(self) -> None:
+        self._repository.rollback_transaction()
+
+    def insert_preflight_attempt(self, context: BatchDispatchContext, command: BatchDispatchCommand) -> None:
+        self._repository.insert_batch_attempt({
+            "id": context.attempt_id, "work_item_id": context.work_item["id"], "workflow_run_id": None,
+            "batch_profile_id": context.profile["id"], "batch_profile_version": int(context.profile["version"]),
+            "profile_snapshot_json": context.profile_snapshot_json, "command_preview": context.initial_command_preview,
+            "idempotency_key": command.idempotency_key, "execution_mode": "DEMO_ONLY", "status": "PREFLIGHT",
+            "progress": 0, "last_message": "배치 프로필과 작업 호환성을 검증 중입니다.",
+            "created_by": command.created_by, "created_at": context.started_at, "started_at": context.started_at,
+            "completed_at": None,
+        })
+
+    def insert_preflight_event(self, context: BatchDispatchContext) -> None:
+        self._repository.insert_batch_attempt_event({
+            "id": f"batch-event-{uuid4().hex[:12]}", "attempt_id": context.attempt_id, "event_index": 0,
+            "event_type": "PREFLIGHT", "level": "INFO", "message": "배치 프로필 snapshot을 고정했습니다.",
+            "progress": 0, "occurred_at": context.started_at,
+        })
+
+    def preflight(self, context: BatchDispatchContext) -> BatchDispatchPreflight:
+        try:
+            result = preflight_batch_profile(context.profile, context.work_item)
+        except BatchPreflightError as exc:
+            raise BatchPreflightFailedError(exc.code, str(exc)) from exc
+        return BatchDispatchPreflight(
+            command_preview=result.command_preview,
+            working_directory_preview=result.working_directory_preview,
+        )
+
+    def reject_attempt(self, context: BatchDispatchContext, *, message: str, completed_at: datetime) -> None:
+        self._repository.update_batch_attempt(context.attempt_id, workflow_run_id=None, status="REJECTED", progress=0, message=message, started_at=context.started_at, completed_at=completed_at)
+
+    def insert_rejected_event(self, context: BatchDispatchContext, *, message: str, occurred_at: datetime) -> None:
+        self._repository.insert_batch_attempt_event({
+            "id": f"batch-event-{uuid4().hex[:12]}", "attempt_id": context.attempt_id, "event_index": 1,
+            "event_type": "REJECTED", "level": "ERROR", "message": message, "progress": 0, "occurred_at": occurred_at,
+        })
+
+    def queue_attempt(self, context: BatchDispatchContext) -> None:
+        self._repository.update_batch_attempt(context.attempt_id, workflow_run_id=None, status="QUEUED", progress=10, message="DEMO_ONLY 실행 기록을 생성합니다.", started_at=context.started_at)
+
+    def insert_queued_event(self, context: BatchDispatchContext, *, occurred_at: datetime) -> None:
+        self._repository.insert_batch_attempt_event({
+            "id": f"batch-event-{uuid4().hex[:12]}", "attempt_id": context.attempt_id, "event_index": 1,
+            "event_type": "QUEUED", "level": "INFO", "message": "DEMO_ONLY 제어 plane에 등록했습니다.",
+            "progress": 10, "occurred_at": occurred_at,
+        })
+
+    def create_demo_run(self, context: BatchDispatchContext, command: BatchDispatchCommand) -> dict[str, object]:
+        work_item = context.work_item
+        payload = DemoRunCreate(
+            name=f"{work_item['display_name']} 배치 기록", request_id=work_item["request_id"],
+            execution_mode="DEMO_ONLY", nodes=[{
+                "node_key": work_item["node_key"], "task_type_id": work_item["task_type_id"],
+                "task_type_version": int(work_item["task_type_version"]), "depends_on": [],
+            }], created_by=command.created_by,
+        )
+        try:
+            return DemoRunnerService(self._repository).create_run(payload)
+        except WorkbenchValidationError as exc:
+            raise BatchDemoRunValidationError(str(exc)) from exc
+
+    def fail_attempt(self, context: BatchDispatchContext, *, message: str, completed_at: datetime) -> None:
+        self._repository.update_batch_attempt(context.attempt_id, workflow_run_id=None, status="FAILED", progress=10, message=message, started_at=context.started_at, completed_at=completed_at)
+
+    def insert_failed_event(self, context: BatchDispatchContext, *, message: str, occurred_at: datetime) -> None:
+        self._repository.insert_batch_attempt_event({
+            "id": f"batch-event-{uuid4().hex[:12]}", "attempt_id": context.attempt_id, "event_index": 2,
+            "event_type": "FAILED", "level": "ERROR", "message": message, "progress": 10, "occurred_at": occurred_at,
+        })
+
+    def succeed_attempt(self, context: BatchDispatchContext, *, workflow_run_id: str, completed_at: datetime) -> None:
+        self._repository.update_batch_attempt(context.attempt_id, workflow_run_id=workflow_run_id, status="SUCCEEDED", progress=100, message="DEMO_ONLY 배치 실행 기록이 완료되었습니다.", started_at=context.started_at, completed_at=completed_at)
+
+    def insert_succeeded_event(self, context: BatchDispatchContext, *, occurred_at: datetime) -> None:
+        self._repository.insert_batch_attempt_event({
+            "id": f"batch-event-{uuid4().hex[:12]}", "attempt_id": context.attempt_id, "event_index": 2,
+            "event_type": "SUCCEEDED", "level": "INFO", "message": "외부 solver 호출 없이 DEMO_ONLY 실행 기록을 완료했습니다.",
+            "progress": 100, "occurred_at": occurred_at,
+        })
+
+    def insert_batch_dispatch(self, context: BatchDispatchContext, preflight: BatchDispatchPreflight, command: BatchDispatchCommand, *, workflow_run_id: str, created_at: datetime) -> None:
+        self._repository.insert_batch_dispatch({
+            "id": f"dispatch-{uuid4().hex[:12]}", "work_item_id": context.work_item["id"],
+            "workflow_run_id": workflow_run_id, "batch_profile_id": context.profile["id"],
+            "profile_snapshot_json": context.profile_snapshot_json, "command_preview": preflight.command_preview,
+            "status": "RECORDED_DEMO", "created_by": command.created_by, "created_at": created_at,
+        })
+
+    def update_work_item_progress(self, context: BatchDispatchContext, command: BatchDispatchCommand, *, updated_at: datetime) -> None:
+        self._connection.execute(
+            """
+            UPDATE request_work_items
+            SET progress=CASE WHEN progress < 90 THEN 90 ELSE progress END,
+                progress_updated_by=?, progress_updated_at=?
+            WHERE id=? AND status='IN_PROGRESS'
+            """,
+            [command.created_by, updated_at, context.work_item["id"]],
+        )
+
+    def sync_request_status(self, request_id: str) -> None:
+        sync_request_status(self._connection, request_id)

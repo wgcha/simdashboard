@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import json
-from datetime import datetime, timezone
 from typing import Any
-from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
@@ -15,12 +12,14 @@ from ..adapters.persistence.workbench import (
     SQLWorkbenchWorkItemCompleteCommand,
     SQLWorkbenchWorkItemProgressCommand,
     SQLWorkbenchWorkItemReassignmentCommand,
+    SQLWorkbenchBatchDispatchCommand,
     SQLWorkbenchWorkItemStartCommand,
 )
 from ..application.workbench.commands import (
     assign_workbench_request_type,
     complete_workbench_work_item,
     reassign_workbench_work_item,
+    dispatch_workbench_batch,
     start_workbench_work_item,
     update_workbench_work_item_progress,
 )
@@ -49,6 +48,9 @@ from ..domains.workbench.models import (
     WorkItemPrerequisiteIncompleteError,
     WorkItemReassignmentCommand,
     WorkItemReassignmentFinalError,
+    BatchDispatchCommand,
+    BatchDispatchError,
+    BatchDemoRunValidationError,
     WorkItemStartCommand,
 )
 from ..modules.access_control import (
@@ -67,9 +69,8 @@ from ..repositories.workbench import WorkbenchRepository
 from ..schemas.api import DashboardDefinition
 from ..schemas.workbench import AnalysisTemplateVersionCreate, BatchDispatchCreate, BatchProfileInput, DemoRunCreate, RequestTypeAssignmentInput, RequestTypeVersionCreate, ResultLayoutMaterializeInput, ResultProfileInput, TaskTypeVersionCreate, WorkItemAssigneeUpdate, WorkItemComplete, WorkItemProgress, WorkItemStart
 from ..security import write_audit_event
-from ..services.batch_execution import BatchPreflightError, preflight_batch_profile, validate_profile_definition
+from ..services.batch_execution import BatchPreflightError, validate_profile_definition
 from ..services.demo_runner import DemoRunnerService, WorkbenchValidationError, _topological_nodes
-from ..services.request_monitoring import request_monitoring_summary, sync_request_status
 from ..services.request_result_dashboard import materialize_request_result_dashboard
 
 
@@ -472,140 +473,31 @@ def list_batch_attempts(item_id: str, request: Request) -> list[dict[str, Any]]:
 @router.post("/workbench/work-items/{item_id}/batch-dispatch", status_code=201)
 def dispatch_batch_work_item(item_id: str, payload: BatchDispatchCreate, request: Request) -> dict[str, Any]:
     principal = request.state.principal
-    created_by = principal.display_name
     with connect() as conn:
-        repository = WorkbenchRepository(conn)
-        work_items = rows(conn.execute("SELECT * FROM request_work_items WHERE id=?", [item_id]))
-        if not work_items:
-            raise HTTPException(404, detail={"code": "WORK_ITEM_NOT_FOUND", "item_id": item_id})
-        work_item = work_items[0]
-        require_assigned_work_item(request, item_id, conn=conn)
-        existing_attempt = repository.batch_attempt_by_key(item_id, payload.idempotency_key)
-        if existing_attempt:
-            if existing_attempt.get("workflow_run_id"):
-                existing_run = DemoRunnerService(repository).get_run(existing_attempt["workflow_run_id"])
-                if existing_run:
-                    return _sanitize_demo_run(existing_run, request)
-            raise HTTPException(409, detail={"code": "BATCH_ATTEMPT_ALREADY_REJECTED", "attempt": existing_attempt})
-        if work_item["status"] != "IN_PROGRESS":
-            raise HTTPException(409, detail={"code": "WORK_ITEM_NOT_IN_PROGRESS", "item_id": item_id})
-        task_type_id = str(work_item["task_type_id"])
-        task_type_version = int(work_item["task_type_version"])
-        profile = repository.get_batch_profile_for_task(task_type_id, task_type_version)
-        if payload.batch_profile_id and (not profile or payload.batch_profile_id != profile["id"]):
-            raise HTTPException(409, detail={"code": "BATCH_PROFILE_TASK_MISMATCH", "task_type_id": task_type_id, "task_type_version": task_type_version})
-        if not profile or not profile["is_active"]:
-            raise HTTPException(404, detail={"code": "BATCH_PROFILE_NOT_CONFIGURED", "task_type_id": task_type_id, "task_type_version": task_type_version})
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
-        attempt_id = f"attempt-{uuid4().hex[:12]}"
-        profile_snapshot_json = json.dumps(profile, ensure_ascii=False, default=str)
-        provisional_preview = f'"{profile["solver_path"]}" {profile["arguments_template"]}'.strip()
-        repository.begin_transaction()
+        command_port = SQLWorkbenchBatchDispatchCommand(conn)
         try:
-            _audit_execution_override(request, conn, "batch_dispatch")
-            repository.insert_batch_attempt({
-                "id": attempt_id,
-                "work_item_id": item_id,
-                "workflow_run_id": None,
-                "batch_profile_id": profile["id"],
-                "batch_profile_version": int(profile["version"]),
-                "profile_snapshot_json": profile_snapshot_json,
-                "command_preview": provisional_preview,
-                "idempotency_key": payload.idempotency_key,
-                "execution_mode": "DEMO_ONLY",
-                "status": "PREFLIGHT",
-                "progress": 0,
-                "last_message": "배치 프로필과 작업 호환성을 검증 중입니다.",
-                "created_by": created_by,
-                "created_at": now,
-                "started_at": now,
-                "completed_at": None,
-            })
-            repository.insert_batch_attempt_event({
-                "id": f"batch-event-{uuid4().hex[:12]}", "attempt_id": attempt_id, "event_index": 0,
-                "event_type": "PREFLIGHT", "level": "INFO", "message": "배치 프로필 snapshot을 고정했습니다.",
-                "progress": 0, "occurred_at": now,
-            })
-            try:
-                preflight = preflight_batch_profile(profile, work_item)
-            except BatchPreflightError as exc:
-                rejected_at = datetime.now(timezone.utc).replace(tzinfo=None)
-                repository.update_batch_attempt(attempt_id, workflow_run_id=None, status="REJECTED", progress=0, message=str(exc), started_at=now, completed_at=rejected_at)
-                repository.insert_batch_attempt_event({
-                    "id": f"batch-event-{uuid4().hex[:12]}", "attempt_id": attempt_id, "event_index": 1,
-                    "event_type": "REJECTED", "level": "ERROR", "message": str(exc), "progress": 0, "occurred_at": rejected_at,
-                })
-                repository.commit_transaction()
-                raise HTTPException(409, detail={"code": exc.code, "message": str(exc), "attempt_id": attempt_id}) from exc
-            repository.update_batch_attempt(attempt_id, workflow_run_id=None, status="QUEUED", progress=10, message="DEMO_ONLY 실행 기록을 생성합니다.", started_at=now)
-            repository.insert_batch_attempt_event({
-                "id": f"batch-event-{uuid4().hex[:12]}", "attempt_id": attempt_id, "event_index": 1,
-                "event_type": "QUEUED", "level": "INFO", "message": "DEMO_ONLY 제어 plane에 등록했습니다.",
-                "progress": 10, "occurred_at": datetime.now(timezone.utc).replace(tzinfo=None),
-            })
-            repository.commit_transaction()
-        except HTTPException:
-            raise
-        except Exception:
-            repository.rollback_transaction()
-            raise
-        node = {
-            "node_key": work_item["node_key"],
-            "task_type_id": work_item["task_type_id"],
-            "task_type_version": int(work_item["task_type_version"]),
-            "depends_on": [],
-        }
-        demo_payload = DemoRunCreate(
-            name=f"{work_item['display_name']} 배치 기록",
-            request_id=work_item["request_id"],
-            execution_mode="DEMO_ONLY",
-            nodes=[node],
-            created_by=created_by,
-        )
-        try:
-            run = DemoRunnerService(repository).create_run(demo_payload)
-        except WorkbenchValidationError as exc:
-            failed_at = datetime.now(timezone.utc).replace(tzinfo=None)
-            repository.begin_transaction()
-            repository.update_batch_attempt(attempt_id, workflow_run_id=None, status="FAILED", progress=10, message=str(exc), started_at=now, completed_at=failed_at)
-            repository.insert_batch_attempt_event({
-                "id": f"batch-event-{uuid4().hex[:12]}", "attempt_id": attempt_id, "event_index": 2,
-                "event_type": "FAILED", "level": "ERROR", "message": str(exc), "progress": 10, "occurred_at": failed_at,
-            })
-            repository.commit_transaction()
+            run = dispatch_workbench_batch(
+                command_port,
+                item_id,
+                BatchDispatchCommand(
+                    batch_profile_id=payload.batch_profile_id,
+                    idempotency_key=payload.idempotency_key,
+                    created_by=principal.display_name,
+                ),
+                authorize=lambda: require_assigned_work_item(request, item_id, conn=conn),
+                audit=lambda: _audit_execution_override(request, conn, "batch_dispatch"),
+            )
+        except WorkItemNotFoundError as exc:
+            raise HTTPException(404, detail={"code": "WORK_ITEM_NOT_FOUND", "item_id": exc.item_id}) from exc
+        except BatchDispatchError as exc:
+            status_code = 404 if exc.code == "BATCH_PROFILE_NOT_CONFIGURED" else 409
+            detail = {"code": exc.code, **exc.detail}
+            if exc.code == "BATCH_ATTEMPT_ALREADY_REJECTED" and isinstance(detail.get("attempt"), dict):
+                detail["attempt"] = _sanitize_batch_attempt(detail["attempt"], request)
+            raise HTTPException(status_code, detail=detail) from exc
+        except BatchDemoRunValidationError as exc:
             raise _bad_request(exc) from exc
-        completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
-        repository.begin_transaction()
-        repository.update_batch_attempt(attempt_id, workflow_run_id=run["id"], status="SUCCEEDED", progress=100, message="DEMO_ONLY 배치 실행 기록이 완료되었습니다.", started_at=now, completed_at=completed_at)
-        repository.insert_batch_attempt_event({
-            "id": f"batch-event-{uuid4().hex[:12]}", "attempt_id": attempt_id, "event_index": 2,
-            "event_type": "SUCCEEDED", "level": "INFO", "message": "외부 solver 호출 없이 DEMO_ONLY 실행 기록을 완료했습니다.",
-            "progress": 100, "occurred_at": completed_at,
-        })
-        dispatch = {
-            "id": f"dispatch-{uuid4().hex[:12]}",
-            "work_item_id": item_id,
-            "workflow_run_id": run["id"],
-            "batch_profile_id": profile["id"],
-            "profile_snapshot_json": json.dumps(profile, ensure_ascii=False, default=str),
-            "command_preview": preflight.command_preview,
-            "status": "RECORDED_DEMO",
-            "created_by": created_by,
-            "created_at": completed_at,
-        }
-        repository.insert_batch_dispatch(dispatch)
-        conn.execute(
-            """
-            UPDATE request_work_items
-            SET progress=CASE WHEN progress < 90 THEN 90 ELSE progress END,
-                progress_updated_by=?, progress_updated_at=?
-            WHERE id=? AND status='IN_PROGRESS'
-            """,
-            [created_by, completed_at, item_id],
-        )
-        sync_request_status(conn, work_item["request_id"])
-        conn.execute("COMMIT")
-        return _sanitize_demo_run(DemoRunnerService(repository).get_run(run["id"]), request)  # type: ignore[arg-type]
+        return _sanitize_demo_run(run.run, request)
 
 
 @router.get("/workbench/requests/{request_id}/request-type")

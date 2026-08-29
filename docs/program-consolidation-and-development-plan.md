@@ -388,6 +388,16 @@ detail·audit·rollback 계약을 보존한다. batch는 이 slice에 포함하�
 use case, same-connection SQL adapter로 분리했다. joined projection read → workflow-edit authorize → completed guard →
 active project-member validation/resolution → update → audit → reread 순서를 보존하고, 기존 final 409 및 membership/account
 422 detail, single rollback, raw work-item response는 그대로 유지한다. batch는 이 slice에 포함하지 않는다.
+최종 work-item execution slice인 `POST /api/workbench/work-items/{item_id}/batch-dispatch`도 command/port/application
+boundary를 도입했다. application use case가 동일 idempotency-key 재호출, IN_PROGRESS/profile-version-active 검증,
+PREFLIGHT·QUEUED commit, 독립 DEMO_ONLY runner, FAILED 또는 SUCCEEDED attempt/dispatch/progress/status finalization을
+단계별 port로 조정한다. rejected attempt의 commit과 runner의 독립 transaction을 일반 rollback으로 합치지 않으며,
+adapter는 기존 query/persistence/service를 같은 connection에서 제공하고 router는 권한/audit, HTTP 오류와 민감 run
+projection sanitization을 유지한다.
+Duplicate rejection 409의 attempt detail은 non-admin에게 profile snapshot과 command preview를 노출하지 않도록 router에서
+sanitize하고 admin 원문 계약은 유지한다. idempotency check와 attempt insert 사이의 경쟁, 그리고 QUEUED→DEMO_ONLY runner
+→finalization 사이의 복구/재처리 설계는 이번 safe slice에서 transaction semantics를 바꾸지 않고 별도 reliability 계획으로
+다룬다.
 
 각 slice는 `HTTP → application → domain port → adapter`를 갖고 router `.execute()`를 0으로 유지한다.
 
