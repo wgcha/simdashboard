@@ -877,10 +877,29 @@ def _initialize_duckdb_legacy() -> None:
                 created_at TIMESTAMP NOT NULL,
                 started_at TIMESTAMP,
                 completed_at TIMESTAMP,
+                recovery_lease_owner_id VARCHAR,
+                recovery_lease_token VARCHAR,
+                recovery_lease_generation BIGINT NOT NULL DEFAULT 0,
+                recovery_lease_acquired_at TIMESTAMP,
+                recovery_lease_expires_at TIMESTAMP,
                 UNIQUE (work_item_id, idempotency_key),
                 CHECK (execution_mode = 'DEMO_ONLY'),
                 CHECK (status IN ('PREFLIGHT', 'QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED', 'REJECTED')),
-                CHECK (progress BETWEEN 0 AND 100)
+                CHECK (progress BETWEEN 0 AND 100),
+                CONSTRAINT ck_batch_attempts_recovery_lease_generation CHECK (recovery_lease_generation >= 0),
+                CONSTRAINT ck_batch_attempts_recovery_lease_state CHECK (
+                    recovery_lease_token IS NULL
+                    OR (recovery_lease_generation > 0 AND status = 'QUEUED'
+                        AND workflow_run_id IS NOT NULL AND completed_at IS NULL)
+                ),
+                CONSTRAINT ck_batch_attempts_recovery_lease_identity CHECK (
+                    (recovery_lease_owner_id IS NULL AND recovery_lease_token IS NULL
+                     AND recovery_lease_acquired_at IS NULL AND recovery_lease_expires_at IS NULL)
+                    OR
+                    (recovery_lease_owner_id IS NOT NULL AND recovery_lease_token IS NOT NULL
+                     AND recovery_lease_acquired_at IS NOT NULL AND recovery_lease_expires_at IS NOT NULL
+                     AND recovery_lease_expires_at > recovery_lease_acquired_at)
+                )
             );
 
             CREATE TABLE IF NOT EXISTS batch_execution_events (
@@ -916,6 +935,40 @@ def _initialize_duckdb_legacy() -> None:
         # legacy queued links without that reverse identity are not guessed.
         conn.execute("ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS batch_attempt_id VARCHAR")
         conn.execute("ALTER TABLE batch_dispatches ADD COLUMN IF NOT EXISTS attempt_id VARCHAR")
+        # Recovery ownership is local-development compatible only; production
+        # concurrency is verified against PostgreSQL before release.
+        conn.execute("ALTER TABLE batch_execution_attempts ADD COLUMN IF NOT EXISTS recovery_lease_owner_id VARCHAR")
+        conn.execute("ALTER TABLE batch_execution_attempts ADD COLUMN IF NOT EXISTS recovery_lease_token VARCHAR")
+        conn.execute("ALTER TABLE batch_execution_attempts ADD COLUMN IF NOT EXISTS recovery_lease_generation BIGINT DEFAULT 0")
+        conn.execute("ALTER TABLE batch_execution_attempts ADD COLUMN IF NOT EXISTS recovery_lease_acquired_at TIMESTAMP")
+        conn.execute("ALTER TABLE batch_execution_attempts ADD COLUMN IF NOT EXISTS recovery_lease_expires_at TIMESTAMP")
+        conn.execute("UPDATE batch_execution_attempts SET recovery_lease_generation=0 WHERE recovery_lease_generation IS NULL")
+        invalid_recovery_lease = conn.execute(
+            """SELECT 1 FROM batch_execution_attempts AS attempt
+            WHERE (attempt.recovery_lease_owner_id IS NULL) <> (attempt.recovery_lease_token IS NULL)
+               OR (attempt.recovery_lease_owner_id IS NULL) <> (attempt.recovery_lease_acquired_at IS NULL)
+               OR (attempt.recovery_lease_owner_id IS NULL) <> (attempt.recovery_lease_expires_at IS NULL)
+               OR attempt.recovery_lease_generation < 0
+               OR (attempt.recovery_lease_token IS NOT NULL AND (
+                   attempt.recovery_lease_generation <= 0 OR attempt.status <> 'QUEUED'
+                   OR attempt.workflow_run_id IS NULL OR attempt.completed_at IS NOT NULL
+                   OR NOT EXISTS (
+                       SELECT 1 FROM workflow_runs AS run
+                       JOIN request_work_items AS item ON item.id=attempt.work_item_id
+                       WHERE run.id=attempt.workflow_run_id AND run.batch_attempt_id=attempt.id
+                         AND run.request_id=item.request_id AND run.execution_mode='DEMO_ONLY'
+                         AND run.status='SUCCEEDED' AND run.created_by=attempt.created_by
+                         AND json_array_length(json_extract(run.definition_json, '$.nodes'))=1
+                         AND json_extract_string(run.definition_json, '$.nodes[0].node_key')=item.node_key
+                         AND json_extract_string(run.definition_json, '$.nodes[0].task_type_id')=item.task_type_id
+                         AND CAST(json_extract_string(run.definition_json, '$.nodes[0].task_type_version') AS INTEGER)=item.task_type_version
+                         AND json_array_length(json_extract(run.definition_json, '$.nodes[0].depends_on'))=0
+                   )
+                   OR EXISTS (SELECT 1 FROM batch_dispatches AS dispatch WHERE dispatch.workflow_run_id=attempt.workflow_run_id)
+               )) LIMIT 1"""
+        ).fetchone()
+        if invalid_recovery_lease:
+            raise RuntimeError("invalid historical batch recovery lease; remediate before local database initialization")
         invalid_batch_link = conn.execute(
             """SELECT 1 FROM batch_execution_attempts
             WHERE workflow_run_id IS NOT NULL AND status NOT IN ('QUEUED', 'SUCCEEDED') LIMIT 1"""
@@ -1091,6 +1144,8 @@ def _initialize_duckdb_legacy() -> None:
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_analysis_runs_load_case_run_no ON analysis_runs(load_case_id, run_no)")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_workflow_runs_batch_attempt_id ON workflow_runs(batch_attempt_id)")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_batch_dispatches_attempt_id ON batch_dispatches(attempt_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_batch_attempts_recovery_candidates ON batch_execution_attempts(status, recovery_lease_expires_at, id)")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_batch_attempts_recovery_lease_token ON batch_execution_attempts(recovery_lease_token)")
         conn.execute("UPDATE request_work_items SET progress=CASE WHEN status='COMPLETED' THEN 100 ELSE COALESCE(progress, 0) END")
 
         ensure_quality_threshold_schema(conn)

@@ -119,6 +119,11 @@ Duplicate idempotency-key가 과거 rejection record를 가리킬 때도 non-adm
 QUEUED→runner→finalization의 lease claim, retry API, scheduler, 자동 recovery와 status 의미 변경은 현재 실행 경계 밖의
 후속 release-gated reliability slice로 남긴다.
 
+`0019_batch_recovery_lease`는 그 후속 slice를 위한 내부 claim/renew/release ownership만 추가했다. 전용 application/SQL
+adapter는 DB UTC clock과 owner/token/generation CAS로 0018의 정확한 QUEUED crash-window만 점유하며, lease field는 admin을
+포함한 모든 public attempt/run projection에서 제거된다. router·scheduler·worker·재실행·finalization은 연결하지 않았고,
+future finalization은 같은 transaction에서 active lease CAS를 요구한다.
+
 ### 3.2 비즈니스 로직과 데이터 접근
 
 | 경로 | 사용 방식 |

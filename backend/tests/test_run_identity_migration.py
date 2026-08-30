@@ -43,7 +43,9 @@ def test_run_identity_v2_precedes_batch_attempt_identity_head() -> None:
     assert revision and revision.down_revision == "0016_result_ingestion_sources"
     identity = script.get_revision("0018_batch_attempt_run_identity")
     assert identity and identity.down_revision == "0017_run_identity_v2"
-    assert tuple(script.get_heads()) == ("0018_batch_attempt_run_identity",)
+    lease = script.get_revision("0019_batch_recovery_lease")
+    assert lease and lease.down_revision == "0018_batch_attempt_run_identity"
+    assert tuple(script.get_heads()) == ("0019_batch_recovery_lease",)
 
 
 def test_run_identity_v2_adds_nullable_history_columns_and_constraints(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -371,11 +371,75 @@ class BatchDispatchResult:
     run: dict[str, object]
 
 
+@dataclass(frozen=True)
+class BatchRecoveryLeaseClaimCommand:
+    """Request ownership of one recoverable, already-created batch run."""
+
+    owner_id: str
+    token: str
+    expected_generation: int
+    ttl_seconds: int
+
+
+@dataclass(frozen=True)
+class BatchRecoveryLeaseRenewCommand:
+    """Extend an owned recovery lease without changing its generation."""
+
+    owner_id: str
+    token: str
+    generation: int
+    ttl_seconds: int
+
+
+@dataclass(frozen=True)
+class BatchRecoveryLeaseReleaseCommand:
+    """Compare-and-swap release for a recovery lease."""
+
+    owner_id: str
+    token: str
+    generation: int
+
+
+@dataclass(frozen=True)
+class BatchRecoveryLeaseRead:
+    """Internal recovery ownership; deliberately absent from public projections."""
+
+    attempt_id: str
+    workflow_run_id: str
+    owner_id: str
+    token: str
+    generation: int
+    acquired_at: datetime
+    expires_at: datetime
+
+
 class BatchDispatchError(Exception):
     def __init__(self, code: str, detail: dict[str, Any]):
         self.code = code
         self.detail = detail
         super().__init__(code)
+
+
+class BatchRecoveryLeaseError(Exception):
+    def __init__(self, code: str, detail: dict[str, Any]):
+        self.code = code
+        self.detail = detail
+        super().__init__(code)
+
+
+class BatchRecoveryLeaseCommandInvalidError(BatchRecoveryLeaseError):
+    def __init__(self, field: str):
+        super().__init__("BATCH_RECOVERY_LEASE_COMMAND_INVALID", {"field": field})
+
+
+class BatchRecoveryLeaseUnavailableError(BatchRecoveryLeaseError):
+    def __init__(self, attempt_id: str):
+        super().__init__("BATCH_RECOVERY_LEASE_UNAVAILABLE", {"attempt_id": attempt_id})
+
+
+class BatchRecoveryLeaseLostError(BatchRecoveryLeaseError):
+    def __init__(self, attempt_id: str):
+        super().__init__("BATCH_RECOVERY_LEASE_LOST", {"attempt_id": attempt_id})
 
 
 class BatchAttemptAlreadyRejectedError(BatchDispatchError):

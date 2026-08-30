@@ -1072,6 +1072,13 @@ class WorkbenchRepository:
     @staticmethod
     def _batch_attempt_item(item: dict[str, Any], events: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         item["profile_snapshot"] = _decoded(item.pop("profile_snapshot_json")) or {}
+        # Recovery ownership is persistence-only.  Keep every established
+        # attempt/run API projection stable, including administrator views.
+        item.pop("recovery_lease_owner_id", None)
+        item.pop("recovery_lease_token", None)
+        item.pop("recovery_lease_generation", None)
+        item.pop("recovery_lease_acquired_at", None)
+        item.pop("recovery_lease_expires_at", None)
         item["events"] = events or []
         return item
 

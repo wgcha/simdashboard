@@ -17,6 +17,10 @@ from .models import (
     BatchDispatchCommand,
     BatchDispatchContext,
     BatchDispatchPreflight,
+    BatchRecoveryLeaseClaimCommand,
+    BatchRecoveryLeaseRead,
+    BatchRecoveryLeaseReleaseCommand,
+    BatchRecoveryLeaseRenewCommand,
     WorkPlanMonitoringSummaryRead,
     RequestResultLayoutContext,
     ResultLayoutMaterializeCommand,
@@ -209,3 +213,31 @@ class WorkbenchBatchDispatchPort(Protocol):
     def update_work_item_progress(self, context: BatchDispatchContext, command: BatchDispatchCommand, *, updated_at: datetime) -> None: ...
 
     def sync_request_status(self, request_id: str) -> None: ...
+
+
+class WorkbenchBatchRecoveryLeasePort(Protocol):
+    """Internal-only atomic ownership operations for recoverable batch attempts."""
+
+    def begin_transaction(self) -> None: ...
+
+    def commit_transaction(self) -> None: ...
+
+    def rollback_transaction(self) -> None: ...
+
+    def claim_batch_recovery_lease(
+        self,
+        attempt_id: str,
+        command: BatchRecoveryLeaseClaimCommand,
+    ) -> BatchRecoveryLeaseRead | None: ...
+
+    def renew_batch_recovery_lease(
+        self,
+        attempt_id: str,
+        command: BatchRecoveryLeaseRenewCommand,
+    ) -> BatchRecoveryLeaseRead | None: ...
+
+    def release_batch_recovery_lease(
+        self,
+        attempt_id: str,
+        command: BatchRecoveryLeaseReleaseCommand,
+    ) -> bool: ...

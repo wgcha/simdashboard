@@ -796,10 +796,29 @@ CREATE TABLE IF NOT EXISTS projects (
                 created_at TIMESTAMP NOT NULL,
                 started_at TIMESTAMP,
                 completed_at TIMESTAMP,
+                recovery_lease_owner_id VARCHAR,
+                recovery_lease_token VARCHAR,
+                recovery_lease_generation BIGINT NOT NULL DEFAULT 0,
+                recovery_lease_acquired_at TIMESTAMP,
+                recovery_lease_expires_at TIMESTAMP,
                 UNIQUE (work_item_id, idempotency_key),
                 CHECK (execution_mode = 'DEMO_ONLY'),
                 CHECK (status IN ('PREFLIGHT', 'QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED', 'REJECTED')),
-                CHECK (progress BETWEEN 0 AND 100)
+                CHECK (progress BETWEEN 0 AND 100),
+                CONSTRAINT ck_batch_attempts_recovery_lease_generation CHECK (recovery_lease_generation >= 0),
+                CONSTRAINT ck_batch_attempts_recovery_lease_state CHECK (
+                    recovery_lease_token IS NULL
+                    OR (recovery_lease_generation > 0 AND status = 'QUEUED'
+                        AND workflow_run_id IS NOT NULL AND completed_at IS NULL)
+                ),
+                CONSTRAINT ck_batch_attempts_recovery_lease_identity CHECK (
+                    (recovery_lease_owner_id IS NULL AND recovery_lease_token IS NULL
+                     AND recovery_lease_acquired_at IS NULL AND recovery_lease_expires_at IS NULL)
+                    OR
+                    (recovery_lease_owner_id IS NOT NULL AND recovery_lease_token IS NOT NULL
+                     AND recovery_lease_acquired_at IS NOT NULL AND recovery_lease_expires_at IS NOT NULL
+                     AND recovery_lease_expires_at > recovery_lease_acquired_at)
+                )
             );
 
             CREATE TABLE IF NOT EXISTS batch_execution_events (
@@ -855,6 +874,8 @@ CREATE INDEX IF NOT EXISTS ix_task_run_events_task ON task_run_events(task_run_i
 CREATE INDEX IF NOT EXISTS ix_batch_profile_versions_id ON batch_path_profile_versions(id, version DESC);
 CREATE INDEX IF NOT EXISTS ix_batch_attempts_work_item ON batch_execution_attempts(work_item_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS ix_batch_attempts_status ON batch_execution_attempts(status, created_at);
+CREATE INDEX IF NOT EXISTS ix_batch_attempts_recovery_candidates ON batch_execution_attempts(status, recovery_lease_expires_at, id);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_batch_attempts_recovery_lease_token ON batch_execution_attempts(recovery_lease_token);
 CREATE INDEX IF NOT EXISTS ix_batch_events_attempt ON batch_execution_events(attempt_id, event_index);
 CREATE INDEX IF NOT EXISTS ix_batch_dispatches_work_item ON batch_dispatches(work_item_id, created_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_batch_dispatches_attempt_id ON batch_dispatches(attempt_id);
