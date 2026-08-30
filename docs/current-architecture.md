@@ -109,9 +109,15 @@ profile/version guard, PREFLIGHT와 QUEUED commit, 독립 DEMO_ONLY run 생성, 
 adapter는 같은 connection에서 단계별 query/persistence, preflight 및 기존 demo-run service를 제공한다. preflight rejection
 record commit과 runner의 독립 transaction은 기존 실행 계약으로 보존하며, router는 permission/audit callback, sensitive run
 projection sanitization과 HTTP mapping을 소유한다.
+`0018_batch_attempt_run_identity`는 runner commit 뒤 finalization 전에 중단되어도 run을 정확히 식별할 수 있게 한다.
+batch adapter는 attempt ID에서 결정적인 `demo-{attempt_id}`를 만들고 `workflow_runs.batch_attempt_id`와
+`batch_dispatches.attempt_id`가 같은 attempt를 1:1로 보존한다. 재호출은 request·DEMO_ONLY mode·created-by·attempt ID가
+모두 일치할 때만 기존 run을 반환하며 충돌하는 deterministic ID는 fail-closed한다. recovery identity는 public WorkflowRun
+projection에 노출하지 않고, migration은 SUCCEEDED historical link만 backfill하며 legacy QUEUED orphan을 추정하지 않는다.
 Duplicate idempotency-key가 과거 rejection record를 가리킬 때도 non-admin 409 detail의 attempt snapshot과 command preview는
 `_sanitize_batch_attempt`로 비공개 처리하며, admin은 기존 원문을 유지한다. idempotency check/insert 경쟁과
-QUEUED→runner→finalization 복구는 현재 계약을 바꾸지 않는 후속 reliability slice로 남긴다.
+QUEUED→runner→finalization의 lease claim, retry API, scheduler, 자동 recovery와 status 의미 변경은 현재 실행 경계 밖의
+후속 release-gated reliability slice로 남긴다.
 
 ### 3.2 비즈니스 로직과 데이터 접근
 

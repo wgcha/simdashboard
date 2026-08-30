@@ -47,7 +47,7 @@ def test_result_profile_migration_chain_and_roundtrip_sql(monkeypatch) -> None:
     revision_15 = script.get_revision("0015_legacy_drop_layout")
     assert revision_14 and revision_14.down_revision == "0013_project_result_profile_menu"
     assert revision_15 and revision_15.down_revision == "0014_result_profile_revs"
-    assert tuple(script.get_heads()) == ("0017_run_identity_v2",)
+    assert tuple(script.get_heads()) == ("0018_batch_attempt_run_identity",)
 
     module = _migration("0014_project_result_profile_binding_revisions.py")
     statements = _Statements()

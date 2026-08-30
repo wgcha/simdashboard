@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
-from ..repositories.workbench import WorkbenchRepository
+from ..repositories.workbench import BatchAttemptWorkflowRunLinkConflictError, WorkbenchRepository
 from ..schemas.workbench import DemoRunCreate, WorkflowNodeDraft
 
 
@@ -68,6 +68,45 @@ def _json(value: Any) -> Any:
         except json.JSONDecodeError:
             pass
     return value
+
+
+_RUN_IDENTITY_CONSTRAINTS = {
+    "workflow_runs_pkey",
+    "ux_workflow_runs_batch_attempt_id",
+}
+
+
+def _is_deterministic_run_identity_conflict(exc: Exception) -> bool:
+    """Recognize only the two unique conflicts that a safe retry can replay."""
+    errors = (exc, getattr(exc, "orig", None))
+    codes = {
+        str(code)
+        for error in errors
+        if error is not None
+        for code in (getattr(error, "sqlstate", None), getattr(error, "pgcode", None))
+        if code is not None
+    }
+    constraints = {
+        str(name).lower()
+        for error in errors
+        if error is not None
+        for name in (
+            getattr(error, "constraint_name", None),
+            getattr(getattr(error, "diag", None), "constraint_name", None),
+        )
+        if name is not None
+    }
+    if "23505" in codes and constraints & _RUN_IDENTITY_CONSTRAINTS:
+        return True
+
+    message = " ".join(str(error).lower() for error in errors if error is not None)
+    is_run_id_duplicate = 'duplicate key "id:' in message and (
+        "workflow_runs_pkey" in message or "primary key" in message
+    )
+    is_attempt_id_duplicate = 'duplicate key "batch_attempt_id:' in message and (
+        "ux_workflow_runs_batch_attempt_id" in message or "unique constraint" in message
+    )
+    return is_run_id_duplicate or is_attempt_id_duplicate
 
 
 def _topological_nodes(nodes: list[WorkflowNodeDraft]) -> list[WorkflowNodeDraft]:
@@ -165,9 +204,71 @@ class DemoRunnerService:
             task_types[node.node_key] = task_type
         return ordered, request_type, task_types
 
-    def create_run(self, payload: DemoRunCreate) -> dict[str, Any]:
+    def create_run(
+        self,
+        payload: DemoRunCreate,
+        *,
+        run_id: str | None = None,
+        batch_attempt_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a demo run, optionally under a caller-owned stable identity.
+
+        The stable identity is intentionally an internal service concern.  Batch
+        dispatch uses it to make a retry after a partial commit return the same
+        workflow run instead of attempting to insert a second one.
+        """
+        if (run_id is None) != (batch_attempt_id is None):
+            raise WorkbenchValidationError("run_id와 batch_attempt_id는 함께 지정해야 합니다.")
+        if run_id is not None:
+            run_id = run_id.strip()
+            batch_attempt_id = batch_attempt_id.strip()  # type: ignore[union-attr]
+            if not run_id or not batch_attempt_id:
+                raise WorkbenchValidationError("run_id와 batch_attempt_id는 비어 있을 수 없습니다.")
+            attempt = self.repository.batch_attempt(batch_attempt_id)
+            work_item = self.repository.work_item(str(attempt["work_item_id"])) if attempt else None
+            node = payload.nodes[0] if len(payload.nodes) == 1 else None
+            if (
+                not attempt
+                or not work_item
+                or work_item.get("request_id") != payload.request_id
+                or attempt.get("execution_mode") != "DEMO_ONLY"
+                or attempt.get("created_by") != payload.created_by.strip()
+                or attempt.get("status") not in {"QUEUED", "SUCCEEDED"}
+                or node is None
+                or node.node_key != work_item.get("node_key")
+                or node.task_type_id != work_item.get("task_type_id")
+                or node.task_type_version != work_item.get("task_type_version")
+                or (attempt.get("status") == "QUEUED" and attempt.get("workflow_run_id") not in {None, run_id})
+                or (attempt.get("status") == "SUCCEEDED" and attempt.get("workflow_run_id") != run_id)
+            ):
+                raise WorkbenchValidationError("batch attempt의 요청·DEMO_ONLY mode·소유권이 실행 요청과 일치하지 않습니다.")
+
+            expected_definition = {"nodes": [node.model_dump() for node in payload.nodes]}
+
+            def matches_existing(existing: dict[str, Any]) -> bool:
+                return (
+                    existing.get("batch_attempt_id") == batch_attempt_id
+                    and existing.get("request_id") == payload.request_id
+                    and existing.get("execution_mode") == "DEMO_ONLY"
+                    and existing.get("created_by") == payload.created_by.strip()
+                    and existing.get("status") == "SUCCEEDED"
+                    and existing.get("name") == payload.name.strip()
+                    and _json(existing.get("definition_json")) == expected_definition
+                )
+
+            # Check the attempt-owned record first.  This catches a unique
+            # batch_attempt_id collision with a different run ID and permits
+            # recovery even after the work item's mutable lifecycle advances.
+            owned_run = self.repository.workflow_run_by_batch_attempt(batch_attempt_id)
+            if owned_run:
+                if owned_run.get("id") != run_id or not matches_existing(owned_run):
+                    raise WorkbenchValidationError("batch_attempt_id가 다른 deterministic run에 이미 연결되어 있습니다.")
+                return self.get_run(run_id)  # type: ignore[return-value]
+            existing = self.repository.get_workflow_run(run_id)
+            if existing:
+                raise WorkbenchValidationError("run_id가 이 batch attempt의 DEMO_ONLY 실행 소유권과 일치하지 않습니다.")
         ordered, request_type, task_types = self._validated_plan(payload)
-        run_id = f"demo-{uuid4().hex[:12]}"
+        run_id = run_id or f"demo-{uuid4().hex[:12]}"
         base_time = _utcnow()
         definition = {"nodes": [node.model_dump() for node in payload.nodes]}
         run = {
@@ -184,11 +285,17 @@ class DemoRunnerService:
             "created_at": base_time,
             "started_at": base_time,
             "completed_at": base_time + timedelta(seconds=max(1, len(ordered) * 3)),
+            "batch_attempt_id": batch_attempt_id,
         }
 
         self.repository.conn.execute("BEGIN TRANSACTION")
         try:
             self.repository.insert_workflow_run(run)
+            if batch_attempt_id is not None:
+                # This is intentionally not a status transition.  It commits
+                # with the runner record so a crash before finalization still
+                # leaves the QUEUED attempt and run mutually identifiable.
+                self.repository.link_batch_attempt_workflow_run(batch_attempt_id, run_id)
             for task_index, node in enumerate(ordered):
                 task_type = task_types[node.node_key]
                 task_run_id = f"task-{uuid4().hex[:12]}"
@@ -228,8 +335,38 @@ class DemoRunnerService:
                         }
                     )
             self.repository.conn.execute("COMMIT")
-        except Exception:
+        except Exception as exc:
             self.repository.conn.execute("ROLLBACK")
+            if isinstance(exc, BatchAttemptWorkflowRunLinkConflictError):
+                raise WorkbenchValidationError(
+                    "batch attempt 상태가 바뀌어 deterministic runner identity를 연결할 수 없습니다."
+                ) from exc
+            if run_id is not None and batch_attempt_id is not None and _is_deterministic_run_identity_conflict(exc):
+                # Concurrent deterministic creates may collide after both
+                # callers performed the absence check.  Re-read only the
+                # immutable attempt-owned identity after rollback; do not
+                # adopt a run merely because its deterministic ID exists.
+                recovered = self.repository.workflow_run_by_batch_attempt(batch_attempt_id)
+                recovered_attempt = self.repository.batch_attempt(batch_attempt_id)
+                if recovered and (
+                    recovered_attempt is not None
+                    and recovered_attempt.get("execution_mode") == "DEMO_ONLY"
+                    and recovered_attempt.get("created_by") == payload.created_by.strip()
+                    and (
+                        (recovered_attempt.get("status") == "QUEUED" and recovered_attempt.get("workflow_run_id") == run_id)
+                        or (recovered_attempt.get("status") == "SUCCEEDED" and recovered_attempt.get("workflow_run_id") == run_id)
+                    )
+                    and recovered.get("id") == run_id
+                    and recovered.get("request_id") == payload.request_id
+                    and recovered.get("execution_mode") == "DEMO_ONLY"
+                    and recovered.get("created_by") == payload.created_by.strip()
+                    and recovered.get("status") == "SUCCEEDED"
+                    and recovered.get("name") == payload.name.strip()
+                    and _json(recovered.get("definition_json")) == definition
+                ):
+                    return self.get_run(run_id)  # type: ignore[return-value]
+                if recovered or self.repository.get_workflow_run(run_id):
+                    raise WorkbenchValidationError("deterministic batch run identity conflicts with an existing workflow run.") from exc
             raise
         return self.get_run(run_id)  # type: ignore[return-value]
 
@@ -237,6 +374,9 @@ class DemoRunnerService:
         run = self.repository.get_workflow_run(run_id)
         if not run:
             return None
+        # It is a persistence-only recovery identity, never part of the
+        # public WorkflowRun API projection.
+        run.pop("batch_attempt_id", None)
         run["definition"] = _json(run.pop("definition_json")) or {"nodes": []}
         tasks = self.repository.task_runs(run_id)
         for task in tasks:

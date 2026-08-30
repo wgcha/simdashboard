@@ -231,7 +231,7 @@ def test_source_claim_migration_is_the_current_alembic_head():
     migration = script.get_revision("0016_result_ingestion_sources")
 
     assert migration and migration.down_revision == "0015_legacy_drop_layout"
-    assert tuple(script.get_heads()) == ("0017_run_identity_v2",)
+    assert tuple(script.get_heads()) == ("0018_batch_attempt_run_identity",)
 
 
 def test_source_claim_migration_has_a_three_part_primary_key(monkeypatch: pytest.MonkeyPatch):

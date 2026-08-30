@@ -22,6 +22,7 @@ from app.domains.workbench.models import (
     BatchWorkItemNotInProgressError,
     WorkItemNotFoundError,
 )
+from app.repositories.workbench import WorkbenchRepository
 from app.services.demo_runner import WorkbenchValidationError
 pytestmark = pytest.mark.unit
 
@@ -94,7 +95,7 @@ def test_batch_dispatch_insert_race_rolls_back_then_replays_the_requeried_run():
         def existing_attempt(self, item_id, idempotency_key):
             self.reads += 1
             self.events.append("existing_attempt")
-            return None if self.reads == 1 else {"workflow_run_id": "run-1"}
+            return None if self.reads == 1 else {"status": "SUCCEEDED", "workflow_run_id": "run-1"}
 
         def insert_preflight_attempt(self, context, command):
             self.events.append("insert_attempt")
@@ -159,7 +160,7 @@ def test_batch_dispatch_insert_race_propagates_requery_run_failure_after_one_rol
         def existing_attempt(self, item_id, idempotency_key):
             self.reads += 1
             self.events.append("existing_attempt")
-            return None if self.reads == 1 else {"workflow_run_id": "run-1"}
+            return None if self.reads == 1 else {"status": "SUCCEEDED", "workflow_run_id": "run-1"}
 
         def insert_preflight_attempt(self, context, command):
             self.events.append("insert_attempt")
@@ -278,7 +279,7 @@ def test_batch_dispatch_insert_race_rejects_requeried_attempt_after_one_rollback
         "rollback",
         "existing_attempt",
     ]
-    if attempt["workflow_run_id"]:
+    if attempt["status"] == "SUCCEEDED" and attempt["workflow_run_id"]:
         expected_events.append("load_run")
     assert port.events == expected_events
     assert port.events.count("rollback") == 1
@@ -315,12 +316,49 @@ def test_batch_dispatch_missing_item_stops_before_authorization_or_transactions(
 
 def test_batch_dispatch_replays_an_existing_run_before_state_or_profile_checks() -> None:
     port = _BatchPort()
-    port.existing_attempt = lambda _item_id, _key: port.events.append("existing_attempt") or {"workflow_run_id": "run-1"}
+    port.existing_attempt = lambda _item_id, _key: port.events.append("existing_attempt") or {"status": "SUCCEEDED", "workflow_run_id": "run-1"}
 
     result = _run(port)
 
     assert result.run == port.run
     assert port.events == ["read", "authorize", "existing_attempt", "load_run"]
+
+
+def test_batch_dispatch_does_not_replay_a_queued_attempt_even_when_its_runner_run_is_linked() -> None:
+    port = _BatchPort()
+    attempt = {"id": "attempt-queued", "status": "QUEUED", "workflow_run_id": "run-1"}
+    port.existing_attempt = lambda _item_id, _key: port.events.append("existing_attempt") or attempt
+
+    with pytest.raises(BatchAttemptAlreadyRejectedError) as exc_info:
+        _run(port)
+
+    assert exc_info.value.detail == {"attempt": attempt}
+    assert port.events == ["read", "authorize", "existing_attempt"]
+
+
+def test_runner_link_fails_closed_when_attempt_state_changed_before_the_link_update() -> None:
+    class _Result:
+        def fetchone(self):
+            return (None,)
+
+    class _Connection:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, list[object] | None]] = []
+
+        def execute(self, sql: str, params=None):
+            self.calls.append((sql, params))
+            return _Result()
+
+    connection = _Connection()
+    repository = WorkbenchRepository(connection)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="conflicts"):
+        repository.link_batch_attempt_workflow_run("attempt-1", "demo-attempt-1")
+
+    update_sql, update_params = connection.calls[0]
+    assert "status='QUEUED'" in update_sql
+    assert "workflow_run_id IS NULL" in update_sql
+    assert update_params == ["demo-attempt-1", "attempt-1"]
 
 
 def test_batch_dispatch_rejects_an_existing_attempt_without_a_linked_run() -> None:
@@ -392,7 +430,9 @@ def test_sql_batch_adapter_translates_demo_runner_validation_to_domain_error(mon
         def __init__(self, actual_repository: object) -> None:
             assert actual_repository is repository
 
-        def create_run(self, _payload: object) -> dict[str, object]:
+        def create_run(self, _payload: object, *, run_id: str, batch_attempt_id: str) -> dict[str, object]:
+            assert run_id == "demo-attempt-1"
+            assert batch_attempt_id == "attempt-1"
             raise WorkbenchValidationError("invalid workflow")
 
     monkeypatch.setattr(workbench_persistence, "WorkbenchRepository", lambda _connection: repository)

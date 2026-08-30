@@ -401,8 +401,14 @@ PREFLIGHT·QUEUED commit, 독립 DEMO_ONLY runner, FAILED 또는 SUCCEEDED attem
 adapter는 기존 query/persistence/service를 같은 connection에서 제공하고 router는 권한/audit, HTTP 오류와 민감 run
 projection sanitization을 유지한다.
 Batch attempt idempotency는 phase-one insert의 DB unique race를 typed conflict로 번역해 rollback 후 같은 connection에서
-existing attempt를 재조회한다. 연결된 run은 기존처럼 replay하고, 그 외 attempt는 기존 duplicate 409 규칙을 적용한다.
-queued recovery는 lease/retry ownership을 포함한 별도 reliability slice로 보류한다.
+existing attempt를 재조회한다. SUCCEEDED attempt의 연결된 run만 기존처럼 replay하고, QUEUED linked crash-window attempt는
+성공으로 반환하지 않으며 그 외 attempt와 함께 기존 duplicate 409 규칙을 적용한다.
+`0018_batch_attempt_run_identity`는 runner commit 뒤 finalization 전 crash를 식별 가능한 상태로만 축소한다. attempt ID 기반
+deterministic run ID, `workflow_runs.batch_attempt_id`, `batch_dispatches.attempt_id`를 저장하고 재호출 때
+request/mode/owner/attempt identity를 검증한다. SUCCEEDED historical attempt의 기존 run link만 backfill하며 QUEUED legacy
+orphan은 매핑하지 않는다. 이는 **execution 구현 경계**이며 lease claim, retry ownership/API, scheduler, 자동 recovery,
+status semantics 변경은 포함하지 않는다. 그 기능은 PostgreSQL live migration/privilege 검증과 운영 retry·lease 정책 승인 뒤의
+**release gate**다.
 Duplicate rejection 409의 attempt detail은 non-admin에게 profile snapshot과 command preview를 노출하지 않도록 router에서
 sanitize하고 admin 원문 계약은 유지한다. idempotency check와 attempt insert 사이의 경쟁, 그리고 QUEUED→DEMO_ONLY runner
 →finalization 사이의 복구/재처리 설계는 이번 safe slice에서 transaction semantics를 바꾸지 않고 별도 reliability 계획으로

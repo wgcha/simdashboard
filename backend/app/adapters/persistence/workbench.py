@@ -593,7 +593,12 @@ class SQLWorkbenchBatchDispatchCommand:
             }], created_by=command.created_by,
         )
         try:
-            return DemoRunnerService(self._repository).create_run(payload)
+            runner = DemoRunnerService(self._repository)
+            return runner.create_run(
+                payload,
+                run_id=f"demo-{context.attempt_id}",
+                batch_attempt_id=context.attempt_id,
+            )
         except WorkbenchValidationError as exc:
             raise BatchDemoRunValidationError(str(exc)) from exc
 
@@ -620,7 +625,8 @@ class SQLWorkbenchBatchDispatchCommand:
         self._repository.insert_batch_dispatch({
             "id": f"dispatch-{uuid4().hex[:12]}", "work_item_id": context.work_item["id"],
             "workflow_run_id": workflow_run_id, "batch_profile_id": context.profile["id"],
-            "profile_snapshot_json": context.profile_snapshot_json, "command_preview": preflight.command_preview,
+            "profile_snapshot_json": context.profile_snapshot_json, "attempt_id": context.attempt_id,
+            "command_preview": preflight.command_preview,
             "status": "RECORDED_DEMO", "created_by": command.created_by, "created_at": created_at,
         })
 

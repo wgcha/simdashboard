@@ -250,7 +250,7 @@ def dispatch_workbench_batch(
     existing_attempt = command_port.existing_attempt(item_id, command.idempotency_key)
     if existing_attempt:
         workflow_run_id = existing_attempt.get("workflow_run_id")
-        if workflow_run_id:
+        if existing_attempt.get("status") == "SUCCEEDED" and workflow_run_id:
             existing_run = command_port.load_run(str(workflow_run_id))
             if existing_run:
                 return BatchDispatchResult(run=existing_run)
@@ -286,7 +286,7 @@ def dispatch_workbench_batch(
             command_port.rollback_transaction()
             preflight_insert_conflict_rolled_back = True
             existing_attempt = command_port.existing_attempt(item_id, command.idempotency_key)
-            if existing_attempt and existing_attempt.get("workflow_run_id"):
+            if existing_attempt and existing_attempt.get("status") == "SUCCEEDED" and existing_attempt.get("workflow_run_id"):
                 existing_run = command_port.load_run(str(existing_attempt["workflow_run_id"]))
                 if existing_run:
                     return BatchDispatchResult(run=existing_run)

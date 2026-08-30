@@ -83,6 +83,10 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+class BatchAttemptWorkflowRunLinkConflictError(ValueError):
+    """A QUEUED attempt changed before its runner identity could be linked."""
+
+
 def _decoded(value: Any) -> Any:
     if isinstance(value, str):
         try:
@@ -906,10 +910,11 @@ class WorkbenchRepository:
             """
             INSERT INTO workflow_runs
             (id, name, request_id, request_type_id, request_type_version, definition_json,
-             execution_mode, status, progress, created_by, created_at, started_at, completed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             execution_mode, status, progress, created_by, created_at, started_at, completed_at,
+             batch_attempt_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            [item[key] for key in ("id", "name", "request_id", "request_type_id", "request_type_version", "definition_json", "execution_mode", "status", "progress", "created_by", "created_at", "started_at", "completed_at")],
+            [item[key] for key in ("id", "name", "request_id", "request_type_id", "request_type_version", "definition_json", "execution_mode", "status", "progress", "created_by", "created_at", "started_at", "completed_at")] + [item.get("batch_attempt_id")],
         )
 
     def insert_task_run(self, item: dict[str, Any]) -> None:
@@ -944,6 +949,10 @@ class WorkbenchRepository:
 
     def get_workflow_run(self, run_id: str) -> dict[str, Any] | None:
         items = rows(self.conn.execute("SELECT * FROM workflow_runs WHERE id=?", [run_id]))
+        return items[0] if items else None
+
+    def workflow_run_by_batch_attempt(self, attempt_id: str) -> dict[str, Any] | None:
+        items = rows(self.conn.execute("SELECT * FROM workflow_runs WHERE batch_attempt_id=?", [attempt_id]))
         return items[0] if items else None
 
     def task_runs(self, run_id: str) -> list[dict[str, Any]]:
@@ -1044,11 +1053,11 @@ class WorkbenchRepository:
         self.conn.execute(
             """
             INSERT INTO batch_dispatches
-                (id, work_item_id, workflow_run_id, batch_profile_id, profile_snapshot_json,
+                (id, work_item_id, workflow_run_id, batch_profile_id, profile_snapshot_json, attempt_id,
                  command_preview, status, created_by, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            [item[key] for key in ("id", "work_item_id", "workflow_run_id", "batch_profile_id", "profile_snapshot_json", "command_preview", "status", "created_by", "created_at")],
+            [item[key] for key in ("id", "work_item_id", "workflow_run_id", "batch_profile_id", "profile_snapshot_json")] + [item.get("attempt_id")] + [item[key] for key in ("command_preview", "status", "created_by", "created_at")],
         )
 
     def batch_dispatch_for_run(self, run_id: str) -> dict[str, Any] | None:
@@ -1057,6 +1066,7 @@ class WorkbenchRepository:
             return None
         item = items[0]
         item["profile_snapshot"] = _decoded(item.pop("profile_snapshot_json")) or {}
+        item.pop("attempt_id", None)
         return item
 
     @staticmethod
@@ -1091,6 +1101,23 @@ class WorkbenchRepository:
             [workflow_run_id, status, progress, message, started_at, completed_at, attempt_id],
         )
 
+    def link_batch_attempt_workflow_run(self, attempt_id: str, workflow_run_id: str) -> None:
+        """Durably attach the runner record without changing attempt status."""
+        self.conn.execute(
+            """UPDATE batch_execution_attempts
+            SET workflow_run_id=?
+            WHERE id=? AND status='QUEUED' AND workflow_run_id IS NULL""",
+            [workflow_run_id, attempt_id],
+        )
+        linked = self.conn.execute(
+            "SELECT workflow_run_id FROM batch_execution_attempts WHERE id=?",
+            [attempt_id],
+        ).fetchone()
+        if not linked or linked[0] != workflow_run_id:
+            raise BatchAttemptWorkflowRunLinkConflictError(
+                "batch attempt workflow run link conflicts with the deterministic identity"
+            )
+
     def insert_batch_attempt_event(self, item: dict[str, Any]) -> None:
         self.conn.execute(
             """
@@ -1109,6 +1136,13 @@ class WorkbenchRepository:
         if not items:
             return None
         events = rows(self.conn.execute("SELECT * FROM batch_execution_events WHERE attempt_id=? ORDER BY event_index", [items[0]["id"]]))
+        return self._batch_attempt_item(items[0], events)
+
+    def batch_attempt(self, attempt_id: str) -> dict[str, Any] | None:
+        items = rows(self.conn.execute("SELECT * FROM batch_execution_attempts WHERE id=?", [attempt_id]))
+        if not items:
+            return None
+        events = rows(self.conn.execute("SELECT * FROM batch_execution_events WHERE attempt_id=? ORDER BY event_index", [attempt_id]))
         return self._batch_attempt_item(items[0], events)
 
     def list_batch_attempts(self, work_item_id: str) -> list[dict[str, Any]]:

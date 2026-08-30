@@ -778,6 +778,7 @@ def _initialize_duckdb_legacy() -> None:
                 created_at TIMESTAMP NOT NULL,
                 started_at TIMESTAMP NOT NULL,
                 completed_at TIMESTAMP,
+                batch_attempt_id VARCHAR,
                 CHECK (execution_mode = 'DEMO_ONLY'),
                 CHECK (progress BETWEEN 0 AND 100)
             );
@@ -855,6 +856,7 @@ def _initialize_duckdb_legacy() -> None:
                 status VARCHAR NOT NULL,
                 created_by VARCHAR NOT NULL,
                 created_at TIMESTAMP NOT NULL,
+                attempt_id VARCHAR,
                 CHECK (status = 'RECORDED_DEMO')
             );
 
@@ -908,6 +910,136 @@ def _initialize_duckdb_legacy() -> None:
         conn.execute("ALTER TABLE batch_path_profiles ADD COLUMN IF NOT EXISTS task_type_version INTEGER DEFAULT 1")
         conn.execute("ALTER TABLE batch_path_profile_versions ADD COLUMN IF NOT EXISTS task_type_id VARCHAR")
         conn.execute("ALTER TABLE batch_path_profile_versions ADD COLUMN IF NOT EXISTS task_type_version INTEGER DEFAULT 1")
+        # Batch attempt identity is deliberately additive for old local files.
+        # A runner commit may leave a QUEUED attempt linked to its exact run
+        # before finalization.  Other non-SUCCEEDED links are malformed, and
+        # legacy queued links without that reverse identity are not guessed.
+        conn.execute("ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS batch_attempt_id VARCHAR")
+        conn.execute("ALTER TABLE batch_dispatches ADD COLUMN IF NOT EXISTS attempt_id VARCHAR")
+        invalid_batch_link = conn.execute(
+            """SELECT 1 FROM batch_execution_attempts
+            WHERE workflow_run_id IS NOT NULL AND status NOT IN ('QUEUED', 'SUCCEEDED') LIMIT 1"""
+        ).fetchone()
+        ambiguous_batch_link = conn.execute(
+            """SELECT workflow_run_id FROM batch_execution_attempts
+            WHERE workflow_run_id IS NOT NULL AND status = 'SUCCEEDED'
+            GROUP BY workflow_run_id HAVING count(*) > 1 LIMIT 1"""
+        ).fetchone()
+        mismatched_run_identity = conn.execute(
+            """SELECT 1 FROM workflow_runs AS run
+            LEFT JOIN batch_execution_attempts AS attempt ON attempt.id = run.batch_attempt_id
+            LEFT JOIN request_work_items AS item ON item.id = attempt.work_item_id
+            WHERE run.batch_attempt_id IS NOT NULL
+              AND (
+                  attempt.id IS NULL
+                  OR attempt.workflow_run_id IS DISTINCT FROM run.id
+                  OR item.id IS NULL
+                  OR item.request_id IS DISTINCT FROM run.request_id
+              ) LIMIT 1"""
+        ).fetchone()
+        mismatched_dispatch_identity = conn.execute(
+            """SELECT 1 FROM batch_dispatches AS dispatch
+            LEFT JOIN batch_execution_attempts AS attempt ON attempt.id = dispatch.attempt_id
+            WHERE dispatch.attempt_id IS NOT NULL
+              AND (
+                  attempt.id IS NULL
+                  OR attempt.workflow_run_id IS DISTINCT FROM dispatch.workflow_run_id
+                  OR attempt.work_item_id IS DISTINCT FROM dispatch.work_item_id
+                  OR attempt.batch_profile_id IS DISTINCT FROM dispatch.batch_profile_id
+              ) LIMIT 1"""
+        ).fetchone()
+        invalid_queued_link = conn.execute(
+            """SELECT 1 FROM batch_execution_attempts AS attempt
+            LEFT JOIN workflow_runs AS run ON run.id = attempt.workflow_run_id
+            LEFT JOIN request_work_items AS item ON item.id = attempt.work_item_id
+            WHERE attempt.status = 'QUEUED' AND attempt.workflow_run_id IS NOT NULL
+              AND (
+                  run.id IS NULL
+                  OR run.batch_attempt_id IS DISTINCT FROM attempt.id
+                  OR run.request_id IS DISTINCT FROM item.request_id
+                  OR run.execution_mode <> 'DEMO_ONLY'
+                  OR run.status <> 'SUCCEEDED'
+                  OR run.created_by IS DISTINCT FROM attempt.created_by
+                  OR json_array_length(json_extract(run.definition_json, '$.nodes')) IS DISTINCT FROM 1
+                  OR json_extract_string(run.definition_json, '$.nodes[0].node_key') IS DISTINCT FROM item.node_key
+                  OR json_extract_string(run.definition_json, '$.nodes[0].task_type_id') IS DISTINCT FROM item.task_type_id
+                  OR CAST(json_extract_string(run.definition_json, '$.nodes[0].task_type_version') AS INTEGER) IS DISTINCT FROM item.task_type_version
+                  OR json_array_length(json_extract(run.definition_json, '$.nodes[0].depends_on')) IS DISTINCT FROM 0
+                  OR attempt.completed_at IS NOT NULL
+                  OR EXISTS (
+                      SELECT 1 FROM batch_dispatches AS dispatch
+                      WHERE dispatch.workflow_run_id = attempt.workflow_run_id
+                  )
+              ) LIMIT 1"""
+        ).fetchone()
+        missing_succeeded_dispatch = conn.execute(
+            """SELECT 1 FROM batch_execution_attempts AS attempt
+            WHERE attempt.status = 'SUCCEEDED'
+              AND NOT EXISTS (
+                  SELECT 1 FROM batch_dispatches AS dispatch
+                  WHERE dispatch.workflow_run_id = attempt.workflow_run_id
+              ) LIMIT 1"""
+        ).fetchone()
+        mismatched_dispatch_provenance = conn.execute(
+            """SELECT 1 FROM batch_execution_attempts AS attempt
+            JOIN batch_dispatches AS dispatch ON dispatch.workflow_run_id = attempt.workflow_run_id
+            WHERE attempt.status = 'SUCCEEDED'
+              AND (dispatch.work_item_id <> attempt.work_item_id
+                   OR dispatch.batch_profile_id <> attempt.batch_profile_id) LIMIT 1"""
+        ).fetchone()
+        if (
+            invalid_batch_link
+            or ambiguous_batch_link
+            or mismatched_run_identity
+            or mismatched_dispatch_identity
+            or invalid_queued_link
+            or missing_succeeded_dispatch
+            or mismatched_dispatch_provenance
+        ):
+            raise RuntimeError("ambiguous or invalid historical batch attempt identity; remediate before local database initialization")
+        conn.execute(
+            """
+            UPDATE workflow_runs AS run
+            SET batch_attempt_id = attempt.id
+            FROM batch_execution_attempts AS attempt
+            WHERE attempt.workflow_run_id = run.id
+              AND attempt.workflow_run_id IS NOT NULL
+              AND attempt.status = 'SUCCEEDED'
+              AND run.batch_attempt_id IS NULL
+            """
+        )
+        conn.execute(
+            """
+            UPDATE batch_dispatches AS dispatch
+            SET attempt_id = attempt.id
+            FROM batch_execution_attempts AS attempt
+            WHERE attempt.workflow_run_id = dispatch.workflow_run_id
+              AND attempt.workflow_run_id IS NOT NULL
+              AND attempt.status = 'SUCCEEDED'
+              AND dispatch.attempt_id IS NULL
+            """
+        )
+        invalid_succeeded_link = conn.execute(
+            """SELECT 1 FROM batch_execution_attempts AS attempt
+            LEFT JOIN workflow_runs AS run ON run.id = attempt.workflow_run_id
+            LEFT JOIN request_work_items AS item ON item.id = attempt.work_item_id
+            WHERE attempt.status = 'SUCCEEDED'
+              AND (
+                  run.id IS NULL
+                  OR run.batch_attempt_id IS DISTINCT FROM attempt.id
+                  OR run.request_id IS DISTINCT FROM item.request_id
+                  OR run.execution_mode <> 'DEMO_ONLY'
+                  OR run.status <> 'SUCCEEDED'
+                  OR run.created_by IS DISTINCT FROM attempt.created_by
+                  OR json_array_length(json_extract(run.definition_json, '$.nodes')) IS DISTINCT FROM 1
+                  OR json_extract_string(run.definition_json, '$.nodes[0].node_key') IS DISTINCT FROM item.node_key
+                  OR json_extract_string(run.definition_json, '$.nodes[0].task_type_id') IS DISTINCT FROM item.task_type_id
+                  OR CAST(json_extract_string(run.definition_json, '$.nodes[0].task_type_version') AS INTEGER) IS DISTINCT FROM item.task_type_version
+                  OR json_array_length(json_extract(run.definition_json, '$.nodes[0].depends_on')) IS DISTINCT FROM 0
+              ) LIMIT 1"""
+        ).fetchone()
+        if invalid_succeeded_link:
+            raise RuntimeError("succeeded batch attempt lacks an exact runner identity after local backfill")
         # Run Identity V2 is additive for existing local DuckDB files.  The
         # nullable history fields intentionally do not reinterpret old jobs.
         for column_name, definition in (
@@ -957,6 +1089,8 @@ def _initialize_duckdb_legacy() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS ix_canonical_result_ingestion_source_versions_lookup ON canonical_result_ingestion_source_versions(load_case_id, source_type, source_key, source_run_id, source_revision DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS ix_canonical_result_ingestion_source_versions_supersedes_run ON canonical_result_ingestion_source_versions(supersedes_analysis_run_id)")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_analysis_runs_load_case_run_no ON analysis_runs(load_case_id, run_no)")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_workflow_runs_batch_attempt_id ON workflow_runs(batch_attempt_id)")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_batch_dispatches_attempt_id ON batch_dispatches(attempt_id)")
         conn.execute("UPDATE request_work_items SET progress=CASE WHEN status='COMPLETED' THEN 100 ELSE COALESCE(progress, 0) END")
 
         ensure_quality_threshold_schema(conn)
