@@ -369,8 +369,14 @@ read model/port, SQL adapter로 옮겼다. `all_versions` 선택, active/latest 
 context → assignment → assigned type 또는 active catalog rule 순서, 네 상태 응답, missing-request 404와
 무인증 read를 보존했다. 이어서 단일 request work-plan GET은 request 존재 확인 → canonical monitoring summary
 순서와 두 not-found 상태, 성공 payload를 framework-neutral outcome/port로 명시했다. monitoring 계산은 기존
-service에 남겨 shared projection의 single source of truth를 유지한다. batch 실행, 결과 snapshot과 변경 endpoint는
-후속 단위다. 단, request-type assignment `PUT`은 별도 command port/use case/SQL adapter로 옮겼다. router는
+service에 남겨 shared projection의 single source of truth를 유지한다. `GET /api/workbench/requests/{request_id}/result-layout`과
+`POST /api/workbench/requests/{request_id}/result-layout/materialize`도 typed domain model/error·port,
+framework-neutral application query/command, same-connection SQL adapter로 분리했다. GET은 request context →
+`PROJECT_DATA_VIEW` → load-case 소유권 → snapshot → bindings 순서와 `UNCONFIGURED`, 의도적으로 이관된
+`LEGACY_ASSIGNED` compatibility를 유지한다. POST는 context → `DASHBOARD_EDIT` → ownership → begin → materialize →
+commit 순서, `201 DashboardDefinition`, `LookupError`/`ValueError` HTTP mapping과 rollback 계약을 유지한다. canonical
+examples와 master-results JSON/CSV/SVG/glTF → DB → bindings bridge test까지 고정했고, 이 상태의 전체 backend 검증은
+`787 passed, 5 skipped`다. 단, request-type assignment `PUT`은 별도 command port/use case/SQL adapter로 옮겼다. router는
 principal source·`REQUEST_EDIT`·HTTP 오류 응답을 유지하며, application은 동일 connection의 work-plan immutable
 guard 후 기존 repository assignment를 호출한다. persistence adapter는 repository의 admin lock과 target-not-found를
 domain error로 번역해 기존 HTTP status/detail을 보존한다. 첫 lifecycle command slice인

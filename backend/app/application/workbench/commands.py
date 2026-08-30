@@ -38,6 +38,9 @@ from ...domains.workbench.models import (
     BatchProfileNotConfiguredError,
     BatchProfileTaskMismatchError,
     BatchWorkItemNotInProgressError,
+    RequestResultLayoutNotFoundError,
+    ResultLayoutLoadCaseNotFoundError,
+    ResultLayoutMaterializeCommand,
 )
 from ...domains.workbench.ports import (
     WorkbenchRequestTypeAssignmentCommandPort,
@@ -46,7 +49,10 @@ from ...domains.workbench.ports import (
     WorkbenchWorkItemStartCommandPort,
     WorkbenchWorkItemReassignmentCommandPort,
     WorkbenchBatchDispatchPort,
+    WorkbenchResultLayoutMaterializeCommandPort,
 )
+
+
 def _batch_dispatch_now() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
@@ -60,6 +66,32 @@ def assign_workbench_request_type(
     if command_port.has_work_plan(request_id):
         raise RequestWorkPlanImmutableError(request_id)
     return command_port.assign_request_type(request_id, command)
+
+
+def materialize_workbench_request_result_layout(
+    command_port: WorkbenchResultLayoutMaterializeCommandPort,
+    request_id: str,
+    command: ResultLayoutMaterializeCommand,
+    *,
+    authorize: Callable[[str], None],
+) -> dict[str, object]:
+    """Materialize after request scope authorization and ownership checks on one UoW."""
+    context = command_port.request_result_layout_context(request_id)
+    if context is None:
+        raise RequestResultLayoutNotFoundError(request_id)
+
+    authorize(context.project_id)
+    if not command_port.load_case_belongs_to_request(request_id, command.load_case_id):
+        raise ResultLayoutLoadCaseNotFoundError(command.load_case_id)
+
+    command_port.begin_transaction()
+    try:
+        dashboard = command_port.materialize_result_layout(request_id, command)
+        command_port.commit_transaction()
+        return dashboard
+    except (LookupError, ValueError):
+        command_port.rollback_transaction()
+        raise
 
 
 def update_workbench_work_item_progress(

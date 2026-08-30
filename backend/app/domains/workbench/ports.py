@@ -18,6 +18,8 @@ from .models import (
     BatchDispatchContext,
     BatchDispatchPreflight,
     WorkPlanMonitoringSummaryRead,
+    RequestResultLayoutContext,
+    ResultLayoutMaterializeCommand,
 )
 
 
@@ -41,6 +43,38 @@ class WorkbenchRequestWorkPlanQueryPort(Protocol):
     def analysis_request_exists(self, request_id: str) -> bool: ...
 
     def request_monitoring_summary(self, request_id: str) -> WorkPlanMonitoringSummaryRead: ...
+
+
+class WorkbenchRequestResultLayoutQueryPort(Protocol):
+    """Same-connection reads for one immutable request result-layout snapshot."""
+
+    def request_result_layout_context(self, request_id: str) -> RequestResultLayoutContext | None: ...
+
+    def load_case_belongs_to_request(self, request_id: str, load_case_id: str) -> bool: ...
+
+    def result_layout_snapshot(self, request_id: str) -> dict[str, Any] | None: ...
+
+    def result_layout_bindings(self, request_id: str, load_case_id: str | None) -> dict[str, Any]: ...
+
+
+class WorkbenchResultLayoutMaterializeCommandPort(Protocol):
+    """Same-connection UoW and materialization operations for a result snapshot."""
+
+    def request_result_layout_context(self, request_id: str) -> RequestResultLayoutContext | None: ...
+
+    def load_case_belongs_to_request(self, request_id: str, load_case_id: str) -> bool: ...
+
+    def begin_transaction(self) -> None: ...
+
+    def commit_transaction(self) -> None: ...
+
+    def rollback_transaction(self) -> None: ...
+
+    def materialize_result_layout(
+        self,
+        request_id: str,
+        command: ResultLayoutMaterializeCommand,
+    ) -> dict[str, Any]: ...
 
 
 class WorkbenchRequestTypeAssignmentCommandPort(Protocol):

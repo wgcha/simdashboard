@@ -31,12 +31,15 @@ from ...domains.workbench.models import (
     WorkItemReassignmentState,
     WorkItemStartCommand,
     WorkPlanMonitoringSummaryRead,
+    RequestResultLayoutContext,
+    ResultLayoutMaterializeCommand,
 )
 from ...modules.access_control import resolve_project_assignee
 from ...repositories.workbench import WorkbenchRepository
 from ...services.request_monitoring import request_monitoring_summary, sync_request_status
 from ...services.batch_execution import BatchPreflightError, preflight_batch_profile
 from ...services.demo_runner import DemoRunnerService, WorkbenchValidationError
+from ...services.request_result_dashboard import materialize_request_result_dashboard
 from ...schemas.workbench import DemoRunCreate
 
 
@@ -201,6 +204,73 @@ class SQLWorkbenchRequestWorkPlanQuery:
 
     def request_monitoring_summary(self, request_id: str) -> WorkPlanMonitoringSummaryRead:
         return _work_plan_monitoring_summary_read(request_monitoring_summary(self._connection, request_id))
+
+
+class SQLWorkbenchRequestResultLayoutQuery:
+    """Adapt the existing request-layout repository reads on one connection."""
+
+    def __init__(self, connection: ConnectionLike) -> None:
+        self._repository = WorkbenchRepository(connection)
+
+    def request_result_layout_context(self, request_id: str) -> RequestResultLayoutContext | None:
+        stored = self._repository.request_context(request_id)
+        if stored is None:
+            return None
+        return RequestResultLayoutContext(
+            request_id=request_id,
+            project_id=str(stored["project_id"]),
+        )
+
+    def load_case_belongs_to_request(self, request_id: str, load_case_id: str) -> bool:
+        return self._repository.load_case_belongs_to_request(request_id, load_case_id)
+
+    def result_layout_snapshot(self, request_id: str) -> dict[str, Any] | None:
+        return self._repository.result_layout_snapshot(request_id)
+
+    def result_layout_bindings(self, request_id: str, load_case_id: str | None) -> dict[str, Any]:
+        return self._repository.result_layout_bindings(request_id, load_case_id)
+
+
+class SQLWorkbenchResultLayoutMaterializeCommand:
+    """Keep result-layout materialization and its transaction on one SQL connection."""
+
+    def __init__(self, connection: ConnectionLike) -> None:
+        self._connection = connection
+        self._repository = WorkbenchRepository(connection)
+
+    def request_result_layout_context(self, request_id: str) -> RequestResultLayoutContext | None:
+        stored = self._repository.request_context(request_id)
+        if stored is None:
+            return None
+        return RequestResultLayoutContext(
+            request_id=request_id,
+            project_id=str(stored["project_id"]),
+        )
+
+    def load_case_belongs_to_request(self, request_id: str, load_case_id: str) -> bool:
+        return self._repository.load_case_belongs_to_request(request_id, load_case_id)
+
+    def begin_transaction(self) -> None:
+        self._repository.begin_transaction()
+
+    def commit_transaction(self) -> None:
+        self._repository.commit_transaction()
+
+    def rollback_transaction(self) -> None:
+        self._repository.rollback_transaction()
+
+    def materialize_result_layout(
+        self,
+        request_id: str,
+        command: ResultLayoutMaterializeCommand,
+    ) -> dict[str, Any]:
+        return materialize_request_result_dashboard(
+            self._connection,
+            request_id=request_id,
+            load_case_id=command.load_case_id,
+            page_id=command.page_id,
+            created_by=command.created_by,
+        )
 
 
 class SQLWorkbenchRequestTypeAssignmentCommand:

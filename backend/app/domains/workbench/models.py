@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
 
 
 class TaskTypeVersionRead(TypedDict):
@@ -75,6 +75,73 @@ class RequestWorkPlanRead(TypedDict):
 
     status: RequestWorkPlanReadStatus
     summary: WorkPlanMonitoringSummaryRead | None
+
+
+@dataclass(frozen=True)
+class RequestResultLayoutContext:
+    """Request project scope needed before exposing or editing result layout."""
+
+    request_id: str
+    project_id: str
+
+
+class RequestResultLayoutSnapshotRead(TypedDict):
+    """Decoded immutable result-layout snapshot plus runtime bindings."""
+
+    request_id: str
+    source_request_type_id: str
+    source_request_type_version: int
+    source_template_id: str
+    source_template_version: int
+    snapshot: dict[str, Any]
+    snapshot_reason: Literal["REQUEST_CREATED", "LEGACY_ASSIGNED", "MIGRATED"]
+    created_by: str
+    created_at: datetime
+    bindings: dict[str, Any]
+    compatibility: NotRequired["RequestResultLayoutLegacyCompatibilityRead"]
+
+
+class RequestResultLayoutLegacyCompatibilityRead(TypedDict):
+    """Explicit legacy-only rendering route retained for migrated snapshots."""
+
+    route_kind: Literal["DOMAIN"]
+    renderer: Literal["LEGACY_DOMAIN"]
+
+
+class UnconfiguredRequestResultLayoutRead(TypedDict):
+    """Existing response shape when a request has no result-layout snapshot."""
+
+    request_id: str
+    status: Literal["UNCONFIGURED"]
+    message: str
+
+
+RequestResultLayoutRead = RequestResultLayoutSnapshotRead | UnconfiguredRequestResultLayoutRead
+
+
+@dataclass(frozen=True)
+class ResultLayoutMaterializeCommand:
+    """Actor-owned inputs for turning a snapshot page into an editable dashboard."""
+
+    load_case_id: str
+    page_id: str | None
+    created_by: str
+
+
+class RequestResultLayoutNotFoundError(Exception):
+    """The requested analysis request does not exist."""
+
+    def __init__(self, request_id: str) -> None:
+        self.request_id = request_id
+        super().__init__(request_id)
+
+
+class ResultLayoutLoadCaseNotFoundError(Exception):
+    """The selected load case is absent or belongs to another request."""
+
+    def __init__(self, load_case_id: str) -> None:
+        self.load_case_id = load_case_id
+        super().__init__(load_case_id)
 
 
 RequestTypeAssignmentSource = Literal["ADMIN", "USER"]

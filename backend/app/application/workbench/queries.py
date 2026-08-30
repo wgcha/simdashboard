@@ -1,8 +1,15 @@
-"""Framework-neutral immutable workbench catalog reads."""
+"""Framework-neutral immutable workbench reads."""
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import cast
+
 from ...domains.workbench.models import (
+    RequestResultLayoutRead,
+    RequestResultLayoutSnapshotRead,
+    RequestResultLayoutNotFoundError,
+    ResultLayoutLoadCaseNotFoundError,
     RequestTypeResolutionRead,
     RequestTypeVersionRead,
     RequestWorkPlanRead,
@@ -12,6 +19,7 @@ from ...domains.workbench.ports import (
     WorkbenchCatalogQueryPort,
     WorkbenchRequestWorkPlanQueryPort,
     WorkbenchRequestTypeResolutionQueryPort,
+    WorkbenchRequestResultLayoutQueryPort,
 )
 
 
@@ -52,3 +60,36 @@ def get_workbench_request_work_plan(
     if not summary["work_plan"]:
         return {"status": "WORK_PLAN_NOT_FOUND", "summary": None}
     return {"status": "FOUND", "summary": summary}
+
+
+def get_workbench_request_result_layout(
+    query: WorkbenchRequestResultLayoutQueryPort,
+    request_id: str,
+    *,
+    load_case_id: str | None,
+    authorize: Callable[[str], None],
+) -> RequestResultLayoutRead:
+    """Preserve request scope, authorization, ownership, snapshot, binding order."""
+    context = query.request_result_layout_context(request_id)
+    if context is None:
+        raise RequestResultLayoutNotFoundError(request_id)
+
+    authorize(context.project_id)
+    if load_case_id and not query.load_case_belongs_to_request(request_id, load_case_id):
+        raise ResultLayoutLoadCaseNotFoundError(load_case_id)
+
+    snapshot = query.result_layout_snapshot(request_id)
+    if not snapshot:
+        return {
+            "request_id": request_id,
+            "status": "UNCONFIGURED",
+            "message": "이 의뢰에는 결과 화면 구성이 지정되지 않았습니다.",
+        }
+
+    result = cast(RequestResultLayoutSnapshotRead, dict(snapshot))
+    result["bindings"] = query.result_layout_bindings(request_id, load_case_id)
+    # No load-case/result heuristic is allowed here. Only a deliberately
+    # migrated LEGACY_ASSIGNED snapshot may retain its old domain route.
+    if result.get("snapshot_reason") == "LEGACY_ASSIGNED":
+        result["compatibility"] = {"route_kind": "DOMAIN", "renderer": "LEGACY_DOMAIN"}
+    return result

@@ -14,6 +14,8 @@ from ..adapters.persistence.workbench import (
     SQLWorkbenchWorkItemReassignmentCommand,
     SQLWorkbenchBatchDispatchCommand,
     SQLWorkbenchWorkItemStartCommand,
+    SQLWorkbenchRequestResultLayoutQuery,
+    SQLWorkbenchResultLayoutMaterializeCommand,
 )
 from ..application.workbench.commands import (
     assign_workbench_request_type,
@@ -22,12 +24,14 @@ from ..application.workbench.commands import (
     dispatch_workbench_batch,
     start_workbench_work_item,
     update_workbench_work_item_progress,
+    materialize_workbench_request_result_layout,
 )
 from ..application.workbench.queries import (
     list_workbench_request_types,
     list_workbench_task_types,
     get_workbench_request_work_plan,
     resolve_workbench_request_type,
+    get_workbench_request_result_layout,
 )
 from ..domains.workbench.models import (
     RequestTypeAssignmentCommand,
@@ -52,6 +56,9 @@ from ..domains.workbench.models import (
     BatchDispatchError,
     BatchDemoRunValidationError,
     WorkItemStartCommand,
+    RequestResultLayoutNotFoundError,
+    ResultLayoutLoadCaseNotFoundError,
+    ResultLayoutMaterializeCommand,
 )
 from ..modules.access_control import (
     DASHBOARD_EDIT,
@@ -71,7 +78,6 @@ from ..schemas.workbench import AnalysisTemplateVersionCreate, BatchDispatchCrea
 from ..security import write_audit_event
 from ..services.batch_execution import BatchPreflightError, validate_profile_definition
 from ..services.demo_runner import DemoRunnerService, WorkbenchValidationError, _topological_nodes
-from ..services.request_result_dashboard import materialize_request_result_dashboard
 
 
 router = APIRouter(prefix="/api", tags=["workbench-demo"])
@@ -252,22 +258,19 @@ def get_request_result_layout(
     load_case_id: str | None = Query(default=None),
 ) -> dict[str, Any]:
     with connect() as conn:
-        repository = WorkbenchRepository(conn)
-        context = repository.request_context(request_id)
-        if not context:
-            raise HTTPException(404, detail={"code": "REQUEST_NOT_FOUND", "request_id": request_id})
-        require_permission(request, PROJECT_DATA_VIEW, context["project_id"], conn=conn)
-        if load_case_id and not repository.load_case_belongs_to_request(request_id, load_case_id):
-            raise HTTPException(404, detail={"code": "LOAD_CASE_NOT_FOUND", "load_case_id": load_case_id})
-        snapshot = repository.result_layout_snapshot(request_id)
-        if not snapshot:
-            return {"request_id": request_id, "status": "UNCONFIGURED", "message": "이 의뢰에는 결과 화면 구성이 지정되지 않았습니다."}
-        snapshot["bindings"] = repository.result_layout_bindings(request_id, load_case_id)
-        # No load-case/result heuristic is allowed here. Only a deliberately
-        # migrated LEGACY_ASSIGNED snapshot may retain its old domain route.
-        if snapshot.get("snapshot_reason") == "LEGACY_ASSIGNED":
-            snapshot["compatibility"] = {"route_kind": "DOMAIN", "renderer": "LEGACY_DOMAIN"}
-        return snapshot
+        try:
+            return get_workbench_request_result_layout(
+                SQLWorkbenchRequestResultLayoutQuery(conn),
+                request_id,
+                load_case_id=load_case_id,
+                authorize=lambda project_id: require_permission(
+                    request, PROJECT_DATA_VIEW, project_id, conn=conn
+                ),
+            )
+        except RequestResultLayoutNotFoundError as exc:
+            raise HTTPException(404, detail={"code": "REQUEST_NOT_FOUND", "request_id": exc.request_id}) from exc
+        except ResultLayoutLoadCaseNotFoundError as exc:
+            raise HTTPException(404, detail={"code": "LOAD_CASE_NOT_FOUND", "load_case_id": exc.load_case_id}) from exc
 
 
 @router.post(
@@ -281,29 +284,27 @@ def materialize_request_result_layout(
     request: Request,
 ) -> dict[str, Any]:
     with connect() as conn:
-        repository = WorkbenchRepository(conn)
-        context = repository.request_context(request_id)
-        if not context:
-            raise HTTPException(404, detail={"code": "REQUEST_NOT_FOUND", "request_id": request_id})
-        require_permission(request, DASHBOARD_EDIT, context["project_id"], conn=conn)
-        if not repository.load_case_belongs_to_request(request_id, payload.load_case_id):
-            raise HTTPException(404, detail={"code": "LOAD_CASE_NOT_FOUND", "load_case_id": payload.load_case_id})
-        repository.begin_transaction()
         try:
-            dashboard = materialize_request_result_dashboard(
-                conn,
+            dashboard = materialize_workbench_request_result_layout(
+                SQLWorkbenchResultLayoutMaterializeCommand(conn),
                 request_id=request_id,
-                load_case_id=payload.load_case_id,
-                page_id=payload.page_id,
-                created_by=request.state.principal.display_name,
+                command=ResultLayoutMaterializeCommand(
+                    load_case_id=payload.load_case_id,
+                    page_id=payload.page_id,
+                    created_by=request.state.principal.display_name,
+                ),
+                authorize=lambda project_id: require_permission(
+                    request, DASHBOARD_EDIT, project_id, conn=conn
+                ),
             )
-            repository.commit_transaction()
             return dashboard
+        except RequestResultLayoutNotFoundError as exc:
+            raise HTTPException(404, detail={"code": "REQUEST_NOT_FOUND", "request_id": exc.request_id}) from exc
+        except ResultLayoutLoadCaseNotFoundError as exc:
+            raise HTTPException(404, detail={"code": "LOAD_CASE_NOT_FOUND", "load_case_id": exc.load_case_id}) from exc
         except LookupError as exc:
-            repository.rollback_transaction()
             raise HTTPException(404, detail={"code": str(exc), "request_id": request_id}) from exc
         except ValueError as exc:
-            repository.rollback_transaction()
             raise _bad_request(exc) from exc
 
 
