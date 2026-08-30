@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
 
@@ -80,6 +81,207 @@ def _run(port, *, authorize=None, audit=None):
     authorize = authorize or (lambda: port.events.append("authorize"))
     audit = audit or (lambda: port.events.append("audit"))
     return dispatch_workbench_batch(port, "item-1", _command(), authorize=authorize, audit=audit)
+
+
+def test_batch_dispatch_insert_race_rolls_back_then_replays_the_requeried_run():
+    from app.domains.workbench.models import BatchAttemptInsertConflictError
+
+    class _RacingPort(_BatchPort):
+        def __init__(self):
+            super().__init__()
+            self.reads = 0
+
+        def existing_attempt(self, item_id, idempotency_key):
+            self.reads += 1
+            self.events.append("existing_attempt")
+            return None if self.reads == 1 else {"workflow_run_id": "run-1"}
+
+        def insert_preflight_attempt(self, context, command):
+            self.events.append("insert_attempt")
+            raise BatchAttemptInsertConflictError()
+
+    port = _RacingPort()
+    result = _run(port)
+    assert result.run == port.run
+    assert port.events == ["read", "authorize", "existing_attempt", "profile", "begin", "audit", "insert_attempt", "rollback", "existing_attempt", "load_run"]
+
+
+def test_batch_dispatch_insert_race_propagates_requery_attempt_failure_after_one_rollback():
+    from app.domains.workbench.models import BatchAttemptInsertConflictError
+
+    original_error = RuntimeError("requery failed")
+
+    class _RacingPort(_BatchPort):
+        def __init__(self):
+            super().__init__()
+            self.reads = 0
+
+        def existing_attempt(self, item_id, idempotency_key):
+            self.reads += 1
+            self.events.append("existing_attempt")
+            if self.reads == 1:
+                return None
+            raise original_error
+
+        def insert_preflight_attempt(self, context, command):
+            self.events.append("insert_attempt")
+            raise BatchAttemptInsertConflictError()
+
+    port = _RacingPort()
+    with pytest.raises(RuntimeError) as exc_info:
+        _run(port)
+
+    assert exc_info.value is original_error
+    assert port.events == [
+        "read",
+        "authorize",
+        "existing_attempt",
+        "profile",
+        "begin",
+        "audit",
+        "insert_attempt",
+        "rollback",
+        "existing_attempt",
+    ]
+    assert port.events.count("rollback") == 1
+
+
+def test_batch_dispatch_insert_race_propagates_requery_run_failure_after_one_rollback():
+    from app.domains.workbench.models import BatchAttemptInsertConflictError
+
+    original_error = RuntimeError("run requery failed")
+
+    class _RacingPort(_BatchPort):
+        def __init__(self):
+            super().__init__()
+            self.reads = 0
+
+        def existing_attempt(self, item_id, idempotency_key):
+            self.reads += 1
+            self.events.append("existing_attempt")
+            return None if self.reads == 1 else {"workflow_run_id": "run-1"}
+
+        def insert_preflight_attempt(self, context, command):
+            self.events.append("insert_attempt")
+            raise BatchAttemptInsertConflictError()
+
+        def load_run(self, run_id):
+            self.events.append("load_run")
+            raise original_error
+
+    port = _RacingPort()
+    with pytest.raises(RuntimeError) as exc_info:
+        _run(port)
+
+    assert exc_info.value is original_error
+    assert port.events == [
+        "read",
+        "authorize",
+        "existing_attempt",
+        "profile",
+        "begin",
+        "audit",
+        "insert_attempt",
+        "rollback",
+        "existing_attempt",
+        "load_run",
+    ]
+    assert port.events.count("rollback") == 1
+
+
+def test_batch_attempt_idempotency_conflict_accepts_direct_sqlstate() -> None:
+    error = RuntimeError("database rejected the insert")
+    error.sqlstate = "23505"  # type: ignore[attr-defined]
+    error.constraint_name = "batch_execution_attempts_work_item_id_idempotency_key_key"  # type: ignore[attr-defined]
+
+    assert workbench_persistence._is_batch_attempt_idempotency_conflict(error) is True
+
+
+@pytest.mark.parametrize("code_attribute", ["sqlstate", "pgcode"])
+def test_batch_attempt_idempotency_conflict_accepts_nested_driver_codes(code_attribute: str) -> None:
+    original = SimpleNamespace(
+        **{
+            code_attribute: "23505",
+            "constraint_name": "batch_execution_attempts_work_item_id_idempotency_key_key",
+        }
+    )
+    error = RuntimeError("database rejected the insert")
+    error.orig = original  # type: ignore[attr-defined]
+
+    assert workbench_persistence._is_batch_attempt_idempotency_conflict(error) is True
+
+
+def test_batch_attempt_idempotency_conflict_accepts_duckdb_structural_message() -> None:
+    error = RuntimeError(
+        'Constraint Error: Duplicate key "work_item_id: item-1, idempotency_key: request-1" '
+        "violates unique constraint"
+    )
+
+    assert workbench_persistence._is_batch_attempt_idempotency_conflict(error) is True
+
+
+def test_batch_attempt_idempotency_conflict_rejects_unrelated_unique_constraint() -> None:
+    error = RuntimeError(
+        'Constraint Error: Duplicate key "email: user@example.com" violates '
+        'unique constraint "users_email_key"'
+    )
+    error.sqlstate = "23505"  # type: ignore[attr-defined]
+
+    assert workbench_persistence._is_batch_attempt_idempotency_conflict(error) is False
+
+
+def test_batch_attempt_idempotency_conflict_rejects_unrelated_error() -> None:
+    assert workbench_persistence._is_batch_attempt_idempotency_conflict(RuntimeError("permission denied")) is False
+
+
+@pytest.mark.parametrize(
+    "attempt",
+    [
+        {"id": "attempt-1", "status": "REJECTED", "workflow_run_id": None},
+        {"id": "attempt-1", "status": "QUEUED", "workflow_run_id": "missing-run"},
+    ],
+    ids=["rejected", "unavailable-run"],
+)
+def test_batch_dispatch_insert_race_rejects_requeried_attempt_after_one_rollback(
+    attempt: dict[str, object],
+) -> None:
+    from app.domains.workbench.models import BatchAttemptInsertConflictError
+
+    class _RacingPort(_BatchPort):
+        def __init__(self):
+            super().__init__()
+            self.reads = 0
+
+        def existing_attempt(self, item_id, idempotency_key):
+            self.reads += 1
+            self.events.append("existing_attempt")
+            return None if self.reads == 1 else attempt
+
+        def insert_preflight_attempt(self, context, command):
+            self.events.append("insert_attempt")
+            raise BatchAttemptInsertConflictError()
+
+    port = _RacingPort()
+
+    with pytest.raises(BatchAttemptAlreadyRejectedError) as exc_info:
+        _run(port)
+
+    assert exc_info.value.detail == {"attempt": attempt}
+    expected_events = [
+        "read",
+        "authorize",
+        "existing_attempt",
+        "profile",
+        "begin",
+        "audit",
+        "insert_attempt",
+        "rollback",
+        "existing_attempt",
+    ]
+    if attempt["workflow_run_id"]:
+        expected_events.append("load_run")
+    assert port.events == expected_events
+    assert port.events.count("rollback") == 1
 
 
 def test_batch_dispatch_success_uses_three_committed_phases_in_order() -> None:

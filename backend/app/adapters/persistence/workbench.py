@@ -22,6 +22,7 @@ from ...domains.workbench.models import (
     BatchDispatchPreflight,
     BatchDemoRunValidationError,
     BatchPreflightFailedError,
+    BatchAttemptInsertConflictError,
     WorkItemCompleteCommand,
     WorkItemAssigneeAccountNotActiveError,
     WorkItemAssigneeMembershipRequiredError,
@@ -41,6 +42,63 @@ from ...schemas.workbench import DemoRunCreate
 
 def _utcnow_naive() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+_BATCH_ATTEMPT_IDEMPOTENCY_CONSTRAINT = (
+    "batch_execution_attempts_work_item_id_idempotency_key_key"
+)
+
+
+def _database_error_messages(exc: Exception) -> tuple[str, ...]:
+    original = getattr(exc, "orig", None)
+    messages = [str(exc)]
+    if original is not None:
+        messages.append(str(original))
+    return tuple(message.lower() for message in messages)
+
+
+def _database_error_codes(exc: Exception) -> set[str]:
+    original = getattr(exc, "orig", None)
+    return {
+        str(code)
+        for error in (exc, original)
+        for code in (getattr(error, "sqlstate", None), getattr(error, "pgcode", None))
+        if code is not None
+    }
+
+
+def _database_error_constraint_names(exc: Exception) -> set[str]:
+    original = getattr(exc, "orig", None)
+    return {
+        str(name).lower()
+        for error in (exc, original)
+        for name in (
+            getattr(error, "constraint_name", None),
+            getattr(getattr(error, "diag", None), "constraint_name", None),
+        )
+        if name is not None
+    }
+
+
+def _is_batch_attempt_idempotency_conflict(exc: Exception) -> bool:
+    """Recognize only the batch-attempt idempotency unique constraint."""
+    messages = _database_error_messages(exc)
+    message = " ".join(messages)
+    has_unique_violation = "23505" in _database_error_codes(exc) or any(
+        marker in message
+        for marker in ("duplicate key", "unique constraint", "unique violation")
+    )
+    if not has_unique_violation:
+        return False
+
+    if _BATCH_ATTEMPT_IDEMPOTENCY_CONSTRAINT in _database_error_constraint_names(exc):
+        return True
+    if _BATCH_ATTEMPT_IDEMPOTENCY_CONSTRAINT in message:
+        return True
+
+    # DuckDB reports this constraint structurally without exposing PostgreSQL's
+    # generated constraint name. The column pair is unique to this idempotency key.
+    return "work_item_id" in message and "idempotency_key" in message
 
 
 def _task_type_read(item: dict[str, Any]) -> TaskTypeVersionRead:
@@ -393,15 +451,31 @@ class SQLWorkbenchBatchDispatchCommand:
         self._repository.rollback_transaction()
 
     def insert_preflight_attempt(self, context: BatchDispatchContext, command: BatchDispatchCommand) -> None:
-        self._repository.insert_batch_attempt({
-            "id": context.attempt_id, "work_item_id": context.work_item["id"], "workflow_run_id": None,
-            "batch_profile_id": context.profile["id"], "batch_profile_version": int(context.profile["version"]),
-            "profile_snapshot_json": context.profile_snapshot_json, "command_preview": context.initial_command_preview,
-            "idempotency_key": command.idempotency_key, "execution_mode": "DEMO_ONLY", "status": "PREFLIGHT",
-            "progress": 0, "last_message": "배치 프로필과 작업 호환성을 검증 중입니다.",
-            "created_by": command.created_by, "created_at": context.started_at, "started_at": context.started_at,
-            "completed_at": None,
-        })
+        try:
+            self._repository.insert_batch_attempt(
+                {
+                    "id": context.attempt_id,
+                    "work_item_id": context.work_item["id"],
+                    "workflow_run_id": None,
+                    "batch_profile_id": context.profile["id"],
+                    "batch_profile_version": int(context.profile["version"]),
+                    "profile_snapshot_json": context.profile_snapshot_json,
+                    "command_preview": context.initial_command_preview,
+                    "idempotency_key": command.idempotency_key,
+                    "execution_mode": "DEMO_ONLY",
+                    "status": "PREFLIGHT",
+                    "progress": 0,
+                    "last_message": "배치 프로필과 작업 호환성을 검증 중입니다.",
+                    "created_by": command.created_by,
+                    "created_at": context.started_at,
+                    "started_at": context.started_at,
+                    "completed_at": None,
+                }
+            )
+        except Exception as exc:
+            if _is_batch_attempt_idempotency_conflict(exc):
+                raise BatchAttemptInsertConflictError() from exc
+            raise
 
     def insert_preflight_event(self, context: BatchDispatchContext) -> None:
         self._repository.insert_batch_attempt_event({

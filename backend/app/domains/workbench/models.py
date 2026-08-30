@@ -350,5 +350,9 @@ class BatchPreflightFailedError(ValueError):
         super().__init__(message)
 
 
+class BatchAttemptInsertConflictError(Exception):
+    """The database won the idempotency-key race during phase-one insert."""
+
+
 class BatchDemoRunValidationError(ValueError):
     """The DEMO_ONLY runner rejected the current work-item projection."""

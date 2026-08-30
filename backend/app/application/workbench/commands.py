@@ -31,6 +31,7 @@ from ...domains.workbench.models import (
     BatchAttemptAlreadyRejectedError,
     BatchDispatchContext,
     BatchDispatchResult,
+    BatchAttemptInsertConflictError,
     BatchDemoRunValidationError,
     BatchPreflightFailedError,
     BatchPreflightRejectedError,
@@ -243,10 +244,21 @@ def dispatch_workbench_batch(
         initial_command_preview=f'"{profile["solver_path"]}" {profile["arguments_template"]}'.strip(),
     )
 
+    preflight_insert_conflict_rolled_back = False
     command_port.begin_transaction()
     try:
         audit()
-        command_port.insert_preflight_attempt(context, command)
+        try:
+            command_port.insert_preflight_attempt(context, command)
+        except BatchAttemptInsertConflictError:
+            command_port.rollback_transaction()
+            preflight_insert_conflict_rolled_back = True
+            existing_attempt = command_port.existing_attempt(item_id, command.idempotency_key)
+            if existing_attempt and existing_attempt.get("workflow_run_id"):
+                existing_run = command_port.load_run(str(existing_attempt["workflow_run_id"]))
+                if existing_run:
+                    return BatchDispatchResult(run=existing_run)
+            raise BatchAttemptAlreadyRejectedError(existing_attempt or {})
         command_port.insert_preflight_event(context)
         try:
             preflight = command_port.preflight(context)
@@ -259,10 +271,11 @@ def dispatch_workbench_batch(
         command_port.queue_attempt(context)
         command_port.insert_queued_event(context, occurred_at=_batch_dispatch_now())
         command_port.commit_transaction()
-    except BatchPreflightRejectedError:
+    except (BatchPreflightRejectedError, BatchAttemptAlreadyRejectedError):
         raise
     except Exception:
-        command_port.rollback_transaction()
+        if not preflight_insert_conflict_rolled_back:
+            command_port.rollback_transaction()
         raise
 
     try:
