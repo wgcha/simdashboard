@@ -21,10 +21,15 @@ cannot be used to claim again; takeover requires a new opaque token and the
 current expected generation. The token must therefore remain internal and is
 removed from every public and administrator projection.
 
-Before a DuckDB-to-PostgreSQL transfer, active leases (`recovery_lease_token`
-is non-null) must be zero. The transfer tool must also order or stage the
-bidirectional `workflow_runs.batch_attempt_id` / `batch_execution_attempts.workflow_run_id`
-identity and copy `batch_dispatches.attempt_id` only after its attempt exists;
-its relationship audit must cover that dispatch link. Enforcing those transfer
-preflights and cyclic-FK copy semantics is a separate operational release-gate
-task; this ownership-only slice does not broaden the transfer workflow.
+The DuckDB-to-PostgreSQL transfer tool now fail-closes when any recovery lease
+owner/token/acquired/expiry metadata remains (including expired or malformed
+rows), or when only part of the five lease columns exists. It records that
+preflight in the manifest, takes one source snapshot, NULL-stages the five
+reverse immediate-FK references, restores them with compare-and-swap updates
+inside the target transaction, and commits only after the full checksum match.
+The same blockers make a read-only dry-run exit non-zero before any PostgreSQL
+connection, after an explicitly requested manifest or JSON report is emitted.
+Execute mode also verifies the target table/column contract and required lease
+constraints/indexes before its first INSERT.
+Actual PostgreSQL live migration and app-role verification remain release gates;
+this ownership-only slice is still not production recovery authority.

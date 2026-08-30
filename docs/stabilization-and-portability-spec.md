@@ -75,6 +75,7 @@
 - Alembic으로 빈 DB를 동일 스키마까지 올린다.
 - DuckDB 원본은 읽기 전용으로 열어 PostgreSQL에 복사한다.
 - 복사 전 dry-run, 복사 후 테이블별 행 수·핵심 FK·Run별 결과 수·체크섬을 비교한다.
+- 실행 전 active·expired·malformed batch recovery lease metadata가 모두 0건인지 확인한다. dry-run도 이 조건과 hard relationship audit 실패 시 non-zero로 종료한다. 즉시 FK의 역참조는 같은 PostgreSQL transaction에서 NULL staging 후 원본값으로 복원하고, checksum 검증 뒤에만 commit한다.
 - 이관 스크립트는 재실행으로 중복 데이터를 숨기지 않고 실패 DB를 명확하게 복구하도록 한다.
 - Windows PowerShell과 Linux shell에서 같은 절차를 수행할 수 있어야 한다.
 

@@ -411,9 +411,11 @@ status semantics 변경은 포함하지 않는다. 그 기능은 PostgreSQL live
 **release gate**다.
 `0019_batch_recovery_lease`는 이 release gate의 선행 기반으로 internal ownership만 분리한다. PostgreSQL multi-worker/live
 migration 검증 전 DuckDB는 serialized single-connection coverage로만 취급하며, scheduler/retry endpoint/automatic rerun 및
-finalization CAS는 후속 작업으로 남는다. DuckDB→PostgreSQL transfer preflight는 active lease가 0개인지 검증해야 하며,
-양방향 attempt·run FK를 staging하는 복사 순서와 `batch_dispatches.attempt_id` relationship audit도 보완해야
-한다. 그 migration-tool 반영은 운영 release gate backlog로 유지한다.
+finalization CAS는 후속 작업으로 남는다. DuckDB→PostgreSQL transfer tool은 active·expired·malformed lease metadata와
+partial lease schema를 preflight에서 차단하고, five reverse immediate-FK를 NULL staging 뒤 CAS restore하며, source snapshot과
+checksum 검증 성공 뒤에만 commit한다. 이 blocker는 read-only dry-run도 non-zero로 종료시켜 PostgreSQL 생성 전 setup gate로
+사용하며, 안전한 additive legacy 값만 checksum/INSERT 공통 projection으로 보정한다. target table/column과 필수 recovery
+constraint·unique index도 첫 INSERT 전에 검증한다. 실제 PostgreSQL live migration/app-role 검증은 여전히 운영 release gate다.
 Duplicate rejection 409의 attempt detail은 non-admin에게 profile snapshot과 command preview를 노출하지 않도록 router에서
 sanitize하고 admin 원문 계약은 유지한다. idempotency check와 attempt insert 사이의 경쟁, 그리고 QUEUED→DEMO_ONLY runner
 →finalization 사이의 복구/재처리 설계는 이번 safe slice에서 transaction semantics를 바꾸지 않고 별도 reliability 계획으로
