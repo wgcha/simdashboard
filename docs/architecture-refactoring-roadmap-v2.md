@@ -21,6 +21,24 @@ MCP, Embedding, Graph DB는 이번 리팩터링에서 구현하지 않는다. �
 - Phase 5: PostgreSQL startup은 Alembic table preflight만 수행하도록 했고, 현재 fixture seed는 명시 command `seed_database.py --mode reference`로 분리했다. `reference`와 `demo`는 아직 동일 fixture alias이므로 운영 reference data 분리는 후속 제품 결정이다. DuckDB historic DDL 전체 이동은 하지 않고 development bootstrap adapter entry만 만들었다.
 - Phase 6: vendor-free report/knowledge/MCP protocol ADR을 추가했다. 실제 MCP, graph, embedding, worker는 구현하지 않았다.
 
+### 최신 vertical slice 보강 — 2026-09-01
+
+- Report layout 목록·생성·수정·버전 목록·버전 상세·비활성화 6개
+  API를 reports `HTTP → application → domain port → SQL adapter`로 이동했다.
+  모든 `ACTIVE` 사용자의 read와 fresh `SYSTEM_CATALOG_MANAGE` mutation 경계,
+  route·operationId·OpenAPI 계약을 그대로 유지했다.
+- Update는 active state를 `BEGIN` 전에 읽고 기존처럼 추가 PostgreSQL lock/CAS 없이
+  실행한다. Create/update의 live row·version snapshot·audit는 동일 transaction의
+  atomic rollback 경계를 가진다.
+- 27개 한국어 validation message를 framework-neutral layout policy로 옮겼고 legacy 대비 20,001개
+  differential case에서 불일치 0개를 확인했다. Report focused는 **56 passed**,
+  expanded focused는 **66 passed**이며 full backend는 **979 passed, 10 skipped in 717.37s
+  (0:11:57), exit 0**이다. `main.py` direct `execute` ceiling은 **189 → 174**다.
+- 다음 slice는 PPTX template 4 route다. DB metadata·filesystem 자산 compensation,
+  관리형 root containment, symlink/traversal 차단, ZIP/PPTX archive safety를 고정한
+  뒤 `main.py` 잔여 endpoint 정리로 넘어간다. 사내 PostgreSQL·proxy/CA·Rocky
+  deploy 검증은 기존 office-only release gate를 유지한다.
+
 검증에서 기본 backend suite 176개가 통과하고 3개 PostgreSQL opt-in test가 skip됐다. 별도의 disposable PostgreSQL 18 cluster를 blank DB에서 migration·권한 hardening·reference seed까지 구성한 뒤 app-role profile 60개가 통과했고, canonical 6-step workflow가 suite 전후 동일함을 확인했다. frontend architecture/API/preferences self-test, TypeScript와 production build가 통과했으며 fresh backend/Vite/Chromium을 사용한 Playwright 20개도 모두 통과했다. 실제 Rocky 서버 값·TLS·service user가 없어 운영 배포는 수행하지 않았고, 로컬 credential 파일의 과거 과도한 권한 노출에 대해서는 비밀번호 회전이 별도 운영 조치로 남아 있다. 이 외부 검증 상태는 코드 contract와 구분한다.
 
 ```text
@@ -289,7 +307,17 @@ deploy/rocky8/           # systemd, nginx, install, healthcheck
 
 각 slice의 router는 입력 변환과 응답 mapping만 담당하고 `.execute()`를 갖지 않는다. transaction은 application use case가 소유한다. 권한 검사는 `principal + resource/project scope`로 service 진입 시 수행한다.
 
-보고서 slice에서는 현재 `reportExport.ts`가 직접 소비하는 데이터를 `ReportContext` read model로 정의한다. 단, 서버 PPTX 생성 방식으로 바꾸거나 MCP endpoint를 추가하지 않는다. 미래의 REST UI와 MCP가 같은 report context/composition service를 호출할 수 있는 입력/출력 계약만 만든다.
+보고서 slice의 report layout 6 API는 `reports` router/application/domain port/SQL adapter
+경계로 이동했다. Layout read는 `ACTIVE` 인증만 요구하고 mutation은 persistence
+provider open 전 catalog-manage 권한을 확인한다. Update의 read-before-BEGIN을
+유지하고 추가 PostgreSQL lock/CAS를 도입하지 않으며, live·version·audit 쓰기는
+하나의 transaction으로 묶는다.
+
+현재 `reportExport.ts`가 직접 소비하는 데이터를 `ReportContext` read model로 정의하는
+장기 계획은 유지한다. 다만 다음 안전 분리 단위는 서버 PPTX template 4
+route이며, 기능 변경 없이 filesystem/DB compensation·containment·archive safety를 먼저
+고정한다. MCP endpoint는 추가하지 않으며, 미래 REST UI와 MCP가 같은 report
+context/composition service를 호출할 수 있는 입력/출력 계약만 준비한다.
 
 ### Phase 3 — 프런트 app shell과 feature 분리 (P1)
 
@@ -381,3 +409,12 @@ git diff --check
 6. `R2 projects slice`: 첫 vertical slice로 구조 패턴 확정
 
 이 기준선이 녹색이 되기 전에는 `App.tsx`/`main.py` 대규모 분해를 시작하지 않는다.
+
+### 현재 후속 순서 — 2026-09-01
+
+1. Report layout 6 API vertical slice 완료 상태를 계약 테스트로 유지한다.
+2. PPTX template 4 route를 filesystem/DB compensation·containment·archive safety 경계와
+   함께 독립 slice로 옮긴다.
+3. 그 다음 `main.py` 잔여 endpoint를 기능별로 정리한다.
+4. 실제 PostgreSQL multi-connection/app-role, corporate proxy/CA, Rocky/nginx/systemd/TLS,
+   backup/restore/deploy는 사내 office-only release gate에서 검증한다.

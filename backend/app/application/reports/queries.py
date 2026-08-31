@@ -3,7 +3,12 @@ from __future__ import annotations
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 
-from ...domains.reports.models import ReportLayout
+from ...domains.reports.models import (
+    ReportLayout,
+    ReportLayoutVersion,
+    ReportLayoutVersionNotFoundError,
+    ReportLayoutVersionSummary,
+)
 from ...domains.reports.ports import ReportLayoutRepository
 
 
@@ -24,3 +29,27 @@ def list_report_layouts(
     authorize()
     with repository_provider() as repository:
         return repository.list_active_layouts()
+
+
+def list_report_layout_versions(
+    layout_id: str,
+    authorize: AuthorizationCheck,
+    repository_provider: ReportLayoutRepositoryProvider,
+) -> list[ReportLayoutVersionSummary]:
+    authorize()
+    with repository_provider() as repository:
+        return repository.list_versions(layout_id)
+
+
+def get_report_layout_version(
+    layout_id: str,
+    version: int,
+    authorize: AuthorizationCheck,
+    repository_provider: ReportLayoutRepositoryProvider,
+) -> ReportLayoutVersion:
+    authorize()
+    with repository_provider() as repository:
+        stored = repository.get_version(layout_id, version)
+    if stored is None:
+        raise ReportLayoutVersionNotFoundError()
+    return stored

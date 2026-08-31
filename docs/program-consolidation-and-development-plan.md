@@ -1,7 +1,7 @@
 # 프로그램 정리 및 개발 계획
 
 - 기준일: 2026-09-01
-- 상태: 실행 계획 + Run Identity V2 기준선 반영
+- 상태: 실행 계획 + Run Identity V2·report layout vertical slice 기준선 반영
 - 범위: 구조 정리, DB·결과 수집, 확장자, proxy, 사내 배포, 기술 우선순위
 
 ## 1. 결론
@@ -46,7 +46,7 @@
 | DEP-03 | Windows는 설치/개발 실행과 DB 이관 호환성은 있으나 HTTPS reverse proxy·service·TLS·rollback 운영 자동화 없음 | Windows one-command 운영 배포는 지원 범위에서 제외 | 범위 제외 |
 | DEP-04 | 사내 proxy는 Windows setup 중심이고 Rocky DNF/CA/offline RPM 계약이 불완전 | 폐쇄망 설치 재현성 부족 | P1 |
 | SEC-01 | nginx forwarded header, trusted host, security header 정책 보강 필요 | audit IP 신뢰와 외부 노출 hardening 부족 | P0/P1 |
-| ACC-01 | 프로젝트 초대·외부 directory lifecycle, 독립 assignee 후보 query, account status/global-admin command와 menu policy vertical slice를 반영 | access router를 composition-only로 전환하고 코드·focused 계약 검증 완료. 다음은 reports 영역 분리 | P1 완료 |
+| ACC-01 | 프로젝트 초대·외부 directory lifecycle, 독립 assignee 후보 query, account status/global-admin command와 menu policy vertical slice를 반영 | access router를 composition-only로 전환하고 코드·focused 계약 검증 완료 | P1 완료 |
 | ARC-01 | `main.py`, `database.py`, workbench router/repository, `App.tsx`가 큼 | 기능 추가 시 충돌·회귀 비용 증가 | P1 |
 | API-01 | 일부 성공 응답이 익명 OpenAPI schema | frontend runtime adapter 수동 검증 지속 | P1 |
 
@@ -485,8 +485,26 @@ router include만 담당하는 composition-only 경계가 되었고 직접 SQL `
 보강했으며, 추가 후 menu policy slice 단독 **19 passed**, 확대 focused 검증
 **79 passed**도 통과했다.
 
-개인 노트북의 다음 우선순위는 reports 영역 분리이며, 그 다음 `app/main.py`의
-잔여 endpoint 정리다. 실제 PostgreSQL multi-connection·app-role 권한, 사내
+2026-09-01 report layout vertical slice도 완료했다. 목록·생성·수정·버전
+목록·버전 상세·비활성화 6개 API 전체를 reports
+`HTTP → application → domain port → SQL adapter` 경계로 이동했다. 읽기는
+기존처럼 모든 `ACTIVE` 인증 사용자에게 열려 있고, 생성·수정·삭제는
+영속성 provider를 열기 전 fresh `SYSTEM_CATALOG_MANAGE` 권한을 확인한다.
+수정은 기존 동작대로 active version/is-system을 `BEGIN` 전에 읽으며 새
+PostgreSQL lock이나 CAS를 추가하지 않았다. 생성·수정의 live row, version
+snapshot, audit는 같은 transaction에서 commit/rollback된다. 기존 검증의 한국어
+422 message 27개를 framework-neutral policy로 옮겼고 legacy 구현 대비 20,001개
+차등 검증에서 불일치 0개를 확인했다. report focused 검증은 **56 passed**,
+관련 영역을 넓힌 focused 검증은 **66 passed**이며 architecture·OpenAPI·compile
+gate도 통과했다. 최종 full backend는 **979 passed, 10 skipped in 717.37s
+(0:11:57), exit 0**이다. 이 extraction으로 `backend/app/main.py`의 direct `execute`
+ceiling은 **189 → 174**로 낮아졌다.
+
+개인 노트북의 다음 우선순위는 reports의 PPTX template 4개 route를
+독립 slice로 분리하는 작업이다. 이 단계는 DB metadata와 filesystem 자산 사이의
+compensation, 관리형 root containment, symlink/traversal 차단, ZIP/PPTX archive
+safety를 우선 계약으로 고정한다. 그 다음 `app/main.py`의 잔여 endpoint를
+정리한다. 실제 PostgreSQL multi-connection·app-role 권한, 사내
 directory/IdP와 corporate proxy/CA, Rocky/nginx/systemd/TLS 및 deploy gate는
 office-only 인수 단계에 남긴다.
 
@@ -666,8 +684,10 @@ proxy/CA를 설치·갱신하는 자동화는 아직 없다. `NO_PROXY` assignme
    **2026-08-25 AP-2 검증 기록:** focused 통합 `126 passed in 87.32s`, full backend
    `573 passed, 5 skipped in 382.12s`; backend architecture/OpenAPI/compileall,
    Rocky validator, frontend architecture/API self-test/build도 통과했다.
-8. **다음 개인 노트북 구현 우선순위:** menu policy slice는 완료했다. 이어서
-   (1) reports 영역 분리, (2) `app/main.py` 잔여 endpoint 정리를 진행한다.
+8. **다음 개인 노트북 구현 우선순위:** menu policy와 report layout 6 API
+   slice는 완료했다. 이어서 (1) PPTX template 4 route의 filesystem/DB
+   compensation·containment·archive safety 경계 분리, (2) `app/main.py` 잔여
+   endpoint 정리를 진행한다.
    **office-only release gate 우선순위:** (1) 실제 Rocky host install과 app-role
    startup preflight, NFS/SMB mount probe·승인 및 filesystem quota/capacity 확인,
    (2) production backup을 분리된 빈 DB에 복구하고 exported-snapshot inventory와

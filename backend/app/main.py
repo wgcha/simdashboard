@@ -59,7 +59,6 @@ from .schemas.api import (
     LoadCaseCreate,
     NaturalLanguageCommand,
     QualityThresholdUpdate,
-    ReportLayoutPayload,
     ReportTemplateRenderPayload,
     ReportTemplateUploadPayload,
     ReviewItemCreate,
@@ -71,12 +70,6 @@ from .schemas.api import (
     WorkspaceLayoutVersionResponse,
     WorkflowStepUpdate,
     WorkflowStepsReplace,
-)
-from .schemas.reports import (
-    ReportLayoutDeactivationResponse,
-    ReportLayoutSavedResponse,
-    ReportLayoutVersionDetailResponse,
-    ReportLayoutVersionSummaryResponse,
 )
 from .security import SecurityMiddleware, write_audit_event
 from .routers.security import router as security_router
@@ -163,78 +156,6 @@ def _validated_workspace_layout(kind: str, definition: dict[str, Any]) -> dict[s
             raise HTTPException(422, "워크플로 레이아웃 위치와 크기는 정수여야 합니다.")
         normalized_items.append({"requestId": item["requestId"], **coordinates})
     return {"fontSize": font_size, "accentColor": accent, "items": normalized_items}
-
-
-def _validated_report_layout(definition: dict[str, Any]) -> dict[str, Any]:
-    if definition.get("coverVariant") not in {"balanced", "executive", "evidence"}:
-        raise HTTPException(422, "지원하지 않는 표지 형식입니다.")
-    sections = definition.get("sectionOrder")
-    if not isinstance(sections, list) or len(sections) != 3 or set(sections) != {"series", "scalar", "media"}:
-        raise HTTPException(422, "근거 페이지 순서는 series, scalar, media를 한 번씩 포함해야 합니다.")
-    accent = str(definition.get("accentColor") or "")
-    if len(accent) != 6 or any(character not in "0123456789abcdefABCDEF" for character in accent):
-        raise HTTPException(422, "강조색은 6자리 HEX 색상이어야 합니다.")
-    slide_master = definition.get("slideMaster")
-    if slide_master is not None:
-        if not isinstance(slide_master, dict) or slide_master.get("design") not in {"plain", "frame", "header-band", "split"}:
-            raise HTTPException(422, "슬라이드 마스터에는 올바른 디자인이 필요합니다.")
-        for color_key in ("backgroundColor", "accentColor"):
-            color = str(slide_master.get(color_key) or "")
-            if len(color) != 6 or any(character not in "0123456789abcdefABCDEF" for character in color):
-                raise HTTPException(422, f"슬라이드 마스터 {color_key}은 6자리 HEX 색상이어야 합니다.")
-    placements = definition.get("variablePlacements")
-    if not isinstance(placements, list):
-        raise HTTPException(422, "variablePlacements 배열이 필요합니다.")
-    for placement in placements:
-        if not isinstance(placement, dict) or not placement.get("variableKey") or placement.get("presentation") not in {"chart", "table", "both"}:
-            raise HTTPException(422, "변수 배치에는 variableKey와 올바른 presentation이 필요합니다.")
-    slides = definition.get("slides")
-    if slides is not None:
-        if not isinstance(slides, list) or not slides:
-            raise HTTPException(422, "slides는 1개 이상의 배열이어야 합니다.")
-        slide_ids: set[str] = set()
-        for slide in slides:
-            if not isinstance(slide, dict) or not slide.get("id") or slide.get("kind") not in {"cover", "series", "scalar", "media", "custom"}:
-                raise HTTPException(422, "각 슬라이드에는 고유 id와 올바른 kind가 필요합니다.")
-            if slide["id"] in slide_ids:
-                raise HTTPException(422, "슬라이드 id는 중복될 수 없습니다.")
-            slide_ids.add(slide["id"])
-            slide_style = slide.get("style")
-            if slide_style is not None:
-                if not isinstance(slide_style, dict) or not isinstance(slide_style.get("useMaster"), bool):
-                    raise HTTPException(422, "슬라이드 스타일에는 useMaster 불리언 값이 필요합니다.")
-                if slide_style.get("design") is not None and slide_style["design"] not in {"plain", "frame", "header-band", "split"}:
-                    raise HTTPException(422, "지원하지 않는 슬라이드 디자인입니다.")
-                for color_key in ("backgroundColor", "accentColor"):
-                    if slide_style.get(color_key) is None:
-                        continue
-                    color = str(slide_style[color_key])
-                    if len(color) != 6 or any(character not in "0123456789abcdefABCDEF" for character in color):
-                        raise HTTPException(422, f"슬라이드 {color_key}은 6자리 HEX 색상이어야 합니다.")
-            elements = slide.get("elements")
-            if not isinstance(elements, list) or len(elements) > 80:
-                raise HTTPException(422, "슬라이드 elements는 80개 이하의 배열이어야 합니다.")
-            element_ids: set[str] = set()
-            for element in elements:
-                if not isinstance(element, dict) or element.get("type") not in {"title", "text", "verdict", "scalar-card", "chart", "table", "image"}:
-                    raise HTTPException(422, "지원하지 않는 보고서 위젯 형식입니다.")
-                if not element.get("id") or element["id"] in element_ids:
-                    raise HTTPException(422, "슬라이드 안의 위젯 id는 고유해야 합니다.")
-                element_ids.add(element["id"])
-                if element.get("text") is not None and not isinstance(element["text"], str):
-                    raise HTTPException(422, "텍스트 상자 내용은 문자열이어야 합니다.")
-                for key, limit in (("x", 32), ("w", 32), ("y", 18), ("h", 18)):
-                    if not isinstance(element.get(key), (int, float)) or element[key] < 0 or element[key] > limit:
-                        raise HTTPException(422, f"위젯 {key} 좌표가 캔버스 범위를 벗어났습니다.")
-                if element["w"] <= 0 or element["h"] <= 0 or element["x"] + element["w"] > 32 or element["y"] + element["h"] > 18:
-                    raise HTTPException(422, "위젯 영역이 슬라이드 경계를 벗어났습니다.")
-    if definition.get("templateSource", "native") not in {"native", "pptx_upload"}:
-        raise HTTPException(422, "지원하지 않는 템플릿 원본 형식입니다.")
-    if definition.get("templateSource") == "pptx_upload" and not definition.get("templateAssetId"):
-        raise HTTPException(422, "업로드 PPTX 템플릿 ID가 필요합니다.")
-    if not isinstance(definition.get("templateBindings", {}), dict):
-        raise HTTPException(422, "templateBindings는 객체여야 합니다.")
-    return definition
 
 
 @app.get("/api/health")
@@ -1714,99 +1635,6 @@ def get_workspace_layout_versions(
 
 
 app.include_router(reports_router)
-
-
-@app.post("/api/report-layouts", response_model=ReportLayoutSavedResponse, status_code=201)
-def create_report_layout(payload: ReportLayoutPayload, request: Request) -> dict[str, Any]:
-    require_permission(request, SYSTEM_CATALOG_MANAGE)
-    principal = request.state.principal
-    actor_name = principal.display_name
-    layout_id = f"report-layout-{uuid4().hex[:12]}"
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
-    definition = _validated_report_layout({**payload.definition, "id": layout_id, "name": payload.name.strip(), "description": payload.description.strip(), "version": 1})
-    encoded = json.dumps(definition, ensure_ascii=False)
-    with connect() as conn:
-        conn.execute("BEGIN TRANSACTION")
-        try:
-            conn.execute(
-                "INSERT INTO report_layouts VALUES (?, ?, ?, 1, ?, false, true, ?, ?, ?)",
-                [layout_id, payload.name.strip(), payload.description.strip(), encoded, now, now, actor_name],
-            )
-            conn.execute(
-                "INSERT INTO report_layout_versions VALUES (?, 1, ?, ?, ?, true)",
-                [layout_id, encoded, actor_name, now],
-            )
-            write_audit_event(request=request, principal=principal, status_code=201, action="REPORT_LAYOUT_CREATED", detail={"layout_id": layout_id}, connection=conn)
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
-    return {"id": layout_id, "name": payload.name.strip(), "description": payload.description.strip(), "version": 1, "definition": definition, "is_system": False, "updated_at": now, "updated_by": actor_name}
-
-
-@app.put("/api/report-layouts/{layout_id}", response_model=ReportLayoutSavedResponse)
-def update_report_layout(layout_id: str, payload: ReportLayoutPayload, request: Request) -> dict[str, Any]:
-    require_permission(request, SYSTEM_CATALOG_MANAGE)
-    principal = request.state.principal
-    actor_name = principal.display_name
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
-    with connect() as conn:
-        existing = conn.execute("SELECT version, is_system FROM report_layouts WHERE id=? AND is_active=true", [layout_id]).fetchone()
-        if not existing:
-            raise HTTPException(404, "보고서 레이아웃을 찾을 수 없습니다.")
-        version = existing[0] + 1
-        definition = _validated_report_layout({**payload.definition, "id": layout_id, "name": payload.name.strip(), "description": payload.description.strip(), "version": version})
-        encoded = json.dumps(definition, ensure_ascii=False)
-        conn.execute("BEGIN TRANSACTION")
-        try:
-            conn.execute(
-                "UPDATE report_layouts SET name=?, description=?, version=?, definition_json=?, updated_at=?, updated_by=? WHERE id=?",
-                [payload.name.strip(), payload.description.strip(), version, encoded, now, actor_name, layout_id],
-            )
-            conn.execute(
-                "INSERT INTO report_layout_versions VALUES (?, ?, ?, ?, ?, true)",
-                [layout_id, version, encoded, actor_name, now],
-            )
-            write_audit_event(request=request, principal=principal, status_code=200, action="REPORT_LAYOUT_UPDATED", detail={"layout_id": layout_id, "version": version}, connection=conn)
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
-    return {"id": layout_id, "name": payload.name.strip(), "description": payload.description.strip(), "version": version, "definition": definition, "is_system": bool(existing[1]), "updated_at": now, "updated_by": actor_name}
-
-
-@app.get("/api/report-layouts/{layout_id}/versions", response_model=list[ReportLayoutVersionSummaryResponse])
-def get_report_layout_versions(layout_id: str) -> list[dict[str, Any]]:
-    with connect() as conn:
-        return rows(conn.execute(
-            "SELECT layout_id, version, created_by, created_at, is_valid FROM report_layout_versions WHERE layout_id=? ORDER BY version DESC",
-            [layout_id],
-        ))
-
-
-@app.get("/api/report-layouts/{layout_id}/versions/{version}", response_model=ReportLayoutVersionDetailResponse)
-def get_report_layout_version(layout_id: str, version: int) -> dict[str, Any]:
-    with connect() as conn:
-        stored = conn.execute(
-            "SELECT definition_json, created_by, created_at FROM report_layout_versions WHERE layout_id=? AND version=? AND is_valid=true",
-            [layout_id, version],
-        ).fetchone()
-    if not stored:
-        raise HTTPException(404, "보고서 레이아웃 버전을 찾을 수 없습니다.")
-    return {"layout_id": layout_id, "version": version, "definition": json_value(stored[0]), "created_by": stored[1], "created_at": stored[2]}
-
-
-@app.delete("/api/report-layouts/{layout_id}", response_model=ReportLayoutDeactivationResponse)
-def delete_report_layout(layout_id: str, request: Request) -> dict[str, str]:
-    require_permission(request, SYSTEM_CATALOG_MANAGE)
-    with connect() as conn:
-        existing = conn.execute("SELECT is_system FROM report_layouts WHERE id=? AND is_active=true", [layout_id]).fetchone()
-        if not existing:
-            raise HTTPException(404, "보고서 레이아웃을 찾을 수 없습니다.")
-        if existing[0]:
-            raise HTTPException(409, "기본 레이아웃은 삭제할 수 없습니다. 수정하면 새 버전으로 보존됩니다.")
-        conn.execute("UPDATE report_layouts SET is_active=false, updated_at=? WHERE id=?", [datetime.now(timezone.utc).replace(tzinfo=None), layout_id])
-    return {"status": "deactivated", "id": layout_id}
 
 
 PPTX_NS = {
