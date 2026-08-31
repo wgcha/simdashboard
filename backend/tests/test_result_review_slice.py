@@ -192,7 +192,10 @@ def test_main_relinquishes_result_review_sql_and_result_key_helper_ownership() -
     ):
         assert token not in source
     assert "app.include_router(result_review_router)" in source
-    assert "run_result_keys(conn, run_id)" in source
+    assert "from .adapters.persistence.result_keys import run_result_keys" not in source
+    assert "run_result_keys(conn, run_id)" not in source
+    insights_source = (Path(__file__).parents[1] / "app" / "adapters" / "persistence" / "analysis_insights.py").read_text(encoding="utf-8")
+    assert "return run_result_keys(self._connection, run_id)" in insights_source
 
 
 @pytest.mark.duckdb_integration
@@ -348,13 +351,6 @@ def test_sql_review_mutation_seams_fail_closed_without_authorizer_or_audit_write
         repository.authorize_resource("run", "run-id")
     with pytest.raises(RuntimeError, match="audit"):
         repository.add_audit({})  # type: ignore[arg-type]
-
-
-@pytest.mark.contract
-def test_trust_payload_uses_shared_result_key_query_not_a_divergent_local_copy() -> None:
-    source = (Path(__file__).parents[1] / "app" / "main.py").read_text(encoding="utf-8")
-    trust_source = source[source.index("def _run_trust_payload") : source.index("def get_analysis_run_trust")]
-    assert "run_result_keys(conn, run_id)" in trust_source
 
 
 @pytest.mark.duckdb_integration

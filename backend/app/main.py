@@ -67,8 +67,8 @@ from .adapters.http.routers.import_schemas import router as import_schemas_route
 from .adapters.persistence.products import SQLProductInformationRepositoryProvider
 from .application.products.queries import list_product_information
 from .adapters.persistence.results import SQLAnalysisRunSummaryRepositoryProvider
-from .adapters.persistence.result_keys import run_result_keys
 from .application.results.queries import list_analysis_runs as list_analysis_runs_query
+from .adapters.http.routers.analysis_insights import router as analysis_insights_router
 from .adapters.http.routers.result_review import router as result_review_router
 from .services.drop_video_demo import (
     DEMO_DROP_VIDEO_LOAD_CASE_IDS,
@@ -685,79 +685,6 @@ def get_load_case_overview(
     }
 
 
-def _run_trust_payload(conn: Any, run_id: str, expected_load_case_id: str | None = None) -> dict[str, Any]:
-    run_rows = rows(conn.execute("SELECT * FROM analysis_runs WHERE id=?", [run_id]))
-    if not run_rows or (expected_load_case_id and run_rows[0]["load_case_id"] != expected_load_case_id):
-        raise HTTPException(404, "해석 Run을 찾을 수 없습니다.")
-    run = run_rows[0]
-    latest = conn.execute("SELECT id FROM analysis_runs WHERE load_case_id=? ORDER BY run_no DESC LIMIT 1", [run["load_case_id"]]).fetchone()
-    metadata_rows = rows(conn.execute("SELECT * FROM analysis_run_metadata WHERE analysis_run_id=?", [run_id]))
-    metadata = metadata_rows[0] if metadata_rows else None
-    if metadata:
-        metadata["metadata"] = json_value(metadata.pop("metadata_json"))
-    import_rows = rows(conn.execute("SELECT * FROM folder_import_jobs WHERE analysis_run_id=? ORDER BY created_at DESC LIMIT 1", [run_id]))
-    import_job = import_rows[0] if import_rows else None
-    if import_job:
-        import_job["summary"] = json_value(import_job.pop("summary_json"))
-
-    counts = {
-        "scalar": conn.execute("SELECT count(*) FROM scalar_results WHERE analysis_run_id=?", [run_id]).fetchone()[0],
-        "time_series": conn.execute("SELECT count(*) FROM time_series_results WHERE analysis_run_id=?", [run_id]).fetchone()[0],
-        "curve": conn.execute("SELECT count(*) FROM curve_results WHERE analysis_run_id=?", [run_id]).fetchone()[0],
-        "media": conn.execute("SELECT count(*) FROM media_assets WHERE analysis_run_id=?", [run_id]).fetchone()[0],
-        "location": conn.execute("SELECT count(*) FROM result_locations WHERE analysis_run_id=?", [run_id]).fetchone()[0],
-    }
-    result_keys = run_result_keys(conn, run_id)
-    catalog_rows = rows(conn.execute("SELECT variable_key, display_name, unit FROM variable_definitions WHERE load_case_id=? AND is_active=true", [run["load_case_id"]]))
-    catalog = {item["variable_key"]: item for item in catalog_rows}
-    unmapped = sorted(result_keys - set(catalog))
-    missing = sorted(set(catalog) - result_keys)
-
-    unit_rows = conn.execute(
-        """
-        SELECT variable_key, unit FROM scalar_results WHERE analysis_run_id=?
-        UNION SELECT variable_key, value_unit FROM time_series_results WHERE analysis_run_id=?
-        UNION SELECT variable_key, y_unit FROM curve_results WHERE analysis_run_id=?
-        """,
-        [run_id, run_id, run_id],
-    ).fetchall()
-    unit_mismatches: list[dict[str, str]] = []
-    for variable_key, actual_unit in unit_rows:
-        expected_unit = catalog.get(variable_key, {}).get("unit")
-        if expected_unit and expected_unit != "-" and actual_unit and expected_unit != actual_unit:
-            mismatch = {"variable_key": variable_key, "expected": expected_unit, "actual": actual_unit}
-            if mismatch not in unit_mismatches:
-                unit_mismatches.append(mismatch)
-
-    validations = rows(conn.execute("SELECT validation_type, verdict, created_at FROM validations WHERE analysis_run_id=? ORDER BY created_at DESC", [run_id]))
-    checks = [
-        {"code": "run_status", "label": "Run 완료 상태", "status": "PASS" if run["status"] == "COMPLETED" else "FAIL", "detail": run["status"]},
-        {"code": "source_trace", "label": "적재 출처 추적", "status": "PASS" if metadata or import_job else "WARN", "detail": metadata["source_name"] if metadata else import_job["source_folder"] if import_job else "출처 메타데이터 없음"},
-        {"code": "catalog_mapping", "label": "변수 카탈로그 연결", "status": "WARN" if unmapped else "PASS", "detail": f"미연결 {len(unmapped)}개" if unmapped else f"결과 변수 {len(result_keys)}개 연결"},
-        {"code": "catalog_coverage", "label": "선언 변수 커버리지", "status": "WARN" if missing else "PASS", "detail": f"이 Run에 없는 선언 변수 {len(missing)}개" if missing else "선언 변수 모두 존재"},
-        {"code": "unit_consistency", "label": "단위 일관성", "status": "WARN" if unit_mismatches else "PASS", "detail": f"불일치 {len(unit_mismatches)}개" if unit_mismatches else "불일치 없음"},
-        {"code": "validation", "label": "Validation", "status": "FAIL" if any(item["verdict"] == "FAIL" for item in validations) else "PASS" if validations else "WARN", "detail": f"검증 {len(validations)}건" if validations else "연결된 검증 없음"},
-    ]
-    trust_status = "FAIL" if any(item["status"] == "FAIL" for item in checks) else "WARN" if any(item["status"] == "WARN" for item in checks) else "TRUSTED"
-    completed_at = run["completed_at"]
-    age_days = None
-    if completed_at:
-        age_days = max(0, (datetime.now(timezone.utc).replace(tzinfo=None) - completed_at).days)
-    return {
-        "run": run,
-        "trust_status": trust_status,
-        "is_latest": bool(latest and latest[0] == run_id),
-        "age_days": age_days,
-        "metadata": metadata,
-        "import_job": import_job,
-        "counts": counts,
-        "coverage": {"result_variables": len(result_keys), "catalog_variables": len(catalog), "unmapped": unmapped, "missing": missing},
-        "unit_mismatches": unit_mismatches,
-        "validations": validations,
-        "checks": checks,
-    }
-
-
 @app.get("/api/load-cases/{load_case_id}/runs")
 def list_analysis_runs(load_case_id: str, request: Request) -> list[dict[str, Any]]:
     return list_analysis_runs_query(
@@ -767,98 +694,7 @@ def list_analysis_runs(load_case_id: str, request: Request) -> list[dict[str, An
     )
 
 
-@app.get("/api/load-cases/{load_case_id}/run-comparison")
-def compare_analysis_runs(
-    load_case_id: str,
-    baseline_run_id: str = Query(min_length=3, max_length=120),
-    target_run_id: str = Query(min_length=3, max_length=120),
-    variable_key: str | None = Query(default=None, max_length=120),
-) -> dict[str, Any]:
-    if baseline_run_id == target_run_id:
-        raise HTTPException(422, "기준 Run과 대상 Run은 달라야 합니다.")
-    with connect() as conn:
-        run_rows = rows(conn.execute("SELECT * FROM analysis_runs WHERE load_case_id=? AND id IN (?, ?) ORDER BY run_no", [load_case_id, baseline_run_id, target_run_id]))
-        if len(run_rows) != 2:
-            raise HTTPException(404, "선택한 Run을 하중 경우에서 찾을 수 없습니다.")
-        run_map = {item["id"]: item for item in run_rows}
-        scalar_rows = rows(conn.execute("SELECT * FROM scalar_results WHERE analysis_run_id IN (?, ?)", [baseline_run_id, target_run_id]))
-        scalars = {run_id: {item["variable_key"]: item for item in scalar_rows if item["analysis_run_id"] == run_id} for run_id in (baseline_run_id, target_run_id)}
-        comparison: list[dict[str, Any]] = []
-        for key in sorted(set(scalars[baseline_run_id]) | set(scalars[target_run_id])):
-            baseline = scalars[baseline_run_id].get(key)
-            target = scalars[target_run_id].get(key)
-            baseline_value = (baseline or {}).get("value_double")
-            if baseline_value is None:
-                baseline_value = (baseline or {}).get("value_integer")
-            target_value = (target or {}).get("value_double")
-            if target_value is None:
-                target_value = (target or {}).get("value_integer")
-            comparable = bool(baseline and target and baseline_value is not None and target_value is not None and baseline.get("unit") == target.get("unit"))
-            delta = float(target_value - baseline_value) if comparable else None
-            delta_percent = (delta / abs(float(baseline_value)) * 100) if comparable and baseline_value not in (None, 0) else None
-            if baseline is None:
-                change = "ADDED"
-            elif target is None:
-                change = "REMOVED"
-            elif not comparable:
-                change = "NOT_COMPARABLE"
-            elif baseline.get("verdict") == "PASS" and target.get("verdict") == "FAIL":
-                change = "REGRESSION"
-            elif baseline.get("verdict") == "FAIL" and target.get("verdict") == "PASS":
-                change = "IMPROVED"
-            else:
-                change = "UNCHANGED"
-            comparison.append({
-                "variable_key": key,
-                "display_name": (target or baseline or {}).get("display_name", key),
-                "unit": (target or baseline or {}).get("unit"),
-                "baseline_value": baseline_value,
-                "target_value": target_value,
-                "baseline_verdict": (baseline or {}).get("verdict"),
-                "target_verdict": (target or {}).get("verdict"),
-                "delta": delta,
-                "delta_percent": delta_percent,
-                "change": change,
-                "comparable": comparable,
-            })
-
-        series_rows = rows(conn.execute(
-            """
-            SELECT variable_key, min(display_name) AS display_name, min(value_unit) AS value_unit,
-                   count(DISTINCT analysis_run_id) AS run_count
-            FROM time_series_results WHERE analysis_run_id IN (?, ?)
-            GROUP BY variable_key HAVING count(DISTINCT analysis_run_id)=2 ORDER BY variable_key
-            """,
-            [baseline_run_id, target_run_id],
-        ))
-        available_series = [{"variable_key": item["variable_key"], "display_name": item["display_name"], "unit": item["value_unit"]} for item in series_rows]
-        selected_key = variable_key if any(item["variable_key"] == variable_key for item in available_series) else available_series[0]["variable_key"] if available_series else None
-        series_payload = None
-        if selected_key:
-            points = rows(conn.execute("SELECT analysis_run_id, time_value, value, time_unit, value_unit FROM time_series_results WHERE analysis_run_id IN (?, ?) AND variable_key=? ORDER BY time_value", [baseline_run_id, target_run_id, selected_key]))
-            merged: dict[float, dict[str, Any]] = {}
-            for point in points:
-                item = merged.setdefault(float(point["time_value"]), {"time_value": point["time_value"], "time_unit": point["time_unit"], "baseline_value": None, "target_value": None})
-                item["baseline_value" if point["analysis_run_id"] == baseline_run_id else "target_value"] = point["value"]
-            descriptor = next(item for item in available_series if item["variable_key"] == selected_key)
-            series_payload = {**descriptor, "points": list(merged.values())}
-
-        summary = {status.lower(): sum(1 for item in comparison if item["change"] == status) for status in ("REGRESSION", "IMPROVED", "UNCHANGED")}
-        summary["comparable"] = sum(1 for item in comparison if item["comparable"])
-        return {
-            "baseline_run": run_map[baseline_run_id],
-            "target_run": run_map[target_run_id],
-            "summary": summary,
-            "scalar_comparison": comparison,
-            "available_series": available_series,
-            "time_series": series_payload,
-        }
-
-
-@app.get("/api/analysis-runs/{run_id}/trust")
-def get_analysis_run_trust(run_id: str) -> dict[str, Any]:
-    with connect() as conn:
-        return _run_trust_payload(conn, run_id)
+app.include_router(analysis_insights_router)
 
 
 app.include_router(result_review_router)

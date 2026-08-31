@@ -52,12 +52,12 @@ Browser
 
 ### 3.1 애플리케이션 조립
 
-`backend/app/main.py`가 FastAPI 인스턴스, lifespan, CORS, 보안 middleware, 정적 asset mount와 router 등록을 소유한다. 동시에 결과 비교·trust, workflow, dashboard 등 많은 legacy endpoint와 SQL을 아직 포함한다. Report layout, PPTX report template, variable catalog, project workspace layout, import-schemas와 result-review endpoint는 독립 router로 이동했다.
+`backend/app/main.py`가 FastAPI 인스턴스, lifespan, CORS, 보안 middleware, 정적 asset mount와 router 등록을 소유한다. 동시에 workflow, dashboard 등 많은 legacy endpoint와 SQL을 아직 포함한다. Report layout, PPTX report template, variable catalog, project workspace layout, import-schemas, result-review와 analysis-insights endpoint는 독립 router로 이동했다.
 
 등록된 router는 두 계열이다.
 
 - `backend/app/routers/`: 인증, 접근 제어, workbench, 모델링 카탈로그, 마스터 결과 Refresh, 수동 결과 import·예제 폴더 import를 소유하는 `result_ingestion`
-- `backend/app/adapters/http/routers/`: `projects`, `requests`, `reports`, `report_templates`, `variable_catalog`, `workspace_layouts`, `import_schemas`, `result_review`의 대표 vertical slice HTTP adapter
+- `backend/app/adapters/http/routers/`: `projects`, `requests`, `reports`, `report_templates`, `variable_catalog`, `workspace_layouts`, `import_schemas`, `result_review`, `analysis_insights`의 대표 vertical slice HTTP adapter
 
 새 기능은 가능한 한 얇은 router에서 입력/권한/응답 변환만 처리하고, orchestration과 SQL을 아래 계층으로 넘긴다.
 
@@ -103,13 +103,21 @@ metadata variable key를 같은 SQL/JSON 규칙으로 읽는다. GET은 기존�
 현재 annotation 조회 전에 같은 권한을 확인한 뒤 bookmark·annotation·audit을 하나의 transaction으로 기록하며, authorization/audit HTTP callback이
 없으면 fail-closed한다. Pydantic/OpenAPI/route order와 principal actor 계약도 유지했다.
 
-Result-review focused **27 passed**, architecture·OpenAPI·compile gate와 full backend
-**1078 passed, 10 skipped in 831.43s, exit 0**를 확인했다. 현재 `main.py`는 **1,754줄**이고 direct
-`.execute()` actual/ceiling은 **106**이다. 다음 개인 노트북 우선순위는 comparison+trust
-read-only slice다. review-list GET의 explicit `PROJECT_DATA_VIEW` 부재는 동작 보존을 위한
-별도 security debt다. 개인 노트북 완료 범위는 DuckDB/application/contract 검증까지이며,
-PostgreSQL concurrent PATCH/row-lock, app-role privileges, review status CHECK/index,
-cross-project permission tightening 및 Rocky/proxy/private CA는 사내 office-only release gate다.
+`analysis_insights`는 `GET /api/load-cases/{load_case_id}/run-comparison`과
+`GET /api/analysis-runs/{run_id}/trust`를 HTTP/application/domain errors·port·policies/SQL
+adapter로 분리했다. 두 read route는 기존대로 explicit permission, audit, transaction을 추가하지
+않는다. Comparison의 run 검증, scalar classification, series fallback/merge와 trust의 run·source·catalog·unit·validation check 및 overall status 계산을 보존했다. Trust는 같은 open connection에서 neutral
+`adapters/persistence/result_keys.py`를 계속 사용한다.
+
+Result-review+analysis-insights+legacy additive focused **41 passed**, architecture·OpenAPI·compile
+gate와 final full backend **1092 passed, 10 skipped in 830.97s, exit 0**를 확인했다. 첫 full은 stale
+contract 1건으로 실패했으며 test ownership을 갱신한 뒤 final full green을 재확인했다. 현재 `main.py`는
+**1,590줄**이고 direct `.execute()` actual/ceiling은 **106 → 90**이다. 다음 개인 노트북 우선순위는
+`get_load_case_overview` 1개 read-only route(예상 ceiling **81**)이며 기존 3-connection/order/permission
+동작을 보존한다. review-list GET의 explicit `PROJECT_DATA_VIEW` 부재와 domain pure policy extraction·clock
+injection은 behavior-neutral follow-up debt다. 개인 노트북 완료 범위는 DuckDB/application/contract 검증까지이며,
+PostgreSQL JSONB/numeric, concurrent import multi-query snapshot, query plan/latency/index/pool,
+OIDC active-nonmember/cross-project policy 및 proxy/private CA는 사내 office-only release gate다.
 
 Phase 2의 `result_ingestion`은 세 안전 단위로 정리했다. 첫 단위는 결과-import template, 수동 결과
 import, 예제 폴더 import endpoint를 `main.py`에서 `routers/result_ingestion.py`로 분리했다. 두 번째

@@ -556,15 +556,24 @@ update는 current annotation 조회 전 `RESULT_REVIEW` resource authorization�
 transaction으로 기록한다. HTTP authorization/audit callback을 누락하면 fail-closed하며,
 principal display name·Pydantic·anonymous OpenAPI response·route order/operationId 계약은 그대로다.
 
-Result-review focused는 **27 passed**, architecture·OpenAPI·compile gate가 통과했고 full backend는
-**1078 passed, 10 skipped in 831.43s, exit 0**이다. 직접 측정한 `backend/app/main.py`는 **1,754줄**, direct
-`.execute()` actual/ceiling은 **106**이다. 다음 개인 노트북 우선순위는 comparison+trust
-read-only slice다. review-list GET의 explicit `PROJECT_DATA_VIEW` 부재는 보안 부채지만 구조
-refactor에 섞지 않는다.
+2026-09-01 analysis-insights read-only vertical slice도 완료했다. `GET
+/api/load-cases/{load_case_id}/run-comparison`과 `GET /api/analysis-runs/{run_id}/trust` 2 route를
+analysis-insights HTTP/application/domain errors·port·policies/SQL adapter로 이동했다. 두 route는
+기존대로 explicit permission, audit, transaction이 없으며 comparison classification·series merge,
+trust check·overall status와 raw payload/오류 계약을 유지한다. Trust는 neutral persistence
+`result_keys` helper를 같은 connection에서 사용한다.
 
-개인 노트북에서는 DuckDB/application/contract 검증까지만 수행한다. PostgreSQL concurrent
-PATCH/row-lock, app-role privileges, review status CHECK/index, cross-project permission tightening,
-사내 IdP·directory·Rocky/proxy/private CA 배포 검증은
+Result-review+analysis-insights+legacy additive focused는 **41 passed**, architecture·OpenAPI·compile
+gate가 통과했고 final full backend는 **1092 passed, 10 skipped in 830.97s, exit 0**이다. 첫 full의 stale
+contract 1건은 test ownership 갱신 뒤 final full green으로 재검증했다. 직접 측정한
+`backend/app/main.py`는 **1,590줄**, direct `.execute()` actual/ceiling은 **106 → 90**이다. 다음 개인
+노트북 우선순위는 `get_load_case_overview` 1개 read-only route(예상 ceiling **81**)이며 기존
+3-connection/order/permission 동작을 보존한다. review-list GET의 explicit `PROJECT_DATA_VIEW` 부재와
+domain pure policy extraction·clock injection은 behavior-neutral follow-up debt로 구조 refactor에 섞지 않는다.
+
+개인 노트북에서는 DuckDB/application/contract 검증까지만 수행한다. PostgreSQL JSONB/numeric,
+concurrent import multi-query snapshot, query plan/latency/index/pool, OIDC active-nonmember/cross-project
+policy, 사내 proxy/private CA 배포 검증은
 [`personal-laptop-to-corporate-release-handoff.md`](personal-laptop-to-corporate-release-handoff.md)의
 corporate handoff gate에서 수행한다.
 Duplicate rejection 409의 attempt detail은 non-admin에게 profile snapshot과 command preview를 노출하지 않도록 router에서
@@ -741,10 +750,12 @@ proxy/CA를 설치·갱신하는 자동화는 아직 없다. `NO_PROXY` assignme
    Rocky validator, frontend architecture/API self-test/build도 통과했다.
 8. **다음 개인 노트북 구현 우선순위:** menu policy, report layout 6 API,
    PPTX template 4 API, variable catalog 4 API, project workspace layout 5 route, import-schemas
-   4 route와 result-review bookmark+annotation GET/POST/PATCH 3 route는 완료했다. 다음은
-   comparison+trust read-only slice다. import-schemas DELETE의 별도 permission connection,
-   non-transactional usage check, 명시적 domain delete audit 부재와 review-list GET의 explicit
-   `PROJECT_DATA_VIEW` 부재는 각각 호환/보안 부채로 유지하며 구조 refactor에 섞지 않는다.
+   4 route, result-review bookmark+annotation GET/POST/PATCH 3 route와 analysis-insights comparison/trust
+   GET 2 route는 완료했다. 다음은 `get_load_case_overview` 1개 read-only route이며 기존
+   3-connection/order/permission 동작과 예상 direct `execute` ceiling 81을 보존한다. import-schemas
+   DELETE의 별도 permission connection, non-transactional usage check, 명시적 domain delete audit 부재,
+   review-list GET의 explicit `PROJECT_DATA_VIEW` 부재와 domain pure policy extraction·clock injection은
+   각각 호환/behavior-neutral 부채로 유지하며 구조 refactor에 섞지 않는다.
    **office-only release gate 우선순위:** (1) 실제 Rocky host install과 app-role
    startup preflight, NFS/SMB mount probe·승인 및 filesystem quota/capacity 확인,
    (2) production backup을 분리된 빈 DB에 복구하고 exported-snapshot inventory와
