@@ -69,6 +69,13 @@ adapter, ZIP/XML document adapter로 분리됐다. 기본 runtime root는
 경로와 child symlink를 읽지 않으며, delete는 파일 quarantine 뒤 DB를 갱신하고 실패 시
 복원한다. Rocky의 runtime root·backup/restore 실검증은 사내 release gate다.
 
+`variable_catalog`의 목록·생성/재활성화·수정·soft delete 4개 API도 HTTP adapter,
+application command/query, domain policy/port, SQL persistence adapter로 분리됐다.
+Mutation은 같은 DB connection에서 load-case resource 권한을 먼저 확인하고, 목록의
+기존 공개 조회 계약을 유지한다. `repositories/variable_catalog.py`는 result ingestion
+legacy caller를 위한 compatibility facade만 남고 실제 SQL·정규화 정책은 adapter/domain이
+소유한다. 현재 `main.py`는 2,122줄이고 direct `.execute()` ceiling은 147이다.
+
 Phase 2의 `result_ingestion`은 세 안전 단위로 정리했다. 첫 단위는 결과-import template, 수동 결과
 import, 예제 폴더 import endpoint를 `main.py`에서 `routers/result_ingestion.py`로 분리했다. 두 번째
 단위는 framework-neutral `application/results/ingestion.py`가 parser·canonical command·ingestion

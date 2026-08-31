@@ -1,7 +1,7 @@
 # 프로그램 정리 및 개발 계획
 
 - 기준일: 2026-09-01
-- 상태: 실행 계획 + Run Identity V2·report layout·PPTX template vertical slice 기준선 반영
+- 상태: 실행 계획 + Run Identity V2·report layout·PPTX template·variable catalog vertical slice 기준선 반영
 - 범위: 구조 정리, DB·결과 수집, 확장자, proxy, 사내 배포, 기술 우선순위
 
 ## 1. 결론
@@ -516,11 +516,26 @@ ZIP symlink·외부 relationship·잘못된 XML·비정상 slide 크기도 명�
 `backend/app/main.py`는 **2,182줄**, direct `.execute()` 실제값과 architecture ceiling은
 **148**이다. 잘못 생성됐던 빈 `backend/app/assets` 테스트 디렉터리는 제거했다.
 
-개인 노트북의 다음 우선순위는 variable catalog 4개 route다. 변수 목록·생성/재활성화·
-수정·soft delete를 독립 slice로 옮기되 `has_data`, dashboard 사용 개수, 사용 중 삭제
-차단과 기존 payload actor 계약을 먼저 보존한다. 실제 PostgreSQL multi-connection·
-app-role 권한, 사내 directory/IdP와 corporate proxy/CA, Rocky/nginx/systemd/TLS 및
-report-template runtime root/backup 이관 검증은 office-only 인수 단계에 남긴다.
+2026-09-01 variable catalog vertical slice도 완료했다. 변수 목록·생성/재활성화·수정·
+soft delete 4개 API를 HTTP/application/domain policy·port/SQL adapter로 이동했다.
+GET은 기존처럼 별도 project permission 없이 load-case 존재만 확인하며 mutation은
+provider가 연 같은 연결에서 `PROJECT_VARIABLE_MANAGE`를 먼저 확인한다. `has_data`,
+dashboard 사용 개수, 사용 중 삭제 409, active duplicate, inactive same-key 재활성화와
+클라이언트 `updated_by` 계약을 구조 변경 없이 보존했다. Update는 key/data type을
+바꾸지 않지만 inactive row 재활성화는 현재처럼 data type 변경을 허용한다. Result
+ingestion의 legacy import는 compatibility facade를 통해 같은 SQL adapter를 사용한다.
+
+Variable focused는 **14 passed**, result-ingestion 호환 회귀는 **23 passed**,
+architecture·OpenAPI·compile gate가 통과했다. 최종 full backend는
+**1009 passed, 10 skipped in 702.85s (0:11:42), exit 0**이며 `main.py`는
+**2,122줄**, direct `.execute()` 실제값과 ceiling은 **147**이다.
+
+개인 노트북의 다음 우선순위는 project workspace layout 5개 route다. 두 canonical
+project route, 두 deprecated alias, version 목록을 함께 옮기고 principal actor,
+live row·version snapshot·audit transaction과 기존 lock/CAS 미사용 계약을 유지한다.
+실제 PostgreSQL multi-connection·app-role 권한, 사내 directory/IdP와 corporate
+proxy/CA, Rocky/nginx/systemd/TLS 및 report-template runtime root/backup 이관 검증은
+office-only 인수 단계에 남긴다.
 
 개인 노트북에서는 DuckDB/application/contract 검증까지만 수행한다. 실제 PostgreSQL
 multi-connection 및 app-role 권한, 사내 IdP·directory·proxy/CA·Rocky 배포 검증은
@@ -699,8 +714,9 @@ proxy/CA를 설치·갱신하는 자동화는 아직 없다. `NO_PROXY` assignme
    `573 passed, 5 skipped in 382.12s`; backend architecture/OpenAPI/compileall,
    Rocky validator, frontend architecture/API self-test/build도 통과했다.
 8. **다음 개인 노트북 구현 우선순위:** menu policy, report layout 6 API,
-   PPTX template 4 API slice는 완료했다. 이어서 (1) variable catalog 4 route,
-   (2) `app/main.py` 잔여 endpoint를 위험이 낮은 기능 단위로 정리한다.
+   PPTX template 4 API, variable catalog 4 API slice는 완료했다. 이어서
+   (1) project workspace layout 5 route와 deprecated alias, (2) `import-schemas`
+   또는 result review를 위험 감사 후 정리한다.
    **office-only release gate 우선순위:** (1) 실제 Rocky host install과 app-role
    startup preflight, NFS/SMB mount probe·승인 및 filesystem quota/capacity 확인,
    (2) production backup을 분리된 빈 DB에 복구하고 exported-snapshot inventory와

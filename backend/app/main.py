@@ -19,7 +19,6 @@ from .modules.access_control import (
     PROJECT_DATA_VIEW,
     PROJECT_LAYOUT_EDIT,
     PROJECT_THRESHOLD_MANAGE,
-    PROJECT_VARIABLE_MANAGE,
     REPORT_EXPORT,
     REQUEST_CREATE,
     REQUEST_EDIT,
@@ -37,7 +36,6 @@ from .config import database_settings, security_settings
 from .repositories.media_repository import get_blob, get_drop_video, list_drop_videos
 from .services.media_http import build_media_response
 from .repositories.portfolio import PortfolioRepository
-from .repositories.variable_catalog import VariableCatalogRepository
 from .repositories.workbench import WorkbenchRepository
 from .services.request_monitoring import request_monitoring_summary, sync_request_status
 from .schemas.api import (
@@ -55,8 +53,6 @@ from .schemas.api import (
     QualityThresholdUpdate,
     ReviewItemCreate,
     ReviewItemUpdate,
-    VariableCreate,
-    VariableUpdate,
     WorkspaceLayoutResponse,
     WorkspaceLayoutUpdate,
     WorkspaceLayoutVersionResponse,
@@ -75,6 +71,7 @@ from .adapters.http.routers.projects import router as projects_router
 from .adapters.http.routers.reports import router as reports_router
 from .adapters.http.routers.report_templates import router as report_templates_router
 from .adapters.http.routers.requests import router as requests_router
+from .adapters.http.routers.variable_catalog import router as variable_catalog_router
 from .adapters.persistence.products import SQLProductInformationRepositoryProvider
 from .application.products.queries import list_product_information
 from .adapters.persistence.results import SQLAnalysisRunSummaryRepositoryProvider
@@ -1430,64 +1427,7 @@ def update_workflow_step(step_id: str, payload: WorkflowStepUpdate, request: Req
     return updated[0]
 
 
-@app.get("/api/load-cases/{load_case_id}/variables")
-def get_variables(load_case_id: str) -> list[dict[str, Any]]:
-    with connect() as conn:
-        if not conn.execute("SELECT 1 FROM load_cases WHERE id = ?", [load_case_id]).fetchone():
-            raise HTTPException(404, "하중 경우를 찾을 수 없습니다.")
-        return VariableCatalogRepository(conn).list_for_load_case(load_case_id)
-
-
-def _catalog_error(exc: Exception) -> HTTPException:
-    messages = {
-        "VARIABLE_EXISTS": (409, "같은 변수 키가 이미 존재합니다."),
-        "VARIABLE_NOT_FOUND": (404, "변수를 찾을 수 없습니다."),
-        "LOAD_CASE_NOT_FOUND": (404, "하중 경우를 찾을 수 없습니다."),
-        "INVALID_CATALOG_OPTIONS": (422, "데이터 유형에 허용되지 않은 위젯 또는 집계 방식입니다."),
-        "NUMBER_THRESHOLD_REQUIRED": (422, "숫자 변수에는 판정 기준값이 필요합니다."),
-    }
-    status, message = messages.get(str(exc), (422, str(exc)))
-    return HTTPException(status, message)
-
-
-@app.post("/api/load-cases/{load_case_id}/variables", status_code=201)
-def create_variable(load_case_id: str, payload: VariableCreate, request: Request) -> dict[str, Any]:
-    with connect() as conn:
-        require_resource_permission(request, PROJECT_VARIABLE_MANAGE, "load_case", load_case_id, conn=conn)
-        try:
-            return VariableCatalogRepository(conn).create(load_case_id, payload.model_dump())
-        except (ValueError, LookupError) as exc:
-            raise _catalog_error(exc) from exc
-
-
-@app.put("/api/load-cases/{load_case_id}/variables/{variable_key}")
-def update_variable(load_case_id: str, variable_key: str, payload: VariableUpdate, request: Request) -> dict[str, Any]:
-    with connect() as conn:
-        require_resource_permission(request, PROJECT_VARIABLE_MANAGE, "load_case", load_case_id, conn=conn)
-        try:
-            return VariableCatalogRepository(conn).update(load_case_id, variable_key, payload.model_dump())
-        except (ValueError, LookupError) as exc:
-            raise _catalog_error(exc) from exc
-
-
-@app.delete("/api/load-cases/{load_case_id}/variables/{variable_key}")
-def delete_variable(
-    load_case_id: str,
-    variable_key: str,
-    request: Request,
-    updated_by: str = Query(default="관리자", min_length=2, max_length=60),
-) -> dict[str, Any]:
-    with connect() as conn:
-        require_resource_permission(request, PROJECT_VARIABLE_MANAGE, "load_case", load_case_id, conn=conn)
-        repository = VariableCatalogRepository(conn)
-        references = repository.dashboard_references(load_case_id, variable_key)
-        if references:
-            raise HTTPException(409, detail={"message": "대시보드에서 사용 중인 변수는 삭제할 수 없습니다.", "dashboard_ids": references})
-        try:
-            repository.deactivate(load_case_id, variable_key, updated_by)
-        except LookupError as exc:
-            raise _catalog_error(exc) from exc
-    return {"status": "deactivated", "variable_key": variable_key}
+app.include_router(variable_catalog_router)
 
 
 def _get_project_workspace_layout(

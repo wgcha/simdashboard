@@ -43,8 +43,15 @@ MCP, Embedding, Graph DB는 이번 리팩터링에서 구현하지 않는다. �
   storage root를 테스트 주입 가능하게 했다. 관련 focused는 **19 passed**, 최종 full
   backend는 **996 passed, 10 skipped in 686.52s (0:11:26), exit 0**이다.
   `main.py`는 **2,182줄**, direct `execute` 실제값과 ceiling은 **148**이다.
-- 다음 개인 노트북 slice는 variable catalog 4 route다. 사내 PostgreSQL·proxy/CA·Rocky
-  deploy와 report-template runtime root/backup 이관 검증은 office-only release gate를 유지한다.
+- Variable catalog 목록·생성/재활성화·수정·soft delete 4개 API도 독립
+  `HTTP → application → domain policy/port → SQL adapter` slice로 이동했다. Mutation은
+  provider가 연 같은 연결에서 resource 권한을 먼저 확인하고, GET의 기존 공개 조회와
+  load-case 404를 유지한다. Result ingestion은 6줄 compatibility facade를 계속 사용한다.
+- Variable focused는 **14 passed**, result-ingestion 호환 회귀는 **23 passed**이며 최종
+  full backend는 **1009 passed, 10 skipped in 702.85s (0:11:42), exit 0**이다.
+  `main.py`는 **2,122줄**, direct `execute` 실제값과 ceiling은 **147**이다.
+- 다음 개인 노트북 slice는 project workspace layout 5 route다. 사내 PostgreSQL·proxy/CA·
+  Rocky deploy와 report-template runtime root/backup 이관 검증은 office-only release gate를 유지한다.
 
 검증에서 기본 backend suite 176개가 통과하고 3개 PostgreSQL opt-in test가 skip됐다. 별도의 disposable PostgreSQL 18 cluster를 blank DB에서 migration·권한 hardening·reference seed까지 구성한 뒤 app-role profile 60개가 통과했고, canonical 6-step workflow가 suite 전후 동일함을 확인했다. frontend architecture/API/preferences self-test, TypeScript와 production build가 통과했으며 fresh backend/Vite/Chromium을 사용한 Playwright 20개도 모두 통과했다. 실제 Rocky 서버 값·TLS·service user가 없어 운영 배포는 수행하지 않았고, 로컬 credential 파일의 과거 과도한 권한 노출에 대해서는 비밀번호 회전이 별도 운영 조치로 남아 있다. 이 외부 검증 상태는 코드 contract와 구분한다.
 
@@ -322,10 +329,11 @@ provider open 전 catalog-manage 권한을 확인한다. Update의 read-before-B
 
 현재 `reportExport.ts`가 직접 소비하는 데이터를 `ReportContext` read model로 정의하는
 장기 계획은 유지한다. 서버 PPTX template 4 route는 filesystem/DB
-compensation·containment·archive safety와 함께 분리 완료했다. 다음 안전 분리 단위는
-variable catalog 4 route이며, 결과 데이터·dashboard·report가 공유하는 변수 의미를
-application/domain port로 옮긴다. MCP endpoint는 추가하지 않으며, 미래 REST UI와
-MCP가 같은 report context/composition service를 호출할 수 있는 입력/출력 계약만 준비한다.
+compensation·containment·archive safety와 함께 분리했고 variable catalog 4 route도
+결과 데이터·dashboard·report가 공유하는 변수 의미를 application/domain port로 옮겼다.
+다음 안전 분리 단위는 project workspace layout 5 route다. MCP endpoint는 추가하지
+않으며, 미래 REST UI와 MCP가 같은 report context/composition service를 호출할 수 있는
+입력/출력 계약만 준비한다.
 
 ### Phase 3 — 프런트 app shell과 feature 분리 (P1)
 
@@ -420,8 +428,8 @@ git diff --check
 
 ### 현재 후속 순서 — 2026-09-01
 
-1. Report layout 6 API와 PPTX template 4 API vertical slice 완료 상태를 계약 테스트로 유지한다.
-2. Variable catalog 4 route를 application/domain port와 SQL adapter로 옮긴다.
-3. 그 다음 `main.py` 잔여 endpoint를 위험이 낮은 기능 단위로 계속 정리한다.
+1. Report layout 6 API, PPTX template 4 API, variable catalog 4 API 완료 상태를 계약 테스트로 유지한다.
+2. Project workspace layout 5 route와 deprecated alias를 application/domain port·SQL adapter로 옮긴다.
+3. 그 다음 `import-schemas` 또는 result review를 위험 감사 후 정리한다.
 4. 실제 PostgreSQL multi-connection/app-role, corporate proxy/CA, Rocky/nginx/systemd/TLS,
    backup/restore/deploy는 사내 office-only release gate에서 검증한다.
