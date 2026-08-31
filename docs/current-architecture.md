@@ -52,12 +52,12 @@ Browser
 
 ### 3.1 애플리케이션 조립
 
-`backend/app/main.py`가 FastAPI 인스턴스, lifespan, CORS, 보안 middleware, 정적 asset mount와 router 등록을 소유한다. 동시에 결과 비교·review, workflow, dashboard 등 많은 legacy endpoint와 SQL을 아직 포함한다. Report layout과 PPTX report template endpoint는 독립 router로 이동했다.
+`backend/app/main.py`가 FastAPI 인스턴스, lifespan, CORS, 보안 middleware, 정적 asset mount와 router 등록을 소유한다. 동시에 결과 비교·review, workflow, dashboard 등 많은 legacy endpoint와 SQL을 아직 포함한다. Report layout, PPTX report template, variable catalog과 project workspace layout endpoint는 독립 router로 이동했다.
 
 등록된 router는 두 계열이다.
 
 - `backend/app/routers/`: 인증, 접근 제어, workbench, 모델링 카탈로그, 마스터 결과 Refresh, 수동 결과 import·예제 폴더 import를 소유하는 `result_ingestion`
-- `backend/app/adapters/http/routers/`: `projects`, `requests`, `reports`, `report_templates`의 대표 vertical slice HTTP adapter
+- `backend/app/adapters/http/routers/`: `projects`, `requests`, `reports`, `report_templates`, `variable_catalog`, `workspace_layouts`의 대표 vertical slice HTTP adapter
 
 새 기능은 가능한 한 얇은 router에서 입력/권한/응답 변환만 처리하고, orchestration과 SQL을 아래 계층으로 넘긴다.
 
@@ -74,7 +74,15 @@ application command/query, domain policy/port, SQL persistence adapter로 분리
 Mutation은 같은 DB connection에서 load-case resource 권한을 먼저 확인하고, 목록의
 기존 공개 조회 계약을 유지한다. `repositories/variable_catalog.py`는 result ingestion
 legacy caller를 위한 compatibility facade만 남고 실제 SQL·정규화 정책은 adapter/domain이
-소유한다. 현재 `main.py`는 2,122줄이고 direct `.execute()` ceiling은 147이다.
+소유한다.
+
+`workspace_layouts`는 canonical project route 3개와 deprecated alias 2개, 총 5개 API를
+HTTP adapter, application command/query, domain policy/port, SQL persistence adapter로
+분리했다. Read는 같은 open connection에서 project 존재 확인 뒤 `PROJECT_DATA_VIEW`를,
+write는 `PROJECT_LAYOUT_EDIT`를 확인한다. Write는 `BEGIN → project → auth → live update →
+version append → audit → COMMIT` 또는 rollback으로 수행한다. principal actor와 기존
+validation/404/422/alias/operationId를 유지하며, live row가 없을 때 history 조회는 기존처럼
+빈 목록을 반환한다. 현재 `main.py`는 1,948줄이고 direct `.execute()` actual/ceiling은 136이다.
 
 Phase 2의 `result_ingestion`은 세 안전 단위로 정리했다. 첫 단위는 결과-import template, 수동 결과
 import, 예제 폴더 import endpoint를 `main.py`에서 `routers/result_ingestion.py`로 분리했다. 두 번째
@@ -144,7 +152,7 @@ future finalization은 같은 transaction에서 active lease CAS를 요구한다
 | 경로 | 사용 방식 |
 |---|---|
 | `backend/app/services/` | import, media, monitoring, verdict, OIDC, 배치 실행, 요청 결과 구성 같은 절차형 orchestration |
-| `backend/app/application/` | `projects`, `products`, `requests`, `results`, `reports`, `workbench`의 명시적 command/query use case |
+| `backend/app/application/` | `projects`, `products`, `requests`, `results`, `reports`, `workbench`, `workspace_layouts`의 명시적 command/query use case |
 | `backend/app/domains/` | 같은 대표 slice의 프레임워크 독립 model, policy, repository port |
 | `backend/app/repositories/` | 아직 이전되지 않은 기능의 SQL repository |
 | `backend/app/adapters/persistence/` | 대표 vertical slice의 SQL repository provider/adapter |

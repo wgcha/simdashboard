@@ -15,7 +15,7 @@ MCP, Embedding, Graph DB는 이번 리팩터링에서 구현하지 않는다. �
 ### 구현 상태 — 2026-09-01
 
 - Phase 0~1: runtime lock, PostgreSQL app/owner role preflight, test 계층·아키텍처/OpenAPI CI guard를 구현했다. DuckDB는 local development compatibility adapter로만 유지한다.
-- Phase 2: `projects`, `products`, `results`, `reports` read, `requests` assignee 변경과 workbench result-layout snapshot GET/materialize POST의 representative vertical slice를 HTTP → application → domain port → SQL adapter로 옮겼다. result-layout은 기존 request scope → 권한 → load-case 소유권 → snapshot/binding 또는 transaction materialization 순서와 legacy compatibility를 유지한다. Materials/Parts는 canonical table/API contract가 없어 보류한다.
+- Phase 2: `projects`, `products`, `results`, `reports` read, `requests` assignee 변경, workbench result-layout snapshot GET/materialize POST와 project workspace layout의 representative vertical slice를 HTTP → application → domain policy/port → SQL adapter로 옮겼다. result-layout은 기존 request scope → 권한 → load-case 소유권 → snapshot/binding 또는 transaction materialization 순서와 legacy compatibility를 유지한다. Materials/Parts는 canonical table/API contract가 없어 보류한다.
 - Phase 3: shell/sidebar/topbar, route registry, StrictMode-safe bootstrap machine, versioned UI preferences와 data/schema/variables/automation/workflow/results/report editor의 lazy feature boundary를 구현했다. 비기본 access/workbench route는 hover·focus preload가 있는 lazy module로 분리했고 report export session은 전용 controller/dialog가 소유한다. `App.tsx`는 2,366→1,076줄, main JS는 약 961→714 KB로 감소했다. 목표 400줄 이하와 남은 dashboard/bootstrap controller의 feature state 소유권 이동은 후속이다.
 - Phase 4: generated source를 `shared/api/generated`로 단일화하고 인증·401/403·오류 처리를 중앙 client가 소유한다. `api.ts`와 workbench client의 raw `/api/` 문자열은 0으로 잠갔고, caller 지정 generic cast를 금지해 named response adapter만 사용하도록 architecture gate를 추가했다. Report layout 6개 success response는 concrete named schema로 보강했다. 다만 JSON success response 87개는 아직 anonymous schema이므로, 해당 response model 보강 전 generated DTO 단일 계약이 완전하다고 간주하지 않는다.
 - Phase 5: PostgreSQL startup은 Alembic table preflight만 수행하도록 했고, 현재 fixture seed는 명시 command `seed_database.py --mode reference`로 분리했다. `reference`와 `demo`는 아직 동일 fixture alias이므로 운영 reference data 분리는 후속 제품 결정이다. DuckDB historic DDL 전체 이동은 하지 않고 development bootstrap adapter entry만 만들었다.
@@ -50,8 +50,18 @@ MCP, Embedding, Graph DB는 이번 리팩터링에서 구현하지 않는다. �
 - Variable focused는 **14 passed**, result-ingestion 호환 회귀는 **23 passed**이며 최종
   full backend는 **1009 passed, 10 skipped in 702.85s (0:11:42), exit 0**이다.
   `main.py`는 **2,122줄**, direct `execute` 실제값과 ceiling은 **147**이다.
-- 다음 개인 노트북 slice는 project workspace layout 5 route다. 사내 PostgreSQL·proxy/CA·
-  Rocky deploy와 report-template runtime root/backup 이관 검증은 office-only release gate를 유지한다.
+- Project workspace layout은 canonical 3개와 deprecated alias 2개, 총 5 route를
+  `HTTP → application → domain policy/port → SQL adapter`로 분리했다. Read는 provider가
+  연 같은 connection에서 `PROJECT_DATA_VIEW`, write는 `PROJECT_LAYOUT_EDIT`를 확인한다.
+  Write는 `BEGIN → project → auth → live update → version append → audit → COMMIT` 순서이며
+  실패 시 rollback한다. principal actor, 기존 validation/404/422/alias/operationId와 live row가
+  없는 history 조회의 기존 계약을 유지했다.
+- Workspace-layout focused는 **17 passed**, full backend는 **1023 passed, 10 skipped in
+  763.10s**, `main.py`는 **1,948줄**, direct `execute` 실제값과 ceiling은 **136**이다.
+  다음 개인 노트북 slice는 `import-schemas` 4 route이며 예상 ceiling은 **121**이다.
+  DELETE의 별도 permission connection, non-atomic usage check, 명시적 domain audit 부재는
+  호환 부채로 남긴다. PostgreSQL concurrency/delete-import race, app-role, Rocky smoke와
+  사내 proxy/CA 검증은 office-only release gate를 유지한다.
 
 검증에서 기본 backend suite 176개가 통과하고 3개 PostgreSQL opt-in test가 skip됐다. 별도의 disposable PostgreSQL 18 cluster를 blank DB에서 migration·권한 hardening·reference seed까지 구성한 뒤 app-role profile 60개가 통과했고, canonical 6-step workflow가 suite 전후 동일함을 확인했다. frontend architecture/API/preferences self-test, TypeScript와 production build가 통과했으며 fresh backend/Vite/Chromium을 사용한 Playwright 20개도 모두 통과했다. 실제 Rocky 서버 값·TLS·service user가 없어 운영 배포는 수행하지 않았고, 로컬 credential 파일의 과거 과도한 권한 노출에 대해서는 비밀번호 회전이 별도 운영 조치로 남아 있다. 이 외부 검증 상태는 코드 contract와 구분한다.
 
@@ -331,9 +341,14 @@ provider open 전 catalog-manage 권한을 확인한다. Update의 read-before-B
 장기 계획은 유지한다. 서버 PPTX template 4 route는 filesystem/DB
 compensation·containment·archive safety와 함께 분리했고 variable catalog 4 route도
 결과 데이터·dashboard·report가 공유하는 변수 의미를 application/domain port로 옮겼다.
-다음 안전 분리 단위는 project workspace layout 5 route다. MCP endpoint는 추가하지
-않으며, 미래 REST UI와 MCP가 같은 report context/composition service를 호출할 수 있는
-입력/출력 계약만 준비한다.
+Project workspace layout canonical 3개와 deprecated alias 2개도 같은 HTTP/application/
+domain policy·port/SQL adapter 경계로 이동했다. Read/write project 권한은 provider가 연
+같은 connection에서 확인하고, write의 live row·version append·audit는 transaction으로
+묶는다. live row가 없을 때 history 조회가 빈 목록을 돌려주는 기존 계약도 유지한다.
+다음 안전 분리 단위는 `import-schemas` 4 route다. DELETE의 별도 permission connection,
+non-atomic usage check, 명시적 domain audit 부재는 호환 부채로 남긴다. MCP endpoint는
+추가하지 않으며, 미래 REST UI와 MCP가 같은 report context/composition service를 호출할 수
+있는 입력/출력 계약만 준비한다.
 
 ### Phase 3 — 프런트 app shell과 feature 분리 (P1)
 
@@ -428,8 +443,8 @@ git diff --check
 
 ### 현재 후속 순서 — 2026-09-01
 
-1. Report layout 6 API, PPTX template 4 API, variable catalog 4 API 완료 상태를 계약 테스트로 유지한다.
-2. Project workspace layout 5 route와 deprecated alias를 application/domain port·SQL adapter로 옮긴다.
-3. 그 다음 `import-schemas` 또는 result review를 위험 감사 후 정리한다.
-4. 실제 PostgreSQL multi-connection/app-role, corporate proxy/CA, Rocky/nginx/systemd/TLS,
+1. Report layout 6 API, PPTX template 4 API, variable catalog 4 API와 project workspace layout 5 route의 완료 상태를 계약 테스트로 유지한다.
+2. `import-schemas` 4 route를 다음 개인 노트북 slice로 분리하고 direct `execute` ceiling을 121까지 낮춘다.
+3. DELETE의 별도 permission connection, non-atomic usage check, 명시적 domain audit 부재는 호환 부채로 기록한 채 result review를 위험 감사한다.
+4. 실제 PostgreSQL concurrency/delete-import race·app-role, corporate proxy/CA, Rocky/nginx/systemd/TLS,
    backup/restore/deploy는 사내 office-only release gate에서 검증한다.

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 import shutil
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
@@ -17,7 +16,6 @@ from . import config as app_config
 from .modules.access_control import (
     DASHBOARD_EDIT,
     PROJECT_DATA_VIEW,
-    PROJECT_LAYOUT_EDIT,
     PROJECT_THRESHOLD_MANAGE,
     REPORT_EXPORT,
     REQUEST_CREATE,
@@ -53,9 +51,6 @@ from .schemas.api import (
     QualityThresholdUpdate,
     ReviewItemCreate,
     ReviewItemUpdate,
-    WorkspaceLayoutResponse,
-    WorkspaceLayoutUpdate,
-    WorkspaceLayoutVersionResponse,
     WorkflowStepUpdate,
     WorkflowStepsReplace,
 )
@@ -72,6 +67,7 @@ from .adapters.http.routers.reports import router as reports_router
 from .adapters.http.routers.report_templates import router as report_templates_router
 from .adapters.http.routers.requests import router as requests_router
 from .adapters.http.routers.variable_catalog import router as variable_catalog_router
+from .adapters.http.routers.workspace_layouts import router as workspace_layouts_router
 from .adapters.persistence.products import SQLProductInformationRepositoryProvider
 from .application.products.queries import list_product_information
 from .adapters.persistence.results import SQLAnalysisRunSummaryRepositoryProvider
@@ -114,38 +110,6 @@ def media_storage_mode() -> app_config.MediaStorageMode:
     """Read media cutover policy at request time and keep it patchable."""
 
     return app_config.media_storage_mode()
-
-
-WORKSPACE_LAYOUT_KINDS = {"portfolio", "workflow"}
-
-
-def _validated_workspace_layout(kind: str, definition: dict[str, Any]) -> dict[str, Any]:
-    if kind not in WORKSPACE_LAYOUT_KINDS:
-        raise HTTPException(404, "지원하지 않는 레이아웃 종류입니다.")
-    font_size = definition.get("fontSize")
-    if not isinstance(font_size, int) or not 8 <= font_size <= 18:
-        raise HTTPException(422, "레이아웃 글자 크기는 8~18 사이의 정수여야 합니다.")
-    if kind == "portfolio":
-        chart_order = definition.get("chartOrder")
-        expected = {"trend", "status", "quality", "type"}
-        if not isinstance(chart_order, list) or len(chart_order) != len(expected) or set(chart_order) != expected:
-            raise HTTPException(422, "운영 대시보드 차트 순서가 올바르지 않습니다.")
-        return {"fontSize": font_size, "chartOrder": chart_order}
-    accent = definition.get("accentColor")
-    if not isinstance(accent, str) or not re.fullmatch(r"#[0-9a-fA-F]{6}", accent):
-        raise HTTPException(422, "워크플로 강조 색상은 #을 포함한 6자리 HEX여야 합니다.")
-    items = definition.get("items")
-    if not isinstance(items, list):
-        raise HTTPException(422, "워크플로 레이아웃 items 배열이 필요합니다.")
-    normalized_items = []
-    for item in items:
-        if not isinstance(item, dict) or not isinstance(item.get("requestId"), str):
-            raise HTTPException(422, "워크플로 레이아웃 항목에는 requestId가 필요합니다.")
-        coordinates = {key: item.get(key) for key in ("x", "y", "w", "h")}
-        if any(not isinstance(value, int) for value in coordinates.values()):
-            raise HTTPException(422, "워크플로 레이아웃 위치와 크기는 정수여야 합니다.")
-        normalized_items.append({"requestId": item["requestId"], **coordinates})
-    return {"fontSize": font_size, "accentColor": accent, "items": normalized_items}
 
 
 @app.get("/api/health")
@@ -1428,145 +1392,7 @@ def update_workflow_step(step_id: str, payload: WorkflowStepUpdate, request: Req
 
 
 app.include_router(variable_catalog_router)
-
-
-def _get_project_workspace_layout(
-    project_id: str,
-    layout_kind: Literal["portfolio", "workflow"],
-    request: Request,
-) -> dict[str, Any]:
-    if layout_kind not in WORKSPACE_LAYOUT_KINDS:
-        raise HTTPException(404, "지원하지 않는 레이아웃 종류입니다.")
-    with connect() as conn:
-        if not conn.execute("SELECT 1 FROM projects WHERE id=?", [project_id]).fetchone():
-            raise HTTPException(404, "프로젝트를 찾을 수 없습니다.")
-        require_permission(request, PROJECT_DATA_VIEW, project_id, conn=conn)
-        stored = conn.execute(
-            """
-            SELECT project_id, layout_kind, version, definition_json, updated_by, updated_at
-            FROM project_workspace_layouts WHERE project_id=? AND layout_kind=?
-            """,
-            [project_id, layout_kind],
-        ).fetchone()
-    if not stored:
-        raise HTTPException(404, "저장된 레이아웃이 없습니다.")
-    return {"project_id": stored[0], "layout_kind": stored[1], "version": stored[2], "definition": json_value(stored[3]), "updated_by": stored[4], "updated_at": stored[5]}
-
-
-@app.get("/api/projects/{project_id}/workspace-layouts/{layout_kind}", response_model=WorkspaceLayoutResponse)
-def get_project_workspace_layout(
-    project_id: str,
-    layout_kind: Literal["portfolio", "workflow"],
-    request: Request,
-) -> dict[str, Any]:
-    return _get_project_workspace_layout(project_id, layout_kind, request)
-
-
-@app.get("/api/workspace-layouts/{layout_kind}", response_model=WorkspaceLayoutResponse, deprecated=True)
-def get_workspace_layout(
-    layout_kind: Literal["portfolio", "workflow"],
-    request: Request,
-    project_id: str = Query(min_length=3, max_length=120),
-) -> dict[str, Any]:
-    return _get_project_workspace_layout(project_id, layout_kind, request)
-
-
-def _save_project_workspace_layout(
-    project_id: str,
-    layout_kind: Literal["portfolio", "workflow"],
-    payload: WorkspaceLayoutUpdate,
-    request: Request,
-) -> dict[str, Any]:
-    definition = _validated_workspace_layout(layout_kind, payload.definition)
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
-    encoded = json.dumps(definition, ensure_ascii=False)
-    principal = request.state.principal
-    with connect() as conn:
-        conn.execute("BEGIN TRANSACTION")
-        try:
-            if not conn.execute("SELECT 1 FROM projects WHERE id=?", [project_id]).fetchone():
-                raise HTTPException(404, "프로젝트를 찾을 수 없습니다.")
-            require_permission(request, PROJECT_LAYOUT_EDIT, project_id, conn=conn)
-            existing = conn.execute(
-                "SELECT version FROM project_workspace_layouts WHERE project_id=? AND layout_kind=?",
-                [project_id, layout_kind],
-            ).fetchone()
-            if not existing:
-                raise HTTPException(404, "저장된 레이아웃이 없습니다.")
-            version = int(existing[0]) + 1
-            conn.execute(
-                """
-                UPDATE project_workspace_layouts
-                SET version=?, definition_json=?, updated_by=?, updated_at=?
-                WHERE project_id=? AND layout_kind=?
-                """,
-                [version, encoded, principal.display_name, now, project_id, layout_kind],
-            )
-            conn.execute(
-                """
-                INSERT INTO project_workspace_layout_versions
-                    (project_id, layout_kind, version, definition_json, created_by, created_at, is_valid)
-                VALUES (?, ?, ?, ?, ?, ?, true)
-                """,
-                [project_id, layout_kind, version, encoded, principal.display_name, now],
-            )
-            write_audit_event(
-                request=request,
-                principal=principal,
-                status_code=200,
-                action="PROJECT_WORKSPACE_LAYOUT_UPDATED",
-                detail={"project_id": project_id, "layout_kind": layout_kind, "version": version},
-                connection=conn,
-            )
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
-    return {"project_id": project_id, "layout_kind": layout_kind, "version": version, "definition": definition, "updated_by": principal.display_name, "updated_at": now}
-
-
-@app.put("/api/projects/{project_id}/workspace-layouts/{layout_kind}", response_model=WorkspaceLayoutResponse)
-def save_project_workspace_layout(
-    project_id: str,
-    layout_kind: Literal["portfolio", "workflow"],
-    payload: WorkspaceLayoutUpdate,
-    request: Request,
-) -> dict[str, Any]:
-    return _save_project_workspace_layout(project_id, layout_kind, payload, request)
-
-
-@app.put("/api/workspace-layouts/{layout_kind}", response_model=WorkspaceLayoutResponse, deprecated=True)
-def save_workspace_layout(
-    layout_kind: Literal["portfolio", "workflow"],
-    payload: WorkspaceLayoutUpdate,
-    request: Request,
-    project_id: str = Query(min_length=3, max_length=120),
-) -> dict[str, Any]:
-    return _save_project_workspace_layout(project_id, layout_kind, payload, request)
-
-
-@app.get("/api/projects/{project_id}/workspace-layouts/{layout_kind}/versions", response_model=list[WorkspaceLayoutVersionResponse])
-def get_workspace_layout_versions(
-    project_id: str,
-    layout_kind: Literal["portfolio", "workflow"],
-    request: Request,
-) -> list[dict[str, Any]]:
-    if layout_kind not in WORKSPACE_LAYOUT_KINDS:
-        raise HTTPException(404, "지원하지 않는 레이아웃 종류입니다.")
-    with connect() as conn:
-        if not conn.execute("SELECT 1 FROM projects WHERE id=?", [project_id]).fetchone():
-            raise HTTPException(404, "프로젝트를 찾을 수 없습니다.")
-        require_permission(request, PROJECT_DATA_VIEW, project_id, conn=conn)
-        return rows(conn.execute(
-            """
-            SELECT project_id, layout_kind, version, created_by, created_at, is_valid
-            FROM project_workspace_layout_versions
-            WHERE project_id=? AND layout_kind=? ORDER BY version DESC
-            """,
-            [project_id, layout_kind],
-        ))
-
-
+app.include_router(workspace_layouts_router)
 app.include_router(reports_router)
 app.include_router(report_templates_router)
 

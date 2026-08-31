@@ -530,12 +530,22 @@ architecture·OpenAPI·compile gate가 통과했다. 최종 full backend는
 **1009 passed, 10 skipped in 702.85s (0:11:42), exit 0**이며 `main.py`는
 **2,122줄**, direct `.execute()` 실제값과 ceiling은 **147**이다.
 
-개인 노트북의 다음 우선순위는 project workspace layout 5개 route다. 두 canonical
-project route, 두 deprecated alias, version 목록을 함께 옮기고 principal actor,
-live row·version snapshot·audit transaction과 기존 lock/CAS 미사용 계약을 유지한다.
-실제 PostgreSQL multi-connection·app-role 권한, 사내 directory/IdP와 corporate
-proxy/CA, Rocky/nginx/systemd/TLS 및 report-template runtime root/backup 이관 검증은
-office-only 인수 단계에 남긴다.
+2026-09-01 project workspace layout vertical slice도 완료했다. canonical project route
+3개와 deprecated alias 2개, 총 5개 API를 HTTP/application/domain policy·port/SQL adapter로
+이동했다. Read는 `PROJECT_DATA_VIEW`, write는 `PROJECT_LAYOUT_EDIT`를 provider가 연 같은
+open connection에서 확인한다. Write는 `BEGIN → project → auth → live update → version append
+→ audit → COMMIT` 순서이며 실패 시 rollback한다. principal actor와 기존 validation/404/422,
+alias, operationId를 유지했고 live row가 없을 때 history 조회가 빈 목록을 돌려주는 기존
+계약도 바꾸지 않았다.
+
+Workspace-layout focused는 **17 passed**이며 architecture·OpenAPI·compile gate를 통과했다.
+최종 full backend는 **1023 passed, 10 skipped in 763.10s, exit 0**이다. `backend/app/main.py`는
+**1,948줄**, direct `.execute()` 실제값과 architecture ceiling은 **136**이다. 다음 개인
+노트북 slice는 `import-schemas` 4개 route로, 예상 ceiling은 **121**이다. DELETE의 별도
+permission connection, non-atomic usage check, 명시적 domain audit 부재는 호환 부채로
+남긴다. PostgreSQL concurrency/delete-import race·app-role, 사내 directory/IdP와
+corporate proxy/CA, Rocky/nginx/systemd/TLS 및 runtime root/backup 이관 smoke는 office-only
+인수 단계에서 검증한다.
 
 개인 노트북에서는 DuckDB/application/contract 검증까지만 수행한다. 실제 PostgreSQL
 multi-connection 및 app-role 권한, 사내 IdP·directory·proxy/CA·Rocky 배포 검증은
@@ -714,9 +724,10 @@ proxy/CA를 설치·갱신하는 자동화는 아직 없다. `NO_PROXY` assignme
    `573 passed, 5 skipped in 382.12s`; backend architecture/OpenAPI/compileall,
    Rocky validator, frontend architecture/API self-test/build도 통과했다.
 8. **다음 개인 노트북 구현 우선순위:** menu policy, report layout 6 API,
-   PPTX template 4 API, variable catalog 4 API slice는 완료했다. 이어서
-   (1) project workspace layout 5 route와 deprecated alias, (2) `import-schemas`
-   또는 result review를 위험 감사 후 정리한다.
+   PPTX template 4 API, variable catalog 4 API와 project workspace layout 5 route는 완료했다.
+   이어서 (1) `import-schemas` 4 route를 예상 direct `execute` ceiling 121로 분리하고,
+   (2) result review를 위험 감사 후 정리한다. import-schemas DELETE의 별도 permission
+   connection, non-atomic usage check, 명시적 domain audit 부재는 호환 부채로 유지한다.
    **office-only release gate 우선순위:** (1) 실제 Rocky host install과 app-role
    startup preflight, NFS/SMB mount probe·승인 및 filesystem quota/capacity 확인,
    (2) production backup을 분리된 빈 DB에 복구하고 exported-snapshot inventory와
