@@ -12,7 +12,7 @@
 
 MCP, Embedding, Graph DB는 이번 리팩터링에서 구현하지 않는다. 이후 다음 데이터 흐름을 안전하게 연결할 수 있도록 백엔드 application service와 공용 식별자·권한·provenance 경계만 준비한다.
 
-### 구현 상태 — 2026-08-14
+### 구현 상태 — 2026-09-01
 
 - Phase 0~1: runtime lock, PostgreSQL app/owner role preflight, test 계층·아키텍처/OpenAPI CI guard를 구현했다. DuckDB는 local development compatibility adapter로만 유지한다.
 - Phase 2: `projects`, `products`, `results`, `reports` read, `requests` assignee 변경과 workbench result-layout snapshot GET/materialize POST의 representative vertical slice를 HTTP → application → domain port → SQL adapter로 옮겼다. result-layout은 기존 request scope → 권한 → load-case 소유권 → snapshot/binding 또는 transaction materialization 순서와 legacy compatibility를 유지한다. Materials/Parts는 canonical table/API contract가 없어 보류한다.
@@ -34,10 +34,17 @@ MCP, Embedding, Graph DB는 이번 리팩터링에서 구현하지 않는다. �
   differential case에서 불일치 0개를 확인했다. Report focused는 **56 passed**,
   expanded focused는 **66 passed**이며 full backend는 **979 passed, 10 skipped in 717.37s
   (0:11:57), exit 0**이다. `main.py` direct `execute` ceiling은 **189 → 174**다.
-- 다음 slice는 PPTX template 4 route다. DB metadata·filesystem 자산 compensation,
-  관리형 root containment, symlink/traversal 차단, ZIP/PPTX archive safety를 고정한
-  뒤 `main.py` 잔여 endpoint 정리로 넘어간다. 사내 PostgreSQL·proxy/CA·Rocky
-  deploy 검증은 기존 office-only release gate를 유지한다.
+- PPTX template 목록·업로드·render·비활성화 4개 API도 독립
+  `HTTP → application → domain port → SQL/filesystem/document adapter` slice로 이동했다.
+  DB 연결·BEGIN·audit·commit 실패 시 업로드 파일 보상, exclusive 파일 생성,
+  관리형 direct-child 경로와 child symlink 차단, delete quarantine·rollback을 적용했다.
+  ZIP symlink·경로 이탈·외부 relationship·잘못된 XML·0 크기 slide도 422로 닫는다.
+- 기본 저장 위치는 기존 Rocky 계약인 `backend/assets/report-templates`를 유지하고
+  storage root를 테스트 주입 가능하게 했다. 관련 focused는 **19 passed**, 최종 full
+  backend는 **996 passed, 10 skipped in 686.52s (0:11:26), exit 0**이다.
+  `main.py`는 **2,182줄**, direct `execute` 실제값과 ceiling은 **148**이다.
+- 다음 개인 노트북 slice는 variable catalog 4 route다. 사내 PostgreSQL·proxy/CA·Rocky
+  deploy와 report-template runtime root/backup 이관 검증은 office-only release gate를 유지한다.
 
 검증에서 기본 backend suite 176개가 통과하고 3개 PostgreSQL opt-in test가 skip됐다. 별도의 disposable PostgreSQL 18 cluster를 blank DB에서 migration·권한 hardening·reference seed까지 구성한 뒤 app-role profile 60개가 통과했고, canonical 6-step workflow가 suite 전후 동일함을 확인했다. frontend architecture/API/preferences self-test, TypeScript와 production build가 통과했으며 fresh backend/Vite/Chromium을 사용한 Playwright 20개도 모두 통과했다. 실제 Rocky 서버 값·TLS·service user가 없어 운영 배포는 수행하지 않았고, 로컬 credential 파일의 과거 과도한 권한 노출에 대해서는 비밀번호 회전이 별도 운영 조치로 남아 있다. 이 외부 검증 상태는 코드 contract와 구분한다.
 
@@ -314,10 +321,11 @@ provider open 전 catalog-manage 권한을 확인한다. Update의 read-before-B
 하나의 transaction으로 묶는다.
 
 현재 `reportExport.ts`가 직접 소비하는 데이터를 `ReportContext` read model로 정의하는
-장기 계획은 유지한다. 다만 다음 안전 분리 단위는 서버 PPTX template 4
-route이며, 기능 변경 없이 filesystem/DB compensation·containment·archive safety를 먼저
-고정한다. MCP endpoint는 추가하지 않으며, 미래 REST UI와 MCP가 같은 report
-context/composition service를 호출할 수 있는 입력/출력 계약만 준비한다.
+장기 계획은 유지한다. 서버 PPTX template 4 route는 filesystem/DB
+compensation·containment·archive safety와 함께 분리 완료했다. 다음 안전 분리 단위는
+variable catalog 4 route이며, 결과 데이터·dashboard·report가 공유하는 변수 의미를
+application/domain port로 옮긴다. MCP endpoint는 추가하지 않으며, 미래 REST UI와
+MCP가 같은 report context/composition service를 호출할 수 있는 입력/출력 계약만 준비한다.
 
 ### Phase 3 — 프런트 app shell과 feature 분리 (P1)
 
@@ -412,9 +420,8 @@ git diff --check
 
 ### 현재 후속 순서 — 2026-09-01
 
-1. Report layout 6 API vertical slice 완료 상태를 계약 테스트로 유지한다.
-2. PPTX template 4 route를 filesystem/DB compensation·containment·archive safety 경계와
-   함께 독립 slice로 옮긴다.
-3. 그 다음 `main.py` 잔여 endpoint를 기능별로 정리한다.
+1. Report layout 6 API와 PPTX template 4 API vertical slice 완료 상태를 계약 테스트로 유지한다.
+2. Variable catalog 4 route를 application/domain port와 SQL adapter로 옮긴다.
+3. 그 다음 `main.py` 잔여 endpoint를 위험이 낮은 기능 단위로 계속 정리한다.
 4. 실제 PostgreSQL multi-connection/app-role, corporate proxy/CA, Rocky/nginx/systemd/TLS,
    backup/restore/deploy는 사내 office-only release gate에서 검증한다.

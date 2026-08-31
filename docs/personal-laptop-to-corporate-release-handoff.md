@@ -17,6 +17,7 @@
 | 실패 복구 | downstream event/dispatch/progress 실패 시 attempt·lease·관련 row 전체 rollback | PostgreSQL transaction 재현 테스트로 이어짐 |
 | 이관 안전성 | active/expired/malformed lease, cyclic FK, schema manifest preflight가 write 전 차단되는지 확인 | 운영 DB 이관 승인 전 필수 evidence |
 | 구조 | application/domain port와 SQL adapter 경계를 유지하고 router·scheduler에 자동 연결하지 않음 | 운영 기능 enablement 전 review 대상 |
+| PPTX template | managed direct-child path, upload compensation, render containment, delete quarantine/rollback, ZIP/XML 제한 | Rocky runtime root와 backup/restore 실검증 전제 |
 
 finalization은 runner를 다시 실행하지 않는다. 동일한 transaction에서 lease fencing, attempt 상태, 성공 event, dispatch, work-item progress, request status 동기화가 모두 성공해야 commit한다. stale owner/token/generation, 만료 lease, identity 불일치, 중간 SQL 오류는 fail-closed여야 한다.
 
@@ -46,6 +47,11 @@ cd backend
   tests/test_batch_recovery_lease.py \
   tests/test_batch_recovery_finalize.py
 
+# PPTX template local contract/integration
+../.venv-wsl/bin/python -m pytest -q \
+  tests/test_report_templates_slice.py \
+  tests/test_api.py::test_pptx_template_upload_placeholder_inspection_and_render
+
 # Full backend regression (시간이 허용될 때)
 ../.venv-wsl/bin/python -m pytest -q
 
@@ -63,9 +69,11 @@ focused 결과는 아래 표를 채워 change ticket이나 handoff 묶음에 함
 | transfer safety | `tests/test_postgres_transfer.py` | `<YYYY-MM-DD> / <passed> passed, <skipped> skipped` |
 | source commit | `git rev-parse HEAD` | `<commit SHA>` |
 | template/static check | `deploy/rocky8/validate-templates.sh` | `<exit 0 / failure detail>` |
+| PPTX template slice | `tests/test_report_templates_slice.py` + legacy happy path + ownership contract | `2026-09-01 / 19 passed` |
 | 1차 full backend | `../.venv-wsl/bin/python -m pytest -q` | `820 passed, 5 skipped, 16 capacity failures` (WSL `/tmp` reserve 진단) |
 | 동일 실패 묶음 safe workspace 재실행 | absolute `TMPDIR` + `SIMDASH_IMPORT_SNAPSHOT_ROOT` 지정 | `50 passed` |
 | 최종 full backend 재실행 | 위 safe workspace 명령 | `836 passed, 10 skipped` (새 PG 전용 gate 5 skips 포함) |
+| PPTX slice 반영 후 full backend | `../.venv-wsl/bin/python -m pytest -q` | `2026-09-01 / 996 passed, 10 skipped in 686.52s` |
 
 최종 `10 skipped` 중 새 PostgreSQL separate-connection gate의 `5 skipped`는 사내 전용 실행 가드에 따른 정상 결과이며 운영 합격 증거가 아니다. 사내 전용 DB에서 실제 5개 test가 통과한 별도 증적이 필요하다.
 
@@ -118,6 +126,7 @@ DATABASE_URL='postgresql+psycopg://<test_app_role>:<test_password>@<test_host>:<
 | 인증 | 보안/IdP | OIDC issuer/client/redirect, cookie domain, CORS, 계정 승인 절차 | 로그인·권한·세션 폐기 smoke |
 | proxy/CA | 네트워크/보안 | outbound proxy URL, `NO_PROXY` 정규화, 조직 CA chain, 내부 DNF/PyPI/npm mirror | DNF·Python·Node·서비스 trust 검사 |
 | 결과 입력 | 데이터/인프라 | `SIMDASH_IMPORT_ROOT`, mount 방식, service user read/traverse, quota/capacity | non-symlink·권한·mount probe |
+| 보고서 템플릿 | 인프라/운영 | `/var/lib/simdashboard/report-templates`, service owner·0750, release symlink, backup 보관·복원 정책 | upload→render→delete smoke와 파일 checksum |
 | 백업 | DBA/운영 | 보관 기간, 별도 저장소, backup encryption, restore 담당자 | dump/manifest·restore rehearsal |
 | 복구 정책 | 애플리케이션 owner | lease TTL, owner naming, 수동 recovery 승인, retry/자동화 허용 시점 | 정책 승인 문서와 feature flag 계획 |
 | 변경관리 | 릴리스 담당 | release ID, maintenance window, rollback 책임자·연락망 | change ticket와 승인 ID |
@@ -199,6 +208,15 @@ Vite dev proxy(`VITE_API_TARGET`), outbound corporate proxy(`HTTP_PROXY`/`HTTPS_
 6. systemd는 root-only EnvironmentFile, app role만 포함된 runtime env, `RequiresMountsFor=SIMDASH_IMPORT_ROOT`, read-only import path, restart/health timeout을 검증한다.
 7. TLS 인증서 chain, hostname, 만료 경고, HSTS/CSP, HTTP→HTTPS redirect와 방화벽을 확인한다.
 8. `/api/health`, 로그인, 역할별 권한, 결과 조회/등록, audit, media Range smoke를 수행한다.
+9. `/var/lib/simdashboard/report-templates`가 service-owned 0750이고 release의
+   `backend/assets/report-templates`가 그 runtime root를 가리키는지 확인한 뒤,
+   실제 service user로 PPTX upload→list→render→delete와 재시작 후 render를 검증한다.
+
+현재 transfer/backup collector는 assets 아래 symlink를 일반적으로 거부하는 반면 Rocky의
+report-template root는 의도적인 top-level symlink다. 사내 cutover 전에는 이 root를
+별도 inventory/checksum/restore 대상으로 승인하거나 collector가 승인된 root symlink만
+명시적으로 처리하도록 보강해야 한다. 이를 확인하기 전에는 템플릿 파일을 immutable
+release 안으로 복사해 우회하지 말고 report-template 포함 backup/cutover를 fail-closed한다.
 
 구체적인 install·상태 확인·rollback 명령은 [Rocky 배포 runbook](rocky8-deployment-runbook.md)과 [deploy/rocky8 README](../deploy/rocky8/README.md)를 실행 기준으로 삼는다. 이 문서에는 인증서·비밀번호·사내 host를 복사하지 않는다.
 

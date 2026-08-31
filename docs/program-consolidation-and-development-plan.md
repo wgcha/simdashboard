@@ -1,7 +1,7 @@
 # 프로그램 정리 및 개발 계획
 
 - 기준일: 2026-09-01
-- 상태: 실행 계획 + Run Identity V2·report layout vertical slice 기준선 반영
+- 상태: 실행 계획 + Run Identity V2·report layout·PPTX template vertical slice 기준선 반영
 - 범위: 구조 정리, DB·결과 수집, 확장자, proxy, 사내 배포, 기술 우선순위
 
 ## 1. 결론
@@ -500,13 +500,27 @@ gate도 통과했다. 최종 full backend는 **979 passed, 10 skipped in 717.37s
 (0:11:57), exit 0**이다. 이 extraction으로 `backend/app/main.py`의 direct `execute`
 ceiling은 **189 → 174**로 낮아졌다.
 
-개인 노트북의 다음 우선순위는 reports의 PPTX template 4개 route를
-독립 slice로 분리하는 작업이다. 이 단계는 DB metadata와 filesystem 자산 사이의
-compensation, 관리형 root containment, symlink/traversal 차단, ZIP/PPTX archive
-safety를 우선 계약으로 고정한다. 그 다음 `app/main.py`의 잔여 endpoint를
-정리한다. 실제 PostgreSQL multi-connection·app-role 권한, 사내
-directory/IdP와 corporate proxy/CA, Rocky/nginx/systemd/TLS 및 deploy gate는
-office-only 인수 단계에 남긴다.
+2026-09-01 PPTX template vertical slice도 완료했다. 목록·업로드·render·비활성화
+4개 API를 reports 하위의 독립 HTTP/application/domain/persistence/storage/document
+경계로 이동했다. 업로드는 기존처럼 fresh `SYSTEM_CATALOG_MANAGE`를 파일 검증보다
+먼저 확인하고, render는 `REPORT_EXPORT`, 목록은 `ACTIVE` middleware 계약을 유지한다.
+DB 연결·BEGIN·insert·audit·commit 실패는 생성한 파일만 보상 삭제하며, ID 충돌 시
+기존 파일을 덮지 않는다. 저장 경로는 `report-templates/report-template-<12 hex>.pptx`
+direct child만 허용하고 child/file symlink와 traversal은 기존 410 응답으로 fail-closed한다.
+삭제는 같은 filesystem quarantine 뒤 DB를 비활성화하고 실패 시 파일을 복원한다.
+ZIP symlink·외부 relationship·잘못된 XML·비정상 slide 크기도 명시적 422로 차단한다.
+기본 runtime 경로는 기존 Rocky 계약인 `backend/assets/report-templates`다.
+
+관련 focused 검증은 **19 passed**, architecture·OpenAPI·compile gate가 통과했고
+최종 full backend는 **996 passed, 10 skipped in 686.52s (0:11:26), exit 0**이다.
+`backend/app/main.py`는 **2,182줄**, direct `.execute()` 실제값과 architecture ceiling은
+**148**이다. 잘못 생성됐던 빈 `backend/app/assets` 테스트 디렉터리는 제거했다.
+
+개인 노트북의 다음 우선순위는 variable catalog 4개 route다. 변수 목록·생성/재활성화·
+수정·soft delete를 독립 slice로 옮기되 `has_data`, dashboard 사용 개수, 사용 중 삭제
+차단과 기존 payload actor 계약을 먼저 보존한다. 실제 PostgreSQL multi-connection·
+app-role 권한, 사내 directory/IdP와 corporate proxy/CA, Rocky/nginx/systemd/TLS 및
+report-template runtime root/backup 이관 검증은 office-only 인수 단계에 남긴다.
 
 개인 노트북에서는 DuckDB/application/contract 검증까지만 수행한다. 실제 PostgreSQL
 multi-connection 및 app-role 권한, 사내 IdP·directory·proxy/CA·Rocky 배포 검증은
@@ -684,10 +698,9 @@ proxy/CA를 설치·갱신하는 자동화는 아직 없다. `NO_PROXY` assignme
    **2026-08-25 AP-2 검증 기록:** focused 통합 `126 passed in 87.32s`, full backend
    `573 passed, 5 skipped in 382.12s`; backend architecture/OpenAPI/compileall,
    Rocky validator, frontend architecture/API self-test/build도 통과했다.
-8. **다음 개인 노트북 구현 우선순위:** menu policy와 report layout 6 API
-   slice는 완료했다. 이어서 (1) PPTX template 4 route의 filesystem/DB
-   compensation·containment·archive safety 경계 분리, (2) `app/main.py` 잔여
-   endpoint 정리를 진행한다.
+8. **다음 개인 노트북 구현 우선순위:** menu policy, report layout 6 API,
+   PPTX template 4 API slice는 완료했다. 이어서 (1) variable catalog 4 route,
+   (2) `app/main.py` 잔여 endpoint를 위험이 낮은 기능 단위로 정리한다.
    **office-only release gate 우선순위:** (1) 실제 Rocky host install과 app-role
    startup preflight, NFS/SMB mount probe·승인 및 filesystem quota/capacity 확인,
    (2) production backup을 분리된 빈 DB에 복구하고 exported-snapshot inventory와

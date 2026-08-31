@@ -1,6 +1,6 @@
 # 현재 구현 아키텍처
 
-- 기준일: 2026-08-25
+- 기준일: 2026-09-01
 - 상태: 현재 코드 기준
 - 대상: `backend/app`, `frontend/src`, DB migration, API 계약, 테스트 경계
 
@@ -52,14 +52,22 @@ Browser
 
 ### 3.1 애플리케이션 조립
 
-`backend/app/main.py`가 FastAPI 인스턴스, lifespan, CORS, 보안 middleware, 정적 asset mount와 router 등록을 소유한다. 동시에 결과 조회·import, workflow, dashboard, report template 등 많은 legacy endpoint와 SQL을 아직 포함한다.
+`backend/app/main.py`가 FastAPI 인스턴스, lifespan, CORS, 보안 middleware, 정적 asset mount와 router 등록을 소유한다. 동시에 결과 비교·review, workflow, dashboard 등 많은 legacy endpoint와 SQL을 아직 포함한다. Report layout과 PPTX report template endpoint는 독립 router로 이동했다.
 
 등록된 router는 두 계열이다.
 
 - `backend/app/routers/`: 인증, 접근 제어, workbench, 모델링 카탈로그, 마스터 결과 Refresh, 수동 결과 import·예제 폴더 import를 소유하는 `result_ingestion`
-- `backend/app/adapters/http/routers/`: `projects`, `requests`, `reports`의 대표 vertical slice HTTP adapter
+- `backend/app/adapters/http/routers/`: `projects`, `requests`, `reports`, `report_templates`의 대표 vertical slice HTTP adapter
 
 새 기능은 가능한 한 얇은 router에서 입력/권한/응답 변환만 처리하고, orchestration과 SQL을 아래 계층으로 넘긴다.
+
+`report_templates`의 목록·업로드·render·비활성화 4개 API는 HTTP adapter,
+application command/query, reports domain port, SQL metadata adapter, managed filesystem
+adapter, ZIP/XML document adapter로 분리됐다. 기본 runtime root는
+`backend/assets/report-templates`이며 DB에는 `report-templates/report-template-<12 hex>.pptx`
+상대 경로만 저장한다. 업로드는 DB 실패 시 파일을 보상하고, render는 관리형 root 밖
+경로와 child symlink를 읽지 않으며, delete는 파일 quarantine 뒤 DB를 갱신하고 실패 시
+복원한다. Rocky의 runtime root·backup/restore 실검증은 사내 release gate다.
 
 Phase 2의 `result_ingestion`은 세 안전 단위로 정리했다. 첫 단위는 결과-import template, 수동 결과
 import, 예제 폴더 import endpoint를 `main.py`에서 `routers/result_ingestion.py`로 분리했다. 두 번째
@@ -412,7 +420,9 @@ app-role DDL 거부, pool budget, reference seed와 동시성 test **2 passed**�
 - dashboard definition과 version은 서버에 저장한다.
 - 프로젝트/의뢰/하중 경우 context와 권한을 서버가 다시 검증한다.
 - 규칙 기반 자연어 요청은 구조화된 변경안을 미리 보여준 뒤 적용한다. 임의 SQL·shell·코드를 실행하지 않는다.
-- 보고서 layout/version/template은 서버가 관리하고, 현재 PPTX 조립은 프런트의 `reportExport.ts`가 수행한다.
+- 보고서 layout/version/template metadata는 서버가 관리한다. 일반 report export 조립은
+  프런트의 `reportExport.ts`가 수행하고, 업로드된 native PPTX template의 placeholder
+  render는 서버 document adapter가 수행한다.
 
 ## 6. API 계약
 

@@ -718,7 +718,7 @@ def test_report_layout_router_owns_six_routes_in_legacy_registration_order() -> 
 
 
 @pytest.mark.contract
-def test_main_relinquishes_layout_crud_but_keeps_report_template_ownership() -> None:
+def test_main_relinquishes_layout_and_report_template_ownership() -> None:
     source = (Path(__file__).parents[1] / "app" / "main.py").read_text(encoding="utf-8")
     forbidden = (
         "_validated_report_layout",
@@ -731,18 +731,17 @@ def test_main_relinquishes_layout_crud_but_keeps_report_template_ownership() -> 
         "UPDATE report_layouts",
         "SELECT * FROM report_layouts",
         "report_layout_versions",
-    )
-    for token in forbidden:
-        assert token not in source
-    for token in (
         "REPORT_TEMPLATE_DIR",
         "def list_report_templates",
         "def upload_report_template",
         "def render_report_template",
         "def delete_report_template",
         "report_template_assets",
-    ):
-        assert token in source
+    )
+    for token in forbidden:
+        assert token not in source
+    assert "app.include_router(reports_router)" in source
+    assert "app.include_router(report_templates_router)" in source
 
 
 @pytest.mark.contract
