@@ -203,6 +203,25 @@
 - 응답은 민감 정보가 제거된 안전한 14-field projection으로 제한하고 route,
   operationId, 응답 순서와 OpenAPI 계약을 유지한다.
 
+### 3.12 메뉴 정책 vertical slice
+
+- public navigation policy 조회는 기존처럼 모든 `ACTIVE` 인증 사용자에게 열어 두고,
+  메뉴 정책 관리 권한으로 잘못 제한하지 않는다.
+- admin version list/detail과 update/restore는 요청 시점의 fresh authorization을
+  재검사한다. PostgreSQL mutation transaction은
+  `(menu_policy_state, role_menu_policies)` fixed table lock을 사용한다.
+- update마다 역할별 전체 정책 snapshot과 version history를 기록한다. 과거 부분
+  snapshot을 복원할 때는 누락 값을 현재 정책에서 overlay해 legacy history도
+  복구할 수 있게 한다.
+- historical snapshot visibility는 기존 Pydantic coercion을 거친다. coercion할 수
+  없는 role/value 등 malformed history는 mutation을 저장하지 않고 rollback한다.
+- live 정책 상태, 새 version snapshot과 exact audit event를 같은 transaction에
+  기록하며 audit 실패 시 정책 변경도 원자적으로 rollback한다.
+- `backend/app/routers/access_control.py`는 하위 router include만 담당하는
+  composition-only 경계가 되었다. legacy 직접 SQL `execute` ceiling은
+  **11 → 0**으로 낮아졌고, menu policy slice를 포함한 focused 검증은
+  **79 passed**다.
+
 ## 4. 주요 파일 변경 지도
 
 | 영역 | 주요 파일 | 책임 |
@@ -211,7 +230,8 @@
 | 공개 모듈 경계 | `backend/app/modules/access_control/` | 다른 도메인이 사용하는 안정된 facade |
 | 인증·세션 | `backend/app/security.py`, `backend/app/routers/security.py` | 세션, OIDC 진입, `/me`, 사용자·감사 조회 |
 | 관리 API | `backend/app/adapters/http/routers/user_administration.py` | 계정 상태·전역 관리자 HTTP adapter |
-| 메뉴 정책 API | `backend/app/routers/access_control.py` | 메뉴 정책 API와 legacy access facade |
+| 메뉴 정책 API | `backend/app/adapters/http/routers/menu_policy.py` | public policy 조회와 admin version list/detail·update/restore HTTP adapter |
+| Access composition | `backend/app/routers/access_control.py` | 분리된 access 하위 router include만 담당하는 composition-only 경계 |
 | Access HTTP adapters | `backend/app/adapters/http/routers/project_memberships.py`, `project_invitations.py`, `project_assignees.py` | 프로젝트 멤버십 CRUD, 초대·directory lifecycle, assignee 후보 API와 권한 진입점 |
 | provider | `backend/app/services/oidc_service.py`, `backend/app/services/directory_service.py` | 외부 IdP·디렉터리 연동 격리 |
 | 업무 배정 | `backend/app/main.py`, `backend/app/routers/workbench.py` | canonical 담당자, 재배정, 실행 guard와 override 감사 |
@@ -252,6 +272,15 @@ access focused 검증은 **89 passed in 77.27s, exit 0**이다. architecture/Ope
 검증을 통과했으며, 이를 포함한 full backend 검증은 **911 passed, 10 skipped in
 694.22s (0:11:34), exit 0**이다.
 
+2026-09-01 menu policy vertical slice 단독 검증은 **19 passed**, 확대 focused
+검증은 **79 passed**다.
+public `ACTIVE` 사용자 조회, admin fresh authorization, version/snapshot 복원,
+legacy partial overlay와 historical coercion, malformed history·audit 실패 rollback,
+route/OpenAPI 및 composition-only architecture 경계를 검증했다. 완료된 full backend
+회귀는 **929 passed, 10 skipped in 691.50s (0:11:31), exit 0**이다. 전체 실행 뒤에는
+production 변경 없이 계약 test 한 개만 보강했고, 그 추가 후 위 단독·확대 focused
+검증을 다시 통과했다.
+
 ## 6. 운영 인수 전 남은 외부 확인
 
 코드와 focused 로컬 검증은 완료했지만 다음 항목은 사내 인프라 자격 증명과 실제 운영
@@ -263,8 +292,9 @@ access focused 검증은 **89 passed in 77.27s, exit 0**이다. architecture/Ope
 - Windows VM 서비스 계정, 리버스 프록시, 인증서, 방화벽과 재시작 후 readiness 확인
 - 초기 전역 관리자 지정 후 사용자 승인·메뉴 정책 복원 경로 확인
 
-개인 노트북에서 남은 access 구현 우선순위는 menu policy slice, 이후 reports와
-`main.py`다. corporate proxy/CA, Rocky/Postgres와 실제 deploy
+개인 노트북의 access vertical slice는 menu policy까지 완료했다. 다음 구현
+우선순위는 reports 영역 분리, 이후 `app/main.py` 잔여 endpoint 정리다.
+corporate proxy/CA, Rocky/Postgres와 실제 deploy
 검증은 개인 노트북 범위가 아니라 사내 인수 단계에서 수행한다.
 
 현재 개발 PC에서 운영 PostgreSQL owner 자격 증명이 없을 때 preflight가 `OWNER_CREDENTIAL_UNAVAILABLE`로 중단되는 것은 의도한 fail-closed 동작이다.

@@ -561,7 +561,14 @@ def test_invitation_extraction_removed_legacy_handlers_and_keeps_include_before_
     assert include in source
     assert members_include in source and assignee_include in source
     assert source.index(members_include) < source.index(include) < source.index(assignee_include)
-    assert source.index(include) < source.index("def _menu_policy(")
+    menu_include = "router.include_router(menu_policy_router)"
+    assert menu_include in source
+    assert (
+        source.index(members_include)
+        < source.index(include)
+        < source.index(assignee_include)
+        < source.index(menu_include)
+    )
 
 
 def _insert_http_user(employee_id: str, display_name: str) -> str:
