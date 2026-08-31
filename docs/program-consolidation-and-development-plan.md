@@ -46,6 +46,7 @@
 | DEP-03 | Windows는 설치/개발 실행과 DB 이관 호환성은 있으나 HTTPS reverse proxy·service·TLS·rollback 운영 자동화 없음 | Windows one-command 운영 배포는 지원 범위에서 제외 | 범위 제외 |
 | DEP-04 | 사내 proxy는 Windows setup 중심이고 Rocky DNF/CA/offline RPM 계약이 불완전 | 폐쇄망 설치 재현성 부족 | P1 |
 | SEC-01 | nginx forwarded header, trusted host, security header 정책 보강 필요 | audit IP 신뢰와 외부 노출 hardening 부족 | P0/P1 |
+| ACC-01 | 프로젝트 초대·외부 directory lifecycle과 독립 assignee 후보 query vertical slice를 반영 | 코드·focused 계약 검증 완료. 계정 상태/global-admin command 다음 menu policy 이관이 남음 | P1 진행 |
 | ARC-01 | `main.py`, `database.py`, workbench router/repository, `App.tsx`가 큼 | 기능 추가 시 충돌·회귀 비용 증가 | P1 |
 | API-01 | 일부 성공 응답이 익명 OpenAPI schema | frontend runtime adapter 수동 검증 지속 | P1 |
 
@@ -375,8 +376,8 @@ framework-neutral application query/command, same-connection SQL adapter로 분�
 `PROJECT_DATA_VIEW` → load-case 소유권 → snapshot → bindings 순서와 `UNCONFIGURED`, 의도적으로 이관된
 `LEGACY_ASSIGNED` compatibility를 유지한다. POST는 context → `DASHBOARD_EDIT` → ownership → begin → materialize →
 commit 순서, `201 DashboardDefinition`, `LookupError`/`ValueError` HTTP mapping과 rollback 계약을 유지한다. canonical
-examples와 master-results JSON/CSV/SVG/glTF → DB → bindings bridge test까지 고정했고, 이 상태의 전체 backend 검증은
-`787 passed, 5 skipped`다. 단, request-type assignment `PUT`은 별도 command port/use case/SQL adapter로 옮겼다. router는
+examples와 master-results JSON/CSV/SVG/glTF → DB → bindings bridge test까지 고정했다. 현재 전체 backend 검증은
+`897 passed, 10 skipped in 651.42s (0:10:51)`, exit 0이다. 단, request-type assignment `PUT`은 별도 command port/use case/SQL adapter로 옮겼다. router는
 principal source·`REQUEST_EDIT`·HTTP 오류 응답을 유지하며, application은 동일 connection의 work-plan immutable
 guard 후 기존 repository assignment를 호출한다. persistence adapter는 repository의 admin lock과 target-not-found를
 domain error로 번역해 기존 HTTP status/detail을 보존한다. 첫 lifecycle command slice인
@@ -422,16 +423,33 @@ constraint·unique index도 첫 INSERT 전에 검증한다. 실제 PostgreSQL li
 proxy/CA, Rocky/nginx/systemd/TLS, backup/rollback gate 및 인수인계 증적은
 [`personal-laptop-to-corporate-release-handoff.md`](personal-laptop-to-corporate-release-handoff.md)에 분리해 기록한다.
 
-`access`의 첫 vertical slice로 프로젝트 멤버십 CRUD
+`access`의 vertical slice로 프로젝트 멤버십 CRUD
 (`GET/POST /api/projects/{project_id}/members`,
 `PATCH/DELETE /api/projects/{project_id}/members/{user_id}`)를
 `HTTP → application → domain port → SQL adapter` 경계로 분리했다. 기존 project
 existence 확인과 same-connection 권한 검사, PostgreSQL table lock, 마지막 admin·전역
 관리자·open work·stale timestamp 보호, exact audit detail과 audit 실패 시 mutation
-동시 rollback, route/OpenAPI 응답 순서는 유지한다. 이 이동으로 legacy access router의
-`execute` ceiling은 46에서 36으로 낮췄다. 초대·directory·assignee 후보와 account·global
-admin·menu policy API는 다음 access slice로 남긴다. 이 slice를 포함한 개인 노트북 전체
-backend 회귀는 `865 passed, 10 skipped`이며 skip은 PostgreSQL·사내 환경 선택형 gate다.
+동시 rollback, route/OpenAPI 응답 순서는 유지한다. 이 멤버십 extraction으로 legacy
+access router의 `execute` ceiling은 46에서 36으로 낮췄다.
+
+후속 vertical slice로 프로젝트 초대와 외부 directory lifecycle
+(`GET /directory/employees`, `GET/POST /invitations`, complete/cancel)을
+`HTTP → application → domain port → directory/persistence adapter` 경계로
+분리했다. directory 검색, 초대 상태 전이와 완료 시 멤버십 생성, 중복·재실행 차단,
+동일 transaction의 mutation·audit 원자성과 기존 API/OpenAPI 계약을 보존한다.
+프로젝트 assignee 후보 조회(`GET /api/projects/{project_id}/assignee-candidates`)도
+별도 query slice로 분리해 프로젝트 존재·권한 확인 후 active project member만 조회하고,
+검색어 정규화·제외 조건과 응답 계약을 유지한다. 이 초대·directory·assignee
+extraction으로 legacy access router의 `execute` ceiling은 36에서 20으로 낮아졌다.
+두 slice의 focused 검증은
+**75 passed in 64.81s, exit 0**다.
+이 변경을 포함한 현재 전체 backend suite는 **897 passed, 10 skipped in 651.42s
+(0:10:51), exit 0**이다.
+
+개인 노트북의 다음 우선순위는 account status 및 global-admin command 이관이며, 그 다음
+menu policy slice다. 실제 PostgreSQL multi-connection·app-role 권한, 사내
+directory/IdP와 corporate proxy/CA, Rocky/nginx/systemd/TLS 및 deploy gate는
+office-only 인수 단계에 남긴다.
 
 개인 노트북에서는 DuckDB/application/contract 검증까지만 수행한다. 실제 PostgreSQL
 multi-connection 및 app-role 권한, 사내 IdP·directory·proxy/CA·Rocky 배포 검증은
@@ -609,7 +627,8 @@ proxy/CA를 설치·갱신하는 자동화는 아직 없다. `NO_PROXY` assignme
    **2026-08-25 AP-2 검증 기록:** focused 통합 `126 passed in 87.32s`, full backend
    `573 passed, 5 skipped in 382.12s`; backend architecture/OpenAPI/compileall,
    Rocky validator, frontend architecture/API self-test/build도 통과했다.
-8. **다음 권장 release gate 우선순위:** (1) 실제 Rocky host install과 app-role
+8. **다음 access 구현 우선순위:** (1) account status 및 global-admin command slice,
+   (2) menu policy slice. **office-only release gate 우선순위:** (1) 실제 Rocky host install과 app-role
    startup preflight, NFS/SMB mount probe·승인 및 filesystem quota/capacity 확인,
    (2) production backup을 분리된 빈 DB에 복구하고 exported-snapshot inventory와
    app-role verifier를 대조, (3) 500 MiB/50 stream 부하와 5분 startup timeout 적정성,

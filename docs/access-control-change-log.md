@@ -5,14 +5,14 @@
 | 항목 | 값 |
 |---|---|
 | 릴리스 식별자 | Access Control & Menu Policy v1 |
-| 기준일 | 2026-08-11 |
+| 기준일 | 2026-08-31 |
 | 운영 대상 | 사내 Windows VM, PostgreSQL, HTTPS, OIDC, 사내 디렉터리 API |
 | 개발·테스트 대상 | Windows PC, DuckDB 또는 PostgreSQL, password/disabled 인증 |
 | 관련 계획서 | [사내 SSO·프로젝트 권한·좌측 메뉴 정책 구축 계획서](access-control-and-menu-policy-plan.md) |
 | 관련 수행서 | [권한 및 메뉴 정책 구현 수행서](access-control-and-menu-policy-implementation-guide.md) |
 | 기능 계약 | [권한·메뉴 정책 기능 사양서](access-control-functional-specification.md) |
 
-이 문서는 권한 기능 도입으로 실제 변경된 범위, 데이터 이전 방식, 검증 결과와 운영 인수 조건을 기록한다. Git 커밋 이력을 대신하는 문서가 아니라, 기능 단위 릴리스와 사내 마이그레이션을 위한 변경 명세다. 2026-08-31 프로젝트 멤버십 CRUD 구조 전환 내용을 기존 변경 이력에 병합했다.
+이 문서는 권한 기능 도입으로 실제 변경된 범위, 데이터 이전 방식, 검증 결과와 운영 인수 조건을 기록한다. Git 커밋 이력을 대신하는 문서가 아니라, 기능 단위 릴리스와 사내 마이그레이션을 위한 변경 명세다. 2026-08-31 프로젝트 멤버십 CRUD, 프로젝트 초대·외부 directory lifecycle, 독립 assignee 후보 query 구조 전환 내용을 기존 변경 이력에 병합했다.
 
 ## 2. 주요 의사결정 변경
 
@@ -82,8 +82,8 @@
 - membership mutation과 exact audit detail을 같은 transaction에 기록하며, audit
   실패 시 mutation도 함께 rollback한다.
 - 기존 route 등록 위치, operationId와 응답 순서를 유지해 OpenAPI 호환성을 지켰다.
-- 초대·directory·assignee 후보 API와 account·global-admin·menu policy는 기존 경계에
-  남겨 다음 access slice에서 분리한다.
+- 초대·directory lifecycle과 assignee 후보 API도 독립 application/domain/adapter
+  경계로 분리했으며, 기존 route·OpenAPI 계약을 유지한다.
 
 ### 3.5 좌측 메뉴와 정책 관리
 
@@ -151,7 +151,7 @@
 - 최초 전역 관리자 승인 CLI와 사내 이전 preflight JSON 도구를 추가했다.
 - Linux CI는 Python 3.12, PostgreSQL, 프런트 빌드와 E2E의 교차 플랫폼 회귀 검증으로 유지한다.
 
-### 3.10 프로젝트 멤버십 CRUD 구조 전환
+### 3.10 Access vertical slice 구조 전환
 
 - `backend/app/adapters/http/routers/project_memberships.py`가 네 CRUD endpoint의
   HTTP mapping과 권한 진입점을 담당한다.
@@ -160,8 +160,26 @@
   typed model과 port를 소유한다.
 - `backend/app/adapters/persistence/project_memberships.py`가 DuckDB/PostgreSQL
   연결에서 조회·lock·mutation·audit adapter를 제공한다.
-- legacy `access_control` router의 직접 SQL 실행 ceiling을 46에서 36으로 낮추고,
-  새 router에는 직접 SQL을 두지 않았다.
+- 프로젝트 멤버십 CRUD extraction으로 legacy `access_control` router의 직접 SQL
+  실행 ceiling을 46에서 36으로 낮췄다.
+- 프로젝트 초대·외부 directory lifecycle은
+  `backend/app/adapters/http/routers/project_invitations.py`,
+  `backend/app/application/project_invitations/`,
+  `backend/app/domains/project_invitations/`, directory/persistence adapter로
+  분리했다. directory 검색, 초대 생성·조회·완료·취소, 완료 시 멤버십 생성과
+  중복·재실행 차단을 같은 transaction에서 처리하고 audit 원자성을 유지한다.
+- 프로젝트 assignee 후보 query는
+  `backend/app/adapters/http/routers/project_assignees.py`,
+  `backend/app/application/project_assignees/`,
+  `backend/app/domains/project_assignees/`, persistence adapter로 독립 분리했다.
+  프로젝트 존재·권한 확인 뒤 active project member 후보만 반환하고 검색어 정규화,
+  제외 조건, 응답 계약을 유지한다.
+- 프로젝트 초대·directory·assignee extraction으로 legacy `access_control` router의
+  직접 SQL 실행 ceiling을 36에서 20으로 낮췄으며, 새 HTTP router에는 직접 SQL을
+  두지 않았다.
+- 멤버십·초대/directory·assignee 후보 두 vertical slice의 focused 검증은
+  **75 passed in 64.81s, exit 0**다. 이 변경을 포함한 현재 전체 backend suite는
+  **897 passed, 10 skipped in 651.42s (0:10:51), exit 0**이다.
 - 개인 노트북 검증 범위는 DuckDB/application/contract 테스트다. PostgreSQL
   multi-connection·app-role과 사내 IdP/directory/proxy/CA/Rocky 배포는
   [개인 노트북→사내 인수인계 게이트](personal-laptop-to-corporate-release-handoff.md)에서
@@ -174,7 +192,8 @@
 | 권한 엔진 | `backend/app/access_policy.py` | permission 집합, 메뉴 registry, principal 재검증, 프로젝트·owner guard |
 | 공개 모듈 경계 | `backend/app/modules/access_control/` | 다른 도메인이 사용하는 안정된 facade |
 | 인증·세션 | `backend/app/security.py`, `backend/app/routers/security.py` | 세션, OIDC 진입, `/me`, 사용자·감사 조회 |
-| 관리 API | `backend/app/routers/access_control.py` | 상태·전역 관리자·멤버·초대·디렉터리·메뉴 정책 API |
+| 관리 API | `backend/app/routers/access_control.py` | 계정 상태·전역 관리자·메뉴 정책 API |
+| Access HTTP adapters | `backend/app/adapters/http/routers/project_memberships.py`, `project_invitations.py`, `project_assignees.py` | 프로젝트 멤버십 CRUD, 초대·directory lifecycle, assignee 후보 API와 권한 진입점 |
 | provider | `backend/app/services/oidc_service.py`, `backend/app/services/directory_service.py` | 외부 IdP·디렉터리 연동 격리 |
 | 업무 배정 | `backend/app/main.py`, `backend/app/routers/workbench.py` | canonical 담당자, 재배정, 실행 guard와 override 감사 |
 | 데이터 | `backend/app/database.py`, `backend/migrations/versions/0007_access_control_menu_policy.py` | DuckDB·PostgreSQL 스키마와 backfill |
@@ -190,7 +209,7 @@
 
 | 검증 | 결과 |
 |---|---|
-| 백엔드 전체 pytest | 105 passed, 330.43초 |
+| 백엔드 전체 pytest | **897 passed, 10 skipped in 651.42s (0:10:51), exit 0** |
 | 권한·보안 집중 회귀 | 31 passed |
 | `minimum_role` 제거 후 보안·권한 집중 회귀 | 6 passed |
 | 배포 프로필·마이그레이션 preflight 집중 검증 | 관련 20 passed, 별도 preflight 2 passed |
@@ -203,19 +222,26 @@
 
 테스트는 권한 truth table, OIDC 부정 검증, PENDING·SUSPENDED, 프로젝트 간 변조, owner 충돌과 NULL, 초대 상태 전이, 메뉴 버전 충돌·복원, 감사 원자성, DuckDB 이전, PostgreSQL 스키마 계약과 4개 persona를 포함한다.
 
-2026-08-31 프로젝트 멤버십 CRUD 구조 전환 후 개인 노트북 전체 backend 회귀는
-`865 passed, 10 skipped`다. skip 10개는 실제 PostgreSQL·사내 환경이 필요한 선택형
-gate이며 통과로 간주하지 않고 사내 인수 단계에 남긴다.
+2026-08-31 프로젝트 멤버십 CRUD, 프로젝트 초대·외부 directory lifecycle, assignee
+후보 query vertical slice의 focused 검증은 **75 passed in 64.81s, exit 0**다. 멤버십 CRUD만 반영한
+이전 기준은 `865 passed, 10 skipped`였으며, 현재 두 slice를 포함한 전체 backend
+검증은 **897 passed, 10 skipped in 651.42s (0:10:51), exit 0**이다. PostgreSQL·사내 환경이 필요한 corporate proxy/CA,
+Rocky/Postgres/deploy gate는 통과로 간주하지 않고 office-only 인수 단계에 남긴다.
 
 ## 6. 운영 인수 전 남은 외부 확인
 
-코드와 로컬 회귀 검증은 완료했지만 다음 항목은 사내 인프라 자격 증명과 실제 Windows VM이 있어야 닫을 수 있는 운영 release gate다.
+코드와 focused 로컬 검증은 완료했지만 다음 항목은 사내 인프라 자격 증명과 실제 운영
+환경이 있어야 닫을 수 있는 office-only 운영 release gate다.
 
 - 운영 PostgreSQL 백업 후 실제 0006→0007 dry-run과 checksum 확인
 - 사내 IdP의 issuer·client·JWKS로 HTTPS OIDC redirect와 쿠키 왕복 확인
 - 사내 디렉터리 API의 검색 timeout·최소 PII·장애 시 503 확인
 - Windows VM 서비스 계정, 리버스 프록시, 인증서, 방화벽과 재시작 후 readiness 확인
 - 초기 전역 관리자 지정 후 사용자 승인·메뉴 정책 복원 경로 확인
+
+개인 노트북에서 남은 access 구현 우선순위는 account status 및 global-admin command
+slice, 이후 menu policy slice다. corporate proxy/CA, Rocky/Postgres와 실제 deploy
+검증은 개인 노트북 범위가 아니라 사내 인수 단계에서 수행한다.
 
 현재 개발 PC에서 운영 PostgreSQL owner 자격 증명이 없을 때 preflight가 `OWNER_CREDENTIAL_UNAVAILABLE`로 중단되는 것은 의도한 fail-closed 동작이다.
 

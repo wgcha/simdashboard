@@ -3,39 +3,34 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from typing import Any, cast
-from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Request
 
 from ..access_policy import (
-    PROJECT_INVITATION_CREATE,
-    PROJECT_MEMBER_MANAGE,
-    REQUEST_EDIT,
     ROLE_PERMISSIONS,
     SYSTEM_MENU_POLICY_MANAGE,
     SYSTEM_USER_APPROVE,
     ProjectRole,
     require_permission,
 )
-from ..config import database_settings, security_settings
+from ..config import database_settings
 from ..database import json_value
 from ..database_connection import ConnectionLike, connect, rows
 from ..schemas.access_control import (
     AccountStatusUpdate,
     GlobalAdminUpdate,
-    InvitationCreate,
     MenuPolicyResponse,
     MenuPolicyUpdate,
     MenuPolicyVersionResponse,
     MenuPolicyVersionSummary,
 )
 from ..security import Principal, write_audit_event
-from ..services.directory_service import DirectoryUnavailableError, employee_directory
+from ..adapters.http.routers.project_assignees import router as project_assignees_router
 from ..adapters.http.routers.project_memberships import router as project_memberships_router
+from ..adapters.http.routers.project_invitations import router as project_invitations_router
 
 
 router = APIRouter(tags=["access-control"])
-OPEN_INVITATION_STATUSES = ("PENDING_ACCOUNT", "PENDING_APPROVAL", "READY")
 
 
 def _now() -> datetime:
@@ -204,265 +199,9 @@ def _project_exists(conn: ConnectionLike, project_id: str) -> None:
     if not conn.execute("SELECT 1 FROM projects WHERE id=?", [project_id]).fetchone():
         raise HTTPException(404, "프로젝트를 찾을 수 없습니다.")
 
-def _insert_membership(
-    conn: ConnectionLike,
-    project_id: str,
-    user_id: str,
-    role: ProjectRole,
-    actor_id: str,
-    now: datetime,
-) -> None:
-    existing_user = conn.execute(
-        "SELECT account_status FROM users WHERE id=?",
-        [user_id],
-    ).fetchone()
-    if not existing_user:
-        raise HTTPException(404, "사용자를 찾을 수 없습니다.")
-    if existing_user[0] != "ACTIVE":
-        raise HTTPException(409, {"code": "PROJECT_MEMBER_MUST_BE_ACTIVE"})
-    if conn.execute(
-        "SELECT 1 FROM project_memberships WHERE project_id=? AND user_id=?",
-        [project_id, user_id],
-    ).fetchone():
-        raise HTTPException(409, {"code": "ALREADY_PROJECT_MEMBER"})
-    conn.execute(
-        """
-        INSERT INTO project_memberships
-            (id, project_id, user_id, role, created_by, created_at, updated_by, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        [f"membership-{uuid4().hex[:16]}", project_id, user_id, role, actor_id, now, actor_id, now],
-    )
-
 router.include_router(project_memberships_router)
-
-
-@router.get("/api/projects/{project_id}/directory/employees")
-def search_directory_employees(
-    project_id: str,
-    request: Request,
-    q: str = Query(min_length=2, max_length=80),
-    limit: int = Query(default=20, ge=1, le=50),
-) -> list[dict[str, Any]]:
-    query = q.strip()
-    if len(query) < 2:
-        raise HTTPException(422, {"code": "DIRECTORY_QUERY_TOO_SHORT"})
-    with connect() as conn:
-        _project_exists(conn, project_id)
-        require_permission(request, PROJECT_INVITATION_CREATE, project_id, conn=conn)
-    try:
-        items = employee_directory().search(query, limit)
-    except DirectoryUnavailableError as exc:
-        raise HTTPException(503, {"code": "DIRECTORY_UNAVAILABLE", "message": str(exc)}) from exc
-    principal = _principal(request)
-    write_audit_event(
-        request=request,
-        principal=principal,
-        status_code=200,
-        action="DIRECTORY_SEARCHED",
-        detail={"project_id": project_id, "result_count": len(items)},
-    )
-    return [item.model_dump() for item in items]
-
-
-@router.get("/api/projects/{project_id}/invitations")
-def list_project_invitations(project_id: str, request: Request) -> list[dict[str, Any]]:
-    with connect() as conn:
-        _project_exists(conn, project_id)
-        require_permission(request, PROJECT_INVITATION_CREATE, project_id, conn=conn)
-        return rows(
-            conn.execute(
-                "SELECT * FROM project_invitations WHERE project_id=? ORDER BY invited_at DESC",
-                [project_id],
-            )
-        )
-
-
-@router.post("/api/projects/{project_id}/invitations", status_code=201)
-def create_project_invitation(project_id: str, payload: InvitationCreate, request: Request) -> dict[str, Any]:
-    principal = _principal(request)
-    with connect() as conn:
-        _project_exists(conn, project_id)
-        require_permission(request, PROJECT_INVITATION_CREATE, project_id, conn=conn)
-    try:
-        employee = employee_directory().get_by_employee_id(payload.employee_id.strip())
-    except DirectoryUnavailableError as exc:
-        raise HTTPException(503, {"code": "DIRECTORY_UNAVAILABLE", "message": str(exc)}) from exc
-    if employee is None:
-        raise HTTPException(404, {"code": "DIRECTORY_EMPLOYEE_NOT_FOUND"})
-    if employee.employment_status != "ACTIVE":
-        raise HTTPException(422, {"code": "INACTIVE_EMPLOYEE"})
-    now = _now()
-    invitation_id = f"invitation-{uuid4().hex[:16]}"
-    with connect() as conn:
-        _begin(conn, "users", "project_invitations", "project_memberships")
-        try:
-            require_permission(request, PROJECT_INVITATION_CREATE, project_id, conn=conn)
-            user = conn.execute(
-                "SELECT id, account_status FROM users WHERE employee_id=?",
-                [employee.employee_id],
-            ).fetchone()
-            if user and conn.execute(
-                "SELECT 1 FROM project_memberships WHERE project_id=? AND user_id=?",
-                [project_id, user[0]],
-            ).fetchone():
-                raise HTTPException(409, {"code": "ALREADY_PROJECT_MEMBER"})
-            if conn.execute(
-                """
-                SELECT 1 FROM project_invitations
-                WHERE project_id=? AND employee_id=?
-                  AND status IN ('PENDING_ACCOUNT', 'PENDING_APPROVAL', 'READY')
-                """,
-                [project_id, employee.employee_id],
-            ).fetchone():
-                raise HTTPException(409, {"code": "INVITATION_ALREADY_EXISTS"})
-            status = "READY" if user and user[1] == "ACTIVE" else "PENDING_APPROVAL" if user else "PENDING_ACCOUNT"
-            resolved_user_id = user[0] if user else None
-            conn.execute(
-                """
-                INSERT INTO project_invitations
-                    (id, project_id, employee_id, display_name_snapshot, department_snapshot,
-                     desired_role, status, resolved_user_id, invited_by, invited_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                [invitation_id, project_id, employee.employee_id, employee.display_name, employee.department, payload.desired_role, status, resolved_user_id, principal.user_id, now],
-            )
-            write_audit_event(
-                request=request,
-                principal=principal,
-                status_code=201,
-                action="PROJECT_INVITATION_CREATED",
-                detail={"project_id": project_id, "target_employee_id": _masked_employee_id(employee.employee_id)},
-                connection=conn,
-            )
-            item = rows(conn.execute("SELECT * FROM project_invitations WHERE id=?", [invitation_id]))[0]
-            _commit(conn)
-            return item
-        except Exception:
-            _rollback(conn)
-            raise
-
-
-def _masked_employee_id(employee_id: str) -> str:
-    if len(employee_id) <= 3:
-        return "***"
-    return employee_id[:2] + "*" * (len(employee_id) - 3) + employee_id[-1]
-
-
-@router.post("/api/projects/{project_id}/invitations/{invitation_id}/complete")
-def complete_project_invitation(project_id: str, invitation_id: str, request: Request) -> dict[str, Any]:
-    principal = _principal(request)
-    now = _now()
-    with connect() as conn:
-        _project_exists(conn, project_id)
-        _begin(conn, "users", "project_invitations", "project_memberships")
-        try:
-            require_permission(request, PROJECT_MEMBER_MANAGE, project_id, conn=conn)
-            invitation = conn.execute(
-                "SELECT employee_id, desired_role, status, resolved_user_id FROM project_invitations WHERE id=? AND project_id=?",
-                [invitation_id, project_id],
-            ).fetchone()
-            if not invitation:
-                raise HTTPException(404, "초대를 찾을 수 없습니다.")
-            if invitation[2] != "READY":
-                code = (
-                    "INVITATION_ALREADY_FINAL"
-                    if invitation[2] in {"COMPLETED", "CANCELLED"}
-                    else "INVITATION_ACCOUNT_NOT_READY"
-                )
-                raise HTTPException(409, {"code": code, "status": invitation[2]})
-            user = conn.execute(
-                "SELECT id, account_status FROM users WHERE employee_id=?",
-                [invitation[0]],
-            ).fetchone()
-            if not user or user[1] != "ACTIVE":
-                raise HTTPException(409, {"code": "INVITATION_ACCOUNT_NOT_READY"})
-            _insert_membership(conn, project_id, user[0], invitation[1], principal.user_id, now)
-            conn.execute(
-                """
-                UPDATE project_invitations
-                SET status='COMPLETED', resolved_user_id=?, resolved_by=?, resolved_at=?
-                WHERE id=? AND project_id=?
-                """,
-                [user[0], principal.user_id, now, invitation_id, project_id],
-            )
-            write_audit_event(
-                request=request,
-                principal=principal,
-                status_code=200,
-                action="PROJECT_INVITATION_STATUS_CHANGED",
-                detail={"project_id": project_id, "target_user_id": user[0], "old_status": invitation[2], "new_status": "COMPLETED"},
-                connection=conn,
-            )
-            item = rows(conn.execute("SELECT * FROM project_invitations WHERE id=?", [invitation_id]))[0]
-            _commit(conn)
-            return item
-        except Exception:
-            _rollback(conn)
-            raise
-
-
-@router.delete("/api/projects/{project_id}/invitations/{invitation_id}")
-def cancel_project_invitation(project_id: str, invitation_id: str, request: Request) -> dict[str, Any]:
-    principal = _principal(request)
-    now = _now()
-    with connect() as conn:
-        _project_exists(conn, project_id)
-        _begin(conn, "project_invitations")
-        try:
-            require_permission(request, PROJECT_INVITATION_CREATE, project_id, conn=conn)
-            current = conn.execute(
-                "SELECT status FROM project_invitations WHERE id=? AND project_id=?",
-                [invitation_id, project_id],
-            ).fetchone()
-            if not current:
-                raise HTTPException(404, "초대를 찾을 수 없습니다.")
-            if current[0] in {"COMPLETED", "CANCELLED"}:
-                raise HTTPException(409, {"code": "INVITATION_ALREADY_FINAL"})
-            conn.execute(
-                "UPDATE project_invitations SET status='CANCELLED', cancelled_by=?, cancelled_at=? WHERE id=?",
-                [principal.user_id, now, invitation_id],
-            )
-            write_audit_event(
-                request=request,
-                principal=principal,
-                status_code=200,
-                action="PROJECT_INVITATION_STATUS_CHANGED",
-                detail={"project_id": project_id, "old_status": current[0], "new_status": "CANCELLED"},
-                connection=conn,
-            )
-            _commit(conn)
-            return {"status": "CANCELLED", "id": invitation_id}
-        except Exception:
-            _rollback(conn)
-            raise
-
-
-@router.get("/api/projects/{project_id}/assignee-candidates")
-def assignee_candidates(
-    project_id: str,
-    request: Request,
-    q: str | None = Query(default=None, max_length=80),
-) -> list[dict[str, Any]]:
-    with connect() as conn:
-        _project_exists(conn, project_id)
-        require_permission(request, REQUEST_EDIT, project_id, conn=conn)
-        query = """
-            SELECT users.id AS user_id, users.display_name, users.employee_id,
-                   users.department, users.job_title, memberships.role
-            FROM project_memberships memberships
-            JOIN users ON users.id=memberships.user_id
-            WHERE memberships.project_id=? AND users.account_status='ACTIVE'
-        """
-        parameters: list[Any] = [project_id]
-        if security_settings().auth_mode != "disabled":
-            query += " AND users.id <> 'local-admin'"
-        if q and q.strip():
-            query += " AND (lower(users.display_name) LIKE ? OR lower(COALESCE(users.employee_id, '')) LIKE ?)"
-            pattern = f"%{q.strip().lower()}%"
-            parameters.extend([pattern, pattern])
-        query += " ORDER BY users.display_name, users.id LIMIT 50"
-        return rows(conn.execute(query, parameters))
+router.include_router(project_invitations_router)
+router.include_router(project_assignees_router)
 
 
 def _menu_policy(conn: ConnectionLike) -> dict[str, Any]:

@@ -65,7 +65,7 @@ def test_membership_http_adapter_has_no_direct_database_calls() -> None:
     )
 
 
-def test_membership_extraction_removed_legacy_handlers_and_keeps_include_before_directory() -> None:
+def test_membership_extraction_removed_legacy_handlers_and_keeps_access_slice_order() -> None:
     source = (BACKEND / "app" / "routers" / "access_control.py").read_text(encoding="utf-8")
     for name in (
         "list_project_members",
@@ -78,9 +78,10 @@ def test_membership_extraction_removed_legacy_handlers_and_keeps_include_before_
     assert "@router.post(\"/api/projects/{project_id}/members\"" not in source
     assert "@router.patch(\"/api/projects/{project_id}/members/{user_id}\")" not in source
     assert "@router.delete(\"/api/projects/{project_id}/members/{user_id}\")" not in source
-    assert source.index("router.include_router(project_memberships_router)") < source.index(
-        "def search_directory_employees("
-    )
+    membership_include = source.index("router.include_router(project_memberships_router)")
+    invitation_include = source.index("router.include_router(project_invitations_router)")
+    assignee_include = source.index("router.include_router(project_assignees_router)")
+    assert membership_include < invitation_include < assignee_include
 
 
 def test_extraction_preserves_checked_in_openapi_contract() -> None:

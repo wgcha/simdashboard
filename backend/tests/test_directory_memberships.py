@@ -117,6 +117,69 @@ def test_directory_invitation_membership_and_assignee_candidates():
         set_employee_directory_for_tests(None)
 
 
+def test_active_nonmember_is_denied_project_directory_and_invitation_routes(monkeypatch):
+    initialize_database()
+    suffix = uuid4().hex[:10]
+    user_id, _ = _insert_user(
+        username=f"directory-denied-{suffix}",
+        display_name="디렉터리 접근 거부 사용자",
+        employee_id=f"DENIED-{suffix}",
+        password="directory-denied-password",
+    )
+
+    class UnexpectedDirectoryLookup:
+        def search(self, query: str, limit: int):
+            raise AssertionError("directory lookup must follow project authorization")
+
+        def get_by_employee_id(self, employee_id: str):
+            raise AssertionError("directory lookup must follow project authorization")
+
+    set_employee_directory_for_tests(UnexpectedDirectoryLookup())
+    monkeypatch.setenv("AUTH_MODE", "password")
+    monkeypatch.setenv("AUTH_SECRET_KEY", "test-secret-key-that-is-at-least-32-characters")
+    try:
+        with TestClient(app) as client:
+            login = client.post(
+                "/api/auth/login",
+                json={"username": f"directory-denied-{suffix}", "password": "directory-denied-password"},
+            )
+            assert login.status_code == 200, login.text
+            headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+            denied = [
+                client.get(
+                    "/api/projects/project-tv-001/directory/employees",
+                    params={"q": "E9"},
+                    headers=headers,
+                ),
+                client.get("/api/projects/project-tv-001/invitations", headers=headers),
+                client.post(
+                    "/api/projects/project-tv-001/invitations",
+                    headers=headers,
+                    json={"employee_id": "E-DENIED", "desired_role": "general"},
+                ),
+                client.post(
+                    "/api/projects/project-tv-001/invitations/dummy-id/complete",
+                    headers=headers,
+                ),
+                client.delete(
+                    "/api/projects/project-tv-001/invitations/dummy-id",
+                    headers=headers,
+                ),
+                client.get(
+                    "/api/projects/project-tv-001/assignee-candidates",
+                    params={"q": "E9"},
+                    headers=headers,
+                ),
+            ]
+            assert [response.status_code for response in denied] == [403] * 6
+    finally:
+        set_employee_directory_for_tests(None)
+        with connect() as conn:
+            conn.execute("DELETE FROM project_memberships WHERE user_id=?", [user_id])
+            conn.execute("DELETE FROM users WHERE id=?", [user_id])
+
+
 def test_project_admin_scope_and_last_admin_protection(monkeypatch):
     initialize_database()
     suffix = uuid4().hex[:8]
