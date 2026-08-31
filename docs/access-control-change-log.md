@@ -12,7 +12,7 @@
 | 관련 수행서 | [권한 및 메뉴 정책 구현 수행서](access-control-and-menu-policy-implementation-guide.md) |
 | 기능 계약 | [권한·메뉴 정책 기능 사양서](access-control-functional-specification.md) |
 
-이 문서는 권한 기능 도입으로 실제 변경된 범위, 데이터 이전 방식, 검증 결과와 운영 인수 조건을 기록한다. Git 커밋 이력을 대신하는 문서가 아니라, 기능 단위 릴리스와 사내 마이그레이션을 위한 변경 명세다.
+이 문서는 권한 기능 도입으로 실제 변경된 범위, 데이터 이전 방식, 검증 결과와 운영 인수 조건을 기록한다. Git 커밋 이력을 대신하는 문서가 아니라, 기능 단위 릴리스와 사내 마이그레이션을 위한 변경 명세다. 2026-08-31 프로젝트 멤버십 CRUD 구조 전환 내용을 기존 변경 이력에 병합했다.
 
 ## 2. 주요 의사결정 변경
 
@@ -69,6 +69,21 @@
 - 프로젝트 초대 상태를 `PENDING_ACCOUNT`, `PENDING_APPROVAL`, `READY`, `COMPLETED`, `CANCELLED`로 관리한다.
 - 완료·취소된 초대의 재실행과 동일 프로젝트 중복 멤버십을 차단한다.
 - 담당자 후보 API는 현재 프로젝트의 `ACTIVE` 멤버만 반환한다.
+
+프로젝트 멤버십 CRUD의 첫 구조 전환은 다음 네 endpoint에 적용했다.
+
+- `GET/POST /api/projects/{project_id}/members`와
+  `PATCH/DELETE /api/projects/{project_id}/members/{user_id}`를 HTTP router,
+  framework-neutral application use case, domain model/port, SQL persistence adapter로
+  분리했다.
+- 기존 project existence → same-connection 권한 검사와 PostgreSQL table lock을
+  유지했다. 마지막 project admin 보호, 전역 관리자 우회, open work 차단과 stale
+  timestamp 검사를 동일한 결과 계약으로 보존한다.
+- membership mutation과 exact audit detail을 같은 transaction에 기록하며, audit
+  실패 시 mutation도 함께 rollback한다.
+- 기존 route 등록 위치, operationId와 응답 순서를 유지해 OpenAPI 호환성을 지켰다.
+- 초대·directory·assignee 후보 API와 account·global-admin·menu policy는 기존 경계에
+  남겨 다음 access slice에서 분리한다.
 
 ### 3.5 좌측 메뉴와 정책 관리
 
@@ -136,6 +151,22 @@
 - 최초 전역 관리자 승인 CLI와 사내 이전 preflight JSON 도구를 추가했다.
 - Linux CI는 Python 3.12, PostgreSQL, 프런트 빌드와 E2E의 교차 플랫폼 회귀 검증으로 유지한다.
 
+### 3.10 프로젝트 멤버십 CRUD 구조 전환
+
+- `backend/app/adapters/http/routers/project_memberships.py`가 네 CRUD endpoint의
+  HTTP mapping과 권한 진입점을 담당한다.
+- `backend/app/application/project_memberships/memberships.py`가 command/query와
+  transaction orchestration을 담당하고, `backend/app/domains/project_memberships/`가
+  typed model과 port를 소유한다.
+- `backend/app/adapters/persistence/project_memberships.py`가 DuckDB/PostgreSQL
+  연결에서 조회·lock·mutation·audit adapter를 제공한다.
+- legacy `access_control` router의 직접 SQL 실행 ceiling을 46에서 36으로 낮추고,
+  새 router에는 직접 SQL을 두지 않았다.
+- 개인 노트북 검증 범위는 DuckDB/application/contract 테스트다. PostgreSQL
+  multi-connection·app-role과 사내 IdP/directory/proxy/CA/Rocky 배포는
+  [개인 노트북→사내 인수인계 게이트](personal-laptop-to-corporate-release-handoff.md)에서
+  별도로 확인한다.
+
 ## 4. 주요 파일 변경 지도
 
 | 영역 | 주요 파일 | 책임 |
@@ -171,6 +202,10 @@
 | PowerShell 스크립트 재귀 구문 검사 | 통과 |
 
 테스트는 권한 truth table, OIDC 부정 검증, PENDING·SUSPENDED, 프로젝트 간 변조, owner 충돌과 NULL, 초대 상태 전이, 메뉴 버전 충돌·복원, 감사 원자성, DuckDB 이전, PostgreSQL 스키마 계약과 4개 persona를 포함한다.
+
+2026-08-31 프로젝트 멤버십 CRUD 구조 전환 후 개인 노트북 전체 backend 회귀는
+`865 passed, 10 skipped`다. skip 10개는 실제 PostgreSQL·사내 환경이 필요한 선택형
+gate이며 통과로 간주하지 않고 사내 인수 단계에 남긴다.
 
 ## 6. 운영 인수 전 남은 외부 확인
 

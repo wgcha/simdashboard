@@ -69,3 +69,18 @@ def test_checker_rejects_http_framework_dependency_in_persistence(tmp_path: Path
 
     assert any("persistence code must not import fastapi" in violation for violation in violations)
     assert any("persistence code must not import starlette.requests" in violation for violation in violations)
+
+
+def test_checker_rejects_application_dependencies_with_exact_offending_module(tmp_path: Path) -> None:
+    _write(tmp_path / "app" / "main.py", "def ready():\n    return True\n")
+    _write(
+        tmp_path / "app" / "application" / "projects" / "service.py",
+        "import app\nimport fastapi\nfrom ... import database, domains\nfrom ...repositories import projects\n",
+    )
+
+    violations = check_architecture.check_project(tmp_path, _baseline(tmp_path, {"app/main.py": 0}))
+
+    assert "app/application/projects/service.py:2: application code must not import fastapi" in violations
+    assert "app/application/projects/service.py:3: application code must not import app.database" in violations
+    assert "app/application/projects/service.py:4: application code must not import app.repositories" in violations
+    assert not any("application code must not import app" == violation.rsplit(": ", 1)[-1] for violation in violations)

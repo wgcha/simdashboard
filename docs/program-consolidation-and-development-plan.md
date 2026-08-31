@@ -421,6 +421,22 @@ constraint·unique index도 첫 INSERT 전에 검증한다. 실제 PostgreSQL li
 개인 노트북에서 닫을 수 있는 DuckDB/application 계약과 사내 PostgreSQL separate-connection,
 proxy/CA, Rocky/nginx/systemd/TLS, backup/rollback gate 및 인수인계 증적은
 [`personal-laptop-to-corporate-release-handoff.md`](personal-laptop-to-corporate-release-handoff.md)에 분리해 기록한다.
+
+`access`의 첫 vertical slice로 프로젝트 멤버십 CRUD
+(`GET/POST /api/projects/{project_id}/members`,
+`PATCH/DELETE /api/projects/{project_id}/members/{user_id}`)를
+`HTTP → application → domain port → SQL adapter` 경계로 분리했다. 기존 project
+existence 확인과 same-connection 권한 검사, PostgreSQL table lock, 마지막 admin·전역
+관리자·open work·stale timestamp 보호, exact audit detail과 audit 실패 시 mutation
+동시 rollback, route/OpenAPI 응답 순서는 유지한다. 이 이동으로 legacy access router의
+`execute` ceiling은 46에서 36으로 낮췄다. 초대·directory·assignee 후보와 account·global
+admin·menu policy API는 다음 access slice로 남긴다. 이 slice를 포함한 개인 노트북 전체
+backend 회귀는 `865 passed, 10 skipped`이며 skip은 PostgreSQL·사내 환경 선택형 gate다.
+
+개인 노트북에서는 DuckDB/application/contract 검증까지만 수행한다. 실제 PostgreSQL
+multi-connection 및 app-role 권한, 사내 IdP·directory·proxy/CA·Rocky 배포 검증은
+[`personal-laptop-to-corporate-release-handoff.md`](personal-laptop-to-corporate-release-handoff.md)의
+corporate handoff gate에서 수행한다.
 Duplicate rejection 409의 attempt detail은 non-admin에게 profile snapshot과 command preview를 노출하지 않도록 router에서
 sanitize하고 admin 원문 계약은 유지한다. idempotency check와 attempt insert 사이의 경쟁, 그리고 QUEUED→DEMO_ONLY runner
 →finalization 사이의 복구/재처리 설계는 이번 safe slice에서 transaction semantics를 바꾸지 않고 별도 reliability 계획으로

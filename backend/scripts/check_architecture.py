@@ -26,7 +26,7 @@ FORBIDDEN_DOMAIN_MODULE_PREFIXES = (
 )
 DEFAULT_EXECUTE_CALL_CEILINGS = {
     "app/main.py": 189,
-    "app/routers/access_control.py": 46,
+    "app/routers/access_control.py": 36,
     "app/routers/modeling_catalog.py": 1,
     "app/routers/security.py": 7,
     "app/routers/workbench.py": 49,
@@ -98,6 +98,12 @@ def _domain_files(app_root: Path) -> Iterable[Path]:
 
 def _persistence_files(app_root: Path) -> Iterable[Path]:
     directory = app_root / "adapters" / "persistence"
+    if directory.is_dir():
+        yield from (path for path in sorted(directory.rglob("*.py")) if path.name != "__init__.py")
+
+
+def _application_files(app_root: Path) -> Iterable[Path]:
+    directory = app_root / "application"
     if directory.is_dir():
         yield from (path for path in sorted(directory.rglob("*.py")) if path.name != "__init__.py")
 
@@ -182,6 +188,17 @@ def check_project(backend_root: Path, baseline_path: Path) -> list[str]:
                     violations.append(
                         f"{relative}:{node.lineno}: persistence code must not import {imported}"
                     )
+    for source in _application_files(app_root):
+        relative = _relative(source, backend_root)
+        tree = _parse(source, violations)
+        if tree is None:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.Import, ast.ImportFrom)):
+                continue
+            imported = _forbidden_domain_import(node, _source_package(source, backend_root))
+            if imported is not None:
+                violations.append(f"{relative}:{node.lineno}: application code must not import {imported}")
     return violations
 
 

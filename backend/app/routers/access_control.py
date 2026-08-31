@@ -28,11 +28,10 @@ from ..schemas.access_control import (
     MenuPolicyUpdate,
     MenuPolicyVersionResponse,
     MenuPolicyVersionSummary,
-    ProjectMemberCreate,
-    ProjectMemberUpdate,
 )
 from ..security import Principal, write_audit_event
 from ..services.directory_service import DirectoryUnavailableError, employee_directory
+from ..adapters.http.routers.project_memberships import router as project_memberships_router
 
 
 router = APIRouter(tags=["access-control"])
@@ -205,28 +204,6 @@ def _project_exists(conn: ConnectionLike, project_id: str) -> None:
     if not conn.execute("SELECT 1 FROM projects WHERE id=?", [project_id]).fetchone():
         raise HTTPException(404, "프로젝트를 찾을 수 없습니다.")
 
-
-@router.get("/api/projects/{project_id}/members")
-def list_project_members(project_id: str, request: Request) -> list[dict[str, Any]]:
-    with connect() as conn:
-        _project_exists(conn, project_id)
-        require_permission(request, PROJECT_MEMBER_MANAGE, project_id, conn=conn)
-        return rows(
-            conn.execute(
-                """
-                SELECT memberships.project_id, memberships.user_id, memberships.role,
-                       memberships.created_at, memberships.updated_at,
-                       users.username, users.display_name, users.employee_id,
-                       users.department, users.job_title, users.account_status
-                FROM project_memberships memberships
-                JOIN users ON users.id=memberships.user_id
-                WHERE memberships.project_id=? ORDER BY users.display_name, users.id
-                """,
-                [project_id],
-            )
-        )
-
-
 def _insert_membership(
     conn: ConnectionLike,
     project_id: str,
@@ -257,132 +234,7 @@ def _insert_membership(
         [f"membership-{uuid4().hex[:16]}", project_id, user_id, role, actor_id, now, actor_id, now],
     )
 
-
-@router.post("/api/projects/{project_id}/members", status_code=201)
-def create_project_member(project_id: str, payload: ProjectMemberCreate, request: Request) -> dict[str, Any]:
-    principal = _principal(request)
-    now = _now()
-    with connect() as conn:
-        _project_exists(conn, project_id)
-        _begin(conn, "users", "project_memberships")
-        try:
-            require_permission(request, PROJECT_MEMBER_MANAGE, project_id, conn=conn)
-            _insert_membership(conn, project_id, payload.user_id, payload.role, principal.user_id, now)
-            write_audit_event(
-                request=request,
-                principal=principal,
-                status_code=201,
-                action="PROJECT_MEMBERSHIP_CREATED",
-                detail={"target_user_id": payload.user_id, "project_id": project_id, "new_role": payload.role},
-                connection=conn,
-            )
-            item = rows(
-                conn.execute(
-                    "SELECT * FROM project_memberships WHERE project_id=? AND user_id=?",
-                    [project_id, payload.user_id],
-                )
-            )[0]
-            _commit(conn)
-            return item
-        except Exception:
-            _rollback(conn)
-            raise
-
-
-@router.patch("/api/projects/{project_id}/members/{user_id}")
-def update_project_member(project_id: str, user_id: str, payload: ProjectMemberUpdate, request: Request) -> dict[str, Any]:
-    principal = _principal(request)
-    now = _now()
-    with connect() as conn:
-        _project_exists(conn, project_id)
-        _begin(conn, "project_memberships")
-        try:
-            context = require_permission(request, PROJECT_MEMBER_MANAGE, project_id, conn=conn)
-            current = conn.execute(
-                "SELECT role, updated_at FROM project_memberships WHERE project_id=? AND user_id=?",
-                [project_id, user_id],
-            ).fetchone()
-            if not current:
-                raise HTTPException(404, "프로젝트 멤버를 찾을 수 없습니다.")
-            if payload.expected_updated_at is not None:
-                _assert_expected_timestamp(current[1], payload.expected_updated_at)
-            if current[0] == "admin" and payload.role != "admin" and not context.principal.is_global_admin:
-                admin_count = conn.execute(
-                    "SELECT count(*) FROM project_memberships WHERE project_id=? AND role='admin'",
-                    [project_id],
-                ).fetchone()[0]
-                if admin_count <= 1:
-                    raise HTTPException(409, {"code": "LAST_PROJECT_ADMIN_PROTECTED"})
-            conn.execute(
-                "UPDATE project_memberships SET role=?, updated_by=?, updated_at=? WHERE project_id=? AND user_id=?",
-                [payload.role, principal.user_id, now, project_id, user_id],
-            )
-            write_audit_event(
-                request=request,
-                principal=principal,
-                status_code=200,
-                action="PROJECT_MEMBERSHIP_ROLE_CHANGED",
-                detail={"target_user_id": user_id, "project_id": project_id, "old_role": current[0], "new_role": payload.role},
-                connection=conn,
-            )
-            item = rows(
-                conn.execute(
-                    "SELECT * FROM project_memberships WHERE project_id=? AND user_id=?",
-                    [project_id, user_id],
-                )
-            )[0]
-            _commit(conn)
-            return item
-        except Exception:
-            _rollback(conn)
-            raise
-
-
-@router.delete("/api/projects/{project_id}/members/{user_id}")
-def delete_project_member(project_id: str, user_id: str, request: Request) -> dict[str, Any]:
-    principal = _principal(request)
-    with connect() as conn:
-        _project_exists(conn, project_id)
-        _begin(conn, "project_memberships")
-        try:
-            context = require_permission(request, PROJECT_MEMBER_MANAGE, project_id, conn=conn)
-            current = conn.execute(
-                "SELECT role FROM project_memberships WHERE project_id=? AND user_id=?",
-                [project_id, user_id],
-            ).fetchone()
-            if not current:
-                raise HTTPException(404, "프로젝트 멤버를 찾을 수 없습니다.")
-            if current[0] == "admin" and not context.principal.is_global_admin:
-                admin_count = conn.execute(
-                    "SELECT count(*) FROM project_memberships WHERE project_id=? AND role='admin'",
-                    [project_id],
-                ).fetchone()[0]
-                if admin_count <= 1:
-                    raise HTTPException(409, {"code": "LAST_PROJECT_ADMIN_PROTECTED"})
-            open_items = conn.execute(
-                """
-                SELECT count(*) FROM request_work_items items
-                JOIN analysis_requests requests ON requests.id=items.request_id
-                WHERE requests.project_id=? AND items.owner_user_id=? AND items.status <> 'COMPLETED'
-                """,
-                [project_id, user_id],
-            ).fetchone()[0]
-            if open_items:
-                raise HTTPException(409, {"code": "USER_HAS_OPEN_WORK_ITEMS", "count": open_items})
-            conn.execute("DELETE FROM project_memberships WHERE project_id=? AND user_id=?", [project_id, user_id])
-            write_audit_event(
-                request=request,
-                principal=principal,
-                status_code=200,
-                action="PROJECT_MEMBERSHIP_REMOVED",
-                detail={"target_user_id": user_id, "project_id": project_id, "old_role": current[0]},
-                connection=conn,
-            )
-            _commit(conn)
-            return {"status": "removed", "project_id": project_id, "user_id": user_id}
-        except Exception:
-            _rollback(conn)
-            raise
+router.include_router(project_memberships_router)
 
 
 @router.get("/api/projects/{project_id}/directory/employees")

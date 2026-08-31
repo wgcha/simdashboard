@@ -2,7 +2,7 @@
   "version": 1,
   "execute_call_ceilings": {
     "app/main.py": 189,
-    "app/routers/access_control.py": 46,
+    "app/routers/access_control.py": 36,
     "app/routers/modeling_catalog.py": 1,
     "app/routers/security.py": 7,
     "app/routers/workbench.py": 49
