@@ -24,6 +24,18 @@ attempt state and lease together. DuckDB tests verify this serialized local
 contract; separate-connection PostgreSQL tests remain mandatory before any
 multi-worker recovery is enabled.
 
+그 사내 gate test는
+[`backend/tests/test_postgres_batch_recovery_concurrency.py`](../backend/tests/test_postgres_batch_recovery_concurrency.py)다.
+claim race 단일 승자, 동일 owner/token claim idempotency race, fenced
+finalization race와 private projection, 만료 predecessor의 successor 변경 차단,
+finalization integrity 오류의 전체 rollback 5개를 서로 다른 PostgreSQL session으로
+검증한다. `ANALYSIS_TEST_POSTGRES=1`, DB명이 정확히
+`simdashboard_recovery_test` 또는 `simdashboard_recovery_test_<ticket>`인 dedicated DB,
+`SIM_DASH_OWNER_ROLE`(기본 `simdashboard_owner`)과 다른 non-superuser app role,
+database와 `public` schema `CREATE` 권한 모두 false, Alembic head, recovery table
+DML 권한 가드를 통과하지 못하면 실행하지 않는다. 노트북에서 이 모듈이 `5 skipped`인
+것은 정상이며 운영 합격 증거가 아니다.
+
 An active retry with the same owner and opaque token is idempotent, including
 when it repeats the initial expected generation. It returns the original lease
 without extending expiry or incrementing generation. Once that token expires it

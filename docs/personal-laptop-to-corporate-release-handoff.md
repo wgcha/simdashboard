@@ -65,7 +65,9 @@ focused 결과는 아래 표를 채워 change ticket이나 handoff 묶음에 함
 | template/static check | `deploy/rocky8/validate-templates.sh` | `<exit 0 / failure detail>` |
 | 1차 full backend | `../.venv-wsl/bin/python -m pytest -q` | `820 passed, 5 skipped, 16 capacity failures` (WSL `/tmp` reserve 진단) |
 | 동일 실패 묶음 safe workspace 재실행 | absolute `TMPDIR` + `SIMDASH_IMPORT_SNAPSHOT_ROOT` 지정 | `50 passed` |
-| 최종 full backend 재실행 | 위 safe workspace 명령 | `836 passed, 5 skipped` |
+| 최종 full backend 재실행 | 위 safe workspace 명령 | `836 passed, 10 skipped` (새 PG 전용 gate 5 skips 포함) |
+
+최종 `10 skipped` 중 새 PostgreSQL separate-connection gate의 `5 skipped`는 사내 전용 실행 가드에 따른 정상 결과이며 운영 합격 증거가 아니다. 사내 전용 DB에서 실제 5개 test가 통과한 별도 증적이 필요하다.
 
 WSL의 `/tmp` tmpfs 여유가 기본 snapshot reserve(1 GiB)와 min-free(64 MiB)의 합보다 작으면 `BUNDLE_SNAPSHOT_RESERVE_UNAVAILABLE`가 정상적으로 발생할 수 있다. reserve를 낮추거나 기존 임시 파일을 삭제하는 대신, 결과·진단 디렉터리를 Git에 넣지 않는 전용 workspace로 분리해 전체 pytest를 실행한다.
 
@@ -88,8 +90,8 @@ SIMDASH_IMPORT_SNAPSHOT_ROOT="$PWD/.pytest-tmp/import-snapshots" \
 cd backend
 ANALYSIS_DB_BACKEND=postgresql \
 ANALYSIS_TEST_POSTGRES=1 \
-ANALYSIS_TEST_POSTGRES_DATABASE=<disposable_test_db> \
-DATABASE_URL='postgresql+psycopg://<test_app_role>:<test_password>@<test_host>:<test_port>/<disposable_test_db>' \
+ANALYSIS_TEST_POSTGRES_DATABASE=simdashboard_recovery_test \
+DATABASE_URL='postgresql+psycopg://<test_app_role>:<test_password>@<test_host>:<test_port>/simdashboard_recovery_test' \
 ../.venv-wsl/bin/python -m pytest -q -m postgres_integration
 ```
 
@@ -130,7 +132,7 @@ proxy URL, 계정 비밀번호, OIDC secret, directory token, TLS private key는
 
 1. release bundle의 checksum과 commit을 확인한다.
 2. 빈 PostgreSQL 18 DB에 Alembic을 최신 단일 head까지 적용하고, 기존 revision DB에도 upgrade한다.
-3. app role로 DB/schema `CREATE`와 migration 실행이 거부되는지 확인한다.
+3. app role로 DB와 `public` schema의 `CREATE` 권한이 모두 `false`이고 migration 실행도 거부되는지 확인한다. `SIM_DASH_OWNER_ROLE`(기본 `simdashboard_owner`)은 app connection role로 거부하며, owner/admin credential은 서비스 환경에 넣지 않는다.
 4. DuckDB→PostgreSQL transfer를 먼저 `--execute` 없이 기본 dry-run으로 실행한다. source manifest, target table/column, 0019 lease 컬럼·constraint·index, required checksum을 첫 write 전에 검사한다.
 5. active·expired·malformed lease 또는 partial five-column lease schema가 있으면 dry-run과 execute 모두 non-zero로 종료하는지 확인한다. 원본과 target에 write가 없어야 한다.
 6. `workflow_runs.batch_attempt_id ↔ batch_execution_attempts.workflow_run_id`와 `request_work_items.demo_run_id` cycle은 nullable staging → 양쪽 row 적재 → exact ID restore를 한 transaction에서 확인한다. orphan·mismatch는 hard blocker다.
@@ -153,18 +155,33 @@ proxy URL, 계정 비밀번호, OIDC secret, directory token, TLS private key는
 | finalization 후 downstream 오류 | attempt 상태, lease, event, dispatch, progress, request status가 모두 원상 rollback |
 | identity/status/partial metadata 오류 | write 전 fail-closed, orphan·민감 projection 없음 |
 
-실행 test는 전용 marker와 전용 DB 이름을 사용한다. 현재 노트북에는 DuckDB lease/finalization 계약 테스트는 있으나 PostgreSQL separate-connection module은 아직 없으므로, 아래의 `<recovery_test_module>`은 사내 PostgreSQL concurrency test를 추가한 뒤 실제 경로로 치환한다. 치환 전 명령을 성공한 것으로 기록하지 않는다.
+실행 test는 전용 marker와 전용 DB 이름을 사용한다. PostgreSQL separate-connection gate 모듈은 [`tests/test_postgres_batch_recovery_concurrency.py`](../backend/tests/test_postgres_batch_recovery_concurrency.py)이며, 개인 노트북에서는 모듈 수집과 `5 skipped`가 정상이다. 실제 PostgreSQL 실행 결과가 없으면 release 합격으로 기록하지 않는다.
 
 ```bash
 cd backend
 ANALYSIS_DB_BACKEND=postgresql \
 ANALYSIS_TEST_POSTGRES=1 \
-ANALYSIS_TEST_POSTGRES_DATABASE=<dedicated_recovery_test_db> \
-DATABASE_URL='postgresql+psycopg://<test_app_role>:<test_password>@<pg18_host>:<pg18_port>/<dedicated_recovery_test_db>' \
+ANALYSIS_TEST_POSTGRES_DATABASE=simdashboard_recovery_test_change1234 \
+DATABASE_URL='postgresql+psycopg://<test_app_role>:<test_password>@<pg18_host>:<pg18_port>/simdashboard_recovery_test_change1234' \
 ../.venv-wsl/bin/python -m pytest -q \
-  tests/<recovery_test_module>.py \
+  tests/test_postgres_batch_recovery_concurrency.py \
   -m postgres_integration
 ```
+
+위 명령은 아래 실행 가드를 모두 만족하는 전용 PostgreSQL에서만 실제 test를 수행한다: `ANALYSIS_TEST_POSTGRES=1`, `ANALYSIS_TEST_POSTGRES_DATABASE`와 `current_database()`의 exact 일치, DB 이름이 정확히 `simdashboard_recovery_test` 또는 `simdashboard_recovery_test_<ticket>` 패턴, `ANALYSIS_DB_BACKEND=postgresql`, 최소 2개 독립 pool connection, 기본 `SIM_DASH_APP_ROLE`(또는 승인된 설정 role), `SIM_DASH_OWNER_ROLE`(기본 `simdashboard_owner`)과 다른 non-superuser·no-createdb·no-createrole app role, database와 `public` schema `CREATE` 권한 모두 `false`, 코드 Alembic head, recovery fixture 전체 table의 `SELECT,INSERT,UPDATE,DELETE` 권한. 서비스 DB 이름은 거부된다.
+
+```bash
+# 개인 노트북: 수집은 5개, 실제 실행은 PG 가드 때문에 5 skipped가 정상
+install -d -m 0700 "$PWD/.pytest-tmp/runtime" "$PWD/.pytest-tmp/import-snapshots"
+TMPDIR="$PWD/.pytest-tmp/runtime" \
+SIMDASH_IMPORT_SNAPSHOT_ROOT="$PWD/.pytest-tmp/import-snapshots" \
+../.venv-wsl/bin/python -m pytest --collect-only -q tests/test_postgres_batch_recovery_concurrency.py
+TMPDIR="$PWD/.pytest-tmp/runtime" \
+SIMDASH_IMPORT_SNAPSHOT_ROOT="$PWD/.pytest-tmp/import-snapshots" \
+../.venv-wsl/bin/python -m pytest -q tests/test_postgres_batch_recovery_concurrency.py
+```
+
+사내 PG에서 통과해야 하는 5개 case는 claim race 단일 승자, 동일 owner/token claim idempotency race, fenced finalization race와 private projection, 만료 predecessor의 successor 변경 차단, finalization integrity 오류의 전체 rollback이다.
 
 합격에는 test 결과뿐 아니라 `pg_stat_activity`/connection 수, transaction rollback 여부, 성공 commit 수, stale owner의 변경 행 수(0), duplicate event·dispatch 수(0)를 함께 기록한다. 운영 DB를 대상으로 경쟁 테스트를 하지 않는다.
 
