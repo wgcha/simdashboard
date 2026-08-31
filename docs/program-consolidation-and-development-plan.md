@@ -1,7 +1,7 @@
 # 프로그램 정리 및 개발 계획
 
 - 기준일: 2026-09-01
-- 상태: 실행 계획 + Run Identity V2·report layout·PPTX template·variable catalog vertical slice 기준선 반영
+- 상태: 실행 계획 + Run Identity V2·report layout·PPTX template·variable catalog·import-schemas vertical slice 기준선 반영
 - 범위: 구조 정리, DB·결과 수집, 확장자, proxy, 사내 배포, 기술 우선순위
 
 ## 1. 결론
@@ -538,14 +538,21 @@ open connection에서 확인한다. Write는 `BEGIN → project → auth → liv
 alias, operationId를 유지했고 live row가 없을 때 history 조회가 빈 목록을 돌려주는 기존
 계약도 바꾸지 않았다.
 
-Workspace-layout focused는 **17 passed**이며 architecture·OpenAPI·compile gate를 통과했다.
-최종 full backend는 **1023 passed, 10 skipped in 763.10s, exit 0**이다. `backend/app/main.py`는
-**1,948줄**, direct `.execute()` 실제값과 architecture ceiling은 **136**이다. 다음 개인
-노트북 slice는 `import-schemas` 4개 route로, 예상 ceiling은 **121**이다. DELETE의 별도
-permission connection, non-atomic usage check, 명시적 domain audit 부재는 호환 부채로
-남긴다. PostgreSQL concurrency/delete-import race·app-role, 사내 directory/IdP와
-corporate proxy/CA, Rocky/nginx/systemd/TLS 및 runtime root/backup 이관 smoke는 office-only
-인수 단계에서 검증한다.
+2026-09-01 import-schemas vertical slice도 완료했다. GET/POST/PUT/DELETE 4 route를
+HTTP/application/domain policy·port/SQL adapter로 이동했고, 기존 anonymous OpenAPI response,
+path·route order·operationId를 유지했다. GET의 explicit permission 없음과 mappings validation의
+provider-open 선행도 보존했다. Create/update는 같은 connection에서 `SYSTEM_CATALOG_MANAGE`를
+확인한 뒤 live row·version·audit을 transaction으로 기록하고 실패 시 rollback하며, principal
+actor·embedded `schema_id`·version semantics를 유지한다. DELETE는 legacy separate permission
+connection, non-transactional usage check, 명시적 domain delete audit 없음 상태를 그대로 둔다.
+
+Import-schemas focused는 **28 passed**, architecture·OpenAPI·compile gate가 통과했고 full backend는
+**1052 passed, 10 skipped in 787.09s, exit 0**이다. `backend/app/main.py`는 **1,859줄**,
+direct `.execute()` actual/ceiling은 **121**이다. 다음 개인 노트북 slice는 result review
+bookmark+annotation GET/POST/PATCH 3 route이며 예상 ceiling은 **106**이다. comparison/trust는
+별도 다음 slice로 둔다. review-list GET의 explicit `PROJECT_DATA_VIEW` 부재는 보안 부채지만
+구조 refactor에 섞지 않는다. PostgreSQL concurrent update·delete-vs-import race·app-role·review
+concurrent PATCH/DDL/index, Rocky·proxy/CA 검증은 office-only 인수 단계에서 수행한다.
 
 개인 노트북에서는 DuckDB/application/contract 검증까지만 수행한다. 실제 PostgreSQL
 multi-connection 및 app-role 권한, 사내 IdP·directory·proxy/CA·Rocky 배포 검증은
@@ -724,10 +731,12 @@ proxy/CA를 설치·갱신하는 자동화는 아직 없다. `NO_PROXY` assignme
    `573 passed, 5 skipped in 382.12s`; backend architecture/OpenAPI/compileall,
    Rocky validator, frontend architecture/API self-test/build도 통과했다.
 8. **다음 개인 노트북 구현 우선순위:** menu policy, report layout 6 API,
-   PPTX template 4 API, variable catalog 4 API와 project workspace layout 5 route는 완료했다.
-   이어서 (1) `import-schemas` 4 route를 예상 direct `execute` ceiling 121로 분리하고,
-   (2) result review를 위험 감사 후 정리한다. import-schemas DELETE의 별도 permission
-   connection, non-atomic usage check, 명시적 domain audit 부재는 호환 부채로 유지한다.
+   PPTX template 4 API, variable catalog 4 API, project workspace layout 5 route와 import-schemas
+   4 route는 완료했다. 이어서 (1) result review bookmark+annotation GET/POST/PATCH 3 route를
+   예상 direct `execute` ceiling 106으로 분리하고, (2) comparison/trust를 별도 다음 slice로
+   정리한다. import-schemas DELETE의 별도 permission connection, non-transactional usage check,
+   명시적 domain delete audit 부재와 review-list GET의 explicit `PROJECT_DATA_VIEW` 부재는 각각
+   호환/보안 부채로 유지하며 구조 refactor에 섞지 않는다.
    **office-only release gate 우선순위:** (1) 실제 Rocky host install과 app-role
    startup preflight, NFS/SMB mount probe·승인 및 filesystem quota/capacity 확인,
    (2) production backup을 분리된 빈 DB에 복구하고 exported-snapshot inventory와

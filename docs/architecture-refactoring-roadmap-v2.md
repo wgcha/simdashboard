@@ -56,12 +56,22 @@ MCP, Embedding, Graph DB는 이번 리팩터링에서 구현하지 않는다. �
   Write는 `BEGIN → project → auth → live update → version append → audit → COMMIT` 순서이며
   실패 시 rollback한다. principal actor, 기존 validation/404/422/alias/operationId와 live row가
   없는 history 조회의 기존 계약을 유지했다.
-- Workspace-layout focused는 **17 passed**, full backend는 **1023 passed, 10 skipped in
-  763.10s**, `main.py`는 **1,948줄**, direct `execute` 실제값과 ceiling은 **136**이다.
-  다음 개인 노트북 slice는 `import-schemas` 4 route이며 예상 ceiling은 **121**이다.
-  DELETE의 별도 permission connection, non-atomic usage check, 명시적 domain audit 부재는
-  호환 부채로 남긴다. PostgreSQL concurrency/delete-import race, app-role, Rocky smoke와
-  사내 proxy/CA 검증은 office-only release gate를 유지한다.
+- `import-schemas`의 GET/POST/PUT/DELETE 4 route를 `HTTP → application → domain
+  policy/port → SQL adapter`로 분리했다. 기존 anonymous OpenAPI response와 path·route
+  order·operationId를 유지했고, GET의 explicit permission 없음 및 mappings validation이
+  provider open보다 먼저 일어나는 계약도 보존했다.
+- Create/update는 같은 connection에서 `SYSTEM_CATALOG_MANAGE`를 확인한 뒤 live row·version·audit을
+  하나의 transaction으로 기록하고 실패 시 rollback한다. principal actor, embedded
+  `schema_id`, version semantics를 그대로 유지한다. DELETE는 legacy처럼 별도 permission
+  connection, non-transactional usage check, 명시적 domain delete audit 없음 상태를 유지한다.
+- Import-schemas focused는 **28 passed**, architecture·OpenAPI·compile gate가 통과했고 full
+  backend는 **1052 passed, 10 skipped in 787.09s, exit 0**이다. `main.py`는 **1,859줄**,
+  direct `execute` actual/ceiling은 **121**이다. 다음 개인 노트북 slice는 result review의
+  bookmark+annotation GET/POST/PATCH 3 route이며 예상 ceiling은 **106**이다. comparison/trust는
+  별도 다음 slice로 둔다. review-list GET의 explicit `PROJECT_DATA_VIEW` 부재는 보안 부채이나
+  구조 refactor에 섞지 않는다.
+- PostgreSQL concurrent update와 delete-vs-import race, app-role, review concurrent PATCH·DDL·index,
+  Rocky·proxy/CA 검증은 office-only release gate를 유지한다.
 
 검증에서 기본 backend suite 176개가 통과하고 3개 PostgreSQL opt-in test가 skip됐다. 별도의 disposable PostgreSQL 18 cluster를 blank DB에서 migration·권한 hardening·reference seed까지 구성한 뒤 app-role profile 60개가 통과했고, canonical 6-step workflow가 suite 전후 동일함을 확인했다. frontend architecture/API/preferences self-test, TypeScript와 production build가 통과했으며 fresh backend/Vite/Chromium을 사용한 Playwright 20개도 모두 통과했다. 실제 Rocky 서버 값·TLS·service user가 없어 운영 배포는 수행하지 않았고, 로컬 credential 파일의 과거 과도한 권한 노출에 대해서는 비밀번호 회전이 별도 운영 조치로 남아 있다. 이 외부 검증 상태는 코드 contract와 구분한다.
 
@@ -443,8 +453,8 @@ git diff --check
 
 ### 현재 후속 순서 — 2026-09-01
 
-1. Report layout 6 API, PPTX template 4 API, variable catalog 4 API와 project workspace layout 5 route의 완료 상태를 계약 테스트로 유지한다.
-2. `import-schemas` 4 route를 다음 개인 노트북 slice로 분리하고 direct `execute` ceiling을 121까지 낮춘다.
-3. DELETE의 별도 permission connection, non-atomic usage check, 명시적 domain audit 부재는 호환 부채로 기록한 채 result review를 위험 감사한다.
-4. 실제 PostgreSQL concurrency/delete-import race·app-role, corporate proxy/CA, Rocky/nginx/systemd/TLS,
-   backup/restore/deploy는 사내 office-only release gate에서 검증한다.
+1. Report layout 6 API, PPTX template 4 API, variable catalog 4 API, project workspace layout 5 route와 import-schemas 4 route의 완료 상태를 계약 테스트로 유지한다.
+2. result review bookmark+annotation GET/POST/PATCH 3 route를 다음 개인 노트북 slice로 분리하고 direct `execute` ceiling을 106까지 낮춘다. comparison/trust는 별도 다음 slice다.
+3. import-schemas DELETE의 별도 permission connection, non-transactional usage check, 명시적 domain delete audit 부재와 review-list GET의 explicit `PROJECT_DATA_VIEW` 부재를 각각 호환/보안 부채로 기록하되 구조 refactor에 섞지 않는다.
+4. 실제 PostgreSQL concurrent update·delete-vs-import race·app-role·review concurrent PATCH/DDL/index,
+   Rocky·proxy/CA·backup/restore/deploy는 사내 office-only release gate에서 검증한다.

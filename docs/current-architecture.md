@@ -52,12 +52,12 @@ Browser
 
 ### 3.1 애플리케이션 조립
 
-`backend/app/main.py`가 FastAPI 인스턴스, lifespan, CORS, 보안 middleware, 정적 asset mount와 router 등록을 소유한다. 동시에 결과 비교·review, workflow, dashboard 등 많은 legacy endpoint와 SQL을 아직 포함한다. Report layout, PPTX report template, variable catalog과 project workspace layout endpoint는 독립 router로 이동했다.
+`backend/app/main.py`가 FastAPI 인스턴스, lifespan, CORS, 보안 middleware, 정적 asset mount와 router 등록을 소유한다. 동시에 결과 비교·review, workflow, dashboard 등 많은 legacy endpoint와 SQL을 아직 포함한다. Report layout, PPTX report template, variable catalog, project workspace layout과 import-schemas endpoint는 독립 router로 이동했다.
 
 등록된 router는 두 계열이다.
 
 - `backend/app/routers/`: 인증, 접근 제어, workbench, 모델링 카탈로그, 마스터 결과 Refresh, 수동 결과 import·예제 폴더 import를 소유하는 `result_ingestion`
-- `backend/app/adapters/http/routers/`: `projects`, `requests`, `reports`, `report_templates`, `variable_catalog`, `workspace_layouts`의 대표 vertical slice HTTP adapter
+- `backend/app/adapters/http/routers/`: `projects`, `requests`, `reports`, `report_templates`, `variable_catalog`, `workspace_layouts`, `import_schemas`의 대표 vertical slice HTTP adapter
 
 새 기능은 가능한 한 얇은 router에서 입력/권한/응답 변환만 처리하고, orchestration과 SQL을 아래 계층으로 넘긴다.
 
@@ -82,7 +82,21 @@ HTTP adapter, application command/query, domain policy/port, SQL persistence ada
 write는 `PROJECT_LAYOUT_EDIT`를 확인한다. Write는 `BEGIN → project → auth → live update →
 version append → audit → COMMIT` 또는 rollback으로 수행한다. principal actor와 기존
 validation/404/422/alias/operationId를 유지하며, live row가 없을 때 history 조회는 기존처럼
-빈 목록을 반환한다. 현재 `main.py`는 1,948줄이고 direct `.execute()` actual/ceiling은 136이다.
+빈 목록을 반환한다.
+
+`import_schemas`는 GET/POST/PUT/DELETE 4 route를 HTTP adapter, application command/query,
+domain policy/port, SQL persistence adapter로 분리했다. 기존 anonymous OpenAPI response와
+path·route order·operationId를 유지하며 GET은 기존처럼 explicit permission을 확인하지 않는다.
+mappings validation은 provider open 전에 수행한다. Create/update는 같은 connection에서
+`SYSTEM_CATALOG_MANAGE` → live row → version → audit transaction을 수행하고 실패 시 rollback한다.
+principal actor와 embedded `schema_id`·version semantics를 유지한다. DELETE는 legacy처럼 별도
+permission connection과 non-transactional usage check를 사용하고 명시적 domain delete audit을
+추가하지 않는다. Import-schemas focused **28 passed**, architecture·OpenAPI·compile gate와 full
+backend **1052 passed, 10 skipped in 787.09s, exit 0**를 확인했다. 현재 `main.py`는 1,859줄이고
+direct `.execute()` actual/ceiling은 121이다. 다음 개인 노트북 slice는 result review bookmark+
+annotation GET/POST/PATCH 3 route(예상 ceiling 106)이며 comparison/trust는 별도 다음 slice다.
+PostgreSQL concurrent update·delete-vs-import race·app-role·review concurrent PATCH/DDL/index,
+Rocky·proxy/CA 검증은 office-only release gate다.
 
 Phase 2의 `result_ingestion`은 세 안전 단위로 정리했다. 첫 단위는 결과-import template, 수동 결과
 import, 예제 폴더 import endpoint를 `main.py`에서 `routers/result_ingestion.py`로 분리했다. 두 번째
@@ -547,6 +561,8 @@ Architecture ceiling은 목표 수치가 아니라 부채가 늘지 않게 하�
 - `routers/access_control.py`, `routers/workbench.py`, `repositories/workbench.py`에 SQL과 orchestration이 집중되어 있다.
 - `frontend/src/App.tsx`, `styles.css`, `reportExport.ts`, `api.ts`가 큰 전환 모듈이다.
 - 생성 OpenAPI 계약의 여러 성공 응답이 익명 JSON schema라 UI adapter의 수동 검증이 남아 있다.
+- result review list GET은 explicit `PROJECT_DATA_VIEW`를 확인하지 않는 보안 부채다. 구조 refactor에
+  섞지 않고 별도 security 변경으로 다룬다.
 - 현재 URL은 workspace 진입점만 표현하고 project/request/load-case 선택을 deep-link로 보존하지 않는다.
 - demo와 reference seed가 같은 fixture alias다.
 - 외부 NAS/NFS/SMB `SIMDASH_IMPORT_ROOT`의 부팅 순서, mount context, 용량과

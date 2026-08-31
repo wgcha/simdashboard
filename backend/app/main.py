@@ -22,7 +22,6 @@ from .modules.access_control import (
     REQUEST_EDIT,
     RESULT_IMPORT,
     RESULT_REVIEW,
-    SYSTEM_CATALOG_MANAGE,
     WORKFLOW_EDIT,
     has_permission,
     require_permission,
@@ -45,7 +44,6 @@ from .schemas.api import (
     DashboardClone,
     DashboardDefinition,
     DropVideoPageResponse,
-    ImportSchemaPayload,
     LoadCaseCreate,
     NaturalLanguageCommand,
     QualityThresholdUpdate,
@@ -68,6 +66,7 @@ from .adapters.http.routers.report_templates import router as report_templates_r
 from .adapters.http.routers.requests import router as requests_router
 from .adapters.http.routers.variable_catalog import router as variable_catalog_router
 from .adapters.http.routers.workspace_layouts import router as workspace_layouts_router
+from .adapters.http.routers.import_schemas import router as import_schemas_router
 from .adapters.persistence.products import SQLProductInformationRepositoryProvider
 from .application.products.queries import list_product_information
 from .adapters.persistence.results import SQLAnalysisRunSummaryRepositoryProvider
@@ -164,95 +163,7 @@ def feature_examples() -> list[dict[str, Any]]:
 
 
 app.include_router(projects_router)
-
-
-@app.get("/api/import-schemas")
-def list_import_schemas() -> list[dict[str, Any]]:
-    with connect() as conn:
-        items = rows(conn.execute("SELECT * FROM import_schemas WHERE is_active=true ORDER BY updated_at DESC"))
-    for item in items:
-        item["definition"] = json_value(item.pop("definition_json"))
-    return items
-
-
-@app.post("/api/import-schemas", status_code=201)
-def create_import_schema(payload: ImportSchemaPayload, request: Request) -> dict[str, Any]:
-    if not isinstance(payload.definition.get("mappings"), list):
-        raise HTTPException(422, "스키마 정의에는 mappings 배열이 필요합니다.")
-    schema_id, now = f"import-schema-{uuid4().hex[:12]}", datetime.now(timezone.utc).replace(tzinfo=None)
-    definition = {**payload.definition, "schema_id": payload.definition.get("schema_id") or schema_id, "version": 1}
-    encoded = json.dumps(definition, ensure_ascii=False)
-    principal = request.state.principal
-    with connect() as conn:
-        conn.execute("BEGIN TRANSACTION")
-        try:
-            require_permission(request, SYSTEM_CATALOG_MANAGE, conn=conn)
-            conn.execute(
-                """
-                INSERT INTO import_schemas
-                    (id, name, description, definition_json, is_active, created_at, updated_at, updated_by)
-                VALUES (?, ?, ?, ?, true, ?, ?, ?)
-                """,
-                [schema_id, payload.name.strip(), payload.description.strip(), encoded, now, now, principal.display_name],
-            )
-            conn.execute(
-                """
-                INSERT INTO import_schema_versions
-                    (schema_id, version, definition_json, created_at, updated_by)
-                VALUES (?, 1, ?, ?, ?)
-                """,
-                [schema_id, encoded, now, principal.display_name],
-            )
-            write_audit_event(request=request, principal=principal, status_code=201, action="IMPORT_SCHEMA_CREATED", detail={"schema_id": schema_id}, connection=conn)
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
-    return {"id": schema_id, "name": payload.name.strip(), "description": payload.description.strip(), "definition": definition, "created_at": now, "updated_at": now, "updated_by": principal.display_name}
-
-
-@app.put("/api/import-schemas/{schema_id}")
-def update_import_schema(schema_id: str, payload: ImportSchemaPayload, request: Request) -> dict[str, Any]:
-    if not isinstance(payload.definition.get("mappings"), list):
-        raise HTTPException(422, "스키마 정의에는 mappings 배열이 필요합니다.")
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
-    principal = request.state.principal
-    with connect() as conn:
-        conn.execute("BEGIN TRANSACTION")
-        try:
-            require_permission(request, SYSTEM_CATALOG_MANAGE, conn=conn)
-            existing = conn.execute("SELECT definition_json, created_at FROM import_schemas WHERE id=? AND is_active=true", [schema_id]).fetchone()
-            if not existing:
-                raise HTTPException(404, "폴더 스키마를 찾을 수 없습니다.")
-            previous = json_value(existing[0]) or {}
-            version = int(previous.get("version") or 1) + 1
-            definition = {**payload.definition, "schema_id": previous.get("schema_id") or schema_id, "version": version}
-            encoded = json.dumps(definition, ensure_ascii=False)
-            conn.execute("UPDATE import_schemas SET name=?, description=?, definition_json=?, updated_at=?, updated_by=? WHERE id=?", [payload.name.strip(), payload.description.strip(), encoded, now, principal.display_name, schema_id])
-            conn.execute(
-                "INSERT INTO import_schema_versions (schema_id, version, definition_json, created_at, updated_by) VALUES (?, ?, ?, ?, ?)",
-                [schema_id, version, encoded, now, principal.display_name],
-            )
-            write_audit_event(request=request, principal=principal, status_code=200, action="IMPORT_SCHEMA_UPDATED", detail={"schema_id": schema_id, "version": version}, connection=conn)
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
-    return {"id": schema_id, "name": payload.name.strip(), "description": payload.description.strip(), "definition": definition, "created_at": existing[1], "updated_at": now, "updated_by": principal.display_name}
-
-
-@app.delete("/api/import-schemas/{schema_id}")
-def delete_import_schema(schema_id: str, request: Request) -> dict[str, str]:
-    require_permission(request, SYSTEM_CATALOG_MANAGE)
-    with connect() as conn:
-        existing = conn.execute("SELECT id FROM import_schemas WHERE id=? AND is_active=true", [schema_id]).fetchone()
-        if not existing:
-            raise HTTPException(404, "폴더 스키마를 찾을 수 없습니다.")
-        in_use = conn.execute("SELECT count(*) FROM folder_import_jobs WHERE schema_id=? AND status IN ('RUNNING','COMPLETED')", [schema_id]).fetchone()[0]
-        if in_use:
-            raise HTTPException(409, "적재 이력이 있는 스키마는 삭제할 수 없습니다. 비활성화 정책이 필요합니다.")
-        conn.execute("UPDATE import_schemas SET is_active=false, updated_at=? WHERE id=?", [datetime.now(timezone.utc).replace(tzinfo=None), schema_id])
-    return {"status": "DEACTIVATED", "id": schema_id}
+app.include_router(import_schemas_router)
 
 
 @app.get("/api/portfolio/overview")
