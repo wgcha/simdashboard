@@ -21,7 +21,6 @@ from .modules.access_control import (
     REQUEST_CREATE,
     REQUEST_EDIT,
     RESULT_IMPORT,
-    RESULT_REVIEW,
     WORKFLOW_EDIT,
     has_permission,
     require_permission,
@@ -47,8 +46,6 @@ from .schemas.api import (
     LoadCaseCreate,
     NaturalLanguageCommand,
     QualityThresholdUpdate,
-    ReviewItemCreate,
-    ReviewItemUpdate,
     WorkflowStepUpdate,
     WorkflowStepsReplace,
 )
@@ -70,7 +67,9 @@ from .adapters.http.routers.import_schemas import router as import_schemas_route
 from .adapters.persistence.products import SQLProductInformationRepositoryProvider
 from .application.products.queries import list_product_information
 from .adapters.persistence.results import SQLAnalysisRunSummaryRepositoryProvider
+from .adapters.persistence.result_keys import run_result_keys
 from .application.results.queries import list_analysis_runs as list_analysis_runs_query
+from .adapters.http.routers.result_review import router as result_review_router
 from .services.drop_video_demo import (
     DEMO_DROP_VIDEO_LOAD_CASE_IDS,
     DROP_VIDEO_DEMO_BY_ID,
@@ -686,26 +685,6 @@ def get_load_case_overview(
     }
 
 
-def _run_result_keys(conn: Any, run_id: str) -> set[str]:
-    keys = {
-        row[0]
-        for row in conn.execute(
-            """
-            SELECT variable_key FROM scalar_results WHERE analysis_run_id=?
-            UNION SELECT variable_key FROM time_series_results WHERE analysis_run_id=?
-            UNION SELECT variable_key FROM curve_results WHERE analysis_run_id=?
-            UNION SELECT variable_key FROM result_locations WHERE analysis_run_id=?
-            """,
-            [run_id, run_id, run_id, run_id],
-        ).fetchall()
-    }
-    for (metadata_json,) in conn.execute("SELECT metadata_json FROM media_assets WHERE analysis_run_id=?", [run_id]).fetchall():
-        metadata = json_value(metadata_json) or {}
-        if isinstance(metadata, dict) and metadata.get("variable_key"):
-            keys.add(str(metadata["variable_key"]))
-    return keys
-
-
 def _run_trust_payload(conn: Any, run_id: str, expected_load_case_id: str | None = None) -> dict[str, Any]:
     run_rows = rows(conn.execute("SELECT * FROM analysis_runs WHERE id=?", [run_id]))
     if not run_rows or (expected_load_case_id and run_rows[0]["load_case_id"] != expected_load_case_id):
@@ -728,7 +707,7 @@ def _run_trust_payload(conn: Any, run_id: str, expected_load_case_id: str | None
         "media": conn.execute("SELECT count(*) FROM media_assets WHERE analysis_run_id=?", [run_id]).fetchone()[0],
         "location": conn.execute("SELECT count(*) FROM result_locations WHERE analysis_run_id=?", [run_id]).fetchone()[0],
     }
-    result_keys = _run_result_keys(conn, run_id)
+    result_keys = run_result_keys(conn, run_id)
     catalog_rows = rows(conn.execute("SELECT variable_key, display_name, unit FROM variable_definitions WHERE load_case_id=? AND is_active=true", [run["load_case_id"]]))
     catalog = {item["variable_key"]: item for item in catalog_rows}
     unmapped = sorted(result_keys - set(catalog))
@@ -882,91 +861,7 @@ def get_analysis_run_trust(run_id: str) -> dict[str, Any]:
         return _run_trust_payload(conn, run_id)
 
 
-def _review_items(conn: Any, run_id: str, annotation_id: str | None = None) -> list[dict[str, Any]]:
-    conditions = "a.analysis_run_id=?"
-    parameters: list[Any] = [run_id]
-    if annotation_id:
-        conditions += " AND a.id=?"
-        parameters.append(annotation_id)
-    return rows(conn.execute(
-        f"""
-        SELECT a.id, a.bookmark_id, a.analysis_run_id, a.variable_key, b.title, b.time_value,
-               b.entity_type, b.entity_id, a.body, a.review_status, a.created_by, a.created_at, a.updated_at
-        FROM review_annotations a JOIN result_bookmarks b ON b.id=a.bookmark_id
-        WHERE {conditions} ORDER BY a.updated_at DESC
-        """,
-        parameters,
-    ))
-
-
-@app.get("/api/analysis-runs/{run_id}/review-items")
-def list_review_items(run_id: str) -> list[dict[str, Any]]:
-    with connect() as conn:
-        if not conn.execute("SELECT 1 FROM analysis_runs WHERE id=?", [run_id]).fetchone():
-            raise HTTPException(404, "해석 Run을 찾을 수 없습니다.")
-        return _review_items(conn, run_id)
-
-
-@app.post("/api/analysis-runs/{run_id}/review-items", status_code=201)
-def create_review_item(run_id: str, payload: ReviewItemCreate, request: Request) -> dict[str, Any]:
-    principal = request.state.principal
-    with connect() as conn:
-        bookmark_id, annotation_id = f"bookmark-{uuid4().hex[:12]}", f"review-{uuid4().hex[:12]}"
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
-        conn.execute("BEGIN TRANSACTION")
-        try:
-            context = require_resource_permission(request, RESULT_REVIEW, "run", run_id, conn=conn)
-            if not conn.execute("SELECT 1 FROM analysis_runs WHERE id=?", [run_id]).fetchone():
-                raise HTTPException(404, "해석 Run을 찾을 수 없습니다.")
-            if payload.variable_key and payload.variable_key not in _run_result_keys(conn, run_id):
-                raise HTTPException(422, "선택한 변수는 이 Run의 결과에 없습니다.")
-            if payload.entity_type and not payload.entity_id:
-                raise HTTPException(422, "엔티티 유형을 지정하면 엔티티 ID도 필요합니다.")
-            conn.execute(
-                """
-                INSERT INTO result_bookmarks
-                    (id, analysis_run_id, variable_key, time_value, entity_type, entity_id, title, created_by, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                [bookmark_id, run_id, payload.variable_key, payload.time_value, payload.entity_type, payload.entity_id, payload.title.strip(), principal.display_name, now],
-            )
-            conn.execute(
-                """
-                INSERT INTO review_annotations
-                    (id, bookmark_id, analysis_run_id, variable_key, body, review_status, created_by, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                [annotation_id, bookmark_id, run_id, payload.variable_key, payload.body.strip(), payload.review_status, principal.display_name, now, now],
-            )
-            write_audit_event(request=request, principal=principal, status_code=201, action="RESULT_REVIEW_CREATED", detail={"project_id": context.project_id, "run_id": run_id, "review_item_id": annotation_id}, connection=conn)
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
-        return _review_items(conn, run_id, annotation_id)[0]
-
-
-@app.patch("/api/review-items/{annotation_id}")
-def update_review_item(annotation_id: str, payload: ReviewItemUpdate, request: Request) -> dict[str, Any]:
-    principal = request.state.principal
-    with connect() as conn:
-        conn.execute("BEGIN TRANSACTION")
-        try:
-            context = require_resource_permission(request, RESULT_REVIEW, "review_item", annotation_id, conn=conn)
-            current = conn.execute("SELECT analysis_run_id, body, review_status FROM review_annotations WHERE id=?", [annotation_id]).fetchone()
-            if not current:
-                raise HTTPException(404, "검토 의견을 찾을 수 없습니다.")
-            conn.execute(
-                "UPDATE review_annotations SET body=?, review_status=?, updated_at=? WHERE id=?",
-                [payload.body.strip() if payload.body else current[1], payload.review_status, datetime.now(timezone.utc).replace(tzinfo=None), annotation_id],
-            )
-            write_audit_event(request=request, principal=principal, status_code=200, action="RESULT_REVIEW_UPDATED", detail={"project_id": context.project_id, "run_id": current[0], "review_item_id": annotation_id, "old_status": current[2], "new_status": payload.review_status}, connection=conn)
-            result = _review_items(conn, current[0], annotation_id)[0]
-            conn.execute("COMMIT")
-            return result
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
+app.include_router(result_review_router)
 
 
 @app.get("/api/projects/{project_id}/quality-thresholds")
