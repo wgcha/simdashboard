@@ -1,21 +1,31 @@
-"""SQL adapter for internal batch-recovery lease ownership only."""
+"""SQL adapter for internal batch-recovery leases and fenced finalization."""
 
 from __future__ import annotations
 
+import json
 from typing import Any
+from uuid import uuid4
 
 from ...database_connection import ConnectionLike
 from ...domains.workbench.models import (
     BatchRecoveryLeaseClaimCommand,
+    BatchRecoveryFinalizeCommand,
+    BatchRecoveryFinalizeRead,
     BatchRecoveryLeaseRead,
     BatchRecoveryLeaseReleaseCommand,
     BatchRecoveryLeaseRenewCommand,
 )
+from ...services.request_monitoring import sync_request_status
 
 _LEASE_COLUMNS = (
     "id", "workflow_run_id", "recovery_lease_owner_id", "recovery_lease_token",
     "recovery_lease_generation", "recovery_lease_acquired_at",
     "recovery_lease_expires_at",
+)
+
+_FINALIZE_COLUMNS = (
+    "id", "workflow_run_id", "work_item_id", "batch_profile_id",
+    "profile_snapshot_json", "command_preview", "created_by", "completed_at",
 )
 
 
@@ -28,8 +38,20 @@ def _lease_read(row: Any) -> BatchRecoveryLeaseRead:
     )
 
 
+def _finalize_read(row: Any, request_id: str, dispatch_id: str) -> BatchRecoveryFinalizeRead:
+    item = dict(zip(_FINALIZE_COLUMNS, row))
+    return BatchRecoveryFinalizeRead(
+        attempt_id=str(item["id"]),
+        workflow_run_id=str(item["workflow_run_id"]),
+        work_item_id=str(item["work_item_id"]),
+        request_id=request_id,
+        dispatch_id=dispatch_id,
+        completed_at=item["completed_at"],
+    )
+
+
 class SQLWorkbenchBatchRecoveryLease:
-    """One-connection, internal-only lease adapter; it does no recovery work."""
+    """One-connection, internal-only lease and fenced-finalization adapter."""
 
     def __init__(self, connection: ConnectionLike) -> None:
         self._connection = connection
@@ -134,3 +156,84 @@ class SQLWorkbenchBatchRecoveryLease:
             [attempt_id, command.owner_id, command.token, command.generation],
         ).fetchone()
         return row is not None
+
+    def finalize_batch_recovery_attempt(
+        self,
+        attempt_id: str,
+        command: BatchRecoveryFinalizeCommand,
+    ) -> BatchRecoveryFinalizeRead | None:
+        """CAS the active lease, then write all recovery effects in this UoW.
+
+        The first statement is deliberately the sole ownership and crash-window
+        decision point.  Any later error is allowed to escape so the application
+        layer rolls the entire transaction back, including this status change.
+        """
+        clock = "(CURRENT_TIMESTAMP AT TIME ZONE 'UTC')"
+        row = self._connection.execute(
+            f"""UPDATE batch_execution_attempts AS attempt
+            SET status='SUCCEEDED', progress=100,
+                last_message='DEMO_ONLY 배치 실행 기록이 복구 완료되었습니다.',
+                completed_at={clock},
+                recovery_lease_owner_id=NULL, recovery_lease_token=NULL,
+                recovery_lease_acquired_at=NULL, recovery_lease_expires_at=NULL
+            WHERE attempt.id=? AND {self._eligible_identity()}
+              AND attempt.recovery_lease_owner_id=? AND attempt.recovery_lease_token=?
+              AND attempt.recovery_lease_generation=?
+              AND attempt.recovery_lease_expires_at > {clock}
+            RETURNING {', '.join(_FINALIZE_COLUMNS)}""",
+            [
+                attempt_id, command.owner_id, command.token, command.generation,
+            ],
+        ).fetchone()
+        if row is None:
+            return None
+
+        result_row = dict(zip(_FINALIZE_COLUMNS, row))
+        request_row = self._connection.execute(
+            "SELECT request_id FROM request_work_items WHERE id=?",
+            [result_row["work_item_id"]],
+        ).fetchone()
+        if request_row is None:
+            raise RuntimeError("recovery finalization lost its work-item request identity")
+        request_id = str(request_row[0])
+        occurred_at = result_row["completed_at"]
+        profile_snapshot_json = result_row["profile_snapshot_json"]
+        if not isinstance(profile_snapshot_json, str):
+            profile_snapshot_json = json.dumps(profile_snapshot_json, ensure_ascii=False)
+        dispatch_id = f"dispatch-recovery-{result_row['id']}"
+        self._connection.execute(
+            """INSERT INTO batch_execution_events
+                (id, attempt_id, event_index, event_type, level, message, progress, occurred_at)
+            VALUES (?, ?, 2, 'SUCCEEDED', 'INFO', ?, 100, ?)""",
+            [
+                f"batch-recovery-event-{uuid4().hex[:12]}",
+                result_row["id"],
+                "검증된 DEMO_ONLY runner 결과를 recovery lease로 기록했습니다.",
+                occurred_at,
+            ],
+        )
+        self._connection.execute(
+            """INSERT INTO batch_dispatches
+                (id, work_item_id, workflow_run_id, batch_profile_id, profile_snapshot_json,
+                 attempt_id, command_preview, status, created_by, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'RECORDED_DEMO', ?, ?)""",
+            [
+                dispatch_id,
+                result_row["work_item_id"], result_row["workflow_run_id"],
+                result_row["batch_profile_id"], profile_snapshot_json,
+                result_row["id"], result_row["command_preview"],
+                result_row["created_by"], occurred_at,
+            ],
+        )
+        progressed = self._connection.execute(
+            """UPDATE request_work_items
+            SET progress=CASE WHEN progress < 90 THEN 90 ELSE progress END,
+                progress_updated_by=?, progress_updated_at=?
+            WHERE id=? AND status='IN_PROGRESS'
+            RETURNING id""",
+            [result_row["created_by"], occurred_at, result_row["work_item_id"]],
+        ).fetchone()
+        if progressed is None:
+            raise RuntimeError("recovery finalization could not advance its in-progress work item")
+        sync_request_status(self._connection, request_id)
+        return _finalize_read(row, request_id, dispatch_id)

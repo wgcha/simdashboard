@@ -18,6 +18,8 @@ from .models import (
     BatchDispatchContext,
     BatchDispatchPreflight,
     BatchRecoveryLeaseClaimCommand,
+    BatchRecoveryFinalizeCommand,
+    BatchRecoveryFinalizeRead,
     BatchRecoveryLeaseRead,
     BatchRecoveryLeaseReleaseCommand,
     BatchRecoveryLeaseRenewCommand,
@@ -241,3 +243,19 @@ class WorkbenchBatchRecoveryLeasePort(Protocol):
         attempt_id: str,
         command: BatchRecoveryLeaseReleaseCommand,
     ) -> bool: ...
+
+
+class WorkbenchBatchRecoveryFinalizationPort(Protocol):
+    """Internal-only UoW for the single fenced crash-window finalization."""
+
+    def begin_transaction(self) -> None: ...
+
+    def commit_transaction(self) -> None: ...
+
+    def rollback_transaction(self) -> None: ...
+
+    def finalize_batch_recovery_attempt(
+        self,
+        attempt_id: str,
+        command: BatchRecoveryFinalizeCommand,
+    ) -> BatchRecoveryFinalizeRead | None: ...

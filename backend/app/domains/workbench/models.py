@@ -401,6 +401,15 @@ class BatchRecoveryLeaseReleaseCommand:
 
 
 @dataclass(frozen=True)
+class BatchRecoveryFinalizeCommand:
+    """Finish a proven runner crash-window only while its exact lease is active."""
+
+    owner_id: str
+    token: str
+    generation: int
+
+
+@dataclass(frozen=True)
 class BatchRecoveryLeaseRead:
     """Internal recovery ownership; deliberately absent from public projections."""
 
@@ -411,6 +420,18 @@ class BatchRecoveryLeaseRead:
     generation: int
     acquired_at: datetime
     expires_at: datetime
+
+
+@dataclass(frozen=True)
+class BatchRecoveryFinalizeRead:
+    """Internal provenance produced by one lease-fenced recovery finalization."""
+
+    attempt_id: str
+    workflow_run_id: str
+    work_item_id: str
+    request_id: str
+    dispatch_id: str
+    completed_at: datetime
 
 
 class BatchDispatchError(Exception):

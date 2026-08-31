@@ -1,19 +1,25 @@
 """Framework-neutral ownership use cases for manual batch-recovery workers.
 
-This module deliberately does not schedule, re-run, finalize, or transition an
-attempt.  It only establishes a short-lived internal ownership lease.
+This module deliberately does not schedule, re-run, or expose recovery through
+an API. It establishes an internal ownership lease and can atomically record an
+already-succeeded DEMO_ONLY runner crash-window while that lease remains valid.
 """
 
 from ...domains.workbench.models import (
     BatchRecoveryLeaseClaimCommand,
     BatchRecoveryLeaseCommandInvalidError,
+    BatchRecoveryFinalizeCommand,
+    BatchRecoveryFinalizeRead,
     BatchRecoveryLeaseLostError,
     BatchRecoveryLeaseRead,
     BatchRecoveryLeaseReleaseCommand,
     BatchRecoveryLeaseRenewCommand,
     BatchRecoveryLeaseUnavailableError,
 )
-from ...domains.workbench.ports import WorkbenchBatchRecoveryLeasePort
+from ...domains.workbench.ports import (
+    WorkbenchBatchRecoveryFinalizationPort,
+    WorkbenchBatchRecoveryLeasePort,
+)
 
 
 def _validate_values(
@@ -105,3 +111,33 @@ def release_workbench_batch_recovery_lease(
     except Exception:
         command_port.rollback_transaction()
         raise
+
+
+def finalize_workbench_batch_recovery_attempt(
+    command_port: WorkbenchBatchRecoveryFinalizationPort,
+    attempt_id: str,
+    command: BatchRecoveryFinalizeCommand,
+) -> BatchRecoveryFinalizeRead:
+    """Atomically record a verified runner result while the exact lease is live.
+
+    The persistence port performs the lease-fenced status CAS and all dependent
+    event, dispatch, work-item, and request updates inside this one transaction.
+    It returns ``None`` whenever ownership, expiry, or crash-window identity no
+    longer matches, so stale workers fail closed without mutating any record.
+    """
+    _validate_values(owner_id=command.owner_id, token=command.token, generation=command.generation)
+    command_port.begin_transaction()
+    try:
+        finalized = command_port.finalize_batch_recovery_attempt(attempt_id, command)
+    except Exception:
+        command_port.rollback_transaction()
+        raise
+    if finalized is None:
+        command_port.rollback_transaction()
+        raise BatchRecoveryLeaseLostError(attempt_id)
+    try:
+        command_port.commit_transaction()
+    except Exception:
+        command_port.rollback_transaction()
+        raise
+    return finalized

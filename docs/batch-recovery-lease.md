@@ -1,18 +1,28 @@
-# Batch recovery lease release gate
+# Batch recovery lease and internal finalization release gate
 
-The recovery lease foundation only claims, renews, and releases ownership of a
-previously-created queued DEMO_ONLY batch attempt. It does not schedule work,
-invoke a runner, finalize an attempt, or change a public status.
+The recovery lease layer claims, renews, and releases ownership of a
+previously-created queued DEMO_ONLY batch attempt. An internal-only finalization
+CAS is now implemented on top of that lease: it verifies the active owner,
+opaque token, generation, expiry, and crash-window identity in the same
+transaction before changing the attempt to `SUCCEEDED`, clearing the lease,
+and recording the success event/dispatch/progress updates.
+
+This finalization boundary is not wired to a router, scheduler, worker, retry
+endpoint, automatic rerun, or public recovery API. It does not invoke a
+runner. The code-level finalization result is therefore not production
+recovery authority until the PostgreSQL release gates below are complete.
 
 DuckDB coverage is restricted to its serialized single-connection development
 adapter. Before any multi-worker recovery capability is released, apply Alembic
 head to a production-like PostgreSQL database and verify concurrent claims,
 expiry takeover, stale renewal, and stale release from separate connections.
 
-This foundation is not wired to a router, scheduler, worker, or state
-transition. Future finalization must compare-and-swap the active owner, opaque
-token, and generation in the same transaction as its state write; before that
-work, this is not production recovery authority.
+The finalizer compares-and-swaps the active owner, opaque token, generation,
+expiry, and exact attempt identity in the same transaction as its state write.
+Downstream event, dispatch, progress, or status-sync failure rolls back the
+attempt state and lease together. DuckDB tests verify this serialized local
+contract; separate-connection PostgreSQL tests remain mandatory before any
+multi-worker recovery is enabled.
 
 An active retry with the same owner and opaque token is idempotent, including
 when it repeats the initial expected generation. It returns the original lease
@@ -31,5 +41,11 @@ The same blockers make a read-only dry-run exit non-zero before any PostgreSQL
 connection, after an explicitly requested manifest or JSON report is emitted.
 Execute mode also verifies the target table/column contract and required lease
 constraints/indexes before its first INSERT.
-Actual PostgreSQL live migration and app-role verification remain release gates;
-this ownership-only slice is still not production recovery authority.
+Actual PostgreSQL live migration, app-role privilege verification, and
+separate-connection lease/finalization concurrency remain release gates. Until
+those gates pass, this lease plus internal-finalization slice is not production
+recovery authority.
+
+개인 노트북에서 닫을 수 있는 DuckDB/application 계약과 사내 PostgreSQL·proxy·Rocky
+배포 release gate의 경계, 책임자, 인수인계 증적 형식은
+[`personal-laptop-to-corporate-release-handoff.md`](personal-laptop-to-corporate-release-handoff.md)를 따른다.
