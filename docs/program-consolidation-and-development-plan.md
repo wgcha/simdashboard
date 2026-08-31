@@ -1,6 +1,6 @@
 # 프로그램 정리 및 개발 계획
 
-- 기준일: 2026-08-25
+- 기준일: 2026-09-01
 - 상태: 실행 계획 + Run Identity V2 기준선 반영
 - 범위: 구조 정리, DB·결과 수집, 확장자, proxy, 사내 배포, 기술 우선순위
 
@@ -46,7 +46,7 @@
 | DEP-03 | Windows는 설치/개발 실행과 DB 이관 호환성은 있으나 HTTPS reverse proxy·service·TLS·rollback 운영 자동화 없음 | Windows one-command 운영 배포는 지원 범위에서 제외 | 범위 제외 |
 | DEP-04 | 사내 proxy는 Windows setup 중심이고 Rocky DNF/CA/offline RPM 계약이 불완전 | 폐쇄망 설치 재현성 부족 | P1 |
 | SEC-01 | nginx forwarded header, trusted host, security header 정책 보강 필요 | audit IP 신뢰와 외부 노출 hardening 부족 | P0/P1 |
-| ACC-01 | 프로젝트 초대·외부 directory lifecycle과 독립 assignee 후보 query vertical slice를 반영 | 코드·focused 계약 검증 완료. 계정 상태/global-admin command 다음 menu policy 이관이 남음 | P1 진행 |
+| ACC-01 | 프로젝트 초대·외부 directory lifecycle, 독립 assignee 후보 query, account status/global-admin command vertical slice를 반영 | 코드·focused 계약 검증 완료. 다음은 menu policy 이관 | P1 진행 |
 | ARC-01 | `main.py`, `database.py`, workbench router/repository, `App.tsx`가 큼 | 기능 추가 시 충돌·회귀 비용 증가 | P1 |
 | API-01 | 일부 성공 응답이 익명 OpenAPI schema | frontend runtime adapter 수동 검증 지속 | P1 |
 
@@ -446,8 +446,32 @@ extraction으로 legacy access router의 `execute` ceiling은 36에서 20으로 
 이 변경을 포함한 현재 전체 backend suite는 **897 passed, 10 skipped in 651.42s
 (0:10:51), exit 0**이다.
 
-개인 노트북의 다음 우선순위는 account status 및 global-admin command 이관이며, 그 다음
-menu policy slice다. 실제 PostgreSQL multi-connection·app-role 권한, 사내
+2026-09-01 account status 및 global-admin command vertical slice를 완료했다.
+`PATCH /api/admin/users/{user_id}/status`와
+`PATCH /api/admin/users/{user_id}/global-admin`은
+`HTTP → application → domain port → persistence adapter` 경계를 사용한다.
+HTTP composition이 PostgreSQL 전용 table lock provider를 status 명령의
+`(users, project_invitations)`, global-admin 명령의 `(users,)`로 선택한다.
+provider가 transaction을 시작하고 lock을 획득한 뒤 application이 같은
+connection의 fresh actor에 대해 `SYSTEM_USER_APPROVE` 권한을 재검사하고
+target user를 읽는다. status mutation은 별도 invitation 선행 조회 없이 일치하는
+pending invitation을 원자적으로 갱신한다. stale timestamp, 마지막 global admin
+보호, `ACTIVE` 계정 승인과 초대의 `READY` 전이를 기존 계약대로 보존한다.
+mutation과 exact audit event는 같은 transaction에 기록하며 audit 실패 시 함께
+rollback한다. 응답은 안전한 14-field projection으로 제한하고 기존 route,
+operationId, 응답 순서와 OpenAPI snapshot을 유지했다.
+
+이 extraction으로 legacy `access_control` router의 직접 SQL 실행 ceiling은
+역사적으로 **46 → 36 → 20**을 거쳐 **11**로 낮아졌다. `access_control`은
+이제 menu policy를 보유하고, account status/global-admin HTTP adapter는
+`backend/app/adapters/http/routers/user_administration.py`가 소유한다.
+해당 slice focused 검증은 **14 passed**이며, access focused 검증은
+**89 passed in 77.27s, exit 0**이다. architecture/OpenAPI/compile 검증도
+통과했다. 이 변경을 포함한 full backend suite는 **911 passed, 10 skipped in
+694.22s (0:11:34), exit 0**이다.
+
+개인 노트북의 다음 우선순위는 menu policy slice이며, 그 다음 reports와
+`main.py` 정리다. 실제 PostgreSQL multi-connection·app-role 권한, 사내
 directory/IdP와 corporate proxy/CA, Rocky/nginx/systemd/TLS 및 deploy gate는
 office-only 인수 단계에 남긴다.
 
@@ -627,8 +651,8 @@ proxy/CA를 설치·갱신하는 자동화는 아직 없다. `NO_PROXY` assignme
    **2026-08-25 AP-2 검증 기록:** focused 통합 `126 passed in 87.32s`, full backend
    `573 passed, 5 skipped in 382.12s`; backend architecture/OpenAPI/compileall,
    Rocky validator, frontend architecture/API self-test/build도 통과했다.
-8. **다음 access 구현 우선순위:** (1) account status 및 global-admin command slice,
-   (2) menu policy slice. **office-only release gate 우선순위:** (1) 실제 Rocky host install과 app-role
+8. **다음 access 구현 우선순위:** (1) menu policy slice, (2) reports, (3) `main.py` 정리.
+   **office-only release gate 우선순위:** (1) 실제 Rocky host install과 app-role
    startup preflight, NFS/SMB mount probe·승인 및 filesystem quota/capacity 확인,
    (2) production backup을 분리된 빈 DB에 복구하고 exported-snapshot inventory와
    app-role verifier를 대조, (3) 500 MiB/50 stream 부하와 5분 startup timeout 적정성,

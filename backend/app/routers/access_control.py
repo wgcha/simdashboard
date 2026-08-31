@@ -9,7 +9,6 @@ from fastapi import APIRouter, HTTPException, Request
 from ..access_policy import (
     ROLE_PERMISSIONS,
     SYSTEM_MENU_POLICY_MANAGE,
-    SYSTEM_USER_APPROVE,
     ProjectRole,
     require_permission,
 )
@@ -17,8 +16,6 @@ from ..config import database_settings
 from ..database import json_value
 from ..database_connection import ConnectionLike, connect, rows
 from ..schemas.access_control import (
-    AccountStatusUpdate,
-    GlobalAdminUpdate,
     MenuPolicyResponse,
     MenuPolicyUpdate,
     MenuPolicyVersionResponse,
@@ -28,6 +25,7 @@ from ..security import Principal, write_audit_event
 from ..adapters.http.routers.project_assignees import router as project_assignees_router
 from ..adapters.http.routers.project_memberships import router as project_memberships_router
 from ..adapters.http.routers.project_invitations import router as project_invitations_router
+from ..adapters.http.routers.user_administration import router as user_administration_router
 
 
 router = APIRouter(tags=["access-control"])
@@ -58,146 +56,7 @@ def _commit(conn: ConnectionLike) -> None:
     conn.execute("COMMIT")
 
 
-def _normalize_timestamp(value: datetime) -> datetime:
-    if value.tzinfo is not None:
-        return value.astimezone(timezone.utc).replace(tzinfo=None)
-    return value
-
-
-def _assert_expected_timestamp(actual: datetime, expected: datetime) -> None:
-    if _normalize_timestamp(actual) != _normalize_timestamp(expected):
-        raise HTTPException(
-            409,
-            {"code": "STALE_USER_VERSION", "message": "사용자 정보가 다른 관리자에 의해 변경되었습니다."},
-        )
-
-
-def _user_item(conn: ConnectionLike, user_id: str) -> dict[str, Any]:
-    result = rows(
-        conn.execute(
-            """
-            SELECT id, username, display_name, employee_id, email, department, job_title,
-                   account_status, is_global_admin, approved_by, approved_at, last_login_at,
-                   created_at, updated_at
-            FROM users WHERE id=?
-            """,
-            [user_id],
-        )
-    )
-    if not result:
-        raise HTTPException(404, "사용자를 찾을 수 없습니다.")
-    return result[0]
-
-
-@router.patch("/api/admin/users/{user_id}/status")
-def update_account_status(user_id: str, payload: AccountStatusUpdate, request: Request) -> dict[str, Any]:
-    principal = _principal(request)
-    now = _now()
-    with connect() as conn:
-        _begin(conn, "users", "project_invitations")
-        try:
-            require_permission(request, SYSTEM_USER_APPROVE, conn=conn)
-            current = conn.execute(
-                "SELECT account_status, is_global_admin, employee_id, updated_at FROM users WHERE id=?",
-                [user_id],
-            ).fetchone()
-            if not current:
-                raise HTTPException(404, "사용자를 찾을 수 없습니다.")
-            _assert_expected_timestamp(current[3], payload.expected_updated_at)
-            if current[1] and current[0] == "ACTIVE" and payload.account_status != "ACTIVE":
-                active_admin_count = conn.execute(
-                    "SELECT count(*) FROM users WHERE is_global_admin=true AND account_status='ACTIVE'"
-                ).fetchone()[0]
-                if active_admin_count <= 1:
-                    raise HTTPException(
-                        409,
-                        {"code": "LAST_GLOBAL_ADMIN_PROTECTED", "message": "마지막 전역 관리자는 중지할 수 없습니다."},
-                    )
-            approved_by = principal.user_id if payload.account_status == "ACTIVE" else None
-            approved_at = now if payload.account_status == "ACTIVE" else None
-            conn.execute(
-                """
-                UPDATE users
-                SET account_status=?, is_active=?, approved_by=COALESCE(?, approved_by),
-                    approved_at=COALESCE(?, approved_at), updated_at=?
-                WHERE id=?
-                """,
-                [payload.account_status, payload.account_status != "SUSPENDED", approved_by, approved_at, now, user_id],
-            )
-            if payload.account_status == "ACTIVE" and current[2]:
-                conn.execute(
-                    """
-                    UPDATE project_invitations
-                    SET status='READY', resolved_user_id=?, resolved_by=?, resolved_at=?
-                    WHERE employee_id=? AND status IN ('PENDING_ACCOUNT', 'PENDING_APPROVAL')
-                    """,
-                    [user_id, principal.user_id, now, current[2]],
-                )
-            write_audit_event(
-                request=request,
-                principal=principal,
-                status_code=200,
-                action="ACCOUNT_STATUS_CHANGED",
-                detail={"target_user_id": user_id, "old_status": current[0], "new_status": payload.account_status, "reason": payload.reason},
-                connection=conn,
-            )
-            item = _user_item(conn, user_id)
-            _commit(conn)
-            return item
-        except Exception:
-            _rollback(conn)
-            raise
-
-
-@router.patch("/api/admin/users/{user_id}/global-admin")
-def update_global_admin(user_id: str, payload: GlobalAdminUpdate, request: Request) -> dict[str, Any]:
-    principal = _principal(request)
-    now = _now()
-    with connect() as conn:
-        _begin(conn, "users")
-        try:
-            require_permission(request, SYSTEM_USER_APPROVE, conn=conn)
-            current = conn.execute(
-                "SELECT is_global_admin, account_status, updated_at FROM users WHERE id=?",
-                [user_id],
-            ).fetchone()
-            if not current:
-                raise HTTPException(404, "사용자를 찾을 수 없습니다.")
-            _assert_expected_timestamp(current[2], payload.expected_updated_at)
-            if payload.is_global_admin and current[1] != "ACTIVE":
-                raise HTTPException(422, {"code": "GLOBAL_ADMIN_MUST_BE_ACTIVE"})
-            if current[0] and not payload.is_global_admin:
-                active_admin_count = conn.execute(
-                    "SELECT count(*) FROM users WHERE is_global_admin=true AND account_status='ACTIVE'"
-                ).fetchone()[0]
-                if current[1] == "ACTIVE" and active_admin_count <= 1:
-                    raise HTTPException(
-                        409,
-                        {"code": "LAST_GLOBAL_ADMIN_PROTECTED", "message": "마지막 전역 관리자 권한은 해제할 수 없습니다."},
-                    )
-            conn.execute(
-                "UPDATE users SET is_global_admin=?, updated_at=? WHERE id=?",
-                [payload.is_global_admin, now, user_id],
-            )
-            write_audit_event(
-                request=request,
-                principal=principal,
-                status_code=200,
-                action="GLOBAL_ADMIN_CHANGED",
-                detail={"target_user_id": user_id, "old_value": bool(current[0]), "new_value": payload.is_global_admin, "reason": payload.reason},
-                connection=conn,
-            )
-            item = _user_item(conn, user_id)
-            _commit(conn)
-            return item
-        except Exception:
-            _rollback(conn)
-            raise
-
-
-def _project_exists(conn: ConnectionLike, project_id: str) -> None:
-    if not conn.execute("SELECT 1 FROM projects WHERE id=?", [project_id]).fetchone():
-        raise HTTPException(404, "프로젝트를 찾을 수 없습니다.")
+router.include_router(user_administration_router)
 
 router.include_router(project_memberships_router)
 router.include_router(project_invitations_router)

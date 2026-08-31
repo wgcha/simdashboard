@@ -5,14 +5,14 @@
 | 항목 | 값 |
 |---|---|
 | 릴리스 식별자 | Access Control & Menu Policy v1 |
-| 기준일 | 2026-08-31 |
+| 기준일 | 2026-09-01 |
 | 운영 대상 | 사내 Windows VM, PostgreSQL, HTTPS, OIDC, 사내 디렉터리 API |
 | 개발·테스트 대상 | Windows PC, DuckDB 또는 PostgreSQL, password/disabled 인증 |
 | 관련 계획서 | [사내 SSO·프로젝트 권한·좌측 메뉴 정책 구축 계획서](access-control-and-menu-policy-plan.md) |
 | 관련 수행서 | [권한 및 메뉴 정책 구현 수행서](access-control-and-menu-policy-implementation-guide.md) |
 | 기능 계약 | [권한·메뉴 정책 기능 사양서](access-control-functional-specification.md) |
 
-이 문서는 권한 기능 도입으로 실제 변경된 범위, 데이터 이전 방식, 검증 결과와 운영 인수 조건을 기록한다. Git 커밋 이력을 대신하는 문서가 아니라, 기능 단위 릴리스와 사내 마이그레이션을 위한 변경 명세다. 2026-08-31 프로젝트 멤버십 CRUD, 프로젝트 초대·외부 directory lifecycle, 독립 assignee 후보 query 구조 전환 내용을 기존 변경 이력에 병합했다.
+이 문서는 권한 기능 도입으로 실제 변경된 범위, 데이터 이전 방식, 검증 결과와 운영 인수 조건을 기록한다. Git 커밋 이력을 대신하는 문서가 아니라, 기능 단위 릴리스와 사내 마이그레이션을 위한 변경 명세다. 2026-08-31 프로젝트 멤버십 CRUD, 프로젝트 초대·외부 directory lifecycle, 독립 assignee 후보 query 구조 전환 내용을 기존 변경 이력에 병합했다. 2026-09-01 account status 및 global-admin command vertical slice 완료 내용을 추가했다.
 
 ## 2. 주요 의사결정 변경
 
@@ -185,6 +185,24 @@
   [개인 노트북→사내 인수인계 게이트](personal-laptop-to-corporate-release-handoff.md)에서
   별도로 확인한다.
 
+### 3.11 계정 상태와 전역 관리자 command
+
+- `PATCH /api/admin/users/{user_id}/status`와
+  `PATCH /api/admin/users/{user_id}/global-admin`을
+  `HTTP → application → domain port → persistence adapter`로 분리했다.
+- HTTP composition은 PostgreSQL 전용 lock provider를 status command에서
+  `(users, project_invitations)`, global-admin command에서 `(users,)`로 고정한다.
+  provider가 transaction을 시작하고 lock을 획득한 뒤 application은 같은
+  connection의 fresh actor에 대해 `SYSTEM_USER_APPROVE` 권한을 재검사하고
+  target user를 읽는다. status mutation은 invitation을 먼저 읽지 않고 일치하는
+  pending invitation을 원자적으로 갱신한다.
+- stale timestamp, 마지막 활성 전역 관리자 보호, 승인 시 `ACTIVE` 전이,
+  초대의 `READY` 전이를 기존 결과 계약으로 보존한다.
+- mutation과 exact audit detail은 같은 transaction에서 기록하며 audit 실패 시
+  mutation도 rollback한다.
+- 응답은 민감 정보가 제거된 안전한 14-field projection으로 제한하고 route,
+  operationId, 응답 순서와 OpenAPI 계약을 유지한다.
+
 ## 4. 주요 파일 변경 지도
 
 | 영역 | 주요 파일 | 책임 |
@@ -192,7 +210,8 @@
 | 권한 엔진 | `backend/app/access_policy.py` | permission 집합, 메뉴 registry, principal 재검증, 프로젝트·owner guard |
 | 공개 모듈 경계 | `backend/app/modules/access_control/` | 다른 도메인이 사용하는 안정된 facade |
 | 인증·세션 | `backend/app/security.py`, `backend/app/routers/security.py` | 세션, OIDC 진입, `/me`, 사용자·감사 조회 |
-| 관리 API | `backend/app/routers/access_control.py` | 계정 상태·전역 관리자·메뉴 정책 API |
+| 관리 API | `backend/app/adapters/http/routers/user_administration.py` | 계정 상태·전역 관리자 HTTP adapter |
+| 메뉴 정책 API | `backend/app/routers/access_control.py` | 메뉴 정책 API와 legacy access facade |
 | Access HTTP adapters | `backend/app/adapters/http/routers/project_memberships.py`, `project_invitations.py`, `project_assignees.py` | 프로젝트 멤버십 CRUD, 초대·directory lifecycle, assignee 후보 API와 권한 진입점 |
 | provider | `backend/app/services/oidc_service.py`, `backend/app/services/directory_service.py` | 외부 IdP·디렉터리 연동 격리 |
 | 업무 배정 | `backend/app/main.py`, `backend/app/routers/workbench.py` | canonical 담당자, 재배정, 실행 guard와 override 감사 |
@@ -228,6 +247,11 @@
 검증은 **897 passed, 10 skipped in 651.42s (0:10:51), exit 0**이다. PostgreSQL·사내 환경이 필요한 corporate proxy/CA,
 Rocky/Postgres/deploy gate는 통과로 간주하지 않고 office-only 인수 단계에 남긴다.
 
+2026-09-01 account status/global-admin command slice의 focused 검증은 **14 passed**,
+access focused 검증은 **89 passed in 77.27s, exit 0**이다. architecture/OpenAPI/compile
+검증을 통과했으며, 이를 포함한 full backend 검증은 **911 passed, 10 skipped in
+694.22s (0:11:34), exit 0**이다.
+
 ## 6. 운영 인수 전 남은 외부 확인
 
 코드와 focused 로컬 검증은 완료했지만 다음 항목은 사내 인프라 자격 증명과 실제 운영
@@ -239,8 +263,8 @@ Rocky/Postgres/deploy gate는 통과로 간주하지 않고 office-only 인수 �
 - Windows VM 서비스 계정, 리버스 프록시, 인증서, 방화벽과 재시작 후 readiness 확인
 - 초기 전역 관리자 지정 후 사용자 승인·메뉴 정책 복원 경로 확인
 
-개인 노트북에서 남은 access 구현 우선순위는 account status 및 global-admin command
-slice, 이후 menu policy slice다. corporate proxy/CA, Rocky/Postgres와 실제 deploy
+개인 노트북에서 남은 access 구현 우선순위는 menu policy slice, 이후 reports와
+`main.py`다. corporate proxy/CA, Rocky/Postgres와 실제 deploy
 검증은 개인 노트북 범위가 아니라 사내 인수 단계에서 수행한다.
 
 현재 개발 PC에서 운영 PostgreSQL owner 자격 증명이 없을 때 preflight가 `OWNER_CREDENTIAL_UNAVAILABLE`로 중단되는 것은 의도한 fail-closed 동작이다.
