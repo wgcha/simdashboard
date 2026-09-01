@@ -52,12 +52,12 @@ Browser
 
 ### 3.1 애플리케이션 조립
 
-`backend/app/main.py`가 FastAPI 인스턴스, lifespan, CORS, 보안 middleware, 정적 asset mount와 router 등록을 소유한다. 동시에 workflow, dashboard 등 많은 legacy endpoint와 SQL을 아직 포함한다. Report layout, PPTX report template, variable catalog, project workspace layout, import-schemas, result-review와 analysis-insights endpoint는 독립 router로 이동했다.
+`backend/app/main.py`가 FastAPI 인스턴스, lifespan, CORS, 보안 middleware, 정적 asset mount와 router 등록을 소유한다. 동시에 workflow, dashboard 등 많은 legacy endpoint와 SQL을 아직 포함한다. Report layout, PPTX report template, variable catalog, project workspace layout, import-schemas, result-review, analysis-insights와 load-case-overview endpoint는 독립 router로 이동했다.
 
 등록된 router는 두 계열이다.
 
 - `backend/app/routers/`: 인증, 접근 제어, workbench, 모델링 카탈로그, 마스터 결과 Refresh, 수동 결과 import·예제 폴더 import를 소유하는 `result_ingestion`
-- `backend/app/adapters/http/routers/`: `projects`, `requests`, `reports`, `report_templates`, `variable_catalog`, `workspace_layouts`, `import_schemas`, `result_review`, `analysis_insights`의 대표 vertical slice HTTP adapter
+- `backend/app/adapters/http/routers/`: `projects`, `requests`, `reports`, `report_templates`, `variable_catalog`, `workspace_layouts`, `import_schemas`, `result_review`, `analysis_insights`, `load_case_overview`의 대표 vertical slice HTTP adapter
 
 새 기능은 가능한 한 얇은 router에서 입력/권한/응답 변환만 처리하고, orchestration과 SQL을 아래 계층으로 넘긴다.
 
@@ -109,15 +109,25 @@ adapter로 분리했다. 두 read route는 기존대로 explicit permission, aud
 않는다. Comparison의 run 검증, scalar classification, series fallback/merge와 trust의 run·source·catalog·unit·validation check 및 overall status 계산을 보존했다. Trust는 같은 open connection에서 neutral
 `adapters/persistence/result_keys.py`를 계속 사용한다.
 
-Result-review+analysis-insights+legacy additive focused **41 passed**, architecture·OpenAPI·compile
-gate와 final full backend **1092 passed, 10 skipped in 830.97s, exit 0**를 확인했다. 첫 full은 stale
-contract 1건으로 실패했으며 test ownership을 갱신한 뒤 final full green을 재확인했다. 현재 `main.py`는
-**1,590줄**이고 direct `.execute()` actual/ceiling은 **106 → 90**이다. 다음 개인 노트북 우선순위는
-`get_load_case_overview` 1개 read-only route(예상 ceiling **81**)이며 기존 3-connection/order/permission
-동작을 보존한다. review-list GET의 explicit `PROJECT_DATA_VIEW` 부재와 domain pure policy extraction·clock
-injection은 behavior-neutral follow-up debt다. 개인 노트북 완료 범위는 DuckDB/application/contract 검증까지이며,
-PostgreSQL JSONB/numeric, concurrent import multi-query snapshot, query plan/latency/index/pool,
-OIDC active-nonmember/cross-project policy 및 proxy/private CA는 사내 office-only release gate다.
+`load_case_overview`는 `GET /api/load-cases/{load_case_id}/overview`를 HTTP/application/domain
+policy+errors+port/SQL adapter로 분리했다. Application은 기존 product query를 복제하지 않고
+authorization → product provider → overview provider의 세 connection(A/B/C) 순서를 소유하며, HTTP는
+asset/download URL만 응답에 매핑해 domain policy를 transport-neutral로 둔다. 9개 SQL, selected/latest/no-run
+검증, 404, JSON/template, threshold/verdict 투영을 그대로 유지했다.
+
+Focused root **21 passed**, architecture·OpenAPI·compile gate와 full backend **1104 passed, 10 skipped in
+837.40s, exit 0**를 확인했다. 현재 `main.py`는 **1,441줄**이고 direct `.execute()` actual/ceiling은
+**90 → 81**이다. 다음 개인 노트북 우선순위는 results-before-requests Phase 2 순서의 quality thresholds
+3 route다: `GET /api/projects/{project_id}/quality-thresholds`, canonical
+`PUT /api/projects/{project_id}/quality-thresholds/{criterion_key}`, deprecated
+`PUT /api/quality-thresholds/{criterion_key}`. 예상 direct `.execute()` ceiling은 **81 → 71**이다. GET은
+기존 explicit permission 없는 company-wide `ACTIVE` read를 유지하고, PUT은 lookup 404/alias multi-project
+409 뒤 같은 connection의 `PROJECT_THRESHOLD_MANAGE` → threshold update·criterion-specific scalar recalc·audit·
+commit·post-commit fetch를 보존한다. principal actor, generic OpenAPI와 deprecated alias도 유지한다.
+provider construction purity, dict mutation/storage normalization, unordered media/template, company-wide read,
+single threshold semantics와 post-commit fetch rollback seam/security debt는 별도로 남긴다. 개인 노트북 완료 범위는
+DuckDB/application/contract 검증까지이며, PostgreSQL concurrency/lock/CAS/app-role/EXPLAIN 및 nginx/proxy/private
+CA는 사내 office-only release gate다.
 
 Phase 2의 `result_ingestion`은 세 안전 단위로 정리했다. 첫 단위는 결과-import template, 수동 결과
 import, 예제 폴더 import endpoint를 `main.py`에서 `routers/result_ingestion.py`로 분리했다. 두 번째

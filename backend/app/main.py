@@ -4,7 +4,7 @@ import json
 import shutil
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Literal
+from typing import Any
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
@@ -64,10 +64,9 @@ from .adapters.http.routers.requests import router as requests_router
 from .adapters.http.routers.variable_catalog import router as variable_catalog_router
 from .adapters.http.routers.workspace_layouts import router as workspace_layouts_router
 from .adapters.http.routers.import_schemas import router as import_schemas_router
-from .adapters.persistence.products import SQLProductInformationRepositoryProvider
-from .application.products.queries import list_product_information
 from .adapters.persistence.results import SQLAnalysisRunSummaryRepositoryProvider
 from .application.results.queries import list_analysis_runs as list_analysis_runs_query
+from .adapters.http.routers.load_case_overview import router as load_case_overview_router
 from .adapters.http.routers.analysis_insights import router as analysis_insights_router
 from .adapters.http.routers.result_review import router as result_review_router
 from .services.drop_video_demo import (
@@ -534,155 +533,7 @@ def create_load_case(request_id: str, payload: LoadCaseCreate, request: Request)
 
 app.include_router(result_ingestion_router)
 app.include_router(media_router)
-
-
-@app.get("/api/load-cases/{load_case_id}/overview")
-def get_load_case_overview(
-    load_case_id: str,
-    request: Request,
-    run_id: str | None = Query(default=None, min_length=3, max_length=120),
-) -> dict[str, Any]:
-    def authorize_product_information() -> object:
-        try:
-            return require_resource_permission(
-                request,
-                PROJECT_DATA_VIEW,
-                "load_case",
-                load_case_id,
-            )
-        except HTTPException as error:
-            if error.status_code == 404:
-                raise HTTPException(404, "하중 경우를 찾을 수 없습니다.") from error
-            raise
-
-    product_information = list_product_information(
-        load_case_id,
-        authorize_product_information,
-        SQLProductInformationRepositoryProvider(),
-    )
-    with connect() as conn:
-        load_case_data = rows(
-            conn.execute(
-                """
-                SELECT lc.*, ar.id AS request_id, ar.title AS request_title,
-                       p.id AS project_id, p.name AS project_name, p.product_name
-                FROM load_cases lc
-                JOIN analysis_requests ar ON ar.id = lc.request_id
-                JOIN projects p ON p.id = ar.project_id
-                WHERE lc.id = ?
-                """,
-                [load_case_id],
-            )
-        )
-        if not load_case_data:
-            raise HTTPException(404, "하중 경우를 찾을 수 없습니다.")
-        load_case = load_case_data[0]
-        run = conn.execute(
-            "SELECT id FROM analysis_runs WHERE load_case_id = ? AND (? IS NULL OR id = ?) ORDER BY run_no DESC LIMIT 1",
-            [load_case_id, run_id, run_id],
-        ).fetchone()
-        if run_id and run is None:
-            raise HTTPException(404, "선택한 Run이 이 하중 경우에 존재하지 않습니다.")
-        if run is None:
-            load_case["parameters"] = json_value(load_case.pop("parameters_json"))
-            return {
-                "load_case": load_case,
-                "run": None,
-                "template_execution": None,
-                "overall_verdict": "NO_DATA",
-                "analysis_verdicts": {"open_cell": "NO_DATA", "chassis_rear": "NO_DATA"},
-                "threshold": None,
-                "product_information": product_information,
-                "scalar_results": [],
-                "time_series": [],
-                "curves": [],
-                "result_locations": [],
-                "notes": [],
-                "media": [],
-            }
-        run_id = run[0]
-        scalar_results = rows(
-            conn.execute(
-                """
-                SELECT sr.*, COALESCE(vd.result_group, 'CUSTOM') AS result_group
-                FROM scalar_results sr
-                LEFT JOIN variable_definitions vd
-                  ON vd.load_case_id = ? AND vd.variable_key = sr.variable_key
-                WHERE sr.analysis_run_id = ? ORDER BY sr.display_name
-                """,
-                [load_case_id, run_id],
-            )
-        )
-        time_series = rows(
-            conn.execute(
-                """
-                SELECT ts.*, COALESCE(vd.result_group, 'CUSTOM') AS result_group
-                FROM time_series_results ts
-                LEFT JOIN variable_definitions vd
-                  ON vd.load_case_id = ? AND vd.variable_key = ts.variable_key
-                WHERE ts.analysis_run_id = ? ORDER BY ts.time_value, ts.variable_key
-                """,
-                [load_case_id, run_id],
-            )
-        )
-        curves = rows(conn.execute(
-            """
-            SELECT cr.*, COALESCE(vd.result_group, 'CUSTOM') AS result_group
-            FROM curve_results cr
-            LEFT JOIN variable_definitions vd
-              ON vd.load_case_id = ? AND vd.variable_key = cr.variable_key
-            WHERE cr.analysis_run_id = ? ORDER BY cr.display_name, cr.series_key
-            """,
-            [load_case_id, run_id],
-        ))
-        result_locations = rows(conn.execute("SELECT * FROM result_locations WHERE analysis_run_id = ? ORDER BY variable_key", [run_id]))
-        notes = rows(conn.execute("SELECT * FROM qualitative_notes WHERE analysis_run_id = ? ORDER BY created_at DESC", [run_id]))
-        media = rows(conn.execute("SELECT * FROM media_assets WHERE analysis_run_id = ?", [run_id]))
-        template = rows(
-            conn.execute(
-                """
-                SELECT te.* FROM template_executions te
-                JOIN analysis_runs run ON run.template_execution_id = te.id
-                WHERE run.id = ?
-                """,
-                [run_id],
-            )
-        )
-
-    load_case["parameters"] = json_value(load_case.pop("parameters_json"))
-    for item in media:
-        item["metadata"] = json_value(item.pop("metadata_json"))
-        item["asset_url"] = f"/api/assets/{item['id']}"
-        item["download_url"] = f"/api/assets/{item['id']}/download"
-    for item in template:
-        item["input"] = json_value(item.pop("input_json"))
-        item["generated_model"] = json_value(item.pop("generated_model_json"))
-    open_cell_results = [item for item in scalar_results if item.get("result_group") == "OPEN_CELL" and str(item.get("unit", "")).casefold() == "mpa" and "stress" in str(item.get("variable_key", "")).casefold()]
-    chassis_results = [item for item in scalar_results if item.get("result_group") == "CHASSIS_REAR" and str(item.get("unit", "")).casefold() == "mm" and "permanent_deformation" in str(item.get("variable_key", "")).casefold()]
-    threshold = next((item["threshold_double"] for item in open_cell_results if item["threshold_double"] is not None), None)
-    if threshold is None:
-        threshold = next((item["threshold_double"] for item in chassis_results if item["threshold_double"] is not None), None)
-    overall_verdict: Literal["PASS", "FAIL", "NO_DATA"] = "NO_DATA"
-    if scalar_results:
-        overall_verdict = "FAIL" if any(item["verdict"] == "FAIL" for item in scalar_results) else "PASS"
-    return {
-        "load_case": load_case,
-        "run": run_id,
-        "template_execution": template[0] if template else None,
-        "overall_verdict": overall_verdict,
-        "analysis_verdicts": {
-            "open_cell": "FAIL" if any(item["verdict"] == "FAIL" for item in open_cell_results) else "PASS" if open_cell_results else "NO_DATA",
-            "chassis_rear": "FAIL" if any(item["verdict"] == "FAIL" for item in chassis_results) else "PASS" if chassis_results else "NO_DATA",
-        },
-        "threshold": threshold,
-        "product_information": product_information,
-        "scalar_results": scalar_results,
-        "time_series": time_series,
-        "curves": curves,
-        "result_locations": result_locations,
-        "notes": notes,
-        "media": media,
-    }
+app.include_router(load_case_overview_router)
 
 
 @app.get("/api/load-cases/{load_case_id}/runs")
