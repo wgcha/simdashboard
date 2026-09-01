@@ -52,12 +52,12 @@ Browser
 
 ### 3.1 애플리케이션 조립
 
-`backend/app/main.py`가 FastAPI 인스턴스, lifespan, CORS, 보안 middleware, 정적 asset mount와 router 등록을 소유한다. 동시에 workflow-step mutation, dashboard 등 많은 legacy endpoint와 SQL을 아직 포함한다. Report layout, PPTX report template, variable catalog, project workspace layout, import-schemas, result-review, analysis-insights, load-case-overview, quality-thresholds와 workflow-queries endpoint는 독립 router로 이동했다.
+`backend/app/main.py`가 FastAPI 인스턴스, lifespan, CORS, 보안 middleware, 정적 asset mount와 router 등록을 소유한다. 동시에 workflow-step mutation, dashboard 등 많은 legacy endpoint와 SQL을 아직 포함한다. Report layout, PPTX report template, variable catalog, project workspace layout, import-schemas, result-review, analysis-insights, load-case-overview, quality-thresholds, workflow-queries와 request-load-cases endpoint는 독립 router로 이동했다.
 
 등록된 router는 두 계열이다.
 
 - `backend/app/routers/`: 인증, 접근 제어, workbench, 모델링 카탈로그, 마스터 결과 Refresh, 수동 결과 import·예제 폴더 import를 소유하는 `result_ingestion`
-- `backend/app/adapters/http/routers/`: `projects`, `requests`, `reports`, `report_templates`, `variable_catalog`, `workspace_layouts`, `import_schemas`, `result_review`, `analysis_insights`, `load_case_overview`, `quality_thresholds`, `workflow_queries`의 대표 vertical slice HTTP adapter
+- `backend/app/adapters/http/routers/`: `projects`, `requests`, `request_load_cases`, `reports`, `report_templates`, `variable_catalog`, `workspace_layouts`, `import_schemas`, `result_review`, `analysis_insights`, `load_case_overview`, `quality_thresholds`, `workflow_queries`의 대표 vertical slice HTTP adapter
 
 새 기능은 가능한 한 얇은 router에서 입력/권한/응답 변환만 처리하고, orchestration과 SQL을 아래 계층으로 넘긴다.
 
@@ -141,8 +141,18 @@ projection을 그대로 유지했다. 두 GET에는 legacy와 같이 explicit pe
 
 Focused **19 passed**, architecture·OpenAPI·compile gate와 full backend **1127 passed, 10 skipped**를 확인했다.
 직접 `wc`로 측정한 `main.py`는 **1,263줄**, direct `.execute()` actual/ceiling은 **69**다. 이 slice는 개인
-노트북 검증으로 완결되며 별도 PostgreSQL 필수 검증은 추가하지 않는다. 기존 office-only release gate와 다음
-우선순위 **재감사 후 확정** 상태는 유지한다.
+노트북 검증으로 완결되며 별도 PostgreSQL 필수 검증은 추가하지 않는다. 기존 office-only release gate는 유지한다.
+
+`request_load_cases`는 `GET /api/requests/{request_id}/load-cases`를 HTTP/application/domain/persistence로
+분리했다. exact `SELECT * FROM load_cases WHERE request_id = ? ORDER BY created_at`(ASC), 같은 connection,
+missing request의 `200 []`, `parameters_json` pop 뒤 JSON 또는 malformed raw 문자열을 `parameters`로 투영하는
+기존 동작을 보존했다. permission·audit·transaction·별도 error mapping은 추가하지 않았다.
+
+Focused **11 passed**, workflow/request contract pair **15 passed**, architecture·OpenAPI·compile gate와 final
+full backend **1133 passed, 10 skipped**를 확인했다. 직접 `wc`로 측정한 `main.py`는 **1,251줄**, direct
+`.execute()` actual/ceiling은 **68**이다. 과거 workflow/request 테스트는 monotonic ceiling과 baseline equality를
+검증하도록 보강했다. 이 slice도 개인 노트북 검증으로 완결되며 별도 PostgreSQL 필수 검증은 없다. 기존 office-only
+release gate는 유지하고 다음은 **feature-examples 재감사 후 확정**한다.
 
 Phase 2의 `result_ingestion`은 세 안전 단위로 정리했다. 첫 단위는 결과-import template, 수동 결과
 import, 예제 폴더 import endpoint를 `main.py`에서 `routers/result_ingestion.py`로 분리했다. 두 번째

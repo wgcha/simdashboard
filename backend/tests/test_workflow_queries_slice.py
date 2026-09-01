@@ -261,8 +261,8 @@ def test_main_execute_ast_matches_architecture_ceiling_and_workflow_sql_is_relin
     baseline = __import__("json").loads(
         (main_path.parents[1] / "scripts" / "architecture_baseline.json").read_text(encoding="utf-8")
     )
-    assert actual == 69
-    assert baseline["execute_call_ceilings"]["app/main.py"] == 69
+    assert actual <= 69
+    assert baseline["execute_call_ceilings"]["app/main.py"] == actual
     source = main_path.read_text(encoding="utf-8")
     assert "request_monitoring_summary" not in source
     assert "SELECT * FROM analysis_requests WHERE id = ?" not in source

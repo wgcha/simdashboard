@@ -59,6 +59,7 @@ from .adapters.http.routers.projects import router as projects_router
 from .adapters.http.routers.reports import router as reports_router
 from .adapters.http.routers.report_templates import router as report_templates_router
 from .adapters.http.routers.requests import router as requests_router
+from .adapters.http.routers.request_load_cases import router as request_load_cases_router
 from .adapters.http.routers.variable_catalog import router as variable_catalog_router
 from .adapters.http.routers.workspace_layouts import router as workspace_layouts_router
 from .adapters.http.routers.import_schemas import router as import_schemas_router
@@ -311,20 +312,7 @@ def create_request(project_id: str, payload: AnalysisRequestCreate, request: Req
 
 
 app.include_router(requests_router)
-
-
-@app.get("/api/requests/{request_id}/load-cases")
-def get_load_cases(request_id: str) -> list[dict[str, Any]]:
-    with connect() as conn:
-        result = rows(
-            conn.execute(
-                "SELECT * FROM load_cases WHERE request_id = ? ORDER BY created_at",
-                [request_id],
-            )
-        )
-    for item in result:
-        item["parameters"] = json_value(item.pop("parameters_json"))
-    return result
+app.include_router(request_load_cases_router)
 
 
 @app.get("/api/load-cases/{load_case_id}/drop-videos", response_model=DropVideoPageResponse)
