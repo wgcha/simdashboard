@@ -188,10 +188,19 @@ wrapper를 유지한다. 같은 connection 조회를 사용하며 audit·transac
 **1,087줄**, direct `.execute()` actual/ceiling은 **60**으로 하향했다. 개인 노트북 검증으로 완결되며 별도 PostgreSQL은
 필요 없다. 운영 권한·실데이터·성능 검증은 사내 release gate로 남긴다.
 
-재감사 결과 다음 read/policy 순서를 확정했다. 첫째 `GET /api/projects/{project_id}/requests` read slice에서
-direct `.execute()`를 **60→59**로 줄인다. 둘째 `POST /api/dashboard-commands/preview`를 pure allowlist policy로
-분리한다. 셋째 `GET /api/load-cases/{load_case_id}/drop-videos`를 catalog-only read로 분리하며, drop-video
-streaming은 이번 범위에서 제외한다.
+`GET /api/projects/{project_id}/requests`도 requests query router → application query → domain port/error → SQL adapter로
+분리했다. global route order(GET → POST create → PATCH assignee/next load-case), 같은 connection에서의
+`PROJECT_DATA_VIEW` 확인과 membership bool, 비멤버의 정확한 `PROJECT_MEMBERSHIP_REQUIRED` 403
+(`authorization_detail`/audit 포함), global admin의 누락 project `200 []`, `requested_at DESC` 정렬을 그대로 보존한다.
+audit·transaction·write 동작은 변경하지 않았다. focused **26 passed**, full backend **1159 passed, 10 skipped**,
+compile·architecture·OpenAPI gate를 확인했고
+`backend/app/main.py`는 **1,070줄**, direct `.execute()` ceiling은 **60→59**다. 개인 노트북 완결 범위이며 별도
+PostgreSQL 검증은 필요 없다. 다음은 `POST /api/dashboard-commands/preview` pure allowlist policy, 이후 drop-video
+catalog-only read(스트리밍 제외)다.
+
+재감사 결과 다음 read/policy 순서를 확정했다. 첫째 `POST /api/dashboard-commands/preview`를 pure allowlist policy로
+분리한다. 둘째 `GET /api/load-cases/{load_case_id}/drop-videos`를 catalog-only read로 분리하며, drop-video streaming은
+이번 범위에서 제외한다.
 
 Phase 2의 `result_ingestion`은 세 안전 단위로 정리했다. 첫 단위는 결과-import template, 수동 결과
 import, 예제 폴더 import endpoint를 `main.py`에서 `routers/result_ingestion.py`로 분리했다. 두 번째

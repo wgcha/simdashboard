@@ -200,7 +200,7 @@ def test_main_relinquishes_dashboard_read_handlers_and_sql_with_ceiling_60() -> 
     )
     baseline = json.loads((main_path.parents[1] / "scripts" / "architecture_baseline.json").read_text(encoding="utf-8"))
     assert actual <= 60
-    assert actual == baseline["execute_call_ceilings"]["app/main.py"] == 60
+    assert actual == baseline["execute_call_ceilings"]["app/main.py"]
 
     router_source = (main_path.parent / "adapters" / "http" / "routers" / "dashboard_reads.py").read_text(encoding="utf-8")
     assert ".execute(" not in router_source

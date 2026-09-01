@@ -13,11 +13,51 @@ from ...domains.requests.models import (
     RequestReassignmentAudit,
     StoredAnalysisRequest,
 )
-from ...domains.requests.ports import RequestReassignmentUnitOfWork
+from ...domains.requests.ports import RequestQueryRepository, RequestReassignmentUnitOfWork
 
 
 AuthorizationCallback = Callable[[str, ConnectionLike], object]
+RequestQueryAuthorizationCallback = Callable[[str, ConnectionLike], bool]
 AssigneeResolver = Callable[[str, str, ConnectionLike], RequestAssignee]
+
+
+class SQLRequestQueryRepository:
+    """SQL adapter for the project-scoped request listing."""
+
+    def __init__(self, connection: ConnectionLike, authorize: RequestQueryAuthorizationCallback) -> None:
+        self._connection = connection
+        self._authorize = authorize
+
+    def authorize_project(self, project_id: str) -> bool:
+        return bool(self._authorize(project_id, self._connection))
+
+    def list_requests(self, project_id: str) -> list[StoredAnalysisRequest]:
+        # The application query invokes authorize_project first on this same
+        # connection, before reaching this SQL statement.
+        return cast(
+            list[StoredAnalysisRequest],
+            rows(
+                self._connection.execute(
+                    "SELECT * FROM analysis_requests WHERE project_id = ? ORDER BY requested_at DESC",
+                    [project_id],
+                )
+            ),
+        )
+
+
+class SQLRequestQueryRepositoryProvider:
+    def __init__(
+        self,
+        authorize: RequestQueryAuthorizationCallback,
+        connection_provider: Callable[[], Any] = connect,
+    ) -> None:
+        self._authorize = authorize
+        self._connection_provider = connection_provider
+
+    @contextmanager
+    def __call__(self) -> Iterator[RequestQueryRepository]:
+        with self._connection_provider() as connection:
+            yield SQLRequestQueryRepository(connection, self._authorize)
 
 
 class SQLRequestReassignmentUnitOfWork:

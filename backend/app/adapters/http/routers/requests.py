@@ -6,7 +6,9 @@ from uuid import uuid4
 from fastapi import APIRouter, HTTPException, Request
 
 from ....adapters.persistence.requests import SQLRequestReassignmentUnitOfWorkProvider
+from ....adapters.persistence.requests import SQLRequestQueryRepositoryProvider
 from ....application.requests.commands import reassign_request as reassign_request_command
+from ....application.requests.queries import list_requests as list_requests_query
 from ....database_connection import ConnectionLike
 from ....domains.requests.models import (
     RequestAssignee,
@@ -14,11 +16,35 @@ from ....domains.requests.models import (
     RequestNotFoundError,
     RequestReassignmentAudit,
 )
-from ....modules.access_control import REQUEST_EDIT, require_permission, resolve_project_assignee
+from ....domains.requests.errors import ProjectMembershipRequiredError
+from ....modules.access_control import PROJECT_DATA_VIEW, REQUEST_EDIT, require_permission, resolve_project_assignee
 from ....schemas.api import AssigneeUpdate
 
 
+query_router = APIRouter()
 router = APIRouter()
+
+
+@query_router.get("/api/projects/{project_id}/requests")
+def get_requests(project_id: str, request: Request) -> list[dict[str, Any]]:
+    def authorize(scope_project_id: str, connection: ConnectionLike) -> bool:
+        context = require_permission(request, PROJECT_DATA_VIEW, scope_project_id, conn=connection)
+        return context.project_role is not None
+
+    try:
+        return list_requests_query(
+            project_id,
+            SQLRequestQueryRepositoryProvider(authorize),
+        )
+    except ProjectMembershipRequiredError as error:
+        detail = {
+            "code": "PROJECT_MEMBERSHIP_REQUIRED",
+            "message": "이 작업을 수행할 권한이 없습니다.",
+            "required_permission": PROJECT_DATA_VIEW,
+            "project_id": error.project_id,
+        }
+        request.state.authorization_detail = detail
+        raise HTTPException(403, detail=detail) from error
 
 
 @router.patch("/api/requests/{request_id}/assignee")

@@ -56,6 +56,7 @@ from .routers.media import router as media_router
 from .adapters.http.routers.projects import router as projects_router
 from .adapters.http.routers.reports import router as reports_router
 from .adapters.http.routers.report_templates import router as report_templates_router
+from .adapters.http.routers.requests import query_router as request_query_router
 from .adapters.http.routers.requests import router as requests_router
 from .adapters.http.routers.request_load_cases import router as request_load_cases_router
 from .adapters.http.routers.variable_catalog import router as variable_catalog_router
@@ -126,25 +127,7 @@ app.include_router(import_schemas_router)
 app.include_router(portfolio_router)
 
 
-@app.get("/api/projects/{project_id}/requests")
-def get_requests(project_id: str, request: Request) -> list[dict[str, Any]]:
-    with connect() as conn:
-        context = require_permission(request, PROJECT_DATA_VIEW, project_id, conn=conn)
-        if context.project_role is None:
-            detail = {
-                "code": "PROJECT_MEMBERSHIP_REQUIRED",
-                "message": "이 작업을 수행할 권한이 없습니다.",
-                "required_permission": PROJECT_DATA_VIEW,
-                "project_id": project_id,
-            }
-            request.state.authorization_detail = detail
-            raise HTTPException(403, detail)
-        return rows(
-            conn.execute(
-                "SELECT * FROM analysis_requests WHERE project_id = ? ORDER BY requested_at DESC",
-                [project_id],
-            )
-        )
+app.include_router(request_query_router)
 
 
 @app.post("/api/projects/{project_id}/requests", status_code=201)

@@ -1,8 +1,20 @@
 from __future__ import annotations
 
+from contextlib import AbstractContextManager
 from typing import Protocol
 
 from .models import RequestAssignee, RequestReassignmentAudit, StoredAnalysisRequest
+
+
+class RequestQueryRepository(Protocol):
+    """Read port for project-scoped analysis requests."""
+
+    def authorize_project(self, project_id: str) -> bool: ...
+    def list_requests(self, project_id: str) -> list[StoredAnalysisRequest]: ...
+
+
+class RequestQueryRepositoryProvider(Protocol):
+    def __call__(self) -> AbstractContextManager[RequestQueryRepository]: ...
 
 
 class RequestReassignmentUnitOfWork(Protocol):
