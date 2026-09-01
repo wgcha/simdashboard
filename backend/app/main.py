@@ -70,6 +70,7 @@ from .adapters.http.routers.analysis_insights import router as analysis_insights
 from .adapters.http.routers.result_review import router as result_review_router
 from .adapters.http.routers.quality_thresholds import router as quality_thresholds_router
 from .adapters.http.routers.workflow_queries import router as workflow_queries_router
+from .adapters.http.routers.feature_examples import router as feature_examples_router
 from .services.drop_video_demo import (
     DEMO_DROP_VIDEO_LOAD_CASE_IDS,
     DROP_VIDEO_DEMO_BY_ID,
@@ -117,50 +118,7 @@ def health() -> dict[str, str]:
     return {"status": "ok", "database_backend": database_settings().backend}
 
 
-@app.get("/api/feature-examples")
-def feature_examples() -> list[dict[str, Any]]:
-    """Return curated, stable entry points for exercising product capabilities."""
-    items = [
-        {"id": "run-comparison", "order": 1, "category": "분석 판단", "title": "Run 비교: 회귀와 개선", "summary": "세 설계 Run을 비교해 회귀·개선·유지 판정과 시계열 오버레이를 확인합니다.", "badge": "READY", "workspace_page": "dashboard", "preferred_view": "compare", "project_id": "project-feature-showcase", "request_id": "request-showcase-compare", "load_case_id": "loadcase-showcase-compare", "features": ["Run A/B/C", "회귀 1건", "개선 1건", "시계열 비교"], "checks": ["기준 Run과 대상 Run을 바꿉니다.", "REGRESSION·IMPROVED 필터를 확인합니다.", "상단 응력 시계열을 겹쳐 봅니다."]},
-        {"id": "trust-ready", "order": 2, "category": "신뢰·추적", "title": "신뢰도: 추적 가능한 폴더 Import", "summary": "원본·체크섬·스키마·파서·Validation·카탈로그 매핑이 갖춰진 TRUSTED 결과입니다.", "badge": "TRUSTED", "workspace_page": "dashboard", "preferred_view": "compare", "project_id": "project-feature-showcase", "request_id": "request-showcase-trust", "load_case_id": "loadcase-showcase-trust", "features": ["폴더 Import", "체크섬", "Validation PASS", "다중 결과형"], "checks": ["신뢰도 패널의 모든 점검을 펼칩니다.", "원본 폴더와 스키마 버전을 확인합니다.", "결과 변수의 카탈로그 매핑을 확인합니다."]},
-        {"id": "trust-warning", "order": 3, "category": "신뢰·추적", "title": "신뢰도: 의도적인 경고", "summary": "미등록 hotspot 위치와 Validation 부재를 넣어 WARN의 원인과 해소 방향을 보여줍니다.", "badge": "WARN", "workspace_page": "dashboard", "preferred_view": "compare", "project_id": "project-feature-showcase", "request_id": "request-showcase-warning", "load_case_id": "loadcase-showcase-warning", "features": ["미매핑 변수", "Validation 없음", "WARN 설명"], "checks": ["카탈로그 매핑 경고를 찾습니다.", "unmapped_hotspot 키를 확인합니다.", "Validation 경고와 FAIL의 차이를 봅니다."]},
-        {"id": "review-flow", "order": 4, "category": "협업", "title": "협업 검토: 상태별 코멘트", "summary": "OPEN·IN_REVIEW·RESOLVED 검토 항목을 실제 결과 변수와 위치에 연결한 예제입니다.", "badge": "3 ITEMS", "workspace_page": "dashboard", "preferred_view": "compare", "project_id": "project-feature-showcase", "request_id": "request-showcase-review", "load_case_id": "loadcase-showcase-review", "features": ["결과 북마크", "검토 코멘트", "상태 전환", "요소 위치"], "checks": ["세 가지 검토 상태를 필터링합니다.", "코멘트를 IN_REVIEW 또는 RESOLVED로 바꿉니다.", "새 검토 항목을 추가합니다."]},
-        {"id": "multi-type", "order": 5, "category": "데이터", "title": "다중 결과형: 수치·곡선·이미지", "summary": "한 Run에서 수치, 시간 이력, 하중-변위 곡선, hotspot 위치, 컨투어 이미지를 함께 확인합니다.", "badge": "5 TYPES", "workspace_page": "dashboard", "preferred_view": "open_cell", "project_id": "project-feature-showcase", "request_id": "request-showcase-multitype", "load_case_id": "loadcase-showcase-multitype", "features": ["NUMBER", "TIME_SERIES", "CURVE", "IMAGE", "LOCATION"], "checks": ["상세 분석의 수치·차트를 확인합니다.", "변수 카탈로그에서 데이터형을 비교합니다.", "보고서 편집기에서 변수 배치를 시도합니다."]},
-        {"id": "data-waiting", "order": 6, "category": "데이터", "title": "변수 카탈로그: 데이터 대기", "summary": "SQL/폴더 결과가 오기 전에 NUMBER·TIME_SERIES·IMAGE·VIDEO·MODEL_3D를 먼저 선언한 상태입니다.", "badge": "NO DATA", "workspace_page": "variables", "preferred_view": "open_cell", "project_id": "project-feature-showcase", "request_id": "request-showcase-waiting", "load_case_id": "loadcase-showcase-waiting", "features": ["사전 변수 선언", "데이터 대기", "5개 데이터형"], "checks": ["결과 데이터 대기 표시를 확인합니다.", "허용 위젯과 집계를 비교합니다.", "새 변수를 추가하고 수정합니다."]},
-        {"id": "workflow-states", "order": 7, "category": "운영", "title": "워크플로: 진행·차단·대기", "summary": "10단계 업무 흐름에 완료·진행·차단·대기 상태를 섞어 운영 화면을 재현합니다.", "badge": "BLOCKED", "workspace_page": "dashboard", "preferred_view": "workflow", "project_id": "project-feature-showcase", "request_id": "request-showcase-workflow", "load_case_id": "loadcase-showcase-workflow", "features": ["10단계", "진행률", "차단 사유", "담당자"], "checks": ["차단된 해석 실행 단계를 찾습니다.", "단계명을 편집해 봅니다.", "운영 대시보드 집계와 연결해 봅니다."]},
-        {"id": "folder-schema", "order": 8, "category": "데이터", "title": "폴더 스키마: 3단계 매핑", "summary": "project/request/loadcase 폴더 계층과 수치·곡선·미디어 규칙을 편집하는 예제입니다.", "badge": "SCHEMA", "workspace_page": "schemas", "features": ["폴더 계층", "파일 패턴", "버전 관리"], "checks": ["다중 결과형 폴더 예제를 선택합니다.", "context_mapping 3단계를 확인합니다.", "복제 후 패턴을 수정합니다."]},
-        {"id": "ppt-layout", "order": 9, "category": "보고서", "title": "PPT 시각적 레이아웃 편집", "summary": "실제 결과를 보고서로 열어 슬라이드 캔버스에서 요소 이동·크기·변수 배치·버전을 확인합니다.", "badge": "EDITOR", "workspace_page": "dashboard", "preferred_view": "open_cell", "project_id": "project-feature-showcase", "request_id": "request-showcase-multitype", "load_case_id": "loadcase-showcase-multitype", "features": ["슬라이드 캔버스", "드래그·리사이즈", "변수 바인딩", "레이아웃 버전"], "checks": ["상세 분석의 보고서 내보내기를 누릅니다.", "커스텀 슬라이드와 요소를 추가합니다.", "다른 이름으로 저장 후 버전을 비교합니다."], "action_hint": "상세 분석에서 ‘보고서 내보내기’를 누르세요."},
-        {"id": "automation", "order": 10, "category": "자동화", "title": "모델링 자동화 실행 이력", "summary": "템플릿 버전, 입력 파라미터, 생성 모델과 실행 상태를 카드별로 확인합니다.", "badge": "HISTORY", "workspace_page": "templates", "features": ["템플릿 버전", "입력 파라미터", "생성 모델", "실행 상태"], "checks": ["서로 다른 해석 유형을 비교합니다.", "입력과 생성 모델 메타데이터를 확인합니다."]},
-        {"id": "data-registration", "order": 11, "category": "데이터", "title": "수동·Radioss·폴더 결과 등록", "summary": "프로젝트부터 하중 경우까지 만들고 미리보기 검증 후 결과를 등록하는 전체 흐름입니다.", "badge": "IMPORT", "workspace_page": "data", "features": ["JSON/CSV", "Radioss", "검증 미리보기", "폴더 Import"], "checks": ["샘플 파일을 내려받습니다.", "검증만 실행해 오류를 먼저 확인합니다.", "등록 후 분석 열기로 이동합니다."]},
-        {"id": "help", "order": 12, "category": "안내", "title": "사용 시나리오 도움말", "summary": "처음 사용하는 사람이 업무 목적별로 필요한 화면과 순서를 찾아가는 웹 도움말입니다.", "badge": "GUIDE", "workspace_page": "help", "features": ["시나리오", "단계 안내", "화면 바로가기"], "checks": ["목적에 맞는 시나리오를 고릅니다.", "단계별 설명과 바로가기를 사용합니다."]},
-    ]
-    load_case_ids = [item.get("load_case_id") for item in items if item.get("load_case_id")]
-    if load_case_ids:
-        with connect() as conn:
-            for item in items:
-                load_case_id = item.get("load_case_id")
-                if not load_case_id:
-                    item["data_profile"] = {"runs": 0, "scalars": 0, "series": 0, "curves": 0, "media": 0, "reviews": 0}
-                    continue
-                counts = conn.execute(
-                    """
-                    SELECT count(DISTINCT r.id), count(DISTINCT s.id), count(DISTINCT ts.variable_key),
-                           count(DISTINCT c.id), count(DISTINCT m.id), count(DISTINCT a.id)
-                    FROM load_cases lc
-                    LEFT JOIN analysis_runs r ON r.load_case_id=lc.id
-                    LEFT JOIN scalar_results s ON s.analysis_run_id=r.id
-                    LEFT JOIN time_series_results ts ON ts.analysis_run_id=r.id
-                    LEFT JOIN curve_results c ON c.analysis_run_id=r.id
-                    LEFT JOIN media_assets m ON m.analysis_run_id=r.id
-                    LEFT JOIN review_annotations a ON a.analysis_run_id=r.id
-                    WHERE lc.id=?
-                    """,
-                    [load_case_id],
-                ).fetchone()
-                item["data_profile"] = dict(zip(["runs", "scalars", "series", "curves", "media", "reviews"], counts))
-    return items
-
-
+app.include_router(feature_examples_router)
 app.include_router(projects_router)
 app.include_router(import_schemas_router)
 
