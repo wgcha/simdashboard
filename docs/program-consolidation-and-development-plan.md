@@ -885,7 +885,11 @@ proxy/CA를 설치·갱신하는 자동화는 아직 없다. `NO_PROXY` assignme
 
 ### 2026-09-01 완료 — dashboard_writes 일반 쓰기 cluster
 
-저장 PUT, 버전 logical delete, clone, restore 4개를 `dashboard_writes` vertical slice로 분리 완료했다. ID mismatch connection 전 400, resource-auth-first, invalid history 포함 단조 버전 증가, clone의 `page` 제거, restore의 현재 이름·설명·상태 보존과 기존 비명시 transaction semantics를 계약 테스트로 고정했다. Dedicated **6 passed**, root expanded focused **36 passed in 44.44s**, independent **5 passed/1 deselected in 6.43s**, full backend **1207 passed, 10 skipped in 914.50s (0:15:14)** 및 compile·architecture·OpenAPI·diff-check를 통과했다. `main.py`는 **628 → 487줄**, direct `.execute()`는 **43 → 30**이다. 로컬 검증은 완료했고 PostgreSQL app-role/admin·실제 rollback/same-connection·proxy·동시성·latency는 사내 release gate다. 다음 P1은 `request_load_cases` POST 생성 slice이며 drop-video streaming은 후순위다.
+저장 PUT, 버전 logical delete, clone, restore 4개를 `dashboard_writes` vertical slice로 분리 완료했다. ID mismatch connection 전 400, resource-auth-first, invalid history 포함 단조 버전 증가, clone의 `page` 제거, restore의 현재 이름·설명·상태 보존과 기존 비명시 transaction semantics를 계약 테스트로 고정했다. Dedicated **6 passed**, root expanded focused **36 passed in 44.44s**, independent **5 passed/1 deselected in 6.43s**, full backend **1207 passed, 10 skipped in 914.50s (0:15:14)** 및 compile·architecture·OpenAPI·diff-check를 통과했다. `main.py`는 **628 → 487줄**, direct `.execute()`는 **43 → 30**이다. 로컬 검증은 완료했고 PostgreSQL app-role/admin·실제 rollback/same-connection·proxy·동시성·latency는 사내 release gate다.
+
+### 2026-09-01 완료 — request_load_cases POST 생성 slice
+
+기존 GET feature에 별도 `create_router`를 추가하고 POST를 기존 위치인 drop-video content/download 뒤, result-ingestion 앞에 등록했다. HTTP → application → domain → persistence로 분리하고 ID/time 생성 → provider → 동일 connection auth → request 존재 확인 → insert 순서를 보존했다. exact 201/404/OpenAPI와 Unicode JSON 저장을 유지하고 새 명시 transaction·audit은 추가하지 않았다. Dedicated/latest focused **24 passed in 10.18s**, root expanded **46 passed in 30.75s**, independent review unit/contract **5 passed** 및 DuckDB **2 passed**, full backend **1215 passed, 10 skipped in 928.25s (0:15:28)**와 compile·architecture·OpenAPI·diff-check를 통과했다. `main.py`는 **487 → 473줄**, direct `.execute()`는 **30 → 28**이다. 로컬 검증은 완료했고 PostgreSQL app-role·same-connection·proxy·동시성·latency는 사내 release gate다. 다음은 프로젝트 의뢰 생성 POST, 그 뒤 workflow writes이며 drop-video streaming은 후순위다.
 
 ## 10. 다음 실행 순서
 

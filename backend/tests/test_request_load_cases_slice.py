@@ -87,7 +87,11 @@ def test_load_case_route_contract_and_global_order() -> None:
         ("/api/requests/{request_id}/load-cases", ("GET",), "get_load_cases"),
         ("/api/load-cases/{load_case_id}/drop-videos", ("GET",), "get_drop_videos"),
     ]
-    route = next(route for route in routes if route.path == "/api/requests/{request_id}/load-cases")
+    route = next(
+        route
+        for route in routes
+        if route.path == "/api/requests/{request_id}/load-cases" and route.methods == {"GET"}
+    )
     assert route.response_model == list[dict[str, Any]]
     assert (route.operation_id or route.unique_id) == "get_load_cases_api_requests__request_id__load_cases_get"
     operation = app.openapi()["paths"]["/api/requests/{request_id}/load-cases"]["get"]

@@ -686,7 +686,7 @@ Architecture ceiling은 목표 수치가 아니라 부채가 늘지 않게 하�
   `573 passed, 5 skipped in 382.12s`였다. backend architecture/OpenAPI/compileall,
   Rocky validator, frontend architecture/API self-test/build도 통과했다.
 
-dashboard_writes 일반 저장·버전 무효화·복제·복원 4개 API도 후속 완료했다. 다음 구조 대상은 `request_load_cases` POST 생성 slice이며, drop-video streaming은 후순위다.
+dashboard_writes 일반 저장·버전 무효화·복제·복원 4개 API와 `request_load_cases` POST 생성 slice도 완료했다. 다음 구조 대상은 프로젝트 의뢰 생성 POST이며, 그 뒤 workflow writes를 진행한다. drop-video streaming은 후순위다.
 
 ### 2026-09-01 최신 vertical slice — dashboard_writes 일반 쓰기
 
@@ -775,4 +775,8 @@ Focused **15 passed**, 독립 확대 검토 **22 passed**, full backend **1201 p
 (0:15:01)**와 compile·architecture·OpenAPI gate를 통과했다. `main.py`는 **628줄**, direct `.execute()`는
 **43**이다. 로컬에서는 이 경계를 완료했으며, PostgreSQL app-role/admin 권한·실제 rollback·proxy smoke·동시성은
 사내 release gate로 남긴다. 이 시점의 다음 구조 대상이던 일반 dashboard 저장·버전 무효화·복제·복원
-4개는 위 최신 `dashboard_writes` 기록처럼 후속 완료했다. 현재 다음 대상은 `request_load_cases` POST 생성이다.
+4개와 `request_load_cases` POST 생성은 후속 완료했다. 현재 다음 대상은 프로젝트 의뢰 생성 POST다.
+
+### 2026-09-01 최신 vertical slice — request_load_cases POST 생성
+
+기존 GET feature에 별도 `create_router`를 추가하고 POST를 기존 위치인 drop-video content/download 뒤, result-ingestion 앞에 등록했다. HTTP → application → domain → persistence 경계와 ID/time 생성 → provider → 동일 connection auth → request 존재 확인 → insert 순서를 보존했다. exact 201/404/OpenAPI, Unicode JSON 저장을 유지하고 새 명시 transaction·audit은 추가하지 않았다. Dedicated/latest focused **24 passed in 10.18s**, root expanded **46 passed in 30.75s**, independent review unit/contract **5 passed** 및 DuckDB **2 passed**, full backend **1215 passed, 10 skipped in 928.25s (0:15:28)**와 compile·architecture·OpenAPI·diff-check를 통과했다. `main.py`는 **487 → 473줄**, direct `.execute()`는 **30 → 28**이다. 로컬 검증은 완료했고 PostgreSQL app-role·same-connection·proxy·동시성·latency는 사내 release gate다. 다음은 프로젝트 의뢰 생성 POST, 그 뒤 workflow writes이며 streaming은 후순위다.

@@ -631,7 +631,12 @@ Dedicated **6 passed**, root expanded focused **36 passed in 44.44s**, independe
 1. Report layout 6 API, PPTX template 4 API, variable catalog 4 API, project workspace layout 5 route, import-schemas 4 route, result-review 3 route, analysis-insights 2 route, load-case-overview 1 route, quality thresholds 3 route, workflow queries GET 2 route, request load-cases GET 1 route, feature-examples GET 1 route, portfolio overview/export GET 2 route와 project request list GET 1 route의 완료 상태를 계약 테스트로 유지한다.
 2. dashboard read cluster, `GET /api/projects/{project_id}/requests`, dashboard command preview,
    drop-video catalog-only read, analysis runs GET, health GET, dashboard page read/admin command와
-   일반 dashboard 저장·버전·복제·복원 cluster까지 완료했다. 다음은 기존 `request_load_cases`
-   feature에 POST 생성 경계를 합치는 작업이다. drop-video streaming은 이번 범위에서 제외한다.
+   일반 dashboard 저장·버전·복제·복원 cluster와 `request_load_cases` POST 생성까지 완료했다. 다음은
+   `POST /api/projects/{project_id}/requests` 의뢰 생성 slice다. 그 뒤 workflow writes를 진행하며
+   drop-video streaming은 이번 범위에서 제외한다.
+
+### 2026-09-01 완료 — request_load_cases POST 생성 slice
+
+기존 GET feature에 별도 `create_router`를 추가하되 POST를 기존 위치인 drop-video content/download 뒤, result-ingestion 앞에 등록했다. HTTP → application → domain → persistence로 분리하고 ID/time 생성 → provider → 동일 connection auth → request 존재 확인 → insert 순서를 보존했다. exact 201/404/OpenAPI와 Unicode JSON 저장을 유지했으며 새 명시 transaction·audit은 추가하지 않았다. Dedicated/latest focused **24 passed in 10.18s**, root expanded **46 passed in 30.75s**, independent review unit/contract **5 passed** 및 DuckDB **2 passed**, full backend **1215 passed, 10 skipped in 928.25s (0:15:28)**와 compile·architecture·OpenAPI·diff-check를 통과했다. `main.py`는 **487 → 473줄**, direct `.execute()`는 **30 → 28**이다. 로컬 검증은 완료했고 PostgreSQL app-role·same-connection·proxy·동시성·latency는 사내 office-only release gate다. 다음은 특성화를 마친 프로젝트 의뢰 생성 POST slice이고, 그 뒤 workflow writes를 진행한다. drop-video streaming은 후순위다.
 3. import-schemas DELETE의 별도 permission connection, non-transactional usage check, 명시적 domain delete audit 부재와 review-list GET의 explicit `PROJECT_DATA_VIEW` 부재, quality-threshold GET의 explicit project permission 부재와 alias global semantics, provider construction purity, dict mutation/storage normalization, unordered media/template, company-wide read, single threshold semantics, row lock/CAS, post-commit fetch rollback seam/security debt를 보존 debt로 기록하되 구조 refactor에 섞지 않는다.
 4. PostgreSQL 18 app-role 권한·audit INSERT, correlated update parity, OIDC active-nonmember/cross-project 정책, 동시 update locking/CAS, 현실 데이터 EXPLAIN/index/lock latency와 nginx·proxy/private CA·backup/restore/deploy는 사내 office-only release gate에서 검증한다.

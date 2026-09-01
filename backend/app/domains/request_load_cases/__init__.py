@@ -1,1 +1,1 @@
-"""Request load-case read boundary."""
+"""Request load-case read and write boundary."""

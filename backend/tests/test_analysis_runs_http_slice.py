@@ -99,7 +99,9 @@ def test_analysis_runs_router_owns_exact_route_openapi_and_global_adjacency() ->
             "app.main", "download_drop_video", "download_drop_video",
         ),
         ("/api/requests/{request_id}/load-cases", "POST"): (
-            "app.main", "create_load_case", "create_load_case_api_requests__request_id__load_cases_post",
+            "app.adapters.http.routers.request_load_cases",
+            "create_load_case",
+            "create_load_case_api_requests__request_id__load_cases_post",
         ),
     }
 

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import shutil
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
@@ -17,7 +16,6 @@ from .modules.access_control import (
     PROJECT_DATA_VIEW,
     REPORT_EXPORT,
     REQUEST_CREATE,
-    REQUEST_EDIT,
     RESULT_IMPORT,
     WORKFLOW_EDIT,
     require_permission,
@@ -32,7 +30,6 @@ from .repositories.workbench import WorkbenchRepository
 from .services.request_monitoring import sync_request_status
 from .schemas.api import (
     AnalysisRequestCreate,
-    LoadCaseCreate,
     WorkflowStepUpdate,
     WorkflowStepsReplace,
 )
@@ -49,6 +46,7 @@ from .adapters.http.routers.reports import router as reports_router
 from .adapters.http.routers.report_templates import router as report_templates_router
 from .adapters.http.routers.requests import query_router as request_query_router
 from .adapters.http.routers.requests import router as requests_router
+from .adapters.http.routers.request_load_cases import create_router as request_load_case_create_router
 from .adapters.http.routers.request_load_cases import router as request_load_cases_router
 from .adapters.http.routers.variable_catalog import router as variable_catalog_router
 from .adapters.http.routers.workspace_layouts import router as workspace_layouts_router
@@ -293,19 +291,7 @@ def download_drop_video(video_id: str, request: Request) -> Response:
     return FileResponse(path, media_type="video/mp4", filename=scene.filename)
 
 
-@app.post("/api/requests/{request_id}/load-cases", status_code=201)
-def create_load_case(request_id: str, payload: LoadCaseCreate, request: Request) -> dict[str, Any]:
-    load_case_id = f"loadcase-{uuid4().hex[:12]}"
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
-    with connect() as conn:
-        require_resource_permission(request, REQUEST_EDIT, "request", request_id, conn=conn)
-        if conn.execute("SELECT id FROM analysis_requests WHERE id = ?", [request_id]).fetchone() is None:
-            raise HTTPException(404, "해석 의뢰를 찾을 수 없습니다.")
-        conn.execute(
-            "INSERT INTO load_cases VALUES (?, ?, ?, ?, ?, ?, ?)",
-            [load_case_id, request_id, payload.name.strip(), payload.analysis_type, "READY", json.dumps(payload.parameters, ensure_ascii=False), now],
-        )
-    return {"id": load_case_id, "request_id": request_id, "name": payload.name.strip(), "analysis_type": payload.analysis_type, "status": "READY", "parameters": payload.parameters, "created_at": now}
+app.include_router(request_load_case_create_router)
 
 
 app.include_router(result_ingestion_router)
