@@ -12,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import main as main_module
+from app.application.analysis_pages import commands as analysis_page_commands
 from app.routers import result_ingestion as result_ingestion_module
 from app.adapters.persistence.result_ingestion import SQLResultIngestionQuery
 from app.config import database_settings
@@ -310,11 +311,11 @@ def test_analysis_page_delete_rolls_back_versions_when_body_delete_fails(monkeyp
         assert created.status_code == 201
         dashboard_id = created.json()["id"]
 
-        def fail_after_version_delete(conn, target_id: str):
-            conn.execute("DELETE FROM dashboard_versions WHERE dashboard_id = ?", [target_id])
+        def fail_after_version_delete(repository, target_id: str):
+            repository.delete_analysis_page_records(target_id)
             raise RuntimeError("forced delete failure")
 
-        monkeypatch.setattr(main_module, "_delete_analysis_page_records", fail_after_version_delete)
+        monkeypatch.setattr(analysis_page_commands, "_delete_records", fail_after_version_delete)
         response = client.delete(f"/api/admin/dashboard-pages/{dashboard_id}", params={"load_case_id": load_case_id})
         assert response.status_code == 500
         with connect() as conn:

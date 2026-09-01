@@ -663,7 +663,8 @@ normalization, branch precedence, exact 6개 인식 명령과 1개 미인식 응
 테스트용 epoch seam을 보존했다. restore 직후 마지막 route 위치, operationId, `2..500` schema, optional `project_id`도
 유지한다. focused root **15 passed**, compile·architecture·OpenAPI gate를 확인했고 전체 backend 회귀도 **1164 passed,
 10 skipped in 891.76s (0:14:51)**로 완료했다. `main.py`는 **1,009줄**, direct `.execute()`는 **59**다. 개인 노트북에서
-완결되며 PostgreSQL 검증은 필요 없다. dashboard command preview, drop-video catalog-only read, analysis runs GET과 health GET이 완료됐으며, 다음은 dashboard page admin write cluster다.
+완결되며 PostgreSQL 검증은 필요 없다. dashboard command preview, drop-video catalog-only read, analysis runs GET,
+health GET과 dashboard page read/admin command cluster까지 완료됐으며, 다음은 일반 dashboard 쓰기 4개다.
 
 2026-09-01 drop-video catalog-only read도 완료했다. HTTP router → application query → domain pure policy/ports →
 SQL repository 및 filesystem example adapter로 분리했으며, same-connection context 조회 → `PROJECT_DATA_VIEW`
@@ -682,7 +683,8 @@ health GET도 `GET /api/health`를 router → application query → persistence 
 request-id·audit 없음, general 500 semantics와 retry → health → feature-examples route adjacency를 유지한다. focused root
 **21 passed**, 전체 backend 회귀는 **1189 passed, 10 skipped in 891.45s (0:14:51)**였고 compile·architecture·OpenAPI gate를 확인했으며 `main.py`는 **883줄**, direct execute는 **57**이다.
 개인 노트북에서 완결되며 domain/UoW는 추가하지 않는다. 사내 PostgreSQL pool/app-role/nginx TLS/systemd timeout은
-release gate로 검증한다. 다음은 dashboard page admin write cluster이며 streaming routes는 후순위다.
+release gate로 검증한다. dashboard page admin command cluster도 후속 완료했고 현재 다음은 일반 dashboard
+쓰기 4개이며 streaming routes는 후순위다.
 
 2026-09-01 dashboard page public/admin GET read slice도 완료했다. `GET /api/dashboard-pages`와
 `GET /api/admin/dashboard-pages`를 `adapters/http/routers/analysis_pages.py →
@@ -699,14 +701,34 @@ include_archived filter, SQL ORDER BY 없는 조회 후 `(display_order, name.ca
 43.35s**, 전체 backend **1195 passed, 10 skipped in 886.77s (0:14:46)**와 compile·architecture·OpenAPI gate를
 확인했다. `main.py`는 **824줄**, direct execute ceiling은 **57 → 55**다. Local laptop의
 policy/fake/DuckDB/security/full tests는 완료했고 PostgreSQL app-role/admin permission, same-connection real rows,
-proxy/OpenAPI smoke, real-data latency는 office-only release gate다. 다음은 admin write cluster
-(POST/PATCH/DELETE/PUT order)다. create에 새 transaction을 추가하지 않고, update resource-auth-first/version
+proxy/OpenAPI smoke, real-data latency는 office-only release gate다. 후속 admin write cluster
+(POST/PATCH/DELETE/PUT order)도 아래 기록처럼 완료했다. create에 새 transaction을 추가하지 않고, update resource-auth-first/version
 max+1, delete explicit BEGIN/rollback, reorder duplicate precheck/exact-set 및 same-connection final list 계약을 보존한다.
 Workbench large restructure와 drop-video streaming은 deferred다.
 
+### 2026-09-01 완료 — dashboard page admin command cluster
+
+`POST/PATCH/DELETE/PUT order` 4개 분석 페이지 관리 API를 `analysis_pages` HTTP → application command →
+domain errors/policy/port → SQL adapter로 분리했다. Create의 context/권한/중복/display-order와 비명시 transaction,
+update의 resource authorization 우선 및 history 최대 버전 다음 번호, delete의 2-column read·context 재확인·명시
+transaction/rollback, reorder의 duplicate 선차단·exact set·same-connection final list 순서를 그대로 유지했다.
+Router에는 직접 SQL이나 transaction 문자열이 없고 시스템 페이지·이름·게시·삭제·정렬 Korean 오류 및
+route/OpenAPI 계약도 유지한다.
+
+Focused **15 passed**, 독립 확대 검토 **22 passed**, full backend **1201 passed, 10 skipped in 901.42s
+(0:15:01)**, compile·architecture·OpenAPI gate가 통과했다. `main.py`는 **824 → 628줄**, direct execute는
+**55 → 43**이다. 로컬 완료 범위는 fake ordering, PostgreSQL-style SQL mapping, DuckDB HTTP/security/rollback,
+full regression이다. 사내에서는 PostgreSQL app-role/admin 권한, real-row rollback/same-connection, proxy OpenAPI
+smoke, 동시 쓰기/latency만 확인한다.
+
+다음 P1은 일반 dashboard 쓰기 4개다: 저장 PUT, 버전 logical delete, clone, restore를 별도
+`dashboard_writes` vertical slice로 분리한다. ID mismatch의 connection 전 400, resource-auth-first, 무효 이력을
+포함한 버전 단조 증가, clone의 `page` 제거, 분석 페이지 restore의 현재 이름·설명·상태 보존을 먼저 특성화한다.
+이 단계에서는 기존 비명시 transaction을 바꾸지 않고 원자성 강화는 후속 안전 보강으로 분리한다.
+
 재감사 결과 dashboard command preview, drop-video catalog-only read, analysis runs GET, health GET과 dashboard page
-public/admin GET read slice는 완료했다. 다음은 dashboard page admin write cluster이며, drop-video streaming은
-이번 범위에서 제외한다.
+public/admin GET read 및 admin command slice는 완료했다. 다음은 일반 dashboard write cluster이며,
+drop-video streaming은 이번 범위에서 제외한다.
 Duplicate rejection 409의 attempt detail은 non-admin에게 profile snapshot과 command preview를 노출하지 않도록 router에서
 sanitize하고 admin 원문 계약은 유지한다. idempotency check와 attempt insert 사이의 경쟁, 그리고 QUEUED→DEMO_ONLY runner
 →finalization 사이의 복구/재처리 설계는 이번 safe slice에서 transaction semantics를 바꾸지 않고 별도 reliability 계획으로
@@ -893,7 +915,8 @@ proxy/CA를 설치·갱신하는 자동화는 아직 없다. `NO_PROXY` assignme
    focused **26 passed**, full backend **1159 passed, 10 skipped**, compile·architecture·OpenAPI gate를 확인했고 `main.py`는 **1,070줄**, direct `execute`
    ceiling은 **60→59**다. 개인 노트북에서 완결되며 별도 PostgreSQL 검증은 필요 없다. dashboard command preview도
    완료했으며, drop-video catalog-only read와 `GET /api/load-cases/{load_case_id}/runs` HTTP 소유권 이동도 완료했다.
-   health GET도 완료했다. 다음은 dashboard page admin write cluster다.
+   health GET과 dashboard page public/admin GET 및 admin command cluster도 완료했다. 다음은 일반 dashboard
+   저장·버전 무효화·복제·복원 cluster다.
    drop-video streaming은 제외한다.
    query-count/result parity는 CI로 유지하고 실데이터
    `EXPLAIN`/latency는 office-only에서 검증한다. GET의 explicit project permission

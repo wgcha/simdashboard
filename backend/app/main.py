@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, Query, Request, Response
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -32,10 +32,6 @@ from .services.media_http import build_media_response
 from .repositories.workbench import WorkbenchRepository
 from .services.request_monitoring import sync_request_status
 from .schemas.api import (
-    AnalysisPageCreate,
-    AnalysisPageOrderUpdate,
-    AnalysisPageSummary,
-    AnalysisPageUpdate,
     AnalysisRequestCreate,
     DashboardClone,
     DashboardDefinition,
@@ -74,8 +70,7 @@ from .adapters.http.routers.system_health import router as system_health_router
 from .adapters.http.routers.dashboard_reads import router as dashboard_reads_router
 from .adapters.http.routers.dashboard_reads import version_router as dashboard_versions_router
 from .adapters.http.routers.analysis_pages import router as analysis_pages_router
-from .adapters.persistence.analysis_pages import SQLAnalysisPageRepository
-from .domains.dashboard_reads.policies import analysis_page_meta as _analysis_page_meta
+from .domains.analysis_pages.policies import SYSTEM_ANALYSIS_PAGE_IDS, analysis_page_meta as _analysis_page_meta
 from .services.drop_video_demo import (
     DROP_VIDEO_DEMO_BY_ID,
     DROP_VIDEO_DEMO_SCENES,
@@ -487,40 +482,6 @@ app.include_router(report_templates_router)
 app.include_router(analysis_pages_router)
 
 
-SYSTEM_ANALYSIS_PAGE_IDS = {"dashboard-drop-default", "dashboard-chassis-default", "dashboard-run-comparison-default"}
-
-
-def _require_load_case_context(conn: Any, load_case_id: str) -> tuple[str, str]:
-    context = SQLAnalysisPageRepository(conn).load_case_context(load_case_id)
-    if not context:
-        raise HTTPException(404, "하중 경우를 찾을 수 없습니다.")
-    return context[0], context[1]
-
-
-def _page_name_exists(conn: Any, load_case_id: str, name: str, exclude_id: str | None = None) -> bool:
-    candidates = rows(
-        conn.execute(
-            """
-            SELECT id, load_case_id, definition_json
-            FROM dashboards
-            WHERE load_case_id = ? OR id IN ('dashboard-drop-default', 'dashboard-chassis-default', 'dashboard-run-comparison-default')
-            """,
-            [load_case_id],
-        )
-    )
-    normalized_name = name.strip().casefold()
-    for item in candidates:
-        if item["id"] == exclude_id:
-            continue
-        definition = json_value(item["definition_json"]) or {}
-        page = _analysis_page_meta(definition)
-        if not page or page.get("status") == "archived":
-            continue
-        if str(definition.get("name", "")).strip().casefold() == normalized_name:
-            return True
-    return False
-
-
 def _write_dashboard_definition(
     conn: Any,
     dashboard_id: str,
@@ -550,163 +511,6 @@ def _write_dashboard_definition(
         [dashboard_id, next_version, encoded, created_by, now, True],
     )
     return next_version, now
-
-
-def _delete_analysis_page_records(conn: Any, dashboard_id: str) -> None:
-    conn.execute("DELETE FROM dashboard_versions WHERE dashboard_id = ?", [dashboard_id])
-    conn.execute("DELETE FROM dashboards WHERE id = ?", [dashboard_id])
-
-
-def _list_analysis_pages(conn: Any, load_case_id: str, *, include_private: bool, include_archived: bool) -> list[dict[str, Any]]:
-    _require_load_case_context(conn, load_case_id)
-    return SQLAnalysisPageRepository(conn).list_analysis_pages(
-        load_case_id,
-        include_private=include_private,
-        include_archived=include_archived,
-    )
-
-
-@app.post("/api/admin/dashboard-pages", response_model=DashboardDefinition, status_code=201)
-def create_dashboard_page(payload: AnalysisPageCreate, request: Request) -> dict[str, Any]:
-    name = payload.name.strip()
-    if len(name) < 2:
-        raise HTTPException(422, "분석 페이지 이름은 두 글자 이상이어야 합니다.")
-    dashboard_id = f"dashboard-{uuid4().hex[:12]}"
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
-    with connect() as conn:
-        project_id, request_id = _require_load_case_context(conn, payload.load_case_id)
-        require_permission(request, DASHBOARD_EDIT, project_id, conn=conn)
-        if _page_name_exists(conn, payload.load_case_id, name):
-            raise HTTPException(409, "같은 하중 경우에 동일한 분석 페이지 이름이 이미 있습니다.")
-        existing = rows(conn.execute("SELECT definition_json FROM dashboards WHERE load_case_id = ?", [payload.load_case_id]))
-        custom_orders = []
-        for item in existing:
-            page = _analysis_page_meta(json_value(item["definition_json"]) or {})
-            if page and page.get("analysis_key") == "custom" and page.get("is_system") is False:
-                custom_orders.append(int(page.get("display_order", 99)))
-        display_order = max([99, *custom_orders]) + 1
-        definition = {
-            "id": dashboard_id,
-            "name": name,
-            "description": payload.description.strip(),
-            "widgets": [],
-            "page": {
-                "kind": "analysis_page",
-                "analysis_key": "custom",
-                "status": "draft",
-                "display_order": display_order,
-                "is_system": False,
-            },
-        }
-        definition = DashboardDefinition.model_validate(definition).model_dump()
-        encoded = json.dumps(definition, ensure_ascii=False)
-        conn.execute(
-            "INSERT INTO dashboards VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [dashboard_id, project_id, request_id, payload.load_case_id, name, definition["description"], 1, encoded, now],
-        )
-        conn.execute("INSERT INTO dashboard_versions VALUES (?, ?, ?, ?, ?, ?)", [dashboard_id, 1, encoded, "관리자", now, True])
-    return definition
-
-
-@app.patch("/api/admin/dashboard-pages/{dashboard_id}", response_model=DashboardDefinition)
-def update_dashboard_page(dashboard_id: str, payload: AnalysisPageUpdate, request: Request) -> dict[str, Any]:
-    with connect() as conn:
-        require_resource_permission(request, DASHBOARD_EDIT, "dashboard", dashboard_id, conn=conn)
-        stored_rows = rows(
-            conn.execute(
-                "SELECT id, project_id, request_id, load_case_id, name, description, version, definition_json, updated_at FROM dashboards WHERE id = ?",
-                [dashboard_id],
-            )
-        )
-        if not stored_rows:
-            raise HTTPException(404, "분석 페이지를 찾을 수 없습니다.")
-        item = stored_rows[0]
-        definition = json_value(item.pop("definition_json")) or {}
-        page = _analysis_page_meta(definition)
-        if not page:
-            raise HTTPException(404, "관리 가능한 분석 페이지가 아닙니다.")
-        if dashboard_id in SYSTEM_ANALYSIS_PAGE_IDS or page.get("is_system") is True:
-            raise HTTPException(409, "시스템 기본 분석 페이지의 생명주기는 변경할 수 없습니다.")
-
-        name = payload.name.strip() if payload.name is not None else definition["name"]
-        if len(name) < 2:
-            raise HTTPException(422, "분석 페이지 이름은 두 글자 이상이어야 합니다.")
-        target_status = payload.status or page["status"]
-        if target_status == "published" and not definition.get("widgets"):
-            raise HTTPException(422, "위젯이 없는 분석 페이지는 게시할 수 없습니다.")
-        if target_status != "archived" and _page_name_exists(conn, item["load_case_id"], name, dashboard_id):
-            raise HTTPException(409, "같은 하중 경우에 동일한 분석 페이지 이름이 이미 있습니다.")
-
-        definition["name"] = name
-        if payload.description is not None:
-            definition["description"] = payload.description.strip()
-        page["status"] = target_status
-        definition["page"] = page
-        definition = DashboardDefinition.model_validate(definition).model_dump()
-        _write_dashboard_definition(conn, dashboard_id, definition, item["version"], "관리자")
-    return definition
-
-
-@app.delete("/api/admin/dashboard-pages/{dashboard_id}")
-def delete_dashboard_page(
-    dashboard_id: str,
-    request: Request,
-    load_case_id: str = Query(min_length=1, max_length=120),
-) -> dict[str, str]:
-    with connect() as conn:
-        require_resource_permission(request, DASHBOARD_EDIT, "dashboard", dashboard_id, conn=conn)
-        stored = conn.execute("SELECT load_case_id, definition_json FROM dashboards WHERE id = ?", [dashboard_id]).fetchone()
-        if not stored:
-            raise HTTPException(404, "분석 페이지를 찾을 수 없습니다.")
-        definition = json_value(stored[1]) or {}
-        page = _analysis_page_meta(definition)
-        if (
-            dashboard_id in SYSTEM_ANALYSIS_PAGE_IDS
-            or not page
-            or page.get("is_system") is not False
-            or page.get("analysis_key") != "custom"
-        ):
-            raise HTTPException(409, "사용자 정의 분석 페이지만 영구 삭제할 수 있습니다.")
-        if stored[0] != load_case_id:
-            raise HTTPException(409, "분석 페이지가 요청한 하중 경우에 속하지 않습니다.")
-        _require_load_case_context(conn, load_case_id)
-        conn.execute("BEGIN TRANSACTION")
-        try:
-            _delete_analysis_page_records(conn, dashboard_id)
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
-    return {"status": "deleted", "id": dashboard_id, "load_case_id": load_case_id}
-
-
-@app.put("/api/admin/dashboard-pages/order", response_model=list[AnalysisPageSummary])
-def reorder_dashboard_pages(payload: AnalysisPageOrderUpdate, request: Request) -> list[dict[str, Any]]:
-    if len(payload.page_ids) != len(set(payload.page_ids)):
-        raise HTTPException(422, "분석 페이지 순서에 중복 ID가 있습니다.")
-    with connect() as conn:
-        project_id, _ = _require_load_case_context(conn, payload.load_case_id)
-        require_permission(request, DASHBOARD_EDIT, project_id, conn=conn)
-        stored = rows(
-            conn.execute(
-                "SELECT id, version, definition_json FROM dashboards WHERE load_case_id = ?",
-                [payload.load_case_id],
-            )
-        )
-        custom_pages: dict[str, dict[str, Any]] = {}
-        for item in stored:
-            definition = json_value(item.pop("definition_json")) or {}
-            page = _analysis_page_meta(definition)
-            if page and page.get("analysis_key") == "custom" and page.get("is_system") is False and page.get("status") != "archived":
-                custom_pages[item["id"]] = {**item, "definition": definition}
-        if set(payload.page_ids) != set(custom_pages):
-            raise HTTPException(422, "현재 하중 경우의 보관되지 않은 사용자 분석 페이지를 모두 한 번씩 지정해야 합니다.")
-        for offset, dashboard_id in enumerate(payload.page_ids):
-            item = custom_pages[dashboard_id]
-            item["definition"]["page"]["display_order"] = 100 + offset
-            definition = DashboardDefinition.model_validate(item["definition"]).model_dump()
-            _write_dashboard_definition(conn, dashboard_id, definition, item["version"], "관리자 순서 변경")
-        return _list_analysis_pages(conn, payload.load_case_id, include_private=True, include_archived=False)
 
 
 app.include_router(dashboard_reads_router)

@@ -156,7 +156,8 @@ MCP, Embedding, Graph DB는 이번 리팩터링에서 구현하지 않는다. �
 - 이 이동은 audit·transaction·write 동작을 바꾸지 않았다. focused **26 passed**,
   full backend **1159 passed, 10 skipped**, compile·architecture·OpenAPI gate를 확인했고 `main.py`는 **1,070줄**,
   direct `execute` ceiling은 **60 → 59**로 낮아졌다. 개인 노트북에서 완결되며
-별도 PostgreSQL 검증은 필요 없다. dashboard command preview, drop-video catalog-only read, analysis runs GET과 health GET이 완료됐으며, 다음은 dashboard page admin write cluster다.
+별도 PostgreSQL 검증은 필요 없다. dashboard command preview, drop-video catalog-only read, analysis runs GET,
+health GET과 dashboard page read/admin command cluster까지 완료됐으며, 다음은 일반 dashboard 저장·버전·복제·복원 cluster다.
 
 검증에서 기본 backend suite 176개가 통과하고 3개 PostgreSQL opt-in test가 skip됐다. 별도의 disposable PostgreSQL 18 cluster를 blank DB에서 migration·권한 hardening·reference seed까지 구성한 뒤 app-role profile 60개가 통과했고, canonical 6-step workflow가 suite 전후 동일함을 확인했다. frontend architecture/API/preferences self-test, TypeScript와 production build가 통과했으며 fresh backend/Vite/Chromium을 사용한 Playwright 20개도 모두 통과했다. 실제 Rocky 서버 값·TLS·service user가 없어 운영 배포는 수행하지 않았고, 로컬 credential 파일의 과거 과도한 권한 노출에 대해서는 비밀번호 회전이 별도 운영 조치로 남아 있다. 이 외부 검증 상태는 코드 contract와 구분한다.
 
@@ -175,7 +176,8 @@ exact 6 recognized + 1 unrecognized response, `datetime.now().timestamp()` 기�
 restore 직후 마지막 route 위치, operationId, `2..500` schema, optional `project_id`도 유지한다. focused root **15 passed**,
 compile·architecture·OpenAPI gate를 확인했고 전체 backend 회귀도 **1164 passed, 10 skipped in 891.76s (0:14:51)**로
 완료했다. `main.py`는 **1,009줄**, direct `execute`는 **59**다. 개인 노트북 검증으로 완결되며 PostgreSQL 검증은
-필요 없다. 다음은 dashboard page admin write cluster이며 content/download streaming은 제외한다.
+필요 없다. 후속 dashboard page admin command cluster도 완료됐으며, 현재 다음은 일반 dashboard 쓰기 4개다.
+content/download streaming은 제외한다.
 
 ### 2026-09-01 최신 vertical slice — drop-video catalog-only read
 
@@ -185,7 +187,8 @@ resource authorization → stored list 조회 후 close 순서, context fail-clo
 dual-read일 때만 example file probe를 수행하는 순서를 보존했다. stored/demo 혼합 금지, sort·whole summary·pagination,
 generic resource 404, route order와 OpenAPI 계약도 유지한다. focused root **35 passed**, compile·architecture·OpenAPI
 gate를 확인했고 전체 backend 회귀는 **1176 passed, 10 skipped in 881.53s (0:14:41)**였으며 `main.py`는 **899줄**, direct `execute`는 **58**이다. 개인 노트북에서 완결되며 PostgreSQL 실데이터·
-권한 범위·대용량 latency는 사내 release gate로 남긴다. 다음은 dashboard page admin write cluster다.
+권한 범위·대용량 latency는 사내 release gate로 남긴다. dashboard page admin command cluster도 후속 완료했고,
+현재 다음은 일반 dashboard 쓰기 4개다.
 
 Analysis runs GET은 완료했으며 `adapters/http/routers/analysis_runs.py`가 기존 application/results query, domain
 policy/port, SQL provider를 그대로 연결한다. auth-before-provider, unknown `200 []`, `run_no DESC`, `is_latest`,
@@ -197,7 +200,8 @@ health GET도 `GET /api/health`를 router → application query → persistence 
 request-id·audit 없음, general 500 semantics와 retry → health → feature-examples route adjacency를 유지한다. focused root
 **21 passed**, 전체 backend 회귀는 **1189 passed, 10 skipped in 891.45s (0:14:51)**였고 compile·architecture·OpenAPI gate를 확인했으며 `main.py`는 **883줄**, direct execute는 **57**이다.
 개인 노트북에서 완결되며 domain/UoW는 추가하지 않는다. 사내 PostgreSQL pool/app-role/nginx TLS/systemd timeout은
-release gate로 검증한다. 다음은 dashboard page admin write cluster이며 streaming routes는 후순위다.
+release gate로 검증한다. dashboard page admin command cluster도 후속 완료했고, 현재 다음은 일반 dashboard
+쓰기 4개이며 streaming routes는 후순위다.
 
 ### 2026-09-01 최신 vertical slice — dashboard page public/admin GET
 
@@ -218,6 +222,33 @@ real-data latency는 office-only release gate로 남긴다. 다음 권장은 adm
 (POST/PATCH/DELETE/PUT order)다. create에 새 transaction을 추가하지 않고, update resource-auth-first/version
 max+1, delete explicit BEGIN/rollback, reorder duplicate precheck/exact-set 및 same-connection final list 계약을 보존한다.
 Workbench large restructure와 drop-video streaming은 deferred다.
+
+### 2026-09-01 최신 vertical slice — dashboard page admin commands
+
+분석 페이지 생성·수정·영구 삭제·순서 변경 4개 API를 같은 기능 경계로 옮겼다.
+`adapters/http/routers/analysis_pages.py`는 Pydantic 입출력과 권한 callback·오류 상태 매핑만,
+`application/analysis_pages/commands.py`는 명령 순서와 검증 orchestration을,
+`domains/analysis_pages`는 오류·policy·repository port를,
+`adapters/persistence/analysis_pages.py`는 SQL·버전 기록·삭제 transaction primitive를 소유한다.
+HTTP router에는 직접 SQL, audit write, `BEGIN/COMMIT/ROLLBACK` 문자열이 없다.
+
+동작 변경 없이 create의 trim/context/권한/중복/표시 순서와 비명시 transaction, update의
+resource-auth-first와 history `max(version)+1`, delete의 exact 2-column read → context 재확인 →
+`BEGIN → versions/body delete → COMMIT` 및 실패 rollback, reorder의 DB 연결 전 duplicate 차단 →
+exact-set → 각 버전 기록 → same-connection context 재확인/final list 순서를 보존했다. 시스템 페이지
+생명주기, archived-name/display-order, Korean 오류 문구, route order·operationId·OpenAPI, generic audit 동작도
+그대로다. 삭제 본문 실패와 rollback 실패의 예외 우선순위를 각각 테스트로 고정했다.
+
+Focused **15 passed**, 독립 확대 검토 **22 passed**, 최종 full backend **1201 passed, 10 skipped in
+901.42s (0:15:01)**와 compile·architecture·OpenAPI gate를 확인했다. `main.py`는 **824 → 628줄**,
+direct `execute` actual/ceiling은 **55 → 43**이다. 사용 화면은 같지만 관리 기능의 장애 범위와 변경 지점이
+기능 경계 안으로 줄고, 삭제 실패 복구와 버전 증가 계약을 더 빨리 검증할 수 있다.
+
+개인 노트북 범위는 fake/SQL mapping/DuckDB/security/full regression으로 완료했다. PostgreSQL 18 app-role의
+admin 권한, 실제 행의 same-connection/rollback, proxy 경유 OpenAPI smoke, 동시 쓰기와 실데이터 latency는 사내
+release gate다. 다음 권장은 일반 dashboard 저장·버전 무효화·복제·복원 4개를 별도 `dashboard_writes`
+vertical slice로 옮기는 것이다. 먼저 기존 비명시 transaction과 오류 우선순위를 유지해 구조만 분리하고,
+원자성 강화는 별도 보강으로 다룬다.
 
 ## 2. 2026-08-13 기준선 점검 결과
 
@@ -595,6 +626,7 @@ git diff --check
 2. dashboard read cluster 재감사와 `GET /api/projects/{project_id}/requests` read slice를 완료했고,
    `POST /api/dashboard-commands/preview` pure allowlist policy도 완료했다. 다음은
    `GET /api/load-cases/{load_case_id}/drop-videos` catalog-only read도 완료했다. 다음은 remaining `main.py`
-`GET /api/load-cases/{load_case_id}/runs` HTTP 소유권 이동과 health GET도 완료했다. 다음은 dashboard page admin write cluster다. drop-video streaming은 이번 범위에서 제외한다.
+`GET /api/load-cases/{load_case_id}/runs` HTTP 소유권 이동, health GET과 dashboard page read/admin command
+cluster도 완료했다. 다음은 일반 dashboard 저장·버전·복제·복원 cluster다. drop-video streaming은 이번 범위에서 제외한다.
 3. import-schemas DELETE의 별도 permission connection, non-transactional usage check, 명시적 domain delete audit 부재와 review-list GET의 explicit `PROJECT_DATA_VIEW` 부재, quality-threshold GET의 explicit project permission 부재와 alias global semantics, provider construction purity, dict mutation/storage normalization, unordered media/template, company-wide read, single threshold semantics, row lock/CAS, post-commit fetch rollback seam/security debt를 보존 debt로 기록하되 구조 refactor에 섞지 않는다.
 4. PostgreSQL 18 app-role 권한·audit INSERT, correlated update parity, OIDC active-nonmember/cross-project 정책, 동시 update locking/CAS, 현실 데이터 EXPLAIN/index/lock latency와 nginx·proxy/private CA·backup/restore/deploy는 사내 office-only release gate에서 검증한다.

@@ -192,7 +192,7 @@ def test_analysis_page_read_routes_openapi_operation_ids_and_global_order_are_ex
 
 
 @pytest.mark.contract
-def test_main_relinquishes_analysis_page_gets_and_router_is_strictly_read_only() -> None:
+def test_main_relinquishes_analysis_page_gets_and_router_keeps_http_boundary_clean() -> None:
     main_path = Path(main_module.__file__)
     source = main_path.read_text(encoding="utf-8")
     assert "def list_public_dashboard_pages(" not in source
@@ -205,14 +205,13 @@ def test_main_relinquishes_analysis_page_gets_and_router_is_strictly_read_only()
         for node in ast.walk(ast.parse(source))
     )
     baseline = json.loads((main_path.parents[1] / "scripts" / "architecture_baseline.json").read_text(encoding="utf-8"))
-    assert actual <= 55
+    assert actual <= 43
     assert actual == baseline["execute_call_ceilings"]["app/main.py"]
 
     router_source = Path(analysis_pages_router.__file__).read_text(encoding="utf-8")
     assert ".execute(" not in router_source
     assert "write_audit_event" not in router_source
     assert all(token not in router_source for token in ("BEGIN", "COMMIT", "ROLLBACK"))
-    assert all(f"@router.{method}(" not in router_source for method in ("post", "put", "patch", "delete"))
 
 
 @pytest.mark.unit
@@ -403,25 +402,6 @@ def test_analysis_page_sql_mapping_preserves_query_shape_and_open_connection_com
     ])
     assert SQLAnalysisPageRepository(mapping_connection).load_case_context(LOAD_CASE_ID) == ("project-tv-001", "request-drop-001")
     assert mapping_connection.calls[0][1] == [LOAD_CASE_ID]
-
-    # Dashboard writes still pass their active transaction connection to the
-    # legacy helper. It preserves the write-path context preflight and must
-    # still not acquire a second connection.
-    legacy_connection = TrackingConnection([
-        TrackingCursor(one=("project-tv-001", "request-drop-001")),
-        TrackingCursor(
-            many=[MappingRow(
-                ("custom-page", "project-tv-001", "request-drop-001", LOAD_CASE_ID, "Custom", "", 1, json.dumps(definition), datetime(2026, 1, 1)),
-                tuple(columns),
-            )],
-            columns=columns,
-        ),
-    ])
-    assert main_module._list_analysis_pages(  # type: ignore[attr-defined]
-        legacy_connection, LOAD_CASE_ID, include_private=False, include_archived=False,
-    )[0]["id"] == "custom-page"
-    assert len(legacy_connection.calls) == 2
-
 
 def _insert_password_user(username: str, *, is_global_admin: bool) -> str:
     user_id = f"analysis-page-read-{uuid4().hex[:12]}"

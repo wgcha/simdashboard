@@ -195,9 +195,11 @@ wrapper를 유지한다. 같은 connection 조회를 사용하며 audit·transac
 audit·transaction·write 동작은 변경하지 않았다. focused **26 passed**, full backend **1159 passed, 10 skipped**,
 compile·architecture·OpenAPI gate를 확인했고
 `backend/app/main.py`는 **1,070줄**, direct `.execute()` ceiling은 **60→59**다. 개인 노트북 완결 범위이며 별도
-PostgreSQL 검증은 필요 없다. dashboard command preview, drop-video catalog-only read, analysis runs GET과 health GET이 완료됐으며, 다음은 dashboard page admin write cluster다.
+PostgreSQL 검증은 필요 없다. dashboard command preview, drop-video catalog-only read, analysis runs GET,
+health GET과 dashboard page read/admin command cluster까지 완료됐으며, 다음은 일반 dashboard 쓰기 4개다.
 
-재감사 결과 dashboard command preview, drop-video catalog-only read, analysis runs GET과 health GET은 완료했다. 다음은 dashboard page admin write cluster이며, drop-video content/download streaming은 제외한다.
+재감사 결과 dashboard command preview, drop-video catalog-only read, analysis runs GET, health GET과 dashboard page
+read/admin command cluster까지 완료했다. 다음은 일반 dashboard 쓰기 4개이며 drop-video content/download streaming은 제외한다.
 
 Phase 2의 `result_ingestion`은 세 안전 단위로 정리했다. 첫 단위는 결과-import template, 수동 결과
 import, 예제 폴더 import endpoint를 `main.py`에서 `routers/result_ingestion.py`로 분리했다. 두 번째
@@ -695,7 +697,7 @@ Architecture ceiling은 목표 수치가 아니라 부채가 늘지 않게 하�
 restore 직후 마지막 route 위치, operationId, `2..500` 명령 길이와 optional `project_id` 계약도 그대로다. focused
 root **15 passed**, 전체 backend 회귀는 **1164 passed, 10 skipped in 891.76s (0:14:51)**였고 compile·architecture·OpenAPI
 gate도 확인했다. `main.py`는 **1,009줄**, direct `.execute()`는 **59**다. 개인 노트북 검증으로 완결되며 별도
-PostgreSQL 검증은 필요 없다. 다음은 dashboard page admin write cluster다.
+PostgreSQL 검증은 필요 없다. dashboard page admin command cluster도 후속 완료했고 현재 다음은 일반 dashboard 쓰기 4개다.
 
 ### 2026-09-01 최신 보강 — drop-video catalog-only read
 
@@ -706,7 +708,8 @@ fail-closed 404 → storage mode 1회 → stored가 없고 dual-read일 때만 e
 금지, sort order·전체 summary·pagination, generic resource 404, route order와 OpenAPI 계약을 보존했다. focused root
 **35 passed**, 전체 backend 회귀는 **1176 passed, 10 skipped in 881.53s (0:14:41)**였고 compile·architecture·OpenAPI gate를 확인했으며
 `main.py`는 **899줄**, direct `.execute()`는 **58**이다.
-개인 노트북 검증으로 완결되며 PostgreSQL 실데이터·권한 범위·대용량 latency는 사내 release gate로 남긴다. 다음은 dashboard page admin write cluster다.
+개인 노트북 검증으로 완결되며 PostgreSQL 실데이터·권한 범위·대용량 latency는 사내 release gate로 남긴다.
+dashboard page admin command cluster도 후속 완료했고 현재 다음은 일반 dashboard 쓰기 4개다.
 
 analysis runs GET은 완료했으며, `adapters/http/routers/analysis_runs.py`가 기존 application/results query, domain
 policy/port, SQL provider를 그대로 연결한다. auth-before-provider, unknown `200 []`, `run_no DESC`, `is_latest`,
@@ -718,7 +721,8 @@ health GET도 `GET /api/health`를 router → application query → persistence 
 request-id·audit 없음, general 500 semantics와 retry → health → feature-examples route adjacency를 유지한다. focused root
 **21 passed**, 전체 backend 회귀는 **1189 passed, 10 skipped in 891.45s (0:14:51)**였고 compile·architecture·OpenAPI gate를 확인했으며 `main.py`는 **883줄**, direct execute는 **57**이다.
 개인 노트북에서 완결되며 domain/UoW는 추가하지 않는다. 사내 PostgreSQL pool/app-role/nginx TLS/systemd timeout은
-release gate로 검증한다. 다음은 dashboard page admin write cluster이며 streaming routes는 후순위다.
+release gate로 검증한다. dashboard page admin command cluster도 후속 완료했고 현재 다음은 일반 dashboard
+쓰기 4개이며 streaming routes는 후순위다.
 
 ### 2026-09-01 최신 vertical slice — dashboard page public/admin GET
 
@@ -742,7 +746,27 @@ ceiling은 **57 → 55**다.
 
 로컬 laptop에서는 policy/fake/DuckDB/security/full 테스트를 완료할 수 있다. 실제 PostgreSQL app-role/admin
 permission, same-connection behavior/real rows, proxy/OpenAPI smoke, real-data latency는 office-only release
-gate다. 다음 권장 구현은 같은 기능의 admin write cluster(POST/PATCH/DELETE/PUT order)다. create에 새
+gate다. 같은 기능의 admin write cluster(POST/PATCH/DELETE/PUT order)도 아래 기록처럼 완료했다. create에 새
 transaction을 추가하지 않고, update의 resource-auth-first/version max+1, delete의 explicit BEGIN/rollback,
 reorder의 duplicate precheck/exact-set 및 same-connection final list 계약을 유지한다. Workbench 대규모
 restructure와 drop-video streaming은 계속 후순위다.
+
+### 2026-09-01 최신 vertical slice — dashboard page admin commands
+
+분석 페이지의 `POST /api/admin/dashboard-pages`, `PATCH/DELETE
+/api/admin/dashboard-pages/{dashboard_id}`, `PUT /api/admin/dashboard-pages/order`도 read와 같은
+`analysis_pages` feature에 들어왔다. HTTP adapter는 schema·권한 callback·오류 상태만 매핑하고,
+application command가 create/update/delete/reorder 순서를 소유한다. Domain은 분석 페이지 오류·정책·port를,
+SQL adapter는 같은 open connection에서 실행하는 조회·버전 append·삭제 transaction primitive를 맡는다.
+
+Create/update/reorder는 기존처럼 명시 transaction을 새로 추가하지 않았다. Delete만 기존의 explicit
+`BEGIN/COMMIT/ROLLBACK`을 유지하며, versions 삭제 뒤 body 삭제가 실패하면 rollback한다. 시스템 페이지 보호,
+archived custom page를 포함한 다음 표시 순서, active name 충돌, 게시 전 widget 필수, exact reorder set,
+same-connection final list, route/OpenAPI/Korean 오류 계약은 유지된다. `dashboard_reads.policies`의 분석 페이지
+판정은 canonical `domains.analysis_pages.policies`를 재사용한다.
+
+Focused **15 passed**, 독립 확대 검토 **22 passed**, full backend **1201 passed, 10 skipped in 901.42s
+(0:15:01)**와 compile·architecture·OpenAPI gate를 통과했다. `main.py`는 **628줄**, direct `.execute()`는
+**43**이다. 로컬에서는 이 경계를 완료했으며, PostgreSQL app-role/admin 권한·실제 rollback·proxy smoke·동시성은
+사내 release gate로 남긴다. 다음 구조 대상은 read와 분리된 `dashboard_writes` feature의 일반 dashboard 저장,
+버전 무효화, 복제, 복원 4개다.

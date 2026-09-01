@@ -6,7 +6,7 @@ from typing import Any
 
 from ...database_connection import ConnectionLike, connect, rows
 from ...domains.dashboard_reads.errors import DashboardNotFoundError, DashboardVersionNotFoundError
-from ...domains.dashboard_reads.policies import analysis_page_meta
+from ...domains.analysis_pages.policies import analysis_page_meta
 from ...domains.dashboard_reads.ports import DashboardReadRepository
 from ...database import json_value
 
