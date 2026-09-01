@@ -195,12 +195,11 @@ wrapper를 유지한다. 같은 connection 조회를 사용하며 audit·transac
 audit·transaction·write 동작은 변경하지 않았다. focused **26 passed**, full backend **1159 passed, 10 skipped**,
 compile·architecture·OpenAPI gate를 확인했고
 `backend/app/main.py`는 **1,070줄**, direct `.execute()` ceiling은 **60→59**다. 개인 노트북 완결 범위이며 별도
-PostgreSQL 검증은 필요 없다. 다음은 `POST /api/dashboard-commands/preview` pure allowlist policy, 이후 drop-video
-catalog-only read(스트리밍 제외)다.
+PostgreSQL 검증은 필요 없다. dashboard command preview는 완료했으며, 다음은 drop-video catalog-only
+read(스트리밍 제외)다.
 
-재감사 결과 다음 read/policy 순서를 확정했다. 첫째 `POST /api/dashboard-commands/preview`를 pure allowlist policy로
-분리한다. 둘째 `GET /api/load-cases/{load_case_id}/drop-videos`를 catalog-only read로 분리하며, drop-video streaming은
-이번 범위에서 제외한다.
+재감사 결과 다음 read/policy 순서를 확정했다. dashboard command preview는 완료했으며, 다음은
+`GET /api/load-cases/{load_case_id}/drop-videos` catalog-only read다. drop-video streaming은 이번 범위에서 제외한다.
 
 Phase 2의 `result_ingestion`은 세 안전 단위로 정리했다. 첫 단위는 결과-import template, 수동 결과
 import, 예제 폴더 import endpoint를 `main.py`에서 `routers/result_ingestion.py`로 분리했다. 두 번째
@@ -688,3 +687,15 @@ Architecture ceiling은 목표 수치가 아니라 부채가 늘지 않게 하�
   Rocky validator, frontend architecture/API self-test/build도 통과했다.
 
 우선순위와 완료 기준은 [`program-consolidation-and-development-plan.md`](program-consolidation-and-development-plan.md)에 정리한다.
+
+### 2026-09-01 최신 보강 — dashboard command preview
+
+`POST /api/dashboard-commands/preview`를 HTTP router → application query → domain pure allowlist policy로 분리했다.
+권한 검사는 policy 실행보다 먼저 수행하며 DB·audit·명시적 transaction은 추가하지 않고 generic
+`SecurityMiddleware`의 `API_MUTATION` 기록을 유지한다. 기존 ASCII 공백 제거·소문자 정규화, branch precedence,
+6개 인식 명령과 1개 미인식 응답, `datetime.now().timestamp()` 기반 widget ID와 테스트용 epoch seam을 보존했다.
+restore 직후 마지막 route 위치, operationId, `2..500` 명령 길이와 optional `project_id` 계약도 그대로다. focused
+root **15 passed**, compile·architecture·OpenAPI gate를 확인했으며 전체 backend 회귀도 **1164 passed, 10 skipped
+in 891.76s (0:14:51)**로 완료했다. `main.py`는 **1,009줄**, direct `.execute()`는 **59**다. 개인 노트북 검증으로
+완결되며 별도 PostgreSQL 검증은 필요 없다. 다음은
+`GET /api/load-cases/{load_case_id}/drop-videos` catalog-only read이고 content/download streaming은 제외한다.

@@ -41,7 +41,6 @@ from .schemas.api import (
     DashboardDefinition,
     DropVideoPageResponse,
     LoadCaseCreate,
-    NaturalLanguageCommand,
     WorkflowStepUpdate,
     WorkflowStepsReplace,
 )
@@ -71,6 +70,7 @@ from .adapters.http.routers.quality_thresholds import router as quality_threshol
 from .adapters.http.routers.workflow_queries import router as workflow_queries_router
 from .adapters.http.routers.feature_examples import router as feature_examples_router
 from .adapters.http.routers.portfolio import router as portfolio_router
+from .adapters.http.routers.dashboard_commands import router as dashboard_commands_router
 from .adapters.http.routers.dashboard_reads import router as dashboard_reads_router
 from .adapters.http.routers.dashboard_reads import version_router as dashboard_versions_router
 from .domains.dashboard_reads.policies import analysis_page_meta as _analysis_page_meta
@@ -1006,65 +1006,4 @@ def restore_dashboard(dashboard_id: str, version: int, request: Request) -> dict
     return {"status": "restored", "version": next_version, "restored_from": version}
 
 
-@app.post("/api/dashboard-commands/preview")
-def preview_dashboard_command(
-    payload: NaturalLanguageCommand,
-    request: Request,
-    project_id: str | None = Query(default=None),
-) -> dict[str, Any]:
-    require_permission(request, DASHBOARD_EDIT, project_id)
-    text = payload.command.strip()
-    compact = text.replace(" ", "").lower()
-    widget: dict[str, Any] | None = None
-    message = ""
-
-    if "응력" in compact and ("시간" in compact or "시계열" in compact) and "기준선" in compact and ("추가" in compact or "넣" in compact):
-        return {"recognized": True, "message": "기존 응력-시간 위젯에 기준선을 표시합니다.", "proposal": {"action": "update_widgets", "updates": [{"widget_type": "time_series", "settings": {"showThreshold": True}}]}}
-    if ("판정" in compact or "패스" in compact or "실패" in compact) and ("오른쪽" in compact or "우측" in compact) and ("이동" in compact or "옮" in compact):
-        return {"recognized": True, "message": "패스/실패 판정 카드를 맨 위 오른쪽으로 이동합니다.", "proposal": {"action": "update_widgets", "updates": [{"widget_type": "verdict", "x": 9, "y": 0}]}}
-    if "컨투어" in compact and "의견" in compact and ("나란히" in compact or "옆" in compact):
-        return {"recognized": True, "message": "컨투어 이미지와 수행자 의견을 같은 행에 배치합니다.", "proposal": {"action": "update_widgets", "updates": [{"widget_type": "contour", "x": 4, "y": 18, "w": 4}, {"widget_type": "note", "x": 8, "y": 18, "w": 4}]}}
-    if "응력" in compact and ("시간" in compact or "시계열" in compact) and ("추가" in compact or "만들" in compact):
-        widget = {
-            "id": f"time-series-{int(datetime.now().timestamp())}",
-            "type": "time_series",
-            "title": "Open Cell 엣지 응력-시간",
-            "x": 0,
-            "y": 20,
-            "w": 8,
-            "h": 5,
-            "settings": {"showThreshold": True},
-        }
-        message = "상하좌우 엣지 응력 시계열과 기준선을 표시하는 위젯을 추가합니다."
-    elif ("최대응력" in compact or "상하좌우" in compact) and ("추가" in compact or "막대" in compact):
-        widget = {
-            "id": f"edge-bar-{int(datetime.now().timestamp())}",
-            "type": "edge_bar",
-            "title": "상하좌우 엣지 최대 응력",
-            "x": 0,
-            "y": 20,
-            "w": 6,
-            "h": 4,
-            "settings": {"failColor": "#ff5d73", "showThreshold": True},
-        }
-        message = "엣지별 최대 응력과 기준값을 비교하는 막대그래프를 추가합니다."
-    elif "판정" in compact and ("추가" in compact or "카드" in compact):
-        widget = {
-            "id": f"verdict-{int(datetime.now().timestamp())}",
-            "type": "verdict",
-            "title": "패스/실패 판정",
-            "x": 0,
-            "y": 20,
-            "w": 3,
-            "h": 2,
-            "settings": {},
-        }
-        message = "기준값에 따른 전체 판정 카드를 추가합니다."
-    else:
-        return {
-            "recognized": False,
-            "message": "요청을 안전한 변경 명세로 변환하지 못했습니다. ‘응력-시간 그래프 추가’, ‘상하좌우 최대 응력 막대그래프 추가’, ‘판정 카드 추가’처럼 요청해 주세요.",
-            "proposal": None,
-        }
-
-    return {"recognized": True, "message": message, "proposal": {"action": "add_widget", "widget": widget}}
+app.include_router(dashboard_commands_router)

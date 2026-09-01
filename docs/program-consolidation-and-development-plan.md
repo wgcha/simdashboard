@@ -656,9 +656,18 @@ Focused **18 passed**, full backend **1153 passed, 10 skipped**, compile·archit
 `backend/app/main.py`는 **1,087줄**, direct `.execute()` actual/ceiling은 **60**으로 하향했다. 개인 노트북
 검증으로 완결되며 별도 PostgreSQL 검증은 필요 없다. 운영 권한·실데이터·성능 검증은 사내 release gate로 남긴다.
 
-재감사 결과 후속 순서는 `POST /api/dashboard-commands/preview`를 pure allowlist policy로 분리한 뒤,
-`GET /api/load-cases/{load_case_id}/drop-videos`를 catalog-only read로 분리하는 것이다. drop-video streaming은
-이번 범위에서 제외한다.
+2026-09-01 dashboard command preview도 완료했다. `POST /api/dashboard-commands/preview`를 HTTP router →
+application query → domain pure allowlist policy로 분리했으며 권한 검사를 policy 실행보다 앞에 둔다. DB·audit·명시적
+transaction은 추가하지 않고 generic `SecurityMiddleware`의 `API_MUTATION` 기록을 유지한다. legacy ASCII-space
+normalization, branch precedence, exact 6개 인식 명령과 1개 미인식 응답, `datetime.now().timestamp()` 기반 widget ID와
+테스트용 epoch seam을 보존했다. restore 직후 마지막 route 위치, operationId, `2..500` schema, optional `project_id`도
+유지한다. focused root **15 passed**, compile·architecture·OpenAPI gate를 확인했고 전체 backend 회귀도 **1164 passed,
+10 skipped in 891.76s (0:14:51)**로 완료했다. `main.py`는 **1,009줄**, direct `.execute()`는 **59**다. 개인 노트북에서
+완결되며 PostgreSQL 검증은 필요 없다. 다음은
+`GET /api/load-cases/{load_case_id}/drop-videos` catalog-only read이고 content/download streaming은 제외한다.
+
+재감사 결과 dashboard command preview는 완료했으며, 다음은 `GET /api/load-cases/{load_case_id}/drop-videos`를
+catalog-only read로 분리하는 것이다. drop-video streaming은 이번 범위에서 제외한다.
 Duplicate rejection 409의 attempt detail은 non-admin에게 profile snapshot과 command preview를 노출하지 않도록 router에서
 sanitize하고 admin 원문 계약은 유지한다. idempotency check와 attempt insert 사이의 경쟁, 그리고 QUEUED→DEMO_ONLY runner
 →finalization 사이의 복구/재처리 설계는 이번 safe slice에서 transaction semantics를 바꾸지 않고 별도 reliability 계획으로
@@ -843,9 +852,9 @@ proxy/CA를 설치·갱신하는 자동화는 아직 없다. `NO_PROXY` assignme
    membership bool, 비멤버의 정확한 `PROJECT_MEMBERSHIP_REQUIRED` 403(`authorization_detail`/audit 포함), global admin
    missing project `200 []`, `requested_at DESC`를 보존했으며 audit·transaction·write 동작은 바꾸지 않았다.
    focused **26 passed**, full backend **1159 passed, 10 skipped**, compile·architecture·OpenAPI gate를 확인했고 `main.py`는 **1,070줄**, direct `execute`
-   ceiling은 **60→59**다. 개인 노트북에서 완결되며 별도 PostgreSQL 검증은 필요 없다. 다음 순서는
-   `POST /api/dashboard-commands/preview` pure allowlist policy, 이후 `GET /api/load-cases/{load_case_id}/drop-videos`
-   catalog-only read다. drop-video streaming은 제외한다.
+   ceiling은 **60→59**다. 개인 노트북에서 완결되며 별도 PostgreSQL 검증은 필요 없다. dashboard command preview도
+   완료했으며, 다음 순서는 `GET /api/load-cases/{load_case_id}/drop-videos` catalog-only read다. drop-video
+   streaming은 제외한다.
    query-count/result parity는 CI로 유지하고 실데이터
    `EXPLAIN`/latency는 office-only에서 검증한다. GET의 explicit project permission
    부재와 alias global semantics, row lock/CAS, post-commit fetch rollback seam, import-schemas DELETE의 별도
