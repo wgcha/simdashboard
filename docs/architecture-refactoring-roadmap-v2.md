@@ -156,8 +156,8 @@ MCP, Embedding, Graph DB는 이번 리팩터링에서 구현하지 않는다. �
 - 이 이동은 audit·transaction·write 동작을 바꾸지 않았다. focused **26 passed**,
   full backend **1159 passed, 10 skipped**, compile·architecture·OpenAPI gate를 확인했고 `main.py`는 **1,070줄**,
   direct `execute` ceiling은 **60 → 59**로 낮아졌다. 개인 노트북에서 완결되며
-별도 PostgreSQL 검증은 필요 없다. dashboard command preview는 완료했으며, 다음은 drop-video catalog-only
-read(스트리밍 제외)다.
+별도 PostgreSQL 검증은 필요 없다. dashboard command preview와 drop-video catalog-only read가 완료됐으며, 다음은
+`GET /api/load-cases/{load_case_id}/runs` HTTP 소유권 이동이다.
 
 검증에서 기본 backend suite 176개가 통과하고 3개 PostgreSQL opt-in test가 skip됐다. 별도의 disposable PostgreSQL 18 cluster를 blank DB에서 migration·권한 hardening·reference seed까지 구성한 뒤 app-role profile 60개가 통과했고, canonical 6-step workflow가 suite 전후 동일함을 확인했다. frontend architecture/API/preferences self-test, TypeScript와 production build가 통과했으며 fresh backend/Vite/Chromium을 사용한 Playwright 20개도 모두 통과했다. 실제 Rocky 서버 값·TLS·service user가 없어 운영 배포는 수행하지 않았고, 로컬 credential 파일의 과거 과도한 권한 노출에 대해서는 비밀번호 회전이 별도 운영 조치로 남아 있다. 이 외부 검증 상태는 코드 contract와 구분한다.
 
@@ -176,8 +176,21 @@ exact 6 recognized + 1 unrecognized response, `datetime.now().timestamp()` 기�
 restore 직후 마지막 route 위치, operationId, `2..500` schema, optional `project_id`도 유지한다. focused root **15 passed**,
 compile·architecture·OpenAPI gate를 확인했고 전체 backend 회귀도 **1164 passed, 10 skipped in 891.76s (0:14:51)**로
 완료했다. `main.py`는 **1,009줄**, direct `execute`는 **59**다. 개인 노트북 검증으로 완결되며 PostgreSQL 검증은
-필요 없다. 다음은 `GET /api/load-cases/{load_case_id}/drop-videos`
-catalog-only read이며 content/download streaming은 제외한다.
+필요 없다. 다음은 `GET /api/load-cases/{load_case_id}/runs` HTTP 소유권 이동이며 content/download streaming은 제외한다.
+
+### 2026-09-01 최신 vertical slice — drop-video catalog-only read
+
+`GET /api/load-cases/{load_case_id}/drop-videos`를 HTTP router → application query → domain pure policy/ports →
+SQL repository 및 filesystem example adapter로 분리했다. 같은 connection의 context 조회 → `PROJECT_DATA_VIEW`
+resource authorization → stored list 조회 후 close 순서, context fail-closed 404, storage mode 1회와 stored가 없고
+dual-read일 때만 example file probe를 수행하는 순서를 보존했다. stored/demo 혼합 금지, sort·whole summary·pagination,
+generic resource 404, route order와 OpenAPI 계약도 유지한다. focused root **35 passed**, compile·architecture·OpenAPI
+gate를 확인했고 전체 backend 회귀는 **1176 passed, 10 skipped in 881.53s (0:14:41)**였으며 `main.py`는 **899줄**, direct `execute`는 **58**이다. 개인 노트북에서 완결되며 PostgreSQL 실데이터·
+권한 범위·대용량 latency는 사내 release gate로 남긴다. 다음은 `GET /api/load-cases/{load_case_id}/runs` HTTP 소유권 이동이다.
+
+다음 runs slice는 기존 application/results query와 domain port/policy, SQL provider를 활용한다. auth-before-provider,
+unknown load case `200 []`, `run_no DESC`, `is_latest`, seeded mapping과 SQL ceiling **58**을 유지하며 PostgreSQL 전용
+검증은 필요 없다. health GET은 그 다음 후보이며 streaming/write routes 뒤에 둔다.
 
 ## 2. 2026-08-13 기준선 점검 결과
 
@@ -554,7 +567,7 @@ git diff --check
 1. Report layout 6 API, PPTX template 4 API, variable catalog 4 API, project workspace layout 5 route, import-schemas 4 route, result-review 3 route, analysis-insights 2 route, load-case-overview 1 route, quality thresholds 3 route, workflow queries GET 2 route, request load-cases GET 1 route, feature-examples GET 1 route, portfolio overview/export GET 2 route와 project request list GET 1 route의 완료 상태를 계약 테스트로 유지한다.
 2. dashboard read cluster 재감사와 `GET /api/projects/{project_id}/requests` read slice를 완료했고,
    `POST /api/dashboard-commands/preview` pure allowlist policy도 완료했다. 다음은
-   `GET /api/load-cases/{load_case_id}/drop-videos`의 catalog-only read다. drop-video streaming은
-   이번 범위에서 제외한다.
+   `GET /api/load-cases/{load_case_id}/drop-videos` catalog-only read도 완료했다. 다음은 remaining `main.py`
+   `GET /api/load-cases/{load_case_id}/runs` HTTP 소유권 이동이다. drop-video streaming은 이번 범위에서 제외한다.
 3. import-schemas DELETE의 별도 permission connection, non-transactional usage check, 명시적 domain delete audit 부재와 review-list GET의 explicit `PROJECT_DATA_VIEW` 부재, quality-threshold GET의 explicit project permission 부재와 alias global semantics, provider construction purity, dict mutation/storage normalization, unordered media/template, company-wide read, single threshold semantics, row lock/CAS, post-commit fetch rollback seam/security debt를 보존 debt로 기록하되 구조 refactor에 섞지 않는다.
 4. PostgreSQL 18 app-role 권한·audit INSERT, correlated update parity, OIDC active-nonmember/cross-project 정책, 동시 update locking/CAS, 현실 데이터 EXPLAIN/index/lock latency와 nginx·proxy/private CA·backup/restore/deploy는 사내 office-only release gate에서 검증한다.

@@ -27,7 +27,7 @@ from .modules.access_control import (
 )
 from .database import connect, initialize_database, json_value, rows
 from .config import database_settings, security_settings
-from .repositories.media_repository import get_blob, get_drop_video, list_drop_videos
+from .repositories.media_repository import get_blob, get_drop_video
 from .services.media_http import build_media_response
 from .repositories.workbench import WorkbenchRepository
 from .services.request_monitoring import sync_request_status
@@ -39,7 +39,6 @@ from .schemas.api import (
     AnalysisRequestCreate,
     DashboardClone,
     DashboardDefinition,
-    DropVideoPageResponse,
     LoadCaseCreate,
     WorkflowStepUpdate,
     WorkflowStepsReplace,
@@ -71,17 +70,15 @@ from .adapters.http.routers.workflow_queries import router as workflow_queries_r
 from .adapters.http.routers.feature_examples import router as feature_examples_router
 from .adapters.http.routers.portfolio import router as portfolio_router
 from .adapters.http.routers.dashboard_commands import router as dashboard_commands_router
+from .adapters.http.routers.drop_videos import router as drop_videos_router
 from .adapters.http.routers.dashboard_reads import router as dashboard_reads_router
 from .adapters.http.routers.dashboard_reads import version_router as dashboard_versions_router
 from .domains.dashboard_reads.policies import analysis_page_meta as _analysis_page_meta
 from .services.drop_video_demo import (
-    DEMO_DROP_VIDEO_LOAD_CASE_IDS,
     DROP_VIDEO_DEMO_BY_ID,
     DROP_VIDEO_DEMO_SCENES,
     DROP_VIDEO_SOURCE_DIR,
-    build_demo_evaluation,
     probe_mp4,
-    summarize_demo_evaluations,
 )
 
 
@@ -225,114 +222,7 @@ app.include_router(requests_router)
 app.include_router(request_load_cases_router)
 
 
-@app.get("/api/load-cases/{load_case_id}/drop-videos", response_model=DropVideoPageResponse)
-def get_drop_videos(
-    load_case_id: str,
-    request: Request,
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=1, le=20),
-) -> dict[str, Any]:
-    with connect() as conn:
-        context = conn.execute(
-            """
-            SELECT lc.id, lc.name, lc.analysis_type, ar.id, ar.title
-            FROM load_cases lc
-            JOIN analysis_requests ar ON ar.id = lc.request_id
-            WHERE lc.id = ?
-            """,
-            [load_case_id],
-        ).fetchone()
-        require_resource_permission(request, PROJECT_DATA_VIEW, "load_case", load_case_id, conn=conn)
-        stored_videos = list_drop_videos(conn, load_case_id)
-    if context is None:
-        raise HTTPException(404, "하중 경우를 찾을 수 없습니다.")
-
-    videos: list[dict[str, Any]] = []
-    database_only = media_storage_mode() == "database-only"
-    storage_source = "DATABASE" if stored_videos or database_only else "EXAMPLE_ADAPTER"
-    if stored_videos:
-        for item in stored_videos:
-            scene = DROP_VIDEO_DEMO_BY_ID.get(item["video_id"])
-            metadata = json_value(item.get("metadata_json")) or {}
-            videos.append(
-                {
-                    "video_id": item["video_id"],
-                    "scene_id": item["video_id"],
-                    "scene_name": item["scene_name"],
-                    "video_url": f"/api/drop-videos/{item['video_id']}/content",
-                    "download_url": f"/api/drop-videos/{item['video_id']}/download",
-                    "thumbnail_url": None,
-                    "duration": None,
-                    "file_size": int(item["file_size"]),
-                    "format": "mp4" if str(item["mime_type"]) == "video/mp4" else "webm",
-                    "codec": metadata.get("codec"),
-                    "fast_start": metadata.get("fast_start"),
-                    "sort_order": int(item["sort_order"]),
-                    "drop_direction": metadata.get("drop_direction"),
-                    "drop_condition": metadata.get("drop_condition"),
-                    "analysis_version": metadata.get("analysis_version"),
-                    "evaluation": build_demo_evaluation(scene) if scene else {
-                        "overall_verdict": "PASS",
-                        "open_cell": {"critical_value": 0, "threshold": 75, "unit": "MPa", "verdict": "PASS", "metrics": {}},
-                        "chassis_rear": {"critical_value": 0, "threshold": 5, "unit": "mm", "verdict": "PASS", "metrics": {}},
-                    },
-                }
-            )
-    elif not database_only and load_case_id in DEMO_DROP_VIDEO_LOAD_CASE_IDS:
-        for scene in DROP_VIDEO_DEMO_SCENES:
-            path = DROP_VIDEO_SOURCE_DIR / scene.filename
-            if not path.is_file():
-                continue
-            media = probe_mp4(path)
-            videos.append(
-                {
-                    "video_id": scene.video_id,
-                    "scene_id": scene.video_id,
-                    "scene_name": scene.scene_name,
-                    "video_url": f"/api/drop-videos/{scene.video_id}/content",
-                    "download_url": f"/api/drop-videos/{scene.video_id}/download",
-                    "thumbnail_url": None,
-                    "duration": None,
-                    "file_size": path.stat().st_size,
-                    "format": "mp4",
-                    "codec": media.codec,
-                    "fast_start": media.fast_start,
-                    "sort_order": scene.sort_order,
-                    "drop_direction": None,
-                    "drop_condition": None,
-                    "analysis_version": None,
-                    "evaluation": build_demo_evaluation(scene),
-                }
-            )
-    videos.sort(key=lambda item: (item["sort_order"], item["scene_id"]))
-    summary = summarize_demo_evaluations(videos)
-    total_items = len(videos)
-    total_pages = (total_items + page_size - 1) // page_size if total_items else 0
-    start = (page - 1) * page_size
-    page_videos = videos[start:start + page_size] if start < total_items else []
-    return {
-        "load_case": {
-            "load_case_id": context[0],
-            "load_case_name": context[1],
-            "analysis_type": context[2],
-            "request_id": context[3],
-            "request_name": context[4],
-        },
-        "source": storage_source,
-        "demo_only": True,
-        "evaluation_source": "SYNTHETIC_DEMO",
-        "contract_version": 1,
-        "summary": summary,
-        "pagination": {
-            "page": page,
-            "page_size": page_size,
-            "total_items": total_items,
-            "total_pages": total_pages,
-            "has_previous": page > 1 and total_pages > 0,
-            "has_next": page < total_pages,
-        },
-        "videos": page_videos,
-    }
+app.include_router(drop_videos_router)
 
 
 def _media_audit_callback(request: Request, action: str, bytes_yielded: int, status_code: int) -> None:

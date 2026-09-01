@@ -195,11 +195,11 @@ wrapper를 유지한다. 같은 connection 조회를 사용하며 audit·transac
 audit·transaction·write 동작은 변경하지 않았다. focused **26 passed**, full backend **1159 passed, 10 skipped**,
 compile·architecture·OpenAPI gate를 확인했고
 `backend/app/main.py`는 **1,070줄**, direct `.execute()` ceiling은 **60→59**다. 개인 노트북 완결 범위이며 별도
-PostgreSQL 검증은 필요 없다. dashboard command preview는 완료했으며, 다음은 drop-video catalog-only
-read(스트리밍 제외)다.
+PostgreSQL 검증은 필요 없다. dashboard command preview와 drop-video catalog-only read가 완료됐으며, 다음은
+`GET /api/load-cases/{load_case_id}/runs` HTTP 소유권 이동이다.
 
-재감사 결과 다음 read/policy 순서를 확정했다. dashboard command preview는 완료했으며, 다음은
-`GET /api/load-cases/{load_case_id}/drop-videos` catalog-only read다. drop-video streaming은 이번 범위에서 제외한다.
+재감사 결과 dashboard command preview와 drop-video catalog-only read는 완료했다. 다음은
+`GET /api/load-cases/{load_case_id}/runs` HTTP 소유권 이동이며, drop-video content/download streaming은 제외한다.
 
 Phase 2의 `result_ingestion`은 세 안전 단위로 정리했다. 첫 단위는 결과-import template, 수동 결과
 import, 예제 폴더 import endpoint를 `main.py`에서 `routers/result_ingestion.py`로 분리했다. 두 번째
@@ -695,7 +695,22 @@ Architecture ceiling은 목표 수치가 아니라 부채가 늘지 않게 하�
 `SecurityMiddleware`의 `API_MUTATION` 기록을 유지한다. 기존 ASCII 공백 제거·소문자 정규화, branch precedence,
 6개 인식 명령과 1개 미인식 응답, `datetime.now().timestamp()` 기반 widget ID와 테스트용 epoch seam을 보존했다.
 restore 직후 마지막 route 위치, operationId, `2..500` 명령 길이와 optional `project_id` 계약도 그대로다. focused
-root **15 passed**, compile·architecture·OpenAPI gate를 확인했으며 전체 backend 회귀도 **1164 passed, 10 skipped
-in 891.76s (0:14:51)**로 완료했다. `main.py`는 **1,009줄**, direct `.execute()`는 **59**다. 개인 노트북 검증으로
-완결되며 별도 PostgreSQL 검증은 필요 없다. 다음은
-`GET /api/load-cases/{load_case_id}/drop-videos` catalog-only read이고 content/download streaming은 제외한다.
+root **15 passed**, 전체 backend 회귀는 **1164 passed, 10 skipped in 891.76s (0:14:51)**였고 compile·architecture·OpenAPI
+gate도 확인했다. `main.py`는 **1,009줄**, direct `.execute()`는 **59**다. 개인 노트북 검증으로 완결되며 별도
+PostgreSQL 검증은 필요 없다. 다음은 `GET /api/load-cases/{load_case_id}/runs` HTTP 소유권 이동이다.
+
+### 2026-09-01 최신 보강 — drop-video catalog-only read
+
+`GET /api/load-cases/{load_case_id}/drop-videos`를 HTTP router → application query → domain pure policy/ports →
+SQL repository 및 filesystem example adapter로 분리했다. 같은 connection에서 load-case context 조회 →
+`PROJECT_DATA_VIEW` resource authorization → stored list 조회 후 connection을 닫는 순서를 유지하고, 이후 context
+fail-closed 404 → storage mode 1회 → stored가 없고 dual-read일 때만 example file probe를 수행한다. stored/demo 혼합
+금지, sort order·전체 summary·pagination, generic resource 404, route order와 OpenAPI 계약을 보존했다. focused root
+**35 passed**, 전체 backend 회귀는 **1176 passed, 10 skipped in 881.53s (0:14:41)**였고 compile·architecture·OpenAPI gate를 확인했으며
+`main.py`는 **899줄**, direct `.execute()`는 **58**이다.
+개인 노트북 검증으로 완결되며 PostgreSQL 실데이터·권한 범위·대용량 latency는 사내 release gate로 남긴다. 다음은
+`GET /api/load-cases/{load_case_id}/runs` HTTP 소유권 이동이다.
+
+다음 runs slice는 기존 application/results query와 domain port/policy, SQL provider를 활용한다. auth-before-provider,
+unknown load case `200 []`, `run_no DESC`, `is_latest`, seeded mapping과 direct execute ceiling **58**을 유지하며
+PostgreSQL 전용 검증은 필요 없다. health GET은 그 다음 후보로 두고 streaming/write routes 뒤에 둔다.

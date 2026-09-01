@@ -663,11 +663,23 @@ normalization, branch precedence, exact 6개 인식 명령과 1개 미인식 응
 테스트용 epoch seam을 보존했다. restore 직후 마지막 route 위치, operationId, `2..500` schema, optional `project_id`도
 유지한다. focused root **15 passed**, compile·architecture·OpenAPI gate를 확인했고 전체 backend 회귀도 **1164 passed,
 10 skipped in 891.76s (0:14:51)**로 완료했다. `main.py`는 **1,009줄**, direct `.execute()`는 **59**다. 개인 노트북에서
-완결되며 PostgreSQL 검증은 필요 없다. 다음은
-`GET /api/load-cases/{load_case_id}/drop-videos` catalog-only read이고 content/download streaming은 제외한다.
+완결되며 PostgreSQL 검증은 필요 없다. dashboard command preview와 drop-video catalog-only read가 완료됐으며, 다음은
+`GET /api/load-cases/{load_case_id}/runs` HTTP 소유권 이동이다.
 
-재감사 결과 dashboard command preview는 완료했으며, 다음은 `GET /api/load-cases/{load_case_id}/drop-videos`를
-catalog-only read로 분리하는 것이다. drop-video streaming은 이번 범위에서 제외한다.
+2026-09-01 drop-video catalog-only read도 완료했다. HTTP router → application query → domain pure policy/ports →
+SQL repository 및 filesystem example adapter로 분리했으며, same-connection context 조회 → `PROJECT_DATA_VIEW`
+resource auth → stored list 조회 후 close 순서를 보존했다. 이후 context fail-closed → storage mode 1회 → stored가 없고
+dual-read일 때만 example file probe를 수행하고, stored/demo 혼합 금지·정렬·전체 summary·pagination·generic resource
+404·route/OpenAPI 계약을 유지한다. focused root **35 passed**, 전체 backend 회귀는 **1176 passed, 10 skipped in 881.53s (0:14:41)**였고
+compile·architecture·OpenAPI gate를 확인했다. `main.py`는 **899줄**, direct `execute`는 **58**이다. 개인 노트북에서 완결되며 PostgreSQL 실데이터·권한 범위·대용량
+latency는 사내 release gate로 남긴다.
+
+다음 runs slice는 기존 application/results query와 domain port/policy, SQL provider를 활용한다. auth-before-provider,
+unknown load case `200 []`, `run_no DESC`, `is_latest`, seeded mapping과 direct execute ceiling **58**을 유지하며
+PostgreSQL 전용 검증은 필요 없다. health GET은 그 다음 후보로 두고 streaming/write routes 뒤에 둔다.
+
+재감사 결과 dashboard command preview와 drop-video catalog-only read는 완료했다. 다음은
+`GET /api/load-cases/{load_case_id}/runs` HTTP 소유권 이동이며, drop-video streaming은 이번 범위에서 제외한다.
 Duplicate rejection 409의 attempt detail은 non-admin에게 profile snapshot과 command preview를 노출하지 않도록 router에서
 sanitize하고 admin 원문 계약은 유지한다. idempotency check와 attempt insert 사이의 경쟁, 그리고 QUEUED→DEMO_ONLY runner
 →finalization 사이의 복구/재처리 설계는 이번 safe slice에서 transaction semantics를 바꾸지 않고 별도 reliability 계획으로
@@ -853,8 +865,9 @@ proxy/CA를 설치·갱신하는 자동화는 아직 없다. `NO_PROXY` assignme
    missing project `200 []`, `requested_at DESC`를 보존했으며 audit·transaction·write 동작은 바꾸지 않았다.
    focused **26 passed**, full backend **1159 passed, 10 skipped**, compile·architecture·OpenAPI gate를 확인했고 `main.py`는 **1,070줄**, direct `execute`
    ceiling은 **60→59**다. 개인 노트북에서 완결되며 별도 PostgreSQL 검증은 필요 없다. dashboard command preview도
-   완료했으며, 다음 순서는 `GET /api/load-cases/{load_case_id}/drop-videos` catalog-only read다. drop-video
-   streaming은 제외한다.
+   완료했으며, drop-video catalog-only read도 완료했다. 다음 순서는 `GET /api/load-cases/{load_case_id}/runs` HTTP
+   소유권 이동이다.
+   drop-video streaming은 제외한다.
    query-count/result parity는 CI로 유지하고 실데이터
    `EXPLAIN`/latency는 office-only에서 검증한다. GET의 explicit project permission
    부재와 alias global semantics, row lock/CAS, post-commit fetch rollback seam, import-schemas DELETE의 별도

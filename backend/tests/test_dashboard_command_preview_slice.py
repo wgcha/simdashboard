@@ -80,7 +80,7 @@ def test_main_relinquishes_dashboard_preview_handler_and_router_stays_side_effec
         for node in ast.walk(ast.parse(source))
     )
     baseline = json.loads((main_path.parents[1] / "scripts" / "architecture_baseline.json").read_text(encoding="utf-8"))
-    assert actual == 59
+    assert actual <= 59
     assert baseline["execute_call_ceilings"]["app/main.py"] == actual
 
     router_source = Path(dashboard_commands_router.__file__).read_text(encoding="utf-8")

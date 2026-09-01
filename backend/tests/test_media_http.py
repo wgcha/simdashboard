@@ -9,6 +9,8 @@ from fastapi.testclient import TestClient
 from starlette.requests import Request
 
 from app import main as main_module
+from app.adapters.http.routers import drop_videos as drop_videos_router
+from app.adapters.persistence.drop_videos import SQLDropVideoRepository
 from app.config import media_storage_mode
 from app.database import initialize_database
 from app.database_connection import connect
@@ -90,15 +92,17 @@ def test_media_storage_mode_controls_legacy_asset_and_drop_video_fallbacks(monke
 
             monkeypatch.setattr(media_router, "media_storage_mode", lambda: "database-only")
             monkeypatch.setattr(main_module, "media_storage_mode", lambda: "database-only")
+            monkeypatch.setattr(drop_videos_router.app_config, "media_storage_mode", lambda: "database-only")
             assert client.get(f"/api/assets/{legacy_asset_id}").status_code == 404
 
-            monkeypatch.setattr(main_module, "list_drop_videos", lambda _connection, _load_case_id: [])
+            monkeypatch.setattr(SQLDropVideoRepository, "list_drop_videos", lambda _self, _load_case_id: [])
             catalog = client.get("/api/load-cases/loadcase-drop-bottom-001/drop-videos").json()
             assert catalog["source"] == "DATABASE"
             assert catalog["videos"] == []
             assert catalog["pagination"]["total_items"] == 0
 
             monkeypatch.setattr(main_module, "media_storage_mode", lambda: "dual-read")
+            monkeypatch.setattr(drop_videos_router.app_config, "media_storage_mode", lambda: "dual-read")
             monkeypatch.setattr(media_router, "media_storage_mode", lambda: "dual-read")
             fallback_catalog = client.get("/api/load-cases/loadcase-drop-bottom-001/drop-videos").json()
             assert fallback_catalog["source"] == "EXAMPLE_ADAPTER"
