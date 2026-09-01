@@ -21,7 +21,6 @@ from .modules.access_control import (
     REQUEST_EDIT,
     RESULT_IMPORT,
     WORKFLOW_EDIT,
-    has_permission,
     require_permission,
     require_resource_permission,
     resolve_project_assignee,
@@ -71,6 +70,9 @@ from .adapters.http.routers.quality_thresholds import router as quality_threshol
 from .adapters.http.routers.workflow_queries import router as workflow_queries_router
 from .adapters.http.routers.feature_examples import router as feature_examples_router
 from .adapters.http.routers.portfolio import router as portfolio_router
+from .adapters.http.routers.dashboard_reads import router as dashboard_reads_router
+from .adapters.http.routers.dashboard_reads import version_router as dashboard_versions_router
+from .domains.dashboard_reads.policies import analysis_page_meta as _analysis_page_meta
 from .services.drop_video_demo import (
     DEMO_DROP_VIDEO_LOAD_CASE_IDS,
     DROP_VIDEO_DEMO_BY_ID,
@@ -628,13 +630,6 @@ app.include_router(report_templates_router)
 SYSTEM_ANALYSIS_PAGE_IDS = {"dashboard-drop-default", "dashboard-chassis-default", "dashboard-run-comparison-default"}
 
 
-def _analysis_page_meta(definition: dict[str, Any]) -> dict[str, Any] | None:
-    page = definition.get("page")
-    if not isinstance(page, dict) or page.get("kind") != "analysis_page":
-        return None
-    return page
-
-
 def _analysis_page_summary(item: dict[str, Any], definition: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": item["id"],
@@ -916,41 +911,7 @@ def reorder_dashboard_pages(payload: AnalysisPageOrderUpdate, request: Request) 
         return _list_analysis_pages(conn, payload.load_case_id, include_private=True, include_archived=False)
 
 
-@app.get("/api/dashboards/{dashboard_id}")
-def get_dashboard(dashboard_id: str, request: Request) -> dict[str, Any]:
-    with connect() as conn:
-        result = rows(conn.execute("SELECT * FROM dashboards WHERE id = ?", [dashboard_id]))
-        if not result:
-            raise HTTPException(404, "대시보드를 찾을 수 없습니다.")
-        item = result[0]
-        definition = json_value(item.pop("definition_json"))
-        page = _analysis_page_meta(definition)
-        if page and page.get("status") in {"draft", "archived"}:
-            require_permission(request, DASHBOARD_EDIT, item["project_id"], conn=conn)
-        definition["version"] = item["version"]
-        definition["updated_at"] = item["updated_at"]
-        return definition
-
-
-@app.get("/api/dashboards")
-def list_dashboards(request: Request, project_id: str | None = None) -> list[dict[str, Any]]:
-    with connect() as conn:
-        if project_id:
-            stored = rows(conn.execute("SELECT id, project_id, request_id, load_case_id, name, description, version, definition_json, updated_at FROM dashboards WHERE project_id = ? ORDER BY updated_at DESC", [project_id]))
-        else:
-            stored = rows(conn.execute("SELECT id, project_id, request_id, load_case_id, name, description, version, definition_json, updated_at FROM dashboards ORDER BY updated_at DESC"))
-        result = []
-        for item in stored:
-            definition = json_value(item.pop("definition_json")) or {}
-            page = _analysis_page_meta(definition)
-            if (
-                page
-                and page.get("status") in {"draft", "archived"}
-                and not has_permission(request, DASHBOARD_EDIT, item["project_id"], conn=conn)
-            ):
-                continue
-            result.append(item)
-        return result
+app.include_router(dashboard_reads_router)
 
 
 @app.put("/api/dashboards/{dashboard_id}")
@@ -976,57 +937,7 @@ def save_dashboard(dashboard_id: str, definition: DashboardDefinition, request: 
     return {"status": "saved", "version": version, "updated_at": now}
 
 
-@app.get("/api/dashboards/{dashboard_id}/versions")
-def get_dashboard_versions(
-    dashboard_id: str,
-    request: Request,
-    include_invalid: bool = False,
-) -> list[dict[str, Any]]:
-    with connect() as conn:
-        current = conn.execute("SELECT definition_json FROM dashboards WHERE id = ?", [dashboard_id]).fetchone()
-        if not current:
-            raise HTTPException(404, "대시보드를 찾을 수 없습니다.")
-        page = _analysis_page_meta(json_value(current[0]) or {})
-        if page and page.get("status") in {"draft", "archived"}:
-            require_resource_permission(request, DASHBOARD_EDIT, "dashboard", dashboard_id, conn=conn)
-        valid_filter = "" if include_invalid else " AND is_valid = true"
-        return rows(
-            conn.execute(
-                f"SELECT dashboard_id, version, created_by, created_at, is_valid FROM dashboard_versions WHERE dashboard_id = ?{valid_filter} ORDER BY version DESC",
-                [dashboard_id],
-            )
-        )
-
-
-@app.get("/api/dashboards/{dashboard_id}/versions/{version}")
-def get_dashboard_version(
-    dashboard_id: str,
-    version: int,
-    request: Request,
-    include_invalid: bool = False,
-) -> dict[str, Any]:
-    with connect() as conn:
-        current = conn.execute("SELECT definition_json FROM dashboards WHERE id = ?", [dashboard_id]).fetchone()
-        if not current:
-            raise HTTPException(404, "대시보드를 찾을 수 없습니다.")
-        page = _analysis_page_meta(json_value(current[0]) or {})
-        if page and page.get("status") in {"draft", "archived"}:
-            require_resource_permission(request, DASHBOARD_EDIT, "dashboard", dashboard_id, conn=conn)
-        valid_filter = "" if include_invalid else " AND is_valid = true"
-        stored = conn.execute(
-            f"SELECT definition_json, created_by, created_at, is_valid FROM dashboard_versions WHERE dashboard_id = ? AND version = ?{valid_filter}",
-            [dashboard_id, version],
-        ).fetchone()
-        if not stored:
-            raise HTTPException(404, "대시보드 버전을 찾을 수 없습니다.")
-    return {
-        "dashboard_id": dashboard_id,
-        "version": version,
-        "definition": json_value(stored[0]) or {},
-        "created_by": stored[1],
-        "created_at": stored[2],
-        "is_valid": stored[3],
-    }
+app.include_router(dashboard_versions_router)
 
 
 @app.delete("/api/dashboards/{dashboard_id}/versions/{version}")

@@ -138,6 +138,14 @@ MCP, Embedding, Graph DB는 이번 리팩터링에서 구현하지 않는다. �
   유지했고, 사용처가 없어진 legacy `repositories/portfolio.py`는 제거했다. focused **17 passed**, full backend
   **1149 passed, 10 skipped**와 architecture·OpenAPI·compile gate를 확인했다. `main.py`는 **1,176줄**, direct `execute` actual/ceiling은 **67**로
   이 이동에서 변동 없다. 개인 노트북 검증으로 완결되며 별도 PostgreSQL 검증은 필요 없다.
+- Dashboard read cluster는 detail/list/version list/version detail 4개 GET을
+  `HTTP → application → domain errors+policy+ports → SQL adapter`로 분리했다. legacy global route order
+  (detail/list → save PUT → versions → delete)를 유지하고, active 공개 조회와 draft/archived 조건부 권한,
+  404 선판정, `include_invalid`, `definition_json` list exclusion, exact response wrapper를 보존했다.
+  모든 조회는 기존처럼 같은 connection을 사용하며 audit·transaction·write 동작은 변경하지 않았다.
+  focused **18 passed**, full backend **1153 passed, 10 skipped**, compile·architecture·OpenAPI gate를 확인했고
+  `main.py`는 **1,087줄**, direct `execute` actual/ceiling은 **60**으로 하향했다. 개인 노트북 검증으로 완결되며
+  별도 PostgreSQL은 필요 없다. 운영 권한·실데이터·성능 검증은 사내 release gate로 남긴다.
 
 검증에서 기본 backend suite 176개가 통과하고 3개 PostgreSQL opt-in test가 skip됐다. 별도의 disposable PostgreSQL 18 cluster를 blank DB에서 migration·권한 hardening·reference seed까지 구성한 뒤 app-role profile 60개가 통과했고, canonical 6-step workflow가 suite 전후 동일함을 확인했다. frontend architecture/API/preferences self-test, TypeScript와 production build가 통과했으며 fresh backend/Vite/Chromium을 사용한 Playwright 20개도 모두 통과했다. 실제 Rocky 서버 값·TLS·service user가 없어 운영 배포는 수행하지 않았고, 로컬 credential 파일의 과거 과도한 권한 노출에 대해서는 비밀번호 회전이 별도 운영 조치로 남아 있다. 이 외부 검증 상태는 코드 contract와 구분한다.
 
@@ -520,6 +528,9 @@ git diff --check
 ### 현재 후속 순서 — 2026-09-01
 
 1. Report layout 6 API, PPTX template 4 API, variable catalog 4 API, project workspace layout 5 route, import-schemas 4 route, result-review 3 route, analysis-insights 2 route, load-case-overview 1 route, quality thresholds 3 route, workflow queries GET 2 route, request load-cases GET 1 route, feature-examples GET 1 route와 portfolio overview/export GET 2 route의 완료 상태를 계약 테스트로 유지한다.
-2. 다음 권장 순서는 dashboard read cluster 감사다. `GET /api/dashboards/{dashboard_id}`, 목록, version 목록·상세 4 GET의 조건부 draft/archived permission과 404/JSON projection을 재검토하고 direct `execute` 7개 분리 가능성을 확인한다. audit·명시적 transaction은 없다.
+2. dashboard read cluster 재감사를 완료했다. 다음 순서는 `GET /api/projects/{project_id}/requests` read slice로
+   direct `execute`를 **60→59**로 줄이고, `POST /api/dashboard-commands/preview`의 pure allowlist policy,
+   `GET /api/load-cases/{load_case_id}/drop-videos`의 catalog-only read를 진행한다. drop-video streaming은
+   이번 범위에서 제외한다.
 3. import-schemas DELETE의 별도 permission connection, non-transactional usage check, 명시적 domain delete audit 부재와 review-list GET의 explicit `PROJECT_DATA_VIEW` 부재, quality-threshold GET의 explicit project permission 부재와 alias global semantics, provider construction purity, dict mutation/storage normalization, unordered media/template, company-wide read, single threshold semantics, row lock/CAS, post-commit fetch rollback seam/security debt를 보존 debt로 기록하되 구조 refactor에 섞지 않는다.
 4. PostgreSQL 18 app-role 권한·audit INSERT, correlated update parity, OIDC active-nonmember/cross-project 정책, 동시 update locking/CAS, 현실 데이터 EXPLAIN/index/lock latency와 nginx·proxy/private CA·backup/restore/deploy는 사내 office-only release gate에서 검증한다.

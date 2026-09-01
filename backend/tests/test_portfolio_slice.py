@@ -109,7 +109,7 @@ def test_main_relinquishes_portfolio_implementation() -> None:
     actual = sum(isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "execute" for node in ast.walk(ast.parse(source)))
     baseline = json.loads(Path("scripts/architecture_baseline.json").read_text())["execute_call_ceilings"]["app/main.py"]
     assert actual <= 67
-    assert actual == baseline == 67
+    assert actual == baseline
     router_source = Path("app/adapters/http/routers/portfolio.py").read_text()
     assert ".execute(" not in router_source
     assert all(token not in router_source for token in ("permission", "audit", "BEGIN", "COMMIT", "ROLLBACK"))

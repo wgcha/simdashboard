@@ -180,9 +180,18 @@ latest-run/monitoring/KPI/placeholder projection과 CSV BOM·12열 header·downl
 architecture·OpenAPI·compile gate를 확인했고 `main.py`는 **1,176줄**, direct `.execute()` actual/ceiling은 **67**로 불변이다. 개인 노트북에서 완결되며
 별도 PostgreSQL 검증은 필요 없다.
 
-다음 권장 감사 대상은 dashboard read cluster다. dashboard detail/list/version list/version detail 4 GET의 조건부
-draft/archived permission, 404·JSON projection과 direct SQL 7개를 behavior-neutral query boundary로 분리할 수 있는지
-검토한다. 해당 read cluster에는 audit·명시적 transaction이 없다.
+`dashboard` read cluster는 detail/list/version list/version detail 4개 GET을 HTTP/application/domain errors+policy+ports/
+SQL adapter로 분리했다. legacy global route order(detail/list → save PUT → versions → delete), active 공개 조회,
+draft/archived 조건부 permission, 404 선판정, `include_invalid`, `definition_json` list exclusion과 exact response
+wrapper를 유지한다. 같은 connection 조회를 사용하며 audit·transaction·write 동작은 변경하지 않았다. focused
+**18 passed**, full backend **1153 passed, 10 skipped**, compile·architecture·OpenAPI gate를 확인했고 `main.py`는
+**1,087줄**, direct `.execute()` actual/ceiling은 **60**으로 하향했다. 개인 노트북 검증으로 완결되며 별도 PostgreSQL은
+필요 없다. 운영 권한·실데이터·성능 검증은 사내 release gate로 남긴다.
+
+재감사 결과 다음 read/policy 순서를 확정했다. 첫째 `GET /api/projects/{project_id}/requests` read slice에서
+direct `.execute()`를 **60→59**로 줄인다. 둘째 `POST /api/dashboard-commands/preview`를 pure allowlist policy로
+분리한다. 셋째 `GET /api/load-cases/{load_case_id}/drop-videos`를 catalog-only read로 분리하며, drop-video
+streaming은 이번 범위에서 제외한다.
 
 Phase 2의 `result_ingestion`은 세 안전 단위로 정리했다. 첫 단위는 결과-import template, 수동 결과
 import, 예제 폴더 import endpoint를 `main.py`에서 `routers/result_ingestion.py`로 분리했다. 두 번째

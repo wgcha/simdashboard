@@ -642,9 +642,24 @@ project, analysis type, status, `search` max 120의 6개 filter와 existing late
 
 Focused **17 passed**, full backend **1149 passed, 10 skipped**, architecture·OpenAPI·compile gate를 확인했다.
 `backend/app/main.py`는 **1,176줄**, direct `.execute()` actual/ceiling은 **67**로 이 이동에서 변동 없다. 개인 노트북 검증으로 완결되며 별도 PostgreSQL
-검증은 필요 없다. 다음 권장 감사는 dashboard read cluster이며, detail/list/version list/version detail 4 GET의
-조건부 draft/archived permission·404/JSON projection과 direct SQL 7개 분리 가능성을 검토한다. audit·명시적
-transaction은 없다.
+검증은 필요 없다. 다음 재감사 대상으로 dashboard read cluster를 선정해 detail/list/version list/version detail
+4 GET의 조건부 draft/archived permission·404/JSON projection과 direct SQL 7개 분리 가능성을 검토했다.
+audit·명시적 transaction은 없다.
+
+2026-09-01 dashboard read cluster도 완료했다. detail/list/version list/version detail 4개 GET을
+`HTTP → application → domain errors+policy+ports → SQL adapter`로 분리했다. legacy global route order
+(detail/list → save PUT → versions → delete), active 공개 조회, draft/archived 조건부 permission, 404 선판정,
+`include_invalid`, `definition_json` list exclusion과 exact response wrapper를 보존했다. 같은 connection 조회를
+유지하며 audit·transaction·write 동작은 변경하지 않았다.
+
+Focused **18 passed**, full backend **1153 passed, 10 skipped**, compile·architecture·OpenAPI gate를 확인했다.
+`backend/app/main.py`는 **1,087줄**, direct `.execute()` actual/ceiling은 **60**으로 하향했다. 개인 노트북
+검증으로 완결되며 별도 PostgreSQL 검증은 필요 없다. 운영 권한·실데이터·성능 검증은 사내 release gate로 남긴다.
+
+재감사 결과 다음 순서를 확정했다. `GET /api/projects/{project_id}/requests` read slice에서 direct `.execute()`를
+**60→59**로 줄이고, `POST /api/dashboard-commands/preview`를 pure allowlist policy로 분리한 뒤,
+`GET /api/load-cases/{load_case_id}/drop-videos`를 catalog-only read로 분리한다. drop-video streaming은 이번
+범위에서 제외한다.
 Duplicate rejection 409의 attempt detail은 non-admin에게 profile snapshot과 command preview를 노출하지 않도록 router에서
 sanitize하고 admin 원문 계약은 유지한다. idempotency check와 attempt insert 사이의 경쟁, 그리고 QUEUED→DEMO_ONLY runner
 →finalization 사이의 복구/재처리 설계는 이번 safe slice에서 transaction semantics를 바꾸지 않고 별도 reliability 계획으로
@@ -823,7 +838,10 @@ proxy/CA를 설치·갱신하는 자동화는 아직 없다. `NO_PROXY` assignme
    GET 2 route, load-case-overview GET 1 route, quality-thresholds GET + canonical PUT + deprecated alias PUT
    3 route, workflow detail/list GET 2 route, request load-cases GET 1 route, feature-examples GET 1 route와
    portfolio overview/export GET 2 route는 완료했다. feature-examples data profile grouped query **8→1** 최적화도
-   완료했으며, 다음 권장 감사는 dashboard read cluster다. query-count/result parity는 CI로 유지하고 실데이터
+   완료했으며, dashboard read cluster 재감사도 완료했다. 다음 순서는 `GET /api/projects/{project_id}/requests`
+   read slice(direct `execute` **60→59**), `POST /api/dashboard-commands/preview` pure allowlist policy,
+   `GET /api/load-cases/{load_case_id}/drop-videos` catalog-only read다. drop-video streaming은 제외한다.
+   query-count/result parity는 CI로 유지하고 실데이터
    `EXPLAIN`/latency는 office-only에서 검증한다. GET의 explicit project permission
    부재와 alias global semantics, row lock/CAS, post-commit fetch rollback seam, import-schemas DELETE의 별도
    permission connection·non-transactional usage check·명시적 domain delete audit 부재, review-list GET의
