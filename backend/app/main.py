@@ -73,6 +73,8 @@ from .adapters.http.routers.drop_videos import router as drop_videos_router
 from .adapters.http.routers.system_health import router as system_health_router
 from .adapters.http.routers.dashboard_reads import router as dashboard_reads_router
 from .adapters.http.routers.dashboard_reads import version_router as dashboard_versions_router
+from .adapters.http.routers.analysis_pages import router as analysis_pages_router
+from .adapters.persistence.analysis_pages import SQLAnalysisPageRepository
 from .domains.dashboard_reads.policies import analysis_page_meta as _analysis_page_meta
 from .services.drop_video_demo import (
     DROP_VIDEO_DEMO_BY_ID,
@@ -482,35 +484,14 @@ app.include_router(variable_catalog_router)
 app.include_router(workspace_layouts_router)
 app.include_router(reports_router)
 app.include_router(report_templates_router)
+app.include_router(analysis_pages_router)
 
 
 SYSTEM_ANALYSIS_PAGE_IDS = {"dashboard-drop-default", "dashboard-chassis-default", "dashboard-run-comparison-default"}
 
 
-def _analysis_page_summary(item: dict[str, Any], definition: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "id": item["id"],
-        "project_id": item["project_id"],
-        "request_id": item.get("request_id"),
-        "load_case_id": item.get("load_case_id"),
-        "name": item["name"],
-        "description": item.get("description") or "",
-        "version": item["version"],
-        "updated_at": item["updated_at"],
-        "page": _analysis_page_meta(definition),
-    }
-
-
 def _require_load_case_context(conn: Any, load_case_id: str) -> tuple[str, str]:
-    context = conn.execute(
-        """
-        SELECT ar.project_id, lc.request_id
-        FROM load_cases lc
-        JOIN analysis_requests ar ON ar.id = lc.request_id
-        WHERE lc.id = ?
-        """,
-        [load_case_id],
-    ).fetchone()
+    context = SQLAnalysisPageRepository(conn).load_case_context(load_case_id)
     if not context:
         raise HTTPException(404, "하중 경우를 찾을 수 없습니다.")
     return context[0], context[1]
@@ -578,51 +559,11 @@ def _delete_analysis_page_records(conn: Any, dashboard_id: str) -> None:
 
 def _list_analysis_pages(conn: Any, load_case_id: str, *, include_private: bool, include_archived: bool) -> list[dict[str, Any]]:
     _require_load_case_context(conn, load_case_id)
-    stored = rows(
-        conn.execute(
-            """
-            SELECT id, project_id, request_id, load_case_id, name, description, version, definition_json, updated_at
-            FROM dashboards
-            WHERE load_case_id = ? OR id IN ('dashboard-drop-default', 'dashboard-chassis-default', 'dashboard-run-comparison-default')
-            """,
-            [load_case_id],
-        )
+    return SQLAnalysisPageRepository(conn).list_analysis_pages(
+        load_case_id,
+        include_private=include_private,
+        include_archived=include_archived,
     )
-    result: list[dict[str, Any]] = []
-    for item in stored:
-        definition = json_value(item.pop("definition_json")) or {}
-        page = _analysis_page_meta(definition)
-        if not page:
-            continue
-        is_system = item["id"] in SYSTEM_ANALYSIS_PAGE_IDS and page.get("is_system") is True
-        is_current_custom = item.get("load_case_id") == load_case_id and page.get("analysis_key") == "custom" and page.get("is_system") is False
-        if not (is_system or is_current_custom):
-            continue
-        status = page.get("status")
-        if not include_private and not is_system and status != "published":
-            continue
-        if not include_archived and status == "archived":
-            continue
-        result.append(_analysis_page_summary(item, definition))
-    return sorted(result, key=lambda item: (item["page"]["display_order"], item["name"].casefold(), item["id"]))
-
-
-@app.get("/api/dashboard-pages", response_model=list[AnalysisPageSummary])
-def list_public_dashboard_pages(load_case_id: str = Query(min_length=1, max_length=120)) -> list[dict[str, Any]]:
-    with connect() as conn:
-        return _list_analysis_pages(conn, load_case_id, include_private=False, include_archived=False)
-
-
-@app.get("/api/admin/dashboard-pages", response_model=list[AnalysisPageSummary])
-def list_admin_dashboard_pages(
-    request: Request,
-    load_case_id: str = Query(min_length=1, max_length=120),
-    include_archived: bool = False,
-) -> list[dict[str, Any]]:
-    with connect() as conn:
-        project_id, _ = _require_load_case_context(conn, load_case_id)
-        require_permission(request, DASHBOARD_EDIT, project_id, conn=conn)
-        return _list_analysis_pages(conn, load_case_id, include_private=True, include_archived=include_archived)
 
 
 @app.post("/api/admin/dashboard-pages", response_model=DashboardDefinition, status_code=201)

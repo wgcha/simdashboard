@@ -156,7 +156,7 @@ MCP, Embedding, Graph DB는 이번 리팩터링에서 구현하지 않는다. �
 - 이 이동은 audit·transaction·write 동작을 바꾸지 않았다. focused **26 passed**,
   full backend **1159 passed, 10 skipped**, compile·architecture·OpenAPI gate를 확인했고 `main.py`는 **1,070줄**,
   direct `execute` ceiling은 **60 → 59**로 낮아졌다. 개인 노트북에서 완결되며
-별도 PostgreSQL 검증은 필요 없다. dashboard command preview, drop-video catalog-only read, analysis runs GET과 health GET이 완료됐으며, 다음은 dashboard page public/admin GET 2개 read cluster 분리다.
+별도 PostgreSQL 검증은 필요 없다. dashboard command preview, drop-video catalog-only read, analysis runs GET과 health GET이 완료됐으며, 다음은 dashboard page admin write cluster다.
 
 검증에서 기본 backend suite 176개가 통과하고 3개 PostgreSQL opt-in test가 skip됐다. 별도의 disposable PostgreSQL 18 cluster를 blank DB에서 migration·권한 hardening·reference seed까지 구성한 뒤 app-role profile 60개가 통과했고, canonical 6-step workflow가 suite 전후 동일함을 확인했다. frontend architecture/API/preferences self-test, TypeScript와 production build가 통과했으며 fresh backend/Vite/Chromium을 사용한 Playwright 20개도 모두 통과했다. 실제 Rocky 서버 값·TLS·service user가 없어 운영 배포는 수행하지 않았고, 로컬 credential 파일의 과거 과도한 권한 노출에 대해서는 비밀번호 회전이 별도 운영 조치로 남아 있다. 이 외부 검증 상태는 코드 contract와 구분한다.
 
@@ -175,7 +175,7 @@ exact 6 recognized + 1 unrecognized response, `datetime.now().timestamp()` 기�
 restore 직후 마지막 route 위치, operationId, `2..500` schema, optional `project_id`도 유지한다. focused root **15 passed**,
 compile·architecture·OpenAPI gate를 확인했고 전체 backend 회귀도 **1164 passed, 10 skipped in 891.76s (0:14:51)**로
 완료했다. `main.py`는 **1,009줄**, direct `execute`는 **59**다. 개인 노트북 검증으로 완결되며 PostgreSQL 검증은
-필요 없다. 다음은 dashboard page public/admin GET 2개 read cluster 분리이며 content/download streaming은 제외한다.
+필요 없다. 다음은 dashboard page admin write cluster이며 content/download streaming은 제외한다.
 
 ### 2026-09-01 최신 vertical slice — drop-video catalog-only read
 
@@ -185,7 +185,7 @@ resource authorization → stored list 조회 후 close 순서, context fail-clo
 dual-read일 때만 example file probe를 수행하는 순서를 보존했다. stored/demo 혼합 금지, sort·whole summary·pagination,
 generic resource 404, route order와 OpenAPI 계약도 유지한다. focused root **35 passed**, compile·architecture·OpenAPI
 gate를 확인했고 전체 backend 회귀는 **1176 passed, 10 skipped in 881.53s (0:14:41)**였으며 `main.py`는 **899줄**, direct `execute`는 **58**이다. 개인 노트북에서 완결되며 PostgreSQL 실데이터·
-권한 범위·대용량 latency는 사내 release gate로 남긴다. 다음은 dashboard page public/admin GET 2개 read cluster 분리다.
+권한 범위·대용량 latency는 사내 release gate로 남긴다. 다음은 dashboard page admin write cluster다.
 
 Analysis runs GET은 완료했으며 `adapters/http/routers/analysis_runs.py`가 기존 application/results query, domain
 policy/port, SQL provider를 그대로 연결한다. auth-before-provider, unknown `200 []`, `run_no DESC`, `is_latest`,
@@ -197,7 +197,27 @@ health GET도 `GET /api/health`를 router → application query → persistence 
 request-id·audit 없음, general 500 semantics와 retry → health → feature-examples route adjacency를 유지한다. focused root
 **21 passed**, 전체 backend 회귀는 **1189 passed, 10 skipped in 891.45s (0:14:51)**였고 compile·architecture·OpenAPI gate를 확인했으며 `main.py`는 **883줄**, direct execute는 **57**이다.
 개인 노트북에서 완결되며 domain/UoW는 추가하지 않는다. 사내 PostgreSQL pool/app-role/nginx TLS/systemd timeout은
-release gate로 검증한다. 다음은 dashboard page public/admin GET 2개 read cluster 분리이며 streaming/write routes는 후순위다.
+release gate로 검증한다. 다음은 dashboard page admin write cluster이며 streaming routes는 후순위다.
+
+### 2026-09-01 최신 vertical slice — dashboard page public/admin GET
+
+두 GET을 `adapters/http/routers/analysis_pages.py → application/analysis_pages/queries.py →
+domains/analysis_pages` policy/ports/errors → `adapters/persistence/analysis_pages.py`로 분리했다.
+기존 `dashboard_reads`는 별도 유지하며 behavior change는 없다. Public은 context check와 explicit project
+permission 부재를 유지하고 system pages 및 current-load-case published custom pages를 반환한다. Admin은
+같은 connection에서 `context → DASHBOARD_EDIT → context 재확인 → candidates`를 수행하며 missing은 Korean
+404, permission failure는 second lookup 전 fail-closed다. system/custom/status/include_archived filter,
+SQL `ORDER BY` 없는 조회 후 `(display_order, name.casefold(), id)` 정렬과 falsy description `''` 투영도 보존했다.
+
+Main compatibility wrapper의 write/reorder same-connection과 `_list_analysis_pages` context preflight를 그대로
+두고 create/update/delete/reorder transaction·audit은 바꾸지 않았다. focused combined **23 passed in 43.35s**,
+전체 backend **1195 passed, 10 skipped in 886.77s (0:14:46)**와 compile·architecture·OpenAPI gate를 확인했다.
+`main.py`는 **824줄**, direct execute ceiling은 **57 → 55**다. Local laptop은 policy/fake/DuckDB/security/full
+tests를 완료했고, PostgreSQL app-role/admin permission, same-connection real rows, proxy/OpenAPI smoke,
+real-data latency는 office-only release gate로 남긴다. 다음 권장은 admin write cluster
+(POST/PATCH/DELETE/PUT order)다. create에 새 transaction을 추가하지 않고, update resource-auth-first/version
+max+1, delete explicit BEGIN/rollback, reorder duplicate precheck/exact-set 및 same-connection final list 계약을 보존한다.
+Workbench large restructure와 drop-video streaming은 deferred다.
 
 ## 2. 2026-08-13 기준선 점검 결과
 
@@ -575,6 +595,6 @@ git diff --check
 2. dashboard read cluster 재감사와 `GET /api/projects/{project_id}/requests` read slice를 완료했고,
    `POST /api/dashboard-commands/preview` pure allowlist policy도 완료했다. 다음은
    `GET /api/load-cases/{load_case_id}/drop-videos` catalog-only read도 완료했다. 다음은 remaining `main.py`
-`GET /api/load-cases/{load_case_id}/runs` HTTP 소유권 이동과 health GET도 완료했다. 다음은 dashboard page public/admin GET 2개 read cluster 분리다. drop-video streaming은 이번 범위에서 제외한다.
+`GET /api/load-cases/{load_case_id}/runs` HTTP 소유권 이동과 health GET도 완료했다. 다음은 dashboard page admin write cluster다. drop-video streaming은 이번 범위에서 제외한다.
 3. import-schemas DELETE의 별도 permission connection, non-transactional usage check, 명시적 domain delete audit 부재와 review-list GET의 explicit `PROJECT_DATA_VIEW` 부재, quality-threshold GET의 explicit project permission 부재와 alias global semantics, provider construction purity, dict mutation/storage normalization, unordered media/template, company-wide read, single threshold semantics, row lock/CAS, post-commit fetch rollback seam/security debt를 보존 debt로 기록하되 구조 refactor에 섞지 않는다.
 4. PostgreSQL 18 app-role 권한·audit INSERT, correlated update parity, OIDC active-nonmember/cross-project 정책, 동시 update locking/CAS, 현실 데이터 EXPLAIN/index/lock latency와 nginx·proxy/private CA·backup/restore/deploy는 사내 office-only release gate에서 검증한다.
