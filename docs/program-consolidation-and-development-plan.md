@@ -588,6 +588,18 @@ dict mutation/storage normalization, unordered media/template, company-wide read
 PostgreSQL 18 app-role 권한·audit INSERT, correlated update parity, OIDC active-nonmember/cross-project 정책,
 동시 update locking/CAS, 현실 데이터 EXPLAIN/index/lock latency와 nginx/proxy/private CA 검증은 office-only
 release gate다. 다음 우선순위는 **재감사 후 확정**한다.
+
+2026-09-01 workflow queries read-only vertical slice도 완료했다. `GET
+/api/requests/{request_id}/workflow`와 `GET /api/workflows`를 workflow-queries
+HTTP/application/domain port/persistence로 분리했고 `main.py`는 router composition만 유지한다. Detail은
+analysis request 404를 monitoring 전에 판정하며 detail/list 모두 같은 connection의 monitoring을 사용한다.
+List의 exact join·`min`/`COALESCE`·group·`requested_at DESC` SQL/default, status overwrite와 10-field projection을
+유지했고 두 GET에는 legacy처럼 explicit permission·audit·transaction이 없다.
+
+Focused **19 passed**, architecture·OpenAPI·compile gate와 full backend **1127 passed, 10 skipped**를 확인했다.
+직접 `wc`로 측정한 `backend/app/main.py`는 **1,263줄**, direct `.execute()` actual/ceiling은 **69**다. 이 slice는
+개인 노트북 검증으로 완결되며 별도 PostgreSQL 필수 검증은 추가하지 않는다. 기존 office-only release gate와 다음
+우선순위 **재감사 후 확정** 상태는 유지한다.
 Duplicate rejection 409의 attempt detail은 non-admin에게 profile snapshot과 command preview를 노출하지 않도록 router에서
 sanitize하고 admin 원문 계약은 유지한다. idempotency check와 attempt insert 사이의 경쟁, 그리고 QUEUED→DEMO_ONLY runner
 →finalization 사이의 복구/재처리 설계는 이번 safe slice에서 transaction semantics를 바꾸지 않고 별도 reliability 계획으로
@@ -763,8 +775,8 @@ proxy/CA를 설치·갱신하는 자동화는 아직 없다. `NO_PROXY` assignme
 8. **현재 완료·다음 우선순위:** menu policy, report layout 6 API,
    PPTX template 4 API, variable catalog 4 API, project workspace layout 5 route, import-schemas
    4 route, result-review bookmark+annotation GET/POST/PATCH 3 route, analysis-insights comparison/trust
-   GET 2 route, load-case-overview GET 1 route와 quality-thresholds GET + canonical PUT + deprecated alias PUT
-   3 route는 완료했다. 다음 vertical-slice 우선순위는 **재감사 후 확정**한다. GET의 explicit project permission
+   GET 2 route, load-case-overview GET 1 route, quality-thresholds GET + canonical PUT + deprecated alias PUT
+   3 route와 workflow detail/list GET 2 route는 완료했다. 다음 vertical-slice 우선순위는 **재감사 후 확정**한다. GET의 explicit project permission
    부재와 alias global semantics, row lock/CAS, post-commit fetch rollback seam, import-schemas DELETE의 별도
    permission connection·non-transactional usage check·명시적 domain delete audit 부재, review-list GET의
    explicit `PROJECT_DATA_VIEW` 부재, provider construction purity, dict mutation/storage normalization,

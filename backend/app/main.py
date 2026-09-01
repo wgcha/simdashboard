@@ -32,7 +32,7 @@ from .repositories.media_repository import get_blob, get_drop_video, list_drop_v
 from .services.media_http import build_media_response
 from .repositories.portfolio import PortfolioRepository
 from .repositories.workbench import WorkbenchRepository
-from .services.request_monitoring import request_monitoring_summary, sync_request_status
+from .services.request_monitoring import sync_request_status
 from .schemas.api import (
     AnalysisPageCreate,
     AnalysisPageOrderUpdate,
@@ -68,6 +68,7 @@ from .adapters.http.routers.load_case_overview import router as load_case_overvi
 from .adapters.http.routers.analysis_insights import router as analysis_insights_router
 from .adapters.http.routers.result_review import router as result_review_router
 from .adapters.http.routers.quality_thresholds import router as quality_thresholds_router
+from .adapters.http.routers.workflow_queries import router as workflow_queries_router
 from .services.drop_video_demo import (
     DEMO_DROP_VIDEO_LOAD_CASE_IDS,
     DROP_VIDEO_DEMO_BY_ID,
@@ -549,67 +550,7 @@ app.include_router(analysis_insights_router)
 
 app.include_router(result_review_router)
 app.include_router(quality_thresholds_router)
-
-
-@app.get("/api/requests/{request_id}/workflow")
-def get_workflow(request_id: str) -> dict[str, Any]:
-    with connect() as conn:
-        request_data = rows(conn.execute("SELECT * FROM analysis_requests WHERE id = ?", [request_id]))
-        if not request_data:
-            raise HTTPException(404, "해석 의뢰를 찾을 수 없습니다.")
-        monitoring = request_monitoring_summary(conn, request_id)
-    request_data[0]["status"] = monitoring["status"]
-    return {
-        "request": request_data[0],
-        "steps": monitoring["steps"],
-        "progress": monitoring["progress"],
-        "current_step": monitoring["current_step"],
-        "current_step_id": monitoring["current_step_id"],
-        "completed_count": monitoring["completed_count"],
-        "total_count": monitoring["total_count"],
-        "work_plan": monitoring["work_plan"],
-        "latest_demo_run": monitoring["latest_demo_run"],
-        "request_type_assignment": monitoring["request_type_assignment"],
-    }
-
-
-@app.get("/api/workflows")
-def get_workflows() -> list[dict[str, Any]]:
-    with connect() as conn:
-        requests = rows(
-            conn.execute(
-                """
-                SELECT ar.*, p.name AS project_name, p.product_name,
-                       COALESCE(min(lc.analysis_type), 'UNASSIGNED') AS category,
-                       COALESCE(min(lc.name), '하중 경우 미지정') AS load_case_name
-                FROM analysis_requests ar
-                JOIN projects p ON p.id = ar.project_id
-                LEFT JOIN load_cases lc ON lc.request_id = ar.id
-                GROUP BY ar.id, ar.project_id, ar.title, ar.status, ar.owner, ar.owner_user_id, ar.requested_at,
-                         ar.due_at, ar.overall_note, p.name, p.product_name
-                ORDER BY ar.requested_at DESC
-                """
-            )
-        )
-        result = []
-        for request in requests:
-            monitoring = request_monitoring_summary(conn, request["id"])
-            request["status"] = monitoring["status"]
-            result.append(
-                {
-                    "request": request,
-                    "steps": monitoring["steps"],
-                    "progress": monitoring["progress"],
-                    "current_step": monitoring["current_step"],
-                    "current_step_id": monitoring["current_step_id"],
-                    "completed_count": monitoring["completed_count"],
-                    "total_count": monitoring["total_count"],
-                    "work_plan": monitoring["work_plan"],
-                    "latest_demo_run": monitoring["latest_demo_run"],
-                    "request_type_assignment": monitoring["request_type_assignment"],
-                }
-            )
-    return result
+app.include_router(workflow_queries_router)
 
 
 @app.put("/api/requests/{request_id}/workflow-steps")
