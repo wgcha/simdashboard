@@ -195,9 +195,9 @@ wrapper를 유지한다. 같은 connection 조회를 사용하며 audit·transac
 audit·transaction·write 동작은 변경하지 않았다. focused **26 passed**, full backend **1159 passed, 10 skipped**,
 compile·architecture·OpenAPI gate를 확인했고
 `backend/app/main.py`는 **1,070줄**, direct `.execute()` ceiling은 **60→59**다. 개인 노트북 완결 범위이며 별도
-PostgreSQL 검증은 필요 없다. dashboard command preview, drop-video catalog-only read와 analysis runs GET이 완료됐으며, 다음은 health GET 분리다.
+PostgreSQL 검증은 필요 없다. dashboard command preview, drop-video catalog-only read, analysis runs GET과 health GET이 완료됐으며, 다음은 dashboard page public/admin GET 2개 read cluster 분리다.
 
-재감사 결과 dashboard command preview, drop-video catalog-only read와 analysis runs GET은 완료했다. 다음은 health GET 분리이며, drop-video content/download streaming은 제외한다.
+재감사 결과 dashboard command preview, drop-video catalog-only read, analysis runs GET과 health GET은 완료했다. 다음은 dashboard page public/admin GET 2개 read cluster 분리이며, drop-video content/download streaming은 제외한다.
 
 Phase 2의 `result_ingestion`은 세 안전 단위로 정리했다. 첫 단위는 결과-import template, 수동 결과
 import, 예제 폴더 import endpoint를 `main.py`에서 `routers/result_ingestion.py`로 분리했다. 두 번째
@@ -695,7 +695,7 @@ Architecture ceiling은 목표 수치가 아니라 부채가 늘지 않게 하�
 restore 직후 마지막 route 위치, operationId, `2..500` 명령 길이와 optional `project_id` 계약도 그대로다. focused
 root **15 passed**, 전체 backend 회귀는 **1164 passed, 10 skipped in 891.76s (0:14:51)**였고 compile·architecture·OpenAPI
 gate도 확인했다. `main.py`는 **1,009줄**, direct `.execute()`는 **59**다. 개인 노트북 검증으로 완결되며 별도
-PostgreSQL 검증은 필요 없다. 다음은 health GET 분리다.
+PostgreSQL 검증은 필요 없다. 다음은 dashboard page public/admin GET 2개 read cluster 분리다.
 
 ### 2026-09-01 최신 보강 — drop-video catalog-only read
 
@@ -706,14 +706,16 @@ fail-closed 404 → storage mode 1회 → stored가 없고 dual-read일 때만 e
 금지, sort order·전체 summary·pagination, generic resource 404, route order와 OpenAPI 계약을 보존했다. focused root
 **35 passed**, 전체 backend 회귀는 **1176 passed, 10 skipped in 881.53s (0:14:41)**였고 compile·architecture·OpenAPI gate를 확인했으며
 `main.py`는 **899줄**, direct `.execute()`는 **58**이다.
-개인 노트북 검증으로 완결되며 PostgreSQL 실데이터·권한 범위·대용량 latency는 사내 release gate로 남긴다. 다음은 health GET 분리다.
+개인 노트북 검증으로 완결되며 PostgreSQL 실데이터·권한 범위·대용량 latency는 사내 release gate로 남긴다. 다음은 dashboard page public/admin GET 2개 read cluster 분리다.
 
 analysis runs GET은 완료했으며, `adapters/http/routers/analysis_runs.py`가 기존 application/results query, domain
 policy/port, SQL provider를 그대로 연결한다. auth-before-provider, unknown `200 []`, `run_no DESC`, `is_latest`,
 seeded mapping과 6-query 동작을 유지했고 focused root **26 passed**, 전체 backend 회귀는 **1179 passed, 10 skipped in 886.22s (0:14:46)**였으며 compile·architecture·OpenAPI gate를 확인했다.
-`main.py`는 **888줄**, direct execute ceiling **58**은 불변이며 PostgreSQL 전용 검증은 필요 없다. 다음은 health GET
-분리하고 streaming/write routes는 후순위다. health 후보는 `GET /api/health`이며 router → application
-query → persistence probe의 얇은 구조로, `SELECT 1`/`fetchone` → close 뒤 database backend를 읽는다. public auth bypass,
-request-id, exception 500 semantics와 retry → health → feature-examples route adjacency를 유지하고 direct execute ceiling은
-**58→57**로 예상한다. domain/UoW는 과설계라 추가하지 않으며, 개인 노트북은 DuckDB/fake lifecycle/security/full,
-사내는 PostgreSQL pool/app-role/nginx TLS/systemd timeout을 release gate로 검증한다.
+`main.py`는 **888줄**, direct execute ceiling **58**은 불변이며 PostgreSQL 전용 검증은 필요 없다.
+
+health GET도 `GET /api/health`를 router → application query → persistence callable probe로 분리했다. `connect()` →
+`SELECT 1`(params 없음) → `fetchone` 결과 무시 → close 후 backend settings를 읽으며, public auth bypass/invalid token 허용,
+request-id·audit 없음, general 500 semantics와 retry → health → feature-examples route adjacency를 유지한다. focused root
+**21 passed**, 전체 backend 회귀는 **1189 passed, 10 skipped in 891.45s (0:14:51)**였고 compile·architecture·OpenAPI gate를 확인했으며 `main.py`는 **883줄**, direct execute는 **57**이다.
+개인 노트북에서 완결되며 domain/UoW는 추가하지 않는다. 사내 PostgreSQL pool/app-role/nginx TLS/systemd timeout은
+release gate로 검증한다. 다음은 dashboard page public/admin GET 2개 read cluster 분리이며 streaming/write routes는 후순위다.

@@ -26,7 +26,7 @@ from .modules.access_control import (
     resolve_project_assignee,
 )
 from .database import connect, initialize_database, json_value, rows
-from .config import database_settings, security_settings
+from .config import security_settings
 from .repositories.media_repository import get_blob, get_drop_video
 from .services.media_http import build_media_response
 from .repositories.workbench import WorkbenchRepository
@@ -70,6 +70,7 @@ from .adapters.http.routers.feature_examples import router as feature_examples_r
 from .adapters.http.routers.portfolio import router as portfolio_router
 from .adapters.http.routers.dashboard_commands import router as dashboard_commands_router
 from .adapters.http.routers.drop_videos import router as drop_videos_router
+from .adapters.http.routers.system_health import router as system_health_router
 from .adapters.http.routers.dashboard_reads import router as dashboard_reads_router
 from .adapters.http.routers.dashboard_reads import version_router as dashboard_versions_router
 from .domains.dashboard_reads.policies import analysis_page_meta as _analysis_page_meta
@@ -110,13 +111,7 @@ def media_storage_mode() -> app_config.MediaStorageMode:
     return app_config.media_storage_mode()
 
 
-@app.get("/api/health")
-def health() -> dict[str, str]:
-    with connect() as conn:
-        conn.execute("SELECT 1").fetchone()
-    return {"status": "ok", "database_backend": database_settings().backend}
-
-
+app.include_router(system_health_router)
 app.include_router(feature_examples_router)
 app.include_router(projects_router)
 app.include_router(import_schemas_router)
