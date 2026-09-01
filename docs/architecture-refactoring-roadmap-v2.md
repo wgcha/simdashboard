@@ -132,6 +132,12 @@ MCP, Embedding, Graph DB는 이번 리팩터링에서 구현하지 않는다. �
   gate와 full backend **1143 passed, 10 skipped**를 확인했다. `main.py`는 **1,209줄**, direct `execute`
   actual/ceiling은 **67**로 변동 없다. CI는 query-count/result parity를 보장하고, PostgreSQL/DuckDB 대표 실데이터의
   `EXPLAIN ANALYZE`, fan-out, cold/warm p50/p95, rows scanned, planning·lock impact는 office-only 검증이다.
+- Portfolio read/export는 `GET /api/portfolio/overview`와 `GET /api/portfolio/export.csv`를
+  `HTTP → application query → domain port/policy → SQL adapter`로 분리했다. 6개 filter(`search` max 120),
+  latest-run·canonical monitoring·KPI·load-case 없는 request placeholder와 CSV BOM·12열 header·download filename을
+  유지했고, 사용처가 없어진 legacy `repositories/portfolio.py`는 제거했다. focused **17 passed**, full backend
+  **1149 passed, 10 skipped**와 architecture·OpenAPI·compile gate를 확인했다. `main.py`는 **1,176줄**, direct `execute` actual/ceiling은 **67**로
+  이 이동에서 변동 없다. 개인 노트북 검증으로 완결되며 별도 PostgreSQL 검증은 필요 없다.
 
 검증에서 기본 backend suite 176개가 통과하고 3개 PostgreSQL opt-in test가 skip됐다. 별도의 disposable PostgreSQL 18 cluster를 blank DB에서 migration·권한 hardening·reference seed까지 구성한 뒤 app-role profile 60개가 통과했고, canonical 6-step workflow가 suite 전후 동일함을 확인했다. frontend architecture/API/preferences self-test, TypeScript와 production build가 통과했으며 fresh backend/Vite/Chromium을 사용한 Playwright 20개도 모두 통과했다. 실제 Rocky 서버 값·TLS·service user가 없어 운영 배포는 수행하지 않았고, 로컬 credential 파일의 과거 과도한 권한 노출에 대해서는 비밀번호 회전이 별도 운영 조치로 남아 있다. 이 외부 검증 상태는 코드 contract와 구분한다.
 
@@ -513,7 +519,7 @@ git diff --check
 
 ### 현재 후속 순서 — 2026-09-01
 
-1. Report layout 6 API, PPTX template 4 API, variable catalog 4 API, project workspace layout 5 route, import-schemas 4 route, result-review 3 route, analysis-insights 2 route, load-case-overview 1 route, quality thresholds 3 route, workflow queries GET 2 route, request load-cases GET 1 route와 feature-examples GET 1 route의 완료 상태를 계약 테스트로 유지한다.
-2. 다음 vertical-slice 우선순위는 **재감사 후 확정**한다. feature-examples grouped query의 query-count/result parity는 계약 테스트로 유지하고, 실데이터 성능은 office-only에서 검증한다.
+1. Report layout 6 API, PPTX template 4 API, variable catalog 4 API, project workspace layout 5 route, import-schemas 4 route, result-review 3 route, analysis-insights 2 route, load-case-overview 1 route, quality thresholds 3 route, workflow queries GET 2 route, request load-cases GET 1 route, feature-examples GET 1 route와 portfolio overview/export GET 2 route의 완료 상태를 계약 테스트로 유지한다.
+2. 다음 권장 순서는 dashboard read cluster 감사다. `GET /api/dashboards/{dashboard_id}`, 목록, version 목록·상세 4 GET의 조건부 draft/archived permission과 404/JSON projection을 재검토하고 direct `execute` 7개 분리 가능성을 확인한다. audit·명시적 transaction은 없다.
 3. import-schemas DELETE의 별도 permission connection, non-transactional usage check, 명시적 domain delete audit 부재와 review-list GET의 explicit `PROJECT_DATA_VIEW` 부재, quality-threshold GET의 explicit project permission 부재와 alias global semantics, provider construction purity, dict mutation/storage normalization, unordered media/template, company-wide read, single threshold semantics, row lock/CAS, post-commit fetch rollback seam/security debt를 보존 debt로 기록하되 구조 refactor에 섞지 않는다.
 4. PostgreSQL 18 app-role 권한·audit INSERT, correlated update parity, OIDC active-nonmember/cross-project 정책, 동시 update locking/CAS, 현실 데이터 EXPLAIN/index/lock latency와 nginx·proxy/private CA·backup/restore/deploy는 사내 office-only release gate에서 검증한다.

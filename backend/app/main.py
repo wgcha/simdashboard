@@ -30,7 +30,6 @@ from .database import connect, initialize_database, json_value, rows
 from .config import database_settings, security_settings
 from .repositories.media_repository import get_blob, get_drop_video, list_drop_videos
 from .services.media_http import build_media_response
-from .repositories.portfolio import PortfolioRepository
 from .repositories.workbench import WorkbenchRepository
 from .services.request_monitoring import sync_request_status
 from .schemas.api import (
@@ -71,6 +70,7 @@ from .adapters.http.routers.result_review import router as result_review_router
 from .adapters.http.routers.quality_thresholds import router as quality_thresholds_router
 from .adapters.http.routers.workflow_queries import router as workflow_queries_router
 from .adapters.http.routers.feature_examples import router as feature_examples_router
+from .adapters.http.routers.portfolio import router as portfolio_router
 from .services.drop_video_demo import (
     DEMO_DROP_VIDEO_LOAD_CASE_IDS,
     DROP_VIDEO_DEMO_BY_ID,
@@ -121,40 +121,7 @@ def health() -> dict[str, str]:
 app.include_router(feature_examples_router)
 app.include_router(projects_router)
 app.include_router(import_schemas_router)
-
-
-@app.get("/api/portfolio/overview")
-def get_portfolio_overview(
-    date_from: date | None = None,
-    date_to: date | None = None,
-    project_id: str | None = None,
-    analysis_type: str | None = None,
-    status: str | None = None,
-    search: str | None = Query(default=None, max_length=120),
-) -> dict[str, Any]:
-    with connect() as conn:
-        return PortfolioRepository(conn).overview(
-            date_from=date_from,
-            date_to=date_to,
-            project_id=project_id,
-            analysis_type=analysis_type,
-            status=status,
-            search=search,
-        )
-
-
-@app.get("/api/portfolio/export.csv")
-def export_portfolio_csv(
-    date_from: date | None = None,
-    date_to: date | None = None,
-    project_id: str | None = None,
-    analysis_type: str | None = None,
-    status: str | None = None,
-    search: str | None = Query(default=None, max_length=120),
-) -> Response:
-    with connect() as conn:
-        payload = PortfolioRepository(conn).overview(date_from=date_from, date_to=date_to, project_id=project_id, analysis_type=analysis_type, status=status, search=search)
-    return Response(PortfolioRepository.to_csv(payload["records"]), media_type="text/csv; charset=utf-8", headers={"Content-Disposition": 'attachment; filename="analysis-portfolio.csv"'})
+app.include_router(portfolio_router)
 
 
 @app.get("/api/projects/{project_id}/requests")

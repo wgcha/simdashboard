@@ -632,7 +632,19 @@ OpenAPI·compile gate와 full backend **1143 passed, 10 skipped**를 확인했�
 direct `.execute()` actual/ceiling **67**은 변동 없다. CI는 query-count/result parity를 보장한다.
 
 PostgreSQL/DuckDB 대표 실데이터의 `EXPLAIN ANALYZE`, fan-out, cold/warm p50/p95, rows scanned, planning·lock
-impact는 office-only 검증이다. 다음 vertical-slice 우선순위는 **재감사 후 확정**한다.
+impact는 office-only 검증이며 이후 portfolio read/export를 분리했다.
+
+2026-09-01 portfolio read/export slice도 완료했다. `GET /api/portfolio/overview`와 `GET
+/api/portfolio/export.csv`를 HTTP/application query/domain port+policy/SQL adapter로 분리했다. date 범위,
+project, analysis type, status, `search` max 120의 6개 filter와 existing latest-run·canonical monitoring·KPI·load-case
+없는 request placeholder를 보존한다. CSV의 BOM, 12열 header와 `analysis-portfolio.csv` filename도 동일하다. 내부
+사용처가 없어진 `repositories/portfolio.py`는 제거했다.
+
+Focused **17 passed**, full backend **1149 passed, 10 skipped**, architecture·OpenAPI·compile gate를 확인했다.
+`backend/app/main.py`는 **1,176줄**, direct `.execute()` actual/ceiling은 **67**로 이 이동에서 변동 없다. 개인 노트북 검증으로 완결되며 별도 PostgreSQL
+검증은 필요 없다. 다음 권장 감사는 dashboard read cluster이며, detail/list/version list/version detail 4 GET의
+조건부 draft/archived permission·404/JSON projection과 direct SQL 7개 분리 가능성을 검토한다. audit·명시적
+transaction은 없다.
 Duplicate rejection 409의 attempt detail은 non-admin에게 profile snapshot과 command preview를 노출하지 않도록 router에서
 sanitize하고 admin 원문 계약은 유지한다. idempotency check와 attempt insert 사이의 경쟁, 그리고 QUEUED→DEMO_ONLY runner
 →finalization 사이의 복구/재처리 설계는 이번 safe slice에서 transaction semantics를 바꾸지 않고 별도 reliability 계획으로
@@ -809,10 +821,10 @@ proxy/CA를 설치·갱신하는 자동화는 아직 없다. `NO_PROXY` assignme
    PPTX template 4 API, variable catalog 4 API, project workspace layout 5 route, import-schemas
    4 route, result-review bookmark+annotation GET/POST/PATCH 3 route, analysis-insights comparison/trust
    GET 2 route, load-case-overview GET 1 route, quality-thresholds GET + canonical PUT + deprecated alias PUT
-   3 route, workflow detail/list GET 2 route, request load-cases GET 1 route와 feature-examples GET 1 route는
-   완료했다. feature-examples data profile grouped query **8→1** 최적화도 완료했으며, 다음 vertical-slice
-   우선순위는 **재감사 후 확정**한다. query-count/result parity는 CI로 유지하고 실데이터 `EXPLAIN`/latency는
-   office-only에서 검증한다. GET의 explicit project permission
+   3 route, workflow detail/list GET 2 route, request load-cases GET 1 route, feature-examples GET 1 route와
+   portfolio overview/export GET 2 route는 완료했다. feature-examples data profile grouped query **8→1** 최적화도
+   완료했으며, 다음 권장 감사는 dashboard read cluster다. query-count/result parity는 CI로 유지하고 실데이터
+   `EXPLAIN`/latency는 office-only에서 검증한다. GET의 explicit project permission
    부재와 alias global semantics, row lock/CAS, post-commit fetch rollback seam, import-schemas DELETE의 별도
    permission connection·non-transactional usage check·명시적 domain delete audit 부재, review-list GET의
    explicit `PROJECT_DATA_VIEW` 부재, provider construction purity, dict mutation/storage normalization,

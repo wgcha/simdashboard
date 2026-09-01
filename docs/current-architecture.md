@@ -52,12 +52,12 @@ Browser
 
 ### 3.1 애플리케이션 조립
 
-`backend/app/main.py`가 FastAPI 인스턴스, lifespan, CORS, 보안 middleware, 정적 asset mount와 router 등록을 소유한다. 동시에 workflow-step mutation, dashboard 등 많은 legacy endpoint와 SQL을 아직 포함한다. Report layout, PPTX report template, variable catalog, project workspace layout, import-schemas, result-review, analysis-insights, load-case-overview, quality-thresholds, workflow-queries, request-load-cases와 feature-examples endpoint는 독립 router로 이동했다.
+`backend/app/main.py`가 FastAPI 인스턴스, lifespan, CORS, 보안 middleware, 정적 asset mount와 router 등록을 소유한다. 동시에 workflow-step mutation, dashboard 등 많은 legacy endpoint와 SQL을 아직 포함한다. Report layout, PPTX report template, variable catalog, project workspace layout, import-schemas, result-review, analysis-insights, load-case-overview, quality-thresholds, workflow-queries, request-load-cases, feature-examples와 portfolio endpoint는 독립 router로 이동했다.
 
 등록된 router는 두 계열이다.
 
 - `backend/app/routers/`: 인증, 접근 제어, workbench, 모델링 카탈로그, 마스터 결과 Refresh, 수동 결과 import·예제 폴더 import를 소유하는 `result_ingestion`
-- `backend/app/adapters/http/routers/`: `projects`, `requests`, `request_load_cases`, `reports`, `report_templates`, `variable_catalog`, `workspace_layouts`, `import_schemas`, `result_review`, `analysis_insights`, `load_case_overview`, `quality_thresholds`, `workflow_queries`, `feature_examples`의 대표 vertical slice HTTP adapter
+- `backend/app/adapters/http/routers/`: `projects`, `requests`, `request_load_cases`, `reports`, `report_templates`, `variable_catalog`, `workspace_layouts`, `import_schemas`, `result_review`, `analysis_insights`, `load_case_overview`, `quality_thresholds`, `workflow_queries`, `feature_examples`, `portfolio`의 대표 vertical slice HTTP adapter
 
 새 기능은 가능한 한 얇은 router에서 입력/권한/응답 변환만 처리하고, orchestration과 SQL을 아래 계층으로 넘긴다.
 
@@ -171,7 +171,18 @@ SQL에서 빠진 ID 행은 application이 zero profile로 보완하고, duplicat
 DuckDB legacy per-ID exact equality, focused **12 passed**, architecture·OpenAPI·compile gate와 full backend **1143
 passed, 10 skipped**를 확인했다. `main.py` **1,209줄** 및 direct `.execute()` actual/ceiling **67**은 변동 없다.
 CI는 query-count/result parity를 보장한다. PostgreSQL/DuckDB 대표 실데이터의 `EXPLAIN ANALYZE`, fan-out, cold/warm
-p50/p95, rows scanned, planning·lock impact는 office-only 검증이며 다음 우선순위는 **재감사 후 확정**한다.
+p50/p95, rows scanned, planning·lock impact는 office-only 검증이며 이후 portfolio read/export를 분리했다.
+
+`portfolio`는 `GET /api/portfolio/overview`와 `GET /api/portfolio/export.csv`를 HTTP/application query/domain
+port+policy/SQL adapter로 분리했다. date 범위·project·analysis type·status·`search`(max 120)의 6개 filter,
+latest-run/monitoring/KPI/placeholder projection과 CSV BOM·12열 header·download filename을 그대로 유지한다. 기존
+`repositories/portfolio.py`는 내부 사용처가 없어 제거했다. focused **17 passed**, full backend **1149 passed, 10 skipped**,
+architecture·OpenAPI·compile gate를 확인했고 `main.py`는 **1,176줄**, direct `.execute()` actual/ceiling은 **67**로 불변이다. 개인 노트북에서 완결되며
+별도 PostgreSQL 검증은 필요 없다.
+
+다음 권장 감사 대상은 dashboard read cluster다. dashboard detail/list/version list/version detail 4 GET의 조건부
+draft/archived permission, 404·JSON projection과 direct SQL 7개를 behavior-neutral query boundary로 분리할 수 있는지
+검토한다. 해당 read cluster에는 audit·명시적 transaction이 없다.
 
 Phase 2의 `result_ingestion`은 세 안전 단위로 정리했다. 첫 단위는 결과-import template, 수동 결과
 import, 예제 폴더 import endpoint를 `main.py`에서 `routers/result_ingestion.py`로 분리했다. 두 번째

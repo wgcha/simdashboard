@@ -1,23 +1,21 @@
 from __future__ import annotations
 
-import csv
-import io
 from collections import Counter, defaultdict
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import date, datetime
 from typing import Any
 
-from ..database import rows
-from ..services.request_monitoring import request_monitoring_summary
+from ...database_connection import ConnectionLike, connect, rows
+from ...domains.portfolio.ports import PortfolioRepository
+from ...services.request_monitoring import request_monitoring_summary
 
 
-class PortfolioRepository:
-    """운영 대시보드의 일관된 레코드 grain과 집계를 제공한다.
+class SQLPortfolioRepository:
+    """Keep the established operational-dashboard record grain and aggregates."""
 
-    Grain은 하중 경우 1건이며, 결과 판정은 가장 최근 해석 실행만 사용한다.
-    """
-
-    def __init__(self, conn: Any):
-        self.conn = conn
+    def __init__(self, connection: ConnectionLike):
+        self._connection = connection
 
     def overview(
         self,
@@ -29,7 +27,7 @@ class PortfolioRepository:
         status: str | None = None,
         search: str | None = None,
     ) -> dict[str, Any]:
-        raw = rows(self.conn.execute(
+        raw = rows(self._connection.execute(
             """
             WITH latest_run AS (
                 SELECT *, row_number() OVER (PARTITION BY load_case_id ORDER BY run_no DESC, completed_at DESC) AS rn
@@ -60,7 +58,7 @@ class PortfolioRepository:
             """
         ))
         monitoring_by_request = {
-            request_id: request_monitoring_summary(self.conn, request_id)
+            request_id: request_monitoring_summary(self._connection, request_id)
             for request_id in {item["request_id"] for item in raw}
         }
         for item in raw:
@@ -113,8 +111,6 @@ class PortfolioRepository:
             "pass_rate": round(verdict_counts["PASS"] / judged * 100, 1) if judged else None,
         }
         return {
-            # Keep the public identifier stable for existing dashboard clients.
-            # Requests without a load case are represented by one placeholder row.
             "grain": "LOAD_CASE_LATEST_RUN",
             "source": "projects/analysis_requests/request_steps/load_cases/latest analysis_run · canonical request monitoring projection",
             "freshness": max((str(item["completed_at"]) for item in records if item["completed_at"]), default=None),
@@ -125,17 +121,18 @@ class PortfolioRepository:
             "quality_by_type": [{"type": key, "pass": value["PASS"], "fail": value["FAIL"], "no_data": value["NO_DATA"]} for key, value in sorted(quality.items())],
             "records": records,
             "filter_options": {
-                "projects": [{"id": item[0], "name": item[1]} for item in self.conn.execute("SELECT id, name FROM projects ORDER BY name").fetchall()],
+                "projects": [{"id": item[0], "name": item[1]} for item in self._connection.execute("SELECT id, name FROM projects ORDER BY name").fetchall()],
                 "analysis_types": sorted({item["analysis_type"] for item in raw}),
                 "statuses": sorted({item["request_status"] for item in raw}),
             },
         }
 
-    @staticmethod
-    def to_csv(records: list[dict[str, Any]]) -> str:
-        columns = ["project_name", "product_name", "request_title", "owner", "request_status", "requested_at", "load_case_name", "analysis_type", "load_case_status", "verdict", "result_count", "completed_at"]
-        output = io.StringIO()
-        writer = csv.DictWriter(output, fieldnames=columns, extrasaction="ignore")
-        writer.writeheader()
-        writer.writerows(records)
-        return "\ufeff" + output.getvalue()
+
+class SQLPortfolioRepositoryProvider:
+    def __init__(self, connection_provider: Callable[[], Any] = connect) -> None:
+        self._connection_provider = connection_provider
+
+    @contextmanager
+    def __call__(self) -> Iterator[PortfolioRepository]:
+        with self._connection_provider() as connection:
+            yield SQLPortfolioRepository(connection)
