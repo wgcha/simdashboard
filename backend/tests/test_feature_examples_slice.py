@@ -14,6 +14,7 @@ from app.adapters.http.routers import feature_examples as feature_examples_route
 from app.adapters.persistence.feature_examples import SQLFeatureExamplesRepository
 from app.application.feature_examples.queries import feature_examples
 from app.database import initialize_database
+from app.database_connection import connect
 from app.main import app
 
 
@@ -29,6 +30,7 @@ CATALOG_IDS = [
     "ppt-layout", "automation", "data-registration", "help",
 ]
 PROFILE_KEYS = {"runs", "scalars", "series", "curves", "media", "reviews"}
+PROFILE_ORDER = ("runs", "scalars", "series", "curves", "media", "reviews")
 BASE_KEYS = {"id", "order", "category", "title", "summary", "badge", "workspace_page", "features", "checks", "data_profile"}
 
 
@@ -53,6 +55,18 @@ class _Connection:
     def execute(self, statement: str, parameters: Any | None = None) -> _Cursor:
         self.calls.append((statement, parameters))
         return _Cursor(["runs", "scalars", "series", "curves", "media", "reviews"], [self.values])
+
+
+class _GroupedConnection(_Connection):
+    def __init__(self, profiles: dict[str, tuple[Any, ...]]) -> None:
+        super().__init__()
+        self.profiles = profiles
+
+    def execute(self, statement: str, parameters: Any | None = None) -> _Cursor:
+        self.calls.append((statement, parameters))
+        columns = ["load_case_id", "runs", "scalars", "series", "curves", "media", "reviews"]
+        values = [(load_case_id, *profile) for load_case_id, profile in self.profiles.items()]
+        return _Cursor(columns, values)
 
 
 @pytest.mark.contract
@@ -85,67 +99,91 @@ def test_main_relinquishes_feature_examples_and_ceiling_is_monotonic() -> None:
 
 
 @pytest.mark.unit
-def test_application_uses_one_provider_connection_and_eight_calls_in_catalog_order() -> None:
+def test_application_dedupes_ids_and_uses_one_provider_call() -> None:
     class Repository:
         def __init__(self) -> None:
-            self.calls: list[str] = []
+            self.calls: list[list[str]] = []
 
-        def data_profile(self, load_case_id: str) -> dict[str, int]:
-            self.calls.append(load_case_id)
-            return {key: index for index, key in enumerate(sorted(PROFILE_KEYS))}
+        def data_profiles(self, load_case_ids: list[str]) -> dict[str, dict[str, int]]:
+            self.calls.append(load_case_ids)
+            profile = {key: index + 1 for index, key in enumerate(sorted(PROFILE_KEYS))}
+            return {load_case_id: profile.copy() for load_case_id in load_case_ids}
 
     repository = Repository()
+    entered, exited = [], []
 
     class Provider:
         def __call__(self):
             class Context:
                 def __enter__(self):
+                    entered.append(True)
                     return repository
 
                 def __exit__(self, *_args: Any) -> None:
+                    exited.append(True)
                     return None
 
             return Context()
 
     result = feature_examples(Provider())
-    assert repository.calls == LOAD_CASE_IDS
+    assert repository.calls == [list(dict.fromkeys(LOAD_CASE_IDS))]
+    assert len(entered) == len(exited) == 1
     assert [item["id"] for item in result] == CATALOG_IDS
     assert all(item["data_profile"] for item in result[:7])
     assert result[4]["data_profile"] == result[8]["data_profile"]
+    assert result[4]["data_profile"] is not result[8]["data_profile"]
     assert all(result[index]["data_profile"] == {key: 0 for key in PROFILE_KEYS} for index in (7, 9, 10, 11))
 
 
 @pytest.mark.unit
-def test_sql_adapter_uses_exact_legacy_aggregate_sql() -> None:
+def test_sql_adapter_empty_input_does_not_query() -> None:
     connection = _Connection()
-    SQLFeatureExamplesRepository(connection).data_profile("loadcase-showcase-compare")
-    statement, parameters = connection.calls[0]
-    assert " ".join(statement.split()) == (
-        "SELECT count(DISTINCT r.id), count(DISTINCT s.id), count(DISTINCT ts.variable_key), "
-        "count(DISTINCT c.id), count(DISTINCT m.id), count(DISTINCT a.id) "
-        "FROM load_cases lc LEFT JOIN analysis_runs r ON r.load_case_id=lc.id "
-        "LEFT JOIN scalar_results s ON s.analysis_run_id=r.id "
-        "LEFT JOIN time_series_results ts ON ts.analysis_run_id=r.id "
-        "LEFT JOIN curve_results c ON c.analysis_run_id=r.id "
-        "LEFT JOIN media_assets m ON m.analysis_run_id=r.id "
-        "LEFT JOIN review_annotations a ON a.analysis_run_id=r.id WHERE lc.id=?"
-    )
-    assert parameters == ["loadcase-showcase-compare"]
+    assert SQLFeatureExamplesRepository(connection).data_profiles([]) == {}
+    assert connection.calls == []
 
 
 @pytest.mark.unit
-def test_sql_missing_load_case_is_zero_profile() -> None:
-    connection = _Connection((0, 0, 0, 0, 0, 0))
-    assert SQLFeatureExamplesRepository(connection).data_profile("does-not-exist") == {key: 0 for key in PROFILE_KEYS}
+def test_sql_adapter_dedupes_duplicate_ids_and_maps_grouped_rows() -> None:
+    connection = _GroupedConnection({"loadcase-a": (1, 2, 3, 4, 5, 6)})
+    result = SQLFeatureExamplesRepository(connection).data_profiles(["loadcase-a", "loadcase-a"])
+    assert result == {"loadcase-a": dict(zip(PROFILE_ORDER, (1, 2, 3, 4, 5, 6)))}
+    assert len(connection.calls) == 1
+    assert connection.calls[0][1] == ["loadcase-a"]
+    assert connection.calls[0][0].count("?") == 1
+
+
+@pytest.mark.unit
+def test_sql_adapter_uses_grouped_aggregate_and_omits_missing_ids() -> None:
+    connection = _GroupedConnection({"loadcase-a": (1, 2, 3, 4, 5, 6), "loadcase-b": (7, 8, 9, 10, 11, 12)})
+    result = SQLFeatureExamplesRepository(connection).data_profiles(["loadcase-a", "missing", "loadcase-b"])
+    statement, parameters = connection.calls[0]
+    normalized = " ".join(statement.split())
+    assert normalized.startswith("SELECT lc.id AS load_case_id,")
+    assert normalized.count("count(DISTINCT") == 6
+    assert all(token in normalized for token in ("LEFT JOIN analysis_runs", "LEFT JOIN scalar_results", "LEFT JOIN time_series_results", "LEFT JOIN curve_results", "LEFT JOIN media_assets", "LEFT JOIN review_annotations", "GROUP BY lc.id", "ORDER BY lc.id"))
+    assert "WHERE lc.id IN (?, ?, ?)" in normalized
+    assert parameters == ["loadcase-a", "missing", "loadcase-b"]
+    assert set(result) == {"loadcase-a", "loadcase-b"}
+
+
+@pytest.mark.unit
+def test_sql_adapter_all_missing_returns_empty_mapping() -> None:
+    connection = _GroupedConnection({})
+    assert SQLFeatureExamplesRepository(connection).data_profiles(["missing-a", "missing-b"]) == {}
+    assert len(connection.calls) == 1
 
 
 @pytest.mark.unit
 def test_application_propagates_repository_errors_without_hooks() -> None:
+    class Repository:
+        def data_profiles(self, _load_case_ids: list[str]) -> dict[str, dict[str, int]]:
+            raise RuntimeError("database unavailable")
+
     class Provider:
         def __call__(self):
             class Context:
                 def __enter__(self):
-                    raise RuntimeError("database unavailable")
+                    return Repository()
 
                 def __exit__(self, *_args: Any) -> None:
                     return None
@@ -177,3 +215,30 @@ def test_seeded_catalog_has_exact_order_profiles_and_fresh_objects() -> None:
     assert {"preferred_view", "project_id", "request_id", "load_case_id", "action_hint"} <= set(first[8])
     assert all(set(first[index]) == BASE_KEYS for index in range(9, 12))
     assert "action_hint" in first[8]
+
+
+@pytest.mark.duckdb_integration
+def test_grouped_profiles_equal_legacy_per_id_reference_query() -> None:
+    initialize_database()
+    with connect() as connection:
+        expected = {}
+        for load_case_id in dict.fromkeys(LOAD_CASE_IDS):
+            counts = connection.execute(
+                """
+                SELECT count(DISTINCT r.id), count(DISTINCT s.id), count(DISTINCT ts.variable_key),
+                       count(DISTINCT c.id), count(DISTINCT m.id), count(DISTINCT a.id)
+                FROM load_cases lc
+                LEFT JOIN analysis_runs r ON r.load_case_id=lc.id
+                LEFT JOIN scalar_results s ON s.analysis_run_id=r.id
+                LEFT JOIN time_series_results ts ON ts.analysis_run_id=r.id
+                LEFT JOIN curve_results c ON c.analysis_run_id=r.id
+                LEFT JOIN media_assets m ON m.analysis_run_id=r.id
+                LEFT JOIN review_annotations a ON a.analysis_run_id=r.id
+                WHERE lc.id=?
+                """,
+                [load_case_id],
+            ).fetchone()
+            expected[load_case_id] = dict(zip(("runs", "scalars", "series", "curves", "media", "reviews"), counts))
+    with connect() as connection:
+        actual = SQLFeatureExamplesRepository(connection).data_profiles(LOAD_CASE_IDS)
+    assert actual == expected

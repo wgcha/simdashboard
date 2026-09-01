@@ -621,8 +621,18 @@ content·순서·optional field를 만들고 모두 `data_profile`을 갖는다.
 
 AST catalog exact equality, focused **9 passed**, architecture·OpenAPI·compile gate와 full backend **1140 passed,
 10 skipped**를 확인했다. 직접 `wc`로 측정한 `backend/app/main.py`는 **1,209줄**, direct `.execute()`
-actual/ceiling은 **67**이다. 개인 노트북 검증으로 완결됐고 PostgreSQL 필수 검증은 없다. 다음은 별도 grouped query
-**8→1** 최적화이며 실데이터 `EXPLAIN`/latency는 office-only release gate에서 검증한다.
+actual/ceiling은 **67**이다. 개인 노트북 검증으로 완결됐고 PostgreSQL 필수 검증은 없다. 후속 grouped query
+**8→1** 최적화의 실데이터 `EXPLAIN`/latency는 office-only release gate에서 검증한다.
+
+2026-09-01 grouped 8→1 최적화도 완료했다. application은 8개 output reference를 stable dedupe한 7개 ID로 provider
+`data_profiles()`를 한 번 호출한다. adapter는 defensive dedupe를 유지하고 empty 입력은 DB query 0회, nonempty는
+dynamic bound placeholder와 grouped SQL 1회로 처리한다. missing row는 application zero fill로 보완하며 duplicate
+multitype profile은 값은 같되 독립 dict다. DuckDB legacy per-ID exact equality, focused **12 passed**, architecture·
+OpenAPI·compile gate와 full backend **1143 passed, 10 skipped**를 확인했다. `backend/app/main.py` **1,209줄**과
+direct `.execute()` actual/ceiling **67**은 변동 없다. CI는 query-count/result parity를 보장한다.
+
+PostgreSQL/DuckDB 대표 실데이터의 `EXPLAIN ANALYZE`, fan-out, cold/warm p50/p95, rows scanned, planning·lock
+impact는 office-only 검증이다. 다음 vertical-slice 우선순위는 **재감사 후 확정**한다.
 Duplicate rejection 409의 attempt detail은 non-admin에게 profile snapshot과 command preview를 노출하지 않도록 router에서
 sanitize하고 admin 원문 계약은 유지한다. idempotency check와 attempt insert 사이의 경쟁, 그리고 QUEUED→DEMO_ONLY runner
 →finalization 사이의 복구/재처리 설계는 이번 safe slice에서 transaction semantics를 바꾸지 않고 별도 reliability 계획으로
@@ -800,8 +810,9 @@ proxy/CA를 설치·갱신하는 자동화는 아직 없다. `NO_PROXY` assignme
    4 route, result-review bookmark+annotation GET/POST/PATCH 3 route, analysis-insights comparison/trust
    GET 2 route, load-case-overview GET 1 route, quality-thresholds GET + canonical PUT + deprecated alias PUT
    3 route, workflow detail/list GET 2 route, request load-cases GET 1 route와 feature-examples GET 1 route는
-   완료했다. 다음 vertical-slice 우선순위는 feature-examples data profile의 **grouped query 8→1 최적화**다.
-   실데이터 `EXPLAIN`/latency는 office-only에서 검증한다. GET의 explicit project permission
+   완료했다. feature-examples data profile grouped query **8→1** 최적화도 완료했으며, 다음 vertical-slice
+   우선순위는 **재감사 후 확정**한다. query-count/result parity는 CI로 유지하고 실데이터 `EXPLAIN`/latency는
+   office-only에서 검증한다. GET의 explicit project permission
    부재와 alias global semantics, row lock/CAS, post-commit fetch rollback seam, import-schemas DELETE의 별도
    permission connection·non-transactional usage check·명시적 domain delete audit 부재, review-list GET의
    explicit `PROJECT_DATA_VIEW` 부재, provider construction purity, dict mutation/storage normalization,

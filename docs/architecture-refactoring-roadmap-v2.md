@@ -122,8 +122,16 @@ MCP, Embedding, Graph DB는 이번 리팩터링에서 구현하지 않는다. �
   zero를 반환한다. permission·audit·transaction·별도 error mapping은 추가하지 않았다.
 - AST로 12-item catalog의 기존 literal과 정확히 같음을 확인했고, focused **9 passed**, architecture·OpenAPI·compile
   gate와 full backend **1140 passed, 10 skipped**를 확인했다. 직접 `wc`로 측정한 `main.py`는 **1,209줄**, direct
-  `execute` actual/ceiling은 **67**이다. 개인 노트북 검증으로 완결되며 PostgreSQL 필수 검증은 없다. 다음 slice는
-  별도 grouped query **8→1** 최적화이고, 실데이터 `EXPLAIN`/latency 검증은 office-only release gate다.
+  `execute` actual/ceiling은 **67**이다. 개인 노트북 검증으로 완결되며 PostgreSQL 필수 검증은 없다. 후속
+  grouped query **8→1** 최적화의 실데이터 `EXPLAIN`/latency 검증은 office-only release gate다.
+- Grouped 최적화는 application이 8개 output reference를 stable dedupe한 7개 ID로 만든 뒤 provider의
+  `data_profiles()`를 한 번만 호출한다. adapter도 방어적으로 dedupe하고, 빈 입력은 DB query 0회, nonempty 입력은
+  동적 bound placeholder와 `GROUP BY`/`ORDER BY` aggregate SQL 1회로 처리한다. SQL에서 빠진 ID 행은 application이
+  zero profile로 보완하며 duplicate multitype 두 item은 값은 같되 서로 독립 dict다.
+- DuckDB에서 legacy per-ID 결과와 exact equality를 확인했고 focused **12 passed**, architecture·OpenAPI·compile
+  gate와 full backend **1143 passed, 10 skipped**를 확인했다. `main.py`는 **1,209줄**, direct `execute`
+  actual/ceiling은 **67**로 변동 없다. CI는 query-count/result parity를 보장하고, PostgreSQL/DuckDB 대표 실데이터의
+  `EXPLAIN ANALYZE`, fan-out, cold/warm p50/p95, rows scanned, planning·lock impact는 office-only 검증이다.
 
 검증에서 기본 backend suite 176개가 통과하고 3개 PostgreSQL opt-in test가 skip됐다. 별도의 disposable PostgreSQL 18 cluster를 blank DB에서 migration·권한 hardening·reference seed까지 구성한 뒤 app-role profile 60개가 통과했고, canonical 6-step workflow가 suite 전후 동일함을 확인했다. frontend architecture/API/preferences self-test, TypeScript와 production build가 통과했으며 fresh backend/Vite/Chromium을 사용한 Playwright 20개도 모두 통과했다. 실제 Rocky 서버 값·TLS·service user가 없어 운영 배포는 수행하지 않았고, 로컬 credential 파일의 과거 과도한 권한 노출에 대해서는 비밀번호 회전이 별도 운영 조치로 남아 있다. 이 외부 검증 상태는 코드 contract와 구분한다.
 
@@ -506,6 +514,6 @@ git diff --check
 ### 현재 후속 순서 — 2026-09-01
 
 1. Report layout 6 API, PPTX template 4 API, variable catalog 4 API, project workspace layout 5 route, import-schemas 4 route, result-review 3 route, analysis-insights 2 route, load-case-overview 1 route, quality thresholds 3 route, workflow queries GET 2 route, request load-cases GET 1 route와 feature-examples GET 1 route의 완료 상태를 계약 테스트로 유지한다.
-2. 다음 vertical-slice 우선순위는 feature-examples `data_profile`의 **grouped query 8→1 최적화**다. 동작 계약은 유지하며 실데이터 `EXPLAIN`/latency는 office-only에서 검증한다.
+2. 다음 vertical-slice 우선순위는 **재감사 후 확정**한다. feature-examples grouped query의 query-count/result parity는 계약 테스트로 유지하고, 실데이터 성능은 office-only에서 검증한다.
 3. import-schemas DELETE의 별도 permission connection, non-transactional usage check, 명시적 domain delete audit 부재와 review-list GET의 explicit `PROJECT_DATA_VIEW` 부재, quality-threshold GET의 explicit project permission 부재와 alias global semantics, provider construction purity, dict mutation/storage normalization, unordered media/template, company-wide read, single threshold semantics, row lock/CAS, post-commit fetch rollback seam/security debt를 보존 debt로 기록하되 구조 refactor에 섞지 않는다.
 4. PostgreSQL 18 app-role 권한·audit INSERT, correlated update parity, OIDC active-nonmember/cross-project 정책, 동시 update locking/CAS, 현실 데이터 EXPLAIN/index/lock latency와 nginx·proxy/private CA·backup/restore/deploy는 사내 office-only release gate에서 검증한다.

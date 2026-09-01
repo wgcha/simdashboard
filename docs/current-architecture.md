@@ -162,8 +162,16 @@ aggregate를 항목별로 한 번씩 호출한다. duplicate multitype도 두 �
 
 AST catalog exact equality, focused **9 passed**, architecture·OpenAPI·compile gate와 full backend **1140 passed,
 10 skipped**를 확인했다. 직접 `wc`로 측정한 `main.py`는 **1,209줄**, direct `.execute()` actual/ceiling은 **67**이다.
-개인 노트북 검증으로 완결되며 PostgreSQL 필수 검증은 없다. 다음은 별도 grouped query **8→1** 최적화이고, 실데이터
+개인 노트북 검증으로 완결되며 PostgreSQL 필수 검증은 없다. 후속 grouped query **8→1** 최적화의 실데이터
 `EXPLAIN`/latency 검증은 office-only release gate에서 수행한다.
+
+grouped 최적화에서는 application이 8개 reference를 stable dedupe한 7개 ID로 `data_profiles()`를 한 번 호출한다.
+adapter도 defensive dedupe하며 empty 입력은 query 0회, nonempty는 dynamic bound placeholder와 grouped SQL 1회다.
+SQL에서 빠진 ID 행은 application이 zero profile로 보완하고, duplicate multitype 카드의 profile은 값은 같되 독립 dict다.
+DuckDB legacy per-ID exact equality, focused **12 passed**, architecture·OpenAPI·compile gate와 full backend **1143
+passed, 10 skipped**를 확인했다. `main.py` **1,209줄** 및 direct `.execute()` actual/ceiling **67**은 변동 없다.
+CI는 query-count/result parity를 보장한다. PostgreSQL/DuckDB 대표 실데이터의 `EXPLAIN ANALYZE`, fan-out, cold/warm
+p50/p95, rows scanned, planning·lock impact는 office-only 검증이며 다음 우선순위는 **재감사 후 확정**한다.
 
 Phase 2의 `result_ingestion`은 세 안전 단위로 정리했다. 첫 단위는 결과-import template, 수동 결과
 import, 예제 폴더 import endpoint를 `main.py`에서 `routers/result_ingestion.py`로 분리했다. 두 번째

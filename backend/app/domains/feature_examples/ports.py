@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from contextlib import AbstractContextManager
-from typing import Protocol
+from collections.abc import Mapping, Sequence
+from typing import Protocol, TypeAlias
+
+
+DataProfile: TypeAlias = dict[str, int]
 
 
 class FeatureExamplesRepository(Protocol):
-    def data_profile(self, load_case_id: str) -> dict[str, int]: ...
+    def data_profiles(self, load_case_ids: Sequence[str]) -> Mapping[str, DataProfile]: ...
 
 
 class FeatureExamplesRepositoryProvider(Protocol):
