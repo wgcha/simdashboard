@@ -52,12 +52,12 @@ Browser
 
 ### 3.1 애플리케이션 조립
 
-`backend/app/main.py`가 FastAPI 인스턴스, lifespan, CORS, 보안 middleware, 정적 asset mount와 router 등록을 소유한다. 동시에 workflow, dashboard 등 많은 legacy endpoint와 SQL을 아직 포함한다. Report layout, PPTX report template, variable catalog, project workspace layout, import-schemas, result-review, analysis-insights와 load-case-overview endpoint는 독립 router로 이동했다.
+`backend/app/main.py`가 FastAPI 인스턴스, lifespan, CORS, 보안 middleware, 정적 asset mount와 router 등록을 소유한다. 동시에 workflow, dashboard 등 많은 legacy endpoint와 SQL을 아직 포함한다. Report layout, PPTX report template, variable catalog, project workspace layout, import-schemas, result-review, analysis-insights, load-case-overview와 quality-thresholds endpoint는 독립 router로 이동했다.
 
 등록된 router는 두 계열이다.
 
 - `backend/app/routers/`: 인증, 접근 제어, workbench, 모델링 카탈로그, 마스터 결과 Refresh, 수동 결과 import·예제 폴더 import를 소유하는 `result_ingestion`
-- `backend/app/adapters/http/routers/`: `projects`, `requests`, `reports`, `report_templates`, `variable_catalog`, `workspace_layouts`, `import_schemas`, `result_review`, `analysis_insights`, `load_case_overview`의 대표 vertical slice HTTP adapter
+- `backend/app/adapters/http/routers/`: `projects`, `requests`, `reports`, `report_templates`, `variable_catalog`, `workspace_layouts`, `import_schemas`, `result_review`, `analysis_insights`, `load_case_overview`, `quality_thresholds`의 대표 vertical slice HTTP adapter
 
 새 기능은 가능한 한 얇은 router에서 입력/권한/응답 변환만 처리하고, orchestration과 SQL을 아래 계층으로 넘긴다.
 
@@ -115,19 +115,23 @@ authorization → product provider → overview provider의 세 connection(A/B/C
 asset/download URL만 응답에 매핑해 domain policy를 transport-neutral로 둔다. 9개 SQL, selected/latest/no-run
 검증, 404, JSON/template, threshold/verdict 투영을 그대로 유지했다.
 
-Focused root **21 passed**, architecture·OpenAPI·compile gate와 full backend **1104 passed, 10 skipped in
-837.40s, exit 0**를 확인했다. 현재 `main.py`는 **1,441줄**이고 direct `.execute()` actual/ceiling은
-**90 → 81**이다. 다음 개인 노트북 우선순위는 results-before-requests Phase 2 순서의 quality thresholds
-3 route다: `GET /api/projects/{project_id}/quality-thresholds`, canonical
-`PUT /api/projects/{project_id}/quality-thresholds/{criterion_key}`, deprecated
-`PUT /api/quality-thresholds/{criterion_key}`. 예상 direct `.execute()` ceiling은 **81 → 71**이다. GET은
-기존 explicit permission 없는 company-wide `ACTIVE` read를 유지하고, PUT은 lookup 404/alias multi-project
-409 뒤 같은 connection의 `PROJECT_THRESHOLD_MANAGE` → threshold update·criterion-specific scalar recalc·audit·
-commit·post-commit fetch를 보존한다. principal actor, generic OpenAPI와 deprecated alias도 유지한다.
-provider construction purity, dict mutation/storage normalization, unordered media/template, company-wide read,
-single threshold semantics와 post-commit fetch rollback seam/security debt는 별도로 남긴다. 개인 노트북 완료 범위는
-DuckDB/application/contract 검증까지이며, PostgreSQL concurrency/lock/CAS/app-role/EXPLAIN 및 nginx/proxy/private
-CA는 사내 office-only release gate다.
+`quality_thresholds`는 `GET /api/projects/{project_id}/quality-thresholds`, canonical
+`PUT /api/projects/{project_id}/quality-thresholds/{criterion_key}`, deprecated alias
+`PUT /api/quality-thresholds/{criterion_key}`를 `HTTP → application → domain → persistence`로 분리했다. GET은
+기존 explicit project permission 없는 company-wide `ACTIVE` read를 그대로 두며, PUT은 lookup 404 또는 alias
+multi-project 409을 먼저 판정한 뒤 같은 connection의 `PROJECT_THRESHOLD_MANAGE` → principal/시간 → BEGIN →
+threshold update·criterion-specific scalar recalc·audit → COMMIT → post-commit fetch 순서를 유지한다. generic
+OpenAPI와 deprecated alias도 보존한다.
+
+Focused **22 passed**, architecture·OpenAPI·compile gate와 full backend **1118 passed, 10 skipped**를 확인했다.
+현재 `main.py`는 **1,322줄**이고 direct `.execute()` actual/ceiling은 **71**이다. 로컬 완료 범위는 unit·DuckDB·
+OpenAPI·architecture·full 검증까지다. GET의 explicit project permission 부재와 alias global semantics, row
+lock/CAS, post-commit fetch rollback seam은 보존 기술부채로 남긴다. provider construction purity, dict
+mutation/storage normalization, unordered media/template, company-wide read와 single threshold semantics도 별도다.
+
+PostgreSQL 18 app-role 권한과 audit INSERT, correlated update parity, OIDC active-nonmember/cross-project 정책,
+동시 update locking/CAS, 현실 데이터의 EXPLAIN/index/lock latency는 사내 전용 release gate다. 다음 우선순위는
+**재감사 후 확정**한다.
 
 Phase 2의 `result_ingestion`은 세 안전 단위로 정리했다. 첫 단위는 결과-import template, 수동 결과
 import, 예제 폴더 import endpoint를 `main.py`에서 `routers/result_ingestion.py`로 분리했다. 두 번째

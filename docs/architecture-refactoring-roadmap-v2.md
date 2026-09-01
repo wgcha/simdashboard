@@ -81,19 +81,21 @@ MCP, Embedding, Graph DB는 이번 리팩터링에서 구현하지 않는다. �
   overview provider의 A/B/C 세 connection 순서를 소유하고, HTTP가 asset/download URL만 매핑해 domain은
   transport-neutral이다. 9개 SQL, selected/latest/no-run, 404, JSON/template, threshold/verdict 투영을
   legacy와 동일하게 유지한다.
-- Focused root **21 passed**, architecture·OpenAPI·compile gate가 통과했고 full backend는
-  **1104 passed, 10 skipped in 837.40s, exit 0**이다. 직접 측정한 `main.py`는 **1,441줄**, direct
-  `execute` actual/ceiling은 **90 → 81**이다. 다음 개인 노트북 우선순위는 results-before-requests Phase 2
-  순서의 quality thresholds 3 route다: `GET /api/projects/{project_id}/quality-thresholds`, canonical
-  `PUT /api/projects/{project_id}/quality-thresholds/{criterion_key}`, deprecated
-  `PUT /api/quality-thresholds/{criterion_key}`(예상 ceiling **81 → 71**). GET의 explicit permission 없는
-  company-wide `ACTIVE` read와 PUT의 lookup 404/alias multi-project 409 → same-connection
-  `PROJECT_THRESHOLD_MANAGE` → threshold update·criterion-specific scalar recalc·audit·commit·post-commit fetch,
-  principal actor, generic OpenAPI/deprecated alias를 보존한다.
-- provider construction purity, dict mutation/storage normalization, unordered media/template, company-wide read,
-  single threshold semantics와 post-commit fetch rollback seam/security debt는 별도다. 개인 노트북 완료 범위는
-  DuckDB/application/contract 검증이며 PostgreSQL concurrency/lock/CAS/app-role/EXPLAIN 및 nginx/proxy/private
-  CA는 office-only release gate로 남긴다.
+- Quality thresholds는 `GET /api/projects/{project_id}/quality-thresholds`, canonical
+  `PUT /api/projects/{project_id}/quality-thresholds/{criterion_key}`, deprecated alias
+  `PUT /api/quality-thresholds/{criterion_key}`를 `HTTP → application → domain → persistence`로 분리했다.
+  GET은 기존 explicit project permission 없는 company-wide `ACTIVE` read를 그대로 두고, PUT은 lookup 404 또는
+  alias multi-project 409 → same-connection `PROJECT_THRESHOLD_MANAGE` → principal/시간 → BEGIN → threshold
+  update·criterion-specific scalar recalc·audit → COMMIT → post-commit fetch 순서를 보존한다. generic OpenAPI와
+  deprecated alias도 유지한다.
+- Focused **22 passed**, architecture·OpenAPI·compile gate와 full backend **1118 passed, 10 skipped**를
+  확인했다. 직접 측정한 `main.py`는 **1,322줄**, direct `execute` actual/ceiling은 **71**이다. GET의 explicit
+  project permission 부재와 alias global semantics, row lock/CAS, post-commit fetch rollback seam은 보존
+  기술부채다. provider construction purity, dict mutation/storage normalization, unordered media/template,
+  company-wide read와 single threshold semantics도 별도다. 로컬 완료 범위는 unit·DuckDB·OpenAPI·architecture·full
+  검증까지이고, PostgreSQL 18 app-role 권한·audit INSERT, correlated update parity, OIDC active-nonmember/
+  cross-project 정책, 동시 update locking/CAS, 현실 데이터 EXPLAIN/index/lock latency는 office-only release
+  gate다. 다음 우선순위는 **재감사 후 확정**한다.
 
 검증에서 기본 backend suite 176개가 통과하고 3개 PostgreSQL opt-in test가 skip됐다. 별도의 disposable PostgreSQL 18 cluster를 blank DB에서 migration·권한 hardening·reference seed까지 구성한 뒤 app-role profile 60개가 통과했고, canonical 6-step workflow가 suite 전후 동일함을 확인했다. frontend architecture/API/preferences self-test, TypeScript와 production build가 통과했으며 fresh backend/Vite/Chromium을 사용한 Playwright 20개도 모두 통과했다. 실제 Rocky 서버 값·TLS·service user가 없어 운영 배포는 수행하지 않았고, 로컬 credential 파일의 과거 과도한 권한 노출에 대해서는 비밀번호 회전이 별도 운영 조치로 남아 있다. 이 외부 검증 상태는 코드 contract와 구분한다.
 
@@ -475,7 +477,7 @@ git diff --check
 
 ### 현재 후속 순서 — 2026-09-01
 
-1. Report layout 6 API, PPTX template 4 API, variable catalog 4 API, project workspace layout 5 route, import-schemas 4 route, result-review 3 route, analysis-insights 2 route와 load-case-overview 1 route의 완료 상태를 계약 테스트로 유지한다.
-2. results-before-requests Phase 2 순서로 quality thresholds GET + canonical PUT + deprecated alias PUT 3 route를 분리한다. 기존 GET의 explicit permission 없는 company-wide `ACTIVE` read, PUT의 lookup 404/alias multi-project 409 → same-connection `PROJECT_THRESHOLD_MANAGE` → update·criterion-specific scalar recalc·audit·commit·post-commit fetch, principal actor, generic OpenAPI/deprecated alias를 보존하고 예상 direct `execute` ceiling은 81 → 71이다.
-3. import-schemas DELETE의 별도 permission connection, non-transactional usage check, 명시적 domain delete audit 부재와 review-list GET의 explicit `PROJECT_DATA_VIEW` 부재, provider construction purity, dict mutation/storage normalization, unordered media/template, company-wide read, single threshold semantics, post-commit fetch rollback seam/security debt를 보존 debt로 기록하되 구조 refactor에 섞지 않는다.
-4. PostgreSQL concurrency/lock/CAS/app-role/EXPLAIN 및 nginx·proxy/private CA·backup/restore/deploy는 사내 office-only release gate에서 검증한다.
+1. Report layout 6 API, PPTX template 4 API, variable catalog 4 API, project workspace layout 5 route, import-schemas 4 route, result-review 3 route, analysis-insights 2 route, load-case-overview 1 route와 quality thresholds 3 route의 완료 상태를 계약 테스트로 유지한다.
+2. 다음 vertical-slice 우선순위는 **재감사 후 확정**한다.
+3. import-schemas DELETE의 별도 permission connection, non-transactional usage check, 명시적 domain delete audit 부재와 review-list GET의 explicit `PROJECT_DATA_VIEW` 부재, quality-threshold GET의 explicit project permission 부재와 alias global semantics, provider construction purity, dict mutation/storage normalization, unordered media/template, company-wide read, single threshold semantics, row lock/CAS, post-commit fetch rollback seam/security debt를 보존 debt로 기록하되 구조 refactor에 섞지 않는다.
+4. PostgreSQL 18 app-role 권한·audit INSERT, correlated update parity, OIDC active-nonmember/cross-project 정책, 동시 update locking/CAS, 현실 데이터 EXPLAIN/index/lock latency와 nginx·proxy/private CA·backup/restore/deploy는 사내 office-only release gate에서 검증한다.

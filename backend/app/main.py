@@ -16,7 +16,6 @@ from . import config as app_config
 from .modules.access_control import (
     DASHBOARD_EDIT,
     PROJECT_DATA_VIEW,
-    PROJECT_THRESHOLD_MANAGE,
     REPORT_EXPORT,
     REQUEST_CREATE,
     REQUEST_EDIT,
@@ -45,7 +44,6 @@ from .schemas.api import (
     DropVideoPageResponse,
     LoadCaseCreate,
     NaturalLanguageCommand,
-    QualityThresholdUpdate,
     WorkflowStepUpdate,
     WorkflowStepsReplace,
 )
@@ -69,6 +67,7 @@ from .application.results.queries import list_analysis_runs as list_analysis_run
 from .adapters.http.routers.load_case_overview import router as load_case_overview_router
 from .adapters.http.routers.analysis_insights import router as analysis_insights_router
 from .adapters.http.routers.result_review import router as result_review_router
+from .adapters.http.routers.quality_thresholds import router as quality_thresholds_router
 from .services.drop_video_demo import (
     DEMO_DROP_VIDEO_LOAD_CASE_IDS,
     DROP_VIDEO_DEMO_BY_ID,
@@ -549,125 +548,7 @@ app.include_router(analysis_insights_router)
 
 
 app.include_router(result_review_router)
-
-
-@app.get("/api/projects/{project_id}/quality-thresholds")
-def get_quality_thresholds(project_id: str) -> list[dict[str, Any]]:
-    with connect() as conn:
-        return rows(
-            conn.execute(
-                "SELECT * FROM quality_thresholds WHERE project_id = ? ORDER BY analysis_key, criterion_key",
-                [project_id],
-            )
-        )
-
-
-def _update_quality_threshold(
-    criterion_key: str,
-    payload: QualityThresholdUpdate,
-    request: Request,
-    expected_project_id: str | None = None,
-) -> dict[str, Any]:
-    with connect() as conn:
-        if expected_project_id is not None:
-            criteria = conn.execute(
-                "SELECT project_id, unit, threshold_double FROM quality_thresholds WHERE project_id = ? AND criterion_key = ?",
-                [expected_project_id, criterion_key],
-            ).fetchall()
-        else:
-            criteria = conn.execute(
-                "SELECT project_id, unit, threshold_double FROM quality_thresholds WHERE criterion_key = ? ORDER BY project_id",
-                [criterion_key],
-            ).fetchall()
-        if not criteria:
-            raise HTTPException(404, "품질 판정 기준을 찾을 수 없습니다.")
-        if expected_project_id is None and len(criteria) > 1:
-            raise HTTPException(409, "프로젝트 범위 품질 기준 URL을 사용해야 합니다.")
-        project_id, unit, old_threshold = criteria[0]
-        require_permission(request, PROJECT_THRESHOLD_MANAGE, project_id, conn=conn)
-        principal = request.state.principal
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
-        conn.execute("BEGIN TRANSACTION")
-        try:
-            conn.execute(
-                """
-                UPDATE quality_thresholds
-                SET threshold_double = ?, updated_by = ?, updated_at = ?
-                WHERE project_id = ? AND criterion_key = ?
-                """,
-                [payload.threshold_double, principal.display_name, now, project_id, criterion_key],
-            )
-            if criterion_key == "chassis_rear_permanent_deformation_mm":
-                conn.execute(
-                    """
-                    UPDATE scalar_results
-                    SET threshold_double = ?,
-                        verdict = CASE WHEN value_double >= ? THEN 'FAIL' ELSE 'PASS' END
-                    WHERE lower(unit) = 'mm'
-                      AND variable_key LIKE '%permanent_deformation%'
-                      AND analysis_run_id IN (
-                          SELECT run.id
-                          FROM analysis_runs run
-                          JOIN load_cases lc ON lc.id = run.load_case_id
-                          JOIN analysis_requests ar ON ar.id = lc.request_id
-                          JOIN variable_definitions vd
-                            ON vd.load_case_id = lc.id
-                           AND vd.variable_key = scalar_results.variable_key
-                          WHERE ar.project_id = ? AND vd.result_group = 'CHASSIS_REAR'
-                      )
-                    """,
-                    [payload.threshold_double, payload.threshold_double, project_id],
-                )
-            elif criterion_key == "open_cell_stress_mpa":
-                conn.execute(
-                    """
-                    UPDATE scalar_results
-                    SET threshold_double = ?,
-                        verdict = CASE WHEN value_double >= ? THEN 'FAIL' ELSE 'PASS' END
-                    WHERE lower(unit) = 'mpa'
-                      AND lower(variable_key) LIKE '%stress%'
-                      AND analysis_run_id IN (
-                          SELECT run.id
-                          FROM analysis_runs run
-                          JOIN load_cases lc ON lc.id = run.load_case_id
-                          JOIN analysis_requests ar ON ar.id = lc.request_id
-                          JOIN variable_definitions vd
-                            ON vd.load_case_id = lc.id
-                           AND vd.variable_key = scalar_results.variable_key
-                          WHERE ar.project_id = ? AND vd.result_group = 'OPEN_CELL'
-                      )
-                    """,
-                    [payload.threshold_double, payload.threshold_double, project_id],
-                )
-            write_audit_event(
-                request=request,
-                principal=principal,
-                status_code=200,
-                action="PROJECT_THRESHOLD_CHANGED",
-                detail={"project_id": project_id, "criterion_key": criterion_key, "old_value": old_threshold, "new_value": payload.threshold_double, "unit": unit},
-                connection=conn,
-            )
-            conn.execute("COMMIT")
-            updated_threshold = rows(
-                conn.execute(
-                    "SELECT * FROM quality_thresholds WHERE project_id=? AND criterion_key=?",
-                    [project_id, criterion_key],
-                )
-            )[0]
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
-    return updated_threshold
-
-
-@app.put("/api/projects/{project_id}/quality-thresholds/{criterion_key}")
-def update_project_quality_threshold(project_id: str, criterion_key: str, payload: QualityThresholdUpdate, request: Request) -> dict[str, Any]:
-    return _update_quality_threshold(criterion_key, payload, request, expected_project_id=project_id)
-
-
-@app.put("/api/quality-thresholds/{criterion_key}", deprecated=True)
-def update_quality_threshold(criterion_key: str, payload: QualityThresholdUpdate, request: Request) -> dict[str, Any]:
-    return _update_quality_threshold(criterion_key, payload, request)
+app.include_router(quality_thresholds_router)
 
 
 @app.get("/api/requests/{request_id}/workflow")
