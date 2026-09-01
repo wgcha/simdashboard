@@ -883,6 +883,10 @@ proxy/CA를 설치·갱신하는 자동화는 아직 없다. `NO_PROXY` assignme
   streaming 부하 측정, PowerShell 실실행 (운영 release gate)
 - 문서 링크와 환경 예제 정합성
 
+### 2026-09-01 완료 — dashboard_writes 일반 쓰기 cluster
+
+저장 PUT, 버전 logical delete, clone, restore 4개를 `dashboard_writes` vertical slice로 분리 완료했다. ID mismatch connection 전 400, resource-auth-first, invalid history 포함 단조 버전 증가, clone의 `page` 제거, restore의 현재 이름·설명·상태 보존과 기존 비명시 transaction semantics를 계약 테스트로 고정했다. Dedicated **6 passed**, root expanded focused **36 passed in 44.44s**, independent **5 passed/1 deselected in 6.43s**, full backend **1207 passed, 10 skipped in 914.50s (0:15:14)** 및 compile·architecture·OpenAPI·diff-check를 통과했다. `main.py`는 **628 → 487줄**, direct `.execute()`는 **43 → 30**이다. 로컬 검증은 완료했고 PostgreSQL app-role/admin·실제 rollback/same-connection·proxy·동시성·latency는 사내 release gate다. 다음 P1은 `request_load_cases` POST 생성 slice이며 drop-video streaming은 후순위다.
+
 ## 10. 다음 실행 순서
 
 1. canonical 예제와 import 검증을 유지하고 #13 SPDM discovery layout을 결과 import와 분리한다.
@@ -915,8 +919,8 @@ proxy/CA를 설치·갱신하는 자동화는 아직 없다. `NO_PROXY` assignme
    focused **26 passed**, full backend **1159 passed, 10 skipped**, compile·architecture·OpenAPI gate를 확인했고 `main.py`는 **1,070줄**, direct `execute`
    ceiling은 **60→59**다. 개인 노트북에서 완결되며 별도 PostgreSQL 검증은 필요 없다. dashboard command preview도
    완료했으며, drop-video catalog-only read와 `GET /api/load-cases/{load_case_id}/runs` HTTP 소유권 이동도 완료했다.
-   health GET과 dashboard page public/admin GET 및 admin command cluster도 완료했다. 다음은 일반 dashboard
-   저장·버전 무효화·복제·복원 cluster다.
+   health GET, dashboard page public/admin GET 및 admin command cluster, 일반 dashboard 저장·버전
+   무효화·복제·복원 cluster까지 완료했다. 다음은 `request_load_cases` POST 생성 slice다.
    drop-video streaming은 제외한다.
    query-count/result parity는 CI로 유지하고 실데이터
    `EXPLAIN`/latency는 office-only에서 검증한다. GET의 explicit project permission

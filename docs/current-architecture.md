@@ -686,6 +686,12 @@ Architecture ceiling은 목표 수치가 아니라 부채가 늘지 않게 하�
   `573 passed, 5 skipped in 382.12s`였다. backend architecture/OpenAPI/compileall,
   Rocky validator, frontend architecture/API self-test/build도 통과했다.
 
+dashboard_writes 일반 저장·버전 무효화·복제·복원 4개 API도 후속 완료했다. 다음 구조 대상은 `request_load_cases` POST 생성 slice이며, drop-video streaming은 후순위다.
+
+### 2026-09-01 최신 vertical slice — dashboard_writes 일반 쓰기
+
+4개 API를 `dashboard_writes` HTTP → application command → domain errors/policy/ports → persistence adapter로 분리했다. 입력·권한·오류 매핑, pre-connect ID mismatch 400, invalid history 포함 version `max+1`, clone의 `page` 제거, restore의 현재 name/description/page 보존과 기존 비명시 transaction semantics를 유지한다. Dedicated **6 passed**, root expanded focused **36 passed in 44.44s**, independent **5 passed/1 deselected in 6.43s**, full backend **1207 passed, 10 skipped in 914.50s (0:15:14)** 및 compile·architecture·OpenAPI·diff-check를 통과했다. `main.py`는 **628 → 487줄**, direct `.execute()`는 **43 → 30**이다. 로컬 검증 범위와 사내 office-only PostgreSQL·proxy·동시성·latency gate를 분리해 유지한다.
+
 우선순위와 완료 기준은 [`program-consolidation-and-development-plan.md`](program-consolidation-and-development-plan.md)에 정리한다.
 
 ### 2026-09-01 최신 보강 — dashboard command preview
@@ -768,5 +774,5 @@ same-connection final list, route/OpenAPI/Korean 오류 계약은 유지된다. 
 Focused **15 passed**, 독립 확대 검토 **22 passed**, full backend **1201 passed, 10 skipped in 901.42s
 (0:15:01)**와 compile·architecture·OpenAPI gate를 통과했다. `main.py`는 **628줄**, direct `.execute()`는
 **43**이다. 로컬에서는 이 경계를 완료했으며, PostgreSQL app-role/admin 권한·실제 rollback·proxy smoke·동시성은
-사내 release gate로 남긴다. 다음 구조 대상은 read와 분리된 `dashboard_writes` feature의 일반 dashboard 저장,
-버전 무효화, 복제, 복원 4개다.
+사내 release gate로 남긴다. 이 시점의 다음 구조 대상이던 일반 dashboard 저장·버전 무효화·복제·복원
+4개는 위 최신 `dashboard_writes` 기록처럼 후속 완료했다. 현재 다음 대상은 `request_load_cases` POST 생성이다.

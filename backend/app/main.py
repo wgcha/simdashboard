@@ -14,7 +14,6 @@ from fastapi.responses import FileResponse
 
 from . import config as app_config
 from .modules.access_control import (
-    DASHBOARD_EDIT,
     PROJECT_DATA_VIEW,
     REPORT_EXPORT,
     REQUEST_CREATE,
@@ -25,7 +24,7 @@ from .modules.access_control import (
     require_resource_permission,
     resolve_project_assignee,
 )
-from .database import connect, initialize_database, json_value, rows
+from .database import connect, initialize_database, rows
 from .config import security_settings
 from .repositories.media_repository import get_blob, get_drop_video
 from .services.media_http import build_media_response
@@ -33,8 +32,6 @@ from .repositories.workbench import WorkbenchRepository
 from .services.request_monitoring import sync_request_status
 from .schemas.api import (
     AnalysisRequestCreate,
-    DashboardClone,
-    DashboardDefinition,
     LoadCaseCreate,
     WorkflowStepUpdate,
     WorkflowStepsReplace,
@@ -70,7 +67,8 @@ from .adapters.http.routers.system_health import router as system_health_router
 from .adapters.http.routers.dashboard_reads import router as dashboard_reads_router
 from .adapters.http.routers.dashboard_reads import version_router as dashboard_versions_router
 from .adapters.http.routers.analysis_pages import router as analysis_pages_router
-from .domains.analysis_pages.policies import SYSTEM_ANALYSIS_PAGE_IDS, analysis_page_meta as _analysis_page_meta
+from .adapters.http.routers.dashboard_writes import history_router as dashboard_history_router
+from .adapters.http.routers.dashboard_writes import save_router as dashboard_save_router
 from .services.drop_video_demo import (
     DROP_VIDEO_DEMO_BY_ID,
     DROP_VIDEO_DEMO_SCENES,
@@ -482,147 +480,8 @@ app.include_router(report_templates_router)
 app.include_router(analysis_pages_router)
 
 
-def _write_dashboard_definition(
-    conn: Any,
-    dashboard_id: str,
-    definition: dict[str, Any],
-    current_version: int,
-    created_by: str,
-) -> tuple[int, datetime]:
-    del current_version
-    next_version = int(
-        conn.execute(
-            "SELECT COALESCE(max(version), 0) + 1 FROM dashboard_versions WHERE dashboard_id = ?",
-            [dashboard_id],
-        ).fetchone()[0]
-    )
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
-    encoded = json.dumps(definition, ensure_ascii=False)
-    conn.execute(
-        """
-        UPDATE dashboards
-        SET name = ?, description = ?, version = ?, definition_json = ?, updated_at = ?
-        WHERE id = ?
-        """,
-        [definition["name"], definition.get("description", ""), next_version, encoded, now, dashboard_id],
-    )
-    conn.execute(
-        "INSERT INTO dashboard_versions VALUES (?, ?, ?, ?, ?, ?)",
-        [dashboard_id, next_version, encoded, created_by, now, True],
-    )
-    return next_version, now
-
-
 app.include_router(dashboard_reads_router)
-
-
-@app.put("/api/dashboards/{dashboard_id}")
-def save_dashboard(dashboard_id: str, definition: DashboardDefinition, request: Request) -> dict[str, Any]:
-    if dashboard_id != definition.id:
-        raise HTTPException(400, "대시보드 ID가 일치하지 않습니다.")
-    with connect() as conn:
-        require_resource_permission(request, DASHBOARD_EDIT, "dashboard", dashboard_id, conn=conn)
-        existing = conn.execute("SELECT version, definition_json FROM dashboards WHERE id = ?", [dashboard_id]).fetchone()
-        if not existing:
-            raise HTTPException(404, "대시보드를 찾을 수 없습니다.")
-        stored_definition = json_value(existing[1]) or {}
-        stored_page = _analysis_page_meta(stored_definition)
-        incoming = definition.model_dump()
-        if stored_page:
-            if (
-                incoming.get("name") != stored_definition.get("name")
-                or incoming.get("description", "") != stored_definition.get("description", "")
-                or incoming.get("page") != stored_page
-            ):
-                raise HTTPException(409, "분석 페이지 이름·설명·상태·순서는 관리자 페이지 API에서 변경해야 합니다.")
-        version, now = _write_dashboard_definition(conn, dashboard_id, incoming, existing[0], "대시보드 사용자")
-    return {"status": "saved", "version": version, "updated_at": now}
-
-
+app.include_router(dashboard_save_router)
 app.include_router(dashboard_versions_router)
-
-
-@app.delete("/api/dashboards/{dashboard_id}/versions/{version}")
-def delete_dashboard_version(dashboard_id: str, version: int, request: Request) -> dict[str, Any]:
-    with connect() as conn:
-        require_resource_permission(request, DASHBOARD_EDIT, "dashboard", dashboard_id, conn=conn)
-        current = conn.execute("SELECT version, definition_json FROM dashboards WHERE id = ?", [dashboard_id]).fetchone()
-        if not current:
-            raise HTTPException(404, "대시보드를 찾을 수 없습니다.")
-        current_version = int(current[0])
-        definition = json_value(current[1]) or {}
-        page = _analysis_page_meta(definition)
-        if version == 1 and (dashboard_id in SYSTEM_ANALYSIS_PAGE_IDS or (page and page.get("is_system") is True)):
-            raise HTTPException(409, "시스템 대시보드의 최초 기준 버전은 삭제할 수 없습니다.")
-
-        stored = conn.execute(
-            "SELECT is_valid FROM dashboard_versions WHERE dashboard_id = ? AND version = ?",
-            [dashboard_id, version],
-        ).fetchone()
-        if not stored or stored[0] is not True:
-            raise HTTPException(404, "삭제할 수 있는 유효한 대시보드 버전을 찾을 수 없습니다.")
-        if version == current_version:
-            raise HTTPException(409, "현재 사용 중인 live 버전은 삭제할 수 없습니다.")
-
-        valid_history_count = int(
-            conn.execute(
-                "SELECT count(*) FROM dashboard_versions WHERE dashboard_id = ? AND is_valid = true AND version <> ?",
-                [dashboard_id, current_version],
-            ).fetchone()[0]
-        )
-        if valid_history_count <= 1:
-            raise HTTPException(409, "현재 버전 외에 최소 1개의 유효한 과거 버전을 유지해야 합니다.")
-        conn.execute(
-            "UPDATE dashboard_versions SET is_valid = false WHERE dashboard_id = ? AND version = ? AND is_valid = true",
-            [dashboard_id, version],
-        )
-    return {"status": "invalidated", "dashboard_id": dashboard_id, "version": version}
-
-
-@app.post("/api/dashboards/{dashboard_id}/clone", status_code=201)
-def clone_dashboard(dashboard_id: str, payload: DashboardClone, request: Request) -> dict[str, Any]:
-    clone_id = f"dashboard-{uuid4().hex[:12]}"
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
-    principal = request.state.principal
-    with connect() as conn:
-        require_resource_permission(request, DASHBOARD_EDIT, "dashboard", dashboard_id, conn=conn)
-        source = conn.execute("SELECT project_id, request_id, load_case_id, definition_json FROM dashboards WHERE id = ?", [dashboard_id]).fetchone()
-        if not source:
-            raise HTTPException(404, "대시보드를 찾을 수 없습니다.")
-        definition = json_value(source[3])
-        definition.pop("page", None)
-        definition.update({"id": clone_id, "name": payload.name.strip(), "description": payload.description.strip()})
-        encoded = json.dumps(definition, ensure_ascii=False)
-        conn.execute("INSERT INTO dashboards VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", [clone_id, source[0], source[1], source[2], definition["name"], definition["description"], 1, encoded, now])
-        conn.execute("INSERT INTO dashboard_versions VALUES (?, ?, ?, ?, ?, ?)", [clone_id, 1, encoded, principal.user_id, now, True])
-    return {"id": clone_id, "version": 1, "status": "cloned"}
-
-
-@app.post("/api/dashboards/{dashboard_id}/restore/{version}")
-def restore_dashboard(dashboard_id: str, version: int, request: Request) -> dict[str, Any]:
-    with connect() as conn:
-        require_resource_permission(request, DASHBOARD_EDIT, "dashboard", dashboard_id, conn=conn)
-        stored = conn.execute("SELECT definition_json FROM dashboard_versions WHERE dashboard_id = ? AND version = ? AND is_valid = true", [dashboard_id, version]).fetchone()
-        current = conn.execute("SELECT version, definition_json FROM dashboards WHERE id = ?", [dashboard_id]).fetchone()
-        if not stored or not current:
-            raise HTTPException(404, "복구 가능한 정상 버전을 찾을 수 없습니다.")
-        definition = json_value(stored[0])
-        current_definition = json_value(current[1]) or {}
-        current_page = _analysis_page_meta(current_definition)
-        if current_page:
-            if current_page.get("status") == "published" and not definition.get("widgets"):
-                raise HTTPException(422, "게시된 분석 페이지를 빈 위젯 버전으로 복구할 수 없습니다.")
-            definition.update(
-                {
-                    "id": current_definition["id"],
-                    "name": current_definition["name"],
-                    "description": current_definition.get("description", ""),
-                    "page": current_page,
-                }
-            )
-        definition = DashboardDefinition.model_validate(definition).model_dump()
-        next_version, _ = _write_dashboard_definition(conn, dashboard_id, definition, current[0], "복구 작업")
-    return {"status": "restored", "version": next_version, "restored_from": version}
-
-
+app.include_router(dashboard_history_router)
 app.include_router(dashboard_commands_router)

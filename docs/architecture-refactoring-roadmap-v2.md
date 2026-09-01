@@ -607,6 +607,12 @@ git diff --check
 - Rocky 8에서 지원할 Python/PostgreSQL 버전이 WSL/CI와 달라지는 경우
 - MCP/Graph/Embedding의 실제 제품·SDK·서버를 추가하려는 경우
 
+### 2026-09-01 완료 — dashboard_writes 일반 쓰기 cluster
+
+일반 dashboard 저장 PUT, 버전 logical delete, clone, restore 4개 API를 `dashboard_writes` vertical slice로 분리했다. HTTP router(`save_router`/`history_router`)는 입력·권한·오류 매핑만, application command가 orchestration을, domain은 errors/policy/ports를, persistence adapter는 기존 SQL과 같은 connection 동작을 소유한다. ID mismatch의 connection 전 400, resource-auth-first, invalid 이력을 포함한 `max(version)+1`, clone의 `page` 제거, restore의 현재 name/description/page 보존과 기존 비명시 transaction semantics를 유지했다.
+
+Dedicated **6 passed**, root expanded focused **36 passed in 44.44s**, independent **5 passed/1 deselected in 6.43s**, full backend **1207 passed, 10 skipped in 914.50s (0:15:14)**와 compile·architecture·OpenAPI·diff-check를 통과했다. `main.py`는 **628 → 487줄**, direct `.execute()`는 **43 → 30**이다. 로컬 laptop에서는 fake/SQL mapping/DuckDB HTTP/security/full regression을 완료했고, PostgreSQL app-role/admin 권한·실제 same-connection/rollback·proxy smoke·동시 쓰기·실데이터 latency는 사내 office-only release gate다. drop-video streaming은 후순위로 유지하며 다음 권장은 `request_load_cases` POST 생성 slice다.
+
 ## 8. 첫 실행 묶음
 
 다음 구현 세션은 기능 리팩터링보다 아래 순서가 안전하다.
@@ -623,10 +629,9 @@ git diff --check
 ### 현재 후속 순서 — 2026-09-01
 
 1. Report layout 6 API, PPTX template 4 API, variable catalog 4 API, project workspace layout 5 route, import-schemas 4 route, result-review 3 route, analysis-insights 2 route, load-case-overview 1 route, quality thresholds 3 route, workflow queries GET 2 route, request load-cases GET 1 route, feature-examples GET 1 route, portfolio overview/export GET 2 route와 project request list GET 1 route의 완료 상태를 계약 테스트로 유지한다.
-2. dashboard read cluster 재감사와 `GET /api/projects/{project_id}/requests` read slice를 완료했고,
-   `POST /api/dashboard-commands/preview` pure allowlist policy도 완료했다. 다음은
-   `GET /api/load-cases/{load_case_id}/drop-videos` catalog-only read도 완료했다. 다음은 remaining `main.py`
-`GET /api/load-cases/{load_case_id}/runs` HTTP 소유권 이동, health GET과 dashboard page read/admin command
-cluster도 완료했다. 다음은 일반 dashboard 저장·버전·복제·복원 cluster다. drop-video streaming은 이번 범위에서 제외한다.
+2. dashboard read cluster, `GET /api/projects/{project_id}/requests`, dashboard command preview,
+   drop-video catalog-only read, analysis runs GET, health GET, dashboard page read/admin command와
+   일반 dashboard 저장·버전·복제·복원 cluster까지 완료했다. 다음은 기존 `request_load_cases`
+   feature에 POST 생성 경계를 합치는 작업이다. drop-video streaming은 이번 범위에서 제외한다.
 3. import-schemas DELETE의 별도 permission connection, non-transactional usage check, 명시적 domain delete audit 부재와 review-list GET의 explicit `PROJECT_DATA_VIEW` 부재, quality-threshold GET의 explicit project permission 부재와 alias global semantics, provider construction purity, dict mutation/storage normalization, unordered media/template, company-wide read, single threshold semantics, row lock/CAS, post-commit fetch rollback seam/security debt를 보존 debt로 기록하되 구조 refactor에 섞지 않는다.
 4. PostgreSQL 18 app-role 권한·audit INSERT, correlated update parity, OIDC active-nonmember/cross-project 정책, 동시 update locking/CAS, 현실 데이터 EXPLAIN/index/lock latency와 nginx·proxy/private CA·backup/restore/deploy는 사내 office-only release gate에서 검증한다.
