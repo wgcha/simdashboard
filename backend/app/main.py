@@ -60,9 +60,8 @@ from .adapters.http.routers.request_load_cases import router as request_load_cas
 from .adapters.http.routers.variable_catalog import router as variable_catalog_router
 from .adapters.http.routers.workspace_layouts import router as workspace_layouts_router
 from .adapters.http.routers.import_schemas import router as import_schemas_router
-from .adapters.persistence.results import SQLAnalysisRunSummaryRepositoryProvider
-from .application.results.queries import list_analysis_runs as list_analysis_runs_query
 from .adapters.http.routers.load_case_overview import router as load_case_overview_router
+from .adapters.http.routers.analysis_runs import router as analysis_runs_router
 from .adapters.http.routers.analysis_insights import router as analysis_insights_router
 from .adapters.http.routers.result_review import router as result_review_router
 from .adapters.http.routers.quality_thresholds import router as quality_thresholds_router
@@ -322,17 +321,7 @@ def create_load_case(request_id: str, payload: LoadCaseCreate, request: Request)
 app.include_router(result_ingestion_router)
 app.include_router(media_router)
 app.include_router(load_case_overview_router)
-
-
-@app.get("/api/load-cases/{load_case_id}/runs")
-def list_analysis_runs(load_case_id: str, request: Request) -> list[dict[str, Any]]:
-    return list_analysis_runs_query(
-        load_case_id,
-        lambda: require_permission(request, PROJECT_DATA_VIEW),
-        SQLAnalysisRunSummaryRepositoryProvider(),
-    )
-
-
+app.include_router(analysis_runs_router)
 app.include_router(analysis_insights_router)
 
 

@@ -663,8 +663,7 @@ normalization, branch precedence, exact 6개 인식 명령과 1개 미인식 응
 테스트용 epoch seam을 보존했다. restore 직후 마지막 route 위치, operationId, `2..500` schema, optional `project_id`도
 유지한다. focused root **15 passed**, compile·architecture·OpenAPI gate를 확인했고 전체 backend 회귀도 **1164 passed,
 10 skipped in 891.76s (0:14:51)**로 완료했다. `main.py`는 **1,009줄**, direct `.execute()`는 **59**다. 개인 노트북에서
-완결되며 PostgreSQL 검증은 필요 없다. dashboard command preview와 drop-video catalog-only read가 완료됐으며, 다음은
-`GET /api/load-cases/{load_case_id}/runs` HTTP 소유권 이동이다.
+완결되며 PostgreSQL 검증은 필요 없다. dashboard command preview, drop-video catalog-only read와 analysis runs GET이 완료됐으며, 다음은 health GET 분리다.
 
 2026-09-01 drop-video catalog-only read도 완료했다. HTTP router → application query → domain pure policy/ports →
 SQL repository 및 filesystem example adapter로 분리했으며, same-connection context 조회 → `PROJECT_DATA_VIEW`
@@ -674,12 +673,17 @@ dual-read일 때만 example file probe를 수행하고, stored/demo 혼합 금�
 compile·architecture·OpenAPI gate를 확인했다. `main.py`는 **899줄**, direct `execute`는 **58**이다. 개인 노트북에서 완결되며 PostgreSQL 실데이터·권한 범위·대용량
 latency는 사내 release gate로 남긴다.
 
-다음 runs slice는 기존 application/results query와 domain port/policy, SQL provider를 활용한다. auth-before-provider,
-unknown load case `200 []`, `run_no DESC`, `is_latest`, seeded mapping과 direct execute ceiling **58**을 유지하며
-PostgreSQL 전용 검증은 필요 없다. health GET은 그 다음 후보로 두고 streaming/write routes 뒤에 둔다.
+analysis runs GET은 `adapters/http/routers/analysis_runs.py`로 HTTP 소유권을 이동했다. 기존 application/results query,
+domain policy/port, SQL provider를 그대로 연결하고 auth-before-provider, unknown `200 []`, `run_no DESC`, `is_latest`,
+seeded mapping과 6-query 동작을 유지했다. focused root **26 passed**, 전체 backend 회귀는 **1179 passed, 10 skipped in 886.22s (0:14:46)**였으며 compile·architecture·OpenAPI gate를 확인했고
+`main.py`는 **888줄**, direct execute ceiling **58**은 불변이다. 개인 노트북에서 완결되며 PostgreSQL 전용 검증은 필요 없다.
+다음은 health GET 분리 후 streaming/write routes는 후순위다. `GET /api/health`는 router → application
+query → persistence probe의 얇은 구조로 `SELECT 1`/`fetchone` → close 뒤 database backend를 읽고, public auth bypass,
+request-id, exception 500 semantics와 retry → health → feature-examples route adjacency를 유지한다. direct execute ceiling은
+**58→57**로 예상하며 domain/UoW는 추가하지 않는다. 개인 노트북은 DuckDB/fake lifecycle/security/full, 사내는
+PostgreSQL pool/app-role/nginx TLS/systemd timeout을 release gate로 검증한다.
 
-재감사 결과 dashboard command preview와 drop-video catalog-only read는 완료했다. 다음은
-`GET /api/load-cases/{load_case_id}/runs` HTTP 소유권 이동이며, drop-video streaming은 이번 범위에서 제외한다.
+재감사 결과 dashboard command preview, drop-video catalog-only read와 analysis runs GET은 완료했다. 다음은 health GET 분리이며, drop-video streaming은 이번 범위에서 제외한다.
 Duplicate rejection 409의 attempt detail은 non-admin에게 profile snapshot과 command preview를 노출하지 않도록 router에서
 sanitize하고 admin 원문 계약은 유지한다. idempotency check와 attempt insert 사이의 경쟁, 그리고 QUEUED→DEMO_ONLY runner
 →finalization 사이의 복구/재처리 설계는 이번 safe slice에서 transaction semantics를 바꾸지 않고 별도 reliability 계획으로
@@ -865,8 +869,8 @@ proxy/CA를 설치·갱신하는 자동화는 아직 없다. `NO_PROXY` assignme
    missing project `200 []`, `requested_at DESC`를 보존했으며 audit·transaction·write 동작은 바꾸지 않았다.
    focused **26 passed**, full backend **1159 passed, 10 skipped**, compile·architecture·OpenAPI gate를 확인했고 `main.py`는 **1,070줄**, direct `execute`
    ceiling은 **60→59**다. 개인 노트북에서 완결되며 별도 PostgreSQL 검증은 필요 없다. dashboard command preview도
-   완료했으며, drop-video catalog-only read도 완료했다. 다음 순서는 `GET /api/load-cases/{load_case_id}/runs` HTTP
-   소유권 이동이다.
+   완료했으며, drop-video catalog-only read와 `GET /api/load-cases/{load_case_id}/runs` HTTP 소유권 이동도 완료했다.
+   다음은 health GET 분리다.
    drop-video streaming은 제외한다.
    query-count/result parity는 CI로 유지하고 실데이터
    `EXPLAIN`/latency는 office-only에서 검증한다. GET의 explicit project permission
