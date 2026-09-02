@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" role="img" aria-label="demo workbench">
+  <rect width="16" height="16" rx="2" fill="#13263b"/>
+  <path d="M3 11h10M4 9l2-3 2 2 2-4 2 3" fill="none" stroke="#43d9a3" stroke-width="1.5"/>
+  <text x="2" y="15" font-size="2" fill="#ffffff">DEMO ONLY</text>
+</svg>

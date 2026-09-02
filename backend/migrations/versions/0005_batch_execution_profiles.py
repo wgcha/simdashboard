@@ -69,7 +69,7 @@ def upgrade() -> None:
                'Open Cell 응력 허용값', 75.0, 'MPa', 'system', CURRENT_TIMESTAMP
         FROM quality_thresholds
         WHERE criterion_key = 'chassis_rear_permanent_deformation_mm'
-        ON CONFLICT (criterion_key) DO NOTHING
+        ON CONFLICT (project_id, criterion_key) DO NOTHING
     """))
 
 

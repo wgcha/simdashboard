@@ -1,64 +1,27 @@
-import { authenticatedFetch } from '../../auth'
-import type { Workflow } from '../../types'
-import type { BatchExecutionAttempt, BatchProfile, CreateDemoRunInput, DemoRun, RequestTypeResolution, WorkbenchRequestType, WorkbenchTaskType } from './types'
+import { apiFetch } from '../../shared/api/auth'
+import { apiClient, unwrapGenerated } from '../../shared/api/client'
+import { apiErrorFromResponse } from '../../shared/api/errors'
+import { resultLayoutApi } from '../../shared/api/resultLayouts'
+import type { CreateDemoRunInput } from './types'
+import { adaptBatchAttempts, adaptBatchProfiles, adaptDemoRun, adaptDemoRuns, adaptRequestTypeResolution, adaptRequestTypes, adaptTaskTypes, adaptWorkItem } from './workbenchAdapters'
+import { workbenchCatalogApi } from './workbenchCatalogApi'
 
-async function readJson<T>(response: Response | Promise<Response>): Promise<T> {
-  response = await response
-  if (!response.ok) {
-    const body = await response.text()
-    try {
-      const parsed = JSON.parse(body) as { detail?: string | { code?: string; [key: string]: unknown } }
-      const detail = parsed.detail
-      throw new Error(typeof detail === 'string' ? detail : detail?.code ? `${detail.code}: ${JSON.stringify(detail)}` : body)
-    } catch (reason) {
-      if (reason instanceof Error && reason.message !== body) throw reason
-      throw new Error(body || `요청 실패 (${response.status})`)
-    }
-  }
-  return response.json() as Promise<T>
-}
-
-async function readText(response: Response | Promise<Response>): Promise<string> {
-  response = await response
-  if (!response.ok) throw new Error(`텍스트 데모 파일을 읽지 못했습니다. (${response.status})`)
-  return response.text()
-}
-
+async function readText(response: Response | Promise<Response>) { const value = await response; if (!value.ok) throw await apiErrorFromResponse(value); return value.text() }
 export const workbenchApi = {
-  taskTypes: (allVersions = false) => readJson<WorkbenchTaskType[]>(authenticatedFetch(`/api/workbench/task-types${allVersions ? '?all_versions=true' : ''}`)),
-  requestTypes: () => readJson<WorkbenchRequestType[]>(authenticatedFetch('/api/workbench/request-types')),
-  requestTypeResolution: (requestId: string) => readJson<RequestTypeResolution>(authenticatedFetch(`/api/workbench/requests/${encodeURIComponent(requestId)}/request-type`)),
-  assignRequestType: (requestId: string, requestTypeId: string, requestTypeVersion: number) => readJson<RequestTypeResolution>(authenticatedFetch(`/api/workbench/requests/${encodeURIComponent(requestId)}/request-type`, {
-    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ request_type_id: requestTypeId, request_type_version: requestTypeVersion }),
-  })),
-  demoRuns: (requestId?: string) => readJson<DemoRun[]>(authenticatedFetch(`/api/workbench/demo-runs${requestId ? `?request_id=${encodeURIComponent(requestId)}` : ''}`)),
-  demoRun: (runId: string) => readJson<DemoRun>(authenticatedFetch(`/api/workbench/demo-runs/${encodeURIComponent(runId)}`)),
-  demoTextArtifact: (url: string) => readText(authenticatedFetch(url)),
-  createDemoRun: (payload: CreateDemoRunInput) => readJson<DemoRun>(authenticatedFetch('/api/workbench/demo-runs', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  })),
-  startWorkItem: (itemId: string, startedBy: string) => readJson<Omit<Workflow, 'request'>>(authenticatedFetch(`/api/workbench/work-items/${encodeURIComponent(itemId)}/start`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ started_by: startedBy }),
-  })),
-  completeWorkItem: (itemId: string, completedBy: string, demoRunId?: string) => readJson<Omit<Workflow, 'request'>>(authenticatedFetch(`/api/workbench/work-items/${encodeURIComponent(itemId)}/complete`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ completed_by: completedBy, ...(demoRunId ? { demo_run_id: demoRunId } : {}) }),
-  })),
-  updateWorkItemProgress: (itemId: string, progress: number, updatedBy: string) => readJson<Omit<Workflow, 'request'>>(authenticatedFetch(`/api/workbench/work-items/${encodeURIComponent(itemId)}/progress`, {
-    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ progress, updated_by: updatedBy }),
-  })),
-  batchProfiles: (includeInactive = false) => readJson<BatchProfile[]>(authenticatedFetch(`/api/workbench/batch-profiles${includeInactive ? '?include_inactive=true' : ''}`)),
-  batchAttempts: (itemId: string) => readJson<BatchExecutionAttempt[]>(authenticatedFetch(`/api/workbench/work-items/${encodeURIComponent(itemId)}/batch-attempts`)),
-  saveBatchProfile: (profile: Omit<BatchProfile, 'version' | 'created_at' | 'updated_at'>) => readJson<BatchProfile>(authenticatedFetch(`/api/admin/workbench/batch-profiles/${encodeURIComponent(profile.id)}`, {
-    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(profile),
-  })),
-  dispatchBatch: (itemId: string, batchProfileId: string, createdBy: string, idempotencyKey: string) => readJson<DemoRun>(authenticatedFetch(`/api/workbench/work-items/${encodeURIComponent(itemId)}/batch-dispatch`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ batch_profile_id: batchProfileId, idempotency_key: idempotencyKey, created_by: createdBy }),
-  })),
-  createRequestType: (payload: Omit<WorkbenchRequestType, 'version' | 'created_at'>) => readJson<WorkbenchRequestType>(authenticatedFetch('/api/admin/workbench/request-types', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  })),
+  taskTypes: async (allVersions = false) => adaptTaskTypes(unwrapGenerated(await apiClient.GET('/api/workbench/task-types', { params: { query: { all_versions: allVersions } } }))),
+  requestTypes: async () => adaptRequestTypes(unwrapGenerated(await apiClient.GET('/api/workbench/request-types'))),
+  requestTypeResolution: async (requestId: string) => adaptRequestTypeResolution(unwrapGenerated(await apiClient.GET('/api/workbench/requests/{request_id}/request-type', { params: { path: { request_id: requestId } } }))),
+  assignRequestType: async (requestId: string, requestTypeId: string, requestTypeVersion: number) => adaptRequestTypeResolution(unwrapGenerated(await apiClient.PUT('/api/workbench/requests/{request_id}/request-type', { params: { path: { request_id: requestId } }, body: { request_type_id: requestTypeId, request_type_version: requestTypeVersion } }))),
+  demoRuns: async (requestId?: string) => adaptDemoRuns(unwrapGenerated(await apiClient.GET('/api/workbench/demo-runs', { params: { query: { request_id: requestId } } }))),
+  demoRun: async (runId: string) => adaptDemoRun(unwrapGenerated(await apiClient.GET('/api/workbench/demo-runs/{run_id}', { params: { path: { run_id: runId } } }))),
+  demoTextArtifact: (url: string) => readText(apiFetch(url)),
+  createDemoRun: async (payload: CreateDemoRunInput) => adaptDemoRun(unwrapGenerated(await apiClient.POST('/api/workbench/demo-runs', { body: payload }))),
+  startWorkItem: async (itemId: string, startedBy: string) => adaptWorkItem(unwrapGenerated(await apiClient.POST('/api/workbench/work-items/{item_id}/start', { params: { path: { item_id: itemId } }, body: { started_by: startedBy } }))),
+  completeWorkItem: async (itemId: string, completedBy: string, demoRunId?: string) => adaptWorkItem(unwrapGenerated(await apiClient.POST('/api/workbench/work-items/{item_id}/complete', { params: { path: { item_id: itemId } }, body: { completed_by: completedBy, ...(demoRunId ? { demo_run_id: demoRunId } : {}) } }))),
+  updateWorkItemProgress: async (itemId: string, progress: number, updatedBy: string) => adaptWorkItem(unwrapGenerated(await apiClient.PATCH('/api/workbench/work-items/{item_id}/progress', { params: { path: { item_id: itemId } }, body: { progress, updated_by: updatedBy } }))),
+  batchProfiles: async (includeInactive = false) => adaptBatchProfiles(unwrapGenerated(await apiClient.GET('/api/workbench/batch-profiles', { params: { query: { include_inactive: includeInactive } } }))),
+  batchAttempts: async (itemId: string) => adaptBatchAttempts(unwrapGenerated(await apiClient.GET('/api/workbench/work-items/{item_id}/batch-attempts', { params: { path: { item_id: itemId } } }))),
+  dispatchBatch: async (itemId: string, createdBy: string, idempotencyKey: string) => adaptDemoRun(unwrapGenerated(await apiClient.POST('/api/workbench/work-items/{item_id}/batch-dispatch', { params: { path: { item_id: itemId } }, body: { idempotency_key: idempotencyKey, created_by: createdBy } as never }))),
+  ...workbenchCatalogApi,
+  ...resultLayoutApi,
 }

@@ -1,0 +1,1 @@
+"""Drop-video application queries."""

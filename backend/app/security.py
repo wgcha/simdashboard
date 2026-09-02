@@ -17,18 +17,21 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.responses import JSONResponse, Response
 
 from .config import security_settings
-from .database_connection import connect
+from .modules.access_control import AccountStatus
+from .database_connection import ConnectionLike, connect
 
 
 Role = Literal["viewer", "editor", "admin"]
 ROLE_LEVEL: dict[str, int] = {"viewer": 1, "editor": 2, "admin": 3}
-PUBLIC_API_PATHS = {"/api/health", "/api/auth/status", "/api/auth/login"}
+PUBLIC_API_PATHS = {
+    "/api/health",
+    "/api/auth/status",
+    "/api/auth/login",
+    "/api/auth/oidc/start",
+    "/api/auth/oidc/callback",
+}
+PENDING_ALLOWED_PATHS = {"/api/auth/me", "/api/auth/logout", "/api/auth/status"}
 SESSION_COOKIE = "analysis_canvas_session"
-ADMIN_MUTATION_PREFIXES = (
-    "/api/import-schemas",
-    "/api/quality-thresholds",
-    "/api/admin/",
-)
 logger = logging.getLogger(__name__)
 
 
@@ -37,7 +40,19 @@ class Principal:
     user_id: str
     username: str
     display_name: str
-    role: Role
+    account_status: AccountStatus
+    is_global_admin: bool
+    employee_id: str | None
+    # Retained only while password users and callers migrate away from the
+    # viewer/editor/admin contract. It is never the source for new permissions.
+    legacy_role: Role | None = None
+
+    @property
+    def role(self) -> Role:
+        """Compatibility view for legacy response/audit code."""
+        if self.is_global_admin:
+            return "admin"
+        return self.legacy_role if self.legacy_role in ROLE_LEVEL else "viewer"
 
 
 class AuthenticationError(Exception):
@@ -111,17 +126,25 @@ def _token_user_id(token: str) -> str:
 def _load_principal(user_id: str) -> Principal:
     with connect() as conn:
         row = conn.execute(
-            "SELECT id, username, display_name, role, is_active FROM users WHERE id=?",
+            """
+            SELECT id, username, display_name, account_status, is_global_admin,
+                   employee_id, legacy_role, is_active
+            FROM users WHERE id=?
+            """,
             [user_id],
         ).fetchone()
-    if not row or not row[4] or row[3] not in ROLE_LEVEL:
+    if not row or row[3] not in {"PENDING", "ACTIVE", "SUSPENDED"}:
         raise AuthenticationError("사용할 수 없는 계정입니다.")
-    return Principal(row[0], row[1], row[2], row[3])
+    account_status: AccountStatus = row[3]
+    if not row[7] and account_status == "ACTIVE":
+        account_status = "SUSPENDED"
+    legacy_role = row[6] if row[6] in ROLE_LEVEL else None
+    return Principal(row[0], row[1], row[2], account_status, bool(row[4]), row[5], legacy_role)
 
 
 def authenticate_request(request: Request) -> Principal:
     if security_settings().auth_mode == "disabled":
-        return Principal("local-admin", "local", "로컬 관리자", "admin")
+        return Principal("local-admin", "local", "로컬 관리자", "ACTIVE", True, None, "admin")
     authorization = request.headers.get("authorization", "")
     scheme, _, token = authorization.partition(" ")
     if scheme.lower() != "bearer" or not token:
@@ -134,24 +157,23 @@ def authenticate_request(request: Request) -> Principal:
 def authenticate_credentials(username: str, password: str) -> Principal | None:
     with connect() as conn:
         row = conn.execute(
-            "SELECT id, username, password_hash, display_name, role, is_active FROM users WHERE username=?",
+            """
+            SELECT id, username, password_hash, display_name, legacy_role, is_active,
+                   account_status, is_global_admin, employee_id
+            FROM users WHERE username=?
+            """,
             [username.strip().lower()],
         ).fetchone()
-    if not row or not row[5] or row[4] not in ROLE_LEVEL or not verify_password(password, row[2]):
+    if (
+        not row
+        or not row[5]
+        or row[6] != "ACTIVE"
+        or not row[2]
+        or not verify_password(password, row[2])
+    ):
         return None
-    return Principal(row[0], row[1], row[3], row[4])
-
-
-def minimum_role(method: str, path: str) -> Role:
-    if method in {"GET", "HEAD", "OPTIONS"}:
-        return "admin" if path.startswith("/api/admin/") or path.startswith("/api/audit-events") else "viewer"
-    if method == "DELETE" or path.startswith(ADMIN_MUTATION_PREFIXES):
-        return "admin"
-    if "/quality-thresholds/" in path and method in {"POST", "PUT", "PATCH"}:
-        return "admin"
-    if "/variables" in path and method in {"POST", "PUT", "PATCH"}:
-        return "admin"
-    return "editor"
+    legacy_role = row[4] if row[4] in ROLE_LEVEL else None
+    return Principal(row[0], row[1], row[3], "ACTIVE", bool(row[7]), row[8], legacy_role)
 
 
 def write_audit_event(
@@ -161,9 +183,11 @@ def write_audit_event(
     status_code: int,
     action: str,
     detail: dict[str, Any] | None = None,
+    connection: ConnectionLike | None = None,
 ) -> None:
     request_id = getattr(request.state, "request_id", str(uuid4()))
-    with connect() as conn:
+
+    def insert(conn: ConnectionLike) -> None:
         conn.execute(
             """
             INSERT INTO audit_events
@@ -187,6 +211,12 @@ def write_audit_event(
             ],
         )
 
+    if connection is not None:
+        insert(connection)
+        return
+    with connect() as conn:
+        insert(conn)
+
 
 class SecurityMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
@@ -202,7 +232,16 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         try:
             principal = authenticate_request(request)
         except AuthenticationError as exc:
-            response = JSONResponse({"detail": str(exc)}, status_code=401, headers={"WWW-Authenticate": "Bearer"})
+            response = JSONResponse(
+                {
+                    "detail": {
+                        "code": "AUTHENTICATION_REQUIRED",
+                        "message": str(exc),
+                    }
+                },
+                status_code=401,
+                headers={"WWW-Authenticate": "Bearer"},
+            )
             try:
                 write_audit_event(request=request, principal=None, status_code=401, action="AUTHENTICATION_DENIED")
             except Exception:
@@ -211,18 +250,62 @@ class SecurityMiddleware(BaseHTTPMiddleware):
             return response
 
         request.state.principal = principal
-        required = minimum_role(request.method, path)
-        if ROLE_LEVEL[principal.role] < ROLE_LEVEL[required]:
-            response = JSONResponse({"detail": f"{required} 역할이 필요한 작업입니다."}, status_code=403)
+        if principal.account_status == "PENDING" and path not in PENDING_ALLOWED_PATHS:
+            response = JSONResponse(
+                {
+                    "detail": {
+                        "code": "AUTH_ACCOUNT_PENDING",
+                        "message": "전역 관리자의 계정 승인을 기다리고 있습니다.",
+                    }
+                },
+                status_code=403,
+            )
             try:
-                write_audit_event(request=request, principal=principal, status_code=403, action="AUTHORIZATION_DENIED", detail={"required_role": required})
+                write_audit_event(
+                    request=request,
+                    principal=principal,
+                    status_code=403,
+                    action="ACCOUNT_PENDING_BLOCKED",
+                )
             except Exception:
-                logger.exception("Failed to persist authorization audit event")
+                logger.exception("Failed to persist pending-account audit event")
             response.headers["X-Request-Id"] = request.state.request_id
             return response
-
+        if principal.account_status == "SUSPENDED":
+            response = JSONResponse(
+                {
+                    "detail": {
+                        "code": "AUTH_ACCOUNT_SUSPENDED",
+                        "message": "중지된 계정입니다. 관리자에게 문의하세요.",
+                    }
+                },
+                status_code=403,
+            )
+            try:
+                write_audit_event(
+                    request=request,
+                    principal=principal,
+                    status_code=403,
+                    action="ACCOUNT_SUSPENDED_BLOCKED",
+                )
+            except Exception:
+                logger.exception("Failed to persist suspended-account audit event")
+            response.delete_cookie(SESSION_COOKIE, path="/", httponly=True, samesite="strict")
+            response.headers["X-Request-Id"] = request.state.request_id
+            return response
         response = await call_next(request)
         response.headers["X-Request-Id"] = request.state.request_id
+        if response.status_code == 403:
+            try:
+                write_audit_event(
+                    request=request,
+                    principal=principal,
+                    status_code=403,
+                    action="AUTHORIZATION_DENIED",
+                    detail=getattr(request.state, "authorization_detail", None),
+                )
+            except Exception:
+                logger.exception("Failed to persist authorization audit event")
         if request.method not in {"GET", "HEAD", "OPTIONS"}:
             try:
                 write_audit_event(request=request, principal=principal, status_code=response.status_code, action="API_MUTATION")

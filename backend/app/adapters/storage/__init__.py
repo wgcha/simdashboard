@@ -1,0 +1,1 @@
+"""Managed local-storage adapters."""

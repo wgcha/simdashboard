@@ -119,6 +119,8 @@ try {
         & $Python 'scripts\check_postgres_connection.py'
         if ($LASTEXITCODE -ne 0) { throw 'PostgreSQL application-role preflight failed.' }
     }
+    & $Python 'scripts\check_deployment_profile.py'
+    if ($LASTEXITCODE -ne 0) { throw 'Deployment profile preflight failed.' }
 }
 finally {
     Pop-Location

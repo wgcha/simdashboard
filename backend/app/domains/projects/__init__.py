@@ -1,0 +1,1 @@
+"""Project read-model contracts."""

@@ -549,13 +549,15 @@ DuckDB의 로컬 초기화와 PostgreSQL의 스키마 변경은 분리한다. Po
 
 ## 11. DuckDB → PostgreSQL 데이터 이전 도구 사양
 
-다음 CLI 모듈을 구현한다.
+저장소 `backend` 디렉터리에서 다음 CLI를 실행한다. `DATABASE_URL` 환경변수를
+설정하면 target URL의 기본값으로 사용하며, `--execute`가 없으면 원본만 읽는
+dry-run이다.
 
 ```powershell
-python -m app.scripts.migrate_duckdb_to_postgres `
+python scripts/migrate_duckdb_to_postgres.py `
   --source "E:\simulation_dashboard\backend\data\analysis_dashboard.duckdb" `
-  --target-env DATABASE_URL `
-  --dry-run
+  --manifest "migration-dry-run.json" `
+  --json-output
 ```
 
 실제 실행:
@@ -563,74 +565,56 @@ python -m app.scripts.migrate_duckdb_to_postgres `
 Windows PowerShell:
 
 ```powershell
-python -m app.scripts.migrate_duckdb_to_postgres `
+python scripts/migrate_duckdb_to_postgres.py `
   --source "E:\simulation_dashboard\backend\data\analysis_dashboard.duckdb" `
-  --target-env DATABASE_URL `
-  --require-empty-target `
   --batch-size 5000 `
-  --report "migration-report.json"
+  --manifest "migration-report.json" `
+  --execute
 ```
 
 Linux bash:
 
 ```bash
-python -m app.scripts.migrate_duckdb_to_postgres \
+python scripts/migrate_duckdb_to_postgres.py \
   --source "/var/lib/simdashboard/analysis_dashboard.duckdb" \
-  --target-env DATABASE_URL \
-  --require-empty-target \
   --batch-size 5000 \
-  --report "migration-report.json"
+  --manifest "migration-report.json" \
+  --execute
 ```
 
 ### CLI 안전 조건
 
-- 기본값은 `--dry-run` 또는 사용자 확인 없는 비파괴 모드다.
-- `--require-empty-target`은 대상 테이블에 데이터가 있으면 중단한다.
-- `--truncate-target`은 별도 명시 없이는 제공하거나 사용하지 않는다.
+- `--execute`가 없으면 사용자 확인 없는 비파괴 dry-run이다.
+- dry-run도 hard relationship finding, 잔여 recovery lease, partial lease schema를 발견하면 manifest/JSON을 먼저 남기고 non-zero로 종료한다. 따라서 PostgreSQL 생성 전에 실행하는 setup preflight로 사용할 수 있다.
+- source table/column은 canonical schema와 비교하며, 명시적으로 지원하는 additive legacy projection 이외의 누락·추가 열은 dry-run에서 중단한다.
+- execute는 옵션과 무관하게 대상의 모든 canonical table이 비어 있지 않으면 중단한다.
+- 첫 INSERT 전에 target table/column 계약, 필수 recovery constraint·unique index, 빈 DB 조건을 읽기 전용으로 확인한다.
+- `--truncate-target`은 제공하지 않으며 사용하지 않는다.
 - 원본 DuckDB를 읽기 전용으로 연다.
+- 원본 snapshot 안에서 active/expired/malformed recovery lease metadata가 0건이고, 다섯 lease 열이 모두 있거나 모두 없는지 확인한다. generation만 남은 released row는 0 이상일 때 허용한다.
+- 지원하는 additive legacy 열은 checksum과 INSERT에 동일한 canonical projection으로 보정한다. `request_steps.is_optional`과 완료 work item의 progress는 기존 의미를 보존하며, attempt/run reverse identity나 normalized task identity를 추측해야 하는 legacy data는 중단한다.
+- `media_assets.blob_id`, `request_work_items.demo_run_id`, `workflow_runs.batch_attempt_id`, `batch_execution_attempts.workflow_run_id`, `batch_dispatches.attempt_id`는 초기 복사에서 NULL로 staging하고, 모든 삽입 뒤 `IS NULL` CAS로 복원한다.
+- 대상 transaction은 전체 checksum이 일치할 때만 commit하며, 복사·복원·검증 실패는 rollback한다.
 - 비밀번호와 전체 URL을 로그/보고서에 남기지 않는다.
 - 하나의 테이블 실패 시 해당 실행을 실패로 표시하고 불완전 전환을 금지한다.
-- 대용량 시계열은 `fetchmany(batch_size)`와 PostgreSQL batch insert/COPY를 사용한다.
-- 각 테이블의 시작·완료 행 수, 소요 시간, 오류를 JSON 보고서에 기록한다.
+- 대용량 시계열은 `fetchmany(batch_size)`와 PostgreSQL `executemany` batch insert를 사용한다.
+- manifest에는 source/target별 table count·checksum, source schema/relationship findings, lease/transfer preflight, checksum differences를 기록한다.
 
 ### 복사 순서
 
-외래키 의존성을 고려해 다음 순서를 사용한다.
-
-```text
-projects
-product_information
-analysis_requests
-request_steps
-load_cases
-template_executions
-analysis_runs
-scalar_results
-time_series_results
-curve_results
-curve_points
-result_locations
-qualitative_notes
-media_assets
-folder_import_jobs
-import_schemas
-import_schema_versions
-quality_thresholds
-variable_definitions
-dashboards
-dashboard_versions
-report_layouts
-report_layout_versions
-report_template_assets
-validations
-```
+외래키 의존성을 고려해 canonical `backend/migrations/schema.sql`의 `CREATE TABLE`
+순서를 사용한다. 즉 새 canonical table도 자동으로 포함된다. 즉시 적용되는 역방향
+참조 다섯 개(`media_assets.blob_id`, `request_work_items.demo_run_id`,
+`workflow_runs.batch_attempt_id`, `batch_execution_attempts.workflow_run_id`,
+`batch_dispatches.attempt_id`)는 초기 insert에서 NULL staging하고 전체 table insert
+뒤에 CAS 복원한다.
 
 ### 값 변환
 
 - DuckDB JSON 문자열은 `json.loads()` 후 JSONB로 넣는다.
 - 빈 JSON과 SQL NULL을 구분한다.
-- naive timestamp는 UTC로 간주해 timezone-aware 값으로 변환한다.
-- `NaN`, `Infinity`, `-Infinity`는 이전 전에 오류로 보고한다.
+- canonical `TIMESTAMP` 값은 timezone을 임의 추정하지 않고 그대로 복사하며, checksum에서는 ISO 문자열로 정규화한다.
+- `NaN`, `Infinity`, `-Infinity`는 checksum에서 결정적으로 정규화한다. 도메인별 허용 여부 검사는 별도 release gate다.
 - 불리언을 0/1 문자열로 변환하지 않는다.
 - UTF-8 한국어를 그대로 보존한다.
 - PK와 업무 ID 문자열을 새로 생성하지 않고 원본 그대로 복사한다.
@@ -641,25 +625,21 @@ validations
 
 ## 12. 이전 전 데이터 품질 검사
 
-이전 스크립트는 복사 전에 최소 다음을 검사한다.
+현재 이전 스크립트는 복사 전에 다음을 검사한다.
 
-- 고아 `analysis_requests.project_id`
-- 고아 `load_cases.request_id`
-- 고아 `analysis_runs.load_case_id`
-- 고아 결과의 `analysis_run_id`
-- 중복 `(load_case_id, variable_key)`
-- 중복 `(analysis_run_id, variable_key, time_value)`
-- 대시보드 JSON 파싱 실패
-- 위젯 `variableId`가 비활성 또는 없는 변수인지
-- 숫자 결과의 NULL 단위/기준/판정
-- 지원하지 않는 미디어 경로와 형식
-- 비정상 시간값과 NaN/Infinity
+- canonical source table/column 계약과 지원 가능한 additive legacy projection
+- `analysis_requests`, load case, analysis run, 주요 result 및 workspace/batch/access-control 참조의 hard/warning orphan
+- recovery lease의 owner/token/acquired/expiry 잔여 metadata, partial five-column lease schema
+- attempt/run 양방향 identity와 uniqueness, `QUEUED` crash-window, `SUCCEEDED` dispatch 존재/출처, dispatch status/uniqueness, request work item의 demo run request provenance
+- target canonical table/column, 필수 recovery constraint·unique index, 빈 DB 조건
 
 검사 실패 시 기본 동작은 이전 중단이다. `--allow-warnings`는 치명적 오류를 무시하는 옵션으로 사용하지 않는다.
 
-## 13. 이전 후 자동 검증
+대시보드 위젯 의미 검증, 도메인별 숫자/미디어 품질, 실제 PostgreSQL live migration 및 app-role 권한 검증은 이 코드 preflight를 통과한 뒤에도 별도 release gate로 유지한다.
 
-`verify_postgres_migration.py`는 DuckDB와 PostgreSQL을 동시에 읽어 다음을 비교한다.
+## 13. 이전 후 자동 검증 release gate
+
+현재 transfer CLI는 같은 transaction에서 62개 canonical table의 행 수·정규화 checksum을 비교한다. 아래의 별도 `verify_postgres_migration.py`는 아직 구현되지 않은 운영 release-gate 계획이며, DuckDB와 PostgreSQL을 동시에 읽어 다음을 비교해야 한다.
 
 1. 현재 기준 32개 테이블별 행 수
 2. 모든 PK 또는 복합 PK 집합

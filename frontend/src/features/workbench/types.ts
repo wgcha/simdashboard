@@ -1,3 +1,30 @@
+import type { WidgetType } from '../../types'
+
+export type { AnalysisTemplateVersion, RequestResultLayout, ResultLayoutSnapshot, ResultProfile } from '../../shared/api/resultLayouts'
+
+export type ResultProfileInput = {
+  template_id: string
+  template_version: number
+  included_widget_ids: string[] | null
+  overrides: Record<string, unknown>
+  required_data_contracts: string[]
+}
+
+export type RequestResultWidget = {
+  id: string
+  type: WidgetType
+  title: string
+  variable_key: string | null
+  data_contracts: string[]
+  required: boolean
+}
+
+export type RequestResultDefinition = {
+  page_name?: string
+  page_description?: string
+  widgets: RequestResultWidget[]
+}
+
 export type WorkbenchTaskRef = { id: string; version: number }
 
 export type WorkbenchTaskType = {
@@ -31,8 +58,19 @@ export type WorkbenchRequestType = {
   allowed_task_types: WorkbenchTaskRef[]
   default_workflow: { nodes: WorkbenchNode[] }
   match_rules: Record<string, unknown>
+  result_profile?: ResultProfileInput | null
+  result_definition?: RequestResultDefinition | null
   is_active: boolean
   created_at: string
+}
+
+export const DEFAULT_REQUEST_TYPE_LABELS = ['SPDM', '부서'] as const
+
+export function requestTypeLabels(requestType: Pick<WorkbenchRequestType, 'match_rules'>): string[] {
+  const labels = requestType.match_rules.labels
+  if (!Array.isArray(labels)) return [...DEFAULT_REQUEST_TYPE_LABELS]
+  const cleanLabels = labels.filter((label): label is string => typeof label === 'string' && Boolean(label.trim()))
+  return cleanLabels.length ? cleanLabels : [...DEFAULT_REQUEST_TYPE_LABELS]
 }
 
 export type RequestTypeResolution = {
@@ -105,7 +143,12 @@ export type BatchProfile = {
   working_directory: string
   arguments_template: string
   environment: Record<string, string>
+  /** New 1:1 contract. */
+  task_type_id?: string
+  task_type_version?: number
+  /** Legacy API compatibility. */
   task_type_ids: string[]
+  migration_required?: boolean
   is_active: boolean
   updated_by: string
   created_at: string

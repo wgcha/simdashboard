@@ -1,0 +1,20 @@
+ANALYSIS CANVAS - DEMO RESULT SUMMARY
+=====================================
+execution_mode: DEMO_ONLY
+status: SUCCEEDED
+progress_percent: 100
+
+metric,max_value,unit,verdict
+max_displacement,1.842,mm,PASS
+max_von_mises,186.400,MPa,PASS
+mass,12.740,kg,INFO
+
+artifact_contract:
+- input: DEMO_INPUT_REFERENCE
+- output: DEMO_RESULT_SUMMARY
+- lineage_persisted: false
+- analysis_db_published: false
+- training_dataset_published: false
+
+This static fixture may be used to demonstrate result collection, validation,
+post-processing, and dashboard presentation without an external execution.

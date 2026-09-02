@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from .api import WidgetType
 
 
 TaskKind = Literal[
@@ -47,8 +49,82 @@ class WorkflowDefinitionDraft(StrictModel):
     nodes: list[WorkflowNodeDraft] = Field(min_length=1, max_length=32)
 
 
+class ResultProfileInput(StrictModel):
+    """Versioned selection and configuration for a published result template."""
+
+    template_id: str = Field(min_length=3, max_length=80, pattern=r"^[a-z][a-z0-9_-]*$")
+    template_version: int = Field(ge=1)
+    included_widget_ids: list[str] | None = Field(default=None, max_length=120)
+    overrides: dict[str, Any] = Field(default_factory=dict)
+    required_data_contracts: list[str] = Field(default_factory=list, max_length=32)
+
+
+class ResultLayoutMaterializeInput(StrictModel):
+    load_case_id: str = Field(min_length=1, max_length=120)
+    page_id: str | None = Field(default=None, min_length=1, max_length=120)
+
+
+class ResultWidgetDefinition(StrictModel):
+    """A compact, authored result-widget tag for a request type."""
+
+    id: str = Field(min_length=1, max_length=120)
+    type: WidgetType
+    title: str = Field(min_length=1, max_length=160)
+    variable_key: str | None = Field(default=None, min_length=1, max_length=120)
+    data_contracts: list[str] = Field(default_factory=list, max_length=32)
+    required: bool = False
+
+
+class RequestResultDefinition(StrictModel):
+    """Result widgets authored with a request type, rather than a template."""
+
+    page_name: str | None = Field(default=None, min_length=2, max_length=120)
+    page_description: str = Field(default="", max_length=500)
+    widgets: list[ResultWidgetDefinition] = Field(min_length=1, max_length=120)
+
+    @model_validator(mode="after")
+    def validate_widget_ids(self) -> "RequestResultDefinition":
+        widget_ids = [widget.id for widget in self.widgets]
+        if len(widget_ids) != len(set(widget_ids)):
+            raise ValueError("요청 결과 위젯 ID는 중복될 수 없습니다.")
+        return self
+
+
+class AnalysisTemplateVersionCreate(StrictModel):
+    # Page JSON is validated as DashboardDefinition so the existing 12-column
+    # dashboard model remains the single result-layout contract.
+    id: str | None = Field(default=None, min_length=3, max_length=80, pattern=r"^[a-z][a-z0-9_-]*$")
+    display_name: str = Field(min_length=2, max_length=120)
+    description: str = Field(default="", max_length=500)
+    page_definitions: list[dict[str, Any]] = Field(min_length=1, max_length=40)
+    lifecycle_status: Literal["DRAFT", "PUBLISHED", "ARCHIVED"] = "DRAFT"
+    scope_kind: Literal["SYSTEM", "PROJECT"] = "SYSTEM"
+    project_id: str | None = Field(default=None, min_length=1, max_length=120)
+
+    @field_validator("page_definitions")
+    @classmethod
+    def validate_pages(cls, pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        from .api import DashboardDefinition
+
+        identifiers: set[str] = set()
+        widget_identifiers: set[str] = set()
+        validated: list[dict[str, Any]] = []
+        for page in pages:
+            definition = DashboardDefinition.model_validate(page).model_dump()
+            if definition["id"] in identifiers:
+                raise ValueError("분석 템플릿 페이지 ID는 중복될 수 없습니다.")
+            identifiers.add(definition["id"])
+            for widget in definition["widgets"]:
+                if widget["id"] in widget_identifiers:
+                    raise ValueError("분석 템플릿 위젯 ID는 모든 페이지에서 고유해야 합니다.")
+                widget_identifiers.add(widget["id"])
+            validated.append(definition)
+        return validated
+
+
 class TaskTypeVersionCreate(StrictModel):
-    id: str = Field(min_length=3, max_length=80, pattern=r"^[a-z][a-z0-9_-]*$")
+    # Optional for compatibility; new definitions receive a server-generated id.
+    id: str | None = Field(default=None, min_length=3, max_length=80, pattern=r"^[a-z][a-z0-9_-]*$")
     kind: TaskKind
     display_name: str = Field(min_length=2, max_length=120)
     description: str = Field(default="", max_length=500)
@@ -68,13 +144,46 @@ class TaskTypeVersionCreate(StrictModel):
 
 
 class RequestTypeVersionCreate(StrictModel):
-    id: str = Field(min_length=3, max_length=80, pattern=r"^[a-z][a-z0-9_-]*$")
+    # Optional for compatibility; new definitions receive a server-generated id.
+    id: str | None = Field(default=None, min_length=3, max_length=80, pattern=r"^[a-z][a-z0-9_-]*$")
     display_name: str = Field(min_length=2, max_length=120)
     description: str = Field(default="", max_length=500)
     allowed_task_types: list[TaskTypeRef] = Field(min_length=1, max_length=32)
     default_workflow: WorkflowDefinitionDraft
     match_rules: dict[str, Any] = Field(default_factory=dict)
+    result_profile: ResultProfileInput | None = None
+    result_definition: RequestResultDefinition | None = None
     is_active: bool = True
+
+    @model_validator(mode="after")
+    def validate_result_configuration(self) -> "RequestTypeVersionCreate":
+        if self.result_profile is not None and self.result_definition is not None:
+            raise ValueError("result_profile과 result_definition은 함께 지정할 수 없습니다.")
+        return self
+
+    @field_validator("match_rules")
+    @classmethod
+    def validate_match_rules(cls, value: dict[str, Any]) -> dict[str, Any]:
+        normalized = dict(value)
+        labels = normalized.get("labels", ["SPDM", "부서"])
+        if not isinstance(labels, list) or not 1 <= len(labels) <= 12:
+            raise ValueError("작업 유형 라벨은 1개 이상 12개 이하로 지정해야 합니다.")
+        clean_labels: list[str] = []
+        seen: set[str] = set()
+        for label in labels:
+            if not isinstance(label, str):
+                raise ValueError("작업 유형 라벨은 문자열이어야 합니다.")
+            clean = label.strip().lstrip("#").replace(" ", "-")
+            if not 1 <= len(clean) <= 24 or any(character in clean for character in "#,"):
+                raise ValueError("작업 유형 라벨은 #·쉼표 없이 1~24자로 입력해야 합니다.")
+            key = clean.casefold()
+            if key not in seen:
+                seen.add(key)
+                clean_labels.append(clean)
+        if not clean_labels:
+            raise ValueError("작업 유형 라벨을 1개 이상 지정해야 합니다.")
+        normalized["labels"] = clean_labels
+        return normalized
 
 
 class RequestTypeAssignmentInput(StrictModel):
@@ -106,14 +215,23 @@ class WorkItemProgress(StrictModel):
     updated_by: str = Field(min_length=2, max_length=80)
 
 
+class WorkItemAssigneeUpdate(StrictModel):
+    owner_user_id: str = Field(min_length=3, max_length=120)
+
+
 class BatchProfileInput(StrictModel):
-    id: str = Field(min_length=3, max_length=80, pattern=r"^[a-z][a-z0-9_-]*$")
+    # Internal id is generated by the server when omitted on create.
+    id: str | None = Field(default=None, min_length=3, max_length=80, pattern=r"^[a-z][a-z0-9_-]*$")
     name: str = Field(min_length=2, max_length=120)
     solver_path: str = Field(min_length=2, max_length=500)
     working_directory: str = Field(min_length=1, max_length=500)
     arguments_template: str = Field(default="{input}", max_length=1000)
     environment: dict[str, str] = Field(default_factory=dict)
-    task_type_ids: list[str] = Field(min_length=1, max_length=32)
+    # New writes use one task type/version. A one-element array remains as a
+    # compatibility bridge for legacy clients.
+    task_type_ids: list[str] | None = Field(default=None, max_length=32)
+    task_type_id: str | None = Field(default=None, min_length=3, max_length=80, pattern=r"^[a-z][a-z0-9_-]*$")
+    task_type_version: int = Field(default=1, ge=1)
     is_active: bool = True
     updated_by: str = Field(default="관리자", min_length=2, max_length=80)
 
@@ -138,7 +256,9 @@ class BatchProfileInput(StrictModel):
 
     @field_validator("task_type_ids")
     @classmethod
-    def validate_task_type_ids(cls, value: list[str]) -> list[str]:
+    def validate_task_type_ids(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
         normalized = list(dict.fromkeys(value))
         if any(not item or len(item) > 80 or not item[0].isalpha() or any(character not in "abcdefghijklmnopqrstuvwxyz0123456789_-" for character in item) for item in normalized):
             raise ValueError("작업 유형 ID 형식이 올바르지 않습니다.")
@@ -146,6 +266,8 @@ class BatchProfileInput(StrictModel):
 
 
 class BatchDispatchCreate(StrictModel):
-    batch_profile_id: str = Field(min_length=3, max_length=80, pattern=r"^[a-z][a-z0-9_-]*$")
+    # Omitted for the 1:1 model: the server resolves the definition from the
+    # work item task type/version. Kept optional for old clients.
+    batch_profile_id: str | None = Field(default=None, min_length=3, max_length=80, pattern=r"^[a-z][a-z0-9_-]*$")
     idempotency_key: str = Field(min_length=8, max_length=100, pattern=r"^[A-Za-z0-9._:-]+$")
     created_by: str = Field(default="실행 담당자", min_length=2, max_length=80)

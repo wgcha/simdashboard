@@ -1,0 +1,56 @@
+{
+  "rawApiPathCeilings": {
+    "App.tsx": 0,
+    "api.ts": 0,
+    "features/auth/LoginScreen.tsx": 1,
+    "features/workbench/api.ts": 0,
+    "shared/api/auth.ts": 1
+  },
+  "sourceLineCeilings": {
+    "App.tsx": 1076,
+    "app/routing/workspaceRouteModules.tsx": 26,
+    "api.ts": 393,
+    "features/analysis/AnalysisPageManager.tsx": 95,
+    "features/data/DataWorkspace.tsx": 189,
+    "features/data/FolderSchemaWorkspace.tsx": 84,
+    "features/data/VariableCatalogPage.tsx": 30,
+    "features/reports/ReportLayoutEditor.tsx": 206,
+    "features/reports/ReportExportDialog.tsx": 32,
+    "features/reports/api.ts": 132,
+    "features/reports/useReportExportController.ts": 240,
+    "features/requests/WorkflowView.tsx": 87,
+    "features/results/AnalysisWidgets.tsx": 290,
+    "features/results/DropVideoGrid.tsx": 257,
+    "features/results/ResultsWorkspace.tsx": 80,
+    "features/workbench/AutomationTemplatesPage.tsx": 10,
+    "features/workbench/api.ts": 70,
+    "shared/api/client.ts": 21
+  },
+  "crossFeatureRelativeImports": [
+    {
+      "from": "features/access/AccessAdministration.tsx",
+      "to": "features/auth/access",
+      "specifier": "../auth/access"
+    },
+    {
+      "from": "features/bootstrap/BootstrapWorkspaceShell.tsx",
+      "to": "features/auth/access",
+      "specifier": "../auth/access"
+    },
+    {
+      "from": "features/bootstrap/loadInitialWorkspace.ts",
+      "to": "features/analysis/pageSelection",
+      "specifier": "../analysis/pageSelection"
+    },
+    {
+      "from": "features/bootstrap/loadInitialWorkspace.ts",
+      "to": "features/auth/access",
+      "specifier": "../auth/access"
+    },
+    {
+      "from": "features/navigation/workspaceRouteRegistry.ts",
+      "to": "features/auth/access",
+      "specifier": "../auth/access"
+    }
+  ]
+}

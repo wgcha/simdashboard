@@ -25,7 +25,10 @@ def _schema_sql() -> str:
 
 
 def upgrade() -> None:
-    for statement in _schema_sql().split(";"):
+    schema_sql = _schema_sql()
+    if op.get_bind().dialect.name == "postgresql":
+        schema_sql = schema_sql.replace("content BLOB NOT NULL", "content BYTEA NOT NULL")
+    for statement in schema_sql.split(";"):
         if statement.strip():
             op.execute(sa.text(statement))
 

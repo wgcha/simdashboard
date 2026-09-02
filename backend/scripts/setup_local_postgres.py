@@ -258,7 +258,7 @@ def restore_file_state(path: Path, content: bytes | None) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Initialize a local Analysis Canvas PostgreSQL database.")
-    parser.add_argument("--seed-mode", choices=("duckdb", "empty", "demo"), default="duckdb")
+    parser.add_argument("--seed-mode", choices=("duckdb", "empty", "reference", "demo"), default="duckdb")
     parser.add_argument("--replace-existing", action="store_true")
     parser.add_argument("--backup-dir", type=Path)
     args = parser.parse_args()

@@ -1,0 +1,113 @@
+import { useCallback, useEffect, useRef } from 'react'
+import { useBlocker, useLocation, useNavigate } from 'react-router-dom'
+
+import type { AuthUser } from '../../auth'
+import type { MenuId, WorkspacePage } from '../../features/auth/access'
+import { dashboardEntryForNavigation, WORKSPACE_ROUTES_BY_ID, workspacePathForPage, workspaceRouteForPathname, type DashboardEntry } from '../../features/navigation/workspaceRouteRegistry'
+import { resolveBlockedNavigation } from './navigationState'
+
+type WorkspaceNavigationOptions = {
+  allowedPages: ReadonlySet<WorkspacePage>
+  authUser: AuthUser | null
+  editMode: boolean
+  menuPolicyReady: boolean
+  onCancelEditing: () => void
+  onDashboardRoute: () => void
+  onNotice: (message: string) => void
+  visibleMenus: readonly { id: MenuId }[]
+}
+
+export type WorkspaceNavigationRequest = {
+  dashboardEntry?: DashboardEntry
+  replace?: boolean
+}
+
+type PendingNavigation = {
+  dashboardEntry: DashboardEntry
+  pathname: string
+}
+
+/**
+ * URL-derived workspace state and the single navigation contract. The data
+ * router blocker protects sidebar clicks, feature hand-offs, and browser
+ * history with one confirmation prompt.
+ */
+export function useWorkspaceNavigation({
+  allowedPages,
+  authUser,
+  editMode,
+  menuPolicyReady,
+  onCancelEditing,
+  onDashboardRoute,
+  onNotice,
+  visibleMenus,
+}: WorkspaceNavigationOptions) {
+  const location = useLocation()
+  const navigate = useNavigate()
+  const matchedWorkspaceRoute = workspaceRouteForPathname(location.pathname)
+  const workspacePage = matchedWorkspaceRoute?.page ?? 'portfolio'
+  const isWorkspaceIndex = location.pathname === '/' || location.pathname === '/workspace' || location.pathname === '/workspace/'
+  const navigationBlocker = useBlocker(editMode)
+  const pendingNavigationRef = useRef<PendingNavigation | null>(null)
+
+  useEffect(() => {
+    if (!authUser || authUser.account_status !== 'ACTIVE' || !menuPolicyReady) return
+    const fallbackPath = visibleMenus[0] ? workspacePathForPage(visibleMenus[0].id) : undefined
+    if (isWorkspaceIndex) {
+      if (fallbackPath) navigate(fallbackPath, { replace: true })
+      return
+    }
+    if (!matchedWorkspaceRoute) return
+    if (allowedPages.has(matchedWorkspaceRoute.page) || !fallbackPath) return
+    onNotice('현재 권한으로 열 수 없는 화면입니다. 허용된 첫 화면으로 이동했습니다.')
+    navigate(fallbackPath, { replace: true })
+  }, [allowedPages, authUser?.account_status, authUser?.id, isWorkspaceIndex, matchedWorkspaceRoute, menuPolicyReady, navigate, onNotice, visibleMenus])
+
+  useEffect(() => {
+    if (!editMode) return
+    const beforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', beforeUnload)
+    return () => window.removeEventListener('beforeunload', beforeUnload)
+  }, [editMode])
+
+  useEffect(() => {
+    if (navigationBlocker.state !== 'blocked') return
+    const decision = resolveBlockedNavigation(
+      pendingNavigationRef.current,
+      window.confirm('저장하지 않은 변경 사항이 있습니다. 변경을 취소하고 이동할까요?'),
+    )
+    pendingNavigationRef.current = decision.pending
+    if (decision.shouldProceed) {
+      onCancelEditing()
+      navigationBlocker.proceed()
+    } else {
+      navigationBlocker.reset()
+    }
+  }, [navigationBlocker, onCancelEditing])
+
+  useEffect(() => {
+    const pending = pendingNavigationRef.current
+    if (!pending || pending.pathname !== location.pathname) return
+    pendingNavigationRef.current = null
+    if (matchedWorkspaceRoute?.page === 'dashboard' && pending.dashboardEntry === 'reset') onDashboardRoute()
+  }, [location.pathname, matchedWorkspaceRoute?.page, onDashboardRoute])
+
+  const navigateWorkspace = useCallback((menuId: MenuId, options: WorkspaceNavigationRequest = {}) => {
+    const route = WORKSPACE_ROUTES_BY_ID.get(menuId)
+    if (!route) return
+    const dashboardEntry = dashboardEntryForNavigation(menuId, options.dashboardEntry)
+    if (route.path === location.pathname) {
+      // A same-route menu click must not silently abandon an active editor.
+      // There is no browser transition for useBlocker to intercept here.
+      if (route.page === 'dashboard' && dashboardEntry === 'reset' && !editMode) onDashboardRoute()
+      return
+    }
+    pendingNavigationRef.current = { dashboardEntry, pathname: route.path }
+    navigate(route.path, { replace: options.replace })
+  }, [editMode, location.pathname, navigate, onDashboardRoute])
+
+  return { isWorkspaceIndex, matchedWorkspaceRoute, navigateWorkspace, workspacePage }
+}

@@ -27,7 +27,7 @@ try {
         & $Python scripts\migrate_duckdb_to_postgres.py --source $sourcePath --target-url $env:DATABASE_URL --execute
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     } else {
-        & $Python scripts\seed_database.py
+        & $Python scripts\seed_database.py --mode reference
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     }
 } finally {

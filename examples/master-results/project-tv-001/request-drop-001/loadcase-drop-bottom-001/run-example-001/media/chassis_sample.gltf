@@ -1,0 +1,13 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "simdashboard canonical master-result example"
+  },
+  "scene": 0,
+  "scenes": [
+    {
+      "name": "Chassis Rear sample",
+      "nodes": []
+    }
+  ]
+}

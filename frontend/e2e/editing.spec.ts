@@ -6,12 +6,12 @@ async function waitForDashboard(page: Page, role: 'admin' | 'viewer' = 'admin') 
   await page.getByLabel('사용자 이름').fill(role === 'admin' ? 'e2e-admin' : 'e2e-viewer')
   await page.getByLabel('비밀번호').fill('e2e-validation-password')
   await page.getByRole('button', { name: '로그인', exact: true }).click()
-  await expect(page.getByRole('button', { name: '운영 대시보드', exact: true })).toBeVisible()
+  await expect(page.getByRole('link', { name: '운영 대시보드', exact: true })).toBeVisible()
   await expect(page.locator('.portfolio-page')).toBeVisible()
 }
 
 async function openAnalysisWorkspace(page: Page) {
-  await page.getByRole('button', { name: '해석 의뢰 현황', exact: true }).click()
+  await page.getByRole('link', { name: '해석 의뢰 현황', exact: true }).click()
   await expect(page.locator('.content-head')).toBeVisible()
   await page.locator('.view-tabs').getByRole('button', { name: /상세 분석/ }).click()
 }
@@ -21,9 +21,9 @@ test.beforeEach(async ({ page }, testInfo) => {
 })
 
 test('Viewer는 대시보드를 조회하지만 편집 기능은 사용할 수 없다', async ({ page }) => {
-  await expect(page.locator('.signed-user')).toContainText('VIEWER')
+  await expect(page.locator('.signed-user')).toContainText('GENERAL')
   await expect(page.getByRole('button', { name: '대시보드 편집', exact: true })).toHaveCount(0)
-  await page.getByRole('button', { name: '해석 의뢰 현황', exact: true }).click()
+  await page.getByRole('link', { name: '해석 의뢰 현황', exact: true }).click()
   await expect(page.getByRole('button', { name: '진행 단계 편집', exact: true })).toHaveCount(0)
 })
 

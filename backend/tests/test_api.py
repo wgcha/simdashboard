@@ -8,31 +8,40 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app import main as main_module
+from app.application.analysis_pages import commands as analysis_page_commands
+from app.routers import result_ingestion as result_ingestion_module
+from app.adapters.persistence.result_ingestion import SQLResultIngestionQuery
+from app.config import database_settings
 from app.database import connect, initialize_database
 from app.main import app
 from app.media_policy import validate_media_metadata
 from app.security import hash_password
 
 
+@pytest.mark.contract
+@pytest.mark.duckdb_integration
 def test_workspace_layout_versions_are_persisted():
     initialize_database()
     with TestClient(app) as client:
-        initial = client.get("/api/workspace-layouts/portfolio")
+        path = "/api/projects/project-tv-001/workspace-layouts/portfolio"
+        initial = client.get(path)
         assert initial.status_code == 200
         original = initial.json()
         changed_definition = {**original["definition"], "fontSize": 11 if original["definition"]["fontSize"] != 11 else 12}
         try:
-            saved = client.put("/api/workspace-layouts/portfolio", json={"definition": changed_definition, "updated_by": "테스트 편집자"})
+            saved = client.put(path, json={"definition": changed_definition, "updated_by": "위조 편집자"})
             assert saved.status_code == 200, saved.text
             assert saved.json()["version"] == original["version"] + 1
-            assert client.get("/api/workspace-layouts/portfolio").json()["definition"] == changed_definition
-            versions = client.get("/api/workspace-layouts/portfolio/versions").json()
+            assert saved.json()["updated_by"] == "로컬 관리자"
+            assert client.get(path).json()["definition"] == changed_definition
+            versions = client.get(f"{path}/versions").json()
             assert versions[0]["version"] == saved.json()["version"]
         finally:
-            restored = client.put("/api/workspace-layouts/portfolio", json={"definition": original["definition"], "updated_by": "테스트 복원"})
+            restored = client.put(path, json={"definition": original["definition"], "updated_by": "위조 복원"})
             assert restored.status_code == 200
 
 
@@ -232,8 +241,13 @@ def test_analysis_page_role_access_and_editor_published_widget_edit(monkeypatch)
     with connect() as conn:
         for role, (user_id, username) in users.items():
             conn.execute(
-                "INSERT INTO users VALUES (?, ?, ?, ?, ?, true, ?, ?)",
-                [user_id, username, hash_password(password), username, role, now, now],
+                """
+                INSERT INTO users
+                    (id, username, password_hash, display_name, legacy_role, is_active,
+                     created_at, updated_at, account_status, is_global_admin)
+                VALUES (?, ?, ?, ?, ?, true, ?, ?, 'ACTIVE', ?)
+                """,
+                [user_id, username, hash_password(password), username, role, now, now, role == "admin"],
             )
     monkeypatch.setenv("AUTH_MODE", "password")
     monkeypatch.setenv("AUTH_SECRET_KEY", "test-secret-key-that-is-at-least-32-characters")
@@ -268,7 +282,9 @@ def test_analysis_page_role_access_and_editor_published_widget_edit(monkeypatch)
             published = client.get(f"/api/dashboards/{page_id}", headers=headers["editor"]).json()
             assert client.get(f"/api/dashboards/{page_id}/versions", headers=headers["viewer"]).status_code == 200
             published["widgets"][0]["title"] = "편집자 수정"
-            assert client.put(f"/api/dashboards/{page_id}", headers=headers["editor"], json=published).status_code == 200
+            # Legacy editor maps to the power role; dashboard editing is now
+            # reserved for a project admin or global admin.
+            assert client.put(f"/api/dashboards/{page_id}", headers=headers["editor"], json=published).status_code == 403
             assert client.put(f"/api/dashboards/{page_id}", headers=headers["viewer"], json=published).status_code == 403
             assert client.patch(f"/api/admin/dashboard-pages/{page_id}", headers=headers["editor"], json={"name": "금지"}).status_code == 403
             assert client.delete(f"/api/admin/dashboard-pages/{page_id}", headers=headers["editor"], params={"load_case_id": "loadcase-drop-bottom-001"}).status_code == 403
@@ -278,7 +294,9 @@ def test_analysis_page_role_access_and_editor_published_widget_edit(monkeypatch)
             if page_id:
                 conn.execute("DELETE FROM dashboard_versions WHERE dashboard_id = ?", [page_id])
                 conn.execute("DELETE FROM dashboards WHERE id = ?", [page_id])
-            conn.execute("DELETE FROM audit_events WHERE username LIKE ?", [f"%-{suffix}"])
+            if database_settings().backend == "duckdb":
+                conn.execute("DELETE FROM audit_events WHERE username LIKE ?", [f"%-{suffix}"])
+            conn.execute("DELETE FROM project_memberships WHERE user_id IN (?, ?, ?)", [*(user_id for user_id, _ in users.values())])
             conn.execute("DELETE FROM users WHERE username LIKE ?", [f"%-{suffix}"])
 
 
@@ -293,11 +311,11 @@ def test_analysis_page_delete_rolls_back_versions_when_body_delete_fails(monkeyp
         assert created.status_code == 201
         dashboard_id = created.json()["id"]
 
-        def fail_after_version_delete(conn, target_id: str):
-            conn.execute("DELETE FROM dashboard_versions WHERE dashboard_id = ?", [target_id])
+        def fail_after_version_delete(repository, target_id: str):
+            repository.delete_analysis_page_records(target_id)
             raise RuntimeError("forced delete failure")
 
-        monkeypatch.setattr(main_module, "_delete_analysis_page_records", fail_after_version_delete)
+        monkeypatch.setattr(analysis_page_commands, "_delete_records", fail_after_version_delete)
         response = client.delete(f"/api/admin/dashboard-pages/{dashboard_id}", params={"load_case_id": load_case_id})
         assert response.status_code == 500
         with connect() as conn:
@@ -386,7 +404,7 @@ def test_drop_video_example_adapter_is_scoped_paginated_and_safe():
         )
         assert first_page.status_code == 200, first_page.text
         payload = first_page.json()
-        assert payload["source"] == "EXAMPLE_ADAPTER"
+        assert payload["source"] == "DATABASE"
         assert payload["demo_only"] is True
         assert payload["evaluation_source"] == "SYNTHETIC_DEMO"
         assert payload["contract_version"] == 1
@@ -472,10 +490,13 @@ def test_workflow_step_full_edit_and_validation():
         try:
             updated = client.patch(f'/api/workflow-steps/{original["id"]}', json=payload)
             assert updated.status_code == 200, updated.text
-            assert all(updated.json()[key] == value for key, value in payload.items())
+            expected = {key: value for key, value in payload.items() if key != "owner"}
+            assert all(updated.json()[key] == value for key, value in expected.items())
+            assert updated.json()["owner"] == original["owner"]
             refreshed = client.get("/api/workflows").json()
             saved = next(step for item in refreshed for step in item["steps"] if step["id"] == original["id"])
-            assert all(saved[key] == value for key, value in payload.items())
+            assert all(saved[key] == value for key, value in expected.items())
+            assert saved["owner"] == original["owner"]
             invalid = client.patch(f'/api/workflow-steps/{original["id"]}', json={**payload, "progress": 101})
             assert invalid.status_code == 422
         finally:
@@ -495,7 +516,11 @@ def test_workflow_steps_replace_supports_add_delete_and_reorder():
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     with connect() as conn:
         conn.execute(
-            "INSERT INTO analysis_requests VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            """
+            INSERT INTO analysis_requests
+                (id, project_id, title, status, owner, requested_at, due_at, overall_note)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
             [request_id, "project-tv-001", "레거시 단계 편집 API 검증", "IN_PROGRESS", "워크플로 편집자", now, now + timedelta(days=7), "테스트 후 삭제"],
         )
         for sequence_no, name in enumerate(("레거시 첫 단계", "레거시 두 번째 단계"), start=1):
@@ -511,10 +536,20 @@ def test_workflow_steps_replace_supports_add_delete_and_reorder():
     with TestClient(app) as client:
         workflow = next(item for item in client.get("/api/workflows").json() if item["request"]["id"] == request_id)
         first, second = workflow["steps"][:2]
+        with connect() as conn:
+            assignee = conn.execute(
+                """
+                SELECT users.id FROM users
+                JOIN project_memberships memberships ON memberships.user_id=users.id
+                WHERE memberships.project_id='project-tv-001' AND users.account_status='ACTIVE'
+                ORDER BY users.id LIMIT 1
+                """
+            ).fetchone()
+        assert assignee
         payload = {"steps": [
-            {"id": second["id"], "name": "순서가 바뀐 두 번째 단계", "status": "IN_PROGRESS", "owner": "담당 B", "progress": 45, "is_optional": False, "note": "앞으로 이동"},
-            {"id": first["id"], "name": first["name"], "status": first["status"], "owner": first["owner"], "progress": first["progress"], "is_optional": first["is_optional"], "note": first.get("note") or ""},
-            {"id": None, "name": "새 승인 단계", "status": "WAITING", "owner": "담당 C", "progress": 0, "is_optional": True, "note": "신규 추가"},
+            {"id": second["id"], "name": "순서가 바뀐 두 번째 단계", "status": "IN_PROGRESS", "owner_user_id": assignee[0], "progress": 45, "is_optional": False, "note": "앞으로 이동"},
+            {"id": first["id"], "name": first["name"], "status": first["status"], "owner_user_id": assignee[0], "progress": first["progress"], "is_optional": first["is_optional"], "note": first.get("note") or ""},
+            {"id": None, "name": "새 승인 단계", "status": "WAITING", "owner_user_id": assignee[0], "progress": 0, "is_optional": True, "note": "신규 추가"},
         ]}
         try:
             replaced = client.put(f"/api/requests/{request_id}/workflow-steps", json=payload)
@@ -910,12 +945,22 @@ def test_create_project_request_and_load_case():
         }
         with connect() as conn:
             metadata = {row[0]: row[1] for row in conn.execute("SELECT category, value_text FROM product_information WHERE project_id = ?", [created_project]).fetchall()}
+            assignee = conn.execute(
+                """
+                SELECT users.id FROM users
+                JOIN project_memberships memberships ON memberships.user_id=users.id
+                WHERE memberships.project_id=? AND users.account_status='ACTIVE'
+                ORDER BY users.id LIMIT 1
+                """,
+                [created_project],
+            ).fetchone()
         assert metadata == {"MODEL": "Test TV", "MANUFACTURER": "Test Display", "SPEC": "55 inch"}
+        assert assignee
         request_response = client.post(
             f"/api/projects/{created_project}/requests",
             json={
                 "title": "Side Clamp 검증 의뢰",
-                "owner": "테스트",
+                "owner_user_id": assignee[0],
                 "due_in_days": 5,
                 "source_type": "DEPARTMENT_HEAD",
                 "source_reference": "시험해석팀",
@@ -998,6 +1043,13 @@ def test_create_project_request_and_load_case():
             conn.execute("DELETE FROM result_locations WHERE analysis_run_id = ?", [created_run])
             conn.execute("DELETE FROM time_series_results WHERE analysis_run_id = ?", [created_run])
             conn.execute("DELETE FROM scalar_results WHERE analysis_run_id = ?", [created_run])
+            conn.execute(
+                "DELETE FROM canonical_result_ingestion_source_versions "
+                "WHERE analysis_run_id=? OR supersedes_analysis_run_id=?",
+                [created_run, created_run],
+            )
+            conn.execute("DELETE FROM folder_import_jobs WHERE analysis_run_id = ?", [created_run])
+            conn.execute("DELETE FROM analysis_run_metadata WHERE analysis_run_id = ?", [created_run])
             conn.execute("DELETE FROM analysis_runs WHERE id = ?", [created_run])
         if created_request:
             conn.execute("DELETE FROM request_steps WHERE request_id = ?", [created_request])
@@ -1011,12 +1063,54 @@ def test_create_project_request_and_load_case():
             conn.execute("DELETE FROM projects WHERE id = ?", [created_project])
 
 
-def test_typed_folder_example_registers_scalars_curves_media_and_catalog():
+def test_typed_folder_example_registers_scalars_curves_media_and_catalog(monkeypatch):
     initialize_database()
     load_case_id = "loadcase-clamp-left-001"
+    authorization_connections = []
+    query_connections = []
+    events = []
+    original_authorize = result_ingestion_module.require_resource_permission
+    original_target_query = SQLResultIngestionQuery.get_result_ingestion_target
+
+    def track_result_import_authorization(
+        request,
+        permission,
+        resource_type,
+        resource_id,
+        *,
+        conn=None,
+    ):
+        if permission == result_ingestion_module.RESULT_IMPORT and resource_type == "load_case":
+            events.append("authorize")
+            authorization_connections.append(conn)
+        return original_authorize(
+            request,
+            permission,
+            resource_type,
+            resource_id,
+            conn=conn,
+        )
+
+    def track_target_query(query, *args, **kwargs):
+        events.append("query")
+        query_connections.append(query._repository.conn)
+        return original_target_query(query, *args, **kwargs)
+
+    monkeypatch.setattr(
+        result_ingestion_module,
+        "require_resource_permission",
+        track_result_import_authorization,
+    )
+    monkeypatch.setattr(SQLResultIngestionQuery, "get_result_ingestion_target", track_target_query)
     with TestClient(app) as client:
         response = client.post(f"/api/load-cases/{load_case_id}/folder-import/example")
         assert response.status_code == 200, response.text
+        assert len(authorization_connections) == 2
+        assert all(connection is not None for connection in authorization_connections)
+        assert authorization_connections[0] is not authorization_connections[1]
+        assert events[:3] == ["authorize", "query", "authorize"]
+        assert len(query_connections) == 1
+        assert query_connections[0] is authorization_connections[0]
         result = response.json()
         assert result["summary"] == {"scalar_count": 13, "curve_count": 2, "media_count": 1}
         overview = client.get(f"/api/load-cases/{load_case_id}/overview").json()
@@ -1043,6 +1137,12 @@ def test_typed_folder_example_registers_scalars_curves_media_and_catalog():
         conn.execute("DELETE FROM time_series_results WHERE analysis_run_id=?", [result["run_id"]])
         conn.execute("DELETE FROM scalar_results WHERE analysis_run_id=?", [result["run_id"]])
         conn.execute("DELETE FROM folder_import_jobs WHERE id=?", [result["job_id"]])
+        conn.execute(
+            "DELETE FROM canonical_result_ingestion_source_versions "
+            "WHERE analysis_run_id=? OR supersedes_analysis_run_id=?",
+            [result["run_id"], result["run_id"]],
+        )
+        conn.execute("DELETE FROM analysis_run_metadata WHERE analysis_run_id=?", [result["run_id"]])
         conn.execute("DELETE FROM analysis_runs WHERE id=?", [result["run_id"]])
         for key in ("mesh_element_count", "analysis_judgement", "chassis_rear_verdict", "open_cell_top_edge_stress_curve", "chassis_rear_top_edge_deformation_curve", "open_cell_stress_contour"):
             conn.execute("DELETE FROM variable_definitions WHERE load_case_id=? AND variable_key=?", [load_case_id, key])
@@ -1050,6 +1150,10 @@ def test_typed_folder_example_registers_scalars_curves_media_and_catalog():
         asset_folder = Path(__file__).resolve().parents[1] / "assets" / Path(path).parent
         if asset_folder.exists():
             shutil.rmtree(asset_folder)
+    with connect() as conn:
+        assert conn.execute(
+            "SELECT count(*) FROM analysis_run_metadata WHERE source_type='FOLDER_IMPORT' AND source_name LIKE '%typed-results%tv-drop-chassis'"
+        ).fetchone()[0] == 0
 
 
 def test_import_schema_crud_and_hierarchy_mapping():

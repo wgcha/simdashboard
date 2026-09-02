@@ -510,7 +510,9 @@ GET  /api/workbench/batch-attempts/{attempt_id}/events
 
 권고 코드 경계:
 
-- `backend/app/services/verdict_service.py`: criterion scope와 재판정 규칙
+- `backend/app/adapters/persistence/result_ingestion.py`와
+  `backend/app/repositories/variable_catalog.py`: canonical 결과 catalog·threshold
+  persistence 및 verdict 저장
 - `backend/app/repositories/workbench.py`: profile/attempt/work item 영속화
 - `backend/app/services/request_monitoring.py`: 공통 progress projection
 - `backend/app/routers/workbench.py`: 작업 상세·진행률·배치 API

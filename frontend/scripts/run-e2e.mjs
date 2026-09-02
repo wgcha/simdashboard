@@ -1,24 +1,25 @@
 import { spawn, spawnSync } from 'node:child_process'
-import { rmSync } from 'node:fs'
+import { existsSync, rmSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
 const frontendDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const workspaceDir = path.resolve(frontendDir, '..')
+const wslPython = path.join(workspaceDir, '.venv-wsl', 'bin', 'python')
 const python = process.env.E2E_PYTHON ?? (
   process.platform === 'win32'
     ? path.join(workspaceDir, '.venv-runtime', 'Scripts', 'python.exe')
-    : 'python'
+    : existsSync(wslPython) ? wslPython : 'python'
 )
 const children = []
 const e2eDatabase = path.join(workspaceDir, 'backend', 'data', 'e2e-playwright.duckdb')
 const e2ePassword = 'e2e-validation-password'
 const e2eSecret = 'e2e-secret-key-that-is-at-least-32-characters'
 
-function prepareUser(username, displayName, role) {
+function prepareUser(username, displayName, role, extraArgs = []) {
   const result = spawnSync(python, [
     path.join(workspaceDir, 'backend', 'scripts', 'create_user.py'),
-    '--username', username, '--display-name', displayName, '--role', role, '--replace',
+    '--username', username, '--display-name', displayName, '--role', role, '--replace', ...extraArgs,
   ], {
     cwd: workspaceDir,
     stdio: 'inherit',
@@ -76,6 +77,8 @@ async function main() {
   rmSync(`${e2eDatabase}.wal`, { force: true })
   prepareUser('e2e-admin', 'E2E 관리자', 'admin')
   prepareUser('e2e-viewer', 'E2E 조회자', 'viewer')
+  prepareUser('e2e-power', 'E2E 파워 사용자', 'editor')
+  prepareUser('e2e-project-admin', 'E2E 프로젝트 관리자', 'viewer', ['--project-role', 'admin', '--no-global-admin'])
   const backend = launch(python, [
     '-m', 'uvicorn', 'app.main:app', '--app-dir', path.join(workspaceDir, 'backend'),
     '--host', '127.0.0.1', '--port', '18000',

@@ -25,8 +25,8 @@
    - 운영·워크플로 레이아웃 저장마다 새 버전을 만든다.
 5. OpenAPI 클라이언트
    - FastAPI OpenAPI JSON을 단일 원본으로 TypeScript 타입과 API 클라이언트를 생성한다.
-   - `pnpm run generate:api`가 `frontend/openapi.json`과 `src/generated/openapi.ts`를 갱신한다.
-   - `src/generated/client.ts`의 타입 안전 클라이언트를 신규·변경 API부터 적용한다.
+   - `pnpm run generate:api`가 `frontend/openapi.json`과 `src/shared/api/generated/openapi.ts`를 갱신한다.
+   - `src/shared/api/client.ts`의 타입 안전 클라이언트를 신규·변경 API부터 적용한다.
    - CI는 재생성 결과에 Git 차이가 생기면 API 계약 누락으로 실패한다.
 6. PostgreSQL
    - 마이그레이션, 연결 풀, DuckDB 복사·검증 CLI, Windows/Linux 실행 스크립트를 제공한다.
@@ -75,6 +75,7 @@
 - Alembic으로 빈 DB를 동일 스키마까지 올린다.
 - DuckDB 원본은 읽기 전용으로 열어 PostgreSQL에 복사한다.
 - 복사 전 dry-run, 복사 후 테이블별 행 수·핵심 FK·Run별 결과 수·체크섬을 비교한다.
+- 실행 전 active·expired·malformed batch recovery lease metadata가 모두 0건인지 확인한다. dry-run도 이 조건과 hard relationship audit 실패 시 non-zero로 종료한다. 즉시 FK의 역참조는 같은 PostgreSQL transaction에서 NULL staging 후 원본값으로 복원하고, checksum 검증 뒤에만 commit한다.
 - 이관 스크립트는 재실행으로 중복 데이터를 숨기지 않고 실패 DB를 명확하게 복구하도록 한다.
 - Windows PowerShell과 Linux shell에서 같은 절차를 수행할 수 있어야 한다.
 

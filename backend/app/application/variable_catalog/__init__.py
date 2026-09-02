@@ -1,0 +1,1 @@
+"""Variable-catalog use cases."""

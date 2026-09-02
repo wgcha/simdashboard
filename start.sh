@@ -2,10 +2,14 @@
 set -euo pipefail
 
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export PATH="${HOME}/.local/bin:${PATH}"
+export COREPACK_HOME="${XDG_CACHE_HOME:-${HOME}/.cache}/node/corepack"
+export COREPACK_DEFAULT_TO_LATEST=0
 python_bin="${project_root}/.venv-runtime/bin/python"
+[[ -x "${project_root}/.venv-wsl/bin/python" ]] && python_bin="${project_root}/.venv-wsl/bin/python"
 [[ -x "${python_bin}" ]] || python_bin="${project_root}/.venv/bin/python"
-[[ -x "${python_bin}" ]] || { echo "Python virtual environment not found." >&2; exit 1; }
-command -v pnpm >/dev/null || { echo "pnpm was not found." >&2; exit 1; }
+[[ -x "${python_bin}" ]] || { echo "Python virtual environment not found. On WSL run ./setup-wsl.sh first." >&2; exit 1; }
+command -v pnpm >/dev/null || { echo "pnpm was not found. On WSL run ./setup-wsl.sh first." >&2; exit 1; }
 pid_file="${project_root}/.server-pids.env"
 [[ ! -f "${pid_file}" ]] || { echo "PID file already exists. Run ./stop.sh first." >&2; exit 1; }
 

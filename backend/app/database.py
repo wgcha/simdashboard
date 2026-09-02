@@ -3,32 +3,80 @@ from __future__ import annotations
 import json
 import hashlib
 import math
+import re
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 import duckdb
 
 from .config import database_settings
-from .database_connection import connect, rows
+from .database_connection import ConnectionLike, connect, rows
 
 
 def initialize_database() -> None:
+    """Verify the runtime database is usable without mutating PostgreSQL.
+
+    PostgreSQL schema ownership belongs to Alembic and reference/demo data is
+    installed by an explicit seed command.  The embedded DuckDB adapter keeps
+    its compatibility bootstrap for local development only.
+    """
     settings = database_settings()
     if settings.backend == "postgresql":
         with connect() as conn:
-            migrated = conn.execute("SELECT to_regclass('public.workspace_layouts')").fetchone()[0]
-            if migrated is None:
-                raise RuntimeError("PostgreSQL 스키마가 준비되지 않았습니다. 먼저 alembic upgrade head를 실행하세요.")
-            workbench_migrated = conn.execute("SELECT to_regclass('public.task_type_versions')").fetchone()[0]
-            if workbench_migrated is None:
-                raise RuntimeError("워크벤치 스키마가 준비되지 않았습니다. alembic upgrade head를 실행하세요.")
-            from .repositories.workbench import ensure_default_workbench_catalog
-
-            ensure_default_workbench_catalog(conn)
-            ensure_project_quality_thresholds(conn)
-            ensure_system_analysis_page_metadata(conn)
+            required_tables = (
+                "alembic_version",
+                "workspace_layouts",
+                "task_type_versions",
+                "project_memberships",
+                "menu_policy_state",
+                "project_workspace_layouts",
+                "asset_blobs",
+                "asset_blob_chunks",
+                "drop_video_assets",
+            )
+            missing = [
+                table_name
+                for table_name in required_tables
+                if conn.execute(f"SELECT to_regclass('public.{table_name}')").fetchone()[0] is None
+            ]
+            if missing:
+                raise RuntimeError(
+                    "PostgreSQL 권한 스키마가 준비되지 않았습니다. "
+                    f"누락: {', '.join(missing)}. 먼저 alembic upgrade head를 실행하세요."
+                )
         return
+
+    from .adapters.persistence.duckdb.bootstrap import initialize_duckdb_development_database
+
+    initialize_duckdb_development_database(_initialize_duckdb_legacy)
+
+
+def _initialize_duckdb_legacy() -> None:
+    """Legacy DDL/compatibility bootstrap retained for the DuckDB dev adapter."""
     with connect() as conn:
+        profile_exists = bool(conn.execute("SELECT 1 FROM information_schema.tables WHERE table_name='project_request_type_result_profiles'").fetchone())
+        profile_columns = _duckdb_columns(conn, "project_request_type_result_profiles") if profile_exists else {}
+        if profile_columns and "binding_version" not in profile_columns:
+            conn.execute("BEGIN")
+            try:
+                conn.execute("""CREATE TABLE project_request_type_result_profiles_revised (
+                    project_id VARCHAR NOT NULL, request_type_id VARCHAR NOT NULL,
+                    request_type_version INTEGER NOT NULL, binding_version INTEGER NOT NULL,
+                    template_id VARCHAR NOT NULL, template_version INTEGER NOT NULL,
+                    overrides_json JSON NOT NULL, required_data_contracts_json JSON NOT NULL,
+                    bound_by VARCHAR NOT NULL, bound_at TIMESTAMP NOT NULL,
+                    PRIMARY KEY (project_id, request_type_id, request_type_version, binding_version))""")
+                conn.execute("""INSERT INTO project_request_type_result_profiles_revised
+                    SELECT project_id, request_type_id, request_type_version, 1, template_id, template_version,
+                           overrides_json, required_data_contracts_json, bound_by, bound_at
+                    FROM project_request_type_result_profiles""")
+                conn.execute("DROP TABLE project_request_type_result_profiles")
+                conn.execute("ALTER TABLE project_request_type_result_profiles_revised RENAME TO project_request_type_result_profiles")
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS projects (
@@ -55,6 +103,7 @@ def initialize_database() -> None:
                 title VARCHAR NOT NULL,
                 status VARCHAR NOT NULL,
                 owner VARCHAR,
+                owner_user_id VARCHAR,
                 requested_at TIMESTAMP NOT NULL,
                 due_at TIMESTAMP,
                 overall_note VARCHAR
@@ -67,6 +116,7 @@ def initialize_database() -> None:
                 name VARCHAR NOT NULL,
                 status VARCHAR NOT NULL,
                 owner VARCHAR,
+                owner_user_id VARCHAR,
                 planned_start TIMESTAMP,
                 planned_end TIMESTAMP,
                 actual_start TIMESTAMP,
@@ -187,7 +237,45 @@ def initialize_database() -> None:
                 mime_type VARCHAR NOT NULL,
                 file_size BIGINT,
                 checksum VARCHAR,
-                metadata_json JSON
+                metadata_json JSON,
+                blob_id VARCHAR,
+                original_filename VARCHAR
+            );
+
+            CREATE TABLE IF NOT EXISTS asset_blobs (
+                id VARCHAR PRIMARY KEY,
+                sha256 VARCHAR NOT NULL,
+                file_size BIGINT NOT NULL CHECK (file_size >= 0),
+                chunk_size INTEGER NOT NULL DEFAULT 1048576 CHECK (chunk_size > 0 AND chunk_size <= 1048576),
+                chunk_count INTEGER NOT NULL CHECK (chunk_count >= 0),
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                orphaned_at TIMESTAMP,
+                UNIQUE (sha256, file_size),
+                CHECK (regexp_matches(sha256, '^[0-9a-f]{64}$'))
+            );
+
+            CREATE TABLE IF NOT EXISTS asset_blob_chunks (
+                blob_id VARCHAR NOT NULL,
+                chunk_index INTEGER NOT NULL CHECK (chunk_index >= 0),
+                content BLOB NOT NULL,
+                content_length INTEGER NOT NULL,
+                content_sha256 VARCHAR NOT NULL,
+                PRIMARY KEY (blob_id, chunk_index),
+                CHECK (content_length = octet_length(content)),
+                CHECK (content_length > 0 AND content_length <= 1048576),
+                CHECK (regexp_matches(content_sha256, '^[0-9a-f]{64}$'))
+            );
+
+            CREATE TABLE IF NOT EXISTS drop_video_assets (
+                video_id VARCHAR PRIMARY KEY,
+                load_case_id VARCHAR NOT NULL,
+                blob_id VARCHAR NOT NULL,
+                original_filename VARCHAR NOT NULL,
+                mime_type VARCHAR NOT NULL,
+                scene_name VARCHAR NOT NULL,
+                sort_order INTEGER NOT NULL CHECK (sort_order > 0),
+                metadata_json JSON,
+                UNIQUE (load_case_id, sort_order)
             );
 
             CREATE TABLE IF NOT EXISTS folder_import_jobs (
@@ -199,7 +287,14 @@ def initialize_database() -> None:
                 source_folder VARCHAR NOT NULL,
                 status VARCHAR NOT NULL,
                 summary_json JSON,
-                created_at TIMESTAMP NOT NULL
+                created_at TIMESTAMP NOT NULL,
+                source_type VARCHAR,
+                source_checksum VARCHAR,
+                source_run_id VARCHAR,
+                conflict_policy VARCHAR,
+                outcome_reason VARCHAR,
+                replaced_analysis_run_id VARCHAR,
+                completed_at TIMESTAMP
             );
 
             CREATE TABLE IF NOT EXISTS analysis_run_metadata (
@@ -212,6 +307,31 @@ def initialize_database() -> None:
                 parser_version VARCHAR NOT NULL,
                 metadata_json JSON,
                 created_at TIMESTAMP NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS canonical_result_ingestion_sources (
+                source_type VARCHAR NOT NULL,
+                source_name VARCHAR NOT NULL,
+                source_checksum VARCHAR NOT NULL,
+                claimed_at TIMESTAMP NOT NULL,
+                PRIMARY KEY (source_type, source_name, source_checksum)
+            );
+
+            CREATE TABLE IF NOT EXISTS canonical_result_ingestion_source_versions (
+                load_case_id VARCHAR NOT NULL,
+                source_type VARCHAR NOT NULL,
+                source_key VARCHAR NOT NULL,
+                source_run_id VARCHAR,
+                source_name VARCHAR NOT NULL,
+                source_checksum VARCHAR NOT NULL,
+                source_revision INTEGER NOT NULL CHECK (source_revision > 0),
+                analysis_run_id VARCHAR NOT NULL,
+                conflict_policy VARCHAR NOT NULL,
+                supersedes_analysis_run_id VARCHAR,
+                claimed_at TIMESTAMP NOT NULL,
+                PRIMARY KEY (load_case_id, source_type, source_key, source_revision),
+                UNIQUE (load_case_id, source_type, source_key, source_checksum),
+                UNIQUE (analysis_run_id)
             );
 
             CREATE TABLE IF NOT EXISTS import_schemas (
@@ -345,6 +465,27 @@ def initialize_database() -> None:
                 PRIMARY KEY (layout_kind, version)
             );
 
+            CREATE TABLE IF NOT EXISTS project_workspace_layouts (
+                project_id VARCHAR NOT NULL,
+                layout_kind VARCHAR NOT NULL,
+                version INTEGER NOT NULL,
+                definition_json JSON NOT NULL,
+                updated_by VARCHAR NOT NULL,
+                updated_at TIMESTAMP NOT NULL,
+                PRIMARY KEY (project_id, layout_kind)
+            );
+
+            CREATE TABLE IF NOT EXISTS project_workspace_layout_versions (
+                project_id VARCHAR NOT NULL,
+                layout_kind VARCHAR NOT NULL,
+                version INTEGER NOT NULL,
+                definition_json JSON NOT NULL,
+                created_by VARCHAR NOT NULL,
+                created_at TIMESTAMP NOT NULL,
+                is_valid BOOLEAN NOT NULL DEFAULT true,
+                PRIMARY KEY (project_id, layout_kind, version)
+            );
+
             CREATE TABLE IF NOT EXISTS report_layouts (
                 id VARCHAR PRIMARY KEY,
                 name VARCHAR NOT NULL,
@@ -384,12 +525,24 @@ def initialize_database() -> None:
             CREATE TABLE IF NOT EXISTS users (
                 id VARCHAR PRIMARY KEY,
                 username VARCHAR NOT NULL UNIQUE,
-                password_hash VARCHAR NOT NULL,
+                password_hash VARCHAR,
                 display_name VARCHAR NOT NULL,
-                role VARCHAR NOT NULL,
+                legacy_role VARCHAR,
                 is_active BOOLEAN NOT NULL DEFAULT true,
                 created_at TIMESTAMP NOT NULL,
-                updated_at TIMESTAMP NOT NULL
+                updated_at TIMESTAMP NOT NULL,
+                employee_id VARCHAR,
+                email VARCHAR,
+                department VARCHAR,
+                job_title VARCHAR,
+                oidc_issuer VARCHAR,
+                oidc_subject VARCHAR,
+                account_status VARCHAR NOT NULL DEFAULT 'ACTIVE',
+                is_global_admin BOOLEAN NOT NULL DEFAULT false,
+                approved_by VARCHAR,
+                approved_at TIMESTAMP,
+                last_login_at TIMESTAMP,
+                CHECK (account_status IN ('PENDING', 'ACTIVE', 'SUSPENDED'))
             );
 
             CREATE TABLE IF NOT EXISTS audit_events (
@@ -406,6 +559,77 @@ def initialize_database() -> None:
                 client_ip VARCHAR,
                 user_agent VARCHAR,
                 detail_json JSON
+            );
+
+            CREATE TABLE IF NOT EXISTS project_memberships (
+                id VARCHAR PRIMARY KEY,
+                project_id VARCHAR NOT NULL,
+                user_id VARCHAR NOT NULL,
+                role VARCHAR NOT NULL,
+                created_by VARCHAR NOT NULL,
+                created_at TIMESTAMP NOT NULL,
+                updated_by VARCHAR NOT NULL,
+                updated_at TIMESTAMP NOT NULL,
+                UNIQUE (project_id, user_id),
+                CHECK (role IN ('general', 'power', 'admin'))
+            );
+
+            CREATE TABLE IF NOT EXISTS project_invitations (
+                id VARCHAR PRIMARY KEY,
+                project_id VARCHAR NOT NULL,
+                employee_id VARCHAR NOT NULL,
+                display_name_snapshot VARCHAR NOT NULL,
+                department_snapshot VARCHAR,
+                desired_role VARCHAR NOT NULL,
+                status VARCHAR NOT NULL,
+                resolved_user_id VARCHAR,
+                invited_by VARCHAR NOT NULL,
+                invited_at TIMESTAMP NOT NULL,
+                resolved_by VARCHAR,
+                resolved_at TIMESTAMP,
+                cancelled_by VARCHAR,
+                cancelled_at TIMESTAMP,
+                CHECK (desired_role IN ('general', 'power', 'admin')),
+                CHECK (status IN ('PENDING_ACCOUNT', 'PENDING_APPROVAL', 'READY', 'COMPLETED', 'CANCELLED'))
+            );
+
+            CREATE TABLE IF NOT EXISTS menu_definitions (
+                id VARCHAR PRIMARY KEY,
+                label VARCHAR NOT NULL,
+                required_permission VARCHAR NOT NULL,
+                context_kind VARCHAR NOT NULL,
+                sequence_no INTEGER NOT NULL,
+                is_policy_editable BOOLEAN NOT NULL DEFAULT true,
+                is_active BOOLEAN NOT NULL DEFAULT true,
+                CHECK (context_kind IN ('company', 'project', 'system'))
+            );
+
+            CREATE TABLE IF NOT EXISTS menu_policy_state (
+                id VARCHAR PRIMARY KEY,
+                version INTEGER NOT NULL,
+                updated_by VARCHAR NOT NULL,
+                updated_at TIMESTAMP NOT NULL,
+                CHECK (id = 'global')
+            );
+
+            CREATE TABLE IF NOT EXISTS role_menu_policies (
+                role VARCHAR NOT NULL,
+                menu_id VARCHAR NOT NULL,
+                is_visible BOOLEAN NOT NULL,
+                policy_version INTEGER NOT NULL,
+                updated_by VARCHAR NOT NULL,
+                updated_at TIMESTAMP NOT NULL,
+                PRIMARY KEY (role, menu_id),
+                CHECK (role IN ('general', 'power', 'admin'))
+            );
+
+            CREATE TABLE IF NOT EXISTS menu_policy_versions (
+                version INTEGER PRIMARY KEY,
+                definition_json JSON NOT NULL,
+                created_by VARCHAR NOT NULL,
+                created_at TIMESTAMP NOT NULL,
+                source_version INTEGER,
+                change_note VARCHAR
             );
 
             CREATE TABLE IF NOT EXISTS task_type_versions (
@@ -462,6 +686,59 @@ def initialize_database() -> None:
                 CHECK (source_type IN ('EXTERNAL_SYSTEM', 'DEPARTMENT_HEAD'))
             );
 
+            CREATE TABLE IF NOT EXISTS analysis_template_versions (
+                template_id VARCHAR NOT NULL,
+                version INTEGER NOT NULL,
+                scope_kind VARCHAR NOT NULL,
+                project_id VARCHAR,
+                display_name VARCHAR NOT NULL,
+                description VARCHAR NOT NULL,
+                lifecycle_status VARCHAR NOT NULL,
+                page_definitions_json JSON NOT NULL,
+                created_by VARCHAR NOT NULL,
+                created_at TIMESTAMP NOT NULL,
+                PRIMARY KEY (template_id, version),
+                CHECK (scope_kind IN ('SYSTEM', 'PROJECT')),
+                CHECK (lifecycle_status IN ('DRAFT', 'PUBLISHED', 'ARCHIVED'))
+            );
+
+            CREATE TABLE IF NOT EXISTS request_type_result_profiles (
+                request_type_id VARCHAR NOT NULL,
+                request_type_version INTEGER NOT NULL,
+                template_id VARCHAR NOT NULL,
+                template_version INTEGER NOT NULL,
+                overrides_json JSON NOT NULL,
+                required_data_contracts_json JSON NOT NULL,
+                PRIMARY KEY (request_type_id, request_type_version)
+            );
+
+            CREATE TABLE IF NOT EXISTS project_request_type_result_profiles (
+                project_id VARCHAR NOT NULL,
+                request_type_id VARCHAR NOT NULL,
+                request_type_version INTEGER NOT NULL,
+                binding_version INTEGER NOT NULL,
+                template_id VARCHAR NOT NULL,
+                template_version INTEGER NOT NULL,
+                overrides_json JSON NOT NULL,
+                required_data_contracts_json JSON NOT NULL,
+                bound_by VARCHAR NOT NULL,
+                bound_at TIMESTAMP NOT NULL,
+                PRIMARY KEY (project_id, request_type_id, request_type_version, binding_version)
+            );
+
+            CREATE TABLE IF NOT EXISTS request_result_layout_snapshots (
+                request_id VARCHAR PRIMARY KEY,
+                source_request_type_id VARCHAR NOT NULL,
+                source_request_type_version INTEGER NOT NULL,
+                source_template_id VARCHAR NOT NULL,
+                source_template_version INTEGER NOT NULL,
+                snapshot_json JSON NOT NULL,
+                snapshot_reason VARCHAR NOT NULL,
+                created_by VARCHAR NOT NULL,
+                created_at TIMESTAMP NOT NULL,
+                CHECK (snapshot_reason IN ('REQUEST_CREATED', 'LEGACY_ASSIGNED', 'MIGRATED'))
+            );
+
             CREATE TABLE IF NOT EXISTS request_work_items (
                 id VARCHAR PRIMARY KEY,
                 request_id VARCHAR NOT NULL,
@@ -475,6 +752,7 @@ def initialize_database() -> None:
                 progress_updated_by VARCHAR,
                 progress_updated_at TIMESTAMP,
                 owner VARCHAR NOT NULL,
+                owner_user_id VARCHAR,
                 started_by VARCHAR,
                 started_at TIMESTAMP,
                 completed_by VARCHAR,
@@ -500,6 +778,7 @@ def initialize_database() -> None:
                 created_at TIMESTAMP NOT NULL,
                 started_at TIMESTAMP NOT NULL,
                 completed_at TIMESTAMP,
+                batch_attempt_id VARCHAR,
                 CHECK (execution_mode = 'DEMO_ONLY'),
                 CHECK (progress BETWEEN 0 AND 100)
             );
@@ -541,6 +820,8 @@ def initialize_database() -> None:
                 working_directory VARCHAR NOT NULL,
                 arguments_template VARCHAR NOT NULL,
                 environment_json JSON NOT NULL,
+                task_type_id VARCHAR,
+                task_type_version INTEGER NOT NULL DEFAULT 1,
                 task_type_ids_json JSON NOT NULL,
                 is_active BOOLEAN NOT NULL DEFAULT true,
                 updated_by VARCHAR NOT NULL,
@@ -556,6 +837,8 @@ def initialize_database() -> None:
                 working_directory VARCHAR NOT NULL,
                 arguments_template VARCHAR NOT NULL,
                 environment_json JSON NOT NULL,
+                task_type_id VARCHAR,
+                task_type_version INTEGER NOT NULL DEFAULT 1,
                 task_type_ids_json JSON NOT NULL,
                 is_active BOOLEAN NOT NULL,
                 created_by VARCHAR NOT NULL,
@@ -573,6 +856,7 @@ def initialize_database() -> None:
                 status VARCHAR NOT NULL,
                 created_by VARCHAR NOT NULL,
                 created_at TIMESTAMP NOT NULL,
+                attempt_id VARCHAR,
                 CHECK (status = 'RECORDED_DEMO')
             );
 
@@ -593,10 +877,29 @@ def initialize_database() -> None:
                 created_at TIMESTAMP NOT NULL,
                 started_at TIMESTAMP,
                 completed_at TIMESTAMP,
+                recovery_lease_owner_id VARCHAR,
+                recovery_lease_token VARCHAR,
+                recovery_lease_generation BIGINT NOT NULL DEFAULT 0,
+                recovery_lease_acquired_at TIMESTAMP,
+                recovery_lease_expires_at TIMESTAMP,
                 UNIQUE (work_item_id, idempotency_key),
                 CHECK (execution_mode = 'DEMO_ONLY'),
                 CHECK (status IN ('PREFLIGHT', 'QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED', 'REJECTED')),
-                CHECK (progress BETWEEN 0 AND 100)
+                CHECK (progress BETWEEN 0 AND 100),
+                CONSTRAINT ck_batch_attempts_recovery_lease_generation CHECK (recovery_lease_generation >= 0),
+                CONSTRAINT ck_batch_attempts_recovery_lease_state CHECK (
+                    recovery_lease_token IS NULL
+                    OR (recovery_lease_generation > 0 AND status = 'QUEUED'
+                        AND workflow_run_id IS NOT NULL AND completed_at IS NULL)
+                ),
+                CONSTRAINT ck_batch_attempts_recovery_lease_identity CHECK (
+                    (recovery_lease_owner_id IS NULL AND recovery_lease_token IS NULL
+                     AND recovery_lease_acquired_at IS NULL AND recovery_lease_expires_at IS NULL)
+                    OR
+                    (recovery_lease_owner_id IS NOT NULL AND recovery_lease_token IS NOT NULL
+                     AND recovery_lease_acquired_at IS NOT NULL AND recovery_lease_expires_at IS NOT NULL
+                     AND recovery_lease_expires_at > recovery_lease_acquired_at)
+                )
             );
 
             CREATE TABLE IF NOT EXISTS batch_execution_events (
@@ -615,19 +918,262 @@ def initialize_database() -> None:
         )
 
         conn.execute("ALTER TABLE request_steps ADD COLUMN IF NOT EXISTS is_optional BOOLEAN DEFAULT false")
+        conn.execute("ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS blob_id VARCHAR")
+        conn.execute("ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS original_filename VARCHAR")
+        conn.execute("ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS mime_type VARCHAR")
         conn.execute("ALTER TABLE request_work_items ADD COLUMN IF NOT EXISTS progress INTEGER DEFAULT 0")
         conn.execute("ALTER TABLE request_work_items ADD COLUMN IF NOT EXISTS progress_updated_by VARCHAR")
         conn.execute("ALTER TABLE request_work_items ADD COLUMN IF NOT EXISTS progress_updated_at TIMESTAMP")
         conn.execute("ALTER TABLE batch_path_profiles ADD COLUMN IF NOT EXISTS task_type_ids_json JSON DEFAULT '[]'")
+        conn.execute("ALTER TABLE batch_path_profiles ADD COLUMN IF NOT EXISTS task_type_id VARCHAR")
+        conn.execute("ALTER TABLE batch_path_profiles ADD COLUMN IF NOT EXISTS task_type_version INTEGER DEFAULT 1")
+        conn.execute("ALTER TABLE batch_path_profile_versions ADD COLUMN IF NOT EXISTS task_type_id VARCHAR")
+        conn.execute("ALTER TABLE batch_path_profile_versions ADD COLUMN IF NOT EXISTS task_type_version INTEGER DEFAULT 1")
+        # Batch attempt identity is deliberately additive for old local files.
+        # A runner commit may leave a QUEUED attempt linked to its exact run
+        # before finalization.  Other non-SUCCEEDED links are malformed, and
+        # legacy queued links without that reverse identity are not guessed.
+        conn.execute("ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS batch_attempt_id VARCHAR")
+        conn.execute("ALTER TABLE batch_dispatches ADD COLUMN IF NOT EXISTS attempt_id VARCHAR")
+        # Recovery ownership is local-development compatible only; production
+        # concurrency is verified against PostgreSQL before release.
+        conn.execute("ALTER TABLE batch_execution_attempts ADD COLUMN IF NOT EXISTS recovery_lease_owner_id VARCHAR")
+        conn.execute("ALTER TABLE batch_execution_attempts ADD COLUMN IF NOT EXISTS recovery_lease_token VARCHAR")
+        conn.execute("ALTER TABLE batch_execution_attempts ADD COLUMN IF NOT EXISTS recovery_lease_generation BIGINT DEFAULT 0")
+        conn.execute("ALTER TABLE batch_execution_attempts ADD COLUMN IF NOT EXISTS recovery_lease_acquired_at TIMESTAMP")
+        conn.execute("ALTER TABLE batch_execution_attempts ADD COLUMN IF NOT EXISTS recovery_lease_expires_at TIMESTAMP")
+        conn.execute("UPDATE batch_execution_attempts SET recovery_lease_generation=0 WHERE recovery_lease_generation IS NULL")
+        invalid_recovery_lease = conn.execute(
+            """SELECT 1 FROM batch_execution_attempts AS attempt
+            WHERE (attempt.recovery_lease_owner_id IS NULL) <> (attempt.recovery_lease_token IS NULL)
+               OR (attempt.recovery_lease_owner_id IS NULL) <> (attempt.recovery_lease_acquired_at IS NULL)
+               OR (attempt.recovery_lease_owner_id IS NULL) <> (attempt.recovery_lease_expires_at IS NULL)
+               OR attempt.recovery_lease_generation < 0
+               OR (attempt.recovery_lease_token IS NOT NULL AND (
+                   attempt.recovery_lease_generation <= 0 OR attempt.status <> 'QUEUED'
+                   OR attempt.workflow_run_id IS NULL OR attempt.completed_at IS NOT NULL
+                   OR NOT EXISTS (
+                       SELECT 1 FROM workflow_runs AS run
+                       JOIN request_work_items AS item ON item.id=attempt.work_item_id
+                       WHERE run.id=attempt.workflow_run_id AND run.batch_attempt_id=attempt.id
+                         AND run.request_id=item.request_id AND run.execution_mode='DEMO_ONLY'
+                         AND run.status='SUCCEEDED' AND run.created_by=attempt.created_by
+                         AND json_array_length(json_extract(run.definition_json, '$.nodes'))=1
+                         AND json_extract_string(run.definition_json, '$.nodes[0].node_key')=item.node_key
+                         AND json_extract_string(run.definition_json, '$.nodes[0].task_type_id')=item.task_type_id
+                         AND CAST(json_extract_string(run.definition_json, '$.nodes[0].task_type_version') AS INTEGER)=item.task_type_version
+                         AND json_array_length(json_extract(run.definition_json, '$.nodes[0].depends_on'))=0
+                   )
+                   OR EXISTS (SELECT 1 FROM batch_dispatches AS dispatch WHERE dispatch.workflow_run_id=attempt.workflow_run_id)
+               )) LIMIT 1"""
+        ).fetchone()
+        if invalid_recovery_lease:
+            raise RuntimeError("invalid historical batch recovery lease; remediate before local database initialization")
+        invalid_batch_link = conn.execute(
+            """SELECT 1 FROM batch_execution_attempts
+            WHERE workflow_run_id IS NOT NULL AND status NOT IN ('QUEUED', 'SUCCEEDED') LIMIT 1"""
+        ).fetchone()
+        ambiguous_batch_link = conn.execute(
+            """SELECT workflow_run_id FROM batch_execution_attempts
+            WHERE workflow_run_id IS NOT NULL AND status = 'SUCCEEDED'
+            GROUP BY workflow_run_id HAVING count(*) > 1 LIMIT 1"""
+        ).fetchone()
+        mismatched_run_identity = conn.execute(
+            """SELECT 1 FROM workflow_runs AS run
+            LEFT JOIN batch_execution_attempts AS attempt ON attempt.id = run.batch_attempt_id
+            LEFT JOIN request_work_items AS item ON item.id = attempt.work_item_id
+            WHERE run.batch_attempt_id IS NOT NULL
+              AND (
+                  attempt.id IS NULL
+                  OR attempt.workflow_run_id IS DISTINCT FROM run.id
+                  OR item.id IS NULL
+                  OR item.request_id IS DISTINCT FROM run.request_id
+              ) LIMIT 1"""
+        ).fetchone()
+        mismatched_dispatch_identity = conn.execute(
+            """SELECT 1 FROM batch_dispatches AS dispatch
+            LEFT JOIN batch_execution_attempts AS attempt ON attempt.id = dispatch.attempt_id
+            WHERE dispatch.attempt_id IS NOT NULL
+              AND (
+                  attempt.id IS NULL
+                  OR attempt.workflow_run_id IS DISTINCT FROM dispatch.workflow_run_id
+                  OR attempt.work_item_id IS DISTINCT FROM dispatch.work_item_id
+                  OR attempt.batch_profile_id IS DISTINCT FROM dispatch.batch_profile_id
+              ) LIMIT 1"""
+        ).fetchone()
+        invalid_queued_link = conn.execute(
+            """SELECT 1 FROM batch_execution_attempts AS attempt
+            LEFT JOIN workflow_runs AS run ON run.id = attempt.workflow_run_id
+            LEFT JOIN request_work_items AS item ON item.id = attempt.work_item_id
+            WHERE attempt.status = 'QUEUED' AND attempt.workflow_run_id IS NOT NULL
+              AND (
+                  run.id IS NULL
+                  OR run.batch_attempt_id IS DISTINCT FROM attempt.id
+                  OR run.request_id IS DISTINCT FROM item.request_id
+                  OR run.execution_mode <> 'DEMO_ONLY'
+                  OR run.status <> 'SUCCEEDED'
+                  OR run.created_by IS DISTINCT FROM attempt.created_by
+                  OR json_array_length(json_extract(run.definition_json, '$.nodes')) IS DISTINCT FROM 1
+                  OR json_extract_string(run.definition_json, '$.nodes[0].node_key') IS DISTINCT FROM item.node_key
+                  OR json_extract_string(run.definition_json, '$.nodes[0].task_type_id') IS DISTINCT FROM item.task_type_id
+                  OR CAST(json_extract_string(run.definition_json, '$.nodes[0].task_type_version') AS INTEGER) IS DISTINCT FROM item.task_type_version
+                  OR json_array_length(json_extract(run.definition_json, '$.nodes[0].depends_on')) IS DISTINCT FROM 0
+                  OR attempt.completed_at IS NOT NULL
+                  OR EXISTS (
+                      SELECT 1 FROM batch_dispatches AS dispatch
+                      WHERE dispatch.workflow_run_id = attempt.workflow_run_id
+                  )
+              ) LIMIT 1"""
+        ).fetchone()
+        missing_succeeded_dispatch = conn.execute(
+            """SELECT 1 FROM batch_execution_attempts AS attempt
+            WHERE attempt.status = 'SUCCEEDED'
+              AND NOT EXISTS (
+                  SELECT 1 FROM batch_dispatches AS dispatch
+                  WHERE dispatch.workflow_run_id = attempt.workflow_run_id
+              ) LIMIT 1"""
+        ).fetchone()
+        mismatched_dispatch_provenance = conn.execute(
+            """SELECT 1 FROM batch_execution_attempts AS attempt
+            JOIN batch_dispatches AS dispatch ON dispatch.workflow_run_id = attempt.workflow_run_id
+            WHERE attempt.status = 'SUCCEEDED'
+              AND (dispatch.work_item_id <> attempt.work_item_id
+                   OR dispatch.batch_profile_id <> attempt.batch_profile_id) LIMIT 1"""
+        ).fetchone()
+        if (
+            invalid_batch_link
+            or ambiguous_batch_link
+            or mismatched_run_identity
+            or mismatched_dispatch_identity
+            or invalid_queued_link
+            or missing_succeeded_dispatch
+            or mismatched_dispatch_provenance
+        ):
+            raise RuntimeError("ambiguous or invalid historical batch attempt identity; remediate before local database initialization")
+        conn.execute(
+            """
+            UPDATE workflow_runs AS run
+            SET batch_attempt_id = attempt.id
+            FROM batch_execution_attempts AS attempt
+            WHERE attempt.workflow_run_id = run.id
+              AND attempt.workflow_run_id IS NOT NULL
+              AND attempt.status = 'SUCCEEDED'
+              AND run.batch_attempt_id IS NULL
+            """
+        )
+        conn.execute(
+            """
+            UPDATE batch_dispatches AS dispatch
+            SET attempt_id = attempt.id
+            FROM batch_execution_attempts AS attempt
+            WHERE attempt.workflow_run_id = dispatch.workflow_run_id
+              AND attempt.workflow_run_id IS NOT NULL
+              AND attempt.status = 'SUCCEEDED'
+              AND dispatch.attempt_id IS NULL
+            """
+        )
+        invalid_succeeded_link = conn.execute(
+            """SELECT 1 FROM batch_execution_attempts AS attempt
+            LEFT JOIN workflow_runs AS run ON run.id = attempt.workflow_run_id
+            LEFT JOIN request_work_items AS item ON item.id = attempt.work_item_id
+            WHERE attempt.status = 'SUCCEEDED'
+              AND (
+                  run.id IS NULL
+                  OR run.batch_attempt_id IS DISTINCT FROM attempt.id
+                  OR run.request_id IS DISTINCT FROM item.request_id
+                  OR run.execution_mode <> 'DEMO_ONLY'
+                  OR run.status <> 'SUCCEEDED'
+                  OR run.created_by IS DISTINCT FROM attempt.created_by
+                  OR json_array_length(json_extract(run.definition_json, '$.nodes')) IS DISTINCT FROM 1
+                  OR json_extract_string(run.definition_json, '$.nodes[0].node_key') IS DISTINCT FROM item.node_key
+                  OR json_extract_string(run.definition_json, '$.nodes[0].task_type_id') IS DISTINCT FROM item.task_type_id
+                  OR CAST(json_extract_string(run.definition_json, '$.nodes[0].task_type_version') AS INTEGER) IS DISTINCT FROM item.task_type_version
+                  OR json_array_length(json_extract(run.definition_json, '$.nodes[0].depends_on')) IS DISTINCT FROM 0
+              ) LIMIT 1"""
+        ).fetchone()
+        if invalid_succeeded_link:
+            raise RuntimeError("succeeded batch attempt lacks an exact runner identity after local backfill")
+        # Run Identity V2 is additive for existing local DuckDB files.  The
+        # nullable history fields intentionally do not reinterpret old jobs.
+        for column_name, definition in (
+            ("source_type", "VARCHAR"),
+            ("source_checksum", "VARCHAR"),
+            ("source_run_id", "VARCHAR"),
+            ("conflict_policy", "VARCHAR"),
+            ("outcome_reason", "VARCHAR"),
+            ("replaced_analysis_run_id", "VARCHAR"),
+            ("completed_at", "TIMESTAMP"),
+        ):
+            conn.execute(f"ALTER TABLE folder_import_jobs ADD COLUMN IF NOT EXISTS {column_name} {definition}")
+        # Only singleton legacy links are safe to normalize.  Ambiguous rows
+        # retain their JSON mapping and are quarantined from the 1:1 identity
+        # column so initialization cannot fail on duplicate legacy mappings.
+        conn.execute("UPDATE batch_path_profiles SET task_type_id=CAST(json_extract_string(task_type_ids_json, '$[0]') AS VARCHAR) WHERE task_type_id IS NULL AND json_array_length(task_type_ids_json)=1")
+        conn.execute("""
+            UPDATE batch_path_profiles AS duplicate
+            SET task_type_id=NULL
+            WHERE duplicate.task_type_id IS NOT NULL
+              AND EXISTS (
+                  SELECT 1 FROM batch_path_profiles AS keeper
+                  WHERE keeper.task_type_id=duplicate.task_type_id
+                    AND keeper.task_type_version=duplicate.task_type_version
+                    AND keeper.id < duplicate.id
+              )
+        """)
+        conn.execute("""
+            UPDATE batch_path_profile_versions AS version
+            SET task_type_id=profile.task_type_id, task_type_version=profile.task_type_version
+            FROM batch_path_profiles AS profile
+            WHERE version.id=profile.id
+        """)
+        # DuckDB has no partial indexes; nullable legacy rows remain allowed,
+        # while every normalized task/version pair is enforced as a singleton.
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_batch_profile_task_version ON batch_path_profiles(task_type_id, task_type_version)")
         conn.execute("ALTER TABLE batch_path_profiles ADD COLUMN IF NOT EXISTS version INTEGER DEFAULT 1")
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_media_assets_blob_id ON media_assets(blob_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_analysis_template_versions_status ON analysis_template_versions(template_id, lifecycle_status, version DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_request_result_layout_snapshots_template ON request_result_layout_snapshots(source_template_id, source_template_version)")
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_project_result_profiles_latest ON project_request_type_result_profiles(project_id, request_type_id, request_type_version, binding_version DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_drop_video_assets_blob_id ON drop_video_assets(blob_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_drop_video_assets_load_case ON drop_video_assets(load_case_id, sort_order)")
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_folder_import_jobs_source_identity ON folder_import_jobs(source_type, source_checksum)")
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_folder_import_jobs_source_run ON folder_import_jobs(source_run_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_folder_import_jobs_replaced_run ON folder_import_jobs(replaced_analysis_run_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_canonical_result_ingestion_source_versions_lookup ON canonical_result_ingestion_source_versions(load_case_id, source_type, source_key, source_run_id, source_revision DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_canonical_result_ingestion_source_versions_supersedes_run ON canonical_result_ingestion_source_versions(supersedes_analysis_run_id)")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_analysis_runs_load_case_run_no ON analysis_runs(load_case_id, run_no)")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_workflow_runs_batch_attempt_id ON workflow_runs(batch_attempt_id)")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_batch_dispatches_attempt_id ON batch_dispatches(attempt_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_batch_attempts_recovery_candidates ON batch_execution_attempts(status, recovery_lease_expires_at, id)")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_batch_attempts_recovery_lease_token ON batch_execution_attempts(recovery_lease_token)")
         conn.execute("UPDATE request_work_items SET progress=CASE WHEN status='COMPLETED' THEN 100 ELSE COALESCE(progress, 0) END")
 
         ensure_quality_threshold_schema(conn)
+        # Establish the schema before seeding, but defer one-time legacy data
+        # conversion until the seed has created any default projects.
+        ensure_access_control_schema(conn, apply_legacy_backfills=False)
         ensure_default_content(conn)
+        # Account, membership and owner conversion is a one-time data migration.
+        ensure_access_control_schema(conn)
 
 
 def seed_current_database() -> None:
+    """Compatibility alias for the explicit reference/demo seed command."""
+    seed_reference_database()
+
+
+def seed_reference_database() -> None:
+    """Install idempotent system/reference content after schema migration.
+
+    The historical fixture set still includes deterministic demo examples used
+    by the UI and contract tests. It is intentionally explicit and never runs
+    during PostgreSQL application startup.
+    """
     with connect() as conn:
+        # Menu definitions are application-owned catalog metadata. Keep their
+        # canonical order aligned with DuckDB without overwriting an
+        # administrator's role visibility choices.
+        ensure_menu_policy_catalog(conn)
         ensure_default_content(conn)
 
 
@@ -670,6 +1216,312 @@ def ensure_quality_threshold_schema(conn: duckdb.DuckDBPyConnection) -> None:
         raise
 
 
+def _duckdb_columns(conn: duckdb.DuckDBPyConnection, table_name: str) -> dict[str, tuple[Any, ...]]:
+    return {str(row[1]): row for row in conn.execute(f"PRAGMA table_info('{table_name}')").fetchall()}
+
+
+def _backfill_duckdb_owner_user_id(conn: duckdb.DuckDBPyConnection, table_name: str) -> None:
+    conn.execute(
+        f"""
+        WITH matches AS (
+            SELECT target.id AS target_id, min(users.id) AS user_id,
+                   count(DISTINCT users.id) AS match_count
+            FROM {table_name} AS target
+            JOIN users
+              ON lower(trim(target.owner)) = lower(trim(users.display_name))
+              OR lower(trim(target.owner)) = lower(trim(users.username))
+            WHERE target.owner IS NOT NULL
+              AND users.account_status = 'ACTIVE'
+            GROUP BY target.id
+        )
+        UPDATE {table_name} AS target
+           SET owner_user_id = matches.user_id
+          FROM matches
+         WHERE target.id = matches.target_id
+           AND matches.match_count = 1
+           AND target.owner_user_id IS NULL
+        """
+    )
+
+
+def _ensure_duckdb_user_access_constraints(conn: duckdb.DuckDBPyConnection) -> None:
+    """Rebuild legacy DuckDB users once so account states match PostgreSQL.
+
+    DuckDB cannot add a CHECK constraint to an existing table.  Building the
+    column list from PRAGMA preserves any future provider-neutral columns
+    instead of baking a second, stale users schema into the upgrader.
+    """
+    constraints = conn.execute(
+        "SELECT constraint_text FROM duckdb_constraints() WHERE table_name='users'"
+    ).fetchall()
+    if any("account_status" in str(row[0]) and "PENDING" in str(row[0]) for row in constraints):
+        return
+
+    columns = list(conn.execute("PRAGMA table_info('users')").fetchall())
+    definitions: list[str] = []
+    names: list[str] = []
+    for row in columns:
+        name, data_type, not_null, default_value = str(row[1]), str(row[2]), bool(row[3]), row[4]
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+            raise RuntimeError(f"Unsupported users column name during compatibility upgrade: {name}")
+        names.append(name)
+        definition = f'"{name}" {data_type}'
+        if not_null or name == "account_status":
+            definition += " NOT NULL"
+        if default_value is not None:
+            definition += f" DEFAULT {default_value}"
+        definitions.append(definition)
+    definitions.extend(
+        [
+            "PRIMARY KEY (id)",
+            "UNIQUE (username)",
+            "CHECK (account_status IN ('PENDING', 'ACTIVE', 'SUSPENDED'))",
+        ]
+    )
+    quoted_names = ", ".join(f'"{name}"' for name in names)
+    select_names = ", ".join(
+        "COALESCE(account_status, 'ACTIVE') AS account_status" if name == "account_status" else f'"{name}"'
+        for name in names
+    )
+    conn.execute("BEGIN")
+    try:
+        conn.execute("DROP TABLE IF EXISTS users_access_constrained")
+        conn.execute(f"CREATE TABLE users_access_constrained ({', '.join(definitions)})")
+        conn.execute(
+            f"INSERT INTO users_access_constrained ({quoted_names}) SELECT {select_names} FROM users"
+        )
+        conn.execute("DROP TABLE users")
+        conn.execute("ALTER TABLE users_access_constrained RENAME TO users")
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+
+
+def ensure_access_control_schema(
+    conn: duckdb.DuckDBPyConnection,
+    *,
+    apply_legacy_backfills: bool = True,
+) -> None:
+    """Upgrade existing DuckDB files to the 0007 access-control schema.
+
+    DuckDB does not support every PostgreSQL constraint/index feature used by
+    Alembic (notably partial unique indexes), so duplicate open invitations are
+    also rejected transactionally by the repository/API layer.
+    """
+    # DuckDB has no Alembic history, so data backfills need a durable marker.
+    # Schema/seed repair stays idempotent, while legacy role grants run once.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS duckdb_compatibility_migrations (
+            version VARCHAR PRIMARY KEY,
+            applied_at TIMESTAMP NOT NULL
+        )
+        """
+    )
+    legacy_data_backfill_pending = not bool(
+        conn.execute(
+            "SELECT 1 FROM duckdb_compatibility_migrations WHERE version='0007-access-control-data'"
+        ).fetchone()
+    )
+
+    user_columns = _duckdb_columns(conn, "users")
+    if "role" in user_columns and "legacy_role" not in user_columns:
+        conn.execute("ALTER TABLE users RENAME COLUMN role TO legacy_role")
+        user_columns = _duckdb_columns(conn, "users")
+    additions = {
+        "employee_id": "VARCHAR",
+        "email": "VARCHAR",
+        "department": "VARCHAR",
+        "job_title": "VARCHAR",
+        "oidc_issuer": "VARCHAR",
+        "oidc_subject": "VARCHAR",
+        "account_status": "VARCHAR DEFAULT 'ACTIVE'",
+        "is_global_admin": "BOOLEAN DEFAULT false",
+        "approved_by": "VARCHAR",
+        "approved_at": "TIMESTAMP",
+        "last_login_at": "TIMESTAMP",
+    }
+    for column_name, definition in additions.items():
+        if column_name not in user_columns:
+            conn.execute(f"ALTER TABLE users ADD COLUMN {column_name} {definition}")
+    user_columns = _duckdb_columns(conn, "users")
+    if user_columns.get("password_hash", (None, None, None, False))[3]:
+        conn.execute("ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL")
+    if user_columns.get("legacy_role", (None, None, None, False))[3]:
+        conn.execute("ALTER TABLE users ALTER COLUMN legacy_role DROP NOT NULL")
+    _ensure_duckdb_user_access_constraints(conn)
+    for table_name in ("analysis_requests", "request_steps", "request_work_items"):
+        columns = _duckdb_columns(conn, table_name)
+        if "owner_user_id" not in columns:
+            conn.execute(f"ALTER TABLE {table_name} ADD COLUMN owner_user_id VARCHAR")
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS project_memberships (
+            id VARCHAR PRIMARY KEY,
+            project_id VARCHAR NOT NULL,
+            user_id VARCHAR NOT NULL,
+            role VARCHAR NOT NULL CHECK (role IN ('general', 'power', 'admin')),
+            created_by VARCHAR NOT NULL,
+            created_at TIMESTAMP NOT NULL,
+            updated_by VARCHAR NOT NULL,
+            updated_at TIMESTAMP NOT NULL,
+            UNIQUE (project_id, user_id)
+        );
+        CREATE TABLE IF NOT EXISTS project_invitations (
+            id VARCHAR PRIMARY KEY,
+            project_id VARCHAR NOT NULL,
+            employee_id VARCHAR NOT NULL,
+            display_name_snapshot VARCHAR NOT NULL,
+            department_snapshot VARCHAR,
+            desired_role VARCHAR NOT NULL CHECK (desired_role IN ('general', 'power', 'admin')),
+            status VARCHAR NOT NULL CHECK (
+                status IN ('PENDING_ACCOUNT', 'PENDING_APPROVAL', 'READY', 'COMPLETED', 'CANCELLED')
+            ),
+            resolved_user_id VARCHAR,
+            invited_by VARCHAR NOT NULL,
+            invited_at TIMESTAMP NOT NULL,
+            resolved_by VARCHAR,
+            resolved_at TIMESTAMP,
+            cancelled_by VARCHAR,
+            cancelled_at TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS menu_definitions (
+            id VARCHAR PRIMARY KEY,
+            label VARCHAR NOT NULL,
+            required_permission VARCHAR NOT NULL,
+            context_kind VARCHAR NOT NULL CHECK (context_kind IN ('company', 'project', 'system')),
+            sequence_no INTEGER NOT NULL,
+            is_policy_editable BOOLEAN NOT NULL DEFAULT true,
+            is_active BOOLEAN NOT NULL DEFAULT true
+        );
+        CREATE TABLE IF NOT EXISTS menu_policy_state (
+            id VARCHAR PRIMARY KEY CHECK (id = 'global'),
+            version INTEGER NOT NULL,
+            updated_by VARCHAR NOT NULL,
+            updated_at TIMESTAMP NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS role_menu_policies (
+            role VARCHAR NOT NULL CHECK (role IN ('general', 'power', 'admin')),
+            menu_id VARCHAR NOT NULL,
+            is_visible BOOLEAN NOT NULL,
+            policy_version INTEGER NOT NULL,
+            updated_by VARCHAR NOT NULL,
+            updated_at TIMESTAMP NOT NULL,
+            PRIMARY KEY (role, menu_id)
+        );
+        CREATE TABLE IF NOT EXISTS menu_policy_versions (
+            version INTEGER PRIMARY KEY,
+            definition_json JSON NOT NULL,
+            created_by VARCHAR NOT NULL,
+            created_at TIMESTAMP NOT NULL,
+            source_version INTEGER,
+            change_note VARCHAR
+        )
+        """
+    )
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_users_employee_id ON users(employee_id)")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_users_oidc_identity ON users(oidc_issuer, oidc_subject)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_users_account_status ON users(account_status)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_users_employee_id ON users(employee_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_users_oidc_identity ON users(oidc_issuer, oidc_subject)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_project_memberships_user_project ON project_memberships(user_id, project_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_project_memberships_project_role ON project_memberships(project_id, role, user_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_project_invitations_project_status ON project_invitations(project_id, status, invited_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_project_invitations_employee ON project_invitations(employee_id, status)")
+    for table_name in ("analysis_requests", "request_steps", "request_work_items"):
+        conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{table_name}_owner_user_id ON {table_name}(owner_user_id)")
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    if apply_legacy_backfills and legacy_data_backfill_pending:
+        conn.execute("UPDATE users SET account_status='ACTIVE' WHERE account_status IS NULL")
+        conn.execute(
+            "UPDATE users SET is_global_admin=true WHERE legacy_role='admin' AND COALESCE(is_global_admin, false)=false"
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO project_memberships
+                (id, project_id, user_id, role, created_by, created_at, updated_by, updated_at)
+            SELECT 'membership-' || substr(md5(projects.id || ':' || users.id), 1, 24),
+                   projects.id, users.id,
+                   CASE users.legacy_role WHEN 'editor' THEN 'power' ELSE 'general' END,
+                   'duckdb-upgrade-0007', ?, 'duckdb-upgrade-0007', ?
+            FROM projects CROSS JOIN users
+            WHERE users.legacy_role IN ('viewer', 'editor')
+            """,
+            [now, now],
+        )
+        for table_name in ("analysis_requests", "request_steps", "request_work_items"):
+            _backfill_duckdb_owner_user_id(conn, table_name)
+        conn.execute(
+            """
+            INSERT INTO duckdb_compatibility_migrations (version, applied_at)
+            VALUES ('0007-access-control-data', ?)
+            """,
+            [now],
+        )
+
+    ensure_menu_policy_catalog(conn, seeded_at=now)
+
+
+def ensure_menu_policy_catalog(conn: ConnectionLike, *, seeded_at: datetime | None = None) -> None:
+    """Reconcile application-owned menus without resetting role visibility.
+
+    DuckDB uses this during its compatibility bootstrap. PostgreSQL invokes it
+    only through the explicit reference seed command, so startup remains a
+    read-only schema preflight while both backends share one catalog contract.
+    """
+    from .access_policy import DEFAULT_MENU_VISIBILITY, MENU_DEFINITIONS
+
+    now = seeded_at or datetime.now(timezone.utc).replace(tzinfo=None)
+    for menu in MENU_DEFINITIONS:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO menu_definitions
+                (id, label, required_permission, context_kind, sequence_no, is_policy_editable, is_active)
+            VALUES (?, ?, ?, ?, ?, ?, true)
+            """,
+            [
+                menu.id,
+                menu.label,
+                menu.required_permission,
+                menu.context_kind,
+                menu.sequence_no,
+                menu.is_policy_editable,
+            ],
+        )
+        conn.execute(
+            "UPDATE menu_definitions SET sequence_no=? WHERE id=?",
+            [menu.sequence_no, menu.id],
+        )
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO menu_policy_state (id, version, updated_by, updated_at)
+        VALUES ('global', 1, 'duckdb-upgrade-0007', ?)
+        """,
+        [now],
+    )
+    for role, visibility in DEFAULT_MENU_VISIBILITY.items():
+        for menu_id, is_visible in visibility.items():
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO role_menu_policies
+                    (role, menu_id, is_visible, policy_version, updated_by, updated_at)
+                VALUES (?, ?, ?, 1, 'duckdb-upgrade-0007', ?)
+                """,
+                [role, menu_id, is_visible, now],
+            )
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO menu_policy_versions
+            (version, definition_json, created_by, created_at, source_version, change_note)
+        VALUES (1, ?, 'duckdb-upgrade-0007', ?, NULL, 'Initial seeded policy')
+        """,
+        [json.dumps(DEFAULT_MENU_VISIBILITY, ensure_ascii=False, sort_keys=True), now],
+    )
+
+
 def ensure_project_quality_thresholds(conn: Any) -> None:
     """Ensure both verdict criteria exist independently for every project."""
     now = _iso(datetime.now(timezone.utc))
@@ -695,11 +1547,44 @@ def ensure_project_quality_thresholds(conn: Any) -> None:
         )
 
 
-def ensure_default_content(conn: Any) -> None:
-    from .repositories.workbench import ensure_default_workbench_catalog, ensure_seed_request_work_plans
+def ensure_local_development_identity(conn: Any) -> None:
+    """Seed the virtual disabled-auth principal as a canonical assignee.
 
-    count = conn.execute("SELECT count(*) FROM projects").fetchone()[0]
-    if count == 0:
+    This path is used only by the DuckDB development/test bootstrap.  It is a
+    normal project member (not a persisted global admin), so last-admin
+    invariants continue to describe real managed accounts.
+    """
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO users
+            (id, username, password_hash, display_name, legacy_role,
+             account_status, is_global_admin, is_active, created_at, updated_at)
+        VALUES ('local-admin', 'local', NULL, '로컬 관리자', NULL,
+                'ACTIVE', false, true, ?, ?)
+        """,
+        [now, now],
+    )
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO project_memberships
+            (id, project_id, user_id, role, created_by, created_at, updated_by, updated_at)
+        SELECT 'membership-local-' || substr(md5(projects.id), 1, 20),
+               projects.id, 'local-admin', 'general', 'system', ?, 'system', ?
+        FROM projects
+        """,
+        [now, now],
+    )
+
+
+def _ensure_canonical_orion_seed(conn: Any) -> None:
+    """Seed the canonical Orion graph when its known ID is absent.
+
+    The project count is deliberately not used here: an existing user or
+    example project must not suppress the canonical reference project.
+    """
+    has_canonical_orion = conn.execute("SELECT count(*) FROM projects WHERE id='project-tv-001'").fetchone()[0] == 1
+    if not has_canonical_orion:
         conn.execute("BEGIN TRANSACTION")
         try:
             seed_database(conn)
@@ -707,10 +1592,118 @@ def ensure_default_content(conn: Any) -> None:
         except Exception:
             conn.execute("ROLLBACK")
             raise
+
+
+def _ensure_orion_request_graph(conn: Any, *, now: datetime | None = None) -> None:
+    """Repair only the navigational request graph for an existing Orion row.
+
+    A partially initialized DuckDB file may already contain ``project-tv-001``
+    while its requests or folders are absent.  Re-running ``seed_database`` in
+    that case would collide with completed result rows, so this repair is
+    limited to the deterministic project/request/load-case/step records.
+    """
+    if conn.execute("SELECT count(*) FROM projects WHERE id='project-tv-001'").fetchone()[0] != 1:
+        return
+
+    now = now or datetime.now(timezone.utc)
+    requests = [
+        (
+            "request-drop-001",
+            "포장 낙하 시 Open Cell 엣지 응력 평가",
+            "IN_PROGRESS",
+            "김해석",
+            _iso(now - timedelta(days=8)),
+            _iso(now + timedelta(days=3)),
+            "낙하 방향별 엣지 응력과 허용 기준을 비교한다.",
+        ),
+        (
+            "request-clamp-001",
+            "물류 Side Clamp 하중 안전성 평가",
+            "READY",
+            "박검증",
+            _iso(now - timedelta(days=3)),
+            _iso(now + timedelta(days=8)),
+            "클램프 압력 변화에 따른 케이스 변형을 확인한다.",
+        ),
+    ]
+    for request_id, title, status, owner, requested_at, due_at, note in requests:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO analysis_requests
+                (id, project_id, title, status, owner, requested_at, due_at, overall_note)
+            VALUES (?, 'project-tv-001', ?, ?, ?, ?, ?, ?)
+            """,
+            [request_id, title, status, owner, requested_at, due_at, note],
+        )
+
+    step_names = [
+        "의뢰 접수", "요구사항 검토", "모델 준비", "해석 전처리 모델링", "해석 실행",
+        "후처리 작업", "결과 검토", "Validation", "승인", "완료",
+    ]
+    step_statuses = {
+        "request-drop-001": ["COMPLETED", "COMPLETED", "COMPLETED", "COMPLETED", "COMPLETED", "IN_PROGRESS", "WAITING", "WAITING", "WAITING", "WAITING"],
+        "request-clamp-001": ["COMPLETED", "COMPLETED", "IN_PROGRESS", "IN_PROGRESS", "WAITING", "WAITING", "WAITING", "WAITING", "WAITING", "WAITING"],
+    }
+    for request_id, _, _, owner, requested_at, _, _ in requests:
+        statuses = step_statuses[request_id]
+        step_owner = (
+            ["김해석"] * 6 + ["이검증"] * 4
+            if request_id == "request-drop-001"
+            else [owner] * 10
+        )
+        for index, (name, status) in enumerate(zip(step_names, statuses), start=1):
+            planned_start = datetime.fromisoformat(requested_at) + timedelta(hours=(index - 1) * (20 if request_id == "request-drop-001" else 18))
+            planned_end = planned_start + timedelta(hours=16 if request_id == "request-drop-001" else 14)
+            progress = 100 if status == "COMPLETED" else 65 if status == "IN_PROGRESS" and request_id == "request-drop-001" else 70 if index == 3 else 35 if status == "IN_PROGRESS" else 0
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO request_steps
+                    (id, request_id, sequence_no, name, status, owner, planned_start, planned_end,
+                     actual_start, actual_end, progress, is_optional, blocked_reason, note)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    f"step-{'drop' if request_id == 'request-drop-001' else 'clamp'}-{index:02d}",
+                    request_id, index, name, status, step_owner[index - 1], _iso(planned_start), _iso(planned_end),
+                    _iso(planned_start + timedelta(hours=1)) if status != "WAITING" else None,
+                    _iso(planned_end - timedelta(hours=2)) if status == "COMPLETED" else None,
+                    progress, name == "Validation", None,
+                    "최대 응력 위치 재확인 중" if request_id == "request-drop-001" and status == "IN_PROGRESS" else "클램프 접촉면 모델을 병렬 준비 중" if request_id == "request-clamp-001" and status == "IN_PROGRESS" else None,
+                ],
+            )
+
+    load_cases = [
+        (
+            "loadcase-drop-bottom-001", "request-drop-001", "Bottom Face 450 mm Drop", "DROP", "COMPLETED",
+            {"drop_height_mm": 450, "direction": "BOTTOM", "gravity_ms2": 9.80665},
+        ),
+        (
+            "loadcase-clamp-left-001", "request-clamp-001", "Left/Right Side Clamp 0.35 MPa", "SIDE_CLAMP", "READY",
+            {"pressure_mpa": 0.35, "hold_time_sec": 30, "faces": ["LEFT", "RIGHT"]},
+        ),
+    ]
+    for load_case_id, request_id, name, analysis_type, status, parameters in load_cases:
+        conn.execute(
+            "INSERT OR IGNORE INTO load_cases VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [load_case_id, request_id, name, analysis_type, status, json.dumps(parameters, ensure_ascii=False), _iso(now - timedelta(days=4 if request_id == "request-drop-001" else 2))],
+        )
+
+
+def ensure_default_content(conn: Any) -> None:
+    from .repositories.workbench import ensure_default_workbench_catalog, ensure_seed_legacy_result_layout_assignment, ensure_seed_request_work_plans
+
+    _ensure_canonical_orion_seed(conn)
+    _ensure_orion_request_graph(conn)
+    # Feature examples are project-producing seed data.  Create them before
+    # membership and project-wide repairs so one bootstrap pass is complete.
+    # User-created projects intentionally remain valid while they have no
+    # request yet; only canonical examples are required to be populated.
+    ensure_feature_examples(conn)
+    ensure_local_development_identity(conn)
     ensure_sample_evolutions(conn)
     ensure_project_quality_thresholds(conn)
     ensure_drop_video_widget(conn)
-    ensure_feature_examples(conn)
+    ensure_demo_media_storage(conn)
     ensure_variable_definitions(conn)
     conn.execute(
         """
@@ -722,6 +1715,7 @@ def ensure_default_content(conn: Any) -> None:
     ensure_workspace_layouts(conn)
     ensure_default_workbench_catalog(conn)
     ensure_seed_request_work_plans(conn)
+    ensure_seed_legacy_result_layout_assignment(conn)
     chassis_layout = {
         "id": "dashboard-chassis-default",
         "name": "Chassis Rear 영구변형 기본 분석",
@@ -841,7 +1835,7 @@ def ensure_system_analysis_page_metadata(conn: Any) -> None:
         )
 
 
-def ensure_workspace_layouts(conn: duckdb.DuckDBPyConnection) -> None:
+def ensure_workspace_layouts(conn: ConnectionLike) -> None:
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     layouts = {
         "portfolio": {"fontSize": 10, "chartOrder": ["trend", "status", "quality", "type"]},
@@ -850,12 +1844,189 @@ def ensure_workspace_layouts(conn: duckdb.DuckDBPyConnection) -> None:
     for kind, definition in layouts.items():
         encoded = json.dumps(definition, ensure_ascii=False)
         conn.execute(
-            "INSERT OR IGNORE INTO workspace_layouts VALUES (?, 1, ?, 'system', ?)",
+            """
+            INSERT OR IGNORE INTO workspace_layouts
+                (layout_kind, version, definition_json, updated_by, updated_at)
+            VALUES (?, 1, ?, 'system', ?)
+            """,
             [kind, encoded, now],
         )
         conn.execute(
-            "INSERT OR IGNORE INTO workspace_layout_versions VALUES (?, 1, ?, 'system', ?, true)",
+            """
+            INSERT OR IGNORE INTO workspace_layout_versions
+                (layout_kind, version, definition_json, created_by, created_at, is_valid)
+            VALUES (?, 1, ?, 'system', ?, true)
+            """,
             [kind, encoded, now],
+        )
+    # Existing installations may have customized the legacy global layouts.
+    # Project-scoped storage inherits those exact current rows and histories;
+    # hard-coded defaults are used only when the legacy rows were missing.
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO project_workspace_layouts
+            (project_id, layout_kind, version, definition_json, updated_by, updated_at)
+        SELECT projects.id, layouts.layout_kind, layouts.version, layouts.definition_json,
+               layouts.updated_by, layouts.updated_at
+        FROM projects CROSS JOIN workspace_layouts AS layouts
+        """
+    )
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO project_workspace_layout_versions
+            (project_id, layout_kind, version, definition_json, created_by, created_at, is_valid)
+        SELECT projects.id, versions.layout_kind, versions.version, versions.definition_json,
+               versions.created_by, versions.created_at, versions.is_valid
+        FROM projects CROSS JOIN workspace_layout_versions AS versions
+        """
+    )
+
+
+def _ensure_seed_media_asset(
+    conn: Any,
+    *,
+    asset_id: str,
+    analysis_run_id: str,
+    asset_type: str,
+    title: str,
+    file_path: str,
+    mime_type: str,
+    metadata_json: str,
+    source: Path,
+    filename: str,
+    own_transaction: bool = False,
+) -> None:
+    """Store one known reference asset before creating/linking its row.
+
+    Known reference contour assets are the only callers that create rows.
+    Existing rows are limited to the supplied seed ID and may be repaired when
+    a previous seed stopped after the legacy file_path-only insert.
+    """
+    existing = conn.execute(
+        "SELECT blob_id FROM media_assets WHERE id=?",
+        [asset_id],
+    ).fetchone()
+    if existing is not None and existing[0] is not None:
+        return
+
+    from .services.media_storage_service import store_file
+
+    owns_transaction = own_transaction and getattr(conn, "backend", None) == "duckdb"
+    if owns_transaction:
+        conn.execute("BEGIN TRANSACTION")
+    try:
+        if not source.is_file():
+            raise FileNotFoundError(f"seed media source is missing: {source}")
+        stored = store_file(
+            conn,
+            source,
+            filename=filename,
+            mime_type=mime_type,
+            asset_type=asset_type,
+        )
+        if existing is None:
+            conn.execute(
+                """
+                INSERT INTO media_assets
+                    (id, analysis_run_id, asset_type, title, file_path, mime_type,
+                     file_size, checksum, metadata_json, blob_id, original_filename)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    asset_id,
+                    analysis_run_id,
+                    asset_type,
+                    title,
+                    file_path,
+                    stored.mime_type,
+                    stored.blob.file_size,
+                    stored.blob.sha256,
+                    metadata_json,
+                    stored.blob.id,
+                    stored.original_filename,
+                ],
+            )
+        else:
+            conn.execute("UPDATE asset_blobs SET orphaned_at=NULL WHERE id=?", [stored.blob.id])
+            conn.execute(
+                """
+                UPDATE media_assets
+                SET blob_id=?, original_filename=?, mime_type=?, file_size=?, checksum=?
+                WHERE id=?
+                """,
+                [
+                    stored.blob.id,
+                    stored.original_filename,
+                    stored.mime_type,
+                    stored.blob.file_size,
+                    stored.blob.sha256,
+                    asset_id,
+                ],
+            )
+        if owns_transaction:
+            conn.execute("COMMIT")
+    except BaseException:
+        if owns_transaction:
+            conn.execute("ROLLBACK")
+        raise
+
+
+def ensure_demo_media_storage(conn: Any) -> None:
+    """Backfill local fixtures into the chunk store without rewriting bytes.
+
+    This is intentionally idempotent and only touches known files already
+    referenced by the local seed or by the explicit demo allowlist. Production
+    imports use the same storage service but do not depend on this helper.
+    """
+    from .services.drop_video_demo import DROP_VIDEO_DEMO_SCENES, DROP_VIDEO_SOURCE_DIR, probe_mp4
+    from .services.media_storage_service import store_file
+
+    asset_root = Path(__file__).resolve().parents[1] / "assets"
+    seed_asset_ids = (
+        "media-contour-001",
+        "media-showcase-trust",
+        "media-showcase-multitype",
+    )
+    media_rows = conn.execute(
+        """
+        SELECT id, analysis_run_id, asset_type, title, file_path, mime_type,
+               metadata_json, original_filename
+        FROM media_assets
+        WHERE blob_id IS NULL AND id IN (?, ?, ?)
+        """,
+        list(seed_asset_ids),
+    ).fetchall()
+    for asset_id, analysis_run_id, asset_type, title, file_path, mime_type, metadata_json, original_filename in media_rows:
+        _ensure_seed_media_asset(
+            conn,
+            asset_id=str(asset_id),
+            analysis_run_id=str(analysis_run_id),
+            asset_type=str(asset_type),
+            title=str(title),
+            file_path=str(file_path),
+            mime_type=str(mime_type),
+            metadata_json=str(metadata_json or "{}"),
+            source=asset_root / "sample-contour.svg",
+            filename=str(original_filename or "sample-contour.svg"),
+            own_transaction=True,
+        )
+
+    for scene in DROP_VIDEO_DEMO_SCENES:
+        if conn.execute("SELECT 1 FROM drop_video_assets WHERE video_id=?", [scene.video_id]).fetchone():
+            continue
+        source = (DROP_VIDEO_SOURCE_DIR / scene.filename).resolve()
+        if source.parent != DROP_VIDEO_SOURCE_DIR.resolve() or not source.is_file():
+            continue
+        stored = store_file(conn, source, filename=scene.filename, mime_type="video/mp4", asset_type="VIDEO")
+        media_probe = probe_mp4(source)
+        conn.execute("UPDATE asset_blobs SET orphaned_at=NULL WHERE id=?", [stored.blob.id])
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO drop_video_assets
+                (video_id, load_case_id, blob_id, original_filename, mime_type, scene_name, sort_order, metadata_json)
+            VALUES (?, 'loadcase-drop-bottom-001', ?, ?, 'video/mp4', ?, ?, ?)
+            """,
+            [scene.video_id, stored.blob.id, scene.filename, scene.scene_name, scene.sort_order, json.dumps({"demo": True, "codec": media_probe.codec, "fast_start": media_probe.fast_start})],
         )
 
 
@@ -1061,13 +2232,13 @@ def ensure_sample_evolutions(conn: duckdb.DuckDBPyConnection) -> None:
         """
         INSERT OR IGNORE INTO batch_path_profiles
             (id, name, solver_path, working_directory, arguments_template,
-             environment_json, task_type_ids_json, is_active, updated_by, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, true, ?, ?, ?)
+             environment_json, task_type_id, task_type_version, task_type_ids_json, is_active, updated_by, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, true, ?, ?, ?)
         """,
         [
             "radioss-demo", "Radioss 배치 예시", "C:\\Altair\\hwsolvers\\radioss.exe",
             "C:\\Simulation\\runs\\{request_id}", "-i {input} -nt {cores}",
-            json.dumps({"OMP_NUM_THREADS": "{cores}"}, ensure_ascii=False), json.dumps(["hpc-submit"]), "system", _iso(now), _iso(now),
+            json.dumps({"OMP_NUM_THREADS": "{cores}"}, ensure_ascii=False), "hpc-submit", 1, json.dumps(["hpc-submit"]), "system", _iso(now), _iso(now),
         ],
     )
     conn.execute(
@@ -1082,9 +2253,9 @@ def ensure_sample_evolutions(conn: duckdb.DuckDBPyConnection) -> None:
         """
         INSERT OR IGNORE INTO batch_path_profile_versions
             (id, version, name, solver_path, working_directory, arguments_template,
-             environment_json, task_type_ids_json, is_active, created_by, created_at)
+             environment_json, task_type_id, task_type_version, task_type_ids_json, is_active, created_by, created_at)
         SELECT id, version, name, solver_path, working_directory, arguments_template,
-               environment_json, task_type_ids_json, is_active, updated_by, updated_at
+               environment_json, task_type_id, task_type_version, task_type_ids_json, is_active, updated_by, updated_at
         FROM batch_path_profiles
         """
     )
@@ -1355,8 +2526,48 @@ def ensure_sample_evolutions(conn: duckdb.DuckDBPyConnection) -> None:
 
 def ensure_feature_examples(conn: duckdb.DuckDBPyConnection) -> None:
     """Seed an additive, idempotent gallery that demonstrates the major product flows."""
+    expected_request_ids = {
+        f"request-showcase-{key}"
+        for key in ("compare", "trust", "warning", "review", "multitype", "waiting", "workflow")
+    }
+    expected_load_case_ids = {
+        f"loadcase-showcase-{key}"
+        for key in ("compare", "trust", "warning", "review", "multitype", "waiting", "workflow")
+    }
+    expected_step_ids = {
+        f"step-showcase-{key}-{sequence_no:02d}"
+        for key in ("compare", "trust", "warning", "review", "multitype", "waiting", "workflow")
+        for sequence_no in range(1, 11)
+    }
+    expected_run_ids = {
+        f"run-showcase-{key}-{run_no}"
+        for key, run_numbers in {
+            "compare": (1, 2, 3),
+            "trust": (1, 2),
+            "warning": (1, 2),
+            "review": (1, 2),
+            "multitype": (1, 2),
+        }.items()
+        for run_no in run_numbers
+    }
+
+    def has_exact_seed_ids(table_name: str, ids: set[str]) -> bool:
+        placeholders = ", ".join("?" for _ in ids)
+        existing = {
+            str(row[0])
+            for row in conn.execute(
+                f"SELECT id FROM {table_name} WHERE id IN ({placeholders})",
+                list(ids),
+            ).fetchall()
+        }
+        return existing == ids
+
     complete = (
         conn.execute("SELECT count(*) FROM projects WHERE id='project-feature-showcase'").fetchone()[0] == 1
+        and has_exact_seed_ids("analysis_requests", expected_request_ids)
+        and has_exact_seed_ids("load_cases", expected_load_case_ids)
+        and has_exact_seed_ids("request_steps", expected_step_ids)
+        and has_exact_seed_ids("analysis_runs", expected_run_ids)
         and conn.execute("SELECT count(*) FROM review_annotations WHERE analysis_run_id='run-showcase-review-2'").fetchone()[0] == 3
         and conn.execute("SELECT count(*) FROM variable_definitions WHERE load_case_id='loadcase-showcase-waiting'").fetchone()[0] == 5
         and conn.execute("SELECT count(*) FROM import_schemas WHERE id='import-schema-showcase-typed'").fetchone()[0] == 1
@@ -1390,33 +2601,36 @@ def ensure_feature_examples(conn: duckdb.DuckDBPyConnection) -> None:
         load_case_id = f"loadcase-showcase-{key}"
         requested_at = now - timedelta(days=30 - example_index)
         conn.execute(
-            "INSERT OR IGNORE INTO analysis_requests VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            """
+            INSERT OR IGNORE INTO analysis_requests
+                (id, project_id, title, status, owner, requested_at, due_at, overall_note)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
             [request_id, project_id, title, request_status, "예제 운영자", _iso(requested_at), _iso(requested_at + timedelta(days=12)), f"{title} 기능을 확인하기 위한 비파괴 예제입니다."],
         )
         conn.execute(
             "INSERT OR IGNORE INTO load_cases VALUES (?, ?, ?, ?, ?, ?, ?)",
             [load_case_id, request_id, load_case_name, analysis_type, load_case_status, json.dumps({"sample": True, "example": key, "drop_height_mm": 800 if analysis_type == "DROP" else None, "pressure_mpa": 0.35 if analysis_type == "SIDE_CLAMP" else None}, ensure_ascii=False), _iso(requested_at + timedelta(days=1))],
         )
-        if conn.execute("SELECT count(*) FROM request_steps WHERE request_id=?", [request_id]).fetchone()[0] == 0:
-            for sequence_no, step_name in enumerate(step_names, start=1):
-                if key == "workflow":
-                    statuses = ["COMPLETED", "COMPLETED", "COMPLETED", "IN_PROGRESS", "BLOCKED", "WAITING", "WAITING", "WAITING", "WAITING", "WAITING"]
-                elif request_status == "COMPLETED":
-                    statuses = ["COMPLETED"] * 10
-                else:
-                    statuses = ["COMPLETED"] * 5 + ["IN_PROGRESS"] + ["WAITING"] * 4
-                status = statuses[sequence_no - 1]
-                progress = 100 if status == "COMPLETED" else 55 if status == "IN_PROGRESS" else 0
-                start = requested_at + timedelta(hours=(sequence_no - 1) * 18)
-                conn.execute(
-                    """
-                    INSERT INTO request_steps
-                        (id, request_id, sequence_no, name, status, owner, planned_start, planned_end,
-                         actual_start, actual_end, progress, blocked_reason, note, is_optional)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    [f"step-showcase-{key}-{sequence_no:02d}", request_id, sequence_no, step_name, status, "예제 운영자", _iso(start), _iso(start + timedelta(hours=14)), _iso(start + timedelta(hours=1)) if status not in {"WAITING", "BLOCKED"} else None, _iso(start + timedelta(hours=12)) if status == "COMPLETED" else None, progress, "입력 모델 승인 대기" if status == "BLOCKED" else None, "서로 다른 상태와 진행률을 확인하세요." if key == "workflow" else None, False],
-                )
+        for sequence_no, step_name in enumerate(step_names, start=1):
+            if key == "workflow":
+                statuses = ["COMPLETED", "COMPLETED", "COMPLETED", "IN_PROGRESS", "BLOCKED", "WAITING", "WAITING", "WAITING", "WAITING", "WAITING"]
+            elif request_status == "COMPLETED":
+                statuses = ["COMPLETED"] * 10
+            else:
+                statuses = ["COMPLETED"] * 5 + ["IN_PROGRESS"] + ["WAITING"] * 4
+            status = statuses[sequence_no - 1]
+            progress = 100 if status == "COMPLETED" else 55 if status == "IN_PROGRESS" else 0
+            start = requested_at + timedelta(hours=(sequence_no - 1) * 18)
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO request_steps
+                    (id, request_id, sequence_no, name, status, owner, planned_start, planned_end,
+                     actual_start, actual_end, progress, blocked_reason, note, is_optional)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [f"step-showcase-{key}-{sequence_no:02d}", request_id, sequence_no, step_name, status, "예제 운영자", _iso(start), _iso(start + timedelta(hours=14)), _iso(start + timedelta(hours=1)) if status not in {"WAITING", "BLOCKED"} else None, _iso(start + timedelta(hours=12)) if status == "COMPLETED" else None, progress, "입력 모델 승인 대기" if status == "BLOCKED" else None, "서로 다른 상태와 진행률을 확인하세요." if key == "workflow" else None, False],
+            )
 
     run_specs = {
         "compare": [(1, 68.0, 82.0), (2, 70.0, 80.0), (3, 81.0, 72.0)],
@@ -1454,7 +2668,21 @@ def ensure_feature_examples(conn: duckdb.DuckDBPyConnection) -> None:
     conn.execute("INSERT OR IGNORE INTO import_schema_versions VALUES (?, 1, ?, ?, 'system')", ["import-schema-showcase-typed", encoded_schema, _iso(now - timedelta(days=10))])
     for key in ("trust", "multitype"):
         run_id = f"run-showcase-{key}-2"
-        conn.execute("INSERT OR IGNORE INTO folder_import_jobs VALUES (?, ?, ?, ?, 1, ?, 'COMPLETED', ?, ?)", [f"folder-job-showcase-{key}", f"loadcase-showcase-{key}", run_id, "import-schema-showcase-typed", f"examples/showcase/{key}", json.dumps({"scalar": 4, "series": 1, "curve": 1, "media": 1}), _iso(now - timedelta(days=3))])
+        conn.execute(
+            """INSERT OR IGNORE INTO folder_import_jobs
+                (id, load_case_id, analysis_run_id, schema_id, schema_version,
+                 source_folder, status, summary_json, created_at)
+                VALUES (?, ?, ?, ?, 1, ?, 'COMPLETED', ?, ?)""",
+            [
+                f"folder-job-showcase-{key}",
+                f"loadcase-showcase-{key}",
+                run_id,
+                "import-schema-showcase-typed",
+                f"examples/showcase/{key}",
+                json.dumps({"scalar": 4, "series": 1, "curve": 1, "media": 1}),
+                _iso(now - timedelta(days=3)),
+            ],
+        )
 
     for key in ("trust", "multitype"):
         run_id = f"run-showcase-{key}-2"
@@ -1462,7 +2690,19 @@ def ensure_feature_examples(conn: duckdb.DuckDBPyConnection) -> None:
         conn.execute("INSERT OR IGNORE INTO curve_results VALUES (?, ?, 'load_displacement_curve', '하중-변위 곡선', 'default', 'Displacement', 'mm', 'Load', 'N', 11, 'curve.csv', ?, ?)", [curve_id, run_id, hashlib.sha256(curve_id.encode()).hexdigest(), _iso(now - timedelta(days=3))])
         for point in range(11):
             conn.execute("INSERT OR IGNORE INTO curve_points VALUES (?, ?, ?, ?)", [curve_id, point, point * 0.5, round(120 * math.sin(point / 10 * math.pi), 3)])
-        conn.execute("INSERT OR IGNORE INTO media_assets VALUES (?, ?, 'IMAGE', '응력 컨투어 예제', 'sample-contour.svg', 'image/svg+xml', NULL, ?, ?)", [f"media-showcase-{key}", run_id, hashlib.sha256(f"media-{key}".encode()).hexdigest(), json.dumps({"variable_key": "stress_contour_image", "sample": True})])
+        _ensure_seed_media_asset(
+            conn,
+            asset_id=f"media-showcase-{key}",
+            analysis_run_id=run_id,
+            asset_type="IMAGE",
+            title="응력 컨투어 예제",
+            file_path="sample-contour.svg",
+            mime_type="image/svg+xml",
+            metadata_json=json.dumps({"variable_key": "stress_contour_image", "sample": True}),
+            source=Path(__file__).resolve().parents[1] / "assets" / "sample-contour.svg",
+            filename="sample-contour.svg",
+            own_transaction=True,
+        )
         if conn.execute("SELECT count(*) FROM result_locations WHERE analysis_run_id=? AND variable_key='top_edge_max_stress'", [run_id]).fetchone()[0] == 0:
             conn.execute("INSERT INTO result_locations VALUES (?, 'top_edge_max_stress', 'ELEMENT', 'E-2048', 120.0, 5.0, 18.0, 5.0, 'ms', 'peak')", [run_id])
         for variable_key, display_name, data_type, unit, source, widgets, aggregations in [
@@ -1524,120 +2764,7 @@ def seed_database(conn: duckdb.DuckDBPyConnection) -> None:
     for row in product_rows:
         conn.execute("INSERT INTO product_information VALUES (?, ?, ?, ?, ?, ?, ?)", [*row[:6], json.dumps(row[6], ensure_ascii=False)])
 
-    requests = [
-        (
-            "request-drop-001",
-            "project-tv-001",
-            "포장 낙하 시 Open Cell 엣지 응력 평가",
-            "IN_PROGRESS",
-            "김해석",
-            _iso(now - timedelta(days=8)),
-            _iso(now + timedelta(days=3)),
-            "낙하 방향별 엣지 응력과 허용 기준을 비교한다.",
-        ),
-        (
-            "request-clamp-001",
-            "project-tv-001",
-            "물류 Side Clamp 하중 안전성 평가",
-            "READY",
-            "박검증",
-            _iso(now - timedelta(days=3)),
-            _iso(now + timedelta(days=8)),
-            "클램프 압력 변화에 따른 케이스 변형을 확인한다.",
-        ),
-    ]
-    for request in requests:
-        conn.execute("INSERT INTO analysis_requests VALUES (?, ?, ?, ?, ?, ?, ?, ?)", request)
-
-    step_names = [
-        "의뢰 접수",
-        "요구사항 검토",
-        "모델 준비",
-        "해석 전처리 모델링",
-        "해석 실행",
-        "후처리 작업",
-        "결과 검토",
-        "Validation",
-        "승인",
-        "완료",
-    ]
-    statuses = ["COMPLETED", "COMPLETED", "COMPLETED", "COMPLETED", "COMPLETED", "IN_PROGRESS", "WAITING", "WAITING", "WAITING", "WAITING"]
-    for index, (name, status) in enumerate(zip(step_names, statuses), start=1):
-        planned_start = now - timedelta(days=8) + timedelta(hours=(index - 1) * 20)
-        planned_end = planned_start + timedelta(hours=16)
-        actual_start = planned_start + timedelta(hours=1) if status != "WAITING" else None
-        actual_end = planned_end - timedelta(hours=2) if status == "COMPLETED" else None
-        progress = 100 if status == "COMPLETED" else 65 if status == "IN_PROGRESS" else 0
-        conn.execute(
-            """
-            INSERT INTO request_steps
-                (id, request_id, sequence_no, name, status, owner, planned_start, planned_end,
-                 actual_start, actual_end, progress, is_optional, blocked_reason, note)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            [
-                f"step-drop-{index:02d}",
-                "request-drop-001",
-                index,
-                name,
-                status,
-                "김해석" if index <= 6 else "이검증",
-                _iso(planned_start),
-                _iso(planned_end),
-                _iso(actual_start) if actual_start else None,
-                _iso(actual_end) if actual_end else None,
-                progress,
-                name == "Validation",
-                None,
-                "최대 응력 위치 재확인 중" if status == "IN_PROGRESS" else None,
-            ],
-        )
-
-    clamp_statuses = ["COMPLETED", "COMPLETED", "IN_PROGRESS", "IN_PROGRESS", "WAITING", "WAITING", "WAITING", "WAITING", "WAITING", "WAITING"]
-    for index, (name, status) in enumerate(zip(step_names, clamp_statuses), start=1):
-        planned_start = now - timedelta(days=3) + timedelta(hours=(index - 1) * 18)
-        planned_end = planned_start + timedelta(hours=14)
-        progress = 100 if status == "COMPLETED" else 70 if index == 3 else 35 if status == "IN_PROGRESS" else 0
-        conn.execute(
-            """
-            INSERT INTO request_steps
-                (id, request_id, sequence_no, name, status, owner, planned_start, planned_end,
-                 actual_start, actual_end, progress, is_optional, blocked_reason, note)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            [
-                f"step-clamp-{index:02d}", "request-clamp-001", index, name, status, "박검증",
-                _iso(planned_start), _iso(planned_end), _iso(planned_start + timedelta(hours=1)) if status != "WAITING" else None,
-                _iso(planned_end - timedelta(hours=2)) if status == "COMPLETED" else None, progress, name == "Validation", None,
-                "클램프 접촉면 모델을 병렬 준비 중" if status == "IN_PROGRESS" else None,
-            ],
-        )
-
-    load_cases = [
-        (
-            "loadcase-drop-bottom-001",
-            "request-drop-001",
-            "Bottom Face 450 mm Drop",
-            "DROP",
-            "COMPLETED",
-            {"drop_height_mm": 450, "direction": "BOTTOM", "gravity_ms2": 9.80665},
-            _iso(now - timedelta(days=4)),
-        ),
-        (
-            "loadcase-clamp-left-001",
-            "request-clamp-001",
-            "Left/Right Side Clamp 0.35 MPa",
-            "SIDE_CLAMP",
-            "READY",
-            {"pressure_mpa": 0.35, "hold_time_sec": 30, "faces": ["LEFT", "RIGHT"]},
-            _iso(now - timedelta(days=2)),
-        ),
-    ]
-    for load_case in load_cases:
-        conn.execute(
-            "INSERT INTO load_cases VALUES (?, ?, ?, ?, ?, ?, ?)",
-            [*load_case[:5], json.dumps(load_case[5], ensure_ascii=False), load_case[6]],
-        )
+    _ensure_orion_request_graph(conn, now=now)
 
     conn.execute(
         "INSERT INTO template_executions VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1700,19 +2827,17 @@ def seed_database(conn: duckdb.DuckDBPyConnection) -> None:
             _iso(now - timedelta(days=3, hours=20)),
         ],
     )
-    conn.execute(
-        "INSERT INTO media_assets VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        [
-            "media-contour-001",
-            "run-drop-001",
-            "CONTOUR_IMAGE",
-            "Open Cell 최대주응력 컨투어",
-            "assets/sample-contour.svg",
-            "image/svg+xml",
-            None,
-            None,
-            json.dumps({"result": "maximum_principal_stress", "unit": "MPa"}),
-        ],
+    _ensure_seed_media_asset(
+        conn,
+        asset_id="media-contour-001",
+        analysis_run_id="run-drop-001",
+        asset_type="CONTOUR_IMAGE",
+        title="Open Cell 최대주응력 컨투어",
+        file_path="assets/sample-contour.svg",
+        mime_type="image/svg+xml",
+        metadata_json=json.dumps({"result": "maximum_principal_stress", "unit": "MPa"}),
+        source=Path(__file__).resolve().parents[1] / "assets" / "sample-contour.svg",
+        filename="sample-contour.svg",
     )
 
     layout = {

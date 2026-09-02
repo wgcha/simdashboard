@@ -1,0 +1,1 @@
+"""Result-review domain contracts."""

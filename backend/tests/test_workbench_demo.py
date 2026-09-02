@@ -147,7 +147,6 @@ def test_demo_contract_rejects_real_execution_fields_and_invalid_graphs():
 def test_admin_can_create_immutable_task_and_request_type_versions():
     with TestClient(app) as client:
         task_payload = {
-            "id": "custom-review",
             "kind": "POST_PROCESS",
             "display_name": "사용자 후처리 검토",
             "description": "관리자가 정의한 데모 Task",
@@ -158,73 +157,149 @@ def test_admin_can_create_immutable_task_and_request_type_versions():
             "demo_artifact_url": "/assets/demo-workbench.svg",
             "is_active": True,
         }
-        first = client.post("/api/admin/workbench/task-types", json=task_payload)
-        second = client.post("/api/admin/workbench/task-types", json={**task_payload, "description": "두 번째 불변 버전"})
-        inactive = client.post(
-            "/api/admin/workbench/task-types",
+        first = client.post("/api/admin/workbench/task-types", json={**task_payload, "id": "caller-id-is-ignored"})
+        assert first.status_code == 201, first.text
+        first_item = first.json()
+        assert first_item["id"] != "caller-id-is-ignored"
+        second = client.post("/api/admin/workbench/task-types", json={**task_payload, "description": "두 번째 독립 정의"})
+        assert second.status_code == 201, second.text
+        assert second.json()["version"] == 1
+        assert second.json()["id"] != first_item["id"]
+
+        edited = client.put(
+            f"/api/admin/workbench/task-types/{first_item['id']}",
+            json={**task_payload, "description": "두 번째 불변 버전"},
+        )
+        assert edited.status_code == 201, edited.text
+        assert edited.json()["version"] == 2
+        inactive = client.put(
+            f"/api/admin/workbench/task-types/{first_item['id']}",
             json={**task_payload, "description": "비활성 최신 버전", "is_active": False},
         )
-        assert first.status_code == 201, first.text
-        assert second.status_code == 201, second.text
         assert inactive.status_code == 201, inactive.text
-        assert [first.json()["version"], second.json()["version"]] == [1, 2]
+        assert inactive.json()["version"] == 3
 
-        visible = [item for item in client.get("/api/workbench/task-types").json() if item["id"] == "custom-review"]
-        all_versions = [
-            item
-            for item in client.get("/api/workbench/task-types", params={"all_versions": True}).json()
-            if item["id"] == "custom-review"
-        ]
+        visible = [item for item in client.get("/api/workbench/task-types").json() if item["id"] == first_item["id"]]
+        all_versions = [item for item in client.get("/api/workbench/task-types", params={"all_versions": True}).json() if item["id"] == first_item["id"]]
         assert [item["version"] for item in visible] == [2]
         assert [item["version"] for item in all_versions] == [3, 2, 1]
 
         request_payload = {
-            "id": "custom-request",
             "display_name": "사용자 정의 의뢰",
             "description": "관리자가 정의한 조합",
-            "allowed_task_types": [{"id": "custom-review", "version": 2}],
-            "default_workflow": {
-                "nodes": [
-                    {"node_key": "review", "task_type_id": "custom-review", "task_type_version": 2, "depends_on": []}
-                ]
-            },
+            "allowed_task_types": [{"id": first_item["id"], "version": 2}],
+            "default_workflow": {"nodes": [{"node_key": "review", "task_type_id": first_item["id"], "task_type_version": 2, "depends_on": []}]},
             "match_rules": {"analysis_purpose": "review"},
             "is_active": True,
         }
-        created = client.post("/api/admin/workbench/request-types", json=request_payload)
+        created = client.post("/api/admin/workbench/request-types", json={**request_payload, "id": "caller-request-id-is-ignored"})
         assert created.status_code == 201, created.text
-        assert created.json()["version"] == 1
-        assert created.json()["default_workflow"]["nodes"][0]["task_type_version"] == 2
+        request_item = created.json()
+        assert request_item["id"] != "caller-request-id-is-ignored"
+        assert request_item["version"] == 1
+        assert request_item["default_workflow"]["nodes"][0]["task_type_version"] == 2
 
-        inactive_request_type = client.post(
-            "/api/admin/workbench/request-types",
+        inactive_request_type = client.put(
+            f"/api/admin/workbench/request-types/{request_item['id']}",
             json={**request_payload, "description": "비활성 최신 의뢰 유형", "is_active": False},
         )
         assert inactive_request_type.status_code == 201, inactive_request_type.text
-        visible_request_types = [item for item in client.get("/api/workbench/request-types").json() if item["id"] == "custom-request"]
+        visible_request_types = [item for item in client.get("/api/workbench/request-types").json() if item["id"] == request_item["id"]]
         assert [item["version"] for item in visible_request_types] == [1]
 
         run = client.post(
             "/api/workbench/demo-runs",
             json=_demo_payload(
-                request_type_id="custom-request",
-                nodes=[
-                    {
-                        "node_key": "review",
-                        "task_type_id": "custom-review",
-                        "task_type_version": 2,
-                        "depends_on": [],
-                    }
-                ],
+                request_type_id=request_item["id"],
+                nodes=[{"node_key": "review", "task_type_id": first_item["id"], "task_type_version": 2, "depends_on": []}],
             ),
         )
         assert run.status_code == 201, run.text
         assert run.json()["request_type_version"] == 1
 
+def test_admin_edits_request_type_labels_as_new_version_and_soft_deletes_history():
+    request_type_id = f"labeled-work-{uuid4().hex[:8]}"
+    base_payload = {
+        "display_name": "라벨 작업 유형",
+        "description": "초기 단일 작업 시나리오",
+        "allowed_task_types": [{"id": "cad-prepare", "version": 1}],
+        "default_workflow": {
+            "nodes": [
+                {
+                    "node_key": "prepare",
+                    "task_type_id": "cad-prepare",
+                    "task_type_version": 1,
+                    "depends_on": [],
+                }
+            ]
+        },
+        "match_rules": {},
+        "is_active": True,
+    }
+
+    with TestClient(app) as client:
+        created = client.post("/api/admin/workbench/request-types", json=base_payload)
+        assert created.status_code == 201, created.text
+        created_id = created.json()["id"]
+        assert created_id != request_type_id
+        assert created.json()["match_rules"]["labels"] == ["SPDM", "부서"]
+
+        edited = client.put(
+            f"/api/admin/workbench/request-types/{created_id}",
+            json={
+                **base_payload,
+                "description": "편집된 순차 작업 시나리오",
+                "allowed_task_types": [
+                    {"id": "cad-prepare", "version": 1},
+                    {"id": "doe-generate", "version": 1},
+                ],
+                "default_workflow": {
+                    "nodes": [
+                        {
+                            "node_key": "prepare",
+                            "task_type_id": "cad-prepare",
+                            "task_type_version": 1,
+                            "depends_on": [],
+                        },
+                        {
+                            "node_key": "doe",
+                            "task_type_id": "doe-generate",
+                            "task_type_version": 1,
+                            "depends_on": ["prepare"],
+                        },
+                    ]
+                },
+                "match_rules": {"labels": ["SPDM", "#충돌 해석", "spdm"]},
+            },
+        )
+        assert edited.status_code == 201, edited.text
+        assert edited.json()["version"] == 2
+        assert edited.json()["description"] == "편집된 순차 작업 시나리오"
+        assert edited.json()["match_rules"]["labels"] == ["SPDM", "충돌-해석"]
+        assert len(edited.json()["default_workflow"]["nodes"]) == 2
+
+        invalid_labels = client.post(
+            "/api/admin/workbench/request-types",
+            json={**base_payload, "match_rules": {"labels": []}},
+        )
+        assert invalid_labels.status_code == 422
+
+        deleted = client.delete(f"/api/admin/workbench/request-types/{created_id}")
+        assert deleted.status_code == 200, deleted.text
+        assert deleted.json() == {"id": created_id, "status": "INACTIVE"}
+        assert all(item["id"] != created_id for item in client.get("/api/workbench/request-types").json())
+
+        history = [
+            item
+            for item in client.get("/api/workbench/request-types", params={"all_versions": True}).json()
+            if item["id"] == created_id
+        ]
+        assert [item["version"] for item in history] == [2, 1]
+        assert all(not item["is_active"] for item in history)
+
 
 def test_request_type_is_recommended_from_request_info_then_fixed_to_an_immutable_version():
     request_type_payload = {
-        "id": "drop-analysis-rule",
         "display_name": "DROP 해석 규칙 유형",
         "description": "의뢰의 해석 유형으로 추천하는 조합",
         "allowed_task_types": [{"id": "cad-prepare", "version": 1}],
@@ -246,7 +321,11 @@ def test_request_type_is_recommended_from_request_info_then_fixed_to_an_immutabl
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     with connect() as conn:
         conn.execute(
-            "INSERT INTO analysis_requests VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            """
+            INSERT INTO analysis_requests
+                (id, project_id, title, status, owner, requested_at, due_at, overall_note)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
             [request_id, "project-tv-001", "규칙 추천 검증 의뢰", "READY", "규칙 담당자", now, now + timedelta(days=7), "legacy request"],
         )
         conn.execute(
@@ -257,16 +336,17 @@ def test_request_type_is_recommended_from_request_info_then_fixed_to_an_immutabl
         with TestClient(app) as client:
             created = client.post("/api/admin/workbench/request-types", json=request_type_payload)
             assert created.status_code == 201, created.text
+            request_type_id = created.json()["id"]
 
             recommended = client.get(f"/api/workbench/requests/{request_id}/request-type")
             assert recommended.status_code == 200, recommended.text
             assert recommended.json()["resolution"] == "RECOMMENDED"
             assert recommended.json()["source"] == "RULE"
-            assert recommended.json()["request_type"]["id"] == "drop-analysis-rule"
+            assert recommended.json()["request_type"]["id"] == request_type_id
 
             assigned = client.put(
                 f"/api/workbench/requests/{request_id}/request-type",
-                json={"request_type_id": "drop-analysis-rule", "request_type_version": 1},
+                json={"request_type_id": request_type_id, "request_type_version": 1},
             )
             assert assigned.status_code == 200, assigned.text
             assert assigned.json()["resolution"] == "ASSIGNED"
@@ -280,7 +360,7 @@ def test_request_type_is_recommended_from_request_info_then_fixed_to_an_immutabl
                 if item["request_id"] == request_id
             )
             assert workflow["request_type_assignment"] == portfolio["request_type_assignment"]
-            assert workflow["request_type_assignment"]["request_type_id"] == "drop-analysis-rule"
+            assert workflow["request_type_assignment"]["request_type_id"] == request_type_id
             assert workflow["request_type_assignment"]["request_type_version"] == 1
     finally:
         with connect() as conn:

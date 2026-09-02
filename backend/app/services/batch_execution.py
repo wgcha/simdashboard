@@ -71,10 +71,13 @@ def validate_profile_definition(profile: dict[str, Any]) -> None:
 def preflight_batch_profile(profile: dict[str, Any], work_item: dict[str, Any]) -> BatchPreflightResult:
     validate_profile_definition(profile)
     task_type_id = str(work_item.get("task_type_id") or "")
-    if task_type_id not in profile.get("task_type_ids", []):
+    task_type_version = int(work_item.get("task_type_version") or 1)
+    profile_task_type_id = str(profile.get("task_type_id") or "")
+    profile_task_type_version = int(profile.get("task_type_version") or 1)
+    if (profile_task_type_id, profile_task_type_version) != (task_type_id, task_type_version):
         raise BatchPreflightError(
             "BATCH_PROFILE_TASK_MISMATCH",
-            f"{profile['name']} 프로필은 {task_type_id} 작업 유형과 호환되지 않습니다.",
+            f"{profile['name']} 프로필은 {task_type_id} v{task_type_version} 작업 유형과 호환되지 않습니다.",
         )
     values = {
         "input": "<input>",

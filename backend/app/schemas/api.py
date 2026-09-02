@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 WidgetType = Literal[
@@ -128,7 +128,7 @@ class AnalysisPageSummary(BaseModel):
 class DashboardClone(BaseModel):
     name: str = Field(min_length=2, max_length=120)
     description: str = Field(default="", max_length=500)
-    created_by: str = Field(default="대시보드 사용자", min_length=2, max_length=60)
+    created_by: str | None = Field(default=None, min_length=2, max_length=60)
 
 
 class NaturalLanguageCommand(BaseModel):
@@ -137,10 +137,11 @@ class NaturalLanguageCommand(BaseModel):
 
 class WorkspaceLayoutUpdate(BaseModel):
     definition: dict[str, Any]
-    updated_by: str = Field(default="대시보드 사용자", min_length=2, max_length=60)
+    updated_by: str | None = Field(default=None, min_length=2, max_length=60)
 
 
 class WorkspaceLayoutResponse(BaseModel):
+    project_id: str
     layout_kind: Literal["portfolio", "workflow"]
     version: int
     definition: dict[str, Any]
@@ -149,6 +150,7 @@ class WorkspaceLayoutResponse(BaseModel):
 
 
 class WorkspaceLayoutVersionResponse(BaseModel):
+    project_id: str
     layout_kind: Literal["portfolio", "workflow"]
     version: int
     created_by: str
@@ -159,6 +161,9 @@ class WorkspaceLayoutVersionResponse(BaseModel):
 class WorkflowStepUpdate(BaseModel):
     name: str = Field(min_length=2, max_length=80)
     status: Literal["READY", "COMPLETED", "IN_PROGRESS", "WAITING", "BLOCKED", "FAILED"] | None = None
+    owner_user_id: str | None = Field(default=None, min_length=3, max_length=120)
+    # Deprecated display snapshot input. The server ignores it and resolves
+    # owner from owner_user_id.
     owner: str | None = Field(default=None, min_length=1, max_length=80)
     progress: int | None = Field(default=None, ge=0, le=100)
     is_optional: bool | None = None
@@ -169,7 +174,8 @@ class WorkflowStepDraft(BaseModel):
     id: str | None = None
     name: str = Field(min_length=2, max_length=80)
     status: Literal["READY", "COMPLETED", "IN_PROGRESS", "WAITING", "BLOCKED", "FAILED"]
-    owner: str = Field(min_length=1, max_length=80)
+    owner_user_id: str = Field(min_length=3, max_length=120)
+    owner: str | None = Field(default=None, min_length=1, max_length=80)
     progress: int = Field(ge=0, le=100)
     is_optional: bool = False
     note: str = Field(default="", max_length=500)
@@ -181,7 +187,7 @@ class WorkflowStepsReplace(BaseModel):
 
 class QualityThresholdUpdate(BaseModel):
     threshold_double: float = Field(gt=0, le=1000)
-    updated_by: str = Field(default="관리자", min_length=2, max_length=40)
+    updated_by: str | None = Field(default=None, min_length=2, max_length=40)
 
 
 class ProjectCreate(BaseModel):
@@ -194,15 +200,26 @@ class ProjectCreate(BaseModel):
 
 class AnalysisRequestCreate(BaseModel):
     title: str = Field(min_length=2, max_length=160)
-    owner: str = Field(min_length=2, max_length=60)
+    owner_user_id: str = Field(min_length=3, max_length=120)
+    # Compatibility-only input; the canonical snapshot comes from users.
+    owner: str | None = Field(default=None, min_length=2, max_length=60)
     due_in_days: int = Field(default=7, ge=1, le=365)
     overall_note: str = Field(default="", max_length=500)
     source_type: Literal["EXTERNAL_SYSTEM", "DEPARTMENT_HEAD"]
     source_reference: str = Field(min_length=2, max_length=160)
-    requested_by: str = Field(min_length=2, max_length=80)
-    request_type_id: Literal["design-reliability-validation", "design-doe-exploration"] = "design-reliability-validation"
+    requested_by: str | None = Field(default=None, min_length=2, max_length=80)
+    request_type_id: str = Field(
+        default="design-reliability-validation",
+        min_length=3,
+        max_length=80,
+        pattern=r"^[a-z][a-z0-9_-]*$",
+    )
     request_type_version: int = Field(default=1, ge=1)
     assigned_by: str | None = Field(default=None, min_length=2, max_length=80)
+
+
+class AssigneeUpdate(BaseModel):
+    owner_user_id: str = Field(min_length=3, max_length=120)
 
 
 class LoadCaseCreate(BaseModel):
@@ -230,6 +247,7 @@ class DropVideoItemResponse(BaseModel):
     scene_id: str
     scene_name: str
     video_url: str
+    download_url: str | None = None
     thumbnail_url: str | None
     duration: float | None = Field(default=None, ge=0)
     file_size: int = Field(ge=0)
@@ -277,7 +295,7 @@ class DropVideoEvaluationSummary(BaseModel):
 
 class DropVideoPageResponse(BaseModel):
     load_case: DropVideoLoadCaseResponse
-    source: Literal["EXAMPLE_ADAPTER"]
+    source: Literal["DATABASE", "EXAMPLE_ADAPTER"]
     demo_only: bool
     evaluation_source: Literal["SYNTHETIC_DEMO"]
     contract_version: Literal[1]
@@ -289,8 +307,68 @@ class DropVideoPageResponse(BaseModel):
 class ResultImportPayload(BaseModel):
     filename: str = Field(min_length=5, max_length=240)
     content: str = Field(min_length=1, max_length=5_000_000)
-    author: str = Field(default="해석 담당자", min_length=2, max_length=60)
+    author: str | None = Field(default=None, min_length=2, max_length=60)
     validate_only: bool = False
+    source_run_id: str | None = None
+    conflict_policy: Literal["SKIP", "REJECT", "REPLACE"] = "SKIP"
+
+    @field_validator("source_run_id", mode="before")
+    @classmethod
+    def normalize_source_run_id(cls, value: object) -> object:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("source_run_id는 문자열이어야 합니다.")
+        normalized = value.strip()
+        if not normalized or len(normalized) > 120 or not normalized.isprintable():
+            raise ValueError("source_run_id 형식이 올바르지 않습니다.")
+        return normalized
+
+
+class ResultImportResponse(BaseModel):
+    """Stable response contract for manual result imports."""
+
+    status: Literal["VALID", "IMPORTED", "SKIPPED", "REJECTED"]
+    run_id: str | None = None
+    run_no: int | None = None
+    filename: str
+    # ``summary`` is additive for clients that prefer a grouped shape.  The
+    # flattened counters/source_format below remain for existing consumers.
+    summary: dict[str, Any] | None = None
+    scalar_count: int | None = None
+    node_count: int | None = None
+    element_count: int | None = None
+    frame_count: int | None = None
+    final_time: float | None = None
+    time_series_count: int | None = None
+    open_cell_count: int | None = None
+    chassis_rear_count: int | None = None
+    fail_count: int | None = None
+    overall_verdict: Literal["PASS", "FAIL"] | None = None
+    source_format: str | None = None
+    results: list[Any] = Field(default_factory=list)
+    warnings: list[Any] = Field(default_factory=list)
+    operation: Literal["CREATED", "NOOP", "REPLACED", "REJECTED"] | None = None
+    reason_code: str | None = None
+    existing_run_id: str | None = None
+    replaced_run_id: str | None = None
+    source_revision: int | None = None
+
+
+class TypedResultExampleResponse(BaseModel):
+    """Named response contract for the checked-in typed example importer."""
+
+    status: Literal["IMPORTED", "SKIPPED", "REJECTED"]
+    job_id: str
+    run_id: str | None = None
+    run_no: int | None = None
+    schema_id: str
+    summary: dict[str, Any]
+    operation: Literal["CREATED", "NOOP", "REPLACED", "REJECTED"] | None = None
+    reason_code: str | None = None
+    existing_run_id: str | None = None
+    replaced_run_id: str | None = None
+    source_revision: int | None = None
 
 
 class VariableCreate(BaseModel):
@@ -304,7 +382,7 @@ class VariableCreate(BaseModel):
     allowed_widgets: list[str] = Field(default_factory=list, max_length=12)
     allowed_aggregations: list[str] = Field(default_factory=list, max_length=8)
     result_group: Literal["OPEN_CELL", "CHASSIS_REAR", "CUSTOM"] = "CUSTOM"
-    updated_by: str = Field(default="관리자", min_length=2, max_length=60)
+    updated_by: str | None = Field(default=None, min_length=2, max_length=60)
 
 
 class VariableUpdate(BaseModel):
@@ -316,28 +394,28 @@ class VariableUpdate(BaseModel):
     allowed_widgets: list[str] = Field(default_factory=list, max_length=12)
     allowed_aggregations: list[str] = Field(default_factory=list, max_length=8)
     result_group: Literal["OPEN_CELL", "CHASSIS_REAR", "CUSTOM"] = "CUSTOM"
-    updated_by: str = Field(default="관리자", min_length=2, max_length=60)
+    updated_by: str | None = Field(default=None, min_length=2, max_length=60)
 
 
 class ImportSchemaPayload(BaseModel):
     name: str = Field(min_length=2, max_length=120)
     description: str = Field(default="", max_length=500)
     definition: dict[str, Any]
-    updated_by: str = Field(default="관리자", min_length=2, max_length=60)
+    updated_by: str | None = Field(default=None, min_length=2, max_length=60)
 
 
 class ReportLayoutPayload(BaseModel):
     name: str = Field(min_length=2, max_length=120)
     description: str = Field(default="", max_length=500)
     definition: dict[str, Any]
-    updated_by: str = Field(default="보고서 편집자", min_length=2, max_length=60)
+    updated_by: str | None = Field(default=None, min_length=2, max_length=60)
 
 
 class ReportTemplateUploadPayload(BaseModel):
     name: str = Field(min_length=2, max_length=120)
     filename: str = Field(min_length=6, max_length=240)
     content_base64: str = Field(min_length=8, max_length=36_000_000)
-    updated_by: str = Field(default="보고서 편집자", min_length=2, max_length=60)
+    updated_by: str | None = Field(default=None, min_length=2, max_length=60)
 
 
 class ReportTemplateRenderPayload(BaseModel):
@@ -353,7 +431,7 @@ class ReviewItemCreate(BaseModel):
     entity_type: Literal["NODE", "ELEMENT"] | None = None
     entity_id: str | None = Field(default=None, max_length=120)
     review_status: Literal["OPEN", "IN_REVIEW", "RESOLVED"] = "OPEN"
-    created_by: str = Field(default="검토자", min_length=2, max_length=60)
+    created_by: str | None = Field(default=None, min_length=2, max_length=60)
 
 
 class ReviewItemUpdate(BaseModel):
@@ -364,8 +442,3 @@ class ReviewItemUpdate(BaseModel):
 class LoginPayload(BaseModel):
     username: str = Field(min_length=2, max_length=80)
     password: str = Field(min_length=1, max_length=256)
-
-
-class UserAccessUpdate(BaseModel):
-    role: Literal["viewer", "editor", "admin"]
-    is_active: bool

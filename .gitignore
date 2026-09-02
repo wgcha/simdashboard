@@ -1,9 +1,14 @@
 .venv/
 .venv-runtime/
+.venv-wsl/
 .pnpm-store/
+/.codex/
+/node_modules/
+/pnpm-lock.yaml
 __pycache__/
 *.py[cod]
 .pytest_cache/
+backend/.pytest-tmp/
 backend/data/*.duckdb
 backend/data/*.wal
 backend/data/migration-*.json
@@ -14,6 +19,7 @@ frontend/dist/
 frontend/playwright-report/
 frontend/test-results/
 frontend/*.tsbuildinfo
+/dist/
 .env
 .postgres-owner.env
 .postgres-owner.env.tmp
@@ -24,5 +30,7 @@ transfer-bundles/
 backend/.transfer-assets-*/
 *.log
 !backend/assets/demo-execution.log
+!backend/public_assets/demo-execution.log
 .server-pids.json
 .server-pids.env
+*:Zone.Identifier

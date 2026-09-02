@@ -36,6 +36,13 @@ from scripts.postgres_replacement import (
     validate_dedicated_roles,
     write_recovery_marker,
 )
+from app.services.media_integrity import (  # noqa: E402
+    MEDIA_INVENTORY_FORMAT,
+    MEDIA_INVENTORY_FORMAT_VERSION,
+    MediaIntegrityError,
+    media_inventory,
+    require_media_integrity,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -48,7 +55,7 @@ PID_FILE = ROOT / ".server-pids.json"
 DATABASE = "simulation_dashboard"
 OWNER_ROLE = "simdashboard_owner"
 APP_ROLE = "simdashboard_app"
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 MAX_ASSETS_BYTES = 20 * 1024 * 1024 * 1024
 MAX_ASSET_FILES = 100_000
 
@@ -132,32 +139,76 @@ def expected_alembic_head() -> str:
     return head
 
 
-def database_snapshot(database_url: str) -> dict[str, Any]:
-    url = database_url.replace("postgresql+psycopg://", "postgresql://", 1)
-    with psycopg.connect(url) as connection:
-        revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()[0]
-        tables = [row[0] for row in connection.execute(
-            "SELECT table_name FROM information_schema.tables "
-            "WHERE table_schema='public' AND table_type='BASE TABLE' ORDER BY table_name"
-        ).fetchall()]
-        counts = {
-            table: connection.execute(sql.SQL("SELECT count(*) FROM {}").format(sql.Identifier(table))).fetchone()[0]
-            for table in tables
-        }
-        managed_paths: set[str] = set()
-        if "media_assets" in tables:
-            managed_paths.update(row[0] for row in connection.execute("SELECT file_path FROM media_assets").fetchall() if row[0])
-        if "report_template_assets" in tables:
-            managed_paths.update(row[0] for row in connection.execute(
-                "SELECT file_path FROM report_template_assets WHERE is_active=true"
-            ).fetchall() if row[0])
-        server_version = connection.info.server_version
+def _psycopg_url(value: str) -> str:
+    return value.replace("postgresql+psycopg://", "postgresql://", 1)
+
+
+def _normalized_asset_path(raw: object) -> str:
+    normalized = str(raw).replace("\\", "/")
+    if normalized[:7].casefold() == "assets/":
+        normalized = normalized[7:]
+    return safe_relative_path(normalized).as_posix()
+
+
+def _database_snapshot_from_connection(connection: Any) -> dict[str, Any]:
+    revisions = connection.execute("SELECT version_num FROM alembic_version ORDER BY version_num").fetchall()
+    if len(revisions) != 1 or not revisions[0][0]:
+        raise RuntimeError("The source database Alembic version must contain exactly one revision.")
+    revision = revisions[0][0]
+    tables = [row[0] for row in connection.execute(
+        "SELECT table_name FROM information_schema.tables "
+        "WHERE table_schema='public' AND table_type='BASE TABLE' ORDER BY table_name"
+    ).fetchall()]
+    counts = {
+        table: connection.execute(sql.SQL("SELECT count(*) FROM {}").format(sql.Identifier(table))).fetchone()[0]
+        for table in tables
+    }
+    managed_paths: set[str] = set()
+    bound_media_paths: set[str] = set()
+    if "media_assets" in tables:
+        for file_path, blob_id in connection.execute(
+            "SELECT file_path, blob_id FROM media_assets WHERE file_path IS NOT NULL"
+        ).fetchall():
+            normalized = _normalized_asset_path(file_path)
+            if blob_id is None:
+                managed_paths.add(normalized)
+            else:
+                bound_media_paths.add(normalized)
+    if "report_template_assets" in tables:
+        managed_paths.update(
+            _normalized_asset_path(row[0])
+            for row in connection.execute(
+                "SELECT file_path FROM report_template_assets WHERE is_active=true AND file_path IS NOT NULL"
+            ).fetchall()
+        )
+    server_version = connection.info.server_version
     return {
         "alembic_revision": revision,
         "server_version": server_version,
         "table_counts": counts,
         "managed_asset_paths": sorted(managed_paths),
+        "bound_media_asset_paths": sorted(bound_media_paths),
     }
+
+
+def database_snapshot(database_url: str) -> dict[str, Any]:
+    with psycopg.connect(_psycopg_url(database_url)) as connection:
+        return _database_snapshot_from_connection(connection)
+
+
+def _snapshot_export_state(database_url: str) -> tuple[Any, str, dict[str, Any], dict[str, object]]:
+    """Keep a repeatable-read snapshot open for both inventory and pg_dump."""
+    connection = psycopg.connect(_psycopg_url(database_url))
+    try:
+        connection.execute("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        snapshot = str(connection.execute("SELECT pg_export_snapshot()").fetchone()[0])
+        state = _database_snapshot_from_connection(connection)
+        inventory = media_inventory(connection)
+        require_media_integrity(inventory)
+        return connection, snapshot, state, inventory
+    except BaseException:
+        connection.close()
+        raise
 
 
 def collect_assets() -> list[dict[str, Any]]:
@@ -179,12 +230,27 @@ def validate_managed_asset_paths(paths: list[str], assets: list[dict[str, Any]])
     available = {item["path"].casefold() for item in assets}
     missing: list[str] = []
     for raw in paths:
-        normalized = raw.replace("\\", "/").removeprefix("assets/")
-        safe_relative_path(normalized)
+        normalized = _normalized_asset_path(raw)
         if normalized.casefold() not in available:
             missing.append(normalized)
     if missing:
         raise RuntimeError("Managed asset files are missing: " + ", ".join(missing[:10]))
+
+
+def transfer_assets(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    """Exclude only filesystem copies made redundant by a bound DB blob.
+
+    A path that has any legacy/unbound reference remains in the archive, even
+    if another row with the same path is blob-backed.  Unrelated static and
+    report-template files remain untouched for backward-compatible transfer.
+    """
+    required = {str(path).casefold() for path in snapshot["managed_asset_paths"]}
+    bound_only = {
+        str(path).casefold()
+        for path in snapshot["bound_media_asset_paths"]
+        if str(path).casefold() not in required
+    }
+    return [item for item in collect_assets() if str(item["path"]).casefold() not in bound_only]
 
 
 def create_assets_archive(destination: Path, assets: list[dict[str, Any]]) -> None:
@@ -200,31 +266,41 @@ def export_bundle(output_dir: Path) -> Path:
     if not database_url:
         raise RuntimeError("DATABASE_URL is missing from .env.")
     target = parse_target(database_url)
-    before = database_snapshot(database_url)
-    if before["alembic_revision"] != expected_alembic_head():
-        raise RuntimeError("The source database is not at the current Alembic revision.")
-    assets = collect_assets()
-    validate_managed_asset_paths(before.pop("managed_asset_paths"), assets)
+    snapshot_connection, exported_snapshot, before, inventory = _snapshot_export_state(database_url)
+    try:
+        if before["alembic_revision"] != expected_alembic_head():
+            raise RuntimeError("The source database is not at the current Alembic revision.")
+        assets = transfer_assets(before)
+        validate_managed_asset_paths(before["managed_asset_paths"], assets)
 
-    output_dir = output_dir.expanduser().resolve()
-    output_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    final = output_dir / f"analysis-canvas-transfer-{timestamp}"
-    stage = output_dir / f".{final.name}.{uuid4().hex}.partial"
-    stage.mkdir(parents=True)
+        output_dir = output_dir.expanduser().resolve()
+        output_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        final = output_dir / f"analysis-canvas-transfer-{timestamp}"
+        stage = output_dir / f".{final.name}.{uuid4().hex}.partial"
+        stage.mkdir(parents=True)
+    except BaseException:
+        snapshot_connection.close()
+        raise
     try:
         dump = stage / "database.dump"
         command = [
             find_pg_tool("pg_dump"), *connection_args(target), "--format=custom", "--compress=6",
-            "--no-owner", "--no-privileges", "--file", str(dump),
+            "--no-owner", "--no-privileges", f"--snapshot={exported_snapshot}", "--file", str(dump),
         ]
-        subprocess.run(command, env=command_env(target), check=True)
+        try:
+            subprocess.run(command, env=command_env(target), check=True)
+        finally:
+            snapshot_connection.close()
         subprocess.run([find_pg_tool("pg_restore"), "--list", str(dump)], check=True, stdout=subprocess.DEVNULL)
         archive = stage / "assets.zip"
         create_assets_archive(archive, assets)
         after = database_snapshot(database_url)
-        after.pop("managed_asset_paths")
-        if before != after:
+        after_inventory: dict[str, object]
+        with psycopg.connect(_psycopg_url(database_url)) as connection:
+            after_inventory = media_inventory(connection)
+        require_media_integrity(after_inventory)
+        if before != after or inventory != after_inventory:
             raise RuntimeError("The database changed during export. Keep the application stopped and retry.")
         manifest = {
             "format": "analysis-canvas-postgresql-transfer",
@@ -235,6 +311,7 @@ def export_bundle(output_dir: Path) -> Path:
             "alembic_revision": before["alembic_revision"],
             "postgres_server_version": before["server_version"],
             "table_counts": before["table_counts"],
+            "media_inventory": inventory,
             "database_dump": {"file": dump.name, "bytes": dump.stat().st_size, "sha256": sha256(dump)},
             "assets_archive": {"file": archive.name, "bytes": archive.stat().st_size, "sha256": sha256(archive)},
             "assets": assets,
@@ -257,12 +334,23 @@ def validate_bundle(bundle: Path) -> dict[str, Any]:
     if not bundle.is_dir() or not manifest_path.is_file():
         raise RuntimeError("The transfer bundle or manifest.json was not found.")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if manifest.get("format") != "analysis-canvas-postgresql-transfer" or manifest.get("format_version") != FORMAT_VERSION:
+    if manifest.get("format") != "analysis-canvas-postgresql-transfer":
         raise RuntimeError("Unsupported transfer bundle format.")
+    if manifest.get("format_version") != FORMAT_VERSION:
+        if manifest.get("format_version") == 1:
+            raise RuntimeError("Transfer bundle format version 1 is not supported; export a new version 2 bundle.")
+        raise RuntimeError("Unsupported transfer bundle format version.")
     if manifest.get("database") != DATABASE:
         raise RuntimeError("The transfer bundle database name is not supported.")
     if manifest.get("alembic_revision") != expected_alembic_head():
         raise RuntimeError("The transfer bundle and target code use different Alembic revisions.")
+    inventory = manifest.get("media_inventory")
+    if not isinstance(inventory, dict) or inventory.get("format") != MEDIA_INVENTORY_FORMAT or inventory.get("format_version") != MEDIA_INVENTORY_FORMAT_VERSION:
+        raise RuntimeError("The transfer bundle media inventory is missing or unsupported.")
+    try:
+        require_media_integrity(inventory)
+    except MediaIntegrityError as error:
+        raise RuntimeError("The transfer bundle media inventory is not strict.") from error
     try:
         bundle_id = UUID(str(manifest.get("bundle_id", "")))
     except ValueError as error:
@@ -353,6 +441,33 @@ def grant_runtime_privileges(owner_url: str) -> None:
         connection.execute(sql.SQL("GRANT USAGE ON SCHEMA public TO {}").format(sql.Identifier(APP_ROLE)))
         connection.execute(sql.SQL("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {}").format(sql.Identifier(APP_ROLE)))
         connection.execute(sql.SQL("GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO {}").format(sql.Identifier(APP_ROLE)))
+
+
+def verify_restored_media_inventory(app_url: str, expected: object) -> dict[str, object]:
+    """Require the app role, not the owner/admin, to see the exact inventory."""
+    if not isinstance(expected, dict):
+        raise RuntimeError("The transfer bundle media inventory is missing.")
+    with psycopg.connect(_psycopg_url(app_url)) as connection:
+        actual = media_inventory(connection)
+    require_media_integrity(actual)
+    if actual != expected:
+        raise RuntimeError("Restored media inventory does not match the transfer bundle. Do not start the application.")
+    return actual
+
+
+def run_database_only_verifier(app_url: str) -> None:
+    environment = os.environ.copy()
+    environment.update({
+        "ANALYSIS_DB_BACKEND": "postgresql",
+        "DATABASE_URL": app_url,
+        "SIM_DASH_APP_ROLE": APP_ROLE,
+    })
+    subprocess.run(
+        [sys.executable, str(BACKEND / "scripts" / "verify_media_database_only.py")],
+        cwd=BACKEND,
+        env=environment,
+        check=True,
+    )
 
 
 def _existing_service_passwords() -> tuple[str, str]:
@@ -511,9 +626,11 @@ def import_bundle(
     grant_runtime_privileges(owner_url)
     subprocess.run([sys.executable, str(BACKEND / "scripts" / "harden_postgres_privileges.py")], cwd=BACKEND, env=environment, check=True)
     restored = database_snapshot(app_url)
-    validate_managed_asset_paths(restored.pop("managed_asset_paths"), manifest["assets"])
+    validate_managed_asset_paths(restored["managed_asset_paths"], manifest["assets"])
     if restored["alembic_revision"] != expected_alembic_head() or restored["table_counts"] != manifest["table_counts"]:
         raise RuntimeError("Restored database verification failed. Do not start the application.")
+    verify_restored_media_inventory(app_url, manifest["media_inventory"])
+    run_database_only_verifier(app_url)
 
     from scripts.setup_local_postgres import replace_service_env, verify_app_privileges, write_owner_env
 

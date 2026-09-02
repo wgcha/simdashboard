@@ -12,7 +12,37 @@ import pytest
 
 from scripts import postgres_replacement as replacement
 from scripts import postgres_transfer as transfer
-from scripts.postgres_transfer import safe_relative_path, validate_bundle
+from scripts.postgres_transfer import _normalized_asset_path, safe_relative_path, validate_bundle
+
+
+def _strict_inventory() -> dict[str, object]:
+    return {
+        "format": "analysis-canvas-media-inventory",
+        "format_version": 1,
+        "blob_count": 0,
+        "chunk_count": 0,
+        "declared_chunk_count": 0,
+        "total_blob_bytes": 0,
+        "media_reference_count": 0,
+        "drop_video_reference_count": 0,
+        "reference_count": 0,
+        "unbound_media_asset_count": 0,
+        "missing_media_blob_count": 0,
+        "missing_drop_video_blob_count": 0,
+        "missing_reference_count": 0,
+        "orphan_blob_count": 0,
+        "orphan_chunk_count": 0,
+        "corrupt_blob_count": 0,
+        "corrupt_blob_ids": [],
+        "content_integrity_verified": True,
+        "demo_expected_count": 20,
+        "demo_contract_active": True,
+        "demo_exact": True,
+        "demo_count": 20,
+        "missing_demo_ids": [],
+        "unexpected_demo_ids": [],
+        "catalog_sha256": "a" * 64,
+    }
 
 
 class _BackupMaintenance:
@@ -69,6 +99,10 @@ def test_safe_relative_path_normalizes_windows_separators():
     assert safe_relative_path("imports\\run-1\\image.svg").as_posix() == "imports/run-1/image.svg"
 
 
+def test_normalized_asset_path_accepts_case_insensitive_assets_prefix():
+    assert _normalized_asset_path("AsSeTs\\imports\\run-1\\image.svg") == "imports/run-1/image.svg"
+
+
 def test_validate_bundle_rejects_asset_checksum_mismatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     bundle = tmp_path / "bundle"
     bundle.mkdir()
@@ -79,11 +113,12 @@ def test_validate_bundle_rejects_asset_checksum_mismatch(tmp_path: Path, monkeyp
         output.writestr("sample.svg", b"actual")
     manifest = {
         "format": "analysis-canvas-postgresql-transfer",
-        "format_version": 1,
+        "format_version": 2,
         "bundle_id": str(uuid4()),
         "database": "simulation_dashboard",
         "alembic_revision": "head",
         "table_counts": {},
+        "media_inventory": _strict_inventory(),
         "database_dump": {"file": dump.name, "bytes": dump.stat().st_size, "sha256": hashlib.sha256(b"dump").hexdigest()},
         "assets_archive": {"file": archive.name, "bytes": archive.stat().st_size, "sha256": hashlib.sha256(archive.read_bytes()).hexdigest()},
         "assets": [{"path": "sample.svg", "bytes": 6, "sha256": hashlib.sha256(b"wrong!").hexdigest()}],
@@ -99,15 +134,171 @@ def test_validate_bundle_rejects_noncanonical_bundle_id(tmp_path: Path, monkeypa
     bundle.mkdir()
     manifest = {
         "format": "analysis-canvas-postgresql-transfer",
-        "format_version": 1,
+        "format_version": 2,
         "bundle_id": "../escape",
         "database": "simulation_dashboard",
         "alembic_revision": "head",
+        "media_inventory": _strict_inventory(),
     }
     (bundle / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     monkeypatch.setattr("scripts.postgres_transfer.expected_alembic_head", lambda: "head")
     with pytest.raises(RuntimeError, match="bundle_id"):
         validate_bundle(bundle)
+
+
+def test_validate_bundle_rejects_legacy_format_before_reading_payloads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    (bundle / "manifest.json").write_text(
+        json.dumps({
+            "format": "analysis-canvas-postgresql-transfer",
+            "format_version": 1,
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("scripts.postgres_transfer.expected_alembic_head", lambda: "head")
+
+    with pytest.raises(RuntimeError, match="version 1 is not supported"):
+        validate_bundle(bundle)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda inventory: inventory.pop("catalog_sha256"),
+        lambda inventory: inventory.__setitem__("reference_count", True),
+    ],
+)
+def test_validate_bundle_rejects_incomplete_or_tampered_media_inventory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutate
+):
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    inventory = _strict_inventory()
+    mutate(inventory)
+    (bundle / "manifest.json").write_text(
+        json.dumps({
+            "format": "analysis-canvas-postgresql-transfer",
+            "format_version": 2,
+            "bundle_id": str(uuid4()),
+            "database": "simulation_dashboard",
+            "alembic_revision": "head",
+            "media_inventory": inventory,
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("scripts.postgres_transfer.expected_alembic_head", lambda: "head")
+
+    with pytest.raises(RuntimeError, match="media inventory is not strict"):
+        validate_bundle(bundle)
+
+
+def test_transfer_assets_excludes_bound_media_but_keeps_shared_legacy_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    for name in ("bound.png", "shared.png", "legacy.png", "template.svg"):
+        (assets / name).write_bytes(name.encode("ascii"))
+    monkeypatch.setattr(transfer, "ASSETS", assets)
+    snapshot = {
+        "managed_asset_paths": ["shared.png", "legacy.png", "template.svg"],
+        "bound_media_asset_paths": ["bound.png", "shared.png"],
+    }
+
+    exported = transfer.transfer_assets(snapshot)
+
+    assert [item["path"] for item in exported] == ["legacy.png", "shared.png", "template.svg"]
+
+
+class _SnapshotHolder:
+    def __init__(self) -> None:
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _AfterSnapshotConnection:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+
+def test_export_records_inventory_from_same_pg_dump_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    before = {
+        "alembic_revision": "head",
+        "server_version": 180000,
+        "table_counts": {"asset_blobs": 1},
+        "managed_asset_paths": [],
+        "bound_media_asset_paths": [],
+    }
+    inventory = _strict_inventory()
+    holder = _SnapshotHolder()
+    monkeypatch.setattr(transfer, "require_stopped", lambda: None)
+    monkeypatch.setattr(transfer, "dotenv_values", lambda _path: {"DATABASE_URL": "postgresql://app:pw@db/test"})
+    monkeypatch.setattr(transfer, "_snapshot_export_state", lambda _url: (holder, "snapshot-123", before, inventory))
+    monkeypatch.setattr(transfer, "expected_alembic_head", lambda: "head")
+    monkeypatch.setattr(transfer, "transfer_assets", lambda _snapshot: [])
+    monkeypatch.setattr(transfer, "find_pg_tool", lambda name: name)
+    monkeypatch.setattr(transfer, "database_snapshot", lambda _url: before)
+    monkeypatch.setattr(transfer.psycopg, "connect", lambda _url: _AfterSnapshotConnection())
+    monkeypatch.setattr(transfer, "media_inventory", lambda _connection: inventory)
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str], **_kwargs):
+        commands.append(command)
+        if command[0] == "pg_dump":
+            Path(command[command.index("--file") + 1]).write_bytes(b"dump")
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(transfer.subprocess, "run", fake_run)
+
+    bundle = transfer.export_bundle(tmp_path)
+
+    assert "--snapshot=snapshot-123" in commands[0]
+    assert holder.closed is True
+    assert json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))["media_inventory"] == inventory
+
+
+def test_restored_inventory_uses_app_url_and_rejects_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[str] = []
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(transfer.psycopg, "connect", lambda url: seen.append(url) or Connection())
+    monkeypatch.setattr(transfer, "media_inventory", lambda _connection: {**_strict_inventory(), "catalog_sha256": "b" * 64})
+
+    with pytest.raises(RuntimeError, match="does not match"):
+        transfer.verify_restored_media_inventory(
+            "postgresql+psycopg://simdashboard_app:pw@db/test",
+            {**_strict_inventory(), "catalog_sha256": "c" * 64},
+        )
+
+    assert seen == ["postgresql://simdashboard_app:pw@db/test"]
+
+
+def test_transfer_database_only_verifier_receives_app_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        transfer.subprocess,
+        "run",
+        lambda command, **kwargs: captured.update({"command": command, **kwargs}) or SimpleNamespace(returncode=0),
+    )
+
+    transfer.run_database_only_verifier("postgresql+psycopg://simdashboard_app:pw@db/test")
+
+    assert captured["env"]["DATABASE_URL"] == "postgresql+psycopg://simdashboard_app:pw@db/test"
+    assert captured["env"]["ANALYSIS_DB_BACKEND"] == "postgresql"
 
 
 def test_recovery_marker_blocks_mutation_but_not_validate_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

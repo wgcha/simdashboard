@@ -1,0 +1,642 @@
+# Analysis Canvas 구조 점검 및 리팩터링 로드맵 v2
+
+문서 기준일: 2026-08-13
+대상 환경: WSL2 Ubuntu 개발 → Rocky Linux 8 운영, Docker 미사용
+문서 목적: 복원 직후 기준선을 안정화하고, 현재 기능을 보존하면서 프런트엔드·백엔드 구조를 점진적으로 분리한다.
+
+## 1. 결론
+
+복원 기준선의 CRLF/Corepack/Python lock, FastAPI `TestClient`, DuckDB 직렬화 문제를 안정화했고 전체 backend 및 Playwright 회귀를 다시 녹색으로 만들었다. 이후 실제 계약이 있는 `projects`, `products`, `requests`, `results`, `reports`를 대표 vertical slice로 분리했다. canonical 데이터 계약이 없는 `materials`와 `parts`는 추측성 계층을 만들지 않고 중단 조건으로 남겼다.
+
+프런트엔드와 백엔드는 공통 도메인 언어만 맞추고 내부 구조를 기계적으로 같게 만들지 않는다. 프런트엔드는 화면·상태·API adapter 중심이고 백엔드는 HTTP·use case·domain·persistence 중심이므로 내부 층은 달라야 한다. 현재 패키지는 안전하게 검증 가능한 경계를 마감했으며, `App.tsx` 400줄 이하와 모든 backend endpoint/DTO의 완전 이전은 후속 부채로 명시한다.
+
+MCP, Embedding, Graph DB는 이번 리팩터링에서 구현하지 않는다. 이후 다음 데이터 흐름을 안전하게 연결할 수 있도록 백엔드 application service와 공용 식별자·권한·provenance 경계만 준비한다.
+
+### 구현 상태 — 2026-09-01
+
+- Phase 0~1: runtime lock, PostgreSQL app/owner role preflight, test 계층·아키텍처/OpenAPI CI guard를 구현했다. DuckDB는 local development compatibility adapter로만 유지한다.
+- Phase 2: `projects`, `products`, `results`, `reports` read, `requests` assignee 변경, workbench result-layout snapshot GET/materialize POST와 project workspace layout의 representative vertical slice를 HTTP → application → domain policy/port → SQL adapter로 옮겼다. result-layout은 기존 request scope → 권한 → load-case 소유권 → snapshot/binding 또는 transaction materialization 순서와 legacy compatibility를 유지한다. Materials/Parts는 canonical table/API contract가 없어 보류한다.
+- Phase 3: shell/sidebar/topbar, route registry, StrictMode-safe bootstrap machine, versioned UI preferences와 data/schema/variables/automation/workflow/results/report editor의 lazy feature boundary를 구현했다. 비기본 access/workbench route는 hover·focus preload가 있는 lazy module로 분리했고 report export session은 전용 controller/dialog가 소유한다. `App.tsx`는 2,366→1,076줄, main JS는 약 961→714 KB로 감소했다. 목표 400줄 이하와 남은 dashboard/bootstrap controller의 feature state 소유권 이동은 후속이다.
+- Phase 4: generated source를 `shared/api/generated`로 단일화하고 인증·401/403·오류 처리를 중앙 client가 소유한다. `api.ts`와 workbench client의 raw `/api/` 문자열은 0으로 잠갔고, caller 지정 generic cast를 금지해 named response adapter만 사용하도록 architecture gate를 추가했다. Report layout 6개 success response는 concrete named schema로 보강했다. 다만 JSON success response 87개는 아직 anonymous schema이므로, 해당 response model 보강 전 generated DTO 단일 계약이 완전하다고 간주하지 않는다.
+- Phase 5: PostgreSQL startup은 Alembic table preflight만 수행하도록 했고, 현재 fixture seed는 명시 command `seed_database.py --mode reference`로 분리했다. `reference`와 `demo`는 아직 동일 fixture alias이므로 운영 reference data 분리는 후속 제품 결정이다. DuckDB historic DDL 전체 이동은 하지 않고 development bootstrap adapter entry만 만들었다.
+- Phase 6: vendor-free report/knowledge/MCP protocol ADR을 추가했다. 실제 MCP, graph, embedding, worker는 구현하지 않았다.
+
+### 최신 vertical slice 보강 — 2026-09-01
+
+- Report layout 목록·생성·수정·버전 목록·버전 상세·비활성화 6개
+  API를 reports `HTTP → application → domain port → SQL adapter`로 이동했다.
+  모든 `ACTIVE` 사용자의 read와 fresh `SYSTEM_CATALOG_MANAGE` mutation 경계,
+  route·operationId·OpenAPI 계약을 그대로 유지했다.
+- Update는 active state를 `BEGIN` 전에 읽고 기존처럼 추가 PostgreSQL lock/CAS 없이
+  실행한다. Create/update의 live row·version snapshot·audit는 동일 transaction의
+  atomic rollback 경계를 가진다.
+- 27개 한국어 validation message를 framework-neutral layout policy로 옮겼고 legacy 대비 20,001개
+  differential case에서 불일치 0개를 확인했다. Report focused는 **56 passed**,
+  expanded focused는 **66 passed**이며 full backend는 **979 passed, 10 skipped in 717.37s
+  (0:11:57), exit 0**이다. `main.py` direct `execute` ceiling은 **189 → 174**다.
+- PPTX template 목록·업로드·render·비활성화 4개 API도 독립
+  `HTTP → application → domain port → SQL/filesystem/document adapter` slice로 이동했다.
+  DB 연결·BEGIN·audit·commit 실패 시 업로드 파일 보상, exclusive 파일 생성,
+  관리형 direct-child 경로와 child symlink 차단, delete quarantine·rollback을 적용했다.
+  ZIP symlink·경로 이탈·외부 relationship·잘못된 XML·0 크기 slide도 422로 닫는다.
+- 기본 저장 위치는 기존 Rocky 계약인 `backend/assets/report-templates`를 유지하고
+  storage root를 테스트 주입 가능하게 했다. 관련 focused는 **19 passed**, 최종 full
+  backend는 **996 passed, 10 skipped in 686.52s (0:11:26), exit 0**이다.
+  `main.py`는 **2,182줄**, direct `execute` 실제값과 ceiling은 **148**이다.
+- Variable catalog 목록·생성/재활성화·수정·soft delete 4개 API도 독립
+  `HTTP → application → domain policy/port → SQL adapter` slice로 이동했다. Mutation은
+  provider가 연 같은 연결에서 resource 권한을 먼저 확인하고, GET의 기존 공개 조회와
+  load-case 404를 유지한다. Result ingestion은 6줄 compatibility facade를 계속 사용한다.
+- Variable focused는 **14 passed**, result-ingestion 호환 회귀는 **23 passed**이며 최종
+  full backend는 **1009 passed, 10 skipped in 702.85s (0:11:42), exit 0**이다.
+  `main.py`는 **2,122줄**, direct `execute` 실제값과 ceiling은 **147**이다.
+- Project workspace layout은 canonical 3개와 deprecated alias 2개, 총 5 route를
+  `HTTP → application → domain policy/port → SQL adapter`로 분리했다. Read는 provider가
+  연 같은 connection에서 `PROJECT_DATA_VIEW`, write는 `PROJECT_LAYOUT_EDIT`를 확인한다.
+  Write는 `BEGIN → project → auth → live update → version append → audit → COMMIT` 순서이며
+  실패 시 rollback한다. principal actor, 기존 validation/404/422/alias/operationId와 live row가
+  없는 history 조회의 기존 계약을 유지했다.
+- `import-schemas`의 GET/POST/PUT/DELETE 4 route를 `HTTP → application → domain
+  policy/port → SQL adapter`로 분리했다. 기존 anonymous OpenAPI response와 path·route
+  order·operationId를 유지했고, GET의 explicit permission 없음 및 mappings validation이
+  provider open보다 먼저 일어나는 계약도 보존했다.
+- Create/update는 같은 connection에서 `SYSTEM_CATALOG_MANAGE`를 확인한 뒤 live row·version·audit을
+  하나의 transaction으로 기록하고 실패 시 rollback한다. principal actor, embedded
+  `schema_id`, version semantics를 그대로 유지한다. DELETE는 legacy처럼 별도 permission
+  connection, non-transactional usage check, 명시적 domain delete audit 없음 상태를 유지한다.
+- Result review bookmark+annotation은 `GET/POST /api/analysis-runs/{run_id}/review-items`와
+  `PATCH /api/review-items/{annotation_id}` 3 route를 `HTTP → application → domain policy/port →
+  SQL adapter`로 분리했다. review와 trust는 neutral persistence `result_keys` helper를 공유해
+  동일한 결과 key SQL/JSON 규칙을 사용한다. GET은 기존 explicit `PROJECT_DATA_VIEW` 부재와
+  inner-join/`updated_at DESC` 조회 계약을 보존한다. Create는 같은 connection에서 run 존재 확인 전,
+  update는 current annotation 조회 전 `RESULT_REVIEW` authorization을 확인하고 bookmark+annotation → audit을 하나의 transaction으로
+  수행하고, authorization/audit HTTP callback 누락은 fail-closed한다.
+- Analysis-insights는 `GET /api/load-cases/{load_case_id}/run-comparison`과
+  `GET /api/analysis-runs/{run_id}/trust`를 `HTTP → application → domain errors/port/policies → SQL
+  adapter`로 분리했다. 두 GET는 legacy 그대로 explicit permission·audit·transaction이 없으며,
+  comparison classification/series merge와 trust check/overall semantics를 유지한다. Trust는 neutral
+  `result_keys` helper를 같은 open connection에서 사용한다.
+- Load-case overview는 `GET /api/load-cases/{load_case_id}/overview`를 `HTTP → application → domain
+  policy+errors+port → SQL adapter`로 분리했다. Application은 authorization → 기존 product query/provider →
+  overview provider의 A/B/C 세 connection 순서를 소유하고, HTTP가 asset/download URL만 매핑해 domain은
+  transport-neutral이다. 9개 SQL, selected/latest/no-run, 404, JSON/template, threshold/verdict 투영을
+  legacy와 동일하게 유지한다.
+- Quality thresholds는 `GET /api/projects/{project_id}/quality-thresholds`, canonical
+  `PUT /api/projects/{project_id}/quality-thresholds/{criterion_key}`, deprecated alias
+  `PUT /api/quality-thresholds/{criterion_key}`를 `HTTP → application → domain → persistence`로 분리했다.
+  GET은 기존 explicit project permission 없는 company-wide `ACTIVE` read를 그대로 두고, PUT은 lookup 404 또는
+  alias multi-project 409 → same-connection `PROJECT_THRESHOLD_MANAGE` → principal/시간 → BEGIN → threshold
+  update·criterion-specific scalar recalc·audit → COMMIT → post-commit fetch 순서를 보존한다. generic OpenAPI와
+  deprecated alias도 유지한다.
+- Focused **22 passed**, architecture·OpenAPI·compile gate와 full backend **1118 passed, 10 skipped**를
+  확인했다. 직접 측정한 `main.py`는 **1,322줄**, direct `execute` actual/ceiling은 **71**이다. GET의 explicit
+  project permission 부재와 alias global semantics, row lock/CAS, post-commit fetch rollback seam은 보존
+  기술부채다. provider construction purity, dict mutation/storage normalization, unordered media/template,
+  company-wide read와 single threshold semantics도 별도다. 로컬 완료 범위는 unit·DuckDB·OpenAPI·architecture·full
+  검증까지이고, PostgreSQL 18 app-role 권한·audit INSERT, correlated update parity, OIDC active-nonmember/
+  cross-project 정책, 동시 update locking/CAS, 현실 데이터 EXPLAIN/index/lock latency는 office-only release
+  gate다. 다음 우선순위는 **재감사 후 확정**한다.
+- Workflow queries는 `GET /api/requests/{request_id}/workflow`와 `GET /api/workflows`를
+  `HTTP → application → domain port → persistence`로 분리해 `main.py`를 router composition-only로 남겼다.
+  Detail은 analysis request 404를 monitoring 전에 판정하고, detail/list는 같은 connection의 monitoring을
+  사용한다. List의 exact join·`min`/`COALESCE`·group·`requested_at DESC` SQL/default, status overwrite와
+  10-field projection을 보존했으며 두 GET에는 기존 explicit permission·audit·transaction이 없다.
+- Focused **19 passed**, architecture·OpenAPI·compile gate와 full backend **1127 passed, 10 skipped**를
+  확인했다. 직접 `wc`로 측정한 `main.py`는 **1,263줄**, direct `execute` actual/ceiling은 **69**다. 이 slice는
+  개인 노트북 검증으로 완결되며 별도 PostgreSQL 필수 검증은 추가하지 않고 기존 office-only release gate와 다음
+  우선순위는 후속 slice에서 재감사한다.
+- Request load cases는 `GET /api/requests/{request_id}/load-cases`를
+  `HTTP → application → domain → persistence`로 분리했다. exact `SELECT * FROM load_cases WHERE request_id = ?
+  ORDER BY created_at`(ASC), 같은 connection, missing request `200 []`, `parameters_json` pop 뒤 JSON 또는
+  malformed raw 문자열의 `parameters` 투영을 보존했으며 permission·audit·transaction·별도 error mapping을
+  추가하지 않았다.
+- Focused **11 passed**, workflow/request contract pair **15 passed**, architecture·OpenAPI·compile gate와 final
+  full backend **1133 passed, 10 skipped**를 확인했다. 직접 `wc`로 측정한 `main.py`는 **1,251줄**, direct
+  `execute` actual/ceiling은 **68**이다. 과거 workflow/request 테스트는 monotonic ceiling과 baseline equality를
+  검증하도록 보강했다. 이 slice는 개인 노트북 검증으로 완결되며 별도 PostgreSQL 필수 검증은 없고 기존 office-only
+  release gate를 유지했으며, 이후 feature-examples 재감사를 수행했다.
+- Feature examples는 `GET /api/feature-examples`를 `HTTP → application → domain catalog+policy → persistence`로
+  동작 변경 없이 분리했다. 요청마다 새 dict/list로 정확한 12개 item의 순서와 optional field를 만들고 모든 item에
+  `data_profile`을 붙인다. load case가 없는 4개는 zero profile이며, 나머지 8개는 같은 connection에서 기존
+  `LEFT JOIN` aggregate를 항목별로 호출한다. duplicate multitype도 두 번 호출하고, 없는 load case ID는 aggregate
+  zero를 반환한다. permission·audit·transaction·별도 error mapping은 추가하지 않았다.
+- AST로 12-item catalog의 기존 literal과 정확히 같음을 확인했고, focused **9 passed**, architecture·OpenAPI·compile
+  gate와 full backend **1140 passed, 10 skipped**를 확인했다. 직접 `wc`로 측정한 `main.py`는 **1,209줄**, direct
+  `execute` actual/ceiling은 **67**이다. 개인 노트북 검증으로 완결되며 PostgreSQL 필수 검증은 없다. 후속
+  grouped query **8→1** 최적화의 실데이터 `EXPLAIN`/latency 검증은 office-only release gate다.
+- Grouped 최적화는 application이 8개 output reference를 stable dedupe한 7개 ID로 만든 뒤 provider의
+  `data_profiles()`를 한 번만 호출한다. adapter도 방어적으로 dedupe하고, 빈 입력은 DB query 0회, nonempty 입력은
+  동적 bound placeholder와 `GROUP BY`/`ORDER BY` aggregate SQL 1회로 처리한다. SQL에서 빠진 ID 행은 application이
+  zero profile로 보완하며 duplicate multitype 두 item은 값은 같되 서로 독립 dict다.
+- DuckDB에서 legacy per-ID 결과와 exact equality를 확인했고 focused **12 passed**, architecture·OpenAPI·compile
+  gate와 full backend **1143 passed, 10 skipped**를 확인했다. `main.py`는 **1,209줄**, direct `execute`
+  actual/ceiling은 **67**로 변동 없다. CI는 query-count/result parity를 보장하고, PostgreSQL/DuckDB 대표 실데이터의
+  `EXPLAIN ANALYZE`, fan-out, cold/warm p50/p95, rows scanned, planning·lock impact는 office-only 검증이다.
+- Portfolio read/export는 `GET /api/portfolio/overview`와 `GET /api/portfolio/export.csv`를
+  `HTTP → application query → domain port/policy → SQL adapter`로 분리했다. 6개 filter(`search` max 120),
+  latest-run·canonical monitoring·KPI·load-case 없는 request placeholder와 CSV BOM·12열 header·download filename을
+  유지했고, 사용처가 없어진 legacy `repositories/portfolio.py`는 제거했다. focused **17 passed**, full backend
+  **1149 passed, 10 skipped**와 architecture·OpenAPI·compile gate를 확인했다. `main.py`는 **1,176줄**, direct `execute` actual/ceiling은 **67**로
+  이 이동에서 변동 없다. 개인 노트북 검증으로 완결되며 별도 PostgreSQL 검증은 필요 없다.
+- Dashboard read cluster는 detail/list/version list/version detail 4개 GET을
+  `HTTP → application → domain errors+policy+ports → SQL adapter`로 분리했다. legacy global route order
+  (detail/list → save PUT → versions → delete)를 유지하고, active 공개 조회와 draft/archived 조건부 권한,
+  404 선판정, `include_invalid`, `definition_json` list exclusion, exact response wrapper를 보존했다.
+  모든 조회는 기존처럼 같은 connection을 사용하며 audit·transaction·write 동작은 변경하지 않았다.
+  focused **18 passed**, full backend **1153 passed, 10 skipped**, compile·architecture·OpenAPI gate를 확인했고
+  `main.py`는 **1,087줄**, direct `execute` actual/ceiling은 **60**으로 하향했다. 개인 노트북 검증으로 완결되며
+  별도 PostgreSQL은 필요 없다. 운영 권한·실데이터·성능 검증은 사내 release gate로 남긴다.
+- Project request list는 `GET /api/projects/{project_id}/requests`를 기존
+  `requests` query router → application query → domain port/error → SQL adapter
+  경계로 분리했다. global route order(GET → POST create → PATCH assignee/next
+  load-case)을 유지하고, 같은 connection에서 `PROJECT_DATA_VIEW` 확인과
+  membership bool을 처리한다. 비멤버는 정확한 `PROJECT_MEMBERSHIP_REQUIRED`
+  403 payload(`authorization_detail`/audit 포함)를 유지하며, global admin의
+  누락 project는 `200 []`, 정렬은 `requested_at DESC`로 보존한다.
+- 이 이동은 audit·transaction·write 동작을 바꾸지 않았다. focused **26 passed**,
+  full backend **1159 passed, 10 skipped**, compile·architecture·OpenAPI gate를 확인했고 `main.py`는 **1,070줄**,
+  direct `execute` ceiling은 **60 → 59**로 낮아졌다. 개인 노트북에서 완결되며
+별도 PostgreSQL 검증은 필요 없다. dashboard command preview, drop-video catalog-only read, analysis runs GET,
+health GET과 dashboard page read/admin command cluster까지 완료됐으며, 다음은 일반 dashboard 저장·버전·복제·복원 cluster다.
+
+검증에서 기본 backend suite 176개가 통과하고 3개 PostgreSQL opt-in test가 skip됐다. 별도의 disposable PostgreSQL 18 cluster를 blank DB에서 migration·권한 hardening·reference seed까지 구성한 뒤 app-role profile 60개가 통과했고, canonical 6-step workflow가 suite 전후 동일함을 확인했다. frontend architecture/API/preferences self-test, TypeScript와 production build가 통과했으며 fresh backend/Vite/Chromium을 사용한 Playwright 20개도 모두 통과했다. 실제 Rocky 서버 값·TLS·service user가 없어 운영 배포는 수행하지 않았고, 로컬 credential 파일의 과거 과도한 권한 노출에 대해서는 비밀번호 회전이 별도 운영 조치로 남아 있다. 이 외부 검증 상태는 코드 contract와 구분한다.
+
+```text
+부품 정보 + 소재 물성 정보 + 제품 정보 + 프로젝트 정보 + 해석/판정 데이터
+                              ↓
+                         종합 보고서 생성
+```
+
+### 2026-09-01 최신 vertical slice — dashboard command preview
+
+`POST /api/dashboard-commands/preview`를 HTTP router → application query → domain pure allowlist policy로 분리했다.
+권한 검사는 policy보다 먼저 수행하고 DB·audit·명시적 transaction은 추가하지 않았으며 generic
+`SecurityMiddleware`의 `API_MUTATION` audit 동작을 유지한다. legacy ASCII-space normalization, branch precedence,
+exact 6 recognized + 1 unrecognized response, `datetime.now().timestamp()` 기반 ID와 테스트용 epoch seam을 보존했다.
+restore 직후 마지막 route 위치, operationId, `2..500` schema, optional `project_id`도 유지한다. focused root **15 passed**,
+compile·architecture·OpenAPI gate를 확인했고 전체 backend 회귀도 **1164 passed, 10 skipped in 891.76s (0:14:51)**로
+완료했다. `main.py`는 **1,009줄**, direct `execute`는 **59**다. 개인 노트북 검증으로 완결되며 PostgreSQL 검증은
+필요 없다. 후속 dashboard page admin command cluster도 완료됐으며, 현재 다음은 일반 dashboard 쓰기 4개다.
+content/download streaming은 제외한다.
+
+### 2026-09-01 최신 vertical slice — drop-video catalog-only read
+
+`GET /api/load-cases/{load_case_id}/drop-videos`를 HTTP router → application query → domain pure policy/ports →
+SQL repository 및 filesystem example adapter로 분리했다. 같은 connection의 context 조회 → `PROJECT_DATA_VIEW`
+resource authorization → stored list 조회 후 close 순서, context fail-closed 404, storage mode 1회와 stored가 없고
+dual-read일 때만 example file probe를 수행하는 순서를 보존했다. stored/demo 혼합 금지, sort·whole summary·pagination,
+generic resource 404, route order와 OpenAPI 계약도 유지한다. focused root **35 passed**, compile·architecture·OpenAPI
+gate를 확인했고 전체 backend 회귀는 **1176 passed, 10 skipped in 881.53s (0:14:41)**였으며 `main.py`는 **899줄**, direct `execute`는 **58**이다. 개인 노트북에서 완결되며 PostgreSQL 실데이터·
+권한 범위·대용량 latency는 사내 release gate로 남긴다. dashboard page admin command cluster도 후속 완료했고,
+현재 다음은 일반 dashboard 쓰기 4개다.
+
+Analysis runs GET은 완료했으며 `adapters/http/routers/analysis_runs.py`가 기존 application/results query, domain
+policy/port, SQL provider를 그대로 연결한다. auth-before-provider, unknown `200 []`, `run_no DESC`, `is_latest`,
+seeded mapping과 6-query 동작을 유지했고 focused root **26 passed**, 전체 backend 회귀는 **1179 passed, 10 skipped in 886.22s (0:14:46)**였으며 compile·architecture·OpenAPI gate를 확인했다.
+`main.py`는 **888줄**, direct execute ceiling **58**은 불변이며 PostgreSQL 전용 검증은 필요 없다.
+
+health GET도 `GET /api/health`를 router → application query → persistence callable probe로 분리했다. `connect()` →
+`SELECT 1`(params 없음) → `fetchone` 결과 무시 → close 후 backend settings를 읽으며, public auth bypass/invalid token 허용,
+request-id·audit 없음, general 500 semantics와 retry → health → feature-examples route adjacency를 유지한다. focused root
+**21 passed**, 전체 backend 회귀는 **1189 passed, 10 skipped in 891.45s (0:14:51)**였고 compile·architecture·OpenAPI gate를 확인했으며 `main.py`는 **883줄**, direct execute는 **57**이다.
+개인 노트북에서 완결되며 domain/UoW는 추가하지 않는다. 사내 PostgreSQL pool/app-role/nginx TLS/systemd timeout은
+release gate로 검증한다. dashboard page admin command cluster도 후속 완료했고, 현재 다음은 일반 dashboard
+쓰기 4개이며 streaming routes는 후순위다.
+
+### 2026-09-01 최신 vertical slice — dashboard page public/admin GET
+
+두 GET을 `adapters/http/routers/analysis_pages.py → application/analysis_pages/queries.py →
+domains/analysis_pages` policy/ports/errors → `adapters/persistence/analysis_pages.py`로 분리했다.
+기존 `dashboard_reads`는 별도 유지하며 behavior change는 없다. Public은 context check와 explicit project
+permission 부재를 유지하고 system pages 및 current-load-case published custom pages를 반환한다. Admin은
+같은 connection에서 `context → DASHBOARD_EDIT → context 재확인 → candidates`를 수행하며 missing은 Korean
+404, permission failure는 second lookup 전 fail-closed다. system/custom/status/include_archived filter,
+SQL `ORDER BY` 없는 조회 후 `(display_order, name.casefold(), id)` 정렬과 falsy description `''` 투영도 보존했다.
+
+Main compatibility wrapper의 write/reorder same-connection과 `_list_analysis_pages` context preflight를 그대로
+두고 create/update/delete/reorder transaction·audit은 바꾸지 않았다. focused combined **23 passed in 43.35s**,
+전체 backend **1195 passed, 10 skipped in 886.77s (0:14:46)**와 compile·architecture·OpenAPI gate를 확인했다.
+`main.py`는 **824줄**, direct execute ceiling은 **57 → 55**다. Local laptop은 policy/fake/DuckDB/security/full
+tests를 완료했고, PostgreSQL app-role/admin permission, same-connection real rows, proxy/OpenAPI smoke,
+real-data latency는 office-only release gate로 남긴다. 다음 권장은 admin write cluster
+(POST/PATCH/DELETE/PUT order)다. create에 새 transaction을 추가하지 않고, update resource-auth-first/version
+max+1, delete explicit BEGIN/rollback, reorder duplicate precheck/exact-set 및 same-connection final list 계약을 보존한다.
+Workbench large restructure와 drop-video streaming은 deferred다.
+
+### 2026-09-01 최신 vertical slice — dashboard page admin commands
+
+분석 페이지 생성·수정·영구 삭제·순서 변경 4개 API를 같은 기능 경계로 옮겼다.
+`adapters/http/routers/analysis_pages.py`는 Pydantic 입출력과 권한 callback·오류 상태 매핑만,
+`application/analysis_pages/commands.py`는 명령 순서와 검증 orchestration을,
+`domains/analysis_pages`는 오류·policy·repository port를,
+`adapters/persistence/analysis_pages.py`는 SQL·버전 기록·삭제 transaction primitive를 소유한다.
+HTTP router에는 직접 SQL, audit write, `BEGIN/COMMIT/ROLLBACK` 문자열이 없다.
+
+동작 변경 없이 create의 trim/context/권한/중복/표시 순서와 비명시 transaction, update의
+resource-auth-first와 history `max(version)+1`, delete의 exact 2-column read → context 재확인 →
+`BEGIN → versions/body delete → COMMIT` 및 실패 rollback, reorder의 DB 연결 전 duplicate 차단 →
+exact-set → 각 버전 기록 → same-connection context 재확인/final list 순서를 보존했다. 시스템 페이지
+생명주기, archived-name/display-order, Korean 오류 문구, route order·operationId·OpenAPI, generic audit 동작도
+그대로다. 삭제 본문 실패와 rollback 실패의 예외 우선순위를 각각 테스트로 고정했다.
+
+Focused **15 passed**, 독립 확대 검토 **22 passed**, 최종 full backend **1201 passed, 10 skipped in
+901.42s (0:15:01)**와 compile·architecture·OpenAPI gate를 확인했다. `main.py`는 **824 → 628줄**,
+direct `execute` actual/ceiling은 **55 → 43**이다. 사용 화면은 같지만 관리 기능의 장애 범위와 변경 지점이
+기능 경계 안으로 줄고, 삭제 실패 복구와 버전 증가 계약을 더 빨리 검증할 수 있다.
+
+개인 노트북 범위는 fake/SQL mapping/DuckDB/security/full regression으로 완료했다. PostgreSQL 18 app-role의
+admin 권한, 실제 행의 same-connection/rollback, proxy 경유 OpenAPI smoke, 동시 쓰기와 실데이터 latency는 사내
+release gate다. 다음 권장은 일반 dashboard 저장·버전 무효화·복제·복원 4개를 별도 `dashboard_writes`
+vertical slice로 옮기는 것이다. 먼저 기존 비명시 transaction과 오류 우선순위를 유지해 구조만 분리하고,
+원자성 강화는 별도 보강으로 다룬다.
+
+## 2. 2026-08-13 기준선 점검 결과
+
+### 2.1 정상 확인
+
+- 저장소는 `/home/wgcha/projects/simdashboard`의 WSL 네이티브 파일시스템에 있다.
+- Git은 upstream과 `0 ahead / 0 behind`다. 다만 복원 과정의 미커밋 변경이 남아 있다.
+- Node.js `v22.23.2`, Python `3.12.13`, 백엔드 핵심 import가 동작한다.
+- 프런트 TypeScript 및 Vite production build가 성공한다.
+- Linux lifecycle/PostgreSQL shell script의 `bash -n` 검사가 통과한다.
+- Alembic head는 `0008_media_blob_storage` 하나다.
+
+### 2.2 즉시 해결해야 할 기준선 결함
+
+| ID | 증거 | 영향 | 우선순위 |
+|---|---|---|---|
+| ENV-101 | `pnpm --version`이 Corepack의 `pnpm/latest` 온라인 조회를 시도하다 실패 | 오프라인/사내망에서 setup·start·CI 재현 불가 | P0 |
+| ENV-102 | 복원 변경 파일이 CRLF로 바뀌어 `git diff --check`가 대량 실패 | 실제 코드 변경과 줄끝 변경이 섞이고 shell/생성물 diff가 오염됨 | P0 |
+| TEST-101 | 빈 FastAPI 앱도 `TestClient.__enter__()`에서 멈춤 | 백엔드 API 테스트 107개 중 6개 이후 진행 불가 | P0 |
+| DB-101 | Playwright E2E 중 DuckDB `Unique file handle conflict` 발생 | 20개 E2E 중 11 통과, 9 실패; API 500과 전역 오류 화면 발생 | P0 |
+| PG-101 | `.env`는 PostgreSQL `127.0.0.1:5432/simulation_dashboard`를 가리키지만 PostgreSQL 18 cluster가 `down` | WSL PostgreSQL 실제 연결·권한·마이그레이션을 검증하지 못함 | P0 |
+| FE-101 | production main JS 약 959 KB, CSS 약 235 KB; Vite chunk warning | 초기 로드·변경 충돌·테마 회귀 위험 | P1 |
+
+`TestClient` 교착은 앱 코드나 DuckDB 초기화 없이도 재현되므로 dependency/runtime 문제로 분리한다. 현재 설치 조합은 FastAPI 0.115.12, Starlette 0.46.2, HTTPX 0.28.1, AnyIO 4.14.2다. 직접/전이 의존성을 lock하지 않은 것이 복원 후 조합 변화의 원인이 될 수 있다. 버전 하나를 임의로 내리기보다 호환 행렬을 작은 재현 테스트로 확인하고 lockfile을 생성한다.
+
+### 2.3 구조 부채 수치
+
+| 영역 | 현재 수치 | 판단 |
+|---|---:|---|
+| `backend/app/main.py` | 2,922줄, endpoint 71개, `.execute()` 218곳 | HTTP·권한·SQL·보고서 처리·도메인 규칙이 결합됨 |
+| 전체 router/main SQL | `.execute()` 321곳 | router가 transaction/use case를 직접 소유함 |
+| `backend/app/database.py` | 2,358줄 | runtime schema, DuckDB 보정, seed, 기본 콘텐츠가 한 파일에 결합됨 |
+| `backend/app/routers/access_control.py` | 867줄 | 권한 API와 SQL/transaction 경계가 큼 |
+| `backend/app/routers/workbench.py` | 672줄 | workflow 상태 전이와 SQL이 router에 남아 있음 |
+| `frontend/src/App.tsx` | 2,366줄, `useState` 74개, `useEffect` 31개 | app shell·라우팅·feature 화면·data orchestration이 결합됨 |
+| `frontend/src/styles.css` | 1,698줄, raw color 선언 다수 | feature 스타일과 전역 테마의 소유권이 불명확함 |
+| `frontend/src/api.ts` | 수동 API 약 81개 | OpenAPI 생성 client와 URL/DTO 계약이 중복됨 |
+| `frontend/src/reportExport.ts` | 922줄 | report model, layout, 데이터 변환, PPTX renderer, I/O가 결합됨 |
+
+## 3. 목표 원칙
+
+### 3.1 공통 도메인 언어만 정렬한다
+
+프런트와 백의 최상위 feature/domain 이름은 가능한 범위에서 맞춘다.
+
+| 공통 도메인 | 프런트 책임 | 백엔드 책임 |
+|---|---|---|
+| `projects` | 프로젝트 목록·상세·선택·편집 UI | project use case, scope, repository |
+| `products` | 제품 정보 조회·편집 UI | product aggregate와 조회/변경 service |
+| `materials` | 소재·물성 카탈로그 UI | material/property 모델과 repository |
+| `parts` | 부품/BOM/연결 UI | part·assembly 관계와 validation |
+| `requests` | 의뢰 접수·workflow UI | request/work item 상태 전이 |
+| `results` | import·분석·비교·판정 UI | import/validation/verdict use case |
+| `reports` | 보고서 구성·preview·export UI | report context 조회와 report generation orchestration |
+| `access` | 메뉴·버튼 표시 | 인증·인가·project scope 강제 |
+
+백엔드의 domain은 UI 화면 이름이나 HTTP를 모르고, 프런트 feature는 SQL·DB 종류를 모른다.
+
+### 3.2 REST와 미래 MCP는 같은 service를 사용한다
+
+현재는 REST adapter만 유지한다. 나중에 MCP가 추가될 때 DB나 repository를 직접 호출하지 않고 동일 application service를 호출해야 한다.
+
+```mermaid
+flowchart LR
+  UI["Frontend feature"] --> FA["Feature API adapter"]
+  FA --> REST["REST / OpenAPI adapter"]
+  REST --> UC["Application use case"]
+  MCP["Future MCP adapter (not now)"] -.-> UC
+  UC --> POL["Domain policy / authorization"]
+  UC --> PORT["Repository ports"]
+  PORT --> PG["PostgreSQL adapter"]
+  PORT --> DUCK["DuckDB dev adapter"]
+  UC -. future event .-> OUT["Outbox / jobs"]
+  OUT -. future .-> EMB["Embedding adapter"]
+  OUT -. future .-> GRAPH["Graph projection adapter"]
+```
+
+미래 종합 보고서용 service 입력은 `principal`, `project_id`, 선택한 source ID/version, report options여야 한다. 결과에는 사용된 source revision, 생성 시각, 작성자, 권한 scope, checksum을 남길 수 있어야 한다. MCP tool은 나중에 이 service의 제한된 adapter가 되며 임의 SQL이나 범용 파일 접근 통로가 되어서는 안 된다.
+
+### 3.3 Graph/Embedding은 source of truth가 아니다
+
+- PostgreSQL을 프로젝트·제품·부품·소재·해석 결과·보고서 이력의 canonical store로 유지한다.
+- Graph DB는 관계 projection과 traversal용, vector index는 semantic retrieval용으로만 사용한다.
+- 모든 projection은 `project_id`, source type/id/version, checksum, parser/model/provider version, access scope를 가진다.
+- 원본 변경/삭제 시 재색인할 수 있도록 idempotent projection key를 사용한다.
+- 검색 결과는 최종 응답 전에 PostgreSQL의 현재 권한과 원본 존재 여부로 재검증한다.
+- 이 항목은 현재 디렉터리와 service 계약에만 반영하며 DB 제품 선정, SDK 추가, schema migration, worker 구현은 하지 않는다.
+
+## 4. 목표 디렉터리 구조
+
+### 4.1 프런트엔드
+
+```text
+frontend/src/
+  app/
+    App.tsx
+    bootstrap/
+    routing/
+    providers/
+    shell/
+  features/
+    projects/
+    products/
+    materials/
+    parts/
+    requests/
+    results/
+    reports/
+    access/
+  entities/
+    project/
+    product/
+    material/
+    part/
+    analysis-result/
+    report/
+  shared/
+    api/
+      client.ts
+      errors.ts
+      auth.ts
+      generated/
+    ui/
+    theme/
+    lib/
+  main.tsx
+```
+
+각 feature는 `Page.tsx`, `components/`, `hooks/`, `api.ts`, `model.ts`, 가까운 test를 선택적으로 가진다. 존재하지 않는 층을 빈 폴더로 만들지 않는다. feature 간 내부 import를 금지하고 공개 entry 또는 `entities/shared` 계약만 사용한다.
+
+### 4.2 백엔드
+
+```text
+backend/app/
+  app_factory.py
+  core/
+    config.py
+    security/
+    db/
+    errors.py
+  domains/
+    projects/
+      models.py
+      policies.py
+      ports.py
+    products/
+    materials/
+    parts/
+    requests/
+    results/
+    reports/
+  application/
+    projects/
+    products/
+    materials/
+    parts/
+    requests/
+    results/
+    reports/
+  adapters/
+    http/
+      routers/
+      schemas/
+    persistence/
+      duckdb/
+      postgresql/
+    integrations/
+      directory/
+      media/
+      future_mcp/       # 문서/계약 자리표시자만; 구현·의존성 없음
+      future_knowledge/ # 문서/계약 자리표시자만; 구현·의존성 없음
+  main.py
+```
+
+초기 리팩터링에서는 현재 `routers/services/repositories/schemas`를 위 구조로 한 번에 이동하지 않는다. 한 vertical slice가 안정된 후 새 구조를 기본값으로 삼고 기존 구조를 점진 폐기한다.
+
+### 4.3 데이터베이스와 배포
+
+```text
+backend/migrations/      # Alembic만 canonical schema 변경을 소유
+backend/seeds/           # demo/reference seed를 runtime schema 보정과 분리
+worker/                  # outbox/job이 실제 필요해질 때 별도 생성
+deploy/rocky8/           # systemd, nginx, install, healthcheck
+```
+
+`database.py`의 `CREATE TABLE/ALTER/ensure_*`를 즉시 제거하지 않는다. PostgreSQL은 Alembic, DuckDB dev는 별도 bootstrap adapter로 분리하되 기존 DB 호환 특성화 테스트를 먼저 만든다.
+
+## 5. 실행 순서
+
+각 패키지는 독립 커밋을 원칙으로 하고, 동작 보존 리팩터링과 기능 추가를 섞지 않는다. DB migration은 항상 별도 커밋이다.
+
+### Phase 0 — 복원 기준선 안정화 (P0)
+
+#### R0-01 줄끝·복원 diff 정상화
+
+- 사용자 변경의 의미를 보존하면서 LF/CRLF 변환만 분리한다.
+- `Zone.Identifier` ADS 흔적을 제거 대상 목록에 올리되 삭제 전 사용자가 복원 산출물인지 확인한다.
+- `.gitattributes`에 텍스트 정책을 명시하고 `git diff --check`를 gate로 추가한다.
+- 현재 수정된 migration/schema/OpenAPI가 실제 내용 변경인지 줄끝 변경인지 분리해 검토한다.
+
+수용 조건: `git diff --check` 통과, shell 파일 LF, 의도하지 않은 전체 파일 rewrite 없음.
+
+#### R0-02 재현 가능한 toolchain/dependency lock
+
+- Corepack이 `pnpm/latest`를 조회하지 않도록 project `packageManager`와 설치/doctor 경로를 일치시킨다.
+- `pnpm` offline smoke와 사내 proxy 환경의 실패 메시지를 검증한다.
+- Python은 직접·전이 dependency를 함께 고정하는 `requirements.lock` 또는 uv lock을 도입한다.
+- 최소 FastAPI 앱의 TestClient smoke를 compatibility test로 둔다.
+- Python 3.12.13과 Rocky 목표 Python minor의 일치 여부를 배포 결정으로 기록한다.
+
+수용 조건: 새 venv에서 lock 기반 설치, 네트워크 없이 `pnpm --version`, 빈 FastAPI client smoke, backend collection 실행.
+
+#### R0-03 DuckDB 연결 동시성 안정화
+
+- DuckDB 1.5.5에서 같은 파일을 동시 open할 때의 thread/process 계약을 재현 테스트로 고정한다.
+- 요청마다 무제한 `duckdb.connect()`를 열지 않도록 app-scoped connection manager 또는 직렬화된 connection factory를 설계한다.
+- HTTP sync handler의 threadpool과 DuckDB connection 소유 thread를 명시한다.
+- PostgreSQL adapter 동작을 이 제약에 맞춰 약화시키지 않는다.
+- 장기 목표에서 DuckDB는 로컬 개발/이관 source, PostgreSQL은 동시 사용자 runtime DB로 명확히 구분한다.
+
+수용 조건: backend 107개 전체 통과, E2E 20개 전체 통과, 20개 병렬 read smoke에서 500/handle conflict 없음.
+
+#### R0-04 WSL PostgreSQL 연결성 복구
+
+- WSL PostgreSQL 18 cluster 기동 방법을 `systemd` 사용 가능/불가 환경으로 나눠 문서화한다.
+- WSL용 setup script가 현재 잘못 찾는 `.venv-runtime/.venv` 대신 `.venv-wsl`을 우선 사용하게 한다.
+- `pg_isready`, 앱 role 로그인, `SELECT current_database/current_user`, Alembic current/head, 필수 table, 최소 CRUD transaction, audit append 권한을 검사한다.
+- owner credential은 migration 전용, app credential은 runtime 전용임을 유지한다.
+- WSL과 Rocky 8 운영 PostgreSQL major 지원 정책을 ADR로 고정한다.
+
+수용 조건: `check_postgres_connection.py` 성공, `alembic current == head`, PostgreSQL profile test 통과, 앱 role의 DDL 거부 확인.
+
+### Phase 1 — 특성화와 경계 가드 (P0/P1)
+
+#### R1-01 테스트 계층화
+
+- `unit`, `duckdb-integration`, `postgres-integration`, `contract`, `e2e` marker/job을 분리한다.
+- 빠른 unit suite는 app startup이나 seed DB 전체를 요구하지 않게 한다.
+- API URL/method/response/error code와 OpenAPI snapshot을 고정한다.
+- 프로젝트 scope/IDOR와 report source 권한 테스트를 우선 추가한다.
+
+#### R1-02 아키텍처 import 규칙
+
+- 프런트 feature 내부 import, 백엔드 domain→FastAPI/SQL import를 CI에서 차단한다.
+- router `.execute()`와 새 raw URL string의 수를 baseline으로 잡고 증가를 금지한다.
+- 파일 줄 수는 절대 품질 지표가 아니라 경계 회귀 경보로만 사용한다.
+
+### Phase 2 — 백엔드 vertical slice 분리 (P1)
+
+이 순서로 한 feature씩 `HTTP → application → domain → repository port → adapter`를 만든다.
+
+1. `projects`: scope와 공용 식별자의 기준점
+2. `products`: 제품 정보
+3. `materials`: 소재·물성 정보
+4. `parts`: 부품과 제품/소재 관계
+5. `results`: 해석 결과 조회·판정
+6. `reports`: 위 데이터를 조합하는 read model과 보고서 use case
+7. `requests/workbench`: 복잡한 상태 전이
+
+각 slice의 router는 입력 변환과 응답 mapping만 담당하고 `.execute()`를 갖지 않는다. transaction은 application use case가 소유한다. 권한 검사는 `principal + resource/project scope`로 service 진입 시 수행한다.
+
+보고서 slice의 report layout 6 API는 `reports` router/application/domain port/SQL adapter
+경계로 이동했다. Layout read는 `ACTIVE` 인증만 요구하고 mutation은 persistence
+provider open 전 catalog-manage 권한을 확인한다. Update의 read-before-BEGIN을
+유지하고 추가 PostgreSQL lock/CAS를 도입하지 않으며, live·version·audit 쓰기는
+하나의 transaction으로 묶는다.
+
+현재 `reportExport.ts`가 직접 소비하는 데이터를 `ReportContext` read model로 정의하는
+장기 계획은 유지한다. 서버 PPTX template 4 route는 filesystem/DB
+compensation·containment·archive safety와 함께 분리했고 variable catalog 4 route도
+결과 데이터·dashboard·report가 공유하는 변수 의미를 application/domain port로 옮겼다.
+Project workspace layout canonical 3개와 deprecated alias 2개도 같은 HTTP/application/
+domain policy·port/SQL adapter 경계로 이동했다. Read/write project 권한은 provider가 연
+같은 connection에서 확인하고, write의 live row·version append·audit는 transaction으로
+묶는다. live row가 없을 때 history 조회가 빈 목록을 돌려주는 기존 계약도 유지한다.
+다음 안전 분리 단위는 `import-schemas` 4 route다. DELETE의 별도 permission connection,
+non-atomic usage check, 명시적 domain audit 부재는 호환 부채로 남긴다. MCP endpoint는
+추가하지 않으며, 미래 REST UI와 MCP가 같은 report context/composition service를 호출할 수
+있는 입력/출력 계약만 준비한다.
+
+### Phase 3 — 프런트 app shell과 feature 분리 (P1)
+
+1. `AppShell`, route registry, bootstrap state machine을 추출한다.
+2. 프로젝트/메뉴/워크플로/분석 bootstrap 요청을 dependency에 맞게 병렬화한다.
+3. `projects → requests → results → reports → access` 순서로 feature를 추출한다.
+4. 공용 `entities`에는 안정된 ID와 display model만 두고 server DTO 전체를 복사하지 않는다.
+5. 전역 74개 state를 feature hook/state reducer로 소유권에 따라 나눈다.
+6. 무거운 report editor/PPTX, charts, video grid, admin 화면은 route/feature 단위 dynamic import를 적용한다.
+7. localStorage key를 version하고 예외 처리하며 UI preference만 저장한다.
+
+목표: 최종 `App.tsx`는 wiring 중심 400줄 이하, main initial chunk는 현재 대비 의미 있게 감소. 숫자를 맞추기 위한 의미 없는 파일 분할은 금지한다.
+
+### Phase 4 — OpenAPI 단일 계약 (P1)
+
+- `shared/api/generated`를 유일한 path/DTO source로 둔다.
+- 인증, 401/403 event, error code mapping은 공용 client wrapper가 소유한다.
+- feature `api.ts`는 생성 client를 UI model로 변환하는 adapter만 둔다.
+- endpoint를 한 feature씩 이전하고 수동 `frontend/src/api.ts`를 축소한다.
+- CI에서 API 생성 후 diff와 breaking change 검사를 수행한다.
+
+이 구조가 미래 MCP와 충돌하지 않게 HTTP DTO를 domain model로 사용하지 않는다. MCP는 OpenAPI client를 경유하지 않고 같은 application service에 별도 adapter로 연결된다.
+
+### Phase 5 — DB bootstrap/seed 분리와 운영 구조 (P1/P2)
+
+- Alembic migration, DuckDB compatibility bootstrap, demo/reference seed를 분리한다.
+- `database.py`의 runtime DDL, seed, query helper를 단계적으로 제거한다.
+- PostgreSQL 최소 권한과 connection pool budget을 CI에서 검증한다.
+- Rocky 8용 systemd/nginx/deploy/rollback/healthcheck 구조를 별도 `deploy/rocky8`에 둔다.
+
+### Phase 6 — 미래 확장용 계약 문서화 (P2, 구현 금지)
+
+현재 리팩터링 완료 후 ADR/Protocol 수준으로만 아래를 정의한다.
+
+- `ProjectInfoQuery`, `ProductInfoQuery`, `MaterialPropertyQuery`, `PartStructureQuery`, `AnalysisEvidenceQuery`
+- `ComposeReportContext`, `GenerateReport` use case
+- source reference: type/id/version/checksum/project/access scope
+- 향후 `EmbeddingPort`, `GraphProjectionPort`, `KnowledgeSearchPort`
+- 향후 MCP tool의 allowlist, input schema, timeout, 크기 제한, audit, project scope
+
+완료 조건은 fake/in-memory contract test가 아니라 문서와 application boundary가 벤더 SDK 없이 정의되는 것이다. 실제 port interface도 필요해지는 첫 기능과 함께 추가하며 speculative abstraction을 만들지 않는다.
+
+## 6. 전체 검증 게이트
+
+### 모든 패키지
+
+```bash
+git diff --check
+./scripts/wsl/doctor.sh
+(cd backend && ../.venv-wsl/bin/python -m pytest -q)
+(cd frontend && pnpm run generate:api && pnpm run build)
+```
+
+### 프런트 변경
+
+- Playwright E2E 20/20 통과
+- desktop + mobile 대표 화면
+- blank/overlay/console error 없음
+- main/report chunk 크기 기록과 이전 baseline 비교
+
+### DB/백엔드 변경
+
+- DuckDB integration 전체 통과
+- PostgreSQL migration upgrade와 current/head 확인
+- app role CRUD와 DDL 거부
+- 권한 행렬/IDOR/감사로그 테스트
+- OpenAPI path/method/response diff 검토
+
+## 7. 중단 조건
+
+다음 중 하나면 구현을 중단하고 ADR 또는 사용자 결정을 먼저 받는다.
+
+- `project.data.view`의 회사 전체/프로젝트 멤버 범위 결정이 필요한 경우
+- 제품·부품·소재의 canonical ID와 관계 cardinality가 정해지지 않은 경우
+- 기존 API response 또는 migration history를 깨야 하는 경우
+- DuckDB 동시성 해결이 전체 connection architecture 변경을 요구하는 경우
+- Rocky 8에서 지원할 Python/PostgreSQL 버전이 WSL/CI와 달라지는 경우
+- MCP/Graph/Embedding의 실제 제품·SDK·서버를 추가하려는 경우
+
+### 2026-09-01 완료 — dashboard_writes 일반 쓰기 cluster
+
+일반 dashboard 저장 PUT, 버전 logical delete, clone, restore 4개 API를 `dashboard_writes` vertical slice로 분리했다. HTTP router(`save_router`/`history_router`)는 입력·권한·오류 매핑만, application command가 orchestration을, domain은 errors/policy/ports를, persistence adapter는 기존 SQL과 같은 connection 동작을 소유한다. ID mismatch의 connection 전 400, resource-auth-first, invalid 이력을 포함한 `max(version)+1`, clone의 `page` 제거, restore의 현재 name/description/page 보존과 기존 비명시 transaction semantics를 유지했다.
+
+Dedicated **6 passed**, root expanded focused **36 passed in 44.44s**, independent **5 passed/1 deselected in 6.43s**, full backend **1207 passed, 10 skipped in 914.50s (0:15:14)**와 compile·architecture·OpenAPI·diff-check를 통과했다. `main.py`는 **628 → 487줄**, direct `.execute()`는 **43 → 30**이다. 로컬 laptop에서는 fake/SQL mapping/DuckDB HTTP/security/full regression을 완료했고, PostgreSQL app-role/admin 권한·실제 same-connection/rollback·proxy smoke·동시 쓰기·실데이터 latency는 사내 office-only release gate다. drop-video streaming은 후순위로 유지하며 다음 권장은 `request_load_cases` POST 생성 slice다.
+
+## 8. 첫 실행 묶음
+
+다음 구현 세션은 기능 리팩터링보다 아래 순서가 안전하다.
+
+1. `R0-01`: 줄끝/복원 diff 정리
+2. `R0-02`: pnpm·Python lock과 TestClient compatibility 복구
+3. `R0-03`: DuckDB 동시 연결 충돌 수정
+4. `R0-04`: WSL PostgreSQL 기동·연결·권한 검증
+5. `R1-01`: 20/20 E2E와 107/107 backend를 기준선으로 고정
+6. `R2 projects slice`: 첫 vertical slice로 구조 패턴 확정
+
+이 기준선이 녹색이 되기 전에는 `App.tsx`/`main.py` 대규모 분해를 시작하지 않는다.
+
+### 현재 후속 순서 — 2026-09-01
+
+1. Report layout 6 API, PPTX template 4 API, variable catalog 4 API, project workspace layout 5 route, import-schemas 4 route, result-review 3 route, analysis-insights 2 route, load-case-overview 1 route, quality thresholds 3 route, workflow queries GET 2 route, request load-cases GET 1 route, feature-examples GET 1 route, portfolio overview/export GET 2 route와 project request list GET 1 route의 완료 상태를 계약 테스트로 유지한다.
+2. dashboard read cluster, `GET /api/projects/{project_id}/requests`, dashboard command preview,
+   drop-video catalog-only read, analysis runs GET, health GET, dashboard page read/admin command와
+   일반 dashboard 저장·버전·복제·복원 cluster와 `request_load_cases` POST 생성까지 완료했다. 다음은
+   `POST /api/projects/{project_id}/requests` 의뢰 생성 slice다. 그 뒤 workflow writes를 진행하며
+   drop-video streaming은 이번 범위에서 제외한다.
+
+### 2026-09-01 완료 — request_load_cases POST 생성 slice
+
+기존 GET feature에 별도 `create_router`를 추가하되 POST를 기존 위치인 drop-video content/download 뒤, result-ingestion 앞에 등록했다. HTTP → application → domain → persistence로 분리하고 ID/time 생성 → provider → 동일 connection auth → request 존재 확인 → insert 순서를 보존했다. exact 201/404/OpenAPI와 Unicode JSON 저장을 유지했으며 새 명시 transaction·audit은 추가하지 않았다. Dedicated/latest focused **24 passed in 10.18s**, root expanded **46 passed in 30.75s**, independent review unit/contract **5 passed** 및 DuckDB **2 passed**, full backend **1215 passed, 10 skipped in 928.25s (0:15:28)**와 compile·architecture·OpenAPI·diff-check를 통과했다. `main.py`는 **487 → 473줄**, direct `.execute()`는 **30 → 28**이다. 로컬 검증은 완료했고 PostgreSQL app-role·same-connection·proxy·동시성·latency는 사내 office-only release gate다. 다음은 특성화를 마친 프로젝트 의뢰 생성 POST slice이고, 그 뒤 workflow writes를 진행한다. drop-video streaming은 후순위다.
+3. import-schemas DELETE의 별도 permission connection, non-transactional usage check, 명시적 domain delete audit 부재와 review-list GET의 explicit `PROJECT_DATA_VIEW` 부재, quality-threshold GET의 explicit project permission 부재와 alias global semantics, provider construction purity, dict mutation/storage normalization, unordered media/template, company-wide read, single threshold semantics, row lock/CAS, post-commit fetch rollback seam/security debt를 보존 debt로 기록하되 구조 refactor에 섞지 않는다.
+4. PostgreSQL 18 app-role 권한·audit INSERT, correlated update parity, OIDC active-nonmember/cross-project 정책, 동시 update locking/CAS, 현실 데이터 EXPLAIN/index/lock latency와 nginx·proxy/private CA·backup/restore/deploy는 사내 office-only release gate에서 검증한다.

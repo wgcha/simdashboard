@@ -1,0 +1,35 @@
+[
+  {
+    "variable_key": "top_edge_max_stress",
+    "display_name": "Open Cell 상단 엣지 최대 응력",
+    "data_type": "FLOAT",
+    "value": 68.0,
+    "unit": "MPa",
+    "threshold": 75.0,
+    "result_group": "OPEN_CELL"
+  },
+  {
+    "variable_key": "mesh_element_count",
+    "display_name": "해석 요소 수",
+    "data_type": "INTEGER",
+    "value": 428120,
+    "unit": "ea",
+    "result_group": "CUSTOM"
+  },
+  {
+    "variable_key": "analysis_judgement",
+    "display_name": "해석 판정 사유",
+    "data_type": "TEXT",
+    "value": "상단 엣지 응력이 관리자 기준 이내입니다.",
+    "unit": "",
+    "result_group": "OPEN_CELL"
+  },
+  {
+    "variable_key": "analysis_verdict",
+    "display_name": "해석 판정",
+    "data_type": "VERDICT",
+    "value": "PASS",
+    "unit": "",
+    "result_group": "OPEN_CELL"
+  }
+]

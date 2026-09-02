@@ -10,7 +10,7 @@ async function login(page: Page, role: 'admin' | 'viewer') {
 }
 
 async function openAnalysis(page: Page) {
-  await page.getByRole('button', { name: '해석 의뢰 현황', exact: true }).click()
+  await page.getByRole('link', { name: '해석 의뢰 현황', exact: true }).click()
   await expect(page.locator('.content-head')).toBeVisible()
   await page.locator('.view-tabs').getByRole('button', { name: /상세 분석/ }).click()
   await expect(page.locator('.analysis-subtabs')).toBeVisible()
@@ -105,15 +105,15 @@ test('관리자는 과거 버전을 초안으로 불러오고 삭제한 뒤 cust
   const history = page.locator('.dashboard-version-list')
   await expect(history.locator('article')).toHaveCount(3)
   await history.locator('button:enabled', { hasText: '초안으로 불러오기' }).first().click()
-  const toast = page.getByRole('status')
+  const toast = page.locator('.toast[role="status"]')
   await expect(toast).toContainText('편집 초안')
   await toast.getByRole('button', { name: '알림 닫기' }).click()
   await expect(toast).toHaveCount(0)
   const beforeDelete = await history.locator('article').count()
   await history.getByRole('button', { name: /버전 삭제/ }).first().click()
   await expect(history.locator('article')).toHaveCount(beforeDelete - 1)
-  await expect(page.getByRole('status')).toContainText('과거 이력')
-  await expect(page.getByRole('status')).toHaveCount(0, { timeout: 5500 })
+  await expect(page.locator('.toast[role="status"]')).toContainText('과거 이력')
+  await expect(page.locator('.toast[role="status"]')).toHaveCount(0, { timeout: 5500 })
 
   assistant = page.locator('.assistant-drawer')
   await assistant.locator('.drawer-head button').click()

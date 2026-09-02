@@ -2,12 +2,18 @@
   "name": "analysis-canvas",
   "private": true,
   "version": "0.1.0",
+  "packageManager": "pnpm@11.15.1",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 0.0.0.0",
     "generate:api": "node scripts/generate-api-client.mjs",
+    "check:architecture": "node scripts/check-architecture.mjs",
+    "test:architecture": "node scripts/check-architecture-self-test.mjs",
+    "test:preferences": "node --experimental-strip-types scripts/workspace-preferences-self-test.mjs",
+    "test:routing": "node --experimental-strip-types scripts/workspace-route-registry-self-test.mjs",
+    "test:api": "node --experimental-transform-types scripts/shared-api-self-test.mjs",
     "test:e2e": "node scripts/run-e2e.mjs",
     "test:e2e:ui": "playwright test --ui"
   },
@@ -18,6 +24,7 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-grid-layout": "^1.5.2",
+    "react-router-dom": "^7.18.2",
     "recharts": "^2.15.2"
   },
   "devDependencies": {

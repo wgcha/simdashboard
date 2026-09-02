@@ -42,7 +42,7 @@ def _create_request(client: TestClient, request_type_id: str = "design-reliabili
         "/api/projects/project-tv-001/requests",
         json={
             "title": f"시나리오 의뢰 {uuid4().hex[:8]}",
-            "owner": "해석 담당자",
+            "owner_user_id": "local-admin",
             "due_in_days": 7,
             "overall_note": "work plan test",
             "source_type": "EXTERNAL_SYSTEM",
@@ -96,10 +96,12 @@ def test_request_creation_is_atomic_and_persists_an_immutable_snapshot(monkeypat
             for node in workflow["work_plan"]["definition_snapshot"]["nodes"]
         ] == SCENARIOS["design-doe-exploration"][1]
         assert workflow["request_type_assignment"]["source"] == "ADMIN"
-        assert workflow["request_type_assignment"]["decided_by"] == "운영 관리자"
+        assert workflow["request_type_assignment"]["decided_by"] == "로컬 관리자"
         assert workflow["work_plan"]["source_type"] == "EXTERNAL_SYSTEM"
         assert workflow["work_plan"]["source_reference"] == "PLM Gateway"
-        assert workflow["work_plan"]["requested_by"] == "설계 자동화 시스템"
+        assert workflow["work_plan"]["requested_by"] == "로컬 관리자"
+        assert workflow["request"]["owner_user_id"] == "local-admin"
+        assert {item["owner_user_id"] for item in workflow["steps"]} == {"local-admin"}
         with connect() as conn:
             assert conn.execute("SELECT count(*) FROM request_steps WHERE request_id = ?", [created["id"]]).fetchone()[0] == 0
 
@@ -115,7 +117,7 @@ def test_request_creation_is_atomic_and_persists_an_immutable_snapshot(monkeypat
             "/api/projects/project-tv-001/requests",
             json={
                 "title": failed_title,
-                "owner": "원자성 담당자",
+                "owner_user_id": "local-admin",
                 "due_in_days": 3,
                 "source_type": "DEPARTMENT_HEAD",
                 "source_reference": "구조해석팀",
@@ -126,6 +128,40 @@ def test_request_creation_is_atomic_and_persists_an_immutable_snapshot(monkeypat
     monkeypatch.setattr(WorkbenchRepository, "create_work_plan", original)
     with connect() as conn:
         assert conn.execute("SELECT count(*) FROM analysis_requests WHERE title = ?", [failed_title]).fetchone()[0] == 0
+
+
+def test_request_creation_accepts_an_admin_defined_active_scenario():
+    with TestClient(app) as client:
+        created_type = client.post(
+            "/api/admin/workbench/request-types",
+            json={
+                "display_name": "사용자 정의 접수 시나리오",
+                "description": "관리자가 수행자에게 제공하는 접수 작업 유형",
+                "allowed_task_types": [{"id": "cad-prepare", "version": 1}],
+                "default_workflow": {
+                    "nodes": [
+                        {
+                            "node_key": "step-01-cad-prepare",
+                            "task_type_id": "cad-prepare",
+                            "task_type_version": 1,
+                            "depends_on": [],
+                        }
+                    ]
+                },
+                "match_rules": {},
+                "is_active": True,
+            },
+        )
+        assert created_type.status_code == 201, created_type.text
+        custom_id = created_type.json()["id"]
+
+        created = _create_request(client, custom_id)
+        assert created["request_type_id"] == custom_id
+        assert created["scenario_name"] == "사용자 정의 접수 시나리오"
+
+        workflow = client.get(f"/api/requests/{created['id']}/workflow").json()
+        assert workflow["work_plan"]["scenario_name"] == "사용자 정의 접수 시나리오"
+        assert [item["task_type_id"] for item in workflow["steps"]] == ["cad-prepare"]
 
 
 def test_work_item_completion_is_sequential_idempotent_and_canonical():
@@ -162,6 +198,7 @@ def test_work_item_completion_is_sequential_idempotent_and_canonical():
                         "id": first["id"],
                         "name": first["name"],
                         "status": first["status"],
+                        "owner_user_id": first["owner_user_id"],
                         "owner": first["owner"],
                         "progress": first["progress"],
                         "is_optional": False,
@@ -185,7 +222,7 @@ def test_work_item_completion_is_sequential_idempotent_and_canonical():
         assert started.status_code == 200, started.text
         assert started.json()["status"] == "IN_PROGRESS"
         assert started.json()["progress"] == 0
-        assert started.json()["steps"][0]["started_by"] == "순차 담당자"
+        assert started.json()["steps"][0]["started_by"] == "로컬 관리자"
         first_started_at = started.json()["steps"][0]["started_at"]
         started_again = client.post(
             f"/api/workbench/work-items/{first['id']}/start",
@@ -193,7 +230,7 @@ def test_work_item_completion_is_sequential_idempotent_and_canonical():
         )
         assert started_again.status_code == 200
         assert started_again.json()["steps"][0]["started_at"] == first_started_at
-        assert started_again.json()["steps"][0]["started_by"] == "순차 담당자"
+        assert started_again.json()["steps"][0]["started_by"] == "로컬 관리자"
 
         completed = client.post(
             f"/api/workbench/work-items/{first['id']}/complete",
@@ -213,7 +250,7 @@ def test_work_item_completion_is_sequential_idempotent_and_canonical():
         assert repeated.status_code == 200
         assert repeated.json()["progress"] == 17
         assert repeated.json()["steps"][0]["completed_at"] == first_completed_at
-        assert repeated.json()["steps"][0]["completed_by"] == "순차 담당자"
+        assert repeated.json()["steps"][0]["completed_by"] == "로컬 관리자"
 
         expected_progress = [33, 50, 67, 83, 100]
         for item, progress in zip([second, *rest], expected_progress):
@@ -304,7 +341,11 @@ def test_legacy_request_steps_remain_the_monitoring_fallback():
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     with connect() as conn:
         conn.execute(
-            "INSERT INTO analysis_requests VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            """
+            INSERT INTO analysis_requests
+                (id, project_id, title, status, owner, requested_at, due_at, overall_note)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
             [request_id, "project-tv-001", "레거시 단계 의뢰", "IN_PROGRESS", "레거시 담당자", now, now + timedelta(days=7), "fallback"],
         )
         for index, (name, status, progress) in enumerate(

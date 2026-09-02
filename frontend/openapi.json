@@ -25,6 +25,82 @@
         }
       }
     },
+    "/api/auth/oidc/start": {
+      "get": {
+        "summary": "Oidc Start",
+        "operationId": "oidc_start_api_auth_oidc_start_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/oidc/callback": {
+      "get": {
+        "summary": "Oidc Callback",
+        "operationId": "oidc_callback_api_auth_oidc_callback_get",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Code"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/auth/login": {
       "post": {
         "summary": "Login",
@@ -97,9 +173,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
+                  "additionalProperties": true,
                   "type": "object",
                   "title": "Response Current User Api Auth Me Get"
                 }
@@ -113,59 +187,88 @@
       "get": {
         "summary": "List Users",
         "operationId": "list_users_api_admin_users_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "additionalProperties": true,
-                    "type": "object"
-                  },
-                  "type": "array",
-                  "title": "Response List Users Api Admin Users Get"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/admin/users/{user_id}": {
-      "patch": {
-        "summary": "Update User Access",
-        "operationId": "update_user_access_api_admin_users__user_id__patch",
         "parameters": [
           {
-            "name": "user_id",
-            "in": "path",
-            "required": true,
+            "name": "q",
+            "in": "query",
+            "required": false,
             "schema": {
-              "type": "string",
-              "title": "User Id"
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 80
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "PENDING",
+                    "ACTIVE",
+                    "SUSPENDED"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 120
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
             }
           }
         ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UserAccessUpdate"
-              }
-            }
-          }
-        },
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Update User Access Api Admin Users  User Id  Patch"
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "title": "Response List Users Api Admin Users Get"
                 }
               }
             }
@@ -213,6 +316,837 @@
                     "additionalProperties": true
                   },
                   "title": "Response Audit Events Api Audit Events Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/users/{user_id}/status": {
+      "patch": {
+        "tags": [
+          "access-control"
+        ],
+        "summary": "Update Account Status",
+        "operationId": "update_account_status_api_admin_users__user_id__status_patch",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountStatusUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Update Account Status Api Admin Users  User Id  Status Patch"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/users/{user_id}/global-admin": {
+      "patch": {
+        "tags": [
+          "access-control"
+        ],
+        "summary": "Update Global Admin",
+        "operationId": "update_global_admin_api_admin_users__user_id__global_admin_patch",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GlobalAdminUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Update Global Admin Api Admin Users  User Id  Global Admin Patch"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{project_id}/members": {
+      "get": {
+        "tags": [
+          "access-control"
+        ],
+        "summary": "List Project Members",
+        "operationId": "list_project_members_api_projects__project_id__members_get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "title": "Response List Project Members Api Projects  Project Id  Members Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "access-control"
+        ],
+        "summary": "Create Project Member",
+        "operationId": "create_project_member_api_projects__project_id__members_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectMemberCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Create Project Member Api Projects  Project Id  Members Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{project_id}/members/{user_id}": {
+      "patch": {
+        "tags": [
+          "access-control"
+        ],
+        "summary": "Update Project Member",
+        "operationId": "update_project_member_api_projects__project_id__members__user_id__patch",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectMemberUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Update Project Member Api Projects  Project Id  Members  User Id  Patch"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "access-control"
+        ],
+        "summary": "Delete Project Member",
+        "operationId": "delete_project_member_api_projects__project_id__members__user_id__delete",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Delete Project Member Api Projects  Project Id  Members  User Id  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{project_id}/directory/employees": {
+      "get": {
+        "tags": [
+          "access-control"
+        ],
+        "summary": "Search Directory Employees",
+        "operationId": "search_directory_employees_api_projects__project_id__directory_employees_get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 80,
+              "title": "Q"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 50,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "title": "Response Search Directory Employees Api Projects  Project Id  Directory Employees Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{project_id}/invitations": {
+      "get": {
+        "tags": [
+          "access-control"
+        ],
+        "summary": "List Project Invitations",
+        "operationId": "list_project_invitations_api_projects__project_id__invitations_get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "title": "Response List Project Invitations Api Projects  Project Id  Invitations Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "access-control"
+        ],
+        "summary": "Create Project Invitation",
+        "operationId": "create_project_invitation_api_projects__project_id__invitations_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvitationCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Create Project Invitation Api Projects  Project Id  Invitations Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{project_id}/invitations/{invitation_id}/complete": {
+      "post": {
+        "tags": [
+          "access-control"
+        ],
+        "summary": "Complete Project Invitation",
+        "operationId": "complete_project_invitation_api_projects__project_id__invitations__invitation_id__complete_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "invitation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Invitation Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Complete Project Invitation Api Projects  Project Id  Invitations  Invitation Id  Complete Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{project_id}/invitations/{invitation_id}": {
+      "delete": {
+        "tags": [
+          "access-control"
+        ],
+        "summary": "Cancel Project Invitation",
+        "operationId": "cancel_project_invitation_api_projects__project_id__invitations__invitation_id__delete",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "invitation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Invitation Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Cancel Project Invitation Api Projects  Project Id  Invitations  Invitation Id  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{project_id}/assignee-candidates": {
+      "get": {
+        "tags": [
+          "access-control"
+        ],
+        "summary": "Assignee Candidates",
+        "operationId": "assignee_candidates_api_projects__project_id__assignee_candidates_get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 80
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "title": "Response Assignee Candidates Api Projects  Project Id  Assignee Candidates Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/navigation/menu-policy": {
+      "get": {
+        "tags": [
+          "access-control"
+        ],
+        "summary": "Get Menu Policy",
+        "operationId": "get_menu_policy_api_navigation_menu_policy_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MenuPolicyResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/menu-policy": {
+      "put": {
+        "tags": [
+          "access-control"
+        ],
+        "summary": "Update Menu Policy",
+        "operationId": "update_menu_policy_api_admin_menu_policy_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MenuPolicyUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MenuPolicyResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/menu-policy/versions": {
+      "get": {
+        "tags": [
+          "access-control"
+        ],
+        "summary": "Menu Policy Versions",
+        "operationId": "menu_policy_versions_api_admin_menu_policy_versions_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/MenuPolicyVersionSummary"
+                  },
+                  "type": "array",
+                  "title": "Response Menu Policy Versions Api Admin Menu Policy Versions Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/menu-policy/versions/{version}": {
+      "get": {
+        "tags": [
+          "access-control"
+        ],
+        "summary": "Get Menu Policy Version",
+        "operationId": "get_menu_policy_version_api_admin_menu_policy_versions__version__get",
+        "parameters": [
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Version"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MenuPolicyVersionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/menu-policy/versions/{version}/restore": {
+      "post": {
+        "tags": [
+          "access-control"
+        ],
+        "summary": "Restore Menu Policy",
+        "operationId": "restore_menu_policy_api_admin_menu_policy_versions__version__restore_post",
+        "parameters": [
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Version"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MenuPolicyResponse"
                 }
               }
             }
@@ -321,6 +1255,104 @@
         }
       }
     },
+    "/api/admin/workbench/task-types/{task_type_id}": {
+      "put": {
+        "tags": [
+          "workbench-demo"
+        ],
+        "summary": "Update Task Type",
+        "operationId": "update_task_type_api_admin_workbench_task_types__task_type_id__put",
+        "parameters": [
+          {
+            "name": "task_type_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Type Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskTypeVersionCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Update Task Type Api Admin Workbench Task Types  Task Type Id  Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "workbench-demo"
+        ],
+        "summary": "Deactivate Task Type",
+        "operationId": "deactivate_task_type_api_admin_workbench_task_types__task_type_id__delete",
+        "parameters": [
+          {
+            "name": "task_type_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Type Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Deactivate Task Type Api Admin Workbench Task Types  Task Type Id  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/workbench/request-types": {
       "get": {
         "tags": [
@@ -369,6 +1401,366 @@
         }
       }
     },
+    "/api/workbench/analysis-templates": {
+      "get": {
+        "tags": [
+          "workbench-demo"
+        ],
+        "summary": "List Analysis Templates",
+        "operationId": "list_analysis_templates_api_workbench_analysis_templates_get",
+        "parameters": [
+          {
+            "name": "all_versions",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "All Versions"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "title": "Response List Analysis Templates Api Workbench Analysis Templates Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/workbench/analysis-templates": {
+      "post": {
+        "tags": [
+          "workbench-demo"
+        ],
+        "summary": "Create Analysis Template",
+        "operationId": "create_analysis_template_api_admin_workbench_analysis_templates_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnalysisTemplateVersionCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Create Analysis Template Api Admin Workbench Analysis Templates Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workbench/request-types/{request_type_id}/{version}/result-profile": {
+      "get": {
+        "tags": [
+          "workbench-demo"
+        ],
+        "summary": "Get Result Profile",
+        "operationId": "get_result_profile_api_workbench_request_types__request_type_id___version__result_profile_get",
+        "parameters": [
+          {
+            "name": "request_type_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Type Id"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Version"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Result Profile Api Workbench Request Types  Request Type Id   Version  Result Profile Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{project_id}/admin/workbench/request-types/{request_type_id}/{version}/result-profile": {
+      "put": {
+        "tags": [
+          "workbench-demo"
+        ],
+        "summary": "Save Project Result Profile",
+        "operationId": "save_project_result_profile_api_projects__project_id__admin_workbench_request_types__request_type_id___version__result_profile_put",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "request_type_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Type Id"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Version"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResultProfileInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Save Project Result Profile Api Projects  Project Id  Admin Workbench Request Types  Request Type Id   Version  Result Profile Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workbench/requests/{request_id}/result-layout": {
+      "get": {
+        "tags": [
+          "workbench-demo"
+        ],
+        "summary": "Get Request Result Layout",
+        "operationId": "get_request_result_layout_api_workbench_requests__request_id__result_layout_get",
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
+            }
+          },
+          {
+            "name": "load_case_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Load Case Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Request Result Layout Api Workbench Requests  Request Id  Result Layout Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workbench/requests/{request_id}/result-layout/materialize": {
+      "post": {
+        "tags": [
+          "workbench-demo"
+        ],
+        "summary": "Materialize Request Result Layout",
+        "operationId": "materialize_request_result_layout_api_workbench_requests__request_id__result_layout_materialize_post",
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResultLayoutMaterializeInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardDefinition"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/admin/workbench/request-types": {
       "post": {
         "tags": [
@@ -395,6 +1787,104 @@
                   "additionalProperties": true,
                   "type": "object",
                   "title": "Response Create Request Type Api Admin Workbench Request Types Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/workbench/request-types/{request_type_id}": {
+      "put": {
+        "tags": [
+          "workbench-demo"
+        ],
+        "summary": "Update Request Type",
+        "operationId": "update_request_type_api_admin_workbench_request_types__request_type_id__put",
+        "parameters": [
+          {
+            "name": "request_type_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Type Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestTypeVersionCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Update Request Type Api Admin Workbench Request Types  Request Type Id  Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "workbench-demo"
+        ],
+        "summary": "Deactivate Request Type",
+        "operationId": "deactivate_request_type_api_admin_workbench_request_types__request_type_id__delete",
+        "parameters": [
+          {
+            "name": "request_type_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Type Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Deactivate Request Type Api Admin Workbench Request Types  Request Type Id  Delete"
                 }
               }
             }
@@ -507,6 +1997,49 @@
         }
       }
     },
+    "/api/admin/workbench/batch-profiles": {
+      "post": {
+        "tags": [
+          "workbench-demo"
+        ],
+        "summary": "Create Batch Profile",
+        "operationId": "create_batch_profile_api_admin_workbench_batch_profiles_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchProfileInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Create Batch Profile Api Admin Workbench Batch Profiles Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/admin/workbench/batch-profiles/{profile_id}": {
       "put": {
         "tags": [
@@ -544,6 +2077,50 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Save Batch Profile Api Admin Workbench Batch Profiles  Profile Id  Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "workbench-demo"
+        ],
+        "summary": "Deactivate Batch Profile",
+        "operationId": "deactivate_batch_profile_api_admin_workbench_batch_profiles__profile_id__delete",
+        "parameters": [
+          {
+            "name": "profile_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Profile Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Deactivate Batch Profile Api Admin Workbench Batch Profiles  Profile Id  Delete"
                 }
               }
             }
@@ -987,6 +2564,60 @@
         }
       }
     },
+    "/api/workbench/work-items/{item_id}/assignee": {
+      "patch": {
+        "tags": [
+          "workbench-demo"
+        ],
+        "summary": "Reassign Work Item",
+        "operationId": "reassign_work_item_api_workbench_work_items__item_id__assignee_patch",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Item Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkItemAssigneeUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Reassign Work Item Api Workbench Work Items  Item Id  Assignee Patch"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/workbench/work-items/{item_id}/start": {
       "post": {
         "tags": [
@@ -1132,6 +2763,240 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Complete Work Item Api Workbench Work Items  Item Id  Complete Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/automation-templates": {
+      "get": {
+        "tags": [
+          "modeling-catalog"
+        ],
+        "summary": "Get Automation Templates",
+        "operationId": "get_automation_templates_api_automation_templates_get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "title": "Response Get Automation Templates Api Automation Templates Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/widget-catalog": {
+      "get": {
+        "tags": [
+          "modeling-catalog"
+        ],
+        "summary": "Get Widget Catalog",
+        "operationId": "get_widget_catalog_api_widget_catalog_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "type": "array",
+                  "title": "Response Get Widget Catalog Api Widget Catalog Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/result-imports/refresh": {
+      "post": {
+        "tags": [
+          "result-folder-refresh"
+        ],
+        "summary": "Refresh Master Result Folder",
+        "description": "Discover and import trusted result bundles; client paths are never accepted.",
+        "operationId": "refresh_master_result_folder_api_result_imports_refresh_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MasterResultRefreshResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/load-cases/{load_case_id}/result-imports": {
+      "get": {
+        "tags": [
+          "result-folder-refresh"
+        ],
+        "summary": "List Result Import History",
+        "description": "List every import attempt visible to a load-case result importer.",
+        "operationId": "list_result_import_history_api_load_cases__load_case_id__result_imports_get",
+        "parameters": [
+          {
+            "name": "load_case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Load Case Id"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "RUNNING",
+                    "COMPLETED",
+                    "SKIPPED",
+                    "REJECTED",
+                    "FAILED"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 25,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResultImportHistoryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/result-imports/{job_id}/retry": {
+      "post": {
+        "tags": [
+          "result-folder-refresh"
+        ],
+        "summary": "Retry Result Import",
+        "description": "Retry one eligible master-folder manifest without accepting a client path.",
+        "operationId": "retry_result_import_api_result_imports__job_id__retry_post",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MasterResultRefreshItem"
                 }
               }
             }
@@ -1760,6 +3625,57 @@
         }
       }
     },
+    "/api/requests/{request_id}/assignee": {
+      "patch": {
+        "summary": "Reassign Request",
+        "operationId": "reassign_request_api_requests__request_id__assignee_patch",
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssigneeUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Reassign Request Api Requests  Request Id  Assignee Patch"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/requests/{request_id}/load-cases": {
       "get": {
         "summary": "Get Load Cases",
@@ -1918,7 +3834,44 @@
     "/api/drop-videos/{video_id}/content": {
       "get": {
         "summary": "Get Drop Video Content",
-        "operationId": "get_drop_video_content_api_drop_videos__video_id__content_get",
+        "operationId": "get_drop_video_content",
+        "parameters": [
+          {
+            "name": "video_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Video Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/drop-videos/{video_id}/download": {
+      "get": {
+        "summary": "Download Drop Video",
+        "operationId": "download_drop_video",
         "parameters": [
           {
             "name": "video_id",
@@ -2025,9 +3978,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Import Analysis Results Api Load Cases  Load Case Id  Results Import Post"
+                  "$ref": "#/components/schemas/ResultImportResponse"
                 }
               }
             }
@@ -2067,9 +4018,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Import Typed Result Example Api Load Cases  Load Case Id  Folder Import Example Post"
+                  "$ref": "#/components/schemas/TypedResultExampleResponse"
                 }
               }
             }
@@ -2090,7 +4039,44 @@
     "/api/assets/{asset_id}": {
       "get": {
         "summary": "Get Result Asset",
-        "operationId": "get_result_asset_api_assets__asset_id__get",
+        "operationId": "get_result_asset",
+        "parameters": [
+          {
+            "name": "asset_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Asset Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/assets/{asset_id}/download": {
+      "get": {
+        "summary": "Download Result Asset",
+        "operationId": "download_result_asset",
         "parameters": [
           {
             "name": "asset_id",
@@ -3030,85 +5016,20 @@
         }
       }
     },
-    "/api/automation-templates": {
+    "/api/projects/{project_id}/workspace-layouts/{layout_kind}": {
       "get": {
-        "summary": "Get Automation Templates",
-        "operationId": "get_automation_templates_api_automation_templates_get",
+        "summary": "Get Project Workspace Layout",
+        "operationId": "get_project_workspace_layout_api_projects__project_id__workspace_layouts__layout_kind__get",
         "parameters": [
           {
             "name": "project_id",
-            "in": "query",
-            "required": false,
+            "in": "path",
+            "required": true,
             "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
+              "type": "string",
               "title": "Project Id"
             }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "type": "object",
-                    "additionalProperties": true
-                  },
-                  "title": "Response Get Automation Templates Api Automation Templates Get"
-                }
-              }
-            }
           },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/widget-catalog": {
-      "get": {
-        "summary": "Get Widget Catalog",
-        "operationId": "get_widget_catalog_api_widget_catalog_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "additionalProperties": true,
-                    "type": "object"
-                  },
-                  "type": "array",
-                  "title": "Response Get Widget Catalog Api Widget Catalog Get"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/workspace-layouts/{layout_kind}": {
-      "get": {
-        "summary": "Get Workspace Layout",
-        "operationId": "get_workspace_layout_api_workspace_layouts__layout_kind__get",
-        "parameters": [
           {
             "name": "layout_kind",
             "in": "path",
@@ -3147,9 +5068,18 @@
         }
       },
       "put": {
-        "summary": "Save Workspace Layout",
-        "operationId": "save_workspace_layout_api_workspace_layouts__layout_kind__put",
+        "summary": "Save Project Workspace Layout",
+        "operationId": "save_project_workspace_layout_api_projects__project_id__workspace_layouts__layout_kind__put",
         "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
           {
             "name": "layout_kind",
             "in": "path",
@@ -3198,11 +5128,138 @@
         }
       }
     },
-    "/api/workspace-layouts/{layout_kind}/versions": {
+    "/api/workspace-layouts/{layout_kind}": {
+      "get": {
+        "summary": "Get Workspace Layout",
+        "operationId": "get_workspace_layout_api_workspace_layouts__layout_kind__get",
+        "deprecated": true,
+        "parameters": [
+          {
+            "name": "layout_kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "enum": [
+                "portfolio",
+                "workflow"
+              ],
+              "type": "string",
+              "title": "Layout Kind"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 120,
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceLayoutResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Save Workspace Layout",
+        "operationId": "save_workspace_layout_api_workspace_layouts__layout_kind__put",
+        "deprecated": true,
+        "parameters": [
+          {
+            "name": "layout_kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "enum": [
+                "portfolio",
+                "workflow"
+              ],
+              "type": "string",
+              "title": "Layout Kind"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 120,
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceLayoutUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceLayoutResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{project_id}/workspace-layouts/{layout_kind}/versions": {
       "get": {
         "summary": "Get Workspace Layout Versions",
-        "operationId": "get_workspace_layout_versions_api_workspace_layouts__layout_kind__versions_get",
+        "operationId": "get_workspace_layout_versions_api_projects__project_id__workspace_layouts__layout_kind__versions_get",
         "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
           {
             "name": "layout_kind",
             "in": "path",
@@ -3227,7 +5284,7 @@
                   "items": {
                     "$ref": "#/components/schemas/WorkspaceLayoutVersionResponse"
                   },
-                  "title": "Response Get Workspace Layout Versions Api Workspace Layouts  Layout Kind  Versions Get"
+                  "title": "Response Get Workspace Layout Versions Api Projects  Project Id  Workspace Layouts  Layout Kind  Versions Get"
                 }
               }
             }
@@ -3256,8 +5313,7 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "additionalProperties": true,
-                    "type": "object"
+                    "$ref": "#/components/schemas/ReportLayoutCatalogResponse"
                   },
                   "type": "array",
                   "title": "Response List Report Layouts Api Report Layouts Get"
@@ -3286,9 +5342,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Create Report Layout Api Report Layouts Post"
+                  "$ref": "#/components/schemas/ReportLayoutSavedResponse"
                 }
               }
             }
@@ -3337,9 +5391,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Update Report Layout Api Report Layouts  Layout Id  Put"
+                  "$ref": "#/components/schemas/ReportLayoutSavedResponse"
                 }
               }
             }
@@ -3376,11 +5428,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "title": "Response Delete Report Layout Api Report Layouts  Layout Id  Delete"
+                  "$ref": "#/components/schemas/ReportLayoutDeactivationResponse"
                 }
               }
             }
@@ -3421,8 +5469,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "type": "object",
-                    "additionalProperties": true
+                    "$ref": "#/components/schemas/ReportLayoutVersionSummaryResponse"
                   },
                   "title": "Response Get Report Layout Versions Api Report Layouts  Layout Id  Versions Get"
                 }
@@ -3472,9 +5519,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Get Report Layout Version Api Report Layouts  Layout Id  Versions  Version  Get"
+                  "$ref": "#/components/schemas/ReportLayoutVersionDetailResponse"
                 }
               }
             }
@@ -4330,15 +6375,33 @@
       "post": {
         "summary": "Preview Dashboard Command",
         "operationId": "preview_dashboard_command_api_dashboard_commands_preview_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project Id"
+            }
+          }
+        ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/NaturalLanguageCommand"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "200": {
@@ -4346,8 +6409,8 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "type": "object",
+                  "additionalProperties": true,
                   "title": "Response Preview Dashboard Command Api Dashboard Commands Preview Post"
                 }
               }
@@ -4369,6 +6432,38 @@
   },
   "components": {
     "schemas": {
+      "AccountStatusUpdate": {
+        "properties": {
+          "account_status": {
+            "type": "string",
+            "enum": [
+              "PENDING",
+              "ACTIVE",
+              "SUSPENDED"
+            ],
+            "title": "Account Status"
+          },
+          "expected_updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expected Updated At"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 2,
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "account_status",
+          "expected_updated_at",
+          "reason"
+        ],
+        "title": "AccountStatusUpdate"
+      },
       "AnalysisPageCreate": {
         "properties": {
           "load_case_id": {
@@ -4588,10 +6683,23 @@
             "minLength": 2,
             "title": "Title"
           },
-          "owner": {
+          "owner_user_id": {
             "type": "string",
-            "maxLength": 60,
-            "minLength": 2,
+            "maxLength": 120,
+            "minLength": 3,
+            "title": "Owner User Id"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 60,
+                "minLength": 2
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Owner"
           },
           "due_in_days": {
@@ -4622,17 +6730,23 @@
             "title": "Source Reference"
           },
           "requested_by": {
-            "type": "string",
-            "maxLength": 80,
-            "minLength": 2,
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80,
+                "minLength": 2
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Requested By"
           },
           "request_type_id": {
             "type": "string",
-            "enum": [
-              "design-reliability-validation",
-              "design-doe-exploration"
-            ],
+            "maxLength": 80,
+            "minLength": 3,
+            "pattern": "^[a-z][a-z0-9_-]*$",
             "title": "Request Type Id",
             "default": "design-reliability-validation"
           },
@@ -4659,20 +6773,120 @@
         "type": "object",
         "required": [
           "title",
-          "owner",
+          "owner_user_id",
           "source_type",
-          "source_reference",
-          "requested_by"
+          "source_reference"
         ],
         "title": "AnalysisRequestCreate"
+      },
+      "AnalysisTemplateVersionCreate": {
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80,
+                "minLength": 3,
+                "pattern": "^[a-z][a-z0-9_-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "display_name": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 2,
+            "title": "Display Name"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 500,
+            "title": "Description",
+            "default": ""
+          },
+          "page_definitions": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "maxItems": 40,
+            "minItems": 1,
+            "title": "Page Definitions"
+          },
+          "lifecycle_status": {
+            "type": "string",
+            "enum": [
+              "DRAFT",
+              "PUBLISHED",
+              "ARCHIVED"
+            ],
+            "title": "Lifecycle Status",
+            "default": "DRAFT"
+          },
+          "scope_kind": {
+            "type": "string",
+            "enum": [
+              "SYSTEM",
+              "PROJECT"
+            ],
+            "title": "Scope Kind",
+            "default": "SYSTEM"
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "display_name",
+          "page_definitions"
+        ],
+        "title": "AnalysisTemplateVersionCreate"
+      },
+      "AssigneeUpdate": {
+        "properties": {
+          "owner_user_id": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 3,
+            "title": "Owner User Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "owner_user_id"
+        ],
+        "title": "AssigneeUpdate"
       },
       "BatchDispatchCreate": {
         "properties": {
           "batch_profile_id": {
-            "type": "string",
-            "maxLength": 80,
-            "minLength": 3,
-            "pattern": "^[a-z][a-z0-9_-]*$",
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80,
+                "minLength": 3,
+                "pattern": "^[a-z][a-z0-9_-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Batch Profile Id"
           },
           "idempotency_key": {
@@ -4693,7 +6907,6 @@
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "batch_profile_id",
           "idempotency_key"
         ],
         "title": "BatchDispatchCreate"
@@ -4701,10 +6914,17 @@
       "BatchProfileInput": {
         "properties": {
           "id": {
-            "type": "string",
-            "maxLength": 80,
-            "minLength": 3,
-            "pattern": "^[a-z][a-z0-9_-]*$",
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80,
+                "minLength": 3,
+                "pattern": "^[a-z][a-z0-9_-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Id"
           },
           "name": {
@@ -4739,13 +6959,39 @@
             "title": "Environment"
           },
           "task_type_ids": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "maxItems": 32,
-            "minItems": 1,
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 32
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Task Type Ids"
+          },
+          "task_type_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80,
+                "minLength": 3,
+                "pattern": "^[a-z][a-z0-9_-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Type Id"
+          },
+          "task_type_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Task Type Version",
+            "default": 1
           },
           "is_active": {
             "type": "boolean",
@@ -4763,11 +7009,9 @@
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "id",
           "name",
           "solver_path",
-          "working_directory",
-          "task_type_ids"
+          "working_directory"
         ],
         "title": "BatchProfileInput"
       },
@@ -4786,11 +7030,17 @@
             "default": ""
           },
           "created_by": {
-            "type": "string",
-            "maxLength": 60,
-            "minLength": 2,
-            "title": "Created By",
-            "default": "대시보드 사용자"
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 60,
+                "minLength": 2
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By"
           }
         },
         "type": "object",
@@ -4999,6 +7249,17 @@
             "type": "string",
             "title": "Video Url"
           },
+          "download_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Download Url"
+          },
           "thumbnail_url": {
             "anyOf": [
               {
@@ -5158,7 +7419,10 @@
           },
           "source": {
             "type": "string",
-            "const": "EXAMPLE_ADAPTER",
+            "enum": [
+              "DATABASE",
+              "EXAMPLE_ADAPTER"
+            ],
             "title": "Source"
           },
           "demo_only": {
@@ -5322,6 +7586,33 @@
         ],
         "title": "DropVideoSubsystemSummary"
       },
+      "GlobalAdminUpdate": {
+        "properties": {
+          "is_global_admin": {
+            "type": "boolean",
+            "title": "Is Global Admin"
+          },
+          "expected_updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expected Updated At"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 2,
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "is_global_admin",
+          "expected_updated_at",
+          "reason"
+        ],
+        "title": "GlobalAdminUpdate"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -5355,11 +7646,17 @@
             "title": "Definition"
           },
           "updated_by": {
-            "type": "string",
-            "maxLength": 60,
-            "minLength": 2,
-            "title": "Updated By",
-            "default": "관리자"
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 60,
+                "minLength": 2
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated By"
           }
         },
         "type": "object",
@@ -5368,6 +7665,32 @@
           "definition"
         ],
         "title": "ImportSchemaPayload"
+      },
+      "InvitationCreate": {
+        "properties": {
+          "employee_id": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Employee Id"
+          },
+          "desired_role": {
+            "type": "string",
+            "enum": [
+              "general",
+              "power",
+              "admin"
+            ],
+            "title": "Desired Role"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "employee_id",
+          "desired_role"
+        ],
+        "title": "InvitationCreate"
       },
       "LoadCaseCreate": {
         "properties": {
@@ -5419,6 +7742,414 @@
           "password"
         ],
         "title": "LoginPayload"
+      },
+      "MasterResultRefreshItem": {
+        "properties": {
+          "manifest_path": {
+            "type": "string",
+            "title": "Manifest Path",
+            "description": "Path relative to SIMDASH_IMPORT_ROOT"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "IMPORTED",
+              "SKIPPED",
+              "FAILED"
+            ],
+            "title": "Status"
+          },
+          "load_case_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Load Case Id"
+          },
+          "analysis_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Analysis Run Id"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "operation": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "CREATED",
+                  "NOOP",
+                  "REPLACED",
+                  "REJECTED"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "existing_analysis_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Existing Analysis Run Id"
+          },
+          "replaced_analysis_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replaced Analysis Run Id"
+          },
+          "source_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Revision"
+          }
+        },
+        "type": "object",
+        "required": [
+          "manifest_path",
+          "status"
+        ],
+        "title": "MasterResultRefreshItem",
+        "description": "The outcome for one manifest discovered below the configured root."
+      },
+      "MasterResultRefreshResponse": {
+        "properties": {
+          "scanned_count": {
+            "type": "integer",
+            "title": "Scanned Count"
+          },
+          "imported_count": {
+            "type": "integer",
+            "title": "Imported Count"
+          },
+          "skipped_count": {
+            "type": "integer",
+            "title": "Skipped Count"
+          },
+          "failed_count": {
+            "type": "integer",
+            "title": "Failed Count"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/MasterResultRefreshItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "scanned_count",
+          "imported_count",
+          "skipped_count",
+          "failed_count",
+          "items"
+        ],
+        "title": "MasterResultRefreshResponse",
+        "description": "A best-effort refresh summary; one bad bundle never stops its siblings."
+      },
+      "MenuPolicyItem": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "required_permission": {
+            "type": "string",
+            "title": "Required Permission"
+          },
+          "context_kind": {
+            "type": "string",
+            "enum": [
+              "company",
+              "project",
+              "system"
+            ],
+            "title": "Context Kind"
+          },
+          "sequence_no": {
+            "type": "integer",
+            "title": "Sequence No"
+          },
+          "is_policy_editable": {
+            "type": "boolean",
+            "title": "Is Policy Editable"
+          },
+          "visibility": {
+            "$ref": "#/components/schemas/MenuVisibility"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "required_permission",
+          "context_kind",
+          "sequence_no",
+          "is_policy_editable",
+          "visibility"
+        ],
+        "title": "MenuPolicyItem"
+      },
+      "MenuPolicyResponse": {
+        "properties": {
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "updated_by": {
+            "type": "string",
+            "title": "Updated By"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "menus": {
+            "items": {
+              "$ref": "#/components/schemas/MenuPolicyItem"
+            },
+            "type": "array",
+            "title": "Menus"
+          }
+        },
+        "type": "object",
+        "required": [
+          "version",
+          "updated_by",
+          "updated_at",
+          "menus"
+        ],
+        "title": "MenuPolicyResponse"
+      },
+      "MenuPolicyUpdate": {
+        "properties": {
+          "expected_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Version"
+          },
+          "change_note": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 2,
+            "title": "Change Note"
+          },
+          "visibility": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "type": "boolean"
+              },
+              "type": "object"
+            },
+            "propertyNames": {
+              "enum": [
+                "general",
+                "power",
+                "admin"
+              ]
+            },
+            "type": "object",
+            "title": "Visibility"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_version",
+          "change_note",
+          "visibility"
+        ],
+        "title": "MenuPolicyUpdate"
+      },
+      "MenuPolicyVersionResponse": {
+        "properties": {
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "created_by": {
+            "type": "string",
+            "title": "Created By"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "source_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Version"
+          },
+          "change_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Change Note"
+          },
+          "visibility": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "type": "boolean"
+              },
+              "type": "object"
+            },
+            "propertyNames": {
+              "enum": [
+                "general",
+                "power",
+                "admin"
+              ]
+            },
+            "type": "object",
+            "title": "Visibility"
+          }
+        },
+        "type": "object",
+        "required": [
+          "version",
+          "created_by",
+          "created_at",
+          "visibility"
+        ],
+        "title": "MenuPolicyVersionResponse"
+      },
+      "MenuPolicyVersionSummary": {
+        "properties": {
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "created_by": {
+            "type": "string",
+            "title": "Created By"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "source_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Version"
+          },
+          "change_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Change Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "version",
+          "created_by",
+          "created_at"
+        ],
+        "title": "MenuPolicyVersionSummary"
+      },
+      "MenuVisibility": {
+        "properties": {
+          "general": {
+            "type": "boolean",
+            "title": "General"
+          },
+          "power": {
+            "type": "boolean",
+            "title": "Power"
+          },
+          "admin": {
+            "type": "boolean",
+            "title": "Admin"
+          }
+        },
+        "type": "object",
+        "required": [
+          "general",
+          "power",
+          "admin"
+        ],
+        "title": "MenuVisibility"
       },
       "NaturalLanguageCommand": {
         "properties": {
@@ -5482,6 +8213,63 @@
         ],
         "title": "ProjectCreate"
       },
+      "ProjectMemberCreate": {
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 3,
+            "title": "User Id"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "general",
+              "power",
+              "admin"
+            ],
+            "title": "Role"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "user_id",
+          "role"
+        ],
+        "title": "ProjectMemberCreate"
+      },
+      "ProjectMemberUpdate": {
+        "properties": {
+          "role": {
+            "type": "string",
+            "enum": [
+              "general",
+              "power",
+              "admin"
+            ],
+            "title": "Role"
+          },
+          "expected_updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Updated At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "role"
+        ],
+        "title": "ProjectMemberUpdate"
+      },
       "QualityThresholdUpdate": {
         "properties": {
           "threshold_double": {
@@ -5491,11 +8279,17 @@
             "title": "Threshold Double"
           },
           "updated_by": {
-            "type": "string",
-            "maxLength": 40,
-            "minLength": 2,
-            "title": "Updated By",
-            "default": "관리자"
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 40,
+                "minLength": 2
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated By"
           }
         },
         "type": "object",
@@ -5503,6 +8297,162 @@
           "threshold_double"
         ],
         "title": "QualityThresholdUpdate"
+      },
+      "ReportLayoutCatalogResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "definition": {
+            "$ref": "#/components/schemas/ReportLayoutDefinition"
+          },
+          "is_system": {
+            "type": "boolean",
+            "title": "Is System"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "updated_by": {
+            "type": "string",
+            "title": "Updated By"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "description",
+          "version",
+          "definition",
+          "is_system",
+          "is_active",
+          "created_at",
+          "updated_at",
+          "updated_by"
+        ],
+        "title": "ReportLayoutCatalogResponse"
+      },
+      "ReportLayoutDeactivationResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "deactivated",
+            "title": "Status"
+          },
+          "id": {
+            "type": "string",
+            "title": "Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "id"
+        ],
+        "title": "ReportLayoutDeactivationResponse"
+      },
+      "ReportLayoutDefinition": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "coverVariant": {
+            "type": "string",
+            "enum": [
+              "balanced",
+              "executive",
+              "evidence"
+            ],
+            "title": "Covervariant"
+          },
+          "accentColor": {
+            "type": "string",
+            "title": "Accentcolor"
+          },
+          "sectionOrder": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "series",
+                "scalar",
+                "media"
+              ]
+            },
+            "type": "array",
+            "title": "Sectionorder"
+          },
+          "variablePlacements": {
+            "items": {
+              "$ref": "#/components/schemas/ReportVariablePlacement"
+            },
+            "type": "array",
+            "title": "Variableplacements"
+          },
+          "includeMedia": {
+            "type": "boolean",
+            "title": "Includemedia"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "description",
+          "version",
+          "coverVariant",
+          "accentColor",
+          "sectionOrder",
+          "variablePlacements",
+          "includeMedia"
+        ],
+        "title": "ReportLayoutDefinition",
+        "description": "Stored layout JSON remains an extensible document contract."
       },
       "ReportLayoutPayload": {
         "properties": {
@@ -5524,11 +8474,17 @@
             "title": "Definition"
           },
           "updated_by": {
-            "type": "string",
-            "maxLength": 60,
-            "minLength": 2,
-            "title": "Updated By",
-            "default": "보고서 편집자"
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 60,
+                "minLength": 2
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated By"
           }
         },
         "type": "object",
@@ -5537,6 +8493,121 @@
           "definition"
         ],
         "title": "ReportLayoutPayload"
+      },
+      "ReportLayoutSavedResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "definition": {
+            "$ref": "#/components/schemas/ReportLayoutDefinition"
+          },
+          "is_system": {
+            "type": "boolean",
+            "title": "Is System"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "updated_by": {
+            "type": "string",
+            "title": "Updated By"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "description",
+          "version",
+          "definition",
+          "is_system",
+          "updated_at",
+          "updated_by"
+        ],
+        "title": "ReportLayoutSavedResponse"
+      },
+      "ReportLayoutVersionDetailResponse": {
+        "properties": {
+          "layout_id": {
+            "type": "string",
+            "title": "Layout Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "definition": {
+            "$ref": "#/components/schemas/ReportLayoutDefinition"
+          },
+          "created_by": {
+            "type": "string",
+            "title": "Created By"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "layout_id",
+          "version",
+          "definition",
+          "created_by",
+          "created_at"
+        ],
+        "title": "ReportLayoutVersionDetailResponse"
+      },
+      "ReportLayoutVersionSummaryResponse": {
+        "properties": {
+          "layout_id": {
+            "type": "string",
+            "title": "Layout Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "created_by": {
+            "type": "string",
+            "title": "Created By"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "is_valid": {
+            "type": "boolean",
+            "title": "Is Valid"
+          }
+        },
+        "type": "object",
+        "required": [
+          "layout_id",
+          "version",
+          "created_by",
+          "created_at",
+          "is_valid"
+        ],
+        "title": "ReportLayoutVersionSummaryResponse"
       },
       "ReportTemplateRenderPayload": {
         "properties": {
@@ -5579,11 +8650,17 @@
             "title": "Content Base64"
           },
           "updated_by": {
-            "type": "string",
-            "maxLength": 60,
-            "minLength": 2,
-            "title": "Updated By",
-            "default": "보고서 편집자"
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 60,
+                "minLength": 2
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated By"
           }
         },
         "type": "object",
@@ -5593,6 +8670,75 @@
           "content_base64"
         ],
         "title": "ReportTemplateUploadPayload"
+      },
+      "ReportVariablePlacement": {
+        "properties": {
+          "variableKey": {
+            "type": "string",
+            "title": "Variablekey"
+          },
+          "presentation": {
+            "type": "string",
+            "enum": [
+              "chart",
+              "table",
+              "both"
+            ],
+            "title": "Presentation"
+          },
+          "order": {
+            "type": "integer",
+            "title": "Order"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "variableKey",
+          "presentation",
+          "order"
+        ],
+        "title": "ReportVariablePlacement",
+        "description": "A stable variable placement while retaining layout-specific extensions."
+      },
+      "RequestResultDefinition": {
+        "properties": {
+          "page_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120,
+                "minLength": 2
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page Name"
+          },
+          "page_description": {
+            "type": "string",
+            "maxLength": 500,
+            "title": "Page Description",
+            "default": ""
+          },
+          "widgets": {
+            "items": {
+              "$ref": "#/components/schemas/ResultWidgetDefinition"
+            },
+            "type": "array",
+            "maxItems": 120,
+            "minItems": 1,
+            "title": "Widgets"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "widgets"
+        ],
+        "title": "RequestResultDefinition",
+        "description": "Result widgets authored with a request type, rather than a template."
       },
       "RequestTypeAssignmentInput": {
         "properties": {
@@ -5620,10 +8766,17 @@
       "RequestTypeVersionCreate": {
         "properties": {
           "id": {
-            "type": "string",
-            "maxLength": 80,
-            "minLength": 3,
-            "pattern": "^[a-z][a-z0-9_-]*$",
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80,
+                "minLength": 3,
+                "pattern": "^[a-z][a-z0-9_-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Id"
           },
           "display_name": {
@@ -5655,6 +8808,26 @@
             "type": "object",
             "title": "Match Rules"
           },
+          "result_profile": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResultProfileInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "result_definition": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RequestResultDefinition"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "is_active": {
             "type": "boolean",
             "title": "Is Active",
@@ -5664,12 +8837,204 @@
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "id",
           "display_name",
           "allowed_task_types",
           "default_workflow"
         ],
         "title": "RequestTypeVersionCreate"
+      },
+      "ResultImportHistoryItem": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "load_case_id": {
+            "type": "string",
+            "title": "Load Case Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "RUNNING",
+              "COMPLETED",
+              "SKIPPED",
+              "REJECTED",
+              "FAILED"
+            ],
+            "title": "Status"
+          },
+          "source_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Type"
+          },
+          "source_folder": {
+            "type": "string",
+            "title": "Source Folder"
+          },
+          "source_checksum": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Checksum"
+          },
+          "source_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Run Id"
+          },
+          "conflict_policy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conflict Policy"
+          },
+          "outcome_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome Reason"
+          },
+          "operation": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "CREATED",
+                  "NOOP",
+                  "REPLACED",
+                  "REJECTED"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation"
+          },
+          "analysis_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Analysis Run Id"
+          },
+          "replaced_analysis_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replaced Analysis Run Id"
+          },
+          "source_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Revision"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "retryable": {
+            "type": "boolean",
+            "title": "Retryable"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "load_case_id",
+          "status",
+          "source_folder",
+          "created_at",
+          "retryable"
+        ],
+        "title": "ResultImportHistoryItem",
+        "description": "One persisted import attempt, including no-op and rejected attempts."
+      },
+      "ResultImportHistoryResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ResultImportHistoryItem"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Counts"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "counts"
+        ],
+        "title": "ResultImportHistoryResponse"
       },
       "ResultImportPayload": {
         "properties": {
@@ -5686,16 +9051,43 @@
             "title": "Content"
           },
           "author": {
-            "type": "string",
-            "maxLength": 60,
-            "minLength": 2,
-            "title": "Author",
-            "default": "해석 담당자"
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 60,
+                "minLength": 2
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Author"
           },
           "validate_only": {
             "type": "boolean",
             "title": "Validate Only",
             "default": false
+          },
+          "source_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Run Id"
+          },
+          "conflict_policy": {
+            "type": "string",
+            "enum": [
+              "SKIP",
+              "REJECT",
+              "REPLACE"
+            ],
+            "title": "Conflict Policy",
+            "default": "SKIP"
           }
         },
         "type": "object",
@@ -5704,6 +9096,420 @@
           "content"
         ],
         "title": "ResultImportPayload"
+      },
+      "ResultImportResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "VALID",
+              "IMPORTED",
+              "SKIPPED",
+              "REJECTED"
+            ],
+            "title": "Status"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "run_no": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run No"
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
+          },
+          "scalar_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scalar Count"
+          },
+          "node_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Node Count"
+          },
+          "element_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Element Count"
+          },
+          "frame_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frame Count"
+          },
+          "final_time": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Final Time"
+          },
+          "time_series_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time Series Count"
+          },
+          "open_cell_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Open Cell Count"
+          },
+          "chassis_rear_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chassis Rear Count"
+          },
+          "fail_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fail Count"
+          },
+          "overall_verdict": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "PASS",
+                  "FAIL"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Overall Verdict"
+          },
+          "source_format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Format"
+          },
+          "results": {
+            "items": {},
+            "type": "array",
+            "title": "Results"
+          },
+          "warnings": {
+            "items": {},
+            "type": "array",
+            "title": "Warnings"
+          },
+          "operation": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "CREATED",
+                  "NOOP",
+                  "REPLACED",
+                  "REJECTED"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "existing_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Existing Run Id"
+          },
+          "replaced_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replaced Run Id"
+          },
+          "source_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Revision"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "filename"
+        ],
+        "title": "ResultImportResponse",
+        "description": "Stable response contract for manual result imports."
+      },
+      "ResultLayoutMaterializeInput": {
+        "properties": {
+          "load_case_id": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Load Case Id"
+          },
+          "page_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "load_case_id"
+        ],
+        "title": "ResultLayoutMaterializeInput"
+      },
+      "ResultProfileInput": {
+        "properties": {
+          "template_id": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 3,
+            "pattern": "^[a-z][a-z0-9_-]*$",
+            "title": "Template Id"
+          },
+          "template_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Template Version"
+          },
+          "included_widget_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 120
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Included Widget Ids"
+          },
+          "overrides": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Overrides"
+          },
+          "required_data_contracts": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 32,
+            "title": "Required Data Contracts"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "template_id",
+          "template_version"
+        ],
+        "title": "ResultProfileInput",
+        "description": "Versioned selection and configuration for a published result template."
+      },
+      "ResultWidgetDefinition": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Id"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "kpi",
+              "verdict",
+              "gauge",
+              "edge_bar",
+              "time_series",
+              "scatter",
+              "result_table",
+              "contour",
+              "video",
+              "video_grid",
+              "model3d",
+              "note",
+              "workflow",
+              "open_cell_map",
+              "open_cell_summary",
+              "summary",
+              "chassis_summary",
+              "chassis_diagram",
+              "chassis_bar",
+              "chassis_table",
+              "run_comparison"
+            ],
+            "title": "Type"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "variable_key": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Variable Key"
+          },
+          "data_contracts": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 32,
+            "title": "Data Contracts"
+          },
+          "required": {
+            "type": "boolean",
+            "title": "Required",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "type",
+          "title"
+        ],
+        "title": "ResultWidgetDefinition",
+        "description": "A compact, authored result-widget tag for a request type."
       },
       "ReviewItemCreate": {
         "properties": {
@@ -5780,11 +9586,17 @@
             "default": "OPEN"
           },
           "created_by": {
-            "type": "string",
-            "maxLength": 60,
-            "minLength": 2,
-            "title": "Created By",
-            "default": "검토자"
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 60,
+                "minLength": 2
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By"
           }
         },
         "type": "object",
@@ -5851,10 +9663,17 @@
       "TaskTypeVersionCreate": {
         "properties": {
           "id": {
-            "type": "string",
-            "maxLength": 80,
-            "minLength": 3,
-            "pattern": "^[a-z][a-z0-9_-]*$",
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80,
+                "minLength": 3,
+                "pattern": "^[a-z][a-z0-9_-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Id"
           },
           "kind": {
@@ -5932,34 +9751,128 @@
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "id",
           "kind",
           "display_name"
         ],
         "title": "TaskTypeVersionCreate"
       },
-      "UserAccessUpdate": {
+      "TypedResultExampleResponse": {
         "properties": {
-          "role": {
+          "status": {
             "type": "string",
             "enum": [
-              "viewer",
-              "editor",
-              "admin"
+              "IMPORTED",
+              "SKIPPED",
+              "REJECTED"
             ],
-            "title": "Role"
+            "title": "Status"
           },
-          "is_active": {
-            "type": "boolean",
-            "title": "Is Active"
+          "job_id": {
+            "type": "string",
+            "title": "Job Id"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "run_no": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run No"
+          },
+          "schema_id": {
+            "type": "string",
+            "title": "Schema Id"
+          },
+          "summary": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Summary"
+          },
+          "operation": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "CREATED",
+                  "NOOP",
+                  "REPLACED",
+                  "REJECTED"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "existing_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Existing Run Id"
+          },
+          "replaced_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replaced Run Id"
+          },
+          "source_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Revision"
           }
         },
         "type": "object",
         "required": [
-          "role",
-          "is_active"
+          "status",
+          "job_id",
+          "schema_id",
+          "summary"
         ],
-        "title": "UserAccessUpdate"
+        "title": "TypedResultExampleResponse",
+        "description": "Named response contract for the checked-in typed example importer."
       },
       "ValidationError": {
         "properties": {
@@ -6082,11 +9995,17 @@
             "default": "CUSTOM"
           },
           "updated_by": {
-            "type": "string",
-            "maxLength": 60,
-            "minLength": 2,
-            "title": "Updated By",
-            "default": "관리자"
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 60,
+                "minLength": 2
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated By"
           }
         },
         "type": "object",
@@ -6161,11 +10080,17 @@
             "default": "CUSTOM"
           },
           "updated_by": {
-            "type": "string",
-            "maxLength": 60,
-            "minLength": 2,
-            "title": "Updated By",
-            "default": "관리자"
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 60,
+                "minLength": 2
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated By"
           }
         },
         "type": "object",
@@ -6255,6 +10180,22 @@
           "h"
         ],
         "title": "Widget"
+      },
+      "WorkItemAssigneeUpdate": {
+        "properties": {
+          "owner_user_id": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 3,
+            "title": "Owner User Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "owner_user_id"
+        ],
+        "title": "WorkItemAssigneeUpdate"
       },
       "WorkItemComplete": {
         "properties": {
@@ -6413,10 +10354,23 @@
             ],
             "title": "Status"
           },
-          "owner": {
+          "owner_user_id": {
             "type": "string",
-            "maxLength": 80,
-            "minLength": 1,
+            "maxLength": 120,
+            "minLength": 3,
+            "title": "Owner User Id"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Owner"
           },
           "progress": {
@@ -6441,7 +10395,7 @@
         "required": [
           "name",
           "status",
-          "owner",
+          "owner_user_id",
           "progress"
         ],
         "title": "WorkflowStepDraft"
@@ -6472,6 +10426,19 @@
               }
             ],
             "title": "Status"
+          },
+          "owner_user_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120,
+                "minLength": 3
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner User Id"
           },
           "owner": {
             "anyOf": [
@@ -6549,6 +10516,10 @@
       },
       "WorkspaceLayoutResponse": {
         "properties": {
+          "project_id": {
+            "type": "string",
+            "title": "Project Id"
+          },
           "layout_kind": {
             "type": "string",
             "enum": [
@@ -6578,6 +10549,7 @@
         },
         "type": "object",
         "required": [
+          "project_id",
           "layout_kind",
           "version",
           "definition",
@@ -6594,11 +10566,17 @@
             "title": "Definition"
           },
           "updated_by": {
-            "type": "string",
-            "maxLength": 60,
-            "minLength": 2,
-            "title": "Updated By",
-            "default": "대시보드 사용자"
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 60,
+                "minLength": 2
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated By"
           }
         },
         "type": "object",
@@ -6609,6 +10587,10 @@
       },
       "WorkspaceLayoutVersionResponse": {
         "properties": {
+          "project_id": {
+            "type": "string",
+            "title": "Project Id"
+          },
           "layout_kind": {
             "type": "string",
             "enum": [
@@ -6637,6 +10619,7 @@
         },
         "type": "object",
         "required": [
+          "project_id",
           "layout_kind",
           "version",
           "created_by",
