@@ -116,10 +116,10 @@ def prepare(connection: psycopg.Connection) -> None:
         INSERT INTO request_type_versions
             (id, version, display_name, description, allowed_task_types_json,
              default_workflow_json, match_rules_json, is_active, created_at)
-        VALUES (%s, 1, 'Fixture Request Type', '0006 upgrade fixture request type',
-                jsonb_build_array(jsonb_build_object('id', %s, 'version', 1)),
+        VALUES (CAST(%s AS VARCHAR), 1, 'Fixture Request Type', '0006 upgrade fixture request type',
+                jsonb_build_array(jsonb_build_object('id', CAST(%s AS VARCHAR), 'version', 1)),
                 jsonb_build_object('nodes', jsonb_build_array(jsonb_build_object(
-                    'node_key', 'fixture-node', 'task_type_id', %s,
+                    'node_key', 'fixture-node', 'task_type_id', CAST(%s AS VARCHAR),
                     'task_type_version', 1, 'depends_on', '[]'::jsonb,
                     'display_name', 'Fixture Work Item'))),
                 '{}'::jsonb, true, %s)
@@ -133,10 +133,10 @@ def prepare(connection: psycopg.Connection) -> None:
             (request_id, request_type_id, request_type_version, scenario_name,
              source_type, source_reference, requested_by, definition_snapshot_json,
              assigned_by, assigned_at)
-        VALUES (%s, %s, 1, 'Fixture Request Plan', 'DEPARTMENT_HEAD',
+        VALUES (CAST(%s AS VARCHAR), CAST(%s AS VARCHAR), 1, 'Fixture Request Plan', 'DEPARTMENT_HEAD',
                 '0006 upgrade fixture', 'fixture-admin',
                 jsonb_build_object('nodes', jsonb_build_array(jsonb_build_object(
-                    'node_key', 'fixture-node', 'task_type_id', %s,
+                    'node_key', 'fixture-node', 'task_type_id', CAST(%s AS VARCHAR),
                     'task_type_version', 1, 'depends_on', '[]'::jsonb,
                     'display_name', 'Fixture Work Item'))),
                 'fixture-admin', %s)

@@ -43,3 +43,10 @@ def test_prepare_seeds_the_versioned_plan_parents_before_fixture_work_item() -> 
         fixture.FIXTURE_TASK_TYPE_ID,
     ]
     assert item_parameters == [fixture.FIXTURE_REQUEST_ID, fixture.FIXTURE_TASK_TYPE_ID]
+
+    request_type_statement = connection.calls[request_type_index][0]
+    plan_statement = connection.calls[plan_index][0]
+    assert "jsonb_build_object('id', CAST(%s AS VARCHAR), 'version', 1)" in request_type_statement
+    assert "'task_type_id', CAST(%s AS VARCHAR)" in request_type_statement
+    assert "VALUES (CAST(%s AS VARCHAR), CAST(%s AS VARCHAR), 1" in plan_statement
+    assert "'task_type_id', CAST(%s AS VARCHAR)" in plan_statement
