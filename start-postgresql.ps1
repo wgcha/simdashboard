@@ -10,7 +10,7 @@ if (-not (Test-Path -LiteralPath $Python)) {
 }
 
 if (-not (Test-Path -LiteralPath $Python)) {
-    throw 'Python virtual environment was not found. Run setup-windows.bat first.'
+    throw 'Python virtual environment was not found. Run setup.ps1 first.'
 }
 if (-not (Test-Path -LiteralPath $StartScript)) {
     throw 'start.ps1 was not found.'
@@ -22,7 +22,7 @@ if (Test-Path -LiteralPath $PidFile) {
         $_ -and (Get-Process -Id $_ -ErrorAction SilentlyContinue)
     }
     if ($runningServers.Count -gt 0) {
-        throw 'Analysis Canvas is already running. Run stop.bat before switching to PostgreSQL.'
+        throw 'Analysis Canvas is already running. Run stop.ps1 before switching to PostgreSQL.'
     }
 }
 

@@ -145,7 +145,7 @@ echo  Setup completed successfully.
 echo ============================================================
 echo.
 echo Start command:
-echo   start.bat
+echo   start.ps1
 echo.
 echo Dashboard:
 echo   http://127.0.0.1:5173

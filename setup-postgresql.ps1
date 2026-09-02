@@ -5,7 +5,7 @@ if (-not (Test-Path -LiteralPath $Python)) {
     $Python = Join-Path $Root '.venv\Scripts\python.exe'
 }
 if (-not (Test-Path -LiteralPath $Python)) {
-    throw 'Python virtual environment was not found. Run setup-windows.bat first.'
+    throw 'Python virtual environment was not found. Run setup.ps1 first.'
 }
 
 $env:PYTHONIOENCODING = 'utf-8'

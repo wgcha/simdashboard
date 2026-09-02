@@ -40,14 +40,14 @@
 
 ### Windows
 
-PowerShell 또는 명령 프롬프트에서 다음을 실행합니다.
+PowerShell에서 다음을 실행합니다.
 
 ```powershell
-.\setup.bat
-.\start.bat
+.\setup.ps1
+.\start.ps1
 ```
 
-Windows 실행은 개발·호환성 검증과 DuckDB→PostgreSQL DB 이관을 위한 profile입니다. PostgreSQL 프로필을 사용할 때는 `start-postgresql.bat`을 사용합니다. 새 DB 구축, 기존 DB 유지, 전송 번들 이관은 [`docs/backend-sql-integration-guide.md`](docs/backend-sql-integration-guide.md)와 [`docs/postgresql-pc-transfer-guide.md`](docs/postgresql-pc-transfer-guide.md)를 따릅니다. Windows one-command 운영 배포는 지원하지 않습니다. Master Refresh endpoint는 POSIX snapshot traversal을 사용하는 canonical WSL/Rocky 경로에서만 지원하며, native Windows에서는 Windows handle 기반 adapter가 준비될 때까지 fail-closed합니다. 수동 upload와 다른 compatibility 기능은 계속 사용할 수 있습니다.
+Windows 실행은 개발·호환성 검증과 DuckDB→PostgreSQL DB 이관을 위한 compatibility profile입니다. PostgreSQL 프로필을 사용할 때는 `start-postgresql.ps1`을 사용합니다. 새 DB 구축, 기존 DB 유지, 전송 번들 이관은 [`docs/backend-sql-integration-guide.md`](docs/backend-sql-integration-guide.md)와 [`docs/postgresql-pc-transfer-guide.md`](docs/postgresql-pc-transfer-guide.md)를 따릅니다. Windows one-command 운영 배포는 지원하지 않습니다. 사내 운영 배포는 [`deploy/rocky8/README.md`](deploy/rocky8/README.md)의 Rocky 8 `build-release.sh`와 대상 서버 `install.sh` 절차를 사용합니다. Master Refresh endpoint는 POSIX snapshot traversal을 사용하는 canonical WSL/Rocky 경로에서만 지원하며, native Windows에서는 Windows handle 기반 adapter가 준비될 때까지 fail-closed합니다. 수동 upload와 다른 compatibility 기능은 계속 사용할 수 있습니다.
 
 ## 실행 프로필
 
@@ -135,6 +135,13 @@ pnpm run generate:api
 ## 배포
 
 Rocky Linux 8 + nginx + systemd + PostgreSQL 18이 canonical 운영 target입니다. 구조는 `nginx → loopback FastAPI systemd service → PostgreSQL 18`이며 운영 Node.js 서버나 Docker를 사용하지 않습니다. 결정과 profile 범위는 [`docs/adr/0004-canonical-production-deployment-target.md`](docs/adr/0004-canonical-production-deployment-target.md)를 따릅니다.
+
+릴리스 빌드 장비에서 `./deploy/rocky8/build-release.sh`로 번들을 만든 뒤 대상 Rocky 서버에서 아래 명령을 실행합니다. `--check`가 읽기 전용 사전 검증이고, 두 번째 명령이 실제 설치·서비스 전환입니다.
+
+```bash
+sudo ./install.sh --config /root/simdashboard-install.env --check
+sudo ./install.sh --config /root/simdashboard-install.env
+```
 
 - 설치와 번들: [`deploy/rocky8/README.md`](deploy/rocky8/README.md)
 - 운영 순서: [`docs/rocky8-deployment-runbook.md`](docs/rocky8-deployment-runbook.md)

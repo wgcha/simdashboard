@@ -91,10 +91,10 @@ def require_stopped() -> None:
     try:
         payload = json.loads(PID_FILE.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError):
-        raise RuntimeError("The server PID file is unreadable. Run stop.bat before transfer.")
+        raise RuntimeError("The server PID file is unreadable. Run stop.ps1 before transfer.")
     running = [int(value) for value in (payload.get("backend"), payload.get("frontend")) if value and process_is_running(int(value))]
     if running:
-        raise RuntimeError("Analysis Canvas is running. Run stop.bat before transfer.")
+        raise RuntimeError("Analysis Canvas is running. Run stop.ps1 before transfer.")
 
 
 def find_pg_tool(name: str) -> str:

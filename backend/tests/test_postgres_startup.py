@@ -520,7 +520,6 @@ def test_start_scripts_use_pending_migration_preflight_and_readiness_cleanup():
     postgres_start = (root / "start-postgresql.ps1").read_text(encoding="utf-8")
     general_start = (root / "start.ps1").read_text(encoding="utf-8")
     stop_script = (root / "stop.ps1").read_text(encoding="utf-8")
-    postgres_batch = (root / "start-postgresql.bat").read_text(encoding="utf-8")
     migration_source = (root / "backend" / "scripts" / "upgrade_postgres_schema.py").read_text(encoding="utf-8")
 
     assert "& $StartScript" in postgres_start
@@ -540,7 +539,7 @@ def test_start_scripts_use_pending_migration_preflight_and_readiness_cleanup():
     assert "Analysis Canvas API" in stop_script
     assert "unverified listener is never terminated" in stop_script
     assert "could not be verified as an Analysis Canvas server" in stop_script
-    assert "occupied" in postgres_batch and "port" in postgres_batch
+    assert "-Port 8000" in general_start and "-Port 5173" in general_start
     assert general_start.index("catch {") < general_start.index("Backend health database mismatch.")
     assert "process exited during readiness verification" in general_start
     assert "ANALYSIS_DATABASE_PREFLIGHT_COMPLETE" not in general_start
