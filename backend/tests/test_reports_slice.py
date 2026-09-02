@@ -876,7 +876,27 @@ def test_layout_missing_inactive_version_and_delete_guards_are_exact() -> None:
     }
     with connect() as connection:
         connection.execute(
-            "INSERT INTO report_layout_versions VALUES (?, 1, ?, 'tester', ?, false)",
+            """
+            INSERT INTO report_layouts
+                (id, name, description, version, definition_json, is_system, is_active,
+                 created_at, updated_at, updated_by)
+            VALUES (?, ?, ?, 1, ?, false, true, ?, ?, 'tester')
+            """,
+            [
+                invalid_layout_id,
+                payload["name"],
+                payload["description"],
+                json.dumps(invalid_definition),
+                datetime(2026, 1, 2, 3, 4, 5),
+                datetime(2026, 1, 2, 3, 4, 5),
+            ],
+        )
+        connection.execute(
+            """
+            INSERT INTO report_layout_versions
+                (layout_id, version, definition_json, created_by, created_at, is_valid)
+            VALUES (?, 1, ?, 'tester', ?, false)
+            """,
             [invalid_layout_id, json.dumps(invalid_definition), datetime(2026, 1, 2, 3, 4, 5)],
         )
     with TestClient(app) as client:
@@ -1118,7 +1138,27 @@ def test_password_active_general_can_read_history_but_mutations_require_global_a
     }
     with connect() as connection:
         connection.execute(
-            "INSERT INTO report_layout_versions VALUES (?, 1, ?, 'tester', ?, true)",
+            """
+            INSERT INTO report_layouts
+                (id, name, description, version, definition_json, is_system, is_active,
+                 created_at, updated_at, updated_by)
+            VALUES (?, ?, ?, 1, ?, false, true, ?, ?, 'tester')
+            """,
+            [
+                readable_layout_id,
+                payload["name"],
+                payload["description"],
+                json.dumps(readable_definition),
+                datetime(2026, 1, 2, 3, 4, 5),
+                datetime(2026, 1, 2, 3, 4, 5),
+            ],
+        )
+        connection.execute(
+            """
+            INSERT INTO report_layout_versions
+                (layout_id, version, definition_json, created_by, created_at, is_valid)
+            VALUES (?, 1, ?, 'tester', ?, true)
+            """,
             [readable_layout_id, json.dumps(readable_definition), datetime(2026, 1, 2, 3, 4, 5)],
         )
     with TestClient(app) as client:

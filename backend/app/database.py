@@ -1170,6 +1170,10 @@ def seed_reference_database() -> None:
     during PostgreSQL application startup.
     """
     with connect() as conn:
+        # Menu definitions are application-owned catalog metadata. Keep their
+        # canonical order aligned with DuckDB without overwriting an
+        # administrator's role visibility choices.
+        ensure_menu_policy_catalog(conn)
         ensure_default_content(conn)
 
 
@@ -1305,8 +1309,6 @@ def ensure_access_control_schema(
     Alembic (notably partial unique indexes), so duplicate open invitations are
     also rejected transactionally by the repository/API layer.
     """
-    from .access_policy import DEFAULT_MENU_VISIBILITY, MENU_DEFINITIONS
-
     # DuckDB has no Alembic history, so data backfills need a durable marker.
     # Schema/seed repair stays idempotent, while legacy role grants run once.
     conn.execute(
@@ -1460,6 +1462,19 @@ def ensure_access_control_schema(
             [now],
         )
 
+    ensure_menu_policy_catalog(conn, seeded_at=now)
+
+
+def ensure_menu_policy_catalog(conn: ConnectionLike, *, seeded_at: datetime | None = None) -> None:
+    """Reconcile application-owned menus without resetting role visibility.
+
+    DuckDB uses this during its compatibility bootstrap. PostgreSQL invokes it
+    only through the explicit reference seed command, so startup remains a
+    read-only schema preflight while both backends share one catalog contract.
+    """
+    from .access_policy import DEFAULT_MENU_VISIBILITY, MENU_DEFINITIONS
+
+    now = seeded_at or datetime.now(timezone.utc).replace(tzinfo=None)
     for menu in MENU_DEFINITIONS:
         conn.execute(
             """

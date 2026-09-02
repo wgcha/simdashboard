@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.access_policy import MENU_DEFINITIONS
-from app.database import initialize_database
+from app.database import initialize_database, seed_reference_database
 from app.database_connection import connect
 from app.main import app
 
@@ -126,15 +126,17 @@ def test_default_menu_order_follows_the_request_workflow():
     assert [(definition.id, definition.sequence_no) for definition in MENU_DEFINITIONS] == EXPECTED_MENU_ORDER
 
 
-def test_duckdb_bootstrap_reconciles_menu_order_without_resetting_visibility():
-    initialize_database()
+def test_reference_seed_reconciles_menu_order_without_resetting_visibility():
+    # PostgreSQL startup is deliberately read-only. The explicit reference
+    # seed is the shared DuckDB/PostgreSQL catalog reconciliation boundary.
+    seed_reference_database()
     with connect() as conn:
         conn.execute("UPDATE menu_definitions SET sequence_no=1000-sequence_no")
         conn.execute(
             "UPDATE role_menu_policies SET is_visible=false WHERE role='power' AND menu_id='data'"
         )
 
-    initialize_database()
+    seed_reference_database()
 
     with connect() as conn:
         stored_order = conn.execute(

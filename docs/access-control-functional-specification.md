@@ -401,4 +401,3 @@ DIRECTORY_API_BASE_URL=https://...
 | AUDIT-01~04 | 10장 | 이벤트 내용, secret denylist, 트랜잭션 rollback |
 | OPS-01~04 | 11~14장 | fail-closed, DB 이전, Windows VM release gate |
 | MOD-01~06 | 12장 | facade 의존, provider 교체, 데이터·배포 독립성 |
-
