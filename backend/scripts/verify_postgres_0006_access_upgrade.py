@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from datetime import datetime, timezone
 
@@ -34,6 +35,20 @@ FIXTURE_PROJECT_ID = "fixture-project"
 FIXTURE_REQUEST_ID = "fixture-request-unique"
 FIXTURE_REQUEST_TYPE_ID = "fixture-request-type"
 FIXTURE_TASK_TYPE_ID = "fixture-task-type"
+FIXTURE_LAYOUTS = (
+    (
+        "portfolio",
+        3,
+        {"fontSize": 11, "chartOrder": ["status", "trend", "quality", "type"]},
+        "fixture-layout-owner",
+    ),
+    (
+        "workflow",
+        4,
+        {"fontSize": 12, "accentColor": "#345678", "items": []},
+        "fixture-layout-owner",
+    ),
+)
 
 
 def database_url() -> str:
@@ -77,6 +92,32 @@ def prepare(connection: psycopg.Connection) -> None:
         """,
         [FIXTURE_PROJECT_ID, now],
     )
+    # 0007 copies the legacy global layout current rows and histories into
+    # project-scoped storage only when those legacy parent rows exist.
+    for layout_kind, version, definition, owner in FIXTURE_LAYOUTS:
+        encoded = json.dumps(definition, ensure_ascii=False, sort_keys=True)
+        connection.execute(
+            """
+            INSERT INTO workspace_layouts
+                (layout_kind, version, definition_json, updated_by, updated_at)
+            VALUES (%s, %s, CAST(%s AS JSONB), %s, %s)
+            ON CONFLICT (layout_kind) DO UPDATE SET
+                version=excluded.version, definition_json=excluded.definition_json,
+                updated_by=excluded.updated_by, updated_at=excluded.updated_at
+            """,
+            [layout_kind, version, encoded, owner, now],
+        )
+        connection.execute(
+            """
+            INSERT INTO workspace_layout_versions
+                (layout_kind, version, definition_json, created_by, created_at, is_valid)
+            VALUES (%s, %s, CAST(%s AS JSONB), %s, %s, true)
+            ON CONFLICT (layout_kind, version) DO UPDATE SET
+                definition_json=excluded.definition_json, created_by=excluded.created_by,
+                created_at=excluded.created_at, is_valid=excluded.is_valid
+            """,
+            [layout_kind, version, encoded, owner, now],
+        )
     connection.execute(
         """
         INSERT INTO analysis_requests
@@ -220,11 +261,42 @@ def assert_upgraded(connection: psycopg.Connection) -> None:
     menu_state = connection.execute("SELECT version FROM menu_policy_state WHERE id='global'").fetchone()
     if menu_state != (1,):
         raise AssertionError(f"menu policy seed mismatch: {menu_state}")
-    layout_count = connection.execute(
-        "SELECT count(*) FROM project_workspace_layouts WHERE project_id='fixture-project'"
-    ).fetchone()[0]
-    if layout_count != 2:
-        raise AssertionError(f"project workspace backfill mismatch: {layout_count}")
+    current_layouts = connection.execute(
+        """
+        SELECT project.layout_kind,
+               project.version=global.version,
+               project.definition_json=global.definition_json,
+               project.updated_by=global.updated_by,
+               project.updated_at=global.updated_at
+        FROM project_workspace_layouts AS project
+        JOIN workspace_layouts AS global ON global.layout_kind=project.layout_kind
+        WHERE project.project_id=%s
+        ORDER BY project.layout_kind
+        """,
+        [FIXTURE_PROJECT_ID],
+    ).fetchall()
+    expected_current_layouts = [(kind, True, True, True, True) for kind, *_ in FIXTURE_LAYOUTS]
+    if current_layouts != expected_current_layouts:
+        raise AssertionError(f"project workspace current-layout backfill mismatch: {current_layouts}")
+
+    layout_versions = connection.execute(
+        """
+        SELECT project.layout_kind, project.version,
+               project.definition_json=global.definition_json,
+               project.created_by=global.created_by,
+               project.created_at=global.created_at,
+               project.is_valid=global.is_valid
+        FROM project_workspace_layout_versions AS project
+        JOIN workspace_layout_versions AS global
+          ON global.layout_kind=project.layout_kind AND global.version=project.version
+        WHERE project.project_id=%s
+        ORDER BY project.layout_kind, project.version
+        """,
+        [FIXTURE_PROJECT_ID],
+    ).fetchall()
+    expected_layout_versions = [(kind, version, True, True, True, True) for kind, version, *_ in FIXTURE_LAYOUTS]
+    if layout_versions != expected_layout_versions:
+        raise AssertionError(f"project workspace version backfill mismatch: {layout_versions}")
 
 
 def main() -> None:

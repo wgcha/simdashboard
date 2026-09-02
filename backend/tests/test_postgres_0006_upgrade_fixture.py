@@ -25,7 +25,25 @@ def test_prepare_seeds_the_versioned_plan_parents_before_fixture_work_item() -> 
     request_type_index = call_index("INSERT INTO request_type_versions")
     plan_index = call_index("INSERT INTO request_work_plans")
     item_index = call_index("INSERT INTO request_work_items")
-    assert task_index < request_type_index < plan_index < item_index
+    global_layout_indices = [
+        index for index, (statement, _) in enumerate(connection.calls)
+        if "INSERT INTO workspace_layouts" in statement
+    ]
+    global_layout_version_indices = [
+        index for index, (statement, _) in enumerate(connection.calls)
+        if "INSERT INTO workspace_layout_versions" in statement
+    ]
+    assert len(global_layout_indices) == len(global_layout_version_indices) == 2
+    assert max(global_layout_version_indices) < task_index < request_type_index < plan_index < item_index
+
+    expected_layout_kinds = [kind for kind, *_ in fixture.FIXTURE_LAYOUTS]
+    expected_layout_versions = [version for _, version, *_ in fixture.FIXTURE_LAYOUTS]
+    assert [connection.calls[index][1][:2] for index in global_layout_indices] == [
+        [kind, version] for kind, version in zip(expected_layout_kinds, expected_layout_versions, strict=True)
+    ]
+    assert [connection.calls[index][1][:2] for index in global_layout_version_indices] == [
+        [kind, version] for kind, version in zip(expected_layout_kinds, expected_layout_versions, strict=True)
+    ]
 
     task_parameters = connection.calls[task_index][1]
     request_type_parameters = connection.calls[request_type_index][1]
