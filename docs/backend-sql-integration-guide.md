@@ -16,7 +16,7 @@
 
 이 문서는 현재 구현된 DuckDB/PostgreSQL 선택, 데이터 이전, 운영 시작과 보안 계약을 설명한다. PostgreSQL 드라이버, SQLAlchemy 연결 계층, Alembic migration과 Windows 시작 스크립트는 저장소에 구현되어 있다.
 
-최초 구축은 `setup-postgresql.bat`과 별도 관리자 자격 증명으로 역할·DB·스키마·초기 데이터를 준비한다. 구축 후 서비스 `.env`에는 `simdashboard_app` URL만 저장하고, 보호된 `.postgres-owner.env`에는 migration 전용 `simdashboard_owner` URL만 저장한다. 일반 운영 시작은 아래 10절의 제한된 자동 migration 계약을 따른다.
+최초 구축은 `setup-postgresql.ps1`과 별도 관리자 자격 증명으로 역할·DB·스키마·초기 데이터를 준비한다. 구축 후 서비스 `.env`에는 `simdashboard_app` URL만 저장하고, 보호된 `.postgres-owner.env`에는 migration 전용 `simdashboard_owner` URL만 저장한다. 일반 운영 시작은 아래 10절의 제한된 자동 migration 계약을 따른다.
 
 ## 1. 최종 목표
 
@@ -530,7 +530,7 @@ rg -n "INSERT OR IGNORE|\?|duckdb|CREATE TABLE|BEGIN TRANSACTION|JSON" backend\a
 
 ## 10. 초기화와 샘플 데이터 정책
 
-DuckDB의 로컬 초기화와 PostgreSQL의 스키마 변경은 분리한다. PostgreSQL 스키마 생성·변경은 Alembic만 담당하며, 일반 운영 시작은 `start.ps1`이 `backend/scripts/upgrade_postgres_schema.py`와 `backend/scripts/check_postgres_connection.py`를 서버 프로세스보다 먼저 호출한다. `start-postgresql.bat`은 PostgreSQL 모드를 지정한 뒤 같은 `start.ps1` 계약에 위임한다.
+DuckDB의 로컬 초기화와 PostgreSQL의 스키마 변경은 분리한다. PostgreSQL 스키마 생성·변경은 Alembic만 담당하며, 일반 운영 시작은 `start.ps1`이 `backend/scripts/upgrade_postgres_schema.py`와 `backend/scripts/check_postgres_connection.py`를 서버 프로세스보다 먼저 호출한다. `start-postgresql.ps1`은 PostgreSQL 모드를 지정한 뒤 같은 `start.ps1` 계약에 위임한다.
 
 운영 시작 계약은 다음과 같다.
 

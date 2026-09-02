@@ -6,7 +6,7 @@ $ErrorActionPreference = 'Stop'
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $Python = Join-Path $ProjectRoot '.venv-runtime\Scripts\python.exe'
 if (-not (Test-Path -LiteralPath $Python)) { $Python = Join-Path $ProjectRoot '.venv\Scripts\python.exe' }
-if (-not (Test-Path -LiteralPath $Python)) { throw 'Python virtual environment not found. Run setup-windows.bat first.' }
+if (-not (Test-Path -LiteralPath $Python)) { throw 'Python virtual environment not found. Run setup.ps1 first.' }
 
 foreach ($name in @('POSTGRES_ADMIN_URL', 'SIM_DASH_OWNER_PASSWORD', 'SIM_DASH_APP_PASSWORD', 'DATABASE_URL')) {
     if (-not [Environment]::GetEnvironmentVariable($name, 'Process')) { throw "$name environment variable is required." }

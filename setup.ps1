@@ -286,7 +286,7 @@ try {
     }
 
     Write-Host "`n통합 설치가 완료되었습니다." -ForegroundColor Green
-    Write-Host '다음 명령: start-postgresql.bat'
+    Write-Host '다음 명령: .\start-postgresql.ps1'
     exit 0
 }
 catch {
@@ -296,7 +296,7 @@ catch {
         Write-Host '서비스와 재설치를 중단했습니다. .setup-recovery-required.json 및 백업을 관리자와 검토하세요.'
     }
     else {
-        Write-Host '서비스는 시작하지 않았습니다. 오류를 해결한 뒤 setup.bat을 다시 실행하세요.'
+        Write-Host '서비스는 시작하지 않았습니다. 오류를 해결한 뒤 .\setup.ps1을 다시 실행하세요.'
     }
     exit 1
 }

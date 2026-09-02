@@ -28,7 +28,7 @@ $env:POSTGRES_BIN='E:\PostgreSQL\18\bin'
 
 ### 2.1 안전한 PostgreSQL 시작과 추가 migration
 
-최초 구축을 마친 PC에서 `start-postgresql.bat` 또는 PostgreSQL이 설정된 `start.bat`을 실행하면 시작 전 다음 절차를 수행한다.
+최초 구축을 마친 PC에서 `start-postgresql.ps1` 또는 PostgreSQL이 설정된 `start.ps1`을 실행하면 시작 전 다음 절차를 수행한다.
 
 1. 앱 계정으로 `alembic_version`과 코드의 단일 head를 비교한다.
 2. 이미 head이면 `.postgres-owner.env`를 읽지 않고 앱 권한 및 핵심 테이블 접근을 확인한다.

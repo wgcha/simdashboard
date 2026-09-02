@@ -8,15 +8,15 @@
 
 일관된 DB와 파일을 묶기 위해 먼저 프로그램을 종료한다.
 
-```bat
-stop.bat
-export-postgresql-transfer.bat
+```powershell
+.\stop.ps1
+.\export-postgresql-transfer.ps1
 ```
 
 기본 출력 위치는 `transfer-bundles\analysis-canvas-transfer-<UTC 시각>`이다. 다른 위치를 지정할 수도 있다.
 
-```bat
-export-postgresql-transfer.bat "D:\analysis-transfer"
+```powershell
+.\export-postgresql-transfer.ps1 -OutputDir 'D:\analysis-transfer'
 ```
 
 생성된 `analysis-canvas-transfer-...` 폴더 전체를 대상 PC로 복사한다. 폴더 안의 파일을 개별적으로 수정하거나 이름을 바꾸면 검증에 실패한다.
@@ -26,9 +26,9 @@ export-postgresql-transfer.bat "D:\analysis-transfer"
 1. GitHub에서 동일한 버전의 저장소 전체를 다운로드한다.
 2. VS Code에서 저장소 최상위 폴더를 연다.
 3. PostgreSQL을 설치하고 서비스를 시작한다.
-4. VS Code 터미널에서 `setup.bat`을 실행한다.
+4. VS Code PowerShell 터미널에서 `setup.ps1`을 실행한다.
 5. 회사 프록시를 입력한 뒤 `Transfer` 모드와 받은 번들 폴더를 선택한다.
-6. 설치가 완료되면 `start-postgresql.bat`을 실행한다.
+6. 설치가 완료되면 `start-postgresql.ps1`을 실행한다.
 
 관리자 호스트·포트·사용자·비밀번호는 설치 중 안전하게 입력받으며 관리자 URL을 `.env`에 저장하지 않는다. 통합 설치는 번들을 먼저 검증하고, 기존 DB가 있으면 검증된 백업을 만든 뒤 스테이징 DB에서 복원과 행 수 검증을 마치고 교체한다. 기존 전용 역할이 다른 DB에서도 사용 중이면 자동 교체를 중단한다.
 
@@ -36,7 +36,7 @@ export-postgresql-transfer.bat "D:\analysis-transfer"
 
 ```powershell
 $env:POSTGRES_ADMIN_URL = 'postgresql://postgres:관리자비밀번호@127.0.0.1:5432/postgres'
-.\setup.bat -NonInteractive -Mode Transfer `
+.\setup.ps1 -NonInteractive -Mode Transfer `
   -Bundle 'D:\받은폴더\analysis-canvas-transfer-...' `
   -BackupDir 'D:\analysis-backups' `
   -ProxyUrl 'http://proxy.company.local:8080'
@@ -51,8 +51,8 @@ Remove-Item Env:POSTGRES_ADMIN_URL
 
 먼저 `--validate-only`로 번들 checksum, Alembic 호환성, dump 구조와 assets 경로를 검사한다.
 
-```bat
-import-postgresql-transfer.bat "D:\받은폴더\analysis-canvas-transfer-..." --validate-only
+```powershell
+.\import-postgresql-transfer.ps1 -Bundle 'D:\받은폴더\analysis-canvas-transfer-...' -ValidateOnly
 ```
 
 이 모드에서는 DB, 역할, 파일 또는 `.env`를 변경하지 않는다.
@@ -61,8 +61,8 @@ import-postgresql-transfer.bat "D:\받은폴더\analysis-canvas-transfer-..." --
 
 검증이 통과하면 같은 번들을 실제로 가져온다.
 
-```bat
-import-postgresql-transfer.bat "D:\받은폴더\analysis-canvas-transfer-..."
+```powershell
+.\import-postgresql-transfer.ps1 -Bundle 'D:\받은폴더\analysis-canvas-transfer-...'
 ```
 
 통합 설치 또는 가져오기 도구는 다음 순서로 처리한다.
@@ -79,16 +79,16 @@ import-postgresql-transfer.bat "D:\받은폴더\analysis-canvas-transfer-..."
 
 ## 5. 실패 시 복구
 
-1. 오류가 발생하면 `start-postgresql.bat`을 실행하지 않는다.
+1. 오류가 발생하면 `start-postgresql.ps1`을 실행하지 않는다.
 2. 설치 출력에 표시된 백업 폴더의 manifest, database dump, assets archive와 진단 정보를 보존한다.
 3. 관리자에게 오류 메시지와 백업 폴더 전체를 전달한다. 수동 복구 전에는 기존 DB, 스테이징 DB 또는 타임스탬프 DB를 삭제하거나 이름을 바꾸지 않는다.
-4. `.setup-recovery-required.json`이 있으면 `setup.bat`과 서비스 시작이 모두 차단된다. 관리자가 파일에 기록된 DB 이름·OID와 백업을 확인하고 원래 DB 또는 승격 DB 상태를 복구한 뒤에만 마커를 제거한다.
-5. 복구 마커가 없고 백업 단계에서만 실패했다면 프록시·권한·디스크 공간 등 원인을 해결한 뒤 같은 `setup.bat` 명령을 다시 실행한다.
+4. `.setup-recovery-required.json`이 있으면 `setup.ps1`과 서비스 시작이 모두 차단된다. 관리자가 파일에 기록된 DB 이름·OID와 백업을 확인하고 원래 DB 또는 승격 DB 상태를 복구한 뒤에만 마커를 제거한다.
+5. 복구 마커가 없고 백업 단계에서만 실패했다면 프록시·권한·디스크 공간 등 원인을 해결한 뒤 같은 `setup.ps1` 명령을 다시 실행한다.
 
 ## 6. 시작과 확인
 
-```bat
-start-postgresql.bat
+```powershell
+.\start-postgresql.ps1
 ```
 
 브라우저 또는 PowerShell에서 확인한다.

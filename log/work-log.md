@@ -2,6 +2,22 @@
 
 이 파일은 완료된 개발 작업을 누적 기록한다. 이후 작업은 완료 시 최신 항목을 문서 상단에 추가하며, 변경 범위·검증 결과·남은 확인 사항을 함께 남긴다.
 
+## 2026-09-02 — 배포 진입점 정리
+
+### 변경 내용
+
+- PowerShell 또는 POSIX shell 진입점으로 완전히 대체된 7개 Windows wrapper(`export-postgresql-transfer.bat`, `import-postgresql-transfer.bat`, `setup-postgresql.bat`, `setup.bat`, `start-postgresql.bat`, `start.bat`, `stop.bat`)를 삭제했다.
+- 실제 Windows 의존성 설치 로직을 보유하고 `setup.ps1`에서 호출되는 `setup-windows.bat`은 대체 진입점이 없어 보존했다.
+- 사내 운영 배포의 canonical Rocky 8 경로를 문서에 명시했다: (1) `./deploy/rocky8/build-release.sh`로 bundle 생성, (2) 대상에서 `sudo ./install.sh --config /root/simdashboard-install.env --check` 실행, (3) 검증 통과 후 `sudo ./install.sh --config /root/simdashboard-install.env` 실행.
+- README, PostgreSQL 이관/통합 문서, PowerShell 오류 안내와 startup 테스트를 삭제된 wrapper 없이 갱신했다.
+
+### 검증 결과 및 남은 확인
+
+- `tests/test_postgres_startup.py`: `70 passed`
+- `bash deploy/rocky8/validate-templates.sh`: `ROCKY8_DEPLOY_TEMPLATES_OK`
+- `git diff --check`: 통과
+- WSL에서 Windows PowerShell parser를 호출하려 했으나 Windows interop의 `UtilBindVsockAnyPort` 오류로 실행하지 못했다. Rocky POSIX shell 정적 검증과 Python 테스트는 완료했다.
+
 ## 2026-08-09 — 보고서·판정·작업 배치 실행 미완료 범위 보완
 
 ### 담당

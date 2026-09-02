@@ -22,7 +22,7 @@ $Frontend = Join-Path $Root 'frontend'
 $PidFile = Join-Path $Root '.server-pids.json'
 
 if (-not (Test-Path -LiteralPath $Python)) {
-    throw 'Python virtual environment was not found. Run setup-windows.bat first.'
+    throw 'Python virtual environment was not found. Run setup.ps1 first.'
 }
 
 $pnpm = (Get-Command pnpm.cmd -ErrorAction SilentlyContinue).Source
@@ -31,7 +31,7 @@ if (-not $pnpm) {
     $bundledPnpm = Join-Path $env:USERPROFILE '.cache\codex-runtimes\codex-primary-runtime\dependencies\bin\fallback\pnpm.cmd'
     if (Test-Path -LiteralPath $bundledPnpm) { $pnpm = $bundledPnpm }
 }
-if (-not $pnpm) { throw 'pnpm was not found. Run setup-windows.bat first.' }
+if (-not $pnpm) { throw 'pnpm was not found. Run setup.ps1 first.' }
 
 function Stop-ProcessTree([int]$ProcessIdentifier) {
     $children = Get-CimInstance Win32_Process -Filter "ParentProcessId = $ProcessIdentifier" -ErrorAction SilentlyContinue
@@ -98,7 +98,7 @@ if (Test-Path -LiteralPath $PidFile) {
             $_ -and (Get-Process -Id $_ -ErrorAction SilentlyContinue)
         }
         if ($runningServers.Count -gt 0) {
-            throw 'Analysis Canvas is already running. Run stop.bat first.'
+            throw 'Analysis Canvas is already running. Run stop.ps1 first.'
         }
         Remove-Item -LiteralPath $PidFile -Force
     }
