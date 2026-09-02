@@ -30,6 +30,10 @@ USER_ACCESS_COLUMNS = (
     "approved_at",
     "last_login_at",
 )
+FIXTURE_PROJECT_ID = "fixture-project"
+FIXTURE_REQUEST_ID = "fixture-request-unique"
+FIXTURE_REQUEST_TYPE_ID = "fixture-request-type"
+FIXTURE_TASK_TYPE_ID = "fixture-task-type"
 
 
 def database_url() -> str:
@@ -68,21 +72,21 @@ def prepare(connection: psycopg.Connection) -> None:
     connection.execute(
         """
         INSERT INTO projects (id, name, product_name, description, created_at)
-        VALUES ('fixture-project', 'Fixture Project', 'Fixture Product', '0006 upgrade fixture', %s)
+        VALUES (%s, 'Fixture Project', 'Fixture Product', '0006 upgrade fixture', %s)
         ON CONFLICT (id) DO NOTHING
         """,
-        [now],
+        [FIXTURE_PROJECT_ID, now],
     )
     connection.execute(
         """
         INSERT INTO analysis_requests
             (id, project_id, title, status, owner, requested_at, due_at, overall_note)
         VALUES
-            ('fixture-request-unique', 'fixture-project', 'Unique owner', 'READY', 'fixture-editor', %s, %s, ''),
-            ('fixture-request-ambiguous', 'fixture-project', 'Ambiguous owner', 'READY', 'Duplicate Owner', %s, %s, '')
+            (%s, %s, 'Unique owner', 'READY', 'fixture-editor', %s, %s, ''),
+            ('fixture-request-ambiguous', %s, 'Ambiguous owner', 'READY', 'Duplicate Owner', %s, %s, '')
         ON CONFLICT (id) DO NOTHING
         """,
-        [now, now, now, now],
+        [FIXTURE_REQUEST_ID, FIXTURE_PROJECT_ID, now, now, FIXTURE_PROJECT_ID, now, now],
     )
     connection.execute(
         """
@@ -92,15 +96,64 @@ def prepare(connection: psycopg.Connection) -> None:
         ON CONFLICT (id) DO NOTHING
         """
     )
+    # The 0004 work-item contract already enforces both parents: a plan for
+    # the request and a versioned task type. Seed the smallest realistic plan
+    # graph before inserting the ownership-backfill work item below.
+    connection.execute(
+        """
+        INSERT INTO task_type_versions
+            (id, version, kind, display_name, description, supports_standalone,
+             input_artifact_types_json, output_artifact_types_json, parameter_schema_json,
+             demo_artifact_url, is_active, created_at)
+        VALUES (%s, 1, 'FIXTURE', 'Fixture Task', '0006 upgrade fixture task', true,
+                '[]'::jsonb, '[]'::jsonb, '{}'::jsonb, 'fixture://task', true, %s)
+        ON CONFLICT (id, version) DO NOTHING
+        """,
+        [FIXTURE_TASK_TYPE_ID, now],
+    )
+    connection.execute(
+        """
+        INSERT INTO request_type_versions
+            (id, version, display_name, description, allowed_task_types_json,
+             default_workflow_json, match_rules_json, is_active, created_at)
+        VALUES (%s, 1, 'Fixture Request Type', '0006 upgrade fixture request type',
+                jsonb_build_array(jsonb_build_object('id', %s, 'version', 1)),
+                jsonb_build_object('nodes', jsonb_build_array(jsonb_build_object(
+                    'node_key', 'fixture-node', 'task_type_id', %s,
+                    'task_type_version', 1, 'depends_on', '[]'::jsonb,
+                    'display_name', 'Fixture Work Item'))),
+                '{}'::jsonb, true, %s)
+        ON CONFLICT (id, version) DO NOTHING
+        """,
+        [FIXTURE_REQUEST_TYPE_ID, FIXTURE_TASK_TYPE_ID, FIXTURE_TASK_TYPE_ID, now],
+    )
+    connection.execute(
+        """
+        INSERT INTO request_work_plans
+            (request_id, request_type_id, request_type_version, scenario_name,
+             source_type, source_reference, requested_by, definition_snapshot_json,
+             assigned_by, assigned_at)
+        VALUES (%s, %s, 1, 'Fixture Request Plan', 'DEPARTMENT_HEAD',
+                '0006 upgrade fixture', 'fixture-admin',
+                jsonb_build_object('nodes', jsonb_build_array(jsonb_build_object(
+                    'node_key', 'fixture-node', 'task_type_id', %s,
+                    'task_type_version', 1, 'depends_on', '[]'::jsonb,
+                    'display_name', 'Fixture Work Item'))),
+                'fixture-admin', %s)
+        ON CONFLICT (request_id) DO NOTHING
+        """,
+        [FIXTURE_REQUEST_ID, FIXTURE_REQUEST_TYPE_ID, FIXTURE_TASK_TYPE_ID, now],
+    )
     connection.execute(
         """
         INSERT INTO request_work_items
             (id, request_id, node_key, task_type_id, task_type_version, sequence_no,
              display_name, status, progress, owner)
-        VALUES ('fixture-item', 'fixture-request-unique', 'fixture-node', 'cad-prepare', 1, 1,
+        VALUES ('fixture-item', %s, 'fixture-node', %s, 1, 1,
                 'Fixture Work Item', 'READY', 0, 'fixture-editor')
         ON CONFLICT (id) DO NOTHING
-        """
+        """,
+        [FIXTURE_REQUEST_ID, FIXTURE_TASK_TYPE_ID],
     )
 
 
@@ -144,6 +197,25 @@ def assert_upgraded(connection: psycopg.Connection) -> None:
         owner = connection.execute(f"SELECT owner_user_id FROM {table} WHERE id=%s", [row_id]).fetchone()[0]
         if owner != "fixture-editor":
             raise AssertionError(f"{table} owner backfill mismatch: {owner}")
+
+    work_item_parents = connection.execute(
+        """
+        SELECT plan.request_type_id, plan.request_type_version,
+               item.task_type_id, item.task_type_version
+        FROM request_work_plans AS plan
+        JOIN request_work_items AS item ON item.request_id=plan.request_id
+        WHERE plan.request_id=%s AND item.id='fixture-item'
+        """,
+        [FIXTURE_REQUEST_ID],
+    ).fetchone()
+    expected_work_item_parents = (
+        FIXTURE_REQUEST_TYPE_ID,
+        1,
+        FIXTURE_TASK_TYPE_ID,
+        1,
+    )
+    if work_item_parents != expected_work_item_parents:
+        raise AssertionError(f"fixture work-item parent contract mismatch: {work_item_parents}")
 
     menu_state = connection.execute("SELECT version FROM menu_policy_state WHERE id='global'").fetchone()
     if menu_state != (1,):
