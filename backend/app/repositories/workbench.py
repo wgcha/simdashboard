@@ -183,11 +183,31 @@ def ensure_default_workbench_catalog(conn: Any) -> None:
 def ensure_seed_request_work_plans(conn: Any) -> None:
     repository = WorkbenchRepository(conn)
     seeds = (
-        ("request-drop-001", "design-reliability-validation", {1: "COMPLETED", 2: "COMPLETED", 3: "IN_PROGRESS"}),
-        ("request-clamp-001", "design-doe-exploration", {1: "COMPLETED", 2: "IN_PROGRESS"}),
+        (
+            "request-drop-001",
+            "design-reliability-validation",
+            "SPDM-DEMO-2026-0001",
+            {1: "COMPLETED", 2: "COMPLETED", 3: "IN_PROGRESS"},
+        ),
+        (
+            "request-clamp-001",
+            "design-doe-exploration",
+            "SPDM-DEMO-2026-0002",
+            {1: "COMPLETED", 2: "IN_PROGRESS"},
+        ),
     )
-    for request_id, request_type_id, statuses in seeds:
-        if not repository.analysis_request_exists(request_id) or repository.work_plan(request_id):
+    for request_id, request_type_id, spdm_reference, statuses in seeds:
+        if not repository.analysis_request_exists(request_id):
+            continue
+        existing_plan = repository.work_plan(request_id)
+        if existing_plan:
+            # Only migrate the exact value previously written by this demo seed.
+            # User- or administrator-edited origins are authoritative and must survive re-seeding.
+            if existing_plan.get("source_type") == "DEPARTMENT_HEAD" and existing_plan.get("source_reference") == "기존 데모 시드":
+                conn.execute(
+                    "UPDATE request_work_plans SET source_type=?, source_reference=? WHERE request_id=?",
+                    ["EXTERNAL_SYSTEM", spdm_reference, request_id],
+                )
             continue
         request_type = repository.get_request_type(request_type_id, 1)
         if not request_type:
@@ -200,8 +220,8 @@ def ensure_seed_request_work_plans(conn: Any) -> None:
             owner,
             "system",
             owner_user_id="local-admin",
-            source_type="DEPARTMENT_HEAD",
-            source_reference="기존 데모 시드",
+            source_type="EXTERNAL_SYSTEM",
+            source_reference=spdm_reference,
             requested_by="system",
             statuses=statuses,
         )

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react'
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react'
 import {
   Activity,
   AlertTriangle,
@@ -41,6 +41,7 @@ import type { InitialWorkspace } from './features/bootstrap/loadInitialWorkspace
 import { useWorkspaceBootstrap } from './features/bootstrap/useWorkspaceBootstrap'
 import { AppShell, AppShellMain, AppTopbar } from './app/shell/AppShell'
 import { AppSidebar } from './app/shell/AppSidebar'
+import { ProjectSetupState } from './app/workspace/ProjectSetupState'
 import { loadWorkspacePreferences, saveWorkspacePreference, type WorkspaceTheme } from './app/preferences/workspacePreferences'
 import { useWorkspaceNavigation } from './app/routing/useWorkspaceNavigation'
 import { pageView, preferredPage, visiblePages, type ActiveView } from './features/analysis/pageSelection'
@@ -54,29 +55,12 @@ import { AccessAdminPage, AuditAdminPage, MenuPolicyAdminPage, ProjectResultProf
 import { RequestIntakePage } from './features/workbench/RequestIntakePage'
 import { PortfolioDashboard } from './PortfolioDashboard'
 import { ResultsWorkspaceOverlays } from './features/results/ResultsWorkspaceOverlays'
-import type { AnalysisRequest, AnalysisRunSummary, AutomationTemplate, DashboardDefinition, DashboardPageSummary, DashboardSummary, DashboardVersion, DashboardWidget, FeatureExample, ImportSchema, LoadCase, Overview, PortfolioLayout, Project, QualityThreshold, ReportContentItem, ReportElementDefinition, ReportElementType, ReportLayout, ReportLayoutDefinition, ReportLayoutVersion, ReportSection, ReportSlideDefinition, ReportSlideKind, ReportSource, ReportTemplateAsset, ReviewItem, RunComparison, RunComparisonReportContext, RunTrust, VariableDefinition, VariableDefinitionInput, WidgetCatalogItem, Workflow, WorkflowDashboardLayout, WorkflowStep } from './types'
-const DataWorkspace = lazy(() => import('./features/data/DataWorkspace').then(({ DataWorkspace }) => ({ default: DataWorkspace })))
-const FolderSchemaWorkspace = lazy(() => import('./features/data/FolderSchemaWorkspace').then(({ FolderSchemaWorkspace }) => ({ default: FolderSchemaWorkspace })))
-const VariableCatalogPage = lazy(() => import('./features/data/VariableCatalogPage').then(({ VariableCatalogPage }) => ({ default: VariableCatalogPage })))
-const AutomationTemplatesPage = lazy(() => import('./features/workbench/AutomationTemplatesPage').then(({ AutomationTemplatesPage }) => ({ default: AutomationTemplatesPage })))
-const FeatureExampleGallery = lazy(() => import('./features/examples/FeatureExampleGallery').then(({ FeatureExampleGallery }) => ({ default: FeatureExampleGallery })))
-const HelpCenter = lazy(() => import('./features/help/HelpCenter').then(({ HelpCenter }) => ({ default: HelpCenter })))
-const WorkflowView = lazy(() => import('./features/requests/WorkflowView').then(({ WorkflowView }) => ({ default: WorkflowView })))
-const ResultsWorkspace = lazy(() => import('./features/results/ResultsWorkspace').then(({ ResultsWorkspace }) => ({ default: ResultsWorkspace })))
-const PendingAnalysisWorkspace = lazy(() => import('./features/results/PendingAnalysisWorkspace').then(({ PendingAnalysisWorkspace }) => ({ default: PendingAnalysisWorkspace })))
-const AnalysisPageManager = lazy(() => import('./features/analysis/AnalysisPageManager').then(({ AnalysisPageManager }) => ({ default: AnalysisPageManager })))
-function FeatureScreenFallback() {
-  return <div className="full-state"><LoaderCircle className="spin" /> 화면을 준비하고 있습니다.</div>
-}
-const SPECIAL_WIDGET_CATALOG: WidgetCatalogItem[] = [
-  { type: 'summary', label: '하중 조건 요약', category: '요약', allowed_data_types: [], default_size: [6, 2] },
-  { type: 'open_cell_map', label: 'Open Cell 맵', category: '전용 평가', allowed_data_types: [], default_size: [5, 4] },
-  { type: 'open_cell_summary', label: 'Open Cell 판정 요약', category: '전용 평가', allowed_data_types: [], default_size: [12, 2] },
-  { type: 'chassis_summary', label: 'Chassis 판정 요약', category: '전용 평가', allowed_data_types: [], default_size: [12, 2] },
-  { type: 'chassis_diagram', label: 'Chassis 위치도', category: '전용 평가', allowed_data_types: [], default_size: [7, 5] },
-  { type: 'chassis_bar', label: 'Chassis 비교 그래프', category: '전용 평가', allowed_data_types: [], default_size: [5, 5] },
-  { type: 'chassis_table', label: 'Chassis 상세 표', category: '전용 평가', allowed_data_types: [], default_size: [8, 4] },
-]
+import { ResultVersionSelector } from './features/results/ResultVersionSelector'
+import { useResultVersionSelection } from './features/results/useResultVersionSelection'
+import { AnalysisPageManager, AutomationTemplatesPage, DataWorkspace, FeatureExampleGallery, FeatureScreenFallback, FolderSchemaWorkspace, HelpCenter, PendingAnalysisWorkspace, ResultsWorkspace, SPECIAL_WIDGET_CATALOG, VariableCatalogPage, WorkflowView } from './app/AppDependencies'
+import { EdgeFilter } from './features/results/EdgeFilter'
+import { resetWorkspaceContext } from './app/workspace/resetWorkspaceContext'
+import type { AnalysisRequest, AutomationTemplate, DashboardDefinition, DashboardPageSummary, DashboardSummary, DashboardVersion, DashboardWidget, FeatureExample, ImportSchema, LoadCase, Overview, PortfolioLayout, Project, QualityThreshold, ReportContentItem, ReportElementDefinition, ReportElementType, ReportLayout, ReportLayoutDefinition, ReportLayoutVersion, ReportSection, ReportSlideDefinition, ReportSlideKind, ReportSource, ReportTemplateAsset, ReviewItem, RunComparison, RunComparisonReportContext, RunTrust, VariableDefinition, VariableDefinitionInput, WidgetCatalogItem, Workflow, WorkflowDashboardLayout, WorkflowStep } from './types'
 function App() {
   const [preferences] = useState(loadWorkspacePreferences)
   const [theme, setTheme] = useState<WorkspaceTheme>(preferences.theme)
@@ -132,6 +116,12 @@ function App() {
   const workflowsBeforeEdit = useRef<Workflow[] | null>(null)
   const workflowLayoutBeforeEdit = useRef<WorkflowDashboardLayout | null>(null)
   const dashboardRequestSequence = useRef(0); const { beginContextEntry, beginMonitoringContext, isCurrentContextEntry, isCurrentMonitoringContext, requestContextLoading, runRequestSelection } = useResultAnalysisIntent()
+  const { analysisRuns, selectedAnalysisRunId, analysisRunsLoading, analysisRunChanging, analysisRunError, selectAnalysisRun } = useResultVersionSelection({
+    loadCaseId: selectedLoadCaseId,
+    enabled: authReady && (!authRequired || Boolean(authUser)),
+    overview,
+    setOverview,
+  })
   const dashboardReady = Boolean(dashboard && !dashboardLoading && dashboard.id === activeDashboardId)
   const visibleMenus = useMemo(() => {
     const validated = menuPolicy ? {
@@ -383,8 +373,13 @@ function App() {
       api.workspaceLayout(projectId, 'workflow'),
     ])
     const request = requestData.find((item) => item.id === requestId) ?? requestData[0]
-    if (!request) throw new Error('선택한 프로젝트에 의뢰가 없습니다.')
-    const [caseData, thresholdData] = await Promise.all([api.loadCases(request.id), api.qualityThresholds(projectId)])
+    const [caseData, thresholdData] = await Promise.all([request ? api.loadCases(request.id) : Promise.resolve([] as LoadCase[]), api.qualityThresholds(projectId)])
+    if (!request) {
+      if (!isCurrentMonitoringContext(intent)) return
+      dashboardRequestSequence.current += 1
+      resetWorkspaceContext({ projectId, thresholds: thresholdData, portfolioLayout: storedPortfolioLayout.definition, portfolioLayoutVersion: storedPortfolioLayout.version, workflowLayout: storedWorkflowLayout.definition, workflowLayoutVersion: storedWorkflowLayout.version, setDashboardLoading, setRequests, setLoadCases, setThresholds, setSelectedProjectId, setSelectedRequestId, setSelectedLoadCaseId, setOverview, setDashboard, setAnalysisPages, setActiveDashboardId, setActiveView, setPortfolioLayout, setPortfolioLayoutVersion, setWorkflowDashboardLayout, setWorkflowLayoutVersion })
+      return
+    }
     const loadCase = caseData[0]
     const [overviewData, pageData] = loadCase ? await Promise.all([api.overview(loadCase.id), api.dashboardPages(loadCase.id)]) : [null, [] as DashboardPageSummary[]]
     const selectedPage = overviewData ? preferredPage(pageData, overviewData, preferredView) : undefined
@@ -413,8 +408,13 @@ function App() {
       api.workspaceLayout(projectId, 'workflow'),
     ])
     const request = requestData.find((item) => item.id === requestId) ?? requestData[0]
-    if (!request) throw new Error('선택한 프로젝트에 의뢰가 없습니다.')
-    const [caseData, thresholdData] = await Promise.all([api.loadCases(request.id), api.qualityThresholds(projectId)])
+    const [caseData, thresholdData] = await Promise.all([request ? api.loadCases(request.id) : Promise.resolve([] as LoadCase[]), api.qualityThresholds(projectId)])
+    if (!request) {
+      if (!isCurrentMonitoringContext(intent)) return false
+      dashboardRequestSequence.current += 1
+      resetWorkspaceContext({ projectId, thresholds: thresholdData, portfolioLayout: storedPortfolioLayout.definition, portfolioLayoutVersion: storedPortfolioLayout.version, workflowLayout: storedWorkflowLayout.definition, workflowLayoutVersion: storedWorkflowLayout.version, setDashboardLoading, setRequests, setLoadCases, setThresholds, setSelectedProjectId, setSelectedRequestId, setSelectedLoadCaseId, setOverview, setDashboard, setAnalysisPages, setActiveDashboardId, setActiveView, setPortfolioLayout, setPortfolioLayoutVersion, setWorkflowDashboardLayout, setWorkflowLayoutVersion })
+      return false
+    }
     let overviewData: Overview | null = null; let pageData: DashboardPageSummary[] = []; let selectedPage: DashboardPageSummary | undefined; let dashboardData: DashboardDefinition | null = null
     if (caseData[0]) { [overviewData, pageData] = await Promise.all([api.overview(caseData[0].id), api.dashboardPages(caseData[0].id)]); selectedPage = preferredPage(pageData, overviewData); dashboardData = selectedPage ? await api.dashboard(selectedPage.id) : null }
     if (!isCurrentMonitoringContext(intent)) return false
@@ -749,7 +749,7 @@ function App() {
     try {
       const updated = await api.updateQualityThreshold(overview.load_case.project_id, criterion.criterion_key, value)
       setThresholds((items) => items.map((item) => item.criterion_key === updated.criterion_key ? updated : item))
-      setOverview(await api.overview(overview.load_case.id))
+      setOverview(await api.overview(overview.load_case.id, selectedAnalysisRunId || undefined))
       setNotice(`관리자 판정 기준을 ${value.toFixed(1)} mm로 저장했습니다.`)
     } catch (reason) { setError(reason instanceof Error ? reason.message : '판정 기준을 저장하지 못했습니다.') }
   }
@@ -760,7 +760,7 @@ function App() {
     try {
       const updated = await api.updateQualityThreshold(overview.load_case.project_id, criterion.criterion_key, value)
       setThresholds((items) => items.map((item) => item.criterion_key === updated.criterion_key ? updated : item))
-      setOverview(await api.overview(overview.load_case.id))
+      setOverview(await api.overview(overview.load_case.id, selectedAnalysisRunId || undefined))
       setNotice(`Open Cell 응력 관리 기준을 ${value.toFixed(1)} MPa로 저장했습니다.`)
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Open Cell 응력 기준을 저장하지 못했습니다.') }
   }
@@ -857,6 +857,7 @@ function App() {
 
   const isRequestMonitoring = workspacePage === 'dashboard' && activeView === 'workflow'
   const resultLayoutPending = workspacePage === 'dashboard' && !selectedLoadCaseId && !overview && !dashboard; const pendingAnalysis = activeView !== 'workflow' && isPendingResultAnalysis(resultLayoutPending, activeDashboardId)
+  const projectSetup = Boolean(selectedProjectId && requests.length === 0)
 
   if ((!overview || !dashboard) && !isRequestMonitoring && !pendingAnalysis) {
     const canCreateProject = hasPermission(authUser, 'system.user.approve', selectedProjectId)
@@ -900,8 +901,9 @@ function App() {
   const canDashboardEdit = hasPermission(authUser, 'dashboard.edit', selectedProjectId)
   const canWorkflowEdit = hasPermission(authUser, 'workflow.edit', selectedProjectId)
   const canLayoutEdit = hasPermission(authUser, 'project.layout.edit', selectedProjectId)
-  const canEdit = pendingAnalysis ? canDashboardEdit : workspacePage === 'portfolio' ? canLayoutEdit : activeView === 'workflow' ? canWorkflowEdit || canLayoutEdit : canDashboardEdit
-  const canManagePages = canDashboardEdit && !pendingAnalysis
+  const canEdit = projectSetup ? false : pendingAnalysis ? canDashboardEdit : workspacePage === 'portfolio' ? canLayoutEdit : activeView === 'workflow' ? canWorkflowEdit || canLayoutEdit : canDashboardEdit
+  const canManagePages = canDashboardEdit && !pendingAnalysis && !projectSetup
+  const canCreateRequest = hasPermission(authUser, 'request.create', selectedProjectId)
   const canExecuteAssigned = hasPermission(authUser, 'work.execute_assigned', selectedProjectId)
   const canExecuteAny = hasPermission(authUser, 'work.execute_any', selectedProjectId)
   const analysisTabs = overview ? visiblePages(analysisPages, overview) : []
@@ -965,11 +967,13 @@ function App() {
           </div>
           <div className="context-selectors">
             <label><span>프로젝트</span><select aria-label="프로젝트 선택" value={selectedProjectId} onChange={(event) => handleProjectChange(event.target.value)}>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
-            <label><span>의뢰</span><select aria-label="의뢰 선택" value={selectedRequestId} onChange={(event) => handleRequestChange(event.target.value)}>{requests.map((request) => <option key={request.id} value={request.id}>{request.title}</option>)}</select></label>
+            <label><span>의뢰</span><select aria-label="의뢰 선택" disabled={projectSetup} value={selectedRequestId} onChange={(event) => handleRequestChange(event.target.value)}>{projectSetup ? <option value="">의뢰 접수 후 선택</option> : requests.map((request) => <option key={request.id} value={request.id}>{request.title}</option>)}</select></label>
             <label><span>하중 경우</span><select aria-label="하중 경우 선택" value={selectedLoadCaseId} disabled={loadCases.length === 0} onChange={(event) => handleLoadCaseChange(event.target.value)}>{loadCases.length === 0 ? <option value="">미지정</option> : loadCases.map((loadCase) => <option key={loadCase.id} value={loadCase.id}>{loadCase.name}</option>)}</select></label>
+            {activeView !== 'workflow' && <ResultVersionSelector runs={analysisRuns} selectedRunId={selectedAnalysisRunId} loading={analysisRunsLoading} changing={analysisRunChanging} error={analysisRunError} onChange={(runId) => void selectAnalysisRun(runId)} />}
           </div>
         </section>
 
+        {projectSetup ? <ProjectSetupState projectName={projects.find((project) => project.id === selectedProjectId)?.name ?? '선택한 프로젝트'} canCreateRequest={canCreateRequest} onOpenIntake={() => enterWorkspace('intake')} /> : <>
         <section className="view-tabs">
           <button data-testid="selected-request-progress-tab" className={activeView === 'workflow' ? 'active' : ''} onClick={() => switchDashboardView('workflow')}><CircleDot /> 의뢰 진행 상태 <span>{workflowProgress}%</span></button>
           <ResultLayoutDetailTab requestId={selectedRequestId} requestContextLoading={requestContextLoading} analysisLabel={selectedLoadCaseId ? overview!.load_case.analysis_type.replace('_', ' ') : '하중 경우 미지정'} loadLayout={workbenchApi.requestResultLayout} onBeginOpen={beginContextEntry} isCurrentOpen={isCurrentContextEntry} onSnapshot={() => { const page = explicitCustomAnalysisPage(analysisTabs, activeDashboardId); if (page) { switchAnalysisPage(page); return } clearSnapshotDashboard() }} onDomain={() => { const page = analysisTabs[0]; if (page) switchAnalysisPage(page) }} onUnconfigured={() => { const page = explicitCustomAnalysisPage(analysisTabs, activeDashboardId); if (page) { switchAnalysisPage(page); return } clearSnapshotDashboard() }} onError={setError} />
@@ -1020,6 +1024,7 @@ function App() {
             <Suspense fallback={<FeatureScreenFallback />}><WorkflowView workflows={projectWorkflows} stageEditMode={editMode && workflowEditorMode === 'stages'} layoutEditMode={editMode && workflowEditorMode === 'layout'} dashboardLayout={workflowDashboardLayout} layoutVersion={workflowLayoutVersion} onDashboardLayoutChange={setWorkflowDashboardLayout} onStepChange={updateWorkflowStepDraft} onAddStep={addWorkflowStepDraft} onDeleteStep={deleteWorkflowStepDraft} onMoveStep={moveWorkflowStepDraft} onOpenAnalysis={openWorkflowAnalysis} activeRequestId={selectedRequestId} loadCaseReady={loadCases.length > 0} onOpenData={() => enterWorkspace('data')} /></Suspense>
           )}
         </>}
+        </>}
       </AppShellMain>
 
       <ResultsWorkspaceOverlays
@@ -1064,13 +1069,5 @@ function App() {
     </AppShell>
   )
 }
-
-function EdgeFilter({ selected, setSelected }: { selected: string[]; setSelected: (value: string[]) => void }) {
-  const options = [['top', '상단'], ['bottom', '하단'], ['left', '좌측'], ['right', '우측']]
-  const toggle = (key: string) => setSelected(selected.includes(key) ? selected.filter((item) => item !== key) : [...selected, key])
-  return <div className="edge-filter"><span>표시 엣지</span>{options.map(([key, label]) => <button className={selected.includes(key) ? 'on' : ''} key={key} onClick={() => toggle(key)}><i />{label}</button>)}</div>
-}
-
-
 
 export default App

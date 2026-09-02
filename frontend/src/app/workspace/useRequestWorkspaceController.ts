@@ -5,6 +5,7 @@ import type { WorkspaceEditorMode } from '../../editorState'
 import type { InitialWorkspace } from '../../features/bootstrap/loadInitialWorkspace'
 import { pageView, preferredPage, type ActiveView } from '../../features/analysis/pageSelection'
 import { DEFAULT_WORKFLOW_DASHBOARD_LAYOUT, loadWorkflowDashboardLayout } from '../../features/layouts/layoutDefaults'
+import { useResultVersionSelection } from '../../features/results/useResultVersionSelection'
 import type { AnalysisRequest, DashboardPageSummary, LoadCase, Overview, Project, QualityThreshold, Workflow, WorkflowDashboardLayout, WorkflowStep } from '../../types'
 
 type Editor = {
@@ -15,6 +16,7 @@ type Editor = {
 
 type Options = {
   initialWorkspace: InitialWorkspace | null
+  resultAccessEnabled: boolean
   onError: (message: string) => void
   onNotice: (message: string) => void
   workspaceEditor: Editor
@@ -35,7 +37,7 @@ const workflowSignature = (steps: WorkflowStep[]) => JSON.stringify(steps.map((s
  * workflow editing drafts. Dashboard-widget state deliberately lives in the
  * results feature, so this controller remains usable for monitoring-only UI.
  */
-export function useRequestWorkspaceController({ initialWorkspace, onError, onNotice, workspaceEditor }: Options) {
+export function useRequestWorkspaceController({ initialWorkspace, resultAccessEnabled, onError, onNotice, workspaceEditor }: Options) {
   const [databaseBackend, setDatabaseBackend] = useState<'duckdb' | 'postgresql'>('duckdb')
   const [projects, setProjects] = useState<Project[]>([])
   const [workflows, setWorkflows] = useState<Workflow[]>([])
@@ -52,6 +54,7 @@ export function useRequestWorkspaceController({ initialWorkspace, onError, onNot
   const [workflowDashboardLayout, setWorkflowDashboardLayout] = useState<WorkflowDashboardLayout>(loadWorkflowDashboardLayout)
   const [workflowLayoutVersion, setWorkflowLayoutVersion] = useState(1)
   const [operationalRefreshToken, setOperationalRefreshToken] = useState(0)
+  const contextLoadSequence = useRef(0)
   const workflowsBeforeEdit = useRef<Workflow[] | null>(null)
   const workflowLayoutBeforeEdit = useRef<WorkflowDashboardLayout | null>(null)
 
@@ -84,18 +87,43 @@ export function useRequestWorkspaceController({ initialWorkspace, onError, onNot
     setWorkflowLayoutVersion(initialWorkspace.workflowLayout.version)
   }, [initialWorkspace])
 
+  const { analysisRuns, selectedAnalysisRunId, analysisRunsLoading, analysisRunChanging, analysisRunError, selectAnalysisRun } = useResultVersionSelection({
+    loadCaseId: selectedLoadCaseId,
+    enabled: resultAccessEnabled,
+    overview,
+    setOverview,
+  })
+
   const loadContext = useCallback(async (projectId: string, requestId?: string, preferredView?: ActiveView) => {
+    const sequence = ++contextLoadSequence.current
     const requestData = await api.requests(projectId)
+    if (sequence !== contextLoadSequence.current) return
     const request = requestData.find((item) => item.id === requestId) ?? requestData[0]
-    if (!request) throw new Error('선택한 프로젝트에 의뢰가 없습니다.')
     const [caseData, thresholdData, storedWorkflowLayout] = await Promise.all([
-      api.loadCases(request.id),
+      request ? api.loadCases(request.id) : Promise.resolve([] as LoadCase[]),
       api.qualityThresholds(projectId),
       api.workspaceLayout(projectId, 'workflow'),
     ])
+    if (sequence !== contextLoadSequence.current) return
+    if (!request) {
+      setRequests([])
+      setLoadCases([])
+      setThresholds(thresholdData)
+      setSelectedProjectId(projectId)
+      setSelectedRequestId('')
+      setSelectedLoadCaseId('')
+      setOverview(null)
+      setAnalysisPages([])
+      setActiveDashboardId('pending-open-cell')
+      setActiveView('workflow')
+      setWorkflowDashboardLayout(storedWorkflowLayout.definition)
+      setWorkflowLayoutVersion(storedWorkflowLayout.version)
+      return
+    }
     const loadCase = caseData[0]
     if (!loadCase) throw new Error('선택한 의뢰에 하중 경우가 없습니다.')
     const [overviewData, pageData] = await Promise.all([api.overview(loadCase.id), api.dashboardPages(loadCase.id)])
+    if (sequence !== contextLoadSequence.current) return
     const selectedPage = preferredPage(pageData, overviewData, preferredView)
     setRequests(requestData)
     setLoadCases(caseData)
@@ -114,14 +142,31 @@ export function useRequestWorkspaceController({ initialWorkspace, onError, onNot
   }, [])
 
   const loadMonitoringContext = useCallback(async (projectId: string, requestId?: string) => {
+    const sequence = ++contextLoadSequence.current
     const requestData = await api.requests(projectId)
+    if (sequence !== contextLoadSequence.current) return
     const request = requestData.find((item) => item.id === requestId) ?? requestData[0]
-    if (!request) throw new Error('선택한 프로젝트에 의뢰가 없습니다.')
     const [caseData, thresholdData, storedWorkflowLayout] = await Promise.all([
-      api.loadCases(request.id),
+      request ? api.loadCases(request.id) : Promise.resolve([] as LoadCase[]),
       api.qualityThresholds(projectId),
       api.workspaceLayout(projectId, 'workflow'),
     ])
+    if (sequence !== contextLoadSequence.current) return
+    if (!request) {
+      setRequests([])
+      setLoadCases([])
+      setThresholds(thresholdData)
+      setSelectedProjectId(projectId)
+      setSelectedRequestId('')
+      setSelectedLoadCaseId('')
+      setOverview(null)
+      setAnalysisPages([])
+      setActiveDashboardId('pending-open-cell')
+      setActiveView('workflow')
+      setWorkflowDashboardLayout(storedWorkflowLayout.definition)
+      setWorkflowLayoutVersion(storedWorkflowLayout.version)
+      return
+    }
     setRequests(requestData)
     setLoadCases(caseData)
     setThresholds(thresholdData)
@@ -132,6 +177,7 @@ export function useRequestWorkspaceController({ initialWorkspace, onError, onNot
     setWorkflowLayoutVersion(storedWorkflowLayout.version)
     if (caseData[0]) {
       const [overviewData, pageData] = await Promise.all([api.overview(caseData[0].id), api.dashboardPages(caseData[0].id)])
+      if (sequence !== contextLoadSequence.current) return
       const selectedPage = preferredPage(pageData, overviewData)
       setOverview(overviewData)
       setAnalysisPages(pageData)
@@ -159,8 +205,10 @@ export function useRequestWorkspaceController({ initialWorkspace, onError, onNot
   }, [activeView, loadContext, loadMonitoringContext, onError, selectedProjectId])
 
   const selectLoadCase = useCallback(async (loadCaseId: string) => {
+    const sequence = ++contextLoadSequence.current
     try {
       const [overviewData, pageData] = await Promise.all([api.overview(loadCaseId), api.dashboardPages(loadCaseId)])
+      if (sequence !== contextLoadSequence.current) return
       const selectedPage = preferredPage(pageData, overviewData)
       setSelectedLoadCaseId(loadCaseId)
       setOverview(overviewData)
@@ -170,7 +218,7 @@ export function useRequestWorkspaceController({ initialWorkspace, onError, onNot
         setActiveView(pageView(selectedPage))
       }
     } catch (reason) {
-      onError(reason instanceof Error ? reason.message : '하중 경우를 변경하지 못했습니다.')
+      if (sequence === contextLoadSequence.current) onError(reason instanceof Error ? reason.message : '하중 경우를 변경하지 못했습니다.')
     }
   }, [onError])
 
@@ -336,6 +384,7 @@ export function useRequestWorkspaceController({ initialWorkspace, onError, onNot
     selectedLoadCaseId, selectedProjectId, selectedRequestId, selectedWorkflow, setActiveDashboardId,
     setActiveView, setAnalysisPages, setOverview, setRequests, setSelectedRequestId, setThresholds,
     setWorkflows, setWorkflowDashboardLayout, thresholds, updateWorkflowStepDraft, workflowDashboardLayout,
+    analysisRuns, selectedAnalysisRunId, analysisRunsLoading, analysisRunChanging, analysisRunError, selectAnalysisRun,
     workflowLayoutVersion, workflows,
   }
 }

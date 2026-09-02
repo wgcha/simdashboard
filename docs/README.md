@@ -22,6 +22,7 @@
 | 개발 변경 절차 | [`development-workflow.md`](development-workflow.md) |
 | 프로그램 정리·개발 우선순위 | [`program-consolidation-and-development-plan.md`](program-consolidation-and-development-plan.md) |
 | DB 결과 폴더·확장자 계약 | [`storage-folder-and-file-contract.md`](storage-folder-and-file-contract.md) |
+| 완결형 예제 프로젝트 | [`coherent-demo-examples.md`](coherent-demo-examples.md) |
 | WSL 개발환경 | [`wsl-development-setup.md`](wsl-development-setup.md) |
 | PostgreSQL 전환·운영 | [`backend-sql-integration-guide.md`](backend-sql-integration-guide.md) |
 | Rocky Linux 배포 | [`rocky8-deployment-runbook.md`](rocky8-deployment-runbook.md) |
@@ -34,6 +35,7 @@
 | 개발 | [`development-workflow.md`](development-workflow.md) | 명령·변경·검증 절차 |
 | 통합 계획 | [`program-consolidation-and-development-plan.md`](program-consolidation-and-development-plan.md) | P0~P2 정리·개발 backlog |
 | 저장 계약 | [`storage-folder-and-file-contract.md`](storage-folder-and-file-contract.md) | DB·결과 폴더·확장자·예제 |
+| 예제 카탈로그 | [`coherent-demo-examples.md`](coherent-demo-examples.md) | 프로젝트·의뢰·하중 경우·결과 상태 |
 | 런타임 | [`wsl-development-setup.md`](wsl-development-setup.md) | WSL 설치와 테스트 |
 | PostgreSQL | [`backend-sql-integration-guide.md`](backend-sql-integration-guide.md) | DB profile·migration·이전 |
 | 운영 | [`deploy/rocky8/README.md`](../deploy/rocky8/README.md) | Rocky 설치기 |

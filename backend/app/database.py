@@ -1562,11 +1562,14 @@ def ensure_local_development_identity(conn: Any) -> None:
     )
 
 
-def ensure_default_content(conn: Any) -> None:
-    from .repositories.workbench import ensure_default_workbench_catalog, ensure_seed_legacy_result_layout_assignment, ensure_seed_request_work_plans
+def _ensure_canonical_orion_seed(conn: Any) -> None:
+    """Seed the canonical Orion graph when its known ID is absent.
 
-    count = conn.execute("SELECT count(*) FROM projects").fetchone()[0]
-    if count == 0:
+    The project count is deliberately not used here: an existing user or
+    example project must not suppress the canonical reference project.
+    """
+    has_canonical_orion = conn.execute("SELECT count(*) FROM projects WHERE id='project-tv-001'").fetchone()[0] == 1
+    if not has_canonical_orion:
         conn.execute("BEGIN TRANSACTION")
         try:
             seed_database(conn)
@@ -1574,11 +1577,117 @@ def ensure_default_content(conn: Any) -> None:
         except Exception:
             conn.execute("ROLLBACK")
             raise
+
+
+def _ensure_orion_request_graph(conn: Any, *, now: datetime | None = None) -> None:
+    """Repair only the navigational request graph for an existing Orion row.
+
+    A partially initialized DuckDB file may already contain ``project-tv-001``
+    while its requests or folders are absent.  Re-running ``seed_database`` in
+    that case would collide with completed result rows, so this repair is
+    limited to the deterministic project/request/load-case/step records.
+    """
+    if conn.execute("SELECT count(*) FROM projects WHERE id='project-tv-001'").fetchone()[0] != 1:
+        return
+
+    now = now or datetime.now(timezone.utc)
+    requests = [
+        (
+            "request-drop-001",
+            "포장 낙하 시 Open Cell 엣지 응력 평가",
+            "IN_PROGRESS",
+            "김해석",
+            _iso(now - timedelta(days=8)),
+            _iso(now + timedelta(days=3)),
+            "낙하 방향별 엣지 응력과 허용 기준을 비교한다.",
+        ),
+        (
+            "request-clamp-001",
+            "물류 Side Clamp 하중 안전성 평가",
+            "READY",
+            "박검증",
+            _iso(now - timedelta(days=3)),
+            _iso(now + timedelta(days=8)),
+            "클램프 압력 변화에 따른 케이스 변형을 확인한다.",
+        ),
+    ]
+    for request_id, title, status, owner, requested_at, due_at, note in requests:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO analysis_requests
+                (id, project_id, title, status, owner, requested_at, due_at, overall_note)
+            VALUES (?, 'project-tv-001', ?, ?, ?, ?, ?, ?)
+            """,
+            [request_id, title, status, owner, requested_at, due_at, note],
+        )
+
+    step_names = [
+        "의뢰 접수", "요구사항 검토", "모델 준비", "해석 전처리 모델링", "해석 실행",
+        "후처리 작업", "결과 검토", "Validation", "승인", "완료",
+    ]
+    step_statuses = {
+        "request-drop-001": ["COMPLETED", "COMPLETED", "COMPLETED", "COMPLETED", "COMPLETED", "IN_PROGRESS", "WAITING", "WAITING", "WAITING", "WAITING"],
+        "request-clamp-001": ["COMPLETED", "COMPLETED", "IN_PROGRESS", "IN_PROGRESS", "WAITING", "WAITING", "WAITING", "WAITING", "WAITING", "WAITING"],
+    }
+    for request_id, _, _, owner, requested_at, _, _ in requests:
+        statuses = step_statuses[request_id]
+        step_owner = (
+            ["김해석"] * 6 + ["이검증"] * 4
+            if request_id == "request-drop-001"
+            else [owner] * 10
+        )
+        for index, (name, status) in enumerate(zip(step_names, statuses), start=1):
+            planned_start = datetime.fromisoformat(requested_at) + timedelta(hours=(index - 1) * (20 if request_id == "request-drop-001" else 18))
+            planned_end = planned_start + timedelta(hours=16 if request_id == "request-drop-001" else 14)
+            progress = 100 if status == "COMPLETED" else 65 if status == "IN_PROGRESS" and request_id == "request-drop-001" else 70 if index == 3 else 35 if status == "IN_PROGRESS" else 0
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO request_steps
+                    (id, request_id, sequence_no, name, status, owner, planned_start, planned_end,
+                     actual_start, actual_end, progress, is_optional, blocked_reason, note)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    f"step-{'drop' if request_id == 'request-drop-001' else 'clamp'}-{index:02d}",
+                    request_id, index, name, status, step_owner[index - 1], _iso(planned_start), _iso(planned_end),
+                    _iso(planned_start + timedelta(hours=1)) if status != "WAITING" else None,
+                    _iso(planned_end - timedelta(hours=2)) if status == "COMPLETED" else None,
+                    progress, name == "Validation", None,
+                    "최대 응력 위치 재확인 중" if request_id == "request-drop-001" and status == "IN_PROGRESS" else "클램프 접촉면 모델을 병렬 준비 중" if request_id == "request-clamp-001" and status == "IN_PROGRESS" else None,
+                ],
+            )
+
+    load_cases = [
+        (
+            "loadcase-drop-bottom-001", "request-drop-001", "Bottom Face 450 mm Drop", "DROP", "COMPLETED",
+            {"drop_height_mm": 450, "direction": "BOTTOM", "gravity_ms2": 9.80665},
+        ),
+        (
+            "loadcase-clamp-left-001", "request-clamp-001", "Left/Right Side Clamp 0.35 MPa", "SIDE_CLAMP", "READY",
+            {"pressure_mpa": 0.35, "hold_time_sec": 30, "faces": ["LEFT", "RIGHT"]},
+        ),
+    ]
+    for load_case_id, request_id, name, analysis_type, status, parameters in load_cases:
+        conn.execute(
+            "INSERT OR IGNORE INTO load_cases VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [load_case_id, request_id, name, analysis_type, status, json.dumps(parameters, ensure_ascii=False), _iso(now - timedelta(days=4 if request_id == "request-drop-001" else 2))],
+        )
+
+
+def ensure_default_content(conn: Any) -> None:
+    from .repositories.workbench import ensure_default_workbench_catalog, ensure_seed_legacy_result_layout_assignment, ensure_seed_request_work_plans
+
+    _ensure_canonical_orion_seed(conn)
+    _ensure_orion_request_graph(conn)
+    # Feature examples are project-producing seed data.  Create them before
+    # membership and project-wide repairs so one bootstrap pass is complete.
+    # User-created projects intentionally remain valid while they have no
+    # request yet; only canonical examples are required to be populated.
+    ensure_feature_examples(conn)
     ensure_local_development_identity(conn)
     ensure_sample_evolutions(conn)
     ensure_project_quality_thresholds(conn)
     ensure_drop_video_widget(conn)
-    ensure_feature_examples(conn)
     ensure_demo_media_storage(conn)
     ensure_variable_definitions(conn)
     conn.execute(
@@ -2402,8 +2511,48 @@ def ensure_sample_evolutions(conn: duckdb.DuckDBPyConnection) -> None:
 
 def ensure_feature_examples(conn: duckdb.DuckDBPyConnection) -> None:
     """Seed an additive, idempotent gallery that demonstrates the major product flows."""
+    expected_request_ids = {
+        f"request-showcase-{key}"
+        for key in ("compare", "trust", "warning", "review", "multitype", "waiting", "workflow")
+    }
+    expected_load_case_ids = {
+        f"loadcase-showcase-{key}"
+        for key in ("compare", "trust", "warning", "review", "multitype", "waiting", "workflow")
+    }
+    expected_step_ids = {
+        f"step-showcase-{key}-{sequence_no:02d}"
+        for key in ("compare", "trust", "warning", "review", "multitype", "waiting", "workflow")
+        for sequence_no in range(1, 11)
+    }
+    expected_run_ids = {
+        f"run-showcase-{key}-{run_no}"
+        for key, run_numbers in {
+            "compare": (1, 2, 3),
+            "trust": (1, 2),
+            "warning": (1, 2),
+            "review": (1, 2),
+            "multitype": (1, 2),
+        }.items()
+        for run_no in run_numbers
+    }
+
+    def has_exact_seed_ids(table_name: str, ids: set[str]) -> bool:
+        placeholders = ", ".join("?" for _ in ids)
+        existing = {
+            str(row[0])
+            for row in conn.execute(
+                f"SELECT id FROM {table_name} WHERE id IN ({placeholders})",
+                list(ids),
+            ).fetchall()
+        }
+        return existing == ids
+
     complete = (
         conn.execute("SELECT count(*) FROM projects WHERE id='project-feature-showcase'").fetchone()[0] == 1
+        and has_exact_seed_ids("analysis_requests", expected_request_ids)
+        and has_exact_seed_ids("load_cases", expected_load_case_ids)
+        and has_exact_seed_ids("request_steps", expected_step_ids)
+        and has_exact_seed_ids("analysis_runs", expected_run_ids)
         and conn.execute("SELECT count(*) FROM review_annotations WHERE analysis_run_id='run-showcase-review-2'").fetchone()[0] == 3
         and conn.execute("SELECT count(*) FROM variable_definitions WHERE load_case_id='loadcase-showcase-waiting'").fetchone()[0] == 5
         and conn.execute("SELECT count(*) FROM import_schemas WHERE id='import-schema-showcase-typed'").fetchone()[0] == 1
@@ -2448,26 +2597,25 @@ def ensure_feature_examples(conn: duckdb.DuckDBPyConnection) -> None:
             "INSERT OR IGNORE INTO load_cases VALUES (?, ?, ?, ?, ?, ?, ?)",
             [load_case_id, request_id, load_case_name, analysis_type, load_case_status, json.dumps({"sample": True, "example": key, "drop_height_mm": 800 if analysis_type == "DROP" else None, "pressure_mpa": 0.35 if analysis_type == "SIDE_CLAMP" else None}, ensure_ascii=False), _iso(requested_at + timedelta(days=1))],
         )
-        if conn.execute("SELECT count(*) FROM request_steps WHERE request_id=?", [request_id]).fetchone()[0] == 0:
-            for sequence_no, step_name in enumerate(step_names, start=1):
-                if key == "workflow":
-                    statuses = ["COMPLETED", "COMPLETED", "COMPLETED", "IN_PROGRESS", "BLOCKED", "WAITING", "WAITING", "WAITING", "WAITING", "WAITING"]
-                elif request_status == "COMPLETED":
-                    statuses = ["COMPLETED"] * 10
-                else:
-                    statuses = ["COMPLETED"] * 5 + ["IN_PROGRESS"] + ["WAITING"] * 4
-                status = statuses[sequence_no - 1]
-                progress = 100 if status == "COMPLETED" else 55 if status == "IN_PROGRESS" else 0
-                start = requested_at + timedelta(hours=(sequence_no - 1) * 18)
-                conn.execute(
-                    """
-                    INSERT INTO request_steps
-                        (id, request_id, sequence_no, name, status, owner, planned_start, planned_end,
-                         actual_start, actual_end, progress, blocked_reason, note, is_optional)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    [f"step-showcase-{key}-{sequence_no:02d}", request_id, sequence_no, step_name, status, "예제 운영자", _iso(start), _iso(start + timedelta(hours=14)), _iso(start + timedelta(hours=1)) if status not in {"WAITING", "BLOCKED"} else None, _iso(start + timedelta(hours=12)) if status == "COMPLETED" else None, progress, "입력 모델 승인 대기" if status == "BLOCKED" else None, "서로 다른 상태와 진행률을 확인하세요." if key == "workflow" else None, False],
-                )
+        for sequence_no, step_name in enumerate(step_names, start=1):
+            if key == "workflow":
+                statuses = ["COMPLETED", "COMPLETED", "COMPLETED", "IN_PROGRESS", "BLOCKED", "WAITING", "WAITING", "WAITING", "WAITING", "WAITING"]
+            elif request_status == "COMPLETED":
+                statuses = ["COMPLETED"] * 10
+            else:
+                statuses = ["COMPLETED"] * 5 + ["IN_PROGRESS"] + ["WAITING"] * 4
+            status = statuses[sequence_no - 1]
+            progress = 100 if status == "COMPLETED" else 55 if status == "IN_PROGRESS" else 0
+            start = requested_at + timedelta(hours=(sequence_no - 1) * 18)
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO request_steps
+                    (id, request_id, sequence_no, name, status, owner, planned_start, planned_end,
+                     actual_start, actual_end, progress, blocked_reason, note, is_optional)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [f"step-showcase-{key}-{sequence_no:02d}", request_id, sequence_no, step_name, status, "예제 운영자", _iso(start), _iso(start + timedelta(hours=14)), _iso(start + timedelta(hours=1)) if status not in {"WAITING", "BLOCKED"} else None, _iso(start + timedelta(hours=12)) if status == "COMPLETED" else None, progress, "입력 모델 승인 대기" if status == "BLOCKED" else None, "서로 다른 상태와 진행률을 확인하세요." if key == "workflow" else None, False],
+            )
 
     run_specs = {
         "compare": [(1, 68.0, 82.0), (2, 70.0, 80.0), (3, 81.0, 72.0)],
@@ -2601,127 +2749,7 @@ def seed_database(conn: duckdb.DuckDBPyConnection) -> None:
     for row in product_rows:
         conn.execute("INSERT INTO product_information VALUES (?, ?, ?, ?, ?, ?, ?)", [*row[:6], json.dumps(row[6], ensure_ascii=False)])
 
-    requests = [
-        (
-            "request-drop-001",
-            "project-tv-001",
-            "포장 낙하 시 Open Cell 엣지 응력 평가",
-            "IN_PROGRESS",
-            "김해석",
-            _iso(now - timedelta(days=8)),
-            _iso(now + timedelta(days=3)),
-            "낙하 방향별 엣지 응력과 허용 기준을 비교한다.",
-        ),
-        (
-            "request-clamp-001",
-            "project-tv-001",
-            "물류 Side Clamp 하중 안전성 평가",
-            "READY",
-            "박검증",
-            _iso(now - timedelta(days=3)),
-            _iso(now + timedelta(days=8)),
-            "클램프 압력 변화에 따른 케이스 변형을 확인한다.",
-        ),
-    ]
-    for request in requests:
-        conn.execute(
-            """
-            INSERT INTO analysis_requests
-                (id, project_id, title, status, owner, requested_at, due_at, overall_note)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            request,
-        )
-
-    step_names = [
-        "의뢰 접수",
-        "요구사항 검토",
-        "모델 준비",
-        "해석 전처리 모델링",
-        "해석 실행",
-        "후처리 작업",
-        "결과 검토",
-        "Validation",
-        "승인",
-        "완료",
-    ]
-    statuses = ["COMPLETED", "COMPLETED", "COMPLETED", "COMPLETED", "COMPLETED", "IN_PROGRESS", "WAITING", "WAITING", "WAITING", "WAITING"]
-    for index, (name, status) in enumerate(zip(step_names, statuses), start=1):
-        planned_start = now - timedelta(days=8) + timedelta(hours=(index - 1) * 20)
-        planned_end = planned_start + timedelta(hours=16)
-        actual_start = planned_start + timedelta(hours=1) if status != "WAITING" else None
-        actual_end = planned_end - timedelta(hours=2) if status == "COMPLETED" else None
-        progress = 100 if status == "COMPLETED" else 65 if status == "IN_PROGRESS" else 0
-        conn.execute(
-            """
-            INSERT INTO request_steps
-                (id, request_id, sequence_no, name, status, owner, planned_start, planned_end,
-                 actual_start, actual_end, progress, is_optional, blocked_reason, note)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            [
-                f"step-drop-{index:02d}",
-                "request-drop-001",
-                index,
-                name,
-                status,
-                "김해석" if index <= 6 else "이검증",
-                _iso(planned_start),
-                _iso(planned_end),
-                _iso(actual_start) if actual_start else None,
-                _iso(actual_end) if actual_end else None,
-                progress,
-                name == "Validation",
-                None,
-                "최대 응력 위치 재확인 중" if status == "IN_PROGRESS" else None,
-            ],
-        )
-
-    clamp_statuses = ["COMPLETED", "COMPLETED", "IN_PROGRESS", "IN_PROGRESS", "WAITING", "WAITING", "WAITING", "WAITING", "WAITING", "WAITING"]
-    for index, (name, status) in enumerate(zip(step_names, clamp_statuses), start=1):
-        planned_start = now - timedelta(days=3) + timedelta(hours=(index - 1) * 18)
-        planned_end = planned_start + timedelta(hours=14)
-        progress = 100 if status == "COMPLETED" else 70 if index == 3 else 35 if status == "IN_PROGRESS" else 0
-        conn.execute(
-            """
-            INSERT INTO request_steps
-                (id, request_id, sequence_no, name, status, owner, planned_start, planned_end,
-                 actual_start, actual_end, progress, is_optional, blocked_reason, note)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            [
-                f"step-clamp-{index:02d}", "request-clamp-001", index, name, status, "박검증",
-                _iso(planned_start), _iso(planned_end), _iso(planned_start + timedelta(hours=1)) if status != "WAITING" else None,
-                _iso(planned_end - timedelta(hours=2)) if status == "COMPLETED" else None, progress, name == "Validation", None,
-                "클램프 접촉면 모델을 병렬 준비 중" if status == "IN_PROGRESS" else None,
-            ],
-        )
-
-    load_cases = [
-        (
-            "loadcase-drop-bottom-001",
-            "request-drop-001",
-            "Bottom Face 450 mm Drop",
-            "DROP",
-            "COMPLETED",
-            {"drop_height_mm": 450, "direction": "BOTTOM", "gravity_ms2": 9.80665},
-            _iso(now - timedelta(days=4)),
-        ),
-        (
-            "loadcase-clamp-left-001",
-            "request-clamp-001",
-            "Left/Right Side Clamp 0.35 MPa",
-            "SIDE_CLAMP",
-            "READY",
-            {"pressure_mpa": 0.35, "hold_time_sec": 30, "faces": ["LEFT", "RIGHT"]},
-            _iso(now - timedelta(days=2)),
-        ),
-    ]
-    for load_case in load_cases:
-        conn.execute(
-            "INSERT INTO load_cases VALUES (?, ?, ?, ?, ?, ?, ?)",
-            [*load_case[:5], json.dumps(load_case[5], ensure_ascii=False), load_case[6]],
-        )
+    _ensure_orion_request_graph(conn, now=now)
 
     conn.execute(
         "INSERT INTO template_executions VALUES (?, ?, ?, ?, ?, ?, ?, ?)",

@@ -5,6 +5,9 @@ import type { Layout, Layouts } from 'react-grid-layout'
 import type { ActiveView } from '../../features/analysis/pageSelection'
 import type { DashboardDefinition, DashboardPageSummary, Overview, Project, QualityThreshold, AnalysisRequest, LoadCase, Workflow, WorkflowDashboardLayout, WorkflowStep } from '../../types'
 import type { RunComparisonReportContext } from '../../types'
+import { ProjectSetupState } from './ProjectSetupState'
+import { ResultVersionSelector } from '../../features/results/ResultVersionSelector'
+import type { AnalysisRunSummary } from '../../types'
 
 const ResultsWorkspace = lazy(() => import('../../features/results/ResultsWorkspace').then(({ ResultsWorkspace: Component }) => ({ default: Component })))
 const WorkflowView = lazy(() => import('../../features/requests/WorkflowView').then(({ WorkflowView: Component }) => ({ default: Component })))
@@ -12,9 +15,15 @@ const WorkflowView = lazy(() => import('../../features/requests/WorkflowView').t
 type Props = {
   activeDashboardId: string
   activeView: ActiveView
+  analysisRuns: AnalysisRunSummary[]
+  analysisRunsLoading: boolean
+  analysisRunChanging: boolean
+  analysisRunError: string
+  selectedAnalysisRunId: string
   analysisPages: DashboardPageSummary[]
   canEdit: boolean
   canManagePages: boolean
+  canCreateRequest?: boolean
   chassisThreshold?: QualityThreshold
   dashboard: DashboardDefinition
   editMode: boolean
@@ -31,10 +40,12 @@ type Props = {
   onOpenAnalysis: (workflow: Workflow) => void
   onOpenAssistant: () => void
   onOpenPageManager: () => void
+  onOpenIntake?: () => void
   onRemoveWidget: (id: string) => void
   onSaveChassisThreshold: (value: number) => void
   onSaveOpenCellThreshold: (value: number) => void
   onSelectLoadCase: (id: string) => void
+  onSelectAnalysisRun: (id: string) => void
   onSelectProject: (id: string) => void
   onSelectRequest: (id: string) => void
   onStepChange: (stepId: string, patch: Partial<WorkflowStep>) => void
@@ -45,6 +56,8 @@ type Props = {
   overview: Overview
   projectWorkflows: Workflow[]
   projects: Project[]
+  projectSetup?: boolean
+  projectName?: string
   requests: AnalysisRequest[]
   resetWorkflowDashboardLayout: () => void
   selectedEdges: string[]
@@ -60,13 +73,13 @@ type Props = {
 
 /** The route-level presentation adapter for monitoring and detailed analysis. */
 export function RequestWorkspaceRoute({
-  activeDashboardId, activeView, analysisPages, canEdit, canManagePages, chassisThreshold, dashboard,
-  editMode, loadCases, onAddStep, onBeginEditing, onCancelEditing, onConfigureWidget,
+  activeDashboardId, activeView, analysisPages, analysisRuns, analysisRunsLoading, analysisRunChanging, analysisRunError, selectedAnalysisRunId, canEdit, canManagePages, chassisThreshold, dashboard,
+  canCreateRequest = false, editMode, loadCases, onAddStep, onBeginEditing, onCancelEditing, onConfigureWidget,
   onComparisonContext, onDashboardLayoutChange, onDeleteStep, onLayoutChange, onMoveStep, onOpenAnalysis, onOpenAssistant,
-  onOpenPageManager, onRemoveWidget, onSaveChassisThreshold, onSaveOpenCellThreshold,
-  onSelectLoadCase, onSelectProject, onSelectRequest, onStepChange, onSwitchAnalysisPage,
+  onOpenIntake, onOpenPageManager, onRemoveWidget, onSaveChassisThreshold, onSaveOpenCellThreshold,
+  onSelectLoadCase, onSelectAnalysisRun, onSelectProject, onSelectRequest, onStepChange, onSwitchAnalysisPage,
   onSwitchView, onUpdateWorkflowLayout, openCellThreshold, overview, projectWorkflows, projects,
-  requests, resetWorkflowDashboardLayout, selectedEdges, selectedLoadCaseId, selectedProjectId,
+  projectName, projectSetup = false, requests, resetWorkflowDashboardLayout, selectedEdges, selectedLoadCaseId, selectedProjectId,
   selectedRequestId, selectedWorkflow, setSelectedEdges, workflowDashboardLayout, workflowEditorMode,
   workflowLayoutVersion,
 }: Props) {
@@ -75,10 +88,18 @@ export function RequestWorkspaceRoute({
   const workflowProgress = selectedWorkflow?.progress ?? 0
   const toggleEdge = (edge: string) => setSelectedEdges(selectedEdges.includes(edge) ? selectedEdges.filter((value) => value !== edge) : [...selectedEdges, edge])
 
+  if (projectSetup) return <>
+    <section className="content-head">
+      <div><div className="eyebrow"><span>PROJECT SETUP</span><span>•</span><span>REQUEST INTAKE</span></div><h1>{projectName ?? '선택한 프로젝트'}</h1><p>프로젝트가 선택되었습니다. 첫 의뢰를 접수하면 작업공간이 열립니다.</p></div>
+      <div className="context-selectors"><label><span>프로젝트</span><select aria-label="프로젝트 선택" value={selectedProjectId} onChange={(event) => void onSelectProject(event.target.value)}>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label><label><span>의뢰</span><select aria-label="의뢰 선택" value="" disabled><option value="">아직 없음</option></select></label><label><span>하중 경우</span><select aria-label="하중 경우 선택" value="" disabled><option value="">의뢰 접수 후 설정</option></select></label></div>
+    </section>
+    <ProjectSetupState projectName={projectName ?? '선택한 프로젝트'} canCreateRequest={canCreateRequest} onOpenIntake={onOpenIntake ?? (() => undefined)} />
+  </>
+
   return <>
     <section className="content-head">
       <div><div className="eyebrow"><span>{activeView === 'workflow' ? 'REQUEST MONITORING' : 'PROJECT 24-071'}</span><span>•</span><span>{activeView === 'workflow' ? selectedWorkflow?.request.category ?? 'UNASSIGNED' : overview.load_case.analysis_type}</span></div><h1>{activeView === 'workflow' ? `${selectedWorkflow?.request.project_name ?? overview.load_case.project_name} 해석 의뢰 현황` : `${overview.load_case.product_name} 불량 분석`}</h1><p>{activeView === 'workflow' ? selectedWorkflow?.request.title ?? '의뢰를 선택하세요.' : overview.load_case.request_title}</p></div>
-      <div className="context-selectors"><label><span>프로젝트</span><select aria-label="프로젝트 선택" value={selectedProjectId} onChange={(event) => void onSelectProject(event.target.value)}>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label><label><span>의뢰</span><select aria-label="의뢰 선택" value={selectedRequestId} onChange={(event) => void onSelectRequest(event.target.value)}>{requests.map((request) => <option key={request.id} value={request.id}>{request.title}</option>)}</select></label><label><span>하중 경우</span><select aria-label="하중 경우 선택" value={selectedLoadCaseId} disabled={loadCases.length === 0} onChange={(event) => void onSelectLoadCase(event.target.value)}>{loadCases.length === 0 ? <option value="">미지정</option> : loadCases.map((loadCase) => <option key={loadCase.id} value={loadCase.id}>{loadCase.name}</option>)}</select></label></div>
+      <div className="context-selectors"><label><span>프로젝트</span><select aria-label="프로젝트 선택" value={selectedProjectId} onChange={(event) => void onSelectProject(event.target.value)}>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label><label><span>의뢰</span><select aria-label="의뢰 선택" value={selectedRequestId} onChange={(event) => void onSelectRequest(event.target.value)}>{requests.map((request) => <option key={request.id} value={request.id}>{request.title}</option>)}</select></label><label><span>하중 경우</span><select aria-label="하중 경우 선택" value={selectedLoadCaseId} disabled={loadCases.length === 0} onChange={(event) => void onSelectLoadCase(event.target.value)}>{loadCases.length === 0 ? <option value="">미지정</option> : loadCases.map((loadCase) => <option key={loadCase.id} value={loadCase.id}>{loadCase.name}</option>)}</select></label>{activeView !== 'workflow' && <ResultVersionSelector runs={analysisRuns} selectedRunId={selectedAnalysisRunId} loading={analysisRunsLoading} changing={analysisRunChanging} error={analysisRunError} onChange={onSelectAnalysisRun} />}</div>
     </section>
     <section className="view-tabs"><button data-testid="selected-request-progress-tab" className={activeView === 'workflow' ? 'active' : ''} onClick={() => onSwitchView('workflow')}><CircleDot /> 의뢰 진행 상태 <span>{workflowProgress}%</span></button><button className={activeView !== 'workflow' ? 'active' : ''} disabled={!selectedLoadCaseId || analysisTabs.length === 0} onClick={() => { const page = analysisTabs[0]; if (page) onSwitchAnalysisPage(page) }}><LayoutDashboard /> 상세 분석 <span>{selectedLoadCaseId ? overview.load_case.analysis_type.replace('_', ' ') : '하중 경우 미지정'}</span></button><div className="tab-line" /></section>
     {activeView !== 'workflow' && <section className="analysis-subtabs"><div><span>상세 분석</span><b>/</b><strong>{overview.load_case.request_title}</strong></div><nav aria-label="불량 분석 하위 탭">{analysisTabs.map((page) => <div className="analysis-tab-group" key={page.id}><button className={`analysis-tab ${activeDashboardId === page.id ? 'active' : ''}`} onClick={() => onSwitchAnalysisPage(page)}>{page.page.analysis_key === 'open_cell' ? <Activity /> : page.page.analysis_key === 'chassis_rear' ? <BarChart3 /> : page.page.analysis_key === 'run_comparison' ? <MessageSquareText /> : <LayoutDashboard />} {page.name} <span>{page.page.analysis_key === 'open_cell' ? overview.analysis_verdicts.open_cell : page.page.analysis_key === 'chassis_rear' ? overview.analysis_verdicts.chassis_rear : page.page.analysis_key === 'run_comparison' ? 'SYSTEM' : page.page.status.toUpperCase()}</span></button></div>)}<label className="analysis-page-jump"><span>페이지</span><select aria-label="상세 분석 페이지 선택" value={activeAnalysisPage?.id ?? analysisTabs[0]?.id ?? ''} onChange={(event) => { const page = analysisTabs.find((item) => item.id === event.target.value); if (page) onSwitchAnalysisPage(page) }}>{analysisTabs.map((page) => <option key={page.id} value={page.id}>{page.name}</option>)}</select></label>{canManagePages && <button className="analysis-page-manage-button" onClick={onOpenPageManager}><Plus /> 분석 페이지 관리</button>}</nav>{activeAnalysisPage?.page.analysis_key === 'open_cell' && activeView !== 'compare' && <div className="edge-filter"><span>표시 엣지</span>{[['top', '상단'], ['bottom', '하단'], ['left', '좌측'], ['right', '우측']].map(([edge, label]) => <button className={selectedEdges.includes(edge) ? 'on' : ''} key={edge} onClick={() => toggleEdge(edge)}><i />{label}</button>)}</div>}</section>}

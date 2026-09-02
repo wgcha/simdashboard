@@ -31,7 +31,7 @@
 내부 DashboardDefinition + 결과 프로필 자동 생성
         ↓ 의뢰 생성
 작업계획 + 결과 레이아웃 snapshot 고정
-        ↓ 수행자가 의뢰 폴더에 결과 생성
+        ↓ 수행자가 Altair One 의뢰 작업폴더에 결과 후보 생성
 마스터 폴더 Refresh
         ↓
 탐색 → 검증 → bundle fingerprint 중복 판정
@@ -150,6 +150,18 @@
 
 ## 6. 마스터 폴더 Refresh
 
+### 6.0 SPDM·Altair One·결과 적재 경계
+
+업무 흐름에는 서로 다른 세 저장 위치가 있다. 이름이나 폴더 구조가 비슷해도 서로 대체할 수 없다.
+
+| 경계 | 책임 | 이 문서의 처리 |
+|---|---|---|
+| SPDM | 의뢰 번호·요청 내용·접수 시각의 원천 | 의뢰 출처로만 기록한다. 결과 파일을 탐색하지 않는다. |
+| Altair One 공유폴더 | 의뢰별 실무 작업공간과 결과 후보 | 요청 폴더에 연결·변경 추적하는 기능은 계획 상태다. 이 폴더를 곧바로 DB에 import하지 않는다. |
+| canonical master result folder | 검증 가능한 `manifest.json` bundle의 읽기 전용 적재 경계 | 현재 Refresh가 Run과 결과를 적재하는 유일한 경로다. |
+
+실무자는 Altair One 작업공간에서 결과 v1, v2 등을 준비하고, 각 완료본을 canonical bundle로 발행한다. Refresh는 각 발행을 새 불변 Run으로 적재한다. `analysis_runs.run_no`가 결과 버전이며 이전 Run을 덮어쓰지 않는다. 일반 상세 대시보드는 결과 버전 선택기를 제공하며, 사용자가 Run을 바꾸면 선택한 `run_id`의 overview만 조회·표시한다. Run이 없는 의뢰·하중 경우에는 선택기가 비활성이고 기존 `WAITING`/`EMPTY` 결과 대기 상태를 표시한다.
+
 ### 6.1 신뢰 경계
 
 마스터 결과 루트는 서버 설정 `SIMDASH_IMPORT_ROOT`로만 지정한다. 클라이언트는 절대경로나 임의 서버 경로를 전달할 수 없다.
@@ -185,15 +197,15 @@ PYTHONPATH=backend python backend/scripts/publish_result_bundle.py \
 ```
 
 source는 producer 소유의 완료된 directory이고 final은 manifest context와
-publication ID로 계산한 import-root 내부 canonical path다. SPDM #13 layout 또는 #14
+publication ID로 계산한 import-root 내부 canonical path다. Altair One #13 layout 또는 #14
 확장자 inventory가 source에 존재한다는 사실만으로는 canonical publisher input으로
 자동 허용되지 않는다.
 
-[#13](https://github.com/wgcha/simdashboard/issues/13)의 SPDM 폴더 구조는 upstream
-의뢰 발견·변경 감지 구조다. 이 Refresh의 canonical 결과 폴더, `manifest.json`,
-`mappings`와 혼용하지 않으며 현재 SPDM folder를 직접 결과 import하지 않는다.
-SPDM watcher가 구현될 때에도 검증된 context mapping과 별도의 canonical manifest
-생성/command 경계를 거쳐야 한다.
+[#13](https://github.com/wgcha/simdashboard/issues/13)의 폴더 구조는 Altair One 의뢰
+작업공간의 upstream layout으로 해석한다. SPDM은 의뢰 접수 원천이며 이 폴더와 동일하지
+않다. 이 Refresh의 canonical 결과 폴더, `manifest.json`, `mappings`와 혼용하지 않으며
+현재 Altair One 작업폴더를 직접 결과 import하지 않는다. 작업공간 연동이 구현되더라도
+검증된 context mapping과 별도의 canonical manifest 생성/command 경계를 거쳐야 한다.
 
 ### 6.2 Refresh 동작
 
