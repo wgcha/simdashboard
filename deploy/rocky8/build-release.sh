@@ -8,6 +8,7 @@ output=""
 build_frontend=1
 with_wheels=0
 allow_dirty=0
+python_bin="${PYTHON_BIN:-python3.12}"
 
 usage() {
   cat <<'EOF'
@@ -134,18 +135,26 @@ printf 'git_sha=%s\npython=%s\nnode=%s\ncreated_at=%s\n' \
   >"${bundle_root}/RELEASE_MANIFEST"
 
 if [[ "${with_wheels}" == 1 ]]; then
-  command -v python3.12 >/dev/null 2>&1 || {
-    printf '%s\n' 'python3.12 is required to create the offline wheelhouse.' >&2
-    exit 1
-  }
-  actual_python="$(python3.12 -c 'import platform; print(platform.python_version())')"
+  if [[ "${python_bin}" == */* ]]; then
+    [[ -f "${python_bin}" && -x "${python_bin}" ]] || {
+      printf 'Configured PYTHON_BIN is not executable: %s\n' "${python_bin}" >&2
+      exit 1
+    }
+  else
+    command -v "${python_bin}" >/dev/null 2>&1 || {
+      printf '%s is required to create the offline wheelhouse.\n' "${python_bin}" >&2
+      exit 1
+    }
+    python_bin="$(command -v "${python_bin}")"
+  fi
+  actual_python="$("${python_bin}" -c 'import platform; print(platform.python_version())')"
   expected_python="$(tr -d '[:space:]' <"${project_root}/.python-version")"
   [[ "${actual_python}" == "${expected_python}" ]] || {
     printf 'Python version mismatch for wheelhouse: expected=%s actual=%s\n' "${expected_python}" "${actual_python}" >&2
     exit 1
   }
   mkdir -p "${bundle_root}/wheelhouse"
-  python3.12 -m pip download \
+  "${python_bin}" -m pip download \
     --only-binary=:all: \
     --requirement "${project_root}/backend/requirements.lock" \
     --dest "${bundle_root}/wheelhouse"

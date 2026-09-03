@@ -9,7 +9,7 @@
 
 ## 배포 전 승인 항목
 
-1. 대상은 Rocky Linux 8이며 Python 3.12.13, PostgreSQL 18.x 정책을 만족한다.
+1. 대상은 Rocky Linux 8.6 이상(8.x)이며 Python 3.12.13, PostgreSQL 18.x 정책을 만족한다. Rocky 9 및 Rocky 이외 OS는 지원 대상이 아니며 installer가 거부한다.
 2. PostgreSQL admin/owner/app 역할을 분리하고 app 역할에는 DB/schema CREATE를 주지 않는다.
 3. 서비스 DNS, TLS 인증서와 키, 방화벽, SELinux 변경이 승인되어 있다.
 4. 운영 인증은 `password` 또는 `oidc`이고 secure cookie와 HTTPS를 사용한다.
@@ -18,6 +18,24 @@
 7. 마스터 결과 Refresh를 사용하면 `SIMDASH_IMPORT_ROOT`, service user 읽기 권한, 공유 mount와 SELinux 정책이 승인되어 있다. installer는 이 값을 service EnvironmentFile과 systemd read-only path에 전달하고, `RequiresMountsFor`로 mount 준비 뒤 서비스를 시작하며 설치 시 service user의 재귀 읽기·traverse 권한을 검사한다.
 
 ## Release 절차
+
+소스가 사내 서버에 있고 승인된 package mirror/proxy를 사용할 수 있으면 단일 명령
+경로를 우선한다. `deploy/rocky8/install.env.example`을
+`deploy/rocky8/install.local.env`로 복사하고 실제 값을 입력한 뒤 mode `0600`으로
+설정한다. 이 로컬 설정 파일은 Git에서 제외되며 실행 중 root 전용 파일로 복사된다.
+
+```bash
+./deploy/rocky8/deploy-from-source.sh --config deploy/rocky8/install.local.env
+```
+
+단일 명령은 clean Git 확인 → 고정 Node/Python runtime 준비 → wheel 포함 release
+빌드 → checksum 검증 → installer `--check` → 설치·migration → systemd/nginx와
+health 확인을 순서대로 강제한다. Rocky 8.6 AppStream에 Python 3.12가 없어도
+검증된 전용 Python 3.12.13 runtime을 사용한다. 실제 비밀번호는 root/사용자 전용
+`0600` 설정 파일에 둘 수 있지만 Git, 명령행 인자와 로그에는 기록하지 않는다.
+
+빌드 장비와 운영 서버가 분리되거나 완전 폐쇄망이면 아래 수동 release 절차를
+사용한다.
 
 1. 테스트가 끝난 commit에서 `deploy/rocky8/build-release.sh`를 실행한다.
 2. artifact와 `SHA256SUMS`를 변경관리 경로로 대상 서버에 전달한다.

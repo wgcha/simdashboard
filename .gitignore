@@ -21,6 +21,9 @@ frontend/test-results/
 frontend/*.tsbuildinfo
 /dist/
 .env
+# Local Rocky production installation settings may contain database and admin
+# passwords. deploy-from-source.sh refuses files that are not covered by this.
+deploy/rocky8/*.local.env
 .postgres-owner.env
 .postgres-owner.env.tmp
 .setup-proxy.env
