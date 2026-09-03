@@ -90,6 +90,11 @@ if [[ -n "$(git -C "${project_root}" status --porcelain --untracked-files=normal
   printf '%s\n' '[WARNING] Proceeding from a dirty Git worktree because --allow-dirty was supplied.' >&2
 fi
 
+# Authenticate only after source integrity gates have passed. Keep proxy/CA
+# values out of arguments and logs; only their names are preserved later for
+# the root-owned Python runtime helper.
+sudo -v
+
 ensure_pinned_node_runtime() {
   local expected_node='v22.23.2'
   local runtime_cache node_platform node_archive_name node_sha256 node_archive
@@ -105,7 +110,7 @@ ensure_pinned_node_runtime() {
   [[ "${runtime_bootstrap}" == 1 ]] || \
     die "Node.js ${expected_node} and corepack are required; remove --no-runtime-bootstrap or install them first."
   command -v curl >/dev/null 2>&1 || \
-    die "Node.js ${expected_node} is missing and curl is required to download it. Install curl or preseed SIMDASH_RUNTIME_CACHE."
+    die "Node.js ${expected_node} is missing and curl is required to download it. Install curl or preseed SIMDASH_NODE_RUNTIME_CACHE."
   case "$(uname -m)" in
     x86_64)
       node_platform='x64'
@@ -118,17 +123,17 @@ ensure_pinned_node_runtime() {
     *) die "Unsupported CPU architecture for Node.js runtime bootstrap: $(uname -m)" ;;
   esac
 
-  runtime_cache="${SIMDASH_RUNTIME_CACHE:-${XDG_CACHE_HOME:-${HOME}/.cache}/simdashboard-runtime}"
-  [[ "${runtime_cache}" == /* ]] || die 'SIMDASH_RUNTIME_CACHE must be an absolute path.'
+  runtime_cache="${SIMDASH_NODE_RUNTIME_CACHE:-${XDG_CACHE_HOME:-${HOME}/.cache}/simdashboard-runtime}"
+  [[ "${runtime_cache}" == /* ]] || die 'SIMDASH_NODE_RUNTIME_CACHE must be an absolute path.'
   [[ "${runtime_cache}" != *$'\n'* && "${runtime_cache}" != *$'\r'* ]] || \
-    die 'SIMDASH_RUNTIME_CACHE must not contain a newline.'
-  [[ ! -L "${runtime_cache}" ]] || die 'SIMDASH_RUNTIME_CACHE must not be a symbolic link.'
+    die 'SIMDASH_NODE_RUNTIME_CACHE must not contain a newline.'
+  [[ ! -L "${runtime_cache}" ]] || die 'SIMDASH_NODE_RUNTIME_CACHE must not be a symbolic link.'
   mkdir -p -m 0700 "${runtime_cache}"
   [[ "$(stat -c '%u' "${runtime_cache}")" == "${EUID}" ]] || \
-    die 'SIMDASH_RUNTIME_CACHE must be owned by the user running this command.'
+    die 'SIMDASH_NODE_RUNTIME_CACHE must be owned by the user running this command.'
   runtime_cache_mode="$(stat -c '%a' "${runtime_cache}")"
   (( (8#${runtime_cache_mode} & 077) == 0 )) || \
-    die 'SIMDASH_RUNTIME_CACHE must not be accessible by group or others.'
+    die 'SIMDASH_NODE_RUNTIME_CACHE must not be accessible by group or others.'
 
   runtime_directory_name="node-${expected_node}-linux-${node_platform}"
   node_archive_name="${runtime_directory_name}.tar.gz"
@@ -152,7 +157,7 @@ ensure_pinned_node_runtime() {
     if ! curl --fail --location --proto '=https' --tlsv1.2 --retry 3 --output "${downloaded_archive}" \
       "https://nodejs.org/dist/${expected_node}/${node_archive_name}"; then
       rm -f -- "${downloaded_archive}"
-      die 'Node.js download failed. Configure HTTPS_PROXY/NO_PROXY and your corporate CA (for example CURL_CA_BUNDLE), or preseed SIMDASH_RUNTIME_CACHE with the verified archive.'
+      die 'Node.js download failed. Configure HTTPS_PROXY/NO_PROXY and your corporate CA (for example CURL_CA_BUNDLE), or preseed SIMDASH_NODE_RUNTIME_CACHE with the verified archive.'
     fi
     mv -f "${downloaded_archive}" "${node_archive}"
   fi
@@ -194,7 +199,8 @@ ensure_pinned_node_runtime
 # This privileged helper installs only the pinned runtime; the application
 # build itself remains under the invoking normal user.
 python_runtime_bin='/opt/simdashboard/runtime/python/bin/python3.12'
-sudo "${script_root}/bootstrap-python-runtime.sh"
+sudo --preserve-env=HTTP_PROXY,HTTPS_PROXY,NO_PROXY,http_proxy,https_proxy,no_proxy,CURL_CA_BUNDLE,SSL_CERT_FILE \
+  "${script_root}/bootstrap-python-runtime.sh"
 sudo test -x "${python_runtime_bin}" || \
   die "Pinned Python runtime was not created: ${python_runtime_bin}"
 
@@ -232,10 +238,9 @@ printf '%s\n' 'Verifying extracted release contents.'
 (cd "${bundle_root}" && sha256sum --check --strict --quiet SHA256SUMS) || \
   die 'Extracted release checksum verification failed.'
 
-# The root-only boundary begins after all build and checksum work succeeds.
-# sudo may prompt here, but no secret is placed in an argument, environment
-# variable, command output, or generated log.
-sudo -v
+# The config copy begins only after all build and checksum work succeeds. sudo
+# was authenticated after the clean-worktree gate, before runtime bootstrap;
+# no secret is placed in an argument, environment variable, or generated log.
 root_config='/root/simdashboard-install.env'
 sudo test ! -L "${root_config}" || die 'Root installation configuration must not be a symbolic link.'
 sudo install -o root -g root -m 0600 "${config_file}" "${root_config}"

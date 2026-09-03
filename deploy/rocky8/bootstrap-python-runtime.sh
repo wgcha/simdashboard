@@ -25,7 +25,7 @@ Prepares the exact Python 3.12.13 runtime used by the Rocky 8 installer at:
   /opt/simdashboard/runtime/python/bin/python3.12
 
 The helper first reuses an existing exact runtime, then checks
-SIMDASH_RUNTIME_CACHE (default: /var/cache/simdashboard/runtime) for the
+SIMDASH_PYTHON_RUNTIME_CACHE (default: /var/cache/simdashboard/runtime) for the
 architecture-specific uv 0.11.8 archive, and downloads it only when absent.
 curl honors HTTPS_PROXY/HTTP_PROXY and CURL_CA_BUNDLE/SSL_CERT_FILE for
 corporate egress and CA trust. A preseed archive uses this filename:
@@ -89,24 +89,24 @@ case "${machine}" in
     ;;
 esac
 
-cache_root="${SIMDASH_RUNTIME_CACHE:-${DEFAULT_CACHE_ROOT}}"
+cache_root="${SIMDASH_PYTHON_RUNTIME_CACHE:-${DEFAULT_CACHE_ROOT}}"
 [[ "${cache_root}" == /* && "${cache_root}" != / ]] || \
-  die 'SIMDASH_RUNTIME_CACHE must be an absolute, non-root directory.'
+  die 'SIMDASH_PYTHON_RUNTIME_CACHE must be an absolute, non-root directory.'
 [[ "${cache_root}" != *$'\n'* && "${cache_root}" != *$'\r'* ]] || \
-  die 'SIMDASH_RUNTIME_CACHE contains a newline.'
+  die 'SIMDASH_PYTHON_RUNTIME_CACHE contains a newline.'
 install -d -o root -g root -m 0750 "${cache_root}"
 
 archive_name="uv-${UV_VERSION}-${uv_target}.tar.gz"
 archive_path="${cache_root}/${archive_name}"
 if [[ ! -f "${archive_path}" ]]; then
-  command -v curl >/dev/null 2>&1 || die 'curl is required to download uv. Preseed the archive in SIMDASH_RUNTIME_CACHE instead.'
+  command -v curl >/dev/null 2>&1 || die 'curl is required to download uv. Preseed the archive in SIMDASH_PYTHON_RUNTIME_CACHE instead.'
   download_tmp="$(mktemp "${cache_root}/.${archive_name}.XXXXXX")"
   trap 'rm -f -- "${download_tmp}"' EXIT
   uv_asset="uv-${uv_target}.tar.gz"
   uv_url="https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/${uv_asset}"
   log "Downloading uv ${UV_VERSION} for ${machine} (proxy/CA settings are read from curl environment)."
   curl --fail --location --silent --show-error --retry 3 --output "${download_tmp}" "${uv_url}" || \
-    die 'uv download failed. Configure HTTPS_PROXY/HTTP_PROXY and CURL_CA_BUNDLE or preseed SIMDASH_RUNTIME_CACHE.'
+    die 'uv download failed. Configure HTTPS_PROXY/HTTP_PROXY and CURL_CA_BUNDLE or preseed SIMDASH_PYTHON_RUNTIME_CACHE.'
   mv -f -- "${download_tmp}" "${archive_path}"
   trap - EXIT
 fi
@@ -134,11 +134,11 @@ uv_bin="$(find "${uv_extract_root}" -type f -name uv -perm -u+x -print -quit)"
 [[ -n "${uv_bin}" ]] || die 'The verified uv archive does not contain an executable uv binary.'
 
 install -d -o root -g root -m 0755 "${RUNTIME_ROOT}"
-"${uv_bin}" --no-progress python install "${PYTHON_VERSION}" \
+"${uv_bin}" --system-certs --no-progress python install "${PYTHON_VERSION}" \
   --install-dir "${RUNTIME_ROOT}" --force
 
 managed_python="$(
-  UV_PYTHON_INSTALL_DIR="${RUNTIME_ROOT}" "${uv_bin}" --no-progress python find "${PYTHON_VERSION}" \
+  UV_PYTHON_INSTALL_DIR="${RUNTIME_ROOT}" "${uv_bin}" --system-certs --no-progress python find "${PYTHON_VERSION}" \
     --managed-python --no-project --resolve-links
 )" || die 'uv installed Python but could not locate the managed interpreter.'
 [[ -f "${managed_python}" && -x "${managed_python}" ]] || \

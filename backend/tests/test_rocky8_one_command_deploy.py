@@ -31,7 +31,7 @@ def test_one_command_deployer_requires_an_ignored_private_config() -> None:
     assert "sudo systemctl is-active --quiet nginx.service" in deployer
     assert "sudo /usr/local/sbin/simdashboard-healthcheck" in deployer
     assert "--no-runtime-bootstrap" in deployer
-    assert "SIMDASH_RUNTIME_CACHE" in deployer
+    assert "SIMDASH_NODE_RUNTIME_CACHE" in deployer
     assert "b294a556e639d64338823920e5866c21c02741742d2e1529ee1a225c1ec9252a" in deployer
     assert "013b59cfd2819703a6f4a14ab891fc46fc2a4e3f5bcd92de3fb4929b43e35b30" in deployer
     assert "tar --no-same-owner --no-same-permissions -xzf" in deployer
@@ -41,6 +41,8 @@ def test_one_command_deployer_requires_an_ignored_private_config() -> None:
     assert "--without-wheels" in deployer
     assert 'PYTHON_BIN="${python_runtime_bin}" "${script_root}/build-release.sh"' in deployer
     assert "PYTHON_BIN, when configured, must equal" in deployer
+    assert "sudo -v" in deployer
+    assert "--preserve-env=HTTP_PROXY,HTTPS_PROXY,NO_PROXY,http_proxy,https_proxy,no_proxy,CURL_CA_BUNDLE,SSL_CERT_FILE" in deployer
 
     builder = (root / "deploy" / "rocky8" / "build-release.sh").read_text(encoding="utf-8")
     assert 'python_bin="${PYTHON_BIN:-python3.12}"' in builder
@@ -105,6 +107,8 @@ exit 0
     environment = os.environ | {
         "PATH": f"{mock_bin}:{os.environ['PATH']}",
         "MOCK_SUDO_TRACE": str(trace),
+        "HTTPS_PROXY": "http://proxy.test:8080",
+        "CURL_CA_BUNDLE": "/tmp/company-ca.pem",
     }
     result = subprocess.run(
         [str(deployer), "--config", str(config), "--allow-dirty"],
@@ -123,7 +127,10 @@ exit 0
     assert "install -o root -g root -m 0600" in calls
     assert "install.sh --config /root/simdashboard-install.env --check" in calls
     assert "install.sh --config /root/simdashboard-install.env" in calls
+    assert "--preserve-env=HTTP_PROXY,HTTPS_PROXY,NO_PROXY,http_proxy,https_proxy,no_proxy,CURL_CA_BUNDLE,SSL_CERT_FILE" in calls
     assert "postgresql://secret" not in calls
+    assert "proxy.test" not in calls
+    assert "company-ca.pem" not in calls
 
 
 def test_one_command_deployer_rejects_config_with_group_permissions(tmp_path: Path) -> None:
@@ -316,7 +323,7 @@ exit 0
     result = subprocess.run(
         [str(deployer), "--config", str(config), "--allow-dirty"],
         cwd=project,
-        env=os.environ | {"PATH": f"{mock_bin}:{os.environ['PATH']}", "SIMDASH_RUNTIME_CACHE": str(cache)},
+        env=os.environ | {"PATH": f"{mock_bin}:{os.environ['PATH']}", "SIMDASH_NODE_RUNTIME_CACHE": str(cache)},
         check=True,
         capture_output=True,
         text=True,

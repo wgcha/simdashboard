@@ -60,8 +60,11 @@ vi deploy/rocky8/install.local.env
 외부 인터넷 대신 사내 mirror/proxy를 사용할 때는 실행 전에 표준
 `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`, `CURL_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`와
 `PIP_INDEX_URL`/`PIP_CERT`를 사내 승인값으로 준비한다. Node archive는
-`${SIMDASH_RUNTIME_CACHE:-$HOME/.cache/simdashboard-runtime}`, uv archive는 기본
-`/var/cache/simdashboard/runtime`에 미리 넣어 재사용할 수 있다. 완전 폐쇄망에서는
+`${SIMDASH_NODE_RUNTIME_CACHE:-$HOME/.cache/simdashboard-runtime}`, uv archive는
+`${SIMDASH_PYTHON_RUNTIME_CACHE:-/var/cache/simdashboard/runtime}`에 미리 넣어 재사용할 수
+있다. Node 사용자 cache와 Python root cache는 의도적으로 공유하지 않는다. curl은
+`CURL_CA_BUNDLE`을 사용하고, uv는 `--system-certs`로 OS trust store(필요 시
+`SSL_CERT_FILE`)를 사용한다. 완전 폐쇄망에서는
 Node·uv archive뿐 아니라 pnpm package cache, Python wheel과 DNF RPM도 승인된
 내부 mirror/cache가 필요하다.
 

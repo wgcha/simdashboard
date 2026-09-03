@@ -112,10 +112,11 @@ def test_rocky8_python_runtime_bootstrap_contract() -> None:
     assert "56dd1b66701ecb62fe896abb919444e4b83c5e8645cca953e6ddd496ff8a0feb" in helper
     assert "eee8dd658d20e5ac85fec9c2326b6cbc9d83a1eef09ef07433e58698ac849591" in helper
     assert "/opt/simdashboard/runtime/python/bin/python3.12" in helper
-    assert "SIMDASH_RUNTIME_CACHE" in helper
+    assert "SIMDASH_PYTHON_RUNTIME_CACHE" in helper
     assert "tar -tzf" in helper
     assert "../" in helper
-    assert 'python install "${PYTHON_VERSION}"' in helper
+    assert '--system-certs --no-progress python install "${PYTHON_VERSION}"' in helper
+    assert '--system-certs --no-progress python find "${PYTHON_VERSION}"' in helper
     assert "PYTHON_VERSION=3.12.13" in helper
     assert "set -x" not in helper
 
