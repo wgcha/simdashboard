@@ -121,7 +121,7 @@ DATABASE_URL='postgresql+psycopg://<test_app_role>:<test_password>@<test_host>:<
 
 | 입력/승인 | 주 책임 | 필요한 값 또는 결정 | 완료 증적 |
 |---|---|---|---|
-| 운영 대상 | 인프라 | Rocky 8.10 host, DNS, 시간 동기화, CPU/RAM/disk, firewalld·SELinux 정책 | host preflight 출력과 승인 ID |
+| 운영 대상 | 인프라 | Rocky 8.6 이상(8.x) host, DNS, 시간 동기화, CPU/RAM/disk, firewalld·SELinux 정책 | host preflight 출력과 승인 ID |
 | DB 구축 | DBA | PostgreSQL 18 endpoint, database, admin/owner/app role, pool/connection budget | role grant/revoke와 `alembic_version` 확인 |
 | 인증 | 보안/IdP | OIDC issuer/client/redirect, cookie domain, CORS, 계정 승인 절차 | 로그인·권한·세션 폐기 smoke |
 | proxy/CA | 네트워크/보안 | outbound proxy URL, `NO_PROXY` 정규화, 조직 CA chain, 내부 DNF/PyPI/npm mirror | DNF·Python·Node·서비스 trust 검사 |

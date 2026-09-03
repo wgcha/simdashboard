@@ -6,6 +6,7 @@ bash -n "${root}/healthcheck.sh"
 bash -n "${root}/validate-templates.sh"
 bash -n "${root}/build-release.sh"
 bash -n "${root}/install.sh"
+bash -n "${root}/bootstrap-python-runtime.sh"
 
 for template in \
   "${root}/systemd/simdashboard.service.template" \
@@ -29,6 +30,14 @@ if grep --line-number --extended-regexp '\b(systemctl|dnf|yum|useradd|install)\b
 fi
 
 for required_installer_contract in \
+  'rocky8_version_supported()' \
+  'Rocky Linux 8.6 or later (8.x) is required' \
+  'VERSION_ID:-' \
+  'PYTHON_BIN must be an absolute path when configured.' \
+  '/opt/simdashboard/runtime/python/bin/python3.12' \
+  'python_bin_configured' \
+  'runtime_packages+=(python3.12 python3.12-pip)' \
+  'PYTHON_BIN}" -m venv' \
   'PostgreSQL 18.x is required' \
   'DEPLOYMENT_PROFILE=rocky8' \
   'scripts/check_postgres_connection.py' \
@@ -66,6 +75,10 @@ done
 
 grep -Fq 'wheelhouse' "${root}/build-release.sh"
 grep -Fq 'AUTH_COOKIE_SECURE=true' "${root}/install.env.example"
+grep -Fq 'PYTHON_BIN=' "${root}/install.env.example"
+grep -Fq 'UV_VERSION=0.11.8' "${root}/bootstrap-python-runtime.sh"
+grep -Fq 'uv_asset="uv-${uv_target}.tar.gz"' "${root}/bootstrap-python-runtime.sh"
+grep -Fq 'UV_PYTHON_INSTALL_DIR="${RUNTIME_ROOT}"' "${root}/bootstrap-python-runtime.sh"
 grep -Fq 'SIMDASH_IMPORT_ROOT=/var/lib/simdashboard/import' "${root}/install.env.example"
 grep -Fq 'SIMDASH_IMPORT_READINESS_POLICY=required' "${root}/install.env.example"
 grep -Fq 'SIMDASH_MEDIA_STORAGE_MODE=database-only' "${root}/install.env.example"

@@ -1,6 +1,7 @@
 # Rocky Linux 8 설치·배포
 
-이 디렉터리는 Rocky Linux 8용 배포 번들 생성기와 root 설치기를 제공한다.
+이 디렉터리는 Rocky Linux 8.6 이상(8.x)용 단일 명령 배포기, 배포 번들
+생성기와 root 설치기를 제공한다.
 대상 구조는 `nginx → loopback FastAPI → PostgreSQL 18`이며 Docker와 운영
 Node.js 서버를 사용하지 않는다.
 
@@ -8,20 +9,66 @@ Node.js 서버를 사용하지 않는다.
 
 아니다. 대상 서버는 최소한 다음 조건을 충족해야 한다.
 
-- Rocky Linux 8.10, `systemd`, root 또는 sudo 권한
+- Rocky Linux 8.6 이상(8.x), `systemd`, 일반 사용자 계정과 sudo 권한
 - 실행 중이며 접속 가능한 PostgreSQL 18.x
 - DNS 이름과 발급된 TLS 인증서/개인키
 - PostgreSQL 관리자(최초 DB 구성 시), owner(Alembic), app(평상시 서비스) 접속 정보
 - 온라인 설치라면 승인된 DNF/PyPI 저장소, 오프라인이면 사전에 만든 wheel 포함 번들
 - password 인증이면 최초 관리자 계정 정보, OIDC면 IdP/client/directory 설정
 
-`install.sh`가 Python 3.12, nginx, curl, SELinux/firewalld 도구를 DNF로 설치할
-수 있으므로, 위 저장소에 접근 가능하고 설정 파일·인증서·DB 접속 정보가 준비된
-Rocky 8 서버라면 PostgreSQL 외 OS 패키지를 미리 수동 설치할 필요는 없다.
-프로젝트 정책은 Python `3.12.13`을 고정하므로 Rocky 저장소의 patch가 다르면
-승인된 내부 RPM/runtime을 공급하거나 정책 예외를 명시해야 한다.
+`deploy-from-source.sh`는 프로젝트에 고정된 Node.js를 사용자 전용 cache에,
+Python `3.12.13`을 `/opt/simdashboard/runtime/python`에 준비한다. 다운로드 파일은
+CPU 아키텍처별 고정 SHA-256으로 검증하고, 이미 정확한 runtime이나 검증된 cache가
+있으면 다시 받지 않는다. 이후 `install.sh`가 nginx, curl, SELinux/firewalld 도구를
+DNF로 설치한다. 따라서 Rocky 8.6의 고정 AppStream에 `python3.12` RPM이 없어도
+시스템 Python을 바꾸지 않고 애플리케이션 runtime을 설치할 수 있다.
 
-## 1. 배포 번들 만들기
+## 가장 빠른 설치: 설정 1회 + 한 명령
+
+사내 Rocky 서버에서 저장소를 pull한 뒤, 저장소 루트에서 설정 예제를 Git이
+무시하는 로컬 파일로 복사한다. DB·초기 관리자 비밀번호를 이 파일에 평문으로
+저장해도 되지만 mode `0600`은 유지한다.
+
+```bash
+cp deploy/rocky8/install.env.example deploy/rocky8/install.local.env
+chmod 0600 deploy/rocky8/install.local.env
+vi deploy/rocky8/install.local.env
+```
+
+`CHANGE_ME`를 모두 실제 값으로 바꾸고 PostgreSQL 18, TLS 인증서와 import 경로를
+준비한 다음 아래 한 명령을 실행한다.
+
+```bash
+./deploy/rocky8/deploy-from-source.sh --config deploy/rocky8/install.local.env
+```
+
+이 명령은 다음을 연속 수행한다.
+
+1. 설정 파일이 Git 비추적·현재 사용자 소유·`0600`인지 확인한다.
+2. dirty Git 작업트리를 관리자 권한 사용 전에 거부한다.
+3. Node.js `22.23.2`와 Python `3.12.13`을 준비한다.
+4. 프런트엔드를 빌드하고 Python wheel을 포함한 release를 만든다.
+5. 외부 archive와 내부 파일 checksum을 모두 검증한다.
+6. 설정을 `/root/simdashboard-install.env`에 `root:root`, `0600`으로 복사한다.
+7. 설치 preflight, DB migration, systemd/nginx 전환과 health check를 수행한다.
+
+정상 완료 문구는 `Rocky deployment completed; nginx and simdashboard are healthy.`다.
+로컬 비밀 파일은 `.gitignore`에 포함되며 값은 로그에 출력하지 않는다. 작업트리
+변경을 의도적으로 시험할 때만 `--allow-dirty`를 사용한다. Python wheel을 포함하지
+않고 설치 시 package index에서 받으려면 `--without-wheels`를 명시한다.
+
+외부 인터넷 대신 사내 mirror/proxy를 사용할 때는 실행 전에 표준
+`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`, `CURL_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`와
+`PIP_INDEX_URL`/`PIP_CERT`를 사내 승인값으로 준비한다. Node archive는
+`${SIMDASH_RUNTIME_CACHE:-$HOME/.cache/simdashboard-runtime}`, uv archive는 기본
+`/var/cache/simdashboard/runtime`에 미리 넣어 재사용할 수 있다. 완전 폐쇄망에서는
+Node·uv archive뿐 아니라 pnpm package cache, Python wheel과 DNF RPM도 승인된
+내부 mirror/cache가 필요하다.
+
+아래 수동 절차는 개인 노트북에서 artifact를 만들고 사내 서버로 전달해야 하는
+변경관리·폐쇄망 상황에 사용한다.
+
+## 수동 1. 배포 번들 만들기
 
 온라인 대상 서버용 번들:
 
@@ -42,7 +89,7 @@ Rocky OS RPM, 조직 CA와 DNF 저장소까지 번들에 포함하는 것은 아
 수정된 상태에서는 기본적으로 생성을 거부한다. 검증 목적의 로컬 변경을 일부러
 포함할 때만 `--allow-dirty`를 사용한다.
 
-## 2. 대상 서버 설정 파일 준비
+## 수동 2. 대상 서버 설정 파일 준비
 
 번들을 대상 Rocky 서버로 복사하고 압축을 푼 뒤 설정 예제를 별도 root 전용
 파일로 복사한다. 번들 안의 예제 파일을 직접 수정하면 checksum 검증에 실패한다.
@@ -93,7 +140,7 @@ NFS/SMB mount는 조직의 mount context와 SELinux 정책을 유지하므로, �
 사용되고 systemd 서비스 환경파일에는 기록되지 않는다. 평상시 서비스에는
 최소 권한 `DATABASE_URL`만 기록된다.
 
-## 3. 점검 후 설치
+## 수동 3. 점검 후 설치
 
 `--check`는 OS, 설정, 인증서, payload, checksum만 확인하고 시스템을 변경하지 않는다.
 

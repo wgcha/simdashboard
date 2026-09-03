@@ -12,6 +12,15 @@ pytestmark = pytest.mark.unit
 def test_rocky8_templates_are_non_privileged_and_parseable() -> None:
     root = Path(__file__).resolve().parents[2]
     deploy = root / "deploy" / "rocky8"
+    for script_name in (
+        "bootstrap-python-runtime.sh",
+        "build-release.sh",
+        "deploy-from-source.sh",
+        "healthcheck.sh",
+        "install.sh",
+        "validate-templates.sh",
+    ):
+        assert (deploy / script_name).stat().st_mode & 0o100, script_name
     result = subprocess.run(
         ["bash", str(deploy / "validate-templates.sh")],
         check=True,
@@ -34,7 +43,15 @@ def test_rocky8_installer_is_fail_closed_and_keeps_owner_secret_out_of_service_e
     installer = (deploy / "install.sh").read_text(encoding="utf-8")
     environment_block = installer.split("environment_names=(", 1)[1].split(")", 1)[0]
 
-    assert "Rocky Linux 8.10 is required" in installer
+    assert "rocky8_version_supported()" in installer
+    assert "Rocky Linux 8.6 or later (8.x) is required" in installer
+    assert '[[ "${ID:-}" != rocky ]] || ! rocky8_version_supported "${VERSION_ID:-}"' in installer
+    assert "PYTHON_BIN must be an absolute path when configured." in installer
+    assert "/opt/simdashboard/runtime/python/bin/python3.12" in installer
+    assert "runtime_packages+=(python3.12 python3.12-pip)" in installer
+    assert 'actual_python="$("${PYTHON_BIN}" -c' in installer
+    assert '"${PYTHON_BIN}" -m venv' in installer
+    assert "PYTHON_BIN=/opt/simdashboard/runtime/python/bin/python3.12" in (deploy / "install.env.example").read_text(encoding="utf-8")
     assert "PostgreSQL 18.x is required" in installer
     assert "scripts/check_postgres_connection.py" in installer
     assert "scripts/check_postgres_pool_budget.py" in installer
@@ -82,6 +99,45 @@ def test_rocky8_installer_is_fail_closed_and_keeps_owner_secret_out_of_service_e
     service = (deploy / "systemd" / "simdashboard.service.template").read_text(encoding="utf-8")
     assert "check_media_storage_preflight.py" in service
     assert "TimeoutStartSec=300" in service
+
+
+def test_rocky8_python_runtime_bootstrap_contract() -> None:
+    root = Path(__file__).resolve().parents[2]
+    deploy = root / "deploy" / "rocky8"
+    helper = (deploy / "bootstrap-python-runtime.sh").read_text(encoding="utf-8")
+
+    assert "UV_VERSION=0.11.8" in helper
+    assert 'uv_asset="uv-${uv_target}.tar.gz"' in helper
+    assert 'uv_url="https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/${uv_asset}"' in helper
+    assert "56dd1b66701ecb62fe896abb919444e4b83c5e8645cca953e6ddd496ff8a0feb" in helper
+    assert "eee8dd658d20e5ac85fec9c2326b6cbc9d83a1eef09ef07433e58698ac849591" in helper
+    assert "/opt/simdashboard/runtime/python/bin/python3.12" in helper
+    assert "SIMDASH_RUNTIME_CACHE" in helper
+    assert "tar -tzf" in helper
+    assert "../" in helper
+    assert 'python install "${PYTHON_VERSION}"' in helper
+    assert "PYTHON_VERSION=3.12.13" in helper
+    assert "set -x" not in helper
+
+
+def test_rocky8_version_parser_accepts_supported_8x_and_rejects_other_targets() -> None:
+    root = Path(__file__).resolve().parents[2]
+    installer = (root / "deploy" / "rocky8" / "install.sh").read_text(encoding="utf-8")
+    start = installer.index("rocky8_version_supported()")
+    end = installer.index("\n}\n", start) + 3
+    function = installer[start:end]
+
+    def check(version: str, expected: int) -> None:
+        result = subprocess.run(
+            ["bash", "-c", f"{function}\nrocky8_version_supported \"$1\"", "version", version],
+            check=False,
+        )
+        assert result.returncode == expected, version
+
+    for version in ("8.6", "8.10", "8.99", "8.06", "8.10.1"):
+        check(version, 0)
+    for version in ("8.5", "8", "8.", "9.0", "9.6", "el8", "", "8.6evil"):
+        check(version, 1)
 
 
 def test_rocky8_bundle_builder_packages_built_frontend_and_checksums() -> None:

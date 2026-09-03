@@ -10,7 +10,7 @@ usage() {
   cat <<'EOF'
 Usage: sudo ./install.sh --config /root/simdashboard-install.env [--check]
 
-Installs an immutable Analysis Canvas release on Rocky Linux 8.10. The config is
+Installs an immutable Analysis Canvas release on Rocky Linux 8.6 or later (8.x). The config is
 a trusted root-owned shell file based on install.env.example.
 
 Options:
@@ -92,6 +92,10 @@ HEALTHCHECK_URL=
 INITIAL_ADMIN_USERNAME=
 INITIAL_ADMIN_DISPLAY_NAME='Initial administrator'
 INSTALL_SOURCE_ROOT=
+# Optional absolute path to a preinstalled Python 3.12.13 executable. Rocky
+# 8.6 fixed AppStream repositories may not provide the python3.12 RPM; when
+# set, the installer uses this runtime and does not request Python from dnf.
+PYTHON_BIN=
 
 # This is intentionally a trusted root-owned shell file: it may contain quoted
 # URLs and secrets that cannot be parsed correctly as a simplistic KEY=VALUE file.
@@ -118,10 +122,47 @@ for boolean_name in BOOTSTRAP_DATABASE SIM_DASH_PRESERVE_EXISTING_ROLES MIGRATE_
   [[ "${boolean_value}" == 0 || "${boolean_value}" == 1 ]] || die "${boolean_name} must be 0 or 1."
 done
 
+rocky8_version_supported() {
+  local version_id="${1:-}"
+  local major minor normalized_minor
+
+  # VERSION_ID is metadata from /etc/os-release, not shell input. Still parse
+  # it as a strict dotted decimal version before making any numeric decision.
+  [[ "${version_id}" =~ ^([0-9]+)\.([0-9]+)(\.[0-9]+)?$ ]] || return 1
+  major="${BASH_REMATCH[1]}"
+  minor="${BASH_REMATCH[2]}"
+  [[ "${major}" == 8 ]] || return 1
+
+  # Strip leading zeroes without arithmetic expansion. This keeps the check
+  # safe for malformed/very large metadata values while accepting 8.06 too.
+  normalized_minor="${minor#${minor%%[!0]*}}"
+  normalized_minor="${normalized_minor:-0}"
+  [[ "${#normalized_minor}" -gt 1 || "${normalized_minor}" =~ ^[6-9]$ ]]
+}
+
 [[ -r /etc/os-release ]] || die '/etc/os-release is missing.'
 # shellcheck disable=SC1091
 source /etc/os-release
-[[ "${ID:-}" == rocky && "${VERSION_ID:-}" == 8.10 ]] || die "Rocky Linux 8.10 is required; detected ${PRETTY_NAME:-unknown}."
+if [[ "${ID:-}" != rocky ]] || ! rocky8_version_supported "${VERSION_ID:-}"; then
+  die "Rocky Linux 8.6 or later (8.x) is required; detected ${PRETTY_NAME:-unknown} (VERSION_ID=${VERSION_ID:-unknown})."
+fi
+
+python_bin_configured=0
+if [[ -n "${PYTHON_BIN:-}" ]]; then
+  python_bin_configured=1
+  [[ "${PYTHON_BIN}" == /* ]] || die 'PYTHON_BIN must be an absolute path when configured.'
+  [[ -f "${PYTHON_BIN}" && -x "${PYTHON_BIN}" ]] || die "PYTHON_BIN is not an executable file: ${PYTHON_BIN}"
+elif [[ -f /opt/simdashboard/runtime/python/bin/python3.12 && -x /opt/simdashboard/runtime/python/bin/python3.12 ]]; then
+  # bootstrap-python-runtime.sh prepares this stable path on Rocky 8.6 hosts
+  # whose fixed AppStream does not carry python3.12 RPMs. Treat it like an
+  # operator-provided runtime and do not ask dnf to install Python packages.
+  PYTHON_BIN=/opt/simdashboard/runtime/python/bin/python3.12
+  python_bin_configured=1
+else
+  # Keep the existing package-managed default. The concrete path is resolved
+  # after dnf so every later check invokes the same executable.
+  PYTHON_BIN=python3.12
+fi
 
 safe_name='^[A-Za-z_][A-Za-z0-9_-]*$'
 [[ "${SERVICE_USER}" =~ ${safe_name} ]] || die 'SERVICE_USER contains unsupported characters.'
@@ -269,9 +310,18 @@ fi
 
 if [[ "${INSTALL_OS_PACKAGES}" == 1 ]]; then
   log 'Installing Rocky Linux runtime packages (PostgreSQL is not installed or modified)'
-  dnf -y install python3.12 python3.12-pip nginx curl ca-certificates tar findutils shadow-utils policycoreutils-python-utils firewalld
+  runtime_packages=(nginx curl ca-certificates tar findutils shadow-utils policycoreutils-python-utils firewalld)
+  if [[ "${python_bin_configured}" == 0 ]]; then
+    runtime_packages+=(python3.12 python3.12-pip)
+  fi
+  dnf -y install "${runtime_packages[@]}"
 fi
-for command_name in python3.12 nginx curl systemctl systemd-analyze useradd groupadd getent install find sed grep runuser; do
+if [[ "${python_bin_configured}" == 0 ]]; then
+  PYTHON_BIN="$(command -v python3.12 || true)"
+  [[ -n "${PYTHON_BIN}" ]] || die 'python3.12 is required when PYTHON_BIN is not configured.'
+fi
+[[ -f "${PYTHON_BIN}" && -x "${PYTHON_BIN}" ]] || die "PYTHON_BIN is not an executable file: ${PYTHON_BIN}"
+for command_name in nginx curl systemctl systemd-analyze useradd groupadd getent install find sed grep runuser; do
   command -v "${command_name}" >/dev/null 2>&1 || die "Required command not found: ${command_name}"
 done
 if [[ "${CONFIGURE_SELINUX}" == 1 ]]; then
@@ -284,7 +334,7 @@ if [[ "${CONFIGURE_FIREWALL}" == 1 ]]; then
 fi
 
 expected_python="$(tr -d '[:space:]' <"${source_root}/.python-version")"
-actual_python="$(python3.12 -c 'import platform; print(platform.python_version())')"
+actual_python="$("${PYTHON_BIN}" -c 'import platform; print(platform.python_version())')"
 [[ "${actual_python}" == 3.12.* ]] || die "Python 3.12 is required; detected ${actual_python}."
 if [[ "${REQUIRE_EXACT_PYTHON}" == 1 && "${actual_python}" != "${expected_python}" ]]; then
   die "Python patch mismatch: release=${expected_python}, server=${actual_python}. Install the pinned runtime or record an approved policy exception."
@@ -349,7 +399,7 @@ if [[ -d "${source_root}/examples" ]]; then
   cp -a "${source_root}/examples" "${release_root}/"
 fi
 
-python3.12 -m venv "${release_root}/.venv"
+"${PYTHON_BIN}" -m venv "${release_root}/.venv"
 pip_environment=(PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_INPUT=1)
 [[ -z "${PIP_INDEX_URL:-}" ]] || pip_environment+=(PIP_INDEX_URL="${PIP_INDEX_URL}")
 [[ -z "${PIP_CERT:-}" ]] || pip_environment+=(PIP_CERT="${PIP_CERT}")
