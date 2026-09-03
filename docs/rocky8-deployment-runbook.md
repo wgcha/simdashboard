@@ -33,6 +33,10 @@
 health 확인을 순서대로 강제한다. Rocky 8.6 AppStream에 Python 3.12가 없어도
 검증된 전용 Python 3.12.13 runtime을 사용한다. 실제 비밀번호는 root/사용자 전용
 `0600` 설정 파일에 둘 수 있지만 Git, 명령행 인자와 로그에는 기록하지 않는다.
+Node cache는 사용자 전용 `SIMDASH_NODE_RUNTIME_CACHE`, Python/uv cache는 root 전용
+`SIMDASH_PYTHON_RUNTIME_CACHE`로 분리한다. Proxy/CA 값은 Python helper에 환경변수명만
+보존해 전달한다. curl은 `CURL_CA_BUNDLE`, uv는 `--system-certs`와 OS trust store
+(필요 시 `SSL_CERT_FILE`)를 사용한다.
 
 빌드 장비와 운영 서버가 분리되거나 완전 폐쇄망이면 아래 수동 release 절차를
 사용한다.
