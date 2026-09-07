@@ -149,8 +149,16 @@ dnf -q download --resolve --alldeps --destdir "${bundle_root}/rpm-repo" \
 rpm_count=0
 while IFS= read -r -d '' rpm_file; do
   rpm_count=$((rpm_count + 1))
-  rpmkeys --checksig --verbose "${rpm_file}" 2>&1 | grep -Eqi '(pgp|rsa|dsa).*ok' || \
+  # Capture first: grep -q in a pipe can SIGPIPE rpmkeys under pipefail even
+  # when a valid signature was found before the remaining digest output.
+  if ! signature_output="$(rpmkeys --checksig --verbose "${rpm_file}" 2>&1)"; then
+    printf '%s\n' "${signature_output}" >&2
     die "RPM signature verification failed: $(basename "${rpm_file}")"
+  fi
+  if ! grep -Eqi '(pgp|rsa|dsa).*ok' <<<"${signature_output}"; then
+    printf '%s\n' "${signature_output}" >&2
+    die "RPM signature missing: $(basename "${rpm_file}")"
+  fi
 done < <(find "${bundle_root}/rpm-repo" -maxdepth 1 -type f -name '*.rpm' -print0)
 (( rpm_count > 0 )) || die 'DNF downloaded no RPMs.'
 createrepo_c --quiet "${bundle_root}/rpm-repo"
