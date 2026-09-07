@@ -6,15 +6,18 @@ bash -n "${root}/healthcheck.sh"
 bash -n "${root}/validate-templates.sh"
 bash -n "${root}/build-release.sh"
 bash -n "${root}/install.sh"
+bash -n "${root}/install-offline.sh"
 bash -n "${root}/bootstrap-python-runtime.sh"
 
 for template in \
   "${root}/systemd/simdashboard.service.template" \
-  "${root}/nginx/simdashboard.conf.template"; do
+  "${root}/nginx/simdashboard.conf.template" \
+  "${root}/nginx/simdashboard-http-dev.conf.template"; do
   grep -q '__REPLACE_' "${template}"
 done
 
 nginx_template="${root}/nginx/simdashboard.conf.template"
+nginx_dev_template="${root}/nginx/simdashboard-http-dev.conf.template"
 assets_line="$(grep -n '^    location /assets/' "${nginx_template}" | cut -d: -f1)"
 fallback_line="$(grep -n '^    location @backend_assets' "${nginx_template}" | cut -d: -f1)"
 try_files_line="$(grep -n 'try_files \$uri @backend_assets;' "${nginx_template}" | cut -d: -f1)"
@@ -23,6 +26,17 @@ if [[ -z "${assets_line}" || -z "${fallback_line}" || -z "${try_files_line}" \
   printf '%s\n' 'nginx /assets/ must serve release files before the backend fallback.' >&2
   exit 1
 fi
+
+if ! grep -Fq 'listen 80;' "${nginx_dev_template}" || grep -Eq 'listen 443|ssl_certificate' "${nginx_dev_template}"; then
+  printf '%s\n' 'Development nginx template must be HTTP-only on port 80.' >&2
+  exit 1
+fi
+for required_dev_location in 'location /api/' 'location /assets/' 'location @backend_assets' 'try_files $uri @backend_assets;'; do
+  grep -Fq "${required_dev_location}" "${nginx_dev_template}" || {
+    printf 'Development nginx template is missing: %s\n' "${required_dev_location}" >&2
+    exit 1
+  }
+done
 
 if grep --line-number --extended-regexp '\b(systemctl|dnf|yum|useradd|install)\b' "${root}/healthcheck.sh"; then
   printf '%s\n' 'Deployment template scripts must not execute privileged deployment actions.' >&2
@@ -39,7 +53,11 @@ for required_installer_contract in \
   'runtime_packages+=(python3.12 python3.12-pip)' \
   'PYTHON_BIN}" -m venv' \
   'PostgreSQL 18.x is required' \
-  'DEPLOYMENT_PROFILE=rocky8' \
+  'deployment_profile=rocky8' \
+  '--dev-http' \
+  'rocky8-dev-http' \
+  'AUTH_COOKIE_SECURE=false' \
+  'simdashboard-http-dev.conf.template' \
   'scripts/check_postgres_connection.py' \
   'scripts/check_postgres_pool_budget.py' \
   'scripts/check_media_storage_preflight.py' \
@@ -67,7 +85,7 @@ for required_installer_contract in \
   'Rocky production requires SIMDASH_IMPORT_REFRESH_MAX_CONCURRENT=1.' \
   'SIMDASH_IMPORT_READINESS_POLICY' \
   'SHA256SUMS'; do
-  grep -Fq "${required_installer_contract}" "${root}/install.sh" || {
+  grep -Fq -- "${required_installer_contract}" "${root}/install.sh" || {
     printf 'Rocky 8 installer contract is missing: %s\n' "${required_installer_contract}" >&2
     exit 1
   }
@@ -95,4 +113,5 @@ grep -Fq 'RequiresMountsFor=__REPLACE_IMPORT_ROOT__' "${root}/systemd/simdashboa
 grep -Fq 'ReadOnlyPaths=__REPLACE_IMPORT_ROOT__' "${root}/systemd/simdashboard.service.template"
 grep -Fq 'check_media_storage_preflight.py' "${root}/systemd/simdashboard.service.template"
 grep -Fq 'TimeoutStartSec=300' "${root}/systemd/simdashboard.service.template"
+grep -Fq -- '--dev-http' "${root}/install-offline.sh"
 printf '%s\n' 'ROCKY8_DEPLOY_TEMPLATES_OK'

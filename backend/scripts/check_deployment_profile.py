@@ -11,7 +11,7 @@ from app.config import database_settings, directory_settings, import_readiness_p
 
 def main() -> None:
     profile = os.getenv("DEPLOYMENT_PROFILE", "local").strip().lower()
-    if profile not in {"local", "windows-vm-intranet", "rocky8"}:
+    if profile not in {"local", "windows-vm-intranet", "rocky8", "rocky8-dev-http"}:
         raise RuntimeError("DEPLOYMENT_PROFILE_INVALID")
     database = database_settings()
     security = security_settings()
@@ -42,6 +42,19 @@ def main() -> None:
             failures.append("READINESS_MARKER_REQUIRED")
         if failures:
             raise RuntimeError("ROCKY8_PROFILE_INVALID:" + ",".join(failures))
+    if profile == "rocky8-dev-http":
+        failures = []
+        if database.backend != "postgresql":
+            failures.append("POSTGRESQL_REQUIRED")
+        if security.auth_mode != "password":
+            failures.append("PASSWORD_AUTH_REQUIRED")
+        if security.cookie_secure:
+            failures.append("INSECURE_COOKIE_REQUIRED_FOR_HTTP")
+        if readiness_policy != "required":
+            failures.append("READINESS_MARKER_REQUIRED")
+        if failures:
+            raise RuntimeError("ROCKY8_DEV_HTTP_PROFILE_INVALID:" + ",".join(failures))
+        print("WARN_DEV_HTTP: HTTP development profile uses plaintext cookies; do not use in production.", file=sys.stderr)
     print(
         f"DEPLOYMENT_PROFILE_OK profile={profile} database={database.backend} "
         f"auth={security.auth_mode} directory={directory.mode} readiness={readiness_policy} "

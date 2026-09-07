@@ -168,7 +168,8 @@ def test_offline_installer_rejects_checksum_corruption_before_privileged_mutatio
     assert not trace.exists()
 
 
-def test_offline_check_does_not_install_packages_or_publish_runtime(tmp_path: Path) -> None:
+@pytest.mark.parametrize("dev_http", [False, True])
+def test_offline_check_does_not_install_packages_or_publish_runtime(tmp_path: Path, dev_http: bool) -> None:
     installer = _copy_installer(tmp_path)
     bundle = _bundle(tmp_path)
     runtime = tmp_path / "runtime-tree" / "python" / "bin"
@@ -183,6 +184,10 @@ exit 0
     archive = tmp_path / "python.tar.gz"
     subprocess.run(["tar", "-czf", str(archive), "-C", str(tmp_path / "runtime-tree"), "python"], check=True)
     shutil.copy2(archive, bundle / "runtime/python.tar.gz")
+    install_trace = tmp_path / "install-args"
+    (bundle / "install.sh").write_text(
+        '#!/usr/bin/env bash\nprintf "%s\\n" "$@" > "$INSTALL_TRACE"\n', encoding="utf-8"
+    )
     installer_text = installer.read_text(encoding="utf-8")
     installer.write_text(
         installer_text.replace("3c3427e5628648478da2aa227472c350475a68bc58109f1b43849636a4aecb89", hashlib.sha256(archive.read_bytes()).hexdigest()),
@@ -204,13 +209,18 @@ exit 0
         bundle,
         _config(tmp_path),
         "--check",
+        *(["--dev-http"] if dev_http else []),
         PATH=f"{mock_bin}:{_root_stat_bin(tmp_path)}:{os.environ['PATH']}",
         TRACE=str(trace),
+        INSTALL_TRACE=str(install_trace),
         SIMDASH_RUNTIME_ROOT=str(runtime_target),
     )
     assert result.returncode == 0, result.stderr
     assert not trace.exists()
     assert not runtime_target.exists()
+    forwarded = install_trace.read_text(encoding="utf-8").splitlines()
+    assert "--check" in forwarded
+    assert ("--dev-http" in forwarded) is dev_http
 
 
 def test_offline_package_install_uses_only_local_repo_and_gpg_check(tmp_path: Path) -> None:

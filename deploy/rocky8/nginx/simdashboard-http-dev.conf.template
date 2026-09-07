@@ -1,0 +1,44 @@
+# Development-only HTTP listener. install.sh requires the explicit --dev-http
+# flag to render this template; production continues to use TLS on port 443.
+server {
+    listen 80;
+    server_name __REPLACE_SERVER_NAME__;
+
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options SAMEORIGIN always;
+    add_header Referrer-Policy same-origin always;
+
+    root __REPLACE_RELEASE_ROOT__/frontend/dist;
+    index index.html;
+    client_max_body_size 512m;
+
+    location = /api/health {
+        proxy_pass http://127.0.0.1:__REPLACE_API_PORT__;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:__REPLACE_API_PORT__;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+    location /assets/ {
+        try_files $uri @backend_assets;
+    }
+
+    location @backend_assets {
+        proxy_pass http://127.0.0.1:__REPLACE_API_PORT__;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

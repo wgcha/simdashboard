@@ -14,11 +14,12 @@ readonly PYTHON_BIN="${PYTHON_RUNTIME}/python/bin/python3.12"
 script_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 config_file=''
 check_only=0
+dev_http=0
 temp_root=''
 
 usage() {
   cat <<'EOF'
-Usage: sudo ./install-offline.sh --config /root/simdashboard-install.env [--check]
+Usage: sudo ./install-offline.sh --config /root/simdashboard-install.env [--check] [--dev-http]
 
 Installs only from this self-contained Rocky Linux 8.6 x86_64 release bundle.
 The trusted configuration must be a root-owned 0600 file outside this extracted
@@ -28,6 +29,7 @@ Options:
   --config FILE   Required root-owned mode-0600 configuration outside the bundle
   --check         Validate bundle, config, runtime and offline wheels only; no
                   system changes (temporary files are used for validation)
+  --dev-http      Development-only HTTP installation; no TLS certificate is used
   -h, --help      Show this help
 EOF
 }
@@ -44,6 +46,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --config) config_file="${2:-}"; shift 2 ;;
     --check) check_only=1; shift ;;
+    --dev-http) dev_http=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) printf 'Unknown option: %s\n' "$1" >&2; usage >&2; exit 2 ;;
   esac
@@ -152,7 +155,11 @@ effective_python="${runtime_validation_root}/python/bin/python3.12"
 printf '\n# Values pinned by install-offline.sh; leave operator SSL/auth/database settings above.\nINSTALL_SOURCE_ROOT=%q/payload\nINSTALL_OS_PACKAGES=0\nPYTHON_BIN=%q\n' \
   "${script_root}" "${effective_python}" >>"${generated_config}"
 
-"${script_root}/install.sh" --config "${generated_config}" --check
+installer_args=(--config "${generated_config}")
+if [[ "${dev_http}" == 1 ]]; then
+  installer_args+=(--dev-http)
+fi
+"${script_root}/install.sh" "${installer_args[@]}" --check
 if [[ "${check_only}" == 1 ]]; then
   log "Offline validation passed for release ${release_id}; no system changes were made (temporary files were used)."
   exit 0
@@ -194,4 +201,4 @@ dnf -y --disablerepo='*' --repofrompath="simdashboard-offline,${offline_repo}" \
   install "${runtime_packages[@]}"
 
 printf '\nPYTHON_BIN=%q\n' "${PYTHON_BIN}" >>"${generated_config}"
-"${script_root}/install.sh" --config "${generated_config}"
+"${script_root}/install.sh" "${installer_args[@]}"

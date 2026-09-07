@@ -47,6 +47,10 @@ printf '%s\n' \
 chmod 0600 "$config"
 [[ ! -e /opt/simdashboard/runtimes ]] || exit 1
 bash "${bundle}/install-offline.sh" --config "$config" --check
+# Prove development mode does not merely accept a placeholder certificate:
+# the configured paths are now absent, while default HTTPS remains checked above.
+printf '\nTLS_CERTIFICATE=/missing/dev-cert.pem\nTLS_CERTIFICATE_KEY=/missing/dev-key.key\n' >>"${config}"
+bash "${bundle}/install-offline.sh" --config "$config" --dev-http --check
 [[ ! -e /opt/simdashboard/runtimes ]] || {
   printf '%s\n' '--check unexpectedly installed a Python runtime.' >&2
   exit 1
