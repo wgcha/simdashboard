@@ -12,9 +12,11 @@ source /etc/os-release
 verify_root="$(mktemp -d /tmp/simdashboard-offline-verify.XXXXXX)"
 trap 'rm -rf -- "${verify_root}"' EXIT
 tar -xzf "$archive" -C "$verify_root"
-mapfile -t bundles < <(find "$verify_root" -mindepth 1 -maxdepth 1 -type d)
+# The minimal official image has no findutils until the local RPM transaction.
+shopt -s nullglob
+bundles=("${verify_root}"/*/)
 [[ "${#bundles[@]}" == 1 ]] || exit 1
-bundle="${bundles[0]}"
+bundle="${bundles[0]%/}"
 (cd "$bundle" && sha256sum --check --quiet SHA256SUMS)
 
 # This is a genuinely fresh OS instance: the builder's installed RPMs cannot
