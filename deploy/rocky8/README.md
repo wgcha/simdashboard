@@ -9,7 +9,7 @@ Node.js 서버를 사용하지 않는다.
 
 아니다. 대상 서버는 최소한 다음 조건을 충족해야 한다.
 
-- Rocky Linux 8.6 이상(8.x), `systemd`, 일반 사용자 계정과 sudo 권한
+- Rocky Linux 8.6 이상(8.x), `systemd`, sudo 권한이 있는 일반 계정 또는 root 계정
 - 실행 중이며 접속 가능한 PostgreSQL 18.x
 - DNS 이름과 발급된 TLS 인증서/개인키
 - PostgreSQL 관리자(최초 DB 구성 시), owner(Alembic), app(평상시 서비스) 접속 정보
@@ -41,6 +41,21 @@ vi deploy/rocky8/install.local.env
 ```bash
 ./deploy/rocky8/deploy-from-source.sh --config deploy/rocky8/install.local.env
 ```
+
+로그인용 일반 계정을 만들 수 없어 root로 배포해야 하면 저장소를 `/root` 아래에
+두어도 된다. root 계정에서 아래 명령을 사용한다. 기존 `install.local.env` 설정은
+그대로 사용하며, root 소유 및 mode `0600`이어야 한다.
+
+```bash
+bash deploy/rocky8/deploy-from-source.sh --allow-root --config deploy/rocky8/install.local.env
+```
+
+`--allow-root`는 빌드와 패키지 설치 스크립트까지 root 권한으로 실행하는 명시적
+옵션이다. 이 모드에는 sudo가 필요하지 않으며 Git 작업트리·설정 파일·checksum
+검사는 그대로 수행한다. 애플리케이션은 별도의 비로그인 서비스 계정
+`simdashboard`로 실행한다. 설치기는 해당 계정이 없으면 자동 생성한다. 시스템
+계정 생성까지 금지된 서버는 기존에 승인된 비root 서비스 계정과 기본 그룹을
+`SERVICE_USER`/`SERVICE_GROUP`에 지정해야 한다.
 
 이 명령은 다음을 연속 수행한다.
 
