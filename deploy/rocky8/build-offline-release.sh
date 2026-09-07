@@ -146,6 +146,17 @@ dnf -q download --resolve --alldeps --destdir "${bundle_root}/rpm-repo" \
   --repofrompath=rocky86-extras,"${VAULT_BASE}/extras/x86_64/os/" \
   nginx curl ca-certificates tar findutils shadow-utils policycoreutils-python-utils firewalld
 
+# Minimal Rocky images provide libcurl-minimal instead of libcurl. Include its
+# matching update as a separate alternative, so offline DNF can retain either
+# installed variant without --allowerasing or forcing a package replacement.
+dnf -q download --resolve --alldeps --destdir "${bundle_root}/rpm-repo" \
+  --disablerepo='*' --releasever=8.6 --setopt=module_platform_id=platform:el8 \
+  --setopt=install_weak_deps=False \
+  --repofrompath=rocky86-baseos,"${VAULT_BASE}/BaseOS/x86_64/os/" \
+  --repofrompath=rocky86-appstream,"${VAULT_BASE}/AppStream/x86_64/os/" \
+  --repofrompath=rocky86-extras,"${VAULT_BASE}/extras/x86_64/os/" \
+  libcurl-minimal
+
 rpm_count=0
 while IFS= read -r -d '' rpm_file; do
   rpm_count=$((rpm_count + 1))
