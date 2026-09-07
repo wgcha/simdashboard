@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 from pathlib import Path
 import shutil
 import stat
@@ -221,3 +222,47 @@ def test_offline_package_install_uses_only_local_repo_and_gpg_check(tmp_path: Pa
     assert "--repofrompath" in source
     assert "gpgcheck=1" in source or "--setopt=gpgcheck=1" in source
     assert "https://" not in source
+
+
+def _signature_check_block() -> str:
+    source = (DEPLOY / "build-offline-release.sh").read_text(encoding="utf-8")
+    match = re.search(r"rpm_count=0\nwhile IFS=.*?done < <\(find .*?\n", source, re.DOTALL)
+    assert match, "builder RPM signature verification loop is missing"
+    return match.group(0)
+
+
+def _run_signature_check(tmp_path: Path, rpmkeys_body: str) -> subprocess.CompletedProcess[str]:
+    repo = tmp_path / "repo"
+    (repo / "rpm-repo").mkdir(parents=True)
+    (repo / "rpm-repo" / "sample.rpm").write_bytes(b"rpm")
+    mock_bin = tmp_path / "bin"
+    mock_bin.mkdir()
+    _exe(mock_bin / "rpmkeys", rpmkeys_body)
+    harness = tmp_path / "signature-check.sh"
+    harness.write_text(
+        "#!/usr/bin/env bash\nset -Eeuo pipefail\ndie() { printf '[ERROR] %s\\n' \"$*\" >&2; exit 1; }\n"
+        f"bundle_root={repo}\n"
+        + _signature_check_block()
+        + "printf 'verified\\n'\n",
+        encoding="utf-8",
+    )
+    harness.chmod(0o700)
+    return subprocess.run([str(harness)], env=os.environ | {"PATH": f"{mock_bin}:{os.environ['PATH']}"}, check=False, capture_output=True, text=True)
+
+
+def test_builder_signature_capture_handles_long_rpmkeys_output_under_pipefail(tmp_path: Path) -> None:
+    result = _run_signature_check(
+        tmp_path,
+        "#!/usr/bin/env bash\nprintf 'pgp sha256 OK\\n'\nfor i in $(seq 1 10000); do printf 'digest line %s\\n' \"$i\"; done\n",
+    )
+    assert result.returncode == 0, result.stderr
+    assert "verified" in result.stdout
+
+
+def test_builder_signature_check_fails_closed_when_rpmkeys_fails(tmp_path: Path) -> None:
+    result = _run_signature_check(
+        tmp_path,
+        "#!/usr/bin/env bash\nprintf 'pgp sha256 OK\\n'\nprintf 'signature unavailable\\n'\nexit 9\n",
+    )
+    assert result.returncode != 0
+    assert "RPM signature verification failed" in result.stderr
