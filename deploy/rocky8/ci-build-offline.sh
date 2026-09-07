@@ -14,7 +14,7 @@ for entry in baseos:BaseOS appstream:AppStream extras:extras; do
   repo_path="${entry#*:}"
   repo_args+=(--repofrompath="${repo_name},${vault}/${repo_path}/x86_64/os/"
     --setopt="${repo_name}.gpgcheck=1"
-    --setopt="${repo_name}.gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-8")
+    --setopt="${repo_name}.gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-rockyofficial")
 done
 dnf -y "${repo_args[@]}" install git curl tar gzip findutils ca-certificates \
   dnf-plugins-core createrepo_c

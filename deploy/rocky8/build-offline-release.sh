@@ -86,8 +86,8 @@ mkdir -p "$(dirname "${output}")"
 
 [[ -f "${script_root}/install-offline.sh" ]] || \
   die 'install-offline.sh is missing; build the offline installer before packaging.'
-[[ -r /etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-8 ]] || \
-  die 'Builder Rocky 8 signing key is missing: /etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-8'
+[[ -r /etc/pki/rpm-gpg/RPM-GPG-KEY-rockyofficial ]] || \
+  die 'Builder Rocky 8 signing key is missing: /etc/pki/rpm-gpg/RPM-GPG-KEY-rockyofficial'
 
 stage_root="$(mktemp -d)"
 trap 'rm -rf -- "${stage_root}"' EXIT
@@ -130,7 +130,7 @@ bundle_root="${stage_root}/${bundle_name}"
 mkdir -p "${bundle_root}/runtime" "${bundle_root}/rpm-repo"
 cp "${runtime_archive}" "${bundle_root}/runtime/python.tar.gz"
 cp "${script_root}/install-offline.sh" "${bundle_root}/install-offline.sh"
-cp /etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-8 "${bundle_root}/rpm-repo/RPM-GPG-KEY-Rocky-8"
+cp /etc/pki/rpm-gpg/RPM-GPG-KEY-rockyofficial "${bundle_root}/rpm-repo/RPM-GPG-KEY-Rocky-8"
 if [[ -f "${script_root}/OFFLINE-README.ko.md" ]]; then
   cp "${script_root}/OFFLINE-README.ko.md" "${bundle_root}/OFFLINE-README.ko.md"
 fi
