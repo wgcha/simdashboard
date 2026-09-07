@@ -405,7 +405,7 @@ pip_environment=(PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_INPUT=1)
 [[ -z "${PIP_CERT:-}" ]] || pip_environment+=(PIP_CERT="${PIP_CERT}")
 if [[ -d "${script_root}/wheelhouse" ]]; then
   log 'Installing Python dependencies from the offline wheelhouse'
-  env "${pip_environment[@]}" PIP_NO_INDEX=1 \
+  env "${pip_environment[@]}" PIP_CONFIG_FILE=/dev/null PIP_FIND_LINKS= PIP_NO_INDEX=1 \
     "${release_root}/.venv/bin/python" -m pip install \
     --find-links "${script_root}/wheelhouse" --requirement "${release_root}/backend/requirements.lock"
 else
@@ -415,7 +415,11 @@ else
 fi
 
 find "${release_root}" -type d -exec chmod a+rx,go-w {} +
-find "${release_root}" -type f -exec chmod go-w {} +
+# Both pip (umask 027) and a root operator's archive extraction (possibly 077)
+# can leave root-owned modules unreadable to the non-root service account.
+# Releases contain code/assets only; secrets remain in the private env file.
+find "${release_root}" -type f -exec chmod a+r,go-w {} +
+find "${release_root}" -type f -perm /111 -exec chmod a+rx,go-w {} +
 chown -R root:root "${release_root}"
 
 runtime_environment=(
