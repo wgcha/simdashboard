@@ -265,49 +265,41 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version-file: .python-version
-          cache: pip
-          cache-dependency-path: backend/requirements.lock
-      - name: Install backend dependencies
-        run: python -m pip install -r backend/requirements.lock
+      # Security-only Python releases have no python.org Windows installer.
+      # Exercise the same pinned uv runtime used by the downloadable deployment.
+      - name: Install project runtimes and locked dependencies
+        shell: powershell
+        run: .\setup.ps1 -NetworkMode direct -SkipFrontendBuild
       - name: Run backend contract tests
         working-directory: backend
         env:
           PYTHONPATH: .
         run: >-
-          python -m pytest -q -p no:cacheprovider
+          ..\.venv-runtime\Scripts\python.exe -m pytest -q -p no:cacheprovider
           tests/test_access_policy.py tests/test_assignment_policy.py tests/test_directory_memberships.py
           tests/test_menu_policy.py tests/test_oidc_auth.py tests/test_postgres_portability.py tests/test_postgres_startup.py
       - name: Parse PowerShell lifecycle scripts
         shell: powershell
         run: |
           $failed = $false
-          Get-ChildItem -Path . -Recurse -Filter *.ps1 | ForEach-Object {
+          git ls-files '*.ps1' '*.psm1' | ForEach-Object {
             $tokens = $null
             $errors = $null
-            [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD $_), [ref]$tokens, [ref]$errors) | Out-Null
             if ($errors.Count -gt 0) {
               $failed = $true
               $errors | ForEach-Object { Write-Error "$($_.Extent.File):$($_.Extent.StartLineNumber) $($_.Message)" }
             }
           }
           if ($failed) { exit 1 }
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 11.15.1
-          run_install: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .node-version
-          cache: pnpm
-          cache-dependency-path: frontend/pnpm-lock.yaml
-      - name: Install and build frontend
-        working-directory: frontend
+      - name: Generate API contract and build frontend
+        shell: powershell
         run: |
-          pnpm install --frozen-lockfile
-          pnpm run generate:api
-          pnpm run build
+          Import-Module .\scripts\windows\Runtime.psm1
+          Set-ProjectNodePath | Out-Null
+          $pnpm = Get-ProjectPnpm
+          & $pnpm --dir frontend run generate:api
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $pnpm --dir frontend run build
       - name: Verify generated API contract
         run: git diff --exit-code frontend/openapi.json frontend/src/shared/api/generated/openapi.ts

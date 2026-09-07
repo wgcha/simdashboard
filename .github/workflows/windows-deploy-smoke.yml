@@ -71,58 +71,76 @@ jobs:
         shell: powershell
         run: .\deploy.ps1 -NetworkMode direct
 
-      - name: Start with a disposable local database
+      - name: Run the complete managed service lifecycle
         shell: powershell
         run: |
+          $backendPort = [int]$env:BACKEND_PORT
+          $frontendPort = [int]$env:FRONTEND_PORT
           $databasePath = Join-Path $env:RUNNER_TEMP 'analysis-canvas-windows-smoke.duckdb'
-          .\start.ps1 -DatabaseBackend duckdb -DuckdbPath $databasePath -BackendPort ([int]$env:BACKEND_PORT) -FrontendPort ([int]$env:FRONTEND_PORT) -NoBrowser
-          Copy-Item -LiteralPath '.server-pids.json' -Destination (Join-Path $env:RUNNER_TEMP 'first-server-pids.json')
+          $startScript = Join-Path $PWD 'start.ps1'
+          $stopScript = Join-Path $PWD 'stop.ps1'
+          $startArguments = @(
+            '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $startScript,
+            '-DatabaseBackend', 'duckdb', '-DuckdbPath', $databasePath,
+            '-BackendPort', [string]$backendPort, '-FrontendPort', [string]$frontendPort,
+            '-NoBrowser', '-NetworkMode', 'direct'
+          )
 
-      - name: Verify backend, web app, and frontend API proxy
-        shell: powershell
-        run: |
-          $backendHealth = Invoke-RestMethod -Uri "http://127.0.0.1:$env:BACKEND_PORT/api/health" -TimeoutSec 10
-          if ($backendHealth.status -ne 'ok' -or $backendHealth.database_backend -ne 'duckdb') {
-            throw 'Backend health did not report the disposable DuckDB profile.'
-          }
-          $web = Invoke-WebRequest -Uri "http://127.0.0.1:$env:FRONTEND_PORT/workspace/overview" -UseBasicParsing -TimeoutSec 10
-          if ($web.StatusCode -ne 200 -or $web.Content -notmatch '<div id="root">') {
-            throw 'The frontend application shell was not served.'
-          }
-          $proxiedHealth = Invoke-RestMethod -Uri "http://127.0.0.1:$env:FRONTEND_PORT/api/health" -TimeoutSec 10
-          if ($proxiedHealth.status -ne 'ok' -or $proxiedHealth.database_backend -ne 'duckdb') {
-            throw 'The frontend API proxy did not target the selected backend port.'
+          function Write-ServiceLogs {
+            foreach ($path in @('backend\uvicorn.log', 'backend\uvicorn-error.log', 'frontend\vite.log', 'frontend\vite-error.log')) {
+              Write-Host "===== $path ====="
+              if (Test-Path -LiteralPath $path -PathType Leaf) { Get-Content -LiteralPath $path -Tail 200 }
+              else { Write-Host '(not created)' }
+            }
           }
 
-      - name: Start again and reuse the running services
-        shell: powershell
-        run: |
-          $databasePath = Join-Path $env:RUNNER_TEMP 'analysis-canvas-windows-smoke.duckdb'
-          .\start.ps1 -DatabaseBackend duckdb -DuckdbPath $databasePath -BackendPort ([int]$env:BACKEND_PORT) -FrontendPort ([int]$env:FRONTEND_PORT) -NoBrowser
+          try {
+            & powershell.exe @startArguments
+            if ($LASTEXITCODE -ne 0) { throw "Initial start failed with exit code $LASTEXITCODE." }
+            $first = Get-Content -Raw -LiteralPath '.server-pids.json' | ConvertFrom-Json
 
-      - name: Verify duplicate start preserved process identities
-        shell: powershell
-        run: |
-          $first = Get-Content -Raw -LiteralPath (Join-Path $env:RUNNER_TEMP 'first-server-pids.json') | ConvertFrom-Json
-          $current = Get-Content -Raw -LiteralPath '.server-pids.json' | ConvertFrom-Json
-          if ($first.backend.id -ne $current.backend.id -or $first.frontend.id -ne $current.frontend.id) {
-            throw 'A duplicate start replaced an already healthy service process.'
+            $backendHealth = Invoke-RestMethod -Uri "http://127.0.0.1:$backendPort/api/health" -TimeoutSec 10
+            if ($backendHealth.status -ne 'ok' -or $backendHealth.database_backend -ne 'duckdb') {
+              throw 'Backend health did not report the disposable DuckDB profile.'
+            }
+            $web = Invoke-WebRequest -Uri "http://127.0.0.1:$frontendPort/workspace/overview" -UseBasicParsing -TimeoutSec 10
+            if ($web.StatusCode -ne 200 -or $web.Content -notmatch '<div id="root">') {
+              throw 'The frontend deep route did not serve the application shell.'
+            }
+            $proxiedHealth = Invoke-RestMethod -Uri "http://127.0.0.1:$frontendPort/api/health" -TimeoutSec 10
+            if ($proxiedHealth.status -ne 'ok' -or $proxiedHealth.database_backend -ne 'duckdb') {
+              throw 'The frontend API proxy did not target the selected backend port.'
+            }
+
+            # start.ps1 exits 0 for a healthy duplicate. Run it in a child host so
+            # that exit does not terminate this enclosing lifecycle verification.
+            & powershell.exe @startArguments
+            if ($LASTEXITCODE -ne 0) { throw "Duplicate start failed with exit code $LASTEXITCODE." }
+            $current = Get-Content -Raw -LiteralPath '.server-pids.json' | ConvertFrom-Json
+            if ($first.backend.id -ne $current.backend.id -or $first.frontend.id -ne $current.frontend.id) {
+              throw 'A duplicate start replaced an already healthy service process.'
+            }
+          }
+          catch {
+            Write-ServiceLogs
+            throw
+          }
+          finally {
+            $stopArguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $stopScript, '-BackendPort', [string]$backendPort, '-FrontendPort', [string]$frontendPort)
+            & powershell.exe @stopArguments
+            if ($LASTEXITCODE -ne 0) {
+              Write-ServiceLogs
+              throw "Managed stop failed with exit code $LASTEXITCODE."
+            }
           }
 
-      - name: Stop only the managed services
-        if: always()
-        shell: powershell
-        run: |
-          .\stop.ps1 -BackendPort ([int]$env:BACKEND_PORT) -FrontendPort ([int]$env:FRONTEND_PORT)
           if (Test-Path -LiteralPath '.server-pids.json') {
             throw 'The managed PID file remained after stop.'
           }
-          foreach ($port in @([int]$env:BACKEND_PORT, [int]$env:FRONTEND_PORT)) {
-            try {
-              Invoke-WebRequest -Uri "http://127.0.0.1:$port/" -UseBasicParsing -TimeoutSec 2 | Out-Null
+          foreach ($port in @($backendPort, $frontendPort)) {
+            $listener = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
+            if ($listener) {
+              Write-ServiceLogs
               throw "A managed listener remained on port $port after stop."
-            }
-            catch [System.Net.WebException] {
-              # Connection refusal is the expected post-stop result.
             }
           }
