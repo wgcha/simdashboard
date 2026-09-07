@@ -118,3 +118,25 @@ body { color:var(--color-text); background:var(--color-app-background); }
 .app-shell[data-theme='light'] :is(.workbench-page,.workbench-admin-page,.request-intake-page,.help-center,.example-gallery,.feature-gallery,.data-workspace,.catalog-page,.template-page) :is(button:not(.primary-button),a.button) { color:var(--color-text); border-color:var(--color-border-strong); background:var(--color-surface-raised); }
 .app-shell[data-theme='light'] :is(.workbench-page,.workbench-admin-page,.request-intake-page,.help-center,.example-gallery,.feature-gallery,.data-workspace,.catalog-page,.template-page) :is(.primary-button,.intake-submit,button.primary) { color:var(--color-text-on-accent)!important; border-color:var(--color-accent)!important; background:var(--color-accent)!important; }
 .app-shell[data-theme='light'] :is(.pass,.success,.completed) { color:var(--color-success); }.app-shell[data-theme='light'] :is(.fail,.danger,.failed,.blocked) { color:var(--color-danger); }
+
+/* Residual showcase chrome must not inherit the dark feature defaults when it
+   is mounted below the light workspace shell. The extra shell qualifier keeps
+   these rules stronger than lazy feature CSS while leaving dark mode untouched. */
+.app-shell[data-theme='light'] .example-gallery .example-guide,
+.app-shell[data-theme='light'] .example-gallery .example-card > section,
+.app-shell[data-theme='light'] .example-gallery .example-profile { color:var(--color-text); border-color:var(--color-border); background:var(--color-surface-raised); box-shadow:0 5px 18px var(--color-shadow); }
+.app-shell[data-theme='light'] .example-gallery .example-guide { background:var(--color-surface-2); }
+.app-shell[data-theme='light'] .example-gallery .example-guide > div { color:var(--color-text); }
+.app-shell[data-theme='light'] .example-gallery .example-guide strong,
+.app-shell[data-theme='light'] .example-gallery .example-card > section > strong,
+.app-shell[data-theme='light'] .example-gallery .example-profile strong,
+.app-shell[data-theme='light'] .example-gallery > header aside strong { color:var(--color-text-strong); }
+.app-shell[data-theme='light'] .example-gallery .example-guide p,
+.app-shell[data-theme='light'] .example-gallery .example-card > section ol,
+.app-shell[data-theme='light'] .example-gallery .example-card > p,
+.app-shell[data-theme='light'] .example-gallery .example-profile small,
+.app-shell[data-theme='light'] .example-gallery > header aside small { color:var(--color-text-muted); }
+.app-shell[data-theme='light'] .example-gallery .example-guide svg { color:var(--color-accent); }
+.app-shell[data-theme='light'] .example-gallery .example-tags span { color:var(--color-accent); border-color:var(--color-border-strong); background:var(--color-surface-2); }
+.app-shell[data-theme='light'] .example-gallery .example-profile span { border-color:var(--color-border); }
+.app-shell[data-theme='light'] .example-gallery > header aside { color:var(--color-text); border-color:var(--color-border); background:var(--color-surface-raised); }

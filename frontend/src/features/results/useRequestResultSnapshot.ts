@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type Dispatch, type SetStateAction } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import type { DashboardDefinition, DashboardPageSummary, Overview } from '../../types'
 import { resultLayoutApi } from '../../shared/api/resultLayouts'
 
@@ -25,21 +25,39 @@ type UseRequestResultSnapshotArgs = {
 }
 
 export function useRequestResultSnapshot({ activeDashboardId, selectedProjectId, selectedRequestId, selectedLoadCaseId, overview, analysisPages, visiblePages, dashboard, dashboardReady, shouldPrepareDashboard, canEditActiveDashboard, setDashboard, setDashboardLoading, setAnalysisPages, setActiveDashboardId, setActiveView, setAssistantOpen, setError }: UseRequestResultSnapshotArgs) {
+  const generationRef = useRef(0)
+  const analysisPagesKey = analysisPages.map((page) => `${page.id}:${page.project_id}:${page.request_id}:${page.load_case_id}`).join('|')
+  const scopeKey = useMemo(() => [selectedProjectId, selectedRequestId, selectedLoadCaseId, activeDashboardId, overview?.run ?? '', analysisPagesKey].join('::'), [activeDashboardId, analysisPagesKey, overview?.run, selectedLoadCaseId, selectedProjectId, selectedRequestId])
+  const scopeRef = useRef(scopeKey)
   const [snapshotDashboard, setSnapshotDashboard] = useState<DashboardDefinition | null>(null)
   const [snapshotSourcePageId, setSnapshotSourcePageId] = useState<string | null>(null)
   const snapshotReportPage = useMemo<DashboardPageSummary | null>(() => snapshotDashboard ? { id: snapshotDashboard.id, project_id: selectedProjectId, request_id: selectedRequestId, load_case_id: selectedLoadCaseId, name: snapshotDashboard.name, description: snapshotDashboard.description, version: snapshotDashboard.version ?? 1, updated_at: snapshotDashboard.updated_at ?? '', page: snapshotDashboard.page ?? { kind: 'analysis_page', analysis_key: 'custom', status: 'draft', display_order: 0, is_system: false } } : null, [selectedLoadCaseId, selectedProjectId, selectedRequestId, snapshotDashboard])
   const standardReportablePages = overview ? visiblePages(analysisPages, overview).filter((page) => page.page.analysis_key !== 'run_comparison' && (page.page.is_system || page.page.status === 'published' || (page.id === activeDashboardId && canEditActiveDashboard))) : []
   const reportablePages = activeDashboardId === 'request-result-layout' && snapshotReportPage ? [snapshotReportPage, ...standardReportablePages.filter((page) => page.id !== snapshotReportPage.id)] : standardReportablePages
+  useEffect(() => { scopeRef.current = scopeKey }, [scopeKey])
+  useEffect(() => {
+    generationRef.current += 1
+    setSnapshotDashboard(null)
+    setSnapshotSourcePageId(null)
+    if (activeDashboardId === 'request-result-layout') { setDashboard(null); setDashboardLoading(true) }
+  }, [activeDashboardId, scopeKey, setDashboard, setDashboardLoading])
   const hydrateSnapshotDashboard = useCallback((page: DashboardDefinition) => {
+    if (scopeRef.current !== scopeKey) return
     const sourcePageId = page.id
     const virtual: DashboardDefinition = { ...page, id: 'request-result-layout', widgets: page.widgets.map((widget) => { const variableKey = widget.settings?.variable_key; return variableKey && widget.settings?.variableId == null ? { ...widget, settings: { ...widget.settings, variableId: variableKey } } : widget }), page: { kind: 'analysis_page', analysis_key: 'custom', status: 'draft', display_order: 0, is_system: false, ...page.page } }
     setSnapshotSourcePageId(sourcePageId)
     setSnapshotDashboard(virtual)
     if (activeDashboardId === 'request-result-layout') { setDashboard(virtual); setDashboardLoading(false) }
-  }, [activeDashboardId, setDashboard, setDashboardLoading])
-  const materializeSnapshotDashboard = async () => {
+  }, [activeDashboardId, scopeKey, setDashboard, setDashboardLoading])
+  const materializeSnapshotDashboard = async (): Promise<DashboardDefinition | null> => {
+    const generation = generationRef.current
     if (!selectedLoadCaseId) throw new Error('하중 경우를 선택한 뒤 대시보드를 편집할 수 있습니다.')
+    if (!selectedRequestId) throw new Error('의뢰를 선택한 뒤 대시보드를 편집할 수 있습니다.')
+    if (!canEditActiveDashboard) throw new Error('현재 계정에는 결과 대시보드 편집 권한이 없습니다.')
+    const requestId = selectedRequestId
+    const loadCaseId = selectedLoadCaseId
     const materialized = await resultLayoutApi.materializeRequestResultLayout(selectedRequestId, selectedLoadCaseId, snapshotSourcePageId ?? undefined)
+    if (generationRef.current !== generation || requestId !== selectedRequestId || loadCaseId !== selectedLoadCaseId) return null
     setSnapshotDashboard(null)
     setSnapshotSourcePageId(null)
     setDashboard(materialized)
@@ -58,9 +76,10 @@ export function useRequestResultSnapshot({ activeDashboardId, selectedProjectId,
     return dashboard
   }
   const openAssistant = async () => {
-    try { if (activeDashboardId === 'request-result-layout') await materializeSnapshotDashboard(); setAssistantOpen(true) }
+    const generation = generationRef.current
+    try { if (activeDashboardId === 'request-result-layout' && !(await materializeSnapshotDashboard())) return; if (generationRef.current !== generation) return; setAssistantOpen(true) }
     catch (reason) { setError(reason instanceof Error ? reason.message : '대시보드 편집 준비에 실패했습니다.') }
   }
-  const clearSnapshotDashboard = useCallback(() => { setSnapshotDashboard(null); setSnapshotSourcePageId(null); setDashboard(null); setDashboardLoading(true); setActiveDashboardId('request-result-layout'); setActiveView('custom') }, [setActiveDashboardId, setActiveView, setDashboard, setDashboardLoading])
+  const clearSnapshotDashboard = useCallback(() => { generationRef.current += 1; setSnapshotDashboard(null); setSnapshotSourcePageId(null); setDashboard(null); setDashboardLoading(true); setActiveDashboardId('request-result-layout'); setActiveView('custom') }, [setActiveDashboardId, setActiveView, setDashboard, setDashboardLoading])
   return { snapshotDashboard, reportablePages, hydrateSnapshotDashboard, prepareEditableDashboard, openAssistant, clearSnapshotDashboard }
 }

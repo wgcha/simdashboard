@@ -7,7 +7,10 @@ import sys
 
 import pytest
 
-pytestmark = pytest.mark.unit
+pytestmark = [
+    pytest.mark.unit,
+    pytest.mark.skipif(os.name != "posix", reason="Rocky 8 HTTP deployment tests require POSIX shell tooling"),
+]
 DEPLOY = Path(__file__).resolve().parents[2] / "deploy" / "rocky8"
 
 

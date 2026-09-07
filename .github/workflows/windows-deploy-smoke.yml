@@ -1,0 +1,128 @@
+name: Windows one-click deploy smoke
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/windows-deploy-smoke.yml'
+      - '.node-version'
+      - '.python-version'
+      - '.env.example'
+      - 'deploy.bat'
+      - 'deploy.ps1'
+      - 'deploy/windows/**'
+      - 'setup-windows.bat'
+      - 'setup.ps1'
+      - 'start.bat'
+      - 'start.ps1'
+      - 'stop.bat'
+      - 'stop.ps1'
+      - 'scripts/windows/**'
+      - 'backend/**'
+      - 'frontend/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/windows-deploy-smoke.yml'
+      - '.node-version'
+      - '.python-version'
+      - '.env.example'
+      - 'deploy.bat'
+      - 'deploy.ps1'
+      - 'deploy/windows/**'
+      - 'setup-windows.bat'
+      - 'setup.ps1'
+      - 'start.bat'
+      - 'start.ps1'
+      - 'stop.bat'
+      - 'stop.ps1'
+      - 'scripts/windows/**'
+      - 'backend/**'
+      - 'frontend/**'
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-smoke:
+    name: PowerShell 5.1 clean checkout
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      BACKEND_PORT: '18080'
+      FRONTEND_PORT: '15173'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: true
+
+      - name: Verify Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          if ($PSVersionTable.PSVersion.Major -ne 5) {
+            throw "Expected Windows PowerShell 5.1, found $($PSVersionTable.PSVersion)."
+          }
+
+      - name: Validate network selection without outbound access
+        shell: powershell
+        run: .\scripts\windows\network-self-test.ps1
+
+      - name: Deploy pinned runtimes and dependencies in direct mode
+        shell: powershell
+        run: .\deploy.ps1 -NetworkMode direct
+
+      - name: Start with a disposable local database
+        shell: powershell
+        run: |
+          $databasePath = Join-Path $env:RUNNER_TEMP 'analysis-canvas-windows-smoke.duckdb'
+          .\start.ps1 -DatabaseBackend duckdb -DuckdbPath $databasePath -BackendPort ([int]$env:BACKEND_PORT) -FrontendPort ([int]$env:FRONTEND_PORT) -NoBrowser
+          Copy-Item -LiteralPath '.server-pids.json' -Destination (Join-Path $env:RUNNER_TEMP 'first-server-pids.json')
+
+      - name: Verify backend, web app, and frontend API proxy
+        shell: powershell
+        run: |
+          $backendHealth = Invoke-RestMethod -Uri "http://127.0.0.1:$env:BACKEND_PORT/api/health" -TimeoutSec 10
+          if ($backendHealth.status -ne 'ok' -or $backendHealth.database_backend -ne 'duckdb') {
+            throw 'Backend health did not report the disposable DuckDB profile.'
+          }
+          $web = Invoke-WebRequest -Uri "http://127.0.0.1:$env:FRONTEND_PORT/workspace/overview" -UseBasicParsing -TimeoutSec 10
+          if ($web.StatusCode -ne 200 -or $web.Content -notmatch '<div id="root">') {
+            throw 'The frontend application shell was not served.'
+          }
+          $proxiedHealth = Invoke-RestMethod -Uri "http://127.0.0.1:$env:FRONTEND_PORT/api/health" -TimeoutSec 10
+          if ($proxiedHealth.status -ne 'ok' -or $proxiedHealth.database_backend -ne 'duckdb') {
+            throw 'The frontend API proxy did not target the selected backend port.'
+          }
+
+      - name: Start again and reuse the running services
+        shell: powershell
+        run: |
+          $databasePath = Join-Path $env:RUNNER_TEMP 'analysis-canvas-windows-smoke.duckdb'
+          .\start.ps1 -DatabaseBackend duckdb -DuckdbPath $databasePath -BackendPort ([int]$env:BACKEND_PORT) -FrontendPort ([int]$env:FRONTEND_PORT) -NoBrowser
+
+      - name: Verify duplicate start preserved process identities
+        shell: powershell
+        run: |
+          $first = Get-Content -Raw -LiteralPath (Join-Path $env:RUNNER_TEMP 'first-server-pids.json') | ConvertFrom-Json
+          $current = Get-Content -Raw -LiteralPath '.server-pids.json' | ConvertFrom-Json
+          if ($first.backend.id -ne $current.backend.id -or $first.frontend.id -ne $current.frontend.id) {
+            throw 'A duplicate start replaced an already healthy service process.'
+          }
+
+      - name: Stop only the managed services
+        if: always()
+        shell: powershell
+        run: |
+          .\stop.ps1 -BackendPort ([int]$env:BACKEND_PORT) -FrontendPort ([int]$env:FRONTEND_PORT)
+          if (Test-Path -LiteralPath '.server-pids.json') {
+            throw 'The managed PID file remained after stop.'
+          }
+          foreach ($port in @([int]$env:BACKEND_PORT, [int]$env:FRONTEND_PORT)) {
+            try {
+              Invoke-WebRequest -Uri "http://127.0.0.1:$port/" -UseBasicParsing -TimeoutSec 2 | Out-Null
+              throw "A managed listener remained on port $port after stop."
+            }
+            catch [System.Net.WebException] {
+              # Connection refusal is the expected post-stop result.
+            }
+          }

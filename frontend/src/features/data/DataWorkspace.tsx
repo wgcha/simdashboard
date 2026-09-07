@@ -3,7 +3,8 @@ import { AlertTriangle, Check, ChevronDown, ClipboardPlus, Database, Download, L
 import { api } from '../../api'
 import type { AnalysisRequest, LoadCase, Project } from '../../types'
 import { ResultImportHistory } from './ResultImportHistory'
-export function DataWorkspace({ canCreateProject, canRetryImports, projects, initialProjectId, initialRequestId, onDataChanged, onOpenAnalysis, onOpenIntake }: { canCreateProject: boolean; canRetryImports: boolean; projects: Project[]; initialProjectId: string; initialRequestId?: string; onDataChanged: () => Promise<void>; onOpenAnalysis: (projectId: string, requestId: string, loadCaseId: string) => Promise<void>; onOpenIntake: () => void }) {
+import './DataWorkspace.css'
+export function DataWorkspace({ canCreateProject, canRetryImports, projects, initialProjectId, initialRequestId, initialLoadCaseId, onContextChange, onDataChanged, onOpenAnalysis, onOpenIntake }: { canCreateProject: boolean; canRetryImports: boolean; projects: Project[]; initialProjectId: string; initialRequestId?: string; initialLoadCaseId?: string; onContextChange?: (context: { projectId: string; requestId: string; loadCaseId: string }) => void; onDataChanged: () => Promise<void>; onOpenAnalysis: (projectId: string, requestId: string, loadCaseId: string) => Promise<void>; onOpenIntake: () => void }) {
   const [managedProjects, setManagedProjects] = useState(projects)
   const [projectId, setProjectId] = useState(initialProjectId || projects[0]?.id || '')
   const [requests, setRequests] = useState<AnalysisRequest[]>([])
@@ -35,10 +36,13 @@ export function DataWorkspace({ canCreateProject, canRetryImports, projects, ini
     if (!requestId) { setLoadCases([]); return }
     api.loadCases(requestId).then((items) => {
       setLoadCases(items)
-      setLoadCaseId((current) => items.some((item) => item.id === current) ? current : items[0]?.id || '')
+      setLoadCaseId((current) => items.some((item) => item.id === initialLoadCaseId) ? initialLoadCaseId || '' : items.some((item) => item.id === current) ? current : items[0]?.id || '')
       setResultFile(null); setImportPreview(null); setImported(false)
     }).catch((reason) => setFormError(reason instanceof Error ? reason.message : '하중 경우 목록을 불러오지 못했습니다.'))
-  }, [requestId])
+  }, [initialLoadCaseId, requestId])
+  useEffect(() => {
+    onContextChange?.({ projectId, requestId, loadCaseId })
+  }, [loadCaseId, onContextChange, projectId, requestId])
   const complete = async (label: string, action: () => Promise<void>) => {
     setBusy(true); setFormError(''); setMessage('')
     try {
@@ -49,7 +53,6 @@ export function DataWorkspace({ canCreateProject, canRetryImports, projects, ini
       setFormError(reason instanceof Error ? reason.message : `${label} 등록에 실패했습니다.`)
     } finally { setBusy(false) }
   }
-
   const submitProject = (event: FormEvent) => {
     event.preventDefault()
     void complete('프로젝트', async () => {
@@ -59,7 +62,6 @@ export function DataWorkspace({ canCreateProject, canRetryImports, projects, ini
       setProjectForm({ name: '', product_name: '', manufacturer: '', display_size_inch: 65, description: '' })
     })
   }
-
   const submitLoadCase = (event: FormEvent) => {
     event.preventDefault()
     if (!requestId) return
@@ -73,9 +75,7 @@ export function DataWorkspace({ canCreateProject, canRetryImports, projects, ini
       setCaseForm({ name: '', analysis_type: caseForm.analysis_type, primary: caseForm.analysis_type === 'DROP' ? '800' : '25', secondary: caseForm.analysis_type === 'DROP' ? 'BOTTOM' : '10' })
     })
   }
-
   const selectedRequest = requests.find((item) => item.id === requestId)
-
   const validateResultFile = async (selected: { filename: string; content: string }) => {
     setResultFile(selected); setBusy(true)
     try {
@@ -83,7 +83,6 @@ export function DataWorkspace({ canCreateProject, canRetryImports, projects, ini
     } catch (reason) { setFormError(reason instanceof Error ? reason.message : '결과 파일 검증에 실패했습니다.') }
     finally { setBusy(false) }
   }
-
   const chooseResultFile = async (file?: File) => {
     setFormError(''); setMessage(''); setImportPreview(null); setImported(false)
     if (!file) { setResultFile(null); return }
@@ -92,7 +91,6 @@ export function DataWorkspace({ canCreateProject, canRetryImports, projects, ini
     const selected = { filename: file.name, content: await file.text() }
     await validateResultFile(selected)
   }
-
   const loadRadiossExample = async () => {
     setFormError(''); setMessage(''); setImportPreview(null); setImported(false); setBusy(true)
     try {
@@ -141,8 +139,9 @@ export function DataWorkspace({ canCreateProject, canRetryImports, projects, ini
     </div>
 
     {(message || formError) && <div className={`data-message ${formError ? 'error' : ''}`}>{formError ? <AlertTriangle /> : <Check />}{formError || message}</div>}
-    <div className="data-intake-handoff"><ClipboardPlus /><span><strong>새 해석 의뢰는 별도 접수 절차를 사용합니다.</strong>외부 시스템 전달·부서장 지시와 작업 시나리오를 기록한 뒤 이 화면에서 하중 경우와 결과를 연결하세요.</span><button onClick={onOpenIntake}>의뢰 접수 열기 <ChevronDown /></button></div>
-
+    <details className="data-setup-details" open={projects.length === 0}>
+      <summary>프로젝트와 하중 경우 설정</summary>
+      <div className="data-intake-handoff"><ClipboardPlus /><span><strong>새 해석 의뢰는 별도 접수 절차를 사용합니다.</strong>외부 시스템 전달·부서장 지시와 작업 시나리오를 기록한 뒤 이 화면에서 하중 경우와 결과를 연결하세요.</span><button type="button" onClick={onOpenIntake}>의뢰 접수 열기 <ChevronDown /></button></div>
     <div className={`data-form-grid ${canCreateProject ? '' : 'single'}`}>
       {canCreateProject && <article className="data-form-card"><header><span>01</span><div><h2>새 프로젝트</h2><p>제품 단위 최상위 분류</p></div></header><form onSubmit={submitProject}>
         <label><span>프로젝트 이름</span><input required value={projectForm.name} onChange={(e) => setProjectForm({ ...projectForm, name: e.target.value })} placeholder="예: 2026 OLED 신뢰성" /></label>
@@ -160,6 +159,7 @@ export function DataWorkspace({ canCreateProject, canRetryImports, projects, ini
         <button className="data-submit" disabled={busy || !requestId}><Plus /> 하중 경우 등록</button>
       </form></article>
     </div>
+    </details>
 
     <article className="result-import-card">
       <header>
@@ -183,6 +183,6 @@ export function DataWorkspace({ canCreateProject, canRetryImports, projects, ini
       </div>
       <footer><div><strong>판정 규칙</strong><span>Open Cell 응력 및 Chassis Rear 영구변형 모두 값이 기준 이상이면 FAIL</span></div>{imported ? <button className="open-result-button" onClick={() => void onOpenAnalysis(projectId, requestId, loadCaseId)}><LayoutDashboard /> 분석 대시보드에서 확인</button> : <button className="data-submit import-button" onClick={() => void submitResultImport()} disabled={!importPreview || !resultFile || busy}><Upload /> 검증된 결과 등록</button>}</footer>
     </article>
-    <ResultImportHistory loadCaseId={loadCaseId} canRetryImports={canRetryImports} refreshToken={historyRefreshToken} />
+    <details className="data-history-details"><summary>이전 결과 가져오기 이력</summary><ResultImportHistory loadCaseId={loadCaseId} canRetryImports={canRetryImports} refreshToken={historyRefreshToken} /></details>
   </section>
 }

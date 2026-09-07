@@ -1,6 +1,6 @@
 .master-result-refresh { margin-bottom:14px; border:1px solid #244158; border-radius:10px; background:linear-gradient(145deg,#0f2435,#0a1926); overflow:hidden; }
 .master-result-refresh>header { padding:16px 18px; display:flex; align-items:center; justify-content:space-between; gap:18px; }
-.master-result-refresh>header span { color:var(--cyan); font:700 9px 'IBM Plex Mono'; letter-spacing:.13em; }
+.master-result-refresh>header span { color:var(--cyan); font:700 9px var(--font-mono); letter-spacing:.13em; }
 .master-result-refresh h2 { margin:5px 0 3px; font-size:17px; }
 .master-result-refresh header p { margin:0; color:#6c879a; font-size:10px; }
 .master-result-refresh header button { min-height:36px; padding:0 12px; display:flex; align-items:center; gap:7px; border:1px solid #3aa0c4; border-radius:6px; color:#061722; background:var(--cyan); font-size:10px; font-weight:800; cursor:pointer; white-space:nowrap; }
@@ -12,7 +12,7 @@
 .master-result-refresh-counts { display:grid; grid-template-columns:repeat(4,1fr); background:#0a1b28; }
 .master-result-refresh-counts span { padding:10px 14px; display:flex; align-items:baseline; gap:5px; border-right:1px solid #1e384b; color:#6f8b9d; font-size:9px; }
 .master-result-refresh-counts span:last-child { border-right:0; }
-.master-result-refresh-counts strong { color:#d7e7f0; font:700 16px 'IBM Plex Mono'; }
+.master-result-refresh-counts strong { color:#d7e7f0; font:700 16px var(--font-mono); }
 .master-result-refresh-counts .failed strong { color:#ff647d; }
 .master-result-refresh-items { max-height:230px; overflow:auto; }
 .master-result-refresh-items>p { margin:0; padding:12px 18px; color:#6f8b9d; font-size:10px; }
@@ -23,7 +23,18 @@
 .master-result-refresh-items article strong,.master-result-refresh-items article small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .master-result-refresh-items article strong { color:#bdd2dd; font-size:10px; }
 .master-result-refresh-items article small { color:#587487; font-size:8px; }
-.master-result-refresh-items article b { padding:3px 6px; border-radius:10px; color:#70e0a8; background:#70e0a812; font:700 8px 'IBM Plex Mono'; }
+.master-result-refresh-items article b { padding:3px 6px; border-radius:10px; color:#70e0a8; background:#70e0a812; font:700 8px var(--font-mono); }
 .master-result-refresh-items article b.failed { color:#ff647d; background:#ff647d12; }
 .master-result-refresh-items article b.skipped { color:#8aa0af; background:#8aa0af12; }
 @media(max-width:680px){.master-result-refresh>header{align-items:flex-start;flex-direction:column}.master-result-refresh header button{width:100%;justify-content:center}.master-result-refresh-counts{grid-template-columns:repeat(2,1fr)}}
+.light-theme .master-result-refresh { color:var(--color-text,#172033); border-color:var(--color-border,#d4dfea); background:var(--color-surface-1,#fff); box-shadow:0 4px 15px rgba(25,52,80,.06); }
+.light-theme .master-result-refresh-result { border-color:var(--color-border,#d7e0ea); }
+.light-theme .master-result-refresh header p,.light-theme .master-result-refresh-counts span,.light-theme .master-result-refresh-items>p { color:var(--color-text-muted,#526174); }
+.light-theme .master-result-refresh-counts { background:var(--color-surface-2,#f8fafc); }
+.light-theme .master-result-refresh-counts span,.light-theme .master-result-refresh-items article { border-color:var(--color-border,#d7e0ea); }
+.light-theme .master-result-refresh-counts strong,.light-theme .master-result-refresh-items article strong { color:var(--color-text,#172033); }
+.light-theme .master-result-refresh-items article small { color:var(--color-text-muted,#526174); }
+.light-theme .master-result-refresh-items article b { color:var(--color-success); background:var(--color-success-surface); }
+.light-theme .master-result-refresh-items article b.failed { color:var(--color-danger); background:var(--color-danger-surface); }
+.light-theme .master-result-refresh-items article b.skipped { color:var(--color-text-muted); background:var(--color-surface-2); }
+.light-theme .master-result-refresh-error { border-color:var(--color-border); color:var(--color-danger); background:var(--color-danger-surface); }

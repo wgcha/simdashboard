@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import os
+import platform
 import re
 import stat
 import subprocess
@@ -9,7 +10,10 @@ import subprocess
 import pytest
 
 
-pytestmark = pytest.mark.unit
+pytestmark = [
+    pytest.mark.unit,
+    pytest.mark.skipif(os.name != "posix", reason="Rocky 8 deployment tests require POSIX shell tooling"),
+]
 
 
 def _write_executable(path: Path, content: str) -> None:
@@ -334,7 +338,7 @@ def test_one_command_deployer_can_disable_node_runtime_bootstrap(tmp_path: Path)
     assert "Node.js v22.23.2 and corepack are required" in result.stderr
 
 
-@pytest.mark.skipif(os.uname().machine != "x86_64", reason="fixture models the x86_64 Node archive")
+@pytest.mark.skipif(platform.machine().lower() not in {"amd64", "x86_64"}, reason="fixture models the x86_64 Node archive")
 def test_one_command_deployer_reuses_verified_preseeded_node_archive(tmp_path: Path) -> None:
     source_root = Path(__file__).resolve().parents[2]
     project = tmp_path / "repo"

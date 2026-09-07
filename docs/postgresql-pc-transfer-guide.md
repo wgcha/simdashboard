@@ -21,31 +21,33 @@
 
 생성된 `analysis-canvas-transfer-...` 폴더 전체를 대상 PC로 복사한다. 폴더 안의 파일을 개별적으로 수정하거나 이름을 바꾸면 검증에 실패한다.
 
-## 2. 대상 PC 준비와 통합 설치
+## 2. 대상 PC 준비와 명시적 import
 
 1. GitHub에서 동일한 버전의 저장소 전체를 다운로드한다.
 2. VS Code에서 저장소 최상위 폴더를 연다.
 3. PostgreSQL을 설치하고 서비스를 시작한다.
-4. VS Code PowerShell 터미널에서 `setup.ps1`을 실행한다.
-5. 회사 프록시를 입력한 뒤 `Transfer` 모드와 받은 번들 폴더를 선택한다.
-6. 설치가 완료되면 `start-postgresql.ps1`을 실행한다.
+4. VS Code PowerShell 터미널에서 `setup.ps1`을 실행해 고정 런타임과 의존성만 준비한다.
+5. `import-postgresql-transfer.ps1`의 validation과 import를 별도로 실행한다.
+6. 이관이 성공하면 `.env`의 PostgreSQL 연결을 확인하고 `start-postgresql.ps1`을 실행한다.
 
-관리자 호스트·포트·사용자·비밀번호는 설치 중 안전하게 입력받으며 관리자 URL을 `.env`에 저장하지 않는다. 통합 설치는 번들을 먼저 검증하고, 기존 DB가 있으면 검증된 백업을 만든 뒤 스테이징 DB에서 복원과 행 수 검증을 마치고 교체한다. 기존 전용 역할이 다른 DB에서도 사용 중이면 자동 교체를 중단한다.
+관리자 호스트·포트·사용자·비밀번호는 import 단계에서 안전하게 준비하며 관리자 URL을 `.env`에 저장하지 않는다. import 도구는 번들을 먼저 검증하고, 기존 DB가 있으면 검증된 백업·staging restore·행 수 검증을 마친 뒤 교체하는 명시 절차를 따른다. 기존 전용 역할이 다른 DB에서도 사용 중이면 자동 교체를 중단한다.
 
-비대화형 실행은 다음과 같이 관리자 URL을 프로세스 환경으로만 전달한다. `-BackupDir`을 생략하면 프로젝트의 기본 백업 위치를 사용한다.
+먼저 변경 없는 번들 검증을 실행한다.
 
 ```powershell
-$env:POSTGRES_ADMIN_URL = 'postgresql://postgres:관리자비밀번호@127.0.0.1:5432/postgres'
-.\setup.ps1 -NonInteractive -Mode Transfer `
-  -Bundle 'D:\받은폴더\analysis-canvas-transfer-...' `
-  -BackupDir 'D:\analysis-backups' `
-  -ProxyUrl 'http://proxy.company.local:8080'
-Remove-Item Env:POSTGRES_ADMIN_URL
+.\setup.ps1 -SkipFrontendBuild
+.\import-postgresql-transfer.ps1 -Bundle 'D:\받은폴더\analysis-canvas-transfer-...' -ValidateOnly
+```
+
+검증이 통과한 뒤 실제 import를 실행한다. 대상 DB 교체가 필요한 경우에는 먼저 별도 PostgreSQL backup을 만들고, import 도구의 replace/backup 정책을 확인한 뒤 실행한다.
+
+```powershell
+.\import-postgresql-transfer.ps1 -Bundle 'D:\받은폴더\analysis-canvas-transfer-...'
 ```
 
 ### 기존 데이터가 있는 경우
 
-현재 통합 설치의 기본 정책은 기존 DB를 검증된 백업으로 보존한 뒤, 이관 DB를 스테이징에서 검증하여 통째로 교체하는 방식이다. 기존 데이터를 그대로 사용하려면 `Keep` 모드를 선택한다. 두 DB의 레코드를 합치는 병합 방식은 ID, 참조 무결성, 감사 이력과 assets 파일명 충돌 정책을 먼저 정해야 하므로 자동 실행하지 않는다. 병합이 필요하면 백업을 보존한 상태에서 별도 기능으로 검토·구현한다.
+기존 대상 DB를 그대로 사용할 때는 import를 실행하지 않고 `.env`의 연결을 확인한 뒤 `start-postgresql.ps1`을 사용한다. 이관 DB로 교체할 때만 검증된 백업과 staging restore를 먼저 수행한다. 두 DB의 레코드를 합치는 병합 방식은 ID, 참조 무결성, 감사 이력과 assets 파일명 충돌 정책을 먼저 정해야 하므로 자동 실행하지 않는다. 병합이 필요하면 백업을 보존한 상태에서 별도 기능으로 검토·구현한다.
 
 ## 3. 개별 명령으로 변경 없는 사전검증
 
@@ -65,7 +67,7 @@ Remove-Item Env:POSTGRES_ADMIN_URL
 .\import-postgresql-transfer.ps1 -Bundle 'D:\받은폴더\analysis-canvas-transfer-...'
 ```
 
-통합 설치 또는 가져오기 도구는 다음 순서로 처리한다.
+가져오기 도구는 다음 순서로 처리한다.
 
 1. 번들의 SHA-256과 안전한 상대 경로를 재검증한다.
 2. 기존 DB가 있으면 custom-format dump와 assets archive를 만들고 크기와 SHA-256을 검증한다. 검증 실패 시 교체를 시작하지 않는다.

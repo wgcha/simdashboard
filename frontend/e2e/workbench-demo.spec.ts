@@ -1,3 +1,4 @@
+import { openWorkspaceRoute, revealControl } from './workspace-test-helpers'
 import { expect, test, type Page } from '@playwright/test'
 
 async function login(page: Page, role: 'admin' | 'viewer' = 'admin') {
@@ -5,14 +6,14 @@ async function login(page: Page, role: 'admin' | 'viewer' = 'admin') {
   await page.getByLabel('사용자 이름').fill(role === 'admin' ? 'e2e-admin' : 'e2e-viewer')
   await page.getByLabel('비밀번호').fill('e2e-validation-password')
   await page.getByRole('button', { name: '로그인', exact: true }).click()
-  await expect(page.getByRole('link', { name: '운영 대시보드', exact: true })).toBeVisible()
+  await expect(page.getByRole('link', { name: '결과 대시보드', exact: true })).toBeVisible()
 }
 
 test('DOE 의뢰를 접수하고 배정 작업을 명시적으로 시작·완료한다', async ({ page }) => {
   await login(page)
   const title = `E2E DOE 의뢰 ${Date.now()}`
 
-  await page.getByRole('link', { name: '의뢰 접수', exact: true }).click()
+  await openWorkspaceRoute(page, '/workspace/requests/new')
   await expect(page.getByTestId('request-intake-page')).toBeVisible()
   await page.getByRole('button', { name: /설계 DOE 탐색/ }).click()
 
@@ -58,6 +59,7 @@ test('DOE 의뢰를 접수하고 배정 작업을 명시적으로 시작·완료
   await expect(page.getByTestId('complete-current-work')).toBeVisible()
   await expect(page.locator('.assigned-work-list article.in_progress')).toContainText('CAD 작업')
   await expect(page.getByTestId('execute-selected-task')).toHaveText(/형상 준비 데모 실행·완료/)
+  await revealControl(page.getByLabel('작업 진행도'))
   await page.getByLabel('작업 진행도').fill('20')
   await page.getByRole('button', { name: '진행도 저장' }).click()
   await expect(page.locator('.assigned-work-list article.in_progress')).toContainText('20%')
@@ -66,22 +68,27 @@ test('DOE 의뢰를 접수하고 배정 작업을 명시적으로 시작·완료
   await expect(page.locator('.assigned-request-card')).toContainText('1 / 7')
   await expect(page.locator('.assigned-work-list article.completed')).toContainText('CAD 작업')
   await expect(page.locator('.assigned-work-list article.ready')).toContainText('DOE 파일 생성')
-  await expect(page.getByTestId('start-current-work')).toHaveText(/작업 시작/)
+  await expect(page.getByTestId('execute-selected-task')).toHaveText(/DOE 생성 시작/)
   await expect(page.locator('.workbench-run-detail')).toContainText('CAD 작업 데모 수행')
   await expect(page.getByLabel('텍스트 데모 파일 내용')).toBeVisible()
 
-  await page.getByRole('link', { name: '해석 의뢰 현황', exact: true }).click()
-  await expect(page.getByTestId('selected-request-progress-tab')).toContainText('14%')
-  const monitoringLane = page.locator('.workflow-lane').filter({ hasText: title })
-  await expect(monitoringLane).toContainText('1 / 7 작업 완료')
-  await expect(monitoringLane.locator('.workflow-lane-meta')).toContainText('14%')
+  await openWorkspaceRoute(page, '/workspace/requests')
+  await expect(page.locator('.request-workspace-header')).toContainText(title)
+  const monitoring = page.getByTestId('focused-request-overview')
+  await expect(monitoring).toContainText('1 / 7 작업 완료')
+  await expect(monitoring.getByRole('heading', { name: 'DOE 파일 생성' })).toBeVisible()
+  await expect.poll(() => new URL(page.url()).searchParams.get('request')).toBeTruthy()
+  await page.reload()
+  await expect(monitoring).toContainText('1 / 7 작업 완료')
+  await expect(page.locator('.request-workspace-header')).toContainText(title)
 
-  await page.getByRole('link', { name: '운영 대시보드', exact: true }).click()
+  await openWorkspaceRoute(page, '/workspace/overview')
+  await page.getByRole('button', { name: '운영 현황', exact: true }).click()
   const portfolioRow = page.locator('.portfolio-row').filter({ hasText: title })
   await expect(portfolioRow).toContainText('14%')
   await expect(portfolioRow).toContainText('DOE 파일 생성')
 
-  await page.getByRole('link', { name: '해석 작업 실행', exact: true }).click()
+  await openWorkspaceRoute(page, '/workspace/execution')
   await page.getByTestId('start-current-work').click()
   await page.getByTestId('complete-current-work').click()
   await expect(page.locator('.assigned-work-list article.ready')).toContainText('HPC 수행')
@@ -115,7 +122,7 @@ test('관리자가 제공한 활성 업무 유형을 선택하고 선택 당시 
   expect(versionOne.status(), await versionOne.text()).toBe(201)
   const requestTypeId = (await versionOne.json()).id as string
 
-  await page.getByRole('link', { name: '의뢰 접수', exact: true }).click()
+  await openWorkspaceRoute(page, '/workspace/requests/new')
   await expect(page.getByTestId('request-intake-page')).toBeVisible()
   const option = page.getByTestId(`request-type-option-${requestTypeId}-1`)
   await expect(option).toContainText('E2E 관리자 제공 검토')
@@ -143,21 +150,18 @@ test('관리자가 제공한 활성 업무 유형을 선택하고 선택 당시 
 
 test('Viewer는 배정 작업과 진행 상태를 보되 시작·완료할 수 없다', async ({ page }) => {
   await login(page, 'viewer')
-  await page.getByRole('link', { name: '해석 작업 실행', exact: true }).click()
+  await openWorkspaceRoute(page, '/workspace/execution')
   await expect(page.getByTestId('simulation-workbench')).toBeVisible()
   await expect(page.getByRole('link', { name: '작업 유형 관리', exact: true })).toHaveCount(0)
 
-  const start = page.getByTestId('start-current-work')
-  const complete = page.getByTestId('complete-current-work')
-  if (await start.count()) await expect(start).toBeDisabled()
-  if (await complete.count()) await expect(complete).toBeDisabled()
+  await expect(page.getByTestId('execute-selected-task')).toBeDisabled()
   await expect(page.getByText(/작업 담당자\(.+\)만 실행할 수 있습니다\./)).toBeVisible()
   await expect(page.getByLabel('배치 명령 미리보기')).toHaveCount(0)
 })
 
 test('작업 유형 관리에서 배치 경로 정의를 별도 내부 탭으로 연다', async ({ page }) => {
   await login(page)
-  await page.getByRole('link', { name: '작업 유형 관리', exact: true }).click()
+  await openWorkspaceRoute(page, '/workspace/admin/work-types')
 
   const requestTypesTab = page.getByRole('tab', { name: /^작업 유형/ })
   const batchPathsTab = page.getByRole('tab', { name: /배치 경로 정의/ })
@@ -178,7 +182,7 @@ test('작업 유형 관리에서 배치 경로 정의를 별도 내부 탭으로
 
 test('새 작업 유형은 ID를 서버에서 생성하고 기본 실행 방식을 읽기 쉽게 선택한다', async ({ page }) => {
   await login(page)
-  await page.getByRole('link', { name: '작업 유형 관리', exact: true }).click()
+  await openWorkspaceRoute(page, '/workspace/admin/work-types')
 
   const form = page.getByRole('form', { name: '새 작업 유형 작성' })
   await expect(form.getByLabel('유형 ID')).toHaveCount(0)
@@ -198,7 +202,7 @@ test('작업 유형을 라벨과 시나리오로 편집하고 접수 필터에�
   const suffix = Date.now()
   const displayName = `E2E 라벨 작업 ${suffix}`
 
-  await page.getByRole('link', { name: '작업 유형 관리', exact: true }).click()
+  await openWorkspaceRoute(page, '/workspace/admin/work-types')
   const createForm = page.getByRole('form', { name: '새 작업 유형 작성' })
   await createForm.getByLabel('관리 유형 표시 이름').fill(displayName)
   await createForm.getByLabel('관리 유형 설명').fill('초기 단일 작업 시나리오')
@@ -230,21 +234,21 @@ test('작업 유형을 라벨과 시나리오로 편집하고 접수 필터에�
   await expect(typeCard).not.toContainText('#부서')
   await expect(typeCard).toContainText('DOE 생성')
 
-  await page.getByRole('link', { name: '의뢰 접수', exact: true }).click()
+  await openWorkspaceRoute(page, '/workspace/requests/new')
   const labelFilter = page.getByTestId('request-type-label-filter-충돌해석')
   await expect(labelFilter).toBeVisible()
   await labelFilter.click()
   await expect(page.locator('.intake-scenario-options button')).toHaveCount(1)
   await expect(page.getByTestId(`request-type-option-${requestTypeId}-2`)).toContainText(displayName)
 
-  await page.getByRole('link', { name: '작업 유형 관리', exact: true }).click()
+  await openWorkspaceRoute(page, '/workspace/admin/work-types')
   typeCard = page.locator('.workbench-admin-types article').filter({ hasText: displayName })
   page.once('dialog', (dialog) => dialog.accept())
   await typeCard.getByRole('button', { name: '삭제', exact: true }).click()
   await expect(page.locator('.workbench-admin-notice')).toContainText('과거 버전 이력은 보존됩니다')
   await expect(typeCard).toHaveCount(0)
 
-  await page.getByRole('link', { name: '의뢰 접수', exact: true }).click()
+  await openWorkspaceRoute(page, '/workspace/requests/new')
   await expect(page.getByTestId('request-type-label-filter-충돌해석')).toHaveCount(0)
   await expect(page.getByTestId(`request-type-option-${requestTypeId}-2`)).toHaveCount(0)
 })
@@ -268,7 +272,7 @@ test('작업 유형 선택 카드를 3열 3행 이후 내부 스크롤로 탐색
     ids.push((await response.json()).id as string)
   }
 
-  await page.getByRole('link', { name: '의뢰 접수', exact: true }).click()
+  await openWorkspaceRoute(page, '/workspace/requests/new')
   await page.getByTestId('request-type-label-filter-스크롤검증').click()
   const options = page.locator('.intake-scenario-options')
   await expect(options.getByRole('button')).toHaveCount(10)

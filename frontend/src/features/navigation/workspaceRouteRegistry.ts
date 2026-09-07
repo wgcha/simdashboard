@@ -19,7 +19,7 @@ export type WorkspaceRouteRegistryItem = {
 }
 
 export const WORKSPACE_ROUTES: readonly WorkspaceRouteRegistryItem[] = [
-  { id: 'portfolio', page: 'portfolio', path: '/workspace/overview', label: '운영 대시보드', breadcrumb: { section: '운영', title: '해석 운영 현황' }, requiredPermission: 'company.dashboard.view', contextKind: 'company', navigationKind: 'select' },
+  { id: 'portfolio', page: 'portfolio', path: '/workspace/overview', label: '결과 대시보드', breadcrumb: { section: '결과', title: '결과 대시보드' }, requiredPermission: 'company.dashboard.view', contextKind: 'company', navigationKind: 'select' },
   { id: 'dashboard', page: 'dashboard', path: '/workspace/requests', label: '해석 의뢰 현황', breadcrumb: { section: '프로젝트', title: '해석 의뢰 현황' }, requiredPermission: 'project.data.view', contextKind: 'project', navigationKind: 'open-dashboard' },
   { id: 'intake', page: 'intake', path: '/workspace/requests/new', label: '의뢰 접수', breadcrumb: { section: '의뢰', title: '해석 의뢰 접수' }, requiredPermission: 'request.create', contextKind: 'project', navigationKind: 'select' },
   { id: 'workbench', page: 'workbench', path: '/workspace/execution', label: '해석 작업 실행', breadcrumb: { section: '실행', title: '해석 작업 실행 · DEMO ONLY' }, requiredPermission: 'project.data.view', contextKind: 'project', navigationKind: 'select' },

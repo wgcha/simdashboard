@@ -11,7 +11,10 @@ import subprocess
 import pytest
 
 
-pytestmark = pytest.mark.unit
+pytestmark = [
+    pytest.mark.unit,
+    pytest.mark.skipif(os.name != "posix", reason="Rocky 8 offline deployment tests require POSIX shell tooling"),
+]
 
 
 ROOT = Path(__file__).resolve().parents[2]

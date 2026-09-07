@@ -2,7 +2,7 @@
 
 해석 의뢰의 접수·수행·결과 수집·판정·대시보드·PPTX 보고서를 하나의 흐름으로 관리하는 한국어 웹 애플리케이션입니다. 프런트엔드는 React/TypeScript/Vite, 백엔드는 FastAPI/Python으로 구성되며 로컬 개발은 DuckDB, 동시 사용자 운영은 PostgreSQL을 사용합니다.
 
-이 README는 실행과 진입점만 설명합니다. 실제 코드 기준 구조는 [`docs/current-architecture.md`](docs/current-architecture.md), 개발 절차는 [`docs/development-workflow.md`](docs/development-workflow.md), 정리·개발 우선순위는 [`docs/program-consolidation-and-development-plan.md`](docs/program-consolidation-and-development-plan.md), 전체 문서 분류는 [`docs/README.md`](docs/README.md)를 먼저 참고하세요.
+이 README는 실행과 진입점만 설명합니다. 실제 코드 기준 구조는 [`docs/current-architecture.md`](docs/current-architecture.md), 개발 절차는 [`docs/development-workflow.md`](docs/development-workflow.md), native Windows 개발 순서는 [`docs/windows-development-setup.md`](docs/windows-development-setup.md), 정리·개발 우선순위는 [`docs/program-consolidation-and-development-plan.md`](docs/program-consolidation-and-development-plan.md), 전체 문서 분류는 [`docs/README.md`](docs/README.md)를 먼저 참고하세요.
 
 ## 현재 제공 범위
 
@@ -38,16 +38,19 @@
 
 종료는 `./stop.sh`입니다. 설치 조건과 장애 대응은 [`docs/wsl-development-setup.md`](docs/wsl-development-setup.md)를 따릅니다.
 
-### Windows
+### Windows: 파일 두 개로 설치와 실행
 
-PowerShell에서 다음을 실행합니다.
+소스 ZIP을 **전체 압축 해제**한 뒤 저장소 루트에서 실행합니다. Python, Node.js, Git을 먼저 설치할 필요가 없습니다.
 
-```powershell
-.\setup.ps1
-.\start.ps1
-```
+1. **`deploy.bat`** — 최초 환경 설치와 웹 빌드. 완료 메시지가 나올 때까지 기다립니다.
+2. **`start.bat`** — 웹과 API를 시작하고 결과 대시보드를 기본 브라우저에서 엽니다.
+3. 종료할 때는 **`stop.bat`**를 실행합니다.
 
-Windows 실행은 개발·호환성 검증과 DuckDB→PostgreSQL DB 이관을 위한 compatibility profile입니다. PostgreSQL 프로필을 사용할 때는 `start-postgresql.ps1`을 사용합니다. 새 DB 구축, 기존 DB 유지, 전송 번들 이관은 [`docs/backend-sql-integration-guide.md`](docs/backend-sql-integration-guide.md)와 [`docs/postgresql-pc-transfer-guide.md`](docs/postgresql-pc-transfer-guide.md)를 따릅니다. Windows one-command 운영 배포는 지원하지 않습니다. 사내 운영 배포는 [`deploy/rocky8/README.md`](deploy/rocky8/README.md)의 Rocky 8.6+ 단일 명령 배포 절차를 사용합니다. Master Refresh endpoint는 POSIX snapshot traversal을 사용하는 canonical WSL/Rocky 경로에서만 지원하며, native Windows에서는 Windows handle 기반 adapter가 준비될 때까지 fail-closed합니다. 수동 upload와 다른 compatibility 기능은 계속 사용할 수 있습니다.
+다시 사용할 때는 `start.bat`만 실행합니다. 소스 업데이트 후에는 `deploy.bat`를 다시 실행합니다. 기존 `.env`와 DB를 보존하며, 새 폴더에서는 DuckDB 로컬 설정을 자동 준비합니다.
+
+[Issue #15](https://github.com/wgcha/simdashboard/issues/15)의 사내 프록시 설정을 포함합니다. 기본 `auto` 모드는 기존 프록시 환경변수를 우선하고 사내 프록시에 연결할 수 있으면 사용합니다. 사내 인증서가 별도로 필요하면 `DigitalCity.crt`를 `deploy/windows/certs/` 또는 바탕화면에 둡니다. 자세한 설정과 오류 확인은 **[Windows 배치 안내](docs/windows-one-click-deployment.md)**를 따릅니다.
+
+기본 실행 주소는 `http://127.0.0.1:5173/workspace/overview`이며 사내 PC에서 직접 확인하는 로컬 실행 구성입니다. 기존 PostgreSQL 설정을 사용하려면 `.env`를 유지합니다. 다중 사용자 상시 운영은 [Rocky 배포](deploy/rocky8/README.md), DB 이관은 [PostgreSQL 이전 안내](docs/postgresql-pc-transfer-guide.md)를 따릅니다. Windows의 Master Result Refresh는 기존 POSIX snapshot 계약으로 인해 지원하지 않으며 수동 결과 등록을 사용할 수 있습니다.
 
 ## 실행 프로필
 

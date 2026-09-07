@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import subprocess
 
 import pytest
 
 
-pytestmark = pytest.mark.unit
+pytestmark = [
+    pytest.mark.unit,
+    pytest.mark.skipif(os.name != "posix", reason="Rocky 8 deployment templates require POSIX shell tooling"),
+]
 
 
 def test_rocky8_templates_are_non_privileged_and_parseable() -> None:

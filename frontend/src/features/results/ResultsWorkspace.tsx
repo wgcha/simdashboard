@@ -1,11 +1,9 @@
-import type { ComponentType } from 'react'
+import type { ComponentType, ReactNode } from 'react'
 import { GripVertical, LayoutDashboard, LoaderCircle, Plus, Settings2 } from 'lucide-react'
 import { Responsive, WidthProvider, type Layout, type Layouts } from 'react-grid-layout'
 import type { DashboardDefinition, Overview, QualityThreshold, RunComparisonReportContext } from '../../types'
 import { ComparisonWorkspace, WidgetCard } from './AnalysisWidgets'
-
 const ResponsiveGridLayout = WidthProvider(Responsive) as unknown as ComponentType<any>
-
 type ResultsView = 'open_cell' | 'chassis' | 'custom' | 'compare'
 
 type ResultsWorkspaceProps = {
@@ -27,6 +25,7 @@ type ResultsWorkspaceProps = {
   openCellThreshold?: QualityThreshold
   overview: Overview
   selectedEdges: string[]
+  resultSummary?: ReactNode
 }
 
 export function ResultsWorkspace({
@@ -48,6 +47,7 @@ export function ResultsWorkspace({
   openCellThreshold,
   overview,
   selectedEdges,
+  resultSummary,
 }: ResultsWorkspaceProps) {
   const widgetProps = (widget: DashboardDefinition['widgets'][number]) => ({
     widget,
@@ -74,7 +74,7 @@ export function ResultsWorkspace({
 
   if (dashboard.widgets.length === 0) return <section className="canvas-area"><div className="analysis-empty-canvas"><LayoutDashboard /><h2>{dashboard.name}</h2><p>아직 배치된 위젯이 없습니다. 위젯을 추가해 이 분석 페이지를 구성하세요.</p>{canEdit && <button onClick={() => { if (!editMode) onBeginEditing(); onOpenAssistant() }}><Plus /> 첫 위젯 추가</button>}</div></section>
 
-  return <section className="canvas-area"><ResponsiveGridLayout className="layout" layouts={layouts} breakpoints={{ lg: 900, md: 600, sm: 0 }} cols={{ lg: 12, md: 8, sm: 1 }} rowHeight={74} margin={[16, 16]} isDraggable={editMode} isResizable={editMode} draggableHandle=".widget-drag-handle" compactType="vertical" onLayoutChange={onLayoutChange}>
+  return <>{resultSummary}<section className="canvas-area"><ResponsiveGridLayout className="layout" layouts={layouts} breakpoints={{ lg: 900, md: 600, sm: 0 }} cols={{ lg: 12, md: 8, sm: 1 }} rowHeight={74} margin={[16, 16]} isDraggable={editMode} isResizable={editMode} draggableHandle=".widget-drag-handle" compactType="vertical" onLayoutChange={onLayoutChange}>
     {dashboard.widgets.map((widget) => <div key={widget.id}><WidgetCard {...widgetProps(widget)} /></div>)}
-  </ResponsiveGridLayout></section>
+  </ResponsiveGridLayout></section></>
 }

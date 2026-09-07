@@ -1,3 +1,4 @@
+import { openWorkspaceRoute } from './workspace-test-helpers'
 import { expect, test, type Page } from '@playwright/test'
 
 async function loginAndOpenVideoDashboard(page: Page) {
@@ -10,8 +11,8 @@ async function loginAndOpenVideoDashboard(page: Page) {
 }
 
 async function openVideoDashboard(page: Page) {
-  await page.getByRole('link', { name: '해석 의뢰 현황', exact: true }).click()
-  await page.locator('.view-tabs').getByRole('button', { name: /상세 분석/ }).click()
+  await openWorkspaceRoute(page, '/workspace/requests')
+  await page.locator('.request-journey').getByRole('button', { name: /결과 검토|상세 분석/ }).click()
   await expect(page.getByTestId('drop-video-grid').first()).toBeVisible()
 }
 
@@ -147,7 +148,7 @@ test('video_grid를 카탈로그에서 추가해 이동·리사이즈·저장하
     expect(added.y).not.toBe(30)
 
     await page.reload()
-    await expect(page).toHaveURL(/\/workspace\/requests$/)
+    await expect(page).toHaveURL(/\/workspace\/requests(?:\?|$)/)
     await openVideoDashboard(page)
     await expect(page.locator('.widget-video_grid')).toHaveCount(2)
   } finally {

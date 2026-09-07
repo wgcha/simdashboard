@@ -6,6 +6,7 @@ import { canCommitResultLayoutOpen, canOpenResultLayout, detailedAnalysisRoute }
 
 type Props = {
   analysisLabel: string
+  label?: string
   requestId: string
   requestContextLoading: boolean
   loadLayout: (requestId: string) => Promise<RequestResultLayout>
@@ -19,6 +20,7 @@ type Props = {
 
 export function ResultLayoutDetailTab({
   analysisLabel,
+  label = '상세 분석',
   requestId,
   requestContextLoading,
   loadLayout,
@@ -53,6 +55,6 @@ export function ResultLayoutDetailTab({
 
   return <button className={loading ? 'active' : ''} disabled={!canOpen || loading} onClick={() => void open()}>
     {loading ? <LoaderCircle className="spin" /> : <LayoutDashboard />}
-    상세 분석 <span>{analysisLabel}</span>
+    {label} <span>{analysisLabel}</span>
   </button>
 }

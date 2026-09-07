@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Activity, AlertTriangle, Check, ClipboardList, FileText, FlaskConical, Image, LoaderCircle, Pencil, Play, Plus, RefreshCw, Save, Settings2, ShieldCheck, Tag, Trash2, X } from 'lucide-react'
+import { Activity, AlertTriangle, Check, ChevronRight, ClipboardList, FileText, FlaskConical, Image, LoaderCircle, Pencil, Play, Plus, RefreshCw, Save, Settings2, ShieldCheck, Tag, Trash2, X } from 'lucide-react'
 import type { Workflow } from '../../types'
 import { workbenchApi } from './api'
 import { RequestResultWidgetConfiguration } from './RequestResultWidgetConfiguration'
@@ -133,8 +133,9 @@ export function SimulationWorkbench({ workflows, initialRequestId, currentUserId
   const [batchRequestKey, setBatchRequestKey] = useState(() => `batch-${crypto.randomUUID()}`)
   const [progressDraft, setProgressDraft] = useState(10)
 
-  const requestId = assigned.some((item) => item.request.id === initialRequestId) ? initialRequestId : assigned[0]?.request.id ?? ''
-  const workflow = assigned.find((item) => item.request.id === requestId)
+  const explicitWorkflow = initialRequestId ? workflows.find((item) => item.request.id === initialRequestId) : undefined
+  const requestId = initialRequestId || (assigned[0]?.request.id ?? '')
+  const workflow = initialRequestId ? assigned.find((item) => item.request.id === initialRequestId) : assigned.find((item) => item.request.id === requestId)
   const currentItem = workflow?.steps.find((item) => item.status === 'IN_PROGRESS') ?? workflow?.steps.find((item) => item.status === 'READY') ?? null
   const activeTask = activeRun?.tasks.find((task) => task.id === activeTaskId) ?? activeRun?.tasks[0] ?? null
   const selectedWorkItem = workflow?.steps.find((item) => item.id === selectedWorkItemId) ?? currentItem
@@ -163,7 +164,7 @@ export function SimulationWorkbench({ workflows, initialRequestId, currentUserId
           : `현재 상태(${runStatusLabel(selectedWorkItem?.status ?? '')})에서는 실행할 수 없습니다.`
 
   const loadRuns = async (targetRequestId = requestId) => {
-    if (!targetRequestId) return
+    if (!targetRequestId || !workflow) return
     setLoadingRuns(true)
     try {
       const items = await workbenchApi.demoRuns(targetRequestId)
@@ -182,16 +183,17 @@ export function SimulationWorkbench({ workflows, initialRequestId, currentUserId
     finally { setLoadingBatchAttempts(false) }
   }
 
-  useEffect(() => { void loadRuns(requestId) }, [requestId])
+  useEffect(() => { if (workflow) void loadRuns(requestId) }, [requestId, workflow?.request.id])
   useEffect(() => { void loadBatchAttempts(selectedWorkItem?.id) }, [selectedWorkItem?.id])
   useEffect(() => {
+    if (!workflow) { setBatchProfiles([]); setTaskTypes([]); return }
     Promise.all([workbenchApi.batchProfiles(), workbenchApi.taskTypes()])
       .then(([profiles, tasks]) => {
         setBatchProfiles(profiles)
         setTaskTypes(tasks)
       })
       .catch((reason) => setError(friendlyWorkbenchError(reason)))
-  }, [])
+  }, [workflow?.request.id])
   useEffect(() => {
     if (!selectedWorkItem) return
     setSelectedWorkItemId(selectedWorkItem.id)
@@ -225,6 +227,7 @@ export function SimulationWorkbench({ workflows, initialRequestId, currentUserId
       setRuns((items) => [run, ...items.filter((item) => item.id !== run.id)])
       setActiveRun(run); setActiveTaskId(run.tasks[0]?.id ?? '')
       await onChanged(`${currentItem.name} 작업을 완료했습니다. 다음 작업은 시작 대기 상태입니다.`)
+      setSelectedWorkItemId('')
     } catch (reason) { setError(friendlyWorkbenchError(reason)) }
     finally { setWorking(false) }
   }
@@ -259,62 +262,70 @@ export function SimulationWorkbench({ workflows, initialRequestId, currentUserId
     else if (selectedWorkItem.status === 'IN_PROGRESS') await completeCurrent()
   }
 
-  if (!workflow) return <div className="workbench-state"><ClipboardList /> 접수되어 배정된 작업 계획이 없습니다.</div>
+  if (!workflow) {
+    const title = explicitWorkflow?.request.title ?? '선택한 의뢰'
+    const currentValue = initialRequestId || ''
+    return <div className="workbench-page assigned-only" data-testid="simulation-workbench"><section className="workbench-state workbench-no-plan-state" style={{ minHeight: '260px', flexDirection: 'column', padding: '32px', color: 'var(--focus-muted)', background: 'transparent' }}><ClipboardList aria-hidden="true" /><h1 style={{ margin: 0, color: 'var(--focus-navy)', fontSize: '24px' }}>{title}</h1><p>{explicitWorkflow ? '이 의뢰에는 배정된 작업 계획이 없어 실행할 수 없습니다.' : '선택한 의뢰를 확인할 수 없습니다.'}</p><label><span>배정 작업 대상 의뢰</span><select aria-label="배정 작업 대상 의뢰" value={currentValue} onChange={(event) => { if (event.target.value) changeRequest(event.target.value) }}><option value={currentValue}>{explicitWorkflow ? `${title} · 작업 계획 없음` : '선택한 의뢰 확인 필요'}</option>{assigned.map((item) => <option key={item.request.id} value={item.request.id}>{item.request.project_name} / {item.request.title}</option>)}</select></label></section></div>
+  }
 
   const firstReady = currentItem?.status === 'READY' && currentItem.sequence_no === 1 && workflow.completed_count === 0
   return <div className="workbench-page assigned-only" data-testid="simulation-workbench">
-    <section className="workbench-hero operator"><div><span className="demo-only-badge"><ShieldCheck /> DEMO ONLY</span><h1>배정 작업 실행</h1><p>접수 시 고정된 작업 계획을 순서대로 시작하고 완료합니다. 실행 중인 현재 작업 외에는 수행할 수 없습니다.</p></div><div className="workbench-source"><span>작업 원칙</span><strong>시작 → 데모 수행 → 완료</strong><small>완료 후 다음 작업은 자동 실행되지 않고 READY로 열립니다.</small></div></section>
+    <section className="workbench-hero operator"><div><span className="demo-only-badge"><ShieldCheck /> DEMO ONLY</span><h1>배정 작업 실행</h1><p>작업 계획에 따라 현재 작업을 시작하고 완료합니다.</p></div><details className="workbench-source workbench-collapsible"><summary><span><strong>작업 원칙</strong><small>시작 → 데모 수행 → 완료</small></span><ChevronRight aria-hidden="true" /></summary><p>완료 후 다음 작업은 시작 대기 상태로 열립니다.</p></details></section>
     {error && <section className="workbench-service-error" role="alert"><AlertTriangle /><div><strong>작업 요청을 처리하지 못했습니다.</strong><p>{error}</p></div></section>}
 
     <section className="assigned-request-card">
-      <header><div><span>ASSIGNED WORK PLAN</span><h2>{workflow.request.title}</h2><p>{workflow.request.project_name} · 담당 {workflow.request.owner}</p></div><label><span>대상 의뢰</span><select aria-label="배정 작업 대상 의뢰" value={workflow.request.id} onChange={(event) => changeRequest(event.target.value)}>{assigned.map((item) => <option key={item.request.id} value={item.request.id}>{item.request.project_name} / {item.request.title}</option>)}</select></label></header>
-      <div className="assigned-request-meta"><div><span>시나리오</span><strong>{workflow.work_plan?.scenario_name}</strong></div><div><span>접수 출처</span><strong>{workflow.work_plan?.source_type === 'EXTERNAL_SYSTEM' ? '외부 시스템' : '부서장 지시'}</strong><small>{workflow.work_plan?.source_reference}</small></div><div><span>요청자</span><strong>{workflow.work_plan?.requested_by}</strong></div><div><span>완료 작업</span><strong>{workflow.completed_count ?? 0} / {workflow.total_count ?? workflow.steps.length}</strong></div><div className="assigned-progress"><span>전체 진행률</span><strong>{workflow.progress}%</strong><i><b style={{ width: `${workflow.progress}%` }} /></i></div></div>
+      <header><div><span>배정 의뢰</span><h2>{workflow.request.title}</h2><p>{workflow.request.project_name} · 담당 {workflow.request.owner}</p></div><label><span>대상 의뢰</span><select aria-label="배정 작업 대상 의뢰" value={workflow.request.id} onChange={(event) => changeRequest(event.target.value)}>{assigned.map((item) => <option key={item.request.id} value={item.request.id}>{item.request.project_name} / {item.request.title}</option>)}</select></label></header>
+      <details className="assigned-request-meta workbench-collapsible"><summary><span><strong>의뢰 정보</strong><small>시나리오·요청자·완료 작업</small></span><ChevronRight aria-hidden="true" /></summary><div className="assigned-request-meta-content"><div><span>시나리오</span><strong>{workflow.work_plan?.scenario_name}</strong></div><div><span>접수 출처</span><strong>{workflow.work_plan?.source_type === 'EXTERNAL_SYSTEM' ? '외부 시스템' : '부서장 지시'}</strong><small>{workflow.work_plan?.source_reference}</small></div><div><span>요청자</span><strong>{workflow.work_plan?.requested_by}</strong></div><div><span>완료 작업</span><strong>{workflow.completed_count ?? 0} / {workflow.total_count ?? workflow.steps.length}</strong></div><div className="assigned-progress"><span>전체 진행률</span><strong>{workflow.progress}%</strong><i><b style={{ width: `${workflow.progress}%` }} /></i></div></div></details>
     </section>
 
-    <section className="assigned-work-list"><header><div><span>SEQUENTIAL WORK ITEMS</span><h2>배정 작업 순서</h2></div><b>{currentItem ? `현재 · ${currentItem.name}` : '모든 작업 완료'}</b></header><div>{workflow.steps.map((item) => {
+    <section className="assigned-work-list"><header><div><span>작업 순서</span><h2>배정 작업 순서</h2></div><b>{currentItem ? `현재 · ${currentItem.name}` : '모든 작업 완료'}</b></header><div>{workflow.steps.map((item) => {
       const isCurrent = item.id === currentItem?.id
       const statusLabel = { READY: '시작 대기', IN_PROGRESS: '진행 중', COMPLETED: '완료', WAITING: '선행 작업 대기', BLOCKED: '차단', FAILED: '실패' }[item.status]
-      return <article key={item.id} role="button" tabIndex={0} aria-pressed={selectedWorkItem?.id === item.id} className={`${item.status.toLowerCase()} ${isCurrent ? 'current' : ''} ${selectedWorkItem?.id === item.id ? 'selected' : ''}`} onClick={() => setSelectedWorkItemId(item.id)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedWorkItemId(item.id) } }}><i>{item.status === 'COMPLETED' ? <Check /> : item.sequence_no}</i><div><span>{item.task_type_id} · v{item.task_type_version}</span><strong>{item.name}</strong><small>{item.started_at ? `${item.started_by} 시작 · ${new Date(item.started_at).toLocaleString('ko-KR')}` : '아직 시작하지 않음'}</small></div><b>{statusLabel} · {item.progress}%</b>{isCurrent && item.status === 'READY' && <button data-testid="start-current-work" aria-describedby="task-action-help" disabled={!canOperateCurrent || working} onClick={(event) => { event.stopPropagation(); void startCurrent() }}>{working ? <LoaderCircle className="spin" /> : <Play />}{firstReady ? '의뢰 수령 · 작업 시작' : '작업 시작'}</button>}{isCurrent && item.status === 'IN_PROGRESS' && <button data-testid="complete-current-work" aria-describedby="task-action-help" disabled={!canOperateCurrent || working} onClick={(event) => { event.stopPropagation(); void completeCurrent() }}>{working ? <LoaderCircle className="spin" /> : <FlaskConical />} 작업 완료</button>}</article>
+      return <article key={item.id} role="button" tabIndex={0} aria-pressed={selectedWorkItem?.id === item.id} className={`${item.status.toLowerCase()} ${isCurrent ? 'current' : ''} ${selectedWorkItem?.id === item.id ? 'selected' : ''}`} onClick={() => setSelectedWorkItemId(item.id)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedWorkItemId(item.id) } }}><i>{item.status === 'COMPLETED' ? <Check /> : item.sequence_no}</i><div><span>{item.display_name ?? item.task_type_id} {item.task_type_version ? `· v${item.task_type_version}` : ''}</span><strong>{item.name}</strong><small>{item.started_at ? `${item.started_by} 시작 · ${new Date(item.started_at).toLocaleString('ko-KR')}` : '아직 시작하지 않음'}</small></div><b>{statusLabel} · {item.progress}%</b></article>
     })}</div></section>
 
     {selectedWorkItem && <section className="work-item-detail" data-testid="work-item-detail" aria-busy={working}>
-      <header><div><span>WORK ITEM DETAIL</span><h2>{selectedWorkItem.name}</h2><p>{selectedWorkItem.task_type_id} · v{selectedWorkItem.task_type_version}</p></div><b>{runStatusLabel(selectedWorkItem.status)} · {selectedWorkItem.progress}%</b></header>
-      {selectedGuidance && <div className="work-item-guidance"><div><span>업무 목적</span><strong>{selectedGuidance.purpose}</strong></div><div><span>필요 입력</span><strong>{selectedGuidance.requires}</strong></div><div><span>예상 결과</span><strong>{selectedGuidance.result}</strong></div></div>}
+      <header><div><span>작업 상세</span><h2>{selectedWorkItem.name}</h2><p>{selectedWorkItem.display_name ?? selectedWorkItem.task_type_id} {selectedWorkItem.task_type_version ? `· v${selectedWorkItem.task_type_version}` : ''}</p></div><b>{runStatusLabel(selectedWorkItem.status)} · {selectedWorkItem.progress}%</b></header>
+      {selectedGuidance && <details className="work-item-guidance-disclosure workbench-collapsible"><summary><span><strong>업무 안내</strong><small>목적·필요 입력·예상 결과</small></span><ChevronRight aria-hidden="true" /></summary><div className="work-item-guidance"><div><span>업무 목적</span><strong>{selectedGuidance.purpose}</strong></div><div><span>필요 입력</span><strong>{selectedGuidance.requires}</strong></div><div><span>예상 결과</span><strong>{selectedGuidance.result}</strong></div></div></details>}
       <article className={`task-execution-widget group-${selectedGuidance?.group === 'PhysicsAI' ? 'ai' : selectedGuidance?.group === '해석 실행' ? 'run' : selectedGuidance?.group === '결과 활용' ? 'result' : 'prepare'}`} data-testid={`task-execution-widget-${selectedTaskType?.kind ?? 'unknown'}`}>
         <div className="task-execution-mark"><Activity aria-hidden="true" /></div>
-        <div><span>{selectedExecution.eyebrow}</span><h3>{selectedExecution.title}</h3><p>{selectedExecution.description}</p><small id="task-action-help">{taskActionHelp}</small></div>
-        <button data-testid="execute-selected-task" aria-describedby="task-action-help" disabled={taskActionDisabled} onClick={() => void executeSelectedTask()}>
+        <div><span>현재 작업 실행</span><h3>{selectedExecution.title}</h3><p>{selectedExecution.description}</p><small id="task-action-help">{taskActionHelp}</small></div>
+        <div data-testid={selectedWorkItem.status === 'READY' ? 'start-current-work' : selectedWorkItem.status === 'IN_PROGRESS' ? 'complete-current-work' : undefined} className="task-execution-action-wrap"><button data-testid="execute-selected-task" aria-describedby="task-action-help" disabled={taskActionDisabled} onClick={() => void executeSelectedTask()}>
           {working ? <LoaderCircle className="spin" aria-hidden="true" /> : selectedWorkItem.status === 'IN_PROGRESS' ? <FlaskConical aria-hidden="true" /> : <Play aria-hidden="true" />}
           {selectedWorkItem.status === 'IN_PROGRESS' ? selectedExecution.runLabel : selectedExecution.startLabel}
-        </button>
+        </button></div>
       </article>
       <div className="work-item-detail-grid">
-        <article className="progress-update-card">
+        <details className="progress-update-card workbench-collapsible">
+          <summary><span><strong>진행도 업데이트</strong><small>수동 진행 상태 갱신</small></span><ChevronRight aria-hidden="true" /></summary><div className="progress-update-body">
           <h3>진행도 업데이트</h3><p>진행 중 작업의 진행도만 이전 값보다 크게 갱신할 수 있습니다.</p>
           <div className="progress-current"><span>현재 진행도</span><strong>{selectedWorkItem.progress}%</strong><progress aria-label={`${selectedWorkItem.name} 현재 진행도`} max="100" value={selectedWorkItem.progress}>{selectedWorkItem.progress}%</progress></div>
           <label><span>새 진행도</span><input aria-label="작업 진행도" aria-describedby="progress-update-help" aria-invalid={selectedWorkItem.status === 'IN_PROGRESS' && !progressIsValid} type="number" min={Math.min(99, selectedWorkItem.progress + 1)} max="99" value={progressDraft} disabled={selectedWorkItem.status !== 'IN_PROGRESS'} onChange={(event) => setProgressDraft(event.target.value === '' ? Number.NaN : Number(event.target.value))}/><b>%</b></label>
           <small id="progress-update-help" role="status">{!canExecute ? '진행도를 수정할 실행 권한이 없습니다.' : !isAdmin && selectedWorkItem.owner_user_id !== currentUserId ? `작업 담당자(${selectedWorkItem.owner})만 진행도를 수정할 수 있습니다.` : selectedWorkItem.status !== 'IN_PROGRESS' ? '진행 중인 작업에서만 수정할 수 있습니다.' : progressIsValid ? `${selectedWorkItem.progress + 1}~99 사이의 값을 저장할 수 있습니다.` : `현재 값 ${selectedWorkItem.progress}%보다 큰 ${Math.min(99, selectedWorkItem.progress + 1)}~99 사이의 값을 입력하세요.`}</small>
           <button disabled={!canOperateSelected || working || selectedWorkItem.status !== 'IN_PROGRESS' || !progressIsValid} onClick={() => void updateSelectedProgress()}><RefreshCw aria-hidden="true" /> 진행도 저장</button>
-        </article>
-        <article className="batch-execution-card">
-          <h3>배치 실행 구성</h3><p>경로와 명령은 기록·미리보기 전용입니다. 서버는 외부 solver 프로세스를 실행하지 않습니다.</p>
+          </div></details>
+        <details className="batch-execution-card workbench-collapsible" open={selectedWorkItem.status === 'IN_PROGRESS'}>
+          <summary><span><strong>배치 실행 구성</strong><small>실행 경로와 기록 설정</small></span><ChevronRight aria-hidden="true" /></summary><p>경로와 명령은 기록·미리보기 전용입니다. 서버는 외부 solver 프로세스를 실행하지 않습니다.</p>
           {selectedBatchProfile ? <><div className="batch-linked-definition"><span>자동 연결된 배치 실행 정의</span><strong>{selectedBatchProfile.name} · v{selectedBatchProfile.version}</strong><small>현재 수행 작업 유형과 1:1로 연결됨 · 시스템 ID {selectedBatchProfile.id}</small></div>{selectedBatchProfile.solver_path ? <pre aria-label="배치 명령 미리보기"><code>{`"${selectedBatchProfile.solver_path}" ${selectedBatchProfile.arguments_template}`}</code></pre> : <p className="batch-profile-redacted" role="note">이 계정에는 실행 경로와 명령 미리보기가 표시되지 않습니다.</p>}</> : <p className="batch-profile-empty" role="status">이 작업 유형에 연결된 활성 배치 실행 정의가 없습니다. 관리자에게 배치 실행 정의 등록을 요청하세요.</p>}
           <small id="batch-action-help" role="status">{!canExecute ? '실행 권한이 필요합니다.' : !isAdmin && selectedWorkItem.owner_user_id !== currentUserId ? `작업 담당자(${selectedWorkItem.owner})만 배치 기록을 생성할 수 있습니다.` : selectedWorkItem.status !== 'IN_PROGRESS' ? '진행 중인 현재 작업에서만 배치 기록을 생성할 수 있습니다.' : !selectedBatchProfile ? '호환되는 활성 프로필이 필요합니다.' : 'DEMO_ONLY 배치 기록을 생성할 준비가 되었습니다.'}</small>
           <button className="batch-dispatch-button" aria-describedby="batch-action-help" disabled={!canOperateSelected || working || selectedWorkItem.status !== 'IN_PROGRESS' || !selectedBatchProfile} onClick={() => void dispatchSelectedBatch()}><Play aria-hidden="true" /> 배치 실행 기록 생성</button>
-        </article>
+        </details>
       </div>
-      <section className="batch-attempt-history" aria-labelledby="batch-attempt-history-title" aria-live="polite">
-        <header><div><span>BATCH ATTEMPTS</span><h3 id="batch-attempt-history-title">배치 실행 상태·이벤트</h3><p>선택한 작업의 preflight부터 완료·거부까지 모든 제어 plane 기록을 표시합니다.</p></div><button aria-label="배치 실행 상태 새로고침" disabled={loadingBatchAttempts} onClick={() => void loadBatchAttempts()}><RefreshCw className={loadingBatchAttempts ? 'spin' : ''} aria-hidden="true" /></button></header>
+      <details className="batch-attempt-history workbench-collapsible" open={Boolean(batchAttemptError || loadingBatchAttempts || batchAttempts.length)}>
+        <summary><span><strong>배치 실행 상태·이벤트</strong><small>선택한 작업의 실행 기록</small></span><ChevronRight aria-hidden="true" /></summary>
+        <section aria-labelledby="batch-attempt-history-title" aria-live="polite">
+        <header><div><span>배치 실행 기록</span><h3 id="batch-attempt-history-title">상태·이벤트</h3><p>preflight부터 완료·거부까지 모든 제어 plane 기록을 표시합니다.</p></div><button aria-label="배치 실행 상태 새로고침" disabled={loadingBatchAttempts} onClick={() => void loadBatchAttempts()}><RefreshCw className={loadingBatchAttempts ? 'spin' : ''} aria-hidden="true" /></button></header>
         {batchAttemptError ? <div className="batch-attempt-error" role="alert"><AlertTriangle aria-hidden="true" /><span>{batchAttemptError}</span></div> : loadingBatchAttempts ? <div className="batch-attempt-empty"><LoaderCircle className="spin" aria-hidden="true" /> 배치 실행 기록을 불러오는 중입니다…</div> : batchAttempts.length === 0 ? <div className="batch-attempt-empty"><ClipboardList aria-hidden="true" /> 이 작업의 배치 실행 기록이 아직 없습니다.</div> : <div className="batch-attempt-list">{batchAttempts.map((attempt) => <article key={attempt.id} className={`status-${attempt.status.toLowerCase()}`}>
           <header><div><span>{attempt.execution_mode} · {attempt.batch_profile_id} v{attempt.batch_profile_version}</span><strong>{attempt.last_message}</strong><small>{attempt.id} · <time dateTime={attempt.created_at}>{new Date(attempt.created_at).toLocaleString('ko-KR')}</time></small></div><b>{attempt.status} · {attempt.progress}%</b></header>
           <progress aria-label={`${attempt.batch_profile_id} 배치 실행 진행도`} max="100" value={attempt.progress}>{attempt.progress}%</progress>
           {attempt.profile_snapshot?.solver_path && attempt.command_preview ? <pre aria-label="실행 시점 배치 명령 snapshot"><code>{attempt.command_preview}</code></pre> : null}
           <ol aria-label="배치 상태 이벤트">{attempt.events.map((event) => <li key={event.id} className={`level-${event.level.toLowerCase()}`}><i aria-hidden="true" /><span><strong>{event.event_type} · {event.progress}%</strong><small>{event.message}</small></span><time dateTime={event.occurred_at}>{new Date(event.occurred_at).toLocaleTimeString('ko-KR')}</time></li>)}</ol>
         </article>)}</div>}
-      </section>
+        </section>
+      </details>
     </section>}
 
-    <section className="workbench-monitor"><div className="workbench-run-list"><header><div><span>실행 이력</span><h2>현재 의뢰의 데모 결과</h2></div><button aria-label="실행 이력 새로고침" disabled={loadingRuns} onClick={() => void loadRuns()}><RefreshCw className={loadingRuns ? 'spin' : ''} /></button></header>{runs.length === 0 ? <p className="workbench-empty">완료한 데모 작업이 없습니다.</p> : runs.map((run) => <button key={run.id} className={activeRun?.id === run.id ? 'active' : ''} onClick={() => { setActiveRun(run); setActiveTaskId(run.tasks[0]?.id ?? '') }}><span><strong>{run.name}</strong><small>{new Date(run.created_at).toLocaleString('ko-KR')}</small></span><b>{runStatusLabel(run.status)} · {run.progress}%</b></button>)}</div><div className="workbench-run-detail">{activeRun ? <><header><div><span>{activeRun.execution_mode}</span><h2>{activeRun.name}</h2><p>Run ID {activeRun.id}</p></div><strong>{runStatusLabel(activeRun.status)} · {activeRun.progress}%</strong></header><div className="workbench-run-progress"><i><b style={{ width: `${activeRun.progress}%` }} /></i><span>갱신 {new Date(activeRun.completed_at || activeRun.created_at).toLocaleString('ko-KR')}</span></div><div className="workbench-run-body"><nav>{activeRun.tasks.map((task) => <button key={task.id} className={activeTask?.id === task.id ? 'active' : ''} onClick={() => setActiveTaskId(task.id)}><Activity /><span><strong>{task.display_name}</strong><small>{runStatusLabel(task.status)} · {task.progress}%</small></span></button>)}</nav>{activeTask && <DemoTaskDetail task={activeTask} />}</div></> : <div className="workbench-empty-detail"><Image /><strong>로그·검증·결과 확인</strong><p>현재 작업을 완료하면 데모 실행 결과가 표시됩니다.</p></div>}</div></section>
+    <details className="workbench-monitor workbench-collapsible" open={Boolean(activeRun)}><summary><span><strong>실행 이력</strong><small>현재 의뢰의 DEMO 결과와 로그</small></span><ChevronRight aria-hidden="true" /></summary><section className="workbench-monitor-content"><div className="workbench-run-list"><header><div><span>실행 이력</span><h2>현재 의뢰의 데모 결과</h2></div><button aria-label="실행 이력 새로고침" disabled={loadingRuns} onClick={() => void loadRuns()}><RefreshCw className={loadingRuns ? 'spin' : ''} /></button></header>{runs.length === 0 ? <p className="workbench-empty">완료한 데모 작업이 없습니다.</p> : runs.map((run) => <button key={run.id} className={activeRun?.id === run.id ? 'active' : ''} onClick={() => { setActiveRun(run); setActiveTaskId(run.tasks[0]?.id ?? '') }}><span><strong>{run.name}</strong><small>{new Date(run.created_at).toLocaleString('ko-KR')}</small></span><b>{runStatusLabel(run.status)} · {run.progress}%</b></button>)}</div><div className="workbench-run-detail">{activeRun ? <><header><div><span>{activeRun.execution_mode}</span><h2>{activeRun.name}</h2><p>Run ID {activeRun.id}</p></div><strong>{runStatusLabel(activeRun.status)} · {activeRun.progress}%</strong></header><div className="workbench-run-progress"><i><b style={{ width: `${activeRun.progress}%` }} /></i><span>갱신 {new Date(activeRun.completed_at || activeRun.created_at).toLocaleString('ko-KR')}</span></div><div className="workbench-run-body"><nav>{activeRun.tasks.map((task) => <button key={task.id} className={activeTask?.id === task.id ? 'active' : ''} onClick={() => setActiveTaskId(task.id)}><Activity /><span><strong>{task.display_name}</strong><small>{runStatusLabel(task.status)} · {task.progress}%</small></span></button>)}</nav>{activeTask && <DemoTaskDetail task={activeTask} />}</div></> : <div className="workbench-empty-detail"><Image /><strong>로그·검증·결과 확인</strong><p>현재 작업을 완료하면 데모 실행 결과가 표시됩니다.</p></div>}</div></section></details>
   </div>
 }
 

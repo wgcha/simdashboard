@@ -7,7 +7,6 @@ import {
   BarChart3,
   Check,
   ChevronDown,
-  CircleDot,
   ClipboardPlus,
   Database,
   Download,
@@ -43,7 +42,7 @@ import { AppShell, AppShellMain, AppTopbar } from './app/shell/AppShell'
 import { AppSidebar } from './app/shell/AppSidebar'
 import { ProjectSetupState } from './app/workspace/ProjectSetupState'
 import { loadWorkspacePreferences, saveWorkspacePreference, type WorkspaceTheme } from './app/preferences/workspacePreferences'
-import { useWorkspaceNavigation } from './app/routing/useWorkspaceNavigation'
+import { useWorkspaceNavigation } from './app/routing/useWorkspaceNavigation'; import { useWorkspaceContextRestore } from './app/routing/useWorkspaceContextRestore'
 import { pageView, preferredPage, visiblePages, type ActiveView } from './features/analysis/pageSelection'
 import { DEFAULT_PORTFOLIO_LAYOUT, DEFAULT_WORKFLOW_DASHBOARD_LAYOUT, loadPortfolioLayout, loadWorkflowDashboardLayout } from './features/layouts/layoutDefaults'
 import { ReportExportDialog } from './features/reports/ReportExportDialog'
@@ -59,6 +58,8 @@ import { ResultVersionSelector } from './features/results/ResultVersionSelector'
 import { useResultVersionSelection } from './features/results/useResultVersionSelection'
 import { AnalysisPageManager, AutomationTemplatesPage, DataWorkspace, FeatureExampleGallery, FeatureScreenFallback, FolderSchemaWorkspace, HelpCenter, PendingAnalysisWorkspace, ResultsWorkspace, SPECIAL_WIDGET_CATALOG, VariableCatalogPage, WorkflowView } from './app/AppDependencies'
 import { EdgeFilter } from './features/results/EdgeFilter'
+import { RequestJourneyCompact, RequestWorkspaceHeader } from './features/request-workspace/RequestWorkspaceHeader'
+import { RequestResultSummary } from './features/request-workspace/RequestResultSummary'
 import { resetWorkspaceContext } from './app/workspace/resetWorkspaceContext'
 import type { AnalysisRequest, AutomationTemplate, DashboardDefinition, DashboardPageSummary, DashboardSummary, DashboardVersion, DashboardWidget, FeatureExample, ImportSchema, LoadCase, Overview, PortfolioLayout, Project, QualityThreshold, ReportContentItem, ReportElementDefinition, ReportElementType, ReportLayout, ReportLayoutDefinition, ReportLayoutVersion, ReportSection, ReportSlideDefinition, ReportSlideKind, ReportSource, ReportTemplateAsset, ReviewItem, RunComparison, RunComparisonReportContext, RunTrust, VariableDefinition, VariableDefinitionInput, WidgetCatalogItem, Workflow, WorkflowDashboardLayout, WorkflowStep } from './types'
 function App() {
@@ -115,13 +116,11 @@ function App() {
   const dashboardBeforeEdit = useRef<DashboardDefinition | null>(null)
   const workflowsBeforeEdit = useRef<Workflow[] | null>(null)
   const workflowLayoutBeforeEdit = useRef<WorkflowDashboardLayout | null>(null)
+  const workspaceContextHydrated = useRef(false)
+  const restoredWorkspaceContext = useRef('')
+  const workspaceContextWritePending = useRef('')
+  const userWorkspaceContextChange = useRef(false); const workspaceContextChangePending = useRef(false); const [workspaceContextTransitioning, setWorkspaceContextTransitioning] = useState(false); const [, setWorkspaceContextRestoreEpoch] = useState(0)
   const dashboardRequestSequence = useRef(0); const { beginContextEntry, beginMonitoringContext, isCurrentContextEntry, isCurrentMonitoringContext, requestContextLoading, runRequestSelection } = useResultAnalysisIntent()
-  const { analysisRuns, selectedAnalysisRunId, analysisRunsLoading, analysisRunChanging, analysisRunError, selectAnalysisRun } = useResultVersionSelection({
-    loadCaseId: selectedLoadCaseId,
-    enabled: authReady && (!authRequired || Boolean(authUser)),
-    overview,
-    setOverview,
-  })
   const dashboardReady = Boolean(dashboard && !dashboardLoading && dashboard.id === activeDashboardId)
   const visibleMenus = useMemo(() => {
     const validated = menuPolicy ? {
@@ -142,8 +141,14 @@ function App() {
   }, [authUser, menuPolicy, menuPolicyReady, selectedProjectId])
   const allowedPages = useMemo(() => new Set(visibleMenus.map((menu) => menu.id)), [visibleMenus])
   const cancelEditing = useCallback(() => cancelEditingRef.current(), [])
+  const canChangeContext = () => {
+    if (!editMode) return true
+    if (!window.confirm('저장하지 않은 변경 사항이 있습니다. 변경을 취소하고 이동할까요?')) return false
+    cancelEditing()
+    return true
+  }
   const resetDashboardWorkspace = useCallback(() => setActiveView('workflow'), [])
-  const { isWorkspaceIndex, matchedWorkspaceRoute, navigateWorkspace, workspacePage } = useWorkspaceNavigation({
+  const { isWorkspaceIndex, matchedWorkspaceRoute, navigateWorkspace, updateWorkspaceContext, workspaceContext, workspacePage } = useWorkspaceNavigation({
     allowedPages,
     authUser,
     editMode,
@@ -153,6 +158,13 @@ function App() {
     onNotice: setNotice,
     visibleMenus,
   }); const enterWorkspace = (...args: Parameters<typeof navigateWorkspace>) => { beginContextEntry(); navigateWorkspace(...args) }
+  const { analysisRuns, selectedAnalysisRunId, analysisRunsLoading, analysisRunChanging, analysisRunError, selectAnalysisRun } = useResultVersionSelection({
+    loadCaseId: selectedLoadCaseId,
+    requestedRunId: workspaceContext.runId,
+    enabled: authReady && (!authRequired || Boolean(authUser)),
+    overview,
+    setOverview,
+  })
   const { snapshotDashboard, reportablePages, hydrateSnapshotDashboard, prepareEditableDashboard, openAssistant, clearSnapshotDashboard } = useRequestResultSnapshot({ activeDashboardId, selectedProjectId, selectedRequestId, selectedLoadCaseId, overview, analysisPages, visiblePages, dashboard, dashboardReady, shouldPrepareDashboard: workspacePage === 'dashboard' && activeView !== 'workflow', canEditActiveDashboard: hasPermission(authUser, 'dashboard.edit', selectedProjectId), setDashboard, setDashboardLoading, setAnalysisPages, setActiveDashboardId, setActiveView, setAssistantOpen, setError })
   const reportExport = useReportExportController({
     activeDashboardId,
@@ -178,13 +190,11 @@ function App() {
   useEffect(() => {
     saveWorkspacePreference('uiFontSize', uiFontSize)
   }, [uiFontSize])
-
   useEffect(() => {
     saveWorkspacePreference('theme', theme)
     document.documentElement.dataset.theme = theme
     document.documentElement.style.colorScheme = theme
   }, [theme])
-
   useEffect(() => {
     const prepareAuthentication = async () => {
       try {
@@ -208,7 +218,6 @@ function App() {
     }
     void prepareAuthentication()
   }, [])
-
   const refreshAccess = async () => {
     if (!authUser) return
     const [verified, policy] = await Promise.all([api.me(), api.menuPolicy()])
@@ -216,13 +225,11 @@ function App() {
     setMenuPolicy(policy)
     setMenuPolicyReady(true)
   }
-
   useEffect(() => {
     const changed = () => { void refreshAccess().catch(() => { setMenuPolicy(null); setMenuPolicyReady(true) }) }
     window.addEventListener('analysis-access-changed', changed)
     return () => window.removeEventListener('analysis-access-changed', changed)
   }, [authUser?.id])
-
   useEffect(() => {
     if (workspacePage !== 'portfolio' && portfolioLayoutBeforeEdit.current) {
       setPortfolioLayout(portfolioLayoutBeforeEdit.current)
@@ -244,7 +251,6 @@ function App() {
     setSelectedWidgetId(null)
     setAssistantOpen(false)
   }, [workspacePage])
-
   const applyInitialWorkspace = useCallback((initial: InitialWorkspace) => {
         setProjects(initial.projects)
         setWorkflows(initial.workflows)
@@ -283,13 +289,11 @@ function App() {
         setWorkflowLayoutVersion(initial.workflowLayout.version)
         setActiveView('workflow')
   }, [])
-
   const { state: workspaceBootstrap, invalidate: invalidateWorkspaceBootstrap } = useWorkspaceBootstrap({
     userKey: authReady && authUser?.account_status === 'ACTIVE' ? authUser.id : null,
     onStart: () => setError(''),
     onResolved: applyInitialWorkspace,
   })
-
   useEffect(() => {
     const expired = () => {
       invalidateWorkspaceBootstrap()
@@ -299,7 +303,6 @@ function App() {
     window.addEventListener('analysis-auth-expired', expired)
     return () => window.removeEventListener('analysis-auth-expired', expired)
   }, [invalidateWorkspaceBootstrap])
-
   const handleLogin = async (username: string, password: string) => {
     setAuthError('')
     try {
@@ -312,7 +315,6 @@ function App() {
       throw reason
     }
   }
-
   const logout = async () => {
     const logoutRequest = api.logout()
     invalidateWorkspaceBootstrap()
@@ -323,9 +325,8 @@ function App() {
     setMenuPolicyReady(false)
     setOverview(null)
   }
-
   useEffect(() => {
-    if (!activeDashboardId || !selectedLoadCaseId || !authReady || (authRequired && !authUser) || isPendingResultAnalysis(false, activeDashboardId)) return
+    if (!activeDashboardId || !selectedLoadCaseId || !authReady || (authRequired && !authUser) || isPendingResultAnalysis(false, activeDashboardId) || (editMode && dashboard?.id === activeDashboardId)) return
     const requestSequence = ++dashboardRequestSequence.current
     setDashboardLoading(true)
     api.dashboard(activeDashboardId)
@@ -344,17 +345,14 @@ function App() {
     return () => {
       if (requestSequence === dashboardRequestSequence.current) dashboardRequestSequence.current += 1
     }
-  }, [activeDashboardId, selectedLoadCaseId, authReady, authRequired, authUser?.id])
-
+  }, [activeDashboardId, selectedLoadCaseId, authReady, authRequired, authUser?.id, dashboard?.id, editMode])
   useEffect(() => {
     setComparisonReportContext(null)
   }, [selectedLoadCaseId, activeDashboardId])
-
   useEffect(() => {
     if ((!editMode && workspacePage !== 'variables') || !selectedLoadCaseId) return
     api.variables(selectedLoadCaseId).then((items) => { setVariables(items); setCatalogVariable((current) => current || items[0]?.id || '') }).catch(() => setVariables([]))
   }, [editMode, workspacePage, selectedLoadCaseId])
-
   useEffect(() => {
     if (!assistantOpen || !dashboard || !selectedLoadCaseId) return
     Promise.all([api.widgetCatalog(), api.variables(selectedLoadCaseId), api.dashboardVersions(dashboard.id), api.dashboards(selectedProjectId)])
@@ -364,8 +362,7 @@ function App() {
       })
       .catch((reason) => setError(reason instanceof Error ? reason.message : '편집 카탈로그를 불러오지 못했습니다.'))
   }, [assistantOpen, dashboard?.id, selectedLoadCaseId])
-
-  const loadContext = async (projectId: string, requestId?: string, preferredView?: ActiveView) => {
+  const loadContext = async (projectId: string, requestId?: string, preferredView?: ActiveView, preferredLoadCaseId?: string, preferredPageId?: string, preferredRunId?: string) => {
     setError(''); const intent = beginMonitoringContext()
     const [requestData, storedPortfolioLayout, storedWorkflowLayout] = await Promise.all([
       api.requests(projectId),
@@ -380,9 +377,9 @@ function App() {
       resetWorkspaceContext({ projectId, thresholds: thresholdData, portfolioLayout: storedPortfolioLayout.definition, portfolioLayoutVersion: storedPortfolioLayout.version, workflowLayout: storedWorkflowLayout.definition, workflowLayoutVersion: storedWorkflowLayout.version, setDashboardLoading, setRequests, setLoadCases, setThresholds, setSelectedProjectId, setSelectedRequestId, setSelectedLoadCaseId, setOverview, setDashboard, setAnalysisPages, setActiveDashboardId, setActiveView, setPortfolioLayout, setPortfolioLayoutVersion, setWorkflowDashboardLayout, setWorkflowLayoutVersion })
       return
     }
-    const loadCase = caseData[0]
-    const [overviewData, pageData] = loadCase ? await Promise.all([api.overview(loadCase.id), api.dashboardPages(loadCase.id)]) : [null, [] as DashboardPageSummary[]]
-    const selectedPage = overviewData ? preferredPage(pageData, overviewData, preferredView) : undefined
+    const loadCase = caseData.find((item) => item.id === preferredLoadCaseId) ?? caseData[0]
+    const [overviewData, pageData] = loadCase ? await Promise.all([api.overview(loadCase.id, preferredRunId), api.dashboardPages(loadCase.id)]) : [null, [] as DashboardPageSummary[]]
+    const selectedPage = overviewData ? visiblePages(pageData, overviewData).find((page) => page.id === preferredPageId) ?? preferredPage(pageData, overviewData, preferredView) : undefined
     const dashboardData = selectedPage ? await api.dashboard(selectedPage.id).catch(() => null) : null
     if (!isCurrentMonitoringContext(intent)) return
     setRequests(requestData)
@@ -399,8 +396,7 @@ function App() {
     setAnalysisPages(pageData)
     if (selectedPage) { setActiveDashboardId(selectedPage.id); setActiveView(pageView(selectedPage)); if (dashboardData) setDashboard(dashboardData) } else { setDashboard(null); setActiveDashboardId('pending-open-cell'); setActiveView('custom') }; return selectedPage?.id
   }
-
-  const loadMonitoringContext = async (projectId: string, requestId?: string) => {
+  const loadMonitoringContext = async (projectId: string, requestId?: string, preferredLoadCaseId?: string) => {
     setError(''); const intent = beginMonitoringContext()
     const [requestData, storedPortfolioLayout, storedWorkflowLayout] = await Promise.all([
       api.requests(projectId),
@@ -416,7 +412,8 @@ function App() {
       return false
     }
     let overviewData: Overview | null = null; let pageData: DashboardPageSummary[] = []; let selectedPage: DashboardPageSummary | undefined; let dashboardData: DashboardDefinition | null = null
-    if (caseData[0]) { [overviewData, pageData] = await Promise.all([api.overview(caseData[0].id), api.dashboardPages(caseData[0].id)]); selectedPage = preferredPage(pageData, overviewData); dashboardData = selectedPage ? await api.dashboard(selectedPage.id) : null }
+    const loadCase = caseData.find((item) => item.id === preferredLoadCaseId) ?? caseData[0]
+    if (loadCase) { [overviewData, pageData] = await Promise.all([api.overview(loadCase.id), api.dashboardPages(loadCase.id)]); selectedPage = preferredPage(pageData, overviewData); dashboardData = selectedPage ? await api.dashboard(selectedPage.id) : null }
     if (!isCurrentMonitoringContext(intent)) return false
     setRequests(requestData)
     setLoadCases(caseData)
@@ -427,8 +424,8 @@ function App() {
     setWorkflowDashboardLayout(storedWorkflowLayout.definition)
     setWorkflowLayoutVersion(storedWorkflowLayout.version)
     setSelectedRequestId(request.id)
-    setSelectedLoadCaseId(caseData[0]?.id ?? '')
-    if (caseData[0]) {
+    setSelectedLoadCaseId(loadCase?.id ?? '')
+    if (loadCase) {
       setOverview(overviewData!)
       setAnalysisPages(pageData)
       if (selectedPage) { setActiveDashboardId(selectedPage.id); setDashboard(dashboardData) }
@@ -441,16 +438,43 @@ function App() {
     setActiveView('workflow')
     return true
   }
+  const workspaceContextKey = [workspaceContext.projectId, workspaceContext.requestId, workspaceContext.loadCaseId, workspaceContext.runId, workspaceContext.view, workspaceContext.pageId].join('|')
+  useEffect(() => {
+    if (workspaceContextWritePending.current !== workspaceContextKey) return
+    restoredWorkspaceContext.current = workspaceContextKey
+    workspaceContextWritePending.current = ''
+    setWorkspaceContextTransitioning(false)
+  }, [workspaceContextKey])
+  useEffect(() => { if (workspaceBootstrap.status === 'resolved' && !workspaceContext.projectId) { restoredWorkspaceContext.current = workspaceContextKey; workspaceContextHydrated.current = true } }, [workspaceBootstrap.status, workspaceContext.projectId, workspaceContextKey])
+  useWorkspaceContextRestore({ enabled: workspaceBootstrap.status === 'resolved' && Boolean(workspaceContext.projectId) && !workspaceContextTransitioning && !workspaceContextWritePending.current && restoredWorkspaceContext.current !== workspaceContextKey, context: workspaceContext, projects, beginIntent: () => { workspaceContextChangePending.current = true; return beginContextEntry() }, isCurrentIntent: isCurrentContextEntry, onInvalid: (message, target) => { setSelectedProjectId(target?.projectId ?? ''); setRequests(target?.requests ?? []); setSelectedRequestId(target?.requestId ?? ''); setLoadCases(target?.loadCases ?? []); setSelectedLoadCaseId(''); setOverview(null); setDashboard(null); setAnalysisPages([]); setActiveDashboardId('pending-open-cell'); setActiveView('workflow'); setNotice(message) }, onMonitoringContext: loadMonitoringContext, onAnalysisContext: loadContext, onVirtualResultLayout: clearSnapshotDashboard, onSettled: () => { restoredWorkspaceContext.current = workspaceContextKey; workspaceContextHydrated.current = true; workspaceContextChangePending.current = false; setWorkspaceContextRestoreEpoch((value) => value + 1) } })
+  useEffect(() => {
+    const selectedRunMatchesOverview = !selectedAnalysisRunId || (overview?.load_case.id === selectedLoadCaseId && overview.run === selectedAnalysisRunId)
+    if (workspaceBootstrap.status !== 'resolved' || isWorkspaceIndex || !matchedWorkspaceRoute || editMode || !allowedPages.has(workspacePage) || !workspaceContextHydrated.current || workspaceContextWritePending.current || workspaceContextKey !== restoredWorkspaceContext.current || workspaceContextChangePending.current || requestContextLoading || analysisRunsLoading || analysisRunChanging || !selectedRunMatchesOverview) return
+    const durableAnalysisPage = activeDashboardId !== 'request-result-layout' && !activeDashboardId.startsWith('pending-')
+    const nextContext = {
+      projectId: selectedProjectId || undefined,
+      requestId: selectedRequestId || undefined,
+      loadCaseId: selectedLoadCaseId || undefined,
+      runId: durableAnalysisPage ? selectedAnalysisRunId || undefined : undefined,
+      view: activeView,
+      pageId: durableAnalysisPage ? activeDashboardId : undefined,
+    }
+    const nextContextKey = [nextContext.projectId, nextContext.requestId, nextContext.loadCaseId, nextContext.runId, nextContext.view, nextContext.pageId].join('|')
+    if (nextContextKey === workspaceContextKey) { setWorkspaceContextTransitioning(false); return }
+    workspaceContextWritePending.current = nextContextKey
+    updateWorkspaceContext(nextContext, { replace: !userWorkspaceContextChange.current })
+    userWorkspaceContextChange.current = false
+  }, [activeDashboardId, activeView, allowedPages, analysisRunChanging, analysisRunsLoading, editMode, isWorkspaceIndex, matchedWorkspaceRoute, overview, requestContextLoading, selectedAnalysisRunId, selectedLoadCaseId, selectedProjectId, selectedRequestId, updateWorkspaceContext, workspaceBootstrap.status, workspaceContextKey, workspacePage])
   const handleProjectChange = async (projectId: string) => {
-    if (editMode) cancelEditing(); const intent = beginContextEntry()
-    try { await runRequestSelection(() => {}, () => activeView === 'workflow' ? loadMonitoringContext(projectId) : loadContext(projectId)) } catch (reason) { if (isCurrentContextEntry(intent)) setError(reason instanceof Error ? reason.message : '프로젝트를 변경하지 못했습니다.') }
+    if (!canChangeContext()) return; const intent = beginContextEntry(); userWorkspaceContextChange.current = true; workspaceContextChangePending.current = true; setWorkspaceContextTransitioning(true)
+    try { await runRequestSelection(() => {}, () => activeView === 'workflow' ? loadMonitoringContext(projectId) : loadContext(projectId)) } catch (reason) { userWorkspaceContextChange.current = false; if (isCurrentContextEntry(intent)) { setWorkspaceContextTransitioning(false); setError(reason instanceof Error ? reason.message : '프로젝트를 변경하지 못했습니다.') } } finally { if (isCurrentContextEntry(intent)) workspaceContextChangePending.current = false }
   }
   const handleRequestChange = async (requestId: string) => {
-    if (editMode) cancelEditing(); const intent = beginContextEntry()
-    try { await runRequestSelection(() => setSelectedRequestId(requestId), () => activeView === 'workflow' ? loadMonitoringContext(selectedProjectId, requestId) : loadContext(selectedProjectId, requestId)) } catch (reason) { if (isCurrentContextEntry(intent)) setError(reason instanceof Error ? reason.message : '의뢰를 변경하지 못했습니다.') }
+    if (!canChangeContext()) return; const intent = beginContextEntry(); userWorkspaceContextChange.current = true; workspaceContextChangePending.current = true; setWorkspaceContextTransitioning(true)
+    try { await runRequestSelection(() => {}, () => activeView === 'workflow' ? loadMonitoringContext(selectedProjectId, requestId) : loadContext(selectedProjectId, requestId)) } catch (reason) { userWorkspaceContextChange.current = false; if (isCurrentContextEntry(intent)) { setWorkspaceContextTransitioning(false); setError(reason instanceof Error ? reason.message : '의뢰를 변경하지 못했습니다.') } } finally { if (isCurrentContextEntry(intent)) workspaceContextChangePending.current = false }
   }
   const handleLoadCaseChange = async (loadCaseId: string) => {
-    if (editMode) cancelEditing(); const intent = beginContextEntry()
+    if (!canChangeContext()) return; const intent = beginContextEntry(); userWorkspaceContextChange.current = true; workspaceContextChangePending.current = true; setWorkspaceContextTransitioning(true)
     try {
       const [overviewData, pageData] = await Promise.all([api.overview(loadCaseId), api.dashboardPages(loadCaseId)])
       const selectedPage = preservesResultLayoutOnLoadCaseChange(activeDashboardId) ? undefined : preferredPage(pageData, overviewData)
@@ -461,7 +485,12 @@ function App() {
       setAnalysisPages(pageData)
       if (preservesResultLayoutOnLoadCaseChange(activeDashboardId)) return
       if (selectedPage) { setActiveDashboardId(selectedPage.id); setActiveView(pageView(selectedPage)); setDashboard(dashboardData) }
-    } catch (reason) { if (isCurrentContextEntry(intent)) setError(reason instanceof Error ? reason.message : '하중 경우를 변경하지 못했습니다.') }
+    } catch (reason) { userWorkspaceContextChange.current = false; if (isCurrentContextEntry(intent)) { setWorkspaceContextTransitioning(false); setError(reason instanceof Error ? reason.message : '하중 경우를 변경하지 못했습니다.') } } finally { if (isCurrentContextEntry(intent)) workspaceContextChangePending.current = false }
+  }
+  const handleAnalysisRunChange = async (runId: string) => {
+    if (!canChangeContext()) return
+    userWorkspaceContextChange.current = true; workspaceContextChangePending.current = true; setWorkspaceContextTransitioning(true)
+    try { await selectAnalysisRun(runId) } finally { workspaceContextChangePending.current = false }
   }
   const handleLayoutChange = (_current: Layout[], layouts: Layouts) => {
     if (!editMode) return
@@ -478,7 +507,6 @@ function App() {
       return changed ? { ...current, widgets } : current
     })
   }
-
   const save = async () => {
     if (workspacePage === 'portfolio') {
       try {
@@ -538,7 +566,6 @@ function App() {
       setError(reason instanceof Error ? reason.message : '저장하지 못했습니다.')
     }
   }
-
   const beginEditing = async () => {
     const editableDashboard = await prepareEditableDashboard(); if (!editableDashboard && workspacePage !== 'portfolio') return
     if (workspacePage === 'portfolio') portfolioLayoutBeforeEdit.current = { ...portfolioLayout, chartOrder: [...portfolioLayout.chartOrder] }
@@ -546,17 +573,14 @@ function App() {
     setSelectedWidgetId(null)
     workspaceEditor.open(workspacePage === 'portfolio' ? 'portfolio-layout' : 'analysis-dashboard')
   }
-
   const beginWorkflowStageEditing = () => {
     workflowsBeforeEdit.current = structuredClone(workflows)
     workspaceEditor.open('workflow-stages')
   }
-
   const beginWorkflowLayoutEditing = () => {
     workflowLayoutBeforeEdit.current = structuredClone(workflowDashboardLayout)
     workspaceEditor.open('workflow-layout')
   }
-
   const cancelEditingImplementation = () => {
     if (workspacePage === 'portfolio' && portfolioLayoutBeforeEdit.current) {
       setPortfolioLayout(portfolioLayoutBeforeEdit.current)
@@ -579,19 +603,16 @@ function App() {
     workspaceEditor.close()
   }
   cancelEditingRef.current = cancelEditingImplementation
-
   const resetPortfolioLayout = () => {
     setPortfolioLayout({ ...DEFAULT_PORTFOLIO_LAYOUT, chartOrder: [...DEFAULT_PORTFOLIO_LAYOUT.chartOrder] })
     setNotice('기본 배치를 미리 적용했습니다. 저장하거나 취소할 수 있습니다.')
   }
-
   const resetWorkflowDashboardLayout = () => {
     setWorkflowDashboardLayout({ ...DEFAULT_WORKFLOW_DASHBOARD_LAYOUT, items: [] })
     setNotice('진행 현황 기본 레이아웃을 미리 적용했습니다. 저장하거나 취소할 수 있습니다.')
   }
-
   const switchDashboardView = (view: ActiveView) => {
-    if (editMode) cancelEditing(); beginContextEntry()
+    if (!canChangeContext()) return; beginContextEntry()
     if (view === 'open_cell' || view === 'chassis' || view === 'custom' || view === 'compare') {
       const key = view === 'open_cell' ? 'open_cell' : view === 'chassis' ? 'chassis_rear' : view === 'compare' ? 'run_comparison' : 'custom'
       const page = visiblePages(analysisPages, overview!).find((item) => item.page.analysis_key === key)
@@ -604,9 +625,8 @@ function App() {
     }
     setActiveView(view)
   }
-
   const switchAnalysisPage = (page: DashboardPageSummary) => {
-    if (editMode) cancelEditing(); beginContextEntry()
+    if (!canChangeContext()) return; beginContextEntry()
     setComparisonReportContext(null)
     if (page.id !== activeDashboardId) {
       dashboardRequestSequence.current += 1
@@ -615,7 +635,6 @@ function App() {
     }
     setActiveView(pageView(page))
   }
-
   const previewCommand = async () => {
     if (!command.trim()) return
     if (!dashboardReady) { setError('현재 상세 분석 페이지를 불러온 뒤 자연어 개선을 실행해 주세요.'); return }
@@ -625,7 +644,6 @@ function App() {
       setError(reason instanceof Error ? reason.message : '요청을 해석하지 못했습니다.')
     }
   }
-
   const applyProposal = () => {
     if (!dashboard || !dashboardReady || !proposal?.proposal) return
     if (!dashboardBeforeEdit.current) dashboardBeforeEdit.current = structuredClone(dashboard)
@@ -640,17 +658,14 @@ function App() {
     workspaceEditor.open('analysis-dashboard')
     setNotice('변경안을 적용했습니다. 저장하면 새 버전이 생성됩니다.')
   }
-
   const removeWidget = (id: string) => {
     if (!dashboard) return
     setDashboard({ ...dashboard, widgets: dashboard.widgets.filter((item) => item.id !== id) })
   }
-
   const updateWidget = (id: string, patch: Partial<DashboardWidget>) => {
     if (!dashboard) return
     setDashboard({ ...dashboard, widgets: dashboard.widgets.map((item) => item.id === id ? { ...item, ...patch, settings: { ...item.settings, ...patch.settings } } : item) })
   }
-
   const addCatalogWidget = (item: WidgetCatalogItem) => {
     if (!dashboard) return
     if (!dashboardBeforeEdit.current) dashboardBeforeEdit.current = structuredClone(dashboard)
@@ -660,13 +675,11 @@ function App() {
     setDashboard({ ...dashboard, widgets: [...dashboard.widgets, { id: `${item.type}-${Date.now()}`, type: item.type, title: variable ? `${variable.display_name} · ${item.label}` : item.label, x: 0, y: 30, w, h, settings: { variableId: variable?.id } }] })
     workspaceEditor.open('analysis-dashboard'); setNotice('위젯을 추가했습니다. 위치를 조정한 뒤 저장하세요.')
   }
-
   const cloneLayout = async () => {
     if (!dashboard) return
     const result = await api.cloneDashboard(dashboard.id, `${dashboard.name} 복제본`, dashboard.description)
     setNotice(`복제 레이아웃 ${result.id}을 저장했습니다.`)
   }
-
   const restorePrevious = async () => {
     if (!dashboard) return
     const previous = versions.find((item) => item.version < (dashboard.version ?? 1) && item.is_valid)
@@ -674,7 +687,6 @@ function App() {
     await api.restoreDashboard(dashboard.id, previous.version)
     setDashboard(await api.dashboard(dashboard.id)); setVersions(await api.dashboardVersions(dashboard.id)); setNotice(`v${previous.version} 내용을 새 버전으로 복구했습니다.`)
   }
-
   const loadDashboardVersionDraft = async (version: number) => {
     if (!dashboard) return
     try {
@@ -693,7 +705,6 @@ function App() {
       setNotice(`v${version} 내용을 현재 편집 초안으로 불러왔습니다. 저장하면 새 버전이 생성됩니다.`)
     } catch (reason) { setError(reason instanceof Error ? reason.message : '과거 버전을 불러오지 못했습니다.') }
   }
-
   const removeDashboardVersion = async (version: number) => {
     if (!dashboard) return
     try {
@@ -702,9 +713,7 @@ function App() {
       setNotice(`v${version} 과거 이력을 삭제했습니다.`)
     } catch (reason) { setError(reason instanceof Error ? reason.message : '과거 버전을 삭제하지 못했습니다.') }
   }
-
   const loadSavedDashboard = async (id: string) => { setDashboard(await api.dashboard(id)); setNotice('저장된 레이아웃을 불러왔습니다.') }
-
   const updateWorkflowStepDraft = (stepId: string, patch: Partial<WorkflowStep>) => {
     setWorkflows((items) => items.map((workflow) => {
       if (!workflow.steps.some((step) => step.id === stepId)) return workflow
@@ -712,7 +721,6 @@ function App() {
       return { ...workflow, steps, progress: Math.round(steps.reduce((sum, step) => sum + step.progress, 0) / Math.max(steps.length, 1)) }
     }))
   }
-
   const addWorkflowStepDraft = (requestId: string) => {
     setWorkflows((items) => items.map((workflow) => {
       if (workflow.request.id !== requestId) return workflow
@@ -721,7 +729,6 @@ function App() {
       return { ...workflow, steps, progress: Math.round(steps.reduce((sum, step) => sum + step.progress, 0) / steps.length) }
     }))
   }
-
   const deleteWorkflowStepDraft = (requestId: string, stepId: string) => {
     setWorkflows((items) => items.map((workflow) => {
       if (workflow.request.id !== requestId) return workflow
@@ -730,7 +737,6 @@ function App() {
       return { ...workflow, steps, progress: Math.round(steps.reduce((sum, step) => sum + step.progress, 0) / steps.length) }
     }))
   }
-
   const moveWorkflowStepDraft = (requestId: string, stepId: string, offset: -1 | 1) => {
     setWorkflows((items) => items.map((workflow) => {
       if (workflow.request.id !== requestId) return workflow
@@ -742,7 +748,6 @@ function App() {
       return { ...workflow, steps: steps.map((step, stepIndex) => ({ ...step, sequence_no: stepIndex + 1 })) }
     }))
   }
-
   const saveChassisThreshold = async (value: number) => {
     const criterion = thresholds.find((item) => item.criterion_key === 'chassis_rear_permanent_deformation_mm')
     if (!criterion || !overview) return
@@ -753,7 +758,6 @@ function App() {
       setNotice(`관리자 판정 기준을 ${value.toFixed(1)} mm로 저장했습니다.`)
     } catch (reason) { setError(reason instanceof Error ? reason.message : '판정 기준을 저장하지 못했습니다.') }
   }
-
   const saveOpenCellThreshold = async (value: number) => {
     const criterion = thresholds.find((item) => item.criterion_key === 'open_cell_stress_mpa')
     if (!criterion || !overview) return
@@ -783,14 +787,41 @@ function App() {
     setOperationalRefreshToken((value) => value + 1)
     setNotice(`${request.title} 의뢰를 접수했습니다.`)
   }
-
   const openIntakeWorkbench = (requestId: string) => {
     beginContextEntry(); setSelectedRequestId(requestId)
     navigateWorkspace('workbench')
   }
-
+  const selectWorkbenchRequest = async (requestId: string) => {
+    const workflow = workflows.find((item) => item.request.id === requestId)
+    if (!workflow) { setError('선택한 의뢰의 작업 문맥을 찾지 못했습니다. 목록을 새로고침해 주세요.'); return }
+    const intent = beginContextEntry(); setWorkspaceContextTransitioning(true)
+    try {
+      await loadMonitoringContext(workflow.request.project_id, requestId)
+    } catch (reason) {
+      if (isCurrentContextEntry(intent)) { setWorkspaceContextTransitioning(false); setError(reason instanceof Error ? reason.message : '선택한 의뢰의 작업 문맥을 열지 못했습니다.') }
+    }
+  }
+  const openWorkbenchForRequest = async (requestId: string) => {
+    if (workspaceContextTransitioning) return
+    const workflow = workflows.find((item) => item.request.id === requestId)
+    if (!workflow) { setError('선택한 의뢰의 작업 문맥을 찾지 못했습니다. 목록을 새로고침해 주세요.'); return }
+    const intent = beginContextEntry(); setWorkspaceContextTransitioning(true)
+    try {
+      await loadMonitoringContext(workflow.request.project_id, requestId)
+      if (isCurrentContextEntry(intent)) navigateWorkspace('workbench')
+    } catch (reason) {
+      if (isCurrentContextEntry(intent)) { setWorkspaceContextTransitioning(false); setError(reason instanceof Error ? reason.message : '작업 실행 화면을 열지 못했습니다.') }
+    }
+  }
+  const openCurrentResultReview = () => {
+    if (!selectedProjectId || !selectedRequestId || !selectedLoadCaseId) {
+      setNotice('결과를 검토하려면 하중 경우와 등록된 결과를 먼저 선택해 주세요.')
+      return
+    }
+    void openImportedResult(selectedProjectId, selectedRequestId, selectedLoadCaseId)
+  }
   const openImportedResult = async (projectId: string, requestId: string, loadCaseId: string) => {
-    const intent = beginContextEntry(); const [requestData, caseData, thresholdData, overviewData, pageData] = await Promise.all([
+    const intent = beginContextEntry(); setWorkspaceContextTransitioning(true); try { const [requestData, caseData, thresholdData, overviewData, pageData] = await Promise.all([
       api.requests(projectId), api.loadCases(requestId), api.qualityThresholds(projectId), api.overview(loadCaseId), api.dashboardPages(loadCaseId),
     ])
     const selectedPage = preferredPage(pageData, overviewData)
@@ -800,19 +831,26 @@ function App() {
     setSelectedProjectId(projectId); setSelectedRequestId(requestId); setSelectedLoadCaseId(loadCaseId); setOverview(overviewData)
     setAnalysisPages(pageData)
     if (selectedPage) { setActiveDashboardId(selectedPage.id); setActiveView(pageView(selectedPage)); if (dashboardData) setDashboard(dashboardData) }
-    navigateWorkspace('dashboard', { dashboardEntry: 'preserve' })
+    navigateWorkspace('dashboard', { dashboardEntry: 'preserve' }) } catch (reason) { if (isCurrentContextEntry(intent)) { setWorkspaceContextTransitioning(false); setError(reason instanceof Error ? reason.message : '결과 검토 문맥을 열지 못했습니다.') } }
   }
-
-  const openPortfolioRequest = async (projectId: string, requestId: string) => {
-    const intent = beginContextEntry(); try {
-      const loaded = await loadMonitoringContext(projectId, requestId)
-      if (!loaded || !isCurrentContextEntry(intent)) return
+  const openPortfolioRequest = async (projectId: string, requestId: string, loadCaseId?: string) => {
+    const intent = beginContextEntry(); setWorkspaceContextTransitioning(true); try {
+      const loaded = await loadMonitoringContext(projectId, requestId, loadCaseId)
+      if (!loaded || !isCurrentContextEntry(intent)) { if (isCurrentContextEntry(intent)) setWorkspaceContextTransitioning(false); return }
       navigateWorkspace('dashboard')
     } catch (reason) {
-      if (isCurrentContextEntry(intent)) setError(reason instanceof Error ? reason.message : '의뢰 진행 상태를 열지 못했습니다.')
+      if (isCurrentContextEntry(intent)) { setWorkspaceContextTransitioning(false); setError(reason instanceof Error ? reason.message : '의뢰 진행 상태를 열지 못했습니다.') }
     }
   }
-
+  const openPortfolioResult = async (projectId: string, requestId: string, loadCaseId: string, runId?: string) => {
+    const intent = beginContextEntry(); setWorkspaceContextTransitioning(true)
+    try {
+      await loadContext(projectId, requestId, undefined, loadCaseId, undefined, runId)
+      if (isCurrentContextEntry(intent)) navigateWorkspace('dashboard', { dashboardEntry: 'preserve' })
+    } catch (reason) {
+      if (isCurrentContextEntry(intent)) { setWorkspaceContextTransitioning(false); setError(reason instanceof Error ? reason.message : '결과 검토 문맥을 열지 못했습니다.') }
+    }
+  }
   const openFeatureExample = async (example: FeatureExample) => {
     const intent = beginContextEntry(); try {
       if (example.project_id && example.request_id) {
@@ -826,40 +864,35 @@ function App() {
       if (isCurrentContextEntry(intent)) setError(reason instanceof Error ? reason.message : '예제를 열지 못했습니다.')
     }
   }
-
   if (!authReady) {
     return <div className="full-state"><LoaderCircle className="spin" /> 인증 설정을 확인하고 있습니다.</div>
   }
-
   if (authRequired && !authUser) {
     return <LoginScreen mode={authMode === 'oidc' ? 'oidc' : 'password'} error={authError} onLogin={handleLogin} theme={theme} onThemeChange={setTheme} />
   }
-
   if (authUser?.account_status === 'PENDING') {
     return <ApprovalPendingScreen displayName={authUser.display_name} onLogout={() => void logout()} />
   }
-
   if (workspaceBootstrap.status === 'idle' || workspaceBootstrap.status === 'loading') {
     return <div className="full-state"><LoaderCircle className="spin" /> 데이터와 레이아웃을 준비하고 있습니다.</div>
   }
-
   if (workspaceBootstrap.status === 'failed') {
     return <div className="full-state error"><AlertTriangle /> {workspaceBootstrap.message}</div>
   }
-
   if (error) {
     return <div className="full-state error"><AlertTriangle /> {error}</div>
   }
-
   if (!isWorkspaceIndex && !matchedWorkspaceRoute) {
     return <div className="full-state error" data-testid="workspace-not-found"><AlertTriangle /><h1>페이지를 찾을 수 없습니다.</h1><p>요청한 작업공간 경로가 존재하지 않습니다.</p></div>
   }
-
   const isRequestMonitoring = workspacePage === 'dashboard' && activeView === 'workflow'
   const resultLayoutPending = workspacePage === 'dashboard' && !selectedLoadCaseId && !overview && !dashboard; const pendingAnalysis = activeView !== 'workflow' && isPendingResultAnalysis(resultLayoutPending, activeDashboardId)
   const projectSetup = Boolean(selectedProjectId && requests.length === 0)
-
-  if ((!overview || !dashboard) && !isRequestMonitoring && !pendingAnalysis) {
+  const workspaceContextRestoring = workspaceBootstrap.status === 'resolved' && (workspaceContextTransitioning || (Boolean(workspaceContext.projectId) && !workspaceContextWritePending.current && workspaceContextKey !== restoredWorkspaceContext.current))
+  if (workspaceContextRestoring) {
+    return <div className="full-state" data-testid="workspace-context-restoring"><LoaderCircle className="spin" /> 요청한 의뢰 문맥을 확인하고 있습니다.</div>
+  }
+  if ((!overview || !dashboard) && !isRequestMonitoring && !pendingAnalysis && !(projects.length > 0 && !isWorkspaceIndex && (workspacePage === 'portfolio' || workspacePage === 'workbench' || workspacePage === 'intake'))) {
     const canCreateProject = hasPermission(authUser, 'system.user.approve', selectedProjectId)
     const canCreateRequest = hasPermission(authUser, 'request.create', selectedProjectId)
     const canRegisterData = canCreateProject || hasPermission(authUser, 'result.import', selectedProjectId)
@@ -876,25 +909,21 @@ function App() {
       onLogout={() => void logout()}
     >
       {!canRegisterData && projects.length === 0 ? <div className="bootstrap-empty-access"><AlertTriangle /><h1>접근 가능한 프로젝트가 없습니다.</h1><p>전역 관리자에게 프로젝트 생성 또는 멤버십 할당을 요청하세요.</p></div> : setupPage === 'intake' ? (
-        <RequestIntakePage projects={projects} createdBy={authUser?.display_name ?? '사용자'} canCreate={canCreateRequest} onCreated={handleIntakeCreated} onOpenWorkbench={() => enterWorkspace('data')} />
+        <RequestIntakePage projects={projects} initialProjectId={selectedProjectId} createdBy={authUser?.display_name ?? '사용자'} canCreate={canCreateRequest} onCreated={handleIntakeCreated} onOpenWorkbench={() => enterWorkspace('data')} />
       ) : (
-        <Suspense fallback={<FeatureScreenFallback />}><DataWorkspace canCreateProject={canCreateProject} canRetryImports={canRetryImports} projects={projects} initialProjectId={selectedProjectId} initialRequestId={selectedRequestId} onDataChanged={refreshOperationalData} onOpenAnalysis={openImportedResult} onOpenIntake={() => enterWorkspace('intake')} /></Suspense>
+        <><RequestJourneyCompact active="data" disabled={!selectedRequestId} onOpenOverview={() => enterWorkspace('dashboard')} onOpenWorkbench={() => enterWorkspace('workbench')} onOpenData={() => {}} onOpenReview={openCurrentResultReview} /><Suspense fallback={<FeatureScreenFallback />}><DataWorkspace canCreateProject={canCreateProject} canRetryImports={canRetryImports} projects={projects} initialProjectId={selectedProjectId} initialRequestId={selectedRequestId} initialLoadCaseId={selectedLoadCaseId} onContextChange={({ projectId, requestId, loadCaseId }) => { setSelectedProjectId(projectId); setSelectedRequestId(requestId); setSelectedLoadCaseId(loadCaseId) }} onDataChanged={refreshOperationalData} onOpenAnalysis={openImportedResult} onOpenIntake={() => enterWorkspace('intake')} /></Suspense></>
       )}
     </BootstrapWorkspaceShell>
   }
-
   if (!allowedPages.has(workspacePage)) {
     return <div className="full-state"><LoaderCircle className="spin" /> 허용된 첫 화면으로 이동하고 있습니다.</div>
   }
   if (workspacePage === 'menu_policy_admin' && !menuPolicy) {
     return <div className="full-state error"><AlertTriangle /> 메뉴 정책을 불러오지 못했습니다. 감사로그와 서버 상태를 확인하세요.</div>
   }
-
   const projectWorkflows = workflows.filter((workflow) => workflow.request.project_id === selectedProjectId)
   const selectedWorkflow = workflows.find((workflow) => workflow.request.id === selectedRequestId)
-  // The monitoring tab is scoped to the request selected in the context
-  // controls.  Showing a project-wide average here made the same request read
-  // differently from its monitoring card and the operations dashboard.
+  const completedWorkflowCount = selectedWorkflow?.steps.filter((step) => step.status === 'COMPLETED').length ?? 0
   const workflowProgress = selectedWorkflow?.progress ?? 0
   const chassisThreshold = thresholds.find((item) => item.criterion_key === 'chassis_rear_permanent_deformation_mm')
   const openCellThreshold = thresholds.find((item) => item.criterion_key === 'open_cell_stress_mpa')
@@ -915,7 +944,6 @@ function App() {
   const analysisType = overview?.load_case.analysis_type ?? 'RESULT PENDING'
   const staticBreadcrumb = WORKSPACE_ROUTES_BY_ID.get(workspacePage)?.breadcrumb
   const breadcrumb = workspacePage === 'dashboard' ? activeView === 'workflow' ? <><span>의뢰</span><b>/</b><span>{workflowProjectName}</span><b>/</b><strong>{workflowTitle}</strong></> : <><span>프로젝트</span><b>/</b><span>{analysisProjectName}</span><b>/</b><strong>{overview?.load_case.name ?? '하중 경우 설정 전'}</strong></> : <><span>{staticBreadcrumb?.section}</span><b>/</b><strong>{staticBreadcrumb?.title}</strong></>
-
   return (
     <AppShell
       className={`app-shell ${theme === 'light' ? 'light-theme' : 'dark-theme'} ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}
@@ -940,9 +968,8 @@ function App() {
       style={{ '--ui-font-size': `${uiFontSize}pt` } as CSSProperties}
       theme={theme}
     >
-
       <AppShellMain topbar={<AppTopbar breadcrumb={breadcrumb} actions={<>
-            <div className="theme-switch" role="group" aria-label="화면 테마 선택"><button type="button" className={theme === 'light' ? 'active' : ''} aria-pressed={theme === 'light'} onClick={() => setTheme('light')}><Sun /><span>라이트</span></button><button type="button" className={theme === 'dark' ? 'active' : ''} aria-pressed={theme === 'dark'} onClick={() => setTheme('dark')}><Moon /><span>다크</span></button></div>
+            <div className="theme-switch" role="group" aria-label="화면 테마 선택"><button type="button" aria-label="라이트" className={theme === 'light' ? 'active' : ''} aria-pressed={theme === 'light'} onClick={() => setTheme('light')}><Sun /><span>라이트</span></button><button type="button" aria-label="다크" className={theme === 'dark' ? 'active' : ''} aria-pressed={theme === 'dark'} onClick={() => setTheme('dark')}><Moon /><span>다크</span></button></div>
             {workspacePage === 'dashboard' && activeView !== 'workflow' && <button className="ghost-button" title={!overview?.run && activeView !== 'compare' ? '완료된 Run이 있어야 보고서를 내보낼 수 있습니다.' : undefined} disabled={!dashboardReady || (!overview?.run && activeView !== 'compare')} onClick={() => void reportExport.open()}><Download /> 보고서 내보내기</button>}
             {canEdit && workspacePage === 'dashboard' && activeView !== 'workflow' && <button className="ghost-button" disabled={activeDashboardId === 'request-result-layout' ? !selectedLoadCaseId : !dashboardReady} onClick={() => void openAssistant()}><Sparkles /> 자연어로 개선</button>}
             {canEdit && (workspacePage === 'dashboard' && activeView === 'workflow' ? (editMode ? (
@@ -955,37 +982,15 @@ function App() {
             ) : <button className="edit-button" disabled={workspacePage === 'dashboard' && (activeDashboardId === 'request-result-layout' ? !selectedLoadCaseId : !dashboardReady)} onClick={beginEditing}><Settings2 /> 대시보드 편집</button>))}
             <div className="avatar">{authUser ? authUser.display_name.slice(0, 2) : 'HK'}</div>
           </>} />}>
-
-        {workspacePage === 'portfolio' ? <PortfolioDashboard refreshToken={operationalRefreshToken} editMode={editMode} layout={portfolioLayout} layoutVersion={portfolioLayoutVersion} onLayoutChange={setPortfolioLayout} onCancelEdit={cancelEditing} onResetLayout={resetPortfolioLayout} onOpen={(projectId, requestId) => void openPortfolioRequest(projectId, requestId)} /> : workspacePage === 'intake' ? <RequestIntakePage projects={projects} createdBy={authUser?.display_name ?? '데모 사용자'} canCreate={hasPermission(authUser, 'request.create', selectedProjectId)} onCreated={handleIntakeCreated} onOpenWorkbench={openIntakeWorkbench} /> : workspacePage === 'workbench' ? <Suspense fallback={<FeatureScreenFallback />}><SimulationWorkbench workflows={workflows} initialRequestId={selectedRequestId} currentUserId={authUser?.id ?? ''} createdBy={authUser?.display_name ?? '데모 사용자'} canExecute={canExecuteAssigned || canExecuteAny} isAdmin={canExecuteAny} onRequestSelected={(requestId) => { beginContextEntry(); setSelectedRequestId(requestId) }} onChanged={async (message) => { setWorkflows(await api.workflows()); setOperationalRefreshToken((value) => value + 1); setNotice(message) }} /></Suspense> : workspacePage === 'workbench_admin' ? <Suspense fallback={<FeatureScreenFallback />}><WorkbenchTypeAdmin /></Suspense> : workspacePage === 'project_result_profiles' ? <Suspense fallback={<FeatureScreenFallback />}><ProjectResultProfileBinding projectId={selectedProjectId} /></Suspense> : workspacePage === 'schemas' ? <Suspense fallback={<FeatureScreenFallback />}><FolderSchemaWorkspace /></Suspense> : workspacePage === 'variables' ? <Suspense fallback={<FeatureScreenFallback />}><VariableCatalogPage variables={variables} overview={overview!} loadCaseId={selectedLoadCaseId} onChanged={(items) => { setVariables(items); setCatalogVariable((current) => items.some((item) => item.id === current) ? current : items[0]?.id ?? '') }} /></Suspense> : workspacePage === 'templates' ? <Suspense fallback={<FeatureScreenFallback />}><AutomationTemplatesPage /></Suspense> : workspacePage === 'examples' ? <Suspense fallback={<FeatureScreenFallback />}><FeatureExampleGallery onOpen={openFeatureExample} /></Suspense> : workspacePage === 'help' ? <Suspense fallback={<FeatureScreenFallback />}><HelpCenter onNavigate={enterWorkspace} /></Suspense> : workspacePage === 'access_admin' ? <Suspense fallback={<FeatureScreenFallback />}><AccessAdminPage projectId={selectedProjectId} canApproveUsers={hasPermission(authUser, 'system.user.approve', selectedProjectId)} onAccessChanged={refreshAccess} /></Suspense> : workspacePage === 'menu_policy_admin' && menuPolicy ? <Suspense fallback={<FeatureScreenFallback />}><MenuPolicyAdminPage policy={menuPolicy} onPolicyChanged={setMenuPolicy} /></Suspense> : workspacePage === 'audit_admin' ? <Suspense fallback={<FeatureScreenFallback />}><AuditAdminPage /></Suspense> : workspacePage === 'data' ? (
-          <Suspense fallback={<FeatureScreenFallback />}><DataWorkspace canCreateProject={hasPermission(authUser, 'system.user.approve', selectedProjectId)} canRetryImports={hasPermission(authUser, 'system.catalog.manage', selectedProjectId)} projects={projects} initialProjectId={selectedProjectId} initialRequestId={selectedRequestId} onDataChanged={refreshOperationalData} onOpenAnalysis={openImportedResult} onOpenIntake={() => enterWorkspace('intake')} /></Suspense>
+        {workspacePage === 'portfolio' ? <PortfolioDashboard refreshToken={operationalRefreshToken} editMode={editMode} layout={portfolioLayout} layoutVersion={portfolioLayoutVersion} onLayoutChange={setPortfolioLayout} onCancelEdit={cancelEditing} onResetLayout={resetPortfolioLayout} onOpen={(projectId, requestId, loadCaseId) => void openPortfolioRequest(projectId, requestId, loadCaseId)} onOpenResult={(projectId, requestId, loadCaseId, runId) => void openPortfolioResult(projectId, requestId, loadCaseId, runId)} /> : workspacePage === 'intake' ? <RequestIntakePage projects={projects} initialProjectId={selectedProjectId} createdBy={authUser?.display_name ?? '데모 사용자'} canCreate={hasPermission(authUser, 'request.create', selectedProjectId)} onCreated={handleIntakeCreated} onOpenWorkbench={openIntakeWorkbench} /> : workspacePage === 'workbench' ? <><RequestJourneyCompact active="workbench" disabled={!selectedRequestId} onOpenOverview={() => enterWorkspace('dashboard')} onOpenWorkbench={() => {}} onOpenData={() => enterWorkspace('data')} onOpenReview={openCurrentResultReview} /><Suspense fallback={<FeatureScreenFallback />}><SimulationWorkbench workflows={workflows} initialRequestId={selectedRequestId} currentUserId={authUser?.id ?? ''} createdBy={authUser?.display_name ?? '데모 사용자'} canExecute={canExecuteAssigned || canExecuteAny} isAdmin={canExecuteAny} onRequestSelected={(requestId) => void selectWorkbenchRequest(requestId)} onChanged={async (message) => { setWorkflows(await api.workflows()); setOperationalRefreshToken((value) => value + 1); setNotice(message) }} /></Suspense></> : workspacePage === 'workbench_admin' ? <Suspense fallback={<FeatureScreenFallback />}><WorkbenchTypeAdmin /></Suspense> : workspacePage === 'project_result_profiles' ? <Suspense fallback={<FeatureScreenFallback />}><ProjectResultProfileBinding projectId={selectedProjectId} /></Suspense> : workspacePage === 'schemas' ? <Suspense fallback={<FeatureScreenFallback />}><FolderSchemaWorkspace /></Suspense> : workspacePage === 'variables' ? <Suspense fallback={<FeatureScreenFallback />}><VariableCatalogPage variables={variables} overview={overview!} loadCaseId={selectedLoadCaseId} onChanged={(items) => { setVariables(items); setCatalogVariable((current) => items.some((item) => item.id === current) ? current : items[0]?.id ?? '') }} /></Suspense> : workspacePage === 'templates' ? <Suspense fallback={<FeatureScreenFallback />}><AutomationTemplatesPage /></Suspense> : workspacePage === 'examples' ? <Suspense fallback={<FeatureScreenFallback />}><FeatureExampleGallery onOpen={openFeatureExample} /></Suspense> : workspacePage === 'help' ? <Suspense fallback={<FeatureScreenFallback />}><HelpCenter onNavigate={enterWorkspace} /></Suspense> : workspacePage === 'access_admin' ? <Suspense fallback={<FeatureScreenFallback />}><AccessAdminPage projectId={selectedProjectId} canApproveUsers={hasPermission(authUser, 'system.user.approve', selectedProjectId)} onAccessChanged={refreshAccess} /></Suspense> : workspacePage === 'menu_policy_admin' && menuPolicy ? <Suspense fallback={<FeatureScreenFallback />}><MenuPolicyAdminPage policy={menuPolicy} onPolicyChanged={setMenuPolicy} /></Suspense> : workspacePage === 'audit_admin' ? <Suspense fallback={<FeatureScreenFallback />}><AuditAdminPage /></Suspense> : workspacePage === 'data' ? (
+          <><RequestJourneyCompact active="data" disabled={!selectedRequestId} onOpenOverview={() => enterWorkspace('dashboard')} onOpenWorkbench={() => enterWorkspace('workbench')} onOpenData={() => {}} onOpenReview={openCurrentResultReview} /><Suspense fallback={<FeatureScreenFallback />}><DataWorkspace canCreateProject={hasPermission(authUser, 'system.user.approve', selectedProjectId)} canRetryImports={hasPermission(authUser, 'system.catalog.manage', selectedProjectId)} projects={projects} initialProjectId={selectedProjectId} initialRequestId={selectedRequestId} initialLoadCaseId={selectedLoadCaseId} onContextChange={({ projectId, requestId, loadCaseId }) => { setSelectedProjectId(projectId); setSelectedRequestId(requestId); setSelectedLoadCaseId(loadCaseId) }} onDataChanged={refreshOperationalData} onOpenAnalysis={openImportedResult} onOpenIntake={() => enterWorkspace('intake')} /></Suspense></>
         ) : <>
-        <section className="content-head">
-          <div>
-            <div className="eyebrow"><span>{activeView === 'workflow' ? 'REQUEST MONITORING' : 'PROJECT 24-071'}</span><span>•</span><span>{activeView === 'workflow' ? selectedWorkflow?.request.category ?? 'UNASSIGNED' : analysisType}</span></div>
-            <h1>{activeView === 'workflow' ? `${workflowProjectName} 해석 의뢰 현황` : pendingAnalysis ? '상세 분석' : `${analysisProjectName} 불량 분석`}</h1>
-            <p>{activeView === 'workflow' ? workflowTitle : analysisTitle}</p>
-          </div>
-          <div className="context-selectors">
-            <label><span>프로젝트</span><select aria-label="프로젝트 선택" value={selectedProjectId} onChange={(event) => handleProjectChange(event.target.value)}>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
-            <label><span>의뢰</span><select aria-label="의뢰 선택" disabled={projectSetup} value={selectedRequestId} onChange={(event) => handleRequestChange(event.target.value)}>{projectSetup ? <option value="">의뢰 접수 후 선택</option> : requests.map((request) => <option key={request.id} value={request.id}>{request.title}</option>)}</select></label>
-            <label><span>하중 경우</span><select aria-label="하중 경우 선택" value={selectedLoadCaseId} disabled={loadCases.length === 0} onChange={(event) => handleLoadCaseChange(event.target.value)}>{loadCases.length === 0 ? <option value="">미지정</option> : loadCases.map((loadCase) => <option key={loadCase.id} value={loadCase.id}>{loadCase.name}</option>)}</select></label>
-            {activeView !== 'workflow' && <ResultVersionSelector runs={analysisRuns} selectedRunId={selectedAnalysisRunId} loading={analysisRunsLoading} changing={analysisRunChanging} error={analysisRunError} onChange={(runId) => void selectAnalysisRun(runId)} />}
-          </div>
-        </section>
-
+        <RequestWorkspaceHeader activeView={activeView} activeRunSelector={activeView !== 'workflow' && activeDashboardId !== 'request-result-layout' && !activeDashboardId.startsWith('pending-') ? <ResultVersionSelector runs={analysisRuns} selectedRunId={selectedAnalysisRunId} loading={analysisRunsLoading || workspaceContextTransitioning} changing={analysisRunChanging} error={analysisRunError} onChange={(runId) => void handleAnalysisRunChange(runId)} /> : undefined} canOpenData={allowedPages.has('data')} canOpenWorkbench={allowedPages.has('workbench')} contextChanging={workspaceContextTransitioning} completedCount={selectedWorkflow ? `${completedWorkflowCount} / ${selectedWorkflow.total_count ?? selectedWorkflow.steps.length} 작업 완료` : undefined} loadCases={loadCases} onLoadCaseChange={(id) => void handleLoadCaseChange(id)} onOpenData={() => enterWorkspace('data')} onOpenWorkbench={() => enterWorkspace('workbench')} onProjectChange={(id) => void handleProjectChange(id)} onRequestChange={(id) => void handleRequestChange(id)} onViewOverview={() => switchDashboardView('workflow')} owner={selectedWorkflow?.request.owner ?? requests.find((request) => request.id === selectedRequestId)?.owner ?? ''} projectId={selectedProjectId} projects={projects} requestId={selectedRequestId} requests={requests} resultReviewTab={<ResultLayoutDetailTab label="결과 검토" requestId={selectedRequestId} requestContextLoading={requestContextLoading || workspaceContextTransitioning} analysisLabel={selectedLoadCaseId ? overview?.load_case.analysis_type.replace('_', ' ') ?? '결과 대기' : '하중 경우 미지정'} loadLayout={workbenchApi.requestResultLayout} onBeginOpen={beginContextEntry} isCurrentOpen={isCurrentContextEntry} onSnapshot={() => { const page = explicitCustomAnalysisPage(analysisTabs, activeDashboardId); if (page) { switchAnalysisPage(page); return } clearSnapshotDashboard() }} onDomain={() => { const page = analysisTabs[0]; if (page) switchAnalysisPage(page) }} onUnconfigured={() => { const page = explicitCustomAnalysisPage(analysisTabs, activeDashboardId); if (page) { switchAnalysisPage(page); return } clearSnapshotDashboard() }} onError={setError} />} selectedLoadCaseId={selectedLoadCaseId} status={selectedWorkflow?.request.status ?? (overview?.run ? overview.overall_verdict : '결과 대기')} title={activeView === 'workflow' ? workflowTitle : analysisTitle} />
         {projectSetup ? <ProjectSetupState projectName={projects.find((project) => project.id === selectedProjectId)?.name ?? '선택한 프로젝트'} canCreateRequest={canCreateRequest} onOpenIntake={() => enterWorkspace('intake')} /> : <>
-        <section className="view-tabs">
-          <button data-testid="selected-request-progress-tab" className={activeView === 'workflow' ? 'active' : ''} onClick={() => switchDashboardView('workflow')}><CircleDot /> 의뢰 진행 상태 <span>{workflowProgress}%</span></button>
-          <ResultLayoutDetailTab requestId={selectedRequestId} requestContextLoading={requestContextLoading} analysisLabel={selectedLoadCaseId ? overview!.load_case.analysis_type.replace('_', ' ') : '하중 경우 미지정'} loadLayout={workbenchApi.requestResultLayout} onBeginOpen={beginContextEntry} isCurrentOpen={isCurrentContextEntry} onSnapshot={() => { const page = explicitCustomAnalysisPage(analysisTabs, activeDashboardId); if (page) { switchAnalysisPage(page); return } clearSnapshotDashboard() }} onDomain={() => { const page = analysisTabs[0]; if (page) switchAnalysisPage(page) }} onUnconfigured={() => { const page = explicitCustomAnalysisPage(analysisTabs, activeDashboardId); if (page) { switchAnalysisPage(page); return } clearSnapshotDashboard() }} onError={setError} />
-          <div className="tab-line" />
-        </section>
-
         {activeView !== 'workflow' && !pendingAnalysis && <section className="analysis-subtabs"><div><span>상세 분석</span><b>/</b><strong>{overview!.load_case.request_title}</strong></div><nav aria-label="불량 분석 하위 탭">
           {analysisTabs.map((page) => <div className="analysis-tab-group" key={page.id}><button className={`analysis-tab ${activeDashboardId === page.id ? 'active' : ''}`} onClick={() => switchAnalysisPage(page)}>{page.page.analysis_key === 'open_cell' ? <Activity /> : page.page.analysis_key === 'chassis_rear' ? <BarChart3 /> : page.page.analysis_key === 'run_comparison' ? <MessageSquareText /> : <LayoutDashboard />} {page.name} <span>{page.page.analysis_key === 'open_cell' ? overview!.analysis_verdicts.open_cell : page.page.analysis_key === 'chassis_rear' ? overview!.analysis_verdicts.chassis_rear : page.page.analysis_key === 'run_comparison' ? 'SYSTEM' : page.page.status.toUpperCase()}</span></button></div>)}
-          <label className="analysis-page-jump"><span>페이지</span><select aria-label="상세 분석 페이지 선택" value={activeAnalysisPage?.id ?? analysisTabs[0]?.id ?? ''} onChange={(event) => { const page = analysisTabs.find((item) => item.id === event.target.value); if (page) switchAnalysisPage(page) }}>{analysisTabs.map((page) => <option key={page.id} value={page.id}>{page.name}</option>)}</select></label>
           {canManagePages && <button className="analysis-page-manage-button" onClick={() => setPageManagerOpen(true)}><Plus /> 분석 페이지 관리</button>}
         </nav>{activeAnalysisPage?.page.analysis_key === 'open_cell' && activeView !== 'compare' && <EdgeFilter selected={selectedEdges} setSelected={setSelectedEdges} />}</section>}
-
         {editMode && (
           <div className="edit-banner" data-testid={activeView === 'workflow' ? workspaceEditor.mode ?? undefined : 'analysis-dashboard'}><GripVertical /><span><strong>{activeView === 'workflow' && workflowEditorMode === 'layout' ? '대시보드 레이아웃 편집' : activeView === 'workflow' ? '진행 단계 편집' : '편집 모드'}</strong> {activeView === 'workflow' && workflowEditorMode === 'layout' ? '의뢰 위젯을 이동·리사이즈하고 색상과 글자 크기를 조절한 뒤 상단에서 저장하세요.' : activeView === 'workflow' ? '단계 내용·순서·추가·삭제를 편집한 뒤 상단의 단계 변경 저장을 누르세요.' : '위젯을 드래그하거나 모서리를 잡아 크기를 조절하고 설정 버튼으로 그래프, 변수, 글자 크기를 바꾸세요.'}</span><button onClick={cancelEditing}>편집 취소</button></div>
         )}
@@ -994,14 +999,13 @@ function App() {
           <div><span>글자 크기</span><button aria-label="진행 현황 글자 크기 줄이기" onClick={() => setWorkflowDashboardLayout({ ...workflowDashboardLayout, fontSize: Math.max(8, workflowDashboardLayout.fontSize - 1) })} disabled={workflowDashboardLayout.fontSize <= 8}><Minus /></button><output>{workflowDashboardLayout.fontSize}px</output><button aria-label="진행 현황 글자 크기 늘리기" onClick={() => setWorkflowDashboardLayout({ ...workflowDashboardLayout, fontSize: Math.min(18, workflowDashboardLayout.fontSize + 1) })} disabled={workflowDashboardLayout.fontSize >= 18}><Plus /></button></div>
           <button onClick={resetWorkflowDashboardLayout}><RotateCcw /> 기본 레이아웃</button>
         </div>}
-        {editMode && activeView !== 'workflow' && (
+        {editMode && activeView !== 'workflow' && dashboard && (
           <div className="dashboard-edit-toolbar">
-            <div><strong>{dashboard!.name}</strong><span>v{dashboard!.version ?? 1} · 카드 상단의 손잡이로 이동하고 오른쪽 아래 모서리로 크기를 조절합니다.</span></div>
+            <div><strong>{dashboard.name}</strong><span>v{dashboard.version ?? 1} · 카드 상단의 손잡이로 이동하고 오른쪽 아래 모서리로 크기를 조절합니다.</span></div>
             <button onClick={() => setAssistantOpen(true)}><Plus /> 위젯 추가·버전 관리</button>
           </div>
         )}
-
-        {pendingAnalysis && !editMode ? <Suspense fallback={<FeatureScreenFallback />}><PendingAnalysisWorkspace projectId={selectedProjectId} projectName={analysisProjectName} requestId={selectedRequestId} requestTitle={analysisTitle} selectedLoadCaseId={selectedLoadCaseId} canOpenData={hasPermission(authUser, 'result.import', selectedProjectId)} onOpenData={() => enterWorkspace('data')} onLoadLayout={workbenchApi.requestResultLayout} onSnapshotPageChange={hydrateSnapshotDashboard} /></Suspense> : activeView !== 'workflow' ? <Suspense fallback={<FeatureScreenFallback />}><ResultsWorkspace
+        {(pendingAnalysis || (activeView !== 'workflow' && !dashboard)) ? <Suspense fallback={<FeatureScreenFallback />}><PendingAnalysisWorkspace projectId={selectedProjectId} projectName={analysisProjectName} requestId={selectedRequestId} requestTitle={analysisTitle} selectedLoadCaseId={selectedLoadCaseId} canOpenData={hasPermission(authUser, 'result.import', selectedProjectId)} onOpenData={() => enterWorkspace('data')} onLoadLayout={workbenchApi.requestResultLayout} onSnapshotPageChange={hydrateSnapshotDashboard} /></Suspense> : activeView !== 'workflow' ? <Suspense fallback={<FeatureScreenFallback />}><ResultsWorkspace
           activeView={activeView}
           canEdit={canEdit}
           canManageThresholds={canManagePages}
@@ -1020,13 +1024,13 @@ function App() {
           openCellThreshold={openCellThreshold}
           overview={overview!}
           selectedEdges={selectedEdges}
+          resultSummary={activeView === 'compare' ? null : <RequestResultSummary activeView={activeView} comparisonAvailable={analysisRuns.length > 1 && analysisTabs.some((page) => page.page.analysis_key === 'run_comparison')} overview={overview!} onOpenComparison={() => { const page = analysisTabs.find((item) => item.page.analysis_key === 'run_comparison'); if (page) switchAnalysisPage(page) }} onSelectEdges={setSelectedEdges} runNo={analysisRuns.find((run) => run.id === overview?.run)?.run_no} />}
         /></Suspense> : (
-            <Suspense fallback={<FeatureScreenFallback />}><WorkflowView workflows={projectWorkflows} stageEditMode={editMode && workflowEditorMode === 'stages'} layoutEditMode={editMode && workflowEditorMode === 'layout'} dashboardLayout={workflowDashboardLayout} layoutVersion={workflowLayoutVersion} onDashboardLayoutChange={setWorkflowDashboardLayout} onStepChange={updateWorkflowStepDraft} onAddStep={addWorkflowStepDraft} onDeleteStep={deleteWorkflowStepDraft} onMoveStep={moveWorkflowStepDraft} onOpenAnalysis={openWorkflowAnalysis} activeRequestId={selectedRequestId} loadCaseReady={loadCases.length > 0} onOpenData={() => enterWorkspace('data')} /></Suspense>
+            <Suspense fallback={<FeatureScreenFallback />}><WorkflowView workflows={projectWorkflows} stageEditMode={editMode && workflowEditorMode === 'stages'} layoutEditMode={editMode && workflowEditorMode === 'layout'} dashboardLayout={workflowDashboardLayout} layoutVersion={workflowLayoutVersion} onDashboardLayoutChange={setWorkflowDashboardLayout} onStepChange={updateWorkflowStepDraft} onAddStep={addWorkflowStepDraft} onDeleteStep={deleteWorkflowStepDraft} onMoveStep={moveWorkflowStepDraft} onOpenAnalysis={openWorkflowAnalysis} activeRequestId={selectedRequestId} loadCaseReady={loadCases.length > 0} onOpenData={() => enterWorkspace('data')} onOpenWorkbench={(requestId) => void openWorkbenchForRequest(requestId)} onSelectRequest={(requestId) => void handleRequestChange(requestId)} /></Suspense>
           )}
         </>}
         </>}
       </AppShellMain>
-
       <ResultsWorkspaceOverlays
         assistantOpen={assistantOpen}
         canManagePages={canManagePages}
@@ -1055,10 +1059,10 @@ function App() {
       />
       {pageManagerOpen && <Suspense fallback={null}><AnalysisPageManager loadCaseId={selectedLoadCaseId} activePageId={activeDashboardId} visiblePageIds={analysisTabs.map((page) => page.id)} onClose={() => setPageManagerOpen(false)} onPagesChanged={setAnalysisPages} onActiveDefinitionChanged={(definition) => setDashboard(definition)} onDeleted={(deletedId) => {
         reportExport.handlePageDeleted(deletedId)
-        dashboardBeforeEdit.current = null; setSelectedWidgetId(null); setAssistantOpen(false)
+        dashboardBeforeEdit.current = null; setSelectedWidgetId(null); setAssistantOpen(false); workspaceEditor.close()
       }} onActivate={(definition, startEditing = false) => {
         if (!definition.page) return
-        if (editMode) cancelEditing()
+        if (editMode && dashboardBeforeEdit.current && !canChangeContext()) return
         const summary: DashboardPageSummary = { id: definition.id, project_id: selectedProjectId, request_id: selectedRequestId, load_case_id: selectedLoadCaseId, name: definition.name, description: definition.description, version: definition.version ?? 1, updated_at: definition.updated_at ?? new Date().toISOString(), page: definition.page }
         setAnalysisPages((items) => [...items.filter((item) => item.id !== summary.id), summary].sort((left, right) => left.page.display_order - right.page.display_order))
         setDashboard(definition); setActiveDashboardId(definition.id); setActiveView(pageView(summary)); setPageManagerOpen(false)
@@ -1069,5 +1073,4 @@ function App() {
     </AppShell>
   )
 }
-
 export default App

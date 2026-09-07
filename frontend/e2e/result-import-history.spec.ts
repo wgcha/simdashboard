@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { revealControl } from './workspace-test-helpers'
 
 const password = 'e2e-validation-password'
 
@@ -103,9 +104,10 @@ test('global admin filters selected load-case import history, sees empty state, 
 
   await loginAsGlobalAdmin(page)
   await page.goto('/workspace/data')
-  await expect(page).toHaveURL(/\/workspace\/data$/)
+  await expect(page).toHaveURL(/\/workspace\/data(?:\?|$)/)
   await expect(page.getByRole('heading', { name: '해석 데이터 등록', exact: true })).toBeVisible()
-  const history = page.getByRole('region', { name: '결과 등록 이력' })
+  const history = page.getByRole('region', { name: '결과 등록 이력', includeHidden: true })
+  await revealControl(history)
   await expect(history).toContainText('3건 결과 등록 이력')
   await expect(history.getByText('master/created/manifest.json', { exact: true })).toBeVisible()
   await expect(history.getByText('master/skipped/manifest.json', { exact: true })).toBeVisible()

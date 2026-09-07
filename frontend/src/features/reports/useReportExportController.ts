@@ -1,10 +1,9 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../../api'
 import { reportApi } from './api'
 import { withReportVariables } from './reportLayoutUtils'
 import type { AnalysisRunSummary, DashboardDefinition, DashboardPageSummary, Overview, ReportContentItem, ReportLayout, ReportLayoutDefinition, ReportLayoutVersion, ReportSource, ReportTemplateAsset } from '../../types'
 import type { ReportExportOptions } from '../../reportExport'
-
 type ComparisonReportContext = {
   baselineRunId: string
   comparison: Awaited<ReturnType<typeof api.runComparison>>
@@ -13,7 +12,6 @@ type ComparisonReportContext = {
   targetRunId: string
   trust: Awaited<ReturnType<typeof api.runTrust>>
 }
-
 type ReportExportContext = {
   activeDashboardId: string
   comparisonReportContext: ComparisonReportContext | null
@@ -27,10 +25,11 @@ type ReportExportContext = {
   onError: (message: string) => void
   onNotice: (message: string) => void
 }
-
 type ReportModule = typeof import('../../reportExport')
-
 export function useReportExportController(context: ReportExportContext) {
+  const generationRef = useRef(0)
+  const reportablePagesKey = context.reportablePages.map((page) => `${page.id}:${page.project_id}:${page.request_id}:${page.load_case_id}`).join('|')
+  const contextKey = useMemo(() => [context.mode, context.selectedLoadCaseId, context.activeDashboardId, context.overview?.load_case.project_id ?? '', context.overview?.load_case.request_id ?? '', context.overview?.run ?? '', context.dashboard?.id ?? '', reportablePagesKey].join('::'), [context.activeDashboardId, context.dashboard?.id, context.mode, context.overview?.load_case.project_id, context.overview?.load_case.request_id, context.overview?.run, reportablePagesKey, context.selectedLoadCaseId])
   const [reportDraft, setReportDraft] = useState<ReportExportOptions | null>(null)
   const [reportOverview, setReportOverview] = useState<Overview | null>(null)
   const [reportPageId, setReportPageId] = useState('')
@@ -45,13 +44,13 @@ export function useReportExportController(context: ReportExportContext) {
   const [reportLayoutVersions, setReportLayoutVersions] = useState<ReportLayoutVersion[]>([])
   const [reportTemplates, setReportTemplates] = useState<ReportTemplateAsset[]>([])
   const [isLayoutEditing, setIsLayoutEditing] = useState(false)
-
   const close = useCallback(() => {
     setReportDraft(null); setReportOverview(null); setReportLayoutDraft(null); setReportContents([]); setReportSource(null)
   }, [])
   const cancel = useCallback(() => {
     setReportDraft(null); setReportOverview(null); setReportLayoutDraft(null)
   }, [])
+  useEffect(() => { generationRef.current += 1; setReportDraft(null); setReportOverview(null); setReportPageId(''); setReportRuns([]); setReportRunId(''); setReportContents([]); setReportSource(null); setReportError(''); setReportLayoutDraft(null); setReportLayoutVersions([]); setIsLayoutEditing(false); setReportExporting(false) }, [contextKey])
 
   const reportDataForPage = useCallback(async (pageId: string, sourceOverview: Overview | null | undefined, reportModule: ReportModule, definition?: DashboardDefinition) => {
     const dataOverview = sourceOverview ?? context.overview
@@ -70,11 +69,10 @@ export function useReportExportController(context: ReportExportContext) {
     const variableKeys = [...new Set(resolvedDefinition.widgets.filter((widget) => widget.settings?.includeInReport !== false && typeof widget.settings?.variableId === 'string').map((widget) => String(widget.settings?.variableId)))]
     return { scopedOverview: reportModule.filterOverviewForVariables(dataOverview, variableKeys, page.name), contentOverview: dataOverview, definition: resolvedDefinition, page }
   }, [context.dashboard, context.overview, context.reportablePages])
-
   const open = useCallback(async () => {
     if (!context.overview) return
     if (!context.dashboardReady) { context.onError('현재 상세 분석 페이지를 불러온 뒤 보고서를 내보내 주세요.'); return }
-    setReportError('')
+    setReportError(''); const generation = generationRef.current
     try {
       const comparisonContext = context.mode === 'comparison' ? context.comparisonReportContext : null
       if (context.mode === 'comparison' && (!comparisonContext || comparisonContext.loadCaseId !== context.selectedLoadCaseId)) throw new Error('현재 하중 경우의 기준 Run과 대상 Run 비교가 준비된 뒤 보고서를 내보낼 수 있습니다.')
@@ -88,7 +86,7 @@ export function useReportExportController(context: ReportExportContext) {
       const [reportModule, layouts, templates, availableRuns, selectedPageDefinition] = await Promise.all([
         import('../../reportExport'), reportApi.layouts(), api.reportTemplates(), api.analysisRuns(context.selectedLoadCaseId), selectedPageDefinitionPromise,
       ])
-      const selected = layouts.find((item) => item.id === 'report-layout-standard')?.definition ?? layouts[0]?.definition ?? reportModule.DEFAULT_REPORT_LAYOUT
+      if (generationRef.current !== generation) return; const selected = layouts.find((item) => item.id === 'report-layout-standard')?.definition ?? layouts[0]?.definition ?? reportModule.DEFAULT_REPORT_LAYOUT
       const layoutVersionsPromise = layouts.length ? reportApi.versions(selected.id) : Promise.resolve([])
       let scopedOverview = context.overview
       let contents: ReportContentItem[]
@@ -110,36 +108,37 @@ export function useReportExportController(context: ReportExportContext) {
         pageId = selectedPage.id
       }
       const layoutVersions = await layoutVersionsPromise
-      setReportPageId(pageId); setReportRuns(availableRuns); setReportRunId(scopedOverview.run ?? ''); setReportOverview(scopedOverview)
+      if (generationRef.current !== generation) return; setReportPageId(pageId); setReportRuns(availableRuns); setReportRunId(scopedOverview.run ?? ''); setReportOverview(scopedOverview)
       setReportDraft(reportModule.createDefaultReportOptions(scopedOverview)); setReportContents(contents); setReportSource(source); setReportLayouts(layouts)
       setReportLayoutDraft(reportModule.prepareContentReportLayout(withReportVariables(reportModule.normalizeReportLayout(selected), scopedOverview), source, contents, true))
       setReportLayoutVersions(layoutVersions); setReportTemplates(templates); setIsLayoutEditing(false)
-    } catch (reason) { context.onError(reason instanceof Error ? reason.message : '보고서 레이아웃을 불러오지 못했습니다.') }
-  }, [context, reportDataForPage])
+    } catch (reason) { if (generationRef.current === generation) context.onError(reason instanceof Error ? reason.message : '보고서 레이아웃을 불러오지 못했습니다.') }
+  }, [context, contextKey, reportDataForPage])
 
-  const updateForAnalysisPage = useCallback(async (pageId: string, runId: string) => {
+  const updateForAnalysisPage = useCallback(async (pageId: string, runId: string) => { const generation = generationRef.current
     const currentDashboard = context.dashboard
     const dashboardPromise = currentDashboard?.id === pageId ? Promise.resolve(currentDashboard) : api.dashboard(pageId)
     const [reportModule, selectedOverview, definition] = await Promise.all([import('../../reportExport'), api.overview(context.selectedLoadCaseId, runId), dashboardPromise])
     const { scopedOverview, contentOverview } = await reportDataForPage(pageId, selectedOverview, reportModule, definition)
-    const contents = reportModule.createDashboardReportContent(definition, contentOverview)
+    if (generationRef.current !== generation) return false; const contents = reportModule.createDashboardReportContent(definition, contentOverview)
     const source: ReportSource = { kind: 'analysis_page', dashboardId: pageId, loadCaseId: context.selectedLoadCaseId, runId }
     setReportOverview(scopedOverview); setReportDraft(reportModule.createDefaultReportOptions(scopedOverview)); setReportContents(contents); setReportSource(source)
     setReportLayoutDraft((current) => current ? reportModule.prepareContentReportLayout(withReportVariables(current, scopedOverview), source, contents, true) : current)
+    return true
   }, [context.dashboard, context.selectedLoadCaseId, reportDataForPage])
 
   const selectReportPage = useCallback(async (pageId: string) => {
     setReportError('')
     try {
       if (!reportRunId) throw new Error('보고서에 사용할 Run을 먼저 선택해 주세요.')
-      await updateForAnalysisPage(pageId, reportRunId); setReportPageId(pageId)
+      if (await updateForAnalysisPage(pageId, reportRunId)) setReportPageId(pageId)
     } catch (reason) { setReportError(reason instanceof Error ? reason.message : '분석 페이지를 보고서에 연결하지 못했습니다.') }
   }, [reportRunId, updateForAnalysisPage])
 
   const selectReportRun = useCallback(async (runId: string) => {
     if (!reportPageId || !runId) return
     setReportError('')
-    try { await updateForAnalysisPage(reportPageId, runId); setReportRunId(runId) } catch (reason) { setReportError(reason instanceof Error ? reason.message : '선택한 Run을 보고서에 연결하지 못했습니다.') }
+    try { if (await updateForAnalysisPage(reportPageId, runId)) setReportRunId(runId) } catch (reason) { setReportError(reason instanceof Error ? reason.message : '선택한 Run을 보고서에 연결하지 못했습니다.') }
   }, [reportPageId, updateForAnalysisPage])
 
   const selectComparisonReportRun = useCallback(async (side: 'baseline' | 'target', runId: string) => {
@@ -212,10 +211,11 @@ export function useReportExportController(context: ReportExportContext) {
 
   const downloadReport = useCallback(async () => {
     if (!reportDraft || !reportOverview || !reportLayoutDraft) return
-    setReportExporting(true); setReportError('')
-    try {
+    const generation = generationRef.current; const sourceAtStart = reportSource
+    if (!sourceAtStart || reportOverview.load_case.id !== context.selectedLoadCaseId || reportOverview.load_case.project_id !== context.overview?.load_case.project_id || reportOverview.load_case.request_id !== context.overview?.load_case.request_id || (sourceAtStart.kind === 'analysis_page' && (sourceAtStart.loadCaseId !== context.selectedLoadCaseId || !context.reportablePages.some((page) => page.id === sourceAtStart.dashboardId))) || (sourceAtStart.kind === 'run_compare_review' && sourceAtStart.loadCaseId !== context.selectedLoadCaseId)) { setReportError('현재 의뢰와 하중 경우가 바뀌어 보고서를 생성할 수 없습니다. 보고서 창을 닫고 다시 열어 주세요.'); return }
+    setReportExporting(true); setReportError(''); try {
       const reportModule = await import('../../reportExport')
-      let filename: string
+      if (generationRef.current !== generation) return; let filename: string
       if (reportLayoutDraft.templateSource === 'pptx_upload' && reportLayoutDraft.templateAssetId) {
         if (reportContents.length) throw new Error('페이지별 위젯·Run 비교 콘텐츠는 시각적 레이아웃에서 내보내 주세요. 업로드 PPTX 바인딩은 아직 이 콘텐츠 형식을 지원하지 않습니다.')
         filename = reportModule.reportFilename(reportOverview, reportDraft)
@@ -223,9 +223,9 @@ export function useReportExportController(context: ReportExportContext) {
         const href = URL.createObjectURL(blob); const anchor = document.createElement('a')
         anchor.href = href; anchor.download = filename; document.body.appendChild(anchor); anchor.click(); anchor.remove(); setTimeout(() => URL.revokeObjectURL(href), 1000)
       } else filename = await reportModule.exportAnalysisReport(reportOverview, reportDraft, reportLayoutDraft, reportContents)
-      close(); context.onNotice(`${filename} 생성 완료`)
-    } catch (reason) { setReportError(reason instanceof Error ? reason.message : 'PPTX 보고서를 생성하지 못했습니다.') } finally { setReportExporting(false) }
-  }, [close, context, reportContents, reportDraft, reportLayoutDraft, reportOverview, reportTemplates])
+      if (generationRef.current !== generation) return; close(); context.onNotice(`${filename} 생성 완료`)
+    } catch (reason) { if (generationRef.current === generation) setReportError(reason instanceof Error ? reason.message : 'PPTX 보고서를 생성하지 못했습니다.') } finally { if (generationRef.current === generation) setReportExporting(false) }
+  }, [close, context, reportContents, reportDraft, reportLayoutDraft, reportOverview, reportSource, reportTemplates])
 
   const updateDraft = useCallback((field: keyof ReportExportOptions, value: string) => setReportDraft((current) => current ? { ...current, [field]: value } : current), [])
   const handlePageDeleted = useCallback((pageId: string) => {

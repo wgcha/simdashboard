@@ -339,7 +339,7 @@ Project
 - 보고서와 자연어 개선 dialog 진입
 - route renderer에 필요한 feature callback 조립
 
-화면 자체는 `app/workspace/WorkspaceRouteRenderer.tsx`와 `features/`로 이동했지만 `App.tsx`는 아직 최종 wiring-only 수준은 아니다.
+화면과 controller 일부가 `app/workspace/WorkspaceRouteRenderer.tsx` 및 `features/`로 추출되어 있다. 다만 실제 `main.tsx → App.tsx` 경로는 아직 App 안의 feature 조립부를 사용하므로 추출된 renderer만 수정해서는 화면에 반영되지 않는다. GUI 개편의 현재 기준과 기존 문서 대체 범위는 [`request-centric-workspace-ux.md`](request-centric-workspace-ux.md)를 따른다. `App.tsx`는 아직 최종 wiring-only 수준은 아니다.
 
 ### 4.2 폴더 책임
 

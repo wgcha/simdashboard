@@ -1,37 +1,58 @@
+[CmdletBinding()]
+param(
+    [ValidateSet('duckdb', 'postgresql')]
+    [string]$DatabaseBackend = '',
+    [string]$DuckdbPath = '',
+    [ValidateRange(1, 65535)]
+    [int]$BackendPort = 8000,
+    [ValidateRange(1, 65535)]
+    [int]$FrontendPort = 5173,
+    [switch]$NoBrowser,
+    [ValidateSet('auto', 'direct', 'proxy')]
+    [string]$NetworkMode = ''
+)
+
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RecoveryMarker = Join-Path $Root '.setup-recovery-required.json'
+Import-Module (Join-Path $Root 'scripts\windows\Runtime.psm1') -Force
+$NetworkModule = Join-Path $Root 'scripts\windows\Network.psm1'
+if (Test-Path -LiteralPath $NetworkModule -PathType Leaf) {
+    Import-Module $NetworkModule -Force
+    $networkSummary = if ($NetworkMode) { Initialize-DeploymentNetwork -SettingsPath (Join-Path $Root 'deploy\windows\network-settings.json') -Mode $NetworkMode } else { Initialize-DeploymentNetwork -SettingsPath (Join-Path $Root 'deploy\windows\network-settings.json') }
+}
+elseif ($NetworkMode) {
+    throw 'Network.psm1 was not found. Extract the complete source archive and retry.'
+}
 
 if (Test-Path -LiteralPath $RecoveryMarker) {
     throw 'A previous PostgreSQL replacement needs manual recovery. Review .setup-recovery-required.json before starting.'
 }
 
-# Start-Process fails when the inherited Windows environment contains both
-# "Path" and "PATH" entries. Keep the effective value under one canonical key.
-$processPath = $env:Path
-[Environment]::SetEnvironmentVariable('PATH', $null, 'Process')
-[Environment]::SetEnvironmentVariable('Path', $null, 'Process')
-[Environment]::SetEnvironmentVariable('Path', $processPath, 'Process')
-
-$Python = Join-Path $Root '.venv-runtime\Scripts\python.exe'
-if (-not (Test-Path -LiteralPath $Python)) {
-    $Python = Join-Path $Root '.venv\Scripts\python.exe'
-}
+$Node = Set-ProjectNodePath
+$Python = Get-ProjectPython
 $Backend = Join-Path $Root 'backend'
 $Frontend = Join-Path $Root 'frontend'
 $PidFile = Join-Path $Root '.server-pids.json'
-
-if (-not (Test-Path -LiteralPath $Python)) {
-    throw 'Python virtual environment was not found. Run setup.ps1 first.'
+$Vite = Join-Path $Frontend 'node_modules\vite\bin\vite.js'
+if (-not (Test-Path -LiteralPath $Vite -PathType Leaf)) {
+    throw 'Vite was not found. Run setup.ps1 first.'
 }
 
-$pnpm = (Get-Command pnpm.cmd -ErrorAction SilentlyContinue).Source
-if (-not $pnpm) { $pnpm = (Get-Command pnpm -ErrorAction SilentlyContinue).Source }
-if (-not $pnpm) {
-    $bundledPnpm = Join-Path $env:USERPROFILE '.cache\codex-runtimes\codex-primary-runtime\dependencies\bin\fallback\pnpm.cmd'
-    if (Test-Path -LiteralPath $bundledPnpm) { $pnpm = $bundledPnpm }
+if ($DuckdbPath -and $DatabaseBackend -ne 'duckdb') {
+    throw '-DuckdbPath requires -DatabaseBackend duckdb.'
 }
-if (-not $pnpm) { throw 'pnpm was not found. Run setup.ps1 first.' }
+if ($DatabaseBackend) {
+    $env:ANALYSIS_DB_BACKEND = $DatabaseBackend
+}
+if ($DuckdbPath) {
+    $isAbsoluteWindowsPath = $DuckdbPath -match '^[A-Za-z]:[\\/]' -or $DuckdbPath -match '^\\\\[^\\/]+[\\/][^\\/]+'
+    if (-not $isAbsoluteWindowsPath) {
+        throw '-DuckdbPath must be an absolute path.'
+    }
+    $env:ANALYSIS_DUCKDB_PATH = [System.IO.Path]::GetFullPath($DuckdbPath)
+    Write-Host "Using the process-only DuckDB path: $env:ANALYSIS_DUCKDB_PATH" -ForegroundColor Yellow
+}
 
 function Stop-ProcessTree([int]$ProcessIdentifier) {
     $children = Get-CimInstance Win32_Process -Filter "ParentProcessId = $ProcessIdentifier" -ErrorAction SilentlyContinue
@@ -91,21 +112,72 @@ function Test-LocalPortInUse([int]$Port) {
     }
 }
 
-if (Test-Path -LiteralPath $PidFile) {
+function Test-CurrentServerEndpoint([string]$Role, [int]$Port) {
     try {
-        $serverPids = Get-Content -Raw -LiteralPath $PidFile | ConvertFrom-Json
-        $runningServers = @($serverPids.backend, $serverPids.frontend) | Where-Object {
-            $_ -and (Get-Process -Id $_ -ErrorAction SilentlyContinue)
+        if ($Role -eq 'frontend') {
+            $response = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/" -UseBasicParsing -TimeoutSec 2
+            return $response.StatusCode -eq 200 -and $response.Content -match '<title>\s*VD simulation workbench\s*</title>' -and $response.Content -match '/src/main\.tsx'
         }
-        if ($runningServers.Count -gt 0) {
-            throw 'Analysis Canvas is already running. Run stop.ps1 first.'
+        $health = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/health" -TimeoutSec 2
+        return $health.status -eq 'ok' -and $health.database_backend -in @('duckdb', 'postgresql')
+    }
+    catch { return $false }
+}
+
+function Test-CurrentServerRecord($Record, [int]$ExpectedPort, [ValidateSet('backend', 'frontend')][string]$Role, [string]$ExpectedExecutable, [string]$ExpectedScript = '') {
+    if ($null -eq $Record -or -not ($Record.PSObject.Properties.Name -contains 'id') -or -not ($Record.PSObject.Properties.Name -contains 'startedAtUtc')) {
+        return $false
+    }
+    if ($Record.PSObject.Properties.Name -contains 'port' -and [int]$Record.port -ne $ExpectedPort) { return $false }
+    $process = Get-Process -Id ([int]$Record.id) -ErrorAction SilentlyContinue
+    if (-not $process) { return $false }
+    try {
+        $expected = if ($Record.startedAtUtc -is [DateTime]) {
+            $Record.startedAtUtc.ToUniversalTime()
         }
-        Remove-Item -LiteralPath $PidFile -Force
+        elseif ($Record.startedAtUtc -is [DateTimeOffset]) {
+            $Record.startedAtUtc.UtcDateTime
+        }
+        else {
+            [DateTime]::Parse([string]$Record.startedAtUtc).ToUniversalTime()
+        }
+        if ($process.StartTime.ToUniversalTime().Ticks -ne $expected.Ticks) { return $false }
+        $identity = Get-CimInstance Win32_Process -Filter "ProcessId = $($Record.id)" -ErrorAction SilentlyContinue
+        $commandLine = if ($identity) { [string]$identity.CommandLine } else { '' }
+        $executablePath = if ($identity) { [string]$identity.ExecutablePath } else { [string]$process.Path }
+        if (-not $executablePath -and $process.Path) { $executablePath = [string]$process.Path }
+        if (-not [string]::Equals([System.IO.Path]::GetFullPath($executablePath), [System.IO.Path]::GetFullPath($ExpectedExecutable), [System.StringComparison]::OrdinalIgnoreCase)) { return $false }
+        $portPattern = [regex]::Escape([string]$ExpectedPort)
+        if ($Role -eq 'frontend' -and ($commandLine -notmatch '(?i)vite' -or $commandLine -notmatch "(?i)--port\s+$portPattern(?!\d)")) { return $false }
+        if ($Role -eq 'backend' -and ($commandLine -notmatch '(?i)uvicorn' -or $commandLine -notmatch '(?i)app\.main:app' -or $commandLine -notmatch "(?i)--port\s+$portPattern(?!\d)")) { return $false }
+        if ($ExpectedScript -and $commandLine.IndexOf($ExpectedScript, [System.StringComparison]::OrdinalIgnoreCase) -lt 0) { return $false }
+        return Test-CurrentServerEndpoint -Role $Role -Port $ExpectedPort
     }
     catch {
-        if ($_.Exception.Message -like 'Analysis Canvas is already running*') { throw }
-        Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
+        return $false
     }
+}
+
+function Test-RecordedProcessExists($Record) {
+    return $Record -and ($Record.PSObject.Properties.Name -contains 'id') -and (Get-Process -Id ([int]$Record.id) -ErrorAction SilentlyContinue)
+}
+
+if (Test-Path -LiteralPath $PidFile) {
+    try { $serverPids = Get-Content -Raw -LiteralPath $PidFile | ConvertFrom-Json }
+    catch { throw 'The server PID metadata is invalid. It was preserved; run stop.ps1 after reviewing .server-pids.json.' }
+    if ($null -eq $serverPids -or $null -eq $serverPids.backend -or $null -eq $serverPids.frontend) { throw 'The server PID metadata is incomplete. It was preserved; run stop.ps1 after reviewing .server-pids.json.' }
+    $backendRunning = Test-CurrentServerRecord $serverPids.backend $BackendPort 'backend' $Python
+    $frontendRunning = Test-CurrentServerRecord $serverPids.frontend $FrontendPort 'frontend' $Node $Vite
+    if ($backendRunning -and $frontendRunning) {
+        $dashboardUrl = "http://127.0.0.1:$FrontendPort/workspace/overview"
+        if (-not $NoBrowser) { Start-Process -FilePath $dashboardUrl }
+        Write-Host "Analysis Canvas is already running. Dashboard: $dashboardUrl" -ForegroundColor Cyan
+        exit 0
+    }
+    if ((Test-RecordedProcessExists $serverPids.backend) -or (Test-RecordedProcessExists $serverPids.frontend)) {
+        throw 'An existing Analysis Canvas process could not be verified as healthy. PID metadata was preserved; inspect logs or run stop.ps1.'
+    }
+    Remove-Item -LiteralPath $PidFile -Force
 }
 
 Push-Location $Backend
@@ -113,9 +185,7 @@ try {
     $script:databaseBackend = (& $Python -c "from app.config import database_settings; print(database_settings().backend)").Trim()
     if ($LASTEXITCODE -ne 0) { throw 'Could not read the database configuration.' }
     if ($script:databaseBackend -eq 'postgresql') {
-        Write-Host 'Preparing the PostgreSQL schema...' -ForegroundColor Cyan
-        & $Python 'scripts\upgrade_postgres_schema.py'
-        if ($LASTEXITCODE -ne 0) { throw 'PostgreSQL schema preparation failed.' }
+        Write-Host 'Checking the existing PostgreSQL connection and schema (no migration will run)...' -ForegroundColor Cyan
         & $Python 'scripts\check_postgres_connection.py'
         if ($LASTEXITCODE -ne 0) { throw 'PostgreSQL application-role preflight failed.' }
     }
@@ -126,29 +196,31 @@ finally {
     Pop-Location
 }
 
-if (Test-LocalPortInUse -Port 8000) { throw 'Backend port 8000 is already in use.' }
-if (Test-LocalPortInUse -Port 5173) { throw 'Frontend port 5173 is already in use.' }
+if (Test-LocalPortInUse -Port $BackendPort) { throw "Backend port $BackendPort is already in use." }
+if (Test-LocalPortInUse -Port $FrontendPort) { throw "Frontend port $FrontendPort is already in use." }
 
+$env:VITE_API_TARGET = "http://127.0.0.1:$BackendPort"
 $backendProcess = $null
 $frontendProcess = $null
 $temporaryPidFile = "$PidFile.tmp"
 try {
     $backendProcess = Start-Process -FilePath $Python `
-        -ArgumentList '-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', '8000' `
+        -ArgumentList '-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', ([string]$BackendPort) `
         -WorkingDirectory $Backend -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput (Join-Path $Backend 'uvicorn.log') `
         -RedirectStandardError (Join-Path $Backend 'uvicorn-error.log')
-    Wait-HttpReady -Name 'Backend' -Uri 'http://127.0.0.1:8000/api/health' -Process $backendProcess
+    Wait-HttpReady -Name 'Backend' -Uri "http://127.0.0.1:$BackendPort/api/health" -Process $backendProcess
 
-    $frontendProcess = Start-Process -FilePath $pnpm -ArgumentList 'run', 'dev', '--', '--port', '5173', '--strictPort' `
+    $viteArgument = '"' + $Vite + '"'
+    $frontendProcess = Start-Process -FilePath $Node -ArgumentList $viteArgument, '--host', '127.0.0.1', '--port', ([string]$FrontendPort), '--strictPort' `
         -WorkingDirectory $Frontend -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput (Join-Path $Frontend 'vite.log') `
         -RedirectStandardError (Join-Path $Frontend 'vite-error.log')
-    Wait-HttpReady -Name 'Frontend' -Uri 'http://127.0.0.1:5173' -Process $frontendProcess
+    Wait-HttpReady -Name 'Frontend' -Uri "http://127.0.0.1:$FrontendPort" -Process $frontendProcess
 
     @{
-        backend = $backendProcess.Id
-        frontend = $frontendProcess.Id
+        backend = @{ id = $backendProcess.Id; port = $BackendPort; startedAtUtc = $backendProcess.StartTime.ToUniversalTime().ToString('o') }
+        frontend = @{ id = $frontendProcess.Id; port = $FrontendPort; startedAtUtc = $frontendProcess.StartTime.ToUniversalTime().ToString('o') }
     } | ConvertTo-Json | Set-Content -LiteralPath $temporaryPidFile -Encoding UTF8
     Move-Item -LiteralPath $temporaryPidFile -Destination $PidFile -Force
 }
@@ -161,5 +233,7 @@ catch {
 }
 
 Write-Host 'Analysis Canvas started successfully.' -ForegroundColor Cyan
-Write-Host 'Dashboard: http://127.0.0.1:5173'
-Write-Host 'API docs : http://127.0.0.1:8000/docs'
+$dashboardUrl = "http://127.0.0.1:$FrontendPort/workspace/overview"
+Write-Host "Dashboard: $dashboardUrl"
+Write-Host "API docs : http://127.0.0.1:$BackendPort/docs"
+if (-not $NoBrowser) { Start-Process -FilePath $dashboardUrl }

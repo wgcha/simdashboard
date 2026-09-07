@@ -9,15 +9,16 @@ import { requestTypeLabels, type ResultProfile, type WorkbenchRequestType } from
 type IntakeSource = 'EXTERNAL_SYSTEM' | 'DEPARTMENT_HEAD'
 type RequestTypeSelection = Pick<WorkbenchRequestType, 'id' | 'version'>
 
-export function RequestIntakePage({ projects, createdBy, canCreate, onCreated, onOpenWorkbench }: {
+export function RequestIntakePage({ projects, initialProjectId, createdBy, canCreate, onCreated, onOpenWorkbench }: {
   projects: Project[]
+  initialProjectId?: string
   createdBy: string
   canCreate: boolean
   onCreated: (projectId: string, request: AnalysisRequest) => Promise<void>
   onOpenWorkbench: (requestId: string) => void
 }) {
   const [requestTypes, setRequestTypes] = useState<WorkbenchRequestType[]>([])
-  const [projectId, setProjectId] = useState(projects[0]?.id ?? '')
+  const [projectId, setProjectId] = useState(initialProjectId || projects[0]?.id || '')
   const [sourceType, setSourceType] = useState<IntakeSource>('EXTERNAL_SYSTEM')
   const [sourceReference, setSourceReference] = useState('')
   const [requestedBy, setRequestedBy] = useState('')
@@ -63,8 +64,12 @@ export function RequestIntakePage({ projects, createdBy, canCreate, onCreated, o
   }, [])
 
   useEffect(() => {
+    if (initialProjectId && projects.some((item) => item.id === initialProjectId) && initialProjectId !== projectId) {
+      setProjectId(initialProjectId)
+      return
+    }
     if (!projects.some((item) => item.id === projectId)) setProjectId(projects[0]?.id ?? '')
-  }, [projectId, projects])
+  }, [initialProjectId, projectId, projects])
 
   useEffect(() => {
     let cancelled = false

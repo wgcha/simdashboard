@@ -1,5 +1,7 @@
 # 통합 해석 워크벤치 확장 계획
 
+> GUI 부분 대체(2026-09-07): 1·20·21장의 1급 업무 메뉴와 화면별 정보 배치는 [의뢰 중심 작업공간 GUI](request-centric-workspace-ux.md)를 따른다. 기능별 모듈/API, 공통 monitoring projection, 권한, 작업 dependency와 `DEMO ONLY` 계약은 유지한다. 아래 기존 구현·계획 기록은 삭제하지 않는다.
+
 - 문서 상태: DEMO_ONLY Foundation 1차 구현·운영자/관리자 UI 분리·검증 완료 · 실제 실행 정보 대기
 - 문서 버전: 0.8
 - 작성일: 2026-07-29

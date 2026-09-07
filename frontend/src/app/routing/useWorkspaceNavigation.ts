@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { useBlocker, useLocation, useNavigate } from 'react-router-dom'
 
 import type { AuthUser } from '../../auth'
@@ -20,6 +20,15 @@ type WorkspaceNavigationOptions = {
 export type WorkspaceNavigationRequest = {
   dashboardEntry?: DashboardEntry
   replace?: boolean
+}
+
+export type WorkspaceContextQuery = {
+  loadCaseId?: string
+  pageId?: string
+  projectId?: string
+  requestId?: string
+  runId?: string
+  view?: string
 }
 
 type PendingNavigation = {
@@ -47,6 +56,17 @@ export function useWorkspaceNavigation({
   const matchedWorkspaceRoute = workspaceRouteForPathname(location.pathname)
   const workspacePage = matchedWorkspaceRoute?.page ?? 'portfolio'
   const isWorkspaceIndex = location.pathname === '/' || location.pathname === '/workspace' || location.pathname === '/workspace/'
+  const workspaceContext = useMemo<WorkspaceContextQuery>(() => {
+    const query = new URLSearchParams(location.search)
+    return {
+      projectId: query.get('project') || undefined,
+      requestId: query.get('request') || undefined,
+      loadCaseId: query.get('loadCase') || undefined,
+      runId: query.get('run') || undefined,
+      view: query.get('view') || undefined,
+      pageId: query.get('page') || undefined,
+    }
+  }, [location.search])
   const navigationBlocker = useBlocker(editMode)
   const pendingNavigationRef = useRef<PendingNavigation | null>(null)
 
@@ -106,8 +126,24 @@ export function useWorkspaceNavigation({
       return
     }
     pendingNavigationRef.current = { dashboardEntry, pathname: route.path }
-    navigate(route.path, { replace: options.replace })
-  }, [editMode, location.pathname, navigate, onDashboardRoute])
+    navigate({ pathname: route.path, search: location.search }, { replace: options.replace })
+  }, [editMode, location.pathname, location.search, navigate, onDashboardRoute])
 
-  return { isWorkspaceIndex, matchedWorkspaceRoute, navigateWorkspace, workspacePage }
+  const updateWorkspaceContext = useCallback((next: WorkspaceContextQuery, options: { replace?: boolean } = {}) => {
+    const query = new URLSearchParams(location.search)
+    const values: Array<[string, string | undefined]> = [
+      ['project', next.projectId], ['request', next.requestId], ['loadCase', next.loadCaseId],
+      ['run', next.runId], ['view', next.view], ['page', next.pageId],
+    ]
+    for (const [key, value] of values) {
+      if (value) query.set(key, value)
+      else query.delete(key)
+    }
+    const search = query.toString()
+    if (search === location.search.slice(1)) return
+    const targetSearch = search ? `?${search}` : ''
+    navigate({ pathname: location.pathname, search: targetSearch }, { replace: options.replace ?? true })
+  }, [location.pathname, location.search, navigate])
+
+  return { isWorkspaceIndex, matchedWorkspaceRoute, navigateWorkspace, updateWorkspaceContext, workspaceContext, workspacePage }
 }

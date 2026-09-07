@@ -1,17 +1,19 @@
 # 개발 작업 절차
 
-- 기준일: 2026-08-25
+- 기준일: 2026-09-07
 - 상태: 현재 코드 기준
 
 이 문서는 기능을 추가하거나 구조를 변경할 때 따라야 하는 공통 절차다. 구조의 실제 책임은 [`current-architecture.md`](current-architecture.md), 우선순위는 [`program-consolidation-and-development-plan.md`](program-consolidation-and-development-plan.md)를 따른다.
 
 ## 1. 개발 원칙
 
+GUI 작업은 [`request-centric-workspace-ux.md`](request-centric-workspace-ux.md)의 현재 기준을 따른다. 초기 계획의 메뉴 개수·다중 의뢰 보드·문맥 없는 URL 전제를 새 구현의 제약으로 적용하지 않는다. 해당 문서가 대체하지 않는 API·권한·데이터 계약은 계속 유지한다.
+
 1. 새 기능은 가능한 한 독립된 frontend feature와 backend router/use case/repository 경계를 가진다.
 2. 기존에 검증된 오픈소스 패키지와 표준 라이브러리를 먼저 검토한다. 작은 요구를 위해 자체 framework를 만들지 않는다.
 3. API, DB, 권한, 파일 계약을 변경하면 코드·migration·OpenAPI·예제·테스트·문서를 같은 작업에서 갱신한다.
 4. 사용자 변경이 있는 작업 트리에서는 관련 없는 파일을 되돌리거나 정리하지 않는다.
-5. Sol은 범위·계약·검증을 지휘하고, 기능별 Luna/Terra 구현은 서로 겹치지 않는 파일 경계로 나눈다.
+5. Astra는 범위·계약·설계를 지휘하고, Sol은 검수하며, 기능별 Luna/Terra 구현은 서로 겹치지 않는 파일 경계로 나눈다.
 
 ## 2. 환경 준비와 실행
 
@@ -27,6 +29,21 @@
 - 종료: `./stop.sh`
 
 DuckDB가 기본 로컬 profile이다. PostgreSQL 개발은 별도 DB와 app/owner 역할을 준비한 뒤 [`backend-sql-integration-guide.md`](backend-sql-integration-guide.md)를 따른다.
+
+## native Windows compatibility profile
+
+소스 배치의 기본 진입점은 `deploy.bat`(설치)와 `start.bat`(실행)다. 사내 프록시·인증서와 재실행 계약은 [Windows 배치 안내](windows-one-click-deployment.md)를 따른다. 아래 PowerShell 명령은 개발자가 DB 프로필을 명시하는 고급 경로다.
+
+WSL에서 복사한 작업 트리에서는 먼저 `git status --short`로 dirty 파일과 `.env`·DB 경로를 확인한다. 기존 변경을 보존하면서 [`windows-development-setup.md`](windows-development-setup.md)의 런타임과 실행 절차를 따른다. `git reset`, `git checkout`, `git clean`, 무조건적인 `git stash`, `.env` 덮어쓰기와 DB 초기화를 개발환경 준비 단계에서 실행하지 않는다.
+
+```powershell
+.\setup.ps1
+.\start.ps1 -DatabaseBackend duckdb -DuckdbPath 'E:\simulation_workbench\backend\data\windows-development.duckdb'
+Invoke-RestMethod http://127.0.0.1:8000/api/health
+.\stop.ps1
+```
+
+native Windows는 기본적으로 DuckDB 로컬 검증에 사용한다. `setup.ps1`은 고정 `.tools` 런타임과 `.venv-runtime`을 준비하며 기본적으로 DB를 변경하지 않는다. 기존 PostgreSQL을 그대로 연결할 때는 `.env`를 보존하고 `start.ps1 -DatabaseBackend postgresql`을 사용한다. 다른 PC의 dump/assets를 옮길 때는 [`postgresql-pc-transfer-guide.md`](postgresql-pc-transfer-guide.md)의 명시적인 export/import 절차를 따른다. Windows에서는 현재 POSIX snapshot 계약 때문에 Master Result Refresh가 fail-closed하며, 이를 Rocky 운영 검증 결과로 간주하지 않는다.
 
 ## 3. 기능 변경 순서
 

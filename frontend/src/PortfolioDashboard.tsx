@@ -3,12 +3,14 @@ import { AlertTriangle, ArrowLeft, ArrowRight, BarChart3, CheckCircle2, Database
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Legend, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { api } from './api'
 import type { PortfolioLayout, PortfolioOverview } from './types'
+import { ResultOverviewDashboard } from './features/result-overview/ResultOverviewDashboard'
 
 const COLORS = ['#50d5ff', '#70e0a8', '#ffbf57', '#ff647d', '#8b9cff']
 const STATUS_LABEL: Record<string, string> = { READY: '대기', IN_PROGRESS: '진행 중', COMPLETED: '완료', BLOCKED: '차단', FAILED: '실패' }
 const CHART_LABELS: Record<string, string> = { trend: '의뢰·완료·실패 추이', status: '의뢰 상태 분포', quality: '해석 유형별 품질', type: '해석 유형 구성' }
 
-export function PortfolioDashboard({ refreshToken, editMode, layout, layoutVersion, onLayoutChange, onCancelEdit, onResetLayout, onOpen }: { refreshToken: number; editMode: boolean; layout: PortfolioLayout; layoutVersion: number; onLayoutChange: (layout: PortfolioLayout) => void; onCancelEdit: () => void; onResetLayout: () => void; onOpen: (projectId: string, requestId: string, loadCaseId: string) => void }) {
+export function PortfolioDashboard({ refreshToken, editMode, layout, layoutVersion, onLayoutChange, onCancelEdit, onResetLayout, onOpen, onOpenResult }: { refreshToken: number; editMode: boolean; layout: PortfolioLayout; layoutVersion: number; onLayoutChange: (layout: PortfolioLayout) => void; onCancelEdit: () => void; onResetLayout: () => void; onOpen: (projectId: string, requestId: string, loadCaseId: string) => void; onOpenResult?: (projectId: string, requestId: string, loadCaseId: string, runId: string) => void }) {
+  const [showOperations, setShowOperations] = useState(false)
   const [data, setData] = useState<PortfolioOverview | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
@@ -17,11 +19,12 @@ export function PortfolioDashboard({ refreshToken, editMode, layout, layoutVersi
   const params = useMemo(() => { const value = new URLSearchParams(); Object.entries(filters).forEach(([key, entry]) => entry && value.set(key, entry)); return value }, [filters])
 
   useEffect(() => {
+    let active = true
     const timer = window.setTimeout(() => {
       setLoading(true); setError('')
-      api.portfolio(params).then(setData).catch((reason) => setError(reason instanceof Error ? reason.message : '운영 현황을 불러오지 못했습니다.')).finally(() => setLoading(false))
+      api.portfolio(params).then((next) => { if (active) setData(next) }).catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : '운영 현황을 불러오지 못했습니다.') }).finally(() => { if (active) setLoading(false) })
     }, 220)
-    return () => window.clearTimeout(timer)
+    return () => { active = false; window.clearTimeout(timer) }
   }, [params.toString(), refreshToken])
 
   const set = (key: keyof typeof filters, value: string) => setFilters((current) => ({ ...current, [key]: value }))
@@ -46,16 +49,19 @@ export function PortfolioDashboard({ refreshToken, editMode, layout, layoutVersi
   if (!data && loading) return <div className="portfolio-state"><LoaderCircle className="spin" /> 운영 데이터를 집계하고 있습니다.</div>
   if (!data || error) return <div className="portfolio-state error"><AlertTriangle /> {error || '운영 현황을 표시할 수 없습니다.'}<button onClick={reset}>필터 초기화</button></div>
 
+  if (!showOperations && !editMode) return <div className="portfolio-page result-overview-shell" style={{ padding: 0 }}><ResultOverviewDashboard data={data} loading={loading} projectId={filters.project_id} search={filters.search} onProjectChange={(value) => { setLoading(true); set('project_id', value) }} onSearchChange={(value) => { setLoading(true); set('search', value) }} onOpenResult={(record) => { if (record.run_id && onOpenResult) onOpenResult(record.project_id, record.request_id, record.load_case_id, record.run_id); else onOpen(record.project_id, record.request_id, record.load_case_id) }} onOpenRequest={(record) => onOpen(record.project_id, record.request_id, record.load_case_id)} onShowOperations={() => setShowOperations(true)} /></div>
+
   const renderedFontSize = Math.max(8, layout.fontSize) * 1.2
   const chartFontSize = renderedFontSize
   const chartCards: Record<string, ReactNode> = {
-    trend: <ChartCard title="의뢰·완료·실패 추이" subtitle="의뢰 접수일 기준"><ResponsiveContainer width="100%" height="100%"><AreaChart data={data.trend}><CartesianGrid stroke="#20394d" vertical={false} /><XAxis dataKey="date" tick={{ fill:'#6f899b', fontSize:chartFontSize }} /><YAxis allowDecimals={false} tick={{ fill:'#6f899b', fontSize:chartFontSize }} /><Tooltip /><Legend /><Area dataKey="requests" name="하중 경우" stroke="#50d5ff" fill="#50d5ff22" /><Area dataKey="completed" name="결과 보유" stroke="#70e0a8" fill="#70e0a822" /><Area dataKey="failed" name="FAIL" stroke="#ff647d" fill="#ff647d22" /></AreaChart></ResponsiveContainer></ChartCard>,
+    trend: <ChartCard title="의뢰·완료·실패 추이" subtitle="의뢰 접수일 기준"><ResponsiveContainer width="100%" height="100%"><AreaChart data={data.trend}><CartesianGrid stroke="var(--color-chart-grid)" vertical={false} /><XAxis dataKey="date" tick={{ fill:'var(--color-chart-axis)', fontSize:chartFontSize }} /><YAxis allowDecimals={false} tick={{ fill:'var(--color-chart-axis)', fontSize:chartFontSize }} /><Tooltip /><Legend /><Area dataKey="requests" name="하중 경우" stroke="#50d5ff" fill="#50d5ff22" /><Area dataKey="completed" name="결과 보유" stroke="#70e0a8" fill="#70e0a822" /><Area dataKey="failed" name="FAIL" stroke="#ff647d" fill="#ff647d22" /></AreaChart></ResponsiveContainer></ChartCard>,
     status: <ChartCard title="의뢰 상태 분포" subtitle="현재 상태"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={data.status_distribution} dataKey="value" nameKey="name" innerRadius="52%" outerRadius="76%" paddingAngle={3}>{data.status_distribution.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}</Pie><Tooltip formatter={(v, n) => [v, STATUS_LABEL[String(n)] ?? n]} /><Legend formatter={(v) => STATUS_LABEL[String(v)] ?? v} /></PieChart></ResponsiveContainer></ChartCard>,
-    quality: <ChartCard title="해석 유형별 품질" subtitle="최신 실행 판정"><ResponsiveContainer width="100%" height="100%"><BarChart data={data.quality_by_type}><CartesianGrid stroke="#20394d" vertical={false} /><XAxis dataKey="type" tick={{ fill:'#7892a4', fontSize:chartFontSize }} /><YAxis allowDecimals={false} tick={{ fontSize:chartFontSize }} /><Tooltip /><Legend /><Bar dataKey="pass" name="PASS" stackId="a" fill="#70e0a8" /><Bar dataKey="fail" name="FAIL" stackId="a" fill="#ff647d" /><Bar dataKey="no_data" name="NO DATA" stackId="a" fill="#526c7e" /></BarChart></ResponsiveContainer></ChartCard>,
-    type: <ChartCard title="해석 유형 구성" subtitle="필터 적용 결과"><ResponsiveContainer width="100%" height="100%"><BarChart data={data.type_distribution} layout="vertical"><CartesianGrid stroke="#20394d" horizontal={false} /><XAxis type="number" allowDecimals={false} tick={{ fontSize:chartFontSize }} /><YAxis dataKey="name" type="category" width={90} tick={{ fill:'#7892a4', fontSize:chartFontSize }} /><Tooltip /><Bar dataKey="value" name="하중 경우" fill="#50d5ff" radius={[0,5,5,0]} /></BarChart></ResponsiveContainer></ChartCard>,
+    quality: <ChartCard title="해석 유형별 품질" subtitle="최신 실행 판정"><ResponsiveContainer width="100%" height="100%"><BarChart data={data.quality_by_type}><CartesianGrid stroke="var(--color-chart-grid)" vertical={false} /><XAxis dataKey="type" tick={{ fill:'var(--color-chart-axis)', fontSize:chartFontSize }} /><YAxis allowDecimals={false} tick={{ fontSize:chartFontSize }} /><Tooltip /><Legend /><Bar dataKey="pass" name="PASS" stackId="a" fill="#70e0a8" /><Bar dataKey="fail" name="FAIL" stackId="a" fill="#ff647d" /><Bar dataKey="no_data" name="NO DATA" stackId="a" fill="var(--color-text-muted)" /></BarChart></ResponsiveContainer></ChartCard>,
+    type: <ChartCard title="해석 유형 구성" subtitle="필터 적용 결과"><ResponsiveContainer width="100%" height="100%"><BarChart data={data.type_distribution} layout="vertical"><CartesianGrid stroke="var(--color-chart-grid)" horizontal={false} /><XAxis type="number" allowDecimals={false} tick={{ fontSize:chartFontSize }} /><YAxis dataKey="name" type="category" width={90} tick={{ fill:'var(--color-chart-axis)', fontSize:chartFontSize }} /><Tooltip /><Bar dataKey="value" name="하중 경우" fill="#50d5ff" radius={[0,5,5,0]} /></BarChart></ResponsiveContainer></ChartCard>,
   }
 
   return <div className="portfolio-page" data-custom-font="true" style={{ '--portfolio-font-size': `${renderedFontSize}px` } as CSSProperties}>
+    <button className="result-overview-return" disabled={editMode} onClick={() => { setShowOperations(false); setFilters((current) => ({ ...current, date_from: '', date_to: '', analysis_type: '', status: '' })) }}><ArrowLeft /> 결과 대시보드</button>
     <header className="portfolio-head"><div><span>ANALYSIS OPERATIONS</span><h1>해석 운영 현황</h1><p>프로젝트부터 최신 해석 판정까지 한 화면에서 추적합니다.</p></div><div><small>데이터 기준</small><strong>{data.grain.replaceAll('_', ' ')}</strong><span>최근 결과 {data.freshness ? new Date(data.freshness).toLocaleString('ko-KR') : '없음'}</span></div></header>
     {editMode && <section className="portfolio-edit-toolbar" data-testid="portfolio-layout-editor">
       <GripVertical />

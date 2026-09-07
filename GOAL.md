@@ -1,5 +1,7 @@
 # 해석 데이터베이스 기반 사용자 구성형 시각화 대시보드 MVP
 
+> GUI 부분 대체(2026-09-07): 기본 조회의 다중 의뢰 가로 보드와 빌더 중심 배치는 [의뢰 중심 작업공간 GUI](docs/request-centric-workspace-ux.md)를 따른다. 위젯·편집·저장·보고서와 해석 데이터 요구사항은 유지한다.
+
 > 상태: 초기 MVP 목표 기록. 현재 구현 구조·DB 운영·개발 우선순위의 기준은 `docs/current-architecture.md`, `docs/storage-folder-and-file-contract.md`, `docs/program-consolidation-and-development-plan.md`를 따른다. 이 문서의 “향후 PostgreSQL”과 파일 기반 미디어 전제는 이후 구현으로 대체되었다.
 
 ## 목표
