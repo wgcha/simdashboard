@@ -5,6 +5,11 @@
 대상 구조는 `nginx → loopback FastAPI → PostgreSQL 18`이며 Docker와 운영
 Node.js 서버를 사용하지 않는다.
 
+사내 서버의 외부 다운로드가 제한되면 [Rocky 8.6 오프라인 설치 패키지](OFFLINE-README.ko.md)를
+사용한다. Python 실행 파일, wheel, nginx 등 OS RPM까지 포함하므로 uv나 개별
+파일을 사내 서버에서 내려받을 필요가 없다. 대상은 Rocky **8.6 x86_64**이며 기존
+DB·TLS·결과 폴더 설정을 사용한다. 아래 소스 빌드 방식은 다운로드가 허용된 환경용이다.
+
 ## PostgreSQL만 설치되어 있으면 되는가?
 
 아니다. 대상 서버는 최소한 다음 조건을 충족해야 한다.

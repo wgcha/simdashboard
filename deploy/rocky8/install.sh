@@ -405,7 +405,7 @@ pip_environment=(PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_INPUT=1)
 [[ -z "${PIP_CERT:-}" ]] || pip_environment+=(PIP_CERT="${PIP_CERT}")
 if [[ -d "${script_root}/wheelhouse" ]]; then
   log 'Installing Python dependencies from the offline wheelhouse'
-  env "${pip_environment[@]}" PIP_NO_INDEX=1 \
+  env "${pip_environment[@]}" PIP_CONFIG_FILE=/dev/null PIP_FIND_LINKS= PIP_NO_INDEX=1 \
     "${release_root}/.venv/bin/python" -m pip install \
     --find-links "${script_root}/wheelhouse" --requirement "${release_root}/backend/requirements.lock"
 else
