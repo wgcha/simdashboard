@@ -415,7 +415,11 @@ else
 fi
 
 find "${release_root}" -type d -exec chmod a+rx,go-w {} +
-find "${release_root}" -type f -exec chmod go-w {} +
+# Both pip (umask 027) and a root operator's archive extraction (possibly 077)
+# can leave root-owned modules unreadable to the non-root service account.
+# Releases contain code/assets only; secrets remain in the private env file.
+find "${release_root}" -type f -exec chmod a+r,go-w {} +
+find "${release_root}" -type f -perm /111 -exec chmod a+rx,go-w {} +
 chown -R root:root "${release_root}"
 
 runtime_environment=(
