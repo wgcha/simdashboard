@@ -266,3 +266,33 @@ def test_builder_signature_check_fails_closed_when_rpmkeys_fails(tmp_path: Path)
     )
     assert result.returncode != 0
     assert "RPM signature verification failed" in result.stderr
+
+
+def test_release_permission_normalization_preserves_executable_semantics(tmp_path: Path) -> None:
+    source = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    assert 'find "${release_root}" -type f -exec chmod a+r,go-w {} +' in source
+    assert 'find "${release_root}" -type f -perm /111 -exec chmod a+rx,go-w {} +' in source
+    block = (
+        'find "${release_root}" -type d -exec chmod a+rx,go-w {} +\n'
+        'find "${release_root}" -type f -exec chmod a+r,go-w {} +\n'
+        'find "${release_root}" -type f -perm /111 -exec chmod a+rx,go-w {} +\n'
+    )
+    release_root = tmp_path / "release"
+    release_root.mkdir(mode=0o700)
+    regular = release_root / "regular"
+    executable = release_root / "executable"
+    no_exec = release_root / "no-exec"
+    regular.write_text("regular\n", encoding="utf-8")
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    no_exec.write_text("not executable\n", encoding="utf-8")
+    regular.chmod(0o600)
+    executable.chmod(0o700)
+    no_exec.chmod(0o600)
+    harness = tmp_path / "normalize.sh"
+    harness.write_text("#!/usr/bin/env bash\nset -Eeuo pipefail\numask 077\nrelease_root=$1\n" + block, encoding="utf-8")
+    harness.chmod(0o700)
+    subprocess.run([str(harness), str(release_root)], check=True)
+    assert (regular.stat().st_mode & 0o777) == 0o644
+    assert (executable.stat().st_mode & 0o777) == 0o755
+    assert (no_exec.stat().st_mode & 0o777) == 0o644
+    assert (release_root.stat().st_mode & 0o777) == 0o755

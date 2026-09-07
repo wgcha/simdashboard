@@ -8,7 +8,8 @@ Node.js, uv, 외부 인터넷 다운로드가 필요하지 않습니다.
 ## 사내 설치
 
 Windows에서 받은 설치 압축 파일과 `.sha256` 파일을 승인된 경로로 서버에 복사합니다.
-기존에 작성한 `install.local.env`를 계속 사용할 수 있습니다. 설정 파일은 압축을
+기존에 작성한 `install.local.env` 또는 `install.env`를 계속 사용할 수 있습니다.
+아래 명령의 설정 경로는 실제 사용 중인 파일의 절대 경로로 바꿉니다. 설정 파일은 압축을
 푼 설치 폴더 밖에 두고 root 소유, 권한 600으로 유지합니다.
 
 ```bash
@@ -44,8 +45,13 @@ RPM은 Rocky 8.6 공식 보관 저장소 기준이며 서버의 사내 보안 �
 
 ## 패키지 제작과 검증
 
-GitHub Actions의 `Rocky 8.6 offline installation package` 작업에서 생성합니다.
+GitHub Actions의 `Rocky 8.6 offline installation package` 작업으로 생성할 수 있습니다.
 고정된 Rocky 8.6 컨테이너에서 Python과 wheel을 검증하고, 공식 서명이 있는
 OS RPM 의존성을 모두 모읍니다. 새 컨테이너의 **네트워크를 끈 상태**에서 RPM
 설치와 Python/wheel/앱 설정 사전 검사를 통과한 파일만 artifact로 제공합니다.
 실제 사내 DB·TLS·systemd·마운트와 함께 실행한 검증은 별도로 필요합니다.
+
+Docker가 없는 제작 PC에서는 동일한 공식 Rocky 8.6 이미지의 rootfs를 격리 실행해
+`ci-build-offline.sh`를 사용할 수도 있습니다. 검증에는 반드시 별도의 새 rootfs와
+네트워크가 차단된 namespace를 사용합니다. 호스트 OS 패키지는 수정하지 않습니다.
+이 방식은 systemd 서비스가 실제로 시작되었다는 검증을 대신하지 않습니다.
