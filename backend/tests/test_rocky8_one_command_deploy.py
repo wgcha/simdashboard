@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import os
+import re
 import stat
 import subprocess
 
@@ -26,10 +27,11 @@ def test_one_command_deployer_requires_an_ignored_private_config() -> None:
     assert "git -C \"${project_root}\" check-ignore -q" in deployer
     assert "Config file must not be a symbolic link." in deployer
     assert "Config file must not be accessible by group or others" in deployer
-    assert 'sudo install -o root -g root -m 0600 "${config_file}" "${root_config}"' in deployer
-    assert "sudo \"${bundle_root}/install.sh\" --config \"${root_config}\" --check" in deployer
-    assert "sudo systemctl is-active --quiet nginx.service" in deployer
-    assert "sudo /usr/local/sbin/simdashboard-healthcheck" in deployer
+    assert "run_privileged()" in deployer
+    assert 'run_privileged install -o root -g root -m 0600 "${config_file}" "${root_config}"' in deployer
+    assert 'run_privileged "${bundle_root}/install.sh" --config "${root_config}" --check' in deployer
+    assert 'run_privileged systemctl is-active --quiet nginx.service' in deployer
+    assert 'run_privileged /usr/local/sbin/simdashboard-healthcheck' in deployer
     assert "--no-runtime-bootstrap" in deployer
     assert "SIMDASH_NODE_RUNTIME_CACHE" in deployer
     assert "b294a556e639d64338823920e5866c21c02741742d2e1529ee1a225c1ec9252a" in deployer
@@ -42,11 +44,89 @@ def test_one_command_deployer_requires_an_ignored_private_config() -> None:
     assert 'PYTHON_BIN="${python_runtime_bin}" "${script_root}/build-release.sh"' in deployer
     assert "PYTHON_BIN, when configured, must equal" in deployer
     assert "sudo -v" in deployer
+    assert "--allow-root" in deployer
     assert "--preserve-env=HTTP_PROXY,HTTPS_PROXY,NO_PROXY,http_proxy,https_proxy,no_proxy,CURL_CA_BUNDLE,SSL_CERT_FILE" in deployer
 
     builder = (root / "deploy" / "rocky8" / "build-release.sh").read_text(encoding="utf-8")
     assert 'python_bin="${PYTHON_BIN:-python3.12}"' in builder
     assert '"${python_bin}" -m pip download' in builder
+
+
+def test_run_privileged_uses_sudo_only_for_non_root(tmp_path: Path) -> None:
+    """Exercise the privilege boundary without executing any real privileged command."""
+    source = (Path(__file__).resolve().parents[2] / "deploy" / "rocky8" / "deploy-from-source.sh").read_text()
+    match = re.search(r"run_privileged\(\) \{.*?^\}", source, re.MULTILINE | re.DOTALL)
+    assert match, "run_privileged helper must remain a standalone function"
+    helper = match.group(0).replace('"${EUID}"', '"${TEST_EUID:-${EUID}}"')
+    sudo = tmp_path / "sudo.trace"
+    mock_sudo = tmp_path / "sudo"
+    _write_executable(mock_sudo, '#!/usr/bin/env bash\nprintf \'%s\\n\' "$*" >> "$MOCK_SUDO_TRACE"\n')
+    harness = tmp_path / "harness.sh"
+    harness.write_text(
+        "#!/usr/bin/env bash\nset -Eeuo pipefail\n" + helper + "\nrun_privileged printf root-or-user\n",
+        encoding="utf-8",
+    )
+    harness.chmod(0o700)
+    env = os.environ | {"PATH": f"{tmp_path}:{os.environ['PATH']}", "MOCK_SUDO_TRACE": str(sudo), "TEST_EUID": "0"}
+    root_result = subprocess.run(["bash", str(harness), "root-call"], env=env, check=True, capture_output=True, text=True)
+    assert root_result.stdout == "root-or-user"
+    assert not sudo.exists()
+
+    sudo.unlink(missing_ok=True)
+    subprocess.run(["bash", str(harness), "user-call"], env=env | {"TEST_EUID": "1000"}, check=True, capture_output=True, text=True)
+    assert "printf root-or-user" in sudo.read_text(encoding="utf-8")
+
+
+def test_root_requires_explicit_opt_in_and_opt_in_cannot_bypass_config_gate(tmp_path: Path) -> None:
+    source_root = Path(__file__).resolve().parents[2]
+    project = tmp_path / "repo"
+    rocky = project / "deploy" / "rocky8"
+    rocky.mkdir(parents=True)
+    deployer = rocky / "deploy-from-source.sh"
+    source = (source_root / "deploy" / "rocky8" / "deploy-from-source.sh").read_text(encoding="utf-8")
+    # EUID is readonly in bash; this narrowly substitutes it in the copied test fixture.
+    deployer.write_text(source.replace('"${EUID}"', '"${TEST_EUID:-${EUID}}"'), encoding="utf-8")
+    deployer.chmod(0o700)
+    (project / ".gitignore").write_text("*.local.env\n", encoding="utf-8")
+    config = project / "simdashboard.local.env"
+    config.write_text("DATABASE_URL='postgresql://secret@example.invalid/db'\n", encoding="utf-8")
+    config.chmod(0o600)
+    subprocess.run(["git", "init", "-q"], cwd=project, check=True)
+    subprocess.run(["git", "add", "-f", str(config)], cwd=project, check=True)
+    trace = tmp_path / "sudo.trace"
+    mock_bin = tmp_path / "bin"
+    mock_bin.mkdir()
+    _write_executable(mock_bin / "sudo", '#!/usr/bin/env bash\nprintf call >> "$MOCK_SUDO_TRACE"\n')
+    env = os.environ | {"PATH": f"{mock_bin}:{os.environ['PATH']}", "TEST_EUID": "0", "MOCK_SUDO_TRACE": str(trace)}
+
+    rejected = subprocess.run([str(deployer), "--config", str(config)], cwd=project, env=env, check=False, capture_output=True, text=True)
+    assert rejected.returncode != 0
+    assert "pass --allow-root" in rejected.stderr
+    assert not trace.exists()
+
+    opted_in = subprocess.run([str(deployer), "--config", str(config), "--allow-root"], cwd=project, env=env, check=False, capture_output=True, text=True)
+    assert opted_in.returncode != 0
+    assert "Config file is tracked by Git" in opted_in.stderr
+    assert not trace.exists()
+
+    # Root opt-in also must not waive the dirty-worktree gate.  Remove the
+    # config from the index in this disposable repository, then dirty a
+    # tracked file so validation reaches the worktree check.
+    subprocess.run(["git", "rm", "--cached", "-q", str(config)], cwd=project, check=True)
+    marker = project / "tracked.txt"
+    marker.write_text("clean\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=project, check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "fixture"],
+        cwd=project,
+        check=True,
+    )
+    marker.write_text("dirty\n", encoding="utf-8")
+    _write_executable(mock_bin / "stat", "#!/usr/bin/env bash\ncase \"$2\" in %u) printf '0\\n' ;; %a) printf '600\\n' ;; *) /usr/bin/stat \"$@\" ;; esac\n")
+    dirty = subprocess.run([str(deployer), "--config", str(config), "--allow-root"], cwd=project, env=env, check=False, capture_output=True, text=True)
+    assert dirty.returncode != 0
+    assert "Refusing to deploy from a dirty Git worktree" in dirty.stderr
+    assert not trace.exists()
 
 
 def test_one_command_deployer_runs_verified_bundle_flow_with_mocked_privilege_boundary(tmp_path: Path) -> None:

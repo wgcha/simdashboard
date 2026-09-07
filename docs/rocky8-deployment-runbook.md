@@ -28,6 +28,14 @@
 ./deploy/rocky8/deploy-from-source.sh --config deploy/rocky8/install.local.env
 ```
 
+root 계정만 사용할 수 있는 서버는 동일 명령에 `--allow-root`를 추가한다. 이때는
+sudo 없이 빌드와 설치를 실행하며, `/root` 아래의 저장소도 사용할 수 있다.
+빌드 의존성의 설치 스크립트도 root 권한으로 실행된다. 설정 소유권·접근 권한,
+clean Git, checksum 검사는 유지된다. 서비스는 기본적으로 비로그인 시스템 계정
+`simdashboard`로 실행되며, 설치기가 필요 시 생성한다. 시스템 계정도 생성할 수
+없으면 기존 비root 서비스 계정과 기본 그룹을 `SERVICE_USER`/`SERVICE_GROUP`으로
+지정한다.
+
 단일 명령은 clean Git 확인 → 고정 Node/Python runtime 준비 → wheel 포함 release
 빌드 → checksum 검증 → installer `--check` → 설치·migration → systemd/nginx와
 health 확인을 순서대로 강제한다. Rocky 8.6 AppStream에 Python 3.12가 없어도

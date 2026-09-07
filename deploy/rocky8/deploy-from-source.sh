@@ -2,28 +2,32 @@
 set -Eeuo pipefail
 umask 077
 
-# Build a release as the invoking (non-root) user, then perform the privileged
-# installation from the verified extracted bundle.  The configuration is copied
-# into /root so install.sh can enforce its root ownership and 0600 mode.
+# Build a release as the invoking user, then perform the privileged installation
+# from the verified extracted bundle. Normal-user execution uses sudo; root
+# execution requires explicit --allow-root. The configuration is copied into
+# /root so install.sh can enforce its root ownership and 0600 mode.
 script_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 project_root="$(cd "${script_root}/../.." && pwd -P)"
 config_file=""
 with_wheels=1
 allow_dirty=0
+allow_root=0
 runtime_bootstrap=1
 
 usage() {
   cat <<'EOF'
 Usage: deploy/rocky8/deploy-from-source.sh --config FILE [options]
 
-Builds and installs a Rocky Linux 8 release from this repository. Run it from
-the repository root as a normal user; sudo is requested only for installation.
+Builds and installs a Rocky Linux 8 release from this repository. By default,
+run it from the repository root as a normal user; use --allow-root only when
+running the entire build and installation as root is intentional.
 
 Options:
   --config FILE       Trusted install configuration (required)
   --with-wheels       Build an offline Python wheelhouse with the release (default)
   --without-wheels    Do not include the offline Python wheelhouse
   --allow-dirty       Allow building from an uncommitted Git worktree
+  --allow-root        Allow running the build and installation as root
   --no-runtime-bootstrap
                       Do not download a pinned Node.js runtime when unavailable
   -h, --help          Show this help
@@ -49,6 +53,7 @@ while [[ $# -gt 0 ]]; do
     --with-wheels) with_wheels=1; shift ;;
     --without-wheels) with_wheels=0; shift ;;
     --allow-dirty) allow_dirty=1; shift ;;
+    --allow-root) allow_root=1; shift ;;
     --no-runtime-bootstrap) runtime_bootstrap=0; shift ;;
     -h|--help) usage; exit 0 ;;
     *) printf 'Unknown option: %s\n' "$1" >&2; usage >&2; exit 2 ;;
@@ -57,8 +62,14 @@ done
 
 [[ -n "${config_file}" ]] || die '--config is required.'
 [[ "$(pwd -P)" == "${project_root}" ]] || die "Run this command from the repository root: ${project_root}"
-[[ "${EUID}" -ne 0 ]] || die 'Run the build as a normal user; sudo is used automatically for installation.'
-command -v sudo >/dev/null 2>&1 || die 'sudo is required for installation.'
+if [[ "${EUID}" -eq 0 ]]; then
+  [[ "${allow_root}" == 1 ]] || die 'Refusing to run as root; pass --allow-root only when this is intentional.'
+else
+  command -v sudo >/dev/null 2>&1 || die 'sudo is required for installation.'
+fi
+if [[ "${EUID}" -eq 0 ]]; then
+  printf '%s\n' '[WARNING] --allow-root enabled: build and dependency hooks run as root.' >&2
+fi
 command -v sha256sum >/dev/null 2>&1 || die 'sha256sum is required.'
 command -v tar >/dev/null 2>&1 || die 'tar is required.'
 command -v git >/dev/null 2>&1 || die 'git is required.'
@@ -93,7 +104,17 @@ fi
 # Authenticate only after source integrity gates have passed. Keep proxy/CA
 # values out of arguments and logs; only their names are preserved later for
 # the root-owned Python runtime helper.
-sudo -v
+run_privileged() {
+  if [[ "${EUID}" -eq 0 ]]; then
+    "$@"
+  else
+    sudo "$@"
+  fi
+}
+
+if [[ "${EUID}" -ne 0 ]]; then
+  sudo -v
+fi
 
 ensure_pinned_node_runtime() {
   local expected_node='v22.23.2'
@@ -196,12 +217,16 @@ ensure_pinned_node_runtime() {
 ensure_pinned_node_runtime
 
 # Rocky 8.6 may not provide Python 3.12 from the configured AppStream mirror.
-# This privileged helper installs only the pinned runtime; the application
-# build itself remains under the invoking normal user.
+# This privileged helper installs only the pinned runtime; in root mode the
+# application build also runs as root.
 python_runtime_bin='/opt/simdashboard/runtime/python/bin/python3.12'
-sudo --preserve-env=HTTP_PROXY,HTTPS_PROXY,NO_PROXY,http_proxy,https_proxy,no_proxy,CURL_CA_BUNDLE,SSL_CERT_FILE \
+if [[ "${EUID}" -eq 0 ]]; then
   "${script_root}/bootstrap-python-runtime.sh"
-sudo test -x "${python_runtime_bin}" || \
+else
+  sudo --preserve-env=HTTP_PROXY,HTTPS_PROXY,NO_PROXY,http_proxy,https_proxy,no_proxy,CURL_CA_BUNDLE,SSL_CERT_FILE \
+    "${script_root}/bootstrap-python-runtime.sh"
+fi
+run_privileged test -x "${python_runtime_bin}" || \
   die "Pinned Python runtime was not created: ${python_runtime_bin}"
 
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/simdashboard-deploy.XXXXXX")"
@@ -238,32 +263,33 @@ printf '%s\n' 'Verifying extracted release contents.'
 (cd "${bundle_root}" && sha256sum --check --strict --quiet SHA256SUMS) || \
   die 'Extracted release checksum verification failed.'
 
-# The config copy begins only after all build and checksum work succeeds. sudo
-# was authenticated after the clean-worktree gate, before runtime bootstrap;
+# The config copy begins only after all build and checksum work succeeds. In
+# root mode these commands run directly; otherwise sudo is used. sudo was
+# authenticated after the clean-worktree gate, before runtime bootstrap;
 # no secret is placed in an argument, environment variable, or generated log.
 root_config='/root/simdashboard-install.env'
-sudo test ! -L "${root_config}" || die 'Root installation configuration must not be a symbolic link.'
-sudo install -o root -g root -m 0600 "${config_file}" "${root_config}"
+run_privileged test ! -L "${root_config}" || die 'Root installation configuration must not be a symbolic link.'
+run_privileged install -o root -g root -m 0600 "${config_file}" "${root_config}"
 if grep -Eq '^[[:space:]]*(export[[:space:]]+)?PYTHON_BIN[[:space:]]*=' "${config_file}"; then
   # The installer treats its config as a trusted root-owned shell file. Honor
   # an explicit path only when it is the pinned helper runtime used to build
   # this bundle, so wheel creation and installation cannot drift apart.
-  sudo env CONFIG_FILE="${root_config}" EXPECTED_PYTHON_BIN="${python_runtime_bin}" \
+  run_privileged env CONFIG_FILE="${root_config}" EXPECTED_PYTHON_BIN="${python_runtime_bin}" \
     bash -c 'source "${CONFIG_FILE}"; [[ "${PYTHON_BIN:-}" == "${EXPECTED_PYTHON_BIN}" ]]' >/dev/null || \
     die "PYTHON_BIN, when configured, must equal ${python_runtime_bin}."
 else
-  printf 'PYTHON_BIN=%q\n' "${python_runtime_bin}" | sudo tee -a "${root_config}" >/dev/null
+  printf 'PYTHON_BIN=%q\n' "${python_runtime_bin}" | run_privileged tee -a "${root_config}" >/dev/null
 fi
-sudo test "$(sudo stat -c '%u:%g:%a' "${root_config}")" = '0:0:600' || \
+run_privileged test "$(run_privileged stat -c '%u:%g:%a' "${root_config}")" = '0:0:600' || \
   die 'Root installation configuration has unexpected ownership or mode.'
 
 printf '%s\n' 'Running installer preflight.'
-sudo "${bundle_root}/install.sh" --config "${root_config}" --check
+run_privileged "${bundle_root}/install.sh" --config "${root_config}" --check
 printf '%s\n' 'Installing and starting services.'
-sudo "${bundle_root}/install.sh" --config "${root_config}"
+run_privileged "${bundle_root}/install.sh" --config "${root_config}"
 
-sudo systemctl is-active --quiet nginx.service || die 'nginx.service is not active.'
-sudo systemctl is-active --quiet simdashboard.service || die 'simdashboard.service is not active.'
-sudo /usr/local/sbin/simdashboard-healthcheck >/dev/null || die 'Application health check failed.'
-sudo nginx -t >/dev/null || die 'nginx configuration test failed.'
+run_privileged systemctl is-active --quiet nginx.service || die 'nginx.service is not active.'
+run_privileged systemctl is-active --quiet simdashboard.service || die 'simdashboard.service is not active.'
+run_privileged /usr/local/sbin/simdashboard-healthcheck >/dev/null || die 'Application health check failed.'
+run_privileged nginx -t >/dev/null || die 'nginx configuration test failed.'
 printf '%s\n' 'Rocky deployment completed; nginx and simdashboard are healthy.'
