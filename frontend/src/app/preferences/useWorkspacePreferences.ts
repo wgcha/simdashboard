@@ -6,12 +6,7 @@ import { loadWorkspacePreferences, saveWorkspacePreference, type WorkspaceTheme 
 export function useWorkspacePreferences() {
   const [preferences] = useState(loadWorkspacePreferences)
   const [theme, setTheme] = useState<WorkspaceTheme>(preferences.theme)
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(preferences.sidebarCollapsed)
   const [uiFontSize, setUiFontSize] = useState(preferences.uiFontSize)
-
-  useEffect(() => {
-    saveWorkspacePreference('sidebarCollapsed', sidebarCollapsed)
-  }, [sidebarCollapsed])
 
   useEffect(() => {
     saveWorkspacePreference('uiFontSize', uiFontSize)
@@ -23,5 +18,5 @@ export function useWorkspacePreferences() {
     document.documentElement.style.colorScheme = theme
   }, [theme])
 
-  return { setSidebarCollapsed, setTheme, setUiFontSize, sidebarCollapsed, theme, uiFontSize }
+  return { setTheme, setUiFontSize, theme, uiFontSize }
 }

@@ -87,7 +87,6 @@ function groupForMenu(id: string): MenuGroupId | undefined {
 
 type AppSidebarProps = {
   activePage: string
-  collapsed: boolean
   databaseBackend: 'duckdb' | 'postgresql'
   fontSize: number
   menus: readonly AppSidebarMenu[]
@@ -99,13 +98,11 @@ type AppSidebarProps = {
   onLogout: () => void
   onNavigate: (id: AppSidebarMenuId) => void
   onPreloadPage: (id: AppSidebarMenuId) => void
-  onToggleCollapsed: () => void
   workspacePathForMenu: (id: AppSidebarMenuId) => string
 }
 
 export function AppSidebar({
   activePage,
-  collapsed,
   databaseBackend,
   fontSize,
   menus,
@@ -117,7 +114,6 @@ export function AppSidebar({
   onLogout,
   onNavigate,
   onPreloadPage,
-  onToggleCollapsed,
   workspacePathForMenu,
 }: AppSidebarProps) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
@@ -148,6 +144,7 @@ export function AppSidebar({
     const navigate = (event: MouseEvent<HTMLAnchorElement>) => {
       if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
       event.preventDefault()
+      setMobileMenuOpen(false)
       onNavigate(menu.id)
     }
     return <a key={menu.id} aria-label={label} aria-current={activePage === menu.id ? 'page' : undefined} title={label} className={'nav-link ' + extraClass + (activePage === menu.id ? ' active' : '')} href={workspacePathForMenu(menu.id)} onClick={navigate} onMouseEnter={() => onPreloadPage(menu.id)} onFocus={() => onPreloadPage(menu.id)}><Icon /><span>{label}</span></a>
@@ -156,11 +153,14 @@ export function AppSidebar({
   return <aside className={`sidebar ${mobileMenuOpen ? 'mobile-menu-open' : ''}`} aria-label="주 메뉴">
     <div className="brand" title="VD simulation workbench"><span className="brand-mark"><Activity /></span><span>VD <strong>workbench</strong></span><button type="button" className="mobile-menu-trigger" aria-label={mobileMenuOpen ? '메뉴 닫기' : '메뉴 열기'} aria-expanded={mobileMenuOpen} onClick={() => setMobileMenuOpen((value) => !value)}>{mobileMenuOpen ? <PanelLeftClose /> : <PanelLeftOpen />}<span>{mobileMenuOpen ? '메뉴 닫기' : '메뉴 열기'}</span></button></div>
     <nav className="nav-main">
-      {visibleGroups.map((group) => <div key={group.id}><details className={`nav-group nav-group--${group.id}`} role="group" aria-label={group.label} open={openGroups.has(group.id)} onToggle={(event) => {
-        const next = new Set(openGroups)
-        if (event.currentTarget.open) next.add(group.id)
-        else next.delete(group.id)
-        setOpenGroups(next)
+      {visibleGroups.map((group) => group.id === 'overview' ? <div key={group.id} className="nav-primary" aria-label="주요 업무">{group.menus.map((menu) => renderMenuLink(menu))}</div> : <div key={group.id}><details className={`nav-group nav-group--${group.id}`} role="group" aria-label={group.label} open={openGroups.has(group.id)} onToggle={(event) => {
+        const isOpen = event.currentTarget.open
+        setOpenGroups((current) => {
+          const next = new Set(current)
+          if (isOpen) next.add(group.id)
+          else next.delete(group.id)
+          return next
+        })
       }}>
         <summary className="nav-group-label" aria-label={`${group.label} 메뉴`}><span className="nav-group-icon" aria-hidden="true">{group.id === 'workflow' ? <FlaskConical /> : group.id === 'administration' ? <Settings2 /> : group.id === 'support' ? <BookOpen /> : <LayoutDashboard />}</span><span>{group.label}</span><Plus className="nav-group-caret" aria-hidden="true" /></summary>
         <div className="nav-group-items">
@@ -178,7 +178,6 @@ export function AppSidebar({
       </div>
       {signedIn && <div className="signed-user"><strong>{userDisplayName}</strong><span>{userBadge}</span></div>}
       <details className="sidebar-settings"><summary><Settings2 /> <span>환경설정</span><Plus className="nav-group-caret" aria-hidden="true" /></summary><div className="sidebar-settings-body"><span className="system-pill"><span className="live-dot" /> {databaseBackend === 'postgresql' ? '서버 연결' : '로컬 연결'}</span><small>화면 글자 크기와 메뉴를 조정합니다.</small></div></details>
-      <button type="button" className="sidebar-toggle" aria-label={collapsed ? '메뉴 펼치기' : '메뉴 접기'} aria-expanded={!collapsed} onClick={onToggleCollapsed}>{collapsed ? <PanelLeftOpen /> : <PanelLeftClose />}<span>{collapsed ? '메뉴 펼치기' : '메뉴 접기'}</span></button>
       {signedIn && <button onClick={onLogout}><LogOut /><span>로그아웃</span></button>}
     </div>
   </aside>

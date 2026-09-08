@@ -57,9 +57,6 @@ test('전역 관리자는 간결한 기본 메뉴에서 설정을 펼쳐 모든 
   await expect(page.getByRole('link', { name: '감사로그', exact: true })).toBeVisible()
   await expect(page.getByRole('link', { name: '작업 유형 관리', exact: true })).toBeVisible()
 
-  await page.getByRole('button', { name: '메뉴 접기', exact: true }).click()
-  await expect(page.locator('.app-shell')).toHaveClass(/sidebar-collapsed/)
+  await expect(page.getByRole('button', { name: /메뉴 (접기|펼치기)/ })).toHaveCount(0)
   await expect(sidebar.getByRole('link', { name: '내 작업', exact: true })).toBeVisible()
-  await page.getByRole('button', { name: '메뉴 펼치기', exact: true }).click()
-  await expect(page.locator('.app-shell')).not.toHaveClass(/sidebar-collapsed/)
 })

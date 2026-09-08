@@ -67,7 +67,6 @@ import type { AnalysisRequest, AutomationTemplate, DashboardDefinition, Dashboar
 function App() {
   const [preferences] = useState(loadWorkspacePreferences)
   const [theme, setTheme] = useState<WorkspaceTheme>(preferences.theme)
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(preferences.sidebarCollapsed)
   const [uiFontSize, setUiFontSize] = useState(preferences.uiFontSize)
   const [authReady, setAuthReady] = useState(false)
   const [authRequired, setAuthRequired] = useState(false)
@@ -186,9 +185,6 @@ function App() {
     const timeout = window.setTimeout(() => setNotice((current) => current === notice ? '' : current), 4000)
     return () => window.clearTimeout(timeout)
   }, [notice])
-  useEffect(() => {
-    saveWorkspacePreference('sidebarCollapsed', sidebarCollapsed)
-  }, [sidebarCollapsed])
   useEffect(() => {
     saveWorkspacePreference('uiFontSize', uiFontSize)
   }, [uiFontSize])
@@ -943,10 +939,9 @@ function App() {
   const requestWorkspaceHeader = isRequestWorkspace ? <RequestWorkspaceShellHeader model={{ activeDashboardId, activeTab: requestWorkspaceTab, activeView, analysisRuns, analysisRunsLoading, analysisRunChanging, analysisRunError, canOpenData: allowedPages.has('data'), canOpenWorkbench: allowedPages.has('workbench'), contextChanging: workspaceContextTransitioning, loadCases, overview, owner: selectedWorkflow?.request.owner ?? requests.find((request) => request.id === selectedRequestId)?.owner ?? '', projectId: selectedProjectId, projects, requestContextLoading, requestId: selectedRequestId, requests, selectedAnalysisRunId, selectedLoadCaseId, selectedWorkflow, status: selectedWorkflow?.request.status ?? (overview?.run ? overview.overall_verdict : '결과 대기'), title: requestWorkspaceTab === 'review' ? analysisTitle : workflowTitle }} actions={{ onLoadCaseChange: (id) => void handleLoadCaseChange(id), onOpenData: () => navigateWorkspace('data'), onOpenWorkbench: () => navigateWorkspace('workbench'), onProjectChange: (id) => void handleProjectChange(id), onRequestChange: (id) => void handleRequestChange(id), onReviewContextOpen: workspacePage === 'dashboard' || !selectedLoadCaseId ? undefined : async (intent) => { const nextOverview = await api.overview(selectedLoadCaseId, selectedAnalysisRunId || undefined); if (isCurrentContextEntry(intent)) setOverview(nextOverview) }, onReviewSnapshot: () => { if (workspacePage !== 'dashboard') navigateWorkspace('dashboard', { dashboardEntry: 'preserve' }); const page = explicitCustomAnalysisPage(analysisTabs, activeDashboardId); if (page) { switchAnalysisPage(page); return } clearSnapshotDashboard() }, onReviewDomain: () => { if (workspacePage !== 'dashboard') navigateWorkspace('dashboard', { dashboardEntry: 'preserve' }); const page = analysisTabs[0]; if (page) switchAnalysisPage(page) }, onReviewUnconfigured: () => { if (workspacePage !== 'dashboard') navigateWorkspace('dashboard', { dashboardEntry: 'preserve' }); const page = explicitCustomAnalysisPage(analysisTabs, activeDashboardId); if (page) { switchAnalysisPage(page); return } clearSnapshotDashboard() }, onViewOverview: () => { if (!canChangeContext()) return; beginContextEntry(); setActiveView('workflow'); if (workspacePage !== 'dashboard') navigateWorkspace('dashboard', { dashboardEntry: 'preserve' }) } }} onBeginReview={beginContextEntry} isCurrentReview={isCurrentContextEntry} loadLayout={workbenchApi.requestResultLayout} onReviewError={setError} onRunChange={(runId) => void handleAnalysisRunChange(runId)} /> : null
   return (
     <AppShell
-      className={`app-shell ${theme === 'light' ? 'light-theme' : 'dark-theme'} ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}
+      className={`app-shell ${theme === 'light' ? 'light-theme' : 'dark-theme'}`}
       sidebar={<AppSidebar
         activePage={isRequestWorkspace ? 'dashboard' : workspacePage}
-        collapsed={sidebarCollapsed}
         databaseBackend={databaseBackend}
         fontSize={uiFontSize}
         menus={visibleMenus}
@@ -959,9 +954,7 @@ function App() {
         onNavigate={enterWorkspace}
         onPreloadPage={preloadWorkspaceRouteModule}
         workspacePathForMenu={(id) => WORKSPACE_ROUTES_BY_ID.get(id)?.path ?? '#'}
-        onToggleCollapsed={() => setSidebarCollapsed((value) => !value)}
       />}
-      sidebarCollapsed={sidebarCollapsed}
       style={{ '--ui-font-size': `${uiFontSize}pt` } as CSSProperties}
       theme={theme}
     >

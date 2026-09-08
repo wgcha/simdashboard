@@ -4,7 +4,6 @@ type AppShellProps = {
   children: ReactNode
   className: string
   sidebar: ReactNode
-  sidebarCollapsed: boolean
   style: CSSProperties
   theme: 'dark' | 'light'
 }
@@ -14,8 +13,8 @@ type AppShellProps = {
  * their data and controls; the shell only owns the landmark hierarchy shared
  * by every authenticated workspace route.
  */
-export function AppShell({ children, className, sidebar, sidebarCollapsed, style, theme }: AppShellProps) {
-  return <div className={className} data-theme={theme} data-sidebar-collapsed={sidebarCollapsed} style={style}>
+export function AppShell({ children, className, sidebar, style, theme }: AppShellProps) {
+  return <div className={className} data-theme={theme} style={style}>
     {sidebar}
     {children}
   </div>
