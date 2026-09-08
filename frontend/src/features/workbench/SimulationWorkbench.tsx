@@ -107,13 +107,15 @@ function friendlyWorkbenchError(reason: unknown) {
   return message || '작업 실행 정보를 불러오지 못했습니다.'
 }
 
-export function SimulationWorkbench({ workflows, initialRequestId, currentUserId, createdBy, canExecute, isAdmin, onChanged, onRequestSelected }: {
+export function SimulationWorkbench({ workflows, initialRequestId, currentUserId, createdBy, canExecute, isAdmin, embedded = false, onChanged, onRequestSelected }: {
   workflows: Workflow[]
   initialRequestId: string
   currentUserId: string
   createdBy: string
   canExecute: boolean
   isAdmin: boolean
+  /** The request shell already owns context selection in embedded mode. */
+  embedded?: boolean
   onChanged: (message: string) => void | Promise<void>
   onRequestSelected: (requestId: string) => void
 }) {
@@ -265,18 +267,19 @@ export function SimulationWorkbench({ workflows, initialRequestId, currentUserId
   if (!workflow) {
     const title = explicitWorkflow?.request.title ?? '선택한 의뢰'
     const currentValue = initialRequestId || ''
-    return <div className="workbench-page assigned-only" data-testid="simulation-workbench"><section className="workbench-state workbench-no-plan-state" style={{ minHeight: '260px', flexDirection: 'column', padding: '32px', color: 'var(--focus-muted)', background: 'transparent' }}><ClipboardList aria-hidden="true" /><h1 style={{ margin: 0, color: 'var(--focus-navy)', fontSize: '24px' }}>{title}</h1><p>{explicitWorkflow ? '이 의뢰에는 배정된 작업 계획이 없어 실행할 수 없습니다.' : '선택한 의뢰를 확인할 수 없습니다.'}</p><label><span>배정 작업 대상 의뢰</span><select aria-label="배정 작업 대상 의뢰" value={currentValue} onChange={(event) => { if (event.target.value) changeRequest(event.target.value) }}><option value={currentValue}>{explicitWorkflow ? `${title} · 작업 계획 없음` : '선택한 의뢰 확인 필요'}</option>{assigned.map((item) => <option key={item.request.id} value={item.request.id}>{item.request.project_name} / {item.request.title}</option>)}</select></label></section></div>
+    return <div className="workbench-page assigned-only" data-testid="simulation-workbench"><section className="workbench-state workbench-no-plan-state" style={{ minHeight: '260px', flexDirection: 'column', padding: '32px', color: 'var(--focus-muted)', background: 'transparent' }}><ClipboardList aria-hidden="true" />{!embedded && <h1 style={{ margin: 0, color: 'var(--focus-navy)', fontSize: '24px' }}>{title}</h1>}<p>{explicitWorkflow ? '이 의뢰에는 배정된 작업 계획이 없어 실행할 수 없습니다.' : '선택한 의뢰를 확인할 수 없습니다.'}</p>{!embedded && <label><span>배정 작업 대상 의뢰</span><select aria-label="배정 작업 대상 의뢰" value={currentValue} onChange={(event) => { if (event.target.value) changeRequest(event.target.value) }}><option value={currentValue}>{explicitWorkflow ? `${title} · 작업 계획 없음` : '선택한 의뢰 확인 필요'}</option>{assigned.map((item) => <option key={item.request.id} value={item.request.id}>{item.request.project_name} / {item.request.title}</option>)}</select></label>}</section></div>
   }
 
   const firstReady = currentItem?.status === 'READY' && currentItem.sequence_no === 1 && workflow.completed_count === 0
   return <div className="workbench-page assigned-only" data-testid="simulation-workbench">
-    <section className="workbench-hero operator"><div><span className="demo-only-badge"><ShieldCheck /> DEMO ONLY</span><h1>배정 작업 실행</h1><p>작업 계획에 따라 현재 작업을 시작하고 완료합니다.</p></div><details className="workbench-source workbench-collapsible"><summary><span><strong>작업 원칙</strong><small>시작 → 데모 수행 → 완료</small></span><ChevronRight aria-hidden="true" /></summary><p>완료 후 다음 작업은 시작 대기 상태로 열립니다.</p></details></section>
+    {!embedded && <section className="workbench-hero operator"><div><span className="demo-only-badge"><ShieldCheck /> DEMO ONLY</span><h1>배정 작업 실행</h1><p>작업 계획에 따라 현재 작업을 시작하고 완료합니다.</p></div><details className="workbench-source workbench-collapsible"><summary><span><strong>작업 원칙</strong><small>시작 → 데모 수행 → 완료</small></span><ChevronRight aria-hidden="true" /></summary><p>완료 후 다음 작업은 시작 대기 상태로 열립니다.</p></details></section>}
+    {embedded && <p className="demo-only-badge"><ShieldCheck /> DEMO ONLY · 실제 해석 결과가 아닙니다.</p>}
     {error && <section className="workbench-service-error" role="alert"><AlertTriangle /><div><strong>작업 요청을 처리하지 못했습니다.</strong><p>{error}</p></div></section>}
 
-    <section className="assigned-request-card">
-      <header><div><span>배정 의뢰</span><h2>{workflow.request.title}</h2><p>{workflow.request.project_name} · 담당 {workflow.request.owner}</p></div><label><span>대상 의뢰</span><select aria-label="배정 작업 대상 의뢰" value={workflow.request.id} onChange={(event) => changeRequest(event.target.value)}>{assigned.map((item) => <option key={item.request.id} value={item.request.id}>{item.request.project_name} / {item.request.title}</option>)}</select></label></header>
+    {!embedded && <section className="assigned-request-card">
+      <header><div><span>배정 의뢰</span><h2>{workflow.request.title}</h2><p>{workflow.request.project_name} · 담당 {workflow.request.owner}</p></div>{!embedded && <label><span>대상 의뢰</span><select aria-label="배정 작업 대상 의뢰" value={workflow.request.id} onChange={(event) => changeRequest(event.target.value)}>{assigned.map((item) => <option key={item.request.id} value={item.request.id}>{item.request.project_name} / {item.request.title}</option>)}</select></label>}</header>
       <details className="assigned-request-meta workbench-collapsible"><summary><span><strong>의뢰 정보</strong><small>시나리오·요청자·완료 작업</small></span><ChevronRight aria-hidden="true" /></summary><div className="assigned-request-meta-content"><div><span>시나리오</span><strong>{workflow.work_plan?.scenario_name}</strong></div><div><span>접수 출처</span><strong>{workflow.work_plan?.source_type === 'EXTERNAL_SYSTEM' ? '외부 시스템' : '부서장 지시'}</strong><small>{workflow.work_plan?.source_reference}</small></div><div><span>요청자</span><strong>{workflow.work_plan?.requested_by}</strong></div><div><span>완료 작업</span><strong>{workflow.completed_count ?? 0} / {workflow.total_count ?? workflow.steps.length}</strong></div><div className="assigned-progress"><span>전체 진행률</span><strong>{workflow.progress}%</strong><i><b style={{ width: `${workflow.progress}%` }} /></i></div></div></details>
-    </section>
+    </section>}
 
     <section className="assigned-work-list"><header><div><span>작업 순서</span><h2>배정 작업 순서</h2></div><b>{currentItem ? `현재 · ${currentItem.name}` : '모든 작업 완료'}</b></header><div>{workflow.steps.map((item) => {
       const isCurrent = item.id === currentItem?.id

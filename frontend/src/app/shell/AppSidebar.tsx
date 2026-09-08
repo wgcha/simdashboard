@@ -47,10 +47,10 @@ type AppSidebarMenu = {
 
 const MENU_GROUP_LABELS = {
   overview: '기본 메뉴',
-  workflow: '작업 도구',
+  workflow: '전체 작업',
   configuration: '설정 및 관리',
   administration: '설정 및 관리',
-  support: '도움말',
+  support: '예제 및 참고',
 } as const
 
 type MenuGroupId = keyof typeof MENU_GROUP_LABELS
@@ -58,7 +58,7 @@ type MenuGroupId = keyof typeof MENU_GROUP_LABELS
 const MENU_GROUP_BY_ID: Record<AppSidebarMenuId, MenuGroupId> = {
   portfolio: 'overview',
   dashboard: 'overview',
-  intake: 'workflow',
+  intake: 'overview',
   workbench: 'workflow',
   data: 'workflow',
   workbench_admin: 'administration',
@@ -122,7 +122,7 @@ export function AppSidebar({
 }: AppSidebarProps) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const activeGroup = groupForMenu(activePage)
-  const initialOpen = useMemo(() => new Set<MenuGroupId>(['overview', ...(activeGroup && activeGroup !== 'workflow' ? [activeGroup] : [])]), [activeGroup])
+  const initialOpen = useMemo(() => new Set<MenuGroupId>(['overview', ...(activeGroup && activeGroup !== 'overview' ? [activeGroup] : [])]), [activeGroup])
   const [openGroups, setOpenGroups] = useState<Set<MenuGroupId>>(initialOpen)
   useEffect(() => {
     if (!activeGroup) return
@@ -130,7 +130,7 @@ export function AppSidebar({
   }, [activeGroup])
   const groupedMenus = new Map<MenuGroupId, AppSidebarMenu[]>()
   menus.forEach((menu) => {
-    if (menu.id === 'intake') return
+    if (menu.id === 'workbench' || menu.id === 'data' || menu.id === 'help') return
     const groupId = MENU_GROUP_BY_ID[menu.id]
     const group = groupedMenus.get(groupId)
     if (group) group.push(menu)
@@ -139,9 +139,19 @@ export function AppSidebar({
   const visibleGroups = Array.from(groupedMenus, ([id, groupMenus]) => ({
     id,
     label: MENU_GROUP_LABELS[id],
-    menus: id === 'overview' ? [...groupMenus].sort((a, b) => (a.id === 'portfolio' ? -1 : b.id === 'portfolio' ? 1 : 0)) : groupMenus,
+    menus: id === 'overview' ? [...groupMenus].sort((a, b) => ['portfolio', 'dashboard', 'intake'].indexOf(a.id) - ['portfolio', 'dashboard', 'intake'].indexOf(b.id)) : groupMenus,
   }))
-  const intakeMenu = menus.find((menu) => menu.id === 'intake')
+  const helpMenu = menus.find((menu) => menu.id === 'help')
+  const renderMenuLink = (menu: AppSidebarMenu, extraClass = '') => {
+    const Icon = MENU_ICONS[menu.id]
+    const label = USER_MENU_LABELS[menu.id] ?? menu.label
+    const navigate = (event: MouseEvent<HTMLAnchorElement>) => {
+      if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+      event.preventDefault()
+      onNavigate(menu.id)
+    }
+    return <a key={menu.id} aria-label={label} aria-current={activePage === menu.id ? 'page' : undefined} title={label} className={'nav-link ' + extraClass + (activePage === menu.id ? ' active' : '')} href={workspacePathForMenu(menu.id)} onClick={navigate} onMouseEnter={() => onPreloadPage(menu.id)} onFocus={() => onPreloadPage(menu.id)}><Icon /><span>{label}</span></a>
+  }
 
   return <aside className={`sidebar ${mobileMenuOpen ? 'mobile-menu-open' : ''}`} aria-label="주 메뉴">
     <div className="brand" title="VD simulation workbench"><span className="brand-mark"><Activity /></span><span>VD <strong>workbench</strong></span><button type="button" className="mobile-menu-trigger" aria-label={mobileMenuOpen ? '메뉴 닫기' : '메뉴 열기'} aria-expanded={mobileMenuOpen} onClick={() => setMobileMenuOpen((value) => !value)}>{mobileMenuOpen ? <PanelLeftClose /> : <PanelLeftOpen />}<span>{mobileMenuOpen ? '메뉴 닫기' : '메뉴 열기'}</span></button></div>
@@ -154,18 +164,10 @@ export function AppSidebar({
       }}>
         <summary className="nav-group-label" aria-label={`${group.label} 메뉴`}><span className="nav-group-icon" aria-hidden="true">{group.id === 'workflow' ? <FlaskConical /> : group.id === 'administration' ? <Settings2 /> : group.id === 'support' ? <BookOpen /> : <LayoutDashboard />}</span><span>{group.label}</span><Plus className="nav-group-caret" aria-hidden="true" /></summary>
         <div className="nav-group-items">
-          {group.menus.map((menu) => {
-            const Icon = MENU_ICONS[menu.id]
-            const label = USER_MENU_LABELS[menu.id] ?? menu.label
-            const navigate = (event: MouseEvent<HTMLAnchorElement>) => {
-              if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
-              event.preventDefault()
-              onNavigate(menu.id)
-            }
-            return <a key={menu.id} aria-label={label} aria-current={activePage === menu.id ? 'page' : undefined} title={label} className={`nav-link ${activePage === menu.id ? 'active' : ''}`} href={workspacePathForMenu(menu.id)} onClick={navigate} onMouseEnter={() => onPreloadPage(menu.id)} onFocus={() => onPreloadPage(menu.id)}><Icon /><span>{label}</span></a>
-          })}
+          {group.menus.map((menu) => renderMenuLink(menu))}
         </div>
-      </details>{group.id === 'overview' && intakeMenu && <a key={intakeMenu.id} aria-label="새 의뢰" title="새 의뢰" className={`nav-link nav-link-standalone ${activePage === intakeMenu.id ? 'active' : ''}`} href={workspacePathForMenu(intakeMenu.id)} onClick={(event) => { if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); onNavigate(intakeMenu.id) }} onMouseEnter={() => onPreloadPage(intakeMenu.id)} onFocus={() => onPreloadPage(intakeMenu.id)}><ClipboardPlus /><span>새 의뢰</span></a>}</div>)}
+      </details></div>)}
+      {helpMenu && renderMenuLink(helpMenu, 'nav-link-standalone nav-link-help')}
     </nav>
     <div className="sidebar-foot">
       <div className="global-font-control" aria-label="전체 글자 크기 조절">

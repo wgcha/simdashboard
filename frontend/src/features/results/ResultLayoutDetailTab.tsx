@@ -5,6 +5,7 @@ import type { RequestResultLayout } from '../../shared/api/resultLayouts'
 import { canCommitResultLayoutOpen, canOpenResultLayout, detailedAnalysisRoute } from './resultLayoutRouting'
 
 type Props = {
+  active?: boolean
   analysisLabel: string
   label?: string
   requestId: string
@@ -12,6 +13,7 @@ type Props = {
   loadLayout: (requestId: string) => Promise<RequestResultLayout>
   isCurrentOpen: (intent: number) => boolean
   onBeginOpen: () => number
+  onBeforeOpen?: (intent: number) => Promise<void>
   onDomain: () => void
   onError: (message: string) => void
   onSnapshot: () => void
@@ -19,6 +21,7 @@ type Props = {
 }
 
 export function ResultLayoutDetailTab({
+  active = false,
   analysisLabel,
   label = '상세 분석',
   requestId,
@@ -26,6 +29,7 @@ export function ResultLayoutDetailTab({
   loadLayout,
   isCurrentOpen,
   onBeginOpen,
+  onBeforeOpen,
   onDomain,
   onError,
   onSnapshot,
@@ -41,6 +45,8 @@ export function ResultLayoutDetailTab({
     const intent = ++requestIntent.current
     setLoading(true)
     try {
+      await onBeforeOpen?.(contextIntent)
+      if (!canCommitResultLayoutOpen(intent, requestIntent.current, contextIntent, isCurrentOpen)) return
       const route = detailedAnalysisRoute(await loadLayout(requestId))
       if (!canCommitResultLayoutOpen(intent, requestIntent.current, contextIntent, isCurrentOpen)) return
       if (route === 'SNAPSHOT') onSnapshot()
@@ -53,7 +59,7 @@ export function ResultLayoutDetailTab({
     }
   }
 
-  return <button className={loading ? 'active' : ''} disabled={!canOpen || loading} onClick={() => void open()}>
+  return <button className={loading || active ? 'active' : ''} aria-current={active ? 'step' : undefined} disabled={!canOpen || loading} onClick={() => void open()}>
     {loading ? <LoaderCircle className="spin" /> : <LayoutDashboard />}
     {label} <span>{analysisLabel}</span>
   </button>

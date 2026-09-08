@@ -11,6 +11,8 @@ type JourneyItemProps = {
   label: string
   onClick?: () => void
 }
+export type RequestWorkspaceTab = 'overview' | 'execution' | 'import' | 'review'
+
 const statusLabels: Record<string, string> = { READY: '시작 대기', IN_PROGRESS: '진행 중', COMPLETED: '완료', WAITING: '대기', BLOCKED: '차단', FAILED: '실패', PASS: '통과', FAIL: '검토 필요', NO_DATA: '결과 없음' }
 
 function JourneyItem({ active, disabled = false, icon: Icon, label, onClick }: JourneyItemProps) {
@@ -24,6 +26,7 @@ function JourneyItem({ active, disabled = false, icon: Icon, label, onClick }: J
 }
 
 export function RequestWorkspaceHeader({
+  activeTab,
   activeView,
   activeRunSelector,
   canOpenData = true,
@@ -47,6 +50,8 @@ export function RequestWorkspaceHeader({
   title,
   owner,
 }: {
+  /** The four request-workspace destinations. `activeView` remains for legacy callers. */
+  activeTab?: RequestWorkspaceTab
   activeView: string
   activeRunSelector?: ReactNode
   canOpenData?: boolean
@@ -71,7 +76,7 @@ export function RequestWorkspaceHeader({
   owner: string
 }) {
   const requestUnavailable = !requestId || requests.length === 0
-  const isOverview = activeView === 'workflow'
+  const currentTab = activeTab ?? (activeView === 'workflow' ? 'overview' : 'review')
 
   return <>
     <section className="request-workspace-header">
@@ -88,10 +93,10 @@ export function RequestWorkspaceHeader({
     </section>
 
     <nav className="request-journey" aria-label="의뢰 작업 여정">
-      <JourneyItem icon={CircleDot} label="의뢰 개요" active={isOverview} disabled={contextChanging} onClick={onViewOverview} />
-      <JourneyItem icon={Play} label="작업 실행" active={false} disabled={contextChanging || requestUnavailable || !canOpenWorkbench} onClick={onOpenWorkbench} />
-      <JourneyItem icon={ClipboardPlus} label="결과 등록" active={false} disabled={contextChanging || requestUnavailable || !canOpenData} onClick={onOpenData} />
-      <div className={`request-journey-item result-review ${!isOverview ? 'active' : ''}`}>{resultReviewTab}</div>
+      <JourneyItem icon={CircleDot} label="의뢰 개요" active={currentTab === 'overview'} disabled={contextChanging} onClick={onViewOverview} />
+      <JourneyItem icon={Play} label="작업 실행" active={currentTab === 'execution'} disabled={contextChanging || requestUnavailable || !canOpenWorkbench} onClick={onOpenWorkbench} />
+      <JourneyItem icon={ClipboardPlus} label="결과 등록" active={currentTab === 'import'} disabled={contextChanging || requestUnavailable || !canOpenData} onClick={onOpenData} />
+      <div className={`request-journey-item result-review ${currentTab === 'review' ? 'active' : ''}`}>{resultReviewTab}</div>
     </nav>
   </>
 }

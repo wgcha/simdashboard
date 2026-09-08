@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useBlocker, useLocation, useNavigate } from 'react-router-dom'
 
 import type { AuthUser } from '../../auth'
@@ -69,6 +69,7 @@ export function useWorkspaceNavigation({
   }, [location.search])
   const navigationBlocker = useBlocker(editMode)
   const pendingNavigationRef = useRef<PendingNavigation | null>(null)
+  const [workspaceNavigationPending, setWorkspaceNavigationPending] = useState(false)
 
   useEffect(() => {
     if (!authUser || authUser.account_status !== 'ACTIVE' || !menuPolicyReady) return
@@ -104,6 +105,7 @@ export function useWorkspaceNavigation({
       onCancelEditing()
       navigationBlocker.proceed()
     } else {
+      setWorkspaceNavigationPending(false)
       navigationBlocker.reset()
     }
   }, [navigationBlocker, onCancelEditing])
@@ -112,6 +114,7 @@ export function useWorkspaceNavigation({
     const pending = pendingNavigationRef.current
     if (!pending || pending.pathname !== location.pathname) return
     pendingNavigationRef.current = null
+    setWorkspaceNavigationPending(false)
     if (matchedWorkspaceRoute?.page === 'dashboard' && pending.dashboardEntry === 'reset') onDashboardRoute()
   }, [location.pathname, matchedWorkspaceRoute?.page, onDashboardRoute])
 
@@ -126,6 +129,7 @@ export function useWorkspaceNavigation({
       return
     }
     pendingNavigationRef.current = { dashboardEntry, pathname: route.path }
+    setWorkspaceNavigationPending(true)
     navigate({ pathname: route.path, search: location.search }, { replace: options.replace })
   }, [editMode, location.pathname, location.search, navigate, onDashboardRoute])
 
@@ -145,5 +149,5 @@ export function useWorkspaceNavigation({
     navigate({ pathname: location.pathname, search: targetSearch }, { replace: options.replace ?? true })
   }, [location.pathname, location.search, navigate])
 
-  return { isWorkspaceIndex, matchedWorkspaceRoute, navigateWorkspace, updateWorkspaceContext, workspaceContext, workspacePage }
+  return { isWorkspaceIndex, matchedWorkspaceRoute, navigateWorkspace, updateWorkspaceContext, workspaceContext, workspaceNavigationPending, workspacePage }
 }

@@ -56,7 +56,8 @@ test('a direct route without permission falls back to the first allowed workspac
 test('빈 프로젝트를 선택해도 설정 상태에서 의뢰 접수로 이어지고 예제 프로젝트는 정상 로드된다', async ({ page }) => {
   await login(page)
   await openWorkspaceRoute(page, '/workspace/data')
-  await expect(page.getByRole('heading', { name: '해석 데이터 등록' })).toBeVisible()
+  await expect(page.locator('.request-workspace-header')).toBeVisible()
+  await expect(page.getByRole('heading', { name: '해석 결과 가져오기', exact: true })).toBeVisible()
 
   const projectName = `E2E 빈 프로젝트 ${Date.now()}`
   const projectResponsePromise = page.waitForResponse((response) => response.url().endsWith('/api/projects') && response.request().method() === 'POST')

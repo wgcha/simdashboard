@@ -41,9 +41,10 @@ test('DOE 의뢰를 접수하고 배정 작업을 명시적으로 시작·완료
 
   const workbench = page.getByTestId('simulation-workbench')
   await expect(workbench).toBeVisible()
-  await expect(page.getByLabel('배정 작업 대상 의뢰').locator('option:checked')).toContainText(title)
-  await expect(page.locator('.assigned-request-card')).toContainText(title)
-  await expect(page.locator('.assigned-request-card')).toContainText('0 / 7')
+  await expect(page.getByLabel('배정 작업 대상 의뢰')).toHaveCount(0)
+  await expect(page.getByLabel('의뢰 선택', { exact: true }).locator('option:checked')).toContainText(title)
+  await expect(page.locator('.request-workspace-header')).toContainText(title)
+  await expect(page.locator('.request-workspace-header')).toContainText('0 / 7')
   await expect(page.locator('.assigned-work-list article.ready')).toContainText('CAD 작업')
   await expect(page.locator('.assigned-work-list article.waiting')).toHaveCount(6)
   await expect(page.getByTestId('task-execution-widget-CAD_PREPARE')).toContainText('형상 준비 실행 위젯')
@@ -65,7 +66,7 @@ test('DOE 의뢰를 접수하고 배정 작업을 명시적으로 시작·완료
   await expect(page.locator('.assigned-work-list article.in_progress')).toContainText('20%')
 
   await page.getByTestId('complete-current-work').click()
-  await expect(page.locator('.assigned-request-card')).toContainText('1 / 7')
+  await expect(page.locator('.request-workspace-header')).toContainText('1 / 7')
   await expect(page.locator('.assigned-work-list article.completed')).toContainText('CAD 작업')
   await expect(page.locator('.assigned-work-list article.ready')).toContainText('DOE 파일 생성')
   await expect(page.getByTestId('execute-selected-task')).toHaveText(/DOE 생성 시작/)
