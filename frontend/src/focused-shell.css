@@ -1,6 +1,15 @@
 /* Focused operations shell. This file is imported last so the redesign stays
    scoped and does not disturb the existing result and editor surfaces. */
-.app-shell { --focus-navy:#16243a; --focus-blue:#245fc5; --focus-bg:#f5f7fb; --focus-surface:#fff; --focus-border:#dbe3ed; --focus-muted:#607087; }
+.app-shell {
+  /* Keep the focused shell aligned with the workspace theme contract.  The
+     fallbacks preserve the shell when it is rendered in isolation. */
+  --focus-navy:var(--color-text-strong,#16243a);
+  --focus-blue:var(--color-accent,#245fc5);
+  --focus-bg:var(--color-app-bg,#f5f7fb);
+  --focus-surface:var(--color-surface-1,#fff);
+  --focus-border:var(--color-border,#dbe3ed);
+  --focus-muted:var(--color-text-muted,#607087);
+}
 .app-shell.light-theme { font-family:'Pretendard Variable',Pretendard,system-ui,sans-serif; background:var(--focus-bg); }
 .app-shell.light-theme .sidebar { width:208px; padding:24px 16px 18px; background:var(--focus-surface); border-right:1px solid var(--focus-border); }
 .app-shell.light-theme .main-shell { margin-left:208px; width:calc(100% - 208px); }
@@ -591,6 +600,6 @@
 .app-shell .storage-global-settings>summary::-webkit-details-marker { display:none; }
 .app-shell .storage-global-settings>div { position:absolute; z-index:8; right:0; top:calc(100% + 8px); width:min(360px,calc(100vw - 32px)); padding:14px; display:grid; gap:10px; border:1px solid var(--color-border); border-radius:9px; background:var(--color-surface-raised); box-shadow:0 14px 32px var(--color-shadow); }
 .app-shell .storage-global-settings label { display:grid; gap:5px; color:var(--color-text-muted); font-size:13px; }
-.app-shell .storage-global-settings input { min-width:0; min-height:40px; box-sizing:border-box; padding:0 10px; border:1px solid var(--color-border); border-radius:6px; color:var(--color-text); background:var(--color-surface); font:inherit; }
+.app-shell .storage-global-settings input { min-width:0; min-height:40px; box-sizing:border-box; padding:0 10px; border:1px solid var(--color-border); border-radius:6px; color:var(--color-text); background:var(--color-surface-raised); font:inherit; }
 .app-shell .storage-global-settings button { min-height:40px; border:1px solid var(--color-accent); border-radius:6px; color:var(--color-text-on-accent); background:var(--color-accent); font:inherit; cursor:pointer; }
 .app-shell .storage-global-settings small { color:var(--color-text-muted); font-size:12px; }

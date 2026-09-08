@@ -26,10 +26,28 @@
   --color-focus:#4dcffb;
   --color-chart-grid:#26394c;
   --color-chart-axis:#71899f;
+  --color-chart-series-1:#61d4ff;
+  --color-chart-series-2:#ff647d;
+  --color-chart-series-3:#70e0a8;
+  --color-chart-series-4:#ffbf57;
+  --color-chart-series-5:#8b9cff;
+  --color-chart-series-target:#ff9948;
   --color-shadow:rgba(0,0,0,.16);
   --color-accent-shadow:rgba(81,211,255,.22);
   --color-danger-surface:#2a1720;
   --color-success-surface:#0e2b25;
+  --color-warning-surface:#302715;
+  --color-info-surface:#102c3f;
+  --color-danger-border:#7c3745;
+  --color-success-border:#287b62;
+  --color-warning-border:#87682d;
+  --panel:var(--color-surface-1);
+  --line:var(--color-border);
+  --muted:var(--color-text-muted);
+  --cyan:var(--color-accent);
+  --green:var(--color-success);
+  --red:var(--color-danger);
+  --amber:var(--color-warning);
 }
 
 :root[data-theme='light'],
@@ -59,10 +77,28 @@
   --color-focus:#034ea2;
   --color-chart-grid:#d8e2ec;
   --color-chart-axis:#5c6d80;
+  --color-chart-series-1:#0369a1;
+  --color-chart-series-2:#be123c;
+  --color-chart-series-3:#047857;
+  --color-chart-series-4:#a16207;
+  --color-chart-series-5:#6d28d9;
+  --color-chart-series-target:#c2410c;
   --color-shadow:rgba(25,52,80,.08);
   --color-accent-shadow:rgba(3,78,162,.18);
   --color-danger-surface:#fce8eb;
   --color-success-surface:#e4f4ed;
+  --color-warning-surface:#fff0d9;
+  --color-info-surface:#e8f1fc;
+  --color-danger-border:#e7b7b2;
+  --color-success-border:#9fd8bd;
+  --color-warning-border:#edc98f;
+  --panel:var(--color-surface-1);
+  --line:var(--color-border);
+  --muted:var(--color-text-muted);
+  --cyan:var(--color-accent);
+  --green:var(--color-success);
+  --red:var(--color-danger);
+  --amber:var(--color-warning);
 }
 
 html,body,#root { min-height:100%; background:var(--color-app-bg); }
@@ -140,3 +176,151 @@ body { color:var(--color-text); background:var(--color-app-background); }
 .app-shell[data-theme='light'] .example-gallery .example-tags span { color:var(--color-accent); border-color:var(--color-border-strong); background:var(--color-surface-2); }
 .app-shell[data-theme='light'] .example-gallery .example-profile span { border-color:var(--color-border); }
 .app-shell[data-theme='light'] .example-gallery > header aside { color:var(--color-text); border-color:var(--color-border); background:var(--color-surface-raised); }
+
+/* Analysis controls are mounted by feature CSS after the shared sheet. Keep
+   their chrome token-owned so light mode does not expose the dark fallback. */
+.app-shell[data-theme] .analysis-subtabs {
+  border-color:var(--color-border)!important;
+  background:var(--color-surface-raised)!important;
+  box-shadow:inset 3px 0 var(--color-accent)!important;
+}
+.app-shell[data-theme] .analysis-subtabs>div,
+.app-shell[data-theme] .analysis-subtabs>div strong,
+.app-shell[data-theme] .analysis-subtabs .edge-filter>span {
+  color:var(--color-text-muted)!important;
+}
+.app-shell[data-theme] .analysis-subtabs>div span,
+.app-shell[data-theme] .analysis-subtabs nav button.active {
+  color:var(--color-accent)!important;
+}
+.app-shell[data-theme] .analysis-subtabs nav button {
+  color:var(--color-text-muted)!important;
+  border-color:var(--color-border)!important;
+  background:var(--color-surface-raised)!important;
+}
+.app-shell[data-theme] .analysis-subtabs nav button span:not(.analysis-tab-status) {
+  color:var(--color-accent)!important;
+  background:var(--color-info-surface)!important;
+}
+.app-shell[data-theme] .analysis-tab-status[data-status='fail'],
+.app-shell[data-theme] .analysis-tab-status[data-status='failed'] {
+  color:var(--color-danger)!important;
+  background:var(--color-danger-surface)!important;
+}
+.app-shell[data-theme] .analysis-tab-status[data-status='pass'],
+.app-shell[data-theme] .analysis-tab-status[data-status='published'] {
+  color:var(--color-success)!important;
+  background:var(--color-success-surface)!important;
+}
+.app-shell[data-theme] .analysis-tab-status[data-status='system'] {
+  color:var(--color-accent)!important;
+  background:var(--color-info-surface)!important;
+}
+.app-shell[data-theme] .edge-filter button {
+  color:var(--color-text-muted)!important;
+  border-color:var(--color-border)!important;
+  background:var(--color-surface-raised)!important;
+}
+.app-shell[data-theme] .edge-filter button i { background:var(--color-chart-axis)!important; }
+.app-shell[data-theme] .edge-filter button.on {
+  color:var(--color-accent)!important;
+  border-color:var(--color-border-strong)!important;
+  background:var(--color-info-surface)!important;
+}
+.app-shell[data-theme] .edge-filter button.on i {
+  background:var(--color-accent)!important;
+  box-shadow:0 0 5px var(--color-accent-shadow)!important;
+}
+
+/* Legacy feature fragments inherit these aliases, so define their chrome on
+   semantic surfaces for both themes instead of fixing one palette at a time. */
+.app-shell[data-theme] .data-form-card>header>span {
+  color:var(--color-accent)!important;
+  border-color:var(--color-border-strong)!important;
+  background:var(--color-info-surface)!important;
+}
+.app-shell[data-theme] .workbench-admin-task-picker button i {
+  color:var(--color-accent)!important;
+  background:var(--color-surface-interactive)!important;
+}
+.app-shell[data-theme] .help-flow>div span {
+  color:var(--color-text)!important;
+  border-color:var(--color-border-strong)!important;
+  background:var(--color-surface-interactive)!important;
+}
+.app-shell[data-theme] .workbench-run-progress i { background:var(--color-surface-interactive)!important; }
+
+/* Preserve diagnostic meaning while moving diagram annotations onto light
+   surfaces. These selectors intentionally do not change chart series colors. */
+.app-shell[data-theme='light'] :is(.open-cell-edge,.open-cell-edge small,.chassis-legend,.chassis-legend b,.chassis-marker small) { color:var(--color-text-muted)!important; }
+.app-shell[data-theme='light'] .chassis-marker {
+  color:var(--color-text)!important;
+  border-color:var(--color-success-border)!important;
+  background:var(--color-success-surface)!important;
+  box-shadow:none!important;
+}
+.app-shell[data-theme='light'] .chassis-marker.fail {
+  border-color:var(--color-danger-border)!important;
+  background:var(--color-danger-surface)!important;
+}
+.app-shell[data-theme='light'] :is(.chassis-marker span,.open-cell-meta strong,.chassis-result-row strong) { color:var(--color-text-strong)!important; }
+.app-shell[data-theme='light'] :is(.chassis-summary-strip,.result-table,.chassis-result-row) {
+  border-color:var(--color-border)!important;
+  background:var(--color-surface-raised)!important;
+}
+.app-shell[data-theme='light'] :is(.chassis-result-head,.result-table .table-head) {
+  color:var(--color-text-muted)!important;
+  border-color:var(--color-border)!important;
+  background:var(--color-surface-2)!important;
+}
+
+/* Page-management is an overlay, so it needs the same complete surface stack
+   as a normal light page rather than the feature's dark default. */
+.app-shell[data-theme='light'] .analysis-page-manager {
+  color:var(--color-text)!important;
+  border-color:var(--color-border)!important;
+  background:var(--color-surface-raised)!important;
+  box-shadow:0 18px 54px var(--color-shadow)!important;
+}
+.app-shell[data-theme='light'] .analysis-page-manager>header,
+.app-shell[data-theme='light'] .analysis-page-manager-grid>aside {
+  border-color:var(--color-border)!important;
+  background:var(--color-surface-2)!important;
+}
+.app-shell[data-theme='light'] .analysis-page-manager-grid>aside button,
+.app-shell[data-theme='light'] :is(.analysis-page-create,.analysis-page-detail) {
+  color:var(--color-text)!important;
+  border-color:var(--color-border)!important;
+  background:var(--color-surface-raised)!important;
+}
+.app-shell[data-theme='light'] .analysis-page-manager-grid>aside button.active {
+  color:var(--color-accent)!important;
+  border-color:var(--color-border-strong)!important;
+  background:var(--color-info-surface)!important;
+}
+.app-shell[data-theme='light'] .analysis-page-manager-grid>aside button small { color:var(--color-text-muted)!important; }
+.app-shell[data-theme='light'] .analysis-page-manager-grid>aside button b,
+.app-shell[data-theme='light'] .analysis-page-manager>header span,
+.app-shell[data-theme='light'] .analysis-page-detail>header span { color:var(--color-accent)!important; }
+.app-shell[data-theme='light'] :is(.analysis-page-create,.analysis-page-detail) :is(input,textarea,select) {
+  color:var(--color-text)!important;
+  border-color:var(--color-border)!important;
+  background:var(--color-surface-raised)!important;
+}
+.app-shell[data-theme='light'] .analysis-page-status-actions .danger {
+  color:var(--color-danger)!important;
+  border-color:var(--color-danger-border)!important;
+  background:var(--color-danger-surface)!important;
+}
+
+/* The comparison summary keeps numeric values readable on the neutral count
+   tiles; trust outcomes continue to use their own success/warning/danger roles. */
+.app-shell[data-theme='light'] .trust-counts span {
+  color:var(--color-text-muted)!important;
+  border-color:var(--color-border)!important;
+  background:var(--color-surface-2)!important;
+}
+.app-shell[data-theme='light'] .trust-counts b { color:var(--color-text-strong)!important; }
+
+/* Small analytical labels use the same readable secondary-text role as forms. */
+.app-shell[data-theme] :is(.widget-kicker,.summary-grid span,.summary-grid em,.open-cell-glass span,.open-cell-glass small,.open-cell-meta span,.verdict-block small) { color:var(--color-text-muted); }
