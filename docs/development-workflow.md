@@ -113,7 +113,7 @@ pnpm run generate:api
 ### 3.5 결과 폴더와 확장자
 
 - 기준 계약은 [`storage-folder-and-file-contract.md`](storage-folder-and-file-contract.md)다.
-- 서버는 `SIMDASH_IMPORT_ROOT` 아래 상대 경로만 읽는다.
+- canonical 수집은 `SIMDASH_IMPORT_ROOT` 아래 상대 경로만 읽는다. SPDM 의뢰 탐색과 업로드는 별도 `SIMDASH_SPDM_ROOT`와 검증된 binding을 사용하며 [SPDM 계약](spdm-storage-workflow.md)을 따른다.
 - `manifest.json`의 ID와 DB의 Project/Request/LoadCase 관계를 확인한다.
 - 확장자뿐 아니라 MIME, magic bytes, 크기, checksum, symlink와 traversal을 검사한다.
 - 허용 media extension 전체(`.png`, `.jpg`, `.jpeg`, `.webp`, `.svg`, `.mp4`, `.webm`, `.glb`, `.gltf`)는 `backend/tests/test_media_policy_fixtures.py`의 generated minimal `tmp_path` fixture로 정상 signature, MIME/extension mismatch, corrupt signature를 검증한다. 영구 canonical folder example은 JSON/CSV/SVG/glTF만 유지한다.
@@ -121,7 +121,7 @@ pnpm run generate:api
 - 같은 bundle을 다시 처리했을 때의 `SKIPPED`, 새 Run, replace 정책을 명시한다.
 - local/default `SIMDASH_IMPORT_READINESS_POLICY=legacy`는 marker 없는 호환 bundle을
   읽고, Rocky profile은 `required`로 valid `.simdashboard-ready.json` v1 bundle만 읽는다.
-- producer는 source bundle과 final import root를 분리하고
+- canonical producer는 source bundle과 final import root를 분리하고
   `backend/scripts/publish_result_bundle.py --source-bundle … --import-root … --publication-id …`
   로 publish한다. app service는 import root에 write 권한을 받지 않는다.
 - publication은 sibling staging, payload `fsync`, marker last, no-replace rename, parent

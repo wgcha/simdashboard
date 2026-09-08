@@ -581,3 +581,16 @@
     font-size: calc(var(--ui-font-size) * .82)!important;
   }
 }
+.result-storage-disclosure { margin:0 0 20px; border:1px solid var(--color-border,#d4dfea); border-radius:10px; background:var(--color-surface-1,#fff); }
+.result-storage-disclosure>summary { min-height:48px; padding:0 16px; display:flex; align-items:center; color:var(--color-text,#172033); font-size:15px; font-weight:700; cursor:pointer; }
+.result-storage-disclosure[open]>summary { border-bottom:1px solid var(--color-border,#d4dfea); }
+.result-storage-disclosure .storage-workspace-panel { padding:0 16px 16px; }
+.app-shell .storage-global-actions { display:flex; align-items:center; gap:8px; }
+.app-shell .storage-global-settings { position:relative; }
+.app-shell .storage-global-settings>summary { min-height:38px; padding:0 10px; display:flex; align-items:center; border:1px solid var(--color-border-strong); border-radius:7px; color:var(--color-text); background:var(--color-surface-raised); font-size:14px; cursor:pointer; list-style:none; }
+.app-shell .storage-global-settings>summary::-webkit-details-marker { display:none; }
+.app-shell .storage-global-settings>div { position:absolute; z-index:8; right:0; top:calc(100% + 8px); width:min(360px,calc(100vw - 32px)); padding:14px; display:grid; gap:10px; border:1px solid var(--color-border); border-radius:9px; background:var(--color-surface-raised); box-shadow:0 14px 32px var(--color-shadow); }
+.app-shell .storage-global-settings label { display:grid; gap:5px; color:var(--color-text-muted); font-size:13px; }
+.app-shell .storage-global-settings input { min-width:0; min-height:40px; box-sizing:border-box; padding:0 10px; border:1px solid var(--color-border); border-radius:6px; color:var(--color-text); background:var(--color-surface); font:inherit; }
+.app-shell .storage-global-settings button { min-height:40px; border:1px solid var(--color-accent); border-radius:6px; color:var(--color-text-on-accent); background:var(--color-accent); font:inherit; cursor:pointer; }
+.app-shell .storage-global-settings small { color:var(--color-text-muted); font-size:12px; }

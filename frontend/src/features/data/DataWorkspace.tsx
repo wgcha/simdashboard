@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type ComponentType, type FormEvent } from 'react'
 import { AlertTriangle, Check, ChevronDown, ClipboardPlus, Database, Download, LayoutDashboard, Play, Plus, Upload } from 'lucide-react'
 import { api } from '../../api'
 import type { AnalysisRequest, LoadCase, Project } from '../../types'
 import { ResultImportHistory } from './ResultImportHistory'
 import { useDataWorkspaceContext } from './useDataWorkspaceContext'
+import { uploadStructuredResult, type StoragePanelProps } from '../../shared/api/storage'
 import './DataWorkspace.css'
-export function DataWorkspace({ canCreateProject, canRetryImports, contextChanging = false, embedded = false, projects, initialProjectId, initialRequestId, initialLoadCaseId, onContextChange, onLoadCaseCreated, onDataChanged, onOpenAnalysis, onOpenIntake }: { canCreateProject: boolean; canRetryImports: boolean; contextChanging?: boolean; embedded?: boolean; projects: Project[]; initialProjectId: string; initialRequestId?: string; initialLoadCaseId?: string; onContextChange?: (context: { projectId: string; requestId: string; loadCaseId: string }) => void; onLoadCaseCreated?: (loadCase: LoadCase) => void; onDataChanged: () => Promise<void>; onOpenAnalysis: (projectId: string, requestId: string, loadCaseId: string) => Promise<void>; onOpenIntake: () => void }) {
+export function DataWorkspace({ canCreateProject, canRetryImports, canUploadStorage = false, canBindStorage = false, canManageStorageRoot = false, contextChanging = false, embedded = false, projects, initialProjectId, initialRequestId, initialLoadCaseId, refreshToken = 0, storagePanel: StoragePanel, onContextChange, onLoadCaseCreated, onDataChanged, onOpenAnalysis, onOpenIntake }: { canCreateProject: boolean; canRetryImports: boolean; canUploadStorage?: boolean; canBindStorage?: boolean; canManageStorageRoot?: boolean; contextChanging?: boolean; embedded?: boolean; projects: Project[]; initialProjectId: string; initialRequestId?: string; initialLoadCaseId?: string; refreshToken?: number; storagePanel?: ComponentType<StoragePanelProps>; onContextChange?: (context: { projectId: string; requestId: string; loadCaseId: string }) => void; onLoadCaseCreated?: (loadCase: LoadCase) => void; onDataChanged: () => Promise<void>; onOpenAnalysis: (projectId: string, requestId: string, loadCaseId: string) => Promise<void>; onOpenIntake: () => void }) {
   const [managedProjects, setManagedProjects] = useState(projects)
   const [projectId, setProjectId] = useState(initialProjectId || projects[0]?.id || '')
   const [requests, setRequests] = useState<AnalysisRequest[]>([])
@@ -21,6 +22,7 @@ export function DataWorkspace({ canCreateProject, canRetryImports, contextChangi
   const [resultAuthor, setResultAuthor] = useState('해석 담당자')
   const [importPreview, setImportPreview] = useState<Awaited<ReturnType<typeof api.importResults>> | null>(null)
   const [imported, setImported] = useState(false)
+  const [storageBound, setStorageBound] = useState(false)
   const [historyRefreshToken, setHistoryRefreshToken] = useState(0)
   const resetImportState = useCallback(() => { setResultFile(null); setImportPreview(null); setImported(false) }, [])
   useDataWorkspaceContext({ embedded, initialLoadCaseId, initialProjectId, initialRequestId, projectId, projects, requestId, setFormError, setLoadCaseId, setLoadCases, setManagedProjects, setProjectId, setRequestId, setRequests, resetImportState })
@@ -95,31 +97,21 @@ export function DataWorkspace({ canCreateProject, canRetryImports, contextChangi
     } catch (reason) { if (isCurrentContext(operationContext)) setFormError(reason instanceof Error ? reason.message : 'Radioss 예제 검증에 실패했습니다.') }
     finally { setBusy(false) }
   }
-
-  const importTypedFolderExample = async () => {
-    if (!activeLoadCaseId || !contextReady) return
-    const operationContext = contextKey
-    setBusy(true); setFormError(''); setMessage(''); setImported(false)
-    try {
-      const result = await api.importTypedFolderExample(activeLoadCaseId)
-      if (!isCurrentContext(operationContext)) return
-      setImported(true)
-      setHistoryRefreshToken((value) => value + 1)
-      setMessage(`예제 폴더 스키마(${result.schema_id})를 적용해 실수·정수·텍스트 ${result.summary.scalar_count}개, 커브 ${result.summary.curve_count}개, 미디어 ${result.summary.media_count}개를 Run #${result.run_no}로 등록했습니다.`)
-      await onDataChanged()
-    } catch (reason) { if (isCurrentContext(operationContext)) setFormError(reason instanceof Error ? reason.message : '예제 폴더를 등록하지 못했습니다.') }
-    finally { setBusy(false) }
-  }
-
   const submitResultImport = async () => {
     if (!resultFile || !activeLoadCaseId || !contextReady) return
     const operationContext = contextKey
     setBusy(true); setFormError(''); setMessage('')
     try {
-      const result = await api.importResults(activeLoadCaseId, { ...resultFile, author: resultAuthor, validate_only: false })
+      if (!storageBound) { setFormError('결과 저장 폴더를 먼저 연결하세요.'); return }
+      const result = await uploadStructuredResult(activeLoadCaseId, { ...resultFile, author: resultAuthor })
       if (!isCurrentContext(operationContext)) return
-      setImportPreview(result); setImported(true)
-      setMessage(result.status === 'SKIPPED' ? '동일한 결과 파일이 이미 등록되어 있습니다. 기존 결과를 표시합니다.' : `Run #${result.run_no} 결과를 등록했습니다. 결과 검토 단계가 시작되었습니다.`)
+      const outcome = result.result ?? result as { status?: string; run_id?: string | null; run_no?: number | null }
+      if (!outcome || !['IMPORTED', 'SKIPPED'].includes(outcome.status || '') || !outcome.run_id) {
+        setFormError(outcome?.status === 'FAILED' ? '원본 파일은 저장됐지만 수치 결과 등록에 실패했습니다. 파일 상태를 확인하세요.' : '수치 결과 등록 응답을 확인하지 못했습니다. 현재 폴더를 새로고침해 주세요.')
+        return
+      }
+      setImported(true)
+      setMessage(outcome?.status === 'SKIPPED' ? '동일한 결과 파일이 이미 등록되어 있습니다. 기존 결과를 표시합니다.' : `Run #${outcome?.run_no ?? '신규'} 결과를 등록했습니다. 결과 검토 단계가 시작되었습니다.`)
       await onDataChanged()
     } catch (reason) { if (isCurrentContext(operationContext)) setFormError(reason instanceof Error ? reason.message : '해석 결과 등록에 실패했습니다.') }
     finally { setHistoryRefreshToken((value) => value + 1); setBusy(false) }
@@ -130,7 +122,6 @@ export function DataWorkspace({ canCreateProject, canRetryImports, contextChangi
       <div><span>OPERATIONS / FILE DATABASE</span><h1>해석 데이터 등록</h1><p>프로젝트와 하중 경우를 구성하고, 완료된 해석 결과를 검증해 DB에 등록합니다.</p></div>
       <div className="data-count"><strong>{managedProjects.length}</strong><span>PROJECTS</span></div>
     </header>}
-
     {!embedded && <div className="data-hierarchy-bar">
       <label><span>1 · 프로젝트</span><select aria-label="등록 프로젝트 선택" value={projectId} onChange={(event) => setProjectId(event.target.value)}>{managedProjects.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.product_name}</option>)}</select></label>
       <i>›</i>
@@ -138,7 +129,6 @@ export function DataWorkspace({ canCreateProject, canRetryImports, contextChangi
       <i>›</i>
       <label><span>3 · 하중 경우</span><select aria-label="등록 하중 경우 선택" value={loadCaseId} onChange={(event) => { setLoadCaseId(event.target.value); setResultFile(null); setImportPreview(null); setImported(false) }} disabled={!loadCases.length}>{loadCases.length ? loadCases.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.analysis_type}</option>) : <option value="">하중 경우 없음</option>}</select></label>
     </div>}
-
     {(message || formError) && <div className={`data-message ${formError ? 'error' : ''}`}>{formError ? <AlertTriangle /> : <Check />}{formError || message}</div>}
     <details className="data-setup-details" open={projects.length === 0}>
       <summary>프로젝트와 하중 경우 설정</summary>
@@ -161,11 +151,11 @@ export function DataWorkspace({ canCreateProject, canRetryImports, contextChangi
       </form></article>
     </div>
     </details>
-
+    {activeLoadCaseId && StoragePanel ? <StoragePanel refreshToken={refreshToken} loadCaseId={activeLoadCaseId} projectLabel={managedProjects.find((item) => item.id === projectId)?.name} requestLabel={selectedRequest?.title} loadCaseLabel={loadCases.find((item) => item.id === activeLoadCaseId)?.name} canManageRoot={canManageStorageRoot} canBindFolder={canBindStorage} canUpload={canUploadStorage} allowStructuredUpload={false} onBindingStateChange={setStorageBound} onChanged={onDataChanged} /> : null}
     <article className="result-import-card">
       <header>
         <div><span>{embedded ? 'RESULT INGESTION' : '03 · RESULT INGESTION'}</span><h2>해석 결과 가져오기</h2><p>선택한 하중 경우에 CSV 또는 JSON 결과를 검증한 뒤 새 Analysis Run으로 저장합니다.</p></div>
-        <div className="template-links"><button onClick={() => void loadRadiossExample()} disabled={!activeLoadCaseId || !contextReady || busy}><Play /> 예제로 검증</button><button onClick={() => void importTypedFolderExample()} disabled={!activeLoadCaseId || !contextReady || busy}><Database /> 형식별 폴더 예제 등록</button><a href={api.resultImportTemplateUrl('radioss-csv')} download><Download /> Radioss CSV</a><a href={api.resultImportTemplateUrl('csv')} download><Download /> 요약 CSV</a><a href={api.resultImportTemplateUrl('json')} download><Download /> JSON</a></div>
+        <div className="template-links"><button onClick={() => void loadRadiossExample()} disabled={!activeLoadCaseId || !contextReady || busy}><Play /> 예제로 검증</button><a href={api.resultImportTemplateUrl('radioss-csv')} download><Download /> Radioss CSV</a><a href={api.resultImportTemplateUrl('csv')} download><Download /> 요약 CSV</a><a href={api.resultImportTemplateUrl('json')} download><Download /> JSON</a></div>
       </header>
       <div className="result-import-body">
         <div className="result-drop-zone">
@@ -182,7 +172,7 @@ export function DataWorkspace({ canCreateProject, canRetryImports, contextChangi
           </> : <div className="result-preview-empty"><Database /><strong>검증 결과가 여기에 표시됩니다.</strong><span>허용 변수 외 데이터와 중복 시점은 저장 전에 차단됩니다.</span></div>}
         </div>
       </div>
-      <footer><div><strong>판정 규칙</strong><span>Open Cell 응력 및 Chassis Rear 영구변형 모두 값이 기준 이상이면 FAIL</span></div>{imported ? <button className="open-result-button" disabled={!contextReady} onClick={() => void onOpenAnalysis(projectId, activeRequestId, activeLoadCaseId)}><LayoutDashboard /> 분석 대시보드에서 확인</button> : <button className="data-submit import-button" onClick={() => void submitResultImport()} disabled={!importPreview || !resultFile || !contextReady || busy}><Upload /> 검증된 결과 등록</button>}</footer>
+      <footer><div><strong>판정 규칙</strong><span>Open Cell 응력 및 Chassis Rear 영구변형 모두 값이 기준 이상이면 FAIL</span></div>{imported ? <button className="open-result-button" disabled={!contextReady} onClick={() => void onOpenAnalysis(projectId, activeRequestId, activeLoadCaseId)}><LayoutDashboard /> 분석 대시보드에서 확인</button> : <button className="data-submit import-button" onClick={() => void submitResultImport()} disabled={!importPreview || !resultFile || !contextReady || !storageBound || busy}><Upload /> 검증된 결과 등록</button>}</footer>
     </article>
     <details className="data-history-details"><summary>이전 결과 가져오기 이력</summary><ResultImportHistory loadCaseId={activeLoadCaseId} canRetryImports={canRetryImports} refreshToken={historyRefreshToken} /></details>
   </section>

@@ -4036,6 +4036,413 @@
         }
       }
     },
+    "/api/storage/config": {
+      "get": {
+        "tags": [
+          "spdm-storage"
+        ],
+        "summary": "Get Storage Config",
+        "operationId": "get_storage_config_api_storage_config_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageConfigResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "spdm-storage"
+        ],
+        "summary": "Update Storage Config",
+        "operationId": "update_storage_config_api_storage_config_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StorageConfigUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageConfigResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/storage/folders": {
+      "get": {
+        "tags": [
+          "spdm-storage"
+        ],
+        "summary": "List Storage Folders",
+        "operationId": "list_storage_folders_api_storage_folders_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageFoldersResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/storage/refresh": {
+      "post": {
+        "tags": [
+          "spdm-storage"
+        ],
+        "summary": "Refresh Storage",
+        "operationId": "refresh_storage_api_storage_refresh_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageGlobalRefreshResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/load-cases/{load_case_id}/storage": {
+      "get": {
+        "tags": [
+          "spdm-storage"
+        ],
+        "summary": "Get Load Case Storage",
+        "operationId": "get_load_case_storage_api_load_cases__load_case_id__storage_get",
+        "parameters": [
+          {
+            "name": "load_case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Load Case Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageLoadCaseResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "spdm-storage"
+        ],
+        "summary": "Bind Load Case Storage",
+        "operationId": "bind_load_case_storage_api_load_cases__load_case_id__storage_put",
+        "parameters": [
+          {
+            "name": "load_case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Load Case Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StorageBindingUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageBindingUpdateResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/load-cases/{load_case_id}/storage/refresh": {
+      "post": {
+        "tags": [
+          "spdm-storage"
+        ],
+        "summary": "Refresh Load Case Storage",
+        "operationId": "refresh_load_case_storage_api_load_cases__load_case_id__storage_refresh_post",
+        "parameters": [
+          {
+            "name": "load_case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Load Case Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageScopeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/load-cases/{load_case_id}/storage/upload": {
+      "post": {
+        "tags": [
+          "spdm-storage"
+        ],
+        "summary": "Upload Structured Result",
+        "operationId": "upload_structured_result_api_load_cases__load_case_id__storage_upload_post",
+        "parameters": [
+          {
+            "name": "load_case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Load Case Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StructuredUpload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StructuredUploadResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/load-cases/{load_case_id}/storage/files": {
+      "put": {
+        "tags": [
+          "spdm-storage"
+        ],
+        "summary": "Upload Raw File",
+        "operationId": "upload_raw_file_api_load_cases__load_case_id__storage_files_put",
+        "parameters": [
+          {
+            "name": "load_case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Load Case Id"
+            }
+          },
+          {
+            "name": "filename",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 240,
+              "title": "Filename"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "enum": [
+                "solver",
+                "media",
+                "inputs",
+                "reports"
+              ],
+              "type": "string",
+              "title": "Kind"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RawUploadResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/storage/files/{file_id}/download": {
+      "get": {
+        "tags": [
+          "spdm-storage"
+        ],
+        "summary": "Download Storage File",
+        "operationId": "download_storage_file_api_storage_files__file_id__download_get",
+        "parameters": [
+          {
+            "name": "file_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "File Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/assets/{asset_id}": {
       "get": {
         "summary": "Get Result Asset",
@@ -8298,6 +8705,18 @@
         ],
         "title": "QualityThresholdUpdate"
       },
+      "RawUploadResponse": {
+        "properties": {
+          "stored_file": {
+            "$ref": "#/components/schemas/StorageFileResponse"
+          }
+        },
+        "type": "object",
+        "required": [
+          "stored_file"
+        ],
+        "title": "RawUploadResponse"
+      },
       "ReportLayoutCatalogResponse": {
         "properties": {
           "id": {
@@ -9636,6 +10055,894 @@
           "review_status"
         ],
         "title": "ReviewItemUpdate"
+      },
+      "StorageBindingResponse": {
+        "properties": {
+          "relative_path": {
+            "type": "string",
+            "title": "Relative Path"
+          },
+          "project_id": {
+            "type": "string",
+            "title": "Project Id"
+          },
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          },
+          "load_case_id": {
+            "type": "string",
+            "title": "Load Case Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "relative_path",
+          "project_id",
+          "request_id",
+          "load_case_id"
+        ],
+        "title": "StorageBindingResponse"
+      },
+      "StorageBindingUpdate": {
+        "properties": {
+          "relative_path": {
+            "type": "string",
+            "maxLength": 1024,
+            "minLength": 3,
+            "title": "Relative Path"
+          }
+        },
+        "type": "object",
+        "required": [
+          "relative_path"
+        ],
+        "title": "StorageBindingUpdate"
+      },
+      "StorageBindingUpdateResponse": {
+        "properties": {
+          "binding": {
+            "$ref": "#/components/schemas/StorageBindingResponse"
+          }
+        },
+        "type": "object",
+        "required": [
+          "binding"
+        ],
+        "title": "StorageBindingUpdateResponse"
+      },
+      "StorageConfigResponse": {
+        "properties": {
+          "configured": {
+            "type": "boolean",
+            "title": "Configured"
+          },
+          "locked": {
+            "type": "boolean",
+            "title": "Locked"
+          },
+          "root": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Root"
+          }
+        },
+        "type": "object",
+        "required": [
+          "configured",
+          "locked"
+        ],
+        "title": "StorageConfigResponse"
+      },
+      "StorageConfigUpdate": {
+        "properties": {
+          "root": {
+            "type": "string",
+            "maxLength": 2048,
+            "minLength": 3,
+            "title": "Root"
+          }
+        },
+        "type": "object",
+        "required": [
+          "root"
+        ],
+        "title": "StorageConfigUpdate"
+      },
+      "StorageFileResponse": {
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "relative_path": {
+            "type": "string",
+            "title": "Relative Path"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "size": {
+            "type": "integer",
+            "title": "Size"
+          },
+          "checksum": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checksum"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "reused": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reused"
+          }
+        },
+        "type": "object",
+        "required": [
+          "relative_path",
+          "kind",
+          "size"
+        ],
+        "title": "StorageFileResponse"
+      },
+      "StorageFoldersResponse": {
+        "properties": {
+          "folders": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Folders"
+          }
+        },
+        "type": "object",
+        "required": [
+          "folders"
+        ],
+        "title": "StorageFoldersResponse"
+      },
+      "StorageGlobalRefreshResponse": {
+        "properties": {
+          "created_bindings": {
+            "items": {
+              "$ref": "#/components/schemas/StorageBindingResponse"
+            },
+            "type": "array",
+            "title": "Created Bindings"
+          },
+          "refreshed": {
+            "items": {
+              "$ref": "#/components/schemas/StorageScopeResponse"
+            },
+            "type": "array",
+            "title": "Refreshed"
+          }
+        },
+        "type": "object",
+        "required": [
+          "created_bindings",
+          "refreshed"
+        ],
+        "title": "StorageGlobalRefreshResponse"
+      },
+      "StorageLoadCaseResponse": {
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/StorageConfigResponse"
+          },
+          "binding": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StorageBindingResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rules": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Rules"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/StorageFileResponse"
+            },
+            "type": "array",
+            "title": "Files"
+          },
+          "candidate_folders": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Candidate Folders"
+          }
+        },
+        "type": "object",
+        "required": [
+          "config",
+          "binding",
+          "rules",
+          "files",
+          "candidate_folders"
+        ],
+        "title": "StorageLoadCaseResponse"
+      },
+      "StorageResultResponse": {
+        "properties": {
+          "file_id": {
+            "type": "string",
+            "title": "File Id"
+          },
+          "relative_path": {
+            "type": "string",
+            "title": "Relative Path"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "IMPORTED",
+              "SKIPPED",
+              "FAILED"
+            ],
+            "title": "Status"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "run_no": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run No"
+          },
+          "filename": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filename"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
+          },
+          "scalar_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scalar Count"
+          },
+          "node_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Node Count"
+          },
+          "element_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Element Count"
+          },
+          "frame_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frame Count"
+          },
+          "final_time": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Final Time"
+          },
+          "time_series_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time Series Count"
+          },
+          "open_cell_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Open Cell Count"
+          },
+          "chassis_rear_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chassis Rear Count"
+          },
+          "fail_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fail Count"
+          },
+          "overall_verdict": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "PASS",
+                  "FAIL"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Overall Verdict"
+          },
+          "source_format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Format"
+          },
+          "results": {
+            "items": {},
+            "type": "array",
+            "title": "Results"
+          },
+          "warnings": {
+            "items": {},
+            "type": "array",
+            "title": "Warnings"
+          },
+          "operation": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "CREATED",
+                  "NOOP",
+                  "REPLACED",
+                  "REJECTED"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "existing_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Existing Run Id"
+          },
+          "replaced_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replaced Run Id"
+          },
+          "source_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Revision"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file_id",
+          "relative_path",
+          "status"
+        ],
+        "title": "StorageResultResponse"
+      },
+      "StorageScopeResponse": {
+        "properties": {
+          "binding": {
+            "$ref": "#/components/schemas/StorageBindingResponse"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/StorageFileResponse"
+            },
+            "type": "array",
+            "title": "Files"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/StorageResultResponse"
+            },
+            "type": "array",
+            "title": "Results"
+          }
+        },
+        "type": "object",
+        "required": [
+          "binding",
+          "files",
+          "results"
+        ],
+        "title": "StorageScopeResponse"
+      },
+      "StructuredUpload": {
+        "properties": {
+          "filename": {
+            "type": "string",
+            "maxLength": 240,
+            "minLength": 5,
+            "title": "Filename"
+          },
+          "content": {
+            "type": "string",
+            "maxLength": 5000000,
+            "minLength": 1,
+            "title": "Content"
+          },
+          "author": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 60
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Author"
+          }
+        },
+        "type": "object",
+        "required": [
+          "filename",
+          "content"
+        ],
+        "title": "StructuredUpload"
+      },
+      "StructuredUploadResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "VALID",
+              "IMPORTED",
+              "SKIPPED",
+              "REJECTED"
+            ],
+            "title": "Status"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "run_no": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run No"
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
+          },
+          "scalar_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scalar Count"
+          },
+          "node_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Node Count"
+          },
+          "element_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Element Count"
+          },
+          "frame_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frame Count"
+          },
+          "final_time": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Final Time"
+          },
+          "time_series_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time Series Count"
+          },
+          "open_cell_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Open Cell Count"
+          },
+          "chassis_rear_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chassis Rear Count"
+          },
+          "fail_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fail Count"
+          },
+          "overall_verdict": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "PASS",
+                  "FAIL"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Overall Verdict"
+          },
+          "source_format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Format"
+          },
+          "results": {
+            "items": {},
+            "type": "array",
+            "title": "Results"
+          },
+          "warnings": {
+            "items": {},
+            "type": "array",
+            "title": "Warnings"
+          },
+          "operation": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "CREATED",
+                  "NOOP",
+                  "REPLACED",
+                  "REJECTED"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "existing_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Existing Run Id"
+          },
+          "replaced_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replaced Run Id"
+          },
+          "source_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Revision"
+          },
+          "stored_file": {
+            "$ref": "#/components/schemas/StorageFileResponse"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "filename",
+          "stored_file"
+        ],
+        "title": "StructuredUploadResponse"
       },
       "TaskTypeRef": {
         "properties": {

@@ -1,6 +1,6 @@
 # 현재 구현 아키텍처
 
-- 기준일: 2026-09-01
+- 기준일: 2026-09-08
 - 상태: 현재 코드 기준
 - 대상: `backend/app`, `frontend/src`, DB migration, API 계약, 테스트 경계
 
@@ -30,6 +30,18 @@ Browser
 ```
 
 현재는 legacy 구조와 목표 구조가 공존하는 점진적 전환 상태다. `main.py → application → domain → persistence adapter`가 모든 기능에 일괄 적용된 것처럼 설명하면 안 된다.
+
+### SPDM 저장소 연계
+
+`routers/spdm_storage.py`가 설정·binding·새로고침·파일 업로드/다운로드 HTTP 경계를,
+`services/spdm_storage.py`가 Windows 파일 게시/읽기, Project/WR/CAE 탐색, parent registry와
+파일 index를 담당한다. 수치 결과는 기존 `run_manual_import`와 결과 UoW를 재사용한다.
+`0020_spdm_storage`는 root 설정, Project/WR parent 연결, 하중 경우 binding과 파일 index를 추가한다.
+
+Frontend는 `features/storage/`의 독립 화면과 generated client 기반 `shared/api/storage.ts`를 사용한다.
+App 및 WorkspaceRouteRenderer가 DataWorkspace에 저장소 패널을 주입하므로 Data feature가
+Storage feature를 직접 import하지 않는다. 파일별 수치 조회는 저장된 Run ID로 기존 overview API를 읽는다.
+실행 계약과 검증 범위는 [SPDM 저장 폴더 연계](spdm-storage-workflow.md)를 따른다.
 
 ## 2. 저장소 최상위 책임
 

@@ -26,6 +26,8 @@
 | 개발 변경 절차 | [`development-workflow.md`](development-workflow.md) |
 | 프로그램 정리·개발 우선순위 | [`program-consolidation-and-development-plan.md`](program-consolidation-and-development-plan.md) |
 | DB 결과 폴더·확장자 계약 | [`storage-folder-and-file-contract.md`](storage-folder-and-file-contract.md) |
+| SPDM 의뢰 탐색·업로드·결과 연결 | [`spdm-storage-workflow.md`](spdm-storage-workflow.md) |
+| 사내 PC Git 업데이트 | [`windows-git-update.md`](windows-git-update.md) |
 | 완결형 예제 프로젝트 | [`coherent-demo-examples.md`](coherent-demo-examples.md) |
 | WSL 개발환경 | [`wsl-development-setup.md`](wsl-development-setup.md) |
 | PostgreSQL 전환·운영 | [`backend-sql-integration-guide.md`](backend-sql-integration-guide.md) |

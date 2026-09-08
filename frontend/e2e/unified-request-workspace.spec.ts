@@ -158,9 +158,21 @@ test('일반 사용자는 통합 탭에서 허용된 작업만 열 수 있다', 
   await expect(page.getByLabel('등록 의뢰 선택')).toHaveCount(0)
 })
 
-test('등록 화면에서 의뢰 문맥을 바꾸는 동안 이전 하중 경우의 등록 동작을 차단한다', async ({ page }) => {
+test('등록 화면에서 의뢰 문맥을 바꾸는 동안 이전 하중 경우의 등록 동작을 차단한다', async ({ page }, testInfo) => {
   await loginWorkspace(page)
   await selectRequestContext(page)
+  const configResponse = await page.request.get('/api/storage/config')
+  expect(configResponse.ok()).toBe(true)
+  const config = await configResponse.json() as { configured?: boolean; root?: string | null }
+  const storageRoot = config.configured && config.root ? config.root : testInfo.outputPath('SPDM context guard')
+  const storageLeaf = 'Project_9010_E2E_pv1/WR_9010_SimType1/CAE/Assy_Compare/CMS'
+  mkdirSync(path.join(storageRoot, ...storageLeaf.split('/')), { recursive: true })
+  if (!config.configured) {
+    expect((await page.request.put('/api/storage/config', { data: { root: storageRoot } })).ok()).toBe(true)
+  }
+  expect((await page.request.put(`/api/load-cases/${context.loadCase}/storage`, {
+    data: { relative_path: storageLeaf },
+  })).ok()).toBe(true)
   await journey(page).getByRole('button', { name: '결과 등록', exact: true }).click()
   await page.getByRole('button', { name: '예제로 검증', exact: true }).click()
   const submit = page.getByRole('button', { name: '검증된 결과 등록', exact: true })
