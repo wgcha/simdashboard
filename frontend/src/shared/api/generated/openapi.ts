@@ -879,6 +879,109 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/modeling-templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Templates */
+        get: operations["list_templates_api_modeling_templates_get"];
+        put?: never;
+        /** Create Template */
+        post: operations["create_template_api_modeling_templates_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/modeling-templates/{template_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Template */
+        get: operations["get_template_api_modeling_templates__template_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/modeling-templates/{template_id}/versions/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Version */
+        get: operations["get_version_api_modeling_templates__template_id__versions__version__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/modeling-templates/{template_id}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Add Version */
+        post: operations["add_version_api_modeling_templates__template_id__versions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/modeling-templates/{template_id}/versions/{version}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download Version */
+        get: operations["download_version_api_modeling_templates__template_id__versions__version__download_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/modeling-templates/{template_id}/versions/{version}/files/{file_id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download File */
+        get: operations["download_file_api_modeling_templates__template_id__versions__version__files__file_id__download_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/result-imports/refresh": {
         parameters: {
             query?: never;
@@ -2246,6 +2349,60 @@ export interface components {
              */
             updated_by: string;
         };
+        /** CardCreate */
+        CardCreate: {
+            /** Name */
+            name: string;
+            /** Product Name */
+            product_name: string;
+            /** Load Case Name */
+            load_case_name: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+        };
+        /** CardResponse */
+        CardResponse: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Product Name */
+            product_name: string;
+            /** Load Case Name */
+            load_case_name: string;
+            /** Description */
+            description: string;
+            /** Latest Version */
+            latest_version: number;
+            /** File Count */
+            file_count: number;
+            /** Total Bytes */
+            total_bytes: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** CatalogResponse */
+        CatalogResponse: {
+            /** Items */
+            items: components["schemas"]["CardResponse"][];
+            /** Products */
+            products: string[];
+            /** Load Cases */
+            load_cases: string[];
+            /** Can Manage */
+            can_manage: boolean;
+        };
         /** DashboardClone */
         DashboardClone: {
             /** Name */
@@ -2296,6 +2453,40 @@ export interface components {
              * @default 데모 사용자
              */
             created_by: string;
+        };
+        /** DetailResponse */
+        DetailResponse: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Product Name */
+            product_name: string;
+            /** Load Case Name */
+            load_case_name: string;
+            /** Description */
+            description: string;
+            /** Latest Version */
+            latest_version: number;
+            /** File Count */
+            file_count: number;
+            /** Total Bytes */
+            total_bytes: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Versions */
+            versions: components["schemas"]["VersionResponse"][];
+            /** Files */
+            files: components["schemas"]["FileResponse"][];
+            selected_version: components["schemas"]["VersionResponse"];
         };
         /** DropVideoEvaluation */
         DropVideoEvaluation: {
@@ -2436,6 +2627,24 @@ export interface components {
             threshold: number;
             /** Unit */
             unit: string;
+        };
+        /** FilePayload */
+        FilePayload: {
+            /** Relative Path */
+            relative_path: string;
+            /** Content Base64 */
+            content_base64: string;
+        };
+        /** FileResponse */
+        FileResponse: {
+            /** Id */
+            id: string;
+            /** Relative Path */
+            relative_path: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /** Checksum */
+            checksum: string;
         };
         /** GlobalAdminUpdate */
         GlobalAdminUpdate: {
@@ -3512,6 +3721,33 @@ export interface components {
             result_group: "OPEN_CELL" | "CHASSIS_REAR" | "CUSTOM";
             /** Updated By */
             updated_by?: string | null;
+        };
+        /** VersionCreate */
+        VersionCreate: {
+            /** Expected Version */
+            expected_version: number;
+            /**
+             * Mode
+             * @default merge
+             * @enum {string}
+             */
+            mode: "merge" | "replace";
+            /** Files */
+            files: components["schemas"]["FilePayload"][];
+        };
+        /** VersionResponse */
+        VersionResponse: {
+            /** Version */
+            version: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** File Count */
+            file_count: number;
+            /** Total Bytes */
+            total_bytes: number;
         };
         /** Widget */
         Widget: {
@@ -5641,6 +5877,235 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     }[];
+                };
+            };
+        };
+    };
+    list_templates_api_modeling_templates_get: {
+        parameters: {
+            query?: {
+                q?: string | null;
+                product_name?: string | null;
+                load_case_name?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_template_api_modeling_templates_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CardCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_template_api_modeling_templates__template_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                template_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_version_api_modeling_templates__template_id__versions__version__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                template_id: string;
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    add_version_api_modeling_templates__template_id__versions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                template_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VersionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_version_api_modeling_templates__template_id__versions__version__download_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                template_id: string;
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_file_api_modeling_templates__template_id__versions__version__files__file_id__download_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                template_id: string;
+                version: number;
+                file_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

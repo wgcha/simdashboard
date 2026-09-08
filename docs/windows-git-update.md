@@ -11,6 +11,7 @@ git status --short
 git branch --show-current
 git pull --ff-only origin codex/windows-one-click-deploy
 .\deploy.bat
+& .\.venv-runtime\Scripts\python.exe backend\scripts\upgrade_postgres_schema.py
 .\start.bat
 ```
 
@@ -24,7 +25,7 @@ git pull --ff-only
 
 `git status`에 직접 수정한 파일이 있거나 `pull --ff-only`가 중단되면 강제 덮어쓰기·reset·clean을 하지 않는다. 변경 파일과 오류 내용을 확인한 후 업데이트한다. `deploy.bat`은 필요한 런타임·의존성을 준비하고, 이후 평상시 실행은 `start.bat`만 사용한다.
 
-기본 DuckDB는 시작 시 추가 테이블을 준비한다. PostgreSQL을 사용하는 설치는 앱을 다시 시작하기 전에 새 `0020_spdm_storage` migration을 적용해야 한다. `deploy.bat`은 PostgreSQL migration을 대신 실행하지 않는다. 기존 owner 설정을 갖춘 소스 폴더에서 아래 명시 업데이트를 실행한 후 `start.bat`을 실행한다. owner 설정이 없는 경우 [PostgreSQL 운영 절차](backend-sql-integration-guide.md)의 자격 증명·대상 확인 절차를 먼저 따른다.
+기본 DuckDB는 시작 시 추가 테이블을 준비하며, 위 PostgreSQL 업데이트 명령은 자동으로 건너뛴다. PostgreSQL을 사용하는 설치는 앱을 다시 시작하기 전에 최신 `0021_modeling_templates` migration (SPDM 및 모델링 CSV 라이브러리 포함)을 적용해야 한다. `deploy.bat`은 PostgreSQL migration을 대신 실행하지 않는다. 기존 owner 설정을 갖춘 소스 폴더에서 아래 명시 업데이트를 실행한 후 `start.bat`을 실행한다. owner 설정이 없는 경우 [PostgreSQL 운영 절차](backend-sql-integration-guide.md)의 자격 증명·대상 확인 절차를 먼저 따른다.
 
 ```powershell
 & .\.venv-runtime\Scripts\python.exe backend\scripts\upgrade_postgres_schema.py
@@ -45,6 +46,7 @@ cd simdashboard-git
 
 ```powershell
 .\deploy.bat
+& .\.venv-runtime\Scripts\python.exe backend\scripts\upgrade_postgres_schema.py
 .\start.bat
 ```
 

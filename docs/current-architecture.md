@@ -43,6 +43,17 @@ App 및 WorkspaceRouteRenderer가 DataWorkspace에 저장소 패널을 주입하
 Storage feature를 직접 import하지 않는다. 파일별 수치 조회는 저장된 Run ID로 기존 overview API를 읽는다.
 실행 계약과 검증 범위는 [SPDM 저장 폴더 연계](spdm-storage-workflow.md)를 따른다.
 
+### 제품·하중 경우별 모델링 CSV 라이브러리
+
+`routers/modeling_templates.py`는 형식화된 API·권한·36 MiB 요청 수신 제한을,
+`services/modeling_templates.py`는 경로 검증·검색·트랜잭션·불변 버전 및 CSV 원본 저장을 담당한다.
+`0021_modeling_templates`의 카드/버전/파일 테이블에 파일 바이트까지 저장하며,
+기존 `template_executions` 자동화 실행 이력과 SPDM 결과 파일은 별도로 유지한다.
+Frontend는 `features/workbench/modeling-templates/`에서 카드, 생성 대화상자, 업로드 확인 패널,
+폴더 트리를 분리하고 `shared/api/modelingTemplates.ts`의 생성 API 계약을 사용한다.
+목록·버전 조회 캐시는 제품/하중 경우/검색어/카드/버전 문맥으로 구분한다.
+사용·저장 계약은 [모델링 템플릿 라이브러리](modeling-template-library.md)를 따른다.
+
 ### 메뉴 전환과 조회 수명
 
 `app/routing/workspaceScreenModules.tsx`에서 화면별 동적 import와 사전 로딩을 함께 관리한다.

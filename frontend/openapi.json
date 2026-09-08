@@ -2860,6 +2860,378 @@
         }
       }
     },
+    "/api/modeling-templates": {
+      "get": {
+        "tags": [
+          "modeling-templates"
+        ],
+        "summary": "List Templates",
+        "operationId": "list_templates_api_modeling_templates_get",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "name": "product_name",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Product Name"
+            }
+          },
+          {
+            "name": "load_case_name",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Load Case Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "modeling-templates"
+        ],
+        "summary": "Create Template",
+        "operationId": "create_template_api_modeling_templates_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CardCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/modeling-templates/{template_id}": {
+      "get": {
+        "tags": [
+          "modeling-templates"
+        ],
+        "summary": "Get Template",
+        "operationId": "get_template_api_modeling_templates__template_id__get",
+        "parameters": [
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Template Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/modeling-templates/{template_id}/versions/{version}": {
+      "get": {
+        "tags": [
+          "modeling-templates"
+        ],
+        "summary": "Get Version",
+        "operationId": "get_version_api_modeling_templates__template_id__versions__version__get",
+        "parameters": [
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Template Id"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Version"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/modeling-templates/{template_id}/versions": {
+      "post": {
+        "tags": [
+          "modeling-templates"
+        ],
+        "summary": "Add Version",
+        "operationId": "add_version_api_modeling_templates__template_id__versions_post",
+        "parameters": [
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Template Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VersionCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/modeling-templates/{template_id}/versions/{version}/download": {
+      "get": {
+        "tags": [
+          "modeling-templates"
+        ],
+        "summary": "Download Version",
+        "operationId": "download_version_api_modeling_templates__template_id__versions__version__download_get",
+        "parameters": [
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Template Id"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Version"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/modeling-templates/{template_id}/versions/{version}/files/{file_id}/download": {
+      "get": {
+        "tags": [
+          "modeling-templates"
+        ],
+        "summary": "Download File",
+        "operationId": "download_file_api_modeling_templates__template_id__versions__version__files__file_id__download_get",
+        "parameters": [
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Template Id"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Version"
+            }
+          },
+          {
+            "name": "file_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "File Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/result-imports/refresh": {
       "post": {
         "tags": [
@@ -7422,6 +7794,135 @@
         ],
         "title": "BatchProfileInput"
       },
+      "CardCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 160,
+            "title": "Name"
+          },
+          "product_name": {
+            "type": "string",
+            "maxLength": 160,
+            "title": "Product Name"
+          },
+          "load_case_name": {
+            "type": "string",
+            "maxLength": 160,
+            "title": "Load Case Name"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 2000,
+            "title": "Description",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "product_name",
+          "load_case_name"
+        ],
+        "title": "CardCreate"
+      },
+      "CardResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "product_name": {
+            "type": "string",
+            "title": "Product Name"
+          },
+          "load_case_name": {
+            "type": "string",
+            "title": "Load Case Name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "latest_version": {
+            "type": "integer",
+            "title": "Latest Version"
+          },
+          "file_count": {
+            "type": "integer",
+            "title": "File Count"
+          },
+          "total_bytes": {
+            "type": "integer",
+            "title": "Total Bytes"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "product_name",
+          "load_case_name",
+          "description",
+          "latest_version",
+          "file_count",
+          "total_bytes",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "CardResponse"
+      },
+      "CatalogResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CardResponse"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "products": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Products"
+          },
+          "load_cases": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Load Cases"
+          },
+          "can_manage": {
+            "type": "boolean",
+            "title": "Can Manage"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "products",
+          "load_cases",
+          "can_manage"
+        ],
+        "title": "CatalogResponse"
+      },
       "DashboardClone": {
         "properties": {
           "name": {
@@ -7578,6 +8079,86 @@
           "nodes"
         ],
         "title": "DemoRunCreate"
+      },
+      "DetailResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "product_name": {
+            "type": "string",
+            "title": "Product Name"
+          },
+          "load_case_name": {
+            "type": "string",
+            "title": "Load Case Name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "latest_version": {
+            "type": "integer",
+            "title": "Latest Version"
+          },
+          "file_count": {
+            "type": "integer",
+            "title": "File Count"
+          },
+          "total_bytes": {
+            "type": "integer",
+            "title": "Total Bytes"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "versions": {
+            "items": {
+              "$ref": "#/components/schemas/VersionResponse"
+            },
+            "type": "array",
+            "title": "Versions"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/FileResponse"
+            },
+            "type": "array",
+            "title": "Files"
+          },
+          "selected_version": {
+            "$ref": "#/components/schemas/VersionResponse"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "product_name",
+          "load_case_name",
+          "description",
+          "latest_version",
+          "file_count",
+          "total_bytes",
+          "created_at",
+          "updated_at",
+          "versions",
+          "files",
+          "selected_version"
+        ],
+        "title": "DetailResponse"
       },
       "DropVideoEvaluation": {
         "properties": {
@@ -7992,6 +8573,53 @@
           "unit"
         ],
         "title": "DropVideoSubsystemSummary"
+      },
+      "FilePayload": {
+        "properties": {
+          "relative_path": {
+            "type": "string",
+            "maxLength": 1024,
+            "title": "Relative Path"
+          },
+          "content_base64": {
+            "type": "string",
+            "title": "Content Base64"
+          }
+        },
+        "type": "object",
+        "required": [
+          "relative_path",
+          "content_base64"
+        ],
+        "title": "FilePayload"
+      },
+      "FileResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "relative_path": {
+            "type": "string",
+            "title": "Relative Path"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "title": "Size Bytes"
+          },
+          "checksum": {
+            "type": "string",
+            "title": "Checksum"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "relative_path",
+          "size_bytes",
+          "checksum"
+        ],
+        "title": "FileResponse"
       },
       "GlobalAdminUpdate": {
         "properties": {
@@ -11406,6 +12034,67 @@
           "unit"
         ],
         "title": "VariableUpdate"
+      },
+      "VersionCreate": {
+        "properties": {
+          "expected_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Version"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "merge",
+              "replace"
+            ],
+            "title": "Mode",
+            "default": "merge"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/FilePayload"
+            },
+            "type": "array",
+            "maxItems": 200,
+            "title": "Files"
+          }
+        },
+        "type": "object",
+        "required": [
+          "expected_version",
+          "files"
+        ],
+        "title": "VersionCreate"
+      },
+      "VersionResponse": {
+        "properties": {
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "file_count": {
+            "type": "integer",
+            "title": "File Count"
+          },
+          "total_bytes": {
+            "type": "integer",
+            "title": "Total Bytes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "version",
+          "created_at",
+          "file_count",
+          "total_bytes"
+        ],
+        "title": "VersionResponse"
       },
       "Widget": {
         "properties": {
