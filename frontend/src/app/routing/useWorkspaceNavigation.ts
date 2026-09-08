@@ -5,6 +5,7 @@ import type { AuthUser } from '../../auth'
 import type { MenuId, WorkspacePage } from '../../features/auth/access'
 import { dashboardEntryForNavigation, WORKSPACE_ROUTES_BY_ID, workspacePathForPage, workspaceRouteForPathname, type DashboardEntry } from '../../features/navigation/workspaceRouteRegistry'
 import { resolveBlockedNavigation } from './navigationState'
+import { preloadWorkspaceRouteModule } from './workspaceRouteModules'
 
 type WorkspaceNavigationOptions = {
   allowedPages: ReadonlySet<WorkspacePage>
@@ -73,6 +74,15 @@ export function useWorkspaceNavigation({
 
   useEffect(() => {
     if (!authUser || authUser.account_status !== 'ACTIVE' || !menuPolicyReady) return
+    // Load only permitted, frequently used screens after the first paint. No data requests.
+    const timers = (['dashboard', 'data', 'workbench'] as const)
+      .filter((page) => allowedPages.has(page))
+      .map((page, index) => window.setTimeout(() => preloadWorkspaceRouteModule(page), 600 + index * 250))
+    return () => timers.forEach(window.clearTimeout)
+  }, [authUser?.id, authUser?.account_status, menuPolicyReady, allowedPages])
+
+  useEffect(() => {
+    if (!authUser || authUser.account_status !== 'ACTIVE' || !menuPolicyReady) return
     const fallbackPath = visibleMenus[0] ? workspacePathForPage(visibleMenus[0].id) : undefined
     if (isWorkspaceIndex) {
       if (fallbackPath) navigate(fallbackPath, { replace: true })
@@ -121,6 +131,7 @@ export function useWorkspaceNavigation({
   const navigateWorkspace = useCallback((menuId: MenuId, options: WorkspaceNavigationRequest = {}) => {
     const route = WORKSPACE_ROUTES_BY_ID.get(menuId)
     if (!route) return
+    preloadWorkspaceRouteModule(route.page)
     const dashboardEntry = dashboardEntryForNavigation(menuId, options.dashboardEntry)
     if (route.path === location.pathname) {
       // A same-route menu click must not silently abandon an active editor.

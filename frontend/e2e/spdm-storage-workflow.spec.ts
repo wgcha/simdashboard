@@ -136,3 +136,35 @@ test('이전 하중 경우의 늦은 저장소 응답은 새 의뢰 화면에 �
   await expect(page.getByTestId('storage-workspace-panel').getByText('이전-의뢰-결과.h3d', { exact: true })).toHaveCount(0)
   await expect(page.getByLabel('저장 대상')).toContainText('Run 비교: 회귀와 개선')
 })
+
+test('저장소 background 재검증은 사용자가 작성 중인 상대경로를 덮지 않는다', async ({ page }) => {
+  await loginWorkspace(page)
+  await openDataWorkspace(page)
+  await expect(page.getByTestId('storage-binding-path')).toBeEnabled()
+
+  let signalRefreshStarted!: () => void
+  let releaseRefresh!: () => void
+  const refreshStarted = new Promise<void>((resolve) => { signalRefreshStarted = resolve })
+  const refreshGate = new Promise<void>((resolve) => { releaseRefresh = resolve })
+  await page.route('**/api/storage/refresh', async (route) => {
+    await route.fulfill({ json: { created_bindings: [], refreshed: [] } })
+  })
+  await page.route(`**/api/load-cases/${context.loadCase}/storage`, async (route) => {
+    if (route.request().method() !== 'GET') return route.continue()
+    signalRefreshStarted()
+    await refreshGate
+    await route.continue()
+  })
+
+  await page.getByRole('button', { name: '저장 폴더 새로고침', exact: true }).click()
+  await refreshStarted
+  const draftPath = `${relativeLeaf}/작성중`
+  const input = page.getByTestId('storage-binding-path')
+  try {
+    await expect(input).toBeEnabled()
+    await input.fill(draftPath)
+  } finally {
+    releaseRefresh()
+  }
+  await expect(input).toHaveValue(draftPath)
+})

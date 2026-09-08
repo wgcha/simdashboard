@@ -45,9 +45,9 @@ export function ResultLayoutDetailTab({
     const intent = ++requestIntent.current
     setLoading(true)
     try {
-      await onBeforeOpen?.(contextIntent)
-      if (!canCommitResultLayoutOpen(intent, requestIntent.current, contextIntent, isCurrentOpen)) return
-      const route = detailedAnalysisRoute(await loadLayout(requestId))
+      // Context verification and layout lookup are independent; commit only after both succeed.
+      const [, layout] = await Promise.all([onBeforeOpen?.(contextIntent), loadLayout(requestId)])
+      const route = detailedAnalysisRoute(layout)
       if (!canCommitResultLayoutOpen(intent, requestIntent.current, contextIntent, isCurrentOpen)) return
       if (route === 'SNAPSHOT') onSnapshot()
       else if (route === 'DOMAIN') onDomain()

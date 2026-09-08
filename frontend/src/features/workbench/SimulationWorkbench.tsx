@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Activity, AlertTriangle, Check, ChevronRight, ClipboardList, FileText, FlaskConical, Image, LoaderCircle, Pencil, Play, Plus, RefreshCw, Save, Settings2, ShieldCheck, Tag, Trash2, X } from 'lucide-react'
 import type { Workflow } from '../../types'
 import { workbenchApi } from './api'
@@ -6,6 +6,7 @@ import { RequestResultWidgetConfiguration } from './RequestResultWidgetConfigura
 import { requestResultDefinitionFromProfile, requestResultDefinitionValidation } from './requestResultDefinition'
 import './RequestResultWidgetConfiguration.css'
 import { DEFAULT_REQUEST_TYPE_LABELS, requestTypeLabels, type BatchExecutionAttempt, type BatchProfile, type DemoRun, type DemoRunTask, type RequestResultDefinition, type WorkbenchNode, type WorkbenchRequestType, type WorkbenchTaskType } from './types'
+import { useMemoryQuery } from '../../shared/cache/useMemoryQuery'
 
 type CompositionMode = 'parallel' | 'sequence'
 
@@ -107,6 +108,14 @@ function friendlyWorkbenchError(reason: unknown) {
   return message || '작업 실행 정보를 불러오지 못했습니다.'
 }
 
+const loadWorkbenchExecutionCatalog = async () => {
+  const [profiles, tasks] = await Promise.all([workbenchApi.batchProfiles(), workbenchApi.taskTypes()])
+  return { profiles, tasks }
+}
+const EMPTY_DEMO_RUNS: DemoRun[] = []
+const EMPTY_BATCH_PROFILES: BatchProfile[] = []
+const EMPTY_TASK_TYPES: WorkbenchTaskType[] = []
+
 export function SimulationWorkbench({ workflows, initialRequestId, currentUserId, createdBy, canExecute, isAdmin, embedded = false, onChanged, onRequestSelected }: {
   workflows: Workflow[]
   initialRequestId: string
@@ -120,26 +129,39 @@ export function SimulationWorkbench({ workflows, initialRequestId, currentUserId
   onRequestSelected: (requestId: string) => void
 }) {
   const assigned = useMemo(() => workflows.filter((workflow) => workflow.work_plan), [workflows])
-  const [runs, setRuns] = useState<DemoRun[]>([])
   const [activeRun, setActiveRun] = useState<DemoRun | null>(null)
   const [activeTaskId, setActiveTaskId] = useState('')
-  const [loadingRuns, setLoadingRuns] = useState(false)
   const [working, setWorking] = useState(false)
   const [error, setError] = useState('')
   const [selectedWorkItemId, setSelectedWorkItemId] = useState('')
-  const [batchProfiles, setBatchProfiles] = useState<BatchProfile[]>([])
+  const [optimisticRun, setOptimisticRun] = useState<{ requestId: string; run: DemoRun } | null>(null)
   const [batchAttempts, setBatchAttempts] = useState<BatchExecutionAttempt[]>([])
   const [loadingBatchAttempts, setLoadingBatchAttempts] = useState(false)
   const [batchAttemptError, setBatchAttemptError] = useState('')
-  const [taskTypes, setTaskTypes] = useState<WorkbenchTaskType[]>([])
   const [batchRequestKey, setBatchRequestKey] = useState(() => `batch-${crypto.randomUUID()}`)
   const [progressDraft, setProgressDraft] = useState(10)
+  const batchAttemptSequence = useRef(0)
 
   const explicitWorkflow = initialRequestId ? workflows.find((item) => item.request.id === initialRequestId) : undefined
   const requestId = initialRequestId || (assigned[0]?.request.id ?? '')
   const workflow = initialRequestId ? assigned.find((item) => item.request.id === initialRequestId) : assigned.find((item) => item.request.id === requestId)
+  const runQuery = useMemoryQuery<DemoRun[]>({
+    key: requestId ? `workbench:demo-runs:${requestId}` : 'workbench:demo-runs:none',
+    query: useCallback(() => workbenchApi.demoRuns(requestId), [requestId]),
+    enabled: Boolean(requestId && workflow),
+  })
+  const catalogQuery = useMemoryQuery<{ profiles: BatchProfile[]; tasks: WorkbenchTaskType[] }>({ key: 'workbench:execution-catalog', query: loadWorkbenchExecutionCatalog, enabled: Boolean(workflow) })
+  const cachedRuns = runQuery.data || EMPTY_DEMO_RUNS
+  const runs = useMemo(() => runQuery.isBlocked ? EMPTY_DEMO_RUNS : optimisticRun?.requestId === requestId
+    ? [optimisticRun.run, ...cachedRuns.filter((item) => item.id !== optimisticRun.run.id)]
+    : cachedRuns, [cachedRuns, optimisticRun, requestId, runQuery.isBlocked])
+  useEffect(() => { if (runQuery.isBlocked) setOptimisticRun(null) }, [runQuery.isBlocked])
+  const loadingRuns = runQuery.isLoading || runQuery.isRefreshing
+  const batchProfiles = catalogQuery.data?.profiles || EMPTY_BATCH_PROFILES
+  const taskTypes = catalogQuery.data?.tasks || EMPTY_TASK_TYPES
   const currentItem = workflow?.steps.find((item) => item.status === 'IN_PROGRESS') ?? workflow?.steps.find((item) => item.status === 'READY') ?? null
-  const activeTask = activeRun?.tasks.find((task) => task.id === activeTaskId) ?? activeRun?.tasks[0] ?? null
+  const activeRunForScope = activeRun && runs.some((item) => item.id === activeRun.id) ? activeRun : null
+  const activeTask = activeRunForScope?.tasks.find((task) => task.id === activeTaskId) ?? activeRunForScope?.tasks[0] ?? null
   const selectedWorkItem = workflow?.steps.find((item) => item.id === selectedWorkItemId) ?? currentItem
   const selectedTaskType = taskTypes.find((task) => task.id === selectedWorkItem?.task_type_id && task.version === selectedWorkItem?.task_type_version)
   const selectedGuidance = selectedTaskType ? TASK_GUIDANCE[selectedTaskType.kind] : undefined
@@ -165,37 +187,39 @@ export function SimulationWorkbench({ workflows, initialRequestId, currentUserId
           ? '데모 결과를 생성하고 이 작업을 완료합니다.'
           : `현재 상태(${runStatusLabel(selectedWorkItem?.status ?? '')})에서는 실행할 수 없습니다.`
 
-  const loadRuns = async (targetRequestId = requestId) => {
-    if (!targetRequestId || !workflow) return
-    setLoadingRuns(true)
-    try {
-      const items = await workbenchApi.demoRuns(targetRequestId)
-      setRuns(items)
-      setActiveRun((current) => current && items.some((item) => item.id === current.id) ? current : items[0] ?? null)
-      setActiveTaskId((current) => current || items[0]?.tasks[0]?.id || '')
-    } catch (reason) { setError(friendlyWorkbenchError(reason)) }
-    finally { setLoadingRuns(false) }
-  }
+  const loadRuns = () => { if (workflow && requestId) runQuery.retry() }
 
   const loadBatchAttempts = async (workItemId = selectedWorkItem?.id ?? '') => {
-    if (!workItemId) { setBatchAttempts([]); return }
+    const sequence = ++batchAttemptSequence.current
+    if (!workItemId) { setBatchAttempts([]); setBatchAttemptError(''); setLoadingBatchAttempts(false); return }
+    setBatchAttempts([])
     setLoadingBatchAttempts(true); setBatchAttemptError('')
-    try { setBatchAttempts(await workbenchApi.batchAttempts(workItemId)) }
-    catch (reason) { setBatchAttempts([]); setBatchAttemptError(friendlyWorkbenchError(reason)) }
-    finally { setLoadingBatchAttempts(false) }
+    try {
+      const items = await workbenchApi.batchAttempts(workItemId)
+      if (sequence === batchAttemptSequence.current) setBatchAttempts(items)
+    } catch (reason) {
+      if (sequence === batchAttemptSequence.current) { setBatchAttempts([]); setBatchAttemptError(friendlyWorkbenchError(reason)) }
+    } finally {
+      if (sequence === batchAttemptSequence.current) setLoadingBatchAttempts(false)
+    }
   }
 
-  useEffect(() => { if (workflow) void loadRuns(requestId) }, [requestId, workflow?.request.id])
+  useEffect(() => {
+    setOptimisticRun(null)
+    setActiveRun(null)
+    setActiveTaskId('')
+  }, [requestId])
+  useEffect(() => {
+    if (runQuery.error) setError(friendlyWorkbenchError(runQuery.error))
+  }, [runQuery.error])
+  useEffect(() => {
+    setActiveRun((current) => current && runs.some((item) => item.id === current.id) ? current : runs[0] ?? null)
+    setActiveTaskId((current) => current || runs[0]?.tasks[0]?.id || '')
+  }, [requestId, runs])
   useEffect(() => { void loadBatchAttempts(selectedWorkItem?.id) }, [selectedWorkItem?.id])
   useEffect(() => {
-    if (!workflow) { setBatchProfiles([]); setTaskTypes([]); return }
-    Promise.all([workbenchApi.batchProfiles(), workbenchApi.taskTypes()])
-      .then(([profiles, tasks]) => {
-        setBatchProfiles(profiles)
-        setTaskTypes(tasks)
-      })
-      .catch((reason) => setError(friendlyWorkbenchError(reason)))
-  }, [workflow?.request.id])
+    if (catalogQuery.error) setError(friendlyWorkbenchError(catalogQuery.error))
+  }, [catalogQuery.error])
   useEffect(() => {
     if (!selectedWorkItem) return
     setSelectedWorkItemId(selectedWorkItem.id)
@@ -226,9 +250,10 @@ export function SimulationWorkbench({ workflows, initialRequestId, currentUserId
         nodes: [{ node_key: currentItem.node_key, task_type_id: currentItem.task_type_id, task_type_version: currentItem.task_type_version, depends_on: [] }],
       })
       await workbenchApi.completeWorkItem(currentItem.id, createdBy, run.id)
-      setRuns((items) => [run, ...items.filter((item) => item.id !== run.id)])
+      setOptimisticRun({ requestId, run })
       setActiveRun(run); setActiveTaskId(run.tasks[0]?.id ?? '')
       await onChanged(`${currentItem.name} 작업을 완료했습니다. 다음 작업은 시작 대기 상태입니다.`)
+      runQuery.retry()
       setSelectedWorkItemId('')
     } catch (reason) { setError(friendlyWorkbenchError(reason)) }
     finally { setWorking(false) }
@@ -250,10 +275,11 @@ export function SimulationWorkbench({ workflows, initialRequestId, currentUserId
     setWorking(true); setError('')
     try {
       const run = await workbenchApi.dispatchBatch(workItemId, createdBy, batchRequestKey)
-      setRuns((items) => [run, ...items.filter((item) => item.id !== run.id)])
+      setOptimisticRun({ requestId, run })
       setActiveRun(run); setActiveTaskId(run.tasks[0]?.id ?? '')
       setBatchRequestKey(`batch-${crypto.randomUUID()}`)
       await onChanged(`${selectedWorkItem.name} 배치 구성을 검증하고 DEMO_ONLY 실행 기록을 생성했습니다.`)
+      runQuery.retry()
     } catch (reason) { setError(friendlyWorkbenchError(reason)) }
     finally { await loadBatchAttempts(workItemId); setWorking(false) }
   }
@@ -328,7 +354,7 @@ export function SimulationWorkbench({ workflows, initialRequestId, currentUserId
       </details>
     </section>}
 
-    <details className="workbench-monitor workbench-collapsible" open={Boolean(activeRun)}><summary><span><strong>실행 이력</strong><small>현재 의뢰의 DEMO 결과와 로그</small></span><ChevronRight aria-hidden="true" /></summary><section className="workbench-monitor-content"><div className="workbench-run-list"><header><div><span>실행 이력</span><h2>현재 의뢰의 데모 결과</h2></div><button aria-label="실행 이력 새로고침" disabled={loadingRuns} onClick={() => void loadRuns()}><RefreshCw className={loadingRuns ? 'spin' : ''} /></button></header>{runs.length === 0 ? <p className="workbench-empty">완료한 데모 작업이 없습니다.</p> : runs.map((run) => <button key={run.id} className={activeRun?.id === run.id ? 'active' : ''} onClick={() => { setActiveRun(run); setActiveTaskId(run.tasks[0]?.id ?? '') }}><span><strong>{run.name}</strong><small>{new Date(run.created_at).toLocaleString('ko-KR')}</small></span><b>{runStatusLabel(run.status)} · {run.progress}%</b></button>)}</div><div className="workbench-run-detail">{activeRun ? <><header><div><span>{activeRun.execution_mode}</span><h2>{activeRun.name}</h2><p>Run ID {activeRun.id}</p></div><strong>{runStatusLabel(activeRun.status)} · {activeRun.progress}%</strong></header><div className="workbench-run-progress"><i><b style={{ width: `${activeRun.progress}%` }} /></i><span>갱신 {new Date(activeRun.completed_at || activeRun.created_at).toLocaleString('ko-KR')}</span></div><div className="workbench-run-body"><nav>{activeRun.tasks.map((task) => <button key={task.id} className={activeTask?.id === task.id ? 'active' : ''} onClick={() => setActiveTaskId(task.id)}><Activity /><span><strong>{task.display_name}</strong><small>{runStatusLabel(task.status)} · {task.progress}%</small></span></button>)}</nav>{activeTask && <DemoTaskDetail task={activeTask} />}</div></> : <div className="workbench-empty-detail"><Image /><strong>로그·검증·결과 확인</strong><p>현재 작업을 완료하면 데모 실행 결과가 표시됩니다.</p></div>}</div></section></details>
+    <details className="workbench-monitor workbench-collapsible" open={Boolean(activeRunForScope)}><summary><span><strong>실행 이력</strong><small>현재 의뢰의 DEMO 결과와 로그</small></span><ChevronRight aria-hidden="true" /></summary><section className="workbench-monitor-content"><div className="workbench-run-list"><header><div><span>실행 이력</span><h2>현재 의뢰의 데모 결과</h2></div><button aria-label="실행 이력 새로고침" disabled={loadingRuns} onClick={() => void loadRuns()}><RefreshCw className={loadingRuns ? 'spin' : ''} /></button></header>{runs.length === 0 ? <p className="workbench-empty">완료한 데모 작업이 없습니다.</p> : runs.map((run) => <button key={run.id} className={activeRunForScope?.id === run.id ? 'active' : ''} onClick={() => { setActiveRun(run); setActiveTaskId(run.tasks[0]?.id ?? '') }}><span><strong>{run.name}</strong><small>{new Date(run.created_at).toLocaleString('ko-KR')}</small></span><b>{runStatusLabel(run.status)} · {run.progress}%</b></button>)}</div><div className="workbench-run-detail">{activeRunForScope ? <><header><div><span>{activeRunForScope.execution_mode}</span><h2>{activeRunForScope.name}</h2><p>Run ID {activeRunForScope.id}</p></div><strong>{runStatusLabel(activeRunForScope.status)} · {activeRunForScope.progress}%</strong></header><div className="workbench-run-progress"><i><b style={{ width: `${activeRunForScope.progress}%` }} /></i><span>갱신 {new Date(activeRunForScope.completed_at || activeRunForScope.created_at).toLocaleString('ko-KR')}</span></div><div className="workbench-run-body"><nav>{activeRunForScope.tasks.map((task) => <button key={task.id} className={activeTask?.id === task.id ? 'active' : ''} onClick={() => setActiveTaskId(task.id)}><Activity /><span><strong>{task.display_name}</strong><small>{runStatusLabel(task.status)} · {task.progress}%</small></span></button>)}</nav>{activeTask && <DemoTaskDetail task={activeTask} />}</div></> : <div className="workbench-empty-detail"><Image /><strong>로그·검증·결과 확인</strong><p>현재 작업을 완료하면 데모 실행 결과가 표시됩니다.</p></div>}</div></section></details>
   </div>
 }
 

@@ -1,4 +1,4 @@
-import { lazy, Suspense } from 'react'
+import { Suspense } from 'react'
 
 import { api } from '../../api'
 import type { AuthUser } from '../../auth'
@@ -14,12 +14,7 @@ import type { useRequestWorkspaceController } from './useRequestWorkspaceControl
 import { RequestWorkspaceRoute } from './RequestWorkspaceRoute'
 import { StorageWorkspacePanel } from '../../features/storage/StorageWorkspacePanel'
 
-const DataWorkspace = lazy(() => import('../../features/data/DataWorkspace').then(({ DataWorkspace: Component }) => ({ default: Component })))
-const FolderSchemaWorkspace = lazy(() => import('../../features/data/FolderSchemaWorkspace').then(({ FolderSchemaWorkspace: Component }) => ({ default: Component })))
-const VariableCatalogPage = lazy(() => import('../../features/data/VariableCatalogPage').then(({ VariableCatalogPage: Component }) => ({ default: Component })))
-const AutomationTemplatesPage = lazy(() => import('../../features/workbench/AutomationTemplatesPage').then(({ AutomationTemplatesPage: Component }) => ({ default: Component })))
-const FeatureExampleGallery = lazy(() => import('../../features/examples/FeatureExampleGallery').then(({ FeatureExampleGallery: Component }) => ({ default: Component })))
-const HelpCenter = lazy(() => import('../../features/help/HelpCenter').then(({ HelpCenter: Component }) => ({ default: Component })))
+import { DataWorkspace, FolderSchemaWorkspace, VariableCatalogPage, AutomationTemplatesPage, FeatureExampleGallery, HelpCenter } from '../routing/workspaceScreenModules'
 
 export function FeatureScreenFallback() {
   return <div className="full-state">화면을 준비하고 있습니다.</div>

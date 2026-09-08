@@ -1,3 +1,5 @@
+import { clearMemoryQueryCache, resumeMemoryQueryCache } from './shared/cache/useMemoryQuery'
+
 export type UserRole = 'viewer' | 'editor' | 'admin'
 export type AccountStatus = 'PENDING' | 'ACTIVE' | 'SUSPENDED'
 export type ProjectRole = 'general' | 'power' | 'admin'
@@ -28,10 +30,16 @@ export function storedUser(): Pick<AuthUser, 'id' | 'display_name'> | null {
 export function saveSession(_token: string, user: AuthUser) {
   // Browser API calls use the HttpOnly cookie. The bearer token remains in
   // the login response for non-browser API clients and is never persisted by the SPA.
+  const previous = storedUser()
+  resumeMemoryQueryCache()
+  if (previous?.id !== user.id) {
+    clearMemoryQueryCache()
+  }
   sessionStorage.setItem(USER_KEY, JSON.stringify({ id: user.id, display_name: user.display_name }))
 }
 
 export function clearSession() {
+  clearMemoryQueryCache()
   sessionStorage.removeItem('analysis-canvas-access-token')
   sessionStorage.removeItem(USER_KEY)
 }

@@ -5,9 +5,13 @@ import type { AnalysisRequest, Project } from '../../types'
 import { workbenchApi } from './api'
 import { ExpectedResultsPreview } from './ExpectedResultsPreview'
 import { requestTypeLabels, type ResultProfile, type WorkbenchRequestType } from './types'
+import { useMemoryQuery } from '../../shared/cache/useMemoryQuery'
 
 type IntakeSource = 'EXTERNAL_SYSTEM' | 'DEPARTMENT_HEAD'
 type RequestTypeSelection = Pick<WorkbenchRequestType, 'id' | 'version'>
+
+const loadActiveRequestTypes = async () => (await workbenchApi.requestTypes()).filter((item) => item.is_active)
+const EMPTY_REQUEST_TYPES: WorkbenchRequestType[] = []
 
 export function RequestIntakePage({ projects, initialProjectId, createdBy, canCreate, onCreated, onOpenWorkbench }: {
   projects: Project[]
@@ -17,7 +21,6 @@ export function RequestIntakePage({ projects, initialProjectId, createdBy, canCr
   onCreated: (projectId: string, request: AnalysisRequest) => Promise<void>
   onOpenWorkbench: (requestId: string) => void
 }) {
-  const [requestTypes, setRequestTypes] = useState<WorkbenchRequestType[]>([])
   const [projectId, setProjectId] = useState(initialProjectId || projects[0]?.id || '')
   const [sourceType, setSourceType] = useState<IntakeSource>('EXTERNAL_SYSTEM')
   const [sourceReference, setSourceReference] = useState('')
@@ -32,36 +35,22 @@ export function RequestIntakePage({ projects, initialProjectId, createdBy, canCr
   const [selectedLabel, setSelectedLabel] = useState<string | null>(null)
   const [resultProfile, setResultProfile] = useState<ResultProfile | null>(null)
   const [resultProfileLoading, setResultProfileLoading] = useState(false)
-  const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [created, setCreated] = useState<AnalysisRequest | null>(null)
 
+  const requestTypesQuery = useMemoryQuery({ key: 'workbench:request-types:active', query: loadActiveRequestTypes })
+  const requestTypes = requestTypesQuery.data || EMPTY_REQUEST_TYPES
+  const loading = requestTypesQuery.isLoading
+
   useEffect(() => {
-    let cancelled = false
-    setLoading(true)
-    workbenchApi.requestTypes()
-      .then((items) => {
-        if (cancelled) return
-        const activeItems = items.filter((item) => item.is_active)
-        setRequestTypes(activeItems)
-        setRequestTypeSelection((current) => {
-          if (current && activeItems.some((item) => item.id === current.id && item.version === current.version)) return current
-          const first = activeItems[0]
-          return first ? { id: first.id, version: first.version } : null
-        })
-      })
-      .catch((reason) => {
-        if (cancelled) return
-        setRequestTypes([])
-        setRequestTypeSelection(null)
-        setError(reason instanceof Error ? reason.message : '접수 가능한 업무 유형을 불러오지 못했습니다.')
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
-    return () => { cancelled = true }
-  }, [])
+    setRequestTypeSelection((current) => {
+      if (current && requestTypes.some((item) => item.id === current.id && item.version === current.version)) return current
+      const first = requestTypes[0]
+      return first ? { id: first.id, version: first.version } : null
+    })
+    if (requestTypesQuery.error) setError(requestTypesQuery.error.message || '접수 가능한 업무 유형을 불러오지 못했습니다.')
+  }, [requestTypes, requestTypesQuery.error])
 
   useEffect(() => {
     if (initialProjectId && projects.some((item) => item.id === initialProjectId) && initialProjectId !== projectId) {

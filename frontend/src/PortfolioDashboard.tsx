@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { AlertTriangle, ArrowLeft, ArrowRight, BarChart3, CheckCircle2, Database, Download, GripVertical, LoaderCircle, Minus, Plus, RotateCcw, Search, SlidersHorizontal } from 'lucide-react'
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Legend, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { api } from './api'
 import type { PortfolioLayout, PortfolioOverview } from './types'
 import { ResultOverviewDashboard } from './features/result-overview/ResultOverviewDashboard'
+import { useMemoryQuery } from './shared/cache/useMemoryQuery'
 
 const COLORS = ['#50d5ff', '#70e0a8', '#ffbf57', '#ff647d', '#8b9cff']
 const STATUS_LABEL: Record<string, string> = { READY: '대기', IN_PROGRESS: '진행 중', COMPLETED: '완료', BLOCKED: '차단', FAILED: '실패' }
@@ -11,21 +12,33 @@ const CHART_LABELS: Record<string, string> = { trend: '의뢰·완료·실패 �
 
 export function PortfolioDashboard({ refreshToken, editMode, layout, layoutVersion, onLayoutChange, onCancelEdit, onResetLayout, onOpen, onOpenResult }: { refreshToken: number; editMode: boolean; layout: PortfolioLayout; layoutVersion: number; onLayoutChange: (layout: PortfolioLayout) => void; onCancelEdit: () => void; onResetLayout: () => void; onOpen: (projectId: string, requestId: string, loadCaseId: string) => void; onOpenResult?: (projectId: string, requestId: string, loadCaseId: string, runId: string) => void }) {
   const [showOperations, setShowOperations] = useState(false)
-  const [data, setData] = useState<PortfolioOverview | null>(null)
-  const [error, setError] = useState('')
-  const [loading, setLoading] = useState(true)
   const [draggedChart, setDraggedChart] = useState('')
   const [filters, setFilters] = useState({ date_from: '', date_to: '', project_id: '', analysis_type: '', status: '', search: '' })
-  const params = useMemo(() => { const value = new URLSearchParams(); Object.entries(filters).forEach(([key, entry]) => entry && value.set(key, entry)); return value }, [filters])
-
+  const [debouncedSearch, setDebouncedSearch] = useState(filters.search)
   useEffect(() => {
-    let active = true
-    const timer = window.setTimeout(() => {
-      setLoading(true); setError('')
-      api.portfolio(params).then((next) => { if (active) setData(next) }).catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : '운영 현황을 불러오지 못했습니다.') }).finally(() => { if (active) setLoading(false) })
-    }, 220)
-    return () => { active = false; window.clearTimeout(timer) }
-  }, [params.toString(), refreshToken])
+    const timer = window.setTimeout(() => setDebouncedSearch(filters.search), 220)
+    return () => window.clearTimeout(timer)
+  }, [filters.search])
+  const queryString = useMemo(() => {
+    const value = new URLSearchParams()
+    Object.entries({ ...filters, search: debouncedSearch }).forEach(([key, entry]) => entry && value.set(key, entry))
+    return value.toString()
+  }, [debouncedSearch, filters])
+  const params = useMemo(() => new URLSearchParams(queryString), [queryString])
+  const query = useCallback(() => api.portfolio(new URLSearchParams(queryString)), [queryString])
+  const { data, error, isLoading: loading, isRefreshing, isBlocked, isForbidden, retry } = useMemoryQuery<PortfolioOverview>({
+    key: `portfolio:${queryString}`,
+    query,
+  })
+  const previousRefresh = useRef(refreshToken)
+  const filterProjects = useRef<PortfolioOverview['filter_options']['projects']>([])
+  if (isBlocked) filterProjects.current = []
+  else if (data) filterProjects.current = data.filter_options.projects
+  useEffect(() => {
+    if (previousRefresh.current === refreshToken) return
+    previousRefresh.current = refreshToken
+    retry()
+  }, [refreshToken, retry])
 
   const set = (key: keyof typeof filters, value: string) => setFilters((current) => ({ ...current, [key]: value }))
   const reset = () => setFilters({ date_from: '', date_to: '', project_id: '', analysis_type: '', status: '', search: '' })
@@ -46,10 +59,10 @@ export function PortfolioDashboard({ refreshToken, editMode, layout, layoutVersi
     onLayoutChange({ ...layout, chartOrder: next })
   }
   const changeFontSize = (value: number) => onLayoutChange({ ...layout, fontSize: Math.max(8, Math.min(18, value)) })
+  if (!showOperations && !editMode && (data || loading)) return <div className="portfolio-page result-overview-shell" style={{ padding: 0 }}><ResultOverviewDashboard data={data ?? { records: [], filter_options: { projects: filterProjects.current } }} loading={loading || filters.search !== debouncedSearch} projectId={filters.project_id} search={filters.search} onProjectChange={(value) => set('project_id', value)} onSearchChange={(value) => set('search', value)} onOpenResult={(record) => { if (record.run_id && onOpenResult) onOpenResult(record.project_id, record.request_id, record.load_case_id, record.run_id); else onOpen(record.project_id, record.request_id, record.load_case_id) }} onOpenRequest={(record) => onOpen(record.project_id, record.request_id, record.load_case_id)} onShowOperations={() => setShowOperations(true)} />{error && <div className="portfolio-refresh error" role="alert"><AlertTriangle /> {error.message}<button onClick={retry}>다시 시도</button></div>}</div>
   if (!data && loading) return <div className="portfolio-state"><LoaderCircle className="spin" /> 운영 데이터를 집계하고 있습니다.</div>
-  if (!data || error) return <div className="portfolio-state error"><AlertTriangle /> {error || '운영 현황을 표시할 수 없습니다.'}<button onClick={reset}>필터 초기화</button></div>
+  if (!data) return <div className="portfolio-state error"><AlertTriangle /> {error?.message || (isBlocked ? '접근 권한이 변경되어 운영 데이터를 다시 불러올 수 없습니다.' : '운영 현황을 표시할 수 없습니다.')}{(!isBlocked || isForbidden) && <button onClick={retry}>다시 시도</button>}<button onClick={reset}>필터 초기화</button></div>
 
-  if (!showOperations && !editMode) return <div className="portfolio-page result-overview-shell" style={{ padding: 0 }}><ResultOverviewDashboard data={data} loading={loading} projectId={filters.project_id} search={filters.search} onProjectChange={(value) => { setLoading(true); set('project_id', value) }} onSearchChange={(value) => { setLoading(true); set('search', value) }} onOpenResult={(record) => { if (record.run_id && onOpenResult) onOpenResult(record.project_id, record.request_id, record.load_case_id, record.run_id); else onOpen(record.project_id, record.request_id, record.load_case_id) }} onOpenRequest={(record) => onOpen(record.project_id, record.request_id, record.load_case_id)} onShowOperations={() => setShowOperations(true)} /></div>
 
   const renderedFontSize = Math.max(8, layout.fontSize) * 1.2
   const chartFontSize = renderedFontSize
@@ -99,7 +112,8 @@ export function PortfolioDashboard({ refreshToken, editMode, layout, layoutVersi
       </section>
       <section className="portfolio-table-card"><header><div><span>DETAIL RECORDS · REQUEST MONITORING PROJECTION</span><h2>해석 의뢰 상세</h2></div><strong>{data.records.length}건</strong></header><div className="portfolio-table"><div className="portfolio-row table-header"><span>프로젝트 / 제품</span><span>의뢰 / 하중 경우</span><span>담당자</span><span>상태 / 현재 단계</span><span>유형</span><span>판정</span><span>접수일</span></div>{data.records.map((item) => <button className="portfolio-row" key={`${item.request_id}:${item.load_case_id || 'unassigned'}`} onClick={() => onOpen(item.project_id,item.request_id,item.load_case_id)}><span><strong>{item.project_name}</strong><small>{item.product_name}</small></span><span><strong>{item.request_title}</strong><small>{item.load_case_name}</small></span><span>{item.owner || '-'}</span><span className="portfolio-request-progress"><span><i className={`status-dot ${item.request_status.toLowerCase()}`} />{STATUS_LABEL[item.request_status] ?? item.request_status}<b>{item.request_progress}%</b></span><small>{item.current_step || '단계 미지정'}</small>{item.latest_demo_run && <em>DEMO · {item.latest_demo_run.status} {item.latest_demo_run.progress}%</em>}</span><span>{item.analysis_type.replace('_',' ')}</span><span><b className={item.verdict.toLowerCase()}>{item.verdict}</b></span><span>{new Date(item.requested_at).toLocaleDateString('ko-KR')}</span></button>)}</div></section>
     </>}
-    {loading && <div className="portfolio-refresh"><LoaderCircle className="spin" /> 필터 적용 중</div>}
+    {isRefreshing && <div className="portfolio-refresh"><LoaderCircle className="spin" /> 최신 데이터를 확인하고 있습니다.</div>}
+    {error && <div className="portfolio-refresh error" role="alert"><AlertTriangle /> {error.message}<button onClick={retry}>다시 시도</button></div>}
   </div>
 }
 

@@ -6,7 +6,7 @@ import './ResultOverviewDashboard.css'
 export type ResultOverviewRecord = PortfolioOverview['records'][number]
 
 type ResultOverviewDashboardProps = {
-  data: PortfolioOverview
+  data: { records: PortfolioOverview['records']; filter_options: Pick<PortfolioOverview['filter_options'], 'projects'> }
   loading: boolean
   projectId: string
   search: string

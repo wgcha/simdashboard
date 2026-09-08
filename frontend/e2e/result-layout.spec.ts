@@ -122,6 +122,32 @@ test('작업 유형 결과 구성은 접수 미리보기와 generic pending resu
   await expectCommonResultActions(page, false)
   expect(implicitMaterializations, 'Viewing a result snapshot must not create a dashboard').toEqual([])
 
+  await openWorkspaceRoute(page, '/workspace/help')
+  const layoutRoute = `**/api/workbench/requests/${createdRequest!.id}/result-layout*`
+  let layoutRequestCount = 0
+  let signalWarmRefreshStarted!: () => void
+  let releaseWarmRefresh!: () => void
+  const warmRefreshStarted = new Promise<void>((resolve) => { signalWarmRefreshStarted = resolve })
+  const warmRefreshGate = new Promise<void>((resolve) => { releaseWarmRefresh = resolve })
+  await page.route(layoutRoute, async (route) => {
+    layoutRequestCount += 1
+    if (layoutRequestCount === 1) {
+      signalWarmRefreshStarted()
+      await warmRefreshGate
+    }
+    await route.continue()
+  })
+  await page.goBack()
+  await warmRefreshStarted
+  try {
+    await expect(pending).toContainText(widgetTitle)
+    await expect(page.getByText('상세 분석 구성 확인 중', { exact: true })).toHaveCount(0)
+  } finally {
+    releaseWarmRefresh()
+  }
+  await expect.poll(() => layoutRequestCount, { timeout: 15_000 }).toBeGreaterThan(1)
+  await page.unroute(layoutRoute)
+
   const legacyTypeResponse = await page.request.post('/api/admin/workbench/request-types', {
     data: requestTypePayload(`E2E legacy result ${suffix}`),
   })
