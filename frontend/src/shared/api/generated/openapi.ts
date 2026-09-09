@@ -879,6 +879,109 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/modeling-templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Templates */
+        get: operations["list_templates_api_modeling_templates_get"];
+        put?: never;
+        /** Create Template */
+        post: operations["create_template_api_modeling_templates_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/modeling-templates/{template_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Template */
+        get: operations["get_template_api_modeling_templates__template_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/modeling-templates/{template_id}/versions/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Version */
+        get: operations["get_version_api_modeling_templates__template_id__versions__version__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/modeling-templates/{template_id}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Add Version */
+        post: operations["add_version_api_modeling_templates__template_id__versions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/modeling-templates/{template_id}/versions/{version}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download Version */
+        get: operations["download_version_api_modeling_templates__template_id__versions__version__download_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/modeling-templates/{template_id}/versions/{version}/files/{file_id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download File */
+        get: operations["download_file_api_modeling_templates__template_id__versions__version__files__file_id__download_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/result-imports/refresh": {
         parameters: {
             query?: never;
@@ -1216,6 +1319,144 @@ export interface paths {
          * @description Register the checked-in typed folder example through the same importer used by future uploads.
          */
         post: operations["import_typed_result_example_api_load_cases__load_case_id__folder_import_example_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/storage/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Storage Config */
+        get: operations["get_storage_config_api_storage_config_get"];
+        /** Update Storage Config */
+        put: operations["update_storage_config_api_storage_config_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/storage/folders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Storage Folders */
+        get: operations["list_storage_folders_api_storage_folders_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/storage/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Refresh Storage */
+        post: operations["refresh_storage_api_storage_refresh_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/load-cases/{load_case_id}/storage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Load Case Storage */
+        get: operations["get_load_case_storage_api_load_cases__load_case_id__storage_get"];
+        /** Bind Load Case Storage */
+        put: operations["bind_load_case_storage_api_load_cases__load_case_id__storage_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/load-cases/{load_case_id}/storage/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Refresh Load Case Storage */
+        post: operations["refresh_load_case_storage_api_load_cases__load_case_id__storage_refresh_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/load-cases/{load_case_id}/storage/upload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Upload Structured Result */
+        post: operations["upload_structured_result_api_load_cases__load_case_id__storage_upload_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/load-cases/{load_case_id}/storage/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Upload Raw File */
+        put: operations["upload_raw_file_api_load_cases__load_case_id__storage_files_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/storage/files/{file_id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download Storage File */
+        get: operations["download_storage_file_api_storage_files__file_id__download_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2108,6 +2349,60 @@ export interface components {
              */
             updated_by: string;
         };
+        /** CardCreate */
+        CardCreate: {
+            /** Name */
+            name: string;
+            /** Product Name */
+            product_name: string;
+            /** Load Case Name */
+            load_case_name: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+        };
+        /** CardResponse */
+        CardResponse: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Product Name */
+            product_name: string;
+            /** Load Case Name */
+            load_case_name: string;
+            /** Description */
+            description: string;
+            /** Latest Version */
+            latest_version: number;
+            /** File Count */
+            file_count: number;
+            /** Total Bytes */
+            total_bytes: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** CatalogResponse */
+        CatalogResponse: {
+            /** Items */
+            items: components["schemas"]["CardResponse"][];
+            /** Products */
+            products: string[];
+            /** Load Cases */
+            load_cases: string[];
+            /** Can Manage */
+            can_manage: boolean;
+        };
         /** DashboardClone */
         DashboardClone: {
             /** Name */
@@ -2158,6 +2453,40 @@ export interface components {
              * @default 데모 사용자
              */
             created_by: string;
+        };
+        /** DetailResponse */
+        DetailResponse: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Product Name */
+            product_name: string;
+            /** Load Case Name */
+            load_case_name: string;
+            /** Description */
+            description: string;
+            /** Latest Version */
+            latest_version: number;
+            /** File Count */
+            file_count: number;
+            /** Total Bytes */
+            total_bytes: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Versions */
+            versions: components["schemas"]["VersionResponse"][];
+            /** Files */
+            files: components["schemas"]["FileResponse"][];
+            selected_version: components["schemas"]["VersionResponse"];
         };
         /** DropVideoEvaluation */
         DropVideoEvaluation: {
@@ -2298,6 +2627,24 @@ export interface components {
             threshold: number;
             /** Unit */
             unit: string;
+        };
+        /** FilePayload */
+        FilePayload: {
+            /** Relative Path */
+            relative_path: string;
+            /** Content Base64 */
+            content_base64: string;
+        };
+        /** FileResponse */
+        FileResponse: {
+            /** Id */
+            id: string;
+            /** Relative Path */
+            relative_path: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /** Checksum */
+            checksum: string;
         };
         /** GlobalAdminUpdate */
         GlobalAdminUpdate: {
@@ -2554,6 +2901,10 @@ export interface components {
             threshold_double: number;
             /** Updated By */
             updated_by?: string | null;
+        };
+        /** RawUploadResponse */
+        RawUploadResponse: {
+            stored_file: components["schemas"]["StorageFileResponse"];
         };
         /** ReportLayoutCatalogResponse */
         ReportLayoutCatalogResponse: {
@@ -2994,6 +3345,222 @@ export interface components {
              */
             review_status: "OPEN" | "IN_REVIEW" | "RESOLVED";
         };
+        /** StorageBindingResponse */
+        StorageBindingResponse: {
+            /** Relative Path */
+            relative_path: string;
+            /** Project Id */
+            project_id: string;
+            /** Request Id */
+            request_id: string;
+            /** Load Case Id */
+            load_case_id: string;
+        };
+        /** StorageBindingUpdate */
+        StorageBindingUpdate: {
+            /** Relative Path */
+            relative_path: string;
+        };
+        /** StorageBindingUpdateResponse */
+        StorageBindingUpdateResponse: {
+            binding: components["schemas"]["StorageBindingResponse"];
+        };
+        /** StorageConfigResponse */
+        StorageConfigResponse: {
+            /** Configured */
+            configured: boolean;
+            /** Locked */
+            locked: boolean;
+            /** Root */
+            root?: string | null;
+        };
+        /** StorageConfigUpdate */
+        StorageConfigUpdate: {
+            /** Root */
+            root: string;
+        };
+        /** StorageFileResponse */
+        StorageFileResponse: {
+            /** Id */
+            id?: string | null;
+            /** Name */
+            name?: string | null;
+            /** Relative Path */
+            relative_path: string;
+            /** Kind */
+            kind: string;
+            /** Size */
+            size: number;
+            /** Checksum */
+            checksum?: string | null;
+            /** Status */
+            status?: string | null;
+            /** Run Id */
+            run_id?: string | null;
+            /** Message */
+            message?: string | null;
+            /** Reused */
+            reused?: boolean | null;
+        };
+        /** StorageFoldersResponse */
+        StorageFoldersResponse: {
+            /** Folders */
+            folders: {
+                [key: string]: unknown;
+            }[];
+        };
+        /** StorageGlobalRefreshResponse */
+        StorageGlobalRefreshResponse: {
+            /** Created Bindings */
+            created_bindings: components["schemas"]["StorageBindingResponse"][];
+            /** Refreshed */
+            refreshed: components["schemas"]["StorageScopeResponse"][];
+        };
+        /** StorageLoadCaseResponse */
+        StorageLoadCaseResponse: {
+            config: components["schemas"]["StorageConfigResponse"];
+            binding: components["schemas"]["StorageBindingResponse"] | null;
+            /** Rules */
+            rules: {
+                [key: string]: unknown;
+            }[];
+            /** Files */
+            files: components["schemas"]["StorageFileResponse"][];
+            /** Candidate Folders */
+            candidate_folders: string[];
+        };
+        /** StorageResultResponse */
+        StorageResultResponse: {
+            /** File Id */
+            file_id: string;
+            /** Relative Path */
+            relative_path: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "IMPORTED" | "SKIPPED" | "FAILED";
+            /** Run Id */
+            run_id?: string | null;
+            /** Run No */
+            run_no?: number | null;
+            /** Filename */
+            filename?: string | null;
+            /** Summary */
+            summary?: {
+                [key: string]: unknown;
+            } | null;
+            /** Scalar Count */
+            scalar_count?: number | null;
+            /** Node Count */
+            node_count?: number | null;
+            /** Element Count */
+            element_count?: number | null;
+            /** Frame Count */
+            frame_count?: number | null;
+            /** Final Time */
+            final_time?: number | null;
+            /** Time Series Count */
+            time_series_count?: number | null;
+            /** Open Cell Count */
+            open_cell_count?: number | null;
+            /** Chassis Rear Count */
+            chassis_rear_count?: number | null;
+            /** Fail Count */
+            fail_count?: number | null;
+            /** Overall Verdict */
+            overall_verdict?: ("PASS" | "FAIL") | null;
+            /** Source Format */
+            source_format?: string | null;
+            /** Results */
+            results?: unknown[];
+            /** Warnings */
+            warnings?: unknown[];
+            /** Operation */
+            operation?: ("CREATED" | "NOOP" | "REPLACED" | "REJECTED") | null;
+            /** Reason Code */
+            reason_code?: string | null;
+            /** Existing Run Id */
+            existing_run_id?: string | null;
+            /** Replaced Run Id */
+            replaced_run_id?: string | null;
+            /** Source Revision */
+            source_revision?: number | null;
+            /** Message */
+            message?: string | null;
+        };
+        /** StorageScopeResponse */
+        StorageScopeResponse: {
+            binding: components["schemas"]["StorageBindingResponse"];
+            /** Files */
+            files: components["schemas"]["StorageFileResponse"][];
+            /** Results */
+            results: components["schemas"]["StorageResultResponse"][];
+        };
+        /** StructuredUpload */
+        StructuredUpload: {
+            /** Filename */
+            filename: string;
+            /** Content */
+            content: string;
+            /** Author */
+            author?: string | null;
+        };
+        /** StructuredUploadResponse */
+        StructuredUploadResponse: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "VALID" | "IMPORTED" | "SKIPPED" | "REJECTED";
+            /** Run Id */
+            run_id?: string | null;
+            /** Run No */
+            run_no?: number | null;
+            /** Filename */
+            filename: string;
+            /** Summary */
+            summary?: {
+                [key: string]: unknown;
+            } | null;
+            /** Scalar Count */
+            scalar_count?: number | null;
+            /** Node Count */
+            node_count?: number | null;
+            /** Element Count */
+            element_count?: number | null;
+            /** Frame Count */
+            frame_count?: number | null;
+            /** Final Time */
+            final_time?: number | null;
+            /** Time Series Count */
+            time_series_count?: number | null;
+            /** Open Cell Count */
+            open_cell_count?: number | null;
+            /** Chassis Rear Count */
+            chassis_rear_count?: number | null;
+            /** Fail Count */
+            fail_count?: number | null;
+            /** Overall Verdict */
+            overall_verdict?: ("PASS" | "FAIL") | null;
+            /** Source Format */
+            source_format?: string | null;
+            /** Results */
+            results?: unknown[];
+            /** Warnings */
+            warnings?: unknown[];
+            /** Operation */
+            operation?: ("CREATED" | "NOOP" | "REPLACED" | "REJECTED") | null;
+            /** Reason Code */
+            reason_code?: string | null;
+            /** Existing Run Id */
+            existing_run_id?: string | null;
+            /** Replaced Run Id */
+            replaced_run_id?: string | null;
+            /** Source Revision */
+            source_revision?: number | null;
+            stored_file: components["schemas"]["StorageFileResponse"];
+        };
         /** TaskTypeRef */
         TaskTypeRef: {
             /** Id */
@@ -3154,6 +3721,33 @@ export interface components {
             result_group: "OPEN_CELL" | "CHASSIS_REAR" | "CUSTOM";
             /** Updated By */
             updated_by?: string | null;
+        };
+        /** VersionCreate */
+        VersionCreate: {
+            /** Expected Version */
+            expected_version: number;
+            /**
+             * Mode
+             * @default merge
+             * @enum {string}
+             */
+            mode: "merge" | "replace";
+            /** Files */
+            files: components["schemas"]["FilePayload"][];
+        };
+        /** VersionResponse */
+        VersionResponse: {
+            /** Version */
+            version: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** File Count */
+            file_count: number;
+            /** Total Bytes */
+            total_bytes: number;
         };
         /** Widget */
         Widget: {
@@ -5287,6 +5881,235 @@ export interface operations {
             };
         };
     };
+    list_templates_api_modeling_templates_get: {
+        parameters: {
+            query?: {
+                q?: string | null;
+                product_name?: string | null;
+                load_case_name?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_template_api_modeling_templates_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CardCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_template_api_modeling_templates__template_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                template_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_version_api_modeling_templates__template_id__versions__version__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                template_id: string;
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    add_version_api_modeling_templates__template_id__versions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                template_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VersionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_version_api_modeling_templates__template_id__versions__version__download_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                template_id: string;
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_file_api_modeling_templates__template_id__versions__version__files__file_id__download_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                template_id: string;
+                version: number;
+                file_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     refresh_master_result_folder_api_result_imports_refresh_post: {
         parameters: {
             query?: never;
@@ -6032,6 +6855,300 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TypedResultExampleResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_storage_config_api_storage_config_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorageConfigResponse"];
+                };
+            };
+        };
+    };
+    update_storage_config_api_storage_config_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StorageConfigUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorageConfigResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_storage_folders_api_storage_folders_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorageFoldersResponse"];
+                };
+            };
+        };
+    };
+    refresh_storage_api_storage_refresh_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorageGlobalRefreshResponse"];
+                };
+            };
+        };
+    };
+    get_load_case_storage_api_load_cases__load_case_id__storage_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                load_case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorageLoadCaseResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    bind_load_case_storage_api_load_cases__load_case_id__storage_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                load_case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StorageBindingUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorageBindingUpdateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    refresh_load_case_storage_api_load_cases__load_case_id__storage_refresh_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                load_case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorageScopeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_structured_result_api_load_cases__load_case_id__storage_upload_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                load_case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StructuredUpload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StructuredUploadResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_raw_file_api_load_cases__load_case_id__storage_files_put: {
+        parameters: {
+            query: {
+                filename: string;
+                kind: "solver" | "media" | "inputs" | "reports";
+            };
+            header?: never;
+            path: {
+                load_case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RawUploadResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_storage_file_api_storage_files__file_id__download_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                file_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

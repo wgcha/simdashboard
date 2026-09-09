@@ -1,11 +1,13 @@
 # 개발 문서 지도
 
-- 기준일: 2026-08-25
+- 기준일: 2026-09-08
 - 목적: 현재 구현, 운영 절차, 기능 계약, 과거 계획 문서를 구분한다.
 
 문서 제목에 `plan`, `roadmap`, `spec`이 포함되어 있어도 현재 구현 완료를 뜻하지 않는다. 코드와 문서가 다르면 아래 우선순위를 적용하고, 같은 변경에서 기준 문서를 갱신한다.
 
 ## 문서 우선순위
+
+최신 사용자 요청으로 승인된 변경은 과거 화면 설계보다 우선한다. GUI의 기본 기준은 [`request-centric-workspace-ux.md`](request-centric-workspace-ux.md), 2026-09-08 후속 탭 통합·메뉴·와이드 화면 변경은 [`unified-request-workspace-plan.md`](unified-request-workspace-plan.md)를 따른다. 권한·도메인·불변 데이터 계약은 기존 기준을 유지한다.
 
 1. 실행 가능한 코드, migration, 환경변수 검증과 자동 테스트
 2. 승인된 ADR
@@ -17,11 +19,15 @@
 
 | 목적 | 문서 |
 |---|---|
+| Windows 더블클릭 설치·실행 및 사내 프록시 | [`windows-one-click-deployment.md`](windows-one-click-deployment.md) |
+| native Windows 개발 | [`windows-development-setup.md`](windows-development-setup.md) |
 | 설치와 실행 | [`../README.md`](../README.md) |
 | 실제 프로그램 구조 | [`current-architecture.md`](current-architecture.md) |
 | 개발 변경 절차 | [`development-workflow.md`](development-workflow.md) |
 | 프로그램 정리·개발 우선순위 | [`program-consolidation-and-development-plan.md`](program-consolidation-and-development-plan.md) |
 | DB 결과 폴더·확장자 계약 | [`storage-folder-and-file-contract.md`](storage-folder-and-file-contract.md) |
+| SPDM 의뢰 탐색·업로드·결과 연결 | [`spdm-storage-workflow.md`](spdm-storage-workflow.md) |
+| 사내 PC Git 업데이트 | [`windows-git-update.md`](windows-git-update.md) |
 | 완결형 예제 프로젝트 | [`coherent-demo-examples.md`](coherent-demo-examples.md) |
 | WSL 개발환경 | [`wsl-development-setup.md`](wsl-development-setup.md) |
 | PostgreSQL 전환·운영 | [`backend-sql-integration-guide.md`](backend-sql-integration-guide.md) |
@@ -31,7 +37,11 @@
 
 | 영역 | 문서 | 성격 |
 |---|---|---|
+| 런타임 | [`windows-development-setup.md`](windows-development-setup.md) | native Windows 설치·실행·DB 선택 |
+| 검증 기록 | [`windows-migration-validation-2026-09-07.md`](windows-migration-validation-2026-09-07.md) | WSL→Windows 보존·실행·DB 조사 |
 | 구조 | [`current-architecture.md`](current-architecture.md) | 현재 코드 기준 |
+| GUI | [`request-centric-workspace-ux.md`](request-centric-workspace-ux.md) | 의뢰 중심 화면, 문맥 유지, 과거 GUI 설계 대체 범위 |
+| GUI 후속 개선 | [`unified-request-workspace-plan.md`](unified-request-workspace-plan.md) | 네 탭 공통 화면, 중복 메뉴 제거, 와이드 화면 검증 |
 | 개발 | [`development-workflow.md`](development-workflow.md) | 명령·변경·검증 절차 |
 | 통합 계획 | [`program-consolidation-and-development-plan.md`](program-consolidation-and-development-plan.md) | P0~P2 정리·개발 backlog |
 | 저장 계약 | [`storage-folder-and-file-contract.md`](storage-folder-and-file-contract.md) | DB·결과 폴더·확장자·예제 |
@@ -108,6 +118,7 @@ source/solver/result/report extension inventory, [#15](https://github.com/wgcha/
 - 파일·디렉터리 경로가 실제로 존재하는가?
 - 명령이 현재 `package.json`, `pytest.ini`, script 인자와 일치하는가?
 - 환경변수가 `.env.example` 또는 배포 설정 예제에 있는가?
+- native Windows 명령은 [`windows-development-setup.md`](windows-development-setup.md)와 실제 PowerShell script의 profile 선택이 일치하는가?
 - OpenAPI 생성 경로가 `frontend/src/shared/api/generated/openapi.ts`인가?
 - DuckDB는 로컬 adapter, PostgreSQL은 운영 source of truth로 구분했는가?
 - 계획과 구현 완료를 구분했는가?

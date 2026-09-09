@@ -1,5 +1,7 @@
 # 구현 가정
 
+> GUI 기준 갱신(2026-09-07): 기존 기능과 데이터는 유지하며, 조회 화면과 메뉴는 [의뢰 중심 작업공간 GUI](docs/request-centric-workspace-ux.md)에 따라 개편한다. 아래 해석 기준·합성 데이터·모바일 관련 가정은 유지한다.
+
 > 상태: 초기 MVP 가정 기록. 현재 확정 계약은 `docs/current-architecture.md`와 `docs/storage-folder-and-file-contract.md`를 우선한다.
 
 - 첨부된 개정 Goal을 이 프로젝트의 최종 완료 기준으로 사용한다.

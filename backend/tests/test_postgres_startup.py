@@ -515,31 +515,39 @@ def test_startup_catalog_includes_request_type_assignment_and_fails_closed():
         startup._verify_catalog_access(_CatalogConnection(denied="analysis_request_type_assignments"))
 
 
-def test_start_scripts_use_pending_migration_preflight_and_readiness_cleanup():
+def test_start_scripts_use_connection_preflight_and_readiness_cleanup_without_migration():
     root = Path(__file__).resolve().parents[2]
     postgres_start = (root / "start-postgresql.ps1").read_text(encoding="utf-8")
     general_start = (root / "start.ps1").read_text(encoding="utf-8")
     stop_script = (root / "stop.ps1").read_text(encoding="utf-8")
     migration_source = (root / "backend" / "scripts" / "upgrade_postgres_schema.py").read_text(encoding="utf-8")
 
-    assert "& $StartScript" in postgres_start
-    assert "upgrade_postgres_schema.py" in general_start
-    assert general_start.index("upgrade_postgres_schema.py") < general_start.index("check_postgres_connection.py") < general_start.index("Start-Process -FilePath $Python")
+    assert "& $startScript -DatabaseBackend postgresql" in postgres_start
+    assert "upgrade_postgres_schema.py" not in general_start
+    assert general_start.index("check_postgres_connection.py") < general_start.index("Start-Process -FilePath $Python")
     assert "Wait-HttpReady" in general_start
     assert "Stop-ProcessTree" in general_start
     assert "Remove-Item -LiteralPath $PidFile" in general_start
     assert "--strictPort" in general_start
-    assert "Test-LocalPortInUse -Port 8000" in general_start
-    assert "Test-LocalPortInUse -Port 5173" in general_start
+    assert "[int]$BackendPort = 8000" in general_start
+    assert "[int]$FrontendPort = 5173" in general_start
+    assert "Test-LocalPortInUse -Port $BackendPort" in general_start
+    assert "Test-LocalPortInUse -Port $FrontendPort" in general_start
+    assert '$env:VITE_API_TARGET = "http://127.0.0.1:$BackendPort"' in general_start
+    assert "Test-CurrentServerEndpoint -Role $Role -Port $ExpectedPort" in general_start
+    assert "[System.IO.Path]::GetFullPath($ExpectedExecutable)" in general_start
     assert "Get-NetTCPConnection" not in general_start
     assert "Get-NetTCPConnection" in stop_script
     assert "netstat.exe" in stop_script
     assert "Test-IsAnalysisCanvasListener" in stop_script
     assert "Test-IsAnalysisCanvasEndpoint" in stop_script
     assert "Analysis Canvas API" in stop_script
+    assert "Test-ContainsWorkspacePath" in stop_script
+    assert "if (-not $belongsToWorkspace) { return $false }" in stop_script
     assert "unverified listener is never terminated" in stop_script
     assert "could not be verified as an Analysis Canvas server" in stop_script
-    assert "-Port 8000" in general_start and "-Port 5173" in general_start
+    assert "[int]$BackendPort = 0" in stop_script
+    assert "[int]$FrontendPort = 0" in stop_script
     assert general_start.index("catch {") < general_start.index("Backend health database mismatch.")
     assert "process exited during readiness verification" in general_start
     assert "ANALYSIS_DATABASE_PREFLIGHT_COMPLETE" not in general_start

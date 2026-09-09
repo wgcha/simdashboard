@@ -1,0 +1,35 @@
+.request-workspace-header { display:grid; gap:24px; padding:34px 40px 0; color:#16243a; background:#fff; }
+.request-workspace-title { display:grid; gap:4px; min-width:0; }
+.request-workspace-title h1 { margin:0; font-size:30px; line-height:1.2; letter-spacing:-.045em; color:#16243a; }
+.request-workspace-title p { display:flex; flex-wrap:wrap; gap:8px; margin:10px 0 0; color:#637086; font-size:14px; }
+.request-workspace-title p strong { color:#245fc5; }
+.request-workspace-title p b { color:#bdc6d3; }
+.request-context-strip { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:16px 24px; padding:16px; border:1px solid #dbe2ec; border-radius:8px; background:#fff; box-shadow:0 2px 5px rgb(22 36 58 / 4%); }
+.request-context-strip:has(> :nth-child(4)) { grid-template-columns:repeat(3,minmax(0,1fr)) minmax(180px,.85fr); }
+.request-context-strip label { display:grid; min-width:0; gap:6px; color:#536176; font-size:12px; font-weight:700; }
+.request-context-strip select { width:100%; min-height:42px; padding:0 12px; border:1px solid #d2dbe8; border-radius:8px; color:#16243a; background:#fff; font:inherit; font-size:14px; }
+.request-context-strip select:focus-visible,.request-journey button:focus-visible { outline:3px solid rgb(36 95 197 / 25%); outline-offset:2px; }
+.request-journey { display:flex; align-items:stretch; gap:0; margin:24px 40px 26px; padding:0 14px; min-height:68px; border:1px solid #dbe2ec; border-radius:8px; background:#fff; box-shadow:0 2px 5px rgb(22 36 58 / 4%); }
+.request-journey-item { position:relative; display:flex; align-items:center; justify-content:center; gap:8px; min-width:150px; padding:0 18px; border:0; color:#536176; background:transparent; font:700 14px Pretendard, sans-serif; cursor:pointer; }
+.request-journey-item svg { width:17px; height:17px; color:currentColor; }
+.request-journey-item::after { content:""; position:absolute; right:0; width:1px; height:20px; background:#dbe2ec; }
+.request-journey-item.active { color:#245fc5; }
+.request-journey-item.active::before { content:""; position:absolute; right:18px; bottom:0; left:18px; height:3px; border-radius:3px 3px 0 0; background:#245fc5; }
+.request-journey-item:disabled { color:#a8b2c1; cursor:not-allowed; }
+.request-journey-item.result-review { min-width:150px; }
+.request-journey-item.result-review > button { display:flex; align-items:center; justify-content:center; gap:8px; width:100%; height:100%; padding:0 18px; border:0; color:inherit; background:transparent; font:700 14px Pretendard,sans-serif; cursor:pointer; }
+.request-journey-item.result-review > button span { display:none; }
+.request-journey-item.result-review > button:disabled { color:#a8b2c1; cursor:not-allowed; }
+.request-journey-compact { margin-top:0; }
+.dark-theme .request-workspace-header { background:#0d1c2b; color:#e8f1fb; }
+.dark-theme .request-workspace-title h1 { color:#e8f1fb; }
+.dark-theme .request-workspace-title p,.dark-theme .request-context-strip label { color:#a8b8cd; }
+.dark-theme .request-workspace-title p strong { color:#70b7ff; }
+.dark-theme .request-context-strip,.dark-theme .request-journey { background:#102238; border-color:#294256; box-shadow:none; }
+.dark-theme .request-context-strip select { color:#e8f1fb; background:#0d1c2b; border-color:#496178; }
+.dark-theme .request-journey-item { color:#a8b8cd; }
+.dark-theme .request-journey-item.active { color:#70b7ff; }
+.dark-theme .request-journey-item.active::before { background:#70b7ff; }
+.dark-theme .request-journey-item::after { background:#294256; }
+@media (max-width:980px) { .request-workspace-header { padding:26px 20px 0; } .request-context-strip,.request-context-strip:has(> :nth-child(4)) { grid-template-columns:repeat(2,minmax(0,1fr)); } .request-journey { margin:20px; overflow:auto; } .request-journey-item { flex:none; min-width:138px; } }
+@media (max-width:620px) { .request-workspace-title h1 { font-size:24px; } .request-context-strip,.request-context-strip:has(> :nth-child(4)) { grid-template-columns:1fr; } .request-journey { padding:0; margin:16px; } .request-journey-item { min-width:126px; padding:0 12px; font-size:13px; } }

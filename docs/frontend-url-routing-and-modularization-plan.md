@@ -1,5 +1,7 @@
 # 프론트 URL 라우팅·모듈화 완료 기록
 
+> 부분 대체(2026-09-07): 1·2·5장의 화면별 진입/선택 문맥 deep-link 후속 범위는 [의뢰 중심 작업공간 GUI](request-centric-workspace-ux.md)의 기준으로 확장한다. 기존 canonical path·단일 registry·권한 fallback·편집 blocker는 유지한다. 아래 내용은 당시 완료 기록이다. 실제 App 연결 여부는 현재 코드를 확인한다.
+
 - 원래 계획 문서명 복원: `frontend-url-routing-and-modularization-plan.md`
 - 상태: 구현·회귀 검증 완료
 - 기준일: 2026-08-16

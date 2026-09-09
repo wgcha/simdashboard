@@ -5,10 +5,11 @@ umask 027
 script_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 config_file=""
 check_only=0
+dev_http=0
 
 usage() {
   cat <<'EOF'
-Usage: sudo ./install.sh --config /root/simdashboard-install.env [--check]
+Usage: sudo ./install.sh --config /root/simdashboard-install.env [--check] [--dev-http]
 
 Installs an immutable Analysis Canvas release on Rocky Linux 8.6 or later (8.x). The config is
 a trusted root-owned shell file based on install.env.example.
@@ -16,6 +17,7 @@ a trusted root-owned shell file based on install.env.example.
 Options:
   --config FILE   Required installation configuration
   --check         Validate OS, bundle, config, certificates, and source only
+  --dev-http      Development-only HTTP on port 80; no TLS certificate is used
   -h, --help      Show this help
 EOF
 }
@@ -33,6 +35,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --config) config_file="${2:-}"; shift 2 ;;
     --check) check_only=1; shift ;;
+    --dev-http) dev_http=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) printf 'Unknown option: %s\n' "$1" >&2; usage >&2; exit 2 ;;
   esac
@@ -101,6 +104,18 @@ PYTHON_BIN=
 # URLs and secrets that cannot be parsed correctly as a simplistic KEY=VALUE file.
 # shellcheck disable=SC1090
 source "${config_file}"
+
+deployment_profile=rocky8
+dashboard_scheme=https
+nginx_template="${script_root}/nginx/simdashboard.conf.template"
+if [[ "${dev_http}" == 1 ]]; then
+  [[ "${AUTH_MODE}" == password ]] || die '--dev-http requires AUTH_MODE=password; OIDC redirects require HTTPS.'
+  AUTH_COOKIE_SECURE=false
+  deployment_profile=rocky8-dev-http
+  dashboard_scheme=http
+  nginx_template="${script_root}/nginx/simdashboard-http-dev.conf.template"
+  log 'WARNING: --dev-http disables TLS and secure cookies. Do not use real accounts or production data.'
+fi
 
 INSTALL_ROOT="${INSTALL_ROOT%/}"
 RUNTIME_DIRECTORY="${RUNTIME_DIRECTORY%/}"
@@ -172,11 +187,18 @@ safe_name='^[A-Za-z_][A-Za-z0-9_-]*$'
 [[ "${SIM_DASH_APP_ROLE}" =~ ${safe_name} ]] || die 'SIM_DASH_APP_ROLE contains unsupported characters.'
 [[ "${SERVER_NAME:-}" =~ ^[A-Za-z0-9.-]+$ ]] || die 'SERVER_NAME must be a DNS host name.'
 
-for path_name in INSTALL_ROOT RUNTIME_DIRECTORY SIMDASH_IMPORT_ROOT SIMDASH_IMPORT_SNAPSHOT_ROOT ENVIRONMENT_FILE TLS_CERTIFICATE TLS_CERTIFICATE_KEY; do
+for path_name in INSTALL_ROOT RUNTIME_DIRECTORY SIMDASH_IMPORT_ROOT SIMDASH_IMPORT_SNAPSHOT_ROOT ENVIRONMENT_FILE; do
   path_value="${!path_name:-}"
   [[ "${path_value}" == /* && "${path_value}" != / ]] || die "${path_name} must be an absolute, non-root path."
   [[ "${path_value}" != *$'\n'* && "${path_value}" != *$'\r'* ]] || die "${path_name} contains a newline."
 done
+if [[ "${dev_http}" != 1 ]]; then
+  for path_name in TLS_CERTIFICATE TLS_CERTIFICATE_KEY; do
+    path_value="${!path_name:-}"
+    [[ "${path_value}" == /* && "${path_value}" != / ]] || die "${path_name} must be an absolute, non-root path."
+    [[ "${path_value}" != *$'\n'* && "${path_value}" != *$'\r'* ]] || die "${path_name} contains a newline."
+  done
+fi
 [[ "${SIMDASH_IMPORT_ROOT}" != "${INSTALL_ROOT}" && "${SIMDASH_IMPORT_ROOT}" != "${INSTALL_ROOT}/"* ]] || \
   die 'SIMDASH_IMPORT_ROOT must be outside INSTALL_ROOT so imports survive immutable release changes.'
 [[ "${SIMDASH_IMPORT_ROOT}" != *[[:space:]]* ]] || \
@@ -191,8 +213,10 @@ done
   "${SIMDASH_IMPORT_SNAPSHOT_ROOT}" != "${SIMDASH_IMPORT_ROOT}/"* && \
   "${SIMDASH_IMPORT_ROOT}" != "${SIMDASH_IMPORT_SNAPSHOT_ROOT}/"* ]] || \
   die 'SIMDASH_IMPORT_SNAPSHOT_ROOT must not overlap SIMDASH_IMPORT_ROOT.'
-[[ -r "${TLS_CERTIFICATE}" ]] || die "TLS certificate is not readable: ${TLS_CERTIFICATE}"
-[[ -r "${TLS_CERTIFICATE_KEY}" ]] || die "TLS private key is not readable: ${TLS_CERTIFICATE_KEY}"
+if [[ "${dev_http}" != 1 ]]; then
+  [[ -r "${TLS_CERTIFICATE}" ]] || die "TLS certificate is not readable: ${TLS_CERTIFICATE}"
+  [[ -r "${TLS_CERTIFICATE_KEY}" ]] || die "TLS private key is not readable: ${TLS_CERTIFICATE_KEY}"
+fi
 
 verify_import_root_access() {
   local inaccessible_path
@@ -244,9 +268,23 @@ if [[ "${BOOTSTRAP_DATABASE}" == 1 ]]; then
 fi
 [[ "${SEED_MODE}" == empty || "${SEED_MODE}" == reference ]] || die 'SEED_MODE must be empty or reference.'
 [[ "${AUTH_MODE}" == password || "${AUTH_MODE}" == oidc ]] || die 'Rocky production requires AUTH_MODE=password or oidc.'
-[[ "${AUTH_COOKIE_SECURE}" == true ]] || die 'Rocky production requires AUTH_COOKIE_SECURE=true.'
+if [[ "${dev_http}" == 1 ]]; then
+  [[ "${AUTH_COOKIE_SECURE}" == false ]] || die '--dev-http requires AUTH_COOKIE_SECURE=false.'
+else
+  [[ "${AUTH_COOKIE_SECURE}" == true ]] || die 'Rocky production requires AUTH_COOKIE_SECURE=true.'
+fi
 [[ -n "${AUTH_SECRET_KEY:-}" && ${#AUTH_SECRET_KEY} -ge 32 && "${AUTH_SECRET_KEY}" != *CHANGE_ME* ]] || die 'AUTH_SECRET_KEY must be a non-placeholder value of at least 32 characters.'
-CORS_ALLOWED_ORIGINS="${CORS_ALLOWED_ORIGINS:-https://${SERVER_NAME}}"
+if [[ "${dev_http}" == 1 ]]; then
+  if [[ -z "${CORS_ALLOWED_ORIGINS:-}" || "${CORS_ALLOWED_ORIGINS}" == "https://${SERVER_NAME}" ]]; then
+    CORS_ALLOWED_ORIGINS="http://${SERVER_NAME}"
+  elif [[ "${CORS_ALLOWED_ORIGINS}" == "http://${SERVER_NAME}" ]]; then
+    : # Already the one unambiguous development origin.
+  else
+    die '--dev-http accepts only an unset CORS_ALLOWED_ORIGINS or the exact default http(s)://${SERVER_NAME}; clear custom/multiple origins first.'
+  fi
+else
+  CORS_ALLOWED_ORIGINS="${CORS_ALLOWED_ORIGINS:-https://${SERVER_NAME}}"
+fi
 
 if [[ "${AUTH_MODE}" == oidc ]]; then
   for oidc_name in OIDC_ISSUER_URL OIDC_CLIENT_ID OIDC_CLIENT_SECRET OIDC_REDIRECT_URI; do
@@ -405,7 +443,7 @@ pip_environment=(PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_INPUT=1)
 [[ -z "${PIP_CERT:-}" ]] || pip_environment+=(PIP_CERT="${PIP_CERT}")
 if [[ -d "${script_root}/wheelhouse" ]]; then
   log 'Installing Python dependencies from the offline wheelhouse'
-  env "${pip_environment[@]}" PIP_NO_INDEX=1 \
+  env "${pip_environment[@]}" PIP_CONFIG_FILE=/dev/null PIP_FIND_LINKS= PIP_NO_INDEX=1 \
     "${release_root}/.venv/bin/python" -m pip install \
     --find-links "${script_root}/wheelhouse" --requirement "${release_root}/backend/requirements.lock"
 else
@@ -415,17 +453,21 @@ else
 fi
 
 find "${release_root}" -type d -exec chmod a+rx,go-w {} +
-find "${release_root}" -type f -exec chmod go-w {} +
+# Both pip (umask 027) and a root operator's archive extraction (possibly 077)
+# can leave root-owned modules unreadable to the non-root service account.
+# Releases contain code/assets only; secrets remain in the private env file.
+find "${release_root}" -type f -exec chmod a+r,go-w {} +
+find "${release_root}" -type f -perm /111 -exec chmod a+rx,go-w {} +
 chown -R root:root "${release_root}"
 
 runtime_environment=(
   ANALYSIS_DB_BACKEND=postgresql
   DATABASE_URL="${DATABASE_URL}"
-  DEPLOYMENT_PROFILE=rocky8
+  DEPLOYMENT_PROFILE="${deployment_profile}"
   AUTH_MODE="${AUTH_MODE}"
   AUTH_SECRET_KEY="${AUTH_SECRET_KEY}"
   AUTH_TOKEN_TTL_MINUTES="${AUTH_TOKEN_TTL_MINUTES}"
-  AUTH_COOKIE_SECURE=true
+  AUTH_COOKIE_SECURE="${AUTH_COOKIE_SECURE}"
   CORS_ALLOWED_ORIGINS="${CORS_ALLOWED_ORIGINS}"
   DIRECTORY_MODE="${DIRECTORY_MODE}"
   SIM_DASH_APP_ROLE="${SIM_DASH_APP_ROLE}"
@@ -566,7 +608,7 @@ environment_names=(
   SIMDASH_IMPORT_REFRESH_MAX_CONCURRENT
 )
 ANALYSIS_DB_BACKEND=postgresql
-DEPLOYMENT_PROFILE=rocky8
+DEPLOYMENT_PROFILE="${deployment_profile}"
 for optional_name in OIDC_ISSUER_URL OIDC_CLIENT_ID OIDC_CLIENT_SECRET OIDC_REDIRECT_URI OIDC_SCOPES \
   OIDC_EMPLOYEE_ID_CLAIM OIDC_USERNAME_CLAIM OIDC_DISPLAY_NAME_CLAIM OIDC_DEPARTMENT_CLAIM \
   OIDC_JOB_TITLE_CLAIM OIDC_LOGIN_SUCCESS_URL OIDC_LOGIN_FAILURE_URL OIDC_TIMEOUT_SECONDS \
@@ -609,7 +651,7 @@ render_template() {
 log 'Installing systemd and nginx configuration'
 render_template "${script_root}/systemd/simdashboard.service.template" \
   /etc/systemd/system/simdashboard.service \
-  __REPLACE_ENVIRONMENT__ rocky8 \
+  __REPLACE_ENVIRONMENT__ "${deployment_profile}" \
   __REPLACE_SERVICE_USER__ "${SERVICE_USER}" \
   __REPLACE_SERVICE_GROUP__ "${SERVICE_GROUP}" \
   __REPLACE_RELEASE_ROOT__ "${INSTALL_ROOT}/current" \
@@ -618,13 +660,19 @@ render_template "${script_root}/systemd/simdashboard.service.template" \
   __REPLACE_UVICORN_WORKERS__ "${UVICORN_WORKERS}" \
   __REPLACE_RUNTIME_DIRECTORY__ "${RUNTIME_DIRECTORY}" \
   __REPLACE_IMPORT_ROOT__ "${SIMDASH_IMPORT_ROOT}"
-render_template "${script_root}/nginx/simdashboard.conf.template" \
-  /etc/nginx/conf.d/simdashboard.conf \
-  __REPLACE_SERVER_NAME__ "${SERVER_NAME}" \
-  __REPLACE_TLS_CERTIFICATE__ "${TLS_CERTIFICATE}" \
-  __REPLACE_TLS_CERTIFICATE_KEY__ "${TLS_CERTIFICATE_KEY}" \
-  __REPLACE_RELEASE_ROOT__ "${INSTALL_ROOT}/current" \
-  __REPLACE_API_PORT__ "${API_PORT}"
+if [[ "${dev_http}" == 1 ]]; then
+  render_template "${nginx_template}" /etc/nginx/conf.d/simdashboard.conf \
+    __REPLACE_SERVER_NAME__ "${SERVER_NAME}" \
+    __REPLACE_RELEASE_ROOT__ "${INSTALL_ROOT}/current" \
+    __REPLACE_API_PORT__ "${API_PORT}"
+else
+  render_template "${nginx_template}" /etc/nginx/conf.d/simdashboard.conf \
+    __REPLACE_SERVER_NAME__ "${SERVER_NAME}" \
+    __REPLACE_TLS_CERTIFICATE__ "${TLS_CERTIFICATE}" \
+    __REPLACE_TLS_CERTIFICATE_KEY__ "${TLS_CERTIFICATE_KEY}" \
+    __REPLACE_RELEASE_ROOT__ "${INSTALL_ROOT}/current" \
+    __REPLACE_API_PORT__ "${API_PORT}"
+fi
 install -o root -g root -m 0755 "${script_root}/healthcheck.sh" /usr/local/sbin/simdashboard-healthcheck
 
 previous_target=""
@@ -676,9 +724,9 @@ if [[ "${CONFIGURE_SELINUX}" == 1 ]] && command -v getenforce >/dev/null 2>&1 &&
 fi
 
 if [[ "${CONFIGURE_FIREWALL}" == 1 ]]; then
-  log 'Opening the HTTPS service in firewalld'
+  log "Opening the ${dashboard_scheme^^} service in firewalld"
   systemctl enable --now firewalld
-  firewall-cmd --permanent --add-service=https
+  firewall-cmd --permanent --add-service="${dashboard_scheme}"
   firewall-cmd --reload
 fi
 
@@ -712,13 +760,13 @@ if [[ "${START_SERVICES}" == 1 ]]; then
   if [[ -n "${HEALTHCHECK_URL}" ]]; then
     SIMDASH_HEALTH_URL="${HEALTHCHECK_URL}" /usr/local/sbin/simdashboard-healthcheck || {
       rollback_code_symlink
-      die 'Public HTTPS health check failed; the application symlink was rolled back when possible.'
+      die 'Public dashboard health check failed; the application symlink was rolled back when possible.'
     }
   fi
 fi
 
 log "Installation complete: release=${release_id} current=${INSTALL_ROOT}/current"
-log "Dashboard URL: https://${SERVER_NAME}/"
+log "Dashboard URL: ${dashboard_scheme}://${SERVER_NAME}/"
 if [[ "${START_SERVICES}" != 1 ]]; then
   log 'Services were not started. Review the configuration, then enable/start nginx.service and simdashboard.service.'
 fi

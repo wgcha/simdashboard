@@ -3,6 +3,12 @@ import { defineConfig, devices } from '@playwright/test'
 export default defineConfig({
   testDir: './e2e',
   outputDir: './test-results',
+  // Native Windows initializes the disposable DuckDB fixture and Vite cache on
+  // the first test run. Keep Linux's defaults while allowing that cold start.
+  timeout: process.platform === 'win32' ? 90_000 : 30_000,
+  expect: {
+    timeout: process.platform === 'win32' ? 15_000 : 5_000,
+  },
   fullyParallel: false,
   workers: 1,
   retries: process.env.CI ? 1 : 0,

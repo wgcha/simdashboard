@@ -1,6 +1,6 @@
 # 현재 구현 아키텍처
 
-- 기준일: 2026-09-01
+- 기준일: 2026-09-08
 - 상태: 현재 코드 기준
 - 대상: `backend/app`, `frontend/src`, DB migration, API 계약, 테스트 경계
 
@@ -30,6 +30,56 @@ Browser
 ```
 
 현재는 legacy 구조와 목표 구조가 공존하는 점진적 전환 상태다. `main.py → application → domain → persistence adapter`가 모든 기능에 일괄 적용된 것처럼 설명하면 안 된다.
+
+### SPDM 저장소 연계
+
+`routers/spdm_storage.py`가 설정·binding·새로고침·파일 업로드/다운로드 HTTP 경계를,
+`services/spdm_storage.py`가 Windows 파일 게시/읽기, Project/WR/CAE 탐색, parent registry와
+파일 index를 담당한다. 수치 결과는 기존 `run_manual_import`와 결과 UoW를 재사용한다.
+`0020_spdm_storage`는 root 설정, Project/WR parent 연결, 하중 경우 binding과 파일 index를 추가한다.
+
+Frontend는 `features/storage/`의 독립 화면과 generated client 기반 `shared/api/storage.ts`를 사용한다.
+App 및 WorkspaceRouteRenderer가 DataWorkspace에 저장소 패널을 주입하므로 Data feature가
+Storage feature를 직접 import하지 않는다. 파일별 수치 조회는 저장된 Run ID로 기존 overview API를 읽는다.
+실행 계약과 검증 범위는 [SPDM 저장 폴더 연계](spdm-storage-workflow.md)를 따른다.
+
+### 제품·하중 경우별 모델링 CSV 라이브러리
+
+`routers/modeling_templates.py`는 형식화된 API·권한·36 MiB 요청 수신 제한을,
+`services/modeling_templates.py`는 경로 검증·검색·트랜잭션·불변 버전 및 CSV 원본 저장을 담당한다.
+`0021_modeling_templates`의 카드/버전/파일 테이블에 파일 바이트까지 저장하며,
+기존 `template_executions` 자동화 실행 이력과 SPDM 결과 파일은 별도로 유지한다.
+Frontend는 `features/workbench/modeling-templates/`에서 카드, 생성 대화상자, 업로드 확인 패널,
+폴더 트리를 분리하고 `shared/api/modelingTemplates.ts`의 생성 API 계약을 사용한다.
+목록·버전 조회 캐시는 제품/하중 경우/검색어/카드/버전 문맥으로 구분한다.
+사용·저장 계약은 [모델링 템플릿 라이브러리](modeling-template-library.md)를 따른다.
+
+### 메뉴 전환과 조회 수명
+
+`app/routing/workspaceScreenModules.tsx`에서 화면별 동적 import와 사전 로딩을 함께 관리한다.
+메뉴 hover/focus와 초기 화면 표시 후 주요 작업 화면을 준비하며, 준비된 화면은 추가 Suspense 대기 없이 렌더한다.
+공통 메뉴·헤더를 유지하고 무거운 화면의 코드 분할은 보존한다.
+
+`shared/cache/useMemoryQuery.ts`는 명시적으로 선택한 조회에만 적용하는 메모리 캐시다.
+결과 대시보드, 접수 유형, 작업 실행 이력·설정, 저장소 파일, 결과 레이아웃에 사용한다.
+최근 같은 문맥의 데이터는 즉시 표시하고 백그라운드에서 재검증한다. 필터·프로젝트·의뢰·하중 경우·Run 등
+조회 범위를 key에 포함하여 다른 문맥의 데이터를 대신 표시하지 않는다. 갱신 토큰은 같은 문맥의 재조회 신호다.
+비활성 항목은 기본 5분/64개 LRU로 관리하며, 성공한 쓰기는 재검증을 유발한다.
+로그아웃·계정 전환·권한 오류는 응답을 제거하고 지연 응답의 재삽입을 막는다.
+접근 거부된 조회는 자동 재시도하지 않으며, 권한 재확인 후 허용된 조회를 재개한다.
+
+첫 진입과 새 문맥의 데이터 조회에는 로딩이 필요하다. 결과 레이아웃의 대기 상태 polling과 오류·재시도는
+유지하며 결과 검토의 문맥 확인과 레이아웃 조회는 병렬 실행한다. 실행·등록 form 자체를 숨긴 채 계속
+마운트해 두는 방식은 사용하지 않는다.
+
+### 전역 색상 테마
+
+`frontend/src/theme.css`가 라이트·다크의 배경, 표면, 글자, 테두리, 강조, 상태 및 차트 색상 역할을 소유한다.
+페이지와 기능 CSS는 `--color-*` 변수를 참조하고, 테마 선택은 루트와 앱 shell의 `data-theme`에 반영한다.
+선택된 버튼은 강조색과 그 위의 글자색을 한 쌍으로 사용하며, 판정 배지는 `data-status`로 성공·실패를 구분한다.
+기본 차트 계열과 기준선도 테마에 맞춰 바뀐다. 사용자가 명시한 차트 색상, 보고서 출력용 슬라이드 색상,
+원본 이미지·영상은 콘텐츠의 일부이므로 테마 전환으로 재작성하지 않는다.
+새 화면은 고정된 UI 색상이나 별도 테마 팔레트를 추가하지 않고 이 역할을 재사용한다.
 
 ## 2. 저장소 최상위 책임
 
@@ -339,7 +389,7 @@ Project
 - 보고서와 자연어 개선 dialog 진입
 - route renderer에 필요한 feature callback 조립
 
-화면 자체는 `app/workspace/WorkspaceRouteRenderer.tsx`와 `features/`로 이동했지만 `App.tsx`는 아직 최종 wiring-only 수준은 아니다.
+화면과 controller 일부가 `app/workspace/WorkspaceRouteRenderer.tsx` 및 `features/`로 추출되어 있다. 다만 실제 `main.tsx → App.tsx` 경로는 아직 App 안의 feature 조립부를 사용하므로 추출된 renderer만 수정해서는 화면에 반영되지 않는다. GUI 개편의 현재 기준과 기존 문서 대체 범위는 [`request-centric-workspace-ux.md`](request-centric-workspace-ux.md)를 따른다. `App.tsx`는 아직 최종 wiring-only 수준은 아니다.
 
 ### 4.2 폴더 책임
 

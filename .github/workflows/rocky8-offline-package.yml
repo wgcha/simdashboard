@@ -1,0 +1,53 @@
+name: Rocky 8.6 offline installation package
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/rocky86-offline-installer]
+    paths:
+      - deploy/rocky8/**
+      - .github/workflows/rocky8-offline-package.yml
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      ROCKY_IMAGE: rockylinux:8.6@sha256:b820932e70edf6559d190a1f2e7b19f080ff45a61fc485bb4aad2d1b38b64e5d
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+      - name: Build frontend from this commit
+        working-directory: frontend
+        run: |
+          corepack enable
+          corepack pnpm install --frozen-lockfile
+          corepack pnpm run build
+          # Only these generated files are tracked in the source tree.
+          git restore -- tsconfig.app.tsbuildinfo tsconfig.node.tsbuildinfo
+      - name: Build runtime, wheels and OS repository on Rocky 8.6
+        run: |
+          docker pull "$ROCKY_IMAGE"
+          docker run --rm --platform linux/amd64 \
+            -v "$GITHUB_WORKSPACE:/src" -w /src "$ROCKY_IMAGE" \
+            bash deploy/rocky8/ci-build-offline.sh
+      - name: Verify installation dependencies without network access
+        run: |
+          docker run --rm --platform linux/amd64 --network none \
+            -v "$GITHUB_WORKSPACE:/src:ro" -w /src "$ROCKY_IMAGE" \
+            bash deploy/rocky8/verify-offline-bundle.sh /src/dist/simdashboard-offline.tar.gz
+      - name: Upload verified installation package
+        uses: actions/upload-artifact@v4
+        with:
+          name: simdashboard-rocky86-x86_64-offline
+          path: |
+            dist/simdashboard-offline.tar.gz
+            dist/simdashboard-offline.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0

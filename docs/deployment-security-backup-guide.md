@@ -28,17 +28,17 @@ $env:POSTGRES_BIN='E:\PostgreSQL\18\bin'
 
 ### 2.1 안전한 PostgreSQL 시작과 추가 migration
 
-최초 구축을 마친 PC에서 `start-postgresql.ps1` 또는 PostgreSQL이 설정된 `start.ps1`을 실행하면 시작 전 다음 절차를 수행한다.
+최초 구축을 마친 PC에서 `start-postgresql.ps1` 또는 PostgreSQL이 설정된 `start.ps1`을 실행하면 시작 전 read/preflight 절차를 수행한다. `start.ps1`은 자동 migration을 실행하지 않는다. schema 변경이 승인된 경우에만 `.\.venv-runtime\Scripts\python.exe backend\scripts\upgrade_postgres_schema.py`를 별도로 호출한다.
 
 1. 앱 계정으로 `alembic_version`과 코드의 단일 head를 비교한다.
 2. 이미 head이면 `.postgres-owner.env`를 읽지 않고 앱 권한 및 핵심 테이블 접근을 확인한다.
-3. 알려진 이전 revision일 때만 보호된 `.postgres-owner.env`의 `POSTGRES_OWNER_URL`을 읽는다.
-4. 앱 URL과 owner URL의 host·port·database가 같고 owner 역할과 DB/스키마 소유권이 올바른지 확인한다.
-5. owner advisory lock을 보유한 상태에서 revision을 다시 읽은 후 아직 pending일 때만 Alembic child process를 실행한다.
-6. migration 후 앱 계정으로 head, 신규 테이블 CRUD 기본 권한, `initialize_database`를 다시 검증한다.
+3. pending 또는 코드 계보와 다른 revision이면 일반 시작을 중단하고 명시 migration 절차를 요구한다.
+4. 명시 migration에서만 보호된 `.postgres-owner.env`의 `POSTGRES_OWNER_URL`을 읽고, 앱 URL과 owner URL의 host·port·database, owner 역할과 DB/스키마 소유권을 확인한다.
+5. 일반 시작은 앱 연결의 rollback-only probe와 핵심 테이블 CRUD만 확인한다.
+6. 별도 migration을 수행했다면 앱 계정으로 head, 신규 테이블 CRUD 기본 권한, `initialize_database`를 다시 검증한다.
 7. API와 프런트엔드가 지정 포트에서 실제로 응답한 뒤에만 시작 성공과 PID 파일을 기록한다.
 
-일반 시작은 빈 DB의 최초 구축, 역할 생성·비밀번호 변경, DuckDB 복사를 수행하지 않는다. `alembic_version`이 없거나 revision이 코드 계보와 다르면 최초 구축/복구 절차를 확인하도록 중단한다. 앱 계정에는 DB·스키마 `CREATE` 권한을 부여하지 않는다. owner 파일의 ACL을 완화하거나 owner URL을 `.env`, 콘솔, 로그에 복사하지 않는다.
+일반 시작은 빈 DB의 최초 구축, 역할 생성·비밀번호 변경, DuckDB 복사 또는 임의 downgrade/rollback을 수행하지 않는다. `alembic_version`이 없거나 revision이 코드 계보와 다르면 최초 구축/복구 절차를 확인하도록 중단한다. 앱 계정에는 DB·스키마 `CREATE` 권한을 부여하지 않는다. owner 파일의 ACL을 완화하거나 owner URL을 `.env`, 콘솔, 로그에 복사하지 않는다.
 
 ## 3. Windows compatibility profile의 사내 인증과 역할
 

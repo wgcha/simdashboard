@@ -1,3 +1,4 @@
+import { openWorkspaceRoute } from './workspace-test-helpers'
 import { expect, test, type Page } from '@playwright/test'
 
 const password = 'e2e-validation-password'
@@ -69,7 +70,7 @@ test('작업 유형 결과 구성은 접수 미리보기와 generic pending resu
   const workTypeName = `E2E 결과 구성 작업 ${suffix}`
   const requestTitle = `E2E 결과 snapshot 의뢰 ${suffix}`
 
-  await page.getByRole('link', { name: '작업 유형 관리', exact: true }).click()
+  await openWorkspaceRoute(page, '/workspace/admin/work-types')
   const form = page.getByRole('form', { name: '새 작업 유형 작성' })
   await form.getByLabel('관리 유형 표시 이름').fill(workTypeName)
   await page.locator('.workbench-admin-task-picker').getByRole('button', { name: /CAD\/형상 준비/ }).click()
@@ -88,7 +89,7 @@ test('작업 유형 결과 구성은 접수 미리보기와 generic pending resu
   const requestTypeId = ((await typeCard.locator('code').textContent()) ?? '').split(' · ')[0]
   expect(requestTypeId).toBeTruthy()
 
-  await page.getByRole('link', { name: '의뢰 접수', exact: true }).click()
+  await openWorkspaceRoute(page, '/workspace/requests/new')
   const requestTypeOption = page.getByTestId(`request-type-option-${requestTypeId}-1`)
   await requestTypeOption.click()
   const expectedPreview = page.getByTestId('expected-results-preview')
@@ -107,14 +108,45 @@ test('작업 유형 결과 구성은 접수 미리보기와 generic pending resu
   const createdRequest = (await requestsResponse.json() as Array<{ id: string; title: string }>).find((item) => item.title === requestTitle)
   expect(createdRequest).toBeTruthy()
 
-  await page.getByRole('link', { name: '해석 의뢰 현황', exact: true }).click()
+  await openWorkspaceRoute(page, '/workspace/requests')
   await page.getByLabel('의뢰 선택').selectOption(createdRequest!.id)
-  await page.locator('.view-tabs').getByRole('button', { name: /상세 분석/ }).click()
+  const implicitMaterializations: string[] = []
+  page.on('request', (request) => {
+    if (request.method() === 'POST' && request.url().includes('/result-layout/materialize')) implicitMaterializations.push(request.url())
+  })
+  await page.locator('.request-journey').getByRole('button', { name: /결과 검토|상세 분석/ }).click()
   const pending = page.getByTestId('pending-analysis-workspace')
   await expect(pending).toContainText('요청 결과')
   await expect(pending.getByTestId('result-layout-widget-request-result-kpi')).toContainText('결과 대기')
   await expect(pending.getByTestId('result-layout-widget-request-result-note')).toContainText('결과 대기')
   await expectCommonResultActions(page, false)
+  expect(implicitMaterializations, 'Viewing a result snapshot must not create a dashboard').toEqual([])
+
+  await openWorkspaceRoute(page, '/workspace/help')
+  const layoutRoute = `**/api/workbench/requests/${createdRequest!.id}/result-layout*`
+  let layoutRequestCount = 0
+  let signalWarmRefreshStarted!: () => void
+  let releaseWarmRefresh!: () => void
+  const warmRefreshStarted = new Promise<void>((resolve) => { signalWarmRefreshStarted = resolve })
+  const warmRefreshGate = new Promise<void>((resolve) => { releaseWarmRefresh = resolve })
+  await page.route(layoutRoute, async (route) => {
+    layoutRequestCount += 1
+    if (layoutRequestCount === 1) {
+      signalWarmRefreshStarted()
+      await warmRefreshGate
+    }
+    await route.continue()
+  })
+  await page.goBack()
+  await warmRefreshStarted
+  try {
+    await expect(pending).toContainText(widgetTitle)
+    await expect(page.getByText('상세 분석 구성 확인 중', { exact: true })).toHaveCount(0)
+  } finally {
+    releaseWarmRefresh()
+  }
+  await expect.poll(() => layoutRequestCount, { timeout: 15_000 }).toBeGreaterThan(1)
+  await page.unroute(layoutRoute)
 
   const legacyTypeResponse = await page.request.post('/api/admin/workbench/request-types', {
     data: requestTypePayload(`E2E legacy result ${suffix}`),
@@ -122,11 +154,11 @@ test('작업 유형 결과 구성은 접수 미리보기와 generic pending resu
   expect(legacyTypeResponse.status(), await legacyTypeResponse.text()).toBe(201)
   const legacyType = await legacyTypeResponse.json() as { id: string; version: number }
   const legacyTitle = `E2E legacy request ${suffix}`
-  await createRequest(page, legacyType.id, legacyType.version, legacyTitle)
+  const legacyRequest = await createRequest(page, legacyType.id, legacyType.version, legacyTitle)
   await page.reload({ waitUntil: 'networkidle' })
 
-  const legacyLane = page.getByRole('heading', { name: legacyTitle, exact: true }).locator('xpath=ancestor::section[contains(@class,"workflow-lane")]')
-  await legacyLane.getByRole('button', { name: '상세 분석 열기' }).click()
+  await page.getByLabel('의뢰 선택', { exact: true }).selectOption(legacyRequest.id)
+  await page.locator('.request-journey').getByRole('button', { name: /결과 검토|상세 분석/ }).click()
   const unconfigured = page.getByTestId('result-layout-unconfigured')
   await expect(unconfigured).toBeVisible()
   await expect(unconfigured).toContainText('결과 구성 미지정')

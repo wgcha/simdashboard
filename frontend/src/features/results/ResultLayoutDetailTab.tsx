@@ -5,12 +5,15 @@ import type { RequestResultLayout } from '../../shared/api/resultLayouts'
 import { canCommitResultLayoutOpen, canOpenResultLayout, detailedAnalysisRoute } from './resultLayoutRouting'
 
 type Props = {
+  active?: boolean
   analysisLabel: string
+  label?: string
   requestId: string
   requestContextLoading: boolean
   loadLayout: (requestId: string) => Promise<RequestResultLayout>
   isCurrentOpen: (intent: number) => boolean
   onBeginOpen: () => number
+  onBeforeOpen?: (intent: number) => Promise<void>
   onDomain: () => void
   onError: (message: string) => void
   onSnapshot: () => void
@@ -18,12 +21,15 @@ type Props = {
 }
 
 export function ResultLayoutDetailTab({
+  active = false,
   analysisLabel,
+  label = '상세 분석',
   requestId,
   requestContextLoading,
   loadLayout,
   isCurrentOpen,
   onBeginOpen,
+  onBeforeOpen,
   onDomain,
   onError,
   onSnapshot,
@@ -39,7 +45,9 @@ export function ResultLayoutDetailTab({
     const intent = ++requestIntent.current
     setLoading(true)
     try {
-      const route = detailedAnalysisRoute(await loadLayout(requestId))
+      // Context verification and layout lookup are independent; commit only after both succeed.
+      const [, layout] = await Promise.all([onBeforeOpen?.(contextIntent), loadLayout(requestId)])
+      const route = detailedAnalysisRoute(layout)
       if (!canCommitResultLayoutOpen(intent, requestIntent.current, contextIntent, isCurrentOpen)) return
       if (route === 'SNAPSHOT') onSnapshot()
       else if (route === 'DOMAIN') onDomain()
@@ -51,8 +59,8 @@ export function ResultLayoutDetailTab({
     }
   }
 
-  return <button className={loading ? 'active' : ''} disabled={!canOpen || loading} onClick={() => void open()}>
+  return <button className={loading || active ? 'active' : ''} aria-current={active ? 'step' : undefined} disabled={!canOpen || loading} onClick={() => void open()}>
     {loading ? <LoaderCircle className="spin" /> : <LayoutDashboard />}
-    상세 분석 <span>{analysisLabel}</span>
+    {label} <span>{analysisLabel}</span>
   </button>
 }

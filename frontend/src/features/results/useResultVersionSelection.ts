@@ -5,6 +5,7 @@ import type { AnalysisRunSummary, Overview } from '../../types'
 
 type Options = {
   loadCaseId: string
+  requestedRunId?: string
   enabled?: boolean
   overview: Overview | null
   setOverview: (overview: Overview) => void
@@ -22,7 +23,7 @@ export type ResultVersionSelection = {
 const errorMessage = (reason: unknown, fallback: string) => reason instanceof Error ? reason.message : fallback
 
 /** Loads immutable result versions and keeps overview changes race-safe. */
-export function useResultVersionSelection({ loadCaseId, enabled = true, overview, setOverview }: Options): ResultVersionSelection {
+export function useResultVersionSelection({ loadCaseId, requestedRunId, enabled = true, overview, setOverview }: Options): ResultVersionSelection {
   const [analysisRuns, setAnalysisRuns] = useState<AnalysisRunSummary[]>([])
   const [selectedAnalysisRunId, setSelectedAnalysisRunId] = useState('')
   const [analysisRunsLoading, setAnalysisRunsLoading] = useState(false)
@@ -38,9 +39,9 @@ export function useResultVersionSelection({ loadCaseId, enabled = true, overview
     const sequence = ++requestSequence.current
     setAnalysisRunError('')
     runsRef.current = []
+    setAnalysisRuns([])
+    setSelectedAnalysisRunId('')
     if (!enabled || !loadCaseId) {
-      setAnalysisRuns([])
-      setSelectedAnalysisRunId('')
       setAnalysisRunsLoading(false)
       setAnalysisRunChanging(false)
       return
@@ -49,13 +50,16 @@ export function useResultVersionSelection({ loadCaseId, enabled = true, overview
     api.analysisRuns(loadCaseId).then((runs) => {
       if (sequence !== requestSequence.current) return
       const latest = runs.find((run) => run.is_latest) ?? runs[0]
+      const requested = requestedRunId && runs.some((run) => run.id === requestedRunId) ? requestedRunId : undefined
+      const loadedOverviewRun = overviewRef.current?.load_case.id === loadCaseId && runs.some((run) => run.id === overviewRef.current?.run) ? overviewRef.current?.run : undefined
+      const selectedRunId = requested ?? loadedOverviewRun ?? latest?.id ?? ''
       runsRef.current = runs
       setAnalysisRuns(runs)
-      setSelectedAnalysisRunId(latest?.id ?? '')
+      setSelectedAnalysisRunId(selectedRunId)
       const currentOverview = overviewRef.current
-      if (latest && currentOverview?.load_case.id === loadCaseId && currentOverview.run !== latest.id) {
+      if (selectedRunId && currentOverview?.load_case.id === loadCaseId && currentOverview.run !== selectedRunId) {
         setAnalysisRunChanging(true)
-        return api.overview(loadCaseId, latest.id).then((overviewData) => {
+        return api.overview(loadCaseId, selectedRunId).then((overviewData) => {
           if (sequence === requestSequence.current) setOverview(overviewData)
         })
       }
@@ -73,7 +77,7 @@ export function useResultVersionSelection({ loadCaseId, enabled = true, overview
     return () => {
       if (sequence === requestSequence.current) requestSequence.current += 1
     }
-  }, [enabled, loadCaseId, setOverview])
+  }, [enabled, loadCaseId, requestedRunId, setOverview])
 
   const selectAnalysisRun = useCallback(async (runId: string) => {
     if (!loadCaseId || !enabled || !runsRef.current.some((run) => run.id === runId)) return

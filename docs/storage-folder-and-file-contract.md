@@ -1,6 +1,6 @@
 # DB·결과 폴더·파일 확장자 계약
 
-- 기준일: 2026-08-25
+- 기준일: 2026-09-08
 - 상태: 현재 구현 기준 + 잔여 개선 항목
 - 관련 코드: `backend/app/config.py`, `database_connection.py`, `folder_import.py`, `parsers/manifest_format.py`, `parsers/manifest_parser.py`, `media_policy.py`, `services/bundle_fingerprint.py`, `services/canonical_result_bundle.py`, `services/bundle_snapshot.py`, `services/result_bundle_publisher.py`, `scripts/publish_result_bundle.py`, `services/master_result_refresh.py`, `application/results/commands.py`, `adapters/persistence/result_ingestion.py`, `services/media_storage_service.py`
 
@@ -30,16 +30,17 @@ transfer-bundles/
 | 구분 | 출처·용도 | 현재 처리 |
 |---|---|---|
 | canonical 결과 import layout | 이 문서와 `examples/master-results/` | 실행 가능. `SIMDASH_IMPORT_ROOT` 아래 canonical `manifest.json`과 `mappings`를 실제 parser/UoW가 처리한다. |
-| SPDM discovery layout | [#13](https://github.com/wgcha/simdashboard/issues/13)의 상위 SPDM 폴더 구조 | 의뢰 발견·변경 감지용 설계 입력이다. 감시 schema를 확정·구현하기 전에는 `manifest.json` 결과 import 또는 DB 저장 형식으로 직접 해석하지 않는다. |
-| DB 저장 | DuckDB 파일 또는 PostgreSQL schema | import folder hierarchy가 DB table hierarchy를 만들지 않는다. DB 연결은 검증한 manifest context ID로만 한다. |
+| SPDM discovery layout | [#13](https://github.com/wgcha/simdashboard/issues/13)의 상위 SPDM 폴더 구조 | 별도 `SIMDASH_SPDM_ROOT` adapter의 대상이다. 의뢰 탐색·파일 업로드·직접 저장 파일 연결은 [SPDM 저장 폴더 연계](spdm-storage-workflow.md)를 따른다. |
+| DB 저장 | DuckDB 파일 또는 PostgreSQL schema | canonical 수집은 검증한 manifest context ID로 연결한다. SPDM adapter는 검증한 구조와 명시적 폴더 binding으로 별도 연결한다. |
 
-SPDM upstream 폴더를 결과로 쓰려면 별도 adapter가 (1) 허용 root, (2) 프로젝트·의뢰
-매핑, (3) 안정화/atomic-publish 판정, (4) canonical manifest 생성 또는 명시적 API
-command를 제공해야 한다. 이 adapter는 현재 구현 범위가 아니다.
+SPDM adapter는 별도 허용 root, 프로젝트·의뢰 mapping, 완료 파일 판정과 명시적
+결과 등록 command를 제공한다. 아래 canonical manifest 수집의 read-only root와
+publisher 계약은 SPDM 업로드 경로에 적용하지 않는다. SPDM 지원 상태와 검증 기록은
+[SPDM 저장 폴더 연계](spdm-storage-workflow.md)에 기록한다.
 
 [#13](https://github.com/wgcha/simdashboard/issues/13)의 대표 discovery 구조는 다음과
-같다. 이 tree는 upstream 관찰/의뢰 분류용 참고이며 **현재 실행 가능한 import tree가
-아니다**. 실제 수집은 다음 절의 `SIMDASH_IMPORT_ROOT`와 canonical manifest만 쓴다.
+같다. 이 tree는 SPDM adapter의 의뢰 분류 기준이다. 다음 절의 `SIMDASH_IMPORT_ROOT`
+canonical manifest 수집과는 서로 다른 진입점이다.
 
 ```text
 Project_.../
@@ -176,20 +177,20 @@ parser adapter는 parser/manifest 형식 호환 전용으로 남는다. runtime 
 ## 5. 허용 확장자와 MIME
 
 [#14](https://github.com/wgcha/simdashboard/issues/14)의 source/solver/result/report
-확장자와 명명 inventory는 producer와 보관·연계 범위를 식별하는 목록이다. 이것은
-현재 upload/import allowlist가 아니다. 현재 애플리케이션은 아래 표의 JSON/CSV와
-미디어 형식만 manifest mapping 또는 수동 결과 등록에서 처리한다. inventory에 있는
-새 형식은 parser, MIME·signature 정책, size limit, 예제, 정상/실패 테스트를 함께
-추가한 뒤에만 허용한다.
+확장자와 명명 inventory는 producer와 보관·연계 범위를 식별하는 목록이다.
+SPDM adapter는 아래 원본을 저장·다운로드할 수 있지만, 원본 보관과 수치 parser
+지원은 다르다. canonical manifest mapping과 수동 수치 등록은 기존 JSON/CSV·미디어
+정책을 유지한다. 새 수치 parser나 inline media 형식은 MIME·signature 정책,
+size limit, 예제와 정상/실패 테스트를 함께 추가한 뒤에만 허용한다.
 
 | #14 inventory 범주 | 대표 확장자·명명 | 현재 import 의미 |
 |---|---|---|
-| CAD source | `.prt`, `.x_t` | upstream 원본. 현재 parser/upload allowlist 아님 |
-| model | `.hm`, `.mdl` | solver 전 모델. 현재 allowlist 아님 |
-| solver input | `.fem`, `.rad`, `.xml` | solver 입력. 현재 allowlist 아님 |
-| solver result | `.h3d` | solver native 결과. 현재 allowlist 아님 |
-| document output | `.csv`, `.ppt`, `.pdf`, `.json` | `.csv`/`.json`은 canonical mapping 또는 수동 parser 계약에 맞을 때만 가능; `.ppt`/`.pdf`는 현재 결과 import 불가 |
-| vibration output | `.txt`, `.pkl`, `.png` | `.png`만 media policy와 manifest MIME 계약에 맞을 때 가능; 나머지는 현재 allowlist 아님 |
+| CAD source | `.prt`, `.x_t` | SPDM `inputs` 원본 보관; 수치 parser 없음 |
+| model | `.hm`, `.mdl` | SPDM `inputs` 원본 보관; 모델 실행·변환 없음 |
+| solver input | `.fem`, `.rad`, `.xml` | SPDM `inputs` 원본 보관; solver 실행 없음 |
+| solver result | `.h3d` | SPDM `solver` 원본 보관; H3D 수치 decoding 없음 |
+| document output | `.csv`, `.ppt`, `.pdf`, `.json` | CSV/JSON은 지원 수치 형식을 검증; PPT/PPTX/PDF는 SPDM 의뢰 보고서 폴더에 원본 보관 |
+| vibration output | `.txt`, `.pkl`, `.png` | TXT/PKL은 SPDM `solver` 원본 보관(PKL 역직렬화 없음); PNG 원본 보관과 기존 canonical media 정책은 별도 |
 | naming token | `Deflection`, `CMS`, `StandFailure`, `Stiffness_ChRear`, `1st`, `2nd`, `result` | 파일 발견/분류 후보일 뿐 parser 선택·권한·DB mapping을 우회하지 않음 |
 
 ### 구조화 결과

@@ -1,3 +1,4 @@
+import { openWorkspaceRoute } from './workspace-test-helpers'
 import { expect, test, type Page } from '@playwright/test'
 
 async function waitForDashboard(page: Page, role: 'admin' | 'viewer' = 'admin') {
@@ -6,14 +7,14 @@ async function waitForDashboard(page: Page, role: 'admin' | 'viewer' = 'admin') 
   await page.getByLabel('사용자 이름').fill(role === 'admin' ? 'e2e-admin' : 'e2e-viewer')
   await page.getByLabel('비밀번호').fill('e2e-validation-password')
   await page.getByRole('button', { name: '로그인', exact: true }).click()
-  await expect(page.getByRole('link', { name: '운영 대시보드', exact: true })).toBeVisible()
+  await expect(page.getByRole('link', { name: '결과 대시보드', exact: true })).toBeVisible()
   await expect(page.locator('.portfolio-page')).toBeVisible()
 }
 
 async function openAnalysisWorkspace(page: Page) {
-  await page.getByRole('link', { name: '해석 의뢰 현황', exact: true }).click()
-  await expect(page.locator('.content-head')).toBeVisible()
-  await page.locator('.view-tabs').getByRole('button', { name: /상세 분석/ }).click()
+  await openWorkspaceRoute(page, '/workspace/requests')
+  await expect(page.locator('.request-workspace-header')).toBeVisible()
+  await page.locator('.request-journey').getByRole('button', { name: /결과 검토|상세 분석/ }).click()
 }
 
 test.beforeEach(async ({ page }, testInfo) => {
@@ -23,7 +24,7 @@ test.beforeEach(async ({ page }, testInfo) => {
 test('Viewer는 대시보드를 조회하지만 편집 기능은 사용할 수 없다', async ({ page }) => {
   await expect(page.locator('.signed-user')).toContainText('GENERAL')
   await expect(page.getByRole('button', { name: '대시보드 편집', exact: true })).toHaveCount(0)
-  await page.getByRole('link', { name: '해석 의뢰 현황', exact: true }).click()
+  await openWorkspaceRoute(page, '/workspace/requests')
   await expect(page.getByRole('button', { name: '진행 단계 편집', exact: true })).toHaveCount(0)
 })
 
@@ -59,7 +60,7 @@ test('운영 대시보드 편집은 취소 복원과 백엔드 버전 저장을 
 
 test('의뢰 진행 상태의 레이아웃 편집과 단계 편집은 서로 독립적이다', async ({ page }) => {
   await openAnalysisWorkspace(page)
-  await page.getByRole('button', { name: /의뢰 진행 상태/ }).click()
+  await page.getByRole('button', { name: /의뢰 개요/ }).click()
   await page.getByLabel('프로젝트 선택').selectOption('project-feature-showcase')
   await expect(page.getByLabel('의뢰 선택').locator('option[value="request-showcase-workflow"]')).toHaveCount(1)
   await page.getByLabel('의뢰 선택').selectOption('request-showcase-workflow')

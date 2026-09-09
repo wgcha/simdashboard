@@ -38,8 +38,10 @@ from .routers.security import router as security_router
 from .routers.access_control import router as access_control_router
 from .routers.workbench import router as workbench_router
 from .routers.modeling_catalog import router as modeling_catalog_router
+from .routers.modeling_templates import router as modeling_templates_router
 from .routers.result_folder_refresh import router as result_folder_refresh_router
 from .routers.result_ingestion import router as result_ingestion_router
+from .routers.spdm_storage import router as spdm_storage_router
 from .routers.media import router as media_router
 from .adapters.http.routers.projects import router as projects_router
 from .adapters.http.routers.reports import router as reports_router
@@ -95,6 +97,7 @@ app.include_router(security_router)
 app.include_router(access_control_router)
 app.include_router(workbench_router)
 app.include_router(modeling_catalog_router)
+app.include_router(modeling_templates_router)
 app.include_router(result_folder_refresh_router)
 
 
@@ -295,6 +298,7 @@ app.include_router(request_load_case_create_router)
 
 
 app.include_router(result_ingestion_router)
+app.include_router(spdm_storage_router)
 app.include_router(media_router)
 app.include_router(load_case_overview_router)
 app.include_router(analysis_runs_router)

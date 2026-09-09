@@ -1,17 +1,7 @@
-import { lazy } from 'react'
 import { LoaderCircle } from 'lucide-react'
 import type { WidgetCatalogItem } from '../types'
 
-export const DataWorkspace = lazy(() => import('../features/data/DataWorkspace').then(({ DataWorkspace }) => ({ default: DataWorkspace })))
-export const FolderSchemaWorkspace = lazy(() => import('../features/data/FolderSchemaWorkspace').then(({ FolderSchemaWorkspace }) => ({ default: FolderSchemaWorkspace })))
-export const VariableCatalogPage = lazy(() => import('../features/data/VariableCatalogPage').then(({ VariableCatalogPage }) => ({ default: VariableCatalogPage })))
-export const AutomationTemplatesPage = lazy(() => import('../features/workbench/AutomationTemplatesPage').then(({ AutomationTemplatesPage }) => ({ default: AutomationTemplatesPage })))
-export const FeatureExampleGallery = lazy(() => import('../features/examples/FeatureExampleGallery').then(({ FeatureExampleGallery }) => ({ default: FeatureExampleGallery })))
-export const HelpCenter = lazy(() => import('../features/help/HelpCenter').then(({ HelpCenter }) => ({ default: HelpCenter })))
-export const WorkflowView = lazy(() => import('../features/requests/WorkflowView').then(({ WorkflowView }) => ({ default: WorkflowView })))
-export const ResultsWorkspace = lazy(() => import('../features/results/ResultsWorkspace').then(({ ResultsWorkspace }) => ({ default: ResultsWorkspace })))
-export const PendingAnalysisWorkspace = lazy(() => import('../features/results/PendingAnalysisWorkspace').then(({ PendingAnalysisWorkspace }) => ({ default: PendingAnalysisWorkspace })))
-export const AnalysisPageManager = lazy(() => import('../features/analysis/AnalysisPageManager').then(({ AnalysisPageManager }) => ({ default: AnalysisPageManager })))
+export { DataWorkspace, FolderSchemaWorkspace, VariableCatalogPage, AutomationTemplatesPage, FeatureExampleGallery, HelpCenter, WorkflowView, ResultsWorkspace, PendingAnalysisWorkspace, AnalysisPageManager } from './routing/workspaceScreenModules'
 
 export function FeatureScreenFallback() {
   return <div className="full-state"><LoaderCircle className="spin" /> 화면을 준비하고 있습니다.</div>

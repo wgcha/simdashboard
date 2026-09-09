@@ -34,6 +34,11 @@ def initialize_database() -> None:
                 "asset_blobs",
                 "asset_blob_chunks",
                 "drop_video_assets",
+                "spdm_storage_bindings",
+                "spdm_storage_files",
+                "modeling_templates",
+                "modeling_template_versions",
+                "modeling_template_files",
             )
             missing = [
                 table_name
@@ -1149,6 +1154,8 @@ def _initialize_duckdb_legacy() -> None:
         conn.execute("UPDATE request_work_items SET progress=CASE WHEN status='COMPLETED' THEN 100 ELSE COALESCE(progress, 0) END")
 
         ensure_quality_threshold_schema(conn)
+        ensure_spdm_storage_schema(conn)
+        ensure_modeling_template_schema(conn)
         # Establish the schema before seeding, but defer one-time legacy data
         # conversion until the seed has created any default projects.
         ensure_access_control_schema(conn, apply_legacy_backfills=False)
@@ -1214,6 +1221,96 @@ def ensure_quality_threshold_schema(conn: duckdb.DuckDBPyConnection) -> None:
     except Exception:
         conn.execute("ROLLBACK")
         raise
+
+
+def ensure_spdm_storage_schema(conn: duckdb.DuckDBPyConnection) -> None:
+    """Keep the local DuckDB adapter aligned with Alembic revision 0020."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS spdm_storage_settings (
+            setting_key VARCHAR PRIMARY KEY,
+            setting_value VARCHAR NOT NULL,
+            updated_at TIMESTAMP NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS spdm_storage_project_parents (
+            project_folder VARCHAR PRIMARY KEY,
+            project_id VARCHAR NOT NULL UNIQUE,
+            created_at TIMESTAMP NOT NULL,
+            updated_at TIMESTAMP NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS spdm_storage_request_parents (
+            request_folder VARCHAR PRIMARY KEY,
+            project_folder VARCHAR NOT NULL,
+            project_id VARCHAR NOT NULL,
+            request_id VARCHAR NOT NULL UNIQUE,
+            created_at TIMESTAMP NOT NULL,
+            updated_at TIMESTAMP NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS spdm_storage_bindings (
+            load_case_id VARCHAR PRIMARY KEY,
+            project_id VARCHAR NOT NULL,
+            request_id VARCHAR NOT NULL,
+            relative_path VARCHAR NOT NULL UNIQUE,
+            created_at TIMESTAMP NOT NULL,
+            updated_at TIMESTAMP NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS spdm_storage_files (
+            id VARCHAR PRIMARY KEY,
+            load_case_id VARCHAR NOT NULL,
+            relative_path VARCHAR NOT NULL,
+            name VARCHAR NOT NULL,
+            kind VARCHAR NOT NULL,
+            size_bytes BIGINT NOT NULL,
+            checksum VARCHAR,
+            status VARCHAR NOT NULL,
+            run_id VARCHAR,
+            message VARCHAR,
+            created_at TIMESTAMP NOT NULL,
+            updated_at TIMESTAMP NOT NULL,
+            UNIQUE(load_case_id, relative_path)
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_spdm_storage_bindings_request ON spdm_storage_bindings(request_id, load_case_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_spdm_storage_files_load_case ON spdm_storage_files(load_case_id, status, relative_path)")
+
+
+def ensure_modeling_template_schema(conn: duckdb.DuckDBPyConnection) -> None:
+    """Keep local DuckDB aligned with immutable modeling-template snapshots."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS modeling_templates (
+            id VARCHAR PRIMARY KEY,
+            name VARCHAR NOT NULL,
+            product_name VARCHAR NOT NULL,
+            load_case_name VARCHAR NOT NULL,
+            description VARCHAR NOT NULL DEFAULT '',
+            latest_version INTEGER NOT NULL CHECK (latest_version >= 1),
+            created_at TIMESTAMP NOT NULL,
+            updated_at TIMESTAMP NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS modeling_template_versions (
+            template_id VARCHAR NOT NULL,
+            version INTEGER NOT NULL CHECK (version >= 1),
+            created_at TIMESTAMP NOT NULL,
+            file_count INTEGER NOT NULL CHECK (file_count >= 0 AND file_count <= 200),
+            total_bytes BIGINT NOT NULL CHECK (total_bytes >= 0 AND total_bytes <= 26214400),
+            PRIMARY KEY (template_id, version)
+        );
+        CREATE TABLE IF NOT EXISTS modeling_template_files (
+            id VARCHAR PRIMARY KEY,
+            template_id VARCHAR NOT NULL,
+            version INTEGER NOT NULL,
+            relative_path VARCHAR NOT NULL,
+            size_bytes BIGINT NOT NULL CHECK (size_bytes >= 0),
+            checksum VARCHAR NOT NULL,
+            content BLOB NOT NULL,
+            UNIQUE (template_id, version, relative_path)
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_modeling_templates_catalog ON modeling_templates(product_name, load_case_name, name)")
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_modeling_template_files_version ON modeling_template_files(template_id, version, relative_path)")
 
 
 def _duckdb_columns(conn: duckdb.DuckDBPyConnection, table_name: str) -> dict[str, tuple[Any, ...]]:

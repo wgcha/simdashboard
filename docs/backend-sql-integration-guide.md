@@ -8,7 +8,7 @@
 
 현재 데이터베이스: 파일 기반 DuckDB
 
-목표 데이터베이스: PostgreSQL 15 이상
+목표 데이터베이스: PostgreSQL 18.x
 
 대상 운영체제: Windows 10/11·Windows Server 및 Linux(x86_64, systemd 계열 우선)
 
@@ -16,7 +16,7 @@
 
 이 문서는 현재 구현된 DuckDB/PostgreSQL 선택, 데이터 이전, 운영 시작과 보안 계약을 설명한다. PostgreSQL 드라이버, SQLAlchemy 연결 계층, Alembic migration과 Windows 시작 스크립트는 저장소에 구현되어 있다.
 
-최초 구축은 `setup-postgresql.ps1`과 별도 관리자 자격 증명으로 역할·DB·스키마·초기 데이터를 준비한다. 구축 후 서비스 `.env`에는 `simdashboard_app` URL만 저장하고, 보호된 `.postgres-owner.env`에는 migration 전용 `simdashboard_owner` URL만 저장한다. 일반 운영 시작은 아래 10절의 제한된 자동 migration 계약을 따른다.
+최초 구축은 `setup-postgresql.ps1`과 별도 관리자 자격 증명으로 역할·DB·스키마·초기 데이터를 준비한다. 구축 후 서비스 `.env`에는 `simdashboard_app` URL만 저장하고, 보호된 `.postgres-owner.env`에는 명시 migration 전용 `simdashboard_owner` URL만 저장한다. 일반 운영 시작은 아래 10절의 read/preflight 계약을 따르며 자동 migration을 실행하지 않는다.
 
 ## 1. 최종 목표
 
@@ -263,11 +263,12 @@ CORS_ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 
 Windows:
 
+`setup.ps1`이 저장소 고정 Python 3.12.13과 `.venv-runtime`을 준비하므로 별도 `py` 별칭을 사용하지 않는다.
+
 ```powershell
 cd <프로젝트경로>
-py -3.12 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install --upgrade pip
-.\.venv\Scripts\python.exe -m pip install -r .\backend\requirements.txt
+.\setup.ps1 -SkipFrontendBuild
+& .\.venv-runtime\Scripts\python.exe -m pip install -r .\backend\requirements.lock
 ```
 
 Linux:
@@ -530,20 +531,19 @@ rg -n "INSERT OR IGNORE|\?|duckdb|CREATE TABLE|BEGIN TRANSACTION|JSON" backend\a
 
 ## 10. 초기화와 샘플 데이터 정책
 
-DuckDB의 로컬 초기화와 PostgreSQL의 스키마 변경은 분리한다. PostgreSQL 스키마 생성·변경은 Alembic만 담당하며, 일반 운영 시작은 `start.ps1`이 `backend/scripts/upgrade_postgres_schema.py`와 `backend/scripts/check_postgres_connection.py`를 서버 프로세스보다 먼저 호출한다. `start-postgresql.ps1`은 PostgreSQL 모드를 지정한 뒤 같은 `start.ps1` 계약에 위임한다.
+DuckDB의 로컬 초기화와 PostgreSQL의 스키마 변경은 분리한다. PostgreSQL 스키마 생성·변경은 Alembic만 담당한다. `start.ps1`은 `check_postgres_connection.py`를 호출해 기존 연결과 read-only/rollback-only probe를 확인할 뿐 자동 migration을 실행하지 않는다. schema 변경이 승인된 경우에만 `.venv-runtime\Scripts\python.exe backend\scripts\upgrade_postgres_schema.py`를 별도로 실행한다. `start-postgresql.ps1`은 PostgreSQL backend를 지정한 뒤 같은 `start.ps1` 계약에 위임한다.
 
-운영 시작 계약은 다음과 같다.
+운영 시작과 명시 migration 계약은 분리한다.
 
-1. 앱 URL로 `alembic_version`을 읽기 전용 확인하고 코드의 단일 head와 비교한다.
-2. 이미 head이면 `.postgres-owner.env`를 열지 않고 앱 역할의 DDL 부재와 핵심 catalog CRUD 권한을 검증한다.
-3. 현재 revision이 코드 graph의 알려진 ancestor인 pending 상태일 때만 `.postgres-owner.env`의 owner URL을 읽는다.
-4. app/owner URL의 host·port·database 일치, owner 역할·DB/스키마 소유권, recovery/read-only 상태를 검증한다.
-5. owner advisory lock을 보유한 상태에서 app revision을 다시 읽고, 여전히 pending일 때만 별도 Alembic child process에 owner URL을 전달한다. 부모 환경과 `.env`는 app URL을 유지하며 비밀값과 URL을 출력하지 않는다.
-6. migration 후 app URL로 revision=head, 6개 워크벤치 catalog의 SELECT·INSERT·UPDATE·DELETE, `initialize_database()`와 `/api/health`의 database backend를 재검증한 뒤 서버를 준비 상태로 인정한다.
+1. `start.ps1`은 앱 URL로 `alembic_version`을 읽기 전용 확인하고 코드의 단일 head와 비교한다.
+2. 이미 head이면 `.postgres-owner.env`를 읽지 않고 앱 역할의 DDL 부재, 핵심 catalog CRUD와 rollback-only probe를 검증한다.
+3. pending revision이 있거나 revision이 코드 계보와 다르면 일반 시작은 fail-closed한다.
+4. schema 변경이 승인된 경우에만 `.venv-runtime\Scripts\python.exe backend\scripts\upgrade_postgres_schema.py`를 별도로 실행한다. 이 명시 migration 단계에서 owner URL의 host·port·database, owner 역할·DB/스키마 소유권, recovery/read-only 상태와 advisory lock을 검증한다.
+5. 명시 migration 뒤에는 app URL로 revision=head, 6개 워크벤치 catalog CRUD, `initialize_database()`와 `/api/health`의 database backend를 재검증한다.
 
-`alembic_version`이 없는 빈 DB, unknown/newer/diverged revision, multiple head, owner 파일 누락·접근 실패·역할 오류·target 불일치, recovery/read-only DB, migration 후 catalog 누락·권한 부족은 모두 서버 시작 전에 fail-closed한다. 일반 시작에서는 bootstrap, 역할 생성·비밀번호 회전, DuckDB 복사를 절대 수행하지 않는다. 이 작업은 최초 구축 또는 명시적인 운영 절차에서만 수행한다.
+`alembic_version`이 없는 빈 DB, unknown/newer/diverged revision, multiple head, owner 파일 누락·접근 실패·역할 오류·target 불일치, recovery/read-only DB, migration 후 catalog 누락·권한 부족은 fail-closed한다. 일반 시작에서는 bootstrap, 역할 생성·비밀번호 회전, DuckDB 복사 또는 임의 downgrade/rollback을 수행하지 않는다.
 
-앱과 owner URL 파일 분리는 로컬·단일 PC 운영의 안전한 자동 migration을 위한 계약이다. Production에서는 시작 프로세스가 owner 자격 증명을 보유하지 않도록 별도 배포 단계나 CI/CD migration job에서 Alembic을 실행하고, 애플리케이션에는 app URL만 제공할 수 있다.
+앱과 owner URL 파일 분리는 명시 migration 단계의 자격 증명 경계다. Production에서는 시작 프로세스가 owner 자격 증명을 보유하지 않도록 별도 배포 단계나 CI/CD migration job에서 Alembic을 실행하고, 애플리케이션에는 app URL만 제공한다.
 
 샘플 데이터와 DuckDB의 `ensure_sample_evolutions()`·`ensure_variable_definitions()`는 PostgreSQL 일반 시작마다 재생성하지 않는다. 변수 정의 백필은 데이터 이전 스크립트가 담당하며, 이미 존재하는 `variable_definitions` 행을 우선 보존하고 누락된 결과 변수만 `ON CONFLICT DO NOTHING`으로 보충한다.
 

@@ -3,6 +3,7 @@
 .venv-wsl/
 .pnpm-store/
 /.codex/
+/.tools/
 /node_modules/
 /pnpm-lock.yaml
 __pycache__/
@@ -13,13 +14,16 @@ backend/data/*.duckdb
 backend/data/*.wal
 backend/data/migration-*.json
 backend/backups/
+/backups/
 backend/.postgres-test/
 frontend/node_modules/
 frontend/dist/
 frontend/playwright-report/
 frontend/test-results/
+/.test-import-snapshots-*/
 frontend/*.tsbuildinfo
 /dist/
+/output/
 .env
 # Local Rocky production installation settings may contain database and admin
 # passwords. deploy-from-source.sh refuses files that are not covered by this.
@@ -36,4 +40,10 @@ backend/.transfer-assets-*/
 !backend/public_assets/demo-execution.log
 .server-pids.json
 .server-pids.env
+.windows-deploy-ready.json
+.windows-deploy-ready.json.*.tmp
+deploy/windows/network-settings.local.json
+deploy/windows/certs/*
+!deploy/windows/certs/README.md
 *:Zone.Identifier
+*Zone.Identifier

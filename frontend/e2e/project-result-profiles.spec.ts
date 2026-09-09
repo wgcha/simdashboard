@@ -1,3 +1,4 @@
+import { openWorkspaceRoute } from './workspace-test-helpers'
 import { expect, test, type Page } from '@playwright/test'
 
 const password = 'e2e-validation-password'
@@ -43,7 +44,7 @@ test('project admin binds a result profile, intake previews it, and lower/cross-
   await logout(page)
 
   await login(page, 'e2e-project-admin')
-  await page.getByRole('link', { name: '프로젝트 결과 구성', exact: true }).click()
+  await openWorkspaceRoute(page, '/workspace/project/result-layouts')
   const binding = page.getByTestId('project-result-profile-binding')
   await expect(binding).toBeVisible()
   const requestTypeValue = createdType.id + ":" + createdType.version
@@ -66,7 +67,7 @@ test('project admin binds a result profile, intake previews it, and lower/cross-
   expect(profile.status(), await profile.text()).toBe(200)
   expect((await profile.json() as { template_id: string; profile_scope: string }).template_id).toBe(templateId)
 
-  await page.getByRole('link', { name: '의뢰 접수', exact: true }).click()
+  await openWorkspaceRoute(page, '/workspace/requests/new')
   await page.getByTestId(`request-type-option-${createdType.id}-${createdType.version}`).click()
   await expect(page.getByTestId('expected-results-preview')).toContainText(templateName)
 

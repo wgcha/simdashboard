@@ -13,7 +13,6 @@ type WorkspaceShellLayoutProps = {
   databaseBackend: 'duckdb' | 'postgresql'
   fontSize: number
   menus: readonly { id: MenuId; label: string }[]
-  sidebarCollapsed: boolean
   theme: 'dark' | 'light'
   topbarBreadcrumb: ReactNode
   user: AuthUser | null
@@ -23,7 +22,6 @@ type WorkspaceShellLayoutProps = {
   onLogout: () => void
   onNavigate: (id: MenuId) => void
   onPreloadPage: (id: MenuId) => void
-  onToggleSidebar: () => void
 }
 
 /** Feature-agnostic authenticated chrome: navigation, top bar, and outlet. */
@@ -34,7 +32,6 @@ export function WorkspaceShellLayout({
   databaseBackend,
   fontSize,
   menus,
-  sidebarCollapsed,
   theme,
   topbarBreadcrumb,
   user,
@@ -44,13 +41,11 @@ export function WorkspaceShellLayout({
   onLogout,
   onNavigate,
   onPreloadPage,
-  onToggleSidebar,
 }: WorkspaceShellLayoutProps) {
   return <AppShell
-    className={`app-shell ${theme === 'light' ? 'light-theme' : 'dark-theme'} ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}
+    className={`app-shell ${theme === 'light' ? 'light-theme' : 'dark-theme'}`}
     sidebar={<AppSidebar
       activePage={activePage}
-      collapsed={sidebarCollapsed}
       databaseBackend={databaseBackend}
       fontSize={fontSize}
       menus={menus}
@@ -62,10 +57,8 @@ export function WorkspaceShellLayout({
       onLogout={onLogout}
       onNavigate={onNavigate as (id: AppSidebarMenuId) => void}
       onPreloadPage={onPreloadPage as (id: AppSidebarMenuId) => void}
-      onToggleCollapsed={onToggleSidebar}
       workspacePathForMenu={(menuId) => WORKSPACE_ROUTES_BY_ID.get(menuId)?.path ?? '/workspace'}
     />}
-    sidebarCollapsed={sidebarCollapsed}
     style={{ '--ui-font-size': `${fontSize}pt` } as CSSProperties}
     theme={theme}
   >

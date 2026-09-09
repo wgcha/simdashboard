@@ -1,3 +1,4 @@
+import { openWorkspaceRoute } from './workspace-test-helpers'
 import { expect, test, type Page } from '@playwright/test'
 
 async function login(page: Page, role: 'admin' | 'viewer') {
@@ -10,9 +11,9 @@ async function login(page: Page, role: 'admin' | 'viewer') {
 }
 
 async function openAnalysis(page: Page) {
-  await page.getByRole('link', { name: '해석 의뢰 현황', exact: true }).click()
-  await expect(page.locator('.content-head')).toBeVisible()
-  await page.locator('.view-tabs').getByRole('button', { name: /상세 분석/ }).click()
+  await openWorkspaceRoute(page, '/workspace/requests')
+  await expect(page.locator('.request-workspace-header')).toBeVisible()
+  await page.locator('.request-journey').getByRole('button', { name: /결과 검토|상세 분석/ }).click()
   await expect(page.locator('.analysis-subtabs')).toBeVisible()
 }
 
@@ -52,8 +53,8 @@ test('관리자는 사용자 분석 페이지를 만들고 위젯을 편집·게
   await manager.getByRole('button', { name: '닫기' }).click()
 
   await expect(page.locator('.analysis-subtabs').getByRole('button', { name: /사용자 분석 검증/ })).toBeVisible()
-  await expect(page.getByLabel('상세 분석 페이지 선택')).toHaveValue(/dashboard-/)
-  await expect(page.getByLabel('상세 분석 페이지 선택').locator('option:checked')).toHaveText('사용자 분석 검증')
+  await expect(page.getByLabel('상세 분석 페이지 선택')).toHaveCount(0)
+  await expect(page.locator('.analysis-tab.active')).toContainText('사용자 분석 검증')
   await page.getByRole('button', { name: '보고서 내보내기', exact: true }).click()
   const reportDialog = page.getByRole('dialog', { name: /보고서/ })
   await expect(reportDialog).toBeVisible()
@@ -104,7 +105,10 @@ test('관리자는 과거 버전을 초안으로 불러오고 삭제한 뒤 cust
   await page.locator('.dashboard-edit-toolbar').getByRole('button').click()
   const history = page.locator('.dashboard-version-list')
   await expect(history.locator('article')).toHaveCount(3)
-  await history.locator('button:enabled', { hasText: '초안으로 불러오기' }).first().click()
+  const versionOne = history.locator('article').filter({ has: page.getByText('v1', { exact: true }) })
+  const loadVersionOne = versionOne.getByRole('button', { name: '초안으로 불러오기', exact: true })
+  await expect(loadVersionOne).toBeEnabled()
+  await loadVersionOne.click()
   const toast = page.locator('.toast[role="status"]')
   await expect(toast).toContainText('편집 초안')
   await toast.getByRole('button', { name: '알림 닫기' }).click()

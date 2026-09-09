@@ -1,0 +1,18 @@
+{
+  "mode": "auto",
+  "proxy": "http://168.219.61.252:8080",
+  "noProxy": [
+    "127.0.0.1",
+    "localhost",
+    "::1",
+    "10.0.0.0/8",
+    "165.213.0.0/16",
+    "168.219.0.0/16",
+    "202.20.0.0/16",
+    "112.107.220.0/24",
+    ".samsung.net",
+    "samsung.net"
+  ],
+  "caCertificatePath": "",
+  "useWindowsTrustStore": true
+}

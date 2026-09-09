@@ -834,6 +834,89 @@ CREATE TABLE IF NOT EXISTS projects (
                 CHECK (progress BETWEEN 0 AND 100)
             );
 
+CREATE TABLE IF NOT EXISTS spdm_storage_settings (
+    setting_key VARCHAR PRIMARY KEY,
+    setting_value VARCHAR NOT NULL,
+    updated_at TIMESTAMP NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS spdm_storage_project_parents (
+    project_folder VARCHAR PRIMARY KEY,
+    project_id VARCHAR NOT NULL UNIQUE,
+    created_at TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS spdm_storage_request_parents (
+    request_folder VARCHAR PRIMARY KEY,
+    project_folder VARCHAR NOT NULL,
+    project_id VARCHAR NOT NULL,
+    request_id VARCHAR NOT NULL UNIQUE,
+    created_at TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS spdm_storage_bindings (
+    load_case_id VARCHAR PRIMARY KEY,
+    project_id VARCHAR NOT NULL,
+    request_id VARCHAR NOT NULL,
+    relative_path VARCHAR NOT NULL UNIQUE,
+    created_at TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS spdm_storage_files (
+    id VARCHAR PRIMARY KEY,
+    load_case_id VARCHAR NOT NULL,
+    relative_path VARCHAR NOT NULL,
+    name VARCHAR NOT NULL,
+    kind VARCHAR NOT NULL,
+    size_bytes BIGINT NOT NULL CHECK (size_bytes >= 0),
+    checksum VARCHAR,
+    status VARCHAR NOT NULL,
+    run_id VARCHAR,
+    message VARCHAR,
+    created_at TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP NOT NULL,
+    UNIQUE(load_case_id, relative_path)
+);
+
+CREATE TABLE IF NOT EXISTS modeling_templates (
+    id VARCHAR PRIMARY KEY,
+    name VARCHAR NOT NULL,
+    product_name VARCHAR NOT NULL,
+    load_case_name VARCHAR NOT NULL,
+    description VARCHAR NOT NULL DEFAULT '',
+    latest_version INTEGER NOT NULL CHECK (latest_version >= 1),
+    created_at TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS modeling_template_versions (
+    template_id VARCHAR NOT NULL,
+    version INTEGER NOT NULL CHECK (version >= 1),
+    created_at TIMESTAMP NOT NULL,
+    file_count INTEGER NOT NULL CHECK (file_count >= 0 AND file_count <= 200),
+    total_bytes BIGINT NOT NULL CHECK (total_bytes >= 0 AND total_bytes <= 26214400),
+    PRIMARY KEY (template_id, version)
+);
+
+CREATE TABLE IF NOT EXISTS modeling_template_files (
+    id VARCHAR PRIMARY KEY,
+    template_id VARCHAR NOT NULL,
+    version INTEGER NOT NULL,
+    relative_path VARCHAR NOT NULL,
+    size_bytes BIGINT NOT NULL CHECK (size_bytes >= 0),
+    checksum VARCHAR NOT NULL,
+    content BYTEA NOT NULL,
+    UNIQUE (template_id, version, relative_path)
+);
+
+CREATE INDEX IF NOT EXISTS ix_spdm_storage_bindings_request ON spdm_storage_bindings(request_id, load_case_id);
+CREATE INDEX IF NOT EXISTS ix_spdm_storage_files_load_case ON spdm_storage_files(load_case_id, status, relative_path);
+CREATE INDEX IF NOT EXISTS ix_modeling_templates_catalog ON modeling_templates(product_name, load_case_name, name);
+CREATE INDEX IF NOT EXISTS ix_modeling_template_files_version ON modeling_template_files(template_id, version, relative_path);
+
 CREATE INDEX IF NOT EXISTS ix_product_information_project ON product_information(project_id);
 CREATE INDEX IF NOT EXISTS ix_analysis_requests_project ON analysis_requests(project_id);
 CREATE INDEX IF NOT EXISTS ix_request_steps_request_sequence ON request_steps(request_id, sequence_no);
@@ -967,3 +1050,14 @@ ALTER TABLE batch_execution_attempts ADD CONSTRAINT fk_batch_attempts_work_item 
 ALTER TABLE batch_execution_attempts ADD CONSTRAINT fk_batch_attempts_profile_version FOREIGN KEY (batch_profile_id, batch_profile_version) REFERENCES batch_path_profile_versions(id, version);
 ALTER TABLE batch_execution_attempts ADD CONSTRAINT fk_batch_attempts_workflow_run FOREIGN KEY (workflow_run_id) REFERENCES workflow_runs(id);
 ALTER TABLE batch_execution_events ADD CONSTRAINT fk_batch_events_attempt FOREIGN KEY (attempt_id) REFERENCES batch_execution_attempts(id);
+ALTER TABLE spdm_storage_bindings ADD CONSTRAINT fk_spdm_storage_binding_load_case FOREIGN KEY (load_case_id) REFERENCES load_cases(id);
+ALTER TABLE spdm_storage_bindings ADD CONSTRAINT fk_spdm_storage_binding_project FOREIGN KEY (project_id) REFERENCES projects(id);
+ALTER TABLE spdm_storage_bindings ADD CONSTRAINT fk_spdm_storage_binding_request FOREIGN KEY (request_id) REFERENCES analysis_requests(id);
+ALTER TABLE spdm_storage_files ADD CONSTRAINT fk_spdm_storage_file_load_case FOREIGN KEY (load_case_id) REFERENCES load_cases(id);
+ALTER TABLE spdm_storage_files ADD CONSTRAINT fk_spdm_storage_file_run FOREIGN KEY (run_id) REFERENCES analysis_runs(id);
+ALTER TABLE modeling_template_versions ADD CONSTRAINT fk_modeling_template_version_template FOREIGN KEY (template_id) REFERENCES modeling_templates(id) ON DELETE CASCADE;
+ALTER TABLE modeling_template_files ADD CONSTRAINT fk_modeling_template_file_version FOREIGN KEY (template_id, version) REFERENCES modeling_template_versions(template_id, version) ON DELETE CASCADE;
+ALTER TABLE spdm_storage_project_parents ADD CONSTRAINT fk_spdm_storage_project_parent_project FOREIGN KEY (project_id) REFERENCES projects(id);
+ALTER TABLE spdm_storage_request_parents ADD CONSTRAINT fk_spdm_storage_request_parent_folder FOREIGN KEY (project_folder) REFERENCES spdm_storage_project_parents(project_folder);
+ALTER TABLE spdm_storage_request_parents ADD CONSTRAINT fk_spdm_storage_request_parent_project FOREIGN KEY (project_id) REFERENCES projects(id);
+ALTER TABLE spdm_storage_request_parents ADD CONSTRAINT fk_spdm_storage_request_parent_request FOREIGN KEY (request_id) REFERENCES analysis_requests(id);

@@ -1,5 +1,7 @@
 # 업무 유형 관리·의뢰 접수·SPDM 연계 구현 계획
 
+> GUI 부분 대체(2026-09-07): 화면 영역 배치와 메뉴별 분리 탐색은 [의뢰 중심 작업공간 GUI](request-centric-workspace-ux.md)를 따른다. 접수 원천/작업공간 분리, 담당자 수령, 권한과 불변 작업계획 계약은 유지한다. 미구현 adapter가 GUI 개편으로 구현된 것으로 간주되지 않는다.
+
 - 작성일: 2026-08-12
 - 대상 시스템: Simulation Dashboard
 - 상태: 설계 기준(접수 원천/작업공간 분리 반영). SPDM adapter와 Altair One binding은 아직 미구현.

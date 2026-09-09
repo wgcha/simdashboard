@@ -1,0 +1,6 @@
+.app-shell .data-setup-details,.app-shell .data-history-details { margin:18px 0; border:1px solid var(--color-border); border-radius:8px; background:var(--color-surface-raised); }
+.app-shell .data-setup-details>summary,.app-shell .data-history-details>summary { padding:15px 18px; color:var(--color-text); font-size:13px; font-weight:700; cursor:pointer; }
+.app-shell .data-setup-details[open]>summary,.app-shell .data-history-details[open]>summary { border-bottom:1px solid var(--color-border); }
+.app-shell .data-setup-details .data-intake-handoff { margin:18px; }
+.app-shell .data-setup-details .data-form-grid { padding:0 18px 18px; }
+.app-shell .data-history-details .result-import-history { margin:0; border:0; border-radius:0; }

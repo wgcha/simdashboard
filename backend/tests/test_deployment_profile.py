@@ -57,3 +57,45 @@ def test_rocky8_profile_rejects_legacy_readiness_policy(monkeypatch):
     monkeypatch.setattr(preflight, "directory_settings", lambda: SimpleNamespace(mode="local"))
     with pytest.raises(RuntimeError, match="READINESS_MARKER_REQUIRED"):
         preflight.main()
+
+
+def _set_dev_http(monkeypatch, *, backend="postgresql", auth_mode="password", cookie_secure=False, readiness="required"):
+    monkeypatch.setenv("DEPLOYMENT_PROFILE", "rocky8-dev-http")
+    monkeypatch.setenv("SIMDASH_IMPORT_READINESS_POLICY", readiness)
+    monkeypatch.setattr(preflight, "database_settings", lambda: SimpleNamespace(backend=backend))
+    monkeypatch.setattr(preflight, "security_settings", lambda: SimpleNamespace(auth_mode=auth_mode, cookie_secure=cookie_secure))
+    monkeypatch.setattr(preflight, "directory_settings", lambda: SimpleNamespace(mode="local"))
+
+
+def test_rocky8_dev_http_accepts_postgres_password_insecure_cookie_and_warns(monkeypatch, capsys):
+    _set_dev_http(monkeypatch)
+    preflight.main()
+    captured = capsys.readouterr()
+    assert "DEPLOYMENT_PROFILE_OK profile=rocky8-dev-http" in captured.out
+    assert "WARN_DEV_HTTP" in captured.err
+
+
+@pytest.mark.parametrize(
+    ("backend", "auth_mode", "cookie_secure", "readiness", "expected"),
+    [
+        ("duckdb", "password", False, "required", "POSTGRESQL_REQUIRED"),
+        ("postgresql", "oidc", False, "required", "PASSWORD_AUTH_REQUIRED"),
+        ("postgresql", "disabled", False, "required", "PASSWORD_AUTH_REQUIRED"),
+        ("postgresql", "password", True, "required", "INSECURE_COOKIE_REQUIRED_FOR_HTTP"),
+        ("postgresql", "password", False, "legacy", "READINESS_MARKER_REQUIRED"),
+    ],
+)
+def test_rocky8_dev_http_rejects_each_incompatible_setting(monkeypatch, backend, auth_mode, cookie_secure, readiness, expected):
+    _set_dev_http(monkeypatch, backend=backend, auth_mode=auth_mode, cookie_secure=cookie_secure, readiness=readiness)
+    with pytest.raises(RuntimeError, match=expected):
+        preflight.main()
+
+
+def test_rocky8_production_still_requires_secure_cookie(monkeypatch):
+    monkeypatch.setenv("DEPLOYMENT_PROFILE", "rocky8")
+    monkeypatch.setenv("SIMDASH_IMPORT_READINESS_POLICY", "required")
+    monkeypatch.setattr(preflight, "database_settings", lambda: SimpleNamespace(backend="postgresql"))
+    monkeypatch.setattr(preflight, "security_settings", lambda: SimpleNamespace(auth_mode="password", cookie_secure=False))
+    monkeypatch.setattr(preflight, "directory_settings", lambda: SimpleNamespace(mode="local"))
+    with pytest.raises(RuntimeError, match="SECURE_COOKIE_REQUIRED"):
+        preflight.main()
