@@ -9,13 +9,20 @@ param(
     [int]$FrontendPort = 5173,
     [switch]$NoBrowser,
     [ValidateSet('auto', 'direct', 'proxy')]
-    [string]$NetworkMode = ''
+    [string]$NetworkMode = '',
+    [ValidateRange(5, 600)]
+    [int]$StartupTimeoutSeconds = 120
 )
 
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RecoveryMarker = Join-Path $Root '.setup-recovery-required.json'
 Import-Module (Join-Path $Root 'scripts\windows\Runtime.psm1') -Force
+$LocalHttpModule = Join-Path $Root 'scripts\windows\LocalHttp.psm1'
+if (-not (Test-Path -LiteralPath $LocalHttpModule -PathType Leaf)) {
+    throw 'LocalHttp.psm1 was not found. Extract the complete source archive and retry.'
+}
+Import-Module $LocalHttpModule -Force
 $NetworkModule = Join-Path $Root 'scripts\windows\Network.psm1'
 if (Test-Path -LiteralPath $NetworkModule -PathType Leaf) {
     Import-Module $NetworkModule -Force
@@ -62,40 +69,63 @@ function Stop-ProcessTree([int]$ProcessIdentifier) {
     Stop-Process -Id $ProcessIdentifier -Force -ErrorAction SilentlyContinue
 }
 
-function Wait-HttpReady([string]$Name, [string]$Uri, $Process, [int]$TimeoutSeconds = 40) {
+function Wait-HttpReady([string]$Name, [string]$Uri, $Process, [ValidateSet('backend', 'frontend')][string]$Role, [int]$TimeoutSeconds) {
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    $lastObservation = 'no response received'
+    $logPaths = if ($Role -eq 'backend') {
+        "$(Join-Path $Backend 'uvicorn.log'), $(Join-Path $Backend 'uvicorn-error.log')"
+    }
+    else {
+        "$(Join-Path $Frontend 'vite.log'), $(Join-Path $Frontend 'vite-error.log')"
+    }
     while ([DateTime]::UtcNow -lt $deadline) {
         $Process.Refresh()
         if ($Process.HasExited) {
             throw "$Name process exited before readiness."
         }
-        $response = $null
         try {
-            $response = Invoke-WebRequest -Uri $Uri -UseBasicParsing -TimeoutSec 2
+            $response = Invoke-LocalHttp -Uri $Uri -TimeoutMilliseconds 2000
+            $lastObservation = "HTTP $($response.StatusCode) $($response.StatusDescription)"
+            if ($response.StatusCode -eq 200) {
+                if ($Role -eq 'backend') {
+                    try { $health = $response.Content | ConvertFrom-Json }
+                    catch {
+                        $lastObservation = 'HTTP response did not contain valid JSON health data'
+                        Start-Sleep -Milliseconds 500
+                        continue
+                    }
+                    if ($health.status -ne 'ok') {
+                        $lastObservation = 'HTTP 200 health status was not ok'
+                        Start-Sleep -Milliseconds 500
+                        continue
+                    }
+                    if ($health.database_backend -ne $script:databaseBackend) {
+                        throw 'Backend health database mismatch.'
+                    }
+                }
+                Start-Sleep -Milliseconds 250
+                $Process.Refresh()
+                if ($Process.HasExited) {
+                    throw "$Name process exited during readiness verification."
+                }
+                return
+            }
         }
         catch {
-            # Only transport failures are retried. Health contract failures below
-            # are fatal and must not be swallowed by this catch block.
+            if ($_.Exception.Message -eq 'Backend health database mismatch.' -or $_.Exception.Message -like "$Name process exited*") { throw }
+            $baseException = $_.Exception.GetBaseException()
+            if ($baseException -is [Net.WebException]) {
+                $lastObservation = "transport error: $($baseException.GetType().Name), status $($baseException.Status)"
+            }
+            else {
+                $lastObservation = "transport or response error: $($baseException.GetType().Name)"
+            }
             Start-Sleep -Milliseconds 500
             continue
         }
-        if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 400) {
-            if ($Name -eq 'Backend') {
-                $health = $response.Content | ConvertFrom-Json
-                if ($health.database_backend -ne $script:databaseBackend) {
-                    throw 'Backend health database mismatch.'
-                }
-            }
-            Start-Sleep -Milliseconds 250
-            $Process.Refresh()
-            if ($Process.HasExited) {
-                throw "$Name process exited during readiness verification."
-            }
-            return
-        }
         Start-Sleep -Milliseconds 500
     }
-    throw "$Name readiness timed out."
+    throw "$Name readiness timed out at local URI $Uri (last $lastObservation). Check service logs: $logPaths."
 }
 
 function Test-LocalPortInUse([int]$Port) {
@@ -115,10 +145,12 @@ function Test-LocalPortInUse([int]$Port) {
 function Test-CurrentServerEndpoint([string]$Role, [int]$Port) {
     try {
         if ($Role -eq 'frontend') {
-            $response = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/" -UseBasicParsing -TimeoutSec 2
+            $response = Invoke-LocalHttp -Uri "http://127.0.0.1:$Port/" -TimeoutMilliseconds 2000
             return $response.StatusCode -eq 200 -and $response.Content -match '<title>\s*VD simulation workbench\s*</title>' -and $response.Content -match '/src/main\.tsx'
         }
-        $health = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/health" -TimeoutSec 2
+        $response = Invoke-LocalHttp -Uri "http://127.0.0.1:$Port/api/health" -TimeoutMilliseconds 2000
+        if ($response.StatusCode -ne 200) { return $false }
+        $health = $response.Content | ConvertFrom-Json
         return $health.status -eq 'ok' -and $health.database_backend -in @('duckdb', 'postgresql')
     }
     catch { return $false }
@@ -209,14 +241,14 @@ try {
         -WorkingDirectory $Backend -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput (Join-Path $Backend 'uvicorn.log') `
         -RedirectStandardError (Join-Path $Backend 'uvicorn-error.log')
-    Wait-HttpReady -Name 'Backend' -Uri "http://127.0.0.1:$BackendPort/api/health" -Process $backendProcess
+    Wait-HttpReady -Name 'Backend' -Role 'backend' -Uri "http://127.0.0.1:$BackendPort/api/health" -Process $backendProcess -TimeoutSeconds $StartupTimeoutSeconds
 
     $viteArgument = '"' + $Vite + '"'
     $frontendProcess = Start-Process -FilePath $Node -ArgumentList $viteArgument, '--host', '127.0.0.1', '--port', ([string]$FrontendPort), '--strictPort' `
         -WorkingDirectory $Frontend -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput (Join-Path $Frontend 'vite.log') `
         -RedirectStandardError (Join-Path $Frontend 'vite-error.log')
-    Wait-HttpReady -Name 'Frontend' -Uri "http://127.0.0.1:$FrontendPort" -Process $frontendProcess
+    Wait-HttpReady -Name 'Frontend' -Role 'frontend' -Uri "http://127.0.0.1:$FrontendPort" -Process $frontendProcess -TimeoutSeconds $StartupTimeoutSeconds
 
     @{
         backend = @{ id = $backendProcess.Id; port = $BackendPort; startedAtUtc = $backendProcess.StartTime.ToUniversalTime().ToString('o') }

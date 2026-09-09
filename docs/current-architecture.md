@@ -43,6 +43,23 @@ App 및 WorkspaceRouteRenderer가 DataWorkspace에 저장소 패널을 주입하
 Storage feature를 직접 import하지 않는다. 파일별 수치 조회는 저장된 Run ID로 기존 overview API를 읽는다.
 실행 계약과 검증 범위는 [SPDM 저장 폴더 연계](spdm-storage-workflow.md)를 따른다.
 
+### 내 PC 프로그램 검색과 실행
+
+`local_runner/`는 중앙 FastAPI 서버와 독립된 loopback 실행 도우미다. 프로그램 이름·버전·키워드와
+PC별 경로, 실행 시점 snapshot, 완료 메모와 저장 배치를 개인 SQLite에 보관한다. `server.py`가
+bearer/Origin/Host와 API 입력을, `storage.py`가 트랜잭션·중복 제출·실행 이력을, `executor.py`가
+등록된 실행 파일의 직접/순차 실행을 담당한다. `discovery.py`, `picker.py`, `instance_lock.py`는
+설치 후보 탐색, 네이티브 경로 선택, 중복 도우미 방지를 분리한다.
+
+`features/workbench/local-programs/`가 기존 `SimulationWorkbench`의 선택 작업 안에서 프로그램을
+검색·선택한다. `shared/api/localRunner.ts`는 중앙 로그인 정보와 분리된 도우미 전용 typed client다.
+2026-09-09 계정별 PC 운영은 [관리 연결 계약](managed-local-execution-plan.md)을 따른다. 최초 네이티브
+승인으로 회사 계정과 PC를 연결하고, 중앙에서 발급한 짧은 장치 세션을 사용한다. 로컬 요청마다 중앙이
+연결·계정 상태를 확인하고 실행 시 프로젝트·담당자·작업 상태를 검증한다. 연결별 로컬 DB와 중앙 장치·
+실행 이력 테이블을 분리하며 도우미가 백그라운드에서 상태를 동기화한다. 중앙 서버는 PC 경로 탐색이나
+프로세스 실행을 하지 않는다. 로컬 완료는 중앙 의뢰 완료나 해석 결과 적재를 뜻하지 않는다.
+클라우드 실행은 계획만 보존한다. 기본 실행 기능은 [로컬 프로그램 실행 계획](local-program-execution-plan.md)을 따른다.
+
 ### 제품·하중 경우별 모델링 CSV 라이브러리
 
 `routers/modeling_templates.py`는 형식화된 API·권한·36 MiB 요청 수신 제한을,

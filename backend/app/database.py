@@ -39,6 +39,12 @@ def initialize_database() -> None:
                 "modeling_templates",
                 "modeling_template_versions",
                 "modeling_template_files",
+                "managed_device_bindings",
+                "managed_device_pairing_tokens",
+                "managed_device_sessions",
+                "managed_device_grants",
+                "managed_local_runs",
+                "managed_device_event_sequences",
             )
             missing = [
                 table_name
@@ -1156,6 +1162,8 @@ def _initialize_duckdb_legacy() -> None:
         ensure_quality_threshold_schema(conn)
         ensure_spdm_storage_schema(conn)
         ensure_modeling_template_schema(conn)
+        from .adapters.persistence.duckdb.managed_local_execution import ensure_managed_local_execution_schema
+        ensure_managed_local_execution_schema(conn)
         # Establish the schema before seeding, but defer one-time legacy data
         # conversion until the seed has created any default projects.
         ensure_access_control_schema(conn, apply_legacy_backfills=False)

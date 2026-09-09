@@ -20,6 +20,7 @@
 | 목적 | 문서 |
 |---|---|
 | Windows 더블클릭 설치·실행 및 사내 프록시 | [`windows-one-click-deployment.md`](windows-one-click-deployment.md) |
+| Windows PostgreSQL 최초 설정·기본 실행 | [`windows-postgresql-quickstart.md`](windows-postgresql-quickstart.md) |
 | native Windows 개발 | [`windows-development-setup.md`](windows-development-setup.md) |
 | 설치와 실행 | [`../README.md`](../README.md) |
 | 실제 프로그램 구조 | [`current-architecture.md`](current-architecture.md) |
@@ -28,6 +29,8 @@
 | DB 결과 폴더·확장자 계약 | [`storage-folder-and-file-contract.md`](storage-folder-and-file-contract.md) |
 | SPDM 의뢰 탐색·업로드·결과 연결 | [`spdm-storage-workflow.md`](spdm-storage-workflow.md) |
 | 사내 PC Git 업데이트 | [`windows-git-update.md`](windows-git-update.md) |
+| Windows 원클릭 업데이트 설계·보존 정책 | [`windows-one-click-update-plan.md`](windows-one-click-update-plan.md) |
+| Windows 원클릭 업데이트 검증 | [`windows-one-click-update-qa.md`](windows-one-click-update-qa.md) |
 | 완결형 예제 프로젝트 | [`coherent-demo-examples.md`](coherent-demo-examples.md) |
 | WSL 개발환경 | [`wsl-development-setup.md`](wsl-development-setup.md) |
 | PostgreSQL 전환·운영 | [`backend-sql-integration-guide.md`](backend-sql-integration-guide.md) |
@@ -38,6 +41,7 @@
 | 영역 | 문서 | 성격 |
 |---|---|---|
 | 런타임 | [`windows-development-setup.md`](windows-development-setup.md) | native Windows 설치·실행·DB 선택 |
+| PostgreSQL | [`windows-postgresql-quickstart.md`](windows-postgresql-quickstart.md) | Windows Git 업데이트·최초 설정·실행·DuckDB 이관 |
 | 검증 기록 | [`windows-migration-validation-2026-09-07.md`](windows-migration-validation-2026-09-07.md) | WSL→Windows 보존·실행·DB 조사 |
 | 구조 | [`current-architecture.md`](current-architecture.md) | 현재 코드 기준 |
 | GUI | [`request-centric-workspace-ux.md`](request-centric-workspace-ux.md) | 의뢰 중심 화면, 문맥 유지, 과거 GUI 설계 대체 범위 |
@@ -70,6 +74,12 @@
 | 업무 정의 결과 위젯 | [`work-definition-result-widget-ui-design.md`](work-definition-result-widget-ui-design.md) |
 | 의뢰 접수·SPDM | [`work-type-request-intake-spdm-plan.md`](work-type-request-intake-spdm-plan.md) |
 | 배치 실행·판정 | [`batch-execution-and-verdict-controls-spec.md`](batch-execution-and-verdict-controls-spec.md) |
+| 로컬 프로그램 검색·실행 | [`local-program-execution-plan.md`](local-program-execution-plan.md) |
+| 계정별 PC 연결·중앙 실행 이력 | [`managed-local-execution-plan.md`](managed-local-execution-plan.md) |
+| 계정별 PC 운영 검증 | [`managed-local-execution-qa.md`](managed-local-execution-qa.md) |
+| 기본 내 PC 설정·웹 시작 흐름 | [`personal-pc-settings-plan.md`](personal-pc-settings-plan.md) |
+| 내 PC 설정 검증 | [`personal-pc-settings-qa.md`](personal-pc-settings-qa.md) |
+| 로컬 프로그램 실행 검증 | [`local-program-execution-qa.md`](local-program-execution-qa.md) |
 | 통합 workbench | [`integrated-simulation-workbench-plan.md`](integrated-simulation-workbench-plan.md) |
 | 결과 import | [`result-import-pipeline-spec.md`](result-import-pipeline-spec.md) |
 | 결과 형식·미디어 | [`result-data-types-and-media-spec.md`](result-data-types-and-media-spec.md) |

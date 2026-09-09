@@ -22,7 +22,7 @@ export type Permission =
   | 'system.menu_policy.manage'
   | 'audit.view'
 
-export type MenuId = 'portfolio' | 'dashboard' | 'intake' | 'workbench' | 'data' | 'workbench_admin' | 'project_result_profiles' | 'variables' | 'templates' | 'schemas' | 'examples' | 'help' | 'access_admin' | 'menu_policy_admin' | 'audit_admin'
+export type MenuId = 'portfolio' | 'dashboard' | 'intake' | 'workbench' | 'data' | 'workbench_admin' | 'project_result_profiles' | 'variables' | 'templates' | 'schemas' | 'examples' | 'help' | 'access_admin' | 'menu_policy_admin' | 'audit_admin' | 'local_pc'
 export type WorkspacePage = MenuId
 export type MenuContext = 'company' | 'project' | 'system'
 export type MenuPolicyItem = {
@@ -74,8 +74,11 @@ export function isMenuVisible(menu: MenuPolicyItem, user: AuthUser | null, proje
 }
 
 export function visibleMenuItems(policy: MenuPolicy | null, user: AuthUser | null, projectId: string): MenuPolicyItem[] {
-  if (!policy || !user) return []
-  return policy.menus.filter((menu) => isMenuVisible(menu, user, projectId)).slice().sort((left, right) => left.sequence_no - right.sequence_no)
+  if (!user || user.account_status !== 'ACTIVE') return []
+  // Personal PC settings are a built-in account feature, independent of the
+  // administrator's project/work menus and available before a project exists.
+  const personal: MenuPolicyItem = { id: 'local_pc', label: '내 PC 설정', required_permission: 'company.dashboard.view', context_kind: 'company', sequence_no: 35, is_policy_editable: false, visibility: { general: true, power: true, admin: true } }
+  return [...(policy?.menus ?? []).filter((menu) => menu.id !== 'local_pc' && isMenuVisible(menu, user, projectId)), personal].sort((left, right) => left.sequence_no - right.sequence_no)
 }
 
 export function firstAllowedWorkspacePage(policy: MenuPolicy | null, user: AuthUser | null, projectId: string): WorkspacePage | null {

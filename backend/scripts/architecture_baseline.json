@@ -4,6 +4,7 @@
     "app/main.py": 28,
     "app/routers/access_control.py": 0,
     "app/routers/modeling_catalog.py": 1,
+    "app/routers/managed_local_execution.py": 0,
     "app/routers/security.py": 7,
     "app/routers/workbench.py": 49
   }

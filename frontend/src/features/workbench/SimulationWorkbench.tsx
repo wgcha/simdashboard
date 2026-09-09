@@ -7,6 +7,7 @@ import { requestResultDefinitionFromProfile, requestResultDefinitionValidation }
 import './RequestResultWidgetConfiguration.css'
 import { DEFAULT_REQUEST_TYPE_LABELS, requestTypeLabels, type BatchExecutionAttempt, type BatchProfile, type DemoRun, type DemoRunTask, type RequestResultDefinition, type WorkbenchNode, type WorkbenchRequestType, type WorkbenchTaskType } from './types'
 import { useMemoryQuery } from '../../shared/cache/useMemoryQuery'
+import { LocalProgramPanel } from './local-programs/LocalProgramPanel'
 
 type CompositionMode = 'parallel' | 'sequence'
 
@@ -298,8 +299,7 @@ export function SimulationWorkbench({ workflows, initialRequestId, currentUserId
 
   const firstReady = currentItem?.status === 'READY' && currentItem.sequence_no === 1 && workflow.completed_count === 0
   return <div className="workbench-page assigned-only" data-testid="simulation-workbench">
-    {!embedded && <section className="workbench-hero operator"><div><span className="demo-only-badge"><ShieldCheck /> DEMO ONLY</span><h1>배정 작업 실행</h1><p>작업 계획에 따라 현재 작업을 시작하고 완료합니다.</p></div><details className="workbench-source workbench-collapsible"><summary><span><strong>작업 원칙</strong><small>시작 → 데모 수행 → 완료</small></span><ChevronRight aria-hidden="true" /></summary><p>완료 후 다음 작업은 시작 대기 상태로 열립니다.</p></details></section>}
-    {embedded && <p className="demo-only-badge"><ShieldCheck /> DEMO ONLY · 실제 해석 결과가 아닙니다.</p>}
+    {!embedded && <section className="workbench-hero operator"><div><span className="demo-only-badge"><ShieldCheck /> 작업 실행</span><h1>배정 작업 실행</h1><p>작업 계획에 따라 현재 작업을 시작하고 완료합니다.</p></div><details className="workbench-source workbench-collapsible"><summary><span><strong>작업 원칙</strong><small>시작 → 데모 수행 → 완료</small></span><ChevronRight aria-hidden="true" /></summary><p>완료 후 다음 작업은 시작 대기 상태로 열립니다.</p></details></section>}
     {error && <section className="workbench-service-error" role="alert"><AlertTriangle /><div><strong>작업 요청을 처리하지 못했습니다.</strong><p>{error}</p></div></section>}
 
     {!embedded && <section className="assigned-request-card">
@@ -318,12 +318,13 @@ export function SimulationWorkbench({ workflows, initialRequestId, currentUserId
       {selectedGuidance && <details className="work-item-guidance-disclosure workbench-collapsible"><summary><span><strong>업무 안내</strong><small>목적·필요 입력·예상 결과</small></span><ChevronRight aria-hidden="true" /></summary><div className="work-item-guidance"><div><span>업무 목적</span><strong>{selectedGuidance.purpose}</strong></div><div><span>필요 입력</span><strong>{selectedGuidance.requires}</strong></div><div><span>예상 결과</span><strong>{selectedGuidance.result}</strong></div></div></details>}
       <article className={`task-execution-widget group-${selectedGuidance?.group === 'PhysicsAI' ? 'ai' : selectedGuidance?.group === '해석 실행' ? 'run' : selectedGuidance?.group === '결과 활용' ? 'result' : 'prepare'}`} data-testid={`task-execution-widget-${selectedTaskType?.kind ?? 'unknown'}`}>
         <div className="task-execution-mark"><Activity aria-hidden="true" /></div>
-        <div><span>현재 작업 실행</span><h3>{selectedExecution.title}</h3><p>{selectedExecution.description}</p><small id="task-action-help">{taskActionHelp}</small></div>
+        <div><span>작업 시작 · 데모 예제</span><small className="demo-only-badge">DEMO ONLY · 데모 버튼은 예제 결과를 생성합니다.</small><h3>{selectedExecution.title}</h3><p>{selectedExecution.description}</p><small id="task-action-help">{taskActionHelp}</small></div>
         <div data-testid={selectedWorkItem.status === 'READY' ? 'start-current-work' : selectedWorkItem.status === 'IN_PROGRESS' ? 'complete-current-work' : undefined} className="task-execution-action-wrap"><button data-testid="execute-selected-task" aria-describedby="task-action-help" disabled={taskActionDisabled} onClick={() => void executeSelectedTask()}>
           {working ? <LoaderCircle className="spin" aria-hidden="true" /> : selectedWorkItem.status === 'IN_PROGRESS' ? <FlaskConical aria-hidden="true" /> : <Play aria-hidden="true" />}
           {selectedWorkItem.status === 'IN_PROGRESS' ? selectedExecution.runLabel : selectedExecution.startLabel}
         </button></div>
       </article>
+      <LocalProgramPanel key={currentUserId} currentUserId={currentUserId} currentUserName={createdBy} requestId={requestId} selectedWorkItem={selectedWorkItem} taskName={selectedWorkItem.name} canExecute={canExecute} isAdmin={isAdmin} isCurrent={selectedIsCurrent} />
       <div className="work-item-detail-grid">
         <details className="progress-update-card workbench-collapsible">
           <summary><span><strong>진행도 업데이트</strong><small>수동 진행 상태 갱신</small></span><ChevronRight aria-hidden="true" /></summary><div className="progress-update-body">

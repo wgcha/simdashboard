@@ -10,6 +10,7 @@ import {
   LayoutDashboard,
   LogOut,
   Minus,
+  Monitor,
   PanelLeftClose,
   PanelLeftOpen,
   Play,
@@ -21,6 +22,7 @@ import {
 } from 'lucide-react'
 
 const MENU_ICONS = {
+  local_pc: Monitor,
   portfolio: LayoutDashboard,
   dashboard: Activity,
   intake: ClipboardPlus,
@@ -56,6 +58,7 @@ const MENU_GROUP_LABELS = {
 type MenuGroupId = keyof typeof MENU_GROUP_LABELS
 
 const MENU_GROUP_BY_ID: Record<AppSidebarMenuId, MenuGroupId> = {
+  local_pc: 'overview',
   portfolio: 'overview',
   dashboard: 'overview',
   intake: 'overview',
@@ -135,7 +138,7 @@ export function AppSidebar({
   const visibleGroups = Array.from(groupedMenus, ([id, groupMenus]) => ({
     id,
     label: MENU_GROUP_LABELS[id],
-    menus: id === 'overview' ? [...groupMenus].sort((a, b) => ['portfolio', 'dashboard', 'intake'].indexOf(a.id) - ['portfolio', 'dashboard', 'intake'].indexOf(b.id)) : groupMenus,
+    menus: id === 'overview' ? [...groupMenus].sort((a, b) => ['portfolio', 'dashboard', 'intake', 'local_pc'].indexOf(a.id) - ['portfolio', 'dashboard', 'intake', 'local_pc'].indexOf(b.id)) : groupMenus,
   }))
   const helpMenu = menus.find((menu) => menu.id === 'help')
   const renderMenuLink = (menu: AppSidebarMenu, extraClass = '') => {

@@ -31,6 +31,12 @@ PUBLIC_API_PATHS = {
     "/api/auth/oidc/callback",
 }
 PENDING_ALLOWED_PATHS = {"/api/auth/me", "/api/auth/logout", "/api/auth/status"}
+DEVICE_API_PATHS = {
+    "/api/local-execution/device/pair-preview",
+    "/api/local-execution/device/pair",
+    "/api/local-execution/device/authorize",
+    "/api/local-execution/device/events",
+}
 SESSION_COOKIE = "analysis_canvas_session"
 logger = logging.getLogger(__name__)
 
@@ -223,7 +229,10 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         request.state.request_id = request.headers.get("x-request-id") or str(uuid4())
         path = request.url.path
         protected_path = path.startswith("/api") or path.startswith("/assets/")
-        if not protected_path or path in PUBLIC_API_PATHS or request.method == "OPTIONS":
+        # Device requests have their own pairing-secret authentication in the
+        # router.  This remains an exact-path allow-list: no other /api/local-
+        # execution route can bypass ordinary company authentication.
+        if not protected_path or path in PUBLIC_API_PATHS or (request.method == "POST" and path in DEVICE_API_PATHS) or request.method == "OPTIONS":
             response = await call_next(request)
             response.headers["X-Request-Id"] = request.state.request_id
             return response

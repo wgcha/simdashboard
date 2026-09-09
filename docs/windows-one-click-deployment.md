@@ -2,7 +2,7 @@
 
 - 기준일: 2026-09-08
 - 대상: Windows 10/11 x64 사내 PC의 로컬 시험·사용
-- 진입점: `deploy.bat`, `start.bat`, `stop.bat`
+- 진입점: `deploy.bat`, `start.bat`, `stop.bat`, `update.bat`
 
 ## 처음 사용할 때
 
@@ -43,7 +43,7 @@ Python·Node.js·Git을 별도로 설치하지 않아도 된다. 기본 Windows 
 ## 재설치·업데이트·기존 데이터
 
 - 다시 사용할 때는 `start.bat`만 실행한다. 이미 이 폴더에서 정상 실행 중이면 기존 서버를 사용하고 브라우저를 연다.
-- 소스 업데이트 전 `stop.bat`로 종료하고, 업데이트 후 `deploy.bat` → `start.bat`를 실행한다.
+- 새 버전 적용은 **`update.bat` 하나를 더블클릭**한다. Git 다운로드·앱 종료·소스 적용·의존성/빌드·DB migration·재시작을 순서대로 처리한다. Git은 업데이트 기능에 필요하다. ZIP/`No commits yet` 폴더의 최초 연결은 [사내 PC 업데이트 안내](windows-git-update.md)를 따른다.
 - `.env`가 없을 때만 기본 예제를 복사한다. 새 환경의 기본값은 DuckDB 로컬 프로필이다.
 - 기본 DB는 이 소스의 `backend/data/analysis_dashboard.duckdb`다. 다른 DB를 지정하려면 `.env`에 절대 경로를 넣는다.
 - 기존 `.env`, PostgreSQL 연결 정보, 의뢰·결과 DB는 설치 과정에서 덮어쓰거나 초기화하지 않는다.
@@ -64,6 +64,7 @@ Python·Node.js·Git을 별도로 설치하지 않아도 된다. 기본 Windows 
 | 포트 사용 중 | 다른 프로그램인지 확인하고 포트를 변경하거나 해당 프로그램을 직접 종료 |
 | 기존 실행 상태를 확인할 수 없음 | 로그와 `.server-pids.json`의 이 폴더 실행 상태 확인; 다른 프로그램을 자동 종료하지 않음 |
 | PostgreSQL 연결 실패 | 보존된 `.env`의 대상 DB·권한·스키마 확인 |
+| `Backend readiness timed out` | `backend/uvicorn-error.log` 마지막 줄을 확인한다. `Waiting for application startup`이면 초기화 중이고, `Application startup complete` 이후라면 로컬 상태 확인 경로를 점검한다. |
 
 실행 로그는 `backend/uvicorn.log`, `backend/uvicorn-error.log`, `frontend/vite.log`, `frontend/vite-error.log`에 남는다.
 
@@ -72,6 +73,14 @@ Python·Node.js·Git을 별도로 설치하지 않아도 된다. 기본 Windows 
 ```powershell
 .\start.ps1 -BackendPort 18080 -FrontendPort 18173
 ```
+
+백엔드·웹 준비 확인과 중복 실행 확인은 Windows 시스템 프록시/PAC와 무관하게 loopback에 직접 요청한다. 다운로드용 사내 프록시는 유지한다. 기본 준비 대기는 서비스별 120초이며, 초기 DB 준비가 느린 PC는 다음처럼 늘릴 수 있다.
+
+```powershell
+.\start.ps1 -StartupTimeoutSeconds 300
+```
+
+제한시간이 지나도 준비되지 않으면 서버 로그에서 원인을 확인한다. 이 옵션은 DB 오류를 복구하거나 기존 데이터를 초기화하지 않는다.
 
 ## 검증과 구현 경계
 
