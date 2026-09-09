@@ -40,6 +40,7 @@ import type { InitialWorkspace } from './features/bootstrap/loadInitialWorkspace
 import { useWorkspaceBootstrap } from './features/bootstrap/useWorkspaceBootstrap'
 import { AppShell, AppShellMain, AppTopbar } from './app/shell/AppShell'
 import { AppSidebar } from './app/shell/AppSidebar'
+import { PersonalPcRoute } from './app/workspace/PersonalPcRoute'
 import { ProjectSetupState } from './app/workspace/ProjectSetupState'
 import { loadWorkspacePreferences, saveWorkspacePreference, type WorkspaceTheme } from './app/preferences/workspacePreferences'
 import { useWorkspaceNavigation } from './app/routing/useWorkspaceNavigation'; import { useWorkspaceContextRestore } from './app/routing/useWorkspaceContextRestore'
@@ -133,12 +134,12 @@ function App() {
     } : null
     if (validated) return visibleMenuItems(validated, authUser, selectedProjectId)
     if (menuPolicyReady && authUser?.account_status === 'ACTIVE' && authUser.is_global_admin) {
-      return (['menu_policy_admin', 'audit_admin'] as MenuId[]).map((id, index) => {
+      return [...visibleMenuItems(null, authUser, selectedProjectId), ...(['menu_policy_admin', 'audit_admin'] as MenuId[]).map((id, index) => {
         const local = WORKSPACE_ROUTES_BY_ID.get(id)!
         return { id, label: local.label, required_permission: local.requiredPermission, context_kind: local.contextKind, sequence_no: 900 + index, is_policy_editable: false, visibility: { general: false, power: false, admin: false } }
-      })
+      })]
     }
-    return []
+    return visibleMenuItems(null, authUser, selectedProjectId)
   }, [authUser, menuPolicy, menuPolicyReady, selectedProjectId])
   const allowedPages = useMemo(() => new Set(visibleMenus.map((menu) => menu.id)), [visibleMenus])
   const cancelEditing = useCallback(() => cancelEditingRef.current(), [])
@@ -864,6 +865,9 @@ function App() {
   }
   if (authUser?.account_status === 'PENDING') {
     return <ApprovalPendingScreen displayName={authUser.display_name} onLogout={() => void logout()} />
+  }
+  if (workspacePage === 'local_pc' && authUser?.account_status === 'ACTIVE') {
+    return <PersonalPcRoute user={authUser} menus={visibleMenus} databaseBackend={databaseBackend} theme={theme} fontSize={uiFontSize} onFontSizeChange={setUiFontSize} onThemeChange={setTheme} onLogout={() => void logout()} onNavigate={enterWorkspace} />
   }
   if (workspaceBootstrap.status === 'idle' || workspaceBootstrap.status === 'loading') {
     return <div className="full-state"><LoaderCircle className="spin" /> 데이터와 레이아웃을 준비하고 있습니다.</div>

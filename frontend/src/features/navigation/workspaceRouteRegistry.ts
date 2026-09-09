@@ -19,6 +19,7 @@ export type WorkspaceRouteRegistryItem = {
 }
 
 export const WORKSPACE_ROUTES: readonly WorkspaceRouteRegistryItem[] = [
+  { id: 'local_pc', page: 'local_pc', path: '/workspace/settings/local-pc', label: '내 PC 설정', breadcrumb: { section: '개인 설정', title: '내 PC 설정' }, requiredPermission: 'company.dashboard.view', contextKind: 'company', navigationKind: 'select' },
   { id: 'portfolio', page: 'portfolio', path: '/workspace/overview', label: '결과 대시보드', breadcrumb: { section: '결과', title: '결과 대시보드' }, requiredPermission: 'company.dashboard.view', contextKind: 'company', navigationKind: 'select' },
   { id: 'dashboard', page: 'dashboard', path: '/workspace/requests', label: '해석 의뢰 현황', breadcrumb: { section: '프로젝트', title: '해석 의뢰 현황' }, requiredPermission: 'project.data.view', contextKind: 'project', navigationKind: 'open-dashboard' },
   { id: 'intake', page: 'intake', path: '/workspace/requests/new', label: '의뢰 접수', breadcrumb: { section: '의뢰', title: '해석 의뢰 접수' }, requiredPermission: 'request.create', contextKind: 'project', navigationKind: 'select' },

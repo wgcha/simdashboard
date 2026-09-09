@@ -34,6 +34,7 @@ export function BootstrapWorkspaceShell({
         <button type="button" className={activePage === 'intake' ? 'active' : ''} disabled={!canOpenIntake} onClick={() => onPageChange('intake')}>해석 의뢰 접수</button>
       </nav>
       <div className="bootstrap-workspace-actions">
+        <button type="button" onClick={() => onPageChange('local_pc')}>내 PC 설정</button>
         <div className="theme-switch" role="group" aria-label="화면 테마 선택">
           <button type="button" className={theme === 'light' ? 'active' : ''} aria-pressed={theme === 'light'} onClick={() => onThemeChange('light')}>라이트</button>
           <button type="button" className={theme === 'dark' ? 'active' : ''} aria-pressed={theme === 'dark'} onClick={() => onThemeChange('dark')}>다크</button>

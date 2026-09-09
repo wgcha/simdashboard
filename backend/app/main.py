@@ -43,6 +43,7 @@ from .routers.result_folder_refresh import router as result_folder_refresh_route
 from .routers.result_ingestion import router as result_ingestion_router
 from .routers.spdm_storage import router as spdm_storage_router
 from .routers.media import router as media_router
+from .routers.managed_local_execution import router as managed_local_execution_router
 from .adapters.http.routers.projects import router as projects_router
 from .adapters.http.routers.reports import router as reports_router
 from .adapters.http.routers.report_templates import router as report_templates_router
@@ -98,6 +99,7 @@ app.include_router(access_control_router)
 app.include_router(workbench_router)
 app.include_router(modeling_catalog_router)
 app.include_router(modeling_templates_router)
+app.include_router(managed_local_execution_router)
 app.include_router(result_folder_refresh_router)
 
 

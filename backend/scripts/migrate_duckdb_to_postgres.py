@@ -69,6 +69,21 @@ RELATIONSHIPS = [
     ("analysis_requests", "owner_user_id", "users", "id", "warning"),
     ("request_steps", "owner_user_id", "users", "id", "warning"),
     ("request_work_items", "owner_user_id", "users", "id", "warning"),
+    ("managed_device_bindings", "user_id", "users", "id", "hard"),
+    ("managed_device_pairing_tokens", "user_id", "users", "id", "hard"),
+    ("managed_device_sessions", "binding_id", "managed_device_bindings", "id", "hard"),
+    ("managed_device_sessions", "user_id", "users", "id", "hard"),
+    ("managed_device_grants", "binding_id", "managed_device_bindings", "id", "hard"),
+    ("managed_device_grants", "user_id", "users", "id", "hard"),
+    ("managed_device_grants", "request_id", "analysis_requests", "id", "hard"),
+    ("managed_device_grants", "work_item_id", "request_work_items", "id", "hard"),
+    ("managed_local_runs", "binding_id", "managed_device_bindings", "id", "hard"),
+    ("managed_local_runs", "grant_id", "managed_device_grants", "id", "hard"),
+    ("managed_local_runs", "actor_user_id", "users", "id", "hard"),
+    ("managed_local_runs", "request_id", "analysis_requests", "id", "hard"),
+    ("managed_local_runs", "work_item_id", "request_work_items", "id", "hard"),
+    ("managed_device_event_sequences", "binding_id", "managed_device_bindings", "id", "hard"),
+    ("managed_device_event_sequences", "run_id", "managed_local_runs", "id", "hard"),
 ]
 
 # These values form an immediate-FK cycle in the canonical PostgreSQL schema.

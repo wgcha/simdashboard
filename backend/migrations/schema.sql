@@ -835,87 +835,79 @@ CREATE TABLE IF NOT EXISTS projects (
             );
 
 CREATE TABLE IF NOT EXISTS spdm_storage_settings (
-    setting_key VARCHAR PRIMARY KEY,
-    setting_value VARCHAR NOT NULL,
-    updated_at TIMESTAMP NOT NULL
+    setting_key VARCHAR PRIMARY KEY, setting_value VARCHAR NOT NULL, updated_at TIMESTAMP NOT NULL
 );
-
 CREATE TABLE IF NOT EXISTS spdm_storage_project_parents (
-    project_folder VARCHAR PRIMARY KEY,
-    project_id VARCHAR NOT NULL UNIQUE,
-    created_at TIMESTAMP NOT NULL,
-    updated_at TIMESTAMP NOT NULL
+    project_folder VARCHAR PRIMARY KEY, project_id VARCHAR NOT NULL UNIQUE,
+    created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL
 );
-
 CREATE TABLE IF NOT EXISTS spdm_storage_request_parents (
-    request_folder VARCHAR PRIMARY KEY,
-    project_folder VARCHAR NOT NULL,
-    project_id VARCHAR NOT NULL,
-    request_id VARCHAR NOT NULL UNIQUE,
-    created_at TIMESTAMP NOT NULL,
-    updated_at TIMESTAMP NOT NULL
+    request_folder VARCHAR PRIMARY KEY, project_folder VARCHAR NOT NULL, project_id VARCHAR NOT NULL,
+    request_id VARCHAR NOT NULL UNIQUE, created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL
 );
-
 CREATE TABLE IF NOT EXISTS spdm_storage_bindings (
-    load_case_id VARCHAR PRIMARY KEY,
-    project_id VARCHAR NOT NULL,
-    request_id VARCHAR NOT NULL,
-    relative_path VARCHAR NOT NULL UNIQUE,
-    created_at TIMESTAMP NOT NULL,
-    updated_at TIMESTAMP NOT NULL
+    load_case_id VARCHAR PRIMARY KEY, project_id VARCHAR NOT NULL, request_id VARCHAR NOT NULL,
+    relative_path VARCHAR NOT NULL UNIQUE, created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL
 );
-
 CREATE TABLE IF NOT EXISTS spdm_storage_files (
-    id VARCHAR PRIMARY KEY,
-    load_case_id VARCHAR NOT NULL,
-    relative_path VARCHAR NOT NULL,
-    name VARCHAR NOT NULL,
-    kind VARCHAR NOT NULL,
-    size_bytes BIGINT NOT NULL CHECK (size_bytes >= 0),
-    checksum VARCHAR,
-    status VARCHAR NOT NULL,
-    run_id VARCHAR,
-    message VARCHAR,
-    created_at TIMESTAMP NOT NULL,
-    updated_at TIMESTAMP NOT NULL,
-    UNIQUE(load_case_id, relative_path)
+    id VARCHAR PRIMARY KEY, load_case_id VARCHAR NOT NULL, relative_path VARCHAR NOT NULL,
+    name VARCHAR NOT NULL, kind VARCHAR NOT NULL, size_bytes BIGINT NOT NULL CHECK (size_bytes >= 0),
+    checksum VARCHAR, status VARCHAR NOT NULL, run_id VARCHAR, message VARCHAR,
+    created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL, UNIQUE(load_case_id, relative_path)
 );
-
 CREATE TABLE IF NOT EXISTS modeling_templates (
-    id VARCHAR PRIMARY KEY,
-    name VARCHAR NOT NULL,
-    product_name VARCHAR NOT NULL,
-    load_case_name VARCHAR NOT NULL,
-    description VARCHAR NOT NULL DEFAULT '',
+    id VARCHAR PRIMARY KEY, name VARCHAR NOT NULL, product_name VARCHAR NOT NULL,
+    load_case_name VARCHAR NOT NULL, description VARCHAR NOT NULL DEFAULT '',
     latest_version INTEGER NOT NULL CHECK (latest_version >= 1),
-    created_at TIMESTAMP NOT NULL,
-    updated_at TIMESTAMP NOT NULL
+    created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL
 );
-
 CREATE TABLE IF NOT EXISTS modeling_template_versions (
-    template_id VARCHAR NOT NULL,
-    version INTEGER NOT NULL CHECK (version >= 1),
-    created_at TIMESTAMP NOT NULL,
-    file_count INTEGER NOT NULL CHECK (file_count >= 0 AND file_count <= 200),
+    template_id VARCHAR NOT NULL, version INTEGER NOT NULL CHECK (version >= 1),
+    created_at TIMESTAMP NOT NULL, file_count INTEGER NOT NULL CHECK (file_count >= 0 AND file_count <= 200),
     total_bytes BIGINT NOT NULL CHECK (total_bytes >= 0 AND total_bytes <= 26214400),
     PRIMARY KEY (template_id, version)
 );
-
 CREATE TABLE IF NOT EXISTS modeling_template_files (
-    id VARCHAR PRIMARY KEY,
-    template_id VARCHAR NOT NULL,
-    version INTEGER NOT NULL,
-    relative_path VARCHAR NOT NULL,
-    size_bytes BIGINT NOT NULL CHECK (size_bytes >= 0),
-    checksum VARCHAR NOT NULL,
-    content BYTEA NOT NULL,
+    id VARCHAR PRIMARY KEY, template_id VARCHAR NOT NULL, version INTEGER NOT NULL,
+    relative_path VARCHAR NOT NULL, size_bytes BIGINT NOT NULL CHECK (size_bytes >= 0),
+    checksum VARCHAR NOT NULL, content BYTEA NOT NULL,
     UNIQUE (template_id, version, relative_path)
 );
-
-CREATE INDEX IF NOT EXISTS ix_spdm_storage_bindings_request ON spdm_storage_bindings(request_id, load_case_id);
-CREATE INDEX IF NOT EXISTS ix_spdm_storage_files_load_case ON spdm_storage_files(load_case_id, status, relative_path);
-CREATE INDEX IF NOT EXISTS ix_modeling_templates_catalog ON modeling_templates(product_name, load_case_name, name);
-CREATE INDEX IF NOT EXISTS ix_modeling_template_files_version ON modeling_template_files(template_id, version, relative_path);
+CREATE TABLE IF NOT EXISTS managed_device_bindings (
+    id VARCHAR PRIMARY KEY, device_id VARCHAR NOT NULL, host_name VARCHAR NOT NULL,
+    user_id VARCHAR NOT NULL, secret_hash CHAR(64) NOT NULL CHECK (secret_hash ~ '^[0-9a-f]{64}$'),
+    created_at TIMESTAMP NOT NULL, revoked_at TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS managed_device_pairing_tokens (
+    token_hash CHAR(64) PRIMARY KEY CHECK (token_hash ~ '^[0-9a-f]{64}$'),
+    user_id VARCHAR NOT NULL, device_id VARCHAR NOT NULL, expires_at TIMESTAMP NOT NULL,
+    consumed_at TIMESTAMP, created_at TIMESTAMP NOT NULL
+);
+CREATE TABLE IF NOT EXISTS managed_device_sessions (
+    token_hash CHAR(64) PRIMARY KEY CHECK (token_hash ~ '^[0-9a-f]{64}$'),
+    binding_id VARCHAR NOT NULL, user_id VARCHAR NOT NULL, expires_at TIMESTAMP NOT NULL,
+    created_at TIMESTAMP NOT NULL
+);
+CREATE TABLE IF NOT EXISTS managed_device_grants (
+    id VARCHAR PRIMARY KEY, binding_id VARCHAR NOT NULL, user_id VARCHAR NOT NULL,
+    action VARCHAR NOT NULL CHECK (action IN ('execute', 'retry')),
+    request_id VARCHAR NOT NULL, work_item_id VARCHAR NOT NULL, task_name VARCHAR NOT NULL,
+    actor VARCHAR NOT NULL, issued_at TIMESTAMP NOT NULL
+);
+CREATE TABLE IF NOT EXISTS managed_local_runs (
+    id VARCHAR PRIMARY KEY, binding_id VARCHAR NOT NULL, grant_id VARCHAR NOT NULL,
+    actor_user_id VARCHAR NOT NULL, request_id VARCHAR NOT NULL, work_item_id VARCHAR NOT NULL,
+    task_name VARCHAR NOT NULL, run_json JSONB NOT NULL,
+    immutable_hash CHAR(64) NOT NULL CHECK (immutable_hash ~ '^[0-9a-f]{64}$'),
+    last_sequence BIGINT NOT NULL CHECK (last_sequence >= 0),
+    created_at TIMESTAMP NOT NULL, synced_at TIMESTAMP NOT NULL
+);
+CREATE TABLE IF NOT EXISTS managed_device_event_sequences (
+    binding_id VARCHAR NOT NULL, run_id VARCHAR NOT NULL,
+    sequence BIGINT NOT NULL CHECK (sequence >= 0),
+    event_hash CHAR(64) NOT NULL CHECK (event_hash ~ '^[0-9a-f]{64}$'),
+    accepted_at TIMESTAMP NOT NULL, PRIMARY KEY (binding_id, run_id, sequence)
+);
 
 CREATE INDEX IF NOT EXISTS ix_product_information_project ON product_information(project_id);
 CREATE INDEX IF NOT EXISTS ix_analysis_requests_project ON analysis_requests(project_id);
@@ -976,6 +968,16 @@ CREATE INDEX IF NOT EXISTS idx_request_steps_owner_user_id ON request_steps(owne
 CREATE INDEX IF NOT EXISTS idx_request_work_items_owner_user_id ON request_work_items(owner_user_id);
 CREATE INDEX IF NOT EXISTS idx_project_workspace_layouts_project ON project_workspace_layouts(project_id, layout_kind);
 CREATE INDEX IF NOT EXISTS idx_project_workspace_layout_versions_project ON project_workspace_layout_versions(project_id, layout_kind, version DESC);
+CREATE INDEX IF NOT EXISTS ix_modeling_templates_catalog ON modeling_templates(product_name, load_case_name, name);
+CREATE INDEX IF NOT EXISTS ix_modeling_template_files_version ON modeling_template_files(template_id, version, relative_path);
+CREATE INDEX IF NOT EXISTS ix_spdm_storage_bindings_request ON spdm_storage_bindings(request_id, load_case_id);
+CREATE INDEX IF NOT EXISTS ix_spdm_storage_files_load_case ON spdm_storage_files(load_case_id, status, relative_path);
+CREATE INDEX IF NOT EXISTS ix_managed_bindings_user_active ON managed_device_bindings(user_id, revoked_at, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_managed_active_binding_per_device ON managed_device_bindings(user_id, device_id) WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS ix_managed_pairing_expiry ON managed_device_pairing_tokens(expires_at);
+CREATE INDEX IF NOT EXISTS ix_managed_sessions_binding_expiry ON managed_device_sessions(binding_id, expires_at);
+CREATE INDEX IF NOT EXISTS ix_managed_grants_binding_context ON managed_device_grants(binding_id, request_id, work_item_id);
+CREATE INDEX IF NOT EXISTS ix_managed_runs_context ON managed_local_runs(request_id, work_item_id, synced_at);
 
 ALTER TABLE product_information ADD CONSTRAINT fk_product_information_project FOREIGN KEY (project_id) REFERENCES projects(id);
 ALTER TABLE analysis_requests ADD CONSTRAINT fk_analysis_requests_project FOREIGN KEY (project_id) REFERENCES projects(id);
@@ -1055,9 +1057,24 @@ ALTER TABLE spdm_storage_bindings ADD CONSTRAINT fk_spdm_storage_binding_project
 ALTER TABLE spdm_storage_bindings ADD CONSTRAINT fk_spdm_storage_binding_request FOREIGN KEY (request_id) REFERENCES analysis_requests(id);
 ALTER TABLE spdm_storage_files ADD CONSTRAINT fk_spdm_storage_file_load_case FOREIGN KEY (load_case_id) REFERENCES load_cases(id);
 ALTER TABLE spdm_storage_files ADD CONSTRAINT fk_spdm_storage_file_run FOREIGN KEY (run_id) REFERENCES analysis_runs(id);
-ALTER TABLE modeling_template_versions ADD CONSTRAINT fk_modeling_template_version_template FOREIGN KEY (template_id) REFERENCES modeling_templates(id) ON DELETE CASCADE;
-ALTER TABLE modeling_template_files ADD CONSTRAINT fk_modeling_template_file_version FOREIGN KEY (template_id, version) REFERENCES modeling_template_versions(template_id, version) ON DELETE CASCADE;
 ALTER TABLE spdm_storage_project_parents ADD CONSTRAINT fk_spdm_storage_project_parent_project FOREIGN KEY (project_id) REFERENCES projects(id);
 ALTER TABLE spdm_storage_request_parents ADD CONSTRAINT fk_spdm_storage_request_parent_folder FOREIGN KEY (project_folder) REFERENCES spdm_storage_project_parents(project_folder);
 ALTER TABLE spdm_storage_request_parents ADD CONSTRAINT fk_spdm_storage_request_parent_project FOREIGN KEY (project_id) REFERENCES projects(id);
 ALTER TABLE spdm_storage_request_parents ADD CONSTRAINT fk_spdm_storage_request_parent_request FOREIGN KEY (request_id) REFERENCES analysis_requests(id);
+ALTER TABLE modeling_template_versions ADD CONSTRAINT fk_modeling_template_version_template FOREIGN KEY (template_id) REFERENCES modeling_templates(id) ON DELETE CASCADE;
+ALTER TABLE modeling_template_files ADD CONSTRAINT fk_modeling_template_file_version FOREIGN KEY (template_id, version) REFERENCES modeling_template_versions(template_id, version) ON DELETE CASCADE;
+ALTER TABLE managed_device_bindings ADD CONSTRAINT fk_managed_binding_user FOREIGN KEY (user_id) REFERENCES users(id);
+ALTER TABLE managed_device_pairing_tokens ADD CONSTRAINT fk_managed_pairing_user FOREIGN KEY (user_id) REFERENCES users(id);
+ALTER TABLE managed_device_sessions ADD CONSTRAINT fk_managed_session_binding FOREIGN KEY (binding_id) REFERENCES managed_device_bindings(id);
+ALTER TABLE managed_device_sessions ADD CONSTRAINT fk_managed_session_user FOREIGN KEY (user_id) REFERENCES users(id);
+ALTER TABLE managed_device_grants ADD CONSTRAINT fk_managed_grant_binding FOREIGN KEY (binding_id) REFERENCES managed_device_bindings(id);
+ALTER TABLE managed_device_grants ADD CONSTRAINT fk_managed_grant_user FOREIGN KEY (user_id) REFERENCES users(id);
+ALTER TABLE managed_device_grants ADD CONSTRAINT fk_managed_grant_request FOREIGN KEY (request_id) REFERENCES analysis_requests(id);
+ALTER TABLE managed_device_grants ADD CONSTRAINT fk_managed_grant_work_item FOREIGN KEY (work_item_id) REFERENCES request_work_items(id);
+ALTER TABLE managed_local_runs ADD CONSTRAINT fk_managed_run_binding FOREIGN KEY (binding_id) REFERENCES managed_device_bindings(id);
+ALTER TABLE managed_local_runs ADD CONSTRAINT fk_managed_run_grant FOREIGN KEY (grant_id) REFERENCES managed_device_grants(id);
+ALTER TABLE managed_local_runs ADD CONSTRAINT fk_managed_run_actor FOREIGN KEY (actor_user_id) REFERENCES users(id);
+ALTER TABLE managed_local_runs ADD CONSTRAINT fk_managed_run_request FOREIGN KEY (request_id) REFERENCES analysis_requests(id);
+ALTER TABLE managed_local_runs ADD CONSTRAINT fk_managed_run_work_item FOREIGN KEY (work_item_id) REFERENCES request_work_items(id);
+ALTER TABLE managed_device_event_sequences ADD CONSTRAINT fk_managed_event_binding FOREIGN KEY (binding_id) REFERENCES managed_device_bindings(id);
+ALTER TABLE managed_device_event_sequences ADD CONSTRAINT fk_managed_event_run FOREIGN KEY (run_id) REFERENCES managed_local_runs(id);

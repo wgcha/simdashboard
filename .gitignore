@@ -47,3 +47,8 @@ deploy/windows/certs/*
 !deploy/windows/certs/README.md
 *:Zone.Identifier
 *Zone.Identifier
+# Personal local program registrations, connection code, logs and execution history.
+.local-runner/
+# One-click update process locks.
+.update.lock
+.gitupdate.lock

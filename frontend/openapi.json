@@ -3232,6 +3232,383 @@
         }
       }
     },
+    "/api/local-execution/devices": {
+      "get": {
+        "tags": [
+          "managed-local-execution"
+        ],
+        "summary": "List Devices",
+        "operationId": "list_devices_api_local_execution_devices_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DeviceRead"
+                  },
+                  "type": "array",
+                  "title": "Response List Devices Api Local Execution Devices Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/local-execution/pairing": {
+      "post": {
+        "tags": [
+          "managed-local-execution"
+        ],
+        "summary": "Create Pairing",
+        "operationId": "create_pairing_api_local_execution_pairing_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairingCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairingTokenResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/local-execution/devices/{binding_id}/session": {
+      "post": {
+        "tags": [
+          "managed-local-execution"
+        ],
+        "summary": "Create Session",
+        "operationId": "create_session_api_local_execution_devices__binding_id__session_post",
+        "parameters": [
+          {
+            "name": "binding_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Binding Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceSessionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/local-execution/devices/{binding_id}/revoke": {
+      "post": {
+        "tags": [
+          "managed-local-execution"
+        ],
+        "summary": "Revoke Device",
+        "operationId": "revoke_device_api_local_execution_devices__binding_id__revoke_post",
+        "parameters": [
+          {
+            "name": "binding_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Binding Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "title": "Response Revoke Device Api Local Execution Devices  Binding Id  Revoke Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/local-execution/runs": {
+      "get": {
+        "tags": [
+          "managed-local-execution"
+        ],
+        "summary": "List Runs",
+        "operationId": "list_runs_api_local_execution_runs_get",
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
+            }
+          },
+          {
+            "name": "work_item_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Work Item Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CentralRun"
+                  },
+                  "title": "Response List Runs Api Local Execution Runs Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/local-execution/device/pair-preview": {
+      "post": {
+        "tags": [
+          "managed-local-execution"
+        ],
+        "summary": "Pair Preview",
+        "operationId": "pair_preview_api_local_execution_device_pair_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DevicePairPreview"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Pair Preview Api Local Execution Device Pair Preview Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/local-execution/device/pair": {
+      "post": {
+        "tags": [
+          "managed-local-execution"
+        ],
+        "summary": "Pair",
+        "operationId": "pair_api_local_execution_device_pair_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DevicePair"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/local-execution/device/authorize": {
+      "post": {
+        "tags": [
+          "managed-local-execution"
+        ],
+        "summary": "Authorize",
+        "operationId": "authorize_api_local_execution_device_authorize_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceAuthorize"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceAuthorizeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/local-execution/device/events": {
+      "post": {
+        "tags": [
+          "managed-local-execution"
+        ],
+        "summary": "Events",
+        "operationId": "events_api_local_execution_device_events_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceEvents"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceEventsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/result-imports/refresh": {
       "post": {
         "tags": [
@@ -7211,6 +7588,25 @@
   },
   "components": {
     "schemas": {
+      "AcceptedEvent": {
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "sequence": {
+            "type": "integer",
+            "title": "Sequence"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "run_id",
+          "sequence"
+        ],
+        "title": "AcceptedEvent"
+      },
       "AccountStatusUpdate": {
         "properties": {
           "account_status": {
@@ -7923,6 +8319,196 @@
         ],
         "title": "CatalogResponse"
       },
+      "CentralRun": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Id"
+          },
+          "source_run_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Run Id"
+          },
+          "batch_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batch Id"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "DIRECT",
+              "BATCH"
+            ],
+            "title": "Mode"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "QUEUED",
+              "RUNNING",
+              "AWAITING_COMPLETION",
+              "SUCCEEDED",
+              "FAILED",
+              "COMPLETED",
+              "INTERRUPTED"
+            ],
+            "title": "Status"
+          },
+          "program_name": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Program Name"
+          },
+          "program_version": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Program Version"
+          },
+          "input_path": {
+            "type": "string",
+            "maxLength": 2048,
+            "title": "Input Path"
+          },
+          "working_directory": {
+            "type": "string",
+            "maxLength": 2048,
+            "title": "Working Directory"
+          },
+          "created_at": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Created At"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "exit_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Code"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "context": {
+            "$ref": "#/components/schemas/ManagedContext"
+          },
+          "program_snapshot": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Program Snapshot"
+          },
+          "binding_id": {
+            "type": "string",
+            "title": "Binding Id"
+          },
+          "device_id": {
+            "type": "string",
+            "title": "Device Id"
+          },
+          "host_name": {
+            "type": "string",
+            "title": "Host Name"
+          },
+          "actor_user_id": {
+            "type": "string",
+            "title": "Actor User Id"
+          },
+          "synced_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Synced At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "mode",
+          "status",
+          "program_name",
+          "program_version",
+          "input_path",
+          "working_directory",
+          "created_at",
+          "context",
+          "binding_id",
+          "device_id",
+          "host_name",
+          "actor_user_id",
+          "synced_at"
+        ],
+        "title": "CentralRun"
+      },
       "DashboardClone": {
         "properties": {
           "name": {
@@ -8159,6 +8745,284 @@
           "selected_version"
         ],
         "title": "DetailResponse"
+      },
+      "DeviceAuthorize": {
+        "properties": {
+          "binding_id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Binding Id"
+          },
+          "session_token": {
+            "type": "string",
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Session Token"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "catalog",
+              "history",
+              "execute",
+              "retry",
+              "complete"
+            ],
+            "title": "Action"
+          },
+          "context": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ManagedContext"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "binding_id",
+          "session_token",
+          "action"
+        ],
+        "title": "DeviceAuthorize"
+      },
+      "DeviceAuthorizeResponse": {
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "title": "User Id"
+          },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name"
+          },
+          "context": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ManagedContext"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "grant_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grant Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "user_id",
+          "display_name"
+        ],
+        "title": "DeviceAuthorizeResponse"
+      },
+      "DeviceEvents": {
+        "properties": {
+          "binding_id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Binding Id"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/DeviceRunEvent"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Events"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "binding_id",
+          "events"
+        ],
+        "title": "DeviceEvents"
+      },
+      "DeviceEventsResponse": {
+        "properties": {
+          "accepted": {
+            "items": {
+              "$ref": "#/components/schemas/AcceptedEvent"
+            },
+            "type": "array",
+            "title": "Accepted"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "accepted"
+        ],
+        "title": "DeviceEventsResponse"
+      },
+      "DevicePair": {
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 8,
+            "title": "Device Id"
+          },
+          "host_name": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Host Name"
+          },
+          "device_secret": {
+            "type": "string",
+            "maxLength": 512,
+            "minLength": 43,
+            "title": "Device Secret"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "device_id",
+          "host_name",
+          "device_secret"
+        ],
+        "title": "DevicePair"
+      },
+      "DevicePairPreview": {
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 8,
+            "title": "Device Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "device_id"
+        ],
+        "title": "DevicePairPreview"
+      },
+      "DeviceRead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "device_id": {
+            "type": "string",
+            "title": "Device Id"
+          },
+          "host_name": {
+            "type": "string",
+            "title": "Host Name"
+          },
+          "user_id": {
+            "type": "string",
+            "title": "User Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "device_id",
+          "host_name",
+          "user_id",
+          "created_at"
+        ],
+        "title": "DeviceRead"
+      },
+      "DeviceRunEvent": {
+        "properties": {
+          "sequence": {
+            "type": "integer",
+            "maximum": 9.223372036854776e+18,
+            "minimum": 0.0,
+            "title": "Sequence"
+          },
+          "grant_id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Grant Id"
+          },
+          "run": {
+            "$ref": "#/components/schemas/LocalRun"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "sequence",
+          "grant_id",
+          "run"
+        ],
+        "title": "DeviceRunEvent"
+      },
+      "DeviceSessionResponse": {
+        "properties": {
+          "token": {
+            "type": "string",
+            "title": "Token"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At"
+          },
+          "binding_id": {
+            "type": "string",
+            "title": "Binding Id"
+          },
+          "user_id": {
+            "type": "string",
+            "title": "User Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "token",
+          "expires_at",
+          "binding_id",
+          "user_id"
+        ],
+        "title": "DeviceSessionResponse"
       },
       "DropVideoEvaluation": {
         "properties": {
@@ -8756,6 +9620,170 @@
         ],
         "title": "LoadCaseCreate"
       },
+      "LocalRun": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Id"
+          },
+          "source_run_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Run Id"
+          },
+          "batch_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batch Id"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "DIRECT",
+              "BATCH"
+            ],
+            "title": "Mode"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "QUEUED",
+              "RUNNING",
+              "AWAITING_COMPLETION",
+              "SUCCEEDED",
+              "FAILED",
+              "COMPLETED",
+              "INTERRUPTED"
+            ],
+            "title": "Status"
+          },
+          "program_name": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Program Name"
+          },
+          "program_version": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Program Version"
+          },
+          "input_path": {
+            "type": "string",
+            "maxLength": 2048,
+            "title": "Input Path"
+          },
+          "working_directory": {
+            "type": "string",
+            "maxLength": 2048,
+            "title": "Working Directory"
+          },
+          "created_at": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Created At"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "exit_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Code"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "context": {
+            "$ref": "#/components/schemas/ManagedContext"
+          },
+          "program_snapshot": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Program Snapshot"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "mode",
+          "status",
+          "program_name",
+          "program_version",
+          "input_path",
+          "working_directory",
+          "created_at",
+          "context"
+        ],
+        "title": "LocalRun"
+      },
       "LoginPayload": {
         "properties": {
           "username": {
@@ -8777,6 +9805,43 @@
           "password"
         ],
         "title": "LoginPayload"
+      },
+      "ManagedContext": {
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Request Id"
+          },
+          "work_item_id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Work Item Id"
+          },
+          "task_name": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Task Name"
+          },
+          "actor": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Actor"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "request_id",
+          "work_item_id",
+          "task_name",
+          "actor"
+        ],
+        "title": "ManagedContext"
       },
       "MasterResultRefreshItem": {
         "properties": {
@@ -9200,6 +10265,42 @@
           "command"
         ],
         "title": "NaturalLanguageCommand"
+      },
+      "PairingCreate": {
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 8,
+            "title": "Device Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "device_id"
+        ],
+        "title": "PairingCreate"
+      },
+      "PairingTokenResponse": {
+        "properties": {
+          "pairing_token": {
+            "type": "string",
+            "title": "Pairing Token"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "pairing_token",
+          "expires_at"
+        ],
+        "title": "PairingTokenResponse"
       },
       "ProjectCreate": {
         "properties": {

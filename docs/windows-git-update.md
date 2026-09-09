@@ -1,61 +1,65 @@
-# 사내 PC Git 업데이트
+# 사내 PC 원클릭 업데이트
 
-대상 브랜치는 `codex/windows-one-click-deploy`다. 사내 프록시·인증서는 기존 [Windows 배치 안내](windows-one-click-deployment.md)의 설정을 유지한다.
+평소에는 **`start.bat`**, 새 버전 적용은 **`update.bat`**를 더블클릭한다.
 
-## 이미 Git으로 받은 경우
+## 지금처럼 ZIP 배포 폴더를 쓰는 경우
 
-실행 중인 앱을 `stop.bat`으로 종료하고 소스 폴더에서 PowerShell을 연다. 업데이트 전 `.env`와 현재 DB를 별도 보관한다. DuckDB 파일은 앱이 종료된 상태에서 복사한다. 외부 SPDM 저장 폴더는 소스 폴더와 구분해 유지한다.
+1. 최신 **`update.bat` 한 파일**을 기존 배포 폴더의 `stop.ps1` 옆에 넣는다.
+2. **`update.bat`를 더블클릭**한다. 최초 연결 안내가 나오면 폴더·브랜치를 확인하고 Enter를 누른다.
 
-```powershell
-git status --short
-git branch --show-current
-git pull --ff-only origin codex/windows-one-click-deploy
-.\deploy.bat
-& .\.venv-runtime\Scripts\python.exe backend\scripts\upgrade_postgres_schema.py
-.\start.bat
-```
+`main` / `No commits yet` 상태도 이 흐름으로 처리한다. 새 폴더로 이사하거나 런타임·DB를 다시 설치할 필요가 없다. 같은 경로의 기존 소스 파일은 `backups/git-update-*`에 보관하고, `.env`·DB·런타임·결과 파일은 유지한다. 자동 백업은 충돌하는 소스 파일에 대한 백업이며 DB 전체 백업을 대신하지 않는다.
 
-위 명령은 현재 브랜치가 `codex/windows-one-click-deploy`일 때 사용한다. 다른 브랜치라면 수정 파일을 먼저 보존하고 다음 명령으로 전환한다.
+Git이 설치되어 있고 해당 저장소에 접근할 수 있어야 한다. 기본 저장소는 `https://github.com/wgcha/simdashboard.git`, 최초 연결 브랜치는 `codex/windows-one-click-deploy`다. Git의 기존 로그인·프록시 설정을 사용한다. 최초 Git 인증이 필요한 PC에서는 로그인 창이 추가로 나올 수 있다.
+
+2026-09-09 업데이트에는 PC 도우미·기본 `내 PC 설정` 메뉴·원클릭 업데이트기가 포함된다. 이 변경의 게시 대상은 위 브랜치이며, `main`에서 pull하는 것만으로 이 브랜치의 새 변경을 받지는 않는다. 원격에 `update.ps1`과 Git 모듈이 없으면 다운로드 후 안내하고 종료한다. 최초 실행용 driver는 `backups/updater-driver-*`에 보관한다.
+
+이미 커밋이 있는 정상 Git 폴더에서 이번 브랜치를 받으려면 다음을 실행한다. 직접 수정한 소스가 있으면 먼저 보존하고, 전환이 거부될 때 강제로 덮어쓰지 않는다. `No commits yet` 폴더는 위 BAT 최초 연결 절차를 사용한다.
 
 ```powershell
 git fetch origin
 git switch codex/windows-one-click-deploy
-git pull --ff-only
+git pull --ff-only origin codex/windows-one-click-deploy
+.\update.bat
 ```
 
-`git status`에 직접 수정한 파일이 있거나 `pull --ff-only`가 중단되면 강제 덮어쓰기·reset·clean을 하지 않는다. 변경 파일과 오류 내용을 확인한 후 업데이트한다. `deploy.bat`은 필요한 런타임·의존성을 준비하고, 이후 평상시 실행은 `start.bat`만 사용한다.
+PostgreSQL 기본 실행은 [Windows PostgreSQL 빠른 시작](windows-postgresql-quickstart.md)을 따른다. 이미 PostgreSQL로 이관한 PC에서는 최초 구축 도구를 다시 실행할 필요가 없다.
 
-기본 DuckDB는 시작 시 추가 테이블을 준비하며, 위 PostgreSQL 업데이트 명령은 자동으로 건너뛴다. PostgreSQL을 사용하는 설치는 앱을 다시 시작하기 전에 최신 `0021_modeling_templates` migration (SPDM 및 모델링 CSV 라이브러리 포함)을 적용해야 한다. `deploy.bat`은 PostgreSQL migration을 대신 실행하지 않는다. 기존 owner 설정을 갖춘 소스 폴더에서 아래 명시 업데이트를 실행한 후 `start.bat`을 실행한다. owner 설정이 없는 경우 [PostgreSQL 운영 절차](backend-sql-integration-guide.md)의 자격 증명·대상 확인 절차를 먼저 따른다.
+## 다음 업데이트부터
+
+`update.bat`만 더블클릭한다. 아래 작업을 순서대로 처리한다.
+
+1. Git 상태 확인과 다운로드
+2. 실행 중인 웹/API 종료
+3. 소스 업데이트
+4. 의존성 설치와 프런트엔드 빌드
+5. 필요한 PostgreSQL DB migration
+6. 웹/API 시작과 브라우저 열기
+
+기존 Git 폴더는 현재 브랜치의 upstream을 따른다. upstream이 없으면 같은 이름의 `origin` 브랜치를 사용한다. 대상 브랜치가 없거나 직접 수정한 소스·미추적 파일이 있으면 앱을 종료하기 전에 중단한다. 다른 브랜치로 임의 전환하거나 변경을 강제로 덮어쓰지 않는다.
+
+이전 실행의 사용자 지정 웹/API 포트도 유지한다. 기본 웹 주소는 `http://127.0.0.1:5173`이다. 설치된 런타임과 사내 네트워크 설정은 기존 [Windows 배치 안내](windows-one-click-deployment.md)를 따른다.
+
+## 실패했을 때
+
+화면의 실패 단계와 `log/update-*.log`를 확인한다. Git 다운로드 실패는 기존 앱을 종료하지 않는다. 배포·DB migration 실패는 이후 단계와 재시작을 중단한다. 원인을 해결한 다음 같은 `update.bat`를 다시 실행한다. DB migration을 자동으로 되돌리지는 않는다.
+
+PostgreSQL은 기존 `.postgres-owner.env`와 DB 연결 설정으로 `upgrade_postgres_schema.py`를 실행한다. owner 설정이 없다면 [PostgreSQL 운영 절차](backend-sql-integration-guide.md)를 따른다. DuckDB를 쓰는 설치에서는 PostgreSQL migration을 건너뛴다. 현재 관리형 로컬 실행의 migration은 `0022_managed_local_execution`이며 실제 적용 대상은 Alembic의 최신 head다.
+
+## 관리자 옵션
+
+업데이트기가 이미 설치된 폴더에서는 다음처럼 선택 옵션을 줄 수 있다.
 
 ```powershell
-& .\.venv-runtime\Scripts\python.exe backend\scripts\upgrade_postgres_schema.py
+.\update.ps1 -NoBrowser
+.\update.ps1 -NetworkMode direct
 ```
 
-웹 주소는 기본 설정에서 `http://127.0.0.1:5173`이다. 실행기가 다른 포트를 안내하면 실행기에 표시된 `127.0.0.1` 주소를 사용한다.
+`update.ps1`을 직접 실행해 다른 저장소에 **최초 연결**할 때는 `-RepositoryUrl`, `-Branch`를 지정한다. 기존 Git checkout에서는 현재 upstream을 유지한다. BAT 한 파일로 시작하는 최초 다운로드는 옵션 없이 실행하며, 환경변수 `SIMDASH_UPDATE_REPOSITORY`, `SIMDASH_UPDATE_BRANCH`로 대상을 변경할 수 있다. 이 최초 다운로드 단계에 CLI 옵션을 주면 사용 방법을 표시하고 종료한다.
 
-## ZIP으로 다운로드했던 경우
-
-ZIP에는 Git 이력이 없어 `git pull`을 바로 사용할 수 없다. 기존 폴더는 보존하고 다른 이름의 폴더로 최초 한 번 clone한다. 비공개 저장소이므로 접근 권한이 있는 GitHub 계정으로 인증해야 한다.
-
-```powershell
-git clone --branch codex/windows-one-click-deploy https://github.com/wgcha/simdashboard.git simdashboard-git
-cd simdashboard-git
-```
-
-기존 앱을 종료한 뒤 `.env`를 새 소스 폴더에 복사한다. 기존 DuckDB 기본 파일을 썼다면 파일을 새 폴더의 `backend/data/`로 복사하거나 `.env`의 `ANALYSIS_DUCKDB_PATH`를 기존 DB의 절대 경로로 지정한다. 두 앱을 같은 DB에 동시에 실행하지 않는다. 별도의 PostgreSQL이나 SPDM 저장소는 기존 연결 설정을 유지한다.
-
-```powershell
-.\deploy.bat
-& .\.venv-runtime\Scripts\python.exe backend\scripts\upgrade_postgres_schema.py
-.\start.bat
-```
-
-다음 업데이트부터는 이 새 clone 폴더에서 위 `git pull` 절차를 사용한다. 프록시 주소·인증 정보를 Git에 커밋하지 않는다.
+이 업데이트기는 Windows 로컬 배포용이다. Rocky 운영 서버는 기존 systemd/nginx 배포 절차를 사용한다.
 
 ## 적용 확인
 
 1. 기존 프로젝트·의뢰가 남아 있는지 확인한다.
-2. 저장 폴더 설정에서 사내 SPDM 최상위 경로를 지정한다.
-3. 기존 의뢰를 재사용할 경우 해당 하중 경우에 SPDM 상대 폴더를 먼저 연결한다. 폴더에서 새 의뢰를 만드는 경우에는 저장 폴더 새로고침을 바로 실행한다.
-4. 결과 등록에서 하중 경우의 저장 경로를 확인하고 시험 파일을 등록한다.
-5. 탐색기에서 실제 파일 저장 위치를 확인한 뒤 다시 새로고침하여 중복 Run이 생기지 않는지 확인한다.
+2. 저장 폴더 설정의 사내 SPDM 경로가 유지되는지 확인한다.
+3. 기본 메뉴 `내 PC 설정`에서 내 PC 연결과 프로그램 목록을 확인하고 작업 실행 화면에서도 같은 목록을 확인한다.

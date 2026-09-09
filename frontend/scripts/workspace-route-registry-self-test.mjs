@@ -5,8 +5,10 @@ import {
   workspaceRouteForPathname,
 } from '../src/features/navigation/workspaceRouteRegistry.ts'
 import { resolveBlockedNavigation } from '../src/app/routing/navigationState.ts'
+import { visibleMenuItems } from '../src/features/auth/access.ts'
 
 const expectedPaths = {
+  local_pc: '/workspace/settings/local-pc',
   portfolio: '/workspace/overview',
   dashboard: '/workspace/requests',
   intake: '/workspace/requests/new',
@@ -45,3 +47,12 @@ if (cancelled.pending !== null || cancelled.shouldProceed) throw new Error('a ca
 const confirmed = resolveBlockedNavigation(pendingDashboardReset, true)
 if (confirmed.pending !== pendingDashboardReset || !confirmed.shouldProceed) throw new Error('a confirmed blocker must retain its pending destination')
 console.log('Workspace route registry self-test passed.')
+
+const personalUser = { id: 'personal-user', username: 'personal-user', display_name: 'Personal user', employee_id: null, account_status: 'ACTIVE', is_global_admin: false, memberships: [], company_permissions: [] }
+if (!visibleMenuItems(null, personalUser, '').some((item) => item.id === 'local_pc')) throw new Error('personal settings must be available without project or policy')
+const hiddenPersonalPolicy = { version: 1, updated_by: '', updated_at: '', menus: [{ id: 'local_pc', label: 'hidden', required_permission: 'system.menu_policy.manage', context_kind: 'system', sequence_no: 1, is_policy_editable: true, visibility: { general: false, power: false, admin: false } }] }
+if (visibleMenuItems(hiddenPersonalPolicy, personalUser, '').filter((item) => item.id === 'local_pc').length !== 1) throw new Error('personal settings must remain a single built-in menu')
+for (const account_status of ['PENDING', 'SUSPENDED']) {
+  if (visibleMenuItems(null, { ...personalUser, account_status }, '').length) throw new Error('inactive accounts must not get personal menu access')
+}
+console.log('Personal PC default menu self-test passed.')

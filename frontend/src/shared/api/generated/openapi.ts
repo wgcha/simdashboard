@@ -982,6 +982,159 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/local-execution/devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Devices */
+        get: operations["list_devices_api_local_execution_devices_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/local-execution/pairing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Pairing */
+        post: operations["create_pairing_api_local_execution_pairing_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/local-execution/devices/{binding_id}/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Session */
+        post: operations["create_session_api_local_execution_devices__binding_id__session_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/local-execution/devices/{binding_id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke Device */
+        post: operations["revoke_device_api_local_execution_devices__binding_id__revoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/local-execution/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Runs */
+        get: operations["list_runs_api_local_execution_runs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/local-execution/device/pair-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Pair Preview */
+        post: operations["pair_preview_api_local_execution_device_pair_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/local-execution/device/pair": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Pair */
+        post: operations["pair_api_local_execution_device_pair_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/local-execution/device/authorize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Authorize */
+        post: operations["authorize_api_local_execution_device_authorize_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/local-execution/device/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Events */
+        post: operations["events_api_local_execution_device_events_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/result-imports/refresh": {
         parameters: {
             query?: never;
@@ -2134,6 +2287,13 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AcceptedEvent */
+        AcceptedEvent: {
+            /** Run Id */
+            run_id: string;
+            /** Sequence */
+            sequence: number;
+        };
         /** AccountStatusUpdate */
         AccountStatusUpdate: {
             /**
@@ -2403,6 +2563,63 @@ export interface components {
             /** Can Manage */
             can_manage: boolean;
         };
+        /** CentralRun */
+        CentralRun: {
+            /** Id */
+            id: string;
+            /** Source Run Id */
+            source_run_id?: string | null;
+            /** Batch Id */
+            batch_id?: string | null;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "DIRECT" | "BATCH";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "QUEUED" | "RUNNING" | "AWAITING_COMPLETION" | "SUCCEEDED" | "FAILED" | "COMPLETED" | "INTERRUPTED";
+            /** Program Name */
+            program_name: string;
+            /** Program Version */
+            program_version: string;
+            /** Input Path */
+            input_path: string;
+            /** Working Directory */
+            working_directory: string;
+            /** Created At */
+            created_at: string;
+            /** Started At */
+            started_at?: string | null;
+            /** Completed At */
+            completed_at?: string | null;
+            /** Exit Code */
+            exit_code?: number | null;
+            /** Note */
+            note?: string | null;
+            /** Error */
+            error?: string | null;
+            context: components["schemas"]["ManagedContext"];
+            /** Program Snapshot */
+            program_snapshot?: {
+                [key: string]: unknown;
+            };
+            /** Binding Id */
+            binding_id: string;
+            /** Device Id */
+            device_id: string;
+            /** Host Name */
+            host_name: string;
+            /** Actor User Id */
+            actor_user_id: string;
+            /**
+             * Synced At
+             * Format: date-time
+             */
+            synced_at: string;
+        };
         /** DashboardClone */
         DashboardClone: {
             /** Name */
@@ -2487,6 +2704,95 @@ export interface components {
             /** Files */
             files: components["schemas"]["FileResponse"][];
             selected_version: components["schemas"]["VersionResponse"];
+        };
+        /** DeviceAuthorize */
+        DeviceAuthorize: {
+            /** Binding Id */
+            binding_id: string;
+            /** Session Token */
+            session_token: string;
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "catalog" | "history" | "execute" | "retry" | "complete";
+            context?: components["schemas"]["ManagedContext"] | null;
+        };
+        /** DeviceAuthorizeResponse */
+        DeviceAuthorizeResponse: {
+            /** User Id */
+            user_id: string;
+            /** Display Name */
+            display_name: string;
+            context?: components["schemas"]["ManagedContext"] | null;
+            /** Grant Id */
+            grant_id?: string | null;
+        };
+        /** DeviceEvents */
+        DeviceEvents: {
+            /** Binding Id */
+            binding_id: string;
+            /** Events */
+            events: components["schemas"]["DeviceRunEvent"][];
+        };
+        /** DeviceEventsResponse */
+        DeviceEventsResponse: {
+            /** Accepted */
+            accepted: components["schemas"]["AcceptedEvent"][];
+        };
+        /** DevicePair */
+        DevicePair: {
+            /** Device Id */
+            device_id: string;
+            /** Host Name */
+            host_name: string;
+            /** Device Secret */
+            device_secret: string;
+        };
+        /** DevicePairPreview */
+        DevicePairPreview: {
+            /** Device Id */
+            device_id: string;
+        };
+        /** DeviceRead */
+        DeviceRead: {
+            /** Id */
+            id: string;
+            /** Device Id */
+            device_id: string;
+            /** Host Name */
+            host_name: string;
+            /** User Id */
+            user_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Revoked At */
+            revoked_at?: string | null;
+        };
+        /** DeviceRunEvent */
+        DeviceRunEvent: {
+            /** Sequence */
+            sequence: number;
+            /** Grant Id */
+            grant_id: string;
+            run: components["schemas"]["LocalRun"];
+        };
+        /** DeviceSessionResponse */
+        DeviceSessionResponse: {
+            /** Token */
+            token: string;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Binding Id */
+            binding_id: string;
+            /** User Id */
+            user_id: string;
         };
         /** DropVideoEvaluation */
         DropVideoEvaluation: {
@@ -2703,12 +3009,67 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** LocalRun */
+        LocalRun: {
+            /** Id */
+            id: string;
+            /** Source Run Id */
+            source_run_id?: string | null;
+            /** Batch Id */
+            batch_id?: string | null;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "DIRECT" | "BATCH";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "QUEUED" | "RUNNING" | "AWAITING_COMPLETION" | "SUCCEEDED" | "FAILED" | "COMPLETED" | "INTERRUPTED";
+            /** Program Name */
+            program_name: string;
+            /** Program Version */
+            program_version: string;
+            /** Input Path */
+            input_path: string;
+            /** Working Directory */
+            working_directory: string;
+            /** Created At */
+            created_at: string;
+            /** Started At */
+            started_at?: string | null;
+            /** Completed At */
+            completed_at?: string | null;
+            /** Exit Code */
+            exit_code?: number | null;
+            /** Note */
+            note?: string | null;
+            /** Error */
+            error?: string | null;
+            context: components["schemas"]["ManagedContext"];
+            /** Program Snapshot */
+            program_snapshot?: {
+                [key: string]: unknown;
+            };
+        };
         /** LoginPayload */
         LoginPayload: {
             /** Username */
             username: string;
             /** Password */
             password: string;
+        };
+        /** ManagedContext */
+        ManagedContext: {
+            /** Request Id */
+            request_id: string;
+            /** Work Item Id */
+            work_item_id: string;
+            /** Task Name */
+            task_name: string;
+            /** Actor */
+            actor: string;
         };
         /**
          * MasterResultRefreshItem
@@ -2855,6 +3216,21 @@ export interface components {
         NaturalLanguageCommand: {
             /** Command */
             command: string;
+        };
+        /** PairingCreate */
+        PairingCreate: {
+            /** Device Id */
+            device_id: string;
+        };
+        /** PairingTokenResponse */
+        PairingTokenResponse: {
+            /** Pairing Token */
+            pairing_token: string;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
         };
         /** ProjectCreate */
         ProjectCreate: {
@@ -6097,6 +6473,289 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_devices_api_local_execution_devices_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceRead"][];
+                };
+            };
+        };
+    };
+    create_pairing_api_local_execution_pairing_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PairingCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PairingTokenResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_session_api_local_execution_devices__binding_id__session_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                binding_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceSessionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_device_api_local_execution_devices__binding_id__revoke_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                binding_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: boolean;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_runs_api_local_execution_runs_get: {
+        parameters: {
+            query: {
+                request_id: string;
+                work_item_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CentralRun"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pair_preview_api_local_execution_device_pair_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DevicePairPreview"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pair_api_local_execution_device_pair_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DevicePair"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    authorize_api_local_execution_device_authorize_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeviceAuthorize"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceAuthorizeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    events_api_local_execution_device_events_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeviceEvents"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceEventsResponse"];
                 };
             };
             /** @description Validation Error */
