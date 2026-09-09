@@ -27,6 +27,9 @@ PUBLIC_API_PATHS = {
     "/api/health",
     "/api/auth/status",
     "/api/auth/login",
+    "/api/auth/register",
+    "/api/local-helper/distribution",
+    "/api/local-helper/distribution/download",
     "/api/auth/oidc/start",
     "/api/auth/oidc/callback",
 }

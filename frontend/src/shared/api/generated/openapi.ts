@@ -140,6 +140,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/auth/register": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register */
+        post: operations["register_api_auth_register_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Update Password */
+        post: operations["update_password_api_auth_password_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/local-helper/distribution": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Distribution */
+        get: operations["distribution_api_local_helper_distribution_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/local-helper/distribution/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download Distribution */
+        get: operations["download_distribution_api_local_helper_distribution_download_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/users/{user_id}/status": {
         parameters: {
             query?: never;
@@ -3009,6 +3077,48 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /**
+         * LocalHelperDistributionReady
+         * @description A public, secret-free description of the Windows helper archive.
+         */
+        LocalHelperDistributionReady: {
+            /**
+             * Status
+             * @default ready
+             * @constant
+             */
+            status: "ready";
+            /** Version */
+            version: string;
+            /** Filename */
+            filename: string;
+            /**
+             * Artifact Url
+             * @default /api/local-helper/distribution/download
+             * @constant
+             */
+            artifact_url: "/api/local-helper/distribution/download";
+            /** Sha256 */
+            sha256: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /**
+             * Released At
+             * Format: date-time
+             */
+            released_at: string;
+        };
+        /** LocalHelperDistributionUnavailable */
+        LocalHelperDistributionUnavailable: {
+            /**
+             * Status
+             * @default unavailable
+             * @constant
+             */
+            status: "unavailable";
+            /** Reason */
+            reason: string;
+        };
         /** LocalRun */
         LocalRun: {
             /** Id */
@@ -3232,6 +3342,21 @@ export interface components {
              */
             expires_at: string;
         };
+        /** PasswordChangePayload */
+        PasswordChangePayload: {
+            /** Current Password */
+            current_password: string;
+            /** New Password */
+            new_password: string;
+        };
+        /** PasswordChangeResponse */
+        PasswordChangeResponse: {
+            /**
+             * Ok
+             * @constant
+             */
+            ok: true;
+        };
         /** ProjectCreate */
         ProjectCreate: {
             /** Name */
@@ -3281,6 +3406,29 @@ export interface components {
         /** RawUploadResponse */
         RawUploadResponse: {
             stored_file: components["schemas"]["StorageFileResponse"];
+        };
+        /** RegistrationPayload */
+        RegistrationPayload: {
+            /** Username */
+            username: string;
+            /** Display Name */
+            display_name: string;
+            /** Password */
+            password: string;
+        };
+        /** RegistrationResponse */
+        RegistrationResponse: {
+            /** User Id */
+            user_id: string;
+            /** Username */
+            username: string;
+            /**
+             * Account Status
+             * @constant
+             */
+            account_status: "PENDING";
+            /** Message */
+            message: string;
         };
         /** ReportLayoutCatalogResponse */
         ReportLayoutCatalogResponse: {
@@ -4523,6 +4671,110 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    register_api_auth_register_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegistrationPayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegistrationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_password_api_auth_password_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasswordChangePayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PasswordChangeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    distribution_api_local_helper_distribution_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LocalHelperDistributionReady"] | components["schemas"]["LocalHelperDistributionUnavailable"];
+                };
+            };
+        };
+    };
+    download_distribution_api_local_helper_distribution_download_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

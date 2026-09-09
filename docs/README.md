@@ -70,6 +70,7 @@
 
 | 기능 | 문서 |
 |---|---|
+| 개인 회원가입·비밀번호 변경·도우미 설치 | [`personal-onboarding-implementation.md`](personal-onboarding-implementation.md) |
 | 업무 유형·결과 snapshot·마스터 Refresh | [`work-type-request-results-and-master-refresh.md`](work-type-request-results-and-master-refresh.md) |
 | 업무 정의 결과 위젯 | [`work-definition-result-widget-ui-design.md`](work-definition-result-widget-ui-design.md) |
 | 의뢰 접수·SPDM | [`work-type-request-intake-spdm-plan.md`](work-type-request-intake-spdm-plan.md) |

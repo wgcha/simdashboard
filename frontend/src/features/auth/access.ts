@@ -47,6 +47,11 @@ export function effectiveRole(user: AuthUser, projectId: string): ProjectRole | 
   return user.memberships.find((item) => item.project_id === projectId)?.role ?? null
 }
 
+/** Active accounts without a project assignment can use account settings while awaiting assignment. */
+export function isPersonalOnlyAccount(user: AuthUser | null): boolean {
+  return Boolean(user && user.account_status === 'ACTIVE' && !user.is_global_admin && user.memberships.length === 0)
+}
+
 export function policyRole(user: AuthUser, projectId: string): ProjectRole {
   return effectiveRole(user, projectId) ?? 'general'
 }

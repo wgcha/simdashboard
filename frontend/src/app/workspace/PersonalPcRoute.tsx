@@ -3,6 +3,7 @@ import type { AuthUser } from '../../auth'
 import type { MenuId } from '../../features/auth/access'
 import { LocalPcSettingsPage, preloadWorkspaceRouteModule } from '../routing/workspaceScreenModules'
 import { WorkspaceShellLayout } from '../shell/WorkspaceShellLayout'
+import { ChangePasswordForm } from '../../features/auth/ChangePasswordForm'
 
 type Props = {
   user: AuthUser
@@ -24,7 +25,7 @@ export function PersonalPcRoute({ user, menus, databaseBackend, theme, fontSize,
     topbarBreadcrumb={<><span>개인 설정</span><b>/</b><strong>내 PC 설정</strong></>}
     actions={<div className="theme-switch" role="group" aria-label="화면 테마 선택"><button type="button" aria-pressed={theme === 'light'} onClick={() => onThemeChange('light')}>라이트</button><button type="button" aria-pressed={theme === 'dark'} onClick={() => onThemeChange('dark')}>다크</button></div>}>
     <Suspense fallback={<div className="full-state">내 PC 설정을 준비하고 있습니다.</div>}>
-      <LocalPcSettingsPage key={user.id} currentUserId={user.id} currentUserName={user.display_name} />
+      <LocalPcSettingsPage key={user.id} currentUserId={user.id} currentUserName={user.display_name} passwordSettings={<ChangePasswordForm />} />
     </Suspense>
   </WorkspaceShellLayout>
 }

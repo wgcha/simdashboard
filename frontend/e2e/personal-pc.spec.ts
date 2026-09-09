@@ -26,6 +26,11 @@ test('일반 사용자가 기본 내 PC 설정에서 도우미 준비와 개인 
   page.on('pageerror', (error) => pageErrors.push(error.message))
   // No project data is needed to enter this built-in account screen.
   await page.route('**/api/projects', (route) => route.fulfill({ json: [] }))
+  await page.route('**/api/local-helper/distribution', (route) => route.fulfill({ json: {
+    status: 'ready', version: 'test-1', filename: 'local-helper-windows-x64.zip',
+    artifact_url: '/api/local-helper/distribution/download', sha256: 'a'.repeat(64),
+    size_bytes: 1024, released_at: '2026-09-09T00:00:00Z',
+  } }))
   await loginWorkspace(page, 'e2e-viewer', '/workspace/settings/local-pc')
   const settings = page.getByTestId('local-pc-settings')
   await expect(page).toHaveURL(/\/workspace\/settings\/local-pc/)
@@ -35,9 +40,9 @@ test('일반 사용자가 기본 내 PC 설정에서 도우미 준비와 개인 
   // its first reply can legitimately take us directly to the pairing state.
   await expect(settings.getByRole('button', { name: '다시 확인', exact: true })).toBeVisible()
   await expect(settings.getByRole('button', { name: '다시 확인', exact: true })).toBeEnabled()
-  await expect(settings.getByRole('button', { name: 'PC 도우미 시작 파일 받기' })).toBeEnabled()
+  await expect(settings.getByRole('button', { name: 'PC 도우미 설치 파일 받기' })).toBeEnabled()
   const downloadEvent = page.waitForEvent('download')
-  await settings.getByRole('button', { name: 'PC 도우미 시작 파일 받기' }).click()
+  await settings.getByRole('button', { name: 'PC 도우미 설치 파일 받기' }).click()
   const download = await downloadEvent
   expect(download.suggestedFilename()).toBe('SimulationWorkbench-local-helper-setup.bat')
   const setupPath = await download.path()

@@ -15,6 +15,7 @@ type WorkspaceNavigationOptions = {
   onCancelEditing: () => void
   onDashboardRoute: () => void
   onNotice: (message: string) => void
+  personalOnly: boolean
   visibleMenus: readonly { id: MenuId }[]
 }
 
@@ -50,6 +51,7 @@ export function useWorkspaceNavigation({
   onCancelEditing,
   onDashboardRoute,
   onNotice,
+  personalOnly,
   visibleMenus,
 }: WorkspaceNavigationOptions) {
   const location = useLocation()
@@ -73,16 +75,21 @@ export function useWorkspaceNavigation({
   const [workspaceNavigationPending, setWorkspaceNavigationPending] = useState(false)
 
   useEffect(() => {
-    if (!authUser || authUser.account_status !== 'ACTIVE' || !menuPolicyReady) return
+    if (!authUser || authUser.account_status !== 'ACTIVE' || personalOnly || !menuPolicyReady) return
     // Load only permitted, frequently used screens after the first paint. No data requests.
     const timers = (['dashboard', 'data', 'workbench'] as const)
       .filter((page) => allowedPages.has(page))
       .map((page, index) => window.setTimeout(() => preloadWorkspaceRouteModule(page), 600 + index * 250))
     return () => timers.forEach(window.clearTimeout)
-  }, [authUser?.id, authUser?.account_status, menuPolicyReady, allowedPages])
+  }, [authUser?.id, authUser?.account_status, menuPolicyReady, allowedPages, personalOnly])
 
   useEffect(() => {
-    if (!authUser || authUser.account_status !== 'ACTIVE' || !menuPolicyReady) return
+    if (!authUser || authUser.account_status !== 'ACTIVE') return
+    if (personalOnly) {
+      if (workspacePage !== 'local_pc') navigate(workspacePathForPage('local_pc')!, { replace: true })
+      return
+    }
+    if (!menuPolicyReady) return
     const fallbackPath = visibleMenus[0] ? workspacePathForPage(visibleMenus[0].id) : undefined
     if (isWorkspaceIndex) {
       if (fallbackPath) navigate(fallbackPath, { replace: true })
@@ -92,7 +99,7 @@ export function useWorkspaceNavigation({
     if (allowedPages.has(matchedWorkspaceRoute.page) || !fallbackPath) return
     onNotice('현재 권한으로 열 수 없는 화면입니다. 허용된 첫 화면으로 이동했습니다.')
     navigate(fallbackPath, { replace: true })
-  }, [allowedPages, authUser?.account_status, authUser?.id, isWorkspaceIndex, matchedWorkspaceRoute, menuPolicyReady, navigate, onNotice, visibleMenus])
+  }, [allowedPages, authUser?.account_status, authUser?.id, isWorkspaceIndex, matchedWorkspaceRoute, menuPolicyReady, navigate, onNotice, personalOnly, visibleMenus, workspacePage])
 
   useEffect(() => {
     if (!editMode) return

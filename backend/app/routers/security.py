@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from starlette.responses import JSONResponse, RedirectResponse
+from ..adapters.http.auth_validation import PrivateInputRoute
 
 from ..config import security_settings
 from ..modules.access_control import AUDIT_VIEW, COMPANY_PERMISSIONS, SYSTEM_USER_APPROVE, require_permission
@@ -27,7 +28,7 @@ from ..services.oidc_service import (
 )
 
 
-router = APIRouter()
+router = APIRouter(route_class=PrivateInputRoute)
 OIDC_FLOW_COOKIE = "analysis_canvas_oidc_flow"
 
 
@@ -197,6 +198,7 @@ def auth_status() -> dict[str, Any]:
     return {
         "mode": settings.auth_mode,
         "authentication_required": settings.auth_mode != "disabled",
+        "registration_enabled": settings.auth_mode == "password",
         "oidc_start_url": "/api/auth/oidc/start" if settings.auth_mode == "oidc" else None,
     }
 
@@ -264,7 +266,7 @@ def login(payload: LoginPayload, request: Request, response: Response) -> dict[s
     principal = authenticate_credentials(payload.username, payload.password)
     if not principal:
         write_audit_event(request=request, principal=None, status_code=401, action="LOGIN_FAILED", detail={"username": payload.username.strip().lower()})
-        raise HTTPException(401, "아이디 또는 비밀번호가 올바르지 않습니다.", headers={"WWW-Authenticate": "Bearer"})
+        raise HTTPException(401, "아이디·비밀번호와 계정 승인 상태를 확인해 주세요.", headers={"WWW-Authenticate": "Bearer"})
     token, expires_at = create_access_token(principal)
     settings = security_settings()
     response.set_cookie(

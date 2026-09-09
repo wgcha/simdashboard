@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+from .auth_limits import PASSWORD_MAX_LENGTH, PASSWORD_USERNAME_MAX_LENGTH
 
 
 WidgetType = Literal[
@@ -440,5 +441,5 @@ class ReviewItemUpdate(BaseModel):
 
 
 class LoginPayload(BaseModel):
-    username: str = Field(min_length=2, max_length=80)
-    password: str = Field(min_length=1, max_length=256)
+    username: str = Field(min_length=2, max_length=PASSWORD_USERNAME_MAX_LENGTH)
+    password: str = Field(min_length=1, max_length=PASSWORD_MAX_LENGTH)

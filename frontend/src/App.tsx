@@ -49,7 +49,8 @@ import { DEFAULT_PORTFOLIO_LAYOUT, DEFAULT_WORKFLOW_DASHBOARD_LAYOUT, loadPortfo
 import { ReportExportDialog } from './features/reports/ReportExportDialog'
 import { useReportExportController } from './features/reports/useReportExportController'
 import { ApprovalPendingScreen, LoginScreen } from './features/auth/LoginScreen'
-import { hasPermission, visibleMenuItems, type MenuId, type MenuPolicy } from './features/auth/access'
+import { accountApi } from './shared/api/account'
+import { hasPermission, isPersonalOnlyAccount, visibleMenuItems, type MenuId, type MenuPolicy } from './features/auth/access'
 import { WORKSPACE_ROUTES_BY_ID } from './features/navigation/workspaceRouteRegistry'
 import { AccessAdminPage, AuditAdminPage, MenuPolicyAdminPage, ProjectResultProfileBinding, preloadWorkspaceRouteModule, SimulationWorkbench, WorkbenchTypeAdmin } from './app/routing/workspaceRouteModules'
 import { RequestIntakePage } from './features/workbench/RequestIntakePage'
@@ -72,6 +73,7 @@ function App() {
   const [authReady, setAuthReady] = useState(false)
   const [authRequired, setAuthRequired] = useState(false)
   const [authMode, setAuthMode] = useState<'disabled' | 'password' | 'oidc'>('disabled')
+  const [registrationEnabled, setRegistrationEnabled] = useState(false)
   const [authUser, setAuthUser] = useState<AuthUser | null>(null)
   const [menuPolicy, setMenuPolicy] = useState<MenuPolicy | null>(null)
   const [menuPolicyReady, setMenuPolicyReady] = useState(false)
@@ -158,6 +160,7 @@ function App() {
     onCancelEditing: cancelEditing,
     onDashboardRoute: resetDashboardWorkspace,
     onNotice: setNotice,
+    personalOnly: isPersonalOnlyAccount(authUser),
     visibleMenus,
   }); const enterWorkspace = (...args: Parameters<typeof navigateWorkspace>) => { beginContextEntry(); navigateWorkspace(...args) }
   const { analysisRuns, selectedAnalysisRunId, analysisRunsLoading, analysisRunChanging, analysisRunError, selectAnalysisRun } = useResultVersionSelection({
@@ -200,6 +203,7 @@ function App() {
         const status = await api.authStatus()
         setAuthMode(status.mode)
         setAuthRequired(status.authentication_required)
+        setRegistrationEnabled(status.registration_enabled)
         try {
           const verified = await api.me()
           setAuthUser(verified)
@@ -289,7 +293,7 @@ function App() {
         setActiveView('workflow')
   }, [])
   const { state: workspaceBootstrap, invalidate: invalidateWorkspaceBootstrap } = useWorkspaceBootstrap({
-    userKey: authReady && authUser?.account_status === 'ACTIVE' ? authUser.id : null,
+    userKey: authReady && authUser?.account_status === 'ACTIVE' && !isPersonalOnlyAccount(authUser) ? authUser.id : null,
     onStart: () => setError(''),
     onResolved: applyInitialWorkspace,
   })
@@ -861,7 +865,7 @@ function App() {
     return <div className="full-state"><LoaderCircle className="spin" /> 인증 설정을 확인하고 있습니다.</div>
   }
   if (authRequired && !authUser) {
-    return <LoginScreen mode={authMode === 'oidc' ? 'oidc' : 'password'} error={authError} onLogin={handleLogin} theme={theme} onThemeChange={setTheme} />
+    return <LoginScreen mode={authMode === 'oidc' ? 'oidc' : 'password'} error={authError} onLogin={handleLogin} onRegister={accountApi.register} registrationEnabled={registrationEnabled} theme={theme} onThemeChange={setTheme} />
   }
   if (authUser?.account_status === 'PENDING') {
     return <ApprovalPendingScreen displayName={authUser.display_name} onLogout={() => void logout()} />

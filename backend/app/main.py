@@ -35,6 +35,8 @@ from .schemas.api import (
 )
 from .security import SecurityMiddleware, write_audit_event
 from .routers.security import router as security_router
+from .routers.auth_accounts import router as auth_accounts_router
+from .routers.local_helper_distribution import router as local_helper_distribution_router
 from .routers.access_control import router as access_control_router
 from .routers.workbench import router as workbench_router
 from .routers.modeling_catalog import router as modeling_catalog_router
@@ -95,6 +97,8 @@ app.add_middleware(
 )
 app.mount("/assets", StaticFiles(directory=str(__import__("pathlib").Path(__file__).resolve().parents[1] / "public_assets")), name="assets")
 app.include_router(security_router)
+app.include_router(auth_accounts_router)
+app.include_router(local_helper_distribution_router)
 app.include_router(access_control_router)
 app.include_router(workbench_router)
 app.include_router(modeling_catalog_router)

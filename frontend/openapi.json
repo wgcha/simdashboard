@@ -333,6 +333,131 @@
         }
       }
     },
+    "/api/auth/register": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Register",
+        "operationId": "register_api_auth_register_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegistrationPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistrationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/password": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Update Password",
+        "operationId": "update_password_api_auth_password_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordChangePayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasswordChangeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/local-helper/distribution": {
+      "get": {
+        "tags": [
+          "local-helper-distribution"
+        ],
+        "summary": "Distribution",
+        "operationId": "distribution_api_local_helper_distribution_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/LocalHelperDistributionReady"
+                    },
+                    {
+                      "$ref": "#/components/schemas/LocalHelperDistributionUnavailable"
+                    }
+                  ],
+                  "title": "Response Distribution Api Local Helper Distribution Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/local-helper/distribution/download": {
+      "get": {
+        "tags": [
+          "local-helper-distribution"
+        ],
+        "summary": "Download Distribution",
+        "operationId": "download_distribution_api_local_helper_distribution_download_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          }
+        }
+      }
+    },
     "/api/admin/users/{user_id}/status": {
       "patch": {
         "tags": [
@@ -9620,6 +9745,81 @@
         ],
         "title": "LoadCaseCreate"
       },
+      "LocalHelperDistributionReady": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "ready",
+            "title": "Status",
+            "default": "ready"
+          },
+          "version": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Version"
+          },
+          "filename": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]+\\.zip$",
+            "title": "Filename"
+          },
+          "artifact_url": {
+            "type": "string",
+            "const": "/api/local-helper/distribution/download",
+            "title": "Artifact Url",
+            "default": "/api/local-helper/distribution/download"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Sha256"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Size Bytes"
+          },
+          "released_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Released At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "version",
+          "filename",
+          "sha256",
+          "size_bytes",
+          "released_at"
+        ],
+        "title": "LocalHelperDistributionReady",
+        "description": "A public, secret-free description of the Windows helper archive."
+      },
+      "LocalHelperDistributionUnavailable": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "unavailable",
+            "title": "Status",
+            "default": "unavailable"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "reason"
+        ],
+        "title": "LocalHelperDistributionUnavailable"
+      },
       "LocalRun": {
         "properties": {
           "id": {
@@ -10302,6 +10502,43 @@
         ],
         "title": "PairingTokenResponse"
       },
+      "PasswordChangePayload": {
+        "properties": {
+          "current_password": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Current Password"
+          },
+          "new_password": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 12,
+            "title": "New Password"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "current_password",
+          "new_password"
+        ],
+        "title": "PasswordChangePayload"
+      },
+      "PasswordChangeResponse": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": true,
+            "title": "Ok"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ok"
+        ],
+        "title": "PasswordChangeResponse"
+      },
       "ProjectCreate": {
         "properties": {
           "name": {
@@ -10445,6 +10682,66 @@
           "stored_file"
         ],
         "title": "RawUploadResponse"
+      },
+      "RegistrationPayload": {
+        "properties": {
+          "username": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 3,
+            "pattern": "^[a-z0-9][a-z0-9._-]{2,79}$",
+            "title": "Username"
+          },
+          "display_name": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Display Name"
+          },
+          "password": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 12,
+            "title": "Password"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "username",
+          "display_name",
+          "password"
+        ],
+        "title": "RegistrationPayload"
+      },
+      "RegistrationResponse": {
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "title": "User Id"
+          },
+          "username": {
+            "type": "string",
+            "title": "Username"
+          },
+          "account_status": {
+            "type": "string",
+            "const": "PENDING",
+            "title": "Account Status"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "user_id",
+          "username",
+          "account_status",
+          "message"
+        ],
+        "title": "RegistrationResponse"
       },
       "ReportLayoutCatalogResponse": {
         "properties": {

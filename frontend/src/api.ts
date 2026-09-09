@@ -29,7 +29,8 @@ function adaptAuthStatus(value: unknown) {
   requireStringField(item, 'mode', 'authStatus')
   requireBooleanField(item, 'authentication_required', 'authStatus')
   if (!['disabled', 'password', 'oidc'].includes(item.mode as string)) throw new TypeError('authStatus.mode 응답 값이 올바르지 않습니다.')
-  return item as { mode: 'disabled' | 'password' | 'oidc'; authentication_required: boolean; oidc_start_url: string | null }
+  if (item.registration_enabled !== undefined && typeof item.registration_enabled !== 'boolean') throw new TypeError('authStatus.registration_enabled 응답 형식이 올바르지 않습니다.')
+  return { ...item, registration_enabled: item.registration_enabled === true } as { mode: 'disabled' | 'password' | 'oidc'; authentication_required: boolean; registration_enabled: boolean; oidc_start_url: string | null }
 }
 
 function adaptLogin(value: unknown) {

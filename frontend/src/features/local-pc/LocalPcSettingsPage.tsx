@@ -1,12 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { Check, CircleAlert, Download, FolderOpen, Link2, LoaderCircle, Monitor, Pencil, RefreshCw, Search, Settings2, Trash2, Unplug, WandSparkles, X } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { Check, CircleAlert, FolderOpen, Link2, LoaderCircle, Monitor, Pencil, RefreshCw, Search, Settings2, Trash2, Unplug, WandSparkles, X } from 'lucide-react'
+import { api } from '../../api'
 import { localExecutionApi, type ManagedDevice } from '../../shared/api/localExecution'
 import { localRunnerApi, type LocalProgram, type LocalProgramCandidate, type LocalProgramInput } from '../../shared/api/localRunner'
 import { useManagedLocalConnection } from '../../shared/local-execution/useManagedLocalConnection'
-import { downloadLocalHelperSetup, resolveHelperSetupAddress } from './setupLauncher'
+import { LocalHelperInstallCard } from './LocalHelperInstallCard'
 import './local-pc-settings.css'
 
-type Props = { currentUserId: string; currentUserName?: string }
+type Props = { currentUserId: string; currentUserName?: string; passwordSettings?: ReactNode }
 type Draft = { name: string; version: string; keywords: string; executable_path: string; arguments: string }
 type Action = 'programs' | 'discover' | 'save' | 'remove' | 'pick' | 'devices'
 
@@ -53,22 +54,13 @@ function candidateDraft(candidate: LocalProgramCandidate): Draft {
   return { name: candidate.name, version: candidate.version, keywords: candidate.keywords.join(', '), executable_path: candidate.executable_path, arguments: JSON.stringify(candidate.arguments) }
 }
 
-function SetupInstructions({ autoStart, setAutoStart, onDownload, busy }: { autoStart: boolean; setAutoStart: (value: boolean) => void; onDownload: () => void; busy: boolean }) {
-  return <section className="local-pc-setup-card" aria-labelledby="local-pc-setup-heading">
-    <div className="local-pc-card-heading"><span className="local-pc-eyebrow"><Download aria-hidden="true" /> FIRST-TIME SETUP</span><h2 id="local-pc-setup-heading">PC 도우미 준비</h2><p>기존에 설치한 Workbench 폴더를 선택하세요. 처음 쓰는 PC는 Workbench 설치가 먼저 필요합니다.</p></div>
-    <div className="local-pc-setup-actions"><label className="local-pc-check"><input type="checkbox" checked={autoStart} onChange={(event) => setAutoStart(event.target.checked)} /><span>Windows 로그인 시 자동 시작</span></label><button type="button" className="local-pc-primary" onClick={onDownload} disabled={busy}><Download aria-hidden="true" /> PC 도우미 시작 파일 받기</button></div>
-    <p className="local-pc-setup-note">받은 파일을 실행하고 기존 설치 폴더를 선택한 뒤 이 화면에서 다시 확인하세요. 최초 한 번 필요합니다.</p>
-  </section>
-}
-
 function LoggedOutLocalPcSettings() {
   return <section className="local-pc-settings" data-testid="local-pc-settings"><header className="local-pc-page-header"><span className="local-pc-eyebrow"><Monitor aria-hidden="true" /> PERSONAL PC</span><h1>내 PC 설정</h1><p>로그인한 계정에 연결된 PC와 로컬 프로그램을 관리합니다.</p></header><section className="local-pc-login-required" role="status"><CircleAlert aria-hidden="true" /><div><strong>로그인이 필요합니다.</strong><p>내 PC 연결과 프로그램 목록은 로그인한 계정별로 안전하게 관리됩니다.</p></div></section></section>
 }
 
-function AuthenticatedLocalPcSettings({ currentUserId, currentUserName }: Props) {
+function AuthenticatedLocalPcSettings({ currentUserId, currentUserName, passwordSettings, authMode }: Props & { authMode: 'password' | 'oidc' }) {
   const connection = useManagedLocalConnection(currentUserId)
   const { status, error: connectionError, identity, device, session, health, token, connect, disconnect } = connection
-  const [autoStart, setAutoStart] = useState(true)
   const [programs, setPrograms] = useState<LocalProgram[]>([])
   const [discoveries, setDiscoveries] = useState<LocalProgramCandidate[]>([])
   const [query, setQuery] = useState('')
@@ -138,11 +130,6 @@ function AuthenticatedLocalPcSettings({ currentUserId, currentUserName }: Props)
     else { invalidate(); cancelProgramRead(); setBusy(''); setPrograms([]); setDiscoveries([]) }
   }, [cancelProgramRead, invalidate, loadDevices, loadPrograms, status, token])
 
-  const downloadSetup = () => {
-    try { const address = resolveHelperSetupAddress(); downloadLocalHelperSetup({ ...address, autoStart }); setNotice('PC 도우미 시작 파일을 준비했습니다.') }
-    catch (reason) { setError(friendlyError(reason)) }
-  }
-
   const runDiscover = async () => {
     if (!token) return
     const action = startAction('discover')
@@ -198,9 +185,9 @@ function AuthenticatedLocalPcSettings({ currentUserId, currentUserName }: Props)
 
   return <section className="local-pc-settings" data-testid="local-pc-settings">
     <header className="local-pc-page-header"><div><span className="local-pc-eyebrow"><Monitor aria-hidden="true" /> PERSONAL PC</span><h1>내 PC 설정</h1><p>로그인한 계정에 연결된 PC와 로컬 프로그램을 관리합니다.</p></div><span className={stateClass}>{statusText[status] ?? status}</span></header>
-    <section className="local-pc-account-card" aria-label="내 계정과 PC 상태"><div className="local-pc-account"><span className="local-pc-eyebrow">ACCOUNT</span><strong>{currentUserName || '내 계정'}</strong></div><div className="local-pc-host"><span className="local-pc-eyebrow">THIS PC</span><strong>{health?.host_name || identity?.host_name || '이 PC를 확인하는 중'}</strong></div><div className="local-pc-account-actions">{status === 'CONNECTED' ? <button type="button" className="local-pc-secondary" onClick={() => void disconnectCurrent()} disabled={busyUi}><Unplug aria-hidden="true" /> 이 PC 연결 해제</button> : status === 'NEEDS_PAIRING' ? <button type="button" className="local-pc-primary" onClick={() => connect()} disabled={busyUi}><Link2 aria-hidden="true" /> 이 PC 연결</button> : status === 'DISCONNECTED' ? <><button type="button" className="local-pc-primary" onClick={() => connect()} disabled={busyUi}><Link2 aria-hidden="true" /> 이 PC 연결</button><button type="button" className="local-pc-secondary" onClick={() => connection.refresh()} disabled={busyUi}><RefreshCw aria-hidden="true" /> 다시 확인</button></> : status === 'HELPER_REQUIRED' || status === 'ERROR' ? <button type="button" className="local-pc-secondary" onClick={() => connection.refresh()} disabled={busyUi}><RefreshCw aria-hidden="true" /> 다시 확인</button> : null}</div></section>
-    {connectionError && <div className="local-pc-alert" role="alert"><CircleAlert aria-hidden="true" /><span>{connectionError}</span></div>}
-    {(status === 'HELPER_REQUIRED' || (status === 'ERROR' && !identity?.managed)) && <SetupInstructions autoStart={autoStart} setAutoStart={setAutoStart} onDownload={downloadSetup} busy={Boolean(busy)} />}
+    <section className="local-pc-account-card" aria-label="내 계정과 PC 상태"><div className="local-pc-account"><span className="local-pc-eyebrow">ACCOUNT</span><strong>{currentUserName || '내 계정'}</strong></div><div className="local-pc-host"><span className="local-pc-eyebrow">THIS PC</span><strong>{health?.host_name || identity?.host_name || (status === 'HELPER_REQUIRED' ? '도우미 설치 후 확인' : '이 PC를 확인하는 중')}</strong></div><div className="local-pc-account-actions">{status === 'CONNECTED' ? <button type="button" className="local-pc-secondary" onClick={() => void disconnectCurrent()} disabled={busyUi}><Unplug aria-hidden="true" /> 이 PC 연결 해제</button> : status === 'NEEDS_PAIRING' ? <button type="button" className="local-pc-primary" onClick={() => connect()} disabled={busyUi}><Link2 aria-hidden="true" /> 이 PC 연결</button> : status === 'DISCONNECTED' ? <><button type="button" className="local-pc-primary" onClick={() => connect()} disabled={busyUi}><Link2 aria-hidden="true" /> 이 PC 연결</button><button type="button" className="local-pc-secondary" onClick={() => connection.refresh()} disabled={busyUi}><RefreshCw aria-hidden="true" /> 다시 확인</button></> : status === 'HELPER_REQUIRED' || status === 'ERROR' ? <button type="button" className="local-pc-secondary" onClick={() => connection.refresh()} disabled={busyUi}><RefreshCw aria-hidden="true" /> 다시 확인</button> : null}</div></section>
+    {connectionError && status !== 'HELPER_REQUIRED' && <div className="local-pc-alert" role="alert"><CircleAlert aria-hidden="true" /><span>{connectionError}</span></div>}
+    {(status === 'HELPER_REQUIRED' || (status === 'ERROR' && !identity?.managed)) && <LocalHelperInstallCard busy={Boolean(busy)} />}
     {status === 'NEEDS_PAIRING' && <section className="local-pc-pairing-note" role="status"><Link2 aria-hidden="true" /><div><strong>도우미를 찾았습니다.</strong><p>이 PC 연결을 누르고 승인 창을 확인하세요.</p></div></section>}
     {connected && <section className="local-pc-programs-card" aria-labelledby="local-pc-programs-heading">
       <header className="local-pc-section-header"><div><span className="local-pc-eyebrow"><Settings2 aria-hidden="true" /> PROGRAM LIBRARY</span><h2 id="local-pc-programs-heading">이 PC의 프로그램</h2><p>작업 선택 없이 프로그램을 검색하고, 설치 후보를 확인해 등록합니다.</p></div><button type="button" className="local-pc-secondary" onClick={() => void loadPrograms(query)} disabled={busyUi}><RefreshCw aria-hidden="true" /> 새로고침</button></header>
@@ -210,10 +197,24 @@ function AuthenticatedLocalPcSettings({ currentUserId, currentUserName }: Props)
       {programs.length ? <div className="local-pc-program-grid" role="list" aria-label="등록 프로그램 목록">{programs.map((program) => <article className="local-pc-program" key={program.id}><div className="local-pc-program-main"><div><strong>{program.name} <em>v{program.version}</em></strong><small>{program.keywords.length ? program.keywords.join(' · ') : '키워드 없음'}</small><code>{displayPath(program.executable_path)}</code></div><b className={program.available ? 'available' : 'unavailable'}>{program.available ? '사용 가능' : '경로 없음'}</b></div><footer><button type="button" onClick={() => { setDraft({ name: program.name, version: program.version, keywords: program.keywords.join(', '), executable_path: program.executable_path, arguments: JSON.stringify(program.arguments) }); setEditingId(program.id); setShowEditor(true) }} disabled={busyUi}><Pencil aria-hidden="true" /> 수정</button><button type="button" className="danger" onClick={() => void removeProgram(program)} disabled={busyUi}><Trash2 aria-hidden="true" /> 삭제</button></footer></article>)}</div> : <p className="local-pc-empty">{query.trim() ? `“${query.trim()}”에 맞는 등록 프로그램이 없습니다.` : '등록된 프로그램이 없습니다. 자동검색 후보를 선택하거나 직접 등록하세요.'}</p>}
     </section>}
     <section className="local-pc-devices-card" aria-labelledby="local-pc-devices-heading"><header className="local-pc-section-header"><div><span className="local-pc-eyebrow"><Monitor aria-hidden="true" /> ACCOUNT DEVICES</span><h2 id="local-pc-devices-heading">내 계정의 연결 PC</h2><p>현재 로그인한 계정의 연결만 표시됩니다. 다른 계정의 장치는 조회하지 않습니다.</p></div><button type="button" className="local-pc-icon-button" aria-label="연결 PC 새로고침" onClick={() => void loadDevices()} disabled={busyUi}><RefreshCw aria-hidden="true" /></button></header><div className="local-pc-device-list">{devices.length ? devices.map((item) => <article key={item.id} className={item.id === currentDeviceId ? 'current' : ''}><div><strong>{item.host_name}</strong><small>{item.id === currentDeviceId ? '이 PC · 현재 연결' : `연결됨 · ${new Date(item.created_at).toLocaleString('ko-KR')}`}</small></div>{item.id !== currentDeviceId && <button type="button" className="danger" onClick={() => void revokeOther(item)} disabled={busyUi}><Unplug aria-hidden="true" /> 연결 해제</button>}</article>) : <p className="local-pc-empty">연결된 PC가 없습니다.</p>}</div></section>
+    {authMode === 'password' && passwordSettings}
     {(error || notice) && <div className={`local-pc-toast ${error ? 'error' : ''}`} role={error ? 'alert' : 'status'} aria-live="polite">{error ? <CircleAlert aria-hidden="true" /> : <Check aria-hidden="true" />}<span>{error || notice}</span><button type="button" aria-label="알림 닫기" onClick={() => { setError(''); setNotice('') }}><X aria-hidden="true" /></button></div>}
   </section>
 }
 
 export function LocalPcSettingsPage(props: Props) {
-  return props.currentUserId.trim() ? <AuthenticatedLocalPcSettings {...props} /> : <LoggedOutLocalPcSettings />
+  const [authMode, setAuthMode] = useState<'disabled' | 'password' | 'oidc' | null>(null)
+  const [authError, setAuthError] = useState('')
+  const [revision, setRevision] = useState(0)
+  useEffect(() => {
+    let disposed = false
+    setAuthMode(null); setAuthError('')
+    if (!props.currentUserId.trim()) return
+    void api.authStatus().then((value) => { if (!disposed) setAuthMode(value.mode) })
+      .catch((reason: unknown) => { if (!disposed) setAuthError(friendlyError(reason)) })
+    return () => { disposed = true }
+  }, [props.currentUserId, revision])
+  if (!props.currentUserId.trim()) return <LoggedOutLocalPcSettings />
+  if (authMode === 'password' || authMode === 'oidc') return <AuthenticatedLocalPcSettings key={props.currentUserId} {...props} authMode={authMode} />
+  return <section className="local-pc-settings" data-testid="local-pc-settings"><header className="local-pc-page-header"><h1>내 PC 설정</h1></header><section className="local-pc-login-required" role="status"><CircleAlert aria-hidden="true" /><div><strong>{authMode === 'disabled' ? '서버 로그인 설정이 필요합니다.' : authError ? '로그인 설정을 확인하지 못했습니다.' : '로그인 설정을 확인하고 있습니다.'}</strong><p>{authMode === 'disabled' ? '개인별 PC 연결을 사용하려면 서버 관리자가 아이디·비밀번호 로그인 또는 회사 SSO를 활성화해야 합니다. 설정 후 개인 계정으로 로그인해 주세요.' : authError}</p>{(authMode === 'disabled' || authError) && <button type="button" className="local-pc-secondary" onClick={() => setRevision((value) => value + 1)}><RefreshCw aria-hidden="true" /> 로그인 설정 다시 확인</button>}</div></section></section>
 }
