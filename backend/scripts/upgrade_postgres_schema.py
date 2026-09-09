@@ -327,6 +327,36 @@ def inspect_app_revision(app_url: str, *, verify_catalog: bool) -> RevisionState
     return _validated_revision_state(current)
 
 
+def _verify_empty_bootstrap_database(app_url: str) -> None:
+    """Allow first Alembic setup only for a genuinely empty provisioned DB.
+
+    This never provisions a database or roles.  It merely distinguishes a new,
+    owner/app-role provisioned database from a database whose migration metadata
+    is missing after a failed or foreign installation.
+    """
+    try:
+        with psycopg.connect(_psycopg_url(app_url)) as connection:
+            _verify_server_writable(connection, owner=False)
+            _verify_app_no_ddl(connection)
+            if connection.execute("SELECT to_regclass('public.alembic_version')").fetchone()[0] is not None:
+                _fail("DATABASE_SETUP_CHANGED_CONCURRENTLY")
+            relations = connection.execute(
+                "SELECT EXISTS ("
+                "SELECT 1 FROM pg_class AS c "
+                "JOIN pg_namespace AS n ON n.oid = c.relnamespace "
+                "WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') "
+                "AND n.nspname !~ '^pg_' "
+                "AND c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f')"
+                ")"
+            ).fetchone()[0]
+            if relations:
+                _fail("DATABASE_SETUP_REQUIRED")
+    except StartupMigrationError:
+        raise
+    except Exception:
+        _fail("APP_CONNECTION_FAILED")
+
+
 def _owner_url_from_file(path: Path = OWNER_ENV_FILE) -> str:
     try:
         values = dotenv_values(path)
@@ -394,8 +424,38 @@ def _run_alembic_child(owner_url: str) -> None:
         _fail(_safe_alembic_failure_code(result.stderr, result.returncode, stdout=result.stdout))
 
 
-def upgrade_pending_schema(app_url: str, *, owner_env_file: Path = OWNER_ENV_FILE) -> bool:
-    state = inspect_app_revision(app_url, verify_catalog=False)
+def upgrade_pending_schema(
+    app_url: str,
+    *,
+    owner_env_file: Path = OWNER_ENV_FILE,
+    allow_empty_bootstrap: bool = False,
+) -> bool:
+    try:
+        state = inspect_app_revision(app_url, verify_catalog=False)
+    except StartupMigrationError as error:
+        if str(error) != "DATABASE_SETUP_REQUIRED" or not allow_empty_bootstrap:
+            raise
+        owner_url = _owner_url_from_file(owner_env_file)
+        with _owner_migration_lock(app_url, owner_url):
+            try:
+                locked_state = inspect_app_revision(app_url, verify_catalog=False)
+            except StartupMigrationError as locked_error:
+                if str(locked_error) != "DATABASE_SETUP_REQUIRED":
+                    raise
+                _verify_empty_bootstrap_database(app_url)
+                _run_alembic_child(owner_url)
+                verified = inspect_app_revision(app_url, verify_catalog=True)
+                if verified.pending:
+                    _fail("MIGRATION_REVISION_NOT_ADVANCED")
+                return True
+            if not locked_state.pending:
+                inspect_app_revision(app_url, verify_catalog=True)
+                return False
+            _run_alembic_child(owner_url)
+            verified = inspect_app_revision(app_url, verify_catalog=True)
+            if verified.pending:
+                _fail("MIGRATION_REVISION_NOT_ADVANCED")
+            return True
     if not state.pending:
         inspect_app_revision(app_url, verify_catalog=True)
         return False
@@ -415,6 +475,15 @@ def upgrade_pending_schema(app_url: str, *, owner_env_file: Path = OWNER_ENV_FIL
 
 
 def main() -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Apply pending PostgreSQL schema migrations safely.")
+    parser.add_argument(
+        "--allow-empty-bootstrap",
+        action="store_true",
+        help="Permit Alembic initialization only for an empty, pre-provisioned PostgreSQL database.",
+    )
+    args = parser.parse_args()
     settings = database_settings()
     if settings.backend != "postgresql":
         print("PostgreSQL startup migration skipped for the configured database backend.")
@@ -423,7 +492,7 @@ def main() -> int:
         print("[ERROR] PostgreSQL startup migration failed: APP_DATABASE_URL_MISSING.", file=sys.stderr)
         return 2
     try:
-        changed = upgrade_pending_schema(settings.database_url)
+        changed = upgrade_pending_schema(settings.database_url, allow_empty_bootstrap=args.allow_empty_bootstrap)
     except StartupMigrationError as error:
         print(f"[ERROR] PostgreSQL startup migration failed: {error}.", file=sys.stderr)
         return 1

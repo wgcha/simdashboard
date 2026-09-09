@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from app.database import initialize_database
 from app.database_connection import connect
 from app.main import app
+from app.security import hash_password
 from app.services import auth_accounts
 
 
@@ -32,6 +33,14 @@ def test_password_registration_requires_admin_approval_and_supports_password_cha
     initialize_database()
     _password_env(monkeypatch)
     suffix = uuid4().hex[:12]
+    now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).replace(tzinfo=None)
+    with connect() as conn:
+        conn.execute(
+            """INSERT INTO users (id, username, password_hash, display_name, legacy_role, is_active,
+               created_at, updated_at, account_status, is_global_admin)
+               VALUES (?, ?, ?, ?, 'admin', true, ?, ?, 'ACTIVE', true)""",
+            [f"bootstrap-{suffix}", f"bootstrap-{suffix}", hash_password("bootstrap-admin-password"), "Bootstrap", now, now],
+        )
     username = f"member-{suffix}".ljust(80, 'a')
     initial_password = " initial password is long enough "
     replacement_password = "replacement-password-is-long-enough"

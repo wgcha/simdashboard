@@ -42,11 +42,11 @@
 
 소스 ZIP을 **전체 압축 해제**한 뒤 저장소 루트에서 실행합니다. Python, Node.js, Git을 먼저 설치할 필요가 없습니다.
 
-1. **`deploy.bat`** — 최초 환경 설치와 웹 빌드. 완료 메시지가 나올 때까지 기다립니다.
-2. **`start.bat`** — 웹과 API를 시작하고 결과 대시보드를 기본 브라우저에서 엽니다.
+1. **`deploy.bat`** — 환경 설치·웹 빌드 후 기존 DB 백업, 스키마 준비와 최초 관리자 설정을 진행합니다. PostgreSQL 서비스와 app/owner 연결을 먼저 준비합니다.
+2. **`start.bat`** — 웹과 API를 시작하고 회원 로그인 화면을 기본 브라우저에서 엽니다.
 3. 종료할 때는 **`stop.bat`**를 실행합니다.
 
-다시 사용할 때는 `start.bat`만 실행합니다. 소스 업데이트 후에는 `deploy.bat`를 다시 실행합니다. 기존 `.env`와 DB를 보존하며, 새 폴더에서는 DuckDB 로컬 설정을 자동 준비합니다.
+다시 사용할 때는 `start.bat`, 새 버전 적용은 `update.bat`를 실행합니다. 신규 설치와 DB 종류를 지정하지 않은 실행의 기본값은 **PostgreSQL**입니다. 기존 `.env`와 DB를 보존하며, PostgreSQL 연결 설정이 없으면 설정 안내와 함께 중단합니다. 기존 DuckDB는 검증된 이관을 마친 후 PostgreSQL로 전환합니다.
 
 [Issue #15](https://github.com/wgcha/simdashboard/issues/15)의 사내 프록시 설정을 포함합니다. 기본 `auto` 모드는 기존 프록시 환경변수를 우선하고 사내 프록시에 연결할 수 있으면 사용합니다. 사내 인증서가 별도로 필요하면 `DigitalCity.crt`를 `deploy/windows/certs/` 또는 바탕화면에 둡니다. 자세한 설정과 오류 확인은 **[Windows 배치 안내](docs/windows-one-click-deployment.md)**를 따릅니다.
 
@@ -57,8 +57,8 @@
 | 용도 | 설정 | 계약 |
 |---|---|---|
 | 로컬 개발·데모 | `ANALYSIS_DB_BACKEND=duckdb` | 단일 프로세스용이며 `backend/data/*.duckdb`를 자동 초기화합니다. |
-| 동시 사용자 운영 | `ANALYSIS_DB_BACKEND=postgresql` + `DATABASE_URL` | PostgreSQL 18, Alembic migration, 최소 권한 app 역할을 사용합니다. |
-| 로컬 인증 없음 | `AUTH_MODE=disabled` | 개발 전용 로컬 관리자 principal을 사용합니다. |
+| 기본 실행·동시 사용자 운영 | `ANALYSIS_DB_BACKEND=postgresql` + `DATABASE_URL` | Alembic migration과 최소 권한 app 역할을 사용합니다. PostgreSQL 서비스는 별도 준비합니다. |
+| 로컬 인증 없음 | `AUTH_MODE=disabled` + `DEPLOYMENT_PROFILE=local` + `AUTH_ALLOW_INSECURE_LOCAL=true` | 명시적인 개발 설정에서만 로컬 관리자 principal을 사용합니다. |
 | 비밀번호 인증 | `AUTH_MODE=password` | 32자 이상 `AUTH_SECRET_KEY`가 필요합니다. |
 | 사내 SSO | `AUTH_MODE=oidc` | HTTPS OIDC와 directory 설정이 필요합니다. |
 

@@ -4,11 +4,16 @@ param(
     [string]$RepositoryUrl = '',
     [string]$Branch = '',
     [switch]$NoBrowser,
+    [string]$LocalHelperDistributionSource = '',
+    [Uri]$LocalHelperManifestUrl,
     [ValidateSet('auto', 'direct', 'proxy')]
     [string]$NetworkMode = '',
     # Intended for automated validation. A normal double-click remains interactive
     # for the first ZIP/bootstrap run.
-    [switch]$Yes
+    [switch]$Yes,
+    # Keep unattended jobs fail-closed when a first administrator must be
+    # created. Interactive update.bat continues to prompt through deploy.ps1.
+    [switch]$NonInteractive
 )
 
 $ErrorActionPreference = 'Stop'
@@ -25,6 +30,10 @@ $lockAcquired = $false
 $logPath = $null
 $stage = 'startup'
 $failureExitCode = 1
+
+if ($LocalHelperDistributionSource -and $null -ne $LocalHelperManifestUrl) {
+    throw 'Use either -LocalHelperDistributionSource or -LocalHelperManifestUrl, not both.'
+}
 
 function Write-UpdateLog {
     param([string]$Message)
@@ -198,26 +207,24 @@ try {
     Write-Stage 'deploy' 'Refreshing the deployment environment'
     $deployArguments = @()
     if ($NetworkMode) { $deployArguments += @('-NetworkMode', $NetworkMode) }
+    if ($NonInteractive) { $deployArguments += '-NonInteractive' }
     $deployCode = Invoke-ChildPowerShell -ScriptPath (Join-Path $Root 'deploy.ps1') -Arguments $deployArguments
     Complete-Stage 'deploy' $deployCode
-    if ($deployCode -ne 0) { $failureExitCode = $deployCode; throw "Deployment failed (exit code $deployCode). Migration and restart were skipped." }
+    if ($deployCode -ne 0) { $failureExitCode = $deployCode; throw "Deployment failed (exit code $deployCode). The local-helper import and restart were skipped; review the reported deployment stage." }
 
-    Write-Stage 'migration' 'Applying pending PostgreSQL schema migrations'
-    $runtimeModulePath = Join-Path $Root 'scripts\windows\Runtime.psm1'
-    if (-not (Test-Path -LiteralPath $runtimeModulePath -PathType Leaf)) { throw 'Runtime.psm1 was not found after deployment.' }
-    Import-Module $runtimeModulePath -Force
-    $python = Get-ProjectPython
-    $migrationPath = Join-Path $Root 'backend\scripts\upgrade_postgres_schema.py'
-    if (-not (Test-Path -LiteralPath $migrationPath -PathType Leaf)) { throw 'upgrade_postgres_schema.py was not found after deployment.' }
-    $migrationCode = 1
-    Push-Location (Join-Path $Root 'backend')
-    try {
-        & $python $migrationPath
-        $migrationCode = [int]$LASTEXITCODE
+    if ($LocalHelperDistributionSource -or $null -ne $LocalHelperManifestUrl) {
+        Write-Stage 'local-helper-distribution' 'Importing the requested Windows local helper distribution'
+        $helperScript = Join-Path $Root 'scripts\windows\import-local-helper-distribution.ps1'
+        $helperArguments = @('-ProjectRoot', $Root)
+        if ($LocalHelperDistributionSource) { $helperArguments += @('-LocalHelperDistributionSource', $LocalHelperDistributionSource) }
+        else { $helperArguments += @('-LocalHelperManifestUrl', $LocalHelperManifestUrl.AbsoluteUri) }
+        $helperCode = Invoke-ChildPowerShell -ScriptPath $helperScript -Arguments $helperArguments
+        Complete-Stage 'local-helper-distribution' $helperCode
+        if ($helperCode -ne 0) { $failureExitCode = $helperCode; throw 'Local helper distribution import failed. The existing distribution was preserved and the server was not started.' }
     }
-    finally { Pop-Location }
-    Complete-Stage 'migration' $migrationCode
-    if ($migrationCode -ne 0) { $failureExitCode = $migrationCode; throw "Database migration failed (exit code $migrationCode). The new server was not started; review the migration result before retrying." }
+    else {
+        Write-Host 'Local helper distribution was not supplied; existing server distribution was not changed.' -ForegroundColor Yellow
+    }
 
     Write-Stage 'start' 'Starting the updated application'
     $startArguments = @()

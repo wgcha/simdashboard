@@ -17,6 +17,7 @@ BACKEND = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND))
 
 from app.services.media_integrity import media_inventory, require_media_integrity  # noqa: E402
+from scripts.account_backup_inventory import account_inventory  # noqa: E402
 try:  # pragma: no cover - branch depends on ``python script.py`` invocation
     from .postgres_cli import command_env, connection_args, executable, parse_target
 except ImportError:  # pragma: no cover
@@ -113,7 +114,7 @@ def _psycopg_url(value: str) -> str:
     return value.replace("postgresql+psycopg://", "postgresql://", 1)
 
 
-def _snapshot_inventory(database_url: str) -> tuple[psycopg.Connection, str, dict[str, object]]:
+def _snapshot_inventory(database_url: str) -> tuple[psycopg.Connection, str, dict[str, object], dict[str, object]]:
     """Hold a repeatable-read snapshot open for inventory and ``pg_dump``.
 
     PostgreSQL keeps an exported snapshot valid only while its exporting
@@ -126,7 +127,8 @@ def _snapshot_inventory(database_url: str) -> tuple[psycopg.Connection, str, dic
         snapshot = str(connection.execute("SELECT pg_export_snapshot()").fetchone()[0])
         inventory = media_inventory(connection)
         require_media_integrity(inventory)
-        return connection, snapshot, inventory
+        accounts = account_inventory(connection)
+        return connection, snapshot, inventory, accounts
     except BaseException:
         connection.close()
         raise
@@ -150,7 +152,7 @@ def main() -> None:
     _require_unused(final_path, label="backup dump")
     _require_unused(manifest_path, label="backup manifest")
     environment = command_env(target)
-    snapshot_connection, snapshot, inventory = _snapshot_inventory(args.database_url)
+    snapshot_connection, snapshot, inventory, accounts = _snapshot_inventory(args.database_url)
     try:
         temporary_path = _reserve_unique_partial_path(final_path)
         dump_command = [
@@ -172,6 +174,7 @@ def main() -> None:
         "bytes": final_path.stat().st_size,
         "sha256": sha256(final_path),
         "media_inventory": inventory,
+        "account_inventory": accounts,
     }
     _write_manifest_without_overwrite(manifest_path, manifest)
     print(f"PostgreSQL backup verified: file={final_path}, bytes={manifest['bytes']}, sha256={manifest['sha256']}")

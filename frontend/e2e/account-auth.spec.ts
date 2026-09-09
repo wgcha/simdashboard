@@ -24,7 +24,7 @@ test('개인 회원가입 신청 후 관리자 승인 안내와 로그인 화면
   await page.getByLabel('비밀번호 확인').fill('e2e-registration-password')
   await page.getByRole('button', { name: '회원가입 신청', exact: true }).click()
 
-  await expect(page.getByRole('heading', { name: '보안 로그인', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '회원 로그인', exact: true })).toBeVisible()
   await expect(page.getByRole('status')).toContainText('가입 신청이 접수되었습니다.')
   expect(registration).toEqual({ username: 'e2e-personal-user', display_name: 'E2E 개인 사용자', password: 'e2e-registration-password' })
 })
@@ -37,7 +37,8 @@ test('실제 계정을 승인한 뒤 비밀번호 변경과 새 비밀번호 로
   mkdirSync(evidence, { recursive: true })
   const statusResponse = await page.request.get('/api/auth/status')
   const status = await statusResponse.json() as { registration_enabled?: boolean }
-  test.skip(status.registration_enabled !== true, 'password registration is not enabled on this server')
+  if (process.env.E2E_PASSWORD_RELEASE === 'true') expect(status.registration_enabled).toBe(true)
+  else test.skip(status.registration_enabled !== true, 'password registration is not enabled on this server')
 
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
   const username = `e2e-account-${suffix}`

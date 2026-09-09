@@ -71,6 +71,10 @@
 | 기능 | 문서 |
 |---|---|
 | 개인 회원가입·비밀번호 변경·도우미 설치 | [`personal-onboarding-implementation.md`](personal-onboarding-implementation.md) |
+| 개인 계정 첫 화면·기존 사내 설치 전환 검토와 개발 계획 | [`personal-account-entry-rollout-plan.md`](personal-account-entry-rollout-plan.md) |
+| 개인 계정 최초 관리자·업데이트·검증 기록 | [`personal-account-rollout-runbook.md`](personal-account-rollout-runbook.md) |
+| 계정·프로젝트 권한 백업·재설치·이관 | [`account-backup-and-recovery.md`](account-backup-and-recovery.md) |
+| Windows 사내 HTTPS 템플릿 | [`windows-caddy-intranet.md`](windows-caddy-intranet.md) |
 | 업무 유형·결과 snapshot·마스터 Refresh | [`work-type-request-results-and-master-refresh.md`](work-type-request-results-and-master-refresh.md) |
 | 업무 정의 결과 위젯 | [`work-definition-result-widget-ui-design.md`](work-definition-result-widget-ui-design.md) |
 | 의뢰 접수·SPDM | [`work-type-request-intake-spdm-plan.md`](work-type-request-intake-spdm-plan.md) |

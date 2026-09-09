@@ -30,7 +30,10 @@ function adaptAuthStatus(value: unknown) {
   requireBooleanField(item, 'authentication_required', 'authStatus')
   if (!['disabled', 'password', 'oidc'].includes(item.mode as string)) throw new TypeError('authStatus.mode 응답 값이 올바르지 않습니다.')
   if (item.registration_enabled !== undefined && typeof item.registration_enabled !== 'boolean') throw new TypeError('authStatus.registration_enabled 응답 형식이 올바르지 않습니다.')
-  return { ...item, registration_enabled: item.registration_enabled === true } as { mode: 'disabled' | 'password' | 'oidc'; authentication_required: boolean; registration_enabled: boolean; oidc_start_url: string | null }
+  if (item.setup_required !== undefined && typeof item.setup_required !== 'boolean') throw new TypeError('authStatus.setup_required 응답 형식이 올바르지 않습니다.')
+  if (item.setup_reason !== undefined && item.setup_reason !== null && typeof item.setup_reason !== 'string') throw new TypeError('authStatus.setup_reason 응답 형식이 올바르지 않습니다.')
+  const setupRequired = item.setup_required === true || (item.setup_required === undefined && item.mode === 'disabled')
+  return { ...item, registration_enabled: item.registration_enabled === true, setup_required: setupRequired, setup_reason: typeof item.setup_reason === 'string' ? item.setup_reason : undefined } as { mode: 'disabled' | 'password' | 'oidc'; authentication_required: boolean; registration_enabled: boolean; setup_required: boolean; setup_reason?: string | null; oidc_start_url: string | null }
 }
 
 function adaptLogin(value: unknown) {

@@ -170,7 +170,9 @@ def import_refresh_max_concurrent() -> int:
 
 
 def database_settings() -> DatabaseSettings:
-    backend = os.getenv("ANALYSIS_DB_BACKEND", "duckdb").strip().lower()
+    # PostgreSQL is the deployment default.  Keep DuckDB available only when
+    # an installation explicitly opts into the legacy embedded backend.
+    backend = os.getenv("ANALYSIS_DB_BACKEND", "postgresql").strip().lower()
     if backend not in {"duckdb", "postgresql"}:
         raise RuntimeError("ANALYSIS_DB_BACKEND은 duckdb 또는 postgresql이어야 합니다.")
     default_path = Path(__file__).resolve().parents[1] / "data" / "analysis_dashboard.duckdb"
@@ -263,8 +265,8 @@ def security_settings() -> SecuritySettings:
     if auth_mode not in {"disabled", "password", "oidc"}:
         raise RuntimeError("AUTH_MODE은 disabled, password 또는 oidc여야 합니다.")
     secret_key = os.getenv("AUTH_SECRET_KEY")
-    if auth_mode == "password" and (not secret_key or len(secret_key) < 32):
-        raise RuntimeError("AUTH_MODE=password일 때 32자 이상의 AUTH_SECRET_KEY가 필요합니다.")
+    # A password installation may need to serve the public setup status before
+    # its first secret/admin is created. Private traffic remains fail-closed.
     try:
         token_ttl_minutes = int(os.getenv("AUTH_TOKEN_TTL_MINUTES", "480"))
     except ValueError as exc:

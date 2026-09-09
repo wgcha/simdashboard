@@ -42,7 +42,10 @@ def test_public_distribution_serves_verified_release_without_login(monkeypatch, 
         assert download.headers["cache-control"] == "no-store"
         assert "SimulationWorkbenchLocalHelper.zip" in download.headers["content-disposition"]
         assert client.head(body["artifact_url"]).status_code == 200
-        assert client.get("/api/local-helper/distribution/other").status_code == 401
+        # No initial administrator exists: only the exact public distribution
+        # routes are available while all private paths remain setup-blocked.
+        assert client.get("/api/auth/status").json()["setup_required"] is True
+        assert client.get("/api/local-helper/distribution/other").status_code == 503
         assert client.post(body["artifact_url"], json={}).status_code == 405
 
 

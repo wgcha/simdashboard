@@ -28,6 +28,15 @@ def test_windows_vm_profile_accepts_only_complete_intranet_contract(monkeypatch,
     assert "media_storage=dual-read" in output
 
 
+def test_windows_password_profile_requires_postgres_password_and_secure_cookie(monkeypatch):
+    monkeypatch.setenv("DEPLOYMENT_PROFILE", "windows-password-intranet")
+    monkeypatch.setattr(preflight, "database_settings", lambda: SimpleNamespace(backend="duckdb"))
+    monkeypatch.setattr(preflight, "security_settings", lambda: SimpleNamespace(auth_mode="oidc", cookie_secure=False))
+    monkeypatch.setattr(preflight, "directory_settings", lambda: SimpleNamespace(mode="local"))
+    with pytest.raises(RuntimeError, match="POSTGRESQL_REQUIRED.*PASSWORD_AUTH_REQUIRED.*SECURE_COOKIE_REQUIRED"):
+        preflight.main()
+
+
 def test_rocky8_profile_requires_postgres_authentication_and_secure_cookie(monkeypatch):
     monkeypatch.setenv("DEPLOYMENT_PROFILE", "rocky8")
     monkeypatch.setenv("SIMDASH_IMPORT_READINESS_POLICY", "legacy")

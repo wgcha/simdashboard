@@ -121,6 +121,12 @@ def isolated_database(request: pytest.FixtureRequest, tmp_path: Path, monkeypatc
         yield
         return
 
+    # Existing API tests exercise the explicitly retained local-development
+    # compatibility mode. Bootstrap tests delete this value when asserting the
+    # production-safe default.
+    monkeypatch.setenv("DEPLOYMENT_PROFILE", "local")
+    monkeypatch.setenv("AUTH_ALLOW_INSECURE_LOCAL", "true")
+
     postgres_test_enabled = (
         os.getenv("ANALYSIS_DB_BACKEND", "duckdb").strip().lower() == "postgresql"
         and os.getenv("ANALYSIS_TEST_POSTGRES", "").strip() == "1"

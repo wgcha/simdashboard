@@ -147,6 +147,46 @@ def test_concurrent_starter_rechecks_under_lock_and_skips_duplicate_child(monkey
     assert startup.upgrade_pending_schema("postgresql://app:secret@db:5432/dashboard", owner_env_file=owner_file) is False
 
 
+def test_empty_preprovisioned_database_bootstraps_only_when_explicitly_allowed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    owner_file = tmp_path / ".postgres-owner.env"
+    owner_file.write_text("POSTGRES_OWNER_URL=postgresql://owner:secret@db:5432/dashboard\n", encoding="utf-8")
+    calls: list[str] = []
+    states = iter(
+        [
+            startup.StartupMigrationError("DATABASE_SETUP_REQUIRED"),
+            startup.StartupMigrationError("DATABASE_SETUP_REQUIRED"),
+            startup.RevisionState(current="head", head="head"),
+        ]
+    )
+
+    def inspect(*_args, **_kwargs):
+        item = next(states)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    @contextmanager
+    def migration_lock(_app, _owner):
+        calls.append("lock")
+        yield
+
+    monkeypatch.setattr(startup, "inspect_app_revision", inspect)
+    monkeypatch.setattr(startup, "_owner_migration_lock", migration_lock)
+    monkeypatch.setattr(startup, "_verify_empty_bootstrap_database", lambda _app: calls.append("empty-check"))
+    monkeypatch.setattr(startup, "_run_alembic_child", lambda _owner: calls.append("upgrade"))
+
+    assert startup.upgrade_pending_schema(
+        "postgresql://app:secret@db:5432/dashboard", owner_env_file=owner_file, allow_empty_bootstrap=True
+    ) is True
+    assert calls == ["lock", "empty-check", "upgrade"]
+
+
+def test_missing_migration_metadata_stays_fail_closed_without_explicit_bootstrap(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    monkeypatch.setattr(startup, "inspect_app_revision", lambda *_args, **_kwargs: (_ for _ in ()).throw(startup.StartupMigrationError("DATABASE_SETUP_REQUIRED")))
+    with pytest.raises(startup.StartupMigrationError, match="^DATABASE_SETUP_REQUIRED$"):
+        startup.upgrade_pending_schema("postgresql://app:secret@db:5432/dashboard", owner_env_file=tmp_path / "missing.env")
+
+
 def test_owner_and_app_must_target_same_database():
     app = parse_target("postgresql://app:a@db.internal:5432/dashboard")
     same = parse_target("postgresql://owner:b@DB.INTERNAL.:5432/dashboard")
@@ -524,6 +564,11 @@ def test_start_scripts_use_connection_preflight_and_readiness_cleanup_without_mi
 
     assert "& $startScript -DatabaseBackend postgresql" in postgres_start
     assert "upgrade_postgres_schema.py" not in general_start
+    assert "check_database_startup_preflight.py" in general_start
+    assert general_start.index("check_database_startup_preflight.py") < general_start.index("Checking the existing PostgreSQL connection")
+    assert general_start.index("check_database_startup_preflight.py") < general_start.index("if (Test-Path -LiteralPath $PidFile)")
+    assert "Get-CurrentBackendDatabaseBackend" in general_start
+    assert "Run stop.ps1 and start again with the intended database configuration" in general_start
     assert general_start.index("check_postgres_connection.py") < general_start.index("Start-Process -FilePath $Python")
     assert "Wait-HttpReady" in general_start
     assert "Stop-ProcessTree" in general_start

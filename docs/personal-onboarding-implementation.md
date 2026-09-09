@@ -1,7 +1,9 @@
 # 개인 회원가입과 PC 도우미 설치
 
 - 기준일: 2026-09-09
-- 상태: 구현 완료. 로컬 검증 완료, 실제 사내 서버 반영은 별도다.
+- 상태: 계정·도우미 구성 요소와 서버 최초 관리자 설정·인증 전환·백업 복원 검증을 구현했다. 실제 사내 서버 반영은 별도다.
+- 현재 설치·업데이트 기준: [개인 계정 설치·업데이트와 검증 기록](personal-account-rollout-runbook.md).
+- 후속 검토: [개인 계정 첫 화면과 사내 전환 개발 계획](personal-account-entry-rollout-plan.md). 기존 disabled 설정에서 로그인·가입 첫 화면을 건너뛰는 문제와 배포 절차 누락을 다룬다.
 - 근거: 사용자가 회원가입 기능과 개인용 로컬 도우미 개발을 요청했다.
 
 ## 사용자 흐름과 권한
@@ -18,7 +20,7 @@
 - POST /api/auth/password: current_password, new_password → ok. 로그인한 비밀번호 계정에 한한다.
 - GET /api/auth/status: registration_enabled를 추가한다.
 - 가입 입력 검증, 암호 해시, 비밀정보 없는 감사 기록, 가입 시도 제한을 서버에서 처리한다.
-- 아이디는 영문·숫자로 시작하는 3~80자이며 점·밑줄·하이픈을 허용한다. 가입과 로그인은 같은 길이 상수를 사용한다. 비밀번호는 12~256자로 앞뒤 공백을 보존한다. 잘못된 가입/비밀번호 변경 입력을 응답에 그대로 반환하지 않는다.
+- 아이디는 영문·숫자·마침표(.)·밑줄(_)·대시(-)를 사용한 3~80자다. 한글과 공백은 허용하지 않는다. 가입과 로그인은 같은 길이 상수를 사용한다. 비밀번호는 12~256자로 앞뒤 공백을 보존한다. 잘못된 가입/비밀번호 변경 입력을 응답에 그대로 반환하지 않는다.
 - 도우미는 Windows에서 실행 파일 및 필요한 런타임을 묶고 중앙 서버에서 배포한다. 사용자 PC에는 소스·Git·별도 Python 설치를 요구하지 않는다.
 - 설치는 사용자 로컬 경로에 수행한다. 웹 주소·Origin·자동 시작 선택만 설정 파일에 담으며 계정/PC 토큰을 포함하지 않는다. 중앙 원격 주소는 HTTPS, 로컬 개발 주소만 loopback HTTP를 허용한다.
 - 배포 파일 준비 상태와 무결성을 검증하고, 미준비 상태는 사용자에게 설치 실패와 구별해서 안내한다.
@@ -49,7 +51,7 @@
 4. 생성한 ZIP과 manifest를 서버에 함께 배치한다. Linux 서버에서는 Windows에서 생성한 파일을 그대로 사용한다. 기본 탐색 위치 외에는 `LOCAL_HELPER_DISTRIBUTION_DIR`로 폴더를 지정한다. 새 버전은 버전별 ZIP을 먼저 완성한 후 manifest를 마지막에 원자 교체한다. 사용 중인 ZIP을 덮어쓰지 않는다.
 5. 서버와 프런트엔드를 업데이트·재시작한 후 `/api/auth/status`에서 `registration_enabled=true`, `/api/local-helper/distribution`에서 `status=ready`인지 확인한다. 관리자 화면의 `사용자·프로젝트 권한`에서 신규 계정을 승인한다. 계정 승인과 프로젝트별 실행 권한 부여는 별도다.
 
-Rocky 운영 프로필은 password/OIDC를 지원한다. 기존 `windows-vm-intranet`은 OIDC 전용 계약을 유지한다. Windows에서 비밀번호 파일럿을 수행할 때는 기존 `local` 개발 프로필을 사용하며 이를 Windows 운영 프로필 검증 통과로 간주하지 않는다. 실제 회사 서버의 인증·인증서·계정/DB 설정은 이번 코드 변경으로 자동 전환하지 않는다.
+Rocky 운영 프로필은 password/OIDC를 지원한다. 기존 `windows-vm-intranet`은 OIDC 전용 계약을 유지하며 비밀번호용 `windows-password-intranet`을 별도로 추가했다. 실제 회사 서버의 인증서·서비스 배치는 자동 수행하지 않는다. 최초 관리자는 `setup-accounts.bat` 또는 서버 Python 설정 도구로 준비하고 일반 가입과 별도로 처리한다.
 
 ## 운영 범위와 후속 작업
 
@@ -75,6 +77,6 @@ Rocky 운영 프로필은 password/OIDC를 지원한다. 기존 `windows-vm-intr
 
 화면 증거는 검증 PC의 `%TEMP%\workbench-personal-pc-evidence`에 저장한다: `personal-signup-desktop.png`, `personal-signup-mobile.png`, `personal-pc-first-setup.png`, `personal-pc-connected-desktop.png`, `personal-pc-mobile.png`, `personal-password-changed.png`. `personal-pc` E2E의 설치 파일 metadata는 고정 fixture이며 실제 ZIP·설치 실행은 별도 native harness로 검증한다.
 
-Windows 독립 배포본은 `dist/local-helper/windows-x64/SimulationWorkbenchLocalHelper-0.1.0-windows-x64.zip`에 생성했다(약 20.3 MiB). 운영 서버, 사내 인증서, 새 물리 PC의 기업 보안 정책/코드 서명 신뢰는 이번 로컬 검증으로 확인하지 않았다. PostgreSQL schema 변경은 없으며 이번 신규 계정 SQL의 실제 PostgreSQL 배포 검증은 별도다.
+Windows 독립 배포본은 `dist/local-helper/windows-x64/SimulationWorkbenchLocalHelper-0.1.0-windows-x64.zip`에 생성했다(약 20.3 MiB). 운영 서버, 사내 인증서, 새 물리 PC의 기업 보안 정책/코드 서명 신뢰는 이번 로컬 검증으로 확인하지 않았다. 후속 작업에서 실제 PostgreSQL 17.11의 신규 마이그레이션·가입·승인·로그인·백업 복원을 검증했다. 최신 결과는 [설치·업데이트와 검증 기록](personal-account-rollout-runbook.md)을 따른다.
 
 최종 배포본 SHA-256: `2c5c0c5e0bec1ccb635ed0dcf1fe7b2b0f1d06c53a5d43f749abb5e872808979` (21,289,514 bytes). 빌드 smoke 프로세스와 설치 harness의 테스트 프로세스는 종료했고 사용자 기본 도우미 경로에는 테스트 연결을 남기지 않았다.

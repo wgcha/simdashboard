@@ -33,7 +33,7 @@ import { type Layout, type Layouts } from 'react-grid-layout'
 import { api } from './api'; import { workbenchApi } from './features/workbench/api'
 import { useRequestResultSnapshot } from './features/results/useRequestResultSnapshot'
 import { createWorkflowAnalysisOpener, isPendingResultAnalysis, useResultAnalysisIntent } from './features/results/resultLayoutRouting'; import { explicitCustomAnalysisPage, preservesResultLayoutOnLoadCaseChange } from './features/results/resultLayoutRuntime'
-import { clearSession, saveSession, type AuthUser } from './auth'
+import type { AuthUser } from './auth'
 import { useWorkspaceEditorCoordinator } from './editorState'
 import { BootstrapWorkspaceShell } from './features/bootstrap/BootstrapWorkspaceShell'
 import type { InitialWorkspace } from './features/bootstrap/loadInitialWorkspace'
@@ -48,7 +48,8 @@ import { pageView, preferredPage, visiblePages, type ActiveView } from './featur
 import { DEFAULT_PORTFOLIO_LAYOUT, DEFAULT_WORKFLOW_DASHBOARD_LAYOUT, loadPortfolioLayout, loadWorkflowDashboardLayout } from './features/layouts/layoutDefaults'
 import { ReportExportDialog } from './features/reports/ReportExportDialog'
 import { useReportExportController } from './features/reports/useReportExportController'
-import { ApprovalPendingScreen, LoginScreen } from './features/auth/LoginScreen'
+import { ApprovalPendingScreen, AuthStatusErrorScreen, LoginScreen, ServerSetupScreen } from './features/auth/LoginScreen'
+import { useAuthSession } from './features/auth/useAuthSession'
 import { accountApi } from './shared/api/account'
 import { hasPermission, isPersonalOnlyAccount, visibleMenuItems, type MenuId, type MenuPolicy } from './features/auth/access'
 import { WORKSPACE_ROUTES_BY_ID } from './features/navigation/workspaceRouteRegistry'
@@ -70,14 +71,12 @@ function App() {
   const [preferences] = useState(loadWorkspacePreferences)
   const [theme, setTheme] = useState<WorkspaceTheme>(preferences.theme)
   const [uiFontSize, setUiFontSize] = useState(preferences.uiFontSize)
-  const [authReady, setAuthReady] = useState(false)
-  const [authRequired, setAuthRequired] = useState(false)
-  const [authMode, setAuthMode] = useState<'disabled' | 'password' | 'oidc'>('disabled')
-  const [registrationEnabled, setRegistrationEnabled] = useState(false)
-  const [authUser, setAuthUser] = useState<AuthUser | null>(null)
   const [menuPolicy, setMenuPolicy] = useState<MenuPolicy | null>(null)
   const [menuPolicyReady, setMenuPolicyReady] = useState(false)
-  const [authError, setAuthError] = useState('')
+  const { authCheckFailed, authError, authMode, authReady, authRequired, authUser, expire, login: handleLogin, logout: authLogout, refreshAccess, registrationEnabled, retryAuth, setupReason, setupRequired } = useAuthSession({
+    onAccessChanged: (_user, policy) => { setMenuPolicy(policy); setMenuPolicyReady(true) },
+    onAccessRefreshFailed: () => { setMenuPolicy(null); setMenuPolicyReady(true) },
+  })
   const [overview, setOverview] = useState<Overview | null>(null)
   const [projects, setProjects] = useState<Project[]>([])
   const [requests, setRequests] = useState<AnalysisRequest[]>([])
@@ -198,42 +197,6 @@ function App() {
     document.documentElement.style.colorScheme = theme
   }, [theme])
   useEffect(() => {
-    const prepareAuthentication = async () => {
-      try {
-        const status = await api.authStatus()
-        setAuthMode(status.mode)
-        setAuthRequired(status.authentication_required)
-        setRegistrationEnabled(status.registration_enabled)
-        try {
-          const verified = await api.me()
-          setAuthUser(verified)
-        } catch {
-          if (!status.authentication_required) throw new Error('로컬 관리자 세션을 만들지 못했습니다.')
-          setAuthUser(null)
-        }
-      } catch (reason) {
-        clearSession()
-        setAuthUser(null)
-        setAuthError(reason instanceof Error ? reason.message : '인증 상태를 확인하지 못했습니다.')
-      } finally {
-        setAuthReady(true)
-      }
-    }
-    void prepareAuthentication()
-  }, [])
-  const refreshAccess = async () => {
-    if (!authUser) return
-    const [verified, policy] = await Promise.all([api.me(), api.menuPolicy()])
-    setAuthUser(verified)
-    setMenuPolicy(policy)
-    setMenuPolicyReady(true)
-  }
-  useEffect(() => {
-    const changed = () => { void refreshAccess().catch(() => { setMenuPolicy(null); setMenuPolicyReady(true) }) }
-    window.addEventListener('analysis-access-changed', changed)
-    return () => window.removeEventListener('analysis-access-changed', changed)
-  }, [authUser?.id])
-  useEffect(() => {
     if (workspacePage !== 'portfolio' && portfolioLayoutBeforeEdit.current) {
       setPortfolioLayout(portfolioLayoutBeforeEdit.current)
       portfolioLayoutBeforeEdit.current = null
@@ -297,37 +260,16 @@ function App() {
     onStart: () => setError(''),
     onResolved: applyInitialWorkspace,
   })
+  const logout = async () => { invalidateWorkspaceBootstrap(); await authLogout(); setMenuPolicy(null); setMenuPolicyReady(false); setOverview(null) }
   useEffect(() => {
     const expired = () => {
+      if (!authUser) return
       invalidateWorkspaceBootstrap()
-      setAuthUser(null)
-      setAuthError('로그인 세션이 만료되었습니다. 다시 로그인하세요.')
+      expire('로그인 세션이 만료되었습니다. 다시 로그인하세요.')
     }
     window.addEventListener('analysis-auth-expired', expired)
     return () => window.removeEventListener('analysis-auth-expired', expired)
-  }, [invalidateWorkspaceBootstrap])
-  const handleLogin = async (username: string, password: string) => {
-    setAuthError('')
-    try {
-      const result = await api.login(username, password)
-      const verified = await api.me()
-      saveSession(result.access_token, verified)
-      setAuthUser(verified)
-    } catch (reason) {
-      setAuthError(reason instanceof Error ? reason.message : '로그인하지 못했습니다.')
-      throw reason
-    }
-  }
-  const logout = async () => {
-    const logoutRequest = api.logout()
-    invalidateWorkspaceBootstrap()
-    setAuthUser(null)
-    try { await logoutRequest } catch { /* clear the local session even if the server is unavailable */ }
-    clearSession()
-    setMenuPolicy(null)
-    setMenuPolicyReady(false)
-    setOverview(null)
-  }
+  }, [authUser, expire, invalidateWorkspaceBootstrap])
   useEffect(() => {
     if (!activeDashboardId || !selectedLoadCaseId || !authReady || (authRequired && !authUser) || isPendingResultAnalysis(false, activeDashboardId) || (editMode && dashboard?.id === activeDashboardId)) return
     const requestSequence = ++dashboardRequestSequence.current
@@ -864,6 +806,12 @@ function App() {
   if (!authReady) {
     return <div className="full-state"><LoaderCircle className="spin" /> 인증 설정을 확인하고 있습니다.</div>
   }
+  if (authCheckFailed) {
+    return <AuthStatusErrorScreen message={authError} onRetry={() => void retryAuth()} theme={theme} onThemeChange={setTheme} />
+  }
+  if (setupRequired) {
+    return <ServerSetupScreen reason={setupReason} onRetry={() => void retryAuth()} theme={theme} onThemeChange={setTheme} />
+  }
   if (authRequired && !authUser) {
     return <LoginScreen mode={authMode === 'oidc' ? 'oidc' : 'password'} error={authError} onLogin={handleLogin} onRegister={accountApi.register} registrationEnabled={registrationEnabled} theme={theme} onThemeChange={setTheme} />
   }
@@ -877,7 +825,7 @@ function App() {
     return <div className="full-state"><LoaderCircle className="spin" /> 데이터와 레이아웃을 준비하고 있습니다.</div>
   }
   if (workspaceBootstrap.status === 'failed') {
-    return <div className="full-state error"><AlertTriangle /> {workspaceBootstrap.message}</div>
+    return <div className="full-state error"><AlertTriangle /> <span>{workspaceBootstrap.message}</span><button type="button" onClick={invalidateWorkspaceBootstrap}>다시 시도</button></div>
   }
   if (error) {
     return <div className="full-state error"><AlertTriangle /> {error}</div>

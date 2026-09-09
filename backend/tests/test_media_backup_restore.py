@@ -46,6 +46,12 @@ def _inventory() -> dict[str, object]:
     }
 
 
+def _account_inventory() -> dict[str, object]:
+    return {"format": "analysis-canvas-account-inventory", "format_version": 1,
+            "users": {"count": 2, "pending_count": 0, "active_count": 1, "suspended_count": 1, "global_admin_count": 1, "identity_authorization_sha256": "b" * 64},
+            "project_memberships": {"count": 1, "authorization_sha256": "c" * 64}}
+
+
 def _manifest(dump: Path, *, inventory: object | None = None, **overrides: object) -> dict[str, object]:
     manifest: dict[str, object] = {
         "format": "postgresql-custom",
@@ -111,11 +117,13 @@ def test_backup_snapshot_inventory_holds_repeatable_read_connection(monkeypatch:
     monkeypatch.setattr(backup, "media_inventory", lambda actual: _inventory() if actual is connection else {})
     monkeypatch.setattr(backup, "require_media_integrity", lambda report: None)
 
-    actual, snapshot, inventory = backup._snapshot_inventory("postgresql+psycopg://app:pw@db/test")
+    monkeypatch.setattr(backup, "account_inventory", lambda actual: _account_inventory() if actual is connection else {})
+    actual, snapshot, inventory, accounts = backup._snapshot_inventory("postgresql+psycopg://app:pw@db/test")
 
     assert actual is connection
     assert snapshot == "snapshot-123"
     assert inventory == _inventory()
+    assert accounts == _account_inventory()
     assert connection.commands == [
         "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
         "SELECT pg_export_snapshot()",
@@ -128,7 +136,7 @@ def test_backup_manifest_embeds_inventory_and_pg_dump_snapshot(
 ) -> None:
     inventory = _inventory()
     holder = SimpleNamespace(close=lambda: None)
-    monkeypatch.setattr(backup, "_snapshot_inventory", lambda _url: (holder, "snapshot-123", inventory))
+    monkeypatch.setattr(backup, "_snapshot_inventory", lambda _url: (holder, "snapshot-123", inventory, _account_inventory()))
     monkeypatch.setattr(backup, "executable", lambda name: name)
     commands: list[list[str]] = []
 
@@ -146,6 +154,7 @@ def test_backup_manifest_embeds_inventory_and_pg_dump_snapshot(
     assert "--snapshot=snapshot-123" in commands[0]
     manifest = next(tmp_path.glob("*.manifest.json"))
     assert json.loads(manifest.read_text(encoding="utf-8"))["media_inventory"] == inventory
+    assert json.loads(manifest.read_text(encoding="utf-8"))["account_inventory"] == _account_inventory()
 
 
 @pytest.mark.parametrize("label", ["../escape", "nested/archive", "white space", ""])
@@ -225,7 +234,7 @@ def test_backup_failure_retains_unique_partial_without_final_or_manifest(
 ) -> None:
     holder = SimpleNamespace(close=lambda: None)
     monkeypatch.setattr(backup, "datetime", _FixedDateTime)
-    monkeypatch.setattr(backup, "_snapshot_inventory", lambda _url: (holder, "snapshot-123", _inventory()))
+    monkeypatch.setattr(backup, "_snapshot_inventory", lambda _url: (holder, "snapshot-123", _inventory(), _account_inventory()))
     monkeypatch.setattr(backup, "executable", lambda name: name)
 
     def fail_after_partial(command: list[str], **_kwargs):
@@ -316,6 +325,31 @@ def test_restore_requires_matching_inventory_and_database_only_verifier(
     assert archive_list_command[2] != str(dump)
     assert restore_command[-1] == archive_list_command[2]
     assert not Path(archive_list_command[2]).exists()
+
+
+def test_restore_verifies_account_inventory_when_present(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    dump = tmp_path / "accounts.dump"
+    dump.write_bytes(b"dump")
+    expected_accounts = _account_inventory()
+    dump.with_suffix(".manifest.json").write_text(
+        json.dumps(_manifest(dump, account_inventory=expected_accounts)), encoding="utf-8"
+    )
+    monkeypatch.setattr(restore.psycopg, "connect", lambda _url: _RestoreConnection())
+    monkeypatch.setattr(restore, "executable", lambda name: name)
+    monkeypatch.setattr(restore.subprocess, "run", lambda *_args, **_kwargs: SimpleNamespace(returncode=0))
+    monkeypatch.setattr(restore, "_harden_audit_event_privileges", lambda _url: None)
+    monkeypatch.setattr(restore, "_verify_restored_media", lambda **_kwargs: _inventory())
+    observed: dict[str, object] = {}
+    monkeypatch.setattr(
+        restore, "_verify_restored_accounts",
+        lambda *, expected, verify_database_url: observed.update({"expected": expected, "url": verify_database_url}) or expected,
+    )
+    monkeypatch.setattr(restore, "_run_database_only_verifier", lambda _url: None)
+    monkeypatch.setattr(sys, "argv", _restore_argv(dump))
+
+    restore.main()
+
+    assert observed == {"expected": expected_accounts, "url": "postgresql+psycopg://app:pw@db/test"}
 
 
 def test_restore_clean_uses_single_transaction_and_failure_stops_post_restore_steps(

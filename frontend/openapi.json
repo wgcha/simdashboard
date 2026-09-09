@@ -15,9 +15,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Auth Status Api Auth Status Get"
+                  "$ref": "#/components/schemas/AuthStatusResponse"
                 }
               }
             }
@@ -8173,6 +8171,68 @@
         ],
         "title": "AssigneeUpdate"
       },
+      "AuthStatusResponse": {
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "password",
+              "oidc"
+            ],
+            "title": "Mode"
+          },
+          "authentication_required": {
+            "type": "boolean",
+            "title": "Authentication Required"
+          },
+          "registration_enabled": {
+            "type": "boolean",
+            "title": "Registration Enabled"
+          },
+          "setup_required": {
+            "type": "boolean",
+            "title": "Setup Required"
+          },
+          "setup_reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "AUTH_SETUP_REQUIRED",
+                  "AUTH_SECRET_REQUIRED",
+                  "INITIAL_ADMIN_REQUIRED"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Setup Reason"
+          },
+          "oidc_start_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oidc Start Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "mode",
+          "authentication_required",
+          "registration_enabled",
+          "setup_required",
+          "setup_reason",
+          "oidc_start_url"
+        ],
+        "title": "AuthStatusResponse"
+      },
       "BatchDispatchCreate": {
         "properties": {
           "batch_profile_id": {
@@ -10689,7 +10749,7 @@
             "type": "string",
             "maxLength": 80,
             "minLength": 3,
-            "pattern": "^[a-z0-9][a-z0-9._-]{2,79}$",
+            "pattern": "^[a-z0-9._-]{3,80}$",
             "title": "Username"
           },
           "display_name": {

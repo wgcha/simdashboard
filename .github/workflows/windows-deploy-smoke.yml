@@ -91,12 +91,29 @@ jobs:
         shell: powershell
         run: .\scripts\windows\update-integration-self-test.ps1
 
+      - name: Validate account-aware deployment ordering
+        shell: powershell
+        run: .\scripts\windows\deploy-account-lifecycle-self-test.ps1
+
       - name: Deploy pinned runtimes and dependencies in direct mode
         shell: powershell
-        run: .\deploy.ps1 -NetworkMode direct
+        # CI has no interactive server console for an initial administrator.
+        # This explicit local-only escape is scoped to the disposable runner.
+        env:
+          DEPLOYMENT_PROFILE: local
+          AUTH_ALLOW_INSECURE_LOCAL: 'true'
+          # The disposable smoke target deliberately uses the legacy adapter;
+          # ordinary deployment defaults to PostgreSQL.
+          ANALYSIS_DB_BACKEND: duckdb
+        run: .\deploy.ps1 -NetworkMode direct -NonInteractive
 
       - name: Run the complete managed service lifecycle
         shell: powershell
+        # Match the disposable deploy profile above; keep this escape scoped
+        # to the lifecycle smoke rather than the whole job.
+        env:
+          DEPLOYMENT_PROFILE: local
+          AUTH_ALLOW_INSECURE_LOCAL: 'true'
         run: |
           $backendPort = [int]$env:BACKEND_PORT
           $frontendPort = [int]$env:FRONTEND_PORT

@@ -13,7 +13,7 @@ from ..schemas.auth_accounts import (
     RegistrationPayload,
     RegistrationResponse,
 )
-from ..security import Principal, write_audit_event
+from ..security import Principal, auth_setup_state, write_audit_event
 from ..services.auth_accounts import (
     PasswordChangeResult,
     UsernameAlreadyRegisteredError,
@@ -29,6 +29,8 @@ router = APIRouter(tags=["auth"], route_class=PrivateInputRoute)
 def _password_auth_required() -> None:
     if security_settings().auth_mode != "password":
         raise HTTPException(409, "현재 인증 모드에서는 비밀번호 계정을 사용할 수 없습니다.")
+    if auth_setup_state()[0]:
+        raise HTTPException(503, "서버 계정 설정이 필요합니다.")
 
 
 @router.post("/api/auth/register", status_code=201, response_model=RegistrationResponse)

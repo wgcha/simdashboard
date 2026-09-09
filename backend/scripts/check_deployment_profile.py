@@ -11,7 +11,7 @@ from app.config import database_settings, directory_settings, import_readiness_p
 
 def main() -> None:
     profile = os.getenv("DEPLOYMENT_PROFILE", "local").strip().lower()
-    if profile not in {"local", "windows-vm-intranet", "rocky8", "rocky8-dev-http"}:
+    if profile not in {"local", "windows-vm-intranet", "windows-password-intranet", "rocky8", "rocky8-dev-http"}:
         raise RuntimeError("DEPLOYMENT_PROFILE_INVALID")
     database = database_settings()
     security = security_settings()
@@ -30,6 +30,16 @@ def main() -> None:
             failures.append("HTTP_DIRECTORY_REQUIRED")
         if failures:
             raise RuntimeError("WINDOWS_VM_PROFILE_INVALID:" + ",".join(failures))
+    if profile == "windows-password-intranet":
+        failures = []
+        if database.backend != "postgresql":
+            failures.append("POSTGRESQL_REQUIRED")
+        if security.auth_mode != "password":
+            failures.append("PASSWORD_AUTH_REQUIRED")
+        if not security.cookie_secure:
+            failures.append("SECURE_COOKIE_REQUIRED")
+        if failures:
+            raise RuntimeError("WINDOWS_PASSWORD_PROFILE_INVALID:" + ",".join(failures))
     if profile == "rocky8":
         failures = []
         if database.backend != "postgresql":

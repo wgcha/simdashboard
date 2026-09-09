@@ -1,14 +1,14 @@
 # Windows 파일 실행으로 설치·구동하기
 
-- 기준일: 2026-09-08
+- 기준일: 2026-09-09
 - 대상: Windows 10/11 x64 사내 PC의 로컬 시험·사용
 - 진입점: `deploy.bat`, `start.bat`, `stop.bat`, `update.bat`
 
 ## 처음 사용할 때
 
 1. GitHub에서 소스 ZIP을 받고 **전체 압축을 푼다**. ZIP 안에서 배치 파일만 실행하지 않는다.
-2. 압축을 푼 폴더의 **`deploy.bat`**를 더블클릭한다. 고정 Python·Node.js·pnpm과 의존성을 설치하고 웹을 빌드한다.
-3. 완료 후 **`start.bat`**를 더블클릭한다. 웹과 API가 준비되면 기본 브라우저로 결과 대시보드가 열린다.
+2. 압축을 푼 폴더의 **`deploy.bat`**를 더블클릭한다. 런타임·의존성·웹 빌드 후 기존 DB 백업, 마이그레이션, 계정 준비를 진행한다. 최초 설치는 같은 창에서 관리자 아이디와 비밀번호를 입력한다. 별도 계정 설정 배치 파일을 선택하지 않는다.
+3. 완료 후 **`start.bat`**를 더블클릭한다. 웹과 API가 준비되면 기본 브라우저에 회원 로그인·가입 화면이 열린다. 일반 직원은 가입 후 관리자 승인을 받는다.
 
 주소는 **http://127.0.0.1:5173/workspace/overview**다. 종료할 때는 **`stop.bat`**를 더블클릭한다. 브라우저 창만 닫아도 서버는 계속 실행된다.
 
@@ -43,9 +43,11 @@ Python·Node.js·Git을 별도로 설치하지 않아도 된다. 기본 Windows 
 ## 재설치·업데이트·기존 데이터
 
 - 다시 사용할 때는 `start.bat`만 실행한다. 이미 이 폴더에서 정상 실행 중이면 기존 서버를 사용하고 브라우저를 연다.
-- 새 버전 적용은 **`update.bat` 하나를 더블클릭**한다. Git 다운로드·앱 종료·소스 적용·의존성/빌드·DB migration·재시작을 순서대로 처리한다. Git은 업데이트 기능에 필요하다. ZIP/`No commits yet` 폴더의 최초 연결은 [사내 PC 업데이트 안내](windows-git-update.md)를 따른다.
-- `.env`가 없을 때만 기본 예제를 복사한다. 새 환경의 기본값은 DuckDB 로컬 프로필이다.
-- 기본 DB는 이 소스의 `backend/data/analysis_dashboard.duckdb`다. 다른 DB를 지정하려면 `.env`에 절대 경로를 넣는다.
+- 새 버전 적용은 **`update.bat` 하나를 더블클릭**한다. Git 다운로드·앱 종료·소스 적용·의존성/빌드·기존 DB 및 설정 백업·DB migration·계정 확인·재시작을 순서대로 처리한다. 백업 실패 시 DB 변경과 재시작을 중단한다. Git은 업데이트 기능에 필요하다. ZIP/`No commits yet` 폴더의 최초 연결은 [사내 PC 업데이트 안내](windows-git-update.md)를 따른다.
+- `.env`가 없을 때만 기본 예제를 복사한다. 기존 `backend/.env`가 있으면 그 설정을 유지한다. 새 환경과 DB 종류 미지정 실행의 기본값은 PostgreSQL이다.
+- PostgreSQL 서비스와 DB·app/owner 역할을 준비하고 `DATABASE_URL`을 설정한다. 연결 설정이 없으면 배포·시작을 중단한다. [PostgreSQL 준비 안내](windows-postgresql-quickstart.md)를 따른다.
+- 기존 `ANALYSIS_DB_BACKEND=duckdb` 설정은 유지한다. 해당 DB 파일을 백업하고 검증된 이관을 완료한 뒤 PostgreSQL로 전환한다. 로컬 시험용 DuckDB도 명시적으로 선택해야 한다.
+- DB 종류 설정이 없는데 기존 DuckDB 파일이 있으면 배포·시작을 중단하고 이관 안내를 표시한다. `.env` 또는 `backend/.env` 파일이 존재하더라도 DB 종류가 빠져 있으면 같은 보호 규칙을 적용한다. 기존 데이터를 계속 사용할 때는 `ANALYSIS_DB_BACKEND=duckdb`, 이관 검증을 마친 경우에는 `ANALYSIS_DB_BACKEND=postgresql`을 명시한다.
 - 기존 `.env`, PostgreSQL 연결 정보, 의뢰·결과 DB는 설치 과정에서 덮어쓰거나 초기화하지 않는다.
 - 이전 DB 이관 실패의 `.setup-recovery-required.json`이 있으면 먼저 해당 복구 절차를 완료해야 한다.
 - 다른 PC로 기존 데이터를 옮길 때는 소스 업데이트와 별개로 [DB 이전 안내](postgresql-pc-transfer-guide.md)를 따른다.

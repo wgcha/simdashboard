@@ -2526,6 +2526,24 @@ export interface components {
             /** Owner User Id */
             owner_user_id: string;
         };
+        /** AuthStatusResponse */
+        AuthStatusResponse: {
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "disabled" | "password" | "oidc";
+            /** Authentication Required */
+            authentication_required: boolean;
+            /** Registration Enabled */
+            registration_enabled: boolean;
+            /** Setup Required */
+            setup_required: boolean;
+            /** Setup Reason */
+            setup_reason: ("AUTH_SETUP_REQUIRED" | "AUTH_SECRET_REQUIRED" | "INITIAL_ADMIN_REQUIRED") | null;
+            /** Oidc Start Url */
+            oidc_start_url: string | null;
+        };
         /** BatchDispatchCreate */
         BatchDispatchCreate: {
             /** Batch Profile Id */
@@ -4467,9 +4485,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["AuthStatusResponse"];
                 };
             };
         };

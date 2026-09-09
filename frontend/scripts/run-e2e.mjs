@@ -93,7 +93,7 @@ async function main() {
   })
   const vite = launch(process.execPath, [
     path.join(frontendDir, 'node_modules', 'vite', 'bin', 'vite.js'),
-    '--host', '127.0.0.1', '--port', '15173',
+    '--host', '127.0.0.1', '--port', '15173', '--configLoader', 'runner',
   ], {
     cwd: frontendDir,
     env: { ...process.env, VITE_API_TARGET: 'http://127.0.0.1:18000' },
@@ -110,7 +110,7 @@ async function main() {
   const playwright = launch(process.execPath, [
     path.join(frontendDir, 'node_modules', '@playwright', 'test', 'cli.js'), 'test',
     ...process.argv.slice(2),
-  ], { cwd: frontendDir })
+  ], { cwd: frontendDir, env: { ...process.env, E2E_PASSWORD_RELEASE: process.env.E2E_PASSWORD_RELEASE ?? 'true' } })
   return await waitForExit(playwright)
 }
 

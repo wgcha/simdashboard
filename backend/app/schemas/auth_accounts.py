@@ -13,7 +13,7 @@ class StrictModel(BaseModel):
 
 
 class RegistrationPayload(StrictModel):
-    username: str = Field(min_length=3, max_length=PASSWORD_USERNAME_MAX_LENGTH, pattern=r"^[a-z0-9][a-z0-9._-]{2,79}$")
+    username: str = Field(min_length=3, max_length=PASSWORD_USERNAME_MAX_LENGTH, pattern=r"^[a-z0-9._-]{3,80}$")
     display_name: str = Field(min_length=1, max_length=200)
     password: str = Field(min_length=12, max_length=PASSWORD_MAX_LENGTH)
 
@@ -45,6 +45,15 @@ class RegistrationResponse(BaseModel):
     username: str
     account_status: Literal["PENDING"]
     message: str
+
+
+class AuthStatusResponse(BaseModel):
+    mode: Literal["disabled", "password", "oidc"]
+    authentication_required: bool
+    registration_enabled: bool
+    setup_required: bool
+    setup_reason: Literal["AUTH_SETUP_REQUIRED", "AUTH_SECRET_REQUIRED", "INITIAL_ADMIN_REQUIRED"] | None
+    oidc_start_url: str | None
 
 
 class PasswordChangeResponse(BaseModel):
