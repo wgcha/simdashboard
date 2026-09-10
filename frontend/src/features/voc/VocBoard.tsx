@@ -66,7 +66,7 @@ export function VocBoard({ user }: { user: AuthUser }) {
     }
   }
   const download = async (format: 'csv' | 'json') => {
-    if (exporting) return
+    if (!user.is_global_admin || exporting) return
     setExporting(true)
     setError('')
     try { await vocApi.download(format) }
@@ -77,10 +77,10 @@ export function VocBoard({ user }: { user: AuthUser }) {
   return <section className="voc-board" data-testid="voc-board">
     <header className="voc-header">
       <div><span className="voc-eyebrow"><MessageSquare /> VOC BOARD</span><h1>VOC 게시판</h1><p>서비스 사용 중 느낀 점과 개선 아이디어를 회원들과 공유해 주세요.</p></div>
-      <div className="voc-downloads">
+      {user.is_global_admin ? <div className="voc-downloads">
         <button type="button" disabled={exporting} onClick={() => void download('csv')}><Download /> CSV 다운로드</button>
         <button type="button" disabled={exporting} onClick={() => void download('json')}><Download /> JSON 다운로드</button>
-      </div>
+      </div> : null}
     </header>
     <section className="voc-compose">
       <p className="voc-author">작성자: <strong>{user.display_name}</strong> ({user.username}) · 회원정보 자동 기록</p>

@@ -12,11 +12,11 @@ async function downloadBytes(page: Page, label: string) {
   return { name: download.suggestedFilename(), bytes: readFileSync((await download.path())!) }
 }
 
-test('도움말 아래 VOC에서 회원정보 자동 기록, 텍스트 등록과 CSV·JSON 다운로드를 완료한다', async ({ page }) => {
+test('전역 관리자는 VOC에서 회원정보 자동 기록, 텍스트 등록과 CSV·JSON 다운로드를 완료한다', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', (error) => errors.push(error.message))
   await page.route('http://127.0.0.1:8766/**', (route) => route.abort('connectionrefused'))
-  await loginWorkspace(page, 'e2e-viewer', '/workspace/overview')
+  await loginWorkspace(page, 'e2e-admin', '/workspace/overview')
   const menu = page.getByRole('link', { name: 'VOC 게시판', exact: true })
   await expect(menu).toBeVisible()
   expect(await menu.evaluate((element) => element.previousElementSibling?.getAttribute('href'))).toBe('/workspace/help')
@@ -39,7 +39,7 @@ test('도움말 아래 VOC에서 회원정보 자동 기록, 텍스트 등록과
   const created = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/voc/posts' && response.status() === 201)
   await submit.click()
   const row = await (await created).json() as { id: string; author_username: string; author_display_name: string; content: string }
-  expect(row).toMatchObject({ author_username: 'e2e-viewer', author_display_name: 'E2E 조회자', content })
+  expect(row).toMatchObject({ author_username: 'e2e-admin', author_display_name: 'E2E 관리자', content })
   await expect(input).toHaveValue('')
   await expect(page.getByText(content, { exact: true })).toBeVisible()
   await expect(page.locator('img[src="voc-xss"]')).toHaveCount(0)
@@ -63,7 +63,7 @@ test('도움말 아래 VOC에서 회원정보 자동 기록, 텍스트 등록과
   expect([...csvDownload.bytes.subarray(0, 3)]).toEqual([239, 187, 191])
   const csv = csvDownload.bytes.toString('utf8')
   expect(csv).toContain('author_username')
-  expect(csv).toContain('E2E 조회자')
+  expect(csv).toContain('E2E 관리자')
   expect(csv).toContain(`'${content.split('\n')[0]}`)
   const evidence = path.join(os.tmpdir(), 'workbench-voc-evidence')
   mkdirSync(evidence, { recursive: true })
@@ -75,6 +75,40 @@ test('도움말 아래 VOC에서 회원정보 자동 기록, 텍스트 등록과
   await page.screenshot({ path: path.join(evidence, 'voc-mobile.png'), fullPage: true })
   await expect(page.locator('vite-error-overlay')).toHaveCount(0)
   expect(errors).toEqual([])
+})
+
+test('회원은 VOC 의견을 등록할 수 있다', async ({ page }) => {
+  await loginWorkspace(page, 'e2e-viewer', '/workspace/voc')
+  await expect(page.getByRole('textbox', { name: '개선 의견', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'CSV 다운로드', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'JSON 다운로드', exact: true })).toHaveCount(0)
+  const content = `회원 VOC 등록 ${Date.now()}`
+  await page.getByRole('textbox', { name: '개선 의견', exact: true }).fill(content)
+  await page.getByRole('button', { name: '등록', exact: true }).click()
+  await expect(page.getByText(content, { exact: true })).toBeVisible()
+})
+
+async function assertNonAdminExportDenied(page: Page, username: string) {
+  await loginWorkspace(page, username, '/workspace/voc')
+  await expect(page.getByRole('heading', { name: 'VOC 게시판', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'CSV 다운로드', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'JSON 다운로드', exact: true })).toHaveCount(0)
+  for (const format of ['csv', 'json']) {
+    const response = await page.request.get(`/api/voc/export?format=${format}`)
+    expect(response.status(), `${username} ${format} export`).toBe(403)
+  }
+}
+
+test('일반 사용자는 VOC 내보내기 버튼이 없고 직접 요청도 거부된다', async ({ page }) => {
+  await assertNonAdminExportDenied(page, 'e2e-viewer')
+})
+
+test('파워 사용자는 VOC 내보내기 버튼이 없고 직접 요청도 거부된다', async ({ page }) => {
+  await assertNonAdminExportDenied(page, 'e2e-power')
+})
+
+test('프로젝트 관리자는 VOC 내보내기 버튼이 없고 직접 요청도 거부된다', async ({ page }) => {
+  await assertNonAdminExportDenied(page, 'e2e-project-admin')
 })
 
 test('메뉴 정책에서 숨긴 VOC는 직접 주소로도 표시하지 않는다', async ({ page }) => {

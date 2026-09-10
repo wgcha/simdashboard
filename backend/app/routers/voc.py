@@ -9,7 +9,7 @@ from starlette.background import BackgroundTask
 
 from ..config import security_settings
 from ..database_connection import connect
-from ..access_policy import COMPANY_DASHBOARD_VIEW, REPORT_EXPORT, require_permission
+from ..access_policy import COMPANY_DASHBOARD_VIEW, SYSTEM_USER_APPROVE, require_permission
 from ..repositories.voc_repository import VOCRepository
 from ..schemas.voc import VOCPostCreate, VOCPostListResponse, VOCPostResponse
 from ..services.voc_service import create_post, export_posts
@@ -68,7 +68,7 @@ def export_voc(
     spool = SpooledTemporaryFile(max_size=1_024 * 1_024, mode="w+b")
     try:
         with connect() as connection:
-            require_permission(request, REPORT_EXPORT, conn=connection)
+            require_permission(request, SYSTEM_USER_APPROVE, conn=connection)
             for chunk in export_posts(format, connection):
                 spool.write(chunk)
         spool.seek(0)
