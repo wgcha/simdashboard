@@ -37,13 +37,14 @@ class AccountBackupChildError(RuntimeError):
 class AccountBackupFailure(RuntimeError):
     """A backup failure carrying only allowlisted deployment diagnostics."""
 
-    def __init__(self, code: str, stage: str, cause: BaseException, report_path: Path | None):
+    def __init__(self, code: str, stage: str, cause: BaseException, report_path: Path | None, media_diagnostics: dict[str, object] | None = None):
         # Preserve the original message for direct Python callers and existing
         # error handling.  ``main`` intentionally never prints it.
         super().__init__(str(cause))
         self.code = code
         self.stage = stage
         self.report_path = report_path
+        self.media_diagnostics = media_diagnostics or {}
         self.__cause__ = cause
 
 
@@ -51,7 +52,7 @@ _POSTGRES_TOOL_MARKERS = ("pg_dump", "pg_restore")
 _MISSING_TOOL_MARKERS = ("not recognized as an internal", "command not found", "no such file or directory")
 _PERMISSION_OR_DISK_MARKERS = ("permission denied", "access is denied", "disk full", "not enough space", "no space left", "quota exceeded", "read-only file system", "acl", "reparse point")
 _VERSION_MARKERS = ("server version", "version mismatch", "unsupported version", "server version:")
-_MEDIA_INTEGRITY_MARKERS = ("mediaintegrityerror", "media_integrity_failed", "media integrity", "media_inventory", "media inventory", "media blob", "media file")
+_MEDIA_INTEGRITY_MARKERS = ("deploymentmediabackuperror", "mediaintegrityerror", "media_integrity_failed", "media integrity", "media_inventory", "media inventory", "media blob", "media file")
 _SCHEMA_MISSING_MARKERS = ("undefinedtable", "undefinedcolumn", "relation does not exist", "column does not exist", "table does not exist")
 _AUTH_CONNECTION_MARKERS = ("password authentication failed", "authentication failed", "no pg_hba.conf entry", "could not connect", "connection refused", "connection timed out", "operationalerror")
 _PRE_MEDIA_ALEMBIC_REVISIONS = {
@@ -270,7 +271,7 @@ def _safe_failure_stage(error: BaseException, fallback: str) -> str:
     return fallback
 
 
-def _write_failure_report(directory: Path | None, *, code: str, stage: str) -> Path | None:
+def _write_failure_report(directory: Path | None, *, code: str, stage: str, media_diagnostics: dict[str, object] | None = None) -> Path | None:
     """Best-effort, protected report containing no exception or child output."""
     if directory is None:
         return None
@@ -284,6 +285,8 @@ def _write_failure_report(directory: Path | None, *, code: str, stage: str) -> P
             "stage": stage,
             "remediation": _REMEDIATION[code],
         }
+        if media_diagnostics:
+            payload["media_diagnostics"] = media_diagnostics
         encoded = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
         temporary = directory / f".failure-{uuid.uuid4().hex}.partial"
         descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -367,10 +370,18 @@ def _postgres_backup(url: str, directory: Path, env: dict[str, str]) -> dict[str
     pre_media_schema = bool(revisions) and revisions.issubset(_PRE_MEDIA_ALEMBIC_REVISIONS)
     supported = {"users", "project_memberships"}.issubset(names) and not pre_media_schema
     if supported:
-        # Keep the canonical snapshot/inventory/manifest contract used by
-        # restore_postgres.py.  Its failures are fatal for the current schema;
-        # only an actually legacy schema takes the minimal fallback below.
+        # Select the contract before starting: database-only uses canonical
+        # restore evidence; dual-read also verifies the existing filesystem.
+        # Neither path retries a failed backup with a weaker legacy dump.
         command = [sys.executable, str(BACKEND / "scripts" / "backup_postgres.py"), "--output-dir", str(directory), "--label", "database"]
+        media_mode = env.get("SIMDASH_MEDIA_STORAGE_MODE", "dual-read").strip().lower()
+        if media_mode not in {"dual-read", "database-only"}:
+            raise RuntimeError("SIMDASH_MEDIA_STORAGE_MODE_INVALID")
+        if media_mode == "dual-read":
+            # prepare() always creates <project>/backups/accounts/<run>.
+            # Preserve that project's filesystem, not the tool checkout's.
+            assets_root = directory.parents[2] / "backend" / "assets"
+            command.extend(["--deployment-assets-root", str(assets_root)])
         _run_backup_child(command, cwd=BACKEND, env=command_env, stage="postgres_current_schema_backup")
         dumps = sorted(directory.glob("database-*.dump"), key=lambda item: item.stat().st_mtime, reverse=True)
         if not dumps:
@@ -382,6 +393,22 @@ def _postgres_backup(url: str, directory: Path, env: dict[str, str]) -> dict[str
         _secure_payload(dump)
         _secure_payload(standard_manifest)
         evidence = json.loads(standard_manifest.read_text(encoding="utf-8"))
+        if media_mode == "dual-read":
+            if evidence.get("format") != "analysis-canvas-deployment-postgresql":
+                raise RuntimeError("Deployment backup contract is invalid.")
+            assets = evidence.get("assets_backup", {})
+            archive_name = assets.get("filename", "")
+            if not archive_name or Path(archive_name).name != archive_name:
+                raise RuntimeError("Deployment assets backup manifest is invalid.")
+            archive = directory / archive_name
+            if archive.stat().st_size != assets.get("bytes") or _sha256(archive) != assets.get("sha256"):
+                raise RuntimeError("Deployment assets backup verification failed.")
+            _secure_payload(archive)
+            print("ACCOUNT_BACKUP_MEDIA_STATUS mode=dual-read database_and_files=verified")
+            allowed_warnings = {"ORPHAN_BLOBS_INCLUDED", "INCOMPLETE_DEMO_CATALOG_INCLUDED", "DEMO_SOURCE_MISSING"}
+            for warning in assets.get("warnings", []):
+                if isinstance(warning, str) and warning in allowed_warnings:
+                    print(f"ACCOUNT_BACKUP_MEDIA_WARNING code={warning}")
         return {"classification": "existing", "database_backup": evidence}
 
     # Legacy schemas still receive a complete dump, but are explicitly marked
@@ -457,14 +484,16 @@ def prepare(project_root: Path) -> Path:
     except Exception as error:
         code = _safe_failure_code(error)
         safe_stage = _safe_failure_stage(error, stage)
-        report_path = _write_failure_report(directory, code=code, stage=safe_stage)
+        from scripts.media_backup_diagnostics import safe_media_diagnostics
+        media_details = safe_media_diagnostics(_child_text(error)) if code == "ACCOUNT_BACKUP_FAILED_MEDIA_INTEGRITY" else {}
+        report_path = _write_failure_report(directory, code=code, stage=safe_stage, media_diagnostics=media_details)
         if directory is not None:
             try:
                 (directory / "BACKUP_FAILED").write_text("Backup failed; deployment must stop.\n", encoding="utf-8")
                 _secure_payload(directory / "BACKUP_FAILED")
             except Exception:
                 pass
-        raise AccountBackupFailure(code, safe_stage, error, report_path) from error
+        raise AccountBackupFailure(code, safe_stage, error, report_path, media_details) from error
 
 
 def main() -> int:
@@ -478,6 +507,8 @@ def main() -> int:
         report = f" report={error.report_path}" if error.report_path else ""
         print(f"ACCOUNT_BACKUP_FAILED code={error.code} stage={error.stage}{report}", file=sys.stderr)
         print(f"ACCOUNT_BACKUP_ACTION {_REMEDIATION[error.code]}", file=sys.stderr)
+        if error.media_diagnostics:
+            print("ACCOUNT_BACKUP_MEDIA " + json.dumps(error.media_diagnostics, sort_keys=True), file=sys.stderr)
         return 1
     except Exception:
         # Defensive fallback for errors outside ``prepare`` itself.  Never

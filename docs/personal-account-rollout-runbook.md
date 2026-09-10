@@ -62,6 +62,16 @@ HTTPS URL은 운영자가 실제 게시한 릴리스 주소를 사용한다. 위
 
 관련 Python 회귀 테스트는 **69개 통과, 2개 건너뜀**이다. 별도 실제 PostgreSQL에서 현재 스키마 자동 백업과 0007 형태의 DB 전체 백업·새 DB 복원을 확인했다. 이전 스키마의 사용자 ID·비밀번호 해시·프로젝트 권한·revision이 일치했고 원본에는 마이그레이션을 실행하지 않았다. 테스트용 DB만 사용했으며, 실제 사내 서버에서의 재실행 확인은 별도다. 진단별 조치는 [계정 백업 실패 안내](account-backup-and-recovery.md#업데이트-중-계정-백업-실패)를 따른다.
 
+## 2026-09-10 미디어 무결성 오류 후속 수정
+
+사내 오류 코드가 `ACCOUNT_BACKUP_FAILED_MEDIA_INTEGRITY`로 확인됐다. 기존 파일을 지원하는 기본 `dual-read`와 자동 백업의 DB 전용 릴리스 검사 사이에 정책 충돌이 있었다. 사내 개별 미디어의 상태는 직접 조회하지 않았으나, 파일 방식 미디어·미생성 데모·정리 대기 정상 blob을 가진 실제 PostgreSQL 테스트 DB에서 동일 오류를 재현했다.
+
+현재 스키마의 `dual-read` 배포는 별도 `analysis-canvas-deployment-postgresql` 형식으로 계정·권한·전체 DB와 기존 `backend/assets`, `video_example` 파일을 보존한다. DB 덤프와 목록의 동일 스냅샷, 파일별 해시와 ZIP 재읽기, 파일 변경·누락·링크·Windows junction 거부를 검증한다. 선택적 데모 미완성과 정리 대기 정상 blob은 상태를 명시해 그대로 보존한다. 실제 DB 내용 손상·누락 참조·고립 chunk·누락 일반 미디어 파일은 계속 중단한다. DB 전용 백업·복원·시작 검사는 유지하며 저장 모드를 자동 전환하지 않는다.
+
+검증 결과는 **80개 통과, 3개 건너뜀**이다. 건너뜀은 이 Windows 환경에서 만들 수 없는 symlink fixture이며 Windows junction 검사는 통과했다. 실제 PostgreSQL 별도 DB에서 strict 실패를 재현한 뒤 dual-read DB 덤프·파일·데모 ZIP을 새 DB와 새 폴더로 복원했다. 계정 목록·비밀번호 해시·권한과 전체 미디어 목록이 같았고, 일반 미디어 원본 누락과 blob 해시 변조를 각각 주입했을 때 백업 실패로 중단됐다. 복구용 테스트 데이터만 사용했고 원본 계정 초기화·자동 미디어 이전·삭제는 하지 않았다.
+
+계속 실패하면 `ACCOUNT_BACKUP_MEDIA`와 `failure.json.media_diagnostics`의 고정 reason·숫자로 구분한다. 새 배포 백업은 DB와 파일을 함께 복원해야 하므로 [dual-read 업데이트 백업과 복구](account-backup-and-recovery.md#dual-read-업데이트-백업과-복구) 절차를 따른다. 엄격한 `restore_postgres.py`에 넣으면 복구 전 해당 절차를 안내하고 중단한다.
+
 ## 이번 검증 기록
 
 | 검증 | 결과와 범위 |

@@ -157,6 +157,58 @@ def test_backup_manifest_embeds_inventory_and_pg_dump_snapshot(
     assert json.loads(manifest.read_text(encoding="utf-8"))["account_inventory"] == _account_inventory()
 
 
+def test_deployment_bundle_uses_same_snapshot_and_distinct_restore_contract(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from scripts import deployment_media_backup
+    holder = SimpleNamespace(closed=False)
+    holder.close = lambda: setattr(holder, "closed", True)
+    def snapshot(_url, *, deployment=False):
+        assert deployment is True
+        return holder, "deployment-snapshot", _inventory(), _account_inventory()
+    monkeypatch.setattr(backup, "_snapshot_inventory", snapshot)
+    monkeypatch.setattr(backup, "executable", lambda name: name)
+    def bundle(connection, inventory, assets_root, archive_path):
+        assert connection is holder and not holder.closed
+        assert inventory == _inventory()
+        archive_path.write_bytes(b"archived assets")
+        return {"filename": archive_path.name, "bytes": archive_path.stat().st_size, "sha256": backup.sha256(archive_path)}
+    monkeypatch.setattr(deployment_media_backup, "create_deployment_media_bundle", bundle)
+    def run(command, **_kwargs):
+        if command[0] == "pg_dump":
+            assert not holder.closed
+            assert "--snapshot=deployment-snapshot" in command
+            Path(command[command.index("--file") + 1]).write_bytes(b"snapshot dump")
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(backup.subprocess, "run", run)
+    monkeypatch.setattr(sys, "argv", _backup_argv(tmp_path) + ["--deployment-assets-root", str(tmp_path / "assets")])
+    backup.main()
+    dump = next(tmp_path.glob("*.dump"))
+    manifest = json.loads(dump.with_suffix(".manifest.json").read_text())
+    assert holder.closed
+    assert manifest["format"] == "analysis-canvas-deployment-postgresql"
+    assert manifest["recovery_contract"] == "database-and-assets-before-migration"
+    assert manifest["assets_backup"]["sha256"] == backup.sha256(next(tmp_path.glob("*.assets.zip")))
+    # A dual-read bundle must never masquerade as a strict DB-only archive.
+    with pytest.raises(RuntimeError, match="manifest 형식"):
+        restore._read_verified_manifest(dump)
+
+
+def test_deployment_file_failure_does_not_publish_dump_or_manifest(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from scripts import deployment_media_backup
+    holder = SimpleNamespace(closed=False)
+    holder.close = lambda: setattr(holder, "closed", True)
+    monkeypatch.setattr(backup, "_snapshot_inventory", lambda _url, **_kwargs: (holder, "snapshot", _inventory(), _account_inventory()))
+    def fail(*_args):
+        raise RuntimeError("synthetic missing source")
+    monkeypatch.setattr(deployment_media_backup, "create_deployment_media_bundle", fail)
+    monkeypatch.setattr(backup.subprocess, "run", lambda *_args, **_kwargs: pytest.fail("must stop before dump"))
+    monkeypatch.setattr(sys, "argv", _backup_argv(tmp_path) + ["--deployment-assets-root", str(tmp_path / "assets")])
+    with pytest.raises(RuntimeError, match="synthetic missing source"):
+        backup.main()
+    assert holder.closed
+    assert not list(tmp_path.glob("*.dump"))
+    assert not list(tmp_path.glob("*.manifest.json"))
+
+
 @pytest.mark.parametrize("label", ["../escape", "nested/archive", "white space", ""])
 def test_backup_rejects_pathlike_or_unsafe_label_before_snapshot_access(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, label: str

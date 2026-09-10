@@ -89,6 +89,26 @@ def test_schema_child_failure_has_stable_code() -> None:
     assert deployment._safe_failure_code(error) == "ACCOUNT_BACKUP_FAILED_DATABASE_SCHEMA_OBJECT_MISSING"
 
 
+def test_media_failure_report_includes_only_allowlisted_counts_and_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    root = _project(tmp_path)
+    inventory_error = json.dumps({"code": "MEDIA_INTEGRITY_FAILED", "media_inventory": {
+        "unbound_media_asset_count": 3, "corrupt_blob_count": 0,
+        "password": "synthetic-hidden-password", "corrupt_blob_ids": ["private-id"],
+    }})
+    stderr = "MediaIntegrityError: " + inventory_error + "\n" + "scripts.deployment_media_backup.DeploymentMediaBackupError: UNBOUND_MEDIA_FILE_MISSING"
+    def fail(*_args, **_kwargs):
+        raise deployment.AccountBackupChildError("postgres_current_schema_backup", subprocess.CalledProcessError(1, ["python", "backup_postgres.py"], stderr=stderr))
+    monkeypatch.setattr(deployment, "_duckdb_backup", fail)
+    monkeypatch.setattr(deployment.sys, "argv", ["prepare_account_deployment.py", "--project-root", str(root)])
+    assert deployment.main() == 1
+    output = capsys.readouterr().err
+    assert "ACCOUNT_BACKUP_MEDIA" in output and "UNBOUND_MEDIA_FILE_MISSING" in output
+    report = next((root / "backups/accounts").glob("*/failure.json")).read_text()
+    assert json.loads(report)["media_diagnostics"]["unbound_media_asset_count"] == 3
+    assert "synthetic-hidden-password" not in output + report
+    assert "private-id" not in output + report
+
+
 def test_known_pre_media_revision_uses_verified_legacy_dump(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     queries: list[str] = []
 

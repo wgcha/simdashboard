@@ -16,7 +16,7 @@ import psycopg
 BACKEND = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND))
 
-from app.services.media_integrity import media_inventory, require_media_integrity  # noqa: E402
+from app.services.media_integrity import media_inventory, require_media_integrity, validate_media_inventory_schema  # noqa: E402
 from scripts.account_backup_inventory import account_inventory  # noqa: E402
 try:  # pragma: no cover - branch depends on ``python script.py`` invocation
     from .postgres_cli import command_env, connection_args, executable, parse_target
@@ -114,7 +114,7 @@ def _psycopg_url(value: str) -> str:
     return value.replace("postgresql+psycopg://", "postgresql://", 1)
 
 
-def _snapshot_inventory(database_url: str) -> tuple[psycopg.Connection, str, dict[str, object], dict[str, object]]:
+def _snapshot_inventory(database_url: str, *, deployment: bool = False) -> tuple[psycopg.Connection, str, dict[str, object], dict[str, object]]:
     """Hold a repeatable-read snapshot open for inventory and ``pg_dump``.
 
     PostgreSQL keeps an exported snapshot valid only while its exporting
@@ -126,7 +126,12 @@ def _snapshot_inventory(database_url: str) -> tuple[psycopg.Connection, str, dic
         connection.execute("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
         snapshot = str(connection.execute("SELECT pg_export_snapshot()").fetchone()[0])
         inventory = media_inventory(connection)
-        require_media_integrity(inventory)
+        if deployment:
+            # The caller validates all database bytes and references plus the
+            # filesystem bundle before publishing a deployment manifest.
+            validate_media_inventory_schema(inventory)
+        else:
+            require_media_integrity(inventory)
         accounts = account_inventory(connection)
         return connection, snapshot, inventory, accounts
     except BaseException:
@@ -139,6 +144,7 @@ def main() -> None:
     parser.add_argument("--database-url", default=os.getenv("DATABASE_URL"))
     parser.add_argument("--output-dir", type=Path, default=Path(__file__).resolve().parents[1] / "backups")
     parser.add_argument("--label", default="analysis-canvas")
+    parser.add_argument("--deployment-assets-root", type=Path, help="Stopped-app dual-read deployment backup: preserve and verify existing files alongside the DB; not a database-only release backup.")
     args = parser.parse_args()
     if not args.database_url:
         raise RuntimeError("DATABASE_URL이 필요합니다.")
@@ -152,8 +158,18 @@ def main() -> None:
     _require_unused(final_path, label="backup dump")
     _require_unused(manifest_path, label="backup manifest")
     environment = command_env(target)
-    snapshot_connection, snapshot, inventory, accounts = _snapshot_inventory(args.database_url)
+    assets = None
+    if args.deployment_assets_root is not None:
+        snapshot_connection, snapshot, inventory, accounts = _snapshot_inventory(args.database_url, deployment=True)
+    else:
+        snapshot_connection, snapshot, inventory, accounts = _snapshot_inventory(args.database_url)
     try:
+        if args.deployment_assets_root is not None:
+            from scripts.deployment_media_backup import create_deployment_media_bundle
+            assets = create_deployment_media_bundle(
+                snapshot_connection, inventory, args.deployment_assets_root,
+                final_path.with_suffix(".assets.zip"),
+            )
         temporary_path = _reserve_unique_partial_path(final_path)
         dump_command = [
             executable("pg_dump"), *connection_args(target), "--format=custom", "--compress=6",
@@ -167,7 +183,7 @@ def main() -> None:
     # operator inspection.  A later invocation never reuses or overwrites it.
     _publish_without_overwrite(temporary_path, final_path)
     manifest = {
-        "format": "postgresql-custom",
+        "format": "analysis-canvas-deployment-postgresql" if assets is not None else "postgresql-custom",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "database": target.database,
         "filename": final_path.name,
@@ -176,6 +192,11 @@ def main() -> None:
         "media_inventory": inventory,
         "account_inventory": accounts,
     }
+    if assets is not None:
+        manifest["format_version"] = 1
+        manifest["assets_backup"] = assets
+        manifest["media_storage_mode"] = "dual-read"
+        manifest["recovery_contract"] = "database-and-assets-before-migration"
     _write_manifest_without_overwrite(manifest_path, manifest)
     print(f"PostgreSQL backup verified: file={final_path}, bytes={manifest['bytes']}, sha256={manifest['sha256']}")
     print(f"manifest={manifest_path}")

@@ -112,6 +112,8 @@ def _read_verified_manifest(backup: Path) -> dict[str, object]:
         raise RuntimeError("백업 manifest를 읽을 수 없습니다.") from error
     if not isinstance(manifest, dict):
         raise RuntimeError("백업 manifest는 JSON object여야 합니다.")
+    if manifest.get("format") == "analysis-canvas-deployment-postgresql":
+        raise RuntimeError("이 manifest 형식은 DB와 파일을 함께 복구하는 배포 백업입니다. docs/account-backup-and-recovery.md의 dual-read 복구 절차를 사용하세요.")
     if manifest.get("format") != "postgresql-custom":
         raise RuntimeError("지원하지 않는 백업 manifest 형식입니다.")
     if manifest.get("filename") != backup.name:

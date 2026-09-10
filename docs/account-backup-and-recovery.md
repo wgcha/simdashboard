@@ -16,7 +16,7 @@ manifest의 `account_inventory`에는 계정 수·상태별 수·관리자 수�
 
 `deploy.bat`과 `update.bat`은 기존 DB를 확인하면 마이그레이션·계정 변경 전에 자동 백업을 진행한다. 백업 위치는 배포 창에 표시한다. DB를 조회할 수 없거나 백업 검증에 실패하면 신규 설치로 간주하지 않고 배포를 중단한다. 계정 테이블에 회원이 없더라도 다른 기존 데이터가 있으면 백업한다.
 
-자동 백업은 `backups/accounts/<UTC 시각>-<고유값>/`에 저장된다. 바깥 `manifest.json`은 배포 판정·DB 백업·설정 파일 해시를 기록한다. 현재 PostgreSQL 스키마의 백업은 아래 복원 도구와 호환되는 `database-*.dump`와 같은 이름의 `.manifest.json`을 포함한다. DuckDB는 `database.duckdb`로 저장한다. `.env`, `backend/.env`, `.postgres-owner.env`가 있으면 함께 보호된 설정 백업으로 보관한다. Windows는 소유자 접근 권한을 적용한다.
+자동 백업은 `backups/accounts/<UTC 시각>-<고유값>/`에 저장된다. 바깥 `manifest.json`은 배포 판정·DB 백업·설정 파일 해시를 기록한다. `SIMDASH_MEDIA_STORAGE_MODE=database-only`의 현재 스키마 백업은 아래 엄격한 복원 도구와 호환되는 `database-*.dump`와 같은 이름의 `.manifest.json`을 포함한다. 기본 `dual-read`의 현재 스키마 백업은 DB 덤프에 `.assets.zip`을 추가하는 별도 배포 백업 형식이며, 아래 dual-read 복구 절차를 따른다. DuckDB는 `database.duckdb`로 저장한다. `.env`, `backend/.env`, `.postgres-owner.env`가 있으면 함께 보호된 설정 백업으로 보관한다. Windows는 소유자 접근 권한을 적용한다.
 
 계정 테이블이 아직 없는 레거시 PostgreSQL도 전체 dump를 남기되 `legacy_inventory_status=unavailable_legacy_schema`로 표시한다. 계정 테이블이 있더라도 저장소에 정의된 Alembic 0001~0007 revision은 미디어 테이블 도입 전이므로 같은 전체 dump 경로를 사용하고 `pg_restore --list`로 검증한다. 이 백업은 현재 미디어·계정 검증 계약을 충족한 것으로 취급하지 않는다. 레거시 복구는 별도 빈 DB에서 해당 버전에 맞는 `pg_restore`와 스키마 점검으로 진행해야 한다. 현재 스키마의 백업 실패를 레거시 방식으로 우회하지 않는다.
 
@@ -36,10 +36,30 @@ manifest의 `account_inventory`에는 계정 수·상태별 수·관리자 수�
 | `DATABASE_PRIVILEGE` | 백업용 owner 역할과 기존 테이블 조회 권한 |
 | `DATABASE_SCHEMA_OBJECT_MISSING` | 현재 DB revision과 누락된 스키마 객체. 검증된 백업 없이 마이그레이션을 먼저 진행하지 않음 |
 | `FILESYSTEM_ACCESS_OR_DISK` | 백업 폴더 접근 권한, 디스크 여유 공간, Windows 폴더 보호 정책 |
-| `MEDIA_INTEGRITY` | 미디어 참조·내용 무결성 점검. 검증 실패를 건너뛰지 않음 |
+| `MEDIA_INTEGRITY` | 추가 `ACCOUNT_BACKUP_MEDIA`의 숫자·reason으로 파일 누락, blob 손상, 참조 문제 등을 구분. DB 종류나 미디어 모드를 임의로 바꿔 우회하지 않음 |
 | `UNKNOWN` | 출력된 stage와 진단 코드를 기록하고 해당 단계의 설정·전제 조건 확인 |
 
 수정본을 반영한 뒤 기존 설치 폴더에서 `update.bat`을 다시 실행한다. 계속 실패하면 비밀정보 대신 `code`, `stage`만 공유해 원인을 좁힌다. DB 삭제, 백업 검사 해제, 최초 설치 강제 전환으로 해결하지 않는다.
+
+미디어 실패는 `failure.json`의 `media_diagnostics`와 콘솔 `ACCOUNT_BACKUP_MEDIA`에 허용된 숫자·상태·고정 reason만 추가한다. 사용자 ID, blob ID, 원본 파일 경로는 출력하지 않는다. `UNBOUND_MEDIA_FILE_MISSING`은 파일 방식 미디어의 원본이 없다는 뜻이고, `MEDIA_BLOB_CORRUPT`는 DB 미디어 바이트의 해시 불일치, `MEDIA_DATABASE_REFERENCES_INVALID`는 누락된 DB 참조·고립 chunk·예상 밖 데모 식별자를 의미한다. `ASSETS_CHANGED`는 백업 중 파일 변경이며 앱·파일 작성 프로세스를 종료한 후 다시 확인한다.
+
+## dual-read 업데이트 백업과 복구
+
+2026-09-10 추가 수정: 기본 `dual-read`는 파일 방식 미디어를 정상 지원하지만 이전 자동 백업은 DB 전용 릴리스 검사를 먼저 요구했다. `blob_id`가 없는 정상 파일, 아직 DB에 생성되지 않은 데모, 내용이 정상인 정리 대기 blob 때문에 계정 업데이트까지 중단될 수 있었다.
+
+현재는 배포 전에 저장 모드를 읽어 백업 계약을 선택한다. `dual-read` 백업 형식은 `analysis-canvas-deployment-postgresql`이며 `recovery_contract=database-and-assets-before-migration`를 기록한다. 계정·미디어 목록과 전체 덤프는 같은 읽기 전용 PostgreSQL 스냅샷을 사용한다. `backend/assets`와 프로젝트 루트의 `video_example`에 존재하는 전체 파일을 ZIP 안의 `assets/`, `video_example/`에 각각 저장한다. DB 파일 참조의 원본 존재 여부, 경로 범위, 링크·Windows junction, 파일별 SHA-256, ZIP 재읽기, 백업 전후 파일 목록과 내용을 검증한다. 파일 작성 프로세스가 중지되어 있어야 한다.
+
+DB 손상 blob, 누락 DB 참조, 고립 chunk, 예상 밖 데모 ID, 누락된 일반 미디어 원본, 파일 변경·접근 오류는 계속 배포를 중단한다. 내용이 정상인 고립 blob은 덤프에 그대로 보존하고 `ORPHAN_BLOBS_INCLUDED`를 표시한다. 선택적인 합성 데모 목록이 덜 생성됐거나 데모 폴더가 없으면 `INCOMPLETE_DEMO_CATALOG_INCLUDED` / `DEMO_SOURCE_MISSING`를 기록한다. 이는 기존 상태를 보존했다는 뜻이며, 없던 데모를 생성하거나 DB 전용 미디어 준비 완료로 판정하지 않는다. 원본 미디어를 삭제하거나 자동 이전하지 않는다.
+
+복구는 기존 운영 DB와 폴더를 덮어쓰지 않는 별도 환경에서 진행한다.
+
+1. 바깥 `manifest.json`과 DB `.manifest.json`의 형식을 확인하고, DB dump 및 `.assets.zip`의 크기·SHA-256이 기록과 일치하는지 확인한다. `BACKUP_FAILED` 또는 성공 manifest가 없는 묶음은 사용하지 않는다.
+2. 빈 복구 DB와 owner/app 역할을 준비한다. 보호된 접속 환경에서 `pg_restore --single-transaction --exit-on-error --no-owner --no-privileges`로 지정한 빈 DB에 dump를 복원한다. 운영 DB를 대상으로 `--clean`을 실행하지 않는다.
+3. ZIP 경로에 절대 경로·상위 이동·링크가 없는지 확인하고 빈 임시 폴더에 해제한다. `assets/` 내용은 새 설치의 `backend/assets`, `video_example/` 내용은 새 설치 루트의 `video_example`에 배치한다. 빈 폴더를 대상으로 하며 운영 파일과 합치지 않는다.
+4. 보호된 설정 백업을 참고해 새 DB 연결과 기존 인증 서명 키를 설정하고, 복구 환경의 `SIMDASH_MEDIA_STORAGE_MODE=dual-read`를 유지한다. 원래 버전에서 계정 목록·비밀번호 해시·권한 및 `media_inventory`가 백업 시점과 같은지 확인한다. 앱 역할 권한은 기존 `harden_postgres_privileges.py` 절차로 적용한다.
+5. 원래 관리자·회원의 로그인과 파일 기반 미디어 조회를 확인한 뒤 업데이트를 진행한다. DB 전용 전환은 별도 미디어 이전·검증 작업이다.
+
+`restore_postgres.py`는 이 형식을 DB 전용 백업으로 복원하지 않고 위 절차를 안내한다. 기존 `postgresql-custom`의 엄격한 복원 및 `database-only` 시작 검사는 유지한다.
 
 ## 새 DB로 복구·이관
 
