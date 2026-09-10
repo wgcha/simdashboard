@@ -17,13 +17,63 @@ import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlsplit
 
 from dotenv import dotenv_values
 
 BACKEND = Path(__file__).resolve().parents[1]
 ROOT = BACKEND.parent
 sys.path.insert(0, str(BACKEND))
+
+
+class AccountBackupChildError(RuntimeError):
+    """Keep a failed child result available for safe diagnostic classification."""
+
+    def __init__(self, stage: str, cause: BaseException):
+        super().__init__("PostgreSQL 계정 백업에 실패했습니다." if stage == "postgres_current_schema_backup" else stage)
+        self.stage = stage
+        self.cause = cause
+
+
+class AccountBackupFailure(RuntimeError):
+    """A backup failure carrying only allowlisted deployment diagnostics."""
+
+    def __init__(self, code: str, stage: str, cause: BaseException, report_path: Path | None):
+        # Preserve the original message for direct Python callers and existing
+        # error handling.  ``main`` intentionally never prints it.
+        super().__init__(str(cause))
+        self.code = code
+        self.stage = stage
+        self.report_path = report_path
+        self.__cause__ = cause
+
+
+_POSTGRES_TOOL_MARKERS = ("pg_dump", "pg_restore")
+_MISSING_TOOL_MARKERS = ("not recognized as an internal", "command not found", "no such file or directory")
+_PERMISSION_OR_DISK_MARKERS = ("permission denied", "access is denied", "disk full", "not enough space", "no space left", "quota exceeded", "read-only file system", "acl", "reparse point")
+_VERSION_MARKERS = ("server version", "version mismatch", "unsupported version", "server version:")
+_MEDIA_INTEGRITY_MARKERS = ("mediaintegrityerror", "media_integrity_failed", "media integrity", "media_inventory", "media inventory", "media blob", "media file")
+_SCHEMA_MISSING_MARKERS = ("undefinedtable", "undefinedcolumn", "relation does not exist", "column does not exist", "table does not exist")
+_AUTH_CONNECTION_MARKERS = ("password authentication failed", "authentication failed", "no pg_hba.conf entry", "could not connect", "connection refused", "connection timed out", "operationalerror")
+_PRE_MEDIA_ALEMBIC_REVISIONS = {
+    "0001_initial",
+    "0002_security_audit",
+    "0003_workbench_demo",
+    "0004_request_work_plans",
+    "0005_batch_execution_profiles",
+    "0006_batch_attempts",
+    "0007_access_control_menu_policy",
+}
+
+_REMEDIATION = {
+    "ACCOUNT_BACKUP_FAILED_MISSING_POSTGRES_TOOLS": "Install matching PostgreSQL client tools or set POSTGRES_BIN, then retry.",
+    "ACCOUNT_BACKUP_FAILED_FILESYSTEM_ACCESS_OR_DISK": "Check the backup path permissions, available disk space, and Windows folder access policy, then retry.",
+    "ACCOUNT_BACKUP_FAILED_DATABASE_CONNECTION_OR_AUTHENTICATION": "Verify the PostgreSQL service and configured owner connection credentials, then retry.",
+    "ACCOUNT_BACKUP_FAILED_DATABASE_SCHEMA_OBJECT_MISSING": "Check the database revision and missing schema objects with the administrator; preserve a verified backup before any migration.",
+    "ACCOUNT_BACKUP_FAILED_DATABASE_PRIVILEGE": "Check the configured PostgreSQL backup owner role and its database read permissions, then retry.",
+    "ACCOUNT_BACKUP_FAILED_POSTGRES_VERSION_MISMATCH": "Use PostgreSQL client tools compatible with the server version, then retry.",
+    "ACCOUNT_BACKUP_FAILED_MEDIA_INTEGRITY": "Repair the reported media integrity issue before retrying the deployment backup.",
+    "ACCOUNT_BACKUP_FAILED_UNKNOWN": "Review the protected failure report and deployment prerequisites, then retry.",
+}
 
 
 def _sha256(path: Path) -> str:
@@ -118,6 +168,139 @@ def _write_manifest(directory: Path, value: dict[str, object]) -> Path:
     return path
 
 
+def _child_environment(env: dict[str, str]) -> dict[str, str]:
+    """Build a deterministic, non-interactive child process environment."""
+    result = os.environ.copy()
+    result.update(env)
+    result["PYTHONIOENCODING"] = "utf-8"
+    return result
+
+
+def _run_backup_child(command: list[str], *, cwd: Path, env: dict[str, str], stage: str, stdout: int | None = subprocess.PIPE) -> None:
+    """Run a backup child without ever relaying its untrusted output."""
+    try:
+        result = subprocess.run(
+            command,
+            cwd=cwd,
+            env=_child_environment(env),
+            stdout=stdout,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+    except (FileNotFoundError, OSError, subprocess.CalledProcessError) as error:
+        raise AccountBackupChildError(stage, error) from error
+    if getattr(result, "returncode", 0):
+        error = subprocess.CalledProcessError(
+            result.returncode,
+            command,
+            output=getattr(result, "stdout", None),
+            stderr=getattr(result, "stderr", None),
+        )
+        raise AccountBackupChildError(stage, error) from error
+
+
+def _child_text(error: BaseException) -> str:
+    """Return child output only for local allowlist matching; never persist it."""
+    if isinstance(error, AccountBackupChildError):
+        error = error.cause
+    if isinstance(error, subprocess.CalledProcessError):
+        return "\n".join(str(value) for value in (error.stderr, error.stdout) if value is not None)
+    return str(error)
+
+
+def _safe_failure_code(error: BaseException) -> str:
+    """Map untrusted exception details to a stable, non-secret code."""
+    child = error.cause if isinstance(error, AccountBackupChildError) else error
+    try:
+        from scripts.postgres_cli import PostgresToolNotFound
+    except ImportError:  # pragma: no cover - script invocation fallback
+        PostgresToolNotFound = ()  # type: ignore[assignment]
+    if isinstance(child, PostgresToolNotFound):
+        return "ACCOUNT_BACKUP_FAILED_MISSING_POSTGRES_TOOLS"
+    if isinstance(child, FileNotFoundError):
+        return "ACCOUNT_BACKUP_FAILED_MISSING_POSTGRES_TOOLS"
+    if isinstance(child, (PermissionError, IsADirectoryError, NotADirectoryError)):
+        return "ACCOUNT_BACKUP_FAILED_FILESYSTEM_ACCESS_OR_DISK"
+    text = _child_text(error).casefold()
+    if "postgrestoolnotfound" in text:
+        return "ACCOUNT_BACKUP_FAILED_MISSING_POSTGRES_TOOLS"
+    if any(marker in text for marker in ("insufficientprivilege", "sqlstate 42501", "permission denied for", "permission denied to", "must be owner of")):
+        return "ACCOUNT_BACKUP_FAILED_DATABASE_PRIVILEGE"
+    # Reuse the migration preflight's allowlisted PostgreSQL parsing for SQL
+    # states and client exception names.  Its return value is a code only.
+    try:
+        from scripts.upgrade_postgres_schema import _safe_alembic_failure_code
+        migration_code = _safe_alembic_failure_code(text, getattr(child, "returncode", 1))
+    except Exception:  # Classification must never hide the backup failure.
+        migration_code = "MIGRATION_COMMAND_FAILED_UNCLASSIFIED"
+    if migration_code.endswith("DATABASE_OBJECT_MISSING"):
+        return "ACCOUNT_BACKUP_FAILED_DATABASE_SCHEMA_OBJECT_MISSING"
+    if migration_code.endswith("CONNECTION_OR_AUTHENTICATION"):
+        return "ACCOUNT_BACKUP_FAILED_DATABASE_CONNECTION_OR_AUTHENTICATION"
+    if migration_code.endswith("INSUFFICIENT_PRIVILEGE"):
+        return "ACCOUNT_BACKUP_FAILED_FILESYSTEM_ACCESS_OR_DISK"
+    command = getattr(child, "cmd", None)
+    command_text = " ".join(str(part) for part in command) if isinstance(command, (list, tuple)) else ""
+    if any(marker in text for marker in _PERMISSION_OR_DISK_MARKERS):
+        return "ACCOUNT_BACKUP_FAILED_FILESYSTEM_ACCESS_OR_DISK"
+    if any(marker in text for marker in _VERSION_MARKERS):
+        return "ACCOUNT_BACKUP_FAILED_POSTGRES_VERSION_MISMATCH"
+    if any(marker in text for marker in _MEDIA_INTEGRITY_MARKERS):
+        return "ACCOUNT_BACKUP_FAILED_MEDIA_INTEGRITY"
+    if any(marker in text for marker in _SCHEMA_MISSING_MARKERS):
+        return "ACCOUNT_BACKUP_FAILED_DATABASE_SCHEMA_OBJECT_MISSING"
+    if any(marker in text for marker in _AUTH_CONNECTION_MARKERS):
+        return "ACCOUNT_BACKUP_FAILED_DATABASE_CONNECTION_OR_AUTHENTICATION"
+    if isinstance(child, subprocess.CalledProcessError) and (
+        any(marker in command_text.casefold() for marker in _POSTGRES_TOOL_MARKERS)
+        and any(marker in text for marker in _MISSING_TOOL_MARKERS)
+    ):
+        return "ACCOUNT_BACKUP_FAILED_MISSING_POSTGRES_TOOLS"
+    return "ACCOUNT_BACKUP_FAILED_UNKNOWN"
+
+
+def _safe_failure_stage(error: BaseException, fallback: str) -> str:
+    if isinstance(error, AccountBackupChildError):
+        return error.stage
+    if isinstance(error, (PermissionError, IsADirectoryError, NotADirectoryError)):
+        return "filesystem"
+    return fallback
+
+
+def _write_failure_report(directory: Path | None, *, code: str, stage: str) -> Path | None:
+    """Best-effort, protected report containing no exception or child output."""
+    if directory is None:
+        return None
+    try:
+        path = directory / "failure.json"
+        payload = {
+            "format": "analysis-canvas-account-deployment-backup-failure",
+            "format_version": 1,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "code": code,
+            "stage": stage,
+            "remediation": _REMEDIATION[code],
+        }
+        encoded = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+        temporary = directory / f".failure-{uuid.uuid4().hex}.partial"
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            offset = 0
+            while offset < len(encoded):
+                offset += os.write(descriptor, encoded[offset:])
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        os.replace(temporary, path)
+        _secure_payload(path)
+        return path
+    except Exception:
+        return None
+
+
 def _duckdb_backup(path: Path, directory: Path) -> dict[str, object]:
     if path.exists() and not path.is_file():
         raise RuntimeError("ANALYSIS_DUCKDB_PATH가 일반 파일이 아닙니다.")
@@ -168,22 +351,27 @@ def _postgres_backup(url: str, directory: Path, env: dict[str, str]) -> dict[str
         if not tables:
             return {"classification": "fresh", "database_backup": None}
         names = {row[0] for row in connection.execute("SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p')").fetchall()}
-    command_env = os.environ.copy()
-    command_env.update(env)
+        version_relation = connection.execute("SELECT to_regclass('public.alembic_version')").fetchone()[0]
+        revisions = set()
+        if version_relation:
+            revisions = {str(row[0]) for row in connection.execute("SELECT version_num FROM alembic_version").fetchall()}
+    command_env = dict(env)
     command_env.pop("PGPASSWORD", None)
     command_env["DATABASE_URL"] = owner_url
     if password:
         command_env["PGPASSWORD"] = owner_target[3]
-    supported = {"users", "project_memberships"}.issubset(names)
+    # Revisions through 0007 predate media storage (0008).  They may already
+    # contain accounts, but cannot satisfy the canonical media inventory
+    # backup contract.  This is deliberately an exact allowlist: an unknown
+    # revision with these tables remains on the canonical, fail-closed path.
+    pre_media_schema = bool(revisions) and revisions.issubset(_PRE_MEDIA_ALEMBIC_REVISIONS)
+    supported = {"users", "project_memberships"}.issubset(names) and not pre_media_schema
     if supported:
         # Keep the canonical snapshot/inventory/manifest contract used by
         # restore_postgres.py.  Its failures are fatal for the current schema;
         # only an actually legacy schema takes the minimal fallback below.
         command = [sys.executable, str(BACKEND / "scripts" / "backup_postgres.py"), "--output-dir", str(directory), "--label", "database"]
-        try:
-            subprocess.run(command, cwd=BACKEND, env=command_env, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        except subprocess.CalledProcessError as error:
-            raise RuntimeError("PostgreSQL 계정 백업에 실패했습니다.") from error
+        _run_backup_child(command, cwd=BACKEND, env=command_env, stage="postgres_current_schema_backup")
         dumps = sorted(directory.glob("database-*.dump"), key=lambda item: item.stat().st_mtime, reverse=True)
         if not dumps:
             raise RuntimeError("PostgreSQL 백업 파일이 생성되지 않았습니다.")
@@ -201,9 +389,26 @@ def _postgres_backup(url: str, directory: Path, env: dict[str, str]) -> dict[str
     # available during restore.
     dump = directory / "database.dump"
     pg_bin = env.get("POSTGRES_BIN")
-    executable = lambda name: str(Path(pg_bin) / (name + (".exe" if os.name == "nt" else ""))) if pg_bin else name
-    subprocess.run([executable("pg_dump"), "--host", host, "--port", port, "--username", user, "--dbname", database, "--format=custom", "--no-owner", "--no-privileges", "--file", str(dump)], env=command_env, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    subprocess.run([executable("pg_restore"), "--list", str(dump)], env=command_env, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    if pg_bin:
+        executable = lambda name: str(Path(pg_bin) / (name + (".exe" if os.name == "nt" else "")))
+    else:
+        # Use the shared resolver so Windows PostgreSQL installer locations
+        # work even when their bin folder is not on PATH.
+        from scripts.postgres_cli import executable
+    _run_backup_child(
+        [executable("pg_dump"), "--host", host, "--port", port, "--username", user, "--dbname", database, "--format=custom", "--no-owner", "--no-privileges", "--file", str(dump)],
+        cwd=BACKEND,
+        env=command_env,
+        stage="postgres_legacy_dump",
+        stdout=subprocess.DEVNULL,
+    )
+    _run_backup_child(
+        [executable("pg_restore"), "--list", str(dump)],
+        cwd=BACKEND,
+        env=command_env,
+        stage="postgres_legacy_integrity_check",
+        stdout=subprocess.DEVNULL,
+    )
     _secure_payload(dump)
     evidence = {"format": "postgresql-custom", "created_at": datetime.now(timezone.utc).isoformat(), "database": database, "filename": dump.name, "bytes": dump.stat().st_size, "sha256": _sha256(dump), "legacy_inventory_status": "unavailable_legacy_schema"}
     manifest_path = dump.with_suffix(".manifest.json")
@@ -214,37 +419,52 @@ def _postgres_backup(url: str, directory: Path, env: dict[str, str]) -> dict[str
 
 def prepare(project_root: Path) -> Path:
     project_root = project_root.expanduser().resolve()
-    env = _effective_env(project_root)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
-    directory = _secure_dir(project_root / "backups" / "accounts" / stamp)
+    directory: Path | None = None
+    stage = "prepare_directory"
     try:
+        env = _effective_env(project_root)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
+        directory = _secure_dir(project_root / "backups" / "accounts" / stamp)
         # A missing backend follows the application default: PostgreSQL.  Do
         # not silently create a legacy DuckDB file when DATABASE_URL is absent.
+        stage = "select_backend"
         backend = env.get("ANALYSIS_DB_BACKEND", "postgresql").strip().lower()
         if backend == "duckdb":
+            stage = "duckdb_backup"
             db = Path(env.get("ANALYSIS_DUCKDB_PATH", str(project_root / "backend" / "data" / "analysis_dashboard.duckdb"))).expanduser()
             if not db.is_absolute():
                 db = (project_root / "backend" / db).resolve()
             result = _duckdb_backup(db, directory)
         elif backend == "postgresql":
+            stage = "postgres_backup"
             url = env.get("DATABASE_URL")
             if not url:
                 raise RuntimeError("DATABASE_URL이 필요합니다.")
             result = _postgres_backup(url, directory, env)
         else:
             raise RuntimeError("ANALYSIS_DB_BACKEND은 duckdb 또는 postgresql이어야 합니다.")
+        stage = "copy_environment_files"
         files = [x for x in (
             _copy_secret_file(project_root / ".env", directory / ".env.backup"),
             _copy_secret_file(project_root / "backend" / ".env", directory / "backend.env.backup"),
             _copy_secret_file(project_root / ".postgres-owner.env", directory / ".postgres-owner.env.backup"),
         ) if x]
+        stage = "write_manifest"
         manifest = {"format": "analysis-canvas-account-deployment-backup", "format_version": 1, "created_at": datetime.now(timezone.utc).isoformat(), "backend": backend, **result, "environment_files": files}
         manifest_path = _write_manifest(directory, manifest)
         print(f"ACCOUNT_BACKUP_READY classification={result['classification']} manifest={manifest_path}")
         return directory
-    except Exception:
-        (directory / "BACKUP_FAILED").write_text("Backup failed; deployment must stop.\n", encoding="utf-8")
-        raise
+    except Exception as error:
+        code = _safe_failure_code(error)
+        safe_stage = _safe_failure_stage(error, stage)
+        report_path = _write_failure_report(directory, code=code, stage=safe_stage)
+        if directory is not None:
+            try:
+                (directory / "BACKUP_FAILED").write_text("Backup failed; deployment must stop.\n", encoding="utf-8")
+                _secure_payload(directory / "BACKUP_FAILED")
+            except Exception:
+                pass
+        raise AccountBackupFailure(code, safe_stage, error, report_path) from error
 
 
 def main() -> int:
@@ -254,8 +474,15 @@ def main() -> int:
     try:
         prepare(args.project_root)
         return 0
+    except AccountBackupFailure as error:
+        report = f" report={error.report_path}" if error.report_path else ""
+        print(f"ACCOUNT_BACKUP_FAILED code={error.code} stage={error.stage}{report}", file=sys.stderr)
+        print(f"ACCOUNT_BACKUP_ACTION {_REMEDIATION[error.code]}", file=sys.stderr)
+        return 1
     except Exception:
-        print("ACCOUNT_BACKUP_FAILED: protected account backup could not be completed", file=sys.stderr)
+        # Defensive fallback for errors outside ``prepare`` itself.  Never
+        # include exception text because it may contain database credentials.
+        print("ACCOUNT_BACKUP_FAILED code=ACCOUNT_BACKUP_FAILED_UNKNOWN stage=entrypoint", file=sys.stderr)
         return 1
 
 

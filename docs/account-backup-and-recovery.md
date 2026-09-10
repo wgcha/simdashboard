@@ -6,7 +6,7 @@
 
 마이그레이션·재설치·DB 이관 전에 백업한다. 전체 custom-format `pg_dump`에 계정 테이블과 비밀번호 해시를 포함하므로 복원 후 기존 비밀번호를 사용할 수 있다. `.dump`와 함께 생성된 `.manifest.json`을 한 쌍으로 보호된 백업 저장소에 보관한다. DB 백업에는 민감한 데이터가 있으므로 공개 배포 ZIP이나 소스 저장소에 넣지 않는다.
 
-운영자의 보호된 환경에 `DATABASE_URL`과 `POSTGRES_BIN`을 설정한 후 실행한다. 비밀번호가 포함된 연결 문자열은 명령 예시·로그·manifest에 기록하지 않는다.
+운영자의 보호된 환경에 `DATABASE_URL`을 설정한 후 실행한다. PostgreSQL 도구는 `POSTGRES_BIN`, `PATH`, Windows 표준 설치 폴더 순서로 찾는다. 표준 설치 폴더는 `%ProgramFiles%/PostgreSQL/<버전>/bin` 및 `C:`부터 `Z:`까지의 `PostgreSQL/<버전>/bin`이며, 자동 탐색 후보는 버전 숫자가 큰 순서로 확인한다. 다른 경로에 설치했거나 `PATH`에 오래된 도구가 있으면 서버 버전과 호환되는 실제 bin 폴더를 `POSTGRES_BIN`으로 지정한다. 비밀번호가 포함된 연결 문자열은 명령 예시·로그·manifest에 기록하지 않는다.
 
 ```powershell
 .\scripts\postgres\backup-postgres.ps1 -OutputDir 'D:\simulation-backups'
@@ -18,9 +18,28 @@ manifest의 `account_inventory`에는 계정 수·상태별 수·관리자 수�
 
 자동 백업은 `backups/accounts/<UTC 시각>-<고유값>/`에 저장된다. 바깥 `manifest.json`은 배포 판정·DB 백업·설정 파일 해시를 기록한다. 현재 PostgreSQL 스키마의 백업은 아래 복원 도구와 호환되는 `database-*.dump`와 같은 이름의 `.manifest.json`을 포함한다. DuckDB는 `database.duckdb`로 저장한다. `.env`, `backend/.env`, `.postgres-owner.env`가 있으면 함께 보호된 설정 백업으로 보관한다. Windows는 소유자 접근 권한을 적용한다.
 
-계정 테이블이 아직 없는 레거시 PostgreSQL도 전체 dump를 남기되 `legacy_inventory_status=unavailable_legacy_schema`로 표시한다. 이 백업은 현재 미디어·계정 검증 계약을 충족한 것으로 취급하지 않는다. 레거시 복구는 별도 빈 DB에서 해당 버전에 맞는 `pg_restore`와 스키마 점검으로 진행해야 한다.
+계정 테이블이 아직 없는 레거시 PostgreSQL도 전체 dump를 남기되 `legacy_inventory_status=unavailable_legacy_schema`로 표시한다. 계정 테이블이 있더라도 저장소에 정의된 Alembic 0001~0007 revision은 미디어 테이블 도입 전이므로 같은 전체 dump 경로를 사용하고 `pg_restore --list`로 검증한다. 이 백업은 현재 미디어·계정 검증 계약을 충족한 것으로 취급하지 않는다. 레거시 복구는 별도 빈 DB에서 해당 버전에 맞는 `pg_restore`와 스키마 점검으로 진행해야 한다. 현재 스키마의 백업 실패를 레거시 방식으로 우회하지 않는다.
 
 배포와 무관한 정기 백업 스케줄과 보관 기간은 아직 자동 등록하지 않는다. 운영자가 사내 정책에 맞게 별도 설정하고, 별도 저장 장치로 복제하며 주기적으로 복구 연습을 해야 한다. 같은 디스크의 자동 백업만으로 디스크 고장까지 대비할 수는 없다.
+
+## 업데이트 중 계정 백업 실패
+
+`Account backup preparation failed`는 마이그레이션 전 백업 단계가 실패해 배포를 중단했다는 뜻이다. 2026-09-10 수정본부터 바로 위에 `ACCOUNT_BACKUP_FAILED code=... stage=...`와 `ACCOUNT_BACKUP_ACTION` 조치 안내를 출력한다. 보호된 백업 폴더가 준비된 경우 같은 내용을 `backups/accounts/<시각>-<고유값>/failure.json`에도 남긴다. 폴더 생성·권한 설정 자체가 실패하면 보고서가 없을 수 있다. DB 연결 문자열, 비밀번호, 자식 프로세스의 원문 오류는 진단 출력에 포함하지 않는다.
+
+아래 코드에는 공통 접두사 `ACCOUNT_BACKUP_FAILED_`가 붙는다.
+
+| 코드 | 확인할 사항 |
+|---|---|
+| `MISSING_POSTGRES_TOOLS` | `pg_dump`, `pg_restore` 설치 및 `POSTGRES_BIN`의 실제 bin 경로 |
+| `POSTGRES_VERSION_MISMATCH` | 서버와 호환되는 클라이언트 도구를 `POSTGRES_BIN`으로 지정. 오래된 `PATH` 도구가 우선될 수 있음 |
+| `DATABASE_CONNECTION_OR_AUTHENTICATION` | PostgreSQL 서비스, 연결 대상, 보호된 owner 연결 설정 |
+| `DATABASE_PRIVILEGE` | 백업용 owner 역할과 기존 테이블 조회 권한 |
+| `DATABASE_SCHEMA_OBJECT_MISSING` | 현재 DB revision과 누락된 스키마 객체. 검증된 백업 없이 마이그레이션을 먼저 진행하지 않음 |
+| `FILESYSTEM_ACCESS_OR_DISK` | 백업 폴더 접근 권한, 디스크 여유 공간, Windows 폴더 보호 정책 |
+| `MEDIA_INTEGRITY` | 미디어 참조·내용 무결성 점검. 검증 실패를 건너뛰지 않음 |
+| `UNKNOWN` | 출력된 stage와 진단 코드를 기록하고 해당 단계의 설정·전제 조건 확인 |
+
+수정본을 반영한 뒤 기존 설치 폴더에서 `update.bat`을 다시 실행한다. 계속 실패하면 비밀정보 대신 `code`, `stage`만 공유해 원인을 좁힌다. DB 삭제, 백업 검사 해제, 최초 설치 강제 전환으로 해결하지 않는다.
 
 ## 새 DB로 복구·이관
 

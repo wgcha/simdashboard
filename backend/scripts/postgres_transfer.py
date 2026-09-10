@@ -24,7 +24,7 @@ from sqlalchemy.engine import URL
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from scripts.postgres_cli import command_env, connection_args, parse_target
+from scripts.postgres_cli import command_env, connection_args, executable, parse_target
 from scripts.postgres_replacement import (
     create_replacement_backup,
     create_assets_backup,
@@ -98,24 +98,8 @@ def require_stopped() -> None:
 
 
 def find_pg_tool(name: str) -> str:
-    suffix = ".exe" if os.name == "nt" else ""
-    configured = os.getenv("POSTGRES_BIN")
-    candidates: list[Path] = []
-    if configured:
-        candidates.append(Path(configured) / f"{name}{suffix}")
-    found = shutil.which(name)
-    if found:
-        return found
-    if os.name == "nt":
-        program_files = os.getenv("ProgramFiles")
-        if program_files:
-            candidates.extend(sorted(Path(program_files).glob(f"PostgreSQL/*/bin/{name}.exe"), reverse=True))
-        for drive in "CDEFGHIJKLMNOPQRSTUVWXYZ":
-            candidates.extend(sorted(Path(f"{drive}:\\PostgreSQL").glob(f"*/bin/{name}.exe"), reverse=True))
-    for candidate in candidates:
-        if candidate.is_file():
-            return str(candidate.resolve())
-    raise RuntimeError(f"{name} was not found. Set POSTGRES_BIN to the PostgreSQL bin directory.")
+    # Installation, transfer, backup and restore must discover the same tools.
+    return executable(name)
 
 
 def service_url(parts: dict[str, str], role: str, password: str, database: str = DATABASE) -> str:
