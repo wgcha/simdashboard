@@ -1688,6 +1688,7 @@ button { color: inherit; }
   padding: 24px;
   overflow: auto;
 }
+@media(max-width:620px){.access-admin-page .content-head .ghost-button{display:inline-flex!important;align-self:flex-start}}
 
 .access-admin-card {
   border: 1px solid var(--border, rgba(148, 163, 184, .22));

@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test'
 import { mkdirSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { loginWorkspace } from './workspace-test-helpers'
+import { loginWorkspace, openWorkspaceRoute } from './workspace-test-helpers'
 
 test('개인 회원가입 신청 후 관리자 승인 안내와 로그인 화면으로 돌아간다', async ({ page }) => {
   let registration: Record<string, string> | undefined
@@ -95,8 +95,13 @@ test('실제 계정을 승인한 뒤 비밀번호 변경과 새 비밀번호 로
   await page.getByLabel('비밀번호').fill(oldPassword)
   await page.getByRole('button', { name: '로그인', exact: true }).click()
   await expect(page.getByRole('complementary', { name: '주 메뉴' })).toBeVisible()
-  await expect(page).toHaveURL(/\/workspace\/settings\/local-pc/)
+  await expect(page).toHaveURL(/\/workspace\/overview/)
+  await expect(page.getByRole('link', { name: '결과 대시보드', exact: true })).toBeVisible()
   await page.reload()
+  await expect(page).toHaveURL(/\/workspace\/overview/)
+  await expect(page.getByRole('complementary', { name: '주 메뉴' })).toBeVisible()
+  await expect(page.getByTestId('local-pc-settings')).toHaveCount(0)
+  await openWorkspaceRoute(page, '/workspace/settings/local-pc')
   await expect(page.getByRole('heading', { name: '비밀번호 변경', exact: true })).toBeVisible()
   await page.getByLabel('현재 비밀번호').fill(oldPassword)
   await expect(page.getByLabel('새 비밀번호', { exact: true })).toHaveAttribute('minlength', '8')

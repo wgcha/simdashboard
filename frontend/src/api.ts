@@ -322,12 +322,14 @@ export const api = {
   saveWorkspaceLayout: persistWorkspaceLayout,
   workspaceLayoutVersions: async (projectId: string, kind: 'portfolio' | 'workflow') =>
     adaptWorkspaceLayoutVersions(unwrapGenerated(await apiClient.GET('/api/projects/{project_id}/workspace-layouts/{layout_kind}/versions', { params: { path: { project_id: projectId, layout_kind: kind } } }))),
-  adminUsers: async (params = new URLSearchParams()) => adaptAdminUsers(unwrapGenerated(await apiClient.GET('/api/admin/users', { params: { query: { status: adminUserStatus(params.get('status')), search: params.get('search') ?? undefined } } }))),
+  adminUsers: async (params = new URLSearchParams(), signal?: AbortSignal) => adaptAdminUsers(unwrapGenerated(await apiClient.GET('/api/admin/users', { params: { query: { status: adminUserStatus(params.get('status')), q: params.get('q') ?? undefined } }, signal }))),
   updateUserStatus: async (userId: string, payload: { account_status: 'PENDING' | 'ACTIVE' | 'SUSPENDED'; expected_updated_at: string; reason: string }) =>
     adaptMutationResult(unwrapGenerated(await apiClient.PATCH('/api/admin/users/{user_id}/status', { params: { path: { user_id: userId } }, body: payload })), 'updateUserStatus'),
   updateGlobalAdmin: async (userId: string, payload: { is_global_admin: boolean; expected_updated_at: string; reason: string }) =>
     adaptMutationResult(unwrapGenerated(await apiClient.PATCH('/api/admin/users/{user_id}/global-admin', { params: { path: { user_id: userId } }, body: payload })), 'updateGlobalAdmin'),
-  projectMembers: async (projectId: string) => adaptProjectMembers(unwrapGenerated(await apiClient.GET('/api/projects/{project_id}/members', { params: { path: { project_id: projectId } } }))),
+  projectMembers: async (projectId: string, signal?: AbortSignal) => adaptProjectMembers(unwrapGenerated(await apiClient.GET('/api/projects/{project_id}/members', { params: { path: { project_id: projectId } }, signal }))),
+  createProjectMember: async (projectId: string, userId: string, role: ProjectRole) =>
+    unwrapGenerated(await apiClient.POST('/api/projects/{project_id}/members', { params: { path: { project_id: projectId } }, body: { user_id: userId, role } })),
   updateProjectMember: async (projectId: string, userId: string, role: ProjectRole, expectedUpdatedAt?: string) =>
     adaptMutationResult(unwrapGenerated(await apiClient.PATCH('/api/projects/{project_id}/members/{user_id}', { params: { path: { project_id: projectId, user_id: userId } }, body: { role, expected_updated_at: expectedUpdatedAt } })), 'updateProjectMember'),
   deleteProjectMember: async (projectId: string, userId: string) => adaptMutationResult(unwrapGenerated(await apiClient.DELETE('/api/projects/{project_id}/members/{user_id}', { params: { path: { project_id: projectId, user_id: userId } } })), 'deleteProjectMember'),

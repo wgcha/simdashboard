@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, Check, LoaderCircle, RefreshCw, RotateCcw, Save, Search, ShieldCheck, Users } from 'lucide-react'
 
 import { api } from '../../api'
@@ -7,61 +7,118 @@ import type { MenuPolicy } from '../auth/access'
 
 type AdminUser = Awaited<ReturnType<typeof api.adminUsers>>[number]
 type ProjectMember = Awaited<ReturnType<typeof api.projectMembers>>[number]
+const roleLabels: Record<ProjectRole, string> = { general: '일반 사용자', power: '파워 사용자', admin: '프로젝트 관리자' }
 
-export function AccessAdminPage({ projectId, canApproveUsers, onAccessChanged }: { projectId: string; canApproveUsers: boolean; onAccessChanged: () => Promise<void> }) {
+export function AccessAdminPage({ projectId, projects = [], canApproveUsers, onAccessChanged, onProjectChange = () => {} }: { projectId: string; projects?: readonly { id: string; name: string }[]; canApproveUsers: boolean; onAccessChanged: () => Promise<void>; onProjectChange?: (projectId: string) => void }) {
   const [users, setUsers] = useState<AdminUser[]>([])
   const [members, setMembers] = useState<ProjectMember[]>([])
   const [query, setQuery] = useState('')
   const [reason, setReason] = useState('권한 관리 화면에서 변경')
   const [loading, setLoading] = useState(true)
   const [message, setMessage] = useState('')
+  const [addingUserId, setAddingUserId] = useState<string | null>(null)
+  const [mutationPending, setMutationPending] = useState(false)
+  const [pendingRoles, setPendingRoles] = useState<Record<string, ProjectRole>>({})
+  const currentProjectId = useRef(projectId)
+  currentProjectId.current = projectId
+  const reloadGeneration = useRef(0)
+  const reloadController = useRef<AbortController | null>(null)
+  const [memberReadOnly, setMemberReadOnly] = useState(true)
+  const [userReadOnly, setUserReadOnly] = useState(true)
 
   const reload = async () => {
+    if (currentProjectId.current !== projectId) return
+    const generation = ++reloadGeneration.current
+    reloadController.current?.abort()
+    const controller = new AbortController()
+    reloadController.current = controller
+    const timeout = window.setTimeout(() => controller.abort(), 15_000)
     setLoading(true)
+    setMemberReadOnly(true)
+    setUserReadOnly(canApproveUsers)
     try {
-      const memberPromise = api.projectMembers(projectId)
-      const userPromise = canApproveUsers ? api.adminUsers(new URLSearchParams(query.trim() ? { q: query.trim() } : {})) : Promise.resolve([])
-      const [memberItems, userItems] = await Promise.all([memberPromise, userPromise])
-      setMembers(memberItems)
-      setUsers(userItems)
-      setMessage('')
+      const memberPromise = projectId ? api.projectMembers(projectId, controller.signal) : Promise.resolve([] as ProjectMember[])
+      const userPromise = canApproveUsers ? api.adminUsers(new URLSearchParams(query.trim() ? { q: query.trim() } : {}), controller.signal) : Promise.resolve([] as AdminUser[])
+      const [memberResult, userResult] = await Promise.allSettled([memberPromise, userPromise])
+      if (generation !== reloadGeneration.current || currentProjectId.current !== projectId) return
+      const failures: string[] = []
+      if (memberResult.status === 'fulfilled') { setMembers(memberResult.value); setMemberReadOnly(false) }
+      else failures.push('프로젝트 역할')
+      if (userResult.status === 'fulfilled') { setUsers(userResult.value); setUserReadOnly(false) }
+      else failures.push('사용자 목록')
+      setMessage(controller.signal.aborted ? '권한 정보 조회 시간이 초과되었습니다. 새로고침으로 다시 시도하세요.' : failures.length ? `${failures.join('·')}을 불러오지 못했습니다. 새로고침으로 다시 시도하세요.` : '')
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '권한 정보를 불러오지 못했습니다.')
+      if (generation === reloadGeneration.current) setMessage(controller.signal.aborted ? '권한 정보 조회 시간이 초과되었습니다. 새로고침으로 다시 시도하세요.' : error instanceof Error ? error.message : '권한 정보를 불러오지 못했습니다.')
     } finally {
-      setLoading(false)
+      window.clearTimeout(timeout)
+      if (generation === reloadGeneration.current) setLoading(false)
     }
   }
 
-  useEffect(() => { void reload() }, [projectId, canApproveUsers])
+  useEffect(() => {
+    setMembers([])
+    setPendingRoles({})
+    void reload()
+    return () => { reloadGeneration.current += 1; reloadController.current?.abort() }
+  }, [projectId, canApproveUsers])
 
   const changeStatus = async (user: AdminUser, accountStatus: AdminUser['account_status']) => {
+    if (mutationPending) return
+    if (userReadOnly) return setMessage('사용자 목록을 먼저 새로고침하세요.')
     if (reason.trim().length < 2) return setMessage('변경 사유를 두 글자 이상 입력하세요.')
+    setMutationPending(true)
     try {
       await api.updateUserStatus(user.id, { account_status: accountStatus, expected_updated_at: user.updated_at, reason: reason.trim() })
       await Promise.all([reload(), onAccessChanged()])
-    } catch (error) { setMessage(error instanceof Error ? error.message : '계정 상태를 변경하지 못했습니다.') }
+    } catch (error) { setMessage(error instanceof Error ? error.message : '계정 상태를 변경하지 못했습니다.') } finally { setMutationPending(false) }
   }
 
   const toggleGlobalAdmin = async (user: AdminUser) => {
+    if (mutationPending) return
+    if (userReadOnly) return setMessage('사용자 목록을 먼저 새로고침하세요.')
     if (reason.trim().length < 2) return setMessage('변경 사유를 두 글자 이상 입력하세요.')
+    setMutationPending(true)
     try {
       await api.updateGlobalAdmin(user.id, { is_global_admin: !user.is_global_admin, expected_updated_at: user.updated_at, reason: reason.trim() })
       await Promise.all([reload(), onAccessChanged()])
-    } catch (error) { setMessage(error instanceof Error ? error.message : '전역 관리자 상태를 변경하지 못했습니다.') }
+    } catch (error) { setMessage(error instanceof Error ? error.message : '전역 관리자 상태를 변경하지 못했습니다.') } finally { setMutationPending(false) }
   }
 
   const changeRole = async (member: ProjectMember, role: ProjectRole) => {
+    if (mutationPending) return
+    if (memberReadOnly || !projectId) return setMessage('프로젝트 역할 목록을 먼저 새로고침하세요.')
+    setMutationPending(true)
     try {
       await api.updateProjectMember(projectId, member.user_id, role, member.updated_at)
       await Promise.all([reload(), onAccessChanged()])
-    } catch (error) { setMessage(error instanceof Error ? error.message : '프로젝트 역할을 변경하지 못했습니다.') }
+    } catch (error) { setMessage(error instanceof Error ? error.message : '프로젝트 역할을 변경하지 못했습니다.') } finally { setMutationPending(false) }
+  }
+
+  const addMember = async (user: AdminUser, role: ProjectRole) => {
+    if (mutationPending) return
+    if (userReadOnly || memberReadOnly) return setMessage('사용자와 프로젝트 역할 목록을 먼저 새로고침하세요.')
+    if (!projectId) return setMessage('프로젝트를 먼저 선택하세요.')
+    if (user.account_status !== 'ACTIVE') return setMessage('활성 계정만 프로젝트에 추가할 수 있습니다.')
+    setAddingUserId(user.id); setMutationPending(true)
+    try {
+      await api.createProjectMember(projectId, user.id, role)
+      await Promise.all([reload(), onAccessChanged()])
+      if (currentProjectId.current !== projectId) return
+      setPendingRoles((current) => { const next = { ...current }; delete next[user.id]; return next })
+      setMessage(`${user.display_name} 계정을 프로젝트에 추가했습니다.`)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '프로젝트 멤버를 추가하지 못했습니다.')
+    } finally {
+      setAddingUserId(null); setMutationPending(false)
+    }
   }
 
   return <section className="access-admin-page">
-    <header className="content-head"><div><div className="eyebrow"><span>ACCESS CONTROL</span></div><h1>사용자·프로젝트 권한</h1><p>계정 상태와 프로젝트 역할을 서로 독립적으로 관리합니다.</p></div><button className="ghost-button" onClick={() => void reload()} disabled={loading}><RefreshCw className={loading ? 'spin' : ''} /> 새로고침</button></header>
+    <header className="content-head"><div><div className="eyebrow"><span>ACCESS CONTROL</span></div><h1>사용자·프로젝트 권한</h1><p>계정 상태와 프로젝트 역할을 서로 독립적으로 관리합니다.</p><label><span>관리할 프로젝트</span><select aria-label="관리할 프로젝트" value={projectId} onChange={(event) => onProjectChange(event.target.value)} disabled={mutationPending || !projects.length}><option value="">프로젝트 선택</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label></div><button className="ghost-button" onClick={() => void reload()} disabled={loading || mutationPending}><RefreshCw className={loading ? 'spin' : ''} /> 새로고침</button></header>
+    {!projectId && <p role="status">관리할 프로젝트를 선택하면 프로젝트별 역할을 확인하고 배정할 수 있습니다.</p>}
     {message ? <div className="edit-banner" role="alert"><AlertTriangle /> {message}</div> : null}
-    {canApproveUsers ? <section className="access-admin-card"><header><div><span>GLOBAL USERS</span><h2>계정 승인·전역 관리자</h2></div></header><div className="access-admin-toolbar"><label><Search /><input aria-label="사용자 검색" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="이름·아이디·임직원 ID" /></label><label><span>변경 사유</span><input value={reason} onChange={(event) => setReason(event.target.value)} /></label><button onClick={() => void reload()}>검색</button></div><div className="access-admin-table">{users.map((user) => <article key={user.id}><div><strong>{user.display_name}</strong><span>{user.username} · {user.employee_id || '임직원 ID 없음'}</span></div><b>{user.account_status}</b><div className="access-admin-actions"><button disabled={user.account_status === 'ACTIVE'} onClick={() => void changeStatus(user, 'ACTIVE')}><Check /> 승인</button><button disabled={user.account_status === 'SUSPENDED'} onClick={() => void changeStatus(user, 'SUSPENDED')}>중지</button><button onClick={() => void toggleGlobalAdmin(user)}><ShieldCheck /> {user.is_global_admin ? '전역 관리자 해제' : '전역 관리자 지정'}</button></div></article>)}</div></section> : null}
-    <section className="access-admin-card"><header><div><span>PROJECT MEMBERS</span><h2>프로젝트 역할</h2></div><strong>{members.length}명</strong></header><div className="access-admin-table">{members.map((member) => <article key={member.user_id}><div><strong>{member.display_name}</strong><span>{member.username} · {member.employee_id || '-'}</span></div><label><span className="sr-only">프로젝트 역할</span><select value={member.role} onChange={(event) => void changeRole(member, event.target.value as ProjectRole)}><option value="general">일반 사용자</option><option value="power">파워 사용자</option><option value="admin">프로젝트 관리자</option></select></label></article>)}</div></section>
+    {canApproveUsers ? <section className="access-admin-card"><header><div><span>GLOBAL USERS</span><h2>계정 승인·전역 관리자·프로젝트 배정</h2></div></header><div className="access-admin-toolbar"><label><Search /><input aria-label="사용자 검색" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="이름·아이디·임직원 ID" /></label><label><span>변경 사유</span><input value={reason} onChange={(event) => setReason(event.target.value)} /></label><button disabled={mutationPending} onClick={() => void reload()}>검색</button></div><div className="access-admin-table">{users.map((user) => { const member = members.find((item) => item.user_id === user.id); const selectedRole = pendingRoles[user.id] ?? ''; return <article key={user.id}><div><strong>{user.display_name}</strong><span>{user.username} · {user.employee_id || '임직원 ID 없음'}</span></div><b>{user.is_global_admin ? '전역 관리자' : user.account_status}</b><div className="access-admin-actions"><button disabled={mutationPending || userReadOnly || user.account_status === 'ACTIVE'} onClick={() => void changeStatus(user, 'ACTIVE')}><Check /> 승인</button><button disabled={mutationPending || userReadOnly || user.account_status === 'SUSPENDED'} onClick={() => void changeStatus(user, 'SUSPENDED')}>중지</button><button disabled={mutationPending || userReadOnly} onClick={() => void toggleGlobalAdmin(user)}><ShieldCheck /> {user.is_global_admin ? '전역 관리자 해제' : '전역 관리자 지정'}</button>{member ? <span className="access-admin-role-status">{roleLabels[member.role]}</span> : <><select aria-label={`${user.display_name} 프로젝트 역할`} value={selectedRole} disabled={mutationPending || userReadOnly || memberReadOnly || !projectId || user.account_status !== 'ACTIVE' || addingUserId === user.id} onChange={(event) => setPendingRoles((current) => ({ ...current, [user.id]: event.target.value as ProjectRole }))}><option value="">역할 선택</option><option value="general">일반 사용자</option><option value="power">파워 사용자</option><option value="admin">프로젝트 관리자</option></select><button type="button" disabled={mutationPending || userReadOnly || memberReadOnly || !projectId || !selectedRole || user.account_status !== 'ACTIVE' || addingUserId === user.id} onClick={() => void addMember(user, selectedRole as ProjectRole)}>프로젝트에 추가</button>{addingUserId === user.id && <LoaderCircle className="spin" aria-label="프로젝트 추가 중" />}</>}</div></article> })}</div></section> : null}
+    <section className="access-admin-card"><header><div><span>PROJECT MEMBERS</span><h2>프로젝트 역할</h2></div><strong>{members.length}명</strong></header><div className="access-admin-table">{(['general', 'power', 'admin'] as ProjectRole[]).map((role) => { const grouped = members.filter((member) => member.role === role); return <section key={role} aria-label={roleLabels[role]}><header><strong>{roleLabels[role]}</strong><span>{grouped.length}명</span></header>{grouped.length ? grouped.map((member) => <article key={member.user_id}><div><strong>{member.display_name}</strong><span>{member.username} · {member.employee_id || '-'}</span></div><label><span className="sr-only">프로젝트 역할</span><select value={member.role} disabled={mutationPending || memberReadOnly || !projectId} onChange={(event) => void changeRole(member, event.target.value as ProjectRole)}><option value="general">일반 사용자</option><option value="power">파워 사용자</option><option value="admin">프로젝트 관리자</option></select></label></article>) : <p>배정된 사용자가 없습니다.</p>}</section> })}</div></section>
   </section>
 }
 

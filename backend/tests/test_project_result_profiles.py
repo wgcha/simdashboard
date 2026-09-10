@@ -116,8 +116,17 @@ def test_project_admin_can_bind_only_own_project_and_viewer_cannot_write(monkeyp
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     admin_id = f"project-result-admin-{suffix}"
     viewer_id = f"project-result-viewer-{suffix}"
+    bootstrap_id = f"project-result-bootstrap-{suffix}"
     with connect() as conn:
         conn.execute("INSERT INTO projects VALUES (?, ?, ?, ?, ?)", [other_project_id, "Other project", "Other product", "auth scope", now])
+        # Password login checks that at least one active global administrator
+        # exists. Keep this bootstrap principal outside both project roles so
+        # the assertions below still exercise project-scoped authorization.
+        conn.execute(
+            """INSERT INTO users (id, username, password_hash, display_name, legacy_role, account_status, is_global_admin, is_active, created_at, updated_at)
+               VALUES (?, ?, ?, ?, 'admin', 'ACTIVE', true, true, ?, ?)""",
+            [bootstrap_id, bootstrap_id, hash_password(password), bootstrap_id, now, now],
+        )
         for user_id, username, role in ((admin_id, f"project-result-admin-{suffix}", "admin"), (viewer_id, f"project-result-viewer-{suffix}", "general")):
             conn.execute("""INSERT INTO users (id, username, password_hash, display_name, legacy_role, account_status, is_global_admin, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, 'viewer', 'ACTIVE', false, true, ?, ?)""", [user_id, username, hash_password(password), username, now, now])
             conn.execute("""INSERT INTO project_memberships (id, project_id, user_id, role, created_by, created_at, updated_by, updated_at) VALUES (?, ?, ?, ?, 'test', ?, 'test', ?)""", [f"membership-{user_id}", project_id, user_id, role, now, now])
@@ -146,7 +155,7 @@ def test_project_admin_can_bind_only_own_project_and_viewer_cannot_write(monkeyp
         assert viewer_write.status_code == 403
 
 
-def test_project_request_list_requires_project_data_view_membership(monkeypatch) -> None:
+def test_project_request_list_allows_company_project_data_view(monkeypatch) -> None:
     initialize_database()
     suffix = uuid4().hex[:8]
     own_project_id = "project-tv-001"
@@ -177,14 +186,13 @@ def test_project_request_list_requires_project_data_view_membership(monkeypatch)
         def headers(username: str) -> dict[str, str]:
             login = client.post("/api/auth/login", json={"username": username, "password": password})
             assert login.status_code == 200, login.text
-            return {"Authorization": f"Bearer {login.json()["access_token"]}"}
+            return {"Authorization": f"Bearer {login.json()['access_token']}"}
 
         viewer_headers = headers(viewer_username)
         own_project = client.get(f"/api/projects/{own_project_id}/requests", headers=viewer_headers)
         assert own_project.status_code == 200, own_project.text
         other_project = client.get(f"/api/projects/{other_project_id}/requests", headers=viewer_headers)
-        assert other_project.status_code == 403
-        assert other_project.json()["detail"]["code"] == "PROJECT_MEMBERSHIP_REQUIRED"
+        assert other_project.status_code == 200, other_project.text
         admin_project = client.get(f"/api/projects/{other_project_id}/requests", headers=headers(admin_username))
         assert admin_project.status_code == 200, admin_project.text
 

@@ -28,8 +28,11 @@ router = APIRouter()
 @query_router.get("/api/projects/{project_id}/requests")
 def get_requests(project_id: str, request: Request) -> list[dict[str, Any]]:
     def authorize(scope_project_id: str, connection: ConnectionLike) -> bool:
-        context = require_permission(request, PROJECT_DATA_VIEW, scope_project_id, conn=connection)
-        return context.project_role is not None
+        # PROJECT_DATA_VIEW is a company permission for every active account.
+        # A project membership refines roles for write/execute actions, but is
+        # not a prerequisite for the dashboard's project request read path.
+        require_permission(request, PROJECT_DATA_VIEW, scope_project_id, conn=connection)
+        return True
 
     try:
         return list_requests_query(
