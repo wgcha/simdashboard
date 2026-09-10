@@ -70,6 +70,7 @@ _PRE_MEDIA_ALEMBIC_REVISIONS = {
 _REMEDIATION = {
     "ACCOUNT_BACKUP_FAILED_MISSING_POSTGRES_TOOLS": "Install matching PostgreSQL client tools or set POSTGRES_BIN, then retry.",
     "ACCOUNT_BACKUP_FAILED_FILESYSTEM_ACCESS_OR_DISK": "Check the backup path permissions, available disk space, and Windows folder access policy, then retry.",
+    "ACCOUNT_BACKUP_FAILED_WINDOWS_WRITE_PROTECTED": "Windows returned ERROR_WRITE_PROTECT (19). Check the storage/access policy for the operation named in ACCOUNT_BACKUP_DETAIL. If it is a PostgreSQL tool resolve or launch, run check-backup-tools.ps1 to test --version without a DB backup.",
     "ACCOUNT_BACKUP_FAILED_DATABASE_CONNECTION_OR_AUTHENTICATION": "Verify the PostgreSQL service and configured owner connection credentials, then retry.",
     "ACCOUNT_BACKUP_FAILED_DATABASE_SCHEMA_OBJECT_MISSING": "Check the database revision and missing schema objects with the administrator; preserve a verified backup before any migration.",
     "ACCOUNT_BACKUP_FAILED_DATABASE_PRIVILEGE": "Check the configured PostgreSQL backup owner role and its database read permissions, then retry.",
@@ -221,6 +222,9 @@ def _child_text(error: BaseException) -> str:
 def _safe_failure_code(error: BaseException) -> str:
     """Map untrusted exception details to a stable, non-secret code."""
     child = error.cause if isinstance(error, AccountBackupChildError) else error
+    details = child_failure_details(_child_text(error)) if isinstance(child, subprocess.CalledProcessError) else exception_details(child)
+    if details.get("winerror") == 19:
+        return "ACCOUNT_BACKUP_FAILED_WINDOWS_WRITE_PROTECTED"
     try:
         from scripts.postgres_cli import PostgresToolNotFound
     except ImportError:  # pragma: no cover - script invocation fallback
@@ -231,7 +235,8 @@ def _safe_failure_code(error: BaseException) -> str:
         return "ACCOUNT_BACKUP_FAILED_MISSING_POSTGRES_TOOLS"
     if isinstance(child, (PermissionError, IsADirectoryError, NotADirectoryError)):
         return "ACCOUNT_BACKUP_FAILED_FILESYSTEM_ACCESS_OR_DISK"
-    details = child_failure_details(_child_text(error)) if isinstance(child, subprocess.CalledProcessError) else exception_details(child)
+    if details.get("exception_type") in {"PermissionError", "IsADirectoryError", "NotADirectoryError"}:
+        return "ACCOUNT_BACKUP_FAILED_FILESYSTEM_ACCESS_OR_DISK"
     if details.get("exception_type") in {"UnicodeEncodeError", "UnicodeDecodeError"}:
         return "ACCOUNT_BACKUP_FAILED_ENCODING"
     if details.get("exception_type") in {"ImportError", "ModuleNotFoundError"}:
@@ -271,7 +276,7 @@ def _safe_failure_code(error: BaseException) -> str:
         and any(marker in text for marker in _MISSING_TOOL_MARKERS)
     ):
         return "ACCOUNT_BACKUP_FAILED_MISSING_POSTGRES_TOOLS"
-    if details.get("stage") in {"pg_dump", "pg_restore_list"} and details.get("exception_type") == "CalledProcessError":
+    if details.get("stage") in {"pg_dump", "pg_restore_list", "pg_dump_version", "pg_restore_version"} and details.get("exception_type") == "CalledProcessError":
         return "ACCOUNT_BACKUP_FAILED_POSTGRES_COMMAND"
     if any(marker in text for marker in ("deployment backup contract is invalid", "deployment assets backup manifest is invalid", "deployment assets backup verification failed", "백업 파일이 생성되지 않았습니다", "백업 manifest가 생성되지 않았습니다")):
         return "ACCOUNT_BACKUP_FAILED_BACKUP_VERIFICATION"

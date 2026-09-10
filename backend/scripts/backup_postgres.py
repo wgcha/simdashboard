@@ -140,13 +140,35 @@ def _snapshot_inventory(database_url: str, *, deployment: bool = False) -> tuple
         raise
 
 
+def _resolve_postgres_tools() -> dict[str, str]:
+    tools = {}
+    for name in ("pg_dump", "pg_restore"):
+        with backup_stage(f"{name}_resolve"):
+            tools[name] = executable(name)
+    return tools
+
+
+def _check_postgres_tools() -> None:
+    tools = _resolve_postgres_tools()
+    environment = dict(os.environ, LC_ALL="C", LC_MESSAGES="C", LANGUAGE="C")
+    for name, path in tools.items():
+        with backup_stage(f"{name}_version"):
+            subprocess.run([path, "--version"], env=environment, check=True,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=15)
+    print("POSTGRES_BACKUP_TOOLS_READY")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Create and verify an Analysis Canvas PostgreSQL custom-format backup.")
     parser.add_argument("--database-url", default=os.getenv("DATABASE_URL"))
     parser.add_argument("--output-dir", type=Path, default=Path(__file__).resolve().parents[1] / "backups")
     parser.add_argument("--label", default="analysis-canvas")
     parser.add_argument("--deployment-assets-root", type=Path, help="Stopped-app dual-read deployment backup: preserve and verify existing files alongside the DB; not a database-only release backup.")
+    parser.add_argument("--check-tools", action="store_true", help="Resolve and launch pg_dump/pg_restore --version only; no database connection or backup files.")
     args = parser.parse_args()
+    if args.check_tools:
+        _check_postgres_tools()
+        return
     with backup_stage("config"):
         if not args.database_url:
             raise RuntimeError("DATABASE_URL이 필요합니다.")
@@ -164,6 +186,9 @@ def main() -> None:
         # cannot erase the error keywords consumed by the deployment driver.
         environment.update({"LC_ALL": "C", "LC_MESSAGES": "C", "LANGUAGE": "C"})
     assets = None
+    # Detect missing/inaccessible tool paths before a potentially large ZIP.
+    # Reuse the same resolved files for the subsequent native commands.
+    tools = _resolve_postgres_tools()
     with backup_stage("snapshot_inventory"):
         if args.deployment_assets_root is not None:
             snapshot_connection, snapshot, inventory, accounts = _snapshot_inventory(args.database_url, deployment=True)
@@ -181,14 +206,14 @@ def main() -> None:
             temporary_path = _reserve_unique_partial_path(final_path)
         with backup_stage("pg_dump"):
             dump_command = [
-                executable("pg_dump"), *connection_args(target), "--format=custom", "--compress=6",
+                tools["pg_dump"], *connection_args(target), "--format=custom", "--compress=6",
                 "--no-owner", "--no-privileges", f"--snapshot={snapshot}", "--file", str(temporary_path),
             ]
             subprocess.run(dump_command, env=environment, check=True)
     finally:
         snapshot_connection.close()
     with backup_stage("pg_restore_list"):
-        subprocess.run([executable("pg_restore"), "--list", str(temporary_path)], env=environment, check=True, stdout=subprocess.DEVNULL)
+        subprocess.run([tools["pg_restore"], "--list", str(temporary_path)], env=environment, check=True, stdout=subprocess.DEVNULL)
     # If pg_dump/pg_restore fails, retain the uniquely named partial for
     # operator inspection.  A later invocation never reuses or overwrites it.
     with backup_stage("publish_dump"):

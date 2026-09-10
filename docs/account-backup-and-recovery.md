@@ -42,12 +42,28 @@ manifest의 `account_inventory`에는 계정 수·상태별 수·관리자 수�
 | `BACKUP_VERIFICATION` | 생성된 dump·manifest·파일 ZIP의 형식과 해시 검증 실패. 실패 폴더를 보존하고 저장 장치·배포 파일 버전 확인 |
 | `ENCODING` | `ACCOUNT_BACKUP_DETAIL`의 내부 단계와 인코딩 예외 확인 |
 | `DEPENDENCY` | 배포 런타임 준비 및 소스 파일 버전 일치 여부 확인 |
+| `WINDOWS_WRITE_PROTECTED` | Windows 오류 19. pg_dump/pg_restore 경로 탐색·실행 단계라면 도구 설치 장치와 접근·실행 정책부터 확인 |
 
 수정본을 반영한 뒤 기존 설치 폴더에서 `update.bat`을 다시 실행한다. 계속 실패하면 비밀정보 대신 `code`, `stage`만 공유해 원인을 좁힌다. DB 삭제, 백업 검사 해제, 최초 설치 강제 전환으로 해결하지 않는다.
 
 `stage=postgres_current_schema_backup`은 하위 백업 프로그램이 실패했다는 외부 단계다. 그 값만으로 덤프·파일 작업 중 어느 작업이 실패했는지는 확정할 수 없다. 후속 진단 수정본은 `ACCOUNT_BACKUP_DETAIL`과 `failure.json.details`에 내부 단계(`snapshot_inventory`, `assets_bundle`, `pg_dump`, `pg_restore_list`, `publish_dump`, `write_manifest` 등), 허용된 예외 종류, 정수 `errno`·`winerror`·`returncode`, SQLSTATE만 기록한다. 원문 예외·명령 인자·사용자 경로·접속 문자열은 기록하지 않는다. 진단 줄 전체는 이 허용된 정보로만 구성된다.
 
 PostgreSQL 네이티브 도구는 Python의 `PYTHONIOENCODING`을 따르지 않는다. 한국어 Windows에서 도구의 번역된 오류가 UTF-8 디코딩과 영어 분류 규칙 때문에 `UNKNOWN`이 되는 경우를 줄이기 위해, 백업 자식 도구에만 `LC_ALL=C`, `LC_MESSAGES=C`, `LANGUAGE=C`를 적용한다. 서버·앱의 언어 및 DB 데이터 설정은 변경하지 않는다. 이 보완은 진단 누락을 줄이는 변경이며 특정 사내 DB/디스크 오류가 해결됐다는 뜻은 아니다.
+
+### PermissionError / errno 13 / winerror 19
+
+사내에서 확인된 `stage=pg_dump`, `exception_type=PermissionError`, `errno=13`, `winerror=19`는 Python이 실행 파일 경로를 찾거나 프로세스를 만드는 중 받은 OS 오류다. 당시 `pg_dump` 단계에 두 동작이 함께 들어 있었다. `pg_dump`가 실행된 뒤 dump 쓰기에 실패했다면 `CalledProcessError`와 종료 코드가 기록되므로, 이 상세를 곧바로 백업 대상 디스크의 쓰기 실패로 해석하지 않는다. [Microsoft 정의](https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes--0-499-)에서 오류 19는 `ERROR_WRITE_PROTECT`지만, 어느 경로나 장치·정책이 원인인지는 추가 실행 점검이 필요하다.
+
+전체 업데이트를 반복하기 전에 설치 폴더에서 소스를 반영하고 아래 점검을 실행한다. 기존 `.env`·`backend/.env`·프로세스 환경의 설정 우선순위와 동일한 방식으로 PostgreSQL 도구를 선택한다.
+
+```powershell
+git pull --ff-only
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\postgres\check-backup-tools.ps1
+```
+
+이 점검은 `pg_dump --version`과 `pg_restore --version`만 실행한다. DB 접속, 앱 중지, DB/백업 파일 생성은 하지 않으며 각 실행은 15초로 제한한다. 정상은 `POSTGRES_BACKUP_TOOLS_READY`, 실패는 안전한 `ACCOUNT_BACKUP_FAILED`와 `ACCOUNT_BACKUP_DETAIL`을 표시한다. `pg_dump_resolve`는 경로 탐색, `pg_dump_version`은 해당 실행 파일의 프로세스 시작/버전 조회를 가리킨다. 새 일반 백업도 도구 경로를 큰 ZIP 생성 전에 찾고 `pg_dump_resolve`와 실제 `pg_dump` 실행을 분리한다.
+
+버전 조회에서도 오류 19가 나오면 서버 운영자가 선택된 PostgreSQL 도구의 설치 장치·경로 접근·실행 정책을 확인해야 한다. 승인된 로컬 설치본이 있다면 실제 bin 경로를 `POSTGRES_BIN`으로 지정하고 같은 점검을 다시 수행한다. 실행 허용 또는 장치 상태를 이 프로그램이 자동 변경하지 않는다. 도구 점검이 통과한 뒤 `update.bat`을 재실행한다.
 
 미디어 실패는 `failure.json`의 `media_diagnostics`와 콘솔 `ACCOUNT_BACKUP_MEDIA`에 허용된 숫자·상태·고정 reason만 추가한다. 사용자 ID, blob ID, 원본 파일 경로는 출력하지 않는다. `UNBOUND_MEDIA_FILE_MISSING`은 파일 방식 미디어의 원본이 없다는 뜻이고, `MEDIA_BLOB_CORRUPT`는 DB 미디어 바이트의 해시 불일치, `MEDIA_DATABASE_REFERENCES_INVALID`는 누락된 DB 참조·고립 chunk·예상 밖 데모 식별자를 의미한다. `ASSETS_CHANGED`는 백업 중 파일 변경이며 앱·파일 작성 프로세스를 종료한 후 다시 확인한다.
 

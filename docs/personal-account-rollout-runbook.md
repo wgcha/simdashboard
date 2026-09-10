@@ -80,6 +80,14 @@ HTTPS URL은 운영자가 실제 게시한 릴리스 주소를 사용한다. 위
 
 관련 회귀 테스트 **74개 통과, 3개 건너뜀**. 실제 Windows `pg_dump`와 `pg_restore`에 DB 접속 없는 잘못된 옵션을 전달해 C locale의 영어 오류 출력을 확인했다. 이 변경에서는 운영 DB 또는 테스트 DB 내용을 변경하지 않았다. 사내 재실행에서 새 DETAIL의 내부 단계·오류 번호 확인이 남아 있다.
 
+## 2026-09-10 pg_dump 실행 전 Windows 오류 19 점검
+
+사내 추가 상세는 `stage=pg_dump`, `PermissionError`, `errno=13`, `winerror=19`였다. 당시 코드 범위를 확인해 Python의 도구 경로 탐색 또는 프로세스 생성 중 발생한 OS 오류로 좁혔다. 실행된 pg_dump의 DB/파일 작업 실패라면 `CalledProcessError`가 되므로, 백업 대상 볼륨 쓰기 실패로 단정하지 않았다.
+
+구조화된 자식 PermissionError가 UNKNOWN으로 누락되는 분류를 수정했고 Windows 오류 19를 `WINDOWS_WRITE_PROTECTED`로 구분했다. 도구 경로 탐색을 snapshot/파일 묶음 작업 앞으로 이동하고 실행 단계와 분리했다. `scripts/postgres/check-backup-tools.ps1`은 실제 배포 설정으로 `pg_dump`·`pg_restore --version`만 검사하며, DB 접속과 백업 파일 생성 없이 접근/실행 실패를 확인한다. 사내 장치·실행 정책 자체를 변경하거나 문제가 해결됐다고 보고하지 않는다.
+
+회귀 테스트 **62개 통과, 2개 건너뜀**. 사용자와 동일한 WinError 19를 주입해 상세 보존과 새 분류를 확인했다. Windows PowerShell에서 설치된 실제 PostgreSQL 도구의 성공, 실행 불가 테스트 파일의 실패·상세 출력·종료 코드 1도 확인했다. PowerShell stderr 병합이 상세 줄을 가리지 않도록 수정했다. 초기 병행 테스트에서 fixture 오류가 발생해 단독으로 전체 관련 범위를 재실행하여 통과했다. 사내 도구 설치 위치·실행 정책의 확인과 조치는 남아 있다.
+
 ## 이번 검증 기록
 
 | 검증 | 결과와 범위 |

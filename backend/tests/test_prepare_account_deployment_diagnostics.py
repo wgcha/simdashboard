@@ -118,6 +118,20 @@ def test_unknown_child_failure_preserves_safe_internal_stage(tmp_path: Path, mon
     assert "synthetic-secret" not in output + json.dumps(report)
 
 
+@pytest.mark.parametrize("stage", ["pg_dump", "pg_dump_resolve", "pg_dump_version"])
+def test_windows_write_protection_in_child_is_not_unknown(stage: str) -> None:
+    detail = {"stage": stage, "exception_type": "PermissionError", "errno": 13, "winerror": 19}
+    stderr = "POSTGRES_BACKUP_DETAIL " + json.dumps(detail)
+    error = deployment.AccountBackupChildError("postgres_current_schema_backup", subprocess.CalledProcessError(1, ["python", "backup_postgres.py"], stderr=stderr))
+    assert deployment._safe_failure_code(error) == "ACCOUNT_BACKUP_FAILED_WINDOWS_WRITE_PROTECTED"
+
+
+def test_structured_access_denied_is_filesystem_failure() -> None:
+    stderr = 'POSTGRES_BACKUP_DETAIL {"stage":"pg_dump","exception_type":"PermissionError","errno":13,"winerror":5}'
+    error = deployment.AccountBackupChildError("postgres_current_schema_backup", subprocess.CalledProcessError(1, ["python", "backup_postgres.py"], stderr=stderr))
+    assert deployment._safe_failure_code(error) == "ACCOUNT_BACKUP_FAILED_FILESYSTEM_ACCESS_OR_DISK"
+
+
 def test_media_failure_report_includes_only_allowlisted_counts_and_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     root = _project(tmp_path)
     inventory_error = json.dumps({"code": "MEDIA_INTEGRITY_FAILED", "media_inventory": {

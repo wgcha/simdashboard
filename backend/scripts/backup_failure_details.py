@@ -22,6 +22,10 @@ MAX_SCAN = 1024 * 1024
 BACKUP_STAGES = frozenset(
     {
         "config",
+        "pg_dump_resolve",
+        "pg_restore_resolve",
+        "pg_dump_version",
+        "pg_restore_version",
         "snapshot_inventory",
         "assets_bundle",
         "reserve_dump",

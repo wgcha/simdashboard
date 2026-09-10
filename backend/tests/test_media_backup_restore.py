@@ -202,6 +202,7 @@ def test_deployment_file_failure_does_not_publish_dump_or_manifest(monkeypatch: 
     holder = SimpleNamespace(closed=False)
     holder.close = lambda: setattr(holder, "closed", True)
     monkeypatch.setattr(backup, "_snapshot_inventory", lambda _url, **_kwargs: (holder, "snapshot", _inventory(), _account_inventory()))
+    monkeypatch.setattr(backup, "executable", lambda name: name)
     def fail(*_args):
         raise RuntimeError("synthetic missing source")
     monkeypatch.setattr(deployment_media_backup, "create_deployment_media_bundle", fail)
@@ -212,6 +213,38 @@ def test_deployment_file_failure_does_not_publish_dump_or_manifest(monkeypatch: 
     assert holder.closed
     assert not list(tmp_path.glob("*.dump"))
     assert not list(tmp_path.glob("*.manifest.json"))
+
+
+def test_tools_only_check_never_opens_database_or_creates_backup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(backup, "executable", lambda name: name)
+    monkeypatch.setattr(backup.psycopg, "connect", lambda *_args, **_kwargs: pytest.fail("tools check must not connect to DB"))
+    calls = []
+    def run(command, **kwargs):
+        calls.append(command)
+        assert kwargs["timeout"] == 15
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(backup.subprocess, "run", run)
+    monkeypatch.setattr(sys, "argv", ["backup_postgres.py", "--check-tools", "--output-dir", str(tmp_path / "no-backup")])
+    backup.main()
+    assert calls == [["pg_dump", "--version"], ["pg_restore", "--version"]]
+    assert not (tmp_path / "no-backup").exists()
+
+
+def test_windows_launch_write_protection_has_exact_stage(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    from scripts.backup_failure_details import child_failure_details
+    monkeypatch.setattr(backup, "executable", lambda name: name)
+    def fail(*_args, **_kwargs):
+        error = PermissionError(13, "synthetic write protection")
+        error.winerror = 19
+        raise error
+    monkeypatch.setattr(backup.subprocess, "run", fail)
+    monkeypatch.setattr(sys, "argv", ["backup_postgres.py", "--check-tools"])
+    with pytest.raises(PermissionError):
+        backup.main()
+    assert child_failure_details(capsys.readouterr().err) == {
+        "stage": "pg_dump_version", "exception_type": "PermissionError", "errno": 13, "winerror": 19,
+    }
 
 
 @pytest.mark.parametrize("label", ["../escape", "nested/archive", "white space", ""])
