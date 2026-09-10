@@ -99,3 +99,79 @@ def test_windows_utf8_bom_manifest_is_supported(tmp_path):
     manifest = tmp_path / "distribution-manifest.json"
     manifest.write_text(manifest.read_text(encoding="utf-8"), encoding="utf-8-sig")
     assert service.load_distribution(tmp_path)[0] is not None
+
+
+def test_explicit_directory_argument_does_not_use_bundled_fallback(monkeypatch, tmp_path):
+    bundled = tmp_path / "bundled"
+    bundled.mkdir()
+    _release(bundled)
+    monkeypatch.setattr(service, "bundled_distribution_directory", lambda: bundled)
+
+    assert service.load_distribution(tmp_path / "missing")[0] is None
+
+
+def test_configured_missing_directory_does_not_use_bundled_fallback(monkeypatch, tmp_path):
+    bundled = tmp_path / "bundled"
+    bundled.mkdir()
+    _release(bundled)
+    monkeypatch.setenv("LOCAL_HELPER_DISTRIBUTION_DIR", str(tmp_path / "configured-missing"))
+    monkeypatch.setattr(service, "bundled_distribution_directory", lambda: bundled)
+
+    assert service.load_distribution()[0] is None
+
+
+def test_invalid_runtime_manifest_does_not_use_bundled_fallback(monkeypatch, tmp_path):
+    runtime = tmp_path / "runtime"
+    bundled = tmp_path / "bundled"
+    runtime.mkdir()
+    bundled.mkdir()
+    _release(bundled)
+    (runtime / service.MANIFEST_NAME).write_text("{invalid", encoding="utf-8")
+    monkeypatch.delenv("LOCAL_HELPER_DISTRIBUTION_DIR", raising=False)
+    monkeypatch.setattr(service, "runtime_distribution_directory", lambda: runtime)
+    monkeypatch.setattr(service, "bundled_distribution_directory", lambda: bundled)
+
+    assert service.load_distribution()[0] is None
+
+
+def test_runtime_manifest_directory_does_not_use_bundled_fallback(monkeypatch, tmp_path):
+    runtime = tmp_path / "runtime"
+    bundled = tmp_path / "bundled"
+    runtime.mkdir()
+    bundled.mkdir()
+    _release(bundled)
+    (runtime / service.MANIFEST_NAME).mkdir()
+    monkeypatch.delenv("LOCAL_HELPER_DISTRIBUTION_DIR", raising=False)
+    monkeypatch.setattr(service, "runtime_distribution_directory", lambda: runtime)
+    monkeypatch.setattr(service, "bundled_distribution_directory", lambda: bundled)
+
+    assert service.load_distribution()[0] is None
+
+
+def test_missing_runtime_manifest_serves_valid_bundled_release(monkeypatch, tmp_path):
+    runtime = tmp_path / "runtime"
+    bundled = tmp_path / "bundled"
+    runtime.mkdir()
+    bundled.mkdir()
+    payload = _release(bundled)
+    monkeypatch.delenv("LOCAL_HELPER_DISTRIBUTION_DIR", raising=False)
+    monkeypatch.setattr(service, "runtime_distribution_directory", lambda: runtime)
+    monkeypatch.setattr(service, "bundled_distribution_directory", lambda: bundled)
+
+    artifact, reason = service.load_distribution()
+    assert reason is None
+    assert artifact is not None
+    assert artifact.path.parent == bundled
+    assert artifact.path.read_bytes() == payload
+
+
+def test_import_directory_stays_at_runtime_path_when_bundled_release_exists(monkeypatch, tmp_path):
+    runtime = tmp_path / "runtime"
+    bundled = tmp_path / "bundled"
+    bundled.mkdir()
+    _release(bundled)
+    monkeypatch.delenv("LOCAL_HELPER_DISTRIBUTION_DIR", raising=False)
+    monkeypatch.setattr(service, "runtime_distribution_directory", lambda: runtime)
+    monkeypatch.setattr(service, "bundled_distribution_directory", lambda: bundled)
+
+    assert service.distribution_directory() == runtime

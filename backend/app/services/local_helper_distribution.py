@@ -77,10 +77,24 @@ class DistributionArtifact:
 
 
 def distribution_directory() -> Path:
+    """Return the configured or runtime import directory.
+
+    This remains the writable target used by the release importer.  Serving a
+    checked-in fallback is deliberately handled in ``load_distribution`` so an
+    import never replaces the bundled archive.
+    """
     configured = os.environ.get("LOCAL_HELPER_DISTRIBUTION_DIR", "").strip()
     if configured:
         return Path(configured).expanduser()
+    return runtime_distribution_directory()
+
+
+def runtime_distribution_directory() -> Path:
     return Path(__file__).resolve().parents[3] / "dist" / "local-helper" / "windows-x64"
+
+
+def bundled_distribution_directory() -> Path:
+    return Path(__file__).resolve().parents[3] / "deploy" / "windows" / "local-helper" / "windows-x64"
 
 
 def _sha256(path: Path) -> str:
@@ -97,7 +111,29 @@ def _unavailable(message: str) -> tuple[None, str]:
 
 def load_distribution(directory: Path | None = None) -> tuple[DistributionArtifact | None, str | None]:
     """Return only a fully verified artifact; incomplete releases stay hidden."""
-    root = directory or distribution_directory()
+    if directory is not None:
+        return _load_distribution(directory)
+
+    # An explicit configuration is authoritative.  In particular, an invalid
+    # configured release must not be masked by the checked-in fallback.
+    if os.environ.get("LOCAL_HELPER_DISTRIBUTION_DIR", "").strip():
+        return _load_distribution(distribution_directory())
+
+    runtime_root = runtime_distribution_directory()
+    # A runtime manifest means a publisher has begun (or completed) a release.
+    # Validate it as-is; only a missing manifest permits the bundled fallback.
+    runtime_manifest = runtime_root / MANIFEST_NAME
+    if runtime_manifest.exists() or runtime_manifest.is_symlink():
+        return _load_distribution(runtime_root)
+
+    bundled_root = bundled_distribution_directory()
+    if (bundled_root / MANIFEST_NAME).is_file():
+        return _load_distribution(bundled_root)
+    return _load_distribution(runtime_root)
+
+
+def _load_distribution(root: Path) -> tuple[DistributionArtifact | None, str | None]:
+    """Validate exactly one release directory without selecting a fallback."""
     manifest_path = root / MANIFEST_NAME
     if not manifest_path.is_file():
         return _unavailable("Windows 로컬 도우미 배포본이 아직 준비되지 않았습니다.")

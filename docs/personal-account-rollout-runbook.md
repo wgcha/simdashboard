@@ -48,7 +48,7 @@ Browser plugin not available: 제공된 browser skill이 없어 저장소 Playwr
 
 ## 도우미 배포 파일 업데이트
 
-도우미 ZIP과 manifest는 소스 Git에 포함하지 않는다. 계정 DB, 인증 설정과도 별개다. 빌드된 배포 폴더를 준비해 다음 중 한 경로로 가져온다.
+기본 Windows 도우미 ZIP과 manifest는 `deploy/windows/local-helper/windows-x64`에 포함된다. `git pull --ff-only` 후 서버를 재시작하면 별도 반입 폴더가 없는 서버도 이 배포본을 제공한다. 계정 DB, 인증 설정과는 별개이며 서버에서 PyInstaller를 실행할 필요가 없다. 다른 릴리스를 운영자가 배포하려면 빌드된 배포 폴더를 준비해 다음 중 한 경로로 가져온다.
 
 ```powershell
 # 소스 업데이트와 함께 폐쇄망 반입 폴더에서 도우미 배포본 적용
@@ -61,9 +61,13 @@ Browser plugin not available: 제공된 browser skill이 없어 저장소 Playwr
 .\scripts\windows\import-local-helper-distribution.ps1 -LocalHelperDistributionSource 'D:\releases\local-helper\windows-x64'
 ```
 
-HTTPS URL은 운영자가 실제 게시한 릴리스 주소를 사용한다. 위 예시 URL에 파일이 게시되어 있다는 뜻이 아니다. 온라인·오프라인 옵션을 함께 지정할 수 없다. 경로, 용량, SHA-256을 확인하고 ZIP을 배치한 뒤 manifest를 마지막에 교체한다. 실패하면 기존 배포 파일을 유지하고 업데이트의 새 서버 시작을 중단한다. 배포 옵션 없는 기존 `update.bat`은 기존 배포 폴더를 보존하며 새 도우미를 가져왔다고 보고하지 않는다.
+HTTPS URL은 운영자가 실제 게시한 릴리스 주소를 사용한다. 위 예시 URL에 파일이 게시되어 있다는 뜻이 아니다. 온라인·오프라인 옵션을 함께 지정할 수 없다. 경로, 용량, SHA-256을 확인하고 ZIP을 배치한 뒤 manifest를 마지막에 교체한다. 실패하면 기존 배포 파일을 유지하고 업데이트의 새 서버 시작을 중단한다. 배포 옵션 없는 `update.bat`도 저장소 기본 배포본을 내려받으며 기존 반입 폴더는 보존한다.
 
-기본 배포 경로는 서버의 `dist/local-helper/windows-x64`, 변경하려면 `LOCAL_HELPER_DISTRIBUTION_DIR`를 설정한다. Python 서버와 가져오기 도구가 같은 설정을 읽는다. 배포 후 `/api/local-helper/distribution`의 `status=ready`를 확인한다.
+조회 우선순위는 명시한 `LOCAL_HELPER_DISTRIBUTION_DIR` → `dist/local-helper/windows-x64`의 기존 배포 manifest → 저장소 기본 배포본이다. 명시한 경로가 비었거나 기존 manifest/ZIP 검증에 실패하면 오류를 안내하고 기본 배포본으로 숨기지 않는다. 가져오기 도구는 계속 지정 경로나 `dist/local-helper/windows-x64`에 기록하며 저장소의 기본 배포본을 덮지 않는다. 배포 후 `/api/local-helper/distribution`의 `status=ready`를 확인한다.
+
+`내 PC 설정`에서 배포본 미준비가 계속 표시되면 서버를 최신 버전으로 재시작했는지, ZIP까지 내려왔는지, `LOCAL_HELPER_DISTRIBUTION_DIR`에 별도의 빈 경로를 지정하지 않았는지 확인한다. 기본 경로를 사용하려면 필요 없는 경로 지정을 해제하고 서버를 재시작한다. 새 기본 배포본은 약 20.3 MiB이며 계정·비밀번호·연결 코드·DB를 포함하지 않는다.
+
+검증(2026-09-10): 배포 서비스 회귀 11개, ZIP 내·외부 크기/SHA-256 및 EXE `--help`, 격리된 Windows 신규 설치·실행 중 재설치 거절·실패 롤백·재시도를 통과했다. `LOCAL_HELPER_DISTRIBUTION_DIR`를 저장소 배포본으로 지정한 테스트 서버에서 Playwright `local-helper-distribution.spec.ts` 1개를 통과했다. 실제 ZIP 응답 해시 일치, 내 PC 설정의 설치 버튼 활성화, 설치 BAT 다운로드, 데스크톱/390px 모바일 화면을 확인했다. 실사내 인증서·보안 정책은 검증하지 않았으며 비-loopback 주소의 도우미 설치·연결에는 기존 HTTPS 조건이 유지된다.
 
 ## 2026-09-10 계정 백업 실패 수정
 
