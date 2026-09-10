@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.database import initialize_database
@@ -41,6 +42,12 @@ def test_password_hash_policy():
     encoded = hash_password("a-strong-password")
     assert verify_password("a-strong-password", encoded)
     assert not verify_password("wrong-password", encoded)
+
+
+def test_password_hash_accepts_eight_characters_and_rejects_seven():
+    assert verify_password("12345678", hash_password("12345678"))
+    with pytest.raises(ValueError):
+        hash_password("1234567")
 
 
 def test_password_auth_rbac_and_audit(monkeypatch):

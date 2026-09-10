@@ -252,7 +252,8 @@ try {
     # Account bootstrap is server-local and intentionally blocks launch when
     # noninteractive execution cannot complete a required initial-admin setup.
     & $Python 'scripts\setup_accounts.py'
-    if ($LASTEXITCODE -ne 0) { throw 'Account setup is pending or failed. Run setup-accounts.bat from an interactive server console.' }
+    if ($LASTEXITCODE -eq 2) { throw 'Initial administrator setup is required. Run setup-accounts.bat from an interactive server console, then run update.bat.' }
+    if ($LASTEXITCODE -ne 0) { throw 'Account setup failed. Follow ACCOUNT_SETUP_ACTION, run setup-accounts.bat, then run update.bat.' }
 }
 finally {
     Pop-Location

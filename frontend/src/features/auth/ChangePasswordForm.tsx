@@ -44,8 +44,8 @@ export function ChangePasswordForm() {
     </header>
     <form onSubmit={submit}>
       <label><span>현재 비밀번호</span><input type="password" autoComplete="current-password" maxLength={256} value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required disabled={busy} /></label>
-      <label><span>새 비밀번호</span><input type="password" autoComplete="new-password" minLength={12} maxLength={256} placeholder="12자 이상" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required disabled={busy} /></label>
-      <label><span>새 비밀번호 확인</span><input type="password" autoComplete="new-password" minLength={12} maxLength={256} value={confirmation} onChange={(event) => setConfirmation(event.target.value)} required disabled={busy} /></label>
+      <label><span>새 비밀번호</span><input type="password" autoComplete="new-password" minLength={8} maxLength={256} placeholder="8자 이상" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required disabled={busy} /></label>
+      <label><span>새 비밀번호 확인</span><input type="password" autoComplete="new-password" minLength={8} maxLength={256} value={confirmation} onChange={(event) => setConfirmation(event.target.value)} required disabled={busy} /></label>
       {error && <p className="change-password-feedback error" role="alert"><AlertTriangle aria-hidden="true" />{error}</p>}
       {notice && <p className="change-password-feedback success" role="status"><Check aria-hidden="true" />{notice}</p>}
       <button type="submit" className="change-password-submit" disabled={busy}>{busy ? <LoaderCircle className="spin" aria-hidden="true" /> : <KeyRound aria-hidden="true" />} 비밀번호 변경</button>

@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from .auth_limits import PASSWORD_MAX_LENGTH, PASSWORD_USERNAME_MAX_LENGTH
+from .auth_limits import PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH, PASSWORD_USERNAME_MAX_LENGTH
 
 
 class StrictModel(BaseModel):
@@ -15,7 +15,7 @@ class StrictModel(BaseModel):
 class RegistrationPayload(StrictModel):
     username: str = Field(min_length=3, max_length=PASSWORD_USERNAME_MAX_LENGTH, pattern=r"^[a-z0-9._-]{3,80}$")
     display_name: str = Field(min_length=1, max_length=200)
-    password: str = Field(min_length=12, max_length=PASSWORD_MAX_LENGTH)
+    password: str = Field(min_length=PASSWORD_MIN_LENGTH, max_length=PASSWORD_MAX_LENGTH)
 
     @field_validator("username", mode="before")
     @classmethod
@@ -37,7 +37,7 @@ class RegistrationPayload(StrictModel):
 
 class PasswordChangePayload(StrictModel):
     current_password: str = Field(min_length=1, max_length=PASSWORD_MAX_LENGTH)
-    new_password: str = Field(min_length=12, max_length=PASSWORD_MAX_LENGTH)
+    new_password: str = Field(min_length=PASSWORD_MIN_LENGTH, max_length=PASSWORD_MAX_LENGTH)
 
 
 class RegistrationResponse(BaseModel):

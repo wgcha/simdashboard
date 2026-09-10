@@ -28,7 +28,7 @@ def main() -> None:
     username = args.username.strip().lower()
     if not username or any(character not in "abcdefghijklmnopqrstuvwxyz0123456789._-" for character in username):
         raise RuntimeError("username은 영문 소문자, 숫자, 점, 밑줄, 하이픈만 사용할 수 있습니다.")
-    password = os.getenv("SIM_DASH_USER_PASSWORD") or getpass.getpass("Password (12+ characters): ")
+    password = os.getenv("SIM_DASH_USER_PASSWORD") or getpass.getpass("Password (8+ characters): ")
     encoded = hash_password(password)
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     is_global_admin = args.global_admin if args.global_admin is not None else args.role == "admin"

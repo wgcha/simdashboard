@@ -71,8 +71,8 @@ export function LoginScreen({ mode, error, onLogin, onRegister, registrationEnab
       {mode === 'password' && registerMode ? <>
         <label><span>사용자 이름</span><input autoFocus autoComplete="username" minLength={3} maxLength={80} pattern="[A-Za-z0-9._\-]{3,80}" title="영문·숫자·마침표(.)·대시(-)·밑줄(_)을 사용한 3~80자입니다. 한글과 공백은 사용할 수 없습니다." placeholder="영문·숫자·.·-·_ (3~80자)" value={username} onChange={(event) => { setUsername(event.target.value); setLocalError('') }} required /></label>
         <label><span>표시 이름</span><input autoComplete="name" maxLength={200} value={displayName} onChange={(event) => { setDisplayName(event.target.value); setLocalError('') }} required /></label>
-        <label><span>비밀번호</span><input type="password" autoComplete="new-password" minLength={12} maxLength={256} placeholder="12자 이상" value={password} onChange={(event) => { setPassword(event.target.value); setLocalError('') }} required /></label>
-        <label><span>비밀번호 확인</span><input type="password" autoComplete="new-password" minLength={12} maxLength={256} value={confirmation} onChange={(event) => { setConfirmation(event.target.value); setLocalError('') }} required /></label>
+        <label><span>비밀번호</span><input type="password" autoComplete="new-password" minLength={8} maxLength={256} placeholder="8자 이상" value={password} onChange={(event) => { setPassword(event.target.value); setLocalError('') }} required /></label>
+        <label><span>비밀번호 확인</span><input type="password" autoComplete="new-password" minLength={8} maxLength={256} value={confirmation} onChange={(event) => { setConfirmation(event.target.value); setLocalError('') }} required /></label>
       </> : mode === 'password' ? <>
         <label><span>사용자 이름</span><input autoFocus autoComplete="username" value={username} onChange={(event) => { setUsername(event.target.value); setLocalError('') }} required /></label>
         <label><span>비밀번호</span><input type="password" autoComplete="current-password" value={password} onChange={(event) => { setPassword(event.target.value); setLocalError('') }} required /></label>

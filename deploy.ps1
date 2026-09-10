@@ -143,8 +143,17 @@ try {
     $accountSetupArguments = @()
     if ($NonInteractive) { $accountSetupArguments += '--non-interactive' }
     Write-Host 'Preparing the initial administrator when required...' -ForegroundColor Cyan
-    $accountSetupCode = Invoke-DeploymentPython -Python $python -ScriptPath $accountSetupScript -Arguments $accountSetupArguments
-    if ($accountSetupCode -ne 0) { throw "Account setup is pending or failed (exit code $accountSetupCode). Readiness was not published." }
+    # input()/getpass prompts must reach the console directly. Piping through
+    # Out-Host buffers a prompt without a newline until input is already sent.
+    Write-Host 'If no administrator exists, enter the initial administrator below. Password input is hidden.' -ForegroundColor Cyan
+    Push-Location (Join-Path $Root 'backend')
+    try {
+        & $python $accountSetupScript @accountSetupArguments
+        $accountSetupCode = [int]$LASTEXITCODE
+    }
+    finally { Pop-Location }
+    if ($accountSetupCode -eq 2) { throw 'Initial administrator setup is required. Run setup-accounts.bat in an interactive server console, then run update.bat. Readiness was not published.' }
+    if ($accountSetupCode -ne 0) { throw "Account setup failed (exit code $accountSetupCode). Follow ACCOUNT_SETUP_ACTION, run setup-accounts.bat, then run update.bat. Readiness was not published." }
 
     $stamp = [ordered]@{
         version = 1

@@ -30,6 +30,7 @@ $lockAcquired = $false
 $logPath = $null
 $stage = 'startup'
 $failureExitCode = 1
+$script:ChildPowerShellExitCode = 1
 
 if ($LocalHelperDistributionSource -and $null -ne $LocalHelperManifestUrl) {
     throw 'Use either -LocalHelperDistributionSource or -LocalHelperManifestUrl, not both.'
@@ -75,12 +76,12 @@ function Invoke-ChildPowerShell {
         $windowsPowerShell = $command.Source
     }
     $childArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath) + @($Arguments)
-    # Child output is intentionally sent straight to the console. Keeping it
-    # out of the pipeline is important: callers must receive only the integer
-    # process exit code, even when deploy/start print normal progress.
-    & $windowsPowerShell @childArgs | Out-Host
-    $code = [int]$LASTEXITCODE
-    return $code
+    # Do not capture this function's output or pipe it through Out-Host.
+    # A server-local first-admin prompt has no newline and must remain visible
+    # before the user types. Keep the exit code out of the output stream.
+    $script:ChildPowerShellExitCode = 1
+    & $windowsPowerShell @childArgs
+    $script:ChildPowerShellExitCode = [int]$LASTEXITCODE
 }
 
 function Get-ServerPortArguments {
@@ -196,7 +197,8 @@ try {
     Write-UpdateLog ("PORT_ARGUMENTS_COUNT={0}" -f $portArguments.Count)
 
     Write-Stage 'stop' 'Stopping the current application'
-    $stopCode = Invoke-ChildPowerShell -ScriptPath (Join-Path $Root 'stop.ps1') -Arguments $portArguments
+    Invoke-ChildPowerShell -ScriptPath (Join-Path $Root 'stop.ps1') -Arguments $portArguments
+    $stopCode = $script:ChildPowerShellExitCode
     Complete-Stage 'stop' $stopCode
     if ($stopCode -ne 0) { $failureExitCode = $stopCode; throw "Stopping the application failed (exit code $stopCode). The source was not changed." }
 
@@ -208,7 +210,8 @@ try {
     $deployArguments = @()
     if ($NetworkMode) { $deployArguments += @('-NetworkMode', $NetworkMode) }
     if ($NonInteractive) { $deployArguments += '-NonInteractive' }
-    $deployCode = Invoke-ChildPowerShell -ScriptPath (Join-Path $Root 'deploy.ps1') -Arguments $deployArguments
+    Invoke-ChildPowerShell -ScriptPath (Join-Path $Root 'deploy.ps1') -Arguments $deployArguments
+    $deployCode = $script:ChildPowerShellExitCode
     Complete-Stage 'deploy' $deployCode
     if ($deployCode -ne 0) { $failureExitCode = $deployCode; throw "Deployment failed (exit code $deployCode). The local-helper import and restart were skipped; review the reported deployment stage." }
 
@@ -218,7 +221,8 @@ try {
         $helperArguments = @('-ProjectRoot', $Root)
         if ($LocalHelperDistributionSource) { $helperArguments += @('-LocalHelperDistributionSource', $LocalHelperDistributionSource) }
         else { $helperArguments += @('-LocalHelperManifestUrl', $LocalHelperManifestUrl.AbsoluteUri) }
-        $helperCode = Invoke-ChildPowerShell -ScriptPath $helperScript -Arguments $helperArguments
+        Invoke-ChildPowerShell -ScriptPath $helperScript -Arguments $helperArguments
+        $helperCode = $script:ChildPowerShellExitCode
         Complete-Stage 'local-helper-distribution' $helperCode
         if ($helperCode -ne 0) { $failureExitCode = $helperCode; throw 'Local helper distribution import failed. The existing distribution was preserved and the server was not started.' }
     }
@@ -231,7 +235,8 @@ try {
     $startArguments += $portArguments
     if ($NoBrowser) { $startArguments += '-NoBrowser' }
     if ($NetworkMode) { $startArguments += @('-NetworkMode', $NetworkMode) }
-    $startCode = Invoke-ChildPowerShell -ScriptPath (Join-Path $Root 'start.ps1') -Arguments $startArguments
+    Invoke-ChildPowerShell -ScriptPath (Join-Path $Root 'start.ps1') -Arguments $startArguments
+    $startCode = $script:ChildPowerShellExitCode
     Complete-Stage 'start' $startCode
     if ($startCode -ne 0) { $failureExitCode = $startCode; throw "Starting the updated application failed (exit code $startCode). Review the service logs and retry." }
 

@@ -20,13 +20,20 @@ test('개인 회원가입 신청 후 관리자 승인 안내와 로그인 화면
   await expect(page.getByRole('heading', { name: '개인 회원가입', exact: true })).toBeVisible()
   await page.getByLabel('사용자 이름').fill('e2e-personal-user')
   await page.getByLabel('표시 이름').fill('E2E 개인 사용자')
-  await page.getByLabel('비밀번호', { exact: true }).fill('e2e-registration-password')
-  await page.getByLabel('비밀번호 확인').fill('e2e-registration-password')
+  const password = page.getByLabel('비밀번호', { exact: true })
+  await expect(password).toHaveAttribute('minlength', '8')
+  await password.fill('test123')
+  await page.getByLabel('비밀번호 확인').fill('test123')
+  await page.getByRole('button', { name: '회원가입 신청', exact: true }).click()
+  expect(await password.evaluate((element: HTMLInputElement) => element.validity.tooShort)).toBe(true)
+  expect(registration).toBeUndefined()
+  await password.fill('test1234')
+  await page.getByLabel('비밀번호 확인').fill('test1234')
   await page.getByRole('button', { name: '회원가입 신청', exact: true }).click()
 
   await expect(page.getByRole('heading', { name: '회원 로그인', exact: true })).toBeVisible()
   await expect(page.getByRole('status')).toContainText('가입 신청이 접수되었습니다.')
-  expect(registration).toEqual({ username: 'e2e-personal-user', display_name: 'E2E 개인 사용자', password: 'e2e-registration-password' })
+  expect(registration).toEqual({ username: 'e2e-personal-user', display_name: 'E2E 개인 사용자', password: 'test1234' })
 })
 
 test('실제 계정을 승인한 뒤 비밀번호 변경과 새 비밀번호 로그인을 완료한다', async ({ page, browser }) => {
@@ -42,8 +49,8 @@ test('실제 계정을 승인한 뒤 비밀번호 변경과 새 비밀번호 로
 
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
   const username = `e2e-account-${suffix}`
-  const oldPassword = `e2e-old-${suffix}`
-  const newPassword = `e2e-new-${suffix}`
+  const oldPassword = 'old12345'
+  const newPassword = 'new12345'
   await page.route('http://127.0.0.1:8766/**', (route) => route.abort('connectionrefused'))
   await page.goto('/')
   await page.getByRole('button', { name: '개인 회원가입', exact: true }).click()
@@ -92,6 +99,7 @@ test('실제 계정을 승인한 뒤 비밀번호 변경과 새 비밀번호 로
   await page.reload()
   await expect(page.getByRole('heading', { name: '비밀번호 변경', exact: true })).toBeVisible()
   await page.getByLabel('현재 비밀번호').fill(oldPassword)
+  await expect(page.getByLabel('새 비밀번호', { exact: true })).toHaveAttribute('minlength', '8')
   await page.getByLabel('새 비밀번호', { exact: true }).fill(newPassword)
   await page.getByLabel('새 비밀번호 확인').fill(newPassword)
   await page.getByRole('button', { name: '비밀번호 변경', exact: true }).click()

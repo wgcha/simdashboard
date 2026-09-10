@@ -20,6 +20,7 @@ from starlette.responses import JSONResponse, Response
 from .config import security_settings
 from .modules.access_control import AccountStatus
 from .database_connection import ConnectionLike, connect
+from .schemas.auth_limits import PASSWORD_MIN_LENGTH
 
 
 Role = Literal["viewer", "editor", "admin"]
@@ -107,8 +108,8 @@ def _b64url_decode(value: str) -> bytes:
 
 
 def hash_password(password: str) -> str:
-    if len(password) < 12:
-        raise ValueError("비밀번호는 12자 이상이어야 합니다.")
+    if len(password) < PASSWORD_MIN_LENGTH:
+        raise ValueError(f"비밀번호는 {PASSWORD_MIN_LENGTH}자 이상이어야 합니다.")
     salt = secrets.token_bytes(16)
     digest = hashlib.scrypt(password.encode("utf-8"), salt=salt, n=2**14, r=8, p=1, dklen=32)
     return f"scrypt$16384$8$1${_b64url(salt)}${_b64url(digest)}"

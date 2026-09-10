@@ -43,7 +43,7 @@ def test_password_registration_requires_admin_approval_and_supports_password_cha
         )
     username = f"member-{suffix}".ljust(80, 'a')
     initial_password = " initial password is long enough "
-    replacement_password = "replacement-password-is-long-enough"
+    replacement_password = "new12345"
 
     with TestClient(app) as client:
         assert client.get("/api/auth/status").json()["registration_enabled"] is True
@@ -80,7 +80,7 @@ def test_password_registration_requires_admin_approval_and_supports_password_cha
             "/api/auth/register",
             json={"username": username + 'b', "display_name": "길이 초과", "password": initial_password},
         ).status_code == 422
-        invalid_secret = "short-pw"
+        invalid_secret = "shortpw"
         invalid = client.post("/api/auth/register", json={
             "username": "invalid-password-user", "display_name": "잘못된 입력", "password": invalid_secret,
         })
