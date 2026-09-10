@@ -45,6 +45,7 @@ def initialize_database() -> None:
                 "managed_device_grants",
                 "managed_local_runs",
                 "managed_device_event_sequences",
+                "voc_posts",
             )
             missing = [
                 table_name
@@ -1164,6 +1165,8 @@ def _initialize_duckdb_legacy() -> None:
         ensure_modeling_template_schema(conn)
         from .adapters.persistence.duckdb.managed_local_execution import ensure_managed_local_execution_schema
         ensure_managed_local_execution_schema(conn)
+        from .adapters.persistence.duckdb.voc_posts import ensure_voc_posts_schema
+        ensure_voc_posts_schema(conn)
         # Establish the schema before seeding, but defer one-time legacy data
         # conversion until the seed has created any default projects.
         ensure_access_control_schema(conn, apply_legacy_backfills=False)

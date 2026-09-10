@@ -14,7 +14,7 @@ import type { useRequestWorkspaceController } from './useRequestWorkspaceControl
 import { RequestWorkspaceRoute } from './RequestWorkspaceRoute'
 import { StorageWorkspacePanel } from '../../features/storage/StorageWorkspacePanel'
 
-import { DataWorkspace, FolderSchemaWorkspace, VariableCatalogPage, AutomationTemplatesPage, FeatureExampleGallery, HelpCenter } from '../routing/workspaceScreenModules'
+import { DataWorkspace, FolderSchemaWorkspace, VariableCatalogPage, AutomationTemplatesPage, FeatureExampleGallery, HelpCenter, VocBoard } from '../routing/workspaceScreenModules'
 
 export function FeatureScreenFallback() {
   return <div className="full-state">화면을 준비하고 있습니다.</div>
@@ -89,6 +89,7 @@ export function WorkspaceRouteRenderer({
   if (workspacePage === 'templates') return <Suspense fallback={<FeatureScreenFallback />}><AutomationTemplatesPage /></Suspense>
   if (workspacePage === 'examples') return <Suspense fallback={<FeatureScreenFallback />}><FeatureExampleGallery onOpen={async (example) => onFeatureExample(example)} /></Suspense>
   if (workspacePage === 'help') return <Suspense fallback={<FeatureScreenFallback />}><HelpCenter onNavigate={onWorkspaceNavigate} /></Suspense>
+  if (workspacePage === 'voc' && authUser) return <Suspense fallback={<FeatureScreenFallback />}><VocBoard user={authUser} /></Suspense>
   if (workspacePage === 'access_admin') return <Suspense fallback={<FeatureScreenFallback />}><AccessAdminPage projectId={selectedProjectId} projects={projects.filter((project) => hasPermission(authUser, 'project.member.manage', project.id))} onProjectChange={(projectId) => void selectProject(projectId)} canApproveUsers={hasPermission(authUser, 'system.user.approve', selectedProjectId)} onAccessChanged={async () => onRefreshAccess()} /></Suspense>
   if (workspacePage === 'menu_policy_admin' && menuPolicy) return <Suspense fallback={<FeatureScreenFallback />}><MenuPolicyAdminPage policy={menuPolicy} onPolicyChanged={onMenuPolicyChanged} /></Suspense>
   if (workspacePage === 'audit_admin') return <Suspense fallback={<FeatureScreenFallback />}><AuditAdminPage /></Suspense>

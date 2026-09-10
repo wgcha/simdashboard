@@ -7,6 +7,7 @@ export const VariableCatalogPage = preloadableScreen(() => import('../../feature
 export const AutomationTemplatesPage = preloadableScreen(() => import('../../features/workbench/AutomationTemplatesPage').then((m) => ({ default: m.AutomationTemplatesPage })))
 export const FeatureExampleGallery = preloadableScreen(() => import('../../features/examples/FeatureExampleGallery').then((m) => ({ default: m.FeatureExampleGallery })))
 export const HelpCenter = preloadableScreen(() => import('../../features/help/HelpCenter').then((m) => ({ default: m.HelpCenter })))
+export const VocBoard = preloadableScreen(() => import('../../features/voc/VocBoard').then((m) => ({ default: m.VocBoard })))
 export const LocalPcSettingsPage = preloadableScreen(() => import('../../features/local-pc/LocalPcSettingsPage').then((m) => ({ default: m.LocalPcSettingsPage })))
 export const WorkflowView = preloadableScreen(() => import('../../features/requests/WorkflowView').then((m) => ({ default: m.WorkflowView })))
 export const ResultsWorkspace = preloadableScreen(() => import('../../features/results/ResultsWorkspace').then((m) => ({ default: m.ResultsWorkspace })))
@@ -24,7 +25,7 @@ const modulesByPage: Partial<Record<WorkspacePage, { preload: () => Promise<unkn
   dashboard: [WorkflowView, PendingAnalysisWorkspace, ResultsWorkspace],
   data: [DataWorkspace], workbench: [SimulationWorkbench],
   schemas: [FolderSchemaWorkspace], variables: [VariableCatalogPage], templates: [AutomationTemplatesPage],
-  examples: [FeatureExampleGallery], help: [HelpCenter],
+  examples: [FeatureExampleGallery], help: [HelpCenter], voc: [VocBoard],
   access_admin: [AccessAdminPage], menu_policy_admin: [MenuPolicyAdminPage], audit_admin: [AuditAdminPage],
   workbench_admin: [WorkbenchTypeAdmin], project_result_profiles: [ProjectResultProfileBinding],
 }

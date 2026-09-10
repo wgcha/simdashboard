@@ -623,6 +623,12 @@ app-role DDL 거부, pool budget, reference seed와 동시성 test **2 passed**�
   프런트의 `reportExport.ts`가 수행하고, 업로드된 native PPTX template의 placeholder
   render는 서버 document adapter가 수행한다.
 
+### 5.5 VOC 개선 의견 게시판
+
+사이드바 도움말 바로 아래의 VOC 게시판은 승인된 회원이 텍스트 의견을 공유하고 전체 목록을 CSV·JSON으로 내보내는 회사 범위 기능이다. 프로젝트 배정과 로컬 도우미 설치 없이 사용할 수 있다. 작성자 아이디·표시 이름과 UTC 시각은 서버가 기록하며 `voc_posts`에 보관한다. PostgreSQL 마이그레이션은 `0023_voc_posts`다.
+
+화면은 `features/voc`, API는 독립 router·schema·service·repository로 분리한다. 다운로드는 임시 파일에 내용을 준비한 뒤 DB 연결을 닫고 전송하므로 전송 중 DB 연결이나 DuckDB 잠금을 유지하지 않는다. 회원 권한과 텍스트 검증은 서버에서 적용한다. 상세 사용·배포·검증 절차는 [VOC 게시판](voc-board.md)을 따른다.
+
 ## 6. API 계약
 
 ```text

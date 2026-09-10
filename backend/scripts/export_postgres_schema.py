@@ -76,6 +76,7 @@ CREATE INDEX IF NOT EXISTS ix_managed_pairing_expiry ON managed_device_pairing_t
 CREATE INDEX IF NOT EXISTS ix_managed_sessions_binding_expiry ON managed_device_sessions(binding_id, expires_at);
 CREATE INDEX IF NOT EXISTS ix_managed_grants_binding_context ON managed_device_grants(binding_id, request_id, work_item_id);
 CREATE INDEX IF NOT EXISTS ix_managed_runs_context ON managed_local_runs(request_id, work_item_id, synced_at);
+CREATE INDEX IF NOT EXISTS ix_voc_posts_created_at_id ON voc_posts(created_at, id);
 """.strip()
 
 EXTRA_TABLES = """
@@ -152,6 +153,12 @@ CREATE TABLE IF NOT EXISTS managed_device_event_sequences (
     sequence BIGINT NOT NULL CHECK (sequence >= 0),
     event_hash CHAR(64) NOT NULL CHECK (event_hash ~ '^[0-9a-f]{64}$'),
     accepted_at TIMESTAMP NOT NULL, PRIMARY KEY (binding_id, run_id, sequence)
+);
+CREATE TABLE IF NOT EXISTS voc_posts (
+    id VARCHAR PRIMARY KEY, author_user_id VARCHAR NOT NULL,
+    author_username VARCHAR NOT NULL, author_display_name VARCHAR NOT NULL,
+    content TEXT NOT NULL CHECK (char_length(content) BETWEEN 1 AND 10000),
+    created_at TIMESTAMPTZ NOT NULL
 );
 """.strip()
 

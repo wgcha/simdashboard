@@ -35,6 +35,7 @@ export const WORKSPACE_ROUTES: readonly WorkspaceRouteRegistryItem[] = [
   { id: 'audit_admin', page: 'audit_admin', path: '/workspace/admin/audit', label: '감사로그', breadcrumb: { section: '관리', title: '감사로그' }, requiredPermission: 'audit.view', contextKind: 'system', navigationKind: 'select' },
   { id: 'examples', page: 'examples', path: '/workspace/examples', label: '기능 예제 갤러리', breadcrumb: { section: '지원', title: '기능 예제 갤러리' }, requiredPermission: 'project.data.view', contextKind: 'company', navigationKind: 'select' },
   { id: 'help', page: 'help', path: '/workspace/help', label: '도움말', breadcrumb: { section: '지원', title: '사용 시나리오 도움말' }, requiredPermission: 'company.dashboard.view', contextKind: 'company', navigationKind: 'select' },
+  { id: 'voc', page: 'voc', path: '/workspace/voc', label: 'VOC 게시판', breadcrumb: { section: '지원', title: 'VOC 게시판' }, requiredPermission: 'company.dashboard.view', contextKind: 'company', navigationKind: 'select' },
 ] as const
 
 export const WORKSPACE_ROUTES_BY_ID = new Map(WORKSPACE_ROUTES.map((route) => [route.id, route]))

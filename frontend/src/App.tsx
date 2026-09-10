@@ -36,6 +36,7 @@ import { createWorkflowAnalysisOpener, isPendingResultAnalysis, useResultAnalysi
 import type { AuthUser } from './auth'
 import { useWorkspaceEditorCoordinator } from './editorState'
 import { BootstrapWorkspaceShell } from './features/bootstrap/BootstrapWorkspaceShell'
+import { VocRoute } from './app/workspace/VocRoute'
 import type { InitialWorkspace } from './features/bootstrap/loadInitialWorkspace'
 import { useWorkspaceBootstrap } from './features/bootstrap/useWorkspaceBootstrap'
 import { AppShell, AppShellMain, AppTopbar } from './app/shell/AppShell'
@@ -820,6 +821,9 @@ function App() {
   }
   if (workspacePage === 'local_pc' && authUser?.account_status === 'ACTIVE') {
     return <PersonalPcRoute user={authUser} menus={visibleMenus} databaseBackend={databaseBackend} theme={theme} fontSize={uiFontSize} onFontSizeChange={setUiFontSize} onThemeChange={setTheme} onLogout={() => void logout()} onNavigate={enterWorkspace} />
+  }
+  if (workspacePage === 'voc' && menuPolicyReady && authUser?.account_status === 'ACTIVE' && allowedPages.has('voc')) {
+    return <VocRoute user={authUser} menus={visibleMenus} databaseBackend={databaseBackend} theme={theme} fontSize={uiFontSize} onFontSizeChange={setUiFontSize} onThemeChange={setTheme} onLogout={() => void logout()} onNavigate={enterWorkspace} />
   }
   if (workspaceBootstrap.status === 'idle' || workspaceBootstrap.status === 'loading') {
     return <div className="full-state"><LoaderCircle className="spin" /> 데이터와 레이아웃을 준비하고 있습니다.</div>

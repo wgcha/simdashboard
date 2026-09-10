@@ -19,6 +19,7 @@ import {
   Settings2,
   ShieldCheck,
   Users,
+  MessageSquare,
 } from 'lucide-react'
 
 const MENU_ICONS = {
@@ -35,6 +36,7 @@ const MENU_ICONS = {
   schemas: GripVertical,
   examples: Play,
   help: BookOpen,
+  voc: MessageSquare,
   access_admin: Users,
   menu_policy_admin: ShieldCheck,
   audit_admin: ScrollText,
@@ -74,6 +76,7 @@ const MENU_GROUP_BY_ID: Record<AppSidebarMenuId, MenuGroupId> = {
   audit_admin: 'administration',
   examples: 'support',
   help: 'support',
+  voc: 'support',
 }
 
 const USER_MENU_LABELS: Partial<Record<AppSidebarMenuId, string>> = {
@@ -129,7 +132,7 @@ export function AppSidebar({
   }, [activeGroup])
   const groupedMenus = new Map<MenuGroupId, AppSidebarMenu[]>()
   menus.forEach((menu) => {
-    if (menu.id === 'workbench' || menu.id === 'data' || menu.id === 'help') return
+    if (menu.id === 'workbench' || menu.id === 'data' || menu.id === 'help' || menu.id === 'voc') return
     const groupId = MENU_GROUP_BY_ID[menu.id]
     const group = groupedMenus.get(groupId)
     if (group) group.push(menu)
@@ -171,6 +174,7 @@ export function AppSidebar({
         </div>
       </details></div>)}
       {helpMenu && renderMenuLink(helpMenu, 'nav-link-standalone nav-link-help')}
+      {menus.find((menu) => menu.id === 'voc') && renderMenuLink(menus.find((menu) => menu.id === 'voc')!, 'nav-link-standalone nav-link-help')}
     </nav>
     <div className="sidebar-foot">
       <div className="global-font-control" aria-label="전체 글자 크기 조절">

@@ -24,6 +24,7 @@ const expectedPaths = {
   audit_admin: '/workspace/admin/audit',
   examples: '/workspace/examples',
   help: '/workspace/help',
+  voc: '/workspace/voc',
 }
 
 const paths = new Set()
