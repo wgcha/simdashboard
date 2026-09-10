@@ -72,6 +72,14 @@ HTTPS URL은 운영자가 실제 게시한 릴리스 주소를 사용한다. 위
 
 계속 실패하면 `ACCOUNT_BACKUP_MEDIA`와 `failure.json.media_diagnostics`의 고정 reason·숫자로 구분한다. 새 배포 백업은 DB와 파일을 함께 복원해야 하므로 [dual-read 업데이트 백업과 복구](account-backup-and-recovery.md#dual-read-업데이트-백업과-복구) 절차를 따른다. 엄격한 `restore_postgres.py`에 넣으면 복구 전 해당 절차를 안내하고 중단한다.
 
+## 2026-09-10 UNKNOWN 진단 후속 보완
+
+추가 사내 보고는 `ACCOUNT_BACKUP_FAILED_UNKNOWN stage=postgres_current_schema_backup`이다. 하위 백업 프로그램의 실제 실패 위치를 구분할 정보가 부족했으므로, 이 시점에 사내 원인이 해결됐다고 판단하지 않았다.
+
+백업 하위 프로그램에서 snapshot 조회, 파일 묶음 생성, pg_dump 실행, pg_restore 목록 검사, 덤프 게시, manifest 기록 단계를 구분해 전달한다. 부모의 `ACCOUNT_BACKUP_DETAIL` 및 보호된 `failure.json.details`에는 예외 종류·OS 오류 번호·프로세스 종료 코드·SQLSTATE만 허용한다. 비밀값·원문 오류·명령 인자·파일 경로는 배제한다. 언어별 네이티브 오류가 UNKNOWN으로 누락되지 않도록 백업용 PostgreSQL 도구의 메시지 locale만 C로 지정했다. 별도 프로세스 오류·백업 검증 오류·인코딩·의존성 코드를 추가했다.
+
+관련 회귀 테스트 **74개 통과, 3개 건너뜀**. 실제 Windows `pg_dump`와 `pg_restore`에 DB 접속 없는 잘못된 옵션을 전달해 C locale의 영어 오류 출력을 확인했다. 이 변경에서는 운영 DB 또는 테스트 DB 내용을 변경하지 않았다. 사내 재실행에서 새 DETAIL의 내부 단계·오류 번호 확인이 남아 있다.
+
 ## 이번 검증 기록
 
 | 검증 | 결과와 범위 |

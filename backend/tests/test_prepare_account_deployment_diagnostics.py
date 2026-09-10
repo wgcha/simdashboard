@@ -44,6 +44,7 @@ def test_failure_report_is_structured_and_never_contains_synthetic_secret(tmp_pa
         "code": "ACCOUNT_BACKUP_FAILED_UNKNOWN",
         "stage": "duckdb_backup",
         "remediation": deployment._REMEDIATION["ACCOUNT_BACKUP_FAILED_UNKNOWN"],
+        "details": {"exception_type": "RuntimeError"},
     }
 
 
@@ -87,6 +88,34 @@ def test_schema_child_failure_has_stable_code() -> None:
     )
     error = deployment.AccountBackupChildError("postgres_current_schema_backup", child)
     assert deployment._safe_failure_code(error) == "ACCOUNT_BACKUP_FAILED_DATABASE_SCHEMA_OBJECT_MISSING"
+
+
+@pytest.mark.parametrize(("stage", "exception_type", "expected"), [
+    ("pg_dump", "CalledProcessError", "POSTGRES_COMMAND"),
+    ("pg_restore_list", "CalledProcessError", "POSTGRES_COMMAND"),
+    ("assets_bundle", "UnicodeEncodeError", "ENCODING"),
+    ("snapshot_inventory", "ModuleNotFoundError", "DEPENDENCY"),
+])
+def test_structured_child_failures_are_classified(stage: str, exception_type: str, expected: str) -> None:
+    message = "POSTGRES_BACKUP_DETAIL " + json.dumps({"stage": stage, "exception_type": exception_type, "returncode": 1})
+    error = deployment.AccountBackupChildError("postgres_current_schema_backup", subprocess.CalledProcessError(1, ["python", "backup_postgres.py"], stderr=message))
+    assert deployment._safe_failure_code(error) == "ACCOUNT_BACKUP_FAILED_" + expected
+
+
+def test_unknown_child_failure_preserves_safe_internal_stage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    root = _project(tmp_path)
+    detail = {"stage": "publish_dump", "exception_type": "OSError", "winerror": 50, "errno": 22}
+    def fail(*_args, **_kwargs):
+        stderr = "POSTGRES_BACKUP_DETAIL " + json.dumps({**detail, "password": "synthetic-secret"})
+        raise deployment.AccountBackupChildError("postgres_current_schema_backup", subprocess.CalledProcessError(1, ["python", "backup_postgres.py"], stderr=stderr))
+    monkeypatch.setattr(deployment, "_duckdb_backup", fail)
+    monkeypatch.setattr(deployment.sys, "argv", ["prepare_account_deployment.py", "--project-root", str(root)])
+    assert deployment.main() == 1
+    output = capsys.readouterr().err
+    assert "ACCOUNT_BACKUP_DETAIL" in output and "publish_dump" in output and '"winerror": 50' in output
+    report = json.loads(next((root / "backups/accounts").glob("*/failure.json")).read_text())
+    assert report["details"] == detail
+    assert "synthetic-secret" not in output + json.dumps(report)
 
 
 def test_media_failure_report_includes_only_allowlisted_counts_and_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:

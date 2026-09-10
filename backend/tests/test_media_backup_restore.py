@@ -138,9 +138,13 @@ def test_backup_manifest_embeds_inventory_and_pg_dump_snapshot(
     holder = SimpleNamespace(close=lambda: None)
     monkeypatch.setattr(backup, "_snapshot_inventory", lambda _url: (holder, "snapshot-123", inventory, _account_inventory()))
     monkeypatch.setattr(backup, "executable", lambda name: name)
+    monkeypatch.setenv("LC_ALL", "ko_KR")
     commands: list[list[str]] = []
 
     def fake_run(command: list[str], **_kwargs):
+        assert _kwargs["env"]["LC_ALL"] == "C"
+        assert _kwargs["env"]["LC_MESSAGES"] == "C"
+        assert _kwargs["env"]["LANGUAGE"] == "C"
         commands.append(command)
         if command[0] == "pg_dump":
             Path(command[command.index("--file") + 1]).write_bytes(b"dump")
@@ -155,6 +159,7 @@ def test_backup_manifest_embeds_inventory_and_pg_dump_snapshot(
     manifest = next(tmp_path.glob("*.manifest.json"))
     assert json.loads(manifest.read_text(encoding="utf-8"))["media_inventory"] == inventory
     assert json.loads(manifest.read_text(encoding="utf-8"))["account_inventory"] == _account_inventory()
+    assert backup.os.environ["LC_ALL"] == "ko_KR"
 
 
 def test_deployment_bundle_uses_same_snapshot_and_distinct_restore_contract(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

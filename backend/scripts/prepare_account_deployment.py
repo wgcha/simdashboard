@@ -23,6 +23,7 @@ from dotenv import dotenv_values
 BACKEND = Path(__file__).resolve().parents[1]
 ROOT = BACKEND.parent
 sys.path.insert(0, str(BACKEND))
+from scripts.backup_failure_details import child_failure_details, exception_details
 
 
 class AccountBackupChildError(RuntimeError):
@@ -37,7 +38,7 @@ class AccountBackupChildError(RuntimeError):
 class AccountBackupFailure(RuntimeError):
     """A backup failure carrying only allowlisted deployment diagnostics."""
 
-    def __init__(self, code: str, stage: str, cause: BaseException, report_path: Path | None, media_diagnostics: dict[str, object] | None = None):
+    def __init__(self, code: str, stage: str, cause: BaseException, report_path: Path | None, media_diagnostics: dict[str, object] | None = None, details: dict[str, object] | None = None):
         # Preserve the original message for direct Python callers and existing
         # error handling.  ``main`` intentionally never prints it.
         super().__init__(str(cause))
@@ -45,6 +46,7 @@ class AccountBackupFailure(RuntimeError):
         self.stage = stage
         self.report_path = report_path
         self.media_diagnostics = media_diagnostics or {}
+        self.details = details or {}
         self.__cause__ = cause
 
 
@@ -73,6 +75,10 @@ _REMEDIATION = {
     "ACCOUNT_BACKUP_FAILED_DATABASE_PRIVILEGE": "Check the configured PostgreSQL backup owner role and its database read permissions, then retry.",
     "ACCOUNT_BACKUP_FAILED_POSTGRES_VERSION_MISMATCH": "Use PostgreSQL client tools compatible with the server version, then retry.",
     "ACCOUNT_BACKUP_FAILED_MEDIA_INTEGRITY": "Repair the reported media integrity issue before retrying the deployment backup.",
+    "ACCOUNT_BACKUP_FAILED_POSTGRES_COMMAND": "Check the PostgreSQL client and server versions and the reported command stage/returncode; keep the failed backup directory for diagnosis.",
+    "ACCOUNT_BACKUP_FAILED_BACKUP_VERIFICATION": "The dump or companion manifest did not pass verification. Preserve the failed backup directory and check storage and deployment file versions before retrying.",
+    "ACCOUNT_BACKUP_FAILED_ENCODING": "Check the reported stage and Python console/file encoding; share the safe ACCOUNT_BACKUP_DETAIL line for diagnosis.",
+    "ACCOUNT_BACKUP_FAILED_DEPENDENCY": "Run the deployment runtime setup and confirm all source files belong to the same version, then retry.",
     "ACCOUNT_BACKUP_FAILED_UNKNOWN": "Review the protected failure report and deployment prerequisites, then retry.",
 }
 
@@ -225,6 +231,11 @@ def _safe_failure_code(error: BaseException) -> str:
         return "ACCOUNT_BACKUP_FAILED_MISSING_POSTGRES_TOOLS"
     if isinstance(child, (PermissionError, IsADirectoryError, NotADirectoryError)):
         return "ACCOUNT_BACKUP_FAILED_FILESYSTEM_ACCESS_OR_DISK"
+    details = child_failure_details(_child_text(error)) if isinstance(child, subprocess.CalledProcessError) else exception_details(child)
+    if details.get("exception_type") in {"UnicodeEncodeError", "UnicodeDecodeError"}:
+        return "ACCOUNT_BACKUP_FAILED_ENCODING"
+    if details.get("exception_type") in {"ImportError", "ModuleNotFoundError"}:
+        return "ACCOUNT_BACKUP_FAILED_DEPENDENCY"
     text = _child_text(error).casefold()
     if "postgrestoolnotfound" in text:
         return "ACCOUNT_BACKUP_FAILED_MISSING_POSTGRES_TOOLS"
@@ -260,6 +271,10 @@ def _safe_failure_code(error: BaseException) -> str:
         and any(marker in text for marker in _MISSING_TOOL_MARKERS)
     ):
         return "ACCOUNT_BACKUP_FAILED_MISSING_POSTGRES_TOOLS"
+    if details.get("stage") in {"pg_dump", "pg_restore_list"} and details.get("exception_type") == "CalledProcessError":
+        return "ACCOUNT_BACKUP_FAILED_POSTGRES_COMMAND"
+    if any(marker in text for marker in ("deployment backup contract is invalid", "deployment assets backup manifest is invalid", "deployment assets backup verification failed", "백업 파일이 생성되지 않았습니다", "백업 manifest가 생성되지 않았습니다")):
+        return "ACCOUNT_BACKUP_FAILED_BACKUP_VERIFICATION"
     return "ACCOUNT_BACKUP_FAILED_UNKNOWN"
 
 
@@ -271,7 +286,7 @@ def _safe_failure_stage(error: BaseException, fallback: str) -> str:
     return fallback
 
 
-def _write_failure_report(directory: Path | None, *, code: str, stage: str, media_diagnostics: dict[str, object] | None = None) -> Path | None:
+def _write_failure_report(directory: Path | None, *, code: str, stage: str, media_diagnostics: dict[str, object] | None = None, details: dict[str, object] | None = None) -> Path | None:
     """Best-effort, protected report containing no exception or child output."""
     if directory is None:
         return None
@@ -287,6 +302,8 @@ def _write_failure_report(directory: Path | None, *, code: str, stage: str, medi
         }
         if media_diagnostics:
             payload["media_diagnostics"] = media_diagnostics
+        if details:
+            payload["details"] = details
         encoded = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
         temporary = directory / f".failure-{uuid.uuid4().hex}.partial"
         descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -486,14 +503,18 @@ def prepare(project_root: Path) -> Path:
         safe_stage = _safe_failure_stage(error, stage)
         from scripts.media_backup_diagnostics import safe_media_diagnostics
         media_details = safe_media_diagnostics(_child_text(error)) if code == "ACCOUNT_BACKUP_FAILED_MEDIA_INTEGRITY" else {}
-        report_path = _write_failure_report(directory, code=code, stage=safe_stage, media_diagnostics=media_details)
+        cause = error.cause if isinstance(error, AccountBackupChildError) else error
+        details = child_failure_details(_child_text(error)) if isinstance(cause, subprocess.CalledProcessError) else {}
+        if not details:
+            details = exception_details(cause)
+        report_path = _write_failure_report(directory, code=code, stage=safe_stage, media_diagnostics=media_details, details=details)
         if directory is not None:
             try:
                 (directory / "BACKUP_FAILED").write_text("Backup failed; deployment must stop.\n", encoding="utf-8")
                 _secure_payload(directory / "BACKUP_FAILED")
             except Exception:
                 pass
-        raise AccountBackupFailure(code, safe_stage, error, report_path, media_details) from error
+        raise AccountBackupFailure(code, safe_stage, error, report_path, media_details, details) from error
 
 
 def main() -> int:
@@ -507,6 +528,8 @@ def main() -> int:
         report = f" report={error.report_path}" if error.report_path else ""
         print(f"ACCOUNT_BACKUP_FAILED code={error.code} stage={error.stage}{report}", file=sys.stderr)
         print(f"ACCOUNT_BACKUP_ACTION {_REMEDIATION[error.code]}", file=sys.stderr)
+        if error.details:
+            print("ACCOUNT_BACKUP_DETAIL " + json.dumps(error.details, sort_keys=True), file=sys.stderr)
         if error.media_diagnostics:
             print("ACCOUNT_BACKUP_MEDIA " + json.dumps(error.media_diagnostics, sort_keys=True), file=sys.stderr)
         return 1
