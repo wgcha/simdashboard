@@ -41,6 +41,7 @@ $Python = Get-ProjectPython
 $Backend = Join-Path $Root 'backend'
 $Frontend = Join-Path $Root 'frontend'
 $PidFile = Join-Path $Root '.server-pids.json'
+$WebAccessConfig = Join-Path $Backend 'scripts\windows_web_access.py'
 $Vite = Join-Path $Frontend 'node_modules\vite\bin\vite.js'
 if (-not (Test-Path -LiteralPath $Vite -PathType Leaf)) {
     throw 'Vite was not found. Run setup.ps1 first.'
@@ -202,6 +203,73 @@ function Test-RecordedProcessExists($Record) {
     return $Record -and ($Record.PSObject.Properties.Name -contains 'id') -and (Get-Process -Id ([int]$Record.id) -ErrorAction SilentlyContinue)
 }
 
+function Get-LanDashboardUrls([int]$Port) {
+    $addresses = @()
+    if (Get-Command Get-NetIPAddress -ErrorAction SilentlyContinue) {
+        try {
+            $addresses = @(
+                Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop |
+                    Where-Object {
+                        $_.IPAddress -ne '127.0.0.1' -and
+                        $_.IPAddress -notlike '169.254.*' -and
+                        $_.AddressState -eq 'Preferred' -and
+                        (Get-NetAdapter -InterfaceIndex $_.InterfaceIndex -ErrorAction SilentlyContinue).Status -eq 'Up'
+                    } |
+                    Select-Object -ExpandProperty IPAddress -Unique
+            )
+        }
+        catch { $addresses = @() }
+    }
+    return @($addresses | ForEach-Object { "http://$_`:$Port/workspace/overview" })
+}
+
+function Show-WebAccessUrls([int]$Port) {
+    if ($script:webAccessMode -ne 'lan') { return }
+    $lanUrls = Get-LanDashboardUrls -Port $Port
+    if ($lanUrls.Count -eq 0) {
+        Write-Warning 'LAN listener is enabled, but no active non-loopback IPv4 address was found.'
+        return
+    }
+    Write-Host 'LAN dashboard URLs (HTTP):' -ForegroundColor Yellow
+    foreach ($lanUrl in $lanUrls) { Write-Host "  $lanUrl" }
+}
+
+function Test-FrontendHostRecord($Record, [string]$ExpectedHost) {
+    return $Record -and ($Record.PSObject.Properties.Name -contains 'host') -and
+        [string]::Equals([string]$Record.host, $ExpectedHost, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+function Test-LanAuthenticationReadiness() {
+    if ($script:webAccessMode -ne 'lan') { return }
+    $null = & $Python $WebAccessConfig '--check-auth'
+    if ($LASTEXITCODE -ne 0) {
+        throw 'LAN access requires password or OIDC authentication and cannot use AUTH_COOKIE_SECURE=true without an HTTPS reverse proxy.'
+    }
+    Push-Location $Backend
+    try {
+        & $Python 'scripts\setup_accounts.py' '--check'
+        if ($LASTEXITCODE -ne 0) {
+            throw 'LAN access requires a ready authenticated administrator. Run setup-accounts.bat from an interactive server console, then run start.ps1 again.'
+        }
+    }
+    finally {
+        Pop-Location
+    }
+}
+
+if (-not (Test-Path -LiteralPath $WebAccessConfig -PathType Leaf)) {
+    throw 'windows_web_access.py was not found. Extract the complete source archive and retry.'
+}
+$webAccessOutput = & $Python $WebAccessConfig
+if ($LASTEXITCODE -ne 0) { throw 'Windows web access configuration is invalid. Correct WINDOWS_WEB_HOST and authentication settings before starting.' }
+try { $webAccess = $webAccessOutput | ConvertFrom-Json }
+catch { throw 'Windows web access configuration returned invalid data.' }
+if ($webAccess.host -notin @('127.0.0.1', '0.0.0.0') -or $webAccess.mode -notin @('local', 'lan')) {
+    throw 'Windows web access configuration returned an unsupported listener setting.'
+}
+$script:webAccessHost = [string]$webAccess.host
+$script:webAccessMode = [string]$webAccess.mode
+
 Push-Location $Backend
 try {
     # Read only the effective configuration and validate that it can safely
@@ -228,9 +296,14 @@ if (Test-Path -LiteralPath $PidFile) {
     $backendRunning = Test-CurrentServerRecord $serverPids.backend $BackendPort 'backend' $Python
     $frontendRunning = Test-CurrentServerRecord $serverPids.frontend $FrontendPort 'frontend' $Node $Vite
     if ($backendRunning -and $frontendRunning) {
+        Test-LanAuthenticationReadiness
+        if (-not (Test-FrontendHostRecord $serverPids.frontend $script:webAccessHost)) {
+            throw 'The requested web host changed, or existing PID metadata is from an older version. Run stop.ps1, then start.ps1 to apply the requested listener setting.'
+        }
         $dashboardUrl = "http://127.0.0.1:$FrontendPort/workspace/overview"
         if (-not $NoBrowser) { Start-Process -FilePath $dashboardUrl }
         Write-Host "Analysis Canvas is already running. Dashboard: $dashboardUrl" -ForegroundColor Cyan
+        Show-WebAccessUrls -Port $FrontendPort
         exit 0
     }
     if ((Test-RecordedProcessExists $serverPids.backend) -or (Test-RecordedProcessExists $serverPids.frontend)) {
@@ -254,6 +327,7 @@ try {
     & $Python 'scripts\setup_accounts.py'
     if ($LASTEXITCODE -eq 2) { throw 'Initial administrator setup is required. Run setup-accounts.bat from an interactive server console, then run update.bat.' }
     if ($LASTEXITCODE -ne 0) { throw 'Account setup failed. Follow ACCOUNT_SETUP_ACTION, run setup-accounts.bat, then run update.bat.' }
+    Test-LanAuthenticationReadiness
 }
 finally {
     Pop-Location
@@ -275,7 +349,7 @@ try {
     Wait-HttpReady -Name 'Backend' -Role 'backend' -Uri "http://127.0.0.1:$BackendPort/api/health" -Process $backendProcess -TimeoutSeconds $StartupTimeoutSeconds
 
     $viteArgument = '"' + $Vite + '"'
-    $frontendProcess = Start-Process -FilePath $Node -ArgumentList $viteArgument, '--host', '127.0.0.1', '--port', ([string]$FrontendPort), '--strictPort' `
+    $frontendProcess = Start-Process -FilePath $Node -ArgumentList $viteArgument, '--host', $script:webAccessHost, '--port', ([string]$FrontendPort), '--strictPort' `
         -WorkingDirectory $Frontend -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput (Join-Path $Frontend 'vite.log') `
         -RedirectStandardError (Join-Path $Frontend 'vite-error.log')
@@ -283,7 +357,7 @@ try {
 
     @{
         backend = @{ id = $backendProcess.Id; port = $BackendPort; startedAtUtc = $backendProcess.StartTime.ToUniversalTime().ToString('o') }
-        frontend = @{ id = $frontendProcess.Id; port = $FrontendPort; startedAtUtc = $frontendProcess.StartTime.ToUniversalTime().ToString('o') }
+        frontend = @{ id = $frontendProcess.Id; port = $FrontendPort; host = $script:webAccessHost; startedAtUtc = $frontendProcess.StartTime.ToUniversalTime().ToString('o') }
     } | ConvertTo-Json | Set-Content -LiteralPath $temporaryPidFile -Encoding UTF8
     Move-Item -LiteralPath $temporaryPidFile -Destination $PidFile -Force
 }
@@ -299,4 +373,5 @@ Write-Host 'Analysis Canvas started successfully.' -ForegroundColor Cyan
 $dashboardUrl = "http://127.0.0.1:$FrontendPort/workspace/overview"
 Write-Host "Dashboard: $dashboardUrl"
 Write-Host "API docs : http://127.0.0.1:$BackendPort/docs"
+Show-WebAccessUrls -Port $FrontendPort
 if (-not $NoBrowser) { Start-Process -FilePath $dashboardUrl }

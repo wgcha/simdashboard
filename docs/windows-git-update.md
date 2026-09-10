@@ -26,6 +26,8 @@ PostgreSQL 기본 실행은 [Windows PostgreSQL 빠른 시작](windows-postgresq
 
 ## 다음 업데이트부터
 
+Windows 사내 IP 접속 설정 변경은 [사내 접속 가이드](windows-lan-access.md)를 따른다. 직전 버전에서 이 수정만 받는 경우 `git pull --ff-only` 후 `stop.bat` → `start.bat`으로 적용할 수 있다. `.env`의 `WINDOWS_WEB_HOST`는 업데이트 후에도 유지된다. 의존성·DB migration이 포함된 일반 업데이트는 아래 전체 절차를 사용한다.
+
 `update.bat`만 더블클릭한다. 아래 작업을 순서대로 처리한다.
 
 1. Git 상태 확인과 다운로드

@@ -52,7 +52,7 @@ Python·Node.js·Git을 별도로 설치하지 않아도 된다. 기본 Windows 
 - 이전 DB 이관 실패의 `.setup-recovery-required.json`이 있으면 먼저 해당 복구 절차를 완료해야 한다.
 - 다른 PC로 기존 데이터를 옮길 때는 소스 업데이트와 별개로 [DB 이전 안내](postgresql-pc-transfer-guide.md)를 따른다.
 
-기본 실행은 이 PC의 `127.0.0.1`에만 열린다. 기존 PostgreSQL 설정이 있으면 해당 연결·스키마를 먼저 검증한다. 여러 사람이 네트워크로 접속하는 상시 운영 구성은 [운영 배포 안내](../deploy/rocky8/README.md)를 따른다.
+기본 실행은 이 PC의 `127.0.0.1`에만 열린다. 다른 사내 PC에서 시험 접속하려면 기존 `.env`의 `WINDOWS_WEB_HOST=0.0.0.0` 설정 후 재시작한다. [사내 IP 접속 안내](windows-lan-access.md)에 이번 수정의 pull + 재시작 절차와 방화벽·HTTPS 구성을 정리했다. 기존 PostgreSQL 설정이 있으면 해당 연결·스키마를 먼저 검증한다. 여러 사람이 네트워크로 접속하는 상시 운영 구성은 [운영 배포 안내](../deploy/rocky8/README.md)를 따른다.
 
 ## 실행이 안 될 때
 
