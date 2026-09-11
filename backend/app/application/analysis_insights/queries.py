@@ -8,6 +8,7 @@ from ...domains.analysis_insights.errors import (
     ComparisonRunsNotFoundError,
     MatchingRunComparisonError,
 )
+from ...domains.analysis_insights.condition_comparison import compare_run_conditions
 from ...domains.analysis_insights.policies import json_value
 from ...domains.analysis_insights.ports import AnalysisInsightsRepositoryProvider
 
@@ -26,6 +27,12 @@ def compare_analysis_runs(
         if len(run_rows) != 2:
             raise ComparisonRunsNotFoundError()
         run_map = {item["id"]: item for item in run_rows}
+        condition_comparison = compare_run_conditions(
+            repository.comparison_conditions(baseline_run_id, target_run_id),
+            load_case_id,
+            baseline_run_id,
+            target_run_id,
+        )
         scalar_rows = repository.comparison_scalars(baseline_run_id, target_run_id)
         scalars = {
             run_id: {item["variable_key"]: item for item in scalar_rows if item["analysis_run_id"] == run_id}
@@ -117,6 +124,7 @@ def compare_analysis_runs(
             "scalar_comparison": comparison,
             "available_series": available_series,
             "time_series": series_payload,
+            "condition_comparison": condition_comparison,
         }
 
 

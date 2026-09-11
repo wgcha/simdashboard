@@ -39,6 +39,7 @@ from ..services.import_snapshot_workspace import (
     ImportSnapshotWorkspaceError,
     prepare_import_snapshot_workspace,
 )
+from ..services.run_condition_metadata import validate_run_conditions
 from ..services.result_import_execution_gate import (
     RESULT_IMPORT_REFRESH_BUSY,
     ResultImportExecutionGate,
@@ -505,6 +506,15 @@ def _ingestion_command(
             "bundle_fingerprint": bundle_fingerprint,
         },
     }
+    if isinstance(manifest, dict) and "metadata" in manifest:
+        manifest_metadata = manifest.get("metadata")
+        if not isinstance(manifest_metadata, dict):
+            raise FolderImportError("manifest.metadata는 객체여야 합니다.", code="RUN_CONDITIONS_INVALID")
+        if "run_conditions" in manifest_metadata:
+            supplied_conditions = manifest_metadata.get("run_conditions")
+            if supplied_conditions is None:
+                raise FolderImportError("metadata.run_conditions는 객체여야 합니다.", code="RUN_CONDITIONS_INVALID")
+            command["metadata"]["run_conditions"] = validate_run_conditions(supplied_conditions)
     source_run_id, conflict_policy = _manifest_source_identity(manifest or {})
     if source_run_id is not None:
         command["source_run_id"] = source_run_id

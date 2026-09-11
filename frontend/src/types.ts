@@ -410,7 +410,20 @@ export type AnalysisRunSummary = {
   is_latest: boolean
 }
 
+export type RunConditionComparisonData = {
+  rows: Array<{
+    key: string
+    label: string
+    baseline: { value: unknown; unit: string | null; source: string } | null
+    target: { value: unknown; unit: string | null; source: string } | null
+    status: 'CHANGED' | 'SAME' | 'UNKNOWN'
+    reason: string
+  }>
+  summary: { changed: number; same: number; unknown: number }
+}
+
 export type RunComparison = {
+  condition_comparison?: RunConditionComparisonData
   baseline_run: AnalysisRunSummary
   target_run: AnalysisRunSummary
   summary: { regression: number; improved: number; unchanged: number; comparable: number }

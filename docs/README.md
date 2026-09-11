@@ -19,6 +19,8 @@
 
 | 목적 | 문서 |
 |---|---|
+| Run별 재료·두께·하중·접촉 조건 비교와 기록 범위 | [`run-input-condition-comparison.md`](run-input-condition-comparison.md) |
+| 결과에서 설계 판단으로 이어지는 사용성 개선 실행 계획 | [`dashboard-usability-and-recommended-layout-plan.md`](dashboard-usability-and-recommended-layout-plan.md) |
 | Windows 더블클릭 설치·실행 및 사내 프록시 | [`windows-one-click-deployment.md`](windows-one-click-deployment.md) |
 | Windows PostgreSQL 최초 설정·기본 실행 | [`windows-postgresql-quickstart.md`](windows-postgresql-quickstart.md) |
 | native Windows 개발 | [`windows-development-setup.md`](windows-development-setup.md) |

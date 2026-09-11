@@ -31,6 +31,7 @@ class FakeInsightsRepository:
         self.scalars = overrides.get("scalars", [])
         self.series = overrides.get("series", [])
         self.points = overrides.get("points", [])
+        self.conditions = overrides.get("conditions", [])
         self.run = overrides.get("run")
         self.latest = overrides.get("latest")
         self.metadata = overrides.get("metadata")
@@ -58,6 +59,10 @@ class FakeInsightsRepository:
     def comparison_points(self, *_args: str) -> list[dict[str, Any]]:
         self.events.append("points")
         return self.points
+
+    def comparison_conditions(self, *_args: str) -> list[dict[str, Any]]:
+        self.events.append("conditions")
+        return self.conditions
 
     def trust_run(self, _run_id: str) -> dict[str, Any] | None:
         self.events.append("run")
@@ -261,12 +266,12 @@ def test_comparison_added_and_series_selection_fallback_no_series_and_time_merge
             {"time_value": 2, "time_unit": "ms", "baseline_value": 30, "target_value": None},
         ],
     }
-    assert repository.events == ["runs", "scalars", "series", "points"]
+    assert repository.events == ["runs", "conditions", "scalars", "series", "points"]
     repository.events.clear()
     repository.series = []
     payload = queries.compare_analysis_runs("load", base, target, "not-common", _provider(repository))
     assert payload["time_series"] is None and payload["available_series"] == []
-    assert repository.events == ["runs", "scalars", "series"]
+    assert repository.events == ["runs", "conditions", "scalars", "series"]
 
 
 @pytest.mark.unit

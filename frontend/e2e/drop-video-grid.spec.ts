@@ -16,44 +16,43 @@ async function openVideoDashboard(page: Page) {
   await expect(page.getByTestId('drop-video-grid').first()).toBeVisible()
 }
 
-test('H.264 영상 20개를 실제 재생하고 synthetic 판정·일괄 제어·반응형 배치를 제공한다', async ({ page }) => {
+test('영상 목록을 4개씩 탐색하고 실제 재생·합성 판정·일괄 제어·반응형 배치를 제공한다', async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 1000 })
   await loginAndOpenVideoDashboard(page)
 
   const grid = page.getByTestId('drop-video-grid')
   const cards = grid.locator('.drop-video-card')
   const videos = grid.locator('video')
-  await expect(cards).toHaveCount(20)
-  await expect(videos).toHaveCount(20)
-  await expect(cards.locator('.drop-video-mini-bar')).toHaveCount(40)
-  await expect(cards.filter({ hasText: 'H264 · FAST START' })).toHaveCount(20)
-  await expect(cards.locator('.drop-video-evaluation-badge.pass')).toHaveCount(9)
-  await expect(cards.locator('.drop-video-evaluation-badge.fail')).toHaveCount(11)
+  await expect(cards).toHaveCount(4)
+  await expect(videos).toHaveCount(4)
+  await expect(cards.locator('.drop-video-mini-bar')).toHaveCount(8)
+  await expect(cards.filter({ hasText: 'H264 · FAST START' })).toHaveCount(4)
+  await expect(cards.locator('.drop-video-evaluation-badge')).toHaveCount(4)
   await expect(grid.getByTestId('drop-video-summary')).toContainText('SYNTHETIC EVALUATION')
   await expect(grid.getByTestId('drop-video-summary')).toContainText('9')
   await expect(grid.getByTestId('drop-video-summary')).toContainText('11')
   await expect(videos.first()).toHaveAttribute('preload', 'metadata')
   await expect(videos.first()).toHaveAttribute('playsinline', '')
 
-  await grid.getByRole('button', { name: '전체 재생', exact: true }).click()
+  await grid.getByRole('button', { name: '표시 영상 전체 재생', exact: true }).click()
   await expect.poll(async () => videos.evaluateAll((items) => items.filter((item) => {
     const video = item as HTMLVideoElement
     return video.error === null && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && video.videoWidth > 0 && Number.isFinite(video.duration) && video.duration > 0 && video.currentTime > 0
-  }).length), { timeout: 30_000 }).toBe(20)
+  }).length), { timeout: 30_000 }).toBe(4)
 
-  await grid.getByRole('button', { name: '전체 정지', exact: true }).click()
+  await grid.getByRole('button', { name: '표시 영상 전체 정지', exact: true }).click()
   await expect.poll(() => videos.evaluateAll((items) => items.every((item) => (item as HTMLVideoElement).paused))).toBe(true)
 
   await videos.evaluateAll((items) => items.forEach((item) => {
     const video = item as HTMLVideoElement
     video.currentTime = video.duration * 0.8
   }))
-  await grid.getByRole('button', { name: '처음부터', exact: true }).click()
+  await grid.getByRole('button', { name: '표시 영상 처음부터', exact: true }).click()
   await expect.poll(() => videos.evaluateAll((items) => items.every((item) => {
     const video = item as HTMLVideoElement
     return video.duration > 0 && video.currentTime / video.duration < 0.5
   })), { timeout: 10_000 }).toBe(true)
-  await grid.getByRole('button', { name: '전체 정지', exact: true }).click()
+  await grid.getByRole('button', { name: '표시 영상 전체 정지', exact: true }).click()
 
   await grid.getByRole('button', { name: /반복 꺼짐/ }).click()
   await expect(grid.getByRole('button', { name: /반복 켜짐/ })).toHaveAttribute('aria-pressed', 'true')
@@ -64,10 +63,14 @@ test('H.264 영상 20개를 실제 재생하고 synthetic 판정·일괄 제어�
   await expect(cards.nth(1)).toHaveAttribute('aria-current', 'true')
   await expect(grid.locator('.drop-video-selected')).toContainText('낙하 비교 Scene 01')
 
+  await grid.locator('.drop-video-scene-chart > button').nth(7).click()
+  await expect(grid.locator('.drop-video-media-heading')).toContainText('5–8 / 20')
+  await expect(grid.locator('.drop-video-card.selected')).toContainText('낙하 비교 Scene 07')
+
   const columnCount = () => grid.locator('.drop-video-grid').evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(' ').length)
-  await expect.poll(columnCount).toBe(4)
+  await expect.poll(columnCount).toBe(2)
   await page.setViewportSize({ width: 1100, height: 900 })
-  await expect.poll(columnCount).toBe(3)
+  await expect.poll(columnCount).toBe(2)
   await page.setViewportSize({ width: 850, height: 900 })
   await expect.poll(columnCount).toBe(2)
   await page.setViewportSize({ width: 600, height: 900 })
@@ -86,7 +89,7 @@ test('PASS 평가 영상의 재생 실패는 green verdict border를 유지하�
   await expect(first.locator('.drop-video-error')).toBeVisible()
   expect(await first.evaluate((element) => getComputedStyle(element).borderTopColor)).toBe('rgb(49, 134, 106)')
 
-  const healthy = grid.locator('video').nth(4)
+  const healthy = grid.locator('video').nth(3)
   await expect.poll(() => healthy.evaluate((video) => video.videoWidth), { timeout: 20_000 }).toBeGreaterThan(0)
   await expect.poll(() => healthy.evaluate((video) => video.error?.code ?? null)).toBeNull()
   await healthy.evaluate((video) => video.play())
