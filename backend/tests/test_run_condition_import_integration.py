@@ -27,7 +27,10 @@ def test_master_manifest_conditions_survive_parser_persistence_and_comparison(tm
         'schema_id': 'conditions-integration', 'version': 1, 'solver': 'pytest',
         'context': {'project_id': 'project-tv-001', 'request_id': 'request-drop-001', 'load_case_id': load_case},
         'mappings': [{'kind': 'typed_scalars', 'path': 'scalars.json'}],
-        'metadata': {'run_conditions': {'material': 'SPCC', 'thickness_mm': 1.2, 'pressure_mpa': 0, 'contact': {'enabled': False}}},
+        'metadata': {
+            'run_conditions': {'material': 'SPCC', 'thickness_mm': 1.2, 'pressure_mpa': 0, 'contact': {'enabled': False}},
+            'result_criteria': {'top_edge_max_stress': {'operator': 'LTE', 'upper': 75, 'unit': 'MPa', 'label': '상단 응력'}},
+        },
     }
     manifest_path = bundle / 'manifest.json'
     manifest_path.write_text(json.dumps(manifest), encoding='utf-8')
@@ -41,6 +44,7 @@ def test_master_manifest_conditions_survive_parser_persistence_and_comparison(tm
     with connect() as connection:
         first = connection.execute('SELECT id FROM analysis_runs WHERE load_case_id=? ORDER BY run_no DESC LIMIT 1', [load_case]).fetchone()[0]
     manifest['metadata']['run_conditions']['thickness_mm'] = 1.5
+    manifest['metadata']['result_criteria']['top_edge_max_stress']['upper'] = 40
     manifest_path.write_text(json.dumps(manifest), encoding='utf-8')
     assert import_bundle()['status'] == 'IMPORTED'
     with connect() as connection:
@@ -48,6 +52,9 @@ def test_master_manifest_conditions_survive_parser_persistence_and_comparison(tm
         historical = connection.execute('SELECT metadata_json FROM analysis_run_metadata WHERE analysis_run_id=?', [first]).fetchone()[0]
     assert first != second
     assert json.loads(historical)['run_conditions']['thickness_mm'] == 1.2
+    assert json.loads(historical)['result_criteria']['top_edge_max_stress']['upper'] == 75.0
+    with connect() as connection:
+        connection.execute('UPDATE scalar_results SET threshold_double=999, verdict=? WHERE analysis_run_id=?', ['FAIL', first])
     data = compare_analysis_runs(load_case, first, second, None, SQLAnalysisInsightsRepositoryProvider())
     rows = {item['key']: item for item in data['condition_comparison']['rows']}
     assert rows['thickness']['status'] == 'CHANGED'
@@ -56,4 +63,9 @@ def test_master_manifest_conditions_survive_parser_persistence_and_comparison(tm
     assert rows['pressure_mpa']['status'] == 'SAME'
     assert rows['contact']['status'] == 'SAME'
     assert rows['material']['status'] == 'SAME'
+    scalar = {item['variable_key']: item for item in data['scalar_comparison']}['top_edge_max_stress']
+    assert scalar['baseline_margin']['value'] == 32.5
+    assert scalar['baseline_margin']['meets_criterion'] is True
+    assert scalar['target_margin']['value'] == -2.5
+    assert scalar['target_margin']['meets_criterion'] is False
     assert import_bundle()['status'] == 'SKIPPED'

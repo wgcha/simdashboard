@@ -120,6 +120,7 @@ test('작업 유형 결과 구성은 접수 미리보기와 generic pending resu
   await expect(pending.getByTestId('result-layout-widget-request-result-kpi')).toContainText('결과 대기')
   await expect(pending.getByTestId('result-layout-widget-request-result-note')).toContainText('결과 대기')
   await expectCommonResultActions(page, false)
+  await expect(page.getByRole('button', { name: '추천 배치 미리보기', exact: true })).toHaveCount(0)
   expect(implicitMaterializations, 'Viewing a result snapshot must not create a dashboard').toEqual([])
 
   await openWorkspaceRoute(page, '/workspace/help')

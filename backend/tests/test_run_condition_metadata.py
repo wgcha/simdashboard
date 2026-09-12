@@ -3,6 +3,7 @@ import pytest
 from app.folder_import import FolderImportError
 from app.services.master_result_refresh import _ingestion_command
 from app.services.run_condition_metadata import validate_run_conditions
+from app.services.run_criteria_metadata import validate_result_criteria
 
 pytestmark = pytest.mark.unit
 
@@ -54,3 +55,20 @@ def test_run_conditions_size_is_measured_as_json_bytes():
     with pytest.raises(FolderImportError) as error:
         validate_run_conditions(value)
     assert error.value.code == "RUN_CONDITIONS_INVALID"
+
+
+def test_result_criteria_are_bounded_detached_and_reject_ambiguous_shapes():
+    value = {"peak": {"operator": "LTE", "upper": 75, "unit": "MPa", "label": "Peak stress"}}
+    snapshot = validate_result_criteria(value)
+    assert snapshot == value and snapshot is not value
+    snapshot["peak"]["upper"] = 1
+    assert value["peak"]["upper"] == 75
+    for malformed in (
+        {"peak": {"operator": "LTE", "upper": 75, "lower": 0, "unit": "MPa"}},
+        {"peak": {"operator": "LTE", "uppper": 75, "unit": "MPa"}},
+        {"peak": {"operator": "BETWEEN", "lower": 3, "upper": 2, "unit": "MPa"}},
+        {"a": {"operator": "LTE", "upper": 1, "unit": "N"}, " a": {"operator": "LTE", "upper": 1, "unit": "N"}},
+    ):
+        with pytest.raises(FolderImportError) as error:
+            validate_result_criteria(malformed)
+        assert error.value.code == "RESULT_CRITERIA_INVALID"

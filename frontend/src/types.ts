@@ -422,12 +422,24 @@ export type RunConditionComparisonData = {
   summary: { changed: number; same: number; unknown: number }
 }
 
+export type CriterionMargin = {
+  status: 'AVAILABLE' | 'UNKNOWN'
+  value: number | null
+  unit: string | null
+  criterion_label: string | null
+  reason: string | null
+  source: string | null
+  meets_criterion: boolean | null
+}
+
 export type RunComparison = {
   condition_comparison?: RunConditionComparisonData
   baseline_run: AnalysisRunSummary
   target_run: AnalysisRunSummary
   summary: { regression: number; improved: number; unchanged: number; comparable: number }
   scalar_comparison: Array<{
+    baseline_margin?: CriterionMargin
+    target_margin?: CriterionMargin
     variable_key: string
     display_name: string
     unit: string | null

@@ -2,12 +2,13 @@ import { BarChart3, Check, ClipboardCheck, RotateCcw } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import type { RunComparison } from '../../types'
 import './ComparisonEvidenceTable.css'
+import { CriterionMarginDetail, marginLabel } from './CriterionMarginDetail'
 
 type EvidenceFilter = 'ALL' | 'TARGET_FAIL' | 'REGRESSION' | 'NOT_COMPARABLE'
 
 const FILTERS: Array<{ key: EvidenceFilter; label: string }> = [
   { key: 'ALL', label: '전체' },
-  { key: 'TARGET_FAIL', label: '대상 기준 미충족' },
+  { key: 'TARGET_FAIL', label: '대상 판정 FAIL' },
   { key: 'REGRESSION', label: '이전 대비 악화' },
   { key: 'NOT_COMPARABLE', label: '비교 불가' },
 ]
@@ -53,7 +54,7 @@ export function ComparisonEvidenceTable({ comparison, selectedKey, onSelect, onV
 
   return <section className="comparison-evidence-table" data-testid="comparison-evidence-table">
     <header className="comparison-evidence-header">
-      <div><span>SCALAR EVIDENCE</span><h3>정량 결과 근거</h3><p>기준 Run과 대상 Run의 변수별 판정·변화를 확인합니다.</p></div>
+      <div><span>SCALAR EVIDENCE</span><h3>정량 결과 근거</h3><p>필터는 저장된 판정 기준입니다. 여유는 각 Run에 기록된 기준으로 계산합니다.</p></div>
       <div className="comparison-evidence-count" aria-label={`필터 결과 ${filtered.length}개`}><strong>{filtered.length}</strong><span>/ {comparison.scalar_comparison.length} 변수</span></div>
     </header>
     <nav className="comparison-evidence-filters" aria-label="정량 결과 필터">
@@ -66,7 +67,7 @@ export function ComparisonEvidenceTable({ comparison, selectedKey, onSelect, onV
         {filtered.map((item) => <button key={item.variable_key} type="button" className={`comparison-evidence-row ${selectedKey === item.variable_key ? 'selected' : ''} change-${item.change.toLowerCase()}`} aria-pressed={selectedKey === item.variable_key} data-testid="comparison-evidence-row" data-variable-key={item.variable_key} onClick={() => onSelect(item.variable_key)}>
           <span><strong>{item.display_name}</strong><code>{item.variable_key}</code></span>
           <span>{valueLabel(item.baseline_value, baselineUnit(item))}<small>{baselineNote(item)}</small></span>
-          <span>{valueLabel(item.target_value, item.unit)}<small>{targetNote(item)}</small></span>
+          <span>{valueLabel(item.target_value, item.unit)}<small>{targetNote(item)}</small><small className="criterion-margin-summary">기록 여유 {marginLabel(item.target_margin)}</small></span>
           <span>{item.delta == null || !item.comparable ? '—' : `${item.delta >= 0 ? '+' : ''}${item.delta.toFixed(2)}`}<small>{item.delta_percent == null || !item.comparable ? '' : `${item.delta_percent >= 0 ? '+' : ''}${item.delta_percent.toFixed(1)}%`}</small></span>
           <span><b>{CHANGE_LABEL[item.change] ?? item.change}</b></span>
         </button>)}
@@ -75,6 +76,7 @@ export function ComparisonEvidenceTable({ comparison, selectedKey, onSelect, onV
     {visibleSelected && <aside className={`comparison-evidence-detail change-${visibleSelected.change.toLowerCase()}`} data-testid="comparison-evidence-detail" aria-live="polite">
       <header><div><span>SELECTED VARIABLE</span><strong>{visibleSelected.display_name}</strong><code>{visibleSelected.variable_key}</code></div><b>{CHANGE_LABEL[visibleSelected.change] ?? visibleSelected.change}</b></header>
       <dl><div><dt>기준 Run</dt><dd>{valueLabel(visibleSelected.baseline_value, baselineUnit(visibleSelected))} · {baselineNote(visibleSelected)}</dd></div><div><dt>대상 Run</dt><dd>{valueLabel(visibleSelected.target_value, visibleSelected.unit)} · {targetNote(visibleSelected)}</dd></div><div><dt>변화</dt><dd>{visibleSelected.delta == null || !visibleSelected.comparable ? '비교 불가' : `${visibleSelected.delta >= 0 ? '+' : ''}${visibleSelected.delta.toFixed(2)} ${visibleSelected.unit ?? ''}`}</dd></div></dl>
+      <CriterionMarginDetail baseline={visibleSelected.baseline_margin} target={visibleSelected.target_margin} baselineVerdict={visibleSelected.baseline_verdict} targetVerdict={visibleSelected.target_verdict} />
       <footer><button type="button" onClick={() => onPrepareReview(visibleSelected.variable_key)}><ClipboardCheck /> 검토 준비</button>{seriesAvailable ? <button type="button" onClick={() => onViewSeries(visibleSelected.variable_key)}><BarChart3 /> 시계열 보기</button> : <span className="comparison-evidence-no-series">연결된 시계열 없음</span>}</footer>
     </aside>}
   </section>

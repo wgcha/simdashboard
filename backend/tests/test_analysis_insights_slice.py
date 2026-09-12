@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import datetime, timezone
+import json
 from pathlib import Path
 from typing import Any, Iterator, NoReturn
 
@@ -272,6 +273,41 @@ def test_comparison_added_and_series_selection_fallback_no_series_and_time_merge
     payload = queries.compare_analysis_runs("load", base, target, "not-common", _provider(repository))
     assert payload["time_series"] is None and payload["available_series"] == []
     assert repository.events == ["runs", "conditions", "scalars", "series"]
+
+
+@pytest.mark.unit
+def test_comparison_exposes_immutable_recorded_criterion_margins_without_verdict_inference() -> None:
+    base, target = "base", "target"
+    criteria = {
+        "upper": {"operator": "LT", "upper": 10, "unit": "MPa", "label": "Peak"},
+        "lower": {"operator": "GTE", "lower": -2, "unit": "mm"},
+        "band": {"operator": "BETWEEN", "lower": -3, "upper": 4, "unit": "N"},
+    }
+    repository = FakeInsightsRepository(
+        comparison_run_rows=[_run(base), _run(target)],
+        conditions=[
+            {"id": base, "metadata_json": json.dumps({"result_criteria": criteria})},
+            {"id": target, "metadata_json": json.dumps({"result_criteria": criteria})},
+        ],
+        scalars=[
+            _scalar(base, "upper", 10, "PASS"), _scalar(target, "upper", 9, "FAIL"),
+            _scalar(base, "lower", -2, "PASS", "mm"), _scalar(target, "lower", -3, "PASS", "mm"),
+            _scalar(base, "band", 0, "PASS", "N"), _scalar(target, "band", 5, "PASS", "N"),
+            _scalar(base, "absent", 1, "PASS"),
+            _scalar(target, "upper", 8, "PASS", "N"),
+        ],
+    )
+    rows = {item["variable_key"]: item for item in queries.compare_analysis_runs("load", base, target, None, _provider(repository))["scalar_comparison"]}
+    assert rows["upper"]["baseline_margin"] == {
+        "status": "AVAILABLE", "value": 0.0, "unit": "MPa", "criterion_label": "Peak: 값 < 10 MPa", "reason": None,
+        "source": "analysis_run_metadata.result_criteria:base", "meets_criterion": False,
+    }
+    assert rows["upper"]["target_margin"]["status"] == "UNKNOWN"
+    assert rows["lower"]["baseline_margin"]["value"] == 0.0
+    assert rows["lower"]["target_margin"]["value"] == -1.0
+    assert rows["band"]["baseline_margin"]["value"] == 3.0
+    assert rows["band"]["target_margin"]["value"] == -1.0
+    assert rows["absent"]["baseline_margin"]["reason"] == "CRITERION_NOT_RECORDED"
 
 
 @pytest.mark.unit
