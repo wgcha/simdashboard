@@ -2,7 +2,7 @@ import type { WorkspacePage } from '../../features/auth/access'
 import { preloadableScreen } from './preloadableScreen'
 
 export const DataWorkspace = preloadableScreen(() => import('../../features/data/DataWorkspace').then((m) => ({ default: m.DataWorkspace })))
-export const FolderSchemaWorkspace = preloadableScreen(() => import('../../features/data/FolderSchemaWorkspace').then((m) => ({ default: m.FolderSchemaWorkspace })))
+export const FolderSchemaWorkspace = preloadableScreen(() => import('../../features/data/SemanticMappingRoute').then((m) => ({ default: m.SemanticMappingRoute })))
 export const VariableCatalogPage = preloadableScreen(() => import('../../features/data/VariableCatalogPage').then((m) => ({ default: m.VariableCatalogPage })))
 export const AutomationTemplatesPage = preloadableScreen(() => import('../../features/workbench/AutomationTemplatesPage').then((m) => ({ default: m.AutomationTemplatesPage })))
 export const FeatureExampleGallery = preloadableScreen(() => import('../../features/examples/FeatureExampleGallery').then((m) => ({ default: m.FeatureExampleGallery })))

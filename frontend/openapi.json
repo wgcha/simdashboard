@@ -4025,6 +4025,875 @@
         }
       }
     },
+    "/api/semantic-mapping/catalog": {
+      "get": {
+        "tags": [
+          "semantic-mapping"
+        ],
+        "summary": "Get Catalog",
+        "operationId": "get_catalog_api_semantic_mapping_catalog_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Catalog Api Semantic Mapping Catalog Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/semantic-mapping/items": {
+      "post": {
+        "tags": [
+          "semantic-mapping"
+        ],
+        "summary": "Save Item",
+        "operationId": "save_item_api_semantic_mapping_items_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ItemSave"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Save Item Api Semantic Mapping Items Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/semantic-mapping/recipes": {
+      "post": {
+        "tags": [
+          "semantic-mapping"
+        ],
+        "summary": "Save Recipe",
+        "operationId": "save_recipe_api_semantic_mapping_recipes_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DefinitionSave"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Save Recipe Api Semantic Mapping Recipes Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/semantic-mapping/templates": {
+      "post": {
+        "tags": [
+          "semantic-mapping"
+        ],
+        "summary": "Save Template",
+        "operationId": "save_template_api_semantic_mapping_templates_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DefinitionSave"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Save Template Api Semantic Mapping Templates Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/semantic-mapping/recipes/{recipe_id}/activate": {
+      "post": {
+        "tags": [
+          "semantic-mapping"
+        ],
+        "summary": "Activate Recipe",
+        "operationId": "activate_recipe_api_semantic_mapping_recipes__recipe_id__activate_post",
+        "parameters": [
+          {
+            "name": "recipe_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Recipe Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Activate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Activate Recipe Api Semantic Mapping Recipes  Recipe Id  Activate Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/semantic-mapping/templates/{template_id}/activate": {
+      "post": {
+        "tags": [
+          "semantic-mapping"
+        ],
+        "summary": "Activate Template",
+        "operationId": "activate_template_api_semantic_mapping_templates__template_id__activate_post",
+        "parameters": [
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Template Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Activate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Activate Template Api Semantic Mapping Templates  Template Id  Activate Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/semantic-mapping/inspect": {
+      "post": {
+        "tags": [
+          "semantic-mapping"
+        ],
+        "summary": "Inspect",
+        "operationId": "inspect_api_semantic_mapping_inspect_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Inspect Api Semantic Mapping Inspect Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/semantic-mapping/preview": {
+      "post": {
+        "tags": [
+          "semantic-mapping"
+        ],
+        "summary": "Preview",
+        "operationId": "preview_api_semantic_mapping_preview_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Preview Api Semantic Mapping Preview Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/semantic-mapping/folders": {
+      "get": {
+        "tags": [
+          "semantic-mapping"
+        ],
+        "summary": "Folders",
+        "operationId": "folders_api_semantic_mapping_folders_get",
+        "parameters": [
+          {
+            "name": "relative_path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Relative Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Folders Api Semantic Mapping Folders Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/semantic-mapping/bindings": {
+      "post": {
+        "tags": [
+          "semantic-mapping"
+        ],
+        "summary": "Save Binding",
+        "operationId": "save_binding_api_semantic_mapping_bindings_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BindingSave"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Save Binding Api Semantic Mapping Bindings Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/semantic-mapping/bindings/{binding_id}": {
+      "put": {
+        "tags": [
+          "semantic-mapping"
+        ],
+        "summary": "Reconnect Binding",
+        "operationId": "reconnect_binding_api_semantic_mapping_bindings__binding_id__put",
+        "parameters": [
+          {
+            "name": "binding_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Binding Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BindingSave"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Reconnect Binding Api Semantic Mapping Bindings  Binding Id  Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/semantic-mapping/import": {
+      "post": {
+        "tags": [
+          "semantic-mapping"
+        ],
+        "summary": "Import File",
+        "operationId": "import_file_api_semantic_mapping_import_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Import File Api Semantic Mapping Import Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/semantic-mapping/bindings/{binding_id}/refresh": {
+      "post": {
+        "tags": [
+          "semantic-mapping"
+        ],
+        "summary": "Refresh Binding",
+        "operationId": "refresh_binding_api_semantic_mapping_bindings__binding_id__refresh_post",
+        "parameters": [
+          {
+            "name": "binding_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Binding Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Refresh Binding Api Semantic Mapping Bindings  Binding Id  Refresh Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/semantic-mapping/results": {
+      "get": {
+        "tags": [
+          "semantic-mapping"
+        ],
+        "summary": "Results",
+        "operationId": "results_api_semantic_mapping_results_get",
+        "parameters": [
+          {
+            "name": "load_case_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Load Case Id"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "template_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Template Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Results Api Semantic Mapping Results Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/semantic-mapping/export": {
+      "get": {
+        "tags": [
+          "semantic-mapping"
+        ],
+        "summary": "Export Definitions",
+        "operationId": "export_definitions_api_semantic_mapping_export_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Export Definitions Api Semantic Mapping Export Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/semantic-mapping/import-definitions": {
+      "post": {
+        "tags": [
+          "semantic-mapping"
+        ],
+        "summary": "Import Definitions",
+        "operationId": "import_definitions_api_semantic_mapping_import_definitions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "type": "object",
+                "title": "Payload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Import Definitions Api Semantic Mapping Import Definitions Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/semantic-mapping/activate-bundle": {
+      "post": {
+        "tags": [
+          "semantic-mapping"
+        ],
+        "summary": "Publish Bundle",
+        "operationId": "publish_bundle_api_semantic_mapping_activate_bundle_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BundleActivation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Publish Bundle Api Semantic Mapping Activate Bundle Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/semantic-vocabulary": {
+      "get": {
+        "tags": [
+          "semantic-vocabulary"
+        ],
+        "summary": "List Entries",
+        "operationId": "list_entries_api_semantic_vocabulary_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response List Entries Api Semantic Vocabulary Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "semantic-vocabulary"
+        ],
+        "summary": "Create Entry",
+        "operationId": "create_entry_api_semantic_vocabulary_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VocabularyBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Create Entry Api Semantic Vocabulary Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/semantic-vocabulary/{entry_id}": {
+      "put": {
+        "tags": [
+          "semantic-vocabulary"
+        ],
+        "summary": "Update Entry",
+        "operationId": "update_entry_api_semantic_vocabulary__entry_id__put",
+        "parameters": [
+          {
+            "name": "entry_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Entry Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VocabularyUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Update Entry Api Semantic Vocabulary  Entry Id  Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/semantic-vocabulary/resolve": {
+      "post": {
+        "tags": [
+          "semantic-vocabulary"
+        ],
+        "summary": "Resolve Terms",
+        "operationId": "resolve_terms_api_semantic_vocabulary_resolve_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Resolve Terms Api Semantic Vocabulary Resolve Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/health": {
       "get": {
         "summary": "Health",
@@ -7901,6 +8770,20 @@
         ],
         "title": "AccountStatusUpdate"
       },
+      "Activate": {
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "version"
+        ],
+        "title": "Activate"
+      },
       "AnalysisPageCreate": {
         "properties": {
           "load_case_id": {
@@ -8514,6 +9397,150 @@
         ],
         "title": "BatchProfileInput"
       },
+      "BindingSave": {
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "expected_revision": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Revision"
+          },
+          "relative_path": {
+            "type": "string",
+            "title": "Relative Path"
+          },
+          "project_id": {
+            "type": "string",
+            "title": "Project Id"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "load_case_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Load Case Id"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "recipe_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Recipe Ids"
+          },
+          "template_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "relative_path",
+          "project_id",
+          "role"
+        ],
+        "title": "BindingSave"
+      },
+      "BundleActivation": {
+        "properties": {
+          "recipe_id": {
+            "type": "string",
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Recipe Id"
+          },
+          "recipe_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Recipe Version"
+          },
+          "template_id": {
+            "type": "string",
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Template Id"
+          },
+          "template_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Template Version"
+          },
+          "expected_recipe_active_version": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Recipe Active Version"
+          },
+          "expected_template_active_version": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Template Active Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "recipe_id",
+          "recipe_version",
+          "template_id",
+          "template_version"
+        ],
+        "title": "BundleActivation"
+      },
       "CardCreate": {
         "properties": {
           "name": {
@@ -8912,6 +9939,70 @@
           "widgets"
         ],
         "title": "DashboardDefinition"
+      },
+      "DefinitionSave": {
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "definition": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Definition"
+          },
+          "expected_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Version"
+          },
+          "sample_filename": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sample Filename"
+          },
+          "sample_content_base64": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 349528
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sample Content Base64"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "definition"
+        ],
+        "title": "DefinitionSave"
       },
       "DemoRunCreate": {
         "properties": {
@@ -9914,6 +11005,42 @@
           "desired_role"
         ],
         "title": "InvitationCreate"
+      },
+      "ItemSave": {
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "definition": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Definition"
+          },
+          "expected_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "definition"
+        ],
+        "title": "ItemSave"
       },
       "LoadCaseCreate": {
         "properties": {
@@ -11486,6 +12613,58 @@
           "default_workflow"
         ],
         "title": "RequestTypeVersionCreate"
+      },
+      "ResolveBody": {
+        "properties": {
+          "terms": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 64,
+            "minItems": 1,
+            "title": "Terms"
+          },
+          "target_kinds": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "FOLDER_ROLE",
+                    "PROJECT",
+                    "REQUEST",
+                    "LOAD_CASE",
+                    "RESULT_ITEM"
+                  ]
+                },
+                "type": "array",
+                "maxItems": 5
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Kinds"
+          },
+          "scope_project_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Project Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "terms"
+        ],
+        "title": "ResolveBody"
       },
       "ResultImportHistoryItem": {
         "properties": {
@@ -13778,6 +14957,156 @@
           "total_bytes"
         ],
         "title": "VersionResponse"
+      },
+      "VocabularyBody": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 2,
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Label"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 4000,
+            "title": "Description",
+            "default": ""
+          },
+          "target_kind": {
+            "type": "string",
+            "enum": [
+              "FOLDER_ROLE",
+              "PROJECT",
+              "REQUEST",
+              "LOAD_CASE",
+              "RESULT_ITEM"
+            ],
+            "title": "Target Kind"
+          },
+          "target_id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Target Id"
+          },
+          "scope_project_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Project Id"
+          },
+          "aliases": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 64,
+            "title": "Aliases"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "target_kind",
+          "target_id"
+        ],
+        "title": "VocabularyBody"
+      },
+      "VocabularyUpdate": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 2,
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Label"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 4000,
+            "title": "Description",
+            "default": ""
+          },
+          "target_kind": {
+            "type": "string",
+            "enum": [
+              "FOLDER_ROLE",
+              "PROJECT",
+              "REQUEST",
+              "LOAD_CASE",
+              "RESULT_ITEM"
+            ],
+            "title": "Target Kind"
+          },
+          "target_id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Target Id"
+          },
+          "scope_project_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Project Id"
+          },
+          "aliases": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 64,
+            "title": "Aliases"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "default": true
+          },
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Revision"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "target_kind",
+          "target_id",
+          "expected_revision"
+        ],
+        "title": "VocabularyUpdate"
       },
       "Widget": {
         "properties": {

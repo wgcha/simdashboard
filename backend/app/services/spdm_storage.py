@@ -448,25 +448,59 @@ def _registered_parent_target(conn: ConnectionLike, project_name: str, work_requ
 
 def bind_existing_target(conn: ConnectionLike, root: Path, load_case_id: str, relative_path: str) -> dict[str, Any]:
     candidate = candidate_for(root, relative_path)
-    _lock_root_identity(conn, root)
-    project_id, request_id = _target_for_binding(conn, load_case_id)
-    _register_parent_target(conn, candidate.relative_path, project_id, request_id)
-    existing_path = conn.execute("SELECT load_case_id, project_id, request_id FROM spdm_storage_bindings WHERE relative_path=?", [candidate.relative_path]).fetchone()
-    if existing_path and str(existing_path[0]) != load_case_id:
-        raise SpdmStorageError("SPDM_BINDING_CONFLICT", "이 SPDM 폴더는 다른 하중 경우에 이미 연결되어 있습니다.")
-    existing_target = conn.execute("SELECT relative_path FROM spdm_storage_bindings WHERE load_case_id=?", [load_case_id]).fetchone()
-    if existing_target and str(existing_target[0]) != candidate.relative_path:
-        raise SpdmStorageError("SPDM_TARGET_ALREADY_BOUND", "하중 경우에는 하나의 SPDM 폴더만 연결할 수 있습니다.")
-    # Publish the directory before the database binding.  A failed mkdir must
-    # never leave a database row pointing at an absent external workspace.
-    _ensure_directory(root, candidate.relative_path)
-    now = utc_now()
-    conn.execute(
-        "INSERT INTO spdm_storage_bindings(load_case_id, project_id, request_id, relative_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?) "
-        "ON CONFLICT(load_case_id) DO UPDATE SET relative_path=excluded.relative_path, updated_at=excluded.updated_at",
-        [load_case_id, project_id, request_id, candidate.relative_path, now, now],
-    )
-    return binding_row(load_case_id, project_id, request_id, candidate.relative_path)
+    # The semantic mapper takes this same pair of table locks in this order.
+    # It makes the path-owner decision serializable across the two collectors.
+    with _ownership_transaction(conn):
+        _lock_root_identity(conn, root)
+        _reject_semantic_overlap(conn, candidate.relative_path)
+        project_id, request_id = _target_for_binding(conn, load_case_id)
+        _register_parent_target(conn, candidate.relative_path, project_id, request_id)
+        existing_path = conn.execute("SELECT load_case_id, project_id, request_id FROM spdm_storage_bindings WHERE relative_path=?", [candidate.relative_path]).fetchone()
+        if existing_path and str(existing_path[0]) != load_case_id:
+            raise SpdmStorageError("SPDM_BINDING_CONFLICT", "이 SPDM 폴더는 다른 하중 경우에 이미 연결되어 있습니다.")
+        existing_target = conn.execute("SELECT relative_path FROM spdm_storage_bindings WHERE load_case_id=?", [load_case_id]).fetchone()
+        if existing_target and str(existing_target[0]) != candidate.relative_path:
+            raise SpdmStorageError("SPDM_TARGET_ALREADY_BOUND", "하중 경우에는 하나의 SPDM 폴더만 연결할 수 있습니다.")
+        # Publish the directory before the database binding.  A failed mkdir must
+        # never leave a database row pointing at an absent external workspace.
+        _ensure_directory(root, candidate.relative_path)
+        now = utc_now()
+        conn.execute(
+            "INSERT INTO spdm_storage_bindings(load_case_id, project_id, request_id, relative_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(load_case_id) DO UPDATE SET relative_path=excluded.relative_path, updated_at=excluded.updated_at",
+            [load_case_id, project_id, request_id, candidate.relative_path, now, now],
+        )
+        return binding_row(load_case_id, project_id, request_id, candidate.relative_path)
+
+
+@contextmanager
+def _ownership_transaction(conn: ConnectionLike):
+    """Guard a legacy write against concurrent semantic folder ownership."""
+    conn.execute("BEGIN TRANSACTION")
+    try:
+        if getattr(conn, "backend", "duckdb") == "postgresql":
+            # Keep this order aligned with semantic_mapping.save_binding.
+            conn.execute("LOCK TABLE semantic_folder_bindings IN SHARE ROW EXCLUSIVE MODE")
+            conn.execute("LOCK TABLE spdm_storage_bindings IN SHARE ROW EXCLUSIVE MODE")
+        yield
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+
+
+def _reject_semantic_overlap(conn: ConnectionLike, relative_path: str) -> None:
+    """Keep legacy discovery from claiming a semantic mapping boundary.
+
+    Semantic parent tags may contain a child load-case path, so either
+    ancestor/descendant overlap is owned by the semantic collector.  This
+    check is deliberately at both manual and automatic legacy creation paths.
+    """
+    for row in conn.execute("SELECT relative_path FROM semantic_folder_bindings").fetchall():
+        semantic_path = str(row[0]).casefold()
+        legacy_path = relative_path.casefold()
+        if legacy_path == semantic_path or legacy_path.startswith(semantic_path + "/") or semantic_path.startswith(legacy_path + "/"):
+            raise SpdmStorageError("SPDM_SEMANTIC_PATH_OWNED", "의미 매핑이 소유한 경로는 기존 SPDM 수집에 연결할 수 없습니다.")
 
 
 def binding_row(load_case_id: str, project_id: str, request_id: str, relative_path: str) -> dict[str, str]:
@@ -521,17 +555,17 @@ def discover_bindings(conn: ConnectionLike, root: Path, *, creator_id: str = "sy
             creator_id=creator_id, creator_name=creator_name,
         )
     for candidate in candidates(root):
-        existing = conn.execute("SELECT load_case_id FROM spdm_storage_bindings WHERE relative_path=?", [candidate.relative_path]).fetchone()
-        if existing:
-            continue
-        parent = _registered_parent_target(conn, candidate.project_name, candidate.work_request_name)
-        if parent is None:
-            raise SpdmStorageError("SPDM_PARENT_BINDING_CONFLICT", "SPDM Project/WR parent registry를 확인할 수 없습니다.")
-        project_id, request_id = parent
-        load_case_id = _stable_id("loadcase", candidate.relative_path)
-        now = utc_now()
-        conn.execute("BEGIN TRANSACTION")
-        try:
+        with _ownership_transaction(conn):
+            existing = conn.execute("SELECT load_case_id FROM spdm_storage_bindings WHERE relative_path=?", [candidate.relative_path]).fetchone()
+            if existing:
+                continue
+            _reject_semantic_overlap(conn, candidate.relative_path)
+            parent = _registered_parent_target(conn, candidate.project_name, candidate.work_request_name)
+            if parent is None:
+                raise SpdmStorageError("SPDM_PARENT_BINDING_CONFLICT", "SPDM Project/WR parent registry를 확인할 수 없습니다.")
+            project_id, request_id = parent
+            load_case_id = _stable_id("loadcase", candidate.relative_path)
+            now = utc_now()
             conn.execute("INSERT INTO load_cases(id, request_id, name, analysis_type, status, parameters_json, created_at) VALUES (?, ?, ?, ?, 'READY', ?, ?) ON CONFLICT(id) DO NOTHING", [load_case_id, request_id, candidate.relative_path.rsplit('/', 1)[-1], candidate.analysis_type, json.dumps({"source": "SPDM", "analysis": candidate.analysis_name}), now])
             actual_case = conn.execute("SELECT request_id FROM load_cases WHERE id=?", [load_case_id]).fetchone()
             if actual_case is None or str(actual_case[0]) != request_id:
@@ -543,10 +577,6 @@ def discover_bindings(conn: ConnectionLike, root: Path, *, creator_id: str = "sy
             from ..database import ensure_project_quality_thresholds, ensure_workspace_layouts
             ensure_project_quality_thresholds(conn)
             ensure_workspace_layouts(conn)
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
         created.append(binding_row(load_case_id, project_id, request_id, candidate.relative_path))
     return created
 

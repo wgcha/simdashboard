@@ -19,6 +19,9 @@
 
 | 목적 | 문서 |
 |---|---|
+| 기준 정의·별칭 사전과 폴더/필드 추천 적용 | [`semantic-vocabulary.md`](semantic-vocabulary.md) |
+| 임의 폴더·CSV/JSON 읽기 레시피·결과 위젯 사용법과 지원 범위 | [`semantic-mapping-guide.md`](semantic-mapping-guide.md) |
+| 폴더·읽기 레시피·결과 항목·위젯의 전체 개발 계획과 후속 확장 | [`semantic-storage-mapping-plan.md`](semantic-storage-mapping-plan.md) |
 | 모든 소스 개발에서 유지할 Windows 배포 계약 | [`windows-deployment-policy.md`](windows-deployment-policy.md) |
 | 소스·폐쇄망의 신규 설치/기존 DB 업데이트 시나리오 | [`windows-deployment-scenarios.md`](windows-deployment-scenarios.md) |
 | Windows Server 2022 완결 패키지 제작·폐쇄망 설치 | [`windows-server-offline-installation.md`](windows-server-offline-installation.md) |

@@ -1,0 +1,54 @@
+.semantic-vocabulary { display: grid; gap: 16px; }
+.semantic-vocabulary-header { display: flex; justify-content: space-between; gap: 24px; align-items: start; padding: 4px 0 2px; }
+.semantic-vocabulary-header h2 { margin: 6px 0; font-size: 24px; color: #e7f8ff; }
+.semantic-vocabulary-header p { margin: 0; color: #8eabba; font-size: 12px; }
+.semantic-vocabulary-actions { display: flex; gap: 8px; align-items: center; }
+.vocabulary-readonly { display: inline-flex; align-items: center; gap: 6px; color: #91afbd; font-size: 12px; padding: 9px 12px; border: 1px solid #29475d; border-radius: 6px; }
+.semantic-vocabulary-toolbar { display: grid; grid-template-columns: minmax(240px, 1fr) 210px auto; gap: 12px; align-items: end; padding: 14px; border: 1px solid #1d3b4f; border-radius: 8px; background: #091c2a; }
+.semantic-vocabulary-toolbar label, .vocabulary-dialog label { display: grid; gap: 6px; color: #9fbac7; font-size: 11px; font-weight: 700; }
+.semantic-vocabulary-toolbar input, .semantic-vocabulary-toolbar select, .vocabulary-dialog input, .vocabulary-dialog select, .vocabulary-dialog textarea { border: 1px solid #29475d; border-radius: 6px; background: #081827; color: #e5f6fc; padding: 8px 9px; font: inherit; }
+.semantic-vocabulary-toolbar strong { color: #79a6b8; font: 600 11px var(--font-mono); padding-bottom: 10px; white-space: nowrap; }
+.semantic-vocabulary-table-wrap { overflow: auto; border: 1px solid #1d3b4f; border-radius: 8px; background: #091c2a; }
+.semantic-vocabulary-table { width: 100%; border-collapse: collapse; min-width: 900px; }
+.semantic-vocabulary-table th { color: #6f9bb0; text-align: left; font: 700 10px var(--font-mono); letter-spacing: .05em; text-transform: uppercase; padding: 11px 12px; border-bottom: 1px solid #1d3b4f; }
+.semantic-vocabulary-table td { padding: 12px; border-bottom: 1px solid #173346; vertical-align: top; color: #b9d1dc; font-size: 12px; }
+.semantic-vocabulary-table tr:last-child td { border-bottom: 0; }
+.semantic-vocabulary-table td:first-child { min-width: 200px; }
+.semantic-vocabulary-table td:first-child > code, .semantic-vocabulary-table td:first-child > strong, .semantic-vocabulary-table td:first-child > small { display: block; margin-top: 4px; }
+.semantic-vocabulary-table td:first-child > code { margin-top: 0; }
+.semantic-vocabulary-table code { color: #73dcfa; font: 600 11px var(--font-mono); }
+.semantic-vocabulary-table td strong { color: #e8f8fd; }
+.semantic-vocabulary-table td small { color: #7895a6; line-height: 1.35; }
+.semantic-vocabulary-table td:nth-child(2) { min-width: 150px; }
+.semantic-vocabulary-table td:nth-child(2) > b, .semantic-vocabulary-table td:nth-child(2) > span { display: block; margin-top: 5px; }
+.semantic-vocabulary-table td:nth-child(2) > b { margin-top: 0; }
+.semantic-vocabulary-table td:nth-child(2) b { color: #9fd4e4; font-size: 11px; }
+.semantic-vocabulary-table td:nth-child(2) span { color: #c6e3ec; }
+.semantic-vocabulary-table td:nth-child(2) .vocabulary-target-missing { color: #ffac82; }
+.vocabulary-aliases { display: flex; gap: 5px; flex-wrap: wrap; max-width: 250px; }
+.vocabulary-aliases span { padding: 4px 6px; border-radius: 4px; background: #123246; color: #b9e9f5; font-size: 11px; }
+.vocabulary-aliases em { color: #6d8998; font-style: normal; }
+.vocabulary-enabled, .vocabulary-disabled { display: inline-block; width: fit-content; padding: 4px 6px; border-radius: 4px; font-size: 10px; }
+.vocabulary-enabled { color: #85e4bd; background: #103b34; }.vocabulary-disabled { color: #ff9aa6; background: #402633; }
+.vocabulary-empty { text-align: center; padding: 38px !important; color: #7893a5 !important; }
+.vocabulary-dialog { width: min(660px, 100%); max-height: min(780px, calc(100vh - 40px)); overflow: auto; }
+.vocabulary-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.vocabulary-dialog textarea { min-height: 72px; resize: vertical; }
+.vocabulary-dialog .field-help { font-weight: 400; color: #7794a5; }
+.vocabulary-enabled-toggle { display: flex !important; grid-template-columns: auto 1fr; align-items: center; gap: 8px !important; }
+.vocabulary-enabled-toggle input { accent-color: #51cbe9; }
+@media (max-width: 700px) { .semantic-vocabulary-header { flex-direction: column; }.semantic-vocabulary-toolbar { grid-template-columns: 1fr; }.vocabulary-form-grid { grid-template-columns: 1fr; } }
+.alias-suggestion { position: relative; display: inline-flex; align-items: center; }
+.alias-suggestion-button { display: inline-flex; align-items: center; gap: 4px; border: 1px solid #2d6077; border-radius: 5px; background: #103246; color: #77d9f5; cursor: pointer; padding: 5px 7px; font-size: 10px; white-space: nowrap; }
+.alias-suggestion-button:disabled { opacity: .55; cursor: default; }
+.alias-suggestion-button svg { width: 13px; height: 13px; }
+.alias-suggestion-popover { position: absolute; z-index: 30; top: calc(100% + 5px); left: 0; width: min(310px, 70vw); padding: 8px; border: 1px solid #2e5e76; border-radius: 7px; background: #0b2233; box-shadow: 0 12px 32px #0008; }
+.alias-suggestion-head { display: flex; align-items: center; justify-content: space-between; color: #a8c9d5; font-size: 11px; }
+.alias-suggestion-head button { border: 0; background: none; color: #83a0b0; cursor: pointer; }.alias-suggestion-head svg { width: 14px; }
+.alias-suggestion-candidates { display: grid; gap: 4px; margin-top: 6px; }
+.alias-suggestion-candidates button { display: flex; align-items: center; justify-content: space-between; gap: 8px; border: 1px solid #1d465b; border-radius: 5px; background: #0d2b3d; color: #dff5fa; cursor: pointer; padding: 7px; text-align: left; }
+.alias-suggestion-candidates button:hover { background: #164259; }.alias-suggestion-candidates button > span { display: grid; gap: 3px; }.alias-suggestion-candidates strong { font-size: 11px; }.alias-suggestion-candidates small { color: #88acbb; font-size: 10px; }.alias-suggestion-candidates svg { width: 13px; color: #79e1b7; }
+.alias-suggestion-popover p { color: #91adbc; font-size: 10px; line-height: 1.45; margin: 8px 2px 3px; }.alias-suggestion-error { position: absolute; top: calc(100% + 5px); left: 0; color: #ff8b9c; font-size: 10px; white-space: nowrap; }
+.mapping-source-with-alias { display: grid; gap: 5px; min-width: 0; }
+.vocabulary-scope-select { display: grid; gap: 5px; max-width: 330px; margin-top: 15px; color: #9fbac7; font-size: 11px; font-weight: 700; }.vocabulary-scope-select select { height: 34px; border: 1px solid #29475d; border-radius: 5px; background: #081827; color: #e5f6fc; padding: 0 8px; }.vocabulary-scope-select small { color: #7895a6; font-weight: 400; }
+.folder-path-with-alias { display: flex; align-items: center; gap: 7px; min-width: 0; }.folder-path-with-alias > input { flex: 1; min-width: 0; }.folder-path-with-alias .alias-suggestion { flex: 0 0 auto; }

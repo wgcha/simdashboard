@@ -47,6 +47,9 @@ from .routers.spdm_storage import router as spdm_storage_router
 from .routers.media import router as media_router
 from .routers.managed_local_execution import router as managed_local_execution_router
 from .routers.voc import router as voc_router
+from .routers.semantic_mapping import router as semantic_mapping_router
+from .routers.semantic_activation import router as semantic_activation_router
+from .routers.semantic_vocabulary import router as semantic_vocabulary_router
 from .adapters.http.routers.projects import router as projects_router
 from .adapters.http.routers.reports import router as reports_router
 from .adapters.http.routers.report_templates import router as report_templates_router
@@ -107,6 +110,9 @@ app.include_router(modeling_templates_router)
 app.include_router(managed_local_execution_router)
 app.include_router(result_folder_refresh_router)
 app.include_router(voc_router)
+app.include_router(semantic_mapping_router)
+app.include_router(semantic_activation_router)
+app.include_router(semantic_vocabulary_router)
 
 
 def media_storage_mode() -> app_config.MediaStorageMode:

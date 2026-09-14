@@ -985,6 +985,59 @@ CREATE INDEX IF NOT EXISTS ix_managed_sessions_binding_expiry ON managed_device_
 CREATE INDEX IF NOT EXISTS ix_managed_grants_binding_context ON managed_device_grants(binding_id, request_id, work_item_id);
 CREATE INDEX IF NOT EXISTS ix_managed_runs_context ON managed_local_runs(request_id, work_item_id, synced_at);
 CREATE INDEX IF NOT EXISTS ix_voc_posts_created_at_id ON voc_posts(created_at, id);
+CREATE TABLE IF NOT EXISTS semantic_result_items (
+    id VARCHAR PRIMARY KEY, key VARCHAR NOT NULL UNIQUE, latest_version INTEGER NOT NULL,
+    active_version INTEGER, created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL, updated_by VARCHAR NOT NULL
+);
+CREATE TABLE IF NOT EXISTS semantic_result_item_versions (
+    item_id VARCHAR NOT NULL, version INTEGER NOT NULL, definition_json JSONB NOT NULL, item_snapshot_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+    lifecycle_status VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL, created_by VARCHAR NOT NULL,
+    PRIMARY KEY(item_id, version)
+);
+CREATE TABLE IF NOT EXISTS semantic_recipes (
+    id VARCHAR PRIMARY KEY, name VARCHAR NOT NULL, latest_version INTEGER NOT NULL,
+    active_version INTEGER, created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL, updated_by VARCHAR NOT NULL
+);
+CREATE TABLE IF NOT EXISTS semantic_recipe_versions (
+    recipe_id VARCHAR NOT NULL, version INTEGER NOT NULL, definition_json JSONB NOT NULL, item_snapshot_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+    lifecycle_status VARCHAR NOT NULL, sample_sha256 CHAR(64), sample_filename VARCHAR, sample_bytes BYTEA,
+    created_at TIMESTAMP NOT NULL, created_by VARCHAR NOT NULL, PRIMARY KEY(recipe_id, version)
+);
+CREATE TABLE IF NOT EXISTS semantic_templates (
+    id VARCHAR PRIMARY KEY, name VARCHAR NOT NULL, latest_version INTEGER NOT NULL,
+    active_version INTEGER, created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL, updated_by VARCHAR NOT NULL
+);
+CREATE TABLE IF NOT EXISTS semantic_template_versions (
+    template_id VARCHAR NOT NULL, version INTEGER NOT NULL, definition_json JSONB NOT NULL, item_snapshot_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+    lifecycle_status VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL, created_by VARCHAR NOT NULL,
+    PRIMARY KEY(template_id, version)
+);
+CREATE TABLE IF NOT EXISTS semantic_folder_bindings (
+    id VARCHAR PRIMARY KEY, project_id VARCHAR NOT NULL, request_id VARCHAR, load_case_id VARCHAR,
+    relative_path VARCHAR NOT NULL UNIQUE, role VARCHAR NOT NULL, recipe_ids_json JSONB NOT NULL,
+    template_id VARCHAR, created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL, created_by VARCHAR NOT NULL, revision INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS semantic_import_provenance (
+    analysis_run_id VARCHAR PRIMARY KEY, load_case_id VARCHAR NOT NULL, recipe_id VARCHAR NOT NULL,
+    recipe_version INTEGER NOT NULL, template_id VARCHAR, template_version INTEGER, source_name VARCHAR NOT NULL,
+    source_sha256 CHAR(64) NOT NULL, observations_json JSONB NOT NULL, sample_bytes BYTEA, created_at TIMESTAMP NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_semantic_folder_bindings_project ON semantic_folder_bindings(project_id, load_case_id);
+CREATE INDEX IF NOT EXISTS ix_semantic_import_provenance_lookup ON semantic_import_provenance(load_case_id, recipe_id, recipe_version);
+CREATE TABLE IF NOT EXISTS semantic_vocabulary_entries (
+    id VARCHAR PRIMARY KEY, key VARCHAR NOT NULL CHECK(key ~ '^[a-z][a-z0-9_]{1,127}$'),
+    label VARCHAR(200) NOT NULL, description VARCHAR(4000) NOT NULL DEFAULT '',
+    target_kind VARCHAR(20) NOT NULL CHECK(target_kind IN ('FOLDER_ROLE', 'PROJECT', 'REQUEST', 'LOAD_CASE', 'RESULT_ITEM')),
+    target_id VARCHAR(200) NOT NULL, scope_project_id VARCHAR(200) REFERENCES projects(id), aliases_json JSONB NOT NULL,
+    revision INTEGER NOT NULL DEFAULT 1 CHECK(revision >= 1), enabled BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL, created_by VARCHAR NOT NULL, updated_by VARCHAR NOT NULL
+);
+CREATE TABLE IF NOT EXISTS semantic_vocabulary_terms (
+    entry_id VARCHAR NOT NULL REFERENCES semantic_vocabulary_entries(id) ON DELETE CASCADE,
+    scope_key VARCHAR(200) NOT NULL, target_kind VARCHAR(20) NOT NULL,
+    normalized_term VARCHAR(200) NOT NULL, PRIMARY KEY(scope_key, target_kind, normalized_term)
+);
+CREATE INDEX IF NOT EXISTS ix_semantic_vocabulary_entries_scope ON semantic_vocabulary_entries(scope_project_id, target_kind, enabled);
 
 ALTER TABLE product_information ADD CONSTRAINT fk_product_information_project FOREIGN KEY (project_id) REFERENCES projects(id);
 ALTER TABLE analysis_requests ADD CONSTRAINT fk_analysis_requests_project FOREIGN KEY (project_id) REFERENCES projects(id);

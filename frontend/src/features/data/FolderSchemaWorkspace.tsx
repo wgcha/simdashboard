@@ -5,7 +5,7 @@ import type { ImportSchema } from '../../types'; import { MasterResultFolderRefr
 
 type DiscoveredFolderFile = { path: string; kind: 'typed_scalars' | 'curve_csv' | 'media'; dataType: 'FLOAT' | 'CURVE' | 'IMAGE' | 'VIDEO' | 'MODEL_3D'; variableKey: string }
 
-export function FolderSchemaWorkspace() {
+export function LegacyFolderSchemaWorkspace() {
   const [files, setFiles] = useState<DiscoveredFolderFile[]>([])
   const [schemas, setSchemas] = useState<ImportSchema[]>([])
   const [name, setName] = useState('새 해석 결과 폴더')

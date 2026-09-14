@@ -1,0 +1,30 @@
+{
+  "format_version": 1,
+  "items": [
+    {"id":"example-peak","definition":{"key":"example_peak_stress","label":"최대 응력","kind":"scalar","data_type":"FLOAT","unit":"MPa","dimensions":["node"]}},
+    {"id":"example-displacement","definition":{"key":"example_peak_displacement","label":"최대 변위","kind":"scalar","data_type":"FLOAT","unit":"mm","dimensions":["node"]}},
+    {"id":"example-history","definition":{"key":"example_stress_history","label":"응력 이력","kind":"curve","data_type":"FLOAT","unit":"MPa","dimensions":["node"]}}
+  ],
+  "recipes": [
+    {"id":"example-csv","name":"예제 CSV 읽기","definition":{"format":"csv","required_fields":["T","S","D","N"],"mappings":[
+      {"result_item_id":"example-peak","source":"S","dimensions":{"node":"N"},"aggregate":"max"},
+      {"result_item_id":"example-displacement","source":"D","dimensions":{"node":"N"},"aggregate":"max"},
+      {"result_item_id":"example-history","source":"S","dimensions":{"node":"N"},"x_source":"T","x_unit":"s"}
+    ]}},
+    {"id":"example-json","name":"예제 JSON 읽기","definition":{"format":"json","records_path":"results","required_fields":["T","S","D","N"],"mappings":[
+      {"result_item_id":"example-peak","source":"S","dimensions":{"node":"N"},"aggregate":"max"},
+      {"result_item_id":"example-displacement","source":"D","dimensions":{"node":"N"},"aggregate":"max"},
+      {"result_item_id":"example-history","source":"S","dimensions":{"node":"N"},"x_source":"T","x_unit":"s"}
+    ]}}
+  ],
+  "templates": [
+    {"id":"example-view","name":"예제 결과 위젯 6종","definition":{"widgets":[
+      {"id":"peak-kpi","type":"kpi","title":"최대 응력","item_ids":["example-peak"],"decimals":1},
+      {"id":"peak-gauge","type":"gauge","title":"응력 기준","item_ids":["example-peak"],"threshold":150},
+      {"id":"result-table","type":"table","title":"측정 위치별 결과","item_ids":["example-peak","example-displacement"]},
+      {"id":"peak-bar","type":"bar","title":"응력 비교","item_ids":["example-peak"]},
+      {"id":"history-line","type":"line","title":"응력 이력","item_ids":["example-history"],"x_display_unit":"s"},
+      {"id":"stress-displacement","type":"scatter","title":"응력과 변위","x_item_id":"example-peak","y_item_id":"example-displacement","x_display_unit":"MPa","y_display_unit":"mm"}
+    ]}}
+  ]
+}

@@ -225,13 +225,16 @@ def test_null_checksum_keeps_duckdb_ingestion_and_allocates_run_after_the_lock()
     assert unit_of_work.calls.index("lock_load_case_ingestion") < unit_of_work.calls.index("next_run_no")
 
 
-def test_source_claim_migration_is_the_current_alembic_head():
+def test_source_claim_migration_remains_in_the_single_alembic_lineage():
     config = Config(str(BACKEND / "alembic.ini"))
     script = ScriptDirectory.from_config(config)
     migration = script.get_revision("0016_result_ingestion_sources")
 
     assert migration and migration.down_revision == "0015_legacy_drop_layout"
-    assert tuple(script.get_heads()) == ("0019_batch_recovery_lease",)
+    assert len(script.get_heads()) == 1
+    assert {"0016_result_ingestion_sources", "0019_batch_recovery_lease"} <= {
+        revision.revision for revision in script.walk_revisions()
+    }
 
 
 def test_source_claim_migration_has_a_three_part_primary_key(monkeypatch: pytest.MonkeyPatch):
