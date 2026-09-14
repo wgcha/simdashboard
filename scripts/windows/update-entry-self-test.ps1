@@ -66,7 +66,7 @@ if ($env:SELFTEST_SCENARIO -eq 'deployfailure') { exit 7 }
 exit 0
 '@;
         'start.ps1' = @'
-param([int]$BackendPort=8000,[int]$FrontendPort=5173,[switch]$NoBrowser,[string]$NetworkMode='')
+param([int]$BackendPort=8000,[int]$FrontendPort=80,[switch]$NoBrowser,[string]$NetworkMode='')
 Add-Content -LiteralPath $env:SELFTEST_LOG -Value ("start backend=$BackendPort frontend=$FrontendPort")
 Write-Output 'fake start stdout'
 if ($env:SELFTEST_SCENARIO -eq 'startfailure') { exit 8 }
@@ -96,7 +96,7 @@ try {
     $code = Invoke-Fixture $fixture
     Assert-Condition ($code -eq 0) "success scenario exit was $code"
     $events = @(Get-Content -LiteralPath $fixture.Log)
-    Assert-Condition ((($events -join '|') -eq 'plan|stop backend=0 frontend=0|apply|deploy network=|start backend=8000 frontend=5173')) 'success stage order or child exit handling was incorrect'
+    Assert-Condition ((($events -join '|') -eq 'plan|stop backend=0 frontend=0|apply|deploy network=|start backend=8000 frontend=80')) 'success stage order or child exit handling was incorrect'
 
     $fixture = New-Fixture -Scenario 'fetchfailure'; $fixtures += $fixture
     $code = Invoke-Fixture $fixture
@@ -133,6 +133,17 @@ try {
     $events = @(Get-Content -LiteralPath $fixture.Log)
     Assert-Condition ($code -eq 0) 'custom port scenario failed'
     Assert-Condition (($events -join '|') -match 'stop backend=9123 frontend=9456.*start backend=9123 frontend=9456') 'custom ports were not forwarded to stop/start'
+
+    $fixture = New-Fixture -Scenario 'legacy-default' -BackendPort 8000 -FrontendPort 5173; $fixtures += $fixture
+    $code = Invoke-Fixture $fixture
+    $events = @(Get-Content -LiteralPath $fixture.Log)
+    Assert-Condition ($code -eq 0 -and ($events -join '|') -match 'stop backend=8000 frontend=5173.*start backend=8000 frontend=80') 'legacy default must stop on 5173 and restart on 80'
+
+    $fixture = New-Fixture -Scenario 'explicit-default' -BackendPort 8000 -FrontendPort 5173; $fixtures += $fixture
+    Write-Utf8File (Join-Path $fixture.Target '.server-pids.json') (@{ backend=@{port=8000}; frontend=@{port=5173; basePath='/workbench/'} } | ConvertTo-Json -Depth 4)
+    $code = Invoke-Fixture $fixture
+    $events = @(Get-Content -LiteralPath $fixture.Log)
+    Assert-Condition ($code -eq 0 -and ($events -join '|') -match 'stop backend=8000 frontend=5173.*start backend=8000 frontend=5173') 'new explicit 5173 setting must survive updates'
 
     $fixture = New-Fixture -Scenario 'lockhold'; $fixtures += $fixture
     $env:SELFTEST_LOG = $fixture.Log; $env:SELFTEST_SCENARIO = $fixture.Scenario

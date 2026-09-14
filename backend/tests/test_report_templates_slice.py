@@ -32,6 +32,16 @@ def test_default_template_storage_root_preserves_backend_assets_contract() -> No
     )
 
 
+def test_default_template_store_uses_configured_persistent_assets_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.adapters.storage.report_template_files import ReportTemplateFileStore
+
+    assets = tmp_path / "persistent-assets"
+    monkeypatch.setenv("SIMDASH_ASSETS_ROOT", str(assets))
+    assert ReportTemplateFileStore()._configured_root == assets / "report-templates"
+
+
 def _pptx(
     *,
     slide_xml: bytes | None = None,

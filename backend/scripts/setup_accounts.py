@@ -22,6 +22,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
+from ctypes import wintypes
+
 from dotenv import dotenv_values, load_dotenv
 
 
@@ -122,18 +124,108 @@ def _write_env(updates: dict[str, str], values: dict[str, str]) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def _copy_windows_security_descriptor(source: Path, target: Path) -> None:
-    """Copy owner/group/DACL before publishing a replacement secret file."""
-    security_information = 0x00000001 | 0x00000002 | 0x00000004  # owner, group, DACL
+_OWNER_SECURITY_INFORMATION = 0x00000001
+_GROUP_SECURITY_INFORMATION = 0x00000002
+_DACL_SECURITY_INFORMATION = 0x00000004
+_PROTECTED_DACL_SECURITY_INFORMATION = 0x80000000
+_UNPROTECTED_DACL_SECURITY_INFORMATION = 0x20000000
+_SE_DACL_PROTECTED = 0x1000
+
+
+def _configure_windows_security_apis(advapi) -> None:
+    """Declare the security-descriptor API boundary used for .env replacement."""
+    advapi.GetFileSecurityW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    advapi.GetFileSecurityW.restype = wintypes.BOOL
+    advapi.SetFileSecurityW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.LPVOID]
+    advapi.SetFileSecurityW.restype = wintypes.BOOL
+    advapi.GetSecurityDescriptorOwner.argtypes = [
+        wintypes.LPVOID,
+        ctypes.POINTER(wintypes.LPVOID),
+        ctypes.POINTER(wintypes.BOOL),
+    ]
+    advapi.GetSecurityDescriptorOwner.restype = wintypes.BOOL
+    advapi.GetSecurityDescriptorGroup.argtypes = [
+        wintypes.LPVOID,
+        ctypes.POINTER(wintypes.LPVOID),
+        ctypes.POINTER(wintypes.BOOL),
+    ]
+    advapi.GetSecurityDescriptorGroup.restype = wintypes.BOOL
+    advapi.GetSecurityDescriptorControl.argtypes = [
+        wintypes.LPVOID,
+        ctypes.POINTER(wintypes.WORD),
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    advapi.GetSecurityDescriptorControl.restype = wintypes.BOOL
+    advapi.EqualSid.argtypes = [wintypes.LPVOID, wintypes.LPVOID]
+    advapi.EqualSid.restype = wintypes.BOOL
+
+
+def _windows_security_error(operation: str) -> RuntimeError:
+    """Return an operator-safe Win32 diagnostic without including file content."""
+    error = ctypes.get_last_error()
+    return RuntimeError(f"{operation} failed with Windows error {error}.")
+
+
+def _windows_advapi32():
+    """Load Advapi32 with ctypes last-error tracking for safe diagnostics."""
+    return ctypes.WinDLL("advapi32", use_last_error=True)
+
+
+def _read_windows_security_descriptor(advapi, path: Path, security_information: int):
     needed = ctypes.c_uint32()
-    advapi = ctypes.windll.advapi32
-    if advapi.GetFileSecurityW(str(source), security_information, None, 0, ctypes.byref(needed)) or not needed.value:
-        raise RuntimeError("Could not read existing .env access controls.")
+    advapi.GetFileSecurityW(str(path), security_information, None, 0, ctypes.byref(needed))
+    if not needed.value:
+        raise _windows_security_error("Could not read .env access controls")
     descriptor = ctypes.create_string_buffer(needed.value)
-    if not advapi.GetFileSecurityW(str(source), security_information, descriptor, needed.value, ctypes.byref(needed)):
-        raise RuntimeError("Could not read existing .env access controls.")
-    if not advapi.SetFileSecurityW(str(target), security_information, descriptor):
-        raise RuntimeError("Could not preserve existing .env access controls.")
+    if not advapi.GetFileSecurityW(str(path), security_information, descriptor, needed.value, ctypes.byref(needed)):
+        raise _windows_security_error("Could not read .env access controls")
+    return descriptor
+
+
+def _windows_descriptor_sid(advapi, descriptor, accessor):
+    sid = wintypes.LPVOID()
+    defaulted = wintypes.BOOL()
+    if not accessor(descriptor, ctypes.byref(sid), ctypes.byref(defaulted)) or not sid:
+        raise _windows_security_error("Could not read .env access controls")
+    return sid
+
+
+def _windows_dacl_security_information(advapi, descriptor) -> int:
+    control = wintypes.WORD()
+    revision = wintypes.DWORD()
+    if not advapi.GetSecurityDescriptorControl(descriptor, ctypes.byref(control), ctypes.byref(revision)):
+        raise _windows_security_error("Could not read .env access controls")
+    inheritance = _PROTECTED_DACL_SECURITY_INFORMATION if control.value & _SE_DACL_PROTECTED else _UNPROTECTED_DACL_SECURITY_INFORMATION
+    return _DACL_SECURITY_INFORMATION | inheritance
+
+
+def _copy_windows_security_descriptor(source: Path, target: Path) -> None:
+    """Preserve source owner/group/DACL without needless WRITE_OWNER requests."""
+    owner_group_dacl = _OWNER_SECURITY_INFORMATION | _GROUP_SECURITY_INFORMATION | _DACL_SECURITY_INFORMATION
+    owner_group = _OWNER_SECURITY_INFORMATION | _GROUP_SECURITY_INFORMATION
+    advapi = _windows_advapi32()
+    _configure_windows_security_apis(advapi)
+    source_descriptor = _read_windows_security_descriptor(advapi, source, owner_group_dacl)
+    target_descriptor = _read_windows_security_descriptor(advapi, target, owner_group)
+
+    source_owner = _windows_descriptor_sid(advapi, source_descriptor, advapi.GetSecurityDescriptorOwner)
+    target_owner = _windows_descriptor_sid(advapi, target_descriptor, advapi.GetSecurityDescriptorOwner)
+    source_group = _windows_descriptor_sid(advapi, source_descriptor, advapi.GetSecurityDescriptorGroup)
+    target_group = _windows_descriptor_sid(advapi, target_descriptor, advapi.GetSecurityDescriptorGroup)
+
+    security_information = _windows_dacl_security_information(advapi, source_descriptor)
+    if not advapi.EqualSid(source_owner, target_owner):
+        security_information |= _OWNER_SECURITY_INFORMATION
+    if not advapi.EqualSid(source_group, target_group):
+        security_information |= _GROUP_SECURITY_INFORMATION
+    if not advapi.SetFileSecurityW(str(target), security_information, source_descriptor):
+        raise _windows_security_error("Could not preserve .env access controls")
 
 
 def _set_owner_only_windows_dacl(target: Path) -> None:

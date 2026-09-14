@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import errno
 import json
+import ctypes
+from ctypes import wintypes
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -135,3 +137,93 @@ def test_only_an_actual_nonblocking_lock_collision_maps_to_setup_in_progress() -
     assert setup_accounts._is_lock_contention(BlockingIOError(errno.EAGAIN, "locked"))
     assert setup_accounts._is_lock_contention(OSError(0, "locked", None, 33))
     assert not setup_accounts._is_lock_contention(PermissionError("ACL denied"))
+
+
+def _mock_windows_descriptor_copy(monkeypatch: pytest.MonkeyPatch, owner_matches: bool, group_matches: bool, dacl_information: int, set_result: bool = True):
+    source = Path("source.env")
+    target = Path("target.env")
+    source_descriptor = object()
+    target_descriptor = object()
+    owner_accessor = object()
+    group_accessor = object()
+    calls: list[tuple[str, object]] = []
+    advapi = SimpleNamespace(
+        GetSecurityDescriptorOwner=owner_accessor,
+        GetSecurityDescriptorGroup=group_accessor,
+        EqualSid=lambda source_sid, target_sid: source_sid == target_sid,
+        SetFileSecurityW=lambda path, information, descriptor: calls.append((path, information, descriptor)) or set_result,
+    )
+    monkeypatch.setattr(setup_accounts, "_windows_advapi32", lambda: advapi)
+    monkeypatch.setattr(setup_accounts, "_configure_windows_security_apis", lambda _advapi: None)
+    monkeypatch.setattr(
+        setup_accounts,
+        "_read_windows_security_descriptor",
+        lambda _advapi, path, _information: source_descriptor if path == source else target_descriptor,
+    )
+
+    def descriptor_sid(_advapi, descriptor, accessor):
+        if accessor is owner_accessor:
+            return "owner" if descriptor is source_descriptor or owner_matches else "different-owner"
+        return "group" if descriptor is source_descriptor or group_matches else "different-group"
+
+    monkeypatch.setattr(setup_accounts, "_windows_descriptor_sid", descriptor_sid)
+    monkeypatch.setattr(setup_accounts, "_windows_dacl_security_information", lambda _advapi, _descriptor: dacl_information)
+    monkeypatch.setattr(setup_accounts, "_windows_security_error", lambda operation: RuntimeError(operation))
+    return source, target, calls
+
+
+def test_windows_descriptor_copy_skips_write_owner_and_group_for_matching_sids(monkeypatch: pytest.MonkeyPatch) -> None:
+    source, target, calls = _mock_windows_descriptor_copy(
+        monkeypatch,
+        owner_matches=True,
+        group_matches=True,
+        dacl_information=setup_accounts._DACL_SECURITY_INFORMATION | setup_accounts._PROTECTED_DACL_SECURITY_INFORMATION,
+    )
+
+    setup_accounts._copy_windows_security_descriptor(source, target)
+
+    assert len(calls) == 1
+    assert calls[0][0] == str(target)
+    assert calls[0][1] == setup_accounts._DACL_SECURITY_INFORMATION | setup_accounts._PROTECTED_DACL_SECURITY_INFORMATION
+
+
+def test_windows_descriptor_copy_keeps_owner_group_restore_required_when_sids_differ(monkeypatch: pytest.MonkeyPatch) -> None:
+    source, target, calls = _mock_windows_descriptor_copy(
+        monkeypatch,
+        owner_matches=False,
+        group_matches=False,
+        dacl_information=setup_accounts._DACL_SECURITY_INFORMATION | setup_accounts._UNPROTECTED_DACL_SECURITY_INFORMATION,
+        set_result=False,
+    )
+
+    with pytest.raises(RuntimeError, match="Could not preserve .env access controls"):
+        setup_accounts._copy_windows_security_descriptor(source, target)
+
+    assert calls[0][1] == (
+        setup_accounts._DACL_SECURITY_INFORMATION
+        | setup_accounts._UNPROTECTED_DACL_SECURITY_INFORMATION
+        | setup_accounts._OWNER_SECURITY_INFORMATION
+        | setup_accounts._GROUP_SECURITY_INFORMATION
+    )
+
+
+@pytest.mark.parametrize(
+    ("source_control", "expected_inheritance"),
+    [
+        (setup_accounts._SE_DACL_PROTECTED, setup_accounts._PROTECTED_DACL_SECURITY_INFORMATION),
+        (0, setup_accounts._UNPROTECTED_DACL_SECURITY_INFORMATION),
+    ],
+)
+def test_windows_descriptor_dacl_inheritance_state_comes_from_source_control(
+    source_control: int, expected_inheritance: int
+) -> None:
+    def get_security_descriptor_control(_descriptor, control_pointer, revision_pointer) -> bool:
+        ctypes.cast(control_pointer, ctypes.POINTER(wintypes.WORD)).contents.value = source_control
+        ctypes.cast(revision_pointer, ctypes.POINTER(wintypes.DWORD)).contents.value = 1
+        return True
+
+    advapi = SimpleNamespace(GetSecurityDescriptorControl=get_security_descriptor_control)
+
+    assert setup_accounts._windows_dacl_security_information(advapi, object()) == (
+        setup_accounts._DACL_SECURITY_INFORMATION | expected_inheritance
+    )

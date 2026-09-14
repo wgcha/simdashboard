@@ -161,3 +161,71 @@ def test_current_schema_backup_failure_does_not_fallback_to_legacy(monkeypatch: 
     monkeypatch.setattr(deployment.subprocess, "run", fail)
     with pytest.raises(RuntimeError, match="PostgreSQL 계정 백업"):
         deployment._postgres_backup("postgresql://app:app@localhost:5432/testdb", tmp_path, {"POSTGRES_BIN": ""})
+
+
+def test_current_schema_backup_uses_configured_persistent_assets_root(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class Result:
+        def __init__(self, one: tuple[object, ...] | None = None, rows: list[tuple[object, ...]] | None = None):
+            self.one = one
+            self.rows = rows or []
+
+        def fetchone(self):
+            return self.one
+
+        def fetchall(self):
+            return self.rows
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, query: str):
+            if "count(*)" in query:
+                return Result((2,))
+            if "SELECT c.relname" in query:
+                return Result(rows=[("users",), ("project_memberships",)])
+            if "to_regclass" in query:
+                return Result(("alembic_version",))
+            if "SELECT version_num" in query:
+                return Result(rows=[("0008_media_storage",)])
+            raise AssertionError(query)
+
+    observed: list[str] = []
+    assets = tmp_path / "persistent-assets"
+    assets.mkdir()
+
+    def backup_child(command: list[str], **_kwargs):
+        observed.extend(command)
+        dump = tmp_path / "database-current.dump"
+        archive = tmp_path / "database-current.assets.zip"
+        dump.write_bytes(b"dump")
+        archive.write_bytes(b"assets")
+        (tmp_path / "database-current.manifest.json").write_text(
+            json.dumps(
+                {
+                    "format": "analysis-canvas-deployment-postgresql",
+                    "assets_backup": {
+                        "filename": archive.name,
+                        "bytes": archive.stat().st_size,
+                        "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr("psycopg.connect", lambda *_args, **_kwargs: Connection())
+    monkeypatch.setattr(deployment, "_run_backup_child", backup_child)
+    deployment._postgres_backup(
+        "postgresql://app:app@localhost:5432/testdb",
+        tmp_path,
+        {"SIMDASH_ASSETS_ROOT": str(assets), "SIMDASH_MEDIA_STORAGE_MODE": "dual-read"},
+        project_root=tmp_path,
+    )
+
+    assert observed[observed.index("--deployment-assets-root") + 1] == str(assets)

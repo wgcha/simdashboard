@@ -362,7 +362,25 @@ def _pg_target(url: str) -> tuple[str, str, str, str, str]:
     return target.host, str(target.port), target.username, target.password or "", target.database
 
 
-def _postgres_backup(url: str, directory: Path, env: dict[str, str]) -> dict[str, object]:
+def _managed_assets_root(project_root: Path, env: dict[str, str]) -> Path:
+    value = env.get("SIMDASH_ASSETS_ROOT", "").strip()
+    if not value:
+        return project_root / "backend" / "assets"
+    root = Path(value).expanduser()
+    if not root.is_absolute():
+        raise RuntimeError("SIMDASH_ASSETS_ROOT는 절대 경로여야 합니다.")
+    # Keep link information intact for backup_postgres.py's deployment-media
+    # validator, which rejects redirected asset roots.
+    return root.absolute()
+
+
+def _postgres_backup(
+    url: str,
+    directory: Path,
+    env: dict[str, str],
+    *,
+    project_root: Path | None = None,
+) -> dict[str, object]:
     import psycopg
     app_target = _pg_target(url)
     owner_url = env.get("POSTGRES_OWNER_URL") or url
@@ -401,8 +419,9 @@ def _postgres_backup(url: str, directory: Path, env: dict[str, str]) -> dict[str
             raise RuntimeError("SIMDASH_MEDIA_STORAGE_MODE_INVALID")
         if media_mode == "dual-read":
             # prepare() always creates <project>/backups/accounts/<run>.
-            # Preserve that project's filesystem, not the tool checkout's.
-            assets_root = directory.parents[2] / "backend" / "assets"
+            # Preserve the configured persistent filesystem, not the tool
+            # checkout or a disposable release directory.
+            assets_root = _managed_assets_root(project_root or directory.parents[2], env)
             command.extend(["--deployment-assets-root", str(assets_root)])
         _run_backup_child(command, cwd=BACKEND, env=command_env, stage="postgres_current_schema_backup")
         dumps = sorted(directory.glob("database-*.dump"), key=lambda item: item.stat().st_mtime, reverse=True)
@@ -489,7 +508,7 @@ def prepare(project_root: Path) -> Path:
             url = env.get("DATABASE_URL")
             if not url:
                 raise RuntimeError("DATABASE_URL이 필요합니다.")
-            result = _postgres_backup(url, directory, env)
+            result = _postgres_backup(url, directory, env, project_root=project_root)
         else:
             raise RuntimeError("ANALYSIS_DB_BACKEND은 duckdb 또는 postgresql이어야 합니다.")
         stage = "copy_environment_files"

@@ -21,6 +21,8 @@
 
 ## 빠른 시작
 
+Windows 소스 최초 설치는 `deploy.bat`, 이후 업데이트는 `update.bat`입니다. [소스 설치 안내](docs/windows-one-click-deployment.md), [Windows Server 2022 폐쇄망 설치](docs/windows-server-offline-installation.md), 모든 개발에서 유지할 [배포 정책](docs/windows-deployment-policy.md)을 따릅니다. DB 이관은 [설치·백업·복원 구분](docs/windows-install-backup-guidance.md)을 확인하세요.
+
 고정 런타임은 [`.node-version`](.node-version)의 Node.js, [`.python-version`](.python-version)의 Python, `pnpm@11.15.1`입니다.
 
 ### WSL2 Ubuntu
@@ -38,19 +40,15 @@
 
 종료는 `./stop.sh`입니다. 설치 조건과 장애 대응은 [`docs/wsl-development-setup.md`](docs/wsl-development-setup.md)를 따릅니다.
 
-### Windows: 파일 두 개로 설치와 실행
+### Windows
 
-소스 ZIP을 **전체 압축 해제**한 뒤 저장소 루트에서 실행합니다. Python, Node.js, Git을 먼저 설치할 필요가 없습니다.
+PowerShell에서 다음을 실행합니다.
 
-1. **`deploy.bat`** — 환경 설치·웹 빌드 후 기존 DB 백업, 스키마 준비와 최초 관리자 설정을 진행합니다. PostgreSQL 서비스와 app/owner 연결을 먼저 준비합니다.
-2. **`start.bat`** — 웹과 API를 시작하고 회원 로그인 화면을 기본 브라우저에서 엽니다.
-3. 종료할 때는 **`stop.bat`**를 실행합니다.
+```powershell
+.\deploy.bat
+```
 
-다시 사용할 때는 `start.bat`, 새 버전 적용은 `update.bat`를 실행합니다. 신규 설치와 DB 종류를 지정하지 않은 실행의 기본값은 **PostgreSQL**입니다. 기존 `.env`와 DB를 보존하며, PostgreSQL 연결 설정이 없으면 설정 안내와 함께 중단합니다. 기존 DuckDB는 검증된 이관을 마친 후 PostgreSQL로 전환합니다.
-
-[Issue #15](https://github.com/wgcha/simdashboard/issues/15)의 사내 프록시 설정을 포함합니다. 기본 `auto` 모드는 기존 프록시 환경변수를 우선하고 사내 프록시에 연결할 수 있으면 사용합니다. 사내 인증서가 별도로 필요하면 `DigitalCity.crt`를 `deploy/windows/certs/` 또는 바탕화면에 둡니다. 자세한 설정과 오류 확인은 **[Windows 배치 안내](docs/windows-one-click-deployment.md)**를 따릅니다.
-
-기본 실행 주소는 `http://127.0.0.1:5173/workspace/overview`이며 사내 PC에서 직접 확인하는 로컬 실행 구성입니다. 기존 PostgreSQL 설정을 사용하려면 `.env`를 유지합니다. 다중 사용자 상시 운영은 [Rocky 배포](deploy/rocky8/README.md), DB 이관은 [PostgreSQL 이전 안내](docs/postgresql-pc-transfer-guide.md)를 따릅니다. Windows의 Master Result Refresh는 기존 POSIX snapshot 계약으로 인해 지원하지 않으며 수동 결과 등록을 사용할 수 있습니다.
+PostgreSQL이 준비된 소스 PC에서는 Python·Node.js 사전 설치 없이 런타임·DB·계정 준비부터 시작까지 이어서 실행합니다. 기존 DB는 백업 후 스키마를 업데이트하고 데이터를 유지합니다. 다음 실행은 `start.bat`, 소스 업데이트는 `update.bat`을 사용합니다. Windows Server 2022만 있는 폐쇄망은 외부에서 만든 완결 설치 패키지를 사용합니다. [ADR 0005](docs/adr/0005-windows-server-offline-deployment.md)와 설치 안내의 검증 범위를 확인하세요. Rocky 운영 경로는 [`deploy/rocky8/README.md`](deploy/rocky8/README.md)를 유지합니다. Master Refresh endpoint는 POSIX snapshot traversal을 사용하는 canonical WSL/Rocky 경로에서만 지원하며, native Windows에서는 Windows handle 기반 adapter가 준비될 때까지 fail-closed합니다. 수동 upload와 다른 compatibility 기능은 계속 사용할 수 있습니다.
 
 ## 실행 프로필
 

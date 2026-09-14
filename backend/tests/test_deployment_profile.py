@@ -37,6 +37,33 @@ def test_windows_password_profile_requires_postgres_password_and_secure_cookie(m
         preflight.main()
 
 
+def test_windows_server_http_profile_accepts_postgres_password_and_http_cookie(monkeypatch, capsys):
+    monkeypatch.setenv("DEPLOYMENT_PROFILE", "windows-server-intranet-http")
+    monkeypatch.setattr(preflight, "database_settings", lambda: SimpleNamespace(backend="postgresql"))
+    monkeypatch.setattr(preflight, "security_settings", lambda: SimpleNamespace(auth_mode="password", cookie_secure=False))
+    monkeypatch.setattr(preflight, "directory_settings", lambda: SimpleNamespace(mode="local"))
+    preflight.main()
+    assert "DEPLOYMENT_PROFILE_OK profile=windows-server-intranet-http" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("backend", "auth_mode", "cookie_secure", "expected"),
+    [
+        ("duckdb", "password", False, "POSTGRESQL_REQUIRED"),
+        ("postgresql", "disabled", False, "PASSWORD_AUTH_REQUIRED"),
+        ("postgresql", "oidc", False, "PASSWORD_AUTH_REQUIRED"),
+        ("postgresql", "password", True, "INSECURE_COOKIE_REQUIRED_FOR_HTTP"),
+    ],
+)
+def test_windows_server_http_profile_rejects_incompatible_settings(monkeypatch, backend, auth_mode, cookie_secure, expected):
+    monkeypatch.setenv("DEPLOYMENT_PROFILE", "windows-server-intranet-http")
+    monkeypatch.setattr(preflight, "database_settings", lambda: SimpleNamespace(backend=backend))
+    monkeypatch.setattr(preflight, "security_settings", lambda: SimpleNamespace(auth_mode=auth_mode, cookie_secure=cookie_secure))
+    monkeypatch.setattr(preflight, "directory_settings", lambda: SimpleNamespace(mode="local"))
+    with pytest.raises(RuntimeError, match=expected):
+        preflight.main()
+
+
 def test_rocky8_profile_requires_postgres_authentication_and_secure_cookie(monkeypatch):
     monkeypatch.setenv("DEPLOYMENT_PROFILE", "rocky8")
     monkeypatch.setenv("SIMDASH_IMPORT_READINESS_POLICY", "legacy")

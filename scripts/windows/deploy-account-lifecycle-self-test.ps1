@@ -24,13 +24,22 @@ function New-Fixture([string]$Name, [switch]$ExistingEnvironment, [switch]$Legac
     Write-FixtureFile (Join-Path $root '.env.example') 'FIXTURE_DEFAULT=true'
     if ($ExistingEnvironment) { Write-FixtureFile (Join-Path $root '.env') 'EXISTING_DATABASE=preserved' }
     if ($LegacyBackendEnvironment) { Write-FixtureFile (Join-Path $root 'backend\.env') 'LEGACY_DATABASE=preserved' }
-    Write-FixtureFile (Join-Path $root 'setup.ps1') @'
+    Write-FixtureFile (Join-Path $root 'scripts\windows\prepare-source-environment.ps1') @'
 param([switch]$SkipFrontendBuild,[string]$NetworkMode='')
 Add-Content -LiteralPath $env:WORKBENCH_DEPLOY_EVENTS -Value 'runtime-setup'
 exit 0
 '@
+    Write-FixtureFile (Join-Path $root 'scripts\windows\initialize-source-postgres.ps1') @'
+param([switch]$EnvironmentCreated,[switch]$NonInteractive)
+Add-Content -LiteralPath $env:WORKBENCH_DEPLOY_EVENTS -Value ('postgres-init:environment=' + $EnvironmentCreated.ToString().ToLowerInvariant())
+exit 0
+'@
     Write-FixtureFile (Join-Path $root 'stop.ps1') @'
 Add-Content -LiteralPath $env:WORKBENCH_DEPLOY_EVENTS -Value 'stop'
+exit 0
+'@
+    Write-FixtureFile (Join-Path $root 'start.ps1') @'
+Add-Content -LiteralPath $env:WORKBENCH_DEPLOY_EVENTS -Value 'start'
 exit 0
 '@
     Write-FixtureFile (Join-Path $root 'scripts\windows\Network.psm1') @'
@@ -75,12 +84,13 @@ exit /b 0
 '@
     return [pscustomobject]@{ Base=$base; Root=$root; Events=$events; Python=$python; FailureStage='' }
 }
-function Invoke-Fixture($Fixture, [switch]$NonInteractive, [string]$FailureStage = '') {
+function Invoke-Fixture($Fixture, [switch]$NonInteractive, [switch]$StartAfterDeploy, [string]$FailureStage = '') {
     $env:WORKBENCH_DEPLOY_EVENTS = $Fixture.Events
     $env:WORKBENCH_DEPLOY_FAKE_PYTHON = $Fixture.Python
     if ($FailureStage) { Write-FixtureFile (Join-Path $Fixture.Base ($FailureStage + '.marker')) 'fail this fixture stage' }
     $arguments = @('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $Fixture.Root 'deploy.ps1'),'-SkipFrontendBuild')
     if ($NonInteractive) { $arguments += '-NonInteractive' }
+    if ($StartAfterDeploy) { $arguments += '-StartAfterDeploy' }
     & $powerShell @arguments | Out-Host
     return [int]$LASTEXITCODE
 }
@@ -89,7 +99,7 @@ try {
     $fresh = New-Fixture -Name 'fresh'
     $fixtures += $fresh
     Assert-True ((Invoke-Fixture $fresh -NonInteractive) -eq 0) 'fresh deployment failed'
-    Assert-True ((@(Get-Content -LiteralPath $fresh.Events) -join '|') -eq 'runtime-setup|database-preflight|stop|backup-verified|migration|account-setup:--non-interactive') 'fresh deployment order or noninteractive account handling is wrong'
+    Assert-True ((@(Get-Content -LiteralPath $fresh.Events) -join '|') -eq 'runtime-setup|postgres-init:environment=true|database-preflight|stop|backup-verified|migration|account-setup:--non-interactive') 'fresh deployment order or noninteractive account handling is wrong'
     Assert-True (Test-Path -LiteralPath (Join-Path $fresh.Root '.windows-deploy-ready.json')) 'successful fresh deployment did not publish readiness'
     $freshAcl = Get-Acl -LiteralPath (Join-Path $fresh.Root '.env')
     Assert-True ([bool]$freshAcl.AreAccessRulesProtected) 'fresh environment ACL still inherits directory access'
@@ -98,7 +108,7 @@ try {
     $existing = New-Fixture -Name 'existing' -ExistingEnvironment
     $fixtures += $existing
     Assert-True ((Invoke-Fixture $existing) -eq 0) 'existing deployment failed'
-    Assert-True ((@(Get-Content -LiteralPath $existing.Events) -join '|') -eq 'runtime-setup|database-preflight|stop|backup-verified|migration|account-setup:') 'existing deployment did not verify backup before migration'
+    Assert-True ((@(Get-Content -LiteralPath $existing.Events) -join '|') -eq 'runtime-setup|postgres-init:environment=false|database-preflight|stop|backup-verified|migration|account-setup:') 'existing deployment did not preserve its configuration and verify backup before migration'
     Assert-True ((Get-Content -Raw -LiteralPath (Join-Path $existing.Root '.env')).Trim() -eq 'EXISTING_DATABASE=preserved') 'existing environment was modified'
 
     $legacy = New-Fixture -Name 'legacy-backend-env' -LegacyBackendEnvironment
@@ -111,13 +121,13 @@ try {
     $fixtures += $backupFailure
     Write-FixtureFile (Join-Path $backupFailure.Root '.windows-deploy-ready.json') '{"old":true}'
     Assert-True ((Invoke-Fixture $backupFailure -NonInteractive -FailureStage 'backup') -ne 0) 'backup failure unexpectedly succeeded'
-    Assert-True ((@(Get-Content -LiteralPath $backupFailure.Events) -join '|') -eq 'runtime-setup|database-preflight|stop|backup-verified') 'backup failure continued to migration or account setup'
+    Assert-True ((@(Get-Content -LiteralPath $backupFailure.Events) -join '|') -eq 'runtime-setup|postgres-init:environment=true|database-preflight|stop|backup-verified') 'backup failure continued to migration or account setup'
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $backupFailure.Root '.windows-deploy-ready.json'))) 'failed deployment retained a stale readiness stamp'
 
     $postgresPreflightFailure = New-Fixture -Name 'postgres-preflight-failure'
     $fixtures += $postgresPreflightFailure
     Assert-True ((Invoke-Fixture $postgresPreflightFailure -NonInteractive -FailureStage 'postgres-preflight') -ne 0) 'missing PostgreSQL configuration unexpectedly succeeded'
-    Assert-True ((@(Get-Content -LiteralPath $postgresPreflightFailure.Events) -join '|') -eq 'runtime-setup|database-preflight') 'PostgreSQL configuration failure stopped services or ran database stages'
+    Assert-True ((@(Get-Content -LiteralPath $postgresPreflightFailure.Events) -join '|') -eq 'runtime-setup|postgres-init:environment=true|database-preflight') 'PostgreSQL configuration failure stopped services or ran database stages'
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $postgresPreflightFailure.Root '.windows-deploy-ready.json'))) 'PostgreSQL configuration failure published readiness'
 
     $accountPending = New-Fixture -Name 'account-pending'
@@ -125,6 +135,11 @@ try {
     Write-FixtureFile (Join-Path $accountPending.Base 'accountpending.marker') 'pending'
     Assert-True ((Invoke-Fixture $accountPending -NonInteractive) -ne 0) 'pending administrator unexpectedly published deployment readiness'
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $accountPending.Root '.windows-deploy-ready.json'))) 'pending administrator published readiness'
+
+    $autoStart = New-Fixture -Name 'auto-start'
+    $fixtures += $autoStart
+    Assert-True ((Invoke-Fixture $autoStart -NonInteractive -StartAfterDeploy) -eq 0) 'double-click launch deployment failed'
+    Assert-True ((@(Get-Content -LiteralPath $autoStart.Events) -join '|') -match 'account-setup:--non-interactive\|start$') 'requested automatic launch did not run only after account setup'
 
     Write-Host 'Windows deployment account lifecycle self-test passed.' -ForegroundColor Green
     exit 0

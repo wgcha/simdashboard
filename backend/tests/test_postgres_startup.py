@@ -565,7 +565,7 @@ def test_start_scripts_use_connection_preflight_and_readiness_cleanup_without_mi
     assert "& $startScript -DatabaseBackend postgresql" in postgres_start
     assert "upgrade_postgres_schema.py" not in general_start
     assert "check_database_startup_preflight.py" in general_start
-    assert general_start.index("check_database_startup_preflight.py") < general_start.index("Checking the existing PostgreSQL connection")
+    assert general_start.index("check_database_startup_preflight.py") < general_start.index("check_postgres_schema.py")
     assert general_start.index("check_database_startup_preflight.py") < general_start.index("if (Test-Path -LiteralPath $PidFile)")
     assert "Get-CurrentBackendDatabaseBackend" in general_start
     assert "Run stop.ps1 and start again with the intended database configuration" in general_start
@@ -575,7 +575,8 @@ def test_start_scripts_use_connection_preflight_and_readiness_cleanup_without_mi
     assert "Remove-Item -LiteralPath $PidFile" in general_start
     assert "--strictPort" in general_start
     assert "[int]$BackendPort = 8000" in general_start
-    assert "[int]$FrontendPort = 5173" in general_start
+    assert "[int]$FrontendPort = 80" in general_start
+    assert "if (-not $PSBoundParameters.ContainsKey('FrontendPort'))" in general_start
     assert "Test-LocalPortInUse -Port $BackendPort" in general_start
     assert "Test-LocalPortInUse -Port $FrontendPort" in general_start
     assert '$env:VITE_API_TARGET = "http://127.0.0.1:$BackendPort"' in general_start
@@ -591,8 +592,9 @@ def test_start_scripts_use_connection_preflight_and_readiness_cleanup_without_mi
     assert "if (-not $belongsToWorkspace) { return $false }" in stop_script
     assert "unverified listener is never terminated" in stop_script
     assert "could not be verified as an Analysis Canvas server" in stop_script
-    assert "[int]$BackendPort = 0" in stop_script
-    assert "[int]$FrontendPort = 0" in stop_script
+    assert "$script:BackendPort = 8000" in stop_script
+    assert "$script:FrontendPort = 80" in stop_script
+    assert "Test-RecordedServerIdentity" in stop_script
     assert general_start.index("catch {") < general_start.index("Backend health database mismatch.")
     assert "process exited during readiness verification" in general_start
     assert "ANALYSIS_DATABASE_PREFLIGHT_COMPLETE" not in general_start

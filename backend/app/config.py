@@ -112,6 +112,23 @@ def media_storage_mode() -> MediaStorageMode:
     return cast(MediaStorageMode, mode)
 
 
+def managed_assets_root() -> Path:
+    """Return the durable assets directory used by media and report templates.
+
+    Source checkouts retain ``backend/assets``.  Installers can set an
+    absolute physical state directory so release-directory replacement never
+    discards legacy media or uploaded report templates.
+    """
+    default = ROOT / "backend" / "assets"
+    raw = os.getenv("SIMDASH_ASSETS_ROOT")
+    root = Path(raw).expanduser() if raw else default
+    if not root.is_absolute():
+        raise RuntimeError("SIMDASH_ASSETS_ROOT는 절대 경로여야 합니다.")
+    # Do not resolve a configured path here: backup validation must still see
+    # and reject a junction/symlink instead of silently following it.
+    return root.absolute()
+
+
 def import_snapshot_settings(
     limits: ImportBundleLimits | None = None,
 ) -> ImportSnapshotSettings:

@@ -345,3 +345,18 @@
 - 상세: docs/lan-video-usability-followup.md. 실제 다른 직원 PC의 이름 확인/방화벽 통과는 미검증. 기존 미커밋 배포·계정 관련 변경은 이번 기능과 혼합해 푸시하지 않았다.
 
 - 후속 푸시: 기존 HEAD 실행기의 사용자 지정 포트·프로세스 소유 확인·준비 상태 검사를 유지하며 `/home`·포트80 기본값과 이름/IP 표시만 선별했다. 선별 실행기는 PowerShell 구문 검사와 격리 Windows 웹 설정 검사 통과. 별도 설치·계정·오프라인 배포 작업 및 환경 백업은 커밋에서 제외했다.
+
+## 2026-09-14 소스·폐쇄망 Windows 배포 계약 및 설치기 구현
+
+- 요청: PostgreSQL만 있는 소스 PC의 원클릭 최초 설치/기존 DB 업데이트와, Windows Server 2022 x64만 있는 폐쇄망의 설치 EXE를 같은 데이터 보존 정책으로 지원한다. 이후 소스 개발에도 같은 진입점과 정책을 유지한다.
+- Astra가 설계·통합, Terra가 소스 배포/영구 자산 경로/설정 동기화, Luna가 오프라인 설치기 초안, Sol이 서비스·ACL·DB 연결 검증 및 안전성 검수를 담당했다. 기존 및 동시 작업의 미커밋 변경을 보존했다.
+- deploy.bat은 런타임 준비 → 안전한 DB 분기 → 검증 백업 → migration → 계정 → 실행을 수행한다. 시작은 읽기 전용 스키마 검사만 수행하며 업데이트와 설치 실패를 숨기지 않는다. 시작·종료의 PID/서비스 소유권 검증을 복구했다.
+- 폐쇄망 빌더는 현재 소스, /home/ 정적 빌드, 고정 requirements.lock wheel, Python/PostgreSQL/Caddy/WinSW/VC++ 런타임과 라이선스를 묶고 ZIP/EXE/SHA-256을 생성한다. 정상 배포는 깨끗한 Git 상태를 요구한다. 현재 작업 트리는 기존 변경이 있으므로 -AllowDirty 개발 후보로 생성했다. 소스 저장만으로 서버가 바뀌지는 않으며, 매 릴리스의 새 빌드와 반입·실행이 필요하다.
+- 설치기는 최초/빈 DB/기존 DB를 구분하고, 기존 상태·계정·인증 키·첨부파일을 state 아래 보존한다. 기존 서비스 및 DB 연결의 대상 불일치, URL 쿼리의 대상 우회, 변조/누락/경로 이탈, 백업 실패를 차단한다. 버전별 실행 경로와 Windows 자동 서비스를 준비한다. 기존 PostgreSQL 메이저 업그레이드는 앱 업데이트와 분리한다.
+- 영구 SIMDASH_ASSETS_ROOT, 설정의 stage/sync, 비밀번호 인증용 사내 HTTP 프로필을 추가했다. HTTPS 프로필의 secure-cookie 요건은 유지했다. Inno는 64-bit install mode로 x64 PowerShell을 실행한다. 근거: https://raw.githubusercontent.com/jrsoftware/issrc/is-6_7_3/ISHelp/isxfunc.xml (Exec).
+- AGENTS.md, 배포 정책·시나리오·ADR 0005·소스/폐쇄망 사용자 문서를 갱신했다. 매 push/PR에 Windows 배포 계약 및 오프라인 wheel 설치를 검사하는 CI를 추가했다. 원격 CI 자체 실행은 이 작업에서 수행하지 않았다.
+- 검증: 핵심 Python 테스트 177 passed / 2 skipped, 영구 미디어/템플릿 경로 2 passed. PowerShell 배포/초기화/업데이트/프로세스 소유권/오프라인 manifest/DB 연결·서비스 검사가 통과했다. 34개 배포 PowerShell 구문과 diff 검사를 통과했다. 프런트엔드 재빌드, 새 venv의 전체 wheel 오프라인 설치·pip check·네이티브 import를 통과했다. 실제 Caddy와 가짜 API로 HTML·JS/CSS 파일·API·미디어·리다이렉트·SPA 라우팅을 검증했다.
+- 산출물: output/offline-release/simworkbench-windows-offline-20260914-preview.exe (146,677,912 bytes) 및 ZIP/각 SHA-256 파일. EXE SHA-256: ff41787ce8229ac1d08a3a6d70f90dd82c2d086044d0271072306a69c9f87d9d. dev1/dev2는 이전 초안이므로 배포 후보로 사용하지 않는다.
+- 런타임: Python 3.12.13, PostgreSQL 17.11, Caddy 2.11.4, WinSW 2.12.0 NET461, 공식 서명 확인한 VC++ redist, Inno Setup 6.7.3. 라이선스/런타임 파일은 패키지 manifest 해시로 추적한다.
+- 한계: 실제 사용자 DB/Windows 서비스에는 설치하지 않았다. 네트워크를 차단한 깨끗한 Server 2022 VM에서 신규 설치 → 업무 데이터 생성 → 업데이트 → 재부팅 자동 시작은 미검증이다. 이 산출물은 해당 실기 수락 검증용 개발 후보이며 운영 인증 릴리스가 아니다. 관련 없는 전체 미디어/보고서 테스트의 기존 인코딩·OpenAPI·인증 실패를 이 작업의 통과 결과에 포함하지 않았다.
+- 최종 패키지 확인: 설치기의 실제 manifest 검증 함수로 7,266개 파일 해시를 검사했고 현재 소스/프런트엔드 파일 542개의 일치를 확인했다. 릴리스 안에 운영 데이터/비밀 상태가 없음을 검사했다.

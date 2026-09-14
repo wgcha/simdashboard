@@ -85,6 +85,7 @@ function Invoke-ChildPowerShell {
 }
 
 function Get-ServerPortArguments {
+    param([switch]$ForStart)
     $pidPath = Join-Path $Root '.server-pids.json'
     if (-not (Test-Path -LiteralPath $pidPath -PathType Leaf)) {
         return @()
@@ -111,6 +112,12 @@ function Get-ServerPortArguments {
         $port = 0
         if (-not [int]::TryParse([string]$record.port, [ref]$port) -or $port -lt 1 -or $port -gt 65535) {
             throw "The existing .server-pids.json has an invalid $($entry.Name) port; it was preserved. Review it before updating."
+        }
+        # The old default was 5173. Migrate only legacy default records;
+        # custom ports and explicit 5173 records from the new launcher survive.
+        if ($ForStart -and $entry.Name -eq 'frontend' -and $port -eq 5173 -and
+            -not ($record.PSObject.Properties.Name -contains 'basePath')) {
+            $port = 80
         }
         $arguments += @($entry.Parameter, [string]$port)
     }
@@ -194,6 +201,7 @@ try {
     # Read this before stop.ps1 can remove the metadata. Only valid, explicitly
     # recorded ports are forwarded; defaults remain owned by stop/start.ps1.
     $portArguments = Get-ServerPortArguments
+    $restartPortArguments = Get-ServerPortArguments -ForStart
     Write-UpdateLog ("PORT_ARGUMENTS_COUNT={0}" -f $portArguments.Count)
 
     Write-Stage 'stop' 'Stopping the current application'
@@ -232,7 +240,7 @@ try {
 
     Write-Stage 'start' 'Starting the updated application'
     $startArguments = @()
-    $startArguments += $portArguments
+    $startArguments += $restartPortArguments
     if ($NoBrowser) { $startArguments += '-NoBrowser' }
     if ($NetworkMode) { $startArguments += @('-NetworkMode', $NetworkMode) }
     Invoke-ChildPowerShell -ScriptPath (Join-Path $Root 'start.ps1') -Arguments $startArguments

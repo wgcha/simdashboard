@@ -5,6 +5,9 @@ param(
     # normal interactive deployment deliberately prompts for the first server
     # administrator when one is required.
     [switch]$NonInteractive,
+    # deploy.ps1 stays preparation-first for update.ps1 and automation.  The
+    # double-click deploy.bat wrapper opts in to the first launch.
+    [switch]$StartAfterDeploy,
     [ValidateSet('auto', 'direct', 'proxy')]
     [string]$NetworkMode = ''
 )
@@ -15,7 +18,8 @@ $RecoveryMarker = Join-Path $Root '.setup-recovery-required.json'
 $EnvFile = Join-Path $Root '.env'
 $EnvExample = Join-Path $Root '.env.example'
 $ReadyStamp = Join-Path $Root '.windows-deploy-ready.json'
-$Setup = Join-Path $Root 'setup.ps1'
+$RuntimePreparation = Join-Path $Root 'scripts\windows\prepare-source-environment.ps1'
+$PostgresInitializer = Join-Path $Root 'scripts\windows\initialize-source-postgres.ps1'
 $envCreated = $false
 
 function Set-NewEnvironmentOwnerOnlyAcl {
@@ -33,6 +37,28 @@ function Set-NewEnvironmentOwnerOnlyAcl {
     )
     $acl.SetAccessRule($ownerRule)
     Set-Acl -LiteralPath $Path -AclObject $acl -ErrorAction Stop
+}
+
+function Set-NewEnvironmentPostgresSelection {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $lines = Get-Content -LiteralPath $Path -Encoding UTF8
+    $updated = $false
+    $output = foreach ($line in $lines) {
+        if ($line -match '^\s*ANALYSIS_DB_BACKEND\s*=') {
+            $updated = $true
+            'ANALYSIS_DB_BACKEND=postgresql'
+        }
+        else { $line }
+    }
+    if (-not $updated) { $output += 'ANALYSIS_DB_BACKEND=postgresql' }
+    $temporary = "$Path.$PID.tmp"
+    try {
+        $output | Set-Content -LiteralPath $temporary -Encoding UTF8
+        Set-NewEnvironmentOwnerOnlyAcl -Path $temporary
+        Move-Item -LiteralPath $temporary -Destination $Path -Force
+    }
+    finally { Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue }
 }
 
 function Invoke-DeploymentPython {
@@ -76,7 +102,9 @@ try {
     if (Test-Path -LiteralPath $RecoveryMarker -PathType Leaf) {
         throw 'A previous database replacement needs manual recovery. Review .setup-recovery-required.json before deploying again.'
     }
-    if (-not (Test-Path -LiteralPath $Setup -PathType Leaf)) { throw 'setup.ps1 was not found. Extract the complete source archive and retry.' }
+    if (-not (Test-Path -LiteralPath $RuntimePreparation -PathType Leaf) -or -not (Test-Path -LiteralPath $PostgresInitializer -PathType Leaf)) {
+        throw 'The source deployment preparation scripts were not found. Extract the complete source archive and retry.'
+    }
     if (-not (Test-Path -LiteralPath $EnvFile -PathType Leaf)) {
         $legacyBackendEnv = Join-Path $Root 'backend\.env'
         if (Test-Path -LiteralPath $legacyBackendEnv -PathType Leaf) {
@@ -94,8 +122,12 @@ try {
             if (-not (Test-Path -LiteralPath $EnvExample -PathType Leaf)) { throw '.env.example was not found; the source archive is incomplete.' }
             Copy-Item -LiteralPath $EnvExample -Destination $EnvFile -ErrorAction Stop
             Set-NewEnvironmentOwnerOnlyAcl -Path $EnvFile
+            # Source deployment is PostgreSQL-first.  This avoids leaving a
+            # copied development DuckDB default behind when an initial runtime
+            # download or PostgreSQL provision attempt has to be retried.
+            Set-NewEnvironmentPostgresSelection -Path $EnvFile
             $envCreated = $true
-            Write-Host 'Created .env from .env.example because no local environment file existed.' -ForegroundColor Cyan
+            Write-Host 'Created a PostgreSQL source-deployment .env from .env.example because no local environment file existed.' -ForegroundColor Cyan
         }
     }
     else { Write-Host 'Preserving the existing .env and database configuration.' -ForegroundColor Yellow }
@@ -105,11 +137,19 @@ try {
     Import-Module $networkModule -Force
     $networkSummary = if ($NetworkMode) { Initialize-DeploymentNetwork -Mode $NetworkMode } else { Initialize-DeploymentNetwork }
 
-    $setupArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Setup)
-    if ($SkipFrontendBuild) { $setupArgs += '-SkipFrontendBuild' }
-    if ($NetworkMode) { $setupArgs += @('-NetworkMode', $NetworkMode) }
-    & powershell.exe @setupArgs
-    if ($LASTEXITCODE -ne 0) { throw "Environment setup failed (exit code $LASTEXITCODE)." }
+    $runtimeArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $RuntimePreparation)
+    if ($SkipFrontendBuild) { $runtimeArgs += '-SkipFrontendBuild' }
+    if ($NetworkMode) { $runtimeArgs += @('-NetworkMode', $NetworkMode) }
+    Write-Host 'Preparing the pinned source runtime and application dependencies...' -ForegroundColor Cyan
+    & powershell.exe @runtimeArgs
+    if ($LASTEXITCODE -ne 0) { throw "Source runtime preparation failed (exit code $LASTEXITCODE)." }
+
+    $postgresArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $PostgresInitializer)
+    if ($envCreated) { $postgresArgs += '-EnvironmentCreated' }
+    if ($NonInteractive) { $postgresArgs += '-NonInteractive' }
+    Write-Host 'Selecting the safe PostgreSQL initialization path...' -ForegroundColor Cyan
+    & powershell.exe @postgresArgs
+    if ($LASTEXITCODE -ne 0) { throw "PostgreSQL initialization failed (exit code $LASTEXITCODE). Existing database data was not replaced." }
 
     Import-Module (Join-Path $Root 'scripts\windows\Runtime.psm1') -Force
     $versions = Get-ExpectedRuntimeVersions
@@ -171,8 +211,17 @@ try {
     finally { Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue }
 
     Write-Host "`nWindows deployment environment is ready." -ForegroundColor Green
-    Write-Host 'Start the application with start.bat or .\start.ps1.'
-    Write-Host 'The default browser opens http://127.0.0.1:5173/workspace/overview after both services report healthy.'
+    if ($StartAfterDeploy) {
+        $startScript = Join-Path $Root 'start.ps1'
+        if (-not (Test-Path -LiteralPath $startScript -PathType Leaf)) { throw 'start.ps1 was not found. The application was not started.' }
+        Write-Host 'Starting the prepared application...' -ForegroundColor Cyan
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $startScript
+        if ($LASTEXITCODE -ne 0) { throw "Application start failed (exit code $LASTEXITCODE). The deployment remains prepared for retry." }
+    }
+    else {
+        Write-Host 'Start the application with start.bat or .\start.ps1.'
+    }
+    Write-Host 'The default browser opens http://127.0.0.1/home after both services report healthy.'
 }
 catch {
     Write-Host "`n[ERROR] $($_.Exception.Message)" -ForegroundColor Red
