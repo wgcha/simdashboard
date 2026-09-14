@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ComponentType, type MouseEvent } from 'react'
+import { Link } from 'react-router-dom'
 import {
   Activity,
   BarChart3,
@@ -153,7 +154,7 @@ export function AppSidebar({
       setMobileMenuOpen(false)
       onNavigate(menu.id)
     }
-    return <a key={menu.id} aria-label={label} aria-current={activePage === menu.id ? 'page' : undefined} title={label} className={'nav-link ' + extraClass + (activePage === menu.id ? ' active' : '')} href={workspacePathForMenu(menu.id)} onClick={navigate} onMouseEnter={() => onPreloadPage(menu.id)} onFocus={() => onPreloadPage(menu.id)}><Icon /><span>{label}</span></a>
+    return <Link key={menu.id} aria-label={label} aria-current={activePage === menu.id ? 'page' : undefined} title={label} className={'nav-link ' + extraClass + (activePage === menu.id ? ' active' : '')} to={workspacePathForMenu(menu.id)} onClick={navigate} onMouseEnter={() => onPreloadPage(menu.id)} onFocus={() => onPreloadPage(menu.id)}><Icon /><span>{label}</span></Link>
   }
 
   return <aside className={`sidebar ${mobileMenuOpen ? 'mobile-menu-open' : ''}`} aria-label="주 메뉴">

@@ -52,6 +52,23 @@ async function getFreePort() {
   return port
 }
 
+function startVite(frontendPort, backendPort, basePath) {
+  const viteProcess = spawn(process.execPath, [viteBin, '--host', '0.0.0.0', '--port', String(frontendPort), '--strictPort', '--configLoader', 'runner'], {
+    cwd: frontendDir,
+    env: {
+      ...process.env,
+      VITE_API_TARGET: `http://127.0.0.1:${backendPort}`,
+      ...(basePath ? { VITE_APP_BASE_PATH: basePath } : { VITE_APP_BASE_PATH: '' }),
+      VITE_ALLOWED_HOSTS: 'explicit-lan-test.local',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  let output = ''
+  viteProcess.stdout.on('data', (chunk) => { output += chunk.toString() })
+  viteProcess.stderr.on('data', (chunk) => { output += chunk.toString() })
+  return { process: viteProcess, get output() { return output } }
+}
+
 function request(req, res) {
   if (req.url === '/api/health') {
     res.writeHead(200, { 'content-type': 'application/json' })
@@ -88,22 +105,31 @@ async function main() {
   if (!existsSync(viteBin)) throw new Error(`Vite was not found: ${viteBin}`)
 
   const backend = http.createServer(request)
-  let viteProcess
+  const viteProcesses = []
   try {
     const backendPort = await listen(backend, '127.0.0.1')
     const frontendPort = await getFreePort()
-    viteProcess = spawn(process.execPath, [viteBin, '--host', '0.0.0.0', '--port', String(frontendPort), '--strictPort', '--configLoader', 'runner'], {
-      cwd: frontendDir,
-      env: { ...process.env, VITE_API_TARGET: `http://127.0.0.1:${backendPort}` },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
-    let viteOutput = ''
-    viteProcess.stdout.on('data', (chunk) => { viteOutput += chunk.toString() })
-    viteProcess.stderr.on('data', (chunk) => { viteOutput += chunk.toString() })
+    const baseVite = startVite(frontendPort, backendPort, '/home/')
+    viteProcesses.push(baseVite.process)
 
     const origin = `http://${lanAddress}:${frontendPort}`
-    const page = await waitFor(`${origin}/`)
+    const baseOrigin = `${origin}/home`
+    await waitFor(`${baseOrigin}/`)
+    const bareBase = await fetch(`${baseOrigin}?from=bare`, { headers: { accept: 'text/html' }, redirect: 'manual' })
+    if (bareBase.status !== 307 || bareBase.headers.get('location') !== '/home/?from=bare') throw new Error('LAN bare base route did not redirect to /home/ while preserving the query')
+    const page = await waitFor(`${baseOrigin}/`)
     if (!page.ok || !(await page.text()).includes('<title>')) throw new Error('LAN HTML request did not return the Vite page')
+
+    const nestedPage = await fetch(`${baseOrigin}/workspace/data`)
+    if (!nestedPage.ok || !(await nestedPage.text()).includes('<title>')) throw new Error('LAN nested base route did not return the Vite page')
+    const baseHtml = await (await fetch(`${baseOrigin}/`)).text()
+    if (!baseHtml.includes('/home/')) throw new Error('LAN base route did not emit /home/ asset URLs')
+
+    const hostname = os.hostname().trim().toLowerCase()
+    const hostnamePage = await fetch(`${origin}/home/`, { headers: { host: `${hostname}:${frontendPort}` } })
+    if (!hostnamePage.ok || !(await hostnamePage.text()).includes('<title>')) throw new Error('LAN hostname allowlist did not accept the machine hostname')
+    const explicitHostPage = await fetch(`${origin}/home/`, { headers: { host: `explicit-lan-test.local:${frontendPort}` } })
+    if (!explicitHostPage.ok || !(await explicitHostPage.text()).includes('<title>')) throw new Error('LAN explicit host allowlist did not accept the configured hostname')
 
     const health = await fetch(`${origin}/api/health`)
     if (!health.ok || (await health.json()).via !== 'loopback-stub') throw new Error('LAN /api proxy did not reach the loopback backend')
@@ -117,10 +143,19 @@ async function main() {
     const asset = await fetch(`${origin}/assets/lan-proxy.txt`)
     if (!asset.ok || (await asset.text()) !== 'asset-through-proxy') throw new Error('LAN /assets proxy did not reach the loopback backend')
 
-    console.log(`LAN proxy self-test passed via ${lanAddress}:${frontendPort} (backend loopback 127.0.0.1:${backendPort})`)
-    if (viteOutput.includes('error')) console.warn(viteOutput)
+    const defaultFrontendPort = await getFreePort()
+    const defaultVite = startVite(defaultFrontendPort, backendPort)
+    viteProcesses.push(defaultVite.process)
+    const defaultOrigin = `http://${lanAddress}:${defaultFrontendPort}`
+    const defaultPage = await waitFor(`${defaultOrigin}/`)
+    if (!defaultPage.ok || !(await defaultPage.text()).includes('<title>')) throw new Error('LAN default root route did not return the Vite page')
+    const defaultNestedPage = await fetch(`${defaultOrigin}/workspace/data`)
+    if (!defaultNestedPage.ok || !(await defaultNestedPage.text()).includes('<title>')) throw new Error('LAN default nested route did not return the Vite page')
+
+    console.log(`LAN proxy self-test passed via ${lanAddress}:${frontendPort} (base /home/ and default /; backend loopback 127.0.0.1:${backendPort})`)
+    for (const vite of [baseVite, defaultVite]) if (vite.output.includes('error')) console.warn(vite.output)
   } finally {
-    if (viteProcess && !viteProcess.killed) viteProcess.kill()
+    for (const viteProcess of viteProcesses) if (!viteProcess.killed) viteProcess.kill()
     await new Promise((resolvePromise) => backend.close(() => resolvePromise()))
   }
 }

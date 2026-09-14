@@ -29,6 +29,37 @@
   background: #0a1c29;
 }
 
+.drop-video-dashboard .drop-video-media-heading-title,
+.drop-video-dashboard .drop-video-media-heading-meta {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.drop-video-dashboard .drop-video-media-heading-title b {
+  padding: 3px 6px;
+  border: 1px solid #31647a;
+  border-radius: 4px;
+  color: #66d9f7;
+  background: #102b3a;
+  font: 700 10px var(--font-mono);
+  white-space: nowrap;
+}
+
+.drop-video-dashboard .drop-video-media-heading-meta button {
+  flex: 0 0 auto;
+  min-height: 24px;
+  padding: 0 7px;
+  border: 1px solid #3d7185;
+  border-radius: 4px;
+  color: #d4f3fb;
+  background: #15394a;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
 .drop-video-dashboard .drop-video-media-heading strong {
   color: #cfe4ec;
   font-size: 12px;
@@ -96,6 +127,11 @@
     flex-direction: column;
     gap: 3px;
   }
+
+  .drop-video-dashboard .drop-video-media-heading-meta {
+    width: 100%;
+    justify-content: space-between;
+  }
 }
 
 .app-shell[data-theme='light'] .drop-video-dashboard .drop-video-media-heading {
@@ -105,6 +141,18 @@
 
 .app-shell[data-theme='light'] .drop-video-dashboard .drop-video-media-heading strong {
   color: #172033;
+}
+
+.app-shell[data-theme='light'] .drop-video-dashboard .drop-video-media-heading-title b {
+  border-color: #9bb9d8;
+  color: #034ea2;
+  background: #edf5ff;
+}
+
+.app-shell[data-theme='light'] .drop-video-dashboard .drop-video-media-heading-meta button {
+  border-color: #9bb9d8;
+  color: #034ea2;
+  background: #fff;
 }
 
 .app-shell[data-theme='light'] .drop-video-dashboard .drop-video-media-heading span,
@@ -152,3 +200,15 @@
 .drop-video-dashboard:not([data-video-columns='1']):not([data-video-columns='2']) .drop-video-mini-bar>header { grid-template-columns:minmax(0,1fr) auto; }
 .drop-video-dashboard:not([data-video-columns='1']):not([data-video-columns='2']) .drop-video-mini-bar>header span { grid-column:1 / -1; }
 .drop-video-dashboard .drop-video-mini-bar>header strong { min-width:0; overflow-wrap:anywhere; }
+
+@media (min-width:1800px) and (min-height:1100px) {
+  dialog.widget-video_grid:modal .drop-video-dashboard[data-video-dense='true'] .drop-video-grid {
+    grid-template-rows:repeat(var(--video-rows, 3),minmax(260px,1fr));
+    align-content:stretch;
+  }
+  dialog.widget-video_grid:modal .drop-video-dashboard[data-video-dense='true'] .drop-video-mini-evaluations {
+    display:grid;
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:8px;
+  }
+}

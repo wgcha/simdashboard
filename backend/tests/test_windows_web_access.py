@@ -13,7 +13,7 @@ pytestmark = pytest.mark.unit
 @pytest.fixture
 def isolated_config(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(windows_web_access, 'ROOT', tmp_path)
-    for name in ('WINDOWS_WEB_HOST', 'AUTH_MODE', 'AUTH_COOKIE_SECURE', 'DATABASE_URL', 'AUTH_SECRET_KEY'):
+    for name in ('WINDOWS_WEB_HOST', 'WINDOWS_WEB_BASE_PATH', 'AUTH_MODE', 'AUTH_COOKIE_SECURE', 'DATABASE_URL', 'AUTH_SECRET_KEY'):
         # Track even previously absent keys so dotenv additions are undone.
         monkeypatch.setenv(name, '')
         monkeypatch.delenv(name)
@@ -31,14 +31,18 @@ def invoke(monkeypatch, capsys, *args):
 def test_unconfigured_installation_stays_local(isolated_config, monkeypatch, capsys):
     code, output, error = invoke(monkeypatch, capsys)
     assert code == 0 and not error
-    assert json.loads(output) == {'host': '127.0.0.1', 'mode': 'local'}
+    assert json.loads(output) == {
+        'host': '127.0.0.1', 'mode': 'local', 'frontend_port': 80, 'app_base_path': '/home/'
+    }
 
 
 def test_lan_configuration_can_be_read_before_initial_admin_setup(isolated_config, monkeypatch, capsys):
     (isolated_config / '.env').write_text('WINDOWS_WEB_HOST=0.0.0.0\nAUTH_MODE=disabled\n')
     code, output, error = invoke(monkeypatch, capsys)
     assert code == 0 and not error
-    assert json.loads(output) == {'host': '0.0.0.0', 'mode': 'lan'}
+    assert json.loads(output) == {
+        'host': '0.0.0.0', 'mode': 'lan', 'frontend_port': 80, 'app_base_path': '/home/'
+    }
 
 
 @pytest.mark.parametrize('mode', ['disabled', 'unknown', ''])
@@ -89,7 +93,9 @@ def test_process_then_root_then_backend_env_precedence_preserves_files(isolated_
     assert code == 0 and json.loads(output)['mode'] == 'local'
     monkeypatch.delenv('WINDOWS_WEB_HOST')
     code, output, _ = invoke(monkeypatch, capsys)
-    assert code == 0 and json.loads(output) == {'host': '0.0.0.0', 'mode': 'lan'}
+    assert code == 0 and json.loads(output) == {
+        'host': '0.0.0.0', 'mode': 'lan', 'frontend_port': 80, 'app_base_path': '/home/'
+    }
     assert 'synthetic-private' not in output
     assert originals == (root_env.read_bytes(), backend_env.read_bytes())
 
@@ -100,7 +106,46 @@ def test_backend_only_environment_is_supported(isolated_config, monkeypatch, cap
     assert code == 0 and json.loads(output)['mode'] == 'lan'
 
 
+@pytest.mark.parametrize('mode', ['password', 'oidc'])
+def test_authenticated_windows_installation_defaults_to_lan_without_host_setting(isolated_config, monkeypatch, capsys, mode):
+    monkeypatch.setenv('AUTH_MODE', mode)
+    code, output, error = invoke(monkeypatch, capsys, '--check-auth')
+    assert code == 0 and not error
+    assert json.loads(output)['host'] == '0.0.0.0'
+
+
+def test_explicit_loopback_overrides_authenticated_lan_default(isolated_config, monkeypatch, capsys):
+    monkeypatch.setenv('AUTH_MODE', 'password')
+    monkeypatch.setenv('WINDOWS_WEB_HOST', '127.0.0.1')
+    monkeypatch.setenv('AUTH_COOKIE_SECURE', 'true')
+    code, output, error = invoke(monkeypatch, capsys, '--check-auth')
+    assert code == 0 and not error
+    assert json.loads(output)['mode'] == 'local'
+
+
 def test_windows_utf8_bom_preserves_first_setting(isolated_config, monkeypatch, capsys):
     (isolated_config / '.env').write_text('WINDOWS_WEB_HOST=0.0.0.0\nAUTH_MODE=password\n', encoding='utf-8-sig')
     code, output, _ = invoke(monkeypatch, capsys, '--check-auth')
     assert code == 0 and json.loads(output)['mode'] == 'lan'
+
+
+def test_custom_base_path_is_returned_without_exposing_other_settings(isolated_config, monkeypatch, capsys):
+    monkeypatch.setenv('WINDOWS_WEB_BASE_PATH', '/engineering-workbench')
+    code, output, error = invoke(monkeypatch, capsys)
+    assert code == 0 and not error
+    assert json.loads(output)['app_base_path'] == '/engineering-workbench/'
+
+
+def test_root_base_path_preserves_existing_root_deployments(isolated_config, monkeypatch, capsys):
+    monkeypatch.setenv('WINDOWS_WEB_BASE_PATH', '/')
+    code, output, error = invoke(monkeypatch, capsys)
+    assert code == 0 and not error
+    assert json.loads(output)['app_base_path'] == '/'
+
+
+@pytest.mark.parametrize('base_path', ['workbench/', '/./workbench/', '/../workbench/', '/work bench/', '/workbench//', '/workbench/?next=x'])
+def test_invalid_base_path_is_rejected_without_echoing_input(isolated_config, monkeypatch, capsys, base_path):
+    monkeypatch.setenv('WINDOWS_WEB_BASE_PATH', base_path)
+    code, output, error = invoke(monkeypatch, capsys)
+    assert code != 0 and not output
+    assert base_path not in error

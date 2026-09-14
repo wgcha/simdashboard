@@ -61,7 +61,7 @@ export function WidgetFocusFrame({ children, className, customFontSize, editMode
         {editMode && <GripVertical />}
         <div>{editMode && <span className="widget-kicker">{type.replace('_', ' ')}</span>}<h3 id={titleId}>{title}</h3></div>
       </div>
-      {editMode ? <div className="widget-edit-actions"><button aria-label={`${title} 설정`} onClick={onConfigure}><Settings2 /></button><button aria-label={`${title} 삭제`} onClick={onRemove}><X /></button></div> : isFocused ? <button ref={closeButtonRef} className="widget-focus-button" type="button" aria-label={`${title} 원래 크기로`} onClick={collapse}><Minimize2 /><span>원래 크기</span></button> : <button ref={expandButtonRef} className="widget-focus-button" type="button" aria-label={`${title} 확대 보기`} onClick={expand}><Maximize2 /><span>확대 보기</span></button>}
+      {editMode ? <div className="widget-edit-actions"><button className={type === 'video_grid' ? 'widget-video-configure' : undefined} aria-label={`${title} 설정`} onClick={onConfigure}><Settings2 />{type === 'video_grid' && <span>영상 배치</span>}</button><button aria-label={`${title} 삭제`} onClick={onRemove}><X /></button></div> : isFocused ? <button ref={closeButtonRef} className="widget-focus-button" type="button" aria-label={`${title} 원래 크기로`} onClick={collapse}><Minimize2 /><span>원래 크기</span></button> : <button ref={expandButtonRef} className="widget-focus-button" type="button" aria-label={`${title} 확대 보기`} onClick={expand}><Maximize2 /><span>확대 보기</span></button>}
     </header>
     <div className="widget-body">{children}</div>
   </dialog>

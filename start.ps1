@@ -146,7 +146,7 @@ function Test-LocalPortInUse([int]$Port) {
 function Test-CurrentServerEndpoint([string]$Role, [int]$Port) {
     try {
         if ($Role -eq 'frontend') {
-            $response = Invoke-LocalHttp -Uri "http://127.0.0.1:$Port/" -TimeoutMilliseconds 2000
+            $response = Invoke-LocalHttp -Uri "http://127.0.0.1:$Port$script:appBasePath" -TimeoutMilliseconds 2000
             return $response.StatusCode -eq 200 -and $response.Content -match '<title>\s*VD simulation workbench\s*</title>' -and $response.Content -match '/src/main\.tsx'
         }
         return (Get-CurrentBackendDatabaseBackend -Port $Port) -eq $script:databaseBackend
@@ -203,7 +203,14 @@ function Test-RecordedProcessExists($Record) {
     return $Record -and ($Record.PSObject.Properties.Name -contains 'id') -and (Get-Process -Id ([int]$Record.id) -ErrorAction SilentlyContinue)
 }
 
-function Get-LanDashboardUrls([int]$Port) {
+function Get-WebUrl([string]$Address, [int]$Port, [string]$Path) {
+    $normalizedPath = if ([string]::IsNullOrWhiteSpace($Path)) { '/' } elseif ($Path.StartsWith('/')) { $Path } else { "/$Path" }
+    if (-not $normalizedPath.EndsWith('/')) { $normalizedPath += '/' }
+    $portSuffix = if ($Port -eq 80) { '' } else { ":$Port" }
+    return "http://$Address$portSuffix$normalizedPath"
+}
+
+function Get-LanDashboardUrls([int]$Port, [string]$BasePath) {
     $addresses = @()
     if (Get-Command Get-NetIPAddress -ErrorAction SilentlyContinue) {
         try {
@@ -220,23 +227,31 @@ function Get-LanDashboardUrls([int]$Port) {
         }
         catch { $addresses = @() }
     }
-    return @($addresses | ForEach-Object { "http://$_`:$Port/workspace/overview" })
+    return @($addresses | ForEach-Object { Get-WebUrl -Address $_ -Port $Port -Path $BasePath })
 }
 
-function Show-WebAccessUrls([int]$Port) {
+function Show-WebAccessUrls([int]$Port, [string]$BasePath) {
     if ($script:webAccessMode -ne 'lan') { return }
-    $lanUrls = Get-LanDashboardUrls -Port $Port
+    $computerUrl = Get-WebUrl -Address ([Environment]::MachineName) -Port $Port -Path $BasePath
+    $lanUrls = @(Get-LanDashboardUrls -Port $Port -BasePath $BasePath)
     if ($lanUrls.Count -eq 0) {
         Write-Warning 'LAN listener is enabled, but no active non-loopback IPv4 address was found.'
+        Write-Host "LAN dashboard URL (computer name): $computerUrl" -ForegroundColor Yellow
         return
     }
-    Write-Host 'LAN dashboard URLs (HTTP):' -ForegroundColor Yellow
+    Write-Host 'LAN dashboard URLs (computer name and IPv4):' -ForegroundColor Yellow
+    Write-Host "  $computerUrl"
     foreach ($lanUrl in $lanUrls) { Write-Host "  $lanUrl" }
 }
 
 function Test-FrontendHostRecord($Record, [string]$ExpectedHost) {
     return $Record -and ($Record.PSObject.Properties.Name -contains 'host') -and
         [string]::Equals([string]$Record.host, $ExpectedHost, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+function Test-FrontendBasePathRecord($Record, [string]$ExpectedBasePath) {
+    return $Record -and ($Record.PSObject.Properties.Name -contains 'basePath') -and
+        [string]::Equals([string]$Record.basePath, $ExpectedBasePath, [System.StringComparison]::Ordinal)
 }
 
 function Test-LanAuthenticationReadiness() {
@@ -269,6 +284,14 @@ if ($webAccess.host -notin @('127.0.0.1', '0.0.0.0') -or $webAccess.mode -notin 
 }
 $script:webAccessHost = [string]$webAccess.host
 $script:webAccessMode = [string]$webAccess.mode
+if (-not ($webAccess.PSObject.Properties.Name -contains 'frontend_port') -or -not ($webAccess.PSObject.Properties.Name -contains 'app_base_path')) {
+    throw 'Windows web access configuration is missing the frontend port or application base path.'
+}
+if (-not $PSBoundParameters.ContainsKey('FrontendPort')) { $FrontendPort = [int]$webAccess.frontend_port }
+$script:appBasePath = [string]$webAccess.app_base_path
+if ($FrontendPort -lt 1 -or $FrontendPort -gt 65535 -or [string]::IsNullOrWhiteSpace($script:appBasePath) -or -not $script:appBasePath.StartsWith('/')) {
+    throw 'Windows web access configuration returned an invalid frontend port or application base path.'
+}
 
 Push-Location $Backend
 try {
@@ -297,13 +320,14 @@ if (Test-Path -LiteralPath $PidFile) {
     $frontendRunning = Test-CurrentServerRecord $serverPids.frontend $FrontendPort 'frontend' $Node $Vite
     if ($backendRunning -and $frontendRunning) {
         Test-LanAuthenticationReadiness
-        if (-not (Test-FrontendHostRecord $serverPids.frontend $script:webAccessHost)) {
-            throw 'The requested web host changed, or existing PID metadata is from an older version. Run stop.ps1, then start.ps1 to apply the requested listener setting.'
+        if (-not (Test-FrontendHostRecord $serverPids.frontend $script:webAccessHost) -or
+            -not (Test-FrontendBasePathRecord $serverPids.frontend $script:appBasePath)) {
+            throw 'The requested web host or application base path changed, or PID metadata is from an older version. Run stop.ps1, then start.ps1 to apply the requested listener setting.'
         }
-        $dashboardUrl = "http://127.0.0.1:$FrontendPort/workspace/overview"
+        $dashboardUrl = Get-WebUrl -Address '127.0.0.1' -Port $FrontendPort -Path $script:appBasePath
         if (-not $NoBrowser) { Start-Process -FilePath $dashboardUrl }
         Write-Host "Analysis Canvas is already running. Dashboard: $dashboardUrl" -ForegroundColor Cyan
-        Show-WebAccessUrls -Port $FrontendPort
+        Show-WebAccessUrls -Port $FrontendPort -BasePath $script:appBasePath
         exit 0
     }
     if ((Test-RecordedProcessExists $serverPids.backend) -or (Test-RecordedProcessExists $serverPids.frontend)) {
@@ -337,6 +361,7 @@ if (Test-LocalPortInUse -Port $BackendPort) { throw "Backend port $BackendPort i
 if (Test-LocalPortInUse -Port $FrontendPort) { throw "Frontend port $FrontendPort is already in use." }
 
 $env:VITE_API_TARGET = "http://127.0.0.1:$BackendPort"
+$env:VITE_APP_BASE_PATH = $script:appBasePath
 $backendProcess = $null
 $frontendProcess = $null
 $temporaryPidFile = "$PidFile.tmp"
@@ -353,11 +378,11 @@ try {
         -WorkingDirectory $Frontend -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput (Join-Path $Frontend 'vite.log') `
         -RedirectStandardError (Join-Path $Frontend 'vite-error.log')
-    Wait-HttpReady -Name 'Frontend' -Role 'frontend' -Uri "http://127.0.0.1:$FrontendPort" -Process $frontendProcess -TimeoutSeconds $StartupTimeoutSeconds
+    Wait-HttpReady -Name 'Frontend' -Role 'frontend' -Uri "http://127.0.0.1:$FrontendPort$script:appBasePath" -Process $frontendProcess -TimeoutSeconds $StartupTimeoutSeconds
 
     @{
         backend = @{ id = $backendProcess.Id; port = $BackendPort; startedAtUtc = $backendProcess.StartTime.ToUniversalTime().ToString('o') }
-        frontend = @{ id = $frontendProcess.Id; port = $FrontendPort; host = $script:webAccessHost; startedAtUtc = $frontendProcess.StartTime.ToUniversalTime().ToString('o') }
+        frontend = @{ id = $frontendProcess.Id; port = $FrontendPort; host = $script:webAccessHost; basePath = $script:appBasePath; startedAtUtc = $frontendProcess.StartTime.ToUniversalTime().ToString('o') }
     } | ConvertTo-Json | Set-Content -LiteralPath $temporaryPidFile -Encoding UTF8
     Move-Item -LiteralPath $temporaryPidFile -Destination $PidFile -Force
 }
@@ -370,8 +395,8 @@ catch {
 }
 
 Write-Host 'Analysis Canvas started successfully.' -ForegroundColor Cyan
-$dashboardUrl = "http://127.0.0.1:$FrontendPort/workspace/overview"
+$dashboardUrl = Get-WebUrl -Address '127.0.0.1' -Port $FrontendPort -Path $script:appBasePath
 Write-Host "Dashboard: $dashboardUrl"
 Write-Host "API docs : http://127.0.0.1:$BackendPort/docs"
-Show-WebAccessUrls -Port $FrontendPort
+Show-WebAccessUrls -Port $FrontendPort -BasePath $script:appBasePath
 if (-not $NoBrowser) { Start-Process -FilePath $dashboardUrl }

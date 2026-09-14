@@ -24,7 +24,7 @@ function Get-StartFunction([string]$Name) {
 
 $fixture = Join-Path ([System.IO.Path]::GetTempPath()) ("analysis-canvas-web-access-" + [guid]::NewGuid().ToString('N'))
 $savedEnvironment = @{}
-foreach ($name in @('WINDOWS_WEB_HOST', 'AUTH_MODE', 'AUTH_COOKIE_SECURE')) {
+foreach ($name in @('WINDOWS_WEB_HOST', 'WINDOWS_WEB_BASE_PATH', 'AUTH_MODE', 'AUTH_COOKIE_SECURE')) {
     $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
     Remove-Item "Env:$name" -ErrorAction SilentlyContinue
 }
@@ -38,11 +38,13 @@ try {
     $local = (& $Python $helper | ConvertFrom-Json)
     Assert-True ($LASTEXITCODE -eq 0) 'default helper invocation should succeed.'
     Assert-True ($local.host -eq '127.0.0.1' -and $local.mode -eq 'local') 'default listener should be loopback/local.'
+    Assert-True ($local.frontend_port -eq 80 -and $local.app_base_path -eq '/home/') 'default web profile should use port 80 and /home/.'
 
     Set-Content -LiteralPath (Join-Path $fixture '.env') -Value @('WINDOWS_WEB_HOST=0.0.0.0', 'AUTH_MODE=password') -Encoding UTF8
     $lan = (& $Python $helper | ConvertFrom-Json)
     Assert-True ($LASTEXITCODE -eq 0) 'LAN host lookup should not require an account before setup.'
     Assert-True ($lan.host -eq '0.0.0.0' -and $lan.mode -eq 'lan') 'LAN listener metadata should be explicit.'
+    Assert-True ($lan.frontend_port -eq 80 -and $lan.app_base_path -eq '/home/') 'LAN URL profile should omit the port under /home/.'
     $null = & $Python $helper '--check-auth'
     Assert-True ($LASTEXITCODE -eq 0) 'password LAN should pass the settings-only authentication check.'
 
@@ -59,9 +61,13 @@ try {
     Assert-True ($LASTEXITCODE -ne 0) 'secure cookies must reject direct HTTP LAN guidance.'
 
     . (Get-StartFunction 'Test-FrontendHostRecord')
+    . (Get-StartFunction 'Test-FrontendBasePathRecord')
     Assert-True (Test-FrontendHostRecord ([pscustomobject]@{ host = '0.0.0.0' }) '0.0.0.0') 'matching frontend metadata should be accepted.'
     Assert-True (-not (Test-FrontendHostRecord ([pscustomobject]@{}) '0.0.0.0')) 'legacy frontend metadata without host must be rejected.'
     Assert-True (-not (Test-FrontendHostRecord ([pscustomobject]@{ host = '127.0.0.1' }) '0.0.0.0')) 'changed frontend host metadata must be rejected.'
+    Assert-True (Test-FrontendBasePathRecord ([pscustomobject]@{ basePath = '/home/' }) '/home/') 'matching frontend base-path metadata should be accepted.'
+    Assert-True (-not (Test-FrontendBasePathRecord ([pscustomobject]@{}) '/home/')) 'legacy frontend metadata without a base path must be rejected.'
+    Assert-True (-not (Test-FrontendBasePathRecord ([pscustomobject]@{ basePath = '/' }) '/home/')) 'changed frontend base-path metadata must be rejected.'
 
     function Get-NetIPAddress {
         [CmdletBinding()]
@@ -80,8 +86,11 @@ try {
         [pscustomobject]@{ Status = if ($InterfaceIndex -eq 5) { 'Down' } else { 'Up' } }
     }
     . (Get-StartFunction 'Get-LanDashboardUrls')
-    $urls = @(Get-LanDashboardUrls -Port 5199)
-    Assert-True ($urls.Count -eq 1 -and $urls[0] -eq 'http://192.168.20.15:5199/workspace/overview') 'LAN URLs must exclude loopback, APIPA, deprecated, and down interfaces.'
+    . (Get-StartFunction 'Get-WebUrl')
+    $urls = @(Get-LanDashboardUrls -Port 80 -BasePath '/home/')
+    Assert-True ($urls.Count -eq 1 -and $urls[0] -eq 'http://192.168.20.15/home/') 'LAN URLs must exclude loopback, APIPA, deprecated, and down interfaces and omit default HTTP port.'
+    Assert-True ((Get-WebUrl -Address 'SERVER-PC' -Port 80 -Path '/home/') -eq 'http://SERVER-PC/home/') 'server hostname URL must omit default HTTP port.'
+    Assert-True ((Get-WebUrl -Address '127.0.0.1' -Port 5199 -Path '/home/') -eq 'http://127.0.0.1:5199/home/') 'explicit frontend ports must remain usable.'
 
     Write-Host 'Windows web access self-test passed.' -ForegroundColor Green
 }

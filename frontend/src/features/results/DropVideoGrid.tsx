@@ -138,8 +138,8 @@ export function DropVideoGrid({ loadCaseId, pageSize = 20, columns = 2, rows = 2
       <DropVideoSummary result={result} selected={selectedVideo} onSelect={selectVideo} />
       <div className="drop-video-media-panel">
         <div className="drop-video-media-heading">
-          <strong>현재 표시 영상</strong>
-          <span>{localCardStart + 1}–{Math.min(localCardStart + layout.pageSize, result.videos.length)} / {result.videos.length} · 배치 {layout.columns}×{layout.rows} · 목록 {result.pagination.page} / {result.pagination.total_pages}</span>
+          <div className="drop-video-media-heading-title"><strong>현재 표시 영상</strong><b role="status">가로 {layout.columns} × 세로 {layout.rows}</b></div>
+          <div className="drop-video-media-heading-meta"><span>{localCardStart + 1}–{Math.min(localCardStart + layout.pageSize, result.videos.length)} / {result.videos.length} · 목록 {result.pagination.page} / {result.pagination.total_pages}</span></div>
         </div>
         <div className={`drop-video-grid drop-video-grid-${Math.min(4, visibleVideos.length)}`} aria-label="낙하 영상 Scene 목록">
         {visibleVideos.map((video) => <DropVideoCard
