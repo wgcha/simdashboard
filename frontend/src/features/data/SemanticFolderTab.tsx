@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { FolderOpen, RefreshCw, Save, Upload } from 'lucide-react'
 import { semanticContextApi, semanticMappingApi, type ContextLoadCase, type ContextProject, type ContextRequest, type FolderResponse, type SemanticBinding, type SemanticCatalog } from '../../shared/api/semanticMapping'
 import { AliasSuggestion } from './AliasSuggestion'
+import { SemanticReviewQueue } from './SemanticReviewQueue'
 import type { SemanticVocabularyEntry } from '../../shared/api/semanticVocabulary'
 
 type Message = { kind: 'success' | 'error' | 'info'; text: string }
@@ -21,6 +22,7 @@ export function FolderTab({ catalog, onMessage, busy, setBusy, onCatalog, scopeP
   const [cases, setCases] = useState<ContextLoadCase[]>([])
   const [file, setFile] = useState<File | null>(null)
   const [refreshResult, setRefreshResult] = useState<RefreshResult | null>(null)
+  const [reviewBinding, setReviewBinding] = useState<SemanticBinding | null>(null)
   const error = (reason: unknown) => onMessage({ kind: 'error', text: reason instanceof Error ? reason.message : '요청을 처리하지 못했습니다.' })
 
   useEffect(() => { let active = true; semanticContextApi.projects().then((value) => { if (active) setProjects(value) }).catch(error); return () => { active = false } }, [])
@@ -48,6 +50,7 @@ export function FolderTab({ catalog, onMessage, busy, setBusy, onCatalog, scopeP
     try {
       const saved = editing ? await semanticMappingApi.reconnectBinding(editing.id, { ...payload, expected_revision: editing.revision ?? 1 }) : await semanticMappingApi.createBinding(payload)
       onCatalog(await semanticMappingApi.catalog()); setEditing(saved)
+      if (reviewBinding?.id === saved.id) setReviewBinding(saved)
       onMessage({ kind: 'success', text: `폴더 연결을 저장했습니다 · 개정 ${saved.revision}. 이 폴더 바로 아래 파일을 처리합니다.` })
     } catch (reason) { error(reason) } finally { setBusy('') }
   }
@@ -108,8 +111,9 @@ export function FolderTab({ catalog, onMessage, busy, setBusy, onCatalog, scopeP
     <div className="semantic-card">
       <h2>다음 파일 처리</h2><p>단일 파일 등록은 위에서 선택한 대상·레시피·템플릿을 사용합니다.</p>
       <div className="folder-import-row"><input aria-label="등록할 결과 파일" type="file" accept=".csv,.json" onChange={(event) => setFile(event.target.files?.[0] ?? null)} /><button className="primary-button" onClick={() => void upload()} disabled={!!busy}><Upload />단일 파일 가져오기</button></div>
-      <div className="binding-list">{catalog.bindings.map((binding) => <article key={binding.id}><div><strong>{binding.relative_path}</strong><small>{projects.find((project) => project.id === binding.project_id)?.name ?? binding.project_id} · {binding.role} · 개정 {binding.revision}</small></div><button onClick={() => edit(binding)}>재연결·수정</button>{binding.load_case_id && <button onClick={() => void refresh(binding.id)} disabled={!!busy}><RefreshCw />새로고침</button>}</article>)}</div>
+      <div className="binding-list">{catalog.bindings.map((binding) => <article key={binding.id}><div><strong>{binding.relative_path}</strong><small>{projects.find((project) => project.id === binding.project_id)?.name ?? binding.project_id} · {binding.role} · 개정 {binding.revision}</small></div><button onClick={() => edit(binding)}>재연결·수정</button>{binding.load_case_id && <button onClick={() => void refresh(binding.id)} disabled={!!busy}><RefreshCw />새로고침</button>}{binding.load_case_id && <button onClick={() => setReviewBinding((current) => current?.id === binding.id ? null : binding)}>{reviewBinding?.id === binding.id ? '검토함 닫기' : '검토함'}</button>}</article>)}</div>
       {refreshResult && <table className="semantic-result-table"><thead><tr><th>파일 / 실행</th><th>처리 상태</th><th>상세</th></tr></thead><tbody>{refreshResult.results.map((result, index) => <tr key={index}><td>{result.relative_path ?? result.run_id}</td><td>{result.status}</td><td>{result.code ?? (result.detail ? JSON.stringify(result.detail) : '')}</td></tr>)}</tbody></table>}
+      {reviewBinding ? <SemanticReviewQueue binding={reviewBinding} catalog={catalog} canReview onMessage={onMessage} /> : null}
     </div>
   </div>
 }

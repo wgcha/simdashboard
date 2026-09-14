@@ -49,6 +49,8 @@ from .routers.managed_local_execution import router as managed_local_execution_r
 from .routers.voc import router as voc_router
 from .routers.semantic_mapping import router as semantic_mapping_router
 from .routers.semantic_activation import router as semantic_activation_router
+from .routers.semantic_review import router as semantic_review_router
+from .routers.semantic_impact import router as semantic_impact_router
 from .routers.semantic_vocabulary import router as semantic_vocabulary_router
 from .adapters.http.routers.projects import router as projects_router
 from .adapters.http.routers.reports import router as reports_router
@@ -112,6 +114,8 @@ app.include_router(result_folder_refresh_router)
 app.include_router(voc_router)
 app.include_router(semantic_mapping_router)
 app.include_router(semantic_activation_router)
+app.include_router(semantic_review_router)
+app.include_router(semantic_impact_router)
 app.include_router(semantic_vocabulary_router)
 
 

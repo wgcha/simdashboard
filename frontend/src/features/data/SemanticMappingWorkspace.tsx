@@ -1,6 +1,6 @@
 import { FolderTab } from './SemanticFolderTab'
 import { ResultsTab } from './SemanticResultsTab'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, Check, ChevronRight, FileJson, FolderOpen, Gauge, LineChart as LineChartIcon, LoaderCircle, Plus, RefreshCw, Save, Tags, Upload, X } from 'lucide-react'
 import {
   semanticMappingApi,
@@ -24,11 +24,14 @@ import { semanticContextApi, type ContextProject } from '../../shared/api/semant
 import { SemanticWidgetGrid } from '../../shared/components/semanticResults'
 import { AliasSuggestion } from './AliasSuggestion'
 import { SemanticVocabularyTab } from './SemanticVocabularyTab'
+import { SemanticImpactDialog } from './SemanticImpactDialog'
+import { semanticImpactApi, type ImpactResponse } from '../../shared/api/semanticImpact'
+import { createClientId } from '../../shared/identity/clientId'
 import './SemanticMappingWorkspace.css'
 
 const emptyRecipe = (format: SemanticFormat = 'csv'): SemanticRecipeDefinition => ({ format, delimiter: ',', encoding: 'utf-8-sig', header_row: 1, records_path: '', required_fields: [], mappings: [] })
 const defaultItem = (source = ''): SemanticItemDefinition => ({ key: source.toLowerCase().replace(/[^a-z0-9]+/gi, '_').replace(/^_|_$/g, '') || 'result_item', label: source || '새 결과 항목', kind: 'scalar', data_type: 'FLOAT', unit: '', dimensions: [] })
-const defaultWidget = (itemId = ''): SemanticWidgetDefinition => ({ id: `widget-${crypto.randomUUID?.() ?? Date.now()}`, type: 'kpi', title: '결과 값', item_ids: itemId ? [itemId] : [], filters: {}, decimals: 2 })
+const defaultWidget = (itemId = ''): SemanticWidgetDefinition => ({ id: `widget-${createClientId()}`, type: 'kpi', title: '결과 값', item_ids: itemId ? [itemId] : [], filters: {}, decimals: 2 })
 const definitionVersion = (definition: { version?: number; latest_version?: number }) => definition.version ?? definition.latest_version ?? 1
 
 type Tab = 'recipe' | 'folder' | 'results' | 'vocabulary'
@@ -53,6 +56,9 @@ export function SemanticMappingWorkspace({ onLegacy, isVocabularyAdmin = false, 
   const [busy, setBusy] = useState('')
   const [scopeProjects, setScopeProjects] = useState<ContextProject[]>([])
   const [vocabularyScopeProjectId, setVocabularyScopeProjectId] = useState(selectedProjectId)
+  const [impact, setImpact] = useState<ImpactResponse | null>(null)
+  const [impactPayload, setImpactPayload] = useState<Parameters<typeof semanticMappingApi.activateBundle>[0] | null>(null)
+  const impactGeneration = useRef(0)
 
   const loadCatalog = useCallback(async () => {
     setBusy('catalog')
@@ -61,7 +67,8 @@ export function SemanticMappingWorkspace({ onLegacy, isVocabularyAdmin = false, 
   useEffect(() => { void loadCatalog() }, [loadCatalog])
   useEffect(() => { let active = true; semanticContextApi.projects().then((items) => { if (active) setScopeProjects(items) }).catch(() => undefined); return () => { active = false } }, [])
   useEffect(() => { setVocabularyScopeProjectId(selectedProjectId) }, [selectedProjectId])
-  useEffect(() => { setPreview(null) }, [recipe, template])
+  useEffect(() => { setPreview(null); setImpact(null); setImpactPayload(null); impactGeneration.current += 1 }, [recipe, template])
+  useEffect(() => { impactGeneration.current += 1; setImpact(null); setImpactPayload(null) }, [catalog])
 
   const exportDefinitions = async () => {
     setBusy('export')
@@ -141,17 +148,35 @@ export function SemanticMappingWorkspace({ onLegacy, isVocabularyAdmin = false, 
     if (!selected) return
     setTemplateId(selected.id); setTemplateVersion(definitionVersion(selected)); setTemplateName(selected.name ?? selected.id); setTemplate(selected.definition); setMessage({ kind: 'info', text: `템플릿 ${selected.name ?? selected.id} v${definitionVersion(selected)}을 편집 중입니다.` })
   }
-  const activateBundle = async () => {
+  const bundlePayload = () => {
     if (!recipeId || !recipeVersion || !templateId || !templateVersion) { setMessage({ kind: 'error', text: '레시피와 템플릿을 각각 저장한 뒤 함께 활성화하세요.' }); return }
     if (!preview || preview.widgets.some((widget) => widget.status !== 'READY')) { setMessage({ kind: 'error', text: '샘플 미리보기에서 모든 위젯이 READY인지 확인한 뒤 활성화하세요.' }); return }
     const savedRecipe = catalog.recipes.find((item) => item.id === recipeId)
     const savedTemplate = catalog.templates.find((item) => item.id === templateId)
     if (JSON.stringify(savedRecipe?.definition) !== JSON.stringify(recipe) || JSON.stringify(savedTemplate?.definition) !== JSON.stringify(template)) { setMessage({ kind: 'error', text: '수정한 레시피와 템플릿을 먼저 저장하세요. 활성화는 저장된 버전에 적용됩니다.' }); return }
+    return { recipe_id: recipeId, recipe_version: recipeVersion, template_id: templateId, template_version: templateVersion, expected_recipe_active_version: savedRecipe?.active_version ?? null, expected_template_active_version: savedTemplate?.active_version ?? null }
+  }
+  const activateBundle = async () => {
+    const payload = bundlePayload()
+    if (!payload) return
+    const generation = ++impactGeneration.current
+    setImpact(null); setImpactPayload(payload); setBusy('impact-bundle')
+    try {
+      const result = await semanticImpactApi.previewBundle(payload)
+      if (generation === impactGeneration.current) setImpact(result)
+    } catch (reason) { if (generation === impactGeneration.current) setMessage({ kind: 'error', text: errorText(reason, '활성화 영향 미리보기를 불러오지 못했습니다.') }) } finally { if (generation === impactGeneration.current) setBusy('') }
+  }
+  const confirmBundleActivation = async () => {
+    const payload = bundlePayload()
+    if (!payload || !impactPayload || JSON.stringify(payload) !== JSON.stringify(impactPayload)) { setImpact(null); setImpactPayload(null); setMessage({ kind: 'error', text: '영향 미리보기 이후 레시피·템플릿 또는 활성 포인터가 바뀌었습니다. 최신 상태를 다시 조회하세요.' }); return }
+    if (!impact?.activation_allowed || impact.validation.status !== 'READY') return
+    const generation = ++impactGeneration.current
     setBusy('activate-bundle')
     try {
-      await semanticMappingApi.activateBundle({ recipe_id: recipeId, recipe_version: recipeVersion, template_id: templateId, template_version: templateVersion, expected_recipe_active_version: savedRecipe?.active_version ?? null, expected_template_active_version: savedTemplate?.active_version ?? null })
-      await loadCatalog(); setMessage({ kind: 'success', text: `레시피 v${recipeVersion}와 템플릿 v${templateVersion}을 함께 활성화했습니다.` })
-    } catch (reason) { setMessage({ kind: 'error', text: errorText(reason, '묶음 활성화에 실패했습니다. 다른 편집자의 활성 버전 변경 여부를 확인하세요.') }) } finally { setBusy('') }
+      await semanticMappingApi.activateBundle(impactPayload)
+      if (generation !== impactGeneration.current) return
+      setImpact(null); setImpactPayload(null); await loadCatalog(); setMessage({ kind: 'success', text: `레시피 v${impactPayload.recipe_version}와 템플릿 v${impactPayload.template_version}을 함께 활성화했습니다.` })
+    } catch (reason) { if (generation === impactGeneration.current) setMessage({ kind: 'error', text: errorText(reason, '묶음 활성화에 실패했습니다. 다른 편집자의 활성 버전 변경 여부를 확인하세요.') }) } finally { if (generation === impactGeneration.current) setBusy('') }
   }
   const runPreview = async () => {
     if (!sample) { setMessage({ kind: 'error', text: '먼저 샘플 CSV 또는 JSON을 선택하세요.' }); return }
@@ -167,6 +192,7 @@ export function SemanticMappingWorkspace({ onLegacy, isVocabularyAdmin = false, 
     {message ? <div className={`semantic-message ${message.kind}`} role={message.kind === 'error' ? 'alert' : 'status'}>{message.kind === 'error' ? <AlertTriangle /> : <Check />}{message.text}<button aria-label="메시지 닫기" onClick={() => setMessage(null)}><X /></button></div> : null}
     {tab === 'recipe' ? <RecipeTab sample={sample} selectSample={selectSample} inspect={inspect} recipe={recipe} setRecipe={setRecipe} catalog={catalog} updateMapping={updateMapping} addMapping={addMapping} removeMapping={removeMapping} createItem={createItem} busy={busy} recipeName={recipeName} setRecipeName={setRecipeName} saveRecipe={saveRecipe} activateBundle={() => void activateBundle()} template={template} setTemplate={setTemplate} templateName={templateName} setTemplateName={setTemplateName} saveTemplate={saveTemplate} preview={preview} runPreview={runPreview} recipeId={recipeId} templateId={templateId} selectRecipe={selectRecipe} selectTemplate={selectTemplate} vocabularyScopeProjectId={vocabularyScopeProjectId} setVocabularyScopeProjectId={setVocabularyScopeProjectId} scopeProjects={scopeProjects} /> : tab === 'folder' ? <FolderTab catalog={catalog} onMessage={setMessage} busy={busy} setBusy={setBusy} onCatalog={setCatalog} /> : tab === 'results' ? <ResultsTab catalog={catalog} onMessage={setMessage} /> : <SemanticVocabularyTab isAdmin={isVocabularyAdmin} selectedProjectId={selectedProjectId} />}
     {itemDialog ? <ItemDefinitionDialog value={itemDialog.definition} busy={busy === 'item-save'} onCancel={() => setItemDialog(null)} onSave={(definition) => { setBusy('item-save'); void saveItem(definition) }} /> : null}
+    {impact || busy === 'impact-bundle' ? <SemanticImpactDialog impact={impact} loading={busy === 'impact-bundle'} confirming={busy === 'activate-bundle'} onClose={() => { impactGeneration.current += 1; setImpact(null); setImpactPayload(null); setBusy('') }} onConfirm={() => void confirmBundleActivation()} /> : null}
   </section>
 }
 
@@ -183,7 +209,7 @@ function RecipeTabContent(props: {
   return <div className="semantic-flow">
     <div className="semantic-card sample-card"><div className="semantic-card-heading"><div><span>STEP 01 · INSPECT</span><h2>샘플 파일 업로드</h2></div><Upload /></div><label className="file-drop"><input type="file" accept=".csv,.json" onChange={(event) => void selectSample(event.target.files?.[0] ?? null)} /><Upload /><strong>{sample ? sample.name : 'CSV 또는 JSON을 선택하세요'}</strong><small>확장자보다 실제 내용과 필수 필드를 확인합니다.</small></label>{inspect ? <div className="inspect-summary"><span><b>{inspect.format.toUpperCase()}</b> 형식</span><span><b>{inspect.fields.length}</b> 필드</span><span><b>{inspect.rows.length}</b> 샘플 행</span></div> : null}<label className="vocabulary-scope-select">별칭 검색 프로젝트 (전역 기본)<select aria-label="별칭 검색 프로젝트" value={vocabularyScopeProjectId} onChange={(event) => setVocabularyScopeProjectId(event.target.value)}><option value="">전역만</option>{scopeProjects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select><small>RESULT_ITEM 후보는 이 프로젝트 범위부터 찾습니다. 레시피에는 범위가 저장되지 않습니다.</small></label></div>
     <div className="semantic-card"><div className="semantic-card-heading"><div><span>STEP 02 · DEFINE</span><h2>필드 → 결과 항목 · 단위</h2></div><button className="ghost-button" onClick={addMapping}><Plus /> 매핑 추가</button></div><div className="semantic-inline-fields"><label>파일 형식<select value={recipe.format} onChange={(event) => setRecipe({ ...recipe, format: event.target.value as SemanticFormat })}><option value="csv">CSV</option><option value="json">JSON</option></select></label><label>구분자<input value={recipe.delimiter} maxLength={1} onChange={(event) => setRecipe({ ...recipe, delimiter: event.target.value })} /></label><label>JSON records 경로<input value={recipe.records_path} placeholder="예: results.rows" onChange={(event) => setRecipe({ ...recipe, records_path: event.target.value })} /></label><label>인코딩<select value={recipe.encoding} onChange={(event) => setRecipe({ ...recipe, encoding: event.target.value })}><option value="utf-8-sig">UTF-8 BOM</option><option value="utf-8">UTF-8</option><option value="cp949">CP949</option><option value="utf-16">UTF-16</option></select></label><label>헤더 행<input type="number" min={1} max={100} value={recipe.header_row} onChange={(event) => setRecipe({ ...recipe, header_row: Number(event.target.value) })} /></label></div><div className="mapping-table"><div className="mapping-row mapping-head"><span>원본 필드</span><span>결과 항목</span><span>변환 단위</span><span>측정 위치 필드</span><span>결측·집계</span><span /></div>{recipe.mappings.length ? recipe.mappings.map((mapping, index) => <div className="mapping-row" key={index}><div className="mapping-source-with-alias"><input aria-label="원본 필드" list="semantic-source-fields" value={mapping.source} onChange={(event) => updateMapping(index, { source: event.target.value })} placeholder="필드 경로" /><AliasSuggestion term={mapping.source} targetKinds={['RESULT_ITEM']} scopeProjectId={vocabularyScopeProjectId || undefined} onSelect={(entry) => updateMapping(index, { result_item_id: entry.target_id })} /></div><div className="mapping-item-select"><select aria-label="결과 항목" value={mapping.result_item_id} onChange={(event) => updateMapping(index, { result_item_id: event.target.value })}><option value="">결과 항목 선택</option>{catalog.items.map((item) => <option key={item.id} value={item.id}>{item.definition.label} · {item.definition.unit || '단위 없음'} · v{definitionVersion(item)}</option>)}</select><button title="새 결과 항목" onClick={() => void createItem(index)} disabled={busy === `item-${index}`}><Plus /></button></div><div className="unit-pair"><input aria-label="원본 단위" placeholder="원본 단위" value={mapping.source_unit ?? ''} onChange={(event) => updateMapping(index, { source_unit: event.target.value || undefined })} /><span>→</span><input aria-label="대상 단위" placeholder="대상 단위" value={catalog.items.find((item) => item.id === mapping.result_item_id)?.definition.unit ?? ''} readOnly /></div><DimensionFields value={mapping.dimensions} dimensions={catalog.items.find((item) => item.id === mapping.result_item_id)?.definition.dimensions ?? []} onChange={(dimensions) => updateMapping(index, { dimensions })} /><div className="mapping-policies"><select value={mapping.missing} onChange={(event) => updateMapping(index, { missing: event.target.value as 'error' | 'skip' })}><option value="error">누락이면 오류</option><option value="skip">누락 건너뜀</option></select><select value={mapping.aggregate ?? 'none'} onChange={(event) => updateMapping(index, { aggregate: event.target.value as RecipeMapping['aggregate'] })}><option value="none">집계 없음</option><option value="max">최대</option><option value="min">최소</option><option value="mean">평균</option></select></div><button className="icon-button danger-icon" aria-label="매핑 삭제" onClick={() => removeMapping(index)}><X /></button></div>) : <div className="empty-inline">샘플을 올리면 필드 매핑을 시작할 수 있습니다.</div>}</div></div>
-    <div className="semantic-card"><div className="semantic-card-heading"><div><span>STEP 03 · WIDGET CONTRACT</span><h2>위젯 입력 역할</h2></div><button className="ghost-button" onClick={() => setTemplate({ ...template, widgets: [...template.widgets, defaultWidget(recipe.mappings.find((mapping) => mapping.result_item_id)?.result_item_id)] })}><Plus /> 위젯 추가</button></div><div className="widget-config-list">{template.widgets.length ? template.widgets.map((widget, index) => <WidgetEditor key={widget.id} widget={widget} items={catalog.items} onChange={(next) => setTemplate({ ...template, widgets: template.widgets.map((item, row) => row === index ? next : item) })} onRemove={() => setTemplate({ ...template, widgets: template.widgets.filter((_, row) => row !== index) })} />) : <div className="empty-inline">위젯을 추가하면 결과 항목을 카드·표·선 그래프·산점도 입력 역할에 연결합니다.</div>}</div><div className="definition-actions"><label>레시피 이름<input value={recipeName} onChange={(event) => setRecipeName(event.target.value)} /></label><label>템플릿 이름<input value={templateName} onChange={(event) => setTemplateName(event.target.value)} /></label><button className="primary-button" onClick={saveRecipe} disabled={busy === 'save-recipe'}><Save /> {busy === 'save-recipe' ? '저장 중' : recipeId ? '레시피 새 버전 저장' : '레시피 저장'}</button><button className="primary-button" onClick={saveTemplate} disabled={busy === 'save-template'}><Save /> {busy === 'save-template' ? '저장 중' : templateId ? '템플릿 새 버전 저장' : '템플릿 저장'}</button><button className="secondary-button" onClick={activateBundle} disabled={!recipeId || !templateId || busy.startsWith('activate')}><Check /> 레시피·템플릿 함께 활성화</button></div></div>
+    <div className="semantic-card"><div className="semantic-card-heading"><div><span>STEP 03 · WIDGET CONTRACT</span><h2>위젯 입력 역할</h2></div><button className="ghost-button" onClick={() => setTemplate({ ...template, widgets: [...template.widgets, defaultWidget(recipe.mappings.find((mapping) => mapping.result_item_id)?.result_item_id)] })}><Plus /> 위젯 추가</button></div><div className="widget-config-list">{template.widgets.length ? template.widgets.map((widget, index) => <WidgetEditor key={widget.id} widget={widget} items={catalog.items} onChange={(next) => setTemplate({ ...template, widgets: template.widgets.map((item, row) => row === index ? next : item) })} onRemove={() => setTemplate({ ...template, widgets: template.widgets.filter((_, row) => row !== index) })} />) : <div className="empty-inline">위젯을 추가하면 결과 항목을 카드·표·선 그래프·산점도 입력 역할에 연결합니다.</div>}</div><div className="definition-actions"><label>레시피 이름<input value={recipeName} onChange={(event) => setRecipeName(event.target.value)} /></label><label>템플릿 이름<input value={templateName} onChange={(event) => setTemplateName(event.target.value)} /></label><button className="primary-button" onClick={saveRecipe} disabled={busy === 'save-recipe'}><Save /> {busy === 'save-recipe' ? '저장 중' : recipeId ? '레시피 새 버전 저장' : '레시피 저장'}</button><button className="primary-button" onClick={saveTemplate} disabled={busy === 'save-template'}><Save /> {busy === 'save-template' ? '저장 중' : templateId ? '템플릿 새 버전 저장' : '템플릿 저장'}</button><button className="secondary-button" onClick={activateBundle} disabled={!recipeId || !templateId || busy.startsWith('activate') || busy === 'impact-bundle'}><Check /> 함께 활성화 · 활성화 영향 미리보기</button></div></div>
     <div className="semantic-card preview-card"><div className="semantic-card-heading"><div><span>STEP 04 · VERIFY</span><h2>변환 + 위젯 통합 미리보기</h2></div><button className="primary-button" onClick={runPreview} disabled={!sample || busy === 'preview'}>{busy === 'preview' ? <LoaderCircle className="spin" /> : <RefreshCw />} 미리보기 실행</button></div>{preview ? <PreviewPanel parsed={preview.parsed} widgets={preview.widgets} /> : <div className="empty-preview"><LineChartIcon /><p>저장 전에도 현재 레시피로 실행할 수 있습니다. 결과 항목이 없거나 여러 값이 연결되면 원인을 표시합니다.</p></div>}</div>
   </div>
 }

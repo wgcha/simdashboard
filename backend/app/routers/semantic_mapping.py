@@ -30,6 +30,7 @@ from ..security import write_audit_event
 from ..services import spdm_storage
 from ..services.semantic_mapping import persist_semantic_import, semantic_transaction
 from .semantic_body_limit import SemanticBodyLimitRoute
+from .semantic_review import record_unresolved_refresh
 
 
 router = APIRouter(prefix="/api/semantic-mapping", tags=["semantic-mapping"], route_class=SemanticBodyLimitRoute)
@@ -441,9 +442,9 @@ async def import_file(request: Request) -> dict[str, Any]:
 @router.post("/bindings/{binding_id}/refresh")
 def refresh_binding(binding_id: str, request: Request) -> dict[str, Any]:
     with connect() as conn:
-        row = conn.execute("SELECT * FROM semantic_folder_bindings WHERE id=?", [binding_id]).fetchone()
-        if not row: raise HTTPException(404, {"code": "SEMANTIC_BINDING_NOT_FOUND"})
-        binding = dict(zip([c[0] for c in conn.execute("SELECT * FROM semantic_folder_bindings WHERE id=?", [binding_id]).description], row))
+        bound = rows(conn.execute("SELECT * FROM semantic_folder_bindings WHERE id=?", [binding_id]))
+        if not bound: raise HTTPException(404, {"code": "SEMANTIC_BINDING_NOT_FOUND"})
+        binding = bound[0]
         if not binding["load_case_id"]: raise HTTPException(422, {"code": "SEMANTIC_BINDING_LOAD_CASE_REQUIRED"})
         require_resource_permission(request, RESULT_IMPORT, "load_case", str(binding["load_case_id"]), conn=conn)
         root = spdm_storage.storage_root(conn)
@@ -463,25 +464,59 @@ def refresh_binding(binding_id: str, request: Request) -> dict[str, Any]:
                 paths.append(path)
                 if len(paths) > 500: raise HTTPException(422, {"code": "SEMANTIC_REFRESH_FILE_LIMIT"})
         for path in sorted(paths, key=lambda p: p.name.casefold()):
+            content: bytes | None = None
             try:
                 content, _ = spdm_storage.read_stable_bytes(path, max_bytes=5 * 1024 * 1024)
                 total_bytes += len(content)
                 if total_bytes > 128 * 1024 * 1024: raise spdm_storage.SpdmStorageError("SEMANTIC_REFRESH_SIZE_LIMIT", "새로고침 파일 총량이 한도를 초과했습니다.")
                 candidates = []
-                for recipe_id, _, definition, snapshot in recipes:
+                for recipe_id, recipe_version, definition, snapshot in recipes:
                     try: preview_recipe(definition, snapshot, path.name, content)
                     except SemanticValidationError: continue
-                    candidates.append(recipe_id)
+                    candidates.append({"recipe_id": recipe_id, "recipe_version": recipe_version})
                 if len(candidates) != 1:
-                    results.append({"relative_path": path.name, "status": "UNMAPPED" if not candidates else "AMBIGUOUS", "recipe_ids": candidates})
+                    status = "UNMAPPED" if not candidates else "AMBIGUOUS"
+                    review = record_unresolved_refresh(conn, binding, relative_path=path.name, scan_status=status, candidates=candidates, source_sha256=hashlib.sha256(content).hexdigest(), source_size=len(content), error=None, actor=request.state.principal.user_id)
+                    results.append({"relative_path": path.name, "status": status, "recipe_ids": [candidate["recipe_id"] for candidate in candidates], "review_item_id": review["id"]})
                     continue
-                results.append(_import(conn, request, path.name, content, candidates[0], str(binding["load_case_id"]), binding["template_id"]))
+                # A previously unresolved file must still satisfy the pinned
+                # recipe/template display contract before it is shown as
+                # pending.  Otherwise a recurring widget incompatibility
+                # loses its INVALID reason merely because its parser matched.
+                matched_id = candidates[0]["recipe_id"]
+                matched = next(entry for entry in recipes if entry[0] == matched_id)
+                parsed = preview_recipe(matched[2], matched[3], path.name, content)
+                if binding.get("template_id"):
+                    _template_version, template, template_items = _version(conn, kind="template", ident=str(binding["template_id"]))
+                    widgets = resolve_widgets(template, template_items, parsed)
+                    if any(widget.get("status") != "READY" for widget in widgets):
+                        raise HTTPException(422, {"code": "SEMANTIC_WIDGET_INPUT_INVALID", "widgets": widgets})
+                prior_review = conn.execute("SELECT id FROM semantic_import_review_items WHERE binding_id=? AND load_case_id=? AND relative_path=?", [binding["id"], binding["load_case_id"], path.name]).fetchone()
+                if prior_review:
+                    review = record_unresolved_refresh(conn, binding, relative_path=path.name, scan_status="PENDING", candidates=candidates, source_sha256=hashlib.sha256(content).hexdigest(), source_size=len(content), error=None, actor=request.state.principal.user_id)
+                    if review["review_state"] in {"IMPORTED", "SKIPPED"}:
+                        results.append({"relative_path": path.name, "status": review["review_state"], "run_id": review.get("confirmed_analysis_run_id"), "review_item_id": review["id"]})
+                    else:
+                        results.append({"relative_path": path.name, "status": "PENDING", "recipe_ids": [candidates[0]["recipe_id"]], "review_item_id": review["id"]})
+                    continue
+                results.append(_import(conn, request, path.name, content, candidates[0]["recipe_id"], str(binding["load_case_id"]), binding["template_id"]))
             except spdm_storage.SpdmStorageError as error:
-                results.append({"relative_path": path.name, "status": "PENDING", "code": error.code})
+                review = record_unresolved_refresh(conn, binding, relative_path=path.name, scan_status="PENDING", candidates=[], source_sha256=None, source_size=None, error={"code": error.code}, actor=request.state.principal.user_id)
+                if review["review_state"] in {"IMPORTED", "SKIPPED"}:
+                    results.append({"relative_path": path.name, "status": review["review_state"], "run_id": review.get("confirmed_analysis_run_id"), "review_item_id": review["id"]})
+                else:
+                    results.append({"relative_path": path.name, "status": "PENDING", "code": error.code, "review_item_id": review["id"]})
             except HTTPException as error:
+                detail_code = error.detail.get("code") if isinstance(error.detail, dict) else None
+                # The reviewed binding was reconnected after this refresh took
+                # its snapshot.  Do not turn that stale scan into an INVALID
+                # item against the newly bound target.
+                if error.status_code == 409 and detail_code in {"SEMANTIC_REVIEW_BINDING_STALE", "SEMANTIC_REVIEW_TARGET_CHANGED"}:
+                    raise
                 if error.status_code not in {409, 422}:
                     raise
-                results.append({"relative_path": path.name, "status": "INVALID", "detail": error.detail})
+                review = record_unresolved_refresh(conn, binding, relative_path=path.name, scan_status="INVALID", candidates=candidates, source_sha256=hashlib.sha256(content).hexdigest() if content is not None else None, source_size=len(content) if content is not None else None, error={"detail": error.detail}, actor=request.state.principal.user_id)
+                results.append({"relative_path": path.name, "status": "INVALID", "detail": error.detail, "review_item_id": review["id"]})
         return {"binding_id": binding_id, "results": results, "partial": any(item.get("status") not in {"IMPORTED", "SKIPPED"} for item in results)}
 
 

@@ -439,4 +439,12 @@ API DTO, 오류 코드, revision/권한 규칙을 먼저 합의한 후 기능별
 - 0024 다음 additive 0025 migration, 새로운 영구 DB 테이블 두 개, 기존 앱 역할 CRUD 및 읽기 전용 시작 검사를 유지한다. 최신 schema.sql과 migration 제약을 맞춰 신규 설치와 기존 업데이트가 같은 스키마가 되도록 한다. 새 의존성·외부 서비스·영구 파일 경로가 없다.
 - Astra 설계/통합, 독립 Terra 백엔드·DB, Luna 프런트 구현, Sol 1차 및 별도 Astra 최종 검수를 적용한다. 검증된 구현 범위와 실제 검사 기록은 [사전 안내](semantic-vocabulary.md)에 기록한다.
 
+### 12.5 다음 단계: 변경 영향 분석·검토함 (2026-09-15)
+
+사용자가 선행 기능을 먼저 푸시한 뒤 다음 단계를 진행하도록 요청했다. 선행 기능은 `133e821`에 커밋했다. 사용자 목적지 승인 후 원격 브랜치의 해시 일치를 확인했다. 후속 기능은 사용자 상태 없는 격리 소스에서 구현·검증했으며, 기존 미커밋 변경을 보존하여 통합했다.
+
+[후속 구현 설계](semantic-review-impact-plan.md)의 폴더별 검토함, 명시적 레시피 선택·재검증·등록·다시 검토, 저장 샘플 기반 영향 미리보기와 활성화 차단을 구현했다. 고정 버전·원본 해시·개정 CAS, 결과/provenance/감사/검토 전이의 원자 저장, 재연결 대상별 이력 분리, 0026 additive migration과 읽기 전용 시작 검사를 적용했다. 기존 정상 파일의 자동 등록과 과거 Run을 유지한다.
+
+최종 검토함 API 15개, 관련 기존 회귀, 실제 API 브라우저 신규 2개·기존 9개, 임시 PostgreSQL 신규/0025 업데이트/동시성/복원, 배포 계약 회귀와 정적 빌드를 검증했다. Sol 1차·독립 Astra 최종 검수 지적을 반영했다. 세부 지원 범위·검증·배포 미실기 구분은 [운영 기능 안내](semantic-review-guide.md)에 기록한다. 프로젝트 전체 통합 검토함·오류 유형 필터, AI 추론·새 포맷 파서·다중 파일 Run 조인은 후속 범위다.
+
 관련 문서: [문서 지도](README.md), [배포 정책](windows-deployment-policy.md), [배포 시나리오](windows-deployment-scenarios.md), [ADR 0005](adr/0005-windows-server-offline-deployment.md), [SPDM 현행 흐름](spdm-storage-workflow.md), [폴더·파일 계약](storage-folder-and-file-contract.md).

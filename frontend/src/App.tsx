@@ -35,6 +35,7 @@ import { useRequestResultSnapshot } from './features/results/useRequestResultSna
 import { createWorkflowAnalysisOpener, isPendingResultAnalysis, useResultAnalysisIntent } from './features/results/resultLayoutRouting'; import { explicitCustomAnalysisPage, preservesResultLayoutOnLoadCaseChange } from './features/results/resultLayoutRuntime'
 import type { AuthUser } from './auth'
 import { useWorkspaceEditorCoordinator } from './editorState'
+import { createClientId } from './shared/identity/clientId'
 import { BootstrapWorkspaceShell } from './features/bootstrap/BootstrapWorkspaceShell'
 import { VocRoute } from './app/workspace/VocRoute'
 import type { InitialWorkspace } from './features/bootstrap/loadInitialWorkspace'
@@ -671,7 +672,7 @@ function App() {
     setWorkflows((items) => items.map((workflow) => {
       if (workflow.request.id !== requestId) return workflow
       const sequence = workflow.steps.length + 1
-      const steps = [...workflow.steps, { id: `draft-step-${crypto.randomUUID()}`, sequence_no: sequence, name: '새 진행 단계', status: 'WAITING' as const, owner: workflow.request.owner || '미지정', owner_user_id: workflow.request.owner_user_id ?? null, progress: 0, planned_end: workflow.request.due_at, is_optional: false, note: '' }]
+      const steps = [...workflow.steps, { id: `draft-step-${createClientId()}`, sequence_no: sequence, name: '새 진행 단계', status: 'WAITING' as const, owner: workflow.request.owner || '미지정', owner_user_id: workflow.request.owner_user_id ?? null, progress: 0, planned_end: workflow.request.due_at, is_optional: false, note: '' }]
       return { ...workflow, steps, progress: Math.round(steps.reduce((sum, step) => sum + step.progress, 0) / steps.length) }
     }))
   }

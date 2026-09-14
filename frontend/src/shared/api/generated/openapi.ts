@@ -1587,6 +1587,111 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/semantic-mapping/bindings/{binding_id}/review-items": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Review Items */
+        get: operations["list_review_items_api_semantic_mapping_bindings__binding_id__review_items_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/semantic-mapping/review-items/{item_id}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** History */
+        get: operations["history_api_semantic_mapping_review_items__item_id__history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/semantic-mapping/review-items/{item_id}/revalidate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revalidate */
+        post: operations["revalidate_api_semantic_mapping_review_items__item_id__revalidate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/semantic-mapping/review-items/{item_id}/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Confirm */
+        post: operations["confirm_api_semantic_mapping_review_items__item_id__confirm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/semantic-mapping/review-items/{item_id}/reopen": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reopen
+         * @description Begin an explicit new review cycle while retaining the prior Run link.
+         */
+        post: operations["reopen_api_semantic_mapping_review_items__item_id__reopen_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/semantic-mapping/impact-bundle": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Impact Bundle */
+        post: operations["impact_bundle_api_semantic_mapping_impact_bundle_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/semantic-vocabulary": {
         parameters: {
             query?: never;
@@ -3012,6 +3117,19 @@ export interface components {
             /** Expected Template Active Version */
             expected_template_active_version?: number | null;
         };
+        /** BundleImpactResponse */
+        BundleImpactResponse: {
+            proposed_pair: components["schemas"]["ImpactProposedPair"];
+            current_active_versions: components["schemas"]["ImpactActiveVersions"];
+            recipe_change: components["schemas"]["RecipeChange"];
+            /** Affected Bindings */
+            affected_bindings: components["schemas"]["ImpactBinding"][];
+            protected_prior_runs: components["schemas"]["ProtectedPriorRuns"];
+            pending_review_items: components["schemas"]["PendingReviewItems"];
+            validation: components["schemas"]["ImpactValidation"];
+            /** Activation Allowed */
+            activation_allowed: boolean;
+        };
         /** CardCreate */
         CardCreate: {
             /** Name */
@@ -3122,6 +3240,11 @@ export interface components {
              * Format: date-time
              */
             synced_at: string;
+        };
+        /** ConfirmBody */
+        ConfirmBody: {
+            /** Expected Revision */
+            expected_revision: number;
         };
         /** DashboardClone */
         DashboardClone: {
@@ -3489,6 +3612,92 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /** ImpactActiveVersions */
+        ImpactActiveVersions: {
+            /** Recipe */
+            recipe: number | null;
+            /** Template */
+            template: number | null;
+        };
+        /** ImpactBinding */
+        ImpactBinding: {
+            /** Id */
+            id: string;
+            /** Project Id */
+            project_id: string;
+            /** Request Id */
+            request_id?: string | null;
+            /** Load Case Id */
+            load_case_id?: string | null;
+            /** Relative Path */
+            relative_path: string;
+            /** Recipe Ids */
+            recipe_ids: string[];
+            /** Template Id */
+            template_id?: string | null;
+            /** Revision */
+            revision: number;
+            /** Binding Parse Error */
+            binding_parse_error?: boolean | null;
+            /** Compatibility */
+            compatibility: components["schemas"]["ImpactPairCheck"][];
+        };
+        /**
+         * ImpactPairCheck
+         * @description Compatibility of one actual recipe/template pair against its sample.
+         */
+        ImpactPairCheck: {
+            /** Recipe Id */
+            recipe_id?: string | null;
+            /** Recipe Version */
+            recipe_version?: number | null;
+            /** Template Id */
+            template_id?: string | null;
+            /** Template Version */
+            template_version?: number | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "READY" | "BLOCK";
+            /** Reason Code */
+            reason_code?: string | null;
+            /** Widgets */
+            widgets: {
+                [key: string]: unknown;
+            }[];
+        };
+        /** ImpactProposedPair */
+        ImpactProposedPair: {
+            /** Recipe Id */
+            recipe_id: string;
+            /** Recipe Version */
+            recipe_version: number;
+            /** Template Id */
+            template_id: string;
+            /** Template Version */
+            template_version: number;
+        };
+        /** ImpactUnverified */
+        ImpactUnverified: {
+            /** Reason Code */
+            reason_code: string;
+        };
+        /** ImpactValidation */
+        ImpactValidation: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "READY" | "BLOCK" | "UNVERIFIED";
+            /** Checks */
+            checks: components["schemas"]["ImpactPairCheck"][];
+            /** Truncated */
+            truncated: boolean;
+            /** Unverified */
+            unverified: components["schemas"]["ImpactUnverified"][];
+            sample_coverage: components["schemas"]["SampleCoverage"];
+        };
         /** ImportSchemaPayload */
         ImportSchemaPayload: {
             /** Name */
@@ -3820,6 +4029,13 @@ export interface components {
              */
             ok: true;
         };
+        /** PendingReviewItems */
+        PendingReviewItems: {
+            /** Count */
+            count: number | null;
+            /** Available */
+            available: boolean;
+        };
         /** ProjectCreate */
         ProjectCreate: {
             /** Name */
@@ -3859,6 +4075,37 @@ export interface components {
             /** Expected Updated At */
             expected_updated_at?: string | null;
         };
+        /** ProtectedPriorRun */
+        ProtectedPriorRun: {
+            /** Analysis Run Id */
+            analysis_run_id: string;
+            /** Load Case Id */
+            load_case_id: string;
+            /** Recipe Id */
+            recipe_id: string;
+            /** Recipe Version */
+            recipe_version: number;
+            /** Template Id */
+            template_id?: string | null;
+            /** Template Version */
+            template_version?: number | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** ProtectedPriorRuns */
+        ProtectedPriorRuns: {
+            /** Count */
+            count: number;
+            /** Items */
+            items: components["schemas"]["ProtectedPriorRun"][];
+            /** Truncated */
+            truncated: boolean;
+            /** Immutable */
+            immutable: boolean;
+        };
         /** QualityThresholdUpdate */
         QualityThresholdUpdate: {
             /** Threshold Double */
@@ -3869,6 +4116,16 @@ export interface components {
         /** RawUploadResponse */
         RawUploadResponse: {
             stored_file: components["schemas"]["StorageFileResponse"];
+        };
+        /** RecipeChange */
+        RecipeChange: {
+            /**
+             * Classification
+             * @enum {string}
+             */
+            classification: "UNCHANGED" | "PRESENTATION_ONLY" | "INTERPRETATION" | "UNKNOWN";
+            /** Reason Codes */
+            reason_codes: string[];
         };
         /** RegistrationPayload */
         RegistrationPayload: {
@@ -3892,6 +4149,11 @@ export interface components {
             account_status: "PENDING";
             /** Message */
             message: string;
+        };
+        /** ReopenBody */
+        ReopenBody: {
+            /** Expected Revision */
+            expected_revision: number;
         };
         /** ReportLayoutCatalogResponse */
         ReportLayoutCatalogResponse: {
@@ -4308,6 +4570,72 @@ export interface components {
              */
             required: boolean;
         };
+        /** RevalidateBody */
+        RevalidateBody: {
+            /** Expected Revision */
+            expected_revision: number;
+            /** Recipe Id */
+            recipe_id?: string | null;
+            /** Recipe Version */
+            recipe_version?: number | null;
+        };
+        /** ReviewCandidate */
+        ReviewCandidate: {
+            /** Recipe Id */
+            recipe_id: string;
+            /** Recipe Version */
+            recipe_version: number;
+        };
+        /** ReviewConfirmResponse */
+        ReviewConfirmResponse: {
+            item: components["schemas"]["ReviewItemResponse"];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "IMPORTED" | "SKIPPED";
+            /** Run Id */
+            run_id?: string | null;
+            /** Widgets */
+            widgets?: {
+                [key: string]: unknown;
+            }[];
+        };
+        /** ReviewEventResponse */
+        ReviewEventResponse: {
+            /** Id */
+            id: string;
+            /** Review Item Id */
+            review_item_id: string;
+            /** Old State */
+            old_state?: string | null;
+            /** New State */
+            new_state: string;
+            /** Revision */
+            revision: number;
+            /** Prior Run Id */
+            prior_run_id?: string | null;
+            /** Current Run Id */
+            current_run_id?: string | null;
+            /** Detail */
+            detail: {
+                [key: string]: unknown;
+            };
+            /** Occurred At */
+            occurred_at: string;
+            /** Actor */
+            actor: string;
+        };
+        /** ReviewHistoryResponse */
+        ReviewHistoryResponse: {
+            /** Events */
+            events: components["schemas"]["ReviewEventResponse"][];
+            /**
+             * Truncated
+             * @default false
+             */
+            truncated: boolean;
+        };
         /** ReviewItemCreate */
         ReviewItemCreate: {
             /** Title */
@@ -4331,6 +4659,49 @@ export interface components {
             /** Created By */
             created_by?: string | null;
         };
+        /** ReviewItemResponse */
+        ReviewItemResponse: {
+            /** Id */
+            id: string;
+            /** Binding Id */
+            binding_id: string;
+            /** Binding Revision */
+            binding_revision: number;
+            /** Load Case Id */
+            load_case_id: string;
+            /** Relative Path */
+            relative_path: string;
+            /** Source Sha256 */
+            source_sha256?: string | null;
+            /** Source Size */
+            source_size?: number | null;
+            /** Scan Status */
+            scan_status: string;
+            /** Review State */
+            review_state: string;
+            /** Candidates */
+            candidates?: components["schemas"]["ReviewCandidate"][];
+            /** Selected Recipe Id */
+            selected_recipe_id?: string | null;
+            /** Selected Recipe Version */
+            selected_recipe_version?: number | null;
+            /** Template Id */
+            template_id?: string | null;
+            /** Template Version */
+            template_version?: number | null;
+            /** Validated Sha256 */
+            validated_sha256?: string | null;
+            /** Revision */
+            revision: number;
+            /** Confirmed Analysis Run Id */
+            confirmed_analysis_run_id?: string | null;
+            /** Previous Confirmed Analysis Run Id */
+            previous_confirmed_analysis_run_id?: string | null;
+            /** Error */
+            error?: {
+                [key: string]: unknown;
+            } | null;
+        };
         /** ReviewItemUpdate */
         ReviewItemUpdate: {
             /** Body */
@@ -4340,6 +4711,76 @@ export interface components {
              * @enum {string}
              */
             review_status: "OPEN" | "IN_REVIEW" | "RESOLVED";
+        };
+        /** ReviewPageResponse */
+        ReviewPageResponse: {
+            /** Items */
+            items: components["schemas"]["ReviewItemResponse"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+        };
+        /** ReviewRevalidateResponse */
+        ReviewRevalidateResponse: {
+            /** Id */
+            id: string;
+            /** Binding Id */
+            binding_id: string;
+            /** Binding Revision */
+            binding_revision: number;
+            /** Load Case Id */
+            load_case_id: string;
+            /** Relative Path */
+            relative_path: string;
+            /** Source Sha256 */
+            source_sha256?: string | null;
+            /** Source Size */
+            source_size?: number | null;
+            /** Scan Status */
+            scan_status: string;
+            /** Review State */
+            review_state: string;
+            /** Candidates */
+            candidates?: components["schemas"]["ReviewCandidate"][];
+            /** Selected Recipe Id */
+            selected_recipe_id?: string | null;
+            /** Selected Recipe Version */
+            selected_recipe_version?: number | null;
+            /** Template Id */
+            template_id?: string | null;
+            /** Template Version */
+            template_version?: number | null;
+            /** Validated Sha256 */
+            validated_sha256?: string | null;
+            /** Revision */
+            revision: number;
+            /** Confirmed Analysis Run Id */
+            confirmed_analysis_run_id?: string | null;
+            /** Previous Confirmed Analysis Run Id */
+            previous_confirmed_analysis_run_id?: string | null;
+            /** Error */
+            error?: {
+                [key: string]: unknown;
+            } | null;
+            /** Widgets */
+            widgets?: {
+                [key: string]: unknown;
+            }[];
+            /** Summary */
+            summary?: {
+                [key: string]: unknown;
+            };
+        };
+        /** SampleCoverage */
+        SampleCoverage: {
+            /**
+             * Source
+             * @constant
+             */
+            source: "STORED_RECIPE_SAMPLES_ONLY";
+            /** Validated Pair Count */
+            validated_pair_count: number;
+            /** Unverified Pair Count */
+            unverified_pair_count: number;
         };
         /** StorageBindingResponse */
         StorageBindingResponse: {
@@ -8289,6 +8730,212 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_review_items_api_semantic_mapping_bindings__binding_id__review_items_get: {
+        parameters: {
+            query?: {
+                state?: ("OPEN" | "SELECTED" | "READY" | "STALE" | "IMPORTED" | "SKIPPED") | null;
+                limit?: number;
+                cursor?: string | null;
+            };
+            header?: never;
+            path: {
+                binding_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewPageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    history_api_semantic_mapping_review_items__item_id__history_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewHistoryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revalidate_api_semantic_mapping_review_items__item_id__revalidate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RevalidateBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewRevalidateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    confirm_api_semantic_mapping_review_items__item_id__confirm_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfirmBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewConfirmResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reopen_api_semantic_mapping_review_items__item_id__reopen_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReopenBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewItemResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    impact_bundle_api_semantic_mapping_impact_bundle_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BundleActivation"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BundleImpactResponse"];
                 };
             };
             /** @description Validation Error */

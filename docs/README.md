@@ -19,6 +19,8 @@
 
 | 목적 | 문서 |
 |---|---|
+| 활성화 영향 미리보기·파일 검토·명시적 재처리 사용법 | [`semantic-review-guide.md`](semantic-review-guide.md) |
+| 의미 매핑 변경 영향 분석·미처리 파일 검토함의 후속 구현 설계 | [`semantic-review-impact-plan.md`](semantic-review-impact-plan.md) |
 | 기준 정의·별칭 사전과 폴더/필드 추천 적용 | [`semantic-vocabulary.md`](semantic-vocabulary.md) |
 | 임의 폴더·CSV/JSON 읽기 레시피·결과 위젯 사용법과 지원 범위 | [`semantic-mapping-guide.md`](semantic-mapping-guide.md) |
 | 폴더·읽기 레시피·결과 항목·위젯의 전체 개발 계획과 후속 확장 | [`semantic-storage-mapping-plan.md`](semantic-storage-mapping-plan.md) |

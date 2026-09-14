@@ -5,6 +5,7 @@ import json
 from typing import Any, Callable
 
 from ..domains.semantic_mapping.engine import SemanticValidationError, preview_recipe, resolve_widgets
+from .semantic_impact import ActivationImpactBlocked, guard_bundle_activation
 
 
 class ActivationConflict(ValueError):
@@ -19,6 +20,9 @@ def activate_bundle(conn: Any, payload: dict, actor: str, now: Any, audit: Calla
 
     conn.execute("BEGIN TRANSACTION")
     try:
+        # This rechecks persisted references under transaction locks.  A prior
+        # impact preview is useful UX only and is never an activation permit.
+        impact = guard_bundle_activation(conn, payload)
         definitions = {}
         current = {}
         for kind in ("recipe", "template"):
@@ -43,6 +47,8 @@ def activate_bundle(conn: Any, payload: dict, actor: str, now: Any, audit: Calla
         invalid = [widget for widget in widgets if widget["status"] != "READY"]
         if invalid:
             raise SemanticValidationError("SEMANTIC_WIDGET_VALIDATION_FAILED", "샘플의 위젯 연결을 확인하세요: " + ", ".join(f"{w['title']} ({w['status']})" for w in invalid))
+        if not impact["activation_allowed"]:
+            raise ActivationImpactBlocked(impact)
         for kind in ("recipe", "template"):
             ident, version = payload[f"{kind}_id"], payload[f"{kind}_version"]
             conn.execute(f"UPDATE semantic_{kind}_versions SET lifecycle_status='VALIDATED' WHERE {kind}_id=? AND lifecycle_status='ACTIVE'", [ident])
@@ -50,7 +56,7 @@ def activate_bundle(conn: Any, payload: dict, actor: str, now: Any, audit: Calla
             conn.execute(f"UPDATE semantic_{kind}_versions SET lifecycle_status='ACTIVE' WHERE {kind}_id=? AND version=?", [ident, version])
         audit()
         conn.execute("COMMIT")
-        return {"recipe_id": payload["recipe_id"], "recipe_version": payload["recipe_version"], "template_id": payload["template_id"], "template_version": payload["template_version"], "status": "ACTIVE", "widgets": widgets}
+        return {"recipe_id": payload["recipe_id"], "recipe_version": payload["recipe_version"], "template_id": payload["template_id"], "template_version": payload["template_version"], "status": "ACTIVE", "widgets": widgets, "impact": impact}
     except BaseException:
         conn.execute("ROLLBACK")
         raise

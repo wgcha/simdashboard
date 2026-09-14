@@ -115,3 +115,9 @@ LAN 검사는 `frontend`에서 `npm run test:lan-proxy`, Windows 설정 검사�
 `setup-accounts.bat`은 성공·실패 메시지 이후 창을 유지한다. 자동 검사는 `setup-accounts.bat -NoPause -NonInteractive`를 사용하며 Python 종료 코드를 유지한다. 검증은 계정 CLI·ACL 관련 13개 테스트, 실제 동일 사용자 임시 파일 ACL 복사, 공식 설정 도구의 `ACCOUNT_SETUP_READY` 및 재확인으로 수행했다. 기존 계정·비밀번호는 변경하지 않고 누락된 인증 설정만 저장했다.
 
 실제 서비스 재시작도 완료했다. `http://127.0.0.1/workbench`, 컴퓨터 이름 및 사내 IPv4의 동일 경로에서 HTTP 200을 확인했다. `/api/auth/status`는 `mode=password`, `setup_required=false`를 반환한다. Chromium에서 최초 설정 안내가 사라지고 회원 로그인 화면이 표시되며 회원가입 화면 이동·로그인 화면 복귀가 정상 동작했다(런타임 오류 없음). 일반 배치 실행은 성공 후 `Press any key`에서 창이 유지되는 것도 직접 확인했다. 현재 실행기는 복원되어 있던 정수형 PID 기록과 호환되도록 포트·기본 경로를 별도 메타데이터로 기록한다.
+
+## 2026-09-15 사내 HTTP 접속의 UUID 오류 수정
+
+사내 IP의 HTTP 주소에서 `crypto.randomUUID is not a function` 오류로 작업대가 열리지 않는 문제를 수정했다. 이 환경에서 제공되지 않는 `randomUUID` 대신 브라우저의 `getRandomValues`로 UUID v4를 생성하는 공통 함수를 사용한다. 작업대 배치 요청, 진행 단계 추가, 로컬 실행 요청, 의미 매핑 위젯 생성에 같은 처리를 적용한다.
+
+소스 실행은 수정된 프런트엔드를 반영하고 브라우저를 강력 새로고침한다. 정적 웹 배포는 새 프런트엔드 빌드를 기존 업데이트 절차로 반영한다. 인증·HTTPS·로컬 도우미의 기존 배포 요구사항은 유지한다.

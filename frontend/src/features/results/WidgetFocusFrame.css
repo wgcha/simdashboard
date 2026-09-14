@@ -1,6 +1,10 @@
 dialog.widget-card { position:static; width:100%; max-width:none; height:100%; margin:0; padding:0; color:inherit; }
-dialog.widget-card:modal { position:fixed; inset:0; box-sizing:border-box; width:calc(100vw - 32px); height:calc(100dvh - 32px); max-width:none; max-height:none; margin:auto; border-color:#4ebee5; box-shadow:0 26px 75px rgba(0,0,0,.62); }
-dialog.widget-card:modal::backdrop { background:rgba(2,10,18,.72); backdrop-filter:blur(3px); }
-.widget-focus-button { display:inline-flex; align-items:center; gap:6px; border:1px solid #31566c; border-radius:6px; padding:6px 8px; color:#9cbccb; background:#102b3c; font-size:10.8px; cursor:pointer; }.widget-focus-button svg { width:14px; height:14px; }.widget-focus-button:hover,.widget-focus-button:focus-visible { color:#e4f6ff; border-color:#58d5ff; outline:none; box-shadow:0 0 0 3px rgba(88,213,255,.16); }
+dialog.widget-card:modal { position:fixed; inset:0; box-sizing:border-box; width:calc(100vw - 32px); height:calc(100dvh - 32px); max-width:none; max-height:none; margin:auto; border-color:var(--color-border-strong); box-shadow:0 26px 75px var(--color-shadow); }
+dialog.widget-card:modal::backdrop { background:var(--color-overlay); backdrop-filter:blur(3px); }
+.app-shell .widget-card .widget-focus-button { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--color-border-strong); border-radius:6px; padding:6px 8px; color:var(--color-text); background:var(--color-surface-interactive); font-size:10.8px; cursor:pointer; }
+/* Keep control labels in sync with hover/focus despite legacy light-theme text overrides. */
+.app-shell .widget-card .widget-focus-button svg,.app-shell .widget-card .widget-focus-button span { color:inherit!important; }
+.widget-focus-button svg { width:14px; height:14px; }
+.app-shell .widget-card .widget-focus-button:hover,.app-shell .widget-card .widget-focus-button:focus-visible { color:var(--color-accent); border-color:var(--color-focus); background:var(--color-surface-selected); outline:none; box-shadow:0 0 0 3px var(--color-accent-shadow); }
 .widget-edit-actions .widget-video-configure { display:inline-flex; align-items:center; gap:6px; width:auto; padding:5px 9px; white-space:nowrap; }
 @media (max-width:640px) { dialog.widget-card:modal { width:calc(100vw - 16px); height:calc(100vh - 16px); }.widget-focus-button span { display:none; } }

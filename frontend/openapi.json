@@ -4733,6 +4733,348 @@
         }
       }
     },
+    "/api/semantic-mapping/bindings/{binding_id}/review-items": {
+      "get": {
+        "tags": [
+          "semantic-mapping"
+        ],
+        "summary": "List Review Items",
+        "operationId": "list_review_items_api_semantic_mapping_bindings__binding_id__review_items_get",
+        "parameters": [
+          {
+            "name": "binding_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Binding Id"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "OPEN",
+                    "SELECTED",
+                    "READY",
+                    "STALE",
+                    "IMPORTED",
+                    "SKIPPED"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewPageResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/semantic-mapping/review-items/{item_id}/history": {
+      "get": {
+        "tags": [
+          "semantic-mapping"
+        ],
+        "summary": "History",
+        "operationId": "history_api_semantic_mapping_review_items__item_id__history_get",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Item Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 100,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewHistoryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/semantic-mapping/review-items/{item_id}/revalidate": {
+      "post": {
+        "tags": [
+          "semantic-mapping"
+        ],
+        "summary": "Revalidate",
+        "operationId": "revalidate_api_semantic_mapping_review_items__item_id__revalidate_post",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Item Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevalidateBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewRevalidateResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/semantic-mapping/review-items/{item_id}/confirm": {
+      "post": {
+        "tags": [
+          "semantic-mapping"
+        ],
+        "summary": "Confirm",
+        "operationId": "confirm_api_semantic_mapping_review_items__item_id__confirm_post",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Item Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewConfirmResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/semantic-mapping/review-items/{item_id}/reopen": {
+      "post": {
+        "tags": [
+          "semantic-mapping"
+        ],
+        "summary": "Reopen",
+        "description": "Begin an explicit new review cycle while retaining the prior Run link.",
+        "operationId": "reopen_api_semantic_mapping_review_items__item_id__reopen_post",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Item Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReopenBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewItemResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/semantic-mapping/impact-bundle": {
+      "post": {
+        "tags": [
+          "semantic-mapping"
+        ],
+        "summary": "Impact Bundle",
+        "operationId": "impact_bundle_api_semantic_mapping_impact_bundle_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BundleActivation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BundleImpactResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/semantic-vocabulary": {
       "get": {
         "tags": [
@@ -9541,6 +9883,51 @@
         ],
         "title": "BundleActivation"
       },
+      "BundleImpactResponse": {
+        "properties": {
+          "proposed_pair": {
+            "$ref": "#/components/schemas/ImpactProposedPair"
+          },
+          "current_active_versions": {
+            "$ref": "#/components/schemas/ImpactActiveVersions"
+          },
+          "recipe_change": {
+            "$ref": "#/components/schemas/RecipeChange"
+          },
+          "affected_bindings": {
+            "items": {
+              "$ref": "#/components/schemas/ImpactBinding"
+            },
+            "type": "array",
+            "title": "Affected Bindings"
+          },
+          "protected_prior_runs": {
+            "$ref": "#/components/schemas/ProtectedPriorRuns"
+          },
+          "pending_review_items": {
+            "$ref": "#/components/schemas/PendingReviewItems"
+          },
+          "validation": {
+            "$ref": "#/components/schemas/ImpactValidation"
+          },
+          "activation_allowed": {
+            "type": "boolean",
+            "title": "Activation Allowed"
+          }
+        },
+        "type": "object",
+        "required": [
+          "proposed_pair",
+          "current_active_versions",
+          "recipe_change",
+          "affected_bindings",
+          "protected_prior_runs",
+          "pending_review_items",
+          "validation",
+          "activation_allowed"
+        ],
+        "title": "BundleImpactResponse"
+      },
       "CardCreate": {
         "properties": {
           "name": {
@@ -9859,6 +10246,20 @@
           "synced_at"
         ],
         "title": "CentralRun"
+      },
+      "ConfirmBody": {
+        "properties": {
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Revision"
+          }
+        },
+        "type": "object",
+        "required": [
+          "expected_revision"
+        ],
+        "title": "ConfirmBody"
       },
       "DashboardClone": {
         "properties": {
@@ -10940,6 +11341,292 @@
         "type": "object",
         "title": "HTTPValidationError"
       },
+      "ImpactActiveVersions": {
+        "properties": {
+          "recipe": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recipe"
+          },
+          "template": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template"
+          }
+        },
+        "type": "object",
+        "required": [
+          "recipe",
+          "template"
+        ],
+        "title": "ImpactActiveVersions"
+      },
+      "ImpactBinding": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "project_id": {
+            "type": "string",
+            "title": "Project Id"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "load_case_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Load Case Id"
+          },
+          "relative_path": {
+            "type": "string",
+            "title": "Relative Path"
+          },
+          "recipe_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Recipe Ids"
+          },
+          "template_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template Id"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          },
+          "binding_parse_error": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Binding Parse Error"
+          },
+          "compatibility": {
+            "items": {
+              "$ref": "#/components/schemas/ImpactPairCheck"
+            },
+            "type": "array",
+            "title": "Compatibility"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "project_id",
+          "relative_path",
+          "recipe_ids",
+          "revision",
+          "compatibility"
+        ],
+        "title": "ImpactBinding"
+      },
+      "ImpactPairCheck": {
+        "properties": {
+          "recipe_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recipe Id"
+          },
+          "recipe_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recipe Version"
+          },
+          "template_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template Id"
+          },
+          "template_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template Version"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "READY",
+              "BLOCK"
+            ],
+            "title": "Status"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "widgets": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Widgets"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "widgets"
+        ],
+        "title": "ImpactPairCheck",
+        "description": "Compatibility of one actual recipe/template pair against its sample."
+      },
+      "ImpactProposedPair": {
+        "properties": {
+          "recipe_id": {
+            "type": "string",
+            "title": "Recipe Id"
+          },
+          "recipe_version": {
+            "type": "integer",
+            "title": "Recipe Version"
+          },
+          "template_id": {
+            "type": "string",
+            "title": "Template Id"
+          },
+          "template_version": {
+            "type": "integer",
+            "title": "Template Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "recipe_id",
+          "recipe_version",
+          "template_id",
+          "template_version"
+        ],
+        "title": "ImpactProposedPair"
+      },
+      "ImpactUnverified": {
+        "properties": {
+          "reason_code": {
+            "type": "string",
+            "title": "Reason Code"
+          }
+        },
+        "type": "object",
+        "required": [
+          "reason_code"
+        ],
+        "title": "ImpactUnverified"
+      },
+      "ImpactValidation": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "READY",
+              "BLOCK",
+              "UNVERIFIED"
+            ],
+            "title": "Status"
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/ImpactPairCheck"
+            },
+            "type": "array",
+            "title": "Checks"
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated"
+          },
+          "unverified": {
+            "items": {
+              "$ref": "#/components/schemas/ImpactUnverified"
+            },
+            "type": "array",
+            "title": "Unverified"
+          },
+          "sample_coverage": {
+            "$ref": "#/components/schemas/SampleCoverage"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "checks",
+          "truncated",
+          "unverified",
+          "sample_coverage"
+        ],
+        "title": "ImpactValidation"
+      },
       "ImportSchemaPayload": {
         "properties": {
           "name": {
@@ -11865,6 +12552,31 @@
         ],
         "title": "PasswordChangeResponse"
       },
+      "PendingReviewItems": {
+        "properties": {
+          "count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Count"
+          },
+          "available": {
+            "type": "boolean",
+            "title": "Available"
+          }
+        },
+        "type": "object",
+        "required": [
+          "count",
+          "available"
+        ],
+        "title": "PendingReviewItems"
+      },
       "ProjectCreate": {
         "properties": {
           "name": {
@@ -11969,6 +12681,93 @@
         ],
         "title": "ProjectMemberUpdate"
       },
+      "ProtectedPriorRun": {
+        "properties": {
+          "analysis_run_id": {
+            "type": "string",
+            "title": "Analysis Run Id"
+          },
+          "load_case_id": {
+            "type": "string",
+            "title": "Load Case Id"
+          },
+          "recipe_id": {
+            "type": "string",
+            "title": "Recipe Id"
+          },
+          "recipe_version": {
+            "type": "integer",
+            "title": "Recipe Version"
+          },
+          "template_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template Id"
+          },
+          "template_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template Version"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "analysis_run_id",
+          "load_case_id",
+          "recipe_id",
+          "recipe_version",
+          "created_at"
+        ],
+        "title": "ProtectedPriorRun"
+      },
+      "ProtectedPriorRuns": {
+        "properties": {
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ProtectedPriorRun"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated"
+          },
+          "immutable": {
+            "type": "boolean",
+            "title": "Immutable"
+          }
+        },
+        "type": "object",
+        "required": [
+          "count",
+          "items",
+          "truncated",
+          "immutable"
+        ],
+        "title": "ProtectedPriorRuns"
+      },
       "QualityThresholdUpdate": {
         "properties": {
           "threshold_double": {
@@ -12008,6 +12807,33 @@
           "stored_file"
         ],
         "title": "RawUploadResponse"
+      },
+      "RecipeChange": {
+        "properties": {
+          "classification": {
+            "type": "string",
+            "enum": [
+              "UNCHANGED",
+              "PRESENTATION_ONLY",
+              "INTERPRETATION",
+              "UNKNOWN"
+            ],
+            "title": "Classification"
+          },
+          "reason_codes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Reason Codes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "classification",
+          "reason_codes"
+        ],
+        "title": "RecipeChange"
       },
       "RegistrationPayload": {
         "properties": {
@@ -12068,6 +12894,20 @@
           "message"
         ],
         "title": "RegistrationResponse"
+      },
+      "ReopenBody": {
+        "properties": {
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Revision"
+          }
+        },
+        "type": "object",
+        "required": [
+          "expected_revision"
+        ],
+        "title": "ReopenBody"
       },
       "ReportLayoutCatalogResponse": {
         "properties": {
@@ -13334,6 +14174,201 @@
         "title": "ResultWidgetDefinition",
         "description": "A compact, authored result-widget tag for a request type."
       },
+      "RevalidateBody": {
+        "properties": {
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Revision"
+          },
+          "recipe_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 160,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recipe Id"
+          },
+          "recipe_version": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recipe Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "expected_revision"
+        ],
+        "title": "RevalidateBody"
+      },
+      "ReviewCandidate": {
+        "properties": {
+          "recipe_id": {
+            "type": "string",
+            "title": "Recipe Id"
+          },
+          "recipe_version": {
+            "type": "integer",
+            "title": "Recipe Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "recipe_id",
+          "recipe_version"
+        ],
+        "title": "ReviewCandidate"
+      },
+      "ReviewConfirmResponse": {
+        "properties": {
+          "item": {
+            "$ref": "#/components/schemas/ReviewItemResponse"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "IMPORTED",
+              "SKIPPED"
+            ],
+            "title": "Status"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "widgets": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Widgets"
+          }
+        },
+        "type": "object",
+        "required": [
+          "item",
+          "status"
+        ],
+        "title": "ReviewConfirmResponse"
+      },
+      "ReviewEventResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "review_item_id": {
+            "type": "string",
+            "title": "Review Item Id"
+          },
+          "old_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Old State"
+          },
+          "new_state": {
+            "type": "string",
+            "title": "New State"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          },
+          "prior_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prior Run Id"
+          },
+          "current_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Run Id"
+          },
+          "detail": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Detail"
+          },
+          "occurred_at": {
+            "type": "string",
+            "title": "Occurred At"
+          },
+          "actor": {
+            "type": "string",
+            "title": "Actor"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "review_item_id",
+          "new_state",
+          "revision",
+          "detail",
+          "occurred_at",
+          "actor"
+        ],
+        "title": "ReviewEventResponse"
+      },
+      "ReviewHistoryResponse": {
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewEventResponse"
+            },
+            "type": "array",
+            "title": "Events"
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "events"
+        ],
+        "title": "ReviewHistoryResponse"
+      },
       "ReviewItemCreate": {
         "properties": {
           "title": {
@@ -13429,6 +14464,172 @@
         ],
         "title": "ReviewItemCreate"
       },
+      "ReviewItemResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "binding_id": {
+            "type": "string",
+            "title": "Binding Id"
+          },
+          "binding_revision": {
+            "type": "integer",
+            "title": "Binding Revision"
+          },
+          "load_case_id": {
+            "type": "string",
+            "title": "Load Case Id"
+          },
+          "relative_path": {
+            "type": "string",
+            "title": "Relative Path"
+          },
+          "source_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Sha256"
+          },
+          "source_size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Size"
+          },
+          "scan_status": {
+            "type": "string",
+            "title": "Scan Status"
+          },
+          "review_state": {
+            "type": "string",
+            "title": "Review State"
+          },
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewCandidate"
+            },
+            "type": "array",
+            "title": "Candidates"
+          },
+          "selected_recipe_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Recipe Id"
+          },
+          "selected_recipe_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Recipe Version"
+          },
+          "template_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template Id"
+          },
+          "template_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template Version"
+          },
+          "validated_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Validated Sha256"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          },
+          "confirmed_analysis_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmed Analysis Run Id"
+          },
+          "previous_confirmed_analysis_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Confirmed Analysis Run Id"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "binding_id",
+          "binding_revision",
+          "load_case_id",
+          "relative_path",
+          "scan_status",
+          "review_state",
+          "revision"
+        ],
+        "title": "ReviewItemResponse"
+      },
       "ReviewItemUpdate": {
         "properties": {
           "body": {
@@ -13459,6 +14660,236 @@
           "review_status"
         ],
         "title": "ReviewItemUpdate"
+      },
+      "ReviewPageResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewItemResponse"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "ReviewPageResponse"
+      },
+      "ReviewRevalidateResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "binding_id": {
+            "type": "string",
+            "title": "Binding Id"
+          },
+          "binding_revision": {
+            "type": "integer",
+            "title": "Binding Revision"
+          },
+          "load_case_id": {
+            "type": "string",
+            "title": "Load Case Id"
+          },
+          "relative_path": {
+            "type": "string",
+            "title": "Relative Path"
+          },
+          "source_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Sha256"
+          },
+          "source_size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Size"
+          },
+          "scan_status": {
+            "type": "string",
+            "title": "Scan Status"
+          },
+          "review_state": {
+            "type": "string",
+            "title": "Review State"
+          },
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewCandidate"
+            },
+            "type": "array",
+            "title": "Candidates"
+          },
+          "selected_recipe_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Recipe Id"
+          },
+          "selected_recipe_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Recipe Version"
+          },
+          "template_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template Id"
+          },
+          "template_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template Version"
+          },
+          "validated_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Validated Sha256"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          },
+          "confirmed_analysis_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmed Analysis Run Id"
+          },
+          "previous_confirmed_analysis_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Confirmed Analysis Run Id"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "widgets": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Widgets"
+          },
+          "summary": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Summary"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "binding_id",
+          "binding_revision",
+          "load_case_id",
+          "relative_path",
+          "scan_status",
+          "review_state",
+          "revision"
+        ],
+        "title": "ReviewRevalidateResponse"
+      },
+      "SampleCoverage": {
+        "properties": {
+          "source": {
+            "type": "string",
+            "const": "STORED_RECIPE_SAMPLES_ONLY",
+            "title": "Source"
+          },
+          "validated_pair_count": {
+            "type": "integer",
+            "title": "Validated Pair Count"
+          },
+          "unverified_pair_count": {
+            "type": "integer",
+            "title": "Unverified Pair Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source",
+          "validated_pair_count",
+          "unverified_pair_count"
+        ],
+        "title": "SampleCoverage"
       },
       "StorageBindingResponse": {
         "properties": {

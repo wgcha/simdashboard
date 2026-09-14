@@ -56,6 +56,8 @@ def initialize_database() -> None:
                 "semantic_import_provenance",
                 "semantic_vocabulary_entries",
                 "semantic_vocabulary_terms",
+                "semantic_import_review_items",
+                "semantic_import_review_events",
             )
             missing = [
                 table_name
@@ -1179,6 +1181,7 @@ def _initialize_duckdb_legacy() -> None:
         ensure_voc_posts_schema(conn)
         ensure_semantic_mapping_schema(conn)
         ensure_semantic_vocabulary_schema(conn)
+        ensure_semantic_review_schema(conn)
         # Establish the schema before seeding, but defer one-time legacy data
         # conversion until the seed has created any default projects.
         ensure_access_control_schema(conn, apply_legacy_backfills=False)
@@ -1372,6 +1375,29 @@ def ensure_semantic_vocabulary_schema(conn: duckdb.DuckDBPyConnection) -> None:
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS ix_semantic_vocabulary_entries_scope ON semantic_vocabulary_entries(scope_project_id, target_kind, enabled)")
+
+
+def ensure_semantic_review_schema(conn: duckdb.DuckDBPyConnection) -> None:
+    """Embedded development equivalent of additive migration 0026."""
+    conn.execute("""CREATE TABLE IF NOT EXISTS semantic_import_review_items (
+        id VARCHAR PRIMARY KEY, binding_id VARCHAR NOT NULL, binding_revision INTEGER NOT NULL,
+        load_case_id VARCHAR NOT NULL, relative_path VARCHAR NOT NULL, source_sha256 VARCHAR, source_size BIGINT,
+        scan_status VARCHAR NOT NULL, review_state VARCHAR NOT NULL, candidates_json JSON NOT NULL,
+        selected_recipe_id VARCHAR, selected_recipe_version INTEGER, template_id VARCHAR, template_version INTEGER,
+        validated_sha256 VARCHAR, validation_summary_json JSON, error_json JSON, revision INTEGER NOT NULL DEFAULT 1,
+        previous_confirmed_analysis_run_id VARCHAR, confirmed_analysis_run_id VARCHAR,
+        created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL, created_by VARCHAR NOT NULL, updated_by VARCHAR NOT NULL,
+        validated_at TIMESTAMP, validated_by VARCHAR, confirmed_at TIMESTAMP, confirmed_by VARCHAR,
+        UNIQUE(binding_id, load_case_id, relative_path)
+    )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_semantic_review_binding_updated ON semantic_import_review_items(binding_id, updated_at DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_semantic_review_load_case_state ON semantic_import_review_items(load_case_id, review_state, updated_at DESC)")
+    conn.execute("""CREATE TABLE IF NOT EXISTS semantic_import_review_events (
+        id VARCHAR PRIMARY KEY, review_item_id VARCHAR NOT NULL, old_state VARCHAR, new_state VARCHAR NOT NULL,
+        revision INTEGER NOT NULL, prior_run_id VARCHAR, current_run_id VARCHAR, detail_json JSON NOT NULL,
+        occurred_at TIMESTAMP NOT NULL, actor VARCHAR NOT NULL
+    )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_semantic_review_events_item ON semantic_import_review_events(review_item_id, occurred_at DESC)")
 
 
 def ensure_modeling_template_schema(conn: duckdb.DuckDBPyConnection) -> None:

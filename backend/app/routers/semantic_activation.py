@@ -9,6 +9,7 @@ from ..domains.semantic_mapping.engine import SemanticValidationError
 from ..modules.access_control import SYSTEM_CATALOG_MANAGE, require_permission
 from ..security import write_audit_event
 from ..services.semantic_activation import ActivationConflict, activate_bundle
+from ..services.semantic_impact import ActivationImpactBlocked
 from .semantic_body_limit import SemanticBodyLimitRoute
 
 router = APIRouter(prefix="/api/semantic-mapping", tags=["semantic-mapping"], route_class=SemanticBodyLimitRoute)
@@ -36,5 +37,7 @@ def publish_bundle(payload: BundleActivation, request: Request) -> dict:
             )
         except ActivationConflict as error:
             raise HTTPException(409, {"code": "SEMANTIC_REVISION_CONFLICT", "message": str(error), "current_active_versions": error.current}) from error
+        except ActivationImpactBlocked as error:
+            raise HTTPException(422, {"code": error.code, "message": error.message, "impact": error.impact}) from error
         except SemanticValidationError as error:
             raise HTTPException(422, {"code": error.code, "message": error.message}) from error

@@ -1038,6 +1038,28 @@ CREATE TABLE IF NOT EXISTS semantic_vocabulary_terms (
     normalized_term VARCHAR(200) NOT NULL, PRIMARY KEY(scope_key, target_kind, normalized_term)
 );
 CREATE INDEX IF NOT EXISTS ix_semantic_vocabulary_entries_scope ON semantic_vocabulary_entries(scope_project_id, target_kind, enabled);
+CREATE TABLE IF NOT EXISTS semantic_import_review_items (
+  id VARCHAR PRIMARY KEY, binding_id VARCHAR NOT NULL REFERENCES semantic_folder_bindings(id),
+  binding_revision INTEGER NOT NULL CHECK(binding_revision >= 1), load_case_id VARCHAR NOT NULL REFERENCES load_cases(id),
+  relative_path VARCHAR(1024) NOT NULL, source_sha256 CHAR(64), source_size BIGINT,
+  scan_status VARCHAR(16) NOT NULL CHECK(scan_status IN ('UNMAPPED','AMBIGUOUS','INVALID','PENDING')),
+  review_state VARCHAR(16) NOT NULL CHECK(review_state IN ('OPEN','SELECTED','READY','STALE','IMPORTED','SKIPPED')),
+  candidates_json JSONB NOT NULL, selected_recipe_id VARCHAR, selected_recipe_version INTEGER,
+  template_id VARCHAR, template_version INTEGER, validated_sha256 CHAR(64), validation_summary_json JSONB,
+  error_json JSONB, revision INTEGER NOT NULL DEFAULT 1 CHECK(revision >= 1),
+  previous_confirmed_analysis_run_id VARCHAR REFERENCES analysis_runs(id), confirmed_analysis_run_id VARCHAR REFERENCES analysis_runs(id),
+  created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL, created_by VARCHAR NOT NULL, updated_by VARCHAR NOT NULL,
+  validated_at TIMESTAMP, validated_by VARCHAR, confirmed_at TIMESTAMP, confirmed_by VARCHAR,
+  UNIQUE(binding_id, load_case_id, relative_path), CHECK((selected_recipe_id IS NULL) = (selected_recipe_version IS NULL)),
+  CHECK((template_id IS NULL) = (template_version IS NULL))
+);
+CREATE INDEX IF NOT EXISTS ix_semantic_review_binding_updated ON semantic_import_review_items(binding_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS ix_semantic_review_load_case_state ON semantic_import_review_items(load_case_id, review_state, updated_at DESC);
+CREATE TABLE IF NOT EXISTS semantic_import_review_events (
+ id VARCHAR PRIMARY KEY, review_item_id VARCHAR NOT NULL REFERENCES semantic_import_review_items(id), old_state VARCHAR, new_state VARCHAR NOT NULL,
+ revision INTEGER NOT NULL, prior_run_id VARCHAR REFERENCES analysis_runs(id), current_run_id VARCHAR REFERENCES analysis_runs(id), detail_json JSONB NOT NULL, occurred_at TIMESTAMP NOT NULL, actor VARCHAR NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_semantic_review_events_item ON semantic_import_review_events(review_item_id, occurred_at DESC);
 
 ALTER TABLE product_information ADD CONSTRAINT fk_product_information_project FOREIGN KEY (project_id) REFERENCES projects(id);
 ALTER TABLE analysis_requests ADD CONSTRAINT fk_analysis_requests_project FOREIGN KEY (project_id) REFERENCES projects(id);

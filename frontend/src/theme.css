@@ -33,6 +33,7 @@
   --color-chart-series-5:#8b9cff;
   --color-chart-series-target:#ff9948;
   --color-shadow:rgba(0,0,0,.16);
+  --color-overlay:rgba(2,10,18,.72);
   --color-accent-shadow:rgba(81,211,255,.22);
   --color-danger-surface:#2a1720;
   --color-success-surface:#0e2b25;
@@ -63,8 +64,8 @@
   --color-text:#142033;
   --color-text-muted:#536276;
   --color-accent:#034ea2;
-  --color-danger:#d92d20;
-  --color-success:#16845b;
+  --color-danger:#b42318;
+  --color-success:#13734f;
   --color-warning:#9a5b00;
   --color-sidebar-bg:rgba(255,255,255,.96);
   --color-topbar-bg:rgba(255,255,255,.88);
@@ -84,6 +85,7 @@
   --color-chart-series-5:#6d28d9;
   --color-chart-series-target:#c2410c;
   --color-shadow:rgba(25,52,80,.08);
+  --color-overlay:rgba(20,32,51,.32);
   --color-accent-shadow:rgba(3,78,162,.18);
   --color-danger-surface:#fce8eb;
   --color-success-surface:#e4f4ed;
