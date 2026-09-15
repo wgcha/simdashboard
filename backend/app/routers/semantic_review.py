@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Literal
 from uuid import uuid4
@@ -12,9 +11,10 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from ..adapters.persistence.result_ingestion import SQLResultIngestionQuery
-from ..database_connection import connect, rows
+from ..database_connection import connect
 from ..domains.semantic_mapping.engine import SemanticValidationError, preview_recipe, resolve_widgets
 from ..modules.access_control import RESULT_IMPORT, require_resource_permission
+from ..repositories import semantic_review as review_repository
 from ..security import write_audit_event
 from ..services import spdm_storage
 from ..services.semantic_mapping import persist_semantic_import_in_transaction
@@ -96,11 +96,9 @@ def _json(value: Any) -> Any:
 
 
 def _record(conn: Any, item_id: str, *, lock: bool = False) -> dict[str, Any] | None:
-    suffix = " FOR UPDATE" if lock and getattr(conn, "backend", "duckdb") == "postgresql" else ""
-    values = rows(conn.execute("SELECT * FROM semantic_import_review_items WHERE id=?" + suffix, [item_id]))
-    if not values:
+    item = review_repository.item(conn, item_id, lock=lock)
+    if item is None:
         return None
-    item = values[0]
     for key in ("candidates_json", "validation_summary_json", "error_json"):
         item[key.removesuffix("_json")] = _json(item.pop(key)) if item.get(key) is not None else None
     for key, value in tuple(item.items()):
@@ -108,28 +106,15 @@ def _record(conn: Any, item_id: str, *, lock: bool = False) -> dict[str, Any] | 
     return item
 
 
-@contextmanager
-def _transaction(conn: Any):
-    conn.execute("BEGIN TRANSACTION")
-    try:
-        yield
-        conn.execute("COMMIT")
-    except BaseException:
-        conn.execute("ROLLBACK")
-        raise
-
-
 def _binding(conn: Any, binding_id: str) -> dict[str, Any]:
-    records = rows(conn.execute("SELECT * FROM semantic_folder_bindings WHERE id=?", [binding_id]))
-    if not records:
+    binding = review_repository.binding(conn, binding_id)
+    if binding is None:
         raise HTTPException(404, {"code": "SEMANTIC_BINDING_NOT_FOUND"})
-    return records[0]
+    return binding
 
 
 def _locked_binding(conn: Any, binding_id: str) -> dict[str, Any] | None:
-    suffix = " FOR UPDATE" if getattr(conn, "backend", "duckdb") == "postgresql" else ""
-    records = rows(conn.execute("SELECT * FROM semantic_folder_bindings WHERE id=?" + suffix, [binding_id]))
-    return records[0] if records else None
+    return review_repository.binding(conn, binding_id, lock=True)
 
 
 def _authorize(request: Request, conn: Any, binding: dict[str, Any]) -> None:
@@ -144,7 +129,7 @@ def _item_target_ids(conn: Any, item: dict[str, Any]) -> set[str]:
     for run_id in (item.get("previous_confirmed_analysis_run_id"), item.get("confirmed_analysis_run_id")):
         if not run_id:
             continue
-        row = conn.execute("SELECT load_case_id FROM analysis_runs WHERE id=?", [run_id]).fetchone()
+        row = review_repository.run_target(conn, run_id)
         if row is None:
             # A dangling reference is not safe to show through a reconnected
             # binding.  The normal FK prevents new rows from reaching here.
@@ -182,7 +167,7 @@ def _source(conn: Any, binding: dict[str, Any], relative_path: str) -> bytes:
 
 
 def _exact_recipe(conn: Any, recipe_id: str, version: int) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    row = conn.execute("SELECT definition_json, item_snapshot_json FROM semantic_recipe_versions WHERE recipe_id=? AND version=?", [recipe_id, version]).fetchone()
+    row = review_repository.recipe_version(conn, recipe_id, version)
     if not row:
         raise HTTPException(409, {"code": "SEMANTIC_REVIEW_VERSION_STALE"})
     return _json(row[0]), _json(row[1])
@@ -191,7 +176,7 @@ def _exact_recipe(conn: Any, recipe_id: str, version: int) -> tuple[dict[str, An
 def _exact_template(conn: Any, template_id: str | None, version: int | None, fallback: list[dict[str, Any]]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     if template_id is None or version is None:
         return {"widgets": []}, fallback
-    row = conn.execute("SELECT definition_json, item_snapshot_json FROM semantic_template_versions WHERE template_id=? AND version=?", [template_id, version]).fetchone()
+    row = review_repository.template_version(conn, template_id, version)
     if not row:
         raise HTTPException(409, {"code": "SEMANTIC_REVIEW_VERSION_STALE"})
     return _json(row[0]), _json(row[1])
@@ -201,11 +186,7 @@ def _stale(conn: Any, item: dict[str, Any], code: str, actor: str) -> dict[str, 
     """Expire a locked review item and append its state event atomically."""
     if item["review_state"] == "STALE" and item.get("error") == {"code": code}:
         return item
-    changed = conn.execute(
-        "UPDATE semantic_import_review_items SET review_state='STALE', error_json=?, revision=revision+1, updated_at=?, updated_by=? "
-        "WHERE id=? AND revision=? RETURNING revision",
-        [json.dumps({"code": code}), _now(), actor, item["id"], item["revision"]],
-    ).fetchone()
+    changed = review_repository.stale_item(conn, item=item, code=code, actor=actor, now=_now())
     if not changed:
         raise HTTPException(409, {"code": "SEMANTIC_REVIEW_REVISION_CONFLICT"})
     revision = int(changed[0])
@@ -215,7 +196,7 @@ def _stale(conn: Any, item: dict[str, Any], code: str, actor: str) -> dict[str, 
 
 def _stale_and_raise(conn: Any, item_id: str, expected_revision: int, code: str, actor: str) -> None:
     """Serialize expiry with a concurrent revalidation/confirmation command."""
-    with _transaction(conn):
+    with review_repository.review_transaction(conn):
         current = _record(conn, item_id, lock=True)
         if not current:
             raise HTTPException(404, {"code": "SEMANTIC_REVIEW_NOT_FOUND"})
@@ -226,7 +207,7 @@ def _stale_and_raise(conn: Any, item_id: str, expected_revision: int, code: str,
 
 
 def _event(conn: Any, item_id: str, old: str | None, new: str, revision: int, actor: str, detail: dict[str, Any], prior: str | None = None, current: str | None = None) -> None:
-    conn.execute("INSERT INTO semantic_import_review_events VALUES (?,?,?,?,?,?,?,?,?,?)", [f"semantic-review-event-{uuid4().hex[:12]}", item_id, old, new, revision, prior, current, json.dumps(detail, ensure_ascii=False), _now(), actor])
+    review_repository.add_event(conn, item_id=item_id, old=old, new=new, revision=revision, actor=actor, detail=detail, now=_now(), prior=prior, current=current)
 
 
 def record_unresolved_refresh(
@@ -242,9 +223,7 @@ def record_unresolved_refresh(
     from accepting review data read from its previous folder.
     """
     now = _now()
-    encoded_candidates = json.dumps(candidates, ensure_ascii=False)
-    encoded_error = json.dumps(error, ensure_ascii=False) if error else None
-    with _transaction(conn):
+    with review_repository.review_transaction(conn):
         current_binding = _locked_binding(conn, str(binding["id"]))
         if not current_binding:
             raise HTTPException(404, {"code": "SEMANTIC_BINDING_NOT_FOUND"})
@@ -253,17 +232,10 @@ def record_unresolved_refresh(
             or str(current_binding.get("load_case_id") or "") != str(binding.get("load_case_id") or "")
         ):
             raise HTTPException(409, {"code": "SEMANTIC_REVIEW_BINDING_STALE"})
-        existing = conn.execute(
-            "SELECT id FROM semantic_import_review_items WHERE binding_id=? AND load_case_id=? AND relative_path=?" +
-            (" FOR UPDATE" if getattr(conn, "backend", "duckdb") == "postgresql" else ""),
-            [binding["id"], binding["load_case_id"], relative_path],
-        ).fetchone()
+        existing = review_repository.unresolved_item_id(conn, binding_id=binding["id"], load_case_id=binding["load_case_id"], relative_path=relative_path)
         if not existing:
             ident = f"semantic-review-{uuid4().hex[:12]}"
-            conn.execute(
-                "INSERT INTO semantic_import_review_items(id,binding_id,binding_revision,load_case_id,relative_path,source_sha256,source_size,scan_status,review_state,candidates_json,error_json,revision,created_at,updated_at,created_by,updated_by) VALUES (?,?,?,?,?,?,?,?,? ,?,?,1,?,?,?,?)",
-                [ident, binding["id"], binding["revision"], binding["load_case_id"], relative_path, source_sha256, source_size, scan_status, "OPEN", encoded_candidates, encoded_error, now, now, actor, actor],
-            )
+            review_repository.create_unresolved_item(conn, ident=ident, binding=binding, relative_path=relative_path, source_sha256=source_sha256, source_size=source_size, scan_status=scan_status, candidates=candidates, error=error, actor=actor, now=now)
             _event(conn, ident, None, "OPEN", 1, actor, {"scan_status": scan_status, "reason": "CREATED"})
             return _record(conn, ident) or {}
         previous = _record(conn, str(existing[0]), lock=True)
@@ -300,10 +272,7 @@ def record_unresolved_refresh(
         if unchanged:
             return previous
         prior_run = previous.get("confirmed_analysis_run_id") or previous.get("previous_confirmed_analysis_run_id")
-        changed = conn.execute(
-            "UPDATE semantic_import_review_items SET binding_revision=?, source_sha256=?, source_size=?, scan_status=?, review_state='OPEN', candidates_json=?, selected_recipe_id=NULL, selected_recipe_version=NULL, template_id=NULL, template_version=NULL, validated_sha256=NULL, validation_summary_json=NULL, error_json=?, previous_confirmed_analysis_run_id=?, confirmed_analysis_run_id=NULL, revision=revision+1, updated_at=?, updated_by=? WHERE id=? AND revision=? RETURNING revision",
-            [binding["revision"], source_sha256, source_size, scan_status, encoded_candidates, encoded_error, prior_run, now, actor, previous["id"], previous["revision"]],
-        ).fetchone()
+        changed = review_repository.reopen_from_scan(conn, binding=binding, previous=previous, source_sha256=source_sha256, source_size=source_size, scan_status=scan_status, candidates=candidates, error=error, prior_run=prior_run, actor=actor, now=now)
         if not changed:
             raise HTTPException(409, {"code": "SEMANTIC_REVIEW_REVISION_CONFLICT"})
         _event(
@@ -319,15 +288,17 @@ def list_review_items(binding_id: str, request: Request, state: ReviewState | No
         raise HTTPException(422, {"code": "SEMANTIC_REVIEW_PAGE_INVALID"})
     with connect() as conn:
         binding = _binding(conn, binding_id); _authorize(request, conn, binding)
-        query, args = "SELECT id FROM semantic_import_review_items WHERE binding_id=? AND load_case_id=?", [binding_id, binding["load_case_id"]]
-        if state:
-            query += " AND review_state=?"; args.append(state)
-        query += " AND id>?"; args.append(cursor or "")
-        query += " ORDER BY id LIMIT ?"
         listed = []
         scan_cursor = cursor or ""
         while True:
-            batch = rows(conn.execute(query, [*args, 101]))
+            batch = review_repository.page_items(
+                conn,
+                binding_id=binding_id,
+                load_case_id=str(binding["load_case_id"]),
+                state=state,
+                cursor=scan_cursor,
+                limit=101,
+            )
             if not batch:
                 break
             for row in batch:
@@ -349,7 +320,6 @@ def list_review_items(binding_id: str, request: Request, state: ReviewState | No
                 break
             # Advance only over rows that have already been denied; an
             # authorized overflow returns the last visible item as cursor.
-            args[-1] = scan_cursor
         return {"items": listed, "next_cursor": None}
 
 
@@ -361,7 +331,7 @@ def history(item_id: str, request: Request, limit: int = 100) -> dict[str, Any]:
         item = _record(conn, item_id)
         if not item: raise HTTPException(404, {"code": "SEMANTIC_REVIEW_NOT_FOUND"})
         _authorize_item(request, conn, _binding(conn, str(item["binding_id"])), item)
-        events = rows(conn.execute("SELECT * FROM semantic_import_review_events WHERE review_item_id=? ORDER BY occurred_at DESC, id DESC LIMIT ?", [item_id, limit + 1]))
+        events = review_repository.events(conn, item_id, limit + 1)
         truncated = len(events) > limit
         events = events[:limit]
         for event in events:
@@ -396,7 +366,7 @@ def revalidate(item_id: str, payload: RevalidateBody, request: Request) -> dict[
             raise HTTPException(422, {"code": "SEMANTIC_REVIEW_RECIPE_REQUIRED"})
         configured = _json(binding["recipe_ids_json"])
         if payload.recipe_id is not None:
-            active = conn.execute("SELECT active_version FROM semantic_recipes WHERE id=?", [payload.recipe_id]).fetchone()
+            active = review_repository.active_recipe(conn, payload.recipe_id)
             if payload.recipe_id not in configured or not active or int(active[0] or 0) != payload.recipe_version:
                 raise HTTPException(422, {"code": "SEMANTIC_REVIEW_RECIPE_NOT_CONFIGURED"})
         if not recipe_id or version is None:
@@ -405,7 +375,7 @@ def revalidate(item_id: str, payload: RevalidateBody, request: Request) -> dict[
         template_id = binding.get("template_id")
         template_version = None
         if template_id:
-            active = conn.execute("SELECT active_version FROM semantic_templates WHERE id=?", [template_id]).fetchone()
+            active = review_repository.active_template(conn, template_id)
             if not active or active[0] is None: raise HTTPException(409, {"code": "SEMANTIC_REVIEW_TEMPLATE_STALE"})
             template_version = int(active[0])
         template, template_items = _exact_template(conn, str(template_id) if template_id else None, template_version, items)
@@ -417,7 +387,7 @@ def revalidate(item_id: str, payload: RevalidateBody, request: Request) -> dict[
         if any(widget.get("status") != "READY" for widget in widgets): raise HTTPException(422, {"code": "SEMANTIC_WIDGET_INPUT_INVALID", "widgets": widgets})
         stale: dict[str, Any] | None = None
         updated: dict[str, Any] | None = None
-        with _transaction(conn):
+        with review_repository.review_transaction(conn):
             locked_binding = _locked_binding(conn, str(binding["id"]))
             current = _record(conn, item_id, lock=True)
             if current is None:
@@ -429,7 +399,7 @@ def revalidate(item_id: str, payload: RevalidateBody, request: Request) -> dict[
             elif current["review_state"] in {"IMPORTED", "SKIPPED"}:
                 raise HTTPException(409, {"code": "SEMANTIC_REVIEW_TERMINAL", "item": current})
             else:
-                changed = conn.execute("UPDATE semantic_import_review_items SET review_state='READY', selected_recipe_id=?, selected_recipe_version=?, template_id=?, template_version=?, validated_sha256=?, validation_summary_json=?, error_json=NULL, revision=revision+1, updated_at=?, updated_by=?, validated_at=?, validated_by=? WHERE id=? AND revision=? RETURNING revision", [recipe_id, version, template_id, template_version, digest, json.dumps(parsed["summary"], ensure_ascii=False), _now(), request.state.principal.user_id, _now(), request.state.principal.user_id, item_id, payload.expected_revision]).fetchone()
+                changed = review_repository.mark_ready(conn, item_id=item_id, expected_revision=payload.expected_revision, recipe_id=recipe_id, recipe_version=version, template_id=template_id, template_version=template_version, digest=digest, summary=parsed["summary"], actor=request.state.principal.user_id, now=_now())
                 if not changed:
                     raise HTTPException(409, {"code": "SEMANTIC_REVIEW_REVISION_CONFLICT"})
                 _event(conn, item_id, str(current["review_state"]), "READY", int(changed[0]), request.state.principal.user_id, {"recipe_id": recipe_id, "recipe_version": version})
@@ -459,7 +429,7 @@ def confirm(item_id: str, payload: ConfirmBody, request: Request) -> dict[str, A
         digest = hashlib.sha256(content).hexdigest()
         stale: dict[str, Any] | None = None
         result: dict[str, Any] | None = None
-        with _transaction(conn):
+        with review_repository.review_transaction(conn):
             binding = _locked_binding(conn, str(binding["id"]))
             if binding is None:
                 raise HTTPException(404, {"code": "SEMANTIC_BINDING_NOT_FOUND"})
@@ -482,7 +452,7 @@ def confirm(item_id: str, payload: ConfirmBody, request: Request) -> dict[str, A
                 command = {"project_id": target.project_id, "request_id": target.request_id, "load_case_id": current["load_case_id"], "source_type": "SEMANTIC_RECIPE", "source_name": f"semantic/{current['selected_recipe_id']}/{current['selected_recipe_version']}/{current['relative_path']}", "source_checksum": digest, "source_run_id": f"semantic:{current['selected_recipe_id']}:{current['selected_recipe_version']}:{digest}", "conflict_policy": "SKIP", "parser_version": "semantic-mapping-v1", "parsed": parsed, "actor": request.state.principal.display_name, "metadata": {"recipe_id": current["selected_recipe_id"], "recipe_version": current["selected_recipe_version"], "template_id": current.get("template_id"), "template_version": current.get("template_version"), "observations": parsed.get("observations", []), "source_filename": current["relative_path"]}}
                 outcome, run_id = persist_semantic_import_in_transaction(conn, command, recipe_id=str(current["selected_recipe_id"]), recipe_version=int(current["selected_recipe_version"]), template_id=current.get("template_id"), template_version=current.get("template_version"), filename=str(current["relative_path"]), source_bytes=content, authorize=lambda c, tx: require_resource_permission(request, RESULT_IMPORT, "load_case", c["load_case_id"], conn=tx), now=_now)
                 state = "SKIPPED" if outcome["status"] == "SKIPPED" else "IMPORTED"
-                changed = conn.execute("UPDATE semantic_import_review_items SET review_state=?, confirmed_analysis_run_id=?, confirmed_at=?, confirmed_by=?, revision=revision+1, updated_at=?, updated_by=? WHERE id=? AND revision=? RETURNING revision", [state, run_id, _now(), request.state.principal.user_id, _now(), request.state.principal.user_id, item_id, current["revision"]]).fetchone()
+                changed = review_repository.mark_confirmed(conn, item_id=item_id, expected_revision=current["revision"], state=state, run_id=run_id, actor=request.state.principal.user_id, now=_now())
                 if not changed:
                     raise HTTPException(409, {"code": "SEMANTIC_REVIEW_REVISION_CONFLICT"})
                 _event(conn, item_id, "READY", state, int(changed[0]), request.state.principal.user_id, {"outcome": outcome["status"]}, current.get("previous_confirmed_analysis_run_id"), run_id)
@@ -515,7 +485,7 @@ def reopen(item_id: str, payload: ReopenBody, request: Request) -> dict[str, Any
                 raise HTTPException(409, {"code": "SEMANTIC_REVIEW_SOURCE_STALE"}) from error
             raise
         digest = hashlib.sha256(content).hexdigest()
-        with _transaction(conn):
+        with review_repository.review_transaction(conn):
             locked_binding = _locked_binding(conn, str(binding["id"]))
             current = _record(conn, item_id, lock=True)
             if not locked_binding or not current:
@@ -527,10 +497,7 @@ def reopen(item_id: str, payload: ReopenBody, request: Request) -> dict[str, Any
             if int(locked_binding["revision"]) != int(current["binding_revision"]) or str(locked_binding.get("load_case_id")) != str(current.get("load_case_id")):
                 raise HTTPException(409, {"code": "SEMANTIC_REVIEW_BINDING_STALE"})
             prior_run = current.get("confirmed_analysis_run_id") or current.get("previous_confirmed_analysis_run_id")
-            changed = conn.execute(
-                "UPDATE semantic_import_review_items SET source_sha256=?, source_size=?, scan_status='PENDING', review_state='OPEN', selected_recipe_id=NULL, selected_recipe_version=NULL, template_id=NULL, template_version=NULL, validated_sha256=NULL, validation_summary_json=NULL, error_json=NULL, previous_confirmed_analysis_run_id=?, confirmed_analysis_run_id=NULL, revision=revision+1, updated_at=?, updated_by=? WHERE id=? AND revision=? RETURNING revision",
-                [digest, len(content), prior_run, _now(), request.state.principal.user_id, item_id, current["revision"]],
-            ).fetchone()
+            changed = review_repository.reopen_explicit(conn, item_id=item_id, expected_revision=current["revision"], digest=digest, source_size=len(content), prior_run=prior_run, actor=request.state.principal.user_id, now=_now())
             if not changed:
                 raise HTTPException(409, {"code": "SEMANTIC_REVIEW_REVISION_CONFLICT"})
             _event(conn, item_id, str(current["review_state"]), "OPEN", int(changed[0]), request.state.principal.user_id, {"reason": "EXPLICIT_REOPEN"}, prior_run)

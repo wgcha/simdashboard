@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [switch]$SkipFrontendBuild,
     # Automation may use this to verify an already prepared deployment.  The

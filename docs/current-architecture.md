@@ -128,6 +128,8 @@ Frontend는 `features/workbench/modeling-templates/`에서 카드, 생성 대화
 
 새 기능은 가능한 한 얇은 router에서 입력/권한/응답 변환만 처리하고, orchestration과 SQL을 아래 계층으로 넘긴다.
 
+계정 등록과 semantic mapping·review·vocabulary API는 이 전환을 따르며, router는 HTTP 입력·권한·감사 호출을 유지한다. 같은 connection의 transaction, PostgreSQL row/table lock, revision CAS 및 audit rollback을 보존하는 SQL 조회·상태 전이·행 투영은 각각 `repositories/auth_accounts.py`, `repositories/semantic_mapping.py`, `repositories/semantic_review.py`, `repositories/semantic_vocabulary.py`가 소유한다.
+
 `report_templates`의 목록·업로드·render·비활성화 4개 API는 HTTP adapter,
 application command/query, reports domain port, SQL metadata adapter, managed filesystem
 adapter, ZIP/XML document adapter로 분리됐다. 기본 runtime root는

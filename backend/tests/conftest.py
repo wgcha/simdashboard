@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from app.config import database_settings
 from app.database import initialize_database
 from app.database_connection import connect
 from app.security import hash_password
@@ -133,7 +134,8 @@ def password_auth_bootstrap_admin() -> tuple[str, str, str]:
         yield user_id, username, password
     finally:
         with connect() as connection:
-            connection.execute("DELETE FROM audit_events WHERE user_id=?", [user_id])
+            if database_settings().backend == "duckdb":
+                connection.execute("DELETE FROM audit_events WHERE user_id=?", [user_id])
             connection.execute("DELETE FROM project_memberships WHERE user_id=?", [user_id])
             connection.execute("DELETE FROM users WHERE id=?", [user_id])
 

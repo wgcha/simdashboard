@@ -468,3 +468,11 @@
 - Windows 배포 계약은 기존 setup.ps1로 정확한 프로젝트 runtime을 준비하고 wheel 수집 전에 표준 ensurepip로 pip를 복구한다. 오프라인 설치 검사는 별도 venv와 --no-index를 유지한다. 업데이트 fixture JSON 입출력을 UTF-8로 명시했다.
 - 6개 권한 테스트에만 독립 활성 관리자 fixture를 주입해 초기 설정이 완료된 상태의 권한/강등 계약을 검사한다. 운영 bootstrap guard와 bootstrap 전용 테스트에는 적용하지 않는다. 관련 계약 25개 통과, 업데이트 bootstrap/integration PowerShell 검사 통과. Sol 1차 및 독립 Astra 최종 검수 승인.
 - SQL 경계와 스키마 생성기 관련 CI 실패는 별도 수정·검증 중이며 이번 부분 커밋에 포함하지 않는다.
+### main 통합 backend·배포 계약 복구
+
+- 새 네 router의 직접 SQL을 기능별 repository로 옮겼다. 기존 connection, transaction, CAS, PostgreSQL 잠금, 권한 확인 및 감사 rollback 순서를 유지하며, 검토함의 조건별 SQL과 권한 필터 페이지 진행도 repository 경계로 정리했다. 아키텍처 baseline을 늘리거나 검사를 우회하지 않았다.
+- semantic API 31개, 계정 API/bootstrap 6개, 검토함 페이지·사전 focused 회귀 7개 통과. architecture 및 OpenAPI 검사 통과. Win32에서 전체 unit 실행은 666개 통과/50개 건너뜀/66개 실패였으며, POSIX 전용 기능의 Windows 미지원 실패와 오래된 migration head 기대값 실패를 확인했다. migration 순서 검사의 head를 현재 0026에 맞췄고, Linux 전체 검증은 원격 CI에서 확인한다.
+- PostgreSQL 계약 테스트의 본문은 통과했지만 fixture 정리에서 감사 테이블 DELETE 권한 오류가 났다. 감사 삭제가 허용되지 않는 app 역할을 유지하고 기존 테스트 패턴대로 DuckDB에서만 해당 정리를 수행한다.
+- PostgreSQL semantic bootstrap DDL을 독립 생성 원본에 연결하여 schema.sql 재생성 누락을 복구했다. portability 4개 통과 및 재생성 무diff를 확인했다. schema와 migration 자체는 변경하지 않았으며 기존 canonical과 migration의 모든 제약 일치를 확인한 것으로 기록하지 않는다.
+- 영문 Windows PowerShell 5.1이 BOM 없는 deploy.ps1의 한글을 ANSI로 오해석했다. 파일 본문은 유지하고 UTF-8 BOM만 추가했다. 전체 배포 PowerShell ParseFile 및 account lifecycle 검사를 통과했고, 비ASCII 추적 PS 파일의 BOM 누락이 없음을 확인했다.
+- 원격에서 Windows x64 잠금 의존성의 wheel 수집·별도 환경 오프라인 설치 검사가 통과했다. 원본 작업 폴더의 미커밋 12개 파일 SHA-256도 작업 전과 동일함을 재확인했다. 실제 사용자 DB/서비스와 Server 2022 폐쇄망 실기는 변경하거나 실행하지 않았다.

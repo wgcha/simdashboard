@@ -15,7 +15,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from ..adapters.persistence.result_ingestion import SQLResultIngestionQuery
-from ..database_connection import connect, rows
+from ..database_connection import connect
 from ..domains.semantic_mapping.engine import (
     SemanticValidationError,
     inspect_sample,
@@ -26,6 +26,7 @@ from ..domains.semantic_mapping.engine import (
     validate_template,
 )
 from ..modules.access_control import PROJECT_DATA_VIEW, RESULT_IMPORT, SYSTEM_CATALOG_MANAGE, require_permission, require_resource_permission
+from ..repositories import semantic_mapping as mapping_repository
 from ..security import write_audit_event
 from ..services import spdm_storage
 from ..services.semantic_mapping import persist_semantic_import, semantic_transaction
@@ -89,25 +90,12 @@ def _error(error: Exception) -> HTTPException:
 
 
 def _catalog(conn: Any) -> dict[str, list[dict[str, Any]]]:
-    def listed(table: str, version_table: str, id_column: str) -> list[dict[str, Any]]:
-        records = []
-        for row in rows(conn.execute(
-            f"SELECT base.id, base.{ 'key' if table == 'semantic_result_items' else 'name' } AS name, base.latest_version, base.active_version, base.updated_at, base.updated_by, "
-            f"version.definition_json, version.lifecycle_status "
-            f"FROM {table} base JOIN {version_table} version ON version.{id_column}=base.id AND version.version=base.latest_version "
-            "ORDER BY base.updated_at DESC, base.id"
-        )):
-            record = dict(row); record["definition"] = _json(record.pop("definition_json")); records.append(record)
-        return records
-    return {
-        "items": listed("semantic_result_items", "semantic_result_item_versions", "item_id"),
-        "recipes": listed("semantic_recipes", "semantic_recipe_versions", "recipe_id"),
-        "templates": listed("semantic_templates", "semantic_template_versions", "template_id"),
-        "bindings": [
-            {**dict(row), "recipe_ids": _json(row["recipe_ids_json"])}
-            for row in rows(conn.execute("SELECT * FROM semantic_folder_bindings ORDER BY relative_path"))
-        ],
-    }
+    catalog = mapping_repository.catalog(conn)
+    for kind in ("items", "recipes", "templates"):
+        for record in catalog[kind]:
+            record["definition"] = _json(record.pop("definition_json"))
+    catalog["bindings"] = [{**entry, "recipe_ids": _json(entry["recipe_ids_json"])} for entry in catalog["bindings"]]
+    return catalog
 
 
 def _items(conn: Any) -> list[dict[str, Any]]:
@@ -115,57 +103,25 @@ def _items(conn: Any) -> list[dict[str, Any]]:
 
 
 def _version(conn: Any, kind: str, ident: str, active: bool = True) -> tuple[int, dict[str, Any], list[dict[str, Any]]]:
-    base, versions, column = {
-        "recipe": ("semantic_recipes", "semantic_recipe_versions", "recipe_id"),
-        "template": ("semantic_templates", "semantic_template_versions", "template_id"),
-    }[kind]
-    field = "active_version" if active else "latest_version"
-    row = conn.execute(
-        f"SELECT b.{field}, v.definition_json, v.item_snapshot_json FROM {base} b JOIN {versions} v ON v.{column}=b.id AND v.version=b.{field} WHERE b.id=?",
-        [ident],
-    ).fetchone()
+    row = mapping_repository.version(conn, kind, ident, active=active)
     if not row or row[0] is None:
         raise HTTPException(409, {"code": f"SEMANTIC_{kind.upper()}_NOT_ACTIVE", "message": "활성 정의가 없습니다."})
     return int(row[0]), _json(row[1]), _json(row[2])
 
 
 def _version_at(conn: Any, kind: str, ident: str, version: int) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    _, versions, column = {"recipe": ("semantic_recipes", "semantic_recipe_versions", "recipe_id"), "template": ("semantic_templates", "semantic_template_versions", "template_id")}[kind]
-    row = conn.execute(f"SELECT definition_json, item_snapshot_json FROM {versions} WHERE {column}=? AND version=?", [ident, version]).fetchone()
+    row = mapping_repository.version_at(conn, kind, ident, version)
     if not row: raise HTTPException(409, {"code": "SEMANTIC_VERSION_NOT_FOUND"})
     return _json(row[0]), _json(row[1])
 
 
 def _save_version(conn: Any, kind: str, ident: str | None, name: str, definition: dict[str, Any], expected: int | None, actor: str) -> dict[str, Any]:
-    base, versions, column = {
-        "item": ("semantic_result_items", "semantic_result_item_versions", "item_id"),
-        "recipe": ("semantic_recipes", "semantic_recipe_versions", "recipe_id"),
-        "template": ("semantic_templates", "semantic_template_versions", "template_id"),
-    }[kind]
     ident = ident or f"semantic-{kind}-{uuid4().hex[:12]}"
     now = _now()
-    lock_suffix = " FOR UPDATE" if getattr(conn, "backend", "duckdb") == "postgresql" else ""
-    existing = conn.execute(f"SELECT latest_version FROM {base} WHERE id=?{lock_suffix}", [ident]).fetchone()
-    if existing is not None:
-        latest = int(existing[0])
-        if expected is None or expected != latest:
-            raise HTTPException(409, {"code": "SEMANTIC_REVISION_CONFLICT", "current_version": latest})
-        version = latest + 1
-        if kind == "item":
-            conn.execute(f"UPDATE {base} SET key=?, latest_version=?, updated_at=?, updated_by=? WHERE id=? AND latest_version=?", [str(definition["key"]), version, now, actor, ident, latest])
-        else:
-            conn.execute(f"UPDATE {base} SET name=?, latest_version=?, updated_at=?, updated_by=? WHERE id=? AND latest_version=?", [name.strip(), version, now, actor, ident, latest])
-    else:
-        if expected not in (None, 0):
-            raise HTTPException(409, {"code": "SEMANTIC_REVISION_CONFLICT", "current_version": 0})
-        version = 1
-        key = str(definition.get("key") or ident)
-        if kind == "item":
-            conn.execute(f"INSERT INTO {base}(id, key, latest_version, active_version, created_at, updated_at, updated_by) VALUES (?, ?, ?, NULL, ?, ?, ?)", [ident, key, version, now, now, actor])
-        else:
-            conn.execute(f"INSERT INTO {base}(id, name, latest_version, active_version, created_at, updated_at, updated_by) VALUES (?, ?, ?, NULL, ?, ?, ?)", [ident, name.strip(), version, now, now, actor])
     snapshot = [] if kind == "item" else _items(conn)
-    conn.execute(f"INSERT INTO {versions}({column}, version, definition_json, item_snapshot_json, lifecycle_status, created_at, created_by) VALUES (?, ?, ?, ?, 'DRAFT', ?, ?)", [ident, version, json.dumps(definition, ensure_ascii=False), json.dumps(snapshot, ensure_ascii=False), now, actor])
+    conflict, version = mapping_repository.save_version(conn, kind=kind, ident=ident, name=name, definition=definition, expected=expected, actor=actor, now=now, item_snapshot=snapshot)
+    if version == 0:
+        raise HTTPException(409, {"code": "SEMANTIC_REVISION_CONFLICT", "current_version": conflict})
     return {"id": ident, "version": version, "lifecycle_status": "DRAFT", "definition": definition, "item_snapshot": snapshot}
 
 
@@ -184,17 +140,16 @@ def save_item(payload: ItemSave, request: Request) -> dict[str, Any]:
         definition = dict(payload.definition); definition["id"] = item_id
         try: definition = validate_item(definition)
         except Exception as error: raise _error(error) from error
-        if getattr(conn, "backend", "duckdb") == "postgresql":
-            conn.execute("SELECT id FROM semantic_result_items WHERE id=? FOR UPDATE", [item_id]).fetchone()
-        key_owner = conn.execute("SELECT id FROM semantic_result_items WHERE key=?", [definition["key"]]).fetchone()
+        mapping_repository.lock_item(conn, item_id)
+        key_owner = mapping_repository.item_key_owner(conn, definition["key"])
         if key_owner and str(key_owner[0]) != item_id:
             raise HTTPException(409, {"code": "SEMANTIC_ITEM_KEY_CONFLICT"})
-        previous = conn.execute("SELECT definition_json FROM semantic_result_item_versions WHERE item_id=? ORDER BY version DESC LIMIT 1", [item_id]).fetchone()
+        previous = mapping_repository.previous_item_definition(conn, item_id)
         if previous:
             old = _json(previous[0])
             changed = any(old.get(field) != definition.get(field) for field in ("key", "kind", "data_type", "unit", "dimensions"))
             if changed:
-                snapshots = [row[0] for row in conn.execute("SELECT item_snapshot_json FROM semantic_recipe_versions UNION ALL SELECT item_snapshot_json FROM semantic_template_versions").fetchall()]
+                snapshots = mapping_repository.all_item_snapshots(conn)
                 if any(any(entry.get("id") == item_id for entry in _json(snapshot)) for snapshot in snapshots):
                     raise HTTPException(422, {"code": "SEMANTIC_ITEM_MEANING_IMMUTABLE", "message": "사용 중인 결과 항목의 의미는 변경할 수 없습니다."})
         result = _save_version(conn, "item", item_id, str(definition["label"]), definition, payload.expected_version, request.state.principal.user_id)
@@ -203,12 +158,10 @@ def save_item(payload: ItemSave, request: Request) -> dict[str, Any]:
 
 
 def _save_definition(kind: str, payload: DefinitionSave, request: Request) -> dict[str, Any]:
-    with connect() as conn:
+    with connect() as conn, mapping_repository.definition_transaction(conn):
         require_permission(request, SYSTEM_CATALOG_MANAGE, conn=conn)
-        conn.execute("BEGIN TRANSACTION")
         try:
-            if getattr(conn, "backend", "duckdb") == "postgresql":
-                conn.execute("SELECT id FROM semantic_result_items ORDER BY id FOR SHARE").fetchall()
+            mapping_repository.lock_items_for_definition_save(conn)
             definitions = _items(conn)
             (validate_recipe if kind == "recipe" else validate_template)(payload.definition, definitions)
             if kind == "recipe" and payload.sample_content_base64 is not None:
@@ -219,12 +172,10 @@ def _save_definition(kind: str, payload: DefinitionSave, request: Request) -> di
             else: sample = None
             result = _save_version(conn, kind, payload.id, payload.name, payload.definition, payload.expected_version, request.state.principal.user_id)
             if sample is not None:
-                conn.execute("UPDATE semantic_recipe_versions SET sample_filename=?, sample_sha256=?, sample_bytes=? WHERE recipe_id=? AND version=?", [payload.sample_filename, hashlib.sha256(sample).hexdigest(), sample, result["id"], result["version"]])
+                mapping_repository.store_recipe_sample(conn, filename=payload.sample_filename, digest=hashlib.sha256(sample).hexdigest(), content=sample, recipe_id=result["id"], version_number=result["version"])
             write_audit_event(request=request, principal=request.state.principal, status_code=201, action=f"SEMANTIC_{kind.upper()}_SAVED", detail={f"{kind}_id": result["id"], "version": result["version"]}, connection=conn)
-            conn.execute("COMMIT")
             return result
         except BaseException as error:
-            conn.execute("ROLLBACK")
             if isinstance(error, SemanticValidationError):
                 raise _error(error) from error
             raise
@@ -339,14 +290,10 @@ def save_binding(payload: BindingSave, request: Request) -> dict[str, Any]:
     with connect() as conn, semantic_transaction(conn):
         require_permission(request, SYSTEM_CATALOG_MANAGE, conn=conn)
         require_permission(request, RESULT_IMPORT, payload.project_id, conn=conn)
-        if getattr(conn, "backend", "duckdb") == "postgresql":
-            conn.execute("LOCK TABLE semantic_folder_bindings, spdm_storage_bindings IN SHARE ROW EXCLUSIVE MODE")
+        mapping_repository.lock_binding_tables(conn)
         if payload.load_case_id: require_resource_permission(request, RESULT_IMPORT, "load_case", payload.load_case_id, conn=conn)
         if payload.request_id or payload.load_case_id:
-            lineage = conn.execute(
-                "SELECT ar.project_id, ar.id, lc.id FROM analysis_requests ar LEFT JOIN load_cases lc ON lc.request_id=ar.id WHERE ar.id=coalesce(?, (SELECT request_id FROM load_cases WHERE id=?)) AND (? IS NULL OR lc.id=?)",
-                [payload.request_id, payload.load_case_id, payload.load_case_id, payload.load_case_id],
-            ).fetchone()
+            lineage = mapping_repository.binding_lineage(conn, payload.request_id, payload.load_case_id)
             if not lineage or str(lineage[0]) != payload.project_id or (payload.request_id and str(lineage[1]) != payload.request_id):
                 raise HTTPException(422, {"code": "SEMANTIC_BINDING_TARGET_MISMATCH"})
             payload = payload.model_copy(update={"request_id": str(lineage[1])})
@@ -365,8 +312,8 @@ def save_binding(payload: BindingSave, request: Request) -> dict[str, Any]:
         target_path = root.root.joinpath(*relative_path.split("/")); spdm_storage._assert_safe_existing(target_path, root.root)
         if not target_path.is_dir(): raise HTTPException(422, {"code": "SPDM_PATH_MISSING"})
         path_key = relative_path.casefold()
-        legacy = [str(row[0]).casefold() for row in conn.execute("SELECT relative_path FROM spdm_storage_bindings").fetchall()]
-        existing = [dict(row) for row in rows(conn.execute("SELECT b.id, b.project_id, coalesce(b.request_id, lc.request_id) AS request_id, b.load_case_id, b.relative_path FROM semantic_folder_bindings b LEFT JOIN load_cases lc ON lc.id=b.load_case_id"))]
+        legacy = mapping_repository.legacy_binding_paths(conn)
+        existing = mapping_repository.semantic_bindings(conn)
         if any(path_key == path or path_key.startswith(path + "/") or path.startswith(path_key + "/") for path in legacy):
             raise HTTPException(409, {"code": "SEMANTIC_LEGACY_PATH_OWNED"})
         for prior in existing:
@@ -384,16 +331,15 @@ def save_binding(payload: BindingSave, request: Request) -> dict[str, Any]:
         if payload.template_id: _version(conn, "template", payload.template_id)
         now = _now()
         if payload.id:
-            suffix = " FOR UPDATE" if getattr(conn, "backend", "duckdb") == "postgresql" else ""
-            current = conn.execute("SELECT revision FROM semantic_folder_bindings WHERE id=?" + suffix, [payload.id]).fetchone()
+            current = mapping_repository.binding_revision(conn, payload.id)
             if not current: raise HTTPException(404, {"code": "SEMANTIC_BINDING_NOT_FOUND"})
             if payload.expected_revision != int(current[0]): raise HTTPException(409, {"code": "SEMANTIC_BINDING_REVISION_CONFLICT", "current_revision": int(current[0])})
             revision = int(current[0]) + 1
-            conn.execute("UPDATE semantic_folder_bindings SET project_id=?, request_id=?, load_case_id=?, relative_path=?, role=?, recipe_ids_json=?, template_id=?, updated_at=?, created_by=?, revision=? WHERE id=? AND revision=?", [payload.project_id, payload.request_id, payload.load_case_id, relative_path, payload.role, json.dumps(payload.recipe_ids), payload.template_id, now, request.state.principal.user_id, revision, payload.id, int(current[0])])
+            mapping_repository.update_binding(conn, payload=payload, relative_path=relative_path, revision=revision, actor=request.state.principal.user_id, now=now)
             binding_id = payload.id
         else:
             binding_id = f"semantic-binding-{uuid4().hex[:12]}"; revision = 1
-            conn.execute("INSERT INTO semantic_folder_bindings VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [binding_id, payload.project_id, payload.request_id, payload.load_case_id, relative_path, payload.role, json.dumps(payload.recipe_ids), payload.template_id, now, now, request.state.principal.user_id, revision])
+            mapping_repository.create_binding(conn, binding_id=binding_id, payload=payload, relative_path=relative_path, actor=request.state.principal.user_id, now=now)
         return {**payload.model_dump(), "id": binding_id, "relative_path": relative_path, "revision": revision}
 
 
@@ -418,7 +364,7 @@ def _import(conn: Any, request: Request, filename: str, content: bytes, recipe_i
     command = {"project_id": target.project_id, "request_id": target.request_id, "load_case_id": load_case_id, "source_type": "SEMANTIC_RECIPE", "source_name": f"semantic/{recipe_id}/{recipe_version}/{filename}", "source_checksum": digest, "source_run_id": f"semantic:{recipe_id}:{recipe_version}:{digest}", "conflict_policy": "SKIP", "parser_version": "semantic-mapping-v1", "parsed": parsed, "actor": request.state.principal.display_name, "metadata": {"recipe_id": recipe_id, "recipe_version": recipe_version, "template_id": template_id, "template_version": template_version, "observations": parsed.get("observations", []), "source_filename": filename}}
     outcome, run_id = persist_semantic_import(conn, command, recipe_id=recipe_id, recipe_version=recipe_version, template_id=template_id, template_version=template_version, filename=filename, source_bytes=content, authorize=lambda c, tx: require_resource_permission(request, RESULT_IMPORT, "load_case", c["load_case_id"], conn=tx), now=_now)
     if outcome["status"] == "SKIPPED" and run_id:
-        stored = conn.execute("SELECT template_id, template_version FROM semantic_import_provenance WHERE analysis_run_id=?", [run_id]).fetchone()
+        stored = mapping_repository.provenance_template(conn, run_id)
         if stored and stored[0] is not None:
             template_id, template_version = str(stored[0]), int(stored[1]) if stored[1] is not None else None
             if template_version is not None:
@@ -442,9 +388,8 @@ async def import_file(request: Request) -> dict[str, Any]:
 @router.post("/bindings/{binding_id}/refresh")
 def refresh_binding(binding_id: str, request: Request) -> dict[str, Any]:
     with connect() as conn:
-        bound = rows(conn.execute("SELECT * FROM semantic_folder_bindings WHERE id=?", [binding_id]))
-        if not bound: raise HTTPException(404, {"code": "SEMANTIC_BINDING_NOT_FOUND"})
-        binding = bound[0]
+        binding = mapping_repository.binding(conn, binding_id)
+        if binding is None: raise HTTPException(404, {"code": "SEMANTIC_BINDING_NOT_FOUND"})
         if not binding["load_case_id"]: raise HTTPException(422, {"code": "SEMANTIC_BINDING_LOAD_CASE_REQUIRED"})
         require_resource_permission(request, RESULT_IMPORT, "load_case", str(binding["load_case_id"]), conn=conn)
         root = spdm_storage.storage_root(conn)
@@ -491,7 +436,7 @@ def refresh_binding(binding_id: str, request: Request) -> dict[str, Any]:
                     widgets = resolve_widgets(template, template_items, parsed)
                     if any(widget.get("status") != "READY" for widget in widgets):
                         raise HTTPException(422, {"code": "SEMANTIC_WIDGET_INPUT_INVALID", "widgets": widgets})
-                prior_review = conn.execute("SELECT id FROM semantic_import_review_items WHERE binding_id=? AND load_case_id=? AND relative_path=?", [binding["id"], binding["load_case_id"], path.name]).fetchone()
+                prior_review = mapping_repository.review_exists(conn, binding["id"], binding["load_case_id"], path.name)
                 if prior_review:
                     review = record_unresolved_refresh(conn, binding, relative_path=path.name, scan_status="PENDING", candidates=candidates, source_sha256=hashlib.sha256(content).hexdigest(), source_size=len(content), error=None, actor=request.state.principal.user_id)
                     if review["review_state"] in {"IMPORTED", "SKIPPED"}:
@@ -524,11 +469,8 @@ def refresh_binding(binding_id: str, request: Request) -> dict[str, Any]:
 def results(load_case_id: str, request: Request, run_id: str | None = None, template_id: str | None = None) -> dict[str, Any]:
     with connect() as conn:
         require_resource_permission(request, PROJECT_DATA_VIEW, "load_case", load_case_id, conn=conn)
-        query = "SELECT * FROM semantic_import_provenance WHERE load_case_id=?"; args: list[Any] = [load_case_id]
-        if run_id: query += " AND analysis_run_id=?"; args.append(run_id)
-        query += " ORDER BY created_at DESC LIMIT 1"; row = conn.execute(query, args).fetchone()
-        if not row: return {"run_id": run_id, "widgets": []}
-        columns = [column[0] for column in conn.execute(query, args).description]; provenance = dict(zip(columns, row))
+        provenance = mapping_repository.latest_provenance(conn, load_case_id, run_id)
+        if provenance is None: return {"run_id": run_id, "widgets": []}
         selected = template_id or provenance["template_id"]
         if selected and template_id is None and provenance["template_version"] is not None:
             template, snapshot = _version_at(conn, "template", str(selected), int(provenance["template_version"]))
@@ -559,7 +501,7 @@ def import_definitions(payload: dict[str, Any], request: Request) -> dict[str, A
             for entry in item_entries:
                 definition = dict(entry.get("definition", entry)); old = str(entry.get("id") or definition.get("id") or "")
                 if not old or old in remap: raise SemanticValidationError("ITEM_INVALID", "반입 항목 ID가 없거나 중복됩니다.")
-                if conn.execute("SELECT 1 FROM semantic_result_items WHERE key=?", [definition.get("key")]).fetchone(): raise SemanticValidationError("ITEM_KEY_CONFLICT", "같은 결과 변수 키가 이미 존재합니다.")
+                if mapping_repository.item_key_exists(conn, definition.get("key")): raise SemanticValidationError("ITEM_KEY_CONFLICT", "같은 결과 변수 키가 이미 존재합니다.")
                 if definition.get("key") in imported_keys: raise SemanticValidationError("ITEM_KEY_CONFLICT", "반입 패키지에 같은 결과 변수 키가 중복됩니다.")
                 imported_keys.add(definition.get("key"))
                 new = f"semantic-item-{uuid4().hex[:12]}"; remap[old] = new; definition["id"] = new
@@ -580,13 +522,9 @@ def import_definitions(payload: dict[str, Any], request: Request) -> dict[str, A
                     target.append((str(entry.get("name") or definition.get("label") or kind), definition))
         except Exception as error:
             raise _error(error) from error
-        conn.execute("BEGIN TRANSACTION")
-        try:
+        with mapping_repository.definition_transaction(conn):
             created=[]
             for definition in normalized_items: created.append(_save_version(conn, "item", definition["id"], definition["label"], definition, None, request.state.principal.user_id))
             for kind, entries in (("recipe", normalized_recipes), ("template", normalized_templates)):
                 for name, definition in entries: created.append(_save_version(conn, kind, None, name, definition, None, request.state.principal.user_id))
-            conn.execute("COMMIT")
-        except BaseException:
-            conn.execute("ROLLBACK"); raise
         return {"status": "DRAFT_IMPORTED", "created": created, "item_id_remap": remap}

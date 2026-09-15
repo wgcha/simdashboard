@@ -7,6 +7,7 @@ from ..adapters.http.auth_validation import PrivateInputRoute
 
 from ..config import security_settings
 from ..database_connection import connect
+from ..repositories.auth_accounts import registration_transaction
 from ..schemas.auth_accounts import (
     PasswordChangePayload,
     PasswordChangeResponse,
@@ -47,31 +48,29 @@ def register(payload: RegistrationPayload, request: Request) -> dict[str, Any]:
         raise HTTPException(429, "회원가입 요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.", headers={"Retry-After": "60"})
     with connect() as conn:
         try:
-            conn.execute("BEGIN TRANSACTION")
-            account = register_password_account(
-                conn,
-                username=payload.username,
-                display_name=payload.display_name,
-                password=payload.password,
-            )
-            audit_principal = Principal(
-                user_id=account.user_id,
-                username=account.username,
-                display_name=account.display_name,
-                account_status="PENDING",
-                is_global_admin=False,
-                employee_id=None,
-            )
-            write_audit_event(
-                request=request,
-                principal=audit_principal,
-                status_code=201,
-                action="ACCOUNT_CREATED_PENDING",
-                connection=conn,
-            )
-            conn.execute("COMMIT")
+            with registration_transaction(conn):
+                account = register_password_account(
+                    conn,
+                    username=payload.username,
+                    display_name=payload.display_name,
+                    password=payload.password,
+                )
+                audit_principal = Principal(
+                    user_id=account.user_id,
+                    username=account.username,
+                    display_name=account.display_name,
+                    account_status="PENDING",
+                    is_global_admin=False,
+                    employee_id=None,
+                )
+                write_audit_event(
+                    request=request,
+                    principal=audit_principal,
+                    status_code=201,
+                    action="ACCOUNT_CREATED_PENDING",
+                    connection=conn,
+                )
         except UsernameAlreadyRegisteredError as exc:
-            conn.execute("ROLLBACK")
             write_audit_event(
                 request=request,
                 principal=None,
@@ -81,7 +80,6 @@ def register(payload: RegistrationPayload, request: Request) -> dict[str, Any]:
             )
             raise HTTPException(409, "이미 사용 중인 사용자 이름입니다.") from exc
         except Exception:
-            conn.execute("ROLLBACK")
             raise
     return {
         "user_id": account.user_id,
