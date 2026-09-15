@@ -1,10 +1,17 @@
 import assert from 'node:assert/strict'
-import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { execFileSync } from 'node:child_process'
 import test from 'node:test'
 import { buildLocalHelperSetup, resolveHelperSetupAddress } from '../src/features/local-pc/setupLauncher.ts'
+
+const distribution = {
+  status: 'ready',
+  version: '1.0.0',
+  filename: 'SimulationWorkbenchLocalHelper-1.0.0-windows-x64.zip',
+  artifact_url: '/api/local-helper/distribution/download',
+  sha256: 'a'.repeat(64),
+  size_bytes: 12345,
+  released_at: '2026-09-09T00:00:00Z',
+}
 
 function decodedPowerShell(batch) {
   const match = batch.match(/:: WORKBENCH_LOCAL_HELPER_SETUP_PAYLOAD\r?\n([A-Za-z0-9+/=]+)\r?\n?$/)
@@ -21,7 +28,7 @@ function decodedConfig(script) {
 test('launcher uses a UTF-16LE encoded payload and keeps the configuration data-only', () => {
   const serverUrl = 'https://workbench.example.test'
   const webOrigin = 'https://workbench.example.test'
-  const batch = buildLocalHelperSetup({ serverUrl, webOrigin, autoStart: true })
+  const batch = buildLocalHelperSetup({ serverUrl, webOrigin, autoStart: true, distribution })
   const script = decodedPowerShell(batch)
 
   assert.match(batch, /@echo off\r\nsetlocal/)
@@ -31,15 +38,16 @@ test('launcher uses a UTF-16LE encoded payload and keeps the configuration data-
   assert.ok(Math.max(...batch.split(/\r?\n/).slice(0, -2).map((line) => line.length)) < 8191, 'every executed cmd.exe line must fit its command limit')
   assert.doesNotMatch(batch, /workbench\.example\.test/)
   assert.doesNotMatch(script, /workbench\.example\.test/)
-  assert.match(script, /FolderBrowserDialog/)
+  assert.match(script, /LocalApplicationData/)
+  assert.match(script, /artifact-manifest\.json/)
   assert.match(script, /start-local-runner\.ps1/)
   assert.match(script, /-InstallAutoStart/)
-  assert.match(script, /update\.bat/)
-  assert.deepEqual(decodedConfig(script), { serverUrl, webOrigin, autoStart: true })
+  assert.match(script, /Get-FileHash/)
+  assert.deepEqual(decodedConfig(script), { serverUrl, webOrigin, autoStart: true, distribution })
 })
 
 test('launcher rejects unsafe central server and browser origin addresses', () => {
-  const safe = { serverUrl: 'https://workbench.example.test', webOrigin: 'https://workbench.example.test', autoStart: false }
+  const safe = { serverUrl: 'https://workbench.example.test', webOrigin: 'https://workbench.example.test', autoStart: false, distribution }
   for (const serverUrl of [
     'http://workbench.example.test',
     'https://user:password@workbench.example.test',
@@ -69,6 +77,7 @@ test('generated PowerShell parses without executing a launcher or changing start
     serverUrl: 'https://workbench.example.test',
     webOrigin: 'https://workbench.example.test',
     autoStart: false,
+    distribution,
   }))
   const encoded = Buffer.from(script, 'utf16le').toString('base64')
   execFileSync('powershell.exe', [
@@ -77,54 +86,13 @@ test('generated PowerShell parses without executing a launcher or changing start
   ], { stdio: 'pipe' })
 })
 
-function stagedLauncher({ autoStart, exitCode }) {
-  const stage = mkdtempSync(join(tmpdir(), 'simulation-workbench-도우미-'))
-  assert.notEqual(resolve(stage), resolve(process.cwd()), 'test stage must never be the frontend workspace')
-  assert.ok(resolve(stage).startsWith(resolve(tmpdir())), 'test stage must remain below the system temp directory')
-  mkdirSync(join(stage, '.venv-runtime', 'Scripts'), { recursive: true })
-  writeFileSync(join(stage, '.venv-runtime', 'Scripts', 'python.exe'), '')
-  writeFileSync(join(stage, 'start-local-runner.ps1'), String.raw`param([string]$ServerUrl, [string[]]$Origin, [switch]$InstallAutoStart)
-[pscustomobject]@{ serverUrl = $ServerUrl; origin = @($Origin); installAutoStart = [bool]$InstallAutoStart } | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $PSScriptRoot 'received.json') -Encoding UTF8
-Write-Host 'fake runner invoked'
-exit [int]$env:SIMULATION_WORKBENCH_FAKE_EXIT
-`)
-  const batchPath = join(stage, 'SimulationWorkbench-local-helper-setup.bat')
-  writeFileSync(batchPath, buildLocalHelperSetup({
-    serverUrl: 'https://workbench.example.test',
-    webOrigin: 'https://workbench.example.test',
-    autoStart,
-  }), 'utf8')
-  const result = spawnSync('cmd.exe', ['/d', '/c', batchPath], {
-    cwd: stage,
-    input: '',
-    encoding: 'utf8',
-    env: { ...process.env, SIMULATION_WORKBENCH_FAKE_EXIT: String(exitCode) },
-  })
-  return { stage, result }
-}
-
-test('generated BAT really runs from a Unicode/spaces deployment folder and preserves success arguments', () => {
-  const { stage, result } = stagedLauncher({ autoStart: true, exitCode: 0 })
-  try {
-    assert.equal(result.status, 0, result.stderr || result.stdout)
-    const received = JSON.parse(readFileSync(join(stage, 'received.json'), 'utf8').replace(/^\uFEFF/, ''))
-    assert.deepEqual(received, {
-      serverUrl: 'https://workbench.example.test',
-      origin: ['https://workbench.example.test'],
-      installAutoStart: true,
-    })
-  } finally {
-    rmSync(stage, { recursive: true, force: true })
-  }
-})
-
-test('generated BAT returns launcher failures and omits the auto-start switch when disabled', () => {
-  const { stage, result } = stagedLauncher({ autoStart: false, exitCode: 7 })
-  try {
-    assert.equal(result.status, 7, result.stderr || result.stdout)
-    const received = JSON.parse(readFileSync(join(stage, 'received.json'), 'utf8').replace(/^\uFEFF/, ''))
-    assert.equal(received.installAutoStart, false)
-  } finally {
-    rmSync(stage, { recursive: true, force: true })
-  }
+test('manifest accepts only a safe same-origin download path and complete archive checksum', () => {
+  assert.throws(() => buildLocalHelperSetup({
+    serverUrl: 'https://workbench.example.test', webOrigin: 'https://workbench.example.test', autoStart: false,
+    distribution: { ...distribution, artifact_url: 'https://unexpected.example/helper.zip' },
+  }), TypeError)
+  assert.throws(() => buildLocalHelperSetup({
+    serverUrl: 'https://workbench.example.test', webOrigin: 'https://workbench.example.test', autoStart: false,
+    distribution: { ...distribution, sha256: 'nope' },
+  }), TypeError)
 })

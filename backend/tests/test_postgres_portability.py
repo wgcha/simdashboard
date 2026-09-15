@@ -1,9 +1,11 @@
+import re
 from pathlib import Path
 
 from app.database_connection import _postgres_statement, _sqlalchemy_url
 from scripts.export_postgres_schema import extract_schema
 from scripts.migrate_duckdb_to_postgres import compare, normalize, table_order
 from scripts.postgres_cli import parse_target
+from scripts.postgres_semantic_schema import SEMANTIC_DDL
 
 
 BACKEND = Path(__file__).resolve().parents[1]
@@ -25,6 +27,46 @@ def test_postgres_schema_export_is_current_and_portable():
     assert "CREATE TABLE IF NOT EXISTS project_workspace_layouts" in stored
     assert "uq_users_oidc_identity" in stored
     assert len(table_order()) >= 50
+
+
+def test_postgres_semantic_bootstrap_ddl_covers_migration_tables_and_constraints():
+    migrations = {
+        "0024_semantic_mapping.py": {
+            "semantic_result_items",
+            "semantic_result_item_versions",
+            "semantic_recipes",
+            "semantic_recipe_versions",
+            "semantic_templates",
+            "semantic_template_versions",
+            "semantic_folder_bindings",
+            "semantic_import_provenance",
+        },
+        "0025_semantic_vocabulary.py": {
+            "semantic_vocabulary_entries",
+            "semantic_vocabulary_terms",
+        },
+        "0026_semantic_import_review.py": {
+            "semantic_import_review_items",
+            "semantic_import_review_events",
+        },
+    }
+    semantic_tables = set(re.findall(r"^CREATE TABLE IF NOT EXISTS (\w+)", SEMANTIC_DDL, re.MULTILINE))
+    assert semantic_tables == set().union(*migrations.values())
+
+    migration_source = "\n".join(
+        (BACKEND / "migrations" / "versions" / filename).read_text(encoding="utf-8")
+        for filename in migrations
+    )
+    for clause in (
+        "sample_sha256 CHAR(64)",
+        "sample_bytes BYTEA",
+        "key ~ '^[a-z][a-z0-9_]{1,127}$'",
+        "ON DELETE CASCADE",
+        "binding_id VARCHAR NOT NULL REFERENCES semantic_folder_bindings(id)",
+        "CHECK((selected_recipe_id IS NULL) = (selected_recipe_version IS NULL))",
+    ):
+        assert clause in migration_source
+        assert clause in SEMANTIC_DDL
 
 
 def test_postgres_sql_adapter_translates_parameters_and_conflict_policy():

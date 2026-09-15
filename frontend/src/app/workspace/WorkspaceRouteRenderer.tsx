@@ -14,7 +14,7 @@ import type { useRequestWorkspaceController } from './useRequestWorkspaceControl
 import { RequestWorkspaceRoute } from './RequestWorkspaceRoute'
 import { StorageWorkspacePanel } from '../../features/storage/StorageWorkspacePanel'
 
-import { DataWorkspace, FolderSchemaWorkspace, VariableCatalogPage, AutomationTemplatesPage, FeatureExampleGallery, HelpCenter } from '../routing/workspaceScreenModules'
+import { DataWorkspace, FolderSchemaWorkspace, VariableCatalogPage, AutomationTemplatesPage, FeatureExampleGallery, HelpCenter, VocBoard } from '../routing/workspaceScreenModules'
 
 export function FeatureScreenFallback() {
   return <div className="full-state">화면을 준비하고 있습니다.</div>
@@ -84,12 +84,13 @@ export function WorkspaceRouteRenderer({
   if (workspacePage === 'workbench') return <Suspense fallback={<FeatureScreenFallback />}><SimulationWorkbench workflows={workflows} initialRequestId={selectedRequestId} currentUserId={authUser?.id ?? ''} createdBy={authUser?.display_name ?? '데모 사용자'} canExecute={hasPermission(authUser, 'work.execute_assigned', selectedProjectId) || hasPermission(authUser, 'work.execute_any', selectedProjectId)} isAdmin={hasPermission(authUser, 'work.execute_any', selectedProjectId)} onRequestSelected={setSelectedRequestId} onChanged={async (message) => { setWorkflows(await api.workflows()); }} /></Suspense>
   if (workspacePage === 'workbench_admin') return <Suspense fallback={<FeatureScreenFallback />}><WorkbenchTypeAdmin /></Suspense>
   if (workspacePage === 'project_result_profiles') return <Suspense fallback={<FeatureScreenFallback />}><ProjectResultProfileBinding projectId={selectedProjectId} /></Suspense>
-  if (workspacePage === 'schemas') return <Suspense fallback={<FeatureScreenFallback />}><FolderSchemaWorkspace /></Suspense>
+  if (workspacePage === 'schemas') return <Suspense fallback={<FeatureScreenFallback />}><FolderSchemaWorkspace isVocabularyAdmin={hasPermission(authUser, 'system.catalog.manage', selectedProjectId)} selectedProjectId={selectedProjectId} /></Suspense>
   if (workspacePage === 'variables') return <Suspense fallback={<FeatureScreenFallback />}><VariableCatalogPage variables={variables} overview={overview!} loadCaseId={selectedLoadCaseId} onChanged={onWidgetCatalogVariablesChanged} /></Suspense>
   if (workspacePage === 'templates') return <Suspense fallback={<FeatureScreenFallback />}><AutomationTemplatesPage /></Suspense>
   if (workspacePage === 'examples') return <Suspense fallback={<FeatureScreenFallback />}><FeatureExampleGallery onOpen={async (example) => onFeatureExample(example)} /></Suspense>
   if (workspacePage === 'help') return <Suspense fallback={<FeatureScreenFallback />}><HelpCenter onNavigate={onWorkspaceNavigate} /></Suspense>
-  if (workspacePage === 'access_admin') return <Suspense fallback={<FeatureScreenFallback />}><AccessAdminPage projectId={selectedProjectId} canApproveUsers={hasPermission(authUser, 'system.user.approve', selectedProjectId)} onAccessChanged={async () => onRefreshAccess()} /></Suspense>
+  if (workspacePage === 'voc' && authUser) return <Suspense fallback={<FeatureScreenFallback />}><VocBoard user={authUser} /></Suspense>
+  if (workspacePage === 'access_admin') return <Suspense fallback={<FeatureScreenFallback />}><AccessAdminPage projectId={selectedProjectId} projects={projects.filter((project) => hasPermission(authUser, 'project.member.manage', project.id))} onProjectChange={(projectId) => void selectProject(projectId)} canApproveUsers={hasPermission(authUser, 'system.user.approve', selectedProjectId)} onAccessChanged={async () => onRefreshAccess()} /></Suspense>
   if (workspacePage === 'menu_policy_admin' && menuPolicy) return <Suspense fallback={<FeatureScreenFallback />}><MenuPolicyAdminPage policy={menuPolicy} onPolicyChanged={onMenuPolicyChanged} /></Suspense>
   if (workspacePage === 'audit_admin') return <Suspense fallback={<FeatureScreenFallback />}><AuditAdminPage /></Suspense>
   if (workspacePage === 'data') return <Suspense fallback={<FeatureScreenFallback />}><DataWorkspace storagePanel={StorageWorkspacePanel} refreshToken={operationalRefreshToken} canCreateProject={hasPermission(authUser, 'system.user.approve', selectedProjectId)} canRetryImports={hasPermission(authUser, 'system.catalog.manage', selectedProjectId)} canUploadStorage={hasPermission(authUser, 'result.import', selectedProjectId)} canBindStorage={hasPermission(authUser, 'result.import', selectedProjectId)} canManageStorageRoot={Boolean(authUser?.is_global_admin)} projects={projects} initialProjectId={selectedProjectId} initialRequestId={selectedRequestId} initialLoadCaseId={selectedLoadCaseId} onDataChanged={refreshOperationalData} onOpenAnalysis={async (projectId, requestId, loadCaseId) => onImportedResult(projectId, requestId, loadCaseId)} onOpenIntake={() => onWorkspaceNavigate('intake')} /></Suspense>

@@ -1,24 +1,10 @@
-[CmdletBinding()]
-param(
-    [int]$BackendPort = 0,
-    [int]$FrontendPort = 0
-)
-
-if (($BackendPort -ne 0 -and ($BackendPort -lt 1 -or $BackendPort -gt 65535)) -or ($FrontendPort -ne 0 -and ($FrontendPort -lt 1 -or $FrontendPort -gt 65535))) {
-    throw 'BackendPort and FrontendPort must be 1~65535 when provided.'
-}
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RootPath = [System.IO.Path]::GetFullPath($Root).TrimEnd('\')
 $PidFile = Join-Path $Root '.server-pids.json'
-$ExpectedPython = Join-Path $Root '.venv-runtime\Scripts\python.exe'
-$NodeVersion = (Get-Content -Raw -LiteralPath (Join-Path $Root '.node-version')).Trim()
-$ExpectedNode = Join-Path $Root ".tools\node-$NodeVersion-win-x64\node.exe"
-$ExpectedVite = Join-Path $Root 'frontend\node_modules\vite\bin\vite.js'
-$ManagedPorts = @(
-    if ($BackendPort) { $BackendPort } else { 8000 }
-    if ($FrontendPort) { $FrontendPort } else { 5173 }
-) | Select-Object -Unique
+$ManagedPorts = @(8000, 80, 5173)
+$script:BackendPort = 8000
+$script:FrontendPort = 80
 
 function Get-ProcessIdentity([int]$TargetProcessId) {
     $process = Get-Process -Id $TargetProcessId -ErrorAction SilentlyContinue
@@ -51,83 +37,57 @@ function Get-ProcessIdentity([int]$TargetProcessId) {
 }
 
 function Test-ContainsWorkspacePath([string]$Value) {
-    return $Value -and $Value.IndexOf($RootPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+    if (-not $Value) { return $false }
+    $position = $Value.IndexOf($RootPath, [System.StringComparison]::OrdinalIgnoreCase)
+    while ($position -ge 0) {
+        $following = $position + $RootPath.Length
+        if ($following -eq $Value.Length -or $Value[$following] -in @('\', '/', '"', "'", ' ', ';')) { return $true }
+        $position = $Value.IndexOf($RootPath, $position + 1, [System.StringComparison]::OrdinalIgnoreCase)
+    }
+    return $false
 }
 
 function Test-IsAnalysisCanvasListener($Identity, [int]$Port) {
-    if (-not $Identity) { return $false }
-    $belongsToWorkspace = (Test-ContainsWorkspacePath $Identity.CommandLine) -or (Test-ContainsWorkspacePath $Identity.ExecutablePath)
-    if (-not $belongsToWorkspace) { return $false }
-    $portPattern = [regex]::Escape([string]$Port)
-    $frontendCommand = $Identity.CommandLine -match '(?i)vite' -and
-        $Identity.CommandLine.IndexOf($ExpectedVite, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -and
-        $Identity.CommandLine -match "(?i)--port\s+$portPattern(?!\d)"
-    $nodeMatches = [string]::IsNullOrWhiteSpace($Identity.ExecutablePath) -or -not (Test-Path -LiteralPath $ExpectedNode -PathType Leaf) -or [string]::Equals([System.IO.Path]::GetFullPath($Identity.ExecutablePath), [System.IO.Path]::GetFullPath($ExpectedNode), [System.StringComparison]::OrdinalIgnoreCase)
-    if ($frontendCommand -and $nodeMatches) {
-        return $true
-    }
-    $pythonMatches = [string]::Equals([System.IO.Path]::GetFullPath($Identity.ExecutablePath), [System.IO.Path]::GetFullPath($ExpectedPython), [System.StringComparison]::OrdinalIgnoreCase)
-    if ($pythonMatches -and $Identity.CommandLine.IndexOf($ExpectedPython, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -and
-        $Identity.CommandLine -match '(?i)uvicorn' -and
-        $Identity.CommandLine -match '(?i)app\.main:app' -and
-        $Identity.CommandLine -match "(?i)--port\s+$portPattern(?!\d)") {
-        return $true
+    if ($Identity) {
+        $belongsToWorkspace = (Test-ContainsWorkspacePath $Identity.CommandLine) -or (Test-ContainsWorkspacePath $Identity.ExecutablePath)
+        if (-not $belongsToWorkspace) { return $false }
+        if (($Port -eq $script:FrontendPort -or $Port -eq 5173 -or $Port -eq 80) -and
+            $Identity.CommandLine -match '(?i)vite' -and
+            $Identity.CommandLine -match "(?i)(--port\s+$Port|vite(?:\.js)?\b)") {
+            return $true
+        }
+        if ($Port -eq $script:BackendPort -and
+            $Identity.CommandLine -match '(?i)uvicorn' -and
+            $Identity.CommandLine -match '(?i)app\.main:app' -and
+            $Identity.CommandLine -match "(?i)--port\s+$Port(?!\d)") {
+            return $true
+        }
+        return Test-IsAnalysisCanvasEndpoint -Port $Port
     }
     return $false
 }
 
 function Test-IsAnalysisCanvasEndpoint([int]$Port) {
     try {
-        $response = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/" -UseBasicParsing -TimeoutSec 2
-        if ($response.StatusCode -eq 200 -and
-            $response.Content -match '<title>\s*VD simulation workbench\s*</title>' -and
-            $response.Content -match '/src/main\.tsx') {
-            return $true
+        if ($Port -eq $script:FrontendPort -or $Port -eq 5173 -or $Port -eq 80) {
+            $path = if ($Port -eq $script:FrontendPort) { $script:FrontendBasePath } else { '/' }
+            $response = Invoke-WebRequest -Uri "http://127.0.0.1:$Port$path" -UseBasicParsing -TimeoutSec 2
+            return $response.StatusCode -eq 200 -and
+                ($response.Content -match '<title>\s*(Analysis Canvas|VD simulation workbench)\s*</title>') -and
+                ($response.Content -match 'src/main\.tsx' -or $response.Content -match '/workbench/')
         }
-    }
-    catch { }
-    try {
-        $health = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/health" -TimeoutSec 2
-        $openApi = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/openapi.json" -TimeoutSec 2
-        return $health.status -eq 'ok' -and
-            $health.database_backend -in @('duckdb', 'postgresql') -and
-            $openApi.info.title -eq 'Analysis Canvas API'
-    }
-    catch { return $false }
-    return $false
-}
-
-function Test-ManagedServerRecord($Record, [int]$Port) {
-    if ($null -eq $Record -or -not ($Record.PSObject.Properties.Name -contains 'id') -or -not ($Record.PSObject.Properties.Name -contains 'startedAtUtc')) {
-        return $false
-    }
-    try {
-        if ($Record.PSObject.Properties.Name -contains 'port' -and [int]$Record.port -ne $Port) { return $false }
-        $expected = if ($Record.startedAtUtc -is [DateTime]) {
-            $Record.startedAtUtc.ToUniversalTime()
+        if ($Port -eq $script:BackendPort) {
+            $health = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/health" -TimeoutSec 2
+            $openApi = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/openapi.json" -TimeoutSec 2
+            return $health.status -eq 'ok' -and
+                $health.database_backend -in @('duckdb', 'postgresql') -and
+                $openApi.info.title -eq 'Analysis Canvas API'
         }
-        elseif ($Record.startedAtUtc -is [DateTimeOffset]) {
-            $Record.startedAtUtc.UtcDateTime
-        }
-        else {
-            [DateTime]::Parse([string]$Record.startedAtUtc).ToUniversalTime()
-        }
-        $identity = Get-ProcessIdentity -TargetProcessId ([int]$Record.id)
-        if (-not $identity) { return $false }
-        $actual = (Get-Process -Id $identity.Id -ErrorAction Stop).StartTime.ToUniversalTime()
-        if ($actual.Ticks -ne $expected.Ticks) { return $false }
-        return Test-IsAnalysisCanvasListener -Identity $identity -Port $Port
     }
     catch {
         return $false
     }
-}
-
-function Get-RecordPort($Record, [int]$Fallback) {
-    if ($Record -and $Record.PSObject.Properties.Name -contains 'port' -and [int]$Record.port -ge 1 -and [int]$Record.port -le 65535) {
-        return [int]$Record.port
-    }
-    return $Fallback
+    return $false
 }
 
 function Stop-ProcessTree([int]$TargetProcessId) {
@@ -175,26 +135,69 @@ function Get-PortListeners([int]$Port) {
     return @($owners.Values)
 }
 
+function Test-RecordedServerIdentity($Record, [int]$Port, [ValidateSet('backend', 'frontend')][string]$Role) {
+    if ($null -eq $Record -or -not ($Record.PSObject.Properties.Name -contains 'id') -or
+        -not ($Record.PSObject.Properties.Name -contains 'startedAtUtc')) { return $false }
+    $recordedId = 0
+    if (-not [int]::TryParse([string]$Record.id, [ref]$recordedId) -or $recordedId -lt 1) { return $false }
+    if ($Record.PSObject.Properties.Name -contains 'port' -and [int]$Record.port -ne $Port) { return $false }
+    $process = Get-Process -Id $recordedId -ErrorAction SilentlyContinue
+    if (-not $process) { return $false }
+    try {
+        $expectedStart = [DateTime]::Parse([string]$Record.startedAtUtc).ToUniversalTime()
+        if ($process.StartTime.ToUniversalTime().Ticks -ne $expectedStart.Ticks) { return $false }
+        $identity = Get-ProcessIdentity -TargetProcessId $recordedId
+        if (-not $identity -or -not (Test-ContainsWorkspacePath $identity.CommandLine)) { return $false }
+        $portPattern = [regex]::Escape([string]$Port)
+        if ($Role -eq 'backend') {
+            return $identity.CommandLine -match '(?i)uvicorn' -and
+                $identity.CommandLine -match '(?i)app\.main:app' -and
+                $identity.CommandLine -match "(?i)--port\s+$portPattern(?!\d)"
+        }
+        return $identity.CommandLine -match '(?i)vite' -and
+            $identity.CommandLine -match "(?i)--port\s+$portPattern(?!\d)"
+    }
+    catch { return $false }
+}
+
 $stoppedCount = 0
 $hadPidFile = Test-Path -LiteralPath $PidFile
+$script:FrontendBasePath = '/workbench/'
+$metadata = $null
+if ($hadPidFile) {
+    try {
+        $metadata = Get-Content -Raw -LiteralPath $PidFile | ConvertFrom-Json
+        if ($metadata.backend -and ($metadata.backend.PSObject.Properties.Name -contains 'port')) {
+            $script:BackendPort = [int]$metadata.backend.port
+        }
+        if ($metadata.frontend -and ($metadata.frontend.PSObject.Properties.Name -contains 'port')) {
+            $script:FrontendPort = [int]$metadata.frontend.port
+        }
+        elseif ($metadata.PSObject.Properties.Name -contains 'frontendPort') {
+            $script:FrontendPort = [int]$metadata.frontendPort
+        }
+        if ($metadata.PSObject.Properties.Name -contains 'basePath' -and -not [string]::IsNullOrWhiteSpace([string]$metadata.basePath)) {
+            $script:FrontendBasePath = [string]$metadata.basePath
+        }
+        elseif ($metadata.frontend -and ($metadata.frontend.PSObject.Properties.Name -contains 'basePath')) {
+            $script:FrontendBasePath = [string]$metadata.frontend.basePath
+        }
+        $ManagedPorts = @($ManagedPorts + @($script:BackendPort, $script:FrontendPort) | Select-Object -Unique)
+    }
+    catch { }
+}
 
 if ($hadPidFile) {
     try {
-        $serverPids = Get-Content -Raw -LiteralPath $PidFile | ConvertFrom-Json
-        $backendRecordPort = if ($BackendPort) { $BackendPort } else { Get-RecordPort $serverPids.backend 8000 }
-        $frontendRecordPort = if ($FrontendPort) { $FrontendPort } else { Get-RecordPort $serverPids.frontend 5173 }
-        $ManagedPorts = @($backendRecordPort, $frontendRecordPort) | Select-Object -Unique
-        foreach ($serverRecord in @(
-            [pscustomobject]@{ Value = $serverPids.backend; Port = $backendRecordPort },
-            [pscustomobject]@{ Value = $serverPids.frontend; Port = $frontendRecordPort }
-        )) {
-            if (Test-ManagedServerRecord -Record $serverRecord.Value -Port $serverRecord.Port) {
-                $stoppedCount += Stop-ProcessTree -TargetProcessId ([int]$serverRecord.Value.id)
-            }
-            elseif ($serverRecord.Value) {
-                Write-Warning "Ignoring unverified server PID metadata for port $($serverRecord.Port)."
-            }
+        if ($null -eq $metadata) { throw 'Invalid PID metadata.' }
+        if (Test-RecordedServerIdentity -Record $metadata.frontend -Port $script:FrontendPort -Role 'frontend') {
+            $stoppedCount += Stop-ProcessTree -TargetProcessId ([int]$metadata.frontend.id)
         }
+        if (Test-RecordedServerIdentity -Record $metadata.backend -Port $script:BackendPort -Role 'backend') {
+            $stoppedCount += Stop-ProcessTree -TargetProcessId ([int]$metadata.backend.id)
+        }
+        # Integer-only legacy records carry no start time. Never terminate
+        # their PID directly; the listener recovery below verifies ownership.
     }
     catch {
         Write-Warning 'The server PID file was invalid. Falling back to verified port-owner recovery.'
@@ -224,6 +227,9 @@ $remainingListeners = @()
 foreach ($port in $ManagedPorts) {
     foreach ($listener in (Get-PortListeners -Port $port)) {
         $identity = Get-ProcessIdentity -TargetProcessId ([int]$listener.OwningProcess)
+        if (-not (Test-IsAnalysisCanvasListener -Identity $identity -Port $port)) {
+            continue
+        }
         $remainingListeners += [pscustomobject]@{
             Port = $port
             ProcessId = [int]$listener.OwningProcess

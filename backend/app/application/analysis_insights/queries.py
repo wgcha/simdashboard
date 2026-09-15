@@ -8,6 +8,8 @@ from ...domains.analysis_insights.errors import (
     ComparisonRunsNotFoundError,
     MatchingRunComparisonError,
 )
+from ...domains.analysis_insights.condition_comparison import compare_run_conditions
+from ...domains.analysis_insights.criterion_margin import criterion_margin
 from ...domains.analysis_insights.policies import json_value
 from ...domains.analysis_insights.ports import AnalysisInsightsRepositoryProvider
 
@@ -26,7 +28,15 @@ def compare_analysis_runs(
         if len(run_rows) != 2:
             raise ComparisonRunsNotFoundError()
         run_map = {item["id"]: item for item in run_rows}
+        condition_source_rows = repository.comparison_conditions(baseline_run_id, target_run_id)
+        condition_comparison = compare_run_conditions(
+            condition_source_rows,
+            load_case_id,
+            baseline_run_id,
+            target_run_id,
+        )
         scalar_rows = repository.comparison_scalars(baseline_run_id, target_run_id)
+        condition_rows = {item["id"]: item for item in condition_source_rows}
         scalars = {
             run_id: {item["variable_key"]: item for item in scalar_rows if item["analysis_run_id"] == run_id}
             for run_id in (baseline_run_id, target_run_id)
@@ -75,6 +85,8 @@ def compare_analysis_runs(
                     "delta_percent": delta_percent,
                     "change": change,
                     "comparable": comparable,
+                    "baseline_margin": criterion_margin(baseline, condition_rows.get(baseline_run_id)),
+                    "target_margin": criterion_margin(target, condition_rows.get(target_run_id)),
                 }
             )
 
@@ -117,6 +129,7 @@ def compare_analysis_runs(
             "scalar_comparison": comparison,
             "available_series": available_series,
             "time_series": series_payload,
+            "condition_comparison": condition_comparison,
         }
 
 

@@ -46,6 +46,12 @@ def _inventory() -> dict[str, object]:
     }
 
 
+def _account_inventory() -> dict[str, object]:
+    return {"format": "analysis-canvas-account-inventory", "format_version": 1,
+            "users": {"count": 2, "pending_count": 0, "active_count": 1, "suspended_count": 1, "global_admin_count": 1, "identity_authorization_sha256": "b" * 64},
+            "project_memberships": {"count": 1, "authorization_sha256": "c" * 64}}
+
+
 def _manifest(dump: Path, *, inventory: object | None = None, **overrides: object) -> dict[str, object]:
     manifest: dict[str, object] = {
         "format": "postgresql-custom",
@@ -111,11 +117,13 @@ def test_backup_snapshot_inventory_holds_repeatable_read_connection(monkeypatch:
     monkeypatch.setattr(backup, "media_inventory", lambda actual: _inventory() if actual is connection else {})
     monkeypatch.setattr(backup, "require_media_integrity", lambda report: None)
 
-    actual, snapshot, inventory = backup._snapshot_inventory("postgresql+psycopg://app:pw@db/test")
+    monkeypatch.setattr(backup, "account_inventory", lambda actual: _account_inventory() if actual is connection else {})
+    actual, snapshot, inventory, accounts = backup._snapshot_inventory("postgresql+psycopg://app:pw@db/test")
 
     assert actual is connection
     assert snapshot == "snapshot-123"
     assert inventory == _inventory()
+    assert accounts == _account_inventory()
     assert connection.commands == [
         "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
         "SELECT pg_export_snapshot()",
@@ -128,11 +136,15 @@ def test_backup_manifest_embeds_inventory_and_pg_dump_snapshot(
 ) -> None:
     inventory = _inventory()
     holder = SimpleNamespace(close=lambda: None)
-    monkeypatch.setattr(backup, "_snapshot_inventory", lambda _url: (holder, "snapshot-123", inventory))
+    monkeypatch.setattr(backup, "_snapshot_inventory", lambda _url: (holder, "snapshot-123", inventory, _account_inventory()))
     monkeypatch.setattr(backup, "executable", lambda name: name)
+    monkeypatch.setenv("LC_ALL", "ko_KR")
     commands: list[list[str]] = []
 
     def fake_run(command: list[str], **_kwargs):
+        assert _kwargs["env"]["LC_ALL"] == "C"
+        assert _kwargs["env"]["LC_MESSAGES"] == "C"
+        assert _kwargs["env"]["LANGUAGE"] == "C"
         commands.append(command)
         if command[0] == "pg_dump":
             Path(command[command.index("--file") + 1]).write_bytes(b"dump")
@@ -146,6 +158,93 @@ def test_backup_manifest_embeds_inventory_and_pg_dump_snapshot(
     assert "--snapshot=snapshot-123" in commands[0]
     manifest = next(tmp_path.glob("*.manifest.json"))
     assert json.loads(manifest.read_text(encoding="utf-8"))["media_inventory"] == inventory
+    assert json.loads(manifest.read_text(encoding="utf-8"))["account_inventory"] == _account_inventory()
+    assert backup.os.environ["LC_ALL"] == "ko_KR"
+
+
+def test_deployment_bundle_uses_same_snapshot_and_distinct_restore_contract(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from scripts import deployment_media_backup
+    holder = SimpleNamespace(closed=False)
+    holder.close = lambda: setattr(holder, "closed", True)
+    def snapshot(_url, *, deployment=False):
+        assert deployment is True
+        return holder, "deployment-snapshot", _inventory(), _account_inventory()
+    monkeypatch.setattr(backup, "_snapshot_inventory", snapshot)
+    monkeypatch.setattr(backup, "executable", lambda name: name)
+    def bundle(connection, inventory, assets_root, archive_path):
+        assert connection is holder and not holder.closed
+        assert inventory == _inventory()
+        archive_path.write_bytes(b"archived assets")
+        return {"filename": archive_path.name, "bytes": archive_path.stat().st_size, "sha256": backup.sha256(archive_path)}
+    monkeypatch.setattr(deployment_media_backup, "create_deployment_media_bundle", bundle)
+    def run(command, **_kwargs):
+        if command[0] == "pg_dump":
+            assert not holder.closed
+            assert "--snapshot=deployment-snapshot" in command
+            Path(command[command.index("--file") + 1]).write_bytes(b"snapshot dump")
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(backup.subprocess, "run", run)
+    monkeypatch.setattr(sys, "argv", _backup_argv(tmp_path) + ["--deployment-assets-root", str(tmp_path / "assets")])
+    backup.main()
+    dump = next(tmp_path.glob("*.dump"))
+    manifest = json.loads(dump.with_suffix(".manifest.json").read_text())
+    assert holder.closed
+    assert manifest["format"] == "analysis-canvas-deployment-postgresql"
+    assert manifest["recovery_contract"] == "database-and-assets-before-migration"
+    assert manifest["assets_backup"]["sha256"] == backup.sha256(next(tmp_path.glob("*.assets.zip")))
+    # A dual-read bundle must never masquerade as a strict DB-only archive.
+    with pytest.raises(RuntimeError, match="manifest 형식"):
+        restore._read_verified_manifest(dump)
+
+
+def test_deployment_file_failure_does_not_publish_dump_or_manifest(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from scripts import deployment_media_backup
+    holder = SimpleNamespace(closed=False)
+    holder.close = lambda: setattr(holder, "closed", True)
+    monkeypatch.setattr(backup, "_snapshot_inventory", lambda _url, **_kwargs: (holder, "snapshot", _inventory(), _account_inventory()))
+    monkeypatch.setattr(backup, "executable", lambda name: name)
+    def fail(*_args):
+        raise RuntimeError("synthetic missing source")
+    monkeypatch.setattr(deployment_media_backup, "create_deployment_media_bundle", fail)
+    monkeypatch.setattr(backup.subprocess, "run", lambda *_args, **_kwargs: pytest.fail("must stop before dump"))
+    monkeypatch.setattr(sys, "argv", _backup_argv(tmp_path) + ["--deployment-assets-root", str(tmp_path / "assets")])
+    with pytest.raises(RuntimeError, match="synthetic missing source"):
+        backup.main()
+    assert holder.closed
+    assert not list(tmp_path.glob("*.dump"))
+    assert not list(tmp_path.glob("*.manifest.json"))
+
+
+def test_tools_only_check_never_opens_database_or_creates_backup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(backup, "executable", lambda name: name)
+    monkeypatch.setattr(backup.psycopg, "connect", lambda *_args, **_kwargs: pytest.fail("tools check must not connect to DB"))
+    calls = []
+    def run(command, **kwargs):
+        calls.append(command)
+        assert kwargs["timeout"] == 15
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(backup.subprocess, "run", run)
+    monkeypatch.setattr(sys, "argv", ["backup_postgres.py", "--check-tools", "--output-dir", str(tmp_path / "no-backup")])
+    backup.main()
+    assert calls == [["pg_dump", "--version"], ["pg_restore", "--version"]]
+    assert not (tmp_path / "no-backup").exists()
+
+
+def test_windows_launch_write_protection_has_exact_stage(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    from scripts.backup_failure_details import child_failure_details
+    monkeypatch.setattr(backup, "executable", lambda name: name)
+    def fail(*_args, **_kwargs):
+        error = PermissionError(13, "synthetic write protection")
+        error.winerror = 19
+        raise error
+    monkeypatch.setattr(backup.subprocess, "run", fail)
+    monkeypatch.setattr(sys, "argv", ["backup_postgres.py", "--check-tools"])
+    with pytest.raises(PermissionError):
+        backup.main()
+    assert child_failure_details(capsys.readouterr().err) == {
+        "stage": "pg_dump_version", "exception_type": "PermissionError", "errno": 13, "winerror": 19,
+    }
 
 
 @pytest.mark.parametrize("label", ["../escape", "nested/archive", "white space", ""])
@@ -225,7 +324,7 @@ def test_backup_failure_retains_unique_partial_without_final_or_manifest(
 ) -> None:
     holder = SimpleNamespace(close=lambda: None)
     monkeypatch.setattr(backup, "datetime", _FixedDateTime)
-    monkeypatch.setattr(backup, "_snapshot_inventory", lambda _url: (holder, "snapshot-123", _inventory()))
+    monkeypatch.setattr(backup, "_snapshot_inventory", lambda _url: (holder, "snapshot-123", _inventory(), _account_inventory()))
     monkeypatch.setattr(backup, "executable", lambda name: name)
 
     def fail_after_partial(command: list[str], **_kwargs):
@@ -316,6 +415,31 @@ def test_restore_requires_matching_inventory_and_database_only_verifier(
     assert archive_list_command[2] != str(dump)
     assert restore_command[-1] == archive_list_command[2]
     assert not Path(archive_list_command[2]).exists()
+
+
+def test_restore_verifies_account_inventory_when_present(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    dump = tmp_path / "accounts.dump"
+    dump.write_bytes(b"dump")
+    expected_accounts = _account_inventory()
+    dump.with_suffix(".manifest.json").write_text(
+        json.dumps(_manifest(dump, account_inventory=expected_accounts)), encoding="utf-8"
+    )
+    monkeypatch.setattr(restore.psycopg, "connect", lambda _url: _RestoreConnection())
+    monkeypatch.setattr(restore, "executable", lambda name: name)
+    monkeypatch.setattr(restore.subprocess, "run", lambda *_args, **_kwargs: SimpleNamespace(returncode=0))
+    monkeypatch.setattr(restore, "_harden_audit_event_privileges", lambda _url: None)
+    monkeypatch.setattr(restore, "_verify_restored_media", lambda **_kwargs: _inventory())
+    observed: dict[str, object] = {}
+    monkeypatch.setattr(
+        restore, "_verify_restored_accounts",
+        lambda *, expected, verify_database_url: observed.update({"expected": expected, "url": verify_database_url}) or expected,
+    )
+    monkeypatch.setattr(restore, "_run_database_only_verifier", lambda _url: None)
+    monkeypatch.setattr(sys, "argv", _restore_argv(dump))
+
+    restore.main()
+
+    assert observed == {"expected": expected_accounts, "url": "postgresql+psycopg://app:pw@db/test"}
 
 
 def test_restore_clean_uses_single_transaction_and_failure_stops_post_restore_steps(

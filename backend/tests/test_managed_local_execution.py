@@ -60,7 +60,7 @@ def _run(status: str = "QUEUED") -> dict:
     }
 
 
-def test_managed_device_pairing_authorization_events_and_revoke(monkeypatch):
+def test_managed_device_pairing_authorization_events_and_revoke(monkeypatch, password_auth_bootstrap_admin):
     initialize_database()
     suffix = uuid4().hex[:8]
     username = f"managed-{suffix}"

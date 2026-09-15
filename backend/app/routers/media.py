@@ -46,7 +46,7 @@ def _media_audit_callback(
 
 
 def _legacy_asset_path(file_path: str) -> Path:
-    assets_root = (Path(__file__).resolve().parents[2] / "assets").resolve()
+    assets_root = app_config.managed_assets_root()
     relative_path = Path(file_path)
     if relative_path.parts and relative_path.parts[0].lower() == "assets":
         relative_path = Path(*relative_path.parts[1:])

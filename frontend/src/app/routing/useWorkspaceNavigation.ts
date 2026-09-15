@@ -15,10 +15,12 @@ type WorkspaceNavigationOptions = {
   onCancelEditing: () => void
   onDashboardRoute: () => void
   onNotice: (message: string) => void
+  personalOnly: boolean
   visibleMenus: readonly { id: MenuId }[]
 }
 
 export type WorkspaceNavigationRequest = {
+  context?: WorkspaceContextQuery
   dashboardEntry?: DashboardEntry
   replace?: boolean
 }
@@ -37,6 +39,20 @@ type PendingNavigation = {
   pathname: string
 }
 
+function workspaceSearch(context: WorkspaceContextQuery, currentSearch: string): string {
+  const query = new URLSearchParams(currentSearch)
+  const values: Array<[string, string | undefined]> = [
+    ['project', context.projectId], ['request', context.requestId], ['loadCase', context.loadCaseId],
+    ['run', context.runId], ['view', context.view], ['page', context.pageId],
+  ]
+  for (const [key, value] of values) {
+    if (value) query.set(key, value)
+    else query.delete(key)
+  }
+  const search = query.toString()
+  return search ? `?${search}` : ''
+}
+
 /**
  * URL-derived workspace state and the single navigation contract. The data
  * router blocker protects sidebar clicks, feature hand-offs, and browser
@@ -50,6 +66,7 @@ export function useWorkspaceNavigation({
   onCancelEditing,
   onDashboardRoute,
   onNotice,
+  personalOnly,
   visibleMenus,
 }: WorkspaceNavigationOptions) {
   const location = useLocation()
@@ -73,16 +90,21 @@ export function useWorkspaceNavigation({
   const [workspaceNavigationPending, setWorkspaceNavigationPending] = useState(false)
 
   useEffect(() => {
-    if (!authUser || authUser.account_status !== 'ACTIVE' || !menuPolicyReady) return
+    if (!authUser || authUser.account_status !== 'ACTIVE' || personalOnly || !menuPolicyReady) return
     // Load only permitted, frequently used screens after the first paint. No data requests.
     const timers = (['dashboard', 'data', 'workbench'] as const)
       .filter((page) => allowedPages.has(page))
       .map((page, index) => window.setTimeout(() => preloadWorkspaceRouteModule(page), 600 + index * 250))
     return () => timers.forEach(window.clearTimeout)
-  }, [authUser?.id, authUser?.account_status, menuPolicyReady, allowedPages])
+  }, [authUser?.id, authUser?.account_status, menuPolicyReady, allowedPages, personalOnly])
 
   useEffect(() => {
-    if (!authUser || authUser.account_status !== 'ACTIVE' || !menuPolicyReady) return
+    if (!authUser || authUser.account_status !== 'ACTIVE') return
+    if (personalOnly) {
+      if (workspacePage !== 'local_pc') navigate(workspacePathForPage('local_pc')!, { replace: true })
+      return
+    }
+    if (!menuPolicyReady) return
     const fallbackPath = visibleMenus[0] ? workspacePathForPage(visibleMenus[0].id) : undefined
     if (isWorkspaceIndex) {
       if (fallbackPath) navigate(fallbackPath, { replace: true })
@@ -92,7 +114,7 @@ export function useWorkspaceNavigation({
     if (allowedPages.has(matchedWorkspaceRoute.page) || !fallbackPath) return
     onNotice('현재 권한으로 열 수 없는 화면입니다. 허용된 첫 화면으로 이동했습니다.')
     navigate(fallbackPath, { replace: true })
-  }, [allowedPages, authUser?.account_status, authUser?.id, isWorkspaceIndex, matchedWorkspaceRoute, menuPolicyReady, navigate, onNotice, visibleMenus])
+  }, [allowedPages, authUser?.account_status, authUser?.id, isWorkspaceIndex, matchedWorkspaceRoute, menuPolicyReady, navigate, onNotice, personalOnly, visibleMenus, workspacePage])
 
   useEffect(() => {
     if (!editMode) return
@@ -141,7 +163,7 @@ export function useWorkspaceNavigation({
     }
     pendingNavigationRef.current = { dashboardEntry, pathname: route.path }
     setWorkspaceNavigationPending(true)
-    navigate({ pathname: route.path, search: location.search }, { replace: options.replace })
+    navigate({ pathname: route.path, search: options.context ? workspaceSearch(options.context, location.search) : location.search }, { replace: options.replace })
   }, [editMode, location.pathname, location.search, navigate, onDashboardRoute])
 
   const updateWorkspaceContext = useCallback((next: WorkspaceContextQuery, options: { replace?: boolean } = {}) => {

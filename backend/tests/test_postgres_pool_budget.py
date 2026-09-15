@@ -12,6 +12,22 @@ from scripts import check_postgres_pool_budget
 pytestmark = pytest.mark.unit
 
 
+def test_missing_backend_defaults_to_postgresql(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ANALYSIS_DB_BACKEND", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    settings = database_settings()
+
+    assert settings.backend == "postgresql"
+    assert settings.database_url is None
+
+
+def test_explicit_duckdb_backend_remains_supported(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ANALYSIS_DB_BACKEND", "duckdb")
+
+    assert database_settings().backend == "duckdb"
+
+
 def _pool(**overrides: int) -> PostgresPoolSettings:
     defaults = {
         "request_pool_size": 5,

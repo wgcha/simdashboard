@@ -128,6 +128,7 @@ MENU_DEFINITIONS: Final[tuple[MenuDefinition, ...]] = (
     MenuDefinition("audit_admin", "감사로그", AUDIT_VIEW, "system", 120, False),
     MenuDefinition("examples", "예제 갤러리", PROJECT_DATA_VIEW, "company", 130),
     MenuDefinition("help", "도움말", COMPANY_DASHBOARD_VIEW, "company", 140),
+    MenuDefinition("voc", "VOC 게시판", COMPANY_DASHBOARD_VIEW, "company", 150),
 )
 
 DEFAULT_MENU_VISIBILITY: Final[dict[ProjectRole, dict[str, bool]]] = {
@@ -144,6 +145,7 @@ DEFAULT_MENU_VISIBILITY: Final[dict[ProjectRole, dict[str, bool]]] = {
         "schemas": False,
         "examples": True,
         "help": True,
+        "voc": True,
         "access_admin": False,
         "menu_policy_admin": False,
         "audit_admin": False,
@@ -161,6 +163,7 @@ DEFAULT_MENU_VISIBILITY: Final[dict[ProjectRole, dict[str, bool]]] = {
         "schemas": False,
         "examples": True,
         "help": True,
+        "voc": True,
         "access_admin": False,
         "menu_policy_admin": False,
         "audit_admin": False,
@@ -178,6 +181,7 @@ DEFAULT_MENU_VISIBILITY: Final[dict[ProjectRole, dict[str, bool]]] = {
         "schemas": False,
         "examples": True,
         "help": True,
+        "voc": True,
         "access_admin": True,
         "menu_policy_admin": False,
         "audit_admin": False,

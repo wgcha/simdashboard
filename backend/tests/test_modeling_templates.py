@@ -64,7 +64,9 @@ def test_csv_template_search_validation_and_stale_version_conflict() -> None:
         assert stale.status_code == 409
 
 
-def test_library_read_is_authorized_but_catalog_write_requires_global_admin(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_library_read_is_authorized_but_catalog_write_requires_global_admin(
+    monkeypatch: pytest.MonkeyPatch, password_auth_bootstrap_admin: tuple[str, str, str]
+) -> None:
     monkeypatch.setenv("AUTH_MODE", "password")
     monkeypatch.setenv("AUTH_SECRET_KEY", "modeling-template-test-secret-key-32chars")
     with connect() as conn:

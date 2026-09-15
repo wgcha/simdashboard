@@ -13,7 +13,7 @@ depends_on = None
 
 def upgrade() -> None:
     op.execute(sa.text("""
-        CREATE TABLE managed_device_bindings (
+        CREATE TABLE IF NOT EXISTS managed_device_bindings (
             id VARCHAR PRIMARY KEY,
             device_id VARCHAR NOT NULL,
             host_name VARCHAR NOT NULL,
@@ -24,7 +24,7 @@ def upgrade() -> None:
         )
     """))
     op.execute(sa.text("""
-        CREATE TABLE managed_device_pairing_tokens (
+        CREATE TABLE IF NOT EXISTS managed_device_pairing_tokens (
             token_hash CHAR(64) PRIMARY KEY CHECK (token_hash ~ '^[0-9a-f]{64}$'),
             user_id VARCHAR NOT NULL REFERENCES users(id),
             device_id VARCHAR NOT NULL,
@@ -34,7 +34,7 @@ def upgrade() -> None:
         )
     """))
     op.execute(sa.text("""
-        CREATE TABLE managed_device_sessions (
+        CREATE TABLE IF NOT EXISTS managed_device_sessions (
             token_hash CHAR(64) PRIMARY KEY CHECK (token_hash ~ '^[0-9a-f]{64}$'),
             binding_id VARCHAR NOT NULL REFERENCES managed_device_bindings(id),
             user_id VARCHAR NOT NULL REFERENCES users(id),
@@ -43,7 +43,7 @@ def upgrade() -> None:
         )
     """))
     op.execute(sa.text("""
-        CREATE TABLE managed_device_grants (
+        CREATE TABLE IF NOT EXISTS managed_device_grants (
             id VARCHAR PRIMARY KEY,
             binding_id VARCHAR NOT NULL REFERENCES managed_device_bindings(id),
             user_id VARCHAR NOT NULL REFERENCES users(id),
@@ -56,7 +56,7 @@ def upgrade() -> None:
         )
     """))
     op.execute(sa.text("""
-        CREATE TABLE managed_local_runs (
+        CREATE TABLE IF NOT EXISTS managed_local_runs (
             id VARCHAR PRIMARY KEY,
             binding_id VARCHAR NOT NULL REFERENCES managed_device_bindings(id),
             grant_id VARCHAR NOT NULL REFERENCES managed_device_grants(id),
@@ -72,7 +72,7 @@ def upgrade() -> None:
         )
     """))
     op.execute(sa.text("""
-        CREATE TABLE managed_device_event_sequences (
+        CREATE TABLE IF NOT EXISTS managed_device_event_sequences (
             binding_id VARCHAR NOT NULL REFERENCES managed_device_bindings(id),
             run_id VARCHAR NOT NULL REFERENCES managed_local_runs(id),
             sequence BIGINT NOT NULL CHECK (sequence >= 0),
@@ -81,12 +81,12 @@ def upgrade() -> None:
             PRIMARY KEY (binding_id, run_id, sequence)
         )
     """))
-    op.execute(sa.text("CREATE INDEX ix_managed_bindings_user_active ON managed_device_bindings(user_id, revoked_at, created_at)"))
-    op.execute(sa.text("CREATE UNIQUE INDEX ux_managed_active_binding_per_device ON managed_device_bindings(user_id, device_id) WHERE revoked_at IS NULL"))
-    op.execute(sa.text("CREATE INDEX ix_managed_pairing_expiry ON managed_device_pairing_tokens(expires_at)"))
-    op.execute(sa.text("CREATE INDEX ix_managed_sessions_binding_expiry ON managed_device_sessions(binding_id, expires_at)"))
-    op.execute(sa.text("CREATE INDEX ix_managed_grants_binding_context ON managed_device_grants(binding_id, request_id, work_item_id)"))
-    op.execute(sa.text("CREATE INDEX ix_managed_runs_context ON managed_local_runs(request_id, work_item_id, synced_at)"))
+    op.execute(sa.text("CREATE INDEX IF NOT EXISTS ix_managed_bindings_user_active ON managed_device_bindings(user_id, revoked_at, created_at)"))
+    op.execute(sa.text("CREATE UNIQUE INDEX IF NOT EXISTS ux_managed_active_binding_per_device ON managed_device_bindings(user_id, device_id) WHERE revoked_at IS NULL"))
+    op.execute(sa.text("CREATE INDEX IF NOT EXISTS ix_managed_pairing_expiry ON managed_device_pairing_tokens(expires_at)"))
+    op.execute(sa.text("CREATE INDEX IF NOT EXISTS ix_managed_sessions_binding_expiry ON managed_device_sessions(binding_id, expires_at)"))
+    op.execute(sa.text("CREATE INDEX IF NOT EXISTS ix_managed_grants_binding_context ON managed_device_grants(binding_id, request_id, work_item_id)"))
+    op.execute(sa.text("CREATE INDEX IF NOT EXISTS ix_managed_runs_context ON managed_local_runs(request_id, work_item_id, synced_at)"))
 
 
 def downgrade() -> None:

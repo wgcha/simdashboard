@@ -1,13 +1,19 @@
+import type { LocalHelperDistributionReady } from '../../shared/api/localHelperDistribution'
+
+export type { LocalHelperDistributionReady } from '../../shared/api/localHelperDistribution'
+
 export type LocalHelperSetupConfig = Readonly<{
   serverUrl: string
   webOrigin: string
   autoStart: boolean
+  distribution: LocalHelperDistributionReady
 }>
 
 type NormalizedSetupConfig = {
   serverUrl: string
   webOrigin: string
   autoStart: boolean
+  distribution: LocalHelperDistributionReady
 }
 
 const loopbackHosts = new Set(['localhost', '127.0.0.1', '::1'])
@@ -34,10 +40,20 @@ function normalizedHttpUrl(value: string, label: string, allowHttpOnlyOnLoopback
 }
 
 function normalizeConfig(config: LocalHelperSetupConfig): NormalizedSetupConfig {
+  const distribution = config.distribution
+  if (
+    distribution.status !== 'ready' ||
+    !/^\/[A-Za-z0-9._/-]+$/.test(distribution.artifact_url) || distribution.artifact_url.startsWith('//') ||
+    !/^[a-f0-9]{64}$/i.test(distribution.sha256) ||
+    !Number.isSafeInteger(distribution.size_bytes) || distribution.size_bytes <= 0 ||
+    !/^[A-Za-z0-9._-]+\.zip$/i.test(distribution.filename) ||
+    !distribution.version.trim() || !distribution.released_at.trim()
+  ) throw new TypeError('로컬 도우미 배포 manifest가 올바르지 않습니다.')
   return {
     serverUrl: normalizedHttpUrl(config.serverUrl, 'ServerUrl', true),
     webOrigin: normalizedHttpUrl(config.webOrigin, '웹 origin', false),
     autoStart: Boolean(config.autoStart),
+    distribution,
   }
 }
 
@@ -78,59 +94,136 @@ export function buildLocalHelperSetup(config: LocalHelperSetupConfig): string {
   const script = String.raw`$ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 
-function Test-HelperDeployment {
-    param([string]$Candidate)
-    if ([string]::IsNullOrWhiteSpace($Candidate)) { return $false }
-    try { $resolved = [IO.Path]::GetFullPath($Candidate) } catch { return $false }
-    return (Test-Path -LiteralPath $resolved -PathType Container) -and
-        (Test-Path -LiteralPath (Join-Path -Path $resolved -ChildPath 'start-local-runner.ps1') -PathType Leaf) -and
-        (Test-Path -LiteralPath (Join-Path -Path $resolved -ChildPath '.venv-runtime\Scripts\python.exe') -PathType Leaf)
+function Get-Sha256([string]$Path) { return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
+function Assert-ChildPath([string]$Candidate, [string]$Parent, [string]$Name) {
+    $resolvedCandidate = [IO.Path]::GetFullPath($Candidate).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+    $resolvedParent = [IO.Path]::GetFullPath($Parent).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+    if (-not $resolvedCandidate.StartsWith($resolvedParent, [StringComparison]::OrdinalIgnoreCase)) { throw "$Name 경로가 허용된 설치 범위를 벗어납니다." }
 }
-
-function Stop-InvalidDeployment {
-    param([string]$Candidate)
-    $resolved = [IO.Path]::GetFullPath($Candidate)
-    $looksLikeOldSourceFolder = (Test-Path -LiteralPath (Join-Path -Path $resolved -ChildPath '.git') -PathType Container) -or
-        (Test-Path -LiteralPath (Join-Path -Path $resolved -ChildPath 'update.bat') -PathType Leaf)
-    if ($looksLikeOldSourceFolder) {
-        throw "선택한 폴더에는 새 로컬 도우미 실행 파일이 없습니다. 해당 배포본의 update.bat를 실행하거나 새 버전을 다시 받아 주세요. ($resolved)"
+function Assert-SafeRelativePath([string]$Path) {
+    if ([string]::IsNullOrWhiteSpace($Path) -or $Path.IndexOf([char]0) -ge 0) { throw '배포 파일 경로가 올바르지 않습니다.' }
+    $normalized = $Path.Replace('/', '\\')
+    if ([IO.Path]::IsPathRooted($normalized) -or $normalized.Split('\\') -contains '..') { throw '안전하지 않은 압축 파일 경로가 포함되어 있습니다.' }
+    return $normalized
+}
+function Expand-VerifiedArchive([string]$Archive, [string]$Destination) {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zip = [IO.Compression.ZipFile]::OpenRead($Archive)
+    try {
+        $base = [IO.Path]::GetFullPath($Destination).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+        $maximumBytes = [Math]::Min(512MB, [Math]::Max(64MB, (Get-Item -LiteralPath $Archive).Length * 25)); $expandedBytes = [int64]0; $entryCount = 0
+        foreach ($entry in $zip.Entries) {
+            if ([string]::IsNullOrEmpty($entry.Name)) { continue }
+            $entryCount += 1; $expandedBytes += [int64]$entry.Length
+            if ($entryCount -gt 128 -or $entry.Length -gt 256MB -or $expandedBytes -gt $maximumBytes) { throw '압축 해제 크기 또는 파일 수가 안전 한도를 초과했습니다.' }
+            $relative = Assert-SafeRelativePath $entry.FullName
+            $target = [IO.Path]::GetFullPath((Join-Path $Destination $relative))
+            if (-not $target.StartsWith($base, [StringComparison]::OrdinalIgnoreCase)) { throw '압축 파일 경로가 설치 경로를 벗어납니다.' }
+            [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($target)) | Out-Null
+            $input = $entry.Open(); $output = [IO.File]::Create($target)
+            try {
+                $buffer = New-Object byte[] 65536; $written = [int64]0
+                while (($read = $input.Read($buffer, 0, $buffer.Length)) -gt 0) {
+                    $written += $read
+                    if ($written -gt 256MB -or ($expandedBytes - [int64]$entry.Length + $written) -gt $maximumBytes) { throw '압축 해제 크기가 안전 한도를 초과했습니다.' }
+                    $output.Write($buffer, 0, $read)
+                }
+            } catch { Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue; throw } finally { $output.Dispose(); $input.Dispose() }
+        }
+    } finally { $zip.Dispose() }
+}
+function Test-ExtractedManifest([string]$Directory) {
+    $manifestPath = Join-Path $Directory 'artifact-manifest.json'
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw '배포 파일 manifest가 없습니다.' }
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    if ($null -eq $manifest -or $manifest.format -ne 1 -or $null -eq $manifest.files) { throw '배포 파일 manifest 형식이 올바르지 않습니다.' }
+    $base = [IO.Path]::GetFullPath($Directory).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+    foreach ($item in @($manifest.files)) {
+        $relative = Assert-SafeRelativePath ([string]$item.path)
+        if ([string]$item.sha256 -notmatch '^[a-fA-F0-9]{64}$' -or [int64]$item.size_bytes -lt 0) { throw '배포 파일 manifest 항목이 올바르지 않습니다.' }
+        $file = [IO.Path]::GetFullPath((Join-Path $Directory $relative))
+        if (-not $file.StartsWith($base, [StringComparison]::OrdinalIgnoreCase) -or -not (Test-Path -LiteralPath $file -PathType Leaf)) { throw '배포 파일이 누락되었습니다.' }
+        if ((Get-Item -LiteralPath $file).Length -ne [int64]$item.size_bytes -or (Get-Sha256 $file) -ine [string]$item.sha256) { throw "배포 파일 검증에 실패했습니다: $relative" }
     }
-    throw "선택한 폴더는 로컬 도우미 배포 폴더가 아닙니다. start-local-runner.ps1 및 .venv-runtime\\Scripts\\python.exe가 필요합니다. ($resolved)"
+    if (-not (Test-Path -LiteralPath (Join-Path $Directory 'SimulationWorkbenchLocalHelper.exe') -PathType Leaf) -or -not (Test-Path -LiteralPath (Join-Path $Directory 'start-local-runner.ps1') -PathType Leaf)) { throw '실행 파일 또는 시작 스크립트가 없습니다.' }
+}
+function Get-RunningHelperIdentity {
+    try {
+        $response = Invoke-WebRequest -Uri 'http://127.0.0.1:8766/v1/identity' -TimeoutSec 1 -UseBasicParsing -ErrorAction Stop
+        $identity = $response.Content | ConvertFrom-Json
+        if ($response.StatusCode -eq 200 -and $identity.managed -eq $true -and $identity.device_id) { return $identity }
+    } catch { }
+    return $null
 }
 
 $configBase64 = '${configBase64}'
 $configJson = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($configBase64))
 $config = $configJson | ConvertFrom-Json
-if ($null -eq $config -or [string]::IsNullOrWhiteSpace([string]$config.serverUrl) -or [string]::IsNullOrWhiteSpace([string]$config.webOrigin)) {
+if ($null -eq $config -or [string]::IsNullOrWhiteSpace([string]$config.serverUrl) -or [string]::IsNullOrWhiteSpace([string]$config.webOrigin) -or $null -eq $config.distribution) {
     throw '설정 데이터가 올바르지 않습니다. 웹 페이지에서 새 설정 파일을 다시 내려받아 주세요.'
 }
-
-$downloadFolder = [Environment]::GetEnvironmentVariable('SIMULATION_WORKBENCH_SETUP_DIRECTORY')
-if (Test-HelperDeployment $downloadFolder) {
-    $deploymentFolder = [IO.Path]::GetFullPath($downloadFolder)
-    Write-Host "배포 폴더를 찾았습니다: $deploymentFolder"
-} else {
-    Add-Type -AssemblyName System.Windows.Forms
-    $picker = New-Object System.Windows.Forms.FolderBrowserDialog
-    $picker.Description = 'start-local-runner.ps1가 있는 로컬 도우미 배포 폴더를 선택하세요.'
-    $picker.ShowNewFolderButton = $false
-    if ($picker.ShowDialog() -ne [Windows.Forms.DialogResult]::OK) {
-        throw '폴더를 선택하지 않아 설정을 취소했습니다. 다시 실행하여 로컬 도우미 배포 폴더를 선택하세요.'
+if ([string]$config.distribution.artifact_url -notmatch '^/[A-Za-z0-9._/-]+$' -or ([string]$config.distribution.artifact_url).StartsWith('//') -or [string]$config.distribution.sha256 -notmatch '^[a-fA-F0-9]{64}$') { throw '배포 manifest가 올바르지 않습니다.' }
+$server = [Uri]([string]$config.serverUrl)
+$downloadUri = [Uri]::new($server, [string]$config.distribution.artifact_url)
+$installParent = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)) 'SimulationWorkbench'
+$installRoot = Join-Path $installParent 'local-helper'
+$backup = Join-Path $installParent 'local-helper.previous'
+$stagingParent = Join-Path $installParent '.staging'
+$temporaryParent = [IO.Path]::GetTempPath()
+$temporary = Join-Path $temporaryParent ('simulation-workbench-helper-' + [Guid]::NewGuid().ToString('N'))
+$archive = Join-Path $temporary ([string]$config.distribution.filename)
+$stage = Join-Path $stagingParent ([Guid]::NewGuid().ToString('N'))
+Assert-ChildPath -Candidate $installRoot -Parent $installParent -Name '설치'
+Assert-ChildPath -Candidate $backup -Parent $installParent -Name '복구'
+Assert-ChildPath -Candidate $stagingParent -Parent $installParent -Name '설치 준비'
+Assert-ChildPath -Candidate $temporary -Parent $temporaryParent -Name '임시 설치'
+Assert-ChildPath -Candidate $archive -Parent $temporary -Name '다운로드'
+Assert-ChildPath -Candidate $stage -Parent $stagingParent -Name '임시 배포'
+New-Item -ItemType Directory -Force -Path $installParent, $stagingParent, $temporary, $stage | Out-Null
+try {
+    Write-Host '로컬 도우미를 안전하게 내려받는 중입니다...'
+    Invoke-WebRequest -Uri $downloadUri.AbsoluteUri -OutFile $archive -UseBasicParsing -MaximumRedirection 0
+    if ((Get-Item -LiteralPath $archive).Length -ne [int64]$config.distribution.size_bytes -or (Get-Sha256 $archive) -ine [string]$config.distribution.sha256) { throw '다운로드한 배포 파일의 무결성 검증에 실패했습니다.' }
+    Expand-VerifiedArchive -Archive $archive -Destination $stage
+    Test-ExtractedManifest -Directory $stage
+    if ((Test-Path -LiteralPath $installRoot) -and (Get-RunningHelperIdentity)) { throw '실행 중인 로컬 도우미가 있습니다. 작업 관리자에서 도우미를 종료한 뒤 업데이트를 다시 실행하세요.' }
+    $movedPrevious = $false
+    try {
+        if (Test-Path -LiteralPath $backup) { Remove-Item -LiteralPath $backup -Recurse -Force }
+        if (Test-Path -LiteralPath $installRoot) { Move-Item -LiteralPath $installRoot -Destination $backup; $movedPrevious = $true }
+        Move-Item -LiteralPath $stage -Destination $installRoot
+    } catch {
+        if ($movedPrevious -and (Test-Path -LiteralPath $installRoot)) { Remove-Item -LiteralPath $installRoot -Recurse -Force }
+        if ($movedPrevious -and (Test-Path -LiteralPath $backup)) { Move-Item -LiteralPath $backup -Destination $installRoot }
+        throw
     }
-    $deploymentFolder = [IO.Path]::GetFullPath($picker.SelectedPath)
-    if (-not (Test-HelperDeployment $deploymentFolder)) { Stop-InvalidDeployment $deploymentFolder }
+} finally {
+    if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue }
+    if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Recurse -Force -ErrorAction SilentlyContinue }
 }
-
-$launcher = Join-Path -Path $deploymentFolder -ChildPath 'start-local-runner.ps1'
-Write-Host '현재 Windows 사용자에게만 설정합니다. 관리자 권한은 필요하지 않습니다.'
-if ([bool]$config.autoStart) {
-    & $launcher -ServerUrl ([string]$config.serverUrl) -Origin ([string]$config.webOrigin) -InstallAutoStart
-} else {
-    & $launcher -ServerUrl ([string]$config.serverUrl) -Origin ([string]$config.webOrigin)
-}
-if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) {
-    Write-Host "로컬 도우미 시작에 실패했습니다. 종료 코드: $LASTEXITCODE"
-    exit $LASTEXITCODE
+$launcher = Join-Path -Path $installRoot -ChildPath 'start-local-runner.ps1'
+Write-Host '현재 Windows 사용자 범위에 설치합니다. 관리자 권한은 필요하지 않습니다.'
+try {
+    if ([bool]$config.autoStart) {
+        & $launcher -ServerUrl ([string]$config.serverUrl) -Origin ([string]$config.webOrigin) -InstallAutoStart
+    } else {
+        & $launcher -ServerUrl ([string]$config.serverUrl) -Origin ([string]$config.webOrigin)
+    }
+    if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) { throw "로컬 도우미 시작에 실패했습니다. 종료 코드: $LASTEXITCODE" }
+    if (-not (Get-RunningHelperIdentity)) { throw '로컬 도우미가 시작된 뒤 상태를 확인하지 못했습니다.' }
+    if (Test-Path -LiteralPath $backup) { Remove-Item -LiteralPath $backup -Recurse -Force }
+} catch {
+    $failure = $_
+    # The pre-update check proves no previous helper owned the default port.
+    # Restore the known-good installation only when the failed release is not
+    # running and can therefore be removed safely.
+    if (-not (Get-RunningHelperIdentity) -and (Test-Path -LiteralPath $installRoot)) {
+        try { Remove-Item -LiteralPath $installRoot -Recurse -Force } catch { }
+    }
+    if (-not (Test-Path -LiteralPath $installRoot) -and (Test-Path -LiteralPath $backup)) {
+        Move-Item -LiteralPath $backup -Destination $installRoot
+    }
+    throw $failure
 }
 Write-Host ''
 Write-Host '설정이 완료되었습니다. 웹 페이지로 돌아가서 “다시 확인”을 선택하세요.'

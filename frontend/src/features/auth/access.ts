@@ -22,7 +22,7 @@ export type Permission =
   | 'system.menu_policy.manage'
   | 'audit.view'
 
-export type MenuId = 'portfolio' | 'dashboard' | 'intake' | 'workbench' | 'data' | 'workbench_admin' | 'project_result_profiles' | 'variables' | 'templates' | 'schemas' | 'examples' | 'help' | 'access_admin' | 'menu_policy_admin' | 'audit_admin' | 'local_pc'
+export type MenuId = 'portfolio' | 'dashboard' | 'intake' | 'workbench' | 'data' | 'workbench_admin' | 'project_result_profiles' | 'variables' | 'templates' | 'schemas' | 'examples' | 'help' | 'voc' | 'access_admin' | 'menu_policy_admin' | 'audit_admin' | 'local_pc'
 export type WorkspacePage = MenuId
 export type MenuContext = 'company' | 'project' | 'system'
 export type MenuPolicyItem = {
@@ -45,6 +45,11 @@ const permissionsByRole: Record<ProjectRole, ReadonlySet<Permission>> = { genera
 
 export function effectiveRole(user: AuthUser, projectId: string): ProjectRole | null {
   return user.memberships.find((item) => item.project_id === projectId)?.role ?? null
+}
+
+/** Accounts without project membership still reach company-level read screens when granted. */
+export function isPersonalOnlyAccount(user: AuthUser | null): boolean {
+  return Boolean(user && user.account_status === 'ACTIVE' && !user.is_global_admin && user.memberships.length === 0 && !user.company_permissions.includes('company.dashboard.view'))
 }
 
 export function policyRole(user: AuthUser, projectId: string): ProjectRole {

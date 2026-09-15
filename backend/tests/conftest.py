@@ -4,12 +4,15 @@ import asyncio
 import os
 import shutil
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
+from app.config import database_settings
 from app.database import initialize_database
 from app.database_connection import connect
+from app.security import hash_password
 
 
 # WSL2 kernel 6.18 currently fails to wake Python's selector loop through
@@ -103,6 +106,40 @@ def seeded_duckdb(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return database
 
 
+@pytest.fixture
+def password_auth_bootstrap_admin() -> tuple[str, str, str]:
+    """Provide one disposable valid global admin for password-auth contracts.
+
+    Password-authenticated API contracts often exercise a non-admin principal.
+    The production setup guard still requires another active global admin with a
+    password, so these tests must model that account explicitly rather than
+    weakening the guard or making it an autouse fixture.
+    """
+    suffix = os.urandom(5).hex()
+    user_id = f"contract-bootstrap-admin-{suffix}"
+    username = f"contract-bootstrap-admin-{suffix}"
+    password = "contract-bootstrap-admin-password"
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    with connect() as connection:
+        connection.execute(
+            """
+            INSERT INTO users
+                (id, username, password_hash, display_name, legacy_role,
+                 account_status, is_global_admin, is_active, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 'admin', 'ACTIVE', true, true, ?, ?)
+            """,
+            [user_id, username, hash_password(password), "계약 부트스트랩 관리자", now, now],
+        )
+    try:
+        yield user_id, username, password
+    finally:
+        with connect() as connection:
+            if database_settings().backend == "duckdb":
+                connection.execute("DELETE FROM audit_events WHERE user_id=?", [user_id])
+            connection.execute("DELETE FROM project_memberships WHERE user_id=?", [user_id])
+            connection.execute("DELETE FROM users WHERE id=?", [user_id])
+
+
 def _cleanup_disposable_duckdb(database: Path) -> None:
     """Remove only the per-test DuckDB files, leaving test diagnostics intact."""
     for artifact in (database, database.with_name(f"{database.name}.wal")):
@@ -120,6 +157,12 @@ def isolated_database(request: pytest.FixtureRequest, tmp_path: Path, monkeypatc
     if request.node.get_closest_marker("unit") is not None:
         yield
         return
+
+    # Existing API tests exercise the explicitly retained local-development
+    # compatibility mode. Bootstrap tests delete this value when asserting the
+    # production-safe default.
+    monkeypatch.setenv("DEPLOYMENT_PROFILE", "local")
+    monkeypatch.setenv("AUTH_ALLOW_INSECURE_LOCAL", "true")
 
     postgres_test_enabled = (
         os.getenv("ANALYSIS_DB_BACKEND", "duckdb").strip().lower() == "postgresql"

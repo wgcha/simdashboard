@@ -334,7 +334,7 @@ def test_scoped_read_and_binding_use_distinct_permissions(
 
 
 def test_viewer_can_read_storage_but_cannot_change_binding(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, password_auth_bootstrap_admin: tuple[str, str, str]
 ) -> None:
     _root, relative = _candidate_root(tmp_path, monkeypatch)
     initialize_database()

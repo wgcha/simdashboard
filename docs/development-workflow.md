@@ -83,6 +83,7 @@ pnpm run generate:api
 ### 3.3 Frontend feature
 
 - canonical workspace URL은 `features/navigation/workspaceRouteRegistry.ts`에만 정의한다.
+- 다른 작업 화면으로 이동하며 문맥을 바꿀 때는 목표 URL과 문맥을 함께 전달한다. 목표 문맥에 없는 Run·페이지 query는 제거하고, 자동 문맥 동기화가 비의뢰 화면의 방문 기록을 추가하지 않게 한다.
 - route-to-screen 연결은 `app/workspace/WorkspaceRouteRenderer.tsx` 또는 lazy route module을 사용한다.
 - feature의 화면·상태·API adapter·스타일을 가까이 둔다.
 - 새 상태를 `App.tsx`에 먼저 추가하지 말고 feature hook/controller가 소유하게 한다.
@@ -249,3 +250,10 @@ DuckDB 통합 테스트는 session seed를 복사해 테스트별 `test.duckdb`�
 - migration과 rollback 제한이 문서화되었다.
 - 관련 예제와 자동 테스트가 통과한다.
 - 현재 기준 문서와 GitHub Issue 추적 정보가 갱신되었다.
+
+## 전역 색 테마 적용 계약 (2026-09-15)
+
+- 전역 색의 기준은 `frontend/src/theme.css`의 `--color-*` 토큰이다. 기능 CSS는 표면·본문·보조 글자·테두리·동작·포커스·상태·차트 역할을 참조하며 라이트/다크 팔레트를 따로 하드코딩하지 않는다. 모달 가림막은 `--color-overlay`를 사용한다.
+- 사용자에게 저장된 차트 강조색·데이터 범주색처럼 의미가 있는 명시적 설정은 유지한다. 기본 차트 팔레트와 PASS/FAIL 색상은 전역 차트·상태 토큰을 따른다.
+- 기능 단위로 늦게 로드되는 CSS는 `.primary-button` 같은 공통 클래스의 전역 소유권을 가져오지 않는다. 기능별 예외는 해당 화면·대화상자의 범위에 둔다. 글자색과 배경색을 서로 다른 모드에서 가져오는 덮어쓰기를 피한다.
+- 테마 변경 시 일반/hover/키보드 포커스, 모달 확대·복귀, 다른 기능을 방문한 뒤의 CSS 로드 순서, 새로고침 후 테마 복원을 함께 검증한다. 관련 회귀는 `frontend/e2e/theme-contract.spec.ts`에 둔다. 전역 토큰이 존재한다는 이유만으로 모든 레거시 화면의 고정 색상이 제거됐다고 기록하지 않는다.

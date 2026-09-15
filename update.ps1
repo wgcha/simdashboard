@@ -4,11 +4,16 @@ param(
     [string]$RepositoryUrl = '',
     [string]$Branch = '',
     [switch]$NoBrowser,
+    [string]$LocalHelperDistributionSource = '',
+    [Uri]$LocalHelperManifestUrl,
     [ValidateSet('auto', 'direct', 'proxy')]
     [string]$NetworkMode = '',
     # Intended for automated validation. A normal double-click remains interactive
     # for the first ZIP/bootstrap run.
-    [switch]$Yes
+    [switch]$Yes,
+    # Keep unattended jobs fail-closed when a first administrator must be
+    # created. Interactive update.bat continues to prompt through deploy.ps1.
+    [switch]$NonInteractive
 )
 
 $ErrorActionPreference = 'Stop'
@@ -25,6 +30,11 @@ $lockAcquired = $false
 $logPath = $null
 $stage = 'startup'
 $failureExitCode = 1
+$script:ChildPowerShellExitCode = 1
+
+if ($LocalHelperDistributionSource -and $null -ne $LocalHelperManifestUrl) {
+    throw 'Use either -LocalHelperDistributionSource or -LocalHelperManifestUrl, not both.'
+}
 
 function Write-UpdateLog {
     param([string]$Message)
@@ -66,15 +76,16 @@ function Invoke-ChildPowerShell {
         $windowsPowerShell = $command.Source
     }
     $childArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath) + @($Arguments)
-    # Child output is intentionally sent straight to the console. Keeping it
-    # out of the pipeline is important: callers must receive only the integer
-    # process exit code, even when deploy/start print normal progress.
-    & $windowsPowerShell @childArgs | Out-Host
-    $code = [int]$LASTEXITCODE
-    return $code
+    # Do not capture this function's output or pipe it through Out-Host.
+    # A server-local first-admin prompt has no newline and must remain visible
+    # before the user types. Keep the exit code out of the output stream.
+    $script:ChildPowerShellExitCode = 1
+    & $windowsPowerShell @childArgs
+    $script:ChildPowerShellExitCode = [int]$LASTEXITCODE
 }
 
 function Get-ServerPortArguments {
+    param([switch]$ForStart)
     $pidPath = Join-Path $Root '.server-pids.json'
     if (-not (Test-Path -LiteralPath $pidPath -PathType Leaf)) {
         return @()
@@ -101,6 +112,12 @@ function Get-ServerPortArguments {
         $port = 0
         if (-not [int]::TryParse([string]$record.port, [ref]$port) -or $port -lt 1 -or $port -gt 65535) {
             throw "The existing .server-pids.json has an invalid $($entry.Name) port; it was preserved. Review it before updating."
+        }
+        # The old default was 5173. Migrate only legacy default records;
+        # custom ports and explicit 5173 records from the new launcher survive.
+        if ($ForStart -and $entry.Name -eq 'frontend' -and $port -eq 5173 -and
+            -not ($record.PSObject.Properties.Name -contains 'basePath')) {
+            $port = 80
         }
         $arguments += @($entry.Parameter, [string]$port)
     }
@@ -184,10 +201,12 @@ try {
     # Read this before stop.ps1 can remove the metadata. Only valid, explicitly
     # recorded ports are forwarded; defaults remain owned by stop/start.ps1.
     $portArguments = Get-ServerPortArguments
+    $restartPortArguments = Get-ServerPortArguments -ForStart
     Write-UpdateLog ("PORT_ARGUMENTS_COUNT={0}" -f $portArguments.Count)
 
     Write-Stage 'stop' 'Stopping the current application'
-    $stopCode = Invoke-ChildPowerShell -ScriptPath (Join-Path $Root 'stop.ps1') -Arguments $portArguments
+    Invoke-ChildPowerShell -ScriptPath (Join-Path $Root 'stop.ps1') -Arguments $portArguments
+    $stopCode = $script:ChildPowerShellExitCode
     Complete-Stage 'stop' $stopCode
     if ($stopCode -ne 0) { $failureExitCode = $stopCode; throw "Stopping the application failed (exit code $stopCode). The source was not changed." }
 
@@ -198,33 +217,34 @@ try {
     Write-Stage 'deploy' 'Refreshing the deployment environment'
     $deployArguments = @()
     if ($NetworkMode) { $deployArguments += @('-NetworkMode', $NetworkMode) }
-    $deployCode = Invoke-ChildPowerShell -ScriptPath (Join-Path $Root 'deploy.ps1') -Arguments $deployArguments
+    if ($NonInteractive) { $deployArguments += '-NonInteractive' }
+    Invoke-ChildPowerShell -ScriptPath (Join-Path $Root 'deploy.ps1') -Arguments $deployArguments
+    $deployCode = $script:ChildPowerShellExitCode
     Complete-Stage 'deploy' $deployCode
-    if ($deployCode -ne 0) { $failureExitCode = $deployCode; throw "Deployment failed (exit code $deployCode). Migration and restart were skipped." }
+    if ($deployCode -ne 0) { $failureExitCode = $deployCode; throw "Deployment failed (exit code $deployCode). The local-helper import and restart were skipped; review the reported deployment stage." }
 
-    Write-Stage 'migration' 'Applying pending PostgreSQL schema migrations'
-    $runtimeModulePath = Join-Path $Root 'scripts\windows\Runtime.psm1'
-    if (-not (Test-Path -LiteralPath $runtimeModulePath -PathType Leaf)) { throw 'Runtime.psm1 was not found after deployment.' }
-    Import-Module $runtimeModulePath -Force
-    $python = Get-ProjectPython
-    $migrationPath = Join-Path $Root 'backend\scripts\upgrade_postgres_schema.py'
-    if (-not (Test-Path -LiteralPath $migrationPath -PathType Leaf)) { throw 'upgrade_postgres_schema.py was not found after deployment.' }
-    $migrationCode = 1
-    Push-Location (Join-Path $Root 'backend')
-    try {
-        & $python $migrationPath
-        $migrationCode = [int]$LASTEXITCODE
+    if ($LocalHelperDistributionSource -or $null -ne $LocalHelperManifestUrl) {
+        Write-Stage 'local-helper-distribution' 'Importing the requested Windows local helper distribution'
+        $helperScript = Join-Path $Root 'scripts\windows\import-local-helper-distribution.ps1'
+        $helperArguments = @('-ProjectRoot', $Root)
+        if ($LocalHelperDistributionSource) { $helperArguments += @('-LocalHelperDistributionSource', $LocalHelperDistributionSource) }
+        else { $helperArguments += @('-LocalHelperManifestUrl', $LocalHelperManifestUrl.AbsoluteUri) }
+        Invoke-ChildPowerShell -ScriptPath $helperScript -Arguments $helperArguments
+        $helperCode = $script:ChildPowerShellExitCode
+        Complete-Stage 'local-helper-distribution' $helperCode
+        if ($helperCode -ne 0) { $failureExitCode = $helperCode; throw 'Local helper distribution import failed. The existing distribution was preserved and the server was not started.' }
     }
-    finally { Pop-Location }
-    Complete-Stage 'migration' $migrationCode
-    if ($migrationCode -ne 0) { $failureExitCode = $migrationCode; throw "Database migration failed (exit code $migrationCode). The new server was not started; review the migration result before retrying." }
+    else {
+        Write-Host 'Local helper distribution was not supplied; existing server distribution was not changed.' -ForegroundColor Yellow
+    }
 
     Write-Stage 'start' 'Starting the updated application'
     $startArguments = @()
-    $startArguments += $portArguments
+    $startArguments += $restartPortArguments
     if ($NoBrowser) { $startArguments += '-NoBrowser' }
     if ($NetworkMode) { $startArguments += @('-NetworkMode', $NetworkMode) }
-    $startCode = Invoke-ChildPowerShell -ScriptPath (Join-Path $Root 'start.ps1') -Arguments $startArguments
+    Invoke-ChildPowerShell -ScriptPath (Join-Path $Root 'start.ps1') -Arguments $startArguments
+    $startCode = $script:ChildPowerShellExitCode
     Complete-Stage 'start' $startCode
     if ($startCode -ne 0) { $failureExitCode = $startCode; throw "Starting the updated application failed (exit code $startCode). Review the service logs and retry." }
 

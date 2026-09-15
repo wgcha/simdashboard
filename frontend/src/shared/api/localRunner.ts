@@ -5,6 +5,8 @@
  * the user's loopback interface.
  */
 
+import { createClientId } from '../identity/clientId'
+
 export type LocalProgram = {
   id: string
   name: string
@@ -123,5 +125,5 @@ export function localRunnerPairingKey(userId: string) {
 }
 
 export function newIdempotencyKey() {
-  return `local-${crypto.randomUUID()}`
+  return `local-${createClientId()}`
 }

@@ -39,7 +39,8 @@ try {
     Set-Content -LiteralPath (Join-Path $remoteRoot 'scripts\windows\GitUpdate.psm1') -Value '# Bootstrap contract fixture only.'
     @'
 param([string]$ProjectRoot, [string]$RepositoryUrl, [string]$Branch)
-@{Root=$ProjectRoot;Repository=$RepositoryUrl;Branch=$Branch} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $ProjectRoot 'driver-result.json')
+$result = @{Root=$ProjectRoot;Repository=$RepositoryUrl;Branch=$Branch} | ConvertTo-Json
+[IO.File]::WriteAllText((Join-Path $ProjectRoot 'driver-result.json'), $result, (New-Object Text.UTF8Encoding($false)))
 # Replacing the running batch file must not execute its new tail.
 Set-Content -LiteralPath (Join-Path $ProjectRoot 'update.bat') -Value '@echo off'
 exit 0
@@ -52,7 +53,7 @@ exit 0
     $env:SIMDASH_UPDATE_REPOSITORY = $remoteRoot
     $env:SIMDASH_UPDATE_BRANCH = 'fixture'
     Assert-True ((Invoke-TestBatch (Join-Path $targetRoot 'update.bat')) -eq 0) 'Single-file bootstrap failed.'
-    $result = Get-Content -Raw -LiteralPath (Join-Path $targetRoot 'driver-result.json') | ConvertFrom-Json
+    $result = [IO.File]::ReadAllText((Join-Path $targetRoot 'driver-result.json'), [Text.Encoding]::UTF8) | ConvertFrom-Json
     Assert-True ($result.Root -eq $targetRoot) 'The staged driver received the wrong deployment root.'
     Assert-True ($result.Repository -eq $remoteRoot -and $result.Branch -eq 'fixture') 'Repository/branch arguments were lost.'
     Assert-True ((Get-Content -Raw -LiteralPath (Join-Path $targetRoot '.env')).Trim() -eq 'KEEP=original') 'Bootstrap changed user settings.'

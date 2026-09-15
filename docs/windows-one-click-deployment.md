@@ -1,16 +1,22 @@
 # Windows 파일 실행으로 설치·구동하기
 
-- 기준일: 2026-09-08
-- 대상: Windows 10/11 x64 사내 PC의 로컬 시험·사용
+- 기준일: 2026-09-14
+- 대상: PostgreSQL이 준비된 Windows x64 소스 배포 PC. Python·Node.js·Git·VS Code의 사전 설치는 필요하지 않음
 - 진입점: `deploy.bat`, `start.bat`, `stop.bat`, `update.bat`
+
+모든 소스 변경에 적용하는 [배포 정책](windows-deployment-policy.md)과 [신규·업데이트 시나리오](windows-deployment-scenarios.md)를 따른다. **Windows Server 2022만 있는 폐쇄망**은 [완결 설치 패키지 안내](windows-server-offline-installation.md)를 사용한다.
 
 ## 처음 사용할 때
 
-1. GitHub에서 소스 ZIP을 받고 **전체 압축을 푼다**. ZIP 안에서 배치 파일만 실행하지 않는다.
-2. 압축을 푼 폴더의 **`deploy.bat`**를 더블클릭한다. 고정 Python·Node.js·pnpm과 의존성을 설치하고 웹을 빌드한다.
-3. 완료 후 **`start.bat`**를 더블클릭한다. 웹과 API가 준비되면 기본 브라우저로 결과 대시보드가 열린다.
+`deploy.bat`은 실행 환경 전용 준비 스크립트와 안전한 DB 준비 단계를 호출한다. 기존 `setup.ps1`의 Fresh/Transfer 메뉴는 일반 설치·업데이트에서 호출하지 않는다.
 
-주소는 **http://127.0.0.1:5173/workspace/overview**다. 종료할 때는 **`stop.bat`**를 더블클릭한다. 브라우저 창만 닫아도 서버는 계속 실행된다.
+1. GitHub에서 소스 ZIP을 받고 **전체 압축을 푼다**. ZIP 안에서 배치 파일만 실행하지 않는다.
+2. 압축을 푼 폴더의 **`deploy.bat`**를 더블클릭한다. 런타임·의존성·웹 빌드 후 DB 준비, 기존 DB 백업, 마이그레이션, 계정 준비를 진행한다. PostgreSQL 연결이 없으면 관리자 호스트·포트·사용자·비밀번호를 입력한다. 비밀번호 입력은 숨겨진다. DB 없음/실제 빈 DB만 최초 준비하며, 데이터가 있는 미설정 DB를 덮어쓰지 않는다.
+3. 최초 웹 관리자 아이디와 비밀번호를 입력하면 **앱 시작까지 이어서 실행**한다. 웹과 API가 준비되면 기본 브라우저에 회원 로그인·가입 화면이 열린다. 일반 직원은 가입 후 관리자 승인을 받는다. 이후 다시 실행할 때는 **`start.bat`**를 사용한다.
+
+기본 주소는 **http://127.0.0.1/home**다(HTTP 80). 인증된 설치는 별도 수신 주소 설정이 없어도 **http://컴퓨터이름/home**와 **http://사내IP/home**로 접속한다. [Windows 사내 접속 안내](windows-lan-access.md)를 참고한다. 종료할 때는 **`stop.bat`**를 더블클릭한다. 브라우저 창만 닫아도 서버는 계속 실행된다.
+
+`stop.bat`은 중지 확인 중임을 표시하고, 작업 후 완료 또는 실패 결과를 안내한다. 결과를 확인한 뒤 아무 키나 누르면 배치 실행이 끝나고 더블클릭으로 연 창이 닫힌다. 업데이트·배포 자동화는 입력 대기가 없는 `stop.ps1`을 사용한다.
 
 Python·Node.js·Git을 별도로 설치하지 않아도 된다. 기본 Windows PowerShell 5.1을 사용하며 런타임은 소스 폴더 안의 `.tools`와 `.venv-runtime`에 둔다. 최초 설치에는 패키지 다운로드가 가능한 연결이 필요하다. 이후 `start.bat`는 설치나 패키지 다운로드를 수행하지 않는다.
 
@@ -43,14 +49,16 @@ Python·Node.js·Git을 별도로 설치하지 않아도 된다. 기본 Windows 
 ## 재설치·업데이트·기존 데이터
 
 - 다시 사용할 때는 `start.bat`만 실행한다. 이미 이 폴더에서 정상 실행 중이면 기존 서버를 사용하고 브라우저를 연다.
-- 새 버전 적용은 **`update.bat` 하나를 더블클릭**한다. Git 다운로드·앱 종료·소스 적용·의존성/빌드·DB migration·재시작을 순서대로 처리한다. Git은 업데이트 기능에 필요하다. ZIP/`No commits yet` 폴더의 최초 연결은 [사내 PC 업데이트 안내](windows-git-update.md)를 따른다.
-- `.env`가 없을 때만 기본 예제를 복사한다. 새 환경의 기본값은 DuckDB 로컬 프로필이다.
-- 기본 DB는 이 소스의 `backend/data/analysis_dashboard.duckdb`다. 다른 DB를 지정하려면 `.env`에 절대 경로를 넣는다.
+- 새 버전 적용은 **`update.bat` 하나를 더블클릭**한다. Git 다운로드·앱 종료·소스 적용·의존성/빌드·기존 DB 및 설정 백업·DB migration·계정 확인·재시작을 순서대로 처리한다. 백업 실패 시 DB 변경과 재시작을 중단한다. Git은 업데이트 기능에 필요하다. ZIP/`No commits yet` 폴더의 최초 연결은 [사내 PC 업데이트 안내](windows-git-update.md)를 따른다.
+- `.env`가 없을 때만 기본 예제를 복사한다. 기존 `backend/.env`가 있으면 그 설정을 유지한다. 새 환경과 DB 종류 미지정 실행의 기본값은 PostgreSQL이다.
+- PostgreSQL 서버가 준비되어 있으면 새 소스 설치가 전용 앱 DB·owner/app 역할을 준비한다. 기존 설치의 `.env`/`backend/.env`와 `.postgres-owner.env`를 유지하면 그 연결로 백업 후 업데이트한다. 별도 서버에 기존 DB만 있다면 해당 app/owner 연결을 먼저 설정한다. 관리자 연결을 입력했다고 기존 데이터에서 앱 비밀번호를 추측하거나 재발급하지 않는다.
+- 기존 `ANALYSIS_DB_BACKEND=duckdb` 설정은 유지한다. 해당 DB 파일을 백업하고 검증된 이관을 완료한 뒤 PostgreSQL로 전환한다. 로컬 시험용 DuckDB도 명시적으로 선택해야 한다.
+- DB 종류 설정이 없는데 기존 DuckDB 파일이 있으면 배포·시작을 중단하고 이관 안내를 표시한다. `.env` 또는 `backend/.env` 파일이 존재하더라도 DB 종류가 빠져 있으면 같은 보호 규칙을 적용한다. 기존 데이터를 계속 사용할 때는 `ANALYSIS_DB_BACKEND=duckdb`, 이관 검증을 마친 경우에는 `ANALYSIS_DB_BACKEND=postgresql`을 명시한다.
 - 기존 `.env`, PostgreSQL 연결 정보, 의뢰·결과 DB는 설치 과정에서 덮어쓰거나 초기화하지 않는다.
 - 이전 DB 이관 실패의 `.setup-recovery-required.json`이 있으면 먼저 해당 복구 절차를 완료해야 한다.
 - 다른 PC로 기존 데이터를 옮길 때는 소스 업데이트와 별개로 [DB 이전 안내](postgresql-pc-transfer-guide.md)를 따른다.
 
-기본 실행은 이 PC의 `127.0.0.1`에만 열린다. 기존 PostgreSQL 설정이 있으면 해당 연결·스키마를 먼저 검증한다. 여러 사람이 네트워크로 접속하는 상시 운영 구성은 [운영 배포 안내](../deploy/rocky8/README.md)를 따른다.
+인증된 Windows 설치는 기본적으로 사내 IP와 컴퓨터 이름으로 접속할 수 있다. 기존 `.env`에 `WINDOWS_WEB_HOST=127.0.0.1`을 명시한 설치는 그 설정을 유지하므로, 사내 접속으로 바꾸려면 `0.0.0.0`으로 변경 후 재시작한다. [사내 IP 접속 안내](windows-lan-access.md)를 참고한다. 시작 시 스키마 변경이 필요하면 배포/업데이트를 안내하며 `start` 자체는 migration을 실행하지 않는다. Windows 상시 서버 설치는 [폐쇄망 서버 안내](windows-server-offline-installation.md), Rocky 서버는 [기존 운영 안내](../deploy/rocky8/README.md)를 따른다.
 
 ## 실행이 안 될 때
 
@@ -84,7 +92,8 @@ Python·Node.js·Git을 별도로 설치하지 않아도 된다. 기본 Windows 
 
 ## 검증과 구현 경계
 
-- 설치: `deploy.ps1` → `setup.ps1` → `scripts/windows/bootstrap-runtime.ps1`.
+- 설치: `deploy.ps1` → `scripts/windows/prepare-source-environment.ps1` → 필요 시 `bootstrap-runtime.ps1` → `initialize-source-postgres.ps1` → 백업·migration·계정 준비.
+- `deploy.ps1`은 업데이트 자동화와 호환되도록 기본값에서 앱을 시작하지 않는다. `deploy.bat`은 `-StartAfterDeploy`를 전달한다. 비대화형 최초 설치는 `POSTGRES_ADMIN_URL`과 계정 준비 조건을 사전에 충족해야 하며, 필요한 입력이 없으면 기다리지 않고 실패한다.
 - 프록시·CA: `scripts/windows/Network.psm1` 및 `deploy/windows/network-settings.json`.
 - 실행·중지: `start.ps1`, `stop.ps1`. 저장된 PID와 시작 시각·실행 경로·포트를 확인한다.
 - CI: `.github/workflows/windows-deploy-smoke.yml`에서 Windows PowerShell 5.1의 설치·실행·재실행·중지를 확인한다.

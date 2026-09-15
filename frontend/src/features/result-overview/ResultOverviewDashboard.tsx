@@ -56,7 +56,7 @@ export function ResultOverviewDashboard({ data, loading, projectId, search, onPr
   const resultCountTotal = records.filter(hasRun).length
   const pendingCount = records.filter(isPending).length
   const unassignedCount = records.filter((record) => !hasLoadCase(record)).length
-  const matchingRecords = records.filter((record) => filter === 'all' || (filter === 'review' ? hasResult(record) && record.verdict === 'FAIL' : filter === 'available' ? hasRun(record) : isPending(record)))
+  const matchingRecords = records.filter((record) => filter === 'all' || (filter === 'review' ? hasResult(record) && String(record.verdict).toUpperCase() === 'FAIL' : filter === 'available' ? hasRun(record) : isPending(record)))
   const pageCount = Math.max(1, Math.ceil(matchingRecords.length / PAGE_SIZE))
   const recentRecords = matchingRecords.slice(Math.min(page, pageCount - 1) * PAGE_SIZE, (Math.min(page, pageCount - 1) + 1) * PAGE_SIZE)
   const toggleFilter = (next: typeof filter) => setFilter((current) => current === next ? 'all' : next)
@@ -75,7 +75,7 @@ export function ResultOverviewDashboard({ data, loading, projectId, search, onPr
 
     {loading ? <div className="result-overview-loading" role="status" aria-busy="true"><LoaderCircle className="spin" aria-hidden="true" /> 결과 대시보드를 갱신하고 있습니다.</div> : <>
     <section className="result-overview-summary" aria-label="결과 요약">
-      <SummaryCard label="검토 필요" value={reviewCount} note="최신 Run의 수치 판정 FAIL" tone="danger" selected={filter === 'review'} onClick={() => toggleFilter('review')} icon={<AlertCircle aria-hidden="true" />} />
+      <SummaryCard label="기준 미충족" value={reviewCount} note="최신 Run의 수치 판정 FAIL" tone="danger" selected={filter === 'review'} onClick={() => toggleFilter('review')} icon={<AlertCircle aria-hidden="true" />} />
       <SummaryCard label="결과 보유" value={resultCountTotal} note="최신 Run이 있는 하중 경우" tone="success" selected={filter === 'available'} onClick={() => toggleFilter('available')} icon={<CheckCircle2 aria-hidden="true" />} />
       <SummaryCard label="결과 대기" value={pendingCount} note="Run이 없는 하중 경우" tone="warning" selected={filter === 'pending'} onClick={() => toggleFilter('pending')} icon={<Clock3 aria-hidden="true" />} />
     </section>

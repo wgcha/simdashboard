@@ -38,7 +38,11 @@ class SQLAnalysisInsightsRepository:
                 SELECT variable_key, min(display_name) AS display_name, min(value_unit) AS value_unit,
                        count(DISTINCT analysis_run_id) AS run_count
                 FROM time_series_results WHERE analysis_run_id IN (?, ?)
-                GROUP BY variable_key HAVING count(DISTINCT analysis_run_id)=2 ORDER BY variable_key
+                GROUP BY variable_key
+                HAVING count(DISTINCT analysis_run_id)=2
+                   AND count(DISTINCT value_unit)=1 AND count(value_unit)=count(*)
+                   AND count(DISTINCT time_unit)=1 AND count(time_unit)=count(*)
+                ORDER BY variable_key
                 """,
                 [baseline_run_id, target_run_id],
             )
@@ -49,6 +53,22 @@ class SQLAnalysisInsightsRepository:
             self._connection.execute(
                 "SELECT analysis_run_id, time_value, value, time_unit, value_unit FROM time_series_results WHERE analysis_run_id IN (?, ?) AND variable_key=? ORDER BY time_value",
                 [baseline_run_id, target_run_id, variable_key],
+            )
+        )
+
+    def comparison_conditions(self, baseline_run_id: str, target_run_id: str) -> list[dict[str, Any]]:
+        return rows(
+            self._connection.execute(
+                """
+                SELECT run.id, run.load_case_id, run.solver,
+                       execution.id AS execution_id, execution.load_case_id AS execution_load_case_id, execution.input_json,
+                       metadata.metadata_json
+                FROM analysis_runs run
+                LEFT JOIN template_executions execution ON execution.id=run.template_execution_id
+                LEFT JOIN analysis_run_metadata metadata ON metadata.analysis_run_id=run.id
+                WHERE run.id IN (?, ?)
+                """,
+                [baseline_run_id, target_run_id],
             )
         )
 

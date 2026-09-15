@@ -7,6 +7,7 @@ import { pageView, preferredPage, type ActiveView } from '../../features/analysi
 import { DEFAULT_WORKFLOW_DASHBOARD_LAYOUT, loadWorkflowDashboardLayout } from '../../features/layouts/layoutDefaults'
 import { useResultVersionSelection } from '../../features/results/useResultVersionSelection'
 import type { AnalysisRequest, DashboardPageSummary, LoadCase, Overview, Project, QualityThreshold, Workflow, WorkflowDashboardLayout, WorkflowStep } from '../../types'
+import { createClientId } from '../../shared/identity/clientId'
 
 type Editor = {
   close: () => void
@@ -296,7 +297,7 @@ export function useRequestWorkspaceController({ initialWorkspace, resultAccessEn
     setWorkflows((items) => items.map((workflow) => {
       if (workflow.request.id !== requestId) return workflow
       const steps = [...workflow.steps, {
-        id: `draft-step-${crypto.randomUUID()}`,
+        id: `draft-step-${createClientId()}`,
         sequence_no: workflow.steps.length + 1,
         name: '새 진행 단계',
         status: 'WAITING' as const,

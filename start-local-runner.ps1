@@ -9,7 +9,10 @@ param(
 
 $workspace = Split-Path -Parent $MyInvocation.MyCommand.Path
 $python = Join-Path $workspace ".venv-runtime\Scripts\python.exe"
-if (-not (Test-Path -LiteralPath $python)) { throw "Local runner Python was not found: $python" }
+$frozenRunner = Join-Path $workspace "SimulationWorkbenchLocalHelper.exe"
+if (-not (Test-Path -LiteralPath $frozenRunner -PathType Leaf) -and -not (Test-Path -LiteralPath $python -PathType Leaf)) {
+    throw "Local helper runtime was not found. Expected SimulationWorkbenchLocalHelper.exe or $python"
+}
 $serverUri = [Uri]$ServerUrl
 if ($serverUri.Scheme -ne 'https' -and $serverUri.Host -notin @('localhost', '127.0.0.1', '::1')) { throw "ServerUrl must use HTTPS (HTTP is accepted only for loopback development)." }
 if (-not $Origin -or $Origin.Count -eq 0) { $Origin = @($serverUri.GetLeftPart([UriPartial]::Authority)) }
@@ -72,20 +75,35 @@ if ($runningIdentity) {
     Write-Host "Local runner is already running at http://127.0.0.1:$Port"; return
 }
 
-$runnerArgs = @('-m', 'local_runner', '--data-dir', $DataDir, '--port', "$Port", '--server-url', $ServerUrl)
+$runnerArgs = if (Test-Path -LiteralPath $frozenRunner -PathType Leaf) {
+    @('--data-dir', $DataDir, '--port', "$Port", '--server-url', $ServerUrl)
+} else {
+    @('-m', 'local_runner', '--data-dir', $DataDir, '--port', "$Port", '--server-url', $ServerUrl)
+}
 foreach ($item in $Origin) { $runnerArgs += @('--origin', $item) }
 $stdoutLog = Join-Path $DataDir 'local-runner.stdout.log'; $stderrLog = Join-Path $DataDir 'local-runner.stderr.log'
 $quotedRunnerArgs = ($runnerArgs | ForEach-Object { ConvertTo-WindowsCommandLineArgument $_ }) -join ' '
-$process = Start-Process -FilePath $python -ArgumentList $quotedRunnerArgs -WorkingDirectory $workspace -WindowStyle Hidden -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog -PassThru
-$deadline = [DateTime]::UtcNow.AddSeconds(5)
-while ([DateTime]::UtcNow -lt $deadline) {
-    $startedIdentity = Get-LocalRunnerIdentity -RunnerPort $Port
-    if ($startedIdentity) {
-        $expectedDeviceId = Get-ManagedDeviceId
-        if ($expectedDeviceId -and $startedIdentity.device_id -eq $expectedDeviceId) { Install-LocalRunnerAutoStart; Write-Host "Local runner started at http://127.0.0.1:$Port"; return }
-        break
+$runnerBinary = if (Test-Path -LiteralPath $frozenRunner -PathType Leaf) { $frozenRunner } else { $python }
+$process = Start-Process -FilePath $runnerBinary -ArgumentList $quotedRunnerArgs -WorkingDirectory $workspace -WindowStyle Hidden -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog -PassThru
+try {
+    # A frozen runtime may need time for first-run extraction and antivirus scanning.
+    $deadline = [DateTime]::UtcNow.AddSeconds(30)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        $startedIdentity = Get-LocalRunnerIdentity -RunnerPort $Port
+        if ($startedIdentity) {
+            $expectedDeviceId = Get-ManagedDeviceId
+            if ($expectedDeviceId -and $startedIdentity.device_id -eq $expectedDeviceId) { Install-LocalRunnerAutoStart; Write-Host "Local runner started at http://127.0.0.1:$Port"; return }
+            break
+        }
+        if ($process.HasExited) { break }; Start-Sleep -Milliseconds 250
     }
-    if ($process.HasExited) { break }; Start-Sleep -Milliseconds 250
+    throw "Local runner did not become available within 30 seconds. Check $stdoutLog and $stderrLog."
+} catch {
+    # Only this invocation's new process tree is owned here. In particular, do
+    # not kill a process discovered through the shared loopback port.
+    if (-not $process.HasExited) {
+        & (Join-Path $env:SystemRoot 'System32\taskkill.exe') /PID $process.Id /T /F 2>$null | Out-Null
+        $process.WaitForExit(5000) | Out-Null
+    }
+    throw
 }
-if ($process.HasExited) { Write-Error "Local runner exited before becoming available. Check $stdoutLog and $stderrLog." }
-else { Write-Error "Local runner did not become healthy within 5 seconds. Check $stdoutLog and $stderrLog." }

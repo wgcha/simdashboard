@@ -7,6 +7,15 @@ for each approved account-PC binding.
 
 ## Start managed mode
 
+For an individual Windows PC, sign in to the web application and open
+**내 PC 설정 → PC 도우미 설치 파일 받기**. The setup installs the bundled runtime
+under the current user's LocalAppData directory; source, Git and a separate
+Python installation are not required on that PC. The central server must have
+a verified Windows release available. Release-build and server preparation
+steps are in [personal onboarding](../docs/personal-onboarding-implementation.md).
+
+The command below remains available for source-based development:
+
 ```powershell
 ./start-local-runner.ps1 -ServerUrl https://workbench.example.com
 ```

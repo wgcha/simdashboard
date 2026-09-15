@@ -1,0 +1,150 @@
+import { expect, test, type Page } from '@playwright/test'
+import { loginWorkspace } from './workspace-test-helpers'
+
+async function dictionary(page: Page) {
+  await page.getByRole('button', { name: '기준 정의·별칭', exact: true }).click()
+  await expect(page.getByRole('heading', { name: '기준 정의·별칭', exact: true })).toBeVisible()
+}
+
+test('real dictionary CRUD persists aliases and explicitly maps a sample field', async ({ page }) => {
+  test.setTimeout(90_000)
+  await loginWorkspace(page, 'e2e-admin', '/workspace/catalog/schemas')
+  const suffix = Date.now().toString(), label = `QA 응력 정의 ${suffix}`
+  const item = await page.request.post('/api/semantic-mapping/items', { data: { definition: { key: `vocab_stress_${suffix}`, label: 'QA 기준 응력', kind: 'scalar', data_type: 'FLOAT', unit: 'MPa', dimensions: [] } } })
+  expect(item.status()).toBe(201)
+  const itemId = (await item.json()).id as string
+  await page.goto('/workspace/catalog/schemas')
+  await dictionary(page)
+  await page.getByRole('button', { name: '새 기준 정의', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: '새 기준 정의' })
+  await dialog.getByLabel('고정키', { exact: true }).fill(`vocab_definition_${suffix}`)
+  await dialog.getByLabel('표시명', { exact: true }).fill(label)
+  await dialog.getByLabel('실제 대상', { exact: true }).selectOption(itemId)
+  await dialog.getByLabel('프로젝트 범위', { exact: true }).selectOption('')
+  const aliases = dialog.getByLabel('별칭', { exact: true })
+  await aliases.fill('Smax'); await aliases.press('End'); await aliases.press('Enter'); await aliases.pressSequentially('Maximum Stress')
+  await expect(aliases).toHaveValue('Smax\nMaximum Stress')
+  const saved = page.waitForResponse((r) => r.url().endsWith('/api/semantic-vocabulary') && r.request().method() === 'POST')
+  await dialog.getByRole('button', { name: '기준 정의 저장', exact: true }).click()
+  expect((await saved).status()).toBe(201)
+  await expect(dialog).toBeHidden()
+  await page.reload(); await dictionary(page)
+  await expect(page.getByRole('row').filter({ hasText: label })).toContainText('Maximum Stress')
+  await page.getByRole('button', { name: '1. 샘플·레시피', exact: true }).click()
+  const screen = page.locator('.semantic-page')
+  await screen.getByLabel('별칭 검색 프로젝트', { exact: true }).selectOption('')
+  await screen.locator('.file-drop input').setInputFiles({ name: 'new-format.csv', mimeType: 'text/csv', buffer: Buffer.from('Smax\n120\n') })
+  await expect(screen.getByLabel('결과 항목', { exact: true })).toHaveValue('')
+  await screen.getByRole('button', { name: '별칭 찾기: Smax', exact: true }).click()
+  const candidate = screen.locator('.alias-suggestion-candidates button').filter({ hasText: label })
+  await expect(candidate).toBeVisible()
+  await expect(screen.getByLabel('결과 항목', { exact: true })).toHaveValue('')
+  await candidate.click()
+  await expect(screen.getByLabel('결과 항목', { exact: true })).toHaveValue(itemId)
+  await expect(screen.getByLabel('원본 필드', { exact: true })).toHaveValue('Smax')
+  await expect(screen.getByLabel('원본 단위', { exact: true })).toHaveValue('')
+  await dictionary(page)
+  await screen.getByRole('button', { name: `${label} 편집`, exact: true }).click()
+  const edit = page.getByRole('dialog', { name: '기준 정의 수정' })
+  await expect(edit.getByLabel('프로젝트 범위', { exact: true })).toBeDisabled()
+  await edit.getByLabel('매칭에 사용').uncheck()
+  const revised = page.waitForResponse((r) => r.url().includes('/api/semantic-vocabulary/') && r.request().method() === 'PUT')
+  await edit.getByRole('button', { name: '수정 저장', exact: true }).click()
+  expect((await revised).status()).toBe(200)
+  await expect(edit).toBeHidden()
+  await screen.getByRole('button', { name: '1. 샘플·레시피', exact: true }).click()
+  await expect(screen.getByLabel('결과 항목', { exact: true })).toHaveValue(itemId)
+  await screen.getByRole('button', { name: '별칭 찾기: Smax', exact: true }).click()
+  await expect(screen.getByText('일치하는 별칭 없음', { exact: true })).toBeVisible()
+})
+
+test('current folder basename maps explicitly without changing its path or saving', async ({ page }) => {
+  await loginWorkspace(page, 'e2e-admin', '/workspace/catalog/schemas')
+  const suffix = Date.now().toString(), name = `Eagle_2026.v2_${suffix}`, label = `QA 프로젝트 ${suffix}`
+  const saved = await page.request.post('/api/semantic-vocabulary', { data: { key: `eagle_${suffix}`, label, target_kind: 'PROJECT', target_id: 'project-tv-001', aliases: [name], enabled: true } })
+  expect(saved.status()).toBe(201)
+  await page.goto('/workspace/catalog/schemas')
+  const screen = page.locator('.semantic-page')
+  await screen.getByRole('button', { name: '2. 폴더 연결', exact: true }).click()
+  const relativePath = `arbitrary-parent/${name}`
+  await screen.getByLabel('폴더 상대 경로').fill(relativePath)
+  await screen.getByLabel('프로젝트', { exact: true }).selectOption('')
+  let writes = 0
+  page.on('request', (r) => { if (r.url().includes('/semantic-mapping/bindings') && r.method() !== 'GET') writes += 1 })
+  await screen.getByRole('button', { name: `현재 폴더 별칭 찾기: ${name}`, exact: true }).click()
+  const candidate = screen.locator('.alias-suggestion-candidates button').filter({ hasText: label })
+  await expect(candidate).toBeVisible()
+  await expect(screen.getByLabel('프로젝트', { exact: true })).toHaveValue('')
+  await candidate.click()
+  await expect(screen.getByLabel('프로젝트', { exact: true })).toHaveValue('project-tv-001')
+  await expect(screen.getByLabel('연결 역할', { exact: true })).toHaveValue('PROJECT')
+  await expect(screen.getByLabel('폴더 상대 경로')).toHaveValue(relativePath)
+  expect(writes).toBe(0)
+})
+
+test('global request and load-case targets can be selected independently of scope', async ({ page }) => {
+  test.setTimeout(90_000)
+  await loginWorkspace(page, 'e2e-admin', '/workspace/catalog/schemas')
+  await page.goto('/workspace/catalog/schemas'); await dictionary(page)
+  const suffix = Date.now().toString()
+  for (const [kind, target] of [['REQUEST', 'request-drop-001'], ['LOAD_CASE', 'loadcase-drop-bottom-001']]) {
+    await page.getByRole('button', { name: '새 기준 정의', exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: '새 기준 정의' })
+    await dialog.getByLabel('고정키', { exact: true }).fill(`qa_${kind.toLowerCase()}_${suffix}`)
+    await dialog.getByLabel('표시명', { exact: true }).fill(`QA ${kind} ${suffix}`)
+    await dialog.getByLabel('정의 종류', { exact: true }).selectOption(kind)
+    await dialog.getByLabel('프로젝트 범위', { exact: true }).selectOption('')
+    await dialog.getByLabel('대상 프로젝트', { exact: true }).selectOption('project-tv-001')
+    if (kind === 'LOAD_CASE') await dialog.getByLabel('대상 의뢰', { exact: true }).selectOption('request-drop-001')
+    await dialog.getByLabel('실제 대상', { exact: true }).selectOption(target)
+    const saved = page.waitForResponse((r) => r.url().endsWith('/api/semantic-vocabulary') && r.request().method() === 'POST')
+    await dialog.getByRole('button', { name: '기준 정의 저장', exact: true }).click()
+    const response = await saved
+    expect(response.status()).toBe(201)
+    expect((await response.json()).scope_project_id).toBeNull()
+    await expect(dialog).toBeHidden()
+  }
+  const header = await page.locator('.semantic-vocabulary-table th').nth(1).boundingBox()
+  const targetCell = await page.locator('.semantic-vocabulary-table tbody tr').first().locator('td').nth(1).boundingBox()
+  expect(header).not.toBeNull(); expect(targetCell).not.toBeNull()
+  expect(Math.abs(header!.x - targetCell!.x)).toBeLessThan(2)
+  if (process.env.VOCABULARY_QA_SCREENSHOT) await page.screenshot({ path: process.env.VOCABULARY_QA_SCREENSHOT, fullPage: true })
+})
+
+test('a pending candidate confirmation cannot modify a replacement mapping row', async ({ page }) => {
+  await loginWorkspace(page, 'e2e-admin', '/workspace/catalog/schemas')
+  const suffix = Date.now().toString(), term = `SafeField_${suffix}`
+  const itemResponse = await page.request.post('/api/semantic-mapping/items', { data: { definition: { key: `safe_item_${suffix}`, label: 'Protected item', kind: 'scalar', dimensions: [] } } })
+  expect(itemResponse.status()).toBe(201)
+  const itemId = (await itemResponse.json()).id
+  expect((await page.request.post('/api/semantic-vocabulary', { data: { key: `safe_alias_${suffix}`, label: term, target_kind: 'RESULT_ITEM', target_id: itemId } })).status()).toBe(201)
+  await page.goto('/workspace/catalog/schemas')
+  const screen = page.locator('.semantic-page')
+  await screen.getByLabel('별칭 검색 프로젝트', { exact: true }).selectOption('')
+  await screen.locator('.file-drop input').setInputFiles({ name: 'safe.csv', mimeType: 'text/csv', buffer: Buffer.from(`${term}\n12\n`) })
+  await screen.getByRole('button', { name: `별칭 찾기: ${term}`, exact: true }).click()
+  const candidate = screen.locator('.alias-suggestion-candidates button').filter({ hasText: term })
+  await expect(candidate).toBeVisible()
+  let started: (() => void) | undefined, finish: (() => void) | undefined
+  const entered = new Promise<void>((resolve) => { started = resolve })
+  const release = new Promise<void>((resolve) => { finish = resolve })
+  await page.route('**/api/semantic-vocabulary/resolve', async (route) => {
+    const response = await route.fetch()
+    started?.(); await release; await route.fulfill({ response })
+  })
+  await candidate.click(); await entered
+  await screen.getByRole('button', { name: '매핑 삭제', exact: true }).click()
+  await screen.getByRole('button', { name: '매핑 추가', exact: true }).click()
+  await screen.getByLabel('원본 필드', { exact: true }).fill('Replacement')
+  const completed = page.waitForResponse((r) => r.url().endsWith('/api/semantic-vocabulary/resolve'))
+  finish?.(); await completed
+  await expect(screen.getByLabel('결과 항목', { exact: true })).toHaveValue('')
+  await expect(screen.getByLabel('원본 필드', { exact: true })).toHaveValue('Replacement')
+})
+
+test('viewer cannot read or mutate the administrator vocabulary', async ({ page }) => {
+  await loginWorkspace(page, 'e2e-viewer')
+  expect((await page.request.get('/api/semantic-vocabulary')).status()).toBe(403)
+  expect((await page.request.post('/api/semantic-vocabulary', { data: { key: 'denied', label: 'Denied', target_kind: 'FOLDER_ROLE', target_id: 'INPUT' } })).status()).toBe(403)
+  expect((await page.request.post('/api/semantic-vocabulary/resolve', { data: { terms: ['denied'] } })).status()).toBe(403)
+})

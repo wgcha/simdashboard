@@ -35,6 +35,8 @@ from .schemas.api import (
 )
 from .security import SecurityMiddleware, write_audit_event
 from .routers.security import router as security_router
+from .routers.auth_accounts import router as auth_accounts_router
+from .routers.local_helper_distribution import router as local_helper_distribution_router
 from .routers.access_control import router as access_control_router
 from .routers.workbench import router as workbench_router
 from .routers.modeling_catalog import router as modeling_catalog_router
@@ -44,6 +46,12 @@ from .routers.result_ingestion import router as result_ingestion_router
 from .routers.spdm_storage import router as spdm_storage_router
 from .routers.media import router as media_router
 from .routers.managed_local_execution import router as managed_local_execution_router
+from .routers.voc import router as voc_router
+from .routers.semantic_mapping import router as semantic_mapping_router
+from .routers.semantic_activation import router as semantic_activation_router
+from .routers.semantic_review import router as semantic_review_router
+from .routers.semantic_impact import router as semantic_impact_router
+from .routers.semantic_vocabulary import router as semantic_vocabulary_router
 from .adapters.http.routers.projects import router as projects_router
 from .adapters.http.routers.reports import router as reports_router
 from .adapters.http.routers.report_templates import router as report_templates_router
@@ -95,12 +103,20 @@ app.add_middleware(
 )
 app.mount("/assets", StaticFiles(directory=str(__import__("pathlib").Path(__file__).resolve().parents[1] / "public_assets")), name="assets")
 app.include_router(security_router)
+app.include_router(auth_accounts_router)
+app.include_router(local_helper_distribution_router)
 app.include_router(access_control_router)
 app.include_router(workbench_router)
 app.include_router(modeling_catalog_router)
 app.include_router(modeling_templates_router)
 app.include_router(managed_local_execution_router)
 app.include_router(result_folder_refresh_router)
+app.include_router(voc_router)
+app.include_router(semantic_mapping_router)
+app.include_router(semantic_activation_router)
+app.include_router(semantic_review_router)
+app.include_router(semantic_impact_router)
+app.include_router(semantic_vocabulary_router)
 
 
 def media_storage_mode() -> app_config.MediaStorageMode:

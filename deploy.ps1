@@ -1,6 +1,13 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [switch]$SkipFrontendBuild,
+    # Automation may use this to verify an already prepared deployment.  The
+    # normal interactive deployment deliberately prompts for the first server
+    # administrator when one is required.
+    [switch]$NonInteractive,
+    # deploy.ps1 stays preparation-first for update.ps1 and automation.  The
+    # double-click deploy.bat wrapper opts in to the first launch.
+    [switch]$StartAfterDeploy,
     [ValidateSet('auto', 'direct', 'proxy')]
     [string]$NetworkMode = ''
 )
@@ -11,20 +18,117 @@ $RecoveryMarker = Join-Path $Root '.setup-recovery-required.json'
 $EnvFile = Join-Path $Root '.env'
 $EnvExample = Join-Path $Root '.env.example'
 $ReadyStamp = Join-Path $Root '.windows-deploy-ready.json'
-$Setup = Join-Path $Root 'setup.ps1'
+$RuntimePreparation = Join-Path $Root 'scripts\windows\prepare-source-environment.ps1'
+$PostgresInitializer = Join-Path $Root 'scripts\windows\initialize-source-postgres.ps1'
 $envCreated = $false
+
+function Set-NewEnvironmentOwnerOnlyAcl {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
+    $owner = $acl.Owner
+    if ([string]::IsNullOrWhiteSpace($owner)) { throw 'Could not determine the owner for the new .env file.' }
+    $acl.SetAccessRuleProtection($true, $false)
+    foreach ($rule in @($acl.Access)) { [void]$acl.RemoveAccessRuleAll($rule) }
+    $ownerRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+        $owner,
+        [System.Security.AccessControl.FileSystemRights]::FullControl,
+        [System.Security.AccessControl.AccessControlType]::Allow
+    )
+    $acl.SetAccessRule($ownerRule)
+    Set-Acl -LiteralPath $Path -AclObject $acl -ErrorAction Stop
+}
+
+function Set-NewEnvironmentPostgresSelection {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $lines = Get-Content -LiteralPath $Path -Encoding UTF8
+    $updated = $false
+    $output = foreach ($line in $lines) {
+        if ($line -match '^\s*ANALYSIS_DB_BACKEND\s*=') {
+            $updated = $true
+            'ANALYSIS_DB_BACKEND=postgresql'
+        }
+        else { $line }
+    }
+    if (-not $updated) { $output += 'ANALYSIS_DB_BACKEND=postgresql' }
+    $temporary = "$Path.$PID.tmp"
+    try {
+        $output | Set-Content -LiteralPath $temporary -Encoding UTF8
+        Set-NewEnvironmentOwnerOnlyAcl -Path $temporary
+        Move-Item -LiteralPath $temporary -Destination $Path -Force
+    }
+    finally { Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue }
+}
+
+function Invoke-DeploymentPython {
+    param(
+        [Parameter(Mandatory = $true)][string]$Python,
+        [Parameter(Mandatory = $true)][string]$ScriptPath,
+        [string[]]$Arguments = @()
+    )
+
+    if (-not (Test-Path -LiteralPath $ScriptPath -PathType Leaf)) {
+        throw "Required deployment script was not found: $ScriptPath"
+    }
+    $exitCode = 1
+    Push-Location (Join-Path $Root 'backend')
+    try {
+        # Keep child progress on the console.  Returning it through this
+        # function would turn a successful text line into a nonzero stage
+        # value when PowerShell compares the resulting array to zero.
+        & $Python $ScriptPath @Arguments | Out-Host
+        $exitCode = [int]$LASTEXITCODE
+    }
+    finally { Pop-Location }
+    return $exitCode
+}
+
+function Test-EnvlessLegacyDuckdb {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return }
+    # A caller can deliberately retain the legacy backend through the inherited
+    # process environment. Do not replace that explicit selection.
+    if ($env:ANALYSIS_DB_BACKEND -and $env:ANALYSIS_DB_BACKEND.Trim().ToLowerInvariant() -eq 'duckdb') { return }
+    throw "Existing DuckDB data was found at $Path while no .env or backend/.env selects it. Migration is required before creating PostgreSQL defaults. Run setup-postgresql.ps1 to migrate it, or explicitly set ANALYSIS_DB_BACKEND=duckdb to preserve the legacy installation. .env/backend/.env이 없는 기존 DuckDB 데이터가 발견되었습니다. PostgreSQL 기본값을 만들기 전에 마이그레이션이 필요합니다. setup-postgresql.ps1로 이전하거나 ANALYSIS_DB_BACKEND=duckdb를 명시하여 기존 설치를 유지하십시오."
+}
 
 try {
     Set-Location -LiteralPath $Root
+    # A previous ready stamp cannot describe an in-progress deployment.  It is
+    # recreated only after account protection and schema work complete.
+    Remove-Item -LiteralPath $ReadyStamp -Force -ErrorAction SilentlyContinue
     if (Test-Path -LiteralPath $RecoveryMarker -PathType Leaf) {
         throw 'A previous database replacement needs manual recovery. Review .setup-recovery-required.json before deploying again.'
     }
-    if (-not (Test-Path -LiteralPath $Setup -PathType Leaf)) { throw 'setup.ps1 was not found. Extract the complete source archive and retry.' }
+    if (-not (Test-Path -LiteralPath $RuntimePreparation -PathType Leaf) -or -not (Test-Path -LiteralPath $PostgresInitializer -PathType Leaf)) {
+        throw 'The source deployment preparation scripts were not found. Extract the complete source archive and retry.'
+    }
     if (-not (Test-Path -LiteralPath $EnvFile -PathType Leaf)) {
-        if (-not (Test-Path -LiteralPath $EnvExample -PathType Leaf)) { throw '.env.example was not found; the source archive is incomplete.' }
-        Copy-Item -LiteralPath $EnvExample -Destination $EnvFile -ErrorAction Stop
-        $envCreated = $true
-        Write-Host 'Created .env from .env.example because no local environment file existed.' -ForegroundColor Cyan
+        $legacyBackendEnv = Join-Path $Root 'backend\.env'
+        if (Test-Path -LiteralPath $legacyBackendEnv -PathType Leaf) {
+            $legacyItem = Get-Item -Force -LiteralPath $legacyBackendEnv
+            if ($legacyItem.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                throw 'Legacy backend/.env is linked. It was preserved; replace it with a regular file before deploying.'
+            }
+            # app.config deliberately loads the root file and then backend/.env
+            # without overriding.  Do not create a default root file here: it
+            # could mask a legacy database or authentication configuration.
+            Write-Host 'Preserving the existing backend/.env as the effective deployment configuration.' -ForegroundColor Yellow
+        }
+        else {
+            Test-EnvlessLegacyDuckdb -Path (Join-Path $Root 'backend\data\analysis_dashboard.duckdb')
+            if (-not (Test-Path -LiteralPath $EnvExample -PathType Leaf)) { throw '.env.example was not found; the source archive is incomplete.' }
+            Copy-Item -LiteralPath $EnvExample -Destination $EnvFile -ErrorAction Stop
+            Set-NewEnvironmentOwnerOnlyAcl -Path $EnvFile
+            # Source deployment is PostgreSQL-first.  This avoids leaving a
+            # copied development DuckDB default behind when an initial runtime
+            # download or PostgreSQL provision attempt has to be retried.
+            Set-NewEnvironmentPostgresSelection -Path $EnvFile
+            $envCreated = $true
+            Write-Host 'Created a PostgreSQL source-deployment .env from .env.example because no local environment file existed.' -ForegroundColor Cyan
+        }
     }
     else { Write-Host 'Preserving the existing .env and database configuration.' -ForegroundColor Yellow }
 
@@ -33,20 +137,71 @@ try {
     Import-Module $networkModule -Force
     $networkSummary = if ($NetworkMode) { Initialize-DeploymentNetwork -Mode $NetworkMode } else { Initialize-DeploymentNetwork }
 
-    $setupArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Setup)
-    if ($SkipFrontendBuild) { $setupArgs += '-SkipFrontendBuild' }
-    if ($NetworkMode) { $setupArgs += @('-NetworkMode', $NetworkMode) }
-    & powershell.exe @setupArgs
-    if ($LASTEXITCODE -ne 0) { throw "Environment setup failed (exit code $LASTEXITCODE)." }
+    $runtimeArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $RuntimePreparation)
+    if ($SkipFrontendBuild) { $runtimeArgs += '-SkipFrontendBuild' }
+    if ($NetworkMode) { $runtimeArgs += @('-NetworkMode', $NetworkMode) }
+    Write-Host 'Preparing the pinned source runtime and application dependencies...' -ForegroundColor Cyan
+    & powershell.exe @runtimeArgs
+    if ($LASTEXITCODE -ne 0) { throw "Source runtime preparation failed (exit code $LASTEXITCODE)." }
+
+    $postgresArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $PostgresInitializer)
+    if ($envCreated) { $postgresArgs += '-EnvironmentCreated' }
+    if ($NonInteractive) { $postgresArgs += '-NonInteractive' }
+    Write-Host 'Selecting the safe PostgreSQL initialization path...' -ForegroundColor Cyan
+    & powershell.exe @postgresArgs
+    if ($LASTEXITCODE -ne 0) { throw "PostgreSQL initialization failed (exit code $LASTEXITCODE). Existing database data was not replaced." }
 
     Import-Module (Join-Path $Root 'scripts\windows\Runtime.psm1') -Force
     $versions = Get-ExpectedRuntimeVersions
+
+    $python = Get-ProjectPython
+    $databasePreflightScript = Join-Path $Root 'backend\scripts\check_database_startup_preflight.py'
+    Write-Host 'Checking the selected database configuration before stopping services...' -ForegroundColor Cyan
+    $databasePreflightCode = Invoke-DeploymentPython -Python $python -ScriptPath $databasePreflightScript
+    if ($databasePreflightCode -ne 0) { throw 'PostgreSQL configuration preflight failed. DATABASE_URL and the provisioned PostgreSQL server connection are required; DuckDB fallback was not used.' }
+
+    # setup.ps1 only prepares pinned runtimes.  Stop after that point, before
+    # the account backup gate and any database migration can change state.
+    $stopScript = Join-Path $Root 'stop.ps1'
+    if (-not (Test-Path -LiteralPath $stopScript -PathType Leaf)) { throw 'stop.ps1 was not found. Extract the complete source archive and retry.' }
+    Write-Host "`nStopping any currently managed application before database preparation..." -ForegroundColor Cyan
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $stopScript
+    if ($LASTEXITCODE -ne 0) { throw "Stopping the existing application failed (exit code $LASTEXITCODE). No database action was performed." }
+
+    $prepareScript = Join-Path $Root 'backend\scripts\prepare_account_deployment.py'
+    Write-Host 'Checking account state and creating a verified database backup when required...' -ForegroundColor Cyan
+    $prepareCode = Invoke-DeploymentPython -Python $python -ScriptPath $prepareScript -Arguments @('--project-root', $Root)
+    if ($prepareCode -ne 0) { throw "Account backup preparation failed (exit code $prepareCode). Database migration was not performed." }
+
+    $migrationScript = Join-Path $Root 'backend\scripts\upgrade_postgres_schema.py'
+    Write-Host 'Applying pending PostgreSQL schema migrations...' -ForegroundColor Cyan
+    $migrationArguments = @('--allow-empty-bootstrap')
+    $migrationCode = Invoke-DeploymentPython -Python $python -ScriptPath $migrationScript -Arguments $migrationArguments
+    if ($migrationCode -ne 0) { throw "Database migration failed (exit code $migrationCode). Account setup and readiness publication were skipped." }
+
+    $accountSetupScript = Join-Path $Root 'backend\scripts\setup_accounts.py'
+    $accountSetupArguments = @()
+    if ($NonInteractive) { $accountSetupArguments += '--non-interactive' }
+    Write-Host 'Preparing the initial administrator when required...' -ForegroundColor Cyan
+    # input()/getpass prompts must reach the console directly. Piping through
+    # Out-Host buffers a prompt without a newline until input is already sent.
+    Write-Host 'If no administrator exists, enter the initial administrator below. Password input is hidden.' -ForegroundColor Cyan
+    Push-Location (Join-Path $Root 'backend')
+    try {
+        & $python $accountSetupScript @accountSetupArguments
+        $accountSetupCode = [int]$LASTEXITCODE
+    }
+    finally { Pop-Location }
+    if ($accountSetupCode -eq 2) { throw 'Initial administrator setup is required. Run setup-accounts.bat in an interactive server console, then run update.bat. Readiness was not published.' }
+    if ($accountSetupCode -ne 0) { throw "Account setup failed (exit code $accountSetupCode). Follow ACCOUNT_SETUP_ACTION, run setup-accounts.bat, then run update.bat. Readiness was not published." }
+
     $stamp = [ordered]@{
         version = 1
         ready_at_utc = [DateTime]::UtcNow.ToString('o')
         runtime = [ordered]@{ node = $versions.Node; python = $versions.Python; pnpm = $versions.Pnpm }
         env_created = $envCreated
         network_mode = $networkSummary.Mode
+        account_setup = 'ready'
     }
     $temporary = "$ReadyStamp.$PID.tmp"
     try {
@@ -56,11 +211,20 @@ try {
     finally { Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue }
 
     Write-Host "`nWindows deployment environment is ready." -ForegroundColor Green
-    Write-Host 'Start the application with start.bat or .\start.ps1.'
-    Write-Host 'The default browser opens http://127.0.0.1:5173/workspace/overview after both services report healthy.'
+    if ($StartAfterDeploy) {
+        $startScript = Join-Path $Root 'start.ps1'
+        if (-not (Test-Path -LiteralPath $startScript -PathType Leaf)) { throw 'start.ps1 was not found. The application was not started.' }
+        Write-Host 'Starting the prepared application...' -ForegroundColor Cyan
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $startScript
+        if ($LASTEXITCODE -ne 0) { throw "Application start failed (exit code $LASTEXITCODE). The deployment remains prepared for retry." }
+    }
+    else {
+        Write-Host 'Start the application with start.bat or .\start.ps1.'
+    }
+    Write-Host 'The default browser opens http://127.0.0.1/home after both services report healthy.'
 }
 catch {
     Write-Host "`n[ERROR] $($_.Exception.Message)" -ForegroundColor Red
-    Write-Host 'No database migration, seed, replacement, or reset was performed by deploy.ps1.' -ForegroundColor Yellow
+    Write-Host 'Deployment stopped before readiness was published. Review the reported account-backup, migration, or account-setup stage before retrying.' -ForegroundColor Yellow
     exit 1
 }

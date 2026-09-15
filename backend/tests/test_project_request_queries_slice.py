@@ -162,7 +162,7 @@ def test_sql_adapter_authorizes_then_queries_on_the_same_connection_and_preserve
 
 
 @pytest.mark.unit
-def test_router_only_maps_membership_error_and_preserves_generic_permission_detail(
+def test_router_preserves_generic_permission_detail_and_allows_company_project_read(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     request = SimpleNamespace(state=SimpleNamespace())
@@ -199,16 +199,8 @@ def test_router_only_maps_membership_error_and_preserves_generic_permission_deta
         "require_permission",
         lambda *_args, **_kwargs: SimpleNamespace(project_role=None),
     )
-    with pytest.raises(HTTPException) as membership_error:
-        request_router.get_requests("project-1", request)
-    expected = {
-        "code": "PROJECT_MEMBERSHIP_REQUIRED",
-        "message": "이 작업을 수행할 권한이 없습니다.",
-        "required_permission": "project.data.view",
-        "project_id": "project-1",
-    }
-    assert membership_error.value.detail == expected
-    assert request.state.authorization_detail == expected
+    assert request_router.get_requests("project-1", request) == []
+    assert not hasattr(request.state, "authorization_detail")
 
 
 def _add_password_user(
@@ -232,7 +224,7 @@ def _add_password_user(
 
 
 @pytest.mark.duckdb_integration
-def test_member_list_order_membership_audit_and_global_admin_empty_projects(
+def test_member_and_company_reader_list_order_and_global_admin_empty_projects(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     suffix = uuid4().hex[:10]
@@ -275,30 +267,23 @@ def test_member_list_order_membership_audit_and_global_admin_empty_projects(
             member_ids = [item["id"] for item in member_response.json()]
             assert member_ids.index(newer_id) < member_ids.index(older_id)
 
-            denied = client.get(f"/api/projects/{project_id}/requests", headers=headers(outsider_name))
-            expected_detail = {
-                "code": "PROJECT_MEMBERSHIP_REQUIRED",
-                "message": "이 작업을 수행할 권한이 없습니다.",
-                "required_permission": "project.data.view",
-                "project_id": project_id,
-            }
-            assert denied.status_code == 403
-            assert denied.json() == {"detail": expected_detail}
+            outsider_headers = headers(outsider_name)
+            company_reader = client.get(f"/api/projects/{project_id}/requests", headers=outsider_headers)
+            assert company_reader.status_code == 200, company_reader.text
+            assert [item["id"] for item in company_reader.json()][:2] == [newer_id, older_id]
+            company_reader_write = client.patch(
+                f"/api/requests/{older_id}/assignee",
+                headers=outsider_headers,
+                json={"owner_user_id": member_id},
+            )
+            assert company_reader_write.status_code == 403
+            assert company_reader_write.json()["detail"]["required_permission"] == "request.edit"
 
             assert client.get(f"/api/projects/{project_id}/requests", headers=headers(admin_name)).status_code == 200
             missing = client.get(f"/api/projects/project-missing-{suffix}/requests", headers=headers(admin_name))
             assert missing.status_code == 200
             assert missing.json() == []
 
-        with connect() as connection:
-            row = connection.execute(
-                """SELECT detail_json FROM audit_events
-                   WHERE action='AUTHORIZATION_DENIED' AND user_id=?
-                   ORDER BY occurred_at DESC LIMIT 1""",
-                [outsider_id],
-            ).fetchone()
-        assert row is not None
-        assert json.loads(row[0]) == expected_detail
     finally:
         with connect() as connection:
             placeholders = ", ".join("?" for _ in user_ids)

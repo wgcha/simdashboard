@@ -19,6 +19,7 @@ BACKEND = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND))
 
 from app.services.media_integrity import media_inventory, require_media_integrity  # noqa: E402
+from scripts.account_backup_inventory import account_inventory, require_account_inventory  # noqa: E402
 try:  # pragma: no cover - branch depends on ``python script.py`` invocation
     from .postgres_cli import command_env, connection_args, executable, parse_target
 except ImportError:  # pragma: no cover
@@ -56,6 +57,15 @@ def _verify_restored_media(*, expected: object, verify_database_url: str) -> dic
         raise RuntimeError(
             "복구된 media inventory가 백업 manifest와 일치하지 않습니다. 애플리케이션을 시작하지 마세요."
         )
+    return actual
+
+
+def _verify_restored_accounts(*, expected: object, verify_database_url: str) -> dict[str, object]:
+    require_account_inventory(expected)
+    with psycopg.connect(_psycopg_url(verify_database_url)) as connection:
+        actual = account_inventory(connection)
+    if actual != expected:
+        raise RuntimeError("복구된 계정/전역 관리자/프로젝트 멤버십 inventory가 backup manifest와 일치하지 않습니다.")
     return actual
 
 
@@ -102,6 +112,8 @@ def _read_verified_manifest(backup: Path) -> dict[str, object]:
         raise RuntimeError("백업 manifest를 읽을 수 없습니다.") from error
     if not isinstance(manifest, dict):
         raise RuntimeError("백업 manifest는 JSON object여야 합니다.")
+    if manifest.get("format") == "analysis-canvas-deployment-postgresql":
+        raise RuntimeError("이 manifest 형식은 DB와 파일을 함께 복구하는 배포 백업입니다. docs/account-backup-and-recovery.md의 dual-read 복구 절차를 사용하세요.")
     if manifest.get("format") != "postgresql-custom":
         raise RuntimeError("지원하지 않는 백업 manifest 형식입니다.")
     if manifest.get("filename") != backup.name:
@@ -117,6 +129,11 @@ def _read_verified_manifest(backup: Path) -> dict[str, object]:
         require_media_integrity(manifest.get("media_inventory"))
     except Exception as error:
         raise RuntimeError("백업 manifest media_inventory가 strict 계약을 충족하지 않습니다.") from error
+    if "account_inventory" in manifest:
+        try:
+            require_account_inventory(manifest["account_inventory"])
+        except Exception as error:
+            raise RuntimeError("백업 manifest account_inventory가 strict 계약을 충족하지 않습니다.") from error
     return manifest
 
 
@@ -222,6 +239,8 @@ def main() -> None:
     inventory = _verify_restored_media(
         expected=manifest["media_inventory"], verify_database_url=args.verify_database_url
     )
+    if "account_inventory" in manifest:
+        _verify_restored_accounts(expected=manifest["account_inventory"], verify_database_url=args.verify_database_url)
     _run_database_only_verifier(args.verify_database_url)
     print(
         "PostgreSQL restore completed, media inventory matched, and database-only verification passed: "

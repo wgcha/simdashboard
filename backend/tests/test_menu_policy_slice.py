@@ -432,7 +432,7 @@ def test_real_persistence_provider_rolls_back_exception_without_commit(monkeypat
     assert "COMMIT" not in events
 
 
-def test_password_auth_rechecks_global_admin_for_menu_policy_admin_paths(monkeypatch):
+def test_password_auth_rechecks_global_admin_for_menu_policy_admin_paths(monkeypatch, password_auth_bootstrap_admin):
     initialize_database()
     user_id = "menu-policy-stale-global"
     with connect() as connection:

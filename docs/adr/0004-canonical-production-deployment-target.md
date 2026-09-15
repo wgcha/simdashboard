@@ -3,6 +3,8 @@
 - Status: accepted
 - Date: 2026-08-24
 
+> 2026-09-14 amendment: [ADR 0005](0005-windows-server-offline-deployment.md) adds Windows Server 2022 offline installation following an explicit user request. The Windows exclusion below describes the original decision; ADR 0005 and the [deployment policy](../windows-deployment-policy.md) govern new Windows work. Rocky remains supported. Windows VM release acceptance is tracked separately.
+
 ## Decision
 
 The canonical production target is **Rocky Linux 8 + nginx + systemd +

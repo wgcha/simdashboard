@@ -9,10 +9,11 @@ export async function revealControl(control: Locator) {
 /** Navigate through the real sidebar, including its collapsed utility groups. */
 export async function openWorkspaceRoute(page: Page, pathname: string) {
   const sidebar = page.getByRole('complementary', { name: '주 메뉴' })
+  await expect(sidebar).toBeVisible()
   const mobileMenu = sidebar.getByRole('button', { name: '메뉴 열기', exact: true })
   if (await mobileMenu.isVisible()) await mobileMenu.click()
   const link = sidebar.locator(`a[href="${pathname}"], a[href^="${pathname}?"]`)
-  if (pathname === '/workspace/overview') {
+  if (pathname === '/workspace/overview' || pathname === '/workspace/requests') {
     await expect(link).toHaveCount(1)
     await link.click()
     return

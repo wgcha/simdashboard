@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from uuid import uuid4
 
+from ... import config as app_config
+
 from ...domains.reports.template_models import (
     ReportTemplateFileCollisionError,
     UnsafeReportTemplateFileError,
@@ -16,7 +18,7 @@ from ...domains.reports.template_models import (
 
 logger = logging.getLogger(__name__)
 REPORT_TEMPLATE_STORAGE_ROOT = (
-    Path(__file__).resolve().parents[3] / "assets" / "report-templates"
+    app_config.managed_assets_root() / "report-templates"
 )
 
 
@@ -40,7 +42,9 @@ class ReportTemplateFileStore:
 
     def __init__(self, storage_root: Path | str | None = None) -> None:
         self._configured_root = (
-            Path(storage_root) if storage_root is not None else REPORT_TEMPLATE_STORAGE_ROOT
+            Path(storage_root)
+            if storage_root is not None
+            else app_config.managed_assets_root() / "report-templates"
         )
 
     def relative_path(self, template_id: str) -> str:

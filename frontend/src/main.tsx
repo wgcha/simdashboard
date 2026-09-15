@@ -14,7 +14,7 @@ import './focused-shell.css'
 // migration.
 const router = createBrowserRouter([
   { path: '*', Component: App },
-])
+], { basename: import.meta.env.BASE_URL })
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

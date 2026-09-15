@@ -19,7 +19,22 @@
 
 | 목적 | 문서 |
 |---|---|
+| 활성화 영향 미리보기·파일 검토·명시적 재처리 사용법 | [`semantic-review-guide.md`](semantic-review-guide.md) |
+| 의미 매핑 변경 영향 분석·미처리 파일 검토함의 후속 구현 설계 | [`semantic-review-impact-plan.md`](semantic-review-impact-plan.md) |
+| 기준 정의·별칭 사전과 폴더/필드 추천 적용 | [`semantic-vocabulary.md`](semantic-vocabulary.md) |
+| 임의 폴더·CSV/JSON 읽기 레시피·결과 위젯 사용법과 지원 범위 | [`semantic-mapping-guide.md`](semantic-mapping-guide.md) |
+| 폴더·읽기 레시피·결과 항목·위젯의 전체 개발 계획과 후속 확장 | [`semantic-storage-mapping-plan.md`](semantic-storage-mapping-plan.md) |
+| 모든 소스 개발에서 유지할 Windows 배포 계약 | [`windows-deployment-policy.md`](windows-deployment-policy.md) |
+| 소스·폐쇄망의 신규 설치/기존 DB 업데이트 시나리오 | [`windows-deployment-scenarios.md`](windows-deployment-scenarios.md) |
+| Windows Server 2022 완결 패키지 제작·폐쇄망 설치 | [`windows-server-offline-installation.md`](windows-server-offline-installation.md) |
+| Run별 재료·두께·하중·접촉 조건 비교와 기록 범위 | [`run-input-condition-comparison.md`](run-input-condition-comparison.md) |
+| 기록 기준 여유와 공통 비교 축 · 결과 분석 4단계 | [`result-analysis-phase4.md`](result-analysis-phase4.md) |
+| 대표 업무 흐름과 추천 배치 미리보기 · 결과 분석 5단계 | [`result-analysis-phase5.md`](result-analysis-phase5.md) |
+| 컴퓨터 이름·IP 접속과 영상 배치·와이드 화면 보완 | [`lan-video-usability-followup.md`](lan-video-usability-followup.md) |
+| 결과에서 설계 판단으로 이어지는 사용성 개선 실행 계획 | [`dashboard-usability-and-recommended-layout-plan.md`](dashboard-usability-and-recommended-layout-plan.md) |
+| Windows 설치·백업·복원 안내 전 확인할 사용자 요청과 미구현 사항 | [`windows-install-backup-guidance.md`](windows-install-backup-guidance.md) |
 | Windows 더블클릭 설치·실행 및 사내 프록시 | [`windows-one-click-deployment.md`](windows-one-click-deployment.md) |
+| Windows 컴퓨터 이름·IP의 `/home/` 접속 | [`windows-lan-access.md`](windows-lan-access.md) |
 | Windows PostgreSQL 최초 설정·기본 실행 | [`windows-postgresql-quickstart.md`](windows-postgresql-quickstart.md) |
 | native Windows 개발 | [`windows-development-setup.md`](windows-development-setup.md) |
 | 설치와 실행 | [`../README.md`](../README.md) |
@@ -70,6 +85,11 @@
 
 | 기능 | 문서 |
 |---|---|
+| 개인 회원가입·비밀번호 변경·도우미 설치 | [`personal-onboarding-implementation.md`](personal-onboarding-implementation.md) |
+| 개인 계정 첫 화면·기존 사내 설치 전환 검토와 개발 계획 | [`personal-account-entry-rollout-plan.md`](personal-account-entry-rollout-plan.md) |
+| 개인 계정 최초 관리자·업데이트·검증 기록 | [`personal-account-rollout-runbook.md`](personal-account-rollout-runbook.md) |
+| 계정·프로젝트 권한 백업·재설치·이관 | [`account-backup-and-recovery.md`](account-backup-and-recovery.md) |
+| Windows 사내 HTTPS 템플릿 | [`windows-caddy-intranet.md`](windows-caddy-intranet.md) |
 | 업무 유형·결과 snapshot·마스터 Refresh | [`work-type-request-results-and-master-refresh.md`](work-type-request-results-and-master-refresh.md) |
 | 업무 정의 결과 위젯 | [`work-definition-result-widget-ui-design.md`](work-definition-result-widget-ui-design.md) |
 | 의뢰 접수·SPDM | [`work-type-request-intake-spdm-plan.md`](work-type-request-intake-spdm-plan.md) |

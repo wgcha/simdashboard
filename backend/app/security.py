@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import secrets
 import time
 from dataclasses import dataclass
@@ -19,6 +20,7 @@ from starlette.responses import JSONResponse, Response
 from .config import security_settings
 from .modules.access_control import AccountStatus
 from .database_connection import ConnectionLike, connect
+from .schemas.auth_limits import PASSWORD_MIN_LENGTH
 
 
 Role = Literal["viewer", "editor", "admin"]
@@ -27,6 +29,9 @@ PUBLIC_API_PATHS = {
     "/api/health",
     "/api/auth/status",
     "/api/auth/login",
+    "/api/auth/register",
+    "/api/local-helper/distribution",
+    "/api/local-helper/distribution/download",
     "/api/auth/oidc/start",
     "/api/auth/oidc/callback",
 }
@@ -65,6 +70,35 @@ class AuthenticationError(Exception):
     pass
 
 
+def _truthy_environment(name: str) -> bool:
+    return os.getenv(name, "false").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def auth_setup_state() -> tuple[bool, str | None]:
+    """Return public-safe account bootstrap readiness, without leaking state."""
+    settings = security_settings()
+    if settings.auth_mode == "oidc":
+        return False, None
+    if (
+        settings.auth_mode == "disabled"
+        and os.getenv("DEPLOYMENT_PROFILE", "local").strip().lower() == "local"
+        and _truthy_environment("AUTH_ALLOW_INSECURE_LOCAL")
+    ):
+        return False, None
+    if settings.auth_mode != "password":
+        return True, "AUTH_SETUP_REQUIRED"
+    if not settings.secret_key or len(settings.secret_key) < 32:
+        return True, "AUTH_SECRET_REQUIRED"
+    try:
+        with connect() as conn:
+            has_admin = conn.execute(
+                "SELECT 1 FROM users WHERE is_global_admin=true AND is_active=true AND account_status='ACTIVE' AND password_hash IS NOT NULL AND password_hash <> '' LIMIT 1"
+            ).fetchone()
+    except Exception:
+        return True, "AUTH_SETUP_REQUIRED"
+    return (not bool(has_admin), "INITIAL_ADMIN_REQUIRED" if not has_admin else None)
+
+
 def _b64url(value: bytes) -> str:
     return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
 
@@ -74,8 +108,8 @@ def _b64url_decode(value: str) -> bytes:
 
 
 def hash_password(password: str) -> str:
-    if len(password) < 12:
-        raise ValueError("비밀번호는 12자 이상이어야 합니다.")
+    if len(password) < PASSWORD_MIN_LENGTH:
+        raise ValueError(f"비밀번호는 {PASSWORD_MIN_LENGTH}자 이상이어야 합니다.")
     salt = secrets.token_bytes(16)
     digest = hashlib.scrypt(password.encode("utf-8"), salt=salt, n=2**14, r=8, p=1, dklen=32)
     return f"scrypt$16384$8$1${_b64url(salt)}${_b64url(digest)}"
@@ -150,6 +184,8 @@ def _load_principal(user_id: str) -> Principal:
 
 def authenticate_request(request: Request) -> Principal:
     if security_settings().auth_mode == "disabled":
+        if auth_setup_state()[0]:
+            raise AuthenticationError("계정 설정이 완료되지 않았습니다.")
         return Principal("local-admin", "local", "로컬 관리자", "ACTIVE", True, None, "admin")
     authorization = request.headers.get("authorization", "")
     scheme, _, token = authorization.partition(" ")
@@ -234,6 +270,15 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         # execution route can bypass ordinary company authentication.
         if not protected_path or path in PUBLIC_API_PATHS or (request.method == "POST" and path in DEVICE_API_PATHS) or request.method == "OPTIONS":
             response = await call_next(request)
+            response.headers["X-Request-Id"] = request.state.request_id
+            return response
+
+        setup_required, setup_reason = auth_setup_state()
+        if setup_required:
+            response = JSONResponse(
+                {"detail": {"code": "AUTH_SETUP_REQUIRED", "message": "서버 계정 설정이 필요합니다.", "setup_reason": setup_reason}},
+                status_code=503,
+            )
             response.headers["X-Request-Id"] = request.state.request_id
             return response
 

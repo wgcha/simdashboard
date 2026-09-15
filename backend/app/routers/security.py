@@ -7,13 +7,15 @@ from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from starlette.responses import JSONResponse, RedirectResponse
+from ..adapters.http.auth_validation import PrivateInputRoute
 
 from ..config import security_settings
 from ..modules.access_control import AUDIT_VIEW, COMPANY_PERMISSIONS, SYSTEM_USER_APPROVE, require_permission
 from ..database import json_value
 from ..database_connection import connect, rows
 from ..schemas.api import LoginPayload
-from ..security import Principal, SESSION_COOKIE, authenticate_credentials, create_access_token, write_audit_event
+from ..schemas.auth_accounts import AuthStatusResponse
+from ..security import Principal, SESSION_COOKIE, auth_setup_state, authenticate_credentials, create_access_token, write_audit_event
 from ..services.oidc_service import (
     OIDC_FLOW_TTL_SECONDS,
     OidcProtocolError,
@@ -27,7 +29,7 @@ from ..services.oidc_service import (
 )
 
 
-router = APIRouter()
+router = APIRouter(route_class=PrivateInputRoute)
 OIDC_FLOW_COOKIE = "analysis_canvas_oidc_flow"
 
 
@@ -191,14 +193,18 @@ def _upsert_oidc_user(request: Request, claims: dict[str, Any]) -> tuple[Princip
     return principal, created
 
 
-@router.get("/api/auth/status")
-def auth_status() -> dict[str, Any]:
+@router.get("/api/auth/status", response_model=AuthStatusResponse)
+def auth_status() -> AuthStatusResponse:
     settings = security_settings()
-    return {
-        "mode": settings.auth_mode,
-        "authentication_required": settings.auth_mode != "disabled",
-        "oidc_start_url": "/api/auth/oidc/start" if settings.auth_mode == "oidc" else None,
-    }
+    setup_required, setup_reason = auth_setup_state()
+    return AuthStatusResponse(
+        mode=settings.auth_mode,
+        authentication_required=settings.auth_mode != "disabled" or setup_required,
+        registration_enabled=settings.auth_mode == "password" and not setup_required,
+        setup_required=setup_required,
+        setup_reason=setup_reason,
+        oidc_start_url="/api/auth/oidc/start" if settings.auth_mode == "oidc" else None,
+    )
 
 
 @router.get("/api/auth/oidc/start")
@@ -261,10 +267,12 @@ async def oidc_callback(request: Request, code: str | None = None, state: str | 
 def login(payload: LoginPayload, request: Request, response: Response) -> dict[str, Any]:
     if security_settings().auth_mode != "password":
         raise HTTPException(409, "현재 실행 모드에서는 로그인이 필요하지 않습니다.")
+    if auth_setup_state()[0]:
+        raise HTTPException(503, "서버 계정 설정이 필요합니다.")
     principal = authenticate_credentials(payload.username, payload.password)
     if not principal:
         write_audit_event(request=request, principal=None, status_code=401, action="LOGIN_FAILED", detail={"username": payload.username.strip().lower()})
-        raise HTTPException(401, "아이디 또는 비밀번호가 올바르지 않습니다.", headers={"WWW-Authenticate": "Bearer"})
+        raise HTTPException(401, "아이디·비밀번호와 계정 승인 상태를 확인해 주세요.", headers={"WWW-Authenticate": "Bearer"})
     token, expires_at = create_access_token(principal)
     settings = security_settings()
     response.set_cookie(

@@ -33,9 +33,11 @@ import { type Layout, type Layouts } from 'react-grid-layout'
 import { api } from './api'; import { workbenchApi } from './features/workbench/api'
 import { useRequestResultSnapshot } from './features/results/useRequestResultSnapshot'
 import { createWorkflowAnalysisOpener, isPendingResultAnalysis, useResultAnalysisIntent } from './features/results/resultLayoutRouting'; import { explicitCustomAnalysisPage, preservesResultLayoutOnLoadCaseChange } from './features/results/resultLayoutRuntime'
-import { clearSession, saveSession, type AuthUser } from './auth'
+import type { AuthUser } from './auth'
 import { useWorkspaceEditorCoordinator } from './editorState'
+import { createClientId } from './shared/identity/clientId'
 import { BootstrapWorkspaceShell } from './features/bootstrap/BootstrapWorkspaceShell'
+import { VocRoute } from './app/workspace/VocRoute'
 import type { InitialWorkspace } from './features/bootstrap/loadInitialWorkspace'
 import { useWorkspaceBootstrap } from './features/bootstrap/useWorkspaceBootstrap'
 import { AppShell, AppShellMain, AppTopbar } from './app/shell/AppShell'
@@ -48,8 +50,10 @@ import { pageView, preferredPage, visiblePages, type ActiveView } from './featur
 import { DEFAULT_PORTFOLIO_LAYOUT, DEFAULT_WORKFLOW_DASHBOARD_LAYOUT, loadPortfolioLayout, loadWorkflowDashboardLayout } from './features/layouts/layoutDefaults'
 import { ReportExportDialog } from './features/reports/ReportExportDialog'
 import { useReportExportController } from './features/reports/useReportExportController'
-import { ApprovalPendingScreen, LoginScreen } from './features/auth/LoginScreen'
-import { hasPermission, visibleMenuItems, type MenuId, type MenuPolicy } from './features/auth/access'
+import { ApprovalPendingScreen, AuthStatusErrorScreen, LoginScreen, ServerSetupScreen } from './features/auth/LoginScreen'
+import { useAuthSession } from './features/auth/useAuthSession'
+import { accountApi } from './shared/api/account'
+import { hasPermission, isPersonalOnlyAccount, visibleMenuItems, type MenuId, type MenuPolicy } from './features/auth/access'
 import { WORKSPACE_ROUTES_BY_ID } from './features/navigation/workspaceRouteRegistry'
 import { AccessAdminPage, AuditAdminPage, MenuPolicyAdminPage, ProjectResultProfileBinding, preloadWorkspaceRouteModule, SimulationWorkbench, WorkbenchTypeAdmin } from './app/routing/workspaceRouteModules'
 import { RequestIntakePage } from './features/workbench/RequestIntakePage'
@@ -69,13 +73,12 @@ function App() {
   const [preferences] = useState(loadWorkspacePreferences)
   const [theme, setTheme] = useState<WorkspaceTheme>(preferences.theme)
   const [uiFontSize, setUiFontSize] = useState(preferences.uiFontSize)
-  const [authReady, setAuthReady] = useState(false)
-  const [authRequired, setAuthRequired] = useState(false)
-  const [authMode, setAuthMode] = useState<'disabled' | 'password' | 'oidc'>('disabled')
-  const [authUser, setAuthUser] = useState<AuthUser | null>(null)
   const [menuPolicy, setMenuPolicy] = useState<MenuPolicy | null>(null)
   const [menuPolicyReady, setMenuPolicyReady] = useState(false)
-  const [authError, setAuthError] = useState('')
+  const { authCheckFailed, authError, authMode, authReady, authRequired, authUser, expire, login: handleLogin, logout: authLogout, refreshAccess, registrationEnabled, retryAuth, setupReason, setupRequired } = useAuthSession({
+    onAccessChanged: (_user, policy) => { setMenuPolicy(policy); setMenuPolicyReady(true) },
+    onAccessRefreshFailed: () => { setMenuPolicy(null); setMenuPolicyReady(true) },
+  })
   const [overview, setOverview] = useState<Overview | null>(null)
   const [projects, setProjects] = useState<Project[]>([])
   const [requests, setRequests] = useState<AnalysisRequest[]>([])
@@ -158,6 +161,7 @@ function App() {
     onCancelEditing: cancelEditing,
     onDashboardRoute: resetDashboardWorkspace,
     onNotice: setNotice,
+    personalOnly: isPersonalOnlyAccount(authUser),
     visibleMenus,
   }); const enterWorkspace = (...args: Parameters<typeof navigateWorkspace>) => { beginContextEntry(); navigateWorkspace(...args) }
   const { analysisRuns, selectedAnalysisRunId, analysisRunsLoading, analysisRunChanging, analysisRunError, selectAnalysisRun } = useResultVersionSelection({
@@ -194,41 +198,6 @@ function App() {
     document.documentElement.dataset.theme = theme
     document.documentElement.style.colorScheme = theme
   }, [theme])
-  useEffect(() => {
-    const prepareAuthentication = async () => {
-      try {
-        const status = await api.authStatus()
-        setAuthMode(status.mode)
-        setAuthRequired(status.authentication_required)
-        try {
-          const verified = await api.me()
-          setAuthUser(verified)
-        } catch {
-          if (!status.authentication_required) throw new Error('로컬 관리자 세션을 만들지 못했습니다.')
-          setAuthUser(null)
-        }
-      } catch (reason) {
-        clearSession()
-        setAuthUser(null)
-        setAuthError(reason instanceof Error ? reason.message : '인증 상태를 확인하지 못했습니다.')
-      } finally {
-        setAuthReady(true)
-      }
-    }
-    void prepareAuthentication()
-  }, [])
-  const refreshAccess = async () => {
-    if (!authUser) return
-    const [verified, policy] = await Promise.all([api.me(), api.menuPolicy()])
-    setAuthUser(verified)
-    setMenuPolicy(policy)
-    setMenuPolicyReady(true)
-  }
-  useEffect(() => {
-    const changed = () => { void refreshAccess().catch(() => { setMenuPolicy(null); setMenuPolicyReady(true) }) }
-    window.addEventListener('analysis-access-changed', changed)
-    return () => window.removeEventListener('analysis-access-changed', changed)
-  }, [authUser?.id])
   useEffect(() => {
     if (workspacePage !== 'portfolio' && portfolioLayoutBeforeEdit.current) {
       setPortfolioLayout(portfolioLayoutBeforeEdit.current)
@@ -289,41 +258,20 @@ function App() {
         setActiveView('workflow')
   }, [])
   const { state: workspaceBootstrap, invalidate: invalidateWorkspaceBootstrap } = useWorkspaceBootstrap({
-    userKey: authReady && authUser?.account_status === 'ACTIVE' ? authUser.id : null,
+    userKey: authReady && authUser?.account_status === 'ACTIVE' && !isPersonalOnlyAccount(authUser) ? authUser.id : null,
     onStart: () => setError(''),
     onResolved: applyInitialWorkspace,
   })
+  const logout = async () => { invalidateWorkspaceBootstrap(); await authLogout(); setMenuPolicy(null); setMenuPolicyReady(false); setOverview(null) }
   useEffect(() => {
     const expired = () => {
+      if (!authUser) return
       invalidateWorkspaceBootstrap()
-      setAuthUser(null)
-      setAuthError('로그인 세션이 만료되었습니다. 다시 로그인하세요.')
+      expire('로그인 세션이 만료되었습니다. 다시 로그인하세요.')
     }
     window.addEventListener('analysis-auth-expired', expired)
     return () => window.removeEventListener('analysis-auth-expired', expired)
-  }, [invalidateWorkspaceBootstrap])
-  const handleLogin = async (username: string, password: string) => {
-    setAuthError('')
-    try {
-      const result = await api.login(username, password)
-      const verified = await api.me()
-      saveSession(result.access_token, verified)
-      setAuthUser(verified)
-    } catch (reason) {
-      setAuthError(reason instanceof Error ? reason.message : '로그인하지 못했습니다.')
-      throw reason
-    }
-  }
-  const logout = async () => {
-    const logoutRequest = api.logout()
-    invalidateWorkspaceBootstrap()
-    setAuthUser(null)
-    try { await logoutRequest } catch { /* clear the local session even if the server is unavailable */ }
-    clearSession()
-    setMenuPolicy(null)
-    setMenuPolicyReady(false)
-    setOverview(null)
-  }
+  }, [authUser, expire, invalidateWorkspaceBootstrap])
   useEffect(() => {
     if (!activeDashboardId || !selectedLoadCaseId || !authReady || (authRequired && !authUser) || isPendingResultAnalysis(false, activeDashboardId) || (editMode && dashboard?.id === activeDashboardId)) return
     const requestSequence = ++dashboardRequestSequence.current
@@ -461,7 +409,8 @@ function App() {
     const nextContextKey = [nextContext.projectId, nextContext.requestId, nextContext.loadCaseId, nextContext.runId, nextContext.view, nextContext.pageId].join('|')
     if (nextContextKey === workspaceContextKey) { setWorkspaceContextTransitioning(false); return }
     workspaceContextWritePending.current = nextContextKey
-    updateWorkspaceContext(nextContext, { replace: !userWorkspaceContextChange.current })
+    const requestWorkspace = workspacePage === 'dashboard' || workspacePage === 'workbench' || workspacePage === 'data'
+    updateWorkspaceContext(nextContext, { replace: !userWorkspaceContextChange.current || !requestWorkspace })
     userWorkspaceContextChange.current = false
   }, [activeDashboardId, activeView, allowedPages, analysisRunChanging, analysisRunsLoading, editMode, isWorkspaceIndex, matchedWorkspaceRoute, overview, requestContextLoading, selectedAnalysisRunId, selectedLoadCaseId, selectedProjectId, selectedRequestId, updateWorkspaceContext, workspaceBootstrap.status, workspaceContextKey, workspaceNavigationPending, workspacePage])
   const handleProjectChange = async (projectId: string) => {
@@ -724,7 +673,7 @@ function App() {
     setWorkflows((items) => items.map((workflow) => {
       if (workflow.request.id !== requestId) return workflow
       const sequence = workflow.steps.length + 1
-      const steps = [...workflow.steps, { id: `draft-step-${crypto.randomUUID()}`, sequence_no: sequence, name: '새 진행 단계', status: 'WAITING' as const, owner: workflow.request.owner || '미지정', owner_user_id: workflow.request.owner_user_id ?? null, progress: 0, planned_end: workflow.request.due_at, is_optional: false, note: '' }]
+      const steps = [...workflow.steps, { id: `draft-step-${createClientId()}`, sequence_no: sequence, name: '새 진행 단계', status: 'WAITING' as const, owner: workflow.request.owner || '미지정', owner_user_id: workflow.request.owner_user_id ?? null, progress: 0, planned_end: workflow.request.due_at, is_optional: false, note: '' }]
       return { ...workflow, steps, progress: Math.round(steps.reduce((sum, step) => sum + step.progress, 0) / steps.length) }
     }))
   }
@@ -860,8 +809,14 @@ function App() {
   if (!authReady) {
     return <div className="full-state"><LoaderCircle className="spin" /> 인증 설정을 확인하고 있습니다.</div>
   }
+  if (authCheckFailed) {
+    return <AuthStatusErrorScreen message={authError} onRetry={() => void retryAuth()} theme={theme} onThemeChange={setTheme} />
+  }
+  if (setupRequired) {
+    return <ServerSetupScreen reason={setupReason} onRetry={() => void retryAuth()} theme={theme} onThemeChange={setTheme} />
+  }
   if (authRequired && !authUser) {
-    return <LoginScreen mode={authMode === 'oidc' ? 'oidc' : 'password'} error={authError} onLogin={handleLogin} theme={theme} onThemeChange={setTheme} />
+    return <LoginScreen mode={authMode === 'oidc' ? 'oidc' : 'password'} error={authError} onLogin={handleLogin} onRegister={accountApi.register} registrationEnabled={registrationEnabled} theme={theme} onThemeChange={setTheme} />
   }
   if (authUser?.account_status === 'PENDING') {
     return <ApprovalPendingScreen displayName={authUser.display_name} onLogout={() => void logout()} />
@@ -869,11 +824,14 @@ function App() {
   if (workspacePage === 'local_pc' && authUser?.account_status === 'ACTIVE') {
     return <PersonalPcRoute user={authUser} menus={visibleMenus} databaseBackend={databaseBackend} theme={theme} fontSize={uiFontSize} onFontSizeChange={setUiFontSize} onThemeChange={setTheme} onLogout={() => void logout()} onNavigate={enterWorkspace} />
   }
+  if (workspacePage === 'voc' && menuPolicyReady && authUser?.account_status === 'ACTIVE' && allowedPages.has('voc')) {
+    return <VocRoute user={authUser} menus={visibleMenus} databaseBackend={databaseBackend} theme={theme} fontSize={uiFontSize} onFontSizeChange={setUiFontSize} onThemeChange={setTheme} onLogout={() => void logout()} onNavigate={enterWorkspace} />
+  }
   if (workspaceBootstrap.status === 'idle' || workspaceBootstrap.status === 'loading') {
     return <div className="full-state"><LoaderCircle className="spin" /> 데이터와 레이아웃을 준비하고 있습니다.</div>
   }
   if (workspaceBootstrap.status === 'failed') {
-    return <div className="full-state error"><AlertTriangle /> {workspaceBootstrap.message}</div>
+    return <div className="full-state error"><AlertTriangle /> <span>{workspaceBootstrap.message}</span><button type="button" onClick={invalidateWorkspaceBootstrap}>다시 시도</button></div>
   }
   if (error) {
     return <div className="full-state error"><AlertTriangle /> {error}</div>
@@ -888,7 +846,7 @@ function App() {
   if (workspaceContextRestoring) {
     return <div className="full-state" data-testid="workspace-context-restoring"><LoaderCircle className="spin" /> 요청한 의뢰 문맥을 확인하고 있습니다.</div>
   }
-  if ((!overview || !dashboard) && !isRequestMonitoring && !pendingAnalysis && !(projects.length > 0 && !isWorkspaceIndex && (workspacePage === 'portfolio' || workspacePage === 'workbench' || workspacePage === 'data' || workspacePage === 'intake'))) {
+  if (workspacePage !== 'access_admin' && (!overview || !dashboard) && !isRequestMonitoring && !pendingAnalysis && !(projects.length > 0 && !isWorkspaceIndex && (workspacePage === 'portfolio' || workspacePage === 'workbench' || workspacePage === 'data' || workspacePage === 'intake'))) {
     const canCreateProject = hasPermission(authUser, 'system.user.approve', selectedProjectId)
     const canCreateRequest = hasPermission(authUser, 'request.create', selectedProjectId)
     const canRegisterData = canCreateProject || hasPermission(authUser, 'result.import', selectedProjectId)
@@ -940,7 +898,7 @@ function App() {
   const isRequestWorkspace = workspacePage === 'dashboard' || workspacePage === 'workbench' || workspacePage === 'data'; const requestWorkspaceTab = workspacePage === 'workbench' ? 'execution' : workspacePage === 'data' ? 'import' : activeView === 'workflow' ? 'overview' : 'review'
   const staticBreadcrumb = WORKSPACE_ROUTES_BY_ID.get(workspacePage)?.breadcrumb
   const breadcrumb = isRequestWorkspace ? requestWorkspaceTab === 'review' ? <><span>프로젝트</span><b>/</b><span>{analysisProjectName}</span><b>/</b><strong>{overview?.load_case.name ?? '하중 경우 설정 전'}</strong></> : <><span>의뢰</span><b>/</b><span>{workflowProjectName}</span><b>/</b><strong>{workflowTitle}</strong></> : <><span>{staticBreadcrumb?.section}</span><b>/</b><strong>{staticBreadcrumb?.title}</strong></>
-  const requestWorkspaceHeader = isRequestWorkspace ? <RequestWorkspaceShellHeader model={{ activeDashboardId, activeTab: requestWorkspaceTab, activeView, analysisRuns, analysisRunsLoading, analysisRunChanging, analysisRunError, canOpenData: allowedPages.has('data'), canOpenWorkbench: allowedPages.has('workbench'), contextChanging: workspaceContextTransitioning, loadCases, overview, owner: selectedWorkflow?.request.owner ?? requests.find((request) => request.id === selectedRequestId)?.owner ?? '', projectId: selectedProjectId, projects, requestContextLoading, requestId: selectedRequestId, requests, selectedAnalysisRunId, selectedLoadCaseId, selectedWorkflow, status: selectedWorkflow?.request.status ?? (overview?.run ? overview.overall_verdict : '결과 대기'), title: requestWorkspaceTab === 'review' ? analysisTitle : workflowTitle }} actions={{ onLoadCaseChange: (id) => void handleLoadCaseChange(id), onOpenData: () => navigateWorkspace('data'), onOpenWorkbench: () => navigateWorkspace('workbench'), onProjectChange: (id) => void handleProjectChange(id), onRequestChange: (id) => void handleRequestChange(id), onReviewContextOpen: workspacePage === 'dashboard' || !selectedLoadCaseId ? undefined : async (intent) => { const nextOverview = await api.overview(selectedLoadCaseId, selectedAnalysisRunId || undefined); if (isCurrentContextEntry(intent)) setOverview(nextOverview) }, onReviewSnapshot: () => { if (workspacePage !== 'dashboard') navigateWorkspace('dashboard', { dashboardEntry: 'preserve' }); const page = explicitCustomAnalysisPage(analysisTabs, activeDashboardId); if (page) { switchAnalysisPage(page); return } clearSnapshotDashboard() }, onReviewDomain: () => { if (workspacePage !== 'dashboard') navigateWorkspace('dashboard', { dashboardEntry: 'preserve' }); const page = analysisTabs[0]; if (page) switchAnalysisPage(page) }, onReviewUnconfigured: () => { if (workspacePage !== 'dashboard') navigateWorkspace('dashboard', { dashboardEntry: 'preserve' }); const page = explicitCustomAnalysisPage(analysisTabs, activeDashboardId); if (page) { switchAnalysisPage(page); return } clearSnapshotDashboard() }, onViewOverview: () => { if (!canChangeContext()) return; beginContextEntry(); setActiveView('workflow'); if (workspacePage !== 'dashboard') navigateWorkspace('dashboard', { dashboardEntry: 'preserve' }) } }} onBeginReview={beginContextEntry} isCurrentReview={isCurrentContextEntry} loadLayout={workbenchApi.requestResultLayout} onReviewError={setError} onRunChange={(runId) => void handleAnalysisRunChange(runId)} /> : null
+  const requestWorkspaceHeader = isRequestWorkspace ? <RequestWorkspaceShellHeader model={{ activeDashboardId, activeTab: requestWorkspaceTab, activeView, analysisRuns, analysisRunsLoading, analysisRunChanging, analysisRunError, canOpenData: allowedPages.has('data'), canOpenWorkbench: allowedPages.has('workbench'), contextChanging: workspaceContextTransitioning, loadCases, overview, owner: selectedWorkflow?.request.owner ?? requests.find((request) => request.id === selectedRequestId)?.owner ?? '', projectId: selectedProjectId, projects, requestContextLoading, requestId: selectedRequestId, requests, selectedAnalysisRunId, selectedLoadCaseId, selectedWorkflow, status: selectedWorkflow?.request.status ?? (overview?.run ? overview.overall_verdict : '결과 대기'), title: requestWorkspaceTab === 'review' ? analysisTitle : workflowTitle }} actions={{ onLoadCaseChange: (id) => void handleLoadCaseChange(id), onOpenData: () => navigateWorkspace('data'), onOpenWorkbench: () => navigateWorkspace('workbench'), onProjectChange: (id) => void handleProjectChange(id), onRequestChange: (id) => void handleRequestChange(id), onReviewContextOpen: workspacePage === 'dashboard' || !selectedLoadCaseId ? undefined : async (intent) => { const nextOverview = await api.overview(selectedLoadCaseId, selectedAnalysisRunId || undefined); if (isCurrentContextEntry(intent)) setOverview(nextOverview) }, onReviewSnapshot: () => { if (workspacePage !== 'dashboard') navigateWorkspace('dashboard', { dashboardEntry: 'preserve' }); const page = explicitCustomAnalysisPage(analysisTabs, activeDashboardId); if (page) { switchAnalysisPage(page); return } clearSnapshotDashboard() }, onReviewDomain: () => { if (workspacePage !== 'dashboard') navigateWorkspace('dashboard', { dashboardEntry: 'preserve' }); const page = analysisTabs[0]; if (page) switchAnalysisPage(page) }, onReviewUnconfigured: () => { const page = explicitCustomAnalysisPage(analysisTabs, activeDashboardId); if (page) { switchAnalysisPage(page); if (workspacePage !== 'dashboard') navigateWorkspace('dashboard', { dashboardEntry: 'preserve', context: { projectId: selectedProjectId, requestId: selectedRequestId, loadCaseId: selectedLoadCaseId, runId: selectedAnalysisRunId || undefined, view: pageView(page), pageId: page.id } }); return } const reviewContext = { projectId: selectedProjectId, requestId: selectedRequestId, loadCaseId: selectedLoadCaseId, view: 'custom' }; clearSnapshotDashboard(); if (workspacePage !== 'dashboard') navigateWorkspace('dashboard', { dashboardEntry: 'preserve', context: reviewContext }) }, onViewOverview: () => { if (!canChangeContext()) return; beginContextEntry(); setActiveView('workflow'); if (workspacePage !== 'dashboard') navigateWorkspace('dashboard', { dashboardEntry: 'preserve' }) } }} onBeginReview={beginContextEntry} isCurrentReview={isCurrentContextEntry} loadLayout={workbenchApi.requestResultLayout} onReviewError={setError} onRunChange={(runId) => void handleAnalysisRunChange(runId)} /> : null
   return (
     <AppShell
       className={`app-shell ${theme === 'light' ? 'light-theme' : 'dark-theme'}`}
@@ -977,7 +935,7 @@ function App() {
             ) : <button className="edit-button" disabled={workspacePage === 'dashboard' && (activeDashboardId === 'request-result-layout' ? !selectedLoadCaseId : !dashboardReady)} onClick={beginEditing}><Settings2 /> 대시보드 편집</button>))}
             <div className="avatar">{authUser ? authUser.display_name.slice(0, 2) : 'HK'}</div>
           </>} />}>
-        {workspacePage === 'portfolio' ? <PortfolioDashboard refreshToken={operationalRefreshToken} editMode={editMode} layout={portfolioLayout} layoutVersion={portfolioLayoutVersion} onLayoutChange={setPortfolioLayout} onCancelEdit={cancelEditing} onResetLayout={resetPortfolioLayout} onOpen={(projectId, requestId, loadCaseId) => void openPortfolioRequest(projectId, requestId, loadCaseId)} onOpenResult={(projectId, requestId, loadCaseId, runId) => void openPortfolioResult(projectId, requestId, loadCaseId, runId)} /> : workspacePage === 'intake' ? <RequestIntakePage projects={projects} initialProjectId={selectedProjectId} createdBy={authUser?.display_name ?? '데모 사용자'} canCreate={hasPermission(authUser, 'request.create', selectedProjectId)} onCreated={handleIntakeCreated} onOpenWorkbench={openIntakeWorkbench} /> : workspacePage === 'workbench' ? <>{requestWorkspaceHeader}<Suspense fallback={<FeatureScreenFallback />}><SimulationWorkbench embedded workflows={workflows} initialRequestId={selectedRequestId} currentUserId={authUser?.id ?? ''} createdBy={authUser?.display_name ?? '데모 사용자'} canExecute={canExecuteAssigned || canExecuteAny} isAdmin={canExecuteAny} onRequestSelected={(requestId) => void selectWorkbenchRequest(requestId)} onChanged={async (message) => { setWorkflows(await api.workflows()); setOperationalRefreshToken((value) => value + 1); setNotice(message) }} /></Suspense></> : workspacePage === 'workbench_admin' ? <Suspense fallback={<FeatureScreenFallback />}><WorkbenchTypeAdmin /></Suspense> : workspacePage === 'project_result_profiles' ? <Suspense fallback={<FeatureScreenFallback />}><ProjectResultProfileBinding projectId={selectedProjectId} /></Suspense> : workspacePage === 'schemas' ? <Suspense fallback={<FeatureScreenFallback />}><FolderSchemaWorkspace /></Suspense> : workspacePage === 'variables' ? <Suspense fallback={<FeatureScreenFallback />}><VariableCatalogPage variables={variables} overview={overview!} loadCaseId={selectedLoadCaseId} onChanged={(items) => { setVariables(items); setCatalogVariable((current) => items.some((item) => item.id === current) ? current : items[0]?.id ?? '') }} /></Suspense> : workspacePage === 'templates' ? <Suspense fallback={<FeatureScreenFallback />}><AutomationTemplatesPage /></Suspense> : workspacePage === 'examples' ? <Suspense fallback={<FeatureScreenFallback />}><FeatureExampleGallery onOpen={openFeatureExample} /></Suspense> : workspacePage === 'help' ? <Suspense fallback={<FeatureScreenFallback />}><HelpCenter onNavigate={enterWorkspace} /></Suspense> : workspacePage === 'access_admin' ? <Suspense fallback={<FeatureScreenFallback />}><AccessAdminPage projectId={selectedProjectId} canApproveUsers={hasPermission(authUser, 'system.user.approve', selectedProjectId)} onAccessChanged={refreshAccess} /></Suspense> : workspacePage === 'menu_policy_admin' && menuPolicy ? <Suspense fallback={<FeatureScreenFallback />}><MenuPolicyAdminPage policy={menuPolicy} onPolicyChanged={setMenuPolicy} /></Suspense> : workspacePage === 'audit_admin' ? <Suspense fallback={<FeatureScreenFallback />}><AuditAdminPage /></Suspense> : workspacePage === 'data' ? (
+        {workspacePage === 'portfolio' ? <PortfolioDashboard refreshToken={operationalRefreshToken} editMode={editMode} layout={portfolioLayout} layoutVersion={portfolioLayoutVersion} onLayoutChange={setPortfolioLayout} onCancelEdit={cancelEditing} onResetLayout={resetPortfolioLayout} onOpen={(projectId, requestId, loadCaseId) => void openPortfolioRequest(projectId, requestId, loadCaseId)} onOpenResult={(projectId, requestId, loadCaseId, runId) => void openPortfolioResult(projectId, requestId, loadCaseId, runId)} /> : workspacePage === 'intake' ? <RequestIntakePage projects={projects} initialProjectId={selectedProjectId} createdBy={authUser?.display_name ?? '데모 사용자'} canCreate={hasPermission(authUser, 'request.create', selectedProjectId)} onCreated={handleIntakeCreated} onOpenWorkbench={openIntakeWorkbench} /> : workspacePage === 'workbench' ? <>{requestWorkspaceHeader}<Suspense fallback={<FeatureScreenFallback />}><SimulationWorkbench embedded workflows={workflows} initialRequestId={selectedRequestId} currentUserId={authUser?.id ?? ''} createdBy={authUser?.display_name ?? '데모 사용자'} canExecute={canExecuteAssigned || canExecuteAny} isAdmin={canExecuteAny} onRequestSelected={(requestId) => void selectWorkbenchRequest(requestId)} onChanged={async (message) => { setWorkflows(await api.workflows()); setOperationalRefreshToken((value) => value + 1); setNotice(message) }} /></Suspense></> : workspacePage === 'workbench_admin' ? <Suspense fallback={<FeatureScreenFallback />}><WorkbenchTypeAdmin /></Suspense> : workspacePage === 'project_result_profiles' ? <Suspense fallback={<FeatureScreenFallback />}><ProjectResultProfileBinding projectId={selectedProjectId} /></Suspense> : workspacePage === 'schemas' ? <Suspense fallback={<FeatureScreenFallback />}><FolderSchemaWorkspace isVocabularyAdmin={hasPermission(authUser, 'system.catalog.manage', selectedProjectId)} selectedProjectId={selectedProjectId} /></Suspense> : workspacePage === 'variables' ? <Suspense fallback={<FeatureScreenFallback />}><VariableCatalogPage variables={variables} overview={overview!} loadCaseId={selectedLoadCaseId} onChanged={(items) => { setVariables(items); setCatalogVariable((current) => items.some((item) => item.id === current) ? current : items[0]?.id ?? '') }} /></Suspense> : workspacePage === 'templates' ? <Suspense fallback={<FeatureScreenFallback />}><AutomationTemplatesPage /></Suspense> : workspacePage === 'examples' ? <Suspense fallback={<FeatureScreenFallback />}><FeatureExampleGallery onOpen={openFeatureExample} /></Suspense> : workspacePage === 'help' ? <Suspense fallback={<FeatureScreenFallback />}><HelpCenter onNavigate={enterWorkspace} /></Suspense> : workspacePage === 'access_admin' ? <Suspense fallback={<FeatureScreenFallback />}><AccessAdminPage projectId={selectedProjectId} projects={projects.filter((project) => hasPermission(authUser, 'project.member.manage', project.id))} onProjectChange={(projectId) => void handleProjectChange(projectId)} canApproveUsers={hasPermission(authUser, 'system.user.approve', selectedProjectId)} onAccessChanged={refreshAccess} /></Suspense> : workspacePage === 'menu_policy_admin' && menuPolicy ? <Suspense fallback={<FeatureScreenFallback />}><MenuPolicyAdminPage policy={menuPolicy} onPolicyChanged={setMenuPolicy} /></Suspense> : workspacePage === 'audit_admin' ? <Suspense fallback={<FeatureScreenFallback />}><AuditAdminPage /></Suspense> : workspacePage === 'data' ? (
           <>{requestWorkspaceHeader}<Suspense fallback={<FeatureScreenFallback />}><DataWorkspace storagePanel={StorageWorkspacePanel} refreshToken={operationalRefreshToken} embedded contextChanging={workspaceContextTransitioning} canCreateProject={hasPermission(authUser, 'system.user.approve', selectedProjectId)} canRetryImports={hasPermission(authUser, 'system.catalog.manage', selectedProjectId)} canUploadStorage={hasPermission(authUser, 'result.import', selectedProjectId)} canBindStorage={hasPermission(authUser, 'result.import', selectedProjectId)} canManageStorageRoot={Boolean(authUser?.is_global_admin)} projects={projects} initialProjectId={selectedProjectId} initialRequestId={selectedRequestId} initialLoadCaseId={selectedLoadCaseId} onContextChange={({ projectId, requestId, loadCaseId }) => { setSelectedProjectId(projectId); setSelectedRequestId(requestId); setSelectedLoadCaseId(loadCaseId); setOverview(null); setDashboard(null); setAnalysisPages([]); setActiveDashboardId('pending-open-cell'); setActiveView('workflow') }} onLoadCaseCreated={(loadCase) => { setLoadCases((items) => [loadCase, ...items.filter((item) => item.id !== loadCase.id)]); setSelectedLoadCaseId(loadCase.id); setOverview(null); setDashboard(null); setAnalysisPages([]); setActiveDashboardId('pending-open-cell'); setActiveView('workflow') }} onDataChanged={refreshOperationalData} onOpenAnalysis={openImportedResult} onOpenIntake={() => enterWorkspace('intake')} /></Suspense></>
         ) : <>
         {requestWorkspaceHeader}

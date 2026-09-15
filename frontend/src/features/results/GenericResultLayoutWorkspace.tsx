@@ -44,7 +44,7 @@ function SnapshotWidget({ widget, requiredDataContracts, bindings, overview, thr
     <header><div><small>{widget.type.replaceAll('_', ' ')}</small><h4>{widget.title}</h4></div><span className="result-layout-widget-state">{state === 'WAITING' ? '결과 대기' : state}</span></header>
     <Database aria-hidden="true" />
     {state !== 'READY' ? <p>{resultWidgetMessage(state)}</p>
-      : widget.type === 'video_grid' && loadCaseId ? <DropVideoGrid loadCaseId={loadCaseId} pageSize={Number(widget.settings?.pageSize ?? 20)} />
+      : widget.type === 'video_grid' && loadCaseId ? <DropVideoGrid loadCaseId={loadCaseId} pageSize={Number(widget.settings?.pageSize ?? 20)} columns={Number(widget.settings?.videoColumns ?? 2)} rows={Number(widget.settings?.videoRows ?? 2)} />
         : domainWidgetTypes.has(widget.type) && overview && loadCaseId ? <DomainRenderer widget={widget} overview={overview} thresholds={thresholds} loadCaseId={loadCaseId} currentRunId={bindings.latest_result_run?.id ?? ''} />
           : domainWidgetTypes.has(widget.type) ? <p>{domainError || '전용 결과 렌더러 데이터를 불러오는 중입니다.'}</p>
             : <BoundResult widget={widget} bindings={bindings} />}

@@ -4,7 +4,7 @@
 - 대상: Git으로 받은 기존 Windows 배포 폴더를 PostgreSQL 기본 실행으로 사용하는 관리자
 - 범위: 로컬 `127.0.0.1` 실행. 다중 사용자 상시 운영은 [Rocky 배포 안내](../deploy/rocky8/README.md)를 따른다.
 
-일반 Git 업데이트는 기존 `.env`, `.postgres-owner.env`, DuckDB 파일과 PostgreSQL 데이터를 보존한다. 반면 최초 PostgreSQL 설정과 DuckDB 이관은 DB·역할·환경 파일을 변경할 수 있으므로, 일반 업데이트나 시작과 섞지 않는다.
+신규 설치와 DB 종류 미지정 실행은 PostgreSQL을 기본으로 사용한다. 일반 Git 업데이트는 기존 `.env`, `.postgres-owner.env`, DuckDB 파일과 PostgreSQL 데이터를 보존한다. 기존 DuckDB를 PostgreSQL로 전환하려면 아래 별도 이관 절차를 따른다. DB 종류만 바꿔 기존 계정이 없는 새 DB에 연결하지 않는다.
 
 ## 이미 PostgreSQL로 이관한 배포: 평소 실행
 
@@ -27,7 +27,7 @@ Invoke-RestMethod http://127.0.0.1:8000/api/health
 ## 준비
 
 1. 배포 폴더 전체를 Git으로 받는다. 이미 ZIP으로 설치한 폴더를 Git 업데이트 대상으로 연결하려면 [Windows Git 업데이트 안내](windows-git-update.md)를 먼저 따른다. 이후 평소 업데이트는 배포 폴더의 `update.bat`를 더블클릭한다.
-2. 처음 받은 폴더에서는 `deploy.bat`를 한 번 실행해 고정 런타임과 의존성을 준비한다. 이 단계는 `.env`가 없을 때만 `.env.example`을 복사한다.
+2. PostgreSQL을 아직 준비하지 않았다면 `setup.ps1`로 고정 런타임과 의존성만 준비한다. `deploy.bat`은 DB 준비·계정 설정까지 검사하므로 연결 설정이 없으면 완료되지 않는다. `.env`가 없으면 `.env.example`을 복사해 PostgreSQL 기본 설정을 준비한다.
 3. PostgreSQL 18을 설치하고 Windows 서비스를 시작한다. PostgreSQL `bin` 폴더가 PATH에 없으면 `.env`에 `POSTGRES_BIN=E:\PostgreSQL\18\bin` 형식으로 지정한다.
 4. `.env.example`을 참고해 **관리자 연결만 일시적으로** `.env`에 넣는다. `POSTGRES_ADMIN_URL` 또는 `DATABASE_URL`은 대상 서버의 `postgres` 데이터베이스에 연결하는 CREATEDB·CREATEROLE 권한 계정이어야 한다. 실제 비밀번호나 URL은 Git, 문서, 채팅에 넣지 않는다.
 
@@ -41,21 +41,30 @@ PostgreSQL을 이미 사용 중인 배포는 DB 설정을 편집하지 않고 �
 .\update.bat
 ```
 
-업데이트기는 Git 다운로드, 실행 중인 앱 중지, `deploy.ps1`, 필요한 PostgreSQL Alembic migration, 재시작 순서로 처리한다. Git의 직접 수정·미추적 소스 파일이 있으면 앱을 중지하기 전에 멈춘다. `.env`, `.postgres-owner.env`, DB, 런타임과 결과 파일은 업데이트 대상에서 제외된다. migration 또는 시작이 실패하면 자동 DB rollback은 하지 않으므로, 오류 단계와 `log\update-*.log`를 확인한 뒤 수정하고 다시 실행한다.
+업데이트기는 Git 다운로드, 앱 중지, `deploy.ps1`의 기존 DB 자동 백업·Alembic migration·계정 준비, 재시작 순서로 처리한다. Git의 직접 수정·미추적 소스 파일이 있으면 앱을 중지하기 전에 멈춘다. `.env`, `.postgres-owner.env`, DB, 런타임과 결과 파일은 보존한다. 백업 실패 시 DB 변경을 중단한다. migration 또는 시작 실패 시 자동 DB rollback은 하지 않으므로 오류 단계와 `log\update-*.log`를 확인한 뒤 수정하고 다시 실행한다.
 
 ## 최초 PostgreSQL 설정
 
-새 PostgreSQL DB를 만들고 기본 DuckDB 데이터를 복사하려면 PowerShell에서 다음을 실행한다.
+기존 데이터가 없는 신규 설치는 PostgreSQL 서비스와 관리자 연결을 준비한 후 빈 DB를 생성한다. 다음 명령은 DuckDB 파일을 요구하거나 복사하지 않는다.
+
+```powershell
+.\.venv-runtime\Scripts\python.exe backend\scripts\setup_local_postgres.py --seed-mode empty
+.\deploy.bat
+```
+
+DB 준비가 끝나면 배포 창에서 최초 관리자 아이디·비밀번호를 입력한다. 이후에는 `start.bat`과 `update.bat`을 사용한다.
+
+기존 DuckDB 데이터를 이전하는 경우에만 다음 전용 진입점을 사용한다.
 
 ```powershell
 .\setup-postgresql.ps1
 ```
 
-기본 seed 모드는 `duckdb`다. 스크립트는 원본 `backend\data\analysis_dashboard.duckdb`를 읽기 전용으로 검사한 뒤, 역할·DB·Alembic schema를 만들고 데이터를 복사해 행 수와 checksum을 검증한다. 원본 DuckDB 파일은 유지된다.
+이 이전 도구의 기본 seed 모드는 `duckdb`이며 애플리케이션의 PostgreSQL 기본값과는 별개다. 원본 `backend\data\analysis_dashboard.duckdb`를 읽기 전용으로 검사한 뒤, 역할·DB·Alembic schema를 만들고 데이터를 복사해 행 수와 checksum을 검증한다. 원본 DuckDB 파일은 유지된다.
 
 대상 `simulation_dashboard`에 관리 schema가 이미 있으면 이 명령은 기존 데이터를 보호하기 위해 중단한다. 내부 설정 스크립트의 실제 `--replace-existing`과 `--backup-dir` 옵션은 검증된 backup·staging 전환을 수행하는 관리자 작업이다. 기존 데이터를 유지하려면 사용하지 않는다.
 
-DuckDB를 복사하지 않는 빈 DB 또는 기준 데이터 DB가 필요할 때만 내부 스크립트의 seed 옵션을 명시한다.
+신규 설치의 빈 DB 또는 별도 기준 데이터 DB는 내부 스크립트의 seed 옵션으로 구분한다.
 
 ```powershell
 .\.venv-runtime\Scripts\python.exe backend\scripts\setup_local_postgres.py --seed-mode empty

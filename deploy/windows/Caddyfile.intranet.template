@@ -1,0 +1,44 @@
+# Manual-certificate intranet profile. Replace every __REPLACE_*__ token
+# before validation. This file does not request, install, or trust any CA.
+{
+    auto_https off
+}
+
+https://__REPLACE_SERVER_NAME__ {
+    tls "__REPLACE_TLS_CERTIFICATE__" "__REPLACE_TLS_CERTIFICATE_KEY__"
+    encode zstd gzip
+    request_body {
+        max_size 512MB
+    }
+
+    root * "__REPLACE_RELEASE_ROOT__/frontend/dist"
+
+    # API always goes to FastAPI.  The backend keeps its own authorization.
+    @api path /api /api/*
+    handle @api {
+        reverse_proxy 127.0.0.1:__REPLACE_API_PORT__
+    }
+
+    # Serve only existing Vite build files from frontend/dist.  An absent
+    # /assets/* path falls through to FastAPI, which protects legacy assets.
+    @vite_assets {
+        path /assets/*
+        file
+    }
+    handle @vite_assets {
+        file_server
+    }
+    @backend_assets path /assets/*
+    handle @backend_assets {
+        reverse_proxy 127.0.0.1:__REPLACE_API_PORT__
+    }
+
+    # The remaining non-file routes are the single-page application.
+    handle {
+        try_files {path} /index.html
+        # Keep the HTML entrypoint fresh across a source update; fingerprinted
+        # Vite assets are handled above and retain their normal file caching.
+        header Cache-Control "no-cache"
+        file_server
+    }
+}

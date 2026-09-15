@@ -8,6 +8,7 @@ import './RequestResultWidgetConfiguration.css'
 import { DEFAULT_REQUEST_TYPE_LABELS, requestTypeLabels, type BatchExecutionAttempt, type BatchProfile, type DemoRun, type DemoRunTask, type RequestResultDefinition, type WorkbenchNode, type WorkbenchRequestType, type WorkbenchTaskType } from './types'
 import { useMemoryQuery } from '../../shared/cache/useMemoryQuery'
 import { LocalProgramPanel } from './local-programs/LocalProgramPanel'
+import { createClientId } from '../../shared/identity/clientId'
 
 type CompositionMode = 'parallel' | 'sequence'
 
@@ -139,7 +140,7 @@ export function SimulationWorkbench({ workflows, initialRequestId, currentUserId
   const [batchAttempts, setBatchAttempts] = useState<BatchExecutionAttempt[]>([])
   const [loadingBatchAttempts, setLoadingBatchAttempts] = useState(false)
   const [batchAttemptError, setBatchAttemptError] = useState('')
-  const [batchRequestKey, setBatchRequestKey] = useState(() => `batch-${crypto.randomUUID()}`)
+  const [batchRequestKey, setBatchRequestKey] = useState(() => `batch-${createClientId()}`)
   const [progressDraft, setProgressDraft] = useState(10)
   const batchAttemptSequence = useRef(0)
 
@@ -226,7 +227,7 @@ export function SimulationWorkbench({ workflows, initialRequestId, currentUserId
     setSelectedWorkItemId(selectedWorkItem.id)
     setProgressDraft(Math.min(99, Math.max(1, Number(selectedWorkItem.progress || 0) + 10)))
   }, [selectedWorkItem?.id, selectedWorkItem?.progress])
-  useEffect(() => { setBatchRequestKey(`batch-${crypto.randomUUID()}`) }, [selectedWorkItem?.id, selectedBatchProfile?.id])
+  useEffect(() => { setBatchRequestKey(`batch-${createClientId()}`) }, [selectedWorkItem?.id, selectedBatchProfile?.id])
 
   const changeRequest = (nextRequestId: string) => {
     onRequestSelected(nextRequestId); setError(''); setActiveRun(null); setActiveTaskId('')
@@ -278,7 +279,7 @@ export function SimulationWorkbench({ workflows, initialRequestId, currentUserId
       const run = await workbenchApi.dispatchBatch(workItemId, createdBy, batchRequestKey)
       setOptimisticRun({ requestId, run })
       setActiveRun(run); setActiveTaskId(run.tasks[0]?.id ?? '')
-      setBatchRequestKey(`batch-${crypto.randomUUID()}`)
+      setBatchRequestKey(`batch-${createClientId()}`)
       await onChanged(`${selectedWorkItem.name} 배치 구성을 검증하고 DEMO_ONLY 실행 기록을 생성했습니다.`)
       runQuery.retry()
     } catch (reason) { setError(friendlyWorkbenchError(reason)) }

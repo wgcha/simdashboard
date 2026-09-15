@@ -63,6 +63,18 @@ def test_legacy_media_path_stays_inside_the_backend_assets_root() -> None:
     assert exc_info.value.status_code == 404
 
 
+def test_legacy_media_path_uses_configured_persistent_assets_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assets = tmp_path / "persistent-assets"
+    (assets / "case").mkdir(parents=True)
+    expected = assets / "case" / "contour.svg"
+    expected.write_text("<svg/>", encoding="utf-8")
+    monkeypatch.setenv("SIMDASH_ASSETS_ROOT", str(assets))
+
+    assert media._legacy_asset_path("assets/case/contour.svg") == expected.resolve()
+
+
 def test_media_read_extraction_preserves_the_checked_in_openapi_contract() -> None:
     snapshot = Path(__file__).parents[2] / "frontend" / "openapi.json"
     assert check_contract(snapshot, app.openapi()) == []

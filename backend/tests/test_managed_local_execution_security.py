@@ -94,7 +94,7 @@ def _event(context: dict, grant_id: str, *, sequence: int = 1, version: str = "1
     }
 
 
-def test_pairing_and_session_expiry_and_device_binding_are_fail_closed(monkeypatch):
+def test_pairing_and_session_expiry_and_device_binding_are_fail_closed(monkeypatch, password_auth_bootstrap_admin):
     initialize_database()
     monkeypatch.setenv("AUTH_MODE", "password")
     monkeypatch.setenv("AUTH_SECRET_KEY", SECRET)
@@ -127,7 +127,7 @@ def test_pairing_and_session_expiry_and_device_binding_are_fail_closed(monkeypat
         assert client.post("/api/local-execution/device/events", content=b"x" * (1_048_576 + 1), headers={"Content-Type": "application/json"}).status_code == 413
 
 
-def test_assignment_account_and_project_boundaries_are_rechecked(monkeypatch):
+def test_assignment_account_and_project_boundaries_are_rechecked(monkeypatch, password_auth_bootstrap_admin):
     initialize_database()
     monkeypatch.setenv("AUTH_MODE", "password")
     monkeypatch.setenv("AUTH_SECRET_KEY", SECRET)
@@ -169,7 +169,7 @@ def test_assignment_account_and_project_boundaries_are_rechecked(monkeypatch):
         assert client.get("/api/local-execution/devices", headers=other_headers).status_code == 200
 
 
-def test_forged_grant_context_sequence_and_immutable_run_are_rejected(monkeypatch):
+def test_forged_grant_context_sequence_and_immutable_run_are_rejected(monkeypatch, password_auth_bootstrap_admin):
     initialize_database()
     monkeypatch.setenv("AUTH_MODE", "password")
     monkeypatch.setenv("AUTH_SECRET_KEY", SECRET)

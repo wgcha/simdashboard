@@ -212,6 +212,7 @@ jobs:
           pnpm run test:architecture
           pnpm run test:preferences
           pnpm run test:api
+          pnpm run test:e2e-runner
           pnpm run build
       - name: Verify generated API contract
         working-directory: .

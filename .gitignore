@@ -25,6 +25,9 @@ frontend/*.tsbuildinfo
 /dist/
 /output/
 .env
+.env.accounts-backup-*
+.env.*.tmp
+.setup-accounts.lock
 # Local Rocky production installation settings may contain database and admin
 # passwords. deploy-from-source.sh refuses files that are not covered by this.
 deploy/rocky8/*.local.env

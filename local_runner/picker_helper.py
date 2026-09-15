@@ -28,10 +28,10 @@ def select_paths(kind: str) -> list[str]:
         root.destroy()
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--kind", choices=("program", "files", "directory"), required=True)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     try:
         print(json.dumps({"paths": select_paths(args.kind)}))
         return 0

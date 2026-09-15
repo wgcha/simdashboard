@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ComponentType, type MouseEvent } from 'react'
+import { Link } from 'react-router-dom'
 import {
   Activity,
   BarChart3,
@@ -19,6 +20,7 @@ import {
   Settings2,
   ShieldCheck,
   Users,
+  MessageSquare,
 } from 'lucide-react'
 
 const MENU_ICONS = {
@@ -35,6 +37,7 @@ const MENU_ICONS = {
   schemas: GripVertical,
   examples: Play,
   help: BookOpen,
+  voc: MessageSquare,
   access_admin: Users,
   menu_policy_admin: ShieldCheck,
   audit_admin: ScrollText,
@@ -74,6 +77,7 @@ const MENU_GROUP_BY_ID: Record<AppSidebarMenuId, MenuGroupId> = {
   audit_admin: 'administration',
   examples: 'support',
   help: 'support',
+  voc: 'support',
 }
 
 const USER_MENU_LABELS: Partial<Record<AppSidebarMenuId, string>> = {
@@ -129,7 +133,7 @@ export function AppSidebar({
   }, [activeGroup])
   const groupedMenus = new Map<MenuGroupId, AppSidebarMenu[]>()
   menus.forEach((menu) => {
-    if (menu.id === 'workbench' || menu.id === 'data' || menu.id === 'help') return
+    if (menu.id === 'workbench' || menu.id === 'data' || menu.id === 'help' || menu.id === 'voc') return
     const groupId = MENU_GROUP_BY_ID[menu.id]
     const group = groupedMenus.get(groupId)
     if (group) group.push(menu)
@@ -150,7 +154,7 @@ export function AppSidebar({
       setMobileMenuOpen(false)
       onNavigate(menu.id)
     }
-    return <a key={menu.id} aria-label={label} aria-current={activePage === menu.id ? 'page' : undefined} title={label} className={'nav-link ' + extraClass + (activePage === menu.id ? ' active' : '')} href={workspacePathForMenu(menu.id)} onClick={navigate} onMouseEnter={() => onPreloadPage(menu.id)} onFocus={() => onPreloadPage(menu.id)}><Icon /><span>{label}</span></a>
+    return <Link key={menu.id} aria-label={label} aria-current={activePage === menu.id ? 'page' : undefined} title={label} className={'nav-link ' + extraClass + (activePage === menu.id ? ' active' : '')} to={workspacePathForMenu(menu.id)} onClick={navigate} onMouseEnter={() => onPreloadPage(menu.id)} onFocus={() => onPreloadPage(menu.id)}><Icon /><span>{label}</span></Link>
   }
 
   return <aside className={`sidebar ${mobileMenuOpen ? 'mobile-menu-open' : ''}`} aria-label="주 메뉴">
@@ -171,6 +175,7 @@ export function AppSidebar({
         </div>
       </details></div>)}
       {helpMenu && renderMenuLink(helpMenu, 'nav-link-standalone nav-link-help')}
+      {menus.find((menu) => menu.id === 'voc') && renderMenuLink(menus.find((menu) => menu.id === 'voc')!, 'nav-link-standalone nav-link-help')}
     </nav>
     <div className="sidebar-foot">
       <div className="global-font-control" aria-label="전체 글자 크기 조절">

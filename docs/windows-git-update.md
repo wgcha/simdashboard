@@ -7,7 +7,7 @@
 1. 최신 **`update.bat` 한 파일**을 기존 배포 폴더의 `stop.ps1` 옆에 넣는다.
 2. **`update.bat`를 더블클릭**한다. 최초 연결 안내가 나오면 폴더·브랜치를 확인하고 Enter를 누른다.
 
-`main` / `No commits yet` 상태도 이 흐름으로 처리한다. 새 폴더로 이사하거나 런타임·DB를 다시 설치할 필요가 없다. 같은 경로의 기존 소스 파일은 `backups/git-update-*`에 보관하고, `.env`·DB·런타임·결과 파일은 유지한다. 자동 백업은 충돌하는 소스 파일에 대한 백업이며 DB 전체 백업을 대신하지 않는다.
+`main` / `No commits yet` 상태도 이 흐름으로 처리한다. 새 폴더로 이사하거나 런타임·DB를 다시 설치할 필요가 없다. 같은 경로의 기존 소스 파일은 `backups/git-update-*`에 보관하고, `.env`·DB·런타임·결과 파일은 유지한다. 이어지는 배포 단계에서 기존 DB와 설정을 `backups/accounts/` 아래 별도로 백업하고 검증한다.
 
 Git이 설치되어 있고 해당 저장소에 접근할 수 있어야 한다. 기본 저장소는 `https://github.com/wgcha/simdashboard.git`, 최초 연결 브랜치는 `codex/windows-one-click-deploy`다. Git의 기존 로그인·프록시 설정을 사용한다. 최초 Git 인증이 필요한 PC에서는 로그인 창이 추가로 나올 수 있다.
 
@@ -26,14 +26,17 @@ PostgreSQL 기본 실행은 [Windows PostgreSQL 빠른 시작](windows-postgresq
 
 ## 다음 업데이트부터
 
+Windows 사내 IP 접속 설정 변경은 [사내 접속 가이드](windows-lan-access.md)를 따른다. 직전 버전에서 이 수정만 받는 경우 `git pull --ff-only` 후 `stop.bat` → `start.bat`으로 적용할 수 있다. `.env`의 `WINDOWS_WEB_HOST`는 업데이트 후에도 유지된다. 의존성·DB migration이 포함된 일반 업데이트는 아래 전체 절차를 사용한다.
+
 `update.bat`만 더블클릭한다. 아래 작업을 순서대로 처리한다.
 
 1. Git 상태 확인과 다운로드
 2. 실행 중인 웹/API 종료
 3. 소스 업데이트
 4. 의존성 설치와 프런트엔드 빌드
-5. 필요한 PostgreSQL DB migration
-6. 웹/API 시작과 브라우저 열기
+5. 기존 DB와 설정 자동 백업·검증, 백업 경로 표시
+6. 필요한 PostgreSQL DB migration과 계정 준비 확인 — 최초 관리자가 없으면 같은 창에서 설정
+7. 웹/API 시작과 브라우저 열기
 
 기존 Git 폴더는 현재 브랜치의 upstream을 따른다. upstream이 없으면 같은 이름의 `origin` 브랜치를 사용한다. 대상 브랜치가 없거나 직접 수정한 소스·미추적 파일이 있으면 앱을 종료하기 전에 중단한다. 다른 브랜치로 임의 전환하거나 변경을 강제로 덮어쓰지 않는다.
 
@@ -41,7 +44,7 @@ PostgreSQL 기본 실행은 [Windows PostgreSQL 빠른 시작](windows-postgresq
 
 ## 실패했을 때
 
-화면의 실패 단계와 `log/update-*.log`를 확인한다. Git 다운로드 실패는 기존 앱을 종료하지 않는다. 배포·DB migration 실패는 이후 단계와 재시작을 중단한다. 원인을 해결한 다음 같은 `update.bat`를 다시 실행한다. DB migration을 자동으로 되돌리지는 않는다.
+화면의 실패 단계와 `log/update-*.log`를 확인한다. Git 다운로드 실패는 기존 앱을 종료하지 않는다. 백업 실패는 DB migration을 차단하고, 배포·DB migration·계정 준비 실패는 이후 단계와 재시작을 중단한다. 원인을 해결한 다음 같은 `update.bat`를 다시 실행한다. DB migration을 자동으로 되돌리지는 않는다.
 
 PostgreSQL은 기존 `.postgres-owner.env`와 DB 연결 설정으로 `upgrade_postgres_schema.py`를 실행한다. owner 설정이 없다면 [PostgreSQL 운영 절차](backend-sql-integration-guide.md)를 따른다. DuckDB를 쓰는 설치에서는 PostgreSQL migration을 건너뛴다. 현재 관리형 로컬 실행의 migration은 `0022_managed_local_execution`이며 실제 적용 대상은 Alembic의 최신 head다.
 

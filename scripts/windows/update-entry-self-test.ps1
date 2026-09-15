@@ -32,7 +32,6 @@ function New-Fixture {
     $log = Join-Path $base 'events.log'
     New-Item -ItemType Directory -Path (Join-Path $driver 'scripts\windows') -Force | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $target 'scripts\windows') -Force | Out-Null
-    New-Item -ItemType Directory -Path (Join-Path $target 'backend\scripts') -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $SkillRoot 'update.ps1') -Destination (Join-Path $driver 'update.ps1')
 
     $module = @'
@@ -67,7 +66,7 @@ if ($env:SELFTEST_SCENARIO -eq 'deployfailure') { exit 7 }
 exit 0
 '@;
         'start.ps1' = @'
-param([int]$BackendPort=8000,[int]$FrontendPort=5173,[switch]$NoBrowser,[string]$NetworkMode='')
+param([int]$BackendPort=8000,[int]$FrontendPort=80,[switch]$NoBrowser,[string]$NetworkMode='')
 Add-Content -LiteralPath $env:SELFTEST_LOG -Value ("start backend=$BackendPort frontend=$FrontendPort")
 Write-Output 'fake start stdout'
 if ($env:SELFTEST_SCENARIO -eq 'startfailure') { exit 8 }
@@ -75,25 +74,17 @@ exit 0
 '@
     }
     foreach ($name in $lifecycle.Keys) { Write-Utf8File (Join-Path $target $name) $lifecycle[$name] }
-    Write-Utf8File (Join-Path $target 'scripts\windows\Runtime.psm1') @'
-function Get-ProjectPython { return $env:SELFTEST_PYTHON }
-Export-ModuleMember -Function Get-ProjectPython
-'@
-    Write-Utf8File (Join-Path $target 'backend\scripts\upgrade_postgres_schema.py') '# fake migration'
-    $python = Join-Path $base 'fake-python.cmd'
-    Write-Utf8File $python "@echo off`r`n>>""%SELFTEST_LOG%"" echo migration`r`nif /I ""%SELFTEST_SCENARIO%""==""migrationfailure"" exit /b 9`r`nexit /b 0`r`n"
     if ($BackendPort -or $FrontendPort) {
         $json = @{ backend = @{ port=$BackendPort }; frontend = @{ port=$FrontendPort } } | ConvertTo-Json
         Write-Utf8File (Join-Path $target '.server-pids.json') $json
     }
-    return [pscustomobject]@{ Base=$base; Driver=$driver; Target=$target; Log=$log; Python=$python; Scenario=$Scenario }
+    return [pscustomobject]@{ Base=$base; Driver=$driver; Target=$target; Log=$log; Scenario=$Scenario }
 }
 
 function Invoke-Fixture {
     param($Fixture)
     $env:SELFTEST_LOG = $Fixture.Log
     $env:SELFTEST_SCENARIO = $Fixture.Scenario
-    $env:SELFTEST_PYTHON = $Fixture.Python
     $args = @('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $Fixture.Driver 'update.ps1'),'-ProjectRoot',$Fixture.Target,'-Yes','-NoBrowser')
     & $PowerShell @args | Out-Null
     return [int]$LASTEXITCODE
@@ -105,7 +96,7 @@ try {
     $code = Invoke-Fixture $fixture
     Assert-Condition ($code -eq 0) "success scenario exit was $code"
     $events = @(Get-Content -LiteralPath $fixture.Log)
-    Assert-Condition ((($events -join '|') -eq 'plan|stop backend=0 frontend=0|apply|deploy network=|migration|start backend=8000 frontend=5173')) 'success stage order or child exit handling was incorrect'
+    Assert-Condition ((($events -join '|') -eq 'plan|stop backend=0 frontend=0|apply|deploy network=|start backend=8000 frontend=80')) 'success stage order or child exit handling was incorrect'
 
     $fixture = New-Fixture -Scenario 'fetchfailure'; $fixtures += $fixture
     $code = Invoke-Fixture $fixture
@@ -129,13 +120,7 @@ try {
     $code = Invoke-Fixture $fixture
     $events = @(Get-Content -LiteralPath $fixture.Log)
     Assert-Condition ($code -eq 7) "deploy failure exit was $code"
-    Assert-Condition (($events -join '|') -notmatch 'migration|start ') 'a failed deploy continued to migration or start'
-
-    $fixture = New-Fixture -Scenario 'migrationfailure'; $fixtures += $fixture
-    $code = Invoke-Fixture $fixture
-    $events = @(Get-Content -LiteralPath $fixture.Log)
-    Assert-Condition ($code -eq 9) "migration failure exit was $code"
-    Assert-Condition (($events -join '|') -notmatch 'start ') 'a failed migration continued to start'
+    Assert-Condition (($events -join '|') -notmatch 'start ') 'a failed deploy continued to start'
 
     $fixture = New-Fixture -Scenario 'startfailure'; $fixtures += $fixture
     $code = Invoke-Fixture $fixture
@@ -149,8 +134,19 @@ try {
     Assert-Condition ($code -eq 0) 'custom port scenario failed'
     Assert-Condition (($events -join '|') -match 'stop backend=9123 frontend=9456.*start backend=9123 frontend=9456') 'custom ports were not forwarded to stop/start'
 
+    $fixture = New-Fixture -Scenario 'legacy-default' -BackendPort 8000 -FrontendPort 5173; $fixtures += $fixture
+    $code = Invoke-Fixture $fixture
+    $events = @(Get-Content -LiteralPath $fixture.Log)
+    Assert-Condition ($code -eq 0 -and ($events -join '|') -match 'stop backend=8000 frontend=5173.*start backend=8000 frontend=80') 'legacy default must stop on 5173 and restart on 80'
+
+    $fixture = New-Fixture -Scenario 'explicit-default' -BackendPort 8000 -FrontendPort 5173; $fixtures += $fixture
+    Write-Utf8File (Join-Path $fixture.Target '.server-pids.json') (@{ backend=@{port=8000}; frontend=@{port=5173; basePath='/workbench/'} } | ConvertTo-Json -Depth 4)
+    $code = Invoke-Fixture $fixture
+    $events = @(Get-Content -LiteralPath $fixture.Log)
+    Assert-Condition ($code -eq 0 -and ($events -join '|') -match 'stop backend=8000 frontend=5173.*start backend=8000 frontend=5173') 'new explicit 5173 setting must survive updates'
+
     $fixture = New-Fixture -Scenario 'lockhold'; $fixtures += $fixture
-    $env:SELFTEST_LOG = $fixture.Log; $env:SELFTEST_SCENARIO = $fixture.Scenario; $env:SELFTEST_PYTHON = $fixture.Python
+    $env:SELFTEST_LOG = $fixture.Log; $env:SELFTEST_SCENARIO = $fixture.Scenario
     $firstArgs = @('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $fixture.Driver 'update.ps1'),'-ProjectRoot',$fixture.Target,'-Yes','-NoBrowser')
     $first = Start-Process -FilePath $PowerShell -ArgumentList $firstArgs -PassThru -WindowStyle Hidden
     Start-Sleep -Milliseconds 500
@@ -165,7 +161,6 @@ try {
 finally {
     Remove-Item Env:SELFTEST_LOG -ErrorAction SilentlyContinue
     Remove-Item Env:SELFTEST_SCENARIO -ErrorAction SilentlyContinue
-    Remove-Item Env:SELFTEST_PYTHON -ErrorAction SilentlyContinue
     $tempParent = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\')
     $fixturePrefix = 'workbench-update-selftest-'
     foreach ($fixture in $fixtures) {

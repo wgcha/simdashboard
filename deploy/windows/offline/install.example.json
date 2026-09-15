@@ -1,0 +1,18 @@
+{
+  "postgresMode": "bundled",
+  "postgresAdminUrl": "",
+  "databaseUrl": "",
+  "ownerUrl": "",
+  "postgresPort": 55432,
+  "database": "simulation_dashboard",
+  "ownerRole": "simdashboard_owner",
+  "appRole": "simdashboard_app",
+  "apiPort": 18080,
+  "webPort": 8080,
+  "serverName": "_",
+  "tlsMode": "http",
+  "tlsCertificate": "",
+  "tlsKey": "",
+  "serviceAccount": "NT AUTHORITY\\LOCAL SERVICE",
+  "installRoot": "C:\\ProgramData\\SimulationWorkbench"
+}

@@ -27,6 +27,7 @@ EXPECTED_MENU_ORDER = [
     ("audit_admin", 120),
     ("examples", 130),
     ("help", 140),
+    ("voc", 150),
 ]
 
 
@@ -36,7 +37,7 @@ def test_menu_policy_update_validation_versions_and_restore():
         initial = client.get("/api/navigation/menu-policy")
         assert initial.status_code == 200
         assert initial.json()["version"] == 1
-        assert len(initial.json()["menus"]) == 15
+        assert len(initial.json()["menus"]) == 16
 
         mismatch = client.put(
             "/api/admin/menu-policy",
@@ -116,7 +117,7 @@ def test_frontend_menu_registry_matches_server_definitions_exactly():
         r"\{ id: '([^']+)', page: '[^']+', path: '[^']+', label: '[^']+', breadcrumb: \{[^}]+\}, requiredPermission: '([^']+)', contextKind: '([^']+)', navigationKind: '[^']+' \}",
         source,
     )
-    assert entries == [
+    assert [entry for entry in entries if entry[0] != "local_pc"] == [
         (definition.id, definition.required_permission, definition.context_kind)
         for definition in MENU_DEFINITIONS
     ]

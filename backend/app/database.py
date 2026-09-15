@@ -45,6 +45,19 @@ def initialize_database() -> None:
                 "managed_device_grants",
                 "managed_local_runs",
                 "managed_device_event_sequences",
+                "voc_posts",
+                "semantic_result_items",
+                "semantic_result_item_versions",
+                "semantic_recipes",
+                "semantic_recipe_versions",
+                "semantic_templates",
+                "semantic_template_versions",
+                "semantic_folder_bindings",
+                "semantic_import_provenance",
+                "semantic_vocabulary_entries",
+                "semantic_vocabulary_terms",
+                "semantic_import_review_items",
+                "semantic_import_review_events",
             )
             missing = [
                 table_name
@@ -1164,6 +1177,11 @@ def _initialize_duckdb_legacy() -> None:
         ensure_modeling_template_schema(conn)
         from .adapters.persistence.duckdb.managed_local_execution import ensure_managed_local_execution_schema
         ensure_managed_local_execution_schema(conn)
+        from .adapters.persistence.duckdb.voc_posts import ensure_voc_posts_schema
+        ensure_voc_posts_schema(conn)
+        ensure_semantic_mapping_schema(conn)
+        ensure_semantic_vocabulary_schema(conn)
+        ensure_semantic_review_schema(conn)
         # Establish the schema before seeding, but defer one-time legacy data
         # conversion until the seed has created any default projects.
         ensure_access_control_schema(conn, apply_legacy_backfills=False)
@@ -1281,6 +1299,105 @@ def ensure_spdm_storage_schema(conn: duckdb.DuckDBPyConnection) -> None:
     )
     conn.execute("CREATE INDEX IF NOT EXISTS ix_spdm_storage_bindings_request ON spdm_storage_bindings(request_id, load_case_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS ix_spdm_storage_files_load_case ON spdm_storage_files(load_case_id, status, relative_path)")
+
+
+def ensure_semantic_mapping_schema(conn: duckdb.DuckDBPyConnection) -> None:
+    """Embedded development catalog equivalent of migration 0024."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS semantic_result_items (
+            id VARCHAR PRIMARY KEY, key VARCHAR NOT NULL UNIQUE, latest_version INTEGER NOT NULL,
+            active_version INTEGER, created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL, updated_by VARCHAR NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS semantic_result_item_versions (
+            item_id VARCHAR NOT NULL, version INTEGER NOT NULL, definition_json JSON NOT NULL, item_snapshot_json JSON NOT NULL DEFAULT '[]',
+            lifecycle_status VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL, created_by VARCHAR NOT NULL,
+            PRIMARY KEY(item_id, version)
+        );
+        CREATE TABLE IF NOT EXISTS semantic_recipes (
+            id VARCHAR PRIMARY KEY, name VARCHAR NOT NULL, latest_version INTEGER NOT NULL,
+            active_version INTEGER, created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL, updated_by VARCHAR NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS semantic_recipe_versions (
+            recipe_id VARCHAR NOT NULL, version INTEGER NOT NULL, definition_json JSON NOT NULL, item_snapshot_json JSON NOT NULL DEFAULT '[]',
+            lifecycle_status VARCHAR NOT NULL, sample_sha256 VARCHAR, sample_filename VARCHAR, sample_bytes BLOB,
+            created_at TIMESTAMP NOT NULL, created_by VARCHAR NOT NULL, PRIMARY KEY(recipe_id, version)
+        );
+        CREATE TABLE IF NOT EXISTS semantic_templates (
+            id VARCHAR PRIMARY KEY, name VARCHAR NOT NULL, latest_version INTEGER NOT NULL,
+            active_version INTEGER, created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL, updated_by VARCHAR NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS semantic_template_versions (
+            template_id VARCHAR NOT NULL, version INTEGER NOT NULL, definition_json JSON NOT NULL, item_snapshot_json JSON NOT NULL DEFAULT '[]',
+            lifecycle_status VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL, created_by VARCHAR NOT NULL,
+            PRIMARY KEY(template_id, version)
+        );
+        CREATE TABLE IF NOT EXISTS semantic_folder_bindings (
+            id VARCHAR PRIMARY KEY, project_id VARCHAR NOT NULL, request_id VARCHAR, load_case_id VARCHAR,
+            relative_path VARCHAR NOT NULL UNIQUE, role VARCHAR NOT NULL, recipe_ids_json JSON NOT NULL,
+            template_id VARCHAR, created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL, created_by VARCHAR NOT NULL, revision INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TABLE IF NOT EXISTS semantic_import_provenance (
+            analysis_run_id VARCHAR PRIMARY KEY, load_case_id VARCHAR NOT NULL, recipe_id VARCHAR NOT NULL,
+            recipe_version INTEGER NOT NULL, template_id VARCHAR, template_version INTEGER, source_name VARCHAR NOT NULL,
+            source_sha256 VARCHAR NOT NULL, observations_json JSON NOT NULL, sample_bytes BLOB, created_at TIMESTAMP NOT NULL
+        );
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_semantic_folder_bindings_project ON semantic_folder_bindings(project_id, load_case_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_semantic_import_provenance_lookup ON semantic_import_provenance(load_case_id, recipe_id, recipe_version)")
+    # Development DBs may have been created while the semantic mapping branch
+    # was being iterated; keep their embedded schema forward-compatible.
+    conn.execute("ALTER TABLE semantic_result_item_versions ADD COLUMN IF NOT EXISTS item_snapshot_json JSON DEFAULT '[]'")
+    conn.execute("ALTER TABLE semantic_recipe_versions ADD COLUMN IF NOT EXISTS item_snapshot_json JSON DEFAULT '[]'")
+    conn.execute("ALTER TABLE semantic_recipe_versions ADD COLUMN IF NOT EXISTS sample_filename VARCHAR")
+    conn.execute("ALTER TABLE semantic_template_versions ADD COLUMN IF NOT EXISTS item_snapshot_json JSON DEFAULT '[]'")
+    conn.execute("ALTER TABLE semantic_folder_bindings ADD COLUMN IF NOT EXISTS revision INTEGER DEFAULT 1")
+
+
+def ensure_semantic_vocabulary_schema(conn: duckdb.DuckDBPyConnection) -> None:
+    """Embedded development equivalent of additive migration 0025."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS semantic_vocabulary_entries (
+            id VARCHAR PRIMARY KEY, key VARCHAR NOT NULL, label VARCHAR NOT NULL,
+            description VARCHAR NOT NULL DEFAULT '', target_kind VARCHAR NOT NULL,
+            target_id VARCHAR NOT NULL, scope_project_id VARCHAR, aliases_json JSON NOT NULL,
+            revision INTEGER NOT NULL DEFAULT 1, enabled BOOLEAN NOT NULL DEFAULT true,
+            created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL,
+            created_by VARCHAR NOT NULL, updated_by VARCHAR NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS semantic_vocabulary_terms (
+            entry_id VARCHAR NOT NULL, scope_key VARCHAR NOT NULL, target_kind VARCHAR NOT NULL,
+            normalized_term VARCHAR NOT NULL,
+            PRIMARY KEY (scope_key, target_kind, normalized_term)
+        );
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_semantic_vocabulary_entries_scope ON semantic_vocabulary_entries(scope_project_id, target_kind, enabled)")
+
+
+def ensure_semantic_review_schema(conn: duckdb.DuckDBPyConnection) -> None:
+    """Embedded development equivalent of additive migration 0026."""
+    conn.execute("""CREATE TABLE IF NOT EXISTS semantic_import_review_items (
+        id VARCHAR PRIMARY KEY, binding_id VARCHAR NOT NULL, binding_revision INTEGER NOT NULL,
+        load_case_id VARCHAR NOT NULL, relative_path VARCHAR NOT NULL, source_sha256 VARCHAR, source_size BIGINT,
+        scan_status VARCHAR NOT NULL, review_state VARCHAR NOT NULL, candidates_json JSON NOT NULL,
+        selected_recipe_id VARCHAR, selected_recipe_version INTEGER, template_id VARCHAR, template_version INTEGER,
+        validated_sha256 VARCHAR, validation_summary_json JSON, error_json JSON, revision INTEGER NOT NULL DEFAULT 1,
+        previous_confirmed_analysis_run_id VARCHAR, confirmed_analysis_run_id VARCHAR,
+        created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL, created_by VARCHAR NOT NULL, updated_by VARCHAR NOT NULL,
+        validated_at TIMESTAMP, validated_by VARCHAR, confirmed_at TIMESTAMP, confirmed_by VARCHAR,
+        UNIQUE(binding_id, load_case_id, relative_path)
+    )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_semantic_review_binding_updated ON semantic_import_review_items(binding_id, updated_at DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_semantic_review_load_case_state ON semantic_import_review_items(load_case_id, review_state, updated_at DESC)")
+    conn.execute("""CREATE TABLE IF NOT EXISTS semantic_import_review_events (
+        id VARCHAR PRIMARY KEY, review_item_id VARCHAR NOT NULL, old_state VARCHAR, new_state VARCHAR NOT NULL,
+        revision INTEGER NOT NULL, prior_run_id VARCHAR, current_run_id VARCHAR, detail_json JSON NOT NULL,
+        occurred_at TIMESTAMP NOT NULL, actor VARCHAR NOT NULL
+    )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_semantic_review_events_item ON semantic_import_review_events(review_item_id, occurred_at DESC)")
 
 
 def ensure_modeling_template_schema(conn: duckdb.DuckDBPyConnection) -> None:

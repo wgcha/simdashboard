@@ -29,7 +29,11 @@ function adaptAuthStatus(value: unknown) {
   requireStringField(item, 'mode', 'authStatus')
   requireBooleanField(item, 'authentication_required', 'authStatus')
   if (!['disabled', 'password', 'oidc'].includes(item.mode as string)) throw new TypeError('authStatus.mode 응답 값이 올바르지 않습니다.')
-  return item as { mode: 'disabled' | 'password' | 'oidc'; authentication_required: boolean; oidc_start_url: string | null }
+  if (item.registration_enabled !== undefined && typeof item.registration_enabled !== 'boolean') throw new TypeError('authStatus.registration_enabled 응답 형식이 올바르지 않습니다.')
+  if (item.setup_required !== undefined && typeof item.setup_required !== 'boolean') throw new TypeError('authStatus.setup_required 응답 형식이 올바르지 않습니다.')
+  if (item.setup_reason !== undefined && item.setup_reason !== null && typeof item.setup_reason !== 'string') throw new TypeError('authStatus.setup_reason 응답 형식이 올바르지 않습니다.')
+  const setupRequired = item.setup_required === true || (item.setup_required === undefined && item.mode === 'disabled')
+  return { ...item, registration_enabled: item.registration_enabled === true, setup_required: setupRequired, setup_reason: typeof item.setup_reason === 'string' ? item.setup_reason : undefined } as { mode: 'disabled' | 'password' | 'oidc'; authentication_required: boolean; registration_enabled: boolean; setup_required: boolean; setup_reason?: string | null; oidc_start_url: string | null }
 }
 
 function adaptLogin(value: unknown) {
@@ -318,12 +322,14 @@ export const api = {
   saveWorkspaceLayout: persistWorkspaceLayout,
   workspaceLayoutVersions: async (projectId: string, kind: 'portfolio' | 'workflow') =>
     adaptWorkspaceLayoutVersions(unwrapGenerated(await apiClient.GET('/api/projects/{project_id}/workspace-layouts/{layout_kind}/versions', { params: { path: { project_id: projectId, layout_kind: kind } } }))),
-  adminUsers: async (params = new URLSearchParams()) => adaptAdminUsers(unwrapGenerated(await apiClient.GET('/api/admin/users', { params: { query: { status: adminUserStatus(params.get('status')), search: params.get('search') ?? undefined } } }))),
+  adminUsers: async (params = new URLSearchParams(), signal?: AbortSignal) => adaptAdminUsers(unwrapGenerated(await apiClient.GET('/api/admin/users', { params: { query: { status: adminUserStatus(params.get('status')), q: params.get('q') ?? undefined } }, signal }))),
   updateUserStatus: async (userId: string, payload: { account_status: 'PENDING' | 'ACTIVE' | 'SUSPENDED'; expected_updated_at: string; reason: string }) =>
     adaptMutationResult(unwrapGenerated(await apiClient.PATCH('/api/admin/users/{user_id}/status', { params: { path: { user_id: userId } }, body: payload })), 'updateUserStatus'),
   updateGlobalAdmin: async (userId: string, payload: { is_global_admin: boolean; expected_updated_at: string; reason: string }) =>
     adaptMutationResult(unwrapGenerated(await apiClient.PATCH('/api/admin/users/{user_id}/global-admin', { params: { path: { user_id: userId } }, body: payload })), 'updateGlobalAdmin'),
-  projectMembers: async (projectId: string) => adaptProjectMembers(unwrapGenerated(await apiClient.GET('/api/projects/{project_id}/members', { params: { path: { project_id: projectId } } }))),
+  projectMembers: async (projectId: string, signal?: AbortSignal) => adaptProjectMembers(unwrapGenerated(await apiClient.GET('/api/projects/{project_id}/members', { params: { path: { project_id: projectId } }, signal }))),
+  createProjectMember: async (projectId: string, userId: string, role: ProjectRole) =>
+    unwrapGenerated(await apiClient.POST('/api/projects/{project_id}/members', { params: { path: { project_id: projectId } }, body: { user_id: userId, role } })),
   updateProjectMember: async (projectId: string, userId: string, role: ProjectRole, expectedUpdatedAt?: string) =>
     adaptMutationResult(unwrapGenerated(await apiClient.PATCH('/api/projects/{project_id}/members/{user_id}', { params: { path: { project_id: projectId, user_id: userId } }, body: { role, expected_updated_at: expectedUpdatedAt } })), 'updateProjectMember'),
   deleteProjectMember: async (projectId: string, userId: string) => adaptMutationResult(unwrapGenerated(await apiClient.DELETE('/api/projects/{project_id}/members/{user_id}', { params: { path: { project_id: projectId, user_id: userId } } })), 'deleteProjectMember'),

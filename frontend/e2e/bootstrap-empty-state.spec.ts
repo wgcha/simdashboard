@@ -24,7 +24,7 @@ const menuPolicy = {
 
 test('빈 데이터에서도 전역 관리자는 초기 설정과 전역 테마를 사용할 수 있다', async ({ page }) => {
   const bootstrapRequests = { health: 0, projects: 0, workflows: 0, menuPolicy: 0 }
-  await page.route('**/api/auth/status', (route) => route.fulfill({ json: { mode: 'disabled', authentication_required: false, oidc_start_url: null } }))
+  await page.route('**/api/auth/status', (route) => route.fulfill({ json: { mode: 'disabled', authentication_required: false, registration_enabled: false, setup_required: false, oidc_start_url: null } }))
   await page.route('**/api/auth/me', (route) => route.fulfill({ json: globalAdmin }))
   await page.route('**/api/health', (route) => { bootstrapRequests.health += 1; return route.fulfill({ json: { status: 'ok', database_backend: 'postgresql' } }) })
   await page.route('**/api/projects', (route) => { bootstrapRequests.projects += 1; return route.fulfill({ json: [] }) })
