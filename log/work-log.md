@@ -454,3 +454,11 @@
 
 - 사용자 요청에 따라 완료·검수된 의미 검토/영향 분석 기능, HTTP UUID 호환 수정, 전역 테마 수정과 관련 검사·문서를 `codex/windows-one-click-deploy`에 커밋·푸시한다. 별도 진행 중인 설치/배포 스크립트 변경과 로컬 설정·DB·QA 산출물은 제외한다. 문서 지도는 신규 기능 링크만 포함하고 무관한 경로 변경은 보존한다.
 - 사내 소스 PC는 기존 `update.bat`의 백업·0026 migration·프런트엔드 빌드 절차로 갱신한다. 새 오프라인 설치 패키지 제작이나 사내/Server 2022 실기 완료를 뜻하지 않는다.
+
+## 2026-09-15 승인 개발분 main 통합 준비
+
+- 사용자 요청에 따라 최신 원격 브랜치와 승인·검수 기록을 대조했다. `origin/main` 이후 완료 개발은 `codex/windows-one-click-deploy`의 `0f8407b5`부터 `b8b00e23`까지 20개 커밋에 모여 있다. 다른 일반 브랜치는 이미 main에 포함되어 있고, 과거 백업 브랜치의 변경은 patch-equivalent여서 추가 병합하지 않는다.
+- 기존 작업 폴더의 미커밋 설치/배포 변경 12개 파일과 사용자 상태를 보존하고, 승인된 커밋의 별도 worktree에서 통합을 준비했다. 계정·도우미·VOC·분석/영상·Windows 배포·의미 매핑/사전/검토·HTTP UUID/테마의 기존 승인 범위가 대상이다.
+- 원격 CI의 YAML plain scalar 안 `--only-binary=:all:` 파싱 문제를 block scalar로 고쳤다. Windows .NET의 loopback 프록시 우회를 고려하여 프록시 대조군을 문서용 주소로 변경하되 강제 프록시는 닫힌 loopback 포트를 유지한다. 배포 smoke의 deep route는 시작 스크립트 기본 base `/home/`와 일치시켰다.
+- 격리 소스에서 배포 Python 검사 177개 통과/2개 건너뜀, 영구 경로 검사 2개 통과. PowerShell 배포 계약 자체 검사 8종, Git update/bootstrap/integration 검사와 수정한 local HTTP 검사를 통과했다. 최초 격리 사본의 런타임 부재 실패는 준비된 Python 참조 후 재검증했다.
+- 이 기록 시점에는 GitHub PR CI 재검증과 main 병합이 남아 있다. 최종 원격 검증·병합 결과는 통합 PR에 기록한다. 실제 사용자 DB/서비스 및 폐쇄망 Server 2022 신규 설치·업데이트·재부팅을 실행한 것이 아니다.

@@ -146,7 +146,7 @@ jobs:
             if ($backendHealth.status -ne 'ok' -or $backendHealth.database_backend -ne 'duckdb') {
               throw 'Backend health did not report the disposable DuckDB profile.'
             }
-            $web = Invoke-LocalHttp -Uri "http://127.0.0.1:$frontendPort/workspace/overview" -TimeoutMilliseconds 10000
+            $web = Invoke-LocalHttp -Uri "http://127.0.0.1:$frontendPort/home/workspace/overview" -TimeoutMilliseconds 10000
             if ($web.StatusCode -ne 200 -or $web.Content -notmatch '<div id="root">') {
               throw 'The frontend deep route did not serve the application shell.'
             }

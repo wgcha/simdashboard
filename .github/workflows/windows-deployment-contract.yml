@@ -91,7 +91,8 @@ jobs:
         with:
           python-version-file: .python-version
       - name: Collect Windows wheels for every locked dependency
-        run: python -m pip download --only-binary=:all: --dest wheelhouse -r backend/requirements.lock
+        run: |
+          python -m pip download --only-binary=:all: --dest wheelhouse -r backend/requirements.lock
       - name: Install and import using only the collected wheels
         run: |
           python -m venv offline-validation

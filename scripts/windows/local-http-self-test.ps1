@@ -81,7 +81,12 @@ try {
 
     [Net.WebRequest]::DefaultWebProxy = $badProxy
     Write-Verbose 'Checking that a legacy request is forced through the default proxy.'
-    $legacyRequest = [Net.HttpWebRequest]::Create("http://127.0.0.1:$port/ok")
+    # HttpWebRequest on Windows PowerShell/.NET Framework can unconditionally
+    # bypass a configured proxy for loopback destinations.  Use a documentation
+    # address here so this check exercises the default-proxy path; the forced
+    # proxy still points to a closed local port, so it never makes an external
+    # connection.
+    $legacyRequest = [Net.HttpWebRequest]::Create('http://192.0.2.1/')
     $legacyRequest.Timeout = 500
     try {
         $legacyResponse = $legacyRequest.GetResponse()
