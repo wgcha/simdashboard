@@ -133,7 +133,9 @@ def test_result_import_history_paginates_and_enforces_query_contract() -> None:
             conn.execute("DELETE FROM folder_import_jobs WHERE id LIKE ?", [f"{prefix}-%"])
 
 
-def test_result_import_history_prevents_cross_project_load_case_read(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_result_import_history_prevents_cross_project_load_case_read(
+    monkeypatch: pytest.MonkeyPatch, password_auth_bootstrap_admin: tuple[str, str, str]
+) -> None:
     initialize_database()
     suffix = uuid4().hex[:10]
     now = datetime.now(timezone.utc).replace(tzinfo=None)

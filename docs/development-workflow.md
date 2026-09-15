@@ -83,6 +83,7 @@ pnpm run generate:api
 ### 3.3 Frontend feature
 
 - canonical workspace URL은 `features/navigation/workspaceRouteRegistry.ts`에만 정의한다.
+- 다른 작업 화면으로 이동하며 문맥을 바꿀 때는 목표 URL과 문맥을 함께 전달한다. 목표 문맥에 없는 Run·페이지 query는 제거하고, 자동 문맥 동기화가 비의뢰 화면의 방문 기록을 추가하지 않게 한다.
 - route-to-screen 연결은 `app/workspace/WorkspaceRouteRenderer.tsx` 또는 lazy route module을 사용한다.
 - feature의 화면·상태·API adapter·스타일을 가까이 둔다.
 - 새 상태를 `App.tsx`에 먼저 추가하지 말고 feature hook/controller가 소유하게 한다.
