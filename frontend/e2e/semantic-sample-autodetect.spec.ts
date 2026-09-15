@@ -42,7 +42,7 @@ test('fields beyond the first page remain mappable and reset ignores a delayed i
   await inspector.getByRole('checkbox', { name: '#/field100 선택', exact: true }).check()
   await inspector.getByRole('button', { name: /선택 필드 매핑 추가/ }).click()
   await expect(screen.getByLabel('원본 필드', { exact: true })).toHaveCount(1)
-  await expect(screen.getByText(/매핑/).first()).toBeVisible()
+  await expect(screen.getByLabel('원본 필드', { exact: true })).toHaveValue('#/field100')
   await inspector.getByRole('button', { name: /필드 더 보기/ }).click()
   await inspector.getByRole('button', { name: /필드 더 보기/ }).click()
   await expect(inspector).toContainText('#/field304')

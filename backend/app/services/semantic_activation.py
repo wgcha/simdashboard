@@ -44,7 +44,7 @@ def activate_bundle(conn: Any, payload: dict, actor: str, now: Any, audit: Calla
             raise SemanticValidationError("SEMANTIC_SAMPLE_REQUIRED", "검증 샘플을 저장한 레시피가 필요합니다.")
         parsed = preview_recipe(decoded(recipe[0]), decoded(recipe[1]), str(recipe[2]), bytes(recipe[3]))
         widgets = resolve_widgets(decoded(template[0]), decoded(template[1]), parsed)
-        invalid = [widget for widget in widgets if widget["status"] != "READY"]
+        invalid = [widget for widget in widgets if widget["status"] not in {"READY", "NO_VALUE"}]
         if invalid:
             raise SemanticValidationError("SEMANTIC_WIDGET_VALIDATION_FAILED", "샘플의 위젯 연결을 확인하세요: " + ", ".join(f"{w['title']} ({w['status']})" for w in invalid))
         if not impact["activation_allowed"]:

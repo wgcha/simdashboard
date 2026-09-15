@@ -159,7 +159,7 @@ def save_item(payload: ItemSave, request: Request) -> dict[str, Any]:
         previous = mapping_repository.previous_item_definition(conn, item_id)
         if previous:
             old = _json(previous[0])
-            changed = any(old.get(field) != definition.get(field) for field in ("key", "kind", "data_type", "unit", "dimensions"))
+            changed = any(old.get(field) != definition.get(field) for field in ("key", "kind", "data_type", "unit", "dimensions", "components"))
             if changed:
                 usage = mapping_repository.item_usage(conn, item_id)
                 if usage["recipes"] or usage["templates"]:
@@ -267,7 +267,7 @@ def save_configuration(payload: ConfigurationSave, request: Request) -> dict[str
                     parsed = preview_recipe(recipe_definition, definitions, filename, content)
                 else:
                     content = None
-            if content is not None and any(widget.get("status") != "READY" for widget in resolve_widgets(payload.template.definition, definitions, parsed)):
+            if content is not None and any(widget.get("status") not in {"READY", "NO_VALUE"} for widget in resolve_widgets(payload.template.definition, definitions, parsed)):
                 raise HTTPException(422, {"code": "SEMANTIC_WIDGET_NOT_READY"})
             recipe = _save_version(conn, "recipe", payload.recipe.id, payload.recipe.name, recipe_definition, payload.recipe.expected_version, request.state.principal.user_id)
             if content is not None:
@@ -513,7 +513,7 @@ def _import(conn: Any, request: Request, filename: str, content: bytes, recipe_i
     except Exception as error: raise _error(error) from error
     try: widgets = resolve_widgets(template, template_items, parsed) if template_id else []
     except Exception as error: raise _error(error) from error
-    if any(widget.get("status") != "READY" for widget in widgets):
+    if any(widget.get("status") not in {"READY", "NO_VALUE"} for widget in widgets):
         raise HTTPException(422, {"code": "SEMANTIC_WIDGET_INPUT_INVALID", "widgets": widgets})
     digest = hashlib.sha256(content).hexdigest(); now = _now()
     command = {"project_id": target.project_id, "request_id": target.request_id, "load_case_id": load_case_id, "source_type": "SEMANTIC_RECIPE", "source_name": f"semantic/{recipe_id}/{recipe_version}/{filename}", "source_checksum": digest, "source_run_id": f"semantic:{recipe_id}:{recipe_version}:{digest}", "conflict_policy": "SKIP", "parser_version": "semantic-mapping-v2" if recipe.get("reader_version") == 2 else "semantic-mapping-v1", "parsed": parsed, "actor": request.state.principal.display_name, "metadata": {"recipe_id": recipe_id, "recipe_version": recipe_version, "template_id": template_id, "template_version": template_version, "observations": parsed.get("observations", []), "source_filename": filename}}
@@ -589,7 +589,7 @@ def refresh_binding(binding_id: str, request: Request) -> dict[str, Any]:
                 if binding.get("template_id"):
                     _template_version, template, template_items = _version(conn, kind="template", ident=str(binding["template_id"]))
                     widgets = resolve_widgets(template, template_items, parsed)
-                    if any(widget.get("status") != "READY" for widget in widgets):
+                    if any(widget.get("status") not in {"READY", "NO_VALUE"} for widget in widgets):
                         raise HTTPException(422, {"code": "SEMANTIC_WIDGET_INPUT_INVALID", "widgets": widgets})
                 prior_review = mapping_repository.review_exists(conn, binding["id"], binding["load_case_id"], path.name)
                 if prior_review:

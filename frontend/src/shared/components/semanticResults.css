@@ -5,4 +5,5 @@
 .semantic-result-grid { align-items:start; }
 .semantic-result-widget.type-table { max-height:480px; overflow:auto; }
 .semantic-result-table td:first-child { white-space:normal; overflow-wrap:anywhere; min-width:120px; max-width:none; }
+.semantic-result-table td:nth-child(3) { white-space:normal; overflow-wrap:anywhere; min-width:100px; }
 .semantic-result-table th { position:sticky; top:0; background:var(--color-surface-2); z-index:1; }

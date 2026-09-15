@@ -49,7 +49,15 @@ def _semantic_snapshot(value: Any) -> Any:
         return None
     fields = ("id", "key", "kind", "data_type", "unit", "dimensions")
     return sorted(
-        ({field: entry.get(field) for field in fields} for entry in value if isinstance(entry, dict)),
+        (
+            {
+                **{field: entry.get(field) for field in fields},
+                # Missing legacy components and an explicit [] mean the same thing.
+                "components": entry.get("components") or [],
+            }
+            for entry in value
+            if isinstance(entry, dict)
+        ),
         key=lambda entry: str(entry.get("id", "")),
     )
 
@@ -129,7 +137,7 @@ def _validate_pair(conn: Any, recipe_id: str, recipe_version: int | None, templa
         return {**pair, "status": "BLOCK", "reason_code": error.code, "widgets": []}
     except (TypeError, ValueError, json.JSONDecodeError):
         return {**pair, "status": "BLOCK", "reason_code": "SNAPSHOT_UNREADABLE", "widgets": []}
-    invalid = [widget for widget in widgets if widget.get("status") != "READY"]
+    invalid = [widget for widget in widgets if widget.get("status") not in {"READY", "NO_VALUE"}]
     return {**pair, "status": "READY" if not invalid else "BLOCK", "reason_code": None if not invalid else "WIDGET_INPUT_INVALID", "widgets": widgets}
 
 

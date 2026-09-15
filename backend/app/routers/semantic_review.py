@@ -385,7 +385,7 @@ def revalidate(item_id: str, payload: RevalidateBody, request: Request) -> dict[
             widgets = resolve_widgets(template, template_items, parsed) if template_id else []
         except SemanticValidationError as error:
             raise HTTPException(422, {"code": error.code, "message": str(error)}) from error
-        if any(widget.get("status") != "READY" for widget in widgets): raise HTTPException(422, {"code": "SEMANTIC_WIDGET_INPUT_INVALID", "widgets": widgets})
+        if any(widget.get("status") not in {"READY", "NO_VALUE"} for widget in widgets): raise HTTPException(422, {"code": "SEMANTIC_WIDGET_INPUT_INVALID", "widgets": widgets})
         stale: dict[str, Any] | None = None
         updated: dict[str, Any] | None = None
         with review_repository.review_transaction(conn):
@@ -447,7 +447,7 @@ def confirm(item_id: str, payload: ConfirmBody, request: Request) -> dict[str, A
                 template, template_items = _exact_template(conn, current.get("template_id"), current.get("template_version"), recipe_items)
                 parsed = preview_recipe(recipe, recipe_items, str(current["relative_path"]), content)
                 widgets = resolve_widgets(template, template_items, parsed) if current.get("template_id") else []
-                if any(widget.get("status") != "READY" for widget in widgets): raise HTTPException(422, {"code": "SEMANTIC_WIDGET_INPUT_INVALID", "widgets": widgets})
+                if any(widget.get("status") not in {"READY", "NO_VALUE"} for widget in widgets): raise HTTPException(422, {"code": "SEMANTIC_WIDGET_INPUT_INVALID", "widgets": widgets})
                 target = SQLResultIngestionQuery(conn).get_result_ingestion_target(str(current["load_case_id"]))
                 if target is None: raise HTTPException(404, {"code": "LOAD_CASE_NOT_FOUND"})
                 command = {"project_id": target.project_id, "request_id": target.request_id, "load_case_id": current["load_case_id"], "source_type": "SEMANTIC_RECIPE", "source_name": f"semantic/{current['selected_recipe_id']}/{current['selected_recipe_version']}/{current['relative_path']}", "source_checksum": digest, "source_run_id": f"semantic:{current['selected_recipe_id']}:{current['selected_recipe_version']}:{digest}", "conflict_policy": "SKIP", "parser_version": "semantic-mapping-v1", "parsed": parsed, "actor": request.state.principal.display_name, "metadata": {"recipe_id": current["selected_recipe_id"], "recipe_version": current["selected_recipe_version"], "template_id": current.get("template_id"), "template_version": current.get("template_version"), "observations": parsed.get("observations", []), "source_filename": current["relative_path"]}}

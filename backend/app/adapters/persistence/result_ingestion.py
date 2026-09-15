@@ -444,9 +444,13 @@ class SQLResultIngestionUnitOfWork(ResultIngestionUnitOfWork):
         for item in parsed["scalars"]:
             value_double = item["value"] if item["data_type"] == "FLOAT" else None
             value_integer = item["value"] if item["data_type"] == "INTEGER" else None
-            value_text = str(item["value"]) if item["data_type"] not in {"FLOAT", "INTEGER"} else None
+            value_text = (
+                str(item["value"])
+                if item["value"] is not None and item["data_type"] not in {"FLOAT", "INTEGER"}
+                else None
+            )
             threshold = float(item["threshold"]) if item["threshold"] is not None else None
-            if threshold is not None and item["data_type"] in {"FLOAT", "INTEGER"}:
+            if item["value"] is not None and threshold is not None and item["data_type"] in {"FLOAT", "INTEGER"}:
                 verdict = "FAIL" if float(item["value"]) >= threshold else "PASS"
             elif item["data_type"] == "VERDICT":
                 verdict = str(item["value"])

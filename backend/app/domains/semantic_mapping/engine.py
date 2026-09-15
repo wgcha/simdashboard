@@ -12,7 +12,14 @@ from collections import defaultdict
 from pathlib import PurePath
 from typing import Any
 
-from .reader_v2 import INPUT_V2_MAX_BYTES, LEGACY_CSV_FIELD_LIMIT, ReaderV2Error, json_pointer_get, read as read_v2
+from .reader_v2 import (
+    INPUT_V2_MAX_BYTES,
+    LEGACY_CSV_FIELD_LIMIT,
+    ReaderV2Error,
+    json_pointer_get,
+    pointer_unescape,
+    read as read_v2,
+)
 
 ENGINE_VERSION = "semantic-1"
 MAX_BYTES = 5_000_000
@@ -108,7 +115,7 @@ def _items(items: list[dict]) -> dict[str, dict]:
         item.setdefault("dimensions", [])
         if not isinstance(item["key"], str) or not _KEY.fullmatch(item["key"]):
             _fail("ITEM_INVALID", "결과 변수 키는 영문자로 시작하는 영문·숫자·._- 조합이어야 합니다.")
-        if not isinstance(item["kind"], str) or item["kind"] not in {"scalar", "curve", "image", "video"}:
+        if not isinstance(item["kind"], str) or item["kind"] not in {"scalar", "vector", "curve", "image", "video"}:
             _fail("ITEM_INVALID", "지원하지 않는 결과 항목 유형입니다.")
         if not isinstance(item["data_type"], str) or item["data_type"] not in {"FLOAT", "INTEGER", "TEXT", "BOOLEAN"}:
             _fail("ITEM_INVALID", "지원하지 않는 자료형입니다.")
@@ -117,6 +124,12 @@ def _items(items: list[dict]) -> dict[str, dict]:
             _fail("ITEM_INVALID", "표시명과 단위를 올바르게 지정하세요.")
         if not isinstance(dims, list) or len(dims) > 8 or any(not isinstance(d, str) or not _KEY.fullmatch(d) for d in dims) or len(dims) != len(set(dims)):
             _fail("ITEM_INVALID", "차원 이름은 중복 없는 최대 8개 변수 키여야 합니다.")
+        components = item.get("components", [])
+        if item["kind"] == "vector":
+            if item["data_type"] not in {"FLOAT", "INTEGER"} or not isinstance(components, list) or not components or any(not isinstance(value, str) or not value.strip() for value in components) or len(components) != len(set(components)):
+                _fail("ITEM_INVALID", "벡터는 순서 있는 고유 성분명과 숫자 자료형이 필요합니다.")
+        elif components:
+            _fail("ITEM_INVALID", "성분은 벡터 항목에만 지정할 수 있습니다.")
         if any(existing["key"] == item["key"] for existing in result.values()):
             _fail("ITEM_INVALID", "서로 다른 항목에 같은 결과 변수 키를 사용할 수 없습니다.")
         result[item["id"]] = item
@@ -204,8 +217,10 @@ def _validate_recipe_v2(recipe: dict, items: list[dict]) -> dict:
             _fail("FORMAT_UNSUPPORTED", "미디어는 안전한 미디어 등록 경로로 연결하세요.")
         _v2_pointer(mapping.get("source"))
         mapping.setdefault("missing", "skip")
-        if mapping["missing"] not in ("error", "skip"):
-            _fail("MISSING_POLICY_INVALID", "결측 정책은 오류 또는 건너뛰기여야 합니다.")
+        if mapping["missing"] not in ("error", "skip", "preserve"):
+            _fail("MISSING_POLICY_INVALID", "결측 정책은 오류, 건너뛰기 또는 보존이어야 합니다.")
+        if mapping["missing"] == "preserve" and item["kind"] == "curve":
+            _fail("MISSING_POLICY_INVALID", "결측 보존은 스칼라 또는 벡터 결과에만 사용할 수 있습니다.")
         if mapping.get("aggregate", "none") not in ("none", "max", "min", "mean"):
             _fail("AGGREGATE_INVALID", "지원하지 않는 집계입니다.")
         dimensions = mapping.get("dimensions", {})
@@ -222,6 +237,8 @@ def _validate_recipe_v2(recipe: dict, items: list[dict]) -> dict:
             if item["data_type"] not in {"FLOAT", "INTEGER"} or mapping.get("aggregate", "none") != "none":
                 _fail("TYPE_MISMATCH", "곡선에는 숫자 값과 집계하지 않는 매핑이 필요합니다.")
             convert_unit(0, mapping.get("x_unit", "s"), mapping.get("target_x_unit", mapping.get("x_unit", "s")))
+        if item["kind"] == "vector" and mapping.get("aggregate", "none") != "none":
+            _fail("TYPE_MISMATCH", "벡터에는 집계를 사용할 수 없습니다.")
         if item["data_type"] in {"FLOAT", "INTEGER"}:
             convert_unit(0, mapping.get("source_unit", item["unit"]), item["unit"])
         elif mapping.get("aggregate", "none") != "none":
@@ -281,6 +298,8 @@ def validate_recipe(recipe: dict, items: list[dict]) -> dict:
             if item["data_type"] not in {"FLOAT", "INTEGER"} or mapping.get("aggregate", "none") != "none":
                 _fail("TYPE_MISMATCH", "곡선에는 숫자 값과 집계하지 않는 매핑이 필요합니다.")
             convert_unit(0, mapping.get("x_unit", "s"), mapping.get("target_x_unit", mapping.get("x_unit", "s")))
+        if item["kind"] == "vector":
+            _fail("FORMAT_UNSUPPORTED", "벡터는 reader_version 2 JSON Pointer 레시피에서만 지원합니다.")
         if item["data_type"] in {"FLOAT", "INTEGER"}:
             convert_unit(0, mapping.get("source_unit", item["unit"]), item["unit"])
         elif mapping.get("aggregate", "none") != "none":
@@ -397,6 +416,62 @@ def _v2_flatten(value: Any, pointer: str = "#") -> list[tuple[str, Any]]:
     return result
 
 
+def _v2_arrays(value: Any, pointer: str = "#") -> list[tuple[str, list[Any]]]:
+    """Return nested arrays as well as traversing to their leaf values."""
+    found: list[tuple[str, list[Any]]] = []
+    pending = [(pointer, value)]
+    while pending:
+        current_pointer, current = pending.pop()
+        if isinstance(current, dict):
+            pending.extend(
+                (current_pointer + "/" + key.replace("~", "~0").replace("/", "~1"), child)
+                for key, child in current.items()
+            )
+        elif isinstance(current, list):
+            found.append((current_pointer, current))
+            pending.extend(
+                (current_pointer + "/" + str(index), child)
+                for index, child in enumerate(current)
+            )
+    return found
+
+
+def _pointer_exists(value: Any, pointer: str) -> bool:
+    """Distinguish an explicit JSON null from a path that does not resolve."""
+    if pointer == "#":
+        return True
+    if not isinstance(pointer, str) or not pointer.startswith("#/"):
+        return False
+    current = value
+    for encoded in pointer[2:].split("/"):
+        token = pointer_unescape(encoded)
+        if isinstance(current, dict) and token in current:
+            current = current[token]
+        elif isinstance(current, list) and token.isdigit() and int(token) < len(current):
+            current = current[int(token)]
+        else:
+            return False
+    return True
+
+
+def _is_blank(value: Any) -> bool:
+    return value is None or (isinstance(value, str) and not value.strip())
+
+
+def _has_observed_value(value: Any) -> bool:
+    if isinstance(value, list):
+        return any(_has_observed_value(part) for part in value)
+    return value is not None
+
+
+def _vector_array(value: Any) -> bool:
+    return isinstance(value, list) and all(
+        part is None
+        or isinstance(part, (str, int, float, bool))
+        for part in value
+    )
+
+
 def _display_path(pointer: str) -> str:
     if pointer == "#":
         return "#"
@@ -460,22 +535,65 @@ def inspect_sample(
         _fail(error.code, error.message)
     rows = parsed["rows"]
     all_fields: dict[str, dict[str, Any]] = {}
+    arrays: dict[str, dict[str, Any]] = {}
     for row in rows:
+        for source, value in _v2_arrays(row):
+            state = arrays.setdefault(source, {"present": 0, "null_count": 0, "empty_count": 0, "value": None, "has_value": False, "lengths": set(), "valid": True})
+            state["present"] += 1
+            state["null_count"] += sum(part is None for part in value)
+            state["empty_count"] += sum(isinstance(part, str) and not part.strip() for part in value)
+            state["valid"] &= _vector_array(value)
+            if value:
+                state["lengths"].add(len(value))
+            if not state["has_value"] or (
+                not any(not _is_blank(part) for part in state["value"] or [])
+                and (
+                    any(not _is_blank(part) for part in value)
+                    or (not state["value"] and bool(value))
+                )
+            ):
+                state["value"] = value
+                state["has_value"] = True
         for source, value in _v2_flatten(row):
+            # Arrays are counted once at their parent pointer above.  Empty
+            # arrays otherwise appear as a leaf and would be double-counted.
+            if isinstance(value, list):
+                continue
             label = _display_path(source)
             detail = all_fields.setdefault(source, {"source": source, "label": label, "value": None, "data_types": set(), "present": 0, "null_count": 0, "empty_count": 0, "has_value": False, "mappable": False, "unit": _guess_unit(label)})
             detail["present"] += 1
             detail["null_count"] += value is None
-            detail["empty_count"] += isinstance(value, str) and value == ""
+            detail["empty_count"] += isinstance(value, str) and not value.strip()
             detail["data_types"].add(_value_type(value))
             detail["mappable"] |= not isinstance(value, (dict, list))
             # ``None`` is a known null, not a missing field; false and zero are
             # likewise retained as representative values.
-            if not detail["has_value"] or (detail["value"] is None and value is not None):
+            if not detail["has_value"] or (_is_blank(detail["value"]) and not _is_blank(value)):
                 detail["value"] = value
                 detail["has_value"] = True
+    inspection_warnings = list(parsed["warnings"])
+    for source, state in arrays.items():
+        label = _display_path(source)
+        detail = all_fields.setdefault(source, {"source": source, "label": label, "value": None, "data_types": set(), "present": 0, "null_count": 0, "empty_count": 0, "has_value": False, "mappable": False, "unit": _guess_unit(label)})
+        scalar_types = set(detail["data_types"]) - {"null"}
+        mixed_shape = bool(scalar_types) or len(state["lengths"]) > 1 or not state["valid"]
+        detail["present"] += state["present"]
+        detail["null_count"] += state["null_count"]
+        detail["empty_count"] += state["empty_count"]
+        detail["data_types"].add("array")
+        if not detail["has_value"] or (_is_blank(detail["value"]) and state["has_value"]):
+            detail["value"] = state["value"]
+            detail["has_value"] = state["has_value"]
+        if not mixed_shape and len(state["lengths"]) == 1:
+            length = next(iter(state["lengths"]))
+            detail.update(vector_candidate=True, components=["X", "Y", "Z"] if length == 3 else [str(index + 1) for index in range(length)], mappable=True, data_type_override="array")
+        else:
+            detail["mappable"] = False if mixed_shape else detail["mappable"]
+            if mixed_shape:
+                detail["shape_mixed"] = True
+                inspection_warnings.append(f"MIXED_FIELD_SHAPE:{source}")
     ordered = [all_fields[source] for source in sorted(all_fields, key=lambda source: (_display_path(source).casefold(), source))]
-    details = [{"source": entry["source"], "label": entry["label"], "value": entry["value"], "data_type": _field_data_type(entry["data_types"]), "unit": entry["unit"], "missing": entry["present"] < len(rows), "missing_count": len(rows) - entry["present"], "null_count": entry["null_count"], "empty_count": entry["empty_count"], "mappable": entry["mappable"]} for entry in ordered]
+    details = [{"source": entry["source"], "label": entry["label"], "value": entry["value"], "data_type": entry.get("data_type_override", _field_data_type(entry["data_types"])), "unit": entry["unit"], "missing": entry["present"] < len(rows), "missing_count": len(rows) - entry["present"], "null_count": entry["null_count"], "empty_count": entry["empty_count"], "mappable": entry["mappable"], **({"vector_candidate": True, "components": entry["components"]} if entry.get("vector_candidate") else {}), **({"shape_mixed": True} if entry.get("shape_mixed") else {})} for entry in ordered]
     field_page = details[field_offset:field_offset + field_limit]
     row_page = rows[row_offset:row_offset + row_limit]
     suggestion = {"reader_version": 2, "format": parsed["format"], "encoding": parsed["encoding"], "delimiter": parsed["delimiter"], "header_row": parsed["header_row"], "records_path": parsed["records_path"], "input_layout": parsed["input_layout"]}
@@ -484,7 +602,7 @@ def inspect_sample(
         "row_count": len(rows), "field_count": len(details), "field_details": field_page,
         "row_offset": row_offset, "row_limit": row_limit, "field_offset": field_offset, "field_limit": field_limit,
         "has_more_rows": row_offset + len(row_page) < len(rows), "has_more_fields": field_offset + len(field_page) < len(details),
-        "warnings": parsed["warnings"], "recipe_suggestion": suggestion,
+        "warnings": inspection_warnings, "recipe_suggestion": suggestion,
     }
 
 
@@ -544,11 +662,22 @@ def preview_recipe(recipe: dict, items: list[dict], filename: str, content: byte
             if deadline is not None and index % 1024 == 0 and time.monotonic() > deadline:
                 _fail("EXECUTION_TIMEOUT", "v2 레시피 실행 시간이 30초 한도를 초과했습니다.")
             raw = get_value(row, mapping["source"])
-            if raw is None or raw == "":
+            blank_scalar = raw is None or raw == "" or (
+                mapping.get("missing") == "preserve"
+                and isinstance(raw, str)
+                and not raw.strip()
+            )
+            source_exists = not is_v2 or _pointer_exists(row, mapping["source"])
+            blank_vector = item["kind"] == "vector" and (
+                raw is None or (isinstance(raw, list) and all(_is_blank(part) for part in raw))
+            )
+            missing = blank_vector if item["kind"] == "vector" else blank_scalar
+            if missing:
                 if mapping.get("missing") == "skip":
                     skipped += 1
                     continue
-                _fail("VALUE_MISSING", f"{index}번째 레코드의 {mapping['source']} 값이 없습니다.")
+                if mapping.get("missing") != "preserve" or not source_exists:
+                    _fail("VALUE_MISSING", f"{index}번째 레코드의 {mapping['source']} 값이 없습니다.")
             dimensions = {}
             for name, path in mapping.get("dimensions", {}).items():
                 dim = get_value(row, path)
@@ -562,7 +691,20 @@ def preview_recipe(recipe: dict, items: list[dict], filename: str, content: byte
                 dimensions["series"] = str(series)
             group_key = _dimension_key(dimensions)
             dims_by_key[group_key] = dimensions
-            value = _typed(raw, item, mapping)
+            if item["kind"] == "vector":
+                if raw is None and mapping.get("missing") == "preserve" and source_exists:
+                    raw = [None] * len(item["components"])
+                if not isinstance(raw, list) or len(raw) != len(item["components"]):
+                    _fail("VECTOR_INVALID", "벡터 원본 배열 길이가 성분 정의와 다릅니다.")
+                value = [
+                    None if part is None or (isinstance(part, str) and not part.strip())
+                    else _typed(part, item, mapping)
+                    for part in raw
+                ]
+            elif missing:
+                value = None
+            else:
+                value = _typed(raw, item, mapping)
             if item["kind"] == "curve":
                 x = convert_unit(get_value(row, mapping["x_source"]), mapping.get("x_unit", "s"), mapping.get("target_x_unit", mapping.get("x_unit", "s")))
                 if groups[group_key] and x <= groups[group_key][-1]["x"]:
@@ -585,16 +727,31 @@ def preview_recipe(recipe: dict, items: list[dict], filename: str, content: byte
             observation = {"item_id": item["id"], "kind": item["kind"], "label": item["label"], "unit": item["unit"], "data_type": item["data_type"], "dimensions": dimensions, "variable_key": item["key"] + suffix}
             if item["kind"] == "curve":
                 observation.update(points=values, x_unit=mapping.get("target_x_unit", mapping.get("x_unit", "s")))
+            elif item["kind"] == "vector":
+                if len(values) != 1:
+                    _fail("DUPLICATE_RESULT", "벡터에는 하나의 관측만 허용됩니다.")
+                observation.update(
+                    value=values[0],
+                    components=item["components"],
+                    aggregate="none",
+                    value_status="MISSING" if all(value is None for value in values[0]) else "READY",
+                )
             else:
                 aggregate = mapping.get("aggregate", "none")
                 if len(values) > 1 and aggregate == "none":
                     _fail("DUPLICATE_RESULT", f"{item['label']}: 여러 값이 있습니다. 측정 차원 또는 명시적 집계를 지정하세요.")
+                if any(value is None for value in values) and aggregate != "none":
+                    _fail("VALUE_MISSING", "결측 값을 포함한 결과는 집계할 수 없습니다.")
                 value = max(values) if aggregate == "max" else min(values) if aggregate == "min" else math.fsum(values) / len(values) if aggregate == "mean" else values[0]
                 if isinstance(value, (float, int)) and not isinstance(value, bool):
                     _number(value)
-                if item["data_type"] == "INTEGER" and not float(value).is_integer():
+                if item["data_type"] == "INTEGER" and value is not None and not float(value).is_integer():
                     _fail("TYPE_MISMATCH", "집계 결과가 정수 항목의 자료형과 다릅니다.")
-                observation.update(value=value, aggregate=aggregate)
+                observation.update(
+                    value=value,
+                    aggregate=aggregate,
+                    value_status="MISSING" if value is None else "READY",
+                )
             observation_bytes += len(json.dumps(observation, ensure_ascii=False).encode("utf-8"))
             if observation_bytes > output_byte_limit:
                 _fail("OUTPUT_LIMIT", f"정규화 결과가 {output_byte_limit // (1024 * 1024)} MiB 한도를 초과했습니다.")
@@ -606,9 +763,19 @@ def preview_recipe(recipe: dict, items: list[dict], filename: str, content: byte
         common = {"variable_key": entry["variable_key"], "display_name": entry["label"], "unit": entry["unit"], "source_file": filename, "source_checksum": checksum, "result_group": "CUSTOM"}
         if entry["kind"] == "scalar":
             scalars.append({**common, "data_type": entry["data_type"], "value": entry["value"], "threshold": None})
-        else:
+        elif entry["kind"] == "vector":
+            # The canonical result store has scalar/curve/media rows only.  Keep
+            # one textual JSON evidence row per vector; typed vector observations
+            # remain in semantic provenance and are never expanded into components.
+            scalars.append({
+                **common,
+                "data_type": "TEXT",
+                "value": json.dumps(entry["value"], ensure_ascii=False, separators=(",", ":")),
+                "threshold": None,
+            })
+        elif entry["kind"] == "curve":
             curves.append({**common, "series_key": entry["dimensions"].get("series", "default"), "catalog_data_type": "TIME_SERIES", "x_label": "X", "x_unit": entry["x_unit"], "y_label": entry["label"], "y_unit": entry["unit"], "points": entry["points"]})
-    result = {"schema_id": "semantic-recipe", "schema_version": 1, "solver": "Recipe", "note": "", "scalars": scalars, "curves": curves, "media": [], "observations": observations, "summary": {"row_count": len(rows), "scalar_count": len(scalars), "curve_count": len(curves), "skipped_values": skipped}, "warnings": [f"결측 값 {skipped}개를 건너뛰었습니다."] if skipped else []}
+    result = {"schema_id": "semantic-recipe", "schema_version": 1, "solver": "Recipe", "note": "", "scalars": scalars, "curves": curves, "media": [], "observations": observations, "summary": {"row_count": len(rows), "scalar_count": sum(entry["kind"] == "scalar" for entry in observations), "curve_count": len(curves), "vector_count": sum(entry["kind"] == "vector" for entry in observations), "skipped_values": skipped}, "warnings": [f"결측 값 {skipped}개를 건너뛰었습니다."] if skipped else []}
     if len(json.dumps(result, ensure_ascii=False).encode("utf-8")) > output_byte_limit:
         _fail("OUTPUT_LIMIT", f"정규화 결과가 {output_byte_limit // (1024 * 1024)} MiB 한도를 초과했습니다.")
     return result
@@ -634,8 +801,23 @@ def validate_template(template: dict, items: list[dict]) -> dict:
         if kind in {"kpi", "gauge", "image", "video"} and len(selected) != 1:
             _fail("WIDGET_INPUT_INVALID", "이 위젯에는 결과 항목 하나를 연결하세요.")
         expected = "curve" if kind == "line" else kind if kind in {"image", "video"} else "scalar"
-        if any(catalog[s]["kind"] != expected for s in selected):
+        allowed_kinds = {expected}
+        if kind == "table":
+            allowed_kinds = {"scalar", "vector"}
+        elif kind in {"kpi", "gauge", "bar"}:
+            allowed_kinds = {"scalar", "vector"}
+        if any(catalog[s]["kind"] not in allowed_kinds for s in selected):
             _fail("INCOMPATIBLE_RESULT", "위젯 입력과 결과 항목의 유형이 다릅니다.")
+        component = widget.get("vector_component")
+        vector_selected = [catalog[s] for s in selected if catalog[s]["kind"] == "vector"]
+        if vector_selected:
+            if kind in {"kpi", "gauge", "bar"}:
+                if not isinstance(component, str) or not component or any(component not in item["components"] for item in vector_selected):
+                    _fail("VECTOR_COMPONENT_INVALID", "벡터 KPI, 게이지, 막대에는 유효한 성분을 선택하세요.")
+            elif component is not None:
+                _fail("VECTOR_COMPONENT_INVALID", "벡터 성분 선택은 KPI, 게이지, 막대에서만 사용할 수 있습니다.")
+        elif component is not None:
+            _fail("VECTOR_COMPONENT_INVALID", "벡터 결과가 아닌 위젯에는 성분을 지정할 수 없습니다.")
         if kind in {"gauge", "bar", "scatter"} and any(catalog[s]["data_type"] not in {"FLOAT", "INTEGER"} for s in selected):
             _fail("INCOMPATIBLE_RESULT", "이 위젯에는 숫자 결과가 필요합니다.")
         if type(widget.get("decimals", 2)) is not int or not 0 <= widget.get("decimals", 2) <= 10:
@@ -700,26 +882,53 @@ def resolve_widgets(template: dict, items: list[dict], payload: dict) -> list[di
                 x_unit = widget.get("x_display_unit", widget.get("display_unit", catalog[selected[0]]["unit"]))
                 y_unit = widget.get("y_display_unit", widget.get("display_unit", catalog[selected[1]]["unit"]))
                 try:
-                    output["data"] = [{"x": convert_unit(maps[0][key]["value"], maps[0][key]["unit"], x_unit), "y": convert_unit(maps[1][key]["value"], maps[1][key]["unit"], y_unit), "dimensions": maps[0][key].get("dimensions", {})} for key in maps[0]]
+                    output["data"] = [
+                        {
+                            "x": convert_unit(maps[0][key]["value"], maps[0][key]["unit"], x_unit),
+                            "y": convert_unit(maps[1][key]["value"], maps[1][key]["unit"], y_unit),
+                            "dimensions": maps[0][key].get("dimensions", {}),
+                        }
+                        for key in maps[0]
+                        if maps[0][key].get("value") is not None and maps[1][key].get("value") is not None
+                    ]
                 except SemanticValidationError:
                     output.update(status="INCOMPATIBLE_RESULT", message="저장된 결과와 축 표시 단위가 호환되지 않습니다.", data=[])
                 output.update(x_unit=x_unit, y_unit=y_unit)
+                if output["status"] == "READY" and not output["data"]:
+                    output.update(status="NO_VALUE", message="연결한 결과에 값이 없습니다.")
         else:
             for entry in matches:
                 row = dict(entry)
+                if entry.get("kind") == "vector" and widget.get("vector_component"):
+                    component = widget["vector_component"]
+                    index = entry.get("components", catalog[entry["item_id"]]["components"]).index(component)
+                    row["value"] = entry["value"][index]
+                    row["vector_component"] = component
                 target_unit = widget.get("display_unit", catalog[entry["item_id"]]["unit"])
                 try:
                     if "points" in entry:
                         target_x_unit = widget.get("x_display_unit", entry["x_unit"])
                         row["points"] = [{"x": convert_unit(p["x"], entry["x_unit"], target_x_unit), "y": convert_unit(p["y"], entry["unit"], target_unit)} for p in entry["points"]]
                         row["x_unit"] = target_x_unit
-                    elif "value" in entry and target_unit != entry["unit"]:
-                        row["value"] = convert_unit(entry["value"], entry["unit"], target_unit)
+                    elif "value" in row and target_unit != entry["unit"]:
+                        if isinstance(row["value"], list):
+                            row["value"] = [
+                                None if value is None else convert_unit(value, entry["unit"], target_unit)
+                                for value in row["value"]
+                            ]
+                        elif row["value"] is not None:
+                            row["value"] = convert_unit(row["value"], entry["unit"], target_unit)
                     row["unit"] = target_unit
                 except SemanticValidationError:
                     output.update(status="INCOMPATIBLE_RESULT", message="저장된 결과와 표시 단위가 호환되지 않습니다.", data=[])
                     break
                 output["data"].append(row)
+            if kind in {"table", "kpi", "gauge", "bar"} and output["status"] == "READY" and output["data"] and not any(
+                _has_observed_value(entry.get("value"))
+                for entry in output["data"]
+                if "value" in entry
+            ):
+                output.update(status="NO_VALUE", message="연결한 결과에 값이 없습니다.")
             if kind == "line" and output["status"] == "READY":
                 x_units = {entry["x_unit"] for entry in output["data"]}
                 if len(x_units) != 1:

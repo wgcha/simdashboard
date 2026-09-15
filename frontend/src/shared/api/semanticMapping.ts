@@ -1,17 +1,17 @@
 import { apiClient, unwrapGenerated } from './client'
 import type { components } from './generated/openapi'
 
-export type SemanticItemKind = 'scalar' | 'curve' | 'image' | 'video'
+export type SemanticItemKind = 'scalar' | 'vector' | 'curve' | 'image' | 'video'
 export type SemanticDataType = 'FLOAT' | 'INTEGER' | 'TEXT' | 'BOOLEAN'
 export type SemanticFormat = 'csv' | 'json'
-export type MissingPolicy = 'error' | 'skip'
+export type MissingPolicy = 'error' | 'skip' | 'preserve'
 export type AggregatePolicy = 'none' | 'max' | 'min' | 'mean'
 
-export type SemanticItemDefinition = { id?: string; key: string; label: string; kind: SemanticItemKind; data_type: SemanticDataType; unit: string; dimensions: string[] }
+export type SemanticItemDefinition = { id?: string; key: string; label: string; kind: SemanticItemKind; data_type: SemanticDataType; unit: string; dimensions: string[]; components?: string[] }
 export type RecipeMapping = { result_item_id: string; source: string; x_source?: string; series_source?: string; dimensions: Record<string, string>; source_unit?: string; x_unit?: string; target_x_unit?: string; missing: MissingPolicy; aggregate?: AggregatePolicy }
 export type SemanticRecipeDefinition = { reader_version?: number; input_layout?: string; format: SemanticFormat; delimiter: string; encoding: string; header_row: number; records_path: string; required_fields: string[]; mappings: RecipeMapping[]; display_template_id?: string; display_template_version?: number }
 export type SemanticWidgetType = 'kpi' | 'gauge' | 'table' | 'bar' | 'line' | 'scatter' | 'image' | 'video'
-export type SemanticWidgetDefinition = { id: string; type: SemanticWidgetType; title: string; item_ids: string[]; x_item_id?: string; y_item_id?: string; filters: Record<string, string>; decimals: number; display_unit?: string; threshold?: number; x_display_unit?: string; y_display_unit?: string }
+export type SemanticWidgetDefinition = { id: string; type: SemanticWidgetType; title: string; item_ids: string[]; x_item_id?: string; y_item_id?: string; filters: Record<string, string>; decimals: number; display_unit?: string; threshold?: number; vector_component?: string; x_display_unit?: string; y_display_unit?: string }
 export type SemanticTemplateDefinition = { widgets: SemanticWidgetDefinition[] }
 export type VersionedDefinition<T> = { id: string; name?: string; version?: number; latest_version?: number; active_version?: number | null; lifecycle_status?: string; status?: string; definition: T; updated_at?: string; updated_by?: string }
 export type SemanticBinding = { id: string; relative_path: string; project_id: string; request_id?: string | null; load_case_id?: string | null; role: string; recipe_ids: string[]; template_id?: string | null; status?: string; updated_at?: string; revision?: number }
@@ -49,7 +49,7 @@ export type InspectResponse = {
   warnings?: string[]
   page?: { row_offset?: number; row_limit?: number; field_offset?: number; field_limit?: number; has_more_rows?: boolean; has_more_fields?: boolean; [key: string]: unknown }
 }
-export type ParsedSemanticResult = { schema_id?: string; schema_version?: number; scalars?: Array<Record<string, unknown>>; curves?: Array<Record<string, unknown>>; media?: Array<Record<string, unknown>>; observations?: Array<Record<string, unknown>>; summary?: Record<string, unknown>; warnings?: string[]; note?: string }
+export type ParsedSemanticResult = { schema_id?: string; schema_version?: number; scalars?: Array<Record<string, unknown>>; vectors?: Array<Record<string, unknown>>; curves?: Array<Record<string, unknown>>; media?: Array<Record<string, unknown>>; observations?: Array<Record<string, unknown>>; summary?: Record<string, unknown>; warnings?: string[]; note?: string }
 export type PreviewWidget = { id: string; type: SemanticWidgetType; title: string; status: 'READY' | 'MISSING_RESULT' | 'AMBIGUOUS_RESULT' | 'INCOMPATIBLE_RESULT' | string; unit?: string; data?: unknown[]; points?: Array<{ x: number; y: number; series?: string }>; message?: string; decimals?: number; threshold?: number; verdict?: string; x_unit?: string; y_unit?: string }
 export type PreviewResponse = { parsed: ParsedSemanticResult; widgets: PreviewWidget[] }
 export type ImportResponse = PreviewResponse & { status: string; run_id?: string; summary?: Record<string, unknown>; recipe_version?: number; template_version?: number }
