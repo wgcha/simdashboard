@@ -167,6 +167,46 @@ def get_rules(request: Request, relative_path: str = Query(default="", max_lengt
             raise path_error(error) from error
 
 
+@router.get("/saved-rules")
+def get_saved_rules(request: Request, offset: int = Query(default=0, ge=0), limit: int = Query(default=100, ge=1, le=200)):
+    with connect() as conn:
+        authorize(request, conn)
+        try:
+            return svc.saved_rule_locations(conn, svc.root_identity(svc.configured_root(conn)), offset=offset, limit=limit)
+        except (ValueError, OSError, spdm_storage.SpdmStorageError) as error:
+            raise path_error(error) from error
+
+
+@router.get("/history")
+def get_history(request: Request, offset: int = Query(default=0, ge=0), limit: int = Query(default=100, ge=1, le=200)):
+    with connect() as conn:
+        authorize(request, conn)
+        try:
+            return svc.applied_history(conn, svc.root_identity(svc.configured_root(conn)), offset=offset, limit=limit)
+        except (ValueError, OSError, spdm_storage.SpdmStorageError) as error:
+            raise path_error(error) from error
+
+
+@router.get("/history/{preview_id}/rules")
+def get_history_rules(preview_id: str, request: Request):
+    with connect() as conn:
+        authorize(request, conn)
+        try:
+            return svc.history_rules(conn, preview_id, svc.root_identity(svc.configured_root(conn)))
+        except (ValueError, OSError, spdm_storage.SpdmStorageError) as error:
+            raise path_error(error) from error
+
+
+@router.get("/connections")
+def get_connections(request: Request, offset: int = Query(default=0, ge=0), limit: int = Query(default=100, ge=1, le=200)):
+    with connect() as conn:
+        authorize(request, conn)
+        try:
+            return svc.connections(conn, svc.root_identity(svc.configured_root(conn)), offset=offset, limit=limit)
+        except (ValueError, OSError, spdm_storage.SpdmStorageError) as error:
+            raise path_error(error) from error
+
+
 @router.put("/rules")
 def put_rules(payload: FolderRuleUpdate, request: Request):
     with connect() as conn:

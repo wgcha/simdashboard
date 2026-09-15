@@ -9,14 +9,46 @@ export type AggregatePolicy = 'none' | 'max' | 'min' | 'mean'
 
 export type SemanticItemDefinition = { id?: string; key: string; label: string; kind: SemanticItemKind; data_type: SemanticDataType; unit: string; dimensions: string[] }
 export type RecipeMapping = { result_item_id: string; source: string; x_source?: string; series_source?: string; dimensions: Record<string, string>; source_unit?: string; x_unit?: string; target_x_unit?: string; missing: MissingPolicy; aggregate?: AggregatePolicy }
-export type SemanticRecipeDefinition = { format: SemanticFormat; delimiter: string; encoding: string; header_row: number; records_path: string; required_fields: string[]; mappings: RecipeMapping[] }
+export type SemanticRecipeDefinition = { reader_version?: number; input_layout?: string; format: SemanticFormat; delimiter: string; encoding: string; header_row: number; records_path: string; required_fields: string[]; mappings: RecipeMapping[] }
 export type SemanticWidgetType = 'kpi' | 'gauge' | 'table' | 'bar' | 'line' | 'scatter' | 'image' | 'video'
 export type SemanticWidgetDefinition = { id: string; type: SemanticWidgetType; title: string; item_ids: string[]; x_item_id?: string; y_item_id?: string; filters: Record<string, string>; decimals: number; display_unit?: string; threshold?: number; x_display_unit?: string; y_display_unit?: string }
 export type SemanticTemplateDefinition = { widgets: SemanticWidgetDefinition[] }
 export type VersionedDefinition<T> = { id: string; name?: string; version?: number; latest_version?: number; active_version?: number | null; lifecycle_status?: string; status?: string; definition: T; updated_at?: string; updated_by?: string }
 export type SemanticBinding = { id: string; relative_path: string; project_id: string; request_id?: string | null; load_case_id?: string | null; role: string; recipe_ids: string[]; template_id?: string | null; status?: string; updated_at?: string; revision?: number }
 export type SemanticCatalog = { items: VersionedDefinition<SemanticItemDefinition>[]; recipes: VersionedDefinition<SemanticRecipeDefinition>[]; templates: VersionedDefinition<SemanticTemplateDefinition>[]; bindings: SemanticBinding[] }
-export type InspectResponse = { format: SemanticFormat; fields: string[]; rows: Record<string, unknown>[]; row_count?: number }
+export type InspectFieldDetail = {
+  source?: string
+  label?: string
+  value?: unknown
+  data_type?: string
+  unit?: string | null
+  missing?: boolean
+  missing_count?: number
+  null_count?: number
+  empty_count?: number
+  mappable?: boolean
+  [key: string]: unknown
+}
+export type InspectOptions = { row_offset?: number; row_limit?: number; field_offset?: number; field_limit?: number; overrides?: Record<string, unknown> }
+export type RecipeSuggestion = { reader_version?: number; input_layout?: string; format?: SemanticFormat; encoding?: string; delimiter?: string | null; header_row?: number | null; records_path?: string; [key: string]: unknown }
+export type InspectResponse = {
+  format: SemanticFormat
+  fields: string[]
+  rows: Record<string, unknown>[]
+  row_count?: number
+  field_count?: number
+  field_details?: InspectFieldDetail[]
+  recipe_suggestion?: RecipeSuggestion | null
+  upload_id?: string
+  row_offset?: number
+  row_limit?: number
+  field_offset?: number
+  field_limit?: number
+  has_more_rows?: boolean
+  has_more_fields?: boolean
+  warnings?: string[]
+  page?: { row_offset?: number; row_limit?: number; field_offset?: number; field_limit?: number; has_more_rows?: boolean; has_more_fields?: boolean; [key: string]: unknown }
+}
 export type ParsedSemanticResult = { schema_id?: string; schema_version?: number; scalars?: Array<Record<string, unknown>>; curves?: Array<Record<string, unknown>>; media?: Array<Record<string, unknown>>; observations?: Array<Record<string, unknown>>; summary?: Record<string, unknown>; warnings?: string[]; note?: string }
 export type PreviewWidget = { id: string; type: SemanticWidgetType; title: string; status: 'READY' | 'MISSING_RESULT' | 'AMBIGUOUS_RESULT' | 'INCOMPATIBLE_RESULT' | string; unit?: string; data?: unknown[]; points?: Array<{ x: number; y: number; series?: string }>; message?: string; decimals?: number; threshold?: number; verdict?: string; x_unit?: string; y_unit?: string }
 export type PreviewResponse = { parsed: ParsedSemanticResult; widgets: PreviewWidget[] }
@@ -36,6 +68,16 @@ function uploadForm(file: File, fields: Record<string, string | undefined> = {})
   return form
 }
 
+function inspectFields(options: InspectOptions = {}): Record<string, string | undefined> {
+  return {
+    row_offset: options.row_offset === undefined ? undefined : String(options.row_offset),
+    row_limit: options.row_limit === undefined ? undefined : String(options.row_limit),
+    field_offset: options.field_offset === undefined ? undefined : String(options.field_offset),
+    field_limit: options.field_limit === undefined ? undefined : String(options.field_limit),
+    overrides: options.overrides ? JSON.stringify(options.overrides) : undefined,
+  }
+}
+
 function uploadOptions(form: FormData): UploadCall { return { body: form, bodySerializer: (value) => value as BodyInit } }
 
 function records<T extends object>(payload: unknown, key: string): T[] {
@@ -47,16 +89,25 @@ function records<T extends object>(payload: unknown, key: string): T[] {
 export const semanticMappingApi = {
   catalog: async () => unwrapGenerated(await apiClient.GET('/api/semantic-mapping/catalog')) as SemanticCatalog,
   createItem: async (definition: SemanticItemDefinition) => unwrapGenerated(await apiClient.POST('/api/semantic-mapping/items', { body: { definition } as components['schemas']['ItemSave'] })) as VersionedDefinition<SemanticItemDefinition>,
-  saveRecipe: async (payload: { id?: string; name: string; definition: SemanticRecipeDefinition; expected_version?: number }, sample?: File) => {
-    const body: components['schemas']['DefinitionSave'] = { ...payload, ...(sample ? { sample_filename: sample.name, sample_content_base64: await bytesToBase64(sample.arrayBuffer()) } : {}) }
+  saveRecipe: async (payload: { id?: string; name: string; definition: SemanticRecipeDefinition; expected_version?: number; sample_upload_id?: string }, sample?: File) => {
+    const body: components['schemas']['DefinitionSave'] = { ...payload, ...(sample && !payload.sample_upload_id ? { sample_filename: sample.name, sample_content_base64: await bytesToBase64(sample.arrayBuffer()) } : {}) }
     return unwrapGenerated(await apiClient.POST('/api/semantic-mapping/recipes', { body })) as VersionedDefinition<SemanticRecipeDefinition>
   },
   saveTemplate: async (payload: { id?: string; name: string; definition: SemanticTemplateDefinition; expected_version?: number }) => unwrapGenerated(await apiClient.POST('/api/semantic-mapping/templates', { body: payload })) as VersionedDefinition<SemanticTemplateDefinition>,
   activateRecipe: async (id: string, version: number) => unwrapGenerated(await apiClient.POST('/api/semantic-mapping/recipes/{recipe_id}/activate', { params: { path: { recipe_id: id } }, body: { version } })) as VersionedDefinition<SemanticRecipeDefinition>,
   activateTemplate: async (id: string, version: number) => unwrapGenerated(await apiClient.POST('/api/semantic-mapping/templates/{template_id}/activate', { params: { path: { template_id: id } }, body: { version } })) as VersionedDefinition<SemanticTemplateDefinition>,
   activateBundle: async (payload: components['schemas']['BundleActivation']) => unwrapGenerated(await apiClient.POST('/api/semantic-mapping/activate-bundle', { body: payload })) as { recipe_version?: number; template_version?: number; [key: string]: unknown },
-  inspect: async (file: File) => unwrapGenerated(await apiClient.POST('/api/semantic-mapping/inspect', uploadOptions(uploadForm(file)) as never)) as InspectResponse,
-  preview: async (file: File, recipe: SemanticRecipeDefinition, template?: SemanticTemplateDefinition) => unwrapGenerated(await apiClient.POST('/api/semantic-mapping/preview', uploadOptions(uploadForm(file, { recipe: JSON.stringify(recipe), template: template ? JSON.stringify(template) : undefined })) as never)) as PreviewResponse,
+  inspect: async (file: File, options: InspectOptions = {}, signal?: AbortSignal) => unwrapGenerated(await apiClient.POST('/api/semantic-mapping/inspect', { ...uploadOptions(uploadForm(file, inspectFields(options))), signal } as never)) as InspectResponse,
+  inspectUpload: async (uploadId: string, options: InspectOptions = {}, signal?: AbortSignal) => {
+    const fields = inspectFields(options)
+    return unwrapGenerated(await apiClient.GET('/api/semantic-mapping/sample-uploads/{upload_id}', { params: { path: { upload_id: uploadId }, query: { row_offset: fields.row_offset ? Number(fields.row_offset) : undefined, row_limit: fields.row_limit ? Number(fields.row_limit) : undefined, field_offset: fields.field_offset ? Number(fields.field_offset) : undefined, field_limit: fields.field_limit ? Number(fields.field_limit) : undefined, overrides: fields.overrides ?? undefined } }, signal } as never)) as InspectResponse
+  },
+  deleteUpload: async (uploadId: string) => unwrapGenerated(await apiClient.DELETE('/api/semantic-mapping/sample-uploads/{upload_id}', { params: { path: { upload_id: uploadId } } })) as { status: string },
+  preview: async (file: File | undefined, recipe: SemanticRecipeDefinition, template?: SemanticTemplateDefinition, uploadId?: string, signal?: AbortSignal) => {
+    const form = uploadId ? uploadForm(file as File, { upload_id: uploadId, recipe: JSON.stringify(recipe), template: template ? JSON.stringify(template) : undefined }) : file ? uploadForm(file, { recipe: JSON.stringify(recipe), template: template ? JSON.stringify(template) : undefined }) : uploadForm(new File([''], 'sample.csv'), { upload_id: uploadId, recipe: JSON.stringify(recipe), template: template ? JSON.stringify(template) : undefined })
+    if (uploadId) form.delete('file')
+    return unwrapGenerated(await apiClient.POST('/api/semantic-mapping/preview', { ...uploadOptions(form), signal } as never)) as PreviewResponse
+  },
   folders: async (relativePath: string) => unwrapGenerated(await apiClient.GET('/api/semantic-mapping/folders', { params: { query: { relative_path: relativePath || null } } })) as FolderResponse,
   createBinding: async (binding: Omit<SemanticBinding, 'id' | 'status' | 'updated_at' | 'revision'>) => unwrapGenerated(await apiClient.POST('/api/semantic-mapping/bindings', { body: binding as components['schemas']['BindingSave'] })) as SemanticBinding,
   reconnectBinding: async (id: string, binding: Omit<SemanticBinding, 'id' | 'status' | 'updated_at' | 'revision'> & { expected_revision: number }) => unwrapGenerated(await apiClient.PUT('/api/semantic-mapping/bindings/{binding_id}', { params: { path: { binding_id: id } }, body: { ...binding, id } as components['schemas']['BindingSave'] })) as SemanticBinding,

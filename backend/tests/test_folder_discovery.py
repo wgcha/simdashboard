@@ -17,6 +17,47 @@ def node(path, parent, depth):
 def rule(depth, role, prefix="", analysis_type=""):
     return {"depth":depth,"role":role,"prefix":prefix,"delimiter":"_","code_token":2,"name_from_token":3,"analysis_type":analysis_type}
 
+
+def test_saved_rules_applied_snapshot_and_connections_survive_reentry_and_are_root_scoped(tmp_path, monkeypatch):
+    root = tmp_path / "saved-root"
+    (root / "P_019_Saved" / "CAD").mkdir(parents=True)
+    monkeypatch.setenv("SIMDASH_SPDM_ROOT", str(root))
+    monkeypatch.setenv("AUTH_MODE", "password")
+    monkeypatch.setenv("AUTH_SECRET_KEY", "saved-folder-test-secret-key-at-least-32")
+    initialize_database()
+    stamp = datetime.now(timezone.utc).replace(tzinfo=None)
+    with connect() as conn:
+        conn.execute("INSERT INTO users(id,username,password_hash,display_name,legacy_role,account_status,is_global_admin,is_active,created_at,updated_at) VALUES(?,?,?,?, 'admin','ACTIVE',TRUE,TRUE,?,?)", ["saved-admin", "saved-admin", hash_password("correct-horse-battery-staple"), "admin", stamp, stamp])
+    with TestClient(app) as client:
+        login = client.post("/api/auth/login", json={"username": "saved-admin", "password": "correct-horse-battery-staple"})
+        headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+        rules = [rule(1, "PROJECT", "P_"), {**rule(2, "INPUT"), "delimiter": "", "prefix": "CAD"}]
+        saved = client.put("/api/folder-discovery/rules", headers=headers, json={"relative_path": "", "rules": rules, "expected_revision": 0})
+        assert saved.status_code == 200, saved.text
+        surveyed = client.post("/api/folder-discovery/scan", headers=headers, json={}).json()
+        preview = client.post("/api/folder-discovery/preview", headers=headers, json={"scan_id": surveyed["id"], "rules": rules}).json()
+        assert preview["can_apply"], preview
+        assert client.get(f"/api/folder-discovery/history/{preview['id']}/rules", headers=headers).status_code == 404
+        applied = client.post("/api/folder-discovery/apply", headers=headers, json={"preview_id": preview["id"]})
+        assert applied.status_code == 200, applied.text
+        changed = [rule(1, "PROJECT", "another")]
+        assert client.put("/api/folder-discovery/rules", headers=headers, json={"relative_path": "", "rules": changed, "expected_revision": 1}).status_code == 200
+        locations = client.get("/api/folder-discovery/saved-rules", headers=headers).json()
+        assert locations["total"] == 1 and locations["items"][0]["revision"] == 2
+        history = client.get("/api/folder-discovery/history", headers=headers).json()
+        assert history["total"] == 1 and history["items"][0]["outcome"]["created"]["projects"] == 1
+        snapshot = client.get(f"/api/folder-discovery/history/{preview['id']}/rules", headers=headers).json()
+        assert snapshot["current_rules_revision"] == 2 and len(snapshot["rules"]) == 2
+        first = client.get("/api/folder-discovery/connections", headers=headers, params={"limit": 1}).json()
+        second = client.get("/api/folder-discovery/connections", headers=headers, params={"limit": 1, "offset": 1}).json()
+        assert first["total"] == 2 and first["items"][0]["target_id"] != second["items"][0]["target_id"]
+        other = tmp_path / "other-root"
+        other.mkdir()
+        monkeypatch.setenv("SIMDASH_SPDM_ROOT", str(other))
+        for route in ("saved-rules", "history", "connections"):
+            assert client.get(f"/api/folder-discovery/{route}", headers=headers).json()["total"] == 0
+        assert client.get(f"/api/folder-discovery/history/{preview['id']}/rules", headers=headers).status_code == 404
+
 def test_scan_selected_folder_and_global_entry_limit(tmp_path, monkeypatch):
     root=tmp_path/"root"; leaf=root/"P_001_Project"/"R_002_Request"/"L_003_Load"; leaf.mkdir(parents=True); (leaf/"input.H3D").write_text("not parsed")
     result=scan.scan(root,"P_001_Project")
@@ -175,6 +216,51 @@ def test_same_folder_multi_role_and_duplicate_conflicts():
     assert [row["role"] for row in same["rows"]] == ["PROJECT","REQUEST"] and same["rows"][1]["parent_target_id"] == same["rows"][0]["target_id"]
     duplicate=plan.build_plan([node("P_01_One",None,0),node("P_01_Two",None,0),node("P_only",None,0)],[rule(0,"PROJECT","P_")],"root",[],[],[])
     assert not duplicate["can_apply"] and duplicate["summary"]["conflicts"] >= 2
+
+
+def test_repeated_role_rules_coalesce_only_when_their_actual_effect_is_identical():
+    nodes = [node("P_01_Project", None, 0), node("P_01_Project/CAD", "P_01_Project", 1), node("P_01_Project/cad_results", "P_01_Project", 1)]
+    identical = plan.build_plan(nodes, [
+        rule(0, "PROJECT", "P_"), {**rule(1, "INPUT", "cad"), "delimiter": ""},
+        {**rule(1, "INPUT", "CAD"), "delimiter": ""},
+    ], "root", [], [], [])
+    assert identical["can_apply"]
+    assert [(row["relative_path"], row["role"]) for row in identical["rows"] if row["role_kind"] == "INPUT"] == [("P_01_Project/CAD", "INPUT"), ("P_01_Project/cad_results", "INPUT")]
+
+    incompatible = plan.build_plan([node("P_01_Project", None, 0), node("P_01_Project/CAD_One", "P_01_Project", 1)], [
+        rule(0, "PROJECT", "P_"), {**rule(1, "INPUT", "cad"), "delimiter": "_", "code_token": 1, "name_from_token": 2},
+        {**rule(1, "INPUT", "cad"), "delimiter": ""},
+    ], "root", [], [], [])
+    assert not incompatible["can_apply"] and all(row["status"] == "CONFLICT" for row in incompatible["rows"] if row["role_kind"] == "INPUT")
+
+
+def test_project_level_cad_input_uses_project_parent_and_nested_projects_reset_context():
+    nodes = [node("P_01_Parent", None, 0), node("P_01_Parent/CAD", "P_01_Parent", 1),
+             node("P_01_Parent/P_02_Child", "P_01_Parent", 1), node("P_01_Parent/P_02_Child/CAD", "P_01_Parent/P_02_Child", 2)]
+    result = plan.build_plan(nodes, [
+        rule(0, "PROJECT", "P_"), {**rule(1, "INPUT", "cad"), "delimiter": ""},
+        rule(1, "PROJECT", "P_"), {**rule(2, "INPUT", "cad"), "delimiter": ""},
+    ], "root", [], [], [])
+    projects = [row for row in result["rows"] if row["role_kind"] == "PROJECT"]
+    inputs = [row for row in result["rows"] if row["role_kind"] == "INPUT"]
+    assert result["can_apply"] and len(projects) == 2 and len(inputs) == 2
+    assert inputs[0]["parent_target_id"] == projects[0]["target_id"]
+    assert inputs[1]["parent_target_id"] == projects[1]["target_id"]
+
+
+def test_adding_an_equivalent_custom_role_keeps_the_confirmed_role_and_target():
+    options = plan._default_options()
+    options["roles"].extend([
+        {"key": "CUSTOM_PROJECT", "label": "기존 프로젝트", "kind": "PROJECT", "active": True},
+        {"key": "A_PROJECT", "label": "새 프로젝트", "kind": "PROJECT", "active": True},
+    ])
+    existing = {"relative_path": "P_01_Project", "role": "CUSTOM_PROJECT", "role_kind": "PROJECT", "scope_key": "",
+                "code": "01", "name": "Project", "analysis_type": "", "target_id": "confirmed-project", "target_valid": True}
+    result = plan.build_plan([node("P_01_Project", None, 0)], [
+        rule(0, "CUSTOM_PROJECT", "P_"), rule(0, "A_PROJECT", "P_"),
+    ], "root", [existing], [], [], options)
+    assert result["can_apply"] and len(result["rows"]) == 1
+    assert result["rows"][0]["role"] == "CUSTOM_PROJECT" and result["rows"][0]["target_id"] == "confirmed-project"
 
 def test_confirmed_registry_only_and_boundary_conflicts():
     existing={"relative_path":"P_01_Project","role":"PROJECT","scope_key":"","code":"01","name":"Project","analysis_type":"","target_id":"project-confirmed","target_valid":True}

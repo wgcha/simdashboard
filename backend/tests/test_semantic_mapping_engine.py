@@ -137,7 +137,7 @@ def test_inspection_is_bounded_and_lists_nested_fields():
     sample = json.dumps([{"values": {"stress": i}} for i in range(30)]).encode()
     inspected = inspect_sample("a.json", sample)
     assert inspected["fields"] == ["values.stress"]
-    assert len(inspected["rows"]) == 20
+    assert len(inspected["rows"]) == 30
     assert inspected["row_count"] == 30
 
 

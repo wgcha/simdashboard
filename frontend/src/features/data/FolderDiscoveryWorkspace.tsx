@@ -1,6 +1,6 @@
 import { FolderOpen, LoaderCircle, Play, RefreshCw, Save, Search, WandSparkles } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { folderDiscoveryApi, type FolderDiscoveryBrowse, type FolderDiscoveryPreview, type FolderDiscoveryRule, type FolderDiscoveryScan, type FolderRole } from '../../shared/api/folderDiscovery'
+import { folderDiscoveryApi, type FolderDiscoveryBrowse, type FolderDiscoveryConnection, type FolderDiscoveryHistory, type FolderDiscoveryPreview, type FolderDiscoveryRule, type FolderDiscoverySavedRule, type FolderDiscoveryScan, type FolderRole } from '../../shared/api/folderDiscovery'
 import type { FolderDiscoveryCatalog, FolderRoleKind, FolderRoleOption } from '../../shared/api/folderDiscovery'
 import { FolderDiscoveryCatalogEditor } from './FolderDiscoveryCatalogEditor'
 import { saveStorageConfig } from '../../shared/api/storage'
@@ -40,10 +40,19 @@ export function FolderDiscoveryWorkspace({ onComplete, onOpenFolder }: { onCompl
   const [desiredExcludedPaths, setDesiredExcludedPaths] = useState<string[]>([])
   const [previewOutdated, setPreviewOutdated] = useState(false)
   const [appliedPreviewId, setAppliedPreviewId] = useState('')
+  const [savedRules, setSavedRules] = useState<FolderDiscoverySavedRule[]>([])
+  const [history, setHistory] = useState<FolderDiscoveryHistory[]>([])
+  const [connections, setConnections] = useState<FolderDiscoveryConnection[]>([])
+  const [savedWorkError, setSavedWorkError] = useState('')
+  const [workPages, setWorkPages] = useState({ rules: 0, history: 0, connections: 0 })
+  const [workTotals, setWorkTotals] = useState({ rules: 0, history: 0, connections: 0 })
+  const [workLoading, setWorkLoading] = useState(false)
+  const workGeneration = useRef(0)
   const [notice, setNotice] = useState<Notice | null>(null)
   const [busy, setBusy] = useState<'browse' | 'root' | 'scan' | 'preview' | 'apply' | 'rules' | 'catalog' | ''>('')
   const requestGeneration = useRef(0)
   const rulesGeneration = useRef(0)
+  const skipNextRuleLoad = useRef(false)
 
   const loadCatalog = useCallback(async () => {
     setCatalogError('')
@@ -65,19 +74,47 @@ export function FolderDiscoveryWorkspace({ onComplete, onOpenFolder }: { onCompl
     setRulesLoaded(false); setRulesRevision(null); setPreview(null); setDesiredExcludedPaths([]); setPreviewOutdated(false)
     try {
       const result = await folderDiscoveryApi.rules(path)
-      if (generation !== rulesGeneration.current) return
+      if (generation !== rulesGeneration.current) return false
       setRules(result.rules.length ? result.rules.map((rule) => ({ ...rule, keyword: rule.keyword ?? rule.prefix ?? '', prefix: undefined })) : DEFAULT_RULES); setRulesRevision(result.revision); setRulesLoaded(true)
-    } catch { if (generation === rulesGeneration.current) { setRules(DEFAULT_RULES); setRulesRevision(null); setRulesLoaded(false); setNotice({ kind: 'error', text: '규칙을 불러오지 못했습니다. 폴더를 다시 선택하거나 새로고침하세요.' }) } }
+      return true
+    } catch { if (generation === rulesGeneration.current) { setRules(DEFAULT_RULES); setRulesRevision(null); setRulesLoaded(false); setNotice({ kind: 'error', text: '규칙을 불러오지 못했습니다. 폴더를 다시 선택하거나 새로고침하세요.' }) } return false }
+  }, [])
+  const loadSavedWork = useCallback(async (offsets = { rules: 0, history: 0, connections: 0 }) => {
+    const generation = ++workGeneration.current
+    setSavedWorkError(''); setWorkLoading(true)
+    try {
+      const [stored, applied, linked] = await Promise.all([folderDiscoveryApi.savedRules(offsets.rules), folderDiscoveryApi.history(offsets.history), folderDiscoveryApi.connections(offsets.connections)])
+      if (generation !== workGeneration.current) return
+      setSavedRules(stored.items); setHistory(applied.items); setConnections(linked.items)
+      setWorkPages(offsets); setWorkTotals({ rules: stored.total, history: applied.total, connections: linked.total })
+    } catch (reason) { if (generation === workGeneration.current) setSavedWorkError(errorText(reason, '저장된 규칙과 업무 생성 기록을 불러오지 못했습니다.')) }
+    finally { if (generation === workGeneration.current) setWorkLoading(false) }
   }, [])
   useEffect(() => { void loadBrowse(); void loadCatalog() }, [loadBrowse, loadCatalog])
-  useEffect(() => { if (browse?.configured) void loadRules(selectedPath) }, [loadRules, selectedPath, browse?.configured])
+  useEffect(() => { if (browse?.configured) { void loadSavedWork(); if (skipNextRuleLoad.current) { skipNextRuleLoad.current = false } else void loadRules(selectedPath) } }, [loadRules, loadSavedWork, selectedPath, browse?.configured])
 
   const selectFolder = (path: string) => { setSelectedPath(path); setScan(null); invalidatePreview() }
+  const loadSavedRulesAt = async (path: string) => {
+    skipNextRuleLoad.current = path !== selectedPath; selectFolder(path)
+    if (await loadRules(path)) setNotice({ kind: 'info', text: `${path || '/'}에 저장한 규칙을 불러왔습니다. 전체 트리 조사 후 미리보기를 만드세요.` })
+  }
+  const loadAppliedRules = async (previewId: string) => {
+    const generation = ++rulesGeneration.current
+    setRulesLoaded(false); setRulesRevision(null); setScan(null); invalidatePreview()
+    try {
+      const result = await folderDiscoveryApi.historyRules(previewId)
+      if (generation !== rulesGeneration.current) return
+      skipNextRuleLoad.current = result.relative_path !== selectedPath; setSelectedPath(result.relative_path)
+      setRules(result.rules.map((rule) => ({ ...rule, keyword: rule.keyword ?? rule.prefix ?? '', prefix: undefined })))
+      setRulesRevision(result.current_rules_revision); setRulesLoaded(true)
+      setNotice({ kind: 'info', text: `적용 당시 규칙 v${result.rules_revision}을 불러왔습니다. 현재 저장 개정 v${result.current_rules_revision}으로 다시 저장할 수 있습니다.` })
+    } catch (reason) { if (generation === rulesGeneration.current) setNotice({ kind: 'error', text: errorText(reason, '적용 당시 규칙을 불러오지 못했습니다.') }) }
+  }
   const openPicker = () => { setPickerPath(selectedPath); setPickerOpen(true); void loadBrowse(selectedPath) }
   const saveRoot = async () => {
     if (!rootPath.trim()) return
     setBusy('root')
-    try { await saveStorageConfig(rootPath.trim()); setScan(null); setPreview(null); setSelectedPath(''); setNotice({ kind: 'success', text: '저장 폴더를 설정했습니다. 조사할 최상위 폴더를 선택하세요.' }); await loadBrowse(''); await loadRules('') } catch (reason) { setNotice({ kind: 'error', text: errorText(reason, '저장 폴더를 설정하지 못했습니다.') }) } finally { setBusy('') }
+    try { await saveStorageConfig(rootPath.trim()); setScan(null); setPreview(null); setSelectedPath(''); setNotice({ kind: 'success', text: '저장 폴더를 설정했습니다. 조사할 최상위 폴더를 선택하세요.' }); await loadBrowse(''); await loadRules(''); await loadSavedWork() } catch (reason) { setNotice({ kind: 'error', text: errorText(reason, '저장 폴더를 설정하지 못했습니다.') }) } finally { setBusy('') }
   }
   const startScan = async () => {
     setBusy('scan'); setScan(null); invalidatePreview(); setNotice(null)
@@ -112,7 +149,7 @@ export function FolderDiscoveryWorkspace({ onComplete, onOpenFolder }: { onCompl
   const saveRules = async () => {
     if (rulesRevision == null) return
     setBusy('rules')
-    try { const result = await folderDiscoveryApi.saveRules(selectedPath, rules, rulesRevision); setRules(result.rules); setRulesRevision(result.revision); invalidatePreview(); setNotice({ kind: 'success', text: `이 폴더의 규칙 v${result.revision}을 저장했습니다.` }) } catch (reason) { setNotice({ kind: 'error', text: errorText(reason, '규칙 저장에 실패했습니다. 최신 규칙을 다시 불러오세요.') }) } finally { setBusy('') }
+    try { const result = await folderDiscoveryApi.saveRules(selectedPath, rules, rulesRevision); setRules(result.rules); setRulesRevision(result.revision); invalidatePreview(); void loadSavedWork(); setNotice({ kind: 'success', text: `이 폴더의 규칙 v${result.revision}을 저장했습니다.` }) } catch (reason) { setNotice({ kind: 'error', text: errorText(reason, '규칙 저장에 실패했습니다. 최신 규칙을 다시 불러오세요.') }) } finally { setBusy('') }
   }
   const saveCatalog = async (next: Omit<FolderDiscoveryCatalog, 'revision'>, expectedRevision: number) => {
     setBusy('catalog')
@@ -127,9 +164,10 @@ export function FolderDiscoveryWorkspace({ onComplete, onOpenFolder }: { onCompl
       const result = await folderDiscoveryApi.apply(preview.id)
       setAppliedPreviewId(preview.id)
       setNotice({ kind: 'success', text: `완료: 프로젝트 ${result.created.projects}, 의뢰 ${result.created.requests}, 하중 경우 ${result.created.load_cases}개를 만들고 ${result.kept_count}개를 유지했습니다. 이번 적용에서 제외 ${result.excluded_count ?? preview.summary.excluded}개.` })
-      onComplete?.(); window.dispatchEvent(new CustomEvent('folder-discovery-applied'))
+      onComplete?.(); window.dispatchEvent(new CustomEvent('folder-discovery-applied')); void loadSavedWork()
     } catch (reason) { setNotice({ kind: 'error', text: errorText(reason, '업무 생성 적용에 실패했습니다. 미리보기를 새로 만드세요.') }) } finally { setBusy('') }
   }
+  const workPager = (key: keyof typeof workPages, label: string) => <div className="folder-discovery-actions" aria-label={`${label} 페이지`}><button className="ghost-button" disabled={workLoading || workPages[key] === 0} onClick={() => void loadSavedWork({ ...workPages, [key]: Math.max(0, workPages[key] - 100) })}>이전</button><span>{workTotals[key]}개 · {workPages[key] + 1}–{Math.min(workPages[key] + 100, workTotals[key])}</span><button className="ghost-button" disabled={workLoading || workPages[key] + 100 >= workTotals[key]} onClick={() => void loadSavedWork({ ...workPages, [key]: workPages[key] + 100 })}>다음</button></div>
   const nodes = useMemo(() => scan?.nodes ?? [], [scan])
   const applyDisabled = busy !== '' || previewOutdated || scan?.status !== 'COMPLETE' || !preview?.can_apply
   const catalogResolved = Boolean(catalog) && !catalogError
@@ -145,9 +183,10 @@ export function FolderDiscoveryWorkspace({ onComplete, onOpenFolder }: { onCompl
     <header><span>FOLDER DISCOVERY</span><h2>폴더 조사·업무 생성</h2><p>선택한 최상위 폴더의 전체 하위 트리를 조사하고, 확정 전 미리보기로 프로젝트·의뢰·하중 경우를 검토합니다.</p></header>
     {notice ? <NoticeView notice={notice} /> : null}
     {catalog ? <FolderDiscoveryCatalogEditor catalog={catalog} saving={busy === 'catalog'} onSave={saveCatalog} /> : catalogError ? <div className="folder-discovery-notice error" role="alert">{catalogError} 새로고침으로 다시 시도하세요.</div> : <div className="folder-discovery-notice" role="status">폴더 역할·해석 종류 카탈로그를 불러오는 중입니다.</div>}
-    <div className="folder-discovery-card"><div className="folder-discovery-heading"><div><h3>1. 최상위 폴더 선택</h3><p>{browse?.root_path ?? '설정된 저장 root'}</p></div><button className="ghost-button" onClick={() => { void loadBrowse(selectedPath); void loadRules(selectedPath); void loadCatalog() }} disabled={busy !== ''}><RefreshCw /> 새로고침</button></div><div className="folder-discovery-browser"><strong>{selectedPath || '/'}</strong><button className="ghost-button" onClick={openPicker} disabled={busy !== ''}><FolderOpen />최상위 폴더 선택</button></div><div className="folder-discovery-actions"><button className="primary-button" onClick={() => void startScan()} disabled={busy !== ''}>{busy === 'scan' ? <LoaderCircle className="spin" /> : <Search />}{busy === 'scan' ? '조사 중…' : '전체 트리 조사'}</button></div></div>
+    <div className="folder-discovery-card"><div className="folder-discovery-heading"><div><h3>1. 최상위 폴더 선택</h3><p>{browse?.root_path ?? '설정된 저장 root'}</p></div><button className="ghost-button" onClick={() => { void loadBrowse(selectedPath); void loadRules(selectedPath); void loadCatalog(); void loadSavedWork() }} disabled={busy !== ''}><RefreshCw /> 새로고침</button></div><div className="folder-discovery-browser"><strong>{selectedPath || '/'}</strong><button className="ghost-button" onClick={openPicker} disabled={busy !== ''}><FolderOpen />최상위 폴더 선택</button></div><div className="folder-discovery-actions"><button className="primary-button" onClick={() => void startScan()} disabled={busy !== ''}>{busy === 'scan' ? <LoaderCircle className="spin" /> : <Search />}{busy === 'scan' ? '조사 중…' : '전체 트리 조사'}</button></div></div>
+    <div className="folder-discovery-card folder-discovery-saved"><div className="folder-discovery-heading"><div><h3>저장된 규칙·업무 연결</h3><p>규칙 저장 위치와 실제로 적용된 업무 생성 기록을 다시 불러올 수 있습니다.</p></div></div>{savedWorkError ? <div className="folder-discovery-notice error" role="alert">{savedWorkError}</div> : null}<div className="folder-discovery-saved-grid"><div><h4>저장된 규칙</h4>{savedRules.length ? <ul>{savedRules.map((item) => <li key={item.relative_path}><button type="button" className="ghost-button" onClick={() => void loadSavedRulesAt(item.relative_path)} disabled={busy !== ''}>{item.relative_path || '/'} · v{item.revision}</button></li>)}</ul> : <p>저장된 규칙이 없습니다.</p>}{workPager('rules', '저장 규칙')}</div><div><h4>적용 기록</h4>{history.length ? <ul>{history.map((item) => <li key={item.id}><button type="button" className="ghost-button" onClick={() => void loadAppliedRules(item.id)} disabled={busy !== ''}>{item.relative_path || '/'} · 프로젝트 {item.outcome.created.projects}, 의뢰 {item.outcome.created.requests}, 하중 경우 {item.outcome.created.load_cases}</button></li>)}</ul> : <p>적용 기록이 없습니다.</p>}{workPager('history', '적용 기록')}</div><div><h4>연결된 폴더</h4>{connections.length ? <ul>{connections.map((item) => <li key={`${item.relative_path}/${item.role}`}><code>{item.role_kind}</code> {item.relative_path} · {item.name}</li>)}</ul> : <p>연결된 폴더가 없습니다.</p>}{workPager('connections', '연결 폴더')}</div></div></div>
     {scan ? <div className="folder-discovery-card"><div className="folder-discovery-heading"><div><h3>2. 조사 결과</h3><p>{scan.relative_path || '/'} · 폴더 {scan.folder_count} · 파일 {scan.file_count} · {scan.status}</p></div>{busy === 'scan' ? <LoaderCircle className="spin" /> : null}</div>{scan.issues.length ? <ul className="folder-discovery-issues">{scan.issues.map((issue, index) => <li key={index}><IssueDetail issue={issue} /></li>)}</ul> : null}<div className="folder-discovery-tree">{nodes.map((node) => <div key={node.relative_path} style={{ paddingInlineStart: `${Math.max(0, node.depth) * 22}px` }}><FolderOpen /><span>{node.name}</span><small>파일 {node.file_count}{node.extensions.length ? ` · ${node.extensions.join(', ')}` : ''}</small></div>)}</div></div> : null}
-    {scan ? <div className="folder-discovery-card"><div className="folder-discovery-heading"><div><h3>3. 폴더 역할 규칙</h3><p>포함할 단어가 폴더 이름 어디에든 있으면 규칙을 적용합니다. 같은 깊이에서 같은 역할을 여러 폴더에 적용해도 경로로 구분합니다. 구분자가 비어 있으면 폴더 이름 전체를 이름으로 쓰고 코드는 비워 둡니다. 구분자를 지정하면 폴더 이름에 실제로 포함된 경우에만 규칙을 적용합니다.</p></div><button className="ghost-button" onClick={() => void saveRules()} disabled={busy !== '' || !rulesLoaded || rulesRevision == null || !catalogResolved}><Save /> 규칙 저장</button></div><fieldset className="folder-discovery-rules" disabled={busy !== '' || !rulesLoaded || !catalogResolved}>{rules.map((rule, index) => <RuleEditor key={`${rule.role}-${index}`} rule={rule} roleOptions={roleOptions} analysisTypes={analysisTypes} catalog={catalog} onChange={(patch) => updateRule(index, patch)} onDelete={() => removeRule(index)} />)}</fieldset><div className="folder-discovery-actions"><button className="ghost-button" onClick={addRule} disabled={busy !== '' || !rulesLoaded || !catalogResolved || rules.length >= 30}>규칙 추가</button><button className="primary-button" onClick={() => void runPreview()} disabled={busy !== '' || !rulesLoaded || !catalogResolved || scan.status !== 'COMPLETE'}><WandSparkles />{busy === 'preview' ? '미리보기 생성 중…' : '업무 생성 미리보기'}</button></div></div> : null}
+    <div className="folder-discovery-card"><div className="folder-discovery-heading"><div><h3>3. 폴더 역할 규칙</h3><p>포함할 단어가 폴더 이름 어디에든 있으면 규칙을 적용합니다. 같은 깊이·역할 규칙은 서로 다른 폴더에 적용될 수 있으며, 한 폴더에서 같은 업무를 똑같이 가리킬 때만 하나로 합칩니다. 구분자가 비어 있으면 폴더 이름 전체를 이름으로 쓰고 코드는 비워 둡니다. 구분자를 지정하면 폴더 이름에 실제로 포함된 경우에만 규칙을 적용합니다.</p></div><button className="ghost-button" onClick={() => void saveRules()} disabled={busy !== '' || !rulesLoaded || rulesRevision == null || !catalogResolved}><Save /> 규칙 저장</button></div><fieldset className="folder-discovery-rules" disabled={busy !== '' || !rulesLoaded || !catalogResolved}>{rules.map((rule, index) => <RuleEditor key={`${rule.role}-${index}`} rule={rule} roleOptions={roleOptions} analysisTypes={analysisTypes} catalog={catalog} onChange={(patch) => updateRule(index, patch)} onDelete={() => removeRule(index)} />)}</fieldset><div className="folder-discovery-actions"><button className="ghost-button" onClick={addRule} disabled={busy !== '' || !rulesLoaded || !catalogResolved || rules.length >= 30}>규칙 추가</button><button className="primary-button" onClick={() => void runPreview()} disabled={busy !== '' || !rulesLoaded || !catalogResolved || scan?.status !== 'COMPLETE'}><WandSparkles />{busy === 'preview' ? '미리보기 생성 중…' : '업무 생성 미리보기'}</button>{!scan ? <small>전체 트리를 조사한 뒤 미리보기를 만들 수 있습니다.</small> : null}</div></div>
     {preview ? <div className="folder-discovery-card"><div className="folder-discovery-heading"><div><h3>4. 생성 미리보기</h3><p>프로젝트 {preview.summary.projects} · 의뢰 {preview.summary.requests} · 하중 경우 {preview.summary.load_cases} · 충돌 {preview.summary.conflicts} · 제외 {preview.summary.excluded ?? preview.rows.filter((row) => row.status === 'EXCLUDED').length} · 미분류 {preview.unmatched_count}</p><small>이미 생성된 업무와 결과는 삭제되지 않습니다.</small></div></div><div className="folder-discovery-preview"><table><thead><tr><th>경로</th><th>역할</th><th>코드</th><th>이름</th><th>결과</th><th>상세</th></tr></thead><tbody>{preview.rows.map((row, index) => { const isExcluded = row.status === 'EXCLUDED'; const isExplicitExclusion = isExcluded && row.excluded_by === row.relative_path; const hasExcludedBy = row.excluded_by !== null && row.excluded_by !== undefined; const detail = isExcluded && hasExcludedBy && row.excluded_by !== row.relative_path ? `${row.message ?? '상위 폴더가 제외되었습니다.'} · 상위 제외: ${row.excluded_by || '(root)'}` : row.message ?? (isExcluded ? '이 폴더가 제외되었습니다.' : ''); return <tr key={`${row.relative_path}/${row.role}/${index}`} className={row.status.toLowerCase()}><td>{row.relative_path}</td><td>{row.role_label ?? roleName(row.role, catalog)}{row.role_kind && row.role_kind !== row.role ? <small> · {row.role_kind}</small> : null}</td><td>{row.code}</td><td>{row.name}</td><td>{row.status}</td><td>{detail}{isExcluded ? (isExplicitExclusion ? <button type="button" className="ghost-button folder-discovery-row-action" onClick={() => void updateExclusion(row.relative_path, true)} disabled={busy !== ''}>제외 취소</button> : null) : <button type="button" className="ghost-button folder-discovery-row-action" onClick={() => void updateExclusion(row.relative_path, false)} disabled={busy !== ''}>이번 적용에서 제외</button>}{onOpenFolder && !previewOutdated && folderTarget(row) && row.status !== 'CONFLICT' && (row.status === 'KEEP' || appliedPreviewId === preview.id) ? <button type="button" className="ghost-button folder-discovery-row-action" onClick={() => onOpenFolder(folderTarget(row))} disabled={busy !== ''}>이 폴더 연결</button> : null}</td></tr> })}</tbody></table></div><div className="folder-discovery-actions"><button className="primary-button" onClick={() => void apply()} disabled={applyDisabled}><Play />{busy === 'apply' ? '생성 중…' : '검토한 업무 생성 적용'}</button>{preview && notice?.kind === 'success' && notice.text.startsWith('완료:') ? <button className="ghost-button" onClick={() => { const row = preview.rows.find((item) => (item.role_kind === 'RESULTS' || item.role_kind === 'INPUT') && item.status !== 'EXCLUDED'); onOpenFolder?.(row ? folderTarget(row) : undefined) }} disabled={busy !== '' || previewOutdated}>결과파일 연결하기</button> : null}{scan?.status !== 'COMPLETE' ? <small>조사가 완료되어야 적용할 수 있습니다.</small> : null}</div></div> : null}
     {pickerOpen ? <dialog className="folder-discovery-picker" ref={(node) => { if (node && !node.open) node.showModal() }} aria-label="최상위 폴더 선택" onCancel={() => setPickerOpen(false)}><div className="folder-discovery-heading"><div><h3>조사할 최상위 폴더 선택</h3><p>선택한 폴더 아래의 모든 하위 트리를 조사합니다.</p></div><button className="ghost-button" onClick={() => setPickerOpen(false)}>닫기</button></div><div className="folder-discovery-browser"><button onClick={() => { setPickerPath(''); void loadBrowse('') }} disabled={busy !== ''}>root</button>{browse?.relative_path ? <button onClick={() => { const parent = browse.relative_path.split('/').slice(0, -1).join('/'); setPickerPath(parent); void loadBrowse(parent) }} disabled={busy !== ''}>상위 폴더</button> : null}<strong>{browse?.relative_path || '/'}</strong></div><div className="folder-discovery-entries">{browse?.entries.filter((entry) => entry.is_directory).map((entry) => <button key={entry.relative_path} className={pickerPath === entry.relative_path ? 'selected' : ''} onClick={() => { setPickerPath(entry.relative_path); void loadBrowse(entry.relative_path) }} disabled={busy !== ''}><FolderOpen />{entry.name}</button>)}</div><div className="folder-discovery-actions"><button className="ghost-button" disabled={busy !== ''} onClick={() => setPickerPath(browse?.relative_path ?? '')}>이 위치 선택</button><button className="primary-button" disabled={busy !== '' || pickerPath !== browse?.relative_path} onClick={() => { selectFolder(pickerPath); setPickerOpen(false); void loadRules(pickerPath) }}>선택 완료</button></div></dialog> : null}
   </section>

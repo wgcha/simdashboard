@@ -88,6 +88,67 @@ def rules(conn, root_key: str, relative: str) -> dict:
     return {"rules": decoded(row[0]) if row else [], "revision": int(row[1]) if row else 0}
 
 
+def saved_rule_locations(conn, root_key: str, *, offset: int = 0, limit: int = 100) -> dict:
+    total = int(conn.execute("SELECT count(*) FROM folder_discovery_rules WHERE root_key=?", [root_key]).fetchone()[0])
+    records = rows(conn.execute(
+        "SELECT relative_path,revision,updated_at FROM folder_discovery_rules WHERE root_key=? "
+        "ORDER BY updated_at DESC,relative_path LIMIT ? OFFSET ?",
+        [root_key, limit, offset],
+    ))
+    return {"items": [dict(item) for item in records], "offset": offset, "limit": limit, "total": total}
+
+
+def applied_history(conn, root_key: str, *, offset: int = 0, limit: int = 100) -> dict:
+    total = int(conn.execute(
+        "SELECT count(*) FROM folder_discovery_previews p JOIN folder_discovery_scans s ON s.id=p.scan_id "
+        "WHERE s.root_key=? AND p.applied_json IS NOT NULL", [root_key],
+    ).fetchone()[0])
+    records = rows(conn.execute(
+        "SELECT p.id,p.scan_id,s.relative_path,p.created_at,p.rules_revision,p.catalog_revision,p.applied_json "
+        "FROM folder_discovery_previews p JOIN folder_discovery_scans s ON s.id=p.scan_id "
+        "WHERE s.root_key=? AND p.applied_json IS NOT NULL "
+        "ORDER BY p.created_at DESC,p.id DESC LIMIT ? OFFSET ?",
+        [root_key, limit, offset],
+    ))
+    items = []
+    for record in records:
+        item = dict(record)
+        outcome = decoded(item.pop("applied_json"))
+        # History lists remain bounded even if a future outcome gains a
+        # verbose per-row audit trail.  The immutable preview remains the
+        # source for rule snapshot loading.
+        item["outcome"] = {
+            "status": outcome.get("status", "APPLIED"),
+            "created": outcome.get("created", {}),
+            "kept_count": int(outcome.get("kept_count", 0)),
+            "excluded_count": int(outcome.get("excluded_count", 0)),
+        }
+        items.append(item)
+    return {"items": items, "offset": offset, "limit": limit, "total": total}
+
+
+def history_rules(conn, preview_id: str, root_key: str) -> dict:
+    record = conn.execute(
+        "SELECT p.rules_json,p.rules_revision,s.relative_path,s.root_key,p.applied_json "
+        "FROM folder_discovery_previews p JOIN folder_discovery_scans s ON s.id=p.scan_id WHERE p.id=?",
+        [preview_id],
+    ).fetchone()
+    if not record or record[3] != root_key or record[4] is None:
+        fail("APPLIED_HISTORY_NOT_FOUND", "적용된 업무 생성 기록을 찾을 수 없습니다.", 404)
+    return {"preview_id": preview_id, "relative_path": record[2], "rules": decoded(record[0]),
+            "rules_revision": int(record[1]), "current_rules_revision": rules(conn, root_key, record[2])["revision"]}
+
+
+def connections(conn, root_key: str, *, offset: int = 0, limit: int = 100) -> dict:
+    total = int(conn.execute("SELECT count(*) FROM folder_discovery_registry WHERE root_key=?", [root_key]).fetchone()[0])
+    records = rows(conn.execute(
+        "SELECT relative_path,role,role_kind,code,name,analysis_type,parent_target_id,target_id,created_at "
+        "FROM folder_discovery_registry WHERE root_key=? "
+        "ORDER BY relative_path,role LIMIT ? OFFSET ?", [root_key, limit, offset],
+    ))
+    return {"items": [dict(item) for item in records], "offset": offset, "limit": limit, "total": total}
+
+
 def catalog(conn) -> dict:
     row = conn.execute("SELECT revision,roles_json,analysis_types_json FROM folder_discovery_catalog WHERE id=1").fetchone()
     if not row:
@@ -155,7 +216,17 @@ def registry(conn, root_key: str) -> list[dict]:
         if row["role_kind"] in ("PROJECT", "REQUEST", "LOAD_CASE"):
             row["target_valid"] = targets.get((row["role_kind"], row["target_id"])) == (row["name"], row["parent_target_id"])
         else:
-            row["target_valid"] = bool(conn.execute("SELECT 1 FROM load_cases WHERE id=?", [row["parent_target_id"]]).fetchone())
+            # INPUT/RESULTS registry rows are attached to the nearest real
+            # workload.  They may legitimately belong directly to a project
+            # or request (for example a project-level CAD directory), not
+            # only to a load case.
+            parent_id = row.get("parent_target_id")
+            row["target_valid"] = bool(parent_id and conn.execute(
+                "SELECT 1 FROM projects WHERE id=? UNION ALL "
+                "SELECT 1 FROM analysis_requests WHERE id=? UNION ALL "
+                "SELECT 1 FROM load_cases WHERE id=? LIMIT 1",
+                [parent_id, parent_id, parent_id],
+            ).fetchone())
     types = dict(conn.execute("SELECT t.id,t.analysis_type FROM load_cases t JOIN folder_discovery_registry r ON r.target_id=t.id WHERE r.root_key=? AND r.role_kind='LOAD_CASE'", [root_key]).fetchall())
     for row in result:
         if row["role_kind"] == "LOAD_CASE":

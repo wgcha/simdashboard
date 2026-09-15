@@ -7,9 +7,12 @@ import io
 import json
 import math
 import re
+import time
 from collections import defaultdict
 from pathlib import PurePath
 from typing import Any
+
+from .reader_v2 import INPUT_V2_MAX_BYTES, LEGACY_CSV_FIELD_LIMIT, ReaderV2Error, json_pointer_get, read as read_v2
 
 ENGINE_VERSION = "semantic-1"
 MAX_BYTES = 5_000_000
@@ -19,6 +22,11 @@ MAX_MAPPINGS = 64
 MAX_WIDGETS = 32
 MAX_OUTPUT_VALUES = 100_000
 MAX_OUTPUT_BYTES = 8_000_000
+# v2 intentionally has no row, field, or mapping *count* caps.  It still has
+# explicit operational budgets so a saved recipe cannot produce an unbounded
+# normalized payload or monopolise an import worker indefinitely.
+MAX_V2_OUTPUT_BYTES = 64 * 1024 * 1024
+MAX_V2_EXECUTION_SECONDS = 30
 _KEY = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,119}$")
 _PATH = re.compile(r"(?:[\w\-]+|\[[0-9]+\])(?:\.[\w\-]+|\[[0-9]+\])*")
 # (physical dimension, scale to base unit, offset to base unit)
@@ -144,8 +152,87 @@ def _get(row: Any, path: str) -> Any:
     return current
 
 
+def _v2_pointer(value: Any) -> str:
+    if not isinstance(value, str) or len(value) > 4096 or not value.startswith("#"):
+        _fail("PATH_INVALID", "v2 원본 필드는 JSON Pointer(#/...)여야 합니다.")
+    if value != "#" and not value.startswith("#/"):
+        _fail("PATH_INVALID", "v2 원본 필드는 JSON Pointer(#/...)여야 합니다.")
+    return value
+
+
+def _validate_recipe_v2(recipe: dict, items: list[dict]) -> dict:
+    """Validate the unbounded v2 mapping shape without changing v1 limits."""
+    catalog = _items(items)
+    if recipe.get("format") not in ("csv", "json"):
+        _fail("FORMAT_UNSUPPORTED", "CSV 또는 JSON 읽기 형식을 선택하세요.")
+    if recipe.get("input_layout") not in {"csv_table", "csv_key_value", "json_object", "json_records"}:
+        _fail("INPUT_LAYOUT_INVALID", "v2 입력 레이아웃을 지정하세요.")
+    fmt = recipe["format"]
+    layout = recipe["input_layout"]
+    if (fmt == "csv") != layout.startswith("csv_"):
+        _fail("INPUT_LAYOUT_INVALID", "파일 형식과 입력 레이아웃이 일치하지 않습니다.")
+    if recipe.get("encoding", "utf-8-sig") not in ("utf-8", "utf-8-sig", "cp949", "utf-16"):
+        _fail("ENCODING_UNSUPPORTED", "지원하지 않는 인코딩입니다.")
+    if fmt == "csv" and recipe.get("delimiter", ",") not in (",", ";", "\t", "|"):
+        _fail("DELIMITER_INVALID", "지원하지 않는 구분자입니다.")
+    header = recipe.get("header_row", 1)
+    if fmt == "csv" and (type(header) is not int or header < 1):
+        _fail("HEADER_INVALID", "헤더 행은 1 이상의 정수여야 합니다.")
+    records_path = recipe.get("records_path", "")
+    if not isinstance(records_path, str) or (records_path and records_path != "#" and not records_path.startswith("#/")):
+        _fail("PATH_INVALID", "v2 JSON 레코드 경로는 JSON Pointer여야 합니다.")
+    if layout == "json_records" and not records_path:
+        _fail("PATH_INVALID", "JSON 레코드 레이아웃에는 records_path가 필요합니다.")
+    if layout == "json_object" and records_path:
+        _fail("PATH_INVALID", "JSON 객체 레이아웃에는 records_path를 지정할 수 없습니다.")
+    mappings = recipe.get("mappings")
+    if not isinstance(mappings, list) or not mappings:
+        _fail("MAPPINGS_INVALID", "하나 이상의 읽기 매핑이 필요합니다.")
+    required = recipe.get("required_fields", [])
+    if not isinstance(required, list):
+        _fail("FIELDS_INVALID", "필수 필드 목록이 올바르지 않습니다.")
+    for field in required:
+        _v2_pointer(field)
+    for mapping in mappings:
+        if not isinstance(mapping, dict):
+            _fail("MAPPING_INVALID", "각 매핑은 객체여야 합니다.")
+        reference = mapping.get("result_item_id")
+        item = catalog.get(reference) if isinstance(reference, str) else None
+        if item is None:
+            _fail("ITEM_NOT_FOUND", "매핑의 결과 항목을 찾을 수 없습니다.")
+        if item["kind"] in {"image", "video"}:
+            _fail("FORMAT_UNSUPPORTED", "미디어는 안전한 미디어 등록 경로로 연결하세요.")
+        _v2_pointer(mapping.get("source"))
+        mapping.setdefault("missing", "skip")
+        if mapping["missing"] not in ("error", "skip"):
+            _fail("MISSING_POLICY_INVALID", "결측 정책은 오류 또는 건너뛰기여야 합니다.")
+        if mapping.get("aggregate", "none") not in ("none", "max", "min", "mean"):
+            _fail("AGGREGATE_INVALID", "지원하지 않는 집계입니다.")
+        dimensions = mapping.get("dimensions", {})
+        if not isinstance(dimensions, dict) or set(dimensions) != set(item["dimensions"]):
+            _fail("DIMENSIONS_INVALID", "항목에 정의한 모든 차원의 원본 필드를 연결하세요.")
+        for path in dimensions.values():
+            _v2_pointer(path)
+        if mapping.get("series_source"):
+            _v2_pointer(mapping["series_source"])
+            if item["kind"] != "curve" or "series" in dimensions:
+                _fail("DIMENSIONS_INVALID", "series 필드는 곡선 구분에만 사용하고 차원과 중복할 수 없습니다.")
+        if item["kind"] == "curve":
+            _v2_pointer(mapping.get("x_source"))
+            if item["data_type"] not in {"FLOAT", "INTEGER"} or mapping.get("aggregate", "none") != "none":
+                _fail("TYPE_MISMATCH", "곡선에는 숫자 값과 집계하지 않는 매핑이 필요합니다.")
+            convert_unit(0, mapping.get("x_unit", "s"), mapping.get("target_x_unit", mapping.get("x_unit", "s")))
+        if item["data_type"] in {"FLOAT", "INTEGER"}:
+            convert_unit(0, mapping.get("source_unit", item["unit"]), item["unit"])
+        elif mapping.get("aggregate", "none") != "none":
+            _fail("TYPE_MISMATCH", "숫자 항목만 집계할 수 있습니다.")
+    return recipe
+
+
 def validate_recipe(recipe: dict, items: list[dict]) -> dict:
     recipe = _definition(recipe)
+    if recipe.get("reader_version") == 2:
+        return _validate_recipe_v2(recipe, items)
     catalog = _items(items)
     if recipe.get("format") not in ("csv", "json"):
         _fail("FORMAT_UNSUPPORTED", "CSV 또는 JSON 읽기 형식을 선택하세요.")
@@ -211,6 +298,15 @@ def _json_pairs(pairs: list) -> dict:
 
 
 def _read(filename: str, content: bytes, recipe: dict) -> list[dict]:
+    if recipe.get("reader_version") == 2:
+        suffix = PurePath(filename).suffix.lower()
+        if suffix not in {".csv", ".tsv", ".txt", ".json"}:
+            _fail("FORMAT_MISMATCH", "지원하는 샘플 파일 확장자가 아닙니다.")
+        try:
+            parsed = read_v2(filename, content, recipe)
+        except ReaderV2Error as error:
+            _fail(error.code, error.message)
+        return parsed["rows"]
     if not isinstance(content, bytes) or not 0 < len(content) <= MAX_BYTES:
         _fail("FILE_SIZE_LIMIT", "빈 파일이거나 5 MB 파일 한도를 초과했습니다.")
     fmt = recipe["format"]
@@ -226,10 +322,14 @@ def _read(filename: str, content: bytes, recipe: dict) -> list[dict]:
             for _ in range(recipe.get("header_row", 1) - 1):
                 next(reader)
             fields = next(reader)
+            if any(len(field) > LEGACY_CSV_FIELD_LIMIT for field in fields):
+                _fail("CSV_INVALID", "올바르지 않은 CSV 형식입니다.")
             if not fields or len(fields) > MAX_FIELDS or any(not f for f in fields) or len(set(fields)) != len(fields):
                 _fail("FIELDS_INVALID", "헤더는 비어 있지 않은 고유 필드이며 최대 256개여야 합니다.")
             rows = []
             for line in reader:
+                if any(len(cell) > LEGACY_CSV_FIELD_LIMIT for cell in line):
+                    _fail("CSV_INVALID", "올바르지 않은 CSV 형식입니다.")
                 if not line:
                     continue
                 if len(line) != len(fields):
@@ -276,12 +376,116 @@ def _fields(row: dict, prefix: str = "", depth: int = 0) -> list[str]:
     return fields[:MAX_FIELDS]
 
 
-def inspect_sample(filename: str, content: bytes) -> dict:
-    fmt = PurePath(filename).suffix.lower().lstrip(".")
-    if fmt not in {"csv", "json"}:
-        _fail("FORMAT_UNSUPPORTED", "CSV 또는 JSON 샘플을 선택하세요.")
-    rows = _read(filename, content, {"format": fmt})
-    return {"format": fmt, "fields": list(dict.fromkeys(f for row in rows[:20] for f in _fields(row)))[:MAX_FIELDS], "rows": rows[:20], "row_count": len(rows)}
+def _v2_flatten(value: Any, pointer: str = "#") -> list[tuple[str, Any]]:
+    """Return all leaves using JSON Pointer, retaining literal punctuation keys."""
+    result: list[tuple[str, Any]] = []
+    pending = [(pointer, value)]
+    while pending:
+        current_pointer, current = pending.pop()
+        if isinstance(current, dict):
+            if not current:
+                result.append((current_pointer, current))
+            else:
+                pending.extend((current_pointer + "/" + key.replace("~", "~0").replace("/", "~1"), child) for key, child in reversed(list(current.items())))
+        elif isinstance(current, list):
+            if not current:
+                result.append((current_pointer, current))
+            else:
+                pending.extend((current_pointer + "/" + str(index), child) for index, child in reversed(list(enumerate(current))))
+        else:
+            result.append((current_pointer, current))
+    return result
+
+
+def _display_path(pointer: str) -> str:
+    if pointer == "#":
+        return "#"
+    tokens = [part.replace("~1", "/").replace("~0", "~") for part in pointer[2:].split("/")]
+    display = ""
+    for token in tokens:
+        display += f"[{token}]" if token.isdigit() else ("." if display else "") + token
+    return display
+
+
+def _field_data_type(values: set[str]) -> str:
+    return next(iter(values)) if len(values) == 1 else "mixed"
+
+
+def _value_type(value: Any) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, int):
+        return "integer"
+    if isinstance(value, float):
+        return "number"
+    if isinstance(value, str):
+        return "text"
+    if isinstance(value, list):
+        return "array"
+    return "object"
+
+
+def _guess_unit(label: str) -> str:
+    label = re.sub(r"(?:\[\d+\])+$", "", label)
+    match = re.search(r"(?:\[|\()\s*([^\]\)]+?)\s*(?:\]|\))$", label)
+    return match.group(1) if match and match.group(1) in _UNITS else ""
+
+
+def inspect_sample(
+    filename: str,
+    content: bytes,
+    *,
+    row_offset: int = 0,
+    row_limit: int = 50,
+    field_offset: int = 0,
+    field_limit: int = 100,
+    overrides: dict[str, Any] | None = None,
+) -> dict:
+    """Inspect every field while returning bounded, independently pageable views.
+
+    ``fields`` remains the historic human-readable field list.  ``field_details``
+    is the v2 contract and supplies the lossless JSON Pointer to save in recipes.
+    """
+    if type(row_offset) is not int or type(field_offset) is not int or row_offset < 0 or field_offset < 0:
+        _fail("PAGE_INVALID", "페이지 시작 위치는 0 이상의 정수여야 합니다.")
+    if type(row_limit) is not int or type(field_limit) is not int or not 1 <= row_limit <= 1000 or not 1 <= field_limit <= 5000:
+        _fail("PAGE_INVALID", "페이지 크기가 올바르지 않습니다.")
+    if overrides is not None and not isinstance(overrides, dict):
+        _fail("OVERRIDES_INVALID", "검사 재설정 값은 객체여야 합니다.")
+    try:
+        parsed = read_v2(filename, content, overrides)
+    except ReaderV2Error as error:
+        _fail(error.code, error.message)
+    rows = parsed["rows"]
+    all_fields: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        for source, value in _v2_flatten(row):
+            label = _display_path(source)
+            detail = all_fields.setdefault(source, {"source": source, "label": label, "value": None, "data_types": set(), "present": 0, "null_count": 0, "empty_count": 0, "has_value": False, "mappable": False, "unit": _guess_unit(label)})
+            detail["present"] += 1
+            detail["null_count"] += value is None
+            detail["empty_count"] += isinstance(value, str) and value == ""
+            detail["data_types"].add(_value_type(value))
+            detail["mappable"] |= not isinstance(value, (dict, list))
+            # ``None`` is a known null, not a missing field; false and zero are
+            # likewise retained as representative values.
+            if not detail["has_value"] or (detail["value"] is None and value is not None):
+                detail["value"] = value
+                detail["has_value"] = True
+    ordered = [all_fields[source] for source in sorted(all_fields, key=lambda source: (_display_path(source).casefold(), source))]
+    details = [{"source": entry["source"], "label": entry["label"], "value": entry["value"], "data_type": _field_data_type(entry["data_types"]), "unit": entry["unit"], "missing": entry["present"] < len(rows), "missing_count": len(rows) - entry["present"], "null_count": entry["null_count"], "empty_count": entry["empty_count"], "mappable": entry["mappable"]} for entry in ordered]
+    field_page = details[field_offset:field_offset + field_limit]
+    row_page = rows[row_offset:row_offset + row_limit]
+    suggestion = {"reader_version": 2, "format": parsed["format"], "encoding": parsed["encoding"], "delimiter": parsed["delimiter"], "header_row": parsed["header_row"], "records_path": parsed["records_path"], "input_layout": parsed["input_layout"]}
+    return {
+        "format": parsed["format"], "fields": [_display_path(entry["source"]) for entry in field_page], "rows": row_page,
+        "row_count": len(rows), "field_count": len(details), "field_details": field_page,
+        "row_offset": row_offset, "row_limit": row_limit, "field_offset": field_offset, "field_limit": field_limit,
+        "has_more_rows": row_offset + len(row_page) < len(rows), "has_more_fields": field_offset + len(field_page) < len(details),
+        "warnings": parsed["warnings"], "recipe_suggestion": suggestion,
+    }
 
 
 def _dimension_key(dimensions: dict) -> str:
@@ -309,10 +513,21 @@ def _typed(value: Any, item: dict, mapping: dict) -> Any:
 
 def preview_recipe(recipe: dict, items: list[dict], filename: str, content: bytes) -> dict:
     recipe = validate_recipe(recipe, items)
+    is_v2 = recipe.get("reader_version") == 2
+    output_byte_limit = MAX_V2_OUTPUT_BYTES if is_v2 else MAX_OUTPUT_BYTES
+    deadline = time.monotonic() + MAX_V2_EXECUTION_SECONDS if is_v2 else None
+    def get_value(row: Any, path: str) -> Any:
+        return json_pointer_get(row, path) if is_v2 and (path == "#" or path.startswith("#/")) else _get(row, path)
     catalog = _items(items)
     rows = _read(filename, content, recipe)
+    def check_deadline() -> None:
+        if deadline is not None and time.monotonic() > deadline:
+            _fail("EXECUTION_TIMEOUT", "v2 레시피 실행 시간이 30초 한도를 초과했습니다.")
+    check_deadline()
     for index, row in enumerate(rows, 1):
-        if any(_get(row, p) is None for p in recipe.get("required_fields", [])):
+        if index % 1024 == 0:
+            check_deadline()
+        if any(get_value(row, p) is None for p in recipe.get("required_fields", [])):
             _fail("REQUIRED_FIELD_MISSING", f"{index}번째 레코드에 필수 필드가 없습니다.")
     observations = []
     seen = set()
@@ -321,11 +536,14 @@ def preview_recipe(recipe: dict, items: list[dict], filename: str, content: byte
     observation_bytes = 0
     checksum = hashlib.sha256(content).hexdigest()
     for mapping in recipe["mappings"]:
+        check_deadline()
         item = catalog[mapping["result_item_id"]]
         groups: dict[str, list] = defaultdict(list)
         dims_by_key = {}
         for index, row in enumerate(rows, 1):
-            raw = _get(row, mapping["source"])
+            if deadline is not None and index % 1024 == 0 and time.monotonic() > deadline:
+                _fail("EXECUTION_TIMEOUT", "v2 레시피 실행 시간이 30초 한도를 초과했습니다.")
+            raw = get_value(row, mapping["source"])
             if raw is None or raw == "":
                 if mapping.get("missing") == "skip":
                     skipped += 1
@@ -333,12 +551,12 @@ def preview_recipe(recipe: dict, items: list[dict], filename: str, content: byte
                 _fail("VALUE_MISSING", f"{index}번째 레코드의 {mapping['source']} 값이 없습니다.")
             dimensions = {}
             for name, path in mapping.get("dimensions", {}).items():
-                dim = _get(row, path)
+                dim = get_value(row, path)
                 if dim is None or dim == "" or isinstance(dim, (list, dict)):
                     _fail("DIMENSION_MISSING", f"{index}번째 레코드의 {name} 차원 값이 없습니다.")
                 dimensions[name] = str(dim)
             if mapping.get("series_source"):
-                series = _get(row, mapping["series_source"])
+                series = get_value(row, mapping["series_source"])
                 if series is None or isinstance(series, (dict, list)):
                     _fail("DIMENSION_MISSING", "곡선 구분 값이 없습니다.")
                 dimensions["series"] = str(series)
@@ -346,15 +564,17 @@ def preview_recipe(recipe: dict, items: list[dict], filename: str, content: byte
             dims_by_key[group_key] = dimensions
             value = _typed(raw, item, mapping)
             if item["kind"] == "curve":
-                x = convert_unit(_get(row, mapping["x_source"]), mapping.get("x_unit", "s"), mapping.get("target_x_unit", mapping.get("x_unit", "s")))
+                x = convert_unit(get_value(row, mapping["x_source"]), mapping.get("x_unit", "s"), mapping.get("target_x_unit", mapping.get("x_unit", "s")))
                 if groups[group_key] and x <= groups[group_key][-1]["x"]:
                     _fail("CURVE_ORDER_INVALID", "곡선 X축은 각 series에서 중복 없이 증가해야 합니다.")
                 groups[group_key].append({"x": x, "y": value})
             else:
                 groups[group_key].append(value)
-        for key, values in groups.items():
+        for group_index, (key, values) in enumerate(groups.items(), 1):
+            if deadline is not None and group_index % 1024 == 0 and time.monotonic() > deadline:
+                _fail("EXECUTION_TIMEOUT", "v2 레시피 실행 시간이 30초 한도를 초과했습니다.")
             output_values += len(values) if item["kind"] == "curve" else 1
-            if output_values > MAX_OUTPUT_VALUES:
+            if not is_v2 and output_values > MAX_OUTPUT_VALUES:
                 _fail("OUTPUT_LIMIT", "정규화 결과의 전체 값/곡선 점은 100,000개 이하여야 합니다.")
             identity = (item["id"], key)
             if identity in seen:
@@ -376,8 +596,8 @@ def preview_recipe(recipe: dict, items: list[dict], filename: str, content: byte
                     _fail("TYPE_MISMATCH", "집계 결과가 정수 항목의 자료형과 다릅니다.")
                 observation.update(value=value, aggregate=aggregate)
             observation_bytes += len(json.dumps(observation, ensure_ascii=False).encode("utf-8"))
-            if observation_bytes > MAX_OUTPUT_BYTES:
-                _fail("OUTPUT_LIMIT", "정규화 결과가 8 MB 한도를 초과했습니다.")
+            if observation_bytes > output_byte_limit:
+                _fail("OUTPUT_LIMIT", f"정규화 결과가 {output_byte_limit // (1024 * 1024)} MiB 한도를 초과했습니다.")
             observations.append(observation)
     if not observations:
         _fail("NO_RESULTS", "유효한 결과가 없습니다. 결측 정책과 필드 연결을 확인하세요.")
@@ -389,8 +609,8 @@ def preview_recipe(recipe: dict, items: list[dict], filename: str, content: byte
         else:
             curves.append({**common, "series_key": entry["dimensions"].get("series", "default"), "catalog_data_type": "TIME_SERIES", "x_label": "X", "x_unit": entry["x_unit"], "y_label": entry["label"], "y_unit": entry["unit"], "points": entry["points"]})
     result = {"schema_id": "semantic-recipe", "schema_version": 1, "solver": "Recipe", "note": "", "scalars": scalars, "curves": curves, "media": [], "observations": observations, "summary": {"row_count": len(rows), "scalar_count": len(scalars), "curve_count": len(curves), "skipped_values": skipped}, "warnings": [f"결측 값 {skipped}개를 건너뛰었습니다."] if skipped else []}
-    if len(json.dumps(result, ensure_ascii=False).encode("utf-8")) > MAX_OUTPUT_BYTES:
-        _fail("OUTPUT_LIMIT", "정규화 결과가 8 MB 한도를 초과했습니다.")
+    if len(json.dumps(result, ensure_ascii=False).encode("utf-8")) > output_byte_limit:
+        _fail("OUTPUT_LIMIT", f"정규화 결과가 {output_byte_limit // (1024 * 1024)} MiB 한도를 초과했습니다.")
     return result
 
 

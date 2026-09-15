@@ -11,7 +11,9 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
+from starlette.concurrency import run_in_threadpool
+from tempfile import SpooledTemporaryFile
 from pydantic import BaseModel, Field
 
 from ..adapters.persistence.result_ingestion import SQLResultIngestionQuery
@@ -28,7 +30,7 @@ from ..domains.semantic_mapping.engine import (
 from ..modules.access_control import PROJECT_DATA_VIEW, RESULT_IMPORT, SYSTEM_CATALOG_MANAGE, require_permission, require_resource_permission
 from ..repositories import semantic_mapping as mapping_repository
 from ..security import write_audit_event
-from ..services import spdm_storage
+from ..services import spdm_storage, semantic_sample_uploads as sample_uploads
 from ..services.semantic_mapping import persist_semantic_import, semantic_transaction
 from .semantic_body_limit import SemanticBodyLimitRoute
 from .semantic_review import record_unresolved_refresh
@@ -49,6 +51,7 @@ class DefinitionSave(BaseModel):
     name: str
     definition: dict[str, Any]
     expected_version: int | None = None
+    sample_upload_id: str | None = Field(default=None, min_length=32, max_length=32)
     sample_filename: str | None = None
     sample_content_base64: str | None = Field(default=None, max_length=349528)
 
@@ -164,7 +167,13 @@ def _save_definition(kind: str, payload: DefinitionSave, request: Request) -> di
             mapping_repository.lock_items_for_definition_save(conn)
             definitions = _items(conn)
             (validate_recipe if kind == "recipe" else validate_template)(payload.definition, definitions)
-            if kind == "recipe" and payload.sample_content_base64 is not None:
+            sample_filename = payload.sample_filename
+            if payload.sample_upload_id and payload.sample_content_base64 is not None:
+                raise HTTPException(422, {"code": "SEMANTIC_SAMPLE_AMBIGUOUS"})
+            if kind == "recipe" and payload.sample_upload_id:
+                sample_filename, sample = sample_uploads.load(request.state.principal.user_id, payload.sample_upload_id)
+                preview_recipe(payload.definition, definitions, sample_filename, sample)
+            elif kind == "recipe" and payload.sample_content_base64 is not None:
                 try: sample = base64.b64decode(payload.sample_content_base64, validate=True)
                 except ValueError as error: raise HTTPException(422, {"code": "SEMANTIC_SAMPLE_INVALID"}) from error
                 if not payload.sample_filename or not sample or len(sample) > _SAMPLE_LIMIT: raise HTTPException(422, {"code": "SEMANTIC_SAMPLE_INVALID"})
@@ -172,7 +181,7 @@ def _save_definition(kind: str, payload: DefinitionSave, request: Request) -> di
             else: sample = None
             result = _save_version(conn, kind, payload.id, payload.name, payload.definition, payload.expected_version, request.state.principal.user_id)
             if sample is not None:
-                mapping_repository.store_recipe_sample(conn, filename=payload.sample_filename, digest=hashlib.sha256(sample).hexdigest(), content=sample, recipe_id=result["id"], version_number=result["version"])
+                mapping_repository.store_recipe_sample(conn, filename=sample_filename, digest=hashlib.sha256(sample).hexdigest(), content=sample, recipe_id=result["id"], version_number=result["version"])
             write_audit_event(request=request, principal=request.state.principal, status_code=201, action=f"SEMANTIC_{kind.upper()}_SAVED", detail={f"{kind}_id": result["id"], "version": result["version"]}, connection=conn)
             return result
         except BaseException as error:
@@ -203,13 +212,11 @@ def activate_recipe(recipe_id: str, payload: Activate, request: Request) -> dict
 def activate_template(template_id: str, payload: Activate, request: Request) -> dict[str, Any]: return _activate("template", template_id, payload, request)
 
 
-async def _multipart(request: Request) -> tuple[dict[str, str], str, bytes]:
-    """Read the small, bounded browser multipart subset without a new runtime dependency.
+async def _multipart(request: Request, *, allow_reference: bool = False) -> tuple[dict[str, str], str, bytes]:
+    """Spool a bounded browser multipart request before MIME decoding.
 
-    The application otherwise has no multipart endpoints.  Keeping this parser
-    here avoids changing the locked offline dependency bundle merely for three
-    CSV/JSON upload routes; every part is length-bounded and only one file is
-    accepted.
+    One file or one owned upload reference is accepted. The existing stdlib
+    parser preserves the offline dependency contract.
     """
     content_type = request.headers.get("content-type", "")
     marker = "boundary="
@@ -218,18 +225,23 @@ async def _multipart(request: Request) -> tuple[dict[str, str], str, bytes]:
     boundary = content_type.split(marker, 1)[1].strip().strip('"').encode("ascii", "strict")
     if not boundary or len(boundary) > 200:
         raise HTTPException(422, {"code": "SEMANTIC_MULTIPART_INVALID"})
+    limit = sample_uploads.MAX_SAMPLE_BYTES + 6 * 1024 * 1024
     declared = request.headers.get("content-length")
-    if declared and (not declared.isdigit() or int(declared) > 6 * 1024 * 1024):
+    if declared and (not declared.isdigit() or int(declared) > limit):
         raise HTTPException(413, {"code": "SEMANTIC_SAMPLE_TOO_LARGE"})
-    chunks=[]; total=0
-    async for chunk in request.stream():
-        total += len(chunk)
-        if total > 6 * 1024 * 1024: raise HTTPException(413, {"code": "SEMANTIC_SAMPLE_TOO_LARGE"})
-        chunks.append(chunk)
-    try:
-        message = BytesParser(policy=policy.default).parsebytes((f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n").encode("ascii") + b"".join(chunks))
-    except (ValueError, UnicodeError):
-        raise HTTPException(422, {"code": "SEMANTIC_MULTIPART_INVALID"}) from None
+    total = 0
+    with SpooledTemporaryFile(max_size=1024 * 1024) as upload:
+        upload.write((f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n").encode("ascii"))
+        async for chunk in request.stream():
+            total += len(chunk)
+            if total > limit:
+                raise HTTPException(413, {"code": "SEMANTIC_SAMPLE_TOO_LARGE"})
+            upload.write(chunk)
+        upload.seek(0)
+        try:
+            message = await run_in_threadpool(BytesParser(policy=policy.default).parse, upload)
+        except (ValueError, UnicodeError):
+            raise HTTPException(422, {"code": "SEMANTIC_MULTIPART_INVALID"}) from None
     if not message.is_multipart() or message.defects:
         raise HTTPException(422, {"code": "SEMANTIC_MULTIPART_INVALID"})
     fields: dict[str, str] = {}; filename = ""; content = b""; seen=set(); file_count=0
@@ -243,32 +255,79 @@ async def _multipart(request: Request) -> tuple[dict[str, str], str, bytes]:
         else:
             try: fields[name] = value.decode("utf-8")
             except UnicodeError: raise HTTPException(422, {"code": "SEMANTIC_MULTIPART_INVALID"}) from None
-    if file_count != 1:
+    if allow_reference and file_count == 0 and fields.get("upload_id"):
+        return fields, "", b""
+    if file_count != 1 or fields.get("upload_id"):
         raise HTTPException(422, {"code": "SEMANTIC_MULTIPART_INVALID"})
-    if not filename or not content or len(content) > 32 * 1024 * 1024:
+    if not filename or not content or len(content) > sample_uploads.MAX_SAMPLE_BYTES:
         raise HTTPException(422, {"code": "SEMANTIC_SAMPLE_INVALID"})
     return fields, filename, content
+
+
+def _inspection_options(fields: dict[str, str]) -> dict:
+    try:
+        options = {key: int(fields[key]) for key in ("row_offset", "row_limit", "field_offset", "field_limit") if key in fields}
+        if any(value < 0 for value in options.values()) or any(options.get(key, 1) < 1 or options.get(key, 1) > 500 for key in ("row_limit", "field_limit")):
+            raise ValueError()
+        if fields.get("overrides"):
+            overrides = json.loads(fields["overrides"])
+            if not isinstance(overrides, dict):
+                raise ValueError()
+            options["overrides"] = overrides
+        return options
+    except (ValueError, TypeError):
+        raise HTTPException(422, {"code": "SEMANTIC_INSPECT_OPTIONS_INVALID"}) from None
 
 
 @router.post("/inspect")
 async def inspect(request: Request) -> dict[str, Any]:
     with connect() as conn:
         require_permission(request, SYSTEM_CATALOG_MANAGE, conn=conn)
-    _, filename, content = await _multipart(request)
-    try: return inspect_sample(filename, content)
-    except Exception as error: raise _error(error) from error
+    fields, filename, content = await _multipart(request)
+    try:
+        result = await run_in_threadpool(inspect_sample, filename, content, **_inspection_options(fields))
+        upload_id = await run_in_threadpool(sample_uploads.save, request.state.principal.user_id, filename, content)
+        return {**result, "upload_id": upload_id, "filename": filename, "expires_in_seconds": sample_uploads.UPLOAD_TTL_SECONDS}
+    except Exception as error:
+        raise _error(error) from error
+
+
+@router.get("/sample-uploads/{upload_id}")
+def inspect_upload(upload_id: str, request: Request, row_offset: int = Query(default=0, ge=0),
+                   row_limit: int = Query(default=50, ge=1, le=500), field_offset: int = Query(default=0, ge=0),
+                   field_limit: int = Query(default=100, ge=1, le=500), overrides: str | None = None):
+    with connect() as conn:
+        require_permission(request, SYSTEM_CATALOG_MANAGE, conn=conn)
+    filename, content = sample_uploads.load(request.state.principal.user_id, upload_id)
+    options = _inspection_options({"row_offset": str(row_offset), "row_limit": str(row_limit),
+                                   "field_offset": str(field_offset), "field_limit": str(field_limit),
+                                   **({"overrides": overrides} if overrides else {})})
+    try:
+        return {**inspect_sample(filename, content, **options), "upload_id": upload_id, "filename": filename}
+    except Exception as error:
+        raise _error(error) from error
+
+
+@router.delete("/sample-uploads/{upload_id}")
+def delete_upload(upload_id: str, request: Request):
+    with connect() as conn:
+        require_permission(request, SYSTEM_CATALOG_MANAGE, conn=conn)
+    sample_uploads.delete(request.state.principal.user_id, upload_id)
+    return {"status": "DELETED"}
 
 
 @router.post("/preview")
 async def preview(request: Request) -> dict[str, Any]:
     with connect() as conn:
         require_permission(request, SYSTEM_CATALOG_MANAGE, conn=conn)
-    fields, filename, content = await _multipart(request)
+    fields, filename, content = await _multipart(request, allow_reference=True)
+    if fields.get("upload_id"):
+        filename, content = sample_uploads.load(request.state.principal.user_id, fields["upload_id"])
     try:
         recipe_definition = json.loads(fields["recipe"]); template_definition = json.loads(fields["template"]) if fields.get("template") else None
         with connect() as conn:
             catalog_items = _items(conn)
-        parsed = preview_recipe(recipe_definition, catalog_items, filename, content)
+        parsed = await run_in_threadpool(preview_recipe, recipe_definition, catalog_items, filename, content)
         return {"parsed": parsed, "widgets": resolve_widgets(template_definition, catalog_items, parsed) if template_definition else []}
     except Exception as error: raise _error(error) from error
 
@@ -299,7 +358,7 @@ def save_binding(payload: BindingSave, request: Request) -> dict[str, Any]:
             payload = payload.model_copy(update={"request_id": str(lineage[1])})
         if payload.role not in {"PROJECT", "REQUEST", "LOAD_CASE", "INPUT", "RESULTS"}:
             raise HTTPException(422, {"code": "SEMANTIC_BINDING_ROLE_INVALID"})
-        if (payload.role == "PROJECT" and (payload.request_id or payload.load_case_id)) or (payload.role == "REQUEST" and (not payload.request_id or payload.load_case_id)) or (payload.role in {"LOAD_CASE", "RESULTS"} and not payload.load_case_id):
+        if (payload.role == "PROJECT" and (payload.request_id or payload.load_case_id)) or (payload.role == "REQUEST" and (not payload.request_id or payload.load_case_id)) or (payload.role == "LOAD_CASE" and not payload.load_case_id):
             raise HTTPException(422, {"code": "SEMANTIC_BINDING_TARGET_MISMATCH"})
         if payload.load_case_id and not payload.recipe_ids:
             raise HTTPException(422, {"code": "SEMANTIC_RECIPE_REQUIRED"})
@@ -361,7 +420,7 @@ def _import(conn: Any, request: Request, filename: str, content: bytes, recipe_i
     if any(widget.get("status") != "READY" for widget in widgets):
         raise HTTPException(422, {"code": "SEMANTIC_WIDGET_INPUT_INVALID", "widgets": widgets})
     digest = hashlib.sha256(content).hexdigest(); now = _now()
-    command = {"project_id": target.project_id, "request_id": target.request_id, "load_case_id": load_case_id, "source_type": "SEMANTIC_RECIPE", "source_name": f"semantic/{recipe_id}/{recipe_version}/{filename}", "source_checksum": digest, "source_run_id": f"semantic:{recipe_id}:{recipe_version}:{digest}", "conflict_policy": "SKIP", "parser_version": "semantic-mapping-v1", "parsed": parsed, "actor": request.state.principal.display_name, "metadata": {"recipe_id": recipe_id, "recipe_version": recipe_version, "template_id": template_id, "template_version": template_version, "observations": parsed.get("observations", []), "source_filename": filename}}
+    command = {"project_id": target.project_id, "request_id": target.request_id, "load_case_id": load_case_id, "source_type": "SEMANTIC_RECIPE", "source_name": f"semantic/{recipe_id}/{recipe_version}/{filename}", "source_checksum": digest, "source_run_id": f"semantic:{recipe_id}:{recipe_version}:{digest}", "conflict_policy": "SKIP", "parser_version": "semantic-mapping-v2" if recipe.get("reader_version") == 2 else "semantic-mapping-v1", "parsed": parsed, "actor": request.state.principal.display_name, "metadata": {"recipe_id": recipe_id, "recipe_version": recipe_version, "template_id": template_id, "template_version": template_version, "observations": parsed.get("observations", []), "source_filename": filename}}
     outcome, run_id = persist_semantic_import(conn, command, recipe_id=recipe_id, recipe_version=recipe_version, template_id=template_id, template_version=template_version, filename=filename, source_bytes=content, authorize=lambda c, tx: require_resource_permission(request, RESULT_IMPORT, "load_case", c["load_case_id"], conn=tx), now=_now)
     if outcome["status"] == "SKIPPED" and run_id:
         stored = mapping_repository.provenance_template(conn, run_id)
@@ -405,13 +464,13 @@ def refresh_binding(binding_id: str, request: Request) -> dict[str, Any]:
         for entry_count, path in enumerate(directory.iterdir(), 1):
             if entry_count > 5000:
                 raise HTTPException(422, {"code": "SEMANTIC_REFRESH_ENTRY_LIMIT"})
-            if path.is_file() and path.suffix.lower() in {".csv", ".json"} and not spdm_storage._is_reparse(path):
+            if path.is_file() and path.suffix.lower() in {".csv", ".json", ".tsv", ".txt"} and not spdm_storage._is_reparse(path):
                 paths.append(path)
                 if len(paths) > 500: raise HTTPException(422, {"code": "SEMANTIC_REFRESH_FILE_LIMIT"})
         for path in sorted(paths, key=lambda p: p.name.casefold()):
             content: bytes | None = None
             try:
-                content, _ = spdm_storage.read_stable_bytes(path, max_bytes=5 * 1024 * 1024)
+                content, _ = spdm_storage.read_stable_bytes(path, max_bytes=sample_uploads.MAX_SAMPLE_BYTES)
                 total_bytes += len(content)
                 if total_bytes > 128 * 1024 * 1024: raise spdm_storage.SpdmStorageError("SEMANTIC_REFRESH_SIZE_LIMIT", "새로고침 파일 총량이 한도를 초과했습니다.")
                 candidates = []

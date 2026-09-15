@@ -108,6 +108,19 @@ def test_export_import_is_draft_and_invalid_package_is_atomic() -> None:
 
 
 @pytest.mark.duckdb_integration
+def test_project_level_results_binding_preserves_import_load_case_requirement(monkeypatch, tmp_path):
+    root = tmp_path / "project-results"
+    (root / "CAD").mkdir(parents=True)
+    monkeypatch.setenv("SIMDASH_SPDM_ROOT", str(root))
+    with _client() as client:
+        saved = client.post("/api/semantic-mapping/bindings", json={"relative_path": "CAD", "project_id": "project-tv-001", "role": "RESULTS", "recipe_ids": []})
+        assert saved.status_code == 201, saved.text
+        refresh = client.post(f"/api/semantic-mapping/bindings/{saved.json()['id']}/refresh")
+        assert refresh.status_code == 422
+        assert refresh.json()["detail"]["code"] == "SEMANTIC_BINDING_LOAD_CASE_REQUIRED"
+
+
+@pytest.mark.duckdb_integration
 def test_folder_binding_parent_child_reconnect_revision_and_overlap(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     root = tmp_path / "semantic-root"; (root / "arbitrary" / "case-a").mkdir(parents=True); (root / "renamed").mkdir()
     monkeypatch.setenv("SIMDASH_SPDM_ROOT", str(root))

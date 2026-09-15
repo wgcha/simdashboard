@@ -24,6 +24,11 @@ export type FolderDiscoveryPreviewRow = { relative_path: string; role: FolderRol
 export type FolderDiscoveryPreview = { id: string; scan_id: string; can_apply: boolean; rows: (FolderDiscoveryPreviewRow & { role_kind?: FolderRoleKind; role_label?: string; project_id?: string | null; request_id?: string | null; load_case_id?: string | null })[]; unmatched_count: number; excluded_paths?: string[]; summary: { projects: number; requests: number; load_cases: number; conflicts: number; excluded: number; folders?: number } }
 export type FolderDiscoveryApply = { status: 'APPLIED'; created: { projects: number; requests: number; load_cases: number }; kept_count: number; excluded_count?: number }
 export type FolderDiscoveryRules = { rules: FolderDiscoveryRule[]; revision: number }
+export type FolderDiscoveryPage<T> = { items: T[]; offset: number; limit: number; total: number }
+export type FolderDiscoverySavedRule = { relative_path: string; revision: number; updated_at: string }
+export type FolderDiscoveryHistory = { id: string; scan_id: string; relative_path: string; created_at: string; rules_revision: number; catalog_revision: number; outcome: FolderDiscoveryApply }
+export type FolderDiscoveryConnection = { relative_path: string; role: FolderRole; role_kind: FolderRoleKind; code: string | null; name: string; analysis_type: string; parent_target_id: string | null; target_id: string; created_at: string }
+export type FolderDiscoveryHistoryRules = { preview_id: string; relative_path: string; rules: FolderDiscoveryRule[]; rules_revision: number; current_rules_revision: number }
 
 const completeRule = (rule: FolderDiscoveryRule) => {
   const { prefix: legacyPrefix, ...rest } = rule
@@ -41,6 +46,10 @@ export const folderDiscoveryApi = {
   apply: async (previewId: string, signal?: AbortSignal) => unwrapGenerated(await apiClient.POST('/api/folder-discovery/apply', { body: { preview_id: previewId }, signal })) as FolderDiscoveryApply,
   rules: async (relativePath = '', signal?: AbortSignal) => unwrapGenerated(await apiClient.GET('/api/folder-discovery/rules', { params: { query: { relative_path: relativePath } }, signal })) as FolderDiscoveryRules,
   saveRules: async (relativePath: string, rules: FolderDiscoveryRule[], expectedRevision: number, signal?: AbortSignal) => unwrapGenerated(await apiClient.PUT('/api/folder-discovery/rules', { body: { relative_path: relativePath, rules: rules.map(completeRule), expected_revision: expectedRevision }, signal })) as FolderDiscoveryRules,
+  savedRules: async (offset = 0, signal?: AbortSignal) => unwrapGenerated(await apiClient.GET('/api/folder-discovery/saved-rules', { params: { query: { offset, limit: 100 } }, signal })) as FolderDiscoveryPage<FolderDiscoverySavedRule>,
+  history: async (offset = 0, signal?: AbortSignal) => unwrapGenerated(await apiClient.GET('/api/folder-discovery/history', { params: { query: { offset, limit: 100 } }, signal })) as FolderDiscoveryPage<FolderDiscoveryHistory>,
+  historyRules: async (previewId: string, signal?: AbortSignal) => unwrapGenerated(await apiClient.GET('/api/folder-discovery/history/{preview_id}/rules', { params: { path: { preview_id: previewId } }, signal })) as FolderDiscoveryHistoryRules,
+  connections: async (offset = 0, signal?: AbortSignal) => unwrapGenerated(await apiClient.GET('/api/folder-discovery/connections', { params: { query: { offset, limit: 100 } }, signal })) as FolderDiscoveryPage<FolderDiscoveryConnection>,
   catalog: async (signal?: AbortSignal) => unwrapGenerated(await apiClient.GET('/api/folder-discovery/catalog', { signal })) as FolderDiscoveryCatalog,
   saveCatalog: async (catalog: Omit<FolderDiscoveryCatalog, 'revision'>, expectedRevision: number, signal?: AbortSignal) => unwrapGenerated(await apiClient.PUT('/api/folder-discovery/catalog', { body: { ...catalog, expected_revision: expectedRevision }, signal })) as FolderDiscoveryCatalog,
 }

@@ -1,0 +1,142 @@
+import { expect, test } from '@playwright/test'
+import { readFileSync } from 'node:fs'
+import { loginWorkspace } from './workspace-test-helpers'
+
+test('issue sample drop detects key-value vectors, reset clears only the current sample', async ({ page }) => {
+  await loginWorkspace(page, 'e2e-admin', '/workspace/catalog/schemas')
+  await page.goto('/workspace/catalog/schemas')
+  const screen = page.locator('.semantic-page')
+  const inspector = screen.getByTestId('semantic-sample-inspector')
+  const csv = readFileSync('../backend/tests/fixtures/semantic_samples/issue_23.csv', 'utf8')
+  const transfer = await page.evaluateHandle((text) => {
+    const data = new DataTransfer()
+    data.items.add(new File([text], 'issue_23.csv', { type: 'text/csv' }))
+    return data
+  }, csv)
+  const inspected = page.waitForResponse((response) => response.url().endsWith('/semantic-mapping/inspect') && response.request().method() === 'POST')
+  await inspector.locator('.file-drop').dispatchEvent('drop', { dataTransfer: transfer })
+  const response = await inspected
+  expect(response.status()).toBe(200)
+  const payload = await response.json()
+  expect(payload.recipe_suggestion.input_layout).toBe('csv_key_value')
+  await expect(inspector).toContainText('-311.643')
+  await expect(inspector).toContainText('#/Set CG Coord. (mm)/2')
+  await inspector.getByRole('button', { name: '샘플 초기화', exact: true }).click()
+  await expect(inspector).not.toContainText('-311.643')
+  await expect(screen.getByLabel('원본 필드', { exact: true })).toHaveCount(0)
+  await expect.poll(async () => (await page.request.get(`/api/semantic-mapping/sample-uploads/${payload.upload_id}`)).status()).toBe(404)
+})
+
+test('fields beyond the first page remain mappable and reset ignores a delayed inspection', async ({ page }) => {
+  await loginWorkspace(page, 'e2e-admin', '/workspace/catalog/schemas')
+  await page.goto('/workspace/catalog/schemas')
+  const screen = page.locator('.semantic-page')
+  const inspector = screen.getByTestId('semantic-sample-inspector')
+  const fields = Object.fromEntries(Array.from({ length: 305 }, (_, i) => [`field${String(i).padStart(3, '0')}`, i]))
+  await inspector.locator('input[type=file]').setInputFiles({ name: 'wide.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(fields)) })
+  await expect(inspector).toContainText('305')
+  await expect(inspector).toContainText('#/field000')
+  await inspector.getByRole('button', { name: /필드 더 보기|다음 필드/ }).click()
+  await expect(inspector).toContainText('#/field100')
+  await inspector.getByRole('checkbox', { name: '#/field100 선택', exact: true }).check()
+  await inspector.getByRole('button', { name: /선택 필드 매핑 추가/ }).click()
+  await expect(screen.getByText(/매핑/).first()).toBeVisible()
+  await inspector.getByRole('button', { name: /필드 더 보기/ }).click()
+  await inspector.getByRole('button', { name: /필드 더 보기/ }).click()
+  await expect(inspector).toContainText('#/field304')
+  await expect(inspector.getByRole('button', { name: /필드 더 보기/ })).toBeDisabled()
+  await inspector.getByRole('button', { name: '이전 필드', exact: true }).click()
+  await expect(inspector).toContainText('#/field200')
+  await inspector.getByRole('button', { name: /필드 더 보기/ }).click()
+  await expect(inspector).toContainText('#/field304')
+  await inspector.getByRole('button', { name: '샘플 초기화', exact: true }).click()
+  await inspector.locator('input[type=file]').setInputFiles({ name: 'rows.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(Array.from({ length: 60 }, (_, value) => ({ value })))) })
+  await expect(inspector.locator('.sample-row-heading')).toContainText('1–50행')
+  await inspector.getByRole('button', { name: '행 더 보기', exact: true }).click()
+  await expect(inspector.locator('.sample-row-heading')).toContainText('51–60행')
+  await inspector.getByRole('button', { name: '이전 행', exact: true }).click()
+  await expect(inspector.locator('.sample-row-heading')).toContainText('1–50행')
+  await inspector.getByRole('button', { name: '행 더 보기', exact: true }).click()
+  await expect(inspector.locator('.sample-row-heading')).toContainText('51–60행')
+  await inspector.getByRole('button', { name: '샘플 초기화', exact: true }).click()
+  let release: () => void = () => undefined
+  let arrived: () => void = () => undefined
+  const pending = new Promise<void>((resolve) => { release = resolve })
+  const started = new Promise<void>((resolve) => { arrived = resolve })
+  await page.route('**/api/semantic-mapping/inspect', async (route) => {
+    const result = await route.fetch()
+    arrived()
+    await pending
+    await route.fulfill({ response: result }).catch(() => undefined)
+  })
+  await inspector.locator('input[type=file]').setInputFiles({ name: 'late.json', mimeType: 'application/json', buffer: Buffer.from('{"late":99}') })
+  await started
+  await inspector.getByRole('button', { name: '샘플 초기화', exact: true }).click()
+  release()
+  await expect(inspector).not.toContainText('#/late')
+  await expect(screen.getByLabel('원본 필드', { exact: true })).toHaveCount(0)
+})
+
+test('bulk items bind existing mappings and saved v2 recipe validates several samples', async ({ page }, testInfo) => {
+  await loginWorkspace(page, 'e2e-admin', '/workspace/catalog/schemas')
+  await page.goto('/workspace/catalog/schemas')
+  const screen = page.locator('.semantic-page')
+  const inspector = screen.getByTestId('semantic-sample-inspector')
+  const original = { name: 'original.json', mimeType: 'application/json', buffer: Buffer.from('{"value":7,"flag":false}') }
+  await inspector.locator('input[type=file]').setInputFiles(original)
+  await expect(inspector).toContainText('#/value')
+  await inspector.getByRole('checkbox', { name: '현재 페이지 전체 선택', exact: true }).check()
+  await inspector.getByRole('button', { name: /새 결과 항목으로 생성/ }).click()
+  const items = screen.getByLabel('결과 항목', { exact: true })
+  await expect(items).toHaveCount(2)
+  await expect(items.nth(0)).not.toHaveValue('')
+  await expect(items.nth(1)).not.toHaveValue('')
+  await screen.getByRole('button', { name: '미리보기 실행', exact: true }).click()
+  await expect(screen.locator('.preview-panel')).toContainText('2개 결과')
+  await page.screenshot({ path: testInfo.outputPath('sample-autodetect.png'), fullPage: true })
+  const validation = screen.getByTestId('semantic-multi-sample-validation')
+  await validation.getByLabel('검증할 샘플 파일들').setInputFiles([original, { name: 'missing.json', mimeType: 'application/json', buffer: Buffer.from('{"value":9}') }])
+  await expect(validation.getByRole('listitem').filter({ hasText: 'original.json' })).toContainText('통과')
+  await expect(validation.getByRole('listitem').filter({ hasText: 'missing.json' })).toContainText('오류')
+  const recipeName = `Auto recipe ${Date.now()}`
+  await screen.getByLabel('레시피 이름', { exact: true }).fill(recipeName)
+  const saving = page.waitForResponse((response) => response.url().endsWith('/semantic-mapping/recipes') && response.request().method() === 'POST')
+  await screen.getByRole('button', { name: '레시피 저장', exact: true }).click()
+  const saved = await saving
+  expect(saved.status()).toBe(201)
+  expect(saved.request().postDataJSON().definition.reader_version).toBe(2)
+  await inspector.getByRole('button', { name: '샘플 초기화', exact: true }).click()
+  await expect(items.nth(0)).not.toHaveValue('')
+  await page.reload()
+  await screen.getByLabel('저장된 레시피', { exact: true }).selectOption({ label: `${recipeName} · v1` })
+  await inspector.locator('input[type=file]').setInputFiles(original)
+  await expect(items.nth(0)).not.toHaveValue('')
+  await screen.getByRole('button', { name: '미리보기 실행', exact: true }).click()
+  await expect(screen.locator('.preview-panel')).toContainText('2개 결과')
+})
+
+test('reset while an item is being created cannot restore old mappings', async ({ page }) => {
+  await loginWorkspace(page, 'e2e-admin', '/workspace/catalog/schemas')
+  await page.goto('/workspace/catalog/schemas')
+  const screen = page.locator('.semantic-page')
+  const inspector = screen.getByTestId('semantic-sample-inspector')
+  await inspector.locator('input[type=file]').setInputFiles({ name: 'cancel.json', mimeType: 'application/json', buffer: Buffer.from('{"cancel_me":5}') })
+  await expect(inspector).toContainText('#/cancel_me')
+  let release: () => void = () => undefined
+  let arrived: () => void = () => undefined
+  const pending = new Promise<void>((resolve) => { release = resolve })
+  const started = new Promise<void>((resolve) => { arrived = resolve })
+  await page.route('**/api/semantic-mapping/items', async (route) => {
+    const result = await route.fetch()
+    arrived(); await pending
+    await route.fulfill({ response: result })
+  })
+  await inspector.getByRole('checkbox', { name: '현재 페이지 전체 선택', exact: true }).check()
+  await inspector.getByRole('button', { name: /새 결과 항목으로 생성/ }).click()
+  await started
+  await inspector.getByRole('button', { name: '샘플 초기화', exact: true }).click()
+  const completed = page.waitForResponse((response) => response.url().endsWith('/semantic-mapping/items'))
+  release(); await completed
+  await expect(screen.getByLabel('원본 필드', { exact: true })).toHaveCount(0)
+  await expect(inspector).not.toContainText('#/cancel_me')
+})

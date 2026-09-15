@@ -141,3 +141,33 @@ test('folder discovery creates real project, request and load case then keeps th
   await expect(page.getByLabel('의뢰', { exact: true })).toHaveValue(requestRecord!.id)
   await expect(page.getByLabel('하중 경우', { exact: true })).toHaveValue(actualCases.find(item => item.name === loadCase)!.id)
 })
+
+test('saved rules and applied snapshots reopen without contaminating another folder', async ({ page }, testInfo) => {
+  const root = testInfo.outputPath('saved-work-source')
+  mkdirSync(join(root, 'Alpha', 'CAD'), { recursive: true })
+  mkdirSync(join(root, 'Beta'), { recursive: true })
+  await loginWorkspace(page, 'e2e-admin', '/workspace/catalog/schemas')
+  expect((await page.request.put('/api/storage/config', { data: { root } })).ok()).toBe(true)
+  const first = [{ depth: 0, role: 'PROJECT', delimiter: '', code_token: 0, name_from_token: 0, keyword: 'Alpha', analysis_type: '' }, { depth: 1, role: 'INPUT', delimiter: '', code_token: 0, name_from_token: 0, keyword: 'cad', analysis_type: '' }]
+  const second = [{ ...first[0], keyword: 'Beta' }]
+  for (const [relative_path, rules] of [['Alpha', first], ['Beta', second]] as const) {
+    expect((await page.request.put('/api/folder-discovery/rules', { data: { relative_path, rules, expected_revision: 0 } })).ok()).toBe(true)
+  }
+  const scan = await (await page.request.post('/api/folder-discovery/scan', { data: { relative_path: 'Alpha' } })).json()
+  const preview = await (await page.request.post('/api/folder-discovery/preview', { data: { scan_id: scan.id, rules: [...first, first[0]] } })).json()
+  expect(preview.can_apply).toBe(true)
+  expect((await page.request.post('/api/folder-discovery/apply', { data: { preview_id: preview.id } })).ok()).toBe(true)
+  await page.reload()
+  await page.getByRole('button', { name: '폴더 조사·업무 생성', exact: true }).click()
+  const screen = page.getByTestId('folder-discovery-workspace')
+  await expect(screen.locator('.folder-discovery-saved')).toContainText('Alpha/CAD')
+  await screen.getByRole('button', { name: 'Alpha · v1', exact: true }).click()
+  await expect(screen.getByLabel('프로젝트 포함할 단어', { exact: true })).toHaveValue('Alpha')
+  await screen.getByRole('button', { name: /^Alpha · 프로젝트 1/ }).click()
+  await expect(screen.locator('.folder-discovery-rule')).toHaveCount(3)
+  await screen.getByRole('button', { name: 'Beta · v1', exact: true }).click()
+  await expect(screen.locator('.folder-discovery-rule')).toHaveCount(1)
+  await expect(screen.getByLabel('프로젝트 포함할 단어', { exact: true })).toHaveValue('Beta')
+  await screen.getByRole('button', { name: /규칙 저장/ }).click()
+  await expect(screen.getByRole('button', { name: 'Beta · v2', exact: true })).toBeVisible()
+})

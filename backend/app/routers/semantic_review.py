@@ -17,6 +17,7 @@ from ..modules.access_control import RESULT_IMPORT, require_resource_permission
 from ..repositories import semantic_review as review_repository
 from ..security import write_audit_event
 from ..services import spdm_storage
+from ..services.semantic_sample_uploads import MAX_SAMPLE_BYTES
 from ..services.semantic_mapping import persist_semantic_import_in_transaction
 from .semantic_body_limit import SemanticBodyLimitRoute
 
@@ -161,7 +162,7 @@ def _source(conn: Any, binding: dict[str, Any], relative_path: str) -> bytes:
         path = directory / relative_path
         spdm_storage._assert_safe_existing(path, root.root)
         if not path.is_file() or spdm_storage._is_reparse(path): raise HTTPException(422, {"code": "SEMANTIC_REVIEW_SOURCE_MISSING"})
-        return spdm_storage.read_stable_bytes(path, max_bytes=5 * 1024 * 1024)[0]
+        return spdm_storage.read_stable_bytes(path, max_bytes=MAX_SAMPLE_BYTES)[0]
     except spdm_storage.SpdmStorageError as error:
         raise HTTPException(422, {"code": error.code}) from error
 

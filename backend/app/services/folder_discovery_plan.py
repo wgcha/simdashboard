@@ -60,26 +60,82 @@ def build_plan(nodes: list[dict], rules: list[dict], root_key: str, registry: li
         matches = [rule for rule in rules if rule["depth"] == node["depth"] and
                    folded((rule.get("keyword") if rule.get("keyword") is not None else rule.get("prefix", ""))) in folded(node["name"]) and
                    (not rule.get("delimiter", "") or rule["delimiter"] in node["name"])]
-        selected_by_kind: dict[str, list[tuple[dict, dict | None, str | None]]] = {}
+        # A rule is a matcher, not an exclusive slot.  It is therefore valid
+        # to have several rules for the same depth and role when they match
+        # different folders.  When several matchers select *this* folder we
+        # only reject the case where they describe different work.  This also
+        # makes a broad parent matcher (for example ``cad``) harmless when it
+        # happens to overlap a more specific one.
+        selected_by_role: dict[str, list[tuple[dict, dict | None, str | None]]] = {}
         selected_rules: list[tuple[dict, dict | None, str | None]] = []
         for rule in matches:
             role = role_catalog.get(rule["role"])
             if not role:
                 selected_rules.append((rule, None, "카탈로그에 없는 폴더 역할입니다."))
                 continue
-            selected_by_kind.setdefault(role["kind"], []).append((rule, role, None))
-        for kind, entries in selected_by_kind.items():
-            if len(entries) > 1:
-                selected_rules.extend((rule, role, "같은 폴더에 같은 종류의 역할 규칙이 여러 개 일치합니다.") for rule, role, _ in entries)
-            else:
+            selected_by_role.setdefault(role["key"], []).append((rule, role, None))
+        for role_key, entries in selected_by_role.items():
+            if len(entries) == 1:
                 selected_rules.extend(entries)
+                continue
+            effects = set()
+            for rule, role, _ in entries:
+                try:
+                    code, label = extract(node["name"], rule)
+                    effects.add((code, label, rule.get("analysis_type", "") if role["kind"] == "LOAD_CASE" else ""))
+                except ValueError as error:
+                    effects.add(("!invalid", str(error), ""))
+            if len(effects) == 1:
+                # Identical rules can be saved independently and should not
+                # create a second entity or a false conflict.
+                selected_rules.append(entries[0])
+            else:
+                selected_rules.extend((rule, role, "같은 폴더·역할의 규칙 결과가 서로 다릅니다.") for rule, role, _ in entries)
+
+        # Custom role keys can represent the same entity kind.  A same-folder
+        # duplicate is safe only when both rules derive exactly the same
+        # entity; coalesce that duplicate to one stable role key.  Different
+        # entity values remain an actionable conflict.
+        by_kind: dict[str, list[tuple[dict, dict | None, str | None]]] = {}
+        passthrough: list[tuple[dict, dict | None, str | None]] = []
+        for item in selected_rules:
+            if item[1] is None or item[2] is not None:
+                passthrough.append(item)
+            else:
+                by_kind.setdefault(item[1]["kind"], []).append(item)
+        selected_rules = passthrough
+        for kind, entries in by_kind.items():
+            if len(entries) == 1 or kind in METADATA_KINDS:
+                selected_rules.extend(entries)
+                continue
+            effects = set()
+            for rule, _role, _ in entries:
+                try:
+                    code, label = extract(node["name"], rule)
+                    effects.add((code, label, rule.get("analysis_type", "") if kind == "LOAD_CASE" else ""))
+                except ValueError as error:
+                    effects.add(("!invalid", str(error), ""))
+            if len(effects) == 1:
+                # Keep the durable role key when this folder has already
+                # been applied.  Adding an equivalent custom role later must
+                # not turn a confirmed connection into a different target.
+                registered = [item for item in entries if (folded(node["relative_path"]), item[1]["key"]) in by_path]
+                selected_rules.append(sorted(registered or entries, key=lambda item: item[1]["key"])[0])
+            else:
+                selected_rules.extend((rule, role, "같은 폴더에 서로 다른 업무가 같은 종류로 정의되었습니다.") for rule, role, _ in entries)
         order = {"PROJECT": 0, "REQUEST": 1, "LOAD_CASE": 2, "RESULTS": 3, "INPUT": 4}
         selected_rules.sort(key=lambda item: (order.get(item[1]["kind"] if item[1] else "", 99), item[0]["role"]))
         for rule, role_option, selection_error in selected_rules:
             role = rule["role"]
             role_kind = role_option["kind"] if role_option else ""
-            parent_kind = "PROJECT" if role_kind == "REQUEST" else "REQUEST" if role_kind == "LOAD_CASE" else "LOAD_CASE" if role_kind in METADATA_KINDS else None
-            parent = context.get(parent_kind) if parent_kind else None
+            parent_kind = "PROJECT" if role_kind == "REQUEST" else "REQUEST" if role_kind == "LOAD_CASE" else None
+            if role_kind in METADATA_KINDS:
+                # CAD/input/result folders can be directly under a project or
+                # request.  Bind to the closest concrete workload instead of
+                # inventing a load case or reporting a parent conflict.
+                parent = next((context.get(kind) for kind in ("LOAD_CASE", "REQUEST", "PROJECT") if context.get(kind)), None)
+            else:
+                parent = context.get(parent_kind) if parent_kind else None
             scope = parent["target_id"] if parent else ""
             target_id = f"{role.lower()}-{uuid5(NAMESPACE_URL, root_key + ':' + folded(node['relative_path']) + ':' + role).hex}"
             row = {"relative_path": node["relative_path"], "role": role, "role_kind": role_kind, "role_label": role_option["label"] if role_option else role,
@@ -100,10 +156,8 @@ def build_plan(nodes: list[dict], rules: list[dict], root_key: str, registry: li
                     raise ValueError("정규화한 폴더 경로가 다른 폴더와 중복됩니다.")
                 proposed_paths[path_key] = row
                 row["code"], row["name"] = extract(node["name"], rule)
-                if parent_kind and (not parent or parent["status"] == "CONFLICT"):
+                if (parent_kind or role_kind in METADATA_KINDS) and (not parent or parent["status"] == "CONFLICT"):
                     raise ValueError("상위 프로젝트 또는 의뢰가 없거나 충돌합니다.")
-                if role_kind == "PROJECT" and context.get("PROJECT"):
-                    raise ValueError("프로젝트 안의 중첩 프로젝트는 이번 생성 규칙에서 지원하지 않습니다.")
                 key = (role_kind, scope, folded(row["code"])) if row["code"] and role_kind in ("PROJECT", "REQUEST") else None
                 old = by_path.get((folded(node["relative_path"]), role))
                 code_owner = by_code.get(key) if key else None
