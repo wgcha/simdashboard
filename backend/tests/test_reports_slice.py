@@ -1120,6 +1120,7 @@ def _login_headers(client: TestClient, username: str, password: str) -> dict[str
 @pytest.mark.contract
 def test_password_active_general_can_read_history_but_mutations_require_global_admin(
     monkeypatch: pytest.MonkeyPatch,
+    password_auth_bootstrap_admin: tuple[str, str, str],
 ) -> None:
     monkeypatch.setenv("AUTH_MODE", "password")
     monkeypatch.setenv("AUTH_SECRET_KEY", "report-layout-secret-key-at-least-32-characters")
@@ -1190,6 +1191,7 @@ def test_password_active_general_can_read_history_but_mutations_require_global_a
 @pytest.mark.contract
 def test_password_admin_demotion_after_login_is_fresh_and_writes_nothing(
     monkeypatch: pytest.MonkeyPatch,
+    password_auth_bootstrap_admin: tuple[str, str, str],
 ) -> None:
     monkeypatch.setenv("AUTH_MODE", "password")
     monkeypatch.setenv("AUTH_SECRET_KEY", "report-layout-secret-key-at-least-32-characters")

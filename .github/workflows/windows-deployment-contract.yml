@@ -19,17 +19,10 @@ jobs:
         shell: powershell
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version-file: .python-version
-          cache: pip
-          cache-dependency-path: backend/requirements.lock
-      - name: Prepare test Python without touching application data
-        run: |
-          python -m venv .venv-runtime
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          .\.venv-runtime\Scripts\python.exe -m pip install -r backend/requirements.lock
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # setup-python's Windows manifest does not provide Python 3.12.13.
+      # Reuse the project's verified uv-managed runtime instead.
+      - name: Install project runtimes and locked dependencies
+        run: .\setup.ps1 -NetworkMode direct -SkipFrontendBuild
       - name: Check Windows PowerShell syntax
         run: |
           $files = @('deploy.ps1', 'start.ps1', 'start-postgresql.ps1', 'stop.ps1', 'update.ps1')
@@ -87,15 +80,23 @@ jobs:
         shell: powershell
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version-file: .python-version
+      # Keep wheel collection on the exact project Python as well; the
+      # offline validation environment below must match .python-version.
+      - name: Install project runtimes and locked dependencies
+        run: .\setup.ps1 -NetworkMode direct -SkipFrontendBuild
+      - name: Restore pip tooling in the project virtual environment
+        run: |
+          .\.venv-runtime\Scripts\python.exe -m ensurepip --upgrade
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\.venv-runtime\Scripts\python.exe -m pip --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Collect Windows wheels for every locked dependency
         run: |
-          python -m pip download --only-binary=:all: --dest wheelhouse -r backend/requirements.lock
+          .\.venv-runtime\Scripts\python.exe -m pip download --only-binary=:all: --dest wheelhouse -r backend/requirements.lock
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Install and import using only the collected wheels
         run: |
-          python -m venv offline-validation
+          .\.venv-runtime\Scripts\python.exe -m venv offline-validation
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           .\offline-validation\Scripts\python.exe -I -m pip --isolated install --no-index --only-binary=:all: --disable-pip-version-check --find-links wheelhouse -r backend/requirements.lock
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

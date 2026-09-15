@@ -214,6 +214,7 @@ def test_unknown_load_case_preserves_empty_list_contract() -> None:
 @pytest.mark.contract
 def test_active_nonmember_keeps_company_runs_read_access(
     monkeypatch: pytest.MonkeyPatch,
+    password_auth_bootstrap_admin: tuple[str, str, str],
 ) -> None:
     suffix = uuid4().hex[:10]
     user_id = f"user-runs-{suffix}"

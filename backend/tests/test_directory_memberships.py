@@ -117,7 +117,10 @@ def test_directory_invitation_membership_and_assignee_candidates():
         set_employee_directory_for_tests(None)
 
 
-def test_active_nonmember_is_denied_project_directory_and_invitation_routes(monkeypatch):
+def test_active_nonmember_is_denied_project_directory_and_invitation_routes(
+    monkeypatch,
+    password_auth_bootstrap_admin,
+):
     initialize_database()
     suffix = uuid4().hex[:10]
     user_id, _ = _insert_user(
@@ -180,7 +183,10 @@ def test_active_nonmember_is_denied_project_directory_and_invitation_routes(monk
             conn.execute("DELETE FROM users WHERE id=?", [user_id])
 
 
-def test_project_admin_scope_and_last_admin_protection(monkeypatch):
+def test_project_admin_scope_and_last_admin_protection(
+    monkeypatch,
+    password_auth_bootstrap_admin,
+):
     initialize_database()
     suffix = uuid4().hex[:8]
     password = "project-admin-password"

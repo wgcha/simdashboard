@@ -213,6 +213,7 @@ def test_overview_authorized_product_contract() -> None:
 @pytest.mark.contract
 def test_active_nonmember_keeps_company_product_read_access(
     monkeypatch: pytest.MonkeyPatch,
+    password_auth_bootstrap_admin: tuple[str, str, str],
 ) -> None:
     suffix = uuid4().hex[:10]
     user_id = f"user-product-{suffix}"

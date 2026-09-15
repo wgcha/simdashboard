@@ -462,3 +462,9 @@
 - 원격 CI의 YAML plain scalar 안 `--only-binary=:all:` 파싱 문제를 block scalar로 고쳤다. Windows .NET의 loopback 프록시 우회를 고려하여 프록시 대조군을 문서용 주소로 변경하되 강제 프록시는 닫힌 loopback 포트를 유지한다. 배포 smoke의 deep route는 시작 스크립트 기본 base `/home/`와 일치시켰다.
 - 격리 소스에서 배포 Python 검사 177개 통과/2개 건너뜀, 영구 경로 검사 2개 통과. PowerShell 배포 계약 자체 검사 8종, Git update/bootstrap/integration 검사와 수정한 local HTTP 검사를 통과했다. 최초 격리 사본의 런타임 부재 실패는 준비된 Python 참조 후 재검증했다.
 - 이 기록 시점에는 GitHub PR CI 재검증과 main 병합이 남아 있다. 최종 원격 검증·병합 결과는 통합 PR에 기록한다. 실제 사용자 DB/서비스 및 폐쇄망 Server 2022 신규 설치·업데이트·재부팅을 실행한 것이 아니다.
+### main 통합 CI 후속 복구
+
+- 최초 PR CI에서 Windows setup-python manifest의 고정 Python 미지원, 영문 Windows의 한글 fixture 경로 ANSI 손상, 비밀번호 권한 계약 테스트의 초기 관리자 전제 누락을 확인했다.
+- Windows 배포 계약은 기존 setup.ps1로 정확한 프로젝트 runtime을 준비하고 wheel 수집 전에 표준 ensurepip로 pip를 복구한다. 오프라인 설치 검사는 별도 venv와 --no-index를 유지한다. 업데이트 fixture JSON 입출력을 UTF-8로 명시했다.
+- 6개 권한 테스트에만 독립 활성 관리자 fixture를 주입해 초기 설정이 완료된 상태의 권한/강등 계약을 검사한다. 운영 bootstrap guard와 bootstrap 전용 테스트에는 적용하지 않는다. 관련 계약 25개 통과, 업데이트 bootstrap/integration PowerShell 검사 통과. Sol 1차 및 독립 Astra 최종 검수 승인.
+- SQL 경계와 스키마 생성기 관련 CI 실패는 별도 수정·검증 중이며 이번 부분 커밋에 포함하지 않는다.
