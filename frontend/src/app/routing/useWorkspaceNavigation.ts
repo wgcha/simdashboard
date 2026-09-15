@@ -20,6 +20,7 @@ type WorkspaceNavigationOptions = {
 }
 
 export type WorkspaceNavigationRequest = {
+  context?: WorkspaceContextQuery
   dashboardEntry?: DashboardEntry
   replace?: boolean
 }
@@ -36,6 +37,20 @@ export type WorkspaceContextQuery = {
 type PendingNavigation = {
   dashboardEntry: DashboardEntry
   pathname: string
+}
+
+function workspaceSearch(context: WorkspaceContextQuery, currentSearch: string): string {
+  const query = new URLSearchParams(currentSearch)
+  const values: Array<[string, string | undefined]> = [
+    ['project', context.projectId], ['request', context.requestId], ['loadCase', context.loadCaseId],
+    ['run', context.runId], ['view', context.view], ['page', context.pageId],
+  ]
+  for (const [key, value] of values) {
+    if (value) query.set(key, value)
+    else query.delete(key)
+  }
+  const search = query.toString()
+  return search ? `?${search}` : ''
 }
 
 /**
@@ -148,7 +163,7 @@ export function useWorkspaceNavigation({
     }
     pendingNavigationRef.current = { dashboardEntry, pathname: route.path }
     setWorkspaceNavigationPending(true)
-    navigate({ pathname: route.path, search: location.search }, { replace: options.replace })
+    navigate({ pathname: route.path, search: options.context ? workspaceSearch(options.context, location.search) : location.search }, { replace: options.replace })
   }, [editMode, location.pathname, location.search, navigate, onDashboardRoute])
 
   const updateWorkspaceContext = useCallback((next: WorkspaceContextQuery, options: { replace?: boolean } = {}) => {
