@@ -134,8 +134,17 @@ def test_postgres_lock_contention_aborts_without_writing_account_or_env(tmp_path
 
 
 def test_only_an_actual_nonblocking_lock_collision_maps_to_setup_in_progress() -> None:
+    class WindowsSharingViolation(OSError):
+        """Portable fixture for the Win32 ERROR_LOCK_VIOLATION attribute."""
+
+        def __init__(self) -> None:
+            super().__init__(0, "locked")
+            self.winerror = 33
+
+    sharing_violation = WindowsSharingViolation()
     assert setup_accounts._is_lock_contention(BlockingIOError(errno.EAGAIN, "locked"))
-    assert setup_accounts._is_lock_contention(OSError(0, "locked", None, 33))
+    assert sharing_violation.winerror == 33
+    assert setup_accounts._is_lock_contention(sharing_violation)
     assert not setup_accounts._is_lock_contention(PermissionError("ACL denied"))
 
 

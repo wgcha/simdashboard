@@ -34,25 +34,34 @@ jobs:
           }
       - name: Verify source deployment and update failure gates
         run: |
-          .\scripts\windows\source-postgres-initializer-self-test.ps1
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          .\scripts\windows\deploy-account-lifecycle-self-test.ps1
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          .\scripts\windows\update-entry-self-test.ps1
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\source-postgres-initializer-self-test.ps1
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) { exit $exitCode }
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\deploy-account-lifecycle-self-test.ps1
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) { exit $exitCode }
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\update-entry-self-test.ps1
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) { exit $exitCode }
       - name: Verify owned process identity and LAN profile
         run: |
-          .\scripts\windows\start-stop-identity-self-test.ps1
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          .\scripts\windows\web-access-self-test.ps1
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\start-stop-identity-self-test.ps1
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) { exit $exitCode }
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\web-access-self-test.ps1
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) { exit $exitCode }
       - name: Verify offline package and installer safety
         run: |
-          .\scripts\windows\offline-installer-self-test.ps1
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          .\scripts\windows\offline-manifest-self-test.ps1
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          .\scripts\windows\offline-service-guard-self-test.ps1
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\offline-installer-self-test.ps1
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) { exit $exitCode }
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\offline-manifest-self-test.ps1
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) { exit $exitCode }
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\offline-service-guard-self-test.ps1
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) { exit $exitCode }
       - name: Verify database preservation and read-only service startup
         working-directory: backend
         run: |

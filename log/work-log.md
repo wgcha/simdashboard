@@ -476,3 +476,9 @@
 - PostgreSQL semantic bootstrap DDL을 독립 생성 원본에 연결하여 schema.sql 재생성 누락을 복구했다. portability 4개 통과 및 재생성 무diff를 확인했다. schema와 migration 자체는 변경하지 않았으며 기존 canonical과 migration의 모든 제약 일치를 확인한 것으로 기록하지 않는다.
 - 영문 Windows PowerShell 5.1이 BOM 없는 deploy.ps1의 한글을 ANSI로 오해석했다. 파일 본문은 유지하고 UTF-8 BOM만 추가했다. 전체 배포 PowerShell ParseFile 및 account lifecycle 검사를 통과했고, 비ASCII 추적 PS 파일의 BOM 누락이 없음을 확인했다.
 - 원격에서 Windows x64 잠금 의존성의 wheel 수집·별도 환경 오프라인 설치 검사가 통과했다. 원본 작업 폴더의 미커밋 12개 파일 SHA-256도 작업 전과 동일함을 재확인했다. 실제 사용자 DB/서비스와 Server 2022 폐쇄망 실기는 변경하거나 실행하지 않았다.
+### main 통합 원격 검증과 마지막 CI 호스트 보정
+
+- ed568536 기준 원격 PostgreSQL 18 통합, Windows VM 계약, 프런트 빌드, Windows 원클릭 설치·서비스 lifecycle smoke가 통과했다. 잠금 의존성의 Windows x64 오프라인 설치도 통과했다.
+- Linux unit 780개 통과/1개 건너뜀에서 실패한 Windows OSError 생성자 fixture를 명시적 winerror=33 오류 객체로 바꿨다. 잠금 충돌과 ACL 오류 구분은 유지하며 해당 검사 13개 통과.
+- 배포 계약 CI는 자체 검사가 성공한 뒤에도 의도된 실패 시나리오의 LASTEXITCODE가 호스트에 남아 실패로 판정했다. 8개 PowerShell 자체 검사를 각각 독립 child 프로세스로 실행하고 실제 종료 코드를 즉시 확인한다. 기존 검사 내용은 유지하며 실제 throw의 실패 전파를 확인했다. Sol 및 독립 Astra 검수 승인.
+- 브라우저 전체 회귀는 아직 진행 중이며, 오래된 커밋의 중복 실행은 새 커밋 실행으로 대체하고 부분 로그·화면 증거를 확보했다. 최종 head 전체 CI 통과나 main 병합 완료를 이 중간 기록으로 주장하지 않는다.
