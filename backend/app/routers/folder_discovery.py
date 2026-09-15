@@ -19,9 +19,12 @@ router = APIRouter(prefix="/api/folder-discovery", tags=["folder-discovery"], ro
 
 class FolderRule(BaseModel):
     depth: int = Field(ge=0, le=64)
-    role: Literal["PROJECT", "REQUEST", "LOAD_CASE"]
+    role: str = Field(min_length=1, max_length=64)
+    # `prefix` remains readable for saved rules and older clients. New
+    # clients send `keyword`, which matches anywhere in the folder name.
     prefix: str = Field(default="", max_length=256)
-    delimiter: str = Field(default="_", min_length=1, max_length=8)
+    keyword: str | None = Field(default=None, max_length=256)
+    delimiter: str = Field(default="_", max_length=8)
     code_token: int = Field(default=1, ge=0, le=100)
     name_from_token: int = Field(default=2, ge=0, le=100)
     analysis_type: str = Field(default="", max_length=128)
@@ -43,6 +46,25 @@ class FolderApply(BaseModel):
 class FolderRuleUpdate(FolderScan):
     rules: list[FolderRule] = Field(min_length=1, max_length=30)
     expected_revision: int = Field(ge=0)
+
+
+class CatalogRole(BaseModel):
+    key: str = Field(min_length=1, max_length=64)
+    label: str = Field(min_length=1, max_length=128)
+    kind: Literal["PROJECT", "REQUEST", "LOAD_CASE", "RESULTS", "INPUT"]
+    active: bool = True
+
+
+class CatalogAnalysisType(BaseModel):
+    key: str = Field(min_length=1, max_length=128)
+    label: str = Field(min_length=1, max_length=128)
+    active: bool = True
+
+
+class FolderCatalogUpdate(BaseModel):
+    expected_revision: int = Field(ge=1)
+    roles: list[CatalogRole] = Field(min_length=5, max_length=100)
+    analysis_types: list[CatalogAnalysisType] = Field(min_length=1, max_length=200)
 
 
 def authorize(request, conn):
@@ -68,6 +90,29 @@ def browse(request: Request, relative_path: str = Query(default="", max_length=1
                     "entries": svc.browse(current.root, relative)}
         except (ValueError, OSError, spdm_storage.SpdmStorageError) as error:
             raise path_error(error) from error
+
+
+@router.get("/catalog")
+def get_catalog(request: Request):
+    with connect() as conn:
+        authorize(request, conn)
+        return svc.catalog(conn)
+
+
+@router.put("/catalog")
+def put_catalog(payload: FolderCatalogUpdate, request: Request):
+    with connect() as conn:
+        authorize(request, conn)
+        try:
+            with svc.WRITE_LOCK, semantic_transaction(conn):
+                svc.lock_tables(conn)
+                result = svc.save_catalog(conn, payload.model_dump(), request.state.principal.user_id)
+                write_audit_event(request=request, principal=request.state.principal, status_code=200,
+                                  action="FOLDER_DISCOVERY_CATALOG_SAVED",
+                                  detail={"revision": result["revision"]}, connection=conn)
+                return result
+        except ValueError as error:
+            raise HTTPException(422, {"code": "FOLDER_CATALOG_INVALID", "message": str(error)}) from error
 
 
 @router.post("/scan")

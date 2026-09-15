@@ -32,6 +32,41 @@ def test_token_zero_and_missing_token():
     assert plan.extract("PRJ_001_Display_Alpha",{"delimiter":"_","code_token":0,"name_from_token":3}) == ("PRJ_001_Display_Alpha","Display_Alpha")
     with pytest.raises(ValueError): plan.extract("PRJ_001",{"delimiter":"_","code_token":4,"name_from_token":1})
 
+
+def test_empty_or_missing_delimiter_keeps_the_whole_folder_name_without_code():
+    rule = {"delimiter":"", "code_token":2, "name_from_token":3}
+    assert plan.extract("조립 결과 폴더", rule) == ("", "조립 결과 폴더")
+    assert plan.extract("PRJ-001", {**rule, "delimiter":"_"}) == ("", "PRJ-001")
+
+
+def test_keywords_match_anywhere_case_insensitively_and_repeated_load_case_codes_are_allowed():
+    nodes = [node("prefixPROJECTsuffix", None, 0), node("prefixPROJECTsuffix/Request", "prefixPROJECTsuffix", 1),
+             node("prefixPROJECTsuffix/Request/Case_01_A", "prefixPROJECTsuffix/Request", 2),
+             node("prefixPROJECTsuffix/Request/Case_01_B", "prefixPROJECTsuffix/Request", 2)]
+    rules = [rule(0, "PROJECT", "project"), rule(1, "REQUEST", "request"), rule(2, "LOAD_CASE", "case_", "DROP")]
+    result = plan.build_plan(nodes, rules, "root", [], [], [])
+    loads = [row for row in result["rows"] if row["role_kind"] == "LOAD_CASE"]
+    assert result["can_apply"] and [row["code"] for row in loads] == ["01", "01"]
+
+
+def test_custom_load_case_and_metadata_roles_resolve_future_handoff_ids():
+    options = {"roles": [
+        {"key":"PROJECT", "label":"프로젝트", "kind":"PROJECT", "active":True},
+        {"key":"REQUEST", "label":"의뢰", "kind":"REQUEST", "active":True},
+        {"key":"THERMAL_CASE", "label":"열해석", "kind":"LOAD_CASE", "active":True},
+        {"key":"RESULT_FOLDER", "label":"결과", "kind":"RESULTS", "active":True},
+        {"key":"INPUT", "label":"입력", "kind":"INPUT", "active":True},
+    ], "analysis_types": [{"key":"THERMAL", "label":"열", "active":True}]}
+    nodes = [node("p_001_Project", None, 0), node("p_001_Project/r_002_Request", "p_001_Project", 1),
+             node("p_001_Project/r_002_Request/c_003_Case", "p_001_Project/r_002_Request", 2),
+             node("p_001_Project/r_002_Request/c_003_Case/results", "p_001_Project/r_002_Request/c_003_Case", 3)]
+    result = plan.build_plan(nodes, [rule(0,"PROJECT","p_"), rule(1,"REQUEST","r_"), rule(2,"THERMAL_CASE","c_","THERMAL"),
+                                     rule(3,"RESULT_FOLDER","results")], "root", [], [], [], options)
+    metadata = next(row for row in result["rows"] if row["role"] == "RESULT_FOLDER")
+    load = next(row for row in result["rows"] if row["role"] == "THERMAL_CASE")
+    assert result["can_apply"] and metadata["role_kind"] == "RESULTS"
+    assert metadata["load_case_id"] == load["target_id"] and metadata["request_id"] and metadata["project_id"]
+
 def test_inherited_parent_scopes_through_container():
     nodes=[node("P_01_Project",None,0),node("P_01_Project/container","P_01_Project",1),node("P_01_Project/container/R_77_Request","P_01_Project/container",2),node("P_01_Project/container/R_77_Request/L_01_Load","P_01_Project/container/R_77_Request",3)]
     result=plan.build_plan(nodes,[rule(0,"PROJECT","P_"),rule(2,"REQUEST","R_"),rule(3,"LOAD_CASE","L_","DROP")],"root",[],[],[])
@@ -79,6 +114,15 @@ def test_api_scan_preview_apply_reapply_rules_cas_and_global_admin(tmp_path, mon
             return {"Authorization":f"Bearer {response.json()['access_token']}"}
         global_headers, local_headers=headers("folder-global"),headers("folder-local")
         assert client.post("/api/folder-discovery/scan",headers=local_headers,json={}).status_code==403
+        catalog=client.get("/api/folder-discovery/catalog",headers=global_headers); assert catalog.status_code==200,catalog.text
+        catalog_body=catalog.json(); assert {entry["key"] for entry in catalog_body["roles"]} >= {"PROJECT","REQUEST","LOAD_CASE","RESULTS","INPUT"}
+        custom_catalog={**catalog_body,"expected_revision":catalog_body["revision"],
+                        "roles":[*catalog_body["roles"],{"key":"THERMAL_CASE","label":"열 해석","kind":"LOAD_CASE","active":True},
+                                 {"key":"RESULT_FOLDER","label":"결과","kind":"RESULTS","active":True}],
+                        "analysis_types":[*catalog_body["analysis_types"],{"key":"THERMAL","label":"열","active":True}]}
+        catalog_saved=client.put("/api/folder-discovery/catalog",headers=global_headers,json=custom_catalog); assert catalog_saved.status_code==200,catalog_saved.text
+        assert catalog_saved.json()["revision"] == catalog_body["revision"] + 1
+        assert client.put("/api/folder-discovery/catalog",headers=global_headers,json=custom_catalog).status_code==409
         surveyed=client.post("/api/folder-discovery/scan",headers=global_headers,json={"relative_path":"P_001_Project"}); assert surveyed.status_code==200,surveyed.text
         rules=[rule(0,"PROJECT","P_"),rule(1,"REQUEST","R_"),rule(2,"LOAD_CASE","L_","DROP")]
         preview=client.post("/api/folder-discovery/preview",headers=global_headers,json={"scan_id":surveyed.json()["id"],"rules":rules}); assert preview.status_code==200,preview.text
@@ -101,6 +145,13 @@ def test_api_scan_preview_apply_reapply_rules_cas_and_global_admin(tmp_path, mon
         new_apply=client.post("/api/folder-discovery/apply",headers=global_headers,json={"preview_id":new_preview.json()["id"]}); assert new_apply.json()["created"] == {"projects":0,"requests":0,"load_cases":1}
         with connect() as conn:
             assert conn.execute("SELECT request_id FROM load_cases WHERE name='New'").fetchone()[0] == request_id
+        (root/"P_004_Custom"/"R_005_Request"/"T_006_Case"/"results").mkdir(parents=True)
+        custom_scan=client.post("/api/folder-discovery/scan",headers=global_headers,json={}).json()
+        custom_rules=[rule(1,"PROJECT","P_004_"),rule(2,"REQUEST","R_005_"),rule(3,"THERMAL_CASE","T_006_","THERMAL"),rule(4,"RESULT_FOLDER","results")]
+        custom_preview=client.post("/api/folder-discovery/preview",headers=global_headers,json={"scan_id":custom_scan["id"],"rules":custom_rules}); assert custom_preview.status_code==200 and custom_preview.json()["can_apply"],custom_preview.text
+        custom_apply=client.post("/api/folder-discovery/apply",headers=global_headers,json={"preview_id":custom_preview.json()["id"]}); assert custom_apply.status_code==200,custom_apply.text; assert custom_apply.json()["created"] == {"projects":1,"requests":1,"load_cases":1}
+        assert next(row for row in custom_preview.json()["rows"] if row["role"]=="RESULT_FOLDER")["role_kind"] == "RESULTS"
+        custom_repeat=client.post("/api/folder-discovery/preview",headers=global_headers,json={"scan_id":custom_scan["id"],"rules":custom_rules}); assert all(row["status"]=="KEEP" for row in custom_repeat.json()["rows"])
         import app.services.folder_discovery as service
         original=service.configured_root; other=tmp_path/"other"; other.mkdir()
         monkeypatch.setattr(service,"configured_root",lambda _conn: other)
@@ -119,3 +170,27 @@ def test_api_scan_preview_apply_reapply_rules_cas_and_global_admin(tmp_path, mon
             assert conn.execute("SELECT count(*) FROM load_cases WHERE request_id=?",[request_id]).fetchone()[0] == before
             assert conn.execute("SELECT applied_json FROM folder_discovery_previews WHERE id=?",[rollback_preview["id"]]).fetchone()[0] is None
         monkeypatch.setattr(router,"write_audit_event",original_audit)
+
+
+def test_duckdb_0027_registry_upgrade_preserves_rows_and_catalog_changes():
+    import duckdb
+    from app.database import ensure_folder_discovery_schema
+    with duckdb.connect(":memory:") as conn:
+        conn.execute("CREATE TABLE folder_discovery_registry (id VARCHAR PRIMARY KEY, root_key VARCHAR NOT NULL, relative_path VARCHAR NOT NULL, role VARCHAR NOT NULL, scope_key VARCHAR NOT NULL, code VARCHAR NOT NULL, name VARCHAR NOT NULL, analysis_type VARCHAR NOT NULL DEFAULT '', parent_target_id VARCHAR, target_id VARCHAR NOT NULL UNIQUE, created_at TIMESTAMP NOT NULL, UNIQUE(root_key,role,scope_key,code), UNIQUE(root_key,relative_path,role))")
+        conn.execute("INSERT INTO folder_discovery_registry VALUES('old','root','legacy','PROJECT','','001','Existing','','','project-id',CURRENT_TIMESTAMP)")
+        ensure_folder_discovery_schema(conn)
+        assert conn.execute("SELECT role,role_kind,code,name,target_id FROM folder_discovery_registry").fetchone() == ('PROJECT','PROJECT','001','Existing','project-id')
+        conn.execute("UPDATE folder_discovery_catalog SET revision=2, analysis_types_json='[]'")
+        ensure_folder_discovery_schema(conn)
+        assert conn.execute("SELECT revision,analysis_types_json FROM folder_discovery_catalog").fetchone() == (2,'[]')
+        conn.execute("INSERT INTO folder_discovery_registry VALUES('new','root','whole-name','PROJECT','PROJECT','',NULL,'Whole name','','','new-id',CURRENT_TIMESTAMP)")
+        assert conn.execute("SELECT count(*) FROM folder_discovery_registry").fetchone()[0] == 2
+
+
+def test_project_code_collision_across_custom_roles_is_rejected():
+    options = plan._default_options()
+    options['roles'].append(dict(key='CUSTOM_PROJECT', label='Other project', kind='PROJECT', active=True))
+    nodes = [node('P_001_One',None,0),node('Q_001_Two',None,0)]
+    result = plan.build_plan(nodes,[rule(0,'PROJECT','P_'),rule(0,'CUSTOM_PROJECT','Q_')],'root',[],[],[],options)
+    assert not result['can_apply']
+    assert all(row['status']=='CONFLICT' for row in result['rows'])

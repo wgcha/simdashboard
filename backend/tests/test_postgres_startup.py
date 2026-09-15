@@ -50,9 +50,10 @@ class _PostgresStartupConnection:
             table = parameters[0] if parameters else ""
             columns = {
                 "folder_discovery_scans": {"root_key", "root_path", "relative_path", "tree_json", "issues_json"},
-                "folder_discovery_previews": {"scan_id", "rules_revision", "applied_json"},
+                "folder_discovery_previews": {"scan_id", "rules_revision", "catalog_revision", "applied_json"},
                 "folder_discovery_rules": {"root_key", "relative_path", "revision"},
-                "folder_discovery_registry": {"root_key", "parent_target_id", "scope_key", "target_id"},
+                "folder_discovery_registry": {"root_key", "role_kind", "parent_target_id", "scope_key", "target_id"},
+                "folder_discovery_catalog": {"revision", "roles_json", "analysis_types_json"},
             }[table]
             return _FakeResult([] if self.missing_column in columns else [(column,) for column in columns])
         raise AssertionError(f"unexpected startup query: {statement}")

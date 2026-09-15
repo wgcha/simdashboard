@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { FolderOpen, RefreshCw, Save, Upload } from 'lucide-react'
 import { semanticContextApi, semanticMappingApi, type ContextLoadCase, type ContextProject, type ContextRequest, type FolderResponse, type SemanticBinding, type SemanticCatalog } from '../../shared/api/semanticMapping'
 import { AliasSuggestion } from './AliasSuggestion'
@@ -7,11 +7,12 @@ import type { SemanticVocabularyEntry } from '../../shared/api/semanticVocabular
 
 type Message = { kind: 'success' | 'error' | 'info'; text: string }
 type Target = { project_id: string; request_id: string; load_case_id: string; role: string; recipe_ids: string[]; template_id: string }
+export type FolderConnectionPrefill = { relative_path: string; project_id?: string | null; request_id?: string | null; load_case_id?: string | null; role: 'RESULTS' | 'INPUT' }
 type RefreshResult = { partial: boolean; results: Array<{ relative_path?: string; status: string; run_id?: string; code?: string; detail?: unknown }> }
 const emptyTarget = (): Target => ({ project_id: '', request_id: '', load_case_id: '', role: 'PROJECT', recipe_ids: [], template_id: '' })
 
-export function FolderTab({ catalog, onMessage, busy, setBusy, onCatalog, scopeProjectId = '', onOpenDiscovery }: {
-  catalog: SemanticCatalog; onMessage: (message: Message) => void; busy: string; setBusy: (value: string) => void; onCatalog: (catalog: SemanticCatalog) => void; scopeProjectId?: string; onOpenDiscovery?: () => void
+export function FolderTab({ catalog, onMessage, busy, setBusy, onCatalog, scopeProjectId = '', onOpenDiscovery, initialTarget }: {
+  catalog: SemanticCatalog; onMessage: (message: Message) => void; busy: string; setBusy: (value: string) => void; onCatalog: (catalog: SemanticCatalog) => void; scopeProjectId?: string; onOpenDiscovery?: () => void; initialTarget?: FolderConnectionPrefill | null
 }) {
   const [path, setPath] = useState('')
   const [folder, setFolder] = useState<FolderResponse | null>(null)
@@ -23,6 +24,7 @@ export function FolderTab({ catalog, onMessage, busy, setBusy, onCatalog, scopeP
   const [file, setFile] = useState<File | null>(null)
   const [refreshResult, setRefreshResult] = useState<RefreshResult | null>(null)
   const [reviewBinding, setReviewBinding] = useState<SemanticBinding | null>(null)
+  const appliedPrefill = useRef('')
   const error = (reason: unknown) => onMessage({ kind: 'error', text: reason instanceof Error ? reason.message : '요청을 처리하지 못했습니다.' })
 
   useEffect(() => { let active = true; semanticContextApi.projects().then((value) => { if (active) setProjects(value) }).catch(error); return () => { active = false } }, [])
@@ -36,6 +38,17 @@ export function FolderTab({ catalog, onMessage, busy, setBusy, onCatalog, scopeP
     if (target.request_id) semanticContextApi.loadCases(target.request_id).then((value) => { if (active) setCases(value) }).catch(error)
     return () => { active = false }
   }, [target.request_id])
+  useEffect(() => {
+    if (!initialTarget) return
+    const prefillKey = JSON.stringify(initialTarget)
+    if (appliedPrefill.current === prefillKey) return
+    appliedPrefill.current = prefillKey
+    setEditing(null)
+    setPath(initialTarget.relative_path)
+    setFolder(null)
+    setTarget((current) => ({ ...current, project_id: initialTarget.project_id ?? '', request_id: initialTarget.request_id ?? '', load_case_id: initialTarget.load_case_id ?? '', role: initialTarget.role }))
+    onMessage({ kind: 'info', text: '폴더 조사 결과를 연결 대상으로 미리 채웠습니다. 레시피를 선택한 뒤 연결 저장을 누르세요.' })
+  }, [initialTarget])
 
   const browse = async (next = path) => {
     setBusy('folders')

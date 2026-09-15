@@ -62,6 +62,7 @@ def initialize_database() -> None:
                 "folder_discovery_previews",
                 "folder_discovery_rules",
                 "folder_discovery_registry",
+                "folder_discovery_catalog",
             )
             missing = [
                 table_name
@@ -75,9 +76,10 @@ def initialize_database() -> None:
                 )
             required_columns = {
                 "folder_discovery_scans": {"root_key", "root_path", "relative_path", "tree_json", "issues_json"},
-                "folder_discovery_previews": {"scan_id", "rules_revision", "applied_json"},
+                "folder_discovery_previews": {"scan_id", "rules_revision", "catalog_revision", "applied_json"},
                 "folder_discovery_rules": {"root_key", "relative_path", "revision"},
-                "folder_discovery_registry": {"root_key", "parent_target_id", "scope_key", "target_id"},
+                "folder_discovery_registry": {"root_key", "role_kind", "parent_target_id", "scope_key", "target_id"},
+                "folder_discovery_catalog": {"revision", "roles_json", "analysis_types_json"},
             }
             incompatible = []
             for table_name, expected in required_columns.items():
@@ -1422,11 +1424,22 @@ def ensure_semantic_review_schema(conn: duckdb.DuckDBPyConnection) -> None:
 
 
 def ensure_folder_discovery_schema(conn: duckdb.DuckDBPyConnection) -> None:
-    """DuckDB development equivalent of additive migration 0027."""
+    """DuckDB development equivalent of additive migrations 0027 and 0028."""
     conn.execute("""CREATE TABLE IF NOT EXISTS folder_discovery_scans (id VARCHAR PRIMARY KEY, root_key VARCHAR NOT NULL, root_path VARCHAR NOT NULL, relative_path VARCHAR NOT NULL, status VARCHAR NOT NULL, tree_json JSON NOT NULL, issues_json JSON NOT NULL, created_by VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL);
-    CREATE TABLE IF NOT EXISTS folder_discovery_previews (id VARCHAR PRIMARY KEY, scan_id VARCHAR NOT NULL, rules_json JSON NOT NULL, rules_revision INTEGER NOT NULL, rows_json JSON NOT NULL, can_apply BOOLEAN NOT NULL, applied_json JSON, created_by VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL);
+    CREATE TABLE IF NOT EXISTS folder_discovery_previews (id VARCHAR PRIMARY KEY, scan_id VARCHAR NOT NULL, rules_json JSON NOT NULL, rules_revision INTEGER NOT NULL, catalog_revision INTEGER NOT NULL DEFAULT 1, rows_json JSON NOT NULL, can_apply BOOLEAN NOT NULL, applied_json JSON, created_by VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL);
     CREATE TABLE IF NOT EXISTS folder_discovery_rules (root_key VARCHAR NOT NULL, relative_path VARCHAR NOT NULL, rules_json JSON NOT NULL, revision INTEGER NOT NULL, updated_at TIMESTAMP NOT NULL, updated_by VARCHAR NOT NULL, PRIMARY KEY(root_key,relative_path));
-    CREATE TABLE IF NOT EXISTS folder_discovery_registry (id VARCHAR PRIMARY KEY, root_key VARCHAR NOT NULL, relative_path VARCHAR NOT NULL, role VARCHAR NOT NULL, scope_key VARCHAR NOT NULL, code VARCHAR NOT NULL, name VARCHAR NOT NULL, analysis_type VARCHAR NOT NULL DEFAULT '', parent_target_id VARCHAR, target_id VARCHAR NOT NULL UNIQUE, created_at TIMESTAMP NOT NULL, UNIQUE(root_key,role,scope_key,code), UNIQUE(root_key,relative_path,role));""")
+    CREATE TABLE IF NOT EXISTS folder_discovery_registry (id VARCHAR PRIMARY KEY, root_key VARCHAR NOT NULL, relative_path VARCHAR NOT NULL, role VARCHAR NOT NULL, role_kind VARCHAR NOT NULL, scope_key VARCHAR NOT NULL, code VARCHAR, name VARCHAR NOT NULL, analysis_type VARCHAR NOT NULL DEFAULT '', parent_target_id VARCHAR, target_id VARCHAR NOT NULL UNIQUE, created_at TIMESTAMP NOT NULL, UNIQUE(root_key,relative_path,role));
+    CREATE TABLE IF NOT EXISTS folder_discovery_catalog (id SMALLINT PRIMARY KEY, revision INTEGER NOT NULL, roles_json JSON NOT NULL, analysis_types_json JSON NOT NULL, updated_at TIMESTAMP NOT NULL, updated_by VARCHAR NOT NULL);""")
+    conn.execute("ALTER TABLE folder_discovery_previews ADD COLUMN IF NOT EXISTS catalog_revision INTEGER DEFAULT 1")
+    if "role_kind" not in _duckdb_columns(conn, "folder_discovery_registry"):
+        conn.execute("""CREATE TABLE folder_discovery_registry_0028 (id VARCHAR PRIMARY KEY, root_key VARCHAR NOT NULL, relative_path VARCHAR NOT NULL, role VARCHAR NOT NULL, role_kind VARCHAR NOT NULL, scope_key VARCHAR NOT NULL, code VARCHAR, name VARCHAR NOT NULL, analysis_type VARCHAR NOT NULL DEFAULT '', parent_target_id VARCHAR, target_id VARCHAR NOT NULL UNIQUE, created_at TIMESTAMP NOT NULL, UNIQUE(root_key,relative_path,role));
+        INSERT INTO folder_discovery_registry_0028 SELECT id,root_key,relative_path,role,role,scope_key,code,name,analysis_type,parent_target_id,target_id,created_at FROM folder_discovery_registry;
+        DROP TABLE folder_discovery_registry;
+        ALTER TABLE folder_discovery_registry_0028 RENAME TO folder_discovery_registry;""")
+    conn.execute("""INSERT INTO folder_discovery_catalog(id,revision,roles_json,analysis_types_json,updated_at,updated_by)
+        VALUES(1,1,
+        '[{"key":"PROJECT","label":"프로젝트","kind":"PROJECT","active":true},{"key":"REQUEST","label":"의뢰","kind":"REQUEST","active":true},{"key":"LOAD_CASE","label":"하중 경우","kind":"LOAD_CASE","active":true},{"key":"RESULTS","label":"결과 폴더","kind":"RESULTS","active":true},{"key":"INPUT","label":"입력 폴더","kind":"INPUT","active":true}]',
+        '[{"key":"DROP","label":"DROP","active":true},{"key":"SIDE_CLAMP","label":"SIDE_CLAMP","active":true},{"key":"SPDM_CMS","label":"SPDM_CMS","active":true},{"key":"SPDM_MODAL","label":"SPDM_MODAL","active":true},{"key":"SPDM_DEFLECTION","label":"SPDM_DEFLECTION","active":true},{"key":"SPDM_STIFFNESS","label":"SPDM_STIFFNESS","active":true},{"key":"SPDM_VIBRATION","label":"SPDM_VIBRATION","active":true}]',CURRENT_TIMESTAMP,'system') ON CONFLICT(id) DO NOTHING""")
 
 
 def ensure_modeling_template_schema(conn: duckdb.DuckDBPyConnection) -> None:

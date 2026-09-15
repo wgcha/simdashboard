@@ -1709,6 +1709,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/folder-discovery/catalog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Catalog */
+        get: operations["get_catalog_api_folder_discovery_catalog_get"];
+        /** Put Catalog */
+        put: operations["put_catalog_api_folder_discovery_catalog_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/folder-discovery/scan": {
         parameters: {
             query?: never;
@@ -3259,6 +3277,18 @@ export interface components {
              */
             updated_at: string;
         };
+        /** CatalogAnalysisType */
+        CatalogAnalysisType: {
+            /** Key */
+            key: string;
+            /** Label */
+            label: string;
+            /**
+             * Active
+             * @default true
+             */
+            active: boolean;
+        };
         /** CatalogResponse */
         CatalogResponse: {
             /** Items */
@@ -3269,6 +3299,23 @@ export interface components {
             load_cases: string[];
             /** Can Manage */
             can_manage: boolean;
+        };
+        /** CatalogRole */
+        CatalogRole: {
+            /** Key */
+            key: string;
+            /** Label */
+            label: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "PROJECT" | "REQUEST" | "LOAD_CASE" | "RESULTS" | "INPUT";
+            /**
+             * Active
+             * @default true
+             */
+            active: boolean;
         };
         /** CentralRun */
         CentralRun: {
@@ -3686,6 +3733,15 @@ export interface components {
             /** Preview Id */
             preview_id: string;
         };
+        /** FolderCatalogUpdate */
+        FolderCatalogUpdate: {
+            /** Expected Revision */
+            expected_revision: number;
+            /** Roles */
+            roles: components["schemas"]["CatalogRole"][];
+            /** Analysis Types */
+            analysis_types: components["schemas"]["CatalogAnalysisType"][];
+        };
         /** FolderPreview */
         FolderPreview: {
             /** Scan Id */
@@ -3697,16 +3753,15 @@ export interface components {
         FolderRule: {
             /** Depth */
             depth: number;
-            /**
-             * Role
-             * @enum {string}
-             */
-            role: "PROJECT" | "REQUEST" | "LOAD_CASE";
+            /** Role */
+            role: string;
             /**
              * Prefix
              * @default
              */
             prefix: string;
+            /** Keyword */
+            keyword?: string | null;
             /**
              * Delimiter
              * @default _
@@ -9112,6 +9167,59 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_catalog_api_folder_discovery_catalog_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    put_catalog_api_folder_discovery_catalog_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FolderCatalogUpdate"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

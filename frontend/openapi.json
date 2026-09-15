@@ -5117,6 +5117,62 @@
         }
       }
     },
+    "/api/folder-discovery/catalog": {
+      "get": {
+        "tags": [
+          "folder-discovery"
+        ],
+        "summary": "Get Catalog",
+        "operationId": "get_catalog_api_folder_discovery_catalog_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "folder-discovery"
+        ],
+        "summary": "Put Catalog",
+        "operationId": "put_catalog_api_folder_discovery_catalog_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FolderCatalogUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/folder-discovery/scan": {
       "post": {
         "tags": [
@@ -10258,6 +10314,33 @@
         ],
         "title": "CardResponse"
       },
+      "CatalogAnalysisType": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Label"
+          },
+          "active": {
+            "type": "boolean",
+            "title": "Active",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label"
+        ],
+        "title": "CatalogAnalysisType"
+      },
       "CatalogResponse": {
         "properties": {
           "items": {
@@ -10294,6 +10377,45 @@
           "can_manage"
         ],
         "title": "CatalogResponse"
+      },
+      "CatalogRole": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Label"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "PROJECT",
+              "REQUEST",
+              "LOAD_CASE",
+              "RESULTS",
+              "INPUT"
+            ],
+            "title": "Kind"
+          },
+          "active": {
+            "type": "boolean",
+            "title": "Active",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "kind"
+        ],
+        "title": "CatalogRole"
       },
       "CentralRun": {
         "properties": {
@@ -11554,6 +11676,40 @@
         ],
         "title": "FolderApply"
       },
+      "FolderCatalogUpdate": {
+        "properties": {
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Revision"
+          },
+          "roles": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogRole"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "minItems": 5,
+            "title": "Roles"
+          },
+          "analysis_types": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogAnalysisType"
+            },
+            "type": "array",
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Analysis Types"
+          }
+        },
+        "type": "object",
+        "required": [
+          "expected_revision",
+          "roles",
+          "analysis_types"
+        ],
+        "title": "FolderCatalogUpdate"
+      },
       "FolderPreview": {
         "properties": {
           "scan_id": {
@@ -11589,11 +11745,8 @@
           },
           "role": {
             "type": "string",
-            "enum": [
-              "PROJECT",
-              "REQUEST",
-              "LOAD_CASE"
-            ],
+            "maxLength": 64,
+            "minLength": 1,
             "title": "Role"
           },
           "prefix": {
@@ -11602,10 +11755,21 @@
             "title": "Prefix",
             "default": ""
           },
+          "keyword": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 256
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Keyword"
+          },
           "delimiter": {
             "type": "string",
             "maxLength": 8,
-            "minLength": 1,
             "title": "Delimiter",
             "default": "_"
           },

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from threading import RLock
 from uuid import uuid4
@@ -16,6 +17,22 @@ from .folder_discovery_scan import browse, normal, root_identity, scan
 from .semantic_mapping import semantic_transaction
 
 WRITE_LOCK = RLock()
+KEY = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
+ANALYSIS_KEY = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,127}$")
+ROLE_KINDS = ("PROJECT", "REQUEST", "LOAD_CASE", "RESULTS", "INPUT")
+DEFAULT_CATALOG = {
+    "roles": [
+        {"key": "PROJECT", "label": "프로젝트", "kind": "PROJECT", "active": True},
+        {"key": "REQUEST", "label": "의뢰", "kind": "REQUEST", "active": True},
+        {"key": "LOAD_CASE", "label": "하중 경우", "kind": "LOAD_CASE", "active": True},
+        {"key": "RESULTS", "label": "결과 폴더", "kind": "RESULTS", "active": True},
+        {"key": "INPUT", "label": "입력 폴더", "kind": "INPUT", "active": True},
+    ],
+    "analysis_types": [
+        {"key": key, "label": key, "active": True}
+        for key in ("DROP", "SIDE_CLAMP", "SPDM_CMS", "SPDM_MODAL", "SPDM_DEFLECTION", "SPDM_STIFFNESS", "SPDM_VIBRATION")
+    ],
+}
 
 
 def now():
@@ -44,7 +61,7 @@ def configured_root(conn):
 def lock_tables(conn):
     mapping_repository.lock_binding_tables(conn)
     if getattr(conn, "backend", "duckdb") == "postgresql":
-        conn.execute("LOCK TABLE folder_discovery_registry, folder_discovery_rules, folder_discovery_previews, "
+        conn.execute("LOCK TABLE folder_discovery_catalog, folder_discovery_registry, folder_discovery_rules, folder_discovery_previews, "
                      "spdm_storage_settings, projects, analysis_requests, load_cases IN SHARE ROW EXCLUSIVE MODE")
 
 
@@ -71,6 +88,60 @@ def rules(conn, root_key: str, relative: str) -> dict:
     return {"rules": decoded(row[0]) if row else [], "revision": int(row[1]) if row else 0}
 
 
+def catalog(conn) -> dict:
+    row = conn.execute("SELECT revision,roles_json,analysis_types_json FROM folder_discovery_catalog WHERE id=1").fetchone()
+    if not row:
+        raise RuntimeError("Folder discovery catalog is missing; run the schema migration before starting the application.")
+    return {"revision": int(row[0]), "roles": decoded(row[1]), "analysis_types": decoded(row[2])}
+
+
+def _validate_catalog_entries(entries: list[dict], *, is_role: bool) -> dict[str, dict]:
+    found = {}
+    normalized = set()
+    for entry in entries:
+        key, label = entry["key"].strip(), entry["label"].strip()
+        if not (KEY if is_role else ANALYSIS_KEY).fullmatch(key):
+            raise ValueError("카탈로그 키는 영문자로 시작하고 영문자·숫자·밑줄만 사용할 수 있습니다.")
+        if not label or any(ord(char) < 32 or ord(char) == 127 for char in label):
+            raise ValueError("카탈로그 이름을 입력하세요.")
+        if key.casefold() in normalized:
+            raise ValueError("카탈로그 키가 중복됩니다.")
+        item = {"key": key, "label": label, "active": bool(entry["active"])}
+        if is_role:
+            if entry["kind"] not in ROLE_KINDS:
+                raise ValueError("지원하지 않는 폴더 역할 종류입니다.")
+            item["kind"] = entry["kind"]
+        found[key] = item
+        normalized.add(key.casefold())
+    return found
+
+
+def save_catalog(conn, payload: dict, actor: str) -> dict:
+    current = catalog(conn)
+    if current["revision"] != payload["expected_revision"]:
+        fail("CATALOG_REVISION_CONFLICT", "폴더 옵션이 변경되었습니다. 다시 불러오세요.")
+    roles = _validate_catalog_entries(payload["roles"], is_role=True)
+    types = _validate_catalog_entries(payload["analysis_types"], is_role=False)
+    for kind in ROLE_KINDS:
+        if not any(item["kind"] == kind for item in roles.values()):
+            raise ValueError(f"{kind} 종류의 폴더 역할을 하나 이상 유지하세요.")
+    previous_roles = {item["key"]: item for item in current["roles"]}
+    previous_types = {item["key"]: item for item in current["analysis_types"]}
+    # Keys are durable references in saved rules and previews. Deletion is an
+    # active=false transition, never removal from this singleton document.
+    if set(previous_roles) - set(roles) or set(previous_types) - set(types):
+        raise ValueError("기존 옵션은 삭제하지 말고 비활성화하세요.")
+    used_roles = {str(row[0]): str(row[1]) for row in conn.execute("SELECT DISTINCT role, role_kind FROM folder_discovery_registry").fetchall()}
+    for key, kind in used_roles.items():
+        if key not in roles or roles[key]["kind"] != kind:
+            raise ValueError("사용 중인 폴더 역할의 키와 종류는 변경할 수 없습니다.")
+    revision = current["revision"] + 1
+    result = {"revision": revision, "roles": list(roles.values()), "analysis_types": list(types.values())}
+    conn.execute("UPDATE folder_discovery_catalog SET revision=?,roles_json=?,analysis_types_json=?,updated_at=?,updated_by=? WHERE id=1",
+                 [revision, json.dumps(result["roles"], ensure_ascii=False), json.dumps(result["analysis_types"], ensure_ascii=False), now(), actor])
+    return result
+
+
 def registry(conn, root_key: str) -> list[dict]:
     result = [dict(row) for row in rows(conn.execute("SELECT * FROM folder_discovery_registry WHERE root_key=?", [root_key]))]
     targets = {}
@@ -78,23 +149,28 @@ def registry(conn, root_key: str) -> list[dict]:
                                       ("REQUEST", "analysis_requests", "title", "t.project_id"),
                                       ("LOAD_CASE", "load_cases", "name", "t.request_id")):
         records = conn.execute(f"SELECT t.id,t.{label},{parent} FROM {table} t JOIN folder_discovery_registry r ON r.target_id=t.id "
-                               "WHERE r.root_key=? AND r.role=?", [root_key, role]).fetchall()
+                               "WHERE r.root_key=? AND r.role_kind=?", [root_key, role]).fetchall()
         targets.update({(role, str(row[0])): (str(row[1]), row[2]) for row in records})
     for row in result:
-        row["target_valid"] = targets.get((row["role"], row["target_id"])) == (row["name"], row["parent_target_id"])
-    types = dict(conn.execute("SELECT t.id,t.analysis_type FROM load_cases t JOIN folder_discovery_registry r ON r.target_id=t.id WHERE r.root_key=? AND r.role='LOAD_CASE'", [root_key]).fetchall())
+        if row["role_kind"] in ("PROJECT", "REQUEST", "LOAD_CASE"):
+            row["target_valid"] = targets.get((row["role_kind"], row["target_id"])) == (row["name"], row["parent_target_id"])
+        else:
+            row["target_valid"] = bool(conn.execute("SELECT 1 FROM load_cases WHERE id=?", [row["parent_target_id"]]).fetchone())
+    types = dict(conn.execute("SELECT t.id,t.analysis_type FROM load_cases t JOIN folder_discovery_registry r ON r.target_id=t.id WHERE r.root_key=? AND r.role_kind='LOAD_CASE'", [root_key]).fetchall())
     for row in result:
-        if row["role"] == "LOAD_CASE":
+        if row["role_kind"] == "LOAD_CASE":
             row["target_valid"] = row["target_valid"] and types.get(row["target_id"]) == row["analysis_type"]
+        row["code"] = row["code"] or ""
     return result
 
 
-def proposal(conn, data: dict, rule_list: list[dict]) -> dict:
+def proposal(conn, data: dict, rule_list: list[dict], options: dict | None = None) -> dict:
     old_paths = [str(row[0]) for row in conn.execute("SELECT relative_path FROM spdm_storage_bindings").fetchall()]
     old_paths += [str(row[0]) for row in conn.execute("SELECT project_folder FROM spdm_storage_project_parents").fetchall()]
     old_paths += [str(row[0]) for row in conn.execute("SELECT request_folder FROM spdm_storage_request_parents").fetchall()]
-    return build_plan(data["nodes"], rule_list, data["root_key"], registry(conn, data["root_key"]),
-                      old_paths, mapping_repository.semantic_bindings(conn))
+    options = options or catalog(conn)
+    return build_plan(data["nodes"], rule_list, data["root_key"], registry(conn, data["root_key"]), old_paths,
+                      mapping_repository.semantic_bindings(conn), options)
 
 
 def preview(conn, scan_id: str, rule_list: list[dict], actor: str):
@@ -103,18 +179,19 @@ def preview(conn, scan_id: str, rule_list: list[dict], actor: str):
         fail("ROOT_CHANGED", "저장소가 변경되었습니다. 다시 조사하세요.")
     if data["status"] != "COMPLETE":
         fail("SCAN_INCOMPLETE", "전체 폴더 조사가 완료되지 않아 미리보기를 만들 수 없습니다.")
-    plan = proposal(conn, data, rule_list)
+    options = catalog(conn)
+    plan = proposal(conn, data, rule_list, options)
     preview_id = ident("folder-preview")
     revision = rules(conn, data["root_key"], data["relative_path"])["revision"]
-    conn.execute("INSERT INTO folder_discovery_previews(id,scan_id,rules_json,rows_json,can_apply,rules_revision,created_by,created_at) "
-                 "VALUES(?,?,?,?,?,?,?,?)", [preview_id, scan_id, json.dumps(rule_list), json.dumps(plan["rows"], ensure_ascii=False),
-                 plan["can_apply"], revision, actor, now()])
+    conn.execute("INSERT INTO folder_discovery_previews(id,scan_id,rules_json,rows_json,can_apply,rules_revision,catalog_revision,created_by,created_at) "
+                 "VALUES(?,?,?,?,?,?,?,?,?)", [preview_id, scan_id, json.dumps(rule_list), json.dumps(plan["rows"], ensure_ascii=False),
+                 plan["can_apply"], revision, options["revision"], actor, now()])
     return {"id": preview_id, "scan_id": scan_id, **plan}
 
 
 def materialize(conn, item: dict, principal):
     target_id, stamp = item["target_id"], now()
-    if item["role"] == "PROJECT":
+    if item["role_kind"] == "PROJECT":
         from ..adapters.persistence.projects import SQLProjectUnitOfWork
         unit = SQLProjectUnitOfWork(conn, lambda prefix, length: ident(prefix))
         command = {"name": item["name"], "product_name": item["name"], "description": "폴더 조사로 생성한 프로젝트",
@@ -125,11 +202,11 @@ def materialize(conn, item: dict, principal):
         unit.add_quality_thresholds(target_id, stamp)
         unit.add_workspace_layouts(target_id)
         unit.add_admin_membership(ident("membership"), target_id, command, stamp)
-    elif item["role"] == "REQUEST":
+    elif item["role_kind"] == "REQUEST":
         conn.execute("INSERT INTO analysis_requests(id,project_id,title,status,owner,owner_user_id,requested_at,due_at,overall_note) "
                      "VALUES(?,?,?,'READY',?,?,?,NULL,?)", [target_id, item["parent_target_id"], item["name"],
                      principal.display_name, principal.user_id, stamp, f"폴더 의뢰번호: {item['code']}"])
-    else:
+    elif item["role_kind"] == "LOAD_CASE":
         conn.execute("INSERT INTO load_cases(id,request_id,name,analysis_type,status,parameters_json,created_at) VALUES(?,?,?,?,'READY',?,?)",
                      [target_id, item["parent_target_id"], item["name"], item["analysis_type"],
                       json.dumps({"source": "folder_discovery", "code": item["code"]}), stamp])
@@ -152,6 +229,8 @@ def apply(conn, preview_id: str, principal, audit):
             fail("PREVIEW_CONFLICT", "완료되지 않은 조사나 충돌이 있는 미리보기는 적용할 수 없습니다.")
         if rules(conn, data["root_key"], data["relative_path"])["revision"] != saved["rules_revision"]:
             fail("RULES_CHANGED", "저장된 규칙이 변경되었습니다. 미리보기를 다시 만드세요.")
+        if catalog(conn)["revision"] != saved["catalog_revision"]:
+            fail("CATALOG_CHANGED", "폴더 옵션이 변경되었습니다. 미리보기를 다시 만드세요.")
         fresh = scan(root, data["relative_path"])
         if fresh["status"] != "COMPLETE" or fresh["nodes"] != data["nodes"]:
             fail("SCAN_STALE", "조사 이후 폴더 구조가 변경되었습니다. 다시 조사하세요.")
@@ -165,10 +244,11 @@ def apply(conn, preview_id: str, principal, audit):
                 kept += 1
                 continue
             materialize(conn, item, principal)
-            conn.execute("INSERT INTO folder_discovery_registry(id,root_key,relative_path,role,scope_key,code,name,analysis_type,target_id,parent_target_id,created_at) "
-                         "VALUES(?,?,?,?,?,?,?,?,?,?,?)", [ident("folder-registry"), data["root_key"], item["relative_path"], item["role"],
-                         item["scope_key"], item["code"], item["name"], item["analysis_type"], item["target_id"], item["parent_target_id"], now()])
-            created[{"PROJECT": "projects", "REQUEST": "requests", "LOAD_CASE": "load_cases"}[item["role"]]] += 1
+            conn.execute("INSERT INTO folder_discovery_registry(id,root_key,relative_path,role,role_kind,scope_key,code,name,analysis_type,target_id,parent_target_id,created_at) "
+                         "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", [ident("folder-registry"), data["root_key"], item["relative_path"], item["role"], item["role_kind"],
+                         item["scope_key"], item["code"] or None, item["name"], item["analysis_type"], item["target_id"], item["parent_target_id"], now()])
+            if item["role_kind"] in ("PROJECT", "REQUEST", "LOAD_CASE"):
+                created[{"PROJECT": "projects", "REQUEST": "requests", "LOAD_CASE": "load_cases"}[item["role_kind"]]] += 1
         # Concurrent folder changes invalidate the entire transaction, including the audit.
         after = scan(root, data["relative_path"])
         if root_identity(configured_root(conn)) != data["root_key"] or after["status"] != "COMPLETE" or after["nodes"] != data["nodes"]:

@@ -14,12 +14,14 @@ test('folder discovery creates real project, request and load case then keeps th
   const suffix = `${Date.now()}${testInfo.workerIndex}`
   const root = testInfo.outputPath('folder-core-qa', 'source')
   const project = `P${suffix}_ActualProject`
-  const request = `R${suffix}_ActualRequest`
-  const loadCase = `L${suffix}_DropLoad`
-  const projectName = 'ActualProject'
+  const request = `R${suffix}-ActualRequest`
+  const loadCase = 'A_drop_001'
+  const sibling = 'B_DROP_001'
+  const resultFolder = 'pre-RESULT-data'
+  const projectName = project
   const requestName = 'ActualRequest'
-  const loadCaseName = 'DropLoad'
-  mkdirSync(join(root, project, request, loadCase), { recursive: true })
+  const loadCaseName = loadCase
+  for (const folder of [loadCase, sibling]) mkdirSync(join(root, project, request, folder, resultFolder), { recursive: true })
 
   await loginWorkspace(page, 'e2e-admin', '/workspace/catalog/schemas')
   await page.getByRole('button', { name: '폴더 조사·업무 생성', exact: true }).click()
@@ -41,9 +43,40 @@ test('folder discovery creates real project, request and load case then keeps th
   await picker.getByRole('button', { name: '선택 완료', exact: true }).click()
   await screen.getByRole('button', { name: '전체 트리 조사', exact: true }).click()
   await expect(screen).toContainText(loadCase)
+  const catalogEditor = screen.locator('.folder-discovery-catalog-editor')
+  await catalogEditor.locator('summary').click()
+  await catalogEditor.getByLabel('새 역할 키').fill('RESULTS_CUSTOM')
+  await catalogEditor.getByLabel('새 역할 표시명').fill('결과 폴더')
+  await catalogEditor.getByLabel('새 역할 종류').selectOption('RESULTS')
+  await catalogEditor.getByRole('button', { name: '추가', exact: true }).first().click()
+  await catalogEditor.getByLabel('새 해석 종류 키').fill('CUSTOM_DROP')
+  await catalogEditor.getByLabel('새 해석 종류 표시명').fill('사용자 낙하')
+  await catalogEditor.getByRole('button', { name: '추가', exact: true }).last().click()
+  await catalogEditor.getByRole('button', { name: '카탈로그 저장', exact: true }).click()
+  await expect(screen.getByRole('status')).toContainText('카탈로그')
+  await catalogEditor.getByLabel('DROP 해석 종류 표시명', { exact: true }).fill('낙하 기본')
+  await catalogEditor.getByLabel('SIDE_CLAMP 해석 종류 삭제', { exact: true }).click()
+  await catalogEditor.getByRole('button', { name: '카탈로그 저장', exact: true }).click()
+  await expect(screen.getByRole('status')).toContainText('카탈로그')
+  await catalogEditor.locator('summary').click()
+  const roleRules = screen.locator('.folder-discovery-rule')
+  await roleRules.nth(0).getByLabel(/구분자/).fill('')
+  await roleRules.nth(1).getByLabel(/구분자/).fill('-')
+  await roleRules.nth(2).getByLabel(/포함할 단어/).fill('drop')
+  await roleRules.nth(2).getByLabel(/코드 토큰/).fill('3')
+  await roleRules.nth(2).getByLabel(/이름 토큰/).fill('0')
+  await roleRules.nth(2).getByLabel('하중 경우 해석 종류', { exact: true }).selectOption('CUSTOM_DROP')
+  await screen.getByRole('button', { name: '규칙 추가', exact: true }).click()
+  const customRule = screen.locator('.folder-discovery-rule').last()
+  await customRule.locator('select').first().selectOption('RESULTS_CUSTOM')
+  await customRule.getByLabel(/포함할 단어/).fill('result')
+  await customRule.getByLabel(/구분자/).fill('')
+  await expect(customRule.getByLabel(/코드 토큰/)).toBeDisabled()
+  await expect(customRule.getByLabel(/이름 토큰/)).toBeDisabled()
   await screen.getByRole('button', { name: '규칙 저장', exact: true }).click()
   await screen.getByRole('button', { name: '업무 생성 미리보기', exact: true }).click()
-  await expect(screen.getByRole('cell', { name: 'CREATE', exact: true })).toHaveCount(3)
+  await expect(screen.getByRole('cell', { name: 'CREATE', exact: true })).toHaveCount(6)
+  await expect(screen.getByRole('button', { name: '이 폴더 연결', exact: true })).toHaveCount(0)
   await screen.getByRole('button', { name: '검토한 업무 생성 적용', exact: true }).click()
   await expect(screen.getByRole('status')).toContainText('프로젝트 1')
   const projects = await page.request.get('/api/projects')
@@ -56,9 +89,12 @@ test('folder discovery creates real project, request and load case then keeps th
   expect(requestRecord).toBeTruthy()
   const loadCases = await page.request.get(`/api/requests/${requestRecord?.id}/load-cases`)
   expect(loadCases.ok()).toBe(true)
-  expect(records<{ name: string }>(await loadCases.json(), 'loadCases').some((item) => item.name === loadCaseName)).toBe(true)
+  const actualCases = records<{ id: string; name: string; analysis_type: string }>(await loadCases.json(), 'loadCases')
+  expect(actualCases).toHaveLength(2)
+  expect(actualCases.every(item => item.analysis_type === 'CUSTOM_DROP')).toBe(true)
+  expect(actualCases.some(item => item.name === loadCaseName)).toBe(true)
   await screen.getByRole('button', { name: '업무 생성 미리보기', exact: true }).click()
-  await expect(screen.getByRole('cell', { name: 'KEEP', exact: true })).toHaveCount(3)
+  await expect(screen.getByRole('cell', { name: 'KEEP', exact: true })).toHaveCount(6)
   for (const [theme, label] of [['light', '라이트'], ['dark', '다크']] as const) {
     await page.getByRole('button', { name: label, exact: true }).click()
     await expect(page.locator('.app-shell')).toHaveAttribute('data-theme', theme)
@@ -68,4 +104,10 @@ test('folder discovery creates real project, request and load case then keeps th
   await screen.scrollIntoViewIfNeeded()
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(391)
   await page.screenshot({ path: testInfo.outputPath('folder-discovery-mobile.png'), fullPage: true })
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await screen.getByRole('button', { name: '이 폴더 연결', exact: true }).first().click()
+  await expect(page.getByLabel('폴더 상대 경로', { exact: true })).toHaveValue(`${project}/${request}/${loadCase}/${resultFolder}`)
+  await expect(page.getByLabel('프로젝트', { exact: true })).toHaveValue(projectRecord!.id)
+  await expect(page.getByLabel('의뢰', { exact: true })).toHaveValue(requestRecord!.id)
+  await expect(page.getByLabel('하중 경우', { exact: true })).toHaveValue(actualCases.find(item => item.name === loadCase)!.id)
 })
