@@ -144,6 +144,14 @@ class ResultLayoutLoadCaseNotFoundError(Exception):
         super().__init__(load_case_id)
 
 
+class ResultLayoutRunNotFoundError(Exception):
+    """The selected result run is absent or outside the request/load-case scope."""
+
+    def __init__(self, run_id: str) -> None:
+        self.run_id = run_id
+        super().__init__(run_id)
+
+
 RequestTypeAssignmentSource = Literal["ADMIN", "USER"]
 
 

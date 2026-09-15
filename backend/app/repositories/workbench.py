@@ -513,9 +513,17 @@ class WorkbenchRepository:
             ).fetchone()
         )
 
-    def result_layout_bindings(self, request_id: str, load_case_id: str | None = None) -> dict[str, Any]:
-        load_case_filter = " AND lc.id=?" if load_case_id else ""
-        parameters = [request_id, *([load_case_id] if load_case_id else [])]
+    def result_run_belongs_to_request(self, request_id: str, run_id: str, load_case_id: str | None = None) -> bool:
+        row = self.conn.execute(
+            """SELECT 1 FROM analysis_runs ar JOIN load_cases lc ON lc.id=ar.load_case_id
+               WHERE ar.id=? AND lc.request_id=?""" + (" AND lc.id=?" if load_case_id else ""),
+            [run_id, request_id, *([load_case_id] if load_case_id else [])],
+        ).fetchone()
+        return bool(row)
+
+    def result_layout_bindings(self, request_id: str, load_case_id: str | None = None, run_id: str | None = None) -> dict[str, Any]:
+        load_case_filter = " AND lc.id=?" if load_case_id else (" AND lc.id=(SELECT ar.load_case_id FROM analysis_runs ar WHERE ar.id=?)" if run_id else "")
+        parameters = [request_id, *([load_case_id] if load_case_id else ([run_id] if run_id else []))]
         load_cases = rows(
             self.conn.execute(
                 """
@@ -526,6 +534,8 @@ class WorkbenchRepository:
                 parameters,
             )
         )
+        run_filter = " AND ar.id=?" if run_id else ""
+        run_parameters = [request_id, *([load_case_id] if load_case_id else ([run_id] if run_id else [])), *([run_id] if run_id else [])]
         runs = rows(
             self.conn.execute(
                 """
@@ -534,13 +544,13 @@ class WorkbenchRepository:
                 FROM analysis_runs ar
                 JOIN load_cases lc ON lc.id=ar.load_case_id
                 WHERE lc.request_id=?
-                """ + load_case_filter + """
+                """ + load_case_filter + run_filter + """
                 ORDER BY COALESCE(ar.completed_at, ar.started_at) DESC NULLS LAST, ar.run_no DESC
                 """,
-                parameters,
+                run_parameters,
             )
         )
-        latest_run = runs[0] if runs else None
+        latest_run = next((run for run in runs if run["id"] == run_id), None) if run_id else (runs[0] if runs else None)
         scalars: list[dict[str, Any]] = []
         if latest_run:
             scalar_rows = rows(

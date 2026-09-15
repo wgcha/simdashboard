@@ -55,20 +55,20 @@ function EmptyLayout({ canOpenData, onOpenData }: { canOpenData: boolean; onOpen
   return <section className="result-layout-empty" data-testid="result-layout-unconfigured"><LayoutDashboard aria-hidden="true" /><h2>결과 구성 미지정</h2><p>이 의뢰는 결과 레이아웃 없이 접수되었습니다. 특정 분석 유형을 추정하지 않으며, 하중 경우와 결과를 등록한 뒤 작업 유형의 결과 구성을 버전으로 지정할 수 있습니다.</p>{canOpenData ? <button type="button" onClick={onOpenData}>하중 경우·결과 설정</button> : null}</section>
 }
 
-export function GenericResultLayoutWorkspace({ projectId, projectName, requestId, requestTitle, selectedLoadCaseId, canOpenData = false, onOpenData, onLoadLayout, onSnapshotPageChange }: { projectId: string; projectName: string; requestId: string; requestTitle: string; selectedLoadCaseId?: string; canOpenData?: boolean; onOpenData: () => void; onLoadLayout: (requestId: string, loadCaseId?: string) => Promise<RequestResultLayout>; onSnapshotPageChange?: (page: DashboardDefinition) => void }) {
+export function GenericResultLayoutWorkspace({ projectId, projectName, requestId, requestTitle, selectedLoadCaseId, selectedRunId, canOpenData = false, onOpenData, onLoadLayout, onSnapshotPageChange }: { projectId: string; projectName: string; requestId: string; requestTitle: string; selectedLoadCaseId?: string; selectedRunId?: string; canOpenData?: boolean; onOpenData: () => void; onLoadLayout: (requestId: string, loadCaseId?: string, runId?: string) => Promise<RequestResultLayout>; onSnapshotPageChange?: (page: DashboardDefinition) => void }) {
   const [activePageId, setActivePageId] = useState('')
   const loaderRef = useRef(onLoadLayout)
   loaderRef.current = onLoadLayout
-  const query = useCallback(() => loaderRef.current(requestId, selectedLoadCaseId || undefined), [requestId, selectedLoadCaseId])
+  const query = useCallback(() => loaderRef.current(requestId, selectedLoadCaseId || undefined, selectedRunId), [requestId, selectedLoadCaseId, selectedRunId])
   const { data: layout, error: layoutError, isLoading: loading, isRefreshing, retry } = useMemoryQuery({
-    key: JSON.stringify(['result-layout', projectId, requestId, selectedLoadCaseId || '']), query,
+    key: JSON.stringify(['result-layout', projectId, requestId, selectedLoadCaseId || '', selectedRunId || 'latest']), query,
   })
   const error = layoutError?.message ?? ''
   const pollAttempt = useRef(0)
   useEffect(() => {
     pollAttempt.current = 0
     setActivePageId('')
-  }, [requestId, selectedLoadCaseId])
+  }, [requestId, selectedLoadCaseId, selectedRunId])
   useEffect(() => {
     if (!layout || layoutError || loading || isRefreshing) return
     if (!shouldPollResultLayout(layout)) { pollAttempt.current = 0; return }
@@ -76,16 +76,16 @@ export function GenericResultLayoutWorkspace({ projectId, projectName, requestId
     const resume = () => { if (document.visibilityState === 'visible') { window.clearTimeout(timer); retry() } }
     document.addEventListener('visibilitychange', resume)
     return () => { window.clearTimeout(timer); document.removeEventListener('visibilitychange', resume) }
-  }, [layout, layoutError, loading, isRefreshing, retry])
+  }, [layout, layoutError, loading, isRefreshing, retry, selectedRunId])
 
   const snapshot = layout?.snapshot
   const activePage = snapshot?.pages.find((page) => page.id === activePageId) ?? snapshot?.pages[0]
   const bindings: ResultLayoutBindings = layout?.bindings ?? { available_data_contracts: [], load_cases: [], latest_result_run: null, scalars: [], error: null }
   useEffect(() => { if (activePage) onSnapshotPageChange?.(activePage) }, [activePage, onSnapshotPageChange])
   const needsDomainRenderer = Boolean(activePage?.widgets.some((widget) => domainWidgetTypes.has(widget.type) && resultWidgetState(widget, snapshot?.required_data_contracts ?? [], bindings) === 'READY'))
-  const domainLoadCaseId = bindings.load_cases[0]?.id ?? ''
+  const domainLoadCaseId = selectedLoadCaseId ?? bindings.load_cases[0]?.id ?? ''
 
-  const domainRunId = bindings.latest_result_run?.id ?? ''
+  const domainRunId = selectedRunId ?? bindings.latest_result_run?.id ?? ''
   const domainQuery = useCallback(() => Promise.all([api.overview(domainLoadCaseId, domainRunId || undefined), api.qualityThresholds(projectId)]), [domainLoadCaseId, domainRunId, projectId])
   const domain = useMemoryQuery({ key: JSON.stringify(['result-layout-domain', projectId, domainLoadCaseId, domainRunId]), query: domainQuery, enabled: needsDomainRenderer && Boolean(domainLoadCaseId) })
   const domainOverview = domain.data?.[0] ?? null
@@ -98,5 +98,5 @@ export function GenericResultLayoutWorkspace({ projectId, projectName, requestId
   if (error) return <section className="canvas-area result-layout-workspace" data-testid="pending-analysis-workspace"><div className="result-layout-error"><AlertTriangle /><h2>결과 레이아웃을 불러오지 못했습니다.</h2><p>{error}</p><button type="button" onClick={retry}><RefreshCw /> 다시 시도</button></div></section>
   if (!snapshot || !activePage) return <section className="canvas-area result-layout-workspace" data-testid="pending-analysis-workspace"><header className="result-layout-head"><div><small>DETAILED ANALYSIS · RESULT PENDING</small><h2>상세 분석</h2><p>{projectName} · {requestTitle}</p></div><span>UNCONFIGURED</span></header><EmptyLayout canOpenData={canOpenData} onOpenData={onOpenData} /></section>
 
-  return <section className="canvas-area result-layout-workspace" data-testid="pending-analysis-workspace"><header className="result-layout-head"><div><small>DETAILED ANALYSIS · TEMPLATE v{snapshot.template_version}</small><h2>상세 분석</h2><p><strong>{snapshot.template_name}</strong> · {projectName} · {requestTitle} · 작업 유형 v{layout?.source_request_type_version ?? snapshot.request_type_version} · 의뢰 생성 시점 결과 레이아웃</p></div><span>{bindings.error ? 'RESULT FAILED' : bindings.latest_result_run ? `최신 Run #${bindings.latest_result_run.run_no} · 결과 보유` : '결과 대기'}</span></header><nav className="result-layout-page-tabs" aria-label="상세 분석 결과 페이지">{snapshot.pages.map((page) => <button type="button" key={page.id} className={page.id === activePage.id ? 'active' : ''} aria-current={page.id === activePage.id ? 'page' : undefined} onClick={() => setActivePageId(page.id)}>{page.name}</button>)}</nav><header className="result-layout-page-head"><div><span>12-COLUMN SNAPSHOT</span><h3>{activePage.name}</h3><p>{activePage.description}</p></div><span>{activePage.widgets.length} WIDGETS</span></header><ResponsiveGridLayout className="layout result-layout-grid" layouts={gridLayouts} breakpoints={{ lg: 900, md: 600, sm: 0 }} cols={{ lg: 12, md: 6, sm: 1 }} rowHeight={70} margin={[14, 14]} isDraggable={false} isResizable={false} compactType="vertical">{activePage.widgets.map((widget) => <div key={widget.id}><SnapshotWidget widget={widget} requiredDataContracts={snapshot.required_data_contracts} bindings={bindings} overview={domainOverview} thresholds={domainThresholds} domainError={domainError} /></div>)}</ResponsiveGridLayout></section>
+  return <section className="canvas-area result-layout-workspace" data-testid="pending-analysis-workspace"><header className="result-layout-head"><div><small>DETAILED ANALYSIS · TEMPLATE v{snapshot.template_version}</small><h2>상세 분석</h2><p><strong>{snapshot.template_name}</strong> · {projectName} · {requestTitle} · 작업 유형 v{layout?.source_request_type_version ?? snapshot.request_type_version} · 의뢰 생성 시점 결과 레이아웃</p></div><span>{bindings.error ? 'RESULT FAILED' : bindings.latest_result_run ? `${selectedRunId ? '선택' : '최신'} Run #${bindings.latest_result_run.run_no} · 결과 보유` : '결과 대기'}</span></header><nav className="result-layout-page-tabs" aria-label="상세 분석 결과 페이지">{snapshot.pages.map((page) => <button type="button" key={page.id} className={page.id === activePage.id ? 'active' : ''} aria-current={page.id === activePage.id ? 'page' : undefined} onClick={() => setActivePageId(page.id)}>{page.name}</button>)}</nav><header className="result-layout-page-head"><div><span>12-COLUMN SNAPSHOT</span><h3>{activePage.name}</h3><p>{activePage.description}</p></div><span>{activePage.widgets.length} WIDGETS</span></header><ResponsiveGridLayout className="layout result-layout-grid" layouts={gridLayouts} breakpoints={{ lg: 900, md: 600, sm: 0 }} cols={{ lg: 12, md: 6, sm: 1 }} rowHeight={70} margin={[14, 14]} isDraggable={false} isResizable={false} compactType="vertical">{activePage.widgets.map((widget) => <div key={widget.id}><SnapshotWidget widget={widget} requiredDataContracts={snapshot.required_data_contracts} bindings={bindings} overview={domainOverview} thresholds={domainThresholds} domainError={domainError} /></div>)}</ResponsiveGridLayout></section>
 }

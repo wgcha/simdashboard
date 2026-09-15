@@ -7059,6 +7059,7 @@ export interface operations {
         parameters: {
             query?: {
                 load_case_id?: string | null;
+                run_id?: string | null;
             };
             header?: never;
             path: {

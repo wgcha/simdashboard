@@ -28,7 +28,6 @@ export function useWorkspaceContextRestore({ enabled, context, projects, beginIn
         if (context.loadCaseId && !loadCase) return reject('요청한 의뢰 문맥을 열 수 없습니다. 의뢰 개요로 이동했습니다.', { projectId, requests, requestId: request.id, loadCases })
         if ((context.runId || context.pageId) && !loadCase) return reject('요청한 결과 문맥을 열 수 없습니다. 의뢰 개요로 이동했습니다.', { projectId, requests, requestId: request.id, loadCases })
         const virtualResultLayout = preferredView === 'custom' && !context.pageId
-        if (virtualResultLayout && context.runId) return reject('요청한 결과 문맥을 열 수 없습니다. 의뢰 개요로 이동했습니다.', { projectId, requests, requestId: request.id, loadCases })
         let overview: Overview | null = null
         if (loadCase && context.runId) {
           const runs = await api.analysisRuns(loadCase.id)

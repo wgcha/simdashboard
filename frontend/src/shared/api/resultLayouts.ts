@@ -120,14 +120,15 @@ async function materializeRequestResultLayout(requestId: string, loadCaseId: str
 
 // The generated OpenAPI contract owns transport paths; these adapters define
 // the richer DashboardDefinition payload returned by the versioned endpoints.
-export function requestResultLayoutQuery(loadCaseId?: string) {
-  return loadCaseId ? { load_case_id: loadCaseId } : undefined
+export function requestResultLayoutQuery(loadCaseId?: string, runId?: string) {
+  if (!loadCaseId && !runId) return undefined
+  return { ...(loadCaseId ? { load_case_id: loadCaseId } : {}), ...(runId ? { run_id: runId } : {}) }
 }
 
 export const resultLayoutApi = {
   analysisTemplates: async (allVersions = false, projectId?: string) => adaptAnalysisTemplates(unwrapGenerated(await apiClient.GET('/api/workbench/analysis-templates', { params: { query: { all_versions: allVersions, project_id: projectId } } }))),
   resultProfile: async (requestTypeId: string, version: number, projectId?: string) => adaptResultProfile(unwrapGenerated(await apiClient.GET('/api/workbench/request-types/{request_type_id}/{version}/result-profile', { params: { path: { request_type_id: requestTypeId, version }, query: { project_id: projectId } } }))),
-  requestResultLayout: async (requestId: string, loadCaseId?: string) => adaptRequestResultLayout(unwrapGenerated(await apiClient.GET('/api/workbench/requests/{request_id}/result-layout', { params: { path: { request_id: requestId }, query: requestResultLayoutQuery(loadCaseId) } }))),
+  requestResultLayout: async (requestId: string, loadCaseId?: string, runId?: string) => adaptRequestResultLayout(unwrapGenerated(await apiClient.GET('/api/workbench/requests/{request_id}/result-layout', { params: { path: { request_id: requestId }, query: requestResultLayoutQuery(loadCaseId, runId) } }))),
   materializeRequestResultLayout,
   saveProjectResultProfile: async (projectId: string, requestTypeId: string, version: number, payload: ResultProfileInput) => adaptResultProfile(unwrapGenerated(await apiClient.PUT('/api/projects/{project_id}/admin/workbench/request-types/{request_type_id}/{version}/result-profile', { params: { path: { project_id: projectId, request_type_id: requestTypeId, version } }, body: payload }))),
 }

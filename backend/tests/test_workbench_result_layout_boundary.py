@@ -17,6 +17,7 @@ from app.domains.workbench.models import (
     RequestResultLayoutContext,
     RequestResultLayoutNotFoundError,
     ResultLayoutLoadCaseNotFoundError,
+    ResultLayoutRunNotFoundError,
     ResultLayoutMaterializeCommand,
 )
 from app.main import app
@@ -44,10 +45,14 @@ class _ResultLayoutQueryPort:
         self.events.append("snapshot")
         return self.snapshot
 
-    def result_layout_bindings(self, request_id: str, load_case_id: str | None) -> dict[str, object]:
+    def result_layout_bindings(self, request_id: str, load_case_id: str | None, run_id: str | None = None) -> dict[str, object]:
         assert (request_id, load_case_id) == ("request-1", "case-1")
         self.events.append("bindings")
         return {"load_cases": [{"id": "case-1"}]}
+
+    def result_run_belongs_to_request(self, request_id: str, run_id: str, load_case_id: str | None) -> bool:
+        self.events.append("run-ownership")
+        return run_id == "run-1" and request_id == "request-1" and load_case_id == "case-1"
 
 
 def test_result_layout_query_preserves_context_authorize_ownership_snapshot_bindings_and_legacy_order() -> None:
@@ -109,6 +114,30 @@ def test_result_layout_query_keeps_the_existing_empty_load_case_query_compatibil
 
     assert result["status"] == "UNCONFIGURED"
     assert port.events == ["context", "authorize", "snapshot"]
+
+
+def test_result_layout_query_validates_selected_run_before_loading_bindings() -> None:
+    port = _ResultLayoutQueryPort(
+        context=RequestResultLayoutContext("request-1", "project-1"),
+        snapshot={"request_id": "request-1", "snapshot": {}},
+    )
+    result = get_workbench_request_result_layout(
+        port, "request-1", load_case_id="case-1", run_id="run-1", authorize=lambda _project_id: port.events.append("authorize")
+    )
+    assert result["bindings"] == {"load_cases": [{"id": "case-1"}]}
+    assert port.events == ["context", "authorize", "ownership", "run-ownership", "snapshot", "bindings"]
+
+
+def test_result_layout_query_rejects_unknown_or_wrong_scope_selected_run() -> None:
+    port = _ResultLayoutQueryPort(
+        context=RequestResultLayoutContext("request-1", "project-1"),
+        snapshot={"request_id": "request-1", "snapshot": {}},
+    )
+    with pytest.raises(ResultLayoutRunNotFoundError):
+        get_workbench_request_result_layout(
+            port, "request-1", load_case_id="case-1", run_id="other-run", authorize=lambda _project_id: None
+        )
+    assert port.events == ["context", "ownership", "run-ownership"]
 
 
 class _MaterializePort:

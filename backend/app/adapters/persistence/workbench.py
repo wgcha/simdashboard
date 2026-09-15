@@ -224,11 +224,14 @@ class SQLWorkbenchRequestResultLayoutQuery:
     def load_case_belongs_to_request(self, request_id: str, load_case_id: str) -> bool:
         return self._repository.load_case_belongs_to_request(request_id, load_case_id)
 
+    def result_run_belongs_to_request(self, request_id: str, run_id: str, load_case_id: str | None) -> bool:
+        return self._repository.result_run_belongs_to_request(request_id, run_id, load_case_id)
+
     def result_layout_snapshot(self, request_id: str) -> dict[str, Any] | None:
         return self._repository.result_layout_snapshot(request_id)
 
-    def result_layout_bindings(self, request_id: str, load_case_id: str | None) -> dict[str, Any]:
-        return self._repository.result_layout_bindings(request_id, load_case_id)
+    def result_layout_bindings(self, request_id: str, load_case_id: str | None, run_id: str | None = None) -> dict[str, Any]:
+        return self._repository.result_layout_bindings(request_id, load_case_id, run_id) if run_id else self._repository.result_layout_bindings(request_id, load_case_id)
 
 
 class SQLWorkbenchResultLayoutMaterializeCommand:

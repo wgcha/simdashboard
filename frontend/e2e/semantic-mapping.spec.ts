@@ -8,6 +8,8 @@ test('changing the result query hides previous data and ignores a delayed respon
   const screen = page.locator('.semantic-page')
   await screen.getByRole('button', { name: '3. 결과 조회', exact: true }).click()
   await screen.getByLabel('프로젝트', { exact: true }).selectOption('project-tv-001')
+  await screen.getByLabel('의뢰', { exact: true }).selectOption('request-drop-001')
+  await screen.getByLabel('하중 경우', { exact: true }).selectOption('loadcase-drop-bottom-001')
   await expect(screen.getByLabel('하중 경우', { exact: true })).not.toHaveValue('')
   const run = screen.getByLabel('Run ID (선택)', { exact: true })
   await run.fill('run-before')

@@ -10,6 +10,7 @@ from ...domains.workbench.models import (
     RequestResultLayoutSnapshotRead,
     RequestResultLayoutNotFoundError,
     ResultLayoutLoadCaseNotFoundError,
+    ResultLayoutRunNotFoundError,
     RequestTypeResolutionRead,
     RequestTypeVersionRead,
     RequestWorkPlanRead,
@@ -67,6 +68,7 @@ def get_workbench_request_result_layout(
     request_id: str,
     *,
     load_case_id: str | None,
+    run_id: str | None = None,
     authorize: Callable[[str], None],
 ) -> RequestResultLayoutRead:
     """Preserve request scope, authorization, ownership, snapshot, binding order."""
@@ -77,6 +79,8 @@ def get_workbench_request_result_layout(
     authorize(context.project_id)
     if load_case_id and not query.load_case_belongs_to_request(request_id, load_case_id):
         raise ResultLayoutLoadCaseNotFoundError(load_case_id)
+    if run_id and not query.result_run_belongs_to_request(request_id, run_id, load_case_id):
+        raise ResultLayoutRunNotFoundError(run_id)
 
     snapshot = query.result_layout_snapshot(request_id)
     if not snapshot:
@@ -87,7 +91,7 @@ def get_workbench_request_result_layout(
         }
 
     result = cast(RequestResultLayoutSnapshotRead, dict(snapshot))
-    result["bindings"] = query.result_layout_bindings(request_id, load_case_id)
+    result["bindings"] = query.result_layout_bindings(request_id, load_case_id, run_id) if run_id else query.result_layout_bindings(request_id, load_case_id)
     # No load-case/result heuristic is allowed here. Only a deliberately
     # migrated LEGACY_ASSIGNED snapshot may retain its old domain route.
     if result.get("snapshot_reason") == "LEGACY_ASSIGNED":

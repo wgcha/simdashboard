@@ -58,6 +58,7 @@ from ..domains.workbench.models import (
     WorkItemStartCommand,
     RequestResultLayoutNotFoundError,
     ResultLayoutLoadCaseNotFoundError,
+    ResultLayoutRunNotFoundError,
     ResultLayoutMaterializeCommand,
 )
 from ..modules.access_control import (
@@ -256,6 +257,7 @@ def get_request_result_layout(
     request_id: str,
     request: Request,
     load_case_id: str | None = Query(default=None),
+    run_id: str | None = Query(default=None),
 ) -> dict[str, Any]:
     with connect() as conn:
         try:
@@ -263,6 +265,7 @@ def get_request_result_layout(
                 SQLWorkbenchRequestResultLayoutQuery(conn),
                 request_id,
                 load_case_id=load_case_id,
+                run_id=run_id,
                 authorize=lambda project_id: require_permission(
                     request, PROJECT_DATA_VIEW, project_id, conn=conn
                 ),
@@ -271,6 +274,8 @@ def get_request_result_layout(
             raise HTTPException(404, detail={"code": "REQUEST_NOT_FOUND", "request_id": exc.request_id}) from exc
         except ResultLayoutLoadCaseNotFoundError as exc:
             raise HTTPException(404, detail={"code": "LOAD_CASE_NOT_FOUND", "load_case_id": exc.load_case_id}) from exc
+        except ResultLayoutRunNotFoundError as exc:
+            raise HTTPException(404, detail={"code": "RESULT_RUN_NOT_FOUND", "run_id": exc.run_id}) from exc
 
 
 @router.post(

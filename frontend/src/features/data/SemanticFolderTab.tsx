@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { FolderOpen, RefreshCw, Save, Upload } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { semanticContextApi, semanticMappingApi, type ContextLoadCase, type ContextProject, type ContextRequest, type FolderResponse, type SemanticBinding, type SemanticCatalog } from '../../shared/api/semanticMapping'
 import { AliasSuggestion } from './AliasSuggestion'
 import { SemanticReviewQueue } from './SemanticReviewQueue'
@@ -9,7 +10,13 @@ type Message = { kind: 'success' | 'error' | 'info'; text: string }
 type Target = { project_id: string; request_id: string; load_case_id: string; role: string; recipe_ids: string[]; template_id: string }
 export type FolderConnectionPrefill = { relative_path: string; project_id?: string | null; request_id?: string | null; load_case_id?: string | null; role: 'RESULTS' | 'INPUT' }
 type RefreshResult = { partial: boolean; results: Array<{ relative_path?: string; status: string; run_id?: string; code?: string; detail?: unknown }> }
+type ReviewTarget = { projectId: string; requestId: string; loadCaseId: string; runId: string }
 const emptyTarget = (): Target => ({ project_id: '', request_id: '', load_case_id: '', role: 'PROJECT', recipe_ids: [], template_id: '' })
+const canOpenReview = (status: string, runId?: string | null) => Boolean(runId && ['IMPORTED', 'SKIPPED'].includes(status))
+const reviewHref = ({ projectId, requestId, loadCaseId, runId }: ReviewTarget) => {
+  const query = new URLSearchParams({ project: projectId, request: requestId, loadCase: loadCaseId, run: runId, view: 'custom' })
+  return `/workspace/requests?${query.toString()}`
+}
 
 export function FolderTab({ catalog, onMessage, busy, setBusy, onCatalog, scopeProjectId = '', onOpenDiscovery, initialTarget }: {
   catalog: SemanticCatalog; onMessage: (message: Message) => void; busy: string; setBusy: (value: string) => void; onCatalog: (catalog: SemanticCatalog) => void; scopeProjectId?: string; onOpenDiscovery?: () => void; initialTarget?: FolderConnectionPrefill | null
@@ -23,9 +30,15 @@ export function FolderTab({ catalog, onMessage, busy, setBusy, onCatalog, scopeP
   const [cases, setCases] = useState<ContextLoadCase[]>([])
   const [file, setFile] = useState<File | null>(null)
   const [refreshResult, setRefreshResult] = useState<RefreshResult | null>(null)
+  const [refreshOwnerContext, setRefreshOwnerContext] = useState<Omit<ReviewTarget, 'runId'> | null>(null)
   const [reviewBinding, setReviewBinding] = useState<SemanticBinding | null>(null)
+  const [reviewTarget, setReviewTarget] = useState<ReviewTarget | null>(null)
   const appliedPrefill = useRef('')
+  const refreshRequest = useRef(0)
+  const importRequest = useRef(0)
   const error = (reason: unknown) => onMessage({ kind: 'error', text: reason instanceof Error ? reason.message : '요청을 처리하지 못했습니다.' })
+
+  useEffect(() => () => { refreshRequest.current += 1; importRequest.current += 1 }, [])
 
   useEffect(() => { let active = true; semanticContextApi.projects().then((value) => { if (active) setProjects(value) }).catch(error); return () => { active = false } }, [])
   useEffect(() => {
@@ -72,22 +85,34 @@ export function FolderTab({ catalog, onMessage, busy, setBusy, onCatalog, scopeP
     setTarget({ project_id: binding.project_id, request_id: binding.request_id ?? '', load_case_id: binding.load_case_id ?? '', role: binding.role, recipe_ids: binding.recipe_ids, template_id: binding.template_id ?? '' })
   }
   const refresh = async (id: string) => {
+    const requestId = ++refreshRequest.current
+    const binding = catalog.bindings.find((item) => item.id === id)
+    const ownerContext = binding && binding.request_id && binding.load_case_id ? { projectId: binding.project_id, requestId: binding.request_id, loadCaseId: binding.load_case_id } : null
+    setRefreshOwnerContext(ownerContext)
+    setReviewTarget(null)
+    setRefreshResult(null)
     setBusy(`refresh-${id}`)
     try {
       const result = await semanticMappingApi.refreshBinding(id) as RefreshResult
+      if (requestId !== refreshRequest.current) return
       setRefreshResult(result)
       onMessage({ kind: result.partial ? 'info' : 'success', text: `${result.results.length}개 파일 처리 · ${result.partial ? '보류/오류 항목을 확인하세요.' : '완료'}` })
-    } catch (reason) { error(reason) } finally { setBusy('') }
+    } catch (reason) { if (requestId === refreshRequest.current) error(reason) } finally { if (requestId === refreshRequest.current) setBusy('') }
   }
   const upload = async () => {
     if (!file || target.recipe_ids.length !== 1 || !target.load_case_id) {
       onMessage({ kind: 'error', text: '단일 파일 등록에는 파일·하중 경우·레시피 하나를 선택하세요.' }); return
     }
+    const requestId = ++importRequest.current
+    const targetAtStart = { projectId: target.project_id, requestId: target.request_id, loadCaseId: target.load_case_id }
+    setReviewTarget(null)
     setBusy('import')
     try {
       const result = await semanticMappingApi.importFile(file, target.recipe_ids[0], target.load_case_id, target.template_id || undefined)
+      if (requestId !== importRequest.current) return
+      if (canOpenReview(result.status, result.run_id) && targetAtStart.requestId) setReviewTarget({ ...targetAtStart, runId: result.run_id! })
       onMessage({ kind: 'success', text: `${result.status} · run ${result.run_id} · 레시피 v${result.recipe_version}` })
-    } catch (reason) { error(reason) } finally { setBusy('') }
+    } catch (reason) { if (requestId === importRequest.current) error(reason) } finally { if (requestId === importRequest.current) setBusy('') }
   }
   const applyVocabularyTarget = (entry: SemanticVocabularyEntry) => {
     if (entry.target_kind === 'PROJECT') {
@@ -124,9 +149,9 @@ export function FolderTab({ catalog, onMessage, busy, setBusy, onCatalog, scopeP
     </div>
     <div className="semantic-card">
       <h2>다음 파일 처리</h2><p>단일 파일 등록은 위에서 선택한 대상·레시피·템플릿을 사용합니다.</p>
-      <div className="folder-import-row"><input aria-label="등록할 결과 파일" type="file" accept=".csv,.json" onChange={(event) => setFile(event.target.files?.[0] ?? null)} /><button className="primary-button" onClick={() => void upload()} disabled={!!busy}><Upload />단일 파일 가져오기</button></div>
+      <div className="folder-import-row" aria-label="등록한 결과"><input aria-label="등록할 결과 파일" type="file" accept=".csv,.json" onChange={(event) => setFile(event.target.files?.[0] ?? null)} /><button className="primary-button" onClick={() => void upload()} disabled={!!busy}><Upload />단일 파일 가져오기</button>{reviewTarget ? <Link className="secondary-button" to={reviewHref(reviewTarget)}>결과 검토</Link> : null}</div>
       <div className="binding-list">{catalog.bindings.map((binding) => <article key={binding.id}><div><strong>{binding.relative_path}</strong><small>{projects.find((project) => project.id === binding.project_id)?.name ?? binding.project_id} · {binding.role} · 개정 {binding.revision}</small></div><button onClick={() => edit(binding)}>재연결·수정</button>{binding.load_case_id && <button onClick={() => void refresh(binding.id)} disabled={!!busy}><RefreshCw />새로고침</button>}{binding.load_case_id && <button onClick={() => setReviewBinding((current) => current?.id === binding.id ? null : binding)}>{reviewBinding?.id === binding.id ? '검토함 닫기' : '검토함'}</button>}</article>)}</div>
-      {refreshResult && <table className="semantic-result-table"><thead><tr><th>파일 / 실행</th><th>처리 상태</th><th>상세</th></tr></thead><tbody>{refreshResult.results.map((result, index) => <tr key={index}><td>{result.relative_path ?? result.run_id}</td><td>{result.status}</td><td>{result.code ?? (result.detail ? JSON.stringify(result.detail) : '')}</td></tr>)}</tbody></table>}
+      {refreshResult && <table className="semantic-result-table"><thead><tr><th>파일 / 실행</th><th>처리 상태</th><th>상세</th><th>검토</th></tr></thead><tbody>{refreshResult.results.map((result, index) => { const ownerContext = refreshOwnerContext && result.run_id ? { ...refreshOwnerContext, runId: result.run_id } : null; return <tr key={index}><td>{result.relative_path ?? result.run_id}</td><td>{result.status}</td><td>{result.code ?? (result.detail ? JSON.stringify(result.detail) : '')}</td><td>{ownerContext && canOpenReview(result.status, result.run_id) ? <Link className="secondary-button" to={reviewHref(ownerContext)}>결과 검토</Link> : null}</td></tr> })}</tbody></table>}
       {reviewBinding ? <SemanticReviewQueue binding={reviewBinding} catalog={catalog} canReview onMessage={onMessage} /> : null}
     </div>
   </div>

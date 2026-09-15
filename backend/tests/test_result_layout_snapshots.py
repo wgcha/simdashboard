@@ -529,3 +529,52 @@ def test_result_layout_bindings_are_scoped_to_the_selected_load_case() -> None:
         )
         assert rejected.status_code == 404
         assert rejected.json()["detail"]["code"] == "LOAD_CASE_NOT_FOUND"
+
+
+def test_result_layout_exact_run_preserves_values_contracts_and_ownership() -> None:
+    suffix = uuid4().hex[:8]
+    load_case_id = f"review-case-{suffix}"
+    old_run, new_run = f"review-old-{suffix}", f"review-new-{suffix}"
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO load_cases VALUES (?, 'request-drop-001', 'Review case', 'DROP', 'COMPLETED', ?, ?)",
+            [load_case_id, "{}", now],
+        )
+        for run_id, number, value in ((old_run, 1, 12.5), (new_run, 2, 99.0)):
+            conn.execute(
+                "INSERT INTO analysis_runs VALUES (?, ?, NULL, ?, 'ReviewSolver', 'COMPLETED', ?, ?)",
+                [run_id, load_case_id, number, now, now],
+            )
+            conn.execute(
+                "INSERT INTO scalar_results VALUES (?, ?, 'review_metric', 'Review metric', ?, NULL, NULL, 'mm', NULL, NULL)",
+                [f"scalar-{run_id}", run_id, value],
+            )
+        conn.execute(
+            "INSERT INTO time_series_results VALUES (?, 'new_time', 'New only', 0.0, 99.0, 's', 'mm')",
+            [new_run],
+        )
+        foreign_request = conn.execute("SELECT id FROM analysis_requests WHERE id <> 'request-drop-001' LIMIT 1").fetchone()[0]
+
+    path = "/api/workbench/requests/request-drop-001/result-layout"
+    with TestClient(app) as client:
+        latest = client.get(path, params={"load_case_id": load_case_id})
+        assert latest.status_code == 200, latest.text
+        assert latest.json()["bindings"]["latest_result_run"]["id"] == new_run
+        assert latest.json()["bindings"]["scalars"][0]["value"] == 99.0
+        for params in ({"run_id": old_run}, {"load_case_id": load_case_id, "run_id": old_run}):
+            selected = client.get(path, params=params)
+            assert selected.status_code == 200, selected.text
+            bindings = selected.json()["bindings"]
+            assert bindings["latest_result_run"]["id"] == old_run
+            assert [item["id"] for item in bindings["load_cases"]] == [load_case_id]
+            assert bindings["scalars"][0]["value"] == 12.5
+            assert "TIME_SERIES" not in bindings["available_data_contracts"]
+        for target_path, params in (
+            (path, {"run_id": "unknown-run"}),
+            (path, {"load_case_id": "loadcase-drop-bottom-001", "run_id": old_run}),
+            (f"/api/workbench/requests/{foreign_request}/result-layout", {"run_id": old_run}),
+        ):
+            rejected = client.get(target_path, params=params)
+            assert rejected.status_code == 404, rejected.text
+            assert rejected.json()["detail"]["code"] == "RESULT_RUN_NOT_FOUND"

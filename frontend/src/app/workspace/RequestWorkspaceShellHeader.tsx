@@ -52,7 +52,8 @@ type Props = {
 export function RequestWorkspaceShellHeader({ actions, model, onBeginReview, isCurrentReview, loadLayout, onReviewError, onRunChange }: Props) {
   const { activeDashboardId, activeTab, activeView, analysisRunChanging, analysisRunError, analysisRuns, analysisRunsLoading, canOpenData, canOpenWorkbench, contextChanging, loadCases, overview, owner, projectId, projects, requestContextLoading, requestId, requests, selectedAnalysisRunId, selectedLoadCaseId, selectedWorkflow, status, title } = model
   const completedCount = selectedWorkflow ? `${selectedWorkflow.steps.filter((step) => step.status === 'COMPLETED').length} / ${selectedWorkflow.total_count ?? selectedWorkflow.steps.length} 작업 완료` : undefined
-  const showRunSelector = activeTab === 'review' && activeDashboardId !== 'request-result-layout' && !activeDashboardId.startsWith('pending-')
+  // Snapshot and unconfigured review layouts also render one selected immutable Run.
+  const showRunSelector = activeTab === 'review'
   return <RequestWorkspaceHeader
     activeTab={activeTab}
     activeView={activeView}

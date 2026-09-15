@@ -8,12 +8,13 @@ type Props = {
   requestId: string
   requestTitle: string
   selectedLoadCaseId?: string
+  selectedRunId?: string
   canOpenData: boolean
   onOpenData: () => void
-  onLoadLayout: (requestId: string, loadCaseId?: string) => Promise<RequestResultLayout>
+  onLoadLayout: (requestId: string, loadCaseId?: string, runId?: string) => Promise<RequestResultLayout>
   onSnapshotPageChange?: (page: DashboardDefinition) => void
 }
 
-export function PendingAnalysisWorkspace({ projectId, projectName, requestId, requestTitle, selectedLoadCaseId, canOpenData, onOpenData, onLoadLayout, onSnapshotPageChange }: Props) {
-  return <GenericResultLayoutWorkspace projectId={projectId} projectName={projectName} requestId={requestId} requestTitle={requestTitle} selectedLoadCaseId={selectedLoadCaseId} canOpenData={canOpenData} onOpenData={onOpenData} onLoadLayout={onLoadLayout} onSnapshotPageChange={onSnapshotPageChange} />
+export function PendingAnalysisWorkspace({ projectId, projectName, requestId, requestTitle, selectedLoadCaseId, selectedRunId, canOpenData, onOpenData, onLoadLayout, onSnapshotPageChange }: Props) {
+  return <GenericResultLayoutWorkspace projectId={projectId} projectName={projectName} requestId={requestId} requestTitle={requestTitle} selectedLoadCaseId={selectedLoadCaseId} selectedRunId={selectedRunId} canOpenData={canOpenData} onOpenData={onOpenData} onLoadLayout={onLoadLayout} onSnapshotPageChange={onSnapshotPageChange} />
 }

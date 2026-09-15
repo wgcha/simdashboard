@@ -1,6 +1,49 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 import { readFileSync } from 'node:fs'
 import { loginWorkspace } from './workspace-test-helpers'
+
+async function createReviewTarget(page: Page, withSnapshot: boolean) {
+  const suffix = Date.now()
+  let resultProfile: Record<string, unknown> | undefined
+  if (withSnapshot) {
+    const templateId = `semantic-review-${suffix}`
+    const templateResponse = await page.request.post('/api/admin/workbench/analysis-templates', { data: {
+      id: templateId, display_name: 'Existing request result layout', description: 'Exact Run snapshot regression',
+      lifecycle_status: 'PUBLISHED', scope_kind: 'SYSTEM',
+      page_definitions: [{ id: 'semantic-review-summary', name: '기존 결과 구성', description: '', widgets: [
+        { id: 'semantic-review-summary', type: 'summary', title: '기존 실행 요약', x: 0, y: 0, w: 6, h: 3, settings: {} },
+      ] }],
+    } })
+    expect(templateResponse.status(), await templateResponse.text()).toBe(201)
+    resultProfile = { template_id: templateId, template_version: 1, included_widget_ids: null, overrides: {}, required_data_contracts: [] }
+  }
+  const typeResponse = await page.request.post('/api/admin/workbench/request-types', { data: {
+    display_name: `Semantic review ${suffix}`, description: 'Recipe widgets without a request layout',
+    allowed_task_types: [{ id: 'cad-prepare', version: 1 }],
+    default_workflow: { nodes: [{ node_key: 'prepare', task_type_id: 'cad-prepare', task_type_version: 1, depends_on: [] }] },
+    match_rules: { labels: ['semantic-review'] }, is_active: true,
+    ...(resultProfile ? { result_profile: resultProfile } : {}),
+  } })
+  expect(typeResponse.status(), await typeResponse.text()).toBe(201)
+  const requestType = await typeResponse.json()
+  const candidates = await page.request.get('/api/projects/project-tv-001/assignee-candidates')
+  expect(candidates.ok()).toBeTruthy()
+  const owner = (await candidates.json())[0].user_id
+  const requestResponse = await page.request.post('/api/projects/project-tv-001/requests', { data: {
+    title: `Semantic review ${suffix}`, owner_user_id: owner, due_in_days: 14,
+    overall_note: 'No layout required for recipe widgets', source_type: 'EXTERNAL_SYSTEM',
+    source_reference: 'semantic-e2e', requested_by: 'E2E',
+    request_type_id: requestType.id, request_type_version: requestType.version,
+  } })
+  expect(requestResponse.status(), await requestResponse.text()).toBe(201)
+  const request = await requestResponse.json()
+  const caseResponse = await page.request.post(`/api/requests/${request.id}/load-cases`, {
+    data: { name: 'Representative CSV', analysis_type: 'DROP', parameters: {} },
+  })
+  expect(caseResponse.status(), await caseResponse.text()).toBe(201)
+  const loadCase = await caseResponse.json()
+  return { requestId: request.id as string, loadCaseId: loadCase.id as string }
+}
 
 for (const extension of ['csv', 'json']) {
   test(`issue ${extension} sample: item editing, widgets, atomic save, reopen and Run`, async ({ page }, testInfo) => {
@@ -9,6 +52,7 @@ for (const extension of ['csv', 'json']) {
     page.on('pageerror', (error) => errors.push(error.message))
     page.on('console', (message) => { if (message.type() === 'error' && !message.text().includes('401')) errors.push(message.text()) })
     await loginWorkspace(page, 'e2e-admin', '/workspace/catalog/schemas')
+    const target = await createReviewTarget(page, extension === 'json')
     await page.goto('/workspace/catalog/schemas')
     await expect(page).toHaveTitle(/.+/)
     const screen = page.locator('.semantic-page')
@@ -100,8 +144,8 @@ for (const extension of ['csv', 'json']) {
     expect((await activated).status()).toBe(200)
     await screen.getByRole('button', { name: '2. 폴더 연결', exact: true }).click()
     await screen.getByLabel('프로젝트', { exact: true }).selectOption('project-tv-001')
-    await screen.getByLabel('의뢰', { exact: true }).selectOption('request-drop-001')
-    await screen.getByLabel('하중 경우', { exact: true }).selectOption('loadcase-drop-bottom-001')
+    await screen.getByLabel('의뢰', { exact: true }).selectOption(target.requestId)
+    await screen.getByLabel('하중 경우', { exact: true }).selectOption(target.loadCaseId)
     await screen.getByRole('checkbox', { name: new RegExp(recipeName) }).check()
     await screen.getByLabel('표시 템플릿', { exact: true }).selectOption(saved.template.id)
     await screen.getByLabel('등록할 결과 파일').setInputFiles(sample)
@@ -110,10 +154,48 @@ for (const extension of ['csv', 'json']) {
     const imported = await importing
     expect(imported.status(), await imported.text()).toBe(200)
     const { run_id: runId } = await imported.json()
-    await page.goto(`/workspace/requests?project=project-tv-001&request=request-drop-001&loadCase=loadcase-drop-bottom-001&run=${runId}&view=compare`)
+    // A later result must not change the completed import button's destination.
+    const laterBuffer = Buffer.from(sample.buffer.toString().replace('-311.643', '-123.456'))
+    const laterImport = await page.request.post('/api/semantic-mapping/import', { multipart: {
+      file: { ...sample, buffer: laterBuffer }, recipe_id: saved.recipe.id,
+      load_case_id: target.loadCaseId, template_id: saved.template.id,
+    } })
+    expect(laterImport.status(), await laterImport.text()).toBe(200)
+    const laterRunId = (await laterImport.json()).run_id as string
+    expect(laterRunId).not.toBe(runId)
+    const runsResponse = await page.request.get(`/api/load-cases/${target.loadCaseId}/runs`)
+    expect(runsResponse.ok(), await runsResponse.text()).toBeTruthy()
+    const runNo = (await runsResponse.json()).find((run: { id: string }) => run.id === runId).run_no
+    const reviewLink = screen.getByLabel('등록한 결과', { exact: true }).getByRole('link', { name: '결과 검토', exact: true })
+    await expect(reviewLink).toBeVisible()
+    await reviewLink.click()
     const panel = page.getByRole('region', { name: '레시피로 연결한 결과' })
+    await expect(panel).toHaveCount(1)
     await expect(panel.locator('.semantic-result-kpi strong')).toHaveText(['-311.643', '-159.909'])
     await expect(panel.locator('.semantic-result-table tbody tr')).toHaveCount(itemCount)
+    await expect(page).toHaveURL(new RegExp(`run=${runId}`))
+    await page.locator('.request-journey').getByRole('button', { name: /결과 검토/ }).click()
+    await expect(panel.locator('.semantic-result-kpi strong')).toHaveText(['-311.643', '-159.909'])
+    if (extension === 'csv') await expect(page.getByTestId('result-layout-unconfigured')).toBeVisible()
+    else await expect(page.getByTestId('result-layout-widget-semantic-review-summary')).toContainText(`#${runNo}`)
+    await expect(panel.locator('.semantic-result-table tbody tr').filter({ hasText: 'Set Contact Position' })).toContainText('값 없음')
+    await expect(panel.locator('.semantic-result-table tbody tr').filter({ hasText: 'Set Contact Coord.' })).toContainText('값 없음')
+    await page.reload()
+    await expect(panel.locator('.semantic-result-kpi strong')).toHaveText(['-311.643', '-159.909'])
+    const runPicker = page.getByLabel('결과 버전 선택', { exact: true })
+    await runPicker.selectOption(laterRunId)
+    await expect(panel.locator('.semantic-result-kpi strong')).toHaveText(['-123.456', '-159.909'])
+    await runPicker.selectOption(runId)
+    await expect(panel.locator('.semantic-result-kpi strong')).toHaveText(['-311.643', '-159.909'])
+    await panel.scrollIntoViewIfNeeded()
+    await page.screenshot({ path: testInfo.outputPath(`issue-${extension}-review.png`) })
+    await page.setViewportSize({ width: 390, height: 844 })
+    await panel.scrollIntoViewIfNeeded()
+    const panelBounds = await panel.boundingBox()
+    expect(panelBounds!.x).toBeGreaterThanOrEqual(0)
+    expect(panelBounds!.x + panelBounds!.width).toBeLessThanOrEqual(391)
+    await page.screenshot({ path: testInfo.outputPath(`issue-${extension}-review-mobile.png`) })
+    await page.setViewportSize({ width: 1280, height: 720 })
     await page.goto('/workspace/catalog/schemas')
     const opening = page.waitForResponse((response) => response.url().endsWith(`/semantic-mapping/configurations/${saved.recipe.id}`))
     await screen.getByLabel('저장된 레시피', { exact: true }).selectOption(saved.recipe.id)
