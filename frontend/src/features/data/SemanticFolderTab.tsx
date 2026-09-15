@@ -10,8 +10,8 @@ type Target = { project_id: string; request_id: string; load_case_id: string; ro
 type RefreshResult = { partial: boolean; results: Array<{ relative_path?: string; status: string; run_id?: string; code?: string; detail?: unknown }> }
 const emptyTarget = (): Target => ({ project_id: '', request_id: '', load_case_id: '', role: 'PROJECT', recipe_ids: [], template_id: '' })
 
-export function FolderTab({ catalog, onMessage, busy, setBusy, onCatalog, scopeProjectId = '' }: {
-  catalog: SemanticCatalog; onMessage: (message: Message) => void; busy: string; setBusy: (value: string) => void; onCatalog: (catalog: SemanticCatalog) => void; scopeProjectId?: string
+export function FolderTab({ catalog, onMessage, busy, setBusy, onCatalog, scopeProjectId = '', onOpenDiscovery }: {
+  catalog: SemanticCatalog; onMessage: (message: Message) => void; busy: string; setBusy: (value: string) => void; onCatalog: (catalog: SemanticCatalog) => void; scopeProjectId?: string; onOpenDiscovery?: () => void
 }) {
   const [path, setPath] = useState('')
   const [folder, setFolder] = useState<FolderResponse | null>(null)
@@ -93,6 +93,7 @@ export function FolderTab({ catalog, onMessage, busy, setBusy, onCatalog, scopeP
   const templates = catalog.templates.filter((template) => template.active_version)
 
   return <div className="semantic-flow folder-flow">
+    <div className="semantic-card folder-discovery-handoff"><div><strong>실제 폴더에서 새 업무를 만들려면</strong><p>예제 대상 선택 없이 전체 하위 폴더를 조사하고, 역할 규칙과 생성 결과를 미리 검토할 수 있습니다.</p></div><button className="primary-button" onClick={onOpenDiscovery}>폴더 조사·업무 생성으로 이동</button></div>
     <div className="semantic-card">
       <div className="semantic-card-heading"><h2>{editing ? '폴더 재연결·설정 수정' : '임의 폴더 탐색·대상 연결'}</h2><FolderOpen /></div>
       {editing && <p role="status">기존 연결 · 개정 {editing.revision} <button onClick={() => { setEditing(null); setTarget(emptyTarget()); setPath('') }}>새 연결 작성</button></p>}

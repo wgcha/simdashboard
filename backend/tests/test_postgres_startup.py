@@ -21,6 +21,9 @@ class _FakeResult:
     def fetchone(self):
         return self.value
 
+    def fetchall(self):
+        return self.value
+
 
 class _CatalogConnection:
     def __init__(self, *, missing: str | None = None, denied: str | None = None):
@@ -36,10 +39,22 @@ class _CatalogConnection:
 
 
 class _PostgresStartupConnection:
-    def execute(self, statement: str):
+    def __init__(self, missing_column: str | None = None):
+        self.missing_column = missing_column
+
+    def execute(self, statement: str, parameters: list[str] | None = None):
         if "to_regclass('public." in statement:
             table = statement.split("to_regclass('public.", 1)[1].split("'", 1)[0]
             return _FakeResult((f"public.{table}",))
+        if "information_schema.columns" in statement:
+            table = parameters[0] if parameters else ""
+            columns = {
+                "folder_discovery_scans": {"root_key", "root_path", "relative_path", "tree_json", "issues_json"},
+                "folder_discovery_previews": {"scan_id", "rules_revision", "applied_json"},
+                "folder_discovery_rules": {"root_key", "relative_path", "revision"},
+                "folder_discovery_registry": {"root_key", "parent_target_id", "scope_key", "target_id"},
+            }[table]
+            return _FakeResult([] if self.missing_column in columns else [(column,) for column in columns])
         raise AssertionError(f"unexpected startup query: {statement}")
 
 
@@ -57,6 +72,16 @@ def test_postgres_initialization_is_read_only_schema_preflight(monkeypatch: pyte
 
     # _PostgresStartupConnection rejects every statement except to_regclass;
     # success proves startup performs no INSERT/UPDATE/DDL/seed work.
+
+
+def test_postgres_initialization_rejects_missing_folder_discovery_column(monkeypatch: pytest.MonkeyPatch):
+    connection = _PostgresStartupConnection(missing_column="root_key")
+    @contextmanager
+    def fake_connect(): yield connection
+    monkeypatch.setattr(app_database, "database_settings", lambda: SimpleNamespace(backend="postgresql"))
+    monkeypatch.setattr(app_database, "connect", fake_connect)
+    with pytest.raises(RuntimeError, match="Folder discovery"):
+        app_database.initialize_database()
 
 
 def test_system_analysis_page_backfill_creates_missing_run_comparison_idempotently():

@@ -452,7 +452,7 @@ def bind_existing_target(conn: ConnectionLike, root: Path, load_case_id: str, re
     # It makes the path-owner decision serializable across the two collectors.
     with _ownership_transaction(conn):
         _lock_root_identity(conn, root)
-        _reject_semantic_overlap(conn, candidate.relative_path)
+        _reject_semantic_overlap(conn, candidate.relative_path, root)
         project_id, request_id = _target_for_binding(conn, load_case_id)
         _register_parent_target(conn, candidate.relative_path, project_id, request_id)
         existing_path = conn.execute("SELECT load_case_id, project_id, request_id FROM spdm_storage_bindings WHERE relative_path=?", [candidate.relative_path]).fetchone()
@@ -489,7 +489,7 @@ def _ownership_transaction(conn: ConnectionLike):
         raise
 
 
-def _reject_semantic_overlap(conn: ConnectionLike, relative_path: str) -> None:
+def _reject_semantic_overlap(conn: ConnectionLike, relative_path: str, root: Path | None = None) -> None:
     """Keep legacy discovery from claiming a semantic mapping boundary.
 
     Semantic parent tags may contain a child load-case path, so either
@@ -501,6 +501,16 @@ def _reject_semantic_overlap(conn: ConnectionLike, relative_path: str) -> None:
         legacy_path = relative_path.casefold()
         if legacy_path == semantic_path or legacy_path.startswith(semantic_path + "/") or semantic_path.startswith(legacy_path + "/"):
             raise SpdmStorageError("SPDM_SEMANTIC_PATH_OWNED", "의미 매핑이 소유한 경로는 기존 SPDM 수집에 연결할 수 없습니다.")
+    # New explicit discovery owns its selected subtrees too.  Import lazily so
+    # the storage adapter remains usable while the discovery feature is absent.
+    if root is not None:
+        from .folder_discovery_scan import root_identity
+        from .folder_discovery_plan import overlaps
+        key = root_identity(root)
+        rows = conn.execute("SELECT relative_path FROM folder_discovery_registry WHERE root_key=?", [key]).fetchall()
+        for row in rows:
+            if overlaps(relative_path, str(row[0])):
+                raise SpdmStorageError("SPDM_FOLDER_DISCOVERY_PATH_OWNED", "명시적 폴더 탐색이 소유한 경로는 기존 SPDM 수집에 연결할 수 없습니다.")
 
 
 def binding_row(load_case_id: str, project_id: str, request_id: str, relative_path: str) -> dict[str, str]:
@@ -514,6 +524,7 @@ def _ensure_discovered_request_parent(
     *,
     creator_id: str,
     creator_name: str,
+    root: Path | None = None,
 ) -> None:
     """Create a discoverable request without guessing a load case or result."""
     existing = _registered_parent_target(conn, project_name, work_request_name)
@@ -524,6 +535,10 @@ def _ensure_discovered_request_parent(
     now = utc_now()
     conn.execute("BEGIN TRANSACTION")
     try:
+        if getattr(conn, "backend", "duckdb") == "postgresql":
+            conn.execute("LOCK TABLE semantic_folder_bindings, spdm_storage_bindings IN SHARE ROW EXCLUSIVE MODE")
+        if root is not None:
+            _reject_semantic_overlap(conn, f"{project_name}/{work_request_name}", root)
         conn.execute("INSERT INTO projects(id, name, product_name, description, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING", [project_id, project_name, project_name, "SPDM folder discovery", now])
         conn.execute("INSERT INTO product_information(id, project_id, category, name, value_text, file_path, metadata_json) VALUES (?, ?, 'MODEL', 'SPDM 프로젝트', ?, NULL, ?) ON CONFLICT(id) DO NOTHING", [_stable_id("product", project_id), project_id, project_name, json.dumps({"source": "SPDM"})])
         conn.execute("INSERT INTO project_memberships(id, project_id, user_id, role, created_by, created_at, updated_by, updated_at) VALUES (?, ?, ?, 'admin', ?, ?, ?, ?) ON CONFLICT(project_id, user_id) DO NOTHING", [_stable_id("membership", f"{project_id}/{creator_id}"), project_id, creator_id, creator_id, now, creator_id, now])
@@ -553,13 +568,14 @@ def discover_bindings(conn: ConnectionLike, root: Path, *, creator_id: str = "sy
         _ensure_discovered_request_parent(
             conn, project_name, work_request_name,
             creator_id=creator_id, creator_name=creator_name,
+            root=root,
         )
     for candidate in candidates(root):
         with _ownership_transaction(conn):
             existing = conn.execute("SELECT load_case_id FROM spdm_storage_bindings WHERE relative_path=?", [candidate.relative_path]).fetchone()
             if existing:
                 continue
-            _reject_semantic_overlap(conn, candidate.relative_path)
+            _reject_semantic_overlap(conn, candidate.relative_path, root)
             parent = _registered_parent_target(conn, candidate.project_name, candidate.work_request_name)
             if parent is None:
                 raise SpdmStorageError("SPDM_PARENT_BINDING_CONFLICT", "SPDM Project/WR parent registry를 확인할 수 없습니다.")

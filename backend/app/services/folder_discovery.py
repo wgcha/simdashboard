@@ -1,0 +1,179 @@
+"""Explicit folder discovery proposals and atomic workload creation."""
+from __future__ import annotations
+
+import json
+from datetime import datetime, timezone
+from threading import RLock
+from uuid import uuid4
+
+from fastapi import HTTPException
+
+from ..database_connection import rows
+from ..repositories import semantic_mapping as mapping_repository
+from . import spdm_storage
+from .folder_discovery_plan import build_plan
+from .folder_discovery_scan import browse, normal, root_identity, scan
+from .semantic_mapping import semantic_transaction
+
+WRITE_LOCK = RLock()
+
+
+def now():
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def ident(prefix: str):
+    return f"{prefix}-{uuid4().hex}"
+
+
+def decoded(value):
+    return json.loads(value) if isinstance(value, str) else value
+
+
+def fail(code: str, message: str, status: int = 409):
+    raise HTTPException(status, {"code": code, "message": message})
+
+
+def configured_root(conn):
+    root = spdm_storage.storage_root(conn).root
+    if root is None:
+        fail("SPDM_ROOT_UNSET", "먼저 서버 저장소 경로를 설정하세요.")
+    return root
+
+
+def lock_tables(conn):
+    mapping_repository.lock_binding_tables(conn)
+    if getattr(conn, "backend", "duckdb") == "postgresql":
+        conn.execute("LOCK TABLE folder_discovery_registry, folder_discovery_rules, folder_discovery_previews, "
+                     "spdm_storage_settings, projects, analysis_requests, load_cases IN SHARE ROW EXCLUSIVE MODE")
+
+
+def save_scan(conn, root, relative: str, result: dict, actor: str) -> str:
+    scan_id = ident("folder-scan")
+    conn.execute("INSERT INTO folder_discovery_scans(id,root_key,root_path,relative_path,status,tree_json,issues_json,created_by,created_at) "
+                 "VALUES(?,?,?,?,?,?,?,?,?)", [scan_id, root_identity(root), str(root), relative, result["status"],
+                 json.dumps(result["nodes"], ensure_ascii=False), json.dumps(result["issues"], ensure_ascii=False), actor, now()])
+    return scan_id
+
+
+def load_scan(conn, scan_id: str):
+    data = rows(conn.execute("SELECT * FROM folder_discovery_scans WHERE id=?", [scan_id]))
+    if not data:
+        fail("SCAN_NOT_FOUND", "조사 결과를 찾을 수 없습니다.", 404)
+    row = dict(data[0])
+    row["nodes"], row["issues"] = decoded(row.pop("tree_json")), decoded(row.pop("issues_json"))
+    return row
+
+
+def rules(conn, root_key: str, relative: str) -> dict:
+    row = conn.execute("SELECT rules_json,revision FROM folder_discovery_rules WHERE root_key=? AND relative_path=?",
+                       [root_key, relative]).fetchone()
+    return {"rules": decoded(row[0]) if row else [], "revision": int(row[1]) if row else 0}
+
+
+def registry(conn, root_key: str) -> list[dict]:
+    result = [dict(row) for row in rows(conn.execute("SELECT * FROM folder_discovery_registry WHERE root_key=?", [root_key]))]
+    targets = {}
+    for role, table, label, parent in (("PROJECT", "projects", "name", "NULL"),
+                                      ("REQUEST", "analysis_requests", "title", "t.project_id"),
+                                      ("LOAD_CASE", "load_cases", "name", "t.request_id")):
+        records = conn.execute(f"SELECT t.id,t.{label},{parent} FROM {table} t JOIN folder_discovery_registry r ON r.target_id=t.id "
+                               "WHERE r.root_key=? AND r.role=?", [root_key, role]).fetchall()
+        targets.update({(role, str(row[0])): (str(row[1]), row[2]) for row in records})
+    for row in result:
+        row["target_valid"] = targets.get((row["role"], row["target_id"])) == (row["name"], row["parent_target_id"])
+    types = dict(conn.execute("SELECT t.id,t.analysis_type FROM load_cases t JOIN folder_discovery_registry r ON r.target_id=t.id WHERE r.root_key=? AND r.role='LOAD_CASE'", [root_key]).fetchall())
+    for row in result:
+        if row["role"] == "LOAD_CASE":
+            row["target_valid"] = row["target_valid"] and types.get(row["target_id"]) == row["analysis_type"]
+    return result
+
+
+def proposal(conn, data: dict, rule_list: list[dict]) -> dict:
+    old_paths = [str(row[0]) for row in conn.execute("SELECT relative_path FROM spdm_storage_bindings").fetchall()]
+    old_paths += [str(row[0]) for row in conn.execute("SELECT project_folder FROM spdm_storage_project_parents").fetchall()]
+    old_paths += [str(row[0]) for row in conn.execute("SELECT request_folder FROM spdm_storage_request_parents").fetchall()]
+    return build_plan(data["nodes"], rule_list, data["root_key"], registry(conn, data["root_key"]),
+                      old_paths, mapping_repository.semantic_bindings(conn))
+
+
+def preview(conn, scan_id: str, rule_list: list[dict], actor: str):
+    data = load_scan(conn, scan_id)
+    if root_identity(configured_root(conn)) != data["root_key"]:
+        fail("ROOT_CHANGED", "저장소가 변경되었습니다. 다시 조사하세요.")
+    if data["status"] != "COMPLETE":
+        fail("SCAN_INCOMPLETE", "전체 폴더 조사가 완료되지 않아 미리보기를 만들 수 없습니다.")
+    plan = proposal(conn, data, rule_list)
+    preview_id = ident("folder-preview")
+    revision = rules(conn, data["root_key"], data["relative_path"])["revision"]
+    conn.execute("INSERT INTO folder_discovery_previews(id,scan_id,rules_json,rows_json,can_apply,rules_revision,created_by,created_at) "
+                 "VALUES(?,?,?,?,?,?,?,?)", [preview_id, scan_id, json.dumps(rule_list), json.dumps(plan["rows"], ensure_ascii=False),
+                 plan["can_apply"], revision, actor, now()])
+    return {"id": preview_id, "scan_id": scan_id, **plan}
+
+
+def materialize(conn, item: dict, principal):
+    target_id, stamp = item["target_id"], now()
+    if item["role"] == "PROJECT":
+        from ..adapters.persistence.projects import SQLProjectUnitOfWork
+        unit = SQLProjectUnitOfWork(conn, lambda prefix, length: ident(prefix))
+        command = {"name": item["name"], "product_name": item["name"], "description": "폴더 조사로 생성한 프로젝트",
+                   "manufacturer": "", "display_size_inch": None,
+                   "creator": {"user_id": principal.user_id, "username": principal.username, "role": "admin"}}
+        unit.add_project(target_id, command, stamp)
+        unit.add_product_information(target_id, command)
+        unit.add_quality_thresholds(target_id, stamp)
+        unit.add_workspace_layouts(target_id)
+        unit.add_admin_membership(ident("membership"), target_id, command, stamp)
+    elif item["role"] == "REQUEST":
+        conn.execute("INSERT INTO analysis_requests(id,project_id,title,status,owner,owner_user_id,requested_at,due_at,overall_note) "
+                     "VALUES(?,?,?,'READY',?,?,?,NULL,?)", [target_id, item["parent_target_id"], item["name"],
+                     principal.display_name, principal.user_id, stamp, f"폴더 의뢰번호: {item['code']}"])
+    else:
+        conn.execute("INSERT INTO load_cases(id,request_id,name,analysis_type,status,parameters_json,created_at) VALUES(?,?,?,?,'READY',?,?)",
+                     [target_id, item["parent_target_id"], item["name"], item["analysis_type"],
+                      json.dumps({"source": "folder_discovery", "code": item["code"]}), stamp])
+
+
+def apply(conn, preview_id: str, principal, audit):
+    with WRITE_LOCK, semantic_transaction(conn):
+        lock_tables(conn)
+        result = rows(conn.execute("SELECT * FROM folder_discovery_previews WHERE id=?", [preview_id]))
+        if not result:
+            fail("PREVIEW_NOT_FOUND", "미리보기를 찾을 수 없습니다.", 404)
+        saved = dict(result[0])
+        data = load_scan(conn, saved["scan_id"])
+        root = configured_root(conn)
+        if root_identity(root) != data["root_key"]:
+            fail("ROOT_CHANGED", "저장소가 변경되었습니다. 다시 조사하세요.")
+        if saved["applied_json"] is not None:
+            return decoded(saved["applied_json"])
+        if not saved["can_apply"] or data["status"] != "COMPLETE":
+            fail("PREVIEW_CONFLICT", "완료되지 않은 조사나 충돌이 있는 미리보기는 적용할 수 없습니다.")
+        if rules(conn, data["root_key"], data["relative_path"])["revision"] != saved["rules_revision"]:
+            fail("RULES_CHANGED", "저장된 규칙이 변경되었습니다. 미리보기를 다시 만드세요.")
+        fresh = scan(root, data["relative_path"])
+        if fresh["status"] != "COMPLETE" or fresh["nodes"] != data["nodes"]:
+            fail("SCAN_STALE", "조사 이후 폴더 구조가 변경되었습니다. 다시 조사하세요.")
+        current = proposal(conn, data, decoded(saved["rules_json"]))
+        if not current["can_apply"] or current["rows"] != decoded(saved["rows_json"]):
+            fail("PREVIEW_STALE", "업무 항목이나 폴더 연결이 변경되었습니다. 미리보기를 다시 만드세요.")
+        created = {"projects": 0, "requests": 0, "load_cases": 0}
+        kept = 0
+        for item in current["rows"]:
+            if item["status"] == "KEEP":
+                kept += 1
+                continue
+            materialize(conn, item, principal)
+            conn.execute("INSERT INTO folder_discovery_registry(id,root_key,relative_path,role,scope_key,code,name,analysis_type,target_id,parent_target_id,created_at) "
+                         "VALUES(?,?,?,?,?,?,?,?,?,?,?)", [ident("folder-registry"), data["root_key"], item["relative_path"], item["role"],
+                         item["scope_key"], item["code"], item["name"], item["analysis_type"], item["target_id"], item["parent_target_id"], now()])
+            created[{"PROJECT": "projects", "REQUEST": "requests", "LOAD_CASE": "load_cases"}[item["role"]]] += 1
+        # Concurrent folder changes invalidate the entire transaction, including the audit.
+        after = scan(root, data["relative_path"])
+        if root_identity(configured_root(conn)) != data["root_key"] or after["status"] != "COMPLETE" or after["nodes"] != data["nodes"]:
+            fail("SCAN_STALE", "적용 중 폴더 구조가 변경되었습니다. 다시 조사하세요.")
+        outcome = {"status": "APPLIED", "created": created, "kept_count": kept}
+        audit({"preview_id": preview_id, "scan_id": data["id"], **outcome})
+        conn.execute("UPDATE folder_discovery_previews SET applied_json=? WHERE id=?", [json.dumps(outcome), preview_id])
+        return outcome

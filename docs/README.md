@@ -19,6 +19,7 @@
 
 | 목적 | 문서 |
 |---|---|
+| 전체 폴더 조사·이름 토큰 규칙·프로젝트/의뢰/하중 경우 생성 시험 | [`semantic-folder-discovery-guide.md`](semantic-folder-discovery-guide.md) |
 | 활성화 영향 미리보기·파일 검토·명시적 재처리 사용법 | [`semantic-review-guide.md`](semantic-review-guide.md) |
 | 의미 매핑 변경 영향 분석·미처리 파일 검토함의 후속 구현 설계 | [`semantic-review-impact-plan.md`](semantic-review-impact-plan.md) |
 | 기준 정의·별칭 사전과 폴더/필드 추천 적용 | [`semantic-vocabulary.md`](semantic-vocabulary.md) |

@@ -96,6 +96,18 @@ function App() {
   const workspaceEditor = useWorkspaceEditorCoordinator()
   const editMode = workspaceEditor.isEditing
   const cancelEditingRef = useRef<() => void>(() => {})
+  useEffect(() => {
+    let active = true
+    const refreshCreatedFolders = () => {
+      void Promise.all([api.projects(), api.workflows()]).then(([projectData, workflowData]) => {
+        if (!active) return
+        setProjects(projectData); setWorkflows(workflowData)
+        setOperationalRefreshToken((value) => value + 1)
+      }).catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : '생성한 업무 목록을 불러오지 못했습니다.') })
+    }
+    window.addEventListener('folder-discovery-applied', refreshCreatedFolders)
+    return () => { active = false; window.removeEventListener('folder-discovery-applied', refreshCreatedFolders) }
+  }, [])
   const [assistantOpen, setAssistantOpen] = useState(false)
   const [command, setCommand] = useState('')
   const [proposal, setProposal] = useState<Awaited<ReturnType<typeof api.previewCommand>> | null>(null)

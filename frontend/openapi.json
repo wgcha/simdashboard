@@ -5075,6 +5075,244 @@
         }
       }
     },
+    "/api/folder-discovery/browse": {
+      "get": {
+        "tags": [
+          "folder-discovery"
+        ],
+        "summary": "Browse",
+        "operationId": "browse_api_folder_discovery_browse_get",
+        "parameters": [
+          {
+            "name": "relative_path",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 1024,
+              "default": "",
+              "title": "Relative Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/folder-discovery/scan": {
+      "post": {
+        "tags": [
+          "folder-discovery"
+        ],
+        "summary": "Scan",
+        "operationId": "scan_api_folder_discovery_scan_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FolderScan"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/folder-discovery/preview": {
+      "post": {
+        "tags": [
+          "folder-discovery"
+        ],
+        "summary": "Preview",
+        "operationId": "preview_api_folder_discovery_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FolderPreview"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/folder-discovery/apply": {
+      "post": {
+        "tags": [
+          "folder-discovery"
+        ],
+        "summary": "Apply",
+        "operationId": "apply_api_folder_discovery_apply_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FolderApply"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/folder-discovery/rules": {
+      "get": {
+        "tags": [
+          "folder-discovery"
+        ],
+        "summary": "Get Rules",
+        "operationId": "get_rules_api_folder_discovery_rules_get",
+        "parameters": [
+          {
+            "name": "relative_path",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 1024,
+              "default": "",
+              "title": "Relative Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "folder-discovery"
+        ],
+        "summary": "Put Rules",
+        "operationId": "put_rules_api_folder_discovery_rules_put",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FolderRuleUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/semantic-vocabulary": {
       "get": {
         "tags": [
@@ -11300,6 +11538,146 @@
           "checksum"
         ],
         "title": "FileResponse"
+      },
+      "FolderApply": {
+        "properties": {
+          "preview_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Preview Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "preview_id"
+        ],
+        "title": "FolderApply"
+      },
+      "FolderPreview": {
+        "properties": {
+          "scan_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Scan Id"
+          },
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/FolderRule"
+            },
+            "type": "array",
+            "maxItems": 30,
+            "minItems": 1,
+            "title": "Rules"
+          }
+        },
+        "type": "object",
+        "required": [
+          "scan_id",
+          "rules"
+        ],
+        "title": "FolderPreview"
+      },
+      "FolderRule": {
+        "properties": {
+          "depth": {
+            "type": "integer",
+            "maximum": 64.0,
+            "minimum": 0.0,
+            "title": "Depth"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "PROJECT",
+              "REQUEST",
+              "LOAD_CASE"
+            ],
+            "title": "Role"
+          },
+          "prefix": {
+            "type": "string",
+            "maxLength": 256,
+            "title": "Prefix",
+            "default": ""
+          },
+          "delimiter": {
+            "type": "string",
+            "maxLength": 8,
+            "minLength": 1,
+            "title": "Delimiter",
+            "default": "_"
+          },
+          "code_token": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Code Token",
+            "default": 1
+          },
+          "name_from_token": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Name From Token",
+            "default": 2
+          },
+          "analysis_type": {
+            "type": "string",
+            "maxLength": 128,
+            "title": "Analysis Type",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "depth",
+          "role"
+        ],
+        "title": "FolderRule"
+      },
+      "FolderRuleUpdate": {
+        "properties": {
+          "relative_path": {
+            "type": "string",
+            "maxLength": 1024,
+            "title": "Relative Path",
+            "default": ""
+          },
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/FolderRule"
+            },
+            "type": "array",
+            "maxItems": 30,
+            "minItems": 1,
+            "title": "Rules"
+          },
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Expected Revision"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rules",
+          "expected_revision"
+        ],
+        "title": "FolderRuleUpdate"
+      },
+      "FolderScan": {
+        "properties": {
+          "relative_path": {
+            "type": "string",
+            "maxLength": 1024,
+            "title": "Relative Path",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "title": "FolderScan"
       },
       "GlobalAdminUpdate": {
         "properties": {

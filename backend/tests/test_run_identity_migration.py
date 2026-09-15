@@ -45,7 +45,7 @@ def test_run_identity_v2_precedes_batch_attempt_identity_head() -> None:
     assert identity and identity.down_revision == "0017_run_identity_v2"
     lease = script.get_revision("0019_batch_recovery_lease")
     assert lease and lease.down_revision == "0018_batch_attempt_run_identity"
-    assert tuple(script.get_heads()) == ("0026_semantic_import_review",)
+    assert tuple(script.get_heads()) == ("0027_folder_discovery",)
 
 
 def test_run_identity_v2_adds_nullable_history_columns_and_constraints(monkeypatch: pytest.MonkeyPatch) -> None:

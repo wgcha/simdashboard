@@ -58,6 +58,10 @@ def initialize_database() -> None:
                 "semantic_vocabulary_terms",
                 "semantic_import_review_items",
                 "semantic_import_review_events",
+                "folder_discovery_scans",
+                "folder_discovery_previews",
+                "folder_discovery_rules",
+                "folder_discovery_registry",
             )
             missing = [
                 table_name
@@ -69,6 +73,22 @@ def initialize_database() -> None:
                     "PostgreSQL 권한 스키마가 준비되지 않았습니다. "
                     f"누락: {', '.join(missing)}. 먼저 alembic upgrade head를 실행하세요."
                 )
+            required_columns = {
+                "folder_discovery_scans": {"root_key", "root_path", "relative_path", "tree_json", "issues_json"},
+                "folder_discovery_previews": {"scan_id", "rules_revision", "applied_json"},
+                "folder_discovery_rules": {"root_key", "relative_path", "revision"},
+                "folder_discovery_registry": {"root_key", "parent_target_id", "scope_key", "target_id"},
+            }
+            incompatible = []
+            for table_name, expected in required_columns.items():
+                available = {str(value[0]) for value in conn.execute(
+                    "SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=?",
+                    [table_name],
+                ).fetchall()}
+                if not expected.issubset(available):
+                    incompatible.append(table_name)
+            if incompatible:
+                raise RuntimeError("Folder discovery 스키마가 최신 상태가 아닙니다. 먼저 alembic upgrade head를 실행하세요: " + ", ".join(incompatible))
         return
 
     from .adapters.persistence.duckdb.bootstrap import initialize_duckdb_development_database
@@ -1182,6 +1202,7 @@ def _initialize_duckdb_legacy() -> None:
         ensure_semantic_mapping_schema(conn)
         ensure_semantic_vocabulary_schema(conn)
         ensure_semantic_review_schema(conn)
+        ensure_folder_discovery_schema(conn)
         # Establish the schema before seeding, but defer one-time legacy data
         # conversion until the seed has created any default projects.
         ensure_access_control_schema(conn, apply_legacy_backfills=False)
@@ -1398,6 +1419,14 @@ def ensure_semantic_review_schema(conn: duckdb.DuckDBPyConnection) -> None:
         occurred_at TIMESTAMP NOT NULL, actor VARCHAR NOT NULL
     )""")
     conn.execute("CREATE INDEX IF NOT EXISTS ix_semantic_review_events_item ON semantic_import_review_events(review_item_id, occurred_at DESC)")
+
+
+def ensure_folder_discovery_schema(conn: duckdb.DuckDBPyConnection) -> None:
+    """DuckDB development equivalent of additive migration 0027."""
+    conn.execute("""CREATE TABLE IF NOT EXISTS folder_discovery_scans (id VARCHAR PRIMARY KEY, root_key VARCHAR NOT NULL, root_path VARCHAR NOT NULL, relative_path VARCHAR NOT NULL, status VARCHAR NOT NULL, tree_json JSON NOT NULL, issues_json JSON NOT NULL, created_by VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL);
+    CREATE TABLE IF NOT EXISTS folder_discovery_previews (id VARCHAR PRIMARY KEY, scan_id VARCHAR NOT NULL, rules_json JSON NOT NULL, rules_revision INTEGER NOT NULL, rows_json JSON NOT NULL, can_apply BOOLEAN NOT NULL, applied_json JSON, created_by VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL);
+    CREATE TABLE IF NOT EXISTS folder_discovery_rules (root_key VARCHAR NOT NULL, relative_path VARCHAR NOT NULL, rules_json JSON NOT NULL, revision INTEGER NOT NULL, updated_at TIMESTAMP NOT NULL, updated_by VARCHAR NOT NULL, PRIMARY KEY(root_key,relative_path));
+    CREATE TABLE IF NOT EXISTS folder_discovery_registry (id VARCHAR PRIMARY KEY, root_key VARCHAR NOT NULL, relative_path VARCHAR NOT NULL, role VARCHAR NOT NULL, scope_key VARCHAR NOT NULL, code VARCHAR NOT NULL, name VARCHAR NOT NULL, analysis_type VARCHAR NOT NULL DEFAULT '', parent_target_id VARCHAR, target_id VARCHAR NOT NULL UNIQUE, created_at TIMESTAMP NOT NULL, UNIQUE(root_key,role,scope_key,code), UNIQUE(root_key,relative_path,role));""")
 
 
 def ensure_modeling_template_schema(conn: duckdb.DuckDBPyConnection) -> None:

@@ -7,8 +7,10 @@ from pathlib import Path
 
 try:
     from .postgres_semantic_schema import SEMANTIC_DDL
+    from .postgres_folder_discovery_schema import FOLDER_DISCOVERY_DDL
 except ImportError:  # Supports direct `python scripts/export_postgres_schema.py` execution.
     from postgres_semantic_schema import SEMANTIC_DDL
+    from postgres_folder_discovery_schema import FOLDER_DISCOVERY_DDL
 
 
 INDEXES = """
@@ -285,7 +287,7 @@ def extract_schema(source: Path) -> str:
                 r"\1 ~ \2",
                 ddl,
             )
-            return f"{ddl}\n\n{EXTRA_TABLES}\n\n{INDEXES}\n{SEMANTIC_DDL}\n\n{CONSTRAINTS}\n"
+            return f"{ddl}\n\n{EXTRA_TABLES}\n\n{INDEXES}\n{SEMANTIC_DDL}\n{FOLDER_DISCOVERY_DDL}\n\n{CONSTRAINTS}\n"
     raise RuntimeError("database.py에서 기준 CREATE TABLE DDL을 찾지 못했습니다.")
 
 

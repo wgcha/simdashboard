@@ -44,6 +44,7 @@ from .routers.modeling_templates import router as modeling_templates_router
 from .routers.result_folder_refresh import router as result_folder_refresh_router
 from .routers.result_ingestion import router as result_ingestion_router
 from .routers.spdm_storage import router as spdm_storage_router
+from .routers.folder_discovery import router as folder_discovery_router
 from .routers.media import router as media_router
 from .routers.managed_local_execution import router as managed_local_execution_router
 from .routers.voc import router as voc_router
@@ -116,6 +117,7 @@ app.include_router(semantic_mapping_router)
 app.include_router(semantic_activation_router)
 app.include_router(semantic_review_router)
 app.include_router(semantic_impact_router)
+app.include_router(folder_discovery_router)
 app.include_router(semantic_vocabulary_router)
 
 
