@@ -12,7 +12,7 @@ from fastapi import HTTPException
 from ..database_connection import rows
 from ..repositories import semantic_mapping as mapping_repository
 from . import spdm_storage
-from .folder_discovery_plan import build_plan
+from .folder_discovery_plan import build_plan, folded
 from .folder_discovery_scan import browse, normal, root_identity, scan
 from .semantic_mapping import semantic_transaction
 
@@ -164,23 +164,80 @@ def registry(conn, root_key: str) -> list[dict]:
     return result
 
 
-def proposal(conn, data: dict, rule_list: list[dict], options: dict | None = None) -> dict:
+def _exclusion_roots(data: dict, baseline: dict, excluded_paths: list[str] | None) -> list[str]:
+    """Validate UI selections against this scan and collapse nested roots."""
+    if not excluded_paths:
+        return []
+    scanned = {folded(node["relative_path"]): node["relative_path"] for node in data["nodes"]}
+    matched = {folded(row["relative_path"]) for row in baseline["rows"]}
+    selected: list[str] = []
+    for value in excluded_paths:
+        relative = normal(value)
+        canonical = scanned.get(folded(relative))
+        if canonical is None or folded(canonical) not in matched:
+            fail("EXCLUSION_PATH_INVALID", "조사 결과에서 역할이 일치한 폴더만 제외할 수 있습니다.", 422)
+        selected.append(canonical)
+    roots: list[str] = []
+    for path in sorted(set(selected), key=lambda item: (item.count("/"), folded(item))):
+        path_key = folded(path)
+        if not any(not root or path_key == folded(root) or path_key.startswith(folded(root) + "/") for root in roots):
+            roots.append(path)
+    return roots
+
+
+def _is_excluded(relative_path: str, roots: list[str]) -> str | None:
+    path_key = folded(relative_path)
+    for root in roots:
+        root_key = folded(root)
+        if not root_key or path_key == root_key or path_key.startswith(root_key + "/"):
+            return root
+    return None
+
+
+def proposal(conn, data: dict, rule_list: list[dict], options: dict | None = None,
+             excluded_paths: list[str] | None = None) -> dict:
     old_paths = [str(row[0]) for row in conn.execute("SELECT relative_path FROM spdm_storage_bindings").fetchall()]
     old_paths += [str(row[0]) for row in conn.execute("SELECT project_folder FROM spdm_storage_project_parents").fetchall()]
     old_paths += [str(row[0]) for row in conn.execute("SELECT request_folder FROM spdm_storage_request_parents").fetchall()]
     options = options or catalog(conn)
-    return build_plan(data["nodes"], rule_list, data["root_key"], registry(conn, data["root_key"]), old_paths,
-                      mapping_repository.semantic_bindings(conn), options)
+    current_registry = registry(conn, data["root_key"])
+    bindings = mapping_repository.semantic_bindings(conn)
+    baseline = build_plan(data["nodes"], rule_list, data["root_key"], current_registry, old_paths, bindings, options)
+    roots = _exclusion_roots(data, baseline, excluded_paths)
+    if not roots:
+        return {**baseline, "excluded_paths": [], "summary": {**baseline["summary"], "excluded": 0}}
+    active_nodes = [node for node in data["nodes"] if _is_excluded(node["relative_path"], roots) is None]
+    active = build_plan(active_nodes, rule_list, data["root_key"], current_registry, old_paths, bindings, options)
+    excluded_by_path = {row["relative_path"]: _is_excluded(row["relative_path"], roots)
+                        for row in baseline["rows"]}
+    excluded_rows = {}
+    for row in baseline["rows"]:
+        excluded_by = excluded_by_path[row["relative_path"]]
+        if excluded_by is not None:
+            excluded_rows.setdefault(row["relative_path"], []).append(
+                {**row, "status": "EXCLUDED", "message": "선택한 제외 폴더", "excluded_by": excluded_by})
+    active_rows = {}
+    for row in active["rows"]:
+        active_rows.setdefault(row["relative_path"], []).append(row)
+    ordered_rows = []
+    for node in data["nodes"]:
+        key = node["relative_path"]
+        ordered_rows.extend(excluded_rows.get(key, []))
+        ordered_rows.extend(active_rows.get(key, []))
+    excluded_count = sum(len(items) for items in excluded_rows.values())
+    return {"rows": ordered_rows, "can_apply": bool(active["rows"]) and not active["summary"]["conflicts"],
+            "unmatched_count": active["unmatched_count"], "excluded_paths": roots,
+            "summary": {**active["summary"], "excluded": excluded_count}}
 
 
-def preview(conn, scan_id: str, rule_list: list[dict], actor: str):
+def preview(conn, scan_id: str, rule_list: list[dict], actor: str, excluded_paths: list[str] | None = None):
     data = load_scan(conn, scan_id)
     if root_identity(configured_root(conn)) != data["root_key"]:
         fail("ROOT_CHANGED", "저장소가 변경되었습니다. 다시 조사하세요.")
     if data["status"] != "COMPLETE":
         fail("SCAN_INCOMPLETE", "전체 폴더 조사가 완료되지 않아 미리보기를 만들 수 없습니다.")
     options = catalog(conn)
-    plan = proposal(conn, data, rule_list, options)
+    plan = proposal(conn, data, rule_list, options, excluded_paths)
     preview_id = ident("folder-preview")
     revision = rules(conn, data["root_key"], data["relative_path"])["revision"]
     conn.execute("INSERT INTO folder_discovery_previews(id,scan_id,rules_json,rows_json,can_apply,rules_revision,catalog_revision,created_by,created_at) "
@@ -234,14 +291,20 @@ def apply(conn, preview_id: str, principal, audit):
         fresh = scan(root, data["relative_path"])
         if fresh["status"] != "COMPLETE" or fresh["nodes"] != data["nodes"]:
             fail("SCAN_STALE", "조사 이후 폴더 구조가 변경되었습니다. 다시 조사하세요.")
-        current = proposal(conn, data, decoded(saved["rules_json"]))
-        if not current["can_apply"] or current["rows"] != decoded(saved["rows_json"]):
+        saved_rows = decoded(saved["rows_json"])
+        excluded_paths = sorted({row["excluded_by"] for row in saved_rows if row.get("status") == "EXCLUDED" and row.get("excluded_by") is not None},
+                                key=lambda item: (item.count("/"), folded(item)))
+        current = proposal(conn, data, decoded(saved["rules_json"]), excluded_paths=excluded_paths)
+        if not current["can_apply"] or current["rows"] != saved_rows:
             fail("PREVIEW_STALE", "업무 항목이나 폴더 연결이 변경되었습니다. 미리보기를 다시 만드세요.")
         created = {"projects": 0, "requests": 0, "load_cases": 0}
-        kept = 0
+        kept = excluded = 0
         for item in current["rows"]:
             if item["status"] == "KEEP":
                 kept += 1
+                continue
+            if item["status"] == "EXCLUDED":
+                excluded += 1
                 continue
             materialize(conn, item, principal)
             conn.execute("INSERT INTO folder_discovery_registry(id,root_key,relative_path,role,role_kind,scope_key,code,name,analysis_type,target_id,parent_target_id,created_at) "
@@ -253,7 +316,7 @@ def apply(conn, preview_id: str, principal, audit):
         after = scan(root, data["relative_path"])
         if root_identity(configured_root(conn)) != data["root_key"] or after["status"] != "COMPLETE" or after["nodes"] != data["nodes"]:
             fail("SCAN_STALE", "적용 중 폴더 구조가 변경되었습니다. 다시 조사하세요.")
-        outcome = {"status": "APPLIED", "created": created, "kept_count": kept}
+        outcome = {"status": "APPLIED", "created": created, "kept_count": kept, "excluded_count": excluded}
         audit({"preview_id": preview_id, "scan_id": data["id"], **outcome})
         conn.execute("UPDATE folder_discovery_previews SET applied_json=? WHERE id=?", [json.dumps(outcome), preview_id])
         return outcome

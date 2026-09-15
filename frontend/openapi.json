@@ -11726,6 +11726,14 @@
             "maxItems": 30,
             "minItems": 1,
             "title": "Rules"
+          },
+          "excluded_paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 5000,
+            "title": "Excluded Paths"
           }
         },
         "type": "object",

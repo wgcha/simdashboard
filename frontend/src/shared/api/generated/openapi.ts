@@ -3748,6 +3748,8 @@ export interface components {
             scan_id: string;
             /** Rules */
             rules: components["schemas"]["FolderRule"][];
+            /** Excluded Paths */
+            excluded_paths?: string[];
         };
         /** FolderRule */
         FolderRule: {

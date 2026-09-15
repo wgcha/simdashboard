@@ -58,7 +58,8 @@ def build_plan(nodes: list[dict], rules: list[dict], root_key: str, registry: li
     for node in nodes:
         context = dict(contexts.get(node["parent_path"], {}))
         matches = [rule for rule in rules if rule["depth"] == node["depth"] and
-                   folded((rule.get("keyword") if rule.get("keyword") is not None else rule.get("prefix", ""))) in folded(node["name"])]
+                   folded((rule.get("keyword") if rule.get("keyword") is not None else rule.get("prefix", ""))) in folded(node["name"]) and
+                   (not rule.get("delimiter", "") or rule["delimiter"] in node["name"])]
         selected_by_kind: dict[str, list[tuple[dict, dict | None, str | None]]] = {}
         selected_rules: list[tuple[dict, dict | None, str | None]] = []
         for rule in matches:

@@ -18,10 +18,12 @@ test('folder discovery creates real project, request and load case then keeps th
   const loadCase = 'A_drop_001'
   const sibling = 'B_DROP_001'
   const resultFolder = 'pre-RESULT-data'
+  const noDelimiterFolder = 'dropNotes'
   const projectName = project
   const requestName = 'ActualRequest'
   const loadCaseName = loadCase
   for (const folder of [loadCase, sibling]) mkdirSync(join(root, project, request, folder, resultFolder), { recursive: true })
+  mkdirSync(join(root, project, request, noDelimiterFolder), { recursive: true })
 
   await loginWorkspace(page, 'e2e-admin', '/workspace/catalog/schemas')
   await page.getByRole('button', { name: '폴더 조사·업무 생성', exact: true }).click()
@@ -77,6 +79,23 @@ test('folder discovery creates real project, request and load case then keeps th
   await screen.getByRole('button', { name: '업무 생성 미리보기', exact: true }).click()
   await expect(screen.getByRole('cell', { name: 'CREATE', exact: true })).toHaveCount(6)
   await expect(screen.getByRole('button', { name: '이 폴더 연결', exact: true })).toHaveCount(0)
+  const previewTable = screen.locator('.folder-discovery-preview')
+  const firstLoadPath = `${project}/${request}/${loadCase}`
+  const firstLoadRow = previewTable.getByRole('row').filter({ has: page.getByRole('cell', { name: firstLoadPath, exact: true }) })
+  const firstResultRow = previewTable.getByRole('row').filter({ has: page.getByRole('cell', { name: `${firstLoadPath}/${resultFolder}`, exact: true }) })
+  await expect(screen.locator('.folder-discovery-tree')).toContainText(noDelimiterFolder)
+  await expect(previewTable.getByRole('cell', { name: `${project}/${request}/${noDelimiterFolder}`, exact: true })).toHaveCount(0)
+  await page.route('**/api/folder-discovery/preview', route => route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ detail: { code: 'QA_FAILURE', message: '임시 미리보기 오류' } }) }), { times: 1 })
+  await firstLoadRow.getByRole('button', { name: '이번 적용에서 제외', exact: true }).click()
+  await expect(screen.getByRole('alert')).toContainText('임시 미리보기 오류')
+  await expect(screen.getByRole('button', { name: '검토한 업무 생성 적용', exact: true })).toBeDisabled()
+  await screen.getByRole('button', { name: '업무 생성 미리보기', exact: true }).click()
+  await expect(previewTable.getByRole('cell', { name: 'EXCLUDED', exact: true })).toHaveCount(2)
+  await expect(previewTable.getByRole('cell', { name: 'CREATE', exact: true })).toHaveCount(4)
+  await expect(firstResultRow).toContainText('상위 제외')
+  await expect(firstResultRow.getByRole('button', { name: '제외 취소', exact: true })).toHaveCount(0)
+  await firstLoadRow.getByRole('button', { name: '제외 취소', exact: true }).click()
+  await expect(previewTable.getByRole('cell', { name: 'CREATE', exact: true })).toHaveCount(6)
   await screen.getByRole('button', { name: '검토한 업무 생성 적용', exact: true }).click()
   await expect(screen.getByRole('status')).toContainText('프로젝트 1')
   const projects = await page.request.get('/api/projects')
@@ -95,6 +114,15 @@ test('folder discovery creates real project, request and load case then keeps th
   expect(actualCases.some(item => item.name === loadCaseName)).toBe(true)
   await screen.getByRole('button', { name: '업무 생성 미리보기', exact: true }).click()
   await expect(screen.getByRole('cell', { name: 'KEEP', exact: true })).toHaveCount(6)
+  await firstLoadRow.getByRole('button', { name: '이번 적용에서 제외', exact: true }).click()
+  await expect(previewTable.getByRole('cell', { name: 'EXCLUDED', exact: true })).toHaveCount(2)
+  await expect(previewTable.getByRole('cell', { name: 'KEEP', exact: true })).toHaveCount(4)
+  await expect(firstResultRow.getByRole('button', { name: '이 폴더 연결', exact: true })).toHaveCount(0)
+  await screen.getByRole('button', { name: '검토한 업무 생성 적용', exact: true }).click()
+  await expect(screen.getByRole('status')).toContainText('제외 2개')
+  const keptCases = await page.request.get(`/api/requests/${requestRecord!.id}/load-cases`)
+  expect(keptCases.ok()).toBe(true)
+  expect(records<{id:string}>(await keptCases.json(), 'loadCases').map(item => item.id).sort()).toEqual(actualCases.map(item => item.id).sort())
   for (const [theme, label] of [['light', '라이트'], ['dark', '다크']] as const) {
     await page.getByRole('button', { name: label, exact: true }).click()
     await expect(page.locator('.app-shell')).toHaveAttribute('data-theme', theme)
@@ -105,6 +133,8 @@ test('folder discovery creates real project, request and load case then keeps th
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(391)
   await page.screenshot({ path: testInfo.outputPath('folder-discovery-mobile.png'), fullPage: true })
   await page.setViewportSize({ width: 1280, height: 900 })
+  await firstLoadRow.getByRole('button', { name: '제외 취소', exact: true }).click()
+  await expect(previewTable.getByRole('cell', { name: 'KEEP', exact: true })).toHaveCount(6)
   await screen.getByRole('button', { name: '이 폴더 연결', exact: true }).first().click()
   await expect(page.getByLabel('폴더 상대 경로', { exact: true })).toHaveValue(`${project}/${request}/${loadCase}/${resultFolder}`)
   await expect(page.getByLabel('프로젝트', { exact: true })).toHaveValue(projectRecord!.id)

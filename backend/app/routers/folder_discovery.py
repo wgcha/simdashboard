@@ -37,6 +37,7 @@ class FolderScan(BaseModel):
 class FolderPreview(BaseModel):
     scan_id: str = Field(min_length=1, max_length=128)
     rules: list[FolderRule] = Field(min_length=1, max_length=30)
+    excluded_paths: list[str] = Field(default_factory=list, max_length=5000)
 
 
 class FolderApply(BaseModel):
@@ -138,7 +139,8 @@ def preview(payload: FolderPreview, request: Request):
         try:
             with svc.WRITE_LOCK, semantic_transaction(conn):
                 svc.lock_tables(conn)
-                return svc.preview(conn, payload.scan_id, [rule.model_dump() for rule in payload.rules], request.state.principal.user_id)
+                return svc.preview(conn, payload.scan_id, [rule.model_dump() for rule in payload.rules], request.state.principal.user_id,
+                                   payload.excluded_paths)
         except (ValueError, OSError, spdm_storage.SpdmStorageError) as error:
             raise path_error(error) from error
 
