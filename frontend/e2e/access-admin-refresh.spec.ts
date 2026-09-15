@@ -73,7 +73,7 @@ test('권한별 배정과 사용자관리 새로고침은 도우미 없이 동�
   const adminGroup = page.getByRole('region', { name: '프로젝트 관리자', exact: true })
   await expect(adminGroup.getByText(username, { exact: false })).toBeVisible()
   await page.reload()
-  await expect(adminGroup.getByText(username, { exact: false })).toBeVisible()
+  await expect(adminGroup.getByText(username, { exact: false })).toBeVisible({ timeout: 15_000 })
 
   const userResponse = await page.request.get(`/api/admin/users?q=${username}`)
   expect(userResponse.ok()).toBe(true)

@@ -88,6 +88,8 @@ Playwright E2E를 처음 실행할 때는 WSL 사용자용 Chromium과 Ubuntu �
 
 이후 테스트 실행기는 `.venv-wsl/bin/python`을 자동으로 사용한다.
 
+기본 전체 실행은 현재 flat `frontend/e2e/*.spec.ts` 파일을 이름순으로 각각 새 DuckDB·backend fixture에서 실행한다. 실패한 spec의 trace·screenshot은 다음 실행에 지워지지 않도록 `frontend/test-results/<spec 이름>/`에 보관한다. 특정 spec을 명시하면 기존처럼 해당 선택만 한 disposable fixture에서 실행한다.
+
 ```bash
 pnpm --dir frontend run test:e2e
 # 특정 시나리오만 실행

@@ -400,7 +400,9 @@ def test_duckdb_status_pending_and_suspended_preserve_approval_metadata_and_is_a
 
 
 @pytest.mark.contract
-def test_password_project_admin_without_global_admin_is_denied_system_user_approval() -> None:
+def test_password_project_admin_without_global_admin_is_denied_system_user_approval(
+    password_auth_bootstrap_admin: tuple[str, str, str],
+) -> None:
     from uuid import uuid4
     from app.database import initialize_database
     from app.database_connection import connect

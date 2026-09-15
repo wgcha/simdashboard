@@ -12,6 +12,10 @@ async function loginAndOpenVideoDashboard(page: Page) {
 
 async function openVideoDashboard(page: Page) {
   await openWorkspaceRoute(page, '/workspace/requests')
+  await expect(page.getByLabel('프로젝트 선택', { exact: true })).toBeVisible()
+  await page.getByLabel('프로젝트 선택', { exact: true }).selectOption('project-tv-001')
+  await page.getByLabel('의뢰 선택', { exact: true }).selectOption('request-drop-001')
+  await expect(page.getByLabel('하중 경우 선택', { exact: true })).toHaveValue('loadcase-drop-bottom-001')
   await page.locator('.request-journey').getByRole('button', { name: /결과 검토|상세 분석/ }).click()
   await expect(page.getByTestId('drop-video-grid').first()).toBeVisible()
 }

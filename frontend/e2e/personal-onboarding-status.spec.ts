@@ -20,8 +20,12 @@ test('도우미 배포 파일이 없으면 설치를 시작하지 않고 준비 
 })
 
 test('인증을 끈 서버는 PC 연결 요청 전에 설정 안내를 표시한다', async ({ page }) => {
+  let authDisabled = false
+  await page.route('**/api/auth/status', (route) => route.fulfill({ json: authDisabled
+    ? { mode: 'disabled', authentication_required: false, registration_enabled: false, setup_required: false, oidc_start_url: null }
+    : { mode: 'password', authentication_required: true, registration_enabled: false, setup_required: false, oidc_start_url: null } }))
   await loginWorkspace(page, 'e2e-viewer', '/workspace/settings/local-pc')
-  await page.route('**/api/auth/status', (route) => route.fulfill({ json: { mode: 'disabled', authentication_required: false, registration_enabled: false, oidc_start_url: null } }))
+  authDisabled = true
   let deviceRequests = 0
   await page.route('**/api/local-execution/devices', (route) => { deviceRequests += 1; return route.fulfill({ json: [] }) })
   await page.reload()

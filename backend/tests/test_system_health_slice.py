@@ -50,10 +50,10 @@ def test_system_health_router_owns_exact_route_openapi_and_global_adjacency() ->
         for route in cluster
     ] == [
         (
-            "/api/result-imports/{job_id}/retry",
+            "/api/semantic-vocabulary/resolve",
             ("POST",),
-            "app.routers.result_folder_refresh",
-            "retry_result_import",
+            "app.routers.semantic_vocabulary",
+            "resolve_terms",
         ),
         (HEALTH_PATH, ("GET",), system_health_router.__name__, "health"),
         (
@@ -74,9 +74,10 @@ def test_main_relinquishes_health_handler_and_keeps_monotonic_execute_baseline()
     assert "database_settings" not in source
     assert "app.include_router(system_health_router)" in source
     retry_include = source.index("app.include_router(result_folder_refresh_router)")
+    vocabulary_include = source.index("app.include_router(semantic_vocabulary_router)")
     health_include = source.index("app.include_router(system_health_router)")
     examples_include = source.index("app.include_router(feature_examples_router)")
-    assert retry_include < health_include < examples_include
+    assert retry_include < vocabulary_include < health_include < examples_include
 
     actual = sum(
         isinstance(node, ast.Call)

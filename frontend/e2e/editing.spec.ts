@@ -3,7 +3,7 @@ import { expect, test, type Page } from '@playwright/test'
 
 async function waitForDashboard(page: Page, role: 'admin' | 'viewer' = 'admin') {
   await page.goto('/')
-  await expect(page.getByRole('heading', { name: '보안 로그인' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '회원 로그인' })).toBeVisible()
   await page.getByLabel('사용자 이름').fill(role === 'admin' ? 'e2e-admin' : 'e2e-viewer')
   await page.getByLabel('비밀번호').fill('e2e-validation-password')
   await page.getByRole('button', { name: '로그인', exact: true }).click()

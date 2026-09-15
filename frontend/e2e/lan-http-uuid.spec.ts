@@ -28,6 +28,9 @@ test('HTTP workbench remains usable without crypto.randomUUID', async ({ page })
       Object.defineProperty(globalThis.crypto, 'randomUUID', { configurable: true, value: undefined })
     })
   }
+  await page.route('http://127.0.0.1:8766/v1/identity', (route) => route.fulfill({
+    json: { device_id: 'e2e-http-device', host_name: 'E2E HTTP Browser', managed: false },
+  }))
 
   await page.goto('/')
   const cryptoState = await page.evaluate(() => ({ secure: globalThis.isSecureContext, randomUuid: typeof globalThis.crypto?.randomUUID }))

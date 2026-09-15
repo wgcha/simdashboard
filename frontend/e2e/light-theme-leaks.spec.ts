@@ -88,6 +88,7 @@ test('light theme keeps feature examples and folder schema surfaces on light tok
 
   await page.goto('/workspace/catalog/schemas')
   await expect(page).toHaveURL(/\/workspace\/catalog\/schemas(?:\?|$)/)
+  await page.getByRole('tab', { name: '기존 폴더 스키마', exact: true }).click()
   const schemaPage = page.locator('.catalog-page')
   const refreshPanel = page.locator('.master-result-refresh')
   await expect(schemaPage).toBeVisible()
