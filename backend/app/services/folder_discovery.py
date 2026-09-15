@@ -82,6 +82,14 @@ def load_scan(conn, scan_id: str):
     return row
 
 
+def persist_rules(conn, root_key: str, relative: str, result: dict, actor: str) -> None:
+    """Persist a validated revision inside the caller's existing transaction."""
+    conn.execute("INSERT INTO folder_discovery_rules(root_key,relative_path,rules_json,revision,updated_at,updated_by) "
+                 "VALUES(?,?,?,?,?,?) ON CONFLICT(root_key,relative_path) DO UPDATE SET rules_json=excluded.rules_json,"
+                 "revision=excluded.revision,updated_at=excluded.updated_at,updated_by=excluded.updated_by",
+                 [root_key, relative, json.dumps(result["rules"]), result["revision"], now(), actor])
+
+
 def rules(conn, root_key: str, relative: str) -> dict:
     row = conn.execute("SELECT rules_json,revision FROM folder_discovery_rules WHERE root_key=? AND relative_path=?",
                        [root_key, relative]).fetchone()

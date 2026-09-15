@@ -39,6 +39,11 @@ def version_at(connection: ConnectionLike, kind: str, ident: str, version_number
     return connection.execute(f"SELECT definition_json, item_snapshot_json FROM {versions} WHERE {column}=? AND version=?", [ident, version_number]).fetchone()
 
 
+def definition_metadata(connection: ConnectionLike, kind: str, ident: str) -> Any:
+    table = {"recipe": "semantic_recipes", "template": "semantic_templates"}[kind]
+    return connection.execute(f"SELECT name,active_version FROM {table} WHERE id=?", [ident]).fetchone()
+
+
 def save_version(connection: ConnectionLike, *, kind: str, ident: str, name: str, definition: dict[str, Any], expected: int | None, actor: str, now: datetime, item_snapshot: list[dict[str, Any]]) -> tuple[int, int]:
     base, versions, column = {"item": ("semantic_result_items", "semantic_result_item_versions", "item_id"), "recipe": ("semantic_recipes", "semantic_recipe_versions", "recipe_id"), "template": ("semantic_templates", "semantic_template_versions", "template_id")}[kind]
     lock_suffix = " FOR UPDATE" if getattr(connection, "backend", "duckdb") == "postgresql" else ""
@@ -84,6 +89,15 @@ def all_item_snapshots(connection: ConnectionLike) -> list[Any]:
 def lock_items_for_definition_save(connection: ConnectionLike) -> None:
     if getattr(connection, "backend", "duckdb") == "postgresql":
         connection.execute("SELECT id FROM semantic_result_items ORDER BY id FOR SHARE").fetchall()
+
+
+def lock_configuration(connection: ConnectionLike, recipe_id: str | None, template_id: str | None) -> None:
+    """Use the same recipe-before-template lock order as bundle activation."""
+    if getattr(connection, "backend", "duckdb") == "postgresql":
+        if recipe_id:
+            connection.execute("SELECT id FROM semantic_recipes WHERE id=? FOR UPDATE", [recipe_id]).fetchone()
+        if template_id:
+            connection.execute("SELECT id FROM semantic_templates WHERE id=? FOR UPDATE", [template_id]).fetchone()
 
 
 def store_recipe_sample(connection: ConnectionLike, *, filename: str, digest: str, content: bytes, recipe_id: str, version_number: int) -> None:
@@ -145,3 +159,37 @@ def latest_provenance(connection: ConnectionLike, load_case_id: str, run_id: str
 
 def item_key_exists(connection: ConnectionLike, key: str) -> bool:
     return connection.execute("SELECT 1 FROM semantic_result_items WHERE key=?", [key]).fetchone() is not None
+
+
+def save_item_lifecycle(connection: ConnectionLike, item_id: str, expected: int, status: str, actor: str, now: datetime) -> int | None:
+    lock_suffix = " FOR UPDATE" if getattr(connection, "backend", "duckdb") == "postgresql" else ""
+    row = connection.execute(f"SELECT latest_version FROM semantic_result_items WHERE id=?{lock_suffix}", [item_id]).fetchone()
+    if not row or int(row[0]) != expected:
+        return None
+    definition = connection.execute("SELECT definition_json,item_snapshot_json FROM semantic_result_item_versions WHERE item_id=? AND version=?", [item_id, expected]).fetchone()
+    next_version = expected + 1
+    connection.execute("UPDATE semantic_result_items SET latest_version=?, updated_at=?, updated_by=? WHERE id=? AND latest_version=?", [next_version, now, actor, item_id, expected])
+    connection.execute("INSERT INTO semantic_result_item_versions(item_id,version,definition_json,item_snapshot_json,lifecycle_status,created_at,created_by) VALUES(?,?,?,?,?,?,?)", [item_id, next_version, definition[0], definition[1], status, now, actor])
+    return next_version
+
+
+def item_usage(connection: ConnectionLike, item_id: str) -> dict[str, int]:
+    """Count exact item references in all immutable recipe/template definitions."""
+    counts = {"recipes": 0, "templates": 0, "widgets": 0}
+    for kind, table, versions, column in (("recipes", "semantic_recipes", "semantic_recipe_versions", "recipe_id"), ("templates", "semantic_templates", "semantic_template_versions", "template_id")):
+        entries = connection.execute(f"SELECT v.definition_json FROM {versions} v").fetchall()
+        for entry in entries:
+            definition = json.loads(entry[0]) if isinstance(entry[0], str) else entry[0]
+            mappings = definition.get("mappings", [])
+            widgets = definition.get("widgets", [])
+            referenced = any(mapping.get("result_item_id") == item_id for mapping in mappings) or any(
+                item_id in widget.get("item_ids", []) or widget.get("x_item_id") == item_id or widget.get("y_item_id") == item_id for widget in widgets
+            )
+            if referenced:
+                counts[kind] += 1
+                counts["widgets"] += sum(item_id in widget.get("item_ids", []) or widget.get("x_item_id") == item_id or widget.get("y_item_id") == item_id for widget in widgets)
+    return counts
+
+
+def previous_recipe_sample(connection: ConnectionLike, recipe_id: str) -> Any:
+    return connection.execute("SELECT sample_filename,sample_sha256,sample_bytes FROM semantic_recipe_versions WHERE recipe_id=? AND sample_bytes IS NOT NULL ORDER BY version DESC LIMIT 1", [recipe_id]).fetchone()

@@ -1,7 +1,6 @@
 """Administrator boundary for read-only surveys and explicit workload creation."""
 from __future__ import annotations
 
-import json
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -219,10 +218,7 @@ def put_rules(payload: FolderRuleUpdate, request: Request):
                 if current["revision"] != payload.expected_revision:
                     svc.fail("RULE_REVISION_CONFLICT", "저장된 규칙이 변경되었습니다. 다시 불러오세요.")
                 result = {"rules": [rule.model_dump() for rule in payload.rules], "revision": current["revision"] + 1}
-                conn.execute("INSERT INTO folder_discovery_rules(root_key,relative_path,rules_json,revision,updated_at,updated_by) "
-                             "VALUES(?,?,?,?,?,?) ON CONFLICT(root_key,relative_path) DO UPDATE SET rules_json=excluded.rules_json,"
-                             "revision=excluded.revision,updated_at=excluded.updated_at,updated_by=excluded.updated_by",
-                             [root_key, relative, json.dumps(result["rules"]), result["revision"], svc.now(), request.state.principal.user_id])
+                svc.persist_rules(conn, root_key, relative, result, request.state.principal.user_id)
                 write_audit_event(request=request, principal=request.state.principal, status_code=200,
                                   action="FOLDER_DISCOVERY_RULES_SAVED", detail={"relative_path": relative, "revision": result["revision"]}, connection=conn)
                 return result

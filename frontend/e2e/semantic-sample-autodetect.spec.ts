@@ -36,10 +36,12 @@ test('fields beyond the first page remain mappable and reset ignores a delayed i
   await inspector.locator('input[type=file]').setInputFiles({ name: 'wide.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(fields)) })
   await expect(inspector).toContainText('305')
   await expect(inspector).toContainText('#/field000')
+  await inspector.getByRole('checkbox', { name: '현재 페이지의 사용 가능한 값 선택', exact: true }).uncheck()
   await inspector.getByRole('button', { name: /필드 더 보기|다음 필드/ }).click()
   await expect(inspector).toContainText('#/field100')
   await inspector.getByRole('checkbox', { name: '#/field100 선택', exact: true }).check()
   await inspector.getByRole('button', { name: /선택 필드 매핑 추가/ }).click()
+  await expect(screen.getByLabel('원본 필드', { exact: true })).toHaveCount(1)
   await expect(screen.getByText(/매핑/).first()).toBeVisible()
   await inspector.getByRole('button', { name: /필드 더 보기/ }).click()
   await inspector.getByRole('button', { name: /필드 더 보기/ }).click()
@@ -85,8 +87,8 @@ test('bulk items bind existing mappings and saved v2 recipe validates several sa
   const original = { name: 'original.json', mimeType: 'application/json', buffer: Buffer.from('{"value":7,"flag":false}') }
   await inspector.locator('input[type=file]').setInputFiles(original)
   await expect(inspector).toContainText('#/value')
-  await inspector.getByRole('checkbox', { name: '현재 페이지 전체 선택', exact: true }).check()
-  await inspector.getByRole('button', { name: /새 결과 항목으로 생성/ }).click()
+  await inspector.getByRole('checkbox', { name: '현재 페이지의 사용 가능한 값 선택', exact: true }).check()
+  await inspector.getByRole('button', { name: /선택 값을 결과 항목으로 연결/ }).click()
   const items = screen.getByLabel('결과 항목', { exact: true })
   await expect(items).toHaveCount(2)
   await expect(items.nth(0)).not.toHaveValue('')
@@ -101,6 +103,7 @@ test('bulk items bind existing mappings and saved v2 recipe validates several sa
   const recipeName = `Auto recipe ${Date.now()}`
   await screen.getByLabel('레시피 이름', { exact: true }).fill(recipeName)
   const saving = page.waitForResponse((response) => response.url().endsWith('/semantic-mapping/recipes') && response.request().method() === 'POST')
+  await screen.getByText('고급 · 레시피/템플릿 개별 저장', { exact: true }).click()
   await screen.getByRole('button', { name: '레시피 저장', exact: true }).click()
   const saved = await saving
   expect(saved.status()).toBe(201)
@@ -131,8 +134,8 @@ test('reset while an item is being created cannot restore old mappings', async (
     arrived(); await pending
     await route.fulfill({ response: result })
   })
-  await inspector.getByRole('checkbox', { name: '현재 페이지 전체 선택', exact: true }).check()
-  await inspector.getByRole('button', { name: /새 결과 항목으로 생성/ }).click()
+  await inspector.getByRole('checkbox', { name: '현재 페이지의 사용 가능한 값 선택', exact: true }).check()
+  await inspector.getByRole('button', { name: /선택 값을 결과 항목으로 연결/ }).click()
   await started
   await inspector.getByRole('button', { name: '샘플 초기화', exact: true }).click()
   const completed = page.waitForResponse((response) => response.url().endsWith('/semantic-mapping/items'))

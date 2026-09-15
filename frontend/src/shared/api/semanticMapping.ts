@@ -9,7 +9,7 @@ export type AggregatePolicy = 'none' | 'max' | 'min' | 'mean'
 
 export type SemanticItemDefinition = { id?: string; key: string; label: string; kind: SemanticItemKind; data_type: SemanticDataType; unit: string; dimensions: string[] }
 export type RecipeMapping = { result_item_id: string; source: string; x_source?: string; series_source?: string; dimensions: Record<string, string>; source_unit?: string; x_unit?: string; target_x_unit?: string; missing: MissingPolicy; aggregate?: AggregatePolicy }
-export type SemanticRecipeDefinition = { reader_version?: number; input_layout?: string; format: SemanticFormat; delimiter: string; encoding: string; header_row: number; records_path: string; required_fields: string[]; mappings: RecipeMapping[] }
+export type SemanticRecipeDefinition = { reader_version?: number; input_layout?: string; format: SemanticFormat; delimiter: string; encoding: string; header_row: number; records_path: string; required_fields: string[]; mappings: RecipeMapping[]; display_template_id?: string; display_template_version?: number }
 export type SemanticWidgetType = 'kpi' | 'gauge' | 'table' | 'bar' | 'line' | 'scatter' | 'image' | 'video'
 export type SemanticWidgetDefinition = { id: string; type: SemanticWidgetType; title: string; item_ids: string[]; x_item_id?: string; y_item_id?: string; filters: Record<string, string>; decimals: number; display_unit?: string; threshold?: number; x_display_unit?: string; y_display_unit?: string }
 export type SemanticTemplateDefinition = { widgets: SemanticWidgetDefinition[] }
@@ -86,8 +86,17 @@ function records<T extends object>(payload: unknown, key: string): T[] {
   return []
 }
 
+export type DefinitionSave<T> = { id?: string; name: string; definition: T; expected_version?: number; sample_upload_id?: string }
+export type SemanticConfiguration = { recipe: VersionedDefinition<SemanticRecipeDefinition>; template: VersionedDefinition<SemanticTemplateDefinition> | null }
+export type SemanticItemUsage = { id: string; recipes: number; templates: number; widgets: number; [key: string]: unknown }
 export const semanticMappingApi = {
   catalog: async () => unwrapGenerated(await apiClient.GET('/api/semantic-mapping/catalog')) as SemanticCatalog,
+  saveItem: async (definition: SemanticItemDefinition, id?: string, expected_version?: number) => unwrapGenerated(await apiClient.POST('/api/semantic-mapping/items', { body: { definition, id, expected_version } as components['schemas']['ItemSave'] })) as VersionedDefinition<SemanticItemDefinition>,
+  itemUsage: async (id: string) => unwrapGenerated(await apiClient.GET('/api/semantic-mapping/items/{item_id}/usage', { params: { path: { item_id: id } } })) as SemanticItemUsage,
+  archiveItem: async (id: string, expected_version: number) => unwrapGenerated(await apiClient.POST('/api/semantic-mapping/items/{item_id}/archive', { params: { path: { item_id: id } }, body: { expected_version } })) as { id: string; version: number; lifecycle_status: string },
+  restoreItem: async (id: string, expected_version: number) => unwrapGenerated(await apiClient.POST('/api/semantic-mapping/items/{item_id}/restore', { params: { path: { item_id: id } }, body: { expected_version } })) as { id: string; version: number; lifecycle_status: string },
+  configuration: async (id: string) => unwrapGenerated(await apiClient.GET('/api/semantic-mapping/configurations/{recipe_id}', { params: { path: { recipe_id: id } } })) as SemanticConfiguration,
+  saveConfiguration: async (recipe: DefinitionSave<SemanticRecipeDefinition>, template: DefinitionSave<SemanticTemplateDefinition>, sample?: File) => unwrapGenerated(await apiClient.POST('/api/semantic-mapping/configurations', { body: { recipe: { ...recipe, ...(sample && !recipe.sample_upload_id ? { sample_filename: sample.name, sample_content_base64: await bytesToBase64(sample.arrayBuffer()) } : {}) }, template } as components['schemas']['ConfigurationSave'] })) as SemanticConfiguration,
   createItem: async (definition: SemanticItemDefinition) => unwrapGenerated(await apiClient.POST('/api/semantic-mapping/items', { body: { definition } as components['schemas']['ItemSave'] })) as VersionedDefinition<SemanticItemDefinition>,
   saveRecipe: async (payload: { id?: string; name: string; definition: SemanticRecipeDefinition; expected_version?: number; sample_upload_id?: string }, sample?: File) => {
     const body: components['schemas']['DefinitionSave'] = { ...payload, ...(sample && !payload.sample_upload_id ? { sample_filename: sample.name, sample_content_base64: await bytesToBase64(sample.arrayBuffer()) } : {}) }
@@ -114,7 +123,7 @@ export const semanticMappingApi = {
   refreshBinding: async (id: string) => unwrapGenerated(await apiClient.POST('/api/semantic-mapping/bindings/{binding_id}/refresh', { params: { path: { binding_id: id } } })),
   importFile: async (file: File, recipeId: string, loadCaseId: string, templateId?: string) => unwrapGenerated(await apiClient.POST('/api/semantic-mapping/import', uploadOptions(uploadForm(file, { recipe_id: recipeId, load_case_id: loadCaseId, template_id: templateId })) as never)) as ImportResponse,
   results: async (params: { load_case_id?: string; run_id?: string; template_id?: string }) => unwrapGenerated(await apiClient.GET('/api/semantic-mapping/results', { params: { query: { load_case_id: params.load_case_id ?? '', run_id: params.run_id, template_id: params.template_id } } })) as ResultsResponse,
-  exportDefinitions: async () => unwrapGenerated(await apiClient.GET('/api/semantic-mapping/export')) as { format_version: number; items: unknown[]; recipes: unknown[]; templates: unknown[] },
+  exportDefinitions: async () => unwrapGenerated(await apiClient.GET('/api/semantic-mapping/export')) as { format_version: number; items: unknown[]; recipes: unknown[]; templates: unknown[]; warnings?: Array<{ recipe_id: string; code: string }> },
   importDefinitions: async (definitions: unknown) => unwrapGenerated(await apiClient.POST('/api/semantic-mapping/import-definitions', { body: definitions as Record<string, unknown> })) as { status: string; created: unknown[] },
 }
 

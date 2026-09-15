@@ -56,6 +56,15 @@ class DefinitionSave(BaseModel):
     sample_content_base64: str | None = Field(default=None, max_length=349528)
 
 
+class ConfigurationSave(BaseModel):
+    recipe: DefinitionSave
+    template: DefinitionSave
+
+
+class ItemLifecycle(BaseModel):
+    expected_version: int = Field(ge=1)
+
+
 class Activate(BaseModel):
     version: int = Field(ge=1)
 
@@ -102,7 +111,7 @@ def _catalog(conn: Any) -> dict[str, list[dict[str, Any]]]:
 
 
 def _items(conn: Any) -> list[dict[str, Any]]:
-    return [entry["definition"] | {"id": entry["id"], "version": entry["latest_version"]} for entry in _catalog(conn)["items"]]
+    return [entry["definition"] | {"id": entry["id"], "version": entry["latest_version"]} for entry in _catalog(conn)["items"] if entry["lifecycle_status"] != "ARCHIVED"]
 
 
 def _version(conn: Any, kind: str, ident: str, active: bool = True) -> tuple[int, dict[str, Any], list[dict[str, Any]]]:
@@ -152,12 +161,39 @@ def save_item(payload: ItemSave, request: Request) -> dict[str, Any]:
             old = _json(previous[0])
             changed = any(old.get(field) != definition.get(field) for field in ("key", "kind", "data_type", "unit", "dimensions"))
             if changed:
-                snapshots = mapping_repository.all_item_snapshots(conn)
-                if any(any(entry.get("id") == item_id for entry in _json(snapshot)) for snapshot in snapshots):
+                usage = mapping_repository.item_usage(conn, item_id)
+                if usage["recipes"] or usage["templates"]:
                     raise HTTPException(422, {"code": "SEMANTIC_ITEM_MEANING_IMMUTABLE", "message": "사용 중인 결과 항목의 의미는 변경할 수 없습니다."})
         result = _save_version(conn, "item", item_id, str(definition["label"]), definition, payload.expected_version, request.state.principal.user_id)
         write_audit_event(request=request, principal=request.state.principal, status_code=201, action="SEMANTIC_ITEM_SAVED", detail={"item_id": result["id"], "version": result["version"]}, connection=conn)
         return result
+
+
+@router.post("/items/{item_id}/archive")
+def archive_item(item_id: str, payload: ItemLifecycle, request: Request) -> dict[str, Any]:
+    with connect() as conn, semantic_transaction(conn):
+        require_permission(request, SYSTEM_CATALOG_MANAGE, conn=conn)
+        version = mapping_repository.save_item_lifecycle(conn, item_id, payload.expected_version, "ARCHIVED", request.state.principal.user_id, _now())
+        if version is None: raise HTTPException(409, {"code": "SEMANTIC_REVISION_CONFLICT"})
+        write_audit_event(request=request, principal=request.state.principal, status_code=200, action="SEMANTIC_ITEM_ARCHIVED", detail={"item_id": item_id, "version": version}, connection=conn)
+        return {"id": item_id, "version": version, "lifecycle_status": "ARCHIVED"}
+
+
+@router.post("/items/{item_id}/restore")
+def restore_item(item_id: str, payload: ItemLifecycle, request: Request) -> dict[str, Any]:
+    with connect() as conn, semantic_transaction(conn):
+        require_permission(request, SYSTEM_CATALOG_MANAGE, conn=conn)
+        version = mapping_repository.save_item_lifecycle(conn, item_id, payload.expected_version, "DRAFT", request.state.principal.user_id, _now())
+        if version is None: raise HTTPException(409, {"code": "SEMANTIC_REVISION_CONFLICT"})
+        write_audit_event(request=request, principal=request.state.principal, status_code=200, action="SEMANTIC_ITEM_RESTORED", detail={"item_id": item_id, "version": version}, connection=conn)
+        return {"id": item_id, "version": version, "lifecycle_status": "DRAFT"}
+
+
+@router.get("/items/{item_id}/usage")
+def get_item_usage(item_id: str, request: Request) -> dict[str, Any]:
+    with connect() as conn:
+        require_permission(request, SYSTEM_CATALOG_MANAGE, conn=conn)
+        return {"id": item_id, **mapping_repository.item_usage(conn, item_id)}
 
 
 def _save_definition(kind: str, payload: DefinitionSave, request: Request) -> dict[str, Any]:
@@ -196,6 +232,66 @@ def save_recipe(payload: DefinitionSave, request: Request) -> dict[str, Any]: re
 
 @router.post("/templates", status_code=201)
 def save_template(payload: DefinitionSave, request: Request) -> dict[str, Any]: return _save_definition("template", payload, request)
+
+
+@router.post("/configurations", status_code=201)
+def save_configuration(payload: ConfigurationSave, request: Request) -> dict[str, Any]:
+    """Save a template and its linked recipe in one rollback boundary."""
+    try:
+        with connect() as conn, mapping_repository.definition_transaction(conn):
+            require_permission(request, SYSTEM_CATALOG_MANAGE, conn=conn)
+            mapping_repository.lock_items_for_definition_save(conn)
+            mapping_repository.lock_configuration(conn, payload.recipe.id, payload.template.id)
+            definitions = _items(conn)
+            validate_template(payload.template.definition, definitions)
+            template = _save_version(conn, "template", payload.template.id, payload.template.name, payload.template.definition, payload.template.expected_version, request.state.principal.user_id)
+            recipe_definition = dict(payload.recipe.definition)
+            recipe_definition["display_template_id"] = template["id"]
+            recipe_definition["display_template_version"] = template["version"]
+            validate_recipe(recipe_definition, definitions)
+            if payload.recipe.sample_upload_id and payload.recipe.sample_content_base64 is not None:
+                raise HTTPException(422, {"code": "SEMANTIC_SAMPLE_AMBIGUOUS"})
+            if payload.recipe.sample_upload_id:
+                filename, content = sample_uploads.load(request.state.principal.user_id, payload.recipe.sample_upload_id)
+                parsed = preview_recipe(recipe_definition, definitions, filename, content)
+            elif payload.recipe.sample_content_base64 is not None:
+                try: content = base64.b64decode(payload.recipe.sample_content_base64, validate=True)
+                except ValueError as error: raise HTTPException(422, {"code": "SEMANTIC_SAMPLE_INVALID"}) from error
+                if not payload.recipe.sample_filename or not content or len(content) > _SAMPLE_LIMIT: raise HTTPException(422, {"code": "SEMANTIC_SAMPLE_INVALID"})
+                parsed = preview_recipe(recipe_definition, definitions, payload.recipe.sample_filename, content)
+                filename = payload.recipe.sample_filename
+            else:
+                prior = mapping_repository.previous_recipe_sample(conn, payload.recipe.id) if payload.recipe.id else None
+                if prior:
+                    filename, digest, content = str(prior[0]), str(prior[1]), bytes(prior[2])
+                    parsed = preview_recipe(recipe_definition, definitions, filename, content)
+                else:
+                    content = None
+            if content is not None and any(widget.get("status") != "READY" for widget in resolve_widgets(payload.template.definition, definitions, parsed)):
+                raise HTTPException(422, {"code": "SEMANTIC_WIDGET_NOT_READY"})
+            recipe = _save_version(conn, "recipe", payload.recipe.id, payload.recipe.name, recipe_definition, payload.recipe.expected_version, request.state.principal.user_id)
+            if content is not None:
+                mapping_repository.store_recipe_sample(conn, filename=filename, digest=hashlib.sha256(content).hexdigest(), content=content, recipe_id=recipe["id"], version_number=recipe["version"])
+            write_audit_event(request=request, principal=request.state.principal, status_code=201, action="SEMANTIC_CONFIGURATION_SAVED", detail={"recipe_id": recipe["id"], "template_id": template["id"]}, connection=conn)
+            return {"recipe": recipe, "template": template}
+    except SemanticValidationError as error:
+        raise _error(error) from error
+
+
+@router.get("/configurations/{recipe_id}")
+def get_configuration(recipe_id: str, request: Request) -> dict[str, Any]:
+    with connect() as conn:
+        require_permission(request, SYSTEM_CATALOG_MANAGE, conn=conn)
+        version, definition, snapshot = _version(conn, "recipe", recipe_id, active=False)
+        base = mapping_repository.definition_metadata(conn, "recipe", recipe_id)
+        recipe = {"id": recipe_id, "name": str(base[0]), "version": version, "active_version": base[1], "definition": definition, "item_snapshot": snapshot}
+        template_id, template_version = definition.get("display_template_id"), definition.get("display_template_version")
+        if template_id is None and template_version is None: return {"recipe": recipe, "template": None}
+        if type(template_version) is not int or template_version < 1 or not isinstance(template_id, str) or not template_id: raise HTTPException(409, {"code": "SEMANTIC_TEMPLATE_LINK_INVALID"})
+        template_definition, template_snapshot = _version_at(conn, "template", template_id, template_version)
+        template_base = mapping_repository.definition_metadata(conn, "template", template_id)
+        if not template_base: raise HTTPException(409, {"code": "SEMANTIC_TEMPLATE_LINK_INVALID"})
+        return {"recipe": recipe, "template": {"id": template_id, "name": str(template_base[0]), "version": template_version, "active_version": template_base[1], "definition": template_definition, "item_snapshot": template_snapshot}}
 
 
 def _activate(kind: str, ident: str, payload: Activate, request: Request) -> dict[str, Any]:
@@ -544,7 +640,18 @@ def results(load_case_id: str, request: Request, run_id: str | None = None, temp
 def export_definitions(request: Request) -> dict[str, Any]:
     with connect() as conn:
         require_permission(request, SYSTEM_CATALOG_MANAGE, conn=conn)
-        catalog = _catalog(conn); return {"format_version": 1, "items": catalog["items"], "recipes": catalog["recipes"], "templates": catalog["templates"]}
+        catalog = _catalog(conn)
+        # A package contains latest templates only.  Do not falsely preserve a
+        # recipe link to an older version that is absent from this package.
+        template_versions = {entry["id"]: entry["latest_version"] for entry in catalog["templates"]}
+        warnings = []
+        for recipe in catalog["recipes"]:
+            definition = recipe["definition"]
+            linked, version = definition.get("display_template_id"), definition.get("display_template_version")
+            if linked and template_versions.get(linked) != version:
+                definition.pop("display_template_id", None); definition.pop("display_template_version", None)
+                warnings.append({"recipe_id": recipe["id"], "code": "DISPLAY_TEMPLATE_LINK_OMITTED"})
+        return {"format_version": 1, "items": catalog["items"], "recipes": catalog["recipes"], "templates": catalog["templates"], "warnings": warnings}
 
 
 @router.post("/import-definitions", status_code=201)
@@ -565,7 +672,11 @@ def import_definitions(payload: dict[str, Any], request: Request) -> dict[str, A
                 imported_keys.add(definition.get("key"))
                 new = f"semantic-item-{uuid4().hex[:12]}"; remap[old] = new; definition["id"] = new
                 normalized_items.append(validate_item(definition))
-            normalized_recipes=[]; normalized_templates=[]
+            normalized_recipes=[]; normalized_templates=[]; template_remap: dict[str, str] = {}
+            for entry in payload.get("templates", []):
+                old = str(entry.get("id") or "")
+                if not old or old in template_remap: raise SemanticValidationError("TEMPLATE_INVALID", "반입 템플릿 ID가 없거나 중복됩니다.")
+                template_remap[old] = f"semantic-template-{uuid4().hex[:12]}"
             for kind, target in (("recipe", normalized_recipes), ("template", normalized_templates)):
                 for entry in payload.get(kind + "s", []):
                     definition = json.loads(json.dumps(entry.get("definition", entry)))
@@ -578,12 +689,18 @@ def import_definitions(payload: dict[str, Any], request: Request) -> dict[str, A
                             for field in ("x_item_id", "y_item_id"):
                                 if widget.get(field): widget[field] = remap.get(widget[field], widget[field])
                         validate_template(definition, normalized_items)
-                    target.append((str(entry.get("name") or definition.get("label") or kind), definition))
+                    if kind == "recipe":
+                        linked = definition.get("display_template_id")
+                        if linked in template_remap:
+                            definition["display_template_id"] = template_remap[linked]; definition["display_template_version"] = 1
+                        elif linked:
+                            definition.pop("display_template_id", None); definition.pop("display_template_version", None)
+                    target.append((str(entry.get("name") or definition.get("label") or kind), definition, template_remap.get(str(entry.get("id") or ""))))
         except Exception as error:
             raise _error(error) from error
         with mapping_repository.definition_transaction(conn):
             created=[]
             for definition in normalized_items: created.append(_save_version(conn, "item", definition["id"], definition["label"], definition, None, request.state.principal.user_id))
-            for kind, entries in (("recipe", normalized_recipes), ("template", normalized_templates)):
-                for name, definition in entries: created.append(_save_version(conn, kind, None, name, definition, None, request.state.principal.user_id))
+            for name, definition, template_id in normalized_templates: created.append(_save_version(conn, "template", template_id, name, definition, None, request.state.principal.user_id))
+            for name, definition, _template_id in normalized_recipes: created.append(_save_version(conn, "recipe", None, name, definition, None, request.state.principal.user_id))
         return {"status": "DRAFT_IMPORTED", "created": created, "item_id_remap": remap}

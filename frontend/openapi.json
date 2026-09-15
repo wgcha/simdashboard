@@ -4091,6 +4091,158 @@
         }
       }
     },
+    "/api/semantic-mapping/items/{item_id}/archive": {
+      "post": {
+        "tags": [
+          "semantic-mapping"
+        ],
+        "summary": "Archive Item",
+        "operationId": "archive_item_api_semantic_mapping_items__item_id__archive_post",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Item Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ItemLifecycle"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Archive Item Api Semantic Mapping Items  Item Id  Archive Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/semantic-mapping/items/{item_id}/restore": {
+      "post": {
+        "tags": [
+          "semantic-mapping"
+        ],
+        "summary": "Restore Item",
+        "operationId": "restore_item_api_semantic_mapping_items__item_id__restore_post",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Item Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ItemLifecycle"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Restore Item Api Semantic Mapping Items  Item Id  Restore Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/semantic-mapping/items/{item_id}/usage": {
+      "get": {
+        "tags": [
+          "semantic-mapping"
+        ],
+        "summary": "Get Item Usage",
+        "operationId": "get_item_usage_api_semantic_mapping_items__item_id__usage_get",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Item Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Item Usage Api Semantic Mapping Items  Item Id  Usage Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/semantic-mapping/recipes": {
       "post": {
         "tags": [
@@ -4160,6 +4312,94 @@
                   "additionalProperties": true,
                   "type": "object",
                   "title": "Response Save Template Api Semantic Mapping Templates Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/semantic-mapping/configurations": {
+      "post": {
+        "tags": [
+          "semantic-mapping"
+        ],
+        "summary": "Save Configuration",
+        "description": "Save a template and its linked recipe in one rollback boundary.",
+        "operationId": "save_configuration_api_semantic_mapping_configurations_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigurationSave"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Save Configuration Api Semantic Mapping Configurations Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/semantic-mapping/configurations/{recipe_id}": {
+      "get": {
+        "tags": [
+          "semantic-mapping"
+        ],
+        "summary": "Get Configuration",
+        "operationId": "get_configuration_api_semantic_mapping_configurations__recipe_id__get",
+        "parameters": [
+          {
+            "name": "recipe_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Recipe Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Configuration Api Semantic Mapping Configurations  Recipe Id  Get"
                 }
               }
             }
@@ -10949,6 +11189,22 @@
         ],
         "title": "CentralRun"
       },
+      "ConfigurationSave": {
+        "properties": {
+          "recipe": {
+            "$ref": "#/components/schemas/DefinitionSave"
+          },
+          "template": {
+            "$ref": "#/components/schemas/DefinitionSave"
+          }
+        },
+        "type": "object",
+        "required": [
+          "recipe",
+          "template"
+        ],
+        "title": "ConfigurationSave"
+      },
       "ConfirmBody": {
         "properties": {
           "expected_revision": {
@@ -12597,6 +12853,20 @@
           "desired_role"
         ],
         "title": "InvitationCreate"
+      },
+      "ItemLifecycle": {
+        "properties": {
+          "expected_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "expected_version"
+        ],
+        "title": "ItemLifecycle"
       },
       "ItemSave": {
         "properties": {

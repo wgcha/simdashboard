@@ -1,0 +1,17 @@
+.semantic-page .semantic-widget-editor { display:block; padding:16px; min-width:0; max-width:100%; box-sizing:border-box; }
+.semantic-widget-editor-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; font-size:12px; }
+.semantic-widget-fields { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); align-items:start; gap:14px; }
+.semantic-widget-fields label,.semantic-widget-filters label { display:grid; gap:6px; min-width:0; color:var(--color-text-muted); font-size:12px; }
+.semantic-widget-fields select[multiple] { height:110px; }
+.semantic-widget-fields small { line-height:1.5; overflow-wrap:anywhere; }
+.semantic-widget-fields input,.semantic-widget-fields select { width:100%; box-sizing:border-box; }
+.semantic-widget-help { overflow-wrap:anywhere; color:var(--color-text-muted); font-size:12px; line-height:1.6; margin:12px 0 0; }
+.semantic-widget-filters { display:flex; gap:12px; flex-wrap:wrap; border:1px solid var(--color-border); border-radius:6px; margin-top:12px; padding:12px; }
+.semantic-widget-filters legend { color:var(--color-text-muted); font-size:12px; padding:0 6px; }
+.semantic-widget-source-preview { font-size:12px; color:var(--color-text-muted); margin-top:12px; }
+.semantic-widget-source-preview summary { cursor:pointer; color:var(--color-accent); }
+.semantic-widget-source-preview ul { display:grid; gap:6px; max-height:180px; overflow:auto; padding:0; list-style:none; }
+.semantic-widget-source-preview li { min-width:0; overflow-wrap:anywhere; display:flex; justify-content:space-between; gap:12px; padding:6px 0; border-bottom:1px solid var(--color-border); }
+.semantic-widget-source-preview strong { color:var(--color-text-strong); white-space:nowrap; }
+@media(max-width:1000px) { .semantic-widget-fields { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media(max-width:600px) { .semantic-widget-fields { grid-template-columns:1fr; } }
