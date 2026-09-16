@@ -25,7 +25,7 @@ def _canonical_contracts(values: list[str]) -> list[str]:
 
 
 def _widget_size(widget_type: str) -> tuple[int, int]:
-    if widget_type in {"time_series", "scatter", "result_table", "contour", "video", "video_grid", "model3d", "run_comparison"}:
+    if widget_type in {"time_series", "scatter", "result_table", "contour", "video", "video_grid", "model3d", "run_comparison", "name_value"}:
         return 12, 5
     return 6, 3
 
@@ -56,6 +56,8 @@ def compile_request_result_definition(
         settings: dict[str, Any] = {"data_contracts": tag_contracts, "required": bool(tag.get("required", False))}
         if tag.get("variable_key"):
             settings["variable_key"] = tag["variable_key"]
+        if tag["type"] == "name_value":
+            settings["chartStyle"] = tag.get("chart_style") or "bar"
         widgets.append(
             {
                 "id": tag["id"],

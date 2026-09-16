@@ -15656,6 +15656,7 @@
               "verdict",
               "gauge",
               "edge_bar",
+              "name_value",
               "time_series",
               "scatter",
               "result_table",
@@ -15702,6 +15703,22 @@
             "type": "array",
             "maxItems": 32,
             "title": "Data Contracts"
+          },
+          "chart_style": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "bar",
+                  "dot",
+                  "line"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chart Style"
           },
           "required": {
             "type": "boolean",
@@ -18183,6 +18200,7 @@
               "verdict",
               "gauge",
               "edge_bar",
+              "name_value",
               "time_series",
               "scatter",
               "result_table",

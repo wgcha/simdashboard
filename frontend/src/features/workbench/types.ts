@@ -10,12 +10,15 @@ export type ResultProfileInput = {
   required_data_contracts: string[]
 }
 
+export type NameValueChartStyle = 'bar' | 'dot' | 'line'
+
 export type RequestResultWidget = {
   id: string
   type: WidgetType
   title: string
   variable_key: string | null
   data_contracts: string[]
+  chart_style?: NameValueChartStyle
   required: boolean
 }
 

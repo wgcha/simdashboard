@@ -5,6 +5,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 from .auth_limits import PASSWORD_MAX_LENGTH, PASSWORD_USERNAME_MAX_LENGTH
+from ..domains.dashboard_writes.variable_bindings import validate_widget_variable_binding_shape
 
 
 WidgetType = Literal[
@@ -12,6 +13,7 @@ WidgetType = Literal[
     "verdict",
     "gauge",
     "edge_bar",
+    "name_value",
     "time_series",
     "scatter",
     "result_table",
@@ -36,6 +38,7 @@ ANALYSIS_PAGE_WIDGET_TYPES = {
     "verdict",
     "gauge",
     "edge_bar",
+    "name_value",
     "time_series",
     "scatter",
     "result_table",
@@ -82,6 +85,8 @@ class DashboardDefinition(BaseModel):
 
     @model_validator(mode="after")
     def validate_widget_layout(self) -> "DashboardDefinition":
+        for widget in self.widgets:
+            validate_widget_variable_binding_shape(widget.model_dump())
         widget_ids = [widget.id for widget in self.widgets]
         if len(widget_ids) != len(set(widget_ids)):
             raise ValueError("위젯 ID는 대시보드 안에서 중복될 수 없습니다.")

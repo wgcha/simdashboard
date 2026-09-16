@@ -13,7 +13,9 @@ export function normalizeRequestResultDefinition(value: RequestResultDefinition 
       id: widget.id || widgetIdForType(widget.type, index), type: widget.type,
       title: widget.title?.trim() || catalogItemForWidget(widget).label,
       variable_key: widget.variable_key?.trim() || null,
-      data_contracts: normalizeResultDataContracts(widget.data_contracts), required: widget.required === true,
+      data_contracts: normalizeResultDataContracts(widget.data_contracts),
+      chart_style: widget.type === 'name_value' ? widget.chart_style ?? 'bar' : undefined,
+      required: widget.required === true,
     })),
   }
 }
@@ -27,6 +29,9 @@ export function requestResultDefinitionFromProfile(profile: ResultProfile | null
     id: widget.id, type: widget.type, title: widget.title,
     variable_key: typeof widget.settings?.variable_key === 'string' ? widget.settings.variable_key : null,
     data_contracts: normalizeResultDataContracts(Array.isArray(widget.settings?.data_contracts) ? widget.settings.data_contracts : []),
+    chart_style: widget.type === 'name_value'
+      ? (widget.settings?.chartStyle === 'dot' || widget.settings?.chartStyle === 'line' ? widget.settings.chartStyle : 'bar')
+      : undefined,
     required: widget.settings?.required === true || widget.settings?.required_widget === true,
   }))
   return normalizeRequestResultDefinition({ page_name: pages[0]?.name || '요청 결과', page_description: pages[0]?.description, widgets })

@@ -7,3 +7,4 @@
 .semantic-result-table td:first-child { white-space:normal; overflow-wrap:anywhere; min-width:120px; max-width:none; }
 .semantic-result-table td:nth-child(3) { white-space:normal; overflow-wrap:anywhere; min-width:100px; }
 .semantic-result-table th { position:sticky; top:0; background:var(--color-surface-2); z-index:1; }
+.semantic-name-value-chart{overflow:hidden}.semantic-name-value-scroll{overflow-x:auto;padding-bottom:4px}.semantic-name-value-canvas{min-width:320px}

@@ -5085,13 +5085,15 @@ export interface components {
              * Type
              * @enum {string}
              */
-            type: "kpi" | "verdict" | "gauge" | "edge_bar" | "time_series" | "scatter" | "result_table" | "contour" | "video" | "video_grid" | "model3d" | "note" | "workflow" | "open_cell_map" | "open_cell_summary" | "summary" | "chassis_summary" | "chassis_diagram" | "chassis_bar" | "chassis_table" | "run_comparison";
+            type: "kpi" | "verdict" | "gauge" | "edge_bar" | "name_value" | "time_series" | "scatter" | "result_table" | "contour" | "video" | "video_grid" | "model3d" | "note" | "workflow" | "open_cell_map" | "open_cell_summary" | "summary" | "chassis_summary" | "chassis_diagram" | "chassis_bar" | "chassis_table" | "run_comparison";
             /** Title */
             title: string;
             /** Variable Key */
             variable_key?: string | null;
             /** Data Contracts */
             data_contracts?: string[];
+            /** Chart Style */
+            chart_style?: ("bar" | "dot" | "line") | null;
             /**
              * Required
              * @default false
@@ -5837,7 +5839,7 @@ export interface components {
              * Type
              * @enum {string}
              */
-            type: "kpi" | "verdict" | "gauge" | "edge_bar" | "time_series" | "scatter" | "result_table" | "contour" | "video" | "video_grid" | "model3d" | "note" | "workflow" | "open_cell_map" | "open_cell_summary" | "summary" | "chassis_summary" | "chassis_diagram" | "chassis_bar" | "chassis_table" | "run_comparison";
+            type: "kpi" | "verdict" | "gauge" | "edge_bar" | "name_value" | "time_series" | "scatter" | "result_table" | "contour" | "video" | "video_grid" | "model3d" | "note" | "workflow" | "open_cell_map" | "open_cell_summary" | "summary" | "chassis_summary" | "chassis_diagram" | "chassis_bar" | "chassis_table" | "run_comparison";
             /** Title */
             title: string;
             /** X */

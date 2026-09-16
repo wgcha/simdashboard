@@ -5,6 +5,7 @@
 .semantic-widget-fields select[multiple] { height:110px; }
 .semantic-widget-fields small { line-height:1.5; overflow-wrap:anywhere; }
 .semantic-widget-fields input,.semantic-widget-fields select { width:100%; box-sizing:border-box; }
+.semantic-widget-item-transfer { grid-column:1/-1; min-width:0; }
 .semantic-widget-help { overflow-wrap:anywhere; color:var(--color-text-muted); font-size:12px; line-height:1.6; margin:12px 0 0; }
 .semantic-widget-filters { display:flex; gap:12px; flex-wrap:wrap; border:1px solid var(--color-border); border-radius:6px; margin-top:12px; padding:12px; }
 .semantic-widget-filters legend { color:var(--color-text-muted); font-size:12px; padding:0 6px; }

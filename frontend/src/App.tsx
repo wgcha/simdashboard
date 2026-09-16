@@ -1020,6 +1020,8 @@ function App() {
         proposal={proposal}
         savedDashboards={savedDashboards}
         selectedWidgetId={selectedWidgetId}
+        overview={overview ?? undefined}
+        selectedEdges={selectedEdges}
         variables={variables}
         versions={versions}
         widgetCatalog={widgetCatalog}

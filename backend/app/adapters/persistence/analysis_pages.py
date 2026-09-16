@@ -10,6 +10,12 @@ from ...database import json_value, rows
 from ...database_connection import ConnectionLike, connect
 from ...domains.analysis_pages.policies import analysis_page_meta, sort_analysis_pages, summarize_analysis_page
 from ...domains.analysis_pages.ports import AnalysisPageCommandRepository, AnalysisPageRepository
+from ...services.dashboard_variable_bindings import (
+    has_variable_bindings,
+    has_variable_ids,
+    validate_dashboard_variable_binding_shapes,
+    validate_dashboard_variable_bindings,
+)
 
 
 class SQLAnalysisPageRepository:
@@ -117,6 +123,7 @@ class SQLAnalysisPageCommandRepository(SQLAnalysisPageRepository):
         definition: dict[str, Any],
         occurred_at: datetime,
     ) -> None:
+        validate_dashboard_variable_bindings(self._connection, load_case_id, definition)
         encoded = _encoded(definition)
         self._connection.execute(
             "INSERT INTO dashboards VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -165,6 +172,18 @@ class SQLAnalysisPageCommandRepository(SQLAnalysisPageRepository):
         definition: dict[str, Any],
         created_by: str,
     ) -> tuple[int, datetime]:
+        if has_variable_ids(definition):
+            validate_dashboard_variable_binding_shapes(definition)
+        if has_variable_bindings(definition):
+            load_case = self._connection.execute(
+                "SELECT load_case_id FROM dashboards WHERE id = ?",
+                [dashboard_id],
+            ).fetchone()
+            validate_dashboard_variable_bindings(
+                self._connection,
+                load_case[0] if load_case else None,
+                definition,
+            )
         next_version = int(
             self._connection.execute(
                 "SELECT COALESCE(max(version), 0) + 1 FROM dashboard_versions WHERE dashboard_id = ?",

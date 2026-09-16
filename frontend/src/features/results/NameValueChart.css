@@ -1,0 +1,12 @@
+.name-value-chart { height:100%; min-height:0; }
+.name-value-chart__groups { height:100%; min-height:0; display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:10px; overflow:auto; }
+.name-value-chart--single .name-value-chart__groups { grid-template-columns:minmax(0,1fr); }
+.name-value-chart__unit { min-width:0; min-height:210px; display:flex; flex-direction:column; padding:7px 8px 5px; border:1px solid var(--color-border); border-radius:7px; background:var(--color-surface-interactive); }
+.name-value-chart--single .name-value-chart__unit { min-height:0; }
+.name-value-chart__unit>header { flex:none; display:flex; align-items:baseline; justify-content:space-between; gap:8px; padding:0 4px 5px; }
+.name-value-chart__unit>header span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--color-text); font:700 10px var(--font-mono); }
+.name-value-chart__unit>header small { flex:none; color:var(--color-text-muted); font-size:10px; }
+.name-value-chart__plot { flex:1; min-height:170px; overflow:auto; }
+.name-value-chart__plot-inner { height:100%; min-height:170px; }
+.name-value-chart--single .name-value-chart__plot { min-height:0; }
+@media (max-width:640px) { .name-value-chart__groups { grid-template-columns:minmax(0,1fr); }.name-value-chart__unit { min-height:190px; }.name-value-chart__plot { min-height:150px; } }

@@ -213,7 +213,7 @@ export type Workflow = {
   request_type_assignment?: { request_type_id: string; request_type_version: number; source: 'ADMIN' | 'RULE' | 'USER' | 'DEFAULT'; decided_by: string; decided_at: string } | null
 }
 
-export type WidgetType = 'open_cell_map' | 'open_cell_summary' | 'kpi' | 'verdict' | 'gauge' | 'edge_bar' | 'summary' | 'time_series' | 'scatter' | 'note' | 'result_table' | 'contour' | 'video' | 'video_grid' | 'model3d' | 'workflow' | 'chassis_summary' | 'chassis_diagram' | 'chassis_bar' | 'chassis_table' | 'run_comparison'
+export type WidgetType = 'open_cell_map' | 'open_cell_summary' | 'kpi' | 'verdict' | 'gauge' | 'edge_bar' | 'name_value' | 'summary' | 'time_series' | 'scatter' | 'note' | 'result_table' | 'contour' | 'video' | 'video_grid' | 'model3d' | 'workflow' | 'chassis_summary' | 'chassis_diagram' | 'chassis_bar' | 'chassis_table' | 'run_comparison'
 
 export type VariableDataType = 'NUMBER' | 'TIME_SERIES' | 'FLOAT' | 'INTEGER' | 'TEXT' | 'CURVE' | 'IMAGE' | 'VIDEO' | 'MODEL_3D' | 'VERDICT' | 'STATUS' | 'BOOLEAN'
 export type VariableDefinition = { id: string; definition_id: string; variable_key: string; display_name: string; data_type: VariableDataType; unit: string; filterable: boolean; source: string; allowed_widgets: string[]; allowed_aggregations: string[]; description: string; threshold?: number | null; analysis_type: string; result_group: 'OPEN_CELL' | 'CHASSIS_REAR' | 'CUSTOM'; has_data: boolean; dashboard_usage_count: number; updated_at: string; updated_by: string }

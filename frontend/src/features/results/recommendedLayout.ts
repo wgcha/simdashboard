@@ -19,7 +19,7 @@ const summaryTypes = new Set<DashboardWidget['type']>([
 ])
 
 const evidenceTypes = new Set<DashboardWidget['type']>([
-  'edge_bar', 'time_series', 'scatter', 'result_table', 'contour', 'open_cell_map',
+  'edge_bar', 'name_value', 'time_series', 'scatter', 'result_table', 'contour', 'open_cell_map',
   'chassis_diagram', 'chassis_bar', 'chassis_table', 'run_comparison', 'model3d',
 ])
 

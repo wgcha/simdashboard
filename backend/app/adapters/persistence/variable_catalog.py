@@ -20,6 +20,7 @@ from ...domains.variable_catalog.policies import (
     SCALAR_TYPES,
     normalize_definition,
 )
+from ...services.dashboard_variable_bindings import referenced_variable_keys
 
 
 class SQLVariableCatalogRepository:
@@ -156,7 +157,7 @@ class SQLVariableCatalogRepository:
             "SELECT id, definition_json FROM dashboards WHERE load_case_id = ?", [load_case_id]
         ).fetchall():
             definition = json_value(definition_json) or {}
-            if any((widget.get("settings") or {}).get("variableId") == variable_key for widget in definition.get("widgets", [])):
+            if any(variable_key in referenced_variable_keys(widget) for widget in definition.get("widgets", [])):
                 references.append(dashboard_id)
         return references
 

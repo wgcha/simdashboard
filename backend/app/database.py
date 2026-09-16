@@ -2408,7 +2408,7 @@ def ensure_variable_definitions(conn: duckdb.DuckDBPyConnection) -> None:
             [
                 f"variable-{load_case_id}-{key}", load_case_id, key, display_name, unit or "",
                 f"{analysis_type} latest analysis result: {display_name}", threshold,
-                json.dumps(["kpi", "gauge", "edge_bar", "scatter", "result_table", "chassis_bar", "chassis_table"]),
+                json.dumps(["kpi", "gauge", "edge_bar", "name_value", "scatter", "result_table", "chassis_bar", "chassis_table"]),
                 json.dumps(["MAX", "MIN", "AVG", "LATEST"]), analysis_type, result_group, now, now,
             ],
         )
@@ -2440,7 +2440,7 @@ def ensure_variable_definitions(conn: duckdb.DuckDBPyConnection) -> None:
         SET allowed_widgets_json = ?
         WHERE data_type = 'NUMBER' AND updated_by = 'system'
         """,
-        [json.dumps(["kpi", "gauge", "edge_bar", "scatter", "result_table", "chassis_bar", "chassis_table"])],
+        [json.dumps(["kpi", "gauge", "edge_bar", "name_value", "scatter", "result_table", "chassis_bar", "chassis_table"])],
     )
 
 

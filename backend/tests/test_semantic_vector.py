@@ -134,6 +134,36 @@ def test_vector_widget_projection_and_table_missing_state() -> None:
 
 
 @pytest.mark.unit
+def test_name_value_widget_keeps_zero_and_negative_values_and_returns_chart_style() -> None:
+    vector = _vector_item()
+    scalar = {
+        "id": "offset", "key": "offset", "label": "Signed offset", "kind": "scalar",
+        "data_type": "FLOAT", "unit": "mm", "dimensions": [],
+    }
+    parsed = preview_recipe(_recipe(), [vector], "result.json", b'{"Contact":[1,0,3]}')
+    parsed["observations"].append({
+        "item_id": "offset", "kind": "scalar", "data_type": "FLOAT", "value": -2.5,
+        "value_status": "READY", "dimensions": {}, "unit": "mm",
+    })
+    template = {"widgets": [{
+        "id": "comparison", "type": "name_value", "item_ids": ["position", "offset"],
+        "vector_component": "Y",
+    }]}
+    default_style = resolve_widgets(template, [vector, scalar], parsed)[0]
+    assert default_style["status"] == "READY"
+    assert default_style["chart_style"] == "bar"
+    assert [row["value"] for row in default_style["data"]] == [0.0, -2.5]
+
+    template["widgets"][0]["chart_style"] = "dot"
+    assert resolve_widgets(template, [vector, scalar], parsed)[0]["chart_style"] == "dot"
+    for invalid in ("area", []):
+        template["widgets"][0]["chart_style"] = invalid
+        with pytest.raises(SemanticValidationError) as caught:
+            resolve_widgets(template, [vector, scalar], parsed)
+        assert caught.value.code == "DISPLAY_INVALID"
+
+
+@pytest.mark.unit
 def test_scatter_preserved_nulls_are_no_value_without_hiding_complete_pairs() -> None:
     scalar = lambda ident: {"id": ident, "key": ident, "label": ident, "kind": "scalar", "data_type": "FLOAT", "unit": "mm", "dimensions": []}
     template = {"widgets": [{"id": "xy", "type": "scatter", "x_item_id": "x", "y_item_id": "y", "display_unit": "m"}]}

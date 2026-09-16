@@ -96,6 +96,8 @@ def create_dashboard_page(payload: AnalysisPageCreate, request: Request) -> dict
         )
     except AnalysisPageError as error:
         _raise_mapped(error)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @router.patch("/api/admin/dashboard-pages/{dashboard_id}", response_model=DashboardDefinition)
@@ -122,6 +124,8 @@ def update_dashboard_page(
         )
     except AnalysisPageError as error:
         _raise_mapped(error)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @router.delete("/api/admin/dashboard-pages/{dashboard_id}")
@@ -159,3 +163,5 @@ def reorder_dashboard_pages(payload: AnalysisPageOrderUpdate, request: Request) 
         )
     except AnalysisPageError as error:
         _raise_mapped(error)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error

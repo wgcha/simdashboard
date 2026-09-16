@@ -798,7 +798,7 @@ def validate_template(template: dict, items: list[dict]) -> dict:
             _fail("WIDGET_ID_INVALID", "위젯 인스턴스 ID가 없거나 중복됩니다.")
         ids.add(widget["id"])
         kind = widget.get("type")
-        if not isinstance(kind, str) or kind not in {"kpi", "gauge", "table", "bar", "line", "scatter", "image", "video"}:
+        if not isinstance(kind, str) or kind not in {"kpi", "gauge", "table", "bar", "name_value", "line", "scatter", "image", "video"}:
             _fail("WIDGET_UNSUPPORTED", "지원하지 않는 위젯 유형입니다.")
         selected = [widget.get("x_item_id"), widget.get("y_item_id")] if kind == "scatter" else widget.get("item_ids", [])
         if not isinstance(selected, list) or not selected or len(selected) > MAX_MAPPINGS or any(not isinstance(s, str) or s not in catalog for s in selected):
@@ -809,22 +809,24 @@ def validate_template(template: dict, items: list[dict]) -> dict:
         allowed_kinds = {expected}
         if kind == "table":
             allowed_kinds = {"scalar", "vector"}
-        elif kind in {"kpi", "gauge", "bar"}:
+        elif kind in {"kpi", "gauge", "bar", "name_value"}:
             allowed_kinds = {"scalar", "vector"}
         if any(catalog[s]["kind"] not in allowed_kinds for s in selected):
             _fail("INCOMPATIBLE_RESULT", "위젯 입력과 결과 항목의 유형이 다릅니다.")
         component = widget.get("vector_component")
         vector_selected = [catalog[s] for s in selected if catalog[s]["kind"] == "vector"]
         if vector_selected:
-            if kind in {"kpi", "gauge", "bar"}:
+            if kind in {"kpi", "gauge", "bar", "name_value"}:
                 if not isinstance(component, str) or not component or any(component not in item["components"] for item in vector_selected):
-                    _fail("VECTOR_COMPONENT_INVALID", "벡터 KPI, 게이지, 막대에는 유효한 성분을 선택하세요.")
+                    _fail("VECTOR_COMPONENT_INVALID", "벡터 KPI, 게이지, 막대, 이름·값 그래프에는 유효한 성분을 선택하세요.")
             elif component is not None:
-                _fail("VECTOR_COMPONENT_INVALID", "벡터 성분 선택은 KPI, 게이지, 막대에서만 사용할 수 있습니다.")
+                _fail("VECTOR_COMPONENT_INVALID", "벡터 성분 선택은 KPI, 게이지, 막대, 이름·값 그래프에서만 사용할 수 있습니다.")
         elif component is not None:
             _fail("VECTOR_COMPONENT_INVALID", "벡터 결과가 아닌 위젯에는 성분을 지정할 수 없습니다.")
-        if kind in {"gauge", "bar", "scatter"} and any(catalog[s]["data_type"] not in {"FLOAT", "INTEGER"} for s in selected):
+        if kind in {"gauge", "bar", "name_value", "scatter"} and any(catalog[s]["data_type"] not in {"FLOAT", "INTEGER"} for s in selected):
             _fail("INCOMPATIBLE_RESULT", "이 위젯에는 숫자 결과가 필요합니다.")
+        if kind == "name_value" and (not isinstance(widget.get("chart_style", "bar"), str) or widget.get("chart_style", "bar") not in {"bar", "dot", "line"}):
+            _fail("DISPLAY_INVALID", "이름·값 그래프 스타일은 막대, 점 또는 선이어야 합니다.")
         if type(widget.get("decimals", 2)) is not int or not 0 <= widget.get("decimals", 2) <= 10:
             _fail("DISPLAY_INVALID", "소수 자릿수는 0~10 사이여야 합니다.")
         if not isinstance(widget.get("filters", {}), dict):
@@ -849,7 +851,7 @@ def validate_template(template: dict, items: list[dict]) -> dict:
                 _fail("UNIT_MISMATCH", "숫자 항목에만 표시 단위를 지정할 수 있습니다.")
             for selected_id in selected:
                 convert_unit(0, catalog[selected_id]["unit"], display)
-        if kind in {"bar", "line"} and len({catalog[s]["unit"] for s in selected}) > 1 and display is None:
+        if kind in {"bar", "name_value", "line"} and len({catalog[s]["unit"] for s in selected}) > 1 and display is None:
             _fail("UNIT_MISMATCH", "같은 축에는 같은 단위나 명시적인 표시 단위가 필요합니다.")
     return template
 
@@ -864,6 +866,8 @@ def resolve_widgets(template: dict, items: list[dict], payload: dict) -> list[di
         selected = [widget.get("x_item_id"), widget.get("y_item_id")] if kind == "scatter" else widget["item_ids"]
         matches = [entry for entry in observations if entry.get("item_id") in selected and all(str(entry.get("dimensions", {}).get(k)) == str(v) for k, v in widget.get("filters", {}).items())]
         output = {"id": widget["id"], "type": kind, "title": widget.get("title") or catalog[selected[0]]["label"], "status": "READY", "unit": widget.get("display_unit", catalog[selected[0]]["unit"]), "decimals": widget.get("decimals", 2), "data": []}
+        if kind == "name_value":
+            output["chart_style"] = widget.get("chart_style", "bar")
         if any(not any(entry.get("item_id") == key for entry in matches) for key in selected):
             output.update(status="MISSING_RESULT", message="연결한 결과 항목이 이 실행에 없습니다.")
         elif any(entry.get("kind") != catalog[entry["item_id"]]["kind"] or entry.get("data_type") != catalog[entry["item_id"]]["data_type"] for entry in matches):
@@ -928,7 +932,7 @@ def resolve_widgets(template: dict, items: list[dict], payload: dict) -> list[di
                     output.update(status="INCOMPATIBLE_RESULT", message="저장된 결과와 표시 단위가 호환되지 않습니다.", data=[])
                     break
                 output["data"].append(row)
-            if kind in {"table", "kpi", "gauge", "bar"} and output["status"] == "READY" and output["data"] and not any(
+            if kind in {"table", "kpi", "gauge", "bar", "name_value"} and output["status"] == "READY" and output["data"] and not any(
                 _has_observed_value(entry.get("value"))
                 for entry in output["data"]
                 if "value" in entry

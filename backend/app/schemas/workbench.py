@@ -72,6 +72,7 @@ class ResultWidgetDefinition(StrictModel):
     title: str = Field(min_length=1, max_length=160)
     variable_key: str | None = Field(default=None, min_length=1, max_length=120)
     data_contracts: list[str] = Field(default_factory=list, max_length=32)
+    chart_style: Literal["bar", "dot", "line"] | None = None
     required: bool = False
 
 

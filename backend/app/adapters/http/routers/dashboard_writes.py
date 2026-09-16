@@ -69,6 +69,8 @@ def save_dashboard(dashboard_id: str, definition: DashboardDefinition, request: 
         )
     except DashboardWriteError as error:
         _raise_mapped(error)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @history_router.delete("/api/dashboards/{dashboard_id}/versions/{version}")
@@ -88,6 +90,8 @@ def delete_dashboard_version(dashboard_id: str, version: int, request: Request) 
         )
     except DashboardWriteError as error:
         _raise_mapped(error)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @history_router.post("/api/dashboards/{dashboard_id}/clone", status_code=201)
@@ -109,6 +113,8 @@ def clone_dashboard(dashboard_id: str, payload: DashboardClone, request: Request
         )
     except DashboardWriteError as error:
         _raise_mapped(error)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @history_router.post("/api/dashboards/{dashboard_id}/restore/{version}")
@@ -129,3 +135,5 @@ def restore_dashboard(dashboard_id: str, version: int, request: Request) -> dict
         )
     except DashboardWriteError as error:
         _raise_mapped(error)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error

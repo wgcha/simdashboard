@@ -137,7 +137,7 @@ type ContentSnapshot = {
 }
 
 const widgetPresentation: Record<string, ReportContentItem['defaultPresentation']> = {
-  edge_bar: 'chart', time_series: 'chart', scatter: 'chart', gauge: 'chart', chassis_bar: 'chart',
+  edge_bar: 'chart', name_value: 'chart', time_series: 'chart', scatter: 'chart', gauge: 'chart', chassis_bar: 'chart',
   result_table: 'table', chassis_table: 'table', video_grid: 'table',
   contour: 'image', video: 'image', model3d: 'image',
   note: 'text',

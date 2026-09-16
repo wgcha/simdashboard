@@ -7,7 +7,7 @@ from .errors import VariableCatalogValidationError
 from .models import VariableCatalogDefinition
 
 
-NUMBER_WIDGETS = {"kpi", "gauge", "edge_bar", "scatter", "result_table", "chassis_bar", "chassis_table"}
+NUMBER_WIDGETS = {"kpi", "gauge", "edge_bar", "name_value", "scatter", "result_table", "chassis_bar", "chassis_table"}
 SERIES_WIDGETS = {"time_series", "scatter", "result_table"}
 TEXT_WIDGETS = {"note", "result_table", "verdict"}
 MEDIA_WIDGETS = {"contour", "video", "model3d", "result_table"}

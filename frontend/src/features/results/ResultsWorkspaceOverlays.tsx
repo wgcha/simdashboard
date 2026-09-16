@@ -3,7 +3,7 @@ import { AlertTriangle, Check, Lock, Plus, Sparkles, Trash2, X } from 'lucide-re
 
 import { api } from '../../api'
 
-import type { DashboardDefinition, DashboardSummary, DashboardVersion, DashboardWidget, VariableDefinition, WidgetCatalogItem } from '../../types'
+import type { DashboardDefinition, DashboardSummary, DashboardVersion, DashboardWidget, Overview, VariableDefinition, WidgetCatalogItem } from '../../types'
 
 const WidgetSettingsPanel = lazy(() => import('./AnalysisWidgets').then(({ WidgetSettingsPanel: Component }) => ({ default: Component })))
 
@@ -18,6 +18,8 @@ type Props = {
   proposal: AssistantProposal
   savedDashboards: DashboardSummary[]
   selectedWidgetId: string | null
+  overview?: Overview
+  selectedEdges: string[]
   variables: VariableDefinition[]
   versions: DashboardVersion[]
   widgetCatalog: WidgetCatalogItem[]
@@ -36,12 +38,12 @@ type Props = {
   onUpdateWidget: (id: string, patch: Partial<DashboardWidget>) => void
 }
 
-const SPECIAL_TYPES = new Set(['summary', 'open_cell_map', 'open_cell_summary', 'kpi', 'verdict', 'gauge', 'edge_bar', 'time_series', 'scatter', 'note', 'result_table', 'contour', 'video', 'video_grid', 'chassis_summary', 'chassis_diagram', 'chassis_bar', 'chassis_table'])
+const SPECIAL_TYPES = new Set(['summary', 'open_cell_map', 'open_cell_summary', 'kpi', 'verdict', 'gauge', 'edge_bar', 'name_value', 'time_series', 'scatter', 'note', 'result_table', 'contour', 'video', 'video_grid', 'chassis_summary', 'chassis_diagram', 'chassis_bar', 'chassis_table'])
 
 /** Results-owned temporary UI; its open state remains controlled by the workspace. */
 export function ResultsWorkspaceOverlays({
   assistantOpen, canManagePages, catalogVariable, command, dashboard, proposal, savedDashboards,
-  selectedWidgetId, variables, versions, widgetCatalog, onAddCatalogWidget, onApplyProposal,
+  selectedWidgetId, overview, selectedEdges, variables, versions, widgetCatalog, onAddCatalogWidget, onApplyProposal,
   onCloneLayout, onCloseAssistant, onCloseWidgetSettings, onCommandChange, onLoadSavedDashboard,
   onLoadVersion, onPreviewCommand, onRemoveVersion, onRestorePrevious, onSelectCatalogVariable,
   onUpdateWidget,
@@ -62,6 +64,6 @@ export function ResultsWorkspaceOverlays({
         <label className="saved-layouts"><span>저장된 레이아웃 불러오기</span><select value={dashboard.id} onChange={(event) => onLoadSavedDashboard(event.target.value)}>{savedDashboards.map((item) => <option key={item.id} value={item.id}>{item.name} · v{item.version}</option>)}</select></label>
       </aside>
     </div>}
-    {selectedWidget && <Suspense fallback={null}><WidgetSettingsPanel widget={selectedWidget} variables={variables} onChange={(patch) => onUpdateWidget(selectedWidget.id, patch)} onClose={onCloseWidgetSettings} /></Suspense>}
+    {selectedWidget && <Suspense fallback={null}><WidgetSettingsPanel widget={selectedWidget} variables={variables} overview={overview} selectedEdges={selectedEdges} onChange={(patch) => onUpdateWidget(selectedWidget.id, patch)} onClose={onCloseWidgetSettings} /></Suspense>}
   </>
 }

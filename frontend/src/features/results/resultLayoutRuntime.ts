@@ -5,7 +5,7 @@ export const RESULT_WIDGET_STATES = ['UNCONFIGURED', 'WAITING', 'EMPTY', 'PARTIA
 export type ResultWidgetState = typeof RESULT_WIDGET_STATES[number]
 
 const supportedTypes = new Set<DashboardWidget['type']>([
-  'open_cell_map', 'open_cell_summary', 'kpi', 'verdict', 'gauge', 'edge_bar', 'summary', 'time_series', 'scatter', 'note', 'result_table', 'contour', 'video', 'video_grid', 'model3d', 'workflow', 'chassis_summary', 'chassis_diagram', 'chassis_bar', 'chassis_table', 'run_comparison',
+  'open_cell_map', 'open_cell_summary', 'kpi', 'verdict', 'gauge', 'edge_bar', 'name_value', 'summary', 'time_series', 'scatter', 'note', 'result_table', 'contour', 'video', 'video_grid', 'model3d', 'workflow', 'chassis_summary', 'chassis_diagram', 'chassis_bar', 'chassis_table', 'run_comparison',
 ])
 
 const messages: Record<ResultWidgetState, string> = {
@@ -56,7 +56,7 @@ export function resultWidgetState(
   const availableContracts = new Set(normalizeContracts(bindings.available_data_contracts))
   if (widgetContracts(widget, requiredDataContracts, bindings).some((item) => !availableContracts.has(item))) return "WAITING"
   if (!bindings.load_cases.length && !bindings.latest_result_run && !bindings.scalars.length) return "EMPTY"
-  if (["kpi", "gauge", "verdict", "result_table"].includes(widget.type) && !bindings.scalars.length) return "EMPTY"
+  if (["kpi", "gauge", "verdict", "name_value", "result_table"].includes(widget.type) && !bindings.scalars.length) return "EMPTY"
   return "READY"
 }
 

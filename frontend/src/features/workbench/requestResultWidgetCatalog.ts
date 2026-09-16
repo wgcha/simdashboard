@@ -6,7 +6,7 @@ export type RequestResultWidgetCatalogItem = {
   type: WidgetType
   label: string
   description: string
-  group: '요약' | 'KPI' | '판정' | '표' | '시계열' | '이미지' | '영상' | '전용 평가'
+  group: '요약' | 'KPI' | '판정' | '표' | '시계열' | '차트' | '이미지' | '영상' | '전용 평가'
   data_contracts: readonly string[]
   variable_key?: string
 }
@@ -17,6 +17,7 @@ export const REQUEST_RESULT_WIDGET_CATALOG: readonly RequestResultWidgetCatalogI
   { type: 'verdict', label: '패스/실패 카드', description: 'PASS·FAIL 또는 기준 판정을 표시합니다.', group: '판정', data_contracts: ['SCALAR_RESULT'], variable_key: 'overall_verdict' },
   { type: 'gauge', label: '임계값 게이지', description: '값과 관리 기준을 게이지로 비교합니다.', group: 'KPI', data_contracts: ['SCALAR_RESULT'] },
   { type: 'edge_bar', label: semanticWidgetTypeLabels.edge_bar, description: '항목별 결과를 막대로 비교합니다.', group: '표', data_contracts: ['SCALAR_RESULT'] },
+  { type: 'name_value', label: semanticWidgetTypeLabels.name_value, description: '항목 이름과 값을 막대·점·선으로 비교합니다.', group: '차트', data_contracts: ['SCALAR_RESULT'] },
   { type: 'time_series', label: semanticWidgetTypeLabels.time_series, description: '시간 또는 스텝별 결과 변화를 표시합니다.', group: '시계열', data_contracts: ['TIME_SERIES'], variable_key: 'time_history' },
   { type: 'scatter', label: '산점도', description: '두 결과 변수의 관계를 표시합니다.', group: '시계열', data_contracts: ['SCALAR_RESULT'] },
   { type: 'result_table', label: semanticWidgetTypeLabels.result_table, description: '여러 결과 변수를 행과 열로 보여줍니다.', group: '표', data_contracts: ['SCALAR_RESULT'] },

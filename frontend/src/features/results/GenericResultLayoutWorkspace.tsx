@@ -11,7 +11,7 @@ import { resultLayoutPollDelay, resultWidgetMessage, resultWidgetState, shouldPo
 import { useMemoryQuery } from '../../shared/cache/useMemoryQuery'
 
 const ResponsiveGridLayout = WidthProvider(Responsive) as unknown as ComponentType<any>
-const domainWidgetTypes = new Set<DashboardWidget['type']>(['edge_bar', 'time_series', 'scatter', 'contour', 'video', 'note', 'open_cell_map', 'open_cell_summary', 'chassis_summary', 'chassis_diagram', 'chassis_bar', 'chassis_table', 'run_comparison'])
+const domainWidgetTypes = new Set<DashboardWidget['type']>(['edge_bar', 'name_value', 'time_series', 'scatter', 'contour', 'video', 'note', 'open_cell_map', 'open_cell_summary', 'chassis_summary', 'chassis_diagram', 'chassis_bar', 'chassis_table', 'run_comparison'])
 const noOp = () => {}
 
 function scalarForWidget(widget: DashboardWidget, bindings: ResultLayoutBindings) {

@@ -1,9 +1,12 @@
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.database import connect
 from app.main import app
+from app.services.request_result_definition import compile_request_result_definition
+from app.schemas.workbench import RequestResultDefinition
 
 
 def _payload(name: str, *, widgets: list[dict], task_id: str = "analysis-db-publish") -> dict:
@@ -40,6 +43,33 @@ def _widgets(suffix: str) -> list[dict]:
             "required": False,
         },
     ]
+
+
+def test_name_value_chart_style_is_preserved_in_compiled_dashboard() -> None:
+    compiled = compile_request_result_definition(
+        {
+            "page_name": "이름 값 결과",
+            "page_description": "",
+            "widgets": [{
+                "id": "name-value",
+                "type": "name_value",
+                "title": "항목 이름–값 그래프",
+                "chart_style": "line",
+                "data_contracts": ["scalar_result"],
+                "required": False,
+            }],
+        },
+        request_type_id="name-value-request",
+        request_type_display_name="이름 값 요청",
+    )
+    widget = compiled["template"]["page_definitions"][0]["widgets"][0]
+    assert widget["type"] == "name_value"
+    assert widget["settings"]["chartStyle"] == "line"
+    assert (widget["w"], widget["h"]) == (12, 5)
+    with pytest.raises(ValueError):
+        RequestResultDefinition.model_validate({
+            "widgets": [{"id": "invalid-style", "type": "name_value", "title": "잘못된 스타일", "chart_style": "area"}],
+        })
 
 
 def test_request_result_definition_compiles_to_published_template_and_profile() -> None:

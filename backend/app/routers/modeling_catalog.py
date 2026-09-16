@@ -42,6 +42,7 @@ def get_widget_catalog() -> list[dict[str, Any]]:
         {"type": "verdict", "label": "패스/실패 판정", "category": "요약", "allowed_data_types": ["VERDICT", "NUMBER"], "default_size": [3, 2]},
         {"type": "gauge", "label": "임계값 게이지", "category": "차트", "allowed_data_types": ["NUMBER"], "default_size": [4, 3]},
         {"type": "edge_bar", "label": "막대그래프", "category": "차트", "allowed_data_types": ["NUMBER"], "default_size": [6, 4]},
+        {"type": "name_value", "label": "항목 이름–값 그래프", "category": "차트", "allowed_data_types": ["NUMBER", "FLOAT", "INTEGER"], "default_size": [8, 4]},
         {"type": "time_series", "label": "시계열 그래프", "category": "차트", "allowed_data_types": ["TIME_SERIES", "CURVE"], "default_size": [8, 5]},
         {"type": "scatter", "label": "산점도", "category": "차트", "allowed_data_types": ["NUMBER", "FLOAT", "INTEGER", "TIME_SERIES", "CURVE"], "default_size": [6, 4]},
         {"type": "result_table", "label": "데이터 테이블", "category": "표", "allowed_data_types": ["NUMBER", "FLOAT", "INTEGER", "TEXT", "TIME_SERIES", "CURVE", "IMAGE", "VIDEO", "MODEL_3D"], "default_size": [12, 4]},

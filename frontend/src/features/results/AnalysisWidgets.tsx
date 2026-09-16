@@ -3,10 +3,14 @@ import { Activity, AlertTriangle, Check, Database, LayoutDashboard, Lock, Messag
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 
 import { DropVideoGrid } from './DropVideoGrid'
+import { NameValueChart } from './NameValueChart'
 import { WidgetFocusFrame } from './WidgetFocusFrame'
 import { VideoGridSettings } from './VideoGridSettings'
+import { ItemTransferPicker } from '../../shared/components/ItemTransferPicker'
+import './WidgetVariableSelection.css'
 import type { DashboardWidget, Overview, QualityThreshold, VariableDefinition } from '../../types'
 import { semanticWidgetTypeLabels } from '../../shared/components/semanticLabels'
+import { hasExplicitVariableSelection, legacyDefaultVariableIds, orderByVariableIds, selectedVariableIds, supportsMultipleVariables } from './widgetVariableSelection'
 
 const SERIES_COLORS = [1, 3, 4, 5].map((index) => `var(--color-chart-series-${index})`)
 
@@ -24,6 +28,8 @@ export function WidgetCard({ widget, overview, selectedEdges, editMode, canManag
 
 function WidgetContent({ widget, overview, selectedEdges, canManageThresholds, threshold, openCellThreshold, onSaveThreshold, onSaveOpenCellThreshold }: { widget: DashboardWidget; overview: Overview; selectedEdges: string[]; canManageThresholds: boolean; threshold?: QualityThreshold; openCellThreshold?: QualityThreshold; onSaveThreshold: (value: number) => void; onSaveOpenCellThreshold: (value: number) => void }) {
   const type = widget.type
+  const variableIds = selectedVariableIds(widget.settings)
+  const hasExplicitSelection = hasExplicitVariableSelection(widget.settings)
   const edgeOrder = ['top', 'bottom', 'left', 'right']
   const openCellScalars = overview.scalar_results.filter((item) => item.result_group === 'OPEN_CELL' && item.unit.toLowerCase() === 'mpa' && item.variable_key.toLowerCase().includes('stress') && hasNumericValue(item.value_double))
   const filteredScalars = openCellScalars
@@ -31,37 +37,54 @@ function WidgetContent({ widget, overview, selectedEdges, canManageThresholds, t
     .sort((a, b) => edgeOrder.indexOf(a.variable_key.split('_')[0]) - edgeOrder.indexOf(b.variable_key.split('_')[0]))
   const edgeLabel = (key: string) => ({ top: '상단', bottom: '하단', left: '좌측', right: '우측' }[key.split('_')[0]] ?? key)
   const configuredScalars = widget.settings?.variableId ? overview.scalar_results.filter((item) => item.variable_key === widget.settings?.variableId && hasNumericValue(item.value_double)) : filteredScalars
-  const barData = configuredScalars.map((item) => ({ name: edgeLabel(item.variable_key), value: item.value_double, verdict: item.verdict }))
+  const allNumericScalars = overview.scalar_results.filter((item) => hasNumericValue(item.value_double))
+  const selectedScalars = variableIds === undefined ? undefined : orderByVariableIds(allNumericScalars, variableIds)
+  const nameValueScalars = selectedScalars ?? (widget.settings?.variableId ? configuredScalars : allNumericScalars)
+  const tableScalars = selectedScalars ?? configuredScalars
+  const chartScalars = selectedScalars ?? configuredScalars
+  const barData = chartScalars.map((item) => ({ name: edgeLabel(item.variable_key), value: item.value_double, verdict: item.verdict, unit: item.unit }))
   const openCellLimit = openCellThreshold?.threshold_double ?? openCellScalars.find((item) => hasNumericValue(item.threshold_double))?.threshold_double ?? 75
   const openCellVerdict = openCellScalars.some((item) => item.verdict === 'FAIL') ? 'FAIL' : openCellScalars.length ? 'PASS' : 'NO_DATA'
-  const boundScalar = widget.settings?.variableId ? configuredScalars[0] : undefined
-  const widgetThreshold = widget.settings?.variableId ? (hasNumericValue(boundScalar?.threshold_double) ? boundScalar.threshold_double : null) : openCellLimit
-  const widgetUnit = boundScalar?.unit ?? configuredScalars[0]?.unit ?? 'MPa'
+  const boundScalar = variableIds?.length === 1 ? chartScalars[0] : widget.settings?.variableId ? configuredScalars[0] : undefined
+  const widgetThreshold = boundScalar && hasNumericValue(boundScalar.threshold_double) ? boundScalar.threshold_double : variableIds === undefined ? openCellLimit : null
+  const widgetUnit = new Set(chartScalars.map((item) => item.unit)).size === 1 ? chartScalars[0]?.unit ?? 'MPa' : ''
   const widgetVerdict = boundScalar?.verdict ?? openCellVerdict
-  const chartMaximum = Math.max(...barData.map((item) => item.value), widgetThreshold ?? 0, 1)
+  const chartValues = [...barData.map((item) => item.value), widgetThreshold ?? 0]
+  const chartMinimum = Math.min(0, ...chartValues)
+  const chartMaximum = Math.max(0, ...chartValues)
+  const chartPadding = Math.max((chartMaximum - chartMinimum) * 0.15, 1)
+  const barDomain: [number, number] = [chartMinimum - chartPadding, chartMaximum + chartPadding]
   const resultLocation = (key: string) => overview.result_locations.find((item) => item.variable_key === key)
+  const seriesKeys = variableIds ?? (widget.settings?.variableId ? [String(widget.settings.variableId)] : selectedEdges.map((edge) => `${edge}_edge_stress_time`))
   const seriesData = useMemo(() => {
     const grouped = new Map<number, Record<string, number>>()
-    overview.time_series.filter((item) => hasNumericValue(item.time_value) && hasNumericValue(item.value) && (widget.settings?.variableId ? item.variable_key === widget.settings.variableId : selectedEdges.some((edge) => item.variable_key.startsWith(edge)))).forEach((item) => {
+    overview.time_series.filter((item) => hasNumericValue(item.time_value) && hasNumericValue(item.value) && seriesKeys.includes(item.variable_key)).forEach((item) => {
       const point = grouped.get(item.time_value) ?? { time: item.time_value }
       point[item.variable_key] = item.value
       grouped.set(item.time_value, point)
     })
     return [...grouped.values()]
-  }, [overview.time_series, selectedEdges, widget.settings?.variableId])
+  }, [overview.time_series, seriesKeys])
 
-  if (type.startsWith('chassis_')) return <ChassisWidgetContent type={type} overview={overview} threshold={threshold} canManageThreshold={canManageThresholds} onSaveThreshold={onSaveThreshold} variableId={String(widget.settings?.variableId ?? '')} />
+  if (supportsMultipleVariables(type) && hasExplicitSelection && !variableIds?.length) return <div className="widget-empty"><Database/><strong>선택한 항목이 없습니다.</strong><small>위젯 설정에서 표시할 결과 항목을 추가하세요.</small></div>
+  if (type === 'edge_bar' && new Set(chartScalars.map((item) => item.unit)).size > 1) return <div className="widget-empty"><AlertTriangle/><strong>단위가 다른 항목은 함께 막대로 표시할 수 없습니다.</strong><small>위젯 설정에서 같은 단위의 항목만 선택하세요.</small></div>
+  if (type === 'time_series') {
+    const selectedSeries = overview.time_series.filter((item) => seriesKeys.includes(item.variable_key))
+    if (new Set(selectedSeries.map((item) => item.value_unit)).size > 1 || new Set(selectedSeries.map((item) => item.time_unit)).size > 1) return <div className="widget-empty"><AlertTriangle/><strong>단위 또는 시간 단위가 다른 시계열은 함께 표시할 수 없습니다.</strong><small>위젯 설정에서 같은 단위의 항목만 선택하세요.</small></div>
+  }
+  if (type.startsWith('chassis_')) return <ChassisWidgetContent type={type} overview={overview} threshold={threshold} canManageThreshold={canManageThresholds} onSaveThreshold={onSaveThreshold} variableId={String(widget.settings?.variableId ?? '')} variableIds={variableIds} hasExplicitSelection={hasExplicitSelection} />
   if (widget.settings?.variableId && type === 'time_series' && !overview.time_series.some((item)=>item.variable_key===widget.settings?.variableId)) return <div className="widget-empty"><Database/><strong>선언된 변수에 결과 데이터가 없습니다.</strong><small>{String(widget.settings.variableId)} 키의 시간 이력을 가져오면 자동 표시됩니다.</small></div>
-  if (widget.settings?.variableId && ['kpi','gauge','edge_bar','scatter','result_table'].includes(type) && !overview.scalar_results.some((item)=>item.variable_key===widget.settings?.variableId)) return <div className="widget-empty"><Database/><strong>선언된 변수에 결과 데이터가 없습니다.</strong><small>{String(widget.settings.variableId)} 키의 숫자 결과를 가져오면 자동 표시됩니다.</small></div>
+  if (widget.settings?.variableId && ['kpi','gauge','edge_bar','scatter','result_table','name_value'].includes(type) && !overview.scalar_results.some((item)=>item.variable_key===widget.settings?.variableId)) return <div className="widget-empty"><Database/><strong>선언된 변수에 결과 데이터가 없습니다.</strong><small>{String(widget.settings.variableId)} 키의 숫자 결과를 가져오면 자동 표시됩니다.</small></div>
 
   if (type === 'open_cell_map') return <OpenCellMap overview={overview} />
   if (type === 'open_cell_summary') return <OpenCellSummary overview={overview} threshold={openCellThreshold} canManageThreshold={canManageThresholds} onSaveThreshold={onSaveOpenCellThreshold} />
   if (type === 'verdict') return <div className={`verdict-block ${widgetVerdict.toLowerCase()}`}><div className="verdict-icon">{widgetVerdict === 'PASS' ? <Check /> : <X />}</div><div><strong>{widgetVerdict}</strong><span>{widgetVerdict === 'PASS' ? '허용 기준 만족' : widgetVerdict === 'FAIL' ? '기준 초과 감지' : '판정 데이터 없음'}</span></div><small>{widgetThreshold == null ? widgetUnit : `LIMIT ${widgetThreshold} ${widgetUnit}`}</small></div>
   if (type === 'summary') return overview.load_case.analysis_type === 'SIDE_CLAMP' ? <div className="summary-grid"><div><span>클램프 압력</span><strong>{overview.load_case.parameters.pressure_mpa ?? overview.load_case.parameters.clamp_pressure_kpa ?? '-'}<em>MPa</em></strong></div><div><span>유지 시간</span><strong>{overview.load_case.parameters.hold_time_sec ?? overview.load_case.parameters.hold_time_s ?? '-'}<em>s</em></strong></div><div><span>클램프 면</span><strong>{Array.isArray(overview.load_case.parameters.faces) ? overview.load_case.parameters.faces.join(' / ') : 'LEFT / RIGHT'}</strong></div><div><span>요소 수</span><strong>{overview.template_execution?.generated_model.elements.toLocaleString() ?? '-'}</strong></div></div> : <div className="summary-grid"><div><span>낙하 높이</span><strong>{overview.load_case.parameters.drop_height_mm}<em>mm</em></strong></div><div><span>낙하 방향</span><strong>{overview.load_case.parameters.direction ?? overview.load_case.parameters.impact_direction ?? '-'}</strong></div><div><span>자동화 템플릿</span><strong>{overview.template_execution?.template_version ?? '-'}</strong></div><div><span>요소 수</span><strong>{overview.template_execution?.generated_model.elements.toLocaleString() ?? '-'}</strong></div></div>
-  if (type === 'edge_bar') return <ResponsiveContainer width="100%" height="100%"><BarChart data={barData} margin={{ top: 12, right: 18, left: -12, bottom: 0 }}><CartesianGrid vertical={false} stroke="var(--color-chart-grid)" strokeDasharray="3 3"/><XAxis dataKey="name" tick={{ fill: 'var(--color-chart-axis)', fontSize: 14.4 }} axisLine={false} tickLine={false}/><YAxis domain={[0, chartMaximum * 1.15]} tick={{ fill: 'var(--color-chart-axis)', fontSize: 13.2 }} axisLine={false} tickLine={false} unit=""/><Tooltip contentStyle={{ background: 'var(--color-surface-raised)', color: 'var(--color-text)', border: '1px solid var(--color-border-strong)', borderRadius: 10 }} formatter={(value: number) => [`${value} ${widgetUnit}`, '결과']}/>{widget.settings?.showThreshold !== false && widgetThreshold != null && <ReferenceLine y={widgetThreshold} stroke="var(--color-warning)" strokeDasharray="5 5" label={{ value: `기준 ${widgetThreshold}`, fill: 'var(--color-warning)', fontSize: 13.2, position: 'insideTopRight' }}/>}<Bar dataKey="value" radius={[5,5,1,1]}>{barData.map((entry) => <Cell key={entry.name} fill={entry.verdict === 'FAIL' ? 'var(--color-danger)' : 'var(--color-success)'} />)}</Bar></BarChart></ResponsiveContainer>
-  if (type === 'time_series') { const seriesKeys = widget.settings?.variableId ? [String(widget.settings.variableId)] : selectedEdges.map((edge) => `${edge}_edge_stress_time`); return <ResponsiveContainer width="100%" height="100%"><LineChart data={seriesData} margin={{ top: 10, right: 22, left: -8, bottom: 2 }}><CartesianGrid stroke="var(--color-chart-grid)" strokeDasharray="3 3"/><XAxis dataKey="time" tick={{ fill: 'var(--color-chart-axis)', fontSize: 13.2 }} axisLine={{ stroke: 'var(--color-border-strong)' }} tickLine={false} label={{ value: `TIME (${overview.time_series.find((item)=>seriesKeys.includes(item.variable_key))?.time_unit ?? 'ms'})`, fill: 'var(--color-chart-axis)', fontSize: 12, position: 'insideBottomRight', offset: -2 }}/><YAxis tick={{ fill: 'var(--color-chart-axis)', fontSize: 13.2 }} axisLine={false} tickLine={false}/><Tooltip contentStyle={{ background: 'var(--color-surface-raised)', color: 'var(--color-text)', border: '1px solid var(--color-border-strong)', borderRadius: 10 }}/><Legend wrapperStyle={{ fontSize: 13.2, paddingTop: 5 }}/>{widget.settings?.showThreshold !== false && widgetThreshold != null && <ReferenceLine y={widgetThreshold} stroke="var(--color-warning)" strokeDasharray="6 4"/>}{seriesKeys.map((key, index) => <Line key={key} type="monotone" dataKey={key} name={overview.time_series.find((item) => item.variable_key === key)?.display_name ?? edgeLabel(key)} dot={false} stroke={String(widget.settings?.color ?? SERIES_COLORS[index % SERIES_COLORS.length])} strokeWidth={2}/>)}</LineChart></ResponsiveContainer> }
+  if (type === 'edge_bar') return <ResponsiveContainer width="100%" height="100%"><BarChart data={barData} margin={{ top: 12, right: 18, left: -12, bottom: 0 }}><CartesianGrid vertical={false} stroke="var(--color-chart-grid)" strokeDasharray="3 3"/><XAxis dataKey="name" tick={{ fill: 'var(--color-chart-axis)', fontSize: 14.4 }} axisLine={false} tickLine={false}/><YAxis domain={barDomain} tick={{ fill: 'var(--color-chart-axis)', fontSize: 13.2 }} axisLine={false} tickLine={false} unit=""/><Tooltip contentStyle={{ background: 'var(--color-surface-raised)', color: 'var(--color-text)', border: '1px solid var(--color-border-strong)', borderRadius: 10 }} formatter={(value: number, _name, item) => [`${value}${item?.payload?.unit ? ` ${item.payload.unit}` : ''}`, '결과']}/>{widget.settings?.showThreshold !== false && widgetThreshold != null && <ReferenceLine y={widgetThreshold} stroke="var(--color-warning)" strokeDasharray="5 5" label={{ value: `기준 ${widgetThreshold} ${widgetUnit}`, fill: 'var(--color-warning)', fontSize: 13.2, position: 'insideTopRight' }}/>}<Bar dataKey="value" radius={[5,5,1,1]}>{barData.map((entry) => <Cell key={entry.name} fill={entry.verdict === 'FAIL' ? 'var(--color-danger)' : 'var(--color-success)'} />)}</Bar></BarChart></ResponsiveContainer>
+  if (type === 'time_series') return <ResponsiveContainer width="100%" height="100%"><LineChart data={seriesData} margin={{ top: 10, right: 22, left: -8, bottom: 2 }}><CartesianGrid stroke="var(--color-chart-grid)" strokeDasharray="3 3"/><XAxis dataKey="time" tick={{ fill: 'var(--color-chart-axis)', fontSize: 13.2 }} axisLine={{ stroke: 'var(--color-border-strong)' }} tickLine={false} label={{ value: `TIME (${overview.time_series.find((item)=>seriesKeys.includes(item.variable_key))?.time_unit ?? 'ms'})`, fill: 'var(--color-chart-axis)', fontSize: 12, position: 'insideBottomRight', offset: -2 }}/><YAxis tick={{ fill: 'var(--color-chart-axis)', fontSize: 13.2 }} axisLine={false} tickLine={false}/><Tooltip contentStyle={{ background: 'var(--color-surface-raised)', color: 'var(--color-text)', border: '1px solid var(--color-border-strong)', borderRadius: 10 }}/><Legend wrapperStyle={{ fontSize: 13.2, paddingTop: 5 }}/>{widget.settings?.showThreshold !== false && widgetThreshold != null && <ReferenceLine y={widgetThreshold} stroke="var(--color-warning)" strokeDasharray="6 4"/>}{seriesKeys.map((key, index) => <Line key={key} type="monotone" dataKey={key} name={overview.time_series.find((item) => item.variable_key === key)?.display_name ?? edgeLabel(key)} dot={false} stroke={String(widget.settings?.color ?? SERIES_COLORS[index % SERIES_COLORS.length])} strokeWidth={2}/>)}</LineChart></ResponsiveContainer>
   if (type === 'note') return <div className="note-block"><MessageSquareText /><blockquote>{overview.notes[0]?.body ?? '등록된 의견이 없습니다.'}</blockquote><footer><span>{overview.notes[0]?.author ?? '-'}</span><small>ANALYSIS ENGINEER</small></footer></div>
-  if (type === 'result_table') return <div className="result-table"><div className="table-head"><span>측정 위치</span><span>결과</span><span>허용 기준</span><span>여유율</span><span>판정</span></div>{configuredScalars.map((item) => { const location = resultLocation(item.variable_key); const hasThreshold = hasNumericValue(item.threshold_double) && item.threshold_double !== 0; return <div className="table-row" key={item.id}><strong><i className={`edge-${item.variable_key.split('_')[0]}`} /><span>{item.display_name.replace(' 최대 응력','')}{location && <small>{location.entity_type} {location.entity_id} · ({location.x.toFixed(1)}, {location.y.toFixed(1)}, {location.z.toFixed(1)})</small>}</span></strong><span>{item.value_double.toFixed(1)} <small>{item.unit}</small></span><span>{hasThreshold ? item.threshold_double.toFixed(1) : ''} <small>{hasThreshold ? item.unit : ''}</small></span><span className={item.verdict === 'FAIL' ? 'negative' : 'positive'}>{hasThreshold ? `${((item.threshold_double - item.value_double) / item.threshold_double * 100).toFixed(1)}%` : ''}</span><b className={item.verdict.toLowerCase()}>{item.verdict}</b></div> })}</div>
+  if (type === 'name_value') return <NameValueChart results={nameValueScalars} chartStyle={widget.settings?.chartStyle} color={widget.settings?.color} />
+  if (type === 'result_table') return <div className="result-table"><div className="table-head"><span>측정 위치</span><span>결과</span><span>허용 기준</span><span>여유율</span><span>판정</span></div>{tableScalars.map((item) => { const location = resultLocation(item.variable_key); const hasThreshold = hasNumericValue(item.threshold_double) && item.threshold_double !== 0; return <div className="table-row" key={item.id}><strong><i className={`edge-${item.variable_key.split('_')[0]}`} /><span>{item.display_name.replace(' 최대 응력','')}{location && <small>{location.entity_type} {location.entity_id} · ({location.x.toFixed(1)}, {location.y.toFixed(1)}, {location.z.toFixed(1)})</small>}</span></strong><span>{item.value_double.toFixed(1)} <small>{item.unit}</small></span><span>{hasThreshold ? item.threshold_double.toFixed(1) : ''} <small>{hasThreshold ? item.unit : ''}</small></span><span className={item.verdict === 'FAIL' ? 'negative' : 'positive'}>{hasThreshold ? `${((item.threshold_double - item.value_double) / item.threshold_double * 100).toFixed(1)}%` : ''}</span><b className={item.verdict.toLowerCase()}>{item.verdict}</b></div> })}</div>
   if (type === 'contour') { const variableId = String(widget.settings?.variableId ?? ''); const asset = overview.media.find((item) => item.asset_type === 'IMAGE' && (!variableId || item.metadata?.variable_key === variableId)) ?? overview.media.find((item) => item.asset_type === 'IMAGE'); return asset?.asset_url ? <div className="contour"><img src={asset.asset_url} alt={asset.title} /></div> : <div className="empty-widget">등록된 컨투어 이미지가 없습니다.</div> }
   if (type === 'kpi' || type === 'gauge') {
     const bound = overview.scalar_results.find((item) => item.variable_key === widget.settings?.variableId && hasNumericValue(item.value_double)) ?? openCellScalars[0]
@@ -103,12 +126,65 @@ function OpenCellMap({ overview }: { overview: Overview }) {
   </div>
 }
 
-export function WidgetSettingsPanel({ widget, variables, onChange, onClose }: { widget: DashboardWidget; variables: VariableDefinition[]; onChange: (patch: Partial<DashboardWidget>) => void; onClose: () => void }) {
-  const chartOptions: Array<[DashboardWidget['type'],string]> = ([...(widget.type === 'run_comparison' ? [['run_comparison','Run 비교·검토 패널'] as [DashboardWidget['type'], string]] : []),['summary','하중 조건 요약'],['kpi','KPI 카드'],['verdict','패스/실패 카드'],['gauge','임계값 게이지'],['edge_bar','막대 그래프'],['time_series','시계열 그래프'],['scatter','산점도'],['result_table','결과 표'],['open_cell_map','Open Cell 맵'],['open_cell_summary','Open Cell 판정 요약'],['chassis_summary','Chassis 판정 요약'],['chassis_diagram','Chassis 위치도'],['chassis_bar','Chassis 비교 그래프'],['chassis_table','Chassis 상세 표'],['contour','컨투어 이미지'],['video','영상 플레이어'],['video_grid','낙하 영상 비교'],['note','수행자 의견']] as Array<[DashboardWidget['type'], string]>).map(([type, label]) => [type, semanticWidgetTypeLabels[type] ?? label])
+export function WidgetSettingsPanel({ widget, variables, overview, selectedEdges, onChange, onClose }: { widget: DashboardWidget; variables: VariableDefinition[]; overview?: Overview; selectedEdges: string[]; onChange: (patch: Partial<DashboardWidget>) => void; onClose: () => void }) {
+  const chartOptions: Array<[DashboardWidget['type'],string]> = ([...(widget.type === 'run_comparison' ? [['run_comparison','Run 비교·검토 패널'] as [DashboardWidget['type'], string]] : []),['summary','하중 조건 요약'],['kpi','KPI 카드'],['verdict','패스/실패 카드'],['gauge','임계값 게이지'],['edge_bar','막대 그래프'],['time_series','시계열 그래프'],['scatter','산점도'],['result_table','결과 표'],['name_value','항목-값 그래프'],['open_cell_map','Open Cell 맵'],['open_cell_summary','Open Cell 판정 요약'],['chassis_summary','Chassis 판정 요약'],['chassis_diagram','Chassis 위치도'],['chassis_bar','Chassis 비교 그래프'],['chassis_table','Chassis 상세 표'],['contour','컨투어 이미지'],['video','영상 플레이어'],['video_grid','낙하 영상 비교'],['note','수행자 의견']] as Array<[DashboardWidget['type'], string]>).map(([type, label]) => [type, semanticWidgetTypeLabels[type] ?? label])
+  const isMultiVariableWidget = supportsMultipleVariables(widget.type)
+  const configuredIds = selectedVariableIds(widget.settings)
+  const configuredIdSet = new Set(configuredIds)
   const currentVariable = variables.find((item) => item.id === widget.settings?.variableId)
-  const compatibleVariables = variables.filter((item) => item.allowed_widgets.includes(widget.type) || item.id === currentVariable?.id)
+  const compatibleVariables = variables.filter((item) => item.allowed_widgets.includes(widget.type) || configuredIdSet.has(item.id) || item.id === currentVariable?.id)
+  const effectiveVariableIds = hasExplicitVariableSelection(widget.settings) ? (configuredIds ?? []) : configuredIds ?? legacyDefaultVariableIds(widget.type, overview, selectedEdges)
   const aggregations = currentVariable?.allowed_aggregations ?? ['MAX','MIN','AVG','LATEST','RAW']
-  return <div className="drawer-backdrop" onMouseDown={onClose}><aside className="widget-settings-drawer" onMouseDown={(e)=>e.stopPropagation()}><header><div><span>WIDGET SETTINGS</span><h2>위젯 설정</h2></div><button onClick={onClose}><X/></button></header><label><span>제목</span><input value={widget.title} onChange={(e)=>onChange({title:e.target.value})}/></label><label><span>글자 크기 (px)</span><input type="number" min="8" max="24" step="1" value={Number(widget.settings?.fontSize ?? 10)} onChange={(e)=>onChange({settings:{fontSize:Math.min(24,Math.max(8,Number(e.target.value)||10))}})}/></label><label><span>시각화 유형</span><select value={widget.type} disabled={widget.type === 'run_comparison'} onChange={(e)=>onChange({type:e.target.value as DashboardWidget['type']})}>{chartOptions.map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label>{widget.type === 'video_grid' && <VideoGridSettings settings={widget.settings} onChange={onChange} />}{widget.type !== 'run_comparison' && <><label><span>데이터 변수</span><select value={String(widget.settings?.variableId ?? '')} onChange={(e)=>onChange({settings:{variableId:e.target.value||undefined}})}><option value="">전체/위젯 기본 변수</option>{compatibleVariables.map((item)=><option key={item.id} value={item.id}>{item.display_name} ({item.unit}){item.has_data?'':' · 데이터 대기'}</option>)}</select></label><label><span>집계 방식</span><select value={String(widget.settings?.aggregation ?? aggregations[0])} onChange={(e)=>onChange({settings:{aggregation:e.target.value}})}>{aggregations.map((item)=><option key={item}>{item}</option>)}</select></label></>}<label><span>강조 색상</span><div className="color-setting"><input type="color" value={String(widget.settings?.color ?? '#50d5ff')} onChange={(e)=>onChange({settings:{color:e.target.value}})}/><code>{String(widget.settings?.color ?? '#50d5ff')}</code></div></label><label className="check-setting"><input type="checkbox" checked={widget.settings?.showThreshold !== false} onChange={(e)=>onChange({settings:{showThreshold:e.target.checked}})}/><span>기준선 표시</span></label><label className="check-setting"><input type="checkbox" checked={widget.settings?.includeInReport !== false} onChange={(e)=>onChange({settings:{includeInReport:e.target.checked}})}/><span>보고서 포함</span></label><div className="settings-note"><Lock/><p>카탈로그에 선언되고 현재 그래프에 허용된 변수만 표시됩니다. 변수 키로 실제 결과 테이블과 연결됩니다.</p></div><button className="primary-button" onClick={onClose}><Check/> 설정 완료</button></aside></div>
+  const [typeNotice, setTypeNotice] = useState('')
+  const changeWidgetType = (nextType: DashboardWidget['type']) => {
+    const compatibleForNext = new Set(variables.filter((item) => item.allowed_widgets.includes(nextType)).map((item) => item.id))
+    const compatibleIds = configuredIds?.filter((id) => compatibleForNext.has(id))
+    const retainedIds = supportsMultipleVariables(nextType) ? compatibleIds : compatibleIds?.slice(0, 1)
+    const omitted = (configuredIds ?? []).filter((id) => !retainedIds?.includes(id))
+    setTypeNotice(omitted.length ? supportsMultipleVariables(nextType) ? '새 표시 방식에서 지원하지 않는 항목은 제외되었습니다.' : '이 표시 방식에서는 호환되는 한 항목만 선택할 수 있어 나머지 항목을 제외했습니다.' : '')
+    const nextSettings = supportsMultipleVariables(nextType)
+      ? (retainedIds === undefined ? { variableId: undefined, variableIds: undefined } : { variableId: undefined, variableIds: retainedIds })
+      : { variableId: retainedIds?.[0], variableIds: undefined }
+    onChange({ type: nextType, settings: nextSettings })
+  }
+  const selectedVariableSet = new Set(effectiveVariableIds)
+  const firstSelectedVariable = variables.find((item) => selectedVariableSet.has(item.id))
+  const selectedTimeSeries = overview?.time_series.filter((item) => selectedVariableSet.has(item.variable_key)) ?? []
+  const firstTimeSeries = selectedTimeSeries[0]
+  const selectionOptions = compatibleVariables.map((item) => {
+    const isSelected = selectedVariableSet.has(item.id)
+    const unitMismatch = (widget.type === 'edge_bar' || widget.type === 'time_series') && firstSelectedVariable !== undefined && firstSelectedVariable.unit !== item.unit
+    const timeUnitMismatch = widget.type === 'time_series' && Boolean(firstTimeSeries?.time_unit) && Boolean(overview?.time_series.find((point) => point.variable_key === item.id)?.time_unit) && firstTimeSeries?.time_unit !== overview?.time_series.find((point) => point.variable_key === item.id)?.time_unit
+    const disabled = !isSelected && (unitMismatch || timeUnitMismatch)
+    const waiting = item.has_data ? '' : ' · 데이터 대기'
+    const restriction = disabled ? ' · 단위가 달라 함께 표시할 수 없음' : ''
+    return { id:item.id, label:item.display_name, description:`${item.unit} · ${item.variable_key}${waiting}${restriction}`, disabled }
+  })
+  return <div className="drawer-backdrop" onMouseDown={onClose}>
+    <aside className="widget-settings-drawer" onMouseDown={(event) => event.stopPropagation()}>
+      <header><div><span>WIDGET SETTINGS</span><h2>위젯 설정</h2></div><button onClick={onClose}><X /></button></header>
+      <label><span>제목</span><input value={widget.title} onChange={(event) => onChange({ title:event.target.value })} /></label>
+      <label><span>글자 크기 (px)</span><input type="number" min="8" max="24" step="1" value={Number(widget.settings?.fontSize ?? 10)} onChange={(event) => onChange({ settings:{ fontSize:Math.min(24, Math.max(8, Number(event.target.value) || 10)) } })} /></label>
+      <label><span>시각화 유형</span><select value={widget.type} disabled={widget.type === 'run_comparison'} onChange={(event) => changeWidgetType(event.target.value as DashboardWidget['type'])}>{chartOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+      {typeNotice && <p className="widget-variable-selection-notice" role="status">{typeNotice}</p>}
+      {widget.type === 'video_grid' && <VideoGridSettings settings={widget.settings} onChange={onChange} />}
+      {widget.type !== 'run_comparison' && <>
+        {isMultiVariableWidget ? <>
+          <ItemTransferPicker label="데이터 항목" options={selectionOptions} value={effectiveVariableIds} onChange={(variableIds) => onChange({ settings:{ variableIds, variableId:undefined } })} emptyMessage="추가할 데이터 항목이 없습니다." />
+          <small className="widget-variable-selection-help">현재 표시 방식에서 허용된 항목만 함께 선택할 수 있습니다.</small>
+        </> : <>
+          <label><span>데이터 변수</span><select value={String(widget.settings?.variableId ?? '')} onChange={(event) => onChange({ settings:{ variableId:event.target.value || undefined, variableIds:undefined } })}><option value="">전체/위젯 기본 변수</option>{compatibleVariables.map((item) => <option key={item.id} value={item.id}>{item.display_name} ({item.unit}){item.has_data ? '' : ' · 데이터 대기'}</option>)}</select></label>
+          <label><span>집계 방식</span><select value={String(widget.settings?.aggregation ?? aggregations[0])} onChange={(event) => onChange({ settings:{ aggregation:event.target.value } })}>{aggregations.map((item) => <option key={item}>{item}</option>)}</select></label>
+        </>}
+        {widget.type === 'name_value' && <label><span>항목 그래프 표시 방식</span><select aria-label="항목 그래프 표시 방식" value={String(widget.settings?.chartStyle ?? 'bar')} onChange={(event) => onChange({ settings:{ chartStyle:event.target.value } })}><option value="bar">막대</option><option value="dot">점</option><option value="line">점과 선</option></select></label>}
+      </>}
+      <label><span>강조 색상</span><div className="color-setting"><input type="color" value={String(widget.settings?.color ?? '#50d5ff')} onChange={(event) => onChange({ settings:{ color:event.target.value } })} /><code>{String(widget.settings?.color ?? '#50d5ff')}</code></div></label>
+      <label className="check-setting"><input type="checkbox" checked={widget.settings?.showThreshold !== false} onChange={(event) => onChange({ settings:{ showThreshold:event.target.checked } })} /><span>기준선 표시</span></label>
+      <label className="check-setting"><input type="checkbox" checked={widget.settings?.includeInReport !== false} onChange={(event) => onChange({ settings:{ includeInReport:event.target.checked } })} /><span>보고서 포함</span></label>
+      <div className="settings-note"><Lock /><p>카탈로그에 선언되고 현재 그래프에 허용된 변수만 표시됩니다. 변수 키로 실제 결과 테이블과 연결됩니다.</p></div>
+      <button className="primary-button" onClick={onClose}><Check /> 설정 완료</button>
+    </aside>
+  </div>
 }
 
 
@@ -123,16 +199,16 @@ function OpenCellSummary({ overview, threshold, canManageThreshold, onSaveThresh
   return <div className="chassis-widget-summary open-cell-widget-summary"><div><span>전체 판정</span><strong className={verdict.toLowerCase()}>{verdict}</strong></div><div><span>최대 응력</span><strong>{maximum.toFixed(2)} MPa</strong></div>{canManageThreshold ? <label><span>응력 관리 기준</span><div><input aria-label="Open Cell 응력 기준값" type="number" min="0.1" step="0.1" value={draftLimit} onChange={(event) => setDraftLimit(Number(event.target.value))}/><button disabled={!Number.isFinite(draftLimit) || draftLimit <= 0} onClick={() => onSaveThreshold(draftLimit)}>저장</button></div></label> : <div><span>응력 관리 기준</span><strong>{limit.toFixed(1)} MPa</strong></div>}<p>적용 대상 {results.length}개 · MPa 범위 {minimum.toFixed(2)}~{maximum.toFixed(2)} · 기준 이상은 FAIL입니다.</p></div>
 }
 
-function ChassisWidgetContent({ type, overview, threshold, canManageThreshold, onSaveThreshold, variableId }: { type: DashboardWidget['type']; overview: Overview; threshold?: QualityThreshold; canManageThreshold: boolean; onSaveThreshold: (value: number) => void; variableId: string }) {
+function ChassisWidgetContent({ type, overview, threshold, canManageThreshold, onSaveThreshold, variableId, variableIds, hasExplicitSelection }: { type: DashboardWidget['type']; overview: Overview; threshold?: QualityThreshold; canManageThreshold: boolean; onSaveThreshold: (value: number) => void; variableId: string; variableIds?: string[]; hasExplicitSelection: boolean }) {
   const allResults = overview.scalar_results.filter((item) => item.result_group === 'CHASSIS_REAR' && item.unit.toLowerCase() === 'mm' && item.variable_key.includes('permanent_deformation') && hasNumericValue(item.value_double))
-  const results = type === 'chassis_summary' ? allResults : variableId ? allResults.filter((item)=>item.variable_key===variableId) : allResults
+  const results = type === 'chassis_summary' ? allResults : hasExplicitSelection ? orderByVariableIds(allResults, variableIds ?? []) : variableId ? allResults.filter((item)=>item.variable_key===variableId) : allResults
   const limit = threshold?.threshold_double ?? results.find((item) => hasNumericValue(item.threshold_double))?.threshold_double ?? 5
   const [draftLimit, setDraftLimit] = useState(limit)
   useEffect(() => setDraftLimit(limit), [limit])
   const verdict = results.some((item) => item.verdict === 'FAIL') ? 'FAIL' : results.length ? 'PASS' : 'NO_DATA'
   const maximum = Math.max(...results.map((item) => item.value_double), 0)
   const minimum = results.length ? Math.min(...results.map((item) => item.value_double)) : 0
-  if (type !== 'chassis_summary' && variableId && !results.length) return <div className="widget-empty"><Database/><strong>선언된 변수에 결과 데이터가 없습니다.</strong><small>{variableId} 키의 숫자 결과를 가져오면 자동 표시됩니다.</small></div>
+  if (type !== 'chassis_summary' && (variableId || hasExplicitSelection) && !results.length) return <div className="widget-empty"><Database/><strong>{hasExplicitSelection ? '선택한 항목의 결과 데이터가 없습니다.' : '선언된 변수에 결과 데이터가 없습니다.'}</strong><small>{hasExplicitSelection ? '결과를 가져오거나 위젯 설정에서 다른 항목을 선택하세요.' : `${variableId} 키의 숫자 결과를 가져오면 자동 표시됩니다.`}</small></div>
   const markerClasses: Record<string, string> = { chassis_rear_top_edge_gap_permanent_deformation:'top-edge', chassis_rear_bottom_edge_gap_permanent_deformation:'bottom-edge', chassis_rear_corner_top_left_permanent_deformation:'top-left', chassis_rear_corner_top_right_permanent_deformation:'top-right', chassis_rear_corner_bottom_left_permanent_deformation:'bottom-left', chassis_rear_corner_bottom_right_permanent_deformation:'bottom-right' }
   const labels: Record<string,string> = { top_edge_gap:'상단 엣지', bottom_edge_gap:'하단 엣지', corner_top_left:'좌상단', corner_top_right:'우상단', corner_bottom_left:'좌하단', corner_bottom_right:'우하단' }
   const chartData = results.map((item) => ({ name: labels[item.variable_key.replace('chassis_rear_','').replace('_permanent_deformation','')] ?? item.display_name, value:item.value_double, verdict:item.verdict }))

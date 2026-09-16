@@ -56,7 +56,31 @@ export function SemanticWidgetCard({ widget }: { widget: PreviewWidget }) {
   const decimals = typeof (widget as PreviewWidget & { decimals?: number }).decimals === 'number' ? (widget as PreviewWidget & { decimals?: number }).decimals! : 2
   const unit = widget.unit ? ` ${widget.unit}` : ''
   const mediaUrl = safeMediaUrl(first?.asset_url ?? first?.url)
-  return <article className={`semantic-result-widget type-${widget.type} ${isReady || noValue ? 'ready' : 'invalid'}`}><header><span>{semanticWidgetTypeLabels[widget.type] ?? widget.type}</span><strong>{widget.title}</strong><b>{noValue ? "값 없음" : widget.status}</b></header>{noValue ? <div className="semantic-result-kpi"><strong>값 없음</strong><span>{unit}</span></div> : null}{widget.message ? <p className="semantic-result-message"><AlertTriangle />{widget.message}</p> : null}{isReady && (widget.type === 'image' || widget.type === 'video') ? mediaUrl ? widget.type === 'image' ? <img className="semantic-result-media" src={mediaUrl} alt={widget.title} /> : <video className="semantic-result-media" src={mediaUrl} controls /> : <p className="semantic-result-message">지원된 안전한 미디어 URL이 없습니다.</p> : null}{isReady && (widget.type === 'line' || widget.type === 'scatter' || widget.type === 'bar') ? <Chart widget={widget} data={data} /> : null}{isReady && (widget.type === 'kpi' || widget.type === 'gauge') ? <div className="semantic-result-kpi"><strong>{first && 'value' in first ? scalarValue(typeof first.value === 'number' ? first.value.toFixed(decimals) : first.value) : '—'}</strong><span>{unit}{widget.type === 'gauge' && (widget as PreviewWidget & { threshold?: number }).threshold !== undefined ? ` · 기준 ${(widget as PreviewWidget & { threshold?: number }).threshold}${unit}` : ''}</span>{widget.type === 'gauge' && (widget as PreviewWidget & { verdict?: string }).verdict ? <b>{(widget as PreviewWidget & { verdict?: string }).verdict}</b> : null}</div> : null}{(isReady || noValue) && widget.type === 'table' ? <ResultTable data={data} decimals={decimals} /> : null}{isReady && (widget.type === 'bar' || widget.type === 'scatter' || widget.type === 'line') && !data.length ? <span className="semantic-result-empty">데이터 없음</span> : null}</article>
+  return <article className={`semantic-result-widget type-${widget.type} ${isReady || noValue ? 'ready' : 'invalid'}`}><header><span>{semanticWidgetTypeLabels[widget.type] ?? widget.type}</span><strong>{widget.title}</strong><b>{noValue ? "값 없음" : widget.status}</b></header>{noValue ? <div className="semantic-result-kpi"><strong>값 없음</strong><span>{unit}</span></div> : null}{widget.message ? <p className="semantic-result-message"><AlertTriangle />{widget.message}</p> : null}{isReady && (widget.type === 'image' || widget.type === 'video') ? mediaUrl ? widget.type === 'image' ? <img className="semantic-result-media" src={mediaUrl} alt={widget.title} /> : <video className="semantic-result-media" src={mediaUrl} controls /> : <p className="semantic-result-message">지원된 안전한 미디어 URL이 없습니다.</p> : null}{isReady && widget.type === 'name_value' ? <NameValueChart widget={widget} data={data} /> : null}{isReady && (widget.type === 'line' || widget.type === 'scatter' || widget.type === 'bar') ? <Chart widget={widget} data={data} /> : null}{isReady && (widget.type === 'kpi' || widget.type === 'gauge') ? <div className="semantic-result-kpi"><strong>{first && 'value' in first ? scalarValue(typeof first.value === 'number' ? first.value.toFixed(decimals) : first.value) : '—'}</strong><span>{unit}{widget.type === 'gauge' && (widget as PreviewWidget & { threshold?: number }).threshold !== undefined ? ` · 기준 ${(widget as PreviewWidget & { threshold?: number }).threshold}${unit}` : ''}</span>{widget.type === 'gauge' && (widget as PreviewWidget & { verdict?: string }).verdict ? <b>{(widget as PreviewWidget & { verdict?: string }).verdict}</b> : null}</div> : null}{(isReady || noValue) && widget.type === 'table' ? <ResultTable data={data} decimals={decimals} /> : null}{isReady && (widget.type === 'bar' || widget.type === 'name_value' || widget.type === 'scatter' || widget.type === 'line') && !data.length ? <span className="semantic-result-empty">데이터 없음</span> : null}</article>
+}
+
+function nameValueRows(data: unknown[]) {
+  return data.flatMap((entry) => {
+    const row = entry && typeof entry === 'object' ? entry as Observation : null
+    if (!row || typeof row.value !== 'number' || !Number.isFinite(row.value)) return []
+    const dimensions = row.dimensions && typeof row.dimensions === 'object' && Object.keys(row.dimensions).length ? ` · ${JSON.stringify(row.dimensions)}` : ''
+    return [{ name: `${String(row.label ?? row.item_id ?? '결과 항목')}${dimensions}`, value: row.value }]
+  })
+}
+
+function abbreviatedName(value: string) {
+  return value.length > 8 ? `${value.slice(0, 7)}…` : value
+}
+
+function NameValueChart({ widget, data }: { widget: PreviewWidget; data: unknown[] }) {
+  const rows = nameValueRows(data)
+  const style = widget.chart_style ?? 'bar'
+  const decimals = widget.decimals ?? 2
+  const unit = widget.unit ? ` ${widget.unit}` : ''
+  if (!rows.length) return null
+  const axes = <><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="name" interval={0} tick={{ fontSize: 11 }} tickMargin={8} tickFormatter={(value) => abbreviatedName(String(value))} /><YAxis width={80} label={{ value: widget.unit ?? '', angle: -90, position: 'insideLeft' }} /><Tooltip labelFormatter={(label) => String(label)} formatter={(value) => typeof value === 'number' ? `${value.toFixed(decimals)}${unit}` : String(value)} /></>
+  const chart = style === 'bar' ? <BarChart data={rows} margin={{ left: 16, right: 16, bottom: 10 }}>{axes}<Bar isAnimationActive={false} dataKey="value" name={widget.title} fill="#51d3ff" /></BarChart> : <LineChart data={rows} margin={{ left: 16, right: 16, bottom: 10 }}>{axes}<Line isAnimationActive={false} dataKey="value" name={widget.title} type="linear" stroke="#51d3ff" strokeOpacity={style === 'dot' ? 0 : 1} dot={{ r: 4, fill: '#51d3ff' }} activeDot={{ r: 5 }} /></LineChart>
+  return <div className="semantic-result-chart semantic-name-value-chart"><div className="semantic-name-value-scroll"><div className="semantic-name-value-canvas" style={{ width: Math.max(360, rows.length * 180) }}><ResponsiveContainer width="100%" height={220}>{chart}</ResponsiveContainer></div></div></div>
 }
 
 function Chart({ widget, data }: { widget: PreviewWidget; data: unknown[] }) {
