@@ -14,6 +14,7 @@ from ...domains.requests.models import (
     StoredAnalysisRequest,
 )
 from ...domains.requests.ports import RequestQueryRepository, RequestReassignmentUnitOfWork
+from ...domains.selection_metadata import attach_selection_metadata
 
 
 AuthorizationCallback = Callable[[str, ConnectionLike], object]
@@ -34,14 +35,32 @@ class SQLRequestQueryRepository:
     def list_requests(self, project_id: str) -> list[StoredAnalysisRequest]:
         # The application query invokes authorize_project first on this same
         # connection, before reaching this SQL statement.
+        items = rows(
+            self._connection.execute(
+                """
+                SELECT requests.*, projects.name AS selection_project_name,
+                       registry.code AS selection_code,
+                       registry.relative_path AS selection_relative_path
+                FROM analysis_requests requests
+                JOIN projects ON projects.id=requests.project_id
+                LEFT JOIN folder_discovery_registry registry
+                  ON registry.target_id=requests.id AND registry.role_kind='REQUEST'
+                WHERE requests.project_id = ?
+                ORDER BY requests.requested_at DESC
+                """,
+                [project_id],
+            )
+        )
         return cast(
             list[StoredAnalysisRequest],
-            rows(
-                self._connection.execute(
-                    "SELECT * FROM analysis_requests WHERE project_id = ? ORDER BY requested_at DESC",
-                    [project_id],
+            [
+                attach_selection_metadata(
+                    item,
+                    name_key="title",
+                    project={"id": project_id, "name": str(item.pop("selection_project_name", ""))},
                 )
-            ),
+                for item in items
+            ],
         )
 
 

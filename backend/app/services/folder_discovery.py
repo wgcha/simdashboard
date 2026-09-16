@@ -6,6 +6,7 @@ import re
 from datetime import datetime, timezone
 from threading import RLock
 from uuid import uuid4
+from types import SimpleNamespace
 
 from fastapi import HTTPException
 
@@ -150,11 +151,114 @@ def history_rules(conn, preview_id: str, root_key: str) -> dict:
 def connections(conn, root_key: str, *, offset: int = 0, limit: int = 100) -> dict:
     total = int(conn.execute("SELECT count(*) FROM folder_discovery_registry WHERE root_key=?", [root_key]).fetchone()[0])
     records = rows(conn.execute(
-        "SELECT relative_path,role,role_kind,code,name,analysis_type,parent_target_id,target_id,created_at "
+        "SELECT id,relative_path,role,role_kind,code,name,analysis_type,parent_target_id,target_id,created_at "
         "FROM folder_discovery_registry WHERE root_key=? "
         "ORDER BY relative_path,role LIMIT ? OFFSET ?", [root_key, limit, offset],
     ))
-    return {"items": [dict(item) for item in records], "offset": offset, "limit": limit, "total": total}
+    bindings = {str(row["relative_path"]): dict(row) for row in rows(conn.execute("SELECT * FROM semantic_folder_bindings"))}
+    items = []
+    for record in records:
+        item = dict(record)
+        binding = bindings.get(str(item["relative_path"]))
+        owner = _result_registry_owner(conn, item) if item["role_kind"] == "RESULTS" else None
+        if item["role_kind"] == "RESULTS":
+            # A metadata registry target is a deterministic folder ID, never
+            # the workload target.  Expose only a lineage verified from the
+            # persisted load-case parent for result-query callers.
+            item["project_id"] = owner[0] if owner else None
+            item["request_id"] = owner[1] if owner else None
+            item["load_case_id"] = owner[2] if owner else None
+        if binding and item["role_kind"] == "RESULTS" and _binding_matches_owner(binding, owner):
+            item["binding"] = {"id": binding["id"], "revision": binding["revision"],
+                               "recipe_ids": decoded(binding["recipe_ids_json"]), "template_id": binding["template_id"]}
+        elif binding and item["role_kind"] == "RESULTS":
+            # The path is known to the caller through this registry row, but
+            # an unrelated INPUT/parent/other-load-case binding is managed
+            # only through the advanced connection screen.
+            item["binding"] = {"id": None, "revision": None, "recipe_ids": [], "template_id": None,
+                               "status": "ADVANCED_MANAGEMENT_REQUIRED"}
+        elif item["role_kind"] == "RESULTS" and item["parent_target_id"]:
+            item["binding"] = {"id": None, "revision": None, "recipe_ids": [], "template_id": None,
+                               "status": "CONFIG_REQUIRED"}
+        items.append(item)
+    return {"items": items, "offset": offset, "limit": limit, "total": total}
+
+
+def _result_registry_owner(conn, row: dict) -> tuple[str, str, str] | None:
+    parent = row.get("parent_target_id")
+    if not parent:
+        return None
+    lineage = mapping_repository.binding_lineage(conn, None, str(parent))
+    if not lineage:
+        return None
+    return str(lineage[0]), str(lineage[1]), str(lineage[2])
+
+
+def _binding_matches_owner(binding: dict, owner: tuple[str, str, str] | None) -> bool:
+    return bool(owner and binding.get("role") == "RESULTS" and
+                (str(binding.get("project_id") or ""), str(binding.get("request_id") or ""), str(binding.get("load_case_id") or "")) == owner)
+
+
+def result_config_preview(conn, root_key: str, items: list[dict]) -> dict:
+    """Validate a bulk configuration without changing registry ownership."""
+    registry_rows = {str(row["id"]): dict(row) for row in rows(conn.execute(
+        "SELECT * FROM folder_discovery_registry WHERE root_key=? AND role_kind='RESULTS'", [root_key]))}
+    bindings = {str(row["relative_path"]): dict(row) for row in rows(conn.execute("SELECT * FROM semantic_folder_bindings"))}
+    results = []
+    for entry in items:
+        row = registry_rows.get(str(entry.get("registry_id") or ""))
+        if not row:
+            results.append({"registry_id": entry.get("registry_id"), "status": "NOT_FOUND"}); continue
+        binding = bindings.get(str(row["relative_path"]))
+        owner = _result_registry_owner(conn, row)
+        if not owner:
+            results.append({"registry_id": row["id"], "status": "LOAD_CASE_REQUIRED"}); continue
+        if binding and not _binding_matches_owner(binding, owner):
+            results.append({"registry_id": row["id"], "status": "BINDING_CONFLICT"}); continue
+        try:
+            config = _result_config(entry.get("result_config"))
+            _verify_result_config(conn, config)
+        except ValueError as error:
+            results.append({"registry_id": row["id"], "status": "CONFIG_INVALID", "message": str(error)}); continue
+        except HTTPException as error:
+            detail = error.detail if isinstance(error.detail, dict) else {}
+            results.append({"registry_id": row["id"], "status": "CONFIG_CONFLICT", "code": detail.get("code", "SEMANTIC_CONFIG_INVALID")}); continue
+        if binding and entry.get("expected_binding_revision") is None:
+            results.append({"registry_id": row["id"], "status": "REVISION_REQUIRED", "current_revision": binding["revision"]}); continue
+        if binding and int(entry["expected_binding_revision"]) != int(binding["revision"]):
+            results.append({"registry_id": row["id"], "status": "REVISION_CONFLICT", "current_revision": binding["revision"]}); continue
+        results.append({"registry_id": row["id"], "status": "UPDATE" if binding else "CREATE", "binding_id": binding["id"] if binding else None,
+                        "expected_binding_revision": binding["revision"] if binding else None, "result_config": config})
+    return {"items": results, "can_apply": bool(results) and all(item["status"] in {"CREATE", "UPDATE"} for item in results)}
+
+
+def apply_result_config(conn, root_key: str, items: list[dict], actor: str) -> dict:
+    preview = result_config_preview(conn, root_key, items)
+    if not preview["can_apply"]:
+        fail("RESULT_CONFIG_PREVIEW_CONFLICT", "결과 읽기 설정 미리보기를 다시 확인하세요.")
+    registry_rows = {str(row["id"]): dict(row) for row in rows(conn.execute(
+        "SELECT * FROM folder_discovery_registry WHERE root_key=? AND role_kind='RESULTS'", [root_key]))}
+    applied = []
+    for proposed in preview["items"]:
+        row, config = registry_rows[proposed["registry_id"]], proposed["result_config"]
+        binding = mapping_repository.binding(conn, proposed["binding_id"]) if proposed["binding_id"] else None
+        if binding:
+            payload = SimpleNamespace(id=binding["id"], expected_revision=int(binding["revision"]), project_id=binding["project_id"],
+                                      request_id=binding["request_id"], load_case_id=binding["load_case_id"], role=binding["role"],
+                                      recipe_ids=config["recipe_ids"], template_id=config.get("template_id"))
+            revision = int(binding["revision"]) + 1
+            mapping_repository.update_binding(conn, payload=payload, relative_path=str(binding["relative_path"]), revision=revision, actor=actor, now=now())
+            applied.append({"registry_id": row["id"], "binding_id": binding["id"], "revision": revision, "status": "UPDATED"})
+        else:
+            # Folder registry's parent is a load case for this bulk action.
+            lineage = mapping_repository.binding_lineage(conn, None, row["parent_target_id"])
+            if not lineage:
+                fail("SEMANTIC_BINDING_TARGET_CONFLICT", "결과 폴더의 하중 경우를 찾을 수 없습니다.")
+            payload = SimpleNamespace(project_id=str(lineage[0]), request_id=str(lineage[1]), load_case_id=row["parent_target_id"], role="RESULTS", recipe_ids=config["recipe_ids"], template_id=config.get("template_id"))
+            binding_id = ident("semantic-binding")
+            mapping_repository.create_binding(conn, binding_id=binding_id, payload=payload, relative_path=row["relative_path"], actor=actor, now=now())
+            applied.append({"registry_id": row["id"], "binding_id": binding_id, "revision": 1, "status": "CREATED"})
+    return {"items": applied}
 
 
 def catalog(conn) -> dict:
@@ -176,6 +280,8 @@ def _validate_catalog_entries(entries: list[dict], *, is_role: bool) -> dict[str
         if key.casefold() in normalized:
             raise ValueError("카탈로그 키가 중복됩니다.")
         item = {"key": key, "label": label, "active": bool(entry["active"])}
+        if not is_role and entry.get("default_result_config") is not None:
+            item["default_result_config"] = _result_config(entry["default_result_config"])
         if is_role:
             if entry["kind"] not in ROLE_KINDS:
                 raise ValueError("지원하지 않는 폴더 역할 종류입니다.")
@@ -183,6 +289,113 @@ def _validate_catalog_entries(entries: list[dict], *, is_role: bool) -> dict[str
         found[key] = item
         normalized.add(key.casefold())
     return found
+
+
+def _result_config(value: object) -> dict:
+    if not isinstance(value, dict):
+        raise ValueError("결과 읽기 설정 형식이 올바르지 않습니다.")
+    recipe_ids, template_id = value.get("recipe_ids"), value.get("template_id")
+    if not isinstance(recipe_ids, list) or not recipe_ids or len(recipe_ids) > 32:
+        raise ValueError("결과 읽기 레시피를 하나 이상 선택하세요.")
+    if any(not isinstance(item, str) or not item.strip() for item in recipe_ids) or len(set(recipe_ids)) != len(recipe_ids):
+        raise ValueError("결과 읽기 레시피가 중복되었거나 올바르지 않습니다.")
+    if template_id is not None and (not isinstance(template_id, str) or not template_id.strip()):
+        raise ValueError("표시 템플릿 식별자가 올바르지 않습니다.")
+    return {"recipe_ids": recipe_ids, **({"template_id": template_id} if template_id else {})}
+
+
+def _resolved_result_config(rule: dict, analysis_defaults: dict[str, dict]) -> tuple[dict | None, str]:
+    if rule.get("result_config") is not None:
+        return _result_config(rule["result_config"]), "RULE"
+    default = analysis_defaults.get(str(rule.get("analysis_type") or ""))
+    return (_result_config(default), "ANALYSIS_TYPE_DEFAULT") if default else (None, "NONE")
+
+
+def _attach_result_defaults(plan: dict, defaults: dict[str, dict]) -> dict:
+    """Use the owning load-case type when a result rule deliberately omits policy."""
+    load_types = {str(row["target_id"]): str(row.get("analysis_type") or "")
+                  for row in plan["rows"] if row.get("role_kind") == "LOAD_CASE"}
+    for row in plan["rows"]:
+        if row.get("role_kind") != "RESULTS" or row.get("result_config") is not None:
+            continue
+        config = defaults.get(load_types.get(str(row.get("load_case_id") or ""), ""))
+        if config:
+            row["result_config"] = _result_config(config)
+            row["result_config_source"] = "ANALYSIS_TYPE_DEFAULT"
+            row["binding_status"] = "WILL_CREATE"
+    return plan
+
+
+def _attach_existing_result_bindings(conn, plan: dict) -> dict:
+    """Manual bindings have precedence over any proposed folder-rule policy."""
+    candidates = {str(entry["relative_path"]): entry for entry in mapping_repository.semantic_bindings(conn)}
+    for row in plan["rows"]:
+        if row.get("role_kind") != "RESULTS" or not row.get("load_case_id"):
+            continue
+        entry = candidates.get(str(row["relative_path"]))
+        if not entry:
+            continue
+        binding = mapping_repository.binding(conn, str(entry["id"]))
+        owner = (str(row.get("project_id") or ""), str(row.get("request_id") or ""), str(row.get("load_case_id") or ""))
+        if not _binding_matches_owner(binding or {}, owner):
+            row.update(status="CONFLICT", binding_status="BINDING_CONFLICT", message="다른 업무의 기존 결과 연결과 경로가 겹칩니다.")
+            continue
+        row["result_config"] = {"recipe_ids": decoded(binding["recipe_ids_json"]),
+                                **({"template_id": binding["template_id"]} if binding.get("template_id") else {})}
+        row["result_config_source"] = "EXISTING_BINDING"
+        row["binding_status"] = "REUSE"
+        row["binding_id"] = binding["id"]
+        row["binding_revision"] = binding["revision"]
+    return plan
+
+
+def _validate_result_policies(conn, plan: dict) -> dict:
+    """Make inactive/missing automatic policies visible during proposal."""
+    for row in plan["rows"]:
+        if row.get("role_kind") != "RESULTS" or not row.get("result_config") or row.get("result_config_source") == "EXISTING_BINDING":
+            continue
+        try:
+            _verify_result_config(conn, row["result_config"])
+        except HTTPException as error:
+            detail = error.detail if isinstance(error.detail, dict) else {}
+            row.update(status="CONFLICT", binding_status="CONFIG_CONFLICT", message=detail.get("code", "SEMANTIC_CONFIG_INVALID"))
+    conflicts = sum(row.get("status") == "CONFLICT" for row in plan["rows"])
+    plan["summary"]["conflicts"] = conflicts
+    plan["can_apply"] = bool(plan["rows"]) and not conflicts
+    return plan
+
+
+def _verify_result_config(conn, config: dict) -> None:
+    for recipe_id in config["recipe_ids"]:
+        record = mapping_repository.version(conn, "recipe", recipe_id, active=True)
+        if not record or record[0] is None:
+            fail("SEMANTIC_RECIPE_NOT_ACTIVE", "활성 결과 읽기 레시피가 없습니다.", 422)
+    if config.get("template_id"):
+        record = mapping_repository.version(conn, "template", config["template_id"], active=True)
+        if not record or record[0] is None:
+            fail("SEMANTIC_TEMPLATE_NOT_ACTIVE", "활성 표시 템플릿이 없습니다.", 422)
+
+
+def _result_binding(conn, item: dict, config: dict | None, actor: str) -> tuple[str | None, str]:
+    if item["role_kind"] != "RESULTS" or not item.get("load_case_id"):
+        return None, "NOT_LOAD_CASE_RESULT"
+    existing = mapping_repository.semantic_bindings(conn)
+    found = next((entry for entry in existing if entry["relative_path"] == item["relative_path"]), None)
+    if found:
+        current = mapping_repository.binding(conn, str(found["id"]))
+        if not current or current.get("role") != "RESULTS" or (str(current.get("load_case_id") or "") != str(item["load_case_id"]) or
+                           str(current.get("project_id") or "") != str(item["project_id"] or "") or
+                           str(current.get("request_id") or "") != str(item["request_id"] or "")):
+            fail("SEMANTIC_BINDING_TARGET_CONFLICT", "다른 하중 경우가 결과 폴더를 소유합니다.")
+        return str(found["id"]), "REUSED"
+    if config is None:
+        return None, "CONFIG_REQUIRED"
+    _verify_result_config(conn, config)
+    binding_id = ident("semantic-binding")
+    payload = SimpleNamespace(project_id=item["project_id"], request_id=item["request_id"], load_case_id=item["load_case_id"],
+                              role="RESULTS", recipe_ids=config["recipe_ids"], template_id=config.get("template_id"))
+    mapping_repository.create_binding(conn, binding_id=binding_id, payload=payload, relative_path=item["relative_path"], actor=actor, now=now())
+    return binding_id, "CREATED"
 
 
 def save_catalog(conn, payload: dict, actor: str) -> dict:
@@ -281,12 +494,22 @@ def proposal(conn, data: dict, rule_list: list[dict], options: dict | None = Non
     options = options or catalog(conn)
     current_registry = registry(conn, data["root_key"])
     bindings = mapping_repository.semantic_bindings(conn)
-    baseline = build_plan(data["nodes"], rule_list, data["root_key"], current_registry, old_paths, bindings, options)
+    defaults = {entry["key"]: entry.get("default_result_config") for entry in options["analysis_types"]}
+    enriched_rules = []
+    for rule in rule_list:
+        copied = dict(rule)
+        option = next((entry for entry in options["roles"] if entry["key"] == copied.get("role")), None)
+        if option and option["kind"] == "RESULTS":
+            copied["result_config"], copied["result_config_source"] = _resolved_result_config(copied, defaults)
+        enriched_rules.append(copied)
+    baseline = _validate_result_policies(conn, _attach_existing_result_bindings(conn, _attach_result_defaults(
+        build_plan(data["nodes"], enriched_rules, data["root_key"], current_registry, old_paths, bindings, options), defaults)))
     roots = _exclusion_roots(data, baseline, excluded_paths)
     if not roots:
         return {**baseline, "excluded_paths": [], "summary": {**baseline["summary"], "excluded": 0}}
     active_nodes = [node for node in data["nodes"] if _is_excluded(node["relative_path"], roots) is None]
-    active = build_plan(active_nodes, rule_list, data["root_key"], current_registry, old_paths, bindings, options)
+    active = _validate_result_policies(conn, _attach_existing_result_bindings(conn, _attach_result_defaults(
+        build_plan(active_nodes, enriched_rules, data["root_key"], current_registry, old_paths, bindings, options), defaults)))
     excluded_by_path = {row["relative_path"]: _is_excluded(row["relative_path"], roots)
                         for row in baseline["rows"]}
     excluded_rows = {}
@@ -377,10 +600,15 @@ def apply(conn, preview_id: str, principal, audit):
         if not current["can_apply"] or current["rows"] != saved_rows:
             fail("PREVIEW_STALE", "업무 항목이나 폴더 연결이 변경되었습니다. 미리보기를 다시 만드세요.")
         created = {"projects": 0, "requests": 0, "load_cases": 0}
+        binding_outcome = {"created_ids": [], "reused_ids": [], "configuration_required": []}
         kept = excluded = 0
         for item in current["rows"]:
             if item["status"] == "KEEP":
                 kept += 1
+                binding_id, state = _result_binding(conn, item, item.get("result_config"), principal.user_id)
+                if state == "CREATED": binding_outcome["created_ids"].append(binding_id)
+                elif state == "REUSED": binding_outcome["reused_ids"].append(binding_id)
+                elif state == "CONFIG_REQUIRED": binding_outcome["configuration_required"].append(item["relative_path"])
                 continue
             if item["status"] == "EXCLUDED":
                 excluded += 1
@@ -391,11 +619,15 @@ def apply(conn, preview_id: str, principal, audit):
                          item["scope_key"], item["code"] or None, item["name"], item["analysis_type"], item["target_id"], item["parent_target_id"], now()])
             if item["role_kind"] in ("PROJECT", "REQUEST", "LOAD_CASE"):
                 created[{"PROJECT": "projects", "REQUEST": "requests", "LOAD_CASE": "load_cases"}[item["role_kind"]]] += 1
+            binding_id, state = _result_binding(conn, item, item.get("result_config"), principal.user_id)
+            if state == "CREATED": binding_outcome["created_ids"].append(binding_id)
+            elif state == "REUSED": binding_outcome["reused_ids"].append(binding_id)
+            elif state == "CONFIG_REQUIRED": binding_outcome["configuration_required"].append(item["relative_path"])
         # Concurrent folder changes invalidate the entire transaction, including the audit.
         after = scan(root, data["relative_path"])
         if root_identity(configured_root(conn)) != data["root_key"] or after["status"] != "COMPLETE" or after["nodes"] != data["nodes"]:
             fail("SCAN_STALE", "적용 중 폴더 구조가 변경되었습니다. 다시 조사하세요.")
-        outcome = {"status": "APPLIED", "created": created, "kept_count": kept, "excluded_count": excluded}
+        outcome = {"status": "APPLIED", "created": created, "kept_count": kept, "excluded_count": excluded, "bindings": binding_outcome}
         audit({"preview_id": preview_id, "scan_id": data["id"], **outcome})
         conn.execute("UPDATE folder_discovery_previews SET applied_json=? WHERE id=?", [json.dumps(outcome), preview_id])
         return outcome

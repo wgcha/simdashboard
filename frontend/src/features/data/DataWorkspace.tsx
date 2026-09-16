@@ -5,6 +5,7 @@ import type { AnalysisRequest, LoadCase, Project } from '../../types'
 import { ResultImportHistory } from './ResultImportHistory'
 import { useDataWorkspaceContext } from './useDataWorkspaceContext'
 import { uploadStructuredResult, type StoragePanelProps } from '../../shared/api/storage'
+import { SearchableSelect } from '../../shared/components/selectionLabels'
 import './DataWorkspace.css'
 export function DataWorkspace({ canCreateProject, canRetryImports, canUploadStorage = false, canBindStorage = false, canManageStorageRoot = false, contextChanging = false, embedded = false, projects, initialProjectId, initialRequestId, initialLoadCaseId, refreshToken = 0, storagePanel: StoragePanel, onContextChange, onLoadCaseCreated, onDataChanged, onOpenAnalysis, onOpenIntake }: { canCreateProject: boolean; canRetryImports: boolean; canUploadStorage?: boolean; canBindStorage?: boolean; canManageStorageRoot?: boolean; contextChanging?: boolean; embedded?: boolean; projects: Project[]; initialProjectId: string; initialRequestId?: string; initialLoadCaseId?: string; refreshToken?: number; storagePanel?: ComponentType<StoragePanelProps>; onContextChange?: (context: { projectId: string; requestId: string; loadCaseId: string }) => void; onLoadCaseCreated?: (loadCase: LoadCase) => void; onDataChanged: () => Promise<void>; onOpenAnalysis: (projectId: string, requestId: string, loadCaseId: string) => Promise<void>; onOpenIntake: () => void }) {
   const [managedProjects, setManagedProjects] = useState(projects)
@@ -123,11 +124,11 @@ export function DataWorkspace({ canCreateProject, canRetryImports, canUploadStor
       <div className="data-count"><strong>{managedProjects.length}</strong><span>PROJECTS</span></div>
     </header>}
     {!embedded && <div className="data-hierarchy-bar">
-      <label><span>1 · 프로젝트</span><select aria-label="등록 프로젝트 선택" value={projectId} onChange={(event) => setProjectId(event.target.value)}>{managedProjects.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.product_name}</option>)}</select></label>
+      <label><span>1 · 프로젝트</span><SearchableSelect ariaLabel="등록 프로젝트 선택" items={managedProjects} kind="project" value={projectId} onChange={setProjectId} placeholder="프로젝트 선택" /></label>
       <i>›</i>
-      <label><span>2 · 접수된 의뢰</span><select aria-label="등록 의뢰 선택" value={requestId} onChange={(event) => setRequestId(event.target.value)} disabled={!requests.length}>{requests.length ? requests.map((item) => <option key={item.id} value={item.id}>{item.title}</option>) : <option>의뢰 접수 탭에서 먼저 접수하세요</option>}</select></label>
+      <label><span>2 · 접수된 의뢰</span><SearchableSelect ariaLabel="등록 의뢰 선택" items={requests} kind="request" value={requestId} onChange={setRequestId} disabled={!requests.length} placeholder={requests.length ? '의뢰 선택' : '의뢰 접수 탭에서 먼저 접수하세요'} /></label>
       <i>›</i>
-      <label><span>3 · 하중 경우</span><select aria-label="등록 하중 경우 선택" value={loadCaseId} onChange={(event) => { setLoadCaseId(event.target.value); setResultFile(null); setImportPreview(null); setImported(false) }} disabled={!loadCases.length}>{loadCases.length ? loadCases.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.analysis_type}</option>) : <option value="">하중 경우 없음</option>}</select></label>
+      <label><span>3 · 하중 경우</span><SearchableSelect ariaLabel="등록 하중 경우 선택" items={loadCases} kind="load_case" value={loadCaseId} onChange={(value) => { setLoadCaseId(value); resetImportState() }} disabled={!loadCases.length} placeholder={loadCases.length ? '하중 경우 선택' : '하중 경우 없음'} /></label>
     </div>}
     {(message || formError) && <div className={`data-message ${formError ? 'error' : ''}`}>{formError ? <AlertTriangle /> : <Check />}{formError || message}</div>}
     <details className="data-setup-details" open={projects.length === 0}>

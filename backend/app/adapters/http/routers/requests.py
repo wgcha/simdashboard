@@ -18,14 +18,14 @@ from ....domains.requests.models import (
 )
 from ....domains.requests.errors import ProjectMembershipRequiredError
 from ....modules.access_control import PROJECT_DATA_VIEW, REQUEST_EDIT, require_permission, resolve_project_assignee
-from ....schemas.api import AssigneeUpdate
+from ....schemas.api import AssigneeUpdate, RequestSelectionResponse
 
 
 query_router = APIRouter()
 router = APIRouter()
 
 
-@query_router.get("/api/projects/{project_id}/requests")
+@query_router.get("/api/projects/{project_id}/requests", response_model=list[RequestSelectionResponse])
 def get_requests(project_id: str, request: Request) -> list[dict[str, Any]]:
     def authorize(scope_project_id: str, connection: ConnectionLike) -> bool:
         # PROJECT_DATA_VIEW is a company permission for every active account.

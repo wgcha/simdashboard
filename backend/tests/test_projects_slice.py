@@ -230,7 +230,22 @@ def test_projects_endpoint_preserves_read_contract() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload
-    assert payload == jsonable_encoder(expected)
+    expected_payload = jsonable_encoder(expected)
+    assert [
+        {key: value for key, value in item.items() if key != "selection_metadata"}
+        for item in payload
+    ] == expected_payload
+    assert all(
+        item["selection_metadata"] == {
+            "code": None,
+            "name": item["name"],
+            "project": None,
+            "request": None,
+            "analysis_type": None,
+            "relative_path": None,
+        }
+        for item in payload
+    )
 
 
 @pytest.mark.contract

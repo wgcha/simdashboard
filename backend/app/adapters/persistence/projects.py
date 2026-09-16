@@ -10,6 +10,7 @@ from ...database import ensure_project_quality_thresholds, ensure_workspace_layo
 from ...database_connection import ConnectionLike, connect, rows
 from ...domains.projects.models import CreateProjectCommand, PersistedProjectAuditRecord, Project
 from ...domains.projects.ports import ProjectRepository, ProjectUnitOfWork
+from ...domains.selection_metadata import attach_selection_metadata
 
 
 class SQLProjectRepository:
@@ -17,10 +18,19 @@ class SQLProjectRepository:
         self._connection = connection
 
     def list_projects(self) -> list[Project]:
-        return cast(
-            list[Project],
-            rows(self._connection.execute("SELECT * FROM projects ORDER BY created_at DESC")),
+        items = rows(
+            self._connection.execute(
+                """
+                SELECT projects.*, registry.code AS selection_code,
+                       registry.relative_path AS selection_relative_path
+                FROM projects
+                LEFT JOIN folder_discovery_registry registry
+                  ON registry.target_id=projects.id AND registry.role_kind='PROJECT'
+                ORDER BY projects.created_at DESC
+                """
+            )
         )
+        return cast(list[Project], [attach_selection_metadata(item, name_key="name") for item in items])
 
 
 class SQLProjectRepositoryProvider:

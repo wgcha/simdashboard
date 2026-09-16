@@ -6,6 +6,7 @@ from typing import Any, Callable, Protocol
 
 
 class RequestLoadCasesRepository(Protocol):
+    def authorize_request(self, request_id: str) -> bool: ...
     def list_load_cases(self, request_id: str) -> list[dict[str, Any]]: ...
 
 

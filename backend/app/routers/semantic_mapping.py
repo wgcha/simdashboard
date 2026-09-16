@@ -31,6 +31,7 @@ from ..modules.access_control import PROJECT_DATA_VIEW, RESULT_IMPORT, SYSTEM_CA
 from ..repositories import semantic_mapping as mapping_repository
 from ..security import write_audit_event
 from ..services import spdm_storage, semantic_sample_uploads as sample_uploads
+from ..services import semantic_result_refresh
 from ..services.semantic_mapping import persist_semantic_import, semantic_source_run_id, semantic_transaction
 from .semantic_body_limit import SemanticBodyLimitRoute
 from .semantic_review import record_unresolved_refresh
@@ -555,7 +556,8 @@ def reconnect_binding(binding_id: str, payload: BindingSave, request: Request) -
     return save_binding(payload.model_copy(update={"id": binding_id}), request)
 
 
-def _import(conn: Any, request: Request, filename: str, content: bytes, recipe_id: str, load_case_id: str, template_id: str | None) -> dict[str, Any]:
+def _import(conn: Any, request: Request, filename: str, content: bytes, recipe_id: str, load_case_id: str, template_id: str | None,
+            binding_snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
     require_resource_permission(request, RESULT_IMPORT, "load_case", load_case_id, conn=conn)
     recipe_version, recipe, recipe_items = _version(conn, "recipe", recipe_id)
     template_id, template_version, template, template_items = _display_template(conn, recipe, recipe_items, template_id)
@@ -573,7 +575,12 @@ def _import(conn: Any, request: Request, filename: str, content: bytes, recipe_i
         template_id=template_id, template_version=template_version, source_sha256=digest,
     )
     command = {"project_id": target.project_id, "request_id": target.request_id, "load_case_id": load_case_id, "source_type": "SEMANTIC_RECIPE", "source_name": f"semantic/{recipe_id}/{recipe_version}/{filename}", "source_checksum": digest, "source_run_id": semantic_source_run_id(recipe_id, recipe_version, digest, template_id, template_version, reuse_legacy=reuse_legacy), "conflict_policy": "SKIP", "parser_version": "semantic-mapping-v2" if recipe.get("reader_version") == 2 else "semantic-mapping-v1", "parsed": parsed, "actor": request.state.principal.display_name, "metadata": {"recipe_id": recipe_id, "recipe_version": recipe_version, "template_id": template_id, "template_version": template_version, "observations": parsed.get("observations", []), "source_filename": filename}}
-    outcome, run_id = persist_semantic_import(conn, command, recipe_id=recipe_id, recipe_version=recipe_version, template_id=template_id, template_version=template_version, filename=filename, source_bytes=content, authorize=lambda c, tx: require_resource_permission(request, RESULT_IMPORT, "load_case", c["load_case_id"], conn=tx), now=_now)
+    def authorize_import(command_context: dict[str, Any], tx: Any) -> None:
+        require_resource_permission(request, RESULT_IMPORT, "load_case", command_context["load_case_id"], conn=tx)
+        if binding_snapshot is not None:
+            _assert_binding_snapshot(tx, binding_snapshot, lock=True)
+
+    outcome, run_id = persist_semantic_import(conn, command, recipe_id=recipe_id, recipe_version=recipe_version, template_id=template_id, template_version=template_version, filename=filename, source_bytes=content, authorize=authorize_import, now=_now)
     if outcome["status"] == "SKIPPED" and run_id:
         stored = mapping_repository.provenance_template(conn, run_id)
         if stored and stored[0] is not None:
@@ -583,7 +590,9 @@ def _import(conn: Any, request: Request, filename: str, content: bytes, recipe_i
                 widgets = resolve_widgets(template, template_items, parsed)
         else:
             template_id, template_version, widgets = None, None, []
-    return {"status": outcome["status"], "run_id": run_id, "summary": parsed["summary"], "parsed": parsed, "widgets": widgets, "recipe_version": recipe_version, "template_id": template_id, "template_version": template_version, "operation": outcome["operation"], "reason_code": outcome["reason_code"], **_widget_metadata(template_id, widgets)}
+    return {"status": outcome["status"], "run_id": run_id, "summary": parsed["summary"], "parsed": parsed, "widgets": widgets,
+            "recipe_id": recipe_id, "recipe_version": recipe_version, "template_id": template_id, "template_version": template_version,
+            "operation": outcome["operation"], "reason_code": outcome["reason_code"], **_widget_metadata(template_id, widgets)}
 
 
 @router.post("/import")
@@ -596,11 +605,13 @@ async def import_file(request: Request) -> dict[str, Any]:
     with connect() as conn: return _import(conn, request, filename, content, recipe_id, load_case_id, fields.get("template_id"))
 
 
-@router.post("/bindings/{binding_id}/refresh")
-def refresh_binding(binding_id: str, request: Request) -> dict[str, Any]:
+def _refresh_binding_snapshot(binding: dict[str, Any], request: Request) -> dict[str, Any]:
+    """Refresh one immutable binding snapshot; never follow a later reconnect."""
     with connect() as conn:
-        binding = mapping_repository.binding(conn, binding_id)
-        if binding is None: raise HTTPException(404, {"code": "SEMANTIC_BINDING_NOT_FOUND"})
+        current = mapping_repository.binding(conn, str(binding["id"]))
+        if current is None: raise HTTPException(404, {"code": "SEMANTIC_BINDING_NOT_FOUND"})
+        if not _binding_snapshot_matches(current, binding):
+            raise HTTPException(409, {"code": "SEMANTIC_BINDING_STALE"})
         if not binding["load_case_id"]: raise HTTPException(422, {"code": "SEMANTIC_BINDING_LOAD_CASE_REQUIRED"})
         require_resource_permission(request, RESULT_IMPORT, "load_case", str(binding["load_case_id"]), conn=conn)
         root = spdm_storage.storage_root(conn)
@@ -663,7 +674,8 @@ def refresh_binding(binding_id: str, request: Request) -> dict[str, Any]:
                     else:
                         results.append({"relative_path": path.name, "status": "PENDING", "recipe_ids": [candidates[0]["recipe_id"]], "review_item_id": review["id"], "review_available": False, "clear_reason": "PENDING_REVIEW"})
                     continue
-                results.append({"relative_path": path.name, **_import(conn, request, path.name, content, candidates[0]["recipe_id"], str(binding["load_case_id"]), binding["template_id"])})
+                _assert_binding_snapshot(conn, binding)
+                results.append({"relative_path": path.name, **_import(conn, request, path.name, content, candidates[0]["recipe_id"], str(binding["load_case_id"]), binding["template_id"], binding)})
             except spdm_storage.SpdmStorageError as error:
                 review = record_unresolved_refresh(conn, binding, relative_path=path.name, scan_status="PENDING", candidates=[], source_sha256=None, source_size=None, error={"code": error.code}, actor=request.state.principal.user_id)
                 if review["review_state"] in {"IMPORTED", "SKIPPED"}:
@@ -676,13 +688,92 @@ def refresh_binding(binding_id: str, request: Request) -> dict[str, Any]:
                 # The reviewed binding was reconnected after this refresh took
                 # its snapshot.  Do not turn that stale scan into an INVALID
                 # item against the newly bound target.
-                if error.status_code == 409 and detail_code in {"SEMANTIC_REVIEW_BINDING_STALE", "SEMANTIC_REVIEW_TARGET_CHANGED"}:
+                if error.status_code == 409 and detail_code in {"SEMANTIC_BINDING_STALE", "SEMANTIC_REVIEW_BINDING_STALE", "SEMANTIC_REVIEW_TARGET_CHANGED"}:
                     raise
                 if error.status_code not in {409, 422}:
                     raise
                 review = record_unresolved_refresh(conn, binding, relative_path=path.name, scan_status="INVALID", candidates=candidates, source_sha256=hashlib.sha256(content).hexdigest() if content is not None else None, source_size=len(content) if content is not None else None, error={"detail": error.detail}, actor=request.state.principal.user_id)
                 results.append({"relative_path": path.name, "status": "INVALID", "detail": error.detail, "review_item_id": review["id"]})
-        return {"binding_id": binding_id, "results": results, "partial": any(item.get("status") not in {"IMPORTED", "SKIPPED"} for item in results)}
+        return {"binding_id": binding["id"], "results": results, "partial": any(item.get("status") not in {"IMPORTED", "SKIPPED"} for item in results)}
+
+
+def _binding_snapshot_matches(current: dict[str, Any] | None, snapshot: dict[str, Any]) -> bool:
+    fields = ("role", "project_id", "request_id", "load_case_id", "revision", "relative_path")
+    return bool(current and all(str(current.get(field) or "") == str(snapshot.get(field) or "") for field in fields))
+
+
+def _assert_binding_snapshot(conn: Any, snapshot: dict[str, Any], *, lock: bool = False) -> None:
+    """Verify the binding again inside an import transaction when requested."""
+    if lock:
+        locked = mapping_repository.binding_revision(conn, str(snapshot["id"]))
+        if not locked or int(locked[0]) != int(snapshot["revision"]):
+            raise HTTPException(409, {"code": "SEMANTIC_BINDING_STALE"})
+    current = mapping_repository.binding(conn, str(snapshot["id"]))
+    if not _binding_snapshot_matches(current, snapshot):
+        raise HTTPException(409, {"code": "SEMANTIC_BINDING_STALE"})
+
+
+@router.post("/bindings/{binding_id}/refresh")
+def refresh_binding(binding_id: str, request: Request) -> dict[str, Any]:
+    with connect() as conn:
+        binding = mapping_repository.binding(conn, binding_id)
+        if binding is None:
+            raise HTTPException(404, {"code": "SEMANTIC_BINDING_NOT_FOUND"})
+    return _refresh_binding_snapshot(binding, request)
+
+
+@router.post("/load-cases/{load_case_id}/results/refresh")
+def refresh_load_case_results(load_case_id: str, request: Request) -> dict[str, Any]:
+    """Refresh every exact load-case result binding and pin the chosen run."""
+    with connect() as conn:
+        require_resource_permission(request, RESULT_IMPORT, "load_case", load_case_id, conn=conn)
+        target = SQLResultIngestionQuery(conn).get_result_ingestion_target(load_case_id)
+        if target is None:
+            raise HTTPException(404, {"code": "LOAD_CASE_NOT_FOUND"})
+        binding_snapshots = semantic_result_refresh.load_case_binding_snapshots(conn, load_case_id)
+    all_results: list[dict[str, Any]] = []
+    binding_details: dict[str, dict[str, Any]] = {}
+    for snapshot in binding_snapshots:
+        binding_id = str(snapshot["id"])
+        with connect() as conn:
+            current = mapping_repository.binding(conn, binding_id)
+        if not _binding_snapshot_matches(current, snapshot):
+            all_results.append({"binding_id": binding_id, "binding_revision": snapshot["revision"],
+                                "source_relative_path": snapshot["relative_path"], "status": "FAILED",
+                                "detail": {"code": "SEMANTIC_BINDING_STALE"}})
+            continue
+        binding_details[binding_id] = current
+    for binding_id, binding in binding_details.items():
+        try:
+            outcome = _refresh_binding_snapshot(binding, request)
+            folder = str(binding["relative_path"])
+            all_results.extend({"binding_id": binding_id, "binding_revision": binding_details[binding_id]["revision"],
+                                "source_relative_path": f"{folder}/{item['relative_path']}", **item} for item in outcome["results"])
+        except HTTPException as error:
+            all_results.append({"binding_id": binding_id, "binding_revision": binding_details[binding_id]["revision"],
+                                "source_relative_path": binding["relative_path"], "status": "FAILED", "detail": error.detail})
+    all_results.sort(key=lambda item: (str(item.get("source_relative_path") or item.get("relative_path") or "").casefold(), str(item["binding_id"])))
+    completed = [str(item["run_id"]) for item in all_results if item.get("run_id") and item.get("status") in {"IMPORTED", "SKIPPED"} and item.get("review_available")]
+    with connect() as conn:
+        candidates = mapping_repository.provenances_for_runs(conn, load_case_id, completed)
+        if not candidates:
+            candidates = mapping_repository.recent_provenances(conn, load_case_id)
+        display_run_id = next((str(entry["analysis_run_id"]) for entry in candidates
+                               if _confirmed_run_widget_metadata(conn, load_case_id, str(entry["analysis_run_id"])).get("review_available")), None)
+    response = {"load_case_id": load_case_id, "project_id": target.project_id, "request_id": target.request_id,
+                "display_run_id": display_run_id, "results": all_results,
+                "partial": any(item.get("status") not in {"IMPORTED", "SKIPPED"} for item in all_results),
+                "binding_count": len(binding_snapshots)}
+    with connect() as conn:
+        write_audit_event(
+            request=request, principal=request.state.principal, status_code=200,
+            action="SEMANTIC_LOAD_CASE_RESULTS_REFRESHED",
+            detail={"load_case_id": load_case_id, "display_run_id": display_run_id,
+                    "files": [{key: item.get(key) for key in ("source_relative_path", "binding_id", "binding_revision", "status", "run_id", "recipe_id", "recipe_version", "template_id", "template_version", "detail")}
+                              for item in all_results]},
+            connection=conn,
+        )
+    return response
 
 
 @router.get("/results")

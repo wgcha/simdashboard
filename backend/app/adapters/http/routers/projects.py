@@ -9,13 +9,13 @@ from ....application.projects.commands import create_project as create_project_c
 from ....application.projects.queries import list_projects
 from ....domains.projects.models import CreateProjectCommand, ProjectAuditContext
 from ....modules.access_control import PROJECT_DATA_VIEW, SYSTEM_USER_APPROVE, require_permission
-from ....schemas.api import ProjectCreate
+from ....schemas.api import ProjectCreate, ProjectSelectionResponse
 
 
 router = APIRouter()
 
 
-@router.get("/api/projects")
+@router.get("/api/projects", response_model=list[ProjectSelectionResponse])
 def get_projects(request: Request) -> list[dict[str, Any]]:
     return list_projects(
         lambda: require_permission(request, PROJECT_DATA_VIEW),

@@ -22,7 +22,7 @@ test('changing the result query hides previous data and ignores a delayed respon
     await release
     await route.fulfill({ json: { widgets: [{ id: 'stale', title: '이전 대상 결과', type: 'kpi', status: 'READY', data: [{ value: 999 }] }] } })
   })
-  const query = screen.getByRole('button', { name: '결과 조회', exact: true })
+  const query = screen.getByRole('button', { name: '저장 결과만 조회', exact: true })
   await query.click()
   await arrived
   await run.fill('run-after')

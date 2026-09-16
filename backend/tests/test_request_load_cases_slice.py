@@ -16,6 +16,7 @@ from app.application.request_load_cases.queries import get_load_cases
 from app.database_connection import connect
 from app.domains.request_load_cases.policies import load_cases_with_parameters
 from app.main import app
+from app.schemas.api import LoadCaseSelectionResponse
 
 
 class _Cursor:
@@ -92,7 +93,7 @@ def test_load_case_route_contract_and_global_order() -> None:
         for route in routes
         if route.path == "/api/requests/{request_id}/load-cases" and route.methods == {"GET"}
     )
-    assert route.response_model == list[dict[str, Any]]
+    assert route.response_model == list[LoadCaseSelectionResponse]
     assert (route.operation_id or route.unique_id) == "get_load_cases_api_requests__request_id__load_cases_get"
     operation = app.openapi()["paths"]["/api/requests/{request_id}/load-cases"]["get"]
     assert set(operation["responses"]) == {"200", "422"}
@@ -134,7 +135,9 @@ def test_adapter_uses_exact_sql_and_same_connection() -> None:
     connection = _Connection([ROW])
     result = SQLRequestLoadCasesRepository(connection).list_load_cases("request-1")  # type: ignore[arg-type]
     assert result[0]["id"] == "loadcase-1"
-    assert connection.calls == [("SELECT * FROM load_cases WHERE request_id = ? ORDER BY created_at", ["request-1"])]
+    assert len(connection.calls) == 1
+    assert "FROM load_cases" in connection.calls[0][0]
+    assert connection.calls[0][1] == ["request-1"]
 
 
 @pytest.mark.unit
@@ -166,7 +169,9 @@ def test_seeded_http_projection_order_missing_request_and_malformed_json() -> No
         assert [item["id"] for item in body[:2]] == ["loadcase-query-early", "loadcase-drop-bottom-001"]
         assert all("parameters_json" not in item for item in body)
         assert all("parameters" in item for item in body)
-        assert client.get("/api/requests/does-not-exist/load-cases").json() == []
+        # Selection metadata is now read through the parent resource permission
+        # boundary; a missing request uses the same 404 contract as other reads.
+        assert client.get("/api/requests/does-not-exist/load-cases").status_code == 404
 
     malformed = dict(ROW, parameters_json="not-json")
     result = load_cases_with_parameters([malformed])

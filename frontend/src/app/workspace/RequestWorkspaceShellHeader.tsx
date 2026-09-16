@@ -15,6 +15,7 @@ type Props = {
     onReviewSnapshot: () => void
     onReviewUnconfigured: () => void
     onViewOverview: () => void
+    onRefreshResults?: () => void
   }
   model: {
     activeDashboardId: string
@@ -26,6 +27,8 @@ type Props = {
     analysisRunError: string
     canOpenData: boolean
     canOpenWorkbench: boolean
+    canRefreshResults?: boolean
+    resultsRefreshing?: boolean
     contextChanging: boolean
     loadCases: LoadCase[]
     overview: Overview | null
@@ -50,7 +53,7 @@ type Props = {
 
 /** Application-level assembly keeps request navigation controls identical on all four tabs. */
 export function RequestWorkspaceShellHeader({ actions, model, onBeginReview, isCurrentReview, loadLayout, onReviewError, onRunChange }: Props) {
-  const { activeDashboardId, activeTab, activeView, analysisRunChanging, analysisRunError, analysisRuns, analysisRunsLoading, canOpenData, canOpenWorkbench, contextChanging, loadCases, overview, owner, projectId, projects, requestContextLoading, requestId, requests, selectedAnalysisRunId, selectedLoadCaseId, selectedWorkflow, status, title } = model
+  const { activeDashboardId, activeTab, activeView, analysisRunChanging, analysisRunError, analysisRuns, analysisRunsLoading, canOpenData, canOpenWorkbench, canRefreshResults, resultsRefreshing, contextChanging, loadCases, overview, owner, projectId, projects, requestContextLoading, requestId, requests, selectedAnalysisRunId, selectedLoadCaseId, selectedWorkflow, status, title } = model
   const completedCount = selectedWorkflow ? `${selectedWorkflow.steps.filter((step) => step.status === 'COMPLETED').length} / ${selectedWorkflow.total_count ?? selectedWorkflow.steps.length} 작업 완료` : undefined
   // Snapshot and unconfigured review layouts also render one selected immutable Run.
   const showRunSelector = activeTab === 'review'
@@ -64,6 +67,9 @@ export function RequestWorkspaceShellHeader({ actions, model, onBeginReview, isC
     completedCount={completedCount}
     loadCases={loadCases}
     onLoadCaseChange={actions.onLoadCaseChange}
+    onRefreshResults={actions.onRefreshResults}
+    canRefreshResults={canRefreshResults}
+    resultsRefreshing={resultsRefreshing}
     onOpenData={actions.onOpenData}
     onOpenWorkbench={actions.onOpenWorkbench}
     onProjectChange={actions.onProjectChange}

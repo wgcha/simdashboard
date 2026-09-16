@@ -1,6 +1,7 @@
 """Pure proposal construction; identifiers never bind to similarly named demo data."""
 from __future__ import annotations
 
+import json
 import unicodedata
 from uuid import NAMESPACE_URL, uuid5
 
@@ -38,6 +39,12 @@ def extract(name: str, rule: dict) -> tuple[str, str]:
     if any(ord(char) < 32 or ord(char) == 127 for char in code + label):
         raise ValueError("번호·이름에 제어문자를 사용할 수 없습니다.")
     return code, label
+
+
+def _rule_effect(rule: dict, kind: str, code: str, label: str) -> tuple[str, str, str, str]:
+    """A same-folder rule must also agree on its durable result policy."""
+    policy = json.dumps(rule.get("result_config"), sort_keys=True, ensure_ascii=False, separators=(",", ":")) if kind == "RESULTS" else ""
+    return code, label, rule.get("analysis_type", "") if kind == "LOAD_CASE" else "", policy
 
 
 def _default_options() -> dict:
@@ -82,7 +89,7 @@ def build_plan(nodes: list[dict], rules: list[dict], root_key: str, registry: li
             for rule, role, _ in entries:
                 try:
                     code, label = extract(node["name"], rule)
-                    effects.add((code, label, rule.get("analysis_type", "") if role["kind"] == "LOAD_CASE" else ""))
+                    effects.add(_rule_effect(rule, role["kind"], code, label))
                 except ValueError as error:
                     effects.add(("!invalid", str(error), ""))
             if len(effects) == 1:
@@ -112,7 +119,7 @@ def build_plan(nodes: list[dict], rules: list[dict], root_key: str, registry: li
             for rule, _role, _ in entries:
                 try:
                     code, label = extract(node["name"], rule)
-                    effects.add((code, label, rule.get("analysis_type", "") if kind == "LOAD_CASE" else ""))
+                    effects.add(_rule_effect(rule, kind, code, label))
                 except ValueError as error:
                     effects.add(("!invalid", str(error), ""))
             if len(effects) == 1:
@@ -144,6 +151,10 @@ def build_plan(nodes: list[dict], rules: list[dict], root_key: str, registry: li
                    "project_id": context.get("PROJECT", {}).get("target_id"), "request_id": context.get("REQUEST", {}).get("target_id"),
                    "load_case_id": context.get("LOAD_CASE", {}).get("target_id"),
                    "status": "CREATE", "message": "새 업무 항목 생성"}
+            if role_kind == "RESULTS":
+                row["result_config"] = rule.get("result_config")
+                row["result_config_source"] = rule.get("result_config_source", "NONE")
+                row["binding_status"] = "WILL_CREATE" if row["result_config"] else "CONFIG_REQUIRED"
             if role_kind == "PROJECT": row["project_id"] = target_id
             elif role_kind == "REQUEST": row["request_id"] = target_id
             elif role_kind == "LOAD_CASE": row["load_case_id"] = target_id

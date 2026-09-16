@@ -1,6 +1,7 @@
 import { Plus, RotateCcw, Save, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import type { FolderAnalysisTypeOption, FolderDiscoveryCatalog, FolderRoleKind, FolderRoleOption } from '../../shared/api/folderDiscovery'
+import type { SemanticCatalog } from '../../shared/api/semanticMapping'
 
 const ROLE_KINDS: FolderRoleKind[] = ['PROJECT', 'REQUEST', 'LOAD_CASE', 'RESULTS', 'INPUT']
 const ROLE_KIND_LABEL: Record<FolderRoleKind, string> = { PROJECT: '프로젝트', REQUEST: '의뢰', LOAD_CASE: '하중 경우', RESULTS: '결과 폴더', INPUT: '입력 폴더' }
@@ -9,11 +10,12 @@ type Props = {
   catalog: FolderDiscoveryCatalog
   saving: boolean
   onSave: (catalog: Omit<FolderDiscoveryCatalog, 'revision'>, expectedRevision: number) => Promise<void>
+  resultCatalog?: SemanticCatalog | null
 }
 
 const cloneCatalog = (catalog: FolderDiscoveryCatalog): FolderDiscoveryCatalog => ({ revision: catalog.revision, roles: catalog.roles.map((item) => ({ ...item })), analysis_types: catalog.analysis_types.map((item) => ({ ...item })) })
 
-export function FolderDiscoveryCatalogEditor({ catalog, saving, onSave }: Props) {
+export function FolderDiscoveryCatalogEditor({ catalog, saving, onSave, resultCatalog = null }: Props) {
   const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState<FolderDiscoveryCatalog>(() => cloneCatalog(catalog))
   const [roleKey, setRoleKey] = useState('')
@@ -26,7 +28,7 @@ export function FolderDiscoveryCatalogEditor({ catalog, saving, onSave }: Props)
   useEffect(() => { setDraft(cloneCatalog(catalog)); setError('') }, [catalog])
 
   const updateRole = (key: string, patch: Partial<FolderRoleOption>) => setDraft((current) => ({ ...current, roles: current.roles.map((item) => item.key === key ? { ...item, ...patch } : item) }))
-  const updateAnalysis = (key: string, patch: Partial<FolderAnalysisTypeOption>) => setDraft((current) => ({ ...current, analysis_types: current.analysis_types.map((item) => item.key === key ? { ...item, ...patch } : item) }))
+  const updateAnalysis = (key: string, patch: Partial<FolderAnalysisTypeOption & { default_result_config?: { recipe_ids: string[]; template_id?: string | null } | null }>) => setDraft((current) => ({ ...current, analysis_types: current.analysis_types.map((item) => item.key === key ? { ...item, ...patch } : item) }))
   const addRole = () => {
     const key = roleKey.trim()
     const label = roleLabel.trim()
@@ -59,7 +61,7 @@ export function FolderDiscoveryCatalogEditor({ catalog, saving, onSave }: Props)
           <div className="folder-discovery-catalog-add"><input aria-label="새 역할 키" placeholder="새 역할 키" value={roleKey} onChange={(event) => setRoleKey(event.target.value)} /><input aria-label="새 역할 표시명" placeholder="표시명" value={roleLabel} onChange={(event) => setRoleLabel(event.target.value)} /><select aria-label="새 역할 종류" value={roleKind} onChange={(event) => setRoleKind(event.target.value as FolderRoleKind)}>{ROLE_KINDS.map((kind) => <option key={kind} value={kind}>{ROLE_KIND_LABEL[kind]}</option>)}</select><button type="button" className="ghost-button" onClick={addRole}><Plus /> 추가</button></div>
         </section>
         <section><header><h4>해석 종류</h4><span>하중 경우 역할에 표시됩니다.</span></header>
-          <div className="folder-discovery-catalog-list">{draft.analysis_types.map((item) => <div className={`folder-discovery-catalog-row${item.active ? '' : ' inactive'}`} key={item.key}><code>{item.key}</code><input aria-label={`${item.key} 해석 종류 표시명`} value={item.label} onChange={(event) => updateAnalysis(item.key, { label: event.target.value })} /><button type="button" className="icon-button" aria-label={`${item.key} 해석 종류 ${item.active ? '삭제' : '복구'}`} onClick={() => updateAnalysis(item.key, { active: !item.active })}>{item.active ? <Trash2 /> : <RotateCcw />}</button></div>)}</div>
+          <div className="folder-discovery-catalog-list">{draft.analysis_types.map((item) => { const defaultConfig = item.default_result_config ?? { recipe_ids: [], template_id: null }; const activeRecipes = resultCatalog?.recipes.filter((recipe) => recipe.active_version) ?? []; const activeTemplates = resultCatalog?.templates.filter((template) => template.active_version) ?? []; const setConfig = (patch: Partial<typeof defaultConfig>) => { const next = { ...defaultConfig, ...patch }; updateAnalysis(item.key, { default_result_config: next.recipe_ids.length ? next : null }) }; return <div className={`folder-discovery-catalog-row${item.active ? '' : ' inactive'}`} key={item.key}><code>{item.key}</code><input aria-label={`${item.key} 해석 종류 표시명`} value={item.label} onChange={(event) => updateAnalysis(item.key, { label: event.target.value })} /><button type="button" className="icon-button" aria-label={`${item.key} 해석 종류 ${item.active ? '삭제' : '복구'}`} onClick={() => updateAnalysis(item.key, { active: !item.active })}>{item.active ? <Trash2 /> : <RotateCcw />}</button><details className="folder-discovery-default-result"><summary>기본 결과 읽기 설정</summary><fieldset><legend>레시피</legend>{activeRecipes.length ? activeRecipes.map((recipe) => <label key={recipe.id}><input type="checkbox" aria-label={`${item.key} 기본 결과 레시피 ${recipe.name ?? recipe.id}`} checked={defaultConfig.recipe_ids.includes(recipe.id)} onChange={(event) => setConfig({ recipe_ids: event.target.checked ? [...new Set([...defaultConfig.recipe_ids, recipe.id])] : defaultConfig.recipe_ids.filter((id) => id !== recipe.id) })} />{recipe.name ?? recipe.id} · v{recipe.active_version}</label>) : <small>활성 레시피를 불러오지 못했습니다.</small>}</fieldset><label>템플릿<select aria-label={`${item.key} 기본 결과 템플릿`} disabled={!defaultConfig.recipe_ids.length} value={defaultConfig.template_id ?? ''} onChange={(event) => { if (defaultConfig.recipe_ids.length) setConfig({ template_id: event.target.value || null }) }}><option value="">레시피 저장 템플릿</option>{activeTemplates.map((template) => <option key={template.id} value={template.id}>{template.name ?? template.id} · v{template.active_version}</option>)}</select></label><small>규칙에 명시한 설정이 이 기본값보다 우선합니다. 이미 연결된 폴더에는 자동 재적용되지 않습니다.</small></details></div> })}</div>
           <div className="folder-discovery-catalog-add"><input aria-label="새 해석 종류 키" placeholder="새 해석 키" value={analysisKey} onChange={(event) => setAnalysisKey(event.target.value)} /><input aria-label="새 해석 종류 표시명" placeholder="표시명" value={analysisLabel} onChange={(event) => setAnalysisLabel(event.target.value)} /><button type="button" className="ghost-button" onClick={addAnalysis}><Plus /> 추가</button></div>
         </section>
       </div>

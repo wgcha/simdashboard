@@ -88,6 +88,8 @@ export type Project = {
   name: string
   product_name: string
   description: string
+  code?: string | null
+  selection_metadata?: import('./shared/components/selectionLabels').SelectionMetadata | null
 }
 
 export type FeatureExample = {
@@ -124,6 +126,8 @@ export type AnalysisRequest = {
   source_type?: 'EXTERNAL_SYSTEM' | 'DEPARTMENT_HEAD'
   source_reference?: string
   requested_by?: string
+  code?: string | null
+  selection_metadata?: import('./shared/components/selectionLabels').SelectionMetadata | null
 }
 
 export type LoadCase = {
@@ -133,6 +137,8 @@ export type LoadCase = {
   analysis_type: 'DROP' | 'SIDE_CLAMP' | string
   status: string
   parameters: Record<string, string | number | string[]>
+  code?: string | null
+  selection_metadata?: import('./shared/components/selectionLabels').SelectionMetadata | null
 }
 
 export type QualityThreshold = {

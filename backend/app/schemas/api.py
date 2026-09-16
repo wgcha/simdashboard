@@ -223,6 +223,53 @@ class AssigneeUpdate(BaseModel):
     owner_user_id: str = Field(min_length=3, max_length=120)
 
 
+class SelectionContextResponse(BaseModel):
+    id: str
+    name: str
+
+
+class SelectionMetadataResponse(BaseModel):
+    code: str | None = None
+    name: str
+    project: SelectionContextResponse | None = None
+    request: SelectionContextResponse | None = None
+    analysis_type: str | None = None
+    relative_path: str | None = None
+
+
+class ProjectSelectionResponse(BaseModel):
+    id: str
+    name: str
+    product_name: str
+    description: str | None = None
+    created_at: Any
+    selection_metadata: SelectionMetadataResponse
+
+
+class RequestSelectionResponse(BaseModel):
+    id: str
+    project_id: str
+    title: str
+    status: str
+    owner: str | None = None
+    owner_user_id: str | None = None
+    requested_at: Any
+    due_at: Any = None
+    overall_note: str | None = None
+    selection_metadata: SelectionMetadataResponse
+
+
+class LoadCaseSelectionResponse(BaseModel):
+    id: str
+    request_id: str
+    name: str
+    analysis_type: str
+    status: str
+    parameters: Any
+    created_at: Any
+    selection_metadata: SelectionMetadataResponse
+
+
 class LoadCaseCreate(BaseModel):
     name: str = Field(min_length=2, max_length=160)
     analysis_type: Literal["DROP", "SIDE_CLAMP"]

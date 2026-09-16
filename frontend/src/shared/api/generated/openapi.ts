@@ -1625,6 +1625,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/semantic-mapping/load-cases/{load_case_id}/results/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Refresh Load Case Results
+         * @description Refresh every exact load-case result binding and pin the chosen run.
+         */
+        post: operations["refresh_load_case_results_api_semantic_mapping_load_cases__load_case_id__results_refresh_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/semantic-mapping/results": {
         parameters: {
             query?: never;
@@ -1964,6 +1984,40 @@ export interface paths {
         get: operations["get_connections_api_folder_discovery_connections_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/folder-discovery/connections/result-config/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preview Connection Result Config */
+        post: operations["preview_connection_result_config_api_folder_discovery_connections_result_config_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/folder-discovery/connections/result-config/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Apply Connection Result Config */
+        post: operations["apply_connection_result_config_api_folder_discovery_connections_result_config_apply_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3462,6 +3516,10 @@ export interface components {
              * @default true
              */
             active: boolean;
+            /** Default Result Config */
+            default_result_config?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** CatalogResponse */
         CatalogResponse: {
@@ -3965,6 +4023,10 @@ export interface components {
              * @default
              */
             analysis_type: string;
+            /** Result Config */
+            result_config?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** FolderRuleUpdate */
         FolderRuleUpdate: {
@@ -4144,6 +4206,24 @@ export interface components {
             parameters?: {
                 [key: string]: unknown;
             };
+        };
+        /** LoadCaseSelectionResponse */
+        LoadCaseSelectionResponse: {
+            /** Id */
+            id: string;
+            /** Request Id */
+            request_id: string;
+            /** Name */
+            name: string;
+            /** Analysis Type */
+            analysis_type: string;
+            /** Status */
+            status: string;
+            /** Parameters */
+            parameters: unknown;
+            /** Created At */
+            created_at: unknown;
+            selection_metadata: components["schemas"]["SelectionMetadataResponse"];
         };
         /**
          * LocalHelperDistributionReady
@@ -4471,6 +4551,20 @@ export interface components {
             /** Expected Updated At */
             expected_updated_at?: string | null;
         };
+        /** ProjectSelectionResponse */
+        ProjectSelectionResponse: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Product Name */
+            product_name: string;
+            /** Description */
+            description?: string | null;
+            /** Created At */
+            created_at: unknown;
+            selection_metadata: components["schemas"]["SelectionMetadataResponse"];
+        };
         /** ProtectedPriorRun */
         ProtectedPriorRun: {
             /** Analysis Run Id */
@@ -4741,6 +4835,28 @@ export interface components {
             /** Widgets */
             widgets: components["schemas"]["ResultWidgetDefinition"][];
         };
+        /** RequestSelectionResponse */
+        RequestSelectionResponse: {
+            /** Id */
+            id: string;
+            /** Project Id */
+            project_id: string;
+            /** Title */
+            title: string;
+            /** Status */
+            status: string;
+            /** Owner */
+            owner?: string | null;
+            /** Owner User Id */
+            owner_user_id?: string | null;
+            /** Requested At */
+            requested_at: unknown;
+            /** Due At */
+            due_at?: unknown;
+            /** Overall Note */
+            overall_note?: string | null;
+            selection_metadata: components["schemas"]["SelectionMetadataResponse"];
+        };
         /** RequestTypeAssignmentInput */
         RequestTypeAssignmentInput: {
             /** Request Type Id */
@@ -4782,6 +4898,22 @@ export interface components {
             target_kinds?: ("FOLDER_ROLE" | "PROJECT" | "REQUEST" | "LOAD_CASE" | "RESULT_ITEM")[] | null;
             /** Scope Project Id */
             scope_project_id?: string | null;
+        };
+        /** ResultConfigBulk */
+        ResultConfigBulk: {
+            /** Items */
+            items: components["schemas"]["ResultConfigItem"][];
+        };
+        /** ResultConfigItem */
+        ResultConfigItem: {
+            /** Registry Id */
+            registry_id: string;
+            /** Expected Binding Revision */
+            expected_binding_revision?: number | null;
+            /** Result Config */
+            result_config: {
+                [key: string]: unknown;
+            };
         };
         /**
          * ResultImportHistoryItem
@@ -5177,6 +5309,26 @@ export interface components {
             validated_pair_count: number;
             /** Unverified Pair Count */
             unverified_pair_count: number;
+        };
+        /** SelectionContextResponse */
+        SelectionContextResponse: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+        };
+        /** SelectionMetadataResponse */
+        SelectionMetadataResponse: {
+            /** Code */
+            code?: string | null;
+            /** Name */
+            name: string;
+            project?: components["schemas"]["SelectionContextResponse"] | null;
+            request?: components["schemas"]["SelectionContextResponse"] | null;
+            /** Analysis Type */
+            analysis_type?: string | null;
+            /** Relative Path */
+            relative_path?: string | null;
         };
         /** StorageBindingResponse */
         StorageBindingResponse: {
@@ -9254,6 +9406,39 @@ export interface operations {
             };
         };
     };
+    refresh_load_case_results_api_semantic_mapping_load_cases__load_case_id__results_refresh_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                load_case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     results_api_semantic_mapping_results_get: {
         parameters: {
             query: {
@@ -9963,6 +10148,72 @@ export interface operations {
             };
         };
     };
+    preview_connection_result_config_api_folder_discovery_connections_result_config_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResultConfigBulk"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    apply_connection_result_config_api_folder_discovery_connections_result_config_apply_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResultConfigBulk"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_entries_api_semantic_vocabulary_get: {
         parameters: {
             query?: never;
@@ -10151,9 +10402,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    }[];
+                    "application/json": components["schemas"]["ProjectSelectionResponse"][];
                 };
             };
         };
@@ -10411,9 +10660,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    }[];
+                    "application/json": components["schemas"]["RequestSelectionResponse"][];
                 };
             };
             /** @description Validation Error */
@@ -10518,9 +10765,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    }[];
+                    "application/json": components["schemas"]["LoadCaseSelectionResponse"][];
                 };
             };
             /** @description Validation Error */

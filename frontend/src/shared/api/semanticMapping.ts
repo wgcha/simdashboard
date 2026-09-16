@@ -1,5 +1,6 @@
 import { apiClient, unwrapGenerated } from './client'
 import type { components } from './generated/openapi'
+import type { SelectionMetadata } from '../components/selectionLabels'
 
 export type SemanticItemKind = 'scalar' | 'vector' | 'curve' | 'image' | 'video'
 export type SemanticDataType = 'FLOAT' | 'INTEGER' | 'TEXT' | 'BOOLEAN'
@@ -55,9 +56,9 @@ export type PreviewResponse = { parsed: ParsedSemanticResult; widgets: PreviewWi
 export type ImportResponse = PreviewResponse & { status: string; run_id?: string; summary?: Record<string, unknown>; recipe_version?: number; template_version?: number; template_id?: string | null; review_available?: boolean; clear_reason?: string | null }
 export type ResultsResponse = { widgets: PreviewWidget[]; run_id?: string; template_version?: number; has_provenance?: boolean; empty_reason?: string | null }
 export type FolderResponse = { path?: string; relative_path?: string; entries?: Array<{ name: string; relative_path: string; is_directory: boolean }> }
-export type ContextProject = { id: string; name: string; product_name?: string }
-export type ContextRequest = { id: string; project_id: string; title: string; status?: string }
-export type ContextLoadCase = { id: string; request_id: string; name: string; analysis_type?: string; status?: string }
+export type ContextProject = { id: string; name: string; product_name?: string; code?: string | null; selection_metadata?: SelectionMetadata | null }
+export type ContextRequest = { id: string; project_id: string; title: string; status?: string; code?: string | null; selection_metadata?: SelectionMetadata | null }
+export type ContextLoadCase = { id: string; request_id: string; name: string; analysis_type?: string; status?: string; code?: string | null; selection_metadata?: SelectionMetadata | null }
 
 type UploadCall = { body: FormData; bodySerializer: (value: unknown) => BodyInit }
 
@@ -122,6 +123,7 @@ export const semanticMappingApi = {
   reconnectBinding: async (id: string, binding: Omit<SemanticBinding, 'id' | 'status' | 'updated_at' | 'revision'> & { expected_revision: number }) => unwrapGenerated(await apiClient.PUT('/api/semantic-mapping/bindings/{binding_id}', { params: { path: { binding_id: id } }, body: { ...binding, id } as components['schemas']['BindingSave'] })) as SemanticBinding,
   refreshBinding: async (id: string) => unwrapGenerated(await apiClient.POST('/api/semantic-mapping/bindings/{binding_id}/refresh', { params: { path: { binding_id: id } } })),
   importFile: async (file: File, recipeId: string, loadCaseId: string, templateId?: string) => unwrapGenerated(await apiClient.POST('/api/semantic-mapping/import', uploadOptions(uploadForm(file, { recipe_id: recipeId, load_case_id: loadCaseId, template_id: templateId })) as never)) as ImportResponse,
+  refreshLoadCaseResults: async (loadCaseId: string) => unwrapGenerated(await apiClient.POST('/api/semantic-mapping/load-cases/{load_case_id}/results/refresh', { params: { path: { load_case_id: loadCaseId } } })) as { load_case_id: string; display_run_id?: string | null; results: Array<Record<string, unknown>>; partial: boolean },
   results: async (params: { load_case_id?: string; run_id?: string; template_id?: string }) => unwrapGenerated(await apiClient.GET('/api/semantic-mapping/results', { params: { query: { load_case_id: params.load_case_id ?? '', run_id: params.run_id, template_id: params.template_id } } })) as ResultsResponse,
   exportDefinitions: async () => unwrapGenerated(await apiClient.GET('/api/semantic-mapping/export')) as { format_version: number; items: unknown[]; recipes: unknown[]; templates: unknown[]; warnings?: Array<{ recipe_id: string; code: string }> },
   importDefinitions: async (definitions: unknown) => unwrapGenerated(await apiClient.POST('/api/semantic-mapping/import-definitions', { body: definitions as Record<string, unknown> })) as { status: string; created: unknown[] },

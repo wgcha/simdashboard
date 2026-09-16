@@ -11,17 +11,24 @@ from ....adapters.persistence.request_load_cases import (
 from ....application.request_load_cases.commands import create_load_case as create_load_case_command
 from ....application.request_load_cases.queries import get_load_cases as get_load_cases_query
 from ....domains.request_load_cases.errors import RequestNotFoundError
-from ....modules.access_control import REQUEST_EDIT, require_resource_permission
-from ....schemas.api import LoadCaseCreate
+from ....modules.access_control import PROJECT_DATA_VIEW, REQUEST_EDIT, require_resource_permission
+from ....schemas.api import LoadCaseCreate, LoadCaseSelectionResponse
 
 
 router = APIRouter()
 create_router = APIRouter()
 
 
-@router.get("/api/requests/{request_id}/load-cases")
-def get_load_cases(request_id: str) -> list[dict[str, Any]]:
-    return get_load_cases_query(request_id, SQLRequestLoadCasesRepositoryProvider())
+@router.get("/api/requests/{request_id}/load-cases", response_model=list[LoadCaseSelectionResponse])
+def get_load_cases(request_id: str, request: Request) -> list[dict[str, Any]]:
+    return get_load_cases_query(
+        request_id,
+        SQLRequestLoadCasesRepositoryProvider(
+            lambda resource_id, connection: bool(
+                require_resource_permission(request, PROJECT_DATA_VIEW, "request", resource_id, conn=connection)
+            )
+        ),
+    )
 
 
 @create_router.post("/api/requests/{request_id}/load-cases", status_code=201)

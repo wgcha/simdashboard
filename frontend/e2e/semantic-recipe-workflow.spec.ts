@@ -152,7 +152,6 @@ for (const extension of ['csv', 'json']) {
     await screen.getByRole('checkbox', { name: new RegExp(recipeName) }).check()
     // The recipe's saved display template is sufficient; no second selection is required.
     let runId: string
-    let bindingId = ''
     if (extension === 'csv') {
       const storageRoot = path.resolve('../output/qa/recipe-folder')
       const directory = `issue-${suffix}`
@@ -164,11 +163,11 @@ for (const extension of ['csv', 'json']) {
       expect(storage.status(), await storage.text()).toBe(200)
       await screen.getByLabel('폴더 상대 경로', { exact: true }).fill(directory)
       const savingBinding = page.waitForResponse((response) => response.url().endsWith('/semantic-mapping/bindings') && response.request().method() === 'POST')
-      const processing = page.waitForResponse((response) => /\/semantic-mapping\/bindings\/[^/]+\/refresh$/.test(response.url()))
+      const processing = page.waitForResponse((response) => response.url().endsWith(`/semantic-mapping/load-cases/${target.loadCaseId}/results/refresh`))
       await screen.getByRole('button', { name: '연결 저장', exact: true }).click()
       const bound = await savingBinding
       expect(bound.ok(), await bound.text()).toBeTruthy()
-      bindingId = (await bound.json()).id
+      expect((await bound.json()).id).toBeTruthy()
       const processed = await processing
       expect(processed.status(), await processed.text()).toBe(200)
       const results = (await processed.json()).results as Array<{ relative_path: string; run_id: string; status: string; review_available: boolean; diagnostics?: unknown[] }>
@@ -182,7 +181,7 @@ for (const extension of ['csv', 'json']) {
       await expect(screen.getByRole('row').filter({ hasText: 'unrelated.csv' })).toContainText('후보 오류')
       await screen.getByRole('row').filter({ hasText: filename }).scrollIntoViewIfNeeded()
       await page.screenshot({ path: testInfo.outputPath('issue-csv-folder-processed.png') })
-      const refreshing = page.waitForResponse((response) => response.url().endsWith(`/bindings/${bindingId}/refresh`))
+      const refreshing = page.waitForResponse((response) => response.url().endsWith(`/load-cases/${target.loadCaseId}/results/refresh`))
       await screen.locator('.binding-list article').filter({ hasText: directory }).getByRole('button', { name: '새로고침', exact: true }).click()
       const repeated = (await (await refreshing).json()).results
       expect(repeated.find((row: { relative_path: string }) => row.relative_path === filename).status).toBe('SKIPPED')

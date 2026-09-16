@@ -3,6 +3,7 @@ import { CircleDot, ClipboardPlus, Play, Route, type LucideIcon } from 'lucide-r
 
 import type { AnalysisRequest, LoadCase, Project } from '../../types'
 import './RequestWorkspaceHeader.css'
+import { SearchableSelect } from '../../shared/components/selectionLabels'
 
 type JourneyItemProps = {
   active: boolean
@@ -46,6 +47,9 @@ export function RequestWorkspaceHeader({
   resultReviewTab,
   selectedLoadCaseId,
   onLoadCaseChange,
+  onRefreshResults,
+  canRefreshResults = false,
+  resultsRefreshing = false,
   status,
   title,
   owner,
@@ -71,6 +75,9 @@ export function RequestWorkspaceHeader({
   resultReviewTab: ReactNode
   selectedLoadCaseId: string
   onLoadCaseChange: (id: string) => void
+  onRefreshResults?: () => void
+  canRefreshResults?: boolean
+  resultsRefreshing?: boolean
   status: string
   title: string
   owner: string
@@ -85,9 +92,10 @@ export function RequestWorkspaceHeader({
         <p><span>{owner || '담당자 미지정'}</span><b>·</b><strong>{(statusLabels[status] ?? status) || '상태 미지정'}</strong>{completedCount && <><b>·</b><span>{completedCount}</span></>}</p>
       </div>
       <div className="request-context-strip" aria-label="현재 의뢰 문맥">
-        <label><span>프로젝트</span><select aria-label="프로젝트 선택" value={projectId} disabled={contextChanging} onChange={(event) => onProjectChange(event.target.value)}>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
-        <label><span>의뢰</span><select aria-label="의뢰 선택" value={requestId} disabled={requestUnavailable || contextChanging} onChange={(event) => onRequestChange(event.target.value)}>{requestUnavailable ? <option value="">의뢰 접수 후 선택</option> : requests.map((request) => <option key={request.id} value={request.id}>{request.title}</option>)}</select></label>
-        <label><span>하중 경우</span><select aria-label="하중 경우 선택" value={selectedLoadCaseId} disabled={!loadCases.length || contextChanging} onChange={(event) => onLoadCaseChange(event.target.value)}>{loadCases.length ? loadCases.map((loadCase) => <option key={loadCase.id} value={loadCase.id}>{loadCase.name}</option>) : <option value="">미지정</option>}</select></label>
+        <label><span>프로젝트</span><SearchableSelect ariaLabel="프로젝트 선택" items={projects} kind="project" value={projectId} disabled={contextChanging} onChange={onProjectChange} placeholder="프로젝트 선택" /></label>
+        <label><span>의뢰</span><SearchableSelect ariaLabel="의뢰 선택" items={requests} kind="request" value={requestId} disabled={requestUnavailable || contextChanging} onChange={onRequestChange} placeholder={requestUnavailable ? '의뢰 접수 후 선택' : '의뢰 선택'} /></label>
+        <label><span>하중 경우</span><SearchableSelect ariaLabel="하중 경우 선택" items={loadCases} kind="load_case" value={selectedLoadCaseId} disabled={!loadCases.length || contextChanging} onChange={onLoadCaseChange} placeholder={loadCases.length ? '하중 경우 선택' : '미지정'} /></label>
+        {onRefreshResults ? <button type="button" className="ghost-button request-results-refresh" aria-label="현재 하중 경우 결과 파일 확인" title="결과 파일을 처리하고 표시 가능한 Run을 선택합니다." onClick={onRefreshResults} disabled={!canRefreshResults || resultsRefreshing || contextChanging || !selectedLoadCaseId}>{resultsRefreshing ? '조회 중…' : '결과 조회'}</button> : null}
         {activeRunSelector}
       </div>
     </section>

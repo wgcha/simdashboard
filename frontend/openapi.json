@@ -4942,6 +4942,51 @@
         }
       }
     },
+    "/api/semantic-mapping/load-cases/{load_case_id}/results/refresh": {
+      "post": {
+        "tags": [
+          "semantic-mapping"
+        ],
+        "summary": "Refresh Load Case Results",
+        "description": "Refresh every exact load-case result binding and pin the chosen run.",
+        "operationId": "refresh_load_case_results_api_semantic_mapping_load_cases__load_case_id__results_refresh_post",
+        "parameters": [
+          {
+            "name": "load_case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Load Case Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Refresh Load Case Results Api Semantic Mapping Load Cases  Load Case Id  Results Refresh Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/semantic-mapping/results": {
       "get": {
         "tags": [
@@ -5967,6 +6012,84 @@
         }
       }
     },
+    "/api/folder-discovery/connections/result-config/preview": {
+      "post": {
+        "tags": [
+          "folder-discovery"
+        ],
+        "summary": "Preview Connection Result Config",
+        "operationId": "preview_connection_result_config_api_folder_discovery_connections_result_config_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResultConfigBulk"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/folder-discovery/connections/result-config/apply": {
+      "post": {
+        "tags": [
+          "folder-discovery"
+        ],
+        "summary": "Apply Connection Result Config",
+        "operationId": "apply_connection_result_config_api_folder_discovery_connections_result_config_apply_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResultConfigBulk"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/semantic-vocabulary": {
       "get": {
         "tags": [
@@ -6185,8 +6308,7 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "additionalProperties": true,
-                    "type": "object"
+                    "$ref": "#/components/schemas/ProjectSelectionResponse"
                   },
                   "type": "array",
                   "title": "Response Get Projects Api Projects Get"
@@ -6669,8 +6791,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "type": "object",
-                    "additionalProperties": true
+                    "$ref": "#/components/schemas/RequestSelectionResponse"
                   },
                   "title": "Response Get Requests Api Projects  Project Id  Requests Get"
                 }
@@ -6813,8 +6934,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "type": "object",
-                    "additionalProperties": true
+                    "$ref": "#/components/schemas/LoadCaseSelectionResponse"
                   },
                   "title": "Response Get Load Cases Api Requests  Request Id  Load Cases Get"
                 }
@@ -10930,6 +11050,18 @@
             "type": "boolean",
             "title": "Active",
             "default": true
+          },
+          "default_result_config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Result Config"
           }
         },
         "type": "object",
@@ -12427,6 +12559,18 @@
             "maxLength": 128,
             "title": "Analysis Type",
             "default": ""
+          },
+          "result_config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result Config"
           }
         },
         "type": "object",
@@ -12948,6 +13092,51 @@
           "analysis_type"
         ],
         "title": "LoadCaseCreate"
+      },
+      "LoadCaseSelectionResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "analysis_type": {
+            "type": "string",
+            "title": "Analysis Type"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "parameters": {
+            "title": "Parameters"
+          },
+          "created_at": {
+            "title": "Created At"
+          },
+          "selection_metadata": {
+            "$ref": "#/components/schemas/SelectionMetadataResponse"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "request_id",
+          "name",
+          "analysis_type",
+          "status",
+          "parameters",
+          "created_at",
+          "selection_metadata"
+        ],
+        "title": "LoadCaseSelectionResponse"
       },
       "LocalHelperDistributionReady": {
         "properties": {
@@ -13872,6 +14061,48 @@
         ],
         "title": "ProjectMemberUpdate"
       },
+      "ProjectSelectionResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "product_name": {
+            "type": "string",
+            "title": "Product Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "created_at": {
+            "title": "Created At"
+          },
+          "selection_metadata": {
+            "$ref": "#/components/schemas/SelectionMetadataResponse"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "product_name",
+          "created_at",
+          "selection_metadata"
+        ],
+        "title": "ProjectSelectionResponse"
+      },
       "ProtectedPriorRun": {
         "properties": {
           "analysis_run_id": {
@@ -14542,6 +14773,78 @@
         "title": "RequestResultDefinition",
         "description": "Result widgets authored with a request type, rather than a template."
       },
+      "RequestSelectionResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "project_id": {
+            "type": "string",
+            "title": "Project Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
+          "owner_user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner User Id"
+          },
+          "requested_at": {
+            "title": "Requested At"
+          },
+          "due_at": {
+            "title": "Due At"
+          },
+          "overall_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Overall Note"
+          },
+          "selection_metadata": {
+            "$ref": "#/components/schemas/SelectionMetadataResponse"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "project_id",
+          "title",
+          "status",
+          "requested_at",
+          "selection_metadata"
+        ],
+        "title": "RequestSelectionResponse"
+      },
       "RequestTypeAssignmentInput": {
         "properties": {
           "request_type_id": {
@@ -14696,6 +14999,57 @@
           "terms"
         ],
         "title": "ResolveBody"
+      },
+      "ResultConfigBulk": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ResultConfigItem"
+            },
+            "type": "array",
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "ResultConfigBulk"
+      },
+      "ResultConfigItem": {
+        "properties": {
+          "registry_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Registry Id"
+          },
+          "expected_binding_revision": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Binding Revision"
+          },
+          "result_config": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Result Config"
+          }
+        },
+        "type": "object",
+        "required": [
+          "registry_id",
+          "result_config"
+        ],
+        "title": "ResultConfigItem"
       },
       "ResultImportHistoryItem": {
         "properties": {
@@ -16081,6 +16435,90 @@
           "unverified_pair_count"
         ],
         "title": "SampleCoverage"
+      },
+      "SelectionContextResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "SelectionContextResponse"
+      },
+      "SelectionMetadataResponse": {
+        "properties": {
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "project": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SelectionContextResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "request": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SelectionContextResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "analysis_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Analysis Type"
+          },
+          "relative_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Relative Path"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "SelectionMetadataResponse"
       },
       "StorageBindingResponse": {
         "properties": {

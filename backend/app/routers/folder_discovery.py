@@ -27,6 +27,7 @@ class FolderRule(BaseModel):
     code_token: int = Field(default=1, ge=0, le=100)
     name_from_token: int = Field(default=2, ge=0, le=100)
     analysis_type: str = Field(default="", max_length=128)
+    result_config: dict | None = None
 
 
 class FolderScan(BaseModel):
@@ -59,12 +60,23 @@ class CatalogAnalysisType(BaseModel):
     key: str = Field(min_length=1, max_length=128)
     label: str = Field(min_length=1, max_length=128)
     active: bool = True
+    default_result_config: dict | None = None
 
 
 class FolderCatalogUpdate(BaseModel):
     expected_revision: int = Field(ge=1)
     roles: list[CatalogRole] = Field(min_length=5, max_length=100)
     analysis_types: list[CatalogAnalysisType] = Field(min_length=1, max_length=200)
+
+
+class ResultConfigItem(BaseModel):
+    registry_id: str = Field(min_length=1, max_length=128)
+    expected_binding_revision: int | None = Field(default=None, ge=1)
+    result_config: dict
+
+
+class ResultConfigBulk(BaseModel):
+    items: list[ResultConfigItem] = Field(min_length=1, max_length=200)
 
 
 def authorize(request, conn):
@@ -204,6 +216,31 @@ def get_connections(request: Request, offset: int = Query(default=0, ge=0), limi
             return svc.connections(conn, svc.root_identity(svc.configured_root(conn)), offset=offset, limit=limit)
         except (ValueError, OSError, spdm_storage.SpdmStorageError) as error:
             raise path_error(error) from error
+
+
+@router.post("/connections/result-config/preview")
+def preview_connection_result_config(payload: ResultConfigBulk, request: Request):
+    with connect() as conn:
+        authorize(request, conn)
+        try:
+            return svc.result_config_preview(conn, svc.root_identity(svc.configured_root(conn)), [item.model_dump() for item in payload.items])
+        except ValueError as error:
+            raise HTTPException(422, {"code": "RESULT_CONFIG_INVALID", "message": str(error)}) from error
+
+
+@router.post("/connections/result-config/apply")
+def apply_connection_result_config(payload: ResultConfigBulk, request: Request):
+    with connect() as conn:
+        authorize(request, conn)
+        try:
+            with svc.WRITE_LOCK, semantic_transaction(conn):
+                svc.lock_tables(conn)
+                result = svc.apply_result_config(conn, svc.root_identity(svc.configured_root(conn)), [item.model_dump() for item in payload.items], request.state.principal.user_id)
+                write_audit_event(request=request, principal=request.state.principal, status_code=200,
+                                  action="FOLDER_DISCOVERY_RESULT_CONFIG_APPLIED", detail=result, connection=conn)
+                return result
+        except ValueError as error:
+            raise HTTPException(422, {"code": "RESULT_CONFIG_INVALID", "message": str(error)}) from error
 
 
 @router.put("/rules")

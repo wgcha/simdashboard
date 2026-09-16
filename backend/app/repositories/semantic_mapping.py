@@ -126,7 +126,7 @@ def legacy_binding_paths(connection: ConnectionLike) -> list[str]:
 
 
 def semantic_bindings(connection: ConnectionLike) -> list[dict[str, Any]]:
-    return [dict(row) for row in rows(connection.execute("SELECT b.id, b.project_id, coalesce(b.request_id, lc.request_id) AS request_id, b.load_case_id, b.relative_path FROM semantic_folder_bindings b LEFT JOIN load_cases lc ON lc.id=b.load_case_id"))]
+    return [dict(row) for row in rows(connection.execute("SELECT b.id, b.project_id, coalesce(b.request_id, lc.request_id) AS request_id, b.load_case_id, b.relative_path, b.role, b.revision FROM semantic_folder_bindings b LEFT JOIN load_cases lc ON lc.id=b.load_case_id"))]
 
 
 def binding_revision(connection: ConnectionLike, binding_id: str) -> Any:
@@ -176,6 +176,26 @@ def latest_provenance(connection: ConnectionLike, load_case_id: str, run_id: str
     result = connection.execute(query, args)
     row = result.fetchone()
     return dict(zip([column[0] for column in result.description], row)) if row else None
+
+
+def provenances_for_runs(connection: ConnectionLike, load_case_id: str, run_ids: list[str]) -> list[dict[str, Any]]:
+    """Return supplied immutable runs in canonical creation order."""
+    if not run_ids:
+        return []
+    placeholders = ",".join("?" for _ in run_ids)
+    result = connection.execute(
+        f"SELECT * FROM semantic_import_provenance WHERE load_case_id=? AND analysis_run_id IN ({placeholders}) ORDER BY created_at DESC,analysis_run_id DESC",
+        [load_case_id, *run_ids],
+    )
+    return [dict(zip([column[0] for column in result.description], row)) for row in result.fetchall()]
+
+
+def recent_provenances(connection: ConnectionLike, load_case_id: str) -> list[dict[str, Any]]:
+    result = connection.execute(
+        "SELECT * FROM semantic_import_provenance WHERE load_case_id=? ORDER BY created_at DESC,analysis_run_id DESC",
+        [load_case_id],
+    )
+    return [dict(zip([column[0] for column in result.description], row)) for row in result.fetchall()]
 
 
 def item_key_exists(connection: ConnectionLike, key: str) -> bool:

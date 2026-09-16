@@ -21,6 +21,7 @@ from app.application.requests import queries
 from app.database_connection import connect
 from app.domains.requests.errors import ProjectMembershipRequiredError
 from app.main import app
+from app.schemas.api import RequestSelectionResponse
 from app.security import hash_password
 
 
@@ -38,7 +39,7 @@ def test_project_request_route_preserves_http_openapi_and_global_registration_or
     )
     assert route.endpoint.__module__ == request_router.__name__
     assert route.endpoint.__name__ == "get_requests"
-    assert route.response_model == list[dict[str, Any]]
+    assert route.response_model == list[RequestSelectionResponse]
     assert (route.operation_id or route.unique_id) == "get_requests_api_projects__project_id__requests_get"
     assert app.openapi()["paths"][PROJECT_REQUEST_PATH]["get"]["operationId"] == (
         "get_requests_api_projects__project_id__requests_get"
@@ -147,18 +148,26 @@ def test_sql_adapter_authorizes_then_queries_on_the_same_connection_and_preserve
         events.append(f"authorize:{project_id}:{received_connection is connection}")
         return True
 
-    monkeypatch.setattr(request_persistence, "rows", lambda _cursor: [{"id": "request-1"}])
+    monkeypatch.setattr(
+        request_persistence,
+        "rows",
+        lambda _cursor: [{"id": "request-1", "title": "Current name", "selection_project_name": "Project name"}],
+    )
     result = queries.list_requests(
         "project-1",
         request_persistence.SQLRequestQueryRepositoryProvider(authorize, lambda: connection),  # type: ignore[arg-type]
     )
-    assert result == [{"id": "request-1"}]
-    assert events == [
-        "open",
-        "authorize:project-1:True",
-        f"query:{REQUEST_SQL}:['project-1']",
-        "close",
-    ]
+    assert result == [{
+        "id": "request-1",
+        "title": "Current name",
+        "selection_metadata": {
+            "code": None, "name": "Current name", "project": {"id": "project-1", "name": "Project name"},
+            "request": None, "analysis_type": None, "relative_path": None,
+        },
+    }]
+    assert events[:2] == ["open", "authorize:project-1:True"]
+    assert "FROM analysis_requests requests" in events[2]
+    assert events[-1] == "close"
 
 
 @pytest.mark.unit

@@ -6,6 +6,7 @@ import { workbenchApi } from './api'
 import { ExpectedResultsPreview } from './ExpectedResultsPreview'
 import { requestTypeLabels, type ResultProfile, type WorkbenchRequestType } from './types'
 import { useMemoryQuery } from '../../shared/cache/useMemoryQuery'
+import { SearchableSelect } from '../../shared/components/selectionLabels'
 
 type IntakeSource = 'EXTERNAL_SYSTEM' | 'DEPARTMENT_HEAD'
 type RequestTypeSelection = Pick<WorkbenchRequestType, 'id' | 'version'>
@@ -151,7 +152,7 @@ export function RequestIntakePage({ projects, initialProjectId, createdBy, canCr
     <form className="request-intake-layout" onSubmit={submit}>
       <section className="intake-form-card">
         <header><span>01 · REQUEST SOURCE</span><h2>의뢰 기본 정보</h2><p>누가 어떤 경로로 요청했는지 접수 시점의 정보로 고정합니다.</p></header>
-        <label><span>대상 프로젝트</span><select aria-label="의뢰 프로젝트" required value={projectId} onChange={(event) => setProjectId(event.target.value)}>{projects.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.product_name}</option>)}</select></label>
+        <label><span>대상 프로젝트</span><SearchableSelect ariaLabel="의뢰 프로젝트" items={projects} kind="project" required value={projectId} onChange={setProjectId} placeholder="프로젝트 선택" /></label>
         <fieldset className="intake-source-options"><legend>접수 출처</legend><label className={sourceType === 'EXTERNAL_SYSTEM' ? 'selected' : ''}><input type="radio" name="source" checked={sourceType === 'EXTERNAL_SYSTEM'} onChange={() => { setSourceType('EXTERNAL_SYSTEM'); setSourceReference('') }} /><Network /><span><strong>외부 시스템 전달</strong><small>PLM·PDM·업무 시스템에서 전달</small></span></label><label className={sourceType === 'DEPARTMENT_HEAD' ? 'selected' : ''}><input type="radio" name="source" checked={sourceType === 'DEPARTMENT_HEAD'} onChange={() => { setSourceType('DEPARTMENT_HEAD'); setSourceReference('') }} /><Building2 /><span><strong>부서장 지시</strong><small>조직 책임자의 직접 수행 지시</small></span></label></fieldset>
         <label><span>{sourceType === 'EXTERNAL_SYSTEM' ? '전달 시스템명' : '지시 부서장 또는 부서'}</span><input aria-label="의뢰 출처 상세" required minLength={2} value={sourceReference} onChange={(event) => setSourceReference(event.target.value)} placeholder={sourceType === 'EXTERNAL_SYSTEM' ? '예: PLM Gateway' : '예: 구조해석팀장'} /></label>
         <label><span>요청자</span><div className="intake-icon-input"><UserRound /><input required minLength={2} value={requestedBy} onChange={(event) => setRequestedBy(event.target.value)} placeholder="요청자 이름 또는 시스템 계정" /></div></label>

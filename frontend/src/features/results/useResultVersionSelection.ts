@@ -17,7 +17,7 @@ export type ResultVersionSelection = {
   analysisRunsLoading: boolean
   analysisRunChanging: boolean
   analysisRunError: string
-  selectAnalysisRun: (runId: string) => Promise<void>
+  selectAnalysisRun: (runId: string) => Promise<boolean>
 }
 
 const errorMessage = (reason: unknown, fallback: string) => reason instanceof Error ? reason.message : fallback
@@ -80,17 +80,31 @@ export function useResultVersionSelection({ loadCaseId, requestedRunId, enabled 
   }, [enabled, loadCaseId, requestedRunId, setOverview])
 
   const selectAnalysisRun = useCallback(async (runId: string) => {
-    if (!loadCaseId || !enabled || !runsRef.current.some((run) => run.id === runId)) return
+    if (!loadCaseId || !enabled) return false
     const sequence = ++requestSequence.current
     setAnalysisRunError('')
     setAnalysisRunChanging(true)
     try {
+      // A result refresh can create a Run after the initial list was loaded.
+      // Reload before rejecting the requested immutable provenance.
+      if (!runsRef.current.some((run) => run.id === runId)) {
+        const runs = await api.analysisRuns(loadCaseId)
+        if (sequence !== requestSequence.current) return false
+        runsRef.current = runs
+        setAnalysisRuns(runs)
+      }
+      if (!runsRef.current.some((run) => run.id === runId)) {
+        if (sequence === requestSequence.current) setAnalysisRunError('새 결과 Run을 결과 버전 목록에서 찾지 못했습니다. 잠시 후 다시 시도하세요.')
+        return false
+      }
       const overviewData = await api.overview(loadCaseId, runId)
-      if (sequence !== requestSequence.current) return
+      if (sequence !== requestSequence.current) return false
       setSelectedAnalysisRunId(runId)
       setOverview(overviewData)
+      return true
     } catch (reason) {
       if (sequence === requestSequence.current) setAnalysisRunError(errorMessage(reason, '선택한 결과 버전을 불러오지 못했습니다.'))
+      return false
     } finally {
       if (sequence === requestSequence.current) setAnalysisRunChanging(false)
     }
