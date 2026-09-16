@@ -1,6 +1,7 @@
 """Framework-independent semantic result ingestion transaction."""
 from __future__ import annotations
 
+import hashlib
 import json
 from contextlib import contextmanager
 from collections.abc import Callable
@@ -9,6 +10,19 @@ from typing import Any
 
 from ..adapters.persistence.result_ingestion import bound_result_ingestion_unit_of_work
 from ..application.results.commands import ingest_result_bundle, utc_identifier
+
+
+def semantic_source_run_id(
+    recipe_id: str, recipe_version: int, digest: str, template_id: str | None,
+    template_version: int | None, *, reuse_legacy: bool = False,
+) -> str:
+    """Name an immutable semantic run by parsing and presentation versions."""
+    legacy = f"semantic:{recipe_id}:{recipe_version}:{digest}"
+    if template_id is None or reuse_legacy:
+        if len(legacy) <= 120:
+            return legacy
+    identity = json.dumps([recipe_id, recipe_version, digest, template_id, template_version], separators=(",", ":"), ensure_ascii=True)
+    return "semantic-config:" + hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
 
 @contextmanager

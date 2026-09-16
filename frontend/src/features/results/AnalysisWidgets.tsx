@@ -6,6 +6,7 @@ import { DropVideoGrid } from './DropVideoGrid'
 import { WidgetFocusFrame } from './WidgetFocusFrame'
 import { VideoGridSettings } from './VideoGridSettings'
 import type { DashboardWidget, Overview, QualityThreshold, VariableDefinition } from '../../types'
+import { semanticWidgetTypeLabels } from '../../shared/components/semanticLabels'
 
 const SERIES_COLORS = [1, 3, 4, 5].map((index) => `var(--color-chart-series-${index})`)
 
@@ -103,7 +104,7 @@ function OpenCellMap({ overview }: { overview: Overview }) {
 }
 
 export function WidgetSettingsPanel({ widget, variables, onChange, onClose }: { widget: DashboardWidget; variables: VariableDefinition[]; onChange: (patch: Partial<DashboardWidget>) => void; onClose: () => void }) {
-  const chartOptions: Array<[DashboardWidget['type'],string]> = [...(widget.type === 'run_comparison' ? [['run_comparison','Run 비교·검토 패널'] as [DashboardWidget['type'], string]] : []),['summary','하중 조건 요약'],['kpi','KPI 카드'],['verdict','패스/실패 카드'],['gauge','임계값 게이지'],['edge_bar','막대그래프'],['time_series','시계열 그래프'],['scatter','산점도'],['result_table','데이터 테이블'],['open_cell_map','Open Cell 맵'],['open_cell_summary','Open Cell 판정 요약'],['chassis_summary','Chassis 판정 요약'],['chassis_diagram','Chassis 위치도'],['chassis_bar','Chassis 비교 그래프'],['chassis_table','Chassis 상세 표'],['contour','컨투어 이미지'],['video','영상 플레이어'],['video_grid','낙하 영상 비교'],['note','수행자 의견']]
+  const chartOptions: Array<[DashboardWidget['type'],string]> = ([...(widget.type === 'run_comparison' ? [['run_comparison','Run 비교·검토 패널'] as [DashboardWidget['type'], string]] : []),['summary','하중 조건 요약'],['kpi','KPI 카드'],['verdict','패스/실패 카드'],['gauge','임계값 게이지'],['edge_bar','막대 그래프'],['time_series','시계열 그래프'],['scatter','산점도'],['result_table','결과 표'],['open_cell_map','Open Cell 맵'],['open_cell_summary','Open Cell 판정 요약'],['chassis_summary','Chassis 판정 요약'],['chassis_diagram','Chassis 위치도'],['chassis_bar','Chassis 비교 그래프'],['chassis_table','Chassis 상세 표'],['contour','컨투어 이미지'],['video','영상 플레이어'],['video_grid','낙하 영상 비교'],['note','수행자 의견']] as Array<[DashboardWidget['type'], string]>).map(([type, label]) => [type, semanticWidgetTypeLabels[type] ?? label])
   const currentVariable = variables.find((item) => item.id === widget.settings?.variableId)
   const compatibleVariables = variables.filter((item) => item.allowed_widgets.includes(widget.type) || item.id === currentVariable?.id)
   const aggregations = currentVariable?.allowed_aggregations ?? ['MAX','MIN','AVG','LATEST','RAW']

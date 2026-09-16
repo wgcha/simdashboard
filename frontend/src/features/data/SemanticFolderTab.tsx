@@ -5,14 +5,27 @@ import { semanticContextApi, semanticMappingApi, type ContextLoadCase, type Cont
 import { AliasSuggestion } from './AliasSuggestion'
 import { SemanticReviewQueue } from './SemanticReviewQueue'
 import type { SemanticVocabularyEntry } from '../../shared/api/semanticVocabulary'
+import { semanticFormatLabel, semanticStatusLabel } from '../../shared/components/semanticLabels'
 
 type Message = { kind: 'success' | 'error' | 'info'; text: string }
 type Target = { project_id: string; request_id: string; load_case_id: string; role: string; recipe_ids: string[]; template_id: string }
 export type FolderConnectionPrefill = { relative_path: string; project_id?: string | null; request_id?: string | null; load_case_id?: string | null; role: 'RESULTS' | 'INPUT' }
-type RefreshResult = { partial: boolean; results: Array<{ relative_path?: string; status: string; run_id?: string; code?: string; detail?: unknown }> }
+type RefreshResult = { partial: boolean; results: Array<{ relative_path?: string; filename?: string; status: string; run_id?: string; run_no?: number; code?: string; message?: string; detail?: unknown; clear_reason?: string; candidate_errors?: unknown[]; review_available?: boolean; review_reason?: string }> }
+type ImportResult = { status: string; run_id?: string; recipe_version?: number; review_available?: boolean; clear_reason?: string; candidate_errors?: unknown[] }
 type ReviewTarget = { projectId: string; requestId: string; loadCaseId: string; runId: string }
 const emptyTarget = (): Target => ({ project_id: '', request_id: '', load_case_id: '', role: 'PROJECT', recipe_ids: [], template_id: '' })
-const canOpenReview = (status: string, runId?: string | null) => Boolean(runId && ['IMPORTED', 'SKIPPED'].includes(status))
+const canOpenReview = (status: string, runId?: string | null, reviewAvailable?: boolean) => Boolean(runId && ['IMPORTED', 'SKIPPED'].includes(status) && reviewAvailable !== false)
+const readableReason = (value: string) => ({ NO_DISPLAY_TEMPLATE: '표시 템플릿이 없어 검토 화면을 열 수 없습니다.', TEMPLATE_HAS_NO_WIDGETS: '표시 템플릿에 위젯이 없어 검토 화면을 열 수 없습니다.', NO_RENDERABLE_WIDGETS: '표시할 수 있는 위젯이 없어 검토 화면을 열 수 없습니다.' }[value] ?? value)
+const candidateErrorText = (value: unknown) => {
+  if (typeof value === 'string') return value
+  if (!value || typeof value !== 'object') return String(value)
+  const item = value as Record<string, unknown>
+  const recipe = item.recipe_name ?? item.recipe_id ?? '레시피'
+  const version = item.recipe_version ? ` v${item.recipe_version}` : ''
+  const message = item.message ?? item.detail ?? item.reason ?? item.code ?? '검증 실패'
+  return `${recipe}${version}: ${typeof message === 'string' ? readableReason(message) : JSON.stringify(message)}`
+}
+const activeRecipeFormat = (recipe: SemanticCatalog['recipes'][number]) => recipe.active_format ?? (recipe.latest_version === recipe.active_version ? recipe.definition.format : undefined)
 const reviewHref = ({ projectId, requestId, loadCaseId, runId }: ReviewTarget) => {
   const query = new URLSearchParams({ project: projectId, request: requestId, loadCase: loadCaseId, run: runId, view: 'custom' })
   return `/workspace/requests?${query.toString()}`
@@ -78,15 +91,16 @@ export function FolderTab({ catalog, onMessage, busy, setBusy, onCatalog, scopeP
       onCatalog(await semanticMappingApi.catalog()); setEditing(saved)
       if (reviewBinding?.id === saved.id) setReviewBinding(saved)
       onMessage({ kind: 'success', text: `폴더 연결을 저장했습니다 · 개정 ${saved.revision}. 이 폴더 바로 아래 파일을 처리합니다.` })
+      if (saved.load_case_id && saved.recipe_ids.length) await refresh(saved.id, saved)
     } catch (reason) { error(reason) } finally { setBusy('') }
   }
   const edit = (binding: SemanticBinding) => {
     setEditing(binding); setPath(binding.relative_path); setFolder(null)
     setTarget({ project_id: binding.project_id, request_id: binding.request_id ?? '', load_case_id: binding.load_case_id ?? '', role: binding.role, recipe_ids: binding.recipe_ids, template_id: binding.template_id ?? '' })
   }
-  const refresh = async (id: string) => {
+  async function refresh(id: string, knownBinding?: SemanticBinding) {
     const requestId = ++refreshRequest.current
-    const binding = catalog.bindings.find((item) => item.id === id)
+    const binding = knownBinding ?? catalog.bindings.find((item) => item.id === id)
     const ownerContext = binding && binding.request_id && binding.load_case_id ? { projectId: binding.project_id, requestId: binding.request_id, loadCaseId: binding.load_case_id } : null
     setRefreshOwnerContext(ownerContext)
     setReviewTarget(null)
@@ -108,10 +122,11 @@ export function FolderTab({ catalog, onMessage, busy, setBusy, onCatalog, scopeP
     setReviewTarget(null)
     setBusy('import')
     try {
-      const result = await semanticMappingApi.importFile(file, target.recipe_ids[0], target.load_case_id, target.template_id || undefined)
+      const result = await semanticMappingApi.importFile(file, target.recipe_ids[0], target.load_case_id, target.template_id || undefined) as ImportResult
       if (requestId !== importRequest.current) return
-      if (canOpenReview(result.status, result.run_id) && targetAtStart.requestId) setReviewTarget({ ...targetAtStart, runId: result.run_id! })
-      onMessage({ kind: 'success', text: `${result.status} · run ${result.run_id} · 레시피 v${result.recipe_version}` })
+      if (canOpenReview(result.status, result.run_id, result.review_available) && targetAtStart.requestId) setReviewTarget({ ...targetAtStart, runId: result.run_id! })
+      const reason = result.clear_reason ? ` · ${readableReason(result.clear_reason)}` : ''
+      onMessage({ kind: 'success', text: `${semanticStatusLabel(result.status)}${result.run_id ? ` · Run ${result.run_id}` : ''} · 레시피 v${result.recipe_version ?? '—'}${reason}` })
     } catch (reason) { if (requestId === importRequest.current) error(reason) } finally { if (requestId === importRequest.current) setBusy('') }
   }
   const applyVocabularyTarget = (entry: SemanticVocabularyEntry) => {
@@ -143,15 +158,15 @@ export function FolderTab({ catalog, onMessage, busy, setBusy, onCatalog, scopeP
         <label>하중 경우<select aria-label="하중 경우" disabled={!target.request_id} value={target.load_case_id} onChange={(event) => setTarget({ ...target, load_case_id: event.target.value, role: event.target.value ? 'RESULTS' : 'REQUEST' })}><option value="">선택 안 함</option>{cases.map((loadCase) => <option key={loadCase.id} value={loadCase.id}>{loadCase.name}</option>)}</select></label>
         <label>연결 역할<select aria-label="연결 역할" value={target.role} onChange={(event) => setTarget({ ...target, role: event.target.value })}><option value="PROJECT">프로젝트 폴더</option><option value="REQUEST">의뢰 폴더</option><option value="LOAD_CASE">하중 경우 폴더</option><option value="RESULTS">결과 폴더</option><option value="INPUT">입력 폴더</option></select></label>
       </div>
-      <fieldset className="recipe-checklist"><legend>적용 레시피</legend>{recipes.map((recipe) => <label key={recipe.id}><input type="checkbox" checked={target.recipe_ids.includes(recipe.id)} onChange={(event) => setTarget({ ...target, recipe_ids: event.target.checked ? [...target.recipe_ids, recipe.id] : target.recipe_ids.filter((id) => id !== recipe.id) })} />{recipe.name ?? recipe.id} · 활성 v{recipe.active_version}</label>)}</fieldset>
-      <label>표시 템플릿<select aria-label="표시 템플릿" value={target.template_id} onChange={(event) => setTarget({ ...target, template_id: event.target.value })}><option value="">템플릿 없음</option>{templates.map((template) => <option key={template.id} value={template.id}>{template.name ?? template.id} · 활성 v{template.active_version}</option>)}</select></label>
+      <fieldset className="recipe-checklist"><legend>적용 레시피</legend>{recipes.map((recipe) => { const format = activeRecipeFormat(recipe); return <label key={recipe.id}><input type="checkbox" checked={target.recipe_ids.includes(recipe.id)} onChange={(event) => setTarget({ ...target, recipe_ids: event.target.checked ? [...target.recipe_ids, recipe.id] : target.recipe_ids.filter((id) => id !== recipe.id) })} />{recipe.name ?? recipe.id} · {format ? semanticFormatLabel(format) : '활성 형식 확인 중'} · 활성 v{recipe.active_version}</label> })}</fieldset>
+      <label>표시 템플릿<select aria-label="표시 템플릿" value={target.template_id} onChange={(event) => setTarget({ ...target, template_id: event.target.value })}><option value="">레시피에 저장된 템플릿 사용</option>{templates.map((template) => <option key={template.id} value={template.id}>{template.name ?? template.id} · 활성 v{template.active_version}</option>)}</select><small>선택한 레시피의 저장된 표시 템플릿과 버전을 기본으로 사용합니다.</small></label>
       <button className="primary-button" onClick={() => void save()} disabled={!!busy}><Save />{editing ? '재연결 저장' : '연결 저장'}</button>
     </div>
     <div className="semantic-card">
       <h2>다음 파일 처리</h2><p>단일 파일 등록은 위에서 선택한 대상·레시피·템플릿을 사용합니다.</p>
-      <div className="folder-import-row" aria-label="등록한 결과"><input aria-label="등록할 결과 파일" type="file" accept=".csv,.json" onChange={(event) => setFile(event.target.files?.[0] ?? null)} /><button className="primary-button" onClick={() => void upload()} disabled={!!busy}><Upload />단일 파일 가져오기</button>{reviewTarget ? <Link className="secondary-button" to={reviewHref(reviewTarget)}>결과 검토</Link> : null}</div>
+      <div className="folder-import-row" aria-label="등록한 결과"><input aria-label="등록할 결과 파일" type="file" accept=".csv,.tsv,.json,.txt" onChange={(event) => setFile(event.target.files?.[0] ?? null)} /><button className="primary-button" onClick={() => void upload()} disabled={!!busy}><Upload />단일 파일 가져오기</button>{reviewTarget ? <Link className="secondary-button" to={reviewHref(reviewTarget)}>결과 검토</Link> : null}</div>
       <div className="binding-list">{catalog.bindings.map((binding) => <article key={binding.id}><div><strong>{binding.relative_path}</strong><small>{projects.find((project) => project.id === binding.project_id)?.name ?? binding.project_id} · {binding.role} · 개정 {binding.revision}</small></div><button onClick={() => edit(binding)}>재연결·수정</button>{binding.load_case_id && <button onClick={() => void refresh(binding.id)} disabled={!!busy}><RefreshCw />새로고침</button>}{binding.load_case_id && <button onClick={() => setReviewBinding((current) => current?.id === binding.id ? null : binding)}>{reviewBinding?.id === binding.id ? '검토함 닫기' : '검토함'}</button>}</article>)}</div>
-      {refreshResult && <table className="semantic-result-table"><thead><tr><th>파일 / 실행</th><th>처리 상태</th><th>상세</th><th>검토</th></tr></thead><tbody>{refreshResult.results.map((result, index) => { const ownerContext = refreshOwnerContext && result.run_id ? { ...refreshOwnerContext, runId: result.run_id } : null; return <tr key={index}><td>{result.relative_path ?? result.run_id}</td><td>{result.status}</td><td>{result.code ?? (result.detail ? JSON.stringify(result.detail) : '')}</td><td>{ownerContext && canOpenReview(result.status, result.run_id) ? <Link className="secondary-button" to={reviewHref(ownerContext)}>결과 검토</Link> : null}</td></tr> })}</tbody></table>}
+      {refreshResult && <table className="semantic-result-table folder-refresh-results"><thead><tr><th>파일</th><th>처리 상태</th><th>Run</th><th>상세</th><th>검토</th></tr></thead><tbody>{refreshResult.results.map((result, index) => { const ownerContext = refreshOwnerContext && result.run_id ? { ...refreshOwnerContext, runId: result.run_id } : null; const candidateErrors = result.candidate_errors?.length ? `후보 오류: ${result.candidate_errors.map(candidateErrorText).join(' · ')}` : ''; const detail = [candidateErrors, result.message, result.code, result.detail ? JSON.stringify(result.detail) : '', result.clear_reason ? readableReason(result.clear_reason) : ''].filter(Boolean).join(' · '); return <tr key={`${result.relative_path ?? result.filename ?? 'result'}:${result.run_id ?? index}`}><td>{result.filename ?? result.relative_path ?? '파일명 없음'}{result.relative_path && result.filename && result.relative_path !== result.filename ? <small>{result.relative_path}</small> : null}</td><td>{semanticStatusLabel(result.status)}</td><td>{result.run_id ? <span>{result.run_no != null ? `#${result.run_no} · ` : ''}{result.run_id}</span> : 'Run 없음'}</td><td className="folder-refresh-detail">{detail || '상세 정보 없음'}</td><td>{ownerContext && canOpenReview(result.status, result.run_id, result.review_available) ? <Link className="secondary-button" to={reviewHref(ownerContext)}>결과 검토</Link> : result.review_reason ? <span>{readableReason(result.review_reason)}</span> : null}</td></tr> })}</tbody></table>}
       {reviewBinding ? <SemanticReviewQueue binding={reviewBinding} catalog={catalog} canReview onMessage={onMessage} /> : null}
     </div>
   </div>

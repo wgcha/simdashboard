@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 from pathlib import Path
 from uuid import uuid4
@@ -198,16 +199,23 @@ def test_sample_failure_rolls_back_and_used_item_meaning_is_immutable():
 
 
 @pytest.mark.duckdb_integration
-def test_retry_keeps_null_or_old_template_and_override_is_read_only():
+def test_import_uses_presentation_identity_and_linked_template_version():
     with _client() as client:
         item_id, recipe_id, template_id = _definitions(client)
         headers, body = _multipart(fields={"recipe_id": recipe_id, "load_case_id": LOAD_CASE})
         first = client.post("/api/semantic-mapping/import", headers=headers, content=body)
         assert first.status_code == 200, first.text
-        headers, body = _multipart(fields={"recipe_id": recipe_id, "load_case_id": LOAD_CASE, "template_id": template_id})
+        headers, body = _multipart(fields={"recipe_id": recipe_id, "load_case_id": LOAD_CASE, "template_id": template_id}, content=b"stress,node\n13,N-1\n")
         retry = client.post("/api/semantic-mapping/import", headers=headers, content=body)
-        assert retry.status_code == 200 and retry.json()["status"] == "SKIPPED"
-        assert retry.json()["widgets"] == [] and retry.json()["template_version"] is None
+        assert retry.status_code == 200 and retry.json()["status"] == "IMPORTED"
+        assert retry.json()["widgets"][0]["status"] == "READY" and retry.json()["template_version"] == 1
+        legacy_digest = hashlib.sha256(b"stress,node\n13,N-1\n").hexdigest()
+        legacy_source = f"semantic:{recipe_id}:1:{legacy_digest}"
+        with connect() as conn:
+            conn.execute("UPDATE canonical_result_ingestion_source_versions SET source_run_id=?, source_key=? WHERE analysis_run_id=?", [legacy_source, f"run:{legacy_source}", retry.json()["run_id"]])
+        legacy_retry = client.post("/api/semantic-mapping/import", headers=headers, content=body)
+        assert legacy_retry.status_code == 200 and legacy_retry.json()["status"] == "SKIPPED"
+        assert legacy_retry.json()["run_id"] == retry.json()["run_id"] and legacy_retry.json()["widgets"][0]["status"] == "READY"
         headers, body = _multipart(fields={"recipe_id": recipe_id, "load_case_id": LOAD_CASE, "template_id": template_id}, content=b"stress,node\n15,N-1\n")
         second = client.post("/api/semantic-mapping/import", headers=headers, content=body)
         assert second.status_code == 200
@@ -216,12 +224,68 @@ def test_retry_keeps_null_or_old_template_and_override_is_read_only():
         activated = client.post("/api/semantic-mapping/activate-bundle", json={"recipe_id": recipe_id, "recipe_version": 1, "template_id": template_id, "template_version": 2, "expected_recipe_active_version": 1, "expected_template_active_version": 1})
         assert activated.status_code == 200, activated.text
         retry = client.post("/api/semantic-mapping/import", headers=headers, content=body)
-        assert retry.json()["template_version"] == 1 and retry.json()["widgets"][0]["unit"] == "MPa"
+        assert retry.json()["status"] == "IMPORTED"
+        assert retry.json()["template_version"] == 2 and retry.json()["widgets"][0]["unit"] == "Pa"
         override = client.get("/api/semantic-mapping/results", params={"load_case_id": LOAD_CASE, "run_id": second.json()["run_id"], "template_id": template_id})
         assert override.status_code == 200
         assert override.json()["template_version"] == 2 and override.json()["widgets"][0]["data"][0]["value"] == 15e6
         with connect() as conn:
-            assert conn.execute("SELECT count(*) FROM semantic_import_provenance").fetchone()[0] == 2
+            assert conn.execute("SELECT count(*) FROM semantic_import_provenance").fetchone()[0] == 4
+
+
+@pytest.mark.duckdb_integration
+def test_import_uses_exact_recipe_display_template_when_no_override():
+    with _client() as client:
+        _item_id, recipe_id, template_id = _definitions(client)
+        recipe = next(entry for entry in client.get("/api/semantic-mapping/catalog").json()["recipes"] if entry["id"] == recipe_id)
+        linked = client.post("/api/semantic-mapping/recipes", json={
+            "id": recipe_id, "expected_version": 1, "name": recipe["name"],
+            "definition": {**recipe["definition"], "display_template_id": template_id, "display_template_version": 1},
+            "sample_filename": "sample.csv", "sample_content_base64": base64.b64encode(_recipe_sample()).decode(),
+        })
+        assert linked.status_code == 201, linked.text
+        assert client.post("/api/semantic-mapping/activate-bundle", json={"recipe_id": recipe_id, "recipe_version": 2, "template_id": template_id, "template_version": 1, "expected_recipe_active_version": 1, "expected_template_active_version": 1}).status_code == 200
+        headers, body = _multipart(fields={"recipe_id": recipe_id, "load_case_id": LOAD_CASE})
+        first = client.post("/api/semantic-mapping/import", headers=headers, content=body)
+        assert first.status_code == 200 and first.json()["template_id"] == template_id
+        assert first.json()["template_version"] == 1 and first.json()["widgets"][0]["status"] == "READY"
+        repeated = client.post("/api/semantic-mapping/import", headers=headers, content=body)
+        assert repeated.status_code == 200 and repeated.json()["status"] == "SKIPPED"
+        assert repeated.json()["template_id"] == template_id and repeated.json()["widgets"][0]["status"] == "READY"
+
+
+@pytest.mark.duckdb_integration
+def test_recipe_display_link_rejects_a_draft_template_version():
+    with _client() as client:
+        _item_id, recipe_id, template_id = _definitions(client)
+        catalog = client.get("/api/semantic-mapping/catalog").json()
+        recipe = next(entry for entry in catalog["recipes"] if entry["id"] == recipe_id)
+        template = next(entry for entry in catalog["templates"] if entry["id"] == template_id)
+        assert client.post("/api/semantic-mapping/templates", json={"id": template_id, "expected_version": 1, "name": template["name"], "definition": template["definition"]}).status_code == 201
+        linked = client.post("/api/semantic-mapping/recipes", json={
+            "id": recipe_id, "expected_version": 1, "name": recipe["name"],
+            "definition": {**recipe["definition"], "display_template_id": template_id, "display_template_version": 2},
+            "sample_filename": "sample.csv", "sample_content_base64": base64.b64encode(_recipe_sample()).decode(),
+        })
+        assert linked.status_code == 201
+        assert client.post("/api/semantic-mapping/activate-bundle", json={"recipe_id": recipe_id, "recipe_version": 2, "template_id": template_id, "template_version": 1, "expected_recipe_active_version": 1, "expected_template_active_version": 1}).status_code == 200
+        headers, body = _multipart(fields={"recipe_id": recipe_id, "load_case_id": LOAD_CASE})
+        response = client.post("/api/semantic-mapping/import", headers=headers, content=body)
+        assert response.status_code == 409 and response.json()["detail"]["code"] == "SEMANTIC_TEMPLATE_LINK_INVALID"
+
+
+@pytest.mark.duckdb_integration
+def test_catalog_active_format_is_not_replaced_by_an_inactive_draft():
+    with _client() as client:
+        item_id, recipe_id, _template_id = _definitions(client)
+        draft = client.post("/api/semantic-mapping/recipes", json={
+            "id": recipe_id, "expected_version": 1, "name": "JSON draft",
+            "definition": {"format": "json", "mappings": [{"result_item_id": item_id, "source": "stress", "source_unit": "MPa", "dimensions": {"node": "node"}}]},
+            "sample_filename": "draft.json", "sample_content_base64": base64.b64encode(b'{"stress":12,"node":"N-1"}').decode(),
+        })
+        assert draft.status_code == 201, draft.text
+        recipe = next(entry for entry in client.get("/api/semantic-mapping/catalog").json()["recipes"] if entry["id"] == recipe_id)
+        assert recipe["definition"]["format"] == "json" and recipe["active_format"] == "csv"
 
 
 @pytest.mark.duckdb_integration
@@ -248,6 +312,10 @@ def test_refresh_reports_unmapped_invalid_and_ambiguous_files_without_partial_ru
         result = client.post(f"/api/semantic-mapping/bindings/{bound.json()['id']}/refresh")
         assert result.status_code == 200, result.text
         assert {row["status"] for row in result.json()["results"]} == {"IMPORTED", "INVALID", "UNMAPPED"}
+        imported = next(row for row in result.json()["results"] if row["status"] == "IMPORTED")
+        unmapped = next(row for row in result.json()["results"] if row["status"] == "UNMAPPED")
+        assert imported["relative_path"] == "a.csv" and imported["review_available"] is True
+        assert unmapped["candidate_errors"][0]["code"] == "FORMAT_MISMATCH"
         (directory / "a.csv").rename(directory / "renamed.csv")
         repeated = client.post(f"/api/semantic-mapping/bindings/{bound.json()['id']}/refresh")
         assert {row["status"] for row in repeated.json()["results"]} == {"SKIPPED", "INVALID", "UNMAPPED"}

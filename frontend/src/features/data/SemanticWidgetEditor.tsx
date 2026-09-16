@@ -3,6 +3,7 @@ import { X } from 'lucide-react'
 import type { InspectResponse, RecipeMapping, SemanticItemDefinition, SemanticWidgetDefinition, SemanticWidgetType, VersionedDefinition } from '../../shared/api/semanticMapping'
 import './SemanticWidgetEditor.css'
 import { semanticSampleValue, formatSemanticSample } from './semanticSampleValue'
+import { semanticWidgetTypeLabels } from '../../shared/components/semanticLabels'
 
 type Item = VersionedDefinition<SemanticItemDefinition>
 type Props = {
@@ -15,11 +16,8 @@ type Props = {
   onRemove: () => void
 }
 
-const widgetNames: Record<SemanticWidgetType, string> = {
-  kpi: '값 카드', gauge: '기준값 판정', table: '결과 표', bar: '막대 비교',
-  line: 'X/Y 곡선', scatter: 'X/Y 산점도', image: '이미지', video: '영상',
-}
-const widgetTypes = Object.keys(widgetNames) as SemanticWidgetType[]
+const widgetTypes: SemanticWidgetType[] = ['kpi', 'gauge', 'table', 'bar', 'line', 'scatter', 'image', 'video']
+const widgetNames: Record<SemanticWidgetType, string> = Object.fromEntries(widgetTypes.map((type) => [type, semanticWidgetTypeLabels[type] ?? type])) as Record<SemanticWidgetType, string>
 const isNumeric = (item: Item) => ['FLOAT', 'INTEGER'].includes(item.definition.data_type)
 function compatible(type: SemanticWidgetType, item: Item) {
   if (item.definition.kind === 'vector') return ['table', 'kpi', 'gauge', 'bar'].includes(type) && isNumeric(item)

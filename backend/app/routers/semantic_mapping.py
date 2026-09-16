@@ -31,7 +31,7 @@ from ..modules.access_control import PROJECT_DATA_VIEW, RESULT_IMPORT, SYSTEM_CA
 from ..repositories import semantic_mapping as mapping_repository
 from ..security import write_audit_event
 from ..services import spdm_storage, semantic_sample_uploads as sample_uploads
-from ..services.semantic_mapping import persist_semantic_import, semantic_transaction
+from ..services.semantic_mapping import persist_semantic_import, semantic_source_run_id, semantic_transaction
 from .semantic_body_limit import SemanticBodyLimitRoute
 from .semantic_review import record_unresolved_refresh
 
@@ -106,6 +106,16 @@ def _catalog(conn: Any) -> dict[str, list[dict[str, Any]]]:
     for kind in ("items", "recipes", "templates"):
         for record in catalog[kind]:
             record["definition"] = _json(record.pop("definition_json"))
+    # The catalog definition is the editable latest revision.  Folder matching
+    # executes the active revision, so expose its format separately instead of
+    # letting a draft make an active CSV rule look like a different format.
+    for recipe in catalog["recipes"]:
+        active_version = recipe.get("active_version")
+        if active_version is None:
+            recipe["active_format"] = None
+            continue
+        definition, _snapshot = _version_at(conn, "recipe", str(recipe["id"]), int(active_version))
+        recipe["active_format"] = definition.get("format") if isinstance(definition.get("format"), str) else None
     catalog["bindings"] = [{**entry, "recipe_ids": _json(entry["recipe_ids_json"])} for entry in catalog["bindings"]]
     return catalog
 
@@ -125,6 +135,47 @@ def _version_at(conn: Any, kind: str, ident: str, version: int) -> tuple[dict[st
     row = mapping_repository.version_at(conn, kind, ident, version)
     if not row: raise HTTPException(409, {"code": "SEMANTIC_VERSION_NOT_FOUND"})
     return _json(row[0]), _json(row[1])
+
+
+def _display_template(
+    conn: Any, recipe: dict[str, Any], recipe_items: list[dict[str, Any]], requested_template_id: str | None,
+) -> tuple[str | None, int | None, dict[str, Any], list[dict[str, Any]]]:
+    """Resolve an explicit binding override or the recipe's immutable display link."""
+    if requested_template_id:
+        version, definition, items = _version(conn, "template", requested_template_id)
+        return requested_template_id, version, definition, items
+    linked_id = recipe.get("display_template_id")
+    linked_version = recipe.get("display_template_version")
+    if linked_id is None and linked_version is None:
+        return None, None, {"widgets": []}, recipe_items
+    if not isinstance(linked_id, str) or not linked_id or type(linked_version) is not int or linked_version < 1:
+        raise HTTPException(409, {"code": "SEMANTIC_TEMPLATE_LINK_INVALID"})
+    row = mapping_repository.published_version_at(conn, "template", linked_id, linked_version)
+    if not row:
+        raise HTTPException(409, {"code": "SEMANTIC_TEMPLATE_LINK_INVALID"})
+    definition, items = _json(row[0]), _json(row[1])
+    return linked_id, linked_version, definition, items
+
+
+def _widget_metadata(template_id: str | None, widgets: list[dict[str, Any]]) -> dict[str, Any]:
+    if widgets:
+        return {"review_available": True}
+    return {
+        "review_available": False,
+        "clear_reason": "NO_DISPLAY_TEMPLATE" if template_id is None else "TEMPLATE_HAS_NO_WIDGETS",
+    }
+
+
+def _confirmed_run_widget_metadata(conn: Any, load_case_id: str, run_id: str | None) -> dict[str, Any]:
+    """Describe widgets from immutable provenance, never a later binding rule."""
+    if not run_id:
+        return {"review_available": False, "clear_reason": "NO_CONFIRMED_RUN"}
+    provenance = mapping_repository.latest_provenance(conn, load_case_id, run_id)
+    if not provenance or not provenance.get("template_id") or provenance.get("template_version") is None:
+        return {"review_available": False, "clear_reason": "NO_DISPLAY_TEMPLATE"}
+    template, items = _version_at(conn, "template", str(provenance["template_id"]), int(provenance["template_version"]))
+    payload = {"observations": _json(provenance["observations_json"])}
+    return _widget_metadata(str(provenance["template_id"]), resolve_widgets(template, items, payload))
 
 
 def _save_version(conn: Any, kind: str, ident: str | None, name: str, definition: dict[str, Any], expected: int | None, actor: str) -> dict[str, Any]:
@@ -506,7 +557,8 @@ def reconnect_binding(binding_id: str, payload: BindingSave, request: Request) -
 
 def _import(conn: Any, request: Request, filename: str, content: bytes, recipe_id: str, load_case_id: str, template_id: str | None) -> dict[str, Any]:
     require_resource_permission(request, RESULT_IMPORT, "load_case", load_case_id, conn=conn)
-    recipe_version, recipe, recipe_items = _version(conn, "recipe", recipe_id); template_version, template, template_items = _version(conn, "template", template_id) if template_id else (None, {"widgets": []}, recipe_items)
+    recipe_version, recipe, recipe_items = _version(conn, "recipe", recipe_id)
+    template_id, template_version, template, template_items = _display_template(conn, recipe, recipe_items, template_id)
     target = SQLResultIngestionQuery(conn).get_result_ingestion_target(load_case_id)
     if target is None: raise HTTPException(404, {"code": "LOAD_CASE_NOT_FOUND"})
     try: parsed = preview_recipe(recipe, recipe_items, filename, content)
@@ -516,7 +568,11 @@ def _import(conn: Any, request: Request, filename: str, content: bytes, recipe_i
     if any(widget.get("status") not in {"READY", "NO_VALUE"} for widget in widgets):
         raise HTTPException(422, {"code": "SEMANTIC_WIDGET_INPUT_INVALID", "widgets": widgets})
     digest = hashlib.sha256(content).hexdigest(); now = _now()
-    command = {"project_id": target.project_id, "request_id": target.request_id, "load_case_id": load_case_id, "source_type": "SEMANTIC_RECIPE", "source_name": f"semantic/{recipe_id}/{recipe_version}/{filename}", "source_checksum": digest, "source_run_id": f"semantic:{recipe_id}:{recipe_version}:{digest}", "conflict_policy": "SKIP", "parser_version": "semantic-mapping-v2" if recipe.get("reader_version") == 2 else "semantic-mapping-v1", "parsed": parsed, "actor": request.state.principal.display_name, "metadata": {"recipe_id": recipe_id, "recipe_version": recipe_version, "template_id": template_id, "template_version": template_version, "observations": parsed.get("observations", []), "source_filename": filename}}
+    reuse_legacy = template_id is not None and mapping_repository.has_legacy_provenance(
+        conn, load_case_id=load_case_id, recipe_id=recipe_id, recipe_version=recipe_version,
+        template_id=template_id, template_version=template_version, source_sha256=digest,
+    )
+    command = {"project_id": target.project_id, "request_id": target.request_id, "load_case_id": load_case_id, "source_type": "SEMANTIC_RECIPE", "source_name": f"semantic/{recipe_id}/{recipe_version}/{filename}", "source_checksum": digest, "source_run_id": semantic_source_run_id(recipe_id, recipe_version, digest, template_id, template_version, reuse_legacy=reuse_legacy), "conflict_policy": "SKIP", "parser_version": "semantic-mapping-v2" if recipe.get("reader_version") == 2 else "semantic-mapping-v1", "parsed": parsed, "actor": request.state.principal.display_name, "metadata": {"recipe_id": recipe_id, "recipe_version": recipe_version, "template_id": template_id, "template_version": template_version, "observations": parsed.get("observations", []), "source_filename": filename}}
     outcome, run_id = persist_semantic_import(conn, command, recipe_id=recipe_id, recipe_version=recipe_version, template_id=template_id, template_version=template_version, filename=filename, source_bytes=content, authorize=lambda c, tx: require_resource_permission(request, RESULT_IMPORT, "load_case", c["load_case_id"], conn=tx), now=_now)
     if outcome["status"] == "SKIPPED" and run_id:
         stored = mapping_repository.provenance_template(conn, run_id)
@@ -526,8 +582,8 @@ def _import(conn: Any, request: Request, filename: str, content: bytes, recipe_i
                 template, template_items = _version_at(conn, "template", template_id, template_version)
                 widgets = resolve_widgets(template, template_items, parsed)
         else:
-            template_version, widgets = None, []
-    return {"status": outcome["status"], "run_id": run_id, "summary": parsed["summary"], "parsed": parsed, "widgets": widgets, "recipe_version": recipe_version, "template_version": template_version, "operation": outcome["operation"], "reason_code": outcome["reason_code"]}
+            template_id, template_version, widgets = None, None, []
+    return {"status": outcome["status"], "run_id": run_id, "summary": parsed["summary"], "parsed": parsed, "widgets": widgets, "recipe_version": recipe_version, "template_id": template_id, "template_version": template_version, "operation": outcome["operation"], "reason_code": outcome["reason_code"], **_widget_metadata(template_id, widgets)}
 
 
 @router.post("/import")
@@ -570,14 +626,22 @@ def refresh_binding(binding_id: str, request: Request) -> dict[str, Any]:
                 total_bytes += len(content)
                 if total_bytes > 128 * 1024 * 1024: raise spdm_storage.SpdmStorageError("SEMANTIC_REFRESH_SIZE_LIMIT", "새로고침 파일 총량이 한도를 초과했습니다.")
                 candidates = []
+                candidate_errors = []
                 for recipe_id, recipe_version, definition, snapshot in recipes:
-                    try: preview_recipe(definition, snapshot, path.name, content)
-                    except SemanticValidationError: continue
+                    try:
+                        preview_recipe(definition, snapshot, path.name, content)
+                    except SemanticValidationError as error:
+                        # The match decision must remain strict, but callers
+                        # need the exact per-recipe reason to correct a saved
+                        # folder rule instead of seeing an opaque UNMAPPED.
+                        candidate_errors.append({"recipe_id": recipe_id, "recipe_version": recipe_version, "code": error.code, "message": error.message})
+                        continue
                     candidates.append({"recipe_id": recipe_id, "recipe_version": recipe_version})
                 if len(candidates) != 1:
                     status = "UNMAPPED" if not candidates else "AMBIGUOUS"
-                    review = record_unresolved_refresh(conn, binding, relative_path=path.name, scan_status=status, candidates=candidates, source_sha256=hashlib.sha256(content).hexdigest(), source_size=len(content), error=None, actor=request.state.principal.user_id)
-                    results.append({"relative_path": path.name, "status": status, "recipe_ids": [candidate["recipe_id"] for candidate in candidates], "review_item_id": review["id"]})
+                    diagnostic = {"code": "SEMANTIC_RECIPE_NO_MATCH", "candidate_errors": candidate_errors} if not candidates else {"code": "SEMANTIC_RECIPE_AMBIGUOUS"}
+                    review = record_unresolved_refresh(conn, binding, relative_path=path.name, scan_status=status, candidates=candidates, source_sha256=hashlib.sha256(content).hexdigest(), source_size=len(content), error=diagnostic, actor=request.state.principal.user_id)
+                    results.append({"relative_path": path.name, "status": status, "recipe_ids": [candidate["recipe_id"] for candidate in candidates], "candidate_errors": candidate_errors, "review_item_id": review["id"], "review_available": False, "clear_reason": "NO_RENDERABLE_WIDGETS"})
                     continue
                 # A previously unresolved file must still satisfy the pinned
                 # recipe/template display contract before it is shown as
@@ -586,26 +650,27 @@ def refresh_binding(binding_id: str, request: Request) -> dict[str, Any]:
                 matched_id = candidates[0]["recipe_id"]
                 matched = next(entry for entry in recipes if entry[0] == matched_id)
                 parsed = preview_recipe(matched[2], matched[3], path.name, content)
-                if binding.get("template_id"):
-                    _template_version, template, template_items = _version(conn, kind="template", ident=str(binding["template_id"]))
-                    widgets = resolve_widgets(template, template_items, parsed)
-                    if any(widget.get("status") not in {"READY", "NO_VALUE"} for widget in widgets):
-                        raise HTTPException(422, {"code": "SEMANTIC_WIDGET_INPUT_INVALID", "widgets": widgets})
+                _template_id, _template_version, template, template_items = _display_template(conn, matched[2], matched[3], binding.get("template_id"))
+                widgets = resolve_widgets(template, template_items, parsed) if _template_id else []
+                if any(widget.get("status") not in {"READY", "NO_VALUE"} for widget in widgets):
+                    raise HTTPException(422, {"code": "SEMANTIC_WIDGET_INPUT_INVALID", "widgets": widgets})
                 prior_review = mapping_repository.review_exists(conn, binding["id"], binding["load_case_id"], path.name)
                 if prior_review:
                     review = record_unresolved_refresh(conn, binding, relative_path=path.name, scan_status="PENDING", candidates=candidates, source_sha256=hashlib.sha256(content).hexdigest(), source_size=len(content), error=None, actor=request.state.principal.user_id)
                     if review["review_state"] in {"IMPORTED", "SKIPPED"}:
-                        results.append({"relative_path": path.name, "status": review["review_state"], "run_id": review.get("confirmed_analysis_run_id"), "review_item_id": review["id"]})
+                        run_id = review.get("confirmed_analysis_run_id")
+                        results.append({"relative_path": path.name, "status": review["review_state"], "run_id": run_id, "review_item_id": review["id"], **_confirmed_run_widget_metadata(conn, str(binding["load_case_id"]), run_id)})
                     else:
-                        results.append({"relative_path": path.name, "status": "PENDING", "recipe_ids": [candidates[0]["recipe_id"]], "review_item_id": review["id"]})
+                        results.append({"relative_path": path.name, "status": "PENDING", "recipe_ids": [candidates[0]["recipe_id"]], "review_item_id": review["id"], "review_available": False, "clear_reason": "PENDING_REVIEW"})
                     continue
-                results.append(_import(conn, request, path.name, content, candidates[0]["recipe_id"], str(binding["load_case_id"]), binding["template_id"]))
+                results.append({"relative_path": path.name, **_import(conn, request, path.name, content, candidates[0]["recipe_id"], str(binding["load_case_id"]), binding["template_id"])})
             except spdm_storage.SpdmStorageError as error:
                 review = record_unresolved_refresh(conn, binding, relative_path=path.name, scan_status="PENDING", candidates=[], source_sha256=None, source_size=None, error={"code": error.code}, actor=request.state.principal.user_id)
                 if review["review_state"] in {"IMPORTED", "SKIPPED"}:
-                    results.append({"relative_path": path.name, "status": review["review_state"], "run_id": review.get("confirmed_analysis_run_id"), "review_item_id": review["id"]})
+                    run_id = review.get("confirmed_analysis_run_id")
+                    results.append({"relative_path": path.name, "status": review["review_state"], "run_id": run_id, "review_item_id": review["id"], **_confirmed_run_widget_metadata(conn, str(binding["load_case_id"]), run_id)})
                 else:
-                    results.append({"relative_path": path.name, "status": "PENDING", "code": error.code, "review_item_id": review["id"]})
+                    results.append({"relative_path": path.name, "status": "PENDING", "code": error.code, "review_item_id": review["id"], "review_available": False, "clear_reason": "PENDING_REVIEW"})
             except HTTPException as error:
                 detail_code = error.detail.get("code") if isinstance(error.detail, dict) else None
                 # The reviewed binding was reconnected after this refresh took
@@ -625,7 +690,7 @@ def results(load_case_id: str, request: Request, run_id: str | None = None, temp
     with connect() as conn:
         require_resource_permission(request, PROJECT_DATA_VIEW, "load_case", load_case_id, conn=conn)
         provenance = mapping_repository.latest_provenance(conn, load_case_id, run_id)
-        if provenance is None: return {"run_id": run_id, "widgets": []}
+        if provenance is None: return {"run_id": run_id, "widgets": [], "has_provenance": False, "empty_reason": "NO_SEMANTIC_PROVENANCE"}
         selected = template_id or provenance["template_id"]
         if selected and template_id is None and provenance["template_version"] is not None:
             template, snapshot = _version_at(conn, "template", str(selected), int(provenance["template_version"]))
@@ -633,7 +698,11 @@ def results(load_case_id: str, request: Request, run_id: str | None = None, temp
         else:
             response_template_version, template, snapshot = _version(conn, "template", str(selected)) if selected else (None, {"widgets": []}, [])
         parsed = {"observations": _json(provenance["observations_json"]), "scalars": [], "curves": [], "media": [], "summary": {}, "warnings": [], "note": ""}
-        return {"run_id": provenance["analysis_run_id"], "template_version": response_template_version, "widgets": resolve_widgets(template, snapshot, parsed) if selected else []}
+        widgets = resolve_widgets(template, snapshot, parsed) if selected else []
+        empty_reason = None
+        if not widgets:
+            empty_reason = "NO_DISPLAY_TEMPLATE" if not selected else "TEMPLATE_HAS_NO_WIDGETS"
+        return {"run_id": provenance["analysis_run_id"], "template_id": selected, "template_version": response_template_version, "widgets": widgets, "has_provenance": True, "empty_reason": empty_reason}
 
 
 @router.get("/export")

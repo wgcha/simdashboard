@@ -15,10 +15,11 @@ from ..database_connection import connect
 from ..domains.semantic_mapping.engine import SemanticValidationError, preview_recipe, resolve_widgets
 from ..modules.access_control import RESULT_IMPORT, require_resource_permission
 from ..repositories import semantic_review as review_repository
+from ..repositories import semantic_mapping as mapping_repository
 from ..security import write_audit_event
 from ..services import spdm_storage
 from ..services.semantic_sample_uploads import MAX_SAMPLE_BYTES
-from ..services.semantic_mapping import persist_semantic_import_in_transaction
+from ..services.semantic_mapping import persist_semantic_import_in_transaction, semantic_source_run_id
 from .semantic_body_limit import SemanticBodyLimitRoute
 
 router = APIRouter(prefix="/api/semantic-mapping", tags=["semantic-mapping"], route_class=SemanticBodyLimitRoute)
@@ -181,6 +182,29 @@ def _exact_template(conn: Any, template_id: str | None, version: int | None, fal
     if not row:
         raise HTTPException(409, {"code": "SEMANTIC_REVIEW_VERSION_STALE"})
     return _json(row[0]), _json(row[1])
+
+
+def _review_template_for_recipe(
+    conn: Any, binding: dict[str, Any], recipe: dict[str, Any], fallback: list[dict[str, Any]],
+) -> tuple[str | None, int | None, dict[str, Any], list[dict[str, Any]]]:
+    """Pin the binding override or the recipe's published display link for review."""
+    template_id = binding.get("template_id")
+    if template_id:
+        active = review_repository.active_template(conn, str(template_id))
+        if not active or active[0] is None:
+            raise HTTPException(409, {"code": "SEMANTIC_REVIEW_TEMPLATE_STALE"})
+        version = int(active[0])
+        definition, items = _exact_template(conn, str(template_id), version, fallback)
+        return str(template_id), version, definition, items
+    linked_id, linked_version = recipe.get("display_template_id"), recipe.get("display_template_version")
+    if linked_id is None and linked_version is None:
+        return None, None, {"widgets": []}, fallback
+    if not isinstance(linked_id, str) or not linked_id or type(linked_version) is not int or linked_version < 1:
+        raise HTTPException(409, {"code": "SEMANTIC_TEMPLATE_LINK_INVALID"})
+    row = mapping_repository.published_version_at(conn, "template", linked_id, linked_version)
+    if not row:
+        raise HTTPException(409, {"code": "SEMANTIC_TEMPLATE_LINK_INVALID"})
+    return linked_id, linked_version, _json(row[0]), _json(row[1])
 
 
 def _stale(conn: Any, item: dict[str, Any], code: str, actor: str) -> dict[str, Any]:
@@ -373,13 +397,7 @@ def revalidate(item_id: str, payload: RevalidateBody, request: Request) -> dict[
         if not recipe_id or version is None:
             raise HTTPException(422, {"code": "SEMANTIC_REVIEW_RECIPE_REQUIRED"})
         recipe, items = _exact_recipe(conn, str(recipe_id), int(version))
-        template_id = binding.get("template_id")
-        template_version = None
-        if template_id:
-            active = review_repository.active_template(conn, template_id)
-            if not active or active[0] is None: raise HTTPException(409, {"code": "SEMANTIC_REVIEW_TEMPLATE_STALE"})
-            template_version = int(active[0])
-        template, template_items = _exact_template(conn, str(template_id) if template_id else None, template_version, items)
+        template_id, template_version, template, template_items = _review_template_for_recipe(conn, binding, recipe, items)
         try:
             parsed = preview_recipe(recipe, items, str(item["relative_path"]), content)
             widgets = resolve_widgets(template, template_items, parsed) if template_id else []
@@ -450,7 +468,12 @@ def confirm(item_id: str, payload: ConfirmBody, request: Request) -> dict[str, A
                 if any(widget.get("status") not in {"READY", "NO_VALUE"} for widget in widgets): raise HTTPException(422, {"code": "SEMANTIC_WIDGET_INPUT_INVALID", "widgets": widgets})
                 target = SQLResultIngestionQuery(conn).get_result_ingestion_target(str(current["load_case_id"]))
                 if target is None: raise HTTPException(404, {"code": "LOAD_CASE_NOT_FOUND"})
-                command = {"project_id": target.project_id, "request_id": target.request_id, "load_case_id": current["load_case_id"], "source_type": "SEMANTIC_RECIPE", "source_name": f"semantic/{current['selected_recipe_id']}/{current['selected_recipe_version']}/{current['relative_path']}", "source_checksum": digest, "source_run_id": f"semantic:{current['selected_recipe_id']}:{current['selected_recipe_version']}:{digest}", "conflict_policy": "SKIP", "parser_version": "semantic-mapping-v1", "parsed": parsed, "actor": request.state.principal.display_name, "metadata": {"recipe_id": current["selected_recipe_id"], "recipe_version": current["selected_recipe_version"], "template_id": current.get("template_id"), "template_version": current.get("template_version"), "observations": parsed.get("observations", []), "source_filename": current["relative_path"]}}
+                reuse_legacy = current.get("template_id") is not None and mapping_repository.has_legacy_provenance(
+                    conn, load_case_id=str(current["load_case_id"]), recipe_id=str(current["selected_recipe_id"]),
+                    recipe_version=int(current["selected_recipe_version"]), template_id=current.get("template_id"),
+                    template_version=current.get("template_version"), source_sha256=digest,
+                )
+                command = {"project_id": target.project_id, "request_id": target.request_id, "load_case_id": current["load_case_id"], "source_type": "SEMANTIC_RECIPE", "source_name": f"semantic/{current['selected_recipe_id']}/{current['selected_recipe_version']}/{current['relative_path']}", "source_checksum": digest, "source_run_id": semantic_source_run_id(str(current["selected_recipe_id"]), int(current["selected_recipe_version"]), digest, current.get("template_id"), current.get("template_version"), reuse_legacy=reuse_legacy), "conflict_policy": "SKIP", "parser_version": "semantic-mapping-v1", "parsed": parsed, "actor": request.state.principal.display_name, "metadata": {"recipe_id": current["selected_recipe_id"], "recipe_version": current["selected_recipe_version"], "template_id": current.get("template_id"), "template_version": current.get("template_version"), "observations": parsed.get("observations", []), "source_filename": current["relative_path"]}}
                 outcome, run_id = persist_semantic_import_in_transaction(conn, command, recipe_id=str(current["selected_recipe_id"]), recipe_version=int(current["selected_recipe_version"]), template_id=current.get("template_id"), template_version=current.get("template_version"), filename=str(current["relative_path"]), source_bytes=content, authorize=lambda c, tx: require_resource_permission(request, RESULT_IMPORT, "load_case", c["load_case_id"], conn=tx), now=_now)
                 state = "SKIPPED" if outcome["status"] == "SKIPPED" else "IMPORTED"
                 changed = review_repository.mark_confirmed(conn, item_id=item_id, expected_revision=current["revision"], state=state, run_id=run_id, actor=request.state.principal.user_id, now=_now())

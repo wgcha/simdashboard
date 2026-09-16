@@ -17,14 +17,14 @@ async function fixture(page: Page) {
     return response.json()
   }
   const item = await create('items', { definition: { key: `review_force_${token}`, label: '검토 하중', kind: 'scalar', unit: 'N' } })
-  const definition = { format: 'csv', mappings: [{ source: 'force', source_unit: 'N', result_item_id: item.id }] }
+  const template = await create('templates', { name: `검토 템플릿 ${token}`, definition: { widgets: [{ id: 'force', type: 'kpi', title: '검토 하중 카드', item_ids: [item.id] }] } })
+  const definition = { format: 'csv', display_template_id: template.id, display_template_version: 1, mappings: [{ source: 'force', source_unit: 'N', result_item_id: item.id }] }
   const sample = { sample_filename: 'sample.csv', sample_content_base64: Buffer.from('force\n42\n').toString('base64') }
   const recipe = await create('recipes', { name: `검토 레시피 ${token}`, definition, ...sample })
   const alternate = await create('recipes', { name: `대체 레시피 ${token}`, definition, ...sample })
-  const template = await create('templates', { name: `검토 템플릿 ${token}`, definition: { widgets: [{ id: 'force', type: 'kpi', title: '검토 하중 카드', item_ids: [item.id] }] } })
   await create('activate-bundle', { recipe_id: recipe.id, recipe_version: 1, template_id: template.id, template_version: 1 })
   await create('activate-bundle', { recipe_id: alternate.id, recipe_version: 1, template_id: template.id, template_version: 1, expected_template_active_version: 1 })
-  const binding = await create('bindings', { relative_path: directory, project_id: 'project-tv-001', request_id: 'request-drop-001', load_case_id: 'loadcase-drop-bottom-001', role: 'RESULTS', recipe_ids: [recipe.id, alternate.id], template_id: template.id })
+  const binding = await create('bindings', { relative_path: directory, project_id: 'project-tv-001', request_id: 'request-drop-001', load_case_id: 'loadcase-drop-bottom-001', role: 'RESULTS', recipe_ids: [recipe.id, alternate.id], template_id: null })
   const refresh = await create(`bindings/${binding.id}/refresh`, {})
   expect(refresh.results[0].status).toBe('AMBIGUOUS')
   return { recipe, alternate, template, binding, directory }
@@ -61,6 +61,11 @@ test('real ambiguous file requires revalidation and explicit import; bound impac
   const result = await (await confirmed).json()
   expect(result.status).toBe('IMPORTED')
   expect(result.run_id).toBeTruthy()
+  const importedWidgets = await page.request.get(`/api/semantic-mapping/results?load_case_id=loadcase-drop-bottom-001&run_id=${result.run_id}`)
+  expect(importedWidgets.ok(), await importedWidgets.text()).toBeTruthy()
+  const rendered = await importedWidgets.json()
+  expect(rendered.template_id).toBe(data.template.id)
+  expect(rendered.widgets[0].data[0].value).toBe(42)
   await queue.getByLabel('검토 상태').selectOption('IMPORTED')
   await queue.getByRole('button', { name: /result.csv/ }).click()
   await queue.locator('summary').click()
@@ -75,7 +80,8 @@ test('real ambiguous file requires revalidation and explicit import; bound impac
   const reused = await (await duplicate).json()
   expect(reused.status).toBe('SKIPPED')
   expect(reused.run_id).toBe(result.run_id)
-  await page.reload()
+  // Begin the separate configuration-editing phase at its explicit workspace route.
+  await page.goto('/workspace/catalog/schemas')
   await page.getByLabel('저장된 레시피').selectOption(data.recipe.id)
   await page.getByLabel('저장된 템플릿').selectOption(data.template.id)
   await page.locator('.file-drop input').setInputFiles({ name: 'sample.csv', mimeType: 'text/csv', buffer: Buffer.from('force\n42\n') })
@@ -83,6 +89,7 @@ test('real ambiguous file requires revalidation and explicit import; bound impac
   await expect(page.locator('.semantic-result-kpi strong')).toHaveText('42.00')
   // Opening a sparse API-created definition fills the editor's explicit defaults.
   // Save the displayed configuration before asking to activate its exact version.
+  await page.getByText('고급 · 레시피/템플릿 개별 저장', { exact: true }).click()
   const saved = page.waitForResponse(response => response.url().endsWith('/recipes') && response.request().method() === 'POST')
   await page.getByRole('button', { name: '레시피 새 버전 저장', exact: true }).click()
   expect((await saved).status()).toBeLessThan(300)

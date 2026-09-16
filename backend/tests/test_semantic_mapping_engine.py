@@ -39,6 +39,12 @@ def test_two_formats_normalize_to_same_semantic_item_and_widget():
     assert csv["scalars"][0]["value"] == 120
 
 
+def test_delimited_text_export_uses_the_csv_recipe_without_relaxing_json_matching():
+    parsed = preview_recipe(recipe(), [item()], "solver-output.txt", b"S\n120\n")
+    assert parsed["scalars"][0]["value"] == 120
+    code_error("FORMAT_MISMATCH", lambda: preview_recipe(recipe(), [item()], "solver-output.json", b"S\n120\n"))
+
+
 def test_dimensioned_results_preserve_grain_and_do_not_choose_first_for_card():
     items = [item(dimensions=["node"])]
     parsed = preview_recipe(recipe(dimensions={"node": "N"}), items, "a.csv", b"N,S\n10,120\n20,100\n")

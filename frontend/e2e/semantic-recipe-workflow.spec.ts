@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
-import { readFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
 import { loginWorkspace } from './workspace-test-helpers'
 
 async function createReviewTarget(page: Page, withSnapshot: boolean) {
@@ -91,6 +92,8 @@ for (const extension of ['csv', 'json']) {
     await expect(editors).toHaveCount(2)
     await editors.last().getByLabel('위젯 결과 항목').selectOption(firstId)
     await editors.last().getByLabel('위젯 종류').selectOption('kpi')
+    const widgetTypes = await editors.last().getByLabel('위젯 종류').locator('option').evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value))
+    expect(widgetTypes.sort()).toEqual(['bar', 'gauge', 'image', 'kpi', 'line', 'scatter', 'table', 'video'])
     await expect(editors.last().getByLabel('위젯 제목')).toHaveValue('상단 변위')
     await expect(editors.last().getByLabel('위젯 종류').locator('option[value=line]')).toHaveAttribute('disabled', '')
     await editors.first().getByLabel('표시 자릿수').fill('3')
@@ -147,13 +150,52 @@ for (const extension of ['csv', 'json']) {
     await screen.getByLabel('의뢰', { exact: true }).selectOption(target.requestId)
     await screen.getByLabel('하중 경우', { exact: true }).selectOption(target.loadCaseId)
     await screen.getByRole('checkbox', { name: new RegExp(recipeName) }).check()
-    await screen.getByLabel('표시 템플릿', { exact: true }).selectOption(saved.template.id)
-    await screen.getByLabel('등록할 결과 파일').setInputFiles(sample)
-    const importing = page.waitForResponse((response) => response.url().endsWith('/semantic-mapping/import'))
-    await screen.getByRole('button', { name: '단일 파일 가져오기', exact: true }).click()
-    const imported = await importing
-    expect(imported.status(), await imported.text()).toBe(200)
-    const { run_id: runId } = await imported.json()
+    // The recipe's saved display template is sufficient; no second selection is required.
+    let runId: string
+    let bindingId = ''
+    if (extension === 'csv') {
+      const storageRoot = path.resolve('../output/qa/recipe-folder')
+      const directory = `issue-${suffix}`
+      mkdirSync(path.join(storageRoot, directory), { recursive: true })
+      writeFileSync(path.join(storageRoot, directory, filename), sample.buffer)
+      writeFileSync(path.join(storageRoot, directory, 'same-format.txt'), sample.buffer)
+      writeFileSync(path.join(storageRoot, directory, 'unrelated.csv'), 'other,value\nhello,1\n')
+      const storage = await page.request.put('/api/storage/config', { data: { root: storageRoot } })
+      expect(storage.status(), await storage.text()).toBe(200)
+      await screen.getByLabel('폴더 상대 경로', { exact: true }).fill(directory)
+      const savingBinding = page.waitForResponse((response) => response.url().endsWith('/semantic-mapping/bindings') && response.request().method() === 'POST')
+      const processing = page.waitForResponse((response) => /\/semantic-mapping\/bindings\/[^/]+\/refresh$/.test(response.url()))
+      await screen.getByRole('button', { name: '연결 저장', exact: true }).click()
+      const bound = await savingBinding
+      expect(bound.ok(), await bound.text()).toBeTruthy()
+      bindingId = (await bound.json()).id
+      const processed = await processing
+      expect(processed.status(), await processed.text()).toBe(200)
+      const results = (await processed.json()).results as Array<{ relative_path: string; run_id: string; status: string; review_available: boolean; diagnostics?: unknown[] }>
+      const original = results.find((row) => row.relative_path === filename)!
+      expect(original.status).toBe('IMPORTED')
+      expect(original.review_available).toBe(true)
+      runId = original.run_id
+      expect(results.find((row) => row.relative_path === 'same-format.txt')!.review_available).toBe(true)
+      expect(results.find((row) => row.relative_path === 'unrelated.csv')!.status).toBe('UNMAPPED')
+      await expect(screen.getByRole('row').filter({ hasText: 'unrelated.csv' })).not.toContainText('run-')
+      await expect(screen.getByRole('row').filter({ hasText: 'unrelated.csv' })).toContainText('후보 오류')
+      await screen.getByRole('row').filter({ hasText: filename }).scrollIntoViewIfNeeded()
+      await page.screenshot({ path: testInfo.outputPath('issue-csv-folder-processed.png') })
+      const refreshing = page.waitForResponse((response) => response.url().endsWith(`/bindings/${bindingId}/refresh`))
+      await screen.locator('.binding-list article').filter({ hasText: directory }).getByRole('button', { name: '새로고침', exact: true }).click()
+      const repeated = (await (await refreshing).json()).results
+      expect(repeated.find((row: { relative_path: string }) => row.relative_path === filename).status).toBe('SKIPPED')
+    } else {
+      await screen.getByLabel('등록할 결과 파일').setInputFiles(sample)
+      const importing = page.waitForResponse((response) => response.url().endsWith('/semantic-mapping/import'))
+      await screen.getByRole('button', { name: '단일 파일 가져오기', exact: true }).click()
+      const imported = await importing
+      expect(imported.status(), await imported.text()).toBe(200)
+      const result = await imported.json()
+      expect(result.review_available).toBe(true)
+      runId = result.run_id
+    }
     // A later result must not change the completed import button's destination.
     const laterBuffer = Buffer.from(sample.buffer.toString().replace('-311.643', '-123.456'))
     const laterImport = await page.request.post('/api/semantic-mapping/import', { multipart: {
@@ -166,7 +208,9 @@ for (const extension of ['csv', 'json']) {
     const runsResponse = await page.request.get(`/api/load-cases/${target.loadCaseId}/runs`)
     expect(runsResponse.ok(), await runsResponse.text()).toBeTruthy()
     const runNo = (await runsResponse.json()).find((run: { id: string }) => run.id === runId).run_no
-    const reviewLink = screen.getByLabel('등록한 결과', { exact: true }).getByRole('link', { name: '결과 검토', exact: true })
+    const reviewLink = extension === 'csv'
+      ? screen.getByRole('row').filter({ hasText: filename }).getByRole('link', { name: '결과 검토', exact: true })
+      : screen.getByLabel('등록한 결과', { exact: true }).getByRole('link', { name: '결과 검토', exact: true })
     await expect(reviewLink).toBeVisible()
     await reviewLink.click()
     const panel = page.getByRole('region', { name: '레시피로 연결한 결과' })

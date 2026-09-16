@@ -329,7 +329,12 @@ def _read(filename: str, content: bytes, recipe: dict) -> list[dict]:
     if not isinstance(content, bytes) or not 0 < len(content) <= MAX_BYTES:
         _fail("FILE_SIZE_LIMIT", "빈 파일이거나 5 MB 파일 한도를 초과했습니다.")
     fmt = recipe["format"]
-    if PurePath(filename).suffix.lower() != "." + fmt:
+    suffix = PurePath(filename).suffix.lower()
+    # Solver exports frequently use a plain-text extension for a delimited
+    # table.  Treat that container as CSV only after the configured CSV parser
+    # validates its exact header and rows; JSON remains extension-specific.
+    allowed_suffixes = {".csv", ".tsv", ".txt"} if fmt == "csv" else {".json"}
+    if suffix not in allowed_suffixes:
         _fail("FORMAT_MISMATCH", "파일 확장자가 레시피와 일치하지 않습니다.")
     try:
         source = content.decode(recipe.get("encoding", "utf-8-sig"))

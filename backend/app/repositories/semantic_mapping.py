@@ -39,6 +39,14 @@ def version_at(connection: ConnectionLike, kind: str, ident: str, version_number
     return connection.execute(f"SELECT definition_json, item_snapshot_json FROM {versions} WHERE {column}=? AND version=?", [ident, version_number]).fetchone()
 
 
+def published_version_at(connection: ConnectionLike, kind: str, ident: str, version_number: int) -> Any:
+    _, versions, column = {"recipe": ("semantic_recipes", "semantic_recipe_versions", "recipe_id"), "template": ("semantic_templates", "semantic_template_versions", "template_id")}[kind]
+    return connection.execute(
+        f"SELECT definition_json, item_snapshot_json FROM {versions} WHERE {column}=? AND version=? AND lifecycle_status IN ('ACTIVE', 'VALIDATED')",
+        [ident, version_number],
+    ).fetchone()
+
+
 def definition_metadata(connection: ConnectionLike, kind: str, ident: str) -> Any:
     table = {"recipe": "semantic_recipes", "template": "semantic_templates"}[kind]
     return connection.execute(f"SELECT name,active_version FROM {table} WHERE id=?", [ident]).fetchone()
@@ -136,6 +144,19 @@ def create_binding(connection: ConnectionLike, *, binding_id: str, payload: Any,
 
 def provenance_template(connection: ConnectionLike, run_id: str) -> Any:
     return connection.execute("SELECT template_id, template_version FROM semantic_import_provenance WHERE analysis_run_id=?", [run_id]).fetchone()
+
+
+def has_legacy_provenance(
+    connection: ConnectionLike, *, load_case_id: str, recipe_id: str, recipe_version: int,
+    template_id: str | None, template_version: int | None, source_sha256: str,
+) -> bool:
+    legacy_run_id = f"semantic:{recipe_id}:{recipe_version}:{source_sha256}"
+    return connection.execute(
+        "SELECT 1 FROM semantic_import_provenance p JOIN canonical_result_ingestion_source_versions s ON s.analysis_run_id=p.analysis_run_id "
+        "WHERE p.load_case_id=? AND p.recipe_id=? AND p.recipe_version=? AND p.template_id IS NOT DISTINCT FROM ? "
+        "AND p.template_version IS NOT DISTINCT FROM ? AND p.source_sha256=? AND s.source_run_id=? LIMIT 1",
+        [load_case_id, recipe_id, recipe_version, template_id, template_version, source_sha256, legacy_run_id],
+    ).fetchone() is not None
 
 
 def binding(connection: ConnectionLike, binding_id: str) -> dict[str, Any] | None:

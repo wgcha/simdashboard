@@ -75,6 +75,64 @@ def test_refresh_persists_unmapped_then_revalidate_and_confirm(monkeypatch: pyte
 
 
 @pytest.mark.duckdb_integration
+def test_review_revalidate_uses_recipe_exact_display_template_without_binding_override(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    root = tmp_path / "store" / "review"; root.mkdir(parents=True)
+    (root / "unknown.csv").write_text("other\n1\n", encoding="utf-8")
+    monkeypatch.setenv("SIMDASH_SPDM_ROOT", str(root.parent))
+    with _client() as client:
+        binding_id, recipe_id, template_id = _setup(client, "review")
+        recipe = next(entry for entry in client.get("/api/semantic-mapping/catalog").json()["recipes"] if entry["id"] == recipe_id)
+        sample = base64.b64encode(b"stress,node\n12,N-1\n").decode()
+        linked = client.post("/api/semantic-mapping/recipes", json={"id": recipe_id, "name": recipe["name"], "expected_version": 1, "definition": {**recipe["definition"], "display_template_id": template_id, "display_template_version": 1}, "sample_filename": "a.csv", "sample_content_base64": sample})
+        assert linked.status_code == 201, linked.text
+        assert client.post("/api/semantic-mapping/activate-bundle", json={"recipe_id": recipe_id, "recipe_version": 2, "template_id": template_id, "template_version": 1, "expected_recipe_active_version": 1, "expected_template_active_version": 1}).status_code == 200
+        disconnected = client.put(f"/api/semantic-mapping/bindings/{binding_id}", json={"id": binding_id, "expected_revision": 1, "relative_path": "review", "project_id": "project-tv-001", "request_id": "request-drop-001", "load_case_id": "loadcase-drop-bottom-001", "role": "RESULTS", "recipe_ids": [recipe_id], "template_id": None})
+        assert disconnected.status_code == 200, disconnected.text
+        assert client.post(f"/api/semantic-mapping/bindings/{binding_id}/refresh").json()["results"][0]["status"] == "UNMAPPED"
+        (root / "unknown.csv").write_text("stress,node\n12,N-1\n", encoding="utf-8")
+        assert client.post(f"/api/semantic-mapping/bindings/{binding_id}/refresh").json()["results"][0]["status"] == "PENDING"
+        item = _review_item(client, binding_id)
+        ready = client.post(f"/api/semantic-mapping/review-items/{item['id']}/revalidate", json={"expected_revision": item["revision"], "recipe_id": recipe_id, "recipe_version": 2})
+        assert ready.status_code == 200, ready.text
+        assert ready.json()["template_id"] == template_id and ready.json()["template_version"] == 1 and ready.json()["widgets"]
+        confirmed = client.post(f"/api/semantic-mapping/review-items/{item['id']}/confirm", json={"expected_revision": ready.json()["revision"]})
+        assert confirmed.status_code == 200 and confirmed.json()["status"] == "IMPORTED"
+
+
+@pytest.mark.duckdb_integration
+def test_terminal_refresh_uses_confirmed_no_template_provenance_not_new_recipe_link(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    root = tmp_path / "store" / "review"; root.mkdir(parents=True)
+    (root / "unknown.csv").write_text("other\n1\n", encoding="utf-8")
+    monkeypatch.setenv("SIMDASH_SPDM_ROOT", str(root.parent))
+    with _client() as client:
+        binding_id, recipe_id, template_id = _setup(client, "review")
+        disconnected = client.put(f"/api/semantic-mapping/bindings/{binding_id}", json={"id": binding_id, "expected_revision": 1, "relative_path": "review", "project_id": "project-tv-001", "request_id": "request-drop-001", "load_case_id": "loadcase-drop-bottom-001", "role": "RESULTS", "recipe_ids": [recipe_id], "template_id": None})
+        assert disconnected.status_code == 200
+        assert client.post(f"/api/semantic-mapping/bindings/{binding_id}/refresh").json()["results"][0]["status"] == "UNMAPPED"
+        (root / "unknown.csv").write_text("stress,node\n12,N-1\n", encoding="utf-8")
+        assert client.post(f"/api/semantic-mapping/bindings/{binding_id}/refresh").json()["results"][0]["status"] == "PENDING"
+        item = _review_item(client, binding_id)
+        ready = client.post(f"/api/semantic-mapping/review-items/{item['id']}/revalidate", json={"expected_revision": item["revision"], "recipe_id": recipe_id, "recipe_version": 1}).json()
+        confirmed = client.post(f"/api/semantic-mapping/review-items/{item['id']}/confirm", json={"expected_revision": ready["revision"]}).json()
+        assert confirmed["status"] == "IMPORTED"
+        recipe = next(entry for entry in client.get("/api/semantic-mapping/catalog").json()["recipes"] if entry["id"] == recipe_id)
+        sample = base64.b64encode(b"stress,node\n12,N-1\n").decode()
+        assert client.post("/api/semantic-mapping/recipes", json={"id": recipe_id, "name": recipe["name"], "expected_version": 1, "definition": {**recipe["definition"], "display_template_id": template_id, "display_template_version": 1}, "sample_filename": "a.csv", "sample_content_base64": sample}).status_code == 201
+        assert client.post("/api/semantic-mapping/activate-bundle", json={"recipe_id": recipe_id, "recipe_version": 2, "template_id": template_id, "template_version": 1, "expected_recipe_active_version": 1, "expected_template_active_version": 1}).status_code == 200
+        refreshed = client.post(f"/api/semantic-mapping/bindings/{binding_id}/refresh")
+        assert refreshed.status_code == 200, refreshed.text
+        result = refreshed.json()["results"][0]
+        assert result["status"] == "IMPORTED" and result["run_id"] == confirmed["run_id"]
+        assert result["review_available"] is False and result["clear_reason"] == "NO_DISPLAY_TEMPLATE"
+        monkeypatch.setattr(spdm_storage, "read_stable_bytes", lambda *_args, **_kwargs: (_ for _ in ()).throw(spdm_storage.SpdmStorageError("SPDM_FILE_BUSY", "busy")))
+        locked = client.post(f"/api/semantic-mapping/bindings/{binding_id}/refresh")
+        assert locked.status_code == 200, locked.text
+        locked_result = locked.json()["results"][0]
+        assert locked_result["status"] == "IMPORTED" and locked_result["run_id"] == confirmed["run_id"]
+        assert locked_result["review_available"] is False and locked_result["clear_reason"] == "NO_DISPLAY_TEMPLATE"
+
+
+@pytest.mark.duckdb_integration
 def test_review_list_paginates_and_history_reports_truncation(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     root = tmp_path / "store" / "review"; root.mkdir(parents=True)
     for name in ("a.csv", "b.csv", "c.csv"):
