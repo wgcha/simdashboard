@@ -668,3 +668,9 @@
 - Astra 원인 재현·설계·최종 검수, Terra Git 호출 수정, Luna 회귀 검사, Sol 독립 검수로 진행했다. Invoke-UpdateGit 실행 범위에서만 UTF-8 디코딩을 적용하고 finally에서 기존 콘솔 인코딩을 복원한다. 경로 경계·reparse·보호 파일·빠른 전진 검사와 사용자 stash를 유지한다. 새 의존성·DB migration 없음.
 - 수정 전 CP949/ASCII는 GetFullPath 실패, 수정 후 CP65001/949/437/20127 모두 현재 HEAD의 1,198개 경로 처리 성공. Windows PowerShell 5.1 문법, Git module self-test, update-entry, 실제 임시 Git + 모의 서비스 update-integration, PostgreSQL 초기화 실패 경로, 계정 배포 순서/백업 실패 경로 self-test를 통과했다. 배포 schema/profile/offline 환경 타깃 Python 검사 28 passed, 1 skipped. 실사용 DB·설정·서비스는 테스트하지 않았다.
 - 한글/공백/대괄호 경로와 stash 유지 회귀를 Windows 배포 계약 CI에 연결했다. 구버전 main 업데이트기의 복구 절차(git pull --ff-only origin main 후 update.bat), 미추적 문서 별도 보존과 stash 유지 안내를 docs/windows-git-update.md에 추가했다. Sol 검수 PASS. 사내 PC 재실행 및 실제 Server 2022 폐쇄망 실기는 별도 확인 대상이다.
+
+### 2026-09-19 사내 log 폴더의 Markdown 문서만 변경 검사
+
+- 후속 사용자 요청에 따라 log/ 아래 미추적 출력 파일은 제외하고 .md/.MD 문서만 Git 변경 검사 대상으로 유지했다. 하위 폴더에도 동일 규칙을 적용하며 .gitignore와 기존 설치의 .git/info/exclude 갱신을 함께 반영한다. 기존 추적 문서 log/work-log.md의 변경 감지와 덮어쓰기 방지, 다른 소스 경로의 검사는 유지한다.
+- 임시 Git 업데이트 검사에 TXT/JSON/LOG/확장자 없는 로그가 업데이트를 막지 않고 내용이 보존되는지, 새 최상위·하위 Markdown과 기존 work-log 수정은 여전히 중단시키는지를 추가했다. git check-ignore로 실제 저장소 규칙에서도 일반 출력만 제외되는 것을 확인했다. 실제 사용자 문서·stash·DB·서비스는 변경하지 않았다.
+- Windows PowerShell 5.1 Git update self-test와 Sol 독립 검수, Astra 최종 검수 PASS. 인코딩 수정 커밋과 이번 log 규칙 변경은 외부 전송 승인 전 로컬에 보관한다.

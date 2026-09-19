@@ -240,7 +240,9 @@ function Get-BackupDirectory {
 function Add-UpdaterExclude {
     param([string]$Root)
     $exclude = Join-Path $Root '.git\info\exclude'
-    $lines = @('.gitupdate.lock', '.update.lock', '/update.bat', 'backups/git-update-*', 'backups/updater-driver-*', '/log/update-*.log')
+    # Keep runtime output under log local while allowing Markdown operational notes
+    # at every nesting level to remain visible to the clean-worktree check.
+    $lines = @('.gitupdate.lock', '.update.lock', '/update.bat', 'backups/git-update-*', 'backups/updater-driver-*', '/log/update-*.log', '/log/**', '!/log/**/', '!/log/**/*.[mM][dD]')
     $existing = if (Test-Path -LiteralPath $exclude) { @(Get-Content -LiteralPath $exclude) } else { @() }
     $add = @($lines | Where-Object { $existing -notcontains $_ })
     foreach ($line in @($add)) { Add-Content -LiteralPath $exclude -Value $line }

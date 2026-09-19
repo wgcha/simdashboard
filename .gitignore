@@ -39,6 +39,10 @@ deploy/rocky8/*.local.env
 transfer-bundles/
 backend/.transfer-assets-*/
 *.log
+# Keep Markdown development notes visible; local log/output files stay on the PC.
+/log/**
+!/log/**/
+!/log/**/*.[mM][dD]
 !backend/assets/demo-execution.log
 !backend/public_assets/demo-execution.log
 .server-pids.json

@@ -130,8 +130,24 @@ try {
     Invoke-TestGit -Path $fixture.Source -Arguments @('add', 'app.txt') | Out-Null
     Invoke-TestGit -Path $fixture.Source -Arguments @('commit', '-m', 'second forward') | Out-Null
     Invoke-TestGit -Path $fixture.Source -Arguments @('push', 'origin', $branch) | Out-Null
+    # Local non-Markdown log output must not block an update or be modified.
+    $localLogs = @('log/local.txt', 'log/nested/trace.json', 'log/nested/session.LOG', 'log/no-extension')
+    foreach ($relative in $localLogs) {
+        Write-TestFile -Path (Join-Path $existing $relative) -Contents ('preserved ' + $relative)
+    }
     $stashPlan = Get-WorkbenchGitUpdatePlan -Root $existing
     Invoke-WorkbenchGitUpdate -Plan $stashPlan | Out-Null
+    foreach ($relative in $localLogs) {
+        Assert-True ((Get-Content -Raw -LiteralPath (Join-Path $existing $relative)).Trim() -eq ('preserved ' + $relative)) "Local log file '$relative' was changed."
+    }
+    foreach ($relative in @('log/local.md', 'log/nested/review.MD')) {
+        Write-TestFile -Path (Join-Path $existing $relative) -Contents 'local review note'
+        Assert-Throws -Action { Get-WorkbenchGitUpdatePlan -Root $existing } -Contains 'local changes'
+        Remove-Item -LiteralPath (Join-Path $existing $relative)
+    }
+    Write-TestFile -Path (Join-Path $existing 'log/work-log.md') -Contents 'local tracked review note'
+    Assert-Throws -Action { Get-WorkbenchGitUpdatePlan -Root $existing } -Contains 'local changes'
+    Invoke-TestGit -Path $existing -Arguments @('checkout', '--', 'log/work-log.md') | Out-Null
     $stashAfter = @(Invoke-TestGit -Path $existing -Arguments @('stash', 'list', '--format=%H%x09%s'))
     $stashContentAfter = @(Invoke-TestGit -Path $existing -Arguments @('stash', 'show', '--format=fuller', '--stat', 'stash@{0}'))
     Assert-True (($stashBefore -join [Environment]::NewLine) -eq ($stashAfter -join [Environment]::NewLine)) 'Existing stash entries changed during update.'
