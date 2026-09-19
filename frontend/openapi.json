@@ -7677,6 +7677,512 @@
         }
       }
     },
+    "/api/dashboard/catalog": {
+      "get": {
+        "tags": [
+          "result-dashboard"
+        ],
+        "summary": "Catalog",
+        "operationId": "catalog_api_dashboard_catalog_get",
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
+            }
+          },
+          {
+            "name": "environment",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "enum": [
+                "USAGE",
+                "DISTRIBUTION"
+              ],
+              "type": "string",
+              "title": "Environment"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dashboard/scans": {
+      "post": {
+        "tags": [
+          "result-dashboard"
+        ],
+        "summary": "Scan",
+        "operationId": "scan_api_dashboard_scans_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScanInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dashboard/captures": {
+      "post": {
+        "tags": [
+          "result-dashboard"
+        ],
+        "summary": "Publish",
+        "operationId": "publish_api_dashboard_captures_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CaptureInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dashboard/usage/cases/{case_id}": {
+      "get": {
+        "tags": [
+          "result-dashboard"
+        ],
+        "summary": "Usage",
+        "operationId": "usage_api_dashboard_usage_cases__case_id__get",
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "capture_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Capture Id"
+            }
+          },
+          {
+            "name": "reference_case_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Reference Case Id"
+            }
+          },
+          {
+            "name": "reference_capture_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Reference Capture Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dashboard/distribution/runs/{run_id}": {
+      "get": {
+        "tags": [
+          "result-dashboard"
+        ],
+        "summary": "Distribution",
+        "operationId": "distribution_api_dashboard_distribution_runs__run_id__get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "capture_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Capture Id"
+            }
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Mode"
+            }
+          },
+          {
+            "name": "component_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Component Id"
+            }
+          },
+          {
+            "name": "basis",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "enum": [
+                "DETAIL",
+                "REPORTED_SUMMARY"
+              ],
+              "type": "string",
+              "title": "Basis"
+            }
+          },
+          {
+            "name": "edge_keys",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "LEFT,RIGHT,TOP,BOTTOM",
+              "title": "Edge Keys"
+            }
+          },
+          {
+            "name": "line_indices",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "1,2,3,4",
+              "title": "Line Indices"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dashboard/distribution/scenes/{scene_id}": {
+      "get": {
+        "tags": [
+          "result-dashboard"
+        ],
+        "summary": "Scene Detail",
+        "operationId": "scene_detail_api_dashboard_distribution_scenes__scene_id__get",
+        "parameters": [
+          {
+            "name": "scene_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Scene Id"
+            }
+          },
+          {
+            "name": "capture_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Capture Id"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Mode"
+            }
+          },
+          {
+            "name": "component_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Component Id"
+            }
+          },
+          {
+            "name": "basis",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "enum": [
+                "DETAIL",
+                "REPORTED_SUMMARY"
+              ],
+              "type": "string",
+              "title": "Basis"
+            }
+          },
+          {
+            "name": "line_indices",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "1,2,3,4",
+              "title": "Line Indices"
+            }
+          },
+          {
+            "name": "position",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "TOP",
+                "BOT",
+                "LH",
+                "RH"
+              ],
+              "type": "string",
+              "default": "TOP",
+              "title": "Position"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dashboard/distribution/comparison": {
+      "post": {
+        "tags": [
+          "result-dashboard"
+        ],
+        "summary": "Comparison",
+        "operationId": "comparison_api_dashboard_distribution_comparison_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ComparisonInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dashboard/assets/{asset_id}": {
+      "get": {
+        "tags": [
+          "result-dashboard"
+        ],
+        "summary": "Asset",
+        "operationId": "asset_api_dashboard_assets__asset_id__get",
+        "parameters": [
+          {
+            "name": "asset_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Asset Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/assets/{asset_id}": {
       "get": {
         "summary": "Get Result Asset",
@@ -10940,6 +11446,51 @@
         ],
         "title": "BundleImpactResponse"
       },
+      "CaptureInput": {
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "title": "Project Id"
+          },
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          },
+          "root_relative_path": {
+            "type": "string",
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Root Relative Path"
+          },
+          "environment": {
+            "type": "string",
+            "enum": [
+              "USAGE",
+              "DISTRIBUTION"
+            ],
+            "title": "Environment"
+          },
+          "storage_root_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Storage Root Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "project_id",
+          "request_id",
+          "root_relative_path",
+          "environment"
+        ],
+        "title": "CaptureInput"
+      },
       "CardCreate": {
         "properties": {
           "name": {
@@ -11336,6 +11887,81 @@
           "synced_at"
         ],
         "title": "CentralRun"
+      },
+      "ComparisonInput": {
+        "properties": {
+          "members": {
+            "items": {
+              "$ref": "#/components/schemas/ComparisonMember"
+            },
+            "type": "array",
+            "maxItems": 8,
+            "minItems": 1,
+            "title": "Members"
+          },
+          "edge_keys": {
+            "type": "string",
+            "title": "Edge Keys",
+            "default": "LEFT,RIGHT,TOP,BOTTOM"
+          },
+          "line_indices": {
+            "type": "string",
+            "title": "Line Indices",
+            "default": "1,2,3,4"
+          }
+        },
+        "type": "object",
+        "required": [
+          "members"
+        ],
+        "title": "ComparisonInput"
+      },
+      "ComparisonMember": {
+        "properties": {
+          "simulation_case_id": {
+            "type": "string",
+            "title": "Simulation Case Id"
+          },
+          "load_case_id": {
+            "type": "string",
+            "title": "Load Case Id"
+          },
+          "execution_run_id": {
+            "type": "string",
+            "title": "Execution Run Id"
+          },
+          "capture_id": {
+            "type": "string",
+            "title": "Capture Id"
+          },
+          "mode": {
+            "type": "string",
+            "title": "Mode"
+          },
+          "component_id": {
+            "type": "string",
+            "title": "Component Id"
+          },
+          "basis": {
+            "type": "string",
+            "enum": [
+              "DETAIL",
+              "REPORTED_SUMMARY"
+            ],
+            "title": "Basis"
+          }
+        },
+        "type": "object",
+        "required": [
+          "simulation_case_id",
+          "load_case_id",
+          "execution_run_id",
+          "capture_id",
+          "mode",
+          "component_id",
+          "basis"
+        ],
+        "title": "ComparisonMember"
       },
       "ConfigurationSave": {
         "properties": {
@@ -16452,6 +17078,39 @@
           "unverified_pair_count"
         ],
         "title": "SampleCoverage"
+      },
+      "ScanInput": {
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "title": "Project Id"
+          },
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          },
+          "root_relative_path": {
+            "type": "string",
+            "maxLength": 2048,
+            "title": "Root Relative Path",
+            "default": ""
+          },
+          "environment": {
+            "type": "string",
+            "enum": [
+              "USAGE",
+              "DISTRIBUTION"
+            ],
+            "title": "Environment"
+          }
+        },
+        "type": "object",
+        "required": [
+          "project_id",
+          "request_id",
+          "environment"
+        ],
+        "title": "ScanInput"
       },
       "SelectionContextResponse": {
         "properties": {

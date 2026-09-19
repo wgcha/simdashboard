@@ -63,6 +63,9 @@ def initialize_database() -> None:
                 "folder_discovery_rules",
                 "folder_discovery_registry",
                 "folder_discovery_catalog",
+                "dashboard_cases",
+                "dashboard_captures",
+                "dashboard_assets",
             )
             missing = [
                 table_name
@@ -80,6 +83,9 @@ def initialize_database() -> None:
                 "folder_discovery_rules": {"root_key", "relative_path", "revision"},
                 "folder_discovery_registry": {"root_key", "role_kind", "parent_target_id", "scope_key", "target_id"},
                 "folder_discovery_catalog": {"revision", "roles_json", "analysis_types_json"},
+                "dashboard_cases": {"project_id", "request_id", "storage_root_id", "relative_path", "environment", "metadata_json"},
+                "dashboard_captures": {"case_id", "fingerprint", "recipe_version", "manifest_json", "payload_json"},
+                "dashboard_assets": {"capture_id", "relative_path", "sha256", "media_type", "content", "metadata_json"},
             }
             incompatible = []
             for table_name, expected in required_columns.items():
@@ -90,7 +96,7 @@ def initialize_database() -> None:
                 if not expected.issubset(available):
                     incompatible.append(table_name)
             if incompatible:
-                raise RuntimeError("Folder discovery 스키마가 최신 상태가 아닙니다. 먼저 alembic upgrade head를 실행하세요: " + ", ".join(incompatible))
+                raise RuntimeError("앱 스키마가 최신 상태가 아닙니다. 먼저 alembic upgrade head를 실행하세요: " + ", ".join(incompatible))
         return
 
     from .adapters.persistence.duckdb.bootstrap import initialize_duckdb_development_database
@@ -1205,6 +1211,8 @@ def _initialize_duckdb_legacy() -> None:
         ensure_semantic_vocabulary_schema(conn)
         ensure_semantic_review_schema(conn)
         ensure_folder_discovery_schema(conn)
+        from .adapters.persistence.dashboard_schema import ensure_dashboard_schema
+        ensure_dashboard_schema(conn)
         # Establish the schema before seeding, but defer one-time legacy data
         # conversion until the seed has created any default projects.
         ensure_access_control_schema(conn, apply_legacy_backfills=False)

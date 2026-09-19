@@ -648,3 +648,16 @@
 - 브라우저 최종 고유 시나리오 2개 통과(1.9분): 일반 위젯에서 검색 일괄 추가·개별 추가/제외·선택한 두 항목만 표/그래프 표시·설정 저장/게시/새로고침 후 복원, 실제 CSV 레시피에서 두 목록 선택·벡터 그래프·원본 Run 재조회. 단일 위젯 전환 안내와 명시적 전체 제외 빈 상태, X축 양끝 여백 보완 후 일반 시나리오를 다시 실행해 1개 통과(28.2초)했다.
 - 1280×800 및 390×844 화면을 직접 확인했다. 좌우/상하 목록, 그래프 축 이름, 단위, 저장된 두 항목, 확대 화면을 검수했으며 관련 console/pageerror·Vite overlay 오류가 없었다. 유형 전환 시 비호환/추가 항목 제외 안내, 데이터 대기 선택, 기존 기본 표시와 적용 목록 일치, 혼합 단위 경고도 보완했다. Sol 최종 재검수 및 Astra 최종 검수 PASS.
 - 최종 TypeScript, production build, OpenAPI, 양측 architecture, diff-check 통과. Windows node_modules/.vite-temp 쓰기 EPERM으로 기본 Vite config bundler가 실패한 뒤 기존 runner 방식(`vite build --configLoader runner`)으로 동일 production build를 통과했다. 기존 번들 크기 경고와 Windows e2e runner taskkill 종료 경고는 별도 환경 제약으로 남으며 테스트 본체 성공과 구분한다.
+
+### 2026-09-19 Case·Run·수집 버전 기반 해석 결과 대시보드
+
+- 사용자 요청 `docs/dashboard` 문서를 기준으로 Astra 설계·통합, Luna 파서/수집, Terra 화면, Sol 독립 검수로 구현했다. 사용자 원본 `구현.md`, `상세.md`를 보존하고 사용 안내 `docs/dashboard/README.md` 및 문서 지도를 추가했다.
+- Altair One 표준 및 명시 Case 상대 경로 조사, 사용환경 JSON 우선/CSV 대체·다섯 평가·방향별 값/판정·영상·Reference, 유통환경 Case/하중경우/사용자 Run/Mode/수집 버전/Component/집계 기준을 기존 결과 검토에 연결했다.
+- 선택 엣지 envelope, 네 엣지 패널의 크기/표시순서/Case 선택, 위치 범주 맵, Case×Scene 컨투어 전치, 역할 미확인 거동 슬롯, 원본 비율 확대/영상 제어, 위치별 네 라인 상세, 다중 Case 비교 및 문맥 변경 시 지연 응답 차단을 구현했다. 미확정 운송 프로파일의 Case Scene은 별도 행과 미대응 셀로 유지한다.
+- 0029 additive migration은 기존 AnalysisRun 의미를 바꾸지 않고 dashboard_cases/captures/assets를 추가한다. 원본 수치/미디어 바이트·해시·규칙·관측값을 불변 수집 버전으로 저장하고 같은 파일 반복 게시 시 중복 Run/Scene을 만들지 않는다. 프로젝트 권한·경로/reparse 경계·안정된 파일 읽기·원본 변경 감지·트랜잭션 게시·영상 Range를 적용했다.
+- 새 의존성 없음. deploy.bat/update.bat·검증 백업 후 migration·앱 시작 시 읽기 전용 검사 계약 유지. 실제 사용자 DB·설정·원본/서비스를 변경하지 않았다. 임시 PostgreSQL 17.11에서 전체 빈 설치 migration 및 0028 기존 프로젝트/의뢰 보존 업데이트, 시작 검사, 변경 전후 40/44 수치와 원본 바이트·Run/Scene ID·중복 방지를 확인하고 테스트 서버를 종료했다.
+- 검증: 배포/마이그레이션 및 대시보드 묶음 192 passed, 2 skipped; dotenv 테스트 별도 29 passed. 후속 대시보드 최종 격리 테스트 37 passed(앞 묶음과 중복, 단순 합산하지 않음). Sol 독립 검수 차단 사항 없음. TypeScript·Vite 정적 빌드·프런트 구조 검사·OpenAPI 생성·diff 공백 검사 통과. 기본 Vite config 임시파일 권한 오류는 `--configLoader runner`로 우회하여 같은 production build를 검증했다. 기존 큰 번들 경고는 유지된다.
+- 현재 자산 한도: 32 MiB/파일, 256 MiB/수집, 10,000파일; CSV 100,000행 및 Scene 400,000관측. 단위/Component 역할/최종 프레임·공통 범례·운송 프로파일은 근거 없으면 미확인이다. 실제 Clamping·실제 CAE 이미지 정합성·대용량 영상·Server 2022 폐쇄망 설치/업데이트/재부팅 검증을 완료했다고 기록하지 않는다.
+- 최종 브라우저 검증: 합성 자료의 Playwright E2E 2 passed(20 Scene, 그래프→Scene20 상세, 컨투어 전치와 동일 셀 ID, 이미지 확대/ESC, 늦은 USAGE 응답의 DISTRIBUTION 덮어쓰기 방지). 별도 15473 화면 하네스에서 20 Scene 중 결측 1개의 실제 막대 공백(19 path), 이미지 모달·전치·1440/390px 화면을 확인하고 console/pageerror 0건을 확인했다. Astra가 저장 화면을 직접 검수했다. Browser plugin not available로 일반 Playwright를 사용했다. 합성 컨투어는 UI 동작용이며 실제 CAE 영상 검증이 아니다.
+- 최종 파서/조회 변경 후 타깃 검사 31 passed(위 37개와 중복). 전체 E2E 러너는 2개 성공 후 자식 종료 AggregateError를 보고했으므로 테스트 본체 성공과 종료 문제를 구분한다. 운영 서비스에는 접근하지 않았다.
+- 테스트 정리: 임시 PostgreSQL과 root 15473 Vite는 종료했다. 전체 E2E의 15173/18000 포트는 LISTENING 없음으로 확인했다. 해당 runner PID 명령줄 조회는 호스트 접근 거부였으므로 불확실한 프로세스를 임의 종료하지 않았다.

@@ -19,6 +19,7 @@
 
 | 목적 | 문서 |
 |---|---|
+| Case·사용자 Run·수집 버전 기반 사용/유통환경 대시보드 | [`dashboard/README.md`](dashboard/README.md) |
 | 표 대신 막대·점·선으로 항목별 수치를 보여주는 결과 위젯 | [`name-value-widget.md`](name-value-widget.md) |
 | 폴더 확정 후 결과 조회 자동화·업무 코드와 이름 동시 표시의 구현 계약 | [`folder-result-automation-and-selection-plan.md`](folder-result-automation-and-selection-plan.md) |
 | 전체 폴더 조사·이름 토큰 규칙·프로젝트/의뢰/하중 경우 생성 시험 | [`semantic-folder-discovery-guide.md`](semantic-folder-discovery-guide.md) |

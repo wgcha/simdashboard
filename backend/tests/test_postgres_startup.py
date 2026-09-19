@@ -54,6 +54,9 @@ class _PostgresStartupConnection:
                 "folder_discovery_rules": {"root_key", "relative_path", "revision"},
                 "folder_discovery_registry": {"root_key", "role_kind", "parent_target_id", "scope_key", "target_id"},
                 "folder_discovery_catalog": {"revision", "roles_json", "analysis_types_json"},
+                "dashboard_cases": {"project_id", "request_id", "storage_root_id", "relative_path", "environment", "metadata_json"},
+                "dashboard_captures": {"case_id", "fingerprint", "recipe_version", "manifest_json", "payload_json"},
+                "dashboard_assets": {"capture_id", "relative_path", "sha256", "media_type", "content", "metadata_json"},
             }[table]
             return _FakeResult([] if self.missing_column in columns else [(column,) for column in columns])
         raise AssertionError(f"unexpected startup query: {statement}")
@@ -81,7 +84,7 @@ def test_postgres_initialization_rejects_missing_folder_discovery_column(monkeyp
     def fake_connect(): yield connection
     monkeypatch.setattr(app_database, "database_settings", lambda: SimpleNamespace(backend="postgresql"))
     monkeypatch.setattr(app_database, "connect", fake_connect)
-    with pytest.raises(RuntimeError, match="Folder discovery"):
+    with pytest.raises(RuntimeError, match="folder_discovery_scans"):
         app_database.initialize_database()
 
 
