@@ -124,8 +124,16 @@ function Get-CurrentHead {
 
 function Assert-CleanWorktree {
     param([string]$Git, [string]$Root)
-    $status = Invoke-UpdateGit -Git $Git -Root $Root -Arguments @('status', '--porcelain=v1', '--untracked-files=all')
+    # Documentation is maintained locally and does not block an update. Keep the
+    # exclusion in Git's pathspec engine so tracked source paths are unchanged.
+    $status = Invoke-UpdateGit -Git $Git -Root $Root -Arguments @('status', '--porcelain=v1', '--untracked-files=all', '--', '.', ':(top,exclude,icase)docs/**', ':(top,exclude,icase)docs')
     if ($status.Output) { throw 'The project has local changes or untracked source files. Commit, move, or remove them before updating.' }
+}
+
+function Test-LocalDocumentationChanges {
+    param([string]$Git, [string]$Root)
+    $status = Invoke-UpdateGit -Git $Git -Root $Root -Arguments @('status', '--porcelain=v1', '--untracked-files=all', '--', ':(top,icase)docs/**', ':(top,icase)docs')
+    return -not [string]::IsNullOrWhiteSpace($status.Output)
 }
 
 function Get-BranchName {
@@ -404,7 +412,19 @@ function Invoke-WorkbenchGitUpdate {
             if ($targetCheck.ExitCode -ne 0) { throw 'The planned remote commit is no longer available locally. Generate a new plan.' }
             Get-BootstrapTrackedPaths -Git $git -Root $rootPath -Commit ([string]$Plan.TargetCommit) | Out-Null
             if ([bool]$Plan.Changed) {
-                Invoke-UpdateGit -Git $git -Root $rootPath -Arguments @('merge', '--ff-only', '--no-edit', [string]$Plan.TargetCommit) | Out-Null
+                try {
+                    # Do not let a per-user autoStash setting hide documentation
+                    # changes that the fast-forward must preserve.
+                    Invoke-UpdateGit -Git $git -Root $rootPath -Arguments @('-c', 'merge.autoStash=false', 'merge', '--ff-only', '--no-edit', [string]$Plan.TargetCommit) | Out-Null
+                }
+                catch {
+                    # Preserve Git's specific failure while confirming that local
+                    # documentation remains intact when the ref did not move.
+                    if ((Get-CurrentHead -Git $git -Root $rootPath) -eq [string]$Plan.OriginalCommit -and (Test-LocalDocumentationChanges -Git $git -Root $rootPath)) {
+                        throw ("{0}{1}Local docs changes were preserved; review the Git error before retrying." -f $_.Exception.Message, [Environment]::NewLine)
+                    }
+                    throw
+                }
             }
             return $Plan
         }

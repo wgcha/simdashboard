@@ -674,3 +674,10 @@
 - 후속 사용자 요청에 따라 log/ 아래 미추적 출력 파일은 제외하고 .md/.MD 문서만 Git 변경 검사 대상으로 유지했다. 하위 폴더에도 동일 규칙을 적용하며 .gitignore와 기존 설치의 .git/info/exclude 갱신을 함께 반영한다. 기존 추적 문서 log/work-log.md의 변경 감지와 덮어쓰기 방지, 다른 소스 경로의 검사는 유지한다.
 - 임시 Git 업데이트 검사에 TXT/JSON/LOG/확장자 없는 로그가 업데이트를 막지 않고 내용이 보존되는지, 새 최상위·하위 Markdown과 기존 work-log 수정은 여전히 중단시키는지를 추가했다. git check-ignore로 실제 저장소 규칙에서도 일반 출력만 제외되는 것을 확인했다. 실제 사용자 문서·stash·DB·서비스는 변경하지 않았다.
 - Windows PowerShell 5.1 Git update self-test와 Sol 독립 검수, Astra 최종 검수 PASS. 인코딩 수정 커밋과 이번 log 규칙 변경은 외부 전송 승인 전 로컬에 보관한다.
+
+### 2026-09-19 docs 문서를 업데이트 사전 검사에서 제외
+
+- 사용자 요청에 따라 docs/ 아래의 추적 문서 수정·삭제와 미추적 문서를 업데이트 사전 변경 검사에서 제외했다. Git pathspec으로 해당 루트만 제외하고 다른 소스와 log/ Markdown 검사는 유지한다. 문서 추적 자체를 없애거나 실제 사용자 파일을 삭제하지 않는다.
+- 문서와 무관한 소스 fast-forward는 로컬 문서를 보존하며 진행한다. 같은 문서를 원격이 변경하는 경우에는 Git의 덮어쓰기 거부를 유지하고 원래 오류 및 문서 보존 안내를 표시한다. 호출에 한해 merge.autoStash=false를 지정하여 사용자 설정에 따른 묵시적 stash를 막는다. DB·설정·원본 자료는 변경하지 않는다.
+- Astra 설계·최종 검수, Terra 구현, Luna 임시 Git 회귀, Sol 독립 검수로 진행한다. tracked/untracked 한글 문서 보존, docs 밖 소스 수정 중단, 동일 문서 충돌·autoStash 설정에서도 HEAD/내용/stash 보존 검사를 추가했다. 배포 진입점과 의존성은 유지한다.
+- 최종 Windows PowerShell 5.1 Git update self-test 및 update-entry 실패 경로 검사 PASS. Sol 독립 검수와 Astra 최종 검수 PASS. 실제 사내 PC·Server 2022 실기는 수행하지 않았다.

@@ -69,6 +69,8 @@ function Initialize-RemoteFixture {
     Write-TestFile -Path (Join-Path $source 'app.txt') -Contents 'version one'
     Write-TestFile -Path (Join-Path $source ('folder\' + $script:UnicodeName + ' file.txt')) -Contents 'unicode source'
     Write-TestFile -Path (Join-Path $source ('folder\' + $script:UnicodeName + ' [literal] spaced.txt')) -Contents 'literal path source'
+    Write-TestFile -Path (Join-Path $source ('docs\user-' + $script:UnicodeName + ' [draft].md')) -Contents 'user documentation source'
+    Write-TestFile -Path (Join-Path $source ('docs\' + $script:UnicodeName + '\notes [draft].md')) -Contents 'nested documentation source'
     Write-TestFile -Path (Join-Path $source '.env.example') -Contents 'example only'
     Write-TestFile -Path (Join-Path $source 'deploy\windows\certs\README.md') -Contents 'source documentation'
     Write-TestFile -Path (Join-Path $source 'log\work-log.md') -Contents 'source work log'
@@ -155,6 +157,49 @@ try {
     Assert-True (($stashAfter -join [Environment]::NewLine) -match 'self-test preserved stash') 'Existing stash entry was not retained during update.'
     Assert-True ((Get-Content -Raw -LiteralPath (Join-Path $existing 'app.txt')).Trim() -eq 'version three') 'Update with an existing stash did not apply the remote commit.'
 
+    # User documentation lives under docs and may be edited locally while an
+    # unrelated source update is applied. Both tracked and untracked Korean
+    # documentation paths must survive the update unchanged.
+    $docsRoot = Join-Path $temporary 'docs-local-edits'
+    Invoke-TestGit -Path $temporary -Arguments @('clone', '--branch', $branch, $fixture.Bare, $docsRoot) | Out-Null
+    Write-TestFile -Path (Join-Path $docsRoot ('docs\user-' + $script:UnicodeName + ' [draft].md')) -Contents 'local tracked documentation edit'
+    $localDocsOnly = Join-Path $docsRoot ('docs\' + $script:UnicodeName + '\local-only [draft].md')
+    Write-TestFile -Path $localDocsOnly -Contents 'local untracked documentation edit'
+    Write-TestFile -Path (Join-Path $fixture.Source 'app.txt') -Contents 'version four'
+    Invoke-TestGit -Path $fixture.Source -Arguments @('add', 'app.txt') | Out-Null
+    Invoke-TestGit -Path $fixture.Source -Arguments @('commit', '-m', 'third forward') | Out-Null
+    Invoke-TestGit -Path $fixture.Source -Arguments @('push', 'origin', $branch) | Out-Null
+    $docsPlan = Get-WorkbenchGitUpdatePlan -Root $docsRoot
+    Invoke-WorkbenchGitUpdate -Plan $docsPlan | Out-Null
+    Assert-True ((Get-Content -Raw -LiteralPath (Join-Path $docsRoot 'app.txt')).Trim() -eq 'version four') 'Code update was blocked by local documentation edits.'
+    Assert-True ((Get-Content -Raw -LiteralPath (Join-Path $docsRoot ('docs\user-' + $script:UnicodeName + ' [draft].md'))).Trim() -eq 'local tracked documentation edit') 'Tracked local documentation was overwritten during update.'
+    Assert-True ((Get-Content -Raw -LiteralPath $localDocsOnly).Trim() -eq 'local untracked documentation edit') 'Untracked local documentation was removed during update.'
+    Write-TestFile -Path (Join-Path $docsRoot 'app.txt') -Contents 'local code edit must block'
+    Assert-Throws -Action { Get-WorkbenchGitUpdatePlan -Root $docsRoot } -Contains 'local changes'
+    Invoke-TestGit -Path $docsRoot -Arguments @('checkout', '--', 'app.txt') | Out-Null
+
+    # A concurrent edit to the same documentation file must still fail safely
+    # when the remote commit changes that file; the local text remains intact.
+    $docsConflict = Join-Path $temporary 'docs-conflict'
+    Invoke-TestGit -Path $temporary -Arguments @('clone', '--branch', $branch, $fixture.Bare, $docsConflict) | Out-Null
+    Invoke-TestGit -Path $docsConflict -Arguments @('config', 'merge.autoStash', 'true') | Out-Null
+    $conflictHeadBefore = (Invoke-TestGit -Path $docsConflict -Arguments @('rev-parse', 'HEAD')) -join ''
+    $conflictStashBefore = (Invoke-TestGit -Path $docsConflict -Arguments @('stash', 'list', '--format=%H%x09%s')) -join [Environment]::NewLine
+    $conflictPath = Join-Path $docsConflict ('docs\user-' + $script:UnicodeName + ' [draft].md')
+    Write-TestFile -Path $conflictPath -Contents 'local conflicting documentation edit'
+    Write-TestFile -Path (Join-Path $fixture.Source ('docs\user-' + $script:UnicodeName + ' [draft].md')) -Contents 'remote conflicting documentation edit'
+    Write-TestFile -Path (Join-Path $fixture.Source 'app.txt') -Contents 'version five'
+    Invoke-TestGit -Path $fixture.Source -Arguments @('add', '.') | Out-Null
+    Invoke-TestGit -Path $fixture.Source -Arguments @('commit', '-m', 'remote documentation change') | Out-Null
+    Invoke-TestGit -Path $fixture.Source -Arguments @('push', 'origin', $branch) | Out-Null
+    $conflictPlan = Get-WorkbenchGitUpdatePlan -Root $docsConflict
+    Assert-Throws -Action { Invoke-WorkbenchGitUpdate -Plan $conflictPlan } -Contains 'Local docs changes were preserved'
+    $conflictHeadAfter = (Invoke-TestGit -Path $docsConflict -Arguments @('rev-parse', 'HEAD')) -join ''
+    $conflictStashAfter = (Invoke-TestGit -Path $docsConflict -Arguments @('stash', 'list', '--format=%H%x09%s')) -join [Environment]::NewLine
+    Assert-True ($conflictHeadBefore -eq $conflictHeadAfter) 'Conflicting documentation update changed HEAD after the safe failure.'
+    Assert-True ($conflictStashBefore -eq $conflictStashAfter) 'Conflicting documentation update created or consumed a stash.'
+    Assert-True ((Get-Content -Raw -LiteralPath $conflictPath).Trim() -eq 'local conflicting documentation edit') 'Conflicting local documentation was overwritten.'
+
     Write-TestFile -Path (Join-Path $existing 'app.txt') -Contents 'local edit'
     Assert-Throws -Action { Get-WorkbenchGitUpdatePlan -Root $existing } -Contains 'local changes'
     Invoke-TestGit -Path $existing -Arguments @('checkout', '--', 'app.txt') | Out-Null
@@ -187,7 +232,7 @@ try {
     $bootstrapPlan = Get-WorkbenchGitUpdatePlan -Root $bootstrap -RepositoryUrl $fixture.Bare -Branch $branch
     Assert-True ($bootstrapPlan.Mode -eq 'Bootstrap' -and $bootstrapPlan.BackupDirectory) 'No-.git bootstrap plan is incorrect.'
     Invoke-WorkbenchGitUpdate -Plan $bootstrapPlan | Out-Null
-    Assert-True ((Get-Content -Raw -LiteralPath (Join-Path $bootstrap 'app.txt')).Trim() -eq 'version three') 'Bootstrap did not check out remote source.'
+    Assert-True ((Get-Content -Raw -LiteralPath (Join-Path $bootstrap 'app.txt')).Trim() -eq 'version five') 'Bootstrap did not check out remote source.'
     foreach ($relative in @('.env', '.postgres-owner.env', '.venv-runtime\keep.txt', 'backend\data\local.db', 'output\result.txt', 'backups\updater-driver-test\driver.txt', 'orphan personal file.txt')) {
         Assert-True (Test-Path -LiteralPath (Join-Path $bootstrap $relative)) "Bootstrap moved protected or orphan file '$relative'."
     }
