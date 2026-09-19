@@ -705,3 +705,34 @@
 - 최종 검증 합계: 백엔드 41 passed (기존·수집 진단 39 + contour 값 계약 2). 브라우저 7개 시나리오는 최신 전체 실행의 6 passed와 최종 그래프 단독 재검사의 1 passed(11.9s)로 모두 검증했다. 마지막 그래프 검사는 툴팁, 순서 미확인점을 포함한 점 수, 결측/미확인 선 분리, 축 순서/중복 없음, 확대 SVG 실제 높이, ESC, URL/제목, blank/overlay 없음 및 페이지/콘솔 오류·경고 없음을 단언한다. 처음 추가한 테스트의 문구 범위/범례 SVG 중복 selector를 수정했으며 수락조건은 완화하지 않았다.
 - Astra 최종 시각 검수: 1280×720 및 390×844에서 그래프 축·점/선 위치와 전환/확대 UI 확인. 합성 자료 화면 증거는 Windows TEMP의 simdashboard-issue27-qa/summary-desktop.png, summary-mobile.png, chart-desktop.png, chart-mobile.png에 저장했다. 실제 해석 이미지 검증이 아니다.
 - Windows E2E 러너는 테스트 종료 후 taskkill/child cleanup 오류로 외부 프로세스 exit 1을 반환하는 기존 환경 문제가 재현됐다. Playwright의 시나리오 판정과 이 러너 오류를 구분하며 전체 러너가 무오류 종료했다고 기록하지 않는다. 배포/실행 스크립트를 이번 기능 수정에 섞어 변경하지 않았다. Sol 독립 검수 승인 및 Astra 최종 검수 완료. 원격 commit/push·사내 배포는 수행하지 않았다.
+
+### 2026-09-19 환경별 폴더 규칙과 컴팩트 UI 개선계획
+
+- 사용자 요청에 따라 구현 없이 docs/dashboard/folder-schema-ux-plan.md를 작성하고 문서 지도·대시보드 안내에 미구현 계획으로 연결했다. 사용환경 Case→평가와 유통환경 Case→하중경우→Run Case→선택적 Run Option을 분리한다.
+- 하나의 폴더 연결 화면에서 환경별 규칙을 관리하고 폴더 선택→구조 확인→등록·결과 확인으로 이어지는 흐름을 제안했다. 후보 한 개는 표시로 축약하고 다중 후보만 선택하며 수집 버전·비교·상세 설정을 보조 영역으로 옮긴다.
+- Run Option 원문/없음/미확인 구분, 기존 5종 카탈로그·규칙·불변 capture 보존, 등록과 수집의 멱등 재시도, 선택·버전 유지, 배포 계약 및 인수 시나리오를 포함했다. Astra 설계·최종 검수와 Sol 독립 검수 완료, 차단 사항 없음.
+- 문서 변경만 수행했다. 앱 코드·DB·사내 원본·설정 변경, 구현 테스트, 배포·원격 push는 수행하지 않았다. 문서 diff 공백 검사를 확인했다.
+
+### 2026-09-19 Run Option 결과 계약과 컴팩트 대시보드
+
+- 유통환경 capture에 안정적인 Run Option ID, 원문 label, PRESENT/ABSENT/UNRESOLVED 상태를 추가했다. 직접 Scene과 명명 옵션의 동명 Scene을 option ID로 분리하고, 임의 옵션은 저장 규칙이 확인한 원문 목록에 있을 때만 PRESENT로 처리한다. 기존 UNKNOWN capture는 미확인 기존 자료로 보존한다.
+- 조회 카탈로그·Run/Scene 상세·비교·context key와 프런트 API/URL에 option ID를 전달한다. 기존 mode 입력은 호환 경로로 유지하며 새 option ID가 있으면 서버가 해당 옵션을 직접 선택한다. 읽기 규칙은 dashboard-v3으로 갱신하고 환경 규칙 프로파일/옵션 배정을 fingerprint에 포함했다.
+- 결과 화면은 단일 Case/하중경우/Run/Option/Component/Basis 후보를 배지로 축약하고 여러 후보만 선택한다. 최신 카탈로그 수집 버전을 자동 선택해 URL에 고정하며, 새로고침·카탈로그 갱신에서 유효한 선택을 유지한다. 과거 수집과 Reference는 접힌 수집 이력에서 연다.
+- 합성 parser/query 회귀 34 passed와 프런트 production build를 확인했다. 단일 Run Option 축약·안정 ID URL 고정의 Playwright 시나리오도 통과했으며 화면 증거는 Windows TEMP의 `simdashboard-option-qa/compact-option-desktop.png`에 저장했다. 테스트 판정은 1 passed이나 Windows 러너의 기존 child cleanup 오류로 최종 프로세스 exit는 1이었다. 실제 사용자 DB·원본·실행 서비스 및 Windows Server 2022 폐쇄망 배포 실기는 사용하지 않았다.
+
+### 2026-09-19 환경별 폴더 연결 계획 구현·최종 통합
+
+- 최신 사용자 지시를 우선하여 Astra가 설계·통합·최종 검수, Terra가 환경 조사/등록/복구, Luna가 폴더 UI 초안과 브라우저 사양, Sol이 Run Option 수집/조회/결과 UI 구현 및 독립 검수를 담당했다. Astra가 실제 계약에 맞춰 폴더 UI/client를 통합하고 프로파일 CRUD·기존 규칙 복사·이력과 교차 API 검증을 구현했다.
+- 사용환경은 프로젝트→의뢰→해석 Case→평가5종, 유통환경은 Case→하중경우→Run Case→선택적 Run Option→Scene으로 분리했다. 옵션 원문·안정 ID와 PRESENT/ABSENT/UNRESOLVED를 보존한다. 부모 역할/이름 패턴/선택 깊이 규칙, 명시 역할 확정·기존 업무 연결·하위 트리 제외, 미리보기 변경 검증을 추가했다. Scene/평가는 독립 업무나 registry 항목으로 만들지 않는다.
+- 폴더 연결·규칙은 폴더 선택→구조 확인→등록·결과 확인으로 이어진다. 환경별 마지막 프로파일, 트리 접기/100행 페이지/확인 필요 필터, 선택 폴더 편집, 저장 규칙 복사·개정, 등록 이력과 실패 재시도를 제공한다. 390px에서는 트리와 상세 설정을 전환한다. 완료 링크는 각 job의 project/request/environment/Case/capture를 포함한다. 기존 하중경우·결과가 없는 최초 설치도 이 화면에 진입하도록 초기 구성 진입점을 보완했다.
+- 업무 등록·대기 작업과 capture 트랜잭션을 분리했다. 수집 실패는 업무를 보존하고 부분 capture를 rollback한다. 재시도는 최초 preview의 Case별 부모·옵션·프로파일 버전을 재사용한다. 멱등 키 충돌, 변경된 저장소/트리/프로파일, 잘못된 부모·다른 환경을 확인한다. 교차 검수에서 발견한 PostgreSQL cursor 호환, Case registry ID 불일치, Scene target_id=None 충돌, 첫 URL 선택 소실을 수정했다.
+- additive migration `0030_folder_environment_profiles`로 환경 프로파일·scan·preview·등록·registry·job을 추가했다. `deploy.bat`/`update.bat`, 비DDL 앱 시작 원칙과 기존 데이터 보존 계약을 유지하며 새 의존성은 없다. 문서 지도·설계와 `docs/dashboard/folder-environment-guide.md`를 갱신했다.
+- 최종 백엔드 검사 173 passed: 배포/schema gate/시작/마이그레이션/프로파일/등록 93, 환경 API/복구 10, dashboard parser/query/capture/API/미처리파일/contour/기존 folder discovery 70. 실제 PostgreSQL 17.11 임시 인스턴스에서도 환경 API/복구 10 passed. 추가로 확장 실행한 과거 dashboard read/write 테스트 2개는 현재 인증 bootstrap이 없는 기존 fixture의 401/503 실패였으며 이번 focused 결과 계약의 통과로 대체했다고 주장하지 않는다.
+- 임시 PostgreSQL에서 빈 DB→head, 기존 0029→0030, 비DDL 앱 계정의 schema gate와 startup을 검증했다. 기존 프로젝트/의뢰/5종 catalog/저장 규칙/Case/capture/assets 7개 테이블의 전체 행과 원본 bytes가 보존됨을 upgrade 전후 비교했다. 임시 인스턴스는 pg_ctl fast stop으로 정상 종료했으며 실제 사용자 DB·설정·운영 서비스는 사용하지 않았다.
+- 타입 검사, API client 재생성, frontend architecture check(215 sources), production build 통과. 기본 Vite config 번들러의 `.vite-temp` EPERM을 피하기 위해 기존 E2E와 같은 `--configLoader runner`로 production build를 수행했다. 기존 큰 chunk 경고는 남아 있다.
+- 실제 Playwright 9개 시나리오를 최종 통과했다(첫 전체 실행의 7개 + 수정 후 2개). 폴더 화면은 추가 최종 단독 실행 1 passed(7.8s)로 1366×768/390px, 모바일 트리↔상세, 가로 overflow 없음, 등록 링크·이력·page error 없음까지 확인했다. Astra 시각 검수 증거는 Windows TEMP `environment-folder-final-qa/structure-desktop.png`, `structure-mobile.png`; 규칙 API는 합성 서버 폴더로 별도 통합 검증했다. Windows E2E 러너의 기존 taskkill/child cleanup 오류는 재현되어 프로세스 exit 1이며, 시나리오 통과와 구분한다.
+- 사내 실자료·실제 저장 규칙의 일치 여부와 Windows Server 2022 폐쇄망 설치/업데이트/재부팅 실기는 수행하지 않았다. 로컬 구현과 검증을 완료했으며 이번 작업의 commit/push·사내 배포는 수행하지 않았다.
+
+### 2026-09-19 환경별 폴더 연결 main 반영
+
+- 사용자의 완료 후 main 직접 push 지시에 따라 위에서 검증한 구현·회귀 테스트·migration·사용 안내를 main에 커밋하여 origin/main에 반영한다. 원격 main을 fetch해 분기 차이와 충돌 여부를 확인했고, push 전 diff 공백 검사를 통과했다. 사내 설치·업데이트 실행은 포함하지 않는다.

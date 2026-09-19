@@ -24,7 +24,7 @@ def fail(message: str):
 def context_key(context):
     return "|".join(str(context.get(k) or "") for k in (
         "project_id", "request_id", "simulation_case_id", "load_case_id",
-        "execution_run_id", "mode", "capture_id", "component_id", "basis", "scene_id"))
+        "execution_run_id", "run_option_id", "mode", "capture_id", "component_id", "basis", "scene_id"))
 
 
 def number(value):
@@ -37,9 +37,18 @@ def number(value):
         return None
 
 
+def option_projection(run, capture_id):
+    status = run.get("option_status") or ("UNRESOLVED" if run.get("mode") == "UNKNOWN" else "PRESENT")
+    label = run.get("option_label")
+    if status == "UNRESOLVED" and not label:
+        label = "미확인(기존 자료)"
+    option_id = run.get("run_option_id") or "legacy-option-" + hashlib.sha256(f"{capture_id}:{run['id']}:{run['mode']}".encode()).hexdigest()[:24]
+    return option_id, label, status
+
+
 def catalog(conn, request_id, environment):
     result = {"contract_version": 1, "environment": environment, "cases": [], "captures": [],
-              "load_cases": [], "execution_runs": [], "modes": [], "components": [],
+              "load_cases": [], "execution_runs": [], "run_options": [], "modes": [], "components": [],
               "bases": [{"id": "REPORTED_SUMMARY", "label": "원본 요약"}, {"id": "DETAIL", "label": "상세 추출값"}]}
     records = conn.execute("""SELECT dc.id,dc.source_name,c.id,c.created_at,c.payload_json
         FROM dashboard_cases dc LEFT JOIN dashboard_captures c ON c.case_id=dc.id
@@ -56,14 +65,16 @@ def catalog(conn, request_id, environment):
         result["captures"].append({"id": capture_id, "label": str(created_at), **parent})
         payload = _decode(raw)
         for run in payload.get("runs", []):
-            scope = {**parent, "load_case_id": run["load_case_id"], "execution_run_id": run["id"], "mode": run["mode"]}
+            option_id, option_label, option_status = option_projection(run, capture_id)
+            scope = {**parent, "load_case_id": run["load_case_id"], "execution_run_id": run["id"], "run_option_id": option_id, "option_status": option_status, "option_label": option_label, "mode": run["mode"]}
             result["load_cases"].append({"id": run["load_case_id"], "label": run.get("load_case_name", "하중경우"), **parent})
             result["execution_runs"].append({"id": run["id"], "label": run["source_name"], **scope})
+            result["run_options"].append({"id": option_id, "label": option_label or "옵션 없음", **scope})
             result["modes"].append({"id": run["mode"], "label": run["mode"], **scope})
             components = sorted({o["component_id"] for s in run["scenes"] for o in s.get("observations", []) if o.get("component_id")}
                                 | {m["component_id"] for s in run["scenes"] for m in s.get("media", []) if m.get("component_id")})
             result["components"].extend({"id": c, "label": c, **scope} for c in components)
-    for key in ("load_cases", "execution_runs", "modes", "components"):
+    for key in ("load_cases", "execution_runs", "run_options", "modes", "components"):
         unique = {}
         for item in result[key]:
             unique[tuple(sorted(item.items()))] = item
@@ -122,18 +133,22 @@ def usage_reference(result, reference):
     return result
 
 
-def select_run(capture, run_id, mode, component, basis):
+def select_run(capture, run_id, mode, component, basis, run_option_id=None):
     if capture["environment"] != "DISTRIBUTION" or basis not in {"DETAIL", "REPORTED_SUMMARY"}:
         fail("유통환경과 집계 기준을 명시하세요.")
-    runs = [r for r in capture["payload"].get("runs", []) if r["id"] == run_id and r["mode"] == mode]
+    candidates = [r for r in capture["payload"].get("runs", []) if r["id"] == run_id]
+    runs = [r for r in candidates if option_projection(r, capture["id"])[0] == run_option_id] if run_option_id else [r for r in candidates if r["mode"] == mode]
     if len(runs) != 1:
         fail("선택 Run/Mode와 수집 버전이 일치하지 않습니다.")
     run = runs[0]
     all_components = {o.get("component_id") for s in run["scenes"] for o in [*s.get("observations", []), *s.get("media", [])]}
     if component not in all_components:
         fail("선택 Component가 해당 Run/Mode에 없습니다.")
+    option_id, option_label, option_status = option_projection(run, capture["id"])
     context = {**capture["payload"]["context"], "simulation_case_id": capture["case_id"], "capture_id": capture["id"],
-               "execution_run_id": run_id, "load_case_id": run["load_case_id"], "mode": mode, "component_id": component, "basis": basis}
+               "execution_run_id": run_id, "load_case_id": run["load_case_id"],
+               "run_option_id": option_id, "option_label": option_label, "option_status": option_status,
+               "mode": mode, "component_id": component, "basis": basis}
     context["context_key"] = context_key(context)
     return run, context
 
@@ -172,8 +187,8 @@ def scene_public(scene):
         "match_key": scene.get("scene_match_key")}
 
 
-def distribution(capture, run_id, mode, component, basis, edges, lines):
-    run, context = select_run(capture, run_id, mode, component, basis)
+def distribution(capture, run_id, mode, component, basis, edges, lines, run_option_id=None):
+    run, context = select_run(capture, run_id, mode, component, basis, run_option_id)
     member_id = context_key(context)
     color_index = int(hashlib.sha256(capture["case_id"].encode()).hexdigest()[:8], 16) % 5 + 1
     member = {"id": member_id, "label": capture.get("source_name", capture["case_id"]),
@@ -254,8 +269,8 @@ def comparison(parts):
     return result
 
 
-def scene_detail(capture, scene_id, run_id, mode, component, basis, lines, position):
-    run, context = select_run(capture, run_id, mode, component, basis)
+def scene_detail(capture, scene_id, run_id, mode, component, basis, lines, position, run_option_id=None):
+    run, context = select_run(capture, run_id, mode, component, basis, run_option_id)
     found = [s for s in run["scenes"] if s["id"] == scene_id]
     if len(found) != 1:
         fail("선택 Scene이 해당 Run/Mode/capture에 없습니다.")

@@ -32,6 +32,7 @@ function distributionCatalog() {
     cases: [{ id: CASE_ID, label: 'Case A' }],
     load_cases: [{ id: 'load-drop', label: 'Drop', case_id: CASE_ID, capture_id: CAPTURE_ID }],
     execution_runs: [{ id: RUN_ID, label: 'Run A', case_id: CASE_ID, load_case_id: 'load-drop', capture_id: CAPTURE_ID }],
+    run_options: [{ id: 'option-individual', label: 'Individual', option_label: 'Individual', option_status: 'PRESENT', case_id: CASE_ID, execution_run_id: RUN_ID, mode: MODE, capture_id: CAPTURE_ID }],
     modes: [{ id: MODE, label: MODE, case_id: CASE_ID, execution_run_id: RUN_ID, capture_id: CAPTURE_ID }],
     captures: [{ id: CAPTURE_ID, label: 'capture A', case_id: CASE_ID }],
     components: [{ id: COMPONENT_ID, label: COMPONENT_ID, case_id: CASE_ID, execution_run_id: RUN_ID, mode: MODE, capture_id: CAPTURE_ID }],
@@ -204,17 +205,25 @@ async function installDashboardMocks(page: Page, options: { slowUsage?: boolean;
 
 async function chooseDistribution(page: Page) {
   await page.getByRole('button', { name: '유통환경', exact: true }).click()
-  const select = (label: string) => page.locator('.simulation-dashboard__controls label').filter({ hasText: label }).locator('select')
-  await expect(select('Simulation Case')).toBeVisible()
-  await select('Simulation Case').selectOption(CASE_ID)
-  await select('Capture').selectOption(CAPTURE_ID)
-  await select('Load case').selectOption('load-drop')
-  await select('run #').selectOption(RUN_ID)
-  await select('Mode').selectOption(MODE)
-  await select('Component').selectOption(COMPONENT_ID)
-  await select('Basis').selectOption('DETAIL')
+  const select = (label: string) => page.locator('.simulation-dashboard__controls label').filter({ hasText: label }).locator('select:visible')
+  await expect(page.locator('.simulation-dashboard__controls')).toContainText('Case A')
+  for (const [label, value] of [['해석 Case', CASE_ID], ['수집 버전', CAPTURE_ID], ['하중경우', 'load-drop'], ['Run Case', RUN_ID], ['Run Option', 'option-individual'], ['Component', COMPONENT_ID], ['Basis', 'DETAIL']] as const) {
+    const field = select(label)
+    if (await field.count()) await field.selectOption(value)
+  }
   await expect(page.getByTestId('distribution-dashboard')).toBeVisible()
 }
+
+test('single Run Option is compact and its stable id is pinned in the URL', async ({ page }) => {
+  await installDashboardMocks(page)
+  await openResults(page)
+  await chooseDistribution(page)
+  await expect(page.locator('.simulation-dashboard__choice').filter({ hasText: 'Run Option' })).toContainText('Individual')
+  await expect(page).toHaveURL(/case_option=option-individual/)
+  await expect(page.locator('.simulation-dashboard__history')).not.toHaveAttribute('open', '')
+  const evidenceDir = join(tmpdir(), 'simdashboard-option-qa'); mkdirSync(evidenceDir, { recursive: true })
+  await page.screenshot({ path: join(evidenceDir, 'compact-option-desktop.png'), fullPage: false })
+})
 
 test('synthetic distribution renders all 20 scenes, preserves contour cell IDs through transpose, and links graph selection to detail', async ({ page }) => {
   await installDashboardMocks(page)
@@ -251,11 +260,11 @@ test('slow usage catalog cannot overwrite the selected distribution catalog', as
   await openResults(page)
   await page.getByRole('button', { name: '유통환경', exact: true }).click()
   const controls = page.locator('.simulation-dashboard__controls')
-  await expect(controls.locator('label').filter({ hasText: 'Load case' }).locator('select')).toBeVisible()
-  await expect(controls.locator('label').filter({ hasText: 'Simulation Case' }).locator('option', { hasText: 'Case A' })).toHaveCount(1)
+  await expect(controls).toContainText('하중경우')
+  await expect(controls).toContainText('Case A')
   releaseUsage()
   await page.waitForTimeout(150)
-  await expect(controls.locator('label').filter({ hasText: 'Load case' }).locator('select')).toBeVisible()
+  await expect(controls).toContainText('하중경우')
   await expect(page.getByText('다섯 평가 종합')).toHaveCount(0)
 })
 
@@ -395,13 +404,17 @@ test('contour values retain scope and unknown timing with descriptions and scale
 })
 
 test('fresh request reaches the Case usage review and clears prior capture context on request switch', async ({ page }) => {
+  let usageRequests = 0
   await page.route('**/api/requests/*/load-cases**', (route) => fulfillJson(route, []))
   await page.route('**/api/dashboard/catalog**', async (route) => {
     const url = new URL(route.request().url())
     if (url.searchParams.get('environment') === 'USAGE' && url.searchParams.get('request_id') === 'request-showcase-waiting') return fulfillJson(route, usageCatalog())
     return fulfillJson(route, { ...usageCatalog(), cases: [], captures: [] })
   })
-  await page.route('**/api/dashboard/usage/cases/**', (route) => fulfillJson(route, usageDashboardPayload()))
+  await page.route('**/api/dashboard/usage/cases/**', (route) => {
+    usageRequests += 1
+    return fulfillJson(route, usageDashboardPayload())
+  })
   await loginWorkspace(page, 'e2e-viewer', '/workspace/requests?project=project-feature-showcase&request=request-showcase-waiting')
 
   const project = page.getByLabel('프로젝트 선택', { exact: true })
@@ -410,13 +423,12 @@ test('fresh request reaches the Case usage review and clears prior capture conte
   await expect(request).toHaveValue('request-showcase-waiting')
   await page.getByRole('button', { name: 'Case 결과', exact: true }).click()
   const controls = page.locator('.simulation-dashboard__controls')
-  const caseSelect = controls.locator('label').filter({ hasText: /Simulation Case|Case/ }).locator('select').first()
-  const captureSelect = controls.locator('label').filter({ hasText: 'Capture' }).locator('select').first()
-  await expect(caseSelect).toBeVisible()
-  await expect(caseSelect.locator('option', { hasText: 'Usage Case' })).toHaveCount(1)
-  await caseSelect.selectOption('usage-case')
-  await captureSelect.selectOption('usage-capture')
+  const caseBadge = controls.locator('.simulation-dashboard__choice').filter({ hasText: '해석 Case' })
+  const captureBadge = controls.locator('.simulation-dashboard__capture-pin')
+  await expect(caseBadge).toContainText('Usage Case')
+  await expect(captureBadge).toContainText('usage capture')
   await expect(page.getByTestId('usage-dashboard')).toBeVisible()
+  await expect.poll(() => usageRequests).toBeGreaterThan(0)
   await expect(page.getByTestId('usage-dashboard').locator('tbody tr')).toHaveCount(5)
   await expect(page.getByTestId('usage-dashboard').locator('thead')).toContainText('전방')
   await expect(page.getByTestId('usage-dashboard')).toContainText('11 mm')
@@ -426,16 +438,16 @@ test('fresh request reaches the Case usage review and clears prior capture conte
   await page.getByRole('button', { name: '의뢰 개요', exact: true }).click()
   await expect(caseResultsButton).toBeVisible()
   await caseResultsButton.click()
-  await expect(caseSelect).toBeVisible()
+  await expect(caseBadge).toContainText('Usage Case')
+  await expect(captureBadge).toContainText('usage capture')
   await expect(page.locator('.request-results-refresh')).toHaveCount(0)
-  await caseSelect.selectOption('usage-case')
-  await captureSelect.selectOption('usage-capture')
   await expect(page.getByTestId('usage-dashboard').locator('tbody tr')).toHaveCount(5)
   await expect(page.getByLabel('하중 경우 선택', { exact: true })).toHaveCount(0)
   await expect(page.locator('.request-results-refresh')).toHaveCount(0)
   await page.reload()
-  await expect(caseSelect).toBeVisible()
-  await expect(page.getByTestId('usage-dashboard')).toHaveCount(0)
+  await expect(caseBadge).toContainText('Usage Case')
+  await expect(captureBadge).toContainText('usage capture')
+  await expect(page.getByTestId('usage-dashboard').locator('tbody tr')).toHaveCount(5)
   await expect(page.getByLabel('하중 경우 선택', { exact: true })).toHaveCount(0)
   const outputDirectory = join(process.cwd(), '..', 'output')
   mkdirSync(outputDirectory, { recursive: true })

@@ -273,8 +273,8 @@ def create_capture(conn: ConnectionLike, payload: dict[str, Any], *, actor: str)
     walk_issues: list[str] = []
     files = _walk(root, relative, issues=walk_issues)
     manifest = [{"relative_path": path, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data), "media_type": media_type} for path, data, media_type in files]
-    recipe_version = "dashboard-v2"
-    fingerprint_context = {key: payload.get(key) for key in ("project_id", "request_id", "simulation_case_id", "load_case_id", "execution_run_id", "mode", "component_id")}
+    recipe_version = "dashboard-v3"
+    fingerprint_context = {key: payload.get(key) for key in ("project_id", "request_id", "simulation_case_id", "load_case_id", "execution_run_id", "run_option_id", "option_label", "option_status", "run_option_labels", "hierarchy_assignments", "rule_profile_id", "rule_profile_version", "mode", "component_id")}
     if walk_issues:
         fingerprint_context["quality_issues"] = sorted(set(walk_issues))
     digest = fingerprint({"files": manifest, "context": fingerprint_context}, recipe_version)
@@ -295,7 +295,7 @@ def create_capture(conn: ConnectionLike, payload: dict[str, Any], *, actor: str)
         return {"id": str(existing[0]), "case_id": case_id, "fingerprint": digest, "status": old_payload.get("status", "READY"), "context": old_payload.get("context", payload), "payload": old_payload}
 
     capture_id = _capture_id(case_id, digest)
-    context = {key: payload.get(key) for key in ("project_id", "request_id", "simulation_case_id", "load_case_id", "execution_run_id", "run_display_name", "mode", "capture_id", "component_id")}
+    context = {key: payload.get(key) for key in ("project_id", "request_id", "simulation_case_id", "load_case_id", "execution_run_id", "run_display_name", "run_option_id", "option_label", "option_status", "run_option_labels", "hierarchy_assignments", "rule_profile_id", "rule_profile_version", "mode", "capture_id", "component_id")}
     context["capture_id"] = capture_id
     if payload["environment"] == "USAGE":
         grouped: dict[str, list[tuple[str, bytes]]] = {}
@@ -417,8 +417,10 @@ def _distribution_payload(
     base = PurePosixPath(relative)
     context = context or {}
     scene_files: dict[tuple[str, str, str], list[tuple[str, bytes]]] = {}
+    assigned_scene_ids: dict[tuple[str, str, str], str] = {}
     run_meta: dict[tuple[str, str], dict[str, Any]] = {}
     quality_issues = set(scan_issues or ())
+    assignments = list(context.get("hierarchy_assignments") or [])
     for path, data, _ in files:
         try:
             tail = PurePosixPath(path).relative_to(base).parts
@@ -426,6 +428,41 @@ def _distribution_payload(
             quality_issues.add(f"UNPROCESSED_FILE:{_safe_issue_relative(path)}:OUTSIDE_CAPTURE_ROOT")
             continue
         directories = list(tail[:-1])
+        assigned = []
+        if assignments:
+            source_parent = PurePosixPath(path).parent
+            assigned = [row for row in assignments if PurePosixPath(str(row.get("relative_path") or "")) == source_parent or PurePosixPath(str(row.get("relative_path") or "")) in source_parent.parents]
+            assigned.sort(key=lambda row: len(PurePosixPath(str(row["relative_path"])).parts))
+        assigned_by_role = {row.get("role_kind"): row for row in assigned}
+        if assignments and all(role in assigned_by_role for role in ("LOAD_CASE", "EXECUTION_RUN", "SCENE")):
+            load_row, run_row, scene_row = (assigned_by_role[role] for role in ("LOAD_CASE", "EXECUTION_RUN", "SCENE"))
+            option_row = assigned_by_role.get("RUN_OPTION")
+            load_case, run_name, scene = str(load_row["raw_name"]), str(run_row["raw_name"]), str(scene_row["raw_name"])
+            load_id, run_id = str(load_row["target_id"]), str(run_row["target_id"])
+            option_label = str(option_row["raw_name"]) if option_row else None
+            option_status = str(option_row.get("option_status") or "PRESENT") if option_row else "ABSENT"
+            option_target = option_row.get("target_id") if option_row else None
+            option_identity = str(option_row.get("relative_path") or option_label or "") if option_row else ""
+            option_id = str(option_target) if option_target else "option-" + hashlib.sha256(
+                f"{run_id}:{option_status}:{option_identity}".encode()
+            ).hexdigest()[:24]
+            mode = option_label.upper() if option_label and option_label.casefold() in {"individual", "cumulative"} else (option_label or "UNKNOWN")
+            suffix = PurePosixPath(path).suffix.casefold()
+            if suffix == ".json": quality_issues.add(f"UNPROCESSED_FILE:{_safe_issue_relative(path)}:UNSUPPORTED_DISTRIBUTION_FORMAT")
+            run_meta.setdefault((run_id, option_id), {"id": run_id, "source_name": run_name, "load_case_id": load_id,
+                "load_case_name": load_case, "mode": mode, "modes": [mode], "run_option_id": option_id,
+                "option_label": option_label, "option_status": option_status})
+            scene_files.setdefault((run_id, option_id, scene), []).append((path, data))
+            # Discovery previews deliberately do not persist SCENE registry rows,
+            # so a confirmed hierarchy can validly carry no target_id here.  Do
+            # not turn that absence into the shared literal ID "None"; the
+            # path/run-option fallback below is stable and collision resistant.
+            if scene_row.get("target_id"):
+                assigned_scene_ids[(run_id, option_id, scene)] = str(scene_row["target_id"])
+            continue
+        if assignments:
+            quality_issues.add(f"UNPROCESSED_FILE:{_safe_issue_relative(path)}:INCOMPLETE_HIERARCHY_ASSIGNMENT")
+            continue
         # Production capture roots are Cases. The pure helper also accepts a
         # Run root for isolated parser fixtures; it never changes persisted Case identity.
         if directories and directories[0].casefold() in {"drop", "clamping"}:
@@ -440,14 +477,19 @@ def _distribution_payload(
         else:
             load_case, run_name = base.parent.name, base.name
             remaining = directories
-        if remaining and remaining[0].casefold() in {"individual", "cumulative"}:
-            mode = remaining[0].upper()
+        option_label: str | None = None
+        option_status = "ABSENT"
+        if len(remaining) == 2:
+            # Run Option is an open label, not an enum. Preserve its exact source
+            # spelling while retaining `mode` as a compatibility projection.
+            option_label = remaining[0]
+            confirmed_labels = {str(item).casefold() for item in context.get("run_option_labels") or []}
+            option_status = "PRESENT" if remaining[0].casefold() in {"individual", "cumulative"} | confirmed_labels else "UNRESOLVED"
             remaining = remaining[1:]
-        else:
-            mode = "UNKNOWN"
-        if len(remaining) != 1:
+        elif len(remaining) != 1:
             quality_issues.add(f"UNPROCESSED_FILE:{_safe_issue_relative(path)}:UNEXPECTED_RESULT_PATH_DEPTH")
             continue
+        mode = option_label.upper() if option_label and option_label.casefold() in {"individual", "cumulative"} else (option_label or "UNKNOWN")
         scene = remaining[0]
         suffix = PurePosixPath(path).suffix.casefold()
         if suffix == ".json":
@@ -455,24 +497,30 @@ def _distribution_payload(
         run_identity = f"{storage_root_id}:{relative}:{load_case}/{run_name}"
         run_id = "run-" + hashlib.sha256(run_identity.encode()).hexdigest()[:24]
         load_id = "load-" + hashlib.sha256(f"{storage_root_id}:{relative}:{load_case}".encode()).hexdigest()[:24]
-        run_meta.setdefault((run_id, mode), {"id": run_id, "source_name": run_name, "load_case_id": load_id,
-            "load_case_name": load_case, "mode": mode, "modes": [mode]})
-        scene_files.setdefault((run_id, mode, scene), []).append((path, data))
+        option_identity = f"{run_id}:{option_status}:{option_label or ''}"
+        option_id = "option-" + hashlib.sha256(option_identity.encode()).hexdigest()[:24]
+        run_meta.setdefault((run_id, option_id), {"id": run_id, "source_name": run_name, "load_case_id": load_id,
+            "load_case_name": load_case, "mode": mode, "modes": [mode], "run_option_id": option_id,
+            "option_label": option_label, "option_status": option_status})
+        scene_files.setdefault((run_id, option_id, scene), []).append((path, data))
     scenes = []
     runs: dict[tuple[str, str], list[dict[str, Any]]] = {key: [] for key in run_meta}
-    for (run_id, mode, scene), grouped in sorted(scene_files.items(), key=lambda item: (parse_scene_name(item[0][2]).get("scene_sequence_number") is None, parse_scene_name(item[0][2]).get("scene_sequence_number") or 0, item[0][2].casefold())):
+    for (run_id, option_id, scene), grouped in sorted(scene_files.items(), key=lambda item: (parse_scene_name(item[0][2]).get("scene_sequence_number") is None, parse_scene_name(item[0][2]).get("scene_sequence_number") or 0, item[0][2].casefold())):
         ignored_sources: list[str] = []
         item = build_distribution_scene(scene, grouped, ignored_sources)
         quality_issues.update(
             f"UNPROCESSED_FILE:{_safe_issue_relative(source)}:UNRECOGNIZED_RESULT_FILE"
             for source in ignored_sources
         )
-        item["id"] = "scene-" + hashlib.sha256(f"{run_id}|{mode}|{scene}".encode()).hexdigest()[:24]
+        meta = run_meta[(run_id, option_id)]
+        mode = meta["mode"]
+        item["id"] = assigned_scene_ids.get((run_id, option_id, scene)) or "scene-" + hashlib.sha256(f"{run_id}|{option_id}|{scene}".encode()).hexdigest()[:24]
         item["label"] = scene
         item["run_id"] = run_id
         item["mode"] = mode
+        item["run_option_id"] = option_id
         scenes.append(item)
-        runs[(run_id, mode)].append(item)
+        runs[(run_id, option_id)].append(item)
     run_rows = [{**meta, "scenes": runs[key]} for key, meta in run_meta.items()]
     return {"run": run_rows[0] if len(run_rows) == 1 else {"source_name": base.name}, "runs": run_rows,
             "scenes": scenes, "quality_issues": sorted(quality_issues)}

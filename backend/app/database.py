@@ -66,6 +66,12 @@ def initialize_database() -> None:
                 "dashboard_cases",
                 "dashboard_captures",
                 "dashboard_assets",
+                "folder_environment_profiles",
+                "folder_environment_scans",
+                "folder_environment_previews",
+                "folder_environment_registrations",
+                "folder_environment_registry",
+                "folder_environment_capture_jobs",
             )
             missing = [
                 table_name
@@ -86,6 +92,12 @@ def initialize_database() -> None:
                 "dashboard_cases": {"project_id", "request_id", "storage_root_id", "relative_path", "environment", "metadata_json"},
                 "dashboard_captures": {"case_id", "fingerprint", "recipe_version", "manifest_json", "payload_json"},
                 "dashboard_assets": {"capture_id", "relative_path", "sha256", "media_type", "content", "metadata_json"},
+                "folder_environment_profiles": {"environment", "rules_json", "revision"},
+                "folder_environment_scans": {"root_key", "environment", "tree_json", "profile_id"},
+                "folder_environment_previews": {"scan_id", "rows_json", "can_apply"},
+                "folder_environment_registrations": {"preview_id", "idempotency_key", "environment", "status"},
+                "folder_environment_registry": {"registration_id", "relative_path", "role_kind", "target_id"},
+                "folder_environment_capture_jobs": {"registration_id", "case_id", "status"},
             }
             incompatible = []
             for table_name, expected in required_columns.items():
@@ -1211,6 +1223,7 @@ def _initialize_duckdb_legacy() -> None:
         ensure_semantic_vocabulary_schema(conn)
         ensure_semantic_review_schema(conn)
         ensure_folder_discovery_schema(conn)
+        ensure_folder_environment_schema(conn)
         from .adapters.persistence.dashboard_schema import ensure_dashboard_schema
         ensure_dashboard_schema(conn)
         # Establish the schema before seeding, but defer one-time legacy data
@@ -1448,6 +1461,19 @@ def ensure_folder_discovery_schema(conn: duckdb.DuckDBPyConnection) -> None:
         VALUES(1,1,
         '[{"key":"PROJECT","label":"프로젝트","kind":"PROJECT","active":true},{"key":"REQUEST","label":"의뢰","kind":"REQUEST","active":true},{"key":"LOAD_CASE","label":"하중 경우","kind":"LOAD_CASE","active":true},{"key":"RESULTS","label":"결과 폴더","kind":"RESULTS","active":true},{"key":"INPUT","label":"입력 폴더","kind":"INPUT","active":true}]',
         '[{"key":"DROP","label":"DROP","active":true},{"key":"SIDE_CLAMP","label":"SIDE_CLAMP","active":true},{"key":"SPDM_CMS","label":"SPDM_CMS","active":true},{"key":"SPDM_MODAL","label":"SPDM_MODAL","active":true},{"key":"SPDM_DEFLECTION","label":"SPDM_DEFLECTION","active":true},{"key":"SPDM_STIFFNESS","label":"SPDM_STIFFNESS","active":true},{"key":"SPDM_VIBRATION","label":"SPDM_VIBRATION","active":true}]',CURRENT_TIMESTAMP,'system') ON CONFLICT(id) DO NOTHING""")
+
+
+def ensure_folder_environment_schema(conn: duckdb.DuckDBPyConnection) -> None:
+    """Local development equivalent of additive migration 0030."""
+    conn.execute("""CREATE TABLE IF NOT EXISTS folder_environment_profiles (id VARCHAR PRIMARY KEY, environment VARCHAR NOT NULL, name VARCHAR NOT NULL, revision INTEGER NOT NULL, rules_json JSON NOT NULL, created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL, UNIQUE(environment,name));
+    CREATE TABLE IF NOT EXISTS folder_environment_scans (id VARCHAR PRIMARY KEY, root_key VARCHAR NOT NULL, relative_path VARCHAR NOT NULL, environment VARCHAR NOT NULL, profile_id VARCHAR NOT NULL, profile_revision INTEGER NOT NULL, project_id VARCHAR, request_id VARCHAR, status VARCHAR NOT NULL, tree_json JSON NOT NULL, issues_json JSON NOT NULL, created_by VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL);
+    CREATE TABLE IF NOT EXISTS folder_environment_previews (id VARCHAR PRIMARY KEY, scan_id VARCHAR NOT NULL, rows_json JSON NOT NULL, can_apply BOOLEAN NOT NULL, created_by VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL);
+    CREATE TABLE IF NOT EXISTS folder_environment_registrations (id VARCHAR PRIMARY KEY, preview_id VARCHAR NOT NULL, idempotency_key VARCHAR NOT NULL UNIQUE, environment VARCHAR NOT NULL, project_id VARCHAR, request_id VARCHAR, status VARCHAR NOT NULL, created_by VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL);
+    CREATE TABLE IF NOT EXISTS folder_environment_registry (id VARCHAR PRIMARY KEY, registration_id VARCHAR NOT NULL, root_key VARCHAR NOT NULL, relative_path VARCHAR NOT NULL, role_kind VARCHAR NOT NULL, parent_context_id VARCHAR, target_id VARCHAR NOT NULL, raw_name VARCHAR NOT NULL, option_status VARCHAR, created_at TIMESTAMP NOT NULL, UNIQUE(registration_id,relative_path,role_kind));
+    CREATE TABLE IF NOT EXISTS folder_environment_capture_jobs (id VARCHAR PRIMARY KEY, registration_id VARCHAR NOT NULL, case_id VARCHAR NOT NULL, load_case_id VARCHAR, run_case_id VARCHAR, run_option_id VARCHAR, option_label VARCHAR, option_status VARCHAR, status VARCHAR NOT NULL, capture_id VARCHAR, error_code VARCHAR, created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL);""")
+    conn.execute("""INSERT INTO folder_environment_profiles(id,environment,name,revision,rules_json,created_at,updated_at) VALUES
+    ('environment-profile-usage-default','USAGE','기본 사용환경 규칙',1,'{"roles":["PROJECT","REQUEST","SIMULATION_CASE","EVALUATION"]}',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP),
+    ('environment-profile-distribution-default','DISTRIBUTION','기본 유통환경 규칙',1,'{"roles":["PROJECT","REQUEST","SIMULATION_CASE","LOAD_CASE","EXECUTION_RUN","RUN_OPTION"]}',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP) ON CONFLICT(id) DO NOTHING""")
 
 
 def ensure_modeling_template_schema(conn: duckdb.DuckDBPyConnection) -> None:

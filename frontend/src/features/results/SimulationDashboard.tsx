@@ -6,7 +6,7 @@ import './SimulationDashboard.css'
 import { SimulationLocationMap } from './SimulationLocationMap'
 import { SimulationResultGraph } from './SimulationResultGraph'
 
-type Props = { projectId: string; requestId: string }
+type Props = { projectId: string; requestId: string; canManageFolders?: boolean }
 type Tab = 'usage' | 'distribution'
 const EDGES = ['TOP', 'BOTTOM', 'LEFT', 'RIGHT'] as const
 const ROLES = ['CELL', 'CUSHION', 'BOX'] as const
@@ -19,15 +19,22 @@ function missingText(status?: string | null, reason?: string | null) { return re
 function SelectField({ label, value, choices, onChange, disabled = false }: { label: string; value: string; choices: DashboardChoice[]; onChange: (value: string) => void; disabled?: boolean }) {
   return <label className="simulation-dashboard__select"><span>{label}</span><select value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)}><option value="">선택</option>{Array.from(new Map(choices.map((choice) => [choice.id, choice])).values()).map((choice) => <option key={choice.id} value={choice.id} disabled={choice.disabled} title={choice.reason ?? undefined}>{choice.label}</option>)}</select></label>
 }
+function CompactChoice({ label, value, choices, onChange, disabled = false }: { label: string; value: string; choices: DashboardChoice[]; onChange: (value: string) => void; disabled?: boolean }) {
+  const unique = Array.from(new Map(choices.map((choice) => [choice.id, choice])).values())
+  if (unique.length === 1) return <div className="simulation-dashboard__choice"><span>{label}</span><b title={unique[0].label}>{unique[0].label}</b></div>
+  return <SelectField label={label} value={value} choices={unique} onChange={onChange} disabled={disabled} />
+}
+function initialParam(name: string) { return typeof window === 'undefined' ? '' : new URLSearchParams(window.location.search).get(name) ?? '' }
 
-export function SimulationDashboard({ projectId, requestId }: Props) {
-  const [tab, setTab] = useState<Tab>('usage')
+export function SimulationDashboard({ projectId, requestId, canManageFolders = false }: Props) {
+  const [tab, setTab] = useState<Tab>(() => initialParam('result_environment') === 'DISTRIBUTION' ? 'distribution' : 'usage')
   const [catalog, setCatalog] = useState<DashboardCatalog | null>(null)
   const [catalogError, setCatalogError] = useState('')
-  const [caseId, setCaseId] = useState('')
-  const [captureId, setCaptureId] = useState('')
-  const [loadCaseId, setLoadCaseId] = useState('')
-  const [runId, setRunId] = useState('')
+  const [caseId, setCaseId] = useState(() => initialParam('case'))
+  const [captureId, setCaptureId] = useState(() => initialParam('capture'))
+  const [loadCaseId, setLoadCaseId] = useState(() => initialParam('case_load'))
+  const [runId, setRunId] = useState(() => initialParam('case_run'))
+  const [optionId, setOptionId] = useState(() => initialParam('case_option'))
   const [mode, setMode] = useState('')
   const [componentId, setComponentId] = useState('')
   const [basis, setBasis] = useState<'' | 'REPORTED_SUMMARY' | 'DETAIL'>('')
@@ -35,68 +42,76 @@ export function SimulationDashboard({ projectId, requestId }: Props) {
   const [referenceCaptureId, setReferenceCaptureId] = useState('')
   const [catalogRevision, setCatalogRevision] = useState(0)
   const latestCatalogKey = useRef('')
+  // Treat URL-derived selection as the initial scope. Only a later request or
+  // environment change clears it; otherwise a shared deep link would be
+  // erased before its first catalog response arrives.
+  const catalogScope = useRef(`${requestId}:${tab}`)
 
   useEffect(() => {
     const controller = new AbortController(); const key = `${requestId}:${tab}`; latestCatalogKey.current = key
-    setCatalog(null); setCatalogError(''); setReferenceCaseId(''); setReferenceCaptureId(''); setBasis(''); setCaseId(''); setLoadCaseId(''); setRunId(''); setMode(''); setCaptureId(''); setComponentId('')
+    if (catalogScope.current !== key) {
+      catalogScope.current = key; setCatalog(null); setCaseId(''); setCaptureId(''); setLoadCaseId(''); setRunId(''); setOptionId(''); setMode(''); setComponentId(''); setBasis('')
+    }
+    setCatalogError('')
     simulationDashboardApi.catalog(requestId, tab === 'usage' ? 'USAGE' : 'DISTRIBUTION', controller.signal).then((next) => {
       if (!controller.signal.aborted && latestCatalogKey.current === key) setCatalog(next)
     }).catch((reason) => { if (!controller.signal.aborted) setCatalogError(errorText(reason)) })
     return () => controller.abort()
   }, [catalogRevision, requestId, tab])
 
+  const options = useMemo(() => {
+    if (!catalog || tab !== 'distribution') return []
+    const explicit = catalog.run_options ?? []
+    if (explicit.length) return explicit.filter((item) => item.execution_run_id === runId && item.capture_id === captureId)
+    return catalog.modes.filter((item) => item.execution_run_id === runId && item.capture_id === captureId).map((item) => ({ ...item, run_option_id: item.id, option_status: item.id === 'UNKNOWN' ? 'UNRESOLVED' as const : 'PRESENT' as const }))
+  }, [captureId, catalog, runId, tab])
+  useEffect(() => {
+    if (!catalog) return
+    const choose = (current: string, choices: DashboardChoice[], setter: (value: string) => void) => {
+      const unique = Array.from(new Map(choices.map((item) => [item.id, item])).values())
+      if (unique.some((item) => item.id === current)) return
+      setter(unique.length === 1 ? unique[0].id : '')
+    }
+    choose(caseId, catalog.cases, setCaseId)
+    if (caseId) {
+      const captures = Array.from(new Map(catalog.captures.filter((item) => item.case_id === caseId).map((item) => [item.id, item])).values())
+      if (!captures.some((item) => item.id === captureId)) setCaptureId(captures[0]?.id ?? '')
+    }
+    if (tab === 'distribution' && captureId) choose(loadCaseId, catalog.load_cases.filter((item) => item.case_id === caseId && item.capture_id === captureId), setLoadCaseId)
+    if (tab === 'distribution' && loadCaseId) choose(runId, catalog.execution_runs.filter((item) => item.case_id === caseId && item.load_case_id === loadCaseId && item.capture_id === captureId), setRunId)
+    if (tab === 'distribution' && runId) choose(optionId, options, setOptionId)
+    const selectedOption = options.find((item) => item.id === optionId)
+    if (selectedOption && mode !== selectedOption.mode) setMode(selectedOption.mode ?? selectedOption.id)
+    if (tab === 'distribution' && mode) choose(componentId, catalog.components.filter((item) => item.execution_run_id === runId && item.mode === mode && item.capture_id === captureId && (!item.run_option_id || item.run_option_id === optionId)), setComponentId)
+    if (tab === 'distribution') choose(basis, catalog.bases, (value) => setBasis(value as typeof basis))
+  }, [basis, captureId, caseId, catalog, componentId, loadCaseId, mode, optionId, options, runId, tab])
+  useEffect(() => {
+    const url = new URL(window.location.href)
+    const values: Record<string, string> = { result_environment: tab === 'usage' ? 'USAGE' : 'DISTRIBUTION', case: caseId, capture: captureId, case_load: loadCaseId, case_run: runId, case_option: optionId }
+    Object.entries(values).forEach(([key, value]) => value ? url.searchParams.set(key, value) : url.searchParams.delete(key))
+    window.history.replaceState(window.history.state, '', url)
+  }, [captureId, caseId, loadCaseId, optionId, runId, tab])
+  const folderHref = `/workspace/catalog/schemas?${new URLSearchParams({ project: projectId, request: requestId, result_environment: tab === 'usage' ? 'USAGE' : 'DISTRIBUTION' }).toString()}`
+
   const controls = catalog ? <div className="simulation-dashboard__controls">
-    <SelectField label="해석 Case (Simulation Case)" value={caseId} choices={catalog.cases} onChange={(value) => { setCaseId(value); setCaptureId(''); setLoadCaseId(''); setRunId(''); setMode(''); setComponentId(''); setReferenceCaseId(''); setReferenceCaptureId('') }} />
-    <SelectField label="Capture" value={captureId} choices={catalog.captures.filter((item) => item.case_id === caseId)} disabled={!caseId} onChange={(value) => { setCaptureId(value); setLoadCaseId(''); setRunId(''); setMode(''); setComponentId('') }} />
+    <CompactChoice label="해석 Case" value={caseId} choices={catalog.cases} onChange={(value) => { setCaseId(value); setCaptureId(''); setLoadCaseId(''); setRunId(''); setOptionId(''); setMode(''); setComponentId(''); setReferenceCaseId(''); setReferenceCaptureId('') }} />
+    <div className="simulation-dashboard__capture-pin"><span>수집 버전</span><b>{catalog.captures.find((item) => item.id === captureId)?.label ?? '선택 필요'}</b></div>
     {tab === 'distribution' ? <>
-      <SelectField label="Load case" value={loadCaseId} choices={catalog.load_cases.filter((item) => item.case_id === caseId && item.capture_id === captureId)} disabled={!captureId} onChange={(value) => { setLoadCaseId(value); setRunId(''); setMode(''); setComponentId('') }} />
-      <SelectField label="run #" value={runId} choices={catalog.execution_runs.filter((item) => item.case_id === caseId && item.load_case_id === loadCaseId && item.capture_id === captureId)} disabled={!loadCaseId} onChange={(value) => { setRunId(value); setMode(''); setComponentId('') }} />
-      <SelectField label="Mode" value={mode} choices={catalog.modes.filter((item) => (item.execution_run_id === runId || item.run_id === runId) && item.capture_id === captureId)} disabled={!runId} onChange={(value) => { setMode(value); setComponentId('') }} />
-      <SelectField label="Component" value={componentId} choices={catalog.components.filter((item) => (item.execution_run_id === runId || item.run_id === runId) && item.mode === mode && item.capture_id === captureId)} disabled={!mode} onChange={setComponentId} />
-      <SelectField label="Basis" value={basis} choices={catalog.bases} onChange={(value) => setBasis(value === 'DETAIL' ? 'DETAIL' : value === 'REPORTED_SUMMARY' ? 'REPORTED_SUMMARY' : '')} />
-    </> : <>
-      <SelectField label="Reference Case" value={referenceCaseId} choices={catalog.cases.filter((item) => item.id !== caseId)} onChange={(value) => { setReferenceCaseId(value); setReferenceCaptureId('') }} />
-      <SelectField label="Reference Capture" value={referenceCaptureId} choices={catalog.captures.filter((item) => item.case_id === referenceCaseId)} disabled={!referenceCaseId} onChange={setReferenceCaptureId} />
-    </>}
+      <CompactChoice label="하중경우" value={loadCaseId} choices={catalog.load_cases.filter((item) => item.case_id === caseId && item.capture_id === captureId)} disabled={!captureId} onChange={(value) => { setLoadCaseId(value); setRunId(''); setOptionId(''); setMode(''); setComponentId('') }} />
+      <CompactChoice label="Run Case" value={runId} choices={catalog.execution_runs.filter((item) => item.case_id === caseId && item.load_case_id === loadCaseId && item.capture_id === captureId)} disabled={!loadCaseId} onChange={(value) => { setRunId(value); setOptionId(''); setMode(''); setComponentId('') }} />
+      <CompactChoice label="Run Option" value={optionId} choices={options} disabled={!runId} onChange={(value) => { const choice = options.find((item) => item.id === value); setOptionId(value); setMode(choice?.mode ?? ''); setComponentId('') }} />
+      <CompactChoice label="Component" value={componentId} choices={catalog.components.filter((item) => (item.execution_run_id === runId || item.run_id === runId) && item.mode === mode && item.capture_id === captureId && (!item.run_option_id || item.run_option_id === optionId))} disabled={!mode} onChange={setComponentId} />
+      <CompactChoice label="Basis" value={basis} choices={catalog.bases} onChange={(value) => setBasis(value === 'DETAIL' ? 'DETAIL' : value === 'REPORTED_SUMMARY' ? 'REPORTED_SUMMARY' : '')} />
+    </> : null}
+    <details className="simulation-dashboard__history"><summary>수집 이력{tab === 'usage' ? ' · 비교' : ''}</summary><SelectField label="수집 버전" value={captureId} choices={catalog.captures.filter((item) => item.case_id === caseId)} disabled={!caseId} onChange={(value) => setCaptureId(value)} />{tab === 'usage' ? <><SelectField label="Reference Case" value={referenceCaseId} choices={catalog.cases.filter((item) => item.id !== caseId)} onChange={(value) => { setReferenceCaseId(value); setReferenceCaptureId('') }} /><SelectField label="Reference Capture" value={referenceCaptureId} choices={catalog.captures.filter((item) => item.case_id === referenceCaseId)} disabled={!referenceCaseId} onChange={setReferenceCaptureId} /></> : null}</details>
   </div> : null
 
   return <section className="simulation-dashboard" aria-label="SPDM 해석 결과 대시보드">
     <header className="simulation-dashboard__head"><div><span>RESULT EXPLORER</span><h2>해석 결과 대시보드</h2><p>표시값과 자산은 선택한 Case·Run·capture 문맥의 서버 결과만 사용합니다.</p></div><nav aria-label="결과 환경"><button className={tab === 'usage' ? 'active' : ''} type="button" onClick={() => setTab('usage')}>사용환경</button><button className={tab === 'distribution' ? 'active' : ''} type="button" onClick={() => setTab('distribution')}>유통환경</button></nav></header>
-    {catalogError ? <State message={catalogError} error /> : <>{controls}{catalog && !catalog.cases.length ? <State message="등록된 해석 Case가 없습니다. 원본 폴더 조사·capture 게시에서 Case를 등록하세요." /> : null}</>}
-    <CaptureTools key={`${projectId}:${requestId}:${tab}`} projectId={projectId} requestId={requestId} environment={tab === 'usage' ? 'USAGE' : 'DISTRIBUTION'} onChanged={() => setCatalogRevision((value) => value + 1)} />
-    {tab === 'usage' ? <UsageArea key={`${caseId}:${captureId}:${referenceCaseId}:${referenceCaptureId}`} caseId={caseId} captureId={captureId} referenceCaseId={referenceCaseId} referenceCaptureId={referenceCaptureId} /> : <DistributionArea key={`${projectId}:${requestId}`} projectId={projectId} requestId={requestId} caseId={caseId} loadCaseId={loadCaseId} captureId={captureId} runId={runId} mode={mode} componentId={componentId} basis={basis} />}
+    {catalogError ? <State message={catalogError} error /> : <>{controls}{catalog && !catalog.cases.length ? <State message="등록된 해석 Case가 없습니다. 폴더 연결·규칙에서 Case와 결과를 등록하세요." /> : null}</>}
+    <div className="simulation-dashboard__source-link"><span>새 결과는 폴더 연결에서 등록하고 읽습니다.</span>{canManageFolders ? <a href={folderHref}>폴더 연결·규칙 열기</a> : null}<button type="button" onClick={() => setCatalogRevision((value) => value + 1)}>결과 새로고침</button></div>
+    {tab === 'usage' ? <UsageArea key={`${caseId}:${captureId}:${referenceCaseId}:${referenceCaptureId}`} caseId={caseId} captureId={captureId} referenceCaseId={referenceCaseId} referenceCaptureId={referenceCaptureId} /> : <DistributionArea key={`${projectId}:${requestId}`} projectId={projectId} requestId={requestId} caseId={caseId} loadCaseId={loadCaseId} captureId={captureId} runId={runId} optionId={optionId} mode={mode} componentId={componentId} basis={basis} />}
   </section>
-}
-
-function CaptureTools({ projectId, requestId, environment, onChanged }: { projectId: string; requestId: string; environment: 'USAGE' | 'DISTRIBUTION'; onChanged: () => void }) {
-  const [relativePath, setRelativePath] = useState(''); const [storageRootId, setStorageRootId] = useState(''); const [candidates, setCandidates] = useState<Array<{ root_relative_path: string; source_name: string }>>([]); const [busy, setBusy] = useState(''); const [message, setMessage] = useState('')
-  const operation = useRef<AbortController | null>(null); const latestContext = useRef('')
-  useEffect(() => {
-    operation.current?.abort(); latestContext.current = `${projectId}:${requestId}:${environment}`
-    setRelativePath(''); setStorageRootId(''); setCandidates([]); setBusy(''); setMessage('')
-    return () => operation.current?.abort()
-  }, [environment, projectId, requestId])
-  const isCurrent = (controller: AbortController, key: string) => !controller.signal.aborted && latestContext.current === key
-  const scan = async () => {
-    operation.current?.abort(); const controller = new AbortController(); operation.current = controller; const key = `${projectId}:${requestId}:${environment}`
-    setBusy('scan'); setMessage('')
-    try {
-      const result = await simulationDashboardApi.scan({ project_id: projectId, request_id: requestId, root_relative_path: relativePath.trim(), environment }, controller.signal)
-      if (!isCurrent(controller, key)) return
-      setStorageRootId(result.storage_root_id); setCandidates(result.cases); setMessage(result.cases.length ? '조사 후보를 선택해 capture를 게시하세요.' : result.issues.join(' · ') || '발견된 Case가 없습니다.')
-    } catch (reason) { if (isCurrent(controller, key)) setMessage(errorText(reason)) } finally { if (operation.current === controller) { operation.current = null; setBusy('') } }
-  }
-  const capture = async () => {
-    if (!storageRootId || !relativePath) { setMessage('조사 결과에서 Case를 선택하세요.'); return }
-    operation.current?.abort(); const controller = new AbortController(); operation.current = controller; const key = `${projectId}:${requestId}:${environment}`
-    setBusy('capture'); setMessage('')
-    try {
-      await simulationDashboardApi.capture({ project_id: projectId, request_id: requestId, root_relative_path: relativePath, environment, storage_root_id: storageRootId }, controller.signal)
-      if (!isCurrent(controller, key)) return
-      setMessage('검증된 capture를 게시했습니다.'); onChanged()
-    } catch (reason) { if (isCurrent(controller, key)) setMessage(errorText(reason)) } finally { if (operation.current === controller) { operation.current = null; setBusy('') } }
-  }
-  return <details className="simulation-dashboard__capture"><summary>원본 폴더 조사·capture 게시</summary><p>설정된 저장소 루트 아래의 상대 경로만 사용합니다. 빈 경로는 설정 루트 아래의 표준 Case를 읽기 전용으로 찾습니다.</p><div><label>상대 경로<input value={relativePath} onChange={(event) => setRelativePath(event.target.value)} placeholder="비워두면 설정 루트 전체 조사" /></label><button type="button" disabled={!!busy} onClick={() => void scan()}>{busy === 'scan' ? '조사 중…' : '읽기 전용 조사'}</button><button type="button" disabled={!!busy || !storageRootId || !relativePath} onClick={() => void capture()}>{busy === 'capture' ? '게시 중…' : '선택 Case capture 게시'}</button></div>{candidates.length ? <div className="simulation-dashboard__capture-candidates">{candidates.map((item) => <button type="button" key={item.root_relative_path} className={relativePath === item.root_relative_path ? 'active' : ''} onClick={() => setRelativePath(item.root_relative_path)}>{item.source_name} <small>{item.root_relative_path}</small></button>)}</div> : null}{message ? <small role="status">{message}</small> : null}</details>
 }
 
 function State({ message, error = false }: { message: string; error?: boolean }) { return <div className={`simulation-dashboard__state ${error ? 'error' : ''}`} role={error ? 'alert' : 'status'}>{error ? <AlertTriangle /> : <Layers3 />}<span>{message}</span></div> }
@@ -129,24 +144,24 @@ function UsageArea({ caseId, captureId, referenceCaseId, referenceCaptureId }: {
   </div>
 }
 
-function DistributionArea({ projectId, requestId, caseId, loadCaseId, captureId, runId, mode, componentId, basis }: { projectId: string; requestId: string; caseId: string; loadCaseId: string; captureId: string; runId: string; mode: string; componentId: string; basis: '' | 'REPORTED_SUMMARY' | 'DETAIL' }) {
+function DistributionArea({ projectId, requestId, caseId, loadCaseId, captureId, runId, optionId, mode, componentId, basis }: { projectId: string; requestId: string; caseId: string; loadCaseId: string; captureId: string; runId: string; optionId: string; mode: string; componentId: string; basis: '' | 'REPORTED_SUMMARY' | 'DETAIL' }) {
   const [edges, setEdges] = useState<string[]>([...EDGES]); const [lines, setLines] = useState<string[]>(['1', '2', '3', '4']); const [data, setData] = useState<DashboardDistribution | null>(null); const [error, setError] = useState(''); const [sceneId, setSceneId] = useState(''); const [memberId, setMemberId] = useState(''); const [section, setSection] = useState<'summary' | 'edges' | 'contours' | 'behavior'>('summary'); const [comparison, setComparison] = useState<DashboardComparisonMember[]>([]); const latestKey = useRef('')
   useEffect(() => { setComparison([]); setData(null); setSceneId(''); setMemberId('') }, [projectId, requestId])
-  const contextKey = `${projectId}:${requestId}:${caseId}:${loadCaseId}:${runId}:${mode}:${captureId}:${componentId}:${basis}:${edges.join(',')}:${lines.join(',')}:${comparison.map((item) => `${item.simulation_case_id}/${item.load_case_id}/${item.execution_run_id}/${item.capture_id}/${item.mode}/${item.component_id}/${item.basis}`).join('|')}`
+  const contextKey = `${projectId}:${requestId}:${caseId}:${loadCaseId}:${runId}:${optionId}:${mode}:${captureId}:${componentId}:${basis}:${edges.join(',')}:${lines.join(',')}:${comparison.map((item) => `${item.simulation_case_id}/${item.load_case_id}/${item.execution_run_id}/${item.run_option_id}/${item.capture_id}/${item.mode}/${item.component_id}/${item.basis}`).join('|')}`
   useEffect(() => {
     if (!runId || !captureId || !mode || !componentId || !basis) { setData(null); return }
     const controller = new AbortController(); latestKey.current = contextKey; setError(''); setData(null); setSceneId(''); setMemberId('')
-    const current = { simulation_case_id: caseId, load_case_id: loadCaseId, execution_run_id: runId, capture_id: captureId, mode, component_id: componentId, basis }
+    const current = { simulation_case_id: caseId, load_case_id: loadCaseId, execution_run_id: runId, run_option_id: optionId, capture_id: captureId, mode, component_id: componentId, basis }
     const members = comparison.length ? [...comparison, ...(comparison.some((item) => item.simulation_case_id === caseId) ? [] : [current])] : []
-    const request = members.length > 1 ? simulationDashboardApi.comparison(members, edges.join(','), lines.join(','), controller.signal) : simulationDashboardApi.distribution(runId, { capture_id: captureId, mode, component_id: componentId, basis, edge_keys: edges.join(','), line_indices: lines.join(',') }, controller.signal)
+    const request = members.length > 1 ? simulationDashboardApi.comparison(members, edges.join(','), lines.join(','), controller.signal) : simulationDashboardApi.distribution(runId, { capture_id: captureId, run_option_id: optionId, mode, component_id: componentId, basis, edge_keys: edges.join(','), line_indices: lines.join(',') }, controller.signal)
     request.then((next) => { if (!controller.signal.aborted && latestKey.current === contextKey) setData(next) }).catch((reason) => { if (!controller.signal.aborted && latestKey.current === contextKey) setError(errorText(reason)) })
     return () => controller.abort()
-  }, [basis, captureId, caseId, comparison, componentId, contextKey, edges, lines, loadCaseId, mode, projectId, requestId, runId])
+  }, [basis, captureId, caseId, comparison, componentId, contextKey, edges, lines, loadCaseId, mode, optionId, projectId, requestId, runId])
   if (!runId || !captureId || !mode || !componentId || !basis) return <State message="Run, mode, component, basis와 capture를 모두 선택하세요." />
   if (error) return <State message={error} error />
   if (!data) return <State message="유통환경 요약을 불러오는 중입니다." />
   const choose = (scene: string, member: string) => { setSceneId(scene); setMemberId(member) }
-  const addCurrent = () => { const next = { simulation_case_id: caseId, load_case_id: loadCaseId, execution_run_id: runId, capture_id: captureId, mode, component_id: componentId, basis: basis as DashboardComparisonMember['basis'] }; if (!comparison.some((item) => item.simulation_case_id === caseId) && comparison.length < 8) setComparison([...comparison, next]) }
+  const addCurrent = () => { const next = { simulation_case_id: caseId, load_case_id: loadCaseId, execution_run_id: runId, run_option_id: optionId, capture_id: captureId, mode, component_id: componentId, basis: basis as DashboardComparisonMember['basis'] }; if (!comparison.some((item) => item.simulation_case_id === caseId) && comparison.length < 8) setComparison([...comparison, next]) }
   return <div className="simulation-dashboard__distribution" data-testid="distribution-dashboard"><div className="simulation-dashboard__toolbar"><EdgePicker edges={edges} onChange={setEdges} /><LinePicker lines={lines} onChange={setLines} /><button type="button" onClick={addCurrent} disabled={comparison.some((item) => item.simulation_case_id === caseId) || comparison.length >= 8}>현재 Case 비교에 추가</button>{comparison.map((item) => <button type="button" key={item.simulation_case_id} onClick={() => setComparison(comparison.filter((candidate) => candidate.simulation_case_id !== item.simulation_case_id))}>Case 제거 {item.simulation_case_id}</button>)}<nav aria-label="유통환경 상세"><button className={section === 'summary' ? 'active' : ''} onClick={() => setSection('summary')}>결과 요약</button><button className={section === 'edges' ? 'active' : ''} onClick={() => setSection('edges')}>엣지별 수준</button><button className={section === 'contours' ? 'active' : ''} onClick={() => setSection('contours')}>컨투어</button><button className={section === 'behavior' ? 'active' : ''} onClick={() => setSection('behavior')}>거동</button></nav></div>{section === 'summary' ? <Summary data={data} sceneId={sceneId} memberId={memberId} selectedEdges={edges} onSelect={choose} /> : null}{section === 'edges' ? <EdgePanels data={data} onSelect={choose} /> : null}{section === 'contours' ? <ContourMatrix data={data} onSelect={choose} /> : null}{section === 'behavior' ? <BehaviorMatrix data={data} sceneId={sceneId} onSelect={choose} /> : null}<SimulationLocationMap data={data} onSelect={choose} /><SceneDetail sceneId={sceneId} member={data.members.find((member) => member.id === memberId)} lineIndices={lines.join(',')} />{data.quality_issues.length ? <Issues issues={data.quality_issues} /> : null}</div>
 }
 
@@ -202,7 +217,7 @@ function BehaviorMatrix({ data, sceneId, onSelect }: { data: DashboardDistributi
 function scopeText(scope?: string | null) { return scope === 'EXTRACTED_SIDES_AND_CORNERS' ? '추출 측면·코너' : scope === 'EXTRACTED_SELECTED_LINES' ? '선택 라인의 추출 측면' : scope === 'SELECTED_SIDE_LINES' || scope === 'SELECTED_EDGE_LINES' ? '선택 엣지·라인' : scope ?? '집계 범위 미확인' }
 function MatrixCell({ cellId, asset, status, reason, value, scaleStatus, showContourMeta = false, onClick }: { cellId: string; asset?: DashboardAsset | null; status?: string; reason?: string | null; value?: DashboardValue | null; scaleStatus?: string | null; showContourMeta?: boolean; onClick: () => void }) { return <div className="simulation-dashboard__matrix-cell" role="button" tabIndex={0} data-cell-id={cellId} onClick={onClick} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') onClick() }}>{asset ? <Media asset={asset} /> : <span>{missingText(status, reason)}</span>}{showContourMeta ? <div className="simulation-dashboard__matrix-meta"><small>값: {value ? valueText(value) : '값 없음'}</small><small>집계: {value?.basis === 'REPORTED_SUMMARY' ? '원본 요약' : value?.basis === 'DETAIL' ? '상세 추출' : '집계 범위 미확인'} · {scopeText(value?.scope)}</small><small>상태: {value?.completeness ?? value?.status ?? status ?? '미확인'}</small><small>이미지·수치 시간 정합성 미확인</small><small>Scale bar: {!scaleStatus || scaleStatus === 'UNCONFIRMED' ? '정합성 미확인' : scaleStatus}</small></div> : null}</div> }
 function SceneDetail({ sceneId, member, lineIndices }: { sceneId: string; member?: DashboardMember; lineIndices: string }) { const [data, setData] = useState<DashboardSceneDetail | null>(null); const [error, setError] = useState(''); const [position, setPosition] = useState('TOP'); const latestKey = useRef('')
-  useEffect(() => { if (!sceneId || !member) { setData(null); return }; const controller = new AbortController(); const key = `${sceneId}:${member.id}:${lineIndices}:${position}`; latestKey.current = key; setData(null); setError(''); simulationDashboardApi.sceneDetail(sceneId, { execution_run_id: member.execution_run_id, capture_id: member.capture_id, mode: member.mode, component_id: member.component_id, basis: member.basis, line_indices: lineIndices, position }, controller.signal).then((next) => { if (!controller.signal.aborted && latestKey.current === key) setData(next) }).catch((reason) => { if (!controller.signal.aborted && latestKey.current === key) setError(errorText(reason)) }); return () => controller.abort() }, [lineIndices, member, position, sceneId])
+  useEffect(() => { if (!sceneId || !member) { setData(null); return }; const controller = new AbortController(); const key = `${sceneId}:${member.id}:${lineIndices}:${position}`; latestKey.current = key; setData(null); setError(''); simulationDashboardApi.sceneDetail(sceneId, { execution_run_id: member.execution_run_id, capture_id: member.capture_id, run_option_id: member.run_option_id, mode: member.mode, component_id: member.component_id, basis: member.basis, line_indices: lineIndices, position }, controller.signal).then((next) => { if (!controller.signal.aborted && latestKey.current === key) setData(next) }).catch((reason) => { if (!controller.signal.aborted && latestKey.current === key) setError(errorText(reason)) }); return () => controller.abort() }, [lineIndices, member, position, sceneId])
   if (!sceneId || !member) return null
   if (error) return <State message={error} error />
   if (!data) return <State message="선택 Scene 상세를 불러오는 중입니다." />

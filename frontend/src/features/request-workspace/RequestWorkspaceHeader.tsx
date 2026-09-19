@@ -88,7 +88,7 @@ export function RequestWorkspaceHeader({
   const currentTab = activeTab ?? (activeView === 'workflow' ? 'overview' : 'review')
 
   return <>
-    <section className="request-workspace-header">
+    <section className={`request-workspace-header${caseResultsMode ? ' request-workspace-header--case' : ''}`}>
       <div className="request-workspace-title">
         <h1>{title}</h1>
         <p><span>{owner || '담당자 미지정'}</span><b>·</b><strong>{(statusLabels[status] ?? status) || '상태 미지정'}</strong>{completedCount && <><b>·</b><span>{completedCount}</span></>}</p>
@@ -102,7 +102,7 @@ export function RequestWorkspaceHeader({
       </div>
     </section>
 
-    <nav className="request-journey" aria-label="의뢰 작업 여정">
+    <nav className={`request-journey${caseResultsMode ? ' request-journey--case' : ''}`} aria-label="의뢰 작업 여정">
       <JourneyItem icon={CircleDot} label="의뢰 개요" active={currentTab === 'overview'} disabled={contextChanging} onClick={onViewOverview} />
       <JourneyItem icon={Play} label="작업 실행" active={currentTab === 'execution'} disabled={contextChanging || requestUnavailable || !canOpenWorkbench} onClick={onOpenWorkbench} />
       <JourneyItem icon={ClipboardPlus} label="결과 등록" active={currentTab === 'import'} disabled={contextChanging || requestUnavailable || !canOpenData} onClick={onOpenData} />

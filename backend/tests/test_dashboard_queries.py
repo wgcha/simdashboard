@@ -104,3 +104,15 @@ def test_comparison_keeps_unknown_profile_scenes_separate_and_missing_cells():
     assert len(result["contours"]) == 4
     assert len([c for c in result["contours"] if c["status"] == "UNMATCHED"]) == 2
     assert "CASE_SCENE_ALIGNMENT_UNCONFIRMED" in result["quality_issues"]
+
+
+def test_legacy_unknown_option_is_unresolved_and_queryable_by_catalog_id():
+    legacy = capture()
+    legacy["payload"]["runs"][0]["mode"] = "UNKNOWN"
+    legacy["payload"]["runs"][0].pop("run_option_id", None)
+    option_id, label, status = queries.option_projection(legacy["payload"]["runs"][0], legacy["id"])
+    assert status == "UNRESOLVED"
+    assert label == "미확인(기존 자료)"
+    run, context = queries.select_run(legacy, "run1", "UNKNOWN", "C23", "DETAIL", option_id)
+    assert run["id"] == "run1"
+    assert context["run_option_id"] == option_id

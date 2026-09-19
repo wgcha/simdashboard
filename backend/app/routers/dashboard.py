@@ -32,6 +32,7 @@ class ComparisonMember(BaseModel):
     execution_run_id: str
     capture_id: str
     mode: str
+    run_option_id: str | None = None
     component_id: str
     basis: Literal["DETAIL", "REPORTED_SUMMARY"]
 
@@ -139,14 +140,15 @@ def usage(case_id: str, capture_id: str, request: Request, reference_case_id: st
 
 @router.get("/distribution/runs/{run_id}")
 def distribution(run_id: str, request: Request, capture_id: str, mode: str, component_id: str,
-                 basis: Literal["DETAIL", "REPORTED_SUMMARY"], edge_keys: str = "LEFT,RIGHT,TOP,BOTTOM", line_indices: str = "1,2,3,4"):
+                 basis: Literal["DETAIL", "REPORTED_SUMMARY"], run_option_id: str | None = None,
+                 edge_keys: str = "LEFT,RIGHT,TOP,BOTTOM", line_indices: str = "1,2,3,4"):
     edges = set(filter(None, edge_keys.upper().split(",")))
     if not edges.issubset(queries.EDGES):
         raise HTTPException(422, "엣지 선택이 올바르지 않습니다.")
     with connect() as conn:
         capture = capture_for_read(conn, request, capture_id)
         try:
-            return queries.distribution(capture, run_id, mode, component_id, basis, edges, lines_from(line_indices))
+            return queries.distribution(capture, run_id, mode, component_id, basis, edges, lines_from(line_indices), run_option_id)
         except storage.DashboardCaptureError as exc:
             raise error(exc) from exc
 
@@ -154,11 +156,11 @@ def distribution(run_id: str, request: Request, capture_id: str, mode: str, comp
 @router.get("/distribution/scenes/{scene_id}")
 def scene_detail(scene_id: str, request: Request, capture_id: str, run_id: str, mode: str, component_id: str,
                  basis: Literal["DETAIL", "REPORTED_SUMMARY"], line_indices: str = "1,2,3,4",
-                 position: Literal["TOP", "BOT", "LH", "RH"] = "TOP"):
+                 position: Literal["TOP", "BOT", "LH", "RH"] = "TOP", run_option_id: str | None = None):
     with connect() as conn:
         capture = capture_for_read(conn, request, capture_id)
         try:
-            return queries.scene_detail(capture, scene_id, run_id, mode, component_id, basis, lines_from(line_indices), position)
+            return queries.scene_detail(capture, scene_id, run_id, mode, component_id, basis, lines_from(line_indices), position, run_option_id)
         except storage.DashboardCaptureError as exc:
             raise error(exc) from exc
 
@@ -176,7 +178,7 @@ def comparison(payload: ComparisonInput, request: Request):
                 raise HTTPException(422, "Case별로 정확한 수집 버전을 하나씩 선택하세요.")
             ids.add(member.simulation_case_id)
             try:
-                part = queries.distribution(capture, member.execution_run_id, member.mode, member.component_id, member.basis, edges, lines_from(payload.line_indices))
+                part = queries.distribution(capture, member.execution_run_id, member.mode, member.component_id, member.basis, edges, lines_from(payload.line_indices), member.run_option_id)
                 if part["context"]["load_case_id"] != member.load_case_id:
                     raise HTTPException(422, "하중경우가 선택 Run과 다릅니다.")
                 parts.append(part)

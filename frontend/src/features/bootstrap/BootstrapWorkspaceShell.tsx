@@ -6,6 +6,7 @@ import './bootstrap-workspace.css'
 type BootstrapWorkspaceShellProps = {
   activePage: 'data' | 'intake'
   canOpenIntake: boolean
+  canOpenFolders?: boolean
   children: ReactNode
   databaseBackend: 'duckdb' | 'postgresql'
   displayName: string
@@ -18,6 +19,7 @@ type BootstrapWorkspaceShellProps = {
 export function BootstrapWorkspaceShell({
   activePage,
   canOpenIntake,
+  canOpenFolders = false,
   children,
   databaseBackend,
   displayName,
@@ -32,6 +34,7 @@ export function BootstrapWorkspaceShell({
       <nav aria-label="초기 데이터 구성 단계">
         <button type="button" className={activePage === 'data' ? 'active' : ''} onClick={() => onPageChange('data')}>프로젝트 · 결과 등록</button>
         <button type="button" className={activePage === 'intake' ? 'active' : ''} disabled={!canOpenIntake} onClick={() => onPageChange('intake')}>해석 의뢰 접수</button>
+        {canOpenFolders && <button type="button" onClick={() => onPageChange('schemas')}>폴더 연결·규칙</button>}
       </nav>
       <div className="bootstrap-workspace-actions">
         <button type="button" onClick={() => onPageChange('local_pc')}>내 PC 설정</button>
@@ -43,7 +46,7 @@ export function BootstrapWorkspaceShell({
         <button type="button" onClick={onLogout}>로그아웃</button>
       </div>
     </header>
-    <aside className="bootstrap-workspace-guide"><strong>분석 전 준비 단계</strong><span>프로젝트 생성 → 해석 의뢰 접수 → 하중 경우 생성 → 결과 등록 순서로 진행하세요. 분석 결과가 준비되면 전체 작업공간이 자동으로 열립니다.</span></aside>
+    <aside className="bootstrap-workspace-guide"><strong>분석 전 준비 단계</strong><span>{canOpenFolders ? '폴더 연결·규칙에서 사용환경 또는 유통환경을 선택해 업무와 Case 결과를 등록할 수 있습니다. 기존 업무는 프로젝트·결과 등록에서 관리하세요.' : '프로젝트와 해석 의뢰를 선택해 결과를 등록하세요. 등록된 Case 결과는 의뢰의 Case 결과 화면에서 확인할 수 있습니다.'}</span></aside>
     <main>{children}</main>
   </div>
 }

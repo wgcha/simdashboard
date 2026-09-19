@@ -2024,6 +2024,176 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/folder-discovery/environments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Profiles */
+        get: operations["list_profiles_api_folder_discovery_environments_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/folder-discovery/environments/scan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Scan */
+        post: operations["scan_api_folder_discovery_environments_scan_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/folder-discovery/environments/previews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preview */
+        post: operations["preview_api_folder_discovery_environments_previews_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/folder-discovery/environments/registrations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register */
+        post: operations["register_api_folder_discovery_environments_registrations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/folder-discovery/environments/registrations/{registration_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Status */
+        get: operations["status_api_folder_discovery_environments_registrations__registration_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/folder-discovery/environments/registrations/{registration_id}/capture/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retry */
+        post: operations["retry_api_folder_discovery_environments_registrations__registration_id__capture_retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/folder-discovery/environments/profiles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create */
+        post: operations["create_api_folder_discovery_environments_profiles_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/folder-discovery/environments/profiles/{profile_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Update */
+        put: operations["update_api_folder_discovery_environments_profiles__profile_id__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/folder-discovery/environments/profiles/from-legacy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Copy */
+        post: operations["copy_api_folder_discovery_environments_profiles_from_legacy_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/folder-discovery/environments/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** History */
+        get: operations["history_api_folder_discovery_environments_history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/semantic-vocabulary": {
         parameters: {
             query?: never;
@@ -3480,6 +3650,26 @@ export interface components {
             /** Owner User Id */
             owner_user_id: string;
         };
+        /** Assignment */
+        Assignment: {
+            /** Node Id */
+            node_id: string;
+            /** Role Kind */
+            role_kind: string;
+            /**
+             * Confirm
+             * @default true
+             */
+            confirm: boolean;
+            /**
+             * Target Mode
+             * @default CREATE
+             * @enum {string}
+             */
+            target_mode: "CREATE" | "LINK";
+            /** Target Id */
+            target_id?: string | null;
+        };
         /** AuthStatusResponse */
         AuthStatusResponse: {
             /**
@@ -3785,6 +3975,8 @@ export interface components {
             capture_id: string;
             /** Mode */
             mode: string;
+            /** Run Option Id */
+            run_option_id?: string | null;
             /** Component Id */
             component_id: string;
             /**
@@ -4380,6 +4572,21 @@ export interface components {
             /** Expected Version */
             expected_version?: number | null;
         };
+        /** LegacyCopy */
+        LegacyCopy: {
+            /**
+             * Environment
+             * @enum {string}
+             */
+            environment: "USAGE" | "DISTRIBUTION";
+            /** Name */
+            name: string;
+            /**
+             * Relative Path
+             * @default
+             */
+            relative_path: string;
+        };
         /** LoadCaseCreate */
         LoadCaseCreate: {
             /** Name */
@@ -4699,6 +4906,43 @@ export interface components {
             /** Available */
             available: boolean;
         };
+        /** Preview */
+        Preview: {
+            /** Scan Id */
+            scan_id: string;
+            /** Assignments */
+            assignments?: components["schemas"]["Assignment"][];
+        };
+        /** Profile */
+        Profile: {
+            /**
+             * Environment
+             * @enum {string}
+             */
+            environment: "USAGE" | "DISTRIBUTION";
+            /** Name */
+            name: string;
+            /** Rules */
+            rules?: {
+                [key: string]: unknown;
+            };
+        };
+        /** ProfileUpdate */
+        ProfileUpdate: {
+            /**
+             * Environment
+             * @enum {string}
+             */
+            environment: "USAGE" | "DISTRIBUTION";
+            /** Name */
+            name: string;
+            /** Rules */
+            rules?: {
+                [key: string]: unknown;
+            };
+            /** Expected Revision */
+            expected_revision: number;
+        };
         /** ProjectCreate */
         ProjectCreate: {
             /** Name */
@@ -4803,6 +5047,18 @@ export interface components {
             classification: "UNCHANGED" | "PRESENTATION_ONLY" | "INTERPRETATION" | "UNKNOWN";
             /** Reason Codes */
             reason_codes: string[];
+        };
+        /** Register */
+        Register: {
+            /** Preview Id */
+            preview_id: string;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /**
+             * Capture
+             * @default true
+             */
+            capture: boolean;
         };
         /** RegistrationPayload */
         RegistrationPayload: {
@@ -5287,6 +5543,11 @@ export interface components {
              */
             required: boolean;
         };
+        /** Retry */
+        Retry: {
+            /** Job Ids */
+            job_ids?: string[] | null;
+        };
         /** RevalidateBody */
         RevalidateBody: {
             /** Expected Revision */
@@ -5498,6 +5759,25 @@ export interface components {
             validated_pair_count: number;
             /** Unverified Pair Count */
             unverified_pair_count: number;
+        };
+        /** Scan */
+        Scan: {
+            /**
+             * Environment
+             * @enum {string}
+             */
+            environment: "USAGE" | "DISTRIBUTION";
+            /**
+             * Relative Path
+             * @default
+             */
+            relative_path: string;
+            /** Profile Id */
+            profile_id?: string | null;
+            /** Project Id */
+            project_id?: string | null;
+            /** Request Id */
+            request_id?: string | null;
         };
         /** ScanInput */
         ScanInput: {
@@ -10420,6 +10700,324 @@ export interface operations {
             };
         };
     };
+    list_profiles_api_folder_discovery_environments_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    scan_api_folder_discovery_environments_scan_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Scan"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_api_folder_discovery_environments_previews_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Preview"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_api_folder_discovery_environments_registrations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Register"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    status_api_folder_discovery_environments_registrations__registration_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                registration_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retry_api_folder_discovery_environments_registrations__registration_id__capture_retry_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                registration_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Retry"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_api_folder_discovery_environments_profiles_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Profile"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_api_folder_discovery_environments_profiles__profile_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProfileUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    copy_api_folder_discovery_environments_profiles_from_legacy_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LegacyCopy"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    history_api_folder_discovery_environments_history_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_entries_api_semantic_vocabulary_get: {
         parameters: {
             query?: never;
@@ -11649,6 +12247,7 @@ export interface operations {
                 mode: string;
                 component_id: string;
                 basis: "DETAIL" | "REPORTED_SUMMARY";
+                run_option_id?: string | null;
                 edge_keys?: string;
                 line_indices?: string;
             };
@@ -11690,6 +12289,7 @@ export interface operations {
                 basis: "DETAIL" | "REPORTED_SUMMARY";
                 line_indices?: string;
                 position?: "TOP" | "BOT" | "LH" | "RH";
+                run_option_id?: string | null;
             };
             header?: never;
             path: {

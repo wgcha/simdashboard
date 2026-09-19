@@ -167,6 +167,76 @@ def test_one_folder_run_keeps_modes_and_scenes_isolated() -> None:
     }
 
 
+def test_direct_and_named_unknown_options_with_same_scene_never_merge() -> None:
+    header = b"Position,Layer_1\nTOP,10\n"
+    scene = "1_Face_Drop_Scene01_Face1_1st"
+    filename = "MAX_RESULT_Max_Stress_P1 (major)_Mid_C23_scene.h3d.csv"
+    parsed = _distribution_payload(
+        "Drop/run-a",
+        [
+            (f"Drop/run-a/{scene}/{filename}", header, "text/csv"),
+            (f"Drop/run-a/UNKNOWN/{scene}/{filename}", header, "text/csv"),
+            (f"Drop/run-a/CustomRaw/{scene}/{filename}", header, "text/csv"),
+        ],
+        {"run_option_labels": ["CustomRaw"]},
+    )
+
+    assert len(parsed["runs"]) == 3
+    assert {run["option_status"] for run in parsed["runs"]} == {"ABSENT", "PRESENT", "UNRESOLVED"}
+    assert {run["option_label"] for run in parsed["runs"]} == {None, "UNKNOWN", "CustomRaw"}
+    assert len({run["run_option_id"] for run in parsed["runs"]}) == 3
+    assert len({run["scenes"][0]["id"] for run in parsed["runs"]}) == 3
+
+
+def test_confirmed_hierarchy_assignments_override_legacy_folder_names() -> None:
+    case = "Root/CaseCustom"
+    load = f"{case}/LoadCustom"
+    run = f"{load}/RunCustom"
+    option = f"{run}/Raw Option"
+    scene = f"{option}/PoseCustom"
+    assignments = [
+        {"relative_path": load, "role_kind": "LOAD_CASE", "target_id": "load-custom", "raw_name": "LoadCustom"},
+        {"relative_path": run, "role_kind": "EXECUTION_RUN", "target_id": "run-custom", "raw_name": "RunCustom"},
+        {"relative_path": option, "role_kind": "RUN_OPTION", "target_id": "option-custom", "raw_name": "Raw Option", "option_status": "PRESENT"},
+        {"relative_path": scene, "role_kind": "SCENE", "target_id": "scene-custom", "raw_name": "PoseCustom"},
+    ]
+    parsed = _distribution_payload(case, [(f"{scene}/MAX_RESULT_Max_Stress_P1 (major)_Mid_C23_scene.h3d.csv", b"Position,Layer_1\nTOP,7\n", "text/csv")], {"hierarchy_assignments": assignments})
+    result = parsed["runs"][0]
+    assert (result["load_case_id"], result["id"], result["run_option_id"]) == ("load-custom", "run-custom", "option-custom")
+    assert result["option_label"] == "Raw Option"
+    assert result["scenes"][0]["id"] == "scene-custom"
+    assert result["scenes"][0]["source_name"] == "PoseCustom"
+
+
+def test_confirmed_hierarchy_without_scene_targets_uses_unique_stable_ids() -> None:
+    case = "Root/CaseCustom"
+    load = f"{case}/LoadCustom"
+    run = f"{load}/RunCustom"
+    option_a, option_b = f"{run}/Option A", f"{run}/Option B"
+    scene_a1, scene_a2, scene_b1 = f"{option_a}/Pose01", f"{option_a}/Pose02", f"{option_b}/Pose01"
+    assignments = [
+        {"relative_path": load, "role_kind": "LOAD_CASE", "target_id": "load-custom", "raw_name": "LoadCustom"},
+        {"relative_path": run, "role_kind": "EXECUTION_RUN", "target_id": "run-custom", "raw_name": "RunCustom"},
+        {"relative_path": option_a, "role_kind": "RUN_OPTION", "target_id": None, "raw_name": "Option A", "option_status": "PRESENT"},
+        {"relative_path": scene_a1, "role_kind": "SCENE", "target_id": None, "raw_name": "Pose01"},
+        {"relative_path": scene_a2, "role_kind": "SCENE", "target_id": None, "raw_name": "Pose02"},
+        {"relative_path": option_b, "role_kind": "RUN_OPTION", "target_id": None, "raw_name": "Option B", "option_status": "PRESENT"},
+        {"relative_path": scene_b1, "role_kind": "SCENE", "target_id": None, "raw_name": "Pose01"},
+    ]
+    filename = "MAX_RESULT_Max_Stress_P1 (major)_Mid_C23_scene.h3d.csv"
+    files = [(f"{scene}/{filename}", b"Position,Layer_1\nTOP,7\n", "text/csv") for scene in (scene_a1, scene_a2, scene_b1)]
+
+    first = _distribution_payload(case, files, {"hierarchy_assignments": assignments})
+    repeated = _distribution_payload(case, files, {"hierarchy_assignments": assignments})
+
+    assert len(first["runs"]) == 2
+    assert len({run_row["run_option_id"] for run_row in first["runs"]}) == 2
+    scene_ids = [scene["id"] for run_row in first["runs"] for scene in run_row["scenes"]]
+    assert len(scene_ids) == len(set(scene_ids)) == 3
+    assert "None" not in scene_ids
+    assert scene_ids == [scene["id"] for run_row in repeated["runs"] for scene in run_row["scenes"]]
+
+
 def test_contour_media_keeps_component_and_unknown_frame_provenance() -> None:
     scene = build_distribution_scene(
         "1_Face_Drop_Scene01_Face1_1st",

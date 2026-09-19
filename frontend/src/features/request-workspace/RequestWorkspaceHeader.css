@@ -25,6 +25,14 @@
 .request-review-actions > button.active::after { content:""; position:absolute; right:14px; bottom:0; left:14px; height:3px; border-radius:3px 3px 0 0; background:#245fc5; }
 .request-review-actions > button:disabled { color:#a8b2c1; cursor:not-allowed; }
 .request-journey-compact { margin-top:0; }
+.request-workspace-header--case { padding-top:16px; gap:12px; }
+.request-workspace-header--case .request-workspace-title h1 { font-size:23px; }
+.request-workspace-header--case .request-workspace-title p { margin-top:4px; font-size:12px; }
+.request-workspace-header--case .request-context-strip { grid-template-columns:repeat(2,minmax(0,1fr)); padding:8px 12px; gap:12px; }
+.request-workspace-header--case .request-context-strip label { gap:3px; }
+.request-workspace-header--case .request-context-strip select { min-height:34px; font-size:13px; }
+.request-journey--case { margin-top:12px; margin-bottom:14px; min-height:44px; }
+.request-journey--case .request-journey-item { min-width:110px; font-size:13px; }
 .dark-theme .request-workspace-header { background:#0d1c2b; color:#e8f1fb; }
 .dark-theme .request-workspace-title h1 { color:#e8f1fb; }
 .dark-theme .request-workspace-title p,.dark-theme .request-context-strip label { color:#a8b8cd; }

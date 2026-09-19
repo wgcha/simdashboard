@@ -19,6 +19,8 @@
 
 | 목적 | 문서 |
 |---|---|
+| 사용/유통환경 폴더 연결·규칙·결과 확인 실습 | [`dashboard/folder-environment-guide.md`](dashboard/folder-environment-guide.md) |
+| 환경별 계층·선택적 Run Option·컴팩트 UI 설계와 구현 범위 | [`dashboard/folder-schema-ux-plan.md`](dashboard/folder-schema-ux-plan.md) |
 | Case·사용자 Run·수집 버전 기반 사용/유통환경 대시보드 | [`dashboard/README.md`](dashboard/README.md) |
 | 표 대신 막대·점·선으로 항목별 수치를 보여주는 결과 위젯 | [`name-value-widget.md`](name-value-widget.md) |
 | 폴더 확정 후 결과 조회 자동화·업무 코드와 이름 동시 표시의 구현 계약 | [`folder-result-automation-and-selection-plan.md`](folder-result-automation-and-selection-plan.md) |

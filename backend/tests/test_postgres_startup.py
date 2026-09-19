@@ -57,6 +57,12 @@ class _PostgresStartupConnection:
                 "dashboard_cases": {"project_id", "request_id", "storage_root_id", "relative_path", "environment", "metadata_json"},
                 "dashboard_captures": {"case_id", "fingerprint", "recipe_version", "manifest_json", "payload_json"},
                 "dashboard_assets": {"capture_id", "relative_path", "sha256", "media_type", "content", "metadata_json"},
+                "folder_environment_profiles": {"environment", "rules_json", "revision"},
+                "folder_environment_scans": {"root_key", "environment", "tree_json", "profile_id"},
+                "folder_environment_previews": {"scan_id", "rows_json", "can_apply"},
+                "folder_environment_registrations": {"preview_id", "idempotency_key", "environment", "status"},
+                "folder_environment_registry": {"registration_id", "relative_path", "role_kind", "target_id"},
+                "folder_environment_capture_jobs": {"registration_id", "case_id", "status"},
             }[table]
             return _FakeResult([] if self.missing_column in columns else [(column,) for column in columns])
         raise AssertionError(f"unexpected startup query: {statement}")
@@ -85,6 +91,16 @@ def test_postgres_initialization_rejects_missing_folder_discovery_column(monkeyp
     monkeypatch.setattr(app_database, "database_settings", lambda: SimpleNamespace(backend="postgresql"))
     monkeypatch.setattr(app_database, "connect", fake_connect)
     with pytest.raises(RuntimeError, match="folder_discovery_scans"):
+        app_database.initialize_database()
+
+
+def test_postgres_startup_requires_environment_idempotency_schema_without_repair(monkeypatch):
+    connection = _PostgresStartupConnection(missing_column="idempotency_key")
+    @contextmanager
+    def fake_connect(): yield connection
+    monkeypatch.setattr(app_database, "database_settings", lambda: SimpleNamespace(backend="postgresql"))
+    monkeypatch.setattr(app_database, "connect", fake_connect)
+    with pytest.raises(RuntimeError, match="folder_environment_registrations"):
         app_database.initialize_database()
 
 
