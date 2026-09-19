@@ -78,6 +78,7 @@ def usage(capture, case_id):
     context = {**payload["context"], "simulation_case_id": case_id, "capture_id": capture["id"]}
     context["context_key"] = context_key(context)
     rows, issues = [], set()
+    issues.update(payload.get("quality_issues", []))
     for evaluation, (label, key, unit) in USAGE_KEYS.items():
         entries = [e for e in payload.get("evaluations", []) if e.get("evaluation") == evaluation]
         row = {"id": evaluation, "name": label, "status": "READY", "common": None, "front": None, "rear": None, "media": []}
@@ -179,7 +180,7 @@ def distribution(capture, run_id, mode, component, basis, edges, lines):
               "color": f"var(--color-chart-series-{color_index})", **context}
     result = {"contract_version": 1, "context": context, "status": "READY", "members": [member], "scenes": [],
               "edge_peaks": [], "series": [], "contours": [], "behaviors": [], "location_peaks": [], "quality_issues": []}
-    issues = set()
+    issues = set(capture["payload"].get("quality_issues", []))
     for scene in run["scenes"]:
         public = scene_public(scene)
         result["scenes"].append(public)
@@ -188,8 +189,12 @@ def distribution(capture, run_id, mode, component, basis, edges, lines):
         extracted = observations(scene, component, basis, lines)
         if lines != {1, 2, 3, 4}:
             extracted = [o for o in extracted if o.get("kind") == "SIDE"]
-        result["location_peaks"].append({**peak(extracted, basis=basis, scope="EXTRACTED_SIDES_AND_CORNERS" if lines == {1, 2, 3, 4} else "EXTRACTED_SELECTED_LINES"),
-            "scene_id": scene["id"], "member_id": member_id})
+        extracted_peak = peak(
+            extracted,
+            basis=basis,
+            scope="EXTRACTED_SIDES_AND_CORNERS" if lines == {1, 2, 3, 4} else "EXTRACTED_SELECTED_LINES",
+        )
+        result["location_peaks"].append({**extracted_peak, "scene_id": scene["id"], "member_id": member_id})
         selected = [v for v in values if v["edge"] in edges]
         envelope = peak(selected, complete=bool(selected) and all(v["status"] == "READY" for v in selected), basis=basis, scope="SELECTED_EDGES_ENVELOPE")
         if not edges:
@@ -204,6 +209,7 @@ def distribution(capture, run_id, mode, component, basis, edges, lines):
         asset = images[0] if len(images) == 1 else None
         result["contours"].append({"cell_id": member_id + ":" + scene["id"] + ":contour", "scene_id": scene["id"],
             "member_id": member_id, "asset": asset, "status": "READY" if asset else "AMBIGUOUS" if images else "MISSING",
+            "value": extracted_peak if extracted_peak["value"] is not None else None,
             "reason": "프레임·수치/영상 시간 정합성 미확인", "scale_status": "UNCONFIRMED"})
         for role in ("CELL", "CUSHION", "BOX"):
             candidates = [m for m in media if m.get("subject_role") == role]
@@ -262,4 +268,4 @@ def scene_detail(capture, scene_id, run_id, mode, component, basis, lines, posit
             "line_points": [{**o, "node_id": None, "alignment_node_id": o.get("alignment_node_id", o.get("node_id"))} for o in source if o.get("kind") == "SIDE" and o.get("position") == position],
             "corner_points": [o for o in source if o.get("kind") == "CORNER"],
             "assets": [m for m in scene.get("media", []) if m.get("component_id") == component],
-            "quality_issues": scene.get("quality_issues", [])}
+            "quality_issues": sorted(set(capture["payload"].get("quality_issues", [])) | set(scene.get("quality_issues", [])))}

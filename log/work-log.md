@@ -681,3 +681,27 @@
 - 문서와 무관한 소스 fast-forward는 로컬 문서를 보존하며 진행한다. 같은 문서를 원격이 변경하는 경우에는 Git의 덮어쓰기 거부를 유지하고 원래 오류 및 문서 보존 안내를 표시한다. 호출에 한해 merge.autoStash=false를 지정하여 사용자 설정에 따른 묵시적 stash를 막는다. DB·설정·원본 자료는 변경하지 않는다.
 - Astra 설계·최종 검수, Terra 구현, Luna 임시 Git 회귀, Sol 독립 검수로 진행한다. tracked/untracked 한글 문서 보존, docs 밖 소스 수정 중단, 동일 문서 충돌·autoStash 설정에서도 HEAD/내용/stash 보존 검사를 추가했다. 배포 진입점과 의존성은 유지한다.
 - 최종 Windows PowerShell 5.1 Git update self-test 및 update-entry 실패 경로 검사 PASS. Sol 독립 검수와 Astra 최종 검수 PASS. 실제 사내 PC·Server 2022 실기는 수행하지 않았다.
+
+### 2026-09-19 사용환경 Case 결과의 의뢰 단위 진입 수정
+
+- 사용자 검수에서 사용환경이 프로젝트→의뢰→해석 Case→다섯 평가 결과 순서여야 하는데 기존 하중 경우 선택을 먼저 요구하는 문제를 확인했다. SimulationDashboard를 legacy ResultsWorkspace 내부에 넣어 overview/load_case/결과 레이아웃이 있어야 접근할 수 있던 프런트엔드 연결 오류가 원인이었다. 폴더 스키마가 잘못됐다고 단정하거나 사내 저장 규칙을 삭제하지 않는다.
+- 기존 폴더 스키마/업무 생성 규칙/레시피와 신규 dashboard Case 수집은 별도 계약임을 확인했다. 과거 LOAD_CASE를 새 Simulation Case로 자동 변환하지 않으며 기존 프로젝트·의뢰·결과를 보존한다. 하중 경우가 0개인 새 의뢰에서도 Case 수집·카탈로그·다섯 평가 조회가 되는 API 회귀를 추가해 해당 파일 3 passed를 확인했다.
+- Astra 설계·통합, Terra 의뢰 단위 화면/URL 문맥, Luna 브라우저 회귀, Sol 독립 검수로 진행한다. view=case_results 진입점과 별도 Case 결과 화면을 추가하여 기존 Run 결과와 구분하고, 하중 경우·Run·레이아웃 없는 의뢰에서도 Case를 선택하도록 한다. 새 DB migration·의존성·배포 진입점 변경은 없다. 최종 화면/라우팅 검증 결과는 아래에 기록한다.
+- Sol 독립 코드 검수와 프런트엔드 production build, architecture check, workspace route registry self-test를 통과했다. Case 복원과 기존 Run 화면 진입 중 늦은 응답이 다른 프로젝트·의뢰 선택을 덮어쓰지 않도록 문맥 의도를 검사한다. Astra가 데스크톱·모바일 화면을 확인하고 Case와 기존 Run의 동시 활성 표시를 수정했다.
+- 격리 브라우저 회귀 3 passed: 전체 의뢰에 하중 경우가 없는 초기 상태의 Case 진입·다섯 평가 조회, 새로고침과 프로젝트 전환, 기존 유통환경 20 Scene 및 지연 응답 차단을 확인했다. Browser 전용 플러그인 대신 Playwright 테스트 러너를 사용했다. 실제 사내 저장 스키마·원본·운영 DB는 검사하거나 변경하지 않았으며 사내 환경 호환을 확정한 것은 아니다.
+- 최종 브라우저 재검증도 3 passed (33.2s). Case→의뢰 개요→Case 재진입 후 다섯 평가를 다시 조회하고, 활성 여정이 Case 하나뿐인지 검증했다. 데스크톱·모바일 캡처를 갱신했다. 변경은 로컬 작업 트리에 있으며 이번 수정의 원격 push·사내 배포는 수행하지 않았다.
+
+### 2026-09-19 GitHub #27 logic bug — 기존 사양 내 수정
+
+- 사용자 승인 범위에 따라 선택 버그와 기존 설계의 누락 구현만 반영했다. Astra 지휘·최종 통합, Terra 프런트 구현, Luna 수집 진단 구현, Sol 독립 검수로 진행했다. 작업 시작 시 존재하던 Case 결과 진입/라우팅 등의 미커밋 변경은 보존했다.
+- Case 범례의 빈 선택을 전체로 해석하지 않으며 전체 선택·해제 버튼을 제공한다. 서버의 NO_SELECTION은 요약 envelope 영역에 선택 없음으로 표시하고 엣지 선택기·컨투어·거동·상세 문맥은 유지한다.
+- SimulationResultGraph로 차트 기능을 분리했다. 막대·점·점과 선 전환 및 확대/ESC, Case 색·클릭 문맥·기존 막대 표시 순서를 유지한다. 점과 선은 같은 scene_id 기반 공통 범주축을 사용하며 순번/정렬 상태 미확인점과 결측에서는 선을 끊는다. 미확인 순번의 수치도 점으로는 표시한다. 시각 검수에서 발견한 Recharts 축 중복, 점 key 경고, 툴팁 단위/Case 연결, 확대 영역 높이를 보완했다.
+- 컨투어에는 기존 location_peaks의 동일 문맥 추출값만 연결한다. basis/scope/단위·부분 상태를 보존하고 이미지 최종 프레임 값으로 간주하지 않는다. 원문 이름 툴팁·자세/충돌 설명·집계/시간·Scale bar 미확인 안내를 이미지 아래에 배치하여 원본 범례를 가리지 않는다. 전치 cell_id를 유지한다.
+- 수집 허용 확장자·제외 경로·한도·안전 정책을 유지하면서 미지원/미처리 상대 경로와 이유를 quality_issues로 보존하고 조회 결과 및 한국어 안내에 전달한다. parser의 ignored_sources collector를 재사용해 CSV를 중복 파싱하지 않는다. report.csv/final.csv는 계속 수집되며 제외 디렉터리 내부를 추가 탐색하지 않는다.
+- 읽기 규칙 기록 버전 dashboard-v2 및 정렬된 수집 제외 사유를 fingerprint에 반영한다. 기존 capture는 불변이며 같은 원본·문맥·사유 반복 게시에서 기존 새 버전을 재사용한다. 제외 사유 추가/삭제, 원본 manifest/바이트 보존 및 과거 payload 불변 회귀를 추가했다.
+- 거동표 미제공 역할 행, capture PARTIAL 의미, 모호한 회차/Scene 대응, 최종 프레임·표면·설계설명 입력 계약은 변경하지 않았다. 새 DB migration·외부 의존성·배포 진입점 변경은 없다. 실제 사용자 DB·원본·설정·운영 서비스는 테스트에 사용하지 않았다.
+- 최종 백엔드 검증: dashboard queries/parser/capture/API/unprocessed_files 39 passed (45.65s). Contour 실제 조회의 basis/scope/source_refs/null 및 선택 라인 값까지 단언한다. 타입 검사·정적 production build·frontend architecture check 통과. 일반 build의 .vite-temp 생성 EPERM 때문에 프로젝트가 E2E에서 쓰는 Vite --configLoader runner로 동등한 production build를 실행했으며 소스 설정은 바꾸지 않았다. 기존 큰 chunk 경고는 남는다.
+- Browser plugin not available: 기존 Playwright+격리 DuckDB 러너를 사용했다. 브라우저 검증은 Case 결과 진입→선택 해제/복원→그래프 전환/선 분리/클릭/확대→컨투어 전치 흐름이며 최종 결과를 아래에 덧붙인다. 실제 CAE 자료 정합성 및 Windows Server 2022 폐쇄망 신규 설치/업데이트/재부팅 실기는 수행하지 않았다.
+- 최종 검증 합계: 백엔드 41 passed (기존·수집 진단 39 + contour 값 계약 2). 브라우저 7개 시나리오는 최신 전체 실행의 6 passed와 최종 그래프 단독 재검사의 1 passed(11.9s)로 모두 검증했다. 마지막 그래프 검사는 툴팁, 순서 미확인점을 포함한 점 수, 결측/미확인 선 분리, 축 순서/중복 없음, 확대 SVG 실제 높이, ESC, URL/제목, blank/overlay 없음 및 페이지/콘솔 오류·경고 없음을 단언한다. 처음 추가한 테스트의 문구 범위/범례 SVG 중복 selector를 수정했으며 수락조건은 완화하지 않았다.
+- Astra 최종 시각 검수: 1280×720 및 390×844에서 그래프 축·점/선 위치와 전환/확대 UI 확인. 합성 자료 화면 증거는 Windows TEMP의 simdashboard-issue27-qa/summary-desktop.png, summary-mobile.png, chart-desktop.png, chart-mobile.png에 저장했다. 실제 해석 이미지 검증이 아니다.
+- Windows E2E 러너는 테스트 종료 후 taskkill/child cleanup 오류로 외부 프로세스 exit 1을 반환하는 기존 환경 문제가 재현됐다. Playwright의 시나리오 판정과 이 러너 오류를 구분하며 전체 러너가 무오류 종료했다고 기록하지 않는다. 배포/실행 스크립트를 이번 기능 수정에 섞어 변경하지 않았다. Sol 독립 검수 승인 및 Astra 최종 검수 완료. 원격 commit/push·사내 배포는 수행하지 않았다.

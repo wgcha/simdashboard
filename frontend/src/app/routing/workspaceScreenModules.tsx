@@ -11,6 +11,7 @@ export const VocBoard = preloadableScreen(() => import('../../features/voc/VocBo
 export const LocalPcSettingsPage = preloadableScreen(() => import('../../features/local-pc/LocalPcSettingsPage').then((m) => ({ default: m.LocalPcSettingsPage })))
 export const WorkflowView = preloadableScreen(() => import('../../features/requests/WorkflowView').then((m) => ({ default: m.WorkflowView })))
 export const ResultsWorkspace = preloadableScreen(() => import('../../features/results/ResultsWorkspace').then((m) => ({ default: m.ResultsWorkspace })))
+export const RequestCaseResultsWorkspace = preloadableScreen(() => import('../../features/results/RequestCaseResultsWorkspace').then((m) => ({ default: m.RequestCaseResultsWorkspace })))
 export const PendingAnalysisWorkspace = preloadableScreen(() => import('../../features/results/PendingAnalysisWorkspace').then((m) => ({ default: m.PendingAnalysisWorkspace })))
 export const AnalysisPageManager = preloadableScreen(() => import('../../features/analysis/AnalysisPageManager').then((m) => ({ default: m.AnalysisPageManager })))
 export const AccessAdminPage = preloadableScreen(() => import('../../features/access/AccessAdministration').then((m) => ({ default: m.AccessAdminPage })))
@@ -22,7 +23,7 @@ export const ProjectResultProfileBinding = preloadableScreen(() => import('../..
 
 const modulesByPage: Partial<Record<WorkspacePage, { preload: () => Promise<unknown> }[]>> = {
   local_pc: [LocalPcSettingsPage],
-  dashboard: [WorkflowView, PendingAnalysisWorkspace, ResultsWorkspace],
+  dashboard: [WorkflowView, PendingAnalysisWorkspace, ResultsWorkspace, RequestCaseResultsWorkspace],
   data: [DataWorkspace], workbench: [SimulationWorkbench],
   schemas: [FolderSchemaWorkspace], variables: [VariableCatalogPage], templates: [AutomationTemplatesPage],
   examples: [FeatureExampleGallery], help: [HelpCenter], voc: [VocBoard],

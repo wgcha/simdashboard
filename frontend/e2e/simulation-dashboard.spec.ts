@@ -1,4 +1,8 @@
+import { mkdirSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { expect, test, type Page, type Route } from '@playwright/test'
+import type { DashboardDistribution } from '../src/shared/api/simulationDashboard'
 import { loginWorkspace, openWorkspaceRoute } from './workspace-test-helpers'
 
 const CASE_ID = 'case-a'
@@ -32,6 +36,34 @@ function distributionCatalog() {
     captures: [{ id: CAPTURE_ID, label: 'capture A', case_id: CASE_ID }],
     components: [{ id: COMPONENT_ID, label: COMPONENT_ID, case_id: CASE_ID, execution_run_id: RUN_ID, mode: MODE, capture_id: CAPTURE_ID }],
     bases: [{ id: 'DETAIL', label: '상세 추출값' }],
+  }
+}
+
+function usageDashboardPayload(requestId = 'request-showcase-waiting') {
+  const directions = (index: number) => ({
+    value: index * 10 + 1,
+    unit: 'mm',
+    unit_status: 'CONFIRMED',
+    completeness: 'FULL',
+    status: 'READY',
+    basis: 'REPORTED_SUMMARY',
+    scope: 'CAPTURE',
+  })
+  return {
+    context: { project_id: 'project-feature-showcase', request_id: requestId, simulation_case_id: 'usage-case', capture_id: 'usage-capture', context_key: `usage-${requestId}` },
+    status: 'READY',
+    evaluations: Array.from({ length: 5 }, (_, index) => ({
+      id: `evaluation-${index + 1}`,
+      name: `Evaluation ${index + 1}`,
+      status: 'READY',
+      common: directions(index),
+      front: directions(index + 1),
+      rear: directions(index + 2),
+      verdict: 'PASS',
+      media: [],
+      reference: null,
+    })),
+    quality_issues: [],
   }
 }
 
@@ -140,14 +172,11 @@ async function fulfillJson(route: Route, body: unknown) {
 
 async function openResults(page: Page) {
   await loginWorkspace(page)
-  await openWorkspaceRoute(page, '/workspace/overview')
-  const overview = page.getByTestId('result-overview-dashboard')
-  await overview.getByLabel('의뢰 제목, 하중 경우 검색').fill('')
-  await overview.getByRole('button', { name: '결과 검토', exact: true }).first().click()
+  await page.goto('/workspace/requests?project=project-tv-001&request=request-drop-001&view=case_results')
   await expect(page.getByRole('region', { name: 'SPDM 해석 결과 대시보드' })).toBeVisible()
 }
 
-async function installDashboardMocks(page: Page, options: { slowUsage?: boolean } = {}) {
+async function installDashboardMocks(page: Page, options: { slowUsage?: boolean; distribution?: DashboardDistribution } = {}) {
   let releaseUsage!: () => void
   const usageGate = new Promise<void>((resolve) => { releaseUsage = resolve })
   await page.route('**/api/dashboard/catalog**', async (route) => {
@@ -159,7 +188,13 @@ async function installDashboardMocks(page: Page, options: { slowUsage?: boolean 
     }
     await fulfillJson(route, distributionCatalog())
   })
-  await page.route('**/api/dashboard/distribution/runs/**', (route) => fulfillJson(route, distributionPayload()))
+  await page.route('**/api/dashboard/distribution/runs/**', (route) => {
+    const payload = structuredClone(options.distribution ?? distributionPayload()) as DashboardDistribution
+    if (new URL(route.request().url()).searchParams.get('edge_keys') === '') {
+      payload.series = payload.series.map((point) => ({ ...point, value: null, selected_edge_envelope: null, status: 'NO_SELECTION', completeness: 'NO_SELECTION' }))
+    }
+    return fulfillJson(route, payload)
+  })
   await page.route('**/api/dashboard/distribution/scenes/**', (route) => {
     const sceneId = decodeURIComponent(new URL(route.request().url()).pathname.split('/').pop() ?? '')
     return fulfillJson(route, sceneDetail(sceneId))
@@ -222,4 +257,193 @@ test('slow usage catalog cannot overwrite the selected distribution catalog', as
   await page.waitForTimeout(150)
   await expect(controls.locator('label').filter({ hasText: 'Load case' }).locator('select')).toBeVisible()
   await expect(page.getByText('다섯 평가 종합')).toHaveCount(0)
+})
+
+function comparisonRegressionPayload(): DashboardDistribution {
+  const payload = distributionPayload() as DashboardDistribution
+  const firstMember = payload.members[0]
+  payload.members.push({ ...firstMember, id: 'member-b', label: 'Case B', simulation_case_id: 'case-b', capture_id: 'capture-b', execution_run_id: 'run-b' })
+  payload.scenes.push(...payload.scenes.map((scene) => ({ ...scene, id: `${scene.id}-b`, label: `Case B · ${scene.label}` })))
+  payload.series.push(...payload.series.map((point) => ({ ...point, id: `${point.id}-b`, scene_id: `${point.scene_id}-b`, member_id: 'member-b', value: point.value === null ? null : point.value + 100, selected_edge_envelope: point.selected_edge_envelope == null ? null : point.selected_edge_envelope + 100 })))
+  payload.edge_peaks.push(...payload.edge_peaks.map((point) => ({ ...point, scene_id: `${point.scene_id}-b`, member_id: 'member-b', value: point.value === null ? null : point.value + 100 })))
+  return payload
+}
+
+test('Case legend preserves an empty selection and stable colors when hiding and restoring cases', async ({ page }) => {
+  await installDashboardMocks(page, { distribution: comparisonRegressionPayload() })
+  await openResults(page)
+  await chooseDistribution(page)
+  await page.getByRole('button', { name: '엣지별 수준', exact: true }).click()
+  const legend = page.getByRole('group', { name: 'Case 범례' })
+  const caseA = legend.getByRole('checkbox', { name: 'Case A', exact: true })
+  const caseB = legend.getByRole('checkbox', { name: 'Case B', exact: true })
+  const colorB = await caseB.locator('..').locator('i').getAttribute('style')
+  await caseA.uncheck()
+  await expect(caseB).toBeChecked()
+  await expect(caseB.locator('..').locator('i')).toHaveAttribute('style', colorB!)
+  await caseB.uncheck()
+  await expect(caseA).not.toBeChecked()
+  await expect(caseB).not.toBeChecked()
+  await expect(page.locator('.simulation-dashboard__edge-panels .recharts-bar-rectangle')).toHaveCount(0)
+  await page.getByRole('button', { name: '전체 선택', exact: true }).click()
+  await expect(caseA).toBeChecked()
+  await expect(caseB).toBeChecked()
+  await page.getByRole('button', { name: '전체 해제', exact: true }).click()
+  await expect(caseA).not.toBeChecked()
+  await expect(caseB).not.toBeChecked()
+  await caseB.check()
+  await expect(caseA).not.toBeChecked()
+  await expect(caseB).toBeChecked()
+  await page.getByTestId('simulation-chart-edge-TOP').locator('.recharts-bar-rectangle').last().click()
+  await expect(page.getByText('Scene 상세 · scene-20-b', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '전체 선택', exact: true }).click()
+  for (const graphMode of ['dot', 'line']) {
+    await page.getByLabel('TOP 엣지 수준 그래프 종류', { exact: true }).selectOption(graphMode)
+    const chart = page.getByTestId('simulation-chart-edge-TOP')
+    await expect(chart.locator('.recharts-line-dot')).toHaveCount(40)
+    await chart.locator('.recharts-line-dot').last().click()
+    await expect(page.getByText('Scene 상세 · scene-20-b', { exact: true })).toBeVisible()
+  }
+})
+
+test('clearing every edge shows no selection and selecting an edge restores the summary', async ({ page }) => {
+  await installDashboardMocks(page)
+  await openResults(page)
+  await chooseDistribution(page)
+  const picker = page.locator('.simulation-dashboard__toolbar').getByRole('checkbox')
+  // Only edge controls, leaving the four line controls selected.
+  for (const edge of ['TOP', 'BOTTOM', 'LEFT', 'RIGHT']) await picker.and(page.getByRole('checkbox', { name: edge, exact: true })).uncheck()
+  await expect(page.locator('.simulation-dashboard__summary')).toContainText('선택 없음')
+  await expect(page.locator('.simulation-dashboard__summary .recharts-bar-rectangle')).toHaveCount(0)
+  await page.getByRole('checkbox', { name: 'TOP', exact: true }).check()
+  await expect(page.locator('.simulation-dashboard__summary .recharts-bar-rectangle')).toHaveCount(20)
+})
+
+test('chart modes preserve missing and unordered scenes and expanded charts close with Escape', async ({ page }) => {
+  const payload = distributionPayload() as DashboardDistribution
+  payload.scenes[18] = { ...payload.scenes[18], scene_sequence_number: null, order_status: 'UNCONFIRMED' }
+  await installDashboardMocks(page, { distribution: payload })
+  const errors: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  await openResults(page)
+  await chooseDistribution(page)
+  // The login flow intentionally probes /auth/me before authentication (401).
+  // Collect console health for the dashboard interaction after that handshake.
+  page.on('console', (message) => { if (message.type() === 'error' || message.type() === 'warning') errors.push(message.text()) })
+  const summary = page.getByTestId('simulation-chart-summary')
+  const mode = page.getByLabel('Scene별 엣지 최대응력 그래프 종류', { exact: true })
+  await mode.selectOption('dot')
+  await expect(summary.locator('.recharts-bar')).toHaveCount(0)
+  await expect(summary.locator('.recharts-line-dot')).toHaveCount(19)
+  await summary.locator('.recharts-line-dot').nth(8).hover()
+  await expect(summary.locator('.recharts-tooltip-wrapper')).toContainText('Case A')
+  await summary.locator('.recharts-line-dot').last().click()
+  await expect(page.getByText('Scene 상세 · scene-20', { exact: true })).toBeVisible()
+  await mode.selectOption('line')
+  await expect(page.locator('.simulation-dashboard__summary .simulation-dashboard__chart-notice')).toContainText('미확인')
+  await expect(summary.locator('.recharts-line-dot')).toHaveCount(19)
+  const paths = await summary.locator('.recharts-line-curve:not([stroke="transparent"])').evaluateAll((nodes) => nodes.map((node) => node.getAttribute('d') ?? ''))
+  // Missing Scene12 and unordered Scene19 must interrupt the connected line.
+  expect(paths.join('').split('M').length - 1).toBeGreaterThanOrEqual(3)
+  const numericTicks = (await summary.locator('.recharts-xAxis .recharts-cartesian-axis-tick-value').allTextContents()).filter((label) => /^\d+$/.test(label)).map(Number)
+  expect(numericTicks).toEqual([...numericTicks].sort((left, right) => left - right))
+  expect(new Set(numericTicks).size).toBe(numericTicks.length)
+  await page.getByRole('button', { name: 'Scene별 엣지 최대응력 그래프 확대', exact: true }).click()
+  await expect(page.getByRole('dialog')).toBeVisible()
+  await expect(page.getByRole('dialog')).toContainText('Scene별 엣지 최대응력')
+  await expect.poll(async () => (await page.getByRole('dialog').locator('.recharts-wrapper > svg.recharts-surface').boundingBox())?.height ?? 0).toBeGreaterThan(250)
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('dialog')).not.toBeVisible()
+  await expect(page).toHaveURL(/view=case_results/)
+  expect(await page.title()).not.toBe('')
+  await expect(page.locator('vite-error-overlay')).toHaveCount(0)
+  const evidence = join(tmpdir(), 'simdashboard-issue27-qa')
+  mkdirSync(evidence, { recursive: true })
+  await page.screenshot({ path: join(evidence, 'chart-desktop.png'), fullPage: true })
+  await page.locator('.simulation-dashboard__summary').screenshot({ path: join(evidence, 'summary-desktop.png') })
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expect(mode).toBeVisible()
+  await page.screenshot({ path: join(evidence, 'chart-mobile.png'), fullPage: true })
+  await page.locator('.simulation-dashboard__summary').screenshot({ path: join(evidence, 'summary-mobile.png') })
+  expect(errors).toEqual([])
+})
+
+test('contour values retain scope and unknown timing with descriptions and scale guidance after transpose', async ({ page }) => {
+  const payload = distributionPayload() as DashboardDistribution
+  payload.contours[19].value = { value: 20, unit: null, scope: 'SELECTED_EDGE_LINES', basis: 'DETAIL', status: 'READY' }
+  payload.quality_issues = ['UNPROCESSED_FILE:case/Drop/run/Scene/notes.txt:UNSUPPORTED_EXTENSION']
+  await installDashboardMocks(page, { distribution: payload })
+  await openResults(page)
+  await chooseDistribution(page)
+  await page.getByRole('button', { name: '컨투어', exact: true }).click()
+  const matrix = page.locator('.simulation-dashboard__matrix')
+  const cell = page.locator('[data-cell-id="cell-scene-20-member-a"]')
+  await expect(matrix).toContainText('Scale bar')
+  await expect(matrix).toContainText('미확인')
+  await expect(matrix).toContainText('Face1')
+  await expect(cell).toContainText('20')
+  await expect(cell).toContainText('단위 미확인')
+  await expect(cell).toContainText('시간')
+  await expect(cell).toContainText('상세 추출')
+  await expect(page.locator('.simulation-dashboard__issues')).toContainText('미지원 확장자')
+  await expect(matrix.locator('[title="20_Face_Drop_Scene20"]')).toHaveCount(1)
+  await page.getByRole('button', { name: '행/열 전치', exact: true }).click()
+  await expect(cell).toHaveCount(1)
+  await expect(cell).toContainText('20')
+  await cell.click()
+  await expect(page.getByText('Scene 상세 · scene-20', { exact: true })).toBeVisible()
+})
+
+test('fresh request reaches the Case usage review and clears prior capture context on request switch', async ({ page }) => {
+  await page.route('**/api/requests/*/load-cases**', (route) => fulfillJson(route, []))
+  await page.route('**/api/dashboard/catalog**', async (route) => {
+    const url = new URL(route.request().url())
+    if (url.searchParams.get('environment') === 'USAGE' && url.searchParams.get('request_id') === 'request-showcase-waiting') return fulfillJson(route, usageCatalog())
+    return fulfillJson(route, { ...usageCatalog(), cases: [], captures: [] })
+  })
+  await page.route('**/api/dashboard/usage/cases/**', (route) => fulfillJson(route, usageDashboardPayload()))
+  await loginWorkspace(page, 'e2e-viewer', '/workspace/requests?project=project-feature-showcase&request=request-showcase-waiting')
+
+  const project = page.getByLabel('프로젝트 선택', { exact: true })
+  const request = page.getByLabel('의뢰 선택', { exact: true })
+  await expect(project).toHaveValue('project-feature-showcase')
+  await expect(request).toHaveValue('request-showcase-waiting')
+  await page.getByRole('button', { name: 'Case 결과', exact: true }).click()
+  const controls = page.locator('.simulation-dashboard__controls')
+  const caseSelect = controls.locator('label').filter({ hasText: /Simulation Case|Case/ }).locator('select').first()
+  const captureSelect = controls.locator('label').filter({ hasText: 'Capture' }).locator('select').first()
+  await expect(caseSelect).toBeVisible()
+  await expect(caseSelect.locator('option', { hasText: 'Usage Case' })).toHaveCount(1)
+  await caseSelect.selectOption('usage-case')
+  await captureSelect.selectOption('usage-capture')
+  await expect(page.getByTestId('usage-dashboard')).toBeVisible()
+  await expect(page.getByTestId('usage-dashboard').locator('tbody tr')).toHaveCount(5)
+  await expect(page.getByTestId('usage-dashboard').locator('thead')).toContainText('전방')
+  await expect(page.getByTestId('usage-dashboard')).toContainText('11 mm')
+  const caseResultsButton = page.getByRole('button', { name: 'Case 결과', exact: true })
+  await expect(caseResultsButton).toHaveAttribute('aria-current', 'step')
+  await expect(page.locator('.request-journey [aria-current="step"]')).toHaveCount(1)
+  await page.getByRole('button', { name: '의뢰 개요', exact: true }).click()
+  await expect(caseResultsButton).toBeVisible()
+  await caseResultsButton.click()
+  await expect(caseSelect).toBeVisible()
+  await expect(page.locator('.request-results-refresh')).toHaveCount(0)
+  await caseSelect.selectOption('usage-case')
+  await captureSelect.selectOption('usage-capture')
+  await expect(page.getByTestId('usage-dashboard').locator('tbody tr')).toHaveCount(5)
+  await expect(page.getByLabel('하중 경우 선택', { exact: true })).toHaveCount(0)
+  await expect(page.locator('.request-results-refresh')).toHaveCount(0)
+  await page.reload()
+  await expect(caseSelect).toBeVisible()
+  await expect(page.getByTestId('usage-dashboard')).toHaveCount(0)
+  await expect(page.getByLabel('하중 경우 선택', { exact: true })).toHaveCount(0)
+  const outputDirectory = join(process.cwd(), '..', 'output')
+  mkdirSync(outputDirectory, { recursive: true })
+  await page.screenshot({ path: join(outputDirectory, 'usage-case-entry-desktop.png'), fullPage: true })
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.screenshot({ path: join(outputDirectory, 'usage-case-entry-mobile.png'), fullPage: true })
+
+  await project.selectOption('project-tv-001')
+  await expect(request).not.toHaveValue('request-showcase-waiting')
+  await expect(page.getByTestId('usage-dashboard')).toHaveCount(0)
 })

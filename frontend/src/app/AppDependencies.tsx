@@ -1,7 +1,7 @@
 import { LoaderCircle } from 'lucide-react'
 import type { WidgetCatalogItem } from '../types'
 
-export { DataWorkspace, FolderSchemaWorkspace, VariableCatalogPage, AutomationTemplatesPage, FeatureExampleGallery, HelpCenter, WorkflowView, ResultsWorkspace, PendingAnalysisWorkspace, AnalysisPageManager } from './routing/workspaceScreenModules'
+export { DataWorkspace, FolderSchemaWorkspace, VariableCatalogPage, AutomationTemplatesPage, FeatureExampleGallery, HelpCenter, WorkflowView, ResultsWorkspace, RequestCaseResultsWorkspace, PendingAnalysisWorkspace, AnalysisPageManager } from './routing/workspaceScreenModules'
 
 export function FeatureScreenFallback() {
   return <div className="full-state"><LoaderCircle className="spin" /> 화면을 준비하고 있습니다.</div>

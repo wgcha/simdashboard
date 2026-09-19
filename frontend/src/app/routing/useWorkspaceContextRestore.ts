@@ -1,18 +1,21 @@
 import { useEffect } from 'react'
 import { api } from '../../api'
 import { visiblePages, type ActiveView } from '../../features/analysis/pageSelection'
+import { CASE_RESULTS_VIEW } from './caseResultsRouting'
 import type { AnalysisRequest, LoadCase, Overview, Project } from '../../types'
 import type { WorkspaceContextQuery } from './useWorkspaceNavigation'
 
 type RestoreTarget = { projectId?: string; requests?: AnalysisRequest[]; requestId?: string; loadCases?: LoadCase[] }
 
-export function useWorkspaceContextRestore({ enabled, context, projects, beginIntent, isCurrentIntent, onInvalid, onMonitoringContext, onAnalysisContext, onVirtualResultLayout, onSettled }: {
+export function useWorkspaceContextRestore({ enabled, context, projects, beginIntent, isCurrentIntent, onInvalid, onMonitoringContext, onCaseResultsContext, onAnalysisContext, onVirtualResultLayout, onSettled }: {
   enabled: boolean; context: WorkspaceContextQuery; projects: Project[]; beginIntent: () => number; isCurrentIntent: (intent: number) => boolean
   onInvalid: (message: string, target?: RestoreTarget) => void; onMonitoringContext: (projectId: string, requestId: string, loadCaseId?: string) => Promise<unknown>
+  onCaseResultsContext: (projectId: string, requestId: string, intent: number) => Promise<unknown>
   onAnalysisContext: (projectId: string, requestId: string, view: ActiveView, loadCaseId?: string, pageId?: string, runId?: string) => Promise<unknown>; onVirtualResultLayout: () => void; onSettled: () => void
 }) {
   useEffect(() => {
     if (!enabled || !context.projectId) return
+    const caseResults = context.view === CASE_RESULTS_VIEW
     const preferredView: ActiveView = context.view === 'open_cell' || context.view === 'chassis' || context.view === 'custom' || context.view === 'compare' || context.view === 'workflow' ? context.view : 'workflow'
     void (async () => {
       const intent = beginIntent()
@@ -23,6 +26,11 @@ export function useWorkspaceContextRestore({ enabled, context, projects, beginIn
         const requests = await api.requests(projectId)
         const request = requests.find((item) => item.id === context.requestId)
         if (!request) return reject('요청한 의뢰 문맥을 열 수 없습니다. 의뢰 개요로 이동했습니다.', { projectId, requests })
+        if (caseResults) {
+          if (!isCurrentIntent(intent)) return
+          await onCaseResultsContext(projectId, request.id, intent)
+          return
+        }
         const loadCases = await api.loadCases(request.id)
         const loadCase = context.loadCaseId ? loadCases.find((item) => item.id === context.loadCaseId) : undefined
         if (context.loadCaseId && !loadCase) return reject('요청한 의뢰 문맥을 열 수 없습니다. 의뢰 개요로 이동했습니다.', { projectId, requests, requestId: request.id, loadCases })

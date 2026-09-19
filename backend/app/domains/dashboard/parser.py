@@ -266,7 +266,11 @@ def _peak(observations: list[dict[str, Any]], basis: str | None = None) -> dict[
     return {"basis": basis or "DETAIL", "scope": "EXTRACTED_SIDES_AND_CORNERS", "quantity": "Max_Stress_P1 (major)_Mid", "value": maximum, "unit": None, "unit_status": "UNCONFIRMED", "locations": locations}
 
 
-def build_distribution_scene(scene_name: str, files: Iterable[tuple[str, bytes]]) -> dict[str, Any]:
+def build_distribution_scene(
+    scene_name: str,
+    files: Iterable[tuple[str, bytes]],
+    ignored_sources: list[str] | None = None,
+) -> dict[str, Any]:
     scene = parse_scene_name(scene_name)
     observations: list[dict[str, Any]] = []
     media: list[dict[str, Any]] = []
@@ -289,6 +293,8 @@ def build_distribution_scene(scene_name: str, files: Iterable[tuple[str, bytes]]
                 components.add(parsed["component_id"])
             if parsed.get("status") == "SOURCE_PARSE_ERROR":
                 quality.append("SOURCE_PARSE_ERROR")
+            elif parsed.get("status") == "IGNORED" and ignored_sources is not None:
+                ignored_sources.append(relative)
         elif suffix in {".jpg", ".jpeg", ".png", ".mp4", ".webm"}:
             media.append({"asset_id": hashlib.sha256(relative.encode()).hexdigest()[:20], "relative_path": relative, "kind": "VIDEO" if suffix in {".mp4", ".webm"} else "IMAGE", "status": "READY", "component_id": _component_from_name(PurePosixPath(relative).name), "subject_role": "UNKNOWN", "frame_role": "UNKNOWN"})
     # A peak without an explicit Component and basis would mix independent

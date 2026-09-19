@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 from pathlib import Path
 from uuid import uuid4
 
@@ -76,6 +77,55 @@ def _capture_body(project_id: str, request_id: str, relative: str, environment: 
         "root_relative_path": relative,
         "environment": environment,
     }
+
+
+def test_usage_case_capture_and_five_evaluations_need_no_legacy_load_case(tmp_path, monkeypatch):
+    root = tmp_path / "request-only-shared"
+    files = {
+        "Settle/model_settle_result.json": {"Set Tilt Angle @ Settle (deg)": 1.18},
+        "Wobble/model_wobble_center_front_result.json": {"Wobble Disp. (mm)": -2.5},
+        "Horizontal_Force_Angle/model_horizontal_force_angle_front_result.json": {"Set Tilt Angle Difference (deg)": 3.0},
+        "Slope_Angle/model_slope_angle_front_result.json": {"Slope Angle (deg)": 8.0, "OK/NG": "OK"},
+        "Slope_Angle_360/model_slope_angle_front_360_result.json": {"OK/NG": "NG"},
+    }
+    for relative, values in files.items():
+        path = root / "usage-case" / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(values), encoding="utf-8")
+    monkeypatch.setenv("SIMDASH_SPDM_ROOT", str(root))
+    monkeypatch.setenv("AUTH_MODE", "password")
+    monkeypatch.setenv("AUTH_SECRET_KEY", "request-only-dashboard-test-secret-at-least-32-characters")
+    initialize_database()
+    project_id, _ = _request_context()
+    request_id = "usage-request-without-load-case"
+    with connect() as conn:
+        conn.execute("""INSERT INTO analysis_requests
+            (id,project_id,title,status,owner,requested_at,due_at,overall_note)
+            VALUES (?,?,'Usage request','READY','test',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,'')""",
+            [request_id, project_id])
+        assert conn.execute("SELECT count(*) FROM load_cases WHERE request_id=?", [request_id]).fetchone()[0] == 0
+    admin = _create_user(project_id, role="admin", global_admin=True)
+    with TestClient(app) as client:
+        headers = _login(client, admin)
+        result = client.post("/api/dashboard/captures", headers=headers,
+            json=_capture_body(project_id, request_id, "usage-case", "USAGE"))
+        assert result.status_code == 200, result.text
+        capture = result.json()
+        catalog = client.get("/api/dashboard/catalog", headers=headers,
+            params={"request_id": request_id, "environment": "USAGE"})
+        assert catalog.status_code == 200, catalog.text
+        assert [item["id"] for item in catalog.json()["cases"]] == [capture["case_id"]]
+        assert catalog.json()["load_cases"] == []
+        response = client.get(f"/api/dashboard/usage/cases/{capture['case_id']}", headers=headers,
+            params={"capture_id": capture["id"]})
+        assert response.status_code == 200, response.text
+        rows = {item["id"]: item for item in response.json()["evaluations"]}
+        assert len(rows) == 5
+        assert rows["Settle"]["common"]["value"] == 1.18
+        assert rows["Wobble"]["front"]["value"] == -2.5
+        assert rows["Slope_Angle_360"]["front"]["verdict"] == "NG"
+    with connect() as conn:
+        assert conn.execute("SELECT count(*) FROM load_cases WHERE request_id=?", [request_id]).fetchone()[0] == 0
 
 
 def test_dashboard_scan_publish_read_permissions_and_asset_ranges(

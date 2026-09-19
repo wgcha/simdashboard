@@ -8,6 +8,7 @@ type Props = {
     onLoadCaseChange: (id: string) => void
     onOpenData: () => void
     onOpenWorkbench: () => void
+    onOpenCaseResults: () => void
     onProjectChange: (id: string) => void
     onRequestChange: (id: string) => void
     onReviewDomain: () => void
@@ -28,6 +29,7 @@ type Props = {
     canOpenData: boolean
     canOpenWorkbench: boolean
     canRefreshResults?: boolean
+    caseResultsMode: boolean
     resultsRefreshing?: boolean
     contextChanging: boolean
     loadCases: LoadCase[]
@@ -53,16 +55,17 @@ type Props = {
 
 /** Application-level assembly keeps request navigation controls identical on all four tabs. */
 export function RequestWorkspaceShellHeader({ actions, model, onBeginReview, isCurrentReview, loadLayout, onReviewError, onRunChange }: Props) {
-  const { activeDashboardId, activeTab, activeView, analysisRunChanging, analysisRunError, analysisRuns, analysisRunsLoading, canOpenData, canOpenWorkbench, canRefreshResults, resultsRefreshing, contextChanging, loadCases, overview, owner, projectId, projects, requestContextLoading, requestId, requests, selectedAnalysisRunId, selectedLoadCaseId, selectedWorkflow, status, title } = model
+  const { activeDashboardId, activeTab, activeView, analysisRunChanging, analysisRunError, analysisRuns, analysisRunsLoading, canOpenData, canOpenWorkbench, canRefreshResults, caseResultsMode, resultsRefreshing, contextChanging, loadCases, overview, owner, projectId, projects, requestContextLoading, requestId, requests, selectedAnalysisRunId, selectedLoadCaseId, selectedWorkflow, status, title } = model
   const completedCount = selectedWorkflow ? `${selectedWorkflow.steps.filter((step) => step.status === 'COMPLETED').length} / ${selectedWorkflow.total_count ?? selectedWorkflow.steps.length} 작업 완료` : undefined
   // Snapshot and unconfigured review layouts also render one selected immutable Run.
-  const showRunSelector = activeTab === 'review'
+  const showRunSelector = activeTab === 'review' && !caseResultsMode
   return <RequestWorkspaceHeader
     activeTab={activeTab}
     activeView={activeView}
     activeRunSelector={showRunSelector ? <ResultVersionSelector runs={analysisRuns} selectedRunId={selectedAnalysisRunId} loading={analysisRunsLoading || contextChanging} changing={analysisRunChanging} error={analysisRunError} onChange={onRunChange} /> : undefined}
     canOpenData={canOpenData}
     canOpenWorkbench={canOpenWorkbench}
+    caseResultsMode={caseResultsMode}
     contextChanging={contextChanging}
     completedCount={completedCount}
     loadCases={loadCases}
@@ -80,9 +83,9 @@ export function RequestWorkspaceShellHeader({ actions, model, onBeginReview, isC
     projects={projects}
     requestId={requestId}
     requests={requests}
-    resultReviewTab={<ResultLayoutDetailTab
-      active={activeTab === 'review'}
-      label="결과 검토"
+    resultReviewTab={<div className="request-review-actions"><button type="button" className={caseResultsMode ? 'active' : ''} aria-current={caseResultsMode ? 'step' : undefined} disabled={!requestId || contextChanging} onClick={actions.onOpenCaseResults}>Case 결과</button><ResultLayoutDetailTab
+      active={activeTab === 'review' && !caseResultsMode}
+      label="기존 Run 대시보드"
       requestId={requestId}
       requestContextLoading={requestContextLoading || contextChanging}
       analysisLabel={selectedLoadCaseId ? overview?.load_case.analysis_type.replace('_', ' ') ?? '결과 대기' : '하중 경우 미지정'}
@@ -94,7 +97,7 @@ export function RequestWorkspaceShellHeader({ actions, model, onBeginReview, isC
       onDomain={actions.onReviewDomain}
       onUnconfigured={actions.onReviewUnconfigured}
       onError={onReviewError}
-    />}
+    /></div>}
     selectedLoadCaseId={selectedLoadCaseId}
     status={status}
     title={title}

@@ -160,7 +160,36 @@ def discover_cases(conn: ConnectionLike, relative_path: str = "", environment: s
     return {"contract_version": 1, "storage_root_id": root_id, "environment": environment, "cases": cases, "issues": sorted(issues)}
 
 
-def _walk(root: Path, relative: str) -> list[tuple[str, bytes, str]]:
+def _safe_issue_path(root: Path, path: Path) -> str:
+    """Return a bounded, root-relative path suitable for a quality issue.
+
+    Quality issues are persisted and returned to users, so they must never
+    contain the configured storage root or control characters from a source
+    filename.  The walk has already confined ``path`` below ``root``; this
+    helper only makes that safe relative representation explicit.
+    """
+    try:
+        value = path.relative_to(root).as_posix()
+    except ValueError:
+        value = path.name
+    return _safe_issue_relative(value)
+
+
+def _safe_issue_relative(value: str) -> str:
+    value = "".join(char if ord(char) >= 0x20 and char != "\x7f" else "?" for char in str(value))
+    return value[:512]
+
+
+def _unprocessed_issue(root: Path, path: Path, reason: str) -> str:
+    return f"UNPROCESSED_FILE:{_safe_issue_path(root, path)}:{reason}"
+
+
+def _walk(
+    root: Path,
+    relative: str,
+    *,
+    issues: list[str] | None = None,
+) -> list[tuple[str, bytes, str]]:
     base = _safe_target(root, relative)
     excluded = {"cad", "report", "reports", "final", "validation", "library"}
     allowed = {".csv", ".json", ".jpg", ".jpeg", ".png", ".mp4", ".webm"}
@@ -177,15 +206,22 @@ def _walk(root: Path, relative: str) -> list[tuple[str, bytes, str]]:
                     if visited > 20000:
                         raise DashboardCaptureError("DASHBOARD_SCAN_LIMIT", "결과 파일 조사 범위를 초과했습니다.")
                     path = Path(entry.path)
-                    if entry.name.startswith(".") or entry.name.casefold() in excluded:
+                    if entry.name.startswith("."):
+                        continue
+                    if entry.name.casefold() in excluded:
+                        if issues is not None:
+                            issues.append(_unprocessed_issue(root, path, "EXCLUDED_DIRECTORY"))
                         continue
                     spdm_storage._assert_safe_existing(path, root)
                     if entry.is_dir(follow_symlinks=False):
                         stack.append((path, depth + 1))
-                    elif entry.is_file(follow_symlinks=False) and path.suffix.casefold() in allowed:
-                        items.append(path)
-                        if len(items) > 10000:
-                            raise DashboardCaptureError("DASHBOARD_CAPTURE_TOO_LARGE", "결과 파일 수 제한을 초과했습니다.")
+                    elif entry.is_file(follow_symlinks=False):
+                        if path.suffix.casefold() in allowed:
+                            items.append(path)
+                            if len(items) > 10000:
+                                raise DashboardCaptureError("DASHBOARD_CAPTURE_TOO_LARGE", "결과 파일 수 제한을 초과했습니다.")
+                        elif issues is not None:
+                            issues.append(_unprocessed_issue(root, path, "UNSUPPORTED_EXTENSION"))
         result, total, signatures = [], 0, []
         for item in sorted(items, key=lambda path: path.as_posix()):
             spdm_storage._assert_safe_existing(item, root)
@@ -234,10 +270,13 @@ def create_capture(conn: ConnectionLike, payload: dict[str, Any], *, actor: str)
         if storage_root_id != _root_id(root):
             raise DashboardCaptureError("DASHBOARD_ROOT_ID_INVALID", "설정된 저장소와 storage_root_id가 일치하지 않습니다.")
     _validate_case_root(root, relative, str(payload["environment"]))
-    files = _walk(root, relative)
+    walk_issues: list[str] = []
+    files = _walk(root, relative, issues=walk_issues)
     manifest = [{"relative_path": path, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data), "media_type": media_type} for path, data, media_type in files]
-    recipe_version = "dashboard-v1"
+    recipe_version = "dashboard-v2"
     fingerprint_context = {key: payload.get(key) for key in ("project_id", "request_id", "simulation_case_id", "load_case_id", "execution_run_id", "mode", "component_id")}
+    if walk_issues:
+        fingerprint_context["quality_issues"] = sorted(set(walk_issues))
     digest = fingerprint({"files": manifest, "context": fingerprint_context}, recipe_version)
     storage_root_id = str(payload["storage_root_id"])
     case_id = _case_id(storage_root_id, relative)
@@ -263,8 +302,12 @@ def create_capture(conn: ConnectionLike, payload: dict[str, Any], *, actor: str)
         for path, data, _ in files:
             grouped.setdefault(PurePosixPath(path).parts[0] if PurePosixPath(path).parts else "", []).append((path, data))
         parsed = {"environment": "USAGE", "context": context, **_usage_payload(grouped)}
+        if walk_issues:
+            parsed["quality_issues"] = sorted(set(walk_issues))
     else:
-        parsed = {"environment": "DISTRIBUTION", "context": context, **_distribution_payload(relative, files, context, storage_root_id)}
+        parsed = {"environment": "DISTRIBUTION", "context": context, **_distribution_payload(
+            relative, files, context, storage_root_id, scan_issues=walk_issues
+        )}
     if payload["environment"] == "USAGE":
         from .dashboard_queries import usage
         status = usage({"id": capture_id, "case_id": case_id, "environment": "USAGE", "payload": parsed}, case_id)["status"]
@@ -363,25 +406,36 @@ def _usage_payload(grouped: dict[str, list[tuple[str, bytes]]]) -> dict[str, Any
     return {"evaluation_names": picked["evaluation_names"], "evaluations": result}
 
 
-def _distribution_payload(relative: str, files: list[tuple[str, bytes, str]], context: dict[str, Any] | None = None, storage_root_id: str = "") -> dict[str, Any]:
+def _distribution_payload(
+    relative: str,
+    files: list[tuple[str, bytes, str]],
+    context: dict[str, Any] | None = None,
+    storage_root_id: str = "",
+    *,
+    scan_issues: list[str] | None = None,
+) -> dict[str, Any]:
     base = PurePosixPath(relative)
     context = context or {}
     scene_files: dict[tuple[str, str, str], list[tuple[str, bytes]]] = {}
     run_meta: dict[tuple[str, str], dict[str, Any]] = {}
+    quality_issues = set(scan_issues or ())
     for path, data, _ in files:
         try:
             tail = PurePosixPath(path).relative_to(base).parts
         except ValueError:
+            quality_issues.add(f"UNPROCESSED_FILE:{_safe_issue_relative(path)}:OUTSIDE_CAPTURE_ROOT")
             continue
         directories = list(tail[:-1])
         # Production capture roots are Cases. The pure helper also accepts a
         # Run root for isolated parser fixtures; it never changes persisted Case identity.
         if directories and directories[0].casefold() in {"drop", "clamping"}:
             if len(directories) < 3:
+                quality_issues.add(f"UNPROCESSED_FILE:{_safe_issue_relative(path)}:INCOMPLETE_RESULT_PATH")
                 continue
             load_case, run_name = directories[:2]
             remaining = directories[2:]
         elif context.get("simulation_case_id"):
+            quality_issues.add(f"UNPROCESSED_FILE:{_safe_issue_relative(path)}:UNKNOWN_LOAD_CASE_DIRECTORY")
             continue
         else:
             load_case, run_name = base.parent.name, base.name
@@ -392,8 +446,12 @@ def _distribution_payload(relative: str, files: list[tuple[str, bytes, str]], co
         else:
             mode = "UNKNOWN"
         if len(remaining) != 1:
+            quality_issues.add(f"UNPROCESSED_FILE:{_safe_issue_relative(path)}:UNEXPECTED_RESULT_PATH_DEPTH")
             continue
         scene = remaining[0]
+        suffix = PurePosixPath(path).suffix.casefold()
+        if suffix == ".json":
+            quality_issues.add(f"UNPROCESSED_FILE:{_safe_issue_relative(path)}:UNSUPPORTED_DISTRIBUTION_FORMAT")
         run_identity = f"{storage_root_id}:{relative}:{load_case}/{run_name}"
         run_id = "run-" + hashlib.sha256(run_identity.encode()).hexdigest()[:24]
         load_id = "load-" + hashlib.sha256(f"{storage_root_id}:{relative}:{load_case}".encode()).hexdigest()[:24]
@@ -403,7 +461,12 @@ def _distribution_payload(relative: str, files: list[tuple[str, bytes, str]], co
     scenes = []
     runs: dict[tuple[str, str], list[dict[str, Any]]] = {key: [] for key in run_meta}
     for (run_id, mode, scene), grouped in sorted(scene_files.items(), key=lambda item: (parse_scene_name(item[0][2]).get("scene_sequence_number") is None, parse_scene_name(item[0][2]).get("scene_sequence_number") or 0, item[0][2].casefold())):
-        item = build_distribution_scene(scene, grouped)
+        ignored_sources: list[str] = []
+        item = build_distribution_scene(scene, grouped, ignored_sources)
+        quality_issues.update(
+            f"UNPROCESSED_FILE:{_safe_issue_relative(source)}:UNRECOGNIZED_RESULT_FILE"
+            for source in ignored_sources
+        )
         item["id"] = "scene-" + hashlib.sha256(f"{run_id}|{mode}|{scene}".encode()).hexdigest()[:24]
         item["label"] = scene
         item["run_id"] = run_id
@@ -411,7 +474,8 @@ def _distribution_payload(relative: str, files: list[tuple[str, bytes, str]], co
         scenes.append(item)
         runs[(run_id, mode)].append(item)
     run_rows = [{**meta, "scenes": runs[key]} for key, meta in run_meta.items()]
-    return {"run": run_rows[0] if len(run_rows) == 1 else {"source_name": base.name}, "runs": run_rows, "scenes": scenes}
+    return {"run": run_rows[0] if len(run_rows) == 1 else {"source_name": base.name}, "runs": run_rows,
+            "scenes": scenes, "quality_issues": sorted(quality_issues)}
 
 
 def get_capture(conn: ConnectionLike, capture_id: str) -> dict[str, Any] | None:
