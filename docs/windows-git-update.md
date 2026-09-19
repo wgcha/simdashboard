@@ -44,6 +44,22 @@ Windows 사내 IP 접속 설정 변경은 [사내 접속 가이드](windows-lan-
 
 ## 실패했을 때
 
+### Git plan의 GetFullPath / 잘못된 경로 문자 오류
+
+한국어 Windows PowerShell 5.1의 CP949 콘솔에서는 Git이 UTF-8로 출력한 한글 파일명이 잘못 해석되어 이 오류가 발생할 수 있다. 로컬 문서를 stash한 뒤에도 원격 파일 목록 검사에서 발생하므로 stash를 삭제하거나 DB를 초기화하지 않는다. 업데이트기는 Git 명령을 실행하는 동안 UTF-8로 출력을 읽고 기존 콘솔 인코딩을 복원한다.
+
+이미 이 오류로 구버전 업데이트기가 멈춘 **main checkout**에서는 프로젝트 폴더에서 다음 순서로 수정된 업데이트기를 받은 뒤 다시 실행한다. `git status`에 변경이 남아 있으면 먼저 별도로 보존한다. 일반 stash는 미추적 문서를 포함하지 않으므로 새 문서도 따로 보존했는지 확인한다. pull이 거부되면 강제 reset/clean을 하지 않는다.
+
+```powershell
+git status --short
+git pull --ff-only origin main
+.\update.bat
+```
+
+기존 stash는 자동으로 삭제하거나 적용하지 않는다. 업데이트 후 `git stash list`에서 확인하고, 필요한 문서는 별도로 복원한다. 다른 브랜치를 사용하는 설치는 현재 upstream을 유지하여 해당 브랜치에 수정이 게시된 뒤 업데이트한다.
+
+### 그 밖의 단계 실패
+
 화면의 실패 단계와 `log/update-*.log`를 확인한다. Git 다운로드 실패는 기존 앱을 종료하지 않는다. 백업 실패는 DB migration을 차단하고, 배포·DB migration·계정 준비 실패는 이후 단계와 재시작을 중단한다. 원인을 해결한 다음 같은 `update.bat`를 다시 실행한다. DB migration을 자동으로 되돌리지는 않는다.
 
 PostgreSQL은 기존 `.postgres-owner.env`와 DB 연결 설정으로 `upgrade_postgres_schema.py`를 실행한다. owner 설정이 없다면 [PostgreSQL 운영 절차](backend-sql-integration-guide.md)를 따른다. DuckDB를 쓰는 설치에서는 PostgreSQL migration을 건너뛴다. 현재 관리형 로컬 실행의 migration은 `0022_managed_local_execution`이며 실제 적용 대상은 Alembic의 최신 head다.

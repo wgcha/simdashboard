@@ -42,6 +42,21 @@ function Assert-Throws {
     throw "Expected an error containing '$Contains'."
 }
 
+function Invoke-WithConsoleEncoding {
+    param(
+        [Parameter(Mandatory = $true)][System.Text.Encoding]$Encoding,
+        [Parameter(Mandatory = $true)][scriptblock]$Action
+    )
+    $previous = [Console]::OutputEncoding
+    try {
+        [Console]::OutputEncoding = $Encoding
+        return @(& $Action)
+    }
+    finally {
+        [Console]::OutputEncoding = $previous
+    }
+}
+
 function Initialize-RemoteFixture {
     param([string]$Base, [string]$Branch)
     $source = Join-Path $Base 'source repository'
@@ -53,6 +68,7 @@ function Initialize-RemoteFixture {
     Invoke-TestGit -Path $source -Arguments @('checkout', '-b', $Branch) | Out-Null
     Write-TestFile -Path (Join-Path $source 'app.txt') -Contents 'version one'
     Write-TestFile -Path (Join-Path $source ('folder\' + $script:UnicodeName + ' file.txt')) -Contents 'unicode source'
+    Write-TestFile -Path (Join-Path $source ('folder\' + $script:UnicodeName + ' [literal] spaced.txt')) -Contents 'literal path source'
     Write-TestFile -Path (Join-Path $source '.env.example') -Contents 'example only'
     Write-TestFile -Path (Join-Path $source 'deploy\windows\certs\README.md') -Contents 'source documentation'
     Write-TestFile -Path (Join-Path $source 'log\work-log.md') -Contents 'source work log'
@@ -73,17 +89,55 @@ try {
 
     # Existing checkout: an absent upstream falls back to origin/current-branch,
     # fetches a local bare repository, and applies only a fast-forward.
-    $existing = Join-Path $temporary ('existing deploy ' + $script:UnicodeName)
+    $existing = Join-Path $temporary ('existing deploy ' + $script:UnicodeName + ' [literal] spaced')
     Invoke-TestGit -Path $temporary -Arguments @('clone', '--branch', $branch, $fixture.Bare, $existing) | Out-Null
     Invoke-TestGit -Path $existing -Arguments @('branch', '--unset-upstream') | Out-Null
     Write-TestFile -Path (Join-Path $fixture.Source 'app.txt') -Contents 'version two'
     Invoke-TestGit -Path $fixture.Source -Arguments @('add', 'app.txt') | Out-Null
     Invoke-TestGit -Path $fixture.Source -Arguments @('commit', '-m', 'forward') | Out-Null
     Invoke-TestGit -Path $fixture.Source -Arguments @('push', 'origin', $branch) | Out-Null
-    $plan = Get-WorkbenchGitUpdatePlan -Root $existing
+    # Windows PowerShell 5.1 decodes native Git output using the configured
+    # console code page. Git emits UTF-8 paths, so CP949 must not turn a
+    # tracked Korean path into replacement characters before GetFullPath sees it.
+    $encodingBefore = [Console]::OutputEncoding
+    Invoke-WithConsoleEncoding -Encoding ([Text.Encoding]::GetEncoding(949)) -Action {
+        Assert-Throws -Action {
+            & (Get-Module GitUpdate) {
+                param($Repository)
+                Invoke-UpdateGit -Git (Get-UpdateGit) -Root $Repository -Arguments @('rev-parse', '--verify', 'refs/heads/nonexistent-encoding-probe')
+            } $existing
+        } -Contains 'Git command failed'
+        Assert-True ([Console]::OutputEncoding.CodePage -eq 949) 'Git command failure did not restore CP949.'
+    } | Out-Null
+    $plan = Invoke-WithConsoleEncoding -Encoding ([Text.Encoding]::GetEncoding(949)) -Action {
+        $result = Get-WorkbenchGitUpdatePlan -Root $existing
+        Assert-True ([Console]::OutputEncoding.CodePage -eq 949) 'Git command success did not restore CP949.'
+        return $result
+    }
+    $plan = @($plan)[-1]
+    Assert-True ([Console]::OutputEncoding.CodePage -eq $encodingBefore.CodePage) 'Git update plan did not restore the process console encoding.'
     Assert-True ($plan.Mode -eq 'Existing' -and $plan.Changed -and $plan.Branch -eq $branch) 'Existing fast-forward plan is incorrect.'
     Invoke-WorkbenchGitUpdate -Plan $plan | Out-Null
     Assert-True ((Get-Content -Raw -LiteralPath (Join-Path $existing 'app.txt')).Trim() -eq 'version two') 'Existing fast-forward did not update source.'
+
+    # Updating a clean worktree must preserve an unrelated user stash. The
+    # updater must not create, consume, or clear stash entries as a side effect.
+    Write-TestFile -Path (Join-Path $existing 'app.txt') -Contents 'personal stashed edit'
+    Invoke-TestGit -Path $existing -Arguments @('stash', 'push', '-m', 'self-test preserved stash', '--', 'app.txt') | Out-Null
+    $stashBefore = @(Invoke-TestGit -Path $existing -Arguments @('stash', 'list', '--format=%H%x09%s'))
+    $stashContentBefore = @(Invoke-TestGit -Path $existing -Arguments @('stash', 'show', '--format=fuller', '--stat', 'stash@{0}'))
+    Write-TestFile -Path (Join-Path $fixture.Source 'app.txt') -Contents 'version three'
+    Invoke-TestGit -Path $fixture.Source -Arguments @('add', 'app.txt') | Out-Null
+    Invoke-TestGit -Path $fixture.Source -Arguments @('commit', '-m', 'second forward') | Out-Null
+    Invoke-TestGit -Path $fixture.Source -Arguments @('push', 'origin', $branch) | Out-Null
+    $stashPlan = Get-WorkbenchGitUpdatePlan -Root $existing
+    Invoke-WorkbenchGitUpdate -Plan $stashPlan | Out-Null
+    $stashAfter = @(Invoke-TestGit -Path $existing -Arguments @('stash', 'list', '--format=%H%x09%s'))
+    $stashContentAfter = @(Invoke-TestGit -Path $existing -Arguments @('stash', 'show', '--format=fuller', '--stat', 'stash@{0}'))
+    Assert-True (($stashBefore -join [Environment]::NewLine) -eq ($stashAfter -join [Environment]::NewLine)) 'Existing stash entries changed during update.'
+    Assert-True (($stashContentBefore -join [Environment]::NewLine) -eq ($stashContentAfter -join [Environment]::NewLine)) 'Existing stash content changed during update.'
+    Assert-True (($stashAfter -join [Environment]::NewLine) -match 'self-test preserved stash') 'Existing stash entry was not retained during update.'
+    Assert-True ((Get-Content -Raw -LiteralPath (Join-Path $existing 'app.txt')).Trim() -eq 'version three') 'Update with an existing stash did not apply the remote commit.'
 
     Write-TestFile -Path (Join-Path $existing 'app.txt') -Contents 'local edit'
     Assert-Throws -Action { Get-WorkbenchGitUpdatePlan -Root $existing } -Contains 'local changes'
@@ -106,6 +160,7 @@ try {
     [System.IO.Directory]::CreateDirectory($bootstrap) | Out-Null
     Write-TestFile -Path (Join-Path $bootstrap 'app.txt') -Contents 'old zip source'
     Write-TestFile -Path (Join-Path $bootstrap ('folder\' + $script:UnicodeName + ' file.txt')) -Contents 'old Unicode source'
+    Write-TestFile -Path (Join-Path $bootstrap ('folder\' + $script:UnicodeName + ' [literal] spaced.txt')) -Contents 'old literal path source'
     Write-TestFile -Path (Join-Path $bootstrap '.env') -Contents 'SECRET=must-not-move'
     Write-TestFile -Path (Join-Path $bootstrap '.postgres-owner.env') -Contents 'POSTGRES_PASSWORD=must-not-move'
     Write-TestFile -Path (Join-Path $bootstrap '.venv-runtime\keep.txt') -Contents 'environment'
@@ -116,12 +171,13 @@ try {
     $bootstrapPlan = Get-WorkbenchGitUpdatePlan -Root $bootstrap -RepositoryUrl $fixture.Bare -Branch $branch
     Assert-True ($bootstrapPlan.Mode -eq 'Bootstrap' -and $bootstrapPlan.BackupDirectory) 'No-.git bootstrap plan is incorrect.'
     Invoke-WorkbenchGitUpdate -Plan $bootstrapPlan | Out-Null
-    Assert-True ((Get-Content -Raw -LiteralPath (Join-Path $bootstrap 'app.txt')).Trim() -eq 'version two') 'Bootstrap did not check out remote source.'
+    Assert-True ((Get-Content -Raw -LiteralPath (Join-Path $bootstrap 'app.txt')).Trim() -eq 'version three') 'Bootstrap did not check out remote source.'
     foreach ($relative in @('.env', '.postgres-owner.env', '.venv-runtime\keep.txt', 'backend\data\local.db', 'output\result.txt', 'backups\updater-driver-test\driver.txt', 'orphan personal file.txt')) {
         Assert-True (Test-Path -LiteralPath (Join-Path $bootstrap $relative)) "Bootstrap moved protected or orphan file '$relative'."
     }
     Assert-True ((Get-Content -Raw -LiteralPath (Join-Path $bootstrapPlan.BackupDirectory 'app.txt')).Trim() -eq 'old zip source') 'Colliding source was not retained in the backup.'
     Assert-True ((Get-Content -Raw -LiteralPath (Join-Path $bootstrapPlan.BackupDirectory ('folder\' + $script:UnicodeName + ' file.txt'))).Trim() -eq 'old Unicode source') 'Unicode colliding source was not retained in the backup.'
+    Assert-True ((Get-Content -Raw -LiteralPath (Join-Path $bootstrapPlan.BackupDirectory ('folder\' + $script:UnicodeName + ' [literal] spaced.txt'))).Trim() -eq 'old literal path source') 'Literal bracket/space colliding source was not retained in the backup.'
 
     # An empty, unborn .git repository is also bootstrapable, unless its index has
     # staged user files. This confirms it never silently overwrites that index.
@@ -132,6 +188,7 @@ try {
     Assert-True ($unbornPlan.Mode -eq 'Bootstrap') 'Unborn repository was not planned as bootstrap.'
     Invoke-WorkbenchGitUpdate -Plan $unbornPlan | Out-Null
     Assert-True (Test-Path -LiteralPath (Join-Path $unborn ('folder\' + $script:UnicodeName + ' file.txt'))) 'Unborn bootstrap missed Unicode source path.'
+    Assert-True (Test-Path -LiteralPath (Join-Path $unborn ('folder\' + $script:UnicodeName + ' [literal] spaced.txt'))) 'Unborn bootstrap missed literal bracket/space source path.'
 
     $protectedSource = Join-Path $temporary 'protected source'
     Invoke-TestGit -Path $temporary -Arguments @('clone', $fixture.Bare, $protectedSource) | Out-Null

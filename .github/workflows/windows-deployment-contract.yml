@@ -34,6 +34,9 @@ jobs:
           }
       - name: Verify source deployment and update failure gates
         run: |
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\git-update-self-test.ps1
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) { exit $exitCode }
           & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\source-postgres-initializer-self-test.ps1
           $exitCode = $LASTEXITCODE
           if ($exitCode -ne 0) { exit $exitCode }

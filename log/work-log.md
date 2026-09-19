@@ -661,3 +661,10 @@
 - 최종 브라우저 검증: 합성 자료의 Playwright E2E 2 passed(20 Scene, 그래프→Scene20 상세, 컨투어 전치와 동일 셀 ID, 이미지 확대/ESC, 늦은 USAGE 응답의 DISTRIBUTION 덮어쓰기 방지). 별도 15473 화면 하네스에서 20 Scene 중 결측 1개의 실제 막대 공백(19 path), 이미지 모달·전치·1440/390px 화면을 확인하고 console/pageerror 0건을 확인했다. Astra가 저장 화면을 직접 검수했다. Browser plugin not available로 일반 Playwright를 사용했다. 합성 컨투어는 UI 동작용이며 실제 CAE 영상 검증이 아니다.
 - 최종 파서/조회 변경 후 타깃 검사 31 passed(위 37개와 중복). 전체 E2E 러너는 2개 성공 후 자식 종료 AggregateError를 보고했으므로 테스트 본체 성공과 종료 문제를 구분한다. 운영 서비스에는 접근하지 않았다.
 - 테스트 정리: 임시 PostgreSQL과 root 15473 Vite는 종료했다. 전체 E2E의 15173/18000 포트는 LISTENING 없음으로 확인했다. 해당 runner PID 명령줄 조회는 호스트 접근 거부였으므로 불확실한 프로세스를 임의 종료하지 않았다.
+
+### 2026-09-19 한국어 Windows Git plan 경로 해석 오류
+
+- 사내 업데이트에서 stash 후에도 GetFullPath의 잘못된 경로 문자 오류가 발생한다는 보고를 조사했다. 보고된 사내 로그 파일은 로컬에 없어 직접 열지 못했으나 Windows PowerShell 5.1 + CP949에서 현재 원격 소스와 같은 HEAD의 한글 파일 목록을 읽어 동일 예외를 재현했다. UTF-8 출력이 콘솔 코드페이지로 잘못 디코딩되는 원인이며 로컬 문서 변경이나 stash 손상으로 단정하지 않는다.
+- Astra 원인 재현·설계·최종 검수, Terra Git 호출 수정, Luna 회귀 검사, Sol 독립 검수로 진행했다. Invoke-UpdateGit 실행 범위에서만 UTF-8 디코딩을 적용하고 finally에서 기존 콘솔 인코딩을 복원한다. 경로 경계·reparse·보호 파일·빠른 전진 검사와 사용자 stash를 유지한다. 새 의존성·DB migration 없음.
+- 수정 전 CP949/ASCII는 GetFullPath 실패, 수정 후 CP65001/949/437/20127 모두 현재 HEAD의 1,198개 경로 처리 성공. Windows PowerShell 5.1 문법, Git module self-test, update-entry, 실제 임시 Git + 모의 서비스 update-integration, PostgreSQL 초기화 실패 경로, 계정 배포 순서/백업 실패 경로 self-test를 통과했다. 배포 schema/profile/offline 환경 타깃 Python 검사 28 passed, 1 skipped. 실사용 DB·설정·서비스는 테스트하지 않았다.
+- 한글/공백/대괄호 경로와 stash 유지 회귀를 Windows 배포 계약 CI에 연결했다. 구버전 main 업데이트기의 복구 절차(git pull --ff-only origin main 후 update.bat), 미추적 문서 별도 보존과 stash 유지 안내를 docs/windows-git-update.md에 추가했다. Sol 검수 PASS. 사내 PC 재실행 및 실제 Server 2022 폐쇄망 실기는 별도 확인 대상이다.

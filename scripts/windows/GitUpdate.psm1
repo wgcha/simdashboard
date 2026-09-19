@@ -25,12 +25,21 @@ function Invoke-UpdateGit {
     # Keep a caller's ErrorActionPreference=Stop from turning those probes into
     # NativeCommandError before this function can inspect $LASTEXITCODE.
     $previousErrorActionPreference = $ErrorActionPreference
+    # Git tree paths are UTF-8 bytes, including when `ls-tree -z` is used for
+    # machine-readable records. Windows PowerShell 5.1 otherwise decodes native
+    # stdout using the active console code page (for example CP949), which can
+    # corrupt Hangul paths before the NUL-delimited records reach their parser.
+    # Set the encoding only for this invocation and always restore the caller's
+    # console setting.
+    $previousConsoleOutputEncoding = [Console]::OutputEncoding
     try {
         $ErrorActionPreference = 'Continue'
+        [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
         $result = & $Git -C $Root @Arguments 2>&1
         $exitCode = $LASTEXITCODE
     }
     finally {
+        [Console]::OutputEncoding = $previousConsoleOutputEncoding
         $ErrorActionPreference = $previousErrorActionPreference
     }
     $text = (@($result | ForEach-Object { [string]$_ }) -join [Environment]::NewLine).Trim()
