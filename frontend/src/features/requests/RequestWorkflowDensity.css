@@ -1,0 +1,59 @@
+.focused-request-view[data-ui-density="v1"],
+.workflow-pending-state[data-ui-density="v1"] { font-size:var(--text-body); }
+.focused-request-view[data-ui-density="v1"] .focused-section-label,
+.focused-request-view[data-ui-density="v1"] .focused-status-line,
+.focused-request-view[data-ui-density="v1"] .focused-disclosure summary,
+.focused-request-view[data-ui-density="v1"] dt,
+.focused-request-view[data-ui-density="v1"] .focused-history-list small,
+.focused-request-view[data-ui-density="v1"] .focused-other-toolbar label,
+.focused-request-view[data-ui-density="v1"] .focused-other-list small,
+.focused-request-view[data-ui-density="v1"] .focused-status,
+.focused-request-view[data-ui-density="v1"] .focused-timeline-step span,
+.focused-request-view[data-ui-density="v1"] .focused-history-list article span,
+.focused-request-view[data-ui-density="v1"] .focused-demo-history summary b,
+.workflow-pending-state[data-ui-density="v1"] small { font-size:var(--text-caption); }
+.focused-request-view[data-ui-density="v1"] h2,
+.workflow-board[data-ui-density="v1"] .workflow-board-head h2 { font-size:var(--text-section); }
+.focused-request-view[data-ui-density="v1"] .focused-current-copy p,
+.focused-request-view[data-ui-density="v1"] .focused-disclosure-content,
+.focused-request-view[data-ui-density="v1"] dd,
+.focused-request-view[data-ui-density="v1"] .focused-history-list p,
+.focused-request-view[data-ui-density="v1"] .focused-note,
+.focused-request-view[data-ui-density="v1"] .focused-timeline-step strong,
+.focused-request-view[data-ui-density="v1"] .focused-history-list article strong,
+.workflow-pending-state[data-ui-density="v1"] strong,
+.workflow-pending-state[data-ui-density="v1"] p { font-size:var(--text-body); }
+.focused-request-view[data-ui-density="v1"] .focused-primary-action,
+.focused-request-view[data-ui-density="v1"] .focused-other-list button,
+.focused-request-view[data-ui-density="v1"] select,
+.workflow-pending-state[data-ui-density="v1"] button { font-size:var(--text-body); }
+.focused-request-view[data-ui-density="v1"] .focused-primary-action,
+.focused-request-view[data-ui-density="v1"] .focused-other-list button,
+.focused-request-view[data-ui-density="v1"] select,
+.workflow-pending-state[data-ui-density="v1"] button { min-height:var(--control-h-sm); border-radius:var(--radius-sm); }
+.focused-request-view[data-ui-density="v1"] .request-demo-summary strong { font-size:var(--text-body); }
+.focused-request-view[data-ui-density="v1"] .request-demo-summary small,
+.focused-request-view[data-ui-density="v1"] .request-demo-summary time { font-size:var(--text-caption); }
+
+/* The board has a saved dashboard font setting. Keep every grid label and editor
+   on that setting; row height and stored react-grid-layout coordinates stay fixed. */
+.workflow-board[data-ui-density="v1"] :where(
+  .workflow-board-head>div>span,
+  .workflow-board-head label,
+  .workflow-board-head select,
+  .workflow-category,
+  .workflow-lane-meta b,
+  .workflow-lane-drag-handle,
+  .step-track-horizontal>span,
+  .step-copy-horizontal em,
+  .workflow-step-editor label>span,
+  .workflow-step-editor input,
+  .workflow-step-editor select,
+  .workflow-step-editor textarea,
+  .workflow-step-editor small,
+  .workflow-step-editor .workflow-optional span,
+  .workflow-step-actions button,
+  .request-demo-summary strong,
+  .request-demo-summary small,
+  .request-demo-summary time
+) { font-size:var(--workflow-font-size, var(--text-body)); }

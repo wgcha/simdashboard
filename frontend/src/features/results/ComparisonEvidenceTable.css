@@ -44,3 +44,32 @@
 .comparison-evidence-detail footer button { color:var(--color-accent); }
 .comparison-evidence-no-series { align-self:center; color:var(--color-text-muted); font-size:11px; }
 @media (max-width:700px) { .comparison-evidence-table { padding:12px; }.comparison-evidence-header { flex-direction:column; }.comparison-evidence-filters .comparison-evidence-reset { margin-left:0; }.comparison-evidence-detail dl { grid-template-columns:1fr; gap:7px; } }
+
+/* P4 density scope. Keep the table's overflow and row content geometry while
+   making its type and controls follow the user's workspace preference. */
+.comparison-workspace[data-ui-density="v1"] .comparison-evidence-table { font-size:var(--text-body); }
+.comparison-workspace[data-ui-density="v1"] .comparison-evidence-header h3 { font-size:var(--text-subheading); }
+.comparison-workspace[data-ui-density="v1"] .comparison-evidence-header p,
+.comparison-workspace[data-ui-density="v1"] .comparison-evidence-count,
+.comparison-workspace[data-ui-density="v1"] .comparison-evidence-row code,
+.comparison-workspace[data-ui-density="v1"] .comparison-evidence-detail code,
+.comparison-workspace[data-ui-density="v1"] .comparison-evidence-row small,
+.comparison-workspace[data-ui-density="v1"] .comparison-evidence-detail dt,
+.comparison-workspace[data-ui-density="v1"] .comparison-evidence-no-series,
+.comparison-workspace[data-ui-density="v1"] .comparison-evidence-empty span { font-size:var(--text-caption); }
+.comparison-workspace[data-ui-density="v1"] .comparison-evidence-filters,
+.comparison-workspace[data-ui-density="v1"] .comparison-evidence-row,
+.comparison-workspace[data-ui-density="v1"] .comparison-evidence-detail,
+.comparison-workspace[data-ui-density="v1"] .comparison-evidence-detail dd { font-size:var(--text-body); }
+.comparison-workspace[data-ui-density="v1"] .comparison-evidence-filters button,
+.comparison-workspace[data-ui-density="v1"] .comparison-evidence-empty button,
+.comparison-workspace[data-ui-density="v1"] .comparison-evidence-detail footer button { min-height:var(--control-h-sm); border-radius:var(--radius-sm); font-size:var(--text-body); }
+.comparison-workspace[data-ui-density="v1"] .comparison-evidence-columns { min-height:var(--control-h-sm); font-size:var(--text-caption); }
+.comparison-workspace[data-ui-density="v1"] .comparison-evidence-detail>header strong { font-size:var(--text-subheading); }
+.comparison-workspace[data-ui-density="v1"] .comparison-evidence-filters button b { font-size:var(--text-caption); }
+.comparison-workspace[data-ui-density="v1"] .comparison-evidence-row>span:first-child strong,
+.comparison-workspace[data-ui-density="v1"] .comparison-evidence-row>span:not(:first-child) { font-size:var(--text-body); }
+.comparison-workspace[data-ui-density="v1"] .comparison-evidence-row>span:last-child b { font-size:var(--text-caption); }
+.comparison-workspace[data-ui-density="v1"] .comparison-evidence-empty strong { font-size:var(--text-subheading); }
+.comparison-workspace[data-ui-density="v1"] .comparison-evidence-detail>header span,
+.comparison-workspace[data-ui-density="v1"] .comparison-evidence-detail>header>b { font-size:var(--text-caption); }

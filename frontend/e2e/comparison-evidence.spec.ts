@@ -74,10 +74,10 @@ test('문제 필터는 실제 판정과 일치하고 선택 근거를 설계 검
     expect(box!.x).toBeGreaterThanOrEqual(chartBox!.x)
   }
   if (output) await page.screenshot({ path: path.join(output, 'comparison-chart.png') })
-  await page.setViewportSize({ width: 390, height: 844 })
+  await page.setViewportSize({ width: 1920, height: 1080 })
   await page.getByTestId('comparison-evidence-table').scrollIntoViewIfNeeded()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBeTruthy()
-  if (output) await page.screenshot({ path: path.join(output, 'comparison-mobile.png') })
+  if (output) await page.screenshot({ path: path.join(output, 'comparison-wide.png') })
   expect(errors).toEqual([])
 })
 

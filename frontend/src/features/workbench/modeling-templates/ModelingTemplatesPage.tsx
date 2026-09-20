@@ -62,7 +62,7 @@ export function ModelingTemplatesPage() {
       if (mounted.current) setError(reason instanceof Error ? reason.message : '다운로드하지 못했습니다.')
     } finally { if (mounted.current) setDownloading(false) }
   }
-  return <section className="modeling-templates-page">
+  return <section className="modeling-templates-page" data-ui-density="v1">
     <header className="modeling-hero"><div><span className="eyebrow">MODELING LIBRARY</span><h1>모델링 템플릿</h1><p>제품·하중 경우별 CSV 설정을 저장하고, 필요한 버전을 다시 내려받습니다.</p></div>{canManage && <button className="primary-button" onClick={() => setCreating(true)}><Plus size={17} /> 새 템플릿</button>}</header>
     <section className="template-toolbar" aria-label="템플릿 찾기">
       <label className="template-search"><Search size={18} /><input aria-label="템플릿 검색" placeholder="템플릿 이름, 제품, 하중 경우 검색" value={q} onChange={event => setQ(event.target.value)} /></label>

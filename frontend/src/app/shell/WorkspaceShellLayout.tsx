@@ -1,10 +1,11 @@
-import type { CSSProperties, ReactNode } from 'react'
+import type { ReactNode } from 'react'
 
 import type { AuthUser } from '../../auth'
 import type { MenuId } from '../../features/auth/access'
 import { WORKSPACE_ROUTES_BY_ID } from '../../features/navigation/workspaceRouteRegistry'
 import { AppShell, AppShellMain, AppTopbar } from './AppShell'
 import { AppSidebar, type AppSidebarMenuId } from './AppSidebar'
+import { workspaceFontSizeStyle } from '../preferences/workspaceFontSizeStyle'
 
 type WorkspaceShellLayoutProps = {
   actions: ReactNode
@@ -59,7 +60,7 @@ export function WorkspaceShellLayout({
       onPreloadPage={onPreloadPage as (id: AppSidebarMenuId) => void}
       workspacePathForMenu={(menuId) => WORKSPACE_ROUTES_BY_ID.get(menuId)?.path ?? '/workspace'}
     />}
-    style={{ '--ui-font-size': `${fontSize}pt` } as CSSProperties}
+    style={workspaceFontSizeStyle(fontSize)}
     theme={theme}
   >
     <AppShellMain topbar={<AppTopbar actions={actions} breadcrumb={topbarBreadcrumb} />}>

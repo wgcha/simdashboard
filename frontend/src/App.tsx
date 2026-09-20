@@ -1,4 +1,4 @@
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react'
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import {
   Activity,
   AlertTriangle,
@@ -45,6 +45,7 @@ import { AppSidebar } from './app/shell/AppSidebar'
 import { PersonalPcRoute } from './app/workspace/PersonalPcRoute'
 import { ProjectSetupState } from './app/workspace/ProjectSetupState'
 import { loadWorkspacePreferences, saveWorkspacePreference, type WorkspaceTheme } from './app/preferences/workspacePreferences'
+import { workspaceFontSizeStyle } from './app/preferences/workspaceFontSizeStyle'
 import { CASE_RESULTS_VIEW, caseResultsContext, isCaseResultsView } from './app/routing/caseResultsRouting'; import { useWorkspaceNavigation } from './app/routing/useWorkspaceNavigation'; import { useWorkspaceContextRestore } from './app/routing/useWorkspaceContextRestore'
 import { pageView, preferredPage, visiblePages, type ActiveView } from './features/analysis/pageSelection'
 import { DEFAULT_PORTFOLIO_LAYOUT, DEFAULT_WORKFLOW_DASHBOARD_LAYOUT, loadPortfolioLayout, loadWorkflowDashboardLayout } from './features/layouts/layoutDefaults'
@@ -960,7 +961,7 @@ function App() {
         onPreloadPage={preloadWorkspaceRouteModule}
         workspacePathForMenu={(id) => WORKSPACE_ROUTES_BY_ID.get(id)?.path ?? '#'}
       />}
-      style={{ '--ui-font-size': `${uiFontSize}pt` } as CSSProperties}
+      style={workspaceFontSizeStyle(uiFontSize)}
       theme={theme}
     >
       <AppShellMain topbar={<AppTopbar breadcrumb={breadcrumb} actions={<>

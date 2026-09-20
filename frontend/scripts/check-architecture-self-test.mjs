@@ -85,6 +85,13 @@ try {
     ...defaultBaseline,
     sourceLineCeilings: { ...defaultBaseline.sourceLineCeilings, 'App.tsx': defaultBaseline.sourceLineCeilings['App.tsx'] + 1 },
   }, { isDefaultBaseline: true }), 'Default source line ceilings are locked')
+  expectFailure('raising a CSS ceiling only in JSON is rejected', () => validateBaseline({
+    ...defaultBaseline,
+    css: {
+      ...defaultBaseline.css,
+      globalStyles: { ...defaultBaseline.css.globalStyles, lineCeiling: defaultBaseline.css.globalStyles.lineCeiling + 1 },
+    },
+  }, { isDefaultBaseline: true }), 'Default CSS baseline is locked')
   console.log('Frontend architecture checker self-test passed.')
 } finally {
   rmSync(fixtureDir, { recursive: true, force: true })

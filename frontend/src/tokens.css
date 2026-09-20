@@ -1,0 +1,31 @@
+:root {
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --shell-pad-x: clamp(24px, 2vw, 40px);
+}
+
+@media (max-width: 620px) {
+  :root { --shell-pad-x: 14px; }
+}
+
+/* --ui-font-size is injected on .app-shell. Keep derived values in that
+   scope so descendants resolve the active workspace preference correctly. */
+.app-shell {
+  --text-body: var(--ui-font-size);
+  --text-caption: calc(var(--ui-font-size) * 0.875);
+  --text-subheading: calc(var(--ui-font-size) * 1.125);
+  --text-section: calc(var(--ui-font-size) * 1.25);
+  --text-title: calc(var(--ui-font-size) * 1.5);
+  --control-h-sm: max(32px, calc(var(--ui-font-size) * 12 / 7));
+  --control-h-md: max(38px, calc(var(--ui-font-size) * 57 / 28));
+  --control-h-lg: max(44px, calc(var(--ui-font-size) * 33 / 14));
+  --row-h: max(40px, calc(var(--ui-font-size) * 15 / 7));
+  --row-h-detail: max(52px, calc(var(--ui-font-size) * 39 / 14));
+}

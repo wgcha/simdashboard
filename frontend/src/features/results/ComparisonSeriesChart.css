@@ -4,3 +4,13 @@
 .comparison-series-axis-mode, .comparison-series-scale-toggle { color: var(--color-text-muted); font-size: 11px; white-space: nowrap; }
 .comparison-series-scale-toggle { display: inline-flex; align-items: center; gap: 5px; }
 .comparison-series-scale-toggle input { accent-color: var(--color-accent); margin: 0; }
+
+/* Recharts owns plot geometry; only its surrounding labels and native toggle
+   participate in the density scale. */
+.comparison-workspace[data-ui-density="v1"] .comparison-series-axes { font-size:var(--text-body); }
+.comparison-workspace[data-ui-density="v1"] .comparison-series-axis-mode,
+.comparison-workspace[data-ui-density="v1"] .comparison-series-scale-toggle,
+.comparison-workspace[data-ui-density="v1"] .recharts-text,
+.comparison-workspace[data-ui-density="v1"] .recharts-legend-item-text,
+.comparison-workspace[data-ui-density="v1"] .recharts-default-tooltip { font-size:var(--text-caption); }
+.comparison-workspace[data-ui-density="v1"] .comparison-series-scale-toggle { min-height:var(--control-h-sm); border-radius:var(--radius-sm); }

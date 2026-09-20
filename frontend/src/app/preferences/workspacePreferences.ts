@@ -39,7 +39,8 @@ function theme(value: string | null): WorkspaceTheme | undefined {
   return value === 'dark' || value === 'light' ? value : undefined
 }
 
-function fontSize(value: string | null): number | undefined {
+export function normalizeWorkspaceFontSize(value: unknown): number | undefined {
+  if (typeof value !== 'number' && typeof value !== 'string') return undefined
   const parsed = Number(value)
   return Number.isFinite(parsed) && parsed >= 11 && parsed <= 18 ? parsed : undefined
 }
@@ -47,10 +48,10 @@ function fontSize(value: string | null): number | undefined {
 export function loadWorkspacePreferences(storage?: StorageLike): WorkspacePreferences {
   const target = getStorage(storage)
   const storedTheme = theme(read(target, STORAGE_KEYS.theme))
-  const storedFontSize = fontSize(read(target, STORAGE_KEYS.uiFontSize))
+  const storedFontSize = normalizeWorkspaceFontSize(read(target, STORAGE_KEYS.uiFontSize))
   const preferences = {
     theme: storedTheme ?? theme(read(target, LEGACY_KEYS.theme)) ?? DEFAULT_WORKSPACE_PREFERENCES.theme,
-    uiFontSize: storedFontSize ?? fontSize(read(target, LEGACY_KEYS.uiFontSize)) ?? DEFAULT_WORKSPACE_PREFERENCES.uiFontSize,
+    uiFontSize: storedFontSize ?? normalizeWorkspaceFontSize(read(target, LEGACY_KEYS.uiFontSize)) ?? DEFAULT_WORKSPACE_PREFERENCES.uiFontSize,
   }
   if (storedTheme === undefined) write(target, STORAGE_KEYS.theme, preferences.theme)
   if (storedFontSize === undefined) write(target, STORAGE_KEYS.uiFontSize, String(preferences.uiFontSize))

@@ -1,5 +1,9 @@
 # 해석 결과 대시보드 구현·사용 안내
 
+크기·밀도·본문 폭의 후속 개선은 [UI 개선 실행 계획](ui-density-improvement-plan.md)을 참고한다. [P1 토큰·작업 폭](ui-density-p1-implementation.md)에 이어 사용자 확인 후 [P2 공통 컴포넌트·결과 화면](ui-density-p2-implementation.md)을 구현했다. 기본 14pt·11~18pt 설정과 기존 테마·저장 배치를 유지하며 [P3 글자 역할 시범 적용](ui-density-p3-implementation.md)은 Sol 후속 검수까지 승인됐으며, [P4 화면별 확산](ui-density-p4-implementation.md)은 의뢰/등록·비교/모델링·도움말/설정까지 구현·검수 완료했다. P5는 사용자 확인 대기다. 앞으로 모바일 전용 개선·검수는 제외하고 데스크톱만 대상으로 한다.
+
+단계별 진행은 [P0 적용 계약·기준선](ui-density-p0-contract.md)에 기록한다. 각 단계 결과를 사용자에게 확인받은 후 다음 단계로 진행한다.
+
 환경별 폴더 연결은 [단계별 실습 안내](folder-environment-guide.md)를 따른다. 사용/유통환경 규칙 분리, 선택적 Run Option 원문 보존, 조사→등록→결과 이동을 구현했다. [설계와 구현 범위](folder-schema-ux-plan.md)의 최신 계층·옵션 계약이 아래 과거 Mode/UNKNOWN 설명보다 우선한다. 기존 규칙과 capture는 보존한다.
 
 기준일: 2026-09-19. 이번 사용자 요청에 따라 [구현 인수인계](구현.md)와 [상세 설계](상세.md)를 프로그램에 반영한다. 두 원본 문서의 과거 ‘문서 작성만’ 제한은 원본 작성 작업의 범위이며, 원본 문서는 보존했다.

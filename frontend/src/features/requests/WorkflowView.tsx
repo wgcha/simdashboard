@@ -5,6 +5,7 @@ import type { Workflow, WorkflowDashboardLayout, WorkflowStep } from '../../type
 import { RequestDemoRunSummary } from './RequestDemoRunSummary'; import { WorkflowPendingState } from './WorkflowPendingState'
 import { FocusedRequestOverview } from './FocusedRequestOverview'
 import { WorkflowStepItem } from './WorkflowStepItem'
+import './RequestWorkflowDensity.css'
 const ResponsiveGridLayout = WidthProvider(Responsive) as unknown as React.ComponentType<any>
 export function WorkflowView({ workflows, stageEditMode, layoutEditMode, dashboardLayout, layoutVersion, onDashboardLayoutChange, onStepChange, onAddStep, onDeleteStep, onMoveStep, onOpenAnalysis, activeRequestId, loadCaseReady = true, onOpenData = () => {}, onOpenWorkbench, onSelectRequest }: {
   workflows: Workflow[]
@@ -71,7 +72,7 @@ export function WorkflowView({ workflows, stageEditMode, layoutEditMode, dashboa
   </section>
   }
 
-  return <div className={`workflow-board ${layoutEditMode ? 'layout-editing' : ''}`} style={{ '--workflow-accent': dashboardLayout.accentColor, '--workflow-font-size': `${dashboardLayout.fontSize * 1.2}px` } as CSSProperties}>
+  return <div className={`workflow-board ${layoutEditMode ? 'layout-editing' : ''}`} data-ui-density="v1" style={{ '--workflow-accent': dashboardLayout.accentColor, '--workflow-font-size': `${dashboardLayout.fontSize * 1.2}px` } as CSSProperties}>
     <section className="workflow-board-head"><div><span>CONCURRENT REQUEST BOARD · LAYOUT v{layoutVersion}</span><h2>의뢰 작업 진행 현황</h2><p>{workflows.length}개 의뢰 · {activeCount}개 동시 진행</p></div><label>정렬 기준<select value={sortKey} onChange={(event) => setSortKey(event.target.value as typeof sortKey)}><option value="project">프로젝트(제품)별</option><option value="category">의뢰별 카테고리</option><option value="product">제품 이름순</option><option value="owner">작업자 이름</option><option value="time">시간순</option></select></label></section>
     {showPendingState && <WorkflowPendingState hasWorkflows={ordered.length > 0} onOpenData={onOpenData} />}
     <ResponsiveGridLayout className="workflow-dashboard-grid" layouts={{ lg: gridLayout }} breakpoints={{ lg: 900, md: 600, sm: 0 }} cols={{ lg: 12, md: 8, sm: 1 }} rowHeight={84} margin={[14, 14]} isDraggable={layoutEditMode} isResizable={layoutEditMode} draggableHandle=".workflow-lane-drag-handle" compactType="vertical" onLayoutChange={updateGridLayout}>

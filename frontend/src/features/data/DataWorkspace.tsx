@@ -118,7 +118,7 @@ export function DataWorkspace({ canCreateProject, canRetryImports, canUploadStor
     finally { setHistoryRefreshToken((value) => value + 1); setBusy(false) }
   }
 
-  return <section className="data-workspace">
+  return <section className="data-workspace" data-ui-density="v1">
     {!embedded && <header className="data-workspace-head">
       <div><span>OPERATIONS / FILE DATABASE</span><h1>해석 데이터 등록</h1><p>프로젝트와 하중 경우를 구성하고, 완료된 해석 결과를 검증해 DB에 등록합니다.</p></div>
       <div className="data-count"><strong>{managedProjects.length}</strong><span>PROJECTS</span></div>

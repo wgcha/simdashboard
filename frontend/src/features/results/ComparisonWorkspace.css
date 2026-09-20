@@ -22,3 +22,62 @@
   .comparison-workspace .comparison-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .comparison-workspace .comparison-kpis article { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; }
 }
+
+/* P4 density scope: roles follow the shared workspace scale while chart and
+   stored widget geometry remain unchanged. */
+.comparison-workspace[data-ui-density="v1"],
+.comparison-state[data-ui-density="v1"] { font-size:var(--text-body); }
+.comparison-state[data-ui-density="v1"] strong { font-size:var(--text-subheading); }
+.comparison-state[data-ui-density="v1"] span { font-size:var(--text-body); }
+.comparison-workspace[data-ui-density="v1"] .comparison-hero h2 { font-size:var(--text-title); }
+.comparison-workspace[data-ui-density="v1"] .comparison-card h3,
+.comparison-workspace[data-ui-density="v1"] .trust-card h3,
+.comparison-workspace[data-ui-density="v1"] .review-card h3,
+.comparison-workspace[data-ui-density="v1"] .comparison-evidence-header h3,
+.comparison-workspace[data-ui-density="v1"] .run-condition-header h3 { font-size:var(--text-subheading); }
+.comparison-workspace[data-ui-density="v1"] .comparison-hero>div:first-child>span,
+.comparison-workspace[data-ui-density="v1"] .comparison-card>header span,
+.comparison-workspace[data-ui-density="v1"] .trust-card>header span,
+.comparison-workspace[data-ui-density="v1"] .review-card>header span,
+.comparison-workspace[data-ui-density="v1"] .run-pickers label>span,
+.comparison-workspace[data-ui-density="v1"] .comparison-kpis small,
+.comparison-workspace[data-ui-density="v1"] .comparison-card>header small,
+.comparison-workspace[data-ui-density="v1"] .review-list article>header small,
+.comparison-workspace[data-ui-density="v1"] .review-list footer>span,
+.comparison-workspace[data-ui-density="v1"] .trust-source>span,
+.comparison-workspace[data-ui-density="v1"] .trust-source>small,
+.comparison-workspace[data-ui-density="v1"] .trust-checks small,
+.comparison-workspace[data-ui-density="v1"] .comparison-state span { font-size:var(--text-caption); }
+.comparison-workspace[data-ui-density="v1"] .comparison-hero p,
+.comparison-workspace[data-ui-density="v1"] .comparison-message,
+.comparison-workspace[data-ui-density="v1"] .comparison-kpis,
+.comparison-workspace[data-ui-density="v1"] .comparison-table,
+.comparison-workspace[data-ui-density="v1"] .trust-card,
+.comparison-workspace[data-ui-density="v1"] .review-list,
+.comparison-workspace[data-ui-density="v1"] .run-pickers label,
+.comparison-workspace[data-ui-density="v1"] .review-layout label,
+.comparison-workspace[data-ui-density="v1"] .comparison-state strong { font-size:var(--text-body); }
+.comparison-workspace[data-ui-density="v1"] :is(button,input,select,textarea) { font-size:var(--text-body); }
+.comparison-workspace[data-ui-density="v1"] :is(button,select,input[type="text"],input[type="number"]) { min-height:var(--control-h-sm); border-radius:var(--radius-sm); }
+.comparison-workspace[data-ui-density="v1"] .run-pickers select,
+.comparison-workspace[data-ui-density="v1"] .review-layout input,
+.comparison-workspace[data-ui-density="v1"] .review-layout select { min-height:var(--control-h-md); }
+.comparison-workspace[data-ui-density="v1"] .comparison-kpis span,
+.comparison-workspace[data-ui-density="v1"] .trust-source code,
+.comparison-workspace[data-ui-density="v1"] .trust-checks small,
+.comparison-workspace[data-ui-density="v1"] .review-card>header p,
+.comparison-workspace[data-ui-density="v1"] .review-card>header>strong,
+.comparison-workspace[data-ui-density="v1"] .review-layout label>span,
+.comparison-workspace[data-ui-density="v1"] .review-list article>header small,
+.comparison-workspace[data-ui-density="v1"] .review-list code,
+.comparison-workspace[data-ui-density="v1"] .review-list article>div span,
+.comparison-workspace[data-ui-density="v1"] .review-list article>footer>span,
+.comparison-workspace[data-ui-density="v1"] .comparison-empty { font-size:var(--text-caption); }
+.comparison-workspace[data-ui-density="v1"] .trust-source>strong,
+.comparison-workspace[data-ui-density="v1"] .trust-counts,
+.comparison-workspace[data-ui-density="v1"] .trust-counts span,
+.comparison-workspace[data-ui-density="v1"] .trust-checks strong,
+.comparison-workspace[data-ui-density="v1"] .review-list article>strong,
+.comparison-workspace[data-ui-density="v1"] .review-list article>p { font-size:var(--text-body); }
+.comparison-workspace[data-ui-density="v1"] .trust-card>header>b,
+.comparison-workspace[data-ui-density="v1"] .review-status { font-size:var(--text-caption); }

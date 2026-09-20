@@ -32,7 +32,7 @@ export function FocusedRequestOverview({ workflow, otherWorkflows, onOpenWorkben
   const completed = workflow.steps.filter((step) => step.status === 'COMPLETED').length
   const openWorkbench = () => onOpenWorkbench ? onOpenWorkbench(workflow.request.id) : onOpenAnalysis(workflow)
 
-  return <div className="focused-request-view" data-testid="focused-request-overview">
+  return <div className="focused-request-view" data-ui-density="v1" data-testid="focused-request-overview">
     <section className="focused-current-task" aria-labelledby="focused-current-title">
       <div className="focused-current-copy">
         <span className="focused-section-label">현재 할 일</span>

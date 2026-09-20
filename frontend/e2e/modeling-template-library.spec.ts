@@ -81,8 +81,8 @@ test('product/load-case cards preserve CSV folder bytes, versions and searchable
     await expect(page.locator('.modeling-templates-page')).toBeVisible()
     await page.screenshot({ path: testInfo.outputPath(`templates-${mode === '라이트' ? 'light' : 'dark'}-2560.png`), fullPage: false })
   }
-  await page.setViewportSize({ width: 390, height: 844 })
+  await page.setViewportSize({ width: 1366, height: 768 })
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
-  await page.screenshot({ path: testInfo.outputPath('templates-mobile-390.png'), fullPage: true })
+  await page.screenshot({ path: testInfo.outputPath('templates-desktop-1366.png'), fullPage: true })
   expect(errors).toEqual([])
 })

@@ -11,6 +11,7 @@
     "generate:api": "node scripts/generate-api-client.mjs",
     "check:architecture": "node scripts/check-architecture.mjs",
     "test:architecture": "node scripts/check-architecture-self-test.mjs",
+    "test:css-architecture": "node scripts/check-css-architecture-self-test.mjs",
     "test:preferences": "node --experimental-strip-types scripts/workspace-preferences-self-test.mjs",
     "test:routing": "node --experimental-strip-types scripts/workspace-route-registry-self-test.mjs",
     "test:lan-proxy": "node scripts/lan-proxy-self-test.mjs",
@@ -37,6 +38,7 @@
     "@types/react-grid-layout": "^1.3.5",
     "@vitejs/plugin-react": "^4.4.1",
     "openapi-typescript": "^7.13.0",
+    "postcss": "8.5.22",
     "typescript": "~5.7.2",
     "vite": "^6.1.0"
   }

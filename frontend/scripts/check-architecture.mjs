@@ -1,6 +1,8 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { checkCssArchitecture, validateCssBaseline } from './css-architecture.mjs'
 
 const frontendDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const defaultSourceRoot = path.join(frontendDir, 'src')
@@ -17,7 +19,7 @@ const lockedRawApiPathCeilings = {
 }
 
 const lockedSourceLineCeilings = {
-  'App.tsx': 1076,
+  'App.tsx': 1077,
   'app/routing/workspaceRouteModules.tsx': 26,
   'api.ts': 393,
   'features/analysis/AnalysisPageManager.tsx': 95,
@@ -53,6 +55,11 @@ const lockedCrossFeatureRelativeImports = [
   { from: 'features/navigation/workspaceRouteRegistry.ts', to: 'features/auth/access', specifier: '../auth/access' },
 ]
 
+// This pin deliberately covers the complete reviewable CSS baseline. Updating
+// only architecture-baseline.json cannot raise a CSS ceiling or expand an
+// exception list; a checker change is required after architecture review.
+const lockedCssBaselineHash = '8992dd00dfcd8a9e40033ee705e24ddbe76824af192c9be79554fc3d157ed39a'
+
 function parseArgs(argv) {
   const options = { root: defaultSourceRoot, baseline: defaultBaselinePath }
   for (let index = 0; index < argv.length; index += 1) {
@@ -79,6 +86,10 @@ function stableJson(value) {
     return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`
   }
   return JSON.stringify(value)
+}
+
+function cssBaselineHash(cssBaseline) {
+  return createHash('sha256').update(stableJson(cssBaseline)).digest('hex')
 }
 
 function listFiles(directory) {
@@ -137,6 +148,7 @@ export function validateBaseline(baseline, { isDefaultBaseline }) {
     }
   }
   if (isDefaultBaseline) {
+    validateCssBaseline(baseline.css)
     if (stableJson(baseline.rawApiPathCeilings) !== stableJson(lockedRawApiPathCeilings)) {
       throw new Error('Default /api/ ceilings are locked; edit this checker and the baseline together after architecture review')
     }
@@ -146,6 +158,9 @@ export function validateBaseline(baseline, { isDefaultBaseline }) {
     if (stableJson(baseline.crossFeatureRelativeImports) !== stableJson(lockedCrossFeatureRelativeImports)) {
       throw new Error('Default cross-feature whitelist is locked; edit this checker and the baseline together after architecture review')
     }
+    if (cssBaselineHash(baseline.css) !== lockedCssBaselineHash) {
+      throw new Error('Default CSS baseline is locked; edit this checker and the baseline together after architecture review')
+    }
   }
 }
 
@@ -154,7 +169,8 @@ export function run({ root, baselinePath }) {
   if (!existsSync(baselinePath)) throw new Error(`Baseline does not exist: ${baselinePath}`)
 
   const baseline = JSON.parse(readFileSync(baselinePath, 'utf8'))
-  validateBaseline(baseline, { isDefaultBaseline: path.resolve(baselinePath) === path.resolve(defaultBaselinePath) })
+  const isDefaultBaseline = path.resolve(baselinePath) === path.resolve(defaultBaselinePath)
+  validateBaseline(baseline, { isDefaultBaseline })
   const allowedImports = new Set(baseline.crossFeatureRelativeImports.map(stableJson))
   const observedImports = new Set()
   const errors = []
@@ -187,6 +203,11 @@ export function run({ root, baselinePath }) {
       const value = JSON.parse(record)
       errors.push(`Stale cross-feature whitelist entry: ${value.from} ${value.specifier} -> ${value.to}`)
     }
+  }
+
+  if (isDefaultBaseline) {
+    const cssResult = checkCssArchitecture(root, baseline.css)
+    errors.push(...cssResult.errors)
   }
 
   if (errors.length) throw new Error(`Frontend architecture check failed:\n${errors.map((error) => `- ${error}`).join('\n')}`)

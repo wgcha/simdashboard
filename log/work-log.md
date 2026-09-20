@@ -736,3 +736,88 @@
 ### 2026-09-19 환경별 폴더 연결 main 반영
 
 - 사용자의 완료 후 main 직접 push 지시에 따라 위에서 검증한 구현·회귀 테스트·migration·사용 안내를 main에 커밋하여 origin/main에 반영한다. 원격 main을 fetch해 분기 차이와 충돌 여부를 확인했고, push 전 diff 공백 검사를 통과했다. 사내 설치·업데이트 실행은 포함하지 않는다.
+
+### 2026-09-19 MatNexus 참고 UI 밀도 개선 계획
+
+- 사용자 제공 `docs/dashboard/ui개선_matnexus.md`를 현재 글자 설정·전역 CSS·결과 목록·구조 검사와 대조하여 `docs/dashboard/ui-density-improvement-plan.md`를 작성했다. 문서 지도와 대시보드 안내에 미구현 계획으로 연결하고 사용자 원문은 보존했다.
+- 기본 14pt·11~18pt 및 저장 키/legacy migration을 유지한다. 기준선→폭/토큰→프리미티브/대시보드→시범 영역 글자 규칙→후속 화면→최종 root 전환 순서, Luna/Terra 구현 책임, Sol/Astra 검수와 CSS 가드레일·인수 조건을 정의했다.
+- Sol 독립 검토의 단계 순서·root 어댑터·grid 기본값·페이지 경계 의견을 반영했다. 현재 grid rowHeight 84/70/20px와 보고서 maxRows 18을 확인하고 사용자 글자 배율 자동 연동을 금지했다.
+- 문서만 작성했다. 앱 구현·브라우저 렌더·성능 측정·DB 변경·배포는 수행하지 않았다. 실제 측정은 계획 P0에 남기고 문서 링크·공백을 검사했다.
+- 계획의 Sol 재검수 승인 및 Astra 최종 검수 완료. 추가 차단 사항 없음. 구현 검증 승인을 의미하지 않는다.
+
+### 2026-09-19 UI 개선 P0 기준선 조사 착수
+
+- 사용자가 각 단계 결과 확인 후 진행하도록 요청해 P0 조사·계약 단계부터 수행한다. P1 이후 UI 변경은 사용자 확인 전 적용하지 않는다.
+- Astra가 적용 계약을 작성하고 Terra가 설치된 PostCSS AST로 CSS 38개/15,779 선언을 조사했다. Sol 검수에서 확인한 ResultsWorkspaceGrid 74px를 기존 84/70/20px grid 보존 계약에 추가하고 primitive 공개 API·토큰 scope를 명시했다.
+- 기존 workspace preferences self-test와 architecture check(215 sources/5 reviewed cross-feature imports)를 통과했다. 앱 코드·사용자 DB·설정 변경은 없다. 화면 기준선 수집과 최종 검수 결과는 아래에 후속 기록한다.
+- P0 최종: 11개 PNG/JSON 기준선(1366×768/14pt, 핵심 mobile 390×844/18pt, 대표 wide 2560×1440/14pt) 수집. 실제 데이터 표시와 안정 UNCONFIGURED Run을 구분했고 root 가로 넘침 없음, page/console 오류 없음(인증 전 예상 401 별도). Playwright 시나리오 통과와 Windows runner taskkill AggregateError를 구분했다. 임시 spec 제거·15173/18000 잔존 LISTEN 없음 확인. 문서 링크/공백 검사와 Sol 독립/Astra 최종 검수 완료. P0 사용자 확인 대기, P1 앱 변경 미착수.
+
+### 2026-09-19 UI 개선 P1 토큰·작업 폭
+
+- 사용자 확인 후 P1만 구현했다. Astra 설계·통합, Luna 폭·패딩, Terra 토큰·CSS 가드레일, Sol 독립 검수로 진행했다. `docs/dashboard/ui-density-p1-implementation.md`에 범위·검증·한계를 기록하고 문서 지도를 갱신했다. P2는 다음 사용자 확인까지 미착수다.
+- `tokens.css` 선행 로드와 shell 좌우 clamp(24px,2vw,40px)/모바일14px를 적용했다. 주요 작업 wrapper cap과 assigned-only1120/1920px를 제거하고 light/dark·media query 재정의와 min-width0을 보완했다. 기본14pt/11~18pt, 도움말·dialog·report 폭, grid 저장 배치와 업무·API·DB 로직은 보존했다.
+- PostCSS8.5.22를 기존 전이 버전과 같은 devDependency로 고정하고 lock을 갱신했다. AST 기반 legacy important/폭/breakpoint/global selector baseline과 고정 해시, 이전 컨트롤·radius 토큰 검사를 추가했다. Sol 발견의 혼합 selector·#root·일반 태그·pill radius 우회를 수정했다.
+- IAB에서 desktop/wide/mobile·light/dark·18pt 설정 및 데이터 탭을 검수했다. 최종 폭 회귀 E2E3 passed(46.3s), exit0; architecture216 sources/5 imports 및 두 checker self-test, preferences self-test, TypeScript, /home production build 통과. 실제 Caddy와 TEMP 빌드의 offline web routing 검사도 통과했다.
+- LAN proxy self-test는 LAN 주소 fetch timeout 실패. pnpm offline install은 다운로드0을 관찰했지만 metadata EACCES 경고와 exit code 기록 누락 때문에 완전한 오프라인 설치 통과로 판정하지 않았다. 기존 Vite cache EPERM/runner cleanup 오류 및 중단 후 검수 서버 CONNECTION_REFUSED를 기록하고, 원본 Vite 설정+TEMP 캐시의 격리 서버로 최종 E2E를 통과했다. 기존 큰 chunk 경고는 남아 있다.
+- 합성 TEMP DB·검수 탭·임시 서버만 사용했고 검수 종료 후 정리했다. 실제 사용자 DB·설정·운영 서비스 변경, 전체 배포 CI, 실제 Server2022 폐쇄망 실기, commit/push/배포는 수행하지 않았다.
+- P1 Sol 독립 검수 및 Astra 최종 검수 완료, 추가 차단 사항 없음. 전역 selector 회귀를 세 독립 fixture로 분리한 뒤 CSS self-test와 architecture를 재통과했다. 문서 링크·공백 검사 완료. 사용자 확인을 기다리며 P2는 구현하지 않았다.
+
+### 2026-09-20 UI 개선 P2 공통 컴포넌트·결과 화면
+
+- 사용자 P2 진행 승인 후 Astra가 설계·통합·브라우저 검수, Terra가 Button/Input/Select/Table와 독립 CSS, Luna가 결과 개요·Case 화면, Sol이 독립 검수를 담당했다. 필요한 문서·코드와 관련 테스트만 사용하고 P3는 미착수로 유지했다.
+- native props/ref를 보존하는 공통 컴포넌트에 P1 컨트롤·행 토큰을 적용했다. 결과 개요는25건 기본/10·25·50 선택 및 검색·프로젝트·필터·data·페이지 크기 변경의 첫 페이지 reset과 clamp를 구현했다. Case/Run Option/capture·이력·URL 문맥, 전역 글자 설정·DB/API·배포 경로는 보존했고 새 의존성은 없다.
+- 동일1366×768/14pt에서 첫 결과 행 y627.1→578.1px, 실제 두 줄 행78→74px, 첫 화면 완전 노출1→2행을 확인했다. 모바일 목록 헤더·select 잘림 및18pt 날짜/버튼 겹침을 육안 검수로 발견·수정했다.
+- 최종 고유 E2E10개 통과: 결과 개요4, Case4, 신규 페이지경계/재설정 및 반응형2(분할 실행, 각각 exit0). TypeScript, architecture224sources/5imports, CSS checker self-test, /home production build와 diff 공백 검사 통과. Sol 독립/Astra 최종 검수 승인, 추가 차단 없음.
+- 신규 테스트 label 정정, 반복 reload 테스트의90→180초 전체 제한 조정, 실제 글자 폭 측정 보완, 임시 viewer fixture 준비 후 실패 검사를 재실행해 통과했다. 기존 큰 chunk 경고와 P1 오프라인/LAN 미확인 사항은 해결됐다고 기록하지 않는다. 상세는 docs/dashboard/ui-density-p2-implementation.md.
+- 별도 TEMP 합성 DB·브라우저·임시 포트만 사용하고 정리했다. 실제 사용자 DB·설정·서비스, 실제 Server2022 폐쇄망 실기·전체앱 회귀·commit/push/배포는 수행하지 않았다. P2 사용자 확인 후 다음 단계로 진행한다.
+
+### 2026-09-20 UI 개선 P3 공통 글자 설정 범위
+
+- `workspaceFontSizeStyle` 어댑터로 두 authenticated shell의 `--ui-font-size` 주입을 통합했다. 기존 v1/legacy 저장 키와 기본 14pt, 11~18 범위·소수값 허용을 유지하고, 잘못된 입력은 14pt로 안전하게 되돌린다. P5 전까지 `documentElement` 글자 크기는 변경하지 않는다.
+- 전역 light/dark control·본문·제목·Recharts 강제 글자 규칙과 결과 개요 행 규칙은 `[data-ui-density="v1"]` root 및 후손을 zero-specificity exclusion으로 제외했다. nav와 별도 custom-widget 글자 규칙은 유지했다. legacy `font-size !important` 천장 61은 늘리지 않았고, 변경한 selector fingerprint만 기준선에 다시 고정했다.
+- workspace preference self-test, CSS architecture self-test, architecture check(225 sources/5 reviewed imports), TypeScript build가 통과했다. Chromium fixture에서 기존 영역의 blanket rule 적용과 migrated subtree 제외를 확인했다. Vite build는 config bundle 단계의 기존 `.vite-temp` EPERM으로 앱 컴파일 전에 중단됐다.
+
+### 2026-09-20 UI 개선 P3 결과 화면 글자 역할 시범 적용
+
+- Luna가 ResultOverviewDashboard와 SimulationDashboard에 `data-ui-density="v1"` 시범 root를 추가하고 본문·caption·subheading·section·title 역할을 토큰으로 매핑했다. 결과 필터·페이지·행 작업·Case/Run/capture 선택·native dialog를 포함하며, SimulationResultGraph와 자산 확대 dialog는 root 하위 native DOM으로 변수 상속을 유지한다.
+- 시범 scope의 native 버튼/select/input은 `--control-h-*`와 `--radius-*`를 사용하고, 차트 SVG/tooltip/legend는 widget 의미를 보존하는 caption 토큰을 적용했다. grid rowHeight와 저장 배치는 변경하지 않았다. 전역 CSS·html/body·portal은 수정하지 않았다.
+- TypeScript와 production build, CSS architecture self-test를 통과했다. 전체 architecture check는 Terra의 새 `styles.css` scoped font important 선언이 baseline allowlist에 아직 반영되지 않아 해당 1건만 남아 있다. 실제 사용자 DB·설정·운영 서비스·배포는 사용하지 않았다.
+
+### 2026-09-20 UI 개선 P3 통합 검증 결과
+
+- 위 개별 구현 기록의 일시적 architecture 실패는 selector 기준선 반영 후 해소했다. 공통 전역 CSS는 scope 제외를 위해 수정했으며 html/body 글자 크기는 바꾸지 않았다.
+- 고유 E2E6개, TypeScript, architecture225/5, CSS·preferences self-test 및 TEMP /home production build 통과. 작은 화면의 긴 버튼 문구를 위해 원래 고정 높이와 추가 고정 높이를 제거하고 최소 높이를 유지했다.
+- Astra 독립 최종 코드 검수 승인. Sol은 모델 용량 오류2회 및 재시도 실행 제한으로 미완료이며 승인으로 간주하지 않는다. P4/P5 미착수. 상세: docs/dashboard/ui-density-p3-implementation.md.
+
+### 2026-09-20 AGENTS.md 협업·토큰 효율 지침 통합
+
+- 사용자 요청에 따라 기존 협업 요구와 토큰 효율 가이드를 루트 AGENTS.md에 병합했다. 규모·위험별 투입, Astra 지휘/최종 검수·Sol 독립 검수·Luna/Terra 기능별 구현, 위임·협의·추론 강도·실패 대응 기준을 명시했다.
+- 오픈소스 재사용, 기능별 독립 구조, 선택적 문서 읽기, 변경 기록, 기존 미커밋 변경 및 실제 사용자 상태 보존 요구를 유지했다. 작은 작업의 직접 처리 예외로 일괄 다중 에이전트 투입 비용을 줄이도록 정리했다.
+- 배포 계약 구간이 HEAD 원문과 동일함을 비교하고 참조 문서 존재 및 AGENTS.md diff 공백 검사를 확인했다. 저위험 문서 수정으로 주 에이전트가 직접 검증했으며 앱 테스트·독립 모델 검수·배포는 수행하지 않았다. 기존 작업 로그는 보존하고 이 항목만 추가했다.
+
+### 2026-09-20 프로젝트 AGENTS.md 중복 지침 축약
+
+- 최신 Codex 사용 지침에 맞춰 일반 개발의 지휘 Astra 최종 검수 겸임과 대규모·고위험 변경의 별도 Astra 독립 검수를 명시했다. 공통 운영 설명을 줄이고 프로젝트 고유 규칙과 문서 경로를 유지했다.
+- AGENTS.md 문자 수를 4,322자에서 2,312자로 줄였다(약 47%, 실제 토큰 절감률 측정은 아님). 배포 계약 구간은 수정 직전 원문과 완전히 동일함을 확인했다.
+- 참조 문서 존재와 diff 공백 검사를 통과했다. 저위험 문서 수정으로 직접 검증했으며 앱 테스트·독립 모델 검수는 수행하지 않았다. 기존 미커밋 변경과 작업 로그를 보존했다.
+
+### 2026-09-20 UI 개선 P4-1 및 데스크톱 전용 영구 정책
+
+- P3 미완료 Sol 검수를 재시도해 승인받았다. 사용자 다음 단계 승인 후 Luna가 폴더 연결/조사 scope·타이포그래피·컨트롤, Terra가 합성 E2E, Sol이 독립 검수, Astra가 수정 통합·최종 검수를 수행했다.
+- 최종 데스크톱1366/1920 ×14/18pt ×light/dark E2E2개, TypeScript, architecture225/5, CSS self-test, /home production build 통과. 초기 dialog 역할 누락과 컨트롤/보조 문구 누락은 수정 후 재통과했다. 상세 docs/dashboard/ui-density-p4-implementation.md.
+- 사용자 영구 지침: 앞으로 모바일 전용 UI 개선·최적화·검수·신규 모바일 테스트 제외. AGENTS.md와 실행 계획에 기록하고 과거P0 요구보다 우선하도록 연결했다. 기존 반응형 코드의 일괄 제거는 하지 않는다. 새 모바일 표시 우회 제거 및 P4테스트 데스크톱 전환.
+- 지시 전 종료된 모바일 포함 검사 결과는 과거 기록으로만 남긴다. 최종 완료 조건은 데스크톱으로 적용했다. 실제 사용자 DB/서비스·배포는 건드리지 않았으며 P4-2 의뢰/등록은 확인 전 미착수다.
+
+### 2026-09-20 UI 개선 P4 전체 완료
+
+- 사용자 `p4해줘` 승인으로 Terra 의뢰/등록·Workflow, Luna 비교/모델링·Help/설정 구현, Sol 독립 검수 및 보완 승인, Astra 통합 검수 완료. 모바일 제외 영구 지침 유지. P5는 미착수.
+- 역할 토큰의 하위 누락 보완과 전역 font important6개 v1 제외. 색상 규칙·important상한61·Workflow 사용자 글씨/좌표/rowHeight84 보존. API/인증/데이터/배포 로직 변경 없음.
+- 최종 P4 E2E6개+P3 typography2개+기존 비교/템플릿 기능2개=10개 통과. TypeScript, /home build, architecture228/5, CSS 및 architecture self-tests, diff-check 통과. 기존 큰 chunk 경고 잔존.
+- 기존 unified 첫 검사 실패는 HEAD부터 Case 결과/기존 Run 대시보드로 바뀐 버튼을 결과 검토로 찾는 낡은 기대값이다. 통과로 간주하지 않았고 현행 journey 이동/뒤로/새로고침/Case 결과 문맥은 새 검사로 통과했다.
+- 격리 TEMP 합성 DB와 서버로만 검수, 로컬 helper 차단. IAB 도움말18pt/light 및 등록1366/dark 증거 확인. 실제 서비스·사용자 DB·설정 및 배포 미실행. 범위/예외/증거는 docs/dashboard/ui-density-p4-implementation.md 참조.
+
+### 2026-09-20 Codex Security 활용 지침 추가
+
+- 사용자 요청으로 AGENTS.md에 보안 경계 변경 시 diff 스캔, 전체·심층 스캔 적용 조건, Sol/Astra 검수 연계와 중복 스캔 방지 기준을 추가했다.
+- 격리 재현, 근거 중심 보고, 도구 실패·미검수 범위 공개, 독립 실행 및 기존 배포 계약 유지를 명시했다. 기존 미커밋 변경을 보존했다.
+- 문서 내용과 AGENTS.md diff 및 공백 검사를 확인했다. 저위험 문서 변경으로 직접 검수했으며 보안 스캔·앱 테스트·독립 에이전트 검수는 실행하지 않았다.

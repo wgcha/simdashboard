@@ -64,7 +64,7 @@ export function FolderEnvironmentWorkspace({ selectedProjectId = '', selectedReq
   }), [scan, assignments])
   const showRegistration = (value: FolderEnvironmentRegistration) => { setRegistration(value); setTab('connect'); setStep(3); onComplete?.() }
   const jobPanel = registration && <FolderRegistrationResults value={registration} busy={Boolean(busy)} onRefresh={() => void execute('상태 조회 중…', () => service.registration(registration.registration_id), setRegistration)} onRetry={() => void execute('결과 읽는 중…', () => service.retryCapture(registration.registration_id), setRegistration)} />
-  return <section className="folder-environment-workspace">
+  return <section className="folder-environment-workspace" data-ui-density="v1">
     <header className="folder-environment-heading"><div><h1>폴더 연결·규칙</h1><p>폴더 구조를 확인하고 등록한 Case의 결과를 바로 엽니다.</p></div><label>환경<select aria-label="폴더 환경" value={environment} disabled={Boolean(busy)} onChange={(event) => { invalidate(); setEnvironment(event.target.value as FolderEnvironment); setProfileId('') }}><option value="USAGE">사용환경</option><option value="DISTRIBUTION">유통환경</option></select></label></header>
     <nav className="saved-work-tabs" aria-label="폴더 규칙 작업">{([['connect', '폴더 연결'], ['profiles', '저장된 규칙'], ['history', '등록 이력']] as const).map(([key, title]) => <button type="button" key={key} disabled={Boolean(busy)} className={tab === key ? 'active' : ''} aria-current={tab === key ? 'page' : undefined} onClick={() => setTab(key)}>{title}</button>)}</nav>
     {notice && <div className="folder-environment-notice info" role="status">{notice}</div>}

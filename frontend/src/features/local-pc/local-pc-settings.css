@@ -16,3 +16,72 @@
 .local-pc-pairing-note{display:flex;align-items:flex-start;gap:9px;padding:12px;border:1px solid var(--color-border);border-radius:8px;color:var(--color-accent);background:var(--color-info-surface);font-size:12px}.local-pc-pairing-note svg{width:16px;flex:none}.local-pc-pairing-note div{display:grid;gap:3px}.local-pc-pairing-note strong{color:var(--color-text-strong)}.local-pc-pairing-note p{margin:0;color:var(--color-text-muted);line-height:1.5}
 .local-pc-install-steps{margin:0;padding-left:22px;color:var(--color-text-muted);font-size:13px;line-height:1.8}.local-pc-install-steps strong{color:var(--color-text-strong)}.local-pc-install-unavailable{display:grid;gap:8px;padding:12px;border:1px solid var(--color-border);border-radius:8px;background:var(--color-surface-2);font-size:12px;color:var(--color-text-muted)}.local-pc-install-unavailable p{margin:0}.local-pc-install-unavailable button{justify-self:start}
 .local-pc-state-helper_required{color:var(--color-accent);background:var(--color-info-surface)}
+
+/* P4 density scope. Connection and program behavior stay unchanged; only
+   roles and native control sizing follow the shared workspace tokens. */
+.local-pc-settings[data-ui-density="v1"] { font-size:var(--text-body); }
+.local-pc-settings[data-ui-density="v1"] .local-pc-page-header h1 { font-size:var(--text-title); }
+.local-pc-settings[data-ui-density="v1"] .local-pc-card-heading h2,
+.local-pc-settings[data-ui-density="v1"] .local-pc-section-header h2,
+.local-pc-settings[data-ui-density="v1"] .local-pc-editor h3 { font-size:var(--text-section); }
+.local-pc-settings[data-ui-density="v1"] .local-pc-eyebrow,
+.local-pc-settings[data-ui-density="v1"] .local-pc-state,
+.local-pc-settings[data-ui-density="v1"] .local-pc-account small,
+.local-pc-settings[data-ui-density="v1"] .local-pc-host small,
+.local-pc-settings[data-ui-density="v1"] .local-pc-form-grid small,
+.local-pc-settings[data-ui-density="v1"] .local-pc-program small,
+.local-pc-settings[data-ui-density="v1"] .local-pc-program code,
+.local-pc-settings[data-ui-density="v1"] .local-pc-device-list small,
+.local-pc-settings[data-ui-density="v1"] .local-pc-install-steps,
+.local-pc-settings[data-ui-density="v1"] .local-pc-install-unavailable,
+.local-pc-settings[data-ui-density="v1"] .local-pc-pairing-note p { font-size:var(--text-caption); }
+.local-pc-settings[data-ui-density="v1"] .local-pc-page-header p { font-size:var(--text-body); }
+.local-pc-settings[data-ui-density="v1"] .local-pc-settings,
+.local-pc-settings[data-ui-density="v1"] .local-pc-account-card,
+.local-pc-settings[data-ui-density="v1"] .local-pc-setup-card,
+.local-pc-settings[data-ui-density="v1"] .local-pc-programs-card,
+.local-pc-settings[data-ui-density="v1"] .local-pc-devices-card,
+.local-pc-settings[data-ui-density="v1"] .local-pc-form-grid,
+.local-pc-settings[data-ui-density="v1"] .local-pc-program,
+.local-pc-settings[data-ui-density="v1"] .local-pc-device-list,
+.local-pc-settings[data-ui-density="v1"] .local-pc-empty { font-size:var(--text-body); }
+.local-pc-settings[data-ui-density="v1"] :is(button,input,textarea,select) { font-size:var(--text-body); }
+.local-pc-settings[data-ui-density="v1"] :is(button,input:not([type="checkbox"]):not([type="radio"]),select) { min-height:var(--control-h-sm); border-radius:var(--radius-sm); }
+.local-pc-settings[data-ui-density="v1"] .local-pc-form-grid input,
+.local-pc-settings[data-ui-density="v1"] .local-pc-form-grid textarea { min-height:var(--control-h-md); }
+
+/* Explicit roles for nested cards and the externally supplied password card. */
+.local-pc-settings[data-ui-density="v1"] .local-pc-account strong,
+.local-pc-settings[data-ui-density="v1"] .local-pc-host strong,
+.local-pc-settings[data-ui-density="v1"] .local-pc-alert,
+.local-pc-settings[data-ui-density="v1"] .local-pc-card-heading p,
+.local-pc-settings[data-ui-density="v1"] .local-pc-section-header p,
+.local-pc-settings[data-ui-density="v1"] .local-pc-check,
+.local-pc-settings[data-ui-density="v1"] .local-pc-setup-note,
+.local-pc-settings[data-ui-density="v1"] .local-pc-discovery summary span,
+.local-pc-settings[data-ui-density="v1"] .local-pc-discovery article strong,
+.local-pc-settings[data-ui-density="v1"] .local-pc-form-grid label,
+.local-pc-settings[data-ui-density="v1"] .local-pc-program strong,
+.local-pc-settings[data-ui-density="v1"] .local-pc-device-list article strong,
+.local-pc-settings[data-ui-density="v1"] .local-pc-toast,
+.local-pc-settings[data-ui-density="v1"] .local-pc-login-required,
+.local-pc-settings[data-ui-density="v1"] .local-pc-login-required strong,
+.local-pc-settings[data-ui-density="v1"] .local-pc-login-required p,
+.local-pc-settings[data-ui-density="v1"] .change-password-form,
+.local-pc-settings[data-ui-density="v1"] .change-password-form p { font-size:var(--text-body); }
+.local-pc-settings[data-ui-density="v1"] .local-pc-discovery summary small,
+.local-pc-settings[data-ui-density="v1"] .local-pc-discovery article em,
+.local-pc-settings[data-ui-density="v1"] .local-pc-discovery article small,
+.local-pc-settings[data-ui-density="v1"] .local-pc-form-grid small,
+.local-pc-settings[data-ui-density="v1"] .local-pc-advanced summary,
+.local-pc-settings[data-ui-density="v1"] .local-pc-program em,
+.local-pc-settings[data-ui-density="v1"] .local-pc-program b,
+.local-pc-settings[data-ui-density="v1"] .local-pc-install-steps,
+.local-pc-settings[data-ui-density="v1"] .local-pc-install-unavailable,
+.local-pc-settings[data-ui-density="v1"] .change-password-eyebrow,
+.local-pc-settings[data-ui-density="v1"] .change-password-form label > span,
+.local-pc-settings[data-ui-density="v1"] .change-password-feedback { font-size:var(--text-caption); }
+.local-pc-settings[data-ui-density="v1"] .change-password-form h2 { font-size:var(--text-section); }
+.local-pc-settings[data-ui-density="v1"] .local-pc-program footer button { font-size:var(--text-body); }
+.local-pc-settings[data-ui-density="v1"] .local-pc-pairing-note,
+.local-pc-settings[data-ui-density="v1"] .local-pc-pairing-note strong { font-size:var(--text-body); }

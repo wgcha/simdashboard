@@ -252,7 +252,7 @@ export function StorageWorkspacePanel({
   const disabled = loading || busy || storageQuery.isBlocked || stateScope !== (loadCaseId || '') || !loadCaseId || readOnly
   const ruleExtensions = Array.from(new Set(visibleState.rules.flatMap((rule) => rule.extensions || []))).filter(Boolean)
   const fileAccept = (allowStructuredUpload ? ['.csv', '.json'] : []).concat(ruleExtensions).join(',') || undefined
-  return <section className={`storage-workspace-panel${compact ? ' storage-workspace-panel-compact' : ''}`} data-testid="storage-workspace-panel" aria-labelledby={headingId} aria-busy={loading || busy}>
+  return <section className={`storage-workspace-panel${compact ? ' storage-workspace-panel-compact' : ''}`} data-ui-density="v1" data-testid="storage-workspace-panel" aria-labelledby={headingId} aria-busy={loading || busy}>
     <header className="storage-workspace-head">
       <div><span>RESULT SOURCE STORAGE</span><h2 id={headingId}>결과 저장 폴더</h2><p>{compact ? '현재 의뢰·작업 폴더에 연결된 원본과 수치 결과입니다.' : '파일 원본과 등록된 수치 결과를 선택한 하중 경우에 연결합니다.'}</p></div>
       <div className="storage-context-breadcrumb" aria-label="저장 대상"><b>{projectLabel}</b><span>/</span><b>{requestLabel}</b><span>/</span><b>{loadCaseLabel}</b></div>

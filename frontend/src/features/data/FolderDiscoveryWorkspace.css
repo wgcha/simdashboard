@@ -1,10 +1,10 @@
-.folder-discovery { display:grid; gap:16px; max-width:1440px; color:var(--color-text); }
+.folder-discovery { display:grid; gap:16px; color:var(--color-text); }
 .folder-discovery>header { display:grid; gap:6px; }.folder-discovery>header span { color:var(--color-accent); font:700 10px var(--font-mono); letter-spacing:1.5px; }.folder-discovery>header h2 { margin:0; color:var(--color-text-strong); font-size:23px; }.folder-discovery>header p,.folder-discovery-card p { margin:0; color:var(--color-text-muted); font-size:12px; line-height:1.55; }
 .folder-discovery-card { display:grid; gap:14px; padding:18px; border:1px solid var(--color-border); border-radius:10px; background:var(--color-surface-1); box-shadow:0 10px 30px var(--color-shadow); }.folder-discovery-card h3 { margin:0; font-size:16px; color:var(--color-text-strong); }
 .folder-discovery-heading { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; }.folder-discovery-heading>div { display:grid; gap:5px; }
 .folder-discovery .primary-button,.folder-discovery .ghost-button { min-height:35px; padding:0 11px; display:inline-flex; align-items:center; justify-content:center; gap:7px; border-radius:6px; cursor:pointer; font-size:12px; font-weight:700; }.folder-discovery .primary-button { border:1px solid var(--color-accent); background:var(--color-accent); color:var(--color-text-on-accent); }.folder-discovery .ghost-button { border:1px solid var(--color-border-strong); background:transparent; color:var(--color-text); }.folder-discovery button:disabled { opacity:.55; cursor:not-allowed; }.folder-discovery button svg { width:15px; }
 .folder-discovery-notice { padding:10px 12px; border:1px solid var(--color-border-strong); border-radius:7px; background:var(--color-info-surface); color:var(--color-text); font-size:12px; }.folder-discovery-notice.success { border-color:var(--color-success-border); color:var(--color-success); }.folder-discovery-notice.error { border-color:var(--color-danger-border); background:var(--color-danger-surface); color:var(--color-danger); }
-.folder-discovery-root { display:grid; grid-template-columns:1fr auto; gap:8px; }.folder-discovery input,.folder-discovery select { height:36px; min-width:0; box-sizing:border-box; border:1px solid var(--color-border); border-radius:6px; padding:0 9px; background:var(--color-surface-raised); color:var(--color-text); }
+.folder-discovery-root { display:grid; grid-template-columns:1fr auto; gap:8px; }.folder-discovery input:not([type=checkbox]):not([type=radio]):not([type=file]),.folder-discovery select { height:36px; min-width:0; box-sizing:border-box; border:1px solid var(--color-border); border-radius:6px; padding:0 9px; background:var(--color-surface-raised); color:var(--color-text); }
 .folder-discovery-browser { display:flex; gap:8px; align-items:center; flex-wrap:wrap; padding:9px; border:1px solid var(--color-border); border-radius:7px; background:var(--color-surface-interactive); }.folder-discovery-browser button { border:0; background:transparent; color:var(--color-accent); cursor:pointer; font:700 11px var(--font-mono); }.folder-discovery-browser strong { font:600 12px var(--font-mono); color:var(--color-text-strong); }
 .folder-discovery-entries { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:7px; max-height:220px; overflow:auto; padding:2px; }.folder-discovery-entries button { min-width:0; display:flex; gap:7px; align-items:center; border:1px solid var(--color-border); border-radius:6px; padding:9px; background:var(--color-surface-interactive); color:var(--color-text); cursor:pointer; text-align:left; overflow:hidden; }.folder-discovery-entries button.selected { border-color:var(--color-accent); background:var(--color-surface-selected); }.folder-discovery-entries svg { flex:none; width:14px; color:var(--color-accent); }.folder-discovery-actions { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }.folder-discovery-actions small { color:var(--color-warning); font-size:11px; }
 .folder-discovery-tree { max-height:360px; overflow:auto; border:1px solid var(--color-border); border-radius:7px; background:var(--color-surface-interactive); content-visibility:auto; }.folder-discovery-tree>div { min-width:max-content; display:flex; align-items:center; gap:7px; min-height:28px; padding-right:12px; border-bottom:1px solid var(--color-border); font-size:12px; }.folder-discovery-tree svg { width:13px; color:var(--color-accent); }.folder-discovery-tree small { margin-left:auto; color:var(--color-text-muted); font-size:10px; white-space:nowrap; }
@@ -22,7 +22,7 @@
 .folder-discovery-tree, .folder-discovery-preview, .folder-discovery-rule label { min-width:0; }
 .folder-discovery-heading p, .folder-discovery-browser strong { overflow-wrap:anywhere; }
 .folder-discovery-heading > button { flex-shrink:0; white-space:nowrap; }
-.folder-discovery input, .folder-discovery select { width:100%; }
+.folder-discovery input:not([type=checkbox]):not([type=radio]):not([type=file]), .folder-discovery select { width:100%; }
 .folder-discovery-preview table { table-layout:fixed; min-width:960px; }
 .folder-discovery-preview th, .folder-discovery-preview td { overflow-wrap:anywhere; }
 .folder-discovery-preview th:nth-child(1) { width:30%; }
@@ -36,9 +36,71 @@
 .folder-discovery-catalog-editor summary::-webkit-details-marker { display:none; }
 .folder-discovery-catalog-editor summary>span:first-child { display:grid; gap:3px; }.folder-discovery-catalog-editor summary small { color:var(--color-text-muted); font-size:10px; font-weight:400; }.folder-discovery-catalog-summary { color:var(--color-accent); font:700 10px var(--font-mono); white-space:nowrap; }
 .folder-discovery-catalog-body { display:grid; gap:12px; padding:0 16px 16px; border-top:1px solid var(--color-border); }.folder-discovery-catalog-body>p { margin:12px 0 0; color:var(--color-text-muted); font-size:11px; line-height:1.5; }.folder-discovery-catalog-columns { display:grid; grid-template-columns:1fr 1fr; gap:16px; }.folder-discovery-catalog-columns section { display:grid; gap:8px; min-width:0; }.folder-discovery-catalog-columns header { display:grid; gap:3px; }.folder-discovery-catalog-columns h4 { margin:0; color:var(--color-text-strong); font-size:13px; }.folder-discovery-catalog-columns header span { color:var(--color-text-muted); font-size:10px; }
-.folder-discovery-catalog-list { display:grid; gap:6px; }.folder-discovery-catalog-row { display:grid; grid-template-columns:minmax(100px,.7fr) minmax(100px,1fr) minmax(105px,.8fr) auto; gap:6px; align-items:center; }.folder-discovery-catalog-row code { overflow-wrap:anywhere; color:var(--color-accent); font:600 10px var(--font-mono); }.folder-discovery-catalog-row.inactive { opacity:.55; }.folder-discovery-catalog-row input,.folder-discovery-catalog-row select,.folder-discovery-catalog-add input,.folder-discovery-catalog-add select { height:32px; }.folder-discovery-catalog-row .icon-button { width:30px; height:30px; padding:0; display:inline-flex; align-items:center; justify-content:center; border:1px solid var(--color-border); border-radius:6px; color:var(--color-text-muted); background:transparent; cursor:pointer; }.folder-discovery-catalog-row .icon-button svg { width:13px; }.folder-discovery-catalog-add { display:grid; grid-template-columns:minmax(100px,.7fr) minmax(100px,1fr) minmax(105px,.8fr) auto; gap:6px; align-items:center; }.folder-discovery-catalog-columns section:last-child .folder-discovery-catalog-row { grid-template-columns:minmax(100px,.7fr) 1fr auto; }.folder-discovery-catalog-columns section:last-child .folder-discovery-catalog-add { grid-template-columns:minmax(100px,.7fr) 1fr auto; }.folder-discovery-catalog-error { margin:0; color:var(--color-danger) !important; }.folder-discovery-row-action { min-height:28px !important; margin-top:6px; padding:0 8px !important; font-size:10px !important; }
+.folder-discovery-catalog-list { display:grid; gap:6px; }.folder-discovery-catalog-row { display:grid; grid-template-columns:minmax(100px,.7fr) minmax(100px,1fr) minmax(105px,.8fr) auto; gap:6px; align-items:center; }.folder-discovery-catalog-row code { overflow-wrap:anywhere; color:var(--color-accent); font:600 10px var(--font-mono); }.folder-discovery-catalog-row.inactive { opacity:.55; }.folder-discovery-catalog-row input,.folder-discovery-catalog-row select,.folder-discovery-catalog-add input,.folder-discovery-catalog-add select { height:32px; }.folder-discovery-catalog-row .icon-button { width:30px; height:30px; padding:0; display:inline-flex; align-items:center; justify-content:center; border:1px solid var(--color-border); border-radius:6px; color:var(--color-text-muted); background:transparent; cursor:pointer; }.folder-discovery-catalog-row .icon-button svg { width:13px; }.folder-discovery-catalog-add { display:grid; grid-template-columns:minmax(100px,.7fr) minmax(100px,1fr) minmax(105px,.8fr) auto; gap:6px; align-items:center; }.folder-discovery-catalog-columns section:last-child .folder-discovery-catalog-row { grid-template-columns:minmax(100px,.7fr) 1fr auto; }.folder-discovery-catalog-columns section:last-child .folder-discovery-catalog-add { grid-template-columns:minmax(100px,.7fr) 1fr auto; }.folder-discovery-catalog-error { margin:0; color:var(--color-danger) !important; }.folder-discovery-row-action { min-height:var(--control-h-sm); margin-top:6px; padding:0 8px; font-size:var(--text-body); }
 @media (max-width:800px) { .folder-discovery-catalog-columns { grid-template-columns:1fr; } }
 .folder-result-rule-config { grid-column: 1 / -1; display: grid; gap: 8px; padding: 10px; border: 1px solid var(--color-border, #d4dfea); border-radius: 7px; background: var(--color-surface-2, rgba(127, 154, 179, .08)); }
 .folder-result-rule-config fieldset, [data-testid="folder-result-bulk-config"] fieldset { display: flex; flex-wrap: wrap; gap: 8px 14px; border: 0; padding: 0; margin: 0; }
 .folder-result-rule-config label, [data-testid="folder-result-bulk-config"] label { display: inline-flex; align-items: center; gap: 5px; }
 [data-testid="folder-result-connections"] li { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 7px 0; }
+
+/* P4-1 pilot contract: keep the folder surface tokenized without changing
+   SemanticWidgetGrid's chart dimensions or its custom numeric typography. */
+.folder-discovery[data-ui-density="v1"] { font-size:var(--text-body); }
+.folder-discovery[data-ui-density="v1"]>header span { font-size:var(--text-caption); }
+.folder-discovery[data-ui-density="v1"]>header h2 { font-size:var(--text-title); }
+.folder-discovery[data-ui-density="v1"]>header p,
+.folder-discovery[data-ui-density="v1"] .folder-discovery-card p,
+.folder-discovery[data-ui-density="v1"] .folder-discovery-notice { font-size:var(--text-body); }
+.folder-discovery[data-ui-density="v1"] .folder-discovery-card h3,
+.folder-discovery[data-ui-density="v1"] .folder-discovery-catalog-columns h4 { font-size:var(--text-subheading); }
+.folder-discovery[data-ui-density="v1"] .folder-discovery-picker h3 { font-size:var(--text-section); }
+.folder-discovery[data-ui-density="v1"]>button { min-height:var(--control-h-sm); border-radius:var(--radius-sm); font-size:var(--text-body); }
+.folder-discovery[data-ui-density="v1"] .primary-button,
+.folder-discovery[data-ui-density="v1"] .ghost-button,
+.folder-discovery[data-ui-density="v1"] .folder-discovery-entries button,
+.folder-discovery[data-ui-density="v1"] .folder-discovery-picker button { min-height:var(--control-h-sm); border-radius:var(--radius-md); font-size:var(--text-body); }
+.folder-discovery[data-ui-density="v1"] .folder-discovery-entries button { border-radius:var(--radius-sm); }
+.folder-discovery[data-ui-density="v1"] input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+.folder-discovery[data-ui-density="v1"] select { height:var(--control-h-md); min-height:var(--control-h-md); border-radius:var(--radius-sm); font-size:var(--text-body); }
+.folder-discovery[data-ui-density="v1"] .folder-discovery-browser button,
+.folder-discovery[data-ui-density="v1"] .folder-discovery-browser strong { font-size:var(--text-body); }
+.folder-discovery[data-ui-density="v1"] .folder-discovery-actions small,
+.folder-discovery[data-ui-density="v1"] .folder-discovery-tree small,
+.folder-discovery[data-ui-density="v1"] .folder-discovery-rule label,
+.folder-discovery[data-ui-density="v1"] .folder-discovery-preview th,
+.folder-discovery[data-ui-density="v1"] .folder-discovery-saved-grid li,
+.folder-discovery[data-ui-density="v1"] .folder-discovery-catalog-editor summary small,
+.folder-discovery[data-ui-density="v1"] .folder-discovery-catalog-columns header span { font-size:var(--text-caption); }
+.folder-discovery[data-ui-density="v1"] .folder-discovery-tree>div,
+.folder-discovery[data-ui-density="v1"] .folder-discovery-issues,
+.folder-discovery[data-ui-density="v1"] .folder-discovery-preview table,
+.folder-discovery[data-ui-density="v1"] .folder-discovery-saved-grid p,
+.folder-discovery[data-ui-density="v1"] .folder-discovery-catalog-body>p { font-size:var(--text-body); }
+.folder-discovery[data-ui-density="v1"] .folder-discovery-saved-grid h4 { font-size:var(--text-subheading); }
+.folder-discovery[data-ui-density="v1"] .folder-discovery-catalog-summary,
+.folder-discovery[data-ui-density="v1"] .folder-discovery-catalog-row code { font-size:var(--text-caption); }
+.folder-discovery[data-ui-density="v1"] .folder-discovery-catalog-row input,
+.folder-discovery[data-ui-density="v1"] .folder-discovery-catalog-row select,
+.folder-discovery[data-ui-density="v1"] .folder-discovery-catalog-add input,
+.folder-discovery[data-ui-density="v1"] .folder-discovery-catalog-add select { height:var(--control-h-sm); min-height:var(--control-h-sm); border-radius:var(--radius-sm); font-size:var(--text-body); }
+.folder-discovery[data-ui-density="v1"] .folder-discovery-catalog-row .icon-button { width:var(--control-h-sm); height:var(--control-h-sm); min-height:var(--control-h-sm); border-radius:var(--radius-sm); font-size:var(--text-body); }
+.folder-discovery[data-ui-density="v1"] .folder-discovery-row-action { min-height:var(--control-h-sm); border-radius:var(--radius-sm); font-size:var(--text-body); }
+
+/* Result widgets own chart/SVG sizing; only ordinary surrounding copy takes the pilot roles. */
+.folder-discovery[data-ui-density="v1"] .semantic-run-results>header h2 { font-size:var(--text-section); }
+.folder-discovery[data-ui-density="v1"] .semantic-run-results>header p,
+.folder-discovery[data-ui-density="v1"] .semantic-result-widget header span,
+.folder-discovery[data-ui-density="v1"] .semantic-result-widget header b,
+.folder-discovery[data-ui-density="v1"] .semantic-result-message,
+.folder-discovery[data-ui-density="v1"] .semantic-result-widget .semantic-result-table,
+.folder-discovery[data-ui-density="v1"] .semantic-result-empty,
+.folder-discovery[data-ui-density="v1"] .semantic-result-count { font-size:var(--text-caption); }
+.folder-discovery[data-ui-density="v1"] .semantic-result-widget header strong { font-size:var(--text-body); }
+.folder-discovery[data-ui-density="v1"] .semantic-result-kpi span,
+.folder-discovery[data-ui-density="v1"] .semantic-result-kpi b,
+.folder-discovery[data-ui-density="v1"] .semantic-result-count button { font-size:var(--text-caption); }
+.folder-discovery[data-ui-density="v1"] .semantic-result-count button { min-height:var(--control-h-sm); border-radius:var(--radius-sm); }
+.folder-discovery[data-ui-density="v1"] .recharts-text,
+.folder-discovery[data-ui-density="v1"] .recharts-legend-item-text,
+.folder-discovery[data-ui-density="v1"] .recharts-default-tooltip { font-size:var(--text-caption); }
+.folder-discovery[data-ui-density="v1"] small { font-size:var(--text-caption); }

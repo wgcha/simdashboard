@@ -19,6 +19,12 @@
 
 | 목적 | 문서 |
 |---|---|
+| MatNexus 참고 크기·밀도·본문 폭 개선 계획(P4 완료·확인 대기, 데스크톱 전용) | [`dashboard/ui-density-improvement-plan.md`](dashboard/ui-density-improvement-plan.md) |
+| UI 개선 P4 화면별 확산·데스크톱 검증 | [`dashboard/ui-density-p4-implementation.md`](dashboard/ui-density-p4-implementation.md) |
+| UI 개선 P3 글자 역할 시범 적용·검증 | [`dashboard/ui-density-p3-implementation.md`](dashboard/ui-density-p3-implementation.md) |
+| UI 개선 P2 공통 컴포넌트·결과 화면 구현과 검증 | [`dashboard/ui-density-p2-implementation.md`](dashboard/ui-density-p2-implementation.md) |
+| UI 개선 P1 토큰·작업 폭 구현과 검증 | [`dashboard/ui-density-p1-implementation.md`](dashboard/ui-density-p1-implementation.md) |
+| UI 개선 단계별 적용 계약·CSS/화면 기준선(P0) | [`dashboard/ui-density-p0-contract.md`](dashboard/ui-density-p0-contract.md) |
 | 사용/유통환경 폴더 연결·규칙·결과 확인 실습 | [`dashboard/folder-environment-guide.md`](dashboard/folder-environment-guide.md) |
 | 환경별 계층·선택적 Run Option·컴팩트 UI 설계와 구현 범위 | [`dashboard/folder-schema-ux-plan.md`](dashboard/folder-schema-ux-plan.md) |
 | Case·사용자 Run·수집 버전 기반 사용/유통환경 대시보드 | [`dashboard/README.md`](dashboard/README.md) |

@@ -37,3 +37,26 @@
 .run-condition-empty span { font-size:10px; }
 .run-condition-empty.same { border:1px solid var(--color-success-border); border-radius:6px; background:var(--color-success-surface); }
 @media (max-width:700px) { .run-condition-comparison { padding:11px; }.run-condition-header { flex-direction:column; }.run-condition-at-glance { align-self:flex-start; }.run-condition-columns { display:none; }.run-condition-body { overflow:visible; border:0; }.run-condition-row { min-width:0; grid-template-columns:1fr 1fr; gap:8px; padding:10px 0; }.run-condition-row>header { grid-column:1/-1; }.run-condition-value::before { display:block; margin-bottom:2px; color:var(--color-text-muted); font-size:10px; }.run-condition-value.baseline::before { content:'기준 Run'; }.run-condition-value.target::before { content:'대상 Run'; }.run-condition-status { grid-column:1/-1; }.run-condition-row details { grid-column:1/-1; } }
+
+.comparison-workspace[data-ui-density="v1"] .run-condition-comparison { font-size:var(--text-body); }
+.comparison-workspace[data-ui-density="v1"] .run-condition-header h3 { font-size:var(--text-subheading); }
+.comparison-workspace[data-ui-density="v1"] .run-condition-header span,
+.comparison-workspace[data-ui-density="v1"] .run-condition-header p,
+.comparison-workspace[data-ui-density="v1"] .run-condition-note,
+.comparison-workspace[data-ui-density="v1"] .run-condition-at-glance,
+.comparison-workspace[data-ui-density="v1"] .run-condition-row code,
+.comparison-workspace[data-ui-density="v1"] .run-condition-value small,
+.comparison-workspace[data-ui-density="v1"] .run-condition-status small,
+.comparison-workspace[data-ui-density="v1"] .run-condition-row summary,
+.comparison-workspace[data-ui-density="v1"] .run-condition-row details dl { font-size:var(--text-caption); }
+.comparison-workspace[data-ui-density="v1"] .run-condition-filters,
+.comparison-workspace[data-ui-density="v1"] .run-condition-row,
+.comparison-workspace[data-ui-density="v1"] .run-condition-empty { font-size:var(--text-body); }
+.comparison-workspace[data-ui-density="v1"] .run-condition-filters button { min-height:var(--control-h-sm); border-radius:var(--radius-sm); font-size:var(--text-body); }
+.comparison-workspace[data-ui-density="v1"] .run-condition-columns { min-height:var(--control-h-sm); font-size:var(--text-caption); }
+.comparison-workspace[data-ui-density="v1"] .run-condition-filters b { font-size:var(--text-caption); }
+.comparison-workspace[data-ui-density="v1"] .run-condition-row>header strong,
+.comparison-workspace[data-ui-density="v1"] .run-condition-value>span { font-size:var(--text-body); }
+.comparison-workspace[data-ui-density="v1"] .run-condition-status b { font-size:var(--text-caption); }
+.comparison-workspace[data-ui-density="v1"] .run-condition-empty strong { font-size:var(--text-subheading); }
+.comparison-workspace[data-ui-density="v1"] .run-condition-empty span { font-size:var(--text-caption); }

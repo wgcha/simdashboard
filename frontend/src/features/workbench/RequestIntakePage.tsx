@@ -7,6 +7,7 @@ import { ExpectedResultsPreview } from './ExpectedResultsPreview'
 import { requestTypeLabels, type ResultProfile, type WorkbenchRequestType } from './types'
 import { useMemoryQuery } from '../../shared/cache/useMemoryQuery'
 import { SearchableSelect } from '../../shared/components/selectionLabels'
+import './RequestIntakePage.css'
 
 type IntakeSource = 'EXTERNAL_SYSTEM' | 'DEPARTMENT_HEAD'
 type RequestTypeSelection = Pick<WorkbenchRequestType, 'id' | 'version'>
@@ -138,9 +139,9 @@ export function RequestIntakePage({ projects, initialProjectId, createdBy, canCr
     } finally { setSaving(false) }
   }
 
-  if (loading) return <div className="intake-state"><LoaderCircle className="spin" /> 접수 가능한 업무 유형을 확인하고 있습니다.</div>
+  if (loading) return <div className="intake-state" data-ui-density="v1"><LoaderCircle className="spin" /> 접수 가능한 업무 유형을 확인하고 있습니다.</div>
 
-  return <section className="request-intake-page" data-testid="request-intake-page">
+  return <section className="request-intake-page" data-ui-density="v1" data-testid="request-intake-page">
     <header className="request-intake-hero">
       <div><span><ClipboardPlus /> REQUEST INTAKE</span><h1>해석 의뢰 접수</h1><p>외부 시스템 전달 또는 부서장 지시를 수행자에게 제공된 작업 유형으로 접수합니다.</p></div>
       <aside><strong data-testid="active-request-type-count">{requestTypes.length}</strong><span>접수 가능한 활성 작업 유형</span><small>선택한 유형과 버전은 접수 시 작업계획으로 고정됩니다.</small></aside>
