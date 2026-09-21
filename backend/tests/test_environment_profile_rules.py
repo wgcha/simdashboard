@@ -23,3 +23,15 @@ def test_parent_scoped_rules_preserve_role_ambiguity_and_ignore_physical_depth()
 def test_invalid_rules_do_not_cross_environment_or_execute_arbitrary_matchers(rule):
     with pytest.raises(ValueError):
         validate_rules("USAGE", {"rules": [rule]})
+
+
+def test_usage_source_defaults_preserve_exact_segment_arrays():
+    result = validate_rules("USAGE", {"rules": [], "usage_sources": {
+        "version": 1, "selection": {"json": True, "csv": False},
+        "metric_paths": {"Slope_Angle:front:OK/NG": ["nested.key", "OK/NG"]},
+    }})
+
+    assert result["usage_sources"] == {
+        "version": 1, "selection": {"json": True, "csv": False},
+        "metric_paths": {"Slope_Angle:front:OK/NG": ["nested.key", "OK/NG"]},
+    }

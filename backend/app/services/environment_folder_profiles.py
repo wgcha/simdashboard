@@ -43,7 +43,26 @@ def validate_rules(environment, definition):
         if depth is not None:
             item["depth"] = depth
         normalized.append(item)
-    return {"roles": sorted(allowed), "rules": normalized}
+    result = {"roles": sorted(allowed), "rules": normalized}
+    sources = definition.get("usage_sources")
+    if sources is not None:
+        if environment != "USAGE" or not isinstance(sources, dict):
+            raise ValueError("사용환경 파일 선택 규칙 형식이 올바르지 않습니다.")
+        if sources.get("version", 1) != 1:
+            raise ValueError("지원하지 않는 사용환경 파일 선택 규칙 버전입니다.")
+        selection = sources.get("selection", {})
+        paths = sources.get("metric_paths", {})
+        if not isinstance(selection, dict) or any(key not in {"json", "video", "image", "csv", "media"} or type(value) is not bool for key, value in selection.items()):
+            raise ValueError("파일 형식 선택은 지원 형식의 true/false 값이어야 합니다.")
+        if not isinstance(paths, dict) or len(paths) > 100:
+            raise ValueError("JSON 키 경로는 최대 100개까지 저장할 수 있습니다.")
+        clean_paths = {}
+        for key, segments in paths.items():
+            if not isinstance(key, str) or len(key) > 512 or not isinstance(segments, list) or not 1 <= len(segments) <= 16 or any(not isinstance(part, str) or not part or len(part) > 256 for part in segments):
+                raise ValueError("JSON 키 경로는 비어 있지 않은 segment 배열이어야 합니다.")
+            clean_paths[key] = list(segments)
+        result["usage_sources"] = {"version": 1, "selection": dict(selection), "metric_paths": clean_paths}
+    return result
 
 
 def resolve_role(name, depth, parent_role, rules, environment):

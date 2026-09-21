@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 from ..database_connection import connect
 from ..security import write_audit_event
 from ..modules.access_control import RESULT_IMPORT, SYSTEM_CATALOG_MANAGE, require_permission, require_resource_permission
-from ..services import folder_discovery as legacy, folder_discovery_environment as service
+from ..services import dashboard_capture, folder_discovery as legacy, folder_discovery_environment as service
 from .semantic_body_limit import SemanticBodyLimitRoute
 
 router = APIRouter(prefix="/api/folder-discovery/environments", tags=["folder-discovery-environments"], route_class=SemanticBodyLimitRoute)
@@ -17,9 +17,19 @@ class Scan(BaseModel):
     request_id: str | None = None
 class Assignment(BaseModel):
     node_id: str; role_kind: str; confirm: bool = True; target_mode: Literal["CREATE", "LINK"] = "CREATE"; target_id: str | None = None
-class Preview(BaseModel): scan_id: str; assignments: list[Assignment] = Field(default_factory=list, max_length=5000)
+class Preview(BaseModel):
+    scan_id: str
+    assignments: list[Assignment] = Field(default_factory=list, max_length=5000)
+    require_usage_review: bool = False
 class Register(BaseModel): preview_id: str; idempotency_key: str = Field(min_length=8, max_length=128); capture: bool = True
 class Retry(BaseModel): job_ids: list[str] | None = Field(default=None, max_length=500)
+class UsageReview(BaseModel):
+    case_relative_path: str = Field(min_length=1, max_length=1024)
+    selection: dict = Field(default_factory=dict)
+    selected_sources: dict[str, str] = Field(default_factory=dict)
+    metric_paths: dict[str, list[str]] = Field(default_factory=dict)
+    excludes: dict[str, str] = Field(default_factory=dict)
+    acknowledge_partial: bool = False
 def admin(request, conn):
     require_permission(request, SYSTEM_CATALOG_MANAGE, conn=conn)
     if not request.state.principal.is_global_admin:
@@ -39,15 +49,29 @@ def scan(payload: Scan, request: Request):
 def preview(payload: Preview, request: Request):
     with connect() as conn:
         admin(request, conn)
-        try: return service.preview(conn, payload.scan_id, [x.model_dump() for x in payload.assignments], request.state.principal.user_id)
+        try: return service.preview(conn, payload.scan_id, [x.model_dump() for x in payload.assignments], request.state.principal.user_id, payload.require_usage_review)
         except ValueError as exc: raise HTTPException(422, {"code":"ENVIRONMENT_PREVIEW_INVALID", "message":str(exc)}) from exc
+@router.post("/previews/{preview_id}/usage-review")
+def usage_review(preview_id: str, payload: UsageReview, request: Request):
+    with connect() as conn:
+        admin(request, conn)
+        context = service.preview_context(conn, preview_id); scoped(request, conn, context["request_id"])
+        try:
+            with legacy.WRITE_LOCK:
+                return service.usage_review(conn, preview_id, payload.case_relative_path, payload.selection, payload.selected_sources,
+                                            payload.metric_paths, payload.excludes, payload.acknowledge_partial, legacy.configured_root(conn))
+        except dashboard_capture.DashboardCaptureError as exc:
+            raise HTTPException(422, {"code": exc.code, "message": str(exc)}) from exc
+        except ValueError as exc:
+            raise HTTPException(422, {"code":"USAGE_SOURCE_REVIEW_INVALID", "message":str(exc)}) from exc
 @router.post("/registrations")
 def register(payload: Register, request: Request):
     with connect() as conn:
         admin(request, conn)
         context = service.preview_context(conn, payload.preview_id); scoped(request, conn, context["request_id"])
         try:
-            result = service.register(conn, payload.preview_id, payload.idempotency_key, payload.capture, request.state.principal, legacy.configured_root(conn))
+            with legacy.WRITE_LOCK:
+                result = service.register(conn, payload.preview_id, payload.idempotency_key, payload.capture, request.state.principal, legacy.configured_root(conn))
             write_audit_event(request=request, principal=request.state.principal, status_code=200, action="FOLDER_ENVIRONMENT_REGISTERED", detail={"registration_id": result["registration_id"], "preview_id": payload.preview_id}, connection=conn)
             return result
         except ValueError as exc: raise HTTPException(422, {"code":"ENVIRONMENT_REGISTRATION_INVALID", "message":str(exc)}) from exc

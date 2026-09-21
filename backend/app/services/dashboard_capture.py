@@ -11,8 +11,9 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from ..database_connection import ConnectionLike, rows
-from ..domains.dashboard.parser import _pick_usage, build_distribution_scene, fingerprint, parse_scene_name
+from ..domains.dashboard.parser import EVALUATIONS, _pick_usage, build_distribution_scene, fingerprint, parse_scene_name
 from . import spdm_storage
+from . import usage_source_review
 
 
 MAX_ASSET_BYTES = 32 * 1024 * 1024
@@ -189,6 +190,8 @@ def _walk(
     relative: str,
     *,
     issues: list[str] | None = None,
+    include_path=None,
+    excluded_files: list[dict[str, str]] | None = None,
 ) -> list[tuple[str, bytes, str]]:
     base = _safe_target(root, relative)
     excluded = {"cad", "report", "reports", "final", "validation", "library"}
@@ -216,10 +219,13 @@ def _walk(
                     if entry.is_dir(follow_symlinks=False):
                         stack.append((path, depth + 1))
                     elif entry.is_file(follow_symlinks=False):
-                        if path.suffix.casefold() in allowed:
+                        relative_path = path.relative_to(root).as_posix()
+                        if path.suffix.casefold() in allowed and (include_path is None or include_path(relative_path)):
                             items.append(path)
                             if len(items) > 10000:
                                 raise DashboardCaptureError("DASHBOARD_CAPTURE_TOO_LARGE", "결과 파일 수 제한을 초과했습니다.")
+                        elif excluded_files is not None:
+                            excluded_files.append({"relative_path": _safe_issue_relative(relative_path), "reason": "FORMAT_OR_PATTERN_EXCLUDED"})
                         elif issues is not None:
                             issues.append(_unprocessed_issue(root, path, "UNSUPPORTED_EXTENSION"))
         result, total, signatures = [], 0, []
@@ -271,10 +277,16 @@ def create_capture(conn: ConnectionLike, payload: dict[str, Any], *, actor: str)
             raise DashboardCaptureError("DASHBOARD_ROOT_ID_INVALID", "설정된 저장소와 storage_root_id가 일치하지 않습니다.")
     _validate_case_root(root, relative, str(payload["environment"]))
     walk_issues: list[str] = []
-    files = _walk(root, relative, issues=walk_issues)
+    review_contract = payload.get("usage_source_review") if payload.get("environment") == "USAGE" else None
+    review_selection = usage_source_review.selection(review_contract.get("selection") if isinstance(review_contract, dict) else None)
+    files = _walk(root, relative, issues=walk_issues,
+                  include_path=(lambda path: usage_source_review.include_path(path, review_selection)) if review_contract else None,
+                  excluded_files=[] if review_contract else None)
     manifest = [{"relative_path": path, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data), "media_type": media_type} for path, data, media_type in files]
     recipe_version = "dashboard-v3"
     fingerprint_context = {key: payload.get(key) for key in ("project_id", "request_id", "simulation_case_id", "load_case_id", "execution_run_id", "run_option_id", "option_label", "option_status", "run_option_labels", "hierarchy_assignments", "rule_profile_id", "rule_profile_version", "mode", "component_id")}
+    if review_contract:
+        fingerprint_context["usage_source_review"] = review_contract.get("fingerprint")
     if walk_issues:
         fingerprint_context["quality_issues"] = sorted(set(walk_issues))
     digest = fingerprint({"files": manifest, "context": fingerprint_context}, recipe_version)
@@ -301,7 +313,7 @@ def create_capture(conn: ConnectionLike, payload: dict[str, Any], *, actor: str)
         grouped: dict[str, list[tuple[str, bytes]]] = {}
         for path, data, _ in files:
             grouped.setdefault(PurePosixPath(path).parts[0] if PurePosixPath(path).parts else "", []).append((path, data))
-        parsed = {"environment": "USAGE", "context": context, **_usage_payload(grouped)}
+        parsed = {"environment": "USAGE", "context": context, **_usage_payload(grouped, review_contract)}
         if walk_issues:
             parsed["quality_issues"] = sorted(set(walk_issues))
     else:
@@ -369,8 +381,59 @@ def _usage_identity(path: str, evaluation: str):
     return match.groupdict().get("direction", "common").lower(), match.group("condition")
 
 
-def _usage_payload(grouped: dict[str, list[tuple[str, bytes]]]) -> dict[str, Any]:
+def _usage_payload(grouped: dict[str, list[tuple[str, bytes]]], review_contract: dict[str, Any] | None = None) -> dict[str, Any]:
     files = [(path, data) for entries in grouped.values() for path, data in entries]
+    if review_contract:
+        inspected = usage_source_review.review(
+            files,
+            selected=review_contract.get("selection"),
+            selected_sources=review_contract.get("selected_sources"),
+            metric_paths=review_contract.get("metric_paths"),
+            excludes=review_contract.get("excludes"),
+            profile_id=review_contract.get("profile_id"),
+            profile_revision=review_contract.get("profile_revision"),
+        )
+        expected_sources = sorted(review_contract.get("sources") or [], key=lambda item: str(item.get("source", "")).casefold())
+        if expected_sources != inspected["contract"]["sources"]:
+            raise DashboardCaptureError("USAGE_SOURCE_REVIEW_STALE", "검수 후 선택 원본이 변경되었습니다. 다시 검수하세요.")
+        if inspected["blocking_count"] or ((inspected["missing_count"] or review_contract.get("excludes")) and not review_contract.get("acknowledge_partial")):
+            raise DashboardCaptureError("USAGE_SOURCE_REVIEW_REQUIRED", "파일·값 검수의 오류 또는 부분 게시 확인을 완료하세요.")
+        result = []
+        for entry in inspected["entries"]:
+            paths = {metric["key"]: metric["path"] for metric in entry["metrics"]}
+            statuses = {metric["key"]: metric["status"] for metric in entry["metrics"] if metric["status"] != "READY"}
+            result.append({key: entry[key] for key in ("evaluation", "direction", "condition", "source", "status", "values")}
+                          | {"metric_paths": paths, "metric_statuses": statuses, "media": []})
+        # Match selected media only to the reviewed source stem; unmatched media
+        # remain media-only entries just as the legacy collector did.
+        used_media = set()
+        for item in result:
+            source = item.get("source")
+            if not source:
+                continue
+            source_path = PurePosixPath(source)
+            for path, _ in files:
+                media_path = PurePosixPath(path)
+                if media_path.suffix.casefold() in usage_source_review.MEDIA_SUFFIXES and media_path.parent == source_path.parent and media_path.stem == source_path.stem.removesuffix("_result"):
+                    used_media.add(path)
+                    item["media"].append({"relative_path": path, "title": item["evaluation"] + " · " + item["direction"], "kind": "VIDEO" if media_path.suffix.casefold() in {".mp4", ".webm"} else "IMAGE", "status": "READY", "frame_role": "UNKNOWN"})
+        for path, _ in files:
+            media_path = PurePosixPath(path)
+            evaluation = usage_source_review.evaluation_for_path(path)
+            # Media uses the historical stem convention (without ``_result``),
+            # while numeric sources intentionally require the strict result
+            # suffix in the review selector.
+            identity = _usage_identity(path, evaluation) if evaluation else None
+            if path not in used_media and media_path.suffix.casefold() in usage_source_review.MEDIA_SUFFIXES and identity:
+                target = next((entry for entry in result if entry["evaluation"] == evaluation and entry["direction"] == identity[0] and entry.get("condition") == identity[1]), None)
+                media = {"relative_path": path, "title": evaluation + " · " + identity[0], "kind": "VIDEO" if media_path.suffix.casefold() in {".mp4", ".webm"} else "IMAGE", "status": "READY", "frame_role": "UNKNOWN"}
+                if target is not None:
+                    target["condition"] = identity[1]
+                    target["media"].append(media)
+                else:
+                    media["title"] += " · " + identity[1]
+                    result.append({"evaluation": evaluation, "direction": identity[0], "condition": identity[1], "status": "MISSING", "values": {}, "metric_paths": {}, "metric_statuses": {}, "media_only": True, "media": [media]})
+        return {"evaluation_names": list(EVALUATIONS), "evaluations": result, "usage_source_review": inspected["contract"]}
     picked = _pick_usage([(path, data) for path, data in files if PurePosixPath(path).suffix.casefold() in {".json", ".csv"}])
     result = []
     used_media = set()

@@ -136,14 +136,33 @@ function UsageArea({ caseId, captureId, referenceCaseId, referenceCaptureId }: {
   if (error) return <State message={error} error />
   if (!data) return <State message="사용환경 평가를 불러오는 중입니다." />
   const media = data.evaluations.flatMap((evaluation) => evaluation.media ?? [])
-  const cell = (value?: DashboardValue | null) => value ? <>{value.value == null ? (value.verdict ?? '값 없음') : valueText(value)}{value.value != null && value.verdict ? ` / ${value.verdict}` : ''}<small>{value.status !== 'READY' ? value.status : ''}</small></> : '해당 없음'
+  type Metric = 'value' | 'verdict'
+  const directions = ['common', 'front', 'rear'] as const
+  const keys: Record<string, string> = { Settle: 'Set Tilt Angle @ Settle (deg)', Wobble: 'Wobble Disp. (mm)', Horizontal_Force_Angle: 'Set Tilt Angle Difference (deg)', Slope_Angle: 'Slope Angle (deg)', Slope_Angle_360: 'OK/NG' }
+  const metricStatus = (value: DashboardValue, metric: Metric) => value[`${metric}_status`] ?? (value[metric] != null ? 'READY' : value.status ?? 'MISSING')
+  const stateLabel = (status: string) => status === 'READY' ? '확인' : ['MISSING', 'MISSING_SOURCE', 'MISSING_NUMERIC', 'ABSENT', 'NO_DATA', 'EXCLUDED'].includes(status) ? '자료 없음' : status === 'NOT_APPLICABLE' ? '해당 없음' : '검수 필요'
+  const cell = (value: DashboardValue | null | undefined, metric: Metric) => {
+    if (!value) return <span className="usage-missing">해당 없음</span>
+    const state = metricStatus(value, metric)
+    const label = stateLabel(state)
+    const text = state === 'READY' && value[metric] != null ? metric === 'verdict' ? value.verdict : valueText(value) : '—'
+    return <span className={`usage-cell usage-cell-${label === '검수 필요' ? 'review' : state === 'READY' ? 'ready' : 'missing'}`}><strong>{text}</strong><small>{label}</small></span>
+  }
+  const fieldKey = (evaluation: UsageDashboard['evaluations'][number], metric: Metric) => directions.map((direction) => evaluation[direction]?.[`${metric}_key`]).find(Boolean) || (metric === 'verdict' ? 'OK/NG' : keys[evaluation.id])
+  type EvaluationRow = { evaluation: UsageDashboard['evaluations'][number]; label: string; key?: string; metric: Metric }
+  const evaluationRows: EvaluationRow[] = data.evaluations.flatMap((evaluation): EvaluationRow[] => {
+    const metric = evaluation.id === 'Slope_Angle_360' ? 'verdict' : 'value'
+    const row: EvaluationRow = { evaluation, label: keys[evaluation.id] ? evaluation.id : evaluation.name, key: fieldKey(evaluation, metric), metric }
+    return evaluation.id === 'Slope_Angle' ? [row, { evaluation, label: '', key: fieldKey(evaluation, 'verdict'), metric: 'verdict' }] : [row]
+  })
   return <div className="simulation-dashboard__usage" data-testid="usage-dashboard">
     <div className="simulation-dashboard__usage-media">{media.length ? media.map((asset) => <div key={asset.asset_id}><h3>{asset.title}</h3><Media asset={asset} /></div>) : <State message="연결된 미디어 없음" />}</div>
-    <div className="simulation-dashboard__usage-table"><header><h3>다섯 평가 종합</h3><small>{data.status}</small></header><Table><TableHead><TableRow><TableHeaderCell>평가</TableHeaderCell><TableHeaderCell>공통</TableHeaderCell><TableHeaderCell>전방</TableHeaderCell><TableHeaderCell>후방</TableHeaderCell><TableHeaderCell>Reference</TableHeaderCell></TableRow></TableHead><TableBody>{data.evaluations.map((evaluation) => <TableRow key={evaluation.id}><TableHeaderCell>{evaluation.name}</TableHeaderCell><TableCell>{cell(evaluation.common)}</TableCell><TableCell>{cell(evaluation.front)}</TableCell><TableCell>{cell(evaluation.rear)}</TableCell><TableCell>{evaluation.reference ? <>{evaluation.reference.reason || ['common', 'front', 'rear'].map((direction) => { const value = evaluation.reference?.[direction as 'common' | 'front' | 'rear']; return value ? <div key={direction}>{direction === 'common' ? '공통' : direction === 'front' ? '전방' : '후방'}: {cell(value)}</div> : null })}</> : '미선택'}</TableCell></TableRow>)}</TableBody></Table></div>
+    <div className="simulation-dashboard__usage-table"><header><h3>다섯 평가 종합</h3><small>{data.status === 'READY' ? '확인' : '일부 항목 확인 필요'}</small></header><Table><TableHead><TableRow><TableHeaderCell>평가 / 원문 키</TableHeaderCell><TableHeaderCell>공통</TableHeaderCell><TableHeaderCell>전방</TableHeaderCell><TableHeaderCell>후방</TableHeaderCell><TableHeaderCell>Reference</TableHeaderCell></TableRow></TableHead><TableBody>{evaluationRows.map((row) => <TableRow key={`${row.evaluation.id}:${row.metric}`}><TableHeaderCell><strong>{row.label}</strong>{row.key ? <small className="usage-source-key" title={row.key}>{row.key}</small> : null}</TableHeaderCell><TableCell>{cell(row.evaluation.common, row.metric)}</TableCell><TableCell>{cell(row.evaluation.front, row.metric)}</TableCell><TableCell>{cell(row.evaluation.rear, row.metric)}</TableCell><TableCell>{row.evaluation.reference ? <>{row.evaluation.reference.reason || directions.map((direction) => { const value = row.evaluation.reference?.[direction]; return value ? <div key={direction}>{direction === 'common' ? '공통' : direction === 'front' ? '전방' : '후방'}: {cell(value, row.metric)}</div> : null })}</> : '미선택'}</TableCell></TableRow>)}</TableBody></Table></div>
     <div className="simulation-dashboard__usage-values">{data.evaluations.filter((evaluation) => evaluation.id !== 'Slope_Angle_360').map((evaluation) => {
-      const points = (['common', 'front', 'rear'] as const).filter((key) => evaluation[key] != null).map((key) => ({ direction: key === 'common' ? '공통' : key === 'front' ? '전방' : '후방', current: evaluation[key]?.value, reference: evaluation.reference?.[key]?.value }))
-      return <article key={evaluation.id}><h3>{evaluation.name}</h3><small>{evaluation.common?.unit || evaluation.front?.unit || evaluation.rear?.unit}</small><div style={{height: 150}}><ResponsiveContainer width="100%" height="100%"><BarChart data={points}><XAxis dataKey="direction" /><YAxis /><Tooltip /><Bar dataKey="current" name="현재 Case" fill="var(--color-chart-series-1)" /><Bar dataKey="reference" name="Reference" fill="var(--color-chart-series-2)" /></BarChart></ResponsiveContainer></div></article>
-    })}</div>{data.quality_issues.length ? <Issues issues={data.quality_issues} /> : null}
+      const points = directions.filter((key) => evaluation[key] != null || evaluation.reference?.[key] != null).map((key) => ({ direction: key === 'common' ? '공통' : key === 'front' ? '전방' : '후방', current: evaluation[key] && metricStatus(evaluation[key]!, 'value') === 'READY' ? evaluation[key]?.value : null, reference: evaluation.reference?.[key] && metricStatus(evaluation.reference[key]!, 'value') === 'READY' ? evaluation.reference[key]?.value : null }))
+      const key = fieldKey(evaluation, 'value')
+      return <article key={evaluation.id}><h3>{keys[evaluation.id] ? evaluation.id : evaluation.name}</h3>{key ? <small className="usage-source-key" title={key}>{key}</small> : null}<small>{evaluation.common?.unit || evaluation.front?.unit || evaluation.rear?.unit}</small><div style={{height: 150}}><ResponsiveContainer width="100%" height="100%"><BarChart data={points}><XAxis dataKey="direction" /><YAxis /><Tooltip /><Bar dataKey="current" name="현재 Case" fill="var(--color-chart-series-1)" /><Bar dataKey="reference" name="Reference" fill="var(--color-chart-series-2)" /></BarChart></ResponsiveContainer></div></article>
+    })}</div>
   </div>
 }
 

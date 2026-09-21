@@ -9,11 +9,11 @@ from .dashboard_capture import DashboardCaptureError, _decode, get_capture
 
 EDGES = {"LEFT": "LH", "RIGHT": "RH", "TOP": "TOP", "BOTTOM": "BOT"}
 USAGE_KEYS = {
-    "Settle": ("안착 Tilt", "Set Tilt Angle @ Settle (deg)", "deg"),
+    "Settle": ("Settle", "Set Tilt Angle @ Settle (deg)", "deg"),
     "Wobble": ("Wobble", "Wobble Disp. (mm)", "mm"),
-    "Horizontal_Force_Angle": ("대체각도", "Set Tilt Angle Difference (deg)", "deg"),
-    "Slope_Angle": ("경사도", "Slope Angle (deg)", "deg"),
-    "Slope_Angle_360": ("경사도 360", None, None),
+    "Horizontal_Force_Angle": ("Horizontal_Force_Angle", "Set Tilt Angle Difference (deg)", "deg"),
+    "Slope_Angle": ("Slope_Angle", "Slope Angle (deg)", "deg"),
+    "Slope_Angle_360": ("Slope_Angle_360", None, None),
 }
 
 
@@ -82,6 +82,34 @@ def catalog(conn, request_id, environment):
     return result
 
 
+def usage_metric(entry, key, source_status, *, verdict=False):
+    """Resolve exact key segments without mutating historical capture payloads."""
+    if key is None:
+        return None, "NOT_APPLICABLE", None
+    path = (entry or {}).get("metric_paths", {}).get(key, [key])
+    label = " / ".join(str(segment) for segment in path)
+    override = (entry or {}).get("metric_statuses", {}).get(key)
+    if override and override != "READY":
+        return None, override, label
+    if source_status != "READY":
+        return None, source_status, label
+    value = (entry or {}).get("values", {})
+    for segment in path:
+        if not isinstance(value, dict) or segment not in value:
+            return None, "MISSING_FIELD", label
+        value = value[segment]
+    if value is None:
+        return None, "NULL_VALUE", label
+    if verdict:
+        valid = isinstance(value, str) and value in {"OK", "NG"}
+        return (value, "READY", label) if valid else (None, "INVALID_TYPE", label)
+    # Reviewed JSON is strict; preserve the historical numeric-string contract.
+    if (entry or {}).get("metric_paths") and not isinstance(value, (int, float)):
+        return None, "INVALID_TYPE", label
+    numeric = number(value)
+    return numeric, "READY" if numeric is not None else "INVALID_TYPE", label
+
+
 def usage(capture, case_id):
     if capture["environment"] != "USAGE" or capture["case_id"] != case_id:
         fail("선택 Case와 수집 버전이 일치하지 않습니다.")
@@ -94,21 +122,25 @@ def usage(capture, case_id):
         entries = [e for e in payload.get("evaluations", []) if e.get("evaluation") == evaluation]
         row = {"id": evaluation, "name": label, "status": "READY", "common": None, "front": None, "rear": None, "media": []}
         for direction in (["common"] if evaluation == "Settle" else ["front", "back"]):
-            candidates = [e for e in entries if e.get("direction", "common") == direction]
+            candidates = [e for e in entries if e.get("direction", "common") == direction and not e.get("media_only")]
             entry = candidates[0] if len(candidates) == 1 else None
             status = entry.get("status", "MISSING") if entry else ("AMBIGUOUS" if candidates else "MISSING")
-            values = entry.get("values", {}) if entry else {}
-            value = number(values.get(key)) if key else None
-            verdict = values.get("OK/NG")
-            if status == "READY" and (key and value is None or evaluation in {"Slope_Angle", "Slope_Angle_360"} and verdict not in {"OK", "NG"}):
-                status = "MISSING_FIELD"
+            value, value_status, value_key = usage_metric(entry, key, status)
+            verdict, verdict_status, verdict_key = usage_metric(
+                entry, "OK/NG" if evaluation in {"Slope_Angle", "Slope_Angle_360"} else None, status, verdict=True)
+            field_errors = [s for s in (value_status, verdict_status) if s not in {"READY", "NOT_APPLICABLE"}]
+            if status == "READY" and field_errors:
+                status = field_errors[0]
             if status != "READY":
                 issues.add(status)
                 row["status"] = "PARTIAL"
-            cell = {"value": value, "unit": unit, "status": status, "verdict": verdict if verdict in {"OK", "NG"} else None,
+            cell = {"value": value, "unit": unit, "status": status, "verdict": verdict,
+                    "value_status": value_status, "verdict_status": verdict_status,
+                    "value_key": value_key, "verdict_key": verdict_key,
                     "source": entry.get("source") if entry else None, "condition": entry.get("condition") if entry else None}
             row["rear" if direction == "back" else direction] = cell
             row["media"].extend(entry.get("media", []) if entry else [])
+        row["media"].extend(asset for entry in entries if entry.get("media_only") for asset in entry.get("media", []))
         rows.append(row)
     return {"contract_version": 1, "context": context, "status": "PARTIAL" if issues else "READY", "evaluations": rows, "quality_issues": sorted(issues)}
 
@@ -121,14 +153,23 @@ def usage_reference(result, reference):
             current, candidate = row.get(direction), other.get(direction)
             if current is None and candidate is None:
                 comparison[direction] = None
-            elif not current or not candidate or current["status"] != "READY" or candidate["status"] != "READY":
+            elif not current or not candidate:
                 comparison[direction] = None
                 comparison.update(status="INCOMPARABLE", reason="한쪽 결과가 없거나 읽기 오류입니다.")
             elif current.get("unit") != candidate.get("unit") or not current.get("condition") or current.get("condition") != candidate.get("condition"):
                 comparison[direction] = None
                 comparison.update(status="INCOMPARABLE", reason="동일 단위·조건 대응을 확인할 수 없습니다.")
             else:
-                comparison[direction] = candidate
+                compared = dict(candidate)
+                for field in ("value", "verdict"):
+                    state = field + "_status"
+                    if current.get(state, current["status"]) != "READY" or candidate.get(state, candidate["status"]) != "READY" or current.get(field + "_key") != candidate.get(field + "_key"):
+                        compared[field] = None
+                        compared[state] = "INCOMPARABLE"
+                valid = any(compared.get(field) is not None for field in ("value", "verdict"))
+                comparison[direction] = compared if valid else None
+                if not valid:
+                    comparison.update(status="INCOMPARABLE", reason="한쪽 결과가 없거나 읽기 오류입니다.")
         row["reference"] = comparison
     return result
 

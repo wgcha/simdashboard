@@ -15,6 +15,7 @@ from . import dashboard_capture
 from . import folder_discovery as legacy
 from .folder_discovery_scan import root_identity, scan
 from .environment_folder_profiles import resolve_role
+from . import usage_source_review
 
 ENVIRONMENTS = ("USAGE", "DISTRIBUTION")
 ROLES = {
@@ -29,6 +30,9 @@ def now(): return datetime.now(timezone.utc).replace(tzinfo=None)
 def ident(prefix): return f"{prefix}-{uuid4().hex}"
 def decoded(value): return json.loads(value) if isinstance(value, str) else value
 def stable(prefix, root_key, path, role): return f"{prefix}-{uuid5(NAMESPACE_URL, root_key + ':' + path.casefold() + ':' + role).hex}"
+def preview_data(value):
+    value = decoded(value)
+    return value if isinstance(value, dict) else {"rows": value, "usage_reviews": {}}
 
 
 def profiles(conn):
@@ -63,7 +67,7 @@ def save_scan(conn, root, relative_path: str, environment: str, profile_id: str 
     scan_id = ident("environment-scan")
     conn.execute("INSERT INTO folder_environment_scans(id,root_key,relative_path,environment,profile_id,profile_revision,project_id,request_id,status,tree_json,issues_json,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                  [scan_id, root_key, relative_path, environment, profile["id"], profile["revision"], project_id, request_id, result["status"], json.dumps(nodes, ensure_ascii=False), json.dumps(result["issues"], ensure_ascii=False), actor, now()])
-    return {"id": scan_id, "environment": environment, "profile_id": profile["id"], "profile_revision": profile["revision"], "relative_path": relative_path, "status": result["status"], "nodes": nodes, "issues": result["issues"]}
+    return {"id": scan_id, "environment": environment, "profile_id": profile["id"], "profile_revision": profile["revision"], "usage_sources": profile["rules"].get("usage_sources"), "relative_path": relative_path, "status": result["status"], "nodes": nodes, "issues": result["issues"]}
 
 
 def _profile(conn, profile_id, environment):
@@ -139,7 +143,7 @@ def _role(environment, name, parent, depth=0, rules=None):
     return None, None
 
 
-def preview(conn, scan_id, assignments, actor):
+def preview(conn, scan_id, assignments, actor, require_usage_review=False):
     records = rows(conn.execute("SELECT id,root_key,environment,project_id,request_id,status,tree_json FROM folder_environment_scans WHERE id=?", [scan_id]))
     if not records: legacy.fail("ENVIRONMENT_SCAN_NOT_FOUND", "환경 조사 결과를 찾을 수 없습니다.", 404)
     saved = records[0]; nodes = decoded(saved["tree_json"]); by_id = {node["id"]: node for node in nodes}
@@ -207,8 +211,10 @@ def preview(conn, scan_id, assignments, actor):
     if case_count == 0:
         unresolved.append({"message": "등록할 Simulation Case가 없습니다."})
     preview_id = ident("environment-preview")
-    conn.execute("INSERT INTO folder_environment_previews(id,scan_id,rows_json,can_apply,created_by,created_at) VALUES(?,?,?,?,?,?)", [preview_id, scan_id, json.dumps(plan, ensure_ascii=False), can_apply, actor, now()])
-    return {"id": preview_id, "scan_id": scan_id, "environment": saved["environment"], "can_apply": can_apply, "rows": plan, "unresolved_count": len(unresolved), "message": "등록할 Simulation Case가 없습니다." if case_count == 0 else None, "summary": {"new": len(work_rows) - existing, "existing": existing, "evaluations": sum(n["role_kind"] == "EVALUATION" for n in plan), "scenes": sum(n["role_kind"] == "SCENE" for n in plan)}}
+    review_required = bool(require_usage_review and saved["environment"] == "USAGE")
+    stored = {"rows": plan, "usage_reviews": {}, "usage_review_snapshots": {}, "require_usage_review": review_required} if review_required else plan
+    conn.execute("INSERT INTO folder_environment_previews(id,scan_id,rows_json,can_apply,created_by,created_at) VALUES(?,?,?,?,?,?)", [preview_id, scan_id, json.dumps(stored, ensure_ascii=False), can_apply, actor, now()])
+    return {"id": preview_id, "scan_id": scan_id, "environment": saved["environment"], "can_apply": can_apply, "require_usage_review": review_required, "rows": plan, "unresolved_count": len(unresolved), "message": "등록할 Simulation Case가 없습니다." if case_count == 0 else None, "summary": {"new": len(work_rows) - existing, "existing": existing, "evaluations": sum(n["role_kind"] == "EVALUATION" for n in plan), "scenes": sum(n["role_kind"] == "SCENE" for n in plan)}}
 
 
 def _recompute_context(nodes, root_key, environment, seeded_project, seeded_request):
@@ -238,6 +244,23 @@ def _recompute_context(nodes, root_key, environment, seeded_project, seeded_requ
         contexts[node["relative_path"]] = next_context
 
 
+def _validated_usage_review(root, relative_path, contract):
+    if not isinstance(contract, dict):
+        legacy.fail("USAGE_SOURCE_REVIEW_REQUIRED", "파일·값 검수를 완료하세요.")
+    chosen = usage_source_review.selection(contract.get("selection"))
+    files = dashboard_capture._walk(root, relative_path, include_path=lambda path: usage_source_review.include_path(path, chosen))
+    checked = usage_source_review.review([(path, data) for path, data, _ in files], selected=chosen,
+        selected_sources=contract.get("selected_sources"), metric_paths=contract.get("metric_paths"), excludes=contract.get("excludes"),
+        profile_id=contract.get("profile_id"), profile_revision=contract.get("profile_revision"))
+    expected = sorted(contract.get("sources") or [], key=lambda item: str(item.get("source", "")).casefold())
+    if expected != checked["contract"]["sources"]:
+        legacy.fail("USAGE_SOURCE_REVIEW_STALE", "검수 후 선택 원본이 변경되었습니다. 다시 검수하세요.")
+    partial = bool(contract.get("acknowledge_partial"))
+    if checked["blocking_count"] or ((checked["missing_count"] or contract.get("excludes")) and not partial):
+        legacy.fail("USAGE_SOURCE_REVIEW_REQUIRED", "파일·값 검수의 오류 또는 부분 게시 확인을 완료하세요.")
+    return contract
+
+
 def register(conn, preview_id, idempotency_key, capture, principal, root):
     actor = principal.user_id
     existing = conn.execute("SELECT id,preview_id FROM folder_environment_registrations WHERE idempotency_key=?", [idempotency_key]).fetchone()
@@ -257,7 +280,10 @@ def register(conn, preview_id, idempotency_key, capture, principal, root):
     if fresh["status"] != "COMPLETE" or [item["relative_path"] for item in fresh["nodes"]] != saved_paths or root_identity(root) != scan_row[0]:
         legacy.fail("ENVIRONMENT_SCAN_STALE", "조사 이후 폴더 구조 또는 저장소가 변경되었습니다. 다시 조사하세요.")
     registration_id = ident("environment-registration")
-    plan_rows = decoded(preview_row[1])
+    preview_saved = preview_data(preview_row[1]); plan_rows = preview_saved["rows"]
+    if preview_saved.get("require_usage_review"):
+        for entry in (item for item in plan_rows if item["role_kind"] == "SIMULATION_CASE"):
+            _validated_usage_review(root, entry["relative_path"], preview_saved.get("usage_reviews", {}).get(entry["relative_path"]))
     # Registration is durable before any file read.  A capture is an
     # independently retryable side effect and must never roll this phase back.
     conn.execute("BEGIN TRANSACTION")
@@ -297,7 +323,7 @@ def register(conn, preview_id, idempotency_key, capture, principal, root):
                 case_prefix = entry["relative_path"].rstrip("/") + "/"
                 option_labels = [row["name"] for row in plan_rows if row["role_kind"] == "RUN_OPTION" and row.get("status") == "CONFIRMED" and row["relative_path"].startswith(case_prefix)]
                 hierarchy = [{"relative_path": row["relative_path"], "role_kind": row["role_kind"], "target_id": row.get("target_id"), "parent_context_id": row.get("parent_context"), "raw_name": row["name"], "option_status": row.get("option_status")} for row in plan_rows if row["relative_path"].startswith(case_prefix)]
-                outcome = dashboard_capture.create_capture(conn, {"project_id": entry.get("project_id") or project_id, "request_id": entry.get("request_id") or request_id, "root_relative_path": entry["relative_path"], "environment": scan_row[2], "storage_root_id": dashboard_capture._root_id(root), "simulation_case_id": case_id, "recipe_version": "dashboard-v1", "run_option_labels": option_labels, "hierarchy_assignments": hierarchy, "rule_profile_id": scan_row[6], "rule_profile_version": scan_row[7]}, actor=actor)
+                outcome = dashboard_capture.create_capture(conn, {"project_id": entry.get("project_id") or project_id, "request_id": entry.get("request_id") or request_id, "root_relative_path": entry["relative_path"], "environment": scan_row[2], "storage_root_id": dashboard_capture._root_id(root), "simulation_case_id": case_id, "recipe_version": "dashboard-v1", "run_option_labels": option_labels, "hierarchy_assignments": hierarchy, "rule_profile_id": scan_row[6], "rule_profile_version": scan_row[7], "usage_source_review": preview_saved.get("usage_reviews", {}).get(entry["relative_path"])}, actor=actor)
                 conn.execute("UPDATE folder_environment_capture_jobs SET status='COMPLETED',capture_id=?,updated_at=? WHERE id=?", [outcome["id"], now(), job_id])
                 conn.execute("COMMIT")
             except dashboard_capture.DashboardCaptureError as exc:
@@ -324,7 +350,7 @@ def registration_context(conn, registration_id):
 
 
 def registration(conn, registration_id):
-    row = conn.execute("""SELECT r.id,r.preview_id,r.environment,r.project_id,r.request_id,r.status,r.created_at,s.relative_path
+    row = conn.execute("""SELECT r.id,r.preview_id,r.environment,r.project_id,r.request_id,r.status,r.created_at,s.relative_path,p.rows_json
         FROM folder_environment_registrations r JOIN folder_environment_previews p ON p.id=r.preview_id
         JOIN folder_environment_scans s ON s.id=p.scan_id WHERE r.id=?""", [registration_id]).fetchone()
     if not row: legacy.fail("ENVIRONMENT_REGISTRATION_NOT_FOUND", "환경 등록을 찾을 수 없습니다.", 404)
@@ -336,7 +362,8 @@ def registration(conn, registration_id):
     status = "COMPLETED" if states and states == {"COMPLETED"} else ("FAILED" if "FAILED" in states else ("CAPTURING" if states & {"PENDING", "RUNNING"} else row[5]))
     if status != row[5]:
         conn.execute("UPDATE folder_environment_registrations SET status=? WHERE id=?", [status, registration_id])
-    return {"registration_id": row[0], "preview_id": row[1], "environment": row[2], "project_id": row[3], "request_id": row[4], "status": status, "created_at": row[6], "relative_path": row[7], "capture_jobs": [dict(j) for j in jobs]}
+    saved = preview_data(row[8])
+    return {"registration_id": row[0], "preview_id": row[1], "environment": row[2], "project_id": row[3], "request_id": row[4], "status": status, "created_at": row[6], "relative_path": row[7], "capture_jobs": [dict(j) for j in jobs], "usage_source_reviews": saved.get("usage_review_snapshots", {})}
 
 
 def retry(conn, registration_id, job_ids, principal=None, root=None):
@@ -353,10 +380,16 @@ def retry(conn, registration_id, job_ids, principal=None, root=None):
             JOIN folder_environment_scans s ON s.id=p.scan_id WHERE r.id=?""", [registration_id]).fetchone()
         if not replay:
             legacy.fail("ENVIRONMENT_REGISTRATION_NOT_FOUND", "환경 등록을 찾을 수 없습니다.", 404)
-        plan_rows, environment, profile_id, profile_revision = decoded(replay[0]), replay[1], replay[2], replay[3]
+        saved_preview = preview_data(replay[0]); plan_rows, environment, profile_id, profile_revision = saved_preview["rows"], replay[1], replay[2], replay[3]
         if root_identity(root) != replay[4]:
             legacy.fail("ENVIRONMENT_ROOT_CHANGED", "저장소가 변경되었습니다. 다시 조사하세요.")
         if job_ids: jobs = [job for job in jobs if job["id"] in set(job_ids)]
+        current_profile = conn.execute("SELECT revision FROM folder_environment_profiles WHERE id=?", [profile_id]).fetchone()
+        if not current_profile or int(current_profile[0]) != int(profile_revision):
+            if jobs:
+                marks = ",".join("?" for _ in jobs)
+                conn.execute(f"UPDATE folder_environment_capture_jobs SET status='FAILED',error_code='ENVIRONMENT_PROFILE_STALE',updated_at=? WHERE id IN ({marks})", [now(), *[job["id"] for job in jobs]])
+            return registration(conn, registration_id)
         for job in jobs:
             case = conn.execute("SELECT project_id,request_id,relative_path,environment,storage_root_id FROM dashboard_cases WHERE id=?", [job["case_id"]]).fetchone()
             if not case:
@@ -375,7 +408,7 @@ def retry(conn, registration_id, job_ids, principal=None, root=None):
                 prefix = entry["relative_path"].rstrip("/") + "/"
                 option_labels = [row["name"] for row in plan_rows if row.get("role_kind") == "RUN_OPTION" and row.get("status") == "CONFIRMED" and row["relative_path"].startswith(prefix)]
                 hierarchy = [{"relative_path": row["relative_path"], "role_kind": row["role_kind"], "target_id": row.get("target_id"), "parent_context_id": row.get("parent_context"), "raw_name": row["name"], "option_status": row.get("option_status")} for row in plan_rows if row["relative_path"].startswith(prefix)]
-                payload = {"project_id": case[0], "request_id": case[1], "root_relative_path": case[2], "environment": case[3], "storage_root_id": case[4], "simulation_case_id": job["case_id"], "recipe_version": "dashboard-v1", "run_option_labels": option_labels, "hierarchy_assignments": hierarchy, "rule_profile_id": profile_id, "rule_profile_version": profile_revision}
+                payload = {"project_id": case[0], "request_id": case[1], "root_relative_path": case[2], "environment": case[3], "storage_root_id": case[4], "simulation_case_id": job["case_id"], "recipe_version": "dashboard-v1", "run_option_labels": option_labels, "hierarchy_assignments": hierarchy, "rule_profile_id": profile_id, "rule_profile_version": profile_revision, "usage_source_review": saved_preview.get("usage_reviews", {}).get(entry["relative_path"])}
                 result = dashboard_capture.create_capture(conn, payload, actor=principal.user_id)
                 conn.execute("UPDATE folder_environment_capture_jobs SET status='COMPLETED',capture_id=?,updated_at=? WHERE id=?", [result["id"], now(), job["id"]])
                 conn.execute("COMMIT")
@@ -390,3 +423,32 @@ def retry(conn, registration_id, job_ids, principal=None, root=None):
                 conn.execute("UPDATE folder_environment_capture_jobs SET status='FAILED',error_code=?,updated_at=? WHERE id=?", ["CAPTURE_UNEXPECTED_ERROR", now(), job["id"]])
                 conn.execute("COMMIT")
     return registration(conn, registration_id)
+
+
+def usage_review(conn, preview_id, case_relative_path, selection, selected_sources, metric_paths, excludes, acknowledge_partial, root):
+    """Preflight one Usage Case and persist its selected immutable contract."""
+    row = conn.execute("""SELECT p.rows_json,s.environment,s.profile_id,s.profile_revision,fp.rules_json
+        FROM folder_environment_previews p JOIN folder_environment_scans s ON s.id=p.scan_id
+        JOIN folder_environment_profiles fp ON fp.id=s.profile_id WHERE p.id=?""", [preview_id]).fetchone()
+    if not row: legacy.fail("ENVIRONMENT_PREVIEW_NOT_FOUND", "환경 미리보기를 찾을 수 없습니다.", 404)
+    if row[1] != "USAGE": raise ValueError("사용환경 미리보기에서만 파일·값 검수를 할 수 있습니다.")
+    if conn.execute("SELECT 1 FROM folder_environment_registrations WHERE preview_id=?", [preview_id]).fetchone():
+        legacy.fail("USAGE_SOURCE_REVIEW_FROZEN", "등록된 미리보기의 검수 계약은 바꿀 수 없습니다. 새 미리보기를 만드세요.")
+    saved = preview_data(row[0])
+    case = next((item for item in saved["rows"] if item.get("role_kind") == "SIMULATION_CASE" and item.get("relative_path") == case_relative_path), None)
+    if not case or case.get("status") == "EXCLUDED": raise ValueError("미리보기의 확인된 Simulation Case를 선택하세요.")
+    defaults = decoded(row[4]).get("usage_sources", {})
+    chosen = usage_source_review.selection(selection or defaults.get("selection"))
+    metric_paths = metric_paths or defaults.get("metric_paths", {})
+    excluded_files: list[dict[str, str]] = []
+    files = dashboard_capture._walk(root, case_relative_path, include_path=lambda path: usage_source_review.include_path(path, chosen), excluded_files=excluded_files)
+    result = usage_source_review.review([(path, data) for path, data, _ in files], selected=chosen, selected_sources=selected_sources, metric_paths=metric_paths, excludes=excludes, profile_id=str(row[2]), profile_revision=int(row[3]))
+    result["excluded_count"] = len(excluded_files)
+    result["excluded_files"] = excluded_files
+    if (result["missing_count"] or excludes) and not acknowledge_partial:
+        result["can_publish"] = False
+    result["contract"]["acknowledge_partial"] = bool(acknowledge_partial)
+    saved.setdefault("usage_reviews", {})[case_relative_path] = result["contract"]
+    saved.setdefault("usage_review_snapshots", {})[case_relative_path] = {key: result[key] for key in ("entries", "excluded_count", "excluded_files", "media_paths", "blocking_count", "missing_count", "can_publish")}
+    conn.execute("UPDATE folder_environment_previews SET rows_json=? WHERE id=?", [json.dumps(saved, ensure_ascii=False), preview_id])
+    return {**result, "case_relative_path": case_relative_path, "simulation_case_id": case.get("target_id")}

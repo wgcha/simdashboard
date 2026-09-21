@@ -2075,6 +2075,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/folder-discovery/environments/previews/{preview_id}/usage-review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Usage Review */
+        post: operations["usage_review_api_folder_discovery_environments_previews__preview_id__usage_review_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/folder-discovery/environments/registrations": {
         parameters: {
             query?: never;
@@ -4912,6 +4929,11 @@ export interface components {
             scan_id: string;
             /** Assignments */
             assignments?: components["schemas"]["Assignment"][];
+            /**
+             * Require Usage Review
+             * @default false
+             */
+            require_usage_review: boolean;
         };
         /** Profile */
         Profile: {
@@ -6114,6 +6136,32 @@ export interface components {
             replaced_run_id?: string | null;
             /** Source Revision */
             source_revision?: number | null;
+        };
+        /** UsageReview */
+        UsageReview: {
+            /** Case Relative Path */
+            case_relative_path: string;
+            /** Selection */
+            selection?: {
+                [key: string]: unknown;
+            };
+            /** Selected Sources */
+            selected_sources?: {
+                [key: string]: string;
+            };
+            /** Metric Paths */
+            metric_paths?: {
+                [key: string]: string[];
+            };
+            /** Excludes */
+            excludes?: {
+                [key: string]: string;
+            };
+            /**
+             * Acknowledge Partial
+             * @default false
+             */
+            acknowledge_partial: boolean;
         };
         /**
          * VOCPostCreate
@@ -10763,6 +10811,41 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["Preview"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    usage_review_api_folder_discovery_environments_previews__preview_id__usage_review_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                preview_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UsageReview"];
             };
         };
         responses: {

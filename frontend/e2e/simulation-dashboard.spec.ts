@@ -177,6 +177,47 @@ async function openResults(page: Page) {
   await expect(page.getByRole('region', { name: 'SPDM 해석 결과 대시보드' })).toBeVisible()
 }
 
+test('usage source review preserves independent slope fields and hides raw diagnostics', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 })
+  const errors: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  await page.route('**/api/dashboard/catalog**', (route) => fulfillJson(route, usageCatalog()))
+  await page.route('**/api/dashboard/usage/cases/**', (route) => fulfillJson(route, {
+    context: {}, status: 'PARTIAL', quality_issues: ['SOURCE_PARSE_ERROR', 'UNPROCESSED_FILE:secret.tmp'],
+    evaluations: [
+      { id: 'Settle', name: 'Settle', common: { value: 1.18, unit: 'deg', status: 'READY', value_status: 'READY', value_key: 'Set Tilt Angle @ Settle (deg)' }, media: [] },
+      { id: 'Wobble', name: 'Wobble', front: { value: -21.424, unit: 'mm', status: 'READY', value_status: 'READY', value_key: 'Wobble Disp. (mm)' }, media: [] },
+      { id: 'Horizontal_Force_Angle', name: 'Horizontal_Force_Angle', front: { value: null, status: 'MISSING_KEY', value_status: 'MISSING_KEY' }, media: [] },
+      { id: 'Slope_Angle', name: 'Slope_Angle', front: { value: 15.79, unit: 'deg', verdict: 'NG', status: 'READY', value_status: 'READY', verdict_status: 'READY' }, rear: { value: null, verdict: 'OK', status: 'MISSING_FIELD', value_status: 'MISSING_FIELD', verdict_status: 'READY' }, media: [] },
+      { id: 'Slope_Angle_360', name: 'Slope_Angle_360', front: { value: null, verdict: 'OK', status: 'READY', value_status: 'NOT_APPLICABLE', verdict_status: 'READY' }, media: [] },
+    ],
+  }))
+  await openResults(page)
+  const area = page.getByTestId('usage-dashboard')
+  await expect(area).toBeVisible()
+  const rows = area.locator('tbody tr')
+  await expect(rows).toHaveCount(6)
+  await expect(rows.nth(0)).toContainText('1.18 deg')
+  await expect(rows.nth(0)).toContainText('Set Tilt Angle @ Settle (deg)')
+  await expect(rows.nth(1)).toContainText('-21.424 mm')
+  await expect(rows.nth(2)).toContainText('검수 필요')
+  await expect(rows.nth(3)).toContainText('15.79 deg')
+  await expect(rows.nth(3)).not.toContainText('NG')
+  await expect(rows.nth(4)).toContainText('OK/NG')
+  await expect(rows.nth(4)).toContainText('NG')
+  await expect(rows.nth(4)).toContainText('OK')
+  await expect(area).not.toContainText('SOURCE_PARSE_ERROR')
+  await expect(area).not.toContainText('UNPROCESSED_FILE')
+  await expect(area).not.toContainText('MISSING_KEY')
+  await expect(page.locator('vite-error-overlay')).toHaveCount(0)
+  await page.getByRole('button', { name: '유통환경', exact: true }).click()
+  await page.getByRole('button', { name: '사용환경', exact: true }).click()
+  await expect(area.locator('tbody tr')).toHaveCount(6)
+  expect(errors).toEqual([])
+  const evidence = join(tmpdir(), 'simdashboard-usage-source-review'); mkdirSync(evidence, { recursive: true })
+  await page.screenshot({ path: join(evidence, 'independent-slope-desktop.png'), fullPage: false })
+})
+
 async function installDashboardMocks(page: Page, options: { slowUsage?: boolean; distribution?: DashboardDistribution } = {}) {
   let releaseUsage!: () => void
   const usageGate = new Promise<void>((resolve) => { releaseUsage = resolve })

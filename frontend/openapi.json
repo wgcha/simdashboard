@@ -6187,6 +6187,56 @@
         }
       }
     },
+    "/api/folder-discovery/environments/previews/{preview_id}/usage-review": {
+      "post": {
+        "tags": [
+          "folder-discovery-environments"
+        ],
+        "summary": "Usage Review",
+        "operationId": "usage_review_api_folder_discovery_environments_previews__preview_id__usage_review_post",
+        "parameters": [
+          {
+            "name": "preview_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Preview Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UsageReview"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/folder-discovery/environments/registrations": {
       "post": {
         "tags": [
@@ -15120,6 +15170,11 @@
             "type": "array",
             "maxItems": 5000,
             "title": "Assignments"
+          },
+          "require_usage_review": {
+            "type": "boolean",
+            "title": "Require Usage Review",
+            "default": false
           }
         },
         "type": "object",
@@ -19031,6 +19086,55 @@
         ],
         "title": "TypedResultExampleResponse",
         "description": "Named response contract for the checked-in typed example importer."
+      },
+      "UsageReview": {
+        "properties": {
+          "case_relative_path": {
+            "type": "string",
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Case Relative Path"
+          },
+          "selection": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Selection"
+          },
+          "selected_sources": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Selected Sources"
+          },
+          "metric_paths": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Metric Paths"
+          },
+          "excludes": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Excludes"
+          },
+          "acknowledge_partial": {
+            "type": "boolean",
+            "title": "Acknowledge Partial",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "case_relative_path"
+        ],
+        "title": "UsageReview"
       },
       "VOCPostCreate": {
         "properties": {

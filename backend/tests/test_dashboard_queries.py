@@ -116,3 +116,44 @@ def test_legacy_unknown_option_is_unresolved_and_queryable_by_catalog_id():
     run, context = queries.select_run(legacy, "run1", "UNKNOWN", "C23", "DETAIL", option_id)
     assert run["id"] == "run1"
     assert context["run_option_id"] == option_id
+
+
+@pytest.mark.parametrize("values,angle,verdict", [
+    ({"Slope Angle (deg)": 0, "OK/NG": "NG"}, 0, "NG"),
+    ({"Slope Angle (deg)": 15.79}, 15.79, None),
+    ({"OK/NG": "OK"}, None, "OK"),
+    ({"Slope Angle (deg)": None, "OK/NG": ["OK"]}, None, None),
+])
+def test_usage_slope_fields_are_independent(values, angle, verdict):
+    cap = {"id": "cap", "case_id": "case", "environment": "USAGE", "payload": {
+        "context": {}, "evaluations": [{"evaluation": "Slope_Angle", "direction": "front",
+            "condition": "same", "status": "READY", "values": values}]}}
+    result = queries.usage(cap, "case")
+    cell = result["evaluations"][3]["front"]
+    assert cell["value"] == angle
+    assert cell["verdict"] == verdict
+    assert (cell["value_status"] == "READY") == (angle is not None)
+    assert (cell["verdict_status"] == "READY") == (verdict is not None)
+    compared = queries.usage_reference(result, queries.usage(cap, "case"))["evaluations"][3]["reference"]["front"]
+    if angle is not None or verdict is not None:
+        assert compared["value"] == angle and compared["verdict"] == verdict
+
+
+def test_legacy_capture_labels_do_not_mutate_payload():
+    import copy
+    cap = {"id": "cap", "case_id": "case", "environment": "USAGE", "payload": {
+        "context": {}, "evaluations": [], "quality_issues": ["SOURCE_PARSE_ERROR"]}}
+    original = copy.deepcopy(cap)
+    rows = queries.usage(cap, "case")["evaluations"]
+    assert [r["name"] for r in rows] == list(queries.USAGE_KEYS)
+    assert rows[0]["common"]["value_key"] == "Set Tilt Angle @ Settle (deg)"
+    assert cap == original
+
+
+def test_usage_exact_nested_segments_and_strict_reviewed_values():
+    entry = {"status": "READY", "values": {"a.b": {"OK/NG": "NG", "angle (deg)": -1.18}},
+        "metric_paths": {"Slope Angle (deg)": ["a.b", "angle (deg)"], "OK/NG": ["a.b", "OK/NG"]}}
+    assert queries.usage_metric(entry, "Slope Angle (deg)", "READY")[0] == -1.18
+    assert queries.usage_metric(entry, "OK/NG", "READY", verdict=True)[0] == "NG"
+    entry["values"]["a.b"]["angle (deg)"] = "1.18"
+    assert queries.usage_metric(entry, "Slope Angle (deg)", "READY")[1] == "INVALID_TYPE"
