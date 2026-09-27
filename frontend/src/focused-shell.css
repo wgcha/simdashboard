@@ -19,7 +19,7 @@
 .app-shell.light-theme .brand strong { color:var(--focus-navy); font-weight:700; }
 .app-shell.light-theme .nav-main { display:grid; gap:16px; overflow:auto; }
 .app-shell.light-theme .nav-group { border:0; }
-.app-shell.light-theme .nav-group-label { display:flex; align-items:center; gap:10px; min-width:0; min-height:38px; overflow:hidden; padding:0 10px; color:#748196; font-family:'Pretendard Variable',Pretendard,system-ui,sans-serif; font-size:12px!important; font-weight:700; cursor:pointer; list-style:none; }
+.app-shell.light-theme .nav-group-label { display:flex; align-items:center; gap:10px; min-width:0; min-height:38px; overflow:hidden; padding:0 10px; color:#748196; font-family:'Pretendard Variable',Pretendard,system-ui,sans-serif; font-weight:700; cursor:pointer; list-style:none; }
 .app-shell.light-theme .nav-group-label::-webkit-details-marker { display:none; }
 .app-shell.light-theme .nav-group-label .nav-group-icon { display:grid; place-items:center; flex:none; width:18px; color:#8491a4; }
 .app-shell.light-theme .nav-group-label>span:not(.nav-group-icon) { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -27,7 +27,7 @@
 .app-shell.light-theme .nav-group-label .nav-group-caret { width:13px; margin-left:auto; transition:transform .16s ease; }
 .app-shell.light-theme .nav-group[open] .nav-group-caret { transform:rotate(45deg); }
 .app-shell.light-theme .nav-group-items { display:grid; gap:4px; padding-top:4px; }
-.app-shell.light-theme .nav-main .nav-link { min-height:42px; border-radius:8px; padding:0 12px; color:#55647a; font-size:14px!important; font-weight:600; text-decoration:none; }
+.app-shell.light-theme .nav-main .nav-link { min-height:42px; border-radius:8px; padding:0 12px; color:#55647a; font-weight:600; text-decoration:none; }
 .app-shell.light-theme .nav-main .nav-link:hover { color:var(--focus-blue); background:#f1f5fb; }
 .app-shell.light-theme .nav-main .nav-link.active { color:var(--focus-blue); background:#eaf1fd; box-shadow:none; }
 .app-shell.light-theme .nav-main .nav-link svg { width:18px; color:currentColor; stroke-width:1.8; }
@@ -45,14 +45,14 @@
 .app-shell.light-theme .sidebar-settings-body .system-pill { width:max-content; padding:4px 7px; border:1px solid var(--focus-border); border-radius:6px; color:#607087; background:#f7f9fc; font-size:10px; }
 .app-shell.light-theme .sidebar-foot { gap:10px; border-top:0; padding-top:10px; }
 .app-shell.light-theme .global-font-control { border:1px solid var(--focus-border); border-radius:8px; padding:5px 7px; background:#f8fafc; }
-.app-shell.light-theme .sidebar-foot button { color:#607087; font-size:12px!important; }
+.app-shell.light-theme .sidebar-foot button { color:#607087; }
 .app-shell.light-theme .signed-user { display:grid; gap:4px; overflow-wrap:anywhere; border:0; border-top:1px solid var(--focus-border); border-radius:0; padding:13px 8px 0; background:transparent; }
 .app-shell.light-theme .signed-user strong { font-size:13px; }
 .app-shell.light-theme .signed-user span { font-size:10px; color:var(--focus-blue); }
 .app-shell.light-theme.sidebar-collapsed .nav-group-label { display:flex!important; }
 .app-shell.light-theme.sidebar-collapsed .nav-group-label .nav-group-icon { display:grid!important; }
 .app-shell.light-theme .topbar { height:60px; padding:0 var(--shell-pad-x, 40px); background:#fff; border-bottom:1px solid var(--focus-border); box-shadow:none; }
-.app-shell.light-theme .breadcrumb { font-family:'Pretendard Variable',Pretendard,system-ui,sans-serif; font-size:13px; color:#718097; }
+.app-shell.light-theme .breadcrumb { font-family:'Pretendard Variable',Pretendard,system-ui,sans-serif; color:#718097; }
 .app-shell.light-theme .breadcrumb strong { color:var(--focus-navy); }
 .app-shell.light-theme :where(.topbar a,.nav-link) { text-decoration:none; }
 
@@ -322,7 +322,8 @@
   margin-left: 76px;
   width: calc(100% - 76px);
 }
-.app-shell .nav-main .nav-link {
+.app-shell .nav-main .nav-link,
+.app-shell .nav-main .nav-link>span {
   min-width: 0;
   font-family: 'Pretendard Variable', Pretendard, system-ui, sans-serif;
   font-size: calc(var(--ui-font-size) * .86)!important;
@@ -364,24 +365,10 @@
 .app-shell .nav-group-items { gap:5px; }
 .app-shell .sidebar { width:208px; }
 .app-shell .main-shell { margin-left:208px; width:calc(100% - 208px); }
-.app-shell.light-theme .nav-main .nav-link,
-.app-shell.dark-theme .nav-main .nav-link {
-  font-size: calc(var(--ui-font-size) * .86)!important;
-}
-.app-shell.light-theme .nav-main .nav-link > span,
-.app-shell.dark-theme .nav-main .nav-link > span {
-  font-size: calc(var(--ui-font-size) * .86)!important;
-}
 .app-shell .nav-group-label,
 .app-shell .sidebar-settings summary,
 .app-shell .sidebar-foot button {
   font-family: 'Pretendard Variable', Pretendard, system-ui, sans-serif;
-  font-size: calc(var(--ui-font-size) * .76)!important;
-}
-.app-shell.light-theme .nav-group-label,
-.app-shell.dark-theme .nav-group-label,
-.app-shell.light-theme .sidebar-foot button,
-.app-shell.dark-theme .sidebar-foot button {
   font-size: calc(var(--ui-font-size) * .76)!important;
 }
 .app-shell .global-font-control {
@@ -664,3 +651,85 @@
 
 .app-shell .mobile-menu-trigger { flex-shrink:0; white-space:nowrap; }
 .app-shell .mobile-menu-trigger span { font-size:calc(var(--ui-font-size) * .76)!important; }
+
+/* SVG chart labels keep their own smaller visual role while following root rem. */
+.app-shell :is(.recharts-cartesian-axis-tick-value,.recharts-polar-angle-axis-tick-value,.recharts-polar-radius-axis-tick-value,.recharts-legend-item-text):where(:not([data-ui-density="v1"],[data-ui-density="v1"] *)) { font-size:var(--text-caption); }
+.app-shell .recharts-label:where(:not([data-ui-density="v1"],[data-ui-density="v1"] *)) { font-size:var(--text-body); }
+
+/* P5 fallbacks for legacy routes. Keep rules attached to actual content roles
+   and named controls; broad span/strong rules flatten labels and data values. */
+.app-shell :is(.access-admin-page,.workbench-admin-page,.workbench-page,.catalog-page,.example-gallery,.voc-board,.drop-video-dashboard) { font-size:var(--text-body); }
+.app-shell .access-admin-page h1,
+.app-shell .workbench-admin-page .workbench-admin-hero h1,
+.app-shell .workbench-page .workbench-hero h1,
+.app-shell .catalog-page>header h1,
+.app-shell .example-gallery>header h1,
+.app-shell .voc-board .voc-header h1 { font-size:var(--text-title); }
+.app-shell .access-admin-page .access-admin-card h2,
+.app-shell .workbench-admin-page :is(.workbench-admin-form,.workbench-admin-task-picker,.workbench-admin-types)>header h2,
+.app-shell .workbench-page :is(.workbench-run-list,.workbench-run-detail)>header h2,
+.app-shell .catalog-page .portfolio-empty h2,
+.app-shell .example-gallery .example-card h2,
+.app-shell .example-gallery .portfolio-empty h2,
+.app-shell .voc-board .voc-list-heading h2 { font-size:var(--text-section); }
+.app-shell .access-admin-page :is(.content-head p,.access-admin-card>header p,.access-admin-table>section>p),
+.app-shell .workbench-admin-page :is(.workbench-admin-hero p,.workbench-admin-form>p,.workbench-admin-panel>p,.workbench-admin-task-picker>header>p),
+.app-shell .workbench-page :is(.workbench-hero p,.workbench-source>p,.workbench-empty,.workbench-empty-detail p,.workbench-service-error p),
+.app-shell .catalog-page>header p,
+.app-shell .example-gallery :is(.example-guide>p,.example-card>p),
+.app-shell .voc-board :is(.voc-header>p,.voc-list article p,.voc-notice,.voc-error) { font-size:var(--text-body); }
+.app-shell .access-admin-page :is(.content-head,.access-admin-card,.access-admin-toolbar,.access-admin-actions) :is(button,input,select,textarea),
+.app-shell .workbench-admin-page :is(.workbench-admin-form,.workbench-admin-tabs,.workbench-admin-task-picker,.workbench-admin-types,.batch-profile-admin) :is(button,input,select,textarea),
+.app-shell .workbench-page :is(.workbench-state,.workbench-config,.workbench-source,.workbench-run-list,.workbench-run-detail) :is(button,input,select,textarea),
+.app-shell .catalog-page :is(.catalog-filters,.catalog-header-actions,.catalog-row-actions) :is(button,input,select,textarea),
+.app-shell .example-gallery .example-filters :is(button,input),
+.app-shell .voc-board :is(.voc-downloads,.voc-compose,.voc-pagination) :is(button,input,textarea) { font-size:var(--text-body); }
+.app-shell .drop-video-dashboard :is(.drop-video-controls,.drop-video-scene-chart,.drop-video-pagination,.drop-video-local-pagination) button { font-size:var(--text-body); }
+.app-shell .drop-video-dashboard :is(.drop-video-controls>div>strong,.drop-video-summary>header>strong,.drop-video-card>header strong,.drop-video-selected>header strong,.drop-video-state strong,.drop-video-selected-metric>header strong) { font-size:var(--text-body); }
+.app-shell .drop-video-dashboard :is(.drop-video-summary-counts strong,.drop-video-selected-metric>header strong) { font-size:var(--text-subheading); }
+.app-shell .drop-video-dashboard :is(.drop-video-controls>div>span,.drop-video-controls>div>small,.drop-video-summary>header>span,.drop-video-summary>header>small,.drop-video-summary-counts span,.drop-video-summary-limits span,.drop-video-summary-limits small,.drop-video-scene-chart>header span,.drop-video-card>header>span,.drop-video-card>header small,.drop-video-card>header b,.drop-video-selected>header>span,.drop-video-selected>header>b,.drop-video-selected-metric>header span,.drop-video-selected-metric>header>b,.drop-video-mini-bar>header span,.drop-video-mini-bar>header>b,.drop-video-pagination span,.drop-video-local-pagination span,.drop-video-error small) { font-size:var(--text-caption); }
+.app-shell .drop-video-dashboard :is(.drop-video-state p,.drop-video-card .drop-video-error strong,.drop-video-summary-limits strong,.drop-video-selected-metric p strong,.drop-video-mini-bar>header strong) { font-size:var(--text-body); }
+.app-shell .access-admin-page :is(.eyebrow,.access-admin-card>header>div>span,.access-admin-table article>div>span,.access-admin-role-status,.menu-policy-grid small),
+.app-shell .workbench-admin-page :is(.workbench-admin-hero>div>span,.workbench-admin-hero aside>span,.workbench-admin-form>header span,.workbench-admin-form>label>span,.workbench-admin-form small,.workbench-admin-task-picker>header>span,.workbench-admin-task-picker button small,.workbench-admin-types>header>span),
+.app-shell .workbench-page :is(.demo-only-badge,.workbench-source>summary small,.workbench-source>summary span>strong,.workbench-run-list header span,.workbench-run-detail header span,.workbench-empty-detail p),
+.app-shell .workbench-page :is(.workbench-event-log header span,.workbench-event-log small,.workbench-text-artifacts>header>b,.workbench-task-grid article small,.workbench-task-card small,.workbench-run-progress span,.work-item-guidance>div>span),
+.app-shell .catalog-page>header>div>span,
+.app-shell .catalog-page :is(small,code),
+.app-shell .catalog-page .variable-row.head,
+.app-shell .catalog-page .variable-row code,
+.app-shell .example-gallery>header>div>span,
+.app-shell .example-gallery>header aside small,
+.app-shell .example-gallery .example-card>header span,
+.app-shell .example-gallery .example-tags span,
+.app-shell .example-gallery .example-profile small,
+.app-shell .example-gallery .example-action-hint,
+.app-shell .voc-board :is(.voc-eyebrow,.voc-list small,.voc-list time,.voc-author,.voc-list-heading h2 span,.voc-compose>div>span,.voc-empty,.voc-pagination>span) { font-size:var(--text-caption); }
+.app-shell .brand strong { font-size:var(--text-body); }
+.app-shell .breadcrumb { font-size:var(--text-body); }
+.app-shell .breadcrumb strong { font-size:inherit; }
+.app-shell .example-gallery :is(.example-guide>div,.example-card ol,.example-card>button,.portfolio-empty button) { font-size:var(--text-body); }
+.app-shell .drop-video-dashboard .drop-video-summary-counts strong { font-size:var(--text-subheading); }
+.app-shell .catalog-page .variable-row { font-size:var(--text-body); }
+.app-shell .catalog-page .variable-row.head { font-size:var(--text-caption); }
+.app-shell .catalog-page .variable-row :is(strong,b) { font-size:var(--text-body); }
+.app-shell .catalog-page .variable-row :is(code,small) { font-size:var(--text-caption); }
+.app-shell .workbench-page :is(.workbench-task-grid article h3,.workbench-task-card h3) { font-size:var(--text-subheading); }
+.app-shell .workbench-page :is(.workbench-task-grid article p,.workbench-task-card p,.workbench-event-log>div strong,.workbench-text-artifacts>header strong,.workbench-empty-detail>strong,.workbench-run-detail>header>strong,.work-item-guidance>div>strong) { font-size:var(--text-body); }
+.app-shell .workbench-page .workbench-empty-detail>strong { font-size:var(--text-subheading); }
+.app-shell .workbench-admin-page .workbench-admin-hero aside strong { font-size:var(--text-title); }
+.app-shell .example-gallery>header aside strong { font-size:var(--text-title); }
+.app-shell .access-admin-page .access-admin-table article>div>strong,
+.app-shell .access-admin-page .access-admin-table article>b,
+.app-shell .access-admin-page .menu-policy-grid.header strong,
+.app-shell .catalog-page .variable-row strong,
+.app-shell .catalog-page .catalog-header-actions>strong,
+.app-shell .example-gallery .example-profile strong { font-size:var(--text-body); }
+.app-shell .portfolio-page:not([data-custom-font="true"]) { font-size:var(--text-body); }
+.app-shell .portfolio-page:not([data-custom-font="true"]) .portfolio-head h1 { font-size:var(--text-title); }
+.app-shell .portfolio-page:not([data-custom-font="true"]) .portfolio-head p,
+.app-shell .portfolio-page:not([data-custom-font="true"]) .portfolio-filters :is(input,select,button),
+.app-shell .portfolio-page:not([data-custom-font="true"]) .portfolio-kpis article>span,
+.app-shell .portfolio-page:not([data-custom-font="true"]) .portfolio-kpis strong,
+.app-shell .portfolio-page:not([data-custom-font="true"]) .portfolio-kpis small,
+.app-shell .portfolio-page:not([data-custom-font="true"]) .portfolio-chart header :is(strong,small),
+.app-shell .portfolio-page:not([data-custom-font="true"]) .portfolio-table-card :is(header span,h2,.portfolio-row,.portfolio-row strong,.portfolio-row small,.portfolio-row b) { font-size:var(--text-body); }

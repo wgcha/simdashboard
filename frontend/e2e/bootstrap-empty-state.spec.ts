@@ -23,6 +23,8 @@ const menuPolicy = {
 }
 
 test('빈 데이터에서도 전역 관리자는 초기 설정과 전역 테마를 사용할 수 있다', async ({ page }) => {
+  await page.setViewportSize({ width: 1366, height: 768 })
+  await page.addInitScript(() => localStorage.setItem('simdashboard.workspace.font-size-pt.v1', '18'))
   const bootstrapRequests = { health: 0, projects: 0, workflows: 0, menuPolicy: 0 }
   await page.route('**/api/auth/status', (route) => route.fulfill({ json: { mode: 'disabled', authentication_required: false, registration_enabled: false, setup_required: false, oidc_start_url: null } }))
   await page.route('**/api/auth/me', (route) => route.fulfill({ json: globalAdmin }))
@@ -34,6 +36,8 @@ test('빈 데이터에서도 전역 관리자는 초기 설정과 전역 테마�
   await page.goto('/')
 
   await expect(page.getByText('초기 데이터 구성', { exact: true })).toBeVisible()
+  await expect(page.locator('html')).toHaveCSS('font-size', '24px')
+  await expect(page.locator('.bootstrap-workspace-bar strong').first()).toHaveCSS('font-size', '24px')
   await expect(page.getByRole('heading', { name: '새 프로젝트' })).toBeVisible()
   await expect(page.getByRole('button', { name: '프로젝트 등록' })).toBeEnabled()
   await expect(page.getByRole('button', { name: '해석 의뢰 접수' })).toBeDisabled()

@@ -13,6 +13,7 @@
     "test:architecture": "node scripts/check-architecture-self-test.mjs",
     "test:css-architecture": "node scripts/check-css-architecture-self-test.mjs",
     "test:preferences": "node --experimental-strip-types scripts/workspace-preferences-self-test.mjs",
+    "test:root-font-size": "node --experimental-strip-types scripts/workspace-document-font-size-self-test.mjs",
     "test:routing": "node --experimental-strip-types scripts/workspace-route-registry-self-test.mjs",
     "test:lan-proxy": "node scripts/lan-proxy-self-test.mjs",
     "test:api": "node --experimental-transform-types scripts/shared-api-self-test.mjs",

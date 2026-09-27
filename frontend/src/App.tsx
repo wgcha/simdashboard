@@ -45,7 +45,7 @@ import { AppSidebar } from './app/shell/AppSidebar'
 import { PersonalPcRoute } from './app/workspace/PersonalPcRoute'
 import { ProjectSetupState } from './app/workspace/ProjectSetupState'
 import { loadWorkspacePreferences, saveWorkspacePreference, type WorkspaceTheme } from './app/preferences/workspacePreferences'
-import { workspaceFontSizeStyle } from './app/preferences/workspaceFontSizeStyle'
+import { useWorkspaceDocumentFontSize, workspaceFontSizeStyle } from './app/preferences/workspaceFontSizeStyle'
 import { CASE_RESULTS_VIEW, caseResultsContext, isCaseResultsView } from './app/routing/caseResultsRouting'; import { useWorkspaceNavigation } from './app/routing/useWorkspaceNavigation'; import { useWorkspaceContextRestore } from './app/routing/useWorkspaceContextRestore'
 import { pageView, preferredPage, visiblePages, type ActiveView } from './features/analysis/pageSelection'
 import { DEFAULT_PORTFOLIO_LAYOUT, DEFAULT_WORKFLOW_DASHBOARD_LAYOUT, loadPortfolioLayout, loadWorkflowDashboardLayout } from './features/layouts/layoutDefaults'
@@ -80,8 +80,8 @@ function App() {
   const [menuPolicyReady, setMenuPolicyReady] = useState(false)
   const { authCheckFailed, authError, authMode, authReady, authRequired, authUser, expire, login: handleLogin, logout: authLogout, refreshAccess, registrationEnabled, retryAuth, setupReason, setupRequired } = useAuthSession({
     onAccessChanged: (_user, policy) => { setMenuPolicy(policy); setMenuPolicyReady(true) },
-    onAccessRefreshFailed: () => { setMenuPolicy(null); setMenuPolicyReady(true) },
-  })
+    onAccessRefreshFailed: () => { setMenuPolicy(null); setMenuPolicyReady(true) } })
+  useWorkspaceDocumentFontSize(authReady && !authCheckFailed && !setupRequired && authUser?.account_status !== 'PENDING' && (!authRequired || authUser?.account_status === 'ACTIVE'), uiFontSize)
   const [overview, setOverview] = useState<Overview | null>(null)
   const [projects, setProjects] = useState<Project[]>([])
   const [requests, setRequests] = useState<AnalysisRequest[]>([])

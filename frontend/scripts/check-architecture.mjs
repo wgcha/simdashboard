@@ -58,7 +58,7 @@ const lockedCrossFeatureRelativeImports = [
 // This pin deliberately covers the complete reviewable CSS baseline. Updating
 // only architecture-baseline.json cannot raise a CSS ceiling or expand an
 // exception list; a checker change is required after architecture review.
-const lockedCssBaselineHash = '8992dd00dfcd8a9e40033ee705e24ddbe76824af192c9be79554fc3d157ed39a'
+const lockedCssBaselineHash = '08849c36017902b81c20ce76f6d34bee8cc901ba9a4d663225b6330ae067363f'
 
 function parseArgs(argv) {
   const options = { root: defaultSourceRoot, baseline: defaultBaselinePath }

@@ -19,8 +19,8 @@ for (const width of [1366, 1920]) {
     page.on('pageerror', (error) => errors.push(error.message))
     await loginWorkspace(page, 'e2e-admin', '/')
     const pilot = page.getByTestId('result-overview-dashboard')
-    const htmlFont = await page.locator('html').evaluate((element) => getComputedStyle(element).fontSize)
     await expect(pilot).toHaveAttribute('data-ui-density', 'v1')
+    await expect(pilot.locator('.result-overview-record-name strong').first()).toBeVisible()
     let current = 14
     for (const pt of [11, 14, 18]) {
       await setFont(page, current, pt, false)
@@ -38,7 +38,7 @@ for (const width of [1366, 1920]) {
         expect(measured.caption).toBeCloseTo(body * .875, 1)
         expect(measured.input).toBeCloseTo(body, 1)
         await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
-        await expect(page.locator('html')).toHaveCSS('font-size', htmlFont)
+        await expect.poll(() => page.locator('html').evaluate((element) => parseFloat(getComputedStyle(element).fontSize))).toBeCloseTo(body, 1)
         await expect(page.locator('html')).not.toHaveAttribute('data-ui-density')
         await expect(page.locator('body')).not.toHaveAttribute('data-ui-density')
         if (process.env.GUI_QA_OUTPUT_DIR && (pt === 14 || pt === 18)) {

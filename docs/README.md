@@ -19,7 +19,8 @@
 
 | 목적 | 문서 |
 |---|---|
-| MatNexus 참고 크기·밀도·본문 폭 개선 계획(P4 완료·확인 대기, 데스크톱 전용) | [`dashboard/ui-density-improvement-plan.md`](dashboard/ui-density-improvement-plan.md) |
+| MatNexus 참고 크기·밀도·본문 폭 개선 계획(P0~P5 완료, 데스크톱 전용) | [`dashboard/ui-density-improvement-plan.md`](dashboard/ui-density-improvement-plan.md) |
+| UI 개선 P5 root 글자 설정·전역 규칙 정리 | [`dashboard/ui-density-p5-implementation.md`](dashboard/ui-density-p5-implementation.md) |
 | UI 개선 P4 화면별 확산·데스크톱 검증 | [`dashboard/ui-density-p4-implementation.md`](dashboard/ui-density-p4-implementation.md) |
 | UI 개선 P3 글자 역할 시범 적용·검증 | [`dashboard/ui-density-p3-implementation.md`](dashboard/ui-density-p3-implementation.md) |
 | UI 개선 P2 공통 컴포넌트·결과 화면 구현과 검증 | [`dashboard/ui-density-p2-implementation.md`](dashboard/ui-density-p2-implementation.md) |

@@ -842,3 +842,12 @@
 - 상세.md 3.2와 문서 지도를 갱신하고 개선계획 9절에 사내 사용 순서를 기록했다. 실제 사용자 데이터·설정은 건드리지 않았다. 이번 단계 commit/push는 미실행.
 
 - 최종 CSS 구조 검사에서 원문 키의 고정 max-width를 제거하고 caption 토큰·줄바꿈으로 보완했다. 프런트 architecture 검사(229 source files / 5 reviewed imports)와 수정 후 Vite build가 통과했다. 기존 큰 chunk 경고는 남아 있다.
+
+### 2026-09-27 UI 개선 P5 완료
+
+- 사용자 `응 p5 해줘` 승인. Astra 목표·계약·최종 통합, Sol 세부 설계/조정, Luna(max) 프론트 구현/국소 검사, 별도 Sol 독립 검수 승인. 기능·배포·사용자 데이터 계약 보존.
+- 인증 작업공간 공통 root 글자 설정/복원과 rem 역할 토큰 적용. 기존 inline 값·priority·소수 설정·저장 키 유지. 전역 blanket font!important 제거, 실제60→15개 및 baseline상한15로 감축. 남은15개는 shell/nav/custom widget·portfolio 예외. 간격/그리드/보고서 px 기하 유지.
+- 신규17 route×2조건(1366/18pt/dark,1920/11pt/light)과 fractional16.25/root priority 복원, P3/P4/초기화면 포함 관련 E2E14개 최종 통과. 첫 통합11통과/3실패는 본문역할 기대값과 비동기 대기 테스트를 고친 후 관련4개 재통과. 소스 결함 breadcrumb light13px와 여러 caption/selector/cascade 누락도 수정/확인했다.
+- TypeScript, architecture/CSS/root self-tests, preferences/API/runner 검증, API 계약 unchanged 및 최종 /home build 통과. Node26의 제거된 transform flag는 번들Node24로 대체해 통과. 기존 chunk경고 유지. 별도 CI/전체suite/Server2022 실기를 수행한 것은 아님.
+- 격리 TEMP 새 DuckDB/QA계정과 localhost15184/18103 사용, 실사용 helper 차단. IAB 18pt/light→dark 화면/조작 정상, 개발중router blocker경고1건은 최종reload에서 재발관측없음. 실제 사용자 DB·설정·서비스 및 모바일 검수·배포·commit/push 미실행.
+- 독립 Sol 승인 및 Astra 최종 통합 완료. 상세와 예외/증거: docs/dashboard/ui-density-p5-implementation.md. 임시 검수서버와 브라우저는 종료한다.
