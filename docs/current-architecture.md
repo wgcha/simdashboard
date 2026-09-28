@@ -45,6 +45,8 @@ Storage feature를 직접 import하지 않는다. 파일별 수치 조회는 저
 
 ### 내 PC 프로그램 검색과 실행
 
+2026-09-28 사용자 결정으로 `내 PC 설정` 화면과 진입 안내를 숨긴다. PC도우미를 통한 개인 실행 환경 설정 지원을 중단하고 중앙·클라우드 배치 설정은 후속 보강한다. 아래 로컬 실행 구조·데이터는 이번 변경에서 보존하며, 전체 제거 완료를 뜻하지 않는다. 현재 방향은 [실행 환경 운영 정책](execution-environment-policy.md)을 따른다.
+
 `local_runner/`는 중앙 FastAPI 서버와 독립된 loopback 실행 도우미다. 프로그램 이름·버전·키워드와
 PC별 경로, 실행 시점 snapshot, 완료 메모와 저장 배치를 개인 SQLite에 보관한다. `server.py`가
 bearer/Origin/Host와 API 입력을, `storage.py`가 트랜잭션·중복 제출·실행 이력을, `executor.py`가

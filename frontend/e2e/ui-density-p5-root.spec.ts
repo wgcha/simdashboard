@@ -5,7 +5,7 @@ import { WORKSPACE_ROUTES } from '../src/features/navigation/workspaceRouteRegis
 import { loginWorkspace, openWorkspaceRoute } from './workspace-test-helpers'
 
 const routeHeadings: Record<string, string> = {
-  local_pc: '내 PC 설정', portfolio: '결과 대시보드', workbench_admin: '작업 유형 관리',
+  portfolio: '결과 대시보드', workbench_admin: '작업 유형 관리',
   project_result_profiles: '프로젝트 결과 구성', schemas: '폴더 연결·규칙', variables: '변수 카탈로그',
   templates: '모델링 템플릿', access_admin: '사용자·프로젝트 권한', menu_policy_admin: '권한 및 좌측 메뉴 정책',
   audit_admin: '감사로그', examples: '기능 예제 갤러리', help: 'VD simulation workbench 사용 도움말', voc: 'VOC 게시판',
@@ -32,7 +32,7 @@ for (const { width, pt, theme } of [
     await page.getByRole('button', { name: theme, exact: true }).click()
     await expect.poll(() => page.getByRole('button', { name: '로그아웃', exact: true }).evaluate(e => parseFloat(getComputedStyle(e).fontSize))).toBeCloseTo(pt * 4 / 3 * .76, 1)
     await expect.poll(() => page.getByRole('link', { name: '내 작업', exact: true }).evaluate(e => parseFloat(getComputedStyle(e).fontSize))).toBeCloseTo(pt * 4 / 3 * .86, 1)
-    for (const route of WORKSPACE_ROUTES) {
+    for (const route of WORKSPACE_ROUTES.filter(({ id }) => id !== 'local_pc')) {
       await test.step(route.path, async () => {
         await openWorkspaceRoute(page, route.path)
         // URL updates before lazy route content: never certify the previous screen.

@@ -37,12 +37,13 @@ import type { AuthUser } from './auth'
 import { useWorkspaceEditorCoordinator } from './editorState'
 import { createClientId } from './shared/identity/clientId'
 import { BootstrapWorkspaceShell } from './features/bootstrap/BootstrapWorkspaceShell'
+import { NoAvailableWorkspaceMenu } from './features/bootstrap/NoAvailableWorkspaceMenu'
 import { VocRoute } from './app/workspace/VocRoute'
+import { ChangePasswordDialog } from './features/auth/ChangePasswordDialog'
 import type { InitialWorkspace } from './features/bootstrap/loadInitialWorkspace'
 import { useWorkspaceBootstrap } from './features/bootstrap/useWorkspaceBootstrap'
 import { AppShell, AppShellMain, AppTopbar } from './app/shell/AppShell'
 import { AppSidebar } from './app/shell/AppSidebar'
-import { PersonalPcRoute } from './app/workspace/PersonalPcRoute'
 import { ProjectSetupState } from './app/workspace/ProjectSetupState'
 import { loadWorkspacePreferences, saveWorkspacePreference, type WorkspaceTheme } from './app/preferences/workspacePreferences'
 import { useWorkspaceDocumentFontSize, workspaceFontSizeStyle } from './app/preferences/workspaceFontSizeStyle'
@@ -861,13 +862,10 @@ function App() {
   if (authUser?.account_status === 'PENDING') {
     return <ApprovalPendingScreen displayName={authUser.display_name} onLogout={() => void logout()} />
   }
-  if (workspacePage === 'local_pc' && authUser?.account_status === 'ACTIVE') {
-    return <PersonalPcRoute user={authUser} menus={visibleMenus} databaseBackend={databaseBackend} theme={theme} fontSize={uiFontSize} onFontSizeChange={setUiFontSize} onThemeChange={setTheme} onLogout={() => void logout()} onNavigate={enterWorkspace} />
-  }
   if (workspacePage === 'voc' && menuPolicyReady && authUser?.account_status === 'ACTIVE' && allowedPages.has('voc')) {
-    return <VocRoute user={authUser} menus={visibleMenus} databaseBackend={databaseBackend} theme={theme} fontSize={uiFontSize} onFontSizeChange={setUiFontSize} onThemeChange={setTheme} onLogout={() => void logout()} onNavigate={enterWorkspace} />
+    return <VocRoute authMode={authMode} user={authUser} menus={visibleMenus} databaseBackend={databaseBackend} theme={theme} fontSize={uiFontSize} onFontSizeChange={setUiFontSize} onThemeChange={setTheme} onLogout={() => void logout()} onNavigate={enterWorkspace} />
   }
-  if (workspaceBootstrap.status === 'idle' || workspaceBootstrap.status === 'loading') {
+  if ((workspaceBootstrap.status === 'idle' || workspaceBootstrap.status === 'loading') && !isPersonalOnlyAccount(authUser)) {
     return <div className="full-state"><LoaderCircle className="spin" /> 데이터와 레이아웃을 준비하고 있습니다.</div>
   }
   if (workspaceBootstrap.status === 'failed') {
@@ -892,7 +890,7 @@ function App() {
     const canRegisterData = canCreateProject || hasPermission(authUser, 'result.import', selectedProjectId)
     const canRetryImports = hasPermission(authUser, 'system.catalog.manage', selectedProjectId)
     const setupPage = workspacePage === 'intake' && projects.length > 0 ? 'intake' : 'data'
-    return <BootstrapWorkspaceShell
+    return <BootstrapWorkspaceShell accountSettings={authMode === 'password' && authUser ? <ChangePasswordDialog key={authUser.id} theme={theme} /> : null}
       theme={theme}
       activePage={setupPage}
       displayName={authUser?.display_name ?? '사용자'}
@@ -910,9 +908,8 @@ function App() {
       )}
     </BootstrapWorkspaceShell>
   }
-  if (!allowedPages.has(workspacePage)) {
-    return <div className="full-state"><LoaderCircle className="spin" /> 허용된 첫 화면으로 이동하고 있습니다.</div>
-  }
+  if (!allowedPages.size && authUser?.account_status === 'ACTIVE') return <NoAvailableWorkspaceMenu accountSettings={authMode === 'password' ? <ChangePasswordDialog key={authUser.id} theme={theme} /> : null} theme={theme} displayName={authUser.display_name} databaseBackend={databaseBackend} onPageChange={enterWorkspace} onThemeChange={setTheme} onLogout={() => void logout()} />
+  if (!allowedPages.has(workspacePage)) return <div className="full-state"><LoaderCircle className="spin" /> 허용된 첫 화면으로 이동하고 있습니다.</div>
   if (workspacePage === 'menu_policy_admin' && !menuPolicy) {
     return <div className="full-state error"><AlertTriangle /> 메뉴 정책을 불러오지 못했습니다. 감사로그와 서버 상태를 확인하세요.</div>
   }
@@ -948,10 +945,13 @@ function App() {
       className={`app-shell ${theme === 'light' ? 'light-theme' : 'dark-theme'}`}
       sidebar={<AppSidebar
         activePage={isRequestWorkspace ? 'dashboard' : workspacePage}
+        accountKey={authUser?.id}
+        authMode={authMode}
         databaseBackend={databaseBackend}
         fontSize={uiFontSize}
         menus={visibleMenus}
         signedIn={Boolean(authUser)}
+        theme={theme}
         userBadge={authUser ? authUser.is_global_admin ? 'GLOBAL ADMIN' : authUser.memberships.find((item) => item.project_id === selectedProjectId)?.role.toUpperCase() ?? 'NONMEMBER' : undefined}
         userDisplayName={authUser?.display_name}
         onDecreaseFontSize={() => setUiFontSize((value) => Math.max(11, value - 1))}

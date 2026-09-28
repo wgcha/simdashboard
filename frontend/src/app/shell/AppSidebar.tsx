@@ -22,6 +22,7 @@ import {
   Users,
   MessageSquare,
 } from 'lucide-react'
+import { ChangePasswordDialog } from '../../features/auth/ChangePasswordDialog'
 
 const MENU_ICONS = {
   local_pc: Monitor,
@@ -94,10 +95,13 @@ function groupForMenu(id: string): MenuGroupId | undefined {
 
 type AppSidebarProps = {
   activePage: string
+  accountKey?: string
+  authMode?: 'disabled' | 'password' | 'oidc'
   databaseBackend: 'duckdb' | 'postgresql'
   fontSize: number
   menus: readonly AppSidebarMenu[]
   signedIn: boolean
+  theme: 'dark' | 'light'
   userBadge?: string
   userDisplayName?: string
   onDecreaseFontSize: () => void
@@ -110,10 +114,13 @@ type AppSidebarProps = {
 
 export function AppSidebar({
   activePage,
+  accountKey,
+  authMode = 'disabled',
   databaseBackend,
   fontSize,
   menus,
   signedIn,
+  theme,
   userBadge,
   userDisplayName,
   onDecreaseFontSize,
@@ -185,7 +192,7 @@ export function AppSidebar({
         <button type="button" aria-label="전체 글자 크기 늘리기" onClick={onIncreaseFontSize} disabled={fontSize >= 18}><Plus /></button>
       </div>
       {signedIn && <div className="signed-user"><strong>{userDisplayName}</strong><span>{userBadge}</span></div>}
-      <details className="sidebar-settings"><summary><Settings2 /> <span>환경설정</span><Plus className="nav-group-caret" aria-hidden="true" /></summary><div className="sidebar-settings-body"><span className="system-pill"><span className="live-dot" /> {databaseBackend === 'postgresql' ? '서버 연결' : '로컬 연결'}</span><small>화면 글자 크기와 메뉴를 조정합니다.</small></div></details>
+      <details className="sidebar-settings"><summary><Settings2 /> <span>환경설정</span><Plus className="nav-group-caret" aria-hidden="true" /></summary><div className="sidebar-settings-body"><span className="system-pill"><span className="live-dot" /> {databaseBackend === 'postgresql' ? '서버 연결' : '로컬 연결'}</span><small>화면 글자 크기와 메뉴를 조정합니다.</small>{signedIn && authMode === 'password' && <ChangePasswordDialog key={accountKey ?? 'account'} theme={theme} />}</div></details>
       {signedIn && <button onClick={onLogout}><LogOut /><span>로그아웃</span></button>}
     </div>
   </aside>

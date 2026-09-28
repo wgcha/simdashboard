@@ -851,3 +851,12 @@
 - TypeScript, architecture/CSS/root self-tests, preferences/API/runner 검증, API 계약 unchanged 및 최종 /home build 통과. Node26의 제거된 transform flag는 번들Node24로 대체해 통과. 기존 chunk경고 유지. 별도 CI/전체suite/Server2022 실기를 수행한 것은 아님.
 - 격리 TEMP 새 DuckDB/QA계정과 localhost15184/18103 사용, 실사용 helper 차단. IAB 18pt/light→dark 화면/조작 정상, 개발중router blocker경고1건은 최종reload에서 재발관측없음. 실제 사용자 DB·설정·서비스 및 모바일 검수·배포·commit/push 미실행.
 - 독립 Sol 승인 및 Astra 최종 통합 완료. 상세와 예외/증거: docs/dashboard/ui-density-p5-implementation.md. 임시 검수서버와 브라우저는 종료한다.
+
+### 2026-09-28 개인 PC 설정 지원 중단·화면 비노출
+
+- 사용자 결정: PC도우미를 통한 개인 PC 환경 설정 지원을 중단하고 공용 업무·결과 관리에 집중한다. 중앙·클라우드 배치 설정은 후속 보강한다. `docs/execution-environment-policy.md`와 문서 지도에 기록하고 기존 설치·로컬 실행 문서에 최신 정책 우선 표시를 추가했다.
+- Luna(max) 프런트 구현, 독립 Sol 변경분 검수, Astra 문서·통합 확인. `내 PC 설정` 메뉴·초기 진입 버튼·로그인 연결 권유를 제거하고 기존 URL은 허용 화면으로 이동시킨다. 프로젝트/메뉴 없는 계정의 무한 대기를 방지하고 비밀번호 변경은 공통 계정 dialog로 분리했다. OIDC/disabled 모드에는 변경 버튼을 표시하지 않는다.
+- 도우미 API·배포본·기존 작업 화면의 로컬 실행·연결 데이터·실행 이력을 보존한다. 이번 변경은 설치된 도우미 중지·제거나 중앙 실계산 구현이 아니다. DB migration·의존성·배포 진입점·인증/권한 API 변경 없음.
+- 검증: 최종 프런트 구조 검사(232 files / 5 approved imports), 라우팅 self-test, TypeScript+Vite build 통과. 기존 큰 chunk 경고 유지. 격리 데스크톱 `personal-onboarding-status.spec.ts` 1개 통과(프로젝트 없는 계정의 URL 이동·안내·비밀번호 dialog 닫기/재열기 초기화). Windows E2E 실행기는 테스트 후 자식 PID 정리 taskkill 오류로 exit 1이므로 전체 명령 성공으로 기록하지 않는다.
+- 독립 Sol 지적(빈 메뉴 fallback, dialog 글자 크기 토큰, loopback 도우미 호출 감시, 과거 화면 테스트 기대값)을 해소했고 미해결 정적 지적 없음. 보안 경계 변경이 없는 UI 진입점 정리로 security-diff-scan은 실행하지 않았다. 문서 링크·diff 공백 확인 완료. 전체 E2E·실사내 PC·폐쇄망 배포·commit/push는 수행하지 않았다.
+- E2E 명령은 `node scripts/run-e2e.mjs personal-onboarding-status.spec.ts`. 합성 계정 전용 `backend/data/e2e-playwright.duckdb`를 사용했다. 종료 오류 후 해당 PID 20880/27924 부재와 테스트 포트 15173/18000 해제를 확인했다. 일반 계정 legacy URL 별도 spec(`personal-pc.spec.ts`)은 갱신했으나 이번 실행에는 포함하지 않았다.

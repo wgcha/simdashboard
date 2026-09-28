@@ -8,6 +8,7 @@ import { AppSidebar, type AppSidebarMenuId } from './AppSidebar'
 import { workspaceFontSizeStyle } from '../preferences/workspaceFontSizeStyle'
 
 type WorkspaceShellLayoutProps = {
+  authMode?: 'disabled' | 'password' | 'oidc'
   actions: ReactNode
   activePage: MenuId
   children: ReactNode
@@ -27,6 +28,7 @@ type WorkspaceShellLayoutProps = {
 
 /** Feature-agnostic authenticated chrome: navigation, top bar, and outlet. */
 export function WorkspaceShellLayout({
+  authMode,
   actions,
   activePage,
   children,
@@ -47,10 +49,13 @@ export function WorkspaceShellLayout({
     className={`app-shell ${theme === 'light' ? 'light-theme' : 'dark-theme'}`}
     sidebar={<AppSidebar
       activePage={activePage}
+      accountKey={user?.id}
+      authMode={authMode}
       databaseBackend={databaseBackend}
       fontSize={fontSize}
       menus={menus}
       signedIn={Boolean(user)}
+      theme={theme}
       userBadge={userBadge}
       userDisplayName={user?.display_name}
       onDecreaseFontSize={onDecreaseFontSize}

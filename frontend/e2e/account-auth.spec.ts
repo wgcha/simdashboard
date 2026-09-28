@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test'
 import { mkdirSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { loginWorkspace, openWorkspaceRoute } from './workspace-test-helpers'
+import { loginWorkspace } from './workspace-test-helpers'
 
 test('개인 회원가입 신청 후 관리자 승인 안내와 로그인 화면으로 돌아간다', async ({ page }) => {
   let registration: Record<string, string> | undefined
@@ -101,8 +101,10 @@ test('실제 계정을 승인한 뒤 비밀번호 변경과 새 비밀번호 로
   await expect(page).toHaveURL(/\/workspace\/overview/)
   await expect(page.getByRole('complementary', { name: '주 메뉴' })).toBeVisible()
   await expect(page.getByTestId('local-pc-settings')).toHaveCount(0)
-  await openWorkspaceRoute(page, '/workspace/settings/local-pc')
-  await expect(page.getByRole('heading', { name: '비밀번호 변경', exact: true })).toBeVisible()
+  await expect(page.getByRole('complementary', { name: '주 메뉴' }).getByRole('link', { name: '내 PC 설정', exact: true })).toHaveCount(0)
+  await page.locator('.sidebar-settings > summary').click()
+  await page.getByRole('button', { name: '계정 비밀번호 변경', exact: true }).click()
+  await expect(page.getByRole('dialog', { name: '계정 보안 설정' }).getByRole('heading', { name: '비밀번호 변경', exact: true })).toBeVisible()
   await page.getByLabel('현재 비밀번호').fill(oldPassword)
   await expect(page.getByLabel('새 비밀번호', { exact: true })).toHaveAttribute('minlength', '8')
   await page.getByLabel('새 비밀번호', { exact: true }).fill(newPassword)
@@ -110,6 +112,8 @@ test('실제 계정을 승인한 뒤 비밀번호 변경과 새 비밀번호 로
   await page.getByRole('button', { name: '비밀번호 변경', exact: true }).click()
   await expect(page.locator('.change-password-form').getByRole('status')).toContainText('비밀번호를 변경했습니다.')
   await page.screenshot({ path: path.join(evidence, 'personal-password-changed.png'), fullPage: true })
+  await page.getByRole('button', { name: '계정 보안 설정 닫기' }).click()
+  await expect(page.getByRole('dialog', { name: '계정 보안 설정' })).toBeHidden()
   await page.getByRole('button', { name: '로그아웃', exact: true }).click()
   await page.getByLabel('사용자 이름').fill(username)
   await page.getByLabel('비밀번호').fill(oldPassword)

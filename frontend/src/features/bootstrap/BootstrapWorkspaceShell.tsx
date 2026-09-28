@@ -4,6 +4,7 @@ import type { WorkspacePage } from '../auth/access'
 import './bootstrap-workspace.css'
 
 type BootstrapWorkspaceShellProps = {
+  accountSettings?: ReactNode
   activePage: 'data' | 'intake'
   canOpenIntake: boolean
   canOpenFolders?: boolean
@@ -17,6 +18,7 @@ type BootstrapWorkspaceShellProps = {
 }
 
 export function BootstrapWorkspaceShell({
+  accountSettings,
   activePage,
   canOpenIntake,
   canOpenFolders = false,
@@ -37,7 +39,7 @@ export function BootstrapWorkspaceShell({
         {canOpenFolders && <button type="button" onClick={() => onPageChange('schemas')}>폴더 연결·규칙</button>}
       </nav>
       <div className="bootstrap-workspace-actions">
-        <button type="button" onClick={() => onPageChange('local_pc')}>내 PC 설정</button>
+        {accountSettings}
         <div className="theme-switch" role="group" aria-label="화면 테마 선택">
           <button type="button" className={theme === 'light' ? 'active' : ''} aria-pressed={theme === 'light'} onClick={() => onThemeChange('light')}>라이트</button>
           <button type="button" className={theme === 'dark' ? 'active' : ''} aria-pressed={theme === 'dark'} onClick={() => onThemeChange('dark')}>다크</button>

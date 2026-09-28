@@ -40,8 +40,6 @@ for (const width of [1366, 1920]) {
         await checkSurface(page, page.locator('.help-center'), 'h1', pt)
         await expect.poll(() => page.locator('.help-flow > div > span').first().evaluate((e) => parseFloat(getComputedStyle(e).fontSize))).toBeCloseTo(pt * 4 / 3 * .875, 1)
         await expect.poll(() => page.locator('.help-center button').first().evaluate((e) => parseFloat(getComputedStyle(e).fontSize))).toBeCloseTo(pt * 4 / 3, 1)
-        await openWorkspaceRoute(page, '/workspace/settings/local-pc')
-        await checkSurface(page, page.getByTestId('local-pc-settings'), 'h1', pt)
         await openWorkspaceRoute(page, '/workspace/catalog/templates')
         await checkSurface(page, page.locator('.modeling-templates-page'), 'h1', pt)
         await page.getByRole('button', { name: /새 템플릿/ }).click()

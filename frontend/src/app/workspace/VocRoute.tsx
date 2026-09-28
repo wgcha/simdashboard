@@ -5,6 +5,7 @@ import { VocBoard, preloadWorkspaceRouteModule } from '../routing/workspaceScree
 import { WorkspaceShellLayout } from '../shell/WorkspaceShellLayout'
 
 type Props = {
+  authMode: 'disabled' | 'password' | 'oidc'
   user: AuthUser
   menus: readonly { id: MenuId; label: string }[]
   databaseBackend: 'duckdb' | 'postgresql'
@@ -17,8 +18,8 @@ type Props = {
 }
 
 /** Company feedback is independent of project and result bootstrap state. */
-export function VocRoute({ user, menus, databaseBackend, theme, fontSize, onFontSizeChange, onThemeChange, onLogout, onNavigate }: Props) {
-  return <WorkspaceShellLayout activePage="voc" user={user} menus={menus} databaseBackend={databaseBackend} theme={theme} fontSize={fontSize}
+export function VocRoute({ authMode, user, menus, databaseBackend, theme, fontSize, onFontSizeChange, onThemeChange, onLogout, onNavigate }: Props) {
+  return <WorkspaceShellLayout activePage="voc" user={user} menus={menus} databaseBackend={databaseBackend} theme={theme} fontSize={fontSize} authMode={authMode}
     onDecreaseFontSize={() => onFontSizeChange(Math.max(11, fontSize - 1))} onIncreaseFontSize={() => onFontSizeChange(Math.min(18, fontSize + 1))}
     onLogout={onLogout} onNavigate={onNavigate} onPreloadPage={preloadWorkspaceRouteModule}
     topbarBreadcrumb={<><span>지원</span><b>/</b><strong>VOC 게시판</strong></>}

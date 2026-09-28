@@ -80,7 +80,7 @@ export function LoginScreen({ mode, error, onLogin, onRegister, registrationEnab
       {visibleError && <div className="login-error" role="alert"><AlertTriangle /> {visibleError}</div>}
       {mode === 'oidc' ? <button type="button" onClick={() => window.location.assign('/api/auth/oidc/start')}><Lock /> 회사 SSO 로그인</button> : <button type="submit" disabled={submitting || !username.trim() || !password || (registerMode && (!displayName.trim() || !confirmation))}>{submitting ? <LoaderCircle className="spin" /> : registerMode ? <UserPlus /> : <Lock />} {registerMode ? '회원가입 신청' : '로그인'}</button>}
       {mode === 'password' && registrationEnabled && <button type="button" className="login-secondary-button" disabled={submitting} onClick={() => switchMode(!registerMode)}>{registerMode ? '로그인으로 돌아가기' : '개인 회원가입'}</button>}
-      <small>{registerMode ? '가입 신청 후 관리자가 계정을 승인하면 로그인할 수 있습니다.' : '개인 계정으로 로그인한 뒤 내 PC 설정에서 도우미를 연결하세요.'}</small>
+      <small>{registerMode ? '가입 신청 후 관리자가 계정을 승인하면 로그인할 수 있습니다.' : '승인된 계정으로 로그인하세요.'}</small>
     </form>
   </main>
 }

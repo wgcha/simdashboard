@@ -50,9 +50,9 @@ if (confirmed.pending !== pendingDashboardReset || !confirmed.shouldProceed) thr
 console.log('Workspace route registry self-test passed.')
 
 const personalUser = { id: 'personal-user', username: 'personal-user', display_name: 'Personal user', employee_id: null, account_status: 'ACTIVE', is_global_admin: false, memberships: [], company_permissions: [] }
-if (!visibleMenuItems(null, personalUser, '').some((item) => item.id === 'local_pc')) throw new Error('personal settings must be available without project or policy')
+if (visibleMenuItems(null, personalUser, '').some((item) => item.id === 'local_pc')) throw new Error('legacy personal PC settings must stay out of visible menus')
 const hiddenPersonalPolicy = { version: 1, updated_by: '', updated_at: '', menus: [{ id: 'local_pc', label: 'hidden', required_permission: 'system.menu_policy.manage', context_kind: 'system', sequence_no: 1, is_policy_editable: true, visibility: { general: false, power: false, admin: false } }] }
-if (visibleMenuItems(hiddenPersonalPolicy, personalUser, '').filter((item) => item.id === 'local_pc').length !== 1) throw new Error('personal settings must remain a single built-in menu')
+if (visibleMenuItems(hiddenPersonalPolicy, personalUser, '').some((item) => item.id === 'local_pc')) throw new Error('legacy menu-policy entries must not restore the hidden personal PC menu')
 for (const account_status of ['PENDING', 'SUSPENDED']) {
   if (visibleMenuItems(null, { ...personalUser, account_status }, '').length) throw new Error('inactive accounts must not get personal menu access')
 }

@@ -101,7 +101,8 @@ export function useWorkspaceNavigation({
   useEffect(() => {
     if (!authUser || authUser.account_status !== 'ACTIVE') return
     if (personalOnly) {
-      if (workspacePage !== 'local_pc') navigate(workspacePathForPage('local_pc')!, { replace: true })
+      const fallbackPath = workspacePathForPage('portfolio')!
+      if (isWorkspaceIndex || workspacePage !== 'portfolio') navigate(fallbackPath, { replace: true })
       return
     }
     if (!menuPolicyReady) return
@@ -111,9 +112,10 @@ export function useWorkspaceNavigation({
       return
     }
     if (!matchedWorkspaceRoute) return
-    if (allowedPages.has(matchedWorkspaceRoute.page) || !fallbackPath) return
+    if (allowedPages.has(matchedWorkspaceRoute.page)) return
+    if (!fallbackPath && matchedWorkspaceRoute.page !== 'local_pc') return
     onNotice('현재 권한으로 열 수 없는 화면입니다. 허용된 첫 화면으로 이동했습니다.')
-    navigate(fallbackPath, { replace: true })
+    navigate(fallbackPath ?? workspacePathForPage('portfolio')!, { replace: true })
   }, [allowedPages, authUser?.account_status, authUser?.id, isWorkspaceIndex, matchedWorkspaceRoute, menuPolicyReady, navigate, onNotice, personalOnly, visibleMenus, workspacePage])
 
   useEffect(() => {

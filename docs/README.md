@@ -67,6 +67,8 @@
 
 ## 현재 기준 문서
 
+PC 개인 실행 환경 지원과 향후 중앙 배치 방향은 [실행 환경 운영 정책](execution-environment-policy.md)을 따른다(2026-09-28). 과거 PC도우미 설치·개인 설정 제공 계획보다 우선한다.
+
 | 영역 | 문서 | 성격 |
 |---|---|---|
 | 런타임 | [`windows-development-setup.md`](windows-development-setup.md) | native Windows 설치·실행·DB 선택 |
@@ -99,7 +101,7 @@
 
 | 기능 | 문서 |
 |---|---|
-| 개인 회원가입·비밀번호 변경·도우미 설치 | [`personal-onboarding-implementation.md`](personal-onboarding-implementation.md) |
+| 개인 회원가입·비밀번호 변경·과거 도우미 설치 구현 | [`personal-onboarding-implementation.md`](personal-onboarding-implementation.md) |
 | 개인 계정 첫 화면·기존 사내 설치 전환 검토와 개발 계획 | [`personal-account-entry-rollout-plan.md`](personal-account-entry-rollout-plan.md) |
 | 개인 계정 최초 관리자·업데이트·검증 기록 | [`personal-account-rollout-runbook.md`](personal-account-rollout-runbook.md) |
 | 계정·프로젝트 권한 백업·재설치·이관 | [`account-backup-and-recovery.md`](account-backup-and-recovery.md) |
@@ -111,7 +113,7 @@
 | 로컬 프로그램 검색·실행 | [`local-program-execution-plan.md`](local-program-execution-plan.md) |
 | 계정별 PC 연결·중앙 실행 이력 | [`managed-local-execution-plan.md`](managed-local-execution-plan.md) |
 | 계정별 PC 운영 검증 | [`managed-local-execution-qa.md`](managed-local-execution-qa.md) |
-| 기본 내 PC 설정·웹 시작 흐름 | [`personal-pc-settings-plan.md`](personal-pc-settings-plan.md) |
+| 내 PC 설정·웹 시작 흐름의 과거 구현 기록(현재 비노출) | [`personal-pc-settings-plan.md`](personal-pc-settings-plan.md) |
 | 내 PC 설정 검증 | [`personal-pc-settings-qa.md`](personal-pc-settings-qa.md) |
 | 로컬 프로그램 실행 검증 | [`local-program-execution-qa.md`](local-program-execution-qa.md) |
 | 통합 workbench | [`integrated-simulation-workbench-plan.md`](integrated-simulation-workbench-plan.md) |

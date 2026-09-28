@@ -80,10 +80,8 @@ export function isMenuVisible(menu: MenuPolicyItem, user: AuthUser | null, proje
 
 export function visibleMenuItems(policy: MenuPolicy | null, user: AuthUser | null, projectId: string): MenuPolicyItem[] {
   if (!user || user.account_status !== 'ACTIVE') return []
-  // Personal PC settings are a built-in account feature, independent of the
-  // administrator's project/work menus and available before a project exists.
-  const personal: MenuPolicyItem = { id: 'local_pc', label: '내 PC 설정', required_permission: 'company.dashboard.view', context_kind: 'company', sequence_no: 35, is_policy_editable: false, visibility: { general: true, power: true, admin: true } }
-  return [...(policy?.menus ?? []).filter((menu) => menu.id !== 'local_pc' && isMenuVisible(menu, user, projectId)), personal].sort((left, right) => left.sequence_no - right.sequence_no)
+  // Keep the legacy ID out of navigation even if an older policy still has it.
+  return (policy?.menus ?? []).filter((menu) => menu.id !== 'local_pc' && isMenuVisible(menu, user, projectId)).sort((left, right) => left.sequence_no - right.sequence_no)
 }
 
 export function firstAllowedWorkspacePage(policy: MenuPolicy | null, user: AuthUser | null, projectId: string): WorkspacePage | null {
