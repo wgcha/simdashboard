@@ -860,3 +860,11 @@
 - 검증: 최종 프런트 구조 검사(232 files / 5 approved imports), 라우팅 self-test, TypeScript+Vite build 통과. 기존 큰 chunk 경고 유지. 격리 데스크톱 `personal-onboarding-status.spec.ts` 1개 통과(프로젝트 없는 계정의 URL 이동·안내·비밀번호 dialog 닫기/재열기 초기화). Windows E2E 실행기는 테스트 후 자식 PID 정리 taskkill 오류로 exit 1이므로 전체 명령 성공으로 기록하지 않는다.
 - 독립 Sol 지적(빈 메뉴 fallback, dialog 글자 크기 토큰, loopback 도우미 호출 감시, 과거 화면 테스트 기대값)을 해소했고 미해결 정적 지적 없음. 보안 경계 변경이 없는 UI 진입점 정리로 security-diff-scan은 실행하지 않았다. 문서 링크·diff 공백 확인 완료. 전체 E2E·실사내 PC·폐쇄망 배포·commit/push는 수행하지 않았다.
 - E2E 명령은 `node scripts/run-e2e.mjs personal-onboarding-status.spec.ts`. 합성 계정 전용 `backend/data/e2e-playwright.duckdb`를 사용했다. 종료 오류 후 해당 PID 20880/27924 부재와 테스트 포트 15173/18000 해제를 확인했다. 일반 계정 legacy URL 별도 spec(`personal-pc.spec.ts`)은 갱신했으나 이번 실행에는 포함하지 않았다.
+
+
+### 2026-09-28 작업 실행 PC도우미 패널 비노출
+
+- 사용자 후속 요청으로 SimulationWorkbench의 LocalProgramPanel import·마운트를 제거했다. 연결·프로그램 등록·로컬 실행·패널 내 이력 UI와 해당 패널의 도우미/중앙 로컬 실행 요청을 함께 중단한다. 일반 작업 상태·DEMO_ONLY 배치와 기존 API·DB·이력 데이터는 유지한다.
+- 실행 환경 정책과 관련 과거 구현 문서에 작업 실행 화면 비노출 범위를 반영했다. 기존 도우미 구동 E2E를 합성 환경의 패널 비노출·작업 선택·loopback/API 요청 0 검사로 대체했다. 영향이 명확한 두 줄의 화면 마운트 제거로 주 에이전트가 직접 구현·검증했으며 별도 에이전트 검수는 수행하지 않았다.
+- 검증: 프런트 구조 검사(232 files / 5 reviewed imports), TypeScript+Vite build 통과. 기본 권한 빌드는 Vite 임시 파일 EPERM으로 실패했고 권한 확장 후 통과했다. 기존 chunk 크기 경고 유지. 초기 E2E는 이미 진행 중인 fixture를 READY로 가정해 실패하여 상태 독립적인 작업 선택 검사로 수정했다. 최종 local-programs.spec.ts 데스크톱 1개 통과(7초).
+- E2E 전체 명령은 테스트 이후 Windows taskkill 정리 오류로 exit 1. 해당 PID 6732/13104 부재와 테스트 포트 15173/18000 리스너 없음 확인. 실제 사용자 DB·설정·서비스·도우미를 사용하지 않았다. 전체 회귀·모바일·폐쇄망 배포·commit/push 미실행. DB·인증/권한·실행 API 경계를 변경하지 않아 보안 스캔은 실행하지 않았다.

@@ -7,7 +7,6 @@ import { requestResultDefinitionFromProfile, requestResultDefinitionValidation }
 import './RequestResultWidgetConfiguration.css'
 import { DEFAULT_REQUEST_TYPE_LABELS, requestTypeLabels, type BatchExecutionAttempt, type BatchProfile, type DemoRun, type DemoRunTask, type RequestResultDefinition, type WorkbenchNode, type WorkbenchRequestType, type WorkbenchTaskType } from './types'
 import { useMemoryQuery } from '../../shared/cache/useMemoryQuery'
-import { LocalProgramPanel } from './local-programs/LocalProgramPanel'
 import { createClientId } from '../../shared/identity/clientId'
 
 type CompositionMode = 'parallel' | 'sequence'
@@ -325,7 +324,6 @@ export function SimulationWorkbench({ workflows, initialRequestId, currentUserId
           {selectedWorkItem.status === 'IN_PROGRESS' ? selectedExecution.runLabel : selectedExecution.startLabel}
         </button></div>
       </article>
-      <LocalProgramPanel key={currentUserId} currentUserId={currentUserId} currentUserName={createdBy} requestId={requestId} selectedWorkItem={selectedWorkItem} taskName={selectedWorkItem.name} canExecute={canExecute} isAdmin={isAdmin} isCurrent={selectedIsCurrent} />
       <div className="work-item-detail-grid">
         <details className="progress-update-card workbench-collapsible">
           <summary><span><strong>진행도 업데이트</strong><small>수동 진행 상태 갱신</small></span><ChevronRight aria-hidden="true" /></summary><div className="progress-update-body">
