@@ -72,6 +72,10 @@ def initialize_database() -> None:
                 "folder_environment_registrations",
                 "folder_environment_registry",
                 "folder_environment_capture_jobs",
+                "result_registration_paths",
+                "result_registration_drafts",
+                "result_registration_files",
+                "result_registration_events",
             )
             missing = [
                 table_name
@@ -98,6 +102,10 @@ def initialize_database() -> None:
                 "folder_environment_registrations": {"preview_id", "idempotency_key", "environment", "status"},
                 "folder_environment_registry": {"registration_id", "relative_path", "role_kind", "target_id"},
                 "folder_environment_capture_jobs": {"registration_id", "case_id", "status"},
+                "result_registration_paths": {"root_key", "project_id", "request_id", "environment", "relative_path", "path_key", "role_kind", "target_id"},
+                "result_registration_drafts": {"project_id", "request_id", "environment", "case_relative_path", "result_relative_path", "manifest_json", "inspection_json", "approval_json", "capture_id", "status"},
+                "result_registration_files": {"draft_id", "relative_path", "sha256", "size_bytes", "content"},
+                "result_registration_events": {"draft_id", "action", "detail_json", "actor", "occurred_at"},
             }
             incompatible = []
             for table_name, expected in required_columns.items():
@@ -1224,6 +1232,7 @@ def _initialize_duckdb_legacy() -> None:
         ensure_semantic_review_schema(conn)
         ensure_folder_discovery_schema(conn)
         ensure_folder_environment_schema(conn)
+        ensure_result_registration_schema(conn)
         from .adapters.persistence.dashboard_schema import ensure_dashboard_schema
         ensure_dashboard_schema(conn)
         # Establish the schema before seeding, but defer one-time legacy data
@@ -1474,6 +1483,46 @@ def ensure_folder_environment_schema(conn: duckdb.DuckDBPyConnection) -> None:
     conn.execute("""INSERT INTO folder_environment_profiles(id,environment,name,revision,rules_json,created_at,updated_at) VALUES
     ('environment-profile-usage-default','USAGE','기본 사용환경 규칙',1,'{"roles":["PROJECT","REQUEST","SIMULATION_CASE","EVALUATION"]}',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP),
     ('environment-profile-distribution-default','DISTRIBUTION','기본 유통환경 규칙',1,'{"roles":["PROJECT","REQUEST","SIMULATION_CASE","LOAD_CASE","EXECUTION_RUN","RUN_OPTION"]}',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP) ON CONFLICT(id) DO NOTHING""")
+
+
+def ensure_result_registration_schema(conn: duckdb.DuckDBPyConnection) -> None:
+    """Embedded development equivalent of additive migration 0031."""
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS result_registration_paths (
+        id VARCHAR PRIMARY KEY, root_key VARCHAR NOT NULL, project_id VARCHAR NOT NULL,
+        request_id VARCHAR NOT NULL, environment VARCHAR NOT NULL,
+        relative_path VARCHAR NOT NULL, path_key VARCHAR NOT NULL, parent_relative_path VARCHAR NOT NULL,
+        role_kind VARCHAR NOT NULL, target_id VARCHAR NOT NULL, raw_name VARCHAR NOT NULL,
+        option_status VARCHAR, created_by VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL,
+        UNIQUE(root_key,path_key)
+    );
+    CREATE TABLE IF NOT EXISTS result_registration_drafts (
+        id VARCHAR PRIMARY KEY, project_id VARCHAR NOT NULL, request_id VARCHAR NOT NULL,
+        environment VARCHAR NOT NULL, storage_root_id VARCHAR NOT NULL,
+        case_relative_path VARCHAR NOT NULL, result_relative_path VARCHAR NOT NULL,
+        context_json JSON NOT NULL, manifest_json JSON NOT NULL, inspection_json JSON,
+        source_revision VARCHAR NOT NULL, inspection_revision VARCHAR,
+        approval_json JSON, publish_idempotency_key VARCHAR UNIQUE,
+        case_id VARCHAR, capture_id VARCHAR, status VARCHAR NOT NULL,
+        mirror_status VARCHAR, error_json JSON, revision INTEGER NOT NULL DEFAULT 1,
+        created_by VARCHAR NOT NULL, updated_by VARCHAR NOT NULL, approved_by VARCHAR,
+        published_at TIMESTAMP, created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS result_registration_files (
+        draft_id VARCHAR NOT NULL, relative_path VARCHAR NOT NULL, sha256 VARCHAR NOT NULL,
+        size_bytes BIGINT NOT NULL, media_type VARCHAR NOT NULL, content BLOB NOT NULL,
+        uploaded_by VARCHAR NOT NULL, uploaded_at TIMESTAMP NOT NULL,
+        PRIMARY KEY(draft_id,relative_path)
+    );
+    CREATE TABLE IF NOT EXISTS result_registration_events (
+        id VARCHAR PRIMARY KEY, draft_id VARCHAR NOT NULL, action VARCHAR NOT NULL,
+        detail_json JSON NOT NULL, actor VARCHAR NOT NULL, occurred_at TIMESTAMP NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS ix_result_registration_paths_target ON result_registration_paths(root_key,project_id,request_id,environment,relative_path);
+    CREATE INDEX IF NOT EXISTS ix_result_registration_drafts_request ON result_registration_drafts(project_id,request_id,status,created_at DESC);
+    CREATE INDEX IF NOT EXISTS ix_result_registration_files_draft ON result_registration_files(draft_id,relative_path);
+    CREATE INDEX IF NOT EXISTS ix_result_registration_events_draft ON result_registration_events(draft_id,occurred_at DESC)
+    """)
 
 
 def ensure_modeling_template_schema(conn: duckdb.DuckDBPyConnection) -> None:

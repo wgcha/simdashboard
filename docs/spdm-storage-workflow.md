@@ -4,6 +4,8 @@
 - 상태: 구현 완료, Windows 로컬 검증 통과
 - 요구사항: GitHub [#13 폴더구조](https://github.com/wgcha/simdashboard/issues/13), [#14 확장자](https://github.com/wgcha/simdashboard/issues/14)
 
+> 2026-09-28 결과 등록 화면의 기준은 [#32 결과 등록·검수·가시화 계획](result-registration-review-plan.md)으로 변경했다. 기존 SPDM 업무를 선택하고 결과용 하위 폴더를 준비한 뒤, 격리 업로드 → 자동 검사 → 사용자 승인 → DB 수집 버전 등록 → Case 결과로 진행한다. 이 화면은 새 프로젝트·의뢰·업무 하중경우를 생성하거나 기존 즉시 ingest를 호출하지 않는다. 새 화면의 한도는 파일당 32 MiB·초안당 256 MiB이며, 아래의 경로 수동 연결·즉시 등록·512 MiB 설명은 기존 관리·수집 API의 계약과 과거 화면 기록이다.
+
 ## 구현 범위
 
 1. 기존 소스와 미커밋 변경을 `backups/spdm-storage-before-20260908/`에 보존한다.

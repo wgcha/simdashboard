@@ -19,6 +19,7 @@
 
 | 목적 | 문서 |
 |---|---|
+| SPDM 기존 업무 선택·결과 업로드·검수 후 DB 등록과 Case 가시화(#32 확정 계획) | [`result-registration-review-plan.md`](result-registration-review-plan.md) |
 | MatNexus 참고 크기·밀도·본문 폭 개선 계획(P0~P5 완료, 데스크톱 전용) | [`dashboard/ui-density-improvement-plan.md`](dashboard/ui-density-improvement-plan.md) |
 | UI 개선 P5 root 글자 설정·전역 규칙 정리 | [`dashboard/ui-density-p5-implementation.md`](dashboard/ui-density-p5-implementation.md) |
 | UI 개선 P4 화면별 확산·데스크톱 검증 | [`dashboard/ui-density-p4-implementation.md`](dashboard/ui-density-p4-implementation.md) |

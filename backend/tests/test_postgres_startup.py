@@ -63,6 +63,10 @@ class _PostgresStartupConnection:
                 "folder_environment_registrations": {"preview_id", "idempotency_key", "environment", "status"},
                 "folder_environment_registry": {"registration_id", "relative_path", "role_kind", "target_id"},
                 "folder_environment_capture_jobs": {"registration_id", "case_id", "status"},
+                "result_registration_paths": {"root_key", "project_id", "request_id", "environment", "relative_path", "path_key", "role_kind", "target_id"},
+                "result_registration_drafts": {"project_id", "request_id", "environment", "case_relative_path", "result_relative_path", "manifest_json", "inspection_json", "approval_json", "capture_id", "status"},
+                "result_registration_files": {"draft_id", "relative_path", "sha256", "size_bytes", "content"},
+                "result_registration_events": {"draft_id", "action", "detail_json", "actor", "occurred_at"},
             }[table]
             return _FakeResult([] if self.missing_column in columns else [(column,) for column in columns])
         raise AssertionError(f"unexpected startup query: {statement}")

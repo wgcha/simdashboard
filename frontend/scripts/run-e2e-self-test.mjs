@@ -1,9 +1,10 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
+import { EventEmitter } from 'node:events'
 import { fileURLToPath } from 'node:url'
-import { discoverE2eSpecs, runIsolatedSpecs, terminateChild } from './run-e2e.mjs'
+import { cleanupAfterChildren, cleanupRunnerResources, discoverE2eSpecs, isolatedE2eEnvironment, processIsAlive, runIsolatedSpecs, terminateChild } from './run-e2e.mjs'
 
 const temporaryRoot = process.platform === 'win32' ? os.tmpdir() : '/tmp'
 const fixtureDirectory = mkdtempSync(path.join(temporaryRoot, 'run-e2e-self-test-'))
@@ -52,6 +53,79 @@ async function verifyPosixGracefulChild() {
   }
 }
 
+async function verifyExitedPidBeforeCloseRace() {
+  const exited = spawn(process.execPath, ['-e', 'process.exit(0)'], { stdio: 'ignore' })
+  await new Promise((resolve, reject) => {
+    exited.once('close', resolve)
+    exited.once('error', reject)
+  })
+  // Model an owner handle whose `close` event was not observed although its PID is gone.
+  const delayedClose = new EventEmitter()
+  Object.assign(delayedClose, { pid: exited.pid, exitCode: null })
+  delayedClose.kill = () => false
+  await terminateChild(delayedClose, 80)
+}
+
+async function verifyWindowsOwnedChildTermination() {
+  if (process.platform !== 'win32') return
+  const pidPath = path.join(fixtureDirectory, 'owned-tree-pids.json')
+  const parentScript = [
+    "const { spawn } = require('node:child_process')",
+    "const { writeFileSync } = require('node:fs')",
+    "const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1_000)'], { stdio: 'ignore' })",
+    `writeFileSync(${JSON.stringify(pidPath)}, JSON.stringify({ parent: process.pid, child: child.pid }))`,
+    'setInterval(() => {}, 1_000)',
+  ].join(';')
+  const child = spawn(process.execPath, ['-e', parentScript], { stdio: 'ignore' })
+  let grandchildPid
+  await new Promise((resolve, reject) => {
+    child.once('spawn', resolve)
+    child.once('error', reject)
+  })
+  try {
+    await waitForFile(pidPath)
+    const pids = JSON.parse(readFileSync(pidPath, 'utf8'))
+    grandchildPid = pids.child
+    if (pids.parent !== child.pid || !processIsAlive(grandchildPid)) throw new Error('Windows E2E descendant fixture did not start')
+    await terminateChild(child, 1_000)
+    if (processIsAlive(child.pid) || processIsAlive(grandchildPid)) throw new Error('Windows E2E process tree remains alive after termination')
+  } finally {
+    for (const pid of [grandchildPid, child.pid]) {
+      if (pid && processIsAlive(pid)) spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', timeout: 5_000 })
+    }
+  }
+}
+
+async function verifyIsolatedSpdmRootAndCleanupOrder() {
+  let childrenStopped = false
+  let rootRemoved = false
+  await cleanupAfterChildren(async () => { await new Promise((resolve) => setTimeout(resolve, 10)); childrenStopped = true }, () => {
+    if (!childrenStopped) throw new Error('SPDM root cleanup ran before E2E child cleanup')
+    rootRemoved = true
+  })
+  if (!rootRemoved) throw new Error('SPDM root cleanup did not run after child cleanup')
+  let cleanedAfterFailure = false
+  try {
+    await cleanupAfterChildren(async () => { throw new Error('simulated live child') }, () => { cleanedAfterFailure = true })
+    throw new Error('failed child shutdown should reject runner cleanup')
+  } catch (error) {
+    if (error instanceof Error && error.message === 'failed child shutdown should reject runner cleanup') throw error
+  }
+  if (cleanedAfterFailure) throw new Error('SPDM root cleanup ran after a child shutdown failure')
+
+  const externalRoot = path.join(fixtureDirectory, 'configured-user-storage')
+  const firstEnvironment = isolatedE2eEnvironment({ SIMDASH_SPDM_ROOT: externalRoot }, { E2E_FIXTURE: 'true' })
+  const firstRoot = firstEnvironment.SIMDASH_SPDM_ROOT
+  if (firstRoot === externalRoot || !path.basename(firstRoot).startsWith('simulation-workbench-e2e-spdm-') || !existsSync(firstRoot)) {
+    throw new Error('E2E invocation did not override the configured SPDM root with an isolated temporary root')
+  }
+  await cleanupRunnerResources()
+  if (existsSync(firstRoot)) throw new Error('E2E SPDM root was not cleaned after child cleanup')
+  const secondEnvironment = isolatedE2eEnvironment({ SIMDASH_SPDM_ROOT: externalRoot })
+  if (secondEnvironment.SIMDASH_SPDM_ROOT === firstRoot) throw new Error('E2E invocations reused an SPDM root')
+  await cleanupRunnerResources()
+}
+
 try {
   let launchedEmptySpec = false
   if (await runIsolatedSpecs([], async () => {
@@ -80,6 +154,9 @@ try {
     throw new Error('every discovered E2E spec must run in order after a child failure')
   }
   await verifyPosixGracefulChild()
+  await verifyExitedPidBeforeCloseRace()
+  await verifyWindowsOwnedChildTermination()
+  await verifyIsolatedSpdmRootAndCleanupOrder()
   console.log(`E2E runner self-test passed: ${names.length} discovered specs, real child failures aggregate after every spec runs.`)
 } finally {
   rmSync(fixtureDirectory, { recursive: true, force: true })

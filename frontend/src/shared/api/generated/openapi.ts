@@ -2684,6 +2684,193 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/result-registration/targets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Targets */
+        get: operations["list_targets_api_result_registration_targets_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/result-registration/folders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Folders */
+        get: operations["list_folders_api_result_registration_folders_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/result-registration/folders/prepare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Prepare Folders */
+        post: operations["prepare_folders_api_result_registration_folders_prepare_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/result-registration/drafts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Draft */
+        post: operations["create_draft_api_result_registration_drafts_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/result-registration/drafts/{draft_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Draft */
+        get: operations["get_draft_api_result_registration_drafts__draft_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/result-registration/drafts/{draft_id}/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Upload Draft Files */
+        post: operations["upload_draft_files_api_result_registration_drafts__draft_id__files_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/result-registration/drafts/{draft_id}/inspect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Inspect Draft */
+        post: operations["inspect_draft_api_result_registration_drafts__draft_id__inspect_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/result-registration/drafts/{draft_id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve Draft */
+        post: operations["approve_draft_api_result_registration_drafts__draft_id__approve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/result-registration/drafts/{draft_id}/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Publish Draft */
+        post: operations["publish_draft_api_result_registration_drafts__draft_id__publish_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/result-registration/drafts/{draft_id}/mirror/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retry Mirror */
+        post: operations["retry_mirror_api_result_registration_drafts__draft_id__mirror_retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/result-registration/drafts/{draft_id}/media": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Draft Media */
+        get: operations["draft_media_api_result_registration_drafts__draft_id__media_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/dashboard/catalog": {
         parameters: {
             query?: never;
@@ -3662,6 +3849,18 @@ export interface components {
             /** Project Id */
             project_id?: string | null;
         };
+        /** ApproveDraftInput */
+        ApproveDraftInput: {
+            /** Inspection Revision */
+            inspection_revision: string | number;
+            /**
+             * Acknowledge Partial
+             * @default false
+             */
+            acknowledge_partial: boolean;
+            /** Exclusions */
+            exclusions?: components["schemas"]["FileExclusion"][];
+        };
         /** AssigneeUpdate */
         AssigneeUpdate: {
             /** Owner User Id */
@@ -4012,6 +4211,28 @@ export interface components {
             /** Expected Revision */
             expected_revision: number;
         };
+        /** CreateDraftInput */
+        CreateDraftInput: {
+            /** Project Id */
+            project_id: string;
+            /** Request Id */
+            request_id: string;
+            /**
+             * Environment
+             * @enum {string}
+             */
+            environment: "USAGE" | "DISTRIBUTION";
+            /** Case Relative Path */
+            case_relative_path: string;
+            /** Result Relative Path */
+            result_relative_path: string;
+            /** Context */
+            context: {
+                [key: string]: unknown;
+            };
+            /** Files */
+            files: components["schemas"]["DraftManifestFile"][];
+        };
         /** DashboardClone */
         DashboardClone: {
             /** Name */
@@ -4205,6 +4426,20 @@ export interface components {
             /** User Id */
             user_id: string;
         };
+        /** DraftManifestFile */
+        DraftManifestFile: {
+            /** Relative Path */
+            relative_path: string;
+            /** Size */
+            size: number;
+            /** Sha256 */
+            sha256?: string | null;
+            /**
+             * Media Type
+             * @default
+             */
+            media_type: string;
+        };
         /** DropVideoEvaluation */
         DropVideoEvaluation: {
             /**
@@ -4345,6 +4580,13 @@ export interface components {
             /** Unit */
             unit: string;
         };
+        /** FileExclusion */
+        FileExclusion: {
+            /** Relative Path */
+            relative_path: string;
+            /** Reason */
+            reason: string;
+        };
         /** FilePayload */
         FilePayload: {
             /** Relative Path */
@@ -4443,6 +4685,13 @@ export interface components {
              * @default
              */
             relative_path: string;
+        };
+        /** FolderSegment */
+        FolderSegment: {
+            /** Role Kind */
+            role_kind: string;
+            /** Name */
+            name: string;
         };
         /** GlobalAdminUpdate */
         GlobalAdminUpdate: {
@@ -4562,6 +4811,11 @@ export interface components {
             };
             /** Updated By */
             updated_by?: string | null;
+        };
+        /** InspectDraftInput */
+        InspectDraftInput: {
+            /** Exclusions */
+            exclusions?: components["schemas"]["FileExclusion"][];
         };
         /** InvitationCreate */
         InvitationCreate: {
@@ -4923,6 +5177,27 @@ export interface components {
             /** Available */
             available: boolean;
         };
+        /** PrepareFoldersInput */
+        PrepareFoldersInput: {
+            /** Project Id */
+            project_id: string;
+            /** Request Id */
+            request_id: string;
+            /**
+             * Environment
+             * @enum {string}
+             */
+            environment: "USAGE" | "DISTRIBUTION";
+            /** Parent Relative Path */
+            parent_relative_path?: string | null;
+            /** Segments */
+            segments: components["schemas"]["FolderSegment"][];
+            /**
+             * Confirm Create
+             * @default false
+             */
+            confirm_create: boolean;
+        };
         /** Preview */
         Preview: {
             /** Scan Id */
@@ -5048,6 +5323,13 @@ export interface components {
             truncated: boolean;
             /** Immutable */
             immutable: boolean;
+        };
+        /** PublishDraftInput */
+        PublishDraftInput: {
+            /** Inspection Revision */
+            inspection_revision: string | number;
+            /** Idempotency Key */
+            idempotency_key: string;
         };
         /** QualityThresholdUpdate */
         QualityThresholdUpdate: {
@@ -12165,6 +12447,375 @@ export interface operations {
             header?: never;
             path: {
                 file_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_targets_api_result_registration_targets_get: {
+        parameters: {
+            query: {
+                environment: "USAGE" | "DISTRIBUTION";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_folders_api_result_registration_folders_get: {
+        parameters: {
+            query: {
+                project_id: string;
+                request_id: string;
+                environment: "USAGE" | "DISTRIBUTION";
+                parent_relative_path?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    prepare_folders_api_result_registration_folders_prepare_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PrepareFoldersInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_draft_api_result_registration_drafts_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateDraftInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_draft_api_result_registration_drafts__draft_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                draft_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_draft_files_api_result_registration_drafts__draft_id__files_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                draft_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    files: string[];
+                    relative_paths: string[];
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    inspect_draft_api_result_registration_drafts__draft_id__inspect_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                draft_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["InspectDraftInput"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    approve_draft_api_result_registration_drafts__draft_id__approve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                draft_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApproveDraftInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    publish_draft_api_result_registration_drafts__draft_id__publish_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                draft_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PublishDraftInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retry_mirror_api_result_registration_drafts__draft_id__mirror_retry_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                draft_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    draft_media_api_result_registration_drafts__draft_id__media_get: {
+        parameters: {
+            query: {
+                relative_path: string;
+            };
+            header?: never;
+            path: {
+                draft_id: string;
             };
             cookie?: never;
         };

@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import { mkdirSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 
 import { loginWorkspace } from './workspace-test-helpers'
@@ -25,7 +26,13 @@ async function expectUnifiedContext(page: Page, activeStep: string, expected = c
   await expect(page.locator('.request-workspace-header')).toHaveCount(1)
   await expect(page.getByLabel('프로젝트 선택', { exact: true })).toHaveValue(expected.project)
   await expect(page.getByLabel('의뢰 선택', { exact: true })).toHaveValue(expected.request)
-  await expect(page.getByLabel('하중 경우 선택', { exact: true })).toHaveValue(expected.loadCase)
+  if (activeStep === '결과 등록') {
+    await expect(page.getByLabel('하중 경우 선택', { exact: true })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: '현재 하중 경우 결과 파일 확인', exact: true })).toHaveCount(0)
+    await expect(page.getByLabel('결과 버전 선택', { exact: true })).toHaveCount(0)
+  } else {
+    await expect(page.getByLabel('하중 경우 선택', { exact: true })).toHaveValue(expected.loadCase)
+  }
 
   const requestJourney = journey(page)
   await expect(requestJourney).toBeVisible()
@@ -58,9 +65,22 @@ async function expectWideWorkbenchColumns(page: Page) {
 }
 
 async function captureQa(page: Page, filename: string) {
-  const outputDirectory = path.resolve(process.cwd(), '..', 'backups', 'unified-workspace-qa')
+  const outputDirectory = path.join(tmpdir(), 'simulation-workbench-unified-workspace-qa')
   mkdirSync(outputDirectory, { recursive: true })
   await page.screenshot({ path: path.join(outputDirectory, filename), fullPage: false })
+}
+
+async function stubNoRegistrationTargets(page: Page) {
+  await page.route('**/api/result-registration/targets**', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ storage_root_id: 'root-e2e', environment: 'USAGE', targets: [] }),
+  }))
+  await page.route('**/api/result-registration/folders**', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ storage_root_id: 'root-e2e', nodes: [] }),
+  }))
 }
 
 test('한 의뢰의 네 작업 탭이 같은 헤더와 문맥을 유지하고 뒤로 가기와 새로고침으로 복원된다', async ({ page }) => {
@@ -73,12 +93,13 @@ test('한 의뢰의 네 작업 탭이 같은 헤더와 문맥을 유지하고 �
   await expect(page.getByTestId('simulation-workbench')).toBeVisible()
   await expectUnifiedContext(page, '작업 실행')
 
+  await stubNoRegistrationTargets(page)
   await journey(page).getByRole('button', { name: '결과 등록', exact: true }).click()
   await expect(page).toHaveURL(/\/workspace\/data(?:\?|$)/)
-  await expect(page.getByLabel('등록 프로젝트 선택')).toHaveCount(0)
-  await expect(page.getByLabel('등록 의뢰 선택')).toHaveCount(0)
-  await expect(page.getByLabel('등록 하중 경우 선택')).toHaveCount(0)
-  await expect(page.getByText('등록 대상', { exact: true })).toBeVisible()
+  await expect(page.getByTestId('result-registration-workspace')).toBeVisible()
+  await expect(page.getByLabel('SPDM 해석 Case 선택', { exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: '검수 완료·DB 등록', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: /새 프로젝트|새 의뢰|새 하중경우 등록/ })).toHaveCount(0)
   await expectUnifiedContext(page, '결과 등록')
 
   await journey(page).getByRole('button', { name: '결과 검토', exact: true }).click()
@@ -130,12 +151,13 @@ test('하중 경우가 없는 의뢰도 실행과 등록 탭에서 의뢰 문맥
   await expect(page.getByLabel('배정 작업 대상 의뢰')).toHaveCount(0)
   await expect(journey(page).getByRole('button', { name: '작업 실행', exact: true })).toHaveAttribute('aria-current', 'step')
 
+  await stubNoRegistrationTargets(page)
   await journey(page).getByRole('button', { name: '결과 등록', exact: true }).click()
   await expect(page).toHaveURL(/\/workspace\/data(?:\?|$)/)
   await expect(page.getByLabel('의뢰 선택', { exact: true })).toHaveValue('request-showcase-workflow')
-  await expect(page.getByLabel('등록 의뢰 선택')).toHaveCount(0)
-  await expect(page.getByLabel('등록 하중 경우 선택')).toHaveCount(0)
-  await expect(page.getByRole('button', { name: '검증된 결과 등록', exact: true })).toBeDisabled()
+  await expect(page.getByLabel('하중 경우 선택', { exact: true })).toHaveCount(0)
+  await expect(page.getByLabel('SPDM 해석 Case 선택', { exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: '업로드하고 자동 검사', exact: true })).toBeDisabled()
   await expect(journey(page).getByRole('button', { name: '결과 등록', exact: true })).toHaveAttribute('aria-current', 'step')
 
   await journey(page).getByRole('button', { name: '결과 검토', exact: true }).click()
@@ -158,47 +180,30 @@ test('일반 사용자는 통합 탭에서 허용된 작업만 열 수 있다', 
   await expect(page.getByLabel('등록 의뢰 선택')).toHaveCount(0)
 })
 
-test('등록 화면에서 의뢰 문맥을 바꾸는 동안 이전 하중 경우의 등록 동작을 차단한다', async ({ page }, testInfo) => {
+test('결과 등록 탭은 기존 SPDM 대상을 탐색하고 이전 즉시 가져오기를 호출하지 않는다', async ({ page }) => {
   await loginWorkspace(page)
   await selectRequestContext(page)
-  const configResponse = await page.request.get('/api/storage/config')
-  expect(configResponse.ok()).toBe(true)
-  const config = await configResponse.json() as { configured?: boolean; root?: string | null }
-  const storageRoot = config.configured && config.root ? config.root : testInfo.outputPath('SPDM context guard')
-  const storageLeaf = 'Project_9010_E2E_pv1/WR_9010_SimType1/CAE/Assy_Compare/CMS'
-  mkdirSync(path.join(storageRoot, ...storageLeaf.split('/')), { recursive: true })
-  if (!config.configured) {
-    expect((await page.request.put('/api/storage/config', { data: { root: storageRoot } })).ok()).toBe(true)
-  }
-  expect((await page.request.put(`/api/load-cases/${context.loadCase}/storage`, {
-    data: { relative_path: storageLeaf },
-  })).ok()).toBe(true)
-  await journey(page).getByRole('button', { name: '결과 등록', exact: true }).click()
-  await page.getByRole('button', { name: '예제로 검증', exact: true }).click()
-  const submit = page.getByRole('button', { name: '검증된 결과 등록', exact: true })
-  await expect(submit).toBeEnabled()
-
-  let release!: () => void
-  const gate = new Promise<void>((resolve) => { release = resolve })
-  await page.route('**/api/requests/request-showcase-waiting/load-cases', async (route) => {
-    await gate
-    await route.continue()
+  await stubNoRegistrationTargets(page)
+  let legacyStorageReads = 0
+  await page.route('**/api/load-cases/*/storage', async (route) => {
+    legacyStorageReads += 1
+    await route.fulfill({ status: 410, json: { detail: 'Legacy registration storage is not used by the staged workflow.' } })
   })
-  try {
-    await page.getByLabel('의뢰 선택', { exact: true }).selectOption('request-showcase-waiting')
-    await expect.poll(async () => !(await submit.count()) || await submit.isDisabled()).toBe(true)
-  } finally {
-    release()
-  }
-  await expect(page.getByLabel('의뢰 선택', { exact: true })).toHaveValue('request-showcase-waiting')
-  await expect(submit).toBeDisabled()
+  await journey(page).getByRole('button', { name: '결과 등록', exact: true }).click()
+  await expect(page.getByTestId('result-registration-workspace')).toBeVisible()
+  await expect(page.getByLabel('결과 등록 환경')).toBeVisible()
+  await expect(page.getByLabel('SPDM 해석 Case 선택')).toBeDisabled()
+  await expect(page.getByLabel('하중 경우 선택', { exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '현재 하중 경우 결과 파일 확인', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '검증된 결과 등록', exact: true })).toHaveCount(0)
+  await expect(page.getByTestId('storage-workspace-panel')).toHaveCount(0)
+  await expect.poll(() => legacyStorageReads).toBe(0)
 })
 
 for (const viewport of [
   { width: 2560, height: 1440 },
   { width: 2048, height: 1152 },
   { width: 1707, height: 960 },
-  { width: 390, height: 844 },
 ]) {
   test(`${viewport.width}px 화면에서 통합 작업공간과 글자 크기 설정이 넘치지 않는다`, async ({ page }) => {
     await page.setViewportSize(viewport)
@@ -221,12 +226,8 @@ for (const viewport of [
     if (viewport.width === 2560) await captureQa(page, 'overview-2560.png')
     if (viewport.width === 1707) await captureQa(page, 'overview-1707.png')
     if (viewport.width === 2048) await captureQa(page, 'overview-2048.png')
-    if (viewport.width === 390) await captureQa(page, 'overview-mobile-390.png')
 
     const sidebar = page.getByRole('complementary', { name: '주 메뉴' })
-    if (viewport.width <= 620) {
-      await sidebar.getByRole('button', { name: '메뉴 열기', exact: true }).click()
-    }
     await expect(sidebar.getByRole('link', { name: '내 작업', exact: true })).toHaveAttribute('aria-current', 'page')
     const shell = page.locator('.app-shell')
     const journeyButton = journey(page).getByRole('button', { name: '의뢰 개요', exact: true })
@@ -239,21 +240,14 @@ for (const viewport of [
     expect(increasedFontSize).toBe('15pt')
     expect(increasedJourneyFontPixels).toBeGreaterThan(originalJourneyFontPixels)
 
-    if (viewport.width <= 620) {
-      await sidebar.getByRole('button', { name: '메뉴 닫기', exact: true }).click()
-    }
     await journey(page).getByRole('button', { name: '작업 실행', exact: true }).click()
     await expect(shell).toHaveCSS('--ui-font-size', increasedFontSize)
     await expectNoDocumentOverflow(page)
-    if (viewport.width === 390) {
-      await journey(page).getByRole('button', { name: '결과 등록', exact: true }).click()
-      await expect(page.getByText('해석 결과 가져오기', { exact: true })).toBeVisible()
-      await expectNoDocumentOverflow(page)
-    }
     if (viewport.width === 2560) {
+      await stubNoRegistrationTargets(page)
       await journey(page).getByRole('button', { name: '결과 등록', exact: true }).click()
-      await expect(page.getByText('해석 결과 가져오기', { exact: true })).toBeVisible()
-      await expect(page.locator('.result-import-meta strong')).not.toHaveText('하중 경우를 선택하세요')
+      await expect(page.getByTestId('result-registration-workspace')).toBeVisible()
+      await expect(page.getByLabel('SPDM 해석 Case 선택', { exact: true })).toBeDisabled()
       await expectNoDocumentOverflow(page)
       await captureQa(page, 'import-2560.png')
       await sidebar.getByRole('link', { name: '결과 대시보드', exact: true }).click()

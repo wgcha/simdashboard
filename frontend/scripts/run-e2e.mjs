@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, readdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { createServer } from 'node:net'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
@@ -18,6 +19,7 @@ const closedChildren = new WeakSet()
 const isolatedRunnerChildren = new WeakSet()
 let cancellationRequested = false
 let cleanupPromise
+let isolatedSpdmRoot = null
 const e2eDatabase = path.join(workspaceDir, 'backend', 'data', 'e2e-playwright.duckdb')
 const e2eDirectory = path.join(frontendDir, 'e2e')
 const e2eOutputDirectory = path.join(frontendDir, 'test-results')
@@ -56,6 +58,7 @@ function prepareUser(username, displayName, role, extraArgs = []) {
       ANALYSIS_DB_BACKEND: 'duckdb',
       ANALYSIS_DUCKDB_PATH: e2eDatabase,
       SIM_DASH_USER_PASSWORD: e2ePassword,
+      SIMDASH_SPDM_ROOT: isolatedSpdmRoot,
     },
   })
   if (result.status !== 0) process.exit(result.status ?? 1)
@@ -105,7 +108,18 @@ async function exitsWithin(child, timeoutMs) {
   return result
 }
 
-function processIsAlive(pid) {
+export function processIsAlive(pid) {
+  if (process.platform === 'win32') {
+    const script = `try { Get-Process -Id ${Number(pid)} -ErrorAction Stop | Out-Null; exit 1 } catch { if ($_.FullyQualifiedErrorId -like 'NoProcessFoundForGivenId*') { exit 0 }; exit 2 }`
+    const result = spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script], {
+      encoding: 'utf8', stdio: ['ignore', 'ignore', 'pipe'], timeout: 5_000,
+    })
+    if (result.error || result.status !== 0) {
+      if (result.status === 1) return true
+      throw new Error(`Could not verify E2E child PID ${pid}: ${result.error?.message ?? result.stderr?.trim() ?? `PowerShell status ${result.status}`}`)
+    }
+    return false
+  }
   try {
     process.kill(pid, 0)
     return true
@@ -114,10 +128,18 @@ function processIsAlive(pid) {
   }
 }
 
+export function isolatedE2eEnvironment(baseEnvironment = process.env, extra = {}) {
+  isolatedSpdmRoot ??= mkdtempSync(path.join(tmpdir(), 'simulation-workbench-e2e-spdm-'))
+  return { ...baseEnvironment, ...extra, SIMDASH_SPDM_ROOT: isolatedSpdmRoot }
+}
+
 function stopProcessTree(pid, signal) {
   if (process.platform === 'win32') {
-    const result = spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', timeout: 5_000 })
-    return `taskkill(status=${result.status ?? 'null'}, signal=${result.signal ?? 'none'}, error=${result.error?.message ?? 'none'})`
+    const result = spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], {
+      encoding: 'utf8', stdio: ['ignore', 'ignore', 'pipe'], timeout: 5_000,
+    })
+    const stderr = result.stderr?.trim().slice(0, 300)
+    return `taskkill(status=${result.status ?? 'null'}, signal=${result.signal ?? 'none'}, error=${result.error?.message ?? 'none'}${stderr ? `, stderr=${stderr}` : ''})`
   }
   try {
     process.kill(-pid, signal)
@@ -129,12 +151,22 @@ function stopProcessTree(pid, signal) {
 
 export async function terminateChild(child, gracefulTimeoutMs = 5_000) {
   if (!child.pid || child.exitCode !== null || closedChildren.has(child)) return
-  const attempts = [stopProcessTree(child.pid, 'SIGTERM')]
-  if (await exitsWithin(child, gracefulTimeoutMs) || !processIsAlive(child.pid)) return
-  attempts.push(stopProcessTree(child.pid, 'SIGKILL'))
-  if (!await exitsWithin(child, 5_000) && processIsAlive(child.pid)) {
-    throw new Error(`E2E child did not exit: pid ${child.pid}; ${attempts.join('; ')}`)
+  const attempts = []
+  if (process.platform === 'win32') {
+    // Kill the owned process tree first so Playwright/Vite descendants cannot outlive the handle.
+    attempts.push(stopProcessTree(child.pid, 'SIGKILL'))
+  } else {
+    attempts.push(stopProcessTree(child.pid, 'SIGTERM'))
+    if (await exitsWithin(child, gracefulTimeoutMs) || !processIsAlive(child.pid)) return
+    attempts.push(stopProcessTree(child.pid, 'SIGKILL'))
   }
+  const deadline = Date.now() + 5_000
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null || closedChildren.has(child) || !processIsAlive(child.pid)) return
+    await pause(150)
+  }
+  if (child.exitCode !== null || closedChildren.has(child) || !processIsAlive(child.pid)) return
+  throw new Error(`E2E child did not exit: pid ${child.pid}; ${attempts.join('; ')}`)
 }
 
 async function assertPortAvailable(port) {
@@ -161,6 +193,7 @@ async function waitForService(url, child, label, timeoutMs = 120_000) {
 }
 
 async function runOneE2eInvocation(args) {
+  const isolatedEnvironment = isolatedE2eEnvironment(process.env)
   await Promise.all([assertPortAvailable(18000), assertPortAvailable(15173)])
   rmSync(e2eDatabase, { force: true })
   rmSync(`${e2eDatabase}.wal`, { force: true })
@@ -173,7 +206,7 @@ async function runOneE2eInvocation(args) {
     '--host', '127.0.0.1', '--port', '18000',
   ], {
     env: {
-      ...process.env,
+      ...isolatedEnvironment,
       ANALYSIS_DB_BACKEND: 'duckdb',
       ANALYSIS_DUCKDB_PATH: e2eDatabase,
       AUTH_MODE: 'password',
@@ -185,7 +218,7 @@ async function runOneE2eInvocation(args) {
     '--host', '127.0.0.1', '--port', '15173', '--strictPort', '--configLoader', 'runner',
   ], {
     cwd: frontendDir,
-    env: { ...process.env, VITE_API_TARGET: 'http://127.0.0.1:18000' },
+    env: isolatedE2eEnvironment(process.env, { VITE_API_TARGET: 'http://127.0.0.1:18000' }),
   })
 
   await Promise.all([
@@ -199,8 +232,27 @@ async function runOneE2eInvocation(args) {
   const playwright = launch(process.execPath, [
     path.join(frontendDir, 'node_modules', '@playwright', 'test', 'cli.js'), 'test',
     ...args,
-  ], { cwd: frontendDir, env: { ...process.env, E2E_PYTHON: python, E2E_PASSWORD_RELEASE: process.env.E2E_PASSWORD_RELEASE ?? 'true' } })
+  ], { cwd: frontendDir, env: isolatedE2eEnvironment(process.env, { E2E_PYTHON: python, E2E_PASSWORD_RELEASE: process.env.E2E_PASSWORD_RELEASE ?? 'true' }) })
   return await waitForExit(playwright)
+}
+
+function cleanupIsolatedSpdmRoot() {
+  if (!isolatedSpdmRoot) return
+  const target = path.resolve(isolatedSpdmRoot)
+  if (path.dirname(target) !== path.resolve(tmpdir()) || !path.basename(target).startsWith('simulation-workbench-e2e-spdm-')) {
+    throw new Error(`Refusing to remove unexpected E2E SPDM root: ${target}`)
+  }
+  rmSync(target, { recursive: true, force: true })
+  isolatedSpdmRoot = null
+}
+
+export async function cleanupAfterChildren(stopChildren, cleanupRoot) {
+  await stopChildren()
+  cleanupRoot()
+}
+
+export async function cleanupRunnerResources() {
+  await cleanupAfterChildren(cleanupChildren, cleanupIsolatedSpdmRoot)
 }
 
 function runSpecInChild(specPath) {
@@ -271,7 +323,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === runnerPath) {
     if (stopping) return
     stopping = true
     cancellationRequested = true
-    await cleanupChildren()
+    await cleanupRunnerResources()
     process.exit(exitCode)
   }
   const handleSignal = (signalExitCode) => {
@@ -287,7 +339,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === runnerPath) {
     exitCode = await main()
   } finally {
     stopping = true
-    await cleanupChildren()
+    await cleanupRunnerResources()
   }
   process.exit(exitCode)
 }

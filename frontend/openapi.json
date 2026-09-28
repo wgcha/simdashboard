@@ -8135,6 +8135,564 @@
         }
       }
     },
+    "/api/result-registration/targets": {
+      "get": {
+        "tags": [
+          "result-registration"
+        ],
+        "summary": "List Targets",
+        "operationId": "list_targets_api_result_registration_targets_get",
+        "parameters": [
+          {
+            "name": "environment",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "enum": [
+                "USAGE",
+                "DISTRIBUTION"
+              ],
+              "type": "string",
+              "title": "Environment"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/result-registration/folders": {
+      "get": {
+        "tags": [
+          "result-registration"
+        ],
+        "summary": "List Folders",
+        "operationId": "list_folders_api_result_registration_folders_get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "request_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
+            }
+          },
+          {
+            "name": "environment",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "enum": [
+                "USAGE",
+                "DISTRIBUTION"
+              ],
+              "type": "string",
+              "title": "Environment"
+            }
+          },
+          {
+            "name": "parent_relative_path",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 2048
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Parent Relative Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/result-registration/folders/prepare": {
+      "post": {
+        "tags": [
+          "result-registration"
+        ],
+        "summary": "Prepare Folders",
+        "operationId": "prepare_folders_api_result_registration_folders_prepare_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrepareFoldersInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/result-registration/drafts": {
+      "post": {
+        "tags": [
+          "result-registration"
+        ],
+        "summary": "Create Draft",
+        "operationId": "create_draft_api_result_registration_drafts_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateDraftInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/result-registration/drafts/{draft_id}": {
+      "get": {
+        "tags": [
+          "result-registration"
+        ],
+        "summary": "Get Draft",
+        "operationId": "get_draft_api_result_registration_drafts__draft_id__get",
+        "parameters": [
+          {
+            "name": "draft_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Draft Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/result-registration/drafts/{draft_id}/files": {
+      "post": {
+        "tags": [
+          "result-registration"
+        ],
+        "summary": "Upload Draft Files",
+        "operationId": "upload_draft_files_api_result_registration_drafts__draft_id__files_post",
+        "parameters": [
+          {
+            "name": "draft_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Draft Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "files",
+                  "relative_paths"
+                ],
+                "properties": {
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "binary"
+                    }
+                  },
+                  "relative_paths": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/result-registration/drafts/{draft_id}/inspect": {
+      "post": {
+        "tags": [
+          "result-registration"
+        ],
+        "summary": "Inspect Draft",
+        "operationId": "inspect_draft_api_result_registration_drafts__draft_id__inspect_post",
+        "parameters": [
+          {
+            "name": "draft_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Draft Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/InspectDraftInput"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/result-registration/drafts/{draft_id}/approve": {
+      "post": {
+        "tags": [
+          "result-registration"
+        ],
+        "summary": "Approve Draft",
+        "operationId": "approve_draft_api_result_registration_drafts__draft_id__approve_post",
+        "parameters": [
+          {
+            "name": "draft_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Draft Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApproveDraftInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/result-registration/drafts/{draft_id}/publish": {
+      "post": {
+        "tags": [
+          "result-registration"
+        ],
+        "summary": "Publish Draft",
+        "operationId": "publish_draft_api_result_registration_drafts__draft_id__publish_post",
+        "parameters": [
+          {
+            "name": "draft_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Draft Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishDraftInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/result-registration/drafts/{draft_id}/mirror/retry": {
+      "post": {
+        "tags": [
+          "result-registration"
+        ],
+        "summary": "Retry Mirror",
+        "operationId": "retry_mirror_api_result_registration_drafts__draft_id__mirror_retry_post",
+        "parameters": [
+          {
+            "name": "draft_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Draft Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/result-registration/drafts/{draft_id}/media": {
+      "get": {
+        "tags": [
+          "result-registration"
+        ],
+        "summary": "Draft Media",
+        "operationId": "draft_media_api_result_registration_drafts__draft_id__media_get",
+        "parameters": [
+          {
+            "name": "draft_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Draft Id"
+            }
+          },
+          {
+            "name": "relative_path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024,
+              "title": "Relative Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/dashboard/catalog": {
       "get": {
         "tags": [
@@ -11528,6 +12086,39 @@
         ],
         "title": "AnalysisTemplateVersionCreate"
       },
+      "ApproveDraftInput": {
+        "properties": {
+          "inspection_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "title": "Inspection Revision"
+          },
+          "acknowledge_partial": {
+            "type": "boolean",
+            "title": "Acknowledge Partial",
+            "default": false
+          },
+          "exclusions": {
+            "items": {
+              "$ref": "#/components/schemas/FileExclusion"
+            },
+            "type": "array",
+            "maxItems": 500,
+            "title": "Exclusions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "inspection_revision"
+        ],
+        "title": "ApproveDraftInput"
+      },
       "AssigneeUpdate": {
         "properties": {
           "owner_user_id": {
@@ -12537,6 +13128,67 @@
         ],
         "title": "ConfirmBody"
       },
+      "CreateDraftInput": {
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Project Id"
+          },
+          "request_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Request Id"
+          },
+          "environment": {
+            "type": "string",
+            "enum": [
+              "USAGE",
+              "DISTRIBUTION"
+            ],
+            "title": "Environment"
+          },
+          "case_relative_path": {
+            "type": "string",
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Case Relative Path"
+          },
+          "result_relative_path": {
+            "type": "string",
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Result Relative Path"
+          },
+          "context": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Context"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/DraftManifestFile"
+            },
+            "type": "array",
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Files"
+          }
+        },
+        "type": "object",
+        "required": [
+          "project_id",
+          "request_id",
+          "environment",
+          "case_relative_path",
+          "result_relative_path",
+          "context",
+          "files"
+        ],
+        "title": "CreateDraftInput"
+      },
       "DashboardClone": {
         "properties": {
           "name": {
@@ -13129,6 +13781,46 @@
         ],
         "title": "DeviceSessionResponse"
       },
+      "DraftManifestFile": {
+        "properties": {
+          "relative_path": {
+            "type": "string",
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Relative Path"
+          },
+          "size": {
+            "type": "integer",
+            "maximum": 33554432.0,
+            "minimum": 0.0,
+            "title": "Size"
+          },
+          "sha256": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sha256"
+          },
+          "media_type": {
+            "type": "string",
+            "maxLength": 128,
+            "title": "Media Type",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "relative_path",
+          "size"
+        ],
+        "title": "DraftManifestFile"
+      },
       "DropVideoEvaluation": {
         "properties": {
           "overall_verdict": {
@@ -13543,6 +14235,28 @@
         ],
         "title": "DropVideoSubsystemSummary"
       },
+      "FileExclusion": {
+        "properties": {
+          "relative_path": {
+            "type": "string",
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Relative Path"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "relative_path",
+          "reason"
+        ],
+        "title": "FileExclusion"
+      },
       "FilePayload": {
         "properties": {
           "relative_path": {
@@ -13791,6 +14505,28 @@
         },
         "type": "object",
         "title": "FolderScan"
+      },
+      "FolderSegment": {
+        "properties": {
+          "role_kind": {
+            "type": "string",
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Role Kind"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "role_kind",
+          "name"
+        ],
+        "title": "FolderSegment"
       },
       "GlobalAdminUpdate": {
         "properties": {
@@ -14157,6 +14893,20 @@
           "definition"
         ],
         "title": "ImportSchemaPayload"
+      },
+      "InspectDraftInput": {
+        "properties": {
+          "exclusions": {
+            "items": {
+              "$ref": "#/components/schemas/FileExclusion"
+            },
+            "type": "array",
+            "maxItems": 500,
+            "title": "Exclusions"
+          }
+        },
+        "type": "object",
+        "title": "InspectDraftInput"
       },
       "InvitationCreate": {
         "properties": {
@@ -15157,6 +15907,64 @@
         ],
         "title": "PendingReviewItems"
       },
+      "PrepareFoldersInput": {
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Project Id"
+          },
+          "request_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Request Id"
+          },
+          "environment": {
+            "type": "string",
+            "enum": [
+              "USAGE",
+              "DISTRIBUTION"
+            ],
+            "title": "Environment"
+          },
+          "parent_relative_path": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Relative Path"
+          },
+          "segments": {
+            "items": {
+              "$ref": "#/components/schemas/FolderSegment"
+            },
+            "type": "array",
+            "maxItems": 8,
+            "minItems": 1,
+            "title": "Segments"
+          },
+          "confirm_create": {
+            "type": "boolean",
+            "title": "Confirm Create",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "project_id",
+          "request_id",
+          "environment",
+          "segments"
+        ],
+        "title": "PrepareFoldersInput"
+      },
       "Preview": {
         "properties": {
           "scan_id": {
@@ -15479,6 +16287,33 @@
           "immutable"
         ],
         "title": "ProtectedPriorRuns"
+      },
+      "PublishDraftInput": {
+        "properties": {
+          "inspection_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "title": "Inspection Revision"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 8,
+            "title": "Idempotency Key"
+          }
+        },
+        "type": "object",
+        "required": [
+          "inspection_revision",
+          "idempotency_key"
+        ],
+        "title": "PublishDraftInput"
       },
       "QualityThresholdUpdate": {
         "properties": {

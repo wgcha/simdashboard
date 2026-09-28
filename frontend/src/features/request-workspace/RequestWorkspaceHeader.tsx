@@ -95,10 +95,10 @@ export function RequestWorkspaceHeader({
       </div>
       <div className="request-context-strip" aria-label="현재 의뢰 문맥">
         <label><span>프로젝트</span><SearchableSelect ariaLabel="프로젝트 선택" items={projects} kind="project" value={projectId} disabled={contextChanging} onChange={onProjectChange} placeholder="프로젝트 선택" /></label>
-        <label><span>의뢰</span><SearchableSelect ariaLabel="의뢰 선택" items={requests} kind="request" value={requestId} disabled={requestUnavailable || contextChanging} onChange={onRequestChange} placeholder={requestUnavailable ? '의뢰 접수 후 선택' : '의뢰 선택'} /></label>
-        {!caseResultsMode ? <label><span>하중 경우</span><SearchableSelect ariaLabel="하중 경우 선택" items={loadCases} kind="load_case" value={selectedLoadCaseId} disabled={!loadCases.length || contextChanging} onChange={onLoadCaseChange} placeholder={loadCases.length ? '하중 경우 선택' : '미지정'} /></label> : null}
-        {!caseResultsMode && onRefreshResults ? <button type="button" className="ghost-button request-results-refresh" aria-label="현재 하중 경우 결과 파일 확인" title="결과 파일을 처리하고 표시 가능한 Run을 선택합니다." onClick={onRefreshResults} disabled={!canRefreshResults || resultsRefreshing || contextChanging || !selectedLoadCaseId}>{resultsRefreshing ? '조회 중…' : '결과 조회'}</button> : null}
-        {!caseResultsMode ? activeRunSelector : null}
+        <label><span>의뢰</span><SearchableSelect ariaLabel="의뢰 선택" items={requests} kind="request" value={requestId} disabled={requestUnavailable || contextChanging} onChange={onRequestChange} placeholder={requestUnavailable ? currentTab === 'import' ? 'SPDM 의뢰 연결 필요' : '의뢰 접수 후 선택' : '의뢰 선택'} /></label>
+        {currentTab !== 'import' && !caseResultsMode ? <label><span>하중 경우</span><SearchableSelect ariaLabel="하중 경우 선택" items={loadCases} kind="load_case" value={selectedLoadCaseId} disabled={!loadCases.length || contextChanging} onChange={onLoadCaseChange} placeholder={loadCases.length ? '하중 경우 선택' : '미지정'} /></label> : null}
+        {currentTab !== 'import' && !caseResultsMode && onRefreshResults ? <button type="button" className="ghost-button request-results-refresh" aria-label="현재 하중 경우 결과 파일 확인" title="결과 파일을 처리하고 표시 가능한 Run을 선택합니다." onClick={onRefreshResults} disabled={!canRefreshResults || resultsRefreshing || contextChanging || !selectedLoadCaseId}>{resultsRefreshing ? '조회 중…' : '결과 조회'}</button> : null}
+        {currentTab !== 'import' && !caseResultsMode ? activeRunSelector : null}
       </div>
     </section>
 

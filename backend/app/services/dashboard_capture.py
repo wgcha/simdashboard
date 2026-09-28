@@ -268,20 +268,59 @@ def _verify_context(conn: ConnectionLike, project_id: str, request_id: str) -> N
         raise DashboardCaptureError("DASHBOARD_CONTEXT_INVALID", "의뢰와 프로젝트 문맥이 일치하지 않습니다.")
 
 
-def create_capture(conn: ConnectionLike, payload: dict[str, Any], *, actor: str) -> dict[str, Any]:
+def create_capture(
+    conn: ConnectionLike,
+    payload: dict[str, Any],
+    *,
+    actor: str,
+    approved_files: list[tuple[str, bytes, str]] | None = None,
+    approved_manifest: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     _verify_context(conn, str(payload["project_id"]), str(payload["request_id"]))
     relative = _relative(str(payload["root_relative_path"]))
     root = _root(conn)
     if storage_root_id := str(payload.get("storage_root_id") or ""):
         if storage_root_id != _root_id(root):
             raise DashboardCaptureError("DASHBOARD_ROOT_ID_INVALID", "설정된 저장소와 storage_root_id가 일치하지 않습니다.")
-    _validate_case_root(root, relative, str(payload["environment"]))
+    if approved_files is None:
+        _validate_case_root(root, relative, str(payload["environment"]))
+    else:
+        # Result-registration publication uses the exact review-approved bytes.
+        # It must not scan the Case tree, where unreviewed or concurrent files
+        # may have appeared after inspection.
+        case_root = _safe_target(root, relative)
+        if not case_root.is_dir():
+            raise DashboardCaptureError("DASHBOARD_CASE_INVALID", "승인된 Case 폴더를 찾을 수 없습니다.")
+        expected = {str(item.get("relative_path")): item for item in (approved_manifest or [])}
+        if len(expected) != len(approved_files):
+            raise DashboardCaptureError("DASHBOARD_APPROVED_SOURCE_INVALID", "승인된 파일 목록이 일치하지 않습니다.")
+        actual: set[str] = set()
+        case_prefix = relative.rstrip("/") + "/"
+        total = 0
+        for path, content, _media_type in approved_files:
+            normalized = _relative(path)
+            if not normalized.startswith(case_prefix) or normalized.casefold() in {value.casefold() for value in actual}:
+                raise DashboardCaptureError("DASHBOARD_APPROVED_SOURCE_INVALID", "승인 파일이 Case 경로 밖에 있거나 중복되었습니다.")
+            actual.add(normalized)
+            item = expected.get(normalized)
+            digest = hashlib.sha256(content).hexdigest()
+            if (item is None or int(item.get("size", -1)) != len(content) or
+                    str(item.get("sha256") or "").casefold() != digest):
+                raise DashboardCaptureError("DASHBOARD_APPROVED_SOURCE_STALE", "승인된 원본이 검수 시점과 달라졌습니다.")
+            if len(content) > MAX_ASSET_BYTES:
+                raise DashboardCaptureError("DASHBOARD_ASSET_TOO_LARGE", "원본 자산은 32 MiB 이하여야 합니다.")
+            total += len(content)
+            if total > MAX_TOTAL_BYTES:
+                raise DashboardCaptureError("DASHBOARD_CAPTURE_TOO_LARGE", "수집 버전은 256 MiB 이하여야 합니다.")
     walk_issues: list[str] = []
     review_contract = payload.get("usage_source_review") if payload.get("environment") == "USAGE" else None
     review_selection = usage_source_review.selection(review_contract.get("selection") if isinstance(review_contract, dict) else None)
-    files = _walk(root, relative, issues=walk_issues,
-                  include_path=(lambda path: usage_source_review.include_path(path, review_selection)) if review_contract else None,
-                  excluded_files=[] if review_contract else None)
+    if approved_files is None:
+        files = _walk(root, relative, issues=walk_issues,
+                      include_path=(lambda path: usage_source_review.include_path(path, review_selection)) if review_contract else None,
+                      excluded_files=[] if review_contract else None)
+    else:
+        files = sorted(approved_files, key=lambda item: item[0].casefold())
     manifest = [{"relative_path": path, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data), "media_type": media_type} for path, data, media_type in files]
     recipe_version = "dashboard-v3"
     fingerprint_context = {key: payload.get(key) for key in ("project_id", "request_id", "simulation_case_id", "load_case_id", "execution_run_id", "run_option_id", "option_label", "option_status", "run_option_labels", "hierarchy_assignments", "rule_profile_id", "rule_profile_version", "mode", "component_id")}
@@ -424,15 +463,27 @@ def _usage_payload(grouped: dict[str, list[tuple[str, bytes]]], review_contract:
             # while numeric sources intentionally require the strict result
             # suffix in the review selector.
             identity = _usage_identity(path, evaluation) if evaluation else None
-            if path not in used_media and media_path.suffix.casefold() in usage_source_review.MEDIA_SUFFIXES and identity:
-                target = next((entry for entry in result if entry["evaluation"] == evaluation and entry["direction"] == identity[0] and entry.get("condition") == identity[1]), None)
-                media = {"relative_path": path, "title": evaluation + " · " + identity[0], "kind": "VIDEO" if media_path.suffix.casefold() in {".mp4", ".webm"} else "IMAGE", "status": "READY", "frame_role": "UNKNOWN"}
-                if target is not None:
-                    target["condition"] = identity[1]
-                    target["media"].append(media)
+            if path not in used_media and media_path.suffix.casefold() in usage_source_review.MEDIA_SUFFIXES:
+                media = {"relative_path": path,
+                         "title": (evaluation + " · " if evaluation else "") + media_path.stem,
+                         "kind": "VIDEO" if media_path.suffix.casefold() in {".mp4", ".webm"} else "IMAGE",
+                         "status": "READY", "frame_role": "UNKNOWN"}
+                if identity:
+                    target = next((entry for entry in result if entry["evaluation"] == evaluation and entry["direction"] == identity[0] and entry.get("condition") == identity[1]), None)
+                    if target is not None:
+                        target["condition"] = identity[1]
+                        target["media"].append(media)
+                    else:
+                        result.append({"evaluation": evaluation, "direction": identity[0], "condition": identity[1], "status": "MISSING", "values": {}, "metric_paths": {}, "metric_statuses": {}, "media_only": True, "media": [media]})
                 else:
-                    media["title"] += " · " + identity[1]
-                    result.append({"evaluation": evaluation, "direction": identity[0], "condition": identity[1], "status": "MISSING", "values": {}, "metric_paths": {}, "metric_statuses": {}, "media_only": True, "media": [media]})
+                    # Keep otherwise-unmatched media visible in the Capture.
+                    # Result Registration deliberately permits a video-only
+                    # partial submission after the user acknowledges missing
+                    # numeric sources during approval.
+                    result.append({"evaluation": evaluation or EVALUATIONS[0], "direction": "common",
+                                   "condition": media_path.stem, "status": "MISSING", "values": {},
+                                   "metric_paths": {}, "metric_statuses": {}, "media_only": True,
+                                   "media": [media]})
         return {"evaluation_names": list(EVALUATIONS), "evaluations": result, "usage_source_review": inspected["contract"]}
     picked = _pick_usage([(path, data) for path, data in files if PurePosixPath(path).suffix.casefold() in {".json", ".csv"}])
     result = []
