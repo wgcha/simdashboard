@@ -125,6 +125,158 @@ def test_materials_catalog_and_deck_are_request_scoped_and_uncached(materials_cl
     assert fresh.json()["deck"]["parts"] == []
 
 
+def test_materials_discovers_results_without_a_scene_and_ignores_unrelated_decks(materials_client):
+    client, root, _, request_id, request_folder, _, _, _ = materials_client
+    result_relative = (f"{request_folder}/CAE/Assy_Model/Drop/Run_02/INDIVIDUAL/"
+                       "DAMP-2_Face/results")
+    result_path = root.joinpath(*result_relative.split("/"))
+    result_path.mkdir(parents=True)
+    (result_path / "101_parts.inc").write_text(_parts_deck().replace("/PART/1", "/PART/9"), encoding="utf-8")
+    (result_path / "103_material_propertdb.inc").write_text(
+        _materials_deck().replace("/MAT/ELAST/2", "/MAT/ELAST/99"), encoding="utf-8",
+    )
+
+    unrelated = root.joinpath(*f"{request_folder}/documents/results".split("/"))
+    unrelated.mkdir(parents=True)
+    (unrelated / "parts.inc").write_text(_parts_deck(), encoding="utf-8")
+    (unrelated / "materials.inc").write_text(_materials_deck(), encoding="utf-8")
+
+    catalog = client.get(BASE + "/catalog", params={"request_id": request_id})
+    assert catalog.status_code == 200, catalog.text
+    entries = catalog.json()["scenes"]
+    result = next(item for item in entries if item["relative_path"] == result_relative)
+    assert result["kind"] == "RESULTS"
+    assert result["has_deck"] is True
+    assert all("documents/results" not in item["relative_path"] for item in entries)
+
+    response = client.get(BASE + "/deck", params={"request_id": request_id, "scene_id": result["scene_id"]})
+    assert response.status_code == 200, response.text
+    assert [part["id"] for part in response.json()["deck"]["parts"]] == ["9"]
+    assert [material["id"] for material in response.json()["deck"]["materials"]] == ["99"]
+    assert {item["relative_path"] for item in response.json()["files"]} == {
+        f"{result_relative}/101_parts.inc", f"{result_relative}/103_material_propertdb.inc",
+    }
+
+
+def test_materials_scene_decks_can_be_in_their_results_subfolder(materials_client):
+    client, root, _, request_id, _, _, empty_scene_relative, _ = materials_client
+    result_relative = f"{empty_scene_relative}/results"
+    result_path = root.joinpath(*result_relative.split("/"))
+    result_path.mkdir(parents=True)
+    (result_path / "parts.inc").write_text(_parts_deck().replace("/PART/1", "/PART/7"), encoding="utf-8")
+    (result_path / "materials.inc").write_text(_materials_deck(), encoding="utf-8")
+
+    catalog = client.get(BASE + "/catalog", params={"request_id": request_id})
+    assert catalog.status_code == 200, catalog.text
+    empty_scene = next(item for item in catalog.json()["scenes"] if item["relative_path"] == empty_scene_relative)
+    assert empty_scene["kind"] == "SCENE"
+    assert empty_scene["has_deck"] is True
+    assert all(item["relative_path"] != result_relative for item in catalog.json()["scenes"])
+    response = client.get(BASE + "/deck", params={"request_id": request_id, "scene_id": empty_scene["scene_id"]})
+    assert response.status_code == 200, response.text
+    assert [part["id"] for part in response.json()["deck"]["parts"]] == ["7"]
+
+
+def test_materials_does_not_duplicate_run_results_that_fallback_to_scene(materials_client):
+    client, root, _, request_id, request_folder, _, _, _ = materials_client
+    result_paths = [
+        f"{request_folder}/CAE/Assy_Model/Drop/Run_02/results",
+        f"{request_folder}/CAE/Assy_Model/Drop/Run_03/INDIVIDUAL/results",
+    ]
+    for index, relative in enumerate(result_paths, start=2):
+        directory = root.joinpath(*relative.split("/"))
+        directory.mkdir(parents=True)
+        (directory / "parts.inc").write_text(_parts_deck().replace("/PART/1", f"/PART/{index}"), encoding="utf-8")
+        (directory / "materials.inc").write_text(_materials_deck(), encoding="utf-8")
+
+    catalog = client.get(BASE + "/catalog", params={"request_id": request_id})
+    assert catalog.status_code == 200, catalog.text
+    for relative in result_paths:
+        matches = [item for item in catalog.json()["scenes"] if item["relative_path"] == relative]
+        assert len(matches) == 1
+        assert matches[0]["kind"] == "SCENE"
+        assert matches[0]["has_deck"] is True
+
+
+def test_materials_ignores_result_decks_owned_by_another_environment(materials_client):
+    client, root, project_id, request_id, request_folder, _, empty_scene_relative, _ = materials_client
+    unscened_relative = (f"{request_folder}/CAE/Assy_Model/Drop/Run_02/INDIVIDUAL/"
+                         "DAMP-2_Face/results")
+    scene_result_relative = f"{empty_scene_relative}/results"
+    for relative in (unscened_relative, scene_result_relative):
+        directory = root.joinpath(*relative.split("/"))
+        directory.mkdir(parents=True)
+        (directory / "parts.inc").write_text(_parts_deck(), encoding="utf-8")
+        (directory / "materials.inc").write_text(_materials_deck(), encoding="utf-8")
+
+    from app.services import folder_discovery_environment
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    root_key = folder_discovery_environment.root_identity(root)
+    with connect() as conn:
+        for relative in (unscened_relative, scene_result_relative):
+            registration_id = f"foreign-results-{uuid4().hex}"
+            conn.execute(
+                "INSERT INTO folder_environment_registrations "
+                "(id,preview_id,idempotency_key,environment,project_id,request_id,status,created_by,created_at) "
+                "VALUES(?,?,?,'USAGE',?,?,'APPLIED','synthetic-test',?)",
+                [registration_id, f"preview-{registration_id}", f"key-{registration_id}", project_id, request_id, now],
+            )
+            conn.execute(
+                "INSERT INTO folder_environment_registry "
+                "(id,registration_id,root_key,relative_path,role_kind,parent_context_id,target_id,raw_name,option_status,created_at) "
+                "VALUES(?,?,?,?,'RESULTS',NULL,?,'results',NULL,?)",
+                [f"registry-{registration_id}", registration_id, root_key, relative, f"target-{registration_id}", now],
+            )
+
+    catalog = client.get(BASE + "/catalog", params={"request_id": request_id})
+    assert catalog.status_code == 200, catalog.text
+    assert all(item["relative_path"] != unscened_relative for item in catalog.json()["scenes"])
+    empty_scene = next(item for item in catalog.json()["scenes"] if item["relative_path"] == empty_scene_relative)
+    assert empty_scene["has_deck"] is False
+
+
+def test_materials_checks_result_folder_ownership_before_reading_deck_content(materials_client, monkeypatch):
+    client, root, _, request_id, request_folder, _, _, _ = materials_client
+    result_relative = (f"{request_folder}/CAE/Assy_Model/Drop/Run_02/INDIVIDUAL/"
+                       "DAMP-2_Face/results")
+    result_path = root.joinpath(*result_relative.split("/"))
+    result_path.mkdir(parents=True)
+    (result_path / "parts.inc").write_text(_parts_deck(), encoding="utf-8")
+    (result_path / "materials.inc").write_text(_materials_deck(), encoding="utf-8")
+
+    original_owner_check = materials_catalog.result_registration_paths._owner_conflict
+    original_sniff = materials_catalog._file_roles
+    sniffed_result_files = []
+
+    def deny_result_folder(conn, root_id, root_key, relative_path, project_id, owner_request_id, environment):
+        if relative_path.casefold() == result_relative.casefold():
+            raise materials_catalog.result_registration_paths.ResultRegistrationError(
+                "RESULT_PATH_OWNERSHIP_CONFLICT", "synthetic foreign result owner",
+            )
+        return original_owner_check(conn, root_id, root_key, relative_path, project_id, owner_request_id, environment)
+
+    def observe_sniff(path, budget=None):
+        if path.parent == result_path:
+            sniffed_result_files.append(path.name)
+        return original_sniff(path, budget)
+
+    monkeypatch.setattr(materials_catalog.result_registration_paths, "_owner_conflict", deny_result_folder)
+    monkeypatch.setattr(materials_catalog, "_file_roles", observe_sniff)
+
+    catalog = client.get(BASE + "/catalog", params={"request_id": request_id})
+    assert catalog.status_code == 200, catalog.text
+    assert all(item["relative_path"] != result_relative for item in catalog.json()["scenes"])
+    assert sniffed_result_files == []
+
+
+def test_materials_api_is_distribution_only(materials_client):
+    client, _, _, request_id, _, scene_relative, _, _ = materials_client
+    catalog = client.get(BASE + "/catalog", params={"request_id": request_id, "environment": "USAGE"})
+    deck = client.get(BASE + "/deck", params={"request_id": request_id,
+                                                "environment": "USAGE", "relative_path": scene_relative})
+    assert catalog.status_code == deck.status_code == 422
+
+
 def test_materials_rejects_cross_request_non_scene_and_traversal_paths(materials_client):
     client, root, _, request_id, request_folder, scene_relative, _, _ = materials_client
     other_scene = f"{request_folder}-other/CAE/Assy_Model/Drop/Run_01/INDIVIDUAL/Scene_Other"

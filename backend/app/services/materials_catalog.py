@@ -1,4 +1,4 @@
-"""Bounded, read-only access to Radioss materials stored in SPDM scenes."""
+"""Bounded, read-only access to Radioss materials stored in distribution results."""
 from __future__ import annotations
 
 import re
@@ -24,6 +24,9 @@ _MATERIAL_CARDS = {"BEGIN", "PARAMETER", "SUBSET", "PROP", "MAT", "FUNCT", "MOVE
 _MAX_SNIFF_BYTES = 1024 * 1024
 _MAX_CANDIDATE_SCAN_BYTES = 32 * 1024 * 1024
 _INCLUDE_DIRECTIVE = re.compile(r"^/INCLUDE(?:/(?P<slash>.*)|[ \t]+(?P<space>.*))?[ \t]*$", re.I)
+_MATERIALS_ENVIRONMENT = "DISTRIBUTION"
+_MAX_RESULT_CONTAINER_DEPTH = 3
+_MAX_OWNERSHIP_CHECKS = 256
 
 
 class MaterialsCatalogError(ValueError):
@@ -81,6 +84,8 @@ def _include_target_relative(scope: dict[str, Any], including_relative: str, inc
 
 
 def _request_scope(conn: ConnectionLike, request_id: str, environment: str):
+    if str(environment).upper() != _MATERIALS_ENVIRONMENT:
+        raise MaterialsCatalogError("MATERIALS_ENVIRONMENT_UNSUPPORTED", "소재 덱은 유통환경에서만 조회할 수 있습니다.")
     row = conn.execute("SELECT project_id FROM analysis_requests WHERE id=?", [request_id]).fetchone()
     if not row:
         raise MaterialsCatalogError("RESULT_CONTEXT_INVALID", "기존 의뢰를 확인할 수 없습니다.", 404)
@@ -145,6 +150,21 @@ def _scene_entry(conn: ConnectionLike, root: Path, root_id: str, root_key: str,
     scene = context.get("scene")
     if not isinstance(scene, dict) or str(scene.get("relative_path", "")).casefold() != relative_path.casefold():
         return None
+    if PurePosixPath(relative_path).name.casefold() == "results":
+        parent_path = PurePosixPath(relative_path).parent.as_posix()
+        try:
+            _, parent_nodes = result_registration_paths._trace_path(
+                conn, root, root_id, root_key, scope, parent_path, require_directory=True,
+            )
+        except result_registration_paths.ResultRegistrationError as exc:
+            if exc.code in {"RESULT_PATH_OWNERSHIP_CONFLICT", "RESULT_PATH_ROLE_CONFLICT", "RESULT_PATH_INVALID"}:
+                return None
+            raise
+        if parent_nodes and parent_nodes[-1].get("role_kind") == "CONTAINER":
+            # A results leaf inherits the nearest semantic parent in the
+            # general folder tracer. Keep this as a result location when the
+            # immediate folder itself has no Scene role.
+            return None
     hierarchy: dict[str, Any] = {}
     for key in ("simulation_case", "load_case", "execution_run", "run_option"):
         item = context.get(key)
@@ -158,16 +178,139 @@ def _scene_entry(conn: ConnectionLike, root: Path, root_id: str, root_key: str,
         "label": str(scene.get("label") or PurePosixPath(relative_path).name),
         "relative_path": relative_path,
         "hierarchy": hierarchy,
+        "kind": "SCENE",
         "has_deck": False,
     }
 
 
+def _result_entries(conn: ConnectionLike, root: Path, root_id: str, root_key: str,
+                    scope: dict[str, Any], scan: dict[str, Any],
+                    scene_paths: set[str]) -> list[dict[str, Any]]:
+    """Find real distribution result folders, including runs without a Scene role.
+
+    A result folder is either explicitly registered as RESULTS for this request,
+    or named ``results`` within three container levels of a validated Scene,
+    Run Option, or Execution Run. Both its parent and leaf are traced through
+    the distribution hierarchy; the request-root scan is bounded.
+    """
+    request_parts = tuple(part.casefold() for part in PurePosixPath(scope["request_relative_path"]).parts)
+    registered = rows(conn.execute(
+        "SELECT relative_path FROM result_registration_paths "
+        "WHERE root_key=? AND project_id=? AND request_id=? AND environment=? AND role_kind='RESULTS' "
+        "ORDER BY relative_path LIMIT ?",
+        [root_key, scope["project_id"], scope["request_id"], _MATERIALS_ENVIRONMENT, MAX_DECK_FILES + 1],
+    ))
+    registered.extend(rows(conn.execute(
+        "SELECT g.relative_path FROM folder_environment_registry g "
+        "JOIN folder_environment_registrations r ON r.id=g.registration_id "
+        "WHERE g.root_key=? AND r.project_id=? AND r.request_id=? AND r.environment=? AND g.role_kind='RESULTS' "
+        "ORDER BY g.relative_path LIMIT ?",
+        [root_key, scope["project_id"], scope["request_id"], _MATERIALS_ENVIRONMENT, MAX_DECK_FILES + 1],
+    )))
+    if len(registered) > MAX_DECK_FILES:
+        raise MaterialsCatalogError("MATERIALS_RESULT_LIMIT", "결과 폴더 후보 수가 허용 한도를 초과했습니다.", 413)
+    registered_paths: set[str] = set()
+    for item in registered:
+        value = str(item["relative_path"])
+        parts = tuple(part.casefold() for part in PurePosixPath(value).parts)
+        if parts[:len(request_parts)] == request_parts:
+            registered_paths.add(value.casefold())
+
+    candidates = []
+    started = time.monotonic()
+    for node in scan["nodes"]:
+        if len(candidates) >= MAX_DECK_FILES or time.monotonic() - started > folder_discovery_scan.MAX_SECONDS:
+            raise MaterialsCatalogError("MATERIALS_RESULT_SCAN_LIMIT", "결과 폴더 후보 조사 한도를 초과했습니다.", 413)
+        relative = str(node["relative_path"])
+        folded = relative.casefold()
+        if folded in scene_paths:
+            continue
+        is_registered = folded in registered_paths
+        if not is_registered and str(node.get("name", "")).casefold() != "results":
+            continue
+        parts = tuple(part.casefold() for part in PurePosixPath(relative).parts)
+        if len(parts) <= len(request_parts) or parts[:len(request_parts)] != request_parts:
+            continue
+        parent_path = str(node.get("parent_path") or "")
+        if not parent_path:
+            continue
+        try:
+            context, parent_nodes = result_registration_paths._trace_path(
+                conn, root, root_id, root_key, scope, parent_path, require_directory=True,
+            )
+        except result_registration_paths.ResultRegistrationError as exc:
+            if exc.code in {"RESULT_PATH_OWNERSHIP_CONFLICT", "RESULT_PATH_ROLE_CONFLICT", "RESULT_PATH_INVALID"}:
+                continue
+            raise
+        parent_role = str(parent_nodes[-1]["role_kind"]) if parent_nodes else "REQUEST"
+        in_distribution_run = bool(context.get("simulation_case") and context.get("load_case")
+                                   and context.get("execution_run"))
+        if not in_distribution_run:
+            continue
+        semantic_paths = [str(context[key]["relative_path"]) for key in
+                          ("simulation_case", "load_case", "execution_run", "run_option", "scene")
+                          if isinstance(context.get(key), dict) and context[key].get("relative_path")]
+        anchor_path = max(semantic_paths, key=lambda value: len(PurePosixPath(value).parts), default="")
+        anchor_parts = tuple(part.casefold() for part in PurePosixPath(anchor_path).parts)
+        parent_parts = tuple(part.casefold() for part in PurePosixPath(parent_path).parts)
+        container_depth = (len(parent_parts) - len(anchor_parts)
+                           if parent_parts[:len(anchor_parts)] == anchor_parts else _MAX_RESULT_CONTAINER_DEPTH + 1)
+        if is_registered:
+            if parent_role not in {"SCENE", "RUN_OPTION", "EXECUTION_RUN", "CONTAINER"} or (
+                    parent_role == "CONTAINER" and container_depth > _MAX_RESULT_CONTAINER_DEPTH):
+                continue
+        elif parent_role not in {"SCENE", "RUN_OPTION", "EXECUTION_RUN"} and not (
+                parent_role == "CONTAINER" and container_depth <= _MAX_RESULT_CONTAINER_DEPTH):
+            continue
+        try:
+            result_context, result_nodes = result_registration_paths._trace_path(
+                conn, root, root_id, root_key, scope, relative, require_directory=True,
+            )
+        except result_registration_paths.ResultRegistrationError as exc:
+            if exc.code in {"RESULT_PATH_OWNERSHIP_CONFLICT", "RESULT_PATH_ROLE_CONFLICT", "RESULT_PATH_INVALID"}:
+                continue
+            raise
+        result_role = str(result_nodes[-1]["role_kind"]) if result_nodes else ""
+        if is_registered and result_role != "RESULTS":
+            continue
+        if not is_registered and result_role not in {"RESULTS", "SCENE", "CONTAINER"}:
+            continue
+        # A Scene's own result folder is searched from the existing Scene
+        # entry, so do not add a duplicate selectable location for it.
+        parent_scene = result_context.get("scene") or context.get("scene")
+        if isinstance(parent_scene, dict) and str(parent_scene.get("relative_path", "")).casefold() in scene_paths:
+            if relative.casefold() == f"{str(parent_scene['relative_path'])}/results".casefold():
+                continue
+        candidates.append((relative, result_context))
+
+    if len(candidates) > MAX_DECK_FILES:
+        raise MaterialsCatalogError("MATERIALS_RESULT_LIMIT", "결과 폴더 후보 수가 허용 한도를 초과했습니다.", 413)
+    items = []
+    for relative_path, context in candidates:
+        hierarchy = {key: context[key] for key in ("simulation_case", "load_case", "execution_run", "run_option")
+                     if context.get(key) is not None}
+        parent_label = next((str(hierarchy[key].get("label")) for key in ("run_option", "execution_run", "load_case")
+                             if isinstance(hierarchy.get(key), dict) and hierarchy[key].get("label")), "유통환경")
+        item = {
+            "scene_id": result_registration_paths._stable("materials-result", root_key, relative_path, "RESULTS"),
+            "label": f"{parent_label} · {PurePosixPath(relative_path).name}",
+            "relative_path": relative_path,
+            "hierarchy": hierarchy,
+            "kind": "RESULTS",
+            "has_deck": False,
+        }
+        items.append(item)
+    return items
+
+
 def _candidate_directories(scene: dict[str, Any], scope: dict[str, Any]) -> list[str]:
     scene_path = str(scene["relative_path"])
+    if scene.get("kind") == "RESULTS":
+        return [scene_path]
     hierarchy = scene.get("hierarchy", {})
     option = hierarchy.get("run_option")
     execution = hierarchy.get("execution_run")
-    candidates = [scene_path, f"{scene_path}/INPUT"]
+    candidates = [scene_path, f"{scene_path}/INPUT", f"{scene_path}/results"]
     if isinstance(option, dict) and option.get("status") != "ABSENT":
         candidates.append(str(option["relative_path"]))
     if isinstance(execution, dict):
@@ -188,7 +331,7 @@ def _candidate_directories(scene: dict[str, Any], scope: dict[str, Any]) -> list
     return unique
 
 
-def _file_roles(path: Path) -> set[str]:
+def _file_roles(path: Path, budget: dict[str, Any] | None = None) -> set[str]:
     name = path.stem.casefold().replace("-", "_").replace(" ", "_")
     roles: set[str] = set()
     if re.search(r"(?:^|_)parts?(?:_|$)", name):
@@ -199,6 +342,8 @@ def _file_roles(path: Path) -> set[str]:
         with spdm_storage.open_stable_reader(path) as stream:
             scanned = 0
             for raw_line in stream:
+                if budget is not None and time.monotonic() - budget["started"] > folder_discovery_scan.MAX_SECONDS:
+                    raise MaterialsCatalogError("MATERIALS_CANDIDATE_SCAN_LIMIT", "덱 후보 내용 조사 한도를 초과했습니다.", 413)
                 scanned += len(raw_line)
                 if scanned > _MAX_SNIFF_BYTES:
                     break
@@ -218,9 +363,30 @@ def _file_roles(path: Path) -> set[str]:
     return roles
 
 
+def _candidate_is_owned(conn: ConnectionLike, root: Path, root_id: str, root_key: str,
+                        scope: dict[str, Any], relative_path: str) -> bool:
+    try:
+        result_registration_paths._owner_conflict(
+            conn, root_id, root_key, relative_path, scope["project_id"], scope["request_id"], scope["environment"],
+        )
+        _, nodes = result_registration_paths._trace_path(
+            conn, root, root_id, root_key, scope, relative_path, require_directory=True,
+        )
+    except result_registration_paths.ResultRegistrationError as exc:
+        if exc.code in {"RESULT_PATH_OWNERSHIP_CONFLICT", "RESULT_PATH_ROLE_CONFLICT", "RESULT_PATH_INVALID",
+                        "RESULT_PATH_OUTSIDE_REQUEST"}:
+            return False
+        raise MaterialsCatalogError(exc.code, str(exc)) from exc
+    return bool(nodes)
+
+
 def _candidate_sources(scene: dict[str, Any], root: Path, scope: dict[str, Any],
-                       budget: dict[str, Any] | None = None) -> tuple[str | None, list[tuple[str, Path, int]], list[dict[str, Any]]]:
-    budget = budget if budget is not None else {"started": time.monotonic(), "entries": 0, "sniff_bytes": 0}
+                       budget: dict[str, Any] | None = None, *, conn: ConnectionLike,
+                       root_id: str, root_key: str) -> tuple[str | None, list[tuple[str, Path, int]], list[dict[str, Any]]]:
+    budget = budget if budget is not None else {
+        "started": time.monotonic(), "entries": 0, "sniff_bytes": 0,
+        "owned_directories": {}, "ownership_checks": 0,
+    }
     for directory_relative in _candidate_directories(scene, scope):
         try:
             directory = result_registration_paths._safe_existing(root, directory_relative, allow_missing_leaf=True)
@@ -230,8 +396,7 @@ def _candidate_sources(scene: dict[str, Any], root: Path, scope: dict[str, Any],
             continue
         if not directory.is_dir():
             continue
-        parts: list[tuple[str, Path, int]] = []
-        materials: list[tuple[str, Path, int]] = []
+        deck_files: list[tuple[str, Path, int]] = []
         try:
             with os.scandir(directory) as entries:
                 for entry in entries:
@@ -244,16 +409,42 @@ def _candidate_sources(scene: dict[str, Any], root: Path, scope: dict[str, Any],
                     if not entry.is_file(follow_symlinks=False) or path.suffix.casefold() not in _DECK_EXTENSIONS:
                         continue
                     relative = path.relative_to(root).as_posix()
-                    size = path.stat().st_size
-                    roles = _file_roles(path)
-                    budget["sniff_bytes"] += min(size, _MAX_SNIFF_BYTES)
-                    if budget["sniff_bytes"] > _MAX_CANDIDATE_SCAN_BYTES:
-                        raise MaterialsCatalogError("MATERIALS_CANDIDATE_SCAN_LIMIT", "덱 후보 내용 조사 한도를 초과했습니다.", 413)
-                    item = (relative, path, size)
-                    if "parts" in roles:
-                        parts.append(item)
-                    if "materials" in roles:
-                        materials.append(item)
+                    deck_files.append((relative, path, path.stat().st_size))
+        except MaterialsCatalogError:
+            raise
+        except (OSError, spdm_storage.SpdmStorageError) as exc:
+            raise MaterialsCatalogError("MATERIALS_SCAN_INCOMPLETE", "덱 후보 폴더를 읽을 수 없습니다.") from exc
+        if not deck_files:
+            continue
+        directory_key = directory_relative.casefold()
+        ownership_cache = budget.setdefault("owned_directories", {})
+        if directory_key in ownership_cache:
+            owned = ownership_cache[directory_key]
+        else:
+            budget["ownership_checks"] = int(budget.get("ownership_checks", 0)) + 1
+            if budget["ownership_checks"] > _MAX_OWNERSHIP_CHECKS:
+                raise MaterialsCatalogError("MATERIALS_OWNERSHIP_SCAN_LIMIT", "소유권을 확인할 덱 후보 폴더 수가 허용 한도를 초과했습니다.", 413)
+            owned = _candidate_is_owned(conn, root, root_id, root_key, scope, directory_relative)
+            ownership_cache[directory_key] = owned
+        if not owned:
+            continue
+        parts: list[tuple[str, Path, int]] = []
+        materials: list[tuple[str, Path, int]] = []
+        try:
+            for relative, path, size in deck_files:
+                if time.monotonic() - budget["started"] > folder_discovery_scan.MAX_SECONDS:
+                    raise MaterialsCatalogError("MATERIALS_CANDIDATE_SCAN_LIMIT", "덱 후보 내용 조사 한도를 초과했습니다.", 413)
+                budget["sniff_bytes"] += min(size, _MAX_SNIFF_BYTES)
+                if budget["sniff_bytes"] > _MAX_CANDIDATE_SCAN_BYTES:
+                    raise MaterialsCatalogError("MATERIALS_CANDIDATE_SCAN_LIMIT", "덱 후보 내용 조사 한도를 초과했습니다.", 413)
+                roles = _file_roles(path, budget)
+                if time.monotonic() - budget["started"] > folder_discovery_scan.MAX_SECONDS:
+                    raise MaterialsCatalogError("MATERIALS_CANDIDATE_SCAN_LIMIT", "덱 후보 내용 조사 한도를 초과했습니다.", 413)
+                item = (relative, path, size)
+                if "parts" in roles:
+                    parts.append(item)
+                if "materials" in roles:
+                    materials.append(item)
         except MaterialsCatalogError:
             raise
         except (OSError, spdm_storage.SpdmStorageError) as exc:
@@ -275,17 +466,30 @@ def _candidate_sources(scene: dict[str, Any], root: Path, scope: dict[str, Any],
     return None, [], []
 
 
-def _scene_items(conn: ConnectionLike, root: Path, root_id: str, root_key: str,
-                 scope: dict[str, Any], scan: dict[str, Any]) -> list[dict[str, Any]]:
-    budget = {"started": time.monotonic(), "entries": 0, "sniff_bytes": 0}
+def _catalog_items(conn: ConnectionLike, root: Path, root_id: str, root_key: str,
+                   scope: dict[str, Any], scan: dict[str, Any]) -> list[dict[str, Any]]:
+    budget = {
+        "started": time.monotonic(), "entries": 0, "sniff_bytes": 0,
+        "owned_directories": {}, "ownership_checks": 0,
+    }
     items = []
+    scene_paths: set[str] = set()
     for path in _scene_paths(conn, root_key, scope, scan):
         entry = _scene_entry(conn, root, root_id, root_key, scope, path)
         if entry is None:
             continue
-        _, candidates, _ = _candidate_sources(entry, root, scope, budget)
+        scene_paths.add(path.casefold())
+        _, candidates, _ = _candidate_sources(entry, root, scope, budget, conn=conn, root_id=root_id, root_key=root_key)
         entry["has_deck"] = bool(candidates)
         items.append(entry)
+    result_items = _result_entries(conn, root, root_id, root_key, scope, scan, scene_paths)
+    visible_result_items = []
+    for entry in result_items:
+        _, candidates, _ = _candidate_sources(entry, root, scope, budget, conn=conn, root_id=root_id, root_key=root_key)
+        if candidates:
+            entry["has_deck"] = True
+            visible_result_items.append(entry)
+    items.extend(visible_result_items)
     items.sort(key=lambda item: (item["label"].casefold(), item["relative_path"].casefold()))
     return items
 
@@ -293,7 +497,7 @@ def _scene_items(conn: ConnectionLike, root: Path, root_id: str, root_key: str,
 def catalog(conn: ConnectionLike, request_id: str, environment: str) -> dict[str, Any]:
     project_id, scope, root, root_id, root_key = _request_scope(conn, request_id, environment)
     scan = _scan_request(root, scope)
-    items = _scene_items(conn, root, root_id, root_key, scope, scan)
+    items = _catalog_items(conn, root, root_id, root_key, scope, scan)
     return {"request_id": request_id, "environment": scope["environment"], "scenes": items}
 
 
@@ -303,7 +507,7 @@ def _resolve_scene(conn: ConnectionLike, request_id: str, environment: str,
         raise MaterialsCatalogError("MATERIALS_SCENE_REQUIRED", "scene_id 또는 relative_path를 선택하세요.")
     project_id, scope, root, root_id, root_key = _request_scope(conn, request_id, environment)
     scan = _scan_request(root, scope)
-    catalog_items = _scene_items(conn, root, root_id, root_key, scope, scan)
+    catalog_items = _catalog_items(conn, root, root_id, root_key, scope, scan)
     by_id = {item["scene_id"]: item for item in catalog_items}
     by_path = {item["relative_path"].casefold(): item for item in catalog_items}
     by_id_entry = by_id.get(scene_id) if scene_id else None
@@ -316,15 +520,21 @@ def _resolve_scene(conn: ConnectionLike, request_id: str, environment: str,
             context, nodes = result_registration_paths._trace_path(
                 conn, root, root_id, root_key, scope, normalized, require_directory=True,
             )
-            if not context.get("scene") or str(context["scene"].get("relative_path", "")).casefold() != normalized.casefold() or not nodes or nodes[-1].get("role_kind") != "SCENE":
-                raise MaterialsCatalogError("MATERIALS_SCENE_INVALID", "선택한 경로가 확인된 씬 폴더가 아닙니다.")
-            by_path_entry = {
-                "scene_id": str(context["scene"]["id"]), "label": str(context["scene"].get("label") or PurePosixPath(normalized).name),
-                "relative_path": normalized, "hierarchy": {key: context[key] for key in ("simulation_case", "load_case", "execution_run", "run_option") if context.get(key)},
-                "has_deck": False,
-            }
-            _, candidates, _ = _candidate_sources(by_path_entry, root, scope)
-            by_path_entry["has_deck"] = bool(candidates)
+            if context.get("scene") and str(context["scene"].get("relative_path", "")).casefold() == normalized.casefold() and nodes and nodes[-1].get("role_kind") == "SCENE":
+                by_path_entry = {
+                    "scene_id": str(context["scene"]["id"]), "label": str(context["scene"].get("label") or PurePosixPath(normalized).name),
+                    "relative_path": normalized, "hierarchy": {key: context[key] for key in ("simulation_case", "load_case", "execution_run", "run_option") if context.get(key)},
+                    "kind": "SCENE", "has_deck": False,
+                }
+            else:
+                fallback = next((item for item in _catalog_items(conn, root, root_id, root_key, scope, scan)
+                                 if item["relative_path"].casefold() == normalized.casefold()), None)
+                if fallback is None:
+                    raise MaterialsCatalogError("MATERIALS_SCENE_INVALID", "선택한 경로가 이 의뢰의 씬 또는 결과 폴더가 아닙니다.")
+                by_path_entry = fallback
+            if by_path_entry is not None:
+                _, candidates, _ = _candidate_sources(by_path_entry, root, scope, conn=conn, root_id=root_id, root_key=root_key)
+                by_path_entry["has_deck"] = bool(candidates)
     if scene_id and by_id_entry is None:
         raise MaterialsCatalogError("MATERIALS_SCENE_INVALID", "선택한 씬이 이 의뢰와 환경에 속하지 않습니다.", 404)
     if relative_path and by_path_entry is None:
@@ -477,9 +687,10 @@ def _include_sources(files: list[tuple[str, Path, int]], root: Path, scope: dict
 
 
 def _parse_scene(selected: dict[str, Any], scene_path: Path, root: Path,
-                 scope: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+                 scope: dict[str, Any], conn: ConnectionLike, root_id: str,
+                 root_key: str) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
     del scene_path  # The chosen candidate directory may be above the selected scene.
-    _, files, warnings = _candidate_sources(selected, root, scope)
+    _, files, warnings = _candidate_sources(selected, root, scope, conn=conn, root_id=root_id, root_key=root_key)
     if not files:
         raise MaterialsCatalogError("MATERIALS_DECK_NOT_FOUND", "씬 우선순위 경로에서 Parts와 Materials 덱을 모두 찾을 수 없습니다.", 404)
     budget = _ParseBudget()
@@ -527,7 +738,7 @@ def _parse_scene(selected: dict[str, Any], scene_path: Path, root: Path,
 def deck(conn: ConnectionLike, request_id: str, environment: str,
          scene_id: str | None = None, relative_path: str | None = None) -> dict[str, Any]:
     selected, scene_path, scope = _resolve_scene(conn, request_id, environment, scene_id, relative_path)
-    root, _, _ = result_registration_paths._root(conn)
-    parsed, candidate_warnings, files = _parse_scene(selected, scene_path, root, scope)
+    root, root_id, root_key = result_registration_paths._root(conn)
+    parsed, candidate_warnings, files = _parse_scene(selected, scene_path, root, scope, conn, root_id, root_key)
     return {"request_id": request_id, "environment": scope["environment"], "scene": selected,
             "files": files, "candidate_warnings": candidate_warnings, "deck": parsed}

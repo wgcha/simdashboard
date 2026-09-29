@@ -13155,7 +13155,7 @@ export interface operations {
         parameters: {
             query: {
                 request_id: string;
-                environment?: "USAGE" | "DISTRIBUTION";
+                environment?: "DISTRIBUTION";
             };
             header?: never;
             path?: never;
@@ -13187,7 +13187,7 @@ export interface operations {
         parameters: {
             query: {
                 request_id: string;
-                environment?: "USAGE" | "DISTRIBUTION";
+                environment?: "DISTRIBUTION";
                 scene_id?: string | null;
                 relative_path?: string | null;
             };

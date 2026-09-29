@@ -6,8 +6,9 @@ const projectId = 'project-feature-showcase'
 
 const catalog = {
   scenes: [
-    { scene_id: 'small-scene', label: 'Compact deck', relative_path: 'model/compact', hierarchy: {}, has_deck: true },
-    { scene_id: 'large-scene', label: 'Large deck', relative_path: 'model/large', hierarchy: {}, has_deck: true },
+    { scene_id: 'small-scene', label: 'Compact deck', relative_path: 'model/compact', hierarchy: {}, kind: 'SCENE', has_deck: true },
+    { scene_id: 'large-scene', label: 'Large deck', relative_path: 'model/large', hierarchy: {}, kind: 'SCENE', has_deck: true },
+    { scene_id: 'result-folder', label: 'Run 02 · results', relative_path: 'model/run-02/results', hierarchy: {}, kind: 'RESULTS', has_deck: true },
   ],
 }
 
@@ -77,6 +78,12 @@ async function openMaterials(page: Page) {
 test('소재 표는 긴 이름과 누락 참조를 보여 주고 같은 Material에서도 Part 문맥을 바꾼다', async ({ page }) => {
   await mockMaterialsApi(page)
   await openMaterials(page)
+
+  await expect(page.getByLabel('소재 덱 환경 선택')).toHaveCount(0)
+  const locationSelect = page.getByLabel('소재 덱 위치 선택')
+  await locationSelect.selectOption('result-folder')
+  await expect(page.getByText('4 / 4 Parts')).toBeVisible()
+  await locationSelect.selectOption('small-scene')
 
   const rows = page.locator('.materials-part-table tbody tr')
   await expect(rows).toHaveCount(4)

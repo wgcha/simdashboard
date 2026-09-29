@@ -2,13 +2,14 @@ import { apiFetch } from './auth'
 import { apiErrorFromResponse } from './errors'
 import { apiUrl } from './url'
 
-export type MaterialsEnvironment = 'USAGE' | 'DISTRIBUTION'
+export type MaterialsEnvironment = 'DISTRIBUTION'
 export type MaterialsSource = { file: string | null; line: number | null }
 export type MaterialsScene = {
   scene_id: string
   label: string
   relative_path: string
   hierarchy: Record<string, Record<string, unknown>>
+  kind: 'SCENE' | 'RESULTS'
   has_deck: boolean
 }
 export type MaterialsCatalog = { scenes: MaterialsScene[] }
@@ -125,11 +126,13 @@ function source(value: unknown): MaterialsSource | null {
 function scene(value: unknown): MaterialsScene | null {
   const item = record(value)
   if (!item || typeof item.scene_id !== 'string' || typeof item.label !== 'string' || typeof item.relative_path !== 'string') return null
+  if (item.kind !== 'SCENE' && item.kind !== 'RESULTS') return null
   const hierarchy = record(item.hierarchy) ?? {}
   return {
     scene_id: item.scene_id,
     label: item.label,
     relative_path: item.relative_path,
+    kind: item.kind,
     hierarchy: Object.fromEntries(Object.entries(hierarchy).flatMap(([key, entry]) => {
       const parsed = record(entry)
       return parsed ? [[key, parsed]] : []

@@ -207,7 +207,7 @@ export function MaterialsDashboard({ requestId, requests, onRequestChange, refre
   const [manualRefresh, setManualRefresh] = useState(0)
   const [sort, setSort] = useState<{ key: SortKey; direction: 'asc' | 'desc' }>({ key: 'part', direction: 'asc' })
   const [page, setPage] = useState(0)
-  const environment: MaterialsEnvironment = searchParams.get('environment') === 'USAGE' ? 'USAGE' : 'DISTRIBUTION'
+  const environment: MaterialsEnvironment = 'DISTRIBUTION'
   const selectedSceneId = searchParams.get('scene') ?? ''
   const selectedPartId = searchParams.get('part') ?? ''
   const filter = searchParams.get('filter') ?? ''
@@ -223,6 +223,13 @@ export function MaterialsDashboard({ requestId, requests, onRequestChange, refre
   }
 
   useEffect(() => {
+    if (!searchParams.has('environment')) return
+    const next = new URLSearchParams(searchParams)
+    next.delete('environment')
+    setSearchParams(next, { replace: true })
+  }, [searchParams, setSearchParams])
+
+  useEffect(() => {
     if (!requestId) {
       setCatalog(null)
       setDeck(null)
@@ -236,7 +243,7 @@ export function MaterialsDashboard({ requestId, requests, onRequestChange, refre
     materialsApi.catalog(requestId, environment, controller.signal).then((value) => {
       if (!controller.signal.aborted) setCatalog(value)
     }).catch((reason: unknown) => {
-      if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : '소재 씬을 불러오지 못했습니다.')
+      if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : '소재 덱 위치를 불러오지 못했습니다.')
     }).finally(() => { if (!controller.signal.aborted) setLoadingCatalog(false) })
     return () => controller.abort()
   }, [requestId, environment, refreshToken, manualRefresh])
@@ -332,23 +339,22 @@ export function MaterialsDashboard({ requestId, requests, onRequestChange, refre
           {requestId && !requests.some((item) => item.id === requestId) && <option value={requestId}>{requestName ?? `선택된 의뢰 · ${requestId}`}</option>}
           {requests.map((request) => <option key={request.id} value={request.id}>{request.title || request.id}</option>)}
         </select></label>
-        <label><span>환경</span><select aria-label="소재 덱 환경 선택" value={environment} onChange={(event) => updateQuery({ environment: event.target.value }, false)}><option value="DISTRIBUTION">배포</option><option value="USAGE">사용</option></select></label>
-        <label><span>씬</span><select aria-label="소재 덱 씬 선택" value={selectedSceneId} disabled={!catalog?.scenes.length} onChange={(event) => updateQuery({ scene: event.target.value, part: null }, false)}>
-          {!catalog?.scenes.length && <option value="">{loadingCatalog ? '불러오는 중…' : '씬 없음'}</option>}
+        <label><span>덱 위치</span><select aria-label="소재 덱 위치 선택" value={selectedSceneId} disabled={!catalog?.scenes.length} onChange={(event) => updateQuery({ scene: event.target.value, part: null }, false)}>
+          {!catalog?.scenes.length && <option value="">{loadingCatalog ? '불러오는 중…' : '위치 없음'}</option>}
           {(catalog?.scenes ?? []).map((scene) => <option key={scene.scene_id} value={scene.scene_id}>{scene.label}{scene.has_deck ? '' : ' · 덱 없음'}</option>)}
         </select></label>
       </div>
     </header>
 
     {error && <div className="materials-error" role="alert"><AlertTriangle /><span>{error}</span><button type="button" onClick={() => setManualRefresh((value) => value + 1)}><RotateCw /> 다시 불러오기</button></div>}
-    {!requestId ? <div className="materials-empty-state"><Box /><strong>의뢰를 선택하면 소재 덱을 조회합니다.</strong><span>조회 권한이 있는 의뢰만 목록에 표시됩니다.</span></div> : loadingCatalog ? <div className="materials-empty-state" role="status">씬 카탈로그를 불러오고 있습니다…</div> : catalog && !catalog.scenes.length ? <div className="materials-empty-state"><Layers /><strong>이 의뢰에서 확인된 씬이 없습니다.</strong><span>의뢰의 폴더 경로와 배포·사용 환경을 확인하세요.</span></div> : selectedScene && !selectedScene.has_deck ? <div className="materials-empty-state"><Box /><strong>이 씬에서 Parts와 Materials 덱을 찾지 못했습니다.</strong><span title={selectedScene.relative_path}>{selectedScene.relative_path}</span></div> : <div className="materials-workspace">
+    {!requestId ? <div className="materials-empty-state"><Box /><strong>의뢰를 선택하면 소재 덱을 조회합니다.</strong><span>조회 권한이 있는 의뢰만 목록에 표시됩니다.</span></div> : loadingCatalog ? <div className="materials-empty-state" role="status">유통환경 덱 위치를 불러오고 있습니다…</div> : catalog && !catalog.scenes.length ? <div className="materials-empty-state"><Layers /><strong>이 의뢰에서 확인된 덱 위치가 없습니다.</strong><span>의뢰의 유통환경 결과 폴더를 확인하세요.</span></div> : selectedScene && !selectedScene.has_deck ? <div className="materials-empty-state"><Box /><strong>선택한 위치에서 Parts와 Materials 덱을 찾지 못했습니다.</strong><span title={selectedScene.relative_path}>{selectedScene.relative_path}</span></div> : <div className="materials-workspace">
       <section className="materials-list-panel" aria-label="Part 목록">
         <div className="materials-list-toolbar">
           <label className="materials-search"><Search /><input aria-label="Part 검색" placeholder="Part, Material, Property 검색" value={filter} onChange={(event) => updateQuery({ filter: event.target.value || null }, true)} /></label>
           <strong>{visibleParts.length.toLocaleString()} / {(deck?.parts.length ?? 0).toLocaleString()} Parts</strong>
           <button type="button" className="materials-export-button" disabled={!visibleParts.length} onClick={() => downloadCsv(visibleParts, materialById, propertyById, selectedScene, requestId, deck?.unit_system.input.length ?? null)}><Download /> CSV</button>
         </div>
-        {loadingDeck ? <div className="materials-table-state" role="status">선택한 씬의 덱을 분석하고 있습니다…</div> : deck && !deck.parts.length ? <div className="materials-table-state">파싱된 Part가 없습니다.</div> : <>
+        {loadingDeck ? <div className="materials-table-state" role="status">선택한 덱 위치를 분석하고 있습니다…</div> : deck && !deck.parts.length ? <div className="materials-table-state">파싱된 Part가 없습니다.</div> : <>
           <div className="materials-table-scroll">
             <table className="materials-part-table">
               <colgroup><col className="materials-col-part" /><col className="materials-col-material" /><col className="materials-col-property" /><col className="materials-col-thickness" /><col className="materials-col-density" /></colgroup>

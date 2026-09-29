@@ -9255,10 +9255,7 @@
             "in": "query",
             "required": false,
             "schema": {
-              "enum": [
-                "USAGE",
-                "DISTRIBUTION"
-              ],
+              "const": "DISTRIBUTION",
               "type": "string",
               "default": "DISTRIBUTION",
               "title": "Environment"
@@ -9311,10 +9308,7 @@
             "in": "query",
             "required": false,
             "schema": {
-              "enum": [
-                "USAGE",
-                "DISTRIBUTION"
-              ],
+              "const": "DISTRIBUTION",
               "type": "string",
               "default": "DISTRIBUTION",
               "title": "Environment"

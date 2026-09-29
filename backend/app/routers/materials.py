@@ -27,7 +27,7 @@ def _raise_error(exc: Exception) -> None:
 
 @router.get("/catalog")
 def materials_catalog(request: Request, request_id: str = Query(min_length=1, max_length=128),
-                      environment: Literal["USAGE", "DISTRIBUTION"] = "DISTRIBUTION"):
+                      environment: Literal["DISTRIBUTION"] = "DISTRIBUTION"):
     with connect() as conn:
         require_resource_permission(request, PROJECT_DATA_VIEW, "request", request_id, conn=conn)
         try:
@@ -39,7 +39,7 @@ def materials_catalog(request: Request, request_id: str = Query(min_length=1, ma
 
 @router.get("/deck")
 def materials_deck(request: Request, request_id: str = Query(min_length=1, max_length=128),
-                   environment: Literal["USAGE", "DISTRIBUTION"] = "DISTRIBUTION",
+                   environment: Literal["DISTRIBUTION"] = "DISTRIBUTION",
                    scene_id: str | None = Query(default=None, max_length=256),
                    relative_path: str | None = Query(default=None, max_length=2048)):
     with connect() as conn:
