@@ -6,7 +6,7 @@
 
 - GitHub #40의 실제 `Working/Package.../Drop/Run/INDIVIDUAL/Scene...` 경로를 반영했다. 적용된 유통 폴더 등록의 확정 Scene 역할을 우선하고, 적용 Scene이 있으면 이름만 비슷한 미등록 경로를 제외한다. Scene 직속 `results`의 중복 위치도 제거했다.
 - `101_parts.inc`의 공통 `/BEGIN`·`/PARAMETER`·`/SUBSET`을 소재 파일로 오인하던 판별을 수정했다. 합성 덱에서 101 Parts와 103 Material 파일을 각각 읽고 Part의 Material ID를 해소했다. 소재 화면은 내 작업의 `Case 결과` 오른쪽 탭으로 옮겨 선택 프로젝트·의뢰를 공유한다. 기존 단독 주소는 해당 탭으로 연결한다.
-- 격리 소재 API 26개, TypeScript·Vite 빌드·라우팅 검사, 데스크톱 E2E assertion 4개 통과. E2E runner의 Windows 프로세스 종료 권한 오류로 명령 종료 코드는 1이었으나 임시 DB·서버 정리는 확인했다. 독립 재검수에서 차단 사항 없음. 실제 사내 전체 덱·운영 DB/파일과 폐쇄망 배포는 미검증이다.
+- 격리 소재 API 26개, TypeScript·Vite 빌드·라우팅 검사, 데스크톱 E2E assertion 4개 통과. E2E runner의 Windows 프로세스 종료 권한 오류로 명령 종료 코드는 1이었으나 임시 DB·서버 정리는 확인했다. 독립 재검수에서 차단 사항 없음. Codex Security 변경분 검사 `2d16735f-7c33-4db1-b011-4568c3ddb1f4`는 변경 소스 8개에서 확인된 취약점 0개로 완료했다. 실제 사내 전체 덱·운영 DB/파일과 폐쇄망 배포는 미검증이다.
 
 ## 2026-09-29 — 소재 덱의 유통환경 결과 폴더 탐색 보완
 
