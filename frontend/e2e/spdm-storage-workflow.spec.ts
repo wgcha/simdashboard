@@ -208,24 +208,21 @@ async function installRegistrationApi(page: Page, options: {
     }
     if (pathName.endsWith('/folders/prepare') && method === 'POST') {
       options.onCall?.('prepare', request.postDataJSON())
-      const body = request.postDataJSON() as { confirm_create?: boolean; project_id?: string; request_id?: string }
+      const body = request.postDataJSON() as { confirm_create?: boolean; project_id?: string; request_id?: string; segments?: Array<{ role_kind: string; name: string }> }
       const newTree = usageTree(body.request_id ?? context.request)
-      const casePath = `${newTree.requestFolder}/Case_Prepared`
-      const evaluationPath = `${casePath}/Settle`
-      const resultPath = `${evaluationPath}/results`
-      const contextValue = {
-        ...emptyContext(),
-        simulation_case: { id: `simcase-${body.request_id ?? context.request}`, label: 'Case_Prepared', relative_path: casePath },
-        evaluation: { label: 'Settle', relative_path: evaluationPath },
-      }
+      const segments = body.segments ?? []
+      const proposedPaths = segments.map((segment, index) => ({
+        relative_path: `${newTree.requestFolder}/${segments.slice(0, index + 1).map((item) => item.name).join('/')}`,
+        role_kind: segment.role_kind, name: segment.name, exists: false,
+      }))
+      const casePath = proposedPaths.find((item) => item.role_kind === 'SIMULATION_CASE')?.relative_path ?? `${newTree.requestFolder}/Case_Prepared`
+      const resultPath = proposedPaths.at(-1)?.relative_path ?? `${casePath}/Settle/results`
+      const evaluation = proposedPaths.find((item) => item.role_kind === 'EVALUATION')
+      const contextValue = { ...emptyContext(), simulation_case: { id: `simcase-${body.request_id ?? context.request}`, label: 'Case_Prepared', relative_path: casePath }, evaluation: evaluation ? { label: evaluation.name, relative_path: evaluation.relative_path } : null }
       const preparation = {
         status: body.confirm_create ? 'PREPARED' : 'PREVIEW', case_relative_path: casePath, result_relative_path: resultPath,
-        created: Boolean(body.confirm_create), created_paths: body.confirm_create ? [casePath, evaluationPath, resultPath] : [], context: contextValue,
-        proposed_paths: [
-          { relative_path: casePath, role_kind: 'SIMULATION_CASE', name: 'Case_Prepared', exists: false },
-          { relative_path: evaluationPath, role_kind: 'EVALUATION', name: 'Settle', exists: false },
-          { relative_path: resultPath, role_kind: 'RESULTS', name: 'results', exists: false },
-        ],
+        created: Boolean(body.confirm_create), created_paths: body.confirm_create ? proposedPaths.map((item) => item.relative_path) : [], context: contextValue,
+        proposed_paths: proposedPaths,
       }
       return json(route, preparation)
     }
@@ -491,6 +488,46 @@ test('없는 환경별 경로는 전체 생성안을 확인하고 누락 인정 
   expect(mirrorRetryCount).toBe(1)
 })
 
+test('Run Case가 없어도 새 Run Option 폴더 이름을 정해 경로를 미리 볼 수 있다', async ({ page }) => {
+  await loginWorkspace(page)
+  await selectRequestContext(page)
+  let previewBody: Record<string, unknown> | null = null
+  await installRegistrationApi(page, {
+    scenario: 'empty',
+    onCall: (kind, body) => {
+      if (kind === 'prepare') previewBody = body as Record<string, unknown>
+    },
+  })
+  await openRegistrationTab(page)
+  await page.getByLabel('결과 등록 환경', { exact: true }).selectOption('DISTRIBUTION')
+  await page.getByText('필요한 Case·환경별 하위 폴더가 없을 때', { exact: true }).click()
+  await page.getByLabel('Case 폴더 이름', { exact: true }).fill('Case_New')
+  await page.getByLabel('하중경우 폴더 이름', { exact: true }).fill('Drop_New')
+  await page.getByLabel('Run Case 폴더 이름', { exact: true }).fill('Run_New')
+  await page.getByLabel('Run Option 결과 폴더 추가', { exact: true }).check()
+  await page.getByLabel('Run Option 이름', { exact: true }).fill('Option_New')
+  await page.getByLabel('Scene 폴더 이름', { exact: true }).fill('Front')
+  await page.getByRole('button', { name: '전체 경로 미리보기', exact: true }).click()
+  await expect(page.getByLabel('결과 폴더 생성 경로 미리보기')).toContainText('/Case_New/Drop_New/Run_New/Option_New/Front/results')
+  expect(previewBody?.segments).toEqual([
+    { role_kind: 'SIMULATION_CASE', name: 'Case_New' },
+    { role_kind: 'LOAD_CASE', name: 'Drop_New' },
+    { role_kind: 'EXECUTION_RUN', name: 'Run_New' },
+    { role_kind: 'RUN_OPTION', name: 'Option_New' },
+    { role_kind: 'SCENE', name: 'Front' },
+    { role_kind: 'RESULTS', name: 'results' },
+  ])
+  await page.getByLabel('표시된 결과용 하위 폴더만 생성하도록 확인했습니다.').check()
+  await page.getByRole('button', { name: '경로 확인 후 폴더 생성', exact: true }).click()
+  await page.locator('.result-registration-upload').evaluate((element) => {
+    const files = new DataTransfer()
+    files.items.add(new File(['evaluation,metric,value,unit\nSettle,angle,1.25,deg\n'], 'dropped.csv', { type: 'text/csv' }))
+    element.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: files }))
+  })
+  await expect(page.getByLabel('선택한 파일')).toContainText('dropped.csv')
+  await expect(page.getByRole('button', { name: '업로드하고 자동 검사', exact: true })).toBeEnabled()
+})
+
 test('유통환경은 기존 Case에서 load·run·option·scene 문맥과 결과 폴더를 고른다', async ({ page }) => {
   await loginWorkspace(page)
   await selectRequestContext(page)
@@ -598,6 +635,8 @@ test('필수 오류 검수에서 파일을 수정해 새 초안으로 다시 검
   const inspection = page.getByTestId('result-registration-inspection')
   await expect(inspection).toBeVisible()
   await expect(inspection).toContainText('게시 차단 1')
+  await expect(inspection).toContainText('값 인식됨')
+  await expect(inspection).toContainText('값을 읽은 항목이 있어도 파일·형식 오류가 남아 있으면 DB 등록할 수 없습니다')
   await expect(page.getByRole('button', { name: '검수 완료·DB 등록', exact: true })).toBeDisabled()
   await expect(page.getByLabel('결과 파일과 영상·이미지 선택', { exact: true })).toBeDisabled()
   await page.getByRole('button', { name: '파일 수정 후 새 검수 시작', exact: true }).click()
