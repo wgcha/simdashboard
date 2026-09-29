@@ -1,6 +1,6 @@
 # 해석 결과 대시보드 구현·사용 안내
 
-크기·밀도·본문 폭의 후속 개선은 [UI 개선 실행 계획](ui-density-improvement-plan.md)을 참고한다. [P1 토큰·작업 폭](ui-density-p1-implementation.md)에 이어 사용자 확인 후 [P2 공통 컴포넌트·결과 화면](ui-density-p2-implementation.md)을 구현했다. 기본 14pt·11~18pt 설정과 기존 테마·저장 배치를 유지하며 [P3 글자 역할 시범 적용](ui-density-p3-implementation.md)은 Sol 후속 검수까지 승인됐으며, [P4 화면별 확산](ui-density-p4-implementation.md)은 의뢰/등록·비교/모델링·도움말/설정까지 구현·검수 완료했다. [P5 root/rem·전역 규칙 정리](ui-density-p5-implementation.md)도 2026-09-27 구현·검수 완료했다. P5 배포는 미실행이다. 앞으로 모바일 전용 개선·검수는 제외하고 데스크톱만 대상으로 한다.
+크기·밀도·본문 폭의 후속 개선은 [UI 개선 실행 계획](ui-density-improvement-plan.md)을 참고한다. [P1 토큰·작업 폭](../archive/2026/dashboard/ui-density-p1-implementation.md)에 이어 사용자 확인 후 [P2 공통 컴포넌트·결과 화면](../archive/2026/dashboard/ui-density-p2-implementation.md)을 구현했다. 기본 14pt·11~18pt 설정과 기존 테마·저장 배치를 유지하며 [P3 글자 역할 시범 적용](../archive/2026/dashboard/ui-density-p3-implementation.md)은 Sol 후속 검수까지 승인됐으며, [P4 화면별 확산](../archive/2026/dashboard/ui-density-p4-implementation.md)은 의뢰/등록·비교/모델링·도움말/설정까지 구현·검수 완료했다. [P5 root/rem·전역 규칙 정리](../archive/2026/dashboard/ui-density-p5-implementation.md)도 2026-09-27 구현·검수 완료했다. P5 배포는 미실행이다. 앞으로 모바일 전용 개선·검수는 제외하고 데스크톱만 대상으로 한다.
 
 단계별 진행은 [P0 적용 계약·기준선](ui-density-p0-contract.md)에 기록한다. 각 단계 결과를 사용자에게 확인받은 후 다음 단계로 진행한다.
 

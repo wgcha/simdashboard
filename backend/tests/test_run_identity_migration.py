@@ -47,7 +47,70 @@ def test_run_identity_v2_precedes_batch_attempt_identity_head() -> None:
     assert lease and lease.down_revision == "0018_batch_attempt_run_identity"
     registration = script.get_revision("0031_result_registration")
     assert registration and registration.down_revision == "0030_folder_environment_profiles"
-    assert tuple(script.get_heads()) == ("0031_result_registration",)
+    materials_menu = script.get_revision("0032_materials_dashboard_menu")
+    assert materials_menu and materials_menu.down_revision == "0031_result_registration"
+    assert tuple(script.get_heads()) == ("0032_materials_dashboard_menu",)
+
+
+def test_materials_menu_migration_preserves_existing_visibility_rows() -> None:
+    import duckdb
+
+    path = BACKEND / "migrations" / "versions" / "0032_materials_dashboard_menu.py"
+    spec = spec_from_file_location("materials_menu_migration", path)
+    assert spec and spec.loader
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    def make_connection():
+        connection = duckdb.connect(":memory:")
+        connection.execute("""
+            CREATE TABLE menu_definitions (
+                id VARCHAR PRIMARY KEY, label VARCHAR NOT NULL, required_permission VARCHAR NOT NULL,
+                context_kind VARCHAR NOT NULL, sequence_no INTEGER NOT NULL,
+                is_policy_editable BOOLEAN NOT NULL, is_active BOOLEAN NOT NULL
+            )
+        """)
+        connection.execute("""
+            CREATE TABLE role_menu_policies (
+                role VARCHAR NOT NULL, menu_id VARCHAR NOT NULL, is_visible BOOLEAN NOT NULL,
+                policy_version INTEGER NOT NULL, updated_by VARCHAR NOT NULL, updated_at TIMESTAMP NOT NULL,
+                PRIMARY KEY (role, menu_id)
+            )
+        """)
+        return connection
+
+    conn = make_connection()
+    conn.execute("INSERT INTO menu_definitions VALUES ('materials', '관리자 지정 이름', 'project.data.view', 'project', 55, true, true)")
+    conn.execute("INSERT INTO role_menu_policies VALUES ('general', 'materials', false, 8, 'admin', CURRENT_TIMESTAMP)")
+
+    class DuckDBOperations:
+        def __init__(self, connection) -> None:
+            self.connection = connection
+
+        def execute(self, statement: object) -> None:
+            self.connection.execute(str(statement))
+
+    module.op = DuckDBOperations(conn)
+    module.upgrade()
+
+    assert conn.execute("SELECT label FROM menu_definitions WHERE id='materials'").fetchone()[0] == '관리자 지정 이름'
+    assert conn.execute("SELECT is_visible, policy_version, updated_by FROM role_menu_policies WHERE role='general' AND menu_id='materials'").fetchone() == (False, 8, 'admin')
+    assert conn.execute("SELECT count(*) FROM role_menu_policies WHERE menu_id='materials'").fetchone()[0] == 3
+    assert conn.execute("SELECT role, is_visible FROM role_menu_policies WHERE menu_id='materials' ORDER BY role").fetchall() == [
+        ("admin", True), ("general", False), ("power", True),
+    ]
+    with pytest.raises(RuntimeError, match="administrator-owned"):
+        module.downgrade()
+    assert conn.execute("SELECT count(*) FROM role_menu_policies WHERE menu_id='materials'").fetchone()[0] == 3
+
+    empty_conn = make_connection()
+    module.op = DuckDBOperations(empty_conn)
+    module.upgrade()
+    assert empty_conn.execute("SELECT label, sequence_no FROM menu_definitions WHERE id='materials'").fetchone() == ("모델 소재·물성", 55)
+    assert empty_conn.execute("SELECT role, is_visible, policy_version, updated_by FROM role_menu_policies WHERE menu_id='materials' ORDER BY role").fetchall() == [
+        ("admin", True, 1, "migration-0032"),
+        ("general", True, 1, "migration-0032"),
+        ("power", True, 1, "migration-0032"),
+    ]
 
 
 def test_run_identity_v2_adds_nullable_history_columns_and_constraints(monkeypatch: pytest.MonkeyPatch) -> None:

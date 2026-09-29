@@ -5,7 +5,7 @@
 - 사용자 진행 방식: 각 단계 결과를 제시하고 **사용자 확인 후 다음 단계로 진행**한다.
 - 관련: [전체 계획](ui-density-improvement-plan.md), [CSS 기준선](ui-density-css-baseline.md), [화면 기준선](ui-density-visual-baseline.md).
 - 이 단계는 조사·계약 확정이다. 앱 CSS/TSX, API, DB, 사용자 설정을 변경하지 않는다.
-- 상태: **P0 완료·사용자 확인 후 P1 진행**. P0의 Sol 독립 검수와 Astra 최종 검수 완료. 후속 구현 상태는 [P1 기록](ui-density-p1-implementation.md)을 따른다.
+- 상태: **P0 완료·사용자 확인 후 P1 진행**. P0의 Sol 독립 검수와 Astra 최종 검수 완료. 후속 구현 상태는 [P1 기록](../archive/2026/dashboard/ui-density-p1-implementation.md)을 따른다.
 - 적용 대상 변경(2026-09-20): 향후 모바일 전용 개선·검수는 제외한다. [실행 계획의 데스크톱 전용 정책](ui-density-improvement-plan.md)을 우선하며, 이 문서의 모바일 측정은 과거 기록이다.
 
 ## 보존 계약

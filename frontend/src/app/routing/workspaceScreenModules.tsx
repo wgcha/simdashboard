@@ -2,6 +2,7 @@ import type { WorkspacePage } from '../../features/auth/access'
 import { preloadableScreen } from './preloadableScreen'
 
 export const DataWorkspace = preloadableScreen(() => import('../../features/data/DataWorkspace').then((m) => ({ default: m.DataWorkspace })))
+export const MaterialsDashboard = preloadableScreen(() => import('../../features/materials/MaterialsDashboard').then((m) => ({ default: m.MaterialsDashboard })))
 export const FolderSchemaWorkspace = preloadableScreen(() => import('../../features/data/SemanticMappingRoute').then((m) => ({ default: m.SemanticMappingRoute })))
 export const VariableCatalogPage = preloadableScreen(() => import('../../features/data/VariableCatalogPage').then((m) => ({ default: m.VariableCatalogPage })))
 export const AutomationTemplatesPage = preloadableScreen(() => import('../../features/workbench/AutomationTemplatesPage').then((m) => ({ default: m.AutomationTemplatesPage })))
@@ -24,7 +25,7 @@ export const ProjectResultProfileBinding = preloadableScreen(() => import('../..
 const modulesByPage: Partial<Record<WorkspacePage, { preload: () => Promise<unknown> }[]>> = {
   local_pc: [LocalPcSettingsPage],
   dashboard: [WorkflowView, PendingAnalysisWorkspace, ResultsWorkspace, RequestCaseResultsWorkspace],
-  data: [DataWorkspace], workbench: [SimulationWorkbench],
+  data: [DataWorkspace], materials: [MaterialsDashboard], workbench: [SimulationWorkbench],
   schemas: [FolderSchemaWorkspace], variables: [VariableCatalogPage], templates: [AutomationTemplatesPage],
   examples: [FeatureExampleGallery], help: [HelpCenter], voc: [VocBoard],
   access_admin: [AccessAdminPage], menu_policy_admin: [MenuPolicyAdminPage], audit_admin: [AuditAdminPage],

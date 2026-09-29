@@ -17,6 +17,7 @@ EXPECTED_MENU_ORDER = [
     ("intake", 30),
     ("workbench", 40),
     ("data", 50),
+    ("materials", 55),
     ("workbench_admin", 60),
     ("project_result_profiles", 65),
     ("schemas", 70),
@@ -37,7 +38,7 @@ def test_menu_policy_update_validation_versions_and_restore():
         initial = client.get("/api/navigation/menu-policy")
         assert initial.status_code == 200
         assert initial.json()["version"] == 1
-        assert len(initial.json()["menus"]) == 16
+        assert len(initial.json()["menus"]) == 17
 
         mismatch = client.put(
             "/api/admin/menu-policy",

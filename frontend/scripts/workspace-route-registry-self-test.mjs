@@ -14,6 +14,7 @@ const expectedPaths = {
   intake: '/workspace/requests/new',
   workbench: '/workspace/execution',
   data: '/workspace/data',
+  materials: '/workspace/materials',
   workbench_admin: '/workspace/admin/work-types',
   project_result_profiles: '/workspace/project/result-layouts',
   schemas: '/workspace/catalog/schemas',
