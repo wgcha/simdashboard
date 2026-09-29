@@ -9,7 +9,7 @@ from typing import Any
 
 from ..database_connection import ConnectionLike, rows
 from ..parsers.radioss_deck_parser import RadiossDeckParser
-from . import folder_discovery_scan, result_registration_paths, spdm_storage
+from . import folder_discovery_environment, folder_discovery_scan, result_registration_paths, spdm_storage
 
 MAX_FILE_BYTES = 64 * 1024 * 1024
 MAX_TOTAL_BYTES = 256 * 1024 * 1024
@@ -20,7 +20,10 @@ MAX_INCLUDE_DEPTH = 5
 MAX_INCLUDE_FILES = 5000
 _SCENE_NAME = re.compile(r"(scene|result|contour|animation)", re.I)
 _DECK_EXTENSIONS = {".inc", ".rad"}
-_MATERIAL_CARDS = {"BEGIN", "PARAMETER", "SUBSET", "PROP", "MAT", "FUNCT", "MOVE_FUNCT", "FAIL"}
+# BEGIN, PARAMETER, and SUBSET can appear in a parts include without any
+# material definitions. They remain parseable, but do not identify a material
+# source by themselves.
+_MATERIAL_CARDS = {"PROP", "MAT", "FUNCT", "MOVE_FUNCT", "FAIL"}
 _MAX_SNIFF_BYTES = 1024 * 1024
 _MAX_CANDIDATE_SCAN_BYTES = 32 * 1024 * 1024
 _INCLUDE_DIRECTIVE = re.compile(r"^/INCLUDE(?:/(?P<slash>.*)|[ \t]+(?P<space>.*))?[ \t]*$", re.I)
@@ -111,34 +114,132 @@ def _scan_request(root: Path, scope: dict[str, Any]) -> dict[str, Any]:
     return scan
 
 
-def _scene_paths(conn: ConnectionLike, root_key: str, scope: dict[str, Any], scan: dict[str, Any]) -> list[str]:
-    request_path = str(scope["request_relative_path"])
-    candidates = {
-        str(node["relative_path"])
-        for node in scan["nodes"]
-        if _SCENE_NAME.search(str(node.get("name", "")))
-    }
+def _registered_scene_roles(conn: ConnectionLike, root_key: str,
+                            scope: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Read confirmed Scene roles from saved path and applied environment plans."""
+    request_parts = tuple(part.casefold() for part in PurePosixPath(scope["request_relative_path"]).parts)
+    scenes: dict[str, dict[str, Any]] = {}
+    started = time.monotonic()
+    inspected_plan_rows = 0
+
+    def add(relative_path: Any, *, target_id: Any = None, raw_name: Any = None) -> None:
+        if not relative_path:
+            return
+        try:
+            normalized = result_registration_paths._relative(str(relative_path))
+        except result_registration_paths.ResultRegistrationError:
+            return
+        parts = tuple(part.casefold() for part in PurePosixPath(normalized).parts)
+        if parts[:len(request_parts)] != request_parts:
+            return
+        scenes.setdefault(normalized.casefold(), {
+            "relative_path": normalized,
+            "target_id": str(target_id) if target_id else None,
+            "raw_name": str(raw_name) if raw_name else PurePosixPath(normalized).name,
+        })
+        if len(scenes) > MAX_DECK_FILES:
+            raise MaterialsCatalogError("MATERIALS_SCENE_LIMIT", "씬 후보 수가 허용 한도를 초과했습니다.", 413)
+
     prepared = rows(conn.execute(
-        "SELECT relative_path FROM result_registration_paths "
+        "SELECT relative_path,target_id,raw_name FROM result_registration_paths "
         "WHERE root_key=? AND project_id=? AND request_id=? AND environment=? AND role_kind='SCENE' "
         "ORDER BY relative_path LIMIT ?",
         [root_key, scope["project_id"], scope["request_id"], scope["environment"], MAX_DECK_FILES + 1],
     ))
     if len(prepared) > MAX_DECK_FILES:
         raise MaterialsCatalogError("MATERIALS_SCENE_LIMIT", "씬 후보 수가 허용 한도를 초과했습니다.", 413)
-    request_parts = tuple(part.casefold() for part in PurePosixPath(request_path).parts)
     for item in prepared:
-        value = str(item["relative_path"])
-        parts = PurePosixPath(value).parts
-        if tuple(part.casefold() for part in parts[:len(request_parts)]) == request_parts:
-            candidates.add(value)
+        add(item.get("relative_path"), target_id=item.get("target_id"), raw_name=item.get("raw_name"))
+
+    environment_roles = rows(conn.execute(
+        "SELECT g.relative_path,g.target_id,g.raw_name FROM folder_environment_registry g "
+        "JOIN folder_environment_registrations r ON r.id=g.registration_id "
+        "WHERE g.root_key=? AND r.project_id=? AND r.request_id=? AND r.environment=? "
+        "AND g.role_kind='SCENE' AND r.status IN ('REGISTERED','CAPTURING','COMPLETED','FAILED') "
+        "ORDER BY g.relative_path LIMIT ?",
+        [root_key, scope["project_id"], scope["request_id"], scope["environment"], MAX_DECK_FILES + 1],
+    ))
+    if len(environment_roles) > MAX_DECK_FILES:
+        raise MaterialsCatalogError("MATERIALS_SCENE_LIMIT", "씬 후보 수가 허용 한도를 초과했습니다.", 413)
+    for item in environment_roles:
+        add(item.get("relative_path"), target_id=item.get("target_id"), raw_name=item.get("raw_name"))
+
+    # SCENE rows are deliberately omitted from folder_environment_registry;
+    # the applied preview is their durable, owner-scoped role record.
+    plans = rows(conn.execute(
+        "SELECT p.rows_json FROM folder_environment_registrations r "
+        "JOIN folder_environment_previews p ON p.id=r.preview_id "
+        "JOIN folder_environment_scans s ON s.id=p.scan_id "
+        "WHERE s.root_key=? AND s.environment=r.environment AND s.status='COMPLETE' "
+        "AND r.project_id=? AND r.request_id=? AND r.environment=? "
+        "AND r.status IN ('REGISTERED','CAPTURING','COMPLETED','FAILED') AND p.can_apply=TRUE "
+        "ORDER BY r.created_at DESC LIMIT ?",
+        [root_key, scope["project_id"], scope["request_id"], scope["environment"], MAX_DECK_FILES + 1],
+    ))
+    if len(plans) > MAX_DECK_FILES:
+        raise MaterialsCatalogError("MATERIALS_SCENE_LIMIT", "씬 등록 이력 수가 허용 한도를 초과했습니다.", 413)
+    for record in plans:
+        if time.monotonic() - started > folder_discovery_scan.MAX_SECONDS:
+            raise MaterialsCatalogError("MATERIALS_SCENE_LIMIT", "등록된 씬 역할 조사 한도를 초과했습니다.", 413)
+        saved = folder_discovery_environment.preview_data(record.get("rows_json"))
+        plan_rows = saved.get("rows", [])
+        if not isinstance(plan_rows, list):
+            continue
+        inspected_plan_rows += len(plan_rows)
+        if inspected_plan_rows > folder_discovery_scan.MAX_ENTRIES:
+            raise MaterialsCatalogError("MATERIALS_SCENE_LIMIT", "등록된 씬 역할 조사 한도를 초과했습니다.", 413)
+        for item in plan_rows:
+            if item.get("role_kind") == "SCENE" and item.get("status") == "CONFIRMED":
+                add(item.get("relative_path"), target_id=item.get("target_id"), raw_name=item.get("name"))
+    return scenes
+
+
+def _scene_paths(conn: ConnectionLike, root_key: str, scope: dict[str, Any], scan: dict[str, Any],
+                 registered_scenes: dict[str, dict[str, Any]]) -> list[str]:
+    request_path = str(scope["request_relative_path"])
+    candidates = ({str(item["relative_path"]) for item in registered_scenes.values()}
+                  if registered_scenes else {
+                      str(node["relative_path"])
+                      for node in scan["nodes"]
+                      if _SCENE_NAME.search(str(node.get("name", "")))
+                  })
+    request_parts = tuple(part.casefold() for part in PurePosixPath(request_path).parts)
+    candidates = {
+        value for value in candidates
+        if tuple(part.casefold() for part in PurePosixPath(value).parts[:len(request_parts)]) == request_parts
+    }
     if len(candidates) > MAX_DECK_FILES:
         raise MaterialsCatalogError("MATERIALS_SCENE_LIMIT", "씬 후보 수가 허용 한도를 초과했습니다.", 413)
     return sorted(candidates, key=str.casefold)
 
 
 def _scene_entry(conn: ConnectionLike, root: Path, root_id: str, root_key: str,
-                 scope: dict[str, Any], relative_path: str) -> dict[str, Any] | None:
+                 scope: dict[str, Any], relative_path: str,
+                 registered_scene: dict[str, Any] | None = None,
+                 budget: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    if registered_scene is not None:
+        budget = budget if budget is not None else {"owned_directories": {}, "ownership_checks": 0}
+        key = relative_path.casefold()
+        ownership_cache = budget.setdefault("owned_directories", {})
+        if key in ownership_cache:
+            if not ownership_cache[key]:
+                return None
+        else:
+            budget["ownership_checks"] = int(budget.get("ownership_checks", 0)) + 1
+            if budget["ownership_checks"] > _MAX_OWNERSHIP_CHECKS:
+                raise MaterialsCatalogError("MATERIALS_OWNERSHIP_SCAN_LIMIT", "소유권을 확인할 폴더 수가 허용 한도를 초과했습니다.", 413)
+            try:
+                result_registration_paths._owner_conflict(
+                    conn, root_id, root_key, relative_path,
+                    scope["project_id"], scope["request_id"], scope["environment"],
+                )
+                ownership_cache[key] = True
+            except result_registration_paths.ResultRegistrationError as exc:
+                if exc.code in {"RESULT_PATH_OWNERSHIP_CONFLICT", "RESULT_PATH_ROLE_CONFLICT",
+                                "RESULT_PATH_INVALID", "RESULT_PATH_OUTSIDE_REQUEST"}:
+                    ownership_cache[key] = False
+                    return None
+                raise MaterialsCatalogError(exc.code, str(exc)) from exc
     try:
         context, nodes = result_registration_paths._trace_path(
             conn, root, root_id, root_key, scope, relative_path, require_directory=True,
@@ -148,8 +249,23 @@ def _scene_entry(conn: ConnectionLike, root: Path, root_id: str, root_key: str,
             return None
         raise
     scene = context.get("scene")
-    if not isinstance(scene, dict) or str(scene.get("relative_path", "")).casefold() != relative_path.casefold():
-        return None
+    traced_scene = (isinstance(scene, dict)
+                    and str(scene.get("relative_path", "")).casefold() == relative_path.casefold()
+                    and nodes and nodes[-1].get("role_kind") == "SCENE")
+    if not traced_scene:
+        # Applied environment plans are authoritative for Scene leaf names
+        # that the legacy path fallback cannot classify. Keep ownership and
+        # ancestor-role checks from _trace_path before accepting that role.
+        if (registered_scene is None or not nodes or nodes[-1].get("role_kind") != "CONTAINER"
+                or not context.get("simulation_case")
+                or not (context.get("execution_run") or context.get("run_option"))):
+            return None
+        scene = {
+            "id": str(registered_scene.get("target_id") or result_registration_paths._stable(
+                "environment-scene", root_key, relative_path, "SCENE")),
+            "label": str(registered_scene.get("raw_name") or PurePosixPath(relative_path).name),
+            "relative_path": relative_path,
+        }
     if PurePosixPath(relative_path).name.casefold() == "results":
         parent_path = PurePosixPath(relative_path).parent.as_posix()
         try:
@@ -171,7 +287,7 @@ def _scene_entry(conn: ConnectionLike, root: Path, root_id: str, root_key: str,
         if item is not None:
             hierarchy[key] = item
     # The path and role are revalidated through the same trace used by result registration.
-    if not nodes or nodes[-1].get("role_kind") != "SCENE":
+    if not traced_scene and (not nodes or nodes[-1].get("role_kind") != "CONTAINER"):
         return None
     return {
         "scene_id": str(scene["id"]),
@@ -185,7 +301,7 @@ def _scene_entry(conn: ConnectionLike, root: Path, root_id: str, root_key: str,
 
 def _result_entries(conn: ConnectionLike, root: Path, root_id: str, root_key: str,
                     scope: dict[str, Any], scan: dict[str, Any],
-                    scene_paths: set[str]) -> list[dict[str, Any]]:
+                    scene_paths: set[str], *, authoritative_scenes: bool = False) -> list[dict[str, Any]]:
     """Find real distribution result folders, including runs without a Scene role.
 
     A result folder is either explicitly registered as RESULTS for this request,
@@ -225,7 +341,16 @@ def _result_entries(conn: ConnectionLike, root: Path, root_id: str, root_key: st
         folded = relative.casefold()
         if folded in scene_paths:
             continue
+        relative_path = PurePosixPath(relative)
+        if (relative_path.name.casefold() == "results"
+                and relative_path.parent.as_posix().casefold() in scene_paths):
+            # The Scene candidate already searches its immediate results child.
+            continue
         is_registered = folded in registered_paths
+        if authoritative_scenes and not is_registered:
+            # Once this request has an applied Scene schema, do not infer new
+            # result locations from folder names elsewhere in its tree.
+            continue
         if not is_registered and str(node.get("name", "")).casefold() != "results":
             continue
         parts = tuple(part.casefold() for part in PurePosixPath(relative).parts)
@@ -474,15 +599,20 @@ def _catalog_items(conn: ConnectionLike, root: Path, root_id: str, root_key: str
     }
     items = []
     scene_paths: set[str] = set()
-    for path in _scene_paths(conn, root_key, scope, scan):
-        entry = _scene_entry(conn, root, root_id, root_key, scope, path)
+    registered_scenes = _registered_scene_roles(conn, root_key, scope)
+    for path in _scene_paths(conn, root_key, scope, scan, registered_scenes):
+        entry = _scene_entry(conn, root, root_id, root_key, scope, path,
+                             registered_scenes.get(path.casefold()), budget)
         if entry is None:
             continue
         scene_paths.add(path.casefold())
         _, candidates, _ = _candidate_sources(entry, root, scope, budget, conn=conn, root_id=root_id, root_key=root_key)
         entry["has_deck"] = bool(candidates)
         items.append(entry)
-    result_items = _result_entries(conn, root, root_id, root_key, scope, scan, scene_paths)
+    result_items = _result_entries(
+        conn, root, root_id, root_key, scope, scan, scene_paths,
+        authoritative_scenes=bool(registered_scenes),
+    )
     visible_result_items = []
     for entry in result_items:
         _, candidates, _ = _candidate_sources(entry, root, scope, budget, conn=conn, root_id=root_id, root_key=root_key)

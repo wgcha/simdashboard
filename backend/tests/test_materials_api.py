@@ -1,8 +1,11 @@
 """Isolated read-only materials API contracts over synthetic SPDM folders."""
 from __future__ import annotations
 
+import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
+from pathlib import PurePosixPath
 from uuid import uuid4
 
 import pytest
@@ -175,6 +178,167 @@ def test_materials_scene_decks_can_be_in_their_results_subfolder(materials_clien
     response = client.get(BASE + "/deck", params={"request_id": request_id, "scene_id": empty_scene["scene_id"]})
     assert response.status_code == 200, response.text
     assert [part["id"] for part in response.json()["deck"]["parts"]] == ["7"]
+
+
+def test_materials_uses_registered_scene_roles_and_does_not_mistake_parts_preamble_for_materials(
+    materials_client, monkeypatch,
+):
+    client, root, project_id, request_id, request_folder, _, _, _ = materials_client
+    scene_relative = (
+        f"{request_folder}/Working/Package_Model_Synthetic/Drop/85qn80h_ref_organized/"
+        "INDIVIDUAL/DAMP-2_Face_Drop_Scene02_Face2_1st"
+    )
+    scene_path = root.joinpath(*scene_relative.split("/"))
+    scene_path.mkdir(parents=True)
+    parts = (
+        "/BEGIN\nSynthetic units\n"
+        "/PARAMETER/REAL/1\nSynthetic parameter\n"
+        "/SUBSET/7\nSynthetic subset\n"
+        + _parts_deck()
+    )
+    (scene_path / "101_parts.inc").write_text(parts, encoding="utf-8")
+    (scene_path / "103_material_propertdb.inc").write_text(_materials_deck(), encoding="utf-8")
+
+    parts_only_relative = f"{PurePosixPath(scene_relative).parent.as_posix()}/DAMP-2_Face_Parts_Only"
+    parts_only = root.joinpath(*parts_only_relative.split("/"))
+    parts_only.mkdir()
+    (parts_only / "101_parts.inc").write_text(parts, encoding="utf-8")
+    results_scene_relative = f"{PurePosixPath(scene_relative).parent.as_posix()}/DAMP-2_Face_Registered_Result_Path"
+    scene_results_relative = f"{results_scene_relative}/results"
+    scene_results = root.joinpath(*scene_results_relative.split("/"))
+    scene_results.mkdir(parents=True)
+    (scene_results / "101_parts.inc").write_text(_parts_deck(), encoding="utf-8")
+    (scene_results / "103_material_propertdb.inc").write_text(_materials_deck(), encoding="utf-8")
+    wrong_scene_relative = f"{PurePosixPath(scene_relative).parent.as_posix()}/DAMP-2_Face_Unregistered_Scene"
+    wrong_scene = root.joinpath(*wrong_scene_relative.split("/"))
+    wrong_scene.mkdir()
+    (wrong_scene / "101_parts.inc").write_text(_parts_deck(), encoding="utf-8")
+    (wrong_scene / "103_material_propertdb.inc").write_text(_materials_deck(), encoding="utf-8")
+    wrong_scene_results_relative = f"{wrong_scene_relative}/results"
+    wrong_scene_results = root.joinpath(*wrong_scene_results_relative.split("/"))
+    wrong_scene_results.mkdir()
+    (wrong_scene_results / "101_parts.inc").write_text(_parts_deck(), encoding="utf-8")
+    (wrong_scene_results / "103_material_propertdb.inc").write_text(_materials_deck(), encoding="utf-8")
+
+    from app.services import folder_discovery_environment
+
+    root_key = folder_discovery_environment.root_identity(root)
+    registration_id, preview_id, scan_id = (f"materials-env-{uuid4().hex}" for _ in range(3))
+    package_path = f"{request_folder}/Working/Package_Model_Synthetic"
+    load_case_path = f"{package_path}/Drop"
+    execution_path = f"{load_case_path}/85qn80h_ref_organized"
+    option_path = f"{execution_path}/INDIVIDUAL"
+    role_rows = [
+        {"relative_path": package_path, "role_kind": "SIMULATION_CASE", "name": "Package_Model_Synthetic",
+         "status": "CONFIRMED", "target_id": f"case-{uuid4().hex}"},
+        {"relative_path": load_case_path, "role_kind": "LOAD_CASE", "name": "Drop",
+         "status": "CONFIRMED", "target_id": f"load-{uuid4().hex}"},
+        {"relative_path": execution_path, "role_kind": "EXECUTION_RUN", "name": "85qn80h_ref_organized",
+         "status": "CONFIRMED", "target_id": f"run-{uuid4().hex}"},
+        {"relative_path": option_path, "role_kind": "RUN_OPTION", "name": "INDIVIDUAL",
+         "status": "CONFIRMED", "option_status": "PRESENT", "target_id": f"option-{uuid4().hex}"},
+        {"relative_path": scene_relative, "role_kind": "SCENE",
+         "name": "DAMP-2_Face_Drop_Scene02_Face2_1st", "status": "CONFIRMED"},
+        {"relative_path": parts_only_relative, "role_kind": "SCENE",
+         "name": "DAMP-2_Face_Parts_Only", "status": "CONFIRMED"},
+        {"relative_path": results_scene_relative, "role_kind": "SCENE",
+         "name": "DAMP-2_Face_Registered_Result_Path", "status": "CONFIRMED"},
+    ]
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    with connect() as conn:
+        profile = conn.execute(
+            "SELECT id,revision FROM folder_environment_profiles WHERE environment='DISTRIBUTION' "
+            "ORDER BY created_at LIMIT 1",
+        ).fetchone()
+        assert profile is not None
+        conn.execute(
+            "INSERT INTO folder_environment_scans "
+            "(id,root_key,relative_path,environment,profile_id,profile_revision,project_id,request_id,status,"
+            "tree_json,issues_json,created_by,created_at) VALUES(?,?,?,'DISTRIBUTION',?,?,?,?, 'COMPLETE',?,?,?,?)",
+            [scan_id, root_key, request_folder, profile[0], profile[1], project_id, request_id,
+             json.dumps(role_rows, ensure_ascii=False), "[]", "synthetic-test", now],
+        )
+        conn.execute(
+            "INSERT INTO folder_environment_previews(id,scan_id,rows_json,can_apply,created_by,created_at) "
+            "VALUES(?,?,?,true,?,?)",
+            [preview_id, scan_id, json.dumps(role_rows, ensure_ascii=False), "synthetic-test", now],
+        )
+        conn.execute(
+            "INSERT INTO folder_environment_registrations "
+            "(id,preview_id,idempotency_key,environment,project_id,request_id,status,created_by,created_at) "
+            "VALUES(?,?,?,'DISTRIBUTION',?,?,'COMPLETED',?,?)",
+            [registration_id, preview_id, f"materials-env-key-{uuid4().hex}", project_id, request_id,
+             "synthetic-test", now],
+        )
+        for item in role_rows:
+            if item["role_kind"] in {"SCENE"}:
+                continue  # Applied plans retain SCENE in preview rows by design.
+            conn.execute(
+                "INSERT INTO folder_environment_registry "
+                "(id,registration_id,root_key,relative_path,role_kind,parent_context_id,target_id,raw_name,"
+                "option_status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                [f"materials-env-role-{uuid4().hex}", registration_id, root_key, item["relative_path"],
+                 item["role_kind"], None, item["target_id"], item["name"], item.get("option_status"), now],
+            )
+
+    try:
+        # Prove these catalog candidates come from the applied role plan, even
+        # when the label no longer matches the legacy Scene-name heuristic.
+        scene_name_pattern = materials_catalog._SCENE_NAME
+        monkeypatch.setattr(materials_catalog, "_SCENE_NAME", re.compile(r"(?!)"))
+        catalog = client.get(BASE + "/catalog", params={"request_id": request_id})
+        assert catalog.status_code == 200, catalog.text
+        scenes = {item["relative_path"]: item for item in catalog.json()["scenes"]}
+        scene = scenes[scene_relative]
+        assert scene["label"] == "DAMP-2_Face_Drop_Scene02_Face2_1st"
+        assert scene["hierarchy"]["load_case"]["label"] == "Drop"
+        assert scene["has_deck"] is True
+        results_scene = scenes[results_scene_relative]
+        assert results_scene["has_deck"] is True
+        assert scene_results_relative not in scenes
+
+        response = client.get(BASE + "/deck", params={"request_id": request_id, "scene_id": scene["scene_id"]})
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert [part["id"] for part in body["deck"]["parts"]] == ["1"]
+        assert body["deck"]["parts"][0]["references"]["material_status"] == "resolved"
+        assert body["deck"]["parts"][0]["material"]["id"] == "2"
+        assert {item["relative_path"] for item in body["files"]} == {
+            f"{scene_relative}/101_parts.inc",
+            f"{scene_relative}/103_material_propertdb.inc",
+        }
+
+        parts_only_entry = scenes[parts_only_relative]
+        assert parts_only_entry["has_deck"] is False
+        missing_material = client.get(BASE + "/deck", params={"request_id": request_id,
+                                                                "scene_id": parts_only_entry["scene_id"]})
+        assert missing_material.status_code == 404
+        assert missing_material.json()["detail"]["code"] == "MATERIALS_DECK_NOT_FOUND"
+
+        results_response = client.get(BASE + "/deck", params={"request_id": request_id,
+                                                                "scene_id": results_scene["scene_id"]})
+        assert results_response.status_code == 200, results_response.text
+        assert {item["relative_path"] for item in results_response.json()["files"]} == {
+            f"{scene_results_relative}/101_parts.inc",
+            f"{scene_results_relative}/103_material_propertdb.inc",
+        }
+
+        # With a schema applied, a misleading Scene-shaped sibling with decks
+        # remains out of the catalog even when the legacy name heuristic matches.
+        monkeypatch.setattr(materials_catalog, "_SCENE_NAME", scene_name_pattern)
+        authoritative_catalog = client.get(BASE + "/catalog", params={"request_id": request_id})
+        assert authoritative_catalog.status_code == 200, authoritative_catalog.text
+        authoritative_scenes = [item["relative_path"] for item in authoritative_catalog.json()["scenes"]]
+        assert wrong_scene_relative not in authoritative_scenes
+        assert wrong_scene_results_relative not in authoritative_scenes
+        assert scene_results_relative not in authoritative_scenes
+        assert authoritative_scenes.count(results_scene_relative) == 1
+    finally:
+        with connect() as conn:
+            conn.execute("DELETE FROM folder_environment_registry WHERE registration_id=?", [registration_id])
+            conn.execute("DELETE FROM folder_environment_registrations WHERE id=?", [registration_id])
+            conn.execute("DELETE FROM folder_environment_previews WHERE id=?", [preview_id])
+            conn.execute("DELETE FROM folder_environment_scans WHERE id=?", [scan_id])
 
 
 def test_materials_does_not_duplicate_run_results_that_fallback_to_scene(materials_client):

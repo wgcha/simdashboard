@@ -30,6 +30,7 @@ export type WorkspaceContextQuery = {
   pageId?: string
   projectId?: string
   requestId?: string
+  resultTab?: string
   runId?: string
   view?: string
 }
@@ -43,7 +44,7 @@ function workspaceSearch(context: WorkspaceContextQuery, currentSearch: string):
   const query = new URLSearchParams(currentSearch)
   const values: Array<[string, string | undefined]> = [
     ['project', context.projectId], ['request', context.requestId], ['loadCase', context.loadCaseId],
-    ['run', context.runId], ['view', context.view], ['page', context.pageId],
+    ['run', context.runId], ['view', context.view], ['page', context.pageId], ['resultTab', context.resultTab],
   ]
   for (const [key, value] of values) {
     if (value) query.set(key, value)
@@ -83,6 +84,7 @@ export function useWorkspaceNavigation({
       runId: query.get('run') || undefined,
       view: query.get('view') || undefined,
       pageId: query.get('page') || undefined,
+      resultTab: query.get('resultTab') || undefined,
     }
   }, [location.search])
   const navigationBlocker = useBlocker(editMode)
@@ -112,11 +114,25 @@ export function useWorkspaceNavigation({
       return
     }
     if (!matchedWorkspaceRoute) return
+    if (matchedWorkspaceRoute.page === 'materials' && allowedPages.has('dashboard')) {
+      const dashboardRoute = WORKSPACE_ROUTES_BY_ID.get('dashboard')
+      if (dashboardRoute) {
+        const query = new URLSearchParams(location.search)
+        query.set('view', 'case_results')
+        query.set('resultTab', 'materials')
+        query.delete('loadCase')
+        query.delete('run')
+        query.delete('page')
+        const search = query.toString()
+        navigate({ pathname: dashboardRoute.path, search: search ? `?${search}` : '' }, { replace: true })
+        return
+      }
+    }
     if (allowedPages.has(matchedWorkspaceRoute.page)) return
     if (!fallbackPath && matchedWorkspaceRoute.page !== 'local_pc') return
     onNotice('현재 권한으로 열 수 없는 화면입니다. 허용된 첫 화면으로 이동했습니다.')
     navigate(fallbackPath ?? workspacePathForPage('portfolio')!, { replace: true })
-  }, [allowedPages, authUser?.account_status, authUser?.id, isWorkspaceIndex, matchedWorkspaceRoute, menuPolicyReady, navigate, onNotice, personalOnly, visibleMenus, workspacePage])
+  }, [allowedPages, authUser?.account_status, authUser?.id, isWorkspaceIndex, location.search, matchedWorkspaceRoute, menuPolicyReady, navigate, onNotice, personalOnly, visibleMenus, workspacePage])
 
   useEffect(() => {
     if (!editMode) return
@@ -172,7 +188,7 @@ export function useWorkspaceNavigation({
     const query = new URLSearchParams(location.search)
     const values: Array<[string, string | undefined]> = [
       ['project', next.projectId], ['request', next.requestId], ['loadCase', next.loadCaseId],
-      ['run', next.runId], ['view', next.view], ['page', next.pageId],
+      ['run', next.runId], ['view', next.view], ['page', next.pageId], ['resultTab', next.resultTab],
     ]
     for (const [key, value] of values) {
       if (value) query.set(key, value)
@@ -184,5 +200,15 @@ export function useWorkspaceNavigation({
     navigate({ pathname: location.pathname, search: targetSearch }, { replace: options.replace ?? true })
   }, [location.pathname, location.search, navigate])
 
-  return { isWorkspaceIndex, matchedWorkspaceRoute, navigateWorkspace, updateWorkspaceContext, workspaceContext, workspaceNavigationPending, workspacePage }
+  const setWorkspaceResultTab = useCallback((tab: 'materials' | null, options: { replace?: boolean } = {}) => {
+    const query = new URLSearchParams(location.search)
+    if (tab) query.set('resultTab', tab)
+    else query.delete('resultTab')
+    const search = query.toString()
+    const targetSearch = search ? `?${search}` : ''
+    if (targetSearch === location.search) return
+    navigate({ pathname: location.pathname, search: targetSearch }, { replace: options.replace ?? false })
+  }, [location.pathname, location.search, navigate])
+
+  return { isWorkspaceIndex, matchedWorkspaceRoute, navigateWorkspace, setWorkspaceResultTab, updateWorkspaceContext, workspaceContext, workspaceNavigationPending, workspacePage }
 }

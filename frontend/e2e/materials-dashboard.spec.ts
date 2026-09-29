@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { loginWorkspace, openWorkspaceRoute } from './workspace-test-helpers'
+import { loginWorkspace } from './workspace-test-helpers'
 
 const requestId = 'request-showcase-waiting'
 const projectId = 'project-feature-showcase'
@@ -69,11 +69,56 @@ async function openMaterials(page: Page) {
   await page.getByLabel('프로젝트 선택', { exact: true }).selectOption(projectId)
   await page.getByLabel('의뢰 선택', { exact: true }).selectOption(requestId)
   await expect.poll(() => new URL(page.url()).searchParams.get('request')).toBe(requestId)
-  await openWorkspaceRoute(page, '/workspace/materials')
+  await page.getByRole('navigation', { name: '의뢰 작업 여정' }).getByRole('button', { name: '모델 소재·물성', exact: true }).click()
+  await expect(page).toHaveURL(/\/workspace\/requests\?.*view=case_results.*resultTab=materials/)
   await expect(page.getByRole('heading', { name: '모델 소재·물성', exact: true })).toBeVisible()
-  await expect(page.getByLabel('소재 덱 의뢰 선택')).toHaveValue(requestId)
-  await expect(page.locator('.request-workspace-header')).toHaveCount(0)
+  await expect(page.getByLabel('프로젝트 선택', { exact: true })).toHaveValue(projectId)
+  await expect(page.getByLabel('의뢰 선택', { exact: true })).toHaveValue(requestId)
+  await expect(page.getByRole('complementary', { name: '주 메뉴' }).getByRole('link', { name: '모델 소재·물성', exact: true })).toHaveCount(0)
 }
+
+test('소재 탭은 내 작업 문맥과 뒤로 가기를 유지하고 기존 주소를 새 탭으로 보낸다', async ({ page }) => {
+  await mockMaterialsApi(page)
+  await openMaterials(page)
+
+  const journey = page.getByRole('navigation', { name: '의뢰 작업 여정' })
+  await journey.getByRole('button', { name: 'Case 결과', exact: true }).click()
+  await expect(page.getByRole('region', { name: 'SPDM 해석 결과 대시보드' })).toBeVisible()
+  await expect.poll(() => new URL(page.url()).searchParams.get('resultTab')).toBeNull()
+  await page.goBack()
+  await expect(page.getByRole('heading', { name: '모델 소재·물성', exact: true })).toBeVisible()
+  await expect.poll(() => new URL(page.url()).searchParams.get('resultTab')).toBe('materials')
+  await page.goForward()
+  await expect(page.getByRole('region', { name: 'SPDM 해석 결과 대시보드' })).toBeVisible()
+
+  await page.goto(`/workspace/materials?project=${projectId}&request=${requestId}`)
+  await expect(page.getByRole('heading', { name: '모델 소재·물성', exact: true })).toBeVisible()
+  await expect(page).toHaveURL(/\/workspace\/requests\?.*view=case_results.*resultTab=materials/)
+})
+
+test('내 작업에서 프로젝트와 의뢰를 바꾸면 소재 조회도 선택 문맥을 따라간다', async ({ page }) => {
+  await mockMaterialsApi(page)
+  await openMaterials(page)
+
+  const requestCatalog = page.waitForRequest((request) => request.url().includes('/api/materials/catalog') && request.url().includes('request_id=request-showcase-compare'))
+  await page.getByLabel('의뢰 선택', { exact: true }).selectOption('request-showcase-compare')
+  await requestCatalog
+  await expect(page.getByLabel('의뢰 선택', { exact: true })).toHaveValue('request-showcase-compare')
+  await expect.poll(() => new URL(page.url()).searchParams.get('request')).toBe('request-showcase-compare')
+  await expect.poll(() => new URL(page.url()).searchParams.get('resultTab')).toBe('materials')
+
+  const projectCatalog = page.waitForRequest((request) => request.url().includes('/api/materials/catalog') && request.url().includes('request_id='))
+  await page.getByLabel('프로젝트 선택', { exact: true }).selectOption('project-tv-001')
+  const catalogRequest = await projectCatalog
+  const catalogRequestId = new URL(catalogRequest.url()).searchParams.get('request_id')
+  expect(catalogRequestId).toBeTruthy()
+  await expect(page.getByLabel('프로젝트 선택', { exact: true })).toHaveValue('project-tv-001')
+  await expect(page.getByLabel('의뢰 선택', { exact: true })).toHaveValue(catalogRequestId!)
+  await expect.poll(() => new URL(page.url()).searchParams.get('project')).toBe('project-tv-001')
+  await expect.poll(() => new URL(page.url()).searchParams.get('request')).toBe(catalogRequestId)
+  await expect.poll(() => new URL(page.url()).searchParams.get('resultTab')).toBe('materials')
+  await expect(page.getByRole('heading', { name: '모델 소재·물성', exact: true })).toBeVisible()
+})
 
 test('소재 표는 긴 이름과 누락 참조를 보여 주고 같은 Material에서도 Part 문맥을 바꾼다', async ({ page }) => {
   await mockMaterialsApi(page)

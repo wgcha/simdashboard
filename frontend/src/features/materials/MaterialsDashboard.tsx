@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Download, Search, RotateCw, Box, Layers, AlertTriangle, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useSearchParams } from 'react-router-dom'
-import type { AnalysisRequest } from '../../types'
 import {
   materialsApi,
   type MaterialsCatalog,
@@ -19,8 +18,6 @@ import './MaterialsDashboard.css'
 
 type Props = {
   requestId: string
-  requests: AnalysisRequest[]
-  onRequestChange: (requestId: string) => void
   refreshToken?: number
 }
 
@@ -197,7 +194,7 @@ function FailureCard({ failure }: { failure: MaterialsFailure }) {
   </details>
 }
 
-export function MaterialsDashboard({ requestId, requests, onRequestChange, refreshToken = 0 }: Props) {
+export function MaterialsDashboard({ requestId, refreshToken = 0 }: Props) {
   const [searchParams, setSearchParams] = useSearchParams()
   const [catalog, setCatalog] = useState<MaterialsCatalog | null>(null)
   const [deck, setDeck] = useState<MaterialsDeck | null>(null)
@@ -325,8 +322,6 @@ export function MaterialsDashboard({ requestId, requests, onRequestChange, refre
   const pageCount = Math.max(1, Math.ceil(visibleParts.length / pageSize))
   const currentPage = Math.min(page, pageCount - 1)
   const shownParts = visibleParts.slice(currentPage * pageSize, (currentPage + 1) * pageSize)
-  const requestName = requests.find((item) => item.id === requestId)?.title
-
   const sortBy = (key: SortKey) => setSort((current) => current.key === key ? { key, direction: current.direction === 'asc' ? 'desc' : 'asc' } : { key, direction: 'asc' })
   const sortButton = (key: SortKey, label: string) => <button type="button" className="materials-sort-button" onClick={() => sortBy(key)} aria-label={`${label}로 정렬${sort.key === key ? `, ${sort.direction === 'asc' ? '오름차순' : '내림차순'}` : ''}`}>{label}<span>{sort.key === key ? (sort.direction === 'asc' ? '↑' : '↓') : '↕'}</span></button>
 
@@ -334,11 +329,6 @@ export function MaterialsDashboard({ requestId, requests, onRequestChange, refre
     <header className="materials-page-head">
       <div><span>RADioss STARTER DECK</span><h1>모델 소재·물성</h1><p>Part 참조를 따라 Material, Property, Failure 모델과 함수 곡선을 살펴봅니다.</p></div>
       <div className="materials-page-controls">
-        <label><span>의뢰</span><select aria-label="소재 덱 의뢰 선택" value={requestId} onChange={(event) => onRequestChange(event.target.value)}>
-          {!requestId && <option value="">의뢰를 선택하세요</option>}
-          {requestId && !requests.some((item) => item.id === requestId) && <option value={requestId}>{requestName ?? `선택된 의뢰 · ${requestId}`}</option>}
-          {requests.map((request) => <option key={request.id} value={request.id}>{request.title || request.id}</option>)}
-        </select></label>
         <label><span>덱 위치</span><select aria-label="소재 덱 위치 선택" value={selectedSceneId} disabled={!catalog?.scenes.length} onChange={(event) => updateQuery({ scene: event.target.value, part: null }, false)}>
           {!catalog?.scenes.length && <option value="">{loadingCatalog ? '불러오는 중…' : '위치 없음'}</option>}
           {(catalog?.scenes ?? []).map((scene) => <option key={scene.scene_id} value={scene.scene_id}>{scene.label}{scene.has_deck ? '' : ' · 덱 없음'}</option>)}

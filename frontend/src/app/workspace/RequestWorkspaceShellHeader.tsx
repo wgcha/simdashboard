@@ -9,6 +9,7 @@ type Props = {
     onOpenData: () => void
     onOpenWorkbench: () => void
     onOpenCaseResults: () => void
+    onOpenMaterials: () => void
     onProjectChange: (id: string) => void
     onRequestChange: (id: string) => void
     onReviewDomain: () => void
@@ -30,6 +31,7 @@ type Props = {
     canOpenWorkbench: boolean
     canRefreshResults?: boolean
     caseResultsMode: boolean
+    caseResultsMaterialsTab?: boolean
     resultsRefreshing?: boolean
     contextChanging: boolean
     loadCases: LoadCase[]
@@ -55,7 +57,7 @@ type Props = {
 
 /** Application-level assembly keeps request navigation controls identical on all four tabs. */
 export function RequestWorkspaceShellHeader({ actions, model, onBeginReview, isCurrentReview, loadLayout, onReviewError, onRunChange }: Props) {
-  const { activeDashboardId, activeTab, activeView, analysisRunChanging, analysisRunError, analysisRuns, analysisRunsLoading, canOpenData, canOpenWorkbench, canRefreshResults, caseResultsMode, resultsRefreshing, contextChanging, loadCases, overview, owner, projectId, projects, requestContextLoading, requestId, requests, selectedAnalysisRunId, selectedLoadCaseId, selectedWorkflow, status, title } = model
+  const { activeDashboardId, activeTab, activeView, analysisRunChanging, analysisRunError, analysisRuns, analysisRunsLoading, canOpenData, canOpenWorkbench, canRefreshResults, caseResultsMode, caseResultsMaterialsTab, resultsRefreshing, contextChanging, loadCases, overview, owner, projectId, projects, requestContextLoading, requestId, requests, selectedAnalysisRunId, selectedLoadCaseId, selectedWorkflow, status, title } = model
   const completedCount = selectedWorkflow ? `${selectedWorkflow.steps.filter((step) => step.status === 'COMPLETED').length} / ${selectedWorkflow.total_count ?? selectedWorkflow.steps.length} 작업 완료` : undefined
   // Snapshot and unconfigured review layouts also render one selected immutable Run.
   const showRunSelector = activeTab === 'review' && !caseResultsMode
@@ -83,7 +85,7 @@ export function RequestWorkspaceShellHeader({ actions, model, onBeginReview, isC
     projects={projects}
     requestId={requestId}
     requests={requests}
-    resultReviewTab={<div className="request-review-actions"><button type="button" className={caseResultsMode ? 'active' : ''} aria-current={caseResultsMode ? 'step' : undefined} disabled={!requestId || contextChanging} onClick={actions.onOpenCaseResults}>Case 결과</button><ResultLayoutDetailTab
+    resultReviewTab={<div className="request-review-actions"><button type="button" className={caseResultsMode && !caseResultsMaterialsTab ? 'active' : ''} aria-current={caseResultsMode && !caseResultsMaterialsTab ? 'step' : undefined} disabled={!requestId || contextChanging} onClick={actions.onOpenCaseResults}>Case 결과</button><button type="button" className={caseResultsMaterialsTab ? 'active' : ''} aria-current={caseResultsMaterialsTab ? 'step' : undefined} disabled={!requestId || contextChanging} onClick={actions.onOpenMaterials}>모델 소재·물성</button><ResultLayoutDetailTab
       active={activeTab === 'review' && !caseResultsMode}
       label="기존 Run 대시보드"
       requestId={requestId}
