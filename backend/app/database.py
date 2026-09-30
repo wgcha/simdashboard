@@ -73,6 +73,7 @@ def initialize_database() -> None:
                 "folder_environment_registry",
                 "folder_environment_capture_jobs",
                 "result_registration_paths",
+                "result_registration_location_links",
                 "result_registration_drafts",
                 "result_registration_files",
                 "result_registration_events",
@@ -103,6 +104,7 @@ def initialize_database() -> None:
                 "folder_environment_registry": {"registration_id", "relative_path", "role_kind", "target_id"},
                 "folder_environment_capture_jobs": {"registration_id", "case_id", "status"},
                 "result_registration_paths": {"root_key", "project_id", "request_id", "environment", "relative_path", "path_key", "role_kind", "target_id"},
+                "result_registration_location_links": {"root_key", "project_id", "request_id", "environment", "relative_path", "path_key", "schema_parent_path", "schema_role_kind", "schema_scan_id", "schema_profile_id", "schema_profile_revision", "revision"},
                 "result_registration_drafts": {"project_id", "request_id", "environment", "case_relative_path", "result_relative_path", "manifest_json", "inspection_json", "approval_json", "capture_id", "status"},
                 "result_registration_files": {"draft_id", "relative_path", "sha256", "size_bytes", "content"},
                 "result_registration_events": {"draft_id", "action", "detail_json", "actor", "occurred_at"},
@@ -1496,6 +1498,17 @@ def ensure_result_registration_schema(conn: duckdb.DuckDBPyConnection) -> None:
         option_status VARCHAR, created_by VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL,
         UNIQUE(root_key,path_key)
     );
+    CREATE TABLE IF NOT EXISTS result_registration_location_links (
+        id VARCHAR PRIMARY KEY, root_key VARCHAR NOT NULL, project_id VARCHAR NOT NULL,
+        request_id VARCHAR NOT NULL, environment VARCHAR NOT NULL CHECK (environment IN ('USAGE','DISTRIBUTION')),
+        relative_path VARCHAR NOT NULL, path_key VARCHAR NOT NULL, schema_parent_path VARCHAR NOT NULL,
+        schema_role_kind VARCHAR NOT NULL CHECK (schema_role_kind IN ('EVALUATION','SCENE')),
+        schema_target_id VARCHAR, schema_scan_id VARCHAR NOT NULL,
+        schema_profile_id VARCHAR NOT NULL, schema_profile_revision INTEGER NOT NULL CHECK (schema_profile_revision >= 1),
+        revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1), created_by VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL,
+        updated_by VARCHAR NOT NULL, updated_at TIMESTAMP NOT NULL,
+        UNIQUE(root_key,project_id,request_id,environment,path_key)
+    );
     CREATE TABLE IF NOT EXISTS result_registration_drafts (
         id VARCHAR PRIMARY KEY, project_id VARCHAR NOT NULL, request_id VARCHAR NOT NULL,
         environment VARCHAR NOT NULL, storage_root_id VARCHAR NOT NULL,
@@ -1519,6 +1532,7 @@ def ensure_result_registration_schema(conn: duckdb.DuckDBPyConnection) -> None:
         detail_json JSON NOT NULL, actor VARCHAR NOT NULL, occurred_at TIMESTAMP NOT NULL
     );
     CREATE INDEX IF NOT EXISTS ix_result_registration_paths_target ON result_registration_paths(root_key,project_id,request_id,environment,relative_path);
+    CREATE INDEX IF NOT EXISTS ix_result_location_links_scope ON result_registration_location_links(root_key,project_id,request_id,environment,relative_path);
     CREATE INDEX IF NOT EXISTS ix_result_registration_drafts_request ON result_registration_drafts(project_id,request_id,status,created_at DESC);
     CREATE INDEX IF NOT EXISTS ix_result_registration_files_draft ON result_registration_files(draft_id,relative_path);
     CREATE INDEX IF NOT EXISTS ix_result_registration_events_draft ON result_registration_events(draft_id,occurred_at DESC)

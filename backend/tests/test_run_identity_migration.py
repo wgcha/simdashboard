@@ -49,7 +49,9 @@ def test_run_identity_v2_precedes_batch_attempt_identity_head() -> None:
     assert registration and registration.down_revision == "0030_folder_environment_profiles"
     materials_menu = script.get_revision("0032_materials_dashboard_menu")
     assert materials_menu and materials_menu.down_revision == "0031_result_registration"
-    assert tuple(script.get_heads()) == ("0032_materials_dashboard_menu",)
+    location_links = script.get_revision("0033_result_registration_location_links")
+    assert location_links and location_links.down_revision == "0032_materials_dashboard_menu"
+    assert tuple(script.get_heads()) == ("0033_result_registration_location_links",)
 
 
 def test_materials_menu_migration_preserves_existing_visibility_rows() -> None:

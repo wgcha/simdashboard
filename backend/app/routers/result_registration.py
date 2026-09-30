@@ -17,6 +17,7 @@ from starlette.concurrency import run_in_threadpool
 from ..database_connection import connect
 from ..modules.access_control import RESULT_IMPORT, has_permission, require_any_project_permission, require_resource_permission
 from ..services import result_registration as service
+from ..services import result_registration_locations as location_service
 from ..services.result_registration_paths import ResultRegistrationError
 
 
@@ -56,6 +57,17 @@ class PrepareFoldersInput(BaseModel):
     parent_relative_path: str | None = Field(default=None, max_length=2048)
     segments: list[FolderSegment] = Field(min_length=1, max_length=8)
     confirm_create: bool = False
+
+
+class ResultLocationInput(BaseModel):
+    project_id: str = Field(min_length=1, max_length=128)
+    request_id: str = Field(min_length=1, max_length=128)
+    environment: Literal["USAGE", "DISTRIBUTION"]
+    relative_path: str = Field(min_length=1, max_length=2048)
+
+
+class UpdateResultLocationInput(ResultLocationInput):
+    revision: int = Field(ge=1)
 
 
 class DraftManifestFile(BaseModel):
@@ -106,14 +118,17 @@ def _parse_multipart_message(body: SpooledTemporaryFile[bytes]):
 
 def _http_error(exc: ResultRegistrationError) -> HTTPException:
     code = exc.code
-    if code == "RESULT_DRAFT_NOT_FOUND":
+    if code in {"RESULT_DRAFT_NOT_FOUND", "RESULT_LOCATION_LINK_NOT_FOUND"}:
         status = 404
-    elif code in {
+    elif code.startswith("FOLDER_SCHEMA_") or code.startswith("RESULT_LOCATION_SCHEMA_") or code in {
         "RESULT_DRAFT_IMMUTABLE", "RESULT_INSPECTION_STALE", "RESULT_APPROVAL_STALE", "RESULT_APPROVAL_REQUIRED",
         "RESULT_INSPECTION_REQUIRED", "RESULT_INSPECTION_BLOCKING", "RESULT_PARTIAL_ACK_REQUIRED",
         "RESULT_APPROVAL_EMPTY", "RESULT_IDEMPOTENCY_CONFLICT", "RESULT_CONTEXT_CHANGED", "RESULT_ROOT_CHANGED",
         "RESULT_MIRROR_NOT_READY", "RESULT_SOURCE_STALE", "RESULT_SOURCE_MISSING", "RESULT_DRAFT_STALE",
-        "RESULT_EXCLUSIONS_STALE",
+        "RESULT_EXCLUSIONS_STALE", "RESULT_FOLDER_SCHEMA_REQUIRED", "RESULT_FOLDER_SCHEMA_STALE",
+        "RESULT_FOLDER_SCHEMA_AMBIGUOUS", "RESULT_FOLDER_SCHEMA_REFRESH_REQUIRED",
+        "RESULT_LOCATION_SCHEMA_INVALID", "RESULT_LOCATION_LINK_EXISTS", "RESULT_LOCATION_LINK_STALE",
+        "RESULT_PATH_OWNERSHIP_CONFLICT", "SPDM_FOLDER_MISSING", "SPDM_FOLDER_UNAVAILABLE",
     }:
         status = 409
     elif code in {"RESULT_FILE_SIZE_LIMIT", "RESULT_TOTAL_SIZE_LIMIT", "RESULT_FILE_COUNT_LIMIT"}:
@@ -224,6 +239,54 @@ def list_folders(request: Request, project_id: str, request_id: str,
         require_resource_permission(request, RESULT_IMPORT, "request", request_id, conn=conn)
         try:
             return service.folders(conn, project_id, request_id, environment, parent_relative_path)
+        except ResultRegistrationError as exc:
+            raise _http_error(exc) from exc
+
+
+@router.get("/locations")
+def list_result_locations(request: Request, project_id: str, request_id: str,
+                          environment: Literal["USAGE", "DISTRIBUTION"]):
+    with connect() as conn:
+        require_resource_permission(request, RESULT_IMPORT, "request", request_id, conn=conn)
+        try:
+            return location_service.list_links(conn, project_id, request_id, environment)
+        except ResultRegistrationError as exc:
+            raise _http_error(exc) from exc
+
+
+@router.post("/locations", status_code=201)
+def create_result_location(payload: ResultLocationInput, request: Request):
+    with connect() as conn:
+        require_resource_permission(request, RESULT_IMPORT, "request", payload.request_id, conn=conn)
+        try:
+            return location_service.create_link(
+                conn, payload.project_id, payload.request_id, payload.environment,
+                payload.relative_path, request.state.principal.user_id,
+            )
+        except ResultRegistrationError as exc:
+            raise _http_error(exc) from exc
+
+
+@router.patch("/locations/{link_id}")
+def update_result_location(link_id: str, payload: UpdateResultLocationInput, request: Request):
+    with connect() as conn:
+        require_resource_permission(request, RESULT_IMPORT, "request", payload.request_id, conn=conn)
+        try:
+            return location_service.update_link(
+                conn, link_id, payload.project_id, payload.request_id, payload.environment,
+                payload.relative_path, payload.revision, request.state.principal.user_id,
+            )
+        except ResultRegistrationError as exc:
+            raise _http_error(exc) from exc
+
+
+@router.delete("/locations/{link_id}")
+def delete_result_location(link_id: str, request: Request, project_id: str, request_id: str,
+                           environment: Literal["USAGE", "DISTRIBUTION"], revision: int = Query(ge=1)):
+    with connect() as conn:
+        require_resource_permission(request, RESULT_IMPORT, "request", request_id, conn=conn)
+        try:
+            return location_service.delete_link(conn, link_id, project_id, request_id, environment, revision)
         except ResultRegistrationError as exc:
             raise _http_error(exc) from exc
 

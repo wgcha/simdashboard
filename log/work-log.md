@@ -920,3 +920,11 @@
 - 실행 환경 정책과 관련 과거 구현 문서에 작업 실행 화면 비노출 범위를 반영했다. 기존 도우미 구동 E2E를 합성 환경의 패널 비노출·작업 선택·loopback/API 요청 0 검사로 대체했다. 영향이 명확한 두 줄의 화면 마운트 제거로 주 에이전트가 직접 구현·검증했으며 별도 에이전트 검수는 수행하지 않았다.
 - 검증: 프런트 구조 검사(232 files / 5 reviewed imports), TypeScript+Vite build 통과. 기본 권한 빌드는 Vite 임시 파일 EPERM으로 실패했고 권한 확장 후 통과했다. 기존 chunk 크기 경고 유지. 초기 E2E는 이미 진행 중인 fixture를 READY로 가정해 실패하여 상태 독립적인 작업 선택 검사로 수정했다. 최종 local-programs.spec.ts 데스크톱 1개 통과(7초).
 - E2E 전체 명령은 테스트 이후 Windows taskkill 정리 오류로 exit 1. 해당 PID 6732/13104 부재와 테스트 포트 15173/18000 리스너 없음 확인. 실제 사용자 DB·설정·서비스·도우미를 사용하지 않았다. 전체 회귀·모바일·폐쇄망 배포·commit/push 미실행. DB·인증/권한·실행 API 경계를 변경하지 않아 보안 스캔은 실행하지 않았다.
+### 2026-09-30 결과 등록 저장 위치 Folder Schema 연결
+
+- 결과 등록 02의 Case·결과 위치 후보를 현재 Folder Schema scan/profile과 적용된 역할에 연결했다. 저장 연결 정보는 별도 테이블에 보관하며 편집·삭제는 그 링크 행만 바꾼다. 실제 SPDM 폴더·파일과 기존 초안·검수·캡처 이력은 유지한다.
+- 링크 API에 결과 등록 권한, 의뢰/프로젝트 소유권, 현재 scan/profile/path 검증, 수정 revision 및 충돌 검사를 적용했다. 새 초안은 현재 schema 문맥을 확인하고 과거 초안 검수·게시 경로는 기존 기록을 읽을 수 있도록 보존했다.
+- additive 0033 migration, DuckDB mirror, PostgreSQL schema/export와 결과 등록 화면·API·문서를 갱신했다. Windows Server 2022 실제 폐쇄망 설치/업데이트는 수행하지 않았다.
+- 검증: 등록 API/path, run identity migration, Postgres startup 테스트 109개 통과·1개 skip. 프런트 TypeScript와 Vite build 통과. 빌드의 기존 500 kB 초과 chunk 경고는 남아 있다. 테스트는 격리된 임시 DB와 합성 SPDM 경로를 사용했다.
+- 독립 검수 후속 보완: 늦게 등록된 다른 업무의 결과 경로 소유권이 targets/folders/저장 링크 후보를 통과하지 않도록 다시 검사하고, 생성·수정 시 경로 lock 뒤에도 충돌을 확인한다. 전환된 target 응답은 UI의 새 선택 문맥에 덮어쓰지 않도록 비동기 후 재확인한다. 합성 소유권 충돌 포함 범위 테스트 4개와 TypeScript/Vite build 통과.
+- 소재 표의 Part 이름·번호 표시 순서를 바꾸고 우측 상세 영역의 외곽선·그림자를 제거했다. 최종 통합 테스트 144개 통과·1개 skip, Windows 배포 DB 보존 테스트 179개 통과·2개 skip, 배포 자체점검 9개 통과, 프런트 빌드 통과. 독립 검수에서 Scene 간 덱 혼합 등 3건을 수정·재확인했다. Codex Security 변경분 검사 `3fc611a7-86ae-4ec9-bdfe-2174d643ab7f`는 원본 snapshot의 변경 소스 17개에서 확인된 취약점 0개로 완료했으며, 스캔 중 추가한 UI 표시 변경은 수동 확인했다. 실제 사내 SPDM·DB와 Windows Server 2022 폐쇄망 실설치는 미검증이다.

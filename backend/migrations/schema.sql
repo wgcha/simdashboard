@@ -923,6 +923,29 @@ CREATE TABLE IF NOT EXISTS result_registration_paths (
     created_by VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL,
     UNIQUE(root_key,path_key)
 );
+CREATE TABLE IF NOT EXISTS result_registration_location_links (
+    id VARCHAR PRIMARY KEY,
+    root_key VARCHAR(64) NOT NULL,
+    project_id VARCHAR NOT NULL,
+    request_id VARCHAR NOT NULL,
+    environment VARCHAR NOT NULL CHECK (environment IN ('USAGE','DISTRIBUTION')),
+    relative_path VARCHAR(2048) NOT NULL,
+    path_key VARCHAR(2048) NOT NULL,
+    schema_parent_path VARCHAR(2048) NOT NULL,
+    schema_role_kind VARCHAR(32) NOT NULL CHECK (schema_role_kind IN ('EVALUATION','SCENE')),
+    schema_target_id VARCHAR(256),
+    schema_scan_id VARCHAR(128) NOT NULL,
+    schema_profile_id VARCHAR(128) NOT NULL,
+    schema_profile_revision INTEGER NOT NULL CHECK (schema_profile_revision >= 1),
+    revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
+    created_by VARCHAR NOT NULL,
+    created_at TIMESTAMP NOT NULL,
+    updated_by VARCHAR NOT NULL,
+    updated_at TIMESTAMP NOT NULL,
+    UNIQUE (root_key, project_id, request_id, environment, path_key)
+);
+CREATE INDEX IF NOT EXISTS ix_result_location_links_scope
+    ON result_registration_location_links(root_key, project_id, request_id, environment, relative_path);
 CREATE TABLE IF NOT EXISTS result_registration_drafts (
     id VARCHAR PRIMARY KEY, project_id VARCHAR NOT NULL, request_id VARCHAR NOT NULL,
     environment VARCHAR NOT NULL CHECK(environment IN ('USAGE','DISTRIBUTION')),

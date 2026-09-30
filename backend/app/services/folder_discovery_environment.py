@@ -76,17 +76,36 @@ def _profile(conn, profile_id, environment):
     return {"id": str(row[0]), "revision": int(row[1]), "rules": decoded(row[2])}
 
 
-def _interpret(raw, root_key, environment, project_id, request_id, rules=None):
+def _interpret(raw, root_key, environment, project_id, request_id, rules=None, *, seed_request_path=None):
     context, out = {}, []
+    seeded_request = {"role_kind": "REQUEST", "target_id": request_id,
+                      "project_id": project_id, "request_id": request_id}
+    if seed_request_path and raw:
+        scan_root = str(raw[0].get("relative_path") or "").casefold()
+        request_path = str(seed_request_path).casefold()
+        if request_path != scan_root and (not request_path or scan_root.startswith(request_path.rstrip("/") + "/")):
+            # A scan may start at a Case or deeper folder inside an existing
+            # request. Seed its missing parent context so parent_role rules
+            # still resolve against the selected Request.
+            context[None] = seeded_request
+            context[""] = seeded_request
     for source in raw:
         node = dict(source); parent = context.get(node["parent_path"], {})
         name = node["name"]; folded = name.casefold()
+        _, profile_matched, profile_conflict = resolve_role(
+            name, node["depth"], parent.get("role_kind"), rules, environment,
+        ) if rules else (None, False, False)
         role, option_status = _role(environment, name, parent, node["depth"], rules)
+        is_request_boundary = bool(seed_request_path and str(node.get("relative_path", "")).casefold() == str(seed_request_path).casefold())
+        if is_request_boundary:
+            role, option_status = "REQUEST", None
         # A node id represents a filesystem node, not its current role.  This
         # keeps an explicit assignment valid when its suggested role changes.
         node_id = stable("environment-node", root_key, node["relative_path"], "NODE")
         status = "CONFIRMED" if role else ("UNRESOLVED" if option_status == "UNRESOLVED" else "CONTAINER")
-        item = {**node, "id": node_id, "environment": environment, "role_kind": role, "allowed_roles": ROLES[environment], "status": status, "parent_context": parent.get("target_id"), "project_id": project_id or parent.get("project_id"), "request_id": request_id or parent.get("request_id"), "option_status": option_status, "option_label": name if role == "RUN_OPTION" else None}
+        role_basis = ("REQUEST_BOUNDARY" if is_request_boundary else
+                      "RULE" if profile_matched or profile_conflict else "DEFAULT")
+        item = {**node, "id": node_id, "environment": environment, "role_kind": role, "allowed_roles": ROLES[environment], "status": status, "parent_context": parent.get("target_id"), "project_id": project_id or parent.get("project_id"), "request_id": request_id or parent.get("request_id"), "option_status": option_status, "option_label": name if role == "RUN_OPTION" else None, "role_source": "PROFILE", "role_basis": role_basis}
         if status == "UNRESOLVED":
             item["message"] = "환경 규칙과 일치하지 않는 폴더입니다. 역할을 확인하세요."
             if re.match(r"^WR_[A-Za-z0-9._-]+_SimType[12]$", name, re.I):
@@ -97,7 +116,7 @@ def _interpret(raw, root_key, environment, project_id, request_id, rules=None):
             item["target_id"] = stable("environment-project", root_key, node["relative_path"], role)
             item["project_id"] = item["target_id"]
         if role == "REQUEST":
-            item["target_id"] = stable("environment-request", root_key, node["relative_path"], role)
+            item["target_id"] = request_id if is_request_boundary else stable("environment-request", root_key, node["relative_path"], role)
             item["request_id"] = item["target_id"]
         if role == "SIMULATION_CASE":
             item["target_id"] = dashboard_capture._case_id("dashboard-root-" + root_key, node["relative_path"])
@@ -106,7 +125,7 @@ def _interpret(raw, root_key, environment, project_id, request_id, rules=None):
         if role == "RUN_OPTION": item["run_option_id"] = stable("environment-option", root_key, node["relative_path"], role)
         out.append(item)
         next_context = dict(parent)
-        if role in {"PROJECT", "REQUEST", "SIMULATION_CASE", "LOAD_CASE", "EXECUTION_RUN"}: next_context.update(item)
+        if role in {"PROJECT", "REQUEST", "SIMULATION_CASE", "LOAD_CASE", "EXECUTION_RUN", "RUN_OPTION"}: next_context.update(item)
         if role == "PROJECT": next_context.pop("request_id", None)
         context[node["relative_path"]] = next_context
     return out
@@ -129,6 +148,10 @@ def _role(environment, name, parent, depth=0, rules=None):
         expected = "1" if environment == "USAGE" else "2"
         return ("REQUEST", None) if match.group(1) == expected else (None, "UNRESOLVED")
     if re.match(r"^(assy_res|package)[_-]", name, re.I): return "SIMULATION_CASE", None
+    if environment == "DISTRIBUTION" and lowered in {"result", "results"}:
+        if parent.get("role_kind") in {"SCENE", "RUN_OPTION", "EXECUTION_RUN"}:
+            return "RESULTS", None
+        return None, None
     if environment == "DISTRIBUTION" and _SCENE.search(name): return "SCENE", "PRESENT"
     if environment == "USAGE":
         if parent.get("role_kind") == "SIMULATION_CASE" and lowered in _EVALUATIONS: return "EVALUATION", None
@@ -151,6 +174,8 @@ def preview(conn, scan_id, assignments, actor, require_usage_review=False):
         node = by_id.get(assignment.get("node_id")); role = assignment.get("role_kind")
         if not node or role not in {*ROLES[saved["environment"]], "EXCLUDE"}: raise ValueError("조사 트리에 없는 역할 지정입니다.")
         node["role_kind"], node["status"] = role, "EXCLUDED" if role == "EXCLUDE" else ("CONFIRMED" if assignment.get("confirm", True) else "UNRESOLVED")
+        node["role_source"] = "PREVIEW"
+        node["role_basis"] = "PREVIEW"
         if assignment.get("target_mode") == "LINK": node["target_id"] = assignment.get("target_id")
         if assignment.get("target_mode") == "LINK":
             target = assignment.get("target_id")
@@ -212,7 +237,18 @@ def preview(conn, scan_id, assignments, actor, require_usage_review=False):
         unresolved.append({"message": "등록할 Simulation Case가 없습니다."})
     preview_id = ident("environment-preview")
     review_required = bool(require_usage_review and saved["environment"] == "USAGE")
-    stored = {"rows": plan, "usage_reviews": {}, "usage_review_snapshots": {}, "require_usage_review": review_required} if review_required else plan
+    # Keep the confirmed disposition of every scanned folder alongside the
+    # semantic plan. The plan intentionally contains only role-bearing rows,
+    # but downstream path creation also needs to distinguish an allowed
+    # structural container from one the reviewer explicitly excluded.
+    stored = {
+        "rows": plan,
+        "node_states": [{key: node.get(key) for key in ("relative_path", "parent_path", "name", "role_kind", "status", "role_source", "role_basis")}
+                        for node in nodes],
+        "usage_reviews": {},
+        "usage_review_snapshots": {},
+        "require_usage_review": review_required,
+    }
     conn.execute("INSERT INTO folder_environment_previews(id,scan_id,rows_json,can_apply,created_by,created_at) VALUES(?,?,?,?,?,?)", [preview_id, scan_id, json.dumps(stored, ensure_ascii=False), can_apply, actor, now()])
     return {"id": preview_id, "scan_id": scan_id, "environment": saved["environment"], "can_apply": can_apply, "require_usage_review": review_required, "rows": plan, "unresolved_count": len(unresolved), "message": "등록할 Simulation Case가 없습니다." if case_count == 0 else None, "summary": {"new": len(work_rows) - existing, "existing": existing, "evaluations": sum(n["role_kind"] == "EVALUATION" for n in plan), "scenes": sum(n["role_kind"] == "SCENE" for n in plan)}}
 

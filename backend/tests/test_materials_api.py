@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import re
 from datetime import datetime, timezone
 from pathlib import Path
 from pathlib import PurePosixPath
@@ -14,7 +13,7 @@ from fastapi.testclient import TestClient
 from app.database_connection import connect
 from app.main import app
 from app.security import hash_password
-from app.services import materials_catalog
+from app.services import folder_discovery_environment, materials_catalog
 
 pytestmark = pytest.mark.duckdb_integration
 BASE = "/api/materials"
@@ -35,6 +34,44 @@ def _materials_deck() -> str:
         "/FUNCT/10\nSynthetic curve\n"
         f"{0.0:>20}{0.0:>20}\n{1.0:>20}{2.0:>20}\n"
     )
+
+
+def _base_distribution_rules() -> list[dict[str, object]]:
+    return [
+        {"role_kind": "SIMULATION_CASE", "pattern": "Assy_Model", "parent_role": "REQUEST"},
+        {"role_kind": "LOAD_CASE", "pattern": "Drop", "parent_role": "SIMULATION_CASE"},
+        {"role_kind": "EXECUTION_RUN", "pattern": "Run_*", "parent_role": "LOAD_CASE"},
+        {"role_kind": "RUN_OPTION", "pattern": "INDIVIDUAL", "parent_role": "EXECUTION_RUN"},
+        {"role_kind": "SCENE", "pattern": "*Scene*", "parent_role": "RUN_OPTION"},
+        {"role_kind": "INPUT", "pattern": "INPUT", "parent_role": "EXECUTION_RUN"},
+    ]
+
+
+def _save_distribution_scan(root: Path, project_id: str, request_id: str,
+                            rules: list[dict[str, object]], *, scan_path: str | None = None) -> tuple[str, str]:
+    from app.services import environment_folder_profiles
+
+    profile_id = f"materials-profile-{uuid4().hex}"
+    with connect() as conn:
+        profile = environment_folder_profiles.save_profile(
+            conn, environment="DISTRIBUTION", name=profile_id,
+            rules={"rules": rules},
+        )
+        default_path = str(conn.execute(
+            "SELECT request_folder FROM spdm_storage_request_parents WHERE request_id=?", [request_id],
+        ).fetchone()[0])
+        scan = folder_discovery_environment.save_scan(
+            conn, root, default_path if scan_path is None else scan_path,
+            "DISTRIBUTION", profile["id"], project_id, request_id, "synthetic-test",
+        )
+    return str(profile["id"]), str(scan["id"])
+
+
+def _delete_distribution_scan(profile_id: str, scan_id: str) -> None:
+    with connect() as conn:
+        conn.execute("DELETE FROM folder_environment_previews WHERE scan_id=?", [scan_id])
+        conn.execute("DELETE FROM folder_environment_scans WHERE id=?", [scan_id])
+        conn.execute("DELETE FROM folder_environment_profiles WHERE id=?", [profile_id])
 
 
 @pytest.fixture
@@ -58,6 +95,8 @@ def materials_client(tmp_path, monkeypatch, password_auth_bootstrap_admin):
     admin_id, admin_username, admin_password = password_auth_bootstrap_admin
     project_id, request_id = f"materials-project-{suffix}", f"materials-request-{suffix}"
     viewer_id, viewer_password = f"materials-viewer-{suffix}", "materials-viewer-password"
+    profile_id = f"materials-profile-{suffix}"
+    scan_id = None
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     with connect() as conn:
         conn.execute("INSERT INTO projects(id,name,product_name,description,created_at) VALUES(?,?,?,?,?)",
@@ -70,6 +109,15 @@ def materials_client(tmp_path, monkeypatch, password_auth_bootstrap_admin):
                      [project_folder, project_id, now, now])
         conn.execute("INSERT INTO spdm_storage_request_parents(request_folder,project_folder,project_id,request_id,created_at,updated_at) VALUES(?,?,?,?,?,?)",
                      [request_folder, project_folder, project_id, request_id, now, now])
+        from app.services import environment_folder_profiles
+        profile = environment_folder_profiles.save_profile(
+            conn, environment="DISTRIBUTION", name=profile_id,
+            rules={"rules": _base_distribution_rules()},
+        )
+        scan = folder_discovery_environment.save_scan(
+            conn, root, request_folder, "DISTRIBUTION", profile["id"], project_id, request_id, "synthetic-test",
+        )
+        scan_id = str(scan["id"])
         conn.execute("""INSERT INTO users
             (id,username,password_hash,display_name,legacy_role,account_status,is_global_admin,is_active,created_at,updated_at)
             VALUES(?,?,?,?,'viewer','ACTIVE',false,true,?,?)""",
@@ -84,6 +132,10 @@ def materials_client(tmp_path, monkeypatch, password_auth_bootstrap_admin):
             yield client, root, project_id, request_id, request_folder, scene_relative, empty_scene_relative, viewer_login.json()["access_token"]
     finally:
         with connect() as conn:
+            if scan_id:
+                conn.execute("DELETE FROM folder_environment_previews WHERE scan_id=?", [scan_id])
+                conn.execute("DELETE FROM folder_environment_scans WHERE id=?", [scan_id])
+                conn.execute("DELETE FROM folder_environment_profiles WHERE id=?", [profile_id])
             conn.execute("DELETE FROM project_memberships WHERE user_id=?", [viewer_id])
             conn.execute("DELETE FROM users WHERE id=?", [viewer_id])
             conn.execute("DELETE FROM spdm_storage_request_parents WHERE request_id=?", [request_id])
@@ -128,7 +180,72 @@ def test_materials_catalog_and_deck_are_request_scoped_and_uncached(materials_cl
     assert fresh.json()["deck"]["parts"] == []
 
 
-def test_materials_discovers_results_without_a_scene_and_ignores_unrelated_decks(materials_client):
+def test_materials_request_scope_uses_schema_path_without_result_scope(materials_client, monkeypatch):
+    _, _, _, request_id, request_folder, _, _, _ = materials_client
+
+    def forbidden_scope(*args, **kwargs):
+        raise AssertionError("materials catalog must not depend on result-registration scope")
+
+    monkeypatch.setattr(materials_catalog.result_registration_paths, "_scope", forbidden_scope)
+    with connect() as conn:
+        _, scope, _, _, _, _ = materials_catalog._request_scope(conn, request_id, "DISTRIBUTION")
+    assert scope["request_relative_path"] == request_folder
+
+
+def test_materials_requires_a_request_linked_scan_instead_of_defaulting_a_profile(materials_client):
+    client, root, project_id, _, project_request_folder, _, _, _ = materials_client
+    suffix = uuid4().hex[:10]
+    request_id = f"materials-no-scan-{suffix}"
+    request_folder = f"{PurePosixPath(project_request_folder).parent}/WR_NoScan_{suffix}_SimType2"
+    root.joinpath(*request_folder.split("/")).mkdir(parents=True)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    with connect() as conn:
+        conn.execute("""INSERT INTO analysis_requests
+            (id,project_id,title,status,owner,owner_user_id,requested_at,due_at,overall_note)
+            VALUES(?,?,?,'READY','test',NULL,?,?,?)""",
+                     [request_id, project_id, "Synthetic No Scan Request", now, now, ""])
+        conn.execute("INSERT INTO spdm_storage_request_parents(request_folder,project_folder,project_id,request_id,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+                     [request_folder, str(PurePosixPath(project_request_folder).parent), project_id, request_id, now, now])
+    try:
+        response = client.get(BASE + "/catalog", params={"request_id": request_id})
+        assert response.status_code == 409, response.text
+        assert response.json()["detail"]["code"] == "FOLDER_SCHEMA_REQUEST_SCAN_REQUIRED"
+    finally:
+        with connect() as conn:
+            conn.execute("DELETE FROM spdm_storage_request_parents WHERE request_id=?", [request_id])
+            conn.execute("DELETE FROM analysis_requests WHERE id=?", [request_id])
+
+
+def test_materials_can_rebuild_scene_tree_from_request_linked_root_scan(materials_client):
+    client, root, project_id, request_id, _, scene_relative, _, _ = materials_client
+    profile_id, scan_id = _save_distribution_scan(
+        root, project_id, request_id, _base_distribution_rules(), scan_path="",
+    )
+    try:
+        catalog = client.get(BASE + "/catalog", params={"request_id": request_id})
+        assert catalog.status_code == 200, catalog.text
+        scene = next(item for item in catalog.json()["scenes"] if item["relative_path"] == scene_relative)
+        assert scene["hierarchy"]["load_case"]["name"] == "Drop"
+    finally:
+        _delete_distribution_scan(profile_id, scan_id)
+
+
+def test_materials_rejects_tied_request_scans_instead_of_choosing_one(materials_client):
+    client, root, project_id, request_id, _, _, _, _ = materials_client
+    profile_id, scan_id = _save_distribution_scan(root, project_id, request_id, _base_distribution_rules())
+    tied_at = datetime(2026, 9, 30, 12, 0, 0)
+    with connect() as conn:
+        conn.execute("UPDATE folder_environment_scans SET created_at=? WHERE project_id=? AND request_id=?",
+                     [tied_at, project_id, request_id])
+    try:
+        response = client.get(BASE + "/catalog", params={"request_id": request_id})
+        assert response.status_code == 409, response.text
+        assert response.json()["detail"]["code"] == "FOLDER_SCHEMA_SCAN_AMBIGUOUS"
+    finally:
+        _delete_distribution_scan(profile_id, scan_id)
+
+
+def test_materials_does_not_infer_standalone_results_by_name(materials_client):
     client, root, _, request_id, request_folder, _, _, _ = materials_client
     result_relative = (f"{request_folder}/CAE/Assy_Model/Drop/Run_02/INDIVIDUAL/"
                        "DAMP-2_Face/results")
@@ -147,18 +264,12 @@ def test_materials_discovers_results_without_a_scene_and_ignores_unrelated_decks
     catalog = client.get(BASE + "/catalog", params={"request_id": request_id})
     assert catalog.status_code == 200, catalog.text
     entries = catalog.json()["scenes"]
-    result = next(item for item in entries if item["relative_path"] == result_relative)
-    assert result["kind"] == "RESULTS"
-    assert result["has_deck"] is True
+    assert all(item["relative_path"] != result_relative for item in entries)
     assert all("documents/results" not in item["relative_path"] for item in entries)
 
-    response = client.get(BASE + "/deck", params={"request_id": request_id, "scene_id": result["scene_id"]})
-    assert response.status_code == 200, response.text
-    assert [part["id"] for part in response.json()["deck"]["parts"]] == ["9"]
-    assert [material["id"] for material in response.json()["deck"]["materials"]] == ["99"]
-    assert {item["relative_path"] for item in response.json()["files"]} == {
-        f"{result_relative}/101_parts.inc", f"{result_relative}/103_material_propertdb.inc",
-    }
+    response = client.get(BASE + "/deck", params={"request_id": request_id, "relative_path": result_relative})
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "MATERIALS_SCENE_INVALID"
 
 
 def test_materials_scene_decks_can_be_in_their_results_subfolder(materials_client):
@@ -180,9 +291,7 @@ def test_materials_scene_decks_can_be_in_their_results_subfolder(materials_clien
     assert [part["id"] for part in response.json()["deck"]["parts"]] == ["7"]
 
 
-def test_materials_uses_registered_scene_roles_and_does_not_mistake_parts_preamble_for_materials(
-    materials_client, monkeypatch,
-):
+def test_materials_uses_registered_scene_roles_and_does_not_mistake_parts_preamble_for_materials(materials_client):
     client, root, project_id, request_id, request_folder, _, _, _ = materials_client
     scene_relative = (
         f"{request_folder}/Working/Package_Model_Synthetic/Drop/85qn80h_ref_organized/"
@@ -282,10 +391,6 @@ def test_materials_uses_registered_scene_roles_and_does_not_mistake_parts_preamb
             )
 
     try:
-        # Prove these catalog candidates come from the applied role plan, even
-        # when the label no longer matches the legacy Scene-name heuristic.
-        scene_name_pattern = materials_catalog._SCENE_NAME
-        monkeypatch.setattr(materials_catalog, "_SCENE_NAME", re.compile(r"(?!)"))
         catalog = client.get(BASE + "/catalog", params={"request_id": request_id})
         assert catalog.status_code == 200, catalog.text
         scenes = {item["relative_path"]: item for item in catalog.json()["scenes"]}
@@ -325,7 +430,6 @@ def test_materials_uses_registered_scene_roles_and_does_not_mistake_parts_preamb
 
         # With a schema applied, a misleading Scene-shaped sibling with decks
         # remains out of the catalog even when the legacy name heuristic matches.
-        monkeypatch.setattr(materials_catalog, "_SCENE_NAME", scene_name_pattern)
         authoritative_catalog = client.get(BASE + "/catalog", params={"request_id": request_id})
         assert authoritative_catalog.status_code == 200, authoritative_catalog.text
         authoritative_scenes = [item["relative_path"] for item in authoritative_catalog.json()["scenes"]]
@@ -341,7 +445,65 @@ def test_materials_uses_registered_scene_roles_and_does_not_mistake_parts_preamb
             conn.execute("DELETE FROM folder_environment_scans WHERE id=?", [scan_id])
 
 
-def test_materials_discovers_new_working_case_and_keeps_registered_case_scenes_authoritative(materials_client):
+def test_materials_uses_saved_schema_for_actual_nested_scenes_not_old_false_match(materials_client):
+    client, root, project_id, request_id, request_folder, _, _, _ = materials_client
+    case_path = f"{request_folder}/Working/Package_Model_SetCase1_CushionCase2_조건표시"
+    run_path = f"{case_path}/Drop/85qn80h_ref_organized"
+    option_path = f"{run_path}/INDIVIDUAL"
+    expected_scenes = [
+        f"{option_path}/DAMP-2_Face_Drop_Scene02_Face2_1st",
+        f"{option_path}/DAMP-6_Corner_Drop_2nd_Scene04_Corner235_2nd",
+        f"{option_path}/DAMP-13_Corner_Drop_2nd_Scene08_Corner346_2nd",
+    ]
+    old_false_match = f"{request_folder}/Pkg_SetCase2_Cushion2_test/Drop/85qn80h_test/2_face"
+    for index, relative in enumerate(expected_scenes, start=2):
+        scene_path = root.joinpath(*relative.split("/"))
+        scene_path.mkdir(parents=True)
+        (scene_path / "parts.inc").write_text(
+            _parts_deck().replace("/PART/1", f"/PART/{index}"), encoding="utf-8",
+        )
+        (scene_path / "materials.inc").write_text(
+            _materials_deck().replace("/MAT/ELAST/2", f"/MAT/ELAST/{index}"), encoding="utf-8",
+        )
+    old_path = root.joinpath(*old_false_match.split("/"))
+    old_path.mkdir(parents=True)
+    (old_path / "parts.inc").write_text(_parts_deck().replace("/PART/1", "/PART/99"), encoding="utf-8")
+    (old_path / "materials.inc").write_text(
+        _materials_deck().replace("/MAT/ELAST/2", "/MAT/ELAST/99"), encoding="utf-8",
+    )
+
+    profile_id, scan_id = _save_distribution_scan(root, project_id, request_id, [
+        {"role_kind": "SIMULATION_CASE", "pattern": "Package_Model_SetCase1_CushionCase2_*",
+         "parent_role": "REQUEST"},
+        {"role_kind": "LOAD_CASE", "pattern": "Drop", "parent_role": "SIMULATION_CASE"},
+        {"role_kind": "EXECUTION_RUN", "pattern": "85qn80h_ref_organized", "parent_role": "LOAD_CASE"},
+        {"role_kind": "RUN_OPTION", "pattern": "INDIVIDUAL", "parent_role": "EXECUTION_RUN"},
+        {"role_kind": "SCENE", "pattern": "DAMP-*_Scene*", "parent_role": "RUN_OPTION"},
+    ], scan_path=case_path)
+    try:
+        catalog = client.get(BASE + "/catalog", params={"request_id": request_id})
+        assert catalog.status_code == 200, catalog.text
+        scenes = {item["relative_path"]: item for item in catalog.json()["scenes"]}
+        assert all(relative in scenes for relative in expected_scenes)
+        assert all(scenes[relative]["has_deck"] is True for relative in expected_scenes)
+        assert old_false_match not in scenes
+
+        selected = scenes[expected_scenes[1]]
+        deck = client.get(BASE + "/deck", params={"request_id": request_id,
+                                                    "scene_id": selected["scene_id"],
+                                                    "relative_path": expected_scenes[1]})
+        assert deck.status_code == 200, deck.text
+        assert [item["id"] for item in deck.json()["deck"]["materials"]] == ["3"]
+
+        rejected = client.get(BASE + "/deck", params={"request_id": request_id,
+                                                        "relative_path": old_false_match})
+        assert rejected.status_code == 422
+        assert rejected.json()["detail"]["code"] == "MATERIALS_SCENE_INVALID"
+    finally:
+        _delete_distribution_scan(profile_id, scan_id)
+
+
+def test_materials_current_schema_replaces_older_registered_scene_discovery(materials_client):
     client, root, project_id, request_id, request_folder, _, _, _ = materials_client
     old_case = f"{request_folder}/Pkg_SetCase2_Cushion2_test"
     old_run = f"{old_case}/Drop/85qn80h_test"
@@ -413,11 +575,20 @@ def test_materials_discovers_new_working_case_and_keeps_registered_case_scenes_a
                  item["role_kind"], None, item["target_id"], item["name"], item.get("option_status"), now],
             )
 
+    current_profile_id, current_scan_id = _save_distribution_scan(root, project_id, request_id, [
+        {"role_kind": "SIMULATION_CASE", "pattern": "Package_Model_SetCase1_CushionCase2_*",
+         "parent_role": "REQUEST"},
+        {"role_kind": "LOAD_CASE", "pattern": "Drop", "parent_role": "SIMULATION_CASE"},
+        {"role_kind": "EXECUTION_RUN", "pattern": "85qn80h_ref_organized", "parent_role": "LOAD_CASE"},
+        {"role_kind": "RUN_OPTION", "pattern": "INDIVIDUAL", "parent_role": "EXECUTION_RUN"},
+        {"role_kind": "SCENE", "pattern": "DAMP-*_Scene*", "parent_role": "RUN_OPTION"},
+    ])
+
     try:
         catalog = client.get(BASE + "/catalog", params={"request_id": request_id})
         assert catalog.status_code == 200, catalog.text
         scenes = {item["relative_path"]: item for item in catalog.json()["scenes"]}
-        assert registered_scene in scenes
+        assert registered_scene not in scenes
         assert all(scene in scenes for scene in actual_scenes)
         assert unregistered_sibling not in scenes
         assert scenes[actual_scene]["hierarchy"]["simulation_case"]["relative_path"].endswith(
@@ -427,6 +598,11 @@ def test_materials_discovers_new_working_case_and_keeps_registered_case_scenes_a
         actual_deck = client.get(BASE + "/deck", params={"request_id": request_id, "relative_path": actual_scene})
         assert actual_deck.status_code == 200, actual_deck.text
         assert [item["id"] for item in actual_deck.json()["deck"]["materials"]] == ["2"]
+
+        registered_deck = client.get(BASE + "/deck", params={"request_id": request_id,
+                                                                 "relative_path": registered_scene})
+        assert registered_deck.status_code == 422
+        assert registered_deck.json()["detail"]["code"] == "MATERIALS_SCENE_INVALID"
 
         sibling_deck = client.get(BASE + "/deck", params={"request_id": request_id,
                                                              "relative_path": unregistered_sibling})
@@ -438,6 +614,7 @@ def test_materials_discovers_new_working_case_and_keeps_registered_case_scenes_a
             conn.execute("DELETE FROM folder_environment_registrations WHERE id=?", [registration_id])
             conn.execute("DELETE FROM folder_environment_previews WHERE id=?", [preview_id])
             conn.execute("DELETE FROM folder_environment_scans WHERE id=?", [scan_id])
+        _delete_distribution_scan(current_profile_id, current_scan_id)
 
 
 def test_materials_rejects_inferred_scene_owned_by_another_request(materials_client):
@@ -481,8 +658,8 @@ def test_materials_rejects_inferred_scene_owned_by_another_request(materials_cli
             conn.execute("DELETE FROM result_registration_paths WHERE id=?", [owner_id])
 
 
-def test_materials_does_not_duplicate_run_results_that_fallback_to_scene(materials_client):
-    client, root, _, request_id, request_folder, _, _, _ = materials_client
+def test_materials_exposes_standalone_results_only_when_schema_assigns_the_role(materials_client):
+    client, root, project_id, request_id, request_folder, _, _, _ = materials_client
     result_paths = [
         f"{request_folder}/CAE/Assy_Model/Drop/Run_02/results",
         f"{request_folder}/CAE/Assy_Model/Drop/Run_03/INDIVIDUAL/results",
@@ -493,13 +670,24 @@ def test_materials_does_not_duplicate_run_results_that_fallback_to_scene(materia
         (directory / "parts.inc").write_text(_parts_deck().replace("/PART/1", f"/PART/{index}"), encoding="utf-8")
         (directory / "materials.inc").write_text(_materials_deck(), encoding="utf-8")
 
-    catalog = client.get(BASE + "/catalog", params={"request_id": request_id})
-    assert catalog.status_code == 200, catalog.text
-    for relative in result_paths:
-        matches = [item for item in catalog.json()["scenes"] if item["relative_path"] == relative]
-        assert len(matches) == 1
-        assert matches[0]["kind"] == "SCENE"
-        assert matches[0]["has_deck"] is True
+    profile_id, scan_id = _save_distribution_scan(root, project_id, request_id, [
+        *_base_distribution_rules(),
+        {"role_kind": "RESULTS", "pattern": "results", "parent_role": "EXECUTION_RUN"},
+        {"role_kind": "RESULTS", "pattern": "results", "parent_role": "RUN_OPTION"},
+    ])
+    try:
+        catalog = client.get(BASE + "/catalog", params={"request_id": request_id})
+        assert catalog.status_code == 200, catalog.text
+        entries = {item["relative_path"]: item for item in catalog.json()["scenes"]}
+        for index, relative in enumerate(result_paths, start=2):
+            assert entries[relative]["kind"] == "RESULTS"
+            assert entries[relative]["has_deck"] is True
+            response = client.get(BASE + "/deck", params={"request_id": request_id,
+                                                               "scene_id": entries[relative]["scene_id"]})
+            assert response.status_code == 200, response.text
+            assert [part["id"] for part in response.json()["deck"]["parts"]] == [str(index)]
+    finally:
+        _delete_distribution_scan(profile_id, scan_id)
 
 
 def test_materials_ignores_result_decks_owned_by_another_environment(materials_client):
@@ -642,6 +830,52 @@ def test_materials_candidate_priority_includes_execution_run_input(materials_cli
     assert ancestor_read.status_code == 200, ancestor_read.text
     assert [part["id"] for part in ancestor_read.json()["deck"]["parts"]] == ["9"]
     assert all(item["relative_path"].startswith(run_input + "/") for item in ancestor_read.json()["files"])
+
+
+def test_materials_scene_candidates_do_not_cross_scene_or_run_option(materials_client):
+    client, root, project_id, request_id, request_folder, _, _, _ = materials_client
+    run = f"{request_folder}/CAE/Assy_Model/Drop/Run_01"
+    individual = f"{run}/INDIVIDUAL"
+    scene_a = f"{individual}/Scene_A"
+    scene_b = f"{individual}/Scene_B"
+    scene_b_results = f"{scene_b}/results"
+    cumulative = f"{run}/CUMULATIVE"
+    cumulative_results = f"{cumulative}/output_data"
+
+    root.joinpath(*scene_a.split("/")).mkdir(parents=True)
+    result_b = root.joinpath(*scene_b_results.split("/"))
+    result_b.mkdir(parents=True)
+    (result_b / "parts.inc").write_text(_parts_deck().replace("/PART/1", "/PART/21"), encoding="utf-8")
+    (result_b / "materials.inc").write_text(_materials_deck().replace("/MAT/ELAST/2", "/MAT/ELAST/21"), encoding="utf-8")
+    result_cumulative = root.joinpath(*cumulative_results.split("/"))
+    result_cumulative.mkdir(parents=True)
+    (result_cumulative / "parts.inc").write_text(_parts_deck().replace("/PART/1", "/PART/31"), encoding="utf-8")
+    (result_cumulative / "materials.inc").write_text(_materials_deck().replace("/MAT/ELAST/2", "/MAT/ELAST/31"), encoding="utf-8")
+
+    profile_id, scan_id = _save_distribution_scan(root, project_id, request_id, [
+        *_base_distribution_rules(),
+        {"role_kind": "RUN_OPTION", "pattern": "CUMULATIVE", "parent_role": "EXECUTION_RUN"},
+        {"role_kind": "RESULTS", "pattern": "output_data", "parent_role": "RUN_OPTION"},
+    ])
+    try:
+        response = client.get(BASE + "/catalog", params={"request_id": request_id})
+        assert response.status_code == 200, response.text
+        entries = {item["relative_path"]: item for item in response.json()["scenes"]}
+        assert entries[scene_a]["has_deck"] is False
+        assert entries[scene_b]["has_deck"] is True
+        assert entries[cumulative_results]["kind"] == "RESULTS"
+        assert entries[cumulative_results]["has_deck"] is True
+
+        read_a = client.get(BASE + "/deck", params={"request_id": request_id, "relative_path": scene_a})
+        assert read_a.status_code == 404, read_a.text
+        assert read_a.json()["detail"]["code"] == "MATERIALS_DECK_NOT_FOUND"
+
+        read_b = client.get(BASE + "/deck", params={"request_id": request_id, "relative_path": scene_b})
+        assert read_b.status_code == 200, read_b.text
+        assert [item["id"] for item in read_b.json()["deck"]["parts"]] == ["21"]
+        assert all(item["relative_path"].startswith(scene_b_results + "/") for item in read_b.json()["files"])
+    finally:
+        _delete_distribution_scan(profile_id, scan_id)
 
 
 def test_materials_accepts_starter_rad_with_both_deck_roles(materials_client):

@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from ..database_connection import ConnectionLike, rows
 from ..media_policy import validate_media_metadata
-from . import dashboard_capture, result_registration_paths as paths, spdm_storage, usage_source_review
+from . import dashboard_capture, result_registration_locations, result_registration_paths as paths, spdm_storage, usage_source_review
 
 
 MAX_FILE_BYTES = paths.MAX_FILE_BYTES
@@ -117,9 +117,27 @@ def _current_target(
     result_relative_path: str,
     expected_root_id: str | None = None,
     expected_context: dict[str, Any] | None = None,
+    require_schema_roles: bool = False,
 ) -> dict[str, Any]:
-    scope = paths._scope(conn, project_id, request_id, environment)
     root, root_id, root_key = paths._root(conn)
+    schema = None
+    if require_schema_roles:
+        # New drafts follow the same request boundary as step 02. The SPDM
+        # parent/registry tables are only a compatibility fallback for old
+        # drafts and are not a prerequisite for a Folder Schema request.
+        scope, _schema_root, _schema_root_key, _environment = result_registration_locations._scope_data(
+            conn, project_id, request_id, environment)
+        schema = scope.pop("_schema")
+    else:
+        # Existing draft inspection/publication must remain readable when its
+        # original schema has since changed or disappeared. Prefer the current
+        # schema scope, then retain the established owner-checked scope fallback.
+        try:
+            scope, _schema_root, _schema_root_key, _environment = result_registration_locations._scope_data(
+                conn, project_id, request_id, environment)
+            scope.pop("_schema")
+        except ResultRegistrationError:
+            scope = paths._scope(conn, project_id, request_id, environment)
     if expected_root_id and expected_root_id != root_id:
         raise ResultRegistrationError("RESULT_ROOT_CHANGED", "등록 시작 뒤 SPDM 저장소가 변경되었습니다. 다시 검수하세요.")
     case_relative_path = paths._relative(case_relative_path)
@@ -127,8 +145,61 @@ def _current_target(
     case_prefix = case_relative_path.rstrip("/") + "/"
     if not result_relative_path.casefold().startswith(case_prefix.casefold()):
         raise ResultRegistrationError("RESULT_PATH_OUTSIDE_CASE", "결과 경로가 선택한 Simulation Case 안에 없습니다.")
-    case_context, case_nodes = paths._trace_path(conn, root, root_id, root_key, scope, case_relative_path)
-    context, result_nodes = paths._trace_path(conn, root, root_id, root_key, scope, result_relative_path)
+    schema_target = None
+    if schema is not None:
+        candidates = result_registration_locations._result_candidates(
+            conn, root, root_key, project_id, request_id, scope["environment"], schema)
+        candidate = next((item for item in candidates if item["relative_path"] == result_relative_path), None)
+        if candidate:
+            if not candidate["exists"]:
+                raise ResultRegistrationError("SPDM_FOLDER_MISSING", "선택한 결과 위치가 아직 준비되지 않았습니다.")
+            if (paths._root_casefold(str(candidate["context"].get("simulation_case", {}).get("relative_path") or "")) !=
+                    paths._root_casefold(case_relative_path)):
+                raise ResultRegistrationError("RESULT_CONTEXT_CHANGED", "선택한 결과 위치가 다른 해석 Case에 속합니다.")
+            schema_target = {"scope": scope, "root": root, "root_id": root_id, "root_key": root_key,
+                             "context": candidate["context"], "assignments": candidate["_assignments"],
+                             "case_relative_path": case_relative_path,
+                             "result_relative_path": result_relative_path}
+    else:
+        try:
+            schema_target = result_registration_locations.resolve_result_context(
+                conn, project_id, request_id, scope["environment"], case_relative_path, result_relative_path,
+            )
+        except ResultRegistrationError:
+            if require_schema_roles:
+                raise
+    if schema_target:
+        case_context = schema_target["context"]
+        context = schema_target["context"]
+        result_nodes = [*schema_target["assignments"],
+                        {"relative_path": result_relative_path, "role_kind": "RESULTS"}]
+    else:
+        if require_schema_roles:
+            # A path created through the explicit path builder may not yet be
+            # present as a semantic node in the live Folder Schema scan. Its
+            # semantic roles still need explicit prepare confirmations, and a
+            # live schema exclusion or conflicting semantic role wins.
+            context, result_nodes = paths._trace_path(conn, root, root_id, root_key, scope, result_relative_path)
+            case_context, _case_nodes = paths._trace_path(conn, root, root_id, root_key, scope, case_relative_path)
+            for node in result_nodes:
+                role = str(node.get("role_kind") or "")
+                if role not in {"SIMULATION_CASE", "EVALUATION", "SCENE"}:
+                    continue
+                evidence = result_registration_locations.effective_assignment(
+                    schema, paths._root_casefold(str(node["relative_path"]))) if schema else None
+                if evidence and evidence.get("source") != "STRUCTURE" and (
+                        evidence.get("status") in {"EXCLUDED", "UNRESOLVED"} or evidence.get("role_kind") != role):
+                    raise ResultRegistrationError("RESULT_FOLDER_SCHEMA_STALE", "결과 경로의 역할이 현재 Folder Schema에서 제외되었거나 달라졌습니다.")
+                found = conn.execute(
+                    "SELECT 1 FROM result_registration_paths WHERE root_key=? AND path_key=? AND project_id=? AND request_id=? AND environment=? AND role_kind=?",
+                    [root_key, paths._root_casefold(str(node["relative_path"])), project_id, request_id,
+                     scope["environment"], role],
+                ).fetchone()
+                if not found:
+                    raise ResultRegistrationError("RESULT_FOLDER_SCHEMA_REQUIRED", "결과 경로의 역할이 Folder Schema 또는 명시적인 저장 위치 확인에 연결되지 않았습니다.")
+        else:
+            case_context, _case_nodes = paths._trace_path(conn, root, root_id, root_key, scope, case_relative_path)
+            context, result_nodes = paths._trace_path(conn, root, root_id, root_key, scope, result_relative_path)
     if not case_context.get("simulation_case") or case_context["simulation_case"].get("relative_path", "").casefold() != case_relative_path.casefold():
         raise ResultRegistrationError("RESULT_CASE_INVALID", "선택한 경로가 연결된 Simulation Case가 아닙니다.")
     if context.get("simulation_case") != case_context.get("simulation_case"):
@@ -241,7 +312,7 @@ def create_draft(conn: ConnectionLike, payload: dict[str, Any], actor: str) -> d
     environment = paths._env(str(payload["environment"]))
     target = _current_target(conn, project_id=project_id, request_id=request_id, environment=environment,
                              case_relative_path=str(payload["case_relative_path"]), result_relative_path=str(payload["result_relative_path"]),
-                             expected_context=payload.get("context") or {})
+                             expected_context=payload.get("context") or {}, require_schema_roles=True)
     manifest = _manifest_input(payload.get("files") or [], target["result_relative_path"])
     draft_id = "result-registration-draft-" + uuid4().hex
     now = _now()

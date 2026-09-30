@@ -9,7 +9,8 @@ from typing import Any
 
 from ..database_connection import ConnectionLike, rows
 from ..parsers.radioss_deck_parser import RadiossDeckParser
-from . import folder_discovery_environment, folder_discovery_scan, result_registration_paths, spdm_storage
+from . import (folder_discovery_environment, folder_discovery_scan, folder_schema_resolver,
+               result_registration_paths, spdm_storage)
 
 MAX_FILE_BYTES = 64 * 1024 * 1024
 MAX_TOTAL_BYTES = 256 * 1024 * 1024
@@ -18,7 +19,6 @@ MAX_FUNCTION_POINTS = 500_000
 MAX_DECK_FILES = 5000
 MAX_INCLUDE_DEPTH = 5
 MAX_INCLUDE_FILES = 5000
-_SCENE_NAME = re.compile(r"(scene|result|contour|animation)", re.I)
 _DECK_EXTENSIONS = {".inc", ".rad"}
 # BEGIN, PARAMETER, and SUBSET can appear in a parts include without any
 # material definitions. They remain parseable, but do not identify a material
@@ -28,8 +28,20 @@ _MAX_SNIFF_BYTES = 1024 * 1024
 _MAX_CANDIDATE_SCAN_BYTES = 32 * 1024 * 1024
 _INCLUDE_DIRECTIVE = re.compile(r"^/INCLUDE(?:/(?P<slash>.*)|[ \t]+(?P<space>.*))?[ \t]*$", re.I)
 _MATERIALS_ENVIRONMENT = "DISTRIBUTION"
-_MAX_RESULT_CONTAINER_DEPTH = 3
 _MAX_OWNERSHIP_CHECKS = 256
+
+
+def _explicit_results_role(node: dict[str, Any]) -> bool:
+    """Require a saved rule or explicit/apply-confirmed evidence for standalone results."""
+    return (node.get("role_source") == "PROFILE" and node.get("role_basis") == "RULE"
+            or node.get("role_evidence_source") == "REGISTRATION"
+            or (node.get("role_evidence_source") == "PREVIEW"
+                and node.get("role_basis") in {"RULE", "PREVIEW"}))
+
+
+def _schema_scene_role(node: dict[str, Any]) -> bool:
+    return ((node.get("role_source") == "PROFILE" and node.get("role_basis") == "RULE")
+            or node.get("role_evidence_source") in {"PREVIEW", "REGISTRATION"})
 
 
 class MaterialsCatalogError(ValueError):
@@ -89,493 +101,71 @@ def _include_target_relative(scope: dict[str, Any], including_relative: str, inc
 def _request_scope(conn: ConnectionLike, request_id: str, environment: str):
     if str(environment).upper() != _MATERIALS_ENVIRONMENT:
         raise MaterialsCatalogError("MATERIALS_ENVIRONMENT_UNSUPPORTED", "소재 덱은 유통환경에서만 조회할 수 있습니다.")
-    row = conn.execute("SELECT project_id FROM analysis_requests WHERE id=?", [request_id]).fetchone()
+    row = conn.execute("SELECT project_id,title FROM analysis_requests WHERE id=?", [request_id]).fetchone()
     if not row:
         raise MaterialsCatalogError("RESULT_CONTEXT_INVALID", "기존 의뢰를 확인할 수 없습니다.", 404)
     project_id = str(row[0])
-    scope = result_registration_paths._scope(conn, project_id, request_id, environment)
     root, root_id, root_key = result_registration_paths._root(conn)
-    return project_id, scope, root, root_id, root_key
-
-
-def _scan_request(root: Path, scope: dict[str, Any]) -> dict[str, Any]:
     try:
-        scan = folder_discovery_scan.scan(root, scope["request_relative_path"])
-    except (OSError, ValueError, spdm_storage.SpdmStorageError) as exc:
-        raise MaterialsCatalogError("MATERIALS_SCAN_UNAVAILABLE", "의뢰 폴더를 안전하게 조사할 수 없습니다.") from exc
-    if scan["status"] != "COMPLETE":
-        issues = scan.get("issues", [])
-        limited = any(str(item.get("code", "")).endswith("LIMIT") for item in issues)
-        raise MaterialsCatalogError(
-            "MATERIALS_SCAN_LIMIT" if limited else "MATERIALS_SCAN_INCOMPLETE",
-            "씬 목록을 안전하게 모두 조사할 수 없습니다. 더 작은 의뢰 폴더를 지정하세요.",
-            413 if limited else 422,
+        schema = folder_schema_resolver.resolve_request_schema(
+            conn, root, root_key, project_id, request_id, environment,
         )
-    return scan
-
-
-def _registered_scene_roles(conn: ConnectionLike, root_key: str,
-                            scope: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """Read confirmed Scene roles from saved path and applied environment plans."""
-    request_parts = tuple(part.casefold() for part in PurePosixPath(scope["request_relative_path"]).parts)
-    scenes: dict[str, dict[str, Any]] = {}
-    started = time.monotonic()
-    inspected_plan_rows = 0
-
-    def add(relative_path: Any, *, target_id: Any = None, raw_name: Any = None,
-            case_relative_path: Any = None) -> None:
-        if not relative_path:
-            return
-        try:
-            normalized = result_registration_paths._relative(str(relative_path))
-        except result_registration_paths.ResultRegistrationError:
-            return
-        parts = tuple(part.casefold() for part in PurePosixPath(normalized).parts)
-        if parts[:len(request_parts)] != request_parts:
-            return
-        key = normalized.casefold()
-        scene = scenes.setdefault(key, {
-            "relative_path": normalized,
-            "target_id": str(target_id) if target_id else None,
-            "raw_name": str(raw_name) if raw_name else PurePosixPath(normalized).name,
-        })
-        if case_relative_path:
-            try:
-                case_path = result_registration_paths._relative(str(case_relative_path))
-            except result_registration_paths.ResultRegistrationError:
-                return
-            case_parts = tuple(part.casefold() for part in PurePosixPath(case_path).parts)
-            if parts[:len(case_parts)] == case_parts and len(case_parts) < len(parts):
-                scene["case_relative_path"] = case_path
-        if len(scenes) > MAX_DECK_FILES:
-            raise MaterialsCatalogError("MATERIALS_SCENE_LIMIT", "씬 후보 수가 허용 한도를 초과했습니다.", 413)
-
-    prepared = rows(conn.execute(
-        "SELECT relative_path,target_id,raw_name FROM result_registration_paths "
-        "WHERE root_key=? AND project_id=? AND request_id=? AND environment=? AND role_kind='SCENE' "
-        "ORDER BY relative_path LIMIT ?",
-        [root_key, scope["project_id"], scope["request_id"], scope["environment"], MAX_DECK_FILES + 1],
-    ))
-    if len(prepared) > MAX_DECK_FILES:
-        raise MaterialsCatalogError("MATERIALS_SCENE_LIMIT", "씬 후보 수가 허용 한도를 초과했습니다.", 413)
-    for item in prepared:
-        add(item.get("relative_path"), target_id=item.get("target_id"), raw_name=item.get("raw_name"))
-
-    environment_roles = rows(conn.execute(
-        "SELECT g.relative_path,g.target_id,g.raw_name FROM folder_environment_registry g "
-        "JOIN folder_environment_registrations r ON r.id=g.registration_id "
-        "WHERE g.root_key=? AND r.project_id=? AND r.request_id=? AND r.environment=? "
-        "AND g.role_kind='SCENE' AND r.status IN ('REGISTERED','CAPTURING','COMPLETED','FAILED') "
-        "ORDER BY g.relative_path LIMIT ?",
-        [root_key, scope["project_id"], scope["request_id"], scope["environment"], MAX_DECK_FILES + 1],
-    ))
-    if len(environment_roles) > MAX_DECK_FILES:
-        raise MaterialsCatalogError("MATERIALS_SCENE_LIMIT", "씬 후보 수가 허용 한도를 초과했습니다.", 413)
-    for item in environment_roles:
-        add(item.get("relative_path"), target_id=item.get("target_id"), raw_name=item.get("raw_name"))
-
-    # SCENE rows are deliberately omitted from folder_environment_registry;
-    # the applied preview is their durable, owner-scoped role record.
-    plans = rows(conn.execute(
-        "SELECT p.rows_json FROM folder_environment_registrations r "
-        "JOIN folder_environment_previews p ON p.id=r.preview_id "
-        "JOIN folder_environment_scans s ON s.id=p.scan_id "
-        "WHERE s.root_key=? AND s.environment=r.environment AND s.status='COMPLETE' "
-        "AND r.project_id=? AND r.request_id=? AND r.environment=? "
-        "AND r.status IN ('REGISTERED','CAPTURING','COMPLETED','FAILED') AND p.can_apply=TRUE "
-        "ORDER BY r.created_at DESC LIMIT ?",
-        [root_key, scope["project_id"], scope["request_id"], scope["environment"], MAX_DECK_FILES + 1],
-    ))
-    if len(plans) > MAX_DECK_FILES:
-        raise MaterialsCatalogError("MATERIALS_SCENE_LIMIT", "씬 등록 이력 수가 허용 한도를 초과했습니다.", 413)
-    for record in plans:
-        if time.monotonic() - started > folder_discovery_scan.MAX_SECONDS:
-            raise MaterialsCatalogError("MATERIALS_SCENE_LIMIT", "등록된 씬 역할 조사 한도를 초과했습니다.", 413)
-        saved = folder_discovery_environment.preview_data(record.get("rows_json"))
-        plan_rows = saved.get("rows", [])
-        if not isinstance(plan_rows, list):
-            continue
-        inspected_plan_rows += len(plan_rows)
-        if inspected_plan_rows > folder_discovery_scan.MAX_ENTRIES:
-            raise MaterialsCatalogError("MATERIALS_SCENE_LIMIT", "등록된 씬 역할 조사 한도를 초과했습니다.", 413)
-        confirmed_cases = []
-        for item in plan_rows:
-            if item.get("role_kind") != "SIMULATION_CASE" or item.get("status") != "CONFIRMED":
-                continue
-            try:
-                case_path = result_registration_paths._relative(str(item.get("relative_path", "")))
-            except result_registration_paths.ResultRegistrationError:
-                continue
-            case_parts = tuple(part.casefold() for part in PurePosixPath(case_path).parts)
-            if case_parts[:len(request_parts)] == request_parts:
-                confirmed_cases.append((case_path, case_parts))
-        for item in plan_rows:
-            if item.get("role_kind") == "SCENE" and item.get("status") == "CONFIRMED":
-                scene_path = str(item.get("relative_path", ""))
-                try:
-                    scene_parts = tuple(part.casefold() for part in result_registration_paths._relative(scene_path).split("/"))
-                except result_registration_paths.ResultRegistrationError:
-                    scene_parts = ()
-                ancestors = [(path, parts) for path, parts in confirmed_cases
-                             if len(parts) < len(scene_parts) and scene_parts[:len(parts)] == parts]
-                case_path = max(ancestors, key=lambda value: len(value[1]))[0] if ancestors else None
-                add(scene_path, target_id=item.get("target_id"), raw_name=item.get("name"),
-                    case_relative_path=case_path)
-    return scenes
-
-
-def _scene_paths(conn: ConnectionLike, root_key: str, scope: dict[str, Any], scan: dict[str, Any],
-                 registered_scenes: dict[str, dict[str, Any]]) -> list[str]:
-    request_path = str(scope["request_relative_path"])
-    candidates = {str(item["relative_path"]) for item in registered_scenes.values()}
-    candidates.update(
-        str(node["relative_path"])
-        for node in scan["nodes"]
-        if _SCENE_NAME.search(str(node.get("name", "")))
-    )
-    request_parts = tuple(part.casefold() for part in PurePosixPath(request_path).parts)
-    candidates = {
-        value for value in candidates
-        if tuple(part.casefold() for part in PurePosixPath(value).parts[:len(request_parts)]) == request_parts
+    except folder_schema_resolver.FolderSchemaError as exc:
+        raise MaterialsCatalogError(exc.code, str(exc), exc.status_code) from exc
+    scope = {
+        "project_id": project_id,
+        "request_id": request_id,
+        "environment": _MATERIALS_ENVIRONMENT,
+        "request_name": str(row[1] or ""),
+        "request_relative_path": schema["request_relative_path"],
+        "schema": schema,
     }
-    if len(candidates) > MAX_DECK_FILES:
-        raise MaterialsCatalogError("MATERIALS_SCENE_LIMIT", "씬 후보 수가 허용 한도를 초과했습니다.", 413)
-    return sorted(candidates, key=str.casefold)
-
-
-def _scene_path_owner_conflict(conn: ConnectionLike, root_id: str, root_key: str, relative_path: str,
-                               project_id: str, request_id: str, environment: str) -> None:
-    """Reject foreign ownership of a Scene path or its ancestors, ignoring descendants."""
-    folded = result_registration_paths._root_casefold(relative_path)
-    path_parts = PurePosixPath(folded).parts
-    ancestors = {"/".join(path_parts[:index]) for index in range(1, len(path_parts) + 1)}
-
-    def overlaps_ancestor(other: str) -> bool:
-        return result_registration_paths._root_casefold(other) in ancestors
-
-    cases = rows(conn.execute(
-        "SELECT project_id,request_id,environment,relative_path FROM dashboard_cases WHERE storage_root_id=?",
-        [root_id],
-    ))
-    if any((str(item.get("project_id") or ""), str(item.get("request_id") or ""),
-            str(item.get("environment") or "")) != (project_id, request_id, environment)
-           and overlaps_ancestor(str(item["relative_path"])) for item in cases):
-        raise result_registration_paths.ResultRegistrationError(
-            "RESULT_PATH_OWNERSHIP_CONFLICT", "선택한 폴더가 다른 업무의 결과에 연결되어 있습니다.",
-        )
-
-    path_rows = rows(conn.execute(
-        "SELECT project_id,request_id,environment,relative_path FROM result_registration_paths WHERE root_key=?",
-        [root_key],
-    ))
-    if any((str(item.get("project_id") or ""), str(item.get("request_id") or ""),
-            str(item.get("environment") or "")) != (project_id, request_id, environment)
-           and overlaps_ancestor(str(item["relative_path"])) for item in path_rows):
-        raise result_registration_paths.ResultRegistrationError(
-            "RESULT_PATH_OWNERSHIP_CONFLICT", "선택한 폴더가 다른 업무의 결과 경로로 예약되어 있습니다.",
-        )
-
-    registered = rows(conn.execute(
-        "SELECT r.project_id,r.request_id,r.environment,g.relative_path,g.role_kind "
-        "FROM folder_environment_registry g JOIN folder_environment_registrations r ON r.id=g.registration_id "
-        "WHERE g.root_key=?",
-        [root_key],
-    ))
-    for item in registered:
-        role = str(item.get("role_kind") or "")
-        owner_project = str(item.get("project_id") or "")
-        owner_request = str(item.get("request_id") or "")
-        if role == "PROJECT":
-            foreign = owner_project != project_id
-        elif role == "REQUEST":
-            foreign = (owner_project, owner_request) != (project_id, request_id)
-        else:
-            foreign = ((owner_project, owner_request) != (project_id, request_id)
-                       or str(item.get("environment") or "") != environment)
-        if foreign and overlaps_ancestor(str(item["relative_path"])):
-            raise result_registration_paths.ResultRegistrationError(
-                "RESULT_PATH_OWNERSHIP_CONFLICT", "선택한 폴더가 다른 업무의 확인된 환경 경로와 겹칩니다.",
-            )
-
-    bindings = rows(conn.execute(
-        "SELECT project_id,request_id,relative_path FROM spdm_storage_bindings",
-    ))
-    if any((str(item["project_id"]), str(item["request_id"])) != (project_id, request_id)
-           and overlaps_ancestor(str(item["relative_path"])) for item in bindings):
-        raise result_registration_paths.ResultRegistrationError(
-            "RESULT_PATH_OWNERSHIP_CONFLICT", "선택한 폴더가 다른 의뢰의 기존 결과 경로와 겹칩니다.",
-        )
-
-    semantic = rows(conn.execute(
-        "SELECT project_id,request_id,relative_path FROM semantic_folder_bindings",
-    ))
-    if any((str(item["project_id"]) != project_id
-            or item.get("request_id") is not None and str(item["request_id"]) != request_id)
-           and overlaps_ancestor(str(item["relative_path"])) for item in semantic):
-        raise result_registration_paths.ResultRegistrationError(
-            "RESULT_PATH_OWNERSHIP_CONFLICT", "선택한 폴더가 다른 의뢰의 의미 매핑 경로와 겹칩니다.",
-        )
-
-    discovered = rows(conn.execute(
-        "SELECT g.relative_path,g.role_kind,COALESCE(p.id,a.project_id,ar.project_id) AS owner_project_id, "
-        "COALESCE(a.id,l.request_id) AS owner_request_id "
-        "FROM folder_discovery_registry g "
-        "LEFT JOIN projects p ON g.role_kind='PROJECT' AND p.id=g.target_id "
-        "LEFT JOIN analysis_requests a ON g.role_kind='REQUEST' AND a.id=g.target_id "
-        "LEFT JOIN load_cases l ON g.role_kind='LOAD_CASE' AND l.id=g.target_id "
-        "LEFT JOIN analysis_requests ar ON ar.id=l.request_id WHERE g.root_key=?",
-        [root_key],
-    ))
-    for item in discovered:
-        if not overlaps_ancestor(str(item["relative_path"])):
-            continue
-        owner_project, owner_request = item.get("owner_project_id"), item.get("owner_request_id")
-        if ((owner_project is not None and str(owner_project) != project_id)
-                or (owner_request is not None
-                    and (str(owner_project or project_id), str(owner_request)) != (project_id, request_id))):
-            raise result_registration_paths.ResultRegistrationError(
-                "RESULT_PATH_OWNERSHIP_CONFLICT", "선택한 폴더가 다른 의뢰의 명시적 탐색 경로와 겹칩니다.",
-            )
-
-
-def _scene_entry(conn: ConnectionLike, root: Path, root_id: str, root_key: str,
-                 scope: dict[str, Any], relative_path: str,
-                 registered_scene: dict[str, Any] | None = None,
-                 budget: dict[str, Any] | None = None) -> dict[str, Any] | None:
-    budget = budget if budget is not None else {"owned_directories": {}, "ownership_checks": 0}
-    key = relative_path.casefold()
-    ownership_cache = budget.setdefault("owned_scenes", {})
-    if key in ownership_cache:
-        if not ownership_cache[key]:
-            return None
-    else:
-        budget["ownership_checks"] = int(budget.get("ownership_checks", 0)) + 1
-        if budget["ownership_checks"] > _MAX_OWNERSHIP_CHECKS:
-            raise MaterialsCatalogError("MATERIALS_OWNERSHIP_SCAN_LIMIT", "소유권을 확인할 폴더 수가 허용 한도를 초과했습니다.", 413)
-        try:
-            if registered_scene is not None:
-                result_registration_paths._owner_conflict(
-                    conn, root_id, root_key, relative_path,
-                    scope["project_id"], scope["request_id"], scope["environment"],
-                )
-            else:
-                _scene_path_owner_conflict(
-                    conn, root_id, root_key, relative_path,
-                    scope["project_id"], scope["request_id"], scope["environment"],
-                )
-            ownership_cache[key] = True
-        except result_registration_paths.ResultRegistrationError as exc:
-            if exc.code in {"RESULT_PATH_OWNERSHIP_CONFLICT", "RESULT_PATH_ROLE_CONFLICT",
-                            "RESULT_PATH_INVALID", "RESULT_PATH_OUTSIDE_REQUEST"}:
-                ownership_cache[key] = False
-                return None
-            raise MaterialsCatalogError(exc.code, str(exc)) from exc
-    # For inferred Scene candidates, _trace_path validates the exact role chain
-    # and owner of each registered ancestor. Avoid the subtree-wide ownership
-    # check here: a foreign result folder below a valid Scene must not hide the
-    # Scene itself; result folders are checked separately before reading files.
-    try:
-        context, nodes = result_registration_paths._trace_path(
-            conn, root, root_id, root_key, scope, relative_path, require_directory=True,
-        )
-    except result_registration_paths.ResultRegistrationError as exc:
-        if exc.code in {"RESULT_PATH_OWNERSHIP_CONFLICT", "RESULT_PATH_ROLE_CONFLICT"}:
-            return None
-        raise
-    scene = context.get("scene")
-    traced_scene = (isinstance(scene, dict)
-                    and str(scene.get("relative_path", "")).casefold() == relative_path.casefold()
-                    and nodes and nodes[-1].get("role_kind") == "SCENE")
-    if not traced_scene:
-        # Applied environment plans are authoritative for Scene leaf names
-        # that the legacy path fallback cannot classify. Keep ownership and
-        # ancestor-role checks from _trace_path before accepting that role.
-        if (registered_scene is None or not nodes or nodes[-1].get("role_kind") != "CONTAINER"
-                or not context.get("simulation_case")
-                or not (context.get("execution_run") or context.get("run_option"))):
-            return None
-        scene = {
-            "id": str(registered_scene.get("target_id") or result_registration_paths._stable(
-                "environment-scene", root_key, relative_path, "SCENE")),
-            "label": str(registered_scene.get("raw_name") or PurePosixPath(relative_path).name),
-            "relative_path": relative_path,
-        }
-    if PurePosixPath(relative_path).name.casefold() == "results":
-        parent_path = PurePosixPath(relative_path).parent.as_posix()
-        try:
-            _, parent_nodes = result_registration_paths._trace_path(
-                conn, root, root_id, root_key, scope, parent_path, require_directory=True,
-            )
-        except result_registration_paths.ResultRegistrationError as exc:
-            if exc.code in {"RESULT_PATH_OWNERSHIP_CONFLICT", "RESULT_PATH_ROLE_CONFLICT", "RESULT_PATH_INVALID"}:
-                return None
-            raise
-        if parent_nodes and parent_nodes[-1].get("role_kind") == "CONTAINER":
-            # A results leaf inherits the nearest semantic parent in the
-            # general folder tracer. Keep this as a result location when the
-            # immediate folder itself has no Scene role.
-            return None
-    hierarchy: dict[str, Any] = {}
-    for key in ("simulation_case", "load_case", "execution_run", "run_option"):
-        item = context.get(key)
-        if item is not None:
-            hierarchy[key] = item
-    # The path and role are revalidated through the same trace used by result registration.
-    if not traced_scene and (not nodes or nodes[-1].get("role_kind") != "CONTAINER"):
-        return None
-    return {
-        "scene_id": str(scene["id"]),
-        "label": str(scene.get("label") or PurePosixPath(relative_path).name),
-        "relative_path": relative_path,
-        "hierarchy": hierarchy,
-        "kind": "SCENE",
-        "has_deck": False,
-    }
-
-
-def _result_entries(conn: ConnectionLike, root: Path, root_id: str, root_key: str,
-                    scope: dict[str, Any], scan: dict[str, Any],
-                    scene_paths: set[str], *, authoritative_scenes: bool = False) -> list[dict[str, Any]]:
-    """Find real distribution result folders, including runs without a Scene role.
-
-    A result folder is either explicitly registered as RESULTS for this request,
-    or named ``results`` within three container levels of a validated Scene,
-    Run Option, or Execution Run. Both its parent and leaf are traced through
-    the distribution hierarchy; the request-root scan is bounded.
-    """
-    request_parts = tuple(part.casefold() for part in PurePosixPath(scope["request_relative_path"]).parts)
-    registered = rows(conn.execute(
-        "SELECT relative_path FROM result_registration_paths "
-        "WHERE root_key=? AND project_id=? AND request_id=? AND environment=? AND role_kind='RESULTS' "
-        "ORDER BY relative_path LIMIT ?",
-        [root_key, scope["project_id"], scope["request_id"], _MATERIALS_ENVIRONMENT, MAX_DECK_FILES + 1],
-    ))
-    registered.extend(rows(conn.execute(
-        "SELECT g.relative_path FROM folder_environment_registry g "
-        "JOIN folder_environment_registrations r ON r.id=g.registration_id "
-        "WHERE g.root_key=? AND r.project_id=? AND r.request_id=? AND r.environment=? AND g.role_kind='RESULTS' "
-        "ORDER BY g.relative_path LIMIT ?",
-        [root_key, scope["project_id"], scope["request_id"], _MATERIALS_ENVIRONMENT, MAX_DECK_FILES + 1],
-    )))
-    if len(registered) > MAX_DECK_FILES:
-        raise MaterialsCatalogError("MATERIALS_RESULT_LIMIT", "결과 폴더 후보 수가 허용 한도를 초과했습니다.", 413)
-    registered_paths: set[str] = set()
-    for item in registered:
-        value = str(item["relative_path"])
-        parts = tuple(part.casefold() for part in PurePosixPath(value).parts)
-        if parts[:len(request_parts)] == request_parts:
-            registered_paths.add(value.casefold())
-
-    candidates = []
-    started = time.monotonic()
-    for node in scan["nodes"]:
-        if len(candidates) >= MAX_DECK_FILES or time.monotonic() - started > folder_discovery_scan.MAX_SECONDS:
-            raise MaterialsCatalogError("MATERIALS_RESULT_SCAN_LIMIT", "결과 폴더 후보 조사 한도를 초과했습니다.", 413)
-        relative = str(node["relative_path"])
-        folded = relative.casefold()
-        if folded in scene_paths:
-            continue
-        relative_path = PurePosixPath(relative)
-        if (relative_path.name.casefold() == "results"
-                and relative_path.parent.as_posix().casefold() in scene_paths):
-            # The Scene candidate already searches its immediate results child.
-            continue
-        is_registered = folded in registered_paths
-        if authoritative_scenes and not is_registered:
-            # Once this request has an applied Scene schema, do not infer new
-            # result locations from folder names elsewhere in its tree.
-            continue
-        if not is_registered and str(node.get("name", "")).casefold() != "results":
-            continue
-        parts = tuple(part.casefold() for part in PurePosixPath(relative).parts)
-        if len(parts) <= len(request_parts) or parts[:len(request_parts)] != request_parts:
-            continue
-        parent_path = str(node.get("parent_path") or "")
-        if not parent_path:
-            continue
-        try:
-            context, parent_nodes = result_registration_paths._trace_path(
-                conn, root, root_id, root_key, scope, parent_path, require_directory=True,
-            )
-        except result_registration_paths.ResultRegistrationError as exc:
-            if exc.code in {"RESULT_PATH_OWNERSHIP_CONFLICT", "RESULT_PATH_ROLE_CONFLICT", "RESULT_PATH_INVALID"}:
-                continue
-            raise
-        parent_role = str(parent_nodes[-1]["role_kind"]) if parent_nodes else "REQUEST"
-        in_distribution_run = bool(context.get("simulation_case") and context.get("load_case")
-                                   and context.get("execution_run"))
-        if not in_distribution_run:
-            continue
-        semantic_paths = [str(context[key]["relative_path"]) for key in
-                          ("simulation_case", "load_case", "execution_run", "run_option", "scene")
-                          if isinstance(context.get(key), dict) and context[key].get("relative_path")]
-        anchor_path = max(semantic_paths, key=lambda value: len(PurePosixPath(value).parts), default="")
-        anchor_parts = tuple(part.casefold() for part in PurePosixPath(anchor_path).parts)
-        parent_parts = tuple(part.casefold() for part in PurePosixPath(parent_path).parts)
-        container_depth = (len(parent_parts) - len(anchor_parts)
-                           if parent_parts[:len(anchor_parts)] == anchor_parts else _MAX_RESULT_CONTAINER_DEPTH + 1)
-        if is_registered:
-            if parent_role not in {"SCENE", "RUN_OPTION", "EXECUTION_RUN", "CONTAINER"} or (
-                    parent_role == "CONTAINER" and container_depth > _MAX_RESULT_CONTAINER_DEPTH):
-                continue
-        elif parent_role not in {"SCENE", "RUN_OPTION", "EXECUTION_RUN"} and not (
-                parent_role == "CONTAINER" and container_depth <= _MAX_RESULT_CONTAINER_DEPTH):
-            continue
-        try:
-            result_context, result_nodes = result_registration_paths._trace_path(
-                conn, root, root_id, root_key, scope, relative, require_directory=True,
-            )
-        except result_registration_paths.ResultRegistrationError as exc:
-            if exc.code in {"RESULT_PATH_OWNERSHIP_CONFLICT", "RESULT_PATH_ROLE_CONFLICT", "RESULT_PATH_INVALID"}:
-                continue
-            raise
-        result_role = str(result_nodes[-1]["role_kind"]) if result_nodes else ""
-        if is_registered and result_role != "RESULTS":
-            continue
-        if not is_registered and result_role not in {"RESULTS", "SCENE", "CONTAINER"}:
-            continue
-        # A Scene's own result folder is searched from the existing Scene
-        # entry, so do not add a duplicate selectable location for it.
-        parent_scene = result_context.get("scene") or context.get("scene")
-        if isinstance(parent_scene, dict) and str(parent_scene.get("relative_path", "")).casefold() in scene_paths:
-            if relative.casefold() == f"{str(parent_scene['relative_path'])}/results".casefold():
-                continue
-        candidates.append((relative, result_context))
-
-    if len(candidates) > MAX_DECK_FILES:
-        raise MaterialsCatalogError("MATERIALS_RESULT_LIMIT", "결과 폴더 후보 수가 허용 한도를 초과했습니다.", 413)
-    items = []
-    for relative_path, context in candidates:
-        hierarchy = {key: context[key] for key in ("simulation_case", "load_case", "execution_run", "run_option")
-                     if context.get(key) is not None}
-        parent_label = next((str(hierarchy[key].get("label")) for key in ("run_option", "execution_run", "load_case")
-                             if isinstance(hierarchy.get(key), dict) and hierarchy[key].get("label")), "유통환경")
-        item = {
-            "scene_id": result_registration_paths._stable("materials-result", root_key, relative_path, "RESULTS"),
-            "label": f"{parent_label} · {PurePosixPath(relative_path).name}",
-            "relative_path": relative_path,
-            "hierarchy": hierarchy,
-            "kind": "RESULTS",
-            "has_deck": False,
-        }
-        items.append(item)
-    return items
+    return project_id, scope, root, root_id, root_key, schema
 
 
 def _candidate_directories(scene: dict[str, Any], scope: dict[str, Any]) -> list[str]:
+    """Return only directories whose semantic role comes from Folder Schema."""
     scene_path = str(scene["relative_path"])
     if scene.get("kind") == "RESULTS":
         return [scene_path]
+    schema = scope["schema"]
     hierarchy = scene.get("hierarchy", {})
     option = hierarchy.get("run_option")
     execution = hierarchy.get("execution_run")
-    candidates = [scene_path, f"{scene_path}/INPUT", f"{scene_path}/results"]
-    if isinstance(option, dict) and option.get("status") != "ABSENT":
+    candidates = [scene_path]
+    if isinstance(option, dict):
         candidates.append(str(option["relative_path"]))
     if isinstance(execution, dict):
-        execution_path = str(execution["relative_path"])
-        candidates.extend((execution_path, f"{execution_path}/INPUT", f"{execution_path}/deck", f"{execution_path}/solver"))
-    request_parts = tuple(part.casefold() for part in PurePosixPath(scope["request_relative_path"]).parts)
+        candidates.append(str(execution["relative_path"]))
+    for node in schema["nodes"]:
+        if node.get("role_kind") not in {"INPUT", "RESULTS"} or node.get("status") == "EXCLUDED":
+            continue
+        node_hierarchy = node.get("hierarchy", {})
+        scene_context = node_hierarchy.get("scene")
+        option_context = node_hierarchy.get("run_option")
+        execution_context = node_hierarchy.get("execution_run")
+        node_scene_path = str(scene_context.get("relative_path", "")).casefold() if isinstance(scene_context, dict) else None
+        node_option_path = str(option_context.get("relative_path", "")).casefold() if isinstance(option_context, dict) else None
+        selected_option_path = str(option.get("relative_path", "")).casefold() if isinstance(option, dict) else None
+        related_scene = node_scene_path == scene_path.casefold()
+        same_option = selected_option_path is not None and node_option_path == selected_option_path
+        same_execution = bool(
+            isinstance(execution, dict) and isinstance(execution_context, dict)
+            and str(execution_context.get("relative_path", "")).casefold() == str(execution.get("relative_path", "")).casefold()
+        )
+        # An option-level role can supply this Scene only when it is not under
+        # a different Scene. A run-level role is shared only when it has no
+        # more specific Scene or Run Option context.
+        related_run = same_option and (node_scene_path is None or related_scene)
+        related_execution = same_execution and node_scene_path is None and node_option_path is None
+        schema_confirmed_results = node.get("role_kind") != "RESULTS" or _explicit_results_role(node)
+        # The conventional results child of a confirmed Scene remains a
+        # candidate for that Scene. Sibling run-level results must carry an
+        # explicit Folder Schema role before they can supply a deck.
+        if (related_scene or ((related_run or related_execution) and schema_confirmed_results)):
+            candidates.append(str(node["relative_path"]))
+    request_path = str(scope["request_relative_path"])
+    request_parts = tuple(part.casefold() for part in PurePosixPath(request_path).parts)
     unique: list[str] = []
     seen: set[str] = set()
     for value in candidates:
@@ -622,21 +212,109 @@ def _file_roles(path: Path, budget: dict[str, Any] | None = None) -> set[str]:
     return roles
 
 
+def _path_owner_conflict(conn: ConnectionLike, root_id: str, root_key: str, relative_path: str,
+                         project_id: str, request_id: str, environment: str) -> None:
+    """Reject foreign ownership of a path or its ancestors, ignoring children."""
+    folded = result_registration_paths._root_casefold(relative_path)
+    parts = PurePosixPath(folded).parts
+    ancestors = {"/".join(parts[:index]) for index in range(1, len(parts) + 1)}
+
+    def is_ancestor(other: Any) -> bool:
+        return result_registration_paths._root_casefold(str(other)) in ancestors
+
+    cases = rows(conn.execute(
+        "SELECT project_id,request_id,environment,relative_path FROM dashboard_cases WHERE storage_root_id=?",
+        [root_id],
+    ))
+    if any((str(item.get("project_id") or ""), str(item.get("request_id") or ""),
+            str(item.get("environment") or "")) != (project_id, request_id, environment)
+           and is_ancestor(item["relative_path"]) for item in cases):
+        raise result_registration_paths.ResultRegistrationError(
+            "RESULT_PATH_OWNERSHIP_CONFLICT", "선택한 폴더 또는 상위 폴더가 다른 업무에 연결되어 있습니다.",
+        )
+
+    path_rows = rows(conn.execute(
+        "SELECT project_id,request_id,environment,relative_path FROM result_registration_paths WHERE root_key=?",
+        [root_key],
+    ))
+    if any((str(item.get("project_id") or ""), str(item.get("request_id") or ""),
+            str(item.get("environment") or "")) != (project_id, request_id, environment)
+           and is_ancestor(item["relative_path"]) for item in path_rows):
+        raise result_registration_paths.ResultRegistrationError(
+            "RESULT_PATH_OWNERSHIP_CONFLICT", "선택한 폴더 또는 상위 폴더가 다른 업무의 결과 경로입니다.",
+        )
+
+    registered = rows(conn.execute(
+        "SELECT r.project_id,r.request_id,r.environment,g.relative_path,g.role_kind "
+        "FROM folder_environment_registry g JOIN folder_environment_registrations r ON r.id=g.registration_id "
+        "WHERE g.root_key=?",
+        [root_key],
+    ))
+    for item in registered:
+        if not is_ancestor(item["relative_path"]):
+            continue
+        role = str(item.get("role_kind") or "")
+        owner_project, owner_request = str(item.get("project_id") or ""), str(item.get("request_id") or "")
+        foreign = (owner_project != project_id if role == "PROJECT" else
+                   (owner_project, owner_request) != (project_id, request_id) if role == "REQUEST" else
+                   (owner_project, owner_request) != (project_id, request_id)
+                   or str(item.get("environment") or "") != environment)
+        if foreign:
+            raise result_registration_paths.ResultRegistrationError(
+                "RESULT_PATH_OWNERSHIP_CONFLICT", "선택한 폴더 또는 상위 폴더가 다른 의뢰의 확인 경로입니다.",
+            )
+
+    bindings = rows(conn.execute("SELECT project_id,request_id,relative_path FROM spdm_storage_bindings"))
+    if any((str(item["project_id"]), str(item["request_id"])) != (project_id, request_id)
+           and is_ancestor(item["relative_path"]) for item in bindings):
+        raise result_registration_paths.ResultRegistrationError(
+            "RESULT_PATH_OWNERSHIP_CONFLICT", "선택한 폴더 또는 상위 폴더가 다른 의뢰에 연결되어 있습니다.",
+        )
+
+    semantic = rows(conn.execute("SELECT project_id,request_id,relative_path FROM semantic_folder_bindings"))
+    if any((str(item["project_id"]) != project_id
+            or item.get("request_id") is not None and str(item["request_id"]) != request_id)
+           and is_ancestor(item["relative_path"]) for item in semantic):
+        raise result_registration_paths.ResultRegistrationError(
+            "RESULT_PATH_OWNERSHIP_CONFLICT", "선택한 폴더 또는 상위 폴더가 다른 의뢰의 의미 매핑 경로입니다.",
+        )
+
+    discovered = rows(conn.execute(
+        "SELECT g.relative_path,g.role_kind,COALESCE(p.id,a.project_id,ar.project_id) AS owner_project_id, "
+        "COALESCE(a.id,l.request_id) AS owner_request_id "
+        "FROM folder_discovery_registry g "
+        "LEFT JOIN projects p ON g.role_kind='PROJECT' AND p.id=g.target_id "
+        "LEFT JOIN analysis_requests a ON g.role_kind='REQUEST' AND a.id=g.target_id "
+        "LEFT JOIN load_cases l ON g.role_kind='LOAD_CASE' AND l.id=g.target_id "
+        "LEFT JOIN analysis_requests ar ON ar.id=l.request_id WHERE g.root_key=?",
+        [root_key],
+    ))
+    for item in discovered:
+        if not is_ancestor(item["relative_path"]):
+            continue
+        owner_project, owner_request = item.get("owner_project_id"), item.get("owner_request_id")
+        if ((owner_project is not None and str(owner_project) != project_id)
+                or (owner_request is not None
+                    and (str(owner_project or project_id), str(owner_request)) != (project_id, request_id))):
+            raise result_registration_paths.ResultRegistrationError(
+                "RESULT_PATH_OWNERSHIP_CONFLICT", "선택한 폴더 또는 상위 폴더가 다른 의뢰의 탐색 경로입니다.",
+            )
+
+
 def _candidate_is_owned(conn: ConnectionLike, root: Path, root_id: str, root_key: str,
                         scope: dict[str, Any], relative_path: str) -> bool:
     try:
-        result_registration_paths._owner_conflict(
+        _path_owner_conflict(
             conn, root_id, root_key, relative_path, scope["project_id"], scope["request_id"], scope["environment"],
-        )
-        _, nodes = result_registration_paths._trace_path(
-            conn, root, root_id, root_key, scope, relative_path, require_directory=True,
         )
     except result_registration_paths.ResultRegistrationError as exc:
         if exc.code in {"RESULT_PATH_OWNERSHIP_CONFLICT", "RESULT_PATH_ROLE_CONFLICT", "RESULT_PATH_INVALID",
                         "RESULT_PATH_OUTSIDE_REQUEST"}:
             return False
         raise MaterialsCatalogError(exc.code, str(exc)) from exc
-    return bool(nodes)
+    request_parts = tuple(part.casefold() for part in PurePosixPath(scope["request_relative_path"]).parts)
+    path_parts = tuple(part.casefold() for part in PurePosixPath(relative_path).parts)
+    return len(path_parts) > len(request_parts) and path_parts[:len(request_parts)] == request_parts
 
 
 def _candidate_sources(scene: dict[str, Any], root: Path, scope: dict[str, Any],
@@ -726,66 +404,70 @@ def _candidate_sources(scene: dict[str, Any], root: Path, scope: dict[str, Any],
 
 
 def _catalog_items(conn: ConnectionLike, root: Path, root_id: str, root_key: str,
-                   scope: dict[str, Any], scan: dict[str, Any]) -> list[dict[str, Any]]:
+                   scope: dict[str, Any], schema: dict[str, Any]) -> list[dict[str, Any]]:
     budget = {
         "started": time.monotonic(), "entries": 0, "sniff_bytes": 0,
         "owned_directories": {}, "ownership_checks": 0,
     }
     items = []
-    scene_paths: set[str] = set()
-    registered_scenes = _registered_scene_roles(conn, root_key, scope)
-    candidates = _scene_paths(conn, root_key, scope, scan, registered_scenes)
-    registered_paths = [path for path in candidates if path.casefold() in registered_scenes]
-    inferred_paths = [path for path in candidates if path.casefold() not in registered_scenes]
-    authoritative_cases = {
-        str(item["case_relative_path"]).casefold()
-        for item in registered_scenes.values()
-        if item.get("case_relative_path")
-    }
-    scene_entries: list[tuple[str, dict[str, Any]]] = []
-    for path in registered_paths:
-        entry = _scene_entry(conn, root, root_id, root_key, scope, path,
-                             registered_scenes.get(path.casefold()), budget)
-        if entry is None:
+    for node in schema["nodes"]:
+        role = str(node.get("role_kind") or "")
+        if role not in {"SCENE", "RESULTS"} or node.get("status") == "EXCLUDED":
             continue
-        case = entry["hierarchy"].get("simulation_case")
-        if isinstance(case, dict) and case.get("relative_path"):
-            authoritative_cases.add(str(case["relative_path"]).casefold())
-        scene_entries.append((path, entry))
-    for path in inferred_paths:
-        entry = _scene_entry(conn, root, root_id, root_key, scope, path, budget=budget)
-        if entry is None:
+        if role == "SCENE" and not _schema_scene_role(node):
             continue
-        case = entry["hierarchy"].get("simulation_case")
-        if (isinstance(case, dict) and case.get("relative_path")
-                and str(case["relative_path"]).casefold() in authoritative_cases):
+        hierarchy = node.get("hierarchy", {})
+        required = ("simulation_case", "load_case", "execution_run")
+        if any(not isinstance(hierarchy.get(key), dict) for key in required):
             continue
-        scene_entries.append((path, entry))
-
-    for path, entry in scene_entries:
-        scene_paths.add(path.casefold())
-        _, candidates, _ = _candidate_sources(entry, root, scope, budget, conn=conn, root_id=root_id, root_key=root_key)
-        entry["has_deck"] = bool(candidates)
+        if role == "RESULTS":
+            # A Scene's result child belongs to that Scene and is searched as
+            # one of its candidate directories. Only separately confirmed
+            # Folder Schema results locations become their own catalog entry.
+            if isinstance(hierarchy.get("scene"), dict):
+                continue
+            if not _explicit_results_role(node):
+                continue
+        # Catalog entries must be under their schema-confirmed run branch. The parent
+        # chain is read from Folder Schema's role tree, never from result paths.
+        scene_path = str(node["relative_path"])
+        try:
+            _path_owner_conflict(
+                conn, root_id, root_key, scene_path,
+                scope["project_id"], scope["request_id"], scope["environment"],
+            )
+            scene_path = result_registration_paths._relative(scene_path)
+        except result_registration_paths.ResultRegistrationError as exc:
+            if exc.code in {"RESULT_PATH_OWNERSHIP_CONFLICT", "RESULT_PATH_ROLE_CONFLICT",
+                            "RESULT_PATH_INVALID", "RESULT_PATH_OUTSIDE_REQUEST"}:
+                continue
+            raise MaterialsCatalogError(exc.code, str(exc)) from exc
+        semantic_hierarchy = {
+            key: {**value, "label": value.get("name")}
+            for key, value in hierarchy.items()
+            if key in {"simulation_case", "load_case", "execution_run", "run_option"}
+        }
+        entry = {
+            "scene_id": str(node.get("target_id") or folder_discovery_environment.stable(
+                "materials-" + role.casefold(), root_key, scene_path, role)),
+            "label": str(node.get("name") or PurePosixPath(scene_path).name),
+            "relative_path": scene_path,
+            "hierarchy": semantic_hierarchy,
+            "kind": role,
+            "has_deck": False,
+        }
+        _, candidate_files, _ = _candidate_sources(
+            entry, root, scope, budget, conn=conn, root_id=root_id, root_key=root_key,
+        )
+        entry["has_deck"] = bool(candidate_files)
         items.append(entry)
-    result_items = _result_entries(
-        conn, root, root_id, root_key, scope, scan, scene_paths,
-        authoritative_scenes=bool(registered_scenes),
-    )
-    visible_result_items = []
-    for entry in result_items:
-        _, candidates, _ = _candidate_sources(entry, root, scope, budget, conn=conn, root_id=root_id, root_key=root_key)
-        if candidates:
-            entry["has_deck"] = True
-            visible_result_items.append(entry)
-    items.extend(visible_result_items)
     items.sort(key=lambda item: (item["label"].casefold(), item["relative_path"].casefold()))
     return items
 
 
 def catalog(conn: ConnectionLike, request_id: str, environment: str) -> dict[str, Any]:
-    project_id, scope, root, root_id, root_key = _request_scope(conn, request_id, environment)
-    scan = _scan_request(root, scope)
-    items = _catalog_items(conn, root, root_id, root_key, scope, scan)
+    project_id, scope, root, root_id, root_key, schema = _request_scope(conn, request_id, environment)
+    items = _catalog_items(conn, root, root_id, root_key, scope, schema)
     return {"request_id": request_id, "environment": scope["environment"], "scenes": items}
 
 
@@ -793,23 +475,20 @@ def _resolve_scene(conn: ConnectionLike, request_id: str, environment: str,
                    scene_id: str | None, relative_path: str | None) -> tuple[dict[str, Any], Path, dict[str, Any]]:
     if not scene_id and not relative_path:
         raise MaterialsCatalogError("MATERIALS_SCENE_REQUIRED", "scene_id 또는 relative_path를 선택하세요.")
-    project_id, scope, root, root_id, root_key = _request_scope(conn, request_id, environment)
-    scan = _scan_request(root, scope)
-    catalog_items = _catalog_items(conn, root, root_id, root_key, scope, scan)
+    project_id, scope, root, root_id, root_key, schema = _request_scope(conn, request_id, environment)
+    catalog_items = _catalog_items(conn, root, root_id, root_key, scope, schema)
     by_id = {item["scene_id"]: item for item in catalog_items}
     by_path = {item["relative_path"].casefold(): item for item in catalog_items}
     by_id_entry = by_id.get(scene_id) if scene_id else None
     by_path_entry = None
     if relative_path:
-        normalized = result_registration_paths._relative(relative_path)
+        try:
+            normalized = result_registration_paths._relative(relative_path)
+        except result_registration_paths.ResultRegistrationError as exc:
+            raise MaterialsCatalogError("MATERIALS_SCENE_INVALID", "선택한 경로가 이 의뢰에 속하지 않습니다.") from exc
         by_path_entry = by_path.get(normalized.casefold())
         if by_path_entry is None:
-            # Direct paths must obey the same per-Case applied Scene authority as catalog entries.
-            # Trace still classifies invalid paths consistently, but cannot approve a catalog-excluded sibling.
-            result_registration_paths._trace_path(
-                conn, root, root_id, root_key, scope, normalized, require_directory=True,
-            )
-            raise MaterialsCatalogError("MATERIALS_SCENE_INVALID", "선택한 경로가 이 의뢰의 등록 Scene 또는 결과 폴더가 아닙니다.")
+            raise MaterialsCatalogError("MATERIALS_SCENE_INVALID", "선택한 경로가 이 의뢰 스키마의 Scene이 아닙니다.")
     if scene_id and by_id_entry is None:
         raise MaterialsCatalogError("MATERIALS_SCENE_INVALID", "선택한 씬이 이 의뢰와 환경에 속하지 않습니다.", 404)
     if relative_path and by_path_entry is None:
@@ -818,7 +497,12 @@ def _resolve_scene(conn: ConnectionLike, request_id: str, environment: str,
         raise MaterialsCatalogError("MATERIALS_SCENE_MISMATCH", "scene_id와 relative_path가 서로 다른 씬을 가리킵니다.")
     selected = by_id_entry or by_path_entry
     assert selected is not None
-    scene_path = result_registration_paths._safe_existing(root, selected["relative_path"])
+    try:
+        scene_path = result_registration_paths._safe_existing(root, selected["relative_path"])
+    except result_registration_paths.ResultRegistrationError as exc:
+        raise MaterialsCatalogError(exc.code, str(exc)) from exc
+    if not scene_path.is_dir():
+        raise MaterialsCatalogError("MATERIALS_SCENE_INVALID", "선택한 Scene 폴더를 찾을 수 없습니다.", 404)
     return selected, scene_path, scope
 
 

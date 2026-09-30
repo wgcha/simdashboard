@@ -119,6 +119,21 @@
 .result-registration-selected-path { border-color:var(--color-success-border); color:var(--color-success); }
 .result-registration-selected-path>div { min-width:0; flex:1; display:grid; gap:4px; }
 .result-registration-selected-path>b { color:var(--color-success); white-space:nowrap; }
+.result-registration-location-links { display:grid; gap:10px; padding:13px; border:1px solid var(--color-border); border-radius:var(--radius-sm); background:var(--color-surface-1); }
+.result-registration-location-links>header { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+.result-registration-location-links>header>div { min-width:0; display:grid; gap:4px; }
+.result-registration-location-links>header strong { color:var(--color-text-strong); }
+.result-registration-location-links>header p { margin:0; color:var(--color-text-muted); line-height:1.5; }
+.result-registration-location-links code { min-width:0; overflow-wrap:anywhere; color:var(--color-text); font:500 var(--text-caption) var(--font-mono); }
+.result-registration-location-links button,.result-registration-location-edit select { min-height:34px; padding:0 10px; border:1px solid var(--color-border-strong); border-radius:var(--radius-sm); color:var(--color-text); background:var(--color-surface-raised); cursor:pointer; }
+.result-registration-location-links button:disabled { opacity:.55; cursor:not-allowed; }
+.result-registration-location-list { display:grid; gap:7px; }
+.result-registration-location-row { min-width:0; display:grid; grid-template-columns:minmax(320px,1fr) auto; align-items:center; gap:12px; padding:9px 11px; border:1px solid var(--color-border); border-radius:var(--radius-sm); background:var(--color-surface-raised); }
+.result-registration-location-detail { min-width:0; display:grid; gap:4px; }
+.result-registration-location-detail small { color:var(--color-text-muted); }
+.result-registration-location-actions,.result-registration-location-edit { display:flex; align-items:center; justify-content:flex-end; gap:7px; }
+.result-registration-location-edit select { min-width:360px; cursor:pointer; }
+.result-registration-location-actions .ghost-button,.result-registration-location-edit .ghost-button { background:transparent; }
 .result-registration-prepare-preview { padding:14px; display:grid; gap:12px; border:1px solid var(--color-warning-border); border-radius:var(--radius-sm); background:var(--color-warning-surface); }
 .result-registration-prepare-preview>div { display:grid; gap:3px; }
 .result-registration-prepare-preview>div span { color:var(--color-text-muted); }

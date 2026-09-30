@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -44,10 +46,94 @@ def _bound_request(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     return root, wr_relative, project_id, request_id
 
 
+def _register_synthetic_schema(root: Path, request_path: str, project_id: str, request_id: str,
+                               environment: str, project_path: str | None = None, conn=None,
+                               excluded_paths: tuple[str, ...] = (), keep_seed: bool = False,
+                               legacy_preview: bool = False,
+                               registration_status: str = "REGISTERED") -> None:
+    """Save one confirmed scan that proves the request parent exists in the schema."""
+    seed_parts = (["Package_SchemaSeed", "Drop", "Run_01", "Individual", "Scene_01"]
+                  if environment == "DISTRIBUTION" else ["Assy_RES_SchemaSeed", "Settle"])
+    seed = root.joinpath(*request_path.split("/"), *seed_parts)
+    seed.mkdir(parents=True)
+    project_path = project_path or Path(request_path).parent.as_posix()
+    def save(connection):
+        scan = folder_discovery_environment.save_scan(
+            connection, root, project_path, environment, None, project_id, request_id, "test-user")
+        request_node = next(item for item in scan["nodes"] if item["relative_path"] == request_path)
+        assignment = {"node_id": request_node["id"], "role_kind": "REQUEST", "confirm": True,
+                      "target_mode": "LINK", "target_id": request_id}
+        assignments = [assignment]
+        for excluded_path in excluded_paths:
+            node = next(item for item in scan["nodes"] if item["relative_path"] == excluded_path)
+            assignments.append({"node_id": node["id"], "role_kind": "EXCLUDE", "confirm": True})
+        preview = folder_discovery_environment.preview(connection, scan["id"], assignments, "test-user")
+        assert preview["can_apply"] is True, (preview.get("unresolved_count"),
+            [(row.get("name"), row.get("role_kind"), row.get("status"), row.get("message")) for row in scan.get("nodes", [])])
+        folder_discovery_environment.register(
+            connection, preview["id"], f"synthetic-schema-{uuid4().hex}", None,
+            SimpleNamespace(user_id="test-user"), root)
+        if registration_status != "REGISTERED":
+            connection.execute(
+                "UPDATE folder_environment_registrations SET status=? WHERE preview_id=?",
+                [registration_status, preview["id"]],
+            )
+        if legacy_preview:
+            connection.execute(
+                "UPDATE folder_environment_previews SET rows_json=? WHERE id=?",
+                [json.dumps(preview["rows"], ensure_ascii=False), preview["id"]],
+            )
+    try:
+        if conn is None:
+            with connect() as connection:
+                save(connection)
+        else:
+            save(conn)
+    finally:
+        if not keep_seed:
+            path = seed
+            for _ in seed_parts:
+                try:
+                    path.rmdir()
+                except OSError:
+                    break
+                path = path.parent
+
+
+def _register_schema_roles(root: Path, request_path: str, project_id: str, request_id: str,
+                           environment: str, roles: dict[str, tuple[str, str | None]], conn=None) -> None:
+    """Apply explicit Folder Schema roles for request-scoped path tests."""
+    project_path = Path(request_path).parent.as_posix()
+
+    def save(connection):
+        scan = folder_discovery_environment.save_scan(
+            connection, root, project_path, environment, None, project_id, request_id, "test-user")
+        by_path = {item["relative_path"]: item for item in scan["nodes"]}
+        assignments = [{"node_id": by_path[request_path]["id"], "role_kind": "REQUEST", "confirm": True,
+                        "target_mode": "LINK", "target_id": request_id}]
+        for relative, (role, target_id) in roles.items():
+            item = {"node_id": by_path[relative]["id"], "role_kind": role, "confirm": True}
+            if target_id:
+                item.update(target_mode="LINK", target_id=target_id)
+            assignments.append(item)
+        preview = folder_discovery_environment.preview(connection, scan["id"], assignments, "test-user")
+        assert preview["can_apply"] is True, preview
+        folder_discovery_environment.register(
+            connection, preview["id"], f"explicit-schema-{uuid4().hex}", None,
+            SimpleNamespace(user_id="test-user"), root)
+
+    if conn is None:
+        with connect() as connection:
+            save(connection)
+    else:
+        save(conn)
+
+
 def test_prepare_preview_is_read_only_and_confirm_creates_only_result_folders(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root, wr, project_id, request_id = _bound_request(tmp_path, monkeypatch)
+    _register_synthetic_schema(root, wr, project_id, request_id, "USAGE")
     segments = [
         {"role_kind": "SIMULATION_CASE", "name": "Assy_Result_01"},
         {"role_kind": "EVALUATION", "name": "Settle"},
@@ -68,6 +154,229 @@ def test_prepare_preview_is_read_only_and_confirm_creates_only_result_folders(
         assert conn.execute("SELECT count(*) FROM result_registration_paths").fetchone()[0] == 2
         assert conn.execute("SELECT count(*) FROM load_cases WHERE request_id=?", [request_id]).fetchone()[0] == 0
         assert conn.execute("SELECT count(*) FROM dashboard_cases WHERE request_id=?", [request_id]).fetchone()[0] == 0
+
+
+def test_new_case_uses_browsed_container_from_current_registered_schema(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, wr, project_id, request_id = _bound_request(tmp_path, monkeypatch)
+    working = f"{wr}/Working"
+    root.joinpath(*working.split("/")).mkdir()
+    _register_synthetic_schema(root, wr, project_id, request_id, "DISTRIBUTION",
+                               registration_status="COMPLETED")
+    # An unrelated addition after registration must not stale the selected parent.
+    (root / wr / "Unrelated").mkdir()
+    segments = [
+        {"role_kind": "SIMULATION_CASE", "name": "Package_New"},
+        {"role_kind": "LOAD_CASE", "name": "Drop"},
+        {"role_kind": "EXECUTION_RUN", "name": "85qn80h_ref_organized"},
+        {"role_kind": "RUN_OPTION", "name": "INDIVIDUAL"},
+        {"role_kind": "SCENE", "name": "Scene"},
+        {"role_kind": "RESULTS", "name": "results"},
+    ]
+    with connect() as conn:
+        conn.execute(
+            "UPDATE folder_environment_scans SET project_id=NULL,request_id=NULL WHERE root_key=? AND relative_path=? AND environment='DISTRIBUTION'",
+            [folder_discovery_environment.root_identity(root), Path(wr).parent.as_posix()],
+        )
+        preview = paths.prepare_folders(conn, project_id, request_id, "DISTRIBUTION", working,
+                                        segments, False, "test-user")
+        assert preview["status"] == "CONFIRM_REQUIRED"
+        assert preview["result_relative_path"] == f"{working}/Package_New/Drop/85qn80h_ref_organized/INDIVIDUAL/Scene/results"
+        assert not root.joinpath(*preview["result_relative_path"].split("/")).exists()
+        prepared = paths.prepare_folders(conn, project_id, request_id, "DISTRIBUTION", working,
+                                         segments, True, "test-user")
+        assert prepared["result_relative_path"].startswith(working + "/")
+        assert conn.execute("SELECT count(*) FROM dashboard_cases WHERE request_id=?", [request_id]).fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM load_cases WHERE request_id=?", [request_id]).fetchone()[0] == 0
+
+
+def test_new_case_rejects_container_excluded_from_registered_preview(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, wr, project_id, request_id = _bound_request(tmp_path, monkeypatch)
+    working = f"{wr}/Working"
+    root.joinpath(*working.split("/")).mkdir()
+    _register_synthetic_schema(root, wr, project_id, request_id, "DISTRIBUTION",
+                               excluded_paths=(working,))
+    with connect() as conn:
+        with pytest.raises(paths.ResultRegistrationError) as excluded:
+            paths.prepare_folders(
+                conn, project_id, request_id, "DISTRIBUTION", working,
+                [{"role_kind": "SIMULATION_CASE", "name": "Package_New"},
+                 {"role_kind": "LOAD_CASE", "name": "Drop"},
+                 {"role_kind": "EXECUTION_RUN", "name": "Run_01"},
+                 {"role_kind": "SCENE", "name": "Scene"},
+                 {"role_kind": "RESULTS", "name": "results"}], False, "test-user")
+        assert excluded.value.code == "RESULT_FOLDER_SCHEMA_REQUIRED"
+
+
+def test_new_case_rejects_conflicting_registrations_when_one_excludes_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, wr, project_id, request_id = _bound_request(tmp_path, monkeypatch)
+    working = f"{wr}/Working"
+    root.joinpath(*working.split("/")).mkdir()
+    _register_synthetic_schema(root, wr, project_id, request_id, "DISTRIBUTION",
+                               excluded_paths=(working,))
+    _register_synthetic_schema(root, wr, project_id, request_id, "DISTRIBUTION")
+    with connect() as conn:
+        with pytest.raises(paths.ResultRegistrationError) as conflict:
+            paths.prepare_folders(
+                conn, project_id, request_id, "DISTRIBUTION", working,
+                [{"role_kind": "SIMULATION_CASE", "name": "Package_New"},
+                 {"role_kind": "LOAD_CASE", "name": "Drop"},
+                 {"role_kind": "EXECUTION_RUN", "name": "Run_01"},
+                 {"role_kind": "SCENE", "name": "Scene"},
+                 {"role_kind": "RESULTS", "name": "results"}], False, "test-user")
+        assert conflict.value.code == "RESULT_FOLDER_SCHEMA_AMBIGUOUS"
+        assert not root.joinpath(*working.split("/"), "Package_New").exists()
+
+
+def test_legacy_preview_requires_refresh_for_unclassified_container_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, wr, project_id, request_id = _bound_request(tmp_path, monkeypatch)
+    working = f"{wr}/Working"
+    root.joinpath(*working.split("/")).mkdir()
+    _register_synthetic_schema(root, wr, project_id, request_id, "DISTRIBUTION", legacy_preview=True)
+    with connect() as conn:
+        with pytest.raises(paths.ResultRegistrationError) as refresh:
+            paths.prepare_folders(
+                conn, project_id, request_id, "DISTRIBUTION", working,
+                [{"role_kind": "SIMULATION_CASE", "name": "Package_New"},
+                 {"role_kind": "LOAD_CASE", "name": "Drop"},
+                 {"role_kind": "EXECUTION_RUN", "name": "Run_01"},
+                 {"role_kind": "SCENE", "name": "Scene"},
+                 {"role_kind": "RESULTS", "name": "results"}], False, "test-user")
+        assert refresh.value.code == "RESULT_FOLDER_SCHEMA_REFRESH_REQUIRED"
+        assert "다시 조사" in str(refresh.value)
+        assert not root.joinpath(*working.split("/"), "Package_New").exists()
+
+
+def test_new_registration_with_node_states_supersedes_legacy_container_uncertainty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, wr, project_id, request_id = _bound_request(tmp_path, monkeypatch)
+    working = f"{wr}/Working"
+    root.joinpath(*working.split("/")).mkdir()
+    _register_synthetic_schema(root, wr, project_id, request_id, "DISTRIBUTION", legacy_preview=True)
+    with connect() as conn:
+        conn.execute(
+            "UPDATE folder_environment_registrations SET created_at=? WHERE id=("
+            "SELECT r.id FROM folder_environment_registrations r "
+            "JOIN folder_environment_previews p ON p.id=r.preview_id "
+            "JOIN folder_environment_scans s ON s.id=p.scan_id "
+            "WHERE r.project_id=? AND r.request_id=? AND s.environment=? ORDER BY r.created_at DESC LIMIT 1)",
+            [datetime(2000, 1, 1), project_id, request_id, "DISTRIBUTION"],
+        )
+    _register_synthetic_schema(root, wr, project_id, request_id, "DISTRIBUTION")
+    with connect() as conn:
+        preview = paths.prepare_folders(
+            conn, project_id, request_id, "DISTRIBUTION", working,
+            [{"role_kind": "SIMULATION_CASE", "name": "Package_New"},
+             {"role_kind": "LOAD_CASE", "name": "Drop"},
+             {"role_kind": "EXECUTION_RUN", "name": "Run_01"},
+             {"role_kind": "SCENE", "name": "Scene"},
+             {"role_kind": "RESULTS", "name": "results"}], False, "test-user")
+        assert preview["status"] == "CONFIRM_REQUIRED"
+        assert preview["result_relative_path"].startswith(working + "/Package_New/")
+
+
+def test_scene_preview_role_and_prepared_target_id_merge_without_conflict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, wr, project_id, request_id = _bound_request(tmp_path, monkeypatch)
+    _register_synthetic_schema(root, wr, project_id, request_id, "DISTRIBUTION", keep_seed=True,
+                               registration_status="COMPLETED")
+    run_option_path = f"{wr}/Package_SchemaSeed/Drop/Run_01/Individual"
+    scene_path = f"{run_option_path}/Scene_01"
+    with connect() as conn:
+        prepared = paths.prepare_folders(
+            conn, project_id, request_id, "DISTRIBUTION", run_option_path,
+            [{"role_kind": "SCENE", "name": "Scene_01"},
+             {"role_kind": "RESULTS", "name": "results"}], True, "test-user")
+        folder_view = paths.folders(conn, project_id, request_id, "DISTRIBUTION", run_option_path)
+        scene = next(item for item in folder_view["nodes"] if item["relative_path"] == scene_path)
+        assert scene["role_kind"] == "SCENE"
+        assert scene["context"]["scene"]["id"] == prepared["context"]["scene"]["id"]
+
+
+def test_new_case_rejects_unregistered_or_stale_schema_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, wr, project_id, request_id = _bound_request(tmp_path, monkeypatch)
+    segments = [
+        {"role_kind": "SIMULATION_CASE", "name": "Package_New"},
+        {"role_kind": "LOAD_CASE", "name": "Drop"},
+        {"role_kind": "EXECUTION_RUN", "name": "Run_01"},
+        {"role_kind": "SCENE", "name": "Scene"},
+        {"role_kind": "RESULTS", "name": "results"},
+    ]
+    with connect() as conn:
+        with pytest.raises(paths.ResultRegistrationError) as missing:
+            paths.prepare_folders(conn, project_id, request_id, "DISTRIBUTION", wr,
+                                  segments, False, "test-user")
+        assert missing.value.code == "RESULT_FOLDER_SCHEMA_REQUIRED"
+
+    _register_synthetic_schema(root, wr, project_id, request_id, "DISTRIBUTION")
+    with connect() as conn:
+        profile = conn.execute(
+            "SELECT id FROM folder_environment_profiles WHERE environment='DISTRIBUTION' ORDER BY created_at LIMIT 1"
+        ).fetchone()
+        conn.execute("UPDATE folder_environment_profiles SET revision=revision+1 WHERE id=?", [profile[0]])
+        with pytest.raises(paths.ResultRegistrationError) as stale:
+            paths.prepare_folders(conn, project_id, request_id, "DISTRIBUTION", wr,
+                                  segments, False, "test-user")
+        assert stale.value.code == "RESULT_FOLDER_SCHEMA_STALE"
+
+
+def test_new_case_rejects_conflicting_registered_schema_profiles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, wr, project_id, request_id = _bound_request(tmp_path, monkeypatch)
+    _register_synthetic_schema(root, wr, project_id, request_id, "DISTRIBUTION")
+    segments = [
+        {"role_kind": "SIMULATION_CASE", "name": "Package_New"},
+        {"role_kind": "LOAD_CASE", "name": "Drop"},
+        {"role_kind": "EXECUTION_RUN", "name": "Run_01"},
+        {"role_kind": "SCENE", "name": "Scene"},
+        {"role_kind": "RESULTS", "name": "results"},
+    ]
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    with connect() as conn:
+        schema = conn.execute(
+            "SELECT s.root_key,s.relative_path,s.environment,s.project_id,s.request_id,s.status,s.tree_json,s.issues_json,s.profile_revision,s.created_by,s.created_at,p.rows_json,fp.id,fp.environment,fp.revision,fp.rules_json,fp.created_at,fp.updated_at "
+            "FROM folder_environment_scans s JOIN folder_environment_previews p ON p.scan_id=s.id "
+            "JOIN folder_environment_registrations r ON r.preview_id=p.id "
+            "JOIN folder_environment_profiles fp ON fp.id=s.profile_id "
+            "WHERE r.project_id=? AND r.request_id=? AND s.environment=? ORDER BY r.created_at DESC LIMIT 1",
+            [project_id, request_id, "DISTRIBUTION"],
+        ).fetchone()
+        profile_id = f"alternate-profile-{uuid4().hex}"
+        scan_id = f"alternate-scan-{uuid4().hex}"
+        preview_id = f"alternate-preview-{uuid4().hex}"
+        registration_id = f"alternate-registration-{uuid4().hex}"
+        conn.execute(
+            "INSERT INTO folder_environment_profiles(id,environment,name,revision,rules_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+            [profile_id, schema[13], f"Alternate {profile_id}", schema[14], schema[15], schema[16], schema[17]],
+        )
+        conn.execute(
+            "INSERT INTO folder_environment_scans(id,root_key,relative_path,environment,profile_id,profile_revision,project_id,request_id,status,tree_json,issues_json,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            [scan_id, schema[0], schema[1], schema[2], profile_id, schema[8], schema[3], schema[4], schema[5], schema[6], schema[7], schema[9], now],
+        )
+        conn.execute(
+            "INSERT INTO folder_environment_previews(id,scan_id,rows_json,can_apply,created_by,created_at) VALUES(?,?,?,?,?,?)",
+            [preview_id, scan_id, schema[11], True, "test-user", now],
+        )
+        conn.execute(
+            "INSERT INTO folder_environment_registrations(id,preview_id,idempotency_key,environment,project_id,request_id,status,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            [registration_id, preview_id, registration_id, "DISTRIBUTION", project_id, request_id, "REGISTERED", "test-user", now],
+        )
+        with pytest.raises(paths.ResultRegistrationError) as ambiguous:
+            paths.prepare_folders(conn, project_id, request_id, "DISTRIBUTION", wr,
+                                  segments, False, "test-user")
+        assert ambiguous.value.code == "RESULT_FOLDER_SCHEMA_AMBIGUOUS"
 
 
 def test_existing_arbitrary_run_option_requires_and_accepts_explicit_role_confirmation(
@@ -94,6 +403,15 @@ def test_existing_arbitrary_run_option_requires_and_accepts_explicit_role_confir
         assert conn.execute(
             "SELECT count(*) FROM result_registration_paths WHERE role_kind IN ('RUN_OPTION','SCENE')"
         ).fetchone()[0] == 2
+        case_path = f"{wr}/Assy_Drop_01"
+        _register_schema_roles(root, wr, project_id, request_id, "DISTRIBUTION", {
+            case_path: ("SIMULATION_CASE", None),
+            f"{case_path}/Drop": ("LOAD_CASE", None),
+            f"{parent}": ("EXECUTION_RUN", None),
+            f"{parent}/CustomOption": ("RUN_OPTION", None),
+            f"{parent}/CustomOption/Bottom": ("SCENE", None),
+            result: ("RESULTS", None),
+        }, conn=conn)
         folder_view = paths.folders(conn, project_id, request_id, "DISTRIBUTION", parent)
         option = next(item for item in folder_view["nodes"] if item["name"] == "CustomOption")
         assert option["role_kind"] == "RUN_OPTION"
@@ -192,31 +510,15 @@ def test_existing_evaluation_target_id_survives_result_prepare_and_trace(
     case_path = f"{wr}/Assy_Usage_01"
     evaluation_path = f"{case_path}/Settle"
     root.joinpath(*evaluation_path.split("/")).mkdir(parents=True)
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
-    root_key = folder_discovery_environment.root_identity(root)
-    registration_id = f"confirmed-usage-{uuid4().hex}"
     evaluation_id = "confirmed-evaluation-id"
+    result_path = f"{evaluation_path}/results"
+    root.joinpath(*result_path.split("/")).mkdir()
     with connect() as conn:
-        scan_id = f"confirmed-usage-scan-{uuid4().hex}"
-        preview_id = f"confirmed-usage-preview-{uuid4().hex}"
-        conn.execute(
-            "INSERT INTO folder_environment_scans(id,root_key,relative_path,environment,profile_id,profile_revision,project_id,request_id,status,tree_json,issues_json,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            [scan_id, root_key, wr, "USAGE", "environment-profile-usage-default", 1,
-             project_id, request_id, "COMPLETE", "[]", "[]", "test-user", now],
-        )
-        conn.execute(
-            "INSERT INTO folder_environment_previews(id,scan_id,rows_json,can_apply,created_by,created_at) VALUES(?,?,?,?,?,?)",
-            [preview_id, scan_id, "[]", True, "test-user", now],
-        )
-        conn.execute(
-            "INSERT INTO folder_environment_registrations(id,preview_id,idempotency_key,environment,project_id,request_id,status,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
-            [registration_id, preview_id, registration_id, "USAGE", project_id, request_id, "REGISTERED", "test-user", now],
-        )
-        conn.execute(
-            "INSERT INTO folder_environment_registry(id,registration_id,root_key,relative_path,role_kind,parent_context_id,target_id,raw_name,option_status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
-            [f"confirmed-evaluation-{uuid4().hex}", registration_id, root_key, evaluation_path,
-             "EVALUATION", None, evaluation_id, "Settle", None, now],
-        )
+        _register_schema_roles(root, wr, project_id, request_id, "USAGE", {
+            case_path: ("SIMULATION_CASE", None),
+            evaluation_path: ("EVALUATION", evaluation_id),
+            result_path: ("RESULTS", None),
+        }, conn=conn)
 
         prepared = paths.prepare_folders(
             conn, project_id, request_id, "USAGE", case_path,
@@ -225,7 +527,7 @@ def test_existing_evaluation_target_id_survives_result_prepare_and_trace(
         assert prepared["context"]["evaluation"]["relative_path"] == evaluation_path
         row = conn.execute(
             "SELECT target_id FROM result_registration_paths WHERE root_key=? AND path_key=?",
-            [root_key, evaluation_path.casefold()],
+            [folder_discovery_environment.root_identity(root), evaluation_path.casefold()],
         ).fetchone()
         assert row == (evaluation_id,)
 
@@ -271,6 +573,9 @@ def test_confirmed_environment_registry_resolves_nested_project_and_multiple_req
                     [f"environment-registry-{uuid4().hex}", registration_id, root_key, relative, role, None,
                      f"target-{role}-{request_id}", Path(relative).name, None, now],
                 )
+
+        _register_synthetic_schema(root, request_paths[1], project_id, request_ids[1], "DISTRIBUTION",
+                                   project_path=project_path, conn=conn)
 
         # The old leaf binding's first two components are not the confirmed
         # Project/WR boundaries for this nested folder schema.
@@ -333,6 +638,7 @@ def test_targets_keeps_unbound_legacy_request_visible_without_aborting_bound_tar
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root, _wr, project_id, request_id = _bound_request(tmp_path, monkeypatch)
+    _register_synthetic_schema(root, _wr, project_id, request_id, "USAGE")
     unbound_request_id = f"legacy-only-request-{uuid4().hex[:10]}"
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     with connect() as conn:
@@ -355,7 +661,7 @@ def test_targets_keeps_unbound_legacy_request_visible_without_aborting_bound_tar
     assert legacy["status"] == "BINDING_REQUIRED"
     assert legacy["spdm_request_folder"] is None
     assert legacy["request_relative_path"] is None
-    assert legacy["reason"]["code"] == "SPDM_REQUEST_BINDING_REQUIRED"
+    assert legacy["reason"]["code"] == "FOLDER_SCHEMA_REQUEST_BINDING_REQUIRED"
     assert legacy["cases"] == []
 
 
@@ -363,6 +669,7 @@ def test_foreign_descendant_environment_registry_blocks_path_claim_before_mkdir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root, wr, project_id, request_id = _bound_request(tmp_path, monkeypatch)
+    _register_synthetic_schema(root, wr, project_id, request_id, "USAGE")
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     foreign_registration = f"foreign-registration-{uuid4().hex}"
     other_project = f"foreign-project-{uuid4().hex[:10]}"
@@ -392,6 +699,7 @@ def test_database_failure_compensates_only_new_empty_paths(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root, wr, project_id, request_id = _bound_request(tmp_path, monkeypatch)
+    _register_synthetic_schema(root, wr, project_id, request_id, "USAGE")
     sentinel = root.joinpath(*wr.split("/")) / "keep.txt"
     sentinel.write_text("preexisting", encoding="utf-8")
     segments = [

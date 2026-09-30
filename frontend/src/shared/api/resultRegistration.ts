@@ -46,7 +46,7 @@ export type ResultFolderNode = {
   name: string
   role_kind: string | null
   context: ResultRegistrationContext
-  result_state: 'PRESENT' | 'MISSING' | 'UNAVAILABLE'
+  result_state: 'PRESENT' | 'MISSING' | 'UNAVAILABLE' | 'NOT_APPLICABLE'
   can_prepare: boolean
   suggested_relative_path: string | null
   children_available: boolean
@@ -59,7 +59,49 @@ export type ResultFolders = {
   request_id: string
   environment: ResultEnvironment
   parent_relative_path: string | null
+  parent_context: ResultRegistrationContext
   nodes: ResultFolderNode[]
+}
+
+export type ResultLocationCandidate = {
+  relative_path: string
+  schema_parent_path: string
+  schema_role_kind: 'EVALUATION' | 'SCENE'
+  schema_target_id?: string | null
+  schema_scan_id: string
+  schema_profile_id: string
+  schema_profile_revision: number
+  exists: boolean
+  context: ResultRegistrationContext
+}
+
+export type ResultLocationLink = {
+  id: string
+  root_key?: string
+  relative_path: string
+  schema_parent_path: string
+  schema_role_kind: 'EVALUATION' | 'SCENE'
+  schema_target_id?: string | null
+  schema_scan_id: string
+  schema_profile_id: string
+  schema_profile_revision: number
+  revision: number
+  created_by: string
+  created_at: string
+  updated_by: string
+  updated_at: string
+  is_current: boolean
+}
+
+export type ResultLocations = {
+  storage_root_id: string | null
+  project_id: string
+  request_id: string
+  environment: ResultEnvironment
+  request_relative_path: string
+  candidates: ResultLocationCandidate[]
+  links: ResultLocationLink[]
+  schema_error?: { code: string; message: string } | null
 }
 
 export type ResultManifestItem = {
@@ -210,6 +252,25 @@ export const resultRegistrationApi = {
     const query = new URLSearchParams({ project_id: input.project_id, request_id: input.request_id, environment: input.environment })
     if (input.parent_relative_path) query.set('parent_relative_path', input.parent_relative_path)
     return requestJson<ResultFolders>(`${endpoint('folders')}?${query}`, { signal })
+  },
+  locations(input: { project_id: string; request_id: string; environment: ResultEnvironment }, signal?: AbortSignal) {
+    const query = new URLSearchParams(input)
+    return requestJson<ResultLocations>(`${endpoint('locations')}?${query}`, { signal })
+  },
+  createLocation(input: { project_id: string; request_id: string; environment: ResultEnvironment; relative_path: string }) {
+    return requestJson<ResultLocationLink>(endpoint('locations'), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input),
+    })
+  },
+  updateLocation(linkId: string, input: { project_id: string; request_id: string; environment: ResultEnvironment; relative_path: string; revision: number }) {
+    return requestJson<ResultLocationLink>(endpoint('locations', encodeURIComponent(linkId)), {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input),
+    })
+  },
+  deleteLocation(linkId: string, input: { project_id: string; request_id: string; environment: ResultEnvironment; revision: number }) {
+    const query = new URLSearchParams({ project_id: input.project_id, request_id: input.request_id,
+      environment: input.environment, revision: String(input.revision) })
+    return requestJson<{ id: string; deleted: boolean }>(`${endpoint('locations', encodeURIComponent(linkId))}?${query}`, { method: 'DELETE' })
   },
   prepareFolder(input: { project_id: string; request_id: string; environment: ResultEnvironment; parent_relative_path?: string; segments: Array<{ role_kind: string; name: string }>; confirm_create: boolean }) {
     return requestJson<ResultFolderPreparation>(endpoint('folders', 'prepare'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) })

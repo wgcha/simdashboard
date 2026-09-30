@@ -13,6 +13,8 @@ import {
   type ResultFolderPreparation,
   type ResultInspection,
   type ResultInspectionIssue,
+  type ResultLocationCandidate,
+  type ResultLocationLink,
   type ResultRegistrationContext,
   type ResultRegistrationDraftRead,
   type ResultRegistrationPublished,
@@ -197,7 +199,15 @@ export function ResultRegistrationWorkspace({ embedded = false, contextChanging 
   const [targetCasePath, setTargetCasePath] = useState('')
   const [activeContextNode, setActiveContextNode] = useState<ResultFolderNode | null>(null)
   const [folderStack, setFolderStack] = useState<string[]>([])
+  const [folderParentContext, setFolderParentContext] = useState<ResultRegistrationContext>(emptyContext())
   const [folderNodes, setFolderNodes] = useState<ResultFolderNode[]>([])
+  const [locationCandidates, setLocationCandidates] = useState<ResultLocationCandidate[]>([])
+  const [locationLinks, setLocationLinks] = useState<ResultLocationLink[]>([])
+  const [locationsError, setLocationsError] = useState('')
+  const [locationsBusy, setLocationsBusy] = useState(false)
+  const [locationMutationBusy, setLocationMutationBusy] = useState(false)
+  const [editingLocationId, setEditingLocationId] = useState('')
+  const [editingLocationPath, setEditingLocationPath] = useState('')
   const [selectedResultPath, setSelectedResultPath] = useState('')
   const [selectedResultState, setSelectedResultState] = useState<'PRESENT' | 'MISSING' | 'UNAVAILABLE' | ''>('')
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
@@ -243,6 +253,8 @@ export function ResultRegistrationWorkspace({ embedded = false, contextChanging 
   const activeCasePath = preparedFolder?.case_relative_path ?? activeContext?.simulation_case?.relative_path ?? selectedTargetCase?.relative_path ?? ''
   const suggestedPath = activeContextNode?.suggested_relative_path || ''
   const suggestedState = activeContextNode?.result_state ?? ''
+  const activeDestinationPath = selectedResultPath || suggestedPath
+  const activeDestinationCandidate = locationCandidates.find((item) => item.relative_path === activeDestinationPath)
   const selectedTargetLabel = activeTarget ? `${activeTarget.project_name} · ${activeTarget.request_name}` : ''
   const effectiveContext = activeContext ?? emptyContext()
   const isContextReady = Boolean(activeTarget && activeTarget.status && activeCasePath && effectiveContext.simulation_case?.id)
@@ -261,7 +273,8 @@ export function ResultRegistrationWorkspace({ embedded = false, contextChanging 
     idempotencyByDraft.current.clear()
   }, [])
   const clearPathState = useCallback(() => {
-    setActiveContextNode(null); setFolderStack([]); setFolderNodes([]); setTargetCasePath('')
+    setActiveContextNode(null); setFolderStack([]); setFolderParentContext(emptyContext()); setFolderNodes([]); setTargetCasePath('')
+    setLocationCandidates([]); setLocationLinks([]); setLocationsError(''); setEditingLocationId(''); setEditingLocationPath('')
     setSelectedResultPath(''); setSelectedResultState(''); setSelectedFiles([])
     setPrepareInput(null); setPreparePreview(null); setPreparedFolder(null); setConfirmCreateFolder(false)
     setFoldersError(''); setFormError(''); setNotice(''); setCompletion(null); clearReview()
@@ -312,11 +325,28 @@ export function ResultRegistrationWorkspace({ embedded = false, contextChanging 
     resultRegistrationApi.folders({ project_id: projectId, request_id: requestId, environment }, controller.signal).then((response) => {
       if (controller.signal.aborted || request !== folderRequestId.current || targetKeyRef.current !== targetKey) return
       setFolderNodes(response.nodes)
+      setFolderParentContext(response.parent_context ?? emptyContext())
     }).catch((reason) => {
       if (!controller.signal.aborted && request === folderRequestId.current && targetKeyRef.current === targetKey) setFoldersError(errorMessage(reason, '연결된 폴더를 불러오지 못했습니다.'))
     }).finally(() => { if (!controller.signal.aborted && request === folderRequestId.current) setFolderBusy(false) })
     return () => controller.abort()
   }, [activeTarget, environment, projectId, requestId, targetKey])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    setLocationCandidates([]); setLocationLinks([]); setLocationsError(''); setEditingLocationId(''); setEditingLocationPath('')
+    if (!projectId || !requestId) { setLocationsBusy(false); return () => controller.abort() }
+    setLocationsBusy(true)
+    resultRegistrationApi.locations({ project_id: projectId, request_id: requestId, environment }, controller.signal).then((response) => {
+      if (controller.signal.aborted || targetKeyRef.current !== targetKey) return
+      setLocationCandidates(response.candidates)
+      setLocationLinks(response.links)
+      if (response.schema_error) setLocationsError(response.schema_error.message)
+    }).catch((reason) => {
+      if (!controller.signal.aborted && targetKeyRef.current === targetKey) setLocationsError(errorMessage(reason, '저장 위치 연결을 불러오지 못했습니다.'))
+    }).finally(() => { if (!controller.signal.aborted && targetKeyRef.current === targetKey) setLocationsBusy(false) })
+    return () => controller.abort()
+  }, [environment, projectId, requestId, targetKey])
 
   useEffect(() => () => {
     folderAbort.current?.abort(); targetAbort.current?.abort()
@@ -348,7 +378,7 @@ export function ResultRegistrationWorkspace({ embedded = false, contextChanging 
           relative_path: draft.case_relative_path, name: caseContext.label, role_kind: 'SIMULATION_CASE', context: draft.context,
           result_state: 'PRESENT', can_prepare: false, suggested_relative_path: draft.result_relative_path, children_available: false,
         }
-        setTargetCasePath(draft.case_relative_path); setFolderStack([draft.case_relative_path]); setActiveContextNode(caseNode)
+        setTargetCasePath(draft.case_relative_path); setFolderStack([draft.case_relative_path]); setFolderParentContext(draft.context); setActiveContextNode(caseNode)
         setPreparedFolder(restoredFolder); setSelectedResultPath(draft.result_relative_path); setSelectedResultState('PRESENT')
         setDraftId(draft.draft_id)
         const restoredExclusions = draft.exclusions ?? []
@@ -405,6 +435,16 @@ export function ResultRegistrationWorkspace({ embedded = false, contextChanging 
     return () => Object.values(next).forEach((url) => URL.revokeObjectURL(url))
   }, [selectedFiles])
 
+  const refreshLocations = async (expectedTargetKey = targetKey) => {
+    if (!projectId || !requestId) return null
+    const response = await resultRegistrationApi.locations({ project_id: projectId, request_id: requestId, environment })
+    if (targetKeyRef.current !== expectedTargetKey) return null
+    setLocationCandidates(response.candidates)
+    setLocationLinks(response.links)
+    setLocationsError(response.schema_error?.message ?? '')
+    return response
+  }
+
   const fetchFolderChildren = async (path: string | undefined, options: { setStack?: string[]; keepContext?: boolean } = {}) => {
     if (!activeTarget || !projectId || !requestId) return
     folderAbort.current?.abort()
@@ -416,6 +456,7 @@ export function ResultRegistrationWorkspace({ embedded = false, contextChanging 
       const response = await resultRegistrationApi.folders({ project_id: projectId, request_id: requestId, environment, parent_relative_path: path }, controller.signal)
       if (controller.signal.aborted || request !== folderRequestId.current || targetKeyRef.current !== expectedTargetKey) return
       setFolderNodes(response.nodes)
+      setFolderParentContext(response.parent_context ?? emptyContext())
       setFolderStack(options.setStack ?? (path ? [...folderStack, path] : []))
       if (!options.keepContext && !path) setActiveContextNode(null)
     } catch (reason) {
@@ -446,7 +487,7 @@ export function ResultRegistrationWorkspace({ embedded = false, contextChanging 
         children_available: children.nodes.length > 0,
       } satisfies ResultFolderNode : null)
       if (!contextNode) throw new Error('선택한 Case의 서버 연결 정보를 확인할 수 없습니다. SPDM 폴더 연결을 확인해 주세요.')
-      setActiveContextNode(contextNode); setFolderStack([path]); setFolderNodes(children.nodes)
+      setActiveContextNode(contextNode); setFolderStack([path]); setFolderParentContext(children.parent_context ?? contextNode.context); setFolderNodes(children.nodes)
       if (!caseItem) setTargetCasePath(contextNode.context.simulation_case?.relative_path ?? path)
     } catch (reason) {
       if (!controller.signal.aborted && request === folderRequestId.current && targetKeyRef.current === expectedTargetKey) setFoldersError(errorMessage(reason, '선택한 Case의 폴더 정보를 확인하지 못했습니다.'))
@@ -494,6 +535,90 @@ export function ResultRegistrationWorkspace({ embedded = false, contextChanging 
     setSelectedFiles([]); clearReview(); setFormError(''); setNotice('')
   }
 
+  const selectSavedLocation = (candidate: ResultLocationCandidate) => {
+    if (draftId || isActionBusy) return
+    const casePath = candidate.context.simulation_case?.relative_path
+    if (!casePath) { setLocationsError('저장 위치의 Case 문맥을 확인하지 못했습니다.'); return }
+    const caseParts = casePath.split('/')
+    const parentParts = candidate.schema_parent_path.split('/')
+    const stack = [casePath]
+    for (let depth = caseParts.length + 1; depth <= parentParts.length; depth += 1) stack.push(parentParts.slice(0, depth).join('/'))
+    const contextNode: ResultFolderNode = {
+      relative_path: candidate.schema_parent_path,
+      name: candidate.schema_parent_path.split('/').pop() || candidate.schema_parent_path,
+      role_kind: candidate.schema_role_kind,
+      context: candidate.context,
+      result_state: candidate.exists ? 'PRESENT' : 'MISSING',
+      can_prepare: true,
+      suggested_relative_path: candidate.relative_path,
+      children_available: false,
+      selectable: true,
+    }
+    setTargetCasePath(casePath); setActiveContextNode(contextNode)
+    setSelectedResultPath(candidate.relative_path); setSelectedResultState(candidate.exists ? 'PRESENT' : 'MISSING')
+    setPreparedFolder(null); setPreparePreview(null); setPrepareInput(null); setConfirmCreateFolder(false)
+    setSelectedFiles([]); clearReview(); setFormError(''); setNotice('저장한 Folder Schema 결과 위치를 현재 선택에 불러왔습니다.')
+    void fetchFolderChildren(candidate.schema_parent_path, { setStack: stack, keepContext: true })
+  }
+
+  const saveCurrentLocation = async () => {
+    if (!activeDestinationCandidate || locationMutationBusy) return
+    const expectedTargetKey = targetKey
+    setLocationMutationBusy(true); setLocationsError('')
+    try {
+      await resultRegistrationApi.createLocation({ project_id: projectId, request_id: requestId,
+        environment, relative_path: activeDestinationCandidate.relative_path })
+      if (targetKeyRef.current !== expectedTargetKey) return
+      const refreshed = await refreshLocations(expectedTargetKey)
+      if (!refreshed || targetKeyRef.current !== expectedTargetKey) return
+      setNotice('Folder Schema 결과 위치 연결을 저장했습니다.')
+    } catch (reason) {
+      if (targetKeyRef.current === expectedTargetKey) setLocationsError(errorMessage(reason, '결과 위치 연결을 저장하지 못했습니다.'))
+    } finally { setLocationMutationBusy(false) }
+  }
+
+  const startLocationEdit = (link: ResultLocationLink) => {
+    setEditingLocationId(link.id); setEditingLocationPath(link.relative_path)
+  }
+
+  const updateSavedLocation = async (link: ResultLocationLink) => {
+    if (locationMutationBusy || !locationCandidates.some((candidate) => candidate.relative_path === editingLocationPath)) return
+    const expectedTargetKey = targetKey
+    const expectedSelectionKey = selectionKeyRef.current
+    setLocationMutationBusy(true); setLocationsError('')
+    try {
+      const updated = await resultRegistrationApi.updateLocation(link.id, { project_id: projectId,
+        request_id: requestId, environment, relative_path: editingLocationPath, revision: link.revision })
+      if (targetKeyRef.current !== expectedTargetKey) return
+      const refreshed = await refreshLocations(expectedTargetKey)
+      if (!refreshed || targetKeyRef.current !== expectedTargetKey) return
+      const selectedCandidate = refreshed.candidates.find((candidate) => candidate.relative_path === updated.relative_path)
+      setEditingLocationId(''); setEditingLocationPath('')
+      if (selectionKeyRef.current === expectedSelectionKey && !draftIdRef.current &&
+          selectedResultPath === link.relative_path && selectedCandidate) selectSavedLocation(selectedCandidate)
+      setNotice('저장 위치 연결을 수정했습니다. 기존 초안과 등록 이력은 그대로 보존됩니다.')
+    } catch (reason) {
+      if (targetKeyRef.current === expectedTargetKey) setLocationsError(errorMessage(reason, '결과 위치 연결을 수정하지 못했습니다.'))
+    } finally { setLocationMutationBusy(false) }
+  }
+
+  const deleteSavedLocation = async (link: ResultLocationLink) => {
+    if (locationMutationBusy) return
+    const expectedTargetKey = targetKey
+    setLocationMutationBusy(true); setLocationsError('')
+    try {
+      await resultRegistrationApi.deleteLocation(link.id, { project_id: projectId,
+        request_id: requestId, environment, revision: link.revision })
+      if (targetKeyRef.current !== expectedTargetKey) return
+      setLocationLinks((current) => current.filter((item) => item.id !== link.id))
+      setEditingLocationId((current) => current === link.id ? '' : current)
+      setEditingLocationPath((current) => editingLocationId === link.id ? '' : current)
+      setNotice('저장 위치 연결 정보만 삭제했습니다. 실제 SPDM 폴더·파일과 기존 결과·초안 이력은 보존됩니다.')
+    } catch (reason) {
+      if (targetKeyRef.current === expectedTargetKey) setLocationsError(errorMessage(reason, '결과 위치 연결을 삭제하지 못했습니다.'))
+    } finally { setLocationMutationBusy(false) }
+  }
+
   const beginAction = (label: string) => {
     if (actionLock.current) return false
     actionLock.current = true; setBusyAction(label); setFormError(''); setNotice('')
@@ -502,7 +627,7 @@ export function ResultRegistrationWorkspace({ embedded = false, contextChanging 
   const endAction = () => { actionLock.current = false; setBusyAction('') }
 
   const missingPlan = useMemo(() => {
-    const context = activeContextNode?.context ?? selectedTargetCase?.context ?? emptyContext()
+    const context = (currentFolderPath ? folderParentContext : null) ?? preparedFolder?.context ?? activeContextNode?.context ?? selectedTargetCase?.context ?? emptyContext()
     const segments: PrepareInput['segments'] = []
     const fieldKeys: string[] = []
     if (!context.simulation_case) { segments.push({ role_kind: 'SIMULATION_CASE', name: builderCaseName.trim() }); fieldKeys.push('case') }
@@ -515,13 +640,13 @@ export function ResultRegistrationWorkspace({ embedded = false, contextChanging 
       if (!context.scene) { segments.push({ role_kind: 'SCENE', name: builderSceneName.trim() }); fieldKeys.push('scene') }
     }
     segments.push({ role_kind: 'RESULTS', name: 'results' })
-    const parent = activeContextNode?.relative_path ?? selectedTargetCase?.relative_path ?? activeTarget?.spdm_request_folder ?? undefined
+    const parent = currentFolderPath ?? activeContextNode?.relative_path ?? selectedTargetCase?.relative_path ?? activeTarget?.spdm_request_folder ?? undefined
     const casePathExists = Boolean(context.simulation_case)
     const requiredValues = fieldKeys.filter((key) => key !== 'evaluation').map((key) => ({
       case: builderCaseName, load: builderLoadName, run: builderRunName, option: builderOptionName, scene: builderSceneName,
     } as Record<string, string>)[key]?.trim())
     return { input: { project_id: projectId, request_id: requestId, environment, parent_relative_path: parent, segments }, fieldKeys, ready: Boolean(activeTarget && projectId && requestId && (!casePathExists ? !fieldKeys.includes('case') || Boolean(builderCaseName.trim()) : true) && requiredValues.every(Boolean)), context }
-  }, [activeContextNode, activeTarget, builderCaseName, builderEvaluation, builderIncludeOption, builderLoadName, builderOptionName, builderRunName, builderSceneName, environment, projectId, requestId, selectedTargetCase])
+  }, [activeContextNode, activeTarget, builderCaseName, builderEvaluation, builderIncludeOption, builderLoadName, builderOptionName, builderRunName, builderSceneName, currentFolderPath, environment, folderParentContext, preparedFolder, projectId, requestId, selectedTargetCase])
 
   const previewPreparation = async (input: PrepareInput) => {
     if (!beginAction('결과 경로 확인 중')) return
@@ -712,11 +837,22 @@ export function ResultRegistrationWorkspace({ embedded = false, contextChanging 
       {activeTarget ? <div className="result-registration-binding"><span>SPDM 경로 연결</span><code>{activeTarget.spdm_project_folder || '프로젝트 폴더 연결 없음'}{activeTarget.spdm_request_folder ? ` / ${activeTarget.spdm_request_folder}` : ''}</code><b>{statusLabel(activeTarget.status)}</b></div> : null}
       {!targetBusy && projectId && requestId && !targetError && !activeTarget ? <p className="result-registration-empty" role="status">선택한 프로젝트·의뢰에 이 환경의 확정된 SPDM 경로 연결이 없습니다. SPDM에서 업무를 먼저 등록하거나 관리자에게 폴더 연결을 요청하세요.</p> : null}
       {activeTarget && (!activeTarget.spdm_request_folder || ['CONFLICT', 'UNAVAILABLE', 'BINDING_REQUIRED'].includes(activeTarget.status)) ? <p className="result-registration-error" role="alert"><AlertTriangle />프로젝트·의뢰의 저장 위치를 확인할 수 없습니다. 이름으로 경로를 추정하지 말고 관리자에게 연결 상태를 확인해 주세요.</p> : null}
+      {activeTarget && (!activeTarget.spdm_request_folder || ['CONFLICT', 'UNAVAILABLE', 'BINDING_REQUIRED'].includes(activeTarget.status)) && locationLinks.length > 0 ? <section className="result-registration-card result-registration-folders" aria-label="이전 저장 위치 연결 관리">
+        <div className="result-registration-location-links">
+          <header><div><strong>이전 저장 위치 연결</strong><p>현재 Folder Schema를 확인할 수 없어 연결을 선택하거나 경로를 수정할 수 없습니다. 연결 정보는 여기서 삭제할 수 있으며 실제 폴더·파일과 기존 결과·초안 이력은 보존됩니다.</p></div></header>
+          <div className="result-registration-location-list">
+            {locationLinks.map((link) => <article key={link.id} className="result-registration-location-row">
+              <div className="result-registration-location-detail"><code>{link.relative_path}</code><small>{roleLabel(link.schema_role_kind)} · Folder Schema 확인 필요 · 수정 버전 {link.revision}</small></div>
+              <div className="result-registration-location-actions"><button type="button" className="ghost-button" disabled={locationMutationBusy} onClick={() => void deleteSavedLocation(link)}>연결 삭제</button></div>
+            </article>)}
+          </div>
+        </div>
+      </section> : null}
     </section>
 
     {activeTarget && activeTarget.spdm_request_folder && !['CONFLICT', 'UNAVAILABLE', 'BINDING_REQUIRED'].includes(activeTarget.status) ? <>
       <section className="result-registration-card result-registration-folders" aria-labelledby="registration-folder-title">
-        <header><span>02 · 저장 위치</span><h3 id="registration-folder-title">Case 문맥과 결과 폴더</h3><p>{environment === 'USAGE' ? '사용환경은 Case와 평가 항목을 선택합니다.' : '유통환경은 Case와 하중경우, Run Case, 선택적 Run Option, Scene 문맥을 선택합니다.'} 경로는 SPDM 연결을 기준으로 서버가 반환합니다.</p></header>
+        <header><span>02 · 저장 위치</span><h3 id="registration-folder-title">Case 문맥과 결과 폴더</h3><p>{environment === 'USAGE' ? '사용환경은 Case와 평가 항목을 선택합니다.' : '유통환경은 Case와 하중경우, Run Case, 선택적 Run Option, Scene 문맥을 선택합니다.'} Folder Schema에서 현재 확인한 역할 경로를 표시합니다.</p></header>
         <div className="result-registration-explorer-tools">
           <div><span>현재 폴더</span><code>{currentFolderPath || activeTarget.spdm_request_folder}</code></div>
           <button type="button" className="ghost-button" disabled={folderBusy || isActionBusy || !folderStack.length} onClick={goToParentFolder}><ChevronDown className="result-registration-back-icon" /> 상위 폴더</button>
@@ -750,6 +886,35 @@ export function ResultRegistrationWorkspace({ embedded = false, contextChanging 
         </div> : null}
 
         {selectedResultPath ? <div className={`result-registration-selected-path ${selectedResultState === 'UNAVAILABLE' ? 'is-error' : ''}`}><Check /><div><span>결과 저장 위치</span><code>{selectedResultPath}</code></div><b>{preparedFolder ? '준비 완료' : statusLabel(selectedResultState)}</b></div> : null}
+        <div className="result-registration-location-links" aria-label="저장 위치 연결 관리">
+          <header><div><strong>저장한 결과 위치 연결</strong><p>현재 Folder Schema에서 확정한 평가 항목·Scene 아래 결과 위치만 연결합니다. 연결을 수정하거나 삭제해도 SPDM 파일과 기존 결과·초안 이력은 보존됩니다.</p></div>
+            <button type="button" disabled={locationMutationBusy || !activeDestinationCandidate || locationLinks.some((item) => item.relative_path.toLowerCase() === activeDestinationPath.toLowerCase())} onClick={() => void saveCurrentLocation()}>현재 결과 위치 연결 저장</button>
+          </header>
+          {locationsBusy ? <p className="result-registration-state"><LoaderCircle className="result-registration-spin" /> Folder Schema 저장 위치 확인 중</p> : null}
+          {locationsError ? <p className="result-registration-error" role="alert"><AlertTriangle />{locationsError}</p> : null}
+          {locationLinks.length ? <div className="result-registration-location-list">
+            {locationLinks.map((link) => {
+              const candidate = locationCandidates.find((item) => item.relative_path === link.relative_path)
+              const editing = editingLocationId === link.id
+              const editCandidate = locationCandidates.find((item) => item.relative_path === editingLocationPath)
+              return <article key={link.id} className="result-registration-location-row">
+                <div className="result-registration-location-detail"><code>{link.relative_path}</code><small>{roleLabel(link.schema_role_kind)} · {link.is_current ? '현재 Folder Schema 연결' : 'Folder Schema 확인 필요'} · 수정 버전 {link.revision}</small></div>
+                {editing ? <div className="result-registration-location-edit">
+                  <select aria-label={`${link.relative_path} 새 Folder Schema 위치`} value={editingLocationPath} disabled={locationMutationBusy} onChange={(event) => setEditingLocationPath(event.target.value)}>
+                    <option value="">새 결과 위치 선택</option>
+                    {locationCandidates.map((item) => <option key={item.relative_path} value={item.relative_path}>{roleLabel(item.schema_role_kind)} · {item.relative_path}</option>)}
+                  </select>
+                  <button type="button" disabled={locationMutationBusy || !editCandidate} onClick={() => void updateSavedLocation(link)}>{link.is_current ? '수정 저장' : '연결 갱신'}</button>
+                  <button type="button" className="ghost-button" disabled={locationMutationBusy} onClick={() => { setEditingLocationId(''); setEditingLocationPath('') }}>취소</button>
+                </div> : <div className="result-registration-location-actions">
+                  <button type="button" disabled={draftId !== '' || isActionBusy || !candidate || !link.is_current} onClick={() => candidate && selectSavedLocation(candidate)}>이 위치 선택</button>
+                  <button type="button" disabled={locationMutationBusy} onClick={() => startLocationEdit(link)}>{link.is_current ? '경로 수정' : '연결 갱신·수정'}</button>
+                  <button type="button" className="ghost-button" disabled={locationMutationBusy} onClick={() => void deleteSavedLocation(link)}>연결 삭제</button>
+                </div>}
+              </article>
+            })}
+          </div> : !locationsBusy ? <p className="result-registration-empty">저장한 결과 위치 연결이 없습니다. 선택한 결과 위치를 저장하면 이 프로젝트·의뢰·환경에서 다시 선택할 수 있습니다.</p> : null}
+        </div>
         {preparePreview ? <div className="result-registration-prepare-preview" aria-label="결과 폴더 생성 경로 미리보기"><div><strong>생성 전 전체 경로 확인</strong><span>SPDM의 프로젝트·의뢰 폴더와 DB 업무 항목은 생성하지 않습니다.</span></div><code>{preparePreview.result_relative_path}</code><ul>{(preparePreview.proposed_paths ?? [{ relative_path: preparePreview.result_relative_path, role_kind: 'RESULTS', name: 'results', exists: false }]).map((path) => <li key={`${path.role_kind}:${path.relative_path}`}><code>{path.relative_path}</code><span>{roleLabel(path.role_kind)} · {path.exists ? '기존 폴더' : '새 폴더 생성'}</span></li>)}</ul><label className="result-registration-confirm"><input type="checkbox" checked={confirmCreateFolder} onChange={(event) => setConfirmCreateFolder(event.target.checked)} /><span>표시된 결과용 하위 폴더만 생성하도록 확인했습니다.</span></label><button type="button" className="data-submit" disabled={!confirmCreateFolder || isActionBusy} onClick={() => void confirmPreparation()}><Check /> 경로 확인 후 폴더 생성</button></div> : null}
 
         <details className="result-registration-missing-builder">

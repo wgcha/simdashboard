@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -13,7 +15,7 @@ from fastapi.testclient import TestClient
 from app.database_connection import connect
 from app.main import app
 from app.security import hash_password
-from app.services import dashboard_capture
+from app.services import dashboard_capture, folder_discovery_environment
 
 
 pytestmark = pytest.mark.duckdb_integration
@@ -70,7 +72,20 @@ def registration_client(tmp_path, monkeypatch, password_auth_bootstrap_admin):
                 conn.execute(f"DELETE FROM dashboard_assets WHERE capture_id IN ({marks})", captures)
                 conn.execute(f"DELETE FROM dashboard_captures WHERE id IN ({marks})", captures)
             conn.execute("DELETE FROM dashboard_cases WHERE project_id=? AND request_id=?", [project_id, request_id])
+            conn.execute("DELETE FROM result_registration_location_links WHERE project_id=? AND request_id=?", [project_id, request_id])
             conn.execute("DELETE FROM result_registration_paths WHERE project_id=? AND request_id=?", [project_id, request_id])
+            scan_ids = [row[0] for row in conn.execute(
+                "SELECT id FROM folder_environment_scans WHERE project_id=? AND request_id=?", [project_id, request_id]
+            ).fetchall()]
+            if scan_ids:
+                marks = ",".join("?" for _ in scan_ids)
+                conn.execute(f"DELETE FROM folder_environment_registry WHERE registration_id IN "
+                             f"(SELECT id FROM folder_environment_registrations WHERE preview_id IN "
+                             f"(SELECT id FROM folder_environment_previews WHERE scan_id IN ({marks})))", scan_ids)
+                conn.execute(f"DELETE FROM folder_environment_registrations WHERE preview_id IN "
+                             f"(SELECT id FROM folder_environment_previews WHERE scan_id IN ({marks}))", scan_ids)
+                conn.execute(f"DELETE FROM folder_environment_previews WHERE scan_id IN ({marks})", scan_ids)
+                conn.execute(f"DELETE FROM folder_environment_scans WHERE id IN ({marks})", scan_ids)
             conn.execute("DELETE FROM spdm_storage_request_parents WHERE request_id=?", [request_id])
             conn.execute("DELETE FROM spdm_storage_project_parents WHERE project_id=?", [project_id])
             conn.execute("DELETE FROM analysis_requests WHERE id=?", [request_id])
@@ -78,6 +93,7 @@ def registration_client(tmp_path, monkeypatch, password_auth_bootstrap_admin):
 
 
 def _prepare(client, request_folder, project_id, request_id):
+    _confirm_prepare_request_scope(request_folder, project_id, request_id, "USAGE")
     case_relative = f"{request_folder}/Assy_RES_Registration"
     segments = [{"role_kind": "SIMULATION_CASE", "name": "Assy_RES_Registration"},
                 {"role_kind": "EVALUATION", "name": "Settle"}, {"role_kind": "RESULTS", "name": "results"}]
@@ -94,7 +110,55 @@ def _prepare(client, request_folder, project_id, request_id):
     assert confirmed.json()["created_paths"] == [case_relative, f"{case_relative}/Settle", f"{case_relative}/Settle/results"]
     with connect() as conn:
         assert conn.execute("SELECT count(*) FROM dashboard_cases WHERE project_id=? AND request_id=?", [project_id, request_id]).fetchone()[0] == 0
-    return case_relative, confirmed.json()
+    _confirm_folder_schema(request_folder, project_id, request_id, "USAGE", {
+        case_relative: "SIMULATION_CASE",
+        f"{case_relative}/Settle": "EVALUATION",
+        f"{case_relative}/Settle/results": "RESULTS",
+    })
+    prepared = confirmed.json()
+    locations = client.get(BASE + "/locations", params={
+        "project_id": project_id, "request_id": request_id, "environment": "USAGE",
+    })
+    assert locations.status_code == 200, locations.text
+    candidate = next(item for item in locations.json()["candidates"]
+                     if item["relative_path"] == prepared["result_relative_path"])
+    prepared["context"] = candidate["context"]
+    return case_relative, prepared
+
+
+def _confirm_folder_schema(request_folder, project_id, request_id, environment, roles):
+    from types import SimpleNamespace
+
+    root = Path(os.environ["SIMDASH_SPDM_ROOT"])
+    project_folder = request_folder.split("/", 1)[0]
+    with connect() as conn:
+        scan = folder_discovery_environment.save_scan(
+            conn, root, project_folder, environment, None, project_id, request_id, "test-user")
+        by_path = {node["relative_path"]: node for node in scan["nodes"]}
+        request_node = by_path[request_folder]
+        assignments = [{"node_id": request_node["id"], "role_kind": "REQUEST", "confirm": True,
+                        "target_mode": "LINK", "target_id": request_id}]
+        assignments.extend({"node_id": by_path[path]["id"], "role_kind": role, "confirm": True}
+                           for path, role in roles.items())
+        preview = folder_discovery_environment.preview(conn, scan["id"], assignments, "test-user")
+        assert preview["can_apply"] is True, preview
+        folder_discovery_environment.register(
+            conn, preview["id"], f"api-schema-{uuid4().hex}", None,
+            SimpleNamespace(user_id="test-user"), root)
+
+
+def _confirm_prepare_request_scope(request_folder, project_id, request_id, environment):
+    """Give prepare an applied request-bound schema before it creates paths."""
+    root = Path(os.environ["SIMDASH_SPDM_ROOT"])
+    seed = (f"{request_folder}/Assy_RES_SchemaSeed" if environment == "USAGE"
+            else f"{request_folder}/Package_SchemaSeed")
+    seed_path = root.joinpath(*seed.split("/"))
+    seed_path.mkdir(parents=True, exist_ok=True)
+    try:
+        _confirm_folder_schema(request_folder, project_id, request_id, environment,
+                               {seed: "SIMULATION_CASE"})
+    finally:
+        seed_path.rmdir()
 
 
 def _create_draft(client, project_id, request_id, prep, content):
@@ -113,6 +177,153 @@ def _create_draft(client, project_id, request_id, prep, content):
     inspected = client.post(BASE + f"/drafts/{created.json()['draft_id']}/inspect")
     assert inspected.status_code == 200, inspected.text
     return created.json()["draft_id"], inspected.json()
+
+
+def test_saved_result_location_links_follow_folder_schema_and_preserve_draft_and_files(registration_client):
+    client, root, project_id, request_id, request_folder, _ = registration_client
+    case_a = f"{request_folder}/Assy_RES_LinkCase_A"
+    case_b = f"{request_folder}/Assy_RES_LinkCase_B"
+    first = f"{case_a}/Settle/results"
+    second = f"{case_b}/Wobble/output_data"
+    for relative in (first, second):
+        path = root.joinpath(*relative.split("/"))
+        path.mkdir(parents=True)
+        (path / "keep.txt").write_text(relative, encoding="utf-8")
+    _confirm_folder_schema(request_folder, project_id, request_id, "USAGE", {
+        case_a: "SIMULATION_CASE",
+        f"{case_a}/Settle": "EVALUATION",
+        first: "RESULTS",
+        case_b: "SIMULATION_CASE",
+        f"{case_b}/Wobble": "EVALUATION",
+        second: "RESULTS",
+    })
+
+    target_response = client.get(BASE + "/targets", params={"environment": "USAGE"})
+    assert target_response.status_code == 200, target_response.text
+    target = next(item for item in target_response.json()["targets"] if item["request_id"] == request_id)
+    assert {item["relative_path"] for item in target["cases"]} == {case_a, case_b}
+
+    listed = client.get(BASE + "/locations", params={
+        "project_id": project_id, "request_id": request_id, "environment": "USAGE",
+    })
+    assert listed.status_code == 200, listed.text
+    candidates = {item["relative_path"]: item for item in listed.json()["candidates"]}
+    assert set(candidates) == {first, second}
+    assert candidates[second]["schema_parent_path"] == f"{case_b}/Wobble"
+
+    draft = client.post(BASE + "/drafts", json={
+        "project_id": project_id, "request_id": request_id, "environment": "USAGE",
+        "case_relative_path": case_a, "result_relative_path": first,
+        "context": candidates[first]["context"],
+        "files": [{"relative_path": "result.json", "size": 2, "media_type": "application/json"}],
+    })
+    assert draft.status_code == 201, draft.text
+    draft_id = draft.json()["draft_id"]
+
+    payload = {"project_id": project_id, "request_id": request_id,
+               "environment": "USAGE", "relative_path": first}
+    created = client.post(BASE + "/locations", json=payload)
+    assert created.status_code == 201, created.text
+    link = created.json()
+    duplicate = client.post(BASE + "/locations", json=payload)
+    assert duplicate.status_code == 409
+
+    invalid = client.post(BASE + "/locations", json={**payload, "relative_path": f"{case_a}/Settle/arbitrary"})
+    assert invalid.status_code == 409
+    updated = client.patch(BASE + f"/locations/{link['id']}", json={**payload, "relative_path": second,
+        "revision": link["revision"]})
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["relative_path"] == second
+    assert updated.json()["revision"] == link["revision"] + 1
+    stale = client.patch(BASE + f"/locations/{link['id']}", json={**payload, "relative_path": first,
+        "revision": link["revision"]})
+    assert stale.status_code == 409
+
+    saved_draft = client.get(BASE + f"/drafts/{draft_id}")
+    assert saved_draft.status_code == 200, saved_draft.text
+    assert saved_draft.json()["result_relative_path"] == first
+    deleted = client.delete(BASE + f"/locations/{link['id']}", params={
+        "project_id": project_id, "request_id": request_id, "environment": "USAGE",
+        "revision": updated.json()["revision"],
+    })
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json()["deleted"] is True
+    after_delete = client.get(BASE + "/locations", params={
+        "project_id": project_id, "request_id": request_id, "environment": "USAGE",
+    })
+    assert after_delete.status_code == 200, after_delete.text
+    assert after_delete.json()["links"] == []
+    assert (root / first / "keep.txt").read_text(encoding="utf-8") == first
+    assert (root / second / "keep.txt").read_text(encoding="utf-8") == second
+    preserved_draft = client.get(BASE + f"/drafts/{draft_id}")
+    assert preserved_draft.status_code == 200, preserved_draft.text
+    assert preserved_draft.json()["result_relative_path"] == first
+
+
+def test_schema_targets_and_saved_locations_reject_late_foreign_owner_conflicts(registration_client):
+    client, root, project_id, request_id, request_folder, _ = registration_client
+    case_a = f"{request_folder}/Assy_RES_OwnedCase_A"
+    case_b = f"{request_folder}/Assy_RES_OwnedCase_B"
+    result_a = f"{case_a}/Settle/results"
+    result_b = f"{case_b}/Wobble/results"
+    for relative in (result_a, result_b):
+        root.joinpath(*relative.split("/")).mkdir(parents=True)
+    _confirm_folder_schema(request_folder, project_id, request_id, "USAGE", {
+        case_a: "SIMULATION_CASE", f"{case_a}/Settle": "EVALUATION", result_a: "RESULTS",
+        case_b: "SIMULATION_CASE", f"{case_b}/Wobble": "EVALUATION", result_b: "RESULTS",
+    })
+    payload = {"project_id": project_id, "request_id": request_id,
+               "environment": "USAGE", "relative_path": result_a}
+    created = client.post(BASE + "/locations", json=payload)
+    assert created.status_code == 201, created.text
+    link = created.json()
+
+    root_key = folder_discovery_environment.root_identity(root)
+    owner_claim_ids = [f"late-owner-{uuid4().hex}" for _ in (case_a, case_b)]
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    with connect() as conn:
+        for claim_id, case_path in zip(owner_claim_ids, (case_a, case_b)):
+            conn.execute(
+                "INSERT INTO result_registration_paths "
+                "(id,root_key,project_id,request_id,environment,relative_path,path_key,parent_relative_path,"
+                "role_kind,target_id,raw_name,option_status,created_by,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                [claim_id, root_key, "other-project", "other-request", "USAGE", case_path,
+                 case_path.casefold(), str(Path(case_path).parent).replace("\\", "/"),
+                 "SIMULATION_CASE", f"other-case-{claim_id}", Path(case_path).name, None, "test-owner", now],
+            )
+    try:
+        targets = client.get(BASE + "/targets", params={"environment": "USAGE"})
+        assert targets.status_code == 200, targets.text
+        target = next(item for item in targets.json()["targets"] if item["request_id"] == request_id)
+        assert {item["relative_path"] for item in target["cases"]}.isdisjoint({case_a, case_b})
+
+        folders = client.get(BASE + "/folders", params={
+            "project_id": project_id, "request_id": request_id, "environment": "USAGE",
+            "parent_relative_path": request_folder,
+        })
+        assert folders.status_code == 200, folders.text
+        assert {item["relative_path"] for item in folders.json()["nodes"]}.isdisjoint({case_a, case_b})
+
+        listed = client.get(BASE + "/locations", params={
+            "project_id": project_id, "request_id": request_id, "environment": "USAGE",
+        })
+        assert listed.status_code == 200, listed.text
+        assert listed.json()["candidates"] == []
+        stale_link = next(item for item in listed.json()["links"] if item["id"] == link["id"])
+        assert stale_link["is_current"] is False
+
+        create_blocked = client.post(BASE + "/locations", json={**payload, "relative_path": result_b})
+        assert create_blocked.status_code == 409
+        assert create_blocked.json()["detail"]["code"] == "RESULT_LOCATION_SCHEMA_INVALID"
+        update_blocked = client.patch(BASE + f"/locations/{link['id']}", json={
+            **payload, "revision": link["revision"],
+        })
+        assert update_blocked.status_code == 409
+        assert update_blocked.json()["detail"]["code"] == "RESULT_LOCATION_SCHEMA_INVALID"
+    finally:
+        with connect() as conn:
+            conn.execute("DELETE FROM result_registration_paths WHERE id IN (?,?)", owner_claim_ids)
 
 
 def test_multipart_upload_preserves_binary_crlf_cr_nul_and_sha256(registration_client):
@@ -338,6 +549,7 @@ def test_draft_media_and_publish_recheck_result_import_after_membership_revocati
 
 
 def _prepare_distribution(client, request_folder, project_id, request_id):
+    _confirm_prepare_request_scope(request_folder, project_id, request_id, "DISTRIBUTION")
     segments = [
         {"role_kind": "SIMULATION_CASE", "name": "Assy_RES_Distribution"},
         {"role_kind": "LOAD_CASE", "name": "Drop"},
@@ -352,7 +564,25 @@ def _prepare_distribution(client, request_folder, project_id, request_id):
     assert preview.status_code == 200, preview.text
     prepared = client.post(BASE + "/folders/prepare", json={**body, "confirm_create": True})
     assert prepared.status_code == 200, prepared.text
-    return prepared.json()
+    result = prepared.json()
+    case = result["case_relative_path"]
+    scene = result["result_relative_path"].rsplit("/", 1)[0]
+    _confirm_folder_schema(request_folder, project_id, request_id, "DISTRIBUTION", {
+        case: "SIMULATION_CASE",
+        f"{case}/Drop": "LOAD_CASE",
+        f"{case}/Drop/run-a": "EXECUTION_RUN",
+        f"{case}/Drop/run-a/INDIVIDUAL": "RUN_OPTION",
+        scene: "SCENE",
+        result["result_relative_path"]: "RESULTS",
+    })
+    locations = client.get(BASE + "/locations", params={
+        "project_id": project_id, "request_id": request_id, "environment": "DISTRIBUTION",
+    })
+    assert locations.status_code == 200, locations.text
+    candidate = next(item for item in locations.json()["candidates"]
+                     if item["relative_path"] == result["result_relative_path"])
+    result["context"] = candidate["context"]
+    return result
 
 
 def test_distribution_inspection_and_capture_keep_metric_scene_and_media_context(registration_client):

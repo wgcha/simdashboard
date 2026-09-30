@@ -208,7 +208,15 @@
   gap: var(--space-3);
   overflow: auto;
   padding: var(--space-3);
+  border: 0;
+  background: transparent;
+  box-shadow: none;
   overscroll-behavior: contain;
+}
+.materials-detail-empty {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
 }
 .materials-detail-heading { min-width: 0; padding: 2px 2px var(--space-2); border-bottom: 1px solid var(--color-border); }
 .materials-detail-heading > span { color: var(--color-accent); font: 700 var(--text-caption) var(--font-mono); letter-spacing: .1em; }

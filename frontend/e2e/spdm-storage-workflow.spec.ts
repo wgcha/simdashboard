@@ -16,7 +16,7 @@ const mediaBytes = readFileSync(mediaFile)
 const mediaName = path.basename(mediaFile)
 
 type Environment = 'USAGE' | 'DISTRIBUTION'
-type Scenario = 'usage' | 'empty' | 'distribution' | 'stale' | 'resume'
+type Scenario = 'usage' | 'empty' | 'browsed-container' | 'distribution' | 'stale' | 'resume'
 
 function emptyContext() {
   return { simulation_case: null, evaluation: null, load_case: null, execution_run: null, run_option: null, scene: null }
@@ -83,7 +83,7 @@ function distributionTree(requestId: string) {
 
 function targetFor(requestId: string, environment: Environment, scenario: Scenario) {
   const tree = environment === 'USAGE' ? usageTree(requestId) : distributionTree(requestId)
-  const hasCase = scenario !== 'empty'
+  const hasCase = !['empty', 'browsed-container'].includes(scenario)
   return {
     target: {
       project_id: context.project,
@@ -190,6 +190,15 @@ async function installRegistrationApi(page: Page, options: {
     if (pathName.endsWith('/folders') && method === 'GET') {
       const folderTree = environment === 'USAGE' ? usageTree(requestId) : distributionTree(requestId)
       const parent = url.searchParams.get('parent_relative_path')
+      if (options.scenario === 'browsed-container' && requestId === context.request && environment === 'DISTRIBUTION') {
+        const workingPath = `${folderTree.requestFolder}/Working`
+        const nodes = !parent || parent === folderTree.requestFolder ? [{
+          relative_path: workingPath, name: 'Working', role_kind: 'CONTAINER', context: emptyContext(),
+          result_state: 'MISSING', can_prepare: false, suggested_relative_path: null, children_available: true,
+        }] : []
+        return json(route, { storage_root_id: 'spdm-root-e2e', project_id: context.project, request_id: requestId,
+          environment, parent_relative_path: parent, parent_context: emptyContext(), nodes })
+      }
       if (options.scenario === 'empty' && requestId === context.request) return json(route, { storage_root_id: 'spdm-root-e2e', project_id: context.project, request_id: requestId, environment, parent_relative_path: parent, nodes: [] })
       let nodes: unknown[] = []
       if (!parent || parent === folderTree.requestFolder) nodes = [folderTree.caseNode]
@@ -208,11 +217,12 @@ async function installRegistrationApi(page: Page, options: {
     }
     if (pathName.endsWith('/folders/prepare') && method === 'POST') {
       options.onCall?.('prepare', request.postDataJSON())
-      const body = request.postDataJSON() as { confirm_create?: boolean; project_id?: string; request_id?: string; segments?: Array<{ role_kind: string; name: string }> }
+      const body = request.postDataJSON() as { confirm_create?: boolean; project_id?: string; request_id?: string; parent_relative_path?: string; segments?: Array<{ role_kind: string; name: string }> }
       const newTree = usageTree(body.request_id ?? context.request)
       const segments = body.segments ?? []
+      const basePath = body.parent_relative_path ?? newTree.requestFolder
       const proposedPaths = segments.map((segment, index) => ({
-        relative_path: `${newTree.requestFolder}/${segments.slice(0, index + 1).map((item) => item.name).join('/')}`,
+        relative_path: `${basePath}/${segments.slice(0, index + 1).map((item) => item.name).join('/')}`,
         role_kind: segment.role_kind, name: segment.name, exists: false,
       }))
       const casePath = proposedPaths.find((item) => item.role_kind === 'SIMULATION_CASE')?.relative_path ?? `${newTree.requestFolder}/Case_Prepared`
@@ -526,6 +536,29 @@ test('Run Case가 없어도 새 Run Option 폴더 이름을 정해 경로를 미
   })
   await expect(page.getByLabel('선택한 파일')).toContainText('dropped.csv')
   await expect(page.getByRole('button', { name: '업로드하고 자동 검사', exact: true })).toBeEnabled()
+})
+
+test('Case 문맥이 없어도 현재 탐색한 등록 스키마 부모 아래에서 새 경로를 미리 본다', async ({ page }) => {
+  await loginWorkspace(page)
+  await selectRequestContext(page)
+  let previewBody: Record<string, unknown> | null = null
+  await installRegistrationApi(page, {
+    scenario: 'browsed-container',
+    onCall: (kind, body) => { if (kind === 'prepare') previewBody = body as Record<string, unknown> },
+  })
+  await openRegistrationTab(page)
+  await page.getByLabel('결과 등록 환경', { exact: true }).selectOption('DISTRIBUTION')
+  await page.getByRole('button', { name: '하위 폴더 보기', exact: true }).click()
+  await expect(page.locator('.result-registration-explorer-tools code')).toContainText('/Working')
+  await page.getByText('필요한 Case·환경별 하위 폴더가 없을 때', { exact: true }).click()
+  await page.getByLabel('Case 폴더 이름', { exact: true }).fill('Package_New')
+  await page.getByLabel('하중경우 폴더 이름', { exact: true }).fill('Drop')
+  await page.getByLabel('Run Case 폴더 이름', { exact: true }).fill('85qn80h_ref_organized')
+  await page.getByLabel('Scene 폴더 이름', { exact: true }).fill('Scene')
+  await page.getByRole('button', { name: '전체 경로 미리보기', exact: true }).click()
+  const workingPath = `SPDM/${context.request}/WR/Working`
+  await expect(page.getByLabel('결과 폴더 생성 경로 미리보기')).toContainText(`${workingPath}/Package_New/Drop/85qn80h_ref_organized/Scene/results`)
+  expect(previewBody?.parent_relative_path).toBe(workingPath)
 })
 
 test('유통환경은 기존 Case에서 load·run·option·scene 문맥과 결과 폴더를 고른다', async ({ page }) => {
