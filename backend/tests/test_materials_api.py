@@ -341,6 +341,146 @@ def test_materials_uses_registered_scene_roles_and_does_not_mistake_parts_preamb
             conn.execute("DELETE FROM folder_environment_scans WHERE id=?", [scan_id])
 
 
+def test_materials_discovers_new_working_case_and_keeps_registered_case_scenes_authoritative(materials_client):
+    client, root, project_id, request_id, request_folder, _, _, _ = materials_client
+    old_case = f"{request_folder}/Pkg_SetCase2_Cushion2_test"
+    old_run = f"{old_case}/Drop/85qn80h_test"
+    registered_scene = f"{old_run}/2_face"
+    unregistered_sibling = f"{old_run}/DAMP-2_Face_Unregistered_Scene"
+    actual_scene = (
+        f"{request_folder}/Working/Package_Model_SetCase1_CushionCase2_조건표시/Drop/"
+        "85qn80h_ref_organized/INDIVIDUAL/DAMP-2_Face_Drop_Scene02_Face2_1st"
+    )
+    actual_scenes = (
+        actual_scene,
+        str(PurePosixPath(actual_scene).parent / "DAMP-6_Corner_Drop_2nd_Scene04_Corner235_2nd"),
+        str(PurePosixPath(actual_scene).parent / "DAMP-13_Corner_Drop_2nd_Scene08_Corner346_2nd"),
+    )
+    for relative in (registered_scene, unregistered_sibling, *actual_scenes):
+        directory = root.joinpath(*relative.split("/"))
+        directory.mkdir(parents=True)
+        (directory / "101_parts.inc").write_text(_parts_deck(), encoding="utf-8")
+        (directory / "103_material_propertdb.inc").write_text(_materials_deck(), encoding="utf-8")
+
+    from app.services import folder_discovery_environment
+
+    root_key = folder_discovery_environment.root_identity(root)
+    registration_id, preview_id, scan_id = (f"materials-case-auth-{uuid4().hex}" for _ in range(3))
+    role_rows = [
+        {"relative_path": old_case, "role_kind": "SIMULATION_CASE", "name": "Pkg_SetCase2_Cushion2_test",
+         "status": "CONFIRMED", "target_id": f"case-{uuid4().hex}"},
+        {"relative_path": f"{old_case}/Drop", "role_kind": "LOAD_CASE", "name": "Drop",
+         "status": "CONFIRMED", "target_id": f"load-{uuid4().hex}"},
+        {"relative_path": old_run, "role_kind": "EXECUTION_RUN", "name": "85qn80h_test",
+         "status": "CONFIRMED", "target_id": f"run-{uuid4().hex}"},
+        {"relative_path": registered_scene, "role_kind": "SCENE", "name": "2_face",
+         "status": "CONFIRMED"},
+    ]
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    with connect() as conn:
+        profile = conn.execute(
+            "SELECT id,revision FROM folder_environment_profiles WHERE environment='DISTRIBUTION' "
+            "ORDER BY created_at LIMIT 1",
+        ).fetchone()
+        assert profile is not None
+        conn.execute(
+            "INSERT INTO folder_environment_scans "
+            "(id,root_key,relative_path,environment,profile_id,profile_revision,project_id,request_id,status,"
+            "tree_json,issues_json,created_by,created_at) VALUES(?,?,?,'DISTRIBUTION',?,?,?,?, 'COMPLETE',?,?,?,?)",
+            [scan_id, root_key, request_folder, profile[0], profile[1], project_id, request_id,
+             json.dumps(role_rows, ensure_ascii=False), "[]", "synthetic-test", now],
+        )
+        conn.execute(
+            "INSERT INTO folder_environment_previews(id,scan_id,rows_json,can_apply,created_by,created_at) "
+            "VALUES(?,?,?,true,?,?)",
+            [preview_id, scan_id, json.dumps(role_rows, ensure_ascii=False), "synthetic-test", now],
+        )
+        conn.execute(
+            "INSERT INTO folder_environment_registrations "
+            "(id,preview_id,idempotency_key,environment,project_id,request_id,status,created_by,created_at) "
+            "VALUES(?,?,?,'DISTRIBUTION',?,?,'COMPLETED',?,?)",
+            [registration_id, preview_id, f"materials-case-auth-key-{uuid4().hex}", project_id, request_id,
+             "synthetic-test", now],
+        )
+        for item in role_rows:
+            if item["role_kind"] == "SCENE":
+                continue
+            conn.execute(
+                "INSERT INTO folder_environment_registry "
+                "(id,registration_id,root_key,relative_path,role_kind,parent_context_id,target_id,raw_name,"
+                "option_status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                [f"materials-case-auth-role-{uuid4().hex}", registration_id, root_key, item["relative_path"],
+                 item["role_kind"], None, item["target_id"], item["name"], item.get("option_status"), now],
+            )
+
+    try:
+        catalog = client.get(BASE + "/catalog", params={"request_id": request_id})
+        assert catalog.status_code == 200, catalog.text
+        scenes = {item["relative_path"]: item for item in catalog.json()["scenes"]}
+        assert registered_scene in scenes
+        assert all(scene in scenes for scene in actual_scenes)
+        assert unregistered_sibling not in scenes
+        assert scenes[actual_scene]["hierarchy"]["simulation_case"]["relative_path"].endswith(
+            "Package_Model_SetCase1_CushionCase2_조건표시",
+        )
+
+        actual_deck = client.get(BASE + "/deck", params={"request_id": request_id, "relative_path": actual_scene})
+        assert actual_deck.status_code == 200, actual_deck.text
+        assert [item["id"] for item in actual_deck.json()["deck"]["materials"]] == ["2"]
+
+        sibling_deck = client.get(BASE + "/deck", params={"request_id": request_id,
+                                                             "relative_path": unregistered_sibling})
+        assert sibling_deck.status_code == 422
+        assert sibling_deck.json()["detail"]["code"] == "MATERIALS_SCENE_INVALID"
+    finally:
+        with connect() as conn:
+            conn.execute("DELETE FROM folder_environment_registry WHERE registration_id=?", [registration_id])
+            conn.execute("DELETE FROM folder_environment_registrations WHERE id=?", [registration_id])
+            conn.execute("DELETE FROM folder_environment_previews WHERE id=?", [preview_id])
+            conn.execute("DELETE FROM folder_environment_scans WHERE id=?", [scan_id])
+
+
+def test_materials_rejects_inferred_scene_owned_by_another_request(materials_client):
+    client, root, project_id, request_id, request_folder, _, _, _ = materials_client
+    foreign_scene = (
+        f"{request_folder}/Working/Package_Model_ForeignOwnership/Drop/Run_01/INDIVIDUAL/"
+        "Scene_ForeignOwner"
+    )
+    scene_path = root.joinpath(*foreign_scene.split("/"))
+    scene_path.mkdir(parents=True)
+    (scene_path / "parts.inc").write_text(_parts_deck(), encoding="utf-8")
+    (scene_path / "materials.inc").write_text(_materials_deck(), encoding="utf-8")
+
+    from app.services import folder_discovery_environment
+
+    root_key = folder_discovery_environment.root_identity(root)
+    owner_id = f"foreign-owner-{uuid4().hex}"
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO result_registration_paths "
+            "(id,root_key,project_id,request_id,environment,relative_path,path_key,parent_relative_path,"
+            "role_kind,target_id,raw_name,option_status,created_by,created_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            [owner_id, root_key, f"{project_id}-other", f"{request_id}-other", "DISTRIBUTION",
+             foreign_scene, materials_catalog.result_registration_paths._root_casefold(foreign_scene),
+             str(PurePosixPath(foreign_scene).parent), "SCENE", f"target-{owner_id}", "Scene_ForeignOwner",
+             None, "synthetic-test", now],
+        )
+
+    try:
+        catalog = client.get(BASE + "/catalog", params={"request_id": request_id})
+        assert catalog.status_code == 200, catalog.text
+        assert all(item["relative_path"] != foreign_scene for item in catalog.json()["scenes"])
+
+        deck = client.get(BASE + "/deck", params={"request_id": request_id, "relative_path": foreign_scene})
+        assert deck.status_code == 422
+        assert deck.json()["detail"]["code"] == "MATERIALS_SCENE_INVALID"
+    finally:
+        with connect() as conn:
+            conn.execute("DELETE FROM result_registration_paths WHERE id=?", [owner_id])
+
+
 def test_materials_does_not_duplicate_run_results_that_fallback_to_scene(materials_client):
     client, root, _, request_id, request_folder, _, _, _ = materials_client
     result_paths = [
