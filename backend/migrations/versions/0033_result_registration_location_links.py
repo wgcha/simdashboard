@@ -15,6 +15,15 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # Alembic's default version table uses VARCHAR(32), but this revision ID is
+    # longer. Widen the existing value before Alembic writes the new revision.
+    op.alter_column(
+        "alembic_version",
+        "version_num",
+        existing_type=sa.String(length=32),
+        type_=sa.String(length=64),
+        existing_nullable=False,
+    )
     op.execute(sa.text("""
     CREATE TABLE IF NOT EXISTS result_registration_location_links (
         id VARCHAR PRIMARY KEY,

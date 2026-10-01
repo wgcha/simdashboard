@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from importlib.util import module_from_spec, spec_from_file_location
+from io import StringIO
 from pathlib import Path
 
 import pytest
 from alembic.config import Config
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
 from alembic.script import ScriptDirectory
 import sqlalchemy as sa
 
@@ -52,6 +55,32 @@ def test_run_identity_v2_precedes_batch_attempt_identity_head() -> None:
     location_links = script.get_revision("0033_result_registration_location_links")
     assert location_links and location_links.down_revision == "0032_materials_dashboard_menu"
     assert tuple(script.get_heads()) == ("0033_result_registration_location_links",)
+
+
+def test_result_location_links_migration_widens_alembic_version_before_other_ddl(monkeypatch: pytest.MonkeyPatch) -> None:
+    path = BACKEND / "migrations" / "versions" / "0033_result_registration_location_links.py"
+    spec = spec_from_file_location("result_location_links_migration", path)
+    assert spec and spec.loader
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert len(module.revision) > 32
+    assert len(module.revision) <= 64
+
+    output = StringIO()
+    context = MigrationContext.configure(
+        dialect_name="postgresql",
+        opts={"as_sql": True, "output_buffer": output},
+    )
+    monkeypatch.setattr(module, "op", Operations(context))
+    monkeypatch.setenv("SIM_DASH_APP_ROLE", "migration_test_app")
+    module.upgrade()
+
+    sql = output.getvalue()
+    widen = "ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(64)"
+    create_table = "CREATE TABLE IF NOT EXISTS result_registration_location_links"
+    assert widen in sql
+    assert sql.index(widen) < sql.index(create_table)
 
 
 def test_materials_menu_migration_preserves_existing_visibility_rows() -> None:
