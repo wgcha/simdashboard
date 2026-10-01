@@ -15,16 +15,18 @@ from . import result_registration_paths as paths
 
 def effective_assignment(schema: dict[str, Any], path_key: str) -> dict[str, Any] | None:
     """Return an explicit registered role or a confirmed profile interpretation."""
+    node = next((item for item in schema.get("nodes", [])
+                 if paths._root_casefold(str(item.get("relative_path", ""))) == path_key), None)
+    if node and node.get("status") in {"EXCLUDED", "UNRESOLVED"}:
+        # Current scan disposition must block a stale role snapshot from
+        # making an excluded or unresolved path selectable again.
+        return {"relative_path": node.get("relative_path"), "role_kind": node.get("role_kind"),
+                "status": node.get("status"), "name": node.get("name"), "source": node.get("role_source")}
     assignment = schema.get("confirmed_roles", {}).get(path_key)
     if assignment:
         return assignment
-    node = next((item for item in schema.get("nodes", [])
-                 if paths._root_casefold(str(item.get("relative_path", ""))) == path_key), None)
     if not node:
         return None
-    if node.get("status") in {"EXCLUDED", "UNRESOLVED"}:
-        return {"relative_path": node.get("relative_path"), "role_kind": node.get("role_kind"),
-                "status": node.get("status"), "name": node.get("name"), "source": node.get("role_source")}
     if node.get("status") == "CONTAINER" and node.get("role_source") == "DEFAULT" and not node.get("role_kind"):
         # Neutral containers may be traversed in the confirmed scan tree, but
         # this structural allowance never grants a semantic destination role.

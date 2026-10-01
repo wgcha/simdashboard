@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from pathlib import PurePosixPath
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -615,6 +616,109 @@ def test_materials_current_schema_replaces_older_registered_scene_discovery(mate
             conn.execute("DELETE FROM folder_environment_previews WHERE id=?", [preview_id])
             conn.execute("DELETE FROM folder_environment_scans WHERE id=?", [scan_id])
         _delete_distribution_scan(current_profile_id, current_scan_id)
+
+
+def test_latest_same_profile_schema_replaces_old_roles_only_in_its_confirmed_scope(materials_client):
+    client, root, project_id, request_id, request_folder, _, _, _ = materials_client
+    old_case = f"{request_folder}/Pkg_SetCase2_Cushion2_test"
+    old_scene = f"{old_case}/Drop/85qn80h_test/2_face"
+    current_case = f"{request_folder}/Working/Package_Model_SetCase1_CushionCase2_조건표시"
+    current_scene = (
+        f"{current_case}/Drop/85qn80h_ref_organized/INDIVIDUAL/"
+        "DAMP-2_Face_Drop_Scene02_Face2_1st"
+    )
+    # This is a separate, valid schema branch already present in the fixture.
+    other_valid_case = f"{request_folder}/CAE/Assy_Model"
+    for relative in (old_scene, current_scene):
+        scene_path = root.joinpath(*relative.split("/"))
+        scene_path.mkdir(parents=True)
+        (scene_path / "101_parts.inc").write_text(_parts_deck(), encoding="utf-8")
+        (scene_path / "103_material_propertdb.inc").write_text(_materials_deck(), encoding="utf-8")
+
+    from app.services import environment_folder_profiles
+
+    profile_id = f"materials-shared-profile-{uuid4().hex}"
+    rules = [
+        {"role_kind": "SIMULATION_CASE", "pattern": "Package_Model_SetCase1_CushionCase2_*", "parent_role": "REQUEST"},
+        {"role_kind": "SIMULATION_CASE", "pattern": "Assy_Model", "parent_role": "REQUEST"},
+        {"role_kind": "LOAD_CASE", "pattern": "Drop", "parent_role": "SIMULATION_CASE"},
+        {"role_kind": "EXECUTION_RUN", "pattern": "85qn80h_ref_organized", "parent_role": "LOAD_CASE"},
+        {"role_kind": "EXECUTION_RUN", "pattern": "Run_*", "parent_role": "LOAD_CASE"},
+        {"role_kind": "RUN_OPTION", "pattern": "INDIVIDUAL", "parent_role": "EXECUTION_RUN"},
+        {"role_kind": "SCENE", "pattern": "*Scene*", "parent_role": "RUN_OPTION"},
+        {"role_kind": "SCENE", "pattern": "Scene_*", "parent_role": "RUN_OPTION"},
+    ]
+    registration_ids: list[str] = []
+    scan_ids: list[str] = []
+    with connect() as conn:
+        profile = environment_folder_profiles.save_profile(
+            conn, environment="DISTRIBUTION", name=profile_id, rules={"rules": rules},
+        )
+        project_folder = str(PurePosixPath(request_folder).parent)
+
+        def apply_scan(assignments_by_path):
+            scan = folder_discovery_environment.save_scan(
+                conn, root, project_folder, "DISTRIBUTION", profile["id"],
+                project_id, request_id, "synthetic-test",
+            )
+            scan_ids.append(str(scan["id"]))
+            nodes = {item["relative_path"]: item for item in scan["nodes"]}
+            assignments = [{
+                "node_id": nodes[request_folder]["id"], "role_kind": "REQUEST",
+                "target_mode": "LINK", "target_id": request_id,
+            }]
+            assignments.extend({"node_id": nodes[path]["id"], "role_kind": role}
+                               for path, role in assignments_by_path.items())
+            preview = folder_discovery_environment.preview(
+                conn, scan["id"], assignments, "synthetic-test",
+            )
+            assert preview["can_apply"] is True, preview
+            registration = folder_discovery_environment.register(
+                conn, preview["id"], f"materials-shared-key-{uuid4().hex}", None,
+                SimpleNamespace(user_id="synthetic-test"), root,
+            )
+            registration_ids.append(str(registration["registration_id"]))
+            return registration
+
+        old_registration = apply_scan({
+            old_case: "SIMULATION_CASE",
+            f"{old_case}/Drop": "LOAD_CASE",
+            f"{old_case}/Drop/85qn80h_test": "EXECUTION_RUN",
+            old_scene: "SCENE",
+        })
+        conn.execute(
+            "UPDATE folder_environment_scans SET created_at=? WHERE id=?",
+            [datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=10), scan_ids[0]],
+        )
+        current_registration = apply_scan({old_case: "EXCLUDE"})
+        assert old_registration["registration_id"] != current_registration["registration_id"]
+
+    try:
+        catalog = client.get(BASE + "/catalog", params={"request_id": request_id})
+        assert catalog.status_code == 200, catalog.text
+        catalog_paths = {item["relative_path"] for item in catalog.json()["scenes"]}
+        assert current_scene in catalog_paths
+        assert old_scene not in catalog_paths
+        assert f"{other_valid_case}/Drop/Run_01/INDIVIDUAL/Scene_01" in catalog_paths
+
+        with connect() as conn:
+            targets = materials_catalog.result_registration_paths.targets(
+                conn, "DISTRIBUTION", {project_id},
+            )
+        request_target = next(item for item in targets["targets"] if item["request_id"] == request_id)
+        case_paths = {item["relative_path"] for item in request_target["cases"]}
+        assert current_case in case_paths
+        assert other_valid_case in case_paths
+        assert old_case not in case_paths
+    finally:
+        with connect() as conn:
+            for registration_id in registration_ids:
+                conn.execute("DELETE FROM folder_environment_registry WHERE registration_id=?", [registration_id])
+                conn.execute("DELETE FROM folder_environment_registrations WHERE id=?", [registration_id])
+            for scan_id in scan_ids:
+                conn.execute("DELETE FROM folder_environment_previews WHERE scan_id=?", [scan_id])
+                conn.execute("DELETE FROM folder_environment_scans WHERE id=?", [scan_id])
+            conn.execute("DELETE FROM folder_environment_profiles WHERE id=?", [profile_id])
 
 
 def test_materials_rejects_inferred_scene_owned_by_another_request(materials_client):

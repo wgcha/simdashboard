@@ -298,7 +298,7 @@ def _role_evidence(conn: ConnectionLike, root_key: str, project_id: str, request
         [root_key, environment, profile["id"], profile["revision"], selected_scan["id"],
          project_id, request_id, environment],
     ))
-    roles: dict[str, dict[str, Any]] = {}
+    eligible: list[tuple[dict[str, Any], bool, dict[str, dict[str, Any]]]] = []
     active = set(_APPLIED_STATUSES)
     for record in records:
         registration_id = record.get("registration_id")
@@ -314,7 +314,25 @@ def _role_evidence(conn: ConnectionLike, root_key: str, project_id: str, request
             continue
         source = "REGISTRATION" if is_applied else "PREVIEW"
         additions = _preview_roles(record.get("rows_json"), request_path, environment, source)
-        _merge_roles(roles, additions)
+        selected = str(record["scan_id"]) == str(selected_scan["id"])
+        eligible.append((record, selected, additions))
+
+    selected_scan_roles: dict[str, dict[str, Any]] = {}
+    for _, selected, additions in eligible:
+        if selected:
+            _merge_roles(selected_scan_roles, additions)
+
+    roles: dict[str, dict[str, Any]] = {}
+    for _, selected, additions in eligible:
+        if selected:
+            continue
+        # A newer scan's saved disposition is the current answer for the
+        # paths it actually reviewed. Preserve older registrations for other
+        # paths and retain their conflict checks where the new scan has no
+        # disposition.
+        historical = {key: item for key, item in additions.items() if key not in selected_scan_roles}
+        _merge_roles(roles, historical)
+    roles.update(selected_scan_roles)
     return roles
 
 
@@ -342,8 +360,10 @@ def resolve_request_schema(conn: ConnectionLike, root: Path, root_key: str,
 
     A profile is selected only through a complete scan explicitly linked to this
     request. The scan's saved profile revision must still be current. Applied
-    previews for that profile contribute durable confirmations; an unapplied
-    preview contributes only when it belongs to the selected scan.
+    previews for that profile contribute durable confirmations outside paths
+    dispositioned by the selected scan; the selected scan's preview is current
+    for its own paths. An unapplied preview contributes only when it belongs to
+    the selected scan.
     """
     environment = str(environment).upper()
     if environment not in _ROLE_KINDS:
