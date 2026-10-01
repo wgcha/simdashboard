@@ -6,6 +6,7 @@
 
 | 작업 | 먼저 읽기 | 조건부로 읽기 |
 |---|---|---|
+| 프로그램 기능 구조·데이터 연결 | [현재 시스템 구조도 HTML](current-system-diagram.html) | 근거는 [현재 아키텍처](current-architecture.md), [결과 등록 계약](features/result-registration.md) |
 | 결과 등록·검수·Case 가시화 | [현재 결과 등록 계약](features/result-registration.md) | DB·경로가 바뀌면 [배포 정책](windows-deployment-policy.md), 과거 검증 근거는 [#32 완료 기록](archive/2026/result-registration-review-plan.md) |
 | UI 크기·밀도·본문 폭 | [UI 개선 기준·데스크톱 적용 정책](dashboard/ui-density-improvement-plan.md) | 구현 경계는 [P0 계약](dashboard/ui-density-p0-contract.md), 완료 근거는 [P1~P5 기록](archive/README.md#2026-문서) |
 | 배포·업데이트 | [Windows 배포 정책](windows-deployment-policy.md) | [설치·업데이트 시나리오](windows-deployment-scenarios.md), 폐쇄망이면 [패키지 설치](windows-server-offline-installation.md) |

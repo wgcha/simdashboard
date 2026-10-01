@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Simulation Workbench 기능 구조와 데이터 연결</title>
+  <style>
+    :root { color-scheme: light; font-family: "Malgun Gothic", "Apple SD Gothic Neo", system-ui, sans-serif; background: #f4f7fb; color: #17243a; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    main { max-width: 1576px; padding: 42px 36px 64px; margin: auto; }
+    h1 { margin: 0; font-size: 32px; letter-spacing: -.04em; }
+    h2 { margin: 0 0 8px; font-size: 22px; letter-spacing: -.03em; }
+    p { margin: 8px 0 0; line-height: 1.6; }
+    .intro { color: #53647c; max-width: 930px; }
+    .meta { display: flex; gap: 10px; margin-top: 20px; flex-wrap: wrap; }
+    .pill { padding: 7px 12px; border-radius: 999px; background: #e6eef9; color: #315987; font-size: 12px; font-weight: 700; }
+    section { margin-top: 30px; background: white; border: 1px solid #dce5ef; border-radius: 18px; padding: 24px; box-shadow: 0 8px 30px #24456b0b; }
+    .section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 20px; margin-bottom: 18px; }
+    .section-head p { margin: 0; color: #64748b; font-size: 13px; }
+    .figure { overflow-x: auto; border: 1px solid #e1e8f0; border-radius: 12px; background: #fbfdff; }
+    svg { display: block; min-width: 1380px; width: 100%; height: auto; }
+    .lane { fill: #f6f9fd; stroke: #dce5ef; }
+    .lane-label { fill: #5a6e86; font-size: 15px; font-weight: 800; letter-spacing: .04em; }
+    .box { fill: #fff; stroke: #c8d7e8; stroke-width: 1.5; }
+    .box.front { fill: #eef5ff; stroke: #9cc1f3; }
+    .box.api { fill: #ecf8f4; stroke: #8bcdb9; }
+    .box.store { fill: #fff6e7; stroke: #eac78c; }
+    .box.process { fill: #f3efff; stroke: #baa8eb; }
+    .box.output { fill: #eaf7f9; stroke: #93cad3; }
+    .title { fill: #17243a; font-size: 17px; font-weight: 800; }
+    .detail { fill: #51647b; font-size: 12.5px; }
+    .small { fill: #52677f; font-size: 12px; }
+    .edge { fill: none; stroke: #607b9c; stroke-width: 2.2; marker-end: url(#arrow); }
+    .edge.data { stroke: #4e789f; marker-end: url(#arrow-data); }
+    .edge.write { stroke: #a77536; marker-end: url(#arrow-write); }
+    .edge.legacy { stroke: #8b70b9; stroke-dasharray: 7 5; marker-end: url(#arrow-legacy); }
+    .edge-label { fill: #536981; font-size: 12px; font-weight: 700; paint-order: stroke; stroke: #fbfdff; stroke-width: 6px; stroke-linejoin: round; }
+    .note { color: #52647b; font-size: 13px; margin-top: 15px; }
+    .legend { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; margin-top: 16px; color: #52647b; font-size: 13px; }
+    .swatch { display: inline-block; width: 15px; height: 15px; border-radius: 4px; margin-right: 6px; vertical-align: -3px; border: 1px solid; }
+    .line-sample { display: inline-block; width: 25px; margin-right: 6px; vertical-align: 4px; border-top: 2px solid #607b9c; }
+    .line-sample.dashed { border-top-style: dashed; border-color: #8b70b9; }
+    footer { margin-top: 24px; color: #607189; font-size: 13px; line-height: 1.7; }
+    footer a { color: #245e9d; }
+    @media print { :root { background: white; } main { max-width: none; padding: 0; } section { break-inside: avoid; box-shadow: none; } .figure { overflow: visible; } svg { min-width: 0; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Simulation Workbench 기능 구조와 데이터 연결</h1>
+    <p class="intro">현재 구현을 기준으로 주요 화면, 서버 기능, 저장 위치를 묶어 표시했습니다. 선은 실제 요청·저장·조회 방향을 나타내며, 모든 내부 클래스나 테이블을 나열한 상세 설계도는 아닙니다.</p>
+    <div class="meta"><span class="pill">현재 코드 기준 · 2026-09-30</span><span class="pill">데스크톱 화면</span><span class="pill">단일 HTML · 외부 리소스 없음</span></div>
+  </header>
+
+  <section aria-labelledby="structure-title">
+    <div class="section-head"><h2 id="structure-title">1. 기능별 구조도</h2><p>화면 → API → 저장소</p></div>
+    <div class="figure">
+      <svg viewBox="0 0 1480 815" role="img" aria-labelledby="structure-svg-title structure-svg-desc" xmlns="http://www.w3.org/2000/svg">
+        <title id="structure-svg-title">Simulation Workbench 기능별 구조도</title>
+        <desc id="structure-svg-desc">React 화면 기능이 공통 API 클라이언트와 FastAPI 인증 및 권한 검사를 거쳐 대응하는 서버 API를 호출합니다. 서버는 PostgreSQL과 SPDM 폴더에 연결됩니다.</desc>
+        <defs>
+          <marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M1 1 L8 4.5 L1 8" fill="none" stroke="#607b9c" stroke-width="1.6"/></marker>
+          <marker id="arrow-write" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M1 1 L8 4.5 L1 8" fill="none" stroke="#a77536" stroke-width="1.6"/></marker>
+        </defs>
+        <rect class="lane" x="24" y="146" width="415" height="635" rx="16"/>
+        <rect class="lane" x="495" y="146" width="480" height="635" rx="16"/>
+        <rect class="lane" x="1030" y="146" width="425" height="635" rx="16"/>
+        <text class="lane-label" x="45" y="178">REACT · 사용자 화면</text>
+        <text class="lane-label" x="516" y="178">FASTAPI · 기능 API / 서비스</text>
+        <text class="lane-label" x="1051" y="178">데이터 저장 위치</text>
+
+        <rect class="box front" x="32" y="27" width="255" height="80" rx="14"/>
+        <text class="title" x="52" y="61">사용자 · 브라우저</text>
+        <text class="detail" x="52" y="84">화면 탐색, 입력, 파일 업로드</text>
+        <rect class="box front" x="365" y="27" width="285" height="80" rx="14"/>
+        <text class="title" x="385" y="61">App · 화면 이동</text>
+        <text class="detail" x="385" y="84">로그인 상태 · 선택 문맥</text>
+        <rect class="box api" x="730" y="27" width="300" height="80" rx="14"/>
+        <text class="title" x="750" y="61">공통 API 클라이언트</text>
+        <text class="detail" x="750" y="84">HTTP · 인증 정보 · 응답 변환</text>
+        <rect class="box api" x="1110" y="27" width="320" height="80" rx="14"/>
+        <text class="title" x="1130" y="61">인증 · 권한 검사</text>
+        <text class="detail" x="1130" y="84">사용자와 프로젝트 범위 재확인</text>
+        <path class="edge" d="M287 67 H365"/><path class="edge" d="M650 67 H730"/><path class="edge" d="M1030 67 H1110"/>
+
+        <g>
+          <rect class="box front" x="45" y="207" width="370" height="72" rx="12"/><text class="title" x="64" y="237">의뢰 접수 · 업무 현황</text><text class="detail" x="64" y="260">프로젝트 · 의뢰 · 하중 경우</text>
+          <rect class="box front" x="45" y="300" width="370" height="72" rx="12"/><text class="title" x="64" y="330">해석 작업 실행 · 템플릿</text><text class="detail" x="64" y="353">작업 계획 · 모델링 자료</text>
+          <rect class="box front" x="45" y="393" width="370" height="72" rx="12"/><text class="title" x="64" y="423">폴더 스키마 · 결과 등록</text><text class="detail" x="64" y="446">경로 선택 · 업로드 · 검사 · 승인</text>
+          <rect class="box front" x="45" y="486" width="370" height="72" rx="12"/><text class="title" x="64" y="516">Case 결과 · 검수</text><text class="detail" x="64" y="539">수치 · 미디어 · 비교 · 대시보드</text>
+          <rect class="box front" x="45" y="579" width="370" height="72" rx="12"/><text class="title" x="64" y="609">보고서 · 포트폴리오</text><text class="detail" x="64" y="632">레이아웃 · 버전 · 출력</text>
+          <rect class="box front" x="45" y="672" width="370" height="72" rx="12"/><text class="title" x="64" y="702">계정 · 권한 · 관리</text><text class="detail" x="64" y="725">사용자 · 메뉴 정책 · 감사</text>
+        </g>
+        <g>
+          <rect class="box api" x="520" y="207" width="430" height="72" rx="12"/><text class="title" x="539" y="237">프로젝트 · 의뢰 · 작업 API</text><text class="detail" x="539" y="260">요청 및 업무 상태 관리</text>
+          <rect class="box api" x="520" y="300" width="430" height="72" rx="12"/><text class="title" x="539" y="330">작업 실행 · 템플릿 API</text><text class="detail" x="539" y="353">작업 이력 및 모델링 템플릿</text>
+          <rect class="box api" x="520" y="393" width="430" height="72" rx="12"/><text class="title" x="539" y="423">폴더 탐색 · 결과 수집 API</text><text class="detail" x="539" y="446">SPDM 연결 · 초안 · 불변 수집 버전</text>
+          <rect class="box api" x="520" y="486" width="430" height="72" rx="12"/><text class="title" x="539" y="516">결과 조회 · 분석 API</text><text class="detail" x="539" y="539">Run · Case · 비교 · 검수</text>
+          <rect class="box api" x="520" y="579" width="430" height="72" rx="12"/><text class="title" x="539" y="609">대시보드 · 보고서 API</text><text class="detail" x="539" y="632">설정 · 버전 · 서버 템플릿 렌더</text>
+          <rect class="box api" x="520" y="672" width="430" height="72" rx="12"/><text class="title" x="539" y="702">관리 · 감사 API</text><text class="detail" x="539" y="725">인증 · 권한 · 변경 이력</text>
+        </g>
+        <path class="edge" d="M415 243 H520"/><path class="edge" d="M415 336 H520"/><path class="edge" d="M415 429 H520"/><path class="edge" d="M415 522 H520"/><path class="edge" d="M415 615 H520"/><path class="edge" d="M415 708 H520"/>
+
+        <rect class="box store" x="1084" y="315" width="320" height="110" rx="14"/>
+        <text class="title" x="1105" y="350">PostgreSQL</text>
+        <text class="detail" x="1105" y="375">업무 · 결과 · 권한 · 감사</text>
+        <text class="detail" x="1105" y="397">초안 원본 · 미디어 바이너리</text>
+        <rect class="box store" x="1084" y="495" width="320" height="110" rx="14"/>
+        <text class="title" x="1105" y="530">SPDM 폴더</text>
+        <text class="detail" x="1105" y="555">Project / WR / CAE 경로</text>
+        <text class="detail" x="1105" y="577">원본 파일 · 폴더 구조</text>
+        <path class="edge" d="M950 243 H1005 V350 H1084"/>
+        <path class="edge" d="M950 336 H1005 V362 H1084"/>
+        <path class="edge" d="M950 429 H1005 V375 H1084"/>
+        <path class="edge" d="M950 522 H1005 V388 H1084"/>
+        <path class="edge" d="M950 615 H1005 V402 H1084"/>
+        <path class="edge" d="M950 708 H1005 V414 H1084"/>
+        <path class="edge write" d="M950 441 H1019 V540 H1084"/>
+        <text class="edge-label" x="1027" y="474">읽기 · 게시</text>
+      </svg>
+    </div>
+    <p class="note">각 화면 요청은 상단의 공통 API 클라이언트와 서버 인증·권한 경계를 통과합니다. 아래 가로선은 화면과 담당 서버 기능의 대응 관계를 간단히 나타냅니다.</p>
+  </section>
+
+  <section aria-labelledby="data-title">
+    <div class="section-head"><h2 id="data-title">2. 데이터 연결도</h2><p>업무 문맥 · 결과 등록 · 조회</p></div>
+    <div class="figure">
+      <svg viewBox="0 0 1480 885" role="img" aria-labelledby="data-svg-title data-svg-desc" xmlns="http://www.w3.org/2000/svg">
+        <title id="data-svg-title">Simulation Workbench 주요 데이터 연결도</title>
+        <desc id="data-svg-desc">프로젝트에서 의뢰, 하중 경우, Analysis Run으로 문맥이 이어집니다. 사용자가 업로드한 파일은 격리 초안, 검사, 승인을 거쳐 Case 수집 버전으로 게시되고 결과 조회에 연결됩니다. 기존 SPDM 새로고침 경로는 별도로 표시했습니다.</desc>
+        <defs>
+          <marker id="arrow-data" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M1 1 L8 4.5 L1 8" fill="none" stroke="#4e789f" stroke-width="1.6"/></marker>
+          <marker id="arrow-write" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M1 1 L8 4.5 L1 8" fill="none" stroke="#a77536" stroke-width="1.6"/></marker>
+          <marker id="arrow-legacy" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M1 1 L8 4.5 L1 8" fill="none" stroke="#8b70b9" stroke-width="1.6"/></marker>
+        </defs>
+        <text class="lane-label" x="36" y="48">업무 문맥과 Run</text>
+        <rect class="box front" x="36" y="68" width="218" height="85" rx="13"/><text class="title" x="55" y="102">프로젝트</text><text class="detail" x="55" y="128">Project</text>
+        <rect class="box front" x="321" y="68" width="218" height="85" rx="13"/><text class="title" x="340" y="102">해석 의뢰</text><text class="detail" x="340" y="128">Request · 작업 계획</text>
+        <rect class="box front" x="606" y="68" width="218" height="85" rx="13"/><text class="title" x="625" y="102">하중 경우 · Case</text><text class="detail" x="625" y="128">선택된 업무 문맥</text>
+        <rect class="box process" x="891" y="68" width="218" height="85" rx="13"/><text class="title" x="910" y="102">Analysis Run</text><text class="detail" x="910" y="128">해석 결과 이력</text>
+        <rect class="box output" x="1176" y="68" width="268" height="85" rx="13"/><text class="title" x="1195" y="102">Run 결과 자료</text><text class="detail" x="1195" y="128">수치 · 미디어 · 검수 기록</text>
+        <path class="edge data" d="M254 110 H321"/><path class="edge data" d="M539 110 H606"/><path class="edge data" d="M824 110 H891"/><path class="edge data" d="M1109 110 H1176"/>
+
+        <rect class="lane" x="24" y="215" width="1432" height="422" rx="16"/>
+        <text class="lane-label" x="45" y="249">새 결과 등록 · 현재 화면</text>
+        <rect class="box front" x="48" y="283" width="230" height="91" rx="13"/><text class="title" x="67" y="318">파일 업로드</text><text class="detail" x="67" y="344">선택한 업무 · 결과 경로</text>
+        <rect class="box process" x="342" y="283" width="230" height="91" rx="13"/><text class="title" x="361" y="318">격리 초안</text><text class="detail" x="361" y="344">DB에 원본 바이트 보관</text>
+        <rect class="box process" x="636" y="283" width="230" height="91" rx="13"/><text class="title" x="655" y="318">자동 검사 · 검수</text><text class="detail" x="655" y="344">항목 · 값 · 미디어 확인</text>
+        <rect class="box process" x="930" y="283" width="230" height="91" rx="13"/><text class="title" x="949" y="318">사용자 승인 · 게시</text><text class="detail" x="949" y="344">승인 파일만 불변 등록</text>
+        <rect class="box output" x="1224" y="283" width="208" height="91" rx="13"/><text class="title" x="1243" y="318">Case 수집 버전</text><text class="detail" x="1243" y="344">Capture · 자산</text>
+        <path class="edge data" d="M278 328 H342"/><path class="edge data" d="M572 328 H636"/><path class="edge data" d="M866 328 H930"/><path class="edge data" d="M1160 328 H1224"/>
+
+        <rect class="box store" x="48" y="457" width="360" height="112" rx="13"/><text class="title" x="68" y="494">SPDM 원본 폴더</text><text class="detail" x="68" y="520">등록된 Project / WR / CAE 위치</text><text class="detail" x="68" y="545">경로 연결 · 승인 파일 복사</text>
+        <rect class="box process" x="540" y="457" width="360" height="112" rx="13"/><text class="title" x="560" y="494">기존 폴더 새로고침 · 수집</text><text class="detail" x="560" y="520">연결 경로에서 복사 완료 파일 검색</text><text class="detail" x="560" y="545">새 등록 화면과 별도 API 흐름</text>
+        <rect class="box output" x="1032" y="457" width="400" height="112" rx="13"/><text class="title" x="1052" y="494">Case 결과 · 대시보드 · 보고서</text><text class="detail" x="1052" y="520">Run 및 수집 버전의 수치 · 자산 조회</text><text class="detail" x="1052" y="545">비교 · 검수 · 보고서 구성</text>
+        <path class="edge data" d="M715 153 V189 H228 V283"/><text class="edge-label" x="369" y="184">대상 업무 선택</text>
+        <path class="edge write" d="M1045 374 V421 H228 V457"/><text class="edge-label" x="624" y="414">게시 후 승인한 원본 파일만 복사</text>
+        <path class="edge legacy" d="M408 513 H540"/><text class="edge-label" x="428" y="500">명시적 새로고침</text>
+        <path class="edge legacy" d="M900 513 H1032"/><text class="edge-label" x="915" y="500">기존 수집</text>
+        <path class="edge data" d="M1328 374 V457"/>
+        <path class="edge data" d="M1444 110 H1464 V513 H1432"/><text class="edge-label" x="1371" y="190">Run 조회</text>
+
+        <text class="lane-label" x="36" y="706">영속 저장</text>
+        <rect class="box store" x="320" y="727" width="840" height="113" rx="15"/>
+        <text class="title" x="345" y="768">PostgreSQL · 운영 데이터의 기준 저장소</text>
+        <text class="detail" x="345" y="795">프로젝트 / 의뢰 / Run / Capture / 검수 / 권한 / 감사 / 격리 초안 / 미디어 바이너리</text>
+        <path class="edge write" d="M485 153 V691 H510 V727"/>
+        <path class="edge write" d="M457 374 V673 H625 V727"/>
+        <path class="edge write" d="M1432 328 H1458 V675 H850 V727"/>
+        <path class="edge write" d="M1232 569 V690 H985 V727"/>
+        <text class="edge-label" x="668" y="663">업무·초안·결과 이력 저장</text>
+      </svg>
+    </div>
+    <div class="legend">
+      <span><i class="swatch" style="background:#eef5ff;border-color:#9cc1f3"></i>화면·업무 문맥</span>
+      <span><i class="swatch" style="background:#f3efff;border-color:#baa8eb"></i>처리 단계</span>
+      <span><i class="swatch" style="background:#eaf7f9;border-color:#93cad3"></i>조회 결과</span>
+      <span><i class="swatch" style="background:#fff6e7;border-color:#eac78c"></i>저장 위치</span>
+      <span><i class="line-sample dashed"></i>기존 새로고침 경로</span>
+    </div>
+    <p class="note">새 등록 화면은 SPDM 상위 업무를 새로 만들지 않습니다. 게시가 DB에서 성공한 뒤 SPDM 원본 복사가 실패하면 수집 버전은 보존되고 복구 상태가 표시됩니다. 기존 폴더 새로고침은 별도의 수집 경로입니다.</p>
+  </section>
+
+  <footer>
+    <strong>범위:</strong> 현재 주요 연결만 요약했습니다. PC 도우미 코드는 남아 있지만 현재 작업 실행 화면의 도우미 패널과 연결 요청은 숨겨져 있어 본선 흐름에서 제외했습니다. DuckDB는 로컬 개발용 DB adapter입니다.<br>
+    <strong>근거:</strong> <a href="current-architecture.md">현재 아키텍처</a> · <a href="features/result-registration.md">결과 등록 계약</a> · <a href="spdm-storage-workflow.md">SPDM 저장 폴더 연계</a>
+  </footer>
+</main>
+</body>
+</html>
