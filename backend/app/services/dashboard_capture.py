@@ -262,6 +262,73 @@ def _capture_id(case_id: str, digest: str) -> str:
     return "dashboard-capture-" + hashlib.sha256(f"{case_id}:{digest}".encode()).hexdigest()[:24]
 
 
+def _schema_scoped(payload: dict[str, Any]) -> bool:
+    return bool(payload.get("folder_schema_scoped") or payload.get("folder_schema_snapshot_id"))
+
+
+def _schema_blocks_file(payload: dict[str, Any], file_relative_path: str) -> bool:
+    blocked_paths = payload.get("folder_schema_blocked_paths")
+    if not isinstance(blocked_paths, list):
+        return False
+    file_key = _relative(file_relative_path).casefold()
+    return any(
+        file_key.startswith(_relative(str(path)).casefold().rstrip("/") + "/")
+        for path in blocked_paths if isinstance(path, str) and path
+    )
+
+
+def _schema_fingerprint_locations(locations: Any) -> list[dict[str, Any]]:
+    """Keep capture identity tied to location semantics, not review provenance."""
+    if not isinstance(locations, list):
+        return []
+    return sorted(({
+        key: item.get(key)
+        for key in ("id", "location_id", "target_id", "role_kind", "relative_path", "status")
+    } for item in locations if isinstance(item, dict)),
+        key=lambda item: (str(item.get("relative_path") or "").casefold(),
+                          str(item.get("role_kind") or "")))
+
+
+def _schema_allows_file(payload: dict[str, Any], case_relative_path: str, file_relative_path: str) -> bool:
+    locations = payload.get("folder_schema_locations")
+    if _schema_blocks_file(payload, file_relative_path):
+        return False
+    if not isinstance(locations, list) or not locations:
+        return not _schema_scoped(payload)
+    environment = str(payload.get("environment") or "").upper()
+    allowed_roles = {"EVALUATION", "RESULTS"} if environment == "USAGE" else {"SCENE", "RESULTS"}
+    case_key = _relative(case_relative_path).casefold().rstrip("/") + "/"
+    file_key = _relative(file_relative_path).casefold()
+    for location in locations:
+        if not isinstance(location, dict) or location.get("status") not in {"CONFIRMED", "LINKED"}:
+            continue
+        if str(location.get("role_kind") or "") not in allowed_roles:
+            continue
+        path = str(location.get("relative_path") or "").casefold().rstrip("/")
+        if path.startswith(case_key) and file_key.startswith(path + "/"):
+            return True
+    return False
+
+
+def _assert_schema_allows_approved_files(payload: dict[str, Any], approved_files: list[tuple[str, bytes, str]]) -> None:
+    locations = payload.get("folder_schema_locations")
+    if not isinstance(locations, list) or not locations:
+        if _schema_scoped(payload):
+            raise DashboardCaptureError("DASHBOARD_SCHEMA_LOCATION_INVALID", "승인 파일을 제한할 확정된 Folder Schema 위치가 없습니다.")
+        return
+    allowed = [item for item in locations if isinstance(item, dict)
+               and item.get("status") in {"CONFIRMED", "LINKED"}
+               and item.get("role_kind") == "RESULTS"]
+    if not allowed:
+        raise DashboardCaptureError("DASHBOARD_SCHEMA_LOCATION_INVALID", "승인 파일에 연결된 Folder Schema Results 위치가 없습니다.")
+    allowed_paths = [str(item.get("relative_path") or "").casefold().rstrip("/") + "/" for item in allowed]
+    for path, _content, _media_type in approved_files:
+        normalized = _relative(path).casefold()
+        if (_schema_blocks_file(payload, path)
+                or not any(normalized.startswith(prefix) for prefix in allowed_paths)):
+            raise DashboardCaptureError("DASHBOARD_SCHEMA_LOCATION_INVALID", "승인 파일이 확인된 Folder Schema Results 위치 밖에 있습니다.")
+
+
 def _verify_context(conn: ConnectionLike, project_id: str, request_id: str) -> None:
     row = conn.execute("SELECT project_id FROM analysis_requests WHERE id=?", [request_id]).fetchone()
     if not row or str(row[0]) != project_id:
@@ -294,6 +361,7 @@ def create_capture(
         expected = {str(item.get("relative_path")): item for item in (approved_manifest or [])}
         if len(expected) != len(approved_files):
             raise DashboardCaptureError("DASHBOARD_APPROVED_SOURCE_INVALID", "승인된 파일 목록이 일치하지 않습니다.")
+        _assert_schema_allows_approved_files(payload, approved_files)
         actual: set[str] = set()
         case_prefix = relative.rstrip("/") + "/"
         total = 0
@@ -316,14 +384,41 @@ def create_capture(
     review_contract = payload.get("usage_source_review") if payload.get("environment") == "USAGE" else None
     review_selection = usage_source_review.selection(review_contract.get("selection") if isinstance(review_contract, dict) else None)
     if approved_files is None:
+        schema_scoped = _schema_scoped(payload)
+
+        def include_capture_path(path: str) -> bool:
+            if review_contract and not usage_source_review.include_path(path, review_selection):
+                return False
+            return not schema_scoped or _schema_allows_file(payload, relative, path)
+
         files = _walk(root, relative, issues=walk_issues,
-                      include_path=(lambda path: usage_source_review.include_path(path, review_selection)) if review_contract else None,
-                      excluded_files=[] if review_contract else None)
+                      include_path=include_capture_path if review_contract or schema_scoped else None,
+                      excluded_files=[] if review_contract or schema_scoped else None)
+        if review_contract and schema_scoped:
+            review_files = [(path, data) for path, data, _ in files]
+            # Re-run source review against the exact canonical locations;
+            # do not let an unconfirmed sibling evaluation satisfy review.
+            inspected = usage_source_review.review(
+                review_files,
+                selected=review_contract.get("selection"),
+                selected_sources=review_contract.get("selected_sources"),
+                metric_paths=review_contract.get("metric_paths"),
+                excludes=review_contract.get("excludes"),
+                profile_id=review_contract.get("profile_id"),
+                profile_revision=review_contract.get("profile_revision"),
+            )
+            expected = sorted(review_contract.get("sources") or [], key=lambda item: str(item.get("source", "")).casefold())
+            if expected != inspected["contract"]["sources"] or inspected["blocking_count"]:
+                raise DashboardCaptureError("USAGE_SOURCE_REVIEW_STALE", "확인된 Folder Schema 위치와 파일 검수가 일치하지 않습니다.")
     else:
         files = sorted(approved_files, key=lambda item: item[0].casefold())
     manifest = [{"relative_path": path, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data), "media_type": media_type} for path, data, media_type in files]
     recipe_version = "dashboard-v3"
     fingerprint_context = {key: payload.get(key) for key in ("project_id", "request_id", "simulation_case_id", "load_case_id", "execution_run_id", "run_option_id", "option_label", "option_status", "run_option_labels", "hierarchy_assignments", "rule_profile_id", "rule_profile_version", "mode", "component_id")}
+    if payload.get("folder_schema_locations"):
+        fingerprint_context["folder_schema_locations"] = _schema_fingerprint_locations(
+            payload.get("folder_schema_locations"),
+        )
     if review_contract:
         fingerprint_context["usage_source_review"] = review_contract.get("fingerprint")
     if walk_issues:
@@ -346,7 +441,7 @@ def create_capture(
         return {"id": str(existing[0]), "case_id": case_id, "fingerprint": digest, "status": old_payload.get("status", "READY"), "context": old_payload.get("context", payload), "payload": old_payload}
 
     capture_id = _capture_id(case_id, digest)
-    context = {key: payload.get(key) for key in ("project_id", "request_id", "simulation_case_id", "load_case_id", "execution_run_id", "run_display_name", "run_option_id", "option_label", "option_status", "run_option_labels", "hierarchy_assignments", "rule_profile_id", "rule_profile_version", "mode", "capture_id", "component_id")}
+    context = {key: payload.get(key) for key in ("project_id", "request_id", "simulation_case_id", "load_case_id", "execution_run_id", "run_display_name", "run_option_id", "option_label", "option_status", "run_option_labels", "hierarchy_assignments", "rule_profile_id", "rule_profile_version", "mode", "capture_id", "component_id", "folder_schema_locations", "folder_schema_snapshot_id")}
     context["capture_id"] = capture_id
     if payload["environment"] == "USAGE":
         grouped: dict[str, list[tuple[str, bytes]]] = {}

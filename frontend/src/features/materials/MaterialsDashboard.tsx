@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Download, Search, RotateCw, Box, Layers, AlertTriangle, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useSearchParams } from 'react-router-dom'
+import { folderEnvironmentApi } from '../../shared/api/folderEnvironment'
 import {
   materialsApi,
   type MaterialsCatalog,
@@ -17,7 +18,9 @@ import {
 import './MaterialsDashboard.css'
 
 type Props = {
+  projectId: string
   requestId: string
+  canRefreshSchema?: boolean
   refreshToken?: number
 }
 
@@ -194,7 +197,7 @@ function FailureCard({ failure }: { failure: MaterialsFailure }) {
   </details>
 }
 
-export function MaterialsDashboard({ requestId, refreshToken = 0 }: Props) {
+export function MaterialsDashboard({ projectId, requestId, canRefreshSchema = false, refreshToken = 0 }: Props) {
   const [searchParams, setSearchParams] = useSearchParams()
   const [catalog, setCatalog] = useState<MaterialsCatalog | null>(null)
   const [deck, setDeck] = useState<MaterialsDeck | null>(null)
@@ -202,9 +205,25 @@ export function MaterialsDashboard({ requestId, refreshToken = 0 }: Props) {
   const [loadingDeck, setLoadingDeck] = useState(false)
   const [error, setError] = useState('')
   const [manualRefresh, setManualRefresh] = useState(0)
+  const [refreshBusy, setRefreshBusy] = useState(false)
+  const [refreshNotice, setRefreshNotice] = useState('')
+  const refreshScope = useRef('')
   const [sort, setSort] = useState<{ key: SortKey; direction: 'asc' | 'desc' }>({ key: 'part', direction: 'asc' })
   const [page, setPage] = useState(0)
   const environment: MaterialsEnvironment = 'DISTRIBUTION'
+  useEffect(() => { refreshScope.current = `${projectId}:${requestId}` }, [projectId, requestId])
+  const refreshSchema = async () => {
+    const requestedScope = refreshScope.current
+    setRefreshBusy(true); setRefreshNotice('')
+    try {
+      const result = await folderEnvironmentApi.refresh({ project_id: projectId, request_id: requestId, environment })
+      if (refreshScope.current !== requestedScope) return
+      if (result.status === 'CONFLICT') { setRefreshNotice(result.message || '역할 충돌이 있어 기존 덱 위치를 유지했습니다. 폴더 연결·규칙에서 확인하세요.'); return }
+      setRefreshNotice(result.changed ? '저장소와 덱 위치를 갱신했습니다.' : '저장소 내용이 이미 최신입니다.')
+      setManualRefresh((value) => value + 1)
+    } catch (reason) { if (refreshScope.current === requestedScope) setRefreshNotice(reason instanceof Error ? reason.message : '저장소를 갱신하지 못했습니다.') }
+    finally { setRefreshBusy(false) }
+  }
   const selectedSceneId = searchParams.get('scene') ?? ''
   const selectedPartId = searchParams.get('part') ?? ''
   const filter = searchParams.get('filter') ?? ''
@@ -329,15 +348,17 @@ export function MaterialsDashboard({ requestId, refreshToken = 0 }: Props) {
     <header className="materials-page-head">
       <div><span>RADioss STARTER DECK</span><h1>모델 소재·물성</h1><p>Part 참조를 따라 Material, Property, Failure 모델과 함수 곡선을 살펴봅니다.</p></div>
       <div className="materials-page-controls">
+        {canRefreshSchema && <button type="button" className="materials-export-button" disabled={refreshBusy || !projectId || !requestId} onClick={() => void refreshSchema()}><RotateCw /> {refreshBusy ? '갱신 중…' : '저장소 Refresh'}</button>}
         <label><span>덱 위치</span><select aria-label="소재 덱 위치 선택" value={selectedSceneId} disabled={!catalog?.scenes.length} onChange={(event) => updateQuery({ scene: event.target.value, part: null }, false)}>
-          {!catalog?.scenes.length && <option value="">{loadingCatalog ? '불러오는 중…' : '위치 없음'}</option>}
+          {!catalog?.scenes.length && <option value="">{loadingCatalog ? '불러오는 중…' : error ? '조회 실패' : '위치 없음'}</option>}
           {(catalog?.scenes ?? []).map((scene) => <option key={scene.scene_id} value={scene.scene_id}>{scene.label}{scene.has_deck ? '' : ' · 덱 없음'}</option>)}
         </select></label>
       </div>
     </header>
 
+    {refreshNotice && <div className="materials-error" role="status"><span>{refreshNotice}</span></div>}
     {error && <div className="materials-error" role="alert"><AlertTriangle /><span>{error}</span><button type="button" onClick={() => setManualRefresh((value) => value + 1)}><RotateCw /> 다시 불러오기</button></div>}
-    {!requestId ? <div className="materials-empty-state"><Box /><strong>의뢰를 선택하면 소재 덱을 조회합니다.</strong><span>조회 권한이 있는 의뢰만 목록에 표시됩니다.</span></div> : loadingCatalog ? <div className="materials-empty-state" role="status">유통환경 덱 위치를 불러오고 있습니다…</div> : catalog && !catalog.scenes.length ? <div className="materials-empty-state"><Layers /><strong>이 의뢰에서 확인된 덱 위치가 없습니다.</strong><span>의뢰의 유통환경 결과 폴더를 확인하세요.</span></div> : selectedScene && !selectedScene.has_deck ? <div className="materials-empty-state"><Box /><strong>선택한 위치에서 Parts와 Materials 덱을 찾지 못했습니다.</strong><span title={selectedScene.relative_path}>{selectedScene.relative_path}</span></div> : <div className="materials-workspace">
+    {!requestId ? <div className="materials-empty-state"><Box /><strong>의뢰를 선택하면 소재 덱을 조회합니다.</strong><span>조회 권한이 있는 의뢰만 목록에 표시됩니다.</span></div> : loadingCatalog ? <div className="materials-empty-state" role="status">유통환경 덱 위치를 불러오고 있습니다…</div> : error && !catalog ? <div className="materials-empty-state"><AlertTriangle /><strong>조회 실패</strong><span>오류를 확인하고 다시 불러오세요.</span></div> : catalog && !catalog.scenes.length ? <div className="materials-empty-state"><Layers /><strong>이 의뢰에서 확인된 덱 위치가 없습니다.</strong><span>의뢰의 유통환경 결과 폴더를 확인하세요.</span></div> : selectedScene && !selectedScene.has_deck ? <div className="materials-empty-state"><Box /><strong>선택한 위치에서 Parts와 Materials 덱을 찾지 못했습니다.</strong><span title={selectedScene.relative_path}>{selectedScene.relative_path}</span></div> : <div className="materials-workspace">
       <section className="materials-list-panel" aria-label="Part 목록">
         <div className="materials-list-toolbar">
           <label className="materials-search"><Search /><input aria-label="Part 검색" placeholder="Part, Material, Property 검색" value={filter} onChange={(event) => updateQuery({ filter: event.target.value || null }, true)} /></label>

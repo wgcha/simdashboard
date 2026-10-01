@@ -77,6 +77,24 @@ async function openMaterials(page: Page) {
   await expect(page.getByRole('complementary', { name: '주 메뉴' }).getByRole('link', { name: '모델 소재·물성', exact: true })).toHaveCount(0)
 }
 
+test('소재 Refresh는 선택 의뢰만 갱신하고 실패해도 기존 Scene을 유지한다', async ({ page }) => {
+  await mockMaterialsApi(page)
+  let refreshCount = 0
+  await page.route('**/api/folder-discovery/environments/refresh', (route) => {
+    refreshCount += 1
+    if (refreshCount === 2) return route.fulfill({ status: 422, json: { detail: { code: 'FOLDER_SCHEMA_SCAN_UNAVAILABLE', message: '저장소를 읽을 수 없습니다.' } } })
+    return route.fulfill({ json: { snapshot_id: 'snapshot-2', project_id: projectId, request_id: requestId, environment: 'DISTRIBUTION', status: 'REFRESHED', changed: true, structure_fingerprint: 'structure-2', content_fingerprint: 'content-2', diff: { added: 0, removed: 0, changed: 0 }, nodes: [] } })
+  })
+  await openMaterials(page)
+  const refreshRequest = page.waitForRequest((request) => request.url().endsWith('/api/folder-discovery/environments/refresh'))
+  await page.getByRole('button', { name: '저장소 Refresh' }).click()
+  expect((await refreshRequest).postDataJSON()).toEqual({ project_id: projectId, request_id: requestId, environment: 'DISTRIBUTION' })
+  await expect(page.locator('.materials-dashboard .materials-error[role="status"]')).toContainText('저장소와 덱 위치를 갱신했습니다.')
+  await page.getByRole('button', { name: '저장소 Refresh' }).click()
+  await expect(page.locator('.materials-dashboard .materials-error[role="status"]')).toContainText('저장소를 읽을 수 없습니다.')
+  await expect(page.getByLabel('소재 덱 위치 선택')).toHaveValue('small-scene')
+})
+
 test('소재 탭은 내 작업 문맥과 뒤로 가기를 유지하고 기존 주소를 새 탭으로 보낸다', async ({ page }) => {
   await mockMaterialsApi(page)
   await openMaterials(page)

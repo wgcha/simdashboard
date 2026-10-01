@@ -3,6 +3,7 @@ import { apiErrorFromResponse } from './errors'
 import { apiUrl } from './url'
 
 export type ResultEnvironment = 'USAGE' | 'DISTRIBUTION'
+export type ResultSchemaRefresh = { status: 'REFRESHED' | 'UNCHANGED' | 'FAILED'; snapshot_id?: string; message?: string; code?: string }
 
 export type ResultRegistrationContext = {
   simulation_case: { id: string; label: string; relative_path: string } | null
@@ -181,6 +182,7 @@ export type ResultRegistrationPublished = {
   image_count?: number
   video_count?: number
   mirror_status?: string | null
+  schema_refresh?: ResultSchemaRefresh | null
   error?: { code: string; message: string; relative_path?: string | null } | null
 }
 
@@ -209,6 +211,7 @@ export type ResultRegistrationDraftRead = {
     result_count: number
   }
   mirror_status: string | null
+  schema_refresh?: ResultSchemaRefresh | null
   error: { code: string; message: string; relative_path?: string | null } | null
   capture_id: string | null
   case_id: string | null
@@ -228,6 +231,7 @@ export type ResultFolderPreparation = {
   case_relative_path: string
   result_relative_path: string
   created: boolean
+  schema_refresh?: ResultSchemaRefresh | null
   proposed_paths?: Array<{ relative_path: string; role_kind: string; name: string; exists: boolean }>
   created_paths?: string[]
   context: ResultRegistrationContext

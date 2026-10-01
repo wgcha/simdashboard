@@ -10,7 +10,7 @@ from typing import Any
 from uuid import uuid4
 
 from ..database_connection import ConnectionLike, rows
-from . import result_registration_paths as paths
+from . import folder_schema_locations, result_registration_paths as paths
 
 
 def effective_assignment(schema: dict[str, Any], path_key: str) -> dict[str, Any] | None:
@@ -45,10 +45,10 @@ def _resolver(conn: ConnectionLike, root, root_key: str, project_id: str,
               request_id: str, environment: str) -> dict[str, Any]:
     # Keep the resolver import local so schema bootstrap tools can import this
     # module while the independent Folder Schema service is being installed.
-    from .folder_schema_resolver import FolderSchemaError, resolve_request_schema
+    from .folder_schema_resolver import FolderSchemaError, resolve_request_locations
 
     try:
-        return resolve_request_schema(conn, root, root_key, project_id, request_id, environment)
+        return resolve_request_locations(conn, project_id, request_id, environment).as_dict()
     except FolderSchemaError as exc:
         raise paths.ResultRegistrationError(
             getattr(exc, "code", "RESULT_FOLDER_SCHEMA_REQUIRED"), str(exc)
@@ -277,6 +277,12 @@ def resolve_result_context(conn: ConnectionLike, project_id: str, request_id: st
     return {"scope": scope, "root": root, "root_id": paths.dashboard_capture._root_id(root),
             "root_key": root_key, "context": candidate["context"],
             "assignments": candidate["_assignments"],
+            "folder_schema_locations": schema.get("locations", []),
+            "folder_schema_blocked_paths": folder_schema_locations.blocked_paths_for_case(
+                schema, case_relative_path,
+            ),
+            "folder_schema_scoped": True,
+            "folder_schema_snapshot_id": schema.get("folder_schema_snapshot_id"),
             "case_relative_path": case_relative_path,
             "result_relative_path": normalized}
 

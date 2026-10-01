@@ -158,6 +158,12 @@ def _current_target(
                 raise ResultRegistrationError("RESULT_CONTEXT_CHANGED", "선택한 결과 위치가 다른 해석 Case에 속합니다.")
             schema_target = {"scope": scope, "root": root, "root_id": root_id, "root_key": root_key,
                              "context": candidate["context"], "assignments": candidate["_assignments"],
+                             "folder_schema_locations": schema.get("locations", []),
+                             "folder_schema_blocked_paths": result_registration_locations.folder_schema_locations.blocked_paths_for_case(
+                                 schema, case_relative_path,
+                             ),
+                             "folder_schema_scoped": True,
+                             "folder_schema_snapshot_id": schema.get("folder_schema_snapshot_id"),
                              "case_relative_path": case_relative_path,
                              "result_relative_path": result_relative_path}
     else:
@@ -225,6 +231,10 @@ def _current_target(
         "root_key": root_key,
         "context": _public_context(context),
         "assignments": assignments,
+        "folder_schema_locations": schema_target.get("folder_schema_locations", []) if schema_target else [],
+        "folder_schema_blocked_paths": schema_target.get("folder_schema_blocked_paths", []) if schema_target else [],
+        "folder_schema_scoped": bool(schema_target and schema_target.get("folder_schema_scoped")),
+        "folder_schema_snapshot_id": schema_target.get("folder_schema_snapshot_id") if schema_target else None,
         "case_relative_path": case_relative_path,
         "result_relative_path": result_relative_path,
     }
@@ -254,7 +264,74 @@ def prepare_folders(conn: ConnectionLike, project_id: str, request_id: str, envi
     parent = parent_relative_path
     if parent is None:
         parent = paths._scope(conn, project_id, request_id, environment)["request_relative_path"]
-    return paths.prepare_folders(conn, project_id, request_id, environment, parent, segments, confirm_create, actor)
+    result = paths.prepare_folders(conn, project_id, request_id, environment, parent, segments, confirm_create, actor)
+    if confirm_create and result.get("created"):
+        result["schema_refresh"] = _refresh_schema(conn, project_id, request_id, environment, actor)
+    else:
+        result["schema_refresh"] = {"status": "UNCHANGED", "message": None}
+    return result
+
+
+def _refresh_schema(conn: ConnectionLike, project_id: str, request_id: str,
+                    environment: str, actor: str, *, capture_cases: bool = True) -> dict[str, Any]:
+    from . import folder_discovery_environment, folder_schema_resolver
+
+    root, _root_id, root_key = paths._root(conn)
+    previous = folder_schema_resolver.active_refresh_snapshot(conn, root_key, project_id, request_id, environment)
+    try:
+        result = folder_discovery_environment.refresh_scope(
+            conn, root, project_id, request_id, environment, actor,
+            capture_cases=capture_cases,
+        )
+        if result["status"] == "CONFLICT":
+            return {"status": "FAILED", "code": "FOLDER_SCHEMA_ROLE_CONFLICT",
+                    "message": "폴더 역할이 모호하여 새로고침을 활성화하지 못했습니다.",
+                    "prior_snapshot_id": result.get("snapshot_id")}
+        return {"status": result["status"], "snapshot_id": result["snapshot_id"], "message": None}
+    except Exception as exc:
+        code = str(getattr(exc, "code", "FOLDER_SCHEMA_REFRESH_FAILED"))
+        message = str(exc) if isinstance(exc, folder_schema_resolver.FolderSchemaError) else "폴더 스키마 새로고침에 실패했습니다. 기존 등록은 유지됩니다."
+        return {"status": "FAILED", "code": code, "message": message,
+                "prior_snapshot_id": str(previous["id"]) if previous else None}
+
+
+def reconcile_schema_refresh_failures(conn: ConnectionLike, project_id: str, request_id: str,
+                                      environment: str, snapshot_id: str, status: str,
+                                      actor: str) -> int:
+    """Clear stored publication warnings after a later scoped refresh succeeds."""
+    from . import folder_discovery_environment, folder_schema_resolver
+
+    root, _root_id, root_key = paths._root(conn)
+    current = folder_schema_resolver.active_refresh_snapshot(conn, root_key, project_id, request_id, environment)
+    if not current or str(current["id"]) != snapshot_id:
+        return 0
+    drafts = rows(conn.execute(
+        "SELECT id,approval_json FROM result_registration_drafts "
+        "WHERE project_id=? AND request_id=? AND environment=? AND approval_json IS NOT NULL",
+        [project_id, request_id, environment],
+    ))
+    changed = 0
+    for draft in drafts:
+        approval = draft["approval_json"]
+        if isinstance(approval, str):
+            approval = json.loads(approval)
+        publication = (approval or {}).get("publication") or {}
+        previous = publication.get("schema_refresh") or {}
+        if previous.get("status") != "FAILED":
+            continue
+        publication["schema_refresh"] = {
+            "status": status, "snapshot_id": snapshot_id,
+            "message": None, "recovered_from_failure": True,
+        }
+        approval["publication"] = publication
+        conn.execute(
+            "UPDATE result_registration_drafts SET approval_json=?,revision=revision+1,updated_by=?,updated_at=? WHERE id=?",
+            [_json(approval), actor, _now(), str(draft["id"])],
+        )
+        _event(conn, str(draft["id"]), "SCHEMA_REFRESH_RECOVERED",
+               {"status": status, "snapshot_id": snapshot_id}, actor)
+        changed += 1
+    return changed
 
 
 def _manifest_input(items: Iterable[dict[str, Any]], result_relative_path: str) -> list[dict[str, Any]]:
@@ -783,6 +860,7 @@ def _publish_result(row: dict[str, Any]) -> dict[str, Any]:
             "request_id": row["request_id"], "context": _public_context(row["context_json"] or {}),
             "asset_count": len(manifest), "result_count": int(publication.get("result_count", counts.get("result_count", inspection.get("result_count", 0)))),
             "media_count": media_count, "image_count": image_count, "video_count": video_count,
+            "schema_refresh": publication.get("schema_refresh"),
             "mirror_status": row.get("mirror_status"), "error": row.get("error_json"),
             "idempotency_key": row.get("publish_idempotency_key"), "published_at": row.get("published_at")}
 
@@ -794,7 +872,11 @@ def _capture_payload(row: dict[str, Any], target: dict[str, Any], approval: dict
             "root_relative_path": row["case_relative_path"], "environment": row["environment"],
             "storage_root_id": row["storage_root_id"],
             "simulation_case_id": context.get("simulation_case", {}).get("id"),
-            "hierarchy_assignments": context.get("_registration", {}).get("hierarchy_assignments", [])}
+            "hierarchy_assignments": target.get("assignments") or context.get("_registration", {}).get("hierarchy_assignments", []),
+            "folder_schema_locations": target.get("folder_schema_locations", []),
+            "folder_schema_blocked_paths": target.get("folder_schema_blocked_paths", []),
+            "folder_schema_scoped": bool(target.get("folder_schema_scoped")),
+            "folder_schema_snapshot_id": target.get("folder_schema_snapshot_id")}
     if row["environment"] == "USAGE":
         review = usage_source_review.review([(path, content) for path, content, _ in approved_files], selected=_USAGE_SELECTION)
         body["usage_source_review"] = {**review["contract"], "acknowledge_partial": bool(approval.get("acknowledge_partial"))}
@@ -918,7 +1000,28 @@ def _mirror_after_capture(conn: ConnectionLike, draft_id: str, actor: str) -> di
         _event(conn, draft_id, "MIRRORED" if status == "PUBLISHED" else "MIRROR_FAILED",
                {"status": status, "detail": detail, "capture_id": row["capture_id"]}, actor)
         _commit(conn)
-        return _publish_result(_draft_row(conn, draft_id))
+        published = _publish_result(_draft_row(conn, draft_id))
+        if status == "PUBLISHED":
+            schema_refresh = _refresh_schema(
+                conn, str(row["project_id"]), str(row["request_id"]), str(row["environment"]), actor,
+                capture_cases=False,
+            )
+            _begin(conn)
+            latest = _draft_row(conn, draft_id, lock=True)
+            latest_approval = latest["approval_json"] or {}
+            latest_publication = latest_approval.get("publication") or {}
+            latest_publication["schema_refresh"] = schema_refresh
+            latest_approval["publication"] = latest_publication
+            conn.execute(
+                "UPDATE result_registration_drafts SET approval_json=?,revision=revision+1,updated_by=?,updated_at=? WHERE id=?",
+                [_json(latest_approval), actor, _now(), draft_id],
+            )
+            _event(conn, draft_id, "SCHEMA_REFRESHED" if schema_refresh["status"] != "FAILED" else "SCHEMA_REFRESH_FAILED",
+                   {"status": schema_refresh["status"], "snapshot_id": schema_refresh.get("snapshot_id"),
+                    "code": schema_refresh.get("code")}, actor)
+            _commit(conn)
+            return _publish_result(_draft_row(conn, draft_id))
+        return published
     except BaseException:
         _rollback(conn)
         raise
@@ -1041,6 +1144,7 @@ def read_draft(conn: ConnectionLike, draft_id: str) -> dict[str, Any]:
             "mirror_status": row.get("mirror_status"), "error": row.get("error_json"),
             "capture_id": row.get("capture_id"), "case_id": row.get("case_id"),
             "asset_count": published["asset_count"] if row.get("capture_id") else 0,
+            "schema_refresh": published.get("schema_refresh") if row.get("capture_id") else None,
             "result_count": published["result_count"] if row.get("capture_id") else 0,
             "media_count": published["media_count"] if row.get("capture_id") else 0,
             "image_count": published["image_count"] if row.get("capture_id") else 0,

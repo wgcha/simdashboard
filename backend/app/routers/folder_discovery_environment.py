@@ -5,7 +5,8 @@ from pydantic import BaseModel, Field
 from ..database_connection import connect
 from ..security import write_audit_event
 from ..modules.access_control import RESULT_IMPORT, SYSTEM_CATALOG_MANAGE, require_permission, require_resource_permission
-from ..services import dashboard_capture, folder_discovery as legacy, folder_discovery_environment as service
+from ..services import (dashboard_capture, folder_discovery as legacy,
+                        folder_discovery_environment as service, result_registration)
 from .semantic_body_limit import SemanticBodyLimitRoute
 
 router = APIRouter(prefix="/api/folder-discovery/environments", tags=["folder-discovery-environments"], route_class=SemanticBodyLimitRoute)
@@ -22,6 +23,10 @@ class Preview(BaseModel):
     assignments: list[Assignment] = Field(default_factory=list, max_length=5000)
     require_usage_review: bool = False
 class Register(BaseModel): preview_id: str; idempotency_key: str = Field(min_length=8, max_length=128); capture: bool = True
+class Refresh(BaseModel):
+    project_id: str = Field(min_length=1, max_length=128)
+    request_id: str = Field(min_length=1, max_length=128)
+    environment: Literal["USAGE", "DISTRIBUTION"]
 class Retry(BaseModel): job_ids: list[str] | None = Field(default=None, max_length=500)
 class UsageReview(BaseModel):
     case_relative_path: str = Field(min_length=1, max_length=1024)
@@ -45,6 +50,35 @@ def scan(payload: Scan, request: Request):
         admin(request, conn); scoped(request, conn, payload.request_id)
         try: return service.save_scan(conn, legacy.configured_root(conn), legacy.normal(payload.relative_path), payload.environment, payload.profile_id, payload.project_id, payload.request_id, request.state.principal.user_id)
         except ValueError as exc: raise HTTPException(422, {"code":"ENVIRONMENT_SCAN_INVALID", "message":str(exc)}) from exc
+@router.post("/refresh")
+def refresh(payload: Refresh, request: Request):
+    with connect() as conn:
+        require_resource_permission(request, RESULT_IMPORT, "request", payload.request_id, conn=conn)
+        try:
+            with legacy.WRITE_LOCK:
+                result = service.refresh_scope(
+                    conn, legacy.configured_root(conn), payload.project_id, payload.request_id,
+                    payload.environment, request.state.principal.user_id,
+                )
+            if result.get("activated") and result.get("snapshot_id"):
+                result_registration.reconcile_schema_refresh_failures(
+                    conn, payload.project_id, payload.request_id, payload.environment,
+                    result["snapshot_id"], result["status"], request.state.principal.user_id,
+                )
+            write_audit_event(request=request, principal=request.state.principal, status_code=200,
+                              action="FOLDER_ENVIRONMENT_REFRESH_CONFLICT" if result["status"] == "CONFLICT" else "FOLDER_ENVIRONMENT_REFRESHED",
+                              detail={"snapshot_id": result["snapshot_id"], "project_id": payload.project_id,
+                                      "request_id": payload.request_id, "environment": payload.environment,
+                                      "status": result["status"]}, connection=conn)
+            return result
+        except ValueError as exc:
+            code = getattr(exc, "code", "ENVIRONMENT_REFRESH_INVALID")
+            status_code = getattr(exc, "status_code", 422)
+            write_audit_event(request=request, principal=request.state.principal, status_code=status_code,
+                              action="FOLDER_ENVIRONMENT_REFRESH_FAILED",
+                              detail={"project_id": payload.project_id, "request_id": payload.request_id,
+                                      "environment": payload.environment, "code": code}, connection=conn)
+            raise HTTPException(status_code, {"code": code, "message": str(exc)}) from exc
 @router.post("/previews")
 def preview(payload: Preview, request: Request):
     with connect() as conn:

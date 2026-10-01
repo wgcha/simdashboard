@@ -40,7 +40,9 @@ def _explicit_results_role(node: dict[str, Any]) -> bool:
 
 
 def _schema_scene_role(node: dict[str, Any]) -> bool:
-    return ((node.get("role_source") == "PROFILE" and node.get("role_basis") == "RULE")
+    return ((node.get("role_source") == "PROFILE" and node.get("role_basis") in {"RULE", "PATTERN"})
+            or (node.get("role_source") == "INHERITED" and node.get("role_basis") == "LEVEL")
+            or (node.get("role_source") == "MANUAL" and node.get("role_basis") == "MANUAL")
             or node.get("role_evidence_source") in {"PREVIEW", "REGISTRATION"})
 
 
@@ -107,11 +109,12 @@ def _request_scope(conn: ConnectionLike, request_id: str, environment: str):
     project_id = str(row[0])
     root, root_id, root_key = result_registration_paths._root(conn)
     try:
-        schema = folder_schema_resolver.resolve_request_schema(
-            conn, root, root_key, project_id, request_id, environment,
+        locations = folder_schema_resolver.resolve_request_locations(
+            conn, project_id, request_id, environment,
         )
     except folder_schema_resolver.FolderSchemaError as exc:
         raise MaterialsCatalogError(exc.code, str(exc), exc.status_code) from exc
+    schema = locations.schema
     scope = {
         "project_id": project_id,
         "request_id": request_id,
@@ -119,6 +122,7 @@ def _request_scope(conn: ConnectionLike, request_id: str, environment: str):
         "request_name": str(row[1] or ""),
         "request_relative_path": schema["request_relative_path"],
         "schema": schema,
+        "locations": locations,
     }
     return project_id, scope, root, root_id, root_key, schema
 
@@ -137,33 +141,12 @@ def _candidate_directories(scene: dict[str, Any], scope: dict[str, Any]) -> list
         candidates.append(str(option["relative_path"]))
     if isinstance(execution, dict):
         candidates.append(str(execution["relative_path"]))
-    for node in schema["nodes"]:
-        if node.get("role_kind") not in {"INPUT", "RESULTS"} or node.get("status") == "EXCLUDED":
+    projected_paths = list(scene.get("input_paths") or []) + list(scene.get("result_paths") or [])
+    projected_paths.sort(key=lambda item: (int(item.get("priority", 99)), str(item.get("relative_path", "")).casefold()))
+    for item in projected_paths:
+        if not isinstance(item, dict) or item.get("role_kind") not in {"INPUT", "RESULTS"}:
             continue
-        node_hierarchy = node.get("hierarchy", {})
-        scene_context = node_hierarchy.get("scene")
-        option_context = node_hierarchy.get("run_option")
-        execution_context = node_hierarchy.get("execution_run")
-        node_scene_path = str(scene_context.get("relative_path", "")).casefold() if isinstance(scene_context, dict) else None
-        node_option_path = str(option_context.get("relative_path", "")).casefold() if isinstance(option_context, dict) else None
-        selected_option_path = str(option.get("relative_path", "")).casefold() if isinstance(option, dict) else None
-        related_scene = node_scene_path == scene_path.casefold()
-        same_option = selected_option_path is not None and node_option_path == selected_option_path
-        same_execution = bool(
-            isinstance(execution, dict) and isinstance(execution_context, dict)
-            and str(execution_context.get("relative_path", "")).casefold() == str(execution.get("relative_path", "")).casefold()
-        )
-        # An option-level role can supply this Scene only when it is not under
-        # a different Scene. A run-level role is shared only when it has no
-        # more specific Scene or Run Option context.
-        related_run = same_option and (node_scene_path is None or related_scene)
-        related_execution = same_execution and node_scene_path is None and node_option_path is None
-        schema_confirmed_results = node.get("role_kind") != "RESULTS" or _explicit_results_role(node)
-        # The conventional results child of a confirmed Scene remains a
-        # candidate for that Scene. Sibling run-level results must carry an
-        # explicit Folder Schema role before they can supply a deck.
-        if (related_scene or ((related_run or related_execution) and schema_confirmed_results)):
-            candidates.append(str(node["relative_path"]))
+        candidates.append(str(item["relative_path"]))
     request_path = str(scope["request_relative_path"])
     request_parts = tuple(part.casefold() for part in PurePosixPath(request_path).parts)
     unique: list[str] = []
@@ -410,9 +393,16 @@ def _catalog_items(conn: ConnectionLike, root: Path, root_id: str, root_key: str
         "owned_directories": {}, "ownership_checks": 0,
     }
     items = []
+    projected = {
+        (str(item.get("role_kind")), str(item.get("relative_path", "")).casefold()): item
+        for item in scope.get("locations").locations
+    } if scope.get("locations") else {}
     for node in schema["nodes"]:
         role = str(node.get("role_kind") or "")
+        location = projected.get((role, str(node.get("relative_path", "")).casefold()))
         if role not in {"SCENE", "RESULTS"} or node.get("status") == "EXCLUDED":
+            continue
+        if not location:
             continue
         if role == "SCENE" and not _schema_scene_role(node):
             continue
@@ -448,13 +438,14 @@ def _catalog_items(conn: ConnectionLike, root: Path, root_id: str, root_key: str
             if key in {"simulation_case", "load_case", "execution_run", "run_option"}
         }
         entry = {
-            "scene_id": str(node.get("target_id") or folder_discovery_environment.stable(
-                "materials-" + role.casefold(), root_key, scene_path, role)),
+            "scene_id": str(location.get("scene_id") or location.get("target_id") or location["location_id"]),
             "label": str(node.get("name") or PurePosixPath(scene_path).name),
             "relative_path": scene_path,
             "hierarchy": semantic_hierarchy,
             "kind": role,
             "has_deck": False,
+            "input_paths": list(location.get("input_paths") or []),
+            "result_paths": list(location.get("result_paths") or []),
         }
         _, candidate_files, _ = _candidate_sources(
             entry, root, scope, budget, conn=conn, root_id=root_id, root_key=root_key,

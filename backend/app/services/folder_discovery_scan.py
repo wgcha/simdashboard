@@ -53,6 +53,7 @@ def browse(root: Path, relative: str) -> list[dict[str, Any]]:
 
 def scan(root: Path, relative: str) -> dict[str, Any]:
     nodes, issues = [], []
+    file_state: list[dict[str, Any]] = []
     files = total_entries = 0
     started = time.monotonic()
     stack = [(target(root, relative), normal(relative), 0, None)]
@@ -88,6 +89,12 @@ def scan(root: Path, relative: str) -> dict[str, Any]:
                     elif entry.is_file(follow_symlinks=False):
                         count += 1
                         files += 1
+                        file_info = entry.stat(follow_symlinks=False)
+                        file_state.append({
+                            "relative_path": child_rel,
+                            "size": int(file_info.st_size),
+                            "modified_ns": int(getattr(file_info, "st_mtime_ns", file_info.st_mtime * 1_000_000_000)),
+                        })
                         if child.suffix:
                             extensions.add(child.suffix.lower())
         except (OSError, spdm_storage.SpdmStorageError) as error:
@@ -95,5 +102,6 @@ def scan(root: Path, relative: str) -> dict[str, Any]:
         nodes.append({"relative_path": rel, "parent_path": parent, "name": path.name, "depth": depth,
                       "file_count": count, "extensions": sorted(extensions), "identity": identity})
         stack.extend(sorted(children, key=lambda child: child[1].casefold(), reverse=True))
+    file_state.sort(key=lambda item: str(item["relative_path"]).casefold())
     return {"status": "INCOMPLETE" if issues else "COMPLETE", "folder_count": len(nodes),
-            "file_count": files, "nodes": nodes, "issues": issues}
+            "file_count": files, "nodes": nodes, "file_state": file_state, "issues": issues}

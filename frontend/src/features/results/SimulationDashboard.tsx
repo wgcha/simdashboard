@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { AlertTriangle, Expand, Image as ImageIcon, Layers3, Pause, Play, RotateCcw } from 'lucide-react'
 import { simulationDashboardApi, type DashboardAsset, type DashboardCatalog, type DashboardChoice, type DashboardComparisonMember, type DashboardDistribution, type DashboardEdgePeak, type DashboardMember, type DashboardScene, type DashboardSceneDetail, type DashboardValue, type UsageDashboard } from '../../shared/api/simulationDashboard'
+import { folderEnvironmentApi } from '../../shared/api/folderEnvironment'
 import { Button } from '../../shared/components/Button'
 import { Select } from '../../shared/components/Select'
 import { Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from '../../shared/components/Table'
@@ -9,7 +10,7 @@ import './SimulationDashboard.css'
 import { SimulationLocationMap } from './SimulationLocationMap'
 import { SimulationResultGraph } from './SimulationResultGraph'
 
-type Props = { projectId: string; requestId: string; canManageFolders?: boolean }
+type Props = { projectId: string; requestId: string; canManageFolders?: boolean; canRefreshSchema?: boolean }
 type Tab = 'usage' | 'distribution'
 const EDGES = ['TOP', 'BOTTOM', 'LEFT', 'RIGHT'] as const
 const ROLES = ['CELL', 'CUSHION', 'BOX'] as const
@@ -29,7 +30,7 @@ function CompactChoice({ label, value, choices, onChange, disabled = false }: { 
 }
 function initialParam(name: string) { return typeof window === 'undefined' ? '' : new URLSearchParams(window.location.search).get(name) ?? '' }
 
-export function SimulationDashboard({ projectId, requestId, canManageFolders = false }: Props) {
+export function SimulationDashboard({ projectId, requestId, canManageFolders = false, canRefreshSchema = false }: Props) {
   const [tab, setTab] = useState<Tab>(() => initialParam('result_environment') === 'DISTRIBUTION' ? 'distribution' : 'usage')
   const [catalog, setCatalog] = useState<DashboardCatalog | null>(null)
   const [catalogError, setCatalogError] = useState('')
@@ -44,6 +45,8 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
   const [referenceCaseId, setReferenceCaseId] = useState('')
   const [referenceCaptureId, setReferenceCaptureId] = useState('')
   const [catalogRevision, setCatalogRevision] = useState(0)
+  const [refreshBusy, setRefreshBusy] = useState(false)
+  const [refreshNotice, setRefreshNotice] = useState('')
   const latestCatalogKey = useRef('')
   // Treat URL-derived selection as the initial scope. Only a later request or
   // environment change clears it; otherwise a shared deep link would be
@@ -95,6 +98,18 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
     window.history.replaceState(window.history.state, '', url)
   }, [captureId, caseId, loadCaseId, optionId, runId, tab])
   const folderHref = `/workspace/catalog/schemas?${new URLSearchParams({ project: projectId, request: requestId, result_environment: tab === 'usage' ? 'USAGE' : 'DISTRIBUTION' }).toString()}`
+  const refreshSchema = async () => {
+    const refreshKey = `${requestId}:${tab}`
+    setRefreshBusy(true); setRefreshNotice('')
+    try {
+      const result = await folderEnvironmentApi.refresh({ project_id: projectId, request_id: requestId, environment: tab === 'usage' ? 'USAGE' : 'DISTRIBUTION' })
+      if (latestCatalogKey.current !== refreshKey) return
+      if (result.status === 'CONFLICT') { setRefreshNotice(result.message || '역할 충돌이 있어 기존 결과를 유지했습니다. 폴더 연결·규칙에서 확인하세요.'); return }
+      setRefreshNotice(result.changed ? '저장소와 결과를 갱신했습니다.' : '저장소 내용이 이미 최신입니다.')
+      setCatalogRevision((value) => value + 1)
+    } catch (reason) { if (latestCatalogKey.current === refreshKey) setRefreshNotice(errorText(reason)) }
+    finally { setRefreshBusy(false) }
+  }
 
   const controls = catalog ? <div className="simulation-dashboard__controls">
     <CompactChoice label="해석 Case" value={caseId} choices={catalog.cases} onChange={(value) => { setCaseId(value); setCaptureId(''); setLoadCaseId(''); setRunId(''); setOptionId(''); setMode(''); setComponentId(''); setReferenceCaseId(''); setReferenceCaptureId('') }} />
@@ -112,7 +127,8 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
   return <section className="simulation-dashboard" data-ui-density="v1" aria-label="SPDM 해석 결과 대시보드">
     <header className="simulation-dashboard__head"><div><span>RESULT EXPLORER</span><h2>해석 결과 대시보드</h2><p>표시값과 자산은 선택한 Case·Run·capture 문맥의 서버 결과만 사용합니다.</p></div><nav aria-label="결과 환경"><Button size="sm" className={tab === 'usage' ? 'active' : ''} onClick={() => setTab('usage')}>사용환경</Button><Button size="sm" className={tab === 'distribution' ? 'active' : ''} onClick={() => setTab('distribution')}>유통환경</Button></nav></header>
     {catalogError ? <State message={catalogError} error /> : <>{controls}{catalog && !catalog.cases.length ? <State message="등록된 해석 Case가 없습니다. 폴더 연결·규칙에서 Case와 결과를 등록하세요." /> : null}</>}
-    <div className="simulation-dashboard__source-link"><span>새 결과는 폴더 연결에서 등록하고 읽습니다.</span>{canManageFolders ? <a href={folderHref}>폴더 연결·규칙 열기</a> : null}<Button size="sm" onClick={() => setCatalogRevision((value) => value + 1)}>결과 새로고침</Button></div>
+    <div className="simulation-dashboard__source-link"><span>새 결과는 폴더 연결에서 등록하고 읽습니다.</span>{canManageFolders ? <a href={folderHref}>폴더 연결·규칙 열기</a> : null}{canRefreshSchema ? <Button size="sm" disabled={refreshBusy || !projectId || !requestId} onClick={() => void refreshSchema()}>{refreshBusy ? '갱신 중…' : '저장소 Refresh'}</Button> : null}<Button size="sm" onClick={() => setCatalogRevision((value) => value + 1)}>결과 다시 읽기</Button></div>
+    {refreshNotice && <div className="simulation-dashboard__state" role="status">{refreshNotice}</div>}
     {tab === 'usage' ? <UsageArea key={`${caseId}:${captureId}:${referenceCaseId}:${referenceCaptureId}`} caseId={caseId} captureId={captureId} referenceCaseId={referenceCaseId} referenceCaptureId={referenceCaptureId} /> : <DistributionArea key={`${projectId}:${requestId}`} projectId={projectId} requestId={requestId} caseId={caseId} loadCaseId={loadCaseId} captureId={captureId} runId={runId} optionId={optionId} mode={mode} componentId={componentId} basis={basis} />}
   </section>
 }

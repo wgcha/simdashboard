@@ -7,13 +7,17 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from datetime import datetime, timezone
+from pathlib import PurePosixPath
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from ..database_connection import rows
 from . import dashboard_capture
+from . import environment_folder_profiles
 from . import folder_discovery as legacy
-from .folder_discovery_scan import root_identity, scan
+from . import spdm_storage
+from .folder_discovery_scan import MAX_SECONDS, root_identity, scan
 from .environment_folder_profiles import resolve_role
 from . import usage_source_review
 
@@ -35,6 +39,74 @@ def preview_data(value):
     return value if isinstance(value, dict) else {"rows": value, "usage_reviews": {}}
 
 
+def _explicit_registration_roles(preview_value, request_path: str, environment: str,
+                                 scan_path: str) -> dict[str, dict[str, Any]]:
+    """Extract only explicit preview dispositions, excluding profile defaults."""
+    from . import folder_schema_resolver as resolver
+
+    preview = preview_data(preview_value)
+    normalized_scan_path = resolver._normal(str(scan_path or ""), allow_root=True)
+    explicit_paths = set()
+    for item in [*(preview.get("rows") or []), *(preview.get("node_states") or [])]:
+        if not isinstance(item, dict):
+            continue
+        path = str(item.get("relative_path") or "")
+        explicit = (item.get("role_source") == "PREVIEW"
+                    or item.get("role_basis") == "PREVIEW"
+                    or item.get("status") == "EXCLUDED")
+        if path and explicit and resolver._is_ancestor(normalized_scan_path, path):
+            explicit_paths.add(resolver._fold(path))
+    additions = resolver._preview_roles(preview, request_path, environment, "REGISTRATION")
+    return {key: role for key, role in additions.items() if key in explicit_paths}
+
+
+def _case_capture_payload(root, schema: dict, location_projection, case_relative_path: str,
+                          usage_review: dict | None = None) -> dict:
+    """Build a capture payload from the canonical scoped schema projection."""
+    from . import folder_schema_resolver as resolver
+
+    scene_ids = {str(item["relative_path"]).casefold(): str(item.get("scene_id") or item["id"])
+                 for item in location_projection.locations if item.get("role_kind") == "SCENE"}
+    assignments = []
+    for node in schema.get("nodes", []):
+        if node.get("status") not in {"CONFIRMED", "LINKED"}:
+            continue
+        relative_path = str(node.get("relative_path") or "")
+        if not resolver._is_ancestor(case_relative_path, relative_path):
+            continue
+        role = str(node.get("role_kind") or "")
+        if role not in {"SIMULATION_CASE", "LOAD_CASE", "EXECUTION_RUN", "RUN_OPTION", "SCENE", "RESULTS", "INPUT", "EVALUATION"}:
+            continue
+        target_id = scene_ids.get(relative_path.casefold(), node.get("target_id")) if role == "SCENE" else node.get("target_id")
+        assignments.append({
+            "relative_path": relative_path, "role_kind": role,
+            "target_id": target_id, "parent_context_id": node.get("parent_context"),
+            "raw_name": str(node.get("name") or PurePosixPath(relative_path).name),
+            "option_status": node.get("option_status"),
+        })
+    assignments.sort(key=lambda item: (len(PurePosixPath(item["relative_path"]).parts), item["relative_path"].casefold()))
+    run_option_labels = [item["raw_name"] for item in assignments
+                         if item["role_kind"] == "RUN_OPTION"]
+    case_locations = [dict(item) for item in location_projection.locations
+                      if resolver._is_ancestor(case_relative_path, str(item.get("relative_path") or ""))]
+    from .folder_schema_locations import blocked_paths_for_case
+    blocked_paths = blocked_paths_for_case(schema, case_relative_path)
+    return {
+        "project_id": str(schema["project_id"]), "request_id": str(schema["request_id"]),
+        "root_relative_path": case_relative_path, "environment": str(schema["environment"]),
+        "storage_root_id": dashboard_capture._root_id(root),
+        "simulation_case_id": dashboard_capture._case_id(dashboard_capture._root_id(root), case_relative_path),
+        "run_option_labels": run_option_labels, "hierarchy_assignments": assignments,
+        "folder_schema_locations": case_locations,
+        "folder_schema_blocked_paths": blocked_paths,
+        "folder_schema_scoped": True,
+        "folder_schema_snapshot_id": location_projection.snapshot_id,
+        "rule_profile_id": (schema.get("profile") or {}).get("id"),
+        "rule_profile_version": (schema.get("profile") or {}).get("revision"),
+        "usage_source_review": usage_review,
+    }
+
+
 def profiles(conn):
     records = rows(conn.execute("SELECT id,environment,name,revision,rules_json,created_at,updated_at FROM folder_environment_profiles ORDER BY environment,name"))
     items = []
@@ -49,6 +121,381 @@ def default_profile(conn, environment: str):
     row = conn.execute("SELECT id,revision,rules_json FROM folder_environment_profiles WHERE environment=? ORDER BY created_at LIMIT 1", [environment]).fetchone()
     if not row: raise ValueError("환경 기본 규칙이 없습니다. 스키마 migration을 적용하세요.")
     return {"id": str(row[0]), "revision": int(row[1]), "rules": decoded(row[2])}
+
+
+def refresh_scope(conn, root, project_id: str, request_id: str, environment: str,
+                  actor: str, *, capture_cases: bool = True) -> dict:
+    """Rescan one request and atomically activate its canonical Folder Schema snapshot."""
+    from . import folder_schema_resolver as resolver
+
+    environment = str(environment).upper()
+    if environment not in ENVIRONMENTS:
+        raise resolver.FolderSchemaError("FOLDER_SCHEMA_ENVIRONMENT_INVALID", "지원하지 않는 폴더 환경입니다.")
+    root_key = root_identity(root)
+    request_path = resolver._request_path(conn, root_key, project_id, request_id, environment)
+    previous = resolver.active_refresh_snapshot(conn, root_key, project_id, request_id, environment)
+    if previous:
+        previous_schema = resolver._decode(previous["schema_json"], code="FOLDER_SCHEMA_SNAPSHOT_INVALID",
+                                           message="저장된 폴더 구조를 읽을 수 없습니다.")
+        profile_id = str(previous["profile_id"])
+    else:
+        previous_schema = resolver.resolve_request_schema(conn, root, root_key, project_id, request_id, environment)
+        profile_id = str(previous_schema["profile"]["id"])
+
+    profile_row = conn.execute(
+        "SELECT id,environment,name,revision,rules_json FROM folder_environment_profiles WHERE id=?",
+        [profile_id],
+    ).fetchone()
+    if not profile_row or str(profile_row[1]) != environment:
+        raise resolver.FolderSchemaError("FOLDER_SCHEMA_PROFILE_MISSING", "현재 폴더 규칙을 찾을 수 없습니다.")
+    try:
+        rules = environment_folder_profiles.validate_rules(environment, decoded(profile_row[4]))
+    except (TypeError, ValueError) as exc:
+        raise resolver.FolderSchemaError("FOLDER_SCHEMA_PROFILE_INVALID", "저장 규칙 형식이 올바르지 않습니다.") from exc
+    profile = {"id": str(profile_row[0]), "revision": int(profile_row[3]),
+               "name": str(profile_row[2] or ""), "rules": rules}
+
+    diff_baseline_nodes = list(previous_schema.get("nodes") or []) if previous else []
+    registration_roles_changed = False
+    if previous and int(previous["profile_revision"]) != profile["revision"]:
+        registered = conn.execute(
+            "SELECT s.id,s.relative_path,p.rows_json FROM folder_environment_scans s "
+            "JOIN folder_environment_previews p ON p.scan_id=s.id "
+            "JOIN folder_environment_registrations r ON r.preview_id=p.id "
+            "WHERE s.root_key=? AND s.environment=? AND s.profile_id=? AND s.profile_revision=? "
+            "AND s.status='COMPLETE' AND r.project_id=? AND r.request_id=? AND r.environment=? "
+            "AND r.status IN ('REGISTERED','CAPTURING','COMPLETED','FAILED') AND r.created_at>? "
+            "ORDER BY r.created_at DESC,r.id DESC LIMIT 1",
+            [root_key, environment, profile_id, profile["revision"], project_id, request_id,
+             environment, previous["created_at"]],
+        ).fetchone()
+        if not registered:
+            raise resolver.FolderSchemaError(
+                "FOLDER_SCHEMA_PROFILE_REVISION_CHANGED",
+                "폴더 규칙이 변경되었습니다. 새 규칙으로 스키마를 다시 등록한 뒤 새로고침하세요.",
+            )
+        # A completed registration with the new revision is the explicit
+        # approval boundary for changing the active profile. Keep the previous
+        # snapshot active until this subsequent refresh succeeds.
+        previous_schema = resolver.resolve_request_schema(
+            conn, root, root_key, project_id, request_id, environment,
+            registered_scan_id=str(registered[0]),
+        )
+        profile = previous_schema["profile"]
+    elif previous:
+        registered = conn.execute(
+            "SELECT s.id,s.relative_path,p.rows_json FROM folder_environment_scans s "
+            "JOIN folder_environment_previews p ON p.scan_id=s.id "
+            "JOIN folder_environment_registrations r ON r.preview_id=p.id "
+            "WHERE s.root_key=? AND s.environment=? AND s.profile_id=? AND s.profile_revision=? "
+            "AND s.status='COMPLETE' AND r.project_id=? AND r.request_id=? AND r.environment=? "
+            "AND r.status IN ('REGISTERED','CAPTURING','COMPLETED','FAILED') AND r.created_at>? "
+            "ORDER BY r.created_at,r.id",
+            [root_key, environment, profile_id, profile["revision"], project_id, request_id,
+             environment, previous["created_at"]],
+        ).fetchall()
+        if registered:
+            original_confirmed = dict(previous_schema.get("confirmed_roles") or {})
+            prior_confirmed = dict(original_confirmed)
+            for _scan_id, scan_path, saved_preview in registered:
+                additions = _explicit_registration_roles(
+                    saved_preview, request_path, environment, str(scan_path or ""),
+                )
+                for key, role in additions.items():
+                    prior_confirmed[key] = role
+            role_fields = ("relative_path", "role_kind", "status", "target_id", "name",
+                           "option_status", "source", "role_basis")
+            all_role_keys = set(original_confirmed) | set(prior_confirmed)
+            registration_roles_changed = any(
+                tuple((original_confirmed.get(key) or {}).get(field) for field in role_fields)
+                != tuple((prior_confirmed.get(key) or {}).get(field) for field in role_fields)
+                for key in all_role_keys
+            )
+            previous_schema = {**previous_schema, "confirmed_roles": prior_confirmed}
+
+    refresh_deadline = time.monotonic() + MAX_SECONDS
+    try:
+        fresh = scan(root, request_path)
+    except (OSError, ValueError, spdm_storage.SpdmStorageError) as exc:
+        raise resolver.FolderSchemaError("FOLDER_SCHEMA_SCAN_UNAVAILABLE", "현재 의뢰 폴더를 안전하게 조사할 수 없습니다.", 422) from exc
+    if fresh.get("status") != "COMPLETE":
+        raise resolver.FolderSchemaError("FOLDER_SCHEMA_SCAN_INCOMPLETE", "현재 의뢰 폴더를 모두 확인할 수 없습니다.", 422)
+    structure_fingerprint, content_fingerprint = resolver.scan_fingerprints(
+        fresh, root, deadline=refresh_deadline,
+    )
+
+    if (previous and not registration_roles_changed
+            and int(previous["profile_revision"]) == profile["revision"]
+            and str(previous["request_relative_path"]) == request_path
+            and str(previous["structure_fingerprint"]) == structure_fingerprint
+            and str(previous["content_fingerprint"]) == content_fingerprint):
+        snapshot_id = str(previous["id"])
+        location_projection = resolver.resolve_request_locations(
+            conn, project_id, request_id, environment, schema=previous_schema,
+        )
+        return _refresh_result(snapshot_id, "UNCHANGED", False, previous_schema,
+                               structure_fingerprint, content_fingerprint,
+                               {"added": 0, "removed": 0, "changed": 0}, location_projection)
+
+    prior_nodes = list(previous_schema.get("nodes") or []) if isinstance(previous_schema, dict) else []
+    prior_by_path = {resolver._fold(str(node.get("relative_path") or "")): node for node in prior_nodes}
+    # The legacy resolver reconstructs current roles from the latest registered
+    # preview, but its node list is based on a fresh scan. On the first refresh,
+    # use that registered scan's frozen tree to tell genuinely new siblings
+    # from old, still-unassigned containers.
+    prior_scanned_paths = set(prior_by_path)
+    if previous:
+        prior_scanned_paths = {
+            resolver._fold(str(node.get("relative_path") or "")) for node in prior_nodes
+        }
+    else:
+        registered_scan = conn.execute(
+            "SELECT s.tree_json FROM folder_environment_registrations r "
+            "JOIN folder_environment_previews p ON p.id=r.preview_id "
+            "JOIN folder_environment_scans s ON s.id=p.scan_id "
+            "WHERE s.root_key=? AND r.project_id=? AND r.request_id=? AND r.environment=? "
+            "AND r.status IN ('REGISTERED','CAPTURING','COMPLETED','FAILED') "
+            "ORDER BY r.created_at DESC,r.id DESC LIMIT 1",
+            [root_key, project_id, request_id, environment],
+        ).fetchone()
+        if registered_scan:
+            registered_tree = resolver._decode(
+                registered_scan[0], code="FOLDER_SCHEMA_SNAPSHOT_INVALID",
+                message="저장된 폴더 조사 결과를 읽을 수 없습니다.",
+            )
+            if isinstance(registered_tree, list):
+                prior_scanned_paths = {
+                    resolver._fold(str(node.get("relative_path") or ""))
+                    for node in registered_tree if isinstance(node, dict)
+                    and node.get("relative_path")
+                }
+    current_nodes = _interpret(
+        fresh["nodes"], root_key, environment, project_id, request_id, rules,
+        seed_request_path=request_path,
+    )
+    for node in current_nodes:
+        if node.get("role_kind") and node.get("role_basis") == "DEFAULT":
+            node["role_basis"] = "PATTERN"
+    scoped_nodes = [node for node in current_nodes
+                    if resolver._is_ancestor(request_path, str(node.get("relative_path") or ""))]
+    current_by_path = {resolver._fold(str(node.get("relative_path") or "")): node for node in scoped_nodes}
+
+    # Reapply confirmed dispositions to paths that still exist. Pattern rules
+    # are evaluated first; a saved manual assignment or exclusion is durable.
+    confirmed = previous_schema.get("confirmed_roles", {}) if isinstance(previous_schema, dict) else {}
+    if not isinstance(confirmed, dict):
+        confirmed = {}
+    for key, saved in confirmed.items():
+        node = current_by_path.get(str(key))
+        if node is None or not isinstance(saved, dict):
+            continue
+        status = str(saved.get("status") or "")
+        role = str(saved.get("role_kind") or "")
+        if status == "EXCLUDED" or role in {"EXCLUDE", "EXCLUDED"}:
+            node.update(role_kind=None, status="EXCLUDED", confirmed=True,
+                        role_basis="EXCLUDED", role_source="MANUAL")
+            continue
+        if status not in {"CONFIRMED", "CONTAINER", "LINKED"} or not role:
+            continue
+        previous_basis = str(saved.get("role_basis") or "")
+        if previous_basis == "RULE":
+            previous_basis = "PATTERN"
+        node.update(role_kind=role, status="CONFIRMED" if role != "CONTAINER" else "CONTAINER",
+                    target_id=saved.get("target_id") or node.get("target_id"),
+                    name=saved.get("name") or node.get("name"), confirmed=True,
+                    role_basis=previous_basis if previous_basis in {"LEVEL", "PATTERN"} else "MANUAL",
+                    role_source="MANUAL", role_evidence_source=saved.get("source") or "REGISTRATION")
+
+    # New sibling nodes inherit only when all confirmed prior nodes at the
+    # same semantic parent role and request-relative depth agree on one role.
+    def nearest_parent_role(node: dict, lookup: dict[str, dict]) -> str | None:
+        parent = str(node.get("parent_path") or "")
+        while parent and resolver._is_ancestor(request_path, parent):
+            found = lookup.get(resolver._fold(parent))
+            if found and found.get("role_kind") and found.get("status") not in {"EXCLUDED", "UNRESOLVED"}:
+                return str(found["role_kind"])
+            if resolver._fold(parent) == resolver._fold(request_path):
+                break
+            parent = str(found.get("parent_path") or "") if found else PurePosixPath(parent).parent.as_posix()
+            if parent == ".":
+                parent = ""
+        return None
+
+    request_depth = len(PurePosixPath(request_path).parts)
+    inherited_roles: dict[tuple[str | None, int], set[str]] = {}
+    for old_node in prior_nodes:
+        if old_node.get("status") not in {"CONFIRMED", "LINKED"}:
+            continue
+        role = str(old_node.get("role_kind") or "")
+        if not role:
+            continue
+        path = str(old_node.get("relative_path") or "")
+        relative_depth = len(PurePosixPath(path).parts) - request_depth
+        parent_role = nearest_parent_role(old_node, prior_by_path)
+        inherited_roles.setdefault((parent_role, relative_depth), set()).add(role)
+
+    for node in scoped_nodes:
+        path_key = resolver._fold(str(node.get("relative_path") or ""))
+        if path_key in prior_scanned_paths or node.get("role_basis") == "RULE":
+            if node.get("role_basis") == "RULE" and node.get("status") == "UNRESOLVED":
+                node["role_basis"] = "CONFLICT"
+            elif node.get("role_basis") == "RULE":
+                node["role_basis"] = "PATTERN"
+                node["confirmed"] = True
+            continue
+        if node.get("status") != "CONTAINER" or node.get("role_kind"):
+            continue
+        relative_depth = len(PurePosixPath(str(node["relative_path"])).parts) - request_depth
+        parent_role = nearest_parent_role(node, current_by_path)
+        possibilities = inherited_roles.get((parent_role, relative_depth), set())
+        if len(possibilities) == 1:
+            role = next(iter(possibilities))
+            node.update(role_kind=role, status="CONFIRMED", confirmed=True,
+                        role_basis="LEVEL", role_source="INHERITED")
+            if role == "SCENE" and not node.get("target_id"):
+                node["target_id"] = stable("environment-scene", root_key, node["relative_path"], role)
+        elif len(possibilities) > 1:
+            node.update(role_kind=None, status="UNRESOLVED", confirmed=False,
+                        role_basis="CONFLICT", role_source="INHERITED",
+                        message="같은 상위 역할·깊이에 서로 다른 역할이 확인되어 새 폴더의 역할을 정할 수 없습니다.")
+
+    # A previously excluded path also excludes newly created descendants.
+    excluded_paths = [str(node["relative_path"]) for node in scoped_nodes if node.get("status") == "EXCLUDED"]
+    for node in scoped_nodes:
+        if any(resolver._is_ancestor(path, str(node["relative_path"])) for path in excluded_paths):
+            node.update(role_kind=None, status="EXCLUDED", confirmed=True,
+                        role_basis="EXCLUDED", role_source="MANUAL")
+    _recompute_context(scoped_nodes, root_key, environment, project_id, request_id)
+    for node in scoped_nodes:
+        if node.get("role_kind") == "SCENE" and not node.get("target_id"):
+            node["target_id"] = stable("environment-scene", root_key, node["relative_path"], "SCENE")
+    resolver._add_hierarchy(scoped_nodes)
+
+    confirmed_roles_now = {}
+    for node in scoped_nodes:
+        if node.get("role_kind") and node.get("status") in {"CONFIRMED", "LINKED", "CONTAINER"}:
+            confirmed_roles_now[resolver._fold(str(node["relative_path"]))] = {
+                "relative_path": node["relative_path"], "role_kind": node["role_kind"],
+                "status": node["status"], "target_id": node.get("target_id"),
+                "name": node.get("name"), "source": node.get("role_source"),
+                "role_basis": node.get("role_basis"),
+            }
+        elif node.get("status") == "EXCLUDED":
+            confirmed_roles_now[resolver._fold(str(node["relative_path"]))] = {
+                "relative_path": node["relative_path"], "role_kind": "EXCLUDE",
+                "status": "EXCLUDED", "name": node.get("name"),
+                "source": node.get("role_source"), "role_basis": "EXCLUDED",
+            }
+    schema = {
+        "project_id": project_id, "request_id": request_id, "environment": environment,
+        "request_relative_path": request_path, "profile": profile,
+        "scan": {"id": "pending", "relative_path": request_path, "profile_id": profile["id"],
+                 "profile_revision": profile["revision"], "status": "COMPLETE"},
+        "nodes": scoped_nodes, "confirmed_roles": confirmed_roles_now,
+        "issues": fresh.get("issues", []),
+        "structure_fingerprint": structure_fingerprint,
+        "content_fingerprint": content_fingerprint,
+    }
+    diff = _refresh_diff(diff_baseline_nodes if previous else prior_nodes, scoped_nodes, resolver)
+    if any(node.get("role_basis") == "CONFLICT" and node.get("status") == "UNRESOLVED"
+           for node in scoped_nodes):
+        location_projection = resolver.resolve_request_locations(
+            conn, project_id, request_id, environment, schema=schema,
+        )
+        return _refresh_result(
+            str(previous["id"]) if previous else None, "CONFLICT", False, schema,
+            structure_fingerprint, content_fingerprint, diff, location_projection,
+            activated=False,
+        )
+    snapshot_id = ident("folder-refresh")
+    schema["scan"]["id"] = snapshot_id
+    snapshot = {
+        "kind": "FOLDER_SCHEMA_REFRESH", "version": 1,
+        "structure_fingerprint": structure_fingerprint,
+        "content_fingerprint": content_fingerprint,
+        "schema": schema,
+    }
+    encoded_snapshot = json.dumps(snapshot, ensure_ascii=False)
+    created_at = now()
+    if previous and previous.get("created_at") and previous["created_at"] >= created_at:
+        from datetime import timedelta
+        created_at = previous["created_at"] + timedelta(microseconds=1)
+    conn.execute("BEGIN TRANSACTION")
+    try:
+        conn.execute(
+            "INSERT INTO folder_environment_scans(id,root_key,relative_path,environment,profile_id,profile_revision,"
+            "project_id,request_id,status,tree_json,issues_json,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            [snapshot_id, root_key, request_path, environment, profile["id"], profile["revision"],
+             project_id, request_id, "COMPLETE", encoded_snapshot,
+             json.dumps(fresh.get("issues", []), ensure_ascii=False), actor, created_at],
+        )
+        location_projection = resolver.resolve_request_locations(
+            conn, project_id, request_id, environment, schema=schema,
+        )
+        capture_errors = []
+        if capture_cases:
+            storage_root_id = dashboard_capture._root_id(root)
+            for case_node in scoped_nodes:
+                if case_node.get("role_kind") != "SIMULATION_CASE" or case_node.get("status") != "CONFIRMED":
+                    continue
+                case_path = str(case_node.get("relative_path") or "")
+                case_id = dashboard_capture._case_id(storage_root_id, case_path)
+                if not conn.execute(
+                    "SELECT 1 FROM dashboard_cases WHERE id=? AND project_id=? AND request_id=? AND environment=?",
+                    [case_id, project_id, request_id, environment],
+                ).fetchone():
+                    continue
+                try:
+                    dashboard_capture.create_capture(
+                        conn,
+                        _case_capture_payload(root, schema, location_projection, case_path),
+                        actor=actor,
+                    )
+                except dashboard_capture.DashboardCaptureError as exc:
+                    capture_errors.append(exc.code)
+        if capture_errors:
+            raise resolver.FolderSchemaError(
+                "FOLDER_SCHEMA_CAPTURE_FAILED",
+                "폴더 새로고침 중 결과 캡처를 완료하지 못해 이전 스냅샷을 유지했습니다.",
+                422,
+            )
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    return _refresh_result(snapshot_id, "REFRESHED", True, schema,
+                           structure_fingerprint, content_fingerprint, diff, location_projection)
+
+
+def _refresh_diff(previous_nodes: list[dict], current_nodes: list[dict], resolver) -> dict[str, int]:
+    old = {resolver._fold(str(item.get("relative_path") or "")): item for item in previous_nodes}
+    new = {resolver._fold(str(item.get("relative_path") or "")): item for item in current_nodes}
+    added = set(new) - set(old)
+    removed = set(old) - set(new)
+    changed = 0
+    for key in set(old) & set(new):
+        before, after = old[key], new[key]
+        if any(before.get(field) != after.get(field) for field in (
+                "role_kind", "status", "target_id", "identity", "name")):
+            changed += 1
+    return {"added": len(added), "removed": len(removed), "changed": changed}
+
+
+def _refresh_result(snapshot_id, status, changed, schema, structure_fingerprint,
+                    content_fingerprint, diff, location_projection, *, activated=None):
+    return {
+        "snapshot_id": snapshot_id,
+        "project_id": schema["project_id"], "request_id": schema["request_id"],
+        "environment": schema["environment"], "status": status, "changed": changed,
+        "activated": status != "CONFLICT" if activated is None else activated,
+        "structure_fingerprint": structure_fingerprint,
+        "content_fingerprint": content_fingerprint, "diff": diff,
+        "nodes": [{key: node.get(key) for key in (
+            "relative_path", "parent_path", "name", "depth", "role_kind", "status",
+            "role_basis", "target_id", "hierarchy", "message") if key in node}
+            for node in schema.get("nodes", [])],
+        "locations": [dict(item) for item in location_projection.locations],
+    }
 
 
 def save_scan(conn, root, relative_path: str, environment: str, profile_id: str | None, project_id: str | None, request_id: str | None, actor: str):
@@ -125,7 +572,7 @@ def _interpret(raw, root_key, environment, project_id, request_id, rules=None, *
         if role == "RUN_OPTION": item["run_option_id"] = stable("environment-option", root_key, node["relative_path"], role)
         out.append(item)
         next_context = dict(parent)
-        if role in {"PROJECT", "REQUEST", "SIMULATION_CASE", "LOAD_CASE", "EXECUTION_RUN", "RUN_OPTION"}: next_context.update(item)
+        if role in {"PROJECT", "REQUEST", "SIMULATION_CASE", "EVALUATION", "LOAD_CASE", "EXECUTION_RUN", "RUN_OPTION"}: next_context.update(item)
         if role == "PROJECT": next_context.pop("request_id", None)
         context[node["relative_path"]] = next_context
     return out
@@ -169,7 +616,10 @@ def _role(environment, name, parent, depth=0, rules=None):
 def preview(conn, scan_id, assignments, actor, require_usage_review=False):
     records = rows(conn.execute("SELECT id,root_key,environment,project_id,request_id,status,tree_json FROM folder_environment_scans WHERE id=?", [scan_id]))
     if not records: legacy.fail("ENVIRONMENT_SCAN_NOT_FOUND", "환경 조사 결과를 찾을 수 없습니다.", 404)
-    saved = records[0]; nodes = decoded(saved["tree_json"]); by_id = {node["id"]: node for node in nodes}
+    saved = records[0]; nodes = decoded(saved["tree_json"])
+    if not isinstance(nodes, list):
+        raise ValueError("새로고침 스냅샷은 조사 미리보기로 사용할 수 없습니다.")
+    by_id = {node["id"]: node for node in nodes}
     for assignment in assignments:
         node = by_id.get(assignment.get("node_id")); role = assignment.get("role_kind")
         if not node or role not in {*ROLES[saved["environment"]], "EXCLUDE"}: raise ValueError("조사 트리에 없는 역할 지정입니다.")
@@ -274,7 +724,7 @@ def _recompute_context(nodes, root_key, environment, seeded_project, seeded_requ
         if role == "REQUEST": node["request_id"] = node.get("target_id")
         if parent.get("role_kind") == "SIMULATION_CASE": node["simulation_case_id"] = parent.get("target_id")
         next_context = dict(parent)
-        if role in {"PROJECT", "REQUEST", "SIMULATION_CASE", "LOAD_CASE", "EXECUTION_RUN"}:
+        if role in {"PROJECT", "REQUEST", "SIMULATION_CASE", "EVALUATION", "LOAD_CASE", "EXECUTION_RUN"}:
             next_context.update(node)
         if role == "PROJECT": next_context.pop("request_id", None)
         contexts[node["relative_path"]] = next_context
@@ -295,6 +745,80 @@ def _validated_usage_review(root, relative_path, contract):
     if checked["blocking_count"] or ((checked["missing_count"] or contract.get("excludes")) and not partial):
         legacy.fail("USAGE_SOURCE_REVIEW_REQUIRED", "파일·값 검수의 오류 또는 부분 게시 확인을 완료하세요.")
     return contract
+
+
+def _registration_location_projection(conn, root, project_id: str, request_id: str,
+                                      environment: str, scan_id: str,
+                                      saved_preview: dict):
+    """Resolve this registration's roles over the last active Refresh snapshot."""
+    from . import folder_schema_resolver as resolver
+
+    root_key = root_identity(root)
+    registered_schema = resolver.resolve_request_schema(
+        conn, root, root_key, project_id, request_id, environment,
+        registered_scan_id=scan_id,
+    )
+    active = resolver.active_refresh_snapshot(conn, root_key, project_id, request_id, environment)
+    if (active and str(active["profile_id"]) == str(registered_schema["profile"]["id"])
+            and int(active["profile_revision"]) == int(registered_schema["profile"]["revision"])):
+        active_schema = resolver.resolve_request_schema(conn, root, root_key, project_id, request_id, environment)
+        applied = conn.execute(
+            "SELECT s.relative_path,p.rows_json FROM folder_environment_scans s "
+            "JOIN folder_environment_previews p ON p.scan_id=s.id "
+            "JOIN folder_environment_registrations r ON r.preview_id=p.id "
+            "WHERE s.root_key=? AND s.environment=? AND s.profile_id=? AND s.profile_revision=? "
+            "AND s.status='COMPLETE' AND r.project_id=? AND r.request_id=? AND r.environment=? "
+            "AND r.status IN ('REGISTERED','CAPTURING','COMPLETED','FAILED') AND r.created_at>? "
+            "ORDER BY r.created_at,r.id",
+            [root_key, environment, active["profile_id"], active["profile_revision"],
+             project_id, request_id, environment, active["created_at"]],
+        ).fetchall()
+        later_registration_roles: dict[str, dict[str, Any]] = {}
+        for scan_path, preview_value in applied:
+            additions = _explicit_registration_roles(
+                preview_value, str(active_schema["request_relative_path"]), environment,
+                str(scan_path or ""),
+            )
+            for key, role in additions.items():
+                later_registration_roles[key] = role
+
+        active_by_path = {resolver._fold(str(item.get("relative_path") or "")): item
+                          for item in active_schema.get("nodes", [])}
+        role_fields = ("role_kind", "status", "confirmed", "target_id", "name", "option_status",
+                       "role_source", "role_basis", "role_evidence_source", "parent_context",
+                       "project_id", "request_id", "simulation_case_id", "run_option_id", "option_label")
+        for node in registered_schema.get("nodes", []):
+            key = resolver._fold(str(node.get("relative_path") or ""))
+            registration_role = later_registration_roles.get(key)
+            if registration_role:
+                role_kind = str(registration_role.get("role_kind") or "")
+                status = str(registration_role.get("status") or "")
+                if role_kind in {"EXCLUDE", "EXCLUDED"} or status == "EXCLUDED":
+                    node.update(role_kind=None, status="EXCLUDED", confirmed=True,
+                                role_source="MANUAL", role_basis="EXCLUDED",
+                                role_evidence_source="REGISTRATION")
+                else:
+                    node.update(role_kind=None if role_kind == "CONTAINER" else role_kind,
+                                status=status, confirmed=status in {"CONFIRMED", "CONTAINER"},
+                                role_source="MANUAL", role_basis="MANUAL",
+                                role_evidence_source="REGISTRATION",
+                                target_id=registration_role.get("target_id") or node.get("target_id"),
+                                name=registration_role.get("name") or node.get("name"),
+                                option_status=registration_role.get("option_status") or node.get("option_status"))
+                continue
+            previous = active_by_path.get(key)
+            if previous is None:
+                continue
+            for field in role_fields:
+                if field in previous:
+                    node[field] = previous[field]
+        _recompute_context(
+            registered_schema.get("nodes", []), root_key, environment, project_id, request_id,
+        )
+        resolver._add_hierarchy(registered_schema.get("nodes", []))
+    return resolver.resolve_request_locations(
+        conn, project_id, request_id, environment, schema=registered_schema,
+    )
 
 
 def register(conn, preview_id, idempotency_key, capture, principal, root):
@@ -350,16 +874,21 @@ def register(conn, preview_id, idempotency_key, capture, principal, root):
         conn.execute("ROLLBACK")
         raise
     if capture:
+        location_projection = _registration_location_projection(
+            conn, root, str(project_id), str(request_id), str(scan_row[2]),
+            str(preview_row[0]), preview_saved,
+        )
         for entry in [r for r in plan_rows if r["role_kind"] == "SIMULATION_CASE"]:
             case_id = dashboard_capture._case_id(dashboard_capture._root_id(root), entry["relative_path"])
             job_id = conn.execute("SELECT id FROM folder_environment_capture_jobs WHERE registration_id=? AND case_id=?", [registration_id, case_id]).fetchone()[0]
             conn.execute("BEGIN TRANSACTION")
             try:
                 conn.execute("UPDATE folder_environment_capture_jobs SET status='RUNNING',updated_at=? WHERE id=?", [now(), job_id])
-                case_prefix = entry["relative_path"].rstrip("/") + "/"
-                option_labels = [row["name"] for row in plan_rows if row["role_kind"] == "RUN_OPTION" and row.get("status") == "CONFIRMED" and row["relative_path"].startswith(case_prefix)]
-                hierarchy = [{"relative_path": row["relative_path"], "role_kind": row["role_kind"], "target_id": row.get("target_id"), "parent_context_id": row.get("parent_context"), "raw_name": row["name"], "option_status": row.get("option_status")} for row in plan_rows if row["relative_path"].startswith(case_prefix)]
-                outcome = dashboard_capture.create_capture(conn, {"project_id": entry.get("project_id") or project_id, "request_id": entry.get("request_id") or request_id, "root_relative_path": entry["relative_path"], "environment": scan_row[2], "storage_root_id": dashboard_capture._root_id(root), "simulation_case_id": case_id, "recipe_version": "dashboard-v1", "run_option_labels": option_labels, "hierarchy_assignments": hierarchy, "rule_profile_id": scan_row[6], "rule_profile_version": scan_row[7], "usage_source_review": preview_saved.get("usage_reviews", {}).get(entry["relative_path"])}, actor=actor)
+                capture_payload = _case_capture_payload(
+                    root, location_projection.schema, location_projection, entry["relative_path"],
+                    preview_saved.get("usage_reviews", {}).get(entry["relative_path"]),
+                )
+                outcome = dashboard_capture.create_capture(conn, capture_payload, actor=actor)
                 conn.execute("UPDATE folder_environment_capture_jobs SET status='COMPLETED',capture_id=?,updated_at=? WHERE id=?", [outcome["id"], now(), job_id])
                 conn.execute("COMMIT")
             except dashboard_capture.DashboardCaptureError as exc:
@@ -411,7 +940,7 @@ def retry(conn, registration_id, job_ids, principal=None, root=None):
     conn.execute(query, args)
     if principal is not None and root is not None:
         jobs = rows(conn.execute("SELECT id,case_id FROM folder_environment_capture_jobs WHERE registration_id=? AND status='PENDING'", [registration_id]))
-        replay = conn.execute("""SELECT p.rows_json,s.environment,s.profile_id,s.profile_revision,s.root_key
+        replay = conn.execute("""SELECT p.rows_json,s.environment,s.profile_id,s.profile_revision,s.root_key,s.id
             FROM folder_environment_registrations r JOIN folder_environment_previews p ON p.id=r.preview_id
             JOIN folder_environment_scans s ON s.id=p.scan_id WHERE r.id=?""", [registration_id]).fetchone()
         if not replay:
@@ -426,6 +955,10 @@ def retry(conn, registration_id, job_ids, principal=None, root=None):
                 marks = ",".join("?" for _ in jobs)
                 conn.execute(f"UPDATE folder_environment_capture_jobs SET status='FAILED',error_code='ENVIRONMENT_PROFILE_STALE',updated_at=? WHERE id IN ({marks})", [now(), *[job["id"] for job in jobs]])
             return registration(conn, registration_id)
+        location_projection = _registration_location_projection(
+            conn, root, str(context["project_id"]), str(context["request_id"]),
+            str(environment), str(replay[5]), saved_preview,
+        ) if jobs else None
         for job in jobs:
             case = conn.execute("SELECT project_id,request_id,relative_path,environment,storage_root_id FROM dashboard_cases WHERE id=?", [job["case_id"]]).fetchone()
             if not case:
@@ -441,10 +974,11 @@ def retry(conn, registration_id, job_ids, principal=None, root=None):
             conn.execute("BEGIN TRANSACTION")
             try:
                 conn.execute("UPDATE folder_environment_capture_jobs SET status='RUNNING',updated_at=? WHERE id=?", [now(), job["id"]])
-                prefix = entry["relative_path"].rstrip("/") + "/"
-                option_labels = [row["name"] for row in plan_rows if row.get("role_kind") == "RUN_OPTION" and row.get("status") == "CONFIRMED" and row["relative_path"].startswith(prefix)]
-                hierarchy = [{"relative_path": row["relative_path"], "role_kind": row["role_kind"], "target_id": row.get("target_id"), "parent_context_id": row.get("parent_context"), "raw_name": row["name"], "option_status": row.get("option_status")} for row in plan_rows if row["relative_path"].startswith(prefix)]
-                payload = {"project_id": case[0], "request_id": case[1], "root_relative_path": case[2], "environment": case[3], "storage_root_id": case[4], "simulation_case_id": job["case_id"], "recipe_version": "dashboard-v1", "run_option_labels": option_labels, "hierarchy_assignments": hierarchy, "rule_profile_id": profile_id, "rule_profile_version": profile_revision, "usage_source_review": saved_preview.get("usage_reviews", {}).get(entry["relative_path"])}
+                payload = _case_capture_payload(
+                    root, location_projection.schema, location_projection,
+                    entry["relative_path"],
+                    saved_preview.get("usage_reviews", {}).get(entry["relative_path"]),
+                )
                 result = dashboard_capture.create_capture(conn, payload, actor=principal.user_id)
                 conn.execute("UPDATE folder_environment_capture_jobs SET status='COMPLETED',capture_id=?,updated_at=? WHERE id=?", [result["id"], now(), job["id"]])
                 conn.execute("COMMIT")

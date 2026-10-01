@@ -12,6 +12,29 @@ const nodes = [
 ]
 
 test.describe('환경 폴더 연결', () => {
+  test('데스크톱 Refresh는 선택한 의뢰의 역할 판정 근거를 표시한다', async ({ page }) => {
+    await page.setViewportSize({ width: 1366, height: 768 })
+    await page.route('**/api/folder-discovery/environments', (route) => route.fulfill({ json: { items: [profile] } }))
+    await page.route('**/api/projects', (route) => route.fulfill({ json: [{ id: 'project-tv-001', name: 'Demo Project' }] }))
+    await page.route('**/api/projects/project-tv-001/requests', (route) => route.fulfill({ json: [{ id: 'request-drop-001', project_id: 'project-tv-001', title: 'WR-1042 의뢰', status: 'READY' }] }))
+    await page.route('**/api/folder-discovery/environments/refresh', (route) => route.fulfill({ json: {
+      snapshot_id: 'folder-refresh-1', project_id: 'project-tv-001', request_id: 'request-drop-001', environment: 'DISTRIBUTION',
+      status: 'REFRESHED', changed: true, structure_fingerprint: 'structure-1', content_fingerprint: 'content-1',
+      diff: { added: 1, removed: 0, changed: 0 },
+      nodes: [{ relative_path: 'Project_A/WR_1042_SimType2/Case/Drop/Run/INDIVIDUAL/New Scene', role_kind: 'SCENE', status: 'CONFIRMED', role_basis: 'LEVEL' }],
+    } }))
+    await loginWorkspace(page, 'e2e-admin', '/workspace/catalog/schemas')
+    await page.goto('/workspace/catalog/schemas?project=project-tv-001&request=request-drop-001&result_environment=DISTRIBUTION')
+    const screen = page.locator('.folder-environment-workspace')
+    const refreshRequest = page.waitForRequest((request) => request.url().endsWith('/api/folder-discovery/environments/refresh'))
+    await screen.getByRole('button', { name: 'Refresh', exact: true }).click()
+    expect((await refreshRequest).postDataJSON()).toEqual({ project_id: 'project-tv-001', request_id: 'request-drop-001', environment: 'DISTRIBUTION' })
+    await screen.getByText('Refresh 역할 판정 · 1개 폴더').click()
+    await expect(screen.locator('.folder-preview-row')).toContainText('Scene')
+    await expect(screen.locator('.folder-preview-row')).toContainText('LEVEL')
+    await page.screenshot({ path: join(tmpdir(), 'folder-schema-refresh-desktop.png'), fullPage: false })
+  })
+
   test('completes choose → review → register flow at desktop and mobile sizes', async ({ page }) => {
     const evidence = join(tmpdir(), 'environment-folder-final-qa')
     mkdirSync(evidence, { recursive: true })

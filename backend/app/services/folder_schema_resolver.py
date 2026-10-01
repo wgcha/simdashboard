@@ -6,12 +6,15 @@ re-scans that scan root safely, and overlays applicable confirmed roles.
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import time
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 from ..database_connection import ConnectionLike, rows
-from . import environment_folder_profiles, folder_discovery_environment, folder_discovery_scan, spdm_storage
+from . import (environment_folder_profiles, folder_discovery, folder_discovery_environment,
+               folder_discovery_scan, spdm_storage)
 
 _APPLIED_STATUSES = ("REGISTERED", "CAPTURING", "COMPLETED", "FAILED")
 _ROLE_KINDS = {
@@ -26,6 +29,7 @@ class FolderSchemaError(ValueError):
         self.code = code
         self.status_code = status_code
         super().__init__(message)
+from .folder_schema_locations import EnvironmentLocations, resolve_request_locations
 
 
 def _decode(value: Any, *, code: str, message: str) -> Any:
@@ -53,6 +57,99 @@ def _is_ancestor(path: str, descendant: str) -> bool:
         return True
     folded_path, folded_descendant = _fold(path), _fold(descendant)
     return folded_descendant == folded_path or folded_descendant.startswith(folded_path.rstrip("/") + "/")
+
+
+def scan_fingerprints(result: dict[str, Any], root: Path | None = None, *,
+                      deadline: float | None = None) -> tuple[str, str]:
+    """Fingerprint directory structure and relevant file bytes under scan limits."""
+    structure = sorted((
+        _fold(str(item.get("relative_path") or "")),
+        _fold(str(item.get("parent_path") or "")),
+        str(item.get("identity") or ""),
+    ) for item in result.get("nodes", []))
+    file_state = result.get("file_state", [])
+    content = []
+    content_extensions = {".csv", ".json", ".jpg", ".jpeg", ".png", ".mp4", ".webm", ".inc", ".rad"}
+    hashed_files = 0
+    total_bytes = 0
+    started = time.monotonic()
+    for item in file_state:
+        relative_path = str(item.get("relative_path") or "")
+        size = int(item.get("size") or 0)
+        modified_ns = int(item.get("modified_ns") or 0)
+        digest = None
+        suffix = Path(relative_path).suffix.casefold()
+        if root is not None and suffix in content_extensions:
+            hashed_files += 1
+            if hashed_files > 10_000:
+                raise FolderSchemaError("FOLDER_SCHEMA_CONTENT_FILE_LIMIT", "내용 fingerprint 파일 수 한도를 초과했습니다.", 413)
+            max_file_bytes = 64 * 1024 * 1024 if suffix in {".inc", ".rad"} else 32 * 1024 * 1024
+            if size > max_file_bytes:
+                raise FolderSchemaError("FOLDER_SCHEMA_CONTENT_FILE_LIMIT", "내용 fingerprint 대상 파일이 허용 크기를 초과했습니다.", 413)
+            file_path = root.joinpath(*PurePosixPath(relative_path).parts)
+            try:
+                spdm_storage._assert_safe_existing(file_path, root)
+                before = file_path.stat()
+                if before.st_size != size or int(before.st_mtime_ns) != modified_ns:
+                    raise FolderSchemaError("FOLDER_SCHEMA_FILE_BUSY", "조사 도중 파일이 변경되었습니다. 작성 완료 후 다시 새로고침하세요.", 409)
+                digest_state = hashlib.sha256()
+                read_size = 0
+                with spdm_storage.open_stable_reader(file_path) as stream:
+                    while chunk := stream.read(1024 * 1024):
+                        digest_state.update(chunk)
+                        read_size += len(chunk)
+                        total_bytes += len(chunk)
+                        if total_bytes > 256 * 1024 * 1024:
+                            raise FolderSchemaError("FOLDER_SCHEMA_CONTENT_TOTAL_LIMIT", "내용 fingerprint 전체 크기 한도를 초과했습니다.", 413)
+                        if (time.monotonic() - started > folder_discovery_scan.MAX_SECONDS
+                                or (deadline is not None and time.monotonic() > deadline)):
+                            raise FolderSchemaError("FOLDER_SCHEMA_CONTENT_TIME_LIMIT", "내용 fingerprint 시간 한도를 초과했습니다.", 413)
+                after = file_path.stat()
+                if (read_size != size or after.st_size != size or int(after.st_mtime_ns) != modified_ns
+                        or getattr(after, "st_ino", None) != getattr(before, "st_ino", None)):
+                    raise FolderSchemaError("FOLDER_SCHEMA_FILE_BUSY", "조사 도중 파일이 변경되었습니다. 작성 완료 후 다시 새로고침하세요.", 409)
+                digest = digest_state.hexdigest()
+            except FolderSchemaError:
+                raise
+            except spdm_storage.SpdmStorageError as exc:
+                raise FolderSchemaError(exc.code, str(exc), 409 if exc.code == "SPDM_FILE_BUSY" else 422) from exc
+            except OSError as exc:
+                raise FolderSchemaError("FOLDER_SCHEMA_FILE_UNAVAILABLE", "내용 fingerprint 대상 파일을 읽을 수 없습니다.", 422) from exc
+        content.append((_fold(relative_path), size, modified_ns, digest))
+    if (time.monotonic() - started > folder_discovery_scan.MAX_SECONDS
+            or (deadline is not None and time.monotonic() > deadline)):
+        raise FolderSchemaError("FOLDER_SCHEMA_CONTENT_TIME_LIMIT", "내용 fingerprint 시간 한도를 초과했습니다.", 413)
+    content.sort()
+    encode = lambda value: json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encode(structure)).hexdigest(), hashlib.sha256(encode(content)).hexdigest()
+
+
+def active_refresh_snapshot(conn: ConnectionLike, root_key: str, project_id: str,
+                            request_id: str, environment: str) -> dict[str, Any] | None:
+    found = rows(conn.execute(
+        "SELECT id,root_key,project_id,request_id,environment,relative_path,profile_id,profile_revision,"
+        "tree_json,created_by,created_at FROM folder_environment_scans "
+        "WHERE root_key=? AND project_id=? AND request_id=? AND environment=? "
+        "AND status='COMPLETE' AND id LIKE 'folder-refresh-%' ORDER BY created_at DESC,id DESC LIMIT 1",
+        [root_key, project_id, request_id, environment],
+    ))
+    if not found:
+        return None
+    record = found[0]
+    snapshot = _decode(record.get("tree_json"), code="FOLDER_SCHEMA_SNAPSHOT_INVALID",
+                       message="저장된 폴더 새로고침 내용을 읽을 수 없습니다.")
+    if not isinstance(snapshot, dict) or snapshot.get("kind") != "FOLDER_SCHEMA_REFRESH" or snapshot.get("version") != 1:
+        raise FolderSchemaError("FOLDER_SCHEMA_SNAPSHOT_INVALID", "저장된 폴더 새로고침 형식이 올바르지 않습니다.")
+    return {
+        "id": str(record["id"]), "root_key": str(record["root_key"]),
+        "project_id": str(record["project_id"]), "request_id": str(record["request_id"]),
+        "environment": str(record["environment"]), "request_relative_path": str(record["relative_path"]),
+        "profile_id": str(record["profile_id"]), "profile_revision": int(record["profile_revision"]),
+        "structure_fingerprint": str(snapshot.get("structure_fingerprint") or ""),
+        "content_fingerprint": str(snapshot.get("content_fingerprint") or ""),
+        "schema_json": snapshot.get("schema"), "created_by": record.get("created_by"),
+        "created_at": record.get("created_at"),
+    }
 
 
 def _request_path(conn: ConnectionLike, root_key: str, project_id: str, request_id: str,
@@ -218,9 +315,16 @@ def _preview_roles(preview_value: Any, request_path: str, environment: str,
     result: dict[str, dict[str, Any]] = {}
 
     def add(item: Any, *, state_row: bool = False) -> None:
-        if not isinstance(item, dict) or not item.get("relative_path"):
+        if not isinstance(item, dict):
             raise FolderSchemaError("FOLDER_SCHEMA_PREVIEW_INVALID", "저장된 폴더 역할 경로가 올바르지 않습니다.")
-        path = _normal(str(item["relative_path"]))
+        raw_path = item.get("relative_path")
+        if not raw_path:
+            if state_row and (item.get("status") == "CONTAINER" or item.get("role_kind") == "CONTAINER"):
+                return
+            raise FolderSchemaError("FOLDER_SCHEMA_PREVIEW_INVALID", "저장된 폴더 역할 경로가 올바르지 않습니다.")
+        path = _normal(str(raw_path), allow_root=True)
+        if not path:
+            return
         if not _is_ancestor(request_path, path):
             return
         status = str(item.get("status") or "")
@@ -237,6 +341,7 @@ def _preview_roles(preview_value: Any, request_path: str, environment: str,
             "status": status,
             "target_id": str(item.get("target_id")) if item.get("target_id") else None,
             "name": str(item.get("name") or PurePosixPath(path).name),
+            "option_status": str(item.get("option_status") or "") or None,
             "source": source,
             "role_basis": str(item.get("role_basis") or "") or None,
         }
@@ -255,6 +360,8 @@ def _preview_roles(preview_value: Any, request_path: str, environment: str,
                 item_role["target_id"] = existing["target_id"]
             if existing.get("role_basis") and not item_role.get("role_basis"):
                 item_role["role_basis"] = existing["role_basis"]
+            if existing.get("option_status") and not item_role.get("option_status"):
+                item_role["option_status"] = existing["option_status"]
         result[key] = item_role
 
     # Semantic plan rows preserve confirmed roles in old previews. Structural
@@ -338,7 +445,7 @@ def _role_evidence(conn: ConnectionLike, root_key: str, project_id: str, request
 
 def _add_hierarchy(nodes: list[dict[str, Any]]) -> None:
     contexts: dict[str, dict[str, dict[str, Any]]] = {}
-    role_keys = {"SIMULATION_CASE": "simulation_case", "LOAD_CASE": "load_case",
+    role_keys = {"SIMULATION_CASE": "simulation_case", "EVALUATION": "evaluation", "LOAD_CASE": "load_case",
                  "EXECUTION_RUN": "execution_run", "RUN_OPTION": "run_option", "SCENE": "scene"}
     for node in sorted(nodes, key=lambda item: (int(item.get("depth", 0)), _fold(str(item["relative_path"])) )):
         parent_context = contexts.get(_fold(str(node.get("parent_path") or "")), {})
@@ -355,7 +462,8 @@ def _add_hierarchy(nodes: list[dict[str, Any]]) -> None:
 
 
 def resolve_request_schema(conn: ConnectionLike, root: Path, root_key: str,
-                           project_id: str, request_id: str, environment: str) -> dict[str, Any]:
+                           project_id: str, request_id: str, environment: str, *,
+                           registered_scan_id: str | None = None) -> dict[str, Any]:
     """Return the validated current role tree for a request's saved Folder Schema.
 
     A profile is selected only through a complete scan explicitly linked to this
@@ -371,7 +479,53 @@ def resolve_request_schema(conn: ConnectionLike, root: Path, root_key: str,
     if folder_discovery_environment.root_identity(root) != root_key:
         raise FolderSchemaError("FOLDER_SCHEMA_ROOT_MISMATCH", "조사된 저장소가 현재 저장소와 다릅니다.")
     request_path = _request_path(conn, root_key, project_id, request_id, environment)
-    scan_records = rows(conn.execute(
+    active = active_refresh_snapshot(conn, root_key, project_id, request_id, environment)
+    if active and registered_scan_id is None:
+        profile_row = conn.execute(
+            "SELECT id,environment FROM folder_environment_profiles WHERE id=?",
+            [active["profile_id"]],
+        ).fetchone()
+        if not profile_row or str(profile_row[1]) != environment:
+            raise FolderSchemaError("FOLDER_SCHEMA_PROFILE_MISSING", "현재 폴더 규칙을 찾을 수 없습니다.")
+        snapshot = _decode(active["schema_json"], code="FOLDER_SCHEMA_SNAPSHOT_INVALID",
+                           message="저장된 폴더 구조를 읽을 수 없습니다.")
+        if (not isinstance(snapshot, dict) or str(snapshot.get("project_id")) != project_id
+                or str(snapshot.get("request_id")) != request_id
+                or str(snapshot.get("environment")) != environment
+                or str(snapshot.get("request_relative_path")) != request_path
+                or not isinstance(snapshot.get("nodes"), list)):
+            raise FolderSchemaError("FOLDER_SCHEMA_SNAPSHOT_INVALID", "저장된 폴더 구조의 의뢰 문맥이 올바르지 않습니다.")
+        saved_profile = snapshot.get("profile")
+        if (not isinstance(saved_profile, dict) or str(saved_profile.get("id")) != str(active["profile_id"])
+                or str(saved_profile.get("revision")) != str(active["profile_revision"])):
+            raise FolderSchemaError("FOLDER_SCHEMA_SNAPSHOT_INVALID", "저장된 폴더 구조의 규칙 문맥이 올바르지 않습니다.")
+        raw_rules = saved_profile.get("rules")
+        try:
+            rules = environment_folder_profiles.validate_rules(environment, raw_rules)
+        except (TypeError, ValueError) as exc:
+            raise FolderSchemaError("FOLDER_SCHEMA_PROFILE_INVALID", "저장 규칙 형식이 올바르지 않습니다.") from exc
+        profile = {"id": str(profile_row[0]), "revision": int(active["profile_revision"]),
+                   "name": str(saved_profile.get("name") or ""), "rules": rules}
+        return {**snapshot, "profile": profile,
+                "scan": {"id": str(active["id"]), "relative_path": request_path,
+                         "profile_id": profile["id"], "profile_revision": profile["revision"],
+                         "status": "COMPLETE"},
+                "structure_fingerprint": str(active["structure_fingerprint"]),
+                "content_fingerprint": str(active["content_fingerprint"])}
+    if registered_scan_id is not None:
+        scan_records = rows(conn.execute(
+            "SELECT DISTINCT s.id,s.root_key,s.relative_path,s.environment,s.profile_id,s.profile_revision,s.project_id,s.request_id,"
+            "s.status,s.tree_json,s.issues_json,s.created_at,fp.environment AS profile_environment,fp.name AS profile_name,"
+            "fp.revision AS current_revision,fp.rules_json "
+            "FROM folder_environment_scans s JOIN folder_environment_previews p ON p.scan_id=s.id "
+            "JOIN folder_environment_registrations r ON r.preview_id=p.id "
+            "LEFT JOIN folder_environment_profiles fp ON fp.id=s.profile_id "
+            "WHERE s.id=? AND s.root_key=? AND s.environment=? AND r.project_id=? AND r.request_id=? "
+            "AND r.environment=? AND r.status IN ('REGISTERED','CAPTURING','COMPLETED','FAILED')",
+            [registered_scan_id, root_key, environment, project_id, request_id, environment],
+        ))
+    else:
+        scan_records = rows(conn.execute(
         "SELECT DISTINCT s.id,s.root_key,s.relative_path,s.environment,s.profile_id,s.profile_revision,s.project_id,s.request_id,"
         "s.status,s.tree_json,s.issues_json,s.created_at,fp.environment AS profile_environment,fp.name AS profile_name,"
         "fp.revision AS current_revision,fp.rules_json "
@@ -383,7 +537,7 @@ def resolve_request_schema(conn: ConnectionLike, root: Path, root_key: str,
         "AND r.environment=? AND r.status IN ('REGISTERED','CAPTURING','COMPLETED','FAILED'))) "
         "ORDER BY s.created_at DESC,s.id DESC",
         [root_key, environment, project_id, request_id, project_id, request_id, environment],
-    ))
+        ))
     if not scan_records:
         raise FolderSchemaError("FOLDER_SCHEMA_REQUEST_SCAN_REQUIRED",
                                 "이 의뢰에 연결된 폴더 스키마 조사가 없습니다. 저장 규칙을 선택해 의뢰 폴더를 조사하세요.")
@@ -431,6 +585,7 @@ def resolve_request_schema(conn: ConnectionLike, root: Path, root_key: str,
         node["status"] = role["status"]
         node["target_id"] = role.get("target_id") or node.get("target_id")
         node["name"] = role.get("name") or node.get("name")
+        node["option_status"] = role.get("option_status") or node.get("option_status")
         node["confirmed"] = role["status"] in {"CONFIRMED", "CONTAINER", "EXCLUDED"}
         node["role_evidence_source"] = role["source"]
         node["role_source"] = role["source"]

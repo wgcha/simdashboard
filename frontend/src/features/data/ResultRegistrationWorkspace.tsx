@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom'
 import { api } from '../../api'
 import type { AnalysisRequest, Project } from '../../types'
 import { SearchableSelect } from '../../shared/components/selectionLabels'
+import { folderEnvironmentApi } from '../../shared/api/folderEnvironment'
 import {
   resultRegistrationApi,
   sha256Hex,
@@ -163,7 +164,7 @@ function publishedFromDraft(draft: ResultRegistrationDraftRead): ResultRegistrat
     draft_id: draft.draft_id, status: draft.status, case_id: draft.case_id, capture_id: draft.capture_id,
     environment: draft.environment, project_id: draft.project_id, request_id: draft.request_id, context: draft.context,
     asset_count: draft.asset_count, result_count: draft.result_count, media_count: draft.media_count,
-    image_count: draft.image_count, video_count: draft.video_count, mirror_status: draft.mirror_status, error: draft.error,
+    image_count: draft.image_count, video_count: draft.video_count, mirror_status: draft.mirror_status, schema_refresh: draft.schema_refresh, error: draft.error,
   }
 }
 
@@ -676,7 +677,7 @@ export function ResultRegistrationWorkspace({ embedded = false, contextChanging 
     try {
       const prepared = await resultRegistrationApi.prepareFolder({ ...prepareInput, confirm_create: true })
       if (selectionKeyRef.current !== token) return
-      setPreparedFolder(prepared); setTargetCasePath(prepared.case_relative_path); setPreparePreview(null); setSelectedResultPath(prepared.result_relative_path); setSelectedResultState('PRESENT'); setNotice(`결과용 폴더를 준비했습니다: ${prepared.result_relative_path}`)
+      setPreparedFolder(prepared); setTargetCasePath(prepared.case_relative_path); setPreparePreview(null); setSelectedResultPath(prepared.result_relative_path); setSelectedResultState('PRESENT'); setNotice(prepared.schema_refresh?.status === 'FAILED' ? `결과용 폴더를 준비했지만 스키마 갱신에 실패했습니다: ${prepared.schema_refresh.message ?? 'Refresh를 다시 실행하세요.'}` : `결과용 폴더를 준비했습니다: ${prepared.result_relative_path}`)
     } catch (reason) { setFormError(errorMessage(reason, '결과 폴더를 준비하지 못했습니다.')) }
     finally { endAction() }
   }
@@ -788,6 +789,22 @@ export function ResultRegistrationWorkspace({ embedded = false, contextChanging 
     finally { endAction() }
   }
 
+  const retrySchemaRefresh = async () => {
+    if (isActionBusy || !beginAction('폴더 스키마 다시 확인 중')) return
+    try {
+      const result = await folderEnvironmentApi.refresh({ project_id: projectId, request_id: requestId, environment })
+      const schemaRefresh = result.status === 'CONFLICT'
+        ? { status: 'FAILED' as const, message: result.message || '폴더 역할 충돌을 확인하세요.' }
+        : { status: result.status, snapshot_id: result.snapshot_id ?? undefined }
+      setPreparedFolder((current) => current ? { ...current, schema_refresh: schemaRefresh } : current)
+      setCompletion((current) => current ? { ...current, published: { ...current.published, schema_refresh: schemaRefresh } } : current)
+      setNotice(result.status === 'CONFLICT'
+        ? result.message || '역할 충돌이 있어 기존 폴더 스키마를 유지했습니다.'
+        : result.changed ? '폴더 스키마를 갱신했습니다.' : '폴더 스키마가 이미 최신입니다.')
+    } catch (reason) { setFormError(errorMessage(reason, 'DB 등록과 폴더는 유지됩니다. 스키마 Refresh를 다시 시도하세요.')) }
+    finally { endAction() }
+  }
+
   const selectProject = (next: string) => { setLocalProjectId(next); setLocalRequestId(''); clearPathState() }
   const selectRequest = (next: string) => { setLocalRequestId(next); clearPathState() }
   const changeEnvironment = (next: ResultEnvironment) => {
@@ -886,6 +903,7 @@ export function ResultRegistrationWorkspace({ embedded = false, contextChanging 
         </div> : null}
 
         {selectedResultPath ? <div className={`result-registration-selected-path ${selectedResultState === 'UNAVAILABLE' ? 'is-error' : ''}`}><Check /><div><span>결과 저장 위치</span><code>{selectedResultPath}</code></div><b>{preparedFolder ? '준비 완료' : statusLabel(selectedResultState)}</b></div> : null}
+        {preparedFolder?.schema_refresh?.status === 'FAILED' ? <div className="result-registration-mirror-warning" role="alert"><p><AlertTriangle />폴더 준비 성공 / 스키마 갱신 실패: {preparedFolder.schema_refresh.message ?? '폴더 구조를 다시 확인해야 합니다.'}</p><button type="button" className="ghost-button" disabled={isActionBusy} onClick={() => void retrySchemaRefresh()}><RefreshCw /> 스키마 Refresh 재시도</button></div> : null}
         <div className="result-registration-location-links" aria-label="저장 위치 연결 관리">
           <header><div><strong>저장한 결과 위치 연결</strong><p>현재 Folder Schema에서 확정한 평가 항목·Scene 아래 결과 위치만 연결합니다. 연결을 수정하거나 삭제해도 SPDM 파일과 기존 결과·초안 이력은 보존됩니다.</p></div>
             <button type="button" disabled={locationMutationBusy || !activeDestinationCandidate || locationLinks.some((item) => item.relative_path.toLowerCase() === activeDestinationPath.toLowerCase())} onClick={() => void saveCurrentLocation()}>현재 결과 위치 연결 저장</button>
@@ -962,7 +980,7 @@ export function ResultRegistrationWorkspace({ embedded = false, contextChanging 
       <button type="button" className="data-submit result-registration-publish" disabled={inspection.blocking_count > 0 || exclusionsChanged || hasInvalidExclusionReason || (partialRequired && !acknowledgePartial) || isActionBusy} onClick={() => void approveAndPublish()}><ClipboardCheck />{approved ? 'DB 등록 다시 시도' : '검수 완료·DB 등록'}</button>
     </section> : null}
 
-    {completion ? <CompletionPanel completion={completion} onRetryMirror={() => void retryMirror(completion)} retrying={isActionBusy} /> : null}
+    {completion ? <CompletionPanel completion={completion} onRetryMirror={() => void retryMirror(completion)} onRetrySchema={() => void retrySchemaRefresh()} retrying={isActionBusy} /> : null}
   </section>
 }
 
@@ -1004,7 +1022,7 @@ function ReviewInspection({ inspection, previewUrls, selectedFiles, draftId, exc
   </section>
 }
 
-function CompletionPanel({ completion, onRetryMirror, retrying }: { completion: Completion; onRetryMirror: () => void; retrying: boolean }) {
+function CompletionPanel({ completion, onRetryMirror, onRetrySchema, retrying }: { completion: Completion; onRetryMirror: () => void; onRetrySchema: () => void; retrying: boolean }) {
   const { published } = completion
   const mirrorNeedsRetry = ['MIRROR_PENDING', 'MIRROR_CONFLICT', 'MIRROR_FAILED'].includes(published.status)
   const mirrorConflict = published.status === 'MIRROR_CONFLICT'
@@ -1012,6 +1030,7 @@ function CompletionPanel({ completion, onRetryMirror, retrying }: { completion: 
     <header><span>{mirrorConflict ? 'DB 등록 완료 · 폴더 반영 충돌' : 'DB 등록 완료'}</span><h3>결과값과 영상이 Case 수집 버전에 저장되었습니다.</h3><p>{completion.targetLabel} · {published.environment === 'USAGE' ? '사용환경' : '유통환경'}</p></header>
     <div className="result-registration-completion-stats"><div><span>수집 버전 ID</span><strong>{published.capture_id}</strong></div><div><span>결과값</span><strong>{published.result_count}</strong></div><div><span>미디어</span><strong>{published.media_count ?? completion.mediaCount}</strong></div><div><span>이미지 / 영상</span><strong>{published.image_count ?? completion.imageCount} / {published.video_count ?? completion.videoCount}</strong></div></div>
     {mirrorNeedsRetry ? <div className="result-registration-mirror-warning" role="status"><p><AlertTriangle />{mirrorConflict ? '기존 저장 폴더의 파일과 충돌해 원본 폴더에는 반영하지 않았습니다. 기존 파일은 덮어쓰지 않았습니다.' : published.error?.message || 'DB 등록은 완료됐지만 선택한 저장 폴더 반영이 끝나지 않았습니다.'} 수집 버전은 보존되어 있으며 다시 게시되지 않습니다.</p><button type="button" className="ghost-button" onClick={onRetryMirror} disabled={retrying}><RefreshCw /> 저장 폴더 반영만 재시도</button></div> : null}
+    {published.schema_refresh?.status === 'FAILED' ? <div className="result-registration-mirror-warning" role="alert"><p><AlertTriangle />등록 성공 / 스키마 갱신 실패: {published.schema_refresh.message ?? '폴더 구조를 다시 확인해야 합니다.'} 기존 수집 버전은 보존됩니다.</p><button type="button" className="ghost-button" onClick={onRetrySchema} disabled={retrying}><RefreshCw /> 스키마 Refresh 재시도</button></div> : null}
     <Link className="data-submit result-registration-case-link" to={resultLink(published)}><Database /> Case 결과 보기</Link>
   </section>
 }

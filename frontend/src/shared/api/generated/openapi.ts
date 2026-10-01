@@ -2058,6 +2058,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/folder-discovery/environments/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Refresh */
+        post: operations["refresh_api_folder_discovery_environments_refresh_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/folder-discovery/environments/previews": {
         parameters: {
             query?: never;
@@ -2716,6 +2733,42 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/result-registration/locations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Result Locations */
+        get: operations["list_result_locations_api_result_registration_locations_get"];
+        put?: never;
+        /** Create Result Location */
+        post: operations["create_result_location_api_result_registration_locations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/result-registration/locations/{link_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Result Location */
+        delete: operations["delete_result_location_api_result_registration_locations__link_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Result Location */
+        patch: operations["update_result_location_api_result_registration_locations__link_id__patch"];
         trace?: never;
     };
     "/api/result-registration/folders/prepare": {
@@ -5386,6 +5439,18 @@ export interface components {
             /** Reason Codes */
             reason_codes: string[];
         };
+        /** Refresh */
+        Refresh: {
+            /** Project Id */
+            project_id: string;
+            /** Request Id */
+            request_id: string;
+            /**
+             * Environment
+             * @enum {string}
+             */
+            environment: "USAGE" | "DISTRIBUTION";
+        };
         /** Register */
         Register: {
             /** Preview Id */
@@ -5836,6 +5901,20 @@ export interface components {
             load_case_id: string;
             /** Page Id */
             page_id?: string | null;
+        };
+        /** ResultLocationInput */
+        ResultLocationInput: {
+            /** Project Id */
+            project_id: string;
+            /** Request Id */
+            request_id: string;
+            /**
+             * Environment
+             * @enum {string}
+             */
+            environment: "USAGE" | "DISTRIBUTION";
+            /** Relative Path */
+            relative_path: string;
         };
         /**
          * ResultProfileInput
@@ -6452,6 +6531,22 @@ export interface components {
             replaced_run_id?: string | null;
             /** Source Revision */
             source_revision?: number | null;
+        };
+        /** UpdateResultLocationInput */
+        UpdateResultLocationInput: {
+            /** Project Id */
+            project_id: string;
+            /** Request Id */
+            request_id: string;
+            /**
+             * Environment
+             * @enum {string}
+             */
+            environment: "USAGE" | "DISTRIBUTION";
+            /** Relative Path */
+            relative_path: string;
+            /** Revision */
+            revision: number;
         };
         /** UsageReview */
         UsageReview: {
@@ -11117,6 +11212,39 @@ export interface operations {
             };
         };
     };
+    refresh_api_folder_discovery_environments_refresh_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Refresh"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     preview_api_folder_discovery_environments_previews_post: {
         parameters: {
             query?: never;
@@ -12550,6 +12678,143 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_result_locations_api_result_registration_locations_get: {
+        parameters: {
+            query: {
+                project_id: string;
+                request_id: string;
+                environment: "USAGE" | "DISTRIBUTION";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_result_location_api_result_registration_locations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResultLocationInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_result_location_api_result_registration_locations__link_id__delete: {
+        parameters: {
+            query: {
+                project_id: string;
+                request_id: string;
+                environment: "USAGE" | "DISTRIBUTION";
+                revision: number;
+            };
+            header?: never;
+            path: {
+                link_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_result_location_api_result_registration_locations__link_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                link_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateResultLocationInput"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

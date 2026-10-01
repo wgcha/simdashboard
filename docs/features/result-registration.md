@@ -28,6 +28,8 @@
 
 기존 파일을 덮어쓰거나 삭제하지 않는다. 게시 폴더 준비 요청이 실패하면 그 요청에서 새로 만든 빈 폴더만 보상 정리한다. 이후 업로드·검수·게시 실패는 이미 준비된 폴더를 정리하지 않으며 외부 파일을 건드리지 않는다. DB 게시 성공과 원본 폴더 복사 실패를 구분하며, 성공한 capture는 보존하고 복구 상태를 제공한다. 중복 클릭·재시도는 같은 승인 결과를 중복 등록하지 않는다.
 
+확인된 결과 폴더 생성이나 파일 mirror가 성공하면 선택 의뢰·환경의 [Folder Schema Refresh](folder-schema-refresh.md)를 실행한다. Refresh가 실패해도 이미 성공한 DB capture와 사용자 파일은 보존한다. 화면은 등록 성공과 스키마 갱신 실패를 따로 표시하고 scoped Refresh 재시도를 제공한다. 같은 fingerprint의 재시도는 snapshot·capture를 중복 생성하지 않는다.
+
 ## 배포·검증 경계
 
 배포는 [`Windows 배포 정책`](../windows-deployment-policy.md)을 따른다. 스키마 변경은 배포 단계에서만 수행하며 기존 DB 업데이트 전에 검증한 백업을 만든다. 결과 등록은 additive migration `0031_result_registration`을 사용하고, 편집 가능한 결과 위치 연결은 additive migration `0033_result_registration_location_links`를 사용한다. 사용자 DB·설정·실행 중 서비스와 실제 SPDM 자료는 검증에 사용하지 않았다.
