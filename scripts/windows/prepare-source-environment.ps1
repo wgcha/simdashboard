@@ -17,6 +17,58 @@ function Invoke-Stage {
     & $Action
 }
 
+function Test-EsbuildTemporaryFileSharingViolation {
+    param([string]$Output)
+
+    # Vite/esbuild reports this Windows sharing violation while removing its
+    # hashed temporary file. Keep the retry signature narrow so unrelated
+    # frontend build failures still stop immediately.
+    return $Output -match '(?i)\[vite:esbuild-transpile\]\s+remove\s+[^\r\n]*?[\\/]Temp[\\/]esbuild-[0-9a-f]{64}\s*:\s*The process cannot access the file because it is being used by another process\.'
+}
+
+function Invoke-FrontendBuild {
+    param(
+        [string]$PnpmPath,
+        [string]$WorkingDirectory,
+        [int]$MaxAttempts = 2,
+        [int]$RetryDelaySeconds = 2
+    )
+
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        $logId = [Guid]::NewGuid().ToString('N')
+        $stdoutPath = Join-Path ([IO.Path]::GetTempPath()) ("workbench-frontend-build-$logId.stdout")
+        $stderrPath = Join-Path ([IO.Path]::GetTempPath()) ("workbench-frontend-build-$logId.stderr")
+        try {
+            $process = Start-Process -FilePath $PnpmPath -ArgumentList @('run', 'build') `
+                -WorkingDirectory $WorkingDirectory -NoNewWindow -Wait -PassThru `
+                -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+            $stdout = if (Test-Path -LiteralPath $stdoutPath) { [IO.File]::ReadAllText($stdoutPath) } else { '' }
+            $stderr = if (Test-Path -LiteralPath $stderrPath) { [IO.File]::ReadAllText($stderrPath) } else { '' }
+
+            # Print captured output from both streams before handling the exit
+            # code so operators retain pnpm/Vite diagnostics on every attempt.
+            if ($stdout) { [Console]::Out.Write($stdout) }
+            if ($stderr) { [Console]::Error.Write($stderr) }
+            if ($process.ExitCode -eq 0) { return }
+
+            $combinedOutput = $stdout + "`n" + $stderr
+            if (($attempt -lt $MaxAttempts) -and (Test-EsbuildTemporaryFileSharingViolation -Output $combinedOutput)) {
+                Write-Warning "Detected the known Windows esbuild temporary-file sharing violation. Retrying frontend build ($($attempt + 1)/$MaxAttempts) in $RetryDelaySeconds seconds."
+                Start-Sleep -Seconds $RetryDelaySeconds
+                continue
+            }
+
+            if (Test-EsbuildTemporaryFileSharingViolation -Output $combinedOutput) {
+                throw "Frontend production build failed after $MaxAttempts attempts due to a persistent Windows esbuild temporary-file sharing violation (exit code $($process.ExitCode))."
+            }
+            throw "Frontend production build failed (exit code $($process.ExitCode))."
+        }
+        finally {
+            Remove-Item -LiteralPath $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 try {
     Set-Location -LiteralPath $Root
     $runtimeModule = Join-Path $Root 'scripts\windows\Runtime.psm1'
@@ -68,8 +120,7 @@ try {
             & $projectPnpm install --frozen-lockfile
             if ($LASTEXITCODE -ne 0) { throw "Frontend dependency installation failed (exit code $LASTEXITCODE)." }
             if (-not $SkipFrontendBuild) {
-                & $projectPnpm run build
-                if ($LASTEXITCODE -ne 0) { throw "Frontend production build failed (exit code $LASTEXITCODE)." }
+                Invoke-FrontendBuild -PnpmPath $projectPnpm -WorkingDirectory (Join-Path $Root 'frontend')
             }
         }
         finally { Pop-Location }

@@ -40,6 +40,9 @@ jobs:
           & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\source-postgres-initializer-self-test.ps1
           $exitCode = $LASTEXITCODE
           if ($exitCode -ne 0) { exit $exitCode }
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\source-frontend-build-self-test.ps1
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) { exit $exitCode }
           & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\deploy-account-lifecycle-self-test.ps1
           $exitCode = $LASTEXITCODE
           if ($exitCode -ne 0) { exit $exitCode }
