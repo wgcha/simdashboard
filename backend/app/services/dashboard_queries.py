@@ -157,9 +157,12 @@ def catalog(conn, request_id, environment, project_id=None):
                     "label": str(scene.get("source_name") or scene.get("label") or scene.get("id") or "Scene"),
                     **scope,
                 })
-            components = sorted({o["component_id"] for s in run["scenes"] for o in s.get("observations", []) if o.get("component_id")}
-                                | {m["component_id"] for s in run["scenes"] for m in s.get("media", []) if m.get("component_id")})
-            result["components"].extend({"id": c, "label": c, **scope} for c in components)
+            with_values = {o["component_id"] for s in run["scenes"] for o in s.get("observations", []) if o.get("component_id")}
+            media_only = {m["component_id"] for s in run["scenes"] for m in s.get("media", []) if m.get("component_id")} - with_values
+            # Components with values come first so the screen's default shows numbers,
+            # not a media-only component (each item says whether it has values).
+            result["components"].extend({"id": c, "label": c, "has_values": True, **scope} for c in sorted(with_values))
+            result["components"].extend({"id": c, "label": c, "has_values": False, **scope} for c in sorted(media_only))
         return capture_entry
 
     from .dashboard_capture import latest_capture_id, merge_latest_payload

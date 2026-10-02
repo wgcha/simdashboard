@@ -57,9 +57,11 @@ const VIEW_TABS: Array<{ id: ViewTab; label: string }> = [{ id: 'summary', label
 
 function ViewTabs({ tabs, active, onSelect }: { tabs: Array<{ id: ViewTab; label: string }>; active: ViewTab; onSelect: (tab: ViewTab) => void }) {
   const refs = useRef(new Map<ViewTab, HTMLButtonElement>())
-  const move = (index: number) => { const next = tabs[(index + tabs.length) % tabs.length]; onSelect(next.id); refs.current.get(next.id)?.focus() }
+  // Manual activation: arrows move focus, Enter/Space (button click) opens the tab.
+  const move = (index: number) => { const next = tabs[(index + tabs.length) % tabs.length]; refs.current.get(next.id)?.focus() }
   return <div className="case-view-tabs" role="tablist" aria-label="결과 보기" onKeyDown={(event) => {
-    const index = tabs.findIndex((tab) => tab.id === active)
+    const focused = tabs.findIndex((tab) => refs.current.get(tab.id) === document.activeElement)
+    const index = focused >= 0 ? focused : tabs.findIndex((tab) => tab.id === active)
     if (event.key === 'ArrowRight') { event.preventDefault(); move(index + 1) }
     else if (event.key === 'ArrowLeft') { event.preventDefault(); move(index - 1) }
     else if (event.key === 'Home') { event.preventDefault(); move(0) }
@@ -139,7 +141,9 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
     const choose = (current: string, choices: DashboardChoice[], setter: (value: string) => void, firstIfMany = false) => {
       const unique = Array.from(new Map(choices.map((item) => [item.id, item])).values())
       if (unique.some((item) => item.id === current)) return
-      setter(unique.length === 1 || (firstIfMany && unique.length) ? unique[0].id : '')
+      // Prefer a candidate that carries values (the server lists those first).
+      const preferred = unique.find((item) => item.has_values) ?? unique[0]
+      setter(unique.length === 1 || (firstIfMany && unique.length) ? preferred.id : '')
     }
     const caseChoice = catalog.cases.find((item) => item.id === caseId || item.dashboard_case_id === caseId)
     if (caseChoice && caseChoice.id !== caseId) setCaseId(caseChoice.id)
@@ -169,7 +173,9 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
   const storedCaptures = (catalog?.captures ?? []).filter((item) => item.case_id === caseId && item.kind !== 'LATEST')
   const storedCaptureId = storedCaptures[0]?.id ?? ''
   const selectedCase = catalog?.cases.find((item) => item.id === caseId)
-  const dashboardCaseId = selectedCapture?.dashboard_case_id ?? selectedCase?.dashboard_case_id ?? caseId
+  // A capture left over from another Case (e.g. Case changed in the materials path) is ignored.
+  const captureMatchesCase = !selectedCapture?.case_id || selectedCapture.case_id === caseId
+  const dashboardCaseId = (captureMatchesCase ? selectedCapture?.dashboard_case_id : null) ?? selectedCase?.dashboard_case_id ?? caseId
   const hasCapturedCase = Boolean(selectedCase?.dashboard_case_id
     || catalog?.captures.some((item) => item.case_id === caseId))
   const activeCaptureId = selectedCapture?.id ?? ''
@@ -196,12 +202,14 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
   const tabs = VIEW_TABS.filter((item) => tab === 'distribution' || item.id === 'summary' || item.id === 'materials')
   const activeView: ViewTab = materialsActive ? 'materials' : tabs.some((item) => item.id === view) ? view : 'summary'
   const selectView = (next: ViewTab) => {
+    // `result_environment` is left as is while 소재·물성 is open (materials are
+    // always distribution), so leaving returns to the environment the user came from.
     if (next === 'materials') {
-      if (!materialsActive) updateParams({ resultTab: 'materials', result_environment: 'DISTRIBUTION', ...(tab === 'usage' ? clearedPath : {}) })
+      if (!materialsActive) updateParams({ resultTab: 'materials' })
       return
     }
     setView(next)
-    if (materialsActive) updateParams({ resultTab: null })
+    if (materialsActive) updateParams({ resultTab: null, ...(getParam('result_environment') ? {} : { result_environment: 'DISTRIBUTION' }) })
   }
 
   const pathBar = catalog && !materialsActive ? <HierarchyPath label="Case 경로" className="case-path-bar" trailing={tab === 'distribution' ? <div className="case-scene-chips" role="list" aria-label="Scene 목록">{sceneSummary.length ? sceneSummary.map((item) => <span role="listitem" key={item.label} className={`case-scene-chip${item.hasResult ? ' case-scene-chip--result' : ''}`} title={`${item.title} · ${item.hasResult ? '결과 있음' : '결과 없음'}`}><i aria-hidden="true" />{item.label}<span className="case-sr-only">{item.hasResult ? ' 결과' : ' 결과 없음'}</span></span>) : null}</div> : undefined}>
@@ -231,11 +239,13 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
     </div>
   </details> : null
 
+  const componentLabel = componentChoices.find((item) => item.id === componentId)?.label
+  const viewContext = tab === 'distribution' && !materialsActive && (activeView === 'summary' || activeView === 'compare') && componentLabel && basis ? `${componentLabel} · ${basisLabel(basis)}` : ''
   const distributionEmpty = catalog?.folder_schema?.status === 'AVAILABLE' && selectedCase?.source === 'FOLDER_SCHEMA' && !selectedCase.capture_count ? '이 Case에는 아직 결과 파일이 없습니다. Scene 폴더에 결과를 넣으면 자동으로 표시됩니다.' : '결과를 불러오는 중입니다.'
   const distribution = (section: 'summary' | 'compare') => <DistributionArea key={`${projectId}:${requestId}`} section={section} compareView={compareView} onCompareView={setCompareView} edges={edges} lines={lines} comparison={comparison} caseId={dashboardCaseId} loadCaseId={loadCaseId} captureId={activeCaptureId} runId={runId} optionId={optionId} mode={mode} componentId={componentId} basis={basis} hasCapturedRun={runChoices.some((item) => item.id === runId && item.capture_id === activeCaptureId)} hasCapturedOption={options.some((item) => item.id === optionId && item.capture_id === activeCaptureId)} emptyContextMessage={distributionEmpty} />
   const content = activeView === 'materials' ? renderMaterials?.(pathTarget) ?? null
     : tab === 'usage' ? <UsageArea key={`${caseId}:${captureId}:${referenceCaseId}:${referenceCaptureId}`} caseId={dashboardCaseId} captureId={activeCaptureId} referenceCaseId={catalog?.cases.find((item) => item.id === referenceCaseId)?.dashboard_case_id ?? referenceCaseId} referenceCaptureId={referenceCaptureId} />
-    : activeView === 'video' ? (activeCaptureId && runId ? <CaseVideoGrid key={`${activeCaptureId}:${runId}:${optionId}`} captureId={activeCaptureId} runId={runId} runOptionId={optionId || undefined} mode={mode || undefined} /> : <State message={distributionEmpty} />)
+    : activeView === 'video' ? (runId && !optionId && options.length > 1 ? <State message="Run Option을 선택하세요." /> : activeCaptureId && runId ? <CaseVideoGrid key={`${activeCaptureId}:${runId}:${optionId}`} captureId={activeCaptureId} runId={runId} runOptionId={optionId || undefined} mode={mode || undefined} /> : <State message={distributionEmpty} />)
     : distribution(activeView === 'compare' ? 'compare' : 'summary')
 
   return <section className="simulation-dashboard" data-ui-density="v1" aria-label="SPDM 해석 결과 대시보드">
@@ -250,7 +260,7 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
     <div ref={setPathTarget} className="case-path-slot" hidden={!materialsActive} />
     {!materialsActive && catalog?.folder_schema?.status === 'UNAVAILABLE' ? <State message="폴더 구조를 읽을 수 없습니다. 저장된 결과를 표시합니다." title={catalog.folder_schema?.diagnostic?.message} error /> : null}
     {!materialsActive && catalog && !catalog.cases.length ? <State message="확정된 Case가 없습니다. 폴더 연결·규칙에서 구조를 확인하세요." /> : null}
-    <div className="case-view-bar"><ViewTabs tabs={tabs} active={activeView} onSelect={selectView} />{displayOptions}</div>
+    <div className="case-view-bar"><ViewTabs tabs={tabs} active={activeView} onSelect={selectView} /><div className="case-view-bar__end">{viewContext ? <span className="case-view-context" title={`표시 중: ${viewContext}`}>{viewContext}</span> : null}{displayOptions}</div></div>
     <div className="case-view-panel" id="case-view-panel" role="tabpanel" aria-labelledby={`case-view-tab-${activeView}`}>{content}</div>
   </section>
 }
@@ -395,6 +405,14 @@ function SceneDetail({ sceneId, member, lineIndices }: { sceneId: string; member
   if (!data) return <State message="선택 Scene 상세를 불러오는 중입니다." />
   return <section className="simulation-dashboard__detail"><header><h3>Scene 상세 · {data.scene.label}</h3><label>위치 <select value={position} onChange={(event) => setPosition(event.target.value)} aria-label="Scene 상세 위치">{['TOP', 'BOT', 'LH', 'RH'].map((item) => <option key={item}>{item}</option>)}</select></label></header><div className="simulation-dashboard__chart"><ResponsiveContainer width="100%" height="100%"><LineChart><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="ref_coord" type="number" /><YAxis /><Tooltip /><Legend />{[1, 2, 3, 4].map((line) => <Line key={line} data={data.line_points.filter((point) => point.line_index === line)} dataKey="value" name={`L${line}`} type="linear" connectNulls={false} stroke={COLORS[line - 1]} dot={false} />)}</LineChart></ResponsiveContainer></div><div className="simulation-dashboard__detail-assets">{data.assets.map((asset) => <Media key={asset.asset_id} asset={asset} />)}</div>{data.quality_issues.length ? <Issues issues={data.quality_issues} /> : null}</section> }
 function Media({ asset }: { asset: DashboardAsset }) { const [expanded, setExpanded] = useState(false); const [playError, setPlayError] = useState(''); const video = useRef<HTMLVideoElement>(null); const dialog = useRef<HTMLDialogElement>(null); const close = () => { dialog.current?.close(); setExpanded(false) }; useEffect(() => { setExpanded(false); setPlayError(''); video.current?.pause() }, [asset.asset_id]); useEffect(() => { if (expanded && dialog.current && !dialog.current.open) dialog.current.showModal() }, [expanded]); const toggle = async () => { if (!video.current) return; try { if (video.current.paused) await video.current.play(); else video.current.pause(); setPlayError('') } catch { setPlayError('영상을 재생하지 못했습니다.') } }; const frame = asset.frame_role === 'FINAL_FRAME' ? '최종 프레임' : '프레임 미확인'; const frameMeta = [frame, asset.frame_index == null ? null : `frame ${asset.frame_index}`, asset.time_value == null ? null : `t=${asset.time_value}${asset.time_unit ? ` ${asset.time_unit}` : ' · 단위 미확인'}`, ].filter(Boolean).join(' · '); return <div className="simulation-dashboard__media">{asset.kind === 'VIDEO' ? <video ref={video} controls src={assetUrl(asset)} aria-label={asset.title ?? '결과 영상'} /> : asset.status === 'READY' ? <img src={assetUrl(asset)} alt={asset.title ?? '결과 이미지'} /> : <span><ImageIcon />{statusText(asset.status)}</span>}<small title={frameMeta}>{frame}</small><div className="simulation-dashboard__media-actions">{asset.kind === 'VIDEO' ? <button type="button" aria-label="영상 재생 또는 일시정지" onClick={() => void toggle()}><Play /></button> : null}<button type="button" aria-label="자산 확대" onClick={() => setExpanded(true)}><Expand /></button></div>{playError ? <em role="alert">{playError}</em> : null}{expanded ? <dialog ref={dialog} className="simulation-dashboard__lightbox" onCancel={(event) => { event.preventDefault(); close() }} onClose={() => setExpanded(false)}><button type="button" onClick={close} aria-label="확대 보기 닫기">닫기</button>{asset.kind === 'VIDEO' ? <video controls autoPlay src={assetUrl(asset)} aria-label={asset.title ?? '확대 결과 영상'} /> : <img src={assetUrl(asset)} alt={asset.title ?? '결과 이미지 확대'} />}</dialog> : null}</div> }
-const unprocessedReasons: Record<string, string> = { EXCLUDED_DIRECTORY: '제외된 디렉터리', UNSUPPORTED_EXTENSION: '미지원 확장자', UNKNOWN_LOAD_CASE_DIRECTORY: '알 수 없는 하중 경우 경로', UNEXPECTED_RESULT_PATH_DEPTH: '지원하지 않는 폴더 깊이', INCOMPLETE_RESULT_PATH: '결과 경로 불완전', UNSUPPORTED_DISTRIBUTION_FORMAT: '미지원 유통환경 형식', UNRECOGNIZED_RESULT_FILE: '인식하지 못한 결과 파일' }
-function issueText(issue: string) { if (!issue.startsWith('UNPROCESSED_FILE:')) return issue; const source = issue.slice('UNPROCESSED_FILE:'.length); const marker = source.lastIndexOf(':'); if (marker < 1) return `미처리 파일: ${source}`; const path = source.slice(0, marker); const reason = source.slice(marker + 1); return `미처리 파일: ${path} · ${unprocessedReasons[reason] ?? reason}` }
-function Issues({ issues }: { issues: string[] }) { return <aside className="simulation-dashboard__issues"><AlertTriangle />{issues.map((issue) => <span key={issue}>{issueText(issue)}</span>)}</aside> }
+const unprocessedReasons: Record<string, string> = { EXCLUDED_DIRECTORY: '제외된 디렉터리', UNSUPPORTED_EXTENSION: '미지원 확장자', UNKNOWN_LOAD_CASE_DIRECTORY: '알 수 없는 하중 경우 경로', UNEXPECTED_RESULT_PATH_DEPTH: '지원하지 않는 폴더 깊이', INCOMPLETE_RESULT_PATH: '결과 경로 불완전', INCOMPLETE_HIERARCHY_ASSIGNMENT: '폴더 계층 지정 불완전', UNSUPPORTED_DISTRIBUTION_FORMAT: '미지원 유통환경 형식', UNRECOGNIZED_RESULT_FILE: '인식하지 못한 결과 파일', OUTSIDE_CAPTURE_ROOT: '수집 범위 밖 파일' }
+const issueLabels: Record<string, string> = { CASE_SCENE_ALIGNMENT_UNCONFIRMED: 'Case 간 Scene 대응 미확인', SOURCE_PARSE_ERROR: '원본 파일을 읽지 못함', DIRECTORY_UNAVAILABLE: '폴더를 읽을 수 없음', SCAN_DEPTH_LIMIT: '폴더 깊이 제한으로 일부 생략', SCAN_LIMIT_REACHED: '파일 수 제한으로 일부 생략', UNSAFE_DIRECTORY_SKIPPED: '안전하지 않은 폴더 건너뜀', OUTSIDE_CAPTURE_ROOT: '수집 범위 밖 파일' }
+/** Korean text for a quality issue; unknown codes get a generic phrase, never the raw code. */
+function issueText(issue: string) {
+  if (!issue.startsWith('UNPROCESSED_FILE:')) return issueLabels[issue] ?? (/^[A-Z0-9_:]+$/.test(issue) ? '결과 확인 필요 항목' : issue)
+  const source = issue.slice('UNPROCESSED_FILE:'.length); const marker = source.lastIndexOf(':')
+  if (marker < 1) return `미처리 파일: ${source}`
+  const path = source.slice(0, marker); const reason = source.slice(marker + 1)
+  return `미처리 파일: ${path} · ${unprocessedReasons[reason] ?? (/^[A-Z0-9_]+$/.test(reason) ? '처리하지 않은 형식' : reason)}`
+}
+function Issues({ issues }: { issues: string[] }) { const texts = Array.from(new Set(issues.map(issueText))); return <aside className="simulation-dashboard__issues"><AlertTriangle />{texts.map((text) => <span key={text}>{text}</span>)}</aside> }

@@ -1069,3 +1069,7 @@
 - 비대기 실행 잠금·합치기 확인을 DB 연결 전에 수행(실행 중이면 RUNNING 즉시 반환), 실행 45초·새 의뢰 5개 상한(단계마다 확인). 정확한 SPDM 이름만 등록(NAME_NOT_STANDARD), 같은 WR 번호·환경 중복 차단(WR_ALREADY_LINKED), 재시도 실패 폴더별 backoff(force 무시), 관리자 제외 폴더 ADMIN_EXCLUDED 표시와 제외 집합 캐시, 같은 이름 미연결 프로젝트 PROJECT_NAME_EXISTS, 목록 오류 보고·하위 폴더 하나의 오류 격리, 경합 패배 시 생성 보고 안 함(미리보기 ID 비교). 화면은 선택을 유지한 채 프로젝트·의뢰 목록만 갱신, 401/403에서 확인 중지, 목록 갱신 실패 시 알림 보류.
 - 검증: discovery 17 passed, environment_folder_flow_api·new_scene_registration·folder_auto_sync 포함 59 passed/1 skipped; architecture baseline은 기준과 같은 dashboard.py(7) 1건만 실패. tsc·test:routing 통과, check:architecture 기존 4건(App.tsx 1089, 증가 없음). e2e·독립 재검수 미실행.
 
+
+## 2026-10-02 3단계 A안 화면 검수 반영 (Claude)
+- Case 결과 A안(경로 바·탭·표시 옵션·영상 그리드 재사용·소재 탭) 독립 검수 지적 수정: `has_values` Component 우선, Case 변경 시 이력 초기화, 영상 Run Option 안내, 문제 코드 한글화, 토큰 색상, 줄바꿈·말줄임, 키보드 탭, 환경 복원.
+- 검증: dashboard 관련 백엔드 29 passed, e2e simulation 13/14(capture-pin 폐기 항목), materials 6, case-video-grid 2, folder-working-final 3, tsc·build·routing 통과, check:architecture 기존 4건. Codex Security·Windows 검증은 해당 없음/미실행.

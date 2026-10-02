@@ -105,7 +105,7 @@
   border-radius: 12px;
   background: var(--color-surface-raised, #fff);
   color: var(--color-text, #142033);
-  box-shadow: 0 24px 70px rgb(0 0 0 / 28%);
+  box-shadow: 0 24px 70px var(--color-shadow);
 }
 
 .case-finalization__dialog:not([open]) {
@@ -113,7 +113,7 @@
 }
 
 .case-finalization__dialog::backdrop {
-  background: rgb(4 14 27 / 56%);
+  background: var(--color-overlay);
 }
 
 .case-finalization__dialog-heading,
@@ -275,14 +275,14 @@
 }
 
 /* Compact header placement: one emphasised "Final 지정" action with a small status badge. */
-.case-finalization { flex-wrap: nowrap; min-width: 0; font-size: var(--text-caption, 12px); }
+.case-finalization { flex-wrap: wrap; justify-content: flex-end; min-width: 0; font-size: var(--text-caption, 12px); }
 .case-finalization__trigger {
   min-height: var(--control-h-sm, 32px);
   border-color: var(--color-accent);
   background: var(--color-accent);
-  color: var(--color-surface-raised, #fff);
+  color: var(--color-text-on-accent);
 }
-.case-finalization__trigger:hover:not(:disabled) { background: var(--color-accent); filter: brightness(1.08); }
+.case-finalization__trigger:hover:not(:disabled) { border-color: var(--color-focus); background: var(--color-accent); color: var(--color-text-on-accent); }
 .case-finalization__status {
   display: inline-flex;
   align-items: center;
