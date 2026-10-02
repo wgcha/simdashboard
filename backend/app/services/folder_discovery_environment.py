@@ -285,6 +285,7 @@ def refresh_scope(conn, root, project_id: str, request_id: str, environment: str
     structure_fingerprint, content_fingerprint = resolver.scan_fingerprints(
         fresh, root, deadline=refresh_deadline,
     )
+    quick_fingerprint = stat_fingerprint(fresh)
 
     if (previous and not registration_roles_changed
             and int(previous["profile_revision"]) == profile["revision"]
@@ -297,9 +298,10 @@ def refresh_scope(conn, root, project_id: str, request_id: str, environment: str
         location_projection = resolver.resolve_request_locations(
             conn, project_id, request_id, environment, schema=previous_schema,
         )
-        return _refresh_result(snapshot_id, "UNCHANGED", False, previous_schema,
-                               structure_fingerprint, content_fingerprint,
-                               {"added": 0, "removed": 0, "changed": 0}, location_projection)
+        return {**_refresh_result(snapshot_id, "UNCHANGED", False, previous_schema,
+                                  structure_fingerprint, content_fingerprint,
+                                  {"added": 0, "removed": 0, "changed": 0}, location_projection),
+                "stat_fingerprint": quick_fingerprint}
 
     prior_nodes = list(previous_schema.get("nodes") or []) if isinstance(previous_schema, dict) else []
     prior_by_path = {resolver._fold(str(node.get("relative_path") or "")): node for node in prior_nodes}
@@ -474,7 +476,7 @@ def refresh_scope(conn, root, project_id: str, request_id: str, environment: str
         "nodes": scoped_nodes, "confirmed_roles": confirmed_roles_now,
         "role_rules_revision": ROLE_RULES_REVISION,
         # Quick auto-sync check (names, sizes, mtimes only); see folder_auto_sync.
-        "stat_fingerprint": stat_fingerprint(fresh),
+        "stat_fingerprint": quick_fingerprint,
         "issues": fresh.get("issues", []),
         "structure_fingerprint": structure_fingerprint,
         "content_fingerprint": content_fingerprint,
@@ -485,19 +487,22 @@ def refresh_scope(conn, root, project_id: str, request_id: str, environment: str
         location_projection = resolver.resolve_request_locations(
             conn, project_id, request_id, environment, schema=schema,
         )
-        return _refresh_result(
+        return {**_refresh_result(
             str(previous["id"]) if previous else None, "CONFLICT", False, schema,
             structure_fingerprint, content_fingerprint, diff, location_projection,
             activated=False,
-        )
-    # A refresh caused only by a newer ROLE_RULES_REVISION that changes no
-    # node keeps the result versions as they are: no new capture, not "changed".
+        ), "stat_fingerprint": quick_fingerprint}
+    # Results are unchanged when no node changed and the result-relevant files
+    # kept their size/mtime (only logs or other unread files changed), or the
+    # whole content fingerprint is identical (a role-rule revision re-read).
     revision_only_unchanged = bool(
         previous and not registration_roles_changed
         and int(previous["profile_revision"]) == profile["revision"]
         and str(previous["request_relative_path"]) == request_path
         and str(previous["structure_fingerprint"]) == structure_fingerprint
-        and str(previous["content_fingerprint"]) == content_fingerprint
+        and (str(previous["content_fingerprint"]) == content_fingerprint
+             or (isinstance(previous_schema, dict)
+                 and previous_schema.get("stat_fingerprint") == quick_fingerprint))
         and not any(diff.values())
     )
     snapshot_id = ident("folder-refresh")
@@ -556,8 +561,9 @@ def refresh_scope(conn, root, project_id: str, request_id: str, environment: str
     except BaseException:
         conn.execute("ROLLBACK")
         raise
-    return _refresh_result(snapshot_id, "REFRESHED", not revision_only_unchanged, schema,
-                           structure_fingerprint, content_fingerprint, diff, location_projection)
+    return {**_refresh_result(snapshot_id, "REFRESHED", not revision_only_unchanged, schema,
+                              structure_fingerprint, content_fingerprint, diff, location_projection),
+            "stat_fingerprint": quick_fingerprint}
 
 
 def _refresh_diff(previous_nodes: list[dict], current_nodes: list[dict], resolver) -> dict[str, int]:

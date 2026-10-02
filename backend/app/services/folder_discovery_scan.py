@@ -112,10 +112,20 @@ def scan(root: Path, relative: str, *, skip_descendants: Callable[[str, str | No
             "file_count": files, "nodes": nodes, "file_state": file_state, "issues": issues}
 
 
+# Files the Case results, materials and finalization actually read. Other files
+# (solver logs, scratch output) may change constantly and must not trigger a
+# refresh or new result versions.
+RESULT_RELEVANT_EXTENSIONS = frozenset({
+    ".csv", ".json", ".jpg", ".jpeg", ".png", ".mp4", ".webm",  # results and media
+    ".inc", ".rad",                                              # input decks
+    ".pdf", ".ppt", ".pptx", ".xlsx",                            # reports
+})
+
+
 def stat_fingerprint(scan_result: dict[str, Any]) -> str:
-    """Fingerprint folder structure and file (path, size, mtime) without reading contents."""
-    import hashlib
+    """Fingerprint the folder tree and relevant files' (path, size, mtime) without reading contents."""
     import json
+    from pathlib import PurePosixPath
 
     structure = sorted((
         str(item.get("relative_path") or "").casefold(),
@@ -125,6 +135,7 @@ def stat_fingerprint(scan_result: dict[str, Any]) -> str:
         str(item.get("relative_path") or "").casefold(),
         int(item.get("size") or 0),
         int(item.get("modified_ns") or 0),
-    ) for item in scan_result.get("file_state", []))
+    ) for item in scan_result.get("file_state", [])
+        if PurePosixPath(str(item.get("relative_path") or "")).suffix.casefold() in RESULT_RELEVANT_EXTENSIONS)
     payload = json.dumps({"structure": structure, "files": files}, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()

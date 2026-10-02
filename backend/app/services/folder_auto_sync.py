@@ -18,12 +18,15 @@ Checks for the same request scope are coalesced: a check finished less than
 ``MIN_INTERVAL_SECONDS`` ago is returned again instead of scanning, so many
 viewers of one request cause at most one scan per interval per process.
 
-Known limit (same as refresh fingerprints for non-content files): a file whose
-contents change while its size and modification time stay identical is not
-detected by the quick check. The manual check (``force``) runs a full refresh.
+Only folders and result-relevant files (results, media, decks, reports; see
+``RESULT_RELEVANT_EXTENSIONS``) count. A solver log that keeps growing inside
+the request folder does not trigger a refresh. Known limit: a relevant file
+whose contents change while its size and modification time stay identical is
+not detected; a later change or a manual Refresh in the folder screen picks it up.
 """
 from __future__ import annotations
 
+import json
 import threading
 import time
 from datetime import datetime, timezone
@@ -64,7 +67,7 @@ def _result(status: str, *, changed: bool = False, snapshot_id: str | None = Non
 
 def _quick_current(conn, root, root_key: str, project_id: str, request_id: str,
                    environment: str, memo: dict[str, Any] | None) -> tuple[bool, str | None, str | None]:
-    """Return (current, snapshot_id, stat_fp) for the active snapshot."""
+    """Return (current, snapshot_id, quick fingerprint) for the active snapshot."""
     from . import folder_schema_resolver as resolver
 
     previous = resolver.active_refresh_snapshot(conn, root_key, project_id, request_id, environment)
@@ -97,17 +100,39 @@ def _quick_current(conn, root, root_key: str, project_id: str, request_id: str,
     if fresh.get("status") != "COMPLETE":
         return False, previous["id"], None
     current_fp = stat_fingerprint(fresh)
-    stored = schema.get("stat_fingerprint")
-    if stored == current_fp:
-        return True, previous["id"], current_fp
-    if memo and memo.get("snapshot_id") == previous["id"] and memo.get("stat_fingerprint") == current_fp:
-        return True, previous["id"], current_fp
-    return False, previous["id"], current_fp
+    return schema.get("stat_fingerprint") == current_fp, previous["id"], current_fp
+
+
+def _store_quick_fingerprint(conn, snapshot_id: str, fingerprint: str) -> None:
+    """Record the quick fingerprint on an active snapshot that has none or an outdated one.
+
+    Snapshots written before stage 2, or ones whose relevant files were only
+    touched (same contents), would otherwise need a full content read on every
+    check. The field is a cache used only by the quick check.
+    """
+    row = conn.execute("SELECT tree_json FROM folder_environment_scans WHERE id=?", [snapshot_id]).fetchone()
+    if not row:
+        return
+    try:
+        snapshot = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+    except (TypeError, ValueError):
+        return
+    schema = snapshot.get("schema") if isinstance(snapshot, dict) else None
+    if not isinstance(schema, dict) or schema.get("stat_fingerprint") == fingerprint:
+        return
+    schema["stat_fingerprint"] = fingerprint
+    conn.execute("UPDATE folder_environment_scans SET tree_json=? WHERE id=?",
+                 [json.dumps(snapshot, ensure_ascii=False), snapshot_id])
 
 
 def sync(conn, project_id: str, request_id: str, environment: str, actor: str, *,
          force: bool = False) -> dict[str, Any]:
-    """Bring the active Folder Schema snapshot of one request scope up to date."""
+    """Bring the active Folder Schema snapshot of one request scope up to date.
+
+    ``force`` (the manual "check now") only skips the coalescing interval; it
+    still uses the quick check, so it cannot be used to force repeated full
+    content reads.
+    """
     from . import folder_schema_resolver as resolver
 
     environment = str(environment).upper()
@@ -125,19 +150,27 @@ def sync(conn, project_id: str, request_id: str, environment: str, actor: str, *
             memo = dict(_memo.get(key) or {})
         if memo and time.monotonic() - float(memo.get("checked_monotonic") or 0) < interval:
             return {**memo["result"], "coalesced": True}
-        stat_fp = None
         snapshot_id = None
         try:
-            if not force:
-                current, snapshot_id, stat_fp = _quick_current(
-                    conn, root, root_key, project_id, request_id, environment, memo)
-                if current:
-                    result = _result("UNCHANGED", snapshot_id=snapshot_id)
-                    _remember(key, result, snapshot_id, stat_fp)
-                    return {**result, "coalesced": False}
+            current, snapshot_id, quick_fp = _quick_current(
+                conn, root, root_key, project_id, request_id, environment, memo)
+            if current:
+                result = _result("UNCHANGED", snapshot_id=snapshot_id)
+                _remember(key, result, snapshot_id, quick_fp)
+                return {**result, "coalesced": False}
+            if (memo and quick_fp and memo.get("result", {}).get("status") == "CONFLICT"
+                    and memo.get("stat_fingerprint") == quick_fp and memo.get("snapshot_id") == snapshot_id):
+                # Same folders and rules as the last conflict: do not re-read
+                # contents or audit again until something changes.
+                result = {**memo["result"], "checked_at": _now_iso(), "check_mode": "QUICK"}
+                _remember(key, result, snapshot_id, quick_fp)
+                return {**result, "coalesced": False}
             with folder_discovery.WRITE_LOCK:
                 refreshed = folder_discovery_environment.refresh_scope(
                     conn, root, project_id, request_id, environment, actor)
+                refreshed_fp = refreshed.get("stat_fingerprint")
+                if (refreshed.get("status") == "UNCHANGED" and refreshed.get("snapshot_id") and refreshed_fp):
+                    _store_quick_fingerprint(conn, str(refreshed["snapshot_id"]), str(refreshed_fp))
             if refreshed.get("activated") and refreshed.get("snapshot_id"):
                 from . import result_registration
                 result_registration.reconcile_schema_refresh_failures(
@@ -145,32 +178,26 @@ def sync(conn, project_id: str, request_id: str, environment: str, actor: str, *
                     refreshed["snapshot_id"], refreshed["status"], actor,
                 )
             status = str(refreshed.get("status") or "")
+            conflict = status == "CONFLICT"
             result = _result(
-                "CONFLICT" if status == "CONFLICT" else ("REFRESHED" if refreshed.get("changed") else "UNCHANGED"),
-                changed=bool(refreshed.get("changed")), snapshot_id=refreshed.get("snapshot_id"),
-                diff=refreshed.get("diff"), mode="FULL",
-                code="FOLDER_SCHEMA_ROLE_CONFLICT" if status == "CONFLICT" else None,
-                message="폴더 역할이 모호한 항목이 있어 이전 구조를 유지합니다." if status == "CONFLICT" else None,
+                "CONFLICT" if conflict else ("REFRESHED" if refreshed.get("changed") else "UNCHANGED"),
+                changed=bool(refreshed.get("changed")) and not conflict,
+                snapshot_id=refreshed.get("snapshot_id"), diff=refreshed.get("diff"), mode="FULL",
+                code="FOLDER_SCHEMA_ROLE_CONFLICT" if conflict else None,
+                message="폴더 역할이 모호한 항목이 있어 이전 구조를 유지합니다." if conflict else None,
             )
-            if status != "CONFLICT":
-                if stat_fp is None:
-                    try:
-                        request_path = resolver._request_path(conn, root_key, project_id, request_id, environment)
-                        stat_fp = stat_fingerprint(scan(
-                            root, request_path,
-                            skip_descendants=folder_discovery_environment._skip_final_archive(request_path)))
-                    except (OSError, ValueError, spdm_storage.SpdmStorageError, resolver.FolderSchemaError):
-                        stat_fp = None
-                _remember(key, result, refreshed.get("snapshot_id"), stat_fp)
-            else:
-                _remember(key, result, None, None)
+            # Remember the fingerprint of the exact scan the refresh used, never a
+            # second scan: a copy finishing in between must not be marked current.
+            _remember(key, result, refreshed.get("snapshot_id") if not conflict else snapshot_id, refreshed_fp)
             return {**result, "coalesced": False}
-        except (ValueError, spdm_storage.SpdmStorageError) as exc:
+        except (ValueError, OSError, spdm_storage.SpdmStorageError) as exc:
             # FolderSchemaError is a ValueError. A file still being copied
             # (FOLDER_SCHEMA_FILE_BUSY) lands here and is retried next poll.
             result = _result("FAILED", snapshot_id=snapshot_id,
-                             code=str(getattr(exc, "code", "FOLDER_SCHEMA_REFRESH_FAILED")), message=str(exc),
-                             mode="QUICK" if not force else "FULL")
+                             code=str(getattr(exc, "code", "FOLDER_SCHEMA_REFRESH_FAILED")),
+                             message=str(exc) if isinstance(exc, resolver.FolderSchemaError)
+                             else "폴더를 확인하지 못했습니다. 잠시 후 다시 확인합니다.",
+                             mode="FULL")
             _remember(key, result, None, None)
             return {**result, "coalesced": False}
 

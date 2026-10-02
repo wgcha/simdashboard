@@ -51,6 +51,8 @@ export function useFolderAutoSync({ projectId, requestId, environment, enabled =
   const inFlight = useRef<{ key: string; controller: AbortController } | null>(null)
   const forceQueued = useRef(false)
   const lastCheckedRef = useRef<number | null>(null)
+  // A coalesced answer repeats the last result; count each refreshed snapshot once.
+  const lastRefreshedSnapshot = useRef<string | null>(null)
   const syncRef = useRef(sync)
   syncRef.current = sync
 
@@ -75,9 +77,12 @@ export function useFolderAutoSync({ projectId, requestId, environment, enabled =
       if (controller.signal.aborted || scopeRef.current !== key) return
       const now = Date.now()
       lastCheckedRef.current = now
+      const snapshot = result.snapshot_id ?? null
+      const fresh = Boolean(result.changed) && !(result.coalesced && snapshot !== null && snapshot === lastRefreshedSnapshot.current)
+      if (fresh) lastRefreshedSnapshot.current = snapshot
       setState((current) => ({
         status: result.status, code: result.code ?? null, message: result.message ?? null, lastCheckedAt: now, busy: false, error: '',
-        revision: result.changed ? current.revision + 1 : current.revision, lastResult: result,
+        revision: fresh ? current.revision + 1 : current.revision, lastResult: result,
       }))
     }).catch((reason: unknown) => {
       if (controller.signal.aborted || scopeRef.current !== key) return
@@ -93,6 +98,7 @@ export function useFolderAutoSync({ projectId, requestId, environment, enabled =
     inFlight.current = null
     forceQueued.current = false
     lastCheckedRef.current = null
+    lastRefreshedSnapshot.current = null
     setState((current) => initialState(current.revision))
     if (!scopeKey) return
     if (pageVisible()) run(false)
@@ -108,6 +114,7 @@ export function useFolderAutoSync({ projectId, requestId, environment, enabled =
       document.removeEventListener('visibilitychange', onVisibility)
       inFlight.current?.controller.abort()
       inFlight.current = null
+      forceQueued.current = false
     }
   }, [intervalMs, run, scopeKey])
 

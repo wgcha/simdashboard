@@ -33,7 +33,7 @@ Refresh는 활성 환경 규칙과 기존 수동 확인·제외 상태를 적용
 
 각 Refresh snapshot은 역할 해석 규칙 버전 `role_rules_revision`을 기록한다. 이전 버전 snapshot은 폴더 fingerprint가 같아도 다음 Refresh에서 한 번 다시 해석한다. 다시 해석해도 노드 역할이 바뀌지 않으면 새 capture를 만들지 않고 `changed=false`로 응답한다.
 
-화면의 Refresh 결과는 `LEVEL`, `PATTERN`, `MANUAL`, `EXCLUDED`, `CONFLICT` 등 역할 판정 근거와 구조 차이를 보여준다. 파일 탐색기에서 직접 수정한 내용은 자동 감시하지 않으며 사용자가 명시적으로 Refresh를 실행한다.
+화면의 Refresh 결과는 `LEVEL`, `PATTERN`, `MANUAL`, `EXCLUDED`, `CONFLICT` 등 역할 판정 근거와 구조 차이를 보여준다. 파일 탐색기에서 직접 복사·수정한 내용은 화면이 따라간다(2026-10-02, 자동 반영). Case 결과·소재물성 화면은 열릴 때와 보이는 동안 30초마다 `POST /api/folder-discovery/environments/sync`를 호출한다. 서버는 폴더 구조와 결과 관련 파일(결과·미디어·덱·보고서 확장자)의 이름·크기·수정 시각만 비교하는 빠른 확인을 먼저 하고, 차이·규칙 개정·새 등록이 있을 때만 위 scoped Refresh를 실행한다. 같은 의뢰 범위의 확인은 20초(수동 "지금 확인"은 5초) 안에서 하나로 합친다. 로그 등 결과와 무관한 파일 변경은 갱신·capture를 만들지 않는다. 같은 폴더 상태의 역할 충돌은 다시 조사하지 않는다. 조회 권한(`project.data.view`)으로 호출할 수 있으며 클라이언트 경로는 받지 않는다. 한계: 크기와 수정 시각이 같은 채 내용만 바뀐 결과 파일은 빠른 확인으로 탐지하지 못한다. 서버 프로세스가 여러 개면 합치기와 기록은 프로세스별이다.
 
 ## scoped Refresh와 실패
 

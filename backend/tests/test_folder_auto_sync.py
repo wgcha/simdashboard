@@ -117,3 +117,77 @@ def test_sync_calls_request_view_guard(admin_client, monkeypatch):
                                        "environment": "DISTRIBUTION"})
     assert response.status_code == 403
     assert seen == [("project.data.view", "request", request_id)]
+
+
+def test_growing_solver_log_never_triggers_refresh(admin_client):
+    client, root = admin_client
+    project_id, request_id = _seed(client, root)
+    _sync(client, project_id, request_id)
+    with connect() as conn:
+        captures = conn.execute("SELECT count(*) FROM dashboard_captures").fetchone()[0]
+    before = _snapshot_count(request_id)
+    log = root / OPTION / "2_Face" / "solver.out"
+    for line in range(3):
+        with log.open("a", encoding="utf-8") as handle:
+            handle.write(f"cycle {line}\n")
+        result = _sync(client, project_id, request_id)
+        assert (result["status"], result["check_mode"]) == ("UNCHANGED", "QUICK"), result
+    assert _snapshot_count(request_id) == before
+    with connect() as conn:
+        assert conn.execute("SELECT count(*) FROM dashboard_captures").fetchone()[0] == captures
+
+
+def test_manual_check_still_uses_quick_path(admin_client):
+    client, root = admin_client
+    project_id, request_id = _seed(client, root)
+    _sync(client, project_id, request_id)
+    forced = _sync(client, project_id, request_id, force=True)
+    assert (forced["status"], forced["check_mode"]) == ("UNCHANGED", "QUICK")
+
+
+def test_snapshot_without_quick_fingerprint_is_backfilled(admin_client):
+    import json
+    client, root = admin_client
+    project_id, request_id = _seed(client, root)
+    _sync(client, project_id, request_id)
+    with connect() as conn:
+        snap_id, tree = conn.execute(
+            "SELECT id,tree_json FROM folder_environment_scans WHERE request_id=? AND id LIKE 'folder-refresh-%' "
+            "ORDER BY created_at DESC,id DESC LIMIT 1", [request_id]).fetchone()
+        snapshot = json.loads(tree)
+        snapshot["schema"].pop("stat_fingerprint", None)
+        conn.execute("UPDATE folder_environment_scans SET tree_json=? WHERE id=?",
+                     [json.dumps(snapshot, ensure_ascii=False), snap_id])
+    folder_auto_sync.reset_for_tests()
+    first = _sync(client, project_id, request_id)
+    assert (first["status"], first["check_mode"]) == ("UNCHANGED", "FULL")
+    folder_auto_sync.reset_for_tests()  # e.g. a server restart: the stored field is used
+    second = _sync(client, project_id, request_id)
+    assert (second["status"], second["check_mode"]) == ("UNCHANGED", "QUICK")
+
+
+def test_persistent_conflict_is_not_refreshed_again_until_folders_change(admin_client, monkeypatch):
+    from app.services import folder_discovery_environment as fde
+    client, root = admin_client
+    project_id, request_id = _seed(client, root)
+    _sync(client, project_id, request_id)
+    (root / OPTION / "8_New").mkdir()
+    calls = []
+    from app.services.folder_discovery_scan import scan, stat_fingerprint
+    from tests.test_new_scene_registration import REQUEST
+
+    def conflicting(conn, scan_root, *args, **kwargs):
+        # A refresh that finds an ambiguous role keeps the previous snapshot active.
+        calls.append(1)
+        fresh = scan(scan_root, REQUEST, skip_descendants=fde._skip_final_archive(REQUEST))
+        return {"status": "CONFLICT", "activated": False, "changed": False, "snapshot_id": None,
+                "diff": {"added": 1, "removed": 0, "changed": 0}, "stat_fingerprint": stat_fingerprint(fresh)}
+
+    monkeypatch.setattr(fde, "refresh_scope", conflicting)
+    assert _sync(client, project_id, request_id)["status"] == "CONFLICT"
+    again = _sync(client, project_id, request_id)
+    assert (again["status"], again["check_mode"]) == ("CONFLICT", "QUICK")
+    assert len(calls) == 1
+    (root / OPTION / "9_Other").mkdir()
+    _sync(client, project_id, request_id)
+    assert len(calls) == 2
