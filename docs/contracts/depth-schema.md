@@ -14,6 +14,7 @@
 |---|---|
 | D1 | 상위 구간(Root→…→프로젝트→의뢰)의 깊이는 관리자가 지정한다. 전역 1개 |
 | D2 | 하위 구간은 표준 깊이를 강제한다. Working 필수, 유통 RunOption 레벨 필수. 이탈하면 "확인 필요" |
+| D2a | Working 하위의 폴더 이름은 제한하지 않는다. RunOption도 INDIVIDUAL·CUMULATIVE 외 이름을 허용한다. 역할은 깊이로만 정한다(이름 규칙 `allowed_names` 없음) |
 | D3 | 스키마는 환경별 전역 1개. 프로젝트별 재정의 없음 |
 | D4 | 환경은 의뢰 폴더명 부분일치로 정한다. `사용` → USAGE, `유통` → DISTRIBUTION. 둘 다 있거나 둘 다 없으면 "확인 필요" |
 | D5 | 구형 `WR_x_SimType1|2` 규칙은 삭제한다 |
@@ -49,7 +50,7 @@ Root                                   L0 (역할 없음)
          └─ <Case>                     L2 SIMULATION_CASE   예: Package_Model_SetCase3_CushionCase3_조건표시
             └─ <LoadCase>              L3 LOAD_CASE         예: Drop
                └─ <Run>                L4 EXECUTION_RUN     예: 85qn80h_ref_organized
-                  └─ <RunOption>       L5 RUN_OPTION        INDIVIDUAL | CUMULATIVE
+                  └─ <RunOption>       L5 RUN_OPTION        예: INDIVIDUAL, CUMULATIVE (이름 제한 없음)
                      └─ <Scene>        L6 SCENE             예: 2_Face
                         └─ …           CONTENT
 ```
@@ -83,7 +84,7 @@ Root                                   L0 (역할 없음)
       { "level": 2, "role": "SIMULATION_CASE" },
       { "level": 3, "role": "LOAD_CASE" },
       { "level": 4, "role": "EXECUTION_RUN" },
-      { "level": 5, "role": "RUN_OPTION", "allowed_names": ["INDIVIDUAL", "CUMULATIVE"] },
+      { "level": 5, "role": "RUN_OPTION" },
       { "level": 6, "role": "SCENE" }
     ],
     "below_last": "CONTENT"
@@ -111,7 +112,8 @@ USAGE 행은 `environment_keyword: "사용"`, `lower.levels = [WORKING(fixed), S
 | upper | level은 1부터 연속, 최대 8. `PROJECT`와 `REQUEST`가 정확히 1개씩, PROJECT < REQUEST. REQUEST는 마지막 레벨. 나머지는 `CONTAINER` |
 | final | `fixed: true`. 서버 상수이며 PUT으로 변경할 수 없다(요청에 포함되면 무시) |
 | lower 공통 | L1 = `WORKING`(fixed_name). L2 = `SIMULATION_CASE`. 마지막은 `SCENE`. `CONTAINER`는 중간 통과 레벨로만 허용 |
-| DISTRIBUTION | `RUN_OPTION` 필수, `allowed_names`는 비어 있으면 안 됨 |
+| DISTRIBUTION | `RUN_OPTION` 레벨 필수 |
+| 이름 제한 | 레벨 항목에 `allowed_names` 등 이름 조건을 둘 수 없다(있으면 422). 이름으로 판정하는 곳은 하위 L1(Working/Final)과 Final L2(CAE/Reports/CAD)뿐이다 |
 | 역할 집합 | USAGE: PROJECT, REQUEST, WORKING, FINAL, FINAL_CAE, FINAL_REPORTS, FINAL_CAD, FINAL_VERSION, SIMULATION_CASE, SCENE, CONTAINER. DISTRIBUTION: 여기에 LOAD_CASE, EXECUTION_RUN, RUN_OPTION 추가. `EVALUATION`, `RESULTS`, `INPUT`은 새 스키마에서 사용 불가 |
 | keyword | USAGE는 `사용`, DISTRIBUTION은 `유통`으로 고정(편집 불가) |
 
@@ -134,10 +136,10 @@ USAGE 행은 `environment_keyword: "사용"`, `lower.levels = [WORKING(fixed), S
      - k=2: `CAE` → FINAL_CAE, `Reports` → FINAL_REPORTS, `CAD` → FINAL_CAD(이하 CONTENT), `.finalizations` → 무시. 그 외 이름은 `UNEXPECTED_FINAL_CHILD`
      - k=3: SIMULATION_CASE
      - k=4: FINAL_VERSION. 이름이 32자리 hex가 아니면 `FINAL_VERSION_INVALID`
-     - k≥5: Working 하위 구간의 L3 이후 역할을 적용(미러). allowed_names 위반은 Working과 같은 코드
+     - k≥5: Working 하위 구간의 L3 이후 역할을 적용(미러)
      - Final 가지는 **결과 판독 소스가 아니다.** 결과 캡처·Case 결과 화면은 Working만 읽는다. Final 역할은 Final 지정 이력과 대조·표시용이다
    - 의뢰에 Working이 없으면 `WORKING_MISSING`으로 등록을 막는다
-   - 2 ≤ k ≤ n: `lower[k].role`. `allowed_names`가 있는데 이름이 없으면 `NAME_NOT_ALLOWED`
+   - 2 ≤ k ≤ n: `lower[k].role` (이름 무관)
    - k > n: CONTENT (D6)
 5. **가지가 중간에서 끝남**: `info: BRANCH_INCOMPLETE`로 표시하고 이탈로 보지 않는다(D7).
 6. `_interpret`는 프로필 `format == "DEPTH_V1"`이면 `_role`·`resolve_role` 휴리스틱을 호출하지 않는다. legacy 형식은 기존 스냅샷 refresh 전용으로 남긴다.
@@ -156,7 +158,6 @@ USAGE 행은 `environment_keyword: "사용"`, `lower.levels = [WORKING(fixed), S
 | `UNEXPECTED_REQUEST_CHILD` | 의뢰 바로 아래에 Working/Final 이외 폴더 | 차단 |
 | `UNEXPECTED_FINAL_CHILD` | Final 바로 아래에 CAE/Reports/CAD/.finalizations 이외 폴더 | 경고(등록 허용) |
 | `FINAL_VERSION_INVALID` | Final/CAE·Reports/<Case> 아래 폴더명이 finalization id 형식이 아님 | 경고(등록 허용) |
-| `NAME_NOT_ALLOWED` | allowed_names 위반(예: L5에 `ALL`) | 차단 |
 
 ## 6. API
 
@@ -187,7 +188,7 @@ USAGE 행은 `environment_keyword: "사용"`, `lower.levels = [WORKING(fixed), S
 - `FolderEnvironmentPanels.FolderProfileEditor` → `DepthSchemaEditor`로 교체한다.
   - 탭 3개: 상위 구조 / 사용환경 / 유통환경
   - 탭마다 표 1개: `깊이 | 예시 폴더(이름×개수, +N) | 폴더 수 | 역할 select`
-  - Root 행은 표시만 하고, 하위 탭의 L1 Working 행은 잠근다. 하위 탭 아래에 Final 고정 구조(L1 Final / L2 CAE·Reports / L3 Case / L4 버전 / L5~ 미러)를 읽기 전용으로 함께 표시한다. RUN_OPTION 행에만 허용 이름 칩 입력을 둔다.
+  - Root 행은 표시만 하고, 하위 탭의 L1 Working 행은 잠근다. 하위 탭 아래에 Final 고정 구조(L1 Final / L2 CAE·Reports / L3 Case / L4 버전 / L5~ 미러)를 읽기 전용으로 함께 표시한다.
   - 탭을 열면 `samples`를 자동 호출한다. 행 수는 샘플 깊이에 맞춰 자동이고, 마지막 행 삭제만 가능하다.
   - 버튼은 **확인**(check 결과를 코드별 건수로 표시)과 **저장** 2개뿐이다.
 - `FolderEnvironmentWorkspace`
@@ -236,7 +237,7 @@ T1과 T2는 병렬, T3·T4·T5는 T2 이후 병렬, T6과 T7은 T0 이후 병렬
 ## 11. Verifier 통과 기준
 
 1. 실제 트리 fixture 2개(유통 `75R9J_PV/[WR-0002]_[유통_환경]`, 사용 `75R9J_PV/[WR-0001]_[사용_환경]`)에서 이탈 0건, 역할이 §3과 일치
-2. 유통 L5에 `ALL` 폴더 → `NAME_NOT_ALLOWED`, 등록 차단
+2. 유통 L5에 `INDIVIDUAL`·`CUMULATIVE` 외 이름(예: `ALL`) → RUN_OPTION으로 정상 판정, 이탈 0건
 3. 의뢰명 키워드 없음/둘 다 → auto-discovery `needs_review`, 등록 없음
 4. Working 없는 의뢰 → `WORKING_MISSING`
 5. Scene 아래 하위폴더 → CONTENT, 이탈 아님
@@ -249,3 +250,4 @@ T1과 T2는 병렬, T3·T4·T5는 T2 이후 병렬, T6과 T7은 T0 이후 병렬
 ## 12. 미확정
 
 - `Final/CAD`: 실제 폴더에 존재하며(현재 비어 있음) 앱은 쓰지 않는다. 잠정적으로 FINAL_CAD(하위 CONTENT)로 둔다. 용도와 채우는 주체를 확정해야 한다.
+- **RunOption 레벨 누락 감지**: 이름 제한이 없으므로 Run 바로 아래에 Scene이 온 경우(레벨 누락) Scene이 RUN_OPTION으로, 그 하위가 SCENE으로 잘못 판정된다. 후보 보완책: 구조 레벨(Working~RunOption)에 결과 파일(`*_result.json`, `.csv`, 미디어)이 직접 있으면 `FILES_AT_STRUCTURE_LEVEL` 경고. 채택 여부 확정 필요.
