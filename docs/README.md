@@ -13,6 +13,7 @@
 | 대시보드 조회·비교 | [대시보드 기능 안내](dashboard/README.md) | 등록 방식 변경은 [결과 등록 계약](features/result-registration.md) |
 | SPDM 폴더·기존 수집 API | [SPDM 연동 계약](spdm-storage-workflow.md) | 경로·확장자는 [저장 계약](storage-folder-and-file-contract.md) |
 | Folder Schema 위치·Refresh | [공용 위치·Refresh 계약](features/folder-schema-refresh.md) | 결과 등록은 [현재 결과 등록 계약](features/result-registration.md), 배포 영향은 [Windows 배포 정책](windows-deployment-policy.md) |
+| Working/Final·규칙 편집·최종확정 | [최종확정 계약](features/case-finalization.md), [현재 구현 계획](plans/folder-schema-working-final-implementation.md) | 위치 정본은 [공용 위치 계약](features/folder-schema-refresh.md) |
 | 계정·프로젝트 권한 | [권한 구현 가이드](access-control-and-menu-policy-implementation-guide.md) | 동작 요구는 [권한 명세](access-control-functional-specification.md) |
 | DB·migration·저장 경로 | [DB 통합 가이드](backend-sql-integration-guide.md), [저장 경로 계약](storage-folder-and-file-contract.md) | 현재 구성은 [아키텍처](current-architecture.md), 배포 영향은 [배포 정책](windows-deployment-policy.md) |
 | 미완료 개발 계획 | [현재 계획 목록](plans/README.md) | 계획 문서가 요구할 때만 관련 기능·정책 문서를 확인 |

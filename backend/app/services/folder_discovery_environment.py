@@ -23,8 +23,8 @@ from . import usage_source_review
 
 ENVIRONMENTS = ("USAGE", "DISTRIBUTION")
 ROLES = {
-    "USAGE": ("PROJECT", "REQUEST", "SIMULATION_CASE", "EVALUATION", "RESULTS", "INPUT", "CONTAINER"),
-    "DISTRIBUTION": ("PROJECT", "REQUEST", "SIMULATION_CASE", "LOAD_CASE", "EXECUTION_RUN", "RUN_OPTION", "SCENE", "RESULTS", "INPUT", "CONTAINER"),
+    "USAGE": ("PROJECT", "REQUEST", "WORKING", "FINAL", "SIMULATION_CASE", "EVALUATION", "RESULTS", "INPUT", "CONTAINER"),
+    "DISTRIBUTION": ("PROJECT", "REQUEST", "WORKING", "FINAL", "SIMULATION_CASE", "LOAD_CASE", "EXECUTION_RUN", "RUN_OPTION", "SCENE", "RESULTS", "INPUT", "CONTAINER"),
 }
 _EVALUATIONS = {"settle", "wobble", "horizontal_force_angle", "slope_angle", "slope_angle_360"}
 _SCENE = re.compile(r"(scene|result|contour|animation)", re.I)
@@ -37,6 +37,37 @@ def stable(prefix, root_key, path, role): return f"{prefix}-{uuid5(NAMESPACE_URL
 def preview_data(value):
     value = decoded(value)
     return value if isinstance(value, dict) else {"rows": value, "usage_reviews": {}}
+
+
+def _skip_final_archive(request_path: str | None = None):
+    """Skip contents only for a request-direct Final folder."""
+    confirmed_request = str(request_path or "").strip("/").casefold()
+
+    def looks_like_request(path: str) -> bool:
+        request_name = PurePosixPath(path).name
+        if not (re.fullmatch(r"wr_[a-z0-9][a-z0-9._-]*_simtype[12]", request_name, re.I)
+                or re.match(r"(?:\[)?wr[-_][a-z0-9]+(?:\])?(?:_|\s|$)", request_name, re.I)):
+            return False
+        parent_parts = [part for part in path.split("/") if part]
+        project_name = parent_parts[-2] if len(parent_parts) > 1 else ""
+        return (len(parent_parts) == 1
+                or bool(re.match(r"^(?:project|prj|p)[_-]", project_name, re.I))
+                or bool(re.fullmatch(r"[a-z0-9]{5}_pv", project_name, re.I)))
+
+    def should_skip(relative_path: str, parent_path: str | None) -> bool:
+        parts = [part for part in str(relative_path).strip("/").split("/") if part]
+        for index, name in enumerate(parts):
+            if name.casefold() != "final" or index == 0:
+                continue
+            final_parent = "/".join(parts[:index]).casefold()
+            if confirmed_request:
+                if final_parent == confirmed_request:
+                    return True
+            elif looks_like_request(final_parent):
+                return True
+        return False
+
+    return should_skip
 
 
 def _explicit_registration_roles(preview_value, request_path: str, environment: str,
@@ -113,14 +144,20 @@ def profiles(conn):
     for record in records:
         item = dict(record)
         item["rules"] = decoded(item.pop("rules_json"))
+        metadata = item["rules"].get("profile_metadata", {}) if isinstance(item["rules"], dict) else {}
+        if isinstance(metadata, dict) and metadata.get("archived"):
+            continue
         items.append(item)
     return {"items": items}
 
 
 def default_profile(conn, environment: str):
-    row = conn.execute("SELECT id,revision,rules_json FROM folder_environment_profiles WHERE environment=? ORDER BY created_at LIMIT 1", [environment]).fetchone()
-    if not row: raise ValueError("환경 기본 규칙이 없습니다. 스키마 migration을 적용하세요.")
-    return {"id": str(row[0]), "revision": int(row[1]), "rules": decoded(row[2])}
+    for row in conn.execute("SELECT id,revision,rules_json FROM folder_environment_profiles WHERE environment=? ORDER BY created_at", [environment]).fetchall():
+        definition = decoded(row[2])
+        metadata = definition.get("profile_metadata", {}) if isinstance(definition, dict) else {}
+        if not (isinstance(metadata, dict) and metadata.get("archived")):
+            return {"id": str(row[0]), "revision": int(row[1]), "rules": definition}
+    raise ValueError("활성 환경 규칙이 없습니다. 새 규칙을 저장하세요.")
 
 
 def refresh_scope(conn, root, project_id: str, request_id: str, environment: str,
@@ -215,7 +252,7 @@ def refresh_scope(conn, root, project_id: str, request_id: str, environment: str
 
     refresh_deadline = time.monotonic() + MAX_SECONDS
     try:
-        fresh = scan(root, request_path)
+        fresh = scan(root, request_path, skip_descendants=_skip_final_archive(request_path))
     except (OSError, ValueError, spdm_storage.SpdmStorageError) as exc:
         raise resolver.FolderSchemaError("FOLDER_SCHEMA_SCAN_UNAVAILABLE", "현재 의뢰 폴더를 안전하게 조사할 수 없습니다.", 422) from exc
     if fresh.get("status") != "COMPLETE":
@@ -508,9 +545,17 @@ def save_scan(conn, root, relative_path: str, environment: str, profile_id: str 
         found = conn.execute("SELECT 1 FROM analysis_requests WHERE id=? AND project_id=?", [request_id, project_id]).fetchone()
         if not found: raise ValueError("프로젝트와 의뢰의 연결이 일치하지 않습니다.")
     profile = default_profile(conn, environment) if not profile_id else _profile(conn, profile_id, environment)
-    result = scan(root, relative_path)
     root_key = root_identity(root)
-    nodes = _interpret(result["nodes"], root_key, environment, project_id, request_id, profile["rules"])
+    request_path = None
+    if request_id and project_id:
+        try:
+            from . import folder_schema_resolver as resolver
+            request_path = resolver._request_path(conn, root_key, project_id, request_id, environment)
+        except (ValueError, KeyError):
+            request_path = None
+    result = scan(root, relative_path, skip_descendants=_skip_final_archive(request_path))
+    nodes = _interpret(result["nodes"], root_key, environment, project_id, request_id,
+                       profile["rules"], seed_request_path=request_path)
     scan_id = ident("environment-scan")
     conn.execute("INSERT INTO folder_environment_scans(id,root_key,relative_path,environment,profile_id,profile_revision,project_id,request_id,status,tree_json,issues_json,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                  [scan_id, root_key, relative_path, environment, profile["id"], profile["revision"], project_id, request_id, result["status"], json.dumps(nodes, ensure_ascii=False), json.dumps(result["issues"], ensure_ascii=False), actor, now()])
@@ -536,13 +581,44 @@ def _interpret(raw, root_key, environment, project_id, request_id, rules=None, *
             # still resolve against the selected Request.
             context[None] = seeded_request
             context[""] = seeded_request
+            request_parts = [part for part in str(seed_request_path).split("/") if part]
+            scan_parts = [part for part in str(raw[0].get("relative_path") or "").split("/") if part]
+            if len(scan_parts) > len(request_parts):
+                boundary = scan_parts[len(request_parts)]
+                if boundary.casefold() == "working":
+                    anchor = "/".join(scan_parts[:len(request_parts) + 1])
+                    context[None]["working_relative_path"] = anchor
+                    context[""]["working_relative_path"] = anchor
+                    context[anchor] = {**seeded_request, "role_kind": "WORKING",
+                                       "working_relative_path": anchor}
+                elif boundary.casefold() == "final":
+                    anchor = "/".join(scan_parts[:len(request_parts) + 1])
+                    context[None]["final_relative_path"] = anchor
+                    context[""]["final_relative_path"] = anchor
+                    context[anchor] = {**seeded_request, "role_kind": "FINAL",
+                                       "final_relative_path": anchor}
     for source in raw:
         node = dict(source); parent = context.get(node["parent_path"], {})
         name = node["name"]; folded = name.casefold()
+        working_path = parent.get("working_relative_path")
+        working_level = (len([part for part in str(node.get("relative_path") or "").split("/") if part])
+                         - len([part for part in str(working_path or "").split("/") if part])) if working_path else None
         _, profile_matched, profile_conflict = resolve_role(
             name, node["depth"], parent.get("role_kind"), rules, environment,
+            working_level=working_level,
         ) if rules else (None, False, False)
-        role, option_status = _role(environment, name, parent, node["depth"], rules)
+        role, option_status = _role(environment, name, parent, node["depth"], rules, working_level=working_level)
+        in_final = bool(parent.get("final_relative_path"))
+        if in_final:
+            role, option_status = "CONTAINER", None
+        elif name.casefold() == "working" and parent.get("role_kind") == "REQUEST":
+            role, option_status = "WORKING", None
+        elif name.casefold() == "final" and parent.get("role_kind") == "REQUEST":
+            role, option_status = "FINAL", None
+        elif (not parent.get("role_kind") and node.get("relative_path")
+              and re.fullmatch(r"[A-Z0-9]{5}_PV", name, re.I)):
+            # The storage root has an empty relative path and is never a Project.
+            role, option_status = "PROJECT", None
         is_request_boundary = bool(seed_request_path and str(node.get("relative_path", "")).casefold() == str(seed_request_path).casefold())
         if is_request_boundary:
             role, option_status = "REQUEST", None
@@ -553,6 +629,10 @@ def _interpret(raw, root_key, environment, project_id, request_id, rules=None, *
         role_basis = ("REQUEST_BOUNDARY" if is_request_boundary else
                       "RULE" if profile_matched or profile_conflict else "DEFAULT")
         item = {**node, "id": node_id, "environment": environment, "role_kind": role, "allowed_roles": ROLES[environment], "status": status, "parent_context": parent.get("target_id"), "project_id": project_id or parent.get("project_id"), "request_id": request_id or parent.get("request_id"), "option_status": option_status, "option_label": name if role == "RUN_OPTION" else None, "role_source": "PROFILE", "role_basis": role_basis}
+        if working_path:
+            item["_working_relative_path"] = working_path
+        if parent.get("final_relative_path"):
+            item["_final_relative_path"] = parent["final_relative_path"]
         if status == "UNRESOLVED":
             item["message"] = "환경 규칙과 일치하지 않는 폴더입니다. 역할을 확인하세요."
             if re.match(r"^WR_[A-Za-z0-9._-]+_SimType[12]$", name, re.I):
@@ -572,20 +652,24 @@ def _interpret(raw, root_key, environment, project_id, request_id, rules=None, *
         if role == "RUN_OPTION": item["run_option_id"] = stable("environment-option", root_key, node["relative_path"], role)
         out.append(item)
         next_context = dict(parent)
-        if role in {"PROJECT", "REQUEST", "SIMULATION_CASE", "EVALUATION", "LOAD_CASE", "EXECUTION_RUN", "RUN_OPTION"}: next_context.update(item)
+        if role in {"PROJECT", "REQUEST", "WORKING", "FINAL", "SIMULATION_CASE", "EVALUATION", "LOAD_CASE", "EXECUTION_RUN", "RUN_OPTION"}: next_context.update(item)
         if role == "PROJECT": next_context.pop("request_id", None)
+        if role == "WORKING": next_context["working_relative_path"] = node["relative_path"]
+        if role == "FINAL": next_context["final_relative_path"] = node["relative_path"]
         context[node["relative_path"]] = next_context
     return out
 
 
-def _role(environment, name, parent, depth=0, rules=None):
+def _role(environment, name, parent, depth=0, rules=None, *, working_level=None):
     lowered = name.casefold()
     if rules:
-        resolved, matched, conflict = resolve_role(name, depth, parent.get("role_kind"), rules, environment)
+        resolved, matched, conflict = resolve_role(name, depth, parent.get("role_kind"), rules, environment, working_level=working_level)
         if conflict:
             return None, "UNRESOLVED"
         if matched:
             return (resolved, "PRESENT" if resolved == "RUN_OPTION" else None)
+    if lowered == "working" and parent.get("role_kind") == "REQUEST": return "WORKING", None
+    if lowered == "final" and parent.get("role_kind") == "REQUEST": return "FINAL", None
     # Containers intentionally pass their context through.  Only recognizable
     # semantic folders receive an automatic role; ambiguous folders stay for
     # explicit confirmation in the preview.
@@ -594,6 +678,9 @@ def _role(environment, name, parent, depth=0, rules=None):
     if match:
         expected = "1" if environment == "USAGE" else "2"
         return ("REQUEST", None) if match.group(1) == expected else (None, "UNRESOLVED")
+    if (re.match(r"^WR[-_][A-Za-z0-9]+(?:_|\s|$)", name, re.I)
+            or re.match(r"^\[WR[-_][A-Za-z0-9]+\](?:_|\s|$)", name, re.I)):
+        return "REQUEST", None
     if re.match(r"^(assy_res|package)[_-]", name, re.I): return "SIMULATION_CASE", None
     if environment == "DISTRIBUTION" and lowered in {"result", "results"}:
         if parent.get("role_kind") in {"SCENE", "RUN_OPTION", "EXECUTION_RUN"}:
@@ -613,6 +700,56 @@ def _role(environment, name, parent, depth=0, rules=None):
     return None, None
 
 
+def _expanded_preview_assignments(nodes, assignments):
+    """Propagate one structural assignment across its Working-relative level.
+
+    A direct assignment is applied after propagation, so an explicitly chosen
+    per-folder exception always wins regardless of request order.
+    """
+    by_id = {node["id"]: node for node in nodes}
+    by_path = {node["relative_path"]: node for node in nodes}
+    propagated, direct = {}, {}
+
+    def working_anchor(node):
+        if node.get("_final_relative_path"):
+            return None
+        parent = by_path.get(node.get("parent_path"))
+        while parent:
+            if parent.get("role_kind") == "FINAL":
+                return None
+            if parent.get("role_kind") == "WORKING":
+                return parent
+            parent = by_path.get(parent.get("parent_path"))
+        if node.get("_working_relative_path"):
+            return {"id": "working-anchor:" + str(node["_working_relative_path"]).casefold(),
+                    "relative_path": str(node["_working_relative_path"]), "role_kind": "WORKING"}
+        return None
+
+    for assignment in assignments:
+        node = by_id.get(assignment.get("node_id"))
+        if not node:
+            continue
+        if assignment.get("propagate_same_level", False) and assignment.get("role_kind") in {
+            "SIMULATION_CASE", "LOAD_CASE", "EXECUTION_RUN", "RUN_OPTION", "SCENE",
+        }:
+            anchor = working_anchor(node)
+            if anchor:
+                anchor_depth = len([part for part in anchor["relative_path"].split("/") if part])
+                target_depth = len([part for part in node["relative_path"].split("/") if part])
+                level = target_depth - anchor_depth
+                for candidate in nodes:
+                    if candidate is node or candidate.get("status") == "EXCLUDED":
+                        continue
+                    candidate_anchor = working_anchor(candidate)
+                    if not candidate_anchor or candidate_anchor["id"] != anchor["id"]:
+                        continue
+                    candidate_depth = len([part for part in candidate["relative_path"].split("/") if part])
+                    if candidate_depth - anchor_depth == level:
+                        propagated[candidate["id"]] = {**assignment, "node_id": candidate["id"]}
+        direct[node["id"]] = assignment
+    return [*propagated.values(), *direct.values()]
+
+
 def preview(conn, scan_id, assignments, actor, require_usage_review=False):
     records = rows(conn.execute("SELECT id,root_key,environment,project_id,request_id,status,tree_json FROM folder_environment_scans WHERE id=?", [scan_id]))
     if not records: legacy.fail("ENVIRONMENT_SCAN_NOT_FOUND", "환경 조사 결과를 찾을 수 없습니다.", 404)
@@ -620,7 +757,7 @@ def preview(conn, scan_id, assignments, actor, require_usage_review=False):
     if not isinstance(nodes, list):
         raise ValueError("새로고침 스냅샷은 조사 미리보기로 사용할 수 없습니다.")
     by_id = {node["id"]: node for node in nodes}
-    for assignment in assignments:
+    for assignment in _expanded_preview_assignments(nodes, assignments):
         node = by_id.get(assignment.get("node_id")); role = assignment.get("role_kind")
         if not node or role not in {*ROLES[saved["environment"]], "EXCLUDE"}: raise ValueError("조사 트리에 없는 역할 지정입니다.")
         node["role_kind"], node["status"] = role, "EXCLUDED" if role == "EXCLUDE" else ("CONFIRMED" if assignment.get("confirm", True) else "UNRESOLVED")
@@ -633,13 +770,27 @@ def preview(conn, scan_id, assignments, actor, require_usage_review=False):
             table = {"PROJECT": "projects", "REQUEST": "analysis_requests", "SIMULATION_CASE": "dashboard_cases"}.get(role)
             if table and not conn.execute(f"SELECT 1 FROM {table} WHERE id=?", [target]).fetchone():
                 raise ValueError("연결할 기존 대상을 찾을 수 없습니다.")
+    by_path = {node["relative_path"]: node for node in nodes}
+    final_paths = {node["relative_path"] for node in nodes if node.get("role_kind") == "FINAL"}
+    for node in nodes:
+        ancestor = by_path.get(node.get("parent_path"))
+        under_final = False
+        while ancestor:
+            if ancestor["relative_path"] in final_paths:
+                under_final = True
+                break
+            ancestor = by_path.get(ancestor.get("parent_path"))
+        if (under_final or node.get("_final_relative_path")) and node.get("role_kind") != "EXCLUDE":
+            node["role_kind"], node["status"] = "CONTAINER", "CONFIRMED"
+            node["role_source"], node["role_basis"] = "PROFILE", "FINAL_ARCHIVE"
     excluded = [node["relative_path"] for node in nodes if node["status"] == "EXCLUDED"]
     for node in nodes:
         if any(node["relative_path"].startswith(path.rstrip("/") + "/") for path in excluded):
             node["status"] = "EXCLUDED"
     _recompute_context(nodes, saved["root_key"], saved["environment"], saved.get("project_id"), saved.get("request_id"))
     by_path = {node["relative_path"]: node for node in nodes}
-    required_parent = {"REQUEST": "PROJECT", "SIMULATION_CASE": "REQUEST", "EVALUATION": "SIMULATION_CASE",
+    required_parent = {"REQUEST": "PROJECT", "WORKING": "REQUEST", "FINAL": "REQUEST",
+                       "SIMULATION_CASE": "REQUEST", "EVALUATION": "SIMULATION_CASE",
                        "LOAD_CASE": "SIMULATION_CASE", "EXECUTION_RUN": "LOAD_CASE", "RUN_OPTION": "EXECUTION_RUN"}
     for node in nodes:
         if node.get("status") == "EXCLUDED":
@@ -660,7 +811,13 @@ def preview(conn, scan_id, assignments, actor, require_usage_review=False):
         # A Case-root scan can deliberately attach to an already selected
         # request/project without repeating their folders in the subtree.
         seeded_parent = node.get("role_kind") == "SIMULATION_CASE" and bool(saved.get("request_id"))
-        if (not ancestor or ancestor.get("role_kind") != required) and not seeded_parent:
+        working_case = False
+        if node.get("role_kind") == "SIMULATION_CASE" and ancestor and ancestor.get("role_kind") == "WORKING":
+            working_parent = by_path.get(ancestor.get("parent_path"))
+            while working_parent and working_parent.get("role_kind") in {None, "CONTAINER"}:
+                working_parent = by_path.get(working_parent.get("parent_path"))
+            working_case = bool(working_parent and working_parent.get("role_kind") == "REQUEST")
+        if (not ancestor or ancestor.get("role_kind") != required) and not seeded_parent and not working_case:
             node["status"] = "UNRESOLVED"
             node["message"] = f"상위 {required} 역할이 필요합니다."
     for node in nodes:
@@ -724,7 +881,7 @@ def _recompute_context(nodes, root_key, environment, seeded_project, seeded_requ
         if role == "REQUEST": node["request_id"] = node.get("target_id")
         if parent.get("role_kind") == "SIMULATION_CASE": node["simulation_case_id"] = parent.get("target_id")
         next_context = dict(parent)
-        if role in {"PROJECT", "REQUEST", "SIMULATION_CASE", "EVALUATION", "LOAD_CASE", "EXECUTION_RUN"}:
+        if role in {"PROJECT", "REQUEST", "WORKING", "FINAL", "SIMULATION_CASE", "EVALUATION", "LOAD_CASE", "EXECUTION_RUN"}:
             next_context.update(node)
         if role == "PROJECT": next_context.pop("request_id", None)
         contexts[node["relative_path"]] = next_context
@@ -835,7 +992,14 @@ def register(conn, preview_id, idempotency_key, capture, principal, root):
     profile_now = conn.execute("SELECT revision FROM folder_environment_profiles WHERE id=?", [scan_row[6]]).fetchone()
     if not profile_now or int(profile_now[0]) != int(scan_row[7]):
         legacy.fail("ENVIRONMENT_PROFILE_STALE", "저장 규칙이 변경되었습니다. 다시 조사하세요.")
-    fresh = scan(root, str(scan_row[1]))
+    request_path = None
+    if scan_row[3] and scan_row[4]:
+        try:
+            from . import folder_schema_resolver as resolver
+            request_path = resolver._request_path(conn, str(scan_row[0]), str(scan_row[3]), str(scan_row[4]), str(scan_row[2]))
+        except (ValueError, KeyError):
+            request_path = None
+    fresh = scan(root, str(scan_row[1]), skip_descendants=_skip_final_archive(request_path))
     saved_paths = [item["relative_path"] for item in decoded(scan_row[5])]
     if fresh["status"] != "COMPLETE" or [item["relative_path"] for item in fresh["nodes"]] != saved_paths or root_identity(root) != scan_row[0]:
         legacy.fail("ENVIRONMENT_SCAN_STALE", "조사 이후 폴더 구조 또는 저장소가 변경되었습니다. 다시 조사하세요.")

@@ -640,13 +640,13 @@ export function ResultRegistrationWorkspace({ embedded = false, contextChanging 
       if (!context.scene && context.run_option?.status !== 'PRESENT' && builderIncludeOption) { segments.push({ role_kind: 'RUN_OPTION', name: builderOptionName.trim() }); fieldKeys.push('option') }
       if (!context.scene) { segments.push({ role_kind: 'SCENE', name: builderSceneName.trim() }); fieldKeys.push('scene') }
     }
-    segments.push({ role_kind: 'RESULTS', name: 'results' })
+    if (environment === 'USAGE') segments.push({ role_kind: 'RESULTS', name: 'results' })
     const parent = currentFolderPath ?? activeContextNode?.relative_path ?? selectedTargetCase?.relative_path ?? activeTarget?.spdm_request_folder ?? undefined
     const casePathExists = Boolean(context.simulation_case)
     const requiredValues = fieldKeys.filter((key) => key !== 'evaluation').map((key) => ({
       case: builderCaseName, load: builderLoadName, run: builderRunName, option: builderOptionName, scene: builderSceneName,
     } as Record<string, string>)[key]?.trim())
-    return { input: { project_id: projectId, request_id: requestId, environment, parent_relative_path: parent, segments }, fieldKeys, ready: Boolean(activeTarget && projectId && requestId && (!casePathExists ? !fieldKeys.includes('case') || Boolean(builderCaseName.trim()) : true) && requiredValues.every(Boolean)), context }
+    return { input: { project_id: projectId, request_id: requestId, environment, parent_relative_path: parent, segments }, fieldKeys, ready: Boolean(segments.length && activeTarget && projectId && requestId && (!casePathExists ? !fieldKeys.includes('case') || Boolean(builderCaseName.trim()) : true) && requiredValues.every(Boolean)), context }
   }, [activeContextNode, activeTarget, builderCaseName, builderEvaluation, builderIncludeOption, builderLoadName, builderOptionName, builderRunName, builderSceneName, currentFolderPath, environment, folderParentContext, preparedFolder, projectId, requestId, selectedTargetCase])
 
   const previewPreparation = async (input: PrepareInput) => {

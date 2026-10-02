@@ -10,7 +10,7 @@ import pytest
 
 from app.database import initialize_database
 from app.database_connection import connect
-from app.services import folder_discovery_environment, result_registration_paths as paths, spdm_storage
+from app.services import folder_discovery_environment, result_registration_locations, result_registration_paths as paths, spdm_storage
 
 
 pytestmark = pytest.mark.duckdb_integration
@@ -156,6 +156,75 @@ def test_prepare_preview_is_read_only_and_confirm_creates_only_result_folders(
         assert conn.execute("SELECT count(*) FROM dashboard_cases WHERE request_id=?", [request_id]).fetchone()[0] == 0
 
 
+def test_distribution_scene_can_be_selected_as_direct_result_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, wr, project_id, request_id = _bound_request(tmp_path, monkeypatch)
+    _register_synthetic_schema(root, wr, project_id, request_id, "DISTRIBUTION", keep_seed=True)
+    scene_relative = f"{wr}/Package_SchemaSeed/Drop/Run_01/Individual/Scene_01"
+    with connect() as conn:
+        preview = paths.prepare_folders(
+            conn, project_id, request_id, "DISTRIBUTION", scene_relative, [], False, "test-user",
+        )
+        assert preview["status"] == "EXISTS"
+        assert preview["result_relative_path"] == scene_relative
+        assert (root / scene_relative).is_dir()
+
+
+@pytest.mark.parametrize("scene_file", [None, "solver.INC"])
+def test_result_candidates_offer_confirmed_scene_without_results_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scene_file: str | None,
+) -> None:
+    root = tmp_path / "SPDM"
+    scene_path = "Project_0009_MODEL_pv1/WR_0009_SimType1/Working/Case/Drop/Run/Scene"
+    scene_dir = root.joinpath(*scene_path.split("/"))
+    scene_dir.mkdir(parents=True)
+    if scene_file:
+        (scene_dir / scene_file).write_text("synthetic solver input", encoding="utf-8")
+    monkeypatch.setattr(paths, "_has_owner_conflict", lambda *_args: False)
+    schema = {
+        "request_relative_path": "Project_0009_MODEL_pv1/WR_0009_SimType1/Working",
+        "scan": {"id": "synthetic-scan"}, "profile": {"id": "synthetic-profile", "revision": 1},
+        "nodes": [{"relative_path": scene_path, "parent_path": scene_path.rpartition("/")[0],
+                   "role_kind": "SCENE", "status": "CONFIRMED", "role_source": "PROFILE",
+                   "role_basis": "RULE", "target_id": "synthetic-scene", "name": "Scene"}],
+    }
+    candidates = result_registration_locations._result_candidates(
+        None, root, "synthetic-root", "synthetic-project", "synthetic-request", "DISTRIBUTION", schema,
+    )
+    assert any(item["relative_path"] == scene_path and item["exists"] is True for item in candidates)
+
+
+@pytest.mark.parametrize("child_status", ["EXCLUDED", "UNRESOLVED"])
+def test_unavailable_results_child_does_not_hide_confirmed_scene_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, child_status: str,
+) -> None:
+    root = tmp_path / "SPDM"
+    scene_path = "Project_0009_MODEL_pv1/WR_0009_SimType1/Working/Case/Drop/Run/Scene"
+    scene_dir = root.joinpath(*scene_path.split("/"))
+    scene_dir.mkdir(parents=True)
+    child_path = f"{scene_path}/results"
+    monkeypatch.setattr(paths, "_has_owner_conflict", lambda *_args: False)
+    schema = {
+        "request_relative_path": "Project_0009_MODEL_pv1/WR_0009_SimType1/Working",
+        "scan": {"id": "synthetic-scan"}, "profile": {"id": "synthetic-profile", "revision": 1},
+        "nodes": [
+            {"relative_path": scene_path, "parent_path": scene_path.rpartition("/")[0],
+             "role_kind": "SCENE", "status": "CONFIRMED", "role_source": "PROFILE",
+             "role_basis": "RULE", "target_id": "synthetic-scene", "name": "Scene"},
+            {"relative_path": child_path, "parent_path": scene_path, "role_kind": "RESULTS",
+             "status": child_status, "target_id": None, "name": "results"},
+        ],
+    }
+    candidates = result_registration_locations._result_candidates(
+        None, root, "synthetic-root", "synthetic-project", "synthetic-request", "DISTRIBUTION", schema,
+    )
+    candidate_paths = {item["relative_path"] for item in candidates}
+    assert scene_path in candidate_paths
+    assert child_path not in candidate_paths
+    assert f"{scene_path}/results" not in candidate_paths
+
+
 def test_new_case_uses_browsed_container_from_current_registered_schema(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -172,7 +241,6 @@ def test_new_case_uses_browsed_container_from_current_registered_schema(
         {"role_kind": "EXECUTION_RUN", "name": "85qn80h_ref_organized"},
         {"role_kind": "RUN_OPTION", "name": "INDIVIDUAL"},
         {"role_kind": "SCENE", "name": "Scene"},
-        {"role_kind": "RESULTS", "name": "results"},
     ]
     with connect() as conn:
         conn.execute(
@@ -182,7 +250,7 @@ def test_new_case_uses_browsed_container_from_current_registered_schema(
         preview = paths.prepare_folders(conn, project_id, request_id, "DISTRIBUTION", working,
                                         segments, False, "test-user")
         assert preview["status"] == "CONFIRM_REQUIRED"
-        assert preview["result_relative_path"] == f"{working}/Package_New/Drop/85qn80h_ref_organized/INDIVIDUAL/Scene/results"
+        assert preview["result_relative_path"] == f"{working}/Package_New/Drop/85qn80h_ref_organized/INDIVIDUAL/Scene"
         assert not root.joinpath(*preview["result_relative_path"].split("/")).exists()
         prepared = paths.prepare_folders(conn, project_id, request_id, "DISTRIBUTION", working,
                                          segments, True, "test-user")

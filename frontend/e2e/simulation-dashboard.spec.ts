@@ -5,6 +5,10 @@ import { expect, test, type Page, type Route } from '@playwright/test'
 import type { DashboardDistribution } from '../src/shared/api/simulationDashboard'
 import { loginWorkspace, openWorkspaceRoute } from './workspace-test-helpers'
 
+test.beforeEach(async ({ page }) => {
+  await page.route('**/api/dashboard/finalizations/status**', (route) => route.fulfill({ json: { latest: null, selected_case_latest: null, retryable_operations: [], unverified_records: 0 } }))
+})
+
 const CASE_ID = 'case-a'
 const CAPTURE_ID = 'capture-a'
 const MEMBER_ID = 'member-a'

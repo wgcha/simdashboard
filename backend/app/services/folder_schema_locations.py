@@ -8,6 +8,30 @@ from typing import Any
 from ..database_connection import ConnectionLike
 
 
+def final_branch_paths(schema: dict[str, Any]) -> list[str]:
+    """Find request-level Final branches, including legacy role overlays."""
+    request_path = str(schema.get("request_relative_path") or "").strip("/")
+    request_key = request_path.casefold()
+    roots = set(str(path) for path in schema.get("_final_paths", []) if path)
+    for node in schema.get("nodes", []):
+        path = str(node.get("relative_path") or "").strip("/")
+        parent = str(node.get("parent_path") or "").strip("/")
+        name = str(node.get("name") or PurePosixPath(path).name)
+        is_request_child = parent.casefold() == request_key
+        if path and (str(node.get("role_kind") or "").upper() == "FINAL" or
+                     (is_request_child and name.casefold() == "final")):
+            roots.add(path)
+    return sorted(roots, key=str.casefold)
+
+
+def is_final_branch(schema: dict[str, Any], relative_path: str) -> bool:
+    """Whether a relative path is inside a request's Final branch."""
+    from . import folder_schema_resolver as resolver
+
+    path = resolver._normal(str(relative_path))
+    return any(resolver._is_ancestor(root, path) for root in final_branch_paths(schema))
+
+
 def blocked_paths_for_case(schema: dict[str, Any], case_relative_path: str) -> list[str]:
     """Return excluded, unresolved, and conflicting subtrees within one Case."""
     from . import folder_schema_resolver as resolver
@@ -98,6 +122,8 @@ def resolve_request_locations(conn: ConnectionLike, project_id: str, request_id:
     fallback is deterministic for older schema rows without a target ID.
     Input and Results paths are attached to their nearest confirmed Scene with
     a source and priority that describes the shared Folder Schema relationship.
+    A Scene is also its own input/result location: SPDM commonly places the
+    solver files and result tables directly in that folder.
     """
     from . import folder_discovery, folder_discovery_environment
     from . import folder_schema_resolver as resolver
@@ -110,6 +136,17 @@ def resolve_request_locations(conn: ConnectionLike, project_id: str, request_id:
     if (str(schema.get("project_id")) != project_id or str(schema.get("request_id")) != request_id
             or str(schema.get("environment")) != environment):
         raise resolver.FolderSchemaError("FOLDER_SCHEMA_SCOPE_MISMATCH", "폴더 위치 문맥이 선택한 의뢰와 일치하지 않습니다.")
+    final_paths = final_branch_paths(schema)
+    if final_paths:
+        schema = {**schema, "_final_paths": final_paths,
+                  "nodes": [node for node in schema.get("nodes", [])
+                            if not any(resolver._is_ancestor(final, str(node.get("relative_path") or ""))
+                                       for final in final_paths)],
+                  "confirmed_roles": {
+                      key: value for key, value in (schema.get("confirmed_roles") or {}).items()
+                      if not any(resolver._is_ancestor(final, str(value.get("relative_path") or ""))
+                                 for final in final_paths)
+                  }}
     root_key = folder_discovery_environment.root_identity(folder_discovery.configured_root(conn))
     confirmed_nodes = [node for node in schema.get("nodes", [])
                        if node.get("status") in {"CONFIRMED", "LINKED"}]
@@ -141,6 +178,12 @@ def resolve_request_locations(conn: ConnectionLike, project_id: str, request_id:
             item["scene_id"] = target_id or location_id
             item["input_paths"] = []
             item["result_paths"] = []
+            item["input_paths"].append({"relative_path": relative_path, "source": "SCENE",
+                                        "priority": 0, "location_id": location_id,
+                                        "role_kind": "SCENE"})
+            item["result_paths"].append({"relative_path": relative_path, "source": "SCENE",
+                                         "priority": 0, "location_id": location_id,
+                                         "role_kind": "SCENE"})
             scenes.append(item)
         else:
             other_locations.append(item)

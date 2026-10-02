@@ -9,9 +9,11 @@ import { Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } fro
 import './SimulationDashboard.css'
 import { SimulationLocationMap } from './SimulationLocationMap'
 import { SimulationResultGraph } from './SimulationResultGraph'
+import { CaseFinalizationPanel } from './CaseFinalizationPanel'
 
 type Props = { projectId: string; requestId: string; canManageFolders?: boolean; canRefreshSchema?: boolean }
 type Tab = 'usage' | 'distribution'
+const SCHEMA_CONTEXT = '__folder_schema__'
 const EDGES = ['TOP', 'BOTTOM', 'LEFT', 'RIGHT'] as const
 const ROLES = ['CELL', 'CUSHION', 'BOX'] as const
 const COLORS = ['var(--color-chart-series-1)', 'var(--color-chart-series-2)', 'var(--color-chart-series-3)', 'var(--color-chart-series-4)']
@@ -21,7 +23,8 @@ function assetUrl(asset: DashboardAsset) { return asset.url || simulationDashboa
 function valueText(value?: DashboardValue | null) { return value?.value == null ? '값 없음' : `${value.value}${value.unit ? ` ${value.unit}` : ' · 단위 미확인'}` }
 function missingText(status?: string | null, reason?: string | null) { return reason || status || '자료 없음' }
 function SelectField({ label, value, choices, onChange, disabled = false }: { label: string; value: string; choices: DashboardChoice[]; onChange: (value: string) => void; disabled?: boolean }) {
-  return <label className="simulation-dashboard__select"><span>{label}</span><Select controlSize="sm" value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)}><option value="">선택</option>{Array.from(new Map(choices.map((choice) => [choice.id, choice])).values()).map((choice) => <option key={choice.id} value={choice.id} disabled={choice.disabled} title={choice.reason ?? undefined}>{choice.label}</option>)}</Select></label>
+  const unique = Array.from(new Map(choices.map((choice) => [choice.id, choice])).values())
+  return <label className="simulation-dashboard__select"><span>{label}</span><Select controlSize="sm" value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)}>{unique.some((choice) => !choice.id) ? null : <option value="">선택</option>}{unique.map((choice) => <option key={choice.id || 'folder-schema'} value={choice.id} disabled={choice.disabled} title={choice.reason ?? undefined}>{choice.label}</option>)}</Select></label>
 }
 function CompactChoice({ label, value, choices, onChange, disabled = false }: { label: string; value: string; choices: DashboardChoice[]; onChange: (value: string) => void; disabled?: boolean }) {
   const unique = Array.from(new Map(choices.map((choice) => [choice.id, choice])).values())
@@ -29,6 +32,9 @@ function CompactChoice({ label, value, choices, onChange, disabled = false }: { 
   return <SelectField label={label} value={value} choices={unique} onChange={onChange} disabled={disabled} />
 }
 function initialParam(name: string) { return typeof window === 'undefined' ? '' : new URLSearchParams(window.location.search).get(name) ?? '' }
+function currentHierarchyChoice(item: DashboardChoice, activeCaptureId: string) {
+  return item.capture_id == null || (activeCaptureId !== '' && item.capture_id === activeCaptureId)
+}
 
 export function SimulationDashboard({ projectId, requestId, canManageFolders = false, canRefreshSchema = false }: Props) {
   const [tab, setTab] = useState<Tab>(() => initialParam('result_environment') === 'DISTRIBUTION' ? 'distribution' : 'usage')
@@ -51,26 +57,30 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
   // Treat URL-derived selection as the initial scope. Only a later request or
   // environment change clears it; otherwise a shared deep link would be
   // erased before its first catalog response arrives.
-  const catalogScope = useRef(`${requestId}:${tab}`)
+  const catalogScope = useRef(`${projectId}:${requestId}:${tab}`)
 
   useEffect(() => {
-    const controller = new AbortController(); const key = `${requestId}:${tab}`; latestCatalogKey.current = key
+    const controller = new AbortController(); const key = `${projectId}:${requestId}:${tab}`; latestCatalogKey.current = key
     if (catalogScope.current !== key) {
       catalogScope.current = key; setCatalog(null); setCaseId(''); setCaptureId(''); setLoadCaseId(''); setRunId(''); setOptionId(''); setMode(''); setComponentId(''); setBasis('')
     }
     setCatalogError('')
-    simulationDashboardApi.catalog(requestId, tab === 'usage' ? 'USAGE' : 'DISTRIBUTION', controller.signal).then((next) => {
+    simulationDashboardApi.catalog(projectId, requestId, tab === 'usage' ? 'USAGE' : 'DISTRIBUTION', controller.signal).then((next) => {
       if (!controller.signal.aborted && latestCatalogKey.current === key) setCatalog(next)
     }).catch((reason) => { if (!controller.signal.aborted) setCatalogError(errorText(reason)) })
     return () => controller.abort()
-  }, [catalogRevision, requestId, tab])
+  }, [catalogRevision, projectId, requestId, tab])
 
   const options = useMemo(() => {
     if (!catalog || tab !== 'distribution') return []
+    const activeCaptureId = catalog.captures.some((item) => item.id === captureId) ? captureId : ''
     const explicit = catalog.run_options ?? []
-    if (explicit.length) return explicit.filter((item) => item.execution_run_id === runId && item.capture_id === captureId)
-    return catalog.modes.filter((item) => item.execution_run_id === runId && item.capture_id === captureId).map((item) => ({ ...item, run_option_id: item.id, option_status: item.id === 'UNKNOWN' ? 'UNRESOLVED' as const : 'PRESENT' as const }))
+    if (explicit.length) return explicit.filter((item) => item.execution_run_id === runId && currentHierarchyChoice(item, activeCaptureId))
+    return catalog.modes.filter((item) => item.execution_run_id === runId && currentHierarchyChoice(item, activeCaptureId)).map((item) => ({ ...item, run_option_id: item.id, option_status: item.id === 'UNKNOWN' ? 'UNRESOLVED' as const : 'PRESENT' as const }))
   }, [captureId, catalog, runId, tab])
+  const activeCaptureIdForChoices = catalog?.captures.some((item) => item.id === captureId) ? captureId : ''
+  const loadChoices = catalog?.load_cases.filter((item) => item.case_id === caseId && currentHierarchyChoice(item, activeCaptureIdForChoices)) ?? []
+  const runChoices = catalog?.execution_runs.filter((item) => item.case_id === caseId && item.load_case_id === loadCaseId && currentHierarchyChoice(item, activeCaptureIdForChoices)) ?? []
   useEffect(() => {
     if (!catalog) return
     const choose = (current: string, choices: DashboardChoice[], setter: (value: string) => void) => {
@@ -78,28 +88,31 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
       if (unique.some((item) => item.id === current)) return
       setter(unique.length === 1 ? unique[0].id : '')
     }
-    choose(caseId, catalog.cases, setCaseId)
+    const caseChoice = catalog.cases.find((item) => item.id === caseId || item.dashboard_case_id === caseId)
+    if (caseChoice && caseChoice.id !== caseId) setCaseId(caseChoice.id)
+    else choose(caseId, catalog.cases, setCaseId)
+    const activeCaptureId = catalog.captures.some((item) => item.id === captureId) ? captureId : ''
     if (caseId) {
-      const captures = Array.from(new Map(catalog.captures.filter((item) => item.case_id === caseId).map((item) => [item.id, item])).values())
-      if (!captures.some((item) => item.id === captureId)) setCaptureId(captures[0]?.id ?? '')
+      const captures = Array.from(new Map(catalog.captures.filter((item) => item.case_id === (caseChoice?.id ?? caseId)).map((item) => [item.id, item])).values())
+      if (captureId !== SCHEMA_CONTEXT && !captures.some((item) => item.id === captureId)) setCaptureId(captures[0]?.id ?? SCHEMA_CONTEXT)
     }
-    if (tab === 'distribution' && captureId) choose(loadCaseId, catalog.load_cases.filter((item) => item.case_id === caseId && item.capture_id === captureId), setLoadCaseId)
-    if (tab === 'distribution' && loadCaseId) choose(runId, catalog.execution_runs.filter((item) => item.case_id === caseId && item.load_case_id === loadCaseId && item.capture_id === captureId), setRunId)
+    if (tab === 'distribution' && caseId) choose(loadCaseId, catalog.load_cases.filter((item) => item.case_id === caseId && currentHierarchyChoice(item, activeCaptureId)), setLoadCaseId)
+    if (tab === 'distribution' && loadCaseId) choose(runId, catalog.execution_runs.filter((item) => item.case_id === caseId && item.load_case_id === loadCaseId && currentHierarchyChoice(item, activeCaptureId)), setRunId)
     if (tab === 'distribution' && runId) choose(optionId, options, setOptionId)
     const selectedOption = options.find((item) => item.id === optionId)
     if (selectedOption && mode !== selectedOption.mode) setMode(selectedOption.mode ?? selectedOption.id)
-    if (tab === 'distribution' && mode) choose(componentId, catalog.components.filter((item) => item.execution_run_id === runId && item.mode === mode && item.capture_id === captureId && (!item.run_option_id || item.run_option_id === optionId)), setComponentId)
+    if (tab === 'distribution' && mode) choose(componentId, catalog.components.filter((item) => item.execution_run_id === runId && item.mode === mode && item.capture_id === activeCaptureId && (!item.run_option_id || item.run_option_id === optionId)), setComponentId)
     if (tab === 'distribution') choose(basis, catalog.bases, (value) => setBasis(value as typeof basis))
   }, [basis, captureId, caseId, catalog, componentId, loadCaseId, mode, optionId, options, runId, tab])
   useEffect(() => {
     const url = new URL(window.location.href)
-    const values: Record<string, string> = { result_environment: tab === 'usage' ? 'USAGE' : 'DISTRIBUTION', case: caseId, capture: captureId, case_load: loadCaseId, case_run: runId, case_option: optionId }
+    const values: Record<string, string> = { result_environment: tab === 'usage' ? 'USAGE' : 'DISTRIBUTION', case: caseId, capture: captureId === SCHEMA_CONTEXT ? '' : captureId, case_load: loadCaseId, case_run: runId, case_option: optionId }
     Object.entries(values).forEach(([key, value]) => value ? url.searchParams.set(key, value) : url.searchParams.delete(key))
     window.history.replaceState(window.history.state, '', url)
   }, [captureId, caseId, loadCaseId, optionId, runId, tab])
   const folderHref = `/workspace/catalog/schemas?${new URLSearchParams({ project: projectId, request: requestId, result_environment: tab === 'usage' ? 'USAGE' : 'DISTRIBUTION' }).toString()}`
   const refreshSchema = async () => {
-    const refreshKey = `${requestId}:${tab}`
+    const refreshKey = `${projectId}:${requestId}:${tab}`
     setRefreshBusy(true); setRefreshNotice('')
     try {
       const result = await folderEnvironmentApi.refresh({ project_id: projectId, request_id: requestId, environment: tab === 'usage' ? 'USAGE' : 'DISTRIBUTION' })
@@ -111,25 +124,39 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
     finally { setRefreshBusy(false) }
   }
 
+  const selectedCapture = catalog?.captures.find((item) => item.id === captureId)
+  const selectedCase = catalog?.cases.find((item) => item.id === caseId)
+  const dashboardCaseId = selectedCapture?.dashboard_case_id ?? selectedCase?.dashboard_case_id ?? caseId
+  const hasCapturedCase = Boolean(selectedCase?.dashboard_case_id
+    || catalog?.captures.some((item) => item.case_id === caseId))
+  const schemaContextChoice: DashboardChoice = { id: SCHEMA_CONTEXT, label: catalog?.folder_schema?.status === 'AVAILABLE' ? '현재 확인된 폴더 구조' : 'Folder Schema 확인 불가' }
+  const activeCaptureId = selectedCapture?.id ?? ''
+  const sceneChoices = (catalog?.scenes ?? []).filter((item) => item.case_id === caseId
+    && (!item.load_case_id || item.load_case_id === loadCaseId)
+    && (!item.execution_run_id || item.execution_run_id === runId)
+    && (!item.run_option_id || item.run_option_id === optionId)
+    && currentHierarchyChoice(item, activeCaptureId)) ?? []
   const controls = catalog ? <div className="simulation-dashboard__controls">
+    <CaseFinalizationPanel projectId={projectId} requestId={requestId} environment={tab === 'usage' ? 'USAGE' : 'DISTRIBUTION'} caseId={dashboardCaseId} captureId={activeCaptureId} hasCapturedCase={hasCapturedCase} canFinalize={canRefreshSchema} />
     <CompactChoice label="해석 Case" value={caseId} choices={catalog.cases} onChange={(value) => { setCaseId(value); setCaptureId(''); setLoadCaseId(''); setRunId(''); setOptionId(''); setMode(''); setComponentId(''); setReferenceCaseId(''); setReferenceCaptureId('') }} />
-    <div className="simulation-dashboard__capture-pin"><span>수집 버전</span><b>{catalog.captures.find((item) => item.id === captureId)?.label ?? '선택 필요'}</b></div>
+    <CompactChoice label="조회 문맥" value={captureId} choices={[schemaContextChoice, ...catalog.captures.filter((item) => item.case_id === caseId)]} disabled={!caseId} onChange={(value) => { setCaptureId(value); setLoadCaseId(''); setRunId(''); setOptionId(''); setMode(''); setComponentId('') }} />
     {tab === 'distribution' ? <>
-      <CompactChoice label="하중경우" value={loadCaseId} choices={catalog.load_cases.filter((item) => item.case_id === caseId && item.capture_id === captureId)} disabled={!captureId} onChange={(value) => { setLoadCaseId(value); setRunId(''); setOptionId(''); setMode(''); setComponentId('') }} />
-      <CompactChoice label="Run Case" value={runId} choices={catalog.execution_runs.filter((item) => item.case_id === caseId && item.load_case_id === loadCaseId && item.capture_id === captureId)} disabled={!loadCaseId} onChange={(value) => { setRunId(value); setOptionId(''); setMode(''); setComponentId('') }} />
+      <CompactChoice label="하중경우" value={loadCaseId} choices={loadChoices} disabled={!caseId} onChange={(value) => { setLoadCaseId(value); setRunId(''); setOptionId(''); setMode(''); setComponentId('') }} />
+      <CompactChoice label="Run Case" value={runId} choices={runChoices} disabled={!loadCaseId} onChange={(value) => { setRunId(value); setOptionId(''); setMode(''); setComponentId('') }} />
       <CompactChoice label="Run Option" value={optionId} choices={options} disabled={!runId} onChange={(value) => { const choice = options.find((item) => item.id === value); setOptionId(value); setMode(choice?.mode ?? ''); setComponentId('') }} />
-      <CompactChoice label="Component" value={componentId} choices={catalog.components.filter((item) => (item.execution_run_id === runId || item.run_id === runId) && item.mode === mode && item.capture_id === captureId && (!item.run_option_id || item.run_option_id === optionId))} disabled={!mode} onChange={setComponentId} />
-      <CompactChoice label="Basis" value={basis} choices={catalog.bases} onChange={(value) => setBasis(value === 'DETAIL' ? 'DETAIL' : value === 'REPORTED_SUMMARY' ? 'REPORTED_SUMMARY' : '')} />
+      <CompactChoice label="Component" value={componentId} choices={catalog.components.filter((item) => (item.execution_run_id === runId || item.run_id === runId) && item.mode === mode && item.capture_id === activeCaptureId && (!item.run_option_id || item.run_option_id === optionId))} disabled={!activeCaptureId || !mode} onChange={setComponentId} />
+      <CompactChoice label="Basis" value={basis} choices={catalog.bases} disabled={!activeCaptureId} onChange={(value) => setBasis(value === 'DETAIL' ? 'DETAIL' : value === 'REPORTED_SUMMARY' ? 'REPORTED_SUMMARY' : '')} />
+      <div className="simulation-dashboard__scene-catalog" role="group" aria-label="선택 문맥 Scene 목록" style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}><span>Scene</span>{sceneChoices.length ? sceneChoices.map((item) => <span key={`${item.capture_id ?? 'schema'}:${item.id}`} title={item.relative_path ?? item.label}>{item.label} <small>{item.capture_id ? '선택 수집본' : '현재 폴더'}</small></span>) : <small>해당 문맥에 Scene 없음</small>}</div>
     </> : null}
-    <details className="simulation-dashboard__history"><summary>수집 이력{tab === 'usage' ? ' · 비교' : ''}</summary><SelectField label="수집 버전" value={captureId} choices={catalog.captures.filter((item) => item.case_id === caseId)} disabled={!caseId} onChange={(value) => setCaptureId(value)} />{tab === 'usage' ? <><SelectField label="Reference Case" value={referenceCaseId} choices={catalog.cases.filter((item) => item.id !== caseId)} onChange={(value) => { setReferenceCaseId(value); setReferenceCaptureId('') }} /><SelectField label="Reference Capture" value={referenceCaptureId} choices={catalog.captures.filter((item) => item.case_id === referenceCaseId)} disabled={!referenceCaseId} onChange={setReferenceCaptureId} /></> : null}</details>
+    <details className="simulation-dashboard__history"><summary>수집 이력{tab === 'usage' ? ' · 비교' : ''}</summary><SelectField label="수집 버전" value={captureId} choices={[schemaContextChoice, ...catalog.captures.filter((item) => item.case_id === caseId)]} disabled={!caseId} onChange={(value) => setCaptureId(value)} />{tab === 'usage' ? <><SelectField label="Reference Case" value={referenceCaseId} choices={catalog.cases.filter((item) => item.id !== caseId)} onChange={(value) => { setReferenceCaseId(value); setReferenceCaptureId('') }} /><SelectField label="Reference Capture" value={referenceCaptureId} choices={catalog.captures.filter((item) => item.case_id === referenceCaseId)} disabled={!referenceCaseId} onChange={setReferenceCaptureId} /></> : null}</details>
   </div> : null
 
   return <section className="simulation-dashboard" data-ui-density="v1" aria-label="SPDM 해석 결과 대시보드">
     <header className="simulation-dashboard__head"><div><span>RESULT EXPLORER</span><h2>해석 결과 대시보드</h2><p>표시값과 자산은 선택한 Case·Run·capture 문맥의 서버 결과만 사용합니다.</p></div><nav aria-label="결과 환경"><Button size="sm" className={tab === 'usage' ? 'active' : ''} onClick={() => setTab('usage')}>사용환경</Button><Button size="sm" className={tab === 'distribution' ? 'active' : ''} onClick={() => setTab('distribution')}>유통환경</Button></nav></header>
-    {catalogError ? <State message={catalogError} error /> : <>{controls}{catalog && !catalog.cases.length ? <State message="등록된 해석 Case가 없습니다. 폴더 연결·규칙에서 Case와 결과를 등록하세요." /> : null}</>}
+    {catalogError ? <State message={catalogError} error /> : <>{controls}{catalog?.folder_schema?.status === 'UNAVAILABLE' ? <State message={`현재 Folder Schema를 읽을 수 없습니다${catalog.folder_schema?.diagnostic ? ` · ${catalog.folder_schema.diagnostic.message}` : ''}. 아래 수집 이력은 저장된 capture 문맥으로 조회됩니다.`} error /> : null}{catalog && !catalog.cases.length ? <State message="확정된 Folder Schema Case나 수집 이력이 없습니다. 폴더 연결·규칙에서 구조를 확인하세요." /> : null}</>}
     <div className="simulation-dashboard__source-link"><span>새 결과는 폴더 연결에서 등록하고 읽습니다.</span>{canManageFolders ? <a href={folderHref}>폴더 연결·규칙 열기</a> : null}{canRefreshSchema ? <Button size="sm" disabled={refreshBusy || !projectId || !requestId} onClick={() => void refreshSchema()}>{refreshBusy ? '갱신 중…' : '저장소 Refresh'}</Button> : null}<Button size="sm" onClick={() => setCatalogRevision((value) => value + 1)}>결과 다시 읽기</Button></div>
     {refreshNotice && <div className="simulation-dashboard__state" role="status">{refreshNotice}</div>}
-    {tab === 'usage' ? <UsageArea key={`${caseId}:${captureId}:${referenceCaseId}:${referenceCaptureId}`} caseId={caseId} captureId={captureId} referenceCaseId={referenceCaseId} referenceCaptureId={referenceCaptureId} /> : <DistributionArea key={`${projectId}:${requestId}`} projectId={projectId} requestId={requestId} caseId={caseId} loadCaseId={loadCaseId} captureId={captureId} runId={runId} optionId={optionId} mode={mode} componentId={componentId} basis={basis} />}
+    {tab === 'usage' ? <UsageArea key={`${caseId}:${captureId}:${referenceCaseId}:${referenceCaptureId}`} caseId={dashboardCaseId} captureId={activeCaptureId} referenceCaseId={catalog?.cases.find((item) => item.id === referenceCaseId)?.dashboard_case_id ?? referenceCaseId} referenceCaptureId={referenceCaptureId} /> : <DistributionArea key={`${projectId}:${requestId}`} projectId={projectId} requestId={requestId} caseId={dashboardCaseId} loadCaseId={loadCaseId} captureId={activeCaptureId} runId={runId} optionId={optionId} mode={mode} componentId={componentId} basis={basis} hasCapturedRun={runChoices.some((item) => item.id === runId && item.capture_id === activeCaptureId)} hasCapturedOption={options.some((item) => item.id === optionId && item.capture_id === activeCaptureId)} emptyContextMessage={catalog?.folder_schema?.status === 'AVAILABLE' && selectedCase?.source === 'FOLDER_SCHEMA' ? (selectedCase.capture_count ? '현재 폴더 구조를 조회 중입니다. 결과를 보려면 수집 버전을 선택하세요.' : '폴더 구조는 확인됐지만 이 Case의 수집된 결과가 없습니다. 결과를 등록하고 읽어 주세요.') : '수집 버전을 선택하면 저장된 결과를 조회할 수 있습니다.'} />}
   </section>
 }
 
@@ -182,20 +209,23 @@ function UsageArea({ caseId, captureId, referenceCaseId, referenceCaptureId }: {
   </div>
 }
 
-function DistributionArea({ projectId, requestId, caseId, loadCaseId, captureId, runId, optionId, mode, componentId, basis }: { projectId: string; requestId: string; caseId: string; loadCaseId: string; captureId: string; runId: string; optionId: string; mode: string; componentId: string; basis: '' | 'REPORTED_SUMMARY' | 'DETAIL' }) {
+function DistributionArea({ projectId, requestId, caseId, loadCaseId, captureId, runId, optionId, mode, componentId, basis, hasCapturedRun, hasCapturedOption, emptyContextMessage }: { projectId: string; requestId: string; caseId: string; loadCaseId: string; captureId: string; runId: string; optionId: string; mode: string; componentId: string; basis: '' | 'REPORTED_SUMMARY' | 'DETAIL'; hasCapturedRun: boolean; hasCapturedOption: boolean; emptyContextMessage: string }) {
   const [edges, setEdges] = useState<string[]>([...EDGES]); const [lines, setLines] = useState<string[]>(['1', '2', '3', '4']); const [data, setData] = useState<DashboardDistribution | null>(null); const [error, setError] = useState(''); const [sceneId, setSceneId] = useState(''); const [memberId, setMemberId] = useState(''); const [section, setSection] = useState<'summary' | 'edges' | 'contours' | 'behavior'>('summary'); const [comparison, setComparison] = useState<DashboardComparisonMember[]>([]); const latestKey = useRef('')
   useEffect(() => { setComparison([]); setData(null); setSceneId(''); setMemberId('') }, [projectId, requestId])
   const contextKey = `${projectId}:${requestId}:${caseId}:${loadCaseId}:${runId}:${optionId}:${mode}:${captureId}:${componentId}:${basis}:${edges.join(',')}:${lines.join(',')}:${comparison.map((item) => `${item.simulation_case_id}/${item.load_case_id}/${item.execution_run_id}/${item.run_option_id}/${item.capture_id}/${item.mode}/${item.component_id}/${item.basis}`).join('|')}`
   useEffect(() => {
-    if (!runId || !captureId || !mode || !componentId || !basis) { setData(null); return }
+    if (!runId || !captureId || !hasCapturedRun || !hasCapturedOption || !mode || !componentId || !basis) { setData(null); return }
     const controller = new AbortController(); latestKey.current = contextKey; setError(''); setData(null); setSceneId(''); setMemberId('')
     const current = { simulation_case_id: caseId, load_case_id: loadCaseId, execution_run_id: runId, run_option_id: optionId, capture_id: captureId, mode, component_id: componentId, basis }
     const members = comparison.length ? [...comparison, ...(comparison.some((item) => item.simulation_case_id === caseId) ? [] : [current])] : []
     const request = members.length > 1 ? simulationDashboardApi.comparison(members, edges.join(','), lines.join(','), controller.signal) : simulationDashboardApi.distribution(runId, { capture_id: captureId, run_option_id: optionId, mode, component_id: componentId, basis, edge_keys: edges.join(','), line_indices: lines.join(',') }, controller.signal)
     request.then((next) => { if (!controller.signal.aborted && latestKey.current === contextKey) setData(next) }).catch((reason) => { if (!controller.signal.aborted && latestKey.current === contextKey) setError(errorText(reason)) })
     return () => controller.abort()
-  }, [basis, captureId, caseId, comparison, componentId, contextKey, edges, lines, loadCaseId, mode, optionId, projectId, requestId, runId])
-  if (!runId || !captureId || !mode || !componentId || !basis) return <State message="Run, mode, component, basis와 capture를 모두 선택하세요." />
+  }, [basis, captureId, caseId, comparison, componentId, contextKey, edges, hasCapturedOption, hasCapturedRun, lines, loadCaseId, mode, optionId, projectId, requestId, runId])
+  if (!captureId) return <State message={emptyContextMessage} />
+  if (runId && !hasCapturedRun) return <State message="이 Run의 수집 결과 없음" />
+  if (runId && hasCapturedRun && optionId && !hasCapturedOption) return <State message="이 Run Option의 수집 결과 없음" />
+  if (!runId || !mode || !componentId || !basis) return <State message="Run, mode, component, basis와 capture를 모두 선택하세요." />
   if (error) return <State message={error} error />
   if (!data) return <State message="유통환경 요약을 불러오는 중입니다." />
   const choose = (scene: string, member: string) => { setSceneId(scene); setMemberId(member) }

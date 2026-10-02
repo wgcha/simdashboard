@@ -6492,6 +6492,54 @@
             }
           }
         }
+      },
+      "delete": {
+        "tags": [
+          "folder-discovery-environments"
+        ],
+        "summary": "Archive",
+        "operationId": "archive_api_folder_discovery_environments_profiles__profile_id__delete",
+        "parameters": [
+          {
+            "name": "profile_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Profile Id"
+            }
+          },
+          {
+            "name": "expected_revision",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "title": "Expected Revision"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/folder-discovery/environments/profiles/from-legacy": {
@@ -8989,6 +9037,22 @@
               "type": "string",
               "title": "Environment"
             }
+          },
+          {
+            "name": "project_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project Id"
+            }
           }
         ],
         "responses": {
@@ -9473,6 +9537,161 @@
             "schema": {
               "type": "string",
               "title": "Asset Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dashboard/finalizations/preview": {
+      "post": {
+        "tags": [
+          "case-finalization"
+        ],
+        "summary": "Preview",
+        "operationId": "preview_api_dashboard_finalizations_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FinalizationInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dashboard/finalizations/confirm": {
+      "post": {
+        "tags": [
+          "case-finalization"
+        ],
+        "summary": "Confirm",
+        "operationId": "confirm_api_dashboard_finalizations_confirm_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dashboard/finalizations/status": {
+      "get": {
+        "tags": [
+          "case-finalization"
+        ],
+        "summary": "Status",
+        "operationId": "status_api_dashboard_finalizations_status_get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "request_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "title": "Request Id"
+            }
+          },
+          {
+            "name": "environment",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "enum": [
+                "USAGE",
+                "DISTRIBUTION"
+              ],
+              "type": "string",
+              "title": "Environment"
+            }
+          },
+          {
+            "name": "case_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "title": "Case Id"
             }
           }
         ],
@@ -12575,6 +12794,11 @@
               }
             ],
             "title": "Target Id"
+          },
+          "propagate_same_level": {
+            "type": "boolean",
+            "title": "Propagate Same Level",
+            "default": false
           }
         },
         "type": "object",
@@ -13534,6 +13758,57 @@
           "expected_revision"
         ],
         "title": "ConfirmBody"
+      },
+      "ConfirmInput": {
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Project Id"
+          },
+          "request_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Request Id"
+          },
+          "environment": {
+            "type": "string",
+            "enum": [
+              "USAGE",
+              "DISTRIBUTION"
+            ],
+            "title": "Environment"
+          },
+          "case_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Case Id"
+          },
+          "capture_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Capture Id"
+          },
+          "operation_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$",
+            "title": "Operation Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "project_id",
+          "request_id",
+          "environment",
+          "case_id",
+          "capture_id",
+          "operation_id"
+        ],
+        "title": "ConfirmInput"
       },
       "CreateDraftInput": {
         "properties": {
@@ -14710,6 +14985,51 @@
           "checksum"
         ],
         "title": "FileResponse"
+      },
+      "FinalizationInput": {
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Project Id"
+          },
+          "request_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Request Id"
+          },
+          "environment": {
+            "type": "string",
+            "enum": [
+              "USAGE",
+              "DISTRIBUTION"
+            ],
+            "title": "Environment"
+          },
+          "case_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Case Id"
+          },
+          "capture_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Capture Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "project_id",
+          "request_id",
+          "environment",
+          "case_id",
+          "capture_id"
+        ],
+        "title": "FinalizationInput"
       },
       "FolderApply": {
         "properties": {

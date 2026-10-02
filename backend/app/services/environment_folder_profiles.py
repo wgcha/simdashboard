@@ -9,8 +9,8 @@ from ..database_connection import rows
 from . import folder_discovery as legacy
 
 ROLE_SETS = {
-    "USAGE": {"PROJECT", "REQUEST", "SIMULATION_CASE", "EVALUATION", "RESULTS", "INPUT", "CONTAINER"},
-    "DISTRIBUTION": {"PROJECT", "REQUEST", "SIMULATION_CASE", "LOAD_CASE", "EXECUTION_RUN", "RUN_OPTION", "SCENE", "RESULTS", "INPUT", "CONTAINER"},
+    "USAGE": {"PROJECT", "REQUEST", "WORKING", "FINAL", "SIMULATION_CASE", "EVALUATION", "RESULTS", "INPUT", "CONTAINER"},
+    "DISTRIBUTION": {"PROJECT", "REQUEST", "WORKING", "FINAL", "SIMULATION_CASE", "LOAD_CASE", "EXECUTION_RUN", "RUN_OPTION", "SCENE", "RESULTS", "INPUT", "CONTAINER"},
 }
 
 
@@ -32,18 +32,25 @@ def validate_rules(environment, definition):
         mode = rule.get("match_mode", "glob")
         if not isinstance(pattern, str) or len(pattern) > 256 or any(ord(c) < 32 for c in pattern):
             raise ValueError("폴더 이름 규칙은 제어문자 없는 256자 이내여야 합니다.")
-        if mode not in {"glob", "contains"}:
+        if mode not in {"glob", "contains", "level"}:
             raise ValueError("규칙 일치 방식을 확인하세요.")
         depth = rule.get("depth")
         if depth is not None and (type(depth) is not int or not 0 <= depth <= 64):
             raise ValueError("깊이는 0부터 64까지 지정하세요.")
+        if mode == "level" and depth is None:
+            raise ValueError("Working 기준 깊이를 지정하세요.")
         item = {"role_kind": rule["role_kind"], "pattern": pattern, "match_mode": mode}
         if parent:
             item["parent_role"] = parent
         if depth is not None:
             item["depth"] = depth
         normalized.append(item)
-    result = {"roles": sorted(allowed), "rules": normalized}
+    result = {"roles": sorted(allowed), "rules": normalized, "level_base": "WORKING"}
+    description = definition.get("description", "")
+    if not isinstance(description, str) or len(description) > 512 or any(ord(c) < 32 and c not in "\t\n\r" for c in description):
+        raise ValueError("규칙 설명은 512자 이내여야 합니다.")
+    if description.strip():
+        result["description"] = description.strip()
     sources = definition.get("usage_sources")
     if sources is not None:
         if environment != "USAGE" or not isinstance(sources, dict):
@@ -65,19 +72,27 @@ def validate_rules(environment, definition):
     return result
 
 
-def resolve_role(name, depth, parent_role, rules, environment):
+def resolve_role(name, depth, parent_role, rules, environment, *, working_level=None):
     """Return (role, matched, conflict); never silently choose overlapping roles."""
     definition = validate_rules(environment, rules)
-    matches = []
+    level_matches, named_matches = [], []
     for rule in definition["rules"]:
-        if rule.get("parent_role") and rule["parent_role"] != (parent_role or "ROOT"):
-            continue
-        if rule.get("depth") is not None and rule["depth"] != depth:
-            continue
-        value, pattern = name.casefold(), rule["pattern"].casefold()
-        match = pattern in value if rule["match_mode"] == "contains" else fnmatchcase(value, pattern)
+        if rule["match_mode"] == "level":
+            match = working_level is not None and rule.get("depth") == working_level
+            destination = level_matches
+        else:
+            if rule.get("parent_role") and rule["parent_role"] != (parent_role or "ROOT"):
+                continue
+            if rule.get("depth") is not None and rule["depth"] != depth:
+                continue
+            value, pattern = name.casefold(), rule["pattern"].casefold()
+            match = pattern in value if rule["match_mode"] == "contains" else fnmatchcase(value, pattern)
+            destination = named_matches
         if match:
-            matches.append(rule["role_kind"])
+            destination.append(rule["role_kind"])
+    # A specific name rule is the explicit per-folder exception to the
+    # Working-relative structural default. Multiple name matches stay a conflict.
+    matches = named_matches or level_matches
     kinds = set(matches)
     return (next(iter(kinds)) if len(kinds) == 1 else None, bool(matches), len(kinds) > 1)
 
@@ -92,11 +107,16 @@ def save_profile(conn, *, environment, name, rules, profile_id=None, expected_re
         legacy.fail("ENVIRONMENT_PROFILE_NAME_CONFLICT", "같은 환경에 동일한 규칙 이름이 있습니다.")
     encoded = json.dumps(definition, ensure_ascii=False)
     if profile_id:
-        current = conn.execute("SELECT environment,revision FROM folder_environment_profiles WHERE id=?", [profile_id]).fetchone()
+        lock_clause = " FOR UPDATE" if getattr(conn, "backend", "") == "postgresql" else ""
+        current = conn.execute("SELECT environment,revision,rules_json FROM folder_environment_profiles WHERE id=?" + lock_clause, [profile_id]).fetchone()
         if not current:
             legacy.fail("ENVIRONMENT_PROFILE_NOT_FOUND", "저장 규칙을 찾을 수 없습니다.", 404)
         if current[0] != environment:
             raise ValueError("저장된 규칙의 환경은 바꿀 수 없습니다. 다른 환경 규칙으로 새로 저장하세요.")
+        stored_rules = json.loads(current[2]) if isinstance(current[2], str) else current[2]
+        metadata = stored_rules.get("profile_metadata", {}) if isinstance(stored_rules, dict) else {}
+        if isinstance(metadata, dict) and metadata.get("archived"):
+            legacy.fail("ENVIRONMENT_PROFILE_ARCHIVED", "보관된 규칙은 편집할 수 없습니다. 복사해 새 규칙으로 저장하세요.")
         if current[1] != expected_revision:
             legacy.fail("ENVIRONMENT_PROFILE_REVISION_CONFLICT", "규칙이 변경되었습니다. 다시 불러오세요.")
         updated = conn.execute("""UPDATE folder_environment_profiles SET name=?,rules_json=?,revision=revision+1,
@@ -145,3 +165,23 @@ def history(conn, limit=50, offset=0):
     count = conn.execute("SELECT count(*) " + join, [root_key]).fetchone()[0]
     found = conn.execute("SELECT r.id " + join + " ORDER BY r.created_at DESC,r.id LIMIT ? OFFSET ?", [root_key, limit, offset]).fetchall()
     return {"total": count, "items": [registration(conn, str(row[0])) for row in found]}
+
+
+def archive_profile(conn, profile_id, expected_revision):
+    lock_clause = " FOR UPDATE" if getattr(conn, "backend", "") == "postgresql" else ""
+    row = conn.execute("SELECT environment,name,revision,rules_json,updated_at FROM folder_environment_profiles WHERE id=?" + lock_clause, [profile_id]).fetchone()
+    if not row:
+        legacy.fail("ENVIRONMENT_PROFILE_NOT_FOUND", "저장 규칙을 찾을 수 없습니다.", 404)
+    if int(row[2]) != expected_revision:
+        legacy.fail("ENVIRONMENT_PROFILE_REVISION_CONFLICT", "규칙이 변경되었습니다. 다시 불러오세요.")
+    definition = json.loads(row[3]) if isinstance(row[3], str) else row[3]
+    metadata = definition.get("profile_metadata") if isinstance(definition, dict) else None
+    if isinstance(metadata, dict) and metadata.get("archived"):
+        legacy.fail("ENVIRONMENT_PROFILE_ALREADY_ARCHIVED", "이미 보관된 규칙입니다.")
+    definition = dict(definition)
+    definition["profile_metadata"] = {"archived": True, "archived_revision": expected_revision}
+    changed = conn.execute("UPDATE folder_environment_profiles SET rules_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND revision=? AND updated_at=? RETURNING id",
+                           [json.dumps(definition, ensure_ascii=False), profile_id, expected_revision, row[4]]).fetchone()
+    if not changed:
+        legacy.fail("ENVIRONMENT_PROFILE_REVISION_CONFLICT", "규칙이 변경되었습니다. 다시 불러오세요.")
+    return {"id": profile_id, "environment": str(row[0]), "name": str(row[1]), "revision": expected_revision, "archived": True}

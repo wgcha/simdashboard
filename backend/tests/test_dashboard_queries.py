@@ -150,6 +150,98 @@ def test_legacy_capture_labels_do_not_mutate_payload():
     assert cap == original
 
 
+def test_catalog_uses_confirmed_schema_for_uncaptured_choices_and_keeps_capture_scope(monkeypatch):
+    from types import SimpleNamespace
+    from pathlib import Path
+    from app.services import dashboard_capture, folder_discovery, folder_discovery_environment, folder_schema_resolver
+
+    request_path = "75R9J_PV/request [WR-0001]_[유통_환경]/Working"
+    case_a = f"{request_path}/Case Alpha"
+    case_b = f"{request_path}/Case Beta"
+    load_path = f"{case_a}/Drop"
+    run_path = f"{load_path}/Run A"
+    option_path = f"{run_path}/INDIVIDUAL"
+    scene_path = f"{option_path}/2_Face &3_Face"
+    hierarchy = {
+        "simulation_case": {"target_id": "schema-case-a", "relative_path": case_a},
+        "load_case": {"target_id": "schema-load-a", "relative_path": load_path},
+        "execution_run": {"target_id": "schema-run-a", "relative_path": run_path},
+    }
+    nodes = [
+        {"role_kind": "SIMULATION_CASE", "status": "CONFIRMED", "target_id": "schema-case-a", "name": "Case Alpha", "relative_path": case_a, "hierarchy": {}},
+        {"role_kind": "SIMULATION_CASE", "status": "CONFIRMED", "target_id": "schema-case-b", "name": "Case Beta", "relative_path": case_b, "hierarchy": {}},
+        {"role_kind": "LOAD_CASE", "status": "CONFIRMED", "target_id": "schema-load-a", "name": "Drop", "relative_path": load_path, "hierarchy": {"simulation_case": hierarchy["simulation_case"]}},
+        {"role_kind": "EXECUTION_RUN", "status": "CONFIRMED", "target_id": "schema-run-a", "name": "Run A", "relative_path": run_path, "hierarchy": {"simulation_case": hierarchy["simulation_case"], "load_case": hierarchy["load_case"]}},
+        {"role_kind": "RUN_OPTION", "status": "CONFIRMED", "target_id": "target-option-a", "run_option_id": "semantic-option-a", "option_status": "PRESENT", "name": "INDIVIDUAL", "relative_path": option_path, "hierarchy": hierarchy},
+    ]
+    locations = SimpleNamespace(schema={"nodes": nodes, "scan": {"id": "scan-1"}}, locations=(
+        {
+            "role_kind": "SCENE", "scene_id": "schema-scene-a", "id": "schema-scene-a",
+            "label": "2_Face &3_Face", "relative_path": scene_path,
+            "hierarchy": {**hierarchy, "run_option": {"target_id": "target-option-a", "relative_path": option_path}},
+        },
+        {
+            "role_kind": "SCENE", "scene_id": "schema-scene-no-option", "id": "schema-scene-no-option",
+            "label": "Scene without option", "relative_path": f"{run_path}/Scene without option",
+            "hierarchy": hierarchy,
+        },
+    ))
+    monkeypatch.setattr(folder_schema_resolver, "resolve_request_locations", lambda *_args: locations)
+    monkeypatch.setattr(folder_discovery, "configured_root", lambda _conn: Path("/synthetic-spdm"))
+    monkeypatch.setattr(folder_discovery_environment, "root_identity", lambda _root: "root-synthetic")
+    monkeypatch.setattr(dashboard_capture, "_root_id", lambda _root: "storage-root-1")
+
+    class Connection:
+        def execute(self, statement, _parameters=None):
+            if "FROM analysis_requests" in statement:
+                return SimpleNamespace(fetchone=lambda: ("project-1",))
+            payload = {"runs": [{"id": "run-old", "load_case_id": "load-old", "load_case_name": "Old Drop",
+                "source_name": "Old Run", "mode": "INDIVIDUAL", "scenes": [{"id": "scene-old", "source_name": "Old Scene", "observations": [], "media": []}]}]}
+            row = ("dashboard-case-a", "Case Alpha", "storage-root-1", case_a, "capture-a", "2026-10-01", payload)
+            empty_capture = ("dashboard-case-a", "Case Alpha", "storage-root-1", case_a, "capture-empty", "2026-10-02", {"runs": []})
+            return SimpleNamespace(fetchall=lambda: [row, empty_capture])
+
+    result = queries.catalog(Connection(), "request-1", "DISTRIBUTION")
+    assert result["folder_schema"] == {"status": "AVAILABLE", "diagnostic": None, "snapshot_id": "scan-1"}
+    cases = {item["id"]: item for item in result["cases"]}
+    assert set(cases) == {"schema-case-a", "schema-case-b"}
+    assert cases["schema-case-a"]["dashboard_case_id"] == "dashboard-case-a"
+    assert cases["schema-case-a"]["capture_count"] == 2
+    assert cases["schema-case-b"]["match_status"] == "UNCAPTURED"
+    assert result["captures"][0]["case_id"] == "schema-case-a"
+    assert result["captures"][0]["dashboard_case_id"] == "dashboard-case-a"
+    assert any(item["id"] == "capture-empty" for item in result["captures"])
+    assert any(item["id"] == "schema-load-a" and item.get("capture_id") is None for item in result["load_cases"])
+    assert any(item["id"] == "load-old" and item["capture_id"] == "capture-a" for item in result["load_cases"])
+    assert any(item["id"] == "run-old" and item["capture_id"] == "capture-a" for item in result["execution_runs"])
+    schema_scene = next(item for item in result["scenes"] if item["label"] == "2_Face &3_Face")
+    schema_option = next(item for item in result["run_options"] if item["execution_run_id"] == "schema-run-a")
+    assert schema_scene["match_status"] == "UNCAPTURED"
+    assert schema_scene["capture_id"] is None
+    assert schema_scene["case_id"] == "schema-case-a"
+    assert schema_scene["load_case_id"] == "schema-load-a"
+    assert schema_scene["execution_run_id"] == "schema-run-a"
+    assert schema_option["id"] == "semantic-option-a"
+    assert schema_scene["run_option_id"] == schema_option["id"]
+    scene_without_option = next(item for item in result["scenes"] if item["id"] == "schema-scene-no-option")
+    absent_option = next(item for item in result["run_options"] if item.get("option_status") == "ABSENT")
+    assert scene_without_option["run_option_id"] == absent_option["id"]
+    assert any(item["id"] == "scene-old" and item["capture_id"] == "capture-a" for item in result["scenes"])
+
+
+def test_final_branch_detection_uses_request_direct_path_even_for_legacy_roles():
+    from app.services.folder_schema_locations import final_branch_paths, is_final_branch
+
+    schema = {"request_relative_path": "Project/WR/Request", "nodes": [
+        {"relative_path": "Project/WR/Request/Working", "parent_path": "Project/WR/Request", "name": "Working", "role_kind": None},
+        {"relative_path": "Project/WR/Request/Final", "parent_path": "Project/WR/Request", "name": "Final", "role_kind": None},
+        {"relative_path": "Project/WR/Request/Final/Case A", "parent_path": "Project/WR/Request/Final", "name": "Case A", "role_kind": "SIMULATION_CASE"},
+    ]}
+    assert final_branch_paths(schema) == ["Project/WR/Request/Final"]
+    assert is_final_branch(schema, "Project/WR/Request/Final/Case A")
+    assert not is_final_branch(schema, "Project/WR/Request/Working/Case A")
+
+
 def test_usage_exact_nested_segments_and_strict_reviewed_values():
     entry = {"status": "READY", "values": {"a.b": {"OK/NG": "NG", "angle (deg)": -1.18}},
         "metric_paths": {"Slope Angle (deg)": ["a.b", "angle (deg)"], "OK/NG": ["a.b", "OK/NG"]}}

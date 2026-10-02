@@ -69,6 +69,16 @@ def _relative(value: str, *, allow_empty: bool = False) -> str:
     return path.as_posix()
 
 
+def _is_final_branch(request_path: str, relative_path: str) -> bool:
+    request_parts = PurePosixPath(request_path).parts
+    path_parts = PurePosixPath(relative_path).parts
+    if len(path_parts) <= len(request_parts) or tuple(
+        part.casefold() for part in path_parts[:len(request_parts)]
+    ) != tuple(part.casefold() for part in request_parts):
+        return False
+    return path_parts[len(request_parts)].casefold() == "final"
+
+
 def _scope(conn: ConnectionLike, project_id: str, request_id: str, environment: str) -> dict[str, Any]:
     environment = _env(environment)
     row = conn.execute(
@@ -77,27 +87,41 @@ def _scope(conn: ConnectionLike, project_id: str, request_id: str, environment: 
     ).fetchone()
     if not row:
         raise ResultRegistrationError("RESULT_CONTEXT_INVALID", "기존 프로젝트와 의뢰의 연결을 확인할 수 없습니다.")
-    bindings = rows(conn.execute(
+    root_key = folder_discovery_environment.root_identity(_root(conn)[0])
+    registered = rows(conn.execute(
+        "SELECT r.id AS registration_id,g.relative_path,g.role_kind,g.target_id FROM folder_environment_registry g "
+        "JOIN folder_environment_registrations r ON r.id=g.registration_id "
+        "WHERE g.root_key=? AND r.project_id=? AND r.request_id=? AND r.environment=? "
+        "AND g.role_kind IN ('PROJECT','REQUEST')",
+        [root_key, project_id, request_id, environment],
+    ))
+    registrations: dict[str, list[dict[str, Any]]] = {}
+    for item in registered:
+        registrations.setdefault(str(item["registration_id"]), []).append(item)
+    exact_pairs: set[tuple[str, str]] = set()
+    all_pairs: set[tuple[str, str]] = set()
+    for entries in registrations.values():
+        project_paths = {str(item["relative_path"]) for item in entries if item["role_kind"] == "PROJECT"}
+        request_rows = [item for item in entries if item["role_kind"] == "REQUEST"]
+        for project_path in project_paths:
+            for request_row in request_rows:
+                pair = (project_path, str(request_row["relative_path"]))
+                all_pairs.add(pair)
+                if str(request_row.get("target_id") or "") == request_id:
+                    exact_pairs.add(pair)
+    selected_pairs = exact_pairs if exact_pairs else all_pairs
+    if len(selected_pairs) == 1:
+        project_folder, request_folder = next(iter(selected_pairs))
+        bindings = [{"project_folder": project_folder, "request_folder": request_folder}]
+    elif selected_pairs:
+        raise ResultRegistrationError("SPDM_REQUEST_BINDING_AMBIGUOUS", "확인된 SPDM 프로젝트·의뢰 폴더 연결이 여러 개입니다.")
+    else:
+        bindings = rows(conn.execute(
         "SELECT p.project_folder, q.request_folder FROM spdm_storage_project_parents p "
         "JOIN spdm_storage_request_parents q ON q.project_folder=p.project_folder AND q.project_id=p.project_id "
         "WHERE p.project_id=? AND q.project_id=? AND q.request_id=?",
         [project_id, project_id, request_id],
-    ))
-    # Environment registration is a confirmed, owner-scoped source of exact
-    # Project and Request paths. Prefer it over legacy leaf bindings: a legacy
-    # analysis path cannot establish where an arbitrarily nested WR begins.
-    if not bindings:
-        registered = rows(conn.execute(
-            "SELECT g.relative_path,g.role_kind FROM folder_environment_registry g "
-            "JOIN folder_environment_registrations r ON r.id=g.registration_id "
-            "WHERE g.root_key=? AND r.project_id=? AND r.request_id=? "
-            "AND g.role_kind IN ('PROJECT','REQUEST')",
-            [folder_discovery_environment.root_identity(_root(conn)[0]), project_id, request_id],
         ))
-        project_paths = {str(item["relative_path"]) for item in registered if item["role_kind"] == "PROJECT"}
-        request_paths = {str(item["relative_path"]) for item in registered if item["role_kind"] == "REQUEST"}
-        if len(project_paths) == 1 and len(request_paths) == 1:
-            bindings = [{"project_folder": next(iter(project_paths)), "request_folder": next(iter(request_paths))}]
     # A legacy load-case leaf alone cannot safely identify Project/WR for a
     # nested folder schema. Require an explicit parent binding or a confirmed
     # owner-scoped PROJECT + REQUEST registry instead of guessing first segments.
@@ -409,7 +433,11 @@ def _validate_registered_schema_parent(conn: ConnectionLike, root: Path, root_ke
             # ambiguous scan suggestion or deliberately assign a different
             # role. Raw scan labels only identify unresolved/excluded paths
             # when the confirmed preview contains no row for them.
-            if ((node.get("status") == "UNRESOLVED" or saved_role) and not confirmed_row) or saved_role == "EXCLUDE":
+            # Working is a structural request branch, so it is confirmed by
+            # node_states even though it has no semantic result row. Excluded
+            # states still fail above and saved EXCLUDE roles remain blocked.
+            structural_branch = saved_role == "WORKING" and confirmed_state.get("status") in {"CONFIRMED", "CONTAINER"}
+            if ((node.get("status") == "UNRESOLVED" or (saved_role and not structural_branch)) and not confirmed_row) or saved_role == "EXCLUDE":
                 conflicting_match = True
                 chain_valid = False
                 break
@@ -677,6 +705,8 @@ def targets(conn: ConnectionLike, environment: str, principal_projects: set[str]
                     assignment.get("status") not in {"CONFIRMED", "LINKED"}):
                 continue
             relative = str(assignment.get("relative_path") or schema_node.get("relative_path") or "")
+            if _is_final_branch(wr, relative):
+                continue
             parts = PurePosixPath(relative).parts
             if (len(parts) <= len(request_parts) or
                     tuple(part.casefold() for part in parts[:len(request_parts)]) !=
@@ -883,16 +913,18 @@ def _preview_target(conn: ConnectionLike, project_id: str, request_id: str, envi
     scope = _scope(conn, project_id, request_id, environment)
     root, root_id, root_key = _root(conn)
     parent_relative_path = _relative(parent_relative_path)
+    if _is_final_branch(scope["request_relative_path"], parent_relative_path):
+        raise ResultRegistrationError("RESULT_FINAL_BRANCH_BLOCKED", "Final 폴더는 일반 결과 등록 위치로 사용할 수 없습니다.")
     parent_context, parent_nodes = _trace_path(conn, root, root_id, root_key, scope, parent_relative_path)
     wr_parts = PurePosixPath(scope["request_relative_path"]).parts
     parent_parts = PurePosixPath(parent_relative_path).parts
     if len(parent_parts) < len(wr_parts) or tuple(p.casefold() for p in parent_parts[:len(wr_parts)]) != tuple(p.casefold() for p in wr_parts):
         raise ResultRegistrationError("RESULT_PATH_OUTSIDE_REQUEST", "선택 경로가 연결된 의뢰 폴더 밖에 있습니다.")
-    if len(segments) < 1 or len(segments) > 8:
-        raise ResultRegistrationError("RESULT_HIERARCHY_INVALID", "결과 경로 계층은 1~8개 폴더로 지정하세요.")
     semantic_roles = {"SIMULATION_CASE", "EVALUATION", "LOAD_CASE", "EXECUTION_RUN", "RUN_OPTION", "SCENE", "RESULTS"}
     parent_role = next((str(node["role_kind"]) for node in reversed(parent_nodes)
                        if node["role_kind"] in semantic_roles), "REQUEST")
+    if len(segments) > 8 or (not segments and not (scope["environment"] == "DISTRIBUTION" and parent_role == "SCENE")):
+        raise ResultRegistrationError("RESULT_HIERARCHY_INVALID", "결과 경로 계층은 1~8개 폴더로 지정하세요.")
     if any(str(segment.get("role_kind") or "") == "SIMULATION_CASE" for segment in segments):
         _validate_registered_schema_parent(conn, root, root_key, scope, parent_relative_path)
     current_context = parent_context
@@ -956,9 +988,12 @@ def _preview_target(conn: ConnectionLike, project_id: str, request_id: str, envi
                          "exists": _path_exists(root, actual_path)})
     if not current_context.get("simulation_case"):
         raise ResultRegistrationError("RESULT_CASE_REQUIRED", "결과 폴더 계층에 Simulation Case가 필요합니다.")
-    expected_leaf = "EVALUATION" if scope["environment"] == "USAGE" else "SCENE"
-    if parent_role != "RESULTS" or (len(all_roles) < 2 or all_roles[-2]["role_kind"] != expected_leaf):
-        raise ResultRegistrationError("RESULT_HIERARCHY_INVALID", "결과 폴더는 평가 항목 또는 Scene 아래의 results여야 합니다.")
+    direct_scene_leaf = (scope["environment"] == "DISTRIBUTION" and parent_role == "SCENE"
+                         and all_roles and all_roles[-1]["role_kind"] == "SCENE")
+    if not direct_scene_leaf:
+        expected_leaf = "EVALUATION" if scope["environment"] == "USAGE" else "SCENE"
+        if parent_role != "RESULTS" or (len(all_roles) < 2 or all_roles[-2]["role_kind"] != expected_leaf):
+            raise ResultRegistrationError("RESULT_HIERARCHY_INVALID", "결과 폴더는 평가 항목 또는 Scene 아래의 results여야 합니다.")
     result_relative_path = current_path
     case_relative_path = current_context["simulation_case"]["relative_path"]
     return {"scope": scope, "root": root, "root_id": root_id, "root_key": root_key,

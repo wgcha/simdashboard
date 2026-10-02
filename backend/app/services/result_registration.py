@@ -142,6 +142,12 @@ def _current_target(
         raise ResultRegistrationError("RESULT_ROOT_CHANGED", "등록 시작 뒤 SPDM 저장소가 변경되었습니다. 다시 검수하세요.")
     case_relative_path = paths._relative(case_relative_path)
     result_relative_path = paths._relative(result_relative_path)
+    if (paths._is_final_branch(str(scope.get("request_relative_path") or ""), case_relative_path)
+            or paths._is_final_branch(str(scope.get("request_relative_path") or ""), result_relative_path)
+            or (schema is not None and (
+                result_registration_locations.folder_schema_locations.is_final_branch(schema, case_relative_path)
+                or result_registration_locations.folder_schema_locations.is_final_branch(schema, result_relative_path)))):
+        raise ResultRegistrationError("RESULT_FINAL_BRANCH_BLOCKED", "Final 폴더는 일반 결과 등록 위치로 사용할 수 없습니다.")
     case_prefix = case_relative_path.rstrip("/") + "/"
     if not result_relative_path.casefold().startswith(case_prefix.casefold()):
         raise ResultRegistrationError("RESULT_PATH_OUTSIDE_CASE", "결과 경로가 선택한 Simulation Case 안에 없습니다.")

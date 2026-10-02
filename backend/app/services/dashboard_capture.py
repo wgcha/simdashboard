@@ -318,14 +318,19 @@ def _assert_schema_allows_approved_files(payload: dict[str, Any], approved_files
         return
     allowed = [item for item in locations if isinstance(item, dict)
                and item.get("status") in {"CONFIRMED", "LINKED"}
-               and item.get("role_kind") == "RESULTS"]
+               and item.get("role_kind") in {"RESULTS", "SCENE"}]
     if not allowed:
         raise DashboardCaptureError("DASHBOARD_SCHEMA_LOCATION_INVALID", "승인 파일에 연결된 Folder Schema Results 위치가 없습니다.")
-    allowed_paths = [str(item.get("relative_path") or "").casefold().rstrip("/") + "/" for item in allowed]
+    allowed_results = [str(item.get("relative_path") or "").casefold().rstrip("/") + "/"
+                       for item in allowed if item.get("role_kind") == "RESULTS"]
+    allowed_scenes = {str(item.get("relative_path") or "").casefold().rstrip("/")
+                      for item in allowed if item.get("role_kind") == "SCENE"}
     for path, _content, _media_type in approved_files:
         normalized = _relative(path).casefold()
+        parent = PurePosixPath(normalized).parent.as_posix()
         if (_schema_blocks_file(payload, path)
-                or not any(normalized.startswith(prefix) for prefix in allowed_paths)):
+                or not any(normalized.startswith(prefix) for prefix in allowed_results)
+                and parent not in allowed_scenes):
             raise DashboardCaptureError("DASHBOARD_SCHEMA_LOCATION_INVALID", "승인 파일이 확인된 Folder Schema Results 위치 밖에 있습니다.")
 
 

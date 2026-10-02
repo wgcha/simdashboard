@@ -3,12 +3,19 @@
 - 요구사항: GitHub [#43](https://github.com/wgcha/simdashboard/issues/43)
 - 적용 범위: 의뢰별 사용환경·유통환경 Folder Schema, Case 결과, 유통환경 소재·물성, 결과 등록
 - 배포 기준: [Windows 배포 정책](../windows-deployment-policy.md)
+- 2026-10-02 승인된 Working/Final·계층 규칙 보완은 [구현 계획](../plans/folder-schema-working-final-implementation.md)에서 단계별 검증 상태를 관리한다.
 
 ## 위치 정본
 
 `folder_schema_locations.resolve_request_locations()`는 선택한 프로젝트·의뢰·환경의 확인된 Folder Schema snapshot에서 위치를 투영한다. 유통환경의 기준 항목은 `SCENE`이다. Scene ID는 확인된 `target_id`를 우선하고, 없는 과거 행에서만 경로 기반 stable ID를 사용한다. Case 결과와 소재 목록은 이 ID·상대 경로·계층을 공유한다. 덱이 없는 확인 Scene도 소재 목록에 남고 `has_deck=false`로 표시한다.
 
-위치에는 `SIMULATION_CASE → LOAD_CASE → EXECUTION_RUN → RUN_OPTION → SCENE` 문맥을 보존한다. 생략 가능한 역할은 허용하지만 다른 Run 또는 Scene의 자료를 합치지 않는다. 확인된 `INPUT`과 `RESULTS` 경로만 같은 계층의 Scene에 연결하고, 각 경로의 근거와 우선순위를 노출한다. 제외·미확정·다른 의뢰/환경 소유 경로와 root 이탈·reparse 경로는 후보가 아니다.
+위치에는 `SIMULATION_CASE → LOAD_CASE → EXECUTION_RUN → RUN_OPTION → SCENE` 문맥을 보존한다. 생략 가능한 역할은 허용하지만 다른 Run 또는 Scene의 자료를 합치지 않는다. **확정 Scene 폴더 자체가 입력과 결과의 공통 위치**다. `.rad`·`.inc`와 CSV·미디어 등 결과 파일이 함께 존재하며 별도 INPUT/RESULTS 하위 폴더를 요구하지 않는다. 기존 자료에 명시적인 `INPUT`과 `RESULTS`가 있으면 같은 계층의 Scene에 연결하고 각 경로의 근거와 우선순위를 노출한다. 제외·미확정·다른 의뢰/환경 소유 경로와 root 이탈·reparse 경로는 후보가 아니다.
+
+결과 등록·Case 결과·소재 물성의 구조 목록은 이 공용 위치와 확정 역할 트리를 사용한다. 값·그래프·미디어는 선택된 immutable capture에서 조회한다. capture가 없거나 결과 파일 수집이 실패했다는 이유로 확정된 하중경우·Run·Scene 자체를 목록에서 제거하지 않는다. 현재 구조와 과거 수집 버전의 불일치는 별도 상태로 표시한다.
+
+## Working과 Final
+
+의뢰 직속 `Working`은 작업 Case의 기준 영역이고 `Final`은 사용자가 최종확정한 자료의 보존 영역이다. Working을 0으로 삼는 깊이별 역할은 같은 깊이의 이름이 다른 폴더에도 적용한다. 의뢰 직속 Working/Final의 역할은 깊이만으로 합치지 않으며 Final 및 그 하위는 일반 Case 조사·등록·수집 후보가 아니다. 개별 수동 예외·제외와 과거 ID는 보존한다. 구체적인 저장 규칙 편집·삭제·재적용과 최종확정 파일 복사 범위는 구현 계획을 따른다.
 
 ## 새 폴더 판정
 

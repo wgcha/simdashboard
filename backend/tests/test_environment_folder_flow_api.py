@@ -1,6 +1,7 @@
 """Cross-feature contracts: a folder plan must lead to usable dashboard data."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from uuid import uuid4
@@ -10,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from app.database_connection import connect
 from app.main import app
-from app.services import dashboard_capture, folder_schema_locations, materials_catalog, result_registration
+from app.services import dashboard_capture, folder_discovery_environment, folder_schema_locations, materials_catalog, result_registration
 from app.services.folder_schema_locations import EnvironmentLocations
 
 pytestmark = pytest.mark.duckdb_integration
@@ -38,6 +39,32 @@ def post(client, route, payload):
     return response.json()
 
 
+def test_profile_archive_keeps_revision_and_history_reference_and_rejects_stale_edit(admin_client):
+    client, _ = admin_client
+    profile = post(client, "/profiles", {
+        "environment": "DISTRIBUTION", "name": f"archive test {uuid4().hex[:8]}",
+        "rules": {"rules": [], "description": "Synthetic archive lifecycle check."},
+    })
+    archived = client.delete(
+        f"{BASE}/profiles/{profile['id']}?expected_revision={profile['revision']}"
+    )
+    assert archived.status_code == 200, archived.text
+    assert archived.json()["revision"] == profile["revision"]
+    assert archived.json()["archived"] is True
+    assert profile["id"] not in {item["id"] for item in client.get(BASE).json()["items"]}
+
+    with connect() as conn:
+        saved = folder_discovery_environment._profile(conn, profile["id"], "DISTRIBUTION")
+        assert saved["revision"] == profile["revision"]
+        assert saved["rules"]["profile_metadata"]["archived"] is True
+    stale_edit = client.put(f"{BASE}/profiles/{profile['id']}", json={
+        "environment": "DISTRIBUTION", "name": profile["name"], "rules": {"rules": []},
+        "expected_revision": profile["revision"],
+    })
+    assert stale_edit.status_code == 409
+    assert stale_edit.json()["detail"]["code"] == "ENVIRONMENT_PROFILE_ARCHIVED"
+
+
 def test_schema_scoped_empty_projection_fails_closed_and_legacy_remains_compatible():
     scoped = {"folder_schema_scoped": True, "folder_schema_snapshot_id": "snapshot-test",
               "folder_schema_locations": []}
@@ -48,6 +75,20 @@ def test_schema_scoped_empty_projection_fails_closed_and_legacy_remains_compatib
             scoped, [(result_path, b"{}", "application/json")],
         )
     assert dashboard_capture._schema_allows_file({}, "Case", result_path)
+
+    direct_scene = {**scoped, "folder_schema_locations": [{
+        "relative_path": "Case/Drop/Run/INDIVIDUAL/2_Face &3_Face",
+        "role_kind": "SCENE", "status": "CONFIRMED",
+    }]}
+    direct_file = "Case/Drop/Run/INDIVIDUAL/2_Face &3_Face/result.csv"
+    assert dashboard_capture._schema_allows_file(direct_scene, "Case", direct_file)
+    dashboard_capture._assert_schema_allows_approved_files(
+        direct_scene, [(direct_file, b"Position,Layer_1\nTOP,1\n", "text/csv")],
+    )
+    with pytest.raises(dashboard_capture.DashboardCaptureError):
+        dashboard_capture._assert_schema_allows_approved_files(
+            direct_scene, [(direct_file + "/nested.csv", b"x", "text/csv")],
+        )
 
     blocked = {**scoped, "folder_schema_locations": [{
         "relative_path": "Case/Evaluation/results", "role_kind": "RESULTS", "status": "CONFIRMED",
@@ -424,6 +465,11 @@ def test_distribution_capture_and_materials_share_confirmed_scene_identity(admin
     scene = "1_Face_Drop_Scene01_Face1_1st"
     scene_path = root / case_path / "Drop" / "Run01" / "Individual" / scene
     result_path = scene_path / "results"
+    direct_file = scene_path / "MAX_RESULT_Max_Stress_P1 (major)_Mid_C24_scene.h3d.csv"
+    direct_file.parent.mkdir(parents=True)
+    direct_file.write_text("Position,Layer_1,Layer_2,Layer_3,Layer_4\nTOP,20,20,20,20\n", encoding="utf-8")
+    (scene_path / "model.rad").write_text("solver input", encoding="utf-8")
+    (scene_path / "include.inc").write_text("solver include", encoding="utf-8")
     result_path.mkdir(parents=True)
     (result_path / "MAX_RESULT_Max_Stress_P1 (major)_Mid_C23_scene.h3d.csv").write_text(
         "Position,Layer_1,Layer_2,Layer_3,Layer_4\nTOP,10,10,10,10\n", encoding="utf-8",
@@ -453,18 +499,35 @@ def test_distribution_capture_and_materials_share_confirmed_scene_identity(admin
     assert added_scene["role_basis"] == "PATTERN"
     location_scene = next(item for item in refreshed.json()["locations"]
                           if item["relative_path"] == scene_path.relative_to(root).as_posix())
+    with connect() as conn:
+        direct_target = result_registration._current_target(
+            conn, project_id=registered["project_id"], request_id=request_id,
+            environment="DISTRIBUTION", case_relative_path=case_path,
+            result_relative_path=scene_path.relative_to(root).as_posix(),
+            require_schema_roles=True,
+        )
+    assert direct_target["result_relative_path"] == scene_path.relative_to(root).as_posix()
+    assert direct_target["context"]["scene"]["relative_path"] == scene_path.relative_to(root).as_posix()
     results_location = next(item for item in refreshed.json()["locations"]
                             if item["relative_path"] == result_path.relative_to(root).as_posix())
     assert location_scene["result_paths"] == [{
-        "relative_path": (result_path.relative_to(root).as_posix()),
+        "relative_path": scene_path.relative_to(root).as_posix(),
+        "source": "SCENE", "priority": 0, "location_id": location_scene["id"], "role_kind": "SCENE",
+    }, {
+        "relative_path": result_path.relative_to(root).as_posix(),
         "source": "SCENE", "priority": 0, "location_id": results_location["id"], "role_kind": "RESULTS",
     }]
     with connect() as conn:
-        capture_json = json.loads(conn.execute(
-            "SELECT payload_json FROM dashboard_captures WHERE case_id=? ORDER BY created_at DESC,id DESC LIMIT 1",
+        manifest_json, payload_json = conn.execute(
+            "SELECT manifest_json,payload_json FROM dashboard_captures WHERE case_id=? ORDER BY created_at DESC,id DESC LIMIT 1",
             [registered["capture_jobs"][0]["case_id"]],
-        ).fetchone()[0])
+        ).fetchone()
+        capture_json = json.loads(payload_json)
+        manifest_json = json.loads(manifest_json)
     captured_scene = capture_json["runs"][0]["scenes"][0]
+    manifest_paths = {item["relative_path"] for item in manifest_json}
+    assert direct_file.relative_to(root).as_posix() in manifest_paths
+    assert "model.rad" not in manifest_paths and "include.inc" not in manifest_paths
     catalog = client.get("/api/materials/catalog", params={"request_id": request_id, "environment": "DISTRIBUTION"})
     assert catalog.status_code == 200, catalog.text
     catalog_scenes = catalog.json()["scenes"]
@@ -621,8 +684,10 @@ def test_distribution_registration_keeps_named_unknown_separate_from_no_option(a
     response = client.get("/api/dashboard/catalog", params={"request_id": request_id, "environment": "DISTRIBUTION"})
     assert response.status_code == 200, response.text
     catalog = response.json()
-    options = catalog["run_options"]
+    options = [item for item in catalog["run_options"] if item.get("capture_id") == job["capture_id"]]
+    schema_options = [item for item in catalog["run_options"] if item.get("capture_id") is None]
     assert len(options) == 3, options
+    assert len(schema_options) == 3, schema_options
     assert {option["option_status"] for option in options} == {"ABSENT", "PRESENT"}
     assert {option["label"] for option in options} == {"옵션 없음", "UNKNOWN", "Custom Fatigue"}
     assert len({option["id"] for option in options}) == 3
@@ -637,6 +702,269 @@ def test_distribution_registration_keeps_named_unknown_separate_from_no_option(a
         assert payload["context"]["run_option_id"] == option["id"]
         results[option["label"]] = payload["series"][0]["value"]
     assert results == {"옵션 없음": 10, "UNKNOWN": 20, "Custom Fatigue": 30}
+
+
+def test_case_finalization_is_capture_pinned_signed_retryable_and_keeps_existing_final(admin_client, monkeypatch):
+    from app.services import case_finalization
+    from app.security import hash_password
+    from datetime import datetime, timezone
+
+    client, root = admin_client
+    case_path = "Project_9910_Final/WR_9910_SimType3/Package_SetCase1_CushionCase1"
+    scene_path = root / case_path / "Drop" / "Run01" / "Individual" / "1_Face_Drop_Scene01_Face1_1st"
+    result_path = scene_path / "results"
+    direct_csv = scene_path / "MAX_RESULT_Max_Stress_P1 (major)_Mid_C24_scene.h3d.csv"
+    result_csv = result_path / "MAX_RESULT_Max_Stress_P1 (major)_Mid_C23_scene.h3d.csv"
+    direct_csv.parent.mkdir(parents=True)
+    result_path.mkdir()
+    csv_data = "Position,Layer_1,Layer_2,Layer_3,Layer_4\nTOP,10,10,10,10\n"
+    direct_csv.write_text(csv_data, encoding="utf-8")
+    result_csv.write_text(csv_data, encoding="utf-8")
+    (scene_path / "model.rad").write_text("/INCLUDE include.inc\n", encoding="utf-8")
+    (scene_path / "include.inc").write_text("synthetic include\n", encoding="utf-8")
+    (scene_path / "review.pdf").write_bytes(b"synthetic report")
+    excluded = scene_path / "Private"
+    excluded.mkdir()
+    (excluded / "private.json").write_text('{"private":true}', encoding="utf-8")
+
+    # A pre-existing unrelated Final file must never be overwritten or removed.
+    preserved = root / "Project_9910_Final" / "WR_9910_SimType3" / "Final" / "CAE" / "manual" / "keep.txt"
+    preserved.parent.mkdir(parents=True)
+    preserved.write_text("keep this", encoding="utf-8")
+
+    scan = post(client, "/scan", {"environment": "DISTRIBUTION", "relative_path": ""})
+    private_node = next(node for node in scan["nodes"] if node["relative_path"] == f"{case_path}/Drop/Run01/Individual/1_Face_Drop_Scene01_Face1_1st/Private")
+    schema_preview = post(client, "/previews", {"scan_id": scan["id"], "assignments": [
+        {"node_id": private_node["id"], "role_kind": "EXCLUDE", "confirm": True},
+    ]})
+    registered = post(client, "/registrations", {
+        "preview_id": schema_preview["id"], "idempotency_key": f"final-{uuid4()}", "capture": True,
+    })
+    job = registered["capture_jobs"][0]
+    assert job["status"] == "COMPLETED", registered
+    request_id = registered["request_id"]
+    case_id, capture_id = job["case_id"], job["capture_id"]
+
+    # A Scene that appears after capture and schema refresh is outside this
+    # operation's capture-pinned source scope.
+    added_scene = root / case_path / "Drop" / "Run01" / "Individual" / "2_Face_Added_Scene02"
+    added_scene.mkdir(parents=True)
+    (added_scene / "later.rad").write_text("new scene input", encoding="utf-8")
+    (added_scene / "later.inc").write_text("new scene include", encoding="utf-8")
+    (added_scene / "later.pdf").write_bytes(b"new scene report")
+    added_scene_relative = added_scene.relative_to(root).as_posix()
+    original_scope = case_finalization._scope
+
+    def scope_with_added_current_scene(*args, **kwargs):
+        result = original_scope(*args, **kwargs)
+        result["scene_locations"] = [*result["scene_locations"], {
+            "relative_path": added_scene_relative, "role_kind": "SCENE",
+            "status": "CONFIRMED", "target_id": "synthetic-current-scene",
+        }]
+        return result
+
+    monkeypatch.setattr(case_finalization, "_scope", scope_with_added_current_scene)
+
+    body = {"project_id": registered["project_id"], "request_id": request_id,
+            "environment": "DISTRIBUTION", "case_id": case_id, "capture_id": capture_id}
+
+    # The write route requires result.import; status is readable with the ordinary project data permission.
+    viewer_id = f"finalization-viewer-{uuid4().hex}"
+    viewer_name = viewer_id
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO users (id,username,password_hash,display_name,legacy_role,is_active,created_at,updated_at,account_status,is_global_admin) "
+            "VALUES (?,?,?,?,'viewer',true,?,?,'ACTIVE',false)",
+            [viewer_id, viewer_name, hash_password("synthetic-viewer-password"), viewer_name, now, now],
+        )
+        conn.execute(
+            "INSERT INTO project_memberships (id,project_id,user_id,role,created_by,created_at,updated_by,updated_at) "
+            "VALUES (?,?,?,'general',?,?,?,?)",
+            [f"finalization-membership-{uuid4().hex}", registered["project_id"], viewer_id,
+             "synthetic-admin", now, "synthetic-admin", now],
+        )
+    with TestClient(app) as viewer:
+        login = viewer.post("/api/auth/login", json={"username": viewer_name, "password": "synthetic-viewer-password"})
+        assert login.status_code == 200, login.text
+        viewer.headers["Authorization"] = f"Bearer {login.json()['access_token']}"
+        denied = viewer.post("/api/dashboard/finalizations/preview", json=body)
+        assert denied.status_code == 403, denied.text
+        assert denied.json()["detail"]["required_permission"] == "result.import"
+        assert viewer.get("/api/dashboard/finalizations/status", params={key: value for key, value in body.items() if key != "capture_id"}).status_code == 200
+
+    for bad_body in (
+        {**body, "project_id": "another-project"},
+        {**body, "request_id": "another-request"},
+        {**body, "capture_id": "another-capture"},
+    ):
+        rejected = client.post("/api/dashboard/finalizations/preview", json=bad_body)
+        assert rejected.status_code >= 400, rejected.text
+
+    # Real scan -> schema confirmation -> registration -> capture provenance.
+    plan = client.post("/api/dashboard/finalizations/preview", json=body)
+    assert plan.status_code == 200, plan.text
+    plan = plan.json()
+    assert plan["counts"]["rad_decks"] == 1
+    assert plan["counts"]["inc_decks"] == 1
+    assert plan["counts"]["reports"] == 1
+    assert plan["counts"]["results"] == 2
+    assert added_scene_relative not in plan["scene_paths"]
+    assert not any(item["source_relative_path"].startswith(added_scene_relative + "/") for item in plan["files"])
+    assert {item["source_basis"] for item in plan["files"]} == {"SELECTED_CAPTURE", "CURRENT_CONFIRMED_SCENE"}
+    assert not any("Private" in item["source_relative_path"] for item in plan["files"])
+    assert any(item["source_relative_path"].endswith("review.pdf") for item in plan["files"])
+    assert not (root / "Project_9910_Final" / "WR_9910_SimType3" / "Final" / "Reports" / "Package_SetCase1_CushionCase1").exists()
+
+    # Tampered durable plans fail closed before any destination is copied.
+    operation_dir = root / plan["metadata_relative_path"]
+    stored_plan_path = operation_dir / "plan.json"
+    stored_plan = json.loads(stored_plan_path.read_text(encoding="utf-8"))
+    stored_plan["final_relative_path"] = "Elsewhere"
+    stored_plan_path.write_text(json.dumps(stored_plan), encoding="utf-8")
+    tampered = client.post("/api/dashboard/finalizations/confirm", json={**body, "operation_id": plan["operation_id"]})
+    assert tampered.status_code == 409, tampered.text
+    assert preserved.read_text(encoding="utf-8") == "keep this"
+    stored_plan["final_relative_path"] = plan["final_relative_path"]
+    stored_plan_path.write_text(json.dumps(stored_plan), encoding="utf-8")
+    # This repaired test fixture is signed metadata; in a real retry, preview creates the immutable plan.
+    stored_plan = case_finalization._signed_record(stored_plan, "plan_signature", b"case-finalization:plan:v1\0")
+    stored_plan_path.write_bytes(case_finalization._encode(stored_plan))
+
+    # A changed capture source blocks confirmation, then restoring the captured bytes permits a new preview.
+    result_csv.write_text(csv_data + "# changed\n", encoding="utf-8")
+    stale_preview = client.post("/api/dashboard/finalizations/preview", json=body)
+    assert stale_preview.status_code == 409, stale_preview.text
+    result_csv.write_text(csv_data, encoding="utf-8")
+
+    retry_plan = client.post("/api/dashboard/finalizations/preview", json=body)
+    assert retry_plan.status_code == 200, retry_plan.text
+    retry_plan = retry_plan.json()
+    original_copy = case_finalization._copy_one
+    call_count = 0
+
+    def fail_once(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 2:
+            raise case_finalization.CaseFinalizationError("SYNTHETIC_COPY_FAILURE", "synthetic copy failure")
+        return original_copy(*args, **kwargs)
+
+    monkeypatch.setattr(case_finalization, "_copy_one", fail_once)
+    failed = client.post("/api/dashboard/finalizations/confirm", json={**body, "operation_id": retry_plan["operation_id"]})
+    assert failed.status_code == 422, failed.text
+    assert client.get("/api/dashboard/finalizations/status", params={key: value for key, value in body.items() if key != "capture_id"}).json()["retryable_operations"]
+    monkeypatch.setattr(case_finalization, "_copy_one", original_copy)
+    confirmed = client.post("/api/dashboard/finalizations/confirm", json={**body, "operation_id": retry_plan["operation_id"]})
+    assert confirmed.status_code == 200, confirmed.text
+    record = confirmed.json()
+    assert record["status"] == "COMPLETE"
+    assert record["counts"]["rad_decks"] == 1 and record["counts"]["inc_decks"] == 1
+    assert record["output_paths"]["CAE"].startswith("Project_9910_Final/WR_9910_SimType3/Final/CAE/Package_SetCase1_CushionCase1/")
+    assert record["output_paths"]["Reports"].startswith("Project_9910_Final/WR_9910_SimType3/Final/Reports/Package_SetCase1_CushionCase1/")
+    for item in record["files"]:
+        destination = root / record["output_paths"][item["category"]] / item["case_relative_path"]
+        assert hashlib.sha256(destination.read_bytes()).hexdigest() == item["sha256"]
+    assert (root / record["output_paths"]["CAE"] / "Drop/Run01/Individual/1_Face_Drop_Scene01_Face1_1st/include.inc").is_file()
+    assert preserved.read_text(encoding="utf-8") == "keep this"
+
+    # Idempotent retry uses the signed completion record even after the source Scene disappears.
+    source_bytes = result_csv.read_bytes()
+    result_csv.unlink()
+    repeated = client.post("/api/dashboard/finalizations/confirm", json={**body, "operation_id": retry_plan["operation_id"]})
+    assert repeated.status_code == 200, repeated.text
+    assert repeated.json()["confirmed_at"] == record["confirmed_at"]
+    result_csv.write_bytes(source_bytes)
+
+    # Oversized and deeply nested unsigned siblings are reported as unverified
+    # without hiding the valid, signed completion record.
+    metadata_dir = root / retry_plan["metadata_relative_path"].replace("/" + retry_plan["operation_id"], "")
+    oversized_dir = metadata_dir / uuid4().hex
+    oversized_dir.mkdir()
+    (oversized_dir / "plan.json").write_bytes(
+        b'{"x":"' + b"x" * case_finalization.MAX_METADATA_BYTES + b'"}'
+    )
+    deep_dir = metadata_dir / uuid4().hex
+    deep_dir.mkdir()
+    depth = 1200
+    (deep_dir / "plan.json").write_bytes(b'{"x":' * depth + b"0" + b"}" * depth)
+    state = client.get("/api/dashboard/finalizations/status", params={key: value for key, value in body.items() if key != "capture_id"})
+    assert state.status_code == 200, state.text
+    assert state.json()["latest"]["operation_id"] == retry_plan["operation_id"]
+    assert state.json()["unverified_records"] >= 2
+
+    with monkeypatch.context() as patcher:
+        patcher.setattr(case_finalization, "MAX_STATUS_ITEMS", 1)
+        limited_items = client.get("/api/dashboard/finalizations/status", params={key: value for key, value in body.items() if key != "capture_id"})
+        assert limited_items.status_code == 422, limited_items.text
+        assert limited_items.json()["detail"]["code"] == "FINALIZATION_STATUS_LIMIT"
+    with monkeypatch.context() as patcher:
+        patcher.setattr(case_finalization, "MAX_STATUS_VERIFY_BYTES", 0)
+        limited_bytes = client.get("/api/dashboard/finalizations/status", params={key: value for key, value in body.items() if key != "capture_id"})
+        assert limited_bytes.status_code == 422, limited_bytes.text
+        assert limited_bytes.json()["detail"]["code"] == "FINALIZATION_STATUS_LIMIT"
+
+    original_settings = case_finalization.security_settings
+    monkeypatch.setattr(case_finalization, "security_settings", lambda: type("Settings", (), {"secret_key": "rotated-synthetic-key"})())
+    rotated = client.get("/api/dashboard/finalizations/status", params={key: value for key, value in body.items() if key != "capture_id"})
+    assert rotated.status_code == 200, rotated.text
+    assert rotated.json()["latest"] is None and rotated.json()["unverified_records"] >= 1
+    monkeypatch.setattr(case_finalization, "security_settings", original_settings)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows directory-handle sharing semantics")
+def test_case_finalization_pins_output_parent_during_temp_write(tmp_path, monkeypatch):
+    from app.services import case_finalization
+    from pathlib import Path
+
+    root = tmp_path / "spdm-root"
+    root.mkdir()
+    source = root / "source.inc"
+    payload = b"synthetic deck bytes"
+    source.write_bytes(payload)
+    target = root / "Final" / "CAE" / "Case" / "version"
+    target.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    parked = target.with_name("version-parked")
+    rename_blocked: list[bool] = []
+    original_open = Path.open
+
+    def attempt_junction_swap(path, *args, **kwargs):
+        if path.name.startswith(".codex-partial-") and not rename_blocked:
+            try:
+                target.rename(parked)
+            except OSError:
+                rename_blocked.append(True)
+            else:
+                rename_blocked.append(False)
+                import subprocess
+                subprocess.run(["cmd.exe", "/c", "mklink", "/J", str(target), str(outside)],
+                               check=True, capture_output=True)
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", attempt_junction_swap)
+    operation_error = None
+    try:
+        try:
+            published = case_finalization._copy_one(
+                {"root": root}, {"operation_id": "a" * 32},
+                {"source_relative_path": "source.inc", "case_relative_path": "model.inc",
+                 "size": len(payload), "sha256": hashlib.sha256(payload).hexdigest()},
+                target,
+            )
+        except Exception as exc:  # Capture the vulnerable unpinned path's post-write guard failure.
+            operation_error = exc
+        assert rename_blocked == [True], "output parent was renameable while the temporary file was opened"
+        assert not list(outside.iterdir()), "temporary bytes escaped the configured SPDM root"
+        assert operation_error is None, f"safe copy unexpectedly failed: {operation_error}"
+        assert published == "Final/CAE/Case/version/model.inc"
+        assert (target / "model.inc").read_bytes() == payload
+    finally:
+        if target.is_junction():
+            os.rmdir(target)
+        if parked.exists() and not target.exists():
+            parked.rename(target)
 
 
 def test_saved_profile_revision_is_used_and_old_preview_cannot_apply_after_edit(admin_client):

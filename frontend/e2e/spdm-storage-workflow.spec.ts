@@ -518,14 +518,13 @@ test('Run Case가 없어도 새 Run Option 폴더 이름을 정해 경로를 미
   await page.getByLabel('Run Option 이름', { exact: true }).fill('Option_New')
   await page.getByLabel('Scene 폴더 이름', { exact: true }).fill('Front')
   await page.getByRole('button', { name: '전체 경로 미리보기', exact: true }).click()
-  await expect(page.getByLabel('결과 폴더 생성 경로 미리보기')).toContainText('/Case_New/Drop_New/Run_New/Option_New/Front/results')
+  await expect(page.getByLabel('결과 폴더 생성 경로 미리보기')).toContainText('/Case_New/Drop_New/Run_New/Option_New/Front')
   expect(previewBody?.segments).toEqual([
     { role_kind: 'SIMULATION_CASE', name: 'Case_New' },
     { role_kind: 'LOAD_CASE', name: 'Drop_New' },
     { role_kind: 'EXECUTION_RUN', name: 'Run_New' },
     { role_kind: 'RUN_OPTION', name: 'Option_New' },
     { role_kind: 'SCENE', name: 'Front' },
-    { role_kind: 'RESULTS', name: 'results' },
   ])
   await page.getByLabel('표시된 결과용 하위 폴더만 생성하도록 확인했습니다.').check()
   await page.getByRole('button', { name: '경로 확인 후 폴더 생성', exact: true }).click()
@@ -557,8 +556,14 @@ test('Case 문맥이 없어도 현재 탐색한 등록 스키마 부모 아래�
   await page.getByLabel('Scene 폴더 이름', { exact: true }).fill('Scene')
   await page.getByRole('button', { name: '전체 경로 미리보기', exact: true }).click()
   const workingPath = `SPDM/${context.request}/WR/Working`
-  await expect(page.getByLabel('결과 폴더 생성 경로 미리보기')).toContainText(`${workingPath}/Package_New/Drop/85qn80h_ref_organized/Scene/results`)
+  await expect(page.getByLabel('결과 폴더 생성 경로 미리보기')).toContainText(`${workingPath}/Package_New/Drop/85qn80h_ref_organized/Scene`)
   expect(previewBody?.parent_relative_path).toBe(workingPath)
+  expect(previewBody?.segments).toEqual([
+    { role_kind: 'SIMULATION_CASE', name: 'Package_New' },
+    { role_kind: 'LOAD_CASE', name: 'Drop' },
+    { role_kind: 'EXECUTION_RUN', name: '85qn80h_ref_organized' },
+    { role_kind: 'SCENE', name: 'Scene' },
+  ])
 })
 
 test('유통환경은 기존 Case에서 load·run·option·scene 문맥과 결과 폴더를 고른다', async ({ page }) => {

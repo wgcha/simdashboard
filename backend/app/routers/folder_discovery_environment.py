@@ -17,7 +17,7 @@ class Scan(BaseModel):
     project_id: str | None = None
     request_id: str | None = None
 class Assignment(BaseModel):
-    node_id: str; role_kind: str; confirm: bool = True; target_mode: Literal["CREATE", "LINK"] = "CREATE"; target_id: str | None = None
+    node_id: str; role_kind: str; confirm: bool = True; target_mode: Literal["CREATE", "LINK"] = "CREATE"; target_id: str | None = None; propagate_same_level: bool = False
 class Preview(BaseModel):
     scan_id: str
     assignments: list[Assignment] = Field(default_factory=list, max_length=5000)

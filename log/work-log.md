@@ -970,3 +970,26 @@
 - 검증: 등록 API/path, run identity migration, Postgres startup 테스트 109개 통과·1개 skip. 프런트 TypeScript와 Vite build 통과. 빌드의 기존 500 kB 초과 chunk 경고는 남아 있다. 테스트는 격리된 임시 DB와 합성 SPDM 경로를 사용했다.
 - 독립 검수 후속 보완: 늦게 등록된 다른 업무의 결과 경로 소유권이 targets/folders/저장 링크 후보를 통과하지 않도록 다시 검사하고, 생성·수정 시 경로 lock 뒤에도 충돌을 확인한다. 전환된 target 응답은 UI의 새 선택 문맥에 덮어쓰지 않도록 비동기 후 재확인한다. 합성 소유권 충돌 포함 범위 테스트 4개와 TypeScript/Vite build 통과.
 - 소재 표의 Part 이름·번호 표시 순서를 바꾸고 우측 상세 영역의 외곽선·그림자를 제거했다. 최종 통합 테스트 144개 통과·1개 skip, Windows 배포 DB 보존 테스트 179개 통과·2개 skip, 배포 자체점검 9개 통과, 프런트 빌드 통과. 독립 검수에서 Scene 간 덱 혼합 등 3건을 수정·재확인했다. Codex Security 변경분 검사 `3fc611a7-86ae-4ec9-bdfe-2174d643ab7f`는 원본 snapshot의 변경 소스 17개에서 확인된 취약점 0개로 완료했으며, 스캔 중 추가한 UI 표시 변경은 수동 확인했다. 실제 사내 SPDM·DB와 Windows Server 2022 폐쇄망 실설치는 미검증이다.
+
+## 2026-10-02 SPDM 유통환경 예제 파일
+- 사용자 지정 `E:\shared\SPDM (Admin)\75R9J_PV\[WR-0001]_[유통_환경]\Working`의 두 Case × 2_Face/3_Face에 합성 파일 24개를 추가했다. Scene마다 results CSV 4종과 Part/소재 .inc 2개; 기존 파일 덮어쓰기 없음.
+- 실제 distribution/Radioss 파서 검증: Scene별 32개 관측, 결과 품질 오류 없음, Part→Property→Material 참조 정상, 3점 함수 곡선 확인. 밀도 단위 미선언 경고 및 응력 단위 UNCONFIRMED는 예제 한계로 안내. 복사본 24개 SHA256 일치 확인.
+- 생성기·검증 보고·한국어 안내는 `tmp/spdm-distribution-example/`에 보관. 앱 코드·실제 DB·설정·서비스 변경 없음. UI 등록/조회는 미실행이며 Folder Schema Refresh 및 결과 등록 필요.
+
+## 2026-10-02 초기 데이터 구성 화면 스타일 원인 분석
+- 첨부 화면과 소스 대조: BootstrapWorkspaceShell은 bootstrap-workspace/data-theme만 제공하나, 결과 등록의 기존 밝은 배경은 styles.css의 .light-theme에, 저장소 설정은 DataWorkspace.css의 .app-shell에 의존한다. 초기 구성 shell에서는 해당 규칙이 매칭되지 않아 밝은 글자 토큰과 고정 짙은 배경·기본 details 표시가 혼재한다.
+- App.tsx의 overview/dashboard 및 화면·문맥 조건에 따라 초기 구성 shell을 선택하므로 상태별로 간헐적으로 보일 수 있다. 실제 발생 시 API 실패·문맥 복원 여부는 브라우저/서버 로그 미수집으로 미확정.
+- 분석만 수행. 앱 코드·실제 DB·설정·서비스 변경 및 런타임 재현/테스트 없음. 기존 미커밋 기록 보존.
+
+## 2026-10-02 폴더 규칙·Working/Final 단계별 개선 시작
+- 사용자 승인 범위를 docs/plans/folder-schema-working-final-implementation.md에 정리하고 문서 지도·현재 계획 목록에 연결했다. 기존 미커밋 작업 로그와 tmp 자료를 보존한다.
+- 예제 구조는 읽기 전용 참고다. Working 깊이별 역할, Scene 직속 입력/결과 공존, 공통 schema 조회 복구, 규칙 편집·삭제 및 Case 최종확정으로 작업 범위를 나눴다. 구현·검증 결과는 완료 후 별도 기록한다.
+- 배포 보존 gate: 격리 환경에서 관련 backend 검사 179 passed, 2 skipped. 실제 Server 2022 폐쇄망 설치/업데이트/재부팅은 미실행.
+
+## 2026-10-02 폴더 규칙·공통 조회·최종확정 구현 완료
+- 저장 규칙 불러오기·편집·복사·개정 저장·삭제(참조 이력 보존), Working 상대 깊이 역할 전파와 개별 예외를 구현했다. 의뢰 직속 Final과 그 하위는 조사·등록·capture에서 제외한다.
+- Case 하위 목록이 capture.payload.runs에만 의존하던 문제를 수정했다. 확정 Folder Schema의 Case/하중/Run/Option/Scene ID·경로로 공통 조회하며 미수집 구조도 표시한다. 값·그래프는 선택 capture를 유지한다. Scene 직속 입력/결과와 빈·INC 전용 Scene 등록 후보를 지원하고, 연결된 Option ID와 Scene 필터의 불일치를 해소했다.
+- Case 선택기 옆 최종확정→파일 미리보기→확정을 구현했다. RAD/INC는 의뢰 Final/CAE, 결과·보고서는 Final/Reports의 Case/확정 개정/상대 계층으로 복사한다. 원본·기존 Final을 보존하며 capture 호환 Scene만 사용한다. 서명된 기록, 해시·권한 재검사, Windows 목적 경로 고정, 부분 실패 재시도·완료 멱등과 구조 문맥 확정 이력 표시를 검증했다.
+- 검증: 규칙 53개, catalog 집중 24개, 등록 API/path 30개(1 skip), 후속 Scene/경계 6개 및 Option ID 1개, 확장된 Windows 최종확정 API 2개 통과. TypeScript/Vite build·API 생성/self-test, 관련 데스크톱 UI 12개, 배포 계약 179개(2 skip) 통과. 건수는 중복 범위를 포함하며 합산하지 않는다. 실패 지점을 수정한 뒤 해당 검사를 재실행했고 최종 독립 Astra 기능 검수도 통과했다.
+- Codex Security 고정 변경분 스캔 a5982897-a812-455d-9bbe-2996db3a512d 완료: 28개 소스, CWE-400 medium 1건. 후속 수정에서 metadata 4 MiB 및 상태 조회 항목·누적 읽기 한도, 파일 핸들/재파싱 검사·오류 격리를 적용하고 합성 회귀·주 에이전트 수동 검수로 확인했다. 기준 보고서는 수정 전 기록이며 최신 수정에 대한 플러그인 재스캔·독립 보안 재검수 완료로 기록하지 않는다. 앞선 독립 Windows junction 경계 검증은 통과했다.
+- 계획·현재 기능 문서를 갱신했다. 기존 작업 로그·tmp 자료 보존, 이번 작업에서 실제 사용자 DB·설정·서비스·공유 폴더 변경 없음. 신규 의존성·migration·배포 진입점 변경 없음. 기존 architecture 검사 4건과 Vite chunk 경고는 남아 있다. 실제 Server 2022 폐쇄망 설치/업데이트/재부팅, SMB·POSIX 동시 경로 교체, commit/push/deploy 미실행.

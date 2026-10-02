@@ -5,7 +5,7 @@ import hashlib
 import os
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from . import spdm_storage
 
@@ -51,7 +51,7 @@ def browse(root: Path, relative: str) -> list[dict[str, Any]]:
     return sorted(entries, key=lambda item: item["name"].casefold())
 
 
-def scan(root: Path, relative: str) -> dict[str, Any]:
+def scan(root: Path, relative: str, *, skip_descendants: Callable[[str, str | None], bool] | None = None) -> dict[str, Any]:
     nodes, issues = [], []
     file_state: list[dict[str, Any]] = []
     files = total_entries = 0
@@ -66,11 +66,13 @@ def scan(root: Path, relative: str) -> dict[str, Any]:
         children, extensions = [], set()
         count = 0
         identity = ""
+        skipped = bool(skip_descendants and skip_descendants(rel, parent))
         try:
             spdm_storage._assert_safe_existing(path, root)
             info = path.stat()
             identity = f"{info.st_dev}:{info.st_ino}"
-            with os.scandir(path) as iterator:
+            if not skipped:
+              with os.scandir(path) as iterator:
                 for entry in iterator:
                     total_entries += 1
                     if total_entries > MAX_ENTRIES or time.monotonic() - started > MAX_SECONDS:
@@ -99,8 +101,11 @@ def scan(root: Path, relative: str) -> dict[str, Any]:
                             extensions.add(child.suffix.lower())
         except (OSError, spdm_storage.SpdmStorageError) as error:
             issues.append({"relative_path": rel, "code": "PATH_UNAVAILABLE", "message": str(error)[:200]})
-        nodes.append({"relative_path": rel, "parent_path": parent, "name": path.name, "depth": depth,
-                      "file_count": count, "extensions": sorted(extensions), "identity": identity})
+        node = {"relative_path": rel, "parent_path": parent, "name": path.name, "depth": depth,
+                "file_count": count, "extensions": sorted(extensions), "identity": identity}
+        if skipped:
+            node["children_skipped"] = True
+        nodes.append(node)
         stack.extend(sorted(children, key=lambda child: child[1].casefold(), reverse=True))
     file_state.sort(key=lambda item: str(item["relative_path"]).casefold())
     return {"status": "INCOMPLETE" if issues else "COMPLETE", "folder_count": len(nodes),

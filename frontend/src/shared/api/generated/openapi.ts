@@ -2188,7 +2188,8 @@ export interface paths {
         /** Update */
         put: operations["update_api_folder_discovery_environments_profiles__profile_id__put"];
         post?: never;
-        delete?: never;
+        /** Archive */
+        delete: operations["archive_api_folder_discovery_environments_profiles__profile_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -3052,6 +3053,57 @@ export interface paths {
         };
         /** Asset */
         get: operations["asset_api_dashboard_assets__asset_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/dashboard/finalizations/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preview */
+        post: operations["preview_api_dashboard_finalizations_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/dashboard/finalizations/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Confirm */
+        post: operations["confirm_api_dashboard_finalizations_confirm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/dashboard/finalizations/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Status */
+        get: operations["status_api_dashboard_finalizations_status_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3972,6 +4024,11 @@ export interface components {
             target_mode: "CREATE" | "LINK";
             /** Target Id */
             target_id?: string | null;
+            /**
+             * Propagate Same Level
+             * @default false
+             */
+            propagate_same_level: boolean;
         };
         /** AuthStatusResponse */
         AuthStatusResponse: {
@@ -4297,6 +4354,24 @@ export interface components {
         ConfirmBody: {
             /** Expected Revision */
             expected_revision: number;
+        };
+        /** ConfirmInput */
+        ConfirmInput: {
+            /** Project Id */
+            project_id: string;
+            /** Request Id */
+            request_id: string;
+            /**
+             * Environment
+             * @enum {string}
+             */
+            environment: "USAGE" | "DISTRIBUTION";
+            /** Case Id */
+            case_id: string;
+            /** Capture Id */
+            capture_id: string;
+            /** Operation Id */
+            operation_id: string;
         };
         /** CreateDraftInput */
         CreateDraftInput: {
@@ -4691,6 +4766,22 @@ export interface components {
             size_bytes: number;
             /** Checksum */
             checksum: string;
+        };
+        /** FinalizationInput */
+        FinalizationInput: {
+            /** Project Id */
+            project_id: string;
+            /** Request Id */
+            request_id: string;
+            /**
+             * Environment
+             * @enum {string}
+             */
+            environment: "USAGE" | "DISTRIBUTION";
+            /** Case Id */
+            case_id: string;
+            /** Capture Id */
+            capture_id: string;
         };
         /** FolderApply */
         FolderApply: {
@@ -11480,6 +11571,39 @@ export interface operations {
             };
         };
     };
+    archive_api_folder_discovery_environments_profiles__profile_id__delete: {
+        parameters: {
+            query: {
+                expected_revision: number;
+            };
+            header?: never;
+            path: {
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     copy_api_folder_discovery_environments_profiles_from_legacy_post: {
         parameters: {
             query?: never;
@@ -13145,6 +13269,7 @@ export interface operations {
             query: {
                 request_id: string;
                 environment: "USAGE" | "DISTRIBUTION";
+                project_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -13392,6 +13517,106 @@ export interface operations {
             path: {
                 asset_id: string;
             };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_api_dashboard_finalizations_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FinalizationInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    confirm_api_dashboard_finalizations_confirm_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfirmInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    status_api_dashboard_finalizations_status_get: {
+        parameters: {
+            query: {
+                project_id: string;
+                request_id: string;
+                environment: "USAGE" | "DISTRIBUTION";
+                case_id: string;
+            };
+            header?: never;
+            path?: never;
             cookie?: never;
         };
         requestBody?: never;

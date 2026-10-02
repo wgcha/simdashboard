@@ -14,7 +14,7 @@ from . import folder_schema_locations, result_registration_paths as paths
 
 
 def effective_assignment(schema: dict[str, Any], path_key: str) -> dict[str, Any] | None:
-    """Return an explicit registered role or a confirmed profile interpretation."""
+    """Return an explicit registered role or a confirmed schema interpretation."""
     node = next((item for item in schema.get("nodes", [])
                  if paths._root_casefold(str(item.get("relative_path", ""))) == path_key), None)
     if node and node.get("status") in {"EXCLUDED", "UNRESOLVED"}:
@@ -32,7 +32,13 @@ def effective_assignment(schema: dict[str, Any], path_key: str) -> dict[str, Any
         # this structural allowance never grants a semantic destination role.
         return {"relative_path": node.get("relative_path"), "role_kind": "CONTAINER",
                 "status": "CONTAINER", "name": node.get("name"), "source": "STRUCTURE"}
-    if (node.get("role_source") != "PROFILE" or node.get("role_basis") != "RULE" or
+    if (node.get("role_kind") == "WORKING" and node.get("status") == "CONFIRMED"
+            and node.get("role_source") == "PROFILE" and node.get("role_basis") == "DEFAULT"):
+        return {"relative_path": node.get("relative_path"), "role_kind": "WORKING",
+                "status": "CONFIRMED", "name": node.get("name"), "source": "PROFILE"}
+    confirmed_rule = node.get("role_source") == "PROFILE" and node.get("role_basis") == "RULE"
+    confirmed_level = node.get("role_source") == "INHERITED" and node.get("role_basis") == "LEVEL"
+    if (not (confirmed_rule or confirmed_level) or
             node.get("status") not in {"CONFIRMED", "CONTAINER"}):
         return None
     return {"relative_path": node.get("relative_path"), "role_kind": node.get("role_kind") or "CONTAINER",
@@ -75,6 +81,8 @@ def _result_candidates(conn: ConnectionLike, root, root_key: str, project_id: st
         parent_path = str(assignment.get("relative_path") or node.get("relative_path") or "")
         if not parent_path:
             continue
+        if paths._is_final_branch(request_path, parent_path):
+            continue
         if paths._has_owner_conflict(conn, root_id, root_key, parent_path,
                                     project_id, request_id, environment):
             continue
@@ -90,6 +98,16 @@ def _result_candidates(conn: ConnectionLike, root, root_key: str, project_id: st
                     child_assignment.get("status") in {"CONFIRMED", "LINKED"}):
                 result_nodes.append((child_node, child_assignment))
         destinations: list[tuple[str, bool]] = []
+        if expected_parent_role == "SCENE":
+            # Distribution projects commonly keep approved tables and media
+            # beside the RAD/INC solver inputs. The confirmed Scene is itself
+            # a safe destination, including before any result file is present.
+            try:
+                scene_dir = paths._safe_existing(root, parent_path)
+                if scene_dir.is_dir() and not paths.spdm_storage._is_reparse(scene_dir):
+                    destinations.append((parent_path, True))
+            except (OSError, paths.ResultRegistrationError):
+                pass
         if result_nodes:
             for result_node, result_assignment in result_nodes:
                 result_path = str(result_assignment.get("relative_path") or result_node.get("relative_path") or "")
@@ -103,16 +121,16 @@ def _result_candidates(conn: ConnectionLike, root, root_key: str, project_id: st
             result_path = f"{parent_path.rstrip('/')}/results"
             result_key = paths._root_casefold(result_path)
             result_node = nodes.get(result_key)
-            if result_node:
-                # A scanned but unresolved, excluded, or differently assigned
-                # child must not be promoted to a result destination.
-                continue
-            try:
-                destination = paths._safe_existing(root, result_path, allow_missing_leaf=True)
-                if not destination.exists():
-                    destinations.append((result_path, False))
-            except paths.ResultRegistrationError:
-                continue
+            # A scanned but unresolved, excluded, or differently assigned
+            # child must not be promoted to a result destination. It must not
+            # suppress the already confirmed parent Scene candidate either.
+            if result_node is None:
+                try:
+                    destination = paths._safe_existing(root, result_path, allow_missing_leaf=True)
+                    if not destination.exists():
+                        destinations.append((result_path, False))
+                except paths.ResultRegistrationError:
+                    pass
         context = paths._empty_context()
         assignments: list[dict[str, Any]] = []
         parent_parts = PurePosixPath(parent_path).parts

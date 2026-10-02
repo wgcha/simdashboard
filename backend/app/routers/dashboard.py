@@ -67,10 +67,11 @@ def lines_from(value):
 
 
 @router.get("/catalog")
-def catalog(request: Request, request_id: str, environment: Literal["USAGE", "DISTRIBUTION"]):
+def catalog(request: Request, request_id: str,
+            environment: Literal["USAGE", "DISTRIBUTION"], project_id: str | None = None):
     with connect() as conn:
         require_resource_permission(request, PROJECT_DATA_VIEW, "request", request_id, conn=conn)
-        return queries.catalog(conn, request_id, environment)
+        return queries.catalog(conn, request_id, environment, project_id)
 
 
 @router.post("/scans")

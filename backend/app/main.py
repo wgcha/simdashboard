@@ -46,6 +46,7 @@ from .routers.result_ingestion import router as result_ingestion_router
 from .routers.spdm_storage import router as spdm_storage_router
 from .routers.result_registration import router as result_registration_router
 from .routers.dashboard import router as result_dashboard_router
+from .routers.case_finalization import router as case_finalization_router
 from .routers.materials import router as materials_router
 from .routers.folder_discovery import router as folder_discovery_router
 from .routers.folder_discovery_environment import router as folder_discovery_environment_router
@@ -328,6 +329,7 @@ app.include_router(result_ingestion_router)
 app.include_router(spdm_storage_router)
 app.include_router(result_registration_router)
 app.include_router(result_dashboard_router)
+app.include_router(case_finalization_router)
 app.include_router(materials_router)
 app.include_router(media_router)
 app.include_router(load_case_overview_router)

@@ -37,7 +37,8 @@ def mutate(request, operation):
             with legacy.WRITE_LOCK, semantic_transaction(conn):
                 result = operation(conn)
                 write_audit_event(request=request, principal=request.state.principal, status_code=200,
-                    action="FOLDER_ENVIRONMENT_PROFILE_SAVED", detail={"profile_id": result["id"], "revision": result["revision"]}, connection=conn)
+                    action="FOLDER_ENVIRONMENT_PROFILE_ARCHIVED" if result.get("archived") else "FOLDER_ENVIRONMENT_PROFILE_SAVED",
+                    detail={"profile_id": result["id"], "revision": result["revision"]}, connection=conn)
                 return result
         except ValueError as exc:
             raise HTTPException(422, {"code": "ENVIRONMENT_PROFILE_INVALID", "message": str(exc)}) from exc
@@ -51,6 +52,11 @@ def create(payload: Profile, request: Request):
 @router.put("/profiles/{profile_id}")
 def update(profile_id: str, payload: ProfileUpdate, request: Request):
     return mutate(request, lambda conn: service.save_profile(conn, profile_id=profile_id, **payload.model_dump()))
+
+
+@router.delete("/profiles/{profile_id}")
+def archive(profile_id: str, request: Request, expected_revision: int = Query(ge=1)):
+    return mutate(request, lambda conn: service.archive_profile(conn, profile_id, expected_revision))
 
 
 @router.post("/profiles/from-legacy")
