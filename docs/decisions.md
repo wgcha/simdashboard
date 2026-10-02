@@ -14,3 +14,4 @@
 - 2026-10-02 · 의뢰 하위 L1은 이름(Working 필수 / Final 선택)으로 구분하고 Final도 스키마 대상에 포함 · Final 저장물(CAE·Reports) 구조 검증
 - 2026-10-02 · Final 하위 L2: CAE=해석 입출력, Reports=보고서 PPTX/PDF. L3 이하는 `<Case>/<finalization_id>/<Working 미러>` 고정, 결과 판독은 Working만 · 앱이 쓰는 구조라 편집 불필요
 - 2026-10-02 · Working 하위 폴더명은 제한하지 않음(RunOption도 INDIVIDUAL·CUMULATIVE 외 허용), 역할은 깊이로만 판정 · 실제 RunOption 이름이 다양함
+- 2026-10-02 · RunOption 레벨은 생략하지 않는 운영 규칙으로 두고 자동 누락 감지는 하지 않음. 스키마 편집기에 L5 폴더명 전체 목록을 표시 · 이름 다양성 수용 + 육안 점검

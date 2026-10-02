@@ -15,6 +15,7 @@
 | D1 | 상위 구간(Root→…→프로젝트→의뢰)의 깊이는 관리자가 지정한다. 전역 1개 |
 | D2 | 하위 구간은 표준 깊이를 강제한다. Working 필수, 유통 RunOption 레벨 필수. 이탈하면 "확인 필요" |
 | D2a | Working 하위의 폴더 이름은 제한하지 않는다. RunOption도 INDIVIDUAL·CUMULATIVE 외 이름을 허용한다. 역할은 깊이로만 정한다(이름 규칙 `allowed_names` 없음) |
+| D2b | RunOption 레벨은 생략하지 않는다(운영 규칙). 자동 누락 감지는 두지 않고, 대신 L5(RunOption)에서 발견된 **폴더 이름 전체 목록**을 보여준다. 관리자는 이 목록에서 Scene 이름이 섞였는지 등을 눈으로 확인한다 |
 | D3 | 스키마는 환경별 전역 1개. 프로젝트별 재정의 없음 |
 | D4 | 환경은 의뢰 폴더명 부분일치로 정한다. `사용` → USAGE, `유통` → DISTRIBUTION. 둘 다 있거나 둘 다 없으면 "확인 필요" |
 | D5 | 구형 `WR_x_SimType1|2` 규칙은 삭제한다 |
@@ -167,10 +168,11 @@ USAGE 행은 `environment_keyword: "사용"`, `lower.levels = [WORKING(fixed), S
 |---|---|---|---|
 | GET | `/api/folder-discovery/environments/depth-schema` | – | `{schema_set_id, upper, environments:{USAGE:{profile_id, environment_keyword, lower, usage_sources}, DISTRIBUTION:{…}}, created_at, created_by}` |
 | PUT | `…/depth-schema` | `{expected_schema_set_id, upper, environments}` | GET과 동일. 경합하면 409 `DEPTH_SCHEMA_CONFLICT` |
-| POST | `…/depth-schema/samples` | `{segment: "UPPER"\|"USAGE"\|"DISTRIBUTION", upper?}` | `{levels:[{level, folder_count, samples:[{name, count}] (≤8), truncated}], requests_sampled}` |
+| POST | `…/depth-schema/samples` | `{segment: "UPPER"\|"USAGE"\|"DISTRIBUTION", upper?}` | `{levels:[{level, folder_count, samples:[{name, count}] (≤8), truncated}], requests_sampled, run_option_names?:[{name, count, request_count}]}` |
 | POST | `…/depth-schema/check` | `{upper, environments}` (초안) | `{by_code:{CODE: count}, examples:[{relative_path, code}] (≤20)}` |
 | POST | `/api/requests/{request_id}/reinterpret` | – | 현재 스키마로 scan → preview → register. 이탈이 있으면 등록하지 않고 이탈 목록을 반환 |
 
+- `run_option_names` (DISTRIBUTION만): L5 위치에서 발견된 폴더 이름의 **전체** 목록(중복 제거, casefold 기준 병합, 개수와 의뢰 수 포함). 샘플 20개 제한을 받지 않고 해당 환경의 모든 의뢰를 대상으로 한다(목록 한도 500, 초과 시 `truncated`).
 - `samples`: 하위 구간은 `upper`로 찾은 해당 환경 의뢰를 최대 20개까지 보고, 의뢰 기준 상대 깊이로 집계한다. 집계는 Working 가지만 대상으로 하고(Final은 고정 구조라 편집 대상 아님), 기존 `_Lister` 한도를 재사용한다.
 - 모든 엔드포인트는 SPDM에 쓰지 않는다(읽기 전용 스캔).
 
@@ -189,6 +191,7 @@ USAGE 행은 `environment_keyword: "사용"`, `lower.levels = [WORKING(fixed), S
   - 탭 3개: 상위 구조 / 사용환경 / 유통환경
   - 탭마다 표 1개: `깊이 | 예시 폴더(이름×개수, +N) | 폴더 수 | 역할 select`
   - Root 행은 표시만 하고, 하위 탭의 L1 Working 행은 잠근다. 하위 탭 아래에 Final 고정 구조(L1 Final / L2 CAE·Reports / L3 Case / L4 버전 / L5~ 미러)를 읽기 전용으로 함께 표시한다.
+  - 유통 탭의 RUN_OPTION 행은 예시 대신 **RunOption 이름 전체 목록**(이름 · 폴더 수 · 의뢰 수)을 펼쳐 보여준다. 읽기 전용이다.
   - 탭을 열면 `samples`를 자동 호출한다. 행 수는 샘플 깊이에 맞춰 자동이고, 마지막 행 삭제만 가능하다.
   - 버튼은 **확인**(check 결과를 코드별 건수로 표시)과 **저장** 2개뿐이다.
 - `FolderEnvironmentWorkspace`
@@ -237,7 +240,7 @@ T1과 T2는 병렬, T3·T4·T5는 T2 이후 병렬, T6과 T7은 T0 이후 병렬
 ## 11. Verifier 통과 기준
 
 1. 실제 트리 fixture 2개(유통 `75R9J_PV/[WR-0002]_[유통_환경]`, 사용 `75R9J_PV/[WR-0001]_[사용_환경]`)에서 이탈 0건, 역할이 §3과 일치
-2. 유통 L5에 `INDIVIDUAL`·`CUMULATIVE` 외 이름(예: `ALL`) → RUN_OPTION으로 정상 판정, 이탈 0건
+2. 유통 L5에 `INDIVIDUAL`·`CUMULATIVE` 외 이름(예: `ALL`) → RUN_OPTION으로 정상 판정, 이탈 0건. `samples`의 `run_option_names`에 모든 의뢰의 L5 이름이 빠짐없이 나옴
 3. 의뢰명 키워드 없음/둘 다 → auto-discovery `needs_review`, 등록 없음
 4. Working 없는 의뢰 → `WORKING_MISSING`
 5. Scene 아래 하위폴더 → CONTENT, 이탈 아님
@@ -250,4 +253,3 @@ T1과 T2는 병렬, T3·T4·T5는 T2 이후 병렬, T6과 T7은 T0 이후 병렬
 ## 12. 미확정
 
 - `Final/CAD`: 실제 폴더에 존재하며(현재 비어 있음) 앱은 쓰지 않는다. 잠정적으로 FINAL_CAD(하위 CONTENT)로 둔다. 용도와 채우는 주체를 확정해야 한다.
-- **RunOption 레벨 누락 감지**: 이름 제한이 없으므로 Run 바로 아래에 Scene이 온 경우(레벨 누락) Scene이 RUN_OPTION으로, 그 하위가 SCENE으로 잘못 판정된다. 후보 보완책: 구조 레벨(Working~RunOption)에 결과 파일(`*_result.json`, `.csv`, 미디어)이 직접 있으면 `FILES_AT_STRUCTURE_LEVEL` 경고. 채택 여부 확정 필요.
