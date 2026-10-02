@@ -2,7 +2,7 @@ import { lazy, Suspense } from 'react'
 import { AlertTriangle, Download, LoaderCircle, Settings2, X } from 'lucide-react'
 import type { ReportExportController } from './useReportExportController'
 
-const ReportLayoutEditor = lazy(() => import('./ReportLayoutEditor').then(({ ReportLayoutEditor: Editor }) => ({ default: Editor })))
+const ReportLayoutEditor = lazy(() => import('../../shared/reports/ReportLayoutEditor').then(({ ReportLayoutEditor: Editor }) => ({ default: Editor })))
 const reportEditorFallback = <div className="full-state"><LoaderCircle className="spin" /> 화면을 준비하고 있습니다.</div>
 
 export function ReportExportDialog({ controller }: { controller: ReportExportController }) {

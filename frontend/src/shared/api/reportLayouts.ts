@@ -1,7 +1,7 @@
 import type { ReportLayout, ReportLayoutDefinition, ReportLayoutVersion } from '../../types'
-import { responseRecord, responseRecordArray } from '../../shared/api/adapters'
-import { apiClient, unwrapGenerated } from '../../shared/api/client'
-import type { components } from '../../shared/api/generated/openapi'
+import { responseRecord, responseRecordArray } from './adapters'
+import { apiClient, unwrapGenerated } from './client'
+import type { components } from './generated/openapi'
 
 type ReportLayoutDefinitionResponse = components['schemas']['ReportLayoutDefinition']
 type ReportVariablePlacementResponse = components['schemas']['ReportVariablePlacement']

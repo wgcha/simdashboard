@@ -51,4 +51,39 @@ export const simulationDashboardApi = {
   sceneDetail: (sceneId: string, context: Pick<DashboardContext, 'execution_run_id' | 'capture_id' | 'run_option_id' | 'mode' | 'component_id' | 'basis'> & { line_indices?: string; position?: string }, signal?: AbortSignal) => read<DashboardSceneDetail>(dashboardPath('distribution', 'scenes', encodeURIComponent(sceneId)), { run_id: context.execution_run_id, capture_id: context.capture_id, run_option_id: context.run_option_id, mode: context.mode, component_id: context.component_id, basis: context.basis, line_indices: context.line_indices, position: context.position }, signal),
   videos: (runId: string, context: Pick<DashboardContext, 'capture_id' | 'run_option_id' | 'mode'> & { page?: number; page_size?: number }, signal?: AbortSignal) => read<DashboardRunVideoPage>(dashboardPath('distribution', 'runs', encodeURIComponent(runId), 'videos'), { capture_id: context.capture_id, run_option_id: context.run_option_id, mode: context.mode, page: context.page === undefined ? undefined : String(context.page), page_size: context.page_size === undefined ? undefined : String(context.page_size) }, signal),
   assetUrl: (assetId: string) => apiUrl(dashboardPath('assets', encodeURIComponent(assetId)) as never),
+  assetBlob: (assetId: string, options: { maxBytes?: number; signal?: AbortSignal } = {}) => readAssetBlob(assetId, options),
+}
+
+export type DashboardAssetBlob = { status: 'OK'; blob: Blob } | { status: 'TOO_LARGE'; size: number }
+
+/** Reads one result asset (image or video). Stops reading once `maxBytes` is exceeded. */
+async function readAssetBlob(assetId: string, { maxBytes, signal }: { maxBytes?: number; signal?: AbortSignal }): Promise<DashboardAssetBlob> {
+  const controller = new AbortController()
+  const abort = () => controller.abort()
+  if (signal?.aborted) controller.abort()
+  signal?.addEventListener('abort', abort, { once: true })
+  try {
+    const response = await apiFetch(apiUrl(dashboardPath('assets', encodeURIComponent(assetId)) as never), { signal: controller.signal })
+    if (!response.ok) throw await apiErrorFromResponse(response)
+    const type = response.headers.get('content-type') ?? ''
+    const declared = Number(response.headers.get('content-length') ?? Number.NaN)
+    if (maxBytes !== undefined && Number.isFinite(declared) && declared > maxBytes) { controller.abort(); return { status: 'TOO_LARGE', size: declared } }
+    if (maxBytes === undefined || !response.body) {
+      const blob = await response.blob()
+      return maxBytes !== undefined && blob.size > maxBytes ? { status: 'TOO_LARGE', size: blob.size } : { status: 'OK', blob }
+    }
+    const reader = response.body.getReader()
+    const chunks: BlobPart[] = []
+    let total = 0
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      total += value.byteLength
+      if (total > maxBytes) { await reader.cancel().catch(() => undefined); controller.abort(); return { status: 'TOO_LARGE', size: total } }
+      chunks.push(value)
+    }
+    return { status: 'OK', blob: new Blob(chunks, { type }) }
+  } finally {
+    signal?.removeEventListener('abort', abort)
+  }
 }

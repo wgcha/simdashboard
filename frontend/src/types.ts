@@ -298,9 +298,11 @@ export type ReportElementBinding = {
 export type ReportSource =
   | { kind: 'analysis_page'; dashboardId: string; loadCaseId: string; runId: string }
   | { kind: 'run_compare_review'; loadCaseId: string; baselineRunId: string; targetRunId: string }
+  /** Case 결과 (SPDM folder results): the scope fixed when the report dialog opened. */
+  | { kind: 'case_results'; projectId: string; requestId: string; caseId: string; captureId: string; loadCaseId: string; runId: string; optionId: string; mode: string; componentId: string; basis: string; edgeKeys: string; lineIndices: string }
 export type ReportContentItem = {
   contentId: string
-  kind: 'dashboard_widget' | 'comparison_summary' | 'comparison_variable' | 'comparison_series' | 'trust_summary' | 'review_item'
+  kind: 'dashboard_widget' | 'comparison_summary' | 'comparison_variable' | 'comparison_series' | 'trust_summary' | 'review_item' | 'case_scope' | 'case_summary' | 'case_scene_table' | 'case_image' | 'case_videos'
   sourceKey: string
   title: string
   defaultPresentation: 'card' | 'chart' | 'table' | 'image' | 'text'

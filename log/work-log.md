@@ -1078,3 +1078,10 @@
 - 현장(읽기 전용 API 조회): 같은 `75R9J_PV/[WR-0001]_[유통_환경]` 폴더가 두 프로젝트(00:05 기존 등록, 13:31 UTC 관리자 폴더 조사 수동 등록)의 의뢰에 각각 연결되어, 소재 카탈로그의 소유권 검사가 모든 Scene을 조용히 제외했다. Case 결과는 소유권 검사가 없어 표시됐다. 자동 확인(discover)은 원인이 아님(감사 기록 FOLDER_ENVIRONMENT_REGISTERED, 회귀 테스트로 root 이동 후 중복 생성 안 함 확인).
 - 조치: 소재 카탈로그가 제외한 Scene을 `conflicts`로 돌려주고 화면에 "다른 의뢰에도 연결" 안내 표시. 데이터 정리(중복 프로젝트·의뢰 해제)는 앱에 기능이 없어 사용자 결정 대기.
 - 검증: shared_folder_hierarchy·auto_discovery·materials 58 passed, e2e materials 6 passed, tsc 통과.
+
+## 2026-10-03 5단계 Case 보고서(PPTX·HTML) (Claude, 브랜치 claude/case-results-redesign)
+- Case 결과 헤더에 `보고서` 버튼(Final 지정 옆)과 보고서 창 추가. 창을 연 순간의 범위(Case·`latest:<Case>`·하중경우·Run·Option·Component·Basis·엣지/라인)를 `ReportSource` `case_results`로 고정하고 자료를 한 번 읽어 레시피를 만든 뒤 PPTX·HTML로 그린다. 형식은 하나 이상 선택, 둘이면 두 파일. PDF 관련 구현 없음(23:58 결정). 백엔드 변경 없음.
+- PPTX는 기존 pptxgenjs 렌더러·회사 레이아웃·편집 창 재사용(`renderReportPptxBlob` 추가, 표 12행 분할, 영상은 파일 이름). HTML은 단일 파일(인라인 CSS, data URI, 스크립트 없음, CSP로 외부 참조 차단, 모든 문자열 이스케이프). `영상 포함`(기본 꺼짐)은 영상당 20MB·전체 200MB 상한, 넘으면 파일 이름으로 대체하고 창에 목록 표시.
+- 6단계 재사용용 순수 함수: `frontend/src/features/results/caseReport/caseReport.ts`. 문서: [Case 결과 보고서](../docs/features/case-report.md).
+- 구조: 기능 간 import 금지 규칙에 맞추려고 `features/reports/api.ts`를 `shared/api/reportLayouts.ts`로, `ReportLayoutEditor`·`reportLayoutUtils`를 `shared/reports/`로 옮겼다(동작 변경 없음). 미디어는 `simulationDashboardApi.assetBlob`(크기 상한 스트리밍 읽기)로만 읽는다.
+- 기존 버그 수정: Run Option이 둘 이상일 때 사용자가 고른 값이 자동 보정(이전 URL을 본 렌더)으로 지워지던 문제. 빈 값을 빈 값으로 바꾸는 보정을 건너뛴다(`SimulationDashboard` `choose`).

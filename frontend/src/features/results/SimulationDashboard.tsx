@@ -13,6 +13,8 @@ import { SimulationResultGraph } from './SimulationResultGraph'
 import { CaseFinalizationPanel } from './CaseFinalizationPanel'
 import { CaseVideoGrid } from './CaseVideoGrid'
 import { useCaseHierarchyParams } from '../../shared/hooks/useCaseHierarchyParams'
+import { CaseReportLauncher } from './caseReport/CaseReportLauncher'
+import type { CaseReportScope } from './caseReport/caseReport'
 
 type Props = {
   projectId: string
@@ -143,7 +145,10 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
       if (unique.some((item) => item.id === current)) return
       // Prefer a candidate that carries values (the server lists those first).
       const preferred = unique.find((item) => item.has_values) ?? unique[0]
-      setter(unique.length === 1 || (firstIfMany && unique.length) ? preferred.id : '')
+      const next = unique.length === 1 || (firstIfMany && unique.length) ? preferred.id : ''
+      // Clearing an empty level is a no-op; skipping it also keeps a render that
+      // still sees the old URL from undoing a choice the user just made.
+      if (next !== current) setter(next)
     }
     const caseChoice = catalog.cases.find((item) => item.id === caseId || item.dashboard_case_id === caseId)
     if (caseChoice && caseChoice.id !== caseId) setCaseId(caseChoice.id)
@@ -248,10 +253,17 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
     : activeView === 'video' ? (runId && !optionId && options.length > 1 ? <State message="Run Option을 선택하세요." /> : activeCaptureId && runId ? <CaseVideoGrid key={`${activeCaptureId}:${runId}:${optionId}`} captureId={activeCaptureId} runId={runId} runOptionId={optionId || undefined} mode={mode || undefined} /> : <State message={distributionEmpty} />)
     : distribution(activeView === 'compare' ? 'compare' : 'summary')
 
+  // The report dialog copies this scope when it opens (later changes do not reach it).
+  const optionChoice = options.find((item) => item.id === optionId)
+  const reportReady = tab === 'distribution' && !materialsActive && Boolean(activeCaptureId && runId && mode && componentId && basis && (optionId || !options.length)) && runChoices.some((item) => item.id === runId && item.capture_id === activeCaptureId)
+  const reportScope: CaseReportScope | null = reportReady ? {
+    source: { kind: 'case_results', projectId, requestId, caseId: dashboardCaseId, captureId: activeCaptureId, loadCaseId, runId, optionId, mode, componentId, basis, edgeKeys: edges.join(','), lineIndices: lines.join(',') },
+    labels: { project: '', request: '', caseLabel: selectedCase?.label ?? caseLabel(caseId), loadCase: loadChoices.find((item) => item.id === loadCaseId)?.label ?? '', run: runChoices.find((item) => item.id === runId)?.label ?? '', option: optionChoice?.option_label || optionChoice?.label || '', component: componentLabel ?? '', basis: basisLabel(basis) },
+  } : null
   return <section className="simulation-dashboard" data-ui-density="v1" aria-label="SPDM 해석 결과 대시보드">
     <header className="case-results-head">
       <div className="case-env-toggle" role="group" aria-label="결과 환경"><button type="button" aria-pressed={tab === 'usage'} className={tab === 'usage' ? 'active' : ''} onClick={() => setTab('usage')}>사용환경</button><button type="button" aria-pressed={tab === 'distribution'} className={tab === 'distribution' ? 'active' : ''} onClick={() => setTab('distribution')}>유통환경</button></div>
-      <div className="case-results-head__actions">{headerExtra}{catalog ? <CaseFinalizationPanel projectId={projectId} requestId={requestId} environment={tab === 'usage' ? 'USAGE' : 'DISTRIBUTION'} caseId={dashboardCaseId} captureId={storedCaptureId} hasCapturedCase={hasCapturedCase} canFinalize={canRefreshSchema} /> : null}</div>
+      <div className="case-results-head__actions">{headerExtra}{catalog ? <CaseReportLauncher scope={reportScope} disabledReason="유통환경에서 결과가 있는 Run Case와 Run Option을 선택하면 보고서를 만들 수 있습니다." /> : null}{catalog ? <CaseFinalizationPanel projectId={projectId} requestId={requestId} environment={tab === 'usage' ? 'USAGE' : 'DISTRIBUTION'} caseId={dashboardCaseId} captureId={storedCaptureId} hasCapturedCase={hasCapturedCase} canFinalize={canRefreshSchema} /> : null}</div>
     </header>
     {catalogError && !catalog && !materialsActive ? <State message={catalogError} error /> : null}
     {catalogError && catalog ? <State message={`${catalogError} · 마지막으로 읽은 결과를 표시합니다.`} error /> : null}
