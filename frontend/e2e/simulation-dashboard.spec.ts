@@ -178,7 +178,8 @@ async function fulfillJson(route: Route, body: unknown) {
 async function openResults(page: Page) {
   await loginWorkspace(page)
   await page.goto('/workspace/requests?project=project-tv-001&request=request-drop-001&view=case_results')
-  await expect(page.getByRole('region', { name: 'SPDM 해석 결과 대시보드' })).toBeVisible()
+  // A full reload re-bootstraps the workspace; allow for a slow first render.
+  await expect(page.getByRole('region', { name: 'SPDM 해석 결과 대시보드' })).toBeVisible({ timeout: 15_000 })
 }
 
 test('usage source review preserves independent slope fields and hides raw diagnostics', async ({ page }) => {

@@ -1051,3 +1051,9 @@
 - 독립 검수 지적 7건(로그 변경마다 전체 갱신·capture, 충돌 반복 조사, 구 snapshot 반복 판독, 수동 확인의 전체 판독, 재스캔 경합, 비 ValueError 처리, 중복 revision)과 계약 문서 누락을 수정했다. 기존 회귀 테스트가 같은 mtime 내용 변경 capture 누락을 잡아 결과 내용 지문으로 고쳤다.
 - 검증: 백엔드 관련 회귀 188 passed(격리 DuckDB·임시 root). tsc·build·routing/api/architecture self-test 통과, check:architecture 기존 4건만. e2e materials 5/5, folder-working-final 3/3; simulation-dashboard·spdm-storage-workflow·request-centric-workspace·environment-folder-flow 실패는 기준 커밋 725f4f7과 동일한 기존 항목.
 - 미실행: Codex Security 플러그인 스캔(수동 독립 검수로 대체), PostgreSQL·Windows·Server 2022, 다중 프로세스 부하 측정, 실제 공유폴더 30초 부하. migration·의존성·배포 진입점 변경 없음.
+
+## 2026-10-02 사용자 확인 반영: Scene 폴더 저장·형식 제한 해제·최신 결과 통합 표시 (Claude)
+- 사용자가 브랜치를 update.bat으로 적용해 6_corner 등록·실제 폴더 반영을 확인했다. 요청: results 하위 폴더 불필요, 업로드 형식 제한 해제, Run Option 아래 모든 Scene 결과를 함께 표시(버전별 조회 불필요).
+- 조치: 유통환경 Scene 자체를 결과 위치로 제안, 실행 파일·스크립트 외 모든 형식 업로드 허용, Case별 Scene 최신 결과 병합(가상 버전 latest:<Case>)을 기본 표시하고 버전은 업데이트 이력으로만 표시, 게시 후 Refresh에서 Case 폴더 전체 수집(capture_cases=True). 등록 테스트 2건은 "게시당 버전 1개" 가정을 멱등성 확인으로 바꿨다.
+- 검증: 관련 백엔드 102 passed(신규 포함), tsc 통과, e2e materials 5/5·folder-working-final 3/3·simulation-dashboard 9/10(남은 1건은 기준 커밋부터 실패하는 capture-pin 항목). simulation-dashboard의 첫 화면 대기 시간을 15초로 늘려 재로딩 지연에 따른 간헐 실패를 정리했다.
+- 미실행: 독립 검수(이번 변경분), Codex Security 스캔, Windows/Server 2022. 최종확정의 병합 최신 결과 기준 처리는 6단계에서 정리한다.

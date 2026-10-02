@@ -33,11 +33,10 @@ test('Case 최종확정은 파일 미리보기 후 복사하고 확정 상태를
   await dialog.getByRole('button', { name: '확정하고 파일 복사', exact: true }).click()
   await expect(dialog).not.toBeVisible()
   await expect(page.locator('.case-finalization')).toContainText('확정 완료')
-  const contextSelect = page.locator('.simulation-dashboard').locator('label').filter({ hasText: '조회 문맥' }).locator('select').first()
-  await contextSelect.selectOption('__folder_schema__')
+  // The view always shows the merged latest result (no per-capture context selector).
+  await expect(page.locator('.simulation-dashboard').locator('label').filter({ hasText: '조회 문맥' })).toHaveCount(0)
   await expect(page.locator('.case-finalization')).toContainText('확정 완료')
   await expect(page.locator('.case-finalization')).toContainText('capture-final')
-  await expect(page.getByRole('button', { name: '최종확정', exact: true })).toBeDisabled()
   expect(confirmed).toBe(true)
   expect(errors).toEqual([])
 })

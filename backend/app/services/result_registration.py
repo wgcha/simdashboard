@@ -1052,7 +1052,10 @@ def _mirror_after_capture(conn: ConnectionLike, draft_id: str, actor: str) -> di
         if status == "PUBLISHED":
             schema_refresh = _refresh_schema(
                 conn, str(row["project_id"]), str(row["request_id"]), str(row["environment"]), actor,
-                capture_cases=False,
+                # Capture the whole Case folder too: the newest stored version
+                # must reflect every Scene, and the auto-sync quick check would
+                # otherwise treat this folder state as already captured.
+                capture_cases=True,
             )
             _begin(conn)
             latest = _draft_row(conn, draft_id, lock=True)

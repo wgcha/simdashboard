@@ -138,6 +138,33 @@ def catalog(conn, request_id, environment, project_id=None):
         result["cases"].append(case)
 
     case_choices = {str(item["id"]): item for item in result["cases"]}
+
+    def emit(capture_id, label, dashboard_case_id, canonical_case_id, payload, match_status):
+        parent = {"case_id": canonical_case_id, "simulation_case_id": canonical_case_id,
+                  "capture_id": str(capture_id)}
+        capture_entry = {"id": str(capture_id), "label": label, "dashboard_case_id": str(dashboard_case_id),
+                         "match_status": match_status, **parent}
+        for run in payload.get("runs", []):
+            option_id, option_label, option_status = option_projection(run, capture_id)
+            scope = {**parent, "load_case_id": run["load_case_id"], "execution_run_id": run["id"], "run_option_id": option_id, "option_status": option_status, "option_label": option_label, "mode": run["mode"], "match_status": "CAPTURED"}
+            result["load_cases"].append({"id": run["load_case_id"], "label": run.get("load_case_name", "하중경우"), **scope})
+            result["execution_runs"].append({"id": run["id"], "label": run["source_name"], **scope})
+            result["run_options"].append({"id": option_id, "label": option_label or "옵션 없음", **scope})
+            result["modes"].append({"id": run["mode"], "label": run["mode"], **scope})
+            for scene in run.get("scenes", []):
+                result["scenes"].append({
+                    "id": str(scene.get("id") or ""),
+                    "label": str(scene.get("source_name") or scene.get("label") or scene.get("id") or "Scene"),
+                    **scope,
+                })
+            components = sorted({o["component_id"] for s in run["scenes"] for o in s.get("observations", []) if o.get("component_id")}
+                                | {m["component_id"] for s in run["scenes"] for m in s.get("media", []) if m.get("component_id")})
+            result["components"].extend({"id": c, "label": c, **scope} for c in components)
+        return capture_entry
+
+    from .dashboard_capture import latest_capture_id, merge_latest_payload
+    history_by_case: dict[str, list[tuple[str, Any]]] = {}
+    latest_meta: dict[str, tuple[str, str]] = {}
     for case_id, name, storage_root_id, relative_path, capture_id, created_at, raw in records:
         if str(case_id) in final_case_ids:
             case = next(item for item in result["final_history"] if item["id"] == str(case_id))
@@ -149,33 +176,28 @@ def catalog(conn, request_id, environment, project_id=None):
         canonical_case_id = dashboard_case_ids.get(str(case_id), str(case_id))
         if not capture_id:
             continue
-        parent = {"case_id": canonical_case_id, "simulation_case_id": canonical_case_id,
-                  "capture_id": str(capture_id)}
         case_choice = case_choices.get(canonical_case_id)
         if case_choice is not None:
             case_choice["capture_count"] = int(case_choice.get("capture_count") or 0) + 1
             case_choice["match_status"] = "CAPTURED" if case_choice.get("source") == "FOLDER_SCHEMA" else "HISTORY_ONLY"
-        result["captures"].append({"id": str(capture_id), "label": str(created_at),
-                                   "dashboard_case_id": str(case_id),
-                                   "match_status": "MATCHED_TO_SCHEMA" if case_choice and case_choice.get("source") == "FOLDER_SCHEMA" else "HISTORY_ONLY",
-                                   **parent})
-        payload = _decode(raw)
-        for run in payload.get("runs", []):
-            option_id, option_label, option_status = option_projection(run, capture_id)
-            scope = {**parent, "load_case_id": run["load_case_id"], "execution_run_id": run["id"], "run_option_id": option_id, "option_status": option_status, "option_label": option_label, "mode": run["mode"], "match_status": "CAPTURED"}
-            result["load_cases"].append({"id": run["load_case_id"], "label": run.get("load_case_name", "하중경우"), **scope})
-            result["execution_runs"].append({"id": run["id"], "label": run["source_name"], **scope})
-            result["run_options"].append({"id": option_id, "label": option_label or "옵션 없음", **scope})
-            result["modes"].append({"id": run["mode"], "label": run["mode"], **scope})
-            for scene in run.get("scenes", []):
-                result["scenes"].append({
-                    "id": str(scene.get("id") or ""),
-                    "label": str(scene.get("source_name") or scene.get("id") or "Scene"),
-                    **scope,
-                })
-            components = sorted({o["component_id"] for s in run["scenes"] for o in s.get("observations", []) if o.get("component_id")}
-                                | {m["component_id"] for s in run["scenes"] for m in s.get("media", []) if m.get("component_id")})
-            result["components"].extend({"id": c, "label": c, **scope} for c in components)
+        match_status = "MATCHED_TO_SCHEMA" if case_choice and case_choice.get("source") == "FOLDER_SCHEMA" else "HISTORY_ONLY"
+        result["captures"].append(emit(capture_id, str(created_at), case_id, canonical_case_id, _decode(raw), match_status))
+        # Records are newest first; the merge wants oldest first.
+        history_by_case.setdefault(str(case_id), []).insert(0, (str(capture_id), raw))
+        latest_meta[str(case_id)] = (canonical_case_id, match_status)
+    # The default view of every Case: newest result of each Scene folder
+    # merged across all captures (user decision 2026-10-02). Individual
+    # captures stay listed as update history.
+    latest_entries = []
+    for dashboard_case_id, entries in history_by_case.items():
+        canonical_case_id, match_status = latest_meta[dashboard_case_id]
+        merged = merge_latest_payload(entries)
+        entry = emit(latest_capture_id(dashboard_case_id), "최신 결과", dashboard_case_id, canonical_case_id,
+                     merged, match_status)
+        entry["kind"] = "LATEST"
+        entry["merged_capture_count"] = len(merged.get("merged_capture_ids") or [])
+        latest_entries.append(entry)
+    result["captures"] = latest_entries + result["captures"]
     for key in ("load_cases", "execution_runs", "run_options", "modes", "components", "scenes"):
         unique = {}
         for item in result[key]:

@@ -103,7 +103,11 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
     const activeCaptureId = catalog.captures.some((item) => item.id === captureId) ? captureId : ''
     if (caseId) {
       const captures = Array.from(new Map(catalog.captures.filter((item) => item.case_id === (caseChoice?.id ?? caseId)).map((item) => [item.id, item])).values())
-      if (captureId !== SCHEMA_CONTEXT && !captures.some((item) => item.id === captureId)) setCaptureId(captures[0]?.id ?? SCHEMA_CONTEXT)
+      // Always show the Case's merged latest result: every Scene of the Run
+      // option with its newest captured result. Stored captures are history.
+      const latest = captures.find((item) => item.kind === 'LATEST')
+      if (latest) { if (captureId !== latest.id) setCaptureId(latest.id) }
+      else if (captureId !== SCHEMA_CONTEXT && !captures.some((item) => item.id === captureId)) setCaptureId(captures[0]?.id ?? SCHEMA_CONTEXT)
     }
     if (tab === 'distribution' && caseId) choose(loadCaseId, catalog.load_cases.filter((item) => item.case_id === caseId && currentHierarchyChoice(item, activeCaptureId)), setLoadCaseId)
     if (tab === 'distribution' && loadCaseId) choose(runId, catalog.execution_runs.filter((item) => item.case_id === caseId && item.load_case_id === loadCaseId && currentHierarchyChoice(item, activeCaptureId)), setRunId)
@@ -117,37 +121,46 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
   const folderHref = `/workspace/catalog/schemas?${new URLSearchParams({ project: projectId, request: requestId, result_environment: tab === 'usage' ? 'USAGE' : 'DISTRIBUTION' }).toString()}`
 
   const selectedCapture = catalog?.captures.find((item) => item.id === captureId)
+  // Stored captures of this Case, newest first (the merged LATEST entry is virtual).
+  const storedCaptures = (catalog?.captures ?? []).filter((item) => item.case_id === caseId && item.kind !== 'LATEST')
+  const storedCaptureId = storedCaptures[0]?.id ?? ''
   const selectedCase = catalog?.cases.find((item) => item.id === caseId)
   const dashboardCaseId = selectedCapture?.dashboard_case_id ?? selectedCase?.dashboard_case_id ?? caseId
   const hasCapturedCase = Boolean(selectedCase?.dashboard_case_id
     || catalog?.captures.some((item) => item.case_id === caseId))
-  const schemaContextChoice: DashboardChoice = { id: SCHEMA_CONTEXT, label: catalog?.folder_schema?.status === 'AVAILABLE' ? '현재 확인된 폴더 구조' : 'Folder Schema 확인 불가' }
   const activeCaptureId = selectedCapture?.id ?? ''
   const sceneChoices = (catalog?.scenes ?? []).filter((item) => item.case_id === caseId
     && (!item.load_case_id || item.load_case_id === loadCaseId)
     && (!item.execution_run_id || item.execution_run_id === runId)
     && (!item.run_option_id || item.run_option_id === optionId)
     && currentHierarchyChoice(item, activeCaptureId)) ?? []
+  // One chip per Scene folder: folder Scenes from the schema, marked when the
+  // merged latest result has data for them.
+  const sceneSummary = Array.from(sceneChoices.reduce((map, item) => {
+    const key = item.label.toLocaleLowerCase()
+    const current = map.get(key)
+    map.set(key, { label: current?.label ?? item.label, title: current?.title ?? item.relative_path ?? item.label, hasResult: Boolean(current?.hasResult || item.capture_id) })
+    return map
+  }, new Map<string, { label: string; title: string; hasResult: boolean }>()).values())
   const controls = catalog ? <div className="simulation-dashboard__controls">
-    <CaseFinalizationPanel projectId={projectId} requestId={requestId} environment={tab === 'usage' ? 'USAGE' : 'DISTRIBUTION'} caseId={dashboardCaseId} captureId={activeCaptureId} hasCapturedCase={hasCapturedCase} canFinalize={canRefreshSchema} />
+    <CaseFinalizationPanel projectId={projectId} requestId={requestId} environment={tab === 'usage' ? 'USAGE' : 'DISTRIBUTION'} caseId={dashboardCaseId} captureId={storedCaptureId} hasCapturedCase={hasCapturedCase} canFinalize={canRefreshSchema} />
     <CompactChoice label="해석 Case" value={caseId} choices={catalog.cases} onChange={(value) => { setCaseId(value); setCaptureId(''); setLoadCaseId(''); setRunId(''); setOptionId(''); setMode(''); setComponentId(''); setReferenceCaseId(''); setReferenceCaptureId('') }} />
-    <CompactChoice label="조회 문맥" value={captureId} choices={[schemaContextChoice, ...catalog.captures.filter((item) => item.case_id === caseId)]} disabled={!caseId} onChange={(value) => { setCaptureId(value); setLoadCaseId(''); setRunId(''); setOptionId(''); setMode(''); setComponentId('') }} />
     {tab === 'distribution' ? <>
       <CompactChoice label="하중경우" value={loadCaseId} choices={loadChoices} disabled={!caseId} onChange={(value) => { setLoadCaseId(value); setRunId(''); setOptionId(''); setMode(''); setComponentId('') }} />
       <CompactChoice label="Run Case" value={runId} choices={runChoices} disabled={!loadCaseId} onChange={(value) => { setRunId(value); setOptionId(''); setMode(''); setComponentId('') }} />
       <CompactChoice label="Run Option" value={optionId} choices={options} disabled={!runId} onChange={(value) => { const choice = options.find((item) => item.id === value); setOptionId(value); setMode(choice?.mode ?? ''); setComponentId('') }} />
       <CompactChoice label="Component" value={componentId} choices={catalog.components.filter((item) => (item.execution_run_id === runId || item.run_id === runId) && item.mode === mode && item.capture_id === activeCaptureId && (!item.run_option_id || item.run_option_id === optionId))} disabled={!activeCaptureId || !mode} onChange={setComponentId} />
       <CompactChoice label="Basis" value={basis} choices={catalog.bases} disabled={!activeCaptureId} onChange={(value) => setBasis(value === 'DETAIL' ? 'DETAIL' : value === 'REPORTED_SUMMARY' ? 'REPORTED_SUMMARY' : '')} />
-      <div className="simulation-dashboard__scene-catalog" role="group" aria-label="선택 문맥 Scene 목록" style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}><span>Scene</span>{sceneChoices.length ? sceneChoices.map((item) => <span key={`${item.capture_id ?? 'schema'}:${item.id}`} title={item.relative_path ?? item.label}>{item.label} <small>{item.capture_id ? '선택 수집본' : '현재 폴더'}</small></span>) : <small>해당 문맥에 Scene 없음</small>}</div>
+      <div className="simulation-dashboard__scene-catalog" role="group" aria-label="선택 문맥 Scene 목록" style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}><span>Scene</span>{sceneSummary.length ? sceneSummary.map((item) => <span key={item.label} title={item.title}>{item.label} <small>{item.hasResult ? '결과' : '결과 없음'}</small></span>) : <small>Scene 없음</small>}</div>
     </> : null}
-    <details className="simulation-dashboard__history"><summary>수집 이력{tab === 'usage' ? ' · 비교' : ''}</summary><SelectField label="수집 버전" value={captureId} choices={[schemaContextChoice, ...catalog.captures.filter((item) => item.case_id === caseId)]} disabled={!caseId} onChange={(value) => setCaptureId(value)} />{tab === 'usage' ? <><SelectField label="Reference Case" value={referenceCaseId} choices={catalog.cases.filter((item) => item.id !== caseId)} onChange={(value) => { setReferenceCaseId(value); setReferenceCaptureId('') }} /><SelectField label="Reference Capture" value={referenceCaptureId} choices={catalog.captures.filter((item) => item.case_id === referenceCaseId)} disabled={!referenceCaseId} onChange={setReferenceCaptureId} /></> : null}</details>
+    <details className="simulation-dashboard__history"><summary>업데이트 이력{tab === 'usage' ? ' · 비교' : ''}</summary><ul className="simulation-dashboard__history-list" aria-label="결과 업데이트 이력">{storedCaptures.length ? storedCaptures.map((item) => <li key={item.id}>{item.label}</li>) : <li>아직 수집된 결과가 없습니다.</li>}</ul>{tab === 'usage' ? <><SelectField label="Reference Case" value={referenceCaseId} choices={catalog.cases.filter((item) => item.id !== caseId)} onChange={(value) => { setReferenceCaseId(value); setReferenceCaptureId('') }} /><SelectField label="Reference Capture" value={referenceCaptureId} choices={catalog.captures.filter((item) => item.case_id === referenceCaseId)} disabled={!referenceCaseId} onChange={setReferenceCaptureId} /></> : null}</details>
   </div> : null
 
   return <section className="simulation-dashboard" data-ui-density="v1" aria-label="SPDM 해석 결과 대시보드">
     <header className="simulation-dashboard__head"><div><span>RESULT EXPLORER</span><h2>해석 결과 대시보드</h2><p>표시값과 자산은 선택한 Case·Run·capture 문맥의 서버 결과만 사용합니다.</p></div><nav aria-label="결과 환경"><Button size="sm" className={tab === 'usage' ? 'active' : ''} onClick={() => setTab('usage')}>사용환경</Button><Button size="sm" className={tab === 'distribution' ? 'active' : ''} onClick={() => setTab('distribution')}>유통환경</Button></nav></header>
     {catalogError && !catalog ? <State message={catalogError} error /> : <>{catalogError ? <State message={`${catalogError} · 마지막으로 읽은 결과를 표시합니다.`} error /> : null}{controls}{catalog?.folder_schema?.status === 'UNAVAILABLE' ? <State message={`현재 Folder Schema를 읽을 수 없습니다${catalog.folder_schema?.diagnostic ? ` · ${catalog.folder_schema.diagnostic.message}` : ''}. 아래 수집 이력은 저장된 capture 문맥으로 조회됩니다.`} error /> : null}{catalog && !catalog.cases.length ? <State message="확정된 Folder Schema Case나 수집 이력이 없습니다. 폴더 연결·규칙에서 구조를 확인하세요." /> : null}</>}
     <div className="simulation-dashboard__source-link"><span>새 결과는 폴더 연결에서 등록하고 읽습니다.</span>{canManageFolders ? <Link to={folderHref}>폴더 연결·규칙 열기</Link> : null}</div>
-    {tab === 'usage' ? <UsageArea key={`${caseId}:${captureId}:${referenceCaseId}:${referenceCaptureId}`} caseId={dashboardCaseId} captureId={activeCaptureId} referenceCaseId={catalog?.cases.find((item) => item.id === referenceCaseId)?.dashboard_case_id ?? referenceCaseId} referenceCaptureId={referenceCaptureId} /> : <DistributionArea key={`${projectId}:${requestId}`} projectId={projectId} requestId={requestId} caseId={dashboardCaseId} loadCaseId={loadCaseId} captureId={activeCaptureId} runId={runId} optionId={optionId} mode={mode} componentId={componentId} basis={basis} hasCapturedRun={runChoices.some((item) => item.id === runId && item.capture_id === activeCaptureId)} hasCapturedOption={options.some((item) => item.id === optionId && item.capture_id === activeCaptureId)} emptyContextMessage={catalog?.folder_schema?.status === 'AVAILABLE' && selectedCase?.source === 'FOLDER_SCHEMA' ? (selectedCase.capture_count ? '현재 폴더 구조를 조회 중입니다. 결과를 보려면 수집 버전을 선택하세요.' : '폴더 구조는 확인됐지만 이 Case의 수집된 결과가 없습니다. 결과를 등록하고 읽어 주세요.') : '수집 버전을 선택하면 저장된 결과를 조회할 수 있습니다.'} />}
+    {tab === 'usage' ? <UsageArea key={`${caseId}:${captureId}:${referenceCaseId}:${referenceCaptureId}`} caseId={dashboardCaseId} captureId={activeCaptureId} referenceCaseId={catalog?.cases.find((item) => item.id === referenceCaseId)?.dashboard_case_id ?? referenceCaseId} referenceCaptureId={referenceCaptureId} /> : <DistributionArea key={`${projectId}:${requestId}`} projectId={projectId} requestId={requestId} caseId={dashboardCaseId} loadCaseId={loadCaseId} captureId={activeCaptureId} runId={runId} optionId={optionId} mode={mode} componentId={componentId} basis={basis} hasCapturedRun={runChoices.some((item) => item.id === runId && item.capture_id === activeCaptureId)} hasCapturedOption={options.some((item) => item.id === optionId && item.capture_id === activeCaptureId)} emptyContextMessage={catalog?.folder_schema?.status === 'AVAILABLE' && selectedCase?.source === 'FOLDER_SCHEMA' ? (selectedCase.capture_count ? '결과를 불러오는 중입니다.' : '이 Case에는 아직 결과 파일이 없습니다. Scene 폴더에 결과를 넣으면 자동으로 표시됩니다.') : '결과를 불러오는 중입니다.'} />}
   </section>
 }
 

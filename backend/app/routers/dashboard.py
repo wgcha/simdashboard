@@ -48,6 +48,17 @@ def error(exc):
 
 
 def capture_for_read(conn, request, capture_id):
+    if str(capture_id).startswith(storage.LATEST_PREFIX):
+        # Merged newest result per Scene for one Case (see merge_latest_payload).
+        case_id = str(capture_id)[len(storage.LATEST_PREFIX):]
+        row = conn.execute("SELECT project_id FROM dashboard_cases WHERE id=?", [case_id]).fetchone()
+        if not row:
+            raise HTTPException(404, "수집 버전을 찾을 수 없습니다.")
+        require_permission(request, PROJECT_DATA_VIEW, str(row[0]), conn=conn)
+        latest = storage.get_latest_capture(conn, case_id)
+        if latest is None:
+            raise HTTPException(404, "수집 버전을 찾을 수 없습니다.")
+        return latest
     row = conn.execute("""SELECT dc.project_id FROM dashboard_captures c
         JOIN dashboard_cases dc ON dc.id=c.case_id WHERE c.id=?""", [capture_id]).fetchone()
     if not row:

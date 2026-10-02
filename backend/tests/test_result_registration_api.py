@@ -390,13 +390,18 @@ def test_staged_usage_upload_isolated_until_approval_then_capture_is_idempotent(
     assert (root / prep[1]["result_relative_path"] / "model_settle_result.json").read_bytes() == content
     case_result = client.get(f"/api/dashboard/usage/cases/{result['case_id']}", params={"capture_id": result["capture_id"]})
     assert case_result.status_code == 200, case_result.text
+    with connect() as conn:
+        # The registration capture plus, since 2026-10-02, a whole-folder capture
+        # from the post-publish refresh (the newest version reflects the folder).
+        published_count = conn.execute("SELECT count(*) FROM dashboard_captures WHERE case_id=?", [result["case_id"]]).fetchone()[0]
+    assert 1 <= published_count <= 2
     repeated = client.post(BASE + f"/drafts/{draft_id}/publish", json={
         "inspection_revision": inspection["inspection_revision"], "idempotency_key": key,
     })
     assert repeated.status_code == 200, repeated.text
     assert repeated.json()["capture_id"] == result["capture_id"]
     with connect() as conn:
-        assert conn.execute("SELECT count(*) FROM dashboard_captures WHERE case_id=?", [result["case_id"]]).fetchone()[0] == 1
+        assert conn.execute("SELECT count(*) FROM dashboard_captures WHERE case_id=?", [result["case_id"]]).fetchone()[0] == published_count
 
 
 def test_mirror_conflict_keeps_capture_and_retry_only_copies_files(registration_client):
@@ -472,7 +477,9 @@ def test_changed_upload_invalidates_approval_and_failed_capture_is_retryable(reg
     retried = client.post(BASE + f"/drafts/{draft_id}/publish", json=publish_payload)
     assert retried.status_code == 200, retried.text
     assert retried.json()["status"] == "PUBLISHED"
-    assert attempts["count"] == 2
+    # One failed and one successful registration capture; the post-publish
+    # whole-folder capture (2026-10-02) may add one more call.
+    assert attempts["count"] in {2, 3}
 
 
 def test_upload_rejects_traversal_undeclared_paths_and_client_hash_mismatch(registration_client):
