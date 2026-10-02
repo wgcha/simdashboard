@@ -296,9 +296,17 @@ export function MaterialsDashboard({ projectId, requestId, canRefreshSchema = fa
     const patch: Record<string, string | null> = {}
     const current = { caseId, loadCaseId, runId, optionId }
     const sceneRecord = selectedSceneId ? catalog.scenes.find((item) => item.scene_id === selectedSceneId) : undefined
-    if (!current.caseId && sceneRecord?.case_id && catalog.hierarchy.cases.length) {
-      current.caseId = sceneRecord.case_id; current.loadCaseId = sceneRecord.load_case_id; current.runId = sceneRecord.execution_run_id; current.optionId = sceneRecord.run_option_id
-      Object.assign(patch, { case: current.caseId, case_load: current.loadCaseId || null, case_run: current.runId || null, case_option: current.optionId || null })
+    if (sceneRecord?.case_id && catalog.hierarchy.cases.length) {
+      // A Scene link (old `scene`-only links, or one whose lower levels were
+      // never written) fills the missing parents when the set ones agree.
+      const fromScene = { caseId: sceneRecord.case_id, loadCaseId: sceneRecord.load_case_id, runId: sceneRecord.execution_run_id, optionId: sceneRecord.run_option_id }
+      const fields = ['caseId', 'loadCaseId', 'runId', 'optionId'] as const
+      const keys = { caseId: 'case', loadCaseId: 'case_load', runId: 'case_run', optionId: 'case_option' } as const
+      if (fields.every((field) => !current[field] || current[field] === fromScene[field])) {
+        for (const field of fields) {
+          if (!current[field] && fromScene[field]) { current[field] = fromScene[field]; patch[keys[field]] = fromScene[field] }
+        }
+      }
     }
     const levels: Array<[HierarchyLevel, 'caseId' | 'loadCaseId' | 'runId' | 'optionId', (state: typeof current) => Array<{ id: string }>]> = [
       ['case', 'caseId', () => catalog.hierarchy.cases],

@@ -28,6 +28,8 @@
 
 기존 파일을 덮어쓰거나 삭제하지 않는다. 게시 폴더 준비 요청이 실패하면 그 요청에서 새로 만든 빈 폴더만 보상 정리한다. 이후 업로드·검수·게시 실패는 이미 준비된 폴더를 정리하지 않으며 외부 파일을 건드리지 않는다. DB 게시 성공과 원본 폴더 복사 실패를 구분하며, 성공한 capture는 보존하고 복구 상태를 제공한다. 중복 클릭·재시도는 같은 승인 결과를 중복 등록하지 않는다.
 
+폴더 준비(`folders/prepare`)가 새 폴더를 만들고 자동 Refresh가 성공하면, 응답 문맥은 경로 생성기가 계산한 ID가 아니라 갱신된 Folder Schema 후보의 문맥이다. 초안 업로드는 이 문맥을 그대로 보내므로 `RESULT_CONTEXT_CHANGED`로 막히지 않는다.
+
 확인된 결과 폴더 생성이나 파일 mirror가 성공하면 선택 의뢰·환경의 [Folder Schema Refresh](folder-schema-refresh.md)를 실행한다. Refresh가 실패해도 이미 성공한 DB capture와 사용자 파일은 보존한다. 화면은 등록 성공과 스키마 갱신 실패를 따로 표시하고 scoped Refresh 재시도를 제공한다. 같은 fingerprint의 재시도는 snapshot·capture를 중복 생성하지 않는다.
 
 ## 배포·검증 경계

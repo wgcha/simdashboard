@@ -1,7 +1,7 @@
 # Case 결과 중심 사용 흐름 재설계 계획
 
 - 기준일: 2026-10-02
-- 상태: 계획 확정 대기. 구현 미착수.
+- 상태: 0~1단계 구현·격리 검증 완료(브랜치 `claude/case-results-redesign`). 2단계 이후 미착수.
 - 결정 사항(사용자 확인 2026-10-02): UI는 **A안(경로 바 + 단일 결과면)**, PDF는 **서버 LibreOffice headless 변환**, 결과 검수는 **Final 지정 시점으로 이동**, 자동 변경 확인 주기는 **30초**.
 - 대체 범위: [소재물성 계획의 2026-10-02 후속 UI 계획](materials-dashboard-implementation.md#모델-소재물성-계층-선택-ui-개선-계획)은 이 문서로 대체한다. 해당 절의 검증 시나리오는 여기서 계승한다.
 - 기준 계약: [공용 위치·Refresh](../features/folder-schema-refresh.md), [결과 등록](../features/result-registration.md), [최종확정](../features/case-finalization.md), [Windows 배포 정책](../windows-deployment-policy.md)
@@ -57,7 +57,7 @@
 
 - 필수 버튼은 `보고서`, `Final 지정` 두 개다. Component·Basis·Edge·Line은 기본값 자동 선택 후 `표시 옵션` 접힘 메뉴에 둔다.
 - 설명 문구와 내부 코드(`UNRESOLVED`, `REPORTED_SUMMARY`, `CAPTURE_CONTEXT_MISMATCH` 등)는 화면에 노출하지 않는다. 상태는 `최신 / 결과 없음 / 확인 필요` 배지로, 이유는 툴팁으로 표시한다.
-- 경로는 한 줄 말줄임 + 전체 경로 툴팁. 본문 14pt 기준, 사용자 글자 크기 11~18pt와 라이트·다크 유지. 데스크톱(1440/1920) 전용.
+- 경로는 한 줄 말줄임 + 전체 경로 툴팁. 본문 14pt 기준, 사용자 글자 크기 11~18pt와 라이트·다크 유지. 데스크톱 전용이며 1440/1920에 더해 **32인치 와이드 모니터**(해상도 확정 필요: 2560×1440, 3840×2160@150%, 또는 울트라와이드)를 기준 화면으로 검증한다. 넓은 화면에서 본문이 지나치게 퍼지지 않도록 최대 폭과 다단 배치를 정한다.
 - 탭: 요약 / Scene 비교 / 영상(`DropVideoGrid` 재사용) / 소재·물성(기존 Part 목록·상세). 소재 탭은 경로 바를 공유하고 Scene만 추가로 고른다.
 - 폴더 연결 링크는 라우터 basename을 사용해 `/home/` 배포에서도 한 번에 이동한다.
 
@@ -73,7 +73,7 @@
 - `ReportSource`에 Case capture 원본 분기를 추가하고, 기존 레이아웃·회사 템플릿·편집 창을 그대로 재사용한다. 보고서 창은 시작 시점의 범위(Case·capture·Option)를 고정한다.
 - PPTX는 지금처럼 브라우저에서 생성한다. **PDF는 브라우저가 만든 PPTX를 서버로 보내 LibreOffice headless(`soffice --headless --convert-to pdf`)로 변환한 결과를 내려받는다.** PowerPoint 설치는 필요 없다.
 - 변환 실행 경계: 앱 전용 임시 폴더, 요청당 별도 프로필 디렉터리, 시간 제한(예: 60초)·크기 제한, 동시 변환 수 제한, 외부 링크·매크로 미허용. 변환기가 없거나 실패하면 PPTX 다운로드는 정상 제공하고 PDF만 실패로 표시한다.
-- 배포: LibreOffice(MPL 2.0, Windows x64)를 폐쇄망 설치 패키지에 포함하고 경로를 설정으로 지정한다. 신규 런타임 의존성이므로 배포 정책 5항(Windows x64·오프라인 포함·검증 경로)과 7항(정책·ADR·안내 갱신)을 같은 변경에서 처리한다. 서버의 한글 글꼴(맑은 고딕 등) 존재를 설치 점검 항목에 넣는다.
+- 배포: LibreOffice(MPL 2.0, Windows x64) MSI를 외부 PC에서 `msiexec /a`(관리 설치)로 폴더에 풀어 폐쇄망 패키지에 포함한다. 서버에 설치 과정 없이 `program\soffice.exe`를 앱이 자식 프로세스로 실행하며 경로는 설정으로 지정한다. 상주 변환 서버(unoserver 등)는 Windows 지원이 실험 단계라 사용하지 않고, 요청당 프로세스와 전용 사용자 프로필(`-env:UserInstallation`)로 격리한다. Server 2022 서비스 계정에서의 실행은 현장 검증 대상이다. 신규 런타임 의존성이므로 배포 정책 5항(Windows x64·오프라인 포함·검증 경로)과 7항(정책·ADR·안내 갱신)을 같은 변경에서 처리한다. 서버의 한글 글꼴(맑은 고딕 등) 존재를 설치 점검 항목에 넣는다.
 
 ### 3.6 Final 지정
 
@@ -106,3 +106,13 @@
 
 - 등록 초안·검수 API를 유지할지 제거할지(사용 현황 확인 후).
 - 30초 주기는 현장 공유폴더 부하를 측정한 뒤 조정한다.
+
+## 7. 진행 기록
+
+### 0~1단계 (2026-10-02)
+
+- 원인(4_Edge): 폴더 준비 후 자동 Refresh가 빈 새 폴더를 `UNRESOLVED`로 두어 Scene 역할을 상속하지 못했고 초안이 409 `RESULT_FOLDER_SCHEMA_STALE`로 거부되었다. 해결 후에도 준비 응답 문맥의 Scene ID가 Folder Schema 후보와 달라 409 `RESULT_CONTEXT_CHANGED`가 이어졌다. 실제 서버 접근 로그(읽기 전용)에서 `prepare` 200 ×3, `drafts` 409 ×2를 확인했고 공유폴더의 `4_Edge`는 빈 폴더로 존재했다.
+- 조치: 미결정 폴더의 Scene LEVEL 상속, `role_rules_revision`에 따른 1회 재해석(무변경 시 capture 미생성), 준비 응답의 Folder Schema 후보 문맥 반환, 폴더 연결 링크의 router basename 적용.
+- 1단계: 공용 계층 투영 `folder_schema_hierarchy.py`로 Case 결과·소재 catalog의 Case/하중/Run/Option ID를 일치시켰다. 소재 화면은 Case→하중경우→Run→Option→Scene 경로로 선택하고, 두 화면은 router 기반 공용 URL hook을 쓴다.
+- 독립 검수에서 찾은 회귀(혼합 역할 깊이의 CONFLICT 차단, Run 아래 임의 폴더의 Option 승격, RESULTS 항목 ID 누락, 재해석 시 capture 1회 추가)는 수정하고 회귀 테스트를 추가했다.
+- 현장 반영: 업데이트 후 해당 의뢰에서 Refresh(또는 2단계 자동 반영) 한 번이면 기존 `4_Edge`가 Scene으로 들어온다. 이후 결과 등록에서 업로드한다.

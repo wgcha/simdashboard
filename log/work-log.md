@@ -1036,3 +1036,11 @@
 - 사용자 시나리오(SPDM 폴더 정본, 즉시 반영, 환경별 Folder Schema, 레시피 PPTX/PDF, 영상 그리드, Final 보고서 저장)와 현재 코드를 대조해 `docs/plans/case-results-workflow-redesign.md`를 작성했다. 결정: UI A안, 서버 LibreOffice PDF 변환, 검수를 Final 지정 시점으로 이동, 자동 변경 확인 30초.
 - 확인한 근거: 상단 저장 폴더 새로고침은 전역 관리자·전역 SPDM API이고 페이지 Refresh는 result.import 범위 API로 서로 다르다. Case 결과와 소재 catalog의 계층 투영·URL 상태 관리가 이원화돼 있다. PPTX는 브라우저(pptxgenjs)에서 생성하므로 Final/Reports에 앱 보고서가 저장되지 않는다. DropVideoGrid는 loadCaseId 전용이다.
 - 소재물성 계획의 2026-10-02 후속 UI 절은 새 계획으로 대체 표시했다. 문서만 변경했으며 앱 코드·DB·설정·서비스 변경과 런타임 검증은 없다.
+
+## 2026-10-02 Case 결과 재설계 0~1단계 구현 (Claude, 브랜치 claude/case-results-redesign)
+- 역할: 리드(설계·통합·커밋), 원인 조사 에이전트(격리 재현), 프런트 구현 에이전트, 구현에 참여하지 않은 독립 검수 에이전트.
+- 0단계: 4_Edge 업로드 실패 원인 두 가지(빈 새 Scene의 역할 미상속 → 409 RESULT_FOLDER_SCHEMA_STALE, 준비 응답 Scene ID 불일치 → 409 RESULT_CONTEXT_CHANGED)를 격리 합성 재현으로 확정·수정했다. 실제 서버 로그와 공유폴더는 읽기 전용으로만 확인했다. 폴더 연결 링크는 router basename을 쓴다.
+- 1단계: 공용 Folder Schema 계층 투영, 소재 catalog hierarchy·Scene별 ID, 소재 경로 선택 UI, router 기반 공용 URL hook.
+- 독립 검수 지적 4건(혼합 역할 CONFLICT 회귀, 임의 폴더 Option 승격, RESULTS ID 누락, 재해석 capture 추가) 수정. 프런트 지적(sentinel URL 노출)은 3단계에서 조회 문맥 선택기 제거로 해소 예정.
+- 검증: 백엔드 관련 회귀 172 passed + 신규 11 passed(격리 DuckDB·임시 SPDM root). tsc·build·test:routing/api/preferences/architecture self-test 통과. check:architecture는 기준 커밋과 같은 기존 4건만 실패. e2e: materials 5/5 통과, simulation-dashboard·environment-folder-flow·spdm-storage-workflow의 실패는 기준 커밋 725f4f7에서도 동일하게 실패하는 기존 항목이며 신규 실패 없음(Chromium headless shell 1194 사용).
+- 미실행: Codex Security 플러그인 스캔(도구 없음, 독립 수동 검수로 대체 — 플러그인 스캔 완료로 기록하지 않음), PostgreSQL 통합, Windows/Server 2022 실행, 실제 사용자 DB·서비스. migration·의존성·배포 진입점 변경 없음.

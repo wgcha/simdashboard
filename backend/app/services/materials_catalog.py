@@ -465,8 +465,16 @@ def catalog(conn: ConnectionLike, request_id: str, environment: str) -> dict[str
     by_path = {str(item.get("relative_path") or "").casefold(): item for item in projected["scenes"]}
     for item in items:
         location = by_path.get(str(item["relative_path"]).casefold())
+        if location is None:
+            # Explicit RESULTS locations are not Scene locations; derive the
+            # same ids from their own Folder Schema hierarchy.
+            node = next((candidate for candidate in schema.get("nodes", [])
+                         if str(candidate.get("relative_path") or "").casefold()
+                         == str(item["relative_path"]).casefold()), None)
+            location = folder_schema_hierarchy.context_ids(
+                schema, root_key, (node or {}).get("hierarchy") or {})
         for key in ("case_id", "load_case_id", "execution_run_id", "run_option_id"):
-            item[key] = str(location.get(key) or "") if location else ""
+            item[key] = str(location.get(key) or "")
     hierarchy = {
         "cases": [
             {"id": case["id"], "label": case["label"], "relative_path": case["relative_path"]}

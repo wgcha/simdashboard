@@ -4,12 +4,30 @@ import { loginWorkspace } from './workspace-test-helpers'
 const requestId = 'request-showcase-waiting'
 const projectId = 'project-feature-showcase'
 
+const ids = { case_id: 'case-1', load_case_id: 'load-drop', execution_run_id: 'run-85' }
 const catalog = {
+  request_id: requestId,
+  environment: 'DISTRIBUTION',
   scenes: [
-    { scene_id: 'small-scene', label: 'Compact deck', relative_path: 'model/compact', hierarchy: {}, kind: 'SCENE', has_deck: true },
-    { scene_id: 'large-scene', label: 'Large deck', relative_path: 'model/large', hierarchy: {}, kind: 'SCENE', has_deck: true },
-    { scene_id: 'result-folder', label: 'Run 02 · results', relative_path: 'model/run-02/results', hierarchy: {}, kind: 'RESULTS', has_deck: true },
+    { scene_id: 'small-scene', label: 'Compact deck', relative_path: 'model/compact', hierarchy: {}, kind: 'SCENE', has_deck: true, ...ids, run_option_id: 'opt-individual' },
+    { scene_id: 'large-scene', label: 'Large deck', relative_path: 'model/large', hierarchy: {}, kind: 'SCENE', has_deck: true, ...ids, run_option_id: 'opt-individual' },
+    { scene_id: 'result-folder', label: 'Run 02 · results', relative_path: 'model/run-02/results', hierarchy: {}, kind: 'RESULTS', has_deck: true, ...ids, run_option_id: 'opt-cumulative' },
   ],
+  hierarchy: {
+    cases: [{ id: 'case-1', label: 'Package_Model_SetCase2', relative_path: 'model' }],
+    load_cases: [{ id: 'load-drop', label: 'Drop', case_id: 'case-1', relative_path: 'model/Drop', capture_id: null, match_status: 'UNCAPTURED' }],
+    execution_runs: [{ id: 'run-85', label: '85qn80h_ref_organized', case_id: 'case-1', load_case_id: 'load-drop', relative_path: 'model/Drop/85', capture_id: null, match_status: 'UNCAPTURED' }],
+    run_options: [
+      { id: 'opt-individual', label: 'INDIVIDUAL', case_id: 'case-1', execution_run_id: 'run-85', run_option_id: 'opt-individual', option_status: 'PRESENT', option_label: 'INDIVIDUAL', mode: 'INDIVIDUAL', relative_path: 'model/Drop/85/INDIVIDUAL', capture_id: null, match_status: 'UNCAPTURED' },
+      { id: 'opt-cumulative', label: 'CUMULATIVE', case_id: 'case-1', execution_run_id: 'run-85', run_option_id: 'opt-cumulative', option_status: 'PRESENT', option_label: 'CUMULATIVE', mode: 'CUMULATIVE', relative_path: 'model/Drop/85/CUMULATIVE', capture_id: null, match_status: 'UNCAPTURED' },
+    ],
+  },
+}
+
+async function chooseScene(page: Page, optionId: string, sceneId?: string) {
+  const path = page.getByRole('group', { name: '소재 덱 경로' })
+  await path.getByLabel('Run Option', { exact: true }).selectOption(optionId)
+  if (sceneId) await path.getByLabel('Scene', { exact: true }).selectOption(sceneId)
 }
 
 const longPartName = `Long rail assembly ${'with segmented reinforcement '.repeat(8)}`
@@ -86,13 +104,14 @@ test('소재 Refresh는 선택 의뢰만 갱신하고 실패해도 기존 Scene�
     return route.fulfill({ json: { snapshot_id: 'snapshot-2', project_id: projectId, request_id: requestId, environment: 'DISTRIBUTION', status: 'REFRESHED', changed: true, structure_fingerprint: 'structure-2', content_fingerprint: 'content-2', diff: { added: 0, removed: 0, changed: 0 }, nodes: [] } })
   })
   await openMaterials(page)
+  await chooseScene(page, 'opt-individual', 'small-scene')
   const refreshRequest = page.waitForRequest((request) => request.url().endsWith('/api/folder-discovery/environments/refresh'))
   await page.getByRole('button', { name: '저장소 Refresh' }).click()
   expect((await refreshRequest).postDataJSON()).toEqual({ project_id: projectId, request_id: requestId, environment: 'DISTRIBUTION' })
   await expect(page.locator('.materials-dashboard .materials-error[role="status"]')).toContainText('저장소와 덱 위치를 갱신했습니다.')
   await page.getByRole('button', { name: '저장소 Refresh' }).click()
   await expect(page.locator('.materials-dashboard .materials-error[role="status"]')).toContainText('저장소를 읽을 수 없습니다.')
-  await expect(page.getByLabel('소재 덱 위치 선택')).toHaveValue('small-scene')
+  await expect(page.getByRole('group', { name: '소재 덱 경로' }).getByLabel('Scene', { exact: true })).toHaveValue('small-scene')
 })
 
 test('소재 탭은 내 작업 문맥과 뒤로 가기를 유지하고 기존 주소를 새 탭으로 보낸다', async ({ page }) => {
@@ -143,10 +162,16 @@ test('소재 표는 긴 이름과 누락 참조를 보여 주고 같은 Material
   await openMaterials(page)
 
   await expect(page.getByLabel('소재 덱 환경 선택')).toHaveCount(0)
-  const locationSelect = page.getByLabel('소재 덱 위치 선택')
-  await locationSelect.selectOption('result-folder')
+  const path = page.getByRole('group', { name: '소재 덱 경로' })
+  // Single candidates collapse to fixed text; nothing is auto-picked across branches.
+  await expect(path.locator('[data-hierarchy-level="Case"]')).toContainText('Package_Model_SetCase2')
+  await expect(path.locator('[data-hierarchy-level="하중경우"]')).toContainText('Drop')
+  await expect(page.locator('.materials-part-table')).toHaveCount(0)
+  await chooseScene(page, 'opt-cumulative')
+  await expect(path.locator('[data-hierarchy-level="Scene"]')).toContainText('Run 02 · results')
   await expect(page.getByText('4 / 4 Parts')).toBeVisible()
-  await locationSelect.selectOption('small-scene')
+  await chooseScene(page, 'opt-individual', 'small-scene')
+  await expect.poll(() => new URL(page.url()).searchParams.get('case_option')).toBe('opt-individual')
 
   const rows = page.locator('.materials-part-table tbody tr')
   await expect(rows).toHaveCount(4)
@@ -199,6 +224,8 @@ test('대량 덱의 Part 딥링크는 해당 페이지를 열고 뒤로가기는
   const deepLinkedRow = rows.filter({ hasText: 'P076' })
   await expect(deepLinkedRow).toHaveCount(1)
   await expect(deepLinkedRow).toHaveAttribute('aria-selected', 'true')
+  // An old scene-only link restores its parent path.
+  await expect.poll(() => new URL(page.url()).searchParams.get('case_option')).toBe('opt-individual')
 
   await rows.filter({ hasText: 'P075' }).click()
   await expect.poll(() => new URL(page.url()).searchParams.get('part')).toBe('P075')

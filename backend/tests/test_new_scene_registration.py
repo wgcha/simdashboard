@@ -204,3 +204,52 @@ def test_folder_at_other_depth_does_not_become_scene(admin_client):
     _refresh(client, project_id, request_id)
     node = _schema_node(project_id, request_id, f"{OPTION}/2_Face/extra")
     assert node is None or node.get("role_kind") != "SCENE"
+
+
+RUN = OPTION.rsplit("/", 1)[0]
+
+
+def test_unrelated_folder_under_run_does_not_become_run_option(admin_client):
+    client, root = admin_client
+    project_id, request_id = _seed(client, root)
+    (root / RUN / "mesh_backup").mkdir()
+    result = _refresh(client, project_id, request_id)
+    assert result["status"] != "CONFLICT"
+    node = _schema_node(project_id, request_id, f"{RUN}/mesh_backup")
+    assert node is None or node.get("role_kind") is None
+
+
+def test_mixed_roles_at_scene_level_never_block_refresh(admin_client):
+    """A stray folder beside SCENE and RESULTS siblings stays undecided; the refresh still activates."""
+    client, root = admin_client
+    (root / OPTION / "Result").mkdir(parents=True)
+    project_id, request_id = _seed(client, root)
+    assert _refresh(client, project_id, request_id)["status"] != "CONFLICT"
+    (root / OPTION / "notes").mkdir()
+    for _ in range(2):
+        assert _refresh(client, project_id, request_id)["status"] != "CONFLICT"
+    body = {"project_id": project_id, "request_id": request_id, "environment": "DISTRIBUTION",
+            "parent_relative_path": OPTION, "segments": [{"role_kind": "SCENE", "name": "4_Edge"}]}
+    prepared = client.post(REG + "/folders/prepare", json={**body, "confirm_create": True})
+    assert prepared.status_code == 200, prepared.text
+    assert prepared.json()["schema_refresh"]["status"] != "FAILED", prepared.json()
+
+
+def test_revision_only_refresh_creates_no_capture(admin_client):
+    client, root = admin_client
+    project_id, request_id = _seed(client, root)
+    _refresh(client, project_id, request_id)
+    with connect() as conn:
+        before = conn.execute("SELECT count(*) FROM dashboard_captures").fetchone()[0]
+        snap_id, tree = conn.execute(
+            "SELECT id,tree_json FROM folder_environment_scans WHERE request_id=? AND id LIKE 'folder-refresh-%' "
+            "ORDER BY created_at DESC,id DESC LIMIT 1", [request_id]).fetchone()
+        snapshot = json.loads(tree)
+        snapshot["schema"].pop("role_rules_revision", None)
+        conn.execute("UPDATE folder_environment_scans SET tree_json=? WHERE id=?",
+                     [json.dumps(snapshot, ensure_ascii=False), snap_id])
+    result = _refresh(client, project_id, request_id)
+    with connect() as conn:
+        after = conn.execute("SELECT count(*) FROM dashboard_captures").fetchone()[0]
+    assert (after, result["changed"]) == (before, False), (before, after, result["status"], result["diff"])
+    assert _refresh(client, project_id, request_id)["status"] == "UNCHANGED"

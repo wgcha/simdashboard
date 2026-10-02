@@ -12,6 +12,46 @@ from typing import Any
 from . import folder_discovery_environment
 
 
+def _hierarchy_id(schema: dict[str, Any], root_key: str, role: str, context: dict[str, Any]) -> str:
+    relative_path = str(context.get("relative_path") or "")
+    if role == "RUN_OPTION" and relative_path:
+        option_node = next((node for node in schema.get("nodes", [])
+                            if str(node.get("role_kind") or "") == role
+                            and str(node.get("relative_path") or "").casefold() == relative_path.casefold()), None)
+        if option_node and option_node.get("run_option_id"):
+            return str(option_node["run_option_id"])
+    target_id = context.get("target_id")
+    if target_id:
+        return str(target_id)
+    return folder_discovery_environment.stable(
+        "folder-location-" + role.casefold(), root_key, relative_path, role,
+    ) if relative_path else ""
+
+
+def context_ids(schema: dict[str, Any], root_key: str, hierarchy: dict[str, Any]) -> dict[str, str]:
+    """Case/Load/Run/Option ids for a location's Folder Schema hierarchy.
+
+    An explicit Run option uses its option id; a Run without an option level
+    uses the stable ``옵션 없음`` id so both catalogs agree.
+    """
+    case = hierarchy.get("simulation_case") or {}
+    load_case = hierarchy.get("load_case") or {}
+    execution_run = hierarchy.get("execution_run") or {}
+    run_option = hierarchy.get("run_option") or {}
+    load_case_id = _hierarchy_id(schema, root_key, "LOAD_CASE", load_case)
+    execution_run_id = _hierarchy_id(schema, root_key, "EXECUTION_RUN", execution_run)
+    run_option_id = str(run_option.get("target_id") or "")
+    if isinstance(hierarchy.get("run_option"), dict):
+        run_option_id = _hierarchy_id(schema, root_key, "RUN_OPTION", run_option)
+    elif execution_run_id:
+        run_option_id = folder_discovery_environment.stable(
+            "folder-option-absent", root_key,
+            str(execution_run.get("relative_path") or ""), "ABSENT",
+        )
+    return {"case_id": str(case.get("target_id") or ""), "load_case_id": load_case_id,
+            "execution_run_id": execution_run_id, "run_option_id": run_option_id}
+
+
 def project_schema_hierarchy(schema: dict[str, Any], locations: Any, root_key: str) -> dict[str, Any]:
     """Return schema-only choices (capture_id=None) and Scene locations.
 
@@ -20,19 +60,7 @@ def project_schema_hierarchy(schema: dict[str, Any], locations: Any, root_key: s
     schema_cases: dict[str, dict[str, Any]] = {}
     result: dict[str, Any] = {"load_cases": [], "execution_runs": [], "run_options": [], "scenes": []}
     def hierarchy_id(role: str, context: dict[str, Any]) -> str:
-        relative_path = str(context.get("relative_path") or "")
-        if role == "RUN_OPTION" and relative_path:
-            option_node = next((node for node in schema.get("nodes", [])
-                                if str(node.get("role_kind") or "") == role
-                                and str(node.get("relative_path") or "").casefold() == relative_path.casefold()), None)
-            if option_node and option_node.get("run_option_id"):
-                return str(option_node["run_option_id"])
-        target_id = context.get("target_id")
-        if target_id:
-            return str(target_id)
-        return folder_discovery_environment.stable(
-            "folder-location-" + role.casefold(), root_key, relative_path, role,
-        ) if relative_path else ""
+        return _hierarchy_id(schema, root_key, role, context)
 
     role_keys = {"SIMULATION_CASE": "cases", "LOAD_CASE": "load_cases",
                  "EXECUTION_RUN": "execution_runs", "RUN_OPTION": "run_options"}
@@ -107,26 +135,11 @@ def project_schema_hierarchy(schema: dict[str, Any], locations: Any, root_key: s
         case = hierarchy.get("simulation_case") or {}
         if not case.get("target_id"):
             continue
-        load_case = hierarchy.get("load_case") or {}
-        execution_run = hierarchy.get("execution_run") or {}
-        run_option = hierarchy.get("run_option") or {}
-        load_case_id = hierarchy_id("LOAD_CASE", load_case)
-        execution_run_id = hierarchy_id("EXECUTION_RUN", execution_run)
-        run_option_id = str(run_option.get("target_id") or "")
-        if isinstance(hierarchy.get("run_option"), dict):
-            run_option_id = hierarchy_id("RUN_OPTION", run_option)
-        elif execution_run_id:
-            run_option_id = folder_discovery_environment.stable(
-                "folder-option-absent", root_key,
-                str(execution_run.get("relative_path") or ""), "ABSENT",
-            )
+        ids = context_ids(schema, root_key, hierarchy)
         result["scenes"].append({
             "id": str(location.get("scene_id") or location["id"]),
             "label": str(location.get("label") or location.get("name") or "Scene"),
-            "case_id": str(case["target_id"]),
-            "load_case_id": load_case_id,
-            "execution_run_id": execution_run_id,
-            "run_option_id": run_option_id,
+            **ids,
             "relative_path": str(location.get("relative_path") or ""),
             "capture_id": None, "match_status": "UNCAPTURED",
             "source": "FOLDER_SCHEMA",

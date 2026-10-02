@@ -55,7 +55,11 @@ export function useCaseHierarchyParams() {
       const write = pending.current
       pending.current = null
       if (!write || !mounted.current) return
-      const current = baseSearch.current.startsWith('?') ? baseSearch.current.slice(1) : baseSearch.current
+      // Read the browser query at flush time: the router writes it
+      // synchronously, and so does any remaining direct history writer, so a
+      // concurrent change in the same task is merged instead of overwritten.
+      const latest = typeof window === 'undefined' ? baseSearch.current : window.location.search
+      const current = latest.startsWith('?') ? latest.slice(1) : latest
       const next = applySearchPatch(current, write.patch)
       if (next === current) return
       baseSearch.current = next ? `?${next}` : ''

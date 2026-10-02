@@ -26,7 +26,7 @@ def test_materials_and_case_results_share_hierarchy_ids(admin_client):
     client, root = admin_client
     project_id, request_id = _seed(client, root)
     # A second Run option branch with a Scene of the same name.
-    other = root / OPTION.replace("INDIVIDUAL", "STACK") / "2_Face"
+    other = root / OPTION.replace("INDIVIDUAL", "CUMULATIVE") / "2_Face"
     other.mkdir(parents=True)
     (other / CSV).write_bytes(CSV_BYTES)
     _refresh(client, project_id, request_id)
@@ -57,3 +57,12 @@ def test_every_scene_option_is_listed_in_hierarchy(admin_client):
     dash, mats = _catalogs(client, project_id, request_id)
     option_ids = {o["id"] for o in mats["hierarchy"]["run_options"]}
     assert all(scene["run_option_id"] in option_ids for scene in mats["scenes"])
+
+
+def test_materials_results_location_gets_hierarchy_ids(admin_client):
+    """Explicit RESULTS locations are listed by materials and must be placeable in the path."""
+    client, root = admin_client
+    project_id, request_id = _seed(client, root)
+    dash, mats = _catalogs(client, project_id, request_id)
+    for item in mats["scenes"]:
+        assert item["case_id"] and item["execution_run_id"], item

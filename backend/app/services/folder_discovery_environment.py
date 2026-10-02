@@ -418,6 +418,12 @@ def refresh_scope(conn, root, project_id: str, request_id: str, environment: str
         relative_depth = len(PurePosixPath(str(node["relative_path"])).parts) - request_depth
         parent_role = nearest_parent_role(node, current_by_path)
         possibilities = inherited_roles.get((parent_role, relative_depth), set())
+        if undecided and (len(possibilities) != 1 or "SCENE" not in possibilities):
+            # Undecided folders only gain the Scene role (a user adding a Scene
+            # beside existing Scenes, with or without a Run option level). Any
+            # other or ambiguous level keeps its prior UNRESOLVED state and must
+            # never turn into a refresh-blocking CONFLICT.
+            continue
         if len(possibilities) == 1:
             role = next(iter(possibilities))
             node.update(role_kind=role, status="CONFIRMED", confirmed=True,
@@ -482,6 +488,16 @@ def refresh_scope(conn, root, project_id: str, request_id: str, environment: str
             structure_fingerprint, content_fingerprint, diff, location_projection,
             activated=False,
         )
+    # A refresh caused only by a newer ROLE_RULES_REVISION that changes no
+    # node keeps the result versions as they are: no new capture, not "changed".
+    revision_only_unchanged = bool(
+        previous and not registration_roles_changed
+        and int(previous["profile_revision"]) == profile["revision"]
+        and str(previous["request_relative_path"]) == request_path
+        and str(previous["structure_fingerprint"]) == structure_fingerprint
+        and str(previous["content_fingerprint"]) == content_fingerprint
+        and not any(diff.values())
+    )
     snapshot_id = ident("folder-refresh")
     schema["scan"]["id"] = snapshot_id
     snapshot = {
@@ -508,7 +524,7 @@ def refresh_scope(conn, root, project_id: str, request_id: str, environment: str
             conn, project_id, request_id, environment, schema=schema,
         )
         capture_errors = []
-        if capture_cases:
+        if capture_cases and not revision_only_unchanged:
             storage_root_id = dashboard_capture._root_id(root)
             for case_node in scoped_nodes:
                 if case_node.get("role_kind") != "SIMULATION_CASE" or case_node.get("status") != "CONFIRMED":
@@ -538,7 +554,7 @@ def refresh_scope(conn, root, project_id: str, request_id: str, environment: str
     except BaseException:
         conn.execute("ROLLBACK")
         raise
-    return _refresh_result(snapshot_id, "REFRESHED", True, schema,
+    return _refresh_result(snapshot_id, "REFRESHED", not revision_only_unchanged, schema,
                            structure_fingerprint, content_fingerprint, diff, location_projection)
 
 
