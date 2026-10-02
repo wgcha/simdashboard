@@ -250,6 +250,80 @@ T1과 T2는 병렬, T3·T4·T5는 T2 이후 병렬, T6과 T7은 T0 이후 병렬
 9. 편집기 버튼은 확인·저장 2개
 10. mypy, tsc, pytest, vitest 통과
 
+## 13. 등록 삭제 (관리자)
+
+### 13.1 결정
+
+| # | 결정 |
+|---|---|
+| D13 | 관리자는 "등록 이력"의 등록을 삭제할 수 있다. 삭제 범위는 **등록 기록 + 폴더 역할 매핑 + 그 등록이 생성한 업무 데이터**(프로젝트·의뢰·Case·캡처·자산·Final 지정 DB 기록 등)다 |
+| D14 | SPDM 폴더·파일은 어떤 경우에도 지우거나 옮기지 않는다(`.finalizations`, Final/CAE·Reports 포함) |
+| D15 | 다른 살아 있는 등록, 수동 연결(SPDM 저장소 연결, 레거시 매핑), 등록 이전부터 존재한 엔터티가 참조하는 데이터는 지우지 않는다. 이런 참조가 삭제 대상 행에 걸려 있으면 **전체를 거부(409)**하고 부분 삭제하지 않는다 |
+| D16 | 등록 행은 물리 삭제하지 않고 `status=DELETED`로 남긴다(묘비). 감사·이력 추적용이다. 이력 화면은 기본으로 DELETED를 숨긴다 |
+| D17 | 삭제된 등록은 "연결됨"으로 치지 않는다. 같은 의뢰 폴더는 이후 자동 탐색이 **새 깊이 스키마로 다시 등록**할 수 있다(목적: 구 스키마 등록 정리 후 재등록) |
+
+### 13.2 소유 판정 (무엇이 "이 등록이 생성한" 데이터인가)
+
+1. 신규 등록부터는 `register` 시점에 실제로 INSERT한 엔터티 id를 `folder_environment_registrations.created_targets`(JSON: `{project_ids, request_ids, case_ids}`)에 기록한다. 이 값이 있으면 그대로 쓴다.
+2. 값이 없는 기존 등록(구 스키마)은 추론한다. 엔터티가 이 등록의 registry `target_id`이고, **그 엔터티의 `created_at`이 등록 `created_at` − 5초 이후**이며, 다른 살아 있는(DELETED가 아닌) 등록의 registry가 같은 `target_id`를 가리키지 않으면 소유로 본다.
+3. Case(`dashboard_cases`)는 이 등록의 registry `relative_path`에 해당하고 다른 살아 있는 등록이 참조하지 않으면 소유다. 캡처·자산은 소유 Case의 것이면 함께 삭제한다.
+4. 소유가 아닌 엔터티(LINK된 기존 프로젝트 등)는 남긴다. 그 아래에서 이 등록이 만든 의뢰·Case만 지운다.
+
+### 13.3 삭제 순서 (한 트랜잭션, 자식 먼저, cascade 없음)
+
+`folder_discovery.WRITE_LOCK`과 해당 scope의 자동 동기화 잠금을 잡고, Postgres에서는 대상 등록 행을 `SELECT … FOR UPDATE`한다.
+
+1. `folder_environment_capture_jobs` (해당 등록)
+2. 소유 Case의 Final 지정 DB 기록, `result_registration_*`(case_id/capture_id 참조), `dashboard_assets` → `dashboard_captures` → `dashboard_cases`
+3. `folder_environment_registry` (해당 등록)
+4. 소유 의뢰의 하위 행(`spdm_storage_bindings`, `request_work_plans`, `analysis_request_type_assignments`, `request_result_layout_snapshots`, `semantic_folder_bindings`, load_cases 하위 등 구현 시 FK 전수 조사 결과 전부) → `folder_environment_scans`/`previews`의 request_id·project_id는 NULL 처리(이력 조인 보존) → `analysis_requests`
+5. 소유 프로젝트의 하위 행(`product_information`, `project_memberships`, `project_invitations`, `quality_thresholds`, `project_workspace_layouts(+versions)` 등) → `projects`
+6. 등록 행: `status=DELETED`, `deleted_at`, `deleted_by` 기록
+7. 감사 이벤트 `FOLDER_ENVIRONMENT_REGISTRATION_DELETED`(삭제 건수 요약 포함). `audit_events`는 지우지 않는다
+
+차단 사유가 하나라도 있으면 1~7을 하나도 실행하지 않고 409 `REGISTRATION_DELETE_BLOCKED`와 차단 목록을 반환한다.
+
+### 13.4 마이그레이션 `0035_folder_registration_delete`
+
+- `folder_environment_registrations.status` CHECK에 `DELETED` 추가
+- 컬럼 추가: `deleted_at TIMESTAMP NULL`, `deleted_by TEXT NULL`, `created_targets TEXT NULL`(JSON)
+- `registration()`의 상태 재계산(작업 상태로 덮어쓰기)은 DELETED를 건드리지 않는다
+- Postgres와 DuckDB 둘 다 지원한다
+
+### 13.5 자동 탐색·동기화 영향
+
+- `_linked_state`, 자동 탐색 멱등 키 검사, ADMIN_EXCLUDED 계산, auto_sync 대상 선정에서 DELETED 등록을 제외한다.
+- 자동 탐색 멱등 키는 `auto-discovery-<sha(경로, schema_set_id)>`로 바꾼다. 구 키가 남아 있어도 새 스키마 등록을 막지 않는다.
+- DELETED 등록의 capture job은 재시도·실행 대상이 아니다.
+
+### 13.6 API (전역 관리자 전용)
+
+| 메서드 | 경로 | 요청 | 응답 |
+|---|---|---|---|
+| POST | `/api/folder-discovery/environments/registrations/delete-preview` | `{registration_ids: string[]}` (1~200) | `{items:[{registration_id, deletable, counts:{projects, requests, cases, captures, assets, finalizations, other}, blockers:[{table, id, reason}]}], confirm_token}` |
+| POST | `/api/folder-discovery/environments/registrations/delete` | `{registration_ids, confirm_token}` | `{deleted:[registration_id], counts}`. 차단 시 409 `REGISTRATION_DELETE_BLOCKED`(+preview와 같은 items). 토큰이 현재 상태와 다르면 409 `DELETE_PREVIEW_STALE` |
+| GET | `…/history?include_deleted=false` | 기본 false | 기존 형식 + 항목별 `status`, `deleted_at` |
+
+- `confirm_token` = 대상 id 집합과 삭제 예정 행 id 집합의 해시. preview 이후 상태가 바뀌면 삭제를 거부한다.
+- 요청한 등록 중 하나라도 차단되면 전체 거부한다(원자적).
+- 이미 DELETED인 등록은 건너뛰고 `deleted`에 포함하지 않는다(멱등).
+
+### 13.7 UI (등록 이력 탭)
+
+- 각 행 왼쪽에 체크박스, 목록 위에 **삭제** 버튼 1개(선택이 없으면 비활성)와 "전체 선택" 체크박스를 둔다.
+- 삭제를 누르면 preview를 호출하고, 확인 대화상자에 합계(프로젝트 n · 의뢰 n · Case n · 캡처 n · Final 기록 n)와 "SPDM 폴더·파일은 삭제되지 않습니다"를 표시한다. 차단이 있으면 사유 목록만 보여주고 삭제 버튼을 비활성화한다.
+- 삭제가 끝나면 목록, 프로젝트 목록, 선택 상태를 다시 읽는다. 삭제된 프로젝트·의뢰를 보고 있었다면 선택을 해제한다.
+
+### 13.8 Verifier 기준 (추가)
+
+11. 구 스키마 등록 1건 삭제 → 그 등록이 만든 프로젝트·의뢰·Case·캡처·자산 0건, 등록 행은 DELETED. SPDM 트리의 파일 수·mtime 변화 0
+12. LINK된 기존 프로젝트 아래 등록 삭제 → 프로젝트는 남고 이 등록의 의뢰·Case만 삭제
+13. 다른 살아 있는 등록이 같은 Case를 참조 → 409, 어떤 행도 삭제되지 않음
+14. preview 후 다른 등록 추가 → delete가 `DELETE_PREVIEW_STALE`
+15. 삭제 후 자동 탐색 1회 → 같은 의뢰가 새 깊이 스키마로 재등록됨(DELETED 등록에 막히지 않음)
+16. 비관리자 호출 → 403
+17. Postgres(가능하면)와 DuckDB 양쪽에서 삭제 테스트 통과
+
 ## 12. 미확정
 
 - `Final/CAD`: 실제 폴더에 존재하며(현재 비어 있음) 앱은 쓰지 않는다. 잠정적으로 FINAL_CAD(하위 CONTENT)로 둔다. 용도와 채우는 주체를 확정해야 한다.
