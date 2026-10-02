@@ -16,6 +16,13 @@ from app.services import folder_discovery_environment, result_registration_locat
 pytestmark = pytest.mark.duckdb_integration
 
 
+@pytest.fixture(autouse=True)
+def _legacy_profiles(isolated_database):
+    """These scenarios use legacy folder layouts: run them as a pre-0034 database."""
+    from tests.legacy_environment_profiles import activate_legacy_profiles
+    activate_legacy_profiles()
+
+
 def _bound_request(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     root = tmp_path / "SPDM"
     wr_relative = "Project_0009_MODEL_pv1/WR_0009_SimType1"

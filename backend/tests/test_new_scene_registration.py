@@ -55,11 +55,10 @@ def _seed(client, root):
         (root / OPTION / scene).mkdir(parents=True)
         (root / OPTION / scene / CSV).write_bytes(CSV_BYTES)
     scan = _post(client, ENV + "/scan", {"environment": "DISTRIBUTION", "relative_path": ""})
-    # 2_Face / 3_Face do not match the default Scene name pattern; the user confirmed them as SCENE.
-    assignments = [{"node_id": n["id"], "role_kind": "SCENE", "confirm": True}
-                   for n in scan["nodes"] if n["relative_path"] in {f"{OPTION}/2_Face", f"{OPTION}/3_Face"}]
-    assert len(assignments) == 2
-    preview = _post(client, ENV + "/previews", {"scan_id": scan["id"], "assignments": assignments})
+    # DEPTH_V1: Working L6 is SCENE by depth; manual role assignments are not allowed (§6).
+    scenes = [n for n in scan["nodes"] if n["relative_path"] in {f"{OPTION}/2_Face", f"{OPTION}/3_Face"}]
+    assert [n["role_kind"] for n in scenes] == ["SCENE", "SCENE"]
+    preview = _post(client, ENV + "/previews", {"scan_id": scan["id"], "assignments": []})
     assert preview["can_apply"], preview
     registered = _post(client, ENV + "/registrations", {
         "preview_id": preview["id"], "idempotency_key": f"repro-{uuid4()}", "capture": True,
@@ -119,7 +118,7 @@ def test_new_empty_scene_is_registrable_and_listed(admin_client):
     observed = {"node": (node["role_kind"], node["status"], node.get("role_basis")),
                 "draft": (draft.status_code, draft.json().get("detail", {}).get("code") if draft.status_code >= 400 else None),
                 "dashboard_has_4_Edge": "4_Edge" in dash.text, "materials_has_4_Edge": "4_Edge" in mats.text}
-    assert observed == {"node": ("SCENE", "CONFIRMED", "LEVEL"), "draft": (201, None),
+    assert observed == {"node": ("SCENE", "CONFIRMED", "DEPTH_SCHEMA"), "draft": (201, None),
                         "dashboard_has_4_Edge": True, "materials_has_4_Edge": True}, observed
 
 
@@ -128,12 +127,11 @@ def test_prepared_context_matches_schema_after_scene_is_confirmed(admin_client):
     project_id, request_id = _seed(client, root)
     prepared = _prepare_new_scene(client, project_id, request_id)
     scene_path = f"{OPTION}/4_Edge"
-    # Work around the missing role by confirming 4_Edge as SCENE explicitly, then refresh.
+    # DEPTH_V1: 4_Edge is SCENE by depth; re-register without manual roles, then refresh.
     scan = _post(client, ENV + "/scan", {"environment": "DISTRIBUTION", "relative_path": "",
                                          "project_id": project_id, "request_id": request_id})
-    assignments = [{"node_id": n["id"], "role_kind": "SCENE", "confirm": True} for n in scan["nodes"]
-                   if n["relative_path"] in {f"{OPTION}/2_Face", f"{OPTION}/3_Face", scene_path}]
-    preview = _post(client, ENV + "/previews", {"scan_id": scan["id"], "assignments": assignments})
+    assert next(n for n in scan["nodes"] if n["relative_path"] == scene_path)["role_kind"] == "SCENE"
+    preview = _post(client, ENV + "/previews", {"scan_id": scan["id"], "assignments": []})
     _post(client, ENV + "/registrations", {"preview_id": preview["id"], "idempotency_key": f"confirm-{uuid4()}", "capture": False})
     _post(client, ENV + "/refresh", {"project_id": project_id, "request_id": request_id, "environment": "DISTRIBUTION"})
     locations = client.get(REG + "/locations", params={"project_id": project_id, "request_id": request_id,
@@ -158,7 +156,7 @@ def test_directly_copied_scene_folder_inherits_scene_role(admin_client):
     (copied / CSV).write_bytes(CSV_BYTES)
     _refresh(client, project_id, request_id)
     node = _schema_node(project_id, request_id, f"{OPTION}/5_Corner_any_name")
-    assert (node["role_kind"], node["status"], node.get("role_basis")) == ("SCENE", "CONFIRMED", "LEVEL")
+    assert (node["role_kind"], node["status"], node.get("role_basis")) == ("SCENE", "CONFIRMED", "DEPTH_SCHEMA")
     dash = client.get("/api/dashboard/catalog", params={"request_id": request_id, "project_id": project_id,
                                                         "environment": "DISTRIBUTION"})
     assert dash.status_code == 200 and "5_Corner_any_name" in dash.text
@@ -191,7 +189,7 @@ def test_scene_saved_unresolved_by_older_refresh_is_reinterpreted(admin_client):
     result = _refresh(client, project_id, request_id)
     assert result["status"] != "UNCHANGED", result
     node = _schema_node(project_id, request_id, scene_path)
-    assert (node["role_kind"], node["status"], node.get("role_basis")) == ("SCENE", "CONFIRMED", "LEVEL")
+    assert (node["role_kind"], node["status"], node.get("role_basis")) == ("SCENE", "CONFIRMED", "DEPTH_SCHEMA")
     # A further refresh with the current revision reuses the snapshot.
     assert _refresh(client, project_id, request_id)["status"] == "UNCHANGED"
 
@@ -209,14 +207,15 @@ def test_folder_at_other_depth_does_not_become_scene(admin_client):
 RUN = OPTION.rsplit("/", 1)[0]
 
 
-def test_unrelated_folder_under_run_does_not_become_run_option(admin_client):
+def test_any_folder_name_under_run_is_run_option_by_depth(admin_client):
+    """DEPTH_V1 D2a: RunOption names are not restricted; Working L5 is RUN_OPTION by depth."""
     client, root = admin_client
     project_id, request_id = _seed(client, root)
     (root / RUN / "mesh_backup").mkdir()
     result = _refresh(client, project_id, request_id)
     assert result["status"] != "CONFLICT"
     node = _schema_node(project_id, request_id, f"{RUN}/mesh_backup")
-    assert node is None or node.get("role_kind") is None
+    assert (node["role_kind"], node["status"]) == ("RUN_OPTION", "CONFIRMED")
 
 
 def test_mixed_roles_at_scene_level_never_block_refresh(admin_client):

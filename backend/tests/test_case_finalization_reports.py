@@ -40,9 +40,10 @@ def _seed(client, root: Path) -> dict[str, str]:
     (root / OPTION / "2_Face" / "scene_review.pdf").write_bytes(b"%PDF-1.4 synthetic scene report")
     (root / OPTION / "3_Face" / "scene_table.xlsx").write_bytes(b"PK synthetic workbook")
     scan = _post(client, ENV + "/scan", {"environment": "DISTRIBUTION", "relative_path": ""})
-    assignments = [{"node_id": n["id"], "role_kind": "SCENE", "confirm": True}
-                   for n in scan["nodes"] if n["relative_path"] in {f"{OPTION}/2_Face", f"{OPTION}/3_Face"}]
-    preview = _post(client, ENV + "/previews", {"scan_id": scan["id"], "assignments": assignments})
+    # DEPTH_V1: Working L6 is SCENE by depth; manual role assignments are not allowed (§6).
+    scenes = [n for n in scan["nodes"] if n["relative_path"] in {f"{OPTION}/2_Face", f"{OPTION}/3_Face"}]
+    assert [n["role_kind"] for n in scenes] == ["SCENE", "SCENE"]
+    preview = _post(client, ENV + "/previews", {"scan_id": scan["id"], "assignments": []})
     assert preview["can_apply"], preview
     registered = _post(client, ENV + "/registrations", {
         "preview_id": preview["id"], "idempotency_key": f"final-{uuid4()}", "capture": True,
@@ -665,6 +666,13 @@ def test_latest_basis_never_falls_back_when_newest_capture_lacks_schema(admin_cl
 
 
 def test_usage_latest_basis_uses_the_newest_capture_like_the_screen(admin_client):
+    from tests.legacy_environment_profiles import legacy_profiles_active
+    # Legacy Usage layout (no Working, EVALUATION roles): run as a pre-0034 registration (D8/D9).
+    with legacy_profiles_active():
+        _usage_latest_basis(admin_client)
+
+
+def _usage_latest_basis(admin_client):
     from tests.test_environment_folder_flow_api import BASE, usage_files
     client, root = admin_client
     case_path = "Project_9911_Final/WR_9911_SimType1/Assy_RES_Model_SetCase1"

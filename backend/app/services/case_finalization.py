@@ -206,9 +206,10 @@ def _scope(conn: ConnectionLike, project_id: str, request_id: str, environment: 
     snapshot_id = locations.snapshot_id
     if not snapshot_id:
         raise CaseFinalizationError("FINALIZATION_SCHEMA_UNAVAILABLE", "현재 확정 Folder Schema snapshot을 찾을 수 없습니다.")
-    scene_role = "SCENE" if scope["environment"] == "DISTRIBUTION" else "EVALUATION"
+    # D8: Usage DEPTH_V1 Scenes use SCENE; legacy Usage registrations use EVALUATION.
+    scene_roles = {"SCENE"} if scope["environment"] == "DISTRIBUTION" else {"SCENE", "EVALUATION"}
     scene_locations = [item for item in locations.locations
-                       if item.get("role_kind") == scene_role
+                       if item.get("role_kind") in scene_roles
                        and item.get("status") in {"CONFIRMED", "LINKED"}
                        and _under(case_path, str(item.get("relative_path") or ""))]
     blocked = folder_schema_locations.blocked_paths_for_case(schema, case_path)
@@ -229,7 +230,7 @@ def _scope(conn: ConnectionLike, project_id: str, request_id: str, environment: 
             context_locations = []
         captures[str(row[0])] = {
             "fingerprint": str(row[1]), "manifest": manifest, "schema_missing": schema_missing,
-            "compatible": _compatible_scene_paths(context_locations, current_scenes, scene_role),
+            "compatible": _compatible_scene_paths(context_locations, current_scenes, scene_roles),
         }
     current_paths: list[str] = []
     for item in scene_locations:
@@ -281,7 +282,7 @@ def _scope(conn: ConnectionLike, project_id: str, request_id: str, environment: 
         "basis": "LATEST" if latest_basis else "CAPTURE",
         "captures": captures, "scene_sources": scene_sources, "snapshot_id": snapshot_id,
         "compatible_scene_paths": [item["scene_path"] for item in scene_sources],
-        "scene_role": scene_role, "scene_locations": scene_locations, "blocked_paths": blocked,
+        "scene_roles": sorted(scene_roles), "scene_locations": scene_locations, "blocked_paths": blocked,
         "schema": schema, "excluded_scenes": excluded_scenes,
     }
 
@@ -321,10 +322,10 @@ def _latest_scene_owners(merged: dict[str, Any], captures: dict[str, dict[str, A
 
 
 def _compatible_scene_paths(context_locations: list[Any], current_scenes: dict[str, dict[str, Any]],
-                            scene_role: str) -> list[str]:
+                            scene_roles: set[str]) -> list[str]:
     compatible: list[str] = []
     for captured_scene in context_locations:
-        if not isinstance(captured_scene, dict) or captured_scene.get("role_kind") != scene_role or captured_scene.get("status") not in {"CONFIRMED", "LINKED"}:
+        if not isinstance(captured_scene, dict) or captured_scene.get("role_kind") not in scene_roles or captured_scene.get("status") not in {"CONFIRMED", "LINKED"}:
             continue
         current_scene = current_scenes.get(str(captured_scene.get("relative_path") or "").casefold())
         if current_scene is None:

@@ -40,7 +40,7 @@ def _explicit_results_role(node: dict[str, Any]) -> bool:
 
 
 def _schema_scene_role(node: dict[str, Any]) -> bool:
-    return ((node.get("role_source") == "PROFILE" and node.get("role_basis") in {"RULE", "PATTERN"})
+    return ((node.get("role_source") == "PROFILE" and node.get("role_basis") in {"RULE", "PATTERN", "DEPTH_SCHEMA"})
             or (node.get("role_source") == "INHERITED" and node.get("role_basis") == "LEVEL")
             or (node.get("role_source") == "MANUAL" and node.get("role_basis") == "MANUAL")
             or node.get("role_evidence_source") in {"PREVIEW", "REGISTRATION"})

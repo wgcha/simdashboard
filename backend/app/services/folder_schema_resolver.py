@@ -18,9 +18,12 @@ from . import (environment_folder_profiles, folder_discovery, folder_discovery_e
 
 _APPLIED_STATUSES = ("REGISTERED", "CAPTURING", "COMPLETED", "FAILED")
 _ROLE_KINDS = {
-    "USAGE": {"PROJECT", "REQUEST", "SIMULATION_CASE", "EVALUATION", "RESULTS", "INPUT", "CONTAINER"},
+    # Legacy roles stay readable for registrations made before DEPTH_V1.
+    "USAGE": {"PROJECT", "REQUEST", "SIMULATION_CASE", "EVALUATION", "RESULTS", "INPUT", "CONTAINER",
+              "SCENE", "WORKING", "FINAL", "FINAL_CAE", "FINAL_REPORTS", "FINAL_CAD", "FINAL_VERSION"},
     "DISTRIBUTION": {"PROJECT", "REQUEST", "SIMULATION_CASE", "LOAD_CASE", "EXECUTION_RUN", "RUN_OPTION",
-                     "SCENE", "RESULTS", "INPUT", "CONTAINER"},
+                     "SCENE", "RESULTS", "INPUT", "CONTAINER",
+                     "WORKING", "FINAL", "FINAL_CAE", "FINAL_REPORTS", "FINAL_CAD", "FINAL_VERSION"},
 }
 
 
@@ -420,7 +423,7 @@ def _preview_roles(preview_value: Any, request_path: str, environment: str,
             raise FolderSchemaError("FOLDER_SCHEMA_PREVIEW_INVALID", "저장된 폴더 역할 경로가 올바르지 않습니다.")
         raw_path = item.get("relative_path")
         if not raw_path:
-            if state_row and (item.get("status") == "CONTAINER" or item.get("role_kind") == "CONTAINER"):
+            if state_row and (item.get("status") in {"CONTAINER", "CONTENT"} or item.get("role_kind") == "CONTAINER"):
                 return
             raise FolderSchemaError("FOLDER_SCHEMA_PREVIEW_INVALID", "저장된 폴더 역할 경로가 올바르지 않습니다.")
         path = _normal(str(raw_path), allow_root=True)

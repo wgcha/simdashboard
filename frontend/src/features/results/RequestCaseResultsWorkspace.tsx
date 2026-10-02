@@ -4,9 +4,11 @@ import { useSearchParams } from 'react-router-dom'
 import { SimulationDashboard } from './SimulationDashboard'
 import { MaterialsDashboard } from '../materials/MaterialsDashboard'
 import { FOLDER_SCHEMA_FILE_BUSY, useFolderAutoSync } from '../../shared/hooks/useFolderAutoSync'
+import { folderEnvironmentApi, type DepthDeviationItem } from '../../shared/api/folderEnvironment'
+import { deviationLabel } from '../../shared/api/depthSchemaModel'
 import './RequestCaseResultsWorkspace.css'
 
-type Props = { projectId: string; requestId: string; canManageFolders?: boolean; canRefreshSchema?: boolean; activeTab?: 'case_results' | 'materials'; refreshToken?: number }
+type Props = { projectId: string; requestId: string; canManageFolders?: boolean; canRefreshSchema?: boolean; canReinterpret?: boolean; activeTab?: 'case_results' | 'materials'; refreshToken?: number }
 
 function syncLabel(sync: ReturnType<typeof useFolderAutoSync>, now: number): { text: string; title?: string; tone: 'ok' | 'busy' | 'wait' | 'warn' } {
   if (sync.busy) return { text: '확인 중…', tone: 'busy' }
@@ -23,12 +25,31 @@ function changeNotice(diff: { added: number; removed: number; changed: number } 
 }
 
 /** Request-scoped SPDM review. It intentionally has no legacy Load Case, Run, or layout dependency. */
-export function RequestCaseResultsWorkspace({ projectId, requestId, canManageFolders = false, canRefreshSchema = false, activeTab = 'case_results', refreshToken = 0 }: Props) {
+export function RequestCaseResultsWorkspace({ projectId, requestId, canManageFolders = false, canRefreshSchema = false, canReinterpret = false, activeTab = 'case_results', refreshToken = 0 }: Props) {
   const [searchParams] = useSearchParams()
   const environment = activeTab === 'materials' ? 'DISTRIBUTION' : searchParams.get('result_environment') === 'DISTRIBUTION' ? 'DISTRIBUTION' : 'USAGE'
   const sync = useFolderAutoSync({ projectId, requestId, environment })
   const [now, setNow] = useState(() => Date.now())
   const [notice, setNotice] = useState('')
+  const [reinterpreting, setReinterpreting] = useState(false)
+  const [reinterpretToken, setReinterpretToken] = useState(0)
+  const [deviations, setDeviations] = useState<{ message: string; items: DepthDeviationItem[] } | null>(null)
+  useEffect(() => { setDeviations(null) }, [projectId, requestId])
+  // D9: saving a depth schema never changes registered requests; only this explicit action re-applies it.
+  const reinterpret = async () => {
+    if (!requestId || !window.confirm('현재 깊이 스키마로 이 의뢰의 폴더를 다시 해석해 등록합니다. 이탈이 있으면 등록하지 않습니다. 진행할까요?')) return
+    setReinterpreting(true); setDeviations(null)
+    try {
+      const result = await folderEnvironmentApi.reinterpretRequest(requestId)
+      const items = result.deviations ?? []
+      if (items.length) setDeviations({ message: result.message || '이탈이 있어 재해석 결과를 등록하지 않았습니다.', items })
+      else { setNotice(result.message || '현재 깊이 스키마로 재해석했습니다.'); setReinterpretToken((value) => value + 1) }
+    } catch (error) {
+      const detail = error && typeof error === 'object' && 'detail' in error ? (error as { detail: unknown }).detail : null
+      const items = detail && typeof detail === 'object' && Array.isArray((detail as { deviations?: unknown }).deviations) ? (detail as { deviations: DepthDeviationItem[] }).deviations : []
+      setDeviations({ message: error instanceof Error ? error.message : '재해석하지 못했습니다.', items })
+    } finally { setReinterpreting(false) }
+  }
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 15_000)
     return () => window.clearInterval(timer)
@@ -44,15 +65,20 @@ export function RequestCaseResultsWorkspace({ projectId, requestId, canManageFol
   }, [sync.revision])
   const label = syncLabel(sync, now)
   // App's operational token and the auto-sync revision both only grow, so their sum changes whenever either does.
-  const dashboardToken = refreshToken + sync.revision
+  const dashboardToken = refreshToken + sync.revision + reinterpretToken
   const syncStatus = <div className="request-case-results__sync" role="group" aria-label="폴더 자동 확인">
     {notice ? <span className="request-case-results__notice" role="status">{notice}</span> : null}
     <span className={`request-case-results__status request-case-results__status--${label.tone}`} title={label.title} aria-live="polite">{label.text}</span>
     <button type="button" className="request-case-results__check" aria-label="지금 확인" title="지금 확인" disabled={sync.busy || !projectId || !requestId} onClick={sync.checkNow}><RotateCw aria-hidden="true" /></button>
+    {canReinterpret ? <button type="button" className="request-case-results__reinterpret" title="현재 깊이 스키마로 이 의뢰를 다시 해석" disabled={reinterpreting || !requestId} onClick={() => void reinterpret()}>{reinterpreting ? '재해석 중…' : '재해석'}</button> : null}
   </div>
   // One tabbed page for both routes: the 소재·물성 tab renders the materials
   // dashboard inside the Case results page and shares its path row.
   return <div className="request-case-results">
+    {deviations ? <div className="request-case-results__deviations" role="alert">
+      <div><strong>{deviations.message}</strong><button type="button" aria-label="닫기" onClick={() => setDeviations(null)}>×</button></div>
+      {deviations.items.length ? <ul>{deviations.items.map((item, index) => <li key={`${item.code}:${item.relative_path ?? index}`}><b>{deviationLabel(item.code)}</b>{item.relative_path ? <code>{item.relative_path}</code> : null}{item.message ? <span>{item.message}</span> : null}</li>)}</ul> : null}
+    </div> : null}
     <SimulationDashboard projectId={projectId} requestId={requestId} canManageFolders={canManageFolders} canRefreshSchema={canRefreshSchema} refreshToken={dashboardToken} activeTab={activeTab} headerExtra={syncStatus}
       renderMaterials={(pathTarget) => <MaterialsDashboard projectId={projectId} requestId={requestId} refreshToken={dashboardToken} embedded pathTarget={pathTarget} />} />
   </div>

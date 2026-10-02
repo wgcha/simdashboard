@@ -68,11 +68,13 @@ def test_environment_schema_keeps_profile_edits_and_existing_capture_bytes():
         conn.execute("INSERT INTO dashboard_captures VALUES ('capture','case','hash','v1','[]','{}','tester',CURRENT_TIMESTAMP)")
         conn.execute("INSERT INTO dashboard_assets VALUES ('asset','capture','result.png','sha','image/png',?,'{}')", [b'preserved'])
         ensure_folder_environment_schema(conn)
-        conn.execute("UPDATE folder_environment_profiles SET revision=7,rules_json=? WHERE environment='USAGE'", ['{"custom":"preserved"}'])
+        # 0034 equivalent: legacy defaults archived in place, one DEPTH_V1 set seeded.
+        assert conn.execute('SELECT count(*) FROM folder_environment_profiles').fetchone()[0] == 4
+        conn.execute("UPDATE folder_environment_profiles SET revision=7,rules_json=? WHERE id='environment-profile-usage-default'", ['{"custom":"preserved"}'])
         ensure_folder_environment_schema(conn)
-        assert conn.execute("SELECT revision,rules_json FROM folder_environment_profiles WHERE environment='USAGE'").fetchone() == (7, '{"custom":"preserved"}')
+        assert conn.execute("SELECT revision,rules_json FROM folder_environment_profiles WHERE id='environment-profile-usage-default'").fetchone() == (7, '{"custom":"preserved"}')
         assert conn.execute('SELECT content FROM dashboard_assets').fetchone()[0] == b'preserved'
-        assert conn.execute('SELECT count(*) FROM folder_environment_profiles').fetchone()[0] == 2
+        assert conn.execute('SELECT count(*) FROM folder_environment_profiles').fetchone()[0] == 4
 
 
 def test_environment_migration_does_not_rewrite_old_rules_or_captures(monkeypatch):

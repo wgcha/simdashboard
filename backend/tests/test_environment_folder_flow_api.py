@@ -15,6 +15,13 @@ from app.services import dashboard_capture, folder_discovery_environment, folder
 from app.services.folder_schema_locations import EnvironmentLocations
 
 pytestmark = pytest.mark.duckdb_integration
+
+
+@pytest.fixture(autouse=True)
+def _legacy_profiles(isolated_database):
+    """These scenarios use legacy folder layouts: run them as a pre-0034 database."""
+    from tests.legacy_environment_profiles import activate_legacy_profiles
+    activate_legacy_profiles()
 BASE = "/api/folder-discovery/environments"
 
 
@@ -54,30 +61,45 @@ def post(client, route, payload):
     return response.json()
 
 
+def _profile_call(operation):
+    """Legacy profile editing is HTTP 410 since DEPTH_V1 (§6); these legacy scenarios drive the service."""
+    from fastapi import HTTPException
+    from app.services import environment_folder_profiles
+    from app.services.folder_discovery import WRITE_LOCK
+    from app.services.semantic_mapping import semantic_transaction
+    with connect() as conn:
+        try:
+            with WRITE_LOCK, semantic_transaction(conn):
+                return 200, operation(environment_folder_profiles, conn)
+        except HTTPException as exc:
+            return exc.status_code, exc.detail
+
+
 def test_profile_archive_keeps_revision_and_history_reference_and_rejects_stale_edit(admin_client):
     client, _ = admin_client
-    profile = post(client, "/profiles", {
+    for method, path in (("post", "/profiles"), ("put", "/profiles/x"), ("delete", "/profiles/x?expected_revision=1"),
+                         ("post", "/profiles/from-legacy")):
+        gone = getattr(client, method)(BASE + path, **({"json": {}} if method != "delete" else {}))
+        assert gone.status_code == 410 and gone.json()["detail"]["code"] == "DEPRECATED_USE_DEPTH_SCHEMA", gone.text
+    _, profile = _profile_call(lambda svc, conn: svc.save_profile(conn, **{
         "environment": "DISTRIBUTION", "name": f"archive test {uuid4().hex[:8]}",
         "rules": {"rules": [], "description": "Synthetic archive lifecycle check."},
-    })
-    archived = client.delete(
-        f"{BASE}/profiles/{profile['id']}?expected_revision={profile['revision']}"
-    )
-    assert archived.status_code == 200, archived.text
-    assert archived.json()["revision"] == profile["revision"]
-    assert archived.json()["archived"] is True
+    }))
+    status, archived = _profile_call(lambda svc, conn: svc.archive_profile(conn, profile["id"], profile["revision"]))
+    assert status == 200, archived
+    assert archived["revision"] == profile["revision"]
+    assert archived["archived"] is True
     assert profile["id"] not in {item["id"] for item in client.get(BASE).json()["items"]}
 
     with connect() as conn:
         saved = folder_discovery_environment._profile(conn, profile["id"], "DISTRIBUTION")
         assert saved["revision"] == profile["revision"]
         assert saved["rules"]["profile_metadata"]["archived"] is True
-    stale_edit = client.put(f"{BASE}/profiles/{profile['id']}", json={
-        "environment": "DISTRIBUTION", "name": profile["name"], "rules": {"rules": []},
-        "expected_revision": profile["revision"],
-    })
-    assert stale_edit.status_code == 409
-    assert stale_edit.json()["detail"]["code"] == "ENVIRONMENT_PROFILE_ARCHIVED"
+    status, stale_edit = _profile_call(lambda svc, conn: svc.save_profile(
+        conn, profile_id=profile["id"], environment="DISTRIBUTION", name=profile["name"], rules={"rules": []},
+        expected_revision=profile["revision"]))
+    assert status == 409
+    assert stale_edit["code"] == "ENVIRONMENT_PROFILE_ARCHIVED"
 
 
 def test_schema_scoped_empty_projection_fails_closed_and_legacy_remains_compatible():
@@ -1024,18 +1046,18 @@ def test_saved_profile_revision_is_used_and_old_preview_cannot_apply_after_edit(
     definition = {"environment": "USAGE", "name": f"Custom usage {uuid4()}", "rules": {"rules": [
         {"role_kind": "SIMULATION_CASE", "parent_role": "REQUEST", "pattern": "Model*", "match_mode": "glob"},
     ]}}
-    profile = post(client, "/profiles", definition)
+    _, profile = _profile_call(lambda svc, conn: svc.save_profile(conn, **definition))
     assert profile["revision"] == 1
     scan = post(client, "/scan", {"environment": "USAGE", "relative_path": "", "profile_id": profile["id"]})
     custom = next(node for node in scan["nodes"] if node["name"] == "Model Custom")
     assert custom["role_kind"] == "SIMULATION_CASE"
     preview = post(client, "/previews", {"scan_id": scan["id"], "assignments": []})
     assert preview["can_apply"], preview
-    updated = client.put(BASE + f"/profiles/{profile['id']}", json={**definition, "expected_revision": 1})
-    assert updated.status_code == 200, updated.text
-    assert updated.json()["revision"] == 2
-    conflict = client.put(BASE + f"/profiles/{profile['id']}", json={**definition, "expected_revision": 1})
-    assert conflict.status_code == 409, conflict.text
+    status, updated = _profile_call(lambda svc, conn: svc.save_profile(conn, profile_id=profile["id"], expected_revision=1, **definition))
+    assert status == 200, updated
+    assert updated["revision"] == 2
+    status, conflict = _profile_call(lambda svc, conn: svc.save_profile(conn, profile_id=profile["id"], expected_revision=1, **definition))
+    assert status == 409, conflict
     stale = client.post(BASE + "/registrations", json={"preview_id": preview["id"], "idempotency_key": f"revision-{uuid4()}", "capture": True})
     assert stale.status_code in (409, 422), stale.text
 
@@ -1047,7 +1069,7 @@ def test_legacy_copy_preserves_original_and_requires_case_review(admin_client):
                 {"depth": 3, "role": "LOAD_CASE", "keyword": "LC_", "delimiter": "_", "code_token": 2, "name_from_token": 3, "analysis_type": "SPDM_CMS"}]
     with connect() as conn:
         conn.execute("INSERT INTO folder_discovery_rules VALUES (?, '', ?, 1, CURRENT_TIMESTAMP, 'test')", [root_identity(root), json.dumps(original)])
-    profile = post(client, "/profiles/from-legacy", {"environment": "USAGE", "name": f"Copied legacy {uuid4()}", "relative_path": ""})
+    _, profile = _profile_call(lambda svc, conn: svc.copy_legacy(conn, "USAGE", f"Copied legacy {uuid4()}", ""))
     assert profile["requires_review"]
     assert [r["role_kind"] for r in profile["rules"]["rules"]] == ["PROJECT"]
     assert len(profile["omitted_rules"]) == 1

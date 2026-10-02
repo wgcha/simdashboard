@@ -100,7 +100,7 @@ def initialize_database() -> None:
                 "folder_environment_profiles": {"environment", "rules_json", "revision"},
                 "folder_environment_scans": {"root_key", "environment", "tree_json", "profile_id"},
                 "folder_environment_previews": {"scan_id", "rows_json", "can_apply"},
-                "folder_environment_registrations": {"preview_id", "idempotency_key", "environment", "status"},
+                "folder_environment_registrations": {"preview_id", "idempotency_key", "environment", "status", "deleted_at", "deleted_by", "created_targets"},
                 "folder_environment_registry": {"registration_id", "relative_path", "role_kind", "target_id"},
                 "folder_environment_capture_jobs": {"registration_id", "case_id", "status"},
                 "result_registration_paths": {"root_key", "project_id", "request_id", "environment", "relative_path", "path_key", "role_kind", "target_id"},
@@ -1485,6 +1485,59 @@ def ensure_folder_environment_schema(conn: duckdb.DuckDBPyConnection) -> None:
     conn.execute("""INSERT INTO folder_environment_profiles(id,environment,name,revision,rules_json,created_at,updated_at) VALUES
     ('environment-profile-usage-default','USAGE','기본 사용환경 규칙',1,'{"roles":["PROJECT","REQUEST","SIMULATION_CASE","EVALUATION"]}',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP),
     ('environment-profile-distribution-default','DISTRIBUTION','기본 유통환경 규칙',1,'{"roles":["PROJECT","REQUEST","SIMULATION_CASE","LOAD_CASE","EXECUTION_RUN","RUN_OPTION"]}',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP) ON CONFLICT(id) DO NOTHING""")
+    ensure_folder_depth_schema(conn)
+    ensure_folder_registration_delete_schema(conn)
+
+
+def ensure_folder_registration_delete_schema(conn: duckdb.DuckDBPyConnection) -> None:
+    """Local development equivalent of additive migration 0035 (registration tombstones).
+
+    The DuckDB table carries no status CHECK, so ``DELETED`` needs no constraint change.
+    """
+    for column, kind in (("deleted_at", "TIMESTAMP"), ("deleted_by", "VARCHAR"), ("created_targets", "VARCHAR")):
+        conn.execute(f"ALTER TABLE folder_environment_registrations ADD COLUMN IF NOT EXISTS {column} {kind}")
+
+
+DEPTH_SCHEMA_SEED_SET_ID = "dss-00000000-0000-4000-8000-000000000034"
+
+
+def ensure_folder_depth_schema(conn: duckdb.DuckDBPyConnection) -> None:
+    """Local development equivalent of migration 0034 (one-time, then a no-op).
+
+    Seeds the default DEPTH_V1 set and archives every older active profile in
+    place. Once any DEPTH_V1 row exists the bootstrap never touches profiles.
+    """
+    from .services import environment_folder_profiles as profiles
+
+    stored = [(str(row[0]), str(row[1]), int(row[2]), row[3], row[4]) for row in conn.execute(
+        "SELECT id,environment,revision,rules_json,created_at FROM folder_environment_profiles ORDER BY created_at,id").fetchall()]
+    decoded = [(pid, env, rev, json.loads(raw) if isinstance(raw, str) else raw, created) for pid, env, rev, raw, created in stored]
+    if any(profiles.is_depth_rules(rules) for _pid, _env, _rev, rules, _created in decoded):
+        return
+
+    def active(rules: Any) -> bool:
+        metadata = rules.get("profile_metadata") if isinstance(rules, dict) else None
+        return isinstance(rules, dict) and not (isinstance(metadata, dict) and metadata.get("archived"))
+
+    usage_source = next((rules.get("usage_sources") for _pid, env, _rev, rules, _created in decoded
+                         if env == "USAGE" and active(rules)), None)
+    names = {"USAGE": "기본 사용환경 깊이 스키마", "DISTRIBUTION": "기본 유통환경 깊이 스키마"}
+    for environment in ("USAGE", "DISTRIBUTION"):
+        rules = profiles.default_depth_rules(environment, DEPTH_SCHEMA_SEED_SET_ID)
+        rules["usage_sources"] = profiles.usage_sources_evaluation_to_scene(usage_source) if environment == "USAGE" else None
+        rules["profile_metadata"] = {"created_by": "migration-0034"}
+        conn.execute("INSERT INTO folder_environment_profiles(id,environment,name,revision,rules_json,created_at,updated_at) "
+                     "VALUES (?,?,?,1,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP) ON CONFLICT(id) DO NOTHING",
+                     [f"environment-profile-{environment.lower()}-depth-v1", environment, names[environment],
+                      json.dumps(rules, ensure_ascii=False)])
+    for pid, _env, revision, rules, _created in decoded:
+        if not active(rules):
+            continue
+        archived = dict(rules)
+        archived["profile_metadata"] = {**(rules.get("profile_metadata") or {}), "archived": True,
+                                        "archived_revision": revision, "superseded_by": DEPTH_SCHEMA_SEED_SET_ID}
+        conn.execute("UPDATE folder_environment_profiles SET rules_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                     [json.dumps(archived, ensure_ascii=False), pid])
 
 
 def ensure_result_registration_schema(conn: duckdb.DuckDBPyConnection) -> None:

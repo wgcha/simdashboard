@@ -50,6 +50,7 @@ from .routers.case_finalization import router as case_finalization_router
 from .routers.materials import router as materials_router
 from .routers.folder_discovery import router as folder_discovery_router
 from .routers.folder_discovery_environment import router as folder_discovery_environment_router
+from .routers.folder_environment_profiles import requests_router as folder_environment_requests_router
 from .routers.folder_environment_profiles import router as folder_environment_profiles_router
 from .routers.media import router as media_router
 from .routers.managed_local_execution import router as managed_local_execution_router
@@ -126,6 +127,7 @@ app.include_router(semantic_impact_router)
 app.include_router(folder_discovery_router)
 app.include_router(folder_discovery_environment_router)
 app.include_router(folder_environment_profiles_router)
+app.include_router(folder_environment_requests_router)
 app.include_router(semantic_vocabulary_router)
 
 

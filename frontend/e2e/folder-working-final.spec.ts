@@ -46,45 +46,63 @@ test('Final 지정 미리보기는 최신 결과 기준과 CAE 파일을 보이�
   expect(errors).toEqual([])
 })
 
-test('저장 규칙은 편집·개정 저장 후 유지되고 삭제 시 신규 선택에서 제거된다', async ({ page }) => {
+test('깊이 스키마는 확인 후 저장하면 새 스키마 세트로 바뀌고 기존 등록은 재해석 전까지 유지된다고 안내한다', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 })
   const errors: string[] = []
   page.on('pageerror', (error) => errors.push(error.message))
-  let saved = { id: 'profile-test', environment: 'USAGE', name: 'Working 테스트 규칙', revision: 1,
-    rules: { rules: [{ role_kind: 'SIMULATION_CASE', pattern: '', match_mode: 'level', depth: 1 }] } }
-  let archived = false
-  await page.route('**/api/folder-discovery/environments', (route) => route.fulfill({ json: { items: archived ? [] : [saved] } }))
-  await page.route('**/api/folder-discovery/environments/profiles/profile-test**', async (route) => {
+  const lower = (levels: string[]) => ({ levels: levels.map((role, index) => index === 0 ? { level: 1, role, fixed_name: 'Working' } : { level: index + 1, role }), below_last: 'CONTENT' })
+  let schema = {
+    schema_set_id: 'dss-e2e-1', created_at: '2026-10-02T00:00:00Z', created_by: 'e2e-admin',
+    upper: { levels: [{ level: 1, role: 'PROJECT' }, { level: 2, role: 'REQUEST' }] },
+    environments: {
+      USAGE: { profile_id: 'usage-1', environment_keyword: '사용', lower: lower(['WORKING', 'SIMULATION_CASE', 'SCENE']), usage_sources: null },
+      DISTRIBUTION: { profile_id: 'distribution-1', environment_keyword: '유통', lower: lower(['WORKING', 'SIMULATION_CASE', 'LOAD_CASE', 'EXECUTION_RUN', 'RUN_OPTION', 'SCENE']), usage_sources: null },
+    },
+  }
+  let checked = false
+  let savedBody: { expected_schema_set_id: string; upper: { levels: Array<{ level: number; role: string }> } } | null = null
+  await page.route('**/api/folder-discovery/environments/depth-schema', async (route) => {
     if (route.request().method() === 'PUT') {
-      const body = route.request().postDataJSON()
-      expect(body.expected_revision).toBe(1)
-      expect(body.rules.rules[0].depth).toBe(2)
-      saved = { ...saved, name: body.name, rules: body.rules, revision: 2 }
-      await route.fulfill({ json: saved })
-    } else if (route.request().method() === 'DELETE') {
-      expect(new URL(route.request().url()).searchParams.get('expected_revision')).toBe('2')
-      archived = true
-      await route.fulfill({ json: { id: saved.id, environment: saved.environment, name: saved.name, revision: 2, archived: true } })
-    } else await route.fulfill({ json: saved })
+      savedBody = route.request().postDataJSON()
+      schema = { ...schema, schema_set_id: 'dss-e2e-2', upper: savedBody!.upper }
+    }
+    await route.fulfill({ json: schema })
   })
-  await page.route('**/api/folder-discovery/saved-rules**', (route) => route.fulfill({ json: { items: [], total: 0 } }))
+  await page.route('**/api/folder-discovery/environments/depth-schema/samples', (route) => route.fulfill({ json: {
+    levels: [{ level: 1, folder_count: 1, samples: [{ name: 'SPDM (Admin)', count: 1 }], truncated: false },
+      { level: 2, folder_count: 1, samples: [{ name: '75R9J_PV', count: 1 }], truncated: false },
+      { level: 3, folder_count: 2, samples: [{ name: '[WR-0002]_[유통_환경]', count: 1 }, { name: '[WR-0001]_[사용_환경]', count: 1 }], truncated: false }],
+    requests_sampled: 0 } }))
+  await page.route('**/api/folder-discovery/environments/depth-schema/check', async (route) => {
+    checked = true
+    expect(route.request().postDataJSON().upper.levels.map((item: { role: string }) => item.role)).toEqual(['CONTAINER', 'PROJECT', 'REQUEST'])
+    await route.fulfill({ json: { by_code: { UNEXPECTED_REQUEST_CHILD: 1 }, examples: [{ relative_path: 'SPDM (Admin)/75R9J_PV/[WR-0002]_[유통_환경]', code: 'UNEXPECTED_REQUEST_CHILD' }] } })
+  })
   await loginWorkspace(page, 'e2e-admin', '/workspace/catalog/schemas')
   const workspace = page.locator('.folder-environment-workspace')
   await expect(workspace).toBeVisible()
   await workspace.getByRole('button', { name: '저장된 규칙', exact: true }).click()
-  await workspace.getByLabel('편집할 규칙').selectOption('profile-test')
-  await workspace.getByLabel('규칙 이름', { exact: true }).fill('수정한 Working 규칙')
-  await workspace.getByLabel('Working 기준 깊이 1').fill('2')
-  await workspace.getByRole('button', { name: '새 개정 저장', exact: true }).click()
-  await expect(workspace.getByLabel('규칙 이름', { exact: true })).toHaveValue('수정한 Working 규칙')
-  await expect(workspace.getByLabel('편집할 규칙')).toHaveValue('profile-test')
-  await expect(workspace.getByLabel('편집할 규칙').locator('option:checked')).toContainText('v2')
-  page.once('dialog', (dialog) => dialog.accept())
-  await workspace.getByRole('button', { name: '규칙 삭제', exact: true }).click()
-  await expect(workspace.getByLabel('편집할 규칙').locator('option[value="profile-test"]')).toHaveCount(0)
-  expect(archived).toBe(true)
+  await expect(workspace.getByRole('heading', { name: '저장된 규칙' })).toBeVisible()
+  await expect(workspace).toContainText('dss-e2e-1')
+  const table = workspace.getByRole('table', { name: '상위 구조 깊이 표' })
+  await expect(table).toContainText('SPDM (Admin)')
+  // Root → CONTAINER → PROJECT → REQUEST: set each depth in order (L3 first extends the schema).
+  await table.getByLabel('L3 역할').selectOption('REQUEST')
+  await table.getByLabel('L2 역할').selectOption('PROJECT')
+  await table.getByLabel('L1 역할').selectOption('CONTAINER')
+  await expect(workspace.locator('.depth-schema-errors')).toHaveCount(0)
+  await workspace.getByRole('button', { name: '확인', exact: true }).click()
+  const result = workspace.getByRole('region', { name: '확인 결과' })
+  await expect(result).toContainText('의뢰 아래 Working·Final 외 폴더')
+  expect(checked).toBe(true)
+  await workspace.getByRole('button', { name: '저장', exact: true }).click()
+  await expect(workspace).toContainText('깊이 스키마를 저장했습니다.')
+  await expect(workspace).toContainText('dss-e2e-2')
+  expect(savedBody).not.toBeNull()
+  expect(savedBody!.expected_schema_set_id).toBe('dss-e2e-1')
+  expect(savedBody!.upper.levels.map((item) => item.role)).toEqual(['CONTAINER', 'PROJECT', 'REQUEST'])
   expect(errors).toEqual([])
-  await page.screenshot({ path: join(tmpdir(), 'folder-rule-editor-desktop.png'), fullPage: false })
+  await page.screenshot({ path: join(tmpdir(), 'folder-depth-schema-editor-desktop.png'), fullPage: false })
 })
 
 test('확정 Working 계층은 수집본에 Run이 없거나 결과 미수집 상태에서도 하중경우와 Run을 표시한다', async ({ page }) => {

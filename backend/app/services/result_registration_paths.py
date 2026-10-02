@@ -635,7 +635,7 @@ def targets(conn: ConnectionLike, environment: str, principal_projects: set[str]
     identities = {(str(item["project_id"]), str(item["request_id"])) for item in records}
     identities.update((str(item["project_id"]), str(item["request_id"])) for item in rows(conn.execute(
         "SELECT DISTINCT project_id,request_id FROM folder_environment_registrations "
-        "WHERE project_id IS NOT NULL AND request_id IS NOT NULL")))
+        "WHERE project_id IS NOT NULL AND request_id IS NOT NULL AND status<>'DELETED'")))
     identities.update((str(item["project_id"]), str(item["request_id"])) for item in rows(conn.execute(
         "SELECT DISTINCT project_id,request_id FROM spdm_storage_bindings")))
     identities.update((str(item["project_id"]), str(item["request_id"])) for item in rows(conn.execute(

@@ -8,6 +8,13 @@ from fastapi.testclient import TestClient
 from app.main import app
 
 pytestmark = pytest.mark.duckdb_integration
+
+
+@pytest.fixture(autouse=True)
+def _legacy_profiles(isolated_database):
+    """These scenarios use legacy folder layouts: run them as a pre-0034 database."""
+    from tests.legacy_environment_profiles import activate_legacy_profiles
+    activate_legacy_profiles()
 BASE = "/api/folder-discovery/environments"
 
 

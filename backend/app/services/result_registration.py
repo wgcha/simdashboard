@@ -233,8 +233,8 @@ def _current_target(
         raise ResultRegistrationError("RESULT_CONTEXT_CHANGED", "선택한 결과 폴더의 Simulation Case 문맥이 변경되었습니다.")
     if not result_nodes or result_nodes[-1].get("role_kind") != "RESULTS":
         raise ResultRegistrationError("RESULT_FOLDER_INVALID", "선택한 폴더는 확인된 results 경로여야 합니다.")
-    expected_parent_role = "EVALUATION" if scope["environment"] == "USAGE" else "SCENE"
-    if len(result_nodes) < 2 or result_nodes[-2].get("role_kind") != expected_parent_role:
+    expected_parent_roles = {"EVALUATION", "SCENE"} if scope["environment"] == "USAGE" else {"SCENE"}
+    if len(result_nodes) < 2 or result_nodes[-2].get("role_kind") not in expected_parent_roles:
         raise ResultRegistrationError("RESULT_FOLDER_INVALID", "결과 폴더는 선택한 평가 항목 또는 Scene 바로 아래여야 합니다.")
     if expected_context is not None and _public_context(context) != _public_context(expected_context):
         raise ResultRegistrationError("RESULT_CONTEXT_CHANGED", "검수한 업무 문맥이 현재 경로 연결과 달라졌습니다. 다시 검수하세요.")

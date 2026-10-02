@@ -36,7 +36,7 @@ def effective_assignment(schema: dict[str, Any], path_key: str) -> dict[str, Any
             and node.get("role_source") == "PROFILE" and node.get("role_basis") == "DEFAULT"):
         return {"relative_path": node.get("relative_path"), "role_kind": "WORKING",
                 "status": "CONFIRMED", "name": node.get("name"), "source": "PROFILE"}
-    confirmed_rule = node.get("role_source") == "PROFILE" and node.get("role_basis") == "RULE"
+    confirmed_rule = node.get("role_source") == "PROFILE" and node.get("role_basis") in {"RULE", "DEPTH_SCHEMA"}
     confirmed_level = node.get("role_source") == "INHERITED" and node.get("role_basis") == "LEVEL"
     if (not (confirmed_rule or confirmed_level) or
             node.get("status") not in {"CONFIRMED", "CONTAINER"}):
@@ -65,7 +65,8 @@ def _result_candidates(conn: ConnectionLike, root, root_key: str, project_id: st
                        request_id: str, environment: str,
                        schema: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     schema = schema or _resolver(conn, root, root_key, project_id, request_id, environment)
-    expected_parent_role = "EVALUATION" if environment == "USAGE" else "SCENE"
+    # D8: a Usage Scene (DEPTH_V1) or legacy Evaluation is the result parent.
+    expected_parent_roles = {"EVALUATION", "SCENE"} if environment == "USAGE" else {"SCENE"}
     nodes = {paths._root_casefold(str(node.get("relative_path", ""))): node
              for node in schema.get("nodes", [])}
     request_path = str(schema.get("request_relative_path") or "")
@@ -74,7 +75,7 @@ def _result_candidates(conn: ConnectionLike, root, root_key: str, project_id: st
     candidates: list[dict[str, Any]] = []
     for path_key, node in nodes.items():
         assignment = effective_assignment(schema, path_key)
-        if not assignment or assignment.get("role_kind") != expected_parent_role:
+        if not assignment or assignment.get("role_kind") not in expected_parent_roles:
             continue
         if assignment.get("status") not in {"CONFIRMED", "LINKED"}:
             continue
@@ -98,7 +99,8 @@ def _result_candidates(conn: ConnectionLike, root, root_key: str, project_id: st
                     child_assignment.get("status") in {"CONFIRMED", "LINKED"}):
                 result_nodes.append((child_node, child_assignment))
         destinations: list[tuple[str, bool]] = []
-        if expected_parent_role == "SCENE":
+        parent_role = str(assignment.get("role_kind") or "")
+        if parent_role == "SCENE":
             # Distribution projects commonly keep approved tables and media
             # beside the RAD/INC solver inputs. The confirmed Scene is itself
             # a safe destination, including before any result file is present.
@@ -161,7 +163,7 @@ def _result_candidates(conn: ConnectionLike, root, root_key: str, project_id: st
                 "relative_path": result_path,
                 "path_key": paths._root_casefold(result_path),
                 "schema_parent_path": parent_path,
-                "schema_role_kind": expected_parent_role,
+                "schema_role_kind": parent_role,
                 "schema_target_id": assignment.get("target_id"),
                 "schema_scan_id": schema["scan"]["id"],
                 "schema_profile_id": schema["profile"]["id"],

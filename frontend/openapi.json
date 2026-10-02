@@ -6492,18 +6492,35 @@
         }
       }
     },
-    "/api/folder-discovery/environments/profiles": {
-      "post": {
+    "/api/folder-discovery/environments/depth-schema": {
+      "get": {
         "tags": [
           "folder-discovery-environments"
         ],
-        "summary": "Create",
-        "operationId": "create_api_folder_discovery_environments_profiles_post",
+        "summary": "Get Depth Schema",
+        "operationId": "get_depth_schema_api_folder_discovery_environments_depth_schema_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "folder-discovery-environments"
+        ],
+        "summary": "Put Depth Schema",
+        "operationId": "put_depth_schema_api_folder_discovery_environments_depth_schema_put",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/Profile"
+                "$ref": "#/components/schemas/DepthSchemaPut"
               }
             }
           },
@@ -6531,6 +6548,103 @@
         }
       }
     },
+    "/api/folder-discovery/environments/depth-schema/samples": {
+      "post": {
+        "tags": [
+          "folder-discovery-environments"
+        ],
+        "summary": "Depth Schema Samples",
+        "operationId": "depth_schema_samples_api_folder_discovery_environments_depth_schema_samples_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DepthSamples"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/folder-discovery/environments/depth-schema/check": {
+      "post": {
+        "tags": [
+          "folder-discovery-environments"
+        ],
+        "summary": "Depth Schema Check",
+        "operationId": "depth_schema_check_api_folder_discovery_environments_depth_schema_check_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DepthSchemaDraft"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/folder-discovery/environments/profiles": {
+      "post": {
+        "tags": [
+          "folder-discovery-environments"
+        ],
+        "summary": "Create",
+        "operationId": "create_api_folder_discovery_environments_profiles_post",
+        "responses": {
+          "410": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/folder-discovery/environments/profiles/{profile_id}": {
       "put": {
         "tags": [
@@ -6549,18 +6663,8 @@
             }
           }
         ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ProfileUpdate"
-              }
-            }
-          }
-        },
         "responses": {
-          "200": {
+          "410": {
             "description": "Successful Response",
             "content": {
               "application/json": {
@@ -6595,20 +6699,10 @@
               "type": "string",
               "title": "Profile Id"
             }
-          },
-          {
-            "name": "expected_revision",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "title": "Expected Revision"
-            }
           }
         ],
         "responses": {
-          "200": {
+          "410": {
             "description": "Successful Response",
             "content": {
               "application/json": {
@@ -6636,32 +6730,12 @@
         ],
         "summary": "Copy",
         "operationId": "copy_api_folder_discovery_environments_profiles_from_legacy_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/LegacyCopy"
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
-          "200": {
+          "410": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
               }
             }
           }
@@ -6697,6 +6771,134 @@
               "minimum": 0,
               "default": 0,
               "title": "Offset"
+            }
+          },
+          {
+            "name": "include_deleted",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Include Deleted"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/folder-discovery/environments/registrations/delete-preview": {
+      "post": {
+        "tags": [
+          "folder-discovery-environments"
+        ],
+        "summary": "Delete Preview",
+        "operationId": "delete_preview_api_folder_discovery_environments_registrations_delete_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteTargets"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/folder-discovery/environments/registrations/delete": {
+      "post": {
+        "tags": [
+          "folder-discovery-environments"
+        ],
+        "summary": "Delete Registrations",
+        "operationId": "delete_registrations_api_folder_discovery_environments_registrations_delete_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteConfirm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/requests/{request_id}/reinterpret": {
+      "post": {
+        "tags": [
+          "folder-discovery-environments"
+        ],
+        "summary": "Reinterpret",
+        "operationId": "reinterpret_api_requests__request_id__reinterpret_post",
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
             }
           }
         ],
@@ -14343,6 +14545,49 @@
         ],
         "title": "DefinitionSave"
       },
+      "DeleteConfirm": {
+        "properties": {
+          "registration_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Registration Ids"
+          },
+          "confirm_token": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Confirm Token"
+          }
+        },
+        "type": "object",
+        "required": [
+          "registration_ids",
+          "confirm_token"
+        ],
+        "title": "DeleteConfirm"
+      },
+      "DeleteTargets": {
+        "properties": {
+          "registration_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Registration Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "registration_ids"
+        ],
+        "title": "DeleteTargets"
+      },
       "DemoRunCreate": {
         "properties": {
           "name": {
@@ -14419,6 +14664,83 @@
           "nodes"
         ],
         "title": "DemoRunCreate"
+      },
+      "DepthSamples": {
+        "properties": {
+          "segment": {
+            "type": "string",
+            "enum": [
+              "UPPER",
+              "USAGE",
+              "DISTRIBUTION"
+            ],
+            "title": "Segment"
+          },
+          "upper": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Upper"
+          }
+        },
+        "type": "object",
+        "required": [
+          "segment"
+        ],
+        "title": "DepthSamples"
+      },
+      "DepthSchemaDraft": {
+        "properties": {
+          "upper": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Upper"
+          },
+          "environments": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Environments"
+          }
+        },
+        "type": "object",
+        "required": [
+          "upper",
+          "environments"
+        ],
+        "title": "DepthSchemaDraft"
+      },
+      "DepthSchemaPut": {
+        "properties": {
+          "expected_schema_set_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Expected Schema Set Id"
+          },
+          "upper": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Upper"
+          },
+          "environments": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Environments"
+          }
+        },
+        "type": "object",
+        "required": [
+          "expected_schema_set_id",
+          "upper",
+          "environments"
+        ],
+        "title": "DepthSchemaPut"
       },
       "DetailResponse": {
         "properties": {
@@ -16037,36 +16359,6 @@
         ],
         "title": "ItemSave"
       },
-      "LegacyCopy": {
-        "properties": {
-          "environment": {
-            "type": "string",
-            "enum": [
-              "USAGE",
-              "DISTRIBUTION"
-            ],
-            "title": "Environment"
-          },
-          "name": {
-            "type": "string",
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Name"
-          },
-          "relative_path": {
-            "type": "string",
-            "maxLength": 1024,
-            "title": "Relative Path",
-            "default": ""
-          }
-        },
-        "type": "object",
-        "required": [
-          "environment",
-          "name"
-        ],
-        "title": "LegacyCopy"
-      },
       "LoadCaseCreate": {
         "properties": {
           "name": {
@@ -17043,70 +17335,6 @@
           "scan_id"
         ],
         "title": "Preview"
-      },
-      "Profile": {
-        "properties": {
-          "environment": {
-            "type": "string",
-            "enum": [
-              "USAGE",
-              "DISTRIBUTION"
-            ],
-            "title": "Environment"
-          },
-          "name": {
-            "type": "string",
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Name"
-          },
-          "rules": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Rules"
-          }
-        },
-        "type": "object",
-        "required": [
-          "environment",
-          "name"
-        ],
-        "title": "Profile"
-      },
-      "ProfileUpdate": {
-        "properties": {
-          "environment": {
-            "type": "string",
-            "enum": [
-              "USAGE",
-              "DISTRIBUTION"
-            ],
-            "title": "Environment"
-          },
-          "name": {
-            "type": "string",
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Name"
-          },
-          "rules": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Rules"
-          },
-          "expected_revision": {
-            "type": "integer",
-            "minimum": 1.0,
-            "title": "Expected Revision"
-          }
-        },
-        "type": "object",
-        "required": [
-          "environment",
-          "name",
-          "expected_revision"
-        ],
-        "title": "ProfileUpdate"
       },
       "ProjectCreate": {
         "properties": {

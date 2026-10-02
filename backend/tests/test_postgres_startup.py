@@ -60,7 +60,7 @@ class _PostgresStartupConnection:
                 "folder_environment_profiles": {"environment", "rules_json", "revision"},
                 "folder_environment_scans": {"root_key", "environment", "tree_json", "profile_id"},
                 "folder_environment_previews": {"scan_id", "rows_json", "can_apply"},
-                "folder_environment_registrations": {"preview_id", "idempotency_key", "environment", "status"},
+                "folder_environment_registrations": {"preview_id", "idempotency_key", "environment", "status", "deleted_at", "deleted_by", "created_targets"},
                 "folder_environment_registry": {"registration_id", "relative_path", "role_kind", "target_id"},
                 "folder_environment_capture_jobs": {"registration_id", "case_id", "status"},
                 "result_registration_paths": {"root_key", "project_id", "request_id", "environment", "relative_path", "path_key", "role_kind", "target_id"},

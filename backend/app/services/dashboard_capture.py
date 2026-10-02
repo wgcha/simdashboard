@@ -296,7 +296,8 @@ def _schema_allows_file(payload: dict[str, Any], case_relative_path: str, file_r
     if not isinstance(locations, list) or not locations:
         return not _schema_scoped(payload)
     environment = str(payload.get("environment") or "").upper()
-    allowed_roles = {"EVALUATION", "RESULTS"} if environment == "USAGE" else {"SCENE", "RESULTS"}
+    # D8: DEPTH_V1 Usage Scenes replace EVALUATION; legacy captures keep EVALUATION.
+    allowed_roles = {"EVALUATION", "SCENE", "RESULTS"} if environment == "USAGE" else {"SCENE", "RESULTS"}
     case_key = _relative(case_relative_path).casefold().rstrip("/") + "/"
     file_key = _relative(file_relative_path).casefold()
     for location in locations:

@@ -8,26 +8,33 @@ they appear in the project and request selectors without a manual step.
 
 Scope and safety:
 
-* Only shallow levels are listed: root -> up to ``MAX_CONTAINER_LEVELS``
-  container folders -> project -> request. Only a NEW request folder is scanned
-  in depth, once, with the environment's active folder rule profile; sibling
-  requests and the request ``Final`` folder keep their descendants unread.
-* The environment comes only from the request folder name. A request-like name
-  without a determinable environment, a preview with unresolved roles or an
-  incomplete scan is not registered and is returned in ``needs_review``.
+* Folder roles come from the current depth schema (``DEPTH_V1``, see
+  ``docs/contracts/depth-schema.md`` §8). Only the upper section is listed:
+  root -> (CONTAINER levels) -> PROJECT level -> ... -> REQUEST level, by
+  depth. Every non-hidden folder at the project level is a project candidate
+  and every folder at the request level is a request candidate. Only a NEW
+  request folder is scanned in depth, once; sibling requests keep their
+  descendants unread and are excluded from its preview.
+* The environment comes only from the request folder name keyword (D4):
+  ``사용`` -> USAGE, ``유통`` -> DISTRIBUTION. Both or none is reported
+  (``ENV_KEYWORD_BOTH`` / ``ENV_KEYWORD_NONE``), never registered. A request
+  whose scan has a blocking depth deviation (e.g. ``WORKING_MISSING``) is
+  reported as ``DEPTH_DEVIATION`` and not registered; warnings do not block.
 * A project is created only together with its first registered request, in
-  the same registration transaction, and without any membership grant.
-* Idempotent: a folder that is already linked (environment registry, SPDM
-  request binding, legacy folder registry) or whose deterministic idempotency
-  key was already used is skipped. A process lock serialises runs and the
-  registration's unique idempotency key guards concurrent processes.
+  the same registration transaction, and without any membership grant. An
+  already linked project folder is passed as a ``LINK`` assignment.
+* Idempotent: a folder that is already linked (live environment registry,
+  SPDM request binding, legacy folder registry) or whose deterministic
+  idempotency key (path + schema set) was already used by a live
+  registration is skipped. Registrations with status ``DELETED`` never count
+  (§13.5), so a deleted request folder is registered again with the current
+  schema. A process lock serialises runs and the registration's unique
+  idempotency key guards concurrent processes.
 * Runs are throttled per process and storage root (``MIN_INTERVAL_SECONDS``;
   ``force`` only shortens it to ``FORCE_MIN_INTERVAL_SECONDS``).
-* Only exact SPDM request names are registered: ``[WR-<digits>]_[사용_환경]``,
-  ``[WR-<digits>]_[유통_환경]`` and the legacy ``WR_<id>_SimType1|2``. A
-  request-like name that is not an exact match (a copy, ``_old``, a rename) or
-  whose WR number + environment is already linked in the same project is
-  reported (``NAME_NOT_STANDARD`` / ``WR_ALREADY_LINKED``), never registered.
+* A request whose WR key + environment is already linked in the same project
+  (a copy, ``_old``, a rename) is reported (``WR_ALREADY_LINKED``), never
+  registered.
 * A caller never waits for a run: the memo is checked and the run lock is
   taken without blocking before a DB connection is opened; a concurrent call
   gets the last result with ``status: RUNNING``. A run is bounded by
@@ -54,6 +61,7 @@ from typing import Any
 from fastapi import HTTPException
 
 from ..database_connection import connect
+from . import environment_folder_profiles as depth_profiles
 from . import folder_discovery, folder_discovery_environment as environment_service, spdm_storage
 from .folder_discovery_scan import root_identity
 
@@ -62,18 +70,14 @@ FORCE_MIN_INTERVAL_SECONDS = 10.0
 # A request kept in needs_review is examined again when its top folders change
 # or after this many seconds, so an unresolved folder is not deep-scanned every run.
 NEEDS_REVIEW_RETRY_SECONDS = 600.0
-MAX_CONTAINER_LEVELS = 2
 MAX_LISTED_ENTRIES = 20000
 MAX_NEW_REQUESTS_PER_RUN = 5
 RUN_TIME_BUDGET_SECONDS = 45.0
 RETRY_BACKOFF_SECONDS = (120.0, 300.0, 600.0)
 ACTIVE_STATUSES = ("REGISTERED", "CAPTURING", "COMPLETED", "FAILED")
 
-_PROJECT = re.compile(r"^(?:[A-Z0-9]{5}_PV|(?:project|prj)[_-].+)$", re.I)
-# Anything that looks like a request folder (reported when it is not an exact name).
-_REQUEST = re.compile(r"^(?:\[\s*WR[-_ ]?[A-Za-z0-9]|WR[-_ ][A-Za-z0-9]|WR\d)", re.I)
-_STANDARD = re.compile(r"^\[WR-(\d+)\]_\[(사용|유통)_환경\]$")
-_SIMTYPE = re.compile(r"^WR_([A-Za-z0-9._-]+)_SimType([12])$")
+# WR key of a request folder name (§8); the casefolded folder name otherwise.
+_WR_KEY = re.compile(r"\[?WR[-_]?(\w+)", re.I)
 _logger = logging.getLogger(__name__)
 
 
@@ -109,26 +113,44 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def request_identity(name: str) -> tuple[str, str] | None:
-    """(WR number key, environment) for an exact SPDM request name, else None."""
-    standard = _STANDARD.match(name)
-    if standard:
-        return standard.group(1), "USAGE" if standard.group(2) == "사용" else "DISTRIBUTION"
-    simtype = _SIMTYPE.match(name)
-    if simtype:
-        return simtype.group(1).casefold(), "USAGE" if simtype.group(2) == "1" else "DISTRIBUTION"
-    return None
+def request_identity(name: str) -> tuple[str, str | None, str | None]:
+    """(WR key, environment, keyword deviation code) of a request folder name.
+
+    The environment comes from the name keyword only (D4); ``code`` is
+    ``ENV_KEYWORD_BOTH`` / ``ENV_KEYWORD_NONE`` when it cannot be decided.
+    """
+    environment, code = depth_profiles.keyword_environment(name)
+    match = _WR_KEY.match(str(name).strip())
+    key = (match.group(1) if match else str(name).strip()).casefold()
+    return key, environment, code
 
 
 def request_environment(name: str) -> str | None:
-    """Environment of an exact SPDM request name, or None."""
-    identity = request_identity(name)
-    return identity[1] if identity else None
+    """Environment of a request folder name, or None when the keyword is missing or ambiguous."""
+    return request_identity(name)[1]
 
 
-def idempotency_key(root_key: str, relative_path: str, environment: str) -> str:
-    digest = hashlib.sha256(f"{root_key}:{relative_path.casefold()}:{environment}".encode("utf-8")).hexdigest()
+def idempotency_key(root_key: str, relative_path: str, schema_set_id: str, generation: int = 0) -> str:
+    """``auto-discovery-<sha(path, schema_set_id)>`` (§13.5).
+
+    ``generation`` > 0 is used only when an earlier key of the same path and
+    schema belongs to a DELETED registration, so the folder can be registered
+    again (D17) while concurrent processes still derive the same key.
+    """
+    material = f"{root_key}:{relative_path.casefold()}:{schema_set_id}"
+    if generation:
+        material += f"#{generation}"
+    digest = hashlib.sha256(material.encode("utf-8")).hexdigest()
     return f"auto-discovery-{digest[:48]}"
+
+
+def _live_key(root_key: str, relative_path: str, schema_set_id: str, deleted_keys: set[str]) -> str:
+    generation = 0
+    while True:
+        key = idempotency_key(root_key, relative_path, schema_set_id, generation)
+        if key not in deleted_keys:
+            return key
+        generation += 1
 
 
 class _Lister:
@@ -207,10 +229,12 @@ def _linked_state(conn, root_key: str) -> dict[str, Any]:
             request_paths.add(str(path))
         else:
             projects.setdefault(str(path).casefold(), set()).add(str(target))
-    for (key,) in conn.execute(
-            "SELECT idempotency_key FROM folder_environment_registrations WHERE idempotency_key LIKE 'auto-discovery-%'"
+    deleted_keys: set[str] = set()
+    for key, status in conn.execute(
+            "SELECT idempotency_key,status FROM folder_environment_registrations WHERE idempotency_key LIKE 'auto-discovery-%'"
     ).fetchall():
-        keys.add(str(key))
+        # §13.5: a DELETED registration's key never blocks a new registration.
+        (deleted_keys if str(status) == "DELETED" else keys).add(str(key))
     # Keep only project links whose project still exists.
     existing = {str(row[0]) for row in conn.execute("SELECT id FROM projects").fetchall()}
     projects = {path: {target for target in targets if target in existing} for path, targets in projects.items()}
@@ -223,7 +247,8 @@ def _linked_state(conn, root_key: str) -> dict[str, Any]:
         for value in (name, product_name):
             if value:
                 unlinked_names.setdefault(str(value).strip().casefold(), str(project_id))
-    return {"requests": requests, "request_paths": request_paths, "projects": projects, "keys": keys, "unlinked_project_names": unlinked_names,
+    return {"requests": requests, "request_paths": request_paths, "projects": projects, "keys": keys, "deleted_keys": deleted_keys,
+            "unlinked_project_names": unlinked_names,
             "excluded": _manual_exclusions(conn)}
 
 
@@ -231,11 +256,12 @@ def _manual_exclusions(conn) -> set[str]:
     """Folders an administrator explicitly excluded in an applied registration preview.
 
     Decoding every preview is costly, so the set is cached until the number or
-    latest time of administrator registrations changes.
+    latest time of live administrator registrations changes (a DELETED
+    registration no longer excludes anything, §13.5).
     """
     marker = tuple(conn.execute(
-        "SELECT count(*),max(created_at) FROM folder_environment_registrations WHERE created_by<>?",
-        [SYSTEM.user_id]).fetchone())
+        "SELECT count(*),max(created_at) FROM folder_environment_registrations WHERE created_by<>? "
+        "AND status IN (?,?,?,?)", [SYSTEM.user_id, *ACTIVE_STATUSES]).fetchone())
     with _state_lock:
         if _exclusion_cache.get("marker") == marker:
             return set(_exclusion_cache["paths"])
@@ -262,27 +288,49 @@ def _is_excluded(path: str, excluded: set[str]) -> bool:
     return any(folded == item or folded.startswith(item.rstrip("/") + "/") for item in excluded)
 
 
-def _project_candidates(lister: _Lister, linked: dict[str, Any],
+def _upper_levels(schema: dict[str, Any]) -> tuple[int, int]:
+    """(project_level, request_level) of the current depth schema's upper section."""
+    roles = [item["role"] for item in schema["upper"]["levels"]]
+    return roles.index("PROJECT") + 1, len(roles)
+
+
+def _visible(lister: _Lister, relative: str) -> list[tuple[str, str]]:
+    return [(name, path) for name, path in lister.children(relative) if not depth_profiles.is_ignored_name(name)]
+
+
+def _project_candidates(lister: _Lister, linked: dict[str, Any], schema: dict[str, Any],
                         needs_review: list[dict[str, Any]]) -> list[tuple[str, str]]:
-    """(name, relative path) of project folders: by name pattern or an existing project link."""
-    found: dict[str, tuple[str, str]] = {}
-    level = [("", "")]
-    for depth in range(MAX_CONTAINER_LEVELS + 1):
-        next_level = []
+    """(name, relative path) of every non-hidden folder at the schema's PROJECT level (§8).
+
+    Breadth-first by depth through the upper section; hidden/system folders,
+    files and reparse points/symlinks are never followed (§5.1).
+    """
+    project_level, _request_level = _upper_levels(schema)
+    level: list[tuple[str, str]] = [("", "")]
+    for _depth in range(1, project_level + 1):
+        next_level: list[tuple[str, str]] = []
         for _, relative in level:
-            for name, child in lister.children(relative):
-                if child.casefold() in linked["requests"]:
-                    continue
-                if _is_excluded(child, linked["excluded"]):
-                    if _PROJECT.match(name):
-                        needs_review.append(_review(child, "ADMIN_EXCLUDED", "관리자가 제외한 폴더입니다. 필요하면 폴더 조사에서 다시 연결하세요."))
-                    continue
-                if _PROJECT.match(name) or child.casefold() in linked["projects"]:
-                    found[child.casefold()] = (name, child)
-                elif depth < MAX_CONTAINER_LEVELS and not _REQUEST.match(name):
-                    next_level.append((name, child))
+            next_level.extend(_visible(lister, relative))
         level = next_level
-    return sorted(found.values(), key=lambda item: item[1].casefold())
+    found: list[tuple[str, str]] = []
+    for name, path in level:
+        if _is_excluded(path, linked["excluded"]):
+            needs_review.append(_review(path, "ADMIN_EXCLUDED", "관리자가 제외한 폴더입니다. 필요하면 폴더 조사에서 다시 연결하세요."))
+            continue
+        found.append((name, path))
+    return sorted(found, key=lambda item: item[1].casefold())
+
+
+def _request_candidates(lister: _Lister, schema: dict[str, Any], project_path: str) -> list[tuple[str, str]]:
+    """(name, relative path) of request-level folders below one project folder."""
+    project_level, request_level = _upper_levels(schema)
+    level = [("", project_path)]
+    for _depth in range(project_level + 1, request_level + 1):
+        next_level: list[tuple[str, str]] = []
+        for _, relative in level:
+            next_level.extend(_visible(lister, relative))
+        level = next_level
+    return level
 
 
 def _review(relative_path: str, code: str, reason: str, environment: str | None = None) -> dict[str, Any]:
@@ -291,16 +339,21 @@ def _review(relative_path: str, code: str, reason: str, environment: str | None 
 
 def _register_request(conn, root, root_key: str, project_name: str, project_path: str,
                       siblings: list[str], request_path: str, environment: str,
-                      project_targets: set[str], deadline: float) -> dict[str, Any]:
-    """Run scan -> preview -> registration for one new request folder."""
+                      project_targets: set[str], key: str, deadline: float) -> dict[str, Any]:
+    """Run scan -> preview -> registration for one new request folder.
+
+    Roles come from the depth schema only. The preview carries just the
+    assignments the depth schema allows (§6): ``EXCLUDE`` for sibling request
+    folders and a ``LINK`` for an already linked project. A new project or
+    request is created by the default registration plan. The Final branch gets
+    roles from the schema but is never a capture source (handled by the core).
+    """
     request_name = request_path.rsplit("/", 1)[-1]
     if time.monotonic() > deadline:
         return {"deferred": True}
-    final_paths = [child for name, child in _Lister(root).children(request_path) if name.casefold() == "final"]
     try:
         scanned = environment_service.save_scan(
-            conn, root, project_path, environment, None, None, None, SYSTEM.user_id,
-            skip_paths=[*siblings, *final_paths],
+            conn, root, project_path, environment, None, None, None, SYSTEM.user_id, skip_paths=siblings,
         )
     except (ValueError, spdm_storage.SpdmStorageError) as exc:
         return {"review": _review(request_path, "SCAN_FAILED", f"폴더를 조사할 수 없습니다: {str(exc)[:120]}", environment)}
@@ -313,14 +366,14 @@ def _register_request(conn, root, root_key: str, project_name: str, project_path
     request_node = by_path.get(request_path.casefold())
     if not project_node or not request_node:
         return {"review": _review(request_path, "SCAN_FAILED", "프로젝트 또는 의뢰 폴더를 찾을 수 없습니다.", environment)}
+    if project_node.get("role_kind") != "PROJECT" or request_node.get("role_kind") != "REQUEST":
+        return {"review": _review(request_path, "ROLES_UNRESOLVED",
+                                  "깊이 스키마로 프로젝트·의뢰 역할을 정할 수 없습니다. 깊이 스키마의 상위 구조를 확인하세요.",
+                                  environment)}
     assignments: list[dict[str, Any]] = []
     if project_targets:
         assignments.append({"node_id": project_node["id"], "role_kind": "PROJECT", "confirm": True,
                             "target_mode": "LINK", "target_id": next(iter(project_targets))})
-    elif project_node.get("role_kind") != "PROJECT":
-        assignments.append({"node_id": project_node["id"], "role_kind": "PROJECT", "confirm": True})
-    if request_node.get("role_kind") != "REQUEST":
-        assignments.append({"node_id": request_node["id"], "role_kind": "REQUEST", "confirm": True})
     sibling_keys = {path.casefold() for path in siblings}
     for node in scanned["nodes"]:
         if node["relative_path"].casefold() in sibling_keys:
@@ -329,14 +382,23 @@ def _register_request(conn, root, root_key: str, project_name: str, project_path
         built = environment_service.preview(conn, scanned["id"], assignments, SYSTEM.user_id,
                                             allow_without_cases=True)
     except (ValueError, HTTPException) as exc:
-        return {"review": _review(request_path, "PREVIEW_FAILED", f"등록 미리보기를 만들 수 없습니다: {str(exc)[:120]}", environment)}
+        detail = getattr(exc, "detail", None)
+        message = detail.get("message") if isinstance(detail, dict) else str(exc)
+        return {"review": _review(request_path, "PREVIEW_FAILED", f"등록 미리보기를 만들 수 없습니다: {str(message)[:120]}", environment)}
+    blocking = [item for item in built.get("deviations") or [] if item.get("blocking")]
+    if blocking:
+        first = blocking[0]
+        return {"review": {**_review(request_path, "DEPTH_DEVIATION",
+                                     f"깊이 스키마와 다른 폴더 {len(blocking)}개: {first['message']}", environment),
+                           "deviation_code": first["code"], "deviation_count": len(blocking),
+                           "deviation_path": first["relative_path"]}}
     if not built["can_apply"]:
         return {"review": _review(request_path, "ROLES_UNRESOLVED",
-                                  f"역할을 확인할 수 없는 폴더 {built['unresolved_count']}개가 있습니다. 폴더 규칙을 확인하세요.",
+                                  str(built.get("message") or
+                                      f"역할을 확인할 수 없는 폴더 {built['unresolved_count']}개가 있습니다. 깊이 스키마를 확인하세요."),
                                   environment)}
     if time.monotonic() > deadline:
         return {"deferred": True}
-    key = idempotency_key(root_key, request_path, environment)
     project_row = next((row for row in built["rows"] if row.get("role_kind") == "PROJECT"), None)
     project_existed = bool(project_row and project_row.get("target_id") and conn.execute(
         "SELECT 1 FROM projects WHERE id=?", [project_row["target_id"]]).fetchone())
@@ -355,12 +417,12 @@ def _register_request(conn, root, root_key: str, project_name: str, project_path
     # The registration is durable before its capture phase; report what was
     # actually stored even when a later step raised.
     stored = conn.execute(
-        "SELECT project_id,request_id,created_by,preview_id FROM folder_environment_registrations WHERE idempotency_key=?",
+        "SELECT project_id,request_id,created_by,preview_id,status FROM folder_environment_registrations WHERE idempotency_key=?",
         [key]).fetchone()
     if not stored:
         return {"review": failure or _review(request_path, "REGISTRATION_FAILED", "등록하지 못했습니다.", environment),
                 "retry": True}
-    if str(stored[2]) != SYSTEM.user_id or str(stored[3]) != str(built["id"]):
+    if str(stored[2]) != SYSTEM.user_id or str(stored[3]) != str(built["id"]) or str(stored[4]) == "DELETED":
         # Another process won the race with its own preview: not created by this run.
         return {"skipped": True}
     return {"registration": {"project_id": stored[0], "request_id": stored[1]}, "request_name": request_name,
@@ -374,58 +436,67 @@ _ISSUE_REASONS = {
 
 
 def _project_requests(linked: dict[str, Any], project_path: str) -> set[tuple[str, str]]:
-    """(WR number, environment) of requests already linked directly under a project folder."""
+    """(WR key, environment) of requests already linked below a project folder."""
     prefix = project_path.casefold().rstrip("/") + "/"
     identities = set()
     for path in linked["request_paths"]:
-        if path.casefold().startswith(prefix) and "/" not in path[len(prefix):]:
-            identity = request_identity(path[len(prefix):])
-            if identity:
-                identities.add(identity)
+        if path.casefold().startswith(prefix):
+            key, environment, _code = request_identity(path.rsplit("/", 1)[-1])
+            if environment:
+                identities.add((key, environment))
     return identities
 
 
 def _discover(conn, root) -> dict[str, Any]:
     root_key = root_identity(root)
-    linked = _linked_state(conn, root_key)
     lister = _Lister(root)
     created_projects: list[dict[str, str]] = []
     created_requests: list[dict[str, str]] = []
     needs_review: list[dict[str, Any]] = []
+    try:
+        schema = depth_profiles.get_depth_schema(conn)
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, dict) else {}
+        needs_review.append(_review("", str(detail.get("code") or "DEPTH_SCHEMA_MISSING"),
+                                    str(detail.get("message") or "현재 깊이 스키마가 없습니다.")))
+        return {"created_projects": [], "created_requests": [], "needs_review": needs_review,
+                "checked_at": _now_iso(), "coalesced": False, "partial": False}
+    schema_set_id = str(schema["schema_set_id"])
+    linked = _linked_state(conn, root_key)
     deadline = time.monotonic() + RUN_TIME_BUDGET_SECONDS
     attempts = 0
     stopped = False
-    for project_name, project_path in _project_candidates(lister, linked, needs_review):
+    for project_name, project_path in _project_candidates(lister, linked, schema, needs_review):
         if stopped:
             break
-        children = lister.children(project_path)
         project_targets = set(linked["projects"].get(project_path.casefold(), set()))
         if len(project_targets) > 1:
             needs_review.append(_review(project_path, "PROJECT_AMBIGUOUS", "프로젝트 폴더가 여러 프로젝트에 연결되어 있습니다."))
+            continue
+        candidates = _request_candidates(lister, schema, project_path)
+        unlinked = [(name, path) for name, path in candidates if path.casefold() not in linked["requests"]]
+        if not unlinked:
             continue
         if not project_targets and project_name.strip().casefold() in linked["unlinked_project_names"]:
             needs_review.append(_review(project_path, "PROJECT_NAME_EXISTS",
                                         "같은 이름의 프로젝트가 이미 있습니다. 폴더 조사에서 기존 프로젝트에 연결하세요."))
             continue
         known = _project_requests(linked, project_path)
-        for name, request_path in children:
-            if not _REQUEST.match(name):
-                continue
+        all_paths = [path for _, path in candidates]
+        for name, request_path in unlinked:
             folded = request_path.casefold()
-            if folded in linked["requests"]:
-                continue
             if _is_excluded(request_path, linked["excluded"]):
                 needs_review.append(_review(request_path, "ADMIN_EXCLUDED",
                                             "관리자가 제외한 폴더입니다. 필요하면 폴더 조사에서 다시 연결하세요."))
                 continue
-            identity = request_identity(name)
-            if identity is None:
-                needs_review.append(_review(request_path, "NAME_NOT_STANDARD",
-                                            "의뢰 폴더 이름이 SPDM 형식([WR-번호]_[사용_환경]/[유통_환경])과 다릅니다."))
+            wr_key, environment, keyword_code = request_identity(name)
+            if keyword_code:
+                needs_review.append(_review(request_path, keyword_code, depth_profiles.DEVIATION_MESSAGES[keyword_code]))
                 continue
-            environment = identity[1]
-            if idempotency_key(root_key, request_path, environment) in linked["keys"]:
+            key = _live_key(root_key, request_path, schema_set_id, linked["deleted_keys"])
+            if key in linked["keys"]:
                 continue
+            identity = (wr_key, environment)
             if identity in known:
                 needs_review.append(_review(request_path, "WR_ALREADY_LINKED",
                                             "같은 의뢰번호·환경의 다른 폴더가 이미 연결되어 있습니다.", environment))
@@ -438,7 +509,7 @@ def _discover(conn, root) -> dict[str, Any]:
             if waiting and now < waiting["until"]:
                 needs_review.append(waiting["review"])
                 continue
-            stamp = (lister.mtime(request_path), lister.mtime(request_path + "/Working"))
+            stamp = (schema_set_id, lister.mtime(request_path), lister.mtime(request_path + "/Working"))
             if remembered and remembered["stamp"] == stamp and now - remembered["at"] < NEEDS_REVIEW_RETRY_SECONDS:
                 needs_review.append(remembered["review"])
                 continue
@@ -446,9 +517,9 @@ def _discover(conn, root) -> dict[str, Any]:
                 stopped = True
                 break
             attempts += 1
-            siblings = [path for _, path in children if path.casefold() != folded]
+            siblings = [path for path in all_paths if path.casefold() != folded]
             outcome = _register_request(conn, root, root_key, project_name, project_path, siblings,
-                                        request_path, environment, project_targets, deadline)
+                                        request_path, environment, project_targets, key, deadline)
             if outcome.get("deferred"):
                 stopped = True
                 break
@@ -477,6 +548,7 @@ def _discover(conn, root) -> dict[str, Any]:
             project_targets = {project_id}
             linked["projects"][project_path.casefold()] = {project_id}
             linked["requests"].add(folded)
+            linked["keys"].add(key)
             known.add(identity)
             created_requests.append({"id": request_id, "name": outcome["request_name"],
                                      "environment": environment, "project_id": project_id})
@@ -531,8 +603,12 @@ def discover(*, force: bool = False, connection_factory=None) -> dict[str, Any]:
         with (connection_factory or connect)() as conn:
             try:
                 root = folder_discovery.configured_root(conn)
-            except HTTPException:
-                return {**_empty("ROOT_UNSET"), "coalesced": False}
+            except HTTPException as exc:
+                detail = exc.detail if isinstance(exc.detail, dict) else {}
+                # Not silent: administrators see why nothing is discovered.
+                return {**_empty("ROOT_UNSET"), "coalesced": False,
+                        "needs_review": [_review("", "SPDM_ROOT_UNSET", str(
+                            detail.get("message") or "SPDM 저장소 루트가 설정되지 않아 자동 탐색을 하지 않았습니다."))]}
             result = {**_discover(conn, root), "status": "CHECKED"}
         with _state_lock:
             _memo.update(at=time.monotonic(), result=result)

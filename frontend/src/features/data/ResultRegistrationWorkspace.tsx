@@ -52,7 +52,7 @@ type Completion = {
 
 
 const roleLabels: Record<string, string> = {
-  SIMULATION_CASE: '해석 Case', EVALUATION: '평가 항목', LOAD_CASE: '하중경우',
+  SIMULATION_CASE: '해석 Case', EVALUATION: 'Scene', LOAD_CASE: '하중경우',
   EXECUTION_RUN: 'Run Case', RUN_OPTION: 'Run Option', SCENE: 'Scene', RESULTS: '결과 폴더',
   CONTAINER: '폴더',
 }
