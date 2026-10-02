@@ -11,3 +11,5 @@
 - 2026-10-02 · 정의된 마지막 깊이보다 깊은 폴더는 역할 없는 내용물로 허용 · Scene 하위 결과 구조 자유
 - 2026-10-02 · 사용환경 EVALUATION 역할을 SCENE으로 통합 · 두 환경의 Case 결과·Final 로직 단일화
 - 2026-10-02 · 스키마 저장 시 기존 등록 의뢰는 불변, 의뢰별 수동 "재해석"으로만 적용 · SPDM 결과 연결 변경 위험 통제
+- 2026-10-02 · 의뢰 하위 L1은 이름(Working 필수 / Final 선택)으로 구분하고 Final도 스키마 대상에 포함 · Final 저장물(CAE·Reports) 구조 검증
+- 2026-10-02 · Final 하위 L2: CAE=해석 입출력, Reports=보고서 PPTX/PDF. L3 이하는 `<Case>/<finalization_id>/<Working 미러>` 고정, 결과 판독은 Working만 · 앱이 쓰는 구조라 편집 불필요
