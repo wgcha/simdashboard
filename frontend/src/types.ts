@@ -300,6 +300,10 @@ export type ReportSource =
   | { kind: 'run_compare_review'; loadCaseId: string; baselineRunId: string; targetRunId: string }
   /** Case 결과 (SPDM folder results): the scope fixed when the report dialog opened. */
   | { kind: 'case_results'; projectId: string; requestId: string; caseId: string; captureId: string; loadCaseId: string; runId: string; optionId: string; mode: string; componentId: string; basis: string; edgeKeys: string; lineIndices: string }
+  /** 사용환경 Case 결과: the usage Case (and optional Reference) fixed when the report opened. */
+  | { kind: 'case_usage'; projectId: string; requestId: string; caseId: string; captureId: string; referenceCaseId: string; referenceCaptureId: string }
+  /** Final designation report of a whole distribution Case (every Run Case · Run Option). */
+  | { kind: 'case_final'; projectId: string; requestId: string; caseId: string; captureId: string; catalogCaseId: string; basis: string; edgeKeys: string; lineIndices: string }
 export type ReportContentItem = {
   contentId: string
   kind: 'dashboard_widget' | 'comparison_summary' | 'comparison_variable' | 'comparison_series' | 'trust_summary' | 'review_item' | 'case_scope' | 'case_summary' | 'case_scene_table' | 'case_image' | 'case_videos'

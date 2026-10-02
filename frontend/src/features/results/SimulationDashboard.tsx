@@ -14,7 +14,8 @@ import { CaseFinalizationPanel } from './CaseFinalizationPanel'
 import { CaseVideoGrid } from './CaseVideoGrid'
 import { useCaseHierarchyParams } from '../../shared/hooks/useCaseHierarchyParams'
 import { CaseReportLauncher } from './caseReport/CaseReportLauncher'
-import type { CaseReportScope } from './caseReport/caseReport'
+import type { CaseReportFinalScope, CaseReportScope } from './caseReport/caseReport'
+import { USAGE_DIRECTION_LABELS, USAGE_DIRECTIONS, usageCell, usageEvaluationLabel, usageEvaluationRows, usageFieldKey, usageMetricStatus, usageStatusText, type UsageMetric } from './usageEvaluations'
 
 type Props = {
   projectId: string
@@ -255,14 +256,24 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
   // The report dialog copies this scope when it opens (later changes do not reach it).
   const optionChoice = options.find((item) => item.id === optionId)
   const reportReady = tab === 'distribution' && !materialsActive && Boolean(activeCaptureId && runId && mode && componentId && basis && (optionId || !options.length)) && runChoices.some((item) => item.id === runId && item.capture_id === activeCaptureId)
+  const referenceDashboardCaseId = catalog?.cases.find((item) => item.id === referenceCaseId)?.dashboard_case_id ?? referenceCaseId
+  const usageReady = tab === 'usage' && !materialsActive && Boolean(dashboardCaseId && activeCaptureId) && Boolean(referenceCaseId) === Boolean(referenceCaptureId)
+  const caseText = selectedCase?.label ?? caseLabel(caseId)
   const reportScope: CaseReportScope | null = reportReady ? {
     source: { kind: 'case_results', projectId, requestId, caseId: dashboardCaseId, captureId: activeCaptureId, loadCaseId, runId, optionId, mode, componentId, basis, edgeKeys: edges.join(','), lineIndices: lines.join(',') },
-    labels: { project: '', request: '', caseLabel: selectedCase?.label ?? caseLabel(caseId), loadCase: loadChoices.find((item) => item.id === loadCaseId)?.label ?? '', run: runChoices.find((item) => item.id === runId)?.label ?? '', option: optionChoice?.option_label || optionChoice?.label || '', component: componentLabel ?? '', basis: basisLabel(basis) },
+    labels: { project: '', request: '', caseLabel: caseText, loadCase: loadChoices.find((item) => item.id === loadCaseId)?.label ?? '', run: runChoices.find((item) => item.id === runId)?.label ?? '', option: optionChoice?.option_label || optionChoice?.label || '', component: componentLabel ?? '', basis: basisLabel(basis) },
+  } : usageReady ? {
+    source: { kind: 'case_usage', projectId, requestId, caseId: dashboardCaseId, captureId: activeCaptureId, referenceCaseId: referenceCaptureId ? referenceDashboardCaseId : '', referenceCaptureId },
+    labels: { project: '', request: '', caseLabel: caseText, reference: referenceCaseId ? [caseLabel(referenceCaseId), catalog?.captures.find((item) => item.id === referenceCaptureId)?.label].filter(Boolean).join(' · ') : '' },
   } : null
+  // Final designation reports cover the whole Case regardless of the on-screen selection.
+  const finalScope: CaseReportFinalScope | null = materialsActive || !dashboardCaseId || !activeCaptureId ? null : tab === 'usage'
+    ? { source: { kind: 'case_usage', projectId, requestId, caseId: dashboardCaseId, captureId: activeCaptureId, referenceCaseId: '', referenceCaptureId: '' }, labels: { project: '', request: '', caseLabel: caseText, reference: '' } }
+    : { source: { kind: 'case_final', projectId, requestId, caseId: dashboardCaseId, captureId: activeCaptureId, catalogCaseId: selectedCase?.id ?? caseId, basis, edgeKeys: edges.join(','), lineIndices: lines.join(',') }, labels: { project: '', request: '', caseLabel: caseText, component: componentLabel ?? '' } }
   return <section className="simulation-dashboard" data-ui-density="v1" aria-label="SPDM 해석 결과 대시보드">
     <header className="case-results-head">
       <div className="case-env-toggle" role="group" aria-label="결과 환경"><button type="button" aria-pressed={tab === 'usage'} className={tab === 'usage' ? 'active' : ''} onClick={() => setTab('usage')}>사용환경</button><button type="button" aria-pressed={tab === 'distribution'} className={tab === 'distribution' ? 'active' : ''} onClick={() => setTab('distribution')}>유통환경</button></div>
-      <div className="case-results-head__actions">{headerExtra}{catalog ? <CaseReportLauncher scope={reportScope} disabledReason="유통환경에서 결과가 있는 Run Case와 Run Option을 선택하면 보고서를 만들 수 있습니다." /> : null}{catalog ? <CaseFinalizationPanel projectId={projectId} requestId={requestId} environment={tab === 'usage' ? 'USAGE' : 'DISTRIBUTION'} caseId={dashboardCaseId} captureId={hasCapturedCase && dashboardCaseId ? `latest:${dashboardCaseId}` : ''} hasCapturedCase={hasCapturedCase} canFinalize={canRefreshSchema} reportScope={reportScope} /> : null}</div>
+      <div className="case-results-head__actions">{headerExtra}{catalog ? <CaseReportLauncher scope={reportScope} disabledReason={materialsActive ? '소재·물성 탭에서는 보고서를 만들지 않습니다.' : tab === 'usage' ? '결과가 있는 사용환경 Case를 선택하면 보고서를 만들 수 있습니다.' : '유통환경에서 결과가 있는 Run Case와 Run Option을 선택하면 보고서를 만들 수 있습니다.'} /> : null}{catalog ? <CaseFinalizationPanel projectId={projectId} requestId={requestId} environment={tab === 'usage' ? 'USAGE' : 'DISTRIBUTION'} caseId={dashboardCaseId} captureId={hasCapturedCase && dashboardCaseId ? `latest:${dashboardCaseId}` : ''} hasCapturedCase={hasCapturedCase} canFinalize={canRefreshSchema} reportScope={finalScope} /> : null}</div>
     </header>
     {catalogError && !catalog && !materialsActive ? <State message={catalogError} error /> : null}
     {catalogError && catalog ? <State message={`${catalogError} · 마지막으로 읽은 결과를 표시합니다.`} error /> : null}
@@ -295,32 +306,20 @@ function UsageArea({ caseId, captureId, referenceCaseId, referenceCaptureId }: {
   if (error) return <State message={error} error />
   if (!data) return <State message="사용환경 평가를 불러오는 중입니다." />
   const media = data.evaluations.flatMap((evaluation) => evaluation.media ?? [])
-  type Metric = 'value' | 'verdict'
-  const directions = ['common', 'front', 'rear'] as const
-  const keys: Record<string, string> = { Settle: 'Set Tilt Angle @ Settle (deg)', Wobble: 'Wobble Disp. (mm)', Horizontal_Force_Angle: 'Set Tilt Angle Difference (deg)', Slope_Angle: 'Slope Angle (deg)', Slope_Angle_360: 'OK/NG' }
-  const metricStatus = (value: DashboardValue, metric: Metric) => value[`${metric}_status`] ?? (value[metric] != null ? 'READY' : value.status ?? 'MISSING')
-  const stateLabel = (status: string) => status === 'READY' ? '확인' : ['MISSING', 'MISSING_SOURCE', 'MISSING_NUMERIC', 'ABSENT', 'NO_DATA', 'EXCLUDED'].includes(status) ? '자료 없음' : status === 'NOT_APPLICABLE' ? '해당 없음' : '검수 필요'
-  const cell = (value: DashboardValue | null | undefined, metric: Metric) => {
-    if (!value) return <span className="usage-missing">해당 없음</span>
-    const state = metricStatus(value, metric)
-    const label = stateLabel(state)
-    const text = state === 'READY' && value[metric] != null ? metric === 'verdict' ? value.verdict : valueText(value) : '—'
-    return <span className={`usage-cell usage-cell-${label === '검수 필요' ? 'review' : state === 'READY' ? 'ready' : 'missing'}`}><strong>{text}</strong><small>{label}</small></span>
+  const cell = (value: DashboardValue | null | undefined, metric: UsageMetric) => {
+    const view = usageCell(value, metric)
+    if (view.tone === 'absent') return <span className="usage-missing">{view.text}</span>
+    return <span className={`usage-cell usage-cell-${view.tone}`}><strong>{view.text}</strong><small>{view.label}</small></span>
   }
-  const fieldKey = (evaluation: UsageDashboard['evaluations'][number], metric: Metric) => directions.map((direction) => evaluation[direction]?.[`${metric}_key`]).find(Boolean) || (metric === 'verdict' ? 'OK/NG' : keys[evaluation.id])
-  type EvaluationRow = { evaluation: UsageDashboard['evaluations'][number]; label: string; key?: string; metric: Metric }
-  const evaluationRows: EvaluationRow[] = data.evaluations.flatMap((evaluation): EvaluationRow[] => {
-    const metric = evaluation.id === 'Slope_Angle_360' ? 'verdict' : 'value'
-    const row: EvaluationRow = { evaluation, label: keys[evaluation.id] ? evaluation.id : evaluation.name, key: fieldKey(evaluation, metric), metric }
-    return evaluation.id === 'Slope_Angle' ? [row, { evaluation, label: '', key: fieldKey(evaluation, 'verdict'), metric: 'verdict' }] : [row]
-  })
+  const directions = USAGE_DIRECTIONS
+  const evaluationRows = usageEvaluationRows(data)
   return <div className="simulation-dashboard__usage" data-testid="usage-dashboard">
     <div className="simulation-dashboard__usage-media">{media.length ? media.map((asset) => <div key={asset.asset_id}><h3>{asset.title}</h3><Media asset={asset} /></div>) : <State message="연결된 미디어 없음" />}</div>
-    <div className="simulation-dashboard__usage-table"><header><h3>다섯 평가 종합</h3><small>{data.status === 'READY' ? '확인' : '일부 항목 확인 필요'}</small></header><Table><TableHead><TableRow><TableHeaderCell>평가 / 원문 키</TableHeaderCell><TableHeaderCell>공통</TableHeaderCell><TableHeaderCell>전방</TableHeaderCell><TableHeaderCell>후방</TableHeaderCell><TableHeaderCell>Reference</TableHeaderCell></TableRow></TableHead><TableBody>{evaluationRows.map((row) => <TableRow key={`${row.evaluation.id}:${row.metric}`}><TableHeaderCell><strong>{row.label}</strong>{row.key ? <small className="usage-source-key" title={row.key}>{row.key}</small> : null}</TableHeaderCell><TableCell>{cell(row.evaluation.common, row.metric)}</TableCell><TableCell>{cell(row.evaluation.front, row.metric)}</TableCell><TableCell>{cell(row.evaluation.rear, row.metric)}</TableCell><TableCell>{row.evaluation.reference ? <>{row.evaluation.reference.reason || directions.map((direction) => { const value = row.evaluation.reference?.[direction]; return value ? <div key={direction}>{direction === 'common' ? '공통' : direction === 'front' ? '전방' : '후방'}: {cell(value, row.metric)}</div> : null })}</> : '미선택'}</TableCell></TableRow>)}</TableBody></Table></div>
+    <div className="simulation-dashboard__usage-table"><header><h3>다섯 평가 종합</h3><small>{usageStatusText(data)}</small></header><Table><TableHead><TableRow><TableHeaderCell>평가 / 원문 키</TableHeaderCell><TableHeaderCell>공통</TableHeaderCell><TableHeaderCell>전방</TableHeaderCell><TableHeaderCell>후방</TableHeaderCell><TableHeaderCell>Reference</TableHeaderCell></TableRow></TableHead><TableBody>{evaluationRows.map((row) => <TableRow key={`${row.evaluation.id}:${row.metric}`}><TableHeaderCell><strong>{row.label}</strong>{row.key ? <small className="usage-source-key" title={row.key}>{row.key}</small> : null}</TableHeaderCell><TableCell>{cell(row.evaluation.common, row.metric)}</TableCell><TableCell>{cell(row.evaluation.front, row.metric)}</TableCell><TableCell>{cell(row.evaluation.rear, row.metric)}</TableCell><TableCell>{row.evaluation.reference ? <>{row.evaluation.reference.reason || directions.map((direction) => { const value = row.evaluation.reference?.[direction]; return value ? <div key={direction}>{USAGE_DIRECTION_LABELS[direction]}: {cell(value, row.metric)}</div> : null })}</> : '미선택'}</TableCell></TableRow>)}</TableBody></Table></div>
     <div className="simulation-dashboard__usage-values">{data.evaluations.filter((evaluation) => evaluation.id !== 'Slope_Angle_360').map((evaluation) => {
-      const points = directions.filter((key) => evaluation[key] != null || evaluation.reference?.[key] != null).map((key) => ({ direction: key === 'common' ? '공통' : key === 'front' ? '전방' : '후방', current: evaluation[key] && metricStatus(evaluation[key]!, 'value') === 'READY' ? evaluation[key]?.value : null, reference: evaluation.reference?.[key] && metricStatus(evaluation.reference[key]!, 'value') === 'READY' ? evaluation.reference[key]?.value : null }))
-      const key = fieldKey(evaluation, 'value')
-      return <article key={evaluation.id}><h3>{keys[evaluation.id] ? evaluation.id : evaluation.name}</h3>{key ? <small className="usage-source-key" title={key}>{key}</small> : null}<small>{evaluation.common?.unit || evaluation.front?.unit || evaluation.rear?.unit}</small><div style={{height: 150}}><ResponsiveContainer width="100%" height="100%"><BarChart data={points}><XAxis dataKey="direction" /><YAxis /><Tooltip /><Bar dataKey="current" name="현재 Case" fill="var(--color-chart-series-1)" /><Bar dataKey="reference" name="Reference" fill="var(--color-chart-series-2)" /></BarChart></ResponsiveContainer></div></article>
+      const points = directions.filter((key) => evaluation[key] != null || evaluation.reference?.[key] != null).map((key) => ({ direction: USAGE_DIRECTION_LABELS[key], current: evaluation[key] && usageMetricStatus(evaluation[key]!, 'value') === 'READY' ? evaluation[key]?.value : null, reference: evaluation.reference?.[key] && usageMetricStatus(evaluation.reference[key]!, 'value') === 'READY' ? evaluation.reference[key]?.value : null }))
+      const key = usageFieldKey(evaluation, 'value')
+      return <article key={evaluation.id}><h3>{usageEvaluationLabel(evaluation)}</h3>{key ? <small className="usage-source-key" title={key}>{key}</small> : null}<small>{evaluation.common?.unit || evaluation.front?.unit || evaluation.rear?.unit}</small><div style={{height: 150}}><ResponsiveContainer width="100%" height="100%"><BarChart data={points}><XAxis dataKey="direction" /><YAxis /><Tooltip /><Bar dataKey="current" name="현재 Case" fill="var(--color-chart-series-1)" /><Bar dataKey="reference" name="Reference" fill="var(--color-chart-series-2)" /></BarChart></ResponsiveContainer></div></article>
     })}</div>
   </div>
 }

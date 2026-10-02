@@ -10,7 +10,13 @@
 4. **Final 지정 확정** → 브라우저가 5단계 빌더(`buildCaseReportPptx`·`buildCaseReportHtml`)로 보고서를 만들고, 형식마다 한 번씩 올린 뒤(`PUT /{operation_id}/reports/{format}`) 확정한다(`POST /confirm`).
 5. 완료 화면에 CAE 폴더와 보고서 경로, HTML에 넣지 못한 영상을 보여준다. 실패하면 창에 오류를 보이고 **다시 시도**는 같은 확정 ID와 같은 보고서 바이트로 다시 보낸다.
 
-보고서 범위는 창을 연 순간 화면의 범위(하중경우 › Run Case › Run Option · Component · Basis)다. 범위가 정해지지 않았거나 사용환경이면 보고서를 만들 수 없어 확정이 막힌다(사용환경 보고서는 아직 없다).
+보고서 범위는 화면 선택과 무관하게 **Case 전체**다(2026-10-03 후속).
+
+- 유통환경: Case의 모든 하중경우 › Run Case › Run Option을 경로 바와 같은 후보 규칙(최신 결과 `latest:<Case>`에 속하거나 아직 수집되지 않은 항목)으로 모아 Run Option마다 구역 하나를 만든다. 각 구역은 그 Run Option의 Scene으로 요약·Scene 비교·이미지·영상을 담는다. Component는 화면에서 고른 이름과 같은 것, 없으면 값이 있는 첫 후보, Basis는 화면 값이 후보에 있으면 그 값, 아니면 첫 후보다. 표시 엣지·라인은 화면 설정을 따른다. 결과가 없는 Run Option은 `결과 없음` 구역으로 표시하고 확정을 막지 않는다. 결과 읽기 오류는 보고서 만들기를 실패시킨다(다시 시도).
+- 사용환경: 사용환경 Case의 다섯 평가 종합과 이미지·영상([Case 결과 보고서](case-report.md)의 사용환경 레시피, Reference 없음).
+- 화면에서 Run Case·Run Option을 고르지 않아도 확정할 수 있다. 결과(수집본)가 없는 Case만 보고서를 만들 수 없어 확정이 막힌다.
+- 헤더의 `보고서` 버튼은 지금처럼 현재 선택 범위로 만든다.
+- 보고서를 만들 때 이미지는 한 번 읽어 두 형식이 공유하고, 넣지 못한 이미지·영상은 창에 표시한다.
 
 ## 저장 위치 (DEPTH_V1 D11·D12)
 
@@ -71,4 +77,4 @@
 ## 검증
 
 - 백엔드 `backend/tests/test_case_finalization_reports.py`: CAE 미러(결과·이미지·영상·Scene 문서·덱), Reports에는 서버 이름의 업로드 보고서만, 최신 결과 기준의 Scene별 수집본, 새 수집본 뒤 확정 차단, 보고서 누락·미업로드 시 미완료, PPTX(비 zip·매크로 항목·macroEnabled·경로 이탈·압축률·압축 해제 합계·필수 항목 누락)·HTML(doctype 없음·비 UTF-8·빈 파일)·크기 초과 거부, 완료 전 보고서 교체·완료 후 불변·남의 파일 비덮어쓰기, 1 형식 완료 기록의 상태 검증, Final 밖 쓰기 없음·Working 불변. 기존 `test_environment_folder_flow_api.py`의 서명·변조·재시도·상태 제한 시나리오는 새 계약으로 갱신했다.
-- e2e `frontend/e2e/case-finalization.spec.ts`(형식 선택·형식별 업로드 본문·확정 본문·완료 경로·건너뛴 영상, 업로드 오류와 같은 바이트 재시도), `folder-working-final.spec.ts`(미리보기 기준·CAE 목록·보고서 범위 없음 차단·1 형식 이력 배지).
+- e2e `frontend/e2e/case-finalization.spec.ts`(화면 선택 없이 Run Option 3개(결과 없음 1개)를 담은 유통 Final 보고서, 사용환경 Final 보고서 업로드·확정, 형식 선택·형식별 업로드 본문·확정 본문·완료 경로·건너뛴 영상, 업로드 오류와 같은 바이트 재시도), `folder-working-final.spec.ts`(미리보기 기준·CAE 목록·화면 선택 없이 Case 전체 보고서로 확정 가능·1 형식 이력 배지).

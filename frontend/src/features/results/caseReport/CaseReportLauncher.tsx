@@ -9,7 +9,7 @@ const CaseReportDialog = lazy(() => import('./CaseReportDialog').then(({ CaseRep
 export function CaseReportLauncher({ scope, disabledReason }: { scope: CaseReportScope | null; disabledReason: string }) {
   const [opened, setOpened] = useState<CaseReportScope | null>(null)
   return <>
-    <button type="button" className="case-report__trigger" disabled={!scope} title={scope ? '선택한 Case 결과로 보고서를 만듭니다.' : disabledReason} onClick={() => { if (scope) setOpened(structuredClone(scope)) }}>
+    <button type="button" className="case-report__trigger" disabled={!scope} title={scope ? (scope.source.kind === 'case_usage' ? '사용환경 Case 결과로 보고서를 만듭니다.' : '선택한 Case 결과로 보고서를 만듭니다.') : disabledReason} onClick={() => { if (scope) setOpened(structuredClone(scope)) }}>
       <FileText size={15} aria-hidden="true" />보고서
     </button>
     {opened ? <Suspense fallback={null}><CaseReportDialog scope={opened} onClose={() => setOpened(null)} /></Suspense> : null}

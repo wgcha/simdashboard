@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { loginWorkspace } from './workspace-test-helpers'
 
-test('Final 지정 미리보기는 최신 결과 기준과 CAE 파일을 보이고 보고서 범위가 없으면 확정을 막는다', async ({ page }) => {
+test('Final 지정 미리보기는 최신 결과 기준과 CAE 파일을 보이고 화면 선택 없이도 Case 전체 보고서로 확정할 수 있다', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 })
   const errors: string[] = []
   page.on('pageerror', (error) => errors.push(error.message))
@@ -31,9 +31,10 @@ test('Final 지정 미리보기는 최신 결과 기준과 CAE 파일을 보이�
   await expect(dialog).toContainText('model.rad')
   await expect(dialog).toContainText('result.csv')
   await expect(dialog).toContainText('Case_A_report.pptx')
-  await expect(dialog).toContainText('Run Case·Run Option을 화면에서 선택')
+  // The Final report covers the whole Case, so no on-screen Run Case · Run Option is needed.
+  await expect(dialog.getByTestId('case-final-report-range')).toContainText('Case 전체')
   await expect(dialog).not.toContainText('PDF')
-  await expect(dialog.getByRole('button', { name: 'Final 지정 확정', exact: true })).toBeDisabled()
+  await expect(dialog.getByRole('button', { name: 'Final 지정 확정', exact: true })).toBeEnabled()
   expect(previewBody).toMatchObject({ case_id: 'case-final', capture_id: 'latest:case-final' })
   await page.screenshot({ path: join(tmpdir(), 'folder-final-preview-desktop.png'), fullPage: false })
   await dialog.getByRole('button', { name: '취소', exact: true }).click()

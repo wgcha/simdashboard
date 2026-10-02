@@ -1093,3 +1093,10 @@
 - 화면: Final 지정 창에 기준(최신 결과·Scene·결과 버전 수), Final/CAE 개수·접이식 목록, Final/Reports 형식 선택(PPTX·HTML·영상 포함), 진행 단계, 오류와 같은 바이트 재시도, 완료 경로·건너뛴 영상. 헤더의 재시도 버튼은 제거(미완료 건수는 배지 툴팁). 문서: [최종확정](../docs/features/case-finalization.md).
 - 검증: 백엔드 신규 `test_case_finalization_reports.py` 15 passed, 관련 모듈 포함 53 passed/1 skipped(Windows 전용 1건 skip), OpenAPI 계약 검사 통과. 프런트 tsc·build·test:routing·test:api 통과, check:architecture 기존 4건만. e2e case-finalization 2·folder-working-final 3·case-report 7 통과, simulation-dashboard 13/14(폐기된 capture-pin 항목).
 - 미실행: 독립 Sol/Astra 검수, `security-diff-scan`(업로드·경로 경계 변경이라 대상), PostgreSQL 프로필, 실제 Windows Server 2022·공유폴더·Caddy 경유 대용량 업로드. 사용환경은 보고서가 없어 Final 지정을 완료할 수 없다(결정 필요).
+
+## 2026-10-03 사용환경 보고서·Final Case 전체 보고서·5단계 검수 반영 (Claude, 브랜치 claude/case-results-redesign)
+- 사용환경 보고서: 같은 빌더에 사용환경 레시피 추가(`ReportSource` `case_usage`). 화면과 같은 "다섯 평가 종합" 행·원문 키·공통/전방/후방 값·상태·OK/NG(+고른 Reference)와 평가별 이미지·영상. 표 로직을 `features/results/usageEvaluations.ts`로 옮겨 화면과 보고서가 공유. 사용환경에서 `보고서`·Final 지정 활성(소재·물성 탭 제외 유지).
+- Final 보고서 범위 = Case 전체: 유통은 카탈로그에서 모든 하중경우›Run Case›Run Option을 모아 구역별로 만들고(`case_final`, `loadCaseFinalSections`), 결과 없는 Option은 `결과 없음`. 화면 선택이 없어도 확정 가능. 헤더 `보고서`는 현재 선택 범위 유지.
+- 5단계 검수: M1 보고서 창은 "새 레이아웃으로 저장"만(시스템·현재 레이아웃 새 버전·삭제 없음), 템플릿 필드는 정의에 유지하고 렌더링 때만 화면 레이아웃으로 대체. L1 템플릿 업로드·선택·출력 원본 숨김+안내. L2 만드는 중 `취소`·Esc 중단. L3 이미지 1회 읽기·공유, 이미지 전체 300MB 상한·건너뜀 목록, 상한은 원본 크기·HTML 약 1.33배 안내. L5 엣지 없음은 `선택 없음`.
+- 검증: tsc·build·test:routing·test:api 통과, check:architecture 기존 4건(App.tsx 1089 증가 없음). e2e case-report 11, case-finalization 4, folder-working-final 3, case-video-grid 2 통과. simulation-dashboard 12/14: 폐기된 capture-pin 항목 1건 실패, `single Run Option` 1건은 전체 실행에서만 실패하고 단독 재실행 통과(불안정). 백엔드·migration·의존성·배포 변경 없음.
+- 미실행: 독립 Sol/Astra 검수, 보안 스캔(보안 경계 변경 없음), Windows Server 2022 검증.

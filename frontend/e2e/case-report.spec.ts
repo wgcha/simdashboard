@@ -14,7 +14,34 @@ const PEAK_SCENE = '2_Face_Drop_Scene02'
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAQAAAADCAIAAAA7ljmRAAAAEElEQVR4nGPQqDgBRww4OQBBxhDhzXmo9QAAAABJRU5ErkJggg==', 'base64')
 const SHOT_DIR = '/tmp/claude-0'
 
-type Options = { twoOptions?: boolean; bigVideo?: boolean }
+type Options = { twoOptions?: boolean; bigVideo?: boolean; slowImage?: Promise<void>; layouts?: unknown[]; layoutWrites?: Array<{ method: string; body: Record<string, unknown> }> }
+
+const USAGE_CASE = 'usage-case'
+const USAGE_CAPTURE = 'latest:usage-case'
+
+function usageCatalog() {
+  return { environment: 'USAGE', cases: [{ id: USAGE_CASE, label: 'Usage Case' }], load_cases: [], execution_runs: [], modes: [], components: [], bases: [], captures: [{ id: USAGE_CAPTURE, label: '최신 결과', case_id: USAGE_CASE, kind: 'LATEST', merged_capture_count: 1 }] }
+}
+
+function usageValue(value: number | null, unit: string, verdict: string | null = null, keys: { value_key?: string; verdict_key?: string } = {}) {
+  return { value, unit, status: 'READY', verdict, value_status: value == null ? 'NOT_APPLICABLE' : 'READY', verdict_status: verdict == null ? 'NOT_APPLICABLE' : 'READY', ...keys }
+}
+
+function usagePayload() {
+  return {
+    contract_version: 1,
+    context: { project_id: 'project-tv-001', request_id: 'request-drop-001', simulation_case_id: USAGE_CASE, capture_id: USAGE_CAPTURE, context_key: 'usage-report' },
+    status: 'READY',
+    evaluations: [
+      { id: 'Settle', name: 'Settle', status: 'READY', common: usageValue(1.25, 'deg', null, { value_key: 'Set Tilt Angle @ Settle (deg)' }), front: null, rear: null, media: [{ asset_id: 'img-usage', kind: 'IMAGE', status: 'READY', title: 'Settle_final.png', frame_role: 'FINAL_FRAME' }] },
+      { id: 'Wobble', name: 'Wobble', status: 'READY', common: null, front: usageValue(3.5, 'mm'), rear: usageValue(4, 'mm'), media: [{ asset_id: 'vid-usage', kind: 'VIDEO', status: 'READY', title: 'Wobble_front.mp4' }] },
+      { id: 'Horizontal_Force_Angle', name: 'Horizontal Force Angle', status: 'READY', common: null, front: usageValue(0.75, 'deg'), rear: usageValue(0.5, 'deg'), media: [] },
+      { id: 'Slope_Angle', name: 'Slope Angle', status: 'READY', common: null, front: usageValue(12, 'deg', 'OK'), rear: usageValue(9.5, 'deg', 'NG'), media: [] },
+      { id: 'Slope_Angle_360', name: 'Slope Angle 360', status: 'READY', common: null, front: usageValue(null, '', 'OK'), rear: usageValue(null, '', 'NG'), media: [] },
+    ],
+    quality_issues: [],
+  }
+}
 
 function catalog(options: Options) {
   const runOptions = [{ id: 'option-individual', label: 'Individual', option_label: 'Individual', option_status: 'PRESENT', case_id: CASE_ID, execution_run_id: RUN_ID, mode: MODE, capture_id: CAPTURE_ID }]
@@ -77,11 +104,31 @@ async function installMocks(page: Page, options: Options = {}) {
   const distributionRequests: URL[] = []
   await page.route('**/api/dashboard/finalizations/status**', (route) => route.fulfill({ json: { latest: null, selected_case_latest: null, retryable_operations: [], unverified_records: 0 } }))
   await page.route('**/api/folder-discovery/environments/sync', (route) => route.fulfill({ json: { status: 'UNCHANGED', changed: false, snapshot_id: null, diff: { added: 0, removed: 0, changed: 0 }, code: null, message: null, check_mode: 'QUICK', checked_at: new Date().toISOString(), coalesced: false } }))
-  await page.route('**/api/dashboard/catalog**', (route) => fulfillJson(route, catalog(options)))
+  await page.route('**/api/dashboard/catalog**', (route) => fulfillJson(route, new URL(route.request().url()).searchParams.get('environment') === 'USAGE' ? usageCatalog() : catalog(options)))
+  await page.route('**/api/dashboard/usage/cases/**', (route) => fulfillJson(route, usagePayload()))
+  if (options.layouts) {
+    const layouts = options.layouts
+    await page.route('**/api/report-layouts', async (route) => {
+      const request = route.request()
+      if (request.method() === 'GET') return fulfillJson(route, layouts)
+      const body = request.postDataJSON() as Record<string, unknown>
+      options.layoutWrites?.push({ method: request.method(), body })
+      const definition = { ...(body.definition as Record<string, unknown>), id: 'layout-copy-1', version: 1 }
+      const saved = { id: 'layout-copy-1', name: body.name, description: body.description ?? '', version: 1, definition, is_system: false, updated_at: '2026-10-03T00:00:00Z', updated_by: 'e2e' }
+      layouts.push({ ...saved, is_active: true, created_at: saved.updated_at })
+      return fulfillJson(route, saved)
+    })
+    await page.route('**/api/report-layouts/*', (route) => {
+      options.layoutWrites?.push({ method: route.request().method(), body: {} })
+      return route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ detail: 'unexpected layout write' }) })
+    })
+  }
   await page.route('**/api/dashboard/distribution/scenes/**', (route) => fulfillJson(route, { context: distribution(new URL(route.request().url())).context, scene: { id: 'scene-1', label: 'scene-1' }, edge_peaks: [], line_points: [], assets: [], quality_issues: [] }))
   await page.route('**/api/dashboard/assets/**', (route) => {
     const id = decodeURIComponent(new URL(route.request().url()).pathname.split('/').pop() ?? '')
-    if (id === 'img-1') return route.fulfill({ status: 200, contentType: 'image/png', body: PNG })
+    if (id === 'img-1' && options.slowImage) return options.slowImage.then(() => route.fulfill({ status: 200, contentType: 'image/png', body: PNG })).catch(() => undefined)
+    if (id === 'img-1' || id === 'img-usage') return route.fulfill({ status: 200, contentType: 'image/png', body: PNG })
+    if (id === 'vid-usage') return route.fulfill({ status: 200, contentType: 'video/mp4', body: Buffer.from('synthetic-usage-mp4') })
     if (id === 'vid-small') return route.fulfill({ status: 200, contentType: 'video/mp4', body: Buffer.from('synthetic-mp4-bytes') })
     if (id === 'vid-big') return route.fulfill({ status: 200, contentType: 'video/mp4', body: Buffer.alloc(21 * 1024 * 1024, 1) })
     return route.fulfill({ status: 404, body: '' })
@@ -309,4 +356,120 @@ test.describe('4K 기준 화면', () => {
     await page.screenshot({ path: `${SHOT_DIR}/stage5-dialog.png` })
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
   })
+})
+
+async function openUsageResults(page: Page) {
+  await loginWorkspace(page)
+  await page.goto('/workspace/requests?project=project-tv-001&request=request-drop-001&view=case_results')
+  await expect(page.getByRole('region', { name: 'SPDM 해석 결과 대시보드' })).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByRole('button', { name: '사용환경', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByTestId('usage-dashboard')).toBeVisible()
+}
+
+test('사용환경 보고서는 다섯 평가 종합 값과 결과 이미지·영상을 PPTX·HTML에 넣는다', async ({ page, browser }) => {
+  await installMocks(page)
+  await openUsageResults(page)
+  const button = page.locator('.case-results-head__actions').getByRole('button', { name: '보고서', exact: true })
+  await expect(button).toBeEnabled()
+  await button.click()
+  const dialog = page.getByTestId('case-report-dialog')
+  await expect(dialog).toHaveAttribute('data-environment', 'USAGE')
+  await expect(dialog).toHaveAttribute('data-capture-id', USAGE_CAPTURE)
+  await expect(dialog.locator('.case-report__scope')).toContainText('사용환경')
+  await expect(dialog.getByTestId('case-report-counts')).toContainText('평가 6행 · 이미지 1개 · 영상 1개')
+  await setFormats(dialog, { pptx: true, html: true })
+  await dialog.getByRole('checkbox', { name: '영상 포함', exact: true }).check()
+  const downloads = await downloadAll(page, dialog, 2)
+  const pptx = downloads.find((item) => item.suggestedFilename().endsWith('.pptx'))!
+  const htmlDownload = downloads.find((item) => item.suggestedFilename().endsWith('.html'))!
+  expect(pptx.suggestedFilename()).toMatch(/^Usage_Case_\d{8}-\d{4}\.pptx$/)
+  const zip = readFileSync(await pptx.path() as string)
+  expect(zipEntry(zip, 'ppt/slides/slide1.xml')).toContain('Usage Case')
+  const summary = zipEntry(zip, 'ppt/slides/slide2.xml') ?? ''
+  for (const text of ['다섯 평가 종합', 'Settle', '1.25 deg', 'Wobble', '3.5 mm', 'Horizontal_Force_Angle', 'Slope_Angle_360', 'OK', 'NG']) expect(summary).toContain(text)
+  const html = await downloadText(htmlDownload)
+  for (const text of ['Usage Case 사용환경 해석 결과 보고서', '다섯 평가 종합', '1.25 deg · 확인', '4 mm · 확인', '0.75 deg · 확인', '12 deg · 확인', 'OK · 확인', 'NG · 확인', 'Slope_Angle_360', 'Set Tilt Angle @ Settle (deg)', 'Settle_final.png', 'Wobble_front.mp4']) expect(html).toContain(text)
+  expect(html).toMatch(/<img src="data:image\/png;base64,/)
+  expect(html).toMatch(/<video controls preload="metadata" src="data:video\/mp4;base64,/)
+  expect(html).not.toMatch(/<script/i)
+  expect(html).not.toMatch(/https?:\/\/|url\(/)
+  const context = await browser.newContext({ viewport: { width: 2560, height: 1440 }, deviceScaleFactor: 1.5, javaScriptEnabled: false, offline: true })
+  const view = await context.newPage()
+  await view.setContent(html, { waitUntil: 'load' })
+  await expect(view.getByRole('heading', { name: '다섯 평가 종합' })).toBeVisible()
+  mkdirSync(SHOT_DIR, { recursive: true })
+  await view.screenshot({ path: `${SHOT_DIR}/followup-usage-report-html.png`, fullPage: true })
+  await context.close()
+})
+
+test('보고서를 만드는 중 취소 버튼과 Esc로 멈추고 파일을 받지 않는다', async ({ page }) => {
+  let release = () => {}
+  const slowImage = new Promise<void>((resolve) => { release = resolve })
+  await installMocks(page, { slowImage })
+  await openCaseResults(page)
+  const dialog = await openReport(page)
+  await setFormats(dialog, { pptx: true, html: true })
+  const downloads: Download[] = []
+  page.on('download', (download) => { downloads.push(download) })
+  const start = dialog.getByRole('button', { name: '다운로드', exact: true })
+  await start.click()
+  await expect(dialog.getByTestId('case-report-building')).toBeVisible()
+  await dialog.getByRole('button', { name: '취소', exact: true }).click()
+  await expect(dialog.getByRole('status').filter({ hasText: '보고서 만들기를 취소했습니다.' })).toBeVisible()
+  await expect(dialog.getByTestId('case-report-building')).toHaveCount(0)
+  await expect(start).toBeEnabled()
+  // Escape cancels a running build and keeps the dialog open.
+  await start.click()
+  await expect(dialog.getByTestId('case-report-building')).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByRole('status').filter({ hasText: '보고서 만들기를 취소했습니다.' })).toBeVisible()
+  release()
+  await page.waitForTimeout(1_000)
+  expect(downloads).toHaveLength(0)
+  // Escape without a running build closes the dialog.
+  await page.keyboard.press('Escape')
+  await expect(dialog).toHaveCount(0)
+})
+
+test('보고서 창의 레이아웃 편집은 새 레이아웃으로만 저장하고 PPTX 템플릿 연결을 지우지 않는다', async ({ page }) => {
+  const definition = { id: 'company-template', name: '회사 템플릿', description: '', version: 3, coverVariant: 'balanced', accentColor: '1F6FB2', sectionOrder: ['series', 'scalar', 'media'], variablePlacements: [], includeMedia: true, templateSource: 'pptx_upload', templateAssetId: 'template-asset-1', templateBindings: { 'placeholder-1': 'field:report_title' } }
+  const layouts: unknown[] = [{ id: 'company-template', name: '회사 템플릿', description: '', version: 3, definition, is_system: true, is_active: true, created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z', updated_by: 'admin' }]
+  const layoutWrites: Array<{ method: string; body: Record<string, unknown> }> = []
+  await installMocks(page, { layouts, layoutWrites })
+  await openCaseResults(page)
+  const dialog = await openReport(page)
+  await setFormats(dialog, { pptx: true, html: false })
+  await dialog.getByRole('button', { name: '레이아웃 편집', exact: true }).click()
+  const editor = dialog.getByTestId('case-report-layout-editor')
+  await expect(editor).toContainText('업로드 PPTX 템플릿은 Case 결과 보고서에 적용되지 않습니다')
+  await expect(editor.getByRole('button', { name: /현재 레이아웃 새 버전 저장/ })).toHaveCount(0)
+  await expect(editor.getByRole('button', { name: '삭제', exact: true })).toHaveCount(0)
+  await expect(editor.getByText('출력 원본')).toHaveCount(0)
+  await expect(editor.getByText('PPTX 추가')).toHaveCount(0)
+  await editor.getByRole('button', { name: /새 레이아웃으로 저장/ }).click()
+  await expect(dialog.getByRole('status').filter({ hasText: '새 레이아웃으로 저장 완료' })).toBeVisible()
+  expect(layoutWrites.map((item) => item.method)).toEqual(['POST'])
+  const saved = layoutWrites[0].body.definition as Record<string, unknown>
+  expect(saved).toMatchObject({ templateSource: 'pptx_upload', templateAssetId: 'template-asset-1', templateBindings: { 'placeholder-1': 'field:report_title' } })
+  expect((saved.slides as unknown[]).length).toBeGreaterThan(1)
+  // The template binding is ignored only when rendering: the PPTX still builds.
+  const [download] = await downloadAll(page, dialog, 1)
+  const zip = readFileSync(await download.path() as string)
+  expect(zipEntry(zip, 'ppt/slides/slide1.xml')).toContain('Case A')
+  expect(layoutWrites.map((item) => item.method)).toEqual(['POST'])
+})
+
+test('엣지를 모두 끄면 보고서 요약은 요약 탭과 같은 선택 없음 문구를 쓴다', async ({ page }) => {
+  await installMocks(page)
+  await openCaseResults(page)
+  await page.locator('.case-display-options > summary').click()
+  for (const edge of ['TOP', 'BOTTOM', 'LEFT', 'RIGHT']) await page.locator('.simulation-dashboard__picker').getByRole('checkbox', { name: edge, exact: true }).uncheck()
+  await page.locator('.case-display-options > summary').click()
+  const dialog = await openReport(page)
+  await setFormats(dialog, { pptx: false, html: true })
+  const [download] = await downloadAll(page, dialog, 1)
+  const html = await downloadText(download)
+  expect(html).toContain('선택 없음: 표시 옵션에서 엣지를 하나 이상 선택하세요.')
+  expect(html).toMatch(/<td class="num">선택 없음<\/td>/)
 })

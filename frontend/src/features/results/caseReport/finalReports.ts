@@ -1,34 +1,30 @@
 /**
- * Builds the Final designation reports with the stage-5 builders (same recipe
- * as the 보고서 dialog) for the scope fixed when the Final dialog opened.
+ * Builds the Final designation reports with the stage-5 builders. The scope is
+ * the whole Case: the 사용환경 Case, or every Run Case · Run Option of a
+ * 유통환경 Case (one section each; options without results show `결과 없음`).
  */
-import { api } from '../../../api'
 import { reportApi } from '../../../shared/api/reportLayouts'
-import { buildCaseReportData, buildCaseReportHtml, buildCaseReportPptx, loadCaseReportSources, type CaseReportFormat, type CaseReportScope } from './caseReport'
+import { buildCaseReportHtml, buildCaseReportPptx, loadCaseFinalReport, loadCaseReportImages, type CaseReportData, type CaseReportFinalScope, type CaseReportFormat } from './caseReport'
 
-export type FinalReportFiles = { files: Partial<Record<CaseReportFormat, Blob>>; skippedVideos: string[] }
+export type FinalReportFiles = { files: Partial<Record<CaseReportFormat, Blob>>; skippedVideos: string[]; skippedImages: string[]; data: CaseReportData }
 
-export async function buildFinalReports(scope: CaseReportScope, options: { formats: CaseReportFormat[]; includeVideos: boolean; signal?: AbortSignal }): Promise<FinalReportFiles> {
-  const { source } = scope
-  const [sources, project, request] = await Promise.all([
-    loadCaseReportSources(source, options.signal),
-    api.projects().then((items) => items.find((item) => item.id === source.projectId)?.name).catch(() => undefined),
-    api.requests(source.projectId).then((items) => items.find((item) => item.id === source.requestId)?.title).catch(() => undefined),
-  ])
-  const labels = { ...scope.labels, project: project || scope.labels.project, request: request || scope.labels.request }
-  const data = buildCaseReportData({ scope: { source, labels }, distribution: sources.distribution, videos: sources.videos, generatedAt: new Date() })
+export async function buildFinalReports(scope: CaseReportFinalScope, options: { formats: CaseReportFormat[]; includeVideos: boolean; signal?: AbortSignal }): Promise<FinalReportFiles> {
+  const data = await loadCaseFinalReport(scope, { signal: options.signal })
+  // Images are read once and shared by both formats.
+  const images = await loadCaseReportImages(data, { signal: options.signal })
   const files: FinalReportFiles['files'] = {}
   let skippedVideos: string[] = []
   if (options.formats.includes('pptx')) {
     const [storedLayouts, reportModule] = await Promise.all([reportApi.layouts().catch(() => []), import('../../../reportExport')])
     const stored = storedLayouts.find((item) => item.id === 'report-layout-standard')?.definition ?? storedLayouts[0]?.definition
     const layout = stored ? reportModule.normalizeReportLayout(stored) : undefined
-    files.pptx = await buildCaseReportPptx(data, { layout, labels: { project: labels.project, request: labels.request, loadCase: labels.loadCase }, signal: options.signal })
+    const scopeValue = (label: string) => data.scopeRows.find((row) => row.label === label)?.value ?? ''
+    files.pptx = await buildCaseReportPptx(data, { layout, images, labels: { project: scopeValue('프로젝트'), request: scopeValue('의뢰'), loadCase: scopeValue('하중경우') }, signal: options.signal })
   }
   if (options.formats.includes('html')) {
-    const html = await buildCaseReportHtml(data, { includeVideos: options.includeVideos, signal: options.signal })
+    const html = await buildCaseReportHtml(data, { includeVideos: options.includeVideos, images, signal: options.signal })
     files.html = html.blob
     skippedVideos = html.skippedVideos
   }
-  return { files, skippedVideos }
+  return { files, skippedVideos, skippedImages: images.skipped, data }
 }

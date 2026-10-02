@@ -9,7 +9,7 @@ import {
   type CaseFinalizationStatus,
 } from '../../shared/api/caseFinalization'
 import type { DashboardEnvironment } from '../../shared/api/simulationDashboard'
-import type { CaseReportScope } from './caseReport/caseReport'
+import type { CaseReportFinalScope } from './caseReport/caseReport'
 import { buildFinalReports, type FinalReportFiles } from './caseReport/finalReports'
 import './CaseFinalizationPanel.css'
 
@@ -22,8 +22,8 @@ type Props = {
   captureId: string
   hasCapturedCase: boolean
   canFinalize: boolean
-  /** Report scope shown on screen (Run Case · Run Option · Component · Basis); null when none is selected. */
-  reportScope: CaseReportScope | null
+  /** Final report scope: the whole Case (usage Case, or every Run Case · Run Option); null without results. */
+  reportScope: CaseReportFinalScope | null
 }
 
 type Phase = 'idle' | 'building' | 'uploading' | 'copying'
@@ -50,7 +50,7 @@ export function CaseFinalizationPanel(props: Props) {
   const { projectId, requestId, environment, caseId, captureId, hasCapturedCase, canFinalize, reportScope } = props
   const [status, setStatus] = useState<CaseFinalizationStatus | null>(null)
   const [preview, setPreview] = useState<CaseFinalizationPreview | null>(null)
-  const [scopeAtOpen, setScopeAtOpen] = useState<CaseReportScope | null>(null)
+  const [scopeAtOpen, setScopeAtOpen] = useState<CaseReportFinalScope | null>(null)
   const [formats, setFormats] = useState<Record<CaseFinalizationReportFormat, boolean>>({ pptx: true, html: false })
   const [includeVideos, setIncludeVideos] = useState(false)
   const [phase, setPhase] = useState<Phase>('idle')
@@ -60,6 +60,7 @@ export function CaseFinalizationPanel(props: Props) {
   const [notice, setNotice] = useState('')
   const [result, setResult] = useState<CaseFinalizationRecord | null>(null)
   const [skippedVideos, setSkippedVideos] = useState<string[]>([])
+  const [skippedImages, setSkippedImages] = useState<string[]>([])
   const [dialogOpen, setDialogOpen] = useState(false)
   const generation = useRef(0)
   const dialogRef = useRef<HTMLDialogElement>(null)
@@ -105,13 +106,13 @@ export function CaseFinalizationPanel(props: Props) {
 
   const makePreview = async () => {
     const token = generation.current
-    setBusy(true); setError(''); setNotice(''); setDialogError(''); setResult(null); setSkippedVideos([])
+    setBusy(true); setError(''); setNotice(''); setDialogError(''); setResult(null); setSkippedVideos([]); setSkippedImages([])
     try {
       const next = await caseFinalizationApi.preview(input)
       if (token !== generation.current) return
       built.current = null
       setPreview(next)
-      setScopeAtOpen(reportScope)
+      setScopeAtOpen(reportScope ? structuredClone(reportScope) : null)
       setDialogOpen(true)
     } catch (cause) {
       if (token === generation.current) setError(message(cause, '최종확정 미리보기를 만들지 못했습니다.'))
@@ -136,6 +137,7 @@ export function CaseFinalizationPanel(props: Props) {
       if (token !== generation.current) return
       const reports = built.current.reports
       setSkippedVideos(reports.skippedVideos)
+      setSkippedImages(reports.skippedImages)
       setPhase('uploading')
       for (const format of chosen) {
         const blob = reports.files[format]
@@ -166,7 +168,7 @@ export function CaseFinalizationPanel(props: Props) {
   const badgeTitle = [current ? `확정 ${current.operation_id.slice(0, 8)} · ${current.files.length}개 파일${current.reports?.length ? ` · 보고서 ${current.reports.length}개` : ''} · ${formatDate(current.confirmed_at)}` : '', missing.join(' · '), requestLatest, unfinished, unverified].filter(Boolean).join('\n') || undefined
 
   const sourceCount = preview ? new Set(preview.scene_sources.map((item) => item.source_capture_id)).size : 0
-  const reportRange = scopeAtOpen ? [scopeAtOpen.labels.loadCase, scopeAtOpen.labels.run, scopeAtOpen.labels.option].filter(Boolean).join(' › ') + (scopeAtOpen.labels.component ? ` · ${scopeAtOpen.labels.component}` : '') + (scopeAtOpen.labels.basis ? ` · ${scopeAtOpen.labels.basis}` : '') : ''
+  const reportRange = !scopeAtOpen ? '' : scopeAtOpen.source.kind === 'case_usage' ? '사용환경 Case 전체 · 다섯 평가 종합 · 결과 이미지·영상' : 'Case 전체 · 모든 Run Case · Run Option (결과가 없는 항목은 결과 없음으로 표시)'
   const sceneDocs = preview?.counts.scene_reports ?? 0
   const confirmDisabled = !canFinalize || busy || !preview?.can_confirm || !scopeAtOpen || !chosen.length
 
@@ -197,6 +199,7 @@ export function CaseFinalizationPanel(props: Props) {
           </ul>
         </section>
         {skippedVideos.length > 0 && <p className="case-finalization__missing">HTML에 넣지 못한 영상 {skippedVideos.length}개(파일 이름으로 표시): {skippedVideos.join(', ')}</p>}
+        {skippedImages.length > 0 && <p className="case-finalization__missing">보고서에 넣지 못한 이미지 {skippedImages.length}개: {skippedImages.join(', ')}</p>}
       </div> : <div className="case-finalization__dialog-body">
         <section className="case-finalization__section" aria-label="기준">
           <h4>기준 <span>최신 결과 · Scene {preview.scene_sources.length}개{sourceCount > 1 ? ` · 결과 버전 ${sourceCount}개` : ''}</span></h4>
@@ -228,16 +231,17 @@ export function CaseFinalizationPanel(props: Props) {
         </section>
         <section className="case-finalization__section" aria-label="Final/Reports">
           <h4>Final/Reports <span>하나 이상 선택</span></h4>
-          {scopeAtOpen ? <p className="case-finalization__hint" title={reportRange}>보고서 범위: {reportRange}</p> : <p className="case-finalization__missing">보고서를 만들 Run Case·Run Option을 화면에서 선택한 뒤 다시 여세요.</p>}
+          {scopeAtOpen ? <p className="case-finalization__hint" title={reportRange} data-testid="case-final-report-range">보고서 범위: {reportRange}</p> : <p className="case-finalization__missing">이 Case에는 보고서를 만들 결과가 없습니다.</p>}
           <fieldset className="case-finalization__formats" disabled={busy || !scopeAtOpen}>
             <legend className="case-sr-only">보고서 형식</legend>
             <label className="case-finalization__format"><input type="checkbox" checked={formats.pptx} onChange={(event) => setFormats((value) => ({ ...value, pptx: event.target.checked }))} />PPTX<code title={preview.report_paths.pptx}>{preview.report_files.pptx}</code></label>
             <label className="case-finalization__format"><input type="checkbox" checked={formats.html} onChange={(event) => setFormats((value) => ({ ...value, html: event.target.checked }))} />HTML<code title={preview.report_paths.html}>{preview.report_files.html}</code></label>
-            <label className="case-finalization__format case-finalization__format--sub"><input type="checkbox" checked={includeVideos} disabled={!formats.html} onChange={(event) => setIncludeVideos(event.target.checked)} />영상 포함</label>
+            <label className="case-finalization__format case-finalization__format--sub" title="이미지 전체 300MB, 영상당 20MB·전체 200MB까지 넣습니다(원본 크기 기준). HTML은 base64로 약 1.33배 커집니다."><input type="checkbox" checked={includeVideos} disabled={!formats.html} onChange={(event) => setIncludeVideos(event.target.checked)} />영상 포함</label>
           </fieldset>
           {!chosen.length && <p className="case-finalization__missing" role="note">PPTX 또는 HTML을 하나 이상 고르세요.</p>}
         </section>
         {skippedVideos.length > 0 && <p className="case-finalization__missing">HTML에 넣지 못한 영상 {skippedVideos.length}개: {skippedVideos.join(', ')}</p>}
+        {skippedImages.length > 0 && <p className="case-finalization__missing">보고서에 넣지 못한 이미지 {skippedImages.length}개: {skippedImages.join(', ')}</p>}
         {dialogError && <p className="case-finalization__dialog-error" role="alert"><AlertTriangle size={14} aria-hidden="true" />{dialogError}</p>}
       </div>}
       <footer className="case-finalization__dialog-actions">

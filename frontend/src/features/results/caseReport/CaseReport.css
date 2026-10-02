@@ -203,6 +203,18 @@
   min-width: 0;
 }
 
+.case-report__editor .report-template-note {
+  margin: 0 0 8px;
+  color: var(--color-text-muted, #536276);
+}
+
+.case-report__caps {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--color-text-muted, #536276);
+  font-size: 0.9em;
+}
+
 .case-report__counts,
 .case-report__hint,
 .case-report__message {
