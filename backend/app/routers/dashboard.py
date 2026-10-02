@@ -1,7 +1,7 @@
 """Authorized dashboard reads and explicit atomic capture publication."""
 from __future__ import annotations
 from typing import Literal
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 from ..database_connection import connect
 from ..modules.access_control import PROJECT_DATA_VIEW, RESULT_IMPORT, SYSTEM_CATALOG_MANAGE, require_permission, require_resource_permission
@@ -48,6 +48,17 @@ def error(exc):
 
 
 def capture_for_read(conn, request, capture_id):
+    if str(capture_id).startswith(storage.LATEST_PREFIX):
+        # Merged newest result per Scene for one Case (see merge_latest_payload).
+        case_id = str(capture_id)[len(storage.LATEST_PREFIX):]
+        project_id = storage.case_project_id(conn, case_id)
+        if project_id is None:
+            raise HTTPException(404, "수집 버전을 찾을 수 없습니다.")
+        require_permission(request, PROJECT_DATA_VIEW, project_id, conn=conn)
+        latest = storage.get_latest_capture(conn, case_id)
+        if latest is None:
+            raise HTTPException(404, "수집 버전을 찾을 수 없습니다.")
+        return latest
     row = conn.execute("""SELECT dc.project_id FROM dashboard_captures c
         JOIN dashboard_cases dc ON dc.id=c.case_id WHERE c.id=?""", [capture_id]).fetchone()
     if not row:
@@ -152,6 +163,19 @@ def distribution(run_id: str, request: Request, capture_id: str, mode: str, comp
             return queries.distribution(capture, run_id, mode, component_id, basis, edges, lines_from(line_indices), run_option_id)
         except storage.DashboardCaptureError as exc:
             raise error(exc) from exc
+
+
+@router.get("/distribution/runs/{run_id}/videos")
+def run_videos(run_id: str, request: Request, capture_id: str, run_option_id: str | None = None, mode: str | None = None,
+               page: int = Query(1, ge=1), page_size: int = Query(queries.VIDEO_PAGE_SIZE_MAX, ge=1, le=queries.VIDEO_PAGE_SIZE_MAX)):
+    with connect() as conn:
+        capture = capture_for_read(conn, request, capture_id)
+    if capture is None:
+        raise HTTPException(404, "수집 버전을 찾을 수 없습니다.")
+    try:
+        return queries.run_videos(capture, run_id, mode=mode, run_option_id=run_option_id, page=page, page_size=page_size)
+    except storage.DashboardCaptureError as exc:
+        raise error(exc) from exc
 
 
 @router.get("/distribution/scenes/{scene_id}")

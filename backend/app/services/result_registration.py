@@ -27,6 +27,21 @@ _EXTENSION_MEDIA = {
     ".mp4": "video/mp4",
     ".webm": "video/webm",
 }
+# Users upload whole solver output folders; the dashboard picks the formats it
+# recognises (above) and leaves the rest as stored originals. Only executable
+# and script types are refused because files land in the shared SPDM folder.
+_GENERIC_MEDIA = "application/octet-stream"
+_BLOCKED_EXTENSIONS = frozenset({
+    ".exe", ".com", ".scr", ".pif", ".msi", ".msp", ".dll", ".sys", ".cpl",
+    ".bat", ".cmd", ".ps1", ".psm1", ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh",
+    ".hta", ".lnk", ".reg", ".jar",
+})
+
+
+def _media_type_for(path: str) -> str:
+    return _EXTENSION_MEDIA.get(PurePosixPath(path).suffix.casefold(), _GENERIC_MEDIA)
+
+
 _USAGE_SELECTION = {"json": True, "csv": True, "video": True, "image": True}
 _PUBLIC_CONTEXT_KEYS = ("simulation_case", "evaluation", "load_case", "execution_run", "run_option", "scene")
 _MUTABLE_DRAFT_STATES = {"DRAFT", "INSPECTED", "APPROVED", "PUBLISH_FAILED"}
@@ -273,9 +288,35 @@ def prepare_folders(conn: ConnectionLike, project_id: str, request_id: str, envi
     result = paths.prepare_folders(conn, project_id, request_id, environment, parent, segments, confirm_create, actor)
     if confirm_create and result.get("created"):
         result["schema_refresh"] = _refresh_schema(conn, project_id, request_id, environment, actor)
+        if result["schema_refresh"].get("status") != "FAILED":
+            # The draft step compares the posted context with the live Folder
+            # Schema candidate. Return that candidate's ids (not the ids the
+            # path builder derived before the refresh) so the next step agrees.
+            schema_context = _schema_candidate_context(
+                conn, project_id, request_id, environment, str(result.get("result_relative_path") or ""))
+            if schema_context is not None:
+                result["context"] = schema_context
     else:
         result["schema_refresh"] = {"status": "UNCHANGED", "message": None}
     return result
+
+
+def _schema_candidate_context(conn: ConnectionLike, project_id: str, request_id: str,
+                              environment: str, result_relative_path: str) -> dict[str, Any] | None:
+    if not result_relative_path:
+        return None
+    try:
+        root, _root_id, root_key = paths._root(conn)
+        scope, _schema_root, _schema_root_key, _environment = result_registration_locations._scope_data(
+            conn, project_id, request_id, environment)
+        schema = scope.pop("_schema")
+        candidates = result_registration_locations._result_candidates(
+            conn, root, root_key, project_id, request_id, scope["environment"], schema)
+    except ResultRegistrationError:
+        return None
+    wanted = paths._relative(result_relative_path)
+    candidate = next((item for item in candidates if item["relative_path"] == wanted), None)
+    return _public_context(candidate["context"]) if candidate else None
 
 
 def _refresh_schema(conn: ConnectionLike, project_id: str, request_id: str,
@@ -356,9 +397,10 @@ def _manifest_input(items: Iterable[dict[str, Any]], result_relative_path: str) 
             raise ResultRegistrationError("RESULT_FILE_PATH_DUPLICATE", "같은 파일 경로를 두 번 지정할 수 없습니다.")
         seen.add(folded)
         suffix = PurePosixPath(local_path).suffix.casefold()
-        media_type = _EXTENSION_MEDIA.get(suffix)
-        if media_type is None:
-            raise ResultRegistrationError("RESULT_FILE_TYPE_UNSUPPORTED", "CSV, JSON, JPG, PNG, MP4, WEBM 파일만 등록할 수 있습니다.")
+        if suffix in _BLOCKED_EXTENSIONS:
+            raise ResultRegistrationError("RESULT_FILE_TYPE_BLOCKED", f"실행 파일·스크립트는 등록할 수 없습니다: {local_path}")
+        media_type = _media_type_for(local_path)
+        known_type = suffix in _EXTENSION_MEDIA
         size = raw.get("size")
         if isinstance(size, bool) or not isinstance(size, int) or size < 0 or size > MAX_FILE_BYTES:
             raise ResultRegistrationError("RESULT_FILE_SIZE_LIMIT", "파일은 32 MiB 이하여야 합니다.")
@@ -369,7 +411,7 @@ def _manifest_input(items: Iterable[dict[str, Any]], result_relative_path: str) 
         if supplied_hash is not None and not re.fullmatch(r"[0-9a-fA-F]{64}", str(supplied_hash)):
             raise ResultRegistrationError("RESULT_FILE_HASH_INVALID", "SHA-256 값 형식이 올바르지 않습니다.")
         declared_type = str(raw.get("media_type") or "").strip().casefold()
-        if declared_type and declared_type != media_type:
+        if known_type and declared_type and declared_type != media_type:
             raise ResultRegistrationError("RESULT_MEDIA_TYPE_INVALID", "파일 확장자와 미디어 형식이 일치하지 않습니다.")
         manifest.append({"relative_path": local_path, "size": size,
                          "sha256": str(supplied_hash).lower() if supplied_hash else None,
@@ -489,7 +531,7 @@ def upload_files(conn: ConnectionLike, draft_id: str, files: list[tuple[str, byt
                 raise ResultRegistrationError("RESULT_FILE_SIZE_MISMATCH", f"업로드한 파일 크기가 선언과 다릅니다: {relative}")
             if item.get("client_sha256") and digest != str(item["client_sha256"]).casefold():
                 raise ResultRegistrationError("RESULT_FILE_HASH_MISMATCH", f"업로드한 파일 해시가 선언과 다릅니다: {relative}")
-            item.update({"size": len(content), "sha256": digest, "media_type": _EXTENSION_MEDIA[PurePosixPath(relative).suffix.casefold()],
+            item.update({"size": len(content), "sha256": digest, "media_type": _media_type_for(relative),
                          "upload_status": "UPLOADED", "inspection_status": "PENDING"})
             conn.execute("""INSERT INTO result_registration_files
                 (draft_id,relative_path,sha256,size_bytes,media_type,content,uploaded_by,uploaded_at)
@@ -1010,7 +1052,10 @@ def _mirror_after_capture(conn: ConnectionLike, draft_id: str, actor: str) -> di
         if status == "PUBLISHED":
             schema_refresh = _refresh_schema(
                 conn, str(row["project_id"]), str(row["request_id"]), str(row["environment"]), actor,
-                capture_cases=False,
+                # Capture the whole Case folder too: the newest stored version
+                # must reflect every Scene, and the auto-sync quick check would
+                # otherwise treat this folder state as already captured.
+                capture_cases=True,
             )
             _begin(conn)
             latest = _draft_row(conn, draft_id, lock=True)

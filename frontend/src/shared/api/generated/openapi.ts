@@ -2058,6 +2058,55 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/folder-discovery/environments/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sync
+         * @description Keep a viewed request in step with its SPDM folders (screens poll this).
+         *
+         *     No client path is accepted; the server re-reads only the selected request's
+         *     confirmed folder scope. Checks are coalesced per scope (see folder_auto_sync).
+         */
+        post: operations["sync_api_folder_discovery_environments_sync_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/folder-discovery/environments/discover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Discover
+         * @description Register new SPDM project/request folders found under the storage root (screens poll this).
+         *
+         *     Takes no path or scope from the client. Any active account may trigger it:
+         *     project.data.view is the company permission that already lets every active
+         *     account list all projects and requests (GET /api/projects), so the result
+         *     reveals nothing new. Folder paths needing review go to global admins only.
+         *     Runs are throttled server-side (see folder_auto_discovery).
+         */
+        post: operations["discover_api_folder_discovery_environments_discover_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/folder-discovery/environments/refresh": {
         parameters: {
             query?: never;
@@ -3002,6 +3051,23 @@ export interface paths {
         };
         /** Distribution */
         get: operations["distribution_api_dashboard_distribution_runs__run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/dashboard/distribution/runs/{run_id}/videos": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Run Videos */
+        get: operations["run_videos_api_dashboard_distribution_runs__run_id__videos_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4587,6 +4653,14 @@ export interface components {
             binding_id: string;
             /** User Id */
             user_id: string;
+        };
+        /** Discover */
+        Discover: {
+            /**
+             * Force
+             * @default false
+             */
+            force: boolean;
         };
         /** DraftManifestFile */
         DraftManifestFile: {
@@ -6539,6 +6613,23 @@ export interface components {
             /** Source Revision */
             source_revision?: number | null;
             stored_file: components["schemas"]["StorageFileResponse"];
+        };
+        /** Sync */
+        Sync: {
+            /** Project Id */
+            project_id: string;
+            /** Request Id */
+            request_id: string;
+            /**
+             * Environment
+             * @enum {string}
+             */
+            environment: "USAGE" | "DISTRIBUTION";
+            /**
+             * Force
+             * @default false
+             */
+            force: boolean;
         };
         /** TaskTypeRef */
         TaskTypeRef: {
@@ -11303,6 +11394,72 @@ export interface operations {
             };
         };
     };
+    sync_api_folder_discovery_environments_sync_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Sync"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    discover_api_folder_discovery_environments_discover_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["Discover"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     refresh_api_folder_discovery_environments_refresh_post: {
         parameters: {
             query?: never;
@@ -13408,6 +13565,43 @@ export interface operations {
                 run_option_id?: string | null;
                 edge_keys?: string;
                 line_indices?: string;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_videos_api_dashboard_distribution_runs__run_id__videos_get: {
+        parameters: {
+            query: {
+                capture_id: string;
+                run_option_id?: string | null;
+                mode?: string | null;
+                page?: number;
+                page_size?: number;
             };
             header?: never;
             path: {

@@ -4,12 +4,30 @@ import { loginWorkspace } from './workspace-test-helpers'
 const requestId = 'request-showcase-waiting'
 const projectId = 'project-feature-showcase'
 
+const ids = { case_id: 'case-1', load_case_id: 'load-drop', execution_run_id: 'run-85' }
 const catalog = {
+  request_id: requestId,
+  environment: 'DISTRIBUTION',
   scenes: [
-    { scene_id: 'small-scene', label: 'Compact deck', relative_path: 'model/compact', hierarchy: {}, kind: 'SCENE', has_deck: true },
-    { scene_id: 'large-scene', label: 'Large deck', relative_path: 'model/large', hierarchy: {}, kind: 'SCENE', has_deck: true },
-    { scene_id: 'result-folder', label: 'Run 02 · results', relative_path: 'model/run-02/results', hierarchy: {}, kind: 'RESULTS', has_deck: true },
+    { scene_id: 'small-scene', label: 'Compact deck', relative_path: 'model/compact', hierarchy: {}, kind: 'SCENE', has_deck: true, ...ids, run_option_id: 'opt-individual' },
+    { scene_id: 'large-scene', label: 'Large deck', relative_path: 'model/large', hierarchy: {}, kind: 'SCENE', has_deck: true, ...ids, run_option_id: 'opt-individual' },
+    { scene_id: 'result-folder', label: 'Run 02 · results', relative_path: 'model/run-02/results', hierarchy: {}, kind: 'RESULTS', has_deck: true, ...ids, run_option_id: 'opt-cumulative' },
   ],
+  hierarchy: {
+    cases: [{ id: 'case-1', label: 'Package_Model_SetCase2', relative_path: 'model' }],
+    load_cases: [{ id: 'load-drop', label: 'Drop', case_id: 'case-1', relative_path: 'model/Drop', capture_id: null, match_status: 'UNCAPTURED' }],
+    execution_runs: [{ id: 'run-85', label: '85qn80h_ref_organized', case_id: 'case-1', load_case_id: 'load-drop', relative_path: 'model/Drop/85', capture_id: null, match_status: 'UNCAPTURED' }],
+    run_options: [
+      { id: 'opt-individual', label: 'INDIVIDUAL', case_id: 'case-1', execution_run_id: 'run-85', run_option_id: 'opt-individual', option_status: 'PRESENT', option_label: 'INDIVIDUAL', mode: 'INDIVIDUAL', relative_path: 'model/Drop/85/INDIVIDUAL', capture_id: null, match_status: 'UNCAPTURED' },
+      { id: 'opt-cumulative', label: 'CUMULATIVE', case_id: 'case-1', execution_run_id: 'run-85', run_option_id: 'opt-cumulative', option_status: 'PRESENT', option_label: 'CUMULATIVE', mode: 'CUMULATIVE', relative_path: 'model/Drop/85/CUMULATIVE', capture_id: null, match_status: 'UNCAPTURED' },
+    ],
+  },
+}
+
+async function chooseScene(page: Page, optionId: string, sceneId?: string) {
+  const path = page.getByRole('group', { name: '소재 덱 경로' })
+  await path.getByLabel('Run Option', { exact: true }).selectOption(optionId)
+  if (sceneId) await path.getByLabel('Scene', { exact: true }).selectOption(sceneId)
 }
 
 const longPartName = `Long rail assembly ${'with segmented reinforcement '.repeat(8)}`
@@ -55,6 +73,8 @@ const largeDeck = deckFor(Array.from({ length: 128 }, (_, index) => {
 }))
 
 async function mockMaterialsApi(page: Page) {
+  // Auto-sync is answered locally so the shared e2e backend does not scan seeded folders between tests.
+  await page.route('**/api/folder-discovery/environments/sync', (route) => route.fulfill({ json: { status: 'UNCHANGED', changed: false, snapshot_id: null, diff: { added: 0, removed: 0, changed: 0 }, code: null, message: null, check_mode: 'QUICK', checked_at: new Date().toISOString(), coalesced: false } }))
   await page.route('**/api/materials/catalog**', (route) => route.fulfill({ json: catalog }))
   await page.route('**/api/materials/deck**', (route) => {
     const sceneId = new URL(route.request().url()).searchParams.get('scene_id')
@@ -69,30 +89,55 @@ async function openMaterials(page: Page) {
   await page.getByLabel('프로젝트 선택', { exact: true }).selectOption(projectId)
   await page.getByLabel('의뢰 선택', { exact: true }).selectOption(requestId)
   await expect.poll(() => new URL(page.url()).searchParams.get('request')).toBe(requestId)
-  await page.getByRole('navigation', { name: '의뢰 작업 여정' }).getByRole('button', { name: '모델 소재·물성', exact: true }).click()
+  // 소재·물성 is a tab inside Case 결과 (no separate journey button).
+  await page.getByRole('navigation', { name: '의뢰 작업 여정' }).getByRole('button', { name: 'Case 결과', exact: true }).click()
+  await page.getByRole('tab', { name: '소재·물성', exact: true }).click()
   await expect(page).toHaveURL(/\/workspace\/requests\?.*view=case_results.*resultTab=materials/)
-  await expect(page.getByRole('heading', { name: '모델 소재·물성', exact: true })).toBeVisible()
+  await expect(page.getByRole('tab', { name: '소재·물성', exact: true })).toHaveAttribute('aria-selected', 'true')
   await expect(page.getByLabel('프로젝트 선택', { exact: true })).toHaveValue(projectId)
   await expect(page.getByLabel('의뢰 선택', { exact: true })).toHaveValue(requestId)
   await expect(page.getByRole('complementary', { name: '주 메뉴' }).getByRole('link', { name: '모델 소재·물성', exact: true })).toHaveCount(0)
 }
 
-test('소재 Refresh는 선택 의뢰만 갱신하고 실패해도 기존 Scene을 유지한다', async ({ page }) => {
+test('소재 탭은 폴더를 자동 확인하고 실패해도 기존 Scene을 유지한다', async ({ page }) => {
+  // Fake timers let the test advance the 30 s poll without waiting for it.
+  await page.clock.install()
   await mockMaterialsApi(page)
-  let refreshCount = 0
-  await page.route('**/api/folder-discovery/environments/refresh', (route) => {
-    refreshCount += 1
-    if (refreshCount === 2) return route.fulfill({ status: 422, json: { detail: { code: 'FOLDER_SCHEMA_SCAN_UNAVAILABLE', message: '저장소를 읽을 수 없습니다.' } } })
-    return route.fulfill({ json: { snapshot_id: 'snapshot-2', project_id: projectId, request_id: requestId, environment: 'DISTRIBUTION', status: 'REFRESHED', changed: true, structure_fingerprint: 'structure-2', content_fingerprint: 'content-2', diff: { added: 0, removed: 0, changed: 0 }, nodes: [] } })
+  const syncBodies: Array<Record<string, unknown>> = []
+  const syncQueue: Array<Record<string, unknown>> = []
+  const syncResult = (status: string, extra: Record<string, unknown> = {}) => ({ status, changed: status === 'REFRESHED', snapshot_id: 'snapshot-2', diff: { added: 0, removed: 0, changed: 0 }, code: null, message: null, check_mode: 'QUICK', checked_at: new Date().toISOString(), coalesced: false, ...extra })
+  await page.route('**/api/folder-discovery/environments/sync', (route) => {
+    syncBodies.push(route.request().postDataJSON())
+    return route.fulfill({ json: syncQueue.shift() ?? syncResult('UNCHANGED') })
   })
+  let catalogRequests = 0
+  page.on('request', (request) => { if (request.url().includes('/api/materials/catalog')) catalogRequests += 1 })
   await openMaterials(page)
-  const refreshRequest = page.waitForRequest((request) => request.url().endsWith('/api/folder-discovery/environments/refresh'))
-  await page.getByRole('button', { name: '저장소 Refresh' }).click()
-  expect((await refreshRequest).postDataJSON()).toEqual({ project_id: projectId, request_id: requestId, environment: 'DISTRIBUTION' })
-  await expect(page.locator('.materials-dashboard .materials-error[role="status"]')).toContainText('저장소와 덱 위치를 갱신했습니다.')
-  await page.getByRole('button', { name: '저장소 Refresh' }).click()
-  await expect(page.locator('.materials-dashboard .materials-error[role="status"]')).toContainText('저장소를 읽을 수 없습니다.')
-  await expect(page.getByLabel('소재 덱 위치 선택')).toHaveValue('small-scene')
+  await chooseScene(page, 'opt-individual', 'small-scene')
+  const syncBar = page.getByRole('group', { name: '폴더 자동 확인' })
+  await expect.poll(() => syncBodies.length).toBeGreaterThan(0)
+  expect(syncBodies.at(-1)).toEqual({ project_id: projectId, request_id: requestId, environment: 'DISTRIBUTION', force: false })
+  await expect(syncBar).toContainText('방금 확인')
+
+  // The 30 s poll reports a change: catalogs are re-read and a short notice appears.
+  const catalogsBefore = catalogRequests
+  const sentBefore = syncBodies.length
+  syncQueue.push(syncResult('REFRESHED', { diff: { added: 1, removed: 0, changed: 0 } }))
+  await page.clock.fastForward(30_000)
+  await expect.poll(() => syncBodies.length).toBeGreaterThan(sentBefore)
+  await expect(syncBar.getByRole('status')).toContainText('새 결과 반영 · Scene +1')
+  await expect.poll(() => catalogRequests).toBeGreaterThan(catalogsBefore)
+  await expect(page.getByRole('group', { name: '소재 덱 경로' }).getByLabel('Scene', { exact: true })).toHaveValue('small-scene')
+
+  // Files still being copied are not an error; the manual check is forced.
+  syncQueue.push(syncResult('FAILED', { code: 'FOLDER_SCHEMA_FILE_BUSY', message: '폴더에 복사 중인 파일이 있습니다.' }))
+  const forced = page.waitForRequest((request) => request.url().endsWith('/api/folder-discovery/environments/sync') && request.postDataJSON()?.force === true)
+  await syncBar.getByRole('button', { name: '지금 확인' }).click()
+  expect((await forced).postDataJSON()).toEqual({ project_id: projectId, request_id: requestId, environment: 'DISTRIBUTION', force: true })
+  await expect(syncBar).toContainText('파일 복사 중 · 잠시 후 다시 확인')
+  await expect(syncBar).not.toContainText('폴더 확인 필요')
+  await expect(page.getByRole('group', { name: '소재 덱 경로' }).getByLabel('Scene', { exact: true })).toHaveValue('small-scene')
+  await expect(page.getByRole('button', { name: '저장소 Refresh' })).toHaveCount(0)
 })
 
 test('소재 탭은 내 작업 문맥과 뒤로 가기를 유지하고 기존 주소를 새 탭으로 보낸다', async ({ page }) => {
@@ -104,13 +149,14 @@ test('소재 탭은 내 작업 문맥과 뒤로 가기를 유지하고 기존 �
   await expect(page.getByRole('region', { name: 'SPDM 해석 결과 대시보드' })).toBeVisible()
   await expect.poll(() => new URL(page.url()).searchParams.get('resultTab')).toBeNull()
   await page.goBack()
-  await expect(page.getByRole('heading', { name: '모델 소재·물성', exact: true })).toBeVisible()
+  await expect(page.getByRole('tab', { name: '소재·물성', exact: true })).toHaveAttribute('aria-selected', 'true')
   await expect.poll(() => new URL(page.url()).searchParams.get('resultTab')).toBe('materials')
   await page.goForward()
   await expect(page.getByRole('region', { name: 'SPDM 해석 결과 대시보드' })).toBeVisible()
 
   await page.goto(`/workspace/materials?project=${projectId}&request=${requestId}`)
-  await expect(page.getByRole('heading', { name: '모델 소재·물성', exact: true })).toBeVisible()
+  // A full reload re-bootstraps the workspace before the redirected tab renders.
+  await expect(page.getByRole('tab', { name: '소재·물성', exact: true })).toHaveAttribute('aria-selected', 'true', { timeout: 15_000 })
   await expect(page).toHaveURL(/\/workspace\/requests\?.*view=case_results.*resultTab=materials/)
 })
 
@@ -135,7 +181,7 @@ test('내 작업에서 프로젝트와 의뢰를 바꾸면 소재 조회도 선�
   await expect.poll(() => new URL(page.url()).searchParams.get('project')).toBe('project-tv-001')
   await expect.poll(() => new URL(page.url()).searchParams.get('request')).toBe(catalogRequestId)
   await expect.poll(() => new URL(page.url()).searchParams.get('resultTab')).toBe('materials')
-  await expect(page.getByRole('heading', { name: '모델 소재·물성', exact: true })).toBeVisible()
+  await expect(page.getByRole('tab', { name: '소재·물성', exact: true })).toHaveAttribute('aria-selected', 'true')
 })
 
 test('소재 표는 긴 이름과 누락 참조를 보여 주고 같은 Material에서도 Part 문맥을 바꾼다', async ({ page }) => {
@@ -143,10 +189,16 @@ test('소재 표는 긴 이름과 누락 참조를 보여 주고 같은 Material
   await openMaterials(page)
 
   await expect(page.getByLabel('소재 덱 환경 선택')).toHaveCount(0)
-  const locationSelect = page.getByLabel('소재 덱 위치 선택')
-  await locationSelect.selectOption('result-folder')
+  const path = page.getByRole('group', { name: '소재 덱 경로' })
+  // Single candidates collapse to fixed text; nothing is auto-picked across branches.
+  await expect(path.locator('[data-hierarchy-level="Case"]')).toContainText('Package_Model_SetCase2')
+  await expect(path.locator('[data-hierarchy-level="하중경우"]')).toContainText('Drop')
+  await expect(page.locator('.materials-part-table')).toHaveCount(0)
+  await chooseScene(page, 'opt-cumulative')
+  await expect(path.locator('[data-hierarchy-level="Scene"]')).toContainText('Run 02 · results')
   await expect(page.getByText('4 / 4 Parts')).toBeVisible()
-  await locationSelect.selectOption('small-scene')
+  await chooseScene(page, 'opt-individual', 'small-scene')
+  await expect.poll(() => new URL(page.url()).searchParams.get('case_option')).toBe('opt-individual')
 
   const rows = page.locator('.materials-part-table tbody tr')
   await expect(rows).toHaveCount(4)
@@ -194,11 +246,14 @@ test('대량 덱의 Part 딥링크는 해당 페이지를 열고 뒤로가기는
   await page.goto(`${deepLink.pathname}${deepLink.search}`)
 
   const rows = page.locator('.materials-part-table tbody tr')
-  await expect(page.getByText('128 / 128 Parts')).toBeVisible()
+  // A full reload re-bootstraps the workspace (auth, projects, request context) before the deck loads.
+  await expect(page.getByText('128 / 128 Parts')).toBeVisible({ timeout: 15_000 })
   await expect(page.locator('.materials-pagination')).toContainText('51–100행')
   const deepLinkedRow = rows.filter({ hasText: 'P076' })
   await expect(deepLinkedRow).toHaveCount(1)
   await expect(deepLinkedRow).toHaveAttribute('aria-selected', 'true')
+  // An old scene-only link restores its parent path.
+  await expect.poll(() => new URL(page.url()).searchParams.get('case_option')).toBe('opt-individual')
 
   await rows.filter({ hasText: 'P075' }).click()
   await expect.poll(() => new URL(page.url()).searchParams.get('part')).toBe('P075')

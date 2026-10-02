@@ -1,0 +1,32 @@
+.shared-hierarchy-path {
+  min-width:0;
+  display:flex;
+  flex-wrap:nowrap;
+  align-items:center;
+  gap:var(--space-2, 8px);
+  padding:var(--space-2, 8px) var(--space-3, 12px);
+  border:1px solid var(--color-border);
+  border-radius:var(--radius-md, 6px);
+  background:var(--color-surface-interactive);
+}
+/* Inline label + value keeps every level on one line. */
+.shared-hierarchy-path > .shared-hierarchy-choice {
+  flex:0 1 auto;
+  display:flex;
+  align-items:center;
+  gap:var(--space-1, 4px);
+  min-width:0;
+  max-width:28ch;
+}
+.shared-hierarchy-path > .shared-hierarchy-choice > span { flex:none; white-space:nowrap; }
+.shared-hierarchy-path > .shared-hierarchy-choice > b,
+.shared-hierarchy-path > .shared-hierarchy-choice > select { min-width:8ch; max-width:100%; }
+.shared-hierarchy-path > .shared-hierarchy-choice--fixed > b { background:transparent; border-color:transparent; padding-inline:var(--space-1, 4px); }
+.shared-hierarchy-path__sep { flex:none; color:var(--color-text-muted); font-weight:700; }
+.shared-hierarchy-path__trailing {
+  flex:1 1 0;
+  min-width:12ch;
+  display:flex;
+  justify-content:flex-end;
+}
+.shared-hierarchy-path__trailing > * { min-width:0; max-width:100%; }

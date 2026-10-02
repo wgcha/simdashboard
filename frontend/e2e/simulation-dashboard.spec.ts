@@ -178,7 +178,8 @@ async function fulfillJson(route: Route, body: unknown) {
 async function openResults(page: Page) {
   await loginWorkspace(page)
   await page.goto('/workspace/requests?project=project-tv-001&request=request-drop-001&view=case_results')
-  await expect(page.getByRole('region', { name: 'SPDM 해석 결과 대시보드' })).toBeVisible()
+  // A full reload re-bootstraps the workspace; allow for a slow first render.
+  await expect(page.getByRole('region', { name: 'SPDM 해석 결과 대시보드' })).toBeVisible({ timeout: 15_000 })
 }
 
 test('usage source review preserves independent slope fields and hides raw diagnostics', async ({ page }) => {
@@ -225,6 +226,8 @@ test('usage source review preserves independent slope fields and hides raw diagn
 async function installDashboardMocks(page: Page, options: { slowUsage?: boolean; distribution?: DashboardDistribution } = {}) {
   let releaseUsage!: () => void
   const usageGate = new Promise<void>((resolve) => { releaseUsage = resolve })
+  // Auto-sync is answered locally so the shared e2e backend does not scan seeded folders between tests.
+  await page.route('**/api/folder-discovery/environments/sync', (route) => route.fulfill({ json: { status: 'UNCHANGED', changed: false, snapshot_id: null, diff: { added: 0, removed: 0, changed: 0 }, code: null, message: null, check_mode: 'QUICK', checked_at: new Date().toISOString(), coalesced: false } }))
   await page.route('**/api/dashboard/catalog**', async (route) => {
     const url = new URL(route.request().url())
     if (url.searchParams.get('environment') === 'USAGE') {
@@ -248,14 +251,32 @@ async function installDashboardMocks(page: Page, options: { slowUsage?: boolean;
   return { releaseUsage }
 }
 
+async function openDisplayOptions(page: Page) {
+  const details = page.locator('.case-display-options')
+  if (await details.getAttribute('open') === null) await details.locator('summary').click()
+  return details.locator('.case-display-options__panel')
+}
+
+async function openCompare(page: Page, view: '엣지별 수준' | '컨투어' | '거동') {
+  await page.getByRole('tab', { name: 'Scene 비교', exact: true }).click()
+  await page.getByRole('group', { name: 'Scene 비교 보기' }).getByRole('button', { name: view, exact: true }).click()
+}
+
 async function chooseDistribution(page: Page) {
   await page.getByRole('button', { name: '유통환경', exact: true }).click()
-  const select = (label: string) => page.locator('.simulation-dashboard__controls label').filter({ hasText: label }).locator('select:visible')
-  await expect(page.locator('.simulation-dashboard__controls')).toContainText('Case A')
-  for (const [label, value] of [['해석 Case', CASE_ID], ['수집 버전', CAPTURE_ID], ['하중경우', 'load-drop'], ['Run Case', RUN_ID], ['Run Option', 'option-individual'], ['Component', COMPONENT_ID], ['Basis', 'DETAIL']] as const) {
-    const field = select(label)
+  const path = page.getByRole('group', { name: 'Case 경로' })
+  await expect(path).toContainText('Case A')
+  for (const [label, value] of [['Case', CASE_ID], ['하중경우', 'load-drop'], ['Run Case', RUN_ID], ['Run Option', 'option-individual']] as const) {
+    const field = path.getByRole('combobox', { name: label, exact: true })
     if (await field.count()) await field.selectOption(value)
   }
+  // Component and Basis are auto-selected and live in the collapsed display options.
+  const options = await openDisplayOptions(page)
+  for (const [label, value] of [['Component', COMPONENT_ID], ['Basis', 'DETAIL']] as const) {
+    const field = options.getByRole('combobox', { name: label, exact: true })
+    if (await field.count()) await field.selectOption(value)
+  }
+  await page.locator('.case-display-options > summary').click()
   await expect(page.getByTestId('distribution-dashboard')).toBeVisible()
 }
 
@@ -263,9 +284,9 @@ test('single Run Option is compact and its stable id is pinned in the URL', asyn
   await installDashboardMocks(page)
   await openResults(page)
   await chooseDistribution(page)
-  await expect(page.locator('.simulation-dashboard__choice').filter({ hasText: 'Run Option' })).toContainText('Individual')
+  await expect(page.getByRole('group', { name: 'Case 경로' }).locator('.shared-hierarchy-choice--fixed[data-hierarchy-level="Run Option"]')).toContainText('Individual')
   await expect(page).toHaveURL(/case_option=option-individual/)
-  await expect(page.locator('.simulation-dashboard__history')).not.toHaveAttribute('open', '')
+  await expect(page.locator('.case-display-options')).not.toHaveAttribute('open', '')
   const evidenceDir = join(tmpdir(), 'simdashboard-option-qa'); mkdirSync(evidenceDir, { recursive: true })
   await page.screenshot({ path: join(evidenceDir, 'compact-option-desktop.png'), fullPage: false })
 })
@@ -275,17 +296,17 @@ test('synthetic distribution renders all 20 scenes, preserves contour cell IDs t
   await openResults(page)
   await chooseDistribution(page)
 
-  await page.getByRole('button', { name: '엣지별 수준', exact: true }).click()
+  await openCompare(page, '엣지별 수준')
   await expect(page.locator('.simulation-dashboard__scene-table > div')).toHaveCount(20)
   await expect(page.locator('.simulation-dashboard__scene-table')).toContainText('20_Face_Drop_Scene20')
 
-  await page.getByRole('button', { name: '컨투어', exact: true }).click()
+  await openCompare(page, '컨투어')
   const cell = page.locator('[data-cell-id="cell-scene-20-member-a"]')
   await expect(cell).toHaveCount(1)
   await page.getByRole('button', { name: '행/열 전치', exact: true }).click()
   await expect(page.locator('[data-cell-id="cell-scene-20-member-a"]')).toHaveCount(1)
 
-  await page.getByRole('button', { name: '결과 요약', exact: true }).click()
+  await page.getByRole('tab', { name: '요약', exact: true }).click()
   const bars = page.locator('.simulation-dashboard__summary .recharts-bar-rectangle')
   // Recharts keeps a geometry node for the null Scene12 datum; the fixture still
   // verifies that the final selectable bar carries Scene20's member context.
@@ -293,7 +314,7 @@ test('synthetic distribution renders all 20 scenes, preserves contour cell IDs t
   await bars.nth(19).click()
   await expect(page.getByText('Scene 상세 · scene-20')).toBeVisible()
 
-  await page.getByRole('button', { name: '컨투어', exact: true }).click()
+  await openCompare(page, '컨투어')
   await page.locator('[data-cell-id="cell-scene-20-member-a"]').getByRole('button', { name: '자산 확대' }).click()
   await expect(page.getByRole('dialog')).toContainText('닫기')
   await page.keyboard.press('Escape')
@@ -304,13 +325,28 @@ test('slow usage catalog cannot overwrite the selected distribution catalog', as
   const { releaseUsage } = await installDashboardMocks(page, { slowUsage: true })
   await openResults(page)
   await page.getByRole('button', { name: '유통환경', exact: true }).click()
-  const controls = page.locator('.simulation-dashboard__controls')
+  const controls = page.getByRole('group', { name: 'Case 경로' })
   await expect(controls).toContainText('하중경우')
   await expect(controls).toContainText('Case A')
   releaseUsage()
   await page.waitForTimeout(150)
   await expect(controls).toContainText('하중경우')
   await expect(page.getByText('다섯 평가 종합')).toHaveCount(0)
+})
+
+test('folder auto-sync follows the Case results environment tab', async ({ page }) => {
+  await installDashboardMocks(page)
+  const environments: string[] = []
+  await page.route('**/api/folder-discovery/environments/sync', (route) => {
+    environments.push(String(route.request().postDataJSON()?.environment))
+    return route.fulfill({ json: { status: 'UNCHANGED', changed: false, snapshot_id: null, diff: { added: 0, removed: 0, changed: 0 }, code: null, message: null, check_mode: 'QUICK', checked_at: new Date().toISOString(), coalesced: false } })
+  })
+  await openResults(page)
+  await expect.poll(() => environments.at(-1)).toBe('USAGE')
+  await page.getByRole('button', { name: '유통환경', exact: true }).click()
+  await expect.poll(() => environments.at(-1)).toBe('DISTRIBUTION')
+  await expect(page.getByRole('button', { name: '저장소 Refresh' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '결과 다시 읽기' })).toHaveCount(0)
 })
 
 function comparisonRegressionPayload(): DashboardDistribution {
@@ -327,7 +363,7 @@ test('Case legend preserves an empty selection and stable colors when hiding and
   await installDashboardMocks(page, { distribution: comparisonRegressionPayload() })
   await openResults(page)
   await chooseDistribution(page)
-  await page.getByRole('button', { name: '엣지별 수준', exact: true }).click()
+  await openCompare(page, '엣지별 수준')
   const legend = page.getByRole('group', { name: 'Case 범례' })
   const caseA = legend.getByRole('checkbox', { name: 'Case A', exact: true })
   const caseB = legend.getByRole('checkbox', { name: 'Case B', exact: true })
@@ -364,12 +400,12 @@ test('clearing every edge shows no selection and selecting an edge restores the 
   await installDashboardMocks(page)
   await openResults(page)
   await chooseDistribution(page)
-  const picker = page.locator('.simulation-dashboard__toolbar').getByRole('checkbox')
+  const picker = (await openDisplayOptions(page)).getByRole('checkbox')
   // Only edge controls, leaving the four line controls selected.
   for (const edge of ['TOP', 'BOTTOM', 'LEFT', 'RIGHT']) await picker.and(page.getByRole('checkbox', { name: edge, exact: true })).uncheck()
   await expect(page.locator('.simulation-dashboard__summary')).toContainText('선택 없음')
   await expect(page.locator('.simulation-dashboard__summary .recharts-bar-rectangle')).toHaveCount(0)
-  await page.getByRole('checkbox', { name: 'TOP', exact: true }).check()
+  await picker.and(page.getByRole('checkbox', { name: 'TOP', exact: true })).check()
   await expect(page.locator('.simulation-dashboard__summary .recharts-bar-rectangle')).toHaveCount(20)
 })
 
@@ -433,7 +469,7 @@ test('contour values retain scope and unknown timing with descriptions and scale
   await installDashboardMocks(page, { distribution: payload })
   await openResults(page)
   await chooseDistribution(page)
-  await page.getByRole('button', { name: '컨투어', exact: true }).click()
+  await openCompare(page, '컨투어')
   const matrix = page.locator('.simulation-dashboard__matrix')
   const cell = page.locator('[data-cell-id="cell-scene-20-member-a"]')
   await expect(matrix).toContainText('Scale bar')
@@ -471,8 +507,8 @@ test('fresh request reaches the Case usage review and clears prior capture conte
   await expect(project).toHaveValue('project-feature-showcase')
   await expect(request).toHaveValue('request-showcase-waiting')
   await page.getByRole('button', { name: 'Case 결과', exact: true }).click()
-  const controls = page.locator('.simulation-dashboard__controls')
-  const caseBadge = controls.locator('.simulation-dashboard__choice').filter({ hasText: '해석 Case' })
+  const controls = page.getByRole('group', { name: 'Case 경로' })
+  const caseBadge = controls.locator('[data-hierarchy-level="Case"]')
   const captureBadge = controls.locator('.simulation-dashboard__capture-pin')
   await expect(caseBadge).toContainText('Usage Case')
   await expect(captureBadge).toContainText('usage capture')
@@ -507,4 +543,41 @@ test('fresh request reaches the Case usage review and clears prior capture conte
   await project.selectOption('project-tv-001')
   await expect(request).not.toHaveValue('request-showcase-waiting')
   await expect(page.getByTestId('usage-dashboard')).toHaveCount(0)
+})
+
+async function checkWideLayout(page: Page, screenshot: string) {
+  await expect(page.getByRole('tablist', { name: '결과 보기' }).getByRole('tab')).toHaveCount(4)
+  await expect(page.getByRole('tab', { name: '요약', exact: true })).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByRole('button', { name: 'Final 지정', exact: true })).toBeVisible()
+  // The Case path is one row: every level shares the same vertical band.
+  const tops = await page.getByRole('group', { name: 'Case 경로' }).locator('.shared-hierarchy-choice').evaluateAll((nodes) => nodes.map((node) => Math.round(node.getBoundingClientRect().top)))
+  expect(tops.length).toBeGreaterThanOrEqual(4)
+  expect(Math.max(...tops) - Math.min(...tops)).toBeLessThanOrEqual(4)
+  expect(await page.evaluate(() => document.scrollingElement!.scrollWidth <= document.scrollingElement!.clientWidth)).toBe(true)
+  await page.screenshot({ path: join(tmpdir(), screenshot), fullPage: false })
+}
+
+test.describe('4K monitor at 150%', () => {
+  // Primary target: 32" 4K at Windows 150% scaling (2560×1440 CSS px).
+  test.use({ viewport: { width: 2560, height: 1440 }, deviceScaleFactor: 1.5 })
+  test('Case results fits in dark and light themes without horizontal scroll', async ({ page }) => {
+    await installDashboardMocks(page)
+    await openResults(page)
+    await chooseDistribution(page)
+    for (const theme of ['dark', 'light'] as const) {
+      await page.getByRole('button', { name: theme === 'light' ? '라이트' : '다크', exact: true }).click()
+      await expect(page.locator('.app-shell')).toHaveAttribute('data-theme', theme)
+      await checkWideLayout(page, `case-results-4k-${theme}.png`)
+    }
+  })
+})
+
+test.describe('4K monitor at 100%', () => {
+  test.use({ viewport: { width: 3840, height: 2160 }, deviceScaleFactor: 1 })
+  test('Case results fits 3840×2160 without horizontal scroll', async ({ page }) => {
+    await installDashboardMocks(page)
+    await openResults(page)
+    await chooseDistribution(page)
+    await checkWideLayout(page, 'case-results-4k-3840.png')
+  })
 })

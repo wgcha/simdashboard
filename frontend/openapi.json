@@ -6148,6 +6148,93 @@
         }
       }
     },
+    "/api/folder-discovery/environments/sync": {
+      "post": {
+        "tags": [
+          "folder-discovery-environments"
+        ],
+        "summary": "Sync",
+        "description": "Keep a viewed request in step with its SPDM folders (screens poll this).\n\nNo client path is accepted; the server re-reads only the selected request's\nconfirmed folder scope. Checks are coalesced per scope (see folder_auto_sync).",
+        "operationId": "sync_api_folder_discovery_environments_sync_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Sync"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/folder-discovery/environments/discover": {
+      "post": {
+        "tags": [
+          "folder-discovery-environments"
+        ],
+        "summary": "Discover",
+        "description": "Register new SPDM project/request folders found under the storage root (screens poll this).\n\nTakes no path or scope from the client. Any active account may trigger it:\nproject.data.view is the company permission that already lets every active\naccount list all projects and requests (GET /api/projects), so the result\nreveals nothing new. Folder paths needing review go to global admins only.\nRuns are throttled server-side (see folder_auto_discovery).",
+        "operationId": "discover_api_folder_discovery_environments_discover_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/Discover"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/folder-discovery/environments/refresh": {
       "post": {
         "tags": [
@@ -9327,6 +9414,110 @@
               "type": "string",
               "default": "1,2,3,4",
               "title": "Line Indices"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dashboard/distribution/runs/{run_id}/videos": {
+      "get": {
+        "tags": [
+          "result-dashboard"
+        ],
+        "summary": "Run Videos",
+        "operationId": "run_videos_api_dashboard_distribution_runs__run_id__videos_get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "capture_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Capture Id"
+            }
+          },
+          {
+            "name": "run_option_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Run Option Id"
+            }
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mode"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1,
+              "title": "Page"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 20,
+              "minimum": 1,
+              "default": 20,
+              "title": "Page Size"
             }
           }
         ],
@@ -14462,6 +14653,17 @@
           "user_id"
         ],
         "title": "DeviceSessionResponse"
+      },
+      "Discover": {
+        "properties": {
+          "force": {
+            "type": "boolean",
+            "title": "Force",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "Discover"
       },
       "DraftManifestFile": {
         "properties": {
@@ -20480,6 +20682,42 @@
           "stored_file"
         ],
         "title": "StructuredUploadResponse"
+      },
+      "Sync": {
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Project Id"
+          },
+          "request_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Request Id"
+          },
+          "environment": {
+            "type": "string",
+            "enum": [
+              "USAGE",
+              "DISTRIBUTION"
+            ],
+            "title": "Environment"
+          },
+          "force": {
+            "type": "boolean",
+            "title": "Force",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "project_id",
+          "request_id",
+          "environment"
+        ],
+        "title": "Sync"
       },
       "TaskTypeRef": {
         "properties": {

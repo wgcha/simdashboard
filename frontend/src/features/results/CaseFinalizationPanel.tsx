@@ -115,7 +115,7 @@ export function CaseFinalizationPanel(props: Props) {
       if (token !== generation.current) return
       setPreview(null)
       setDialogOpen(false)
-      setNotice(`최종확정이 완료되었습니다 · ${result.files.length}개 파일 · ${formatDate(result.confirmed_at)}`)
+      setNotice(`Final 지정 완료 · ${result.files.length}개 파일`)
       await refreshStatus(token)
     } catch (cause) {
       if (token === generation.current) setError(cause instanceof Error ? cause.message : '최종확정을 완료하지 못했습니다. 같은 요청으로 다시 시도할 수 있습니다.')
@@ -128,33 +128,30 @@ export function CaseFinalizationPanel(props: Props) {
   const currentCaptureMismatch = Boolean(current && captureId && current.capture_id !== captureId)
   const retryable = captureId ? status?.retryable_operations?.find((item) => item.capture_id === captureId) : undefined
 
+  const unverified = status && status.unverified_records > 0 ? `확정 이력 ${status.unverified_records}건의 무결성을 확인하지 못했습니다. 기존 파일은 보존되어 있습니다.` : ''
+  const missing = [current?.missing.rad_decks ? 'RAD 없음' : '', current?.missing.inc_decks ? 'INC 없음' : '', current?.missing.reports ? '보고서 없음' : ''].filter(Boolean)
+  const requestLatest = status?.latest && status.latest.case_id !== caseId ? `의뢰 최근 확정: ${status.latest.case_label} · ${formatDate(status.latest.confirmed_at)}` : ''
+  const badgeText = current ? (currentCaptureMismatch ? '이전 결과로 확정' : '확정 완료') : !hasCapturedCase ? '결과 없음' : status ? '미확정' : error ? '확인 필요' : '확인 중'
+  const badgeTitle = [current ? `확정 ${current.operation_id.slice(0, 8)} · ${current.files.length}개 파일 · ${formatDate(current.confirmed_at)}` : '', missing.join(' · '), requestLatest, unverified].filter(Boolean).join('\n') || undefined
+
   return <>
-    <div className="case-finalization" aria-label="Case 최종확정">
-      <button type="button" className="case-finalization__trigger" disabled={!canFinalize || busy || !captureId || !caseId} onClick={() => void makePreview()}>
-        {busy ? <LoaderCircle size={15} className="case-finalization__spinner" /> : <FileArchive size={15} aria-hidden="true" />}
-        최종확정
-      </button>
-      {current ? <span className={`case-finalization__status case-finalization__status--complete${currentCaptureMismatch ? ' case-finalization__status--mismatch' : ''}`} title={`확정 캡처 ID ${current.capture_id} · 확정 ID ${current.operation_id} · ${current.files.length}개 파일 · ${formatDate(current.confirmed_at)}`}>
-        <CheckCircle2 size={14} aria-hidden="true" /> {currentCaptureMismatch ? '다른 수집본으로 확정' : '확정 완료'}
-        <span className="case-finalization__capture-id">캡처 {current.capture_id}</span>
-        <span>· {current.operation_id.slice(0, 8)} · {formatDate(current.confirmed_at)}</span>
-      </span> : <span className="case-finalization__status">{!hasCapturedCase ? '결과 미수집' : status ? '미확정' : error ? '상태 확인 실패' : '상태 확인 중'}</span>}
-      {current?.missing.rad_decks && <span className="case-finalization__missing-inline">RAD 없음</span>}
-      {current?.missing.inc_decks && <span className="case-finalization__missing-inline">INC 없음</span>}
-      {current?.missing.reports && <span className="case-finalization__missing-inline">보고서 없음</span>}
+    <div className="case-finalization" role="group" aria-label="Case 최종확정">
+      <span className={`case-finalization__status${current ? ' case-finalization__status--complete' : ''}${currentCaptureMismatch || missing.length || unverified ? ' case-finalization__status--mismatch' : ''}`} title={badgeTitle}>
+        {current ? <CheckCircle2 size={14} aria-hidden="true" /> : null}{badgeText}{missing.length || unverified ? <AlertTriangle size={13} aria-label="확인 필요 항목 있음" /> : null}
+      </span>
       {retryable && <button type="button" className="case-finalization__retry" disabled={!canFinalize || busy} onClick={() => void confirmOperation(retryable.operation_id)}>
         <RotateCcw size={13} aria-hidden="true" /> 재시도
       </button>}
+      <button type="button" className="case-finalization__trigger" title={canFinalize ? undefined : 'Final 지정 권한이 있는 사용자만 실행할 수 있습니다.'} disabled={!canFinalize || busy || !captureId || !caseId} onClick={() => void makePreview()}>
+        {busy ? <LoaderCircle size={15} className="case-finalization__spinner" /> : <FileArchive size={15} aria-hidden="true" />}
+        Final 지정
+      </button>
+      {error && <span className="case-finalization__message case-finalization__message--error" role="alert" title={error}><AlertTriangle size={14} />{error}</span>}
+      {notice && <span className="case-finalization__message" role="status" title={notice}><CheckCircle2 size={14} />{notice}</span>}
     </div>
-    {status?.latest && status.latest.case_id !== caseId && <p className="case-finalization__request-latest">의뢰 최근 확정: {status.latest.case_label} · 캡처 {status.latest.capture_id} · {status.latest.operation_id.slice(0, 8)} · {formatDate(status.latest.confirmed_at)}</p>}
-    {error && <p className="case-finalization__message case-finalization__message--error" role="alert"><AlertTriangle size={14} />{error}</p>}
-    {notice && <p className="case-finalization__message" role="status"><CheckCircle2 size={14} />{notice}</p>}
-    {status && status.unverified_records > 0 && <p className="case-finalization__message case-finalization__message--error" role="alert"><AlertTriangle size={14} />확정 이력 {status.unverified_records}건의 무결성을 확인하지 못했습니다. 기존 파일은 보존되어 있습니다.</p>}
-    {!canFinalize && <span className="case-finalization__hint">최종확정 권한이 있는 사용자만 실행할 수 있습니다.</span>}
-
     {preview && <dialog ref={dialogRef} className="case-finalization__dialog" aria-labelledby="case-finalization-dialog-title" onCancel={(event) => { event.preventDefault(); setDialogOpen(false) }}>
         <header className="case-finalization__dialog-heading">
-          <div><h3 id="case-finalization-dialog-title">최종확정 파일 확인</h3><p>{preview.case_label} · {preview.files.length}개 파일</p></div>
+          <div><h3 id="case-finalization-dialog-title">Final 지정 파일 확인</h3><p>{preview.case_label} · {preview.files.length}개 파일</p></div>
           <button type="button" className="case-finalization__close" aria-label="닫기" onClick={() => setDialogOpen(false)}>×</button>
         </header>
         <div className="case-finalization__dialog-body">

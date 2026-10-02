@@ -18,7 +18,7 @@ from . import dashboard_capture
 from . import environment_folder_profiles
 from . import folder_discovery as legacy
 from . import spdm_storage
-from .folder_discovery_scan import MAX_SECONDS, root_identity, scan
+from .folder_discovery_scan import MAX_SECONDS, relevant_content_fingerprint, root_identity, scan, stat_fingerprint
 from .environment_folder_profiles import resolve_role
 from . import usage_source_review
 
@@ -30,6 +30,11 @@ ROLES = {
 _EVALUATIONS = {"settle", "wobble", "horizontal_force_angle", "slope_angle", "slope_angle_360"}
 _SCENE = re.compile(r"(scene|result|contour|animation)", re.I)
 _logger = logging.getLogger(__name__)
+# Revision of the refresh role interpretation stored in each snapshot. A
+# snapshot from an older revision is re-interpreted once even when the folder
+# fingerprints are unchanged, so a rule fix reaches already scanned folders.
+# 2: undecided folders that only failed the name pattern may inherit a LEVEL role.
+ROLE_RULES_REVISION = 2
 
 
 def now(): return datetime.now(timezone.utc).replace(tzinfo=None)
@@ -277,22 +282,28 @@ def refresh_scope(conn, root, project_id: str, request_id: str, environment: str
         raise resolver.FolderSchemaError("FOLDER_SCHEMA_SCAN_UNAVAILABLE", "현재 의뢰 폴더를 안전하게 조사할 수 없습니다.", 422) from exc
     if fresh.get("status") != "COMPLETE":
         raise resolver.FolderSchemaError("FOLDER_SCHEMA_SCAN_INCOMPLETE", "현재 의뢰 폴더를 모두 확인할 수 없습니다.", 422)
+    content_entries: list = []
     structure_fingerprint, content_fingerprint = resolver.scan_fingerprints(
-        fresh, root, deadline=refresh_deadline,
+        fresh, root, deadline=refresh_deadline, content_entries=content_entries,
     )
+    quick_fingerprint = stat_fingerprint(fresh)
+    result_content_fingerprint = relevant_content_fingerprint(content_entries)
 
     if (previous and not registration_roles_changed
             and int(previous["profile_revision"]) == profile["revision"]
             and str(previous["request_relative_path"]) == request_path
             and str(previous["structure_fingerprint"]) == structure_fingerprint
-            and str(previous["content_fingerprint"]) == content_fingerprint):
+            and str(previous["content_fingerprint"]) == content_fingerprint
+            and isinstance(previous_schema, dict)
+            and previous_schema.get("role_rules_revision") == ROLE_RULES_REVISION):
         snapshot_id = str(previous["id"])
         location_projection = resolver.resolve_request_locations(
             conn, project_id, request_id, environment, schema=previous_schema,
         )
-        return _refresh_result(snapshot_id, "UNCHANGED", False, previous_schema,
-                               structure_fingerprint, content_fingerprint,
-                               {"added": 0, "removed": 0, "changed": 0}, location_projection)
+        return {**_refresh_result(snapshot_id, "UNCHANGED", False, previous_schema,
+                                  structure_fingerprint, content_fingerprint,
+                                  {"added": 0, "removed": 0, "changed": 0}, location_projection),
+                "stat_fingerprint": quick_fingerprint}
 
     prior_nodes = list(previous_schema.get("nodes") or []) if isinstance(previous_schema, dict) else []
     prior_by_path = {resolver._fold(str(node.get("relative_path") or "")): node for node in prior_nodes}
@@ -393,22 +404,38 @@ def refresh_scope(conn, root, project_id: str, request_id: str, environment: str
 
     for node in scoped_nodes:
         path_key = resolver._fold(str(node.get("relative_path") or ""))
-        if path_key in prior_scanned_paths or node.get("role_basis") == "RULE":
+        # A folder that only failed the name pattern (DEFAULT basis, no role,
+        # no saved decision) is still undecided. It may inherit the single
+        # role used at its parent role/depth even when an earlier scan already
+        # saw it, so a Scene created empty and refreshed later is not stuck.
+        undecided = (not node.get("role_kind") and node.get("status") == "UNRESOLVED"
+                     and node.get("role_basis") == "DEFAULT")
+        if (path_key in prior_scanned_paths and not undecided) or node.get("role_basis") == "RULE":
             if node.get("role_basis") == "RULE" and node.get("status") == "UNRESOLVED":
                 node["role_basis"] = "CONFLICT"
             elif node.get("role_basis") == "RULE":
                 node["role_basis"] = "PATTERN"
                 node["confirmed"] = True
             continue
-        if node.get("status") != "CONTAINER" or node.get("role_kind"):
+        if (node.get("status") != "CONTAINER" and not undecided) or node.get("role_kind"):
             continue
         relative_depth = len(PurePosixPath(str(node["relative_path"])).parts) - request_depth
         parent_role = nearest_parent_role(node, current_by_path)
         possibilities = inherited_roles.get((parent_role, relative_depth), set())
+        if undecided and (len(possibilities) != 1 or "SCENE" not in possibilities):
+            # Undecided folders only gain the Scene role (a user adding a Scene
+            # beside existing Scenes, with or without a Run option level). Any
+            # other or ambiguous level keeps its prior UNRESOLVED state and must
+            # never turn into a refresh-blocking CONFLICT.
+            continue
         if len(possibilities) == 1:
             role = next(iter(possibilities))
             node.update(role_kind=role, status="CONFIRMED", confirmed=True,
                         role_basis="LEVEL", role_source="INHERITED")
+            if undecided:
+                node.pop("message", None)
+                if node.get("option_status") == "UNRESOLVED":
+                    node["option_status"] = "PRESENT" if role == "RUN_OPTION" else None
             if role == "SCENE" and not node.get("target_id"):
                 node["target_id"] = stable("environment-scene", root_key, node["relative_path"], role)
         elif len(possibilities) > 1:
@@ -449,6 +476,11 @@ def refresh_scope(conn, root, project_id: str, request_id: str, environment: str
         "scan": {"id": "pending", "relative_path": request_path, "profile_id": profile["id"],
                  "profile_revision": profile["revision"], "status": "COMPLETE"},
         "nodes": scoped_nodes, "confirmed_roles": confirmed_roles_now,
+        "role_rules_revision": ROLE_RULES_REVISION,
+        # Quick auto-sync check (names, sizes, mtimes only); see folder_auto_sync.
+        "stat_fingerprint": quick_fingerprint,
+        # Result-relevant files by content; unread files (logs) do not count.
+        "result_content_fingerprint": result_content_fingerprint,
         "issues": fresh.get("issues", []),
         "structure_fingerprint": structure_fingerprint,
         "content_fingerprint": content_fingerprint,
@@ -459,11 +491,24 @@ def refresh_scope(conn, root, project_id: str, request_id: str, environment: str
         location_projection = resolver.resolve_request_locations(
             conn, project_id, request_id, environment, schema=schema,
         )
-        return _refresh_result(
+        return {**_refresh_result(
             str(previous["id"]) if previous else None, "CONFLICT", False, schema,
             structure_fingerprint, content_fingerprint, diff, location_projection,
             activated=False,
-        )
+        ), "stat_fingerprint": quick_fingerprint}
+    # Results are unchanged when no node changed and the result-relevant files
+    # kept their size/mtime (only logs or other unread files changed), or the
+    # whole content fingerprint is identical (a role-rule revision re-read).
+    revision_only_unchanged = bool(
+        previous and not registration_roles_changed
+        and int(previous["profile_revision"]) == profile["revision"]
+        and str(previous["request_relative_path"]) == request_path
+        and str(previous["structure_fingerprint"]) == structure_fingerprint
+        and (str(previous["content_fingerprint"]) == content_fingerprint
+             or (isinstance(previous_schema, dict)
+                 and previous_schema.get("result_content_fingerprint") == result_content_fingerprint))
+        and not any(diff.values())
+    )
     snapshot_id = ident("folder-refresh")
     schema["scan"]["id"] = snapshot_id
     snapshot = {
@@ -490,7 +535,7 @@ def refresh_scope(conn, root, project_id: str, request_id: str, environment: str
             conn, project_id, request_id, environment, schema=schema,
         )
         capture_errors = []
-        if capture_cases:
+        if capture_cases and not revision_only_unchanged:
             storage_root_id = dashboard_capture._root_id(root)
             for case_node in scoped_nodes:
                 if case_node.get("role_kind") != "SIMULATION_CASE" or case_node.get("status") != "CONFIRMED":
@@ -520,8 +565,9 @@ def refresh_scope(conn, root, project_id: str, request_id: str, environment: str
     except BaseException:
         conn.execute("ROLLBACK")
         raise
-    return _refresh_result(snapshot_id, "REFRESHED", True, schema,
-                           structure_fingerprint, content_fingerprint, diff, location_projection)
+    return {**_refresh_result(snapshot_id, "REFRESHED", not revision_only_unchanged, schema,
+                              structure_fingerprint, content_fingerprint, diff, location_projection),
+            "stat_fingerprint": quick_fingerprint}
 
 
 def _refresh_diff(previous_nodes: list[dict], current_nodes: list[dict], resolver) -> dict[str, int]:
@@ -555,7 +601,20 @@ def _refresh_result(snapshot_id, status, changed, schema, structure_fingerprint,
     }
 
 
-def save_scan(conn, root, relative_path: str, environment: str, profile_id: str | None, project_id: str | None, request_id: str | None, actor: str):
+def _skip_with_boundaries(base, skip_paths):
+    """Also skip the descendants of explicit boundary folders (e.g. sibling requests)."""
+    folded = {str(path).strip("/").casefold() for path in (skip_paths or ()) if str(path).strip("/")}
+    if not folded:
+        return base
+
+    def should_skip(relative_path: str, parent_path: str | None) -> bool:
+        return str(relative_path).strip("/").casefold() in folded or base(relative_path, parent_path)
+
+    return should_skip
+
+
+def save_scan(conn, root, relative_path: str, environment: str, profile_id: str | None, project_id: str | None, request_id: str | None, actor: str,
+              *, skip_paths=None):
     if environment not in ENVIRONMENTS: raise ValueError("지원하지 않는 환경입니다.")
     if request_id and not project_id:
         found = conn.execute("SELECT project_id FROM analysis_requests WHERE id=?", [request_id]).fetchone()
@@ -573,7 +632,7 @@ def save_scan(conn, root, relative_path: str, environment: str, profile_id: str 
             request_path = resolver._request_path(conn, root_key, project_id, request_id, environment)
         except (ValueError, KeyError):
             request_path = None
-    result = scan(root, relative_path, skip_descendants=_skip_final_archive(request_path))
+    result = scan(root, relative_path, skip_descendants=_skip_with_boundaries(_skip_final_archive(request_path), skip_paths))
     nodes = _interpret(result["nodes"], root_key, environment, project_id, request_id,
                        profile["rules"], seed_request_path=request_path)
     scan_id = ident("environment-scan")
@@ -770,7 +829,12 @@ def _expanded_preview_assignments(nodes, assignments):
     return [*propagated.values(), *direct.values()]
 
 
-def preview(conn, scan_id, assignments, actor, require_usage_review=False):
+def preview(conn, scan_id, assignments, actor, require_usage_review=False, *, allow_without_cases=False):
+    """Build a registration preview.
+
+    ``allow_without_cases`` lets automatic discovery register a new request whose
+    Working folder has no Case yet; every other blocker still applies.
+    """
     records = rows(conn.execute("SELECT id,root_key,environment,project_id,request_id,status,tree_json FROM folder_environment_scans WHERE id=?", [scan_id]))
     if not records: legacy.fail("ENVIRONMENT_SCAN_NOT_FOUND", "환경 조사 결과를 찾을 수 없습니다.", 404)
     saved = records[0]; nodes = decoded(saved["tree_json"])
@@ -865,8 +929,10 @@ def preview(conn, scan_id, assignments, actor, require_usage_review=False):
             existing += 1
     work_rows = [n for n in plan if n["role_kind"] not in {"EVALUATION", "SCENE"}]
     case_count = sum(n["role_kind"] == "SIMULATION_CASE" for n in plan)
-    can_apply = not unresolved and saved["status"] == "COMPLETE" and case_count > 0
-    if case_count == 0:
+    has_request = any(n["role_kind"] == "REQUEST" for n in plan)
+    can_apply = (not unresolved and saved["status"] == "COMPLETE"
+                 and (case_count > 0 or (allow_without_cases and has_request)))
+    if case_count == 0 and not (allow_without_cases and has_request):
         unresolved.append({"message": "등록할 Simulation Case가 없습니다."})
     preview_id = ident("environment-preview")
     review_required = bool(require_usage_review and saved["environment"] == "USAGE")
@@ -1004,7 +1070,7 @@ def _registration_location_projection(conn, root, project_id: str, request_id: s
     )
 
 
-def register(conn, preview_id, idempotency_key, capture, principal, root):
+def register(conn, preview_id, idempotency_key, capture, principal, root, *, creator_membership=True):
     actor = principal.user_id
     existing = conn.execute("SELECT id,preview_id FROM folder_environment_registrations WHERE idempotency_key=?", [idempotency_key]).fetchone()
     if existing:
@@ -1025,8 +1091,13 @@ def register(conn, preview_id, idempotency_key, capture, principal, root):
             request_path = resolver._request_path(conn, str(scan_row[0]), str(scan_row[3]), str(scan_row[4]), str(scan_row[2]))
         except (ValueError, KeyError):
             request_path = None
-    fresh = scan(root, str(scan_row[1]), skip_descendants=_skip_final_archive(request_path))
-    saved_paths = [item["relative_path"] for item in decoded(scan_row[5])]
+    saved_tree = decoded(scan_row[5])
+    # Re-scan with the same boundaries the saved scan used (Final archives and
+    # any explicitly skipped sibling folders keep their descendants unread).
+    boundaries = [item["relative_path"] for item in saved_tree if item.get("children_skipped")]
+    fresh = scan(root, str(scan_row[1]),
+                 skip_descendants=_skip_with_boundaries(_skip_final_archive(request_path), boundaries))
+    saved_paths = [item["relative_path"] for item in saved_tree]
     if fresh["status"] != "COMPLETE" or [item["relative_path"] for item in fresh["nodes"]] != saved_paths or root_identity(root) != scan_row[0]:
         legacy.fail("ENVIRONMENT_SCAN_STALE", "조사 이후 폴더 구조 또는 저장소가 변경되었습니다. 다시 조사하세요.")
     registration_id = ident("environment-registration")
@@ -1045,7 +1116,7 @@ def register(conn, preview_id, idempotency_key, capture, principal, root):
                 if conn.execute(f"SELECT 1 FROM {table} WHERE id=?", [item["target_id"]]).fetchone():
                     continue
                 material = {"role_kind": item["role_kind"], "target_id": item["target_id"], "name": item["name"], "code": "", "parent_target_id": item.get("parent_context"), "analysis_type": ""}
-                legacy.materialize(conn, material, principal)
+                legacy.materialize(conn, material, principal, creator_membership=creator_membership)
         project_id = scan_row[3] or next((r.get("target_id") for r in plan_rows if r["role_kind"] == "PROJECT"), None)
         request_id = scan_row[4] or next((r.get("target_id") for r in plan_rows if r["role_kind"] == "REQUEST"), None)
         if not project_id or not request_id: legacy.fail("ENVIRONMENT_CONTEXT_REQUIRED", "프로젝트와 의뢰 연결을 확인하세요.")

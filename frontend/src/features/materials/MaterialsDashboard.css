@@ -19,6 +19,37 @@
 }
 
 .materials-page-head > div:first-child { min-width: 260px; }
+.materials-page-head { flex-wrap: wrap; }
+.materials-hierarchy {
+  flex: 1 0 100%;
+  min-width: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+.materials-scene-location {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-text-muted);
+  font-size: var(--text-caption);
+}
+.materials-scene-location > span {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.materials-scene-location > b {
+  flex: none;
+  padding: 2px var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-weight: 700;
+}
+.materials-scene-location > b.present { border-color: var(--color-accent); color: var(--color-accent); }
+.materials-scene-location > b.absent { border-color: var(--color-warning); color: var(--color-warning); }
 .materials-page-head > div:first-child > span {
   color: var(--color-accent);
   font: 700 var(--text-caption) var(--font-mono);
@@ -358,3 +389,12 @@
 @media (min-width: 1280px) {
   .materials-dashboard { height: calc(100vh - 66px); }
 }
+
+/* Embedded in the Case results page (소재·물성 tab). */
+.materials-dashboard--embedded {
+  min-height: 0;
+  grid-template-rows: none;
+  padding: 0;
+  background: transparent;
+}
+.case-path-slot .materials-hierarchy { margin-bottom: var(--space-3); }

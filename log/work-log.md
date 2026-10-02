@@ -1008,3 +1008,64 @@
 - 격리 백엔드 회귀 9개 통과(52.25초): 실제 서로 다른 두 임시 root에서 기존 실패 등록 재시도 후 선택 Case 완료·정확한 소유자·결과 값 33.0 확인, 타 의뢰/프로젝트 Case 저장 거부 및 중복/근거 없음/타 업무 ID/미적용 preview 검증. TypeScript/Vite build 통과(기존 chunk 크기 경고); 최초 빌드 캐시 EPERM은 허용된 권한 확장 실행으로 해결했다. Sol diff 검수와 독립 Astra 기능·보안 검수 완료.
 - Codex Security diff e75ec0a5-7c82-4a5c-92f7-a95ddfbca01a 완료: baseline 7757f28, snapshot c2110a8a443bf45a7f9ebec34e2600ac93516cfc01872aa8142a7e6aba899492, 소스 3/3 및 변경 테스트·문서 검토, 보안 후보/발견/deferred 0건. 완결 문서 재확인. 도구의 연결 대화 누적 사용량 1,807,806 tokens, cached input 1,781,376이며 이번 수정의 증분 사용량으로 해석하지 않는다. 스캔 이후 변경은 이 작업 기록뿐이다.
 - 사용자 DB·설정·실행 중 서비스는 변경하거나 검증 대상으로 사용하지 않았다. 실제 결과 재읽기와 Windows Server 2022 현장 배포는 미실행. migration·의존성·배포 계약 변경 없음; 프로그램 업데이트/재시작 후 기존 등록에서 미완료 결과 다시 읽기를 사용한다.
+
+## 2026-10-02 소재물성 계층 선택 UI 계획
+- 사용자 결과 읽기 정상 확인 후, Case 결과와 같은 해석 Case→하중경우→Run Case→Run Option→Scene 선택을 소재물성에 적용하는 후속 계획을 기존 소재물성 구현 계획에 추가했다. 현재 소재 catalog hierarchy 활용과 Scene 없는 확정 가지를 위한 상위 목록 확장, 탭/URL 문맥, 상위 변경 시 하위 초기화, 덱 없음·Option 생략·동명 폴더 및 데스크톱 가독성 검증을 정리했다.
+- 문서 지도와 현재 계획 목록을 연결했다. 계획만 작성했으며 앱 코드·DB·설정·서비스 변경이나 런타임 검증은 수행하지 않았다.
+
+## 2026-10-02 Case 결과 보고서 호환 계획 추가
+- 기존 ReportExportDialog/controller의 분석 페이지 Overview·run 문맥과 Case 결과의 capture 문맥 차이를 확인해 UI 개선 계획에 보고서 원본 어댑터, 현재 선택 범위 표시·고정, 기존 레이아웃/회사 템플릿/편집 가능한 PPTX 재사용 및 선택 변경 시 초안 무효화를 추가했다. 기존 분석·비교 내보내기 회귀와 생성 PPTX의 값·미디어 범위 검증을 완료 조건으로 명시했다.
+- 계획 문서와 목록만 갱신했다. 앱 코드 변경·PPTX 생성·실제 DB/서비스 검증은 수행하지 않았다.
+
+## 2026-10-02 Refresh 목록과 폴더 이동 개선 계획 추가
+- 사용자 피드백의 신규 의뢰 미표시, 이름 변경 후 Case 표시명 잔존, /home/ 배포의 폴더 연결 링크 오류를 UI 개선 계획의 우선 단계에 추가했다. 현재 Refresh의 의뢰 범위·catalogRevision 갱신, 상위 requests 전달, 저장 이름 overlay와 일반 a 링크의 basename 누락을 소스에서 확인했다. 이름 변경의 실제 실패 재현은 미실행으로 구분했다.
+- 프로젝트 의뢰 동기화·상위 목록 재조회·현재/과거 이름 구분·모호한 rename 검수·직접 base URL 이동·권한 및 반복/부분 실패 검증을 계획했다. 문서만 변경했고 구현·실제 DB/서비스 검증은 수행하지 않았다.
+
+## 2026-10-02 공용 폴더 새로고침 및 보고서 UI 계획 보완
+- 최상단 저장 폴더 새로고침을 의뢰 목록·확정 폴더 계층·Case/소재물성 탭의 공용 갱신 진입점으로 정리하고, 페이지 내부 중복 Refresh 제거와 공용 진행/부분 실패 표시를 완료 조건에 추가했다. 실패한 결과 수집 재시도는 별도 동작으로 유지한다.
+- 보고서 내보내기를 Run 대시보드와 Case 결과 양쪽의 공통 창·템플릿·PPTX 생성 기능으로 명시했다. 계획 문서만 수정했으며 앱 구현·런타임 검증은 수행하지 않았다.
+
+## 2026-10-02 신규 Scene 결과 등록 즉시 반영 계획 추가
+- 사용자 보고의 4_Edge 생성·업로드 후 Scene 미표시와 파일 부재, DB 미저장 추정을 후속 계획에 기록했다. 현재 결과 등록 계약의 초안 업로드/승인·게시 구분과 폴더 생성·mirror 후 자동 Refresh를 기준으로 단계별 저장·실패·재시도 및 Case 결과 즉시 갱신을 우선 완료 조건에 추가했다.
+- 계획만 수정했다. 실제 파일·DB 실패 원인은 미확정이며 운영 데이터·서비스 검증과 앱 구현은 수행하지 않았다.
+
+## 2026-10-02 Scene 깊이 규칙 일반화
+- 신규 폴더 목록 반영 요구를 특정 4_Edge가 아닌 확정 Folder Schema의 Scene 상대 깊이에 생성되는 모든 해석 Scene으로 명확히 했다. 같은 규칙의 여러 Case/Run/Option 가지에 동일 역할을 적용하고 이름·파일 유무와 무관하게 목록에 포함하며, 여러 이름·가지 및 다른 깊이·제외 영역을 검증하도록 계획을 보완했다. 문서 변경만 수행했다.
+
+## 2026-10-02 Case 결과 중심 사용 흐름 재설계 계획
+- 사용자 시나리오(SPDM 폴더 정본, 즉시 반영, 환경별 Folder Schema, 레시피 PPTX/PDF, 영상 그리드, Final 보고서 저장)와 현재 코드를 대조해 `docs/plans/case-results-workflow-redesign.md`를 작성했다. 결정: UI A안, 서버 LibreOffice PDF 변환, 검수를 Final 지정 시점으로 이동, 자동 변경 확인 30초.
+- 확인한 근거: 상단 저장 폴더 새로고침은 전역 관리자·전역 SPDM API이고 페이지 Refresh는 result.import 범위 API로 서로 다르다. Case 결과와 소재 catalog의 계층 투영·URL 상태 관리가 이원화돼 있다. PPTX는 브라우저(pptxgenjs)에서 생성하므로 Final/Reports에 앱 보고서가 저장되지 않는다. DropVideoGrid는 loadCaseId 전용이다.
+- 소재물성 계획의 2026-10-02 후속 UI 절은 새 계획으로 대체 표시했다. 문서만 변경했으며 앱 코드·DB·설정·서비스 변경과 런타임 검증은 없다.
+
+## 2026-10-02 Case 결과 재설계 0~1단계 구현 (Claude, 브랜치 claude/case-results-redesign)
+- 역할: 리드(설계·통합·커밋), 원인 조사 에이전트(격리 재현), 프런트 구현 에이전트, 구현에 참여하지 않은 독립 검수 에이전트.
+- 0단계: 4_Edge 업로드 실패 원인 두 가지(빈 새 Scene의 역할 미상속 → 409 RESULT_FOLDER_SCHEMA_STALE, 준비 응답 Scene ID 불일치 → 409 RESULT_CONTEXT_CHANGED)를 격리 합성 재현으로 확정·수정했다. 실제 서버 로그와 공유폴더는 읽기 전용으로만 확인했다. 폴더 연결 링크는 router basename을 쓴다.
+- 1단계: 공용 Folder Schema 계층 투영, 소재 catalog hierarchy·Scene별 ID, 소재 경로 선택 UI, router 기반 공용 URL hook.
+- 독립 검수 지적 4건(혼합 역할 CONFLICT 회귀, 임의 폴더 Option 승격, RESULTS ID 누락, 재해석 capture 추가) 수정. 프런트 지적(sentinel URL 노출)은 3단계에서 조회 문맥 선택기 제거로 해소 예정.
+- 검증: 백엔드 관련 회귀 172 passed + 신규 11 passed(격리 DuckDB·임시 SPDM root). tsc·build·test:routing/api/preferences/architecture self-test 통과. check:architecture는 기준 커밋과 같은 기존 4건만 실패. e2e: materials 5/5 통과, simulation-dashboard·environment-folder-flow·spdm-storage-workflow의 실패는 기준 커밋 725f4f7에서도 동일하게 실패하는 기존 항목이며 신규 실패 없음(Chromium headless shell 1194 사용).
+- 미실행: Codex Security 플러그인 스캔(도구 없음, 독립 수동 검수로 대체 — 플러그인 스캔 완료로 기록하지 않음), PostgreSQL 통합, Windows/Server 2022 실행, 실제 사용자 DB·서비스. migration·의존성·배포 진입점 변경 없음.
+
+## 2026-10-02 Case 결과 재설계 2단계 자동 반영 (Claude, 브랜치 claude/case-results-redesign)
+- 사용자 결정: 3단계 기준 화면은 32인치 4K(150% 배율 2560×1440 기본, 100% 3840×2160 보조).
+- `POST /api/folder-discovery/environments/sync`와 화면의 진입 시·30초 주기 확인을 추가하고 페이지 안 Refresh/다시 읽기 버튼을 제거했다. 빠른 확인은 폴더 구조와 결과 관련 파일(결과·미디어·덱·보고서)의 이름·크기·수정 시각만 비교한다. 결과 무관 파일(로그) 변경은 갱신·capture를 만들지 않고, 결과 파일은 내용 digest로 판단한다(같은 mtime의 내용 변경은 전체 Refresh에서 capture).
+- 독립 검수 지적 7건(로그 변경마다 전체 갱신·capture, 충돌 반복 조사, 구 snapshot 반복 판독, 수동 확인의 전체 판독, 재스캔 경합, 비 ValueError 처리, 중복 revision)과 계약 문서 누락을 수정했다. 기존 회귀 테스트가 같은 mtime 내용 변경 capture 누락을 잡아 결과 내용 지문으로 고쳤다.
+- 검증: 백엔드 관련 회귀 188 passed(격리 DuckDB·임시 root). tsc·build·routing/api/architecture self-test 통과, check:architecture 기존 4건만. e2e materials 5/5, folder-working-final 3/3; simulation-dashboard·spdm-storage-workflow·request-centric-workspace·environment-folder-flow 실패는 기준 커밋 725f4f7과 동일한 기존 항목.
+- 미실행: Codex Security 플러그인 스캔(수동 독립 검수로 대체), PostgreSQL·Windows·Server 2022, 다중 프로세스 부하 측정, 실제 공유폴더 30초 부하. migration·의존성·배포 진입점 변경 없음.
+
+## 2026-10-02 사용자 확인 반영: Scene 폴더 저장·형식 제한 해제·최신 결과 통합 표시 (Claude)
+- 사용자가 브랜치를 update.bat으로 적용해 6_corner 등록·실제 폴더 반영을 확인했다. 요청: results 하위 폴더 불필요, 업로드 형식 제한 해제, Run Option 아래 모든 Scene 결과를 함께 표시(버전별 조회 불필요).
+- 조치: 유통환경 Scene 자체를 결과 위치로 제안, 실행 파일·스크립트 외 모든 형식 업로드 허용, Case별 Scene 최신 결과 병합(가상 버전 latest:<Case>)을 기본 표시하고 버전은 업데이트 이력으로만 표시, 게시 후 Refresh에서 Case 폴더 전체 수집(capture_cases=True). 등록 테스트 2건은 "게시당 버전 1개" 가정을 멱등성 확인으로 바꿨다.
+- 검증: 관련 백엔드 102 passed(신규 포함), tsc 통과, e2e materials 5/5·folder-working-final 3/3·simulation-dashboard 9/10(남은 1건은 기준 커밋부터 실패하는 capture-pin 항목). simulation-dashboard의 첫 화면 대기 시간을 15초로 늘려 재로딩 지연에 따른 간헐 실패를 정리했다.
+- 미실행: 독립 검수(이번 변경분), Codex Security 스캔, Windows/Server 2022. 최종확정의 병합 최신 결과 기준 처리는 6단계에서 정리한다.
+
+## 2026-10-02 새 프로젝트·의뢰 폴더 자동 확인 (Claude, 브랜치 claude/case-results-redesign)
+- `folder_auto_discovery.py`와 `POST /api/folder-discovery/environments/discover`: root → 포장 폴더(최대 2단계) → 프로젝트 → 의뢰를 얕게 나열하고, 새 의뢰만 기존 scan → preview → registration(capture)으로 등록한다. 환경은 의뢰 이름(사용/유통, SimType1/2)으로 정하고, 판단 불가·역할 미결정은 등록하지 않고 needs_review(관리자만 표시)로 돌려준다. 빈 Working 의뢰도 등록한다. 새 프로젝트는 첫 의뢰 등록 트랜잭션에서 멤버십 없이 만든다.
+- 기존 파이프라인 확장(기본 동작 불변): `save_scan(skip_paths)`, 등록 재조사 시 저장된 조사의 `children_skipped` 경계 재사용, `preview(allow_without_cases)`, `register/materialize(creator_membership)`.
+- 권한 `project.data.view`(목록 조회와 동일), 프로세스·root별 60초(force 10초) 합치기, 생성 시에만 감사 기록. 프런트 `useFolderDiscovery`(시작 시·60초, 숨김 탭 중지, "새 의뢰 n건 확인" 알림, 생성 시 `refreshOperationalData`).
+- 검증: 신규 10 passed, 지정 회귀(environment_folder_flow_api·new_scene_registration·folder_auto_sync·result_registration_api) 포함 61 passed/2 skipped, environment_registration·folder_discovery·openapi_contract 통과. 백엔드 architecture baseline 테스트 실패는 기준 커밋에서도 동일한 기존 항목(dashboard.py·folder_discovery_environment.py sync의 execute). tsc·test:routing 통과, check:architecture는 기존 4건만(App.tsx 1089/1077, +1행).
+- 미실행: e2e(지휘 담당), 독립 검수·Codex Security 스캔, PostgreSQL·Windows/Server 2022, 실제 공유폴더. migration·의존성·배포 진입점 변경 없음.
+
+## 2026-10-02 자동 확인 독립 검수 지적 수정 (Claude)
+- 비대기 실행 잠금·합치기 확인을 DB 연결 전에 수행(실행 중이면 RUNNING 즉시 반환), 실행 45초·새 의뢰 5개 상한(단계마다 확인). 정확한 SPDM 이름만 등록(NAME_NOT_STANDARD), 같은 WR 번호·환경 중복 차단(WR_ALREADY_LINKED), 재시도 실패 폴더별 backoff(force 무시), 관리자 제외 폴더 ADMIN_EXCLUDED 표시와 제외 집합 캐시, 같은 이름 미연결 프로젝트 PROJECT_NAME_EXISTS, 목록 오류 보고·하위 폴더 하나의 오류 격리, 경합 패배 시 생성 보고 안 함(미리보기 ID 비교). 화면은 선택을 유지한 채 프로젝트·의뢰 목록만 갱신, 401/403에서 확인 중지, 목록 갱신 실패 시 알림 보류.
+- 검증: discovery 17 passed, environment_folder_flow_api·new_scene_registration·folder_auto_sync 포함 59 passed/1 skipped; architecture baseline은 기준과 같은 dashboard.py(7) 1건만 실패. tsc·test:routing 통과, check:architecture 기존 4건(App.tsx 1089, 증가 없음). e2e·독립 재검수 미실행.
+

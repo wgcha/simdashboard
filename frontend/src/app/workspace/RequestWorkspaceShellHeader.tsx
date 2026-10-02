@@ -85,7 +85,7 @@ export function RequestWorkspaceShellHeader({ actions, model, onBeginReview, isC
     projects={projects}
     requestId={requestId}
     requests={requests}
-    resultReviewTab={<div className="request-review-actions"><button type="button" className={caseResultsMode && !caseResultsMaterialsTab ? 'active' : ''} aria-current={caseResultsMode && !caseResultsMaterialsTab ? 'step' : undefined} disabled={!requestId || contextChanging} onClick={actions.onOpenCaseResults}>Case 결과</button><button type="button" className={caseResultsMaterialsTab ? 'active' : ''} aria-current={caseResultsMaterialsTab ? 'step' : undefined} disabled={!requestId || contextChanging} onClick={actions.onOpenMaterials}>모델 소재·물성</button><ResultLayoutDetailTab
+    resultReviewTab={<div className="request-review-actions"><button type="button" className={caseResultsMode ? 'active' : ''} aria-current={caseResultsMode ? 'step' : undefined} disabled={!requestId || contextChanging} onClick={actions.onOpenCaseResults}>Case 결과</button><ResultLayoutDetailTab
       active={activeTab === 'review' && !caseResultsMode}
       label="기존 Run 대시보드"
       requestId={requestId}

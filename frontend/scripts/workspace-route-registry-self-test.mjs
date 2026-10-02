@@ -6,6 +6,7 @@ import {
 } from '../src/features/navigation/workspaceRouteRegistry.ts'
 import { resolveBlockedNavigation } from '../src/app/routing/navigationState.ts'
 import { visibleMenuItems } from '../src/features/auth/access.ts'
+import { applySearchPatch, withClearedChildren } from '../src/shared/hooks/caseHierarchyParams.ts'
 
 const expectedPaths = {
   local_pc: '/workspace/settings/local-pc',
@@ -58,3 +59,15 @@ for (const account_status of ['PENDING', 'SUSPENDED']) {
   if (visibleMenuItems(null, { ...personalUser, account_status }, '').length) throw new Error('inactive accounts must not get personal menu access')
 }
 console.log('Personal PC default menu self-test passed.')
+
+// Shared Case hierarchy URL contract (Case results <-> materials tabs).
+const hierarchySearch = 'project=p&request=r&view=case_results&resultTab=materials&case=c1&case_load=l1&case_run=r1&case_option=o1&scene=s1&part=7&filter=x'
+const caseChange = applySearchPatch(hierarchySearch, withClearedChildren({ case: 'c2' }))
+if (caseChange !== 'project=p&request=r&view=case_results&resultTab=materials&case=c2&filter=x') throw new Error(`case change must clear its children only: ${caseChange}`)
+const optionChange = applySearchPatch(hierarchySearch, withClearedChildren({ case_option: 'o2' }))
+if (optionChange !== 'project=p&request=r&view=case_results&resultTab=materials&case=c1&case_load=l1&case_run=r1&case_option=o2&filter=x') throw new Error(`option change must clear scene/part: ${optionChange}`)
+const restored = applySearchPatch('scene=s1', withClearedChildren({ case: 'c1', case_load: 'l1', case_run: 'r1', case_option: 'o1' }))
+if (new URLSearchParams(restored).has('scene')) throw new Error('setting parents without scene clears the scene child')
+const restoredWithScene = applySearchPatch('scene=s1', withClearedChildren({ case: 'c1', case_option: 'o1', scene: 's1' }))
+if (new URLSearchParams(restoredWithScene).get('scene') !== 's1') throw new Error('an explicit child in the patch must be kept')
+console.log('Case hierarchy URL self-test passed.')

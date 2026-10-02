@@ -99,7 +99,8 @@ function filePath(file: File) { return (file as File & { webkitRelativePath?: st
 function fileMediaType(file: File) {
   const extension = file.name.split('.').pop()?.toLowerCase()
   const canonicalType = ({ csv: 'text/csv', json: 'application/json', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', mp4: 'video/mp4', webm: 'video/webm' } as Record<string, string>)[extension ?? '']
-  return (canonicalType ?? file.type) || 'application/octet-stream'
+  // Any type may be uploaded; the server classifies unknown files as generic originals.
+  return canonicalType ?? 'application/octet-stream'
 }
 function serializeExclusions(values: Record<string, string>): ResultFileExclusion[] {
   return Object.entries(values).sort(([left], [right]) => left.localeCompare(right)).map(([relative_path, reason]) => ({ relative_path, reason: reason.trim() }))
@@ -896,8 +897,8 @@ export function ResultRegistrationWorkspace({ embedded = false, contextChanging 
         {!folderBusy && !folderNodes.length ? <p className="result-registration-empty">현재 폴더에 연결된 하위 항목이 없습니다. 기존 Case를 선택하거나 아래에서 필요한 결과 폴더 계층을 확인하세요.</p> : null}
 
         {activeContextNode?.suggested_relative_path ? <div className="result-registration-destination">
-          <div><span>선택 문맥의 결과 위치</span><code>{suggestedPath}</code><small>{statusLabel(suggestedState)} · 경로 읽기 전용</small></div>
-          {suggestedState === 'PRESENT' ? <button type="button" disabled={isActionBusy} className={currentSuggestedDestinationSelected ? 'result-registration-selected' : ''} onClick={() => selectResultFolder(suggestedPath, 'PRESENT')}>{currentSuggestedDestinationSelected ? <><Check /> 선택됨</> : '이 기존 폴더 선택'}</button> : null}
+          <div><span>선택 문맥의 결과 위치</span><code>{suggestedPath}</code><small>{suggestedPath === activeContextNode.relative_path ? 'Scene 폴더에 입력·결과 파일을 함께 저장' : `${statusLabel(suggestedState)} · 경로 읽기 전용`}</small></div>
+          {suggestedState === 'PRESENT' ? <button type="button" disabled={isActionBusy} className={currentSuggestedDestinationSelected ? 'result-registration-selected' : ''} onClick={() => selectResultFolder(suggestedPath, 'PRESENT')}>{currentSuggestedDestinationSelected ? <><Check /> 선택됨</> : suggestedPath === activeContextNode.relative_path ? '이 Scene 폴더 선택' : '이 기존 폴더 선택'}</button> : null}
           {suggestedState === 'MISSING' && activeContextNode.can_prepare ? <button type="button" disabled={isActionBusy} onClick={previewSuggestedPath}>하위 결과 폴더 준비</button> : null}
           {suggestedState === 'UNAVAILABLE' ? <p role="alert">이 경로에 접근할 수 없습니다. 관리자에게 저장소 접근 권한을 요청하세요.</p> : null}
         </div> : null}
@@ -958,8 +959,8 @@ export function ResultRegistrationWorkspace({ embedded = false, contextChanging 
       }}>
         <header><span>03 · 격리 업로드와 자동 검사</span><h3 id="registration-upload-title">파일 업로드</h3><p>업로드 직후 자동 검사하며, 검수 전에는 정식 Case 결과로 게시되지 않습니다.</p></header>
         <div className="result-registration-upload-controls">
-          <label className={`result-registration-file-picker${canChooseFiles ? '' : ' is-disabled'}`} htmlFor="registration-files"><Upload /><strong>결과 파일과 영상·이미지 선택 또는 여기로 끌어놓기</strong><span>CSV / JSON / JPG / PNG / MP4 / WebM · 파일당 32 MiB · 묶음당 256 MiB</span></label>
-          <input ref={fileInputRef} id="registration-files" aria-label="결과 파일과 영상·이미지 선택" type="file" multiple accept=".csv,.json,.jpg,.jpeg,.png,.mp4,.webm" disabled={!canChooseFiles} onChange={(event) => chooseFiles(Array.from(event.target.files ?? []))} />
+          <label className={`result-registration-file-picker${canChooseFiles ? '' : ' is-disabled'}`} htmlFor="registration-files"><Upload /><strong>해석 파일 선택 또는 여기로 끌어놓기</strong><span>모든 형식 · 대시보드는 CSV·JSON·이미지·영상을 읽고 나머지는 원본으로 보관 · 파일당 32 MiB · 묶음당 256 MiB</span></label>
+          <input ref={fileInputRef} id="registration-files" aria-label="결과 파일과 영상·이미지 선택" type="file" multiple disabled={!canChooseFiles} onChange={(event) => chooseFiles(Array.from(event.target.files ?? []))} />
           {selectedFiles.length ? <div className="result-registration-file-list" aria-label="선택한 파일">{pathPreviews.map(({ file, relativePath }) => <div key={relativePath}><span>{fileMediaType(file).startsWith('video/') ? <FileVideo /> : fileMediaType(file).startsWith('image/') ? <FileImage /> : <Database />}</span><div><strong>{relativePath}</strong><small>{fileMediaType(file)} · {formatBytes(file.size)}</small></div>{!draftId ? <button type="button" aria-label={`${relativePath} 제외`} disabled={isActionBusy} onClick={() => chooseFiles(selectedFiles.filter((item) => filePath(item) !== relativePath))}><X /></button> : null}{previewUrls[relativePath] && fileMediaType(file).startsWith('image/') ? <img src={previewUrls[relativePath]} alt={`${relativePath} 미리보기`} /> : null}{previewUrls[relativePath] && fileMediaType(file).startsWith('video/') ? <video src={previewUrls[relativePath]} controls preload="metadata" aria-label={`${relativePath} 미리보기`} /> : null}</div>)}</div> : null}
           <div className="result-registration-upload-footer"><span>{selectedFiles.length}개 파일 · {formatBytes(selectedFilesBytes)}</span><button type="button" className="data-submit" disabled={!canInspect} onClick={() => void uploadAndInspect()}>{isActionBusy ? <LoaderCircle className="result-registration-spin" /> : <Upload />} 업로드하고 자동 검사</button></div>
           {draftId && !approved && !completion ? <div className="result-registration-correction"><p>업로드나 자동 검사에 문제가 있으면 현재 초안을 게시하지 않고 파일을 다시 선택해 새 검수를 시작할 수 있습니다.</p><button type="button" className="ghost-button" disabled={isActionBusy} onClick={startFreshUpload}>파일 수정 후 새 검수 시작</button></div> : null}

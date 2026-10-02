@@ -848,6 +848,10 @@ def folders(conn: ConnectionLike, project_id: str, request_id: str, environment:
                 result_state = "PRESENT"
                 if len(confirmed_results) == 1:
                     suggested = confirmed_results[0]
+            elif role == "SCENE" and scope["environment"] == "DISTRIBUTION":
+                # Distribution stores inputs and results directly in the
+                # confirmed Scene folder; never propose a results sub-folder.
+                suggested, result_state = child_relative, "PRESENT"
             else:
                 result_candidate = f"{child_relative.rstrip('/')}/results"
                 result_key = _root_casefold(result_candidate)

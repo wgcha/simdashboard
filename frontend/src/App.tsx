@@ -70,7 +70,7 @@ import { RequestJourneyCompact } from './features/request-workspace/RequestWorks
 import { RequestWorkspaceShellHeader } from './app/workspace/RequestWorkspaceShellHeader'
 import { RequestResultSummary } from './features/request-workspace/RequestResultSummary'
 import { StorageWorkspacePanel } from './features/storage/StorageWorkspacePanel'
-import { StorageRefreshControl } from './features/storage/StorageRefreshControl'
+import { StorageRefreshControl } from './features/storage/StorageRefreshControl'; import { useFolderDiscovery } from './shared/hooks/useFolderDiscovery'
 import { resetWorkspaceContext } from './app/workspace/resetWorkspaceContext'
 import type { AnalysisRequest, AutomationTemplate, DashboardDefinition, DashboardPageSummary, DashboardSummary, DashboardVersion, DashboardWidget, FeatureExample, ImportSchema, LoadCase, Overview, PortfolioLayout, Project, QualityThreshold, ReportContentItem, ReportElementDefinition, ReportElementType, ReportLayout, ReportLayoutDefinition, ReportLayoutVersion, ReportSection, ReportSlideDefinition, ReportSlideKind, ReportSource, ReportTemplateAsset, ReviewItem, RunComparison, RunComparisonReportContext, RunTrust, VariableDefinition, VariableDefinitionInput, WidgetCatalogItem, Workflow, WorkflowDashboardLayout, WorkflowStep } from './types'
 function App() {
@@ -747,6 +747,7 @@ function App() {
     setActiveDashboardId, setActiveView, setError,
   })
   const refreshOperationalData = async () => { const [projectData, workflowData] = await Promise.all([api.projects(), api.workflows()]); setProjects(projectData); setWorkflows(workflowData); const projectId = selectedProjectId || projectData[0]?.id || ''; setSelectedProjectId(projectId); if (projectId) { const requestData = await api.requests(projectId); setRequests(requestData); const requestId = requestData.some((request) => request.id === selectedRequestId) ? selectedRequestId : requestData[0]?.id || ''; if (requestId) { const caseData = await api.loadCases(requestId); setLoadCases(caseData); if (!caseData.some((loadCase) => loadCase.id === selectedLoadCaseId)) setSelectedLoadCaseId(caseData[0]?.id || '') } else { setLoadCases([]); setSelectedLoadCaseId('') } if (!requestData.some((request) => request.id === selectedRequestId)) setSelectedRequestId(requestId) } setOperationalRefreshToken((value) => value + 1) }
+  useFolderDiscovery({ enabled: authReady && !setupRequired && (!authRequired || authUser?.account_status === 'ACTIVE'), isAdmin: Boolean(authUser?.is_global_admin), selectedProjectId, loadProjects: api.projects, loadRequests: api.requests, setProjects, setRequests, onNotice: setNotice })
   const handleIntakeCreated = async (projectId: string, request: AnalysisRequest) => {
     const intent = beginContextEntry(); const [projectData, workflowData, requestData] = await Promise.all([api.projects(), api.workflows(), api.requests(projectId)])
     if (!isCurrentContextEntry(intent)) return
@@ -977,7 +978,7 @@ function App() {
     >
       <AppShellMain topbar={<AppTopbar breadcrumb={breadcrumb} actions={<>
             <div className="theme-switch" role="group" aria-label="화면 테마 선택"><button type="button" aria-label="라이트" className={theme === 'light' ? 'active' : ''} aria-pressed={theme === 'light'} onClick={() => setTheme('light')}><Sun /><span>라이트</span></button><button type="button" aria-label="다크" className={theme === 'dark' ? 'active' : ''} aria-pressed={theme === 'dark'} onClick={() => setTheme('dark')}><Moon /><span>다크</span></button></div>
-            {authUser?.is_global_admin && (workspacePage === 'dashboard' || workspacePage === 'portfolio' || workspacePage === 'data') && <StorageRefreshControl onChanged={refreshOperationalData} onMessage={setNotice} onError={setError} />}
+            {authUser?.is_global_admin && (workspacePage === 'portfolio' || workspacePage === 'data') && <StorageRefreshControl onChanged={refreshOperationalData} onMessage={setNotice} onError={setError} />}
             {workspacePage === 'dashboard' && activeView !== 'workflow' && <button className="ghost-button" title={!overview?.run && activeView !== 'compare' ? '완료된 Run이 있어야 보고서를 내보낼 수 있습니다.' : undefined} disabled={!dashboardReady || (!overview?.run && activeView !== 'compare')} onClick={() => void reportExport.open()}><Download /> 보고서 내보내기</button>}
             {canEdit && workspacePage === 'dashboard' && activeView !== 'workflow' && <button className="ghost-button" disabled={activeDashboardId === 'request-result-layout' ? !selectedLoadCaseId : !dashboardReady} onClick={() => void openAssistant()}><Sparkles /> 자연어로 개선</button>}
             {canEdit && (workspacePage === 'dashboard' && activeView === 'workflow' ? (editMode ? (

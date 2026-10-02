@@ -548,7 +548,7 @@ def preview(conn, scan_id: str, rule_list: list[dict], actor: str, excluded_path
     return {"id": preview_id, "scan_id": scan_id, **plan}
 
 
-def materialize(conn, item: dict, principal):
+def materialize(conn, item: dict, principal, *, creator_membership: bool = True):
     target_id, stamp = item["target_id"], now()
     if item["role_kind"] == "PROJECT":
         from ..adapters.persistence.projects import SQLProjectUnitOfWork
@@ -560,7 +560,8 @@ def materialize(conn, item: dict, principal):
         unit.add_product_information(target_id, command)
         unit.add_quality_thresholds(target_id, stamp)
         unit.add_workspace_layouts(target_id)
-        unit.add_admin_membership(ident("membership"), target_id, command, stamp)
+        if creator_membership:
+            unit.add_admin_membership(ident("membership"), target_id, command, stamp)
     elif item["role_kind"] == "REQUEST":
         conn.execute("INSERT INTO analysis_requests(id,project_id,title,status,owner,owner_user_id,requested_at,due_at,overall_note) "
                      "VALUES(?,?,?,'READY',?,?,?,NULL,?)", [target_id, item["parent_target_id"], item["name"],

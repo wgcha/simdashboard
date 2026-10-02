@@ -47,7 +47,7 @@ def option_projection(run, capture_id):
 
 
 def catalog(conn, request_id, environment, project_id=None):
-    from . import folder_discovery, folder_discovery_environment, folder_schema_resolver
+    from . import folder_discovery, folder_discovery_environment, folder_schema_hierarchy, folder_schema_resolver
 
     result = {"contract_version": 1, "environment": environment, "cases": [], "captures": [],
               "load_cases": [], "execution_runs": [], "run_options": [], "modes": [], "components": [],
@@ -89,118 +89,10 @@ def catalog(conn, request_id, environment, project_id=None):
             "snapshot_id": (schema.get("scan") or {}).get("id"),
         }
 
-        def hierarchy_id(role: str, context: dict[str, Any]) -> str:
-            relative_path = str(context.get("relative_path") or "")
-            if role == "RUN_OPTION" and relative_path:
-                option_node = next((node for node in schema.get("nodes", [])
-                                    if str(node.get("role_kind") or "") == role
-                                    and str(node.get("relative_path") or "").casefold() == relative_path.casefold()), None)
-                if option_node and option_node.get("run_option_id"):
-                    return str(option_node["run_option_id"])
-            target_id = context.get("target_id")
-            if target_id:
-                return str(target_id)
-            return folder_discovery_environment.stable(
-                "folder-location-" + role.casefold(), root_key, relative_path, role,
-            ) if relative_path else ""
-
-        role_keys = {"SIMULATION_CASE": "cases", "LOAD_CASE": "load_cases",
-                     "EXECUTION_RUN": "execution_runs", "RUN_OPTION": "run_options"}
-        for node in schema.get("nodes", []):
-            role = str(node.get("role_kind") or "")
-            key = role_keys.get(role)
-            if not key or node.get("status") not in {"CONFIRMED", "LINKED"}:
-                continue
-            hierarchy = node.get("hierarchy") or {}
-            case = hierarchy.get("simulation_case") or (node if role == "SIMULATION_CASE" else {})
-            case_path = str(case.get("relative_path") or "")
-            case_id = str(case.get("target_id") or "")
-            if not case_path or not case_id:
-                continue
-            if role == "SIMULATION_CASE":
-                schema_cases[case_path.casefold()] = {
-                    "id": case_id, "label": str(node.get("name") or "Case"),
-                    "relative_path": case_path, "source": "FOLDER_SCHEMA",
-                    "match_status": "UNCAPTURED", "dashboard_case_id": None,
-                    "capture_count": 0,
-                }
-                continue
-            choice_id = str(node.get("run_option_id") or node.get("target_id") or "")
-            if not choice_id:
-                choice_id = folder_discovery_environment.stable(
-                    "folder-location-" + role.casefold(), root_key,
-                    str(node.get("relative_path") or ""), role,
-                )
-            if not choice_id:
-                continue
-            choice = {"id": choice_id, "label": str(node.get("name") or role),
-                      "case_id": case_id, "relative_path": str(node.get("relative_path") or ""),
-                      "capture_id": None, "match_status": "UNCAPTURED"}
-            if role == "LOAD_CASE":
-                result["load_cases"].append(choice)
-            elif role == "EXECUTION_RUN":
-                load = hierarchy.get("load_case") or {}
-                if load.get("target_id"):
-                    choice["load_case_id"] = str(load["target_id"])
-                    result["execution_runs"].append(choice)
-            else:
-                run = hierarchy.get("execution_run") or {}
-                if run.get("target_id"):
-                    choice["execution_run_id"] = str(run["target_id"])
-                    choice["run_option_id"] = choice_id
-                    choice["option_label"] = choice["label"]
-                    choice["option_status"] = node.get("option_status") or "PRESENT"
-                    choice["mode"] = choice["label"].upper()
-                    result["run_options"].append(choice)
-        absent_scene_runs = set()
-        for scene in locations.locations:
-            hierarchy = scene.get("hierarchy") or {}
-            run = hierarchy.get("execution_run") or {}
-            if run.get("target_id") and not isinstance(hierarchy.get("run_option"), dict):
-                absent_scene_runs.add(str(run["target_id"]))
-        for run_choice in [item for item in result["execution_runs"] if item.get("capture_id") is None]:
-            run_choice_id = str(run_choice.get("id") or "")
-            if run_choice_id in absent_scene_runs:
-                option_id = folder_discovery_environment.stable(
-                    "folder-option-absent", root_key, str(run_choice.get("relative_path") or ""), "ABSENT",
-                )
-                result["run_options"].append({
-                    "id": option_id, "label": "옵션 없음", "case_id": run_choice.get("case_id"),
-                    "execution_run_id": run_choice_id, "run_option_id": option_id,
-                    "option_label": None, "option_status": "ABSENT", "mode": None,
-                    "capture_id": None, "match_status": "UNCAPTURED",
-                })
-        for location in locations.locations:
-            if location.get("role_kind") != "SCENE":
-                continue
-            hierarchy = location.get("hierarchy") or {}
-            case = hierarchy.get("simulation_case") or {}
-            if not case.get("target_id"):
-                continue
-            load_case = hierarchy.get("load_case") or {}
-            execution_run = hierarchy.get("execution_run") or {}
-            run_option = hierarchy.get("run_option") or {}
-            load_case_id = hierarchy_id("LOAD_CASE", load_case)
-            execution_run_id = hierarchy_id("EXECUTION_RUN", execution_run)
-            run_option_id = str(run_option.get("target_id") or "")
-            if isinstance(hierarchy.get("run_option"), dict):
-                run_option_id = hierarchy_id("RUN_OPTION", run_option)
-            elif execution_run_id:
-                run_option_id = folder_discovery_environment.stable(
-                    "folder-option-absent", root_key,
-                    str(execution_run.get("relative_path") or ""), "ABSENT",
-                )
-            result["scenes"].append({
-                "id": str(location.get("scene_id") or location["id"]),
-                "label": str(location.get("label") or location.get("name") or "Scene"),
-                "case_id": str(case["target_id"]),
-                "load_case_id": load_case_id,
-                "execution_run_id": execution_run_id,
-                "run_option_id": run_option_id,
-                "relative_path": str(location.get("relative_path") or ""),
-                "capture_id": None, "match_status": "UNCAPTURED",
-                "source": "FOLDER_SCHEMA",
-            })
+        projected = folder_schema_hierarchy.project_schema_hierarchy(schema, locations, root_key)
+        schema_cases.update(projected["cases"])
+        for key in ("load_cases", "execution_runs", "run_options", "scenes"):
+            result[key].extend(projected[key])
     except folder_schema_resolver.FolderSchemaError as exc:
         result["folder_schema"] = {"status": "UNAVAILABLE",
                                     "diagnostic": {"code": exc.code, "message": str(exc)},
@@ -246,6 +138,33 @@ def catalog(conn, request_id, environment, project_id=None):
         result["cases"].append(case)
 
     case_choices = {str(item["id"]): item for item in result["cases"]}
+
+    def emit(capture_id, label, dashboard_case_id, canonical_case_id, payload, match_status):
+        parent = {"case_id": canonical_case_id, "simulation_case_id": canonical_case_id,
+                  "capture_id": str(capture_id)}
+        capture_entry = {"id": str(capture_id), "label": label, "dashboard_case_id": str(dashboard_case_id),
+                         "match_status": match_status, **parent}
+        for run in payload.get("runs", []):
+            option_id, option_label, option_status = option_projection(run, capture_id)
+            scope = {**parent, "load_case_id": run["load_case_id"], "execution_run_id": run["id"], "run_option_id": option_id, "option_status": option_status, "option_label": option_label, "mode": run["mode"], "match_status": "CAPTURED"}
+            result["load_cases"].append({"id": run["load_case_id"], "label": run.get("load_case_name", "하중경우"), **scope})
+            result["execution_runs"].append({"id": run["id"], "label": run["source_name"], **scope})
+            result["run_options"].append({"id": option_id, "label": option_label or "옵션 없음", **scope})
+            result["modes"].append({"id": run["mode"], "label": run["mode"], **scope})
+            for scene in run.get("scenes", []):
+                result["scenes"].append({
+                    "id": str(scene.get("id") or ""),
+                    "label": str(scene.get("source_name") or scene.get("label") or scene.get("id") or "Scene"),
+                    **scope,
+                })
+            components = sorted({o["component_id"] for s in run["scenes"] for o in s.get("observations", []) if o.get("component_id")}
+                                | {m["component_id"] for s in run["scenes"] for m in s.get("media", []) if m.get("component_id")})
+            result["components"].extend({"id": c, "label": c, **scope} for c in components)
+        return capture_entry
+
+    from .dashboard_capture import latest_capture_id, merge_latest_payload
+    history_by_case: dict[str, list[tuple[str, Any]]] = {}
+    latest_meta: dict[str, tuple[str, str]] = {}
     for case_id, name, storage_root_id, relative_path, capture_id, created_at, raw in records:
         if str(case_id) in final_case_ids:
             case = next(item for item in result["final_history"] if item["id"] == str(case_id))
@@ -257,33 +176,28 @@ def catalog(conn, request_id, environment, project_id=None):
         canonical_case_id = dashboard_case_ids.get(str(case_id), str(case_id))
         if not capture_id:
             continue
-        parent = {"case_id": canonical_case_id, "simulation_case_id": canonical_case_id,
-                  "capture_id": str(capture_id)}
         case_choice = case_choices.get(canonical_case_id)
         if case_choice is not None:
             case_choice["capture_count"] = int(case_choice.get("capture_count") or 0) + 1
             case_choice["match_status"] = "CAPTURED" if case_choice.get("source") == "FOLDER_SCHEMA" else "HISTORY_ONLY"
-        result["captures"].append({"id": str(capture_id), "label": str(created_at),
-                                   "dashboard_case_id": str(case_id),
-                                   "match_status": "MATCHED_TO_SCHEMA" if case_choice and case_choice.get("source") == "FOLDER_SCHEMA" else "HISTORY_ONLY",
-                                   **parent})
-        payload = _decode(raw)
-        for run in payload.get("runs", []):
-            option_id, option_label, option_status = option_projection(run, capture_id)
-            scope = {**parent, "load_case_id": run["load_case_id"], "execution_run_id": run["id"], "run_option_id": option_id, "option_status": option_status, "option_label": option_label, "mode": run["mode"], "match_status": "CAPTURED"}
-            result["load_cases"].append({"id": run["load_case_id"], "label": run.get("load_case_name", "하중경우"), **scope})
-            result["execution_runs"].append({"id": run["id"], "label": run["source_name"], **scope})
-            result["run_options"].append({"id": option_id, "label": option_label or "옵션 없음", **scope})
-            result["modes"].append({"id": run["mode"], "label": run["mode"], **scope})
-            for scene in run.get("scenes", []):
-                result["scenes"].append({
-                    "id": str(scene.get("id") or ""),
-                    "label": str(scene.get("source_name") or scene.get("id") or "Scene"),
-                    **scope,
-                })
-            components = sorted({o["component_id"] for s in run["scenes"] for o in s.get("observations", []) if o.get("component_id")}
-                                | {m["component_id"] for s in run["scenes"] for m in s.get("media", []) if m.get("component_id")})
-            result["components"].extend({"id": c, "label": c, **scope} for c in components)
+        match_status = "MATCHED_TO_SCHEMA" if case_choice and case_choice.get("source") == "FOLDER_SCHEMA" else "HISTORY_ONLY"
+        result["captures"].append(emit(capture_id, str(created_at), case_id, canonical_case_id, _decode(raw), match_status))
+        # Records are newest first; the merge wants oldest first.
+        history_by_case.setdefault(str(case_id), []).insert(0, (str(capture_id), raw))
+        latest_meta[str(case_id)] = (canonical_case_id, match_status)
+    # The default view of every Case: newest result of each Scene folder
+    # merged across all captures (user decision 2026-10-02). Individual
+    # captures stay listed as update history.
+    latest_entries = []
+    for dashboard_case_id, entries in history_by_case.items():
+        canonical_case_id, match_status = latest_meta[dashboard_case_id]
+        merged = merge_latest_payload(entries)
+        entry = emit(latest_capture_id(dashboard_case_id), "최신 결과", dashboard_case_id, canonical_case_id,
+                     merged, match_status)
+        entry["kind"] = "LATEST"
+        entry["merged_capture_count"] = len(merged.get("merged_capture_ids") or [])
+        latest_entries.append(entry)
+    result["captures"] = latest_entries + result["captures"]
     for key in ("load_cases", "execution_runs", "run_options", "modes", "components", "scenes"):
         unique = {}
         for item in result[key]:
@@ -535,3 +449,56 @@ def scene_detail(capture, scene_id, run_id, mode, component, basis, lines, posit
             "corner_points": [o for o in source if o.get("kind") == "CORNER"],
             "assets": [m for m in scene.get("media", []) if m.get("component_id") == component],
             "quality_issues": sorted(set(capture["payload"].get("quality_issues", [])) | set(scene.get("quality_issues", [])))}
+
+
+VIDEO_PAGE_SIZE_MAX = 20
+
+
+def select_run_option(capture, run_id, mode=None, run_option_id=None):
+    """Pick one Run option of a distribution capture without requiring a Component."""
+    if capture["environment"] != "DISTRIBUTION":
+        fail("유통환경 수집 버전을 선택하세요.")
+    candidates = [r for r in capture["payload"].get("runs", []) if r["id"] == run_id]
+    if run_option_id:
+        runs = [r for r in candidates if option_projection(r, capture["id"])[0] == run_option_id]
+    elif mode:
+        runs = [r for r in candidates if r["mode"] == mode]
+    else:
+        runs = candidates
+    if len(runs) != 1:
+        fail("선택 Run/Run Option과 수집 버전이 일치하지 않습니다.")
+    run = runs[0]
+    option_id, option_label, option_status = option_projection(run, capture["id"])
+    context = {**capture["payload"]["context"], "simulation_case_id": capture["case_id"], "capture_id": capture["id"],
+               "execution_run_id": run_id, "load_case_id": run["load_case_id"],
+               "run_option_id": option_id, "option_label": option_label, "option_status": option_status,
+               "mode": run["mode"]}
+    context["context_key"] = context_key(context)
+    context["load_case_name"] = run.get("load_case_name")
+    context["run_label"] = run.get("source_name")
+    return run, context
+
+
+def run_videos(capture, run_id, *, mode=None, run_option_id=None, page=1, page_size=VIDEO_PAGE_SIZE_MAX):
+    """Every VIDEO media of every Scene of one Run option, in Scene order."""
+    run, context = select_run_option(capture, run_id, mode, run_option_id)
+    videos = []
+    for scene in run.get("scenes", []):
+        label = scene.get("label") or scene.get("source_name") or scene["id"]
+        for media in scene.get("media", []):
+            if media.get("kind") != "VIDEO" or not media.get("asset_id"):
+                continue
+            name = str(media.get("relative_path") or "").replace("\\", "/").rsplit("/", 1)[-1]
+            videos.append({"video_id": f"{scene['id']}:{media['asset_id']}", "asset_id": media["asset_id"],
+                           "scene_id": scene["id"], "scene_label": label,
+                           "scene_sequence_number": scene.get("scene_sequence_number"),
+                           "title": media.get("title") or name or label, "component_id": media.get("component_id"),
+                           "frame_role": media.get("frame_role"), "status": media.get("status") or "READY",
+                           "source_capture_id": scene.get("source_capture_id") or capture["id"]})
+    total_items = len(videos)
+    total_pages = (total_items + page_size - 1) // page_size if total_items else 0
+    start = (page - 1) * page_size
+    return {"contract_version": 1, "context": context,
+            "pagination": {"page": page, "page_size": page_size, "total_items": total_items, "total_pages": total_pages,
+                           "has_previous": page > 1 and total_pages > 0, "has_next": page < total_pages},
+            "videos": videos[start:start + page_size] if start < total_items else []}

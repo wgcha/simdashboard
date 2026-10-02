@@ -110,3 +110,50 @@ def scan(root: Path, relative: str, *, skip_descendants: Callable[[str, str | No
     file_state.sort(key=lambda item: str(item["relative_path"]).casefold())
     return {"status": "INCOMPLETE" if issues else "COMPLETE", "folder_count": len(nodes),
             "file_count": files, "nodes": nodes, "file_state": file_state, "issues": issues}
+
+
+# Files the Case results, materials and finalization actually read. Other files
+# (solver logs, scratch output) may change constantly and must not trigger a
+# refresh or new result versions.
+RESULT_RELEVANT_EXTENSIONS = frozenset({
+    ".csv", ".json", ".jpg", ".jpeg", ".png", ".mp4", ".webm",  # results and media
+    ".inc", ".rad",                                              # input decks
+    ".pdf", ".ppt", ".pptx", ".xlsx",                            # reports
+})
+
+
+def stat_fingerprint(scan_result: dict[str, Any]) -> str:
+    """Fingerprint the folder tree and relevant files' (path, size, mtime) without reading contents."""
+    import json
+    from pathlib import PurePosixPath
+
+    structure = sorted((
+        str(item.get("relative_path") or "").casefold(),
+        str(item.get("parent_path") or "").casefold(),
+    ) for item in scan_result.get("nodes", []))
+    files = sorted((
+        str(item.get("relative_path") or "").casefold(),
+        int(item.get("size") or 0),
+        int(item.get("modified_ns") or 0),
+    ) for item in scan_result.get("file_state", [])
+        if PurePosixPath(str(item.get("relative_path") or "")).suffix.casefold() in RESULT_RELEVANT_EXTENSIONS)
+    payload = json.dumps({"structure": structure, "files": files}, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def relevant_content_fingerprint(content_entries: list) -> str:
+    """Fingerprint result-relevant files by content digest (or size when not hashed).
+
+    Modification times are left out: a file rewritten with identical bytes is
+    unchanged, while changed bytes are detected even with an identical mtime.
+    """
+    import json
+    from pathlib import PurePosixPath
+
+    relevant = sorted(
+        (str(path), int(size), digest if digest is not None else None)
+        for path, size, _modified_ns, digest in content_entries
+        if PurePosixPath(str(path)).suffix.casefold() in RESULT_RELEVANT_EXTENSIONS
+    )
+    payload = json.dumps(relevant, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()

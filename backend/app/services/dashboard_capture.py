@@ -756,3 +756,81 @@ def find_asset(conn: ConnectionLike, asset_id: str) -> dict[str, Any] | None:
     item = result[0]
     item["metadata"] = _decode(item.pop("metadata_json"))
     return item
+
+
+LATEST_PREFIX = "latest:"
+
+
+def latest_capture_id(case_id: str) -> str:
+    return LATEST_PREFIX + str(case_id)
+
+
+def merge_latest_payload(entries: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Merge a Case's captures, oldest first, into one "latest result" payload.
+
+    Every Scene of every Run/Run option keeps its newest captured result, so a
+    Run option shows all of its Scene folders together even when they were
+    registered or copied at different times (user decision 2026-10-02).
+    Distribution scenes keep the capture they came from in
+    ``source_capture_id``; media assets still belong to that capture.
+    Usage payloads (no runs) use the newest capture as is.
+    """
+    if not entries:
+        return {"runs": [], "scenes": [], "quality_issues": []}
+    newest_id, newest = entries[-1]
+    newest = _decode(newest)
+    if not any((_decode(payload) or {}).get("runs") for _, payload in entries):
+        return {**newest, "merged_capture_ids": [newest_id]}
+    runs: dict[tuple[str, str], dict[str, Any]] = {}
+    scenes: dict[tuple[str, str], dict[str, dict[str, Any]]] = {}
+    sources: list[str] = []
+    for capture_id, raw in entries:
+        payload = _decode(raw) or {}
+        contributed = False
+        for run in payload.get("runs", []):
+            key = (str(run.get("id")), str(run.get("run_option_id") or run.get("mode") or ""))
+            runs[key] = {k: v for k, v in run.items() if k != "scenes"}
+            bucket = scenes.setdefault(key, {})
+            for scene in run.get("scenes", []):
+                # A Scene folder name is unique inside one Run option.
+                scene_key = str(scene.get("label") or scene.get("id") or "").casefold()
+                bucket[scene_key] = {**scene, "source_capture_id": scene.get("source_capture_id") or capture_id}
+                contributed = True
+        if contributed:
+            sources.append(capture_id)
+    merged_runs = []
+    merged_scenes = []
+    for key, meta in runs.items():
+        ordered = sorted(scenes.get(key, {}).values(), key=lambda item: (
+            parse_scene_name(str(item.get("label") or "")).get("scene_sequence_number") is None,
+            parse_scene_name(str(item.get("label") or "")).get("scene_sequence_number") or 0,
+            str(item.get("label") or "").casefold()))
+        merged_runs.append({**meta, "scenes": ordered})
+        merged_scenes.extend(ordered)
+    return {**{k: v for k, v in newest.items() if k not in {"runs", "scenes", "run"}},
+            "runs": merged_runs, "scenes": merged_scenes,
+            "run": merged_runs[0] if len(merged_runs) == 1 else {"source_name": newest.get("run", {}).get("source_name")},
+            "quality_issues": sorted(set(newest.get("quality_issues", []))),
+            "merged_capture_ids": sources}
+
+
+def get_latest_capture(conn: ConnectionLike, case_id: str) -> dict[str, Any] | None:
+    case = conn.execute("SELECT id,project_id,request_id,environment,source_name FROM dashboard_cases WHERE id=?",
+                        [case_id]).fetchone()
+    if not case:
+        return None
+    entries = [(str(row[0]), row[1]) for row in conn.execute(
+        "SELECT id,payload_json FROM dashboard_captures WHERE case_id=? ORDER BY created_at,id", [case_id]).fetchall()]
+    if not entries:
+        return None
+    payload = merge_latest_payload(entries)
+    capture_id = latest_capture_id(case_id)
+    payload.setdefault("context", {}).update({"project_id": case[1], "request_id": case[2], "capture_id": capture_id})
+    fingerprint = hashlib.sha256(json.dumps([entry[0] for entry in entries]).encode()).hexdigest()
+    return {"id": capture_id, "case_id": str(case[0]), "fingerprint": fingerprint, "environment": case[3],
+            "source_name": case[4], "payload": payload}
+
+
+def case_project_id(conn: ConnectionLike, case_id: str) -> str | None:
+    row = conn.execute("SELECT project_id FROM dashboard_cases WHERE id=?", [case_id]).fetchone()
+    return str(row[0]) if row else None
