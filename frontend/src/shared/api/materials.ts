@@ -38,7 +38,8 @@ export type MaterialsHierarchy = {
   execution_runs: MaterialsHierarchyRun[]
   run_options: MaterialsHierarchyOption[]
 }
-export type MaterialsCatalog = { request_id: string | null; environment: string | null; scenes: MaterialsScene[]; hierarchy: MaterialsHierarchy }
+export type MaterialsCatalogConflict = { relative_path: string; code: string; message: string }
+export type MaterialsCatalog = { request_id: string | null; environment: string | null; scenes: MaterialsScene[]; hierarchy: MaterialsHierarchy; conflicts: MaterialsCatalogConflict[] }
 export type MaterialsPart = {
   id: string
   title: string | null
@@ -218,7 +219,12 @@ function parseCatalog(value: unknown): MaterialsCatalog {
   const payload = record(value)
   if (!payload || !Array.isArray(payload.scenes)) throw new Error('소재 카탈로그 응답 형식이 올바르지 않습니다.')
   const scenes = payload.scenes.map(scene).filter((item): item is MaterialsScene => item !== null)
-  return { request_id: optionalText(payload.request_id), environment: optionalText(payload.environment), scenes, hierarchy: hierarchy(payload.hierarchy) }
+  const conflicts = rows(payload.conflicts).flatMap((value): MaterialsCatalogConflict[] => {
+    const item = record(value)
+    const path = optionalText(item?.relative_path)
+    return item && path ? [{ relative_path: path, code: optionalText(item.code) ?? '', message: optionalText(item.message) ?? '' }] : []
+  })
+  return { request_id: optionalText(payload.request_id), environment: optionalText(payload.environment), scenes, hierarchy: hierarchy(payload.hierarchy), conflicts }
 }
 
 function parseDeck(value: unknown): MaterialsDeckResponse {

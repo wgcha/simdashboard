@@ -1073,3 +1073,8 @@
 ## 2026-10-02 3단계 A안 화면 검수 반영 (Claude)
 - Case 결과 A안(경로 바·탭·표시 옵션·영상 그리드 재사용·소재 탭) 독립 검수 지적 수정: `has_values` Component 우선, Case 변경 시 이력 초기화, 영상 Run Option 안내, 문제 코드 한글화, 토큰 색상, 줄바꿈·말줄임, 키보드 탭, 환경 복원.
 - 검증: dashboard 관련 백엔드 29 passed, e2e simulation 13/14(capture-pin 폐기 항목), materials 6, case-video-grid 2, folder-working-final 3, tsc·build·routing 통과, check:architecture 기존 4건. Codex Security·Windows 검증은 해당 없음/미실행.
+
+## 2026-10-02 소재·물성 탭 빈 화면 원인 확인 (Claude)
+- 현장(읽기 전용 API 조회): 같은 `75R9J_PV/[WR-0001]_[유통_환경]` 폴더가 두 프로젝트(00:05 기존 등록, 13:31 UTC 관리자 폴더 조사 수동 등록)의 의뢰에 각각 연결되어, 소재 카탈로그의 소유권 검사가 모든 Scene을 조용히 제외했다. Case 결과는 소유권 검사가 없어 표시됐다. 자동 확인(discover)은 원인이 아님(감사 기록 FOLDER_ENVIRONMENT_REGISTERED, 회귀 테스트로 root 이동 후 중복 생성 안 함 확인).
+- 조치: 소재 카탈로그가 제외한 Scene을 `conflicts`로 돌려주고 화면에 "다른 의뢰에도 연결" 안내 표시. 데이터 정리(중복 프로젝트·의뢰 해제)는 앱에 기능이 없어 사용자 결정 대기.
+- 검증: shared_folder_hierarchy·auto_discovery·materials 58 passed, e2e materials 6 passed, tsc 통과.

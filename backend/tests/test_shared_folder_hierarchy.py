@@ -66,3 +66,27 @@ def test_materials_results_location_gets_hierarchy_ids(admin_client):
     dash, mats = _catalogs(client, project_id, request_id)
     for item in mats["scenes"]:
         assert item["case_id"] and item["execution_run_id"], item
+
+
+def test_materials_reports_scene_folders_owned_by_another_request(admin_client):
+    """A Scene shown by Case results but owned elsewhere is reported, not silently dropped."""
+    from app.database_connection import connect
+    from tests.test_new_scene_registration import OPTION
+    client, root = admin_client
+    project_id, request_id = _seed(client, root)
+    with connect() as conn:
+        from app.services.folder_discovery import configured_root
+        from app.services.folder_discovery_scan import root_identity
+        root_key = root_identity(configured_root(conn))
+        conn.execute(
+            "INSERT INTO result_registration_paths (id,root_key,project_id,request_id,environment,relative_path,path_key,"
+            "parent_relative_path,role_kind,target_id,raw_name,created_by,created_at) "
+            "VALUES ('rrp-other',?,'other-project','other-request','DISTRIBUTION',?,?,?,'RUN_OPTION','other-option',"
+            "'INDIVIDUAL','tester',CURRENT_TIMESTAMP)",
+            [root_key, OPTION, OPTION.casefold(), OPTION.rsplit("/", 1)[0]])
+    response = client.get("/api/materials/catalog", params={"request_id": request_id, "environment": "DISTRIBUTION"})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["scenes"] == []
+    assert {item["code"] for item in body["conflicts"]} == {"RESULT_PATH_OWNERSHIP_CONFLICT"}
+    assert len(body["conflicts"]) == 2

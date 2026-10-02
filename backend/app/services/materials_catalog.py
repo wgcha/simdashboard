@@ -387,7 +387,8 @@ def _candidate_sources(scene: dict[str, Any], root: Path, scope: dict[str, Any],
 
 
 def _catalog_items(conn: ConnectionLike, root: Path, root_id: str, root_key: str,
-                   scope: dict[str, Any], schema: dict[str, Any]) -> list[dict[str, Any]]:
+                   scope: dict[str, Any], schema: dict[str, Any],
+                   conflicts: list[dict[str, str]] | None = None) -> list[dict[str, Any]]:
     budget = {
         "started": time.monotonic(), "entries": 0, "sniff_bytes": 0,
         "owned_directories": {}, "ownership_checks": 0,
@@ -430,6 +431,10 @@ def _catalog_items(conn: ConnectionLike, root: Path, root_id: str, root_key: str
         except result_registration_paths.ResultRegistrationError as exc:
             if exc.code in {"RESULT_PATH_OWNERSHIP_CONFLICT", "RESULT_PATH_ROLE_CONFLICT",
                             "RESULT_PATH_INVALID", "RESULT_PATH_OUTSIDE_REQUEST"}:
+                # Never silent: the screen explains why a Scene the Case results
+                # show is missing here (e.g. the folder is linked to two requests).
+                if conflicts is not None and len(conflicts) < 20:
+                    conflicts.append({"relative_path": scene_path, "code": exc.code, "message": str(exc)})
                 continue
             raise MaterialsCatalogError(exc.code, str(exc)) from exc
         semantic_hierarchy = {
@@ -458,7 +463,8 @@ def _catalog_items(conn: ConnectionLike, root: Path, root_id: str, root_key: str
 
 def catalog(conn: ConnectionLike, request_id: str, environment: str) -> dict[str, Any]:
     project_id, scope, root, root_id, root_key, schema = _request_scope(conn, request_id, environment)
-    items = _catalog_items(conn, root, root_id, root_key, scope, schema)
+    conflicts: list[dict[str, str]] = []
+    items = _catalog_items(conn, root, root_id, root_key, scope, schema, conflicts)
     # Case results and materials share one hierarchy projection, so the same URL
     # selection (case/case_load/case_run/case_option) means the same folders.
     projected = folder_schema_hierarchy.project_schema_hierarchy(schema, scope["locations"], root_key)
@@ -485,7 +491,7 @@ def catalog(conn: ConnectionLike, request_id: str, environment: str) -> dict[str
         "run_options": projected["run_options"],
     }
     return {"request_id": request_id, "environment": scope["environment"], "scenes": items,
-            "hierarchy": hierarchy}
+            "hierarchy": hierarchy, "conflicts": conflicts}
 
 
 def _resolve_scene(conn: ConnectionLike, request_id: str, environment: str,

@@ -399,3 +399,27 @@ def test_discovery_can_be_disabled_for_isolated_runs(monkeypatch):
     assert folder_auto_discovery.discover()["status"] == "DISABLED"
     monkeypatch.setenv("SIMDASH_AUTO_DISCOVERY", "1")
     assert folder_auto_discovery.enabled()
+
+
+def test_project_linked_under_previous_root_is_not_duplicated_after_root_move(admin_client, monkeypatch):
+    """Field report 2026-10-02: the root moved from E:\\shared\\SPDM (Admin) to E:\\shared.
+
+    The old links are keyed by the old root, so discovery under the new root
+    created a second "75R9J_PV" project and a second WR-0001 request for the
+    same folders; both then failed the materials ownership check.
+    """
+    client, root = admin_client
+    _level_profile()
+    _distribution_request(root, WR2)
+    monkeypatch.setenv("SIMDASH_SPDM_ROOT", str(root / CONTAINER))
+    first = _discover(client, force=True)
+    assert len(first["created_requests"]) == 1, first
+    projects = _count("SELECT count(*) FROM projects")
+    requests = _count("SELECT count(*) FROM analysis_requests")
+    monkeypatch.setenv("SIMDASH_SPDM_ROOT", str(root))
+    folder_auto_discovery.reset_for_tests()
+    moved = _discover(client, force=True)
+    assert moved["created_projects"] == [] and moved["created_requests"] == []
+    assert (PROJECT, "PROJECT_NAME_EXISTS") in {(item["relative_path"], item["code"]) for item in moved["needs_review"]}
+    assert _count("SELECT count(*) FROM projects") == projects
+    assert _count("SELECT count(*) FROM analysis_requests") == requests
