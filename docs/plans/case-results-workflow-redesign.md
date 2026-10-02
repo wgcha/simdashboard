@@ -145,4 +145,5 @@
 - 5단계: Case 결과 보고서 PPTX(브라우저 pptxgenjs, 기존 템플릿·편집 재사용) 다운로드만 구현한다.
 - 6단계: Final 지정 시 같은 레시피의 PPTX를 `Final/Reports/<Case>/<Final ID>/`에 저장하고, 입력·결과는 `Final/CAE/<Case>/<Final ID>/<Working 미러>`에 저장한다(DEPTH_V1 D11·D12). 결과 파일을 Reports로 보내던 기존 분류는 CAE로 바꾼다.
 - 중복 의뢰 정리는 다른 세션의 DEPTH_V1 §13(등록 삭제)이 맡는다.
+- 추가 결정(23:56): 보고서는 PPTX와 HTML을 함께 구현하고 사용자가 하나 이상 고른다. HTML 영상 포함은 선택(영상당 보통 1MB 미만; 상한 영상당 20MB·전체 200MB, 넘으면 대표 이미지로 대체). Final/Reports에는 사용자가 고른 PPTX·HTML을 저장하고 PDF는 계약에서 제외한다(depth-schema D11 갱신). 업로드한 HTML은 SPDM에 저장만 하고 앱이 페이지로 제공하지 않는다.
 

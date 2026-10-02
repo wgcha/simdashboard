@@ -24,7 +24,7 @@
 | D8 | 사용환경의 `EVALUATION` 역할을 `SCENE`으로 통합한다. 두 환경 모두 Scene을 쓴다 |
 | D9 | 스키마를 저장해도 기존 등록 의뢰는 변경하지 않는다. 의뢰 화면의 **재해석** 버튼으로만 새 스키마를 적용한다 |
 | D10 | 하위 L1은 **이름으로** 구분한다. `Working`(필수)과 `Final`(선택, Final 지정 후 생성). `Final`도 스키마 대상이다 |
-| D11 | Final 하위 L2는 이름으로 구분한다. `CAE` = 해석 입력·결과 파일, `Reports` = 보고서 기능이 만든 PPTX/PDF. 앱의 SPDM 쓰기는 이 두 폴더로만 한다 |
+| D11 | Final 하위 L2는 이름으로 구분한다. `CAE` = 해석 입력·결과 파일, `Reports` = 보고서 기능이 만든 PPTX·HTML(사용자가 Final 지정 때 하나 이상 선택, PDF는 만들지 않음). 앱의 SPDM 쓰기는 이 두 폴더로만 한다 |
 | D12 | Final/CAE·Reports의 L3 이하는 고정 구조다: `<Case>/<finalization_id>/` 아래에 Working의 Case 이하 구조를 그대로 미러링한다. 관리자 편집 대상이 아니며 UI에 읽기 전용으로 표시한다 |
 
 ## 3. 표준 트리
@@ -39,7 +39,7 @@ Root                                   L0 (역할 없음)
       │  │  └─ <Case>                   L3 SIMULATION_CASE
       │  │     └─ <finalization_id>     L4 FINAL_VERSION  32자리 hex
       │  │        └─ …                  L5~ = Working의 Case 이하 구조 미러 (사용: Scene / 유통: LoadCase/Run/RunOption/Scene)
-      │  ├─ Reports                     L2 FINAL_REPORTS  보고서 PPTX/PDF
+      │  ├─ Reports                     L2 FINAL_REPORTS  보고서 PPTX·HTML
       │  └─ CAD                         L2 FINAL_CAD      하위는 CONTENT (앱 쓰기 없음) — 미확정, §12
       │     └─ <Case>/<finalization_id>/…  CAE와 같은 구조
       └─ Working                       하위 L1 WORKING (이름으로 판정, 필수)
