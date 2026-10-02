@@ -1064,3 +1064,8 @@
 - 권한 `project.data.view`(목록 조회와 동일), 프로세스·root별 60초(force 10초) 합치기, 생성 시에만 감사 기록. 프런트 `useFolderDiscovery`(시작 시·60초, 숨김 탭 중지, "새 의뢰 n건 확인" 알림, 생성 시 `refreshOperationalData`).
 - 검증: 신규 10 passed, 지정 회귀(environment_folder_flow_api·new_scene_registration·folder_auto_sync·result_registration_api) 포함 61 passed/2 skipped, environment_registration·folder_discovery·openapi_contract 통과. 백엔드 architecture baseline 테스트 실패는 기준 커밋에서도 동일한 기존 항목(dashboard.py·folder_discovery_environment.py sync의 execute). tsc·test:routing 통과, check:architecture는 기존 4건만(App.tsx 1089/1077, +1행).
 - 미실행: e2e(지휘 담당), 독립 검수·Codex Security 스캔, PostgreSQL·Windows/Server 2022, 실제 공유폴더. migration·의존성·배포 진입점 변경 없음.
+
+## 2026-10-02 자동 확인 독립 검수 지적 수정 (Claude)
+- 비대기 실행 잠금·합치기 확인을 DB 연결 전에 수행(실행 중이면 RUNNING 즉시 반환), 실행 45초·새 의뢰 5개 상한(단계마다 확인). 정확한 SPDM 이름만 등록(NAME_NOT_STANDARD), 같은 WR 번호·환경 중복 차단(WR_ALREADY_LINKED), 재시도 실패 폴더별 backoff(force 무시), 관리자 제외 폴더 ADMIN_EXCLUDED 표시와 제외 집합 캐시, 같은 이름 미연결 프로젝트 PROJECT_NAME_EXISTS, 목록 오류 보고·하위 폴더 하나의 오류 격리, 경합 패배 시 생성 보고 안 함(미리보기 ID 비교). 화면은 선택을 유지한 채 프로젝트·의뢰 목록만 갱신, 401/403에서 확인 중지, 목록 갱신 실패 시 알림 보류.
+- 검증: discovery 17 passed, environment_folder_flow_api·new_scene_registration·folder_auto_sync 포함 59 passed/1 skipped; architecture baseline은 기준과 같은 dashboard.py(7) 1건만 실패. tsc·test:routing 통과, check:architecture 기존 4건(App.tsx 1089, 증가 없음). e2e·독립 재검수 미실행.
+

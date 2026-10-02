@@ -119,7 +119,8 @@ test('확정 Working 계층은 수집본에 Run이 없거나 결과 미수집 �
   await loginWorkspace(page)
   await page.goto('/workspace/requests?project=project-tv-001&request=request-drop-001&view=case_results&result_environment=DISTRIBUTION')
   const dashboard = page.locator('.simulation-dashboard')
-  await expect(dashboard).toBeVisible()
+  // A full reload re-bootstraps the workspace; allow for a slow first render.
+  await expect(dashboard).toBeVisible({ timeout: 15_000 })
   await expect(page).toHaveURL(/view=case_results/)
   await expect(page.locator('vite-error-overlay')).toHaveCount(0)
   const caseSelect = dashboard.locator('label').filter({ hasText: '해석 Case' }).locator('select').first()

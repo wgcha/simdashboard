@@ -85,15 +85,16 @@ def discover(request: Request, payload: Discover | None = None):
     Runs are throttled server-side (see folder_auto_discovery).
     """
     force = bool(payload and payload.force)
-    with connect() as conn:
-        access = require_permission(request, PROJECT_DATA_VIEW, conn=conn)
-        result = folder_auto_discovery.discover(conn, force=force)
-        if not result.get("coalesced") and (result["created_projects"] or result["created_requests"]):
-            write_audit_event(request=request, principal=request.state.principal, status_code=200,
-                              action="FOLDER_ENVIRONMENT_AUTO_DISCOVERED",
-                              detail=folder_auto_discovery.audit_detail(result), connection=conn)
-        return folder_auto_discovery.visible_result(
-            result, is_global_admin=bool(getattr(access.principal, "is_global_admin", False)))
+    # Short permission check; the discovery opens a DB connection only when it
+    # actually runs, and never waits for a run that is already in progress.
+    access = require_permission(request, PROJECT_DATA_VIEW)
+    result = folder_auto_discovery.discover(force=force)
+    if not result.get("coalesced") and (result["created_projects"] or result["created_requests"]):
+        write_audit_event(request=request, principal=request.state.principal, status_code=200,
+                          action="FOLDER_ENVIRONMENT_AUTO_DISCOVERED",
+                          detail=folder_auto_discovery.audit_detail(result))
+    return folder_auto_discovery.visible_result(
+        result, is_global_admin=bool(getattr(access.principal, "is_global_admin", False)))
 @router.post("/refresh")
 def refresh(payload: Refresh, request: Request):
     with connect() as conn:

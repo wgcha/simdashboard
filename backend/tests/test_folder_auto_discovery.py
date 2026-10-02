@@ -7,8 +7,9 @@ import pytest
 from fastapi import HTTPException
 
 from app.database_connection import connect
-from app.services import environment_folder_profiles, folder_auto_discovery, folder_auto_sync
-from tests.test_new_scene_registration import CSV, CSV_BYTES, _seed, admin_client  # noqa: F401
+from app.services import environment_folder_profiles, folder_auto_discovery, folder_auto_sync, spdm_storage
+from app.services import folder_discovery_environment as environment_service
+from tests.test_new_scene_registration import CSV, CSV_BYTES, OPTION, _seed, admin_client  # noqa: F401
 
 pytestmark = pytest.mark.duckdb_integration
 DISCOVER = "/api/folder-discovery/environments/discover"
@@ -140,6 +141,9 @@ def test_distribution_and_usage_names_map_to_their_environment():
     assert env("WR_A1_SimType2") == "DISTRIBUTION"
     assert env("[WR-0003]_[기타]") is None
     assert env("[WR-0003]_[사용_유통]") is None
+    for copied in ("[WR-0001]_[유통_환경] - 복사본", "[WR-0001]_[유통_환경]_old", "[WR-0001]_[유통_환경] copy",
+                   "[WR-0001]_[유통 환경]", "WR_A1_SimType2_old", "[WR-ABC]_[유통_환경]"):
+        assert env(copied) is None, copied
 
 
 def test_unknown_environment_and_unresolved_roles_need_review(admin_client):
@@ -152,7 +156,7 @@ def test_unknown_environment_and_unresolved_roles_need_review(admin_client):
     result = _discover(client)
     assert result["created_projects"] == [] and result["created_requests"] == []
     reviews = {item["relative_path"]: item["code"] for item in result["needs_review"]}
-    assert reviews == {f"{PROJECT}/[WR-0003]_[기타]": "ENVIRONMENT_UNKNOWN", WR2: "ROLES_UNRESOLVED"}
+    assert reviews == {f"{PROJECT}/[WR-0003]_[기타]": "NAME_NOT_STANDARD", WR2: "ROLES_UNRESOLVED"}
     assert (_count("SELECT count(*) FROM analysis_requests"), _count("SELECT count(*) FROM projects")) == baseline
 
     # An unchanged unresolved request is not deep-scanned again on the next run.
@@ -192,8 +196,7 @@ def test_concurrent_runs_create_one_request(admin_client):
 
     def run():
         try:
-            with connect() as conn:
-                results.append(folder_auto_discovery.discover(conn, force=True))
+            results.append(folder_auto_discovery.discover(force=True))
         except Exception as exc:  # pragma: no cover - reported below
             errors.append(exc)
 
@@ -259,3 +262,140 @@ def test_needs_review_is_admin_only():
               "checked_at": "", "coalesced": False}
     assert folder_auto_discovery.visible_result(result, is_global_admin=False)["needs_review"] == []
     assert folder_auto_discovery.visible_result(result, is_global_admin=True)["needs_review"] == [{"relative_path": "a"}]
+
+
+def test_running_discovery_never_blocks_a_caller(admin_client):
+    client, root = admin_client
+    (root / WR2 / "Working").mkdir(parents=True)
+    opened = []
+    assert folder_auto_discovery._run_lock.acquire(blocking=False)
+    try:
+        result = folder_auto_discovery.discover(force=True, connection_factory=lambda: opened.append(1))
+        via_api = _discover(client)
+    finally:
+        folder_auto_discovery._run_lock.release()
+    assert opened == []  # no DB connection while another run holds the lock
+    assert result["status"] == via_api["status"] == "RUNNING" and result["created_requests"] == []
+    assert _discover(client)["created_requests"]
+
+
+def test_copied_or_renamed_request_folders_are_not_registered(admin_client):
+    client, root = admin_client
+    _level_profile()
+    baseline = _count("SELECT count(*) FROM analysis_requests")
+    (root / WR2 / "Working").mkdir(parents=True)
+    for name in ("[WR-0002]_[유통_환경] - 복사본", "[WR-0002]_[유통_환경]_old", "WR_0002_SimType2"):
+        (root / PROJECT / name / "Working").mkdir(parents=True)
+    result = _discover(client)
+    assert [item["name"] for item in result["created_requests"]] == ["[WR-0002]_[유통_환경]"]
+    codes = {item["relative_path"].rsplit("/", 1)[-1]: item["code"] for item in result["needs_review"]}
+    assert codes == {"[WR-0002]_[유통_환경] - 복사본": "NAME_NOT_STANDARD", "[WR-0002]_[유통_환경]_old": "NAME_NOT_STANDARD",
+                     "WR_0002_SimType2": "WR_ALREADY_LINKED"}
+    assert _count("SELECT count(*) FROM analysis_requests") == baseline + 1
+    # Also on a later run, after the first one is linked.
+    again = _discover(client)
+    assert again["created_requests"] == [] and {item["code"] for item in again["needs_review"]} == {
+        "NAME_NOT_STANDARD", "WR_ALREADY_LINKED"}
+
+
+def test_failed_registration_backs_off_even_when_forced(admin_client, monkeypatch):
+    client, root = admin_client
+    (root / WR2 / "Working").mkdir(parents=True)
+    calls = []
+
+    def failing(*args, **kwargs):
+        calls.append(1)
+        raise RuntimeError("synthetic failure")
+
+    monkeypatch.setattr(environment_service, "register", failing)
+    first = _discover(client, force=True)
+    assert [item["code"] for item in first["needs_review"]] == ["REGISTRATION_FAILED"]
+    scans = _count("SELECT count(*) FROM folder_environment_scans")
+    second = _discover(client, force=True)
+    assert [item["code"] for item in second["needs_review"]] == ["REGISTRATION_FAILED"]
+    assert len(calls) == 1 and _count("SELECT count(*) FROM folder_environment_scans") == scans
+    monkeypatch.setattr(folder_auto_discovery, "RETRY_BACKOFF_SECONDS", (0.0,))
+    with folder_auto_discovery._state_lock:
+        for value in folder_auto_discovery._retry_memo.values():
+            value["until"] = 0.0
+    _discover(client, force=True)
+    assert len(calls) == 2
+
+
+def test_admin_excluded_request_is_reported_not_hidden(admin_client):
+    client, root = admin_client
+    for scene in ("2_Face", "3_Face"):
+        (root / OPTION / scene).mkdir(parents=True)
+        (root / OPTION / scene / CSV).write_bytes(CSV_BYTES)
+    excluded = "75R9J_PV/[WR-0009]_[유통_환경]"
+    (root / excluded / "Working").mkdir(parents=True)
+    scan = client.post("/api/folder-discovery/environments/scan", json={"environment": "DISTRIBUTION", "relative_path": ""}).json()
+    assignments = [{"node_id": n["id"], "role_kind": "SCENE", "confirm": True}
+                   for n in scan["nodes"] if n["relative_path"] in {f"{OPTION}/2_Face", f"{OPTION}/3_Face"}]
+    assignments += [{"node_id": n["id"], "role_kind": "EXCLUDE", "confirm": True}
+                    for n in scan["nodes"] if n["relative_path"] == excluded]
+    preview = client.post("/api/folder-discovery/environments/previews", json={"scan_id": scan["id"], "assignments": assignments}).json()
+    assert preview["can_apply"], preview
+    registered = client.post("/api/folder-discovery/environments/registrations",
+                             json={"preview_id": preview["id"], "idempotency_key": "admin-exclude-0001", "capture": False})
+    assert registered.status_code == 200, registered.text
+    result = _discover(client)
+    assert result["created_requests"] == []
+    assert {(item["relative_path"], item["code"]) for item in result["needs_review"]} == {(excluded, "ADMIN_EXCLUDED")}
+
+
+def test_unlinked_project_with_same_name_is_not_duplicated(admin_client):
+    client, root = admin_client
+    created = client.post("/api/projects", json={"name": "75r9j_pv", "product_name": "TV"})
+    assert created.status_code == 201, created.text
+    before = _count("SELECT count(*) FROM projects")
+    (root / WR2 / "Working").mkdir(parents=True)
+    result = _discover(client)
+    assert result["created_projects"] == [] and result["created_requests"] == []
+    assert [(item["relative_path"], item["code"]) for item in result["needs_review"]] == [(PROJECT, "PROJECT_NAME_EXISTS")]
+    assert _count("SELECT count(*) FROM projects") == before
+
+
+def test_one_unreadable_child_does_not_hide_its_siblings(admin_client, monkeypatch):
+    client, root = admin_client
+    (root / WR2 / "Working").mkdir(parents=True)
+    # An unreadable sibling project folder in the same container.
+    (root / CONTAINER / "77777_PV" / "[WR-0008]_[사용_환경]").mkdir(parents=True)
+    original = spdm_storage._is_reparse
+
+    def flaky(path):
+        if path.name == "77777_PV":
+            raise spdm_storage.SpdmStorageError("SPDM_PATH_UNAVAILABLE", "synthetic")
+        return original(path)
+
+    monkeypatch.setattr(spdm_storage, "_is_reparse", flaky)
+    result = _discover(client)
+    assert [item["name"] for item in result["created_requests"]] == ["[WR-0002]_[유통_환경]"]
+    assert {(item["relative_path"], item["code"]) for item in result["needs_review"]} == {
+        (f"{CONTAINER}/77777_PV", "PATH_UNAVAILABLE")}
+
+
+def test_race_lost_to_another_process_is_not_reported_as_created(admin_client, monkeypatch):
+    client, root = admin_client
+    (root / WR2 / "Working").mkdir(parents=True)
+    real_register = environment_service.register
+
+    def other_process_wins(conn, preview_id, key, capture, principal, root_path, **kwargs):
+        # Another process registers the same folder with its own preview first.
+        other = conn.execute("SELECT scan_id FROM folder_environment_previews WHERE id=?", [preview_id]).fetchone()[0]
+        rival = environment_service.preview(conn, other, [], principal.user_id, allow_without_cases=True)
+        real_register(conn, rival["id"], key, capture, principal, root_path, **kwargs)
+        return real_register(conn, preview_id, key, capture, principal, root_path, **kwargs)
+
+    monkeypatch.setattr(environment_service, "register", other_process_wins)
+    result = _discover(client)
+    assert result["created_requests"] == [] and result["created_projects"] == []
+    assert _count("SELECT count(*) FROM audit_events WHERE action='FOLDER_ENVIRONMENT_AUTO_DISCOVERED'") == 0
+
+
+def test_discovery_can_be_disabled_for_isolated_runs(monkeypatch):
+    from app.services import folder_auto_discovery
+    monkeypatch.setenv("SIMDASH_AUTO_DISCOVERY", "0")
+    assert folder_auto_discovery.discover()["status"] == "DISABLED"
+    monkeypatch.setenv("SIMDASH_AUTO_DISCOVERY", "1")
+    assert folder_auto_discovery.enabled()

@@ -211,6 +211,8 @@ async function runOneE2eInvocation(args) {
       ANALYSIS_DUCKDB_PATH: e2eDatabase,
       AUTH_MODE: 'password',
       AUTH_SECRET_KEY: e2eSecret,
+      // Keep fixture SPDM folders from being auto-registered during the run.
+      SIMDASH_AUTO_DISCOVERY: '0',
     },
   })
   const vite = launch(process.execPath, [
