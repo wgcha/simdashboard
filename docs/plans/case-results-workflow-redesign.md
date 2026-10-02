@@ -2,7 +2,7 @@
 
 - 기준일: 2026-10-02
 - 상태: 0~3단계 구현·격리 검증 완료(브랜치 `claude/case-results-redesign`). 4단계 이후 미착수.
-- 결정 사항(사용자 확인 2026-10-02): UI는 **A안(경로 바 + 단일 결과면)**, PDF는 **서버 LibreOffice headless 변환**, 결과 검수는 **Final 지정 시점으로 이동**, 자동 변경 확인 주기는 **30초**.
+- 결정 사항(사용자 확인 2026-10-02): UI는 **A안(경로 바 + 단일 결과면)**, PDF는 **보류**(2026-10-02 23:51 사용자 결정: 회사 PC의 MS Office로 변환, 웹은 PPTX만. 이전 결정인 서버 LibreOffice 변환은 철회), 결과 검수는 **Final 지정 시점으로 이동**, 자동 변경 확인 주기는 **30초**.
 - 대체 범위: [소재물성 계획의 2026-10-02 후속 UI 계획](materials-dashboard-implementation.md#모델-소재물성-계층-선택-ui-개선-계획)은 이 문서로 대체한다. 해당 절의 검증 시나리오는 여기서 계승한다.
 - 기준 계약: [공용 위치·Refresh](../features/folder-schema-refresh.md), [결과 등록](../features/result-registration.md), [최종확정](../features/case-finalization.md), [Windows 배포 정책](../windows-deployment-policy.md)
 
@@ -139,4 +139,10 @@
 - 영상 탭은 Run 대시보드 영상 그리드(VideoGridCore)를 재사용하고, Run Option이 여러 개인데 선택이 없으면 선택을 안내한다. 소재·물성은 같은 경로 바를 쓰는 탭으로 옮겼다.
 - 독립 검수 지적 반영: 값이 있는 Component 우선 선택(`has_values`), Case 변경 시 이력 선택 초기화, 문제 코드 한글화, 토큰 색상, 긴 이름 줄바꿈·말줄임, 키보드 탭 이동, 소재 탭에서 돌아올 때 환경 복원.
 - 검증: e2e simulation 13 통과(남은 1건은 폐기된 capture-pin 기대), materials 6, case-video-grid 2, folder-working-final 3, 1440/1920×11/18pt·4K 화면 확인, tsc·build·routing 통과, check:architecture 기존 4건만.
+
+### PDF 보류 결정 (2026-10-02 23:51)
+- 회사에 MS Office가 있으므로 웹 프로그램의 PDF 생성은 보류한다. §3.5의 LibreOffice 변환·폐쇄망 패키징은 진행하지 않는다(배포 정책·ADR 변경 없음).
+- 5단계: Case 결과 보고서 PPTX(브라우저 pptxgenjs, 기존 템플릿·편집 재사용) 다운로드만 구현한다.
+- 6단계: Final 지정 시 같은 레시피의 PPTX를 `Final/Reports/<Case>/<Final ID>/`에 저장하고, 입력·결과는 `Final/CAE/<Case>/<Final ID>/<Working 미러>`에 저장한다(DEPTH_V1 D11·D12). 결과 파일을 Reports로 보내던 기존 분류는 CAE로 바꾼다.
+- 중복 의뢰 정리는 다른 세션의 DEPTH_V1 §13(등록 삭제)이 맡는다.
 
