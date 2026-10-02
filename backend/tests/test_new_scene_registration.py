@@ -253,3 +253,68 @@ def test_revision_only_refresh_creates_no_capture(admin_client):
         after = conn.execute("SELECT count(*) FROM dashboard_captures").fetchone()[0]
     assert (after, result["changed"]) == (before, False), (before, after, result["status"], result["diff"])
     assert _refresh(client, project_id, request_id)["status"] == "UNCHANGED"
+
+
+def test_distribution_scene_proposes_itself_not_a_results_subfolder(admin_client):
+    """Distribution inputs and results live directly in the Scene folder (user decision)."""
+    client, root = admin_client
+    project_id, request_id = _seed(client, root)
+    response = client.get(REG + "/folders", params={"project_id": project_id, "request_id": request_id,
+                                                    "environment": "DISTRIBUTION", "parent_relative_path": OPTION})
+    assert response.status_code == 200, response.text
+    scene = next(node for node in response.json()["nodes"] if node["relative_path"] == f"{OPTION}/2_Face")
+    assert (scene["suggested_relative_path"], scene["result_state"], scene["can_prepare"]) == (
+        f"{OPTION}/2_Face", "PRESENT", False)
+    assert not (root / OPTION / "2_Face" / "results").exists()
+
+
+def test_distribution_scene_proposes_itself_not_a_results_subfolder(admin_client):
+    """Distribution inputs and results live directly in the Scene folder (user decision)."""
+    client, root = admin_client
+    project_id, request_id = _seed(client, root)
+    response = client.get(REG + "/folders", params={"project_id": project_id, "request_id": request_id,
+                                                    "environment": "DISTRIBUTION", "parent_relative_path": OPTION})
+    assert response.status_code == 200, response.text
+    scene = next(node for node in response.json()["nodes"] if node["relative_path"] == f"{OPTION}/2_Face")
+    assert (scene["suggested_relative_path"], scene["result_state"], scene["can_prepare"]) == (
+        f"{OPTION}/2_Face", "PRESENT", False)
+    assert not (root / OPTION / "2_Face" / "results").exists()
+
+
+def test_whole_solver_folder_uploads_into_scene_folder_itself(admin_client):
+    """Users upload every analysis file; the dashboard reads what it recognises."""
+    import hashlib
+    client, root = admin_client
+    project_id, request_id = _seed(client, root)
+    prepared = _prepare_new_scene(client, project_id, request_id)
+    scene = f"{OPTION}/4_Edge"
+    assert prepared["result_relative_path"] == scene
+    payloads = {CSV: CSV_BYTES, "model_0000.rad": b"#RADIOSS STARTER\n/END\n",
+                "sample_parts.inc": b"/PART/1\npart\n1 1\n", "solver.out": b"NORMAL TERMINATION\n",
+                "anim.h3d": bytes(range(256)) * 4}
+    files = [{"relative_path": name, "size": len(data), "sha256": hashlib.sha256(data).hexdigest(),
+              "media_type": "text/csv" if name.endswith(".csv") else "application/octet-stream"}
+             for name, data in payloads.items()]
+    blocked = client.post(REG + "/drafts", json={**_draft_body(project_id, request_id, prepared, prepared["context"]),
+                                                  "files": [{"relative_path": "run.exe", "size": 4, "sha256": None,
+                                                             "media_type": "application/octet-stream"}]})
+    assert blocked.status_code in {400, 409, 422} and blocked.json()["detail"]["code"] == "RESULT_FILE_TYPE_BLOCKED"
+    created = client.post(REG + "/drafts", json={**_draft_body(project_id, request_id, prepared, prepared["context"]),
+                                                  "files": files})
+    assert created.status_code == 201, created.text
+    draft_id = created.json()["draft_id"]
+    uploaded = client.post(REG + f"/drafts/{draft_id}/files", data={"relative_paths": list(payloads)},
+                           files=[("files", (name, data, "application/octet-stream")) for name, data in payloads.items()])
+    assert uploaded.status_code == 200, uploaded.text
+    inspected = client.post(REG + f"/drafts/{draft_id}/inspect")
+    assert inspected.status_code == 200, inspected.text
+    inspection = inspected.json()
+    approved = client.post(REG + f"/drafts/{draft_id}/approve", json={
+        "inspection_revision": inspection["inspection_revision"], "acknowledge_partial": True})
+    assert approved.status_code == 200, approved.text
+    published = client.post(REG + f"/drafts/{draft_id}/publish", json={
+        "inspection_revision": inspection["inspection_revision"], "idempotency_key": f"whole-{uuid4().hex}"})
+    assert published.status_code == 200, published.text
+    for name, data in payloads.items():
+        assert (root / scene / name).read_bytes() == data, name
+    assert not (root / scene / "results").exists()
