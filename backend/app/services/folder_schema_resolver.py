@@ -60,8 +60,12 @@ def _is_ancestor(path: str, descendant: str) -> bool:
 
 
 def scan_fingerprints(result: dict[str, Any], root: Path | None = None, *,
-                      deadline: float | None = None) -> tuple[str, str]:
-    """Fingerprint directory structure and relevant file bytes under scan limits."""
+                      deadline: float | None = None, content_entries: list | None = None) -> tuple[str, str]:
+    """Fingerprint directory structure and relevant file bytes under scan limits.
+
+    ``content_entries``, when given, receives the per-file (path, size, mtime,
+    digest) tuples so callers can fingerprint a subset of files.
+    """
     structure = sorted((
         _fold(str(item.get("relative_path") or "")),
         _fold(str(item.get("parent_path") or "")),
@@ -120,6 +124,8 @@ def scan_fingerprints(result: dict[str, Any], root: Path | None = None, *,
             or (deadline is not None and time.monotonic() > deadline)):
         raise FolderSchemaError("FOLDER_SCHEMA_CONTENT_TIME_LIMIT", "내용 fingerprint 시간 한도를 초과했습니다.", 413)
     content.sort()
+    if content_entries is not None:
+        content_entries.extend(content)
     encode = lambda value: json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encode(structure)).hexdigest(), hashlib.sha256(encode(content)).hexdigest()
 

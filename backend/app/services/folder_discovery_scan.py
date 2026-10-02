@@ -139,3 +139,21 @@ def stat_fingerprint(scan_result: dict[str, Any]) -> str:
         if PurePosixPath(str(item.get("relative_path") or "")).suffix.casefold() in RESULT_RELEVANT_EXTENSIONS)
     payload = json.dumps({"structure": structure, "files": files}, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def relevant_content_fingerprint(content_entries: list) -> str:
+    """Fingerprint result-relevant files by content digest (or size when not hashed).
+
+    Modification times are left out: a file rewritten with identical bytes is
+    unchanged, while changed bytes are detected even with an identical mtime.
+    """
+    import json
+    from pathlib import PurePosixPath
+
+    relevant = sorted(
+        (str(path), int(size), digest if digest is not None else None)
+        for path, size, _modified_ns, digest in content_entries
+        if PurePosixPath(str(path)).suffix.casefold() in RESULT_RELEVANT_EXTENSIONS
+    )
+    payload = json.dumps(relevant, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()

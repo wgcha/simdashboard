@@ -1,7 +1,7 @@
 # Case 결과 중심 사용 흐름 재설계 계획
 
 - 기준일: 2026-10-02
-- 상태: 0~1단계 구현·격리 검증 완료(브랜치 `claude/case-results-redesign`). 2단계 이후 미착수.
+- 상태: 0~2단계 구현·격리 검증 완료(브랜치 `claude/case-results-redesign`). 3단계 이후 미착수.
 - 결정 사항(사용자 확인 2026-10-02): UI는 **A안(경로 바 + 단일 결과면)**, PDF는 **서버 LibreOffice headless 변환**, 결과 검수는 **Final 지정 시점으로 이동**, 자동 변경 확인 주기는 **30초**.
 - 대체 범위: [소재물성 계획의 2026-10-02 후속 UI 계획](materials-dashboard-implementation.md#모델-소재물성-계층-선택-ui-개선-계획)은 이 문서로 대체한다. 해당 절의 검증 시나리오는 여기서 계승한다.
 - 기준 계약: [공용 위치·Refresh](../features/folder-schema-refresh.md), [결과 등록](../features/result-registration.md), [최종확정](../features/case-finalization.md), [Windows 배포 정책](../windows-deployment-policy.md)
@@ -116,3 +116,9 @@
 - 1단계: 공용 계층 투영 `folder_schema_hierarchy.py`로 Case 결과·소재 catalog의 Case/하중/Run/Option ID를 일치시켰다. 소재 화면은 Case→하중경우→Run→Option→Scene 경로로 선택하고, 두 화면은 router 기반 공용 URL hook을 쓴다.
 - 독립 검수에서 찾은 회귀(혼합 역할 깊이의 CONFLICT 차단, Run 아래 임의 폴더의 Option 승격, RESULTS 항목 ID 누락, 재해석 시 capture 1회 추가)는 수정하고 회귀 테스트를 추가했다.
 - 현장 반영: 업데이트 후 해당 의뢰에서 Refresh(또는 2단계 자동 반영) 한 번이면 기존 `4_Edge`가 Scene으로 들어온다. 이후 결과 등록에서 업로드한다.
+
+### 2단계 (2026-10-02)
+
+- `POST /api/folder-discovery/environments/sync`: 빠른 확인(폴더 구조 + 결과 관련 파일의 이름·크기·수정 시각, 내용 미판독) 후 차이·규칙 개정·새 등록이 있을 때만 scoped Refresh. 의뢰 범위별 20초(수동 5초) 합치기, 같은 상태의 역할 충돌 반복 조사 없음, 이전 snapshot의 빠른 지문 보충. 조회 권한으로 호출하며 클라이언트 경로를 받지 않는다.
+- 화면: 진입 시와 보이는 동안 30초마다 확인, 숨김 탭 정지, 상단 상태(`최신 · n분 전`/`확인 중…`/`파일 복사 중`/`폴더 확인 필요`)와 "지금 확인", 갱신 시 짧은 안내. 페이지 안의 `저장소 Refresh`·`결과 다시 읽기` 제거. 관리자 전역 `저장 폴더 새로고침`은 3단계에서 관리 화면으로 옮긴다.
+- 독립 검수 지적(로그 파일 변경마다 전체 갱신·capture, 충돌 반복 조사, 구 snapshot 매번 전체 판독, 수동 확인의 전체 판독 강제, 재스캔 경합, 중복 revision)을 수정하고 회귀 테스트를 추가했다.

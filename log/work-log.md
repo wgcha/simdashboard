@@ -1044,3 +1044,10 @@
 - 독립 검수 지적 4건(혼합 역할 CONFLICT 회귀, 임의 폴더 Option 승격, RESULTS ID 누락, 재해석 capture 추가) 수정. 프런트 지적(sentinel URL 노출)은 3단계에서 조회 문맥 선택기 제거로 해소 예정.
 - 검증: 백엔드 관련 회귀 172 passed + 신규 11 passed(격리 DuckDB·임시 SPDM root). tsc·build·test:routing/api/preferences/architecture self-test 통과. check:architecture는 기준 커밋과 같은 기존 4건만 실패. e2e: materials 5/5 통과, simulation-dashboard·environment-folder-flow·spdm-storage-workflow의 실패는 기준 커밋 725f4f7에서도 동일하게 실패하는 기존 항목이며 신규 실패 없음(Chromium headless shell 1194 사용).
 - 미실행: Codex Security 플러그인 스캔(도구 없음, 독립 수동 검수로 대체 — 플러그인 스캔 완료로 기록하지 않음), PostgreSQL 통합, Windows/Server 2022 실행, 실제 사용자 DB·서비스. migration·의존성·배포 진입점 변경 없음.
+
+## 2026-10-02 Case 결과 재설계 2단계 자동 반영 (Claude, 브랜치 claude/case-results-redesign)
+- 사용자 결정: 3단계 기준 화면은 32인치 4K(150% 배율 2560×1440 기본, 100% 3840×2160 보조).
+- `POST /api/folder-discovery/environments/sync`와 화면의 진입 시·30초 주기 확인을 추가하고 페이지 안 Refresh/다시 읽기 버튼을 제거했다. 빠른 확인은 폴더 구조와 결과 관련 파일(결과·미디어·덱·보고서)의 이름·크기·수정 시각만 비교한다. 결과 무관 파일(로그) 변경은 갱신·capture를 만들지 않고, 결과 파일은 내용 digest로 판단한다(같은 mtime의 내용 변경은 전체 Refresh에서 capture).
+- 독립 검수 지적 7건(로그 변경마다 전체 갱신·capture, 충돌 반복 조사, 구 snapshot 반복 판독, 수동 확인의 전체 판독, 재스캔 경합, 비 ValueError 처리, 중복 revision)과 계약 문서 누락을 수정했다. 기존 회귀 테스트가 같은 mtime 내용 변경 capture 누락을 잡아 결과 내용 지문으로 고쳤다.
+- 검증: 백엔드 관련 회귀 188 passed(격리 DuckDB·임시 root). tsc·build·routing/api/architecture self-test 통과, check:architecture 기존 4건만. e2e materials 5/5, folder-working-final 3/3; simulation-dashboard·spdm-storage-workflow·request-centric-workspace·environment-folder-flow 실패는 기준 커밋 725f4f7과 동일한 기존 항목.
+- 미실행: Codex Security 플러그인 스캔(수동 독립 검수로 대체), PostgreSQL·Windows·Server 2022, 다중 프로세스 부하 측정, 실제 공유폴더 30초 부하. migration·의존성·배포 진입점 변경 없음.

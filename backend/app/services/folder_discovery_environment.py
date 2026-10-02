@@ -18,7 +18,7 @@ from . import dashboard_capture
 from . import environment_folder_profiles
 from . import folder_discovery as legacy
 from . import spdm_storage
-from .folder_discovery_scan import MAX_SECONDS, root_identity, scan, stat_fingerprint
+from .folder_discovery_scan import MAX_SECONDS, relevant_content_fingerprint, root_identity, scan, stat_fingerprint
 from .environment_folder_profiles import resolve_role
 from . import usage_source_review
 
@@ -282,10 +282,12 @@ def refresh_scope(conn, root, project_id: str, request_id: str, environment: str
         raise resolver.FolderSchemaError("FOLDER_SCHEMA_SCAN_UNAVAILABLE", "현재 의뢰 폴더를 안전하게 조사할 수 없습니다.", 422) from exc
     if fresh.get("status") != "COMPLETE":
         raise resolver.FolderSchemaError("FOLDER_SCHEMA_SCAN_INCOMPLETE", "현재 의뢰 폴더를 모두 확인할 수 없습니다.", 422)
+    content_entries: list = []
     structure_fingerprint, content_fingerprint = resolver.scan_fingerprints(
-        fresh, root, deadline=refresh_deadline,
+        fresh, root, deadline=refresh_deadline, content_entries=content_entries,
     )
     quick_fingerprint = stat_fingerprint(fresh)
+    result_content_fingerprint = relevant_content_fingerprint(content_entries)
 
     if (previous and not registration_roles_changed
             and int(previous["profile_revision"]) == profile["revision"]
@@ -477,6 +479,8 @@ def refresh_scope(conn, root, project_id: str, request_id: str, environment: str
         "role_rules_revision": ROLE_RULES_REVISION,
         # Quick auto-sync check (names, sizes, mtimes only); see folder_auto_sync.
         "stat_fingerprint": quick_fingerprint,
+        # Result-relevant files by content; unread files (logs) do not count.
+        "result_content_fingerprint": result_content_fingerprint,
         "issues": fresh.get("issues", []),
         "structure_fingerprint": structure_fingerprint,
         "content_fingerprint": content_fingerprint,
@@ -502,7 +506,7 @@ def refresh_scope(conn, root, project_id: str, request_id: str, environment: str
         and str(previous["structure_fingerprint"]) == structure_fingerprint
         and (str(previous["content_fingerprint"]) == content_fingerprint
              or (isinstance(previous_schema, dict)
-                 and previous_schema.get("stat_fingerprint") == quick_fingerprint))
+                 and previous_schema.get("result_content_fingerprint") == result_content_fingerprint))
         and not any(diff.values())
     )
     snapshot_id = ident("folder-refresh")

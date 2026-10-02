@@ -191,3 +191,17 @@ def test_persistent_conflict_is_not_refreshed_again_until_folders_change(admin_c
     (root / OPTION / "9_Other").mkdir()
     _sync(client, project_id, request_id)
     assert len(calls) == 2
+
+
+def test_manual_refresh_after_log_change_keeps_result_versions(admin_client):
+    client, root = admin_client
+    project_id, request_id = _seed(client, root)
+    body = {"project_id": project_id, "request_id": request_id, "environment": "DISTRIBUTION"}
+    assert client.post("/api/folder-discovery/environments/refresh", json=body).status_code == 200
+    with connect() as conn:
+        captures = conn.execute("SELECT count(*) FROM dashboard_captures").fetchone()[0]
+    (root / OPTION / "2_Face" / "solver.out").write_text("cycle 1\n", encoding="utf-8")
+    refreshed = client.post("/api/folder-discovery/environments/refresh", json=body).json()
+    assert refreshed["changed"] is False, refreshed
+    with connect() as conn:
+        assert conn.execute("SELECT count(*) FROM dashboard_captures").fetchone()[0] == captures
