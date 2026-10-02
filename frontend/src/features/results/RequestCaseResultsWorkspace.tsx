@@ -45,14 +45,15 @@ export function RequestCaseResultsWorkspace({ projectId, requestId, canManageFol
   const label = syncLabel(sync, now)
   // App's operational token and the auto-sync revision both only grow, so their sum changes whenever either does.
   const dashboardToken = refreshToken + sync.revision
+  const syncStatus = <div className="request-case-results__sync" role="group" aria-label="폴더 자동 확인">
+    {notice ? <span className="request-case-results__notice" role="status">{notice}</span> : null}
+    <span className={`request-case-results__status request-case-results__status--${label.tone}`} title={label.title} aria-live="polite">{label.text}</span>
+    <button type="button" className="request-case-results__check" aria-label="지금 확인" title="지금 확인" disabled={sync.busy || !projectId || !requestId} onClick={sync.checkNow}><RotateCw aria-hidden="true" /></button>
+  </div>
+  // One tabbed page for both routes: the 소재·물성 tab renders the materials
+  // dashboard inside the Case results page and shares its path row.
   return <div className="request-case-results">
-    <div className="request-case-results__sync" role="group" aria-label="폴더 자동 확인">
-      {notice ? <span className="request-case-results__notice" role="status">{notice}</span> : null}
-      <span className={`request-case-results__status request-case-results__status--${label.tone}`} title={label.title} aria-live="polite">{label.text}</span>
-      <button type="button" className="request-case-results__check" aria-label="지금 확인" title="지금 확인" disabled={sync.busy || !projectId || !requestId} onClick={sync.checkNow}><RotateCw aria-hidden="true" /></button>
-    </div>
-    {activeTab === 'materials'
-      ? <MaterialsDashboard projectId={projectId} requestId={requestId} refreshToken={dashboardToken} />
-      : <SimulationDashboard projectId={projectId} requestId={requestId} canManageFolders={canManageFolders} canRefreshSchema={canRefreshSchema} refreshToken={dashboardToken} />}
+    <SimulationDashboard projectId={projectId} requestId={requestId} canManageFolders={canManageFolders} canRefreshSchema={canRefreshSchema} refreshToken={dashboardToken} activeTab={activeTab} headerExtra={syncStatus}
+      renderMaterials={(pathTarget) => <MaterialsDashboard projectId={projectId} requestId={requestId} refreshToken={dashboardToken} embedded pathTarget={pathTarget} />} />
   </div>
 }

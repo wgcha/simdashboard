@@ -273,3 +273,30 @@
 @keyframes case-finalization-spin {
   to { transform: rotate(360deg); }
 }
+
+/* Compact header placement: one emphasised "Final 지정" action with a small status badge. */
+.case-finalization { flex-wrap: nowrap; min-width: 0; font-size: var(--text-caption, 12px); }
+.case-finalization__trigger {
+  min-height: var(--control-h-sm, 32px);
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  color: var(--color-surface-raised, #fff);
+}
+.case-finalization__trigger:hover:not(:disabled) { background: var(--color-accent); filter: brightness(1.08); }
+.case-finalization__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.case-finalization__status--complete { flex-wrap: nowrap; border-color: currentColor; }
+.case-finalization__message {
+  margin: 0;
+  max-width: 32ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

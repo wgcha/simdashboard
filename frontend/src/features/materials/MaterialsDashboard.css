@@ -26,13 +26,6 @@
   display: grid;
   gap: var(--space-2);
 }
-.materials-hierarchy-path {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
-  gap: var(--space-2);
-  align-items: end;
-}
 .materials-scene-location {
   min-width: 0;
   display: flex;
@@ -396,3 +389,12 @@
 @media (min-width: 1280px) {
   .materials-dashboard { height: calc(100vh - 66px); }
 }
+
+/* Embedded in the Case results page (소재·물성 tab). */
+.materials-dashboard--embedded {
+  min-height: 0;
+  grid-template-rows: none;
+  padding: 0;
+  background: transparent;
+}
+.case-path-slot .materials-hierarchy { margin-bottom: var(--space-3); }

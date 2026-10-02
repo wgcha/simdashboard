@@ -449,3 +449,56 @@ def scene_detail(capture, scene_id, run_id, mode, component, basis, lines, posit
             "corner_points": [o for o in source if o.get("kind") == "CORNER"],
             "assets": [m for m in scene.get("media", []) if m.get("component_id") == component],
             "quality_issues": sorted(set(capture["payload"].get("quality_issues", [])) | set(scene.get("quality_issues", [])))}
+
+
+VIDEO_PAGE_SIZE_MAX = 20
+
+
+def select_run_option(capture, run_id, mode=None, run_option_id=None):
+    """Pick one Run option of a distribution capture without requiring a Component."""
+    if capture["environment"] != "DISTRIBUTION":
+        fail("유통환경 수집 버전을 선택하세요.")
+    candidates = [r for r in capture["payload"].get("runs", []) if r["id"] == run_id]
+    if run_option_id:
+        runs = [r for r in candidates if option_projection(r, capture["id"])[0] == run_option_id]
+    elif mode:
+        runs = [r for r in candidates if r["mode"] == mode]
+    else:
+        runs = candidates
+    if len(runs) != 1:
+        fail("선택 Run/Run Option과 수집 버전이 일치하지 않습니다.")
+    run = runs[0]
+    option_id, option_label, option_status = option_projection(run, capture["id"])
+    context = {**capture["payload"]["context"], "simulation_case_id": capture["case_id"], "capture_id": capture["id"],
+               "execution_run_id": run_id, "load_case_id": run["load_case_id"],
+               "run_option_id": option_id, "option_label": option_label, "option_status": option_status,
+               "mode": run["mode"]}
+    context["context_key"] = context_key(context)
+    context["load_case_name"] = run.get("load_case_name")
+    context["run_label"] = run.get("source_name")
+    return run, context
+
+
+def run_videos(capture, run_id, *, mode=None, run_option_id=None, page=1, page_size=VIDEO_PAGE_SIZE_MAX):
+    """Every VIDEO media of every Scene of one Run option, in Scene order."""
+    run, context = select_run_option(capture, run_id, mode, run_option_id)
+    videos = []
+    for scene in run.get("scenes", []):
+        label = scene.get("label") or scene.get("source_name") or scene["id"]
+        for media in scene.get("media", []):
+            if media.get("kind") != "VIDEO" or not media.get("asset_id"):
+                continue
+            name = str(media.get("relative_path") or "").replace("\\", "/").rsplit("/", 1)[-1]
+            videos.append({"video_id": f"{scene['id']}:{media['asset_id']}", "asset_id": media["asset_id"],
+                           "scene_id": scene["id"], "scene_label": label,
+                           "scene_sequence_number": scene.get("scene_sequence_number"),
+                           "title": media.get("title") or name or label, "component_id": media.get("component_id"),
+                           "frame_role": media.get("frame_role"), "status": media.get("status") or "READY",
+                           "source_capture_id": scene.get("source_capture_id") or capture["id"]})
+    total_items = len(videos)
+    total_pages = (total_items + page_size - 1) // page_size if total_items else 0
+    start = (page - 1) * page_size
+    return {"contract_version": 1, "context": context,
+            "pagination": {"page": page, "page_size": page_size, "total_items": total_items, "total_pages": total_pages,
+                           "has_previous": page > 1 and total_pages > 0, "has_next": page < total_pages},
+            "videos": videos[start:start + page_size] if start < total_items else []}

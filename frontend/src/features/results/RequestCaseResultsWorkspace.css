@@ -3,12 +3,13 @@
   align-items: center;
   justify-content: flex-end;
   gap: var(--space-2, 8px);
+  min-width: 0;
   min-height: var(--control-h-sm, 32px);
-  padding: var(--space-2, 8px) var(--shell-pad-x, 40px) 0;
   color: var(--color-text-muted);
   font-size: var(--text-caption, 12px);
 }
 .request-case-results__status { white-space: nowrap; }
+.request-case-results { padding-top: var(--space-3, 12px); }
 .request-case-results__status--busy { color: var(--color-text-muted); }
 .request-case-results__status--ok { color: var(--color-text); }
 .request-case-results__status--wait { color: var(--color-warning); }

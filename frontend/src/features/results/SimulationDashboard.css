@@ -144,3 +144,54 @@
 .simulation-dashboard[data-ui-density="v1"] .recharts-text,
 .simulation-dashboard[data-ui-density="v1"] .recharts-default-tooltip,
 .simulation-dashboard[data-ui-density="v1"] .recharts-legend-item-text { font-size:var(--text-caption); }
+
+/* Plan A layout (2026-10): one header band, one path row, view tabs. */
+.case-results-head { display:flex; align-items:center; justify-content:space-between; gap:var(--space-3, 12px); min-width:0; margin-bottom:var(--space-3, 12px); }
+.case-results-head__actions { display:flex; align-items:center; gap:var(--space-3, 12px); min-width:0; }
+.case-env-toggle { display:inline-flex; flex:none; overflow:hidden; border:1px solid var(--color-border-strong); border-radius:var(--radius-sm, 4px); }
+.case-env-toggle button { min-height:var(--control-h-sm, 32px); padding:0 var(--space-4, 16px); border:0; background:var(--color-surface-interactive); color:var(--color-text-muted); font:inherit; font-weight:700; cursor:pointer; }
+.case-env-toggle button + button { border-left:1px solid var(--color-border-strong); }
+.case-env-toggle button.active { background:var(--color-surface-selected); color:var(--color-accent); }
+.case-env-toggle button:focus-visible,
+.case-view-tabs [role="tab"]:focus-visible,
+.case-compare-toggle button:focus-visible { outline:2px solid var(--color-focus); outline-offset:-2px; }
+.case-path-bar { margin-bottom:var(--space-3, 12px); }
+.case-scene-chips { display:flex; flex-wrap:nowrap; gap:var(--space-1, 4px); min-width:0; overflow-x:auto; scrollbar-width:thin; }
+.case-scene-chips > small { color:var(--color-text-muted); white-space:nowrap; }
+.case-scene-chip { flex:none; display:inline-flex; align-items:center; gap:var(--space-1, 4px); padding:2px var(--space-2, 8px); border:1px solid var(--color-border); border-radius:999px; color:var(--color-text); font-size:var(--text-caption, 12px); white-space:nowrap; }
+.case-scene-chip > i { flex:none; width:8px; height:8px; border-radius:50%; background:var(--color-text-muted); opacity:.45; }
+.case-scene-chip--result > i { background:var(--color-success); opacity:1; }
+.case-sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
+.case-view-bar { display:flex; align-items:end; justify-content:space-between; gap:var(--space-3, 12px); margin-bottom:var(--space-3, 12px); border-bottom:1px solid var(--color-border); }
+.case-view-tabs { display:flex; gap:var(--space-1, 4px); min-width:0; }
+.case-view-tabs [role="tab"] { min-height:var(--control-h-md, 38px); padding:0 var(--space-4, 16px); border:0; border-bottom:3px solid transparent; background:none; color:var(--color-text-muted); font:inherit; font-weight:700; cursor:pointer; white-space:nowrap; }
+.case-view-tabs [role="tab"][aria-selected="true"] { border-bottom-color:var(--color-accent); color:var(--color-accent); }
+.case-display-options { position:relative; flex:none; margin-bottom:var(--space-1, 4px); }
+.case-display-options > summary { display:inline-flex; align-items:center; gap:var(--space-1, 4px); min-height:var(--control-h-sm, 32px); padding:0 var(--space-3, 12px); border:1px solid var(--color-border); border-radius:var(--radius-sm, 4px); color:var(--color-text); font-weight:600; list-style:none; cursor:pointer; }
+.case-display-options > summary::-webkit-details-marker { display:none; }
+.case-display-options > summary svg { width:16px; height:16px; }
+.case-display-options[open] > summary { border-color:var(--color-accent); color:var(--color-accent); }
+.case-display-options__panel { position:absolute; top:calc(100% + 6px); right:0; z-index:20; display:grid; gap:var(--space-3, 12px); width:min(620px, 80vw); padding:var(--space-3, 12px); border:1px solid var(--color-border-strong); border-radius:var(--radius-md, 6px); background:var(--color-surface-raised); color:var(--color-text); box-shadow:0 14px 36px rgb(0 0 0 / 26%); }
+.case-display-options__row { display:flex; flex-wrap:wrap; align-items:end; gap:var(--space-3, 12px); }
+.case-display-options__row > .shared-hierarchy-choice { min-width:16ch; }
+.case-display-options__compare { display:flex; flex-wrap:wrap; align-items:end; gap:var(--space-2, 8px); margin:0; padding:var(--space-2, 8px); border:1px solid var(--color-border); border-radius:var(--radius-sm, 4px); }
+.case-display-options__compare legend { padding:0 var(--space-1, 4px); color:var(--color-text-muted); font-size:var(--text-caption, 12px); }
+.case-display-options__compare button { min-height:var(--control-h-sm, 32px); padding:0 var(--space-2, 8px); border:1px solid var(--color-border-strong); border-radius:var(--radius-sm, 4px); background:var(--color-surface-interactive); color:var(--color-text); font:inherit; cursor:pointer; }
+.case-display-options__compare button:disabled { opacity:.55; cursor:not-allowed; }
+.case-display-options__history strong { font-size:var(--text-caption, 12px); color:var(--color-text-muted); }
+.case-display-options__history ul { max-height:160px; margin:var(--space-1, 4px) 0 0; padding-left:18px; overflow:auto; }
+.case-display-options__history li { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.case-display-options__link { justify-self:start; color:var(--color-accent); }
+.case-compare-toggle { display:inline-flex; gap:var(--space-1, 4px); margin-bottom:var(--space-3, 12px); }
+.case-compare-toggle button { min-height:var(--control-h-sm, 32px); padding:0 var(--space-3, 12px); border:1px solid var(--color-border-strong); border-radius:var(--radius-sm, 4px); background:var(--color-surface-interactive); color:var(--color-text-muted); font:inherit; font-weight:700; cursor:pointer; }
+.case-compare-toggle button.active { border-color:var(--color-accent); background:var(--color-surface-selected); color:var(--color-accent); }
+.case-info { display:inline-flex; margin-left:var(--space-1, 4px); color:var(--color-text-muted); vertical-align:middle; cursor:help; }
+.case-info svg { width:14px; height:14px; }
+.case-prose { max-width:80ch; }
+/* 요약: edge map, chart and location table sit side by side when the width
+   allows (4K at 150%: ~2400px content); narrower screens wrap the table. */
+.simulation-dashboard .simulation-dashboard__summary { display:flex; flex-wrap:wrap; align-items:stretch; gap:var(--space-3, 12px); }
+.simulation-dashboard .simulation-dashboard__summary > .case-summary-edge { flex:1 1 320px; min-width:0; }
+.simulation-dashboard .simulation-dashboard__summary > .case-summary-chart { flex:3 1 640px; min-width:0; }
+.simulation-dashboard .simulation-dashboard__summary > .simulation-dashboard__location-map { flex:2 1 900px; min-width:0; margin-top:0; }
+.simulation-dashboard__location-map h3 { margin:0 0 var(--space-2, 8px); }

@@ -978,7 +978,7 @@ function App() {
     >
       <AppShellMain topbar={<AppTopbar breadcrumb={breadcrumb} actions={<>
             <div className="theme-switch" role="group" aria-label="화면 테마 선택"><button type="button" aria-label="라이트" className={theme === 'light' ? 'active' : ''} aria-pressed={theme === 'light'} onClick={() => setTheme('light')}><Sun /><span>라이트</span></button><button type="button" aria-label="다크" className={theme === 'dark' ? 'active' : ''} aria-pressed={theme === 'dark'} onClick={() => setTheme('dark')}><Moon /><span>다크</span></button></div>
-            {authUser?.is_global_admin && (workspacePage === 'dashboard' || workspacePage === 'portfolio' || workspacePage === 'data') && <StorageRefreshControl onChanged={refreshOperationalData} onMessage={setNotice} onError={setError} />}
+            {authUser?.is_global_admin && (workspacePage === 'portfolio' || workspacePage === 'data') && <StorageRefreshControl onChanged={refreshOperationalData} onMessage={setNotice} onError={setError} />}
             {workspacePage === 'dashboard' && activeView !== 'workflow' && <button className="ghost-button" title={!overview?.run && activeView !== 'compare' ? '완료된 Run이 있어야 보고서를 내보낼 수 있습니다.' : undefined} disabled={!dashboardReady || (!overview?.run && activeView !== 'compare')} onClick={() => void reportExport.open()}><Download /> 보고서 내보내기</button>}
             {canEdit && workspacePage === 'dashboard' && activeView !== 'workflow' && <button className="ghost-button" disabled={activeDashboardId === 'request-result-layout' ? !selectedLoadCaseId : !dashboardReady} onClick={() => void openAssistant()}><Sparkles /> 자연어로 개선</button>}
             {canEdit && (workspacePage === 'dashboard' && activeView === 'workflow' ? (editMode ? (

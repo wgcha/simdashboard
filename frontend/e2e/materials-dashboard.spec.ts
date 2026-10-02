@@ -89,9 +89,11 @@ async function openMaterials(page: Page) {
   await page.getByLabel('프로젝트 선택', { exact: true }).selectOption(projectId)
   await page.getByLabel('의뢰 선택', { exact: true }).selectOption(requestId)
   await expect.poll(() => new URL(page.url()).searchParams.get('request')).toBe(requestId)
-  await page.getByRole('navigation', { name: '의뢰 작업 여정' }).getByRole('button', { name: '모델 소재·물성', exact: true }).click()
+  // 소재·물성 is a tab inside Case 결과 (no separate journey button).
+  await page.getByRole('navigation', { name: '의뢰 작업 여정' }).getByRole('button', { name: 'Case 결과', exact: true }).click()
+  await page.getByRole('tab', { name: '소재·물성', exact: true }).click()
   await expect(page).toHaveURL(/\/workspace\/requests\?.*view=case_results.*resultTab=materials/)
-  await expect(page.getByRole('heading', { name: '모델 소재·물성', exact: true })).toBeVisible()
+  await expect(page.getByRole('tab', { name: '소재·물성', exact: true })).toHaveAttribute('aria-selected', 'true')
   await expect(page.getByLabel('프로젝트 선택', { exact: true })).toHaveValue(projectId)
   await expect(page.getByLabel('의뢰 선택', { exact: true })).toHaveValue(requestId)
   await expect(page.getByRole('complementary', { name: '주 메뉴' }).getByRole('link', { name: '모델 소재·물성', exact: true })).toHaveCount(0)
@@ -147,14 +149,14 @@ test('소재 탭은 내 작업 문맥과 뒤로 가기를 유지하고 기존 �
   await expect(page.getByRole('region', { name: 'SPDM 해석 결과 대시보드' })).toBeVisible()
   await expect.poll(() => new URL(page.url()).searchParams.get('resultTab')).toBeNull()
   await page.goBack()
-  await expect(page.getByRole('heading', { name: '모델 소재·물성', exact: true })).toBeVisible()
+  await expect(page.getByRole('tab', { name: '소재·물성', exact: true })).toHaveAttribute('aria-selected', 'true')
   await expect.poll(() => new URL(page.url()).searchParams.get('resultTab')).toBe('materials')
   await page.goForward()
   await expect(page.getByRole('region', { name: 'SPDM 해석 결과 대시보드' })).toBeVisible()
 
   await page.goto(`/workspace/materials?project=${projectId}&request=${requestId}`)
   // A full reload re-bootstraps the workspace before the redirected tab renders.
-  await expect(page.getByRole('heading', { name: '모델 소재·물성', exact: true })).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByRole('tab', { name: '소재·물성', exact: true })).toHaveAttribute('aria-selected', 'true', { timeout: 15_000 })
   await expect(page).toHaveURL(/\/workspace\/requests\?.*view=case_results.*resultTab=materials/)
 })
 
@@ -179,7 +181,7 @@ test('내 작업에서 프로젝트와 의뢰를 바꾸면 소재 조회도 선�
   await expect.poll(() => new URL(page.url()).searchParams.get('project')).toBe('project-tv-001')
   await expect.poll(() => new URL(page.url()).searchParams.get('request')).toBe(catalogRequestId)
   await expect.poll(() => new URL(page.url()).searchParams.get('resultTab')).toBe('materials')
-  await expect(page.getByRole('heading', { name: '모델 소재·물성', exact: true })).toBeVisible()
+  await expect(page.getByRole('tab', { name: '소재·물성', exact: true })).toHaveAttribute('aria-selected', 'true')
 })
 
 test('소재 표는 긴 이름과 누락 참조를 보여 주고 같은 Material에서도 Part 문맥을 바꾼다', async ({ page }) => {

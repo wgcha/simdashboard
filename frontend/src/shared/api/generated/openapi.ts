@@ -3059,6 +3059,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/dashboard/distribution/runs/{run_id}/videos": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Run Videos */
+        get: operations["run_videos_api_dashboard_distribution_runs__run_id__videos_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/dashboard/distribution/scenes/{scene_id}": {
         parameters: {
             query?: never;
@@ -13548,6 +13565,43 @@ export interface operations {
                 run_option_id?: string | null;
                 edge_keys?: string;
                 line_indices?: string;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_videos_api_dashboard_distribution_runs__run_id__videos_get: {
+        parameters: {
+            query: {
+                capture_id: string;
+                run_option_id?: string | null;
+                mode?: string | null;
+                page?: number;
+                page_size?: number;
             };
             header?: never;
             path: {

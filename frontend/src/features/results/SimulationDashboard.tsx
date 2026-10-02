@@ -1,18 +1,32 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Link } from 'react-router-dom'
-import { AlertTriangle, Expand, Image as ImageIcon, Layers3, Pause, Play, RotateCcw } from 'lucide-react'
+import { AlertTriangle, Expand, Image as ImageIcon, Info, Layers3, Play, RotateCcw, SlidersHorizontal } from 'lucide-react'
 import { simulationDashboardApi, type DashboardAsset, type DashboardCatalog, type DashboardChoice, type DashboardComparisonMember, type DashboardDistribution, type DashboardEdgePeak, type DashboardMember, type DashboardScene, type DashboardSceneDetail, type DashboardValue, type UsageDashboard } from '../../shared/api/simulationDashboard'
-import { Button } from '../../shared/components/Button'
 import { Select } from '../../shared/components/Select'
+import { HierarchyChoice, type HierarchyChoiceOption } from '../../shared/components/HierarchyChoice'
+import { HierarchyPath } from '../../shared/components/HierarchyPath'
 import { Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from '../../shared/components/Table'
 import './SimulationDashboard.css'
 import { SimulationLocationMap } from './SimulationLocationMap'
 import { SimulationResultGraph } from './SimulationResultGraph'
 import { CaseFinalizationPanel } from './CaseFinalizationPanel'
+import { CaseVideoGrid } from './CaseVideoGrid'
 import { useCaseHierarchyParams } from '../../shared/hooks/useCaseHierarchyParams'
 
-type Props = { projectId: string; requestId: string; canManageFolders?: boolean; canRefreshSchema?: boolean; refreshToken?: number }
+type Props = {
+  projectId: string
+  requestId: string
+  canManageFolders?: boolean
+  canRefreshSchema?: boolean
+  refreshToken?: number
+  /** `materials` opens the 소재·물성 tab (URL `resultTab=materials`). */
+  activeTab?: 'case_results' | 'materials'
+  /** Rendered at the right of the header row (folder sync status). */
+  headerExtra?: ReactNode
+  /** Materials tab content; it renders its own path bar into `pathTarget`. */
+  renderMaterials?: (pathTarget: HTMLElement | null) => ReactNode
+}
 type Tab = 'usage' | 'distribution'
 const SCHEMA_CONTEXT = '__folder_schema__'
 const EDGES = ['TOP', 'BOTTOM', 'LEFT', 'RIGHT'] as const
@@ -22,27 +36,47 @@ const COLORS = ['var(--color-chart-series-1)', 'var(--color-chart-series-2)', 'v
 function errorText(reason: unknown) { return reason instanceof Error ? reason.message : '대시보드 결과를 불러오지 못했습니다.' }
 function assetUrl(asset: DashboardAsset) { return asset.url || simulationDashboardApi.assetUrl(asset.asset_id) }
 function valueText(value?: DashboardValue | null) { return value?.value == null ? '값 없음' : `${value.value}${value.unit ? ` ${value.unit}` : ' · 단위 미확인'}` }
-function missingText(status?: string | null, reason?: string | null) { return reason || status || '자료 없음' }
+const STATUS_TEXT: Record<string, string> = { COMPLETE: '확인', READY: '확인', CONFIRMED: '확인', PRESENT: '확인', PARTIAL: '일부', UNMATCHED: '대응 없음', MISSING: '결과 없음', MISSING_SOURCE: '결과 없음', NO_DATA: '결과 없음', ABSENT: '결과 없음', UNCAPTURED: '결과 없음', NO_SELECTION: '선택 없음', UNCONFIRMED: '미확인', UNKNOWN: '미확인', INFERRED: '추정', PENDING: '처리 중', NOT_APPLICABLE: '해당 없음' }
+/** Korean label for a server status code; internal codes are never shown. */
+function statusText(code?: string | null) { return code ? STATUS_TEXT[code] ?? '확인 필요' : '결과 없음' }
+function basisLabel(id: string) { return id === 'REPORTED_SUMMARY' ? '원본 요약' : id === 'DETAIL' ? '상세 추출값' : id }
+function missingText(status?: string | null, reason?: string | null) { return reason || statusText(status) }
+function InfoTip({ text }: { text: string }) { return <span className="case-info" role="img" aria-label={text} title={text}><Info aria-hidden="true" /></span> }
 function SelectField({ label, value, choices, onChange, disabled = false }: { label: string; value: string; choices: DashboardChoice[]; onChange: (value: string) => void; disabled?: boolean }) {
   const unique = Array.from(new Map(choices.map((choice) => [choice.id, choice])).values())
   return <label className="simulation-dashboard__select"><span>{label}</span><Select controlSize="sm" value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)}>{unique.some((choice) => !choice.id) ? null : <option value="">선택</option>}{unique.map((choice) => <option key={choice.id || 'folder-schema'} value={choice.id} disabled={choice.disabled} title={choice.reason ?? undefined}>{choice.label}</option>)}</Select></label>
 }
-function CompactChoice({ label, value, choices, onChange, disabled = false }: { label: string; value: string; choices: DashboardChoice[]; onChange: (value: string) => void; disabled?: boolean }) {
-  const unique = Array.from(new Map(choices.map((choice) => [choice.id, choice])).values())
-  if (unique.length === 1) return <div className="simulation-dashboard__choice"><span>{label}</span><b title={unique[0].label}>{unique[0].label}</b></div>
-  return <SelectField label={label} value={value} choices={unique} onChange={onChange} disabled={disabled} />
-}
+function pathChoices(choices: DashboardChoice[]): HierarchyChoiceOption[] { return choices.map((item) => ({ id: item.id, label: item.label, title: item.relative_path ?? item.label, disabled: item.disabled, reason: item.reason })) }
 function currentHierarchyChoice(item: DashboardChoice, activeCaptureId: string) {
   return item.capture_id == null || (activeCaptureId !== '' && item.capture_id === activeCaptureId)
 }
 
-export function SimulationDashboard({ projectId, requestId, canManageFolders = false, canRefreshSchema = false, refreshToken = 0 }: Props) {
+type ViewTab = 'summary' | 'compare' | 'video' | 'materials'
+type CompareView = 'edges' | 'contours' | 'behavior'
+const VIEW_TABS: Array<{ id: ViewTab; label: string }> = [{ id: 'summary', label: '요약' }, { id: 'compare', label: 'Scene 비교' }, { id: 'video', label: '영상' }, { id: 'materials', label: '소재·물성' }]
+
+function ViewTabs({ tabs, active, onSelect }: { tabs: Array<{ id: ViewTab; label: string }>; active: ViewTab; onSelect: (tab: ViewTab) => void }) {
+  const refs = useRef(new Map<ViewTab, HTMLButtonElement>())
+  const move = (index: number) => { const next = tabs[(index + tabs.length) % tabs.length]; onSelect(next.id); refs.current.get(next.id)?.focus() }
+  return <div className="case-view-tabs" role="tablist" aria-label="결과 보기" onKeyDown={(event) => {
+    const index = tabs.findIndex((tab) => tab.id === active)
+    if (event.key === 'ArrowRight') { event.preventDefault(); move(index + 1) }
+    else if (event.key === 'ArrowLeft') { event.preventDefault(); move(index - 1) }
+    else if (event.key === 'Home') { event.preventDefault(); move(0) }
+    else if (event.key === 'End') { event.preventDefault(); move(tabs.length - 1) }
+  }}>{tabs.map((tab) => <button key={tab.id} ref={(node) => { if (node) refs.current.set(tab.id, node); else refs.current.delete(tab.id) }} type="button" role="tab" id={`case-view-tab-${tab.id}`} aria-controls="case-view-panel" aria-selected={tab.id === active} tabIndex={tab.id === active ? 0 : -1} onClick={() => onSelect(tab.id)}>{tab.label}</button>)}</div>
+}
+
+export function SimulationDashboard({ projectId, requestId, canManageFolders = false, canRefreshSchema = false, refreshToken = 0, activeTab = 'case_results', headerExtra, renderMaterials }: Props) {
   // Selection lives in the router URL (shared with the materials tab): user
   // changes push a history entry, automatic repairs replace it.
   const { get: getParam, caseId, loadCaseId, runId, optionId, update: updateParams } = useCaseHierarchyParams()
-  const tab: Tab = getParam('result_environment') === 'DISTRIBUTION' ? 'distribution' : 'usage'
+  const materialsActive = activeTab === 'materials'
+  // Materials decks exist only in the distribution environment.
+  const tab: Tab = materialsActive || getParam('result_environment') === 'DISTRIBUTION' ? 'distribution' : 'usage'
   const captureId = getParam('capture')
-  const setTab = (next: Tab) => { if (next !== tab) updateParams({ result_environment: next === 'usage' ? 'USAGE' : 'DISTRIBUTION', case: null, capture: null, case_load: null, case_run: null, case_option: null, scene: null, part: null }) }
+  const clearedPath = { case: null, capture: null, case_load: null, case_run: null, case_option: null, scene: null, part: null }
+  const setTab = (next: Tab) => { if (next !== tab || materialsActive) updateParams({ result_environment: next === 'usage' ? 'USAGE' : 'DISTRIBUTION', ...(next !== tab ? clearedPath : {}), ...(materialsActive ? { resultTab: null } : {}) }) }
   const setCaseId = (value: string) => updateParams({ case: value || null })
   const setCaptureId = (value: string) => updateParams({ capture: value || null })
   const setLoadCaseId = (value: string) => updateParams({ case_load: value || null })
@@ -55,12 +89,19 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
   const [basis, setBasis] = useState<'' | 'REPORTED_SUMMARY' | 'DETAIL'>('')
   const [referenceCaseId, setReferenceCaseId] = useState('')
   const [referenceCaptureId, setReferenceCaptureId] = useState('')
+  const [view, setView] = useState<Exclude<ViewTab, 'materials'>>('summary')
+  const [compareView, setCompareView] = useState<CompareView>('edges')
+  const [edges, setEdges] = useState<string[]>([...EDGES])
+  const [lines, setLines] = useState<string[]>(['1', '2', '3', '4'])
+  const [comparison, setComparison] = useState<DashboardComparisonMember[]>([])
+  const [pathTarget, setPathTarget] = useState<HTMLDivElement | null>(null)
   const latestCatalogKey = useRef('')
   const loadedCatalogKey = useRef('')
   // A request or environment change drops the previous catalog and local
   // display state. URL ids are kept and validated against the new catalog,
   // so deep links and browser history restore their selection.
   const catalogScope = useRef(`${projectId}:${requestId}:${tab}`)
+  useEffect(() => { setComparison([]) }, [projectId, requestId])
 
   useEffect(() => {
     const controller = new AbortController(); const key = `${projectId}:${requestId}:${tab}`; latestCatalogKey.current = key
@@ -85,17 +126,20 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
   const loadChoices = catalog?.load_cases.filter((item) => item.case_id === caseId && currentHierarchyChoice(item, activeCaptureIdForChoices)) ?? []
   const runChoices = catalog?.execution_runs.filter((item) => item.case_id === caseId && item.load_case_id === loadCaseId && currentHierarchyChoice(item, activeCaptureIdForChoices)) ?? []
   useEffect(() => {
-    if (!catalog || loadedCatalogKey.current !== `${projectId}:${requestId}:${tab}`) return
+    // The materials tab owns the shared path while it is open (its own catalog).
+    if (materialsActive || !catalog || loadedCatalogKey.current !== `${projectId}:${requestId}:${tab}`) return
     // Automatic repairs replace the history entry instead of pushing one.
     const setCaseId = (value: string) => updateParams({ case: value || null }, { replace: true })
     const setCaptureId = (value: string) => updateParams({ capture: value || null }, { replace: true })
     const setLoadCaseId = (value: string) => updateParams({ case_load: value || null }, { replace: true })
     const setRunId = (value: string) => updateParams({ case_run: value || null }, { replace: true })
     const setOptionId = (value: string) => updateParams({ case_option: value || null }, { replace: true })
-    const choose = (current: string, choices: DashboardChoice[], setter: (value: string) => void) => {
+    // Path levels need a user choice when there are several candidates; the
+    // display options (Component, Basis) default to the first candidate.
+    const choose = (current: string, choices: DashboardChoice[], setter: (value: string) => void, firstIfMany = false) => {
       const unique = Array.from(new Map(choices.map((item) => [item.id, item])).values())
       if (unique.some((item) => item.id === current)) return
-      setter(unique.length === 1 ? unique[0].id : '')
+      setter(unique.length === 1 || (firstIfMany && unique.length) ? unique[0].id : '')
     }
     const caseChoice = catalog.cases.find((item) => item.id === caseId || item.dashboard_case_id === caseId)
     if (caseChoice && caseChoice.id !== caseId) setCaseId(caseChoice.id)
@@ -114,9 +158,9 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
     if (tab === 'distribution' && runId) choose(optionId, options, setOptionId)
     const selectedOption = options.find((item) => item.id === optionId)
     if (selectedOption && mode !== selectedOption.mode) setMode(selectedOption.mode ?? selectedOption.id)
-    if (tab === 'distribution' && mode) choose(componentId, catalog.components.filter((item) => item.execution_run_id === runId && item.mode === mode && item.capture_id === activeCaptureId && (!item.run_option_id || item.run_option_id === optionId)), setComponentId)
-    if (tab === 'distribution') choose(basis, catalog.bases, (value) => setBasis(value as typeof basis))
-  }, [basis, captureId, caseId, catalog, componentId, loadCaseId, mode, optionId, options, projectId, requestId, runId, tab, updateParams])
+    if (tab === 'distribution' && mode) choose(componentId, catalog.components.filter((item) => item.execution_run_id === runId && item.mode === mode && item.capture_id === activeCaptureId && (!item.run_option_id || item.run_option_id === optionId)), setComponentId, true)
+    if (tab === 'distribution') choose(basis, catalog.bases, (value) => setBasis(value as typeof basis), true)
+  }, [basis, captureId, caseId, catalog, componentId, loadCaseId, materialsActive, mode, optionId, options, projectId, requestId, runId, tab, updateParams])
   // Router Link applies the deployment basename (for example /home/).
   const folderHref = `/workspace/catalog/schemas?${new URLSearchParams({ project: projectId, request: requestId, result_environment: tab === 'usage' ? 'USAGE' : 'DISTRIBUTION' }).toString()}`
 
@@ -142,29 +186,76 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
     map.set(key, { label: current?.label ?? item.label, title: current?.title ?? item.relative_path ?? item.label, hasResult: Boolean(current?.hasResult || item.capture_id) })
     return map
   }, new Map<string, { label: string; title: string; hasResult: boolean }>()).values())
-  const controls = catalog ? <div className="simulation-dashboard__controls">
-    <CaseFinalizationPanel projectId={projectId} requestId={requestId} environment={tab === 'usage' ? 'USAGE' : 'DISTRIBUTION'} caseId={dashboardCaseId} captureId={storedCaptureId} hasCapturedCase={hasCapturedCase} canFinalize={canRefreshSchema} />
-    <CompactChoice label="해석 Case" value={caseId} choices={catalog.cases} onChange={(value) => { setCaseId(value); setCaptureId(''); setLoadCaseId(''); setRunId(''); setOptionId(''); setMode(''); setComponentId(''); setReferenceCaseId(''); setReferenceCaptureId('') }} />
-    {tab === 'distribution' ? <>
-      <CompactChoice label="하중경우" value={loadCaseId} choices={loadChoices} disabled={!caseId} onChange={(value) => { setLoadCaseId(value); setRunId(''); setOptionId(''); setMode(''); setComponentId('') }} />
-      <CompactChoice label="Run Case" value={runId} choices={runChoices} disabled={!loadCaseId} onChange={(value) => { setRunId(value); setOptionId(''); setMode(''); setComponentId('') }} />
-      <CompactChoice label="Run Option" value={optionId} choices={options} disabled={!runId} onChange={(value) => { const choice = options.find((item) => item.id === value); setOptionId(value); setMode(choice?.mode ?? ''); setComponentId('') }} />
-      <CompactChoice label="Component" value={componentId} choices={catalog.components.filter((item) => (item.execution_run_id === runId || item.run_id === runId) && item.mode === mode && item.capture_id === activeCaptureId && (!item.run_option_id || item.run_option_id === optionId))} disabled={!activeCaptureId || !mode} onChange={setComponentId} />
-      <CompactChoice label="Basis" value={basis} choices={catalog.bases} disabled={!activeCaptureId} onChange={(value) => setBasis(value === 'DETAIL' ? 'DETAIL' : value === 'REPORTED_SUMMARY' ? 'REPORTED_SUMMARY' : '')} />
-      <div className="simulation-dashboard__scene-catalog" role="group" aria-label="선택 문맥 Scene 목록" style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}><span>Scene</span>{sceneSummary.length ? sceneSummary.map((item) => <span key={item.label} title={item.title}>{item.label} <small>{item.hasResult ? '결과' : '결과 없음'}</small></span>) : <small>Scene 없음</small>}</div>
-    </> : null}
-    <details className="simulation-dashboard__history"><summary>업데이트 이력{tab === 'usage' ? ' · 비교' : ''}</summary><ul className="simulation-dashboard__history-list" aria-label="결과 업데이트 이력">{storedCaptures.length ? storedCaptures.map((item) => <li key={item.id}>{item.label}</li>) : <li>아직 수집된 결과가 없습니다.</li>}</ul>{tab === 'usage' ? <><SelectField label="Reference Case" value={referenceCaseId} choices={catalog.cases.filter((item) => item.id !== caseId)} onChange={(value) => { setReferenceCaseId(value); setReferenceCaptureId('') }} /><SelectField label="Reference Capture" value={referenceCaptureId} choices={catalog.captures.filter((item) => item.case_id === referenceCaseId)} disabled={!referenceCaseId} onChange={setReferenceCaptureId} /></> : null}</details>
-  </div> : null
+  const componentChoices = catalog?.components.filter((item) => (item.execution_run_id === runId || item.run_id === runId) && item.mode === mode && item.capture_id === activeCaptureId && (!item.run_option_id || item.run_option_id === optionId)) ?? []
+  const caseLabel = (id: string) => catalog?.cases.find((item) => item.id === id || item.dashboard_case_id === id)?.label ?? 'Case'
+  const addCurrent = () => {
+    if (comparison.some((item) => item.simulation_case_id === dashboardCaseId) || comparison.length >= 8 || !basis) return
+    setComparison([...comparison, { simulation_case_id: dashboardCaseId, load_case_id: loadCaseId, execution_run_id: runId, run_option_id: optionId, capture_id: activeCaptureId, mode, component_id: componentId, basis }])
+  }
+
+  const tabs = VIEW_TABS.filter((item) => tab === 'distribution' || item.id === 'summary' || item.id === 'materials')
+  const activeView: ViewTab = materialsActive ? 'materials' : tabs.some((item) => item.id === view) ? view : 'summary'
+  const selectView = (next: ViewTab) => {
+    if (next === 'materials') {
+      if (!materialsActive) updateParams({ resultTab: 'materials', result_environment: 'DISTRIBUTION', ...(tab === 'usage' ? clearedPath : {}) })
+      return
+    }
+    setView(next)
+    if (materialsActive) updateParams({ resultTab: null })
+  }
+
+  const pathBar = catalog && !materialsActive ? <HierarchyPath label="Case 경로" className="case-path-bar" trailing={tab === 'distribution' ? <div className="case-scene-chips" role="list" aria-label="Scene 목록">{sceneSummary.length ? sceneSummary.map((item) => <span role="listitem" key={item.label} className={`case-scene-chip${item.hasResult ? ' case-scene-chip--result' : ''}`} title={`${item.title} · ${item.hasResult ? '결과 있음' : '결과 없음'}`}><i aria-hidden="true" />{item.label}<span className="case-sr-only">{item.hasResult ? ' 결과' : ' 결과 없음'}</span></span>) : null}</div> : undefined}>
+    <HierarchyChoice label="Case" value={caseId} choices={pathChoices(catalog.cases)} disabledReason="확정된 Case가 없습니다." onChange={(value) => { setCaseId(value); setCaptureId(''); setLoadCaseId(''); setRunId(''); setOptionId(''); setMode(''); setComponentId(''); setReferenceCaseId(''); setReferenceCaptureId('') }} />
+    {tab === 'distribution' ? <HierarchyChoice label="하중경우" value={loadCaseId} choices={pathChoices(loadChoices)} disabled={!caseId} disabledReason={caseId ? '하중경우가 없습니다.' : 'Case를 먼저 선택하세요.'} onChange={(value) => { setLoadCaseId(value); setRunId(''); setOptionId(''); setMode(''); setComponentId('') }} /> : null}
+    {tab === 'distribution' ? <HierarchyChoice label="Run Case" value={runId} choices={pathChoices(runChoices)} disabled={!loadCaseId} disabledReason={loadCaseId ? 'Run Case가 없습니다.' : '하중경우를 먼저 선택하세요.'} onChange={(value) => { setRunId(value); setOptionId(''); setMode(''); setComponentId('') }} /> : null}
+    {tab === 'distribution' ? <HierarchyChoice label="Run Option" value={optionId} choices={pathChoices(options)} disabled={!runId} disabledReason={runId ? 'Run Option이 없습니다.' : 'Run Case를 먼저 선택하세요.'} onChange={(value) => { const choice = options.find((item) => item.id === value); setOptionId(value); setMode(choice?.mode ?? ''); setComponentId('') }} /> : null}
+  </HierarchyPath> : null
+
+  const displayOptions = catalog && !materialsActive ? <details className="case-display-options">
+    <summary><SlidersHorizontal aria-hidden="true" />표시 옵션</summary>
+    <div className="case-display-options__panel">
+      {tab === 'distribution' ? <div className="case-display-options__row">
+        <HierarchyChoice label="Component" value={componentId} choices={pathChoices(componentChoices)} disabled={!activeCaptureId || !mode} disabledReason="결과가 있는 Run Option을 먼저 선택하세요." onChange={setComponentId} />
+        <HierarchyChoice label="Basis" value={basis} choices={catalog.bases.map((item) => ({ id: item.id, label: basisLabel(item.id) }))} disabled={!activeCaptureId} disabledReason="결과가 있는 Run Option을 먼저 선택하세요." onChange={(value) => setBasis(value === 'DETAIL' ? 'DETAIL' : value === 'REPORTED_SUMMARY' ? 'REPORTED_SUMMARY' : '')} />
+      </div> : null}
+      {tab === 'distribution' ? <div className="case-display-options__row"><EdgePicker edges={edges} onChange={setEdges} /><LinePicker lines={lines} onChange={setLines} /></div> : null}
+      {tab === 'distribution' ? <fieldset className="case-display-options__compare"><legend>Case 비교</legend>
+        <button type="button" onClick={addCurrent} disabled={!activeCaptureId || !basis || comparison.some((item) => item.simulation_case_id === dashboardCaseId) || comparison.length >= 8}>현재 Case 비교에 추가</button>
+        {comparison.map((item) => <button type="button" key={item.simulation_case_id} onClick={() => setComparison(comparison.filter((candidate) => candidate.simulation_case_id !== item.simulation_case_id))}>{caseLabel(item.simulation_case_id)} 제거</button>)}
+      </fieldset> : <fieldset className="case-display-options__compare"><legend>Reference 비교</legend>
+        <SelectField label="Reference Case" value={referenceCaseId} choices={catalog.cases.filter((item) => item.id !== caseId)} onChange={(value) => { setReferenceCaseId(value); setReferenceCaptureId('') }} />
+        <SelectField label="Reference 결과" value={referenceCaptureId} choices={catalog.captures.filter((item) => item.case_id === referenceCaseId)} disabled={!referenceCaseId} onChange={setReferenceCaptureId} />
+      </fieldset>}
+      <div className="case-display-options__history"><strong>업데이트 이력</strong><ul aria-label="결과 업데이트 이력">{storedCaptures.length ? storedCaptures.map((item) => <li key={item.id} title={item.label}>{item.label}</li>) : <li>아직 결과가 없습니다.</li>}</ul></div>
+      {canManageFolders ? <Link className="case-display-options__link" to={folderHref}>폴더 연결·규칙 열기</Link> : null}
+    </div>
+  </details> : null
+
+  const distributionEmpty = catalog?.folder_schema?.status === 'AVAILABLE' && selectedCase?.source === 'FOLDER_SCHEMA' && !selectedCase.capture_count ? '이 Case에는 아직 결과 파일이 없습니다. Scene 폴더에 결과를 넣으면 자동으로 표시됩니다.' : '결과를 불러오는 중입니다.'
+  const distribution = (section: 'summary' | 'compare') => <DistributionArea key={`${projectId}:${requestId}`} section={section} compareView={compareView} onCompareView={setCompareView} edges={edges} lines={lines} comparison={comparison} caseId={dashboardCaseId} loadCaseId={loadCaseId} captureId={activeCaptureId} runId={runId} optionId={optionId} mode={mode} componentId={componentId} basis={basis} hasCapturedRun={runChoices.some((item) => item.id === runId && item.capture_id === activeCaptureId)} hasCapturedOption={options.some((item) => item.id === optionId && item.capture_id === activeCaptureId)} emptyContextMessage={distributionEmpty} />
+  const content = activeView === 'materials' ? renderMaterials?.(pathTarget) ?? null
+    : tab === 'usage' ? <UsageArea key={`${caseId}:${captureId}:${referenceCaseId}:${referenceCaptureId}`} caseId={dashboardCaseId} captureId={activeCaptureId} referenceCaseId={catalog?.cases.find((item) => item.id === referenceCaseId)?.dashboard_case_id ?? referenceCaseId} referenceCaptureId={referenceCaptureId} />
+    : activeView === 'video' ? (activeCaptureId && runId ? <CaseVideoGrid key={`${activeCaptureId}:${runId}:${optionId}`} captureId={activeCaptureId} runId={runId} runOptionId={optionId || undefined} mode={mode || undefined} /> : <State message={distributionEmpty} />)
+    : distribution(activeView === 'compare' ? 'compare' : 'summary')
 
   return <section className="simulation-dashboard" data-ui-density="v1" aria-label="SPDM 해석 결과 대시보드">
-    <header className="simulation-dashboard__head"><div><span>RESULT EXPLORER</span><h2>해석 결과 대시보드</h2><p>표시값과 자산은 선택한 Case·Run·capture 문맥의 서버 결과만 사용합니다.</p></div><nav aria-label="결과 환경"><Button size="sm" className={tab === 'usage' ? 'active' : ''} onClick={() => setTab('usage')}>사용환경</Button><Button size="sm" className={tab === 'distribution' ? 'active' : ''} onClick={() => setTab('distribution')}>유통환경</Button></nav></header>
-    {catalogError && !catalog ? <State message={catalogError} error /> : <>{catalogError ? <State message={`${catalogError} · 마지막으로 읽은 결과를 표시합니다.`} error /> : null}{controls}{catalog?.folder_schema?.status === 'UNAVAILABLE' ? <State message={`현재 Folder Schema를 읽을 수 없습니다${catalog.folder_schema?.diagnostic ? ` · ${catalog.folder_schema.diagnostic.message}` : ''}. 아래 수집 이력은 저장된 capture 문맥으로 조회됩니다.`} error /> : null}{catalog && !catalog.cases.length ? <State message="확정된 Folder Schema Case나 수집 이력이 없습니다. 폴더 연결·규칙에서 구조를 확인하세요." /> : null}</>}
-    <div className="simulation-dashboard__source-link"><span>새 결과는 폴더 연결에서 등록하고 읽습니다.</span>{canManageFolders ? <Link to={folderHref}>폴더 연결·규칙 열기</Link> : null}</div>
-    {tab === 'usage' ? <UsageArea key={`${caseId}:${captureId}:${referenceCaseId}:${referenceCaptureId}`} caseId={dashboardCaseId} captureId={activeCaptureId} referenceCaseId={catalog?.cases.find((item) => item.id === referenceCaseId)?.dashboard_case_id ?? referenceCaseId} referenceCaptureId={referenceCaptureId} /> : <DistributionArea key={`${projectId}:${requestId}`} projectId={projectId} requestId={requestId} caseId={dashboardCaseId} loadCaseId={loadCaseId} captureId={activeCaptureId} runId={runId} optionId={optionId} mode={mode} componentId={componentId} basis={basis} hasCapturedRun={runChoices.some((item) => item.id === runId && item.capture_id === activeCaptureId)} hasCapturedOption={options.some((item) => item.id === optionId && item.capture_id === activeCaptureId)} emptyContextMessage={catalog?.folder_schema?.status === 'AVAILABLE' && selectedCase?.source === 'FOLDER_SCHEMA' ? (selectedCase.capture_count ? '결과를 불러오는 중입니다.' : '이 Case에는 아직 결과 파일이 없습니다. Scene 폴더에 결과를 넣으면 자동으로 표시됩니다.') : '결과를 불러오는 중입니다.'} />}
+    <header className="case-results-head">
+      <div className="case-env-toggle" role="group" aria-label="결과 환경"><button type="button" aria-pressed={tab === 'usage'} className={tab === 'usage' ? 'active' : ''} onClick={() => setTab('usage')}>사용환경</button><button type="button" aria-pressed={tab === 'distribution'} className={tab === 'distribution' ? 'active' : ''} onClick={() => setTab('distribution')}>유통환경</button></div>
+      <div className="case-results-head__actions">{headerExtra}{catalog ? <CaseFinalizationPanel projectId={projectId} requestId={requestId} environment={tab === 'usage' ? 'USAGE' : 'DISTRIBUTION'} caseId={dashboardCaseId} captureId={storedCaptureId} hasCapturedCase={hasCapturedCase} canFinalize={canRefreshSchema} /> : null}</div>
+    </header>
+    {catalogError && !catalog && !materialsActive ? <State message={catalogError} error /> : null}
+    {catalogError && catalog ? <State message={`${catalogError} · 마지막으로 읽은 결과를 표시합니다.`} error /> : null}
+    {pathBar}
+    {/* The materials tab renders its own path (same component) into this slot. */}
+    <div ref={setPathTarget} className="case-path-slot" hidden={!materialsActive} />
+    {!materialsActive && catalog?.folder_schema?.status === 'UNAVAILABLE' ? <State message="폴더 구조를 읽을 수 없습니다. 저장된 결과를 표시합니다." title={catalog.folder_schema?.diagnostic?.message} error /> : null}
+    {!materialsActive && catalog && !catalog.cases.length ? <State message="확정된 Case가 없습니다. 폴더 연결·규칙에서 구조를 확인하세요." /> : null}
+    <div className="case-view-bar"><ViewTabs tabs={tabs} active={activeView} onSelect={selectView} />{displayOptions}</div>
+    <div className="case-view-panel" id="case-view-panel" role="tabpanel" aria-labelledby={`case-view-tab-${activeView}`}>{content}</div>
   </section>
 }
 
-function State({ message, error = false }: { message: string; error?: boolean }) { return <div className={`simulation-dashboard__state ${error ? 'error' : ''}`} role={error ? 'alert' : 'status'}>{error ? <AlertTriangle /> : <Layers3 />}<span>{message}</span></div> }
+function State({ message, error = false, title }: { message: string; error?: boolean; title?: string }) { return <div className={`simulation-dashboard__state ${error ? 'error' : ''}`} role={error ? 'alert' : 'status'} title={title}>{error ? <AlertTriangle /> : <Layers3 />}<span className="case-prose">{message}</span></div> }
 
 function UsageArea({ caseId, captureId, referenceCaseId, referenceCaptureId }: { caseId: string; captureId: string; referenceCaseId: string; referenceCaptureId: string }) {
   const [data, setData] = useState<UsageDashboard | null>(null)
@@ -178,8 +269,8 @@ function UsageArea({ caseId, captureId, referenceCaseId, referenceCaptureId }: {
       .catch((reason) => { if (!controller.signal.aborted) setError(errorText(reason)) })
     return () => controller.abort()
   }, [caseId, captureId, referenceCaseId, referenceCaptureId])
-  if (!caseId || !captureId) return <State message="Simulation Case와 수집 버전을 선택하세요." />
-  if (Boolean(referenceCaseId) !== Boolean(referenceCaptureId)) return <State message="Reference 수집 버전을 선택하세요." />
+  if (!caseId || !captureId) return <State message="Case를 선택하세요." />
+  if (Boolean(referenceCaseId) !== Boolean(referenceCaptureId)) return <State message="표시 옵션에서 Reference 결과를 선택하세요." />
   if (error) return <State message={error} error />
   if (!data) return <State message="사용환경 평가를 불러오는 중입니다." />
   const media = data.evaluations.flatMap((evaluation) => evaluation.media ?? [])
@@ -213,10 +304,10 @@ function UsageArea({ caseId, captureId, referenceCaseId, referenceCaptureId }: {
   </div>
 }
 
-function DistributionArea({ projectId, requestId, caseId, loadCaseId, captureId, runId, optionId, mode, componentId, basis, hasCapturedRun, hasCapturedOption, emptyContextMessage }: { projectId: string; requestId: string; caseId: string; loadCaseId: string; captureId: string; runId: string; optionId: string; mode: string; componentId: string; basis: '' | 'REPORTED_SUMMARY' | 'DETAIL'; hasCapturedRun: boolean; hasCapturedOption: boolean; emptyContextMessage: string }) {
-  const [edges, setEdges] = useState<string[]>([...EDGES]); const [lines, setLines] = useState<string[]>(['1', '2', '3', '4']); const [data, setData] = useState<DashboardDistribution | null>(null); const [error, setError] = useState(''); const [sceneId, setSceneId] = useState(''); const [memberId, setMemberId] = useState(''); const [section, setSection] = useState<'summary' | 'edges' | 'contours' | 'behavior'>('summary'); const [comparison, setComparison] = useState<DashboardComparisonMember[]>([]); const latestKey = useRef('')
-  useEffect(() => { setComparison([]); setData(null); setSceneId(''); setMemberId('') }, [projectId, requestId])
-  const contextKey = `${projectId}:${requestId}:${caseId}:${loadCaseId}:${runId}:${optionId}:${mode}:${captureId}:${componentId}:${basis}:${edges.join(',')}:${lines.join(',')}:${comparison.map((item) => `${item.simulation_case_id}/${item.load_case_id}/${item.execution_run_id}/${item.run_option_id}/${item.capture_id}/${item.mode}/${item.component_id}/${item.basis}`).join('|')}`
+type DistributionProps = { section: 'summary' | 'compare'; compareView: CompareView; onCompareView: (view: CompareView) => void; edges: string[]; lines: string[]; comparison: DashboardComparisonMember[]; caseId: string; loadCaseId: string; captureId: string; runId: string; optionId: string; mode: string; componentId: string; basis: '' | 'REPORTED_SUMMARY' | 'DETAIL'; hasCapturedRun: boolean; hasCapturedOption: boolean; emptyContextMessage: string }
+function DistributionArea({ section, compareView, onCompareView, edges, lines, comparison, caseId, loadCaseId, captureId, runId, optionId, mode, componentId, basis, hasCapturedRun, hasCapturedOption, emptyContextMessage }: DistributionProps) {
+  const [data, setData] = useState<DashboardDistribution | null>(null); const [error, setError] = useState(''); const [sceneId, setSceneId] = useState(''); const [memberId, setMemberId] = useState(''); const latestKey = useRef('')
+  const contextKey = `${caseId}:${loadCaseId}:${runId}:${optionId}:${mode}:${captureId}:${componentId}:${basis}:${edges.join(',')}:${lines.join(',')}:${comparison.map((item) => `${item.simulation_case_id}/${item.load_case_id}/${item.execution_run_id}/${item.run_option_id}/${item.capture_id}/${item.mode}/${item.component_id}/${item.basis}`).join('|')}`
   useEffect(() => {
     if (!runId || !captureId || !hasCapturedRun || !hasCapturedOption || !mode || !componentId || !basis) { setData(null); return }
     const controller = new AbortController(); latestKey.current = contextKey; setError(''); setData(null); setSceneId(''); setMemberId('')
@@ -225,16 +316,25 @@ function DistributionArea({ projectId, requestId, caseId, loadCaseId, captureId,
     const request = members.length > 1 ? simulationDashboardApi.comparison(members, edges.join(','), lines.join(','), controller.signal) : simulationDashboardApi.distribution(runId, { capture_id: captureId, run_option_id: optionId, mode, component_id: componentId, basis, edge_keys: edges.join(','), line_indices: lines.join(',') }, controller.signal)
     request.then((next) => { if (!controller.signal.aborted && latestKey.current === contextKey) setData(next) }).catch((reason) => { if (!controller.signal.aborted && latestKey.current === contextKey) setError(errorText(reason)) })
     return () => controller.abort()
-  }, [basis, captureId, caseId, comparison, componentId, contextKey, edges, hasCapturedOption, hasCapturedRun, lines, loadCaseId, mode, optionId, projectId, requestId, runId])
+  }, [basis, captureId, caseId, comparison, componentId, contextKey, edges, hasCapturedOption, hasCapturedRun, lines, loadCaseId, mode, optionId, runId])
   if (!captureId) return <State message={emptyContextMessage} />
   if (runId && !hasCapturedRun) return <State message="이 Run의 수집 결과 없음" />
   if (runId && hasCapturedRun && optionId && !hasCapturedOption) return <State message="이 Run Option의 수집 결과 없음" />
-  if (!runId || !mode || !componentId || !basis) return <State message="Run, mode, component, basis와 capture를 모두 선택하세요." />
+  if (!runId || !mode || !componentId || !basis) return <State message="Run Case와 Run Option을 선택하세요." />
   if (error) return <State message={error} error />
-  if (!data) return <State message="유통환경 요약을 불러오는 중입니다." />
+  if (!data) return <State message="결과를 불러오는 중입니다." />
   const choose = (scene: string, member: string) => { setSceneId(scene); setMemberId(member) }
-  const addCurrent = () => { const next = { simulation_case_id: caseId, load_case_id: loadCaseId, execution_run_id: runId, run_option_id: optionId, capture_id: captureId, mode, component_id: componentId, basis: basis as DashboardComparisonMember['basis'] }; if (!comparison.some((item) => item.simulation_case_id === caseId) && comparison.length < 8) setComparison([...comparison, next]) }
-  return <div className="simulation-dashboard__distribution" data-testid="distribution-dashboard"><div className="simulation-dashboard__toolbar"><EdgePicker edges={edges} onChange={setEdges} /><LinePicker lines={lines} onChange={setLines} /><button type="button" onClick={addCurrent} disabled={comparison.some((item) => item.simulation_case_id === caseId) || comparison.length >= 8}>현재 Case 비교에 추가</button>{comparison.map((item) => <button type="button" key={item.simulation_case_id} onClick={() => setComparison(comparison.filter((candidate) => candidate.simulation_case_id !== item.simulation_case_id))}>Case 제거 {item.simulation_case_id}</button>)}<nav aria-label="유통환경 상세"><button className={section === 'summary' ? 'active' : ''} onClick={() => setSection('summary')}>결과 요약</button><button className={section === 'edges' ? 'active' : ''} onClick={() => setSection('edges')}>엣지별 수준</button><button className={section === 'contours' ? 'active' : ''} onClick={() => setSection('contours')}>컨투어</button><button className={section === 'behavior' ? 'active' : ''} onClick={() => setSection('behavior')}>거동</button></nav></div>{section === 'summary' ? <Summary data={data} sceneId={sceneId} memberId={memberId} selectedEdges={edges} onSelect={choose} /> : null}{section === 'edges' ? <EdgePanels data={data} onSelect={choose} /> : null}{section === 'contours' ? <ContourMatrix data={data} onSelect={choose} /> : null}{section === 'behavior' ? <BehaviorMatrix data={data} sceneId={sceneId} onSelect={choose} /> : null}<SimulationLocationMap data={data} onSelect={choose} /><SceneDetail sceneId={sceneId} member={data.members.find((member) => member.id === memberId)} lineIndices={lines.join(',')} />{data.quality_issues.length ? <Issues issues={data.quality_issues} /> : null}</div>
+  const compareViews: Array<[CompareView, string]> = [['edges', '엣지별 수준'], ['contours', '컨투어'], ['behavior', '거동']]
+  return <div className="simulation-dashboard__distribution" data-testid="distribution-dashboard">
+    {section === 'summary' ? <Summary data={data} sceneId={sceneId} memberId={memberId} selectedEdges={edges} onSelect={choose} /> : <>
+      <div className="case-compare-toggle" role="group" aria-label="Scene 비교 보기">{compareViews.map(([id, label]) => <button key={id} type="button" aria-pressed={compareView === id} className={compareView === id ? 'active' : ''} onClick={() => onCompareView(id)}>{label}</button>)}</div>
+      {compareView === 'edges' ? <EdgePanels data={data} onSelect={choose} /> : null}
+      {compareView === 'contours' ? <ContourMatrix data={data} onSelect={choose} /> : null}
+      {compareView === 'behavior' ? <BehaviorMatrix data={data} sceneId={sceneId} onSelect={choose} /> : null}
+    </>}
+    <SceneDetail sceneId={sceneId} member={data.members.find((member) => member.id === memberId)} lineIndices={lines.join(',')} />
+    {data.quality_issues.length ? <Issues issues={data.quality_issues} /> : null}
+  </div>
 }
 
 function EdgePicker({ edges, onChange }: { edges: string[]; onChange: (next: string[]) => void }) { const toggle = (edge: string) => onChange(edges.includes(edge) ? edges.filter((item) => item !== edge) : [...edges, edge]); return <fieldset className="simulation-dashboard__picker"><legend>표시 엣지</legend>{EDGES.map((edge) => <label key={edge}><input type="checkbox" checked={edges.includes(edge)} onChange={() => toggle(edge)} />{edge}</label>)}</fieldset> }
@@ -251,9 +351,9 @@ function Summary({ data, sceneId, memberId, selectedEdges, onSelect }: { data: D
     const point = pointByKey.get(`${scene.id}:${member.id}`)
     return { scene_id: scene.id, member_id: member.id, scene: sceneLabel(scene), scene_sequence_number: scene.scene_sequence_number, order_status: scene.order_status, member: member.label, color: memberColor(member, index), value: point?.selected_edge_envelope ?? null, unit: point?.unit ?? null }
   }))
-  return <div className="simulation-dashboard__summary"><section><header><h3>Open Cell 엣지 맵</h3><small>{selectedScene?.label ?? 'Scene 선택'}</small></header><EdgeMap peaks={peaks} selectedEdges={selectedEdges} /></section><section><header><h3>Scene별 엣지 최대응력</h3><small>선택 엣지 envelope는 서버가 반환한 값입니다.</small></header>{noEdgeSelection ? <State message="선택 없음: 표시 엣지를 하나 이상 선택하세요." /> : <SimulationResultGraph chartId="summary" title="Scene별 엣지 최대응력" points={rows} members={data.members} onSelect={onSelect} valueName="선택 엣지 envelope" />}</section></div>
+  return <div className="simulation-dashboard__summary"><section className="case-summary-edge"><header><h3>Open Cell 엣지 맵</h3><small title={selectedScene?.label}>{selectedScene?.label ?? 'Scene 선택'}</small></header><EdgeMap peaks={peaks} selectedEdges={selectedEdges} /></section><section className="case-summary-chart"><header><h3>Scene별 엣지 최대응력 <InfoTip text="선택한 엣지의 최대값(envelope)입니다. 값은 서버가 계산합니다." /></h3></header>{noEdgeSelection ? <State message="선택 없음: 표시 옵션에서 엣지를 하나 이상 선택하세요." /> : <SimulationResultGraph chartId="summary" title="Scene별 엣지 최대응력" points={rows} members={data.members} onSelect={onSelect} valueName="선택 엣지 envelope" />}</section><SimulationLocationMap data={data} onSelect={onSelect} info={<InfoTip text="범주별 발생 위치입니다. 동률은 모두 표시하고, 라인 일부만 선택하면 코너는 제외합니다. 단위는 미확인입니다." />} /></div>
 }
-function EdgeMap({ peaks, selectedEdges }: { peaks: DashboardEdgePeak[]; selectedEdges: string[] }) { const item = (edge: string) => peaks.find((peak) => peak.edge === edge); return <div className="simulation-dashboard__edge-map">{EDGES.map((edge) => { const peak = item(edge); return <div key={edge} className={`edge edge-${edge.toLowerCase()} ${selectedEdges.includes(edge) ? 'selected' : ''} ${peak?.is_selected_maximum ? 'maximum' : ''}`}><b>{edge}</b><span>{valueText(peak)}</span><small>{peak?.completeness ?? peak?.status ?? '자료 없음'}</small></div> })}</div> }
+function EdgeMap({ peaks, selectedEdges }: { peaks: DashboardEdgePeak[]; selectedEdges: string[] }) { const item = (edge: string) => peaks.find((peak) => peak.edge === edge); return <div className="simulation-dashboard__edge-map">{EDGES.map((edge) => { const peak = item(edge); return <div key={edge} className={`edge edge-${edge.toLowerCase()} ${selectedEdges.includes(edge) ? 'selected' : ''} ${peak?.is_selected_maximum ? 'maximum' : ''}`}><b>{edge}</b><span>{valueText(peak)}</span><small>{statusText(peak?.completeness ?? peak?.status)}</small></div> })}</div> }
 function EdgePanels({ data, onSelect }: { data: DashboardDistribution; onSelect: (sceneId: string, memberId: string) => void }) {
   const memberIds = data.members.map((member) => member.id)
   const memberKey = memberIds.join('|')
@@ -271,30 +371,30 @@ function EdgePanels({ data, onSelect }: { data: DashboardDistribution; onSelect:
       return { scene_id: scene.id, member_id: member.id, scene: sceneLabel(scene), scene_sequence_number: scene.scene_sequence_number, order_status: scene.order_status, member: member.label, value: point?.value ?? null, unit: point?.unit ?? null, color: memberColor(member, memberIndex) }
     })
   }
-  return <><SceneTable scenes={data.scenes} /><div className="simulation-dashboard__panel-controls"><fieldset><legend>Case 범례</legend><div className="simulation-dashboard__case-actions"><button type="button" onClick={() => setVisible(memberIds)}>전체 선택</button><button type="button" onClick={() => setVisible([])}>전체 해제</button></div>{data.members.map((member, index) => <label key={member.id}><input type="checkbox" checked={visible.includes(member.id)} onChange={() => setVisible((current) => current.includes(member.id) ? current.filter((id) => id !== member.id) : [...current, member.id])} /><i style={{ background: memberColor(member, index) }} />{member.label}</label>)}</fieldset><label>표시 순서<select value={order} onChange={(event) => setOrder(event.target.value as 'scene' | 'case')}><option value="scene">Scene별</option><option value="case">Case별</option></select></label><label>패널 크기<select value={size} onChange={(event) => setSize(event.target.value as 'compact' | 'wide')}><option value="compact">작게</option><option value="wide">크게</option></select></label></div>{members.length ? <div className={`simulation-dashboard__edge-panels ${size}`}>{EDGES.map((edge) => <section key={edge}><header><h3>{edge}</h3><small>서버가 제공한 엣지별 최대값</small></header><SimulationResultGraph chartId={`edge-${edge}`} title={`${edge} 엣지 수준`} points={rows(edge)} members={members} onSelect={onSelect} valueName={edge} /></section>)}</div> : <State message="표시할 Simulation Case가 없습니다. 전체 선택 또는 Case를 선택하세요." />}</>
+  return <><SceneTable scenes={data.scenes} /><div className="simulation-dashboard__panel-controls"><fieldset><legend>Case 범례</legend><div className="simulation-dashboard__case-actions"><button type="button" onClick={() => setVisible(memberIds)}>전체 선택</button><button type="button" onClick={() => setVisible([])}>전체 해제</button></div>{data.members.map((member, index) => <label key={member.id}><input type="checkbox" checked={visible.includes(member.id)} onChange={() => setVisible((current) => current.includes(member.id) ? current.filter((id) => id !== member.id) : [...current, member.id])} /><i style={{ background: memberColor(member, index) }} />{member.label}</label>)}</fieldset><label>표시 순서<select value={order} onChange={(event) => setOrder(event.target.value as 'scene' | 'case')}><option value="scene">Scene별</option><option value="case">Case별</option></select></label><label>패널 크기<select value={size} onChange={(event) => setSize(event.target.value as 'compact' | 'wide')}><option value="compact">작게</option><option value="wide">크게</option></select></label></div>{members.length ? <div className={`simulation-dashboard__edge-panels ${size}`}>{EDGES.map((edge) => <section key={edge}><header><h3>{edge}</h3></header><SimulationResultGraph chartId={`edge-${edge}`} title={`${edge} 엣지 수준`} points={rows(edge)} members={members} onSelect={onSelect} valueName={edge} /></section>)}</div> : <State message="표시할 Simulation Case가 없습니다. 전체 선택 또는 Case를 선택하세요." />}</>
 }
-function SceneTable({ scenes }: { scenes: DashboardScene[] }) { return <div className="simulation-dashboard__scene-table"><span>Scene 설명</span>{scenes.map((scene) => <div key={scene.id}><b>{scene.scene_sequence_number ?? '순번 미확인'}</b><span>{scene.label}</span><small>{[scene.contact_code, scene.repetition, scene.order_status].filter(Boolean).join(' · ') || '설명 미확인'}</small></div>)}</div> }
+function SceneTable({ scenes }: { scenes: DashboardScene[] }) { return <div className="simulation-dashboard__scene-table"><span>Scene 설명</span>{scenes.map((scene) => <div key={scene.id}><b>{scene.scene_sequence_number ?? '순번 미확인'}</b><span>{scene.label}</span><small>{[scene.contact_code, scene.repetition, scene.order_status ? statusText(scene.order_status) : null].filter(Boolean).join(' · ') || '설명 미확인'}</small></div>)}</div> }
 function ContourMatrix({ data, onSelect }: { data: DashboardDistribution; onSelect: (sceneId: string, memberId: string) => void }) {
   const [transpose, setTranspose] = useState(false)
   const rows = transpose ? data.members : data.scenes
   const columns = transpose ? data.scenes : data.members
   const cellByContext = useMemo(() => new Map(data.contours.map((cell) => [`${cell.scene_id}:${cell.member_id}`, cell])), [data.contours])
-  return <section className="simulation-dashboard__matrix"><header><div><h3>Scene별 Cell Tmax 마지막 Frame Contour</h3><small>FINAL_FRAME 근거가 없는 자산은 프레임 미확인으로 표시합니다. 공통 Scale bar 정합성은 미확인으로 셀별 원본 범례를 유지합니다.</small></div><button type="button" onClick={() => setTranspose(!transpose)}><RotateCcw /> 행/열 전치</button></header><div className="simulation-dashboard__matrix-scroll"><div className="simulation-dashboard__matrix-grid" style={{ gridTemplateColumns: `minmax(220px, .7fr) repeat(${columns.length}, minmax(190px, 1fr))` }}><div className="simulation-dashboard__matrix-header">{transpose ? 'Case' : 'Scene / 자세·충돌'}</div>{columns.map((column) => <div className="simulation-dashboard__matrix-header" key={column.id} title={'design_description' in column ? [column.label, column.design_description].filter(Boolean).join(' · ') : column.label}>{column.label}{'design_description' in column && column.design_description ? <small>{column.design_description}</small> : null}</div>)}{rows.flatMap((row) => [<SceneOrCaseHeader key={`${row.id}-label`} item={row} />, ...columns.map((column) => { const scene = transpose ? column as DashboardScene : row as DashboardScene; const member = transpose ? row as DashboardMember : column as DashboardMember; const cell = cellByContext.get(`${scene.id}:${member.id}`); return <MatrixCell key={cell?.cell_id ?? `${scene.id}:${member.id}`} cellId={cell?.cell_id ?? `${scene.id}:${member.id}`} asset={cell?.asset} status={cell?.status} reason={cell?.reason} value={cell?.value} scaleStatus={cell?.scale_status} showContourMeta onClick={() => onSelect(scene.id, member.id)} /> })])}</div></div></section>
+  return <section className="simulation-dashboard__matrix"><header><div><h3>Scene별 Cell Tmax 마지막 Frame Contour <InfoTip text="최종 프레임 근거가 없는 이미지는 '프레임 미확인'으로 표시합니다. 공통 Scale bar가 확인되지 않아 셀별 원본 범례를 유지합니다." /></h3></div><button type="button" onClick={() => setTranspose(!transpose)}><RotateCcw /> 행/열 전치</button></header><div className="simulation-dashboard__matrix-scroll"><div className="simulation-dashboard__matrix-grid" style={{ gridTemplateColumns: `minmax(220px, .7fr) repeat(${columns.length}, minmax(190px, 1fr))` }}><div className="simulation-dashboard__matrix-header">{transpose ? 'Case' : 'Scene / 자세·충돌'}</div>{columns.map((column) => <div className="simulation-dashboard__matrix-header" key={column.id} title={'design_description' in column ? [column.label, column.design_description].filter(Boolean).join(' · ') : column.label}>{column.label}{'design_description' in column && column.design_description ? <small>{column.design_description}</small> : null}</div>)}{rows.flatMap((row) => [<SceneOrCaseHeader key={`${row.id}-label`} item={row} />, ...columns.map((column) => { const scene = transpose ? column as DashboardScene : row as DashboardScene; const member = transpose ? row as DashboardMember : column as DashboardMember; const cell = cellByContext.get(`${scene.id}:${member.id}`); return <MatrixCell key={cell?.cell_id ?? `${scene.id}:${member.id}`} cellId={cell?.cell_id ?? `${scene.id}:${member.id}`} asset={cell?.asset} status={cell?.status} reason={cell?.reason} value={cell?.value} scaleStatus={cell?.scale_status} showContourMeta onClick={() => onSelect(scene.id, member.id)} /> })])}</div></div></section>
 }
 function SceneOrCaseHeader({ item }: { item: DashboardScene | DashboardMember }) {
-  if ('scene_sequence_number' in item) return <div className="simulation-dashboard__matrix-header simulation-dashboard__scene-context" title={[item.label, item.description].filter(Boolean).join(' · ')}><b>{item.scene_sequence_number ?? '순번 미확인'} · {item.label}</b><small>{[item.description, item.contact_code, item.repetition, item.order_status].filter(Boolean).join(' · ') || '자세·충돌 정보 미확인'}</small></div>
+  if ('scene_sequence_number' in item) return <div className="simulation-dashboard__matrix-header simulation-dashboard__scene-context" title={[item.label, item.description].filter(Boolean).join(' · ')}><b>{item.scene_sequence_number ?? '순번 미확인'} · {item.label}</b><small>{[item.description, item.contact_code, item.repetition, item.order_status ? statusText(item.order_status) : null].filter(Boolean).join(' · ') || '자세·충돌 정보 미확인'}</small></div>
   return <div className="simulation-dashboard__matrix-header" title={[item.label, item.design_description].filter(Boolean).join(' · ')}><b>{item.label}</b>{item.design_description ? <small>{item.design_description}</small> : null}</div>
 }
 function BehaviorMatrix({ data, sceneId, onSelect }: { data: DashboardDistribution; sceneId: string; onSelect: (sceneId: string, memberId: string) => void }) { const scene = data.scenes.find((item) => item.id === sceneId) ?? data.scenes[0]; if (!scene) return <State message="Scene이 없습니다." />; return <section className="simulation-dashboard__matrix"><header><div><h3>Scene별 거동</h3><small>{scene.label}</small></div></header><div className="simulation-dashboard__matrix-scroll"><div className="simulation-dashboard__matrix-grid" style={{ gridTemplateColumns: `minmax(150px,.45fr) repeat(${data.members.length}, minmax(190px, 1fr))` }}><strong>대상</strong>{data.members.map((member) => <strong key={member.id}>{member.label}</strong>)}{ROLES.flatMap((role) => [<strong key={`${role}-label`}>{role}</strong>, ...data.members.map((member) => { const cell = data.behaviors.find((candidate) => candidate.scene_id === scene.id && candidate.member_id === member.id && candidate.subject_role === role); return <MatrixCell key={cell?.cell_id ?? `${scene.id}:${member.id}:${role}`} cellId={cell?.cell_id ?? `${scene.id}:${member.id}:${role}`} asset={cell?.asset} status={cell?.status} reason={cell?.reason} onClick={() => onSelect(scene.id, member.id)} /> })])}</div></div></section> }
-function scopeText(scope?: string | null) { return scope === 'EXTRACTED_SIDES_AND_CORNERS' ? '추출 측면·코너' : scope === 'EXTRACTED_SELECTED_LINES' ? '선택 라인의 추출 측면' : scope === 'SELECTED_SIDE_LINES' || scope === 'SELECTED_EDGE_LINES' ? '선택 엣지·라인' : scope ?? '집계 범위 미확인' }
-function MatrixCell({ cellId, asset, status, reason, value, scaleStatus, showContourMeta = false, onClick }: { cellId: string; asset?: DashboardAsset | null; status?: string; reason?: string | null; value?: DashboardValue | null; scaleStatus?: string | null; showContourMeta?: boolean; onClick: () => void }) { return <div className="simulation-dashboard__matrix-cell" role="button" tabIndex={0} data-cell-id={cellId} onClick={onClick} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') onClick() }}>{asset ? <Media asset={asset} /> : <span>{missingText(status, reason)}</span>}{showContourMeta ? <div className="simulation-dashboard__matrix-meta"><small>값: {value ? valueText(value) : '값 없음'}</small><small>집계: {value?.basis === 'REPORTED_SUMMARY' ? '원본 요약' : value?.basis === 'DETAIL' ? '상세 추출' : '집계 범위 미확인'} · {scopeText(value?.scope)}</small><small>상태: {value?.completeness ?? value?.status ?? status ?? '미확인'}</small><small>이미지·수치 시간 정합성 미확인</small><small>Scale bar: {!scaleStatus || scaleStatus === 'UNCONFIRMED' ? '정합성 미확인' : scaleStatus}</small></div> : null}</div> }
+function scopeText(scope?: string | null) { return scope === 'EXTRACTED_SIDES_AND_CORNERS' ? '추출 측면·코너' : scope === 'EXTRACTED_SELECTED_LINES' ? '선택 라인의 추출 측면' : scope === 'SELECTED_SIDE_LINES' || scope === 'SELECTED_EDGE_LINES' ? '선택 엣지·라인' : '집계 범위 미확인' }
+function MatrixCell({ cellId, asset, status, reason, value, scaleStatus, showContourMeta = false, onClick }: { cellId: string; asset?: DashboardAsset | null; status?: string; reason?: string | null; value?: DashboardValue | null; scaleStatus?: string | null; showContourMeta?: boolean; onClick: () => void }) { return <div className="simulation-dashboard__matrix-cell" role="button" tabIndex={0} data-cell-id={cellId} onClick={onClick} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') onClick() }}>{asset ? <Media asset={asset} /> : <span>{missingText(status, reason)}</span>}{showContourMeta ? <div className="simulation-dashboard__matrix-meta"><small>값: {value ? valueText(value) : '값 없음'}</small><small>집계: {value?.basis === 'REPORTED_SUMMARY' ? '원본 요약' : value?.basis === 'DETAIL' ? '상세 추출' : '집계 범위 미확인'} · {scopeText(value?.scope)}</small><small>상태: {statusText(value?.completeness ?? value?.status ?? status)}</small><small title="이미지와 수치의 시간 정합성은 확인되지 않았습니다.">시간 정합성 미확인 · Scale bar {!scaleStatus || scaleStatus === 'UNCONFIRMED' ? '미확인' : statusText(scaleStatus)}</small></div> : null}</div> }
 function SceneDetail({ sceneId, member, lineIndices }: { sceneId: string; member?: DashboardMember; lineIndices: string }) { const [data, setData] = useState<DashboardSceneDetail | null>(null); const [error, setError] = useState(''); const [position, setPosition] = useState('TOP'); const latestKey = useRef('')
   useEffect(() => { if (!sceneId || !member) { setData(null); return }; const controller = new AbortController(); const key = `${sceneId}:${member.id}:${lineIndices}:${position}`; latestKey.current = key; setData(null); setError(''); simulationDashboardApi.sceneDetail(sceneId, { execution_run_id: member.execution_run_id, capture_id: member.capture_id, run_option_id: member.run_option_id, mode: member.mode, component_id: member.component_id, basis: member.basis, line_indices: lineIndices, position }, controller.signal).then((next) => { if (!controller.signal.aborted && latestKey.current === key) setData(next) }).catch((reason) => { if (!controller.signal.aborted && latestKey.current === key) setError(errorText(reason)) }); return () => controller.abort() }, [lineIndices, member, position, sceneId])
   if (!sceneId || !member) return null
   if (error) return <State message={error} error />
   if (!data) return <State message="선택 Scene 상세를 불러오는 중입니다." />
-  return <section className="simulation-dashboard__detail"><header><h3>Scene 상세 · {data.scene.label}</h3><label>위치 <select value={position} onChange={(event) => setPosition(event.target.value)} aria-label="Scene 상세 위치">{['TOP', 'BOT', 'LH', 'RH'].map((item) => <option key={item}>{item}</option>)}</select></label><small>{data.context.context_key}</small></header><div className="simulation-dashboard__chart"><ResponsiveContainer width="100%" height="100%"><LineChart><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="ref_coord" type="number" /><YAxis /><Tooltip /><Legend />{[1, 2, 3, 4].map((line) => <Line key={line} data={data.line_points.filter((point) => point.line_index === line)} dataKey="value" name={`L${line}`} type="linear" connectNulls={false} stroke={COLORS[line - 1]} dot={false} />)}</LineChart></ResponsiveContainer></div><div className="simulation-dashboard__detail-assets">{data.assets.map((asset) => <Media key={asset.asset_id} asset={asset} />)}</div>{data.quality_issues.length ? <Issues issues={data.quality_issues} /> : null}</section> }
-function Media({ asset }: { asset: DashboardAsset }) { const [expanded, setExpanded] = useState(false); const [playError, setPlayError] = useState(''); const video = useRef<HTMLVideoElement>(null); const dialog = useRef<HTMLDialogElement>(null); const close = () => { dialog.current?.close(); setExpanded(false) }; useEffect(() => { setExpanded(false); setPlayError(''); video.current?.pause() }, [asset.asset_id]); useEffect(() => { if (expanded && dialog.current && !dialog.current.open) dialog.current.showModal() }, [expanded]); const toggle = async () => { if (!video.current) return; try { if (video.current.paused) await video.current.play(); else video.current.pause(); setPlayError('') } catch { setPlayError('영상을 재생하지 못했습니다.') } }; const frame = asset.frame_role === 'FINAL_FRAME' ? '최종 프레임' : '프레임 미확인'; const frameMeta = [frame, asset.frame_index == null ? null : `frame ${asset.frame_index}`, asset.time_value == null ? null : `t=${asset.time_value}${asset.time_unit ? ` ${asset.time_unit}` : ' · 단위 미확인'}`, asset.provenance].filter(Boolean).join(' · '); return <div className="simulation-dashboard__media">{asset.kind === 'VIDEO' ? <video ref={video} controls src={assetUrl(asset)} aria-label={asset.title ?? '결과 영상'} /> : asset.status === 'READY' ? <img src={assetUrl(asset)} alt={asset.title ?? '결과 이미지'} /> : <span><ImageIcon />{asset.status}</span>}<small>{frameMeta}</small><div className="simulation-dashboard__media-actions">{asset.kind === 'VIDEO' ? <button type="button" aria-label="영상 재생 또는 일시정지" onClick={() => void toggle()}><Play /></button> : null}<button type="button" aria-label="자산 확대" onClick={() => setExpanded(true)}><Expand /></button></div>{playError ? <em role="alert">{playError}</em> : null}{expanded ? <dialog ref={dialog} className="simulation-dashboard__lightbox" onCancel={(event) => { event.preventDefault(); close() }} onClose={() => setExpanded(false)}><button type="button" onClick={close} aria-label="확대 보기 닫기">닫기</button>{asset.kind === 'VIDEO' ? <video controls autoPlay src={assetUrl(asset)} aria-label={asset.title ?? '확대 결과 영상'} /> : <img src={assetUrl(asset)} alt={asset.title ?? '결과 이미지 확대'} />}</dialog> : null}</div> }
+  return <section className="simulation-dashboard__detail"><header><h3>Scene 상세 · {data.scene.label}</h3><label>위치 <select value={position} onChange={(event) => setPosition(event.target.value)} aria-label="Scene 상세 위치">{['TOP', 'BOT', 'LH', 'RH'].map((item) => <option key={item}>{item}</option>)}</select></label></header><div className="simulation-dashboard__chart"><ResponsiveContainer width="100%" height="100%"><LineChart><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="ref_coord" type="number" /><YAxis /><Tooltip /><Legend />{[1, 2, 3, 4].map((line) => <Line key={line} data={data.line_points.filter((point) => point.line_index === line)} dataKey="value" name={`L${line}`} type="linear" connectNulls={false} stroke={COLORS[line - 1]} dot={false} />)}</LineChart></ResponsiveContainer></div><div className="simulation-dashboard__detail-assets">{data.assets.map((asset) => <Media key={asset.asset_id} asset={asset} />)}</div>{data.quality_issues.length ? <Issues issues={data.quality_issues} /> : null}</section> }
+function Media({ asset }: { asset: DashboardAsset }) { const [expanded, setExpanded] = useState(false); const [playError, setPlayError] = useState(''); const video = useRef<HTMLVideoElement>(null); const dialog = useRef<HTMLDialogElement>(null); const close = () => { dialog.current?.close(); setExpanded(false) }; useEffect(() => { setExpanded(false); setPlayError(''); video.current?.pause() }, [asset.asset_id]); useEffect(() => { if (expanded && dialog.current && !dialog.current.open) dialog.current.showModal() }, [expanded]); const toggle = async () => { if (!video.current) return; try { if (video.current.paused) await video.current.play(); else video.current.pause(); setPlayError('') } catch { setPlayError('영상을 재생하지 못했습니다.') } }; const frame = asset.frame_role === 'FINAL_FRAME' ? '최종 프레임' : '프레임 미확인'; const frameMeta = [frame, asset.frame_index == null ? null : `frame ${asset.frame_index}`, asset.time_value == null ? null : `t=${asset.time_value}${asset.time_unit ? ` ${asset.time_unit}` : ' · 단위 미확인'}`, ].filter(Boolean).join(' · '); return <div className="simulation-dashboard__media">{asset.kind === 'VIDEO' ? <video ref={video} controls src={assetUrl(asset)} aria-label={asset.title ?? '결과 영상'} /> : asset.status === 'READY' ? <img src={assetUrl(asset)} alt={asset.title ?? '결과 이미지'} /> : <span><ImageIcon />{statusText(asset.status)}</span>}<small title={frameMeta}>{frame}</small><div className="simulation-dashboard__media-actions">{asset.kind === 'VIDEO' ? <button type="button" aria-label="영상 재생 또는 일시정지" onClick={() => void toggle()}><Play /></button> : null}<button type="button" aria-label="자산 확대" onClick={() => setExpanded(true)}><Expand /></button></div>{playError ? <em role="alert">{playError}</em> : null}{expanded ? <dialog ref={dialog} className="simulation-dashboard__lightbox" onCancel={(event) => { event.preventDefault(); close() }} onClose={() => setExpanded(false)}><button type="button" onClick={close} aria-label="확대 보기 닫기">닫기</button>{asset.kind === 'VIDEO' ? <video controls autoPlay src={assetUrl(asset)} aria-label={asset.title ?? '확대 결과 영상'} /> : <img src={assetUrl(asset)} alt={asset.title ?? '결과 이미지 확대'} />}</dialog> : null}</div> }
 const unprocessedReasons: Record<string, string> = { EXCLUDED_DIRECTORY: '제외된 디렉터리', UNSUPPORTED_EXTENSION: '미지원 확장자', UNKNOWN_LOAD_CASE_DIRECTORY: '알 수 없는 하중 경우 경로', UNEXPECTED_RESULT_PATH_DEPTH: '지원하지 않는 폴더 깊이', INCOMPLETE_RESULT_PATH: '결과 경로 불완전', UNSUPPORTED_DISTRIBUTION_FORMAT: '미지원 유통환경 형식', UNRECOGNIZED_RESULT_FILE: '인식하지 못한 결과 파일' }
 function issueText(issue: string) { if (!issue.startsWith('UNPROCESSED_FILE:')) return issue; const source = issue.slice('UNPROCESSED_FILE:'.length); const marker = source.lastIndexOf(':'); if (marker < 1) return `미처리 파일: ${source}`; const path = source.slice(0, marker); const reason = source.slice(marker + 1); return `미처리 파일: ${path} · ${unprocessedReasons[reason] ?? reason}` }
 function Issues({ issues }: { issues: string[] }) { return <aside className="simulation-dashboard__issues"><AlertTriangle />{issues.map((issue) => <span key={issue}>{issueText(issue)}</span>)}</aside> }

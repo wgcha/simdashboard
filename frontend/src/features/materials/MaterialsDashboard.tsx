@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Download, Search, RotateCw, Box, Layers, AlertTriangle, ChevronLeft, ChevronRight } from 'lucide-react'
 import {
   materialsApi,
@@ -14,6 +15,7 @@ import {
   type MaterialsSource,
 } from '../../shared/api/materials'
 import { HierarchyChoice } from '../../shared/components/HierarchyChoice'
+import { HierarchyPath } from '../../shared/components/HierarchyPath'
 import { useCaseHierarchyParams } from '../../shared/hooks/useCaseHierarchyParams'
 import './MaterialsDashboard.css'
 
@@ -21,6 +23,10 @@ type Props = {
   projectId: string
   requestId: string
   refreshToken?: number
+  /** Rendered inside the Case results page (소재·물성 tab): no page heading. */
+  embedded?: boolean
+  /** Where the embedded path bar is rendered so it sits in the shared path row. */
+  pathTarget?: HTMLElement | null
 }
 
 type SortKey = 'part' | 'material' | 'property' | 'thickness' | 'density'
@@ -223,7 +229,7 @@ function materialsPath(catalog: MaterialsCatalog | null, path: { caseId: string;
   return { cases, loads, runs, options, scenes, ready, flat }
 }
 
-export function MaterialsDashboard({ requestId, refreshToken = 0 }: Props) {
+export function MaterialsDashboard({ requestId, refreshToken = 0, embedded = false, pathTarget = null }: Props) {
   const hierarchyParams = useCaseHierarchyParams()
   const { caseId, loadCaseId, runId, optionId, get: getParam, update: updateParams, select: selectLevel } = hierarchyParams
   const [catalogState, setCatalogState] = useState<{ requestId: string; value: MaterialsCatalog } | null>(null)
@@ -398,25 +404,24 @@ export function MaterialsDashboard({ requestId, refreshToken = 0 }: Props) {
   const sortBy = (key: SortKey) => setSort((current) => current.key === key ? { key, direction: current.direction === 'asc' ? 'desc' : 'asc' } : { key, direction: 'asc' })
   const sortButton = (key: SortKey, label: string) => <button type="button" className="materials-sort-button" onClick={() => sortBy(key)} aria-label={`${label}로 정렬${sort.key === key ? `, ${sort.direction === 'asc' ? '오름차순' : '내림차순'}` : ''}`}>{label}<span>{sort.key === key ? (sort.direction === 'asc' ? '↑' : '↓') : '↕'}</span></button>
 
-  return <div className="materials-dashboard" data-ui-density="v1">
-    <header className="materials-page-head">
-      <div><span>RADioss STARTER DECK</span><h1>모델 소재·물성</h1><p>Part 참조를 따라 Material, Property, Failure 모델과 함수 곡선을 살펴봅니다.</p></div>
-      {catalog && (catalog.scenes.length || catalog.hierarchy.cases.length) ? <div className="materials-hierarchy" role="group" aria-label="소재 덱 경로">
-        <div className="materials-hierarchy-path">
-          {path.flat ? null : <>
-            <HierarchyChoice label="Case" value={caseId} choices={path.cases.map((item) => ({ id: item.id, label: item.label, title: item.relative_path }))} onChange={(value) => chooseLevel('case', value)} disabledReason="이 의뢰에 확인된 Case가 없습니다." />
-            <HierarchyChoice label="하중경우" value={loadCaseId} choices={path.loads.map((item) => ({ id: item.id, label: item.label, title: item.relative_path }))} disabled={!caseId} disabledReason={caseId ? '이 Case에 하중경우 폴더가 없습니다.' : 'Case를 먼저 선택하세요.'} onChange={(value) => chooseLevel('case_load', value)} />
-            <HierarchyChoice label="Run Case" value={runId} choices={path.runs.map((item) => ({ id: item.id, label: item.label, title: item.relative_path }))} disabled={!loadCaseId} disabledReason={loadCaseId ? '이 하중경우에 Run Case가 없습니다.' : '하중경우를 먼저 선택하세요.'} onChange={(value) => chooseLevel('case_run', value)} />
-            <HierarchyChoice label="Run Option" value={optionId} choices={path.options.map((item) => ({ id: item.id, label: item.label, title: item.relative_path || item.label }))} disabled={!runId} disabledReason={runId ? '이 Run Case에 Run Option이 없습니다.' : 'Run Case를 먼저 선택하세요.'} onChange={(value) => chooseLevel('case_option', value)} />
-          </>}
+  const pathBar = catalog && (catalog.scenes.length || catalog.hierarchy.cases.length) ? <div className="materials-hierarchy">
+        <HierarchyPath label="소재 덱 경로" className="materials-hierarchy-path">
+            {path.flat ? null : <HierarchyChoice key="Case" label="Case" value={caseId} choices={path.cases.map((item) => ({ id: item.id, label: item.label, title: item.relative_path }))} onChange={(value) => chooseLevel('case', value)} disabledReason="이 의뢰에 확인된 Case가 없습니다." />}
+            {path.flat ? null : <HierarchyChoice key="하중경우" label="하중경우" value={loadCaseId} choices={path.loads.map((item) => ({ id: item.id, label: item.label, title: item.relative_path }))} disabled={!caseId} disabledReason={caseId ? '이 Case에 하중경우 폴더가 없습니다.' : 'Case를 먼저 선택하세요.'} onChange={(value) => chooseLevel('case_load', value)} />}
+            {path.flat ? null : <HierarchyChoice key="Run Case" label="Run Case" value={runId} choices={path.runs.map((item) => ({ id: item.id, label: item.label, title: item.relative_path }))} disabled={!loadCaseId} disabledReason={loadCaseId ? '이 하중경우에 Run Case가 없습니다.' : '하중경우를 먼저 선택하세요.'} onChange={(value) => chooseLevel('case_run', value)} />}
+            {path.flat ? null : <HierarchyChoice key="Run Option" label="Run Option" value={optionId} choices={path.options.map((item) => ({ id: item.id, label: item.label, title: item.relative_path || item.label }))} disabled={!runId} disabledReason={runId ? '이 Run Case에 Run Option이 없습니다.' : 'Run Case를 먼저 선택하세요.'} onChange={(value) => chooseLevel('case_option', value)} />}
           <HierarchyChoice label="Scene" value={selectedSceneId} choices={path.scenes.map((item) => ({ id: item.scene_id, label: `${item.label}${item.has_deck ? '' : ' · 덱 없음'}`, title: item.relative_path }))} disabled={!path.ready} disabledReason={path.ready ? '선택한 경로에 Scene이 없습니다.' : '상위 경로를 먼저 선택하세요.'} onChange={(value) => updateQuery({ scene: value || null, part: null }, false)} />
-        </div>
+        </HierarchyPath>
         {selectedScene ? <div className="materials-scene-location">
           <span title={selectedScene.relative_path}>{selectedScene.relative_path}</span>
           <b className={selectedScene.has_deck ? 'present' : 'absent'}>{selectedScene.has_deck ? '덱 있음' : '덱 없음'}</b>
         </div> : null}
-      </div> : null}
-    </header>
+      </div> : null
+  return <div className={`materials-dashboard${embedded ? ' materials-dashboard--embedded' : ''}`} data-ui-density="v1">
+    {embedded ? (pathTarget ? createPortal(pathBar, pathTarget) : pathBar) : <header className="materials-page-head">
+      <div><span>RADioss STARTER DECK</span><h1>모델 소재·물성</h1><p>Part 참조를 따라 Material, Property, Failure 모델과 함수 곡선을 살펴봅니다.</p></div>
+      {pathBar}
+    </header>}
 
     {error && <div className="materials-error" role="alert"><AlertTriangle /><span>{error}</span><button type="button" onClick={() => setManualRefresh((value) => value + 1)}><RotateCw /> 다시 불러오기</button></div>}
     {!requestId ? <div className="materials-empty-state"><Box /><strong>의뢰를 선택하면 소재 덱을 조회합니다.</strong><span>조회 권한이 있는 의뢰만 목록에 표시됩니다.</span></div> : loadingCatalog && !catalog ? <div className="materials-empty-state" role="status">유통환경 덱 위치를 불러오고 있습니다…</div> : error && !catalog ? <div className="materials-empty-state"><AlertTriangle /><strong>조회 실패</strong><span>오류를 확인하고 다시 불러오세요.</span></div> : catalog && !catalog.scenes.length ? <div className="materials-empty-state"><Layers /><strong>이 의뢰에서 확인된 덱 위치가 없습니다.</strong><span>의뢰의 유통환경 결과 폴더를 확인하세요.</span></div> : !selectedScene ? <div className="materials-empty-state"><Layers /><strong>{path.ready && !path.scenes.length ? '선택한 경로에 Scene이 없습니다.' : '경로와 Scene을 선택하면 소재 덱을 조회합니다.'}</strong><span>Case → 하중경우 → Run Case → Run Option → Scene 순서로 선택하세요.</span></div> : !selectedScene.has_deck ? <div className="materials-empty-state"><Box /><strong>선택한 위치에서 Parts와 Materials 덱을 찾지 못했습니다.</strong><span title={selectedScene.relative_path}>{selectedScene.relative_path}</span></div> : <div className="materials-workspace">

@@ -44,3 +44,17 @@ export function DropVideoCard({ video, selected, loop, state, error, setRef, onS
     <details className="drop-video-file-details"><summary>파일 정보 · 다운로드</summary><footer><span>{video.format.toUpperCase()} · {video.codec?.toUpperCase() ?? '코덱 미확인'}{video.fast_start ? ' · FAST START' : ''}</span><span>{fileSizeLabel(video.file_size)}</span>{video.drop_direction && <span>{video.drop_direction}</span>}{video.drop_condition && <span>{video.drop_condition}</span>}{video.analysis_version && <span>{video.analysis_version}</span>}<a href={video.download_url ?? video.video_url} download onClick={(event) => event.stopPropagation()}>다운로드</a></footer></details>
   </article>
 }
+
+export type VideoGridItem = { id: string; title: string; subtitle?: string | null; src: string; status?: string | null }
+
+/** Plain video card (no synthetic evaluation) sharing the drop video card styling and playback states. */
+export function VideoGridCard({ video, ordinal, selected, loop, state, error, setRef, onSelect, onState, onError }: { video: VideoGridItem; ordinal: number; selected: boolean; loop: boolean; state: PlaybackState; error?: string; setRef: (element: HTMLVideoElement | null) => void; onSelect: () => void; onState: (state: PlaybackState) => void; onError: (message: string) => void }) {
+  const handleKeyboard = (event: KeyboardEvent<HTMLElement>) => { if (event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) return; event.preventDefault(); onSelect() }
+  const unavailable = Boolean(video.status && video.status !== 'READY')
+  const label = video.subtitle ? `${video.title} · ${video.subtitle}` : video.title
+  return <article className={`drop-video-card video-grid-card ${state === 'error' ? 'media-error' : ''} ${selected ? 'selected' : ''}`} tabIndex={0} aria-label={`영상 ${String(ordinal).padStart(2, '0')} ${label}`} aria-current={selected ? 'true' : undefined} onClick={onSelect} onKeyDown={handleKeyboard}>
+    <header><span>{String(ordinal).padStart(2, '0')}</span><div><strong title={video.title}>{video.title}</strong>{video.subtitle && <small title={video.subtitle}>{video.subtitle}</small>}</div>{unavailable && <b className="drop-video-evaluation-badge">확인 필요</b>}<b className={state}>{PLAYBACK_LABEL[state]}</b></header>
+    <div className="drop-video-frame"><video ref={setRef} aria-label={`${label} 영상`} controls loop={loop} muted playsInline preload="metadata" src={video.src} onCanPlay={() => onState('ready')} onPlaying={() => onState('playing')} onPause={() => onState('paused')} onEnded={() => onState('ended')} onError={() => { onState('error'); onError('파일 형식 또는 브라우저 코덱 지원을 확인하세요.') }} />{state === 'error' && <div className="drop-video-error"><AlertTriangle /><strong>영상을 재생할 수 없습니다.</strong><small>{error ?? '파일 또는 브라우저 코덱 지원을 확인하세요.'}</small></div>}</div>
+    <details className="drop-video-file-details"><summary>파일 정보 · 다운로드</summary><footer><span>{video.subtitle ?? video.title}</span><a href={video.src} download onClick={(event) => event.stopPropagation()}>다운로드</a></footer></details>
+  </article>
+}
