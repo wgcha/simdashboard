@@ -3,43 +3,45 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { loginWorkspace } from './workspace-test-helpers'
 
-test('Case 최종확정은 파일 미리보기 후 복사하고 확정 상태를 표시한다', async ({ page }) => {
+test('Final 지정 미리보기는 최신 결과 기준과 CAE 파일을 보이고 보고서 범위가 없으면 확정을 막는다', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 })
   const errors: string[] = []
   page.on('pageerror', (error) => errors.push(error.message))
   const files = [
     { source_relative_path: 'Working/Case A/Drop/Run/INDIVIDUAL/2_Face/model.rad', case_relative_path: 'Drop/Run/INDIVIDUAL/2_Face/model.rad', category: 'CAE', source_basis: 'CURRENT_CONFIRMED_SCENE', size: 40, sha256: 'a'.repeat(64) },
-    { source_relative_path: 'Working/Case A/Drop/Run/INDIVIDUAL/2_Face/result.csv', case_relative_path: 'Drop/Run/INDIVIDUAL/2_Face/result.csv', category: 'Reports', source_basis: 'SELECTED_CAPTURE', size: 60, sha256: 'b'.repeat(64) },
+    { source_relative_path: 'Working/Case A/Drop/Run/INDIVIDUAL/2_Face/result.csv', case_relative_path: 'Drop/Run/INDIVIDUAL/2_Face/result.csv', category: 'CAE', source_basis: 'SOURCE_CAPTURE', source_capture_id: 'capture-final', size: 60, sha256: 'b'.repeat(64) },
   ]
-  const common = { operation_id: 'f'.repeat(32), case_id: 'case-final', case_label: 'Case A', capture_id: 'capture-final', capture_fingerprint: 'test', folder_schema_snapshot_id: 'schema-final', files, counts: { CAE: 1, Reports: 1, input_decks: 1, rad_decks: 1, inc_decks: 0, reports: 0, results: 1 }, missing: { input_decks: false, rad_decks: false, reports: true }, excluded_capture_file_count: 0 }
-  const completed = { ...common, status: 'COMPLETE', confirmed_at: '2026-10-02T01:00:00Z', created_by: 'test', output_paths: { CAE: 'Final/CAE/Case A/version', Reports: 'Final/Reports/Case A/version' } }
-  let confirmed = false
+  const completed = { schema_version: 1, operation_id: 'e'.repeat(32), status: 'COMPLETE', case_id: 'case-final', case_label: 'Case A', case_path: 'Working/Case A', capture_id: 'capture-final', basis: 'CAPTURE', scene_sources: [], capture_fingerprint: 'old', folder_schema_snapshot_id: 'schema-final', output_paths: { CAE: 'Final/CAE/Case A/old', Reports: 'Final/Reports/Case A/old' }, files, reports: [], counts: { CAE: 1, Reports: 1, input_decks: 1, rad_decks: 1, inc_decks: 0, results: 1 }, missing: { input_decks: false, rad_decks: false, inc_decks: true, reports: true }, excluded_capture_file_count: 0, created_by: 'test', confirmed_at: '2026-10-01T01:00:00Z' }
+  let previewBody: Record<string, unknown> | null = null
   await page.route('**/api/dashboard/catalog**', (route) => route.fulfill({ json: { environment: 'DISTRIBUTION', cases: [{ id: 'case-final', label: 'Case A' }], captures: [{ id: 'capture-final', label: '수집 1', case_id: 'case-final' }], load_cases: [], execution_runs: [], run_options: [], modes: [], components: [], bases: [] } }))
-  await page.route('**/api/dashboard/finalizations/status**', (route) => route.fulfill({ json: { latest: confirmed ? completed : null, selected_case_latest: confirmed ? completed : null, retryable_operations: [] } }))
-  await page.route('**/api/dashboard/finalizations/preview', (route) => route.fulfill({ json: { ...common, status: 'PREVIEW', project_id: 'project-tv-001', request_id: 'request-drop-001', environment: 'DISTRIBUTION', case_path: 'Working/Case A', previewed_at: '2026-10-02T00:59:00Z', plan_sha256: 'c'.repeat(64), can_confirm: true } }))
-  await page.route('**/api/dashboard/finalizations/confirm', async (route) => {
-    expect(route.request().postDataJSON()).toMatchObject({ case_id: 'case-final', capture_id: 'capture-final', operation_id: common.operation_id })
-    confirmed = true
-    await route.fulfill({ json: completed })
+  // A version-1 record (results under Final/Reports) is still shown as history.
+  await page.route('**/api/dashboard/finalizations/status**', (route) => route.fulfill({ json: { latest: completed, selected_case_latest: completed, retryable_operations: [], unverified_records: 0 } }))
+  await page.route('**/api/dashboard/finalizations/preview', (route) => {
+    previewBody = route.request().postDataJSON()
+    return route.fulfill({ json: { schema_version: 2, operation_id: 'f'.repeat(32), status: 'PREVIEW', project_id: 'project-tv-001', request_id: 'request-drop-001', environment: 'DISTRIBUTION', case_id: 'case-final', case_label: 'Case A', case_path: 'Working/Case A', capture_id: 'latest:case-final', basis: 'LATEST', scene_sources: [{ scene_path: 'Working/Case A/Drop/Run/INDIVIDUAL/2_Face', source_capture_id: 'capture-final' }], capture_fingerprint: 'x', folder_schema_snapshot_id: 'schema-final', scene_paths: ['Working/Case A/Drop/Run/INDIVIDUAL/2_Face'], files, counts: { CAE: 2, input_decks: 1, rad_decks: 1, inc_decks: 0, results: 1, scene_reports: 0 }, missing: { input_decks: false, rad_decks: false, inc_decks: true }, excluded_capture_file_count: 0, previewed_at: '2026-10-02T00:59:00Z', plan_sha256: 'c'.repeat(64), can_confirm: true, output_paths: { CAE: 'Final/CAE/Case A/' + 'f'.repeat(32), Reports: 'Final/Reports/Case A/' + 'f'.repeat(32) }, report_files: { pptx: 'Case_A_report.pptx', html: 'Case_A_report.html' }, report_paths: { pptx: 'Final/Reports/Case A/x/Case_A_report.pptx', html: 'Final/Reports/Case A/x/Case_A_report.html' }, report_limits: { pptx: 67108864, html: 335544320 } } })
   })
   await loginWorkspace(page)
   await page.goto('/workspace/requests?project=project-tv-001&request=request-drop-001&view=case_results&result_environment=DISTRIBUTION')
-  await page.getByRole('button', { name: 'Final 지정', exact: true }).click({ timeout: 15_000 })
-  const dialog = page.getByRole('dialog', { name: 'Final 지정 파일 확인' })
+  await expect(page.locator('.case-finalization')).toContainText('이전 결과로 확정', { timeout: 15_000 })
+  await page.getByRole('button', { name: 'Final 지정', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'Final 지정 확인' })
+  await expect(dialog).toContainText('최신 결과 · Scene 1개')
+  await expect(dialog.getByRole('list', { name: 'Scene 기준' })).toContainText('2_Face')
+  await dialog.getByText('파일 2개 보기').click()
   await expect(dialog).toContainText('model.rad')
   await expect(dialog).toContainText('result.csv')
-  await expect(dialog).toContainText('Final/CAE')
+  await expect(dialog).toContainText('Case_A_report.pptx')
+  await expect(dialog).toContainText('Run Case·Run Option을 화면에서 선택')
+  await expect(dialog).not.toContainText('PDF')
+  await expect(dialog.getByRole('button', { name: 'Final 지정 확정', exact: true })).toBeDisabled()
+  expect(previewBody).toMatchObject({ case_id: 'case-final', capture_id: 'latest:case-final' })
   await page.screenshot({ path: join(tmpdir(), 'folder-final-preview-desktop.png'), fullPage: false })
-  await dialog.getByRole('button', { name: '확정하고 파일 복사', exact: true }).click()
+  await dialog.getByRole('button', { name: '취소', exact: true }).click()
   await expect(dialog).not.toBeVisible()
-  await expect(page.locator('.case-finalization')).toContainText('확정 완료')
-  // The view always shows the merged latest result (no per-capture context selector).
   await expect(page.locator('.simulation-dashboard').locator('label').filter({ hasText: '조회 문맥' })).toHaveCount(0)
-  await expect(page.locator('.case-finalization')).toContainText('확정 완료')
   // Internal capture ids stay out of the visible text; details are in the badge tooltip.
   await expect(page.locator('.case-finalization')).not.toContainText('capture-final')
   await expect(page.locator('.case-finalization__status')).toHaveAttribute('title', /2개 파일/)
-  expect(confirmed).toBe(true)
   expect(errors).toEqual([])
 })
 

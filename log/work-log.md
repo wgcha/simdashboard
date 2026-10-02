@@ -1085,3 +1085,11 @@
 - 6단계 재사용용 순수 함수: `frontend/src/features/results/caseReport/caseReport.ts`. 문서: [Case 결과 보고서](../docs/features/case-report.md).
 - 구조: 기능 간 import 금지 규칙에 맞추려고 `features/reports/api.ts`를 `shared/api/reportLayouts.ts`로, `ReportLayoutEditor`·`reportLayoutUtils`를 `shared/reports/`로 옮겼다(동작 변경 없음). 미디어는 `simulationDashboardApi.assetBlob`(크기 상한 스트리밍 읽기)로만 읽는다.
 - 기존 버그 수정: Run Option이 둘 이상일 때 사용자가 고른 값이 자동 보정(이전 URL을 본 렌더)으로 지워지던 문제. 빈 값을 빈 값으로 바꾸는 보정을 건너뛴다(`SimulationDashboard` `choose`).
+
+## 2026-10-03 6단계 Final 지정에 보고서·최신 결과 기준 (Claude, 브랜치 claude/case-results-redesign)
+- 경로(DEPTH_V1 D11·D12): 기준 Scene의 입력·결과·이미지·영상·Scene 문서(PDF/PPT/PPTX/XLSX)를 모두 `Final/CAE/<Case>/<확정 ID>/<Working 미러>`로, `Final/Reports/<Case>/<확정 ID>/`에는 앱이 만든 `<Case>_report.pptx|html`만 둔다. 계획 `schema_version` 2. 1 형식 완료 기록(결과가 Reports 미러)은 상태 조회에서 계속 검증·표시한다. 기존 Final 파일은 옮기거나 덮어쓰지 않는다(D14).
+- 기준: `capture_id=latest:<Case>`를 받아 Scene별 최신 수집본(`merge_latest_payload` 규칙)에서 해시 고정 목록을 만들고 Scene별 `source_capture_id`를 서명 계획에 기록. 구체 수집본 ID도 계속 허용. 미리보기 뒤 새 수집본이면 `FINALIZATION_CAPTURE_CHANGED`.
+- 보고서: 브라우저가 5단계 빌더로 만든 파일을 형식별 raw `PUT /api/dashboard/finalizations/{id}/reports/{pptx|html}`로 올린 뒤 `confirm`에 `report_formats`(하나 이상, `FINALIZATION_REPORT_REQUIRED`). multipart 대신 별도 업로드 단계를 택해 새 실행 의존성(python-multipart)을 피했다. 서버가 파일 이름을 정하고 PPTX(zip 구조·매크로·경로 이탈·압축 폭탄, 64 MiB)·HTML(UTF-8·doctype, 320 MiB) 검사, SHA-256·크기를 서명된 `reports.json`·완료 기록에 남긴다. 보고서 실패 시 완료 없음, 완료 전 같은 확정의 보고서 교체 허용, 완료 후 불변(`FINALIZATION_ALREADY_COMPLETED`). Caddy 템플릿 `request_body 512MB`는 요청당이라 HTML 상한을 수용(문서화).
+- 화면: Final 지정 창에 기준(최신 결과·Scene·결과 버전 수), Final/CAE 개수·접이식 목록, Final/Reports 형식 선택(PPTX·HTML·영상 포함), 진행 단계, 오류와 같은 바이트 재시도, 완료 경로·건너뛴 영상. 헤더의 재시도 버튼은 제거(미완료 건수는 배지 툴팁). 문서: [최종확정](../docs/features/case-finalization.md).
+- 검증: 백엔드 신규 `test_case_finalization_reports.py` 15 passed, 관련 모듈 포함 53 passed/1 skipped(Windows 전용 1건 skip), OpenAPI 계약 검사 통과. 프런트 tsc·build·test:routing·test:api 통과, check:architecture 기존 4건만. e2e case-finalization 2·folder-working-final 3·case-report 7 통과, simulation-dashboard 13/14(폐기된 capture-pin 항목).
+- 미실행: 독립 Sol/Astra 검수, `security-diff-scan`(업로드·경로 경계 변경이라 대상), PostgreSQL 프로필, 실제 Windows Server 2022·공유폴더·Caddy 경유 대용량 업로드. 사용환경은 보고서가 없어 Final 지정을 완료할 수 없다(결정 필요).

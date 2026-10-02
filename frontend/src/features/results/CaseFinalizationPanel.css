@@ -300,3 +300,133 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Stage 6 Final dialog: basis, Final/CAE, Final/Reports sections (desktop). */
+.case-finalization__section {
+  display: grid;
+  gap: 7px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border, #d7e0ea);
+  border-radius: 8px;
+}
+
+.case-finalization__section h4 {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  font-size: 13px;
+}
+
+.case-finalization__section h4 span {
+  color: var(--color-text-muted, #536276);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.case-finalization__scenes,
+.case-finalization__paths {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.case-finalization__scenes li {
+  max-width: 24ch;
+  overflow: hidden;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--color-surface-2, #eef3f8);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.case-finalization__paths {
+  display: grid;
+}
+
+.case-finalization__paths li {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.case-finalization__paths code,
+.case-finalization__format code {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.case-finalization__file-list summary {
+  color: var(--color-accent, #245fc5);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.case-finalization__file-list .case-finalization__files {
+  max-height: 240px;
+  margin-top: 6px;
+}
+
+.case-finalization__file-list .case-finalization__files li {
+  grid-template-columns: 72px minmax(0, 1fr) 70px;
+}
+
+.case-finalization__formats {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.case-finalization__format {
+  display: grid;
+  grid-template-columns: auto 52px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.case-finalization__format code {
+  color: var(--color-text-muted, #536276);
+  font-weight: 400;
+}
+
+.case-finalization__format--sub {
+  grid-template-columns: auto minmax(0, 1fr);
+  padding-left: 26px;
+  font-weight: 500;
+}
+
+.case-finalization__done,
+.case-finalization__dialog-error,
+.case-finalization__progress {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 13px;
+}
+
+.case-finalization__done {
+  color: var(--color-success, #1d7a46);
+  font-weight: 650;
+}
+
+.case-finalization__dialog-error {
+  color: var(--color-danger, #b42318);
+}
+
+.case-finalization__progress {
+  margin-right: auto;
+  color: var(--color-text-muted, #536276);
+}

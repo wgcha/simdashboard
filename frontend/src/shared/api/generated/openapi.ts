@@ -3161,6 +3161,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/dashboard/finalizations/{operation_id}/reports/{report_format}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Upload Report
+         * @description Stage one browser-built report (raw body) for an unfinished operation.
+         */
+        put: operations["upload_report_api_dashboard_finalizations__operation_id__reports__report_format__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/dashboard/finalizations/status": {
         parameters: {
             query?: never;
@@ -4438,6 +4458,8 @@ export interface components {
             capture_id: string;
             /** Operation Id */
             operation_id: string;
+            /** Report Formats */
+            report_formats?: ("pptx" | "html")[];
         };
         /** CreateDraftInput */
         CreateDraftInput: {
@@ -13780,6 +13802,44 @@ export interface operations {
                 "application/json": components["schemas"]["ConfirmInput"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_report_api_dashboard_finalizations__operation_id__reports__report_format__put: {
+        parameters: {
+            query: {
+                project_id: string;
+                request_id: string;
+                environment: "USAGE" | "DISTRIBUTION";
+                case_id: string;
+                capture_id: string;
+            };
+            header?: never;
+            path: {
+                operation_id: string;
+                report_format: "pptx" | "html";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {

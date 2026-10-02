@@ -147,3 +147,7 @@
 - 중복 의뢰 정리는 다른 세션의 DEPTH_V1 §13(등록 삭제)이 맡는다.
 - 추가 결정(23:56): 보고서는 PPTX와 HTML을 함께 구현하고 사용자가 하나 이상 고른다. HTML 영상 포함은 선택(영상당 보통 1MB 미만; 상한 영상당 20MB·전체 200MB, 넘으면 대표 이미지로 대체). Final/Reports에는 사용자가 고른 PPTX·HTML을 저장하고 PDF는 계약에서 제외한다(depth-schema D11 갱신). 업로드한 HTML은 SPDM에 저장만 하고 앱이 페이지로 제공하지 않는다.
 - 추가 결정(23:58): PDF는 사용자가 PPTX·HTML로 직접 만든다. 웹에는 PDF 관련 구현(변환, 인쇄용 스타일 등)을 하지 않는다. §3.5의 PDF·LibreOffice 내용과 §3.6의 PDF 저장은 폐기한다.
+
+### 6단계 Final 지정 (2026-10-03)
+- Final/CAE에 기준 Scene의 입력·결과 전체(Working 미러), Final/Reports에 사용자가 고른 PPTX·HTML(서버가 이름 결정)만 저장한다. 기준은 화면과 같은 병합 최신 결과(`latest:<Case>`)이고 Scene별 수집본을 서명 계획에 기록한다. 보고서는 확정 ID에 묶인 형식별 업로드 후 확정하며 보고서 없이는 완료되지 않는다. 계약: [최종확정](../features/case-finalization.md).
+- 남은 결정: 사용환경은 보고서 빌더가 없어 Final 지정을 완료할 수 없다.

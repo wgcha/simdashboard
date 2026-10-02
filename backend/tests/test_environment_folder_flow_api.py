@@ -33,6 +33,21 @@ def admin_client(tmp_path, monkeypatch, password_auth_bootstrap_admin):
         yield client, root
 
 
+def synthetic_pptx(extra: dict[str, bytes] | None = None, content_types: bytes | None = None) -> bytes:
+    """Smallest zip the Final report check accepts as PPTX (synthetic, not a real deck)."""
+    import io
+    import zipfile
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", content_types or (
+            b'<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            b'<Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/></Types>'))
+        archive.writestr("ppt/presentation.xml", b"<p:presentation/>")
+        for name, data in (extra or {}).items():
+            archive.writestr(name, data)
+    return buffer.getvalue()
+
+
 def post(client, route, payload):
     response = client.post(BASE + route, json=payload)
     assert response.status_code == 200, response.text
@@ -834,11 +849,14 @@ def test_case_finalization_is_capture_pinned_signed_retryable_and_keeps_existing
     plan = plan.json()
     assert plan["counts"]["rad_decks"] == 1
     assert plan["counts"]["inc_decks"] == 1
-    assert plan["counts"]["reports"] == 1
+    assert plan["counts"]["scene_reports"] == 1
     assert plan["counts"]["results"] == 2
     assert added_scene_relative not in plan["scene_paths"]
     assert not any(item["source_relative_path"].startswith(added_scene_relative + "/") for item in plan["files"])
-    assert {item["source_basis"] for item in plan["files"]} == {"SELECTED_CAPTURE", "CURRENT_CONFIRMED_SCENE"}
+    assert {item["source_basis"] for item in plan["files"]} == {"SOURCE_CAPTURE", "CURRENT_CONFIRMED_SCENE"}
+    assert {item["category"] for item in plan["files"]} == {"CAE"}
+    assert plan["report_files"] == {"pptx": "Package_SetCase1_CushionCase1_report.pptx",
+                                    "html": "Package_SetCase1_CushionCase1_report.html"}
     assert not any("Private" in item["source_relative_path"] for item in plan["files"])
     assert any(item["source_relative_path"].endswith("review.pdf") for item in plan["files"])
     assert not (root / "Project_9910_Final" / "WR_9910_SimType3" / "Final" / "Reports" / "Package_SetCase1_CushionCase1").exists()
@@ -849,7 +867,7 @@ def test_case_finalization_is_capture_pinned_signed_retryable_and_keeps_existing
     stored_plan = json.loads(stored_plan_path.read_text(encoding="utf-8"))
     stored_plan["final_relative_path"] = "Elsewhere"
     stored_plan_path.write_text(json.dumps(stored_plan), encoding="utf-8")
-    tampered = client.post("/api/dashboard/finalizations/confirm", json={**body, "operation_id": plan["operation_id"]})
+    tampered = client.post("/api/dashboard/finalizations/confirm", json={**body, "operation_id": plan["operation_id"], "report_formats": ["pptx"]})
     assert tampered.status_code == 409, tampered.text
     assert preserved.read_text(encoding="utf-8") == "keep this"
     stored_plan["final_relative_path"] = plan["final_relative_path"]
@@ -877,12 +895,16 @@ def test_case_finalization_is_capture_pinned_signed_retryable_and_keeps_existing
             raise case_finalization.CaseFinalizationError("SYNTHETIC_COPY_FAILURE", "synthetic copy failure")
         return original_copy(*args, **kwargs)
 
+    report_query = {**body}
+    staged = client.put(f"/api/dashboard/finalizations/{retry_plan['operation_id']}/reports/pptx",
+                        params=report_query, content=synthetic_pptx())
+    assert staged.status_code == 200, staged.text
     monkeypatch.setattr(case_finalization, "_copy_one", fail_once)
-    failed = client.post("/api/dashboard/finalizations/confirm", json={**body, "operation_id": retry_plan["operation_id"]})
+    failed = client.post("/api/dashboard/finalizations/confirm", json={**body, "operation_id": retry_plan["operation_id"], "report_formats": ["pptx"]})
     assert failed.status_code == 422, failed.text
     assert client.get("/api/dashboard/finalizations/status", params={key: value for key, value in body.items() if key != "capture_id"}).json()["retryable_operations"]
     monkeypatch.setattr(case_finalization, "_copy_one", original_copy)
-    confirmed = client.post("/api/dashboard/finalizations/confirm", json={**body, "operation_id": retry_plan["operation_id"]})
+    confirmed = client.post("/api/dashboard/finalizations/confirm", json={**body, "operation_id": retry_plan["operation_id"], "report_formats": ["pptx"]})
     assert confirmed.status_code == 200, confirmed.text
     record = confirmed.json()
     assert record["status"] == "COMPLETE"
@@ -892,13 +914,15 @@ def test_case_finalization_is_capture_pinned_signed_retryable_and_keeps_existing
     for item in record["files"]:
         destination = root / record["output_paths"][item["category"]] / item["case_relative_path"]
         assert hashlib.sha256(destination.read_bytes()).hexdigest() == item["sha256"]
+    assert [path.name for path in (root / record["output_paths"]["Reports"]).iterdir()] == ["Package_SetCase1_CushionCase1_report.pptx"]
+    assert (root / record["output_paths"]["CAE"] / "Drop/Run01/Individual/1_Face_Drop_Scene01_Face1_1st/review.pdf").is_file()
     assert (root / record["output_paths"]["CAE"] / "Drop/Run01/Individual/1_Face_Drop_Scene01_Face1_1st/include.inc").is_file()
     assert preserved.read_text(encoding="utf-8") == "keep this"
 
     # Idempotent retry uses the signed completion record even after the source Scene disappears.
     source_bytes = result_csv.read_bytes()
     result_csv.unlink()
-    repeated = client.post("/api/dashboard/finalizations/confirm", json={**body, "operation_id": retry_plan["operation_id"]})
+    repeated = client.post("/api/dashboard/finalizations/confirm", json={**body, "operation_id": retry_plan["operation_id"], "report_formats": ["pptx"]})
     assert repeated.status_code == 200, repeated.text
     assert repeated.json()["confirmed_at"] == record["confirmed_at"]
     result_csv.write_bytes(source_bytes)

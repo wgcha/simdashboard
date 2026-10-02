@@ -176,7 +176,6 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
   const selectedCapture = catalog?.captures.find((item) => item.id === captureId)
   // Stored captures of this Case, newest first (the merged LATEST entry is virtual).
   const storedCaptures = (catalog?.captures ?? []).filter((item) => item.case_id === caseId && item.kind !== 'LATEST')
-  const storedCaptureId = storedCaptures[0]?.id ?? ''
   const selectedCase = catalog?.cases.find((item) => item.id === caseId)
   // A capture left over from another Case (e.g. Case changed in the materials path) is ignored.
   const captureMatchesCase = !selectedCapture?.case_id || selectedCapture.case_id === caseId
@@ -263,7 +262,7 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
   return <section className="simulation-dashboard" data-ui-density="v1" aria-label="SPDM 해석 결과 대시보드">
     <header className="case-results-head">
       <div className="case-env-toggle" role="group" aria-label="결과 환경"><button type="button" aria-pressed={tab === 'usage'} className={tab === 'usage' ? 'active' : ''} onClick={() => setTab('usage')}>사용환경</button><button type="button" aria-pressed={tab === 'distribution'} className={tab === 'distribution' ? 'active' : ''} onClick={() => setTab('distribution')}>유통환경</button></div>
-      <div className="case-results-head__actions">{headerExtra}{catalog ? <CaseReportLauncher scope={reportScope} disabledReason="유통환경에서 결과가 있는 Run Case와 Run Option을 선택하면 보고서를 만들 수 있습니다." /> : null}{catalog ? <CaseFinalizationPanel projectId={projectId} requestId={requestId} environment={tab === 'usage' ? 'USAGE' : 'DISTRIBUTION'} caseId={dashboardCaseId} captureId={storedCaptureId} hasCapturedCase={hasCapturedCase} canFinalize={canRefreshSchema} /> : null}</div>
+      <div className="case-results-head__actions">{headerExtra}{catalog ? <CaseReportLauncher scope={reportScope} disabledReason="유통환경에서 결과가 있는 Run Case와 Run Option을 선택하면 보고서를 만들 수 있습니다." /> : null}{catalog ? <CaseFinalizationPanel projectId={projectId} requestId={requestId} environment={tab === 'usage' ? 'USAGE' : 'DISTRIBUTION'} caseId={dashboardCaseId} captureId={hasCapturedCase && dashboardCaseId ? `latest:${dashboardCaseId}` : ''} hasCapturedCase={hasCapturedCase} canFinalize={canRefreshSchema} reportScope={reportScope} /> : null}</div>
     </header>
     {catalogError && !catalog && !materialsActive ? <State message={catalogError} error /> : null}
     {catalogError && catalog ? <State message={`${catalogError} · 마지막으로 읽은 결과를 표시합니다.`} error /> : null}
