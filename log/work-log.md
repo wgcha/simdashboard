@@ -993,3 +993,11 @@
 - 검증: 규칙 53개, catalog 집중 24개, 등록 API/path 30개(1 skip), 후속 Scene/경계 6개 및 Option ID 1개, 확장된 Windows 최종확정 API 2개 통과. TypeScript/Vite build·API 생성/self-test, 관련 데스크톱 UI 12개, 배포 계약 179개(2 skip) 통과. 건수는 중복 범위를 포함하며 합산하지 않는다. 실패 지점을 수정한 뒤 해당 검사를 재실행했고 최종 독립 Astra 기능 검수도 통과했다.
 - Codex Security 고정 변경분 스캔 a5982897-a812-455d-9bbe-2996db3a512d 완료: 28개 소스, CWE-400 medium 1건. 후속 수정에서 metadata 4 MiB 및 상태 조회 항목·누적 읽기 한도, 파일 핸들/재파싱 검사·오류 격리를 적용하고 합성 회귀·주 에이전트 수동 검수로 확인했다. 기준 보고서는 수정 전 기록이며 최신 수정에 대한 플러그인 재스캔·독립 보안 재검수 완료로 기록하지 않는다. 앞선 독립 Windows junction 경계 검증은 통과했다.
 - 계획·현재 기능 문서를 갱신했다. 기존 작업 로그·tmp 자료 보존, 이번 작업에서 실제 사용자 DB·설정·서비스·공유 폴더 변경 없음. 신규 의존성·migration·배포 진입점 변경 없음. 기존 architecture 검사 4건과 Vite chunk 경고는 남아 있다. 실제 Server 2022 폐쇄망 설치/업데이트/재부팅, SMB·POSIX 동시 경로 교체, commit/push/deploy 미실행.
+
+## 2026-10-02 폴더 미리보기 가독성·결과 읽기 실패 후속 수정
+- 사용자 화면의 CONFIRMED/확인 필요 0과 남은 경고가 모순되는 문제를 수정했다. 수동 확정 후 이전 조사 진단을 해소하고 실제 Scene 상위 역할 오류는 다시 진단한다. 경로·역할·긴 이름·상태는 열 내부에서 줄바꿈하고 경고는 별도 행에 표시한다. Refresh의 세 열은 구분했다.
+- 실제 backend/uvicorn-error.log의 FOLDER_SCHEMA_REQUEST_BINDING_REQUIRED를 읽기 전용으로 확인했다. 등록 이력의 다른 의뢰 역할까지 연결 후보에 섞이던 경로 복원을 현재 환경·프로젝트/의뢰 target ID로 제한했다. 진짜 다중 연결은 계속 차단하며 수집 준비 실패는 FAILED·오류 코드로 보존해 재시도한다.
+- 독립 Astra가 발견한 다른 의뢰 Case의 빈 결과 완료·잘못된 소유권 저장 문제를 수집 전 Case/의뢰 경계 검사로 차단했다. 해당 Case는 CAPTURE_CONTEXT_MISMATCH로 안내하고 의뢰별로 등록한다. 기존 이력·데이터 삭제나 migration·의존성·배포 변경 없음.
+- 최신 격리 백엔드 회귀 10개 통과(52.25초), TypeScript/Vite build 통과(기존 chunk 경고). 독립 Astra 최종 기능 및 수동 보안 변경 검수 통과. 유통환경 예제 형태의 두 Working Case + 빈 WR2에서 Scene CSV의 실제 관측과 실패 후 완료 재시도 확인. 실제 DB·서비스·공유 폴더는 검증 대상으로 사용하지 않았다.
+- Codex Security 후속 고정 변경분 스캔 a059e8a2-b4b2-450d-b146-1519829ace04, baseline f2e7b39, digest b7938c88eafee093d137bca120027ef567f53283230b7725d57fc9f6a9de5f4d: 6개 파일 검수·보안 발견 0건으로 완료. 이후 Case 범위 guard·안내·강화 테스트 및 문서 변경은 독립 수동 검수·회귀 범위다. 전체 작업 트리 변경 경고는 이 후속 변경을 포함하므로 완료 스캔을 최신 코드 재스캔으로 주장하지 않는다.
+- 최종 Playwright 데스크톱 1개 통과(5.8초), runner exit 0: Chromium 1440×1000·14pt, 라이트/다크 긴 이름·경로 줄바꿈 및 상태 열 겹침 없음, URL/제목·정상 화면·오류 overlay 없음·로그인 후 console/page 오류 없음. Browser 플러그인 미가용으로 기존 실행기 사용. 초기 정리 권한 오류 뒤 권한 확장 실행, 로그인 전 의도된 401을 검사 범위에 넣던 테스트 수정 후 통과했다. 증거 스크린샷은 OS temp의 environment-folder-preview-long[-light]-desktop.png에 보존한다.

@@ -166,12 +166,14 @@ def _request_path(conn: ConnectionLike, root_key: str, project_id: str, request_
     paths = {(str(item["project_folder"]), str(item["request_folder"])) for item in bindings}
     if not paths:
         registered = rows(conn.execute(
-            "SELECT r.id,g.relative_path,g.role_kind FROM folder_environment_registry g "
+            "SELECT r.id,g.relative_path,g.role_kind,g.target_id FROM folder_environment_registry g "
             "JOIN folder_environment_registrations r ON r.id=g.registration_id "
             "WHERE g.root_key=? AND r.project_id=? AND r.request_id=? "
-            "AND r.status IN ('REGISTERED','CAPTURING','COMPLETED','FAILED') "
-            "AND g.role_kind IN ('PROJECT','REQUEST')",
-            [root_key, project_id, request_id],
+            "AND r.environment=? AND r.status IN ('REGISTERED','CAPTURING','COMPLETED','FAILED') "
+            "AND g.role_kind IN ('PROJECT','REQUEST') "
+            "AND ((g.role_kind='PROJECT' AND g.target_id=r.project_id) "
+            "OR (g.role_kind='REQUEST' AND g.target_id=r.request_id))",
+            [root_key, project_id, request_id, environment],
         ))
         project_paths: dict[str, set[str]] = {}
         request_paths: dict[str, set[str]] = {}

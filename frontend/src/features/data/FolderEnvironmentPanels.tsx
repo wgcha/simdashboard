@@ -9,6 +9,10 @@ export const environmentRoles = (environment: FolderEnvironment) => environment 
   ? ['PROJECT', 'REQUEST', 'WORKING', 'FINAL', 'SIMULATION_CASE', 'EVALUATION', 'INPUT', 'RESULTS', 'CONTAINER']
   : ['PROJECT', 'REQUEST', 'WORKING', 'FINAL', 'SIMULATION_CASE', 'LOAD_CASE', 'EXECUTION_RUN', 'RUN_OPTION', 'SCENE', 'INPUT', 'RESULTS', 'CONTAINER']
 const states: Record<string, string> = { REGISTERED: '연결 완료', CAPTURING: '결과 읽는 중', COMPLETED: '결과 읽기 완료', FAILED: '결과 읽기 실패', PENDING: '결과 읽기 대기', RUNNING: '결과 읽는 중', PARTIAL: '일부 결과 확인 필요' }
+const captureErrorMessages: Record<string, string> = {
+  FOLDER_SCHEMA_REQUEST_BINDING_REQUIRED: '의뢰 폴더 연결이 여러 곳으로 확인됩니다. 폴더 연결을 다시 확인하세요.',
+  CAPTURE_CONTEXT_MISMATCH: '현재 의뢰 밖의 Case입니다. 해당 의뢰 폴더를 선택해 별도로 등록하세요.',
+}
 
 export function FolderRegistrationResults({ value, busy, onRefresh, onRetry }: { value: FolderEnvironmentRegistration; busy: boolean; onRefresh: () => void; onRetry: () => void }) {
   return <div className="folder-registration-results" aria-label="등록 결과">
@@ -16,7 +20,7 @@ export function FolderRegistrationResults({ value, busy, onRefresh, onRetry }: {
       {value.capture_jobs.some((job) => ['FAILED', 'PENDING', 'RUNNING'].includes(job.status)) && <button type="button" className="primary-button" disabled={busy} onClick={onRetry}>미완료 결과 다시 읽기</button>}</div>
     {value.capture_jobs.map((job, index) => {
       const query = new URLSearchParams({ project: job.project_id || value.project_id, request: job.request_id || value.request_id, view: 'case_results', result_environment: value.environment, case: job.case_id, capture: job.capture_id || '' })
-      return <div className="folder-job" key={job.id}><span>Case {index + 1} · {states[job.status] ?? job.status}</span>{job.error_code && <span role="alert">{job.error_code}</span>}{job.status === 'COMPLETED' && job.capture_id && <Link className="primary-button" to={`/workspace/requests?${query}`}>결과 보기{value.capture_jobs.length > 1 ? ` ${index + 1}` : ''}</Link>}</div>
+      return <div className="folder-job" key={job.id}><span>Case {index + 1} · {states[job.status] ?? job.status}</span>{job.error_code && <span role="alert">{captureErrorMessages[job.error_code] ?? job.error_code}</span>}{job.status === 'COMPLETED' && job.capture_id && <Link className="primary-button" to={`/workspace/requests?${query}`}>결과 보기{value.capture_jobs.length > 1 ? ` ${index + 1}` : ''}</Link>}</div>
     })}
     {value.usage_source_reviews && <details className="folder-history-review"><summary>저장된 파일·값 검수 {Object.keys(value.usage_source_reviews).length}건</summary>{Object.entries(value.usage_source_reviews).map(([casePath, review]) => <div key={casePath}><strong>{casePath}</strong><span> · 확인 필요 {review.blocking_count ?? 0} · 자료 없음 {review.missing_count ?? 0}</span>{review.entries?.flatMap((entry) => entry.metrics.map((metric) => <p key={`${entry.evaluation}:${entry.direction}:${metric.key}`}>{entry.evaluation} / {entry.direction} · {metric.key}: {metric.value == null ? '—' : String(metric.value)} ({metric.status})</p>))}</div>)}</details>}
   </div>

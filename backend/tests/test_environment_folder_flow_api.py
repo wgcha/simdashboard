@@ -659,6 +659,33 @@ def test_existing_request_can_register_case_root_and_changed_tree_cannot_apply_o
         assert conn.execute("SELECT count(*) FROM dashboard_cases WHERE relative_path='Assy_RES_Existing'").fetchone()[0] == 0
 
 
+def test_preview_manual_role_clears_scan_diagnosis_and_reports_invalid_scene_parent(admin_client):
+    client, root = admin_client
+    project_path = "Project_9301_Preview"
+    request_path = f"{project_path}/WR_9301_SimType1"
+    case_path = f"{request_path}/Package_한국어_case_결과_매우_긴_이름_SetCase1"
+    valid_scene = case_path + "/Drop/한국어_run_이름이_긴_실행_경로/Individual/2_Face_Drop_Scene01"
+    invalid_scene = case_path + "/Drop/한국어_run_이름이_긴_실행_경로/Individual/RESULTS/3_Face_Drop_Scene02"
+    (root / valid_scene).mkdir(parents=True)
+    (root / invalid_scene).mkdir(parents=True)
+
+    scan = post(client, "/scan", {"environment": "DISTRIBUTION", "relative_path": ""})
+    mismatched_request = next(node for node in scan["nodes"] if node["relative_path"] == request_path)
+    assert mismatched_request["status"] == "UNRESOLVED"
+    assert "SimType 폴더가 일치하지 않습니다" in mismatched_request["message"]
+
+    preview = post(client, "/previews", {"scan_id": scan["id"], "assignments": [
+        {"node_id": mismatched_request["id"], "role_kind": "REQUEST", "confirm": True, "target_mode": "CREATE"},
+    ]})
+    corrected_request = next(row for row in preview["rows"] if row["relative_path"] == request_path)
+    assert corrected_request["status"] == "CONFIRMED"
+    assert corrected_request.get("message") is None
+    rejected_scene = next(row for row in preview["rows"] if row["relative_path"] == invalid_scene)
+    assert rejected_scene["status"] == "UNRESOLVED"
+    assert rejected_scene["message"] == "상위 EXECUTION_RUN 또는 RUN_OPTION 역할이 필요합니다."
+    assert preview["unresolved_count"] == 1
+
+
 def test_distribution_registration_keeps_named_unknown_separate_from_no_option(admin_client):
     client, root = admin_client
     case_path = "Project_9002_Flow/WR_9002_SimType2/Package_SetCase1_CushionCase1"

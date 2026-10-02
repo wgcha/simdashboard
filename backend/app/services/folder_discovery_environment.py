@@ -6,6 +6,7 @@ keeps the original names and a stable context id for every optional Run Option.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 from datetime import datetime, timezone
@@ -28,6 +29,7 @@ ROLES = {
 }
 _EVALUATIONS = {"settle", "wobble", "horizontal_force_angle", "slope_angle", "slope_angle_360"}
 _SCENE = re.compile(r"(scene|result|contour|animation)", re.I)
+_logger = logging.getLogger(__name__)
 
 
 def now(): return datetime.now(timezone.utc).replace(tzinfo=None)
@@ -95,6 +97,24 @@ def _case_capture_payload(root, schema: dict, location_projection, case_relative
                           usage_review: dict | None = None) -> dict:
     """Build a capture payload from the canonical scoped schema projection."""
     from . import folder_schema_resolver as resolver
+
+    try:
+        request_relative_path = resolver._normal(str(schema.get("request_relative_path") or ""))
+        normalized_case_path = resolver._normal(str(case_relative_path or ""))
+    except resolver.FolderSchemaError as exc:
+        raise dashboard_capture.DashboardCaptureError(
+            "CAPTURE_CONTEXT_MISMATCH", "수집 Case 경로를 선택한 의뢰와 연결할 수 없습니다. 의뢰별로 다시 조사하세요.",
+        ) from exc
+    case_node = next((node for node in schema.get("nodes", [])
+                      if node.get("role_kind") == "SIMULATION_CASE"
+                      and node.get("status") in {"CONFIRMED", "LINKED"}
+                      and resolver._fold(str(node.get("relative_path") or ""))
+                      == resolver._fold(normalized_case_path)), None)
+    if (not resolver._is_ancestor(request_relative_path, normalized_case_path)
+            or case_node is None):
+        raise dashboard_capture.DashboardCaptureError(
+            "CAPTURE_CONTEXT_MISMATCH", "수집 Case가 선택한 의뢰의 확인된 범위에 없습니다. 의뢰별로 다시 조사하세요.",
+        )
 
     scene_ids = {str(item["relative_path"]).casefold(): str(item.get("scene_id") or item["id"])
                  for item in location_projection.locations if item.get("role_kind") == "SCENE"}
@@ -761,6 +781,11 @@ def preview(conn, scan_id, assignments, actor, require_usage_review=False):
         node = by_id.get(assignment.get("node_id")); role = assignment.get("role_kind")
         if not node or role not in {*ROLES[saved["environment"]], "EXCLUDE"}: raise ValueError("조사 트리에 없는 역할 지정입니다.")
         node["role_kind"], node["status"] = role, "EXCLUDED" if role == "EXCLUDE" else ("CONFIRMED" if assignment.get("confirm", True) else "UNRESOLVED")
+        if assignment.get("confirm", True):
+            # Scan-time role diagnoses describe the suggested classification.
+            # A manual confirmation supersedes that diagnosis; preview below
+            # will add a fresh message if the selected role breaks hierarchy.
+            node.pop("message", None)
         node["role_source"] = "PREVIEW"
         node["role_basis"] = "PREVIEW"
         if assignment.get("target_mode") == "LINK": node["target_id"] = assignment.get("target_id")
@@ -802,6 +827,7 @@ def preview(conn, scan_id, assignments, actor, require_usage_review=False):
                 ancestor = by_path.get(ancestor.get("parent_path"))
             if not ancestor or ancestor.get("role_kind") not in {"EXECUTION_RUN", "RUN_OPTION"}:
                 node["status"] = "UNRESOLVED"
+                node["message"] = "상위 EXECUTION_RUN 또는 RUN_OPTION 역할이 필요합니다."
             continue
         if not required:
             continue
@@ -1038,10 +1064,23 @@ def register(conn, preview_id, idempotency_key, capture, principal, root):
         conn.execute("ROLLBACK")
         raise
     if capture:
-        location_projection = _registration_location_projection(
-            conn, root, str(project_id), str(request_id), str(scan_row[2]),
-            str(preview_row[0]), preview_saved,
-        )
+        try:
+            location_projection = _registration_location_projection(
+                conn, root, str(project_id), str(request_id), str(scan_row[2]),
+                str(preview_row[0]), preview_saved,
+            )
+        except Exception as exc:
+            error_code = _capture_context_error_code(exc)
+            _logger.warning(
+                "Environment capture projection failed registration_id=%s error_type=%s error_code=%s",
+                registration_id, type(exc).__name__, error_code,
+            )
+            conn.execute(
+                "UPDATE folder_environment_capture_jobs SET status='FAILED',error_code=?,updated_at=? "
+                "WHERE registration_id=? AND status IN ('PENDING','RUNNING')",
+                [error_code, now(), registration_id],
+            )
+            return registration(conn, registration_id)
         for entry in [r for r in plan_rows if r["role_kind"] == "SIMULATION_CASE"]:
             case_id = dashboard_capture._case_id(dashboard_capture._root_id(root), entry["relative_path"])
             job_id = conn.execute("SELECT id FROM folder_environment_capture_jobs WHERE registration_id=? AND case_id=?", [registration_id, case_id]).fetchone()[0]
@@ -1076,6 +1115,11 @@ def registration_context(conn, registration_id):
     row = conn.execute("SELECT project_id,request_id FROM folder_environment_registrations WHERE id=?", [registration_id]).fetchone()
     if not row: legacy.fail("ENVIRONMENT_REGISTRATION_NOT_FOUND", "환경 등록을 찾을 수 없습니다.", 404)
     return {"project_id": row[0], "request_id": row[1]}
+
+
+def _capture_context_error_code(exc: Exception) -> str:
+    code = getattr(exc, "code", None)
+    return str(code) if isinstance(code, str) and code else "CAPTURE_CONTEXT_UNAVAILABLE"
 
 
 def registration(conn, registration_id):
@@ -1119,10 +1163,25 @@ def retry(conn, registration_id, job_ids, principal=None, root=None):
                 marks = ",".join("?" for _ in jobs)
                 conn.execute(f"UPDATE folder_environment_capture_jobs SET status='FAILED',error_code='ENVIRONMENT_PROFILE_STALE',updated_at=? WHERE id IN ({marks})", [now(), *[job["id"] for job in jobs]])
             return registration(conn, registration_id)
-        location_projection = _registration_location_projection(
-            conn, root, str(context["project_id"]), str(context["request_id"]),
-            str(environment), str(replay[5]), saved_preview,
-        ) if jobs else None
+        try:
+            location_projection = _registration_location_projection(
+                conn, root, str(context["project_id"]), str(context["request_id"]),
+                str(environment), str(replay[5]), saved_preview,
+            ) if jobs else None
+        except Exception as exc:
+            error_code = _capture_context_error_code(exc)
+            _logger.warning(
+                "Environment capture retry projection failed registration_id=%s error_type=%s error_code=%s",
+                registration_id, type(exc).__name__, error_code,
+            )
+            if jobs:
+                marks = ",".join("?" for _ in jobs)
+                conn.execute(
+                    f"UPDATE folder_environment_capture_jobs SET status='FAILED',error_code=?,updated_at=? "
+                    f"WHERE id IN ({marks}) AND status='PENDING'",
+                    [error_code, now(), *[job["id"] for job in jobs]],
+                )
+            return registration(conn, registration_id)
         for job in jobs:
             case = conn.execute("SELECT project_id,request_id,relative_path,environment,storage_root_id FROM dashboard_cases WHERE id=?", [job["case_id"]]).fetchone()
             if not case:

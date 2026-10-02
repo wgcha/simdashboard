@@ -81,3 +81,4 @@
 .folder-environment-workspace[data-ui-density="v1"] .saved-work-list button { font-size:var(--text-body); }
 /* Include unclassed history, tree and paging actions in the control scale. */
 .folder-environment-workspace[data-ui-density="v1"] button { min-height:var(--control-h-sm); border-radius:var(--radius-sm); }
+.folder-preview-table{min-width:0}.folder-preview-row{min-width:0;grid-template-columns:minmax(0,2fr) minmax(84px,.7fr) minmax(0,1.4fr) minmax(96px,.75fr);line-height:1.45}.folder-preview-row--refresh{grid-template-columns:minmax(0,2fr) minmax(84px,.7fr) minmax(140px,1fr)}.folder-preview-row>span,.folder-preview-row>b,.folder-preview-row>em,.folder-preview-row>small{min-width:0;overflow-wrap:anywhere}.folder-preview-row--preview>small{grid-column:1/-1;align-self:start}
