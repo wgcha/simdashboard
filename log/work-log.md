@@ -1001,3 +1001,10 @@
 - 최신 격리 백엔드 회귀 10개 통과(52.25초), TypeScript/Vite build 통과(기존 chunk 경고). 독립 Astra 최종 기능 및 수동 보안 변경 검수 통과. 유통환경 예제 형태의 두 Working Case + 빈 WR2에서 Scene CSV의 실제 관측과 실패 후 완료 재시도 확인. 실제 DB·서비스·공유 폴더는 검증 대상으로 사용하지 않았다.
 - Codex Security 후속 고정 변경분 스캔 a059e8a2-b4b2-450d-b146-1519829ace04, baseline f2e7b39, digest b7938c88eafee093d137bca120027ef567f53283230b7725d57fc9f6a9de5f4d: 6개 파일 검수·보안 발견 0건으로 완료. 이후 Case 범위 guard·안내·강화 테스트 및 문서 변경은 독립 수동 검수·회귀 범위다. 전체 작업 트리 변경 경고는 이 후속 변경을 포함하므로 완료 스캔을 최신 코드 재스캔으로 주장하지 않는다.
 - 최종 Playwright 데스크톱 1개 통과(5.8초), runner exit 0: Chromium 1440×1000·14pt, 라이트/다크 긴 이름·경로 줄바꿈 및 상태 열 겹침 없음, URL/제목·정상 화면·오류 overlay 없음·로그인 후 console/page 오류 없음. Browser 플러그인 미가용으로 기존 실행기 사용. 초기 정리 권한 오류 뒤 권한 확장 실행, 로그인 전 의도된 401을 검사 범위에 넣던 테스트 수정 후 통과했다. 증거 스크린샷은 OS temp의 environment-folder-preview-long[-light]-desktop.png에 보존한다.
+
+## 2026-10-02 기존 의뢰 ID와 변경된 조사 경로 연결 복구
+- 사용자 실패 이력의 읽기 전용 진단에서 기존 업무 ID와 SPDM (Admin) 상위 폴더를 포함한 새 조사 경로의 생성 ID 불일치를 확인했다. 여러 프로젝트·의뢰 자체가 충돌 원인은 아니다. 진단은 PostgreSQL READ ONLY transaction에서 SELECT만 실행했고 rollback했다.
+- 현재 root/환경의 선택 업무에 적용된 미리보기와 과거 동일 업무의 확정 registry를 대조해 정확한 프로젝트·의뢰 이름 및 프로젝트 아래 의뢰 상대 경로가 일치하는 단일 경로만 복원한다. 미적용 미리보기, 기존 타 업무 target ID, 근거 없는 경로, 중복 후보는 거부한다. 복원된 REQUEST 경계는 선택 의뢰 ID를 유지한다. 실제 중복 AMBIGUOUS와 연결 없음 REQUIRED 안내 및 조회 picker 상태를 구분했다.
+- 격리 백엔드 회귀 9개 통과(52.25초): 실제 서로 다른 두 임시 root에서 기존 실패 등록 재시도 후 선택 Case 완료·정확한 소유자·결과 값 33.0 확인, 타 의뢰/프로젝트 Case 저장 거부 및 중복/근거 없음/타 업무 ID/미적용 preview 검증. TypeScript/Vite build 통과(기존 chunk 크기 경고); 최초 빌드 캐시 EPERM은 허용된 권한 확장 실행으로 해결했다. Sol diff 검수와 독립 Astra 기능·보안 검수 완료.
+- Codex Security diff e75ec0a5-7c82-4a5c-92f7-a95ddfbca01a 완료: baseline 7757f28, snapshot c2110a8a443bf45a7f9ebec34e2600ac93516cfc01872aa8142a7e6aba899492, 소스 3/3 및 변경 테스트·문서 검토, 보안 후보/발견/deferred 0건. 완결 문서 재확인. 도구의 연결 대화 누적 사용량 1,807,806 tokens, cached input 1,781,376이며 이번 수정의 증분 사용량으로 해석하지 않는다. 스캔 이후 변경은 이 작업 기록뿐이다.
+- 사용자 DB·설정·실행 중 서비스는 변경하거나 검증 대상으로 사용하지 않았다. 실제 결과 재읽기와 Windows Server 2022 현장 배포는 미실행. migration·의존성·배포 계약 변경 없음; 프로그램 업데이트/재시작 후 기존 등록에서 미완료 결과 다시 읽기를 사용한다.

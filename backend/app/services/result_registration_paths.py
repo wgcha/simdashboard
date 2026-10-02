@@ -666,7 +666,8 @@ def targets(conn: ConnectionLike, environment: str, principal_projects: set[str]
             # connection rows can still be inspected or removed. They never
             # make a filesystem path selectable without a live schema.
             binding_codes = {"SPDM_REQUEST_BINDING_REQUIRED", "SPDM_REQUEST_BINDING_INVALID",
-                             "FOLDER_SCHEMA_REQUEST_BINDING_REQUIRED", "FOLDER_SCHEMA_REQUEST_BINDING_INVALID"}
+                             "FOLDER_SCHEMA_REQUEST_BINDING_REQUIRED", "FOLDER_SCHEMA_REQUEST_BINDING_AMBIGUOUS",
+                             "FOLDER_SCHEMA_REQUEST_BINDING_INVALID"}
             items.append({
                 "project_id": project_id, "project_name": str(record["project_name"]),
                 "request_id": request_id, "request_name": str(record["request_name"]),

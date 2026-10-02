@@ -122,6 +122,252 @@ def test_duplicate_paths_for_one_request_target_remain_ambiguous(capture_client)
                 registration["request_id"], registration["environment"],
             )
 
+    assert exc_info.value.code == "FOLDER_SCHEMA_REQUEST_BINDING_AMBIGUOUS"
+
+
+def _add_applied_relinked_preview(conn, root, registration, rows):
+    root_key = folder_discovery_environment.root_identity(root)
+    scan_id = f"synthetic-relinked-scan-{uuid4()}"
+    preview_id = f"synthetic-relinked-preview-{uuid4()}"
+    registration_id = f"synthetic-relinked-registration-{uuid4()}"
+    scan = conn.execute(
+        "SELECT profile_id,profile_revision,environment FROM folder_environment_scans WHERE id=?",
+        [registration["scan_id"]],
+    ).fetchone()
+    now = folder_discovery_environment.now()
+    conn.execute(
+        "INSERT INTO folder_environment_scans "
+        "(id,root_key,relative_path,environment,profile_id,profile_revision,project_id,request_id,status,tree_json,issues_json,created_by,created_at) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        [scan_id, root_key, "", scan[2], scan[0], scan[1], registration["project_id"],
+         registration["request_id"], "COMPLETE", "[]", "[]", "test", now],
+    )
+    conn.execute(
+        "INSERT INTO folder_environment_previews(id,scan_id,rows_json,can_apply,created_by,created_at) "
+        "VALUES(?,?,?,?,?,?)",
+        [preview_id, scan_id, json.dumps({"rows": rows}), True, "test", now],
+    )
+    conn.execute(
+        "INSERT INTO folder_environment_registrations "
+        "(id,preview_id,idempotency_key,environment,project_id,request_id,status,created_by,created_at) "
+        "VALUES(?,?,?,?,?,?,?,?,?)",
+        [registration_id, preview_id, registration_id, scan[2], registration["project_id"],
+         registration["request_id"], "FAILED", "test", now],
+    )
+    return root_key, registration_id
+
+
+def _role(path, role, name, target_id):
+    return {"relative_path": path, "role_kind": role, "status": "CONFIRMED",
+            "name": name, "target_id": target_id}
+
+
+def _generated_role(root_key, path, role):
+    return folder_discovery_environment.stable(
+        "environment-project" if role == "PROJECT" else "environment-request",
+        root_key, path, role,
+    )
+
+
+def test_relinked_capture_retry_recovers_selected_request_only(capture_client, monkeypatch):
+    client, old_root = capture_client
+    add_usage_case(old_root, "WR_0001_SimType1", value=11.0)
+    old_preview = preview_all(client)
+    old_registration = post(client, "/registrations", {
+        "preview_id": old_preview["id"], "idempotency_key": f"old-root-{uuid4()}", "capture": False,
+    })
+
+    new_root = old_root.parent / "new_shared"
+    new_root.mkdir()
+    selected_case = add_usage_case(new_root / "SPDM (Admin)", "WR_0001_SimType1", value=33.0)
+    other_request_case = add_usage_case(new_root / "SPDM (Admin)", "WR_0002_SimType1", value=44.0)
+    other_project_case = new_root / "SPDM (Admin)" / "Project_other" / "WR_0003_SimType1" / "Assy_RES_WR_0003_SimType1"
+    result = other_project_case / "Settle" / "model_settle_result.json"
+    result.parent.mkdir(parents=True)
+    result.write_text(json.dumps({"Set Tilt Angle @ Settle (deg)": 55.0}), encoding="utf-8")
+
+    monkeypatch.setenv("SIMDASH_SPDM_ROOT", str(new_root))
+    scan = post(client, "/scan", {
+        "environment": "USAGE", "relative_path": "",
+        "project_id": old_registration["project_id"], "request_id": old_registration["request_id"],
+    })
+    preview = post(client, "/previews", {"scan_id": scan["id"], "assignments": []})
+    assert preview["can_apply"], preview
+
+    original_projection = folder_discovery_environment._registration_location_projection
+    attempts = 0
+
+    def fail_once(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise folder_schema_resolver.FolderSchemaError(
+                "FOLDER_SCHEMA_REQUEST_BINDING_REQUIRED", "synthetic first capture failure",
+            )
+        return original_projection(*args, **kwargs)
+
+    monkeypatch.setattr(folder_discovery_environment, "_registration_location_projection", fail_once)
+    registration = post(client, "/registrations", {
+        "preview_id": preview["id"], "idempotency_key": f"relinked-retry-{uuid4()}", "capture": True,
+    })
+    assert registration["status"] == "FAILED"
+    monkeypatch.setattr(folder_discovery_environment, "_registration_location_projection", original_projection)
+
+    retried = post(client, f"/registrations/{registration['registration_id']}/capture/retry", {})
+    selected_relative = selected_case.relative_to(new_root).as_posix()
+    selected_case_id = dashboard_capture._case_id(dashboard_capture._root_id(new_root), selected_relative)
+    jobs = {job["case_id"]: job for job in retried["capture_jobs"]}
+    assert jobs[selected_case_id]["status"] == "COMPLETED", retried
+    assert jobs[selected_case_id]["capture_id"]
+
+    with connect() as conn:
+        persisted = conn.execute(
+            "SELECT dc.project_id,dc.request_id,c.payload_json FROM dashboard_cases dc "
+            "JOIN dashboard_captures c ON c.case_id=dc.id WHERE dc.id=?",
+            [selected_case_id],
+        ).fetchone()
+        assert conn.execute("SELECT count(*) FROM dashboard_cases WHERE relative_path IN (?,?)", [
+            other_request_case.relative_to(new_root).as_posix(),
+            other_project_case.relative_to(new_root).as_posix(),
+        ]).fetchone()[0] == 0
+    assert str(persisted[0]) == old_registration["project_id"]
+    assert str(persisted[1]) == old_registration["request_id"]
+    payload = json.loads(persisted[2])
+    settle = next(item for item in payload["evaluations"] if item["evaluation"] == "Settle")
+    assert settle["values"]["Set Tilt Angle @ Settle (deg)"] == 33.0
+
+
+def test_relinked_preview_with_duplicate_historical_matches_is_ambiguous(capture_client):
+    client, root = capture_client
+    add_usage_case(root, "[WR-0001]_[유통_환경]")
+    preview = preview_all(client, "DISTRIBUTION")
+    registration = post(client, "/registrations", {
+        "preview_id": preview["id"], "idempotency_key": f"duplicate-old-root-{uuid4()}", "capture": False,
+    })
+    with connect() as conn:
+        registration["scan_id"] = preview["scan_id"]
+        conn.execute(
+            "UPDATE folder_environment_registry SET root_key=? WHERE registration_id=?",
+            ["synthetic-prior-root", registration["registration_id"]],
+        )
+        conn.execute("UPDATE folder_environment_scans SET root_key=? WHERE id=?",
+                     ["synthetic-prior-root", preview["scan_id"]])
+        current_root_key = folder_discovery_environment.root_identity(root)
+        rows = [
+            _role("Wrapper A/Project_multi", "PROJECT", "Project_multi",
+                  _generated_role(current_root_key, "Wrapper A/Project_multi", "PROJECT")),
+            _role("Wrapper A/Project_multi/[WR-0001]_[유통_환경]", "REQUEST",
+                  "[WR-0001]_[유통_환경]", _generated_role(current_root_key, "Wrapper A/Project_multi/[WR-0001]_[유통_환경]", "REQUEST")),
+            _role("Wrapper B/Project_multi", "PROJECT", "Project_multi",
+                  _generated_role(current_root_key, "Wrapper B/Project_multi", "PROJECT")),
+            _role("Wrapper B/Project_multi/[WR-0001]_[유통_환경]", "REQUEST",
+                  "[WR-0001]_[유통_환경]", _generated_role(current_root_key, "Wrapper B/Project_multi/[WR-0001]_[유통_환경]", "REQUEST")),
+        ]
+        root_key, _ = _add_applied_relinked_preview(conn, root, registration, rows)
+        with pytest.raises(folder_schema_resolver.FolderSchemaError) as exc_info:
+            folder_schema_resolver._request_path(
+                conn, root_key, registration["project_id"], registration["request_id"], "DISTRIBUTION",
+            )
+    assert exc_info.value.code == "FOLDER_SCHEMA_REQUEST_BINDING_AMBIGUOUS"
+
+
+def test_relinked_preview_without_historical_registry_evidence_cannot_guess(capture_client):
+    client, root = capture_client
+    add_usage_case(root, "[WR-0001]_[유통_환경]")
+    preview = preview_all(client, "DISTRIBUTION")
+    registration = post(client, "/registrations", {
+        "preview_id": preview["id"], "idempotency_key": f"no-old-root-{uuid4()}", "capture": False,
+    })
+    with connect() as conn:
+        registration["scan_id"] = preview["scan_id"]
+        conn.execute(
+            "DELETE FROM folder_environment_registry WHERE registration_id=?",
+            [registration["registration_id"]],
+        )
+        conn.execute("UPDATE folder_environment_scans SET root_key=? WHERE id=?",
+                     ["synthetic-prior-root", preview["scan_id"]])
+        current_root_key = folder_discovery_environment.root_identity(root)
+        rows = [
+            _role("SPDM (Admin)/Project_multi", "PROJECT", "Project_multi",
+                  _generated_role(current_root_key, "SPDM (Admin)/Project_multi", "PROJECT")),
+            _role("SPDM (Admin)/Project_multi/[WR-0001]_[유통_환경]", "REQUEST",
+                  "[WR-0001]_[유통_환경]", _generated_role(current_root_key, "SPDM (Admin)/Project_multi/[WR-0001]_[유통_환경]", "REQUEST")),
+        ]
+        root_key, _ = _add_applied_relinked_preview(conn, root, registration, rows)
+        with pytest.raises(folder_schema_resolver.FolderSchemaError) as exc_info:
+            folder_schema_resolver._request_path(
+                conn, root_key, registration["project_id"], registration["request_id"], "DISTRIBUTION",
+            )
+    assert exc_info.value.code == "FOLDER_SCHEMA_REQUEST_BINDING_REQUIRED"
+
+
+def test_relinked_preview_does_not_override_an_existing_foreign_project_target(capture_client):
+    client, root = capture_client
+    add_usage_case(root, "[WR-0001]_[유통_환경]")
+    preview = preview_all(client, "DISTRIBUTION")
+    registration = post(client, "/registrations", {
+        "preview_id": preview["id"], "idempotency_key": f"foreign-target-{uuid4()}", "capture": False,
+    })
+    with connect() as conn:
+        registration["scan_id"] = preview["scan_id"]
+        conn.execute(
+            "UPDATE folder_environment_registry SET root_key=? WHERE registration_id=?",
+            ["synthetic-prior-root", registration["registration_id"]],
+        )
+        conn.execute("UPDATE folder_environment_scans SET root_key=? WHERE id=?",
+                     ["synthetic-prior-root", preview["scan_id"]])
+        foreign_project_id = f"foreign-project-{uuid4()}"
+        conn.execute(
+            "INSERT INTO projects(id,name,product_name,description,created_at) VALUES(?,?,?,?,?)",
+            [foreign_project_id, "Project_multi", "synthetic", None, folder_discovery_environment.now()],
+        )
+        current_root_key = folder_discovery_environment.root_identity(root)
+        project_path = "SPDM (Admin)/Project_multi"
+        request_path = project_path + "/[WR-0001]_[유통_환경]"
+        rows = [
+            _role(project_path, "PROJECT", "Project_multi", foreign_project_id),
+            _role(request_path, "REQUEST", "[WR-0001]_[유통_환경]",
+                  _generated_role(current_root_key, request_path, "REQUEST")),
+        ]
+        root_key, _ = _add_applied_relinked_preview(conn, root, registration, rows)
+        with pytest.raises(folder_schema_resolver.FolderSchemaError) as exc_info:
+            folder_schema_resolver._request_path(
+                conn, root_key, registration["project_id"], registration["request_id"], "DISTRIBUTION",
+            )
+    assert exc_info.value.code == "FOLDER_SCHEMA_REQUEST_BINDING_REQUIRED"
+
+
+def test_relinked_unapplied_preview_cannot_supply_recovery_evidence(capture_client):
+    client, root = capture_client
+    add_usage_case(root, "[WR-0001]_[유통_환경]")
+    preview = preview_all(client, "DISTRIBUTION")
+    registration = post(client, "/registrations", {
+        "preview_id": preview["id"], "idempotency_key": f"unapplied-preview-{uuid4()}", "capture": False,
+    })
+    with connect() as conn:
+        registration["scan_id"] = preview["scan_id"]
+        conn.execute(
+            "UPDATE folder_environment_registry SET root_key=? WHERE registration_id=?",
+            ["synthetic-prior-root", registration["registration_id"]],
+        )
+        conn.execute("UPDATE folder_environment_scans SET root_key=? WHERE id=?",
+                     ["synthetic-prior-root", preview["scan_id"]])
+        current_root_key = folder_discovery_environment.root_identity(root)
+        project_path = "SPDM (Admin)/Project_multi"
+        request_path = project_path + "/[WR-0001]_[유통_환경]"
+        rows = [
+            _role(project_path, "PROJECT", "Project_multi",
+                  _generated_role(current_root_key, project_path, "PROJECT")),
+            _role(request_path, "REQUEST", "[WR-0001]_[유통_환경]",
+                  _generated_role(current_root_key, request_path, "REQUEST")),
+        ]
+        root_key, synthetic_registration_id = _add_applied_relinked_preview(conn, root, registration, rows)
+        conn.execute("UPDATE folder_environment_registrations SET status='DRAFT' WHERE id=?",
+                     [synthetic_registration_id])
+        with pytest.raises(folder_schema_resolver.FolderSchemaError) as exc_info:
+            folder_schema_resolver._request_path(
+                conn, root_key, registration["project_id"], registration["request_id"], "DISTRIBUTION",
+            )
     assert exc_info.value.code == "FOLDER_SCHEMA_REQUEST_BINDING_REQUIRED"
 
 

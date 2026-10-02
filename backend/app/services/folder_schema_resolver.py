@@ -195,7 +195,7 @@ def _request_path(conn: ConnectionLike, root_key: str, project_id: str, request_
     if len(normalized) == 1:
         return next(iter(normalized))[1]
     if len(normalized) > 1:
-        raise FolderSchemaError("FOLDER_SCHEMA_REQUEST_BINDING_REQUIRED",
+        raise FolderSchemaError("FOLDER_SCHEMA_REQUEST_BINDING_AMBIGUOUS",
                                 "의뢰에 연결된 저장소 경로가 여러 개입니다. 관리자에게 연결을 요청하세요.")
 
     # Folder Schema registration may have skipped registry rows for an
@@ -215,22 +215,26 @@ def _request_path(conn: ConnectionLike, root_key: str, project_id: str, request_
     ))
     explicit_paths: set[str] = set()
     linked_request_paths: set[str] = set()
+    current_confirmed_pairs: set[tuple[str, str, str, str, str]] = set()
     for association in associations:
+        is_applied_selected = bool(
+            association.get("registration_id")
+            and str(association.get("registration_project_id") or "") == project_id
+            and str(association.get("registration_request_id") or "") == request_id
+            and association.get("registration_status") in _APPLIED_STATUSES
+        )
         if (str(association.get("scan_project_id") or "") == project_id
                 and str(association.get("scan_request_id") or "") == request_id):
             tree = _decode(association.get("tree_json"), code="FOLDER_SCHEMA_SCAN_INVALID",
                            message="저장된 조사 트리를 읽을 수 없습니다.")
             if isinstance(tree, list):
                 for item in tree:
-                    if isinstance(item, dict) and item.get("role_kind") == "REQUEST" and item.get("relative_path"):
+                    if (isinstance(item, dict) and item.get("role_kind") == "REQUEST"
+                            and item.get("target_id") == request_id and item.get("relative_path")):
                         linked_request_paths.add(_normal(str(item["relative_path"])))
         if not association.get("rows_json") or not association.get("can_apply"):
             continue
-        if association.get("registration_id") and (
-            str(association.get("registration_project_id") or "") != project_id
-            or str(association.get("registration_request_id") or "") != request_id
-            or association.get("registration_status") not in _APPLIED_STATUSES
-        ):
+        if association.get("registration_id") and not is_applied_selected:
             continue
         saved = _decode(association["rows_json"], code="FOLDER_SCHEMA_PREVIEW_INVALID",
                         message="저장된 의뢰 폴더 역할을 읽을 수 없습니다.")
@@ -238,22 +242,111 @@ def _request_path(conn: ConnectionLike, root_key: str, project_id: str, request_
         if not isinstance(plan, list):
             continue
         for item in plan:
-            if (isinstance(item, dict) and item.get("role_kind") == "REQUEST"
-                    and item.get("status") == "CONFIRMED" and item.get("relative_path")):
+            if (not isinstance(item, dict) or item.get("status") != "CONFIRMED"
+                    or not item.get("relative_path")):
+                continue
+            role_kind = item.get("role_kind")
+            role_target = str(item.get("target_id") or "")
+            if role_kind == "REQUEST":
                 request_role_path = _normal(str(item["relative_path"]))
-                if str(item.get("target_id") or "") == request_id:
+                if role_target == request_id:
                     explicit_paths.add(request_role_path)
-                linked_request_paths.add(request_role_path)
+                    linked_request_paths.add(request_role_path)
+        # Pair PROJECT and REQUEST rows from this applied preview. Their generated
+        # target IDs can differ from the selected entities after a root change.
+        if not is_applied_selected:
+            continue
+        project_rows = [item for item in plan if isinstance(item, dict)
+                        and item.get("role_kind") == "PROJECT" and item.get("status") == "CONFIRMED"
+                        and item.get("relative_path")]
+        request_rows = [item for item in plan if isinstance(item, dict)
+                        and item.get("role_kind") == "REQUEST" and item.get("status") == "CONFIRMED"
+                        and item.get("relative_path")]
+        for request_row in request_rows:
+            request_path = _normal(str(request_row["relative_path"]))
+            request_parts = PurePosixPath(request_path).parts
+            ancestors = [
+                (project_row, _normal(str(project_row["relative_path"])))
+                for project_row in project_rows
+                if _is_ancestor(_normal(str(project_row["relative_path"])), request_path)
+                and _fold(str(project_row["relative_path"])) != _fold(request_path)
+            ]
+            if not ancestors:
+                continue
+            project_row, project_path = max(ancestors, key=lambda pair: len(PurePosixPath(pair[1]).parts))
+            project_target = str(project_row.get("target_id") or "")
+            request_target = str(request_row.get("target_id") or "")
+            expected_project_target = folder_discovery_environment.stable(
+                "environment-project", root_key, project_path, "PROJECT",
+            )
+            expected_request_target = folder_discovery_environment.stable(
+                "environment-request", root_key, request_path, "REQUEST",
+            )
+            project_exists = conn.execute("SELECT 1 FROM projects WHERE id=?", [project_target]).fetchone()
+            request_exists = conn.execute("SELECT 1 FROM analysis_requests WHERE id=?", [request_target]).fetchone()
+            if (project_target != project_id and (project_target != expected_project_target or project_exists)):
+                continue
+            if (request_target != request_id and (request_target != expected_request_target or request_exists)):
+                continue
+            suffix = PurePosixPath(*request_parts[len(PurePosixPath(project_path).parts):]).as_posix()
+            current_confirmed_pairs.add((
+                project_path, str(project_row.get("name") or ""), request_path,
+                str(request_row.get("name") or ""), suffix,
+            ))
     if len(explicit_paths) == 1:
         return next(iter(explicit_paths))
     if len(explicit_paths) > 1:
-        raise FolderSchemaError("FOLDER_SCHEMA_REQUEST_BINDING_REQUIRED",
+        raise FolderSchemaError("FOLDER_SCHEMA_REQUEST_BINDING_AMBIGUOUS",
                                 "선택한 의뢰에 여러 REQUEST 경로가 연결되어 있습니다.")
     if len(linked_request_paths) == 1:
         return next(iter(linked_request_paths))
     if len(linked_request_paths) > 1:
-        raise FolderSchemaError("FOLDER_SCHEMA_REQUEST_BINDING_REQUIRED",
+        raise FolderSchemaError("FOLDER_SCHEMA_REQUEST_BINDING_AMBIGUOUS",
                                 "선택한 의뢰 조사에 여러 REQUEST 경로가 있습니다. 역할을 확인하세요.")
+
+    # Match a newly applied, explicitly linked preview to a prior confirmed
+    # registry pair for these same entities. Exact raw names and the exact
+    # project-relative request suffix are required; path or case guessing is
+    # never used to infer ownership.
+    historical_pairs = rows(conn.execute(
+        "SELECT r.id AS registration_id,g.root_key,g.relative_path,g.role_kind,g.raw_name "
+        "FROM folder_environment_registry g "
+        "JOIN folder_environment_registrations r ON r.id=g.registration_id "
+        "WHERE r.project_id=? AND r.request_id=? AND r.environment=? "
+        "AND r.status IN ('REGISTERED','CAPTURING','COMPLETED','FAILED') "
+        "AND g.role_kind IN ('PROJECT','REQUEST') "
+        "AND ((g.role_kind='PROJECT' AND g.target_id=r.project_id) "
+        "OR (g.role_kind='REQUEST' AND g.target_id=r.request_id))",
+        [project_id, request_id, environment],
+    ))
+    old_projects: dict[tuple[str, str], set[tuple[str, str]]] = {}
+    old_requests: dict[tuple[str, str], set[tuple[str, str]]] = {}
+    for item in historical_pairs:
+        bucket = old_projects if item["role_kind"] == "PROJECT" else old_requests
+        bucket.setdefault((str(item["registration_id"]), str(item["root_key"])), set()).add(
+            (_normal(str(item["relative_path"])), str(item["raw_name"]))
+        )
+    evidence: set[tuple[str, str, str]] = set()
+    for registration_key, projects in old_projects.items():
+        for request_path, request_name in old_requests.get(registration_key, set()):
+            ancestors = [(path, name) for path, name in projects
+                         if _is_ancestor(path, request_path) and _fold(path) != _fold(request_path)]
+            if not ancestors:
+                continue
+            project_path, project_name = max(ancestors, key=lambda pair: len(PurePosixPath(pair[0]).parts))
+            request_parts = PurePosixPath(request_path).parts
+            suffix = PurePosixPath(*request_parts[len(PurePosixPath(project_path).parts):]).as_posix()
+            evidence.add((project_name, request_name, suffix))
+    recovered = {
+        request_path
+        for _project_path, project_name, request_path, request_name, suffix in current_confirmed_pairs
+        if suffix and (project_name, request_name, suffix) in evidence
+    }
+    if len(recovered) == 1:
+        return next(iter(recovered))
+    if len(recovered) > 1:
+        raise FolderSchemaError("FOLDER_SCHEMA_REQUEST_BINDING_AMBIGUOUS",
+                                "선택한 의뢰의 확인된 이전 경로와 일치하는 REQUEST 경로가 여러 개입니다.")
 
     # A request-linked scan rooted exactly at one child of the stored Project
     # folder is sufficient to recover a request root. A Case-root or storage-
@@ -592,6 +685,13 @@ def resolve_request_schema(conn: ConnectionLike, root: Path, root_key: str,
         node["role_evidence_source"] = role["source"]
         node["role_source"] = role["source"]
         node["role_basis"] = role.get("role_basis") or node.get("role_basis")
+    # _request_path has already validated this boundary against the selected
+    # project/request binding, including historical evidence recovery. Keep
+    # the schema boundary attached to the selected entity when a newly applied
+    # preview contains a generated REQUEST target ID.
+    request_node = by_path.get(request_folded)
+    if request_node and request_node.get("role_kind") == "REQUEST":
+        request_node["target_id"] = request_id
     excluded = [str(item["relative_path"]) for item in scoped_nodes if item.get("status") == "EXCLUDED"]
     for node in scoped_nodes:
         if any(_is_ancestor(path, str(node["relative_path"])) for path in excluded):

@@ -10,7 +10,8 @@ export const environmentRoles = (environment: FolderEnvironment) => environment 
   : ['PROJECT', 'REQUEST', 'WORKING', 'FINAL', 'SIMULATION_CASE', 'LOAD_CASE', 'EXECUTION_RUN', 'RUN_OPTION', 'SCENE', 'INPUT', 'RESULTS', 'CONTAINER']
 const states: Record<string, string> = { REGISTERED: '연결 완료', CAPTURING: '결과 읽는 중', COMPLETED: '결과 읽기 완료', FAILED: '결과 읽기 실패', PENDING: '결과 읽기 대기', RUNNING: '결과 읽는 중', PARTIAL: '일부 결과 확인 필요' }
 const captureErrorMessages: Record<string, string> = {
-  FOLDER_SCHEMA_REQUEST_BINDING_REQUIRED: '의뢰 폴더 연결이 여러 곳으로 확인됩니다. 폴더 연결을 다시 확인하세요.',
+  FOLDER_SCHEMA_REQUEST_BINDING_REQUIRED: '선택한 의뢰의 폴더 연결을 확인할 수 없습니다. 프로젝트·의뢰 연결과 확정 폴더를 확인하세요.',
+  FOLDER_SCHEMA_REQUEST_BINDING_AMBIGUOUS: '같은 의뢰에 연결된 폴더가 여러 곳입니다. 사용할 의뢰 폴더 연결을 확인하세요.',
   CAPTURE_CONTEXT_MISMATCH: '현재 의뢰 밖의 Case입니다. 해당 의뢰 폴더를 선택해 별도로 등록하세요.',
 }
 
