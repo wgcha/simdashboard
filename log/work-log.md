@@ -1110,3 +1110,11 @@
 - 최신 기준: Final의 Scene별 수집본을 `merge_latest_payload`(같은 순서) 결과에서 직접 정함. 최신 수집본이 현재 스키마와 안 맞으면 이전 수집본으로 대체하지 않고 `excluded_scenes`(`NO_CAPTURE`·`CAPTURE_SCHEMA_MISSING`·`CAPTURE_SCHEMA_INCOMPATIBLE`)로 미리보기·창에 표시. Final 보고서 범위도 `latest:<Case>`로 고정(사용환경 포함). 카탈로그 수집본 정렬에 `c.id DESC` 동률 기준 추가.
 - 검증: 백엔드 finalization 42·folder flow·security·OpenAPI·latest results·dashboard queries 합계 87 passed/1 skipped, OpenAPI 계약 검사 통과(응답 스키마 변경 없음, 재생성 불필요). 프런트 tsc·build 통과, check:architecture 기존 4건만, e2e case-finalization 4·folder-working-final 3 통과.
 - 보안 검수: 이 기록은 검수자 수동 검토와 재현 테스트 반영이며 Codex Security 스캔(`security-diff-scan`)을 대신하지 않고, 스캔은 실행하지 않았다. 독립 Sol/Astra 최종 검수, PostgreSQL 프로필, 실제 Windows Server 2022·공유폴더 검증도 미실행. migration·의존성·배포 변경 없음.
+
+## 2026-10-03 깊이 기반 폴더 역할 스키마(DEPTH_V1)와 관리자 등록 삭제 (`d58a77a`)
+
+- 계약: `docs/contracts/depth-schema.md`(D1–D17), 결정: `docs/decisions.md`.
+- 변경: migration 0034(구 프로필 archive, 기본 세트 seed, EVALUATION→SCENE), 0035(DELETED 묘비, created_targets, 앱 역할 DELETE 권한). 자동 탐색은 상위 깊이 BFS·의뢰명 키워드 환경 판정, SimType 규칙 삭제. API: depth-schema GET/PUT/samples/check, 의뢰 재해석, 등록 delete-preview/delete, 구 프로필 CRUD 410. UI: 깊이표 편집기(확인/저장), 역할 읽기 전용+이탈 배지, 재해석 버튼, 등록 이력 다중 선택 삭제.
+- 검증: DuckDB 전체 2021 passed/9 failed(기존 실패: rocky8 root 6, architecture ceiling, postgres_portability, load_case_create_slice), Postgres 16 신규 DB 대상 4개 파일 108 passed, migration 0033→0035 기존 데이터 업그레이드 확인. 프론트 tsc·build·test:api 통과, e2e 미실행.
+- 독립 검수: Verifier 1회(Blocker 없음, 테스트 측 수정 3건 반영). Codex Security 스캔 미실행. 실제 Server 2022 폐쇄망 배포 검증 미실행.
+- 남은 것: DuckDB 삭제는 FK 단계별 커밋(Postgres는 단일 트랜잭션), Final/CAD 용도 미확정.
