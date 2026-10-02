@@ -3,7 +3,6 @@ import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, Responsive
 import { Link } from 'react-router-dom'
 import { AlertTriangle, Expand, Image as ImageIcon, Layers3, Pause, Play, RotateCcw } from 'lucide-react'
 import { simulationDashboardApi, type DashboardAsset, type DashboardCatalog, type DashboardChoice, type DashboardComparisonMember, type DashboardDistribution, type DashboardEdgePeak, type DashboardMember, type DashboardScene, type DashboardSceneDetail, type DashboardValue, type UsageDashboard } from '../../shared/api/simulationDashboard'
-import { folderEnvironmentApi } from '../../shared/api/folderEnvironment'
 import { Button } from '../../shared/components/Button'
 import { Select } from '../../shared/components/Select'
 import { Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from '../../shared/components/Table'
@@ -13,7 +12,7 @@ import { SimulationResultGraph } from './SimulationResultGraph'
 import { CaseFinalizationPanel } from './CaseFinalizationPanel'
 import { useCaseHierarchyParams } from '../../shared/hooks/useCaseHierarchyParams'
 
-type Props = { projectId: string; requestId: string; canManageFolders?: boolean; canRefreshSchema?: boolean }
+type Props = { projectId: string; requestId: string; canManageFolders?: boolean; canRefreshSchema?: boolean; refreshToken?: number }
 type Tab = 'usage' | 'distribution'
 const SCHEMA_CONTEXT = '__folder_schema__'
 const EDGES = ['TOP', 'BOTTOM', 'LEFT', 'RIGHT'] as const
@@ -37,7 +36,7 @@ function currentHierarchyChoice(item: DashboardChoice, activeCaptureId: string) 
   return item.capture_id == null || (activeCaptureId !== '' && item.capture_id === activeCaptureId)
 }
 
-export function SimulationDashboard({ projectId, requestId, canManageFolders = false, canRefreshSchema = false }: Props) {
+export function SimulationDashboard({ projectId, requestId, canManageFolders = false, canRefreshSchema = false, refreshToken = 0 }: Props) {
   // Selection lives in the router URL (shared with the materials tab): user
   // changes push a history entry, automatic repairs replace it.
   const { get: getParam, caseId, loadCaseId, runId, optionId, update: updateParams } = useCaseHierarchyParams()
@@ -56,9 +55,6 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
   const [basis, setBasis] = useState<'' | 'REPORTED_SUMMARY' | 'DETAIL'>('')
   const [referenceCaseId, setReferenceCaseId] = useState('')
   const [referenceCaptureId, setReferenceCaptureId] = useState('')
-  const [catalogRevision, setCatalogRevision] = useState(0)
-  const [refreshBusy, setRefreshBusy] = useState(false)
-  const [refreshNotice, setRefreshNotice] = useState('')
   const latestCatalogKey = useRef('')
   const loadedCatalogKey = useRef('')
   // A request or environment change drops the previous catalog and local
@@ -76,7 +72,7 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
       if (!controller.signal.aborted && latestCatalogKey.current === key) { loadedCatalogKey.current = key; setCatalog(next) }
     }).catch((reason) => { if (!controller.signal.aborted) setCatalogError(errorText(reason)) })
     return () => controller.abort()
-  }, [catalogRevision, projectId, requestId, tab])
+  }, [refreshToken, projectId, requestId, tab])
 
   const options = useMemo(() => {
     if (!catalog || tab !== 'distribution') return []
@@ -119,18 +115,6 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
   }, [basis, captureId, caseId, catalog, componentId, loadCaseId, mode, optionId, options, projectId, requestId, runId, tab, updateParams])
   // Router Link applies the deployment basename (for example /home/).
   const folderHref = `/workspace/catalog/schemas?${new URLSearchParams({ project: projectId, request: requestId, result_environment: tab === 'usage' ? 'USAGE' : 'DISTRIBUTION' }).toString()}`
-  const refreshSchema = async () => {
-    const refreshKey = `${projectId}:${requestId}:${tab}`
-    setRefreshBusy(true); setRefreshNotice('')
-    try {
-      const result = await folderEnvironmentApi.refresh({ project_id: projectId, request_id: requestId, environment: tab === 'usage' ? 'USAGE' : 'DISTRIBUTION' })
-      if (latestCatalogKey.current !== refreshKey) return
-      if (result.status === 'CONFLICT') { setRefreshNotice(result.message || '역할 충돌이 있어 기존 결과를 유지했습니다. 폴더 연결·규칙에서 확인하세요.'); return }
-      setRefreshNotice(result.changed ? '저장소와 결과를 갱신했습니다.' : '저장소 내용이 이미 최신입니다.')
-      setCatalogRevision((value) => value + 1)
-    } catch (reason) { if (latestCatalogKey.current === refreshKey) setRefreshNotice(errorText(reason)) }
-    finally { setRefreshBusy(false) }
-  }
 
   const selectedCapture = catalog?.captures.find((item) => item.id === captureId)
   const selectedCase = catalog?.cases.find((item) => item.id === caseId)
@@ -161,9 +145,8 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
 
   return <section className="simulation-dashboard" data-ui-density="v1" aria-label="SPDM 해석 결과 대시보드">
     <header className="simulation-dashboard__head"><div><span>RESULT EXPLORER</span><h2>해석 결과 대시보드</h2><p>표시값과 자산은 선택한 Case·Run·capture 문맥의 서버 결과만 사용합니다.</p></div><nav aria-label="결과 환경"><Button size="sm" className={tab === 'usage' ? 'active' : ''} onClick={() => setTab('usage')}>사용환경</Button><Button size="sm" className={tab === 'distribution' ? 'active' : ''} onClick={() => setTab('distribution')}>유통환경</Button></nav></header>
-    {catalogError ? <State message={catalogError} error /> : <>{controls}{catalog?.folder_schema?.status === 'UNAVAILABLE' ? <State message={`현재 Folder Schema를 읽을 수 없습니다${catalog.folder_schema?.diagnostic ? ` · ${catalog.folder_schema.diagnostic.message}` : ''}. 아래 수집 이력은 저장된 capture 문맥으로 조회됩니다.`} error /> : null}{catalog && !catalog.cases.length ? <State message="확정된 Folder Schema Case나 수집 이력이 없습니다. 폴더 연결·규칙에서 구조를 확인하세요." /> : null}</>}
-    <div className="simulation-dashboard__source-link"><span>새 결과는 폴더 연결에서 등록하고 읽습니다.</span>{canManageFolders ? <Link to={folderHref}>폴더 연결·규칙 열기</Link> : null}{canRefreshSchema ? <Button size="sm" disabled={refreshBusy || !projectId || !requestId} onClick={() => void refreshSchema()}>{refreshBusy ? '갱신 중…' : '저장소 Refresh'}</Button> : null}<Button size="sm" onClick={() => setCatalogRevision((value) => value + 1)}>결과 다시 읽기</Button></div>
-    {refreshNotice && <div className="simulation-dashboard__state" role="status">{refreshNotice}</div>}
+    {catalogError && !catalog ? <State message={catalogError} error /> : <>{catalogError ? <State message={`${catalogError} · 마지막으로 읽은 결과를 표시합니다.`} error /> : null}{controls}{catalog?.folder_schema?.status === 'UNAVAILABLE' ? <State message={`현재 Folder Schema를 읽을 수 없습니다${catalog.folder_schema?.diagnostic ? ` · ${catalog.folder_schema.diagnostic.message}` : ''}. 아래 수집 이력은 저장된 capture 문맥으로 조회됩니다.`} error /> : null}{catalog && !catalog.cases.length ? <State message="확정된 Folder Schema Case나 수집 이력이 없습니다. 폴더 연결·규칙에서 구조를 확인하세요." /> : null}</>}
+    <div className="simulation-dashboard__source-link"><span>새 결과는 폴더 연결에서 등록하고 읽습니다.</span>{canManageFolders ? <Link to={folderHref}>폴더 연결·규칙 열기</Link> : null}</div>
     {tab === 'usage' ? <UsageArea key={`${caseId}:${captureId}:${referenceCaseId}:${referenceCaptureId}`} caseId={dashboardCaseId} captureId={activeCaptureId} referenceCaseId={catalog?.cases.find((item) => item.id === referenceCaseId)?.dashboard_case_id ?? referenceCaseId} referenceCaptureId={referenceCaptureId} /> : <DistributionArea key={`${projectId}:${requestId}`} projectId={projectId} requestId={requestId} caseId={dashboardCaseId} loadCaseId={loadCaseId} captureId={activeCaptureId} runId={runId} optionId={optionId} mode={mode} componentId={componentId} basis={basis} hasCapturedRun={runChoices.some((item) => item.id === runId && item.capture_id === activeCaptureId)} hasCapturedOption={options.some((item) => item.id === optionId && item.capture_id === activeCaptureId)} emptyContextMessage={catalog?.folder_schema?.status === 'AVAILABLE' && selectedCase?.source === 'FOLDER_SCHEMA' ? (selectedCase.capture_count ? '현재 폴더 구조를 조회 중입니다. 결과를 보려면 수집 버전을 선택하세요.' : '폴더 구조는 확인됐지만 이 Case의 수집된 결과가 없습니다. 결과를 등록하고 읽어 주세요.') : '수집 버전을 선택하면 저장된 결과를 조회할 수 있습니다.'} />}
   </section>
 }

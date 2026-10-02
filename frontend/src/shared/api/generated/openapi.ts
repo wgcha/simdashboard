@@ -2058,6 +2058,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/folder-discovery/environments/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sync
+         * @description Keep a viewed request in step with its SPDM folders (screens poll this).
+         *
+         *     No client path is accepted; the server re-reads only the selected request's
+         *     confirmed folder scope. Checks are coalesced per scope (see folder_auto_sync).
+         */
+        post: operations["sync_api_folder_discovery_environments_sync_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/folder-discovery/environments/refresh": {
         parameters: {
             query?: never;
@@ -6539,6 +6562,23 @@ export interface components {
             /** Source Revision */
             source_revision?: number | null;
             stored_file: components["schemas"]["StorageFileResponse"];
+        };
+        /** Sync */
+        Sync: {
+            /** Project Id */
+            project_id: string;
+            /** Request Id */
+            request_id: string;
+            /**
+             * Environment
+             * @enum {string}
+             */
+            environment: "USAGE" | "DISTRIBUTION";
+            /**
+             * Force
+             * @default false
+             */
+            force: boolean;
         };
         /** TaskTypeRef */
         TaskTypeRef: {
@@ -11280,6 +11320,39 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["Scan"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    sync_api_folder_discovery_environments_sync_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Sync"];
             };
         };
         responses: {

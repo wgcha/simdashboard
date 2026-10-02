@@ -110,3 +110,21 @@ def scan(root: Path, relative: str, *, skip_descendants: Callable[[str, str | No
     file_state.sort(key=lambda item: str(item["relative_path"]).casefold())
     return {"status": "INCOMPLETE" if issues else "COMPLETE", "folder_count": len(nodes),
             "file_count": files, "nodes": nodes, "file_state": file_state, "issues": issues}
+
+
+def stat_fingerprint(scan_result: dict[str, Any]) -> str:
+    """Fingerprint folder structure and file (path, size, mtime) without reading contents."""
+    import hashlib
+    import json
+
+    structure = sorted((
+        str(item.get("relative_path") or "").casefold(),
+        str(item.get("parent_path") or "").casefold(),
+    ) for item in scan_result.get("nodes", []))
+    files = sorted((
+        str(item.get("relative_path") or "").casefold(),
+        int(item.get("size") or 0),
+        int(item.get("modified_ns") or 0),
+    ) for item in scan_result.get("file_state", []))
+    payload = json.dumps({"structure": structure, "files": files}, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()

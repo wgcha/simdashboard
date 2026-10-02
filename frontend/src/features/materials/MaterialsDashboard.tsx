@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Download, Search, RotateCw, Box, Layers, AlertTriangle, ChevronLeft, ChevronRight } from 'lucide-react'
-import { folderEnvironmentApi } from '../../shared/api/folderEnvironment'
 import {
   materialsApi,
   type MaterialsCatalog,
@@ -21,7 +20,6 @@ import './MaterialsDashboard.css'
 type Props = {
   projectId: string
   requestId: string
-  canRefreshSchema?: boolean
   refreshToken?: number
 }
 
@@ -225,7 +223,7 @@ function materialsPath(catalog: MaterialsCatalog | null, path: { caseId: string;
   return { cases, loads, runs, options, scenes, ready, flat }
 }
 
-export function MaterialsDashboard({ projectId, requestId, canRefreshSchema = false, refreshToken = 0 }: Props) {
+export function MaterialsDashboard({ requestId, refreshToken = 0 }: Props) {
   const hierarchyParams = useCaseHierarchyParams()
   const { caseId, loadCaseId, runId, optionId, get: getParam, update: updateParams, select: selectLevel } = hierarchyParams
   const [catalogState, setCatalogState] = useState<{ requestId: string; value: MaterialsCatalog } | null>(null)
@@ -236,26 +234,11 @@ export function MaterialsDashboard({ projectId, requestId, canRefreshSchema = fa
   const [loadingDeck, setLoadingDeck] = useState(false)
   const [error, setError] = useState('')
   const [manualRefresh, setManualRefresh] = useState(0)
-  const [refreshBusy, setRefreshBusy] = useState(false)
-  const [refreshNotice, setRefreshNotice] = useState('')
-  const refreshScope = useRef('')
   const deckKey = useRef('')
+  const loadedDeckKey = useRef('')
   const [sort, setSort] = useState<{ key: SortKey; direction: 'asc' | 'desc' }>({ key: 'part', direction: 'asc' })
   const [page, setPage] = useState(0)
   const environment: MaterialsEnvironment = 'DISTRIBUTION'
-  useEffect(() => { refreshScope.current = `${projectId}:${requestId}` }, [projectId, requestId])
-  const refreshSchema = async () => {
-    const requestedScope = refreshScope.current
-    setRefreshBusy(true); setRefreshNotice('')
-    try {
-      const result = await folderEnvironmentApi.refresh({ project_id: projectId, request_id: requestId, environment })
-      if (refreshScope.current !== requestedScope) return
-      if (result.status === 'CONFLICT') { setRefreshNotice(result.message || '역할 충돌이 있어 기존 덱 위치를 유지했습니다. 폴더 연결·규칙에서 확인하세요.'); return }
-      setRefreshNotice(result.changed ? '저장소와 덱 위치를 갱신했습니다.' : '저장소 내용이 이미 최신입니다.')
-      setManualRefresh((value) => value + 1)
-    } catch (reason) { if (refreshScope.current === requestedScope) setRefreshNotice(reason instanceof Error ? reason.message : '저장소를 갱신하지 못했습니다.') }
-    finally { setRefreshBusy(false) }
-  }
   const selectedSceneId = getParam('scene')
   const selectedPartId = getParam('part')
   const filter = getParam('filter')
@@ -277,8 +260,8 @@ export function MaterialsDashboard({ projectId, requestId, canRefreshSchema = fa
       return
     }
     const controller = new AbortController()
+    // A background refresh keeps the current catalog and deck on screen.
     setLoadingCatalog(true)
-    setDeck(null)
     setError('')
     materialsApi.catalog(requestId, environment, controller.signal).then((value) => {
       if (!controller.signal.aborted) setCatalogState({ requestId, value })
@@ -341,6 +324,7 @@ export function MaterialsDashboard({ projectId, requestId, canRefreshSchema = fa
   useEffect(() => {
     if (!requestId || !selectedScene?.has_deck) {
       deckKey.current = ''
+      loadedDeckKey.current = ''
       setDeck(null)
       setLoadingDeck(false)
       return
@@ -348,11 +332,14 @@ export function MaterialsDashboard({ projectId, requestId, canRefreshSchema = fa
     const controller = new AbortController()
     const key = `${requestId}:${selectedScene.scene_id}`
     deckKey.current = key
-    setLoadingDeck(true)
-    setDeck(null)
+    // Re-reading the same Scene (auto-sync) keeps the visible deck until the new one arrives.
+    if (loadedDeckKey.current !== key) {
+      setLoadingDeck(true)
+      setDeck(null)
+    }
     setError('')
     materialsApi.deck(requestId, selectedScene.scene_id, environment, controller.signal).then((value) => {
-      if (!controller.signal.aborted && deckKey.current === key) setDeck(value.deck)
+      if (!controller.signal.aborted && deckKey.current === key) { loadedDeckKey.current = key; setDeck(value.deck) }
     }).catch((reason: unknown) => {
       if (!controller.signal.aborted && deckKey.current === key) setError(reason instanceof Error ? reason.message : '선택한 씬의 소재 덱을 읽지 못했습니다.')
     }).finally(() => { if (!controller.signal.aborted && deckKey.current === key) setLoadingDeck(false) })
@@ -414,9 +401,6 @@ export function MaterialsDashboard({ projectId, requestId, canRefreshSchema = fa
   return <div className="materials-dashboard" data-ui-density="v1">
     <header className="materials-page-head">
       <div><span>RADioss STARTER DECK</span><h1>모델 소재·물성</h1><p>Part 참조를 따라 Material, Property, Failure 모델과 함수 곡선을 살펴봅니다.</p></div>
-      <div className="materials-page-controls">
-        {canRefreshSchema && <button type="button" className="materials-export-button" disabled={refreshBusy || !projectId || !requestId} onClick={() => void refreshSchema()}><RotateCw /> {refreshBusy ? '갱신 중…' : '저장소 Refresh'}</button>}
-      </div>
       {catalog && (catalog.scenes.length || catalog.hierarchy.cases.length) ? <div className="materials-hierarchy" role="group" aria-label="소재 덱 경로">
         <div className="materials-hierarchy-path">
           {path.flat ? null : <>
@@ -434,9 +418,8 @@ export function MaterialsDashboard({ projectId, requestId, canRefreshSchema = fa
       </div> : null}
     </header>
 
-    {refreshNotice && <div className="materials-error" role="status"><span>{refreshNotice}</span></div>}
     {error && <div className="materials-error" role="alert"><AlertTriangle /><span>{error}</span><button type="button" onClick={() => setManualRefresh((value) => value + 1)}><RotateCw /> 다시 불러오기</button></div>}
-    {!requestId ? <div className="materials-empty-state"><Box /><strong>의뢰를 선택하면 소재 덱을 조회합니다.</strong><span>조회 권한이 있는 의뢰만 목록에 표시됩니다.</span></div> : loadingCatalog ? <div className="materials-empty-state" role="status">유통환경 덱 위치를 불러오고 있습니다…</div> : error && !catalog ? <div className="materials-empty-state"><AlertTriangle /><strong>조회 실패</strong><span>오류를 확인하고 다시 불러오세요.</span></div> : catalog && !catalog.scenes.length ? <div className="materials-empty-state"><Layers /><strong>이 의뢰에서 확인된 덱 위치가 없습니다.</strong><span>의뢰의 유통환경 결과 폴더를 확인하세요.</span></div> : !selectedScene ? <div className="materials-empty-state"><Layers /><strong>{path.ready && !path.scenes.length ? '선택한 경로에 Scene이 없습니다.' : '경로와 Scene을 선택하면 소재 덱을 조회합니다.'}</strong><span>Case → 하중경우 → Run Case → Run Option → Scene 순서로 선택하세요.</span></div> : !selectedScene.has_deck ? <div className="materials-empty-state"><Box /><strong>선택한 위치에서 Parts와 Materials 덱을 찾지 못했습니다.</strong><span title={selectedScene.relative_path}>{selectedScene.relative_path}</span></div> : <div className="materials-workspace">
+    {!requestId ? <div className="materials-empty-state"><Box /><strong>의뢰를 선택하면 소재 덱을 조회합니다.</strong><span>조회 권한이 있는 의뢰만 목록에 표시됩니다.</span></div> : loadingCatalog && !catalog ? <div className="materials-empty-state" role="status">유통환경 덱 위치를 불러오고 있습니다…</div> : error && !catalog ? <div className="materials-empty-state"><AlertTriangle /><strong>조회 실패</strong><span>오류를 확인하고 다시 불러오세요.</span></div> : catalog && !catalog.scenes.length ? <div className="materials-empty-state"><Layers /><strong>이 의뢰에서 확인된 덱 위치가 없습니다.</strong><span>의뢰의 유통환경 결과 폴더를 확인하세요.</span></div> : !selectedScene ? <div className="materials-empty-state"><Layers /><strong>{path.ready && !path.scenes.length ? '선택한 경로에 Scene이 없습니다.' : '경로와 Scene을 선택하면 소재 덱을 조회합니다.'}</strong><span>Case → 하중경우 → Run Case → Run Option → Scene 순서로 선택하세요.</span></div> : !selectedScene.has_deck ? <div className="materials-empty-state"><Box /><strong>선택한 위치에서 Parts와 Materials 덱을 찾지 못했습니다.</strong><span title={selectedScene.relative_path}>{selectedScene.relative_path}</span></div> : <div className="materials-workspace">
       <section className="materials-list-panel" aria-label="Part 목록">
         <div className="materials-list-toolbar">
           <label className="materials-search"><Search /><input aria-label="Part 검색" placeholder="Part, Material, Property 검색" value={filter} onChange={(event) => updateQuery({ filter: event.target.value || null }, true)} /></label>

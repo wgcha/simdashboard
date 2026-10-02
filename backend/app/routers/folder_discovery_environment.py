@@ -4,8 +4,8 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from ..database_connection import connect
 from ..security import write_audit_event
-from ..modules.access_control import RESULT_IMPORT, SYSTEM_CATALOG_MANAGE, require_permission, require_resource_permission
-from ..services import (dashboard_capture, folder_discovery as legacy,
+from ..modules.access_control import PROJECT_DATA_VIEW, RESULT_IMPORT, SYSTEM_CATALOG_MANAGE, require_permission, require_resource_permission
+from ..services import (dashboard_capture, folder_auto_sync, folder_discovery as legacy,
                         folder_discovery_environment as service, result_registration)
 from .semantic_body_limit import SemanticBodyLimitRoute
 
@@ -27,6 +27,8 @@ class Refresh(BaseModel):
     project_id: str = Field(min_length=1, max_length=128)
     request_id: str = Field(min_length=1, max_length=128)
     environment: Literal["USAGE", "DISTRIBUTION"]
+class Sync(Refresh):
+    force: bool = False
 class Retry(BaseModel): job_ids: list[str] | None = Field(default=None, max_length=500)
 class UsageReview(BaseModel):
     case_relative_path: str = Field(min_length=1, max_length=1024)
@@ -50,6 +52,27 @@ def scan(payload: Scan, request: Request):
         admin(request, conn); scoped(request, conn, payload.request_id)
         try: return service.save_scan(conn, legacy.configured_root(conn), legacy.normal(payload.relative_path), payload.environment, payload.profile_id, payload.project_id, payload.request_id, request.state.principal.user_id)
         except ValueError as exc: raise HTTPException(422, {"code":"ENVIRONMENT_SCAN_INVALID", "message":str(exc)}) from exc
+@router.post("/sync")
+def sync(payload: Sync, request: Request):
+    """Keep a viewed request in step with its SPDM folders (screens poll this).
+
+    No client path is accepted; the server re-reads only the selected request's
+    confirmed folder scope. Checks are coalesced per scope (see folder_auto_sync).
+    """
+    with connect() as conn:
+        require_resource_permission(request, PROJECT_DATA_VIEW, "request", payload.request_id, conn=conn)
+        row = conn.execute("SELECT project_id FROM analysis_requests WHERE id=?", [payload.request_id]).fetchone()
+        if not row or str(row[0]) != payload.project_id:
+            raise HTTPException(404, {"code": "FOLDER_SCHEMA_SCOPE_MISMATCH", "message": "프로젝트와 의뢰 문맥이 일치하지 않습니다."})
+        result = folder_auto_sync.sync(conn, payload.project_id, payload.request_id, payload.environment,
+                                       request.state.principal.user_id, force=payload.force)
+        if not result.get("coalesced") and result["status"] in {"REFRESHED", "CONFLICT"}:
+            write_audit_event(request=request, principal=request.state.principal, status_code=200,
+                              action="FOLDER_ENVIRONMENT_AUTO_SYNCED" if result["status"] == "REFRESHED" else "FOLDER_ENVIRONMENT_REFRESH_CONFLICT",
+                              detail={"snapshot_id": result.get("snapshot_id"), "project_id": payload.project_id,
+                                      "request_id": payload.request_id, "environment": payload.environment,
+                                      "status": result["status"], "force": payload.force}, connection=conn)
+        return result
 @router.post("/refresh")
 def refresh(payload: Refresh, request: Request):
     with connect() as conn:

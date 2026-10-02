@@ -18,7 +18,7 @@ from . import dashboard_capture
 from . import environment_folder_profiles
 from . import folder_discovery as legacy
 from . import spdm_storage
-from .folder_discovery_scan import MAX_SECONDS, root_identity, scan
+from .folder_discovery_scan import MAX_SECONDS, root_identity, scan, stat_fingerprint
 from .environment_folder_profiles import resolve_role
 from . import usage_source_review
 
@@ -473,6 +473,8 @@ def refresh_scope(conn, root, project_id: str, request_id: str, environment: str
                  "profile_revision": profile["revision"], "status": "COMPLETE"},
         "nodes": scoped_nodes, "confirmed_roles": confirmed_roles_now,
         "role_rules_revision": ROLE_RULES_REVISION,
+        # Quick auto-sync check (names, sizes, mtimes only); see folder_auto_sync.
+        "stat_fingerprint": stat_fingerprint(fresh),
         "issues": fresh.get("issues", []),
         "structure_fingerprint": structure_fingerprint,
         "content_fingerprint": content_fingerprint,

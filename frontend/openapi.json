@@ -6148,6 +6148,46 @@
         }
       }
     },
+    "/api/folder-discovery/environments/sync": {
+      "post": {
+        "tags": [
+          "folder-discovery-environments"
+        ],
+        "summary": "Sync",
+        "description": "Keep a viewed request in step with its SPDM folders (screens poll this).\n\nNo client path is accepted; the server re-reads only the selected request's\nconfirmed folder scope. Checks are coalesced per scope (see folder_auto_sync).",
+        "operationId": "sync_api_folder_discovery_environments_sync_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Sync"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/folder-discovery/environments/refresh": {
       "post": {
         "tags": [
@@ -20480,6 +20520,42 @@
           "stored_file"
         ],
         "title": "StructuredUploadResponse"
+      },
+      "Sync": {
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Project Id"
+          },
+          "request_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Request Id"
+          },
+          "environment": {
+            "type": "string",
+            "enum": [
+              "USAGE",
+              "DISTRIBUTION"
+            ],
+            "title": "Environment"
+          },
+          "force": {
+            "type": "boolean",
+            "title": "Force",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "project_id",
+          "request_id",
+          "environment"
+        ],
+        "title": "Sync"
       },
       "TaskTypeRef": {
         "properties": {

@@ -73,6 +73,8 @@ const largeDeck = deckFor(Array.from({ length: 128 }, (_, index) => {
 }))
 
 async function mockMaterialsApi(page: Page) {
+  // Auto-sync is answered locally so the shared e2e backend does not scan seeded folders between tests.
+  await page.route('**/api/folder-discovery/environments/sync', (route) => route.fulfill({ json: { status: 'UNCHANGED', changed: false, snapshot_id: null, diff: { added: 0, removed: 0, changed: 0 }, code: null, message: null, check_mode: 'QUICK', checked_at: new Date().toISOString(), coalesced: false } }))
   await page.route('**/api/materials/catalog**', (route) => route.fulfill({ json: catalog }))
   await page.route('**/api/materials/deck**', (route) => {
     const sceneId = new URL(route.request().url()).searchParams.get('scene_id')
@@ -95,23 +97,45 @@ async function openMaterials(page: Page) {
   await expect(page.getByRole('complementary', { name: '주 메뉴' }).getByRole('link', { name: '모델 소재·물성', exact: true })).toHaveCount(0)
 }
 
-test('소재 Refresh는 선택 의뢰만 갱신하고 실패해도 기존 Scene을 유지한다', async ({ page }) => {
+test('소재 탭은 폴더를 자동 확인하고 실패해도 기존 Scene을 유지한다', async ({ page }) => {
+  // Fake timers let the test advance the 30 s poll without waiting for it.
+  await page.clock.install()
   await mockMaterialsApi(page)
-  let refreshCount = 0
-  await page.route('**/api/folder-discovery/environments/refresh', (route) => {
-    refreshCount += 1
-    if (refreshCount === 2) return route.fulfill({ status: 422, json: { detail: { code: 'FOLDER_SCHEMA_SCAN_UNAVAILABLE', message: '저장소를 읽을 수 없습니다.' } } })
-    return route.fulfill({ json: { snapshot_id: 'snapshot-2', project_id: projectId, request_id: requestId, environment: 'DISTRIBUTION', status: 'REFRESHED', changed: true, structure_fingerprint: 'structure-2', content_fingerprint: 'content-2', diff: { added: 0, removed: 0, changed: 0 }, nodes: [] } })
+  const syncBodies: Array<Record<string, unknown>> = []
+  const syncQueue: Array<Record<string, unknown>> = []
+  const syncResult = (status: string, extra: Record<string, unknown> = {}) => ({ status, changed: status === 'REFRESHED', snapshot_id: 'snapshot-2', diff: { added: 0, removed: 0, changed: 0 }, code: null, message: null, check_mode: 'QUICK', checked_at: new Date().toISOString(), coalesced: false, ...extra })
+  await page.route('**/api/folder-discovery/environments/sync', (route) => {
+    syncBodies.push(route.request().postDataJSON())
+    return route.fulfill({ json: syncQueue.shift() ?? syncResult('UNCHANGED') })
   })
+  let catalogRequests = 0
+  page.on('request', (request) => { if (request.url().includes('/api/materials/catalog')) catalogRequests += 1 })
   await openMaterials(page)
   await chooseScene(page, 'opt-individual', 'small-scene')
-  const refreshRequest = page.waitForRequest((request) => request.url().endsWith('/api/folder-discovery/environments/refresh'))
-  await page.getByRole('button', { name: '저장소 Refresh' }).click()
-  expect((await refreshRequest).postDataJSON()).toEqual({ project_id: projectId, request_id: requestId, environment: 'DISTRIBUTION' })
-  await expect(page.locator('.materials-dashboard .materials-error[role="status"]')).toContainText('저장소와 덱 위치를 갱신했습니다.')
-  await page.getByRole('button', { name: '저장소 Refresh' }).click()
-  await expect(page.locator('.materials-dashboard .materials-error[role="status"]')).toContainText('저장소를 읽을 수 없습니다.')
+  const syncBar = page.getByRole('group', { name: '폴더 자동 확인' })
+  await expect.poll(() => syncBodies.length).toBeGreaterThan(0)
+  expect(syncBodies.at(-1)).toEqual({ project_id: projectId, request_id: requestId, environment: 'DISTRIBUTION', force: false })
+  await expect(syncBar).toContainText('방금 확인')
+
+  // The 30 s poll reports a change: catalogs are re-read and a short notice appears.
+  const catalogsBefore = catalogRequests
+  const sentBefore = syncBodies.length
+  syncQueue.push(syncResult('REFRESHED', { diff: { added: 1, removed: 0, changed: 0 } }))
+  await page.clock.fastForward(30_000)
+  await expect.poll(() => syncBodies.length).toBeGreaterThan(sentBefore)
+  await expect(syncBar.getByRole('status')).toContainText('새 결과 반영 · Scene +1')
+  await expect.poll(() => catalogRequests).toBeGreaterThan(catalogsBefore)
   await expect(page.getByRole('group', { name: '소재 덱 경로' }).getByLabel('Scene', { exact: true })).toHaveValue('small-scene')
+
+  // Files still being copied are not an error; the manual check is forced.
+  syncQueue.push(syncResult('FAILED', { code: 'FOLDER_SCHEMA_FILE_BUSY', message: '폴더에 복사 중인 파일이 있습니다.' }))
+  const forced = page.waitForRequest((request) => request.url().endsWith('/api/folder-discovery/environments/sync') && request.postDataJSON()?.force === true)
+  await syncBar.getByRole('button', { name: '지금 확인' }).click()
+  expect((await forced).postDataJSON()).toEqual({ project_id: projectId, request_id: requestId, environment: 'DISTRIBUTION', force: true })
+  await expect(syncBar).toContainText('파일 복사 중 · 잠시 후 다시 확인')
+  await expect(syncBar).not.toContainText('폴더 확인 필요')
+  await expect(page.getByRole('group', { name: '소재 덱 경로' }).getByLabel('Scene', { exact: true })).toHaveValue('small-scene')
+  await expect(page.getByRole('button', { name: '저장소 Refresh' })).toHaveCount(0)
 })
 
 test('소재 탭은 내 작업 문맥과 뒤로 가기를 유지하고 기존 주소를 새 탭으로 보낸다', async ({ page }) => {
@@ -129,7 +153,8 @@ test('소재 탭은 내 작업 문맥과 뒤로 가기를 유지하고 기존 �
   await expect(page.getByRole('region', { name: 'SPDM 해석 결과 대시보드' })).toBeVisible()
 
   await page.goto(`/workspace/materials?project=${projectId}&request=${requestId}`)
-  await expect(page.getByRole('heading', { name: '모델 소재·물성', exact: true })).toBeVisible()
+  // A full reload re-bootstraps the workspace before the redirected tab renders.
+  await expect(page.getByRole('heading', { name: '모델 소재·물성', exact: true })).toBeVisible({ timeout: 15_000 })
   await expect(page).toHaveURL(/\/workspace\/requests\?.*view=case_results.*resultTab=materials/)
 })
 
@@ -219,7 +244,8 @@ test('대량 덱의 Part 딥링크는 해당 페이지를 열고 뒤로가기는
   await page.goto(`${deepLink.pathname}${deepLink.search}`)
 
   const rows = page.locator('.materials-part-table tbody tr')
-  await expect(page.getByText('128 / 128 Parts')).toBeVisible()
+  // A full reload re-bootstraps the workspace (auth, projects, request context) before the deck loads.
+  await expect(page.getByText('128 / 128 Parts')).toBeVisible({ timeout: 15_000 })
   await expect(page.locator('.materials-pagination')).toContainText('51–100행')
   const deepLinkedRow = rows.filter({ hasText: 'P076' })
   await expect(deepLinkedRow).toHaveCount(1)

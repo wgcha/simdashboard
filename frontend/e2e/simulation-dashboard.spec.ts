@@ -225,6 +225,8 @@ test('usage source review preserves independent slope fields and hides raw diagn
 async function installDashboardMocks(page: Page, options: { slowUsage?: boolean; distribution?: DashboardDistribution } = {}) {
   let releaseUsage!: () => void
   const usageGate = new Promise<void>((resolve) => { releaseUsage = resolve })
+  // Auto-sync is answered locally so the shared e2e backend does not scan seeded folders between tests.
+  await page.route('**/api/folder-discovery/environments/sync', (route) => route.fulfill({ json: { status: 'UNCHANGED', changed: false, snapshot_id: null, diff: { added: 0, removed: 0, changed: 0 }, code: null, message: null, check_mode: 'QUICK', checked_at: new Date().toISOString(), coalesced: false } }))
   await page.route('**/api/dashboard/catalog**', async (route) => {
     const url = new URL(route.request().url())
     if (url.searchParams.get('environment') === 'USAGE') {
@@ -311,6 +313,21 @@ test('slow usage catalog cannot overwrite the selected distribution catalog', as
   await page.waitForTimeout(150)
   await expect(controls).toContainText('하중경우')
   await expect(page.getByText('다섯 평가 종합')).toHaveCount(0)
+})
+
+test('folder auto-sync follows the Case results environment tab', async ({ page }) => {
+  await installDashboardMocks(page)
+  const environments: string[] = []
+  await page.route('**/api/folder-discovery/environments/sync', (route) => {
+    environments.push(String(route.request().postDataJSON()?.environment))
+    return route.fulfill({ json: { status: 'UNCHANGED', changed: false, snapshot_id: null, diff: { added: 0, removed: 0, changed: 0 }, code: null, message: null, check_mode: 'QUICK', checked_at: new Date().toISOString(), coalesced: false } })
+  })
+  await openResults(page)
+  await expect.poll(() => environments.at(-1)).toBe('USAGE')
+  await page.getByRole('button', { name: '유통환경', exact: true }).click()
+  await expect.poll(() => environments.at(-1)).toBe('DISTRIBUTION')
+  await expect(page.getByRole('button', { name: '저장소 Refresh' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '결과 다시 읽기' })).toHaveCount(0)
 })
 
 function comparisonRegressionPayload(): DashboardDistribution {

@@ -15,11 +15,27 @@ export type UsageSourceReview = { status?: string; can_register?: boolean; can_p
 export type FolderCaptureJob = { id: string; status: string; case_id: string; capture_id: string | null; error_code: string | null; project_id?: string; request_id?: string }
 export type FolderEnvironmentRegistration = { registration_id: string; preview_id: string; environment: FolderEnvironment; project_id: string; request_id: string; status: string; created_at: string; relative_path?: string; capture_jobs: FolderCaptureJob[]; usage_source_reviews?: Record<string, Pick<UsageSourceReview, 'entries' | 'excluded_count' | 'blocking_count' | 'missing_count' | 'can_publish'>> }
 export type FolderEnvironmentRefresh = { snapshot_id: string | null; project_id: string; request_id: string; environment: FolderEnvironment; status: 'REFRESHED' | 'UNCHANGED' | 'CONFLICT'; activated?: boolean; changed: boolean; message?: string; structure_fingerprint: string; content_fingerprint: string; diff: { added: number; removed: number; changed: number }; nodes: Array<{ relative_path: string; role_kind: string | null; status: string; role_basis: string }> }
+export type FolderEnvironmentSyncStatus = 'UNCHANGED' | 'REFRESHED' | 'CONFLICT' | 'FAILED'
+/** Response of the viewer-level folder auto-sync check (shape documented by the backend; OpenAPI declares it untyped). */
+export type FolderEnvironmentSync = {
+  status: FolderEnvironmentSyncStatus
+  changed: boolean
+  snapshot_id: string | null
+  diff: { added: number; removed: number; changed: number }
+  code: string | null
+  message: string | null
+  check_mode: 'QUICK' | 'FULL'
+  checked_at: string
+  coalesced: boolean
+}
 type ProfileInput = { environment: FolderEnvironment; name: string; rules: { rules: FolderEnvironmentProfileRule[]; usage_sources?: UsageSourceProfile; description?: string } }
 
 export const folderEnvironmentApi = {
   refresh: async (body: { project_id: string; request_id: string; environment: FolderEnvironment }): Promise<FolderEnvironmentRefresh> => {
     return unwrapGenerated(await apiClient.POST('/api/folder-discovery/environments/refresh', { body })) as FolderEnvironmentRefresh
+  },
+  sync: async (body: { project_id: string; request_id: string; environment: FolderEnvironment; force?: boolean }, signal?: AbortSignal): Promise<FolderEnvironmentSync> => {
+    return unwrapGenerated(await apiClient.POST('/api/folder-discovery/environments/sync', { body: { ...body, force: body.force ?? false }, signal })) as FolderEnvironmentSync
   },
   profiles: async (signal?: AbortSignal) => (unwrapGenerated(await apiClient.GET('/api/folder-discovery/environments', { signal })) as { items: FolderEnvironmentProfile[] }).items,
   createProfile: async (body: ProfileInput) => unwrapGenerated(await apiClient.POST('/api/folder-discovery/environments/profiles', { body })) as FolderEnvironmentProfile,
