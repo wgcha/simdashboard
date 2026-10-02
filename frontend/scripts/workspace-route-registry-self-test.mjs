@@ -62,7 +62,7 @@ console.log('Personal PC default menu self-test passed.')
 
 // Shared Case hierarchy URL contract (Case results <-> materials tabs).
 const hierarchySearch = 'project=p&request=r&view=case_results&resultTab=materials&case=c1&case_load=l1&case_run=r1&case_option=o1&scene=s1&part=7&filter=x'
-const caseChange = applySearchPatch(hierarchySearch, withClearedChildren({ case: 'c2' }))
+const caseChange = applySearchPatch(`${hierarchySearch}&capture=cap1`, withClearedChildren({ case: 'c2' }))
 if (caseChange !== 'project=p&request=r&view=case_results&resultTab=materials&case=c2&filter=x') throw new Error(`case change must clear its children only: ${caseChange}`)
 const optionChange = applySearchPatch(hierarchySearch, withClearedChildren({ case_option: 'o2' }))
 if (optionChange !== 'project=p&request=r&view=case_results&resultTab=materials&case=c1&case_load=l1&case_run=r1&case_option=o2&filter=x') throw new Error(`option change must clear scene/part: ${optionChange}`)

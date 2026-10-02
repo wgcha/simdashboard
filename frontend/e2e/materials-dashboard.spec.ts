@@ -1,5 +1,7 @@
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { expect, test, type Page } from '@playwright/test'
-import { loginWorkspace } from './workspace-test-helpers'
+import { expectCaseResultsLayout, loginWorkspace, setWorkspaceFontSize } from './workspace-test-helpers'
 
 const requestId = 'request-showcase-waiting'
 const projectId = 'project-feature-showcase'
@@ -262,4 +264,20 @@ test('대량 덱의 Part 딥링크는 해당 페이지를 열고 뒤로가기는
   await expect.poll(() => new URL(page.url()).searchParams.get('part')).toBe('P076')
   await expect(rows.filter({ hasText: 'P076' })).toHaveAttribute('aria-selected', 'true')
   await expect(page.locator('.materials-pagination')).toContainText('51–100행')
+})
+
+test('소재·물성 탭은 1440·1920 화면과 11·18pt에서 가로 스크롤 없이 경로를 표시한다', async ({ page }) => {
+  await mockMaterialsApi(page)
+  await page.setViewportSize({ width: 1440, height: 1000 })
+  await openMaterials(page)
+  await chooseScene(page, 'opt-individual', 'small-scene')
+  await expect(page.getByText('4 / 4 Parts')).toBeVisible()
+  for (const [width, height] of [[1440, 1000], [1920, 1080]] as const) {
+    await page.setViewportSize({ width, height })
+    for (const points of [11, 18]) {
+      await setWorkspaceFontSize(page, points)
+      await expectCaseResultsLayout(page)
+      await page.screenshot({ path: join(tmpdir(), `materials-${width}-${points}pt.png`), fullPage: false })
+    }
+  }
 })

@@ -1,7 +1,7 @@
 # Case 결과 중심 사용 흐름 재설계 계획
 
 - 기준일: 2026-10-02
-- 상태: 0~2단계 구현·격리 검증 완료(브랜치 `claude/case-results-redesign`). 3단계 이후 미착수.
+- 상태: 0~3단계 구현·격리 검증 완료(브랜치 `claude/case-results-redesign`). 4단계 이후 미착수.
 - 결정 사항(사용자 확인 2026-10-02): UI는 **A안(경로 바 + 단일 결과면)**, PDF는 **서버 LibreOffice headless 변환**, 결과 검수는 **Final 지정 시점으로 이동**, 자동 변경 확인 주기는 **30초**.
 - 대체 범위: [소재물성 계획의 2026-10-02 후속 UI 계획](materials-dashboard-implementation.md#모델-소재물성-계층-선택-ui-개선-계획)은 이 문서로 대체한다. 해당 절의 검증 시나리오는 여기서 계승한다.
 - 기준 계약: [공용 위치·Refresh](../features/folder-schema-refresh.md), [결과 등록](../features/result-registration.md), [최종확정](../features/case-finalization.md), [Windows 배포 정책](../windows-deployment-policy.md)
@@ -133,3 +133,10 @@
 ### 새 프로젝트·의뢰 자동 확인 (2026-10-02)
 
 - SPDM이 만든 프로젝트·의뢰 폴더를 관리자 등록 없이 기존 조사·등록 파이프라인으로 자동 등록한다(`POST .../environments/discover`, 화면 시작 시·60초 주기). 계약은 [공용 위치·Refresh](../features/folder-schema-refresh.md#새-프로젝트의뢰-자동-확인)를 따른다.
+
+### 3단계 A안 화면 (2026-10-02)
+- Case 결과: 환경 전환·방금 확인·상태·Final 지정을 한 줄에 두고, 경로 바(Case › 하중경우 › Run Case › Run Option)와 탭(요약 / Scene 비교 / 영상 / 소재·물성), 표시 옵션으로 정리했다. 최신 병합 결과를 항상 표시하고 업데이트 이력은 보조 정보로만 둔다.
+- 영상 탭은 Run 대시보드 영상 그리드(VideoGridCore)를 재사용하고, Run Option이 여러 개인데 선택이 없으면 선택을 안내한다. 소재·물성은 같은 경로 바를 쓰는 탭으로 옮겼다.
+- 독립 검수 지적 반영: 값이 있는 Component 우선 선택(`has_values`), Case 변경 시 이력 선택 초기화, 문제 코드 한글화, 토큰 색상, 긴 이름 줄바꿈·말줄임, 키보드 탭 이동, 소재 탭에서 돌아올 때 환경 복원.
+- 검증: e2e simulation 13 통과(남은 1건은 폐기된 capture-pin 기대), materials 6, case-video-grid 2, folder-working-final 3, 1440/1920×11/18pt·4K 화면 확인, tsc·build·routing 통과, check:architecture 기존 4건만.
+

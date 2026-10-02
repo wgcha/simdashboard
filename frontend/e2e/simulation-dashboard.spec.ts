@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { expect, test, type Page, type Route } from '@playwright/test'
 import type { DashboardDistribution } from '../src/shared/api/simulationDashboard'
-import { loginWorkspace, openWorkspaceRoute } from './workspace-test-helpers'
+import { expectCaseResultsLayout, loginWorkspace, openWorkspaceRoute, setWorkspaceFontSize } from './workspace-test-helpers'
 
 test.beforeEach(async ({ page }) => {
   await page.route('**/api/dashboard/finalizations/status**', (route) => route.fulfill({ json: { latest: null, selected_case_latest: null, retryable_operations: [], unverified_records: 0 } }))
@@ -580,4 +580,34 @@ test.describe('4K monitor at 100%', () => {
     await chooseDistribution(page)
     await checkWideLayout(page, 'case-results-4k-3840.png')
   })
+})
+
+test('Case results 요약 fits 1440 and 1920 screens at 11 pt and 18 pt', async ({ page }) => {
+  await installDashboardMocks(page)
+  await page.setViewportSize({ width: 1440, height: 1000 })
+  await openResults(page)
+  await chooseDistribution(page)
+  await expect(page.locator('.case-view-context')).toContainText(`${COMPONENT_ID} · 상세 추출값`)
+  for (const [width, height] of [[1440, 1000], [1920, 1080]] as const) {
+    await page.setViewportSize({ width, height })
+    for (const points of [11, 18]) {
+      await setWorkspaceFontSize(page, points)
+      await expect(page.getByTestId('distribution-dashboard')).toBeVisible()
+      await expectCaseResultsLayout(page)
+      await page.screenshot({ path: join(tmpdir(), `case-results-${width}-${points}pt.png`), fullPage: false })
+    }
+  }
+})
+
+test('tab arrow keys move focus without opening a tab', async ({ page }) => {
+  await installDashboardMocks(page)
+  await openResults(page)
+  await chooseDistribution(page)
+  const summary = page.getByRole('tab', { name: '요약', exact: true })
+  await summary.focus()
+  await page.keyboard.press('ArrowRight')
+  await expect(page.getByRole('tab', { name: 'Scene 비교', exact: true })).toBeFocused()
+  await expect(summary).toHaveAttribute('aria-selected', 'true')
+  await page.keyboard.press('Enter')
+  await expect(page.getByRole('tab', { name: 'Scene 비교', exact: true })).toHaveAttribute('aria-selected', 'true')
 })

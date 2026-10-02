@@ -59,3 +59,30 @@ export async function loginWorkspace(page: Page, username = 'e2e-admin', pathnam
   await page.getByRole('button', { name: '로그인', exact: true }).click()
   await expect(page.getByRole('complementary', { name: '주 메뉴' })).toBeVisible()
 }
+
+/** Set the global font size (11–18 pt) with the sidebar buttons. */
+export async function setWorkspaceFontSize(page: Page, points: number) {
+  for (let step = 0; step < 8; step++) {
+    const current = (await page.locator('.app-shell').evaluate((element) => getComputedStyle(element).getPropertyValue('--ui-font-size'))).trim()
+    const value = Number.parseFloat(current)
+    if (value === points) return
+    await page.getByRole('button', { name: value < points ? '전체 글자 크기 늘리기' : '전체 글자 크기 줄이기', exact: true }).click()
+  }
+  await expect(page.locator('.app-shell')).toHaveCSS('--ui-font-size', `${points}pt`)
+}
+
+type Box = { x: number; y: number; width: number; height: number }
+function overlaps(a: Box, b: Box) { return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height }
+
+/** Desktop layout guard: no page-level horizontal scroll, path bar and header actions inside the dashboard and not overlapping. */
+export async function expectCaseResultsLayout(page: Page) {
+  expect(await page.evaluate(() => document.scrollingElement!.scrollWidth <= document.scrollingElement!.clientWidth)).toBe(true)
+  const section = await page.getByRole('region', { name: 'SPDM 해석 결과 대시보드' }).boundingBox()
+  const actions = await page.locator('.case-results-head__actions').boundingBox()
+  const path = await page.locator('.shared-hierarchy-path').first().boundingBox()
+  const env = await page.getByRole('group', { name: '결과 환경' }).boundingBox()
+  expect(section && actions && path && env).toBeTruthy()
+  for (const box of [actions!, path!]) expect(box.x + box.width).toBeLessThanOrEqual(section!.x + section!.width + 1)
+  expect(overlaps(actions!, path!)).toBe(false)
+  expect(overlaps(actions!, env!)).toBe(false)
+}

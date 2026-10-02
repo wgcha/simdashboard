@@ -8,7 +8,8 @@ export type CaseHierarchyKey = typeof CASE_HIERARCHY_KEYS[number]
 
 /** Keys owned by a parent level. Changing the parent invalidates all of them. */
 export const CASE_HIERARCHY_CHILDREN: Readonly<Record<CaseHierarchyKey, readonly string[]>> = {
-  case: ['case_load', 'case_run', 'case_option', 'scene', 'part'],
+  // `capture` belongs to one Case; a new Case must not keep the old one (Final 지정 target).
+  case: ['capture', 'case_load', 'case_run', 'case_option', 'scene', 'part'],
   case_load: ['case_run', 'case_option', 'scene', 'part'],
   case_run: ['case_option', 'scene', 'part'],
   case_option: ['scene', 'part'],
