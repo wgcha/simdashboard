@@ -30,6 +30,11 @@ ROLES = {
 _EVALUATIONS = {"settle", "wobble", "horizontal_force_angle", "slope_angle", "slope_angle_360"}
 _SCENE = re.compile(r"(scene|result|contour|animation)", re.I)
 _logger = logging.getLogger(__name__)
+# Revision of the refresh role interpretation stored in each snapshot. A
+# snapshot from an older revision is re-interpreted once even when the folder
+# fingerprints are unchanged, so a rule fix reaches already scanned folders.
+# 2: undecided folders that only failed the name pattern may inherit a LEVEL role.
+ROLE_RULES_REVISION = 2
 
 
 def now(): return datetime.now(timezone.utc).replace(tzinfo=None)
@@ -285,7 +290,9 @@ def refresh_scope(conn, root, project_id: str, request_id: str, environment: str
             and int(previous["profile_revision"]) == profile["revision"]
             and str(previous["request_relative_path"]) == request_path
             and str(previous["structure_fingerprint"]) == structure_fingerprint
-            and str(previous["content_fingerprint"]) == content_fingerprint):
+            and str(previous["content_fingerprint"]) == content_fingerprint
+            and isinstance(previous_schema, dict)
+            and previous_schema.get("role_rules_revision") == ROLE_RULES_REVISION):
         snapshot_id = str(previous["id"])
         location_projection = resolver.resolve_request_locations(
             conn, project_id, request_id, environment, schema=previous_schema,
@@ -393,14 +400,20 @@ def refresh_scope(conn, root, project_id: str, request_id: str, environment: str
 
     for node in scoped_nodes:
         path_key = resolver._fold(str(node.get("relative_path") or ""))
-        if path_key in prior_scanned_paths or node.get("role_basis") == "RULE":
+        # A folder that only failed the name pattern (DEFAULT basis, no role,
+        # no saved decision) is still undecided. It may inherit the single
+        # role used at its parent role/depth even when an earlier scan already
+        # saw it, so a Scene created empty and refreshed later is not stuck.
+        undecided = (not node.get("role_kind") and node.get("status") == "UNRESOLVED"
+                     and node.get("role_basis") == "DEFAULT")
+        if (path_key in prior_scanned_paths and not undecided) or node.get("role_basis") == "RULE":
             if node.get("role_basis") == "RULE" and node.get("status") == "UNRESOLVED":
                 node["role_basis"] = "CONFLICT"
             elif node.get("role_basis") == "RULE":
                 node["role_basis"] = "PATTERN"
                 node["confirmed"] = True
             continue
-        if node.get("status") != "CONTAINER" or node.get("role_kind"):
+        if (node.get("status") != "CONTAINER" and not undecided) or node.get("role_kind"):
             continue
         relative_depth = len(PurePosixPath(str(node["relative_path"])).parts) - request_depth
         parent_role = nearest_parent_role(node, current_by_path)
@@ -409,6 +422,10 @@ def refresh_scope(conn, root, project_id: str, request_id: str, environment: str
             role = next(iter(possibilities))
             node.update(role_kind=role, status="CONFIRMED", confirmed=True,
                         role_basis="LEVEL", role_source="INHERITED")
+            if undecided:
+                node.pop("message", None)
+                if node.get("option_status") == "UNRESOLVED":
+                    node["option_status"] = "PRESENT" if role == "RUN_OPTION" else None
             if role == "SCENE" and not node.get("target_id"):
                 node["target_id"] = stable("environment-scene", root_key, node["relative_path"], role)
         elif len(possibilities) > 1:
@@ -449,6 +466,7 @@ def refresh_scope(conn, root, project_id: str, request_id: str, environment: str
         "scan": {"id": "pending", "relative_path": request_path, "profile_id": profile["id"],
                  "profile_revision": profile["revision"], "status": "COMPLETE"},
         "nodes": scoped_nodes, "confirmed_roles": confirmed_roles_now,
+        "role_rules_revision": ROLE_RULES_REVISION,
         "issues": fresh.get("issues", []),
         "structure_fingerprint": structure_fingerprint,
         "content_fingerprint": content_fingerprint,

@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Download, Search, RotateCw, Box, Layers, AlertTriangle, ChevronLeft, ChevronRight } from 'lucide-react'
-import { useSearchParams } from 'react-router-dom'
 import { folderEnvironmentApi } from '../../shared/api/folderEnvironment'
 import {
   materialsApi,
@@ -15,6 +14,8 @@ import {
   type MaterialsScene,
   type MaterialsSource,
 } from '../../shared/api/materials'
+import { HierarchyChoice } from '../../shared/components/HierarchyChoice'
+import { useCaseHierarchyParams } from '../../shared/hooks/useCaseHierarchyParams'
 import './MaterialsDashboard.css'
 
 type Props = {
@@ -197,9 +198,39 @@ function FailureCard({ failure }: { failure: MaterialsFailure }) {
   </details>
 }
 
+type HierarchyLevel = 'case' | 'case_load' | 'case_run' | 'case_option'
+
+function sceneMatches(scene: MaterialsScene, path: { caseId: string; loadCaseId: string; runId: string; optionId: string }) {
+  // A Scene level id of '' means the Folder Schema omits that level (for
+  // example no load-case folder); it then matches whatever the path holds.
+  return scene.case_id === path.caseId
+    && (!scene.load_case_id || scene.load_case_id === path.loadCaseId)
+    && (!scene.execution_run_id || scene.execution_run_id === path.runId)
+    && (!scene.run_option_id || scene.run_option_id === path.optionId)
+}
+
+function materialsPath(catalog: MaterialsCatalog | null, path: { caseId: string; loadCaseId: string; runId: string; optionId: string }) {
+  const hierarchy = catalog?.hierarchy
+  const cases = hierarchy?.cases ?? []
+  const loads = (hierarchy?.load_cases ?? []).filter((item) => item.case_id === path.caseId)
+  const runs = (hierarchy?.execution_runs ?? []).filter((item) => item.case_id === path.caseId && item.load_case_id === path.loadCaseId)
+  const options = (hierarchy?.run_options ?? []).filter((item) => item.case_id === path.caseId && item.execution_run_id === path.runId)
+  // Without any Folder Schema Case the Scene list is the only level left.
+  const flat = !cases.length
+  const ready = flat || (Boolean(path.caseId)
+    && (!loads.length || Boolean(path.loadCaseId))
+    && (!runs.length || Boolean(path.runId))
+    && (!options.length || Boolean(path.optionId)))
+  const scenes = !catalog || !ready ? [] : flat ? catalog.scenes : catalog.scenes.filter((item) => sceneMatches(item, path))
+  return { cases, loads, runs, options, scenes, ready, flat }
+}
+
 export function MaterialsDashboard({ projectId, requestId, canRefreshSchema = false, refreshToken = 0 }: Props) {
-  const [searchParams, setSearchParams] = useSearchParams()
-  const [catalog, setCatalog] = useState<MaterialsCatalog | null>(null)
+  const hierarchyParams = useCaseHierarchyParams()
+  const { caseId, loadCaseId, runId, optionId, get: getParam, update: updateParams, select: selectLevel } = hierarchyParams
+  const [catalogState, setCatalogState] = useState<{ requestId: string; value: MaterialsCatalog } | null>(null)
+  // Ignore a catalog that belongs to the previous request until the new one arrives.
+  const catalog = catalogState?.requestId === requestId ? catalogState.value : null
   const [deck, setDeck] = useState<MaterialsDeck | null>(null)
   const [loadingCatalog, setLoadingCatalog] = useState(false)
   const [loadingDeck, setLoadingDeck] = useState(false)
@@ -208,6 +239,7 @@ export function MaterialsDashboard({ projectId, requestId, canRefreshSchema = fa
   const [refreshBusy, setRefreshBusy] = useState(false)
   const [refreshNotice, setRefreshNotice] = useState('')
   const refreshScope = useRef('')
+  const deckKey = useRef('')
   const [sort, setSort] = useState<{ key: SortKey; direction: 'asc' | 'desc' }>({ key: 'part', direction: 'asc' })
   const [page, setPage] = useState(0)
   const environment: MaterialsEnvironment = 'DISTRIBUTION'
@@ -224,71 +256,98 @@ export function MaterialsDashboard({ projectId, requestId, canRefreshSchema = fa
     } catch (reason) { if (refreshScope.current === requestedScope) setRefreshNotice(reason instanceof Error ? reason.message : '저장소를 갱신하지 못했습니다.') }
     finally { setRefreshBusy(false) }
   }
-  const selectedSceneId = searchParams.get('scene') ?? ''
-  const selectedPartId = searchParams.get('part') ?? ''
-  const filter = searchParams.get('filter') ?? ''
-  const selectedScene = catalog?.scenes.find((item) => item.scene_id === selectedSceneId) ?? null
+  const selectedSceneId = getParam('scene')
+  const selectedPartId = getParam('part')
+  const filter = getParam('filter')
+  const path = useMemo(() => materialsPath(catalog, { caseId, loadCaseId, runId, optionId }), [caseId, catalog, loadCaseId, optionId, runId])
+  const selectedScene = path.scenes.find((item) => item.scene_id === selectedSceneId) ?? null
 
-  const updateQuery = (patch: Record<string, string | null>, replace = true) => {
-    const next = new URLSearchParams(searchParams)
-    for (const [key, value] of Object.entries(patch)) {
-      if (value) next.set(key, value)
-      else next.delete(key)
-    }
-    if (next.toString() !== searchParams.toString()) setSearchParams(next, { replace })
-  }
+  const updateQuery = (patch: Record<string, string | null>, replace = true) => updateParams(patch, { replace })
+  const chooseLevel = (level: HierarchyLevel, value: string) => selectLevel(level, value)
 
   useEffect(() => {
-    if (!searchParams.has('environment')) return
-    const next = new URLSearchParams(searchParams)
-    next.delete('environment')
-    setSearchParams(next, { replace: true })
-  }, [searchParams, setSearchParams])
+    if (!getParam('environment')) return
+    updateParams({ environment: null }, { replace: true })
+  }, [getParam, updateParams])
 
   useEffect(() => {
     if (!requestId) {
-      setCatalog(null)
+      setCatalogState(null)
       setDeck(null)
       return
     }
     const controller = new AbortController()
     setLoadingCatalog(true)
-    setCatalog(null)
     setDeck(null)
     setError('')
     materialsApi.catalog(requestId, environment, controller.signal).then((value) => {
-      if (!controller.signal.aborted) setCatalog(value)
+      if (!controller.signal.aborted) setCatalogState({ requestId, value })
     }).catch((reason: unknown) => {
       if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : '소재 덱 위치를 불러오지 못했습니다.')
     }).finally(() => { if (!controller.signal.aborted) setLoadingCatalog(false) })
     return () => controller.abort()
   }, [requestId, environment, refreshToken, manualRefresh])
 
+  // URL repair: restore parents of an old `scene`-only link, drop stale ids
+  // (with their children) and auto-select single candidates. It never moves
+  // to another branch just because the chosen one has no deck.
   useEffect(() => {
     if (!catalog) return
-    const current = catalog.scenes.find((item) => item.scene_id === selectedSceneId)
-    if (current) return
-    const fallback = catalog.scenes.find((item) => item.has_deck) ?? catalog.scenes[0]
-    updateQuery({ scene: fallback?.scene_id ?? null, part: null }, true)
-    // URL repair only runs when the catalog or selected scene changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [catalog, selectedSceneId])
+    const patch: Record<string, string | null> = {}
+    const current = { caseId, loadCaseId, runId, optionId }
+    const sceneRecord = selectedSceneId ? catalog.scenes.find((item) => item.scene_id === selectedSceneId) : undefined
+    if (!current.caseId && sceneRecord?.case_id && catalog.hierarchy.cases.length) {
+      current.caseId = sceneRecord.case_id; current.loadCaseId = sceneRecord.load_case_id; current.runId = sceneRecord.execution_run_id; current.optionId = sceneRecord.run_option_id
+      Object.assign(patch, { case: current.caseId, case_load: current.loadCaseId || null, case_run: current.runId || null, case_option: current.optionId || null })
+    }
+    const levels: Array<[HierarchyLevel, 'caseId' | 'loadCaseId' | 'runId' | 'optionId', (state: typeof current) => Array<{ id: string }>]> = [
+      ['case', 'caseId', () => catalog.hierarchy.cases],
+      ['case_load', 'loadCaseId', (state) => materialsPath(catalog, state).loads],
+      ['case_run', 'runId', (state) => materialsPath(catalog, state).runs],
+      ['case_option', 'optionId', (state) => materialsPath(catalog, state).options],
+    ]
+    let cleared = false
+    for (const [key, field, candidatesFor] of levels) {
+      if (cleared) {
+        if (current[field]) { current[field] = ''; patch[key] = null }
+        continue
+      }
+      const candidates = candidatesFor(current)
+      if (current[field] && !candidates.some((item) => item.id === current[field])) {
+        current[field] = ''; patch[key] = null; cleared = true
+        continue
+      }
+      if (!current[field] && candidates.length === 1) { current[field] = candidates[0].id; patch[key] = current[field] }
+      if (!current[field] && candidates.length) cleared = true
+    }
+    const resolved = materialsPath(catalog, current)
+    if (selectedSceneId && !resolved.scenes.some((item) => item.scene_id === selectedSceneId)) {
+      patch.scene = null; patch.part = null
+    }
+    if ((!selectedSceneId || patch.scene === null) && resolved.scenes.length === 1) {
+      patch.scene = resolved.scenes[0].scene_id; patch.part = null
+    }
+    if (Object.keys(patch).length) updateParams(patch, { replace: true })
+  }, [caseId, catalog, loadCaseId, optionId, runId, selectedSceneId, updateParams])
 
   useEffect(() => {
     if (!requestId || !selectedScene?.has_deck) {
+      deckKey.current = ''
       setDeck(null)
       setLoadingDeck(false)
       return
     }
     const controller = new AbortController()
+    const key = `${requestId}:${selectedScene.scene_id}`
+    deckKey.current = key
     setLoadingDeck(true)
     setDeck(null)
     setError('')
     materialsApi.deck(requestId, selectedScene.scene_id, environment, controller.signal).then((value) => {
-      if (!controller.signal.aborted) setDeck(value.deck)
+      if (!controller.signal.aborted && deckKey.current === key) setDeck(value.deck)
     }).catch((reason: unknown) => {
-      if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : '선택한 씬의 소재 덱을 읽지 못했습니다.')
-    }).finally(() => { if (!controller.signal.aborted) setLoadingDeck(false) })
+      if (!controller.signal.aborted && deckKey.current === key) setError(reason instanceof Error ? reason.message : '선택한 씬의 소재 덱을 읽지 못했습니다.')
+    }).finally(() => { if (!controller.signal.aborted && deckKey.current === key) setLoadingDeck(false) })
     return () => controller.abort()
   }, [requestId, selectedScene?.scene_id, selectedScene?.has_deck, environment, refreshToken, manualRefresh])
 
@@ -349,16 +408,27 @@ export function MaterialsDashboard({ projectId, requestId, canRefreshSchema = fa
       <div><span>RADioss STARTER DECK</span><h1>모델 소재·물성</h1><p>Part 참조를 따라 Material, Property, Failure 모델과 함수 곡선을 살펴봅니다.</p></div>
       <div className="materials-page-controls">
         {canRefreshSchema && <button type="button" className="materials-export-button" disabled={refreshBusy || !projectId || !requestId} onClick={() => void refreshSchema()}><RotateCw /> {refreshBusy ? '갱신 중…' : '저장소 Refresh'}</button>}
-        <label><span>덱 위치</span><select aria-label="소재 덱 위치 선택" value={selectedSceneId} disabled={!catalog?.scenes.length} onChange={(event) => updateQuery({ scene: event.target.value, part: null }, false)}>
-          {!catalog?.scenes.length && <option value="">{loadingCatalog ? '불러오는 중…' : error ? '조회 실패' : '위치 없음'}</option>}
-          {(catalog?.scenes ?? []).map((scene) => <option key={scene.scene_id} value={scene.scene_id}>{scene.label}{scene.has_deck ? '' : ' · 덱 없음'}</option>)}
-        </select></label>
       </div>
+      {catalog && (catalog.scenes.length || catalog.hierarchy.cases.length) ? <div className="materials-hierarchy" role="group" aria-label="소재 덱 경로">
+        <div className="materials-hierarchy-path">
+          {path.flat ? null : <>
+            <HierarchyChoice label="Case" value={caseId} choices={path.cases.map((item) => ({ id: item.id, label: item.label, title: item.relative_path }))} onChange={(value) => chooseLevel('case', value)} disabledReason="이 의뢰에 확인된 Case가 없습니다." />
+            <HierarchyChoice label="하중경우" value={loadCaseId} choices={path.loads.map((item) => ({ id: item.id, label: item.label, title: item.relative_path }))} disabled={!caseId} disabledReason={caseId ? '이 Case에 하중경우 폴더가 없습니다.' : 'Case를 먼저 선택하세요.'} onChange={(value) => chooseLevel('case_load', value)} />
+            <HierarchyChoice label="Run Case" value={runId} choices={path.runs.map((item) => ({ id: item.id, label: item.label, title: item.relative_path }))} disabled={!loadCaseId} disabledReason={loadCaseId ? '이 하중경우에 Run Case가 없습니다.' : '하중경우를 먼저 선택하세요.'} onChange={(value) => chooseLevel('case_run', value)} />
+            <HierarchyChoice label="Run Option" value={optionId} choices={path.options.map((item) => ({ id: item.id, label: item.label, title: item.relative_path || item.label }))} disabled={!runId} disabledReason={runId ? '이 Run Case에 Run Option이 없습니다.' : 'Run Case를 먼저 선택하세요.'} onChange={(value) => chooseLevel('case_option', value)} />
+          </>}
+          <HierarchyChoice label="Scene" value={selectedSceneId} choices={path.scenes.map((item) => ({ id: item.scene_id, label: `${item.label}${item.has_deck ? '' : ' · 덱 없음'}`, title: item.relative_path }))} disabled={!path.ready} disabledReason={path.ready ? '선택한 경로에 Scene이 없습니다.' : '상위 경로를 먼저 선택하세요.'} onChange={(value) => updateQuery({ scene: value || null, part: null }, false)} />
+        </div>
+        {selectedScene ? <div className="materials-scene-location">
+          <span title={selectedScene.relative_path}>{selectedScene.relative_path}</span>
+          <b className={selectedScene.has_deck ? 'present' : 'absent'}>{selectedScene.has_deck ? '덱 있음' : '덱 없음'}</b>
+        </div> : null}
+      </div> : null}
     </header>
 
     {refreshNotice && <div className="materials-error" role="status"><span>{refreshNotice}</span></div>}
     {error && <div className="materials-error" role="alert"><AlertTriangle /><span>{error}</span><button type="button" onClick={() => setManualRefresh((value) => value + 1)}><RotateCw /> 다시 불러오기</button></div>}
-    {!requestId ? <div className="materials-empty-state"><Box /><strong>의뢰를 선택하면 소재 덱을 조회합니다.</strong><span>조회 권한이 있는 의뢰만 목록에 표시됩니다.</span></div> : loadingCatalog ? <div className="materials-empty-state" role="status">유통환경 덱 위치를 불러오고 있습니다…</div> : error && !catalog ? <div className="materials-empty-state"><AlertTriangle /><strong>조회 실패</strong><span>오류를 확인하고 다시 불러오세요.</span></div> : catalog && !catalog.scenes.length ? <div className="materials-empty-state"><Layers /><strong>이 의뢰에서 확인된 덱 위치가 없습니다.</strong><span>의뢰의 유통환경 결과 폴더를 확인하세요.</span></div> : selectedScene && !selectedScene.has_deck ? <div className="materials-empty-state"><Box /><strong>선택한 위치에서 Parts와 Materials 덱을 찾지 못했습니다.</strong><span title={selectedScene.relative_path}>{selectedScene.relative_path}</span></div> : <div className="materials-workspace">
+    {!requestId ? <div className="materials-empty-state"><Box /><strong>의뢰를 선택하면 소재 덱을 조회합니다.</strong><span>조회 권한이 있는 의뢰만 목록에 표시됩니다.</span></div> : loadingCatalog ? <div className="materials-empty-state" role="status">유통환경 덱 위치를 불러오고 있습니다…</div> : error && !catalog ? <div className="materials-empty-state"><AlertTriangle /><strong>조회 실패</strong><span>오류를 확인하고 다시 불러오세요.</span></div> : catalog && !catalog.scenes.length ? <div className="materials-empty-state"><Layers /><strong>이 의뢰에서 확인된 덱 위치가 없습니다.</strong><span>의뢰의 유통환경 결과 폴더를 확인하세요.</span></div> : !selectedScene ? <div className="materials-empty-state"><Layers /><strong>{path.ready && !path.scenes.length ? '선택한 경로에 Scene이 없습니다.' : '경로와 Scene을 선택하면 소재 덱을 조회합니다.'}</strong><span>Case → 하중경우 → Run Case → Run Option → Scene 순서로 선택하세요.</span></div> : !selectedScene.has_deck ? <div className="materials-empty-state"><Box /><strong>선택한 위치에서 Parts와 Materials 덱을 찾지 못했습니다.</strong><span title={selectedScene.relative_path}>{selectedScene.relative_path}</span></div> : <div className="materials-workspace">
       <section className="materials-list-panel" aria-label="Part 목록">
         <div className="materials-list-toolbar">
           <label className="materials-search"><Search /><input aria-label="Part 검색" placeholder="Part, Material, Property 검색" value={filter} onChange={(event) => updateQuery({ filter: event.target.value || null }, true)} /></label>

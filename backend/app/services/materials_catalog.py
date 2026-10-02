@@ -9,7 +9,7 @@ from typing import Any
 
 from ..database_connection import ConnectionLike, rows
 from ..parsers.radioss_deck_parser import RadiossDeckParser
-from . import (folder_discovery_environment, folder_discovery_scan, folder_schema_resolver,
+from . import (folder_discovery_environment, folder_schema_hierarchy, folder_discovery_scan, folder_schema_resolver,
                result_registration_paths, spdm_storage)
 
 MAX_FILE_BYTES = 64 * 1024 * 1024
@@ -459,7 +459,25 @@ def _catalog_items(conn: ConnectionLike, root: Path, root_id: str, root_key: str
 def catalog(conn: ConnectionLike, request_id: str, environment: str) -> dict[str, Any]:
     project_id, scope, root, root_id, root_key, schema = _request_scope(conn, request_id, environment)
     items = _catalog_items(conn, root, root_id, root_key, scope, schema)
-    return {"request_id": request_id, "environment": scope["environment"], "scenes": items}
+    # Case results and materials share one hierarchy projection, so the same URL
+    # selection (case/case_load/case_run/case_option) means the same folders.
+    projected = folder_schema_hierarchy.project_schema_hierarchy(schema, scope["locations"], root_key)
+    by_path = {str(item.get("relative_path") or "").casefold(): item for item in projected["scenes"]}
+    for item in items:
+        location = by_path.get(str(item["relative_path"]).casefold())
+        for key in ("case_id", "load_case_id", "execution_run_id", "run_option_id"):
+            item[key] = str(location.get(key) or "") if location else ""
+    hierarchy = {
+        "cases": [
+            {"id": case["id"], "label": case["label"], "relative_path": case["relative_path"]}
+            for case in projected["cases"].values()
+        ],
+        "load_cases": projected["load_cases"],
+        "execution_runs": projected["execution_runs"],
+        "run_options": projected["run_options"],
+    }
+    return {"request_id": request_id, "environment": scope["environment"], "scenes": items,
+            "hierarchy": hierarchy}
 
 
 def _resolve_scene(conn: ConnectionLike, request_id: str, environment: str,

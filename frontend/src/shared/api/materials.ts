@@ -11,8 +11,34 @@ export type MaterialsScene = {
   hierarchy: Record<string, Record<string, unknown>>
   kind: 'SCENE' | 'RESULTS'
   has_deck: boolean
+  /** Shared Folder Schema hierarchy ids; '' when the Scene could not be placed. */
+  case_id: string
+  load_case_id: string
+  execution_run_id: string
+  run_option_id: string
 }
-export type MaterialsCatalog = { scenes: MaterialsScene[] }
+export type MaterialsHierarchyCase = { id: string; label: string; relative_path: string }
+export type MaterialsHierarchyLoadCase = MaterialsHierarchyCase & { case_id: string; match_status: string | null }
+export type MaterialsHierarchyRun = MaterialsHierarchyCase & { case_id: string; load_case_id: string }
+export type MaterialsHierarchyOption = {
+  id: string
+  label: string
+  relative_path: string
+  case_id: string
+  execution_run_id: string
+  run_option_id: string
+  option_status: 'PRESENT' | 'ABSENT' | 'UNRESOLVED'
+  option_label: string | null
+  mode: string | null
+}
+/** Schema-only (capture_id null) choices; ids match the Case results dashboard catalog. */
+export type MaterialsHierarchy = {
+  cases: MaterialsHierarchyCase[]
+  load_cases: MaterialsHierarchyLoadCase[]
+  execution_runs: MaterialsHierarchyRun[]
+  run_options: MaterialsHierarchyOption[]
+}
+export type MaterialsCatalog = { request_id: string | null; environment: string | null; scenes: MaterialsScene[]; hierarchy: MaterialsHierarchy }
 export type MaterialsPart = {
   id: string
   title: string | null
@@ -138,7 +164,50 @@ function scene(value: unknown): MaterialsScene | null {
       return parsed ? [[key, parsed]] : []
     })),
     has_deck: item.has_deck === true,
+    case_id: idText(item.case_id),
+    load_case_id: idText(item.load_case_id),
+    execution_run_id: idText(item.execution_run_id),
+    run_option_id: idText(item.run_option_id),
   }
+}
+
+function idText(value: unknown): string {
+  return id(value) ?? ''
+}
+
+function hierarchyBase(value: unknown): (MaterialsHierarchyCase & { item: Record<string, unknown> }) | null {
+  const item = record(value)
+  const itemId = id(item?.id)
+  if (!item || !itemId) return null
+  return { id: itemId, label: optionalText(item.label) ?? itemId, relative_path: optionalText(item.relative_path) ?? '', item }
+}
+
+function hierarchy(value: unknown): MaterialsHierarchy {
+  const payload = record(value)
+  const cases = rows(payload?.cases).flatMap((entry): MaterialsHierarchyCase[] => {
+    const base = hierarchyBase(entry)
+    return base ? [{ id: base.id, label: base.label, relative_path: base.relative_path }] : []
+  })
+  const loadCases = rows(payload?.load_cases).flatMap((entry): MaterialsHierarchyLoadCase[] => {
+    const base = hierarchyBase(entry)
+    return base ? [{ id: base.id, label: base.label, relative_path: base.relative_path, case_id: idText(base.item.case_id), match_status: optionalText(base.item.match_status) }] : []
+  })
+  const runs = rows(payload?.execution_runs).flatMap((entry): MaterialsHierarchyRun[] => {
+    const base = hierarchyBase(entry)
+    return base ? [{ id: base.id, label: base.label, relative_path: base.relative_path, case_id: idText(base.item.case_id), load_case_id: idText(base.item.load_case_id) }] : []
+  })
+  const options = rows(payload?.run_options).flatMap((entry): MaterialsHierarchyOption[] => {
+    const base = hierarchyBase(entry)
+    if (!base) return []
+    const status = base.item.option_status
+    return [{
+      id: base.id, label: base.label, relative_path: base.relative_path, case_id: idText(base.item.case_id),
+      execution_run_id: idText(base.item.execution_run_id), run_option_id: idText(base.item.run_option_id) || base.id,
+      option_status: status === 'ABSENT' || status === 'UNRESOLVED' ? status : 'PRESENT',
+      option_label: optionalText(base.item.option_label), mode: optionalText(base.item.mode),
+    }]
+  })
+  return { cases, load_cases: loadCases, execution_runs: runs, run_options: options }
 }
 
 function keyedRecord(value: unknown): Record<string, unknown> {
@@ -149,7 +218,7 @@ function parseCatalog(value: unknown): MaterialsCatalog {
   const payload = record(value)
   if (!payload || !Array.isArray(payload.scenes)) throw new Error('소재 카탈로그 응답 형식이 올바르지 않습니다.')
   const scenes = payload.scenes.map(scene).filter((item): item is MaterialsScene => item !== null)
-  return { scenes }
+  return { request_id: optionalText(payload.request_id), environment: optionalText(payload.environment), scenes, hierarchy: hierarchy(payload.hierarchy) }
 }
 
 function parseDeck(value: unknown): MaterialsDeckResponse {

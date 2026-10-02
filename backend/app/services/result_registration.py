@@ -273,9 +273,35 @@ def prepare_folders(conn: ConnectionLike, project_id: str, request_id: str, envi
     result = paths.prepare_folders(conn, project_id, request_id, environment, parent, segments, confirm_create, actor)
     if confirm_create and result.get("created"):
         result["schema_refresh"] = _refresh_schema(conn, project_id, request_id, environment, actor)
+        if result["schema_refresh"].get("status") != "FAILED":
+            # The draft step compares the posted context with the live Folder
+            # Schema candidate. Return that candidate's ids (not the ids the
+            # path builder derived before the refresh) so the next step agrees.
+            schema_context = _schema_candidate_context(
+                conn, project_id, request_id, environment, str(result.get("result_relative_path") or ""))
+            if schema_context is not None:
+                result["context"] = schema_context
     else:
         result["schema_refresh"] = {"status": "UNCHANGED", "message": None}
     return result
+
+
+def _schema_candidate_context(conn: ConnectionLike, project_id: str, request_id: str,
+                              environment: str, result_relative_path: str) -> dict[str, Any] | None:
+    if not result_relative_path:
+        return None
+    try:
+        root, _root_id, root_key = paths._root(conn)
+        scope, _schema_root, _schema_root_key, _environment = result_registration_locations._scope_data(
+            conn, project_id, request_id, environment)
+        schema = scope.pop("_schema")
+        candidates = result_registration_locations._result_candidates(
+            conn, root, root_key, project_id, request_id, scope["environment"], schema)
+    except ResultRegistrationError:
+        return None
+    wanted = paths._relative(result_relative_path)
+    candidate = next((item for item in candidates if item["relative_path"] == wanted), None)
+    return _public_context(candidate["context"]) if candidate else None
 
 
 def _refresh_schema(conn: ConnectionLike, project_id: str, request_id: str,

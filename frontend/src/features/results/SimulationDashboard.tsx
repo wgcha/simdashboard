@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { Link } from 'react-router-dom'
 import { AlertTriangle, Expand, Image as ImageIcon, Layers3, Pause, Play, RotateCcw } from 'lucide-react'
 import { simulationDashboardApi, type DashboardAsset, type DashboardCatalog, type DashboardChoice, type DashboardComparisonMember, type DashboardDistribution, type DashboardEdgePeak, type DashboardMember, type DashboardScene, type DashboardSceneDetail, type DashboardValue, type UsageDashboard } from '../../shared/api/simulationDashboard'
 import { folderEnvironmentApi } from '../../shared/api/folderEnvironment'
@@ -10,6 +11,7 @@ import './SimulationDashboard.css'
 import { SimulationLocationMap } from './SimulationLocationMap'
 import { SimulationResultGraph } from './SimulationResultGraph'
 import { CaseFinalizationPanel } from './CaseFinalizationPanel'
+import { useCaseHierarchyParams } from '../../shared/hooks/useCaseHierarchyParams'
 
 type Props = { projectId: string; requestId: string; canManageFolders?: boolean; canRefreshSchema?: boolean }
 type Tab = 'usage' | 'distribution'
@@ -31,20 +33,24 @@ function CompactChoice({ label, value, choices, onChange, disabled = false }: { 
   if (unique.length === 1) return <div className="simulation-dashboard__choice"><span>{label}</span><b title={unique[0].label}>{unique[0].label}</b></div>
   return <SelectField label={label} value={value} choices={unique} onChange={onChange} disabled={disabled} />
 }
-function initialParam(name: string) { return typeof window === 'undefined' ? '' : new URLSearchParams(window.location.search).get(name) ?? '' }
 function currentHierarchyChoice(item: DashboardChoice, activeCaptureId: string) {
   return item.capture_id == null || (activeCaptureId !== '' && item.capture_id === activeCaptureId)
 }
 
 export function SimulationDashboard({ projectId, requestId, canManageFolders = false, canRefreshSchema = false }: Props) {
-  const [tab, setTab] = useState<Tab>(() => initialParam('result_environment') === 'DISTRIBUTION' ? 'distribution' : 'usage')
+  // Selection lives in the router URL (shared with the materials tab): user
+  // changes push a history entry, automatic repairs replace it.
+  const { get: getParam, caseId, loadCaseId, runId, optionId, update: updateParams } = useCaseHierarchyParams()
+  const tab: Tab = getParam('result_environment') === 'DISTRIBUTION' ? 'distribution' : 'usage'
+  const captureId = getParam('capture')
+  const setTab = (next: Tab) => { if (next !== tab) updateParams({ result_environment: next === 'usage' ? 'USAGE' : 'DISTRIBUTION', case: null, capture: null, case_load: null, case_run: null, case_option: null, scene: null, part: null }) }
+  const setCaseId = (value: string) => updateParams({ case: value || null })
+  const setCaptureId = (value: string) => updateParams({ capture: value || null })
+  const setLoadCaseId = (value: string) => updateParams({ case_load: value || null })
+  const setRunId = (value: string) => updateParams({ case_run: value || null })
+  const setOptionId = (value: string) => updateParams({ case_option: value || null })
   const [catalog, setCatalog] = useState<DashboardCatalog | null>(null)
   const [catalogError, setCatalogError] = useState('')
-  const [caseId, setCaseId] = useState(() => initialParam('case'))
-  const [captureId, setCaptureId] = useState(() => initialParam('capture'))
-  const [loadCaseId, setLoadCaseId] = useState(() => initialParam('case_load'))
-  const [runId, setRunId] = useState(() => initialParam('case_run'))
-  const [optionId, setOptionId] = useState(() => initialParam('case_option'))
   const [mode, setMode] = useState('')
   const [componentId, setComponentId] = useState('')
   const [basis, setBasis] = useState<'' | 'REPORTED_SUMMARY' | 'DETAIL'>('')
@@ -54,19 +60,20 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
   const [refreshBusy, setRefreshBusy] = useState(false)
   const [refreshNotice, setRefreshNotice] = useState('')
   const latestCatalogKey = useRef('')
-  // Treat URL-derived selection as the initial scope. Only a later request or
-  // environment change clears it; otherwise a shared deep link would be
-  // erased before its first catalog response arrives.
+  const loadedCatalogKey = useRef('')
+  // A request or environment change drops the previous catalog and local
+  // display state. URL ids are kept and validated against the new catalog,
+  // so deep links and browser history restore their selection.
   const catalogScope = useRef(`${projectId}:${requestId}:${tab}`)
 
   useEffect(() => {
     const controller = new AbortController(); const key = `${projectId}:${requestId}:${tab}`; latestCatalogKey.current = key
     if (catalogScope.current !== key) {
-      catalogScope.current = key; setCatalog(null); setCaseId(''); setCaptureId(''); setLoadCaseId(''); setRunId(''); setOptionId(''); setMode(''); setComponentId(''); setBasis('')
+      catalogScope.current = key; setCatalog(null); setMode(''); setComponentId(''); setBasis('')
     }
     setCatalogError('')
     simulationDashboardApi.catalog(projectId, requestId, tab === 'usage' ? 'USAGE' : 'DISTRIBUTION', controller.signal).then((next) => {
-      if (!controller.signal.aborted && latestCatalogKey.current === key) setCatalog(next)
+      if (!controller.signal.aborted && latestCatalogKey.current === key) { loadedCatalogKey.current = key; setCatalog(next) }
     }).catch((reason) => { if (!controller.signal.aborted) setCatalogError(errorText(reason)) })
     return () => controller.abort()
   }, [catalogRevision, projectId, requestId, tab])
@@ -82,7 +89,13 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
   const loadChoices = catalog?.load_cases.filter((item) => item.case_id === caseId && currentHierarchyChoice(item, activeCaptureIdForChoices)) ?? []
   const runChoices = catalog?.execution_runs.filter((item) => item.case_id === caseId && item.load_case_id === loadCaseId && currentHierarchyChoice(item, activeCaptureIdForChoices)) ?? []
   useEffect(() => {
-    if (!catalog) return
+    if (!catalog || loadedCatalogKey.current !== `${projectId}:${requestId}:${tab}`) return
+    // Automatic repairs replace the history entry instead of pushing one.
+    const setCaseId = (value: string) => updateParams({ case: value || null }, { replace: true })
+    const setCaptureId = (value: string) => updateParams({ capture: value || null }, { replace: true })
+    const setLoadCaseId = (value: string) => updateParams({ case_load: value || null }, { replace: true })
+    const setRunId = (value: string) => updateParams({ case_run: value || null }, { replace: true })
+    const setOptionId = (value: string) => updateParams({ case_option: value || null }, { replace: true })
     const choose = (current: string, choices: DashboardChoice[], setter: (value: string) => void) => {
       const unique = Array.from(new Map(choices.map((item) => [item.id, item])).values())
       if (unique.some((item) => item.id === current)) return
@@ -103,13 +116,8 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
     if (selectedOption && mode !== selectedOption.mode) setMode(selectedOption.mode ?? selectedOption.id)
     if (tab === 'distribution' && mode) choose(componentId, catalog.components.filter((item) => item.execution_run_id === runId && item.mode === mode && item.capture_id === activeCaptureId && (!item.run_option_id || item.run_option_id === optionId)), setComponentId)
     if (tab === 'distribution') choose(basis, catalog.bases, (value) => setBasis(value as typeof basis))
-  }, [basis, captureId, caseId, catalog, componentId, loadCaseId, mode, optionId, options, runId, tab])
-  useEffect(() => {
-    const url = new URL(window.location.href)
-    const values: Record<string, string> = { result_environment: tab === 'usage' ? 'USAGE' : 'DISTRIBUTION', case: caseId, capture: captureId === SCHEMA_CONTEXT ? '' : captureId, case_load: loadCaseId, case_run: runId, case_option: optionId }
-    Object.entries(values).forEach(([key, value]) => value ? url.searchParams.set(key, value) : url.searchParams.delete(key))
-    window.history.replaceState(window.history.state, '', url)
-  }, [captureId, caseId, loadCaseId, optionId, runId, tab])
+  }, [basis, captureId, caseId, catalog, componentId, loadCaseId, mode, optionId, options, projectId, requestId, runId, tab, updateParams])
+  // Router Link applies the deployment basename (for example /home/).
   const folderHref = `/workspace/catalog/schemas?${new URLSearchParams({ project: projectId, request: requestId, result_environment: tab === 'usage' ? 'USAGE' : 'DISTRIBUTION' }).toString()}`
   const refreshSchema = async () => {
     const refreshKey = `${projectId}:${requestId}:${tab}`
@@ -154,7 +162,7 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
   return <section className="simulation-dashboard" data-ui-density="v1" aria-label="SPDM 해석 결과 대시보드">
     <header className="simulation-dashboard__head"><div><span>RESULT EXPLORER</span><h2>해석 결과 대시보드</h2><p>표시값과 자산은 선택한 Case·Run·capture 문맥의 서버 결과만 사용합니다.</p></div><nav aria-label="결과 환경"><Button size="sm" className={tab === 'usage' ? 'active' : ''} onClick={() => setTab('usage')}>사용환경</Button><Button size="sm" className={tab === 'distribution' ? 'active' : ''} onClick={() => setTab('distribution')}>유통환경</Button></nav></header>
     {catalogError ? <State message={catalogError} error /> : <>{controls}{catalog?.folder_schema?.status === 'UNAVAILABLE' ? <State message={`현재 Folder Schema를 읽을 수 없습니다${catalog.folder_schema?.diagnostic ? ` · ${catalog.folder_schema.diagnostic.message}` : ''}. 아래 수집 이력은 저장된 capture 문맥으로 조회됩니다.`} error /> : null}{catalog && !catalog.cases.length ? <State message="확정된 Folder Schema Case나 수집 이력이 없습니다. 폴더 연결·규칙에서 구조를 확인하세요." /> : null}</>}
-    <div className="simulation-dashboard__source-link"><span>새 결과는 폴더 연결에서 등록하고 읽습니다.</span>{canManageFolders ? <a href={folderHref}>폴더 연결·규칙 열기</a> : null}{canRefreshSchema ? <Button size="sm" disabled={refreshBusy || !projectId || !requestId} onClick={() => void refreshSchema()}>{refreshBusy ? '갱신 중…' : '저장소 Refresh'}</Button> : null}<Button size="sm" onClick={() => setCatalogRevision((value) => value + 1)}>결과 다시 읽기</Button></div>
+    <div className="simulation-dashboard__source-link"><span>새 결과는 폴더 연결에서 등록하고 읽습니다.</span>{canManageFolders ? <Link to={folderHref}>폴더 연결·규칙 열기</Link> : null}{canRefreshSchema ? <Button size="sm" disabled={refreshBusy || !projectId || !requestId} onClick={() => void refreshSchema()}>{refreshBusy ? '갱신 중…' : '저장소 Refresh'}</Button> : null}<Button size="sm" onClick={() => setCatalogRevision((value) => value + 1)}>결과 다시 읽기</Button></div>
     {refreshNotice && <div className="simulation-dashboard__state" role="status">{refreshNotice}</div>}
     {tab === 'usage' ? <UsageArea key={`${caseId}:${captureId}:${referenceCaseId}:${referenceCaptureId}`} caseId={dashboardCaseId} captureId={activeCaptureId} referenceCaseId={catalog?.cases.find((item) => item.id === referenceCaseId)?.dashboard_case_id ?? referenceCaseId} referenceCaptureId={referenceCaptureId} /> : <DistributionArea key={`${projectId}:${requestId}`} projectId={projectId} requestId={requestId} caseId={dashboardCaseId} loadCaseId={loadCaseId} captureId={activeCaptureId} runId={runId} optionId={optionId} mode={mode} componentId={componentId} basis={basis} hasCapturedRun={runChoices.some((item) => item.id === runId && item.capture_id === activeCaptureId)} hasCapturedOption={options.some((item) => item.id === optionId && item.capture_id === activeCaptureId)} emptyContextMessage={catalog?.folder_schema?.status === 'AVAILABLE' && selectedCase?.source === 'FOLDER_SCHEMA' ? (selectedCase.capture_count ? '현재 폴더 구조를 조회 중입니다. 결과를 보려면 수집 버전을 선택하세요.' : '폴더 구조는 확인됐지만 이 Case의 수집된 결과가 없습니다. 결과를 등록하고 읽어 주세요.') : '수집 버전을 선택하면 저장된 결과를 조회할 수 있습니다.'} />}
   </section>
