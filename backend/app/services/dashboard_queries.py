@@ -56,7 +56,8 @@ def catalog(conn, request_id, environment, project_id=None):
               "bases": [{"id": "REPORTED_SUMMARY", "label": "원본 요약"}, {"id": "DETAIL", "label": "상세 추출값"}]}
     records = conn.execute("""SELECT dc.id,dc.source_name,dc.storage_root_id,dc.relative_path,c.id,c.created_at,c.payload_json
         FROM dashboard_cases dc LEFT JOIN dashboard_captures c ON c.case_id=dc.id
-        WHERE dc.request_id=? AND dc.environment=? ORDER BY dc.source_name,c.created_at DESC""",
+        WHERE dc.request_id=? AND dc.environment=? ORDER BY dc.source_name,c.created_at DESC,c.id DESC""",
+        # Same capture order as get_latest_capture (created_at,id), reversed: one "latest" rule.
         [request_id, environment]).fetchall()
     schema_cases: dict[str, dict[str, Any]] = {}
     current_storage_root_id = None

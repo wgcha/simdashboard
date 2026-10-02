@@ -267,13 +267,16 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
     labels: { project: '', request: '', caseLabel: caseText, reference: referenceCaseId ? [caseLabel(referenceCaseId), catalog?.captures.find((item) => item.id === referenceCaptureId)?.label].filter(Boolean).join(' · ') : '' },
   } : null
   // Final designation reports cover the whole Case regardless of the on-screen selection.
-  const finalScope: CaseReportFinalScope | null = materialsActive || !dashboardCaseId || !activeCaptureId ? null : tab === 'usage'
-    ? { source: { kind: 'case_usage', projectId, requestId, caseId: dashboardCaseId, captureId: activeCaptureId, referenceCaseId: '', referenceCaptureId: '' }, labels: { project: '', request: '', caseLabel: caseText, reference: '' } }
-    : { source: { kind: 'case_final', projectId, requestId, caseId: dashboardCaseId, captureId: activeCaptureId, catalogCaseId: selectedCase?.id ?? caseId, basis, edgeKeys: edges.join(','), lineIndices: lines.join(',') }, labels: { project: '', request: '', caseLabel: caseText, component: componentLabel ?? '' } }
+  // The Final report always uses the same basis as Final designation: the merged latest
+  // result (newest capture per Scene; for usage the newest capture), never a history entry.
+  const finalCaptureId = dashboardCaseId ? `latest:${dashboardCaseId}` : ''
+  const finalScope: CaseReportFinalScope | null = materialsActive || !dashboardCaseId || !activeCaptureId || !hasCapturedCase ? null : tab === 'usage'
+    ? { source: { kind: 'case_usage', projectId, requestId, caseId: dashboardCaseId, captureId: finalCaptureId, referenceCaseId: '', referenceCaptureId: '' }, labels: { project: '', request: '', caseLabel: caseText, reference: '' } }
+    : { source: { kind: 'case_final', projectId, requestId, caseId: dashboardCaseId, captureId: finalCaptureId, catalogCaseId: selectedCase?.id ?? caseId, basis, edgeKeys: edges.join(','), lineIndices: lines.join(',') }, labels: { project: '', request: '', caseLabel: caseText, component: componentLabel ?? '' } }
   return <section className="simulation-dashboard" data-ui-density="v1" aria-label="SPDM 해석 결과 대시보드">
     <header className="case-results-head">
       <div className="case-env-toggle" role="group" aria-label="결과 환경"><button type="button" aria-pressed={tab === 'usage'} className={tab === 'usage' ? 'active' : ''} onClick={() => setTab('usage')}>사용환경</button><button type="button" aria-pressed={tab === 'distribution'} className={tab === 'distribution' ? 'active' : ''} onClick={() => setTab('distribution')}>유통환경</button></div>
-      <div className="case-results-head__actions">{headerExtra}{catalog ? <CaseReportLauncher scope={reportScope} disabledReason={materialsActive ? '소재·물성 탭에서는 보고서를 만들지 않습니다.' : tab === 'usage' ? '결과가 있는 사용환경 Case를 선택하면 보고서를 만들 수 있습니다.' : '유통환경에서 결과가 있는 Run Case와 Run Option을 선택하면 보고서를 만들 수 있습니다.'} /> : null}{catalog ? <CaseFinalizationPanel projectId={projectId} requestId={requestId} environment={tab === 'usage' ? 'USAGE' : 'DISTRIBUTION'} caseId={dashboardCaseId} captureId={hasCapturedCase && dashboardCaseId ? `latest:${dashboardCaseId}` : ''} hasCapturedCase={hasCapturedCase} canFinalize={canRefreshSchema} reportScope={finalScope} /> : null}</div>
+      <div className="case-results-head__actions">{headerExtra}{catalog ? <CaseReportLauncher scope={reportScope} disabledReason={materialsActive ? '소재·물성 탭에서는 보고서를 만들지 않습니다.' : tab === 'usage' ? '결과가 있는 사용환경 Case를 선택하면 보고서를 만들 수 있습니다.' : '유통환경에서 결과가 있는 Run Case와 Run Option을 선택하면 보고서를 만들 수 있습니다.'} /> : null}{catalog ? <CaseFinalizationPanel projectId={projectId} requestId={requestId} environment={tab === 'usage' ? 'USAGE' : 'DISTRIBUTION'} caseId={dashboardCaseId} captureId={hasCapturedCase ? finalCaptureId : ''} hasCapturedCase={hasCapturedCase} canFinalize={canRefreshSchema} reportScope={finalScope} /> : null}</div>
     </header>
     {catalogError && !catalog && !materialsActive ? <State message={catalogError} error /> : null}
     {catalogError && catalog ? <State message={`${catalogError} · 마지막으로 읽은 결과를 표시합니다.`} error /> : null}

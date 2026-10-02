@@ -1100,3 +1100,13 @@
 - 5단계 검수: M1 보고서 창은 "새 레이아웃으로 저장"만(시스템·현재 레이아웃 새 버전·삭제 없음), 템플릿 필드는 정의에 유지하고 렌더링 때만 화면 레이아웃으로 대체. L1 템플릿 업로드·선택·출력 원본 숨김+안내. L2 만드는 중 `취소`·Esc 중단. L3 이미지 1회 읽기·공유, 이미지 전체 300MB 상한·건너뜀 목록, 상한은 원본 크기·HTML 약 1.33배 안내. L5 엣지 없음은 `선택 없음`.
 - 검증: tsc·build·test:routing·test:api 통과, check:architecture 기존 4건(App.tsx 1089 증가 없음). e2e case-report 11, case-finalization 4, folder-working-final 3, case-video-grid 2 통과. simulation-dashboard 12/14: 폐기된 capture-pin 항목 1건 실패, `single Run Option` 1건은 전체 실행에서만 실패하고 단독 재실행 통과(불안정). 백엔드·migration·의존성·배포 변경 없음.
 - 미실행: 독립 Sol/Astra 검수, 보안 스캔(보안 경계 변경 없음), Windows Server 2022 검증.
+
+## 2026-10-03 Final 지정 백엔드 보강(독립 검수 지적 반영) (Claude, 브랜치 claude/case-results-redesign)
+- 고아 보고서: 이전 시도가 게시한 형식을 재시도 `report_formats`에서 빼면 복사 전에 409 `FINALIZATION_REPORT_FORMATS_MISMATCH`. 확정 Reports 폴더의 남의 항목은 409 `FINALIZATION_REPORTS_UNEXPECTED_FILE`(보존, 삭제 안 함), `complete.json` 직전에 폴더 = 기록 보고서인지 재확인. 완료 후 이력 해시와 같은 보관본만 정리(`reports.json` 유지, 버린 미리보기 보관본은 그대로).
+- PPTX 검사: `[Content_Types].xml`·모든 `.rels`를 BOM/선언으로 UTF-8/UTF-16 판별 후 표준 파서(DTD·ENTITY 거부, defusedxml 미의존)로 읽음. 매크로·ActiveX·OLE·control·attachedTemplate·외부(`TargetMode=External`) 관계·`ppt/activeX/`·xlsx 외 `ppt/embeddings/` 거부(`FINALIZATION_REPORT_PPTX_ACTIVE_CONTENT`). pptxgenjs 차트 내장 xlsx는 허용하되 내부 재검사. 실제 pptxgenjs 4.0.1 fixture 추가.
+- zip 목록 상한: `zipfile` 생성 전 EOCD·ZIP64 EOCD로 항목 10,000·중앙 목록 4 MiB 초과 거부(검수 재현 60 MB/70만 항목 zip 즉시 거부). 업로드·검사 동시 2건, 초과 429 `FINALIZATION_REPORT_BUSY`.
+- 상태 조회: 모든 기록은 서명·범위·존재·크기, SHA-256은 표시 기록(의뢰 최근·선택 Case 최근)만, 실패 시 다음 기록. 표시되지 않는 과거 기록의 같은 크기 변조는 표시될 때까지 드러나지 않음(문서화한 절충).
+- 업로드는 본문 전에 서명 계획·범위·미완료를 확인. 쓰기·권한 `OSError`는 503 `FINALIZATION_WRITE_FAILED`(임시 파일 정리).
+- 최신 기준: Final의 Scene별 수집본을 `merge_latest_payload`(같은 순서) 결과에서 직접 정함. 최신 수집본이 현재 스키마와 안 맞으면 이전 수집본으로 대체하지 않고 `excluded_scenes`(`NO_CAPTURE`·`CAPTURE_SCHEMA_MISSING`·`CAPTURE_SCHEMA_INCOMPATIBLE`)로 미리보기·창에 표시. Final 보고서 범위도 `latest:<Case>`로 고정(사용환경 포함). 카탈로그 수집본 정렬에 `c.id DESC` 동률 기준 추가.
+- 검증: 백엔드 finalization 42·folder flow·security·OpenAPI·latest results·dashboard queries 합계 87 passed/1 skipped, OpenAPI 계약 검사 통과(응답 스키마 변경 없음, 재생성 불필요). 프런트 tsc·build 통과, check:architecture 기존 4건만, e2e case-finalization 4·folder-working-final 3 통과.
+- 보안 검수: 이 기록은 검수자 수동 검토와 재현 테스트 반영이며 Codex Security 스캔(`security-diff-scan`)을 대신하지 않고, 스캔은 실행하지 않았다. 독립 Sol/Astra 최종 검수, PostgreSQL 프로필, 실제 Windows Server 2022·공유폴더 검증도 미실행. migration·의존성·배포 변경 없음.

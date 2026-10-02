@@ -7,6 +7,7 @@ operation (no multipart runtime dependency); each request carries one file.
 """
 from __future__ import annotations
 
+from contextlib import ExitStack
 from tempfile import SpooledTemporaryFile
 from typing import Literal
 
@@ -37,10 +38,18 @@ class ConfirmInput(FinalizationInput):
     report_formats: list[Literal["pptx", "html"]] = Field(default_factory=list, max_length=2)
 
 
+_CONFLICT_CODES = {"FINALIZATION_ALREADY_COMPLETED", "FINALIZATION_REPORT_FORMATS_MISMATCH",
+                   "FINALIZATION_REPORTS_UNEXPECTED_FILE"}
+
+
 def _error(exc: service.CaseFinalizationError) -> HTTPException:
     if exc.code in {"FINALIZATION_REPORT_TOO_LARGE", "FINALIZATION_OUTPUT_TOO_LARGE"}:
         status = 413
-    elif exc.code == "FINALIZATION_ALREADY_COMPLETED":
+    elif exc.code == "FINALIZATION_REPORT_BUSY":
+        status = 429
+    elif exc.code == "FINALIZATION_WRITE_FAILED":
+        status = 503
+    elif exc.code in _CONFLICT_CODES:
         status = 409
     elif exc.code.endswith("NOT_FOUND") or exc.code == "FINALIZATION_PLAN_NOT_FOUND":
         status = 404
@@ -111,13 +120,26 @@ async def upload_report(
     def authorize() -> None:
         with connect() as conn:
             require_resource_permission(request, RESULT_IMPORT, "request", request_id, conn=conn)
+            try:
+                # Signed plan for this exact scope and no completion marker, before any body is read.
+                service.check_report_target(
+                    conn, project_id=project_id, request_id=request_id, environment=environment,
+                    case_id=case_id, capture_id=capture_id, operation_id=operation_id,
+                )
+            except service.CaseFinalizationError as exc:
+                raise _error(exc) from exc
 
-    # Permission first, so an unauthorized caller cannot make the server spool a large body.
+    # Permission and operation first, so an unauthorized or stale caller cannot make the server spool a large body.
     await run_in_threadpool(authorize)
     declared = request.headers.get("content-length")
     if declared is not None and (not declared.isdigit() or int(declared) > limit):
         raise too_large
-    with SpooledTemporaryFile(max_size=1024 * 1024) as upload:
+    slot = ExitStack()
+    try:
+        slot.enter_context(service.report_upload_slot())
+    except service.CaseFinalizationError as exc:
+        raise _error(exc) from exc
+    with slot, SpooledTemporaryFile(max_size=1024 * 1024) as upload:
         total = 0
         async for chunk in request.stream():
             total += len(chunk)

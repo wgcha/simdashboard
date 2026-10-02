@@ -88,6 +88,7 @@ const preview = {
   case_id: CASE_ID, case_label: 'Case A', case_path: 'R/Working/Case A', capture_id: CAPTURE_ID, basis: 'LATEST',
   scene_sources: [{ scene_path: 'R/Working/Case A/Drop/Run A/Individual/2_Face', source_capture_id: 'capture-1' }, { scene_path: 'R/Working/Case A/Drop/Run A/Individual/3_Face', source_capture_id: 'capture-2' }],
   capture_fingerprint: 'f', folder_schema_snapshot_id: 'schema', scene_paths: [], files,
+  excluded_scenes: [{ scene_path: 'R/Working/Case A/Drop/Run A/Individual/4_Face', source_capture_id: 'capture-3', reason: 'CAPTURE_SCHEMA_MISSING' }],
   counts: { CAE: 3, input_decks: 1, rad_decks: 1, inc_decks: 0, results: 2, scene_reports: 0 }, missing: { input_decks: false, rad_decks: false, inc_decks: true },
   excluded_capture_file_count: 0, previewed_at: '2026-10-03T00:00:00Z', plan_sha256: 'c'.repeat(64), can_confirm: true,
   output_paths: { CAE: `R/Final/CAE/Case A/${OPERATION}`, Reports: reportsDir },
@@ -99,6 +100,7 @@ const preview = {
 const usagePreview = {
   ...preview, environment: 'USAGE', case_id: 'usage-case', case_label: 'Usage Case', case_path: 'U/Working/Usage Case', capture_id: 'latest:usage-case',
   scene_sources: ['Settle', 'Wobble', 'Horizontal_Force_Angle', 'Slope_Angle', 'Slope_Angle_360'].map((name) => ({ scene_path: `U/Working/Usage Case/${name}`, source_capture_id: 'usage-capture-1' })),
+  excluded_scenes: [],
   files: [{ source_relative_path: 'U/Working/Usage Case/Settle/result.json', case_relative_path: 'Settle/result.json', category: 'CAE', source_basis: 'SOURCE_CAPTURE', source_capture_id: 'usage-capture-1', size: 80, sha256: '4'.repeat(64) }],
   counts: { CAE: 1, input_decks: 0, rad_decks: 0, inc_decks: 0, results: 1, scene_reports: 0 }, missing: { input_decks: false, rad_decks: false, inc_decks: false },
   output_paths: { CAE: `U/Final/CAE/Usage Case/${OPERATION}`, Reports: usageReportsDir },
@@ -115,10 +117,14 @@ async function fulfillJson(route: Route, body: unknown, status = 200) {
 async function installMocks(page: Page, options: { failFirstUpload?: boolean; multiOption?: boolean } = {}) {
   const uploads: Uploads = []
   const confirms: Array<Record<string, unknown>> = []
+  const usageCaptures: string[] = []
   let failures = options.failFirstUpload ? 1 : 0
   await page.route('**/api/folder-discovery/environments/sync', (route) => fulfillJson(route, { status: 'UNCHANGED', changed: false, snapshot_id: null, diff: { added: 0, removed: 0, changed: 0 }, code: null, message: null, check_mode: 'QUICK', checked_at: new Date().toISOString(), coalesced: false }))
   await page.route('**/api/dashboard/catalog**', (route) => fulfillJson(route, new URL(route.request().url()).searchParams.get('environment') === 'USAGE' ? usageCatalog : options.multiOption ? multiOptionCatalog : catalog))
-  await page.route('**/api/dashboard/usage/cases/**', (route) => fulfillJson(route, usagePayload))
+  await page.route('**/api/dashboard/usage/cases/**', (route) => {
+    usageCaptures.push(new URL(route.request().url()).searchParams.get('capture_id') ?? '')
+    return fulfillJson(route, usagePayload)
+  })
   await page.route('**/api/dashboard/distribution/scenes/**', (route) => fulfillJson(route, { context: distribution().context, scene: { id: 'scene-1', label: 'scene-1' }, edge_peaks: [], line_points: [], assets: [], quality_issues: [] }))
   await page.route('**/api/dashboard/assets/**', (route) => {
     const id = decodeURIComponent(new URL(route.request().url()).pathname.split('/').pop() ?? '')
@@ -162,7 +168,7 @@ async function installMocks(page: Page, options: { failFirstUpload?: boolean; mu
     const plan = body.environment === 'USAGE' ? usagePreview : preview
     return fulfillJson(route, { ...plan, status: 'COMPLETE', created_by: 'test', confirmed_at: '2026-10-03T00:01:00Z', reports: formats.map((format) => ({ format, file_name: plan.report_files[format], size: 100, sha256: '9'.repeat(64), relative_path: plan.report_paths[format] })) })
   })
-  return { uploads, confirms }
+  return { uploads, confirms, usageCaptures }
 }
 
 async function openFinal(page: Page) {
@@ -185,6 +191,9 @@ test('Final 지정은 고른 PPTX·HTML을 만들어 형식별로 올린 뒤 확
   const { uploads, confirms } = await installMocks(page)
   const dialog = await openFinal(page)
   await expect(dialog).toContainText('최신 결과 · Scene 2개 · 결과 버전 2개')
+  // A Scene whose newest capture cannot be used is listed, never replaced by an older capture.
+  await expect(dialog.getByTestId('case-final-excluded-scenes')).toContainText('제외되는 Scene 1개')
+  await expect(dialog.getByTestId('case-final-excluded-scenes')).toContainText('4_Face · 최신 결과에 확정 위치 정보 없음')
   await expect(dialog).toContainText('입력·결과 3개')
   await expect(dialog.getByTestId('case-final-report-range')).toContainText('Case 전체 · 모든 Run Case · Run Option')
   await expect(dialog).not.toContainText('PDF')
@@ -283,7 +292,7 @@ test.describe('사용환경 Final 지정', () => {
   test('사용환경 Case도 보고서를 만들어 올린 뒤 Final 지정을 확정한다', async ({ page }) => {
     const errors: string[] = []
     page.on('pageerror', (error) => errors.push(error.message))
-    const { uploads, confirms } = await installMocks(page)
+    const { uploads, confirms, usageCaptures } = await installMocks(page)
     await loginWorkspace(page)
     await page.goto('/workspace/requests?project=project-tv-001&request=request-drop-001&view=case_results')
     await expect(page.getByTestId('usage-dashboard')).toBeVisible({ timeout: 15_000 })
@@ -310,6 +319,9 @@ test.describe('사용환경 Final 지정', () => {
     for (const text of ['다섯 평가 종합', '2.5 deg · 확인', '6.25 mm · 확인', '11 deg · 확인', 'NG · 확인', 'Slope_Angle_360', 'Settle.png', 'Wobble.mp4']) expect(html).toContain(text)
     expect(html).toMatch(/<video controls preload="metadata" src="data:video\/mp4;base64,/)
     expect(confirms[0]).toMatchObject({ environment: 'USAGE', operation_id: OPERATION, report_formats: ['pptx', 'html'] })
+    // Screen, Final report and Final basis all read the same latest rule (newest capture for usage).
+    expect(usageCaptures.length).toBeGreaterThan(0)
+    expect(new Set(usageCaptures)).toEqual(new Set(['latest:usage-case']))
     expect(errors).toEqual([])
   })
 })

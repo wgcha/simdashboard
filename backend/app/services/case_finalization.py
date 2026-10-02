@@ -10,12 +10,17 @@ from __future__ import annotations
 import codecs
 import hashlib
 import hmac
+import io
 import json
 import os
+import posixpath
 import re
 import stat
+import struct
+import threading
 import time
 import unicodedata
+import xml.etree.ElementTree as ElementTree
 import zipfile
 from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
@@ -51,6 +56,15 @@ MAX_PPTX_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
 MAX_PPTX_ENTRIES = 10_000
 MAX_PPTX_RATIO = 200
 MAX_CONTENT_TYPES_BYTES = 1024 * 1024
+# Central directory read by zipfile before any entry check (memory/CPU bound).
+MAX_ZIP_CENTRAL_DIRECTORY_BYTES = 4 * 1024 * 1024
+MAX_RELS_TOTAL_BYTES = 16 * 1024 * 1024
+# pptxgenjs charts embed one small .xlsx workbook each (ppt/embeddings/*.xlsx).
+MAX_EMBEDDED_WORKBOOK_BYTES = 16 * 1024 * 1024
+MAX_EMBEDDED_WORKBOOK_ENTRIES = 1000
+# Concurrent report uploads/validations per server process (non-blocking: 429 when full).
+REPORT_UPLOAD_CONCURRENCY = 2
+_REPORT_SLOTS = threading.BoundedSemaphore(REPORT_UPLOAD_CONCURRENCY)
 _CHUNK = 1024 * 1024
 _EXCLUDED_DIRS = {"cad", "final", "validation", "library"}
 
@@ -59,6 +73,25 @@ class CaseFinalizationError(ValueError):
     def __init__(self, code: str, message: str) -> None:
         self.code = code
         super().__init__(message)
+
+
+def _write_failed() -> CaseFinalizationError:
+    """Storage write/permission failure: the operation stays retryable and nothing is overwritten."""
+    return CaseFinalizationError(
+        "FINALIZATION_WRITE_FAILED",
+        "Final 폴더에 파일을 쓰지 못했습니다(권한 또는 저장소 상태). 기존 파일은 보존되었습니다. 잠시 후 다시 시도하세요.",
+    )
+
+
+@contextmanager
+def report_upload_slot() -> Iterator[None]:
+    """Per-process limit on concurrent report uploads/validations; never waits."""
+    if not _REPORT_SLOTS.acquire(blocking=False):
+        raise CaseFinalizationError("FINALIZATION_REPORT_BUSY", "다른 보고서 업로드를 검사하고 있습니다. 잠시 후 다시 시도하세요.")
+    try:
+        yield
+    finally:
+        _REPORT_SLOTS.release()
 
 
 def _now() -> str:
@@ -189,29 +222,46 @@ def _scope(conn: ConnectionLike, project_id: str, request_id: str, environment: 
         if not isinstance(manifest, list):
             raise CaseFinalizationError("FINALIZATION_CAPTURE_MANIFEST_INVALID", "결과 버전 파일 목록을 읽을 수 없습니다.")
         context_locations = context.get("folder_schema_locations") if isinstance(context, dict) else None
-        if not isinstance(context_locations, list):
+        schema_missing = not isinstance(context_locations, list)
+        if schema_missing:
             if not latest_basis:
                 raise CaseFinalizationError("FINALIZATION_CAPTURE_SCHEMA_MISSING", "결과 버전에 확정 위치 목록이 없습니다. Case를 다시 수집하세요.")
             context_locations = []
         captures[str(row[0])] = {
-            "fingerprint": str(row[1]), "manifest": manifest,
-            "has_runs": bool(isinstance(payload, dict) and payload.get("runs")),
+            "fingerprint": str(row[1]), "manifest": manifest, "schema_missing": schema_missing,
             "compatible": _compatible_scene_paths(context_locations, current_scenes, scene_role),
         }
-    order = list(captures)
-    if latest_basis and not any(item["has_runs"] for item in captures.values()):
-        # Usage payloads are not merged per Scene: the newest capture is the latest result.
-        order = order[-1:]
+    current_paths: list[str] = []
+    for item in scene_locations:
+        try:
+            current_paths.append(_relative(str(item.get("relative_path") or "")))
+        except CaseFinalizationError:
+            continue
     sources: dict[str, tuple[str, str]] = {}
-    for source_id in order:
-        info = captures[source_id]
-        for scene_path in info["compatible"]:
-            if latest_basis and not any(
-                    isinstance(item, dict) and _under(scene_path, str(item.get("relative_path") or ""))
-                    for item in info["manifest"]):
-                continue
-            # Oldest first, so the newest capture holding the Scene wins (merge_latest_payload).
-            sources[scene_path.casefold()] = (scene_path, source_id)
+    excluded: dict[str, dict[str, Any]] = {}
+    if latest_basis:
+        # Single source of truth with the Case results screen: the same merge
+        # (dashboard_capture.merge_latest_payload, same capture order as
+        # get_latest_capture) decides which capture owns each Scene. A Scene whose
+        # newest capture cannot be matched to the current schema is excluded and
+        # reported; it never silently falls back to an older capture.
+        merged = dashboard_capture.merge_latest_payload([(str(row[0]), row[3]) for row in capture_rows])
+        for scene_path, source_id in _latest_scene_owners(merged, captures, current_paths):
+            info = captures[source_id]
+            key = scene_path.casefold()
+            if any(path.casefold() == key for path in info["compatible"]):
+                sources[key] = (scene_path, source_id)
+            else:
+                excluded[key] = {"scene_path": scene_path, "source_capture_id": source_id,
+                                 "reason": "CAPTURE_SCHEMA_MISSING" if info["schema_missing"] else "CAPTURE_SCHEMA_INCOMPATIBLE"}
+    else:
+        for scene_path in captures[capture_id]["compatible"]:
+            sources[scene_path.casefold()] = (scene_path, capture_id)
+    for path in current_paths:
+        key = path.casefold()
+        if key not in sources and key not in excluded:
+            excluded[key] = {"scene_path": path, "source_capture_id": None, "reason": "NO_CAPTURE"}
+    excluded_scenes = sorted(excluded.values(), key=lambda item: item["scene_path"].casefold())
     if not sources:
         raise CaseFinalizationError("FINALIZATION_CAPTURE_SCHEMA_INCOMPATIBLE", "결과의 Scene 위치가 현재 Folder Schema와 일치하지 않습니다. Case를 다시 수집하세요.")
     scene_sources = [
@@ -232,8 +282,42 @@ def _scope(conn: ConnectionLike, project_id: str, request_id: str, environment: 
         "captures": captures, "scene_sources": scene_sources, "snapshot_id": snapshot_id,
         "compatible_scene_paths": [item["scene_path"] for item in scene_sources],
         "scene_role": scene_role, "scene_locations": scene_locations, "blocked_paths": blocked,
-        "schema": schema,
+        "schema": schema, "excluded_scenes": excluded_scenes,
     }
+
+
+def _manifest_has(manifest: list[Any], scene_path: str) -> bool:
+    return any(isinstance(item, dict) and _under(scene_path, str(item.get("relative_path") or "")) for item in manifest)
+
+
+def _latest_scene_owners(merged: dict[str, Any], captures: dict[str, dict[str, Any]],
+                         current_paths: list[str]) -> list[tuple[str, str]]:
+    """(current Scene path, owning capture) pairs of the merged latest view the screen shows."""
+    merged_ids = [str(item) for item in merged.get("merged_capture_ids") or []]
+    if not merged.get("runs"):
+        # Usage (no runs): the newest capture as is, exactly like merge_latest_payload.
+        newest = merged_ids[-1] if merged_ids else ""
+        if newest not in captures:
+            return []
+        return [(path, newest) for path in current_paths if _manifest_has(captures[newest]["manifest"], path)]
+    owners: dict[str, tuple[str, str]] = {}
+    for scene in merged.get("scenes") or []:
+        if not isinstance(scene, dict):
+            continue
+        source = str(scene.get("source_capture_id") or "")
+        if source not in captures:
+            continue
+        files = [str(item.get("source_path") or "") for item in scene.get("observations") or [] if isinstance(item, dict)]
+        files += [str(item.get("relative_path") or "") for item in scene.get("media") or [] if isinstance(item, dict)]
+        matched = [path for path in current_paths if any(name and _under(path, name) for name in files)]
+        if not matched:
+            # A Scene without parsed values or media: its folder name inside this capture's files.
+            label = str(scene.get("label") or "").casefold()
+            matched = [path for path in current_paths if PurePosixPath(path).name.casefold() == label
+                       and _manifest_has(captures[source]["manifest"], path)]
+        if len(matched) == 1:
+            owners[matched[0].casefold()] = (matched[0], source)
+    return list(owners.values())
 
 
 def _compatible_scene_paths(context_locations: list[Any], current_scenes: dict[str, dict[str, Any]],
@@ -647,6 +731,8 @@ def _ensure_dir(root: Path, relative: str) -> Path:
                     candidate = collision if collision is not None else candidate
                     if not candidate.is_dir():
                         raise CaseFinalizationError("FINALIZATION_PATH_CONFLICT", "최종확정 폴더를 안전하게 만들 수 없습니다.")
+                except OSError as exc:
+                    raise _write_failed() from exc
                 pins.enter_context(_pin_directory_chain(root, candidate))
             current = candidate
         return current
@@ -749,6 +835,9 @@ def preview(conn: ConnectionLike, *, project_id: str, request_id: str, environme
             "scene_sources": scope["scene_sources"],
             "folder_schema_snapshot_id": scope["snapshot_id"],
             "scene_paths": sorted(set(scope["compatible_scene_paths"]), key=str.casefold),
+            # Current confirmed Scenes left out of the latest basis (no capture, or a capture
+            # that does not match the current schema); informational, shown in the preview.
+            "excluded_scenes": scope["excluded_scenes"],
             "metadata_relative_path": operation_relative, "final_relative_path": final_relative,
             "created_by": actor, "previewed_at": _now(), "excluded_capture_file_count": excluded_count,
             "counts": counts, "missing": missing, "files": files, "report_files": report_files,
@@ -876,6 +965,8 @@ def _publish_copy(root: Path, parent: Path, filename: str, data: bytes, current_
                 raise CaseFinalizationError("FINALIZATION_DESTINATION_CONFLICT", f"기존 최종 파일을 덮어쓰지 않았습니다: {relative_path}")
         spdm_storage._assert_safe_existing(destination, root)
         return destination.relative_to(root).as_posix()
+    except OSError as exc:
+        raise _write_failed() from exc
     finally:
         try:
             temporary.unlink(missing_ok=True)
@@ -894,52 +985,215 @@ def _upload_size(upload: BinaryIO) -> int:
     return size
 
 
+_EOCD = struct.Struct("<4s4H2LH")
+_ZIP64_LOCATOR = struct.Struct("<4sLQL")
+_ZIP64_EOCD = struct.Struct("<4sQ2H2L4Q")
+_PPTX_INVALID = "FINALIZATION_REPORT_PPTX_INVALID"
+_PPTX_ACTIVE = "FINALIZATION_REPORT_PPTX_ACTIVE_CONTENT"
+_PPTX_MACRO = "FINALIZATION_REPORT_PPTX_MACRO"
+# Relationship types (last URI segment) for content the app's pptxgenjs builder never emits.
+_MACRO_RELATIONSHIPS = {"vbaproject", "vbaprojectsignature", "vbaprojectsignatureagile", "vbaprojectsignaturev3", "wordvbadata"}
+_ACTIVE_RELATIONSHIPS = {"oleobject", "control", "activexcontrol", "activexcontrolbinary", "attachedtemplate",
+                         "afchunk", "frame", "subdocument", "externallinkpath", "externallink"}
+_ACTIVE_CONTENT_TOKENS = ("activex", "oleobject", "control+xml")
+_EMBEDDED_WORKBOOK = re.compile(r"^ppt/embeddings/[^/]+\.xlsx$")
+_XML_DECLARATION = re.compile(r"^<\?xml[^>]*\?>")
+_XML_ENCODING = re.compile(rb"^\s*<\?xml[^>]*?encoding\s*=\s*[\"']([A-Za-z0-9._-]+)[\"']")
+
+
+def _check_zip_directory(upload: BinaryIO, size: int, *, max_entries: int, max_directory_bytes: int) -> None:
+    """Bound the central directory before zipfile reads it into memory (EOCD and ZIP64 EOCD)."""
+    too_many = CaseFinalizationError("FINALIZATION_REPORT_PPTX_TOO_MANY_ENTRIES", "PPTX 보고서의 항목 수 또는 목록 크기가 제한을 넘습니다.")
+    tail_length = min(size, _EOCD.size + 0xFFFF)
+    upload.seek(size - tail_length)
+    tail = upload.read(tail_length)
+    # Same search order as zipfile._EndRecData: no comment first, then the last match.
+    if len(tail) >= _EOCD.size and tail[-_EOCD.size:-_EOCD.size + 4] == b"PK\x05\x06" and tail[-2:] == b"\0\0":
+        position = len(tail) - _EOCD.size
+    else:
+        position = tail.rfind(b"PK\x05\x06")
+    if position < 0 or position + _EOCD.size > len(tail):
+        raise CaseFinalizationError(_PPTX_INVALID, "PPTX 보고서의 zip 목록을 찾을 수 없습니다.")
+    _sig, disk, directory_disk, disk_entries, total_entries, directory_size, _offset, _comment = _EOCD.unpack_from(tail, position)
+    if disk or directory_disk:
+        raise CaseFinalizationError(_PPTX_INVALID, "분할 zip 형식의 PPTX 보고서는 저장할 수 없습니다.")
+    record_at = size - tail_length + position
+    locator_at = record_at - _ZIP64_LOCATOR.size
+    if locator_at >= 0:
+        upload.seek(locator_at)
+        locator = upload.read(_ZIP64_LOCATOR.size)
+        if len(locator) == _ZIP64_LOCATOR.size and locator[:4] == b"PK\x06\x07":
+            # zipfile reads the ZIP64 record immediately before the locator.
+            if locator_at < _ZIP64_EOCD.size:
+                raise CaseFinalizationError(_PPTX_INVALID, "PPTX 보고서의 ZIP64 목록이 올바르지 않습니다.")
+            upload.seek(locator_at - _ZIP64_EOCD.size)
+            record = upload.read(_ZIP64_EOCD.size)
+            if len(record) != _ZIP64_EOCD.size or record[:4] != b"PK\x06\x06":
+                raise CaseFinalizationError(_PPTX_INVALID, "PPTX 보고서의 ZIP64 목록이 올바르지 않습니다.")
+            (_sig, _record_size, _made, _needed, disk, directory_disk, disk_entries, total_entries,
+             directory_size, _offset) = _ZIP64_EOCD.unpack(record)
+            if disk or directory_disk:
+                raise CaseFinalizationError(_PPTX_INVALID, "분할 zip 형식의 PPTX 보고서는 저장할 수 없습니다.")
+    if max(disk_entries, total_entries) > max_entries or directory_size > max_directory_bytes:
+        raise too_many
+    upload.seek(0)
+
+
+def _xml_root(data: bytes, what: str) -> ElementTree.Element:
+    """Parse one small package XML part: UTF-8/UTF-16 by BOM or declaration, no DTD."""
+    invalid = CaseFinalizationError(_PPTX_INVALID, f"PPTX 보고서의 {what}을(를) 읽을 수 없습니다.")
+    try:
+        if data.startswith(codecs.BOM_UTF8):
+            text = data[len(codecs.BOM_UTF8):].decode("utf-8")
+        elif data.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+            text = data.decode("utf-16")
+        elif data.startswith(b"<\x00"):
+            text = data.decode("utf-16-le")
+        elif data.startswith(b"\x00<"):
+            text = data.decode("utf-16-be")
+        else:
+            declared = _XML_ENCODING.match(data[:256])
+            if declared and declared.group(1).decode("ascii").casefold().replace("_", "-") not in {"utf-8", "utf8"}:
+                raise invalid
+            text = data.decode("utf-8")
+    except UnicodeError as exc:
+        raise invalid from exc
+    text = text.lstrip("﻿ \t\r\n")
+    folded = text.casefold()
+    if "<!doctype" in folded or "<!entity" in folded:
+        # Package parts never need a DTD; refusing it rules out entity expansion.
+        raise CaseFinalizationError(_PPTX_INVALID, f"PPTX 보고서의 {what}에 DTD가 있습니다.")
+    try:
+        return ElementTree.fromstring(_XML_DECLARATION.sub("", text, count=1))
+    except (ElementTree.ParseError, ValueError, RecursionError) as exc:
+        raise invalid from exc
+
+
+def _local_name(tag: Any) -> str:
+    return str(tag).rsplit("}", 1)[-1]
+
+
+def _check_content_types(root_element: ElementTree.Element) -> None:
+    for element in root_element.iter():
+        content_type = str(element.get("ContentType") or "").casefold()
+        if "macroenabled" in content_type or "vbaproject" in content_type:
+            raise CaseFinalizationError(_PPTX_MACRO, "매크로가 포함된 PPTX 보고서는 저장할 수 없습니다.")
+        if any(token in content_type for token in _ACTIVE_CONTENT_TOKENS):
+            raise CaseFinalizationError(_PPTX_ACTIVE, "ActiveX·OLE 등 실행 가능한 내용이 포함된 PPTX 보고서는 저장할 수 없습니다.")
+
+
+def _check_relationships(rels_name: str, root_element: ElementTree.Element) -> None:
+    folder = posixpath.dirname(posixpath.dirname(rels_name))  # "<dir>/_rels/<part>.rels" -> "<dir>"
+    for element in root_element.iter():
+        if _local_name(element.tag) != "Relationship":
+            continue
+        if str(element.get("TargetMode") or "").casefold() == "external":
+            raise CaseFinalizationError(_PPTX_ACTIVE, "외부 파일·주소를 참조하는 PPTX 보고서는 저장할 수 없습니다.")
+        kind = str(element.get("Type") or "").rstrip("/").rsplit("/", 1)[-1].casefold()
+        if kind in _MACRO_RELATIONSHIPS:
+            raise CaseFinalizationError(_PPTX_MACRO, "매크로가 포함된 PPTX 보고서는 저장할 수 없습니다.")
+        if kind in _ACTIVE_RELATIONSHIPS:
+            raise CaseFinalizationError(_PPTX_ACTIVE, "ActiveX·OLE 등 실행 가능한 내용이 포함된 PPTX 보고서는 저장할 수 없습니다.")
+        if kind == "package":
+            target = str(element.get("Target") or "")
+            resolved = posixpath.normpath(target[1:] if target.startswith("/") else posixpath.join(folder, target))
+            if not _EMBEDDED_WORKBOOK.fullmatch(resolved.casefold()):
+                raise CaseFinalizationError(_PPTX_ACTIVE, "차트 데이터 외의 포함 파일이 있는 PPTX 보고서는 저장할 수 없습니다.")
+
+
+def _check_embedded_workbook(data: bytes) -> None:
+    """A chart workbook (pptxgenjs) must itself be a plain .xlsx without macros or embeddings."""
+    active = CaseFinalizationError(_PPTX_ACTIVE, "PPTX 보고서의 차트 데이터에 실행 가능한 내용이 있습니다.")
+    if not data.startswith(b"PK\x03\x04"):
+        raise active
+    stream = io.BytesIO(data)
+    _check_zip_directory(stream, len(data), max_entries=MAX_EMBEDDED_WORKBOOK_ENTRIES,
+                         max_directory_bytes=MAX_ZIP_CENTRAL_DIRECTORY_BYTES)
+    with zipfile.ZipFile(stream) as workbook:
+        infos = workbook.infolist()
+        if len(infos) > MAX_EMBEDDED_WORKBOOK_ENTRIES:
+            raise active
+        total = 0
+        for info in infos:
+            key = info.filename.casefold()
+            total += info.file_size
+            if (info.flag_bits & 0x1 or total > MAX_EMBEDDED_WORKBOOK_BYTES * 4
+                    or any(token in key for token in ("vbaproject", "vbadata", "activex", "embeddings/", "oleobject"))):
+                raise active
+        content_types = next((info for info in infos if info.filename.casefold() == "[content_types].xml"), None)
+        if content_types is None or content_types.file_size > MAX_CONTENT_TYPES_BYTES:
+            raise active
+        with workbook.open(content_types) as handle:
+            _check_content_types(_xml_root(handle.read(MAX_CONTENT_TYPES_BYTES + 1), "차트 데이터 형식 목록"))
+
+
 def _validate_pptx(upload: BinaryIO) -> None:
     upload.seek(0)
     if upload.read(4) != b"PK\x03\x04":
-        raise CaseFinalizationError("FINALIZATION_REPORT_PPTX_INVALID", "PPTX 보고서가 올바른 zip 파일이 아닙니다.")
-    upload.seek(0)
+        raise CaseFinalizationError(_PPTX_INVALID, "PPTX 보고서가 올바른 zip 파일이 아닙니다.")
+    size = _upload_size(upload)
     try:
+        _check_zip_directory(upload, size, max_entries=MAX_PPTX_ENTRIES,
+                             max_directory_bytes=MAX_ZIP_CENTRAL_DIRECTORY_BYTES)
         with zipfile.ZipFile(upload) as archive:
             infos = archive.infolist()
             if len(infos) > MAX_PPTX_ENTRIES:
-                raise CaseFinalizationError("FINALIZATION_REPORT_PPTX_INVALID", "PPTX 보고서의 항목 수가 너무 많습니다.")
+                raise CaseFinalizationError("FINALIZATION_REPORT_PPTX_TOO_MANY_ENTRIES", "PPTX 보고서의 항목 수가 너무 많습니다.")
             names: dict[str, zipfile.ZipInfo] = {}
             total = 0
             for info in infos:
                 name = info.filename
                 parts = name.split("/")
-                if (not name or "\\" in name or "\x00" in name or name.startswith("/")
-                        or re.match(r"^[A-Za-z]:", name) or any(part in {"..", "."} for part in parts)):
+                if (not name or "\\" in name or "\x00" in name or ":" in name or name.startswith("/")
+                        or any(part in {"..", "."} for part in parts)):
                     raise CaseFinalizationError("FINALIZATION_REPORT_PPTX_UNSAFE_ENTRY", "PPTX 보고서에 안전하지 않은 항목 경로가 있습니다.")
                 key = name.casefold()
                 if key in names:
                     raise CaseFinalizationError("FINALIZATION_REPORT_PPTX_UNSAFE_ENTRY", "PPTX 보고서에 중복 항목이 있습니다.")
                 names[key] = info
                 if info.flag_bits & 0x1:
-                    raise CaseFinalizationError("FINALIZATION_REPORT_PPTX_INVALID", "암호화된 PPTX 보고서는 저장할 수 없습니다.")
+                    raise CaseFinalizationError(_PPTX_INVALID, "암호화된 PPTX 보고서는 저장할 수 없습니다.")
                 if "vbaproject" in key or "vbadata" in key:
-                    raise CaseFinalizationError("FINALIZATION_REPORT_PPTX_MACRO", "매크로가 포함된 PPTX 보고서는 저장할 수 없습니다.")
+                    raise CaseFinalizationError(_PPTX_MACRO, "매크로가 포함된 PPTX 보고서는 저장할 수 없습니다.")
+                if key.startswith("ppt/activex/") or (
+                        key.startswith("ppt/embeddings/") and key != "ppt/embeddings/"
+                        and not _EMBEDDED_WORKBOOK.fullmatch(key)):
+                    raise CaseFinalizationError(_PPTX_ACTIVE, "ActiveX·OLE 등 실행 가능한 내용이 포함된 PPTX 보고서는 저장할 수 없습니다.")
                 total += info.file_size
                 if total > MAX_PPTX_UNCOMPRESSED_BYTES or (
                         info.file_size > _CHUNK and info.file_size > MAX_PPTX_RATIO * max(info.compress_size, 1)):
                     raise CaseFinalizationError("FINALIZATION_REPORT_PPTX_TOO_LARGE_UNCOMPRESSED", "PPTX 보고서의 압축 해제 크기가 제한을 넘습니다.")
             content_types = names.get("[content_types].xml")
             if content_types is None or "ppt/presentation.xml" not in names:
-                raise CaseFinalizationError("FINALIZATION_REPORT_PPTX_INVALID", "PPTX 보고서 구조([Content_Types].xml, ppt/presentation.xml)를 찾을 수 없습니다.")
+                raise CaseFinalizationError(_PPTX_INVALID, "PPTX 보고서 구조([Content_Types].xml, ppt/presentation.xml)를 찾을 수 없습니다.")
             if content_types.file_size > MAX_CONTENT_TYPES_BYTES:
-                raise CaseFinalizationError("FINALIZATION_REPORT_PPTX_INVALID", "PPTX 보고서의 형식 목록이 너무 큽니다.")
+                raise CaseFinalizationError(_PPTX_INVALID, "PPTX 보고서의 형식 목록이 너무 큽니다.")
             with archive.open(content_types) as handle:
                 data = handle.read(MAX_CONTENT_TYPES_BYTES + 1)
             if len(data) > MAX_CONTENT_TYPES_BYTES:
-                raise CaseFinalizationError("FINALIZATION_REPORT_PPTX_INVALID", "PPTX 보고서의 형식 목록이 너무 큽니다.")
-            text = data.decode("utf-8", errors="replace").casefold()
-            if "macroenabled" in text or "vbaproject" in text:
-                raise CaseFinalizationError("FINALIZATION_REPORT_PPTX_MACRO", "매크로가 포함된 PPTX 보고서는 저장할 수 없습니다.")
+                raise CaseFinalizationError(_PPTX_INVALID, "PPTX 보고서의 형식 목록이 너무 큽니다.")
+            _check_content_types(_xml_root(data, "형식 목록([Content_Types].xml)"))
+            rels_total = 0
+            for key, info in names.items():
+                if not key.endswith(".rels"):
+                    continue
+                rels_total += info.file_size
+                if info.file_size > MAX_CONTENT_TYPES_BYTES or rels_total > MAX_RELS_TOTAL_BYTES:
+                    raise CaseFinalizationError(_PPTX_INVALID, "PPTX 보고서의 관계 목록이 너무 큽니다.")
+                with archive.open(info) as handle:
+                    data = handle.read(MAX_CONTENT_TYPES_BYTES + 1)
+                _check_relationships(key, _xml_root(data, "관계 목록(.rels)"))
+            for key, info in names.items():
+                if _EMBEDDED_WORKBOOK.fullmatch(key):
+                    if info.file_size > MAX_EMBEDDED_WORKBOOK_BYTES:
+                        raise CaseFinalizationError(_PPTX_ACTIVE, "PPTX 보고서의 차트 데이터가 너무 큽니다.")
+                    with archive.open(info) as handle:
+                        _check_embedded_workbook(handle.read(MAX_EMBEDDED_WORKBOOK_BYTES + 1))
     except CaseFinalizationError:
         raise
-    except (zipfile.BadZipFile, zipfile.LargeZipFile, RuntimeError, NotImplementedError, OSError, EOFError, ValueError) as exc:
-        raise CaseFinalizationError("FINALIZATION_REPORT_PPTX_INVALID", "PPTX 보고서를 읽을 수 없습니다.") from exc
+    except (zipfile.BadZipFile, zipfile.LargeZipFile, struct.error, RuntimeError, NotImplementedError,
+            OSError, EOFError, ValueError) as exc:
+        raise CaseFinalizationError(_PPTX_INVALID, "PPTX 보고서를 읽을 수 없습니다.") from exc
 
 
 def _validate_html(upload: BinaryIO) -> None:
@@ -1047,6 +1301,8 @@ def _write_signed_metadata(operation_dir: Path, root: Path, name: str, record: d
                 os.fsync(handle.fileno())
             # reports.json is the mutable staging record of an unfinished operation.
             os.replace(temporary, operation_dir / name)
+        except OSError as exc:
+            raise _write_failed() from exc
         finally:
             try:
                 temporary.unlink(missing_ok=True)
@@ -1099,25 +1355,50 @@ def _load_operation_plan(conn: ConnectionLike, base_scope: dict[str, Any], opera
     return plan
 
 
+def _report_operation(conn: ConnectionLike, *, project_id: str, request_id: str, environment: str,
+                      case_id: str, capture_id: str, operation_id: str) -> dict[str, Any]:
+    """Resolve an unfinished operation: signed plan for this exact scope and no completion marker."""
+    if not _OPERATION_ID.fullmatch(operation_id):
+        raise CaseFinalizationError("FINALIZATION_OPERATION_ID_INVALID", "최종확정 요청 ID가 올바르지 않습니다.")
+    base_scope = _scope_for_status(conn, project_id, request_id, environment, case_id)
+    root: Path = base_scope["root"]
+    _final_relative, metadata_relative = _final_paths(base_scope)
+    operation_relative = f"{metadata_relative}/{operation_id}"
+    try:
+        metadata_dir = result_registration_paths._safe_existing(root, metadata_relative, allow_missing_leaf=True)
+        operation_dir = result_registration_paths._safe_existing(root, operation_relative, allow_missing_leaf=True)
+        if not metadata_dir.is_dir() or not operation_dir.is_dir():
+            raise CaseFinalizationError("FINALIZATION_PLAN_NOT_FOUND", "미리보기 계획을 찾을 수 없습니다. 새 미리보기를 만드세요.")
+        identity = {"operation_id": operation_id, "project_id": project_id, "request_id": request_id,
+                    "environment": environment, "case_id": case_id, "capture_id": capture_id}
+        plan = _load_operation_plan(conn, base_scope, operation_dir, **identity)
+    except result_registration_paths.ResultRegistrationError as exc:
+        raise CaseFinalizationError(exc.code, str(exc)) from exc
+    except spdm_storage.SpdmStorageError as exc:
+        raise CaseFinalizationError(exc.code, str(exc)) from exc
+    return {"base_scope": base_scope, "root": root, "metadata_dir": metadata_dir, "identity": identity,
+            "operation_relative": operation_relative, "operation_dir": operation_dir, "plan": plan}
+
+
+def check_report_target(conn: ConnectionLike, *, project_id: str, request_id: str, environment: str,
+                        case_id: str, capture_id: str, operation_id: str) -> None:
+    """Cheap pre-check before an upload body is read (signed plan, scope, not completed)."""
+    _report_operation(conn, project_id=project_id, request_id=request_id, environment=environment,
+                      case_id=case_id, capture_id=capture_id, operation_id=operation_id)
+
+
 def stage_report(conn: ConnectionLike, *, project_id: str, request_id: str, environment: str,
                  case_id: str, capture_id: str, operation_id: str, report_format: str,
                  upload: BinaryIO, actor: str) -> dict[str, Any]:
     """Validate and stage one report for an unfinished operation (replaces an earlier upload of that format)."""
     if not _OPERATION_ID.fullmatch(operation_id):
         raise CaseFinalizationError("FINALIZATION_OPERATION_ID_INVALID", "최종확정 요청 ID가 올바르지 않습니다.")
+    target = _report_operation(conn, project_id=project_id, request_id=request_id, environment=environment,
+                               case_id=case_id, capture_id=capture_id, operation_id=operation_id)
     checked = validate_report(report_format, upload)
-    base_scope = _scope_for_status(conn, project_id, request_id, environment, case_id)
-    root: Path = base_scope["root"]
-    _final_relative, metadata_relative = _final_paths(base_scope)
-    metadata_dir = result_registration_paths._safe_existing(root, metadata_relative, allow_missing_leaf=True)
-    operation_relative = f"{metadata_relative}/{operation_id}"
-    operation_dir = result_registration_paths._safe_existing(root, operation_relative, allow_missing_leaf=True)
-    if not metadata_dir.is_dir() or not operation_dir.is_dir():
-        raise CaseFinalizationError("FINALIZATION_PLAN_NOT_FOUND", "미리보기 계획을 찾을 수 없습니다. 새 미리보기를 만드세요.")
-    identity = {"operation_id": operation_id, "project_id": project_id, "request_id": request_id,
-                "environment": environment, "case_id": case_id, "capture_id": capture_id}
-    plan = _load_operation_plan(conn, base_scope, operation_dir, **identity)
-    staging_dir = _ensure_dir(root, f"{operation_relative}/reports")
+    base_scope, root, metadata_dir = target["base_scope"], target["root"], target["metadata_dir"]
+    operation_dir, identity, plan = target["operation_dir"], target["identity"], target["plan"]
+    staging_dir = _ensure_dir(root, f"{target['operation_relative']}/reports")
     temporary: Path | None = None
     try:
         with _pin_directory_chain(root, staging_dir):
@@ -1146,6 +1427,8 @@ def stage_report(conn: ConnectionLike, *, project_id: str, request_id: str, envi
             }}
             _write_signed_metadata(operation_dir, root, "reports.json",
                                    _signed_record(record, "reports_signature", REPORTS_DOMAIN))
+    except OSError as exc:
+        raise _write_failed() from exc
     finally:
         if temporary is not None:
             try:
@@ -1196,6 +1479,8 @@ def _publish_report(root: Path, parent: Path, report: dict[str, Any], staged_pat
                 raise CaseFinalizationError("FINALIZATION_DESTINATION_CONFLICT", f"기존 최종 보고서를 덮어쓰지 않았습니다: {file_name}")
         except spdm_storage.SpdmStorageError as exc:
             raise CaseFinalizationError(exc.code, str(exc)) from exc
+        except OSError as exc:
+            raise _write_failed() from exc
         finally:
             if temporary is not None:
                 try:
@@ -1267,8 +1552,17 @@ def _plan_sources_valid(conn: ConnectionLike, plan: dict[str, Any], *, project_i
     return True
 
 
+def _shallow_matches(root: Path, relative: str, size: int) -> bool:
+    """Existence and recorded size only (status history that is not displayed)."""
+    path = result_registration_paths._safe_existing(root, relative)
+    spdm_storage._assert_safe_existing(path, root)
+    info = path.lstat()
+    return stat.S_ISREG(info.st_mode) and info.st_size == size
+
+
 def _verify_outputs(scope: dict[str, Any], plan: dict[str, Any], output_paths: dict[str, str],
-                    reports: list[dict[str, Any]] | None = None) -> bool:
+                    reports: list[dict[str, Any]] | None = None, *, deep: bool = True) -> bool:
+    """``deep`` re-hashes every output; otherwise existence and recorded size only."""
     root: Path = scope["root"]
     for item in plan["files"]:
         category = str(item["category"])
@@ -1284,6 +1578,10 @@ def _verify_outputs(scope: dict[str, Any], plan: dict[str, Any], output_paths: d
             return False
         base = result_registration_paths._safe_existing(root, output_paths[category])
         relative = f"{output_paths[category]}/{case_relative}"
+        if not deep:
+            if not _shallow_matches(root, relative, item["size"]):
+                return False
+            continue
         path = result_registration_paths._safe_existing(root, relative)
         if not path.is_file() or _read_source(root, relative)[1] != item["sha256"]:
             return False
@@ -1292,6 +1590,10 @@ def _verify_outputs(scope: dict[str, Any], plan: dict[str, Any], output_paths: d
             return False
     for report in reports or []:
         relative = f"{output_paths['Reports']}/{report['file_name']}"
+        if not deep:
+            if not _shallow_matches(root, relative, report["size"]):
+                return False
+            continue
         path = result_registration_paths._safe_existing(root, relative)
         if _hash_path(path, root, MAX_REPORT_BYTES[report["format"]]) != (report["sha256"], report["size"]):
             return False
@@ -1300,6 +1602,81 @@ def _verify_outputs(scope: dict[str, Any], plan: dict[str, Any], output_paths: d
         if not path.is_dir():
             return False
     return True
+
+
+def _reports_directory_entries(root: Path, relative: str, operation_id: str) -> list[tuple[str, bool]]:
+    """Entries of this operation's Final/Reports folder, without its own partial temp files."""
+    try:
+        path = result_registration_paths._safe_existing(root, relative, allow_missing_leaf=True)
+        if not os.path.lexists(path):
+            return []
+        spdm_storage._assert_safe_existing(path, root)
+        if not path.is_dir():
+            raise CaseFinalizationError("FINALIZATION_REPORTS_UNEXPECTED_FILE", "Final/Reports 보고서 폴더 자리에 다른 항목이 있습니다. 기존 자료를 보존하고 관리자에게 문의하세요.")
+        entries: list[tuple[str, bool]] = []
+        with os.scandir(path) as scanned:
+            for entry in scanned:
+                is_file = entry.is_file(follow_symlinks=False)
+                if is_file and entry.name.startswith(f".codex-partial-{operation_id}-"):
+                    continue
+                entries.append((entry.name, is_file))
+                if len(entries) > 2 * len(REPORT_FORMATS):
+                    break
+        return entries
+    except CaseFinalizationError:
+        raise
+    except result_registration_paths.ResultRegistrationError as exc:
+        raise CaseFinalizationError(exc.code, str(exc)) from exc
+    except spdm_storage.SpdmStorageError as exc:
+        raise CaseFinalizationError(exc.code, str(exc)) from exc
+    except OSError as exc:
+        raise CaseFinalizationError("FINALIZATION_SOURCE_UNAVAILABLE", "Final/Reports 보고서 폴더를 읽을 수 없습니다.") from exc
+
+
+def _check_reports_before_publish(root: Path, plan: dict[str, Any], operation_id: str, formats: list[str],
+                                  history: dict[str, Any]) -> None:
+    """A retry must keep every format an earlier attempt of this operation already published."""
+    relative = _expected_output_paths(plan)["Reports"]
+    known = {str(name).casefold(): fmt for fmt, name in plan["report_files"].items()}
+    for name, is_file in _reports_directory_entries(root, relative, operation_id):
+        fmt = known.get(name.casefold())
+        if not is_file or fmt is None:
+            raise CaseFinalizationError("FINALIZATION_REPORTS_UNEXPECTED_FILE", f"Final/Reports 보고서 폴더에 이 Final 지정이 만들지 않은 항목이 있습니다: {name}. 기존 자료를 보존하고 관리자에게 문의하세요.")
+        if fmt in formats:
+            continue  # Replaced or kept by _publish_report under its own history rule.
+        digest, _size = _hash_path(root / relative / name, root, MAX_REPORT_BYTES[fmt])
+        if digest in (history.get(fmt) or []):
+            raise CaseFinalizationError("FINALIZATION_REPORT_FORMATS_MISMATCH", f"이전 시도에서 {fmt.upper()} 보고서가 이미 저장되었습니다. {fmt.upper()}를 포함해 다시 시도하세요.")
+        raise CaseFinalizationError("FINALIZATION_REPORTS_UNEXPECTED_FILE", f"Final/Reports 보고서 폴더에 이 Final 지정이 만들지 않은 파일이 있습니다: {name}. 기존 자료를 보존하고 관리자에게 문의하세요.")
+
+
+def _assert_reports_exact(root: Path, plan: dict[str, Any], operation_id: str, reports: list[dict[str, Any]]) -> None:
+    """Before complete.json: the Reports folder holds exactly the recorded reports (nothing is deleted)."""
+    entries = _reports_directory_entries(root, _expected_output_paths(plan)["Reports"], operation_id)
+    expected = sorted(str(item["file_name"]).casefold() for item in reports)
+    if not all(is_file for _name, is_file in entries) or sorted(name.casefold() for name, _ in entries) != expected:
+        raise CaseFinalizationError("FINALIZATION_REPORTS_UNEXPECTED_FILE", "Final/Reports 보고서 폴더의 파일이 기록할 보고서와 다릅니다. 기존 자료를 보존하고 관리자에게 문의하세요.")
+
+
+def _remove_staged_reports(root: Path, operation_dir: Path, plan: dict[str, Any], history: dict[str, Any]) -> None:
+    """After completion, drop this operation's own staged copies (hash in the signed history); best effort."""
+    staging_dir = operation_dir / "reports"
+    try:
+        if not staging_dir.is_dir():
+            return
+        with _pin_directory_chain(root, staging_dir):
+            for fmt, name in plan["report_files"].items():
+                path = staging_dir / str(name)
+                if not os.path.lexists(path):
+                    continue
+                try:
+                    digest, _size = _hash_path(path, root, MAX_REPORT_BYTES[fmt])
+                except CaseFinalizationError:
+                    continue
+                if digest in (history.get(fmt) or []):
+                    path.unlink()
+    except (OSError, CaseFinalizationError, spdm_storage.SpdmStorageError):
+        pass
 
 
 def _cleanup_partial_files(scope: dict[str, Any], output_paths: dict[str, str], operation_id: str) -> None:
@@ -1439,6 +1816,10 @@ def confirm(conn: ConnectionLike, *, project_id: str, request_id: str, environme
             raise CaseFinalizationError("FINALIZATION_REPORT_STAGE_INVALID", "올린 보고서 기록이 올바르지 않습니다. 보고서를 다시 올리세요.")
         if not plan["files"]:
             raise CaseFinalizationError("FINALIZATION_NO_FILES", "최종확정할 입력 또는 결과 파일이 없습니다.")
+        history = dict((staged or {}).get("history") or {})
+        # Before anything is copied: an earlier attempt of this operation may already have
+        # published a report; completing without it would leave an unrecorded file behind.
+        _check_reports_before_publish(root, plan, operation_id, formats, history)
         output_paths: dict[str, str] = {}
         targets: dict[str, Path] = {}
         relative, path = _target_directory(scope, plan, "CAE")
@@ -1450,10 +1831,11 @@ def confirm(conn: ConnectionLike, *, project_id: str, request_id: str, environme
         output_paths["Reports"], targets["Reports"] = relative, path
         for report in reports:
             _publish_report(root, targets["Reports"], report, operation_dir / "reports" / report["file_name"],
-                            operation_id, list((staged or {}).get("history", {}).get(report["format"]) or []))
+                            operation_id, list(history.get(report["format"]) or []))
         _cleanup_partial_files(scope, output_paths, operation_id)
         if output_paths != _expected_output_paths(plan) or not _verify_outputs(scope, plan, output_paths, reports):
             raise CaseFinalizationError("FINALIZATION_OUTPUT_VERIFY_FAILED", "최종확정 파일 해시 검증에 실패했습니다. 같은 요청을 다시 시도하세요.")
+        _assert_reports_exact(root, plan, operation_id, reports)
         completed = {
             "schema_version": PLAN_VERSION, "operation_id": operation_id, "status": "COMPLETE",
             "plan_sha256": plan_hash, "project_id": project_id, "request_id": request_id,
@@ -1481,11 +1863,16 @@ def confirm(conn: ConnectionLike, *, project_id: str, request_id: str, environme
                     os.rename(temporary, complete_path)
                 else:
                     os.link(temporary, complete_path)
+            except FileExistsError as exc:
+                raise CaseFinalizationError("FINALIZATION_MARKER_CONFLICT", "완료 표식이 동시에 생성되었습니다. 같은 요청을 다시 확인하세요.") from exc
+            except OSError as exc:
+                raise _write_failed() from exc
             finally:
                 try:
                     temporary.unlink(missing_ok=True)
                 except OSError:
                     pass
+        _remove_staged_reports(root, operation_dir, plan, history)
         return _completed_response(plan, completed)
 
 
@@ -1510,28 +1897,32 @@ def _completed_response(plan: dict[str, Any], completed: dict[str, Any]) -> dict
 
 def _status_operation(conn: ConnectionLike, scope: dict[str, Any], project_id: str,
                      request_id: str, environment: str, operation_dir: Path,
-                     metadata_budget: list[int], verification_budget: list[int],
-                     ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, bool]:
-    """Read one signed operation without letting a malformed sibling hide valid history."""
+                     metadata_budget: list[int],
+                     ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, bool, dict[str, Any] | None]:
+    """Read one signed operation without letting a malformed sibling hide valid history.
+
+    Outputs are checked for existence and recorded size here; the hash check of the
+    records status actually shows is done by ``status`` (``deep`` argument tuple).
+    """
     root: Path = scope["root"]
     spdm_storage._assert_safe_existing(operation_dir, root)
     operation_id = operation_dir.name
     plan_path = operation_dir / "plan.json"
     if not os.path.lexists(plan_path):
-        return None, None, False
+        return None, None, False, None
     spdm_storage._assert_safe_existing(plan_path, root)
     plan = _read_json(plan_path, status_metadata_budget=metadata_budget)
     if not plan or not _verify_signed_record(plan, "plan_signature", PLAN_DOMAIN):
-        return None, None, True
+        return None, None, True, None
     final_relative, metadata_relative = _final_paths(scope)
     if ((plan.get("operation_id"), plan.get("project_id"), plan.get("request_id"), plan.get("environment")) !=
             (operation_id, project_id, request_id, str(environment).upper())
             or plan.get("final_relative_path") != final_relative
             or plan.get("metadata_relative_path") != f"{metadata_relative}/{operation_id}"):
-        return None, None, True
+        return None, None, True, None
     case_id = plan.get("case_id")
     if not isinstance(case_id, str) or not case_id or len(case_id) > 128:
-        return None, None, True
+        return None, None, True, None
     case_record = conn.execute(
         "SELECT project_id,request_id,environment,relative_path,source_name,storage_root_id FROM dashboard_cases WHERE id=?",
         [case_id],
@@ -1539,10 +1930,10 @@ def _status_operation(conn: ConnectionLike, scope: dict[str, Any], project_id: s
     if (not case_record or (str(case_record[0]), str(case_record[1]), str(case_record[2]), str(case_record[5])) !=
             (project_id, request_id, str(environment).upper(), scope["root_id"])
             or plan.get("case_path") != str(case_record[3]) or plan.get("case_label") != str(case_record[4])):
-        return None, None, True
+        return None, None, True, None
     if not _plan_sources_valid(conn, plan, project_id=project_id, request_id=request_id,
                                environment=environment, case_id=case_id, case_path=str(case_record[3])):
-        return None, None, True
+        return None, None, True, None
     version = plan.get("schema_version")
     # Version 1 (before 2026-10-03) mirrored results/Scene reports into Final/Reports.
     categories = {"CAE", "Reports"} if version == 1 else {"CAE"}
@@ -1555,17 +1946,17 @@ def _status_operation(conn: ConnectionLike, scope: dict[str, Any], project_id: s
             or not re.fullmatch(r"[0-9a-f]{64}", str(file.get("sha256") or ""))
             or type(file.get("size")) is not int or file["size"] < 0 or file["size"] > MAX_FILE_BYTES
             for file in files)):
-        return None, None, True
+        return None, None, True, None
     output_bytes = sum(file["size"] for file in files)
     if output_bytes > MAX_TOTAL_BYTES:
-        return None, None, True
+        return None, None, True, None
     try:
         expected_outputs = _expected_output_paths(plan)
     except (CaseFinalizationError, TypeError, ValueError):
-        return None, None, True
+        return None, None, True, None
     complete_path = operation_dir / "complete.json"
     if not os.path.lexists(complete_path):
-        return plan, None, False
+        return plan, None, False, None
     spdm_storage._assert_safe_existing(complete_path, root)
     completed = _read_json(complete_path, status_metadata_budget=metadata_budget)
     reports = completed.get("reports") if completed else None
@@ -1577,30 +1968,31 @@ def _status_operation(conn: ConnectionLike, scope: dict[str, Any], project_id: s
             or completed.get("output_paths") != expected_outputs
             or completed.get("plan_sha256") != _plan_hash(plan)
             or not _valid_report_records(plan, reports)):
-        return None, None, True
+        return None, None, True, None
     output_bytes += sum(item["size"] for item in reports or [])
-    if verification_budget[0] + output_bytes > MAX_STATUS_VERIFY_BYTES:
-        raise CaseFinalizationError(
-            "FINALIZATION_STATUS_LIMIT",
-            f"최종확정 출력 검증 누계가 {MAX_STATUS_VERIFY_BYTES // (1024 * 1024)} MiB 제한을 초과했습니다. 이력을 안전하게 판정할 수 없습니다.",
-        )
-    verification_budget[0] += output_bytes
-    if not _verify_outputs(scope, plan, expected_outputs, reports):
-        return None, None, True
-    return plan, _completed_response(plan, completed), False
+    if not _verify_outputs(scope, plan, expected_outputs, reports, deep=False):
+        return None, None, True, None
+    deep = {"expected_outputs": expected_outputs, "reports": reports, "output_bytes": output_bytes}
+    return plan, _completed_response(plan, completed), False, deep
 
 
 def status(conn: ConnectionLike, *, project_id: str, request_id: str, environment: str,
            case_id: str) -> dict[str, Any]:
+    """Request-wide and selected-Case latest completed records.
+
+    Every completed record is checked for signatures, scope and output existence/size.
+    Only the records status returns (request latest, selected Case latest) are hash
+    verified; a record that fails is counted as unverified and the next newer-to-older
+    candidate is tried, so damaged outputs are never shown as normal while large report
+    history cannot exhaust the per-call verification budget.
+    """
     scope = _scope_for_status(conn, project_id, request_id, environment, case_id)
     final_relative, metadata_relative = _final_paths(scope)
     metadata_dir = result_registration_paths._safe_existing(scope["root"], metadata_relative, allow_missing_leaf=True)
-    latest = None
-    selected_case_latest = None
     incomplete: list[dict[str, Any]] = []
+    candidates: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]] = []
     unverified_count = 0
     metadata_budget = [0]
-    verification_budget = [0]
     if metadata_dir.is_dir():
         inspected_items = 0
         for item in metadata_dir.iterdir():
@@ -1613,28 +2005,50 @@ def status(conn: ConnectionLike, *, project_id: str, request_id: str, environmen
             if not item.is_dir() or not _OPERATION_ID.fullmatch(item.name):
                 continue
             try:
-                plan, completed_record, unverified = _status_operation(
-                    conn, scope, project_id, request_id, environment, item,
-                    metadata_budget, verification_budget,
+                plan, completed_record, unverified, deep = _status_operation(
+                    conn, scope, project_id, request_id, environment, item, metadata_budget,
                 )
             except CaseFinalizationError as exc:
                 if exc.code == "FINALIZATION_STATUS_LIMIT":
                     raise
-                plan, completed_record, unverified = None, None, True
+                plan, completed_record, unverified, deep = None, None, True, None
             except (result_registration_paths.ResultRegistrationError,
                     spdm_storage.SpdmStorageError, OSError, TypeError, ValueError, KeyError):
-                plan, completed_record, unverified = None, None, True
+                plan, completed_record, unverified, deep = None, None, True, None
             if unverified:
                 unverified_count += 1
-            if completed_record:
-                if latest is None or str(completed_record.get("confirmed_at", "")) > str(latest.get("confirmed_at", "")):
-                    latest = completed_record
-                if plan and plan.get("case_id") == case_id and (selected_case_latest is None or str(completed_record.get("confirmed_at", "")) > str(selected_case_latest.get("confirmed_at", ""))):
-                    selected_case_latest = completed_record
+            if completed_record and plan and deep:
+                candidates.append((plan, completed_record, deep))
             elif plan and plan.get("case_id") == case_id and plan.get("schema_version") == PLAN_VERSION:
                 # Unfinished version-1 previews cannot be confirmed any more; a new preview replaces them.
                 incomplete.append({"operation_id": plan["operation_id"], "status": "RETRYABLE",
                                    "capture_id": plan.get("capture_id"), "previewed_at": plan.get("previewed_at")})
+    candidates.sort(key=lambda row: str(row[1].get("confirmed_at", "")), reverse=True)
+    verified: dict[str, bool] = {}
+    verification_budget = [0]
+
+    def deep_ok(plan: dict[str, Any], deep: dict[str, Any]) -> bool:
+        nonlocal unverified_count
+        operation_id = str(plan["operation_id"])
+        if operation_id not in verified:
+            if verification_budget[0] + deep["output_bytes"] > MAX_STATUS_VERIFY_BYTES:
+                raise CaseFinalizationError(
+                    "FINALIZATION_STATUS_LIMIT",
+                    f"최종확정 출력 검증 누계가 {MAX_STATUS_VERIFY_BYTES // (1024 * 1024)} MiB 제한을 초과했습니다. 이력을 안전하게 판정할 수 없습니다.",
+                )
+            verification_budget[0] += deep["output_bytes"]
+            try:
+                verified[operation_id] = _verify_outputs(scope, plan, deep["expected_outputs"], deep["reports"])
+            except (CaseFinalizationError, result_registration_paths.ResultRegistrationError,
+                    spdm_storage.SpdmStorageError, OSError, TypeError, ValueError, KeyError):
+                verified[operation_id] = False
+            if not verified[operation_id]:
+                unverified_count += 1
+        return verified[operation_id]
+
+    latest = next((record for plan, record, deep in candidates if deep_ok(plan, deep)), None)
+    selected_case_latest = next((record for plan, record, deep in candidates
+                                 if plan.get("case_id") == case_id and deep_ok(plan, deep)), None)
     return {"case_id": case_id, "request_id": request_id, "environment": str(environment).upper(),
             "final_relative_path": final_relative, "latest": latest, "selected_case_latest": selected_case_latest,
             "retryable_operations": sorted(incomplete, key=lambda row: row["previewed_at"], reverse=True),

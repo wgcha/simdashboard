@@ -6,6 +6,7 @@ import {
   type CaseFinalizationPreview,
   type CaseFinalizationRecord,
   type CaseFinalizationReportFormat,
+  type CaseFinalizationExcludedScene,
   type CaseFinalizationStatus,
 } from '../../shared/api/caseFinalization'
 import type { DashboardEnvironment } from '../../shared/api/simulationDashboard'
@@ -44,6 +45,11 @@ const formatDate = (value?: string | null) => {
 }
 
 const lastSegment = (path: string) => path.split('/').filter(Boolean).pop() ?? path
+const EXCLUDED_REASON: Record<CaseFinalizationExcludedScene['reason'], string> = {
+  NO_CAPTURE: '수집된 결과 없음',
+  CAPTURE_SCHEMA_MISSING: '최신 결과에 확정 위치 정보 없음 · 다시 수집 필요',
+  CAPTURE_SCHEMA_INCOMPATIBLE: '최신 결과가 현재 Folder Schema와 다름 · 다시 수집 필요',
+}
 const message = (cause: unknown, fallback: string) => cause instanceof Error && cause.message ? cause.message : fallback
 
 export function CaseFinalizationPanel(props: Props) {
@@ -170,6 +176,7 @@ export function CaseFinalizationPanel(props: Props) {
   const sourceCount = preview ? new Set(preview.scene_sources.map((item) => item.source_capture_id)).size : 0
   const reportRange = !scopeAtOpen ? '' : scopeAtOpen.source.kind === 'case_usage' ? '사용환경 Case 전체 · 다섯 평가 종합 · 결과 이미지·영상' : 'Case 전체 · 모든 Run Case · Run Option (결과가 없는 항목은 결과 없음으로 표시)'
   const sceneDocs = preview?.counts.scene_reports ?? 0
+  const excludedScenes = preview?.excluded_scenes ?? []
   const confirmDisabled = !canFinalize || busy || !preview?.can_confirm || !scopeAtOpen || !chosen.length
 
   return <>
@@ -206,6 +213,12 @@ export function CaseFinalizationPanel(props: Props) {
           <ul className="case-finalization__scenes" aria-label="Scene 기준">
             {preview.scene_sources.map((item) => <li key={item.scene_path} title={item.scene_path}>{lastSegment(item.scene_path)}</li>)}
           </ul>
+          {excludedScenes.length > 0 && <div className="case-finalization__excluded" data-testid="case-final-excluded-scenes">
+            <p className="case-finalization__missing">제외되는 Scene {excludedScenes.length}개 (이전 결과로 대신하지 않습니다)</p>
+            <ul className="case-finalization__scenes" aria-label="제외 Scene">
+              {excludedScenes.map((item) => <li key={item.scene_path} title={`${item.scene_path}\n${EXCLUDED_REASON[item.reason] ?? item.reason}`}>{lastSegment(item.scene_path)} · {EXCLUDED_REASON[item.reason] ?? item.reason}</li>)}
+            </ul>
+          </div>}
         </section>
         <section className="case-finalization__section" aria-label="Final/CAE">
           <h4>Final/CAE <span>입력·결과 {preview.files.length}개</span></h4>

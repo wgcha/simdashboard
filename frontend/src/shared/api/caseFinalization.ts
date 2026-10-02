@@ -28,6 +28,13 @@ export type CaseFinalizationFile = {
 
 export type CaseFinalizationSceneSource = { scene_path: string; source_capture_id: string; source_capture_fingerprint?: string }
 
+/** A current confirmed Scene left out of the latest basis (never replaced by an older capture). */
+export type CaseFinalizationExcludedScene = {
+  scene_path: string
+  source_capture_id: string | null
+  reason: 'NO_CAPTURE' | 'CAPTURE_SCHEMA_MISSING' | 'CAPTURE_SCHEMA_INCOMPATIBLE'
+}
+
 export type CaseFinalizationReport = { format: CaseFinalizationReportFormat; file_name: string; size: number; sha256: string; relative_path: string }
 
 export type CaseFinalizationCounts = {
@@ -73,6 +80,8 @@ export type CaseFinalizationPreview = Omit<CaseFinalizationRecord, 'status' | 'c
   plan_sha256: string
   can_confirm: boolean
   scene_paths: string[]
+  /** Previews made before 2026-10-03 do not carry this field. */
+  excluded_scenes?: CaseFinalizationExcludedScene[]
   report_files: Record<CaseFinalizationReportFormat, string>
   report_paths: Record<CaseFinalizationReportFormat, string>
   report_limits: Record<CaseFinalizationReportFormat, number>
