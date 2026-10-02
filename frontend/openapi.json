@@ -6188,6 +6188,53 @@
         }
       }
     },
+    "/api/folder-discovery/environments/discover": {
+      "post": {
+        "tags": [
+          "folder-discovery-environments"
+        ],
+        "summary": "Discover",
+        "description": "Register new SPDM project/request folders found under the storage root (screens poll this).\n\nTakes no path or scope from the client. Any active account may trigger it:\nproject.data.view is the company permission that already lets every active\naccount list all projects and requests (GET /api/projects), so the result\nreveals nothing new. Folder paths needing review go to global admins only.\nRuns are throttled server-side (see folder_auto_discovery).",
+        "operationId": "discover_api_folder_discovery_environments_discover_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/Discover"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/folder-discovery/environments/refresh": {
       "post": {
         "tags": [
@@ -14502,6 +14549,17 @@
           "user_id"
         ],
         "title": "DeviceSessionResponse"
+      },
+      "Discover": {
+        "properties": {
+          "force": {
+            "type": "boolean",
+            "title": "Force",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "Discover"
       },
       "DraftManifestFile": {
         "properties": {

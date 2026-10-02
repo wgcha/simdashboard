@@ -2081,6 +2081,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/folder-discovery/environments/discover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Discover
+         * @description Register new SPDM project/request folders found under the storage root (screens poll this).
+         *
+         *     Takes no path or scope from the client. Any active account may trigger it:
+         *     project.data.view is the company permission that already lets every active
+         *     account list all projects and requests (GET /api/projects), so the result
+         *     reveals nothing new. Folder paths needing review go to global admins only.
+         *     Runs are throttled server-side (see folder_auto_discovery).
+         */
+        post: operations["discover_api_folder_discovery_environments_discover_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/folder-discovery/environments/refresh": {
         parameters: {
             query?: never;
@@ -4610,6 +4636,14 @@ export interface components {
             binding_id: string;
             /** User Id */
             user_id: string;
+        };
+        /** Discover */
+        Discover: {
+            /**
+             * Force
+             * @default false
+             */
+            force: boolean;
         };
         /** DraftManifestFile */
         DraftManifestFile: {
@@ -11353,6 +11387,39 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["Sync"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    discover_api_folder_discovery_environments_discover_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["Discover"] | null;
             };
         };
         responses: {

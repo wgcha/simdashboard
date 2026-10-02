@@ -1057,3 +1057,10 @@
 - 조치: 유통환경 Scene 자체를 결과 위치로 제안, 실행 파일·스크립트 외 모든 형식 업로드 허용, Case별 Scene 최신 결과 병합(가상 버전 latest:<Case>)을 기본 표시하고 버전은 업데이트 이력으로만 표시, 게시 후 Refresh에서 Case 폴더 전체 수집(capture_cases=True). 등록 테스트 2건은 "게시당 버전 1개" 가정을 멱등성 확인으로 바꿨다.
 - 검증: 관련 백엔드 102 passed(신규 포함), tsc 통과, e2e materials 5/5·folder-working-final 3/3·simulation-dashboard 9/10(남은 1건은 기준 커밋부터 실패하는 capture-pin 항목). simulation-dashboard의 첫 화면 대기 시간을 15초로 늘려 재로딩 지연에 따른 간헐 실패를 정리했다.
 - 미실행: 독립 검수(이번 변경분), Codex Security 스캔, Windows/Server 2022. 최종확정의 병합 최신 결과 기준 처리는 6단계에서 정리한다.
+
+## 2026-10-02 새 프로젝트·의뢰 폴더 자동 확인 (Claude, 브랜치 claude/case-results-redesign)
+- `folder_auto_discovery.py`와 `POST /api/folder-discovery/environments/discover`: root → 포장 폴더(최대 2단계) → 프로젝트 → 의뢰를 얕게 나열하고, 새 의뢰만 기존 scan → preview → registration(capture)으로 등록한다. 환경은 의뢰 이름(사용/유통, SimType1/2)으로 정하고, 판단 불가·역할 미결정은 등록하지 않고 needs_review(관리자만 표시)로 돌려준다. 빈 Working 의뢰도 등록한다. 새 프로젝트는 첫 의뢰 등록 트랜잭션에서 멤버십 없이 만든다.
+- 기존 파이프라인 확장(기본 동작 불변): `save_scan(skip_paths)`, 등록 재조사 시 저장된 조사의 `children_skipped` 경계 재사용, `preview(allow_without_cases)`, `register/materialize(creator_membership)`.
+- 권한 `project.data.view`(목록 조회와 동일), 프로세스·root별 60초(force 10초) 합치기, 생성 시에만 감사 기록. 프런트 `useFolderDiscovery`(시작 시·60초, 숨김 탭 중지, "새 의뢰 n건 확인" 알림, 생성 시 `refreshOperationalData`).
+- 검증: 신규 10 passed, 지정 회귀(environment_folder_flow_api·new_scene_registration·folder_auto_sync·result_registration_api) 포함 61 passed/2 skipped, environment_registration·folder_discovery·openapi_contract 통과. 백엔드 architecture baseline 테스트 실패는 기준 커밋에서도 동일한 기존 항목(dashboard.py·folder_discovery_environment.py sync의 execute). tsc·test:routing 통과, check:architecture는 기존 4건만(App.tsx 1089/1077, +1행).
+- 미실행: e2e(지휘 담당), 독립 검수·Codex Security 스캔, PostgreSQL·Windows/Server 2022, 실제 공유폴더. migration·의존성·배포 진입점 변경 없음.

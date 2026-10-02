@@ -28,6 +28,16 @@ export type FolderEnvironmentSync = {
   checked_at: string
   coalesced: boolean
 }
+/** Response of automatic SPDM project/request folder discovery (OpenAPI declares it untyped). */
+export type FolderDiscoveryResult = {
+  created_projects: Array<{ id: string; name: string }>
+  created_requests: Array<{ id: string; name: string; environment: FolderEnvironment; project_id: string }>
+  /** Global administrators only; empty for other accounts. */
+  needs_review: Array<{ relative_path: string; reason: string; code?: string; environment?: FolderEnvironment | null }>
+  checked_at: string
+  coalesced: boolean
+  status?: 'CHECKED' | 'ROOT_UNSET'
+}
 type ProfileInput = { environment: FolderEnvironment; name: string; rules: { rules: FolderEnvironmentProfileRule[]; usage_sources?: UsageSourceProfile; description?: string } }
 
 export const folderEnvironmentApi = {
@@ -36,6 +46,9 @@ export const folderEnvironmentApi = {
   },
   sync: async (body: { project_id: string; request_id: string; environment: FolderEnvironment; force?: boolean }, signal?: AbortSignal): Promise<FolderEnvironmentSync> => {
     return unwrapGenerated(await apiClient.POST('/api/folder-discovery/environments/sync', { body: { ...body, force: body.force ?? false }, signal })) as FolderEnvironmentSync
+  },
+  discover: async (body: { force?: boolean } = {}, signal?: AbortSignal): Promise<FolderDiscoveryResult> => {
+    return unwrapGenerated(await apiClient.POST('/api/folder-discovery/environments/discover', { body: { force: body.force ?? false }, signal })) as FolderDiscoveryResult
   },
   profiles: async (signal?: AbortSignal) => (unwrapGenerated(await apiClient.GET('/api/folder-discovery/environments', { signal })) as { items: FolderEnvironmentProfile[] }).items,
   createProfile: async (body: ProfileInput) => unwrapGenerated(await apiClient.POST('/api/folder-discovery/environments/profiles', { body })) as FolderEnvironmentProfile,

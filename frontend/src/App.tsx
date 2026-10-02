@@ -70,7 +70,7 @@ import { RequestJourneyCompact } from './features/request-workspace/RequestWorks
 import { RequestWorkspaceShellHeader } from './app/workspace/RequestWorkspaceShellHeader'
 import { RequestResultSummary } from './features/request-workspace/RequestResultSummary'
 import { StorageWorkspacePanel } from './features/storage/StorageWorkspacePanel'
-import { StorageRefreshControl } from './features/storage/StorageRefreshControl'
+import { StorageRefreshControl } from './features/storage/StorageRefreshControl'; import { useFolderDiscovery } from './shared/hooks/useFolderDiscovery'
 import { resetWorkspaceContext } from './app/workspace/resetWorkspaceContext'
 import type { AnalysisRequest, AutomationTemplate, DashboardDefinition, DashboardPageSummary, DashboardSummary, DashboardVersion, DashboardWidget, FeatureExample, ImportSchema, LoadCase, Overview, PortfolioLayout, Project, QualityThreshold, ReportContentItem, ReportElementDefinition, ReportElementType, ReportLayout, ReportLayoutDefinition, ReportLayoutVersion, ReportSection, ReportSlideDefinition, ReportSlideKind, ReportSource, ReportTemplateAsset, ReviewItem, RunComparison, RunComparisonReportContext, RunTrust, VariableDefinition, VariableDefinitionInput, WidgetCatalogItem, Workflow, WorkflowDashboardLayout, WorkflowStep } from './types'
 function App() {
@@ -747,6 +747,7 @@ function App() {
     setActiveDashboardId, setActiveView, setError,
   })
   const refreshOperationalData = async () => { const [projectData, workflowData] = await Promise.all([api.projects(), api.workflows()]); setProjects(projectData); setWorkflows(workflowData); const projectId = selectedProjectId || projectData[0]?.id || ''; setSelectedProjectId(projectId); if (projectId) { const requestData = await api.requests(projectId); setRequests(requestData); const requestId = requestData.some((request) => request.id === selectedRequestId) ? selectedRequestId : requestData[0]?.id || ''; if (requestId) { const caseData = await api.loadCases(requestId); setLoadCases(caseData); if (!caseData.some((loadCase) => loadCase.id === selectedLoadCaseId)) setSelectedLoadCaseId(caseData[0]?.id || '') } else { setLoadCases([]); setSelectedLoadCaseId('') } if (!requestData.some((request) => request.id === selectedRequestId)) setSelectedRequestId(requestId) } setOperationalRefreshToken((value) => value + 1) }
+  useFolderDiscovery({ enabled: authReady && !setupRequired && (!authRequired || authUser?.account_status === 'ACTIVE'), isAdmin: Boolean(authUser?.is_global_admin), onCreated: refreshOperationalData, onNotice: setNotice })
   const handleIntakeCreated = async (projectId: string, request: AnalysisRequest) => {
     const intent = beginContextEntry(); const [projectData, workflowData, requestData] = await Promise.all([api.projects(), api.workflows(), api.requests(projectId)])
     if (!isCurrentContextEntry(intent)) return

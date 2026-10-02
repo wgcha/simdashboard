@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 from ..database_connection import connect
 from ..security import write_audit_event
 from ..modules.access_control import PROJECT_DATA_VIEW, RESULT_IMPORT, SYSTEM_CATALOG_MANAGE, require_permission, require_resource_permission
-from ..services import (dashboard_capture, folder_auto_sync, folder_discovery as legacy,
+from ..services import (dashboard_capture, folder_auto_discovery, folder_auto_sync, folder_discovery as legacy,
                         folder_discovery_environment as service, result_registration)
 from .semantic_body_limit import SemanticBodyLimitRoute
 
@@ -28,6 +28,8 @@ class Refresh(BaseModel):
     request_id: str = Field(min_length=1, max_length=128)
     environment: Literal["USAGE", "DISTRIBUTION"]
 class Sync(Refresh):
+    force: bool = False
+class Discover(BaseModel):
     force: bool = False
 class Retry(BaseModel): job_ids: list[str] | None = Field(default=None, max_length=500)
 class UsageReview(BaseModel):
@@ -61,8 +63,7 @@ def sync(payload: Sync, request: Request):
     """
     with connect() as conn:
         require_resource_permission(request, PROJECT_DATA_VIEW, "request", payload.request_id, conn=conn)
-        row = conn.execute("SELECT project_id FROM analysis_requests WHERE id=?", [payload.request_id]).fetchone()
-        if not row or str(row[0]) != payload.project_id:
+        if not folder_auto_sync.request_in_project(conn, payload.project_id, payload.request_id):
             raise HTTPException(404, {"code": "FOLDER_SCHEMA_SCOPE_MISMATCH", "message": "프로젝트와 의뢰 문맥이 일치하지 않습니다."})
         result = folder_auto_sync.sync(conn, payload.project_id, payload.request_id, payload.environment,
                                        request.state.principal.user_id, force=payload.force)
@@ -73,6 +74,26 @@ def sync(payload: Sync, request: Request):
                                       "request_id": payload.request_id, "environment": payload.environment,
                                       "status": result["status"], "force": payload.force}, connection=conn)
         return result
+@router.post("/discover")
+def discover(request: Request, payload: Discover | None = None):
+    """Register new SPDM project/request folders found under the storage root (screens poll this).
+
+    Takes no path or scope from the client. Any active account may trigger it:
+    project.data.view is the company permission that already lets every active
+    account list all projects and requests (GET /api/projects), so the result
+    reveals nothing new. Folder paths needing review go to global admins only.
+    Runs are throttled server-side (see folder_auto_discovery).
+    """
+    force = bool(payload and payload.force)
+    with connect() as conn:
+        access = require_permission(request, PROJECT_DATA_VIEW, conn=conn)
+        result = folder_auto_discovery.discover(conn, force=force)
+        if not result.get("coalesced") and (result["created_projects"] or result["created_requests"]):
+            write_audit_event(request=request, principal=request.state.principal, status_code=200,
+                              action="FOLDER_ENVIRONMENT_AUTO_DISCOVERED",
+                              detail=folder_auto_discovery.audit_detail(result), connection=conn)
+        return folder_auto_discovery.visible_result(
+            result, is_global_admin=bool(getattr(access.principal, "is_global_admin", False)))
 @router.post("/refresh")
 def refresh(payload: Refresh, request: Request):
     with connect() as conn:

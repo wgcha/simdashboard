@@ -601,7 +601,20 @@ def _refresh_result(snapshot_id, status, changed, schema, structure_fingerprint,
     }
 
 
-def save_scan(conn, root, relative_path: str, environment: str, profile_id: str | None, project_id: str | None, request_id: str | None, actor: str):
+def _skip_with_boundaries(base, skip_paths):
+    """Also skip the descendants of explicit boundary folders (e.g. sibling requests)."""
+    folded = {str(path).strip("/").casefold() for path in (skip_paths or ()) if str(path).strip("/")}
+    if not folded:
+        return base
+
+    def should_skip(relative_path: str, parent_path: str | None) -> bool:
+        return str(relative_path).strip("/").casefold() in folded or base(relative_path, parent_path)
+
+    return should_skip
+
+
+def save_scan(conn, root, relative_path: str, environment: str, profile_id: str | None, project_id: str | None, request_id: str | None, actor: str,
+              *, skip_paths=None):
     if environment not in ENVIRONMENTS: raise ValueError("지원하지 않는 환경입니다.")
     if request_id and not project_id:
         found = conn.execute("SELECT project_id FROM analysis_requests WHERE id=?", [request_id]).fetchone()
@@ -619,7 +632,7 @@ def save_scan(conn, root, relative_path: str, environment: str, profile_id: str 
             request_path = resolver._request_path(conn, root_key, project_id, request_id, environment)
         except (ValueError, KeyError):
             request_path = None
-    result = scan(root, relative_path, skip_descendants=_skip_final_archive(request_path))
+    result = scan(root, relative_path, skip_descendants=_skip_with_boundaries(_skip_final_archive(request_path), skip_paths))
     nodes = _interpret(result["nodes"], root_key, environment, project_id, request_id,
                        profile["rules"], seed_request_path=request_path)
     scan_id = ident("environment-scan")
@@ -816,7 +829,12 @@ def _expanded_preview_assignments(nodes, assignments):
     return [*propagated.values(), *direct.values()]
 
 
-def preview(conn, scan_id, assignments, actor, require_usage_review=False):
+def preview(conn, scan_id, assignments, actor, require_usage_review=False, *, allow_without_cases=False):
+    """Build a registration preview.
+
+    ``allow_without_cases`` lets automatic discovery register a new request whose
+    Working folder has no Case yet; every other blocker still applies.
+    """
     records = rows(conn.execute("SELECT id,root_key,environment,project_id,request_id,status,tree_json FROM folder_environment_scans WHERE id=?", [scan_id]))
     if not records: legacy.fail("ENVIRONMENT_SCAN_NOT_FOUND", "환경 조사 결과를 찾을 수 없습니다.", 404)
     saved = records[0]; nodes = decoded(saved["tree_json"])
@@ -911,8 +929,10 @@ def preview(conn, scan_id, assignments, actor, require_usage_review=False):
             existing += 1
     work_rows = [n for n in plan if n["role_kind"] not in {"EVALUATION", "SCENE"}]
     case_count = sum(n["role_kind"] == "SIMULATION_CASE" for n in plan)
-    can_apply = not unresolved and saved["status"] == "COMPLETE" and case_count > 0
-    if case_count == 0:
+    has_request = any(n["role_kind"] == "REQUEST" for n in plan)
+    can_apply = (not unresolved and saved["status"] == "COMPLETE"
+                 and (case_count > 0 or (allow_without_cases and has_request)))
+    if case_count == 0 and not (allow_without_cases and has_request):
         unresolved.append({"message": "등록할 Simulation Case가 없습니다."})
     preview_id = ident("environment-preview")
     review_required = bool(require_usage_review and saved["environment"] == "USAGE")
@@ -1050,7 +1070,7 @@ def _registration_location_projection(conn, root, project_id: str, request_id: s
     )
 
 
-def register(conn, preview_id, idempotency_key, capture, principal, root):
+def register(conn, preview_id, idempotency_key, capture, principal, root, *, creator_membership=True):
     actor = principal.user_id
     existing = conn.execute("SELECT id,preview_id FROM folder_environment_registrations WHERE idempotency_key=?", [idempotency_key]).fetchone()
     if existing:
@@ -1071,8 +1091,13 @@ def register(conn, preview_id, idempotency_key, capture, principal, root):
             request_path = resolver._request_path(conn, str(scan_row[0]), str(scan_row[3]), str(scan_row[4]), str(scan_row[2]))
         except (ValueError, KeyError):
             request_path = None
-    fresh = scan(root, str(scan_row[1]), skip_descendants=_skip_final_archive(request_path))
-    saved_paths = [item["relative_path"] for item in decoded(scan_row[5])]
+    saved_tree = decoded(scan_row[5])
+    # Re-scan with the same boundaries the saved scan used (Final archives and
+    # any explicitly skipped sibling folders keep their descendants unread).
+    boundaries = [item["relative_path"] for item in saved_tree if item.get("children_skipped")]
+    fresh = scan(root, str(scan_row[1]),
+                 skip_descendants=_skip_with_boundaries(_skip_final_archive(request_path), boundaries))
+    saved_paths = [item["relative_path"] for item in saved_tree]
     if fresh["status"] != "COMPLETE" or [item["relative_path"] for item in fresh["nodes"]] != saved_paths or root_identity(root) != scan_row[0]:
         legacy.fail("ENVIRONMENT_SCAN_STALE", "조사 이후 폴더 구조 또는 저장소가 변경되었습니다. 다시 조사하세요.")
     registration_id = ident("environment-registration")
@@ -1091,7 +1116,7 @@ def register(conn, preview_id, idempotency_key, capture, principal, root):
                 if conn.execute(f"SELECT 1 FROM {table} WHERE id=?", [item["target_id"]]).fetchone():
                     continue
                 material = {"role_kind": item["role_kind"], "target_id": item["target_id"], "name": item["name"], "code": "", "parent_target_id": item.get("parent_context"), "analysis_type": ""}
-                legacy.materialize(conn, material, principal)
+                legacy.materialize(conn, material, principal, creator_membership=creator_membership)
         project_id = scan_row[3] or next((r.get("target_id") for r in plan_rows if r["role_kind"] == "PROJECT"), None)
         request_id = scan_row[4] or next((r.get("target_id") for r in plan_rows if r["role_kind"] == "REQUEST"), None)
         if not project_id or not request_id: legacy.fail("ENVIRONMENT_CONTEXT_REQUIRED", "프로젝트와 의뢰 연결을 확인하세요.")

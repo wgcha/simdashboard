@@ -44,6 +44,11 @@ _scope_locks: dict[tuple[str, str, str, str], threading.Lock] = {}
 _memo: dict[tuple[str, str, str, str], dict[str, Any]] = {}
 
 
+def request_in_project(conn, project_id: str, request_id: str) -> bool:
+    row = conn.execute("SELECT project_id FROM analysis_requests WHERE id=?", [request_id]).fetchone()
+    return bool(row) and str(row[0]) == str(project_id)
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 

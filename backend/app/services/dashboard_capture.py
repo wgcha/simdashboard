@@ -829,3 +829,8 @@ def get_latest_capture(conn: ConnectionLike, case_id: str) -> dict[str, Any] | N
     fingerprint = hashlib.sha256(json.dumps([entry[0] for entry in entries]).encode()).hexdigest()
     return {"id": capture_id, "case_id": str(case[0]), "fingerprint": fingerprint, "environment": case[3],
             "source_name": case[4], "payload": payload}
+
+
+def case_project_id(conn: ConnectionLike, case_id: str) -> str | None:
+    row = conn.execute("SELECT project_id FROM dashboard_cases WHERE id=?", [case_id]).fetchone()
+    return str(row[0]) if row else None
