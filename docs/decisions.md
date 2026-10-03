@@ -21,3 +21,4 @@
 - 2026-10-03 · 등록 1건 = 의뢰 1개. 수동 등록에서 의뢰 2개 이상이면 차단, 의뢰 폴더 조사 시 프로젝트 자동 도출 · 다중 의뢰 등록 시 첫 의뢰에만 묶여 Case 수집 실패, 일괄 등록은 자동 탐색 담당 · `docs/contracts/depth-schema.md` §14
 - 2026-10-03 · Case 결과 환경은 의뢰의 Case로 자동 판정(토글 제거, 라벨 표시, Case 없음은 결과 없음 안내, 혼재 시만 토글) · 한 의뢰에 사용·유통 혼재 금지가 작업 규칙 · `docs/contracts/case-results-environment.md`
 - 2026-10-03 · 프로젝트 "선택" → 내 작업 이동, 의뢰 "선택" → 선택 해제 · 빈 ID API 호출로 Not Found 표시되던 문제
+- 2026-10-04 · 준비 단계 대체 화면은 의뢰 작업 페이지에만 적용, 사이드바 이동 시 의뢰 화면 전용 쿼리 제거(project·request 유지) · 변수 카탈로그 등에서 구 결과 등록 화면이 뜨던 문제 · `docs/contracts/workspace-navigation.md`
