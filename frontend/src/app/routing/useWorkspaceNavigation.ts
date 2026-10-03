@@ -6,6 +6,7 @@ import type { MenuId, WorkspacePage } from '../../features/auth/access'
 import { dashboardEntryForNavigation, WORKSPACE_ROUTES_BY_ID, workspacePathForPage, workspaceRouteForPathname, type DashboardEntry } from '../../features/navigation/workspaceRouteRegistry'
 import { resolveBlockedNavigation } from './navigationState'
 import { preloadWorkspaceRouteModule } from './workspaceRouteModules'
+import { searchForPageChange } from './workspaceNavigationPolicy'
 
 type WorkspaceNavigationOptions = {
   allowedPages: ReadonlySet<WorkspacePage>
@@ -181,7 +182,9 @@ export function useWorkspaceNavigation({
     }
     pendingNavigationRef.current = { dashboardEntry, pathname: route.path }
     setWorkspaceNavigationPending(true)
-    navigate({ pathname: route.path, search: options.context ? workspaceSearch(options.context, location.search) : location.search }, { replace: options.replace })
+    // N3: leaving the request workspace drops request-screen-only query keys.
+    const baseSearch = searchForPageChange(location.search, route.page)
+    navigate({ pathname: route.path, search: options.context ? workspaceSearch(options.context, baseSearch) : baseSearch }, { replace: options.replace })
   }, [editMode, location.pathname, location.search, navigate, onDashboardRoute])
 
   const updateWorkspaceContext = useCallback((next: WorkspaceContextQuery, options: { replace?: boolean } = {}) => {

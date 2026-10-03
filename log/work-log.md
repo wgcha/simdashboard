@@ -1126,3 +1126,9 @@
 - 계약: `docs/contracts/depth-schema.md` §14, `docs/contracts/case-results-environment.md`.
 - 검증: DuckDB 전체 2032 passed/9 failed(기존 9건), Postgres 16 신규 파일+삭제 24/24, 프론트 tsc·build·test:api, e2e simulation-dashboard 15/16(실패 1건은 기준 커밋에서도 실패), case-finalization·report·video-grid 17/17.
 - 독립 검수: Verifier 1회(Blocker 1건: Case 없는 의뢰 동기화 중단 → 수정). E5·E6·E7 e2e 없음. Codex Security 스캔 미실행.
+
+## 2026-10-04 사이드바 이동 시 구 결과 등록 화면이 뜨던 문제
+
+- 원인: 폴더 등록 의뢰는 overview가 없어 `App.tsx` 준비 단계 대체 화면이 변수 카탈로그 등 무관한 페이지까지 가로챔. 사이드바 이동이 이전 쿼리를 그대로 가져가 의뢰가 다시 선택되며 간헐 재현.
+- 변경: 대체 화면은 의뢰 작업 페이지에만, 변수 카탈로그 빈 상태, 페이지 전환 시 의뢰 화면 전용 쿼리 제거. 계약 `docs/contracts/workspace-navigation.md`.
+- 검증: tsc·build·test:api·test:routing·architecture 자체 테스트 통과, check:architecture 기존 4건 외 추가 없음, 신규 e2e 5/5. simulation-dashboard 1건·workspace-routing 2건 실패는 기준 커밋에서도 실패. 독립 Verifier 미투입(저위험 UI 범위).

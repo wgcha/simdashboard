@@ -71,3 +71,28 @@ if (new URLSearchParams(restored).has('scene')) throw new Error('setting parents
 const restoredWithScene = applySearchPatch('scene=s1', withClearedChildren({ case: 'c1', case_option: 'o1', scene: 's1' }))
 if (new URLSearchParams(restoredWithScene).get('scene') !== 's1') throw new Error('an explicit child in the patch must be kept')
 console.log('Case hierarchy URL self-test passed.')
+
+// Workspace navigation contract (docs/contracts/workspace-navigation.md N1, N3).
+const { scopeWorkspaceContext, searchForPageChange, usesBootstrapFallback } = await import('../src/app/routing/workspaceNavigationPolicy.ts')
+const noOverview = { hasOverview: false, hasDashboard: false, caseResultsMode: false, isRequestMonitoring: false, pendingAnalysis: false, hasProjects: true, isWorkspaceIndex: false }
+for (const page of ['variables', 'templates', 'examples', 'help', 'menu_policy_admin', 'audit_admin', 'workbench_admin', 'project_result_profiles', 'access_admin', 'schemas', 'portfolio', 'intake', 'workbench', 'data', 'materials', 'voc', 'local_pc']) {
+  if (usesBootstrapFallback({ ...noOverview, page })) throw new Error(`${page} must render itself without an overview`)
+}
+if (!usesBootstrapFallback({ ...noOverview, page: 'dashboard' })) throw new Error('dashboard without overview keeps the bootstrap fallback')
+if (usesBootstrapFallback({ ...noOverview, page: 'dashboard', caseResultsMode: true })) throw new Error('case results never use the fallback')
+if (usesBootstrapFallback({ ...noOverview, page: 'dashboard', hasOverview: true, hasDashboard: true })) throw new Error('a loaded legacy request never uses the fallback')
+if (!usesBootstrapFallback({ ...noOverview, page: 'variables', hasProjects: false })) throw new Error('first-run setup without projects keeps the fallback')
+if (usesBootstrapFallback({ ...noOverview, page: 'schemas', hasProjects: false })) throw new Error('schemas stays self-rendered during first-run setup')
+const caseResultsSearch = '?project=p&request=r&view=case_results&result_environment=DISTRIBUTION&capture=cap&case=c&case_load=l&case_run=u&case_option=o&scene=s&part=7&loadCase=lc&run=rn&page=pg&resultTab=materials'
+for (const page of ['variables', 'templates', 'examples', 'help', 'access_admin', 'schemas', 'portfolio']) {
+  const cleaned = searchForPageChange(caseResultsSearch, page)
+  if (cleaned !== '?project=p&request=r') throw new Error(`${page} must keep only project/request: ${cleaned}`)
+}
+if (searchForPageChange('?view=case_results', 'help') !== '') throw new Error('an emptied query yields no ?')
+for (const page of ['dashboard', 'workbench', 'data', 'materials']) {
+  if (searchForPageChange(caseResultsSearch, page) !== caseResultsSearch) throw new Error(`${page} keeps request-workspace query as before`)
+}
+const fullContext = { projectId: 'p', requestId: 'r', loadCaseId: 'l', runId: 'u', view: 'workflow', pageId: 'pg', resultTab: 'materials' }
+if (JSON.stringify(scopeWorkspaceContext('variables', fullContext)) !== JSON.stringify({ projectId: 'p', requestId: 'r' })) throw new Error('non-request pages sync only project/request to the URL')
+if (scopeWorkspaceContext('dashboard', fullContext) !== fullContext) throw new Error('request workspace pages sync their full context as before')
+console.log('Workspace navigation contract self-test passed.')
