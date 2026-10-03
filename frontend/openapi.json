@@ -9955,6 +9955,58 @@
         }
       }
     },
+    "/api/projects/{project_id}/requests/{request_id}/result-environments": {
+      "get": {
+        "tags": [
+          "result-dashboard"
+        ],
+        "summary": "Result Environments",
+        "description": "Environments of the request's registered Cases (case-results-environment.md §2).",
+        "operationId": "result_environments_api_projects__project_id__requests__request_id__result_environments_get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResultEnvironments"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/dashboard/finalizations/preview": {
       "post": {
         "tags": [
@@ -18512,6 +18564,48 @@
           "result_config"
         ],
         "title": "ResultConfigItem"
+      },
+      "ResultEnvironmentCounts": {
+        "properties": {
+          "USAGE": {
+            "type": "integer",
+            "title": "Usage"
+          },
+          "DISTRIBUTION": {
+            "type": "integer",
+            "title": "Distribution"
+          }
+        },
+        "type": "object",
+        "required": [
+          "USAGE",
+          "DISTRIBUTION"
+        ],
+        "title": "ResultEnvironmentCounts"
+      },
+      "ResultEnvironments": {
+        "properties": {
+          "environments": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "USAGE",
+                "DISTRIBUTION"
+              ]
+            },
+            "type": "array",
+            "title": "Environments"
+          },
+          "case_counts": {
+            "$ref": "#/components/schemas/ResultEnvironmentCounts"
+          }
+        },
+        "type": "object",
+        "required": [
+          "environments",
+          "case_counts"
+        ],
+        "title": "ResultEnvironments"
       },
       "ResultImportHistoryItem": {
         "properties": {

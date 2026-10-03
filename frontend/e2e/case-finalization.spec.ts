@@ -1,5 +1,8 @@
 import { expect, test, type Page, type Route } from '@playwright/test'
-import { loginWorkspace } from './workspace-test-helpers'
+import { loginWorkspace, mockResultEnvironments } from './workspace-test-helpers'
+
+// Mixed-environment request: keeps the 사용환경/유통환경 toggle these specs click (E4).
+test.beforeEach(async ({ page }) => { await mockResultEnvironments(page) })
 
 // Final 지정 (stage 6): preview of the latest-result basis, PPTX/HTML report
 // choice, browser-built reports uploaded per format, then confirm. Mocked API,

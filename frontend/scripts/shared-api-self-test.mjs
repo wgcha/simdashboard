@@ -1,4 +1,6 @@
 import { apiErrorMessage } from '../src/shared/api/errors.ts'
+import { formatServerTime, parseServerTime } from '../src/shared/api/serverTime.ts'
+import { keywordEnvironments, normalizeResultEnvironments, resolvedResultEnvironment, resultEnvironmentsPath } from '../src/shared/api/resultEnvironments.ts'
 import { depthRowEditable, depthRows, errorCode, errorItems, lowerRoleOptions, setDepthRole, sumDeleteCounts, validateLowerLevels, validateUpperLevels } from '../src/shared/api/depthSchemaModel.ts'
 
 const validation = { detail: [{ type: 'missing', loc: ['body', 'name'], msg: 'Field required' }] }
@@ -56,5 +58,26 @@ assert(totals.projects === 1 && totals.cases === 5 && totals.captures === 4, 'de
 const blocked = { detail: { code: 'REGISTRATION_DELETE_BLOCKED', items: [{ registration_id: 'r1', deletable: false }] } }
 assert(errorCode(blocked) === 'REGISTRATION_DELETE_BLOCKED' && errorItems(blocked).length === 1, 'blocked delete detail must be readable')
 assert(errorCode({ detail: { code: 'DEPTH_SCHEMA_CONFLICT' } }) === 'DEPTH_SCHEMA_CONFLICT' && errorCode(new Error('x')) === null, 'conflict code must be readable')
+
+// Timestamps without an offset are UTC (depth-schema.md §14.3).
+assert(parseServerTime('2026-10-02T23:02:00')?.toISOString() === '2026-10-02T23:02:00.000Z', 'naive timestamp must be read as UTC')
+assert(parseServerTime('2026-10-02 23:02:00.123456')?.getUTCHours() === 23, 'space-separated naive timestamp must be read as UTC')
+assert(parseServerTime('2026-10-02T23:02:00Z')?.toISOString() === '2026-10-02T23:02:00.000Z', 'Z timestamp must be kept')
+assert(parseServerTime('2026-10-03T08:02:00+09:00')?.toISOString() === '2026-10-02T23:02:00.000Z', 'offset timestamp must be kept')
+assert(parseServerTime('') === null && parseServerTime('not a date') === null, 'invalid timestamps are null')
+const kst = formatServerTime('2026-10-02T23:02:00', { hour: 'numeric', minute: '2-digit', hour12: false }, 'Asia/Seoul')
+assert(kst.includes('08:02') || kst.includes('8:02'), `UTC 23:02 must show as 08:02 KST, got ${kst}`)
+assert(formatServerTime('legacy') === 'legacy', 'unreadable timestamps are shown as given')
+
+// Request result environments (case-results-environment.md §2).
+assert(resultEnvironmentsPath('p 1', 'r/1') === '/api/projects/p%201/requests/r%2F1/result-environments', 'result-environments path must encode ids')
+const both = normalizeResultEnvironments({ environments: ['DISTRIBUTION', 'USAGE', 'OTHER'], case_counts: { USAGE: 2, DISTRIBUTION: 1 } })
+assert(both.environments.join() === 'USAGE,DISTRIBUTION' && resolvedResultEnvironment(both) === null, 'two environments keep the toggle, in USAGE, DISTRIBUTION order')
+assert(resolvedResultEnvironment(normalizeResultEnvironments({ environments: ['DISTRIBUTION'], case_counts: { USAGE: 0, DISTRIBUTION: 3 } })) === 'DISTRIBUTION', 'one environment is resolved')
+const none = normalizeResultEnvironments({ environments: [], case_counts: { USAGE: 0, DISTRIBUTION: 0 } })
+assert(none.environments.length === 0 && resolvedResultEnvironment(none) === null && none.case_counts.USAGE === 0, 'no Cases resolve to no environment')
+
+assert(keywordEnvironments('24-071 사용 낙하').join() === 'USAGE' && keywordEnvironments('유통 진동').join() === 'DISTRIBUTION', 'request keyword picks the sync environment')
+assert(keywordEnvironments('사용 유통').join() === 'USAGE,DISTRIBUTION' && keywordEnvironments('').join() === 'USAGE,DISTRIBUTION', 'unclear keyword syncs both environments')
 
 console.log('Shared API self-test passed.')

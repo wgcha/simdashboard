@@ -5,6 +5,7 @@ import { api } from '../../api'
 import type { AnalysisRequest, Project } from '../../types'
 import { SearchableSelect } from '../../shared/components/selectionLabels'
 import { folderEnvironmentApi } from '../../shared/api/folderEnvironment'
+import { requestResultEnvironments, resolvedResultEnvironment } from '../../shared/api/simulationDashboard'
 import {
   resultRegistrationApi,
   sha256Hex,
@@ -814,6 +815,22 @@ export function ResultRegistrationWorkspace({ embedded = false, contextChanging 
     const query = new URLSearchParams(window.location.search); query.set('result_environment', next)
     window.history.replaceState(window.history.state, '', `${window.location.pathname}?${query.toString()}`)
   }
+  // E5: a request with Cases of one environment fixes the environment. With none (first
+  // registration) or both (legacy data) the select stays a free choice.
+  const [lockedEnvironment, setLockedEnvironment] = useState<ResultEnvironment | null>(null)
+  const changeEnvironmentRef = useRef(changeEnvironment); changeEnvironmentRef.current = changeEnvironment
+  useEffect(() => {
+    setLockedEnvironment(null)
+    if (!projectId || !requestId) return
+    const controller = new AbortController()
+    requestResultEnvironments(projectId, requestId, controller.signal).then((value) => {
+      if (controller.signal.aborted) return
+      const resolved = resolvedResultEnvironment(value)
+      setLockedEnvironment(resolved)
+      if (resolved) changeEnvironmentRef.current(resolved)
+    }).catch(() => undefined)
+    return () => controller.abort()
+  }, [projectId, requestId])
 
   const contextTrail = activeContext ? breadcrumb(activeContext) : []
   const currentSuggestedDestinationSelected = selectedResultPath && selectedResultPath === suggestedPath
@@ -845,7 +862,7 @@ export function ResultRegistrationWorkspace({ embedded = false, contextChanging 
     <section className="result-registration-card result-registration-scope" aria-labelledby="registration-scope-title">
       <header><span>01 · 대상 선택</span><h3 id="registration-scope-title">등록 환경과 기존 Case 선택</h3><p>새 프로젝트·의뢰·하중경우를 만들지 않고, 연결된 SPDM 업무만 선택합니다.</p></header>
       <div className="result-registration-form-row">
-        <label><span>환경</span><select aria-label="결과 등록 환경" value={environment} disabled={isActionBusy || contextChanging} onChange={(event) => changeEnvironment(event.target.value as ResultEnvironment)}><option value="USAGE">사용환경 · Case / 평가 항목</option><option value="DISTRIBUTION">유통환경 · Case / 하중 / Run / Option / Scene</option></select></label>
+        <label><span>환경</span><select aria-label="결과 등록 환경" value={environment} disabled={isActionBusy || contextChanging || Boolean(lockedEnvironment)} title={lockedEnvironment ? '선택한 의뢰에 등록된 Case의 환경으로 자동 지정했습니다.' : undefined} onChange={(event) => changeEnvironment(event.target.value as ResultEnvironment)}><option value="USAGE">사용환경 · Case / 평가 항목</option><option value="DISTRIBUTION">유통환경 · Case / 하중 / Run / Option / Scene</option></select></label>
         <label><span>해석 Case</span><select aria-label="SPDM 해석 Case 선택" value={targetCasePath} disabled={!activeTarget || (!activeTarget.cases.length && !targetCasePath) || folderBusy || isActionBusy || contextChanging} onChange={(event) => chooseCase(event.target.value)}><option value="">{activeTarget?.cases.length ? '기존 Case 선택' : '연결된 Case 없음'}</option>{activeTarget?.cases.map((item) => <option key={item.relative_path} value={item.relative_path}>{item.name} · {item.relative_path}</option>)}{targetCasePath && !activeTarget?.cases.some((item) => item.relative_path === targetCasePath) ? <option value={targetCasePath}>{effectiveContext.simulation_case?.label ?? '복원된 Case'} · {targetCasePath}</option> : null}</select></label>
       </div>
       {targetBusy ? <p className="result-registration-state"><LoaderCircle className="result-registration-spin" /> SPDM 연결 대상 확인 중</p> : null}

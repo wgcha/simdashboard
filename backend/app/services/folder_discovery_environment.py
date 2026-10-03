@@ -38,6 +38,19 @@ ROLE_RULES_REVISION = 2
 
 
 def now(): return datetime.now(timezone.utc).replace(tzinfo=None)
+def iso_utc(value):
+    """API form of a stored time (§14.3): ISO 8601 with a UTC offset; storage stays naive UTC."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return value
+    if isinstance(value, datetime):
+        value = value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+        return value.isoformat()
+    return value
 def ident(prefix): return f"{prefix}-{uuid4().hex}"
 def decoded(value): return json.loads(value) if isinstance(value, str) else value
 def stable(prefix, root_key, path, role): return f"{prefix}-{uuid5(NAMESPACE_URL, root_key + ':' + path.casefold() + ':' + role).hex}"
@@ -169,6 +182,7 @@ def profiles(conn):
     for record in records:
         item = dict(record)
         item["rules"] = decoded(item.pop("rules_json"))
+        item["created_at"], item["updated_at"] = iso_utc(item.get("created_at")), iso_utc(item.get("updated_at"))
         metadata = item["rules"].get("profile_metadata", {}) if isinstance(item["rules"], dict) else {}
         if isinstance(metadata, dict) and metadata.get("archived"):
             continue
@@ -738,9 +752,10 @@ def save_scan(conn, root, relative_path: str, environment: str, profile_id: str 
     nodes = _interpret(result["nodes"], root_key, environment, project_id, request_id,
                        profile["rules"], seed_request_path=request_path)
     scan_id = ident("environment-scan")
+    created_at = now()
     conn.execute("INSERT INTO folder_environment_scans(id,root_key,relative_path,environment,profile_id,profile_revision,project_id,request_id,status,tree_json,issues_json,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                 [scan_id, root_key, relative_path, environment, profile["id"], profile["revision"], project_id, request_id, result["status"], json.dumps(nodes, ensure_ascii=False), json.dumps(result["issues"], ensure_ascii=False), actor, now()])
-    return {"id": scan_id, "environment": environment, "profile_id": profile["id"], "profile_revision": profile["revision"], "usage_sources": profile["rules"].get("usage_sources"), "relative_path": relative_path, "status": result["status"], "nodes": nodes, "issues": result["issues"]}
+                 [scan_id, root_key, relative_path, environment, profile["id"], profile["revision"], project_id, request_id, result["status"], json.dumps(nodes, ensure_ascii=False), json.dumps(result["issues"], ensure_ascii=False), actor, created_at])
+    return {"id": scan_id, "environment": environment, "profile_id": profile["id"], "profile_revision": profile["revision"], "usage_sources": profile["rules"].get("usage_sources"), "relative_path": relative_path, "status": result["status"], "nodes": nodes, "issues": result["issues"], "created_at": iso_utc(created_at)}
 
 
 def _profile(conn, profile_id, environment):
@@ -1010,7 +1025,7 @@ def preview(conn, scan_id, assignments, actor, require_usage_review=False, *, al
     ``allow_without_cases`` lets automatic discovery register a new request whose
     Working folder has no Case yet; every other blocker still applies.
     """
-    records = rows(conn.execute("SELECT id,root_key,environment,project_id,request_id,status,tree_json FROM folder_environment_scans WHERE id=?", [scan_id]))
+    records = rows(conn.execute("SELECT id,root_key,environment,project_id,request_id,status,tree_json,relative_path,profile_id FROM folder_environment_scans WHERE id=?", [scan_id]))
     if not records: legacy.fail("ENVIRONMENT_SCAN_NOT_FOUND", "환경 조사 결과를 찾을 수 없습니다.", 404)
     saved = records[0]; nodes = decoded(saved["tree_json"])
     if not isinstance(nodes, list):
@@ -1174,6 +1189,16 @@ def _preview_depth(conn, saved, nodes, assignments, actor, require_usage_review,
         if any(str(node["relative_path"]).casefold().startswith(path.casefold().rstrip("/") + "/") for path in excluded):
             node["status"] = "EXCLUDED"
     _recompute_context(nodes, saved["root_key"], saved["environment"], saved.get("project_id"), saved.get("request_id"))
+    # D19: a request-level scan (no project in the plan and none selected)
+    # derives its PROJECT from the request folder's ancestor at project_level.
+    derived_project, derive_block = _derive_request_project(conn, saved, nodes)
+    if derived_project:
+        for node in nodes:
+            node["project_id"] = derived_project["target_id"]
+    for node in nodes:
+        if (node.get("role_kind") == "REQUEST" and node.get("status") != "EXCLUDED"
+                and not node.get("parent_context") and node.get("project_id")):
+            node["parent_context"] = node["project_id"]
     for node in nodes:
         if node.get("role_kind") == "REQUEST" and node.get("target_id") and node.get("status") != "EXCLUDED":
             owner = conn.execute("SELECT project_id FROM analysis_requests WHERE id=?", [node["target_id"]]).fetchone()
@@ -1190,6 +1215,17 @@ def _preview_depth(conn, saved, nodes, assignments, actor, require_usage_review,
     # capture jobs or result sources.
     plan = [node for node in active if node.get("role_kind") in _DEPTH_PLAN_ROLES
             and node.get("status") == "CONFIRMED" and not is_final_segment(node)]
+    if derived_project:
+        plan = [derived_project, *plan]
+    request_paths = [str(node["relative_path"]) for node in plan if node["role_kind"] == "REQUEST"]
+    block_code, block_message = None, None
+    if len(request_paths) > 1:
+        block_code, block_message = "MULTIPLE_REQUESTS", MULTIPLE_REQUESTS_MESSAGE  # D18
+    elif derive_block:
+        block_code, block_message = derive_block
+    elif not request_paths and not saved.get("request_id"):
+        # D18: a manual registration is one request; nothing to bind Cases to.
+        block_code, block_message = "REQUEST_MISSING", REQUEST_MISSING_MESSAGE
     existing = 0
     for node in plan:
         if node["role_kind"] == "SCENE":
@@ -1203,10 +1239,12 @@ def _preview_depth(conn, saved, nodes, assignments, actor, require_usage_review,
     work_rows = [node for node in plan if node["role_kind"] != "SCENE"]
     case_count = sum(node["role_kind"] == "SIMULATION_CASE" for node in plan)
     has_request = any(node["role_kind"] == "REQUEST" for node in plan)
-    can_apply = (not unresolved and not blocking and saved["status"] == "COMPLETE"
+    can_apply = (not unresolved and not blocking and not block_code and saved["status"] == "COMPLETE"
                  and (case_count > 0 or (allow_without_cases and has_request)))
     message = None
-    if blocking:
+    if block_code:
+        message = block_message
+    elif blocking:
         message = blocking[0]["message"]
     elif case_count == 0 and not (allow_without_cases and has_request):
         message = "등록할 Simulation Case가 없습니다."
@@ -1220,15 +1258,89 @@ def _preview_depth(conn, saved, nodes, assignments, actor, require_usage_review,
                         for node in nodes],
         "usage_reviews": {}, "usage_review_snapshots": {},
         "require_usage_review": review_required, "format": environment_folder_profiles.DEPTH_FORMAT,
-        "deviations": deviations,
+        "deviations": deviations, "blocking_code": block_code, "request_paths": request_paths,
     }
+    created_at = now()
     conn.execute("INSERT INTO folder_environment_previews(id,scan_id,rows_json,can_apply,created_by,created_at) VALUES(?,?,?,?,?,?)",
-                 [preview_id, saved["id"], json.dumps(stored, ensure_ascii=False), can_apply, actor, now()])
+                 [preview_id, saved["id"], json.dumps(stored, ensure_ascii=False), can_apply, actor, created_at])
     return {"id": preview_id, "scan_id": saved["id"], "environment": saved["environment"], "can_apply": can_apply,
             "require_usage_review": review_required, "rows": plan, "unresolved_count": len(unresolved),
             "message": message, "deviations": deviations, "blocking_count": len(blocking),
+            "blocking_code": block_code, "request_paths": request_paths, "created_at": iso_utc(created_at),
             "summary": {"new": len(work_rows) - existing, "existing": existing, "evaluations": 0,
                         "scenes": sum(node["role_kind"] == "SCENE" for node in plan)}}
+
+
+REQUEST_MISSING_MESSAGE = "등록할 의뢰 폴더가 없습니다. 의뢰 폴더 또는 그 상위 폴더를 조사하세요."
+MULTIPLE_REQUESTS_MESSAGE = "의뢰 폴더별로 조사하세요. 여러 의뢰는 자동 탐색이 의뢰별로 등록합니다."
+REQUEST_LEVEL_MISMATCH_MESSAGE = "의뢰 폴더의 상위 폴더 깊이가 현재 깊이 스키마와 맞지 않아 프로젝트를 정할 수 없습니다. 상위 구조를 확인하세요."
+
+
+def _derive_request_project(conn, saved, nodes):
+    """D19: PROJECT plan row for a request scanned without its project.
+
+    Returns ``(project_row, None)``, ``(None, (code, message))`` or ``(None, None)``
+    when nothing needs deriving (a project is selected, already in the plan, or
+    the plan does not hold exactly one request).
+    """
+    if saved.get("project_id"):
+        return None, None
+    mismatch = ("DEPTH_SCHEMA_REQUEST_LEVEL_MISMATCH", REQUEST_LEVEL_MISMATCH_MESSAGE)
+    active = [node for node in nodes if node.get("status") != "EXCLUDED" and not is_final_segment(node)]
+    requests = [node for node in active if node.get("role_kind") == "REQUEST" and node.get("status") == "CONFIRMED"]
+    scan_parts = [part for part in str(saved.get("relative_path") or "").split("/") if part]
+    if not requests and not saved.get("request_id") and scan_parts:
+        # A folder named like a request (one environment keyword) scanned at a
+        # depth other than the schema's request level: the upper schema does
+        # not fit, so no project can be derived.
+        keyword_env, _code = environment_folder_profiles.keyword_environment(scan_parts[-1])
+        try:
+            rules = profile_rules(conn, str(saved.get("profile_id") or ""))
+        except (ValueError, TypeError):
+            return None, None
+        if (keyword_env and environment_folder_profiles.is_depth_rules(rules)
+                and len(scan_parts) != environment_folder_profiles._depth_parts(rules)[2]):
+            return None, mismatch
+        return None, None
+    if len(requests) != 1:
+        return None, None
+    request = requests[0]
+    request_path = str(request["relative_path"])
+    if any(node.get("role_kind") == "PROJECT" and node.get("status") == "CONFIRMED"
+           and request_path.casefold().startswith(str(node["relative_path"]).casefold().rstrip("/") + "/")
+           for node in active):
+        return None, None
+    try:
+        rules = profile_rules(conn, str(saved.get("profile_id") or ""))
+    except (ValueError, TypeError):
+        return None, mismatch
+    if not environment_folder_profiles.is_depth_rules(rules):
+        return None, mismatch
+    _upper, project_level, request_level = environment_folder_profiles._depth_parts(rules)
+    parts = [part for part in request_path.split("/") if part]
+    if len(parts) != request_level or not 1 <= project_level < request_level:
+        return None, mismatch
+    project_path = "/".join(parts[:project_level])
+    resolved = environment_folder_profiles.resolve_path(parts[:project_level], rules)
+    if not resolved or resolved.get("role_kind") != "PROJECT":
+        return None, mismatch
+    root_key = saved["root_key"]
+    from . import folder_auto_discovery  # local: auto-discovery imports this module
+    linked = folder_auto_discovery._linked_state(conn, root_key)["projects"].get(project_path.casefold(), set())
+    if len(linked) > 1:
+        return None, ("PROJECT_AMBIGUOUS", "프로젝트 폴더가 여러 프로젝트에 연결되어 있습니다. 기존 업무 연결에서 프로젝트를 선택하세요.")
+    row = {"id": stable("environment-node", root_key, project_path, "NODE"), "relative_path": project_path,
+           "parent_path": "/".join(parts[:project_level - 1]) or None, "name": parts[project_level - 1],
+           "depth": project_level, "environment": saved["environment"], "role_kind": "PROJECT", "status": "CONFIRMED",
+           "role_source": "PROFILE", "role_basis": "DEPTH_SCHEMA", "level": resolved["level"],
+           "segment": resolved["segment"], "deviation": None, "info": None, "derived": True,
+           "parent_context": None, "request_id": None}
+    if linked:
+        row.update(target_id=next(iter(linked)), target_mode="LINK")
+    else:
+        row["target_id"] = stable("environment-project", root_key, project_path, "PROJECT")
+    row["project_id"] = row["target_id"]
+    return row, None
 
 
 def _recompute_context(nodes, root_key, environment, seeded_project, seeded_request):
@@ -1358,8 +1470,9 @@ def register(conn, preview_id, idempotency_key, capture, principal, root, *, cre
         return registration(conn, str(existing[0]))
     preview_row = conn.execute("SELECT scan_id,rows_json,can_apply FROM folder_environment_previews WHERE id=?", [preview_id]).fetchone()
     if not preview_row: legacy.fail("ENVIRONMENT_PREVIEW_NOT_FOUND", "환경 미리보기를 찾을 수 없습니다.", 404)
-    if not preview_row[2]: legacy.fail("ENVIRONMENT_PREVIEW_CONFLICT", "확인되지 않은 폴더가 있는 미리보기는 등록할 수 없습니다.")
     scan_row = conn.execute("SELECT root_key,relative_path,environment,project_id,request_id,tree_json,profile_id,profile_revision FROM folder_environment_scans WHERE id=?", [preview_row[0]]).fetchone()
+    _check_single_request(preview_data(preview_row[1]), seeded_request=bool(scan_row and scan_row[4]))
+    if not preview_row[2]: legacy.fail("ENVIRONMENT_PREVIEW_CONFLICT", "확인되지 않은 폴더가 있는 미리보기는 등록할 수 없습니다.")
     profile_now = conn.execute("SELECT revision FROM folder_environment_profiles WHERE id=?", [scan_row[6]]).fetchone()
     if not profile_now or int(profile_now[0]) != int(scan_row[7]):
         legacy.fail("ENVIRONMENT_PROFILE_STALE", "저장 규칙이 변경되었습니다. 다시 조사하세요.")
@@ -1400,7 +1513,13 @@ def register(conn, preview_id, idempotency_key, capture, principal, root, *, cre
                 table = "projects" if item["role_kind"] == "PROJECT" else "analysis_requests"
                 if conn.execute(f"SELECT 1 FROM {table} WHERE id=?", [item["target_id"]]).fetchone():
                     continue
-                material = {"role_kind": item["role_kind"], "target_id": item["target_id"], "name": item["name"], "code": "", "parent_target_id": item.get("parent_context"), "analysis_type": ""}
+                parent_target = item.get("parent_context")
+                if item["role_kind"] == "REQUEST":
+                    parent_target = parent_target or item.get("project_id") or scan_row[3] or next(
+                        (r.get("target_id") for r in plan_rows if r["role_kind"] == "PROJECT"), None)
+                    if not parent_target:  # never insert analysis_requests.project_id NULL (§14.2)
+                        legacy.fail("ENVIRONMENT_CONTEXT_REQUIRED", "의뢰의 상위 프로젝트를 정할 수 없습니다. 프로젝트 폴더 또는 기존 업무를 선택하세요.")
+                material = {"role_kind": item["role_kind"], "target_id": item["target_id"], "name": item["name"], "code": "", "parent_target_id": parent_target, "analysis_type": ""}
                 legacy.materialize(conn, material, principal, creator_membership=creator_membership)
                 created_targets["project_ids" if item["role_kind"] == "PROJECT" else "request_ids"].append(item["target_id"])
         project_id = scan_row[3] or next((r.get("target_id") for r in plan_rows if r["role_kind"] == "PROJECT"), None)
@@ -1464,6 +1583,23 @@ def register(conn, preview_id, idempotency_key, capture, principal, root, *, cre
     return registration(conn, registration_id)
 
 
+def _check_single_request(saved_preview: dict, *, seeded_request: bool) -> None:
+    """D18 defensive check: a manual registration holds exactly one request (409 otherwise).
+
+    A DEPTH_V1 scan below an already selected request has no REQUEST row of its
+    own; it registers into that seeded request and stays allowed.
+    """
+    if not isinstance(saved_preview, dict) or saved_preview.get("format") != environment_folder_profiles.DEPTH_FORMAT:
+        return
+    count = sum(1 for item in saved_preview.get("rows") or [] if isinstance(item, dict) and item.get("role_kind") == "REQUEST")
+    if count == 1 or (count == 0 and seeded_request):
+        return
+    # Same codes as the preview (§14.2): several REQUEST rows vs none.
+    if count > 1:
+        legacy.fail("MULTIPLE_REQUESTS", MULTIPLE_REQUESTS_MESSAGE)
+    legacy.fail("REQUEST_MISSING", REQUEST_MISSING_MESSAGE)
+
+
 def _record_created_case(conn, registration_id, case_id):
     """Add a Case id this registration's capture is about to INSERT to ``created_targets``."""
     row = conn.execute("SELECT created_targets FROM folder_environment_registrations WHERE id=?", [registration_id]).fetchone()
@@ -1510,7 +1646,7 @@ def registration(conn, registration_id):
     if status != row[5]:
         conn.execute("UPDATE folder_environment_registrations SET status=? WHERE id=?", [status, registration_id])
     saved = preview_data(row[8])
-    return {"registration_id": row[0], "preview_id": row[1], "environment": row[2], "project_id": row[3], "request_id": row[4], "status": status, "created_at": row[6], "deleted_at": row[9], "relative_path": row[7], "capture_jobs": [dict(j) for j in jobs], "usage_source_reviews": saved.get("usage_review_snapshots", {})}
+    return {"registration_id": row[0], "preview_id": row[1], "environment": row[2], "project_id": row[3], "request_id": row[4], "status": status, "created_at": iso_utc(row[6]), "deleted_at": iso_utc(row[9]), "relative_path": row[7], "capture_jobs": [dict(j) for j in jobs], "usage_source_reviews": saved.get("usage_review_snapshots", {})}
 
 
 def retry(conn, registration_id, job_ids, principal=None, root=None):

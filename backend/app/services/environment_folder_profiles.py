@@ -570,9 +570,14 @@ def _schema_response(rows_by_env):
                                "lower": item["rules"]["lower"], "usage_sources": item["rules"].get("usage_sources")}
                          for env, item in rows_by_env.items()},
         "final": json.loads(json.dumps(FINAL_BLOCK)),
-        "created_at": usage["created_at"],
+        "created_at": _iso_utc(usage["created_at"]),
         "created_by": created_by,
     }
+
+
+def _iso_utc(value):
+    from .folder_discovery_environment import iso_utc
+    return iso_utc(value)
 
 
 def get_depth_schema(conn):

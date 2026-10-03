@@ -96,6 +96,7 @@ export function useRequestWorkspaceController({ initialWorkspace, resultAccessEn
   })
 
   const loadContext = useCallback(async (projectId: string, requestId?: string, preferredView?: ActiveView) => {
+    if (!projectId) return // never call project APIs with an empty id
     const sequence = ++contextLoadSequence.current
     const requestData = await api.requests(projectId)
     if (sequence !== contextLoadSequence.current) return
@@ -143,6 +144,7 @@ export function useRequestWorkspaceController({ initialWorkspace, resultAccessEn
   }, [])
 
   const loadMonitoringContext = useCallback(async (projectId: string, requestId?: string) => {
+    if (!projectId) return // never call project APIs with an empty id
     const sequence = ++contextLoadSequence.current
     const requestData = await api.requests(projectId)
     if (sequence !== contextLoadSequence.current) return

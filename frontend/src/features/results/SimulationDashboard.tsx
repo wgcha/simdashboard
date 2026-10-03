@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Link } from 'react-router-dom'
 import { AlertTriangle, Expand, Image as ImageIcon, Info, Layers3, Play, RotateCcw, SlidersHorizontal } from 'lucide-react'
-import { simulationDashboardApi, type DashboardAsset, type DashboardCatalog, type DashboardChoice, type DashboardComparisonMember, type DashboardDistribution, type DashboardEdgePeak, type DashboardMember, type DashboardScene, type DashboardSceneDetail, type DashboardValue, type UsageDashboard } from '../../shared/api/simulationDashboard'
+import { simulationDashboardApi, type DashboardAsset, type DashboardCatalog, type DashboardChoice, type DashboardComparisonMember, type DashboardDistribution, type DashboardEdgePeak, type DashboardEnvironment, type DashboardMember, type DashboardScene, type DashboardSceneDetail, type DashboardValue, type UsageDashboard } from '../../shared/api/simulationDashboard'
 import { Select } from '../../shared/components/Select'
 import { HierarchyChoice, type HierarchyChoiceOption } from '../../shared/components/HierarchyChoice'
 import { HierarchyPath } from '../../shared/components/HierarchyPath'
@@ -25,6 +25,8 @@ type Props = {
   refreshToken?: number
   /** `materials` opens the 소재·물성 tab (URL `resultTab=materials`). */
   activeTab?: 'case_results' | 'materials'
+  /** Environments of the request's Cases (E1–E4): `null` while pending; omitted keeps the manual toggle. */
+  resultEnvironments?: DashboardEnvironment[] | null
   /** Rendered at the right of the header row (folder sync status). */
   headerExtra?: ReactNode
   /** Materials tab content; it renders its own path bar into `pathTarget`. */
@@ -72,13 +74,22 @@ function ViewTabs({ tabs, active, onSelect }: { tabs: Array<{ id: ViewTab; label
   }}>{tabs.map((tab) => <button key={tab.id} ref={(node) => { if (node) refs.current.set(tab.id, node); else refs.current.delete(tab.id) }} type="button" role="tab" id={`case-view-tab-${tab.id}`} aria-controls="case-view-panel" aria-selected={tab.id === active} tabIndex={tab.id === active ? 0 : -1} onClick={() => onSelect(tab.id)}>{tab.label}</button>)}</div>
 }
 
-export function SimulationDashboard({ projectId, requestId, canManageFolders = false, canRefreshSchema = false, refreshToken = 0, activeTab = 'case_results', headerExtra, renderMaterials }: Props) {
+const ENVIRONMENT_LABELS: Record<DashboardEnvironment, string> = { USAGE: '사용환경', DISTRIBUTION: '유통환경' }
+export const NO_RESULTS_MESSAGE = '이 의뢰에는 아직 등록된 결과가 없습니다. 의뢰 폴더의 Working에 결과를 추가하면 자동 탐색이 등록합니다.'
+
+export function SimulationDashboard({ projectId, requestId, canManageFolders = false, canRefreshSchema = false, refreshToken = 0, activeTab = 'case_results', resultEnvironments, headerExtra, renderMaterials }: Props) {
   // Selection lives in the router URL (shared with the materials tab): user
   // changes push a history entry, automatic repairs replace it.
   const { get: getParam, caseId, loadCaseId, runId, optionId, update: updateParams } = useCaseHierarchyParams()
   const materialsActive = activeTab === 'materials'
   // Materials decks exist only in the distribution environment.
-  const tab: Tab = materialsActive || getParam('result_environment') === 'DISTRIBUTION' ? 'distribution' : 'usage'
+  // E2: one registered environment wins over the URL; the toggle remains only for both (E4).
+  const environments = resultEnvironments === undefined ? (['USAGE', 'DISTRIBUTION'] as DashboardEnvironment[]) : resultEnvironments
+  const resolvedEnvironment = environments?.length === 1 ? environments[0] : null
+  const noResults = environments?.length === 0
+  const tab: Tab = materialsActive || (resolvedEnvironment ? resolvedEnvironment === 'DISTRIBUTION' : getParam('result_environment') === 'DISTRIBUTION') ? 'distribution' : 'usage'
+  // §3.5: no catalog while the environment is pending or the request has no Cases.
+  const catalogReady = Boolean(environments?.length)
   const captureId = getParam('capture')
   const clearedPath = { case: null, capture: null, case_load: null, case_run: null, case_option: null, scene: null, part: null }
   const setTab = (next: Tab) => { if (next !== tab || materialsActive) updateParams({ result_environment: next === 'usage' ? 'USAGE' : 'DISTRIBUTION', ...(next !== tab ? clearedPath : {}), ...(materialsActive ? { resultTab: null } : {}) }) }
@@ -107,6 +118,8 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
   // so deep links and browser history restore their selection.
   const catalogScope = useRef(`${projectId}:${requestId}:${tab}`)
   useEffect(() => { setComparison([]) }, [projectId, requestId])
+  // §3.2: correct the URL to the resolved environment without a history entry.
+  useEffect(() => { if (resolvedEnvironment && !materialsActive && getParam('result_environment') !== resolvedEnvironment) updateParams({ result_environment: resolvedEnvironment }, { replace: true }) }, [getParam, materialsActive, resolvedEnvironment, updateParams])
 
   useEffect(() => {
     const controller = new AbortController(); const key = `${projectId}:${requestId}:${tab}`; latestCatalogKey.current = key
@@ -114,11 +127,12 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
       catalogScope.current = key; setCatalog(null); setMode(''); setComponentId(''); setBasis('')
     }
     setCatalogError('')
+    if (!catalogReady) return
     simulationDashboardApi.catalog(projectId, requestId, tab === 'usage' ? 'USAGE' : 'DISTRIBUTION', controller.signal).then((next) => {
       if (!controller.signal.aborted && latestCatalogKey.current === key) { loadedCatalogKey.current = key; setCatalog(next) }
     }).catch((reason) => { if (!controller.signal.aborted) setCatalogError(errorText(reason)) })
     return () => controller.abort()
-  }, [refreshToken, projectId, requestId, tab])
+  }, [refreshToken, projectId, requestId, tab, catalogReady])
 
   const options = useMemo(() => {
     if (!catalog || tab !== 'distribution') return []
@@ -218,6 +232,7 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
   }
 
   const pathBar = catalog && !materialsActive ? <HierarchyPath label="Case 경로" className="case-path-bar" trailing={tab === 'distribution' ? <div className="case-scene-chips" role="list" aria-label="Scene 목록">{sceneSummary.length ? sceneSummary.map((item) => <span role="listitem" key={item.label} className={`case-scene-chip${item.hasResult ? ' case-scene-chip--result' : ''}`} title={`${item.title} · ${item.hasResult ? '결과 있음' : '결과 없음'}`}><i aria-hidden="true" />{item.label}<span className="case-sr-only">{item.hasResult ? ' 결과' : ' 결과 없음'}</span></span>) : null}</div> : undefined}>
+    {resolvedEnvironment ? <HierarchyChoice label="환경" value={resolvedEnvironment} choices={[{ id: resolvedEnvironment, label: ENVIRONMENT_LABELS[resolvedEnvironment] }]} onChange={() => undefined} /> : null}
     <HierarchyChoice label="Case" value={caseId} choices={pathChoices(catalog.cases)} disabledReason="확정된 Case가 없습니다." onChange={(value) => { setCaseId(value); setCaptureId(''); setLoadCaseId(''); setRunId(''); setOptionId(''); setMode(''); setComponentId(''); setReferenceCaseId(''); setReferenceCaptureId('') }} />
     {tab === 'distribution' ? <HierarchyChoice label="하중경우" value={loadCaseId} choices={pathChoices(loadChoices)} disabled={!caseId} disabledReason={caseId ? '하중경우가 없습니다.' : 'Case를 먼저 선택하세요.'} onChange={(value) => { setLoadCaseId(value); setRunId(''); setOptionId(''); setMode(''); setComponentId('') }} /> : null}
     {tab === 'distribution' ? <HierarchyChoice label="Run Case" value={runId} choices={pathChoices(runChoices)} disabled={!loadCaseId} disabledReason={loadCaseId ? 'Run Case가 없습니다.' : '하중경우를 먼저 선택하세요.'} onChange={(value) => { setRunId(value); setOptionId(''); setMode(''); setComponentId('') }} /> : null}
@@ -275,9 +290,10 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
     : { source: { kind: 'case_final', projectId, requestId, caseId: dashboardCaseId, captureId: finalCaptureId, catalogCaseId: selectedCase?.id ?? caseId, basis, edgeKeys: edges.join(','), lineIndices: lines.join(',') }, labels: { project: '', request: '', caseLabel: caseText, component: componentLabel ?? '' } }
   return <section className="simulation-dashboard" data-ui-density="v1" aria-label="SPDM 해석 결과 대시보드">
     <header className="case-results-head">
-      <div className="case-env-toggle" role="group" aria-label="결과 환경"><button type="button" aria-pressed={tab === 'usage'} className={tab === 'usage' ? 'active' : ''} onClick={() => setTab('usage')}>사용환경</button><button type="button" aria-pressed={tab === 'distribution'} className={tab === 'distribution' ? 'active' : ''} onClick={() => setTab('distribution')}>유통환경</button></div>
+      {environments?.length === 2 ? <div className="case-env-toggle" role="group" aria-label="결과 환경"><button type="button" aria-pressed={tab === 'usage'} className={tab === 'usage' ? 'active' : ''} onClick={() => setTab('usage')}>사용환경</button><button type="button" aria-pressed={tab === 'distribution'} className={tab === 'distribution' ? 'active' : ''} onClick={() => setTab('distribution')}>유통환경</button></div> : null}
       <div className="case-results-head__actions">{headerExtra}{catalog ? <CaseReportLauncher scope={reportScope} disabledReason={materialsActive ? '소재·물성 탭에서는 보고서를 만들지 않습니다.' : tab === 'usage' ? '결과가 있는 사용환경 Case를 선택하면 보고서를 만들 수 있습니다.' : '유통환경에서 결과가 있는 Run Case와 Run Option을 선택하면 보고서를 만들 수 있습니다.'} /> : null}{catalog ? <CaseFinalizationPanel projectId={projectId} requestId={requestId} environment={tab === 'usage' ? 'USAGE' : 'DISTRIBUTION'} caseId={dashboardCaseId} captureId={hasCapturedCase ? finalCaptureId : ''} hasCapturedCase={hasCapturedCase} canFinalize={canRefreshSchema} reportScope={finalScope} /> : null}</div>
     </header>
+    {noResults && !materialsActive ? <State message={NO_RESULTS_MESSAGE} /> : null}
     {catalogError && !catalog && !materialsActive ? <State message={catalogError} error /> : null}
     {catalogError && catalog ? <State message={`${catalogError} · 마지막으로 읽은 결과를 표시합니다.`} error /> : null}
     {pathBar}
@@ -285,8 +301,10 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
     <div ref={setPathTarget} className="case-path-slot" hidden={!materialsActive} />
     {!materialsActive && catalog?.folder_schema?.status === 'UNAVAILABLE' ? <State message="폴더 구조를 읽을 수 없습니다. 저장된 결과를 표시합니다." title={catalog.folder_schema?.diagnostic?.message} error /> : null}
     {!materialsActive && catalog && !catalog.cases.length ? <State message="확정된 Case가 없습니다. 폴더 연결·규칙에서 구조를 확인하세요." /> : null}
+    {noResults && !materialsActive ? null : <>
     <div className="case-view-bar"><ViewTabs tabs={tabs} active={activeView} onSelect={selectView} /><div className="case-view-bar__end">{viewContext ? <span className="case-view-context" title={`표시 중: ${viewContext}`}>{viewContext}</span> : null}{displayOptions}</div></div>
     <div className="case-view-panel" id="case-view-panel" role="tabpanel" aria-labelledby={`case-view-tab-${activeView}`}>{content}</div>
+    </>}
   </section>
 }
 

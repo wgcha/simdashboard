@@ -523,7 +523,8 @@ def delete(conn, registration_ids, confirm_token: str, actor: str,
             if active:
                 conn.execute(f"UPDATE folder_environment_registrations SET status='DELETED',deleted_at=?,deleted_by=? "
                              f"WHERE id IN ({_marks(active)}) AND status<>'DELETED'", [stamp, actor, *active])
-            result = {"deleted": active, "counts": current["totals"]}
+            from .folder_discovery_environment import iso_utc
+            result = {"deleted": active, "counts": current["totals"], "deleted_at": iso_utc(stamp) if active else None}
             if audit is not None and active:
                 audit(conn, {"registration_ids": active, "counts": current["totals"],
                              "skipped": [rid for rid in ids if rid not in active]})

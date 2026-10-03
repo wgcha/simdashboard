@@ -3230,6 +3230,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{project_id}/requests/{request_id}/result-environments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Result Environments
+         * @description Environments of the request's registered Cases (case-results-environment.md §2).
+         */
+        get: operations["result_environments_api_projects__project_id__requests__request_id__result_environments_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/dashboard/finalizations/preview": {
         parameters: {
             query?: never;
@@ -6053,6 +6073,19 @@ export interface components {
             result_config: {
                 [key: string]: unknown;
             };
+        };
+        /** ResultEnvironmentCounts */
+        ResultEnvironmentCounts: {
+            /** Usage */
+            USAGE: number;
+            /** Distribution */
+            DISTRIBUTION: number;
+        };
+        /** ResultEnvironments */
+        ResultEnvironments: {
+            /** Environments */
+            environments: ("USAGE" | "DISTRIBUTION")[];
+            case_counts: components["schemas"]["ResultEnvironmentCounts"];
         };
         /**
          * ResultImportHistoryItem
@@ -14035,6 +14068,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    result_environments_api_projects__project_id__requests__request_id__result_environments_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResultEnvironments"];
                 };
             };
             /** @description Validation Error */

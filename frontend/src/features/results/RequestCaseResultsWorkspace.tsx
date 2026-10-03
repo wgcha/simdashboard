@@ -6,9 +6,11 @@ import { MaterialsDashboard } from '../materials/MaterialsDashboard'
 import { FOLDER_SCHEMA_FILE_BUSY, useFolderAutoSync } from '../../shared/hooks/useFolderAutoSync'
 import { folderEnvironmentApi, type DepthDeviationItem } from '../../shared/api/folderEnvironment'
 import { deviationLabel } from '../../shared/api/depthSchemaModel'
+import { keywordEnvironments } from '../../shared/api/simulationDashboard'
+import { useRequestResultEnvironments } from './useRequestResultEnvironments'
 import './RequestCaseResultsWorkspace.css'
 
-type Props = { projectId: string; requestId: string; canManageFolders?: boolean; canRefreshSchema?: boolean; canReinterpret?: boolean; activeTab?: 'case_results' | 'materials'; refreshToken?: number }
+type Props = { projectId: string; requestId: string; /** Request (folder) name; its 사용/유통 keyword picks the sync environment before any Case exists. */ requestName?: string; canManageFolders?: boolean; canRefreshSchema?: boolean; canReinterpret?: boolean; activeTab?: 'case_results' | 'materials'; refreshToken?: number }
 
 function syncLabel(sync: ReturnType<typeof useFolderAutoSync>, now: number): { text: string; title?: string; tone: 'ok' | 'busy' | 'wait' | 'warn' } {
   if (sync.busy) return { text: '확인 중…', tone: 'busy' }
@@ -25,10 +27,19 @@ function changeNotice(diff: { added: number; removed: number; changed: number } 
 }
 
 /** Request-scoped SPDM review. It intentionally has no legacy Load Case, Run, or layout dependency. */
-export function RequestCaseResultsWorkspace({ projectId, requestId, canManageFolders = false, canRefreshSchema = false, canReinterpret = false, activeTab = 'case_results', refreshToken = 0 }: Props) {
+export function RequestCaseResultsWorkspace({ projectId, requestId, requestName = '', canManageFolders = false, canRefreshSchema = false, canReinterpret = false, activeTab = 'case_results', refreshToken = 0 }: Props) {
   const [searchParams] = useSearchParams()
-  const environment = activeTab === 'materials' ? 'DISTRIBUTION' : searchParams.get('result_environment') === 'DISTRIBUTION' ? 'DISTRIBUTION' : 'USAGE'
-  const sync = useFolderAutoSync({ projectId, requestId, environment })
+  // E1–E4: the request's registered Cases decide the environment; the URL only chooses when both exist.
+  const [registeredToken, setRegisteredToken] = useState(0)
+  const environments = useRequestResultEnvironments(projectId, requestId, refreshToken + registeredToken)
+  // E3: without Cases the folder sync still runs (it is what registers new Cases into this
+  // request), for the request-name keyword environment, or both when the keyword is unclear.
+  const pendingEnvironments = environments?.length === 0 ? keywordEnvironments(requestName) : null
+  const environment = pendingEnvironments ? pendingEnvironments[0] : environments?.length === 1 ? environments[0] : activeTab === 'materials' ? 'DISTRIBUTION' : searchParams.get('result_environment') === 'DISTRIBUTION' ? 'DISTRIBUTION' : 'USAGE'
+  const sync = useFolderAutoSync({ projectId, requestId, environment, enabled: environments !== null })
+  const secondSync = useFolderAutoSync({ projectId, requestId, environment: 'DISTRIBUTION', enabled: pendingEnvironments?.length === 2 })
+  const syncRevision = sync.revision + secondSync.revision
+  useEffect(() => { if (syncRevision && pendingEnvironments) setRegisteredToken((value) => value + 1) }, [syncRevision]) // eslint-disable-line react-hooks/exhaustive-deps
   const [now, setNow] = useState(() => Date.now())
   const [notice, setNotice] = useState('')
   const [reinterpreting, setReinterpreting] = useState(false)
@@ -79,7 +90,7 @@ export function RequestCaseResultsWorkspace({ projectId, requestId, canManageFol
       <div><strong>{deviations.message}</strong><button type="button" aria-label="닫기" onClick={() => setDeviations(null)}>×</button></div>
       {deviations.items.length ? <ul>{deviations.items.map((item, index) => <li key={`${item.code}:${item.relative_path ?? index}`}><b>{deviationLabel(item.code)}</b>{item.relative_path ? <code>{item.relative_path}</code> : null}{item.message ? <span>{item.message}</span> : null}</li>)}</ul> : null}
     </div> : null}
-    <SimulationDashboard projectId={projectId} requestId={requestId} canManageFolders={canManageFolders} canRefreshSchema={canRefreshSchema} refreshToken={dashboardToken} activeTab={activeTab} headerExtra={syncStatus}
+    <SimulationDashboard projectId={projectId} requestId={requestId} canManageFolders={canManageFolders} canRefreshSchema={canRefreshSchema} refreshToken={dashboardToken} activeTab={activeTab} resultEnvironments={environments} headerExtra={environments ? syncStatus : null}
       renderMaterials={(pathTarget) => <MaterialsDashboard projectId={projectId} requestId={requestId} refreshToken={dashboardToken} embedded pathTarget={pathTarget} />} />
   </div>
 }

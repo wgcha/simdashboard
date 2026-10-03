@@ -6,6 +6,14 @@ export async function revealControl(control: Locator) {
   }
 }
 
+/**
+ * Mocks GET .../result-environments (case-results-environment.md §2). Defaults to a
+ * mixed request (both environments), which keeps the legacy toggle (E4) these specs use.
+ */
+export async function mockResultEnvironments(page: Page, environments: Array<'USAGE' | 'DISTRIBUTION'> = ['USAGE', 'DISTRIBUTION']) {
+  await page.route('**/api/projects/*/requests/*/result-environments', (route) => route.fulfill({ json: { environments, case_counts: { USAGE: environments.includes('USAGE') ? 1 : 0, DISTRIBUTION: environments.includes('DISTRIBUTION') ? 1 : 0 } } }))
+}
+
 /** Navigate through the real sidebar, including its collapsed utility groups. */
 export async function openWorkspaceRoute(page: Page, pathname: string) {
   const sidebar = page.getByRole('complementary', { name: '주 메뉴' })

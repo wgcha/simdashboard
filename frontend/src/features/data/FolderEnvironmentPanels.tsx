@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom'
 import type { FolderEnvironmentRegistration } from '../../shared/api/folderEnvironment'
+import { formatServerTime } from '../../shared/api/serverTime'
 
 // D8: the usage-environment "평가" level is now SCENE; legacy EVALUATION snapshots are shown as Scene too.
 export const environmentRoleLabels: Record<string, string> = { PROJECT: '프로젝트', REQUEST: '의뢰', WORKING: 'Working 작업 영역', FINAL: 'Final 보관 영역', FINAL_CAE: 'Final CAE', FINAL_REPORTS: 'Final Reports', FINAL_CAD: 'Final CAD', FINAL_VERSION: 'Final 버전', SIMULATION_CASE: '해석 Case', EVALUATION: 'Scene', LOAD_CASE: '하중경우', EXECUTION_RUN: 'Run Case', RUN_OPTION: 'Run Option', INPUT: '입력 폴더', RESULTS: '결과 폴더', SCENE: 'Scene', CONTAINER: '일반 중간 폴더', CONTENT: '내용물', EXCLUDE: '이번 등록에서 제외' }
@@ -13,7 +14,7 @@ const captureErrorMessages: Record<string, string> = {
 
 export function FolderRegistrationResults({ value, busy, onRefresh, onRetry }: { value: FolderEnvironmentRegistration; busy: boolean; onRefresh: () => void; onRetry: () => void }) {
   return <div className="folder-registration-results" aria-label="등록 결과">
-    <div className="folder-environment-footer"><strong>{states[value.status] ?? value.status}</strong><span>{new Date(value.created_at).toLocaleString('ko-KR')}</span><button type="button" className="ghost-button" disabled={busy} onClick={onRefresh}>상태 새로고침</button>
+    <div className="folder-environment-footer"><strong>{states[value.status] ?? value.status}</strong><span>{formatServerTime(value.created_at)}</span><button type="button" className="ghost-button" disabled={busy} onClick={onRefresh}>상태 새로고침</button>
       {value.capture_jobs.some((job) => ['FAILED', 'PENDING', 'RUNNING'].includes(job.status)) && <button type="button" className="primary-button" disabled={busy} onClick={onRetry}>미완료 결과 다시 읽기</button>}</div>
     {value.capture_jobs.map((job, index) => {
       const query = new URLSearchParams({ project: job.project_id || value.project_id, request: job.request_id || value.request_id, view: 'case_results', result_environment: value.environment, case: job.case_id, capture: job.capture_id || '' })

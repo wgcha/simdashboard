@@ -9,6 +9,17 @@ from ..security import write_audit_event
 from ..services import dashboard_capture as storage, dashboard_queries as queries
 
 router = APIRouter(prefix="/api/dashboard", tags=["result-dashboard"])
+project_requests_router = APIRouter(tags=["result-dashboard"])
+
+
+class ResultEnvironmentCounts(BaseModel):
+    USAGE: int
+    DISTRIBUTION: int
+
+
+class ResultEnvironments(BaseModel):
+    environments: list[Literal["USAGE", "DISTRIBUTION"]]
+    case_counts: ResultEnvironmentCounts
 
 
 class CaptureInput(BaseModel):
@@ -83,6 +94,19 @@ def catalog(request: Request, request_id: str,
     with connect() as conn:
         require_resource_permission(request, PROJECT_DATA_VIEW, "request", request_id, conn=conn)
         return queries.catalog(conn, request_id, environment, project_id)
+
+
+@project_requests_router.get("/api/projects/{project_id}/requests/{request_id}/result-environments",
+                             response_model=ResultEnvironments)
+def result_environments(project_id: str, request_id: str, request: Request):
+    """Environments of the request's registered Cases (case-results-environment.md §2)."""
+    with connect() as conn:
+        # Same check as /catalog; an unknown request is 404 there as well.
+        require_resource_permission(request, PROJECT_DATA_VIEW, "request", request_id, conn=conn)
+        found = queries.result_environments(conn, project_id, request_id)
+    if found is None:
+        raise HTTPException(404, {"code": "REQUEST_NOT_FOUND", "message": "의뢰를 찾을 수 없습니다."})
+    return found
 
 
 @router.post("/scans")

@@ -1,7 +1,10 @@
 import { mkdirSync, readFileSync } from 'node:fs'
 import { inflateRawSync } from 'node:zlib'
 import { expect, test, type Download, type Page, type Route } from '@playwright/test'
-import { loginWorkspace } from './workspace-test-helpers'
+import { loginWorkspace, mockResultEnvironments } from './workspace-test-helpers'
+
+// Mixed-environment request: keeps the 사용환경/유통환경 toggle these specs click (E4).
+test.beforeEach(async ({ page }) => { await mockResultEnvironments(page) })
 
 // Case results "보고서": PPTX and/or HTML built in the browser from the selection
 // fixed when the dialog opened (mocked dashboard API, synthetic data only).

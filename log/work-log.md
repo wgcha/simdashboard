@@ -1118,3 +1118,11 @@
 - 검증: DuckDB 전체 2021 passed/9 failed(기존 실패: rocky8 root 6, architecture ceiling, postgres_portability, load_case_create_slice), Postgres 16 신규 DB 대상 4개 파일 108 passed, migration 0033→0035 기존 데이터 업그레이드 확인. 프론트 tsc·build·test:api 통과, e2e 미실행.
 - 독립 검수: Verifier 1회(Blocker 없음, 테스트 측 수정 3건 반영). Codex Security 스캔 미실행. 실제 Server 2022 폐쇄망 배포 검증 미실행.
 - 남은 것: DuckDB 삭제는 FK 단계별 커밋(Postgres는 단일 트랜잭션), Final/CAD 용도 미확정.
+
+## 2026-10-03 수동 등록 의뢰 1개 단위, 결과 환경 자동 판정, "선택" 처리
+
+- 원인: 수동 등록에서 Root/프로젝트 수준 조사 시 여러 의뢰가 한 등록에 묶여 첫 의뢰 외 Case가 `CAPTURE_CONTEXT_MISMATCH`. 의뢰 수준 조사는 project_id NULL로 500. 시각은 naive UTC를 현지로 해석해 9시간 차이.
+- 변경: 미리보기·등록에서 의뢰 0개(REQUEST_MISSING)·2개 이상(MULTIPLE_REQUESTS) 차단(등록 시 DB 쓰기 0), 의뢰 수준 조사 시 상위 스키마로 프로젝트 도출, API 시각 UTC 오프셋. `result-environments` API로 Case 결과 환경 자동 판정(라벨, Case 없음 안내+폴더 동기화 유지, 혼재 시 토글), 결과 등록 환경 자동 지정. 프로젝트 "선택"→내 작업, 의뢰 "선택"→선택 해제.
+- 계약: `docs/contracts/depth-schema.md` §14, `docs/contracts/case-results-environment.md`.
+- 검증: DuckDB 전체 2032 passed/9 failed(기존 9건), Postgres 16 신규 파일+삭제 24/24, 프론트 tsc·build·test:api, e2e simulation-dashboard 15/16(실패 1건은 기준 커밋에서도 실패), case-finalization·report·video-grid 17/17.
+- 독립 검수: Verifier 1회(Blocker 1건: Case 없는 의뢰 동기화 중단 → 수정). E5·E6·E7 e2e 없음. Codex Security 스캔 미실행.

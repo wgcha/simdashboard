@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { folderEnvironmentApi as service, type FolderEnvironmentRegistration, type RegistrationDeletePreview, type RegistrationDeletePreviewItem } from '../../shared/api/folderEnvironment'
 import { errorCode, errorItems, sumDeleteCounts } from '../../shared/api/depthSchemaModel'
+import { formatServerTime } from '../../shared/api/serverTime'
 
 type Props = {
   isAdmin: boolean
@@ -82,7 +83,7 @@ export function FolderRegistrationHistory({ isAdmin, busy, onOpen, onDeleted }: 
     {!visible.length && <p>현재 저장소의 등록 이력이 없습니다.</p>}
     {visible.map((item) => <div className="folder-history-item" key={item.registration_id}>
       {isAdmin && <input type="checkbox" aria-label={`${item.relative_path || '저장소 전체'} 선택`} checked={selected.has(item.registration_id)} disabled={busy} onChange={() => toggle(item.registration_id)} />}
-      <button type="button" className="folder-history-row ghost-button" disabled={busy} onClick={() => onOpen(item)}>{new Date(item.created_at).toLocaleString('ko-KR')} · {envLabel(item.environment)} · {item.relative_path || '저장소 전체'} · Case {item.capture_jobs.length}개</button>
+      <button type="button" className="folder-history-row ghost-button" disabled={busy} onClick={() => onOpen(item)}>{formatServerTime(item.created_at)} · {envLabel(item.environment)} · {item.relative_path || '저장소 전체'} · Case {item.capture_jobs.length}개</button>
     </div>)}
     <div className="folder-environment-footer"><button type="button" disabled={!page} onClick={() => setPage(page - 1)}>이전</button><span>{history.total}건 · {page + 1}페이지</span><button type="button" disabled={(page + 1) * 50 >= history.total} onClick={() => setPage(page + 1)}>다음</button></div>
     {confirm && <dialog ref={dialog} className="folder-delete-dialog" aria-labelledby="folder-delete-title" onCancel={(event) => { event.preventDefault(); if (!confirm.deleting) setConfirm(null) }}>

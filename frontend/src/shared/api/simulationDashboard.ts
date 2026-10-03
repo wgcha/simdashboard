@@ -1,6 +1,9 @@
 import { apiFetch } from './auth'
 import { apiErrorFromResponse } from './errors'
 import { apiUrl } from './url'
+import { normalizeResultEnvironments, resultEnvironmentsPath, type RequestResultEnvironments } from './resultEnvironments'
+
+export { keywordEnvironments, normalizeResultEnvironments, resolvedResultEnvironment, resultEnvironmentsPath, type RequestResultEnvironments } from './resultEnvironments'
 
 export type DashboardEnvironment = 'USAGE' | 'DISTRIBUTION'
 export type DashboardBasis = 'REPORTED_SUMMARY' | 'DETAIL'
@@ -29,6 +32,13 @@ export type DashboardRunVideoPage = { contract_version: number; context: Dashboa
 
 const dashboardPath = (...segments: string[]) => `/${['api', 'dashboard', ...segments].join('/')}`
 
+export async function requestResultEnvironments(projectId: string, requestId: string, signal?: AbortSignal): Promise<RequestResultEnvironments> {
+  if (!projectId || !requestId) throw new TypeError('프로젝트와 의뢰를 먼저 선택하세요.')
+  const response = await apiFetch(apiUrl(resultEnvironmentsPath(projectId, requestId) as never), { signal, headers: { Accept: 'application/json' } })
+  if (!response.ok) throw await apiErrorFromResponse(response)
+  return normalizeResultEnvironments(await response.json() as Partial<RequestResultEnvironments>)
+}
+
 async function read<T>(path: string, parameters: Record<string, string | undefined>, signal?: AbortSignal): Promise<T> {
   const response = await apiFetch(apiUrl(path as never, {}, parameters), { signal, headers: { Accept: 'application/json' } })
   if (!response.ok) throw await apiErrorFromResponse(response)
@@ -42,6 +52,7 @@ async function write<T>(path: string, body: unknown, signal?: AbortSignal): Prom
 }
 
 export const simulationDashboardApi = {
+  resultEnvironments: requestResultEnvironments,
   catalog: (projectId: string, requestId: string, environment: DashboardEnvironment, signal?: AbortSignal) => read<DashboardCatalog>(dashboardPath('catalog'), { project_id: projectId, request_id: requestId, environment }, signal),
   scan: (payload: { project_id: string; request_id: string; root_relative_path: string; environment: DashboardEnvironment }, signal?: AbortSignal) => write<DashboardScan>(dashboardPath('scans'), payload, signal),
   capture: (payload: { project_id: string; request_id: string; root_relative_path: string; environment: DashboardEnvironment; storage_root_id?: string }, signal?: AbortSignal) => write<unknown>(dashboardPath('captures'), payload, signal),
