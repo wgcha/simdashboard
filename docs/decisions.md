@@ -22,3 +22,4 @@
 - 2026-10-03 · Case 결과 환경은 의뢰의 Case로 자동 판정(토글 제거, 라벨 표시, Case 없음은 결과 없음 안내, 혼재 시만 토글) · 한 의뢰에 사용·유통 혼재 금지가 작업 규칙 · `docs/contracts/case-results-environment.md`
 - 2026-10-03 · 프로젝트 "선택" → 내 작업 이동, 의뢰 "선택" → 선택 해제 · 빈 ID API 호출로 Not Found 표시되던 문제
 - 2026-10-04 · 준비 단계 대체 화면은 의뢰 작업 페이지에만 적용, 사이드바 이동 시 의뢰 화면 전용 쿼리 제거(project·request 유지) · 변수 카탈로그 등에서 구 결과 등록 화면이 뜨던 문제 · `docs/contracts/workspace-navigation.md`
+- 2026-10-04 · 폴더 등록 의뢰 진척은 폴더 상태로 자동 계산(등록→모델링→결과→Final→보고서, 의뢰 단위). 모델링은 Scene 폴더 바로 아래 `.rad`/`.fem`, 대표 Case 1개 Final + 보고서로 완료 · 수동 입력 없이 SPDM 원본과 일치 · `docs/contracts/folder-request-progress.md`
