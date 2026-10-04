@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 import hashlib
-import os
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
 from . import spdm_storage
+from .storage.local import LocalFsProvider
 
 MAX_FOLDERS = 5000
 MAX_ENTRIES = 50000
@@ -24,34 +24,38 @@ def normal(relative: str) -> str:
 
 
 def root_identity(root: Path) -> str:
-    return hashlib.sha256(spdm_storage._root_identity(root).encode("utf-8")).hexdigest()
+    """``root_key``: sha256 of the provider's root identity."""
+    return LocalFsProvider(root).root_key()
 
 
-def target(root: Path, relative: str) -> Path:
-    path = root.joinpath(*normal(relative).split("/")) if relative else root
-    spdm_storage._assert_safe_existing(path, root)
-    if not path.is_dir():
+def target(root: Path, relative: str) -> str:
+    """Root-relative folder to inspect (checked: no reparse ancestor, a directory)."""
+    fs = LocalFsProvider(root)
+    path = "/".join(normal(relative).split("/")) if relative else ""
+    fs.assert_safe(path)
+    if not fs.is_dir(path):
         raise ValueError("조사할 폴더를 찾을 수 없습니다.")
     return path
 
 
 def browse(root: Path, relative: str) -> list[dict[str, Any]]:
+    fs = LocalFsProvider(root)
     base = target(root, relative)
     entries = []
     started = time.monotonic()
-    with os.scandir(base) as iterator:
-        for index, entry in enumerate(iterator):
-            if index >= MAX_ENTRIES or time.monotonic() - started > MAX_SECONDS:
-                raise ValueError("폴더 선택 목록의 조사 한도를 초과했습니다. 더 작은 시작 위치를 지정하세요.")
-            path = Path(entry.path)
-            if spdm_storage._is_reparse(path):
-                continue
-            entries.append({"name": entry.name, "relative_path": path.relative_to(root).as_posix(),
-                            "is_directory": entry.is_dir(follow_symlinks=False)})
+    for index, entry in enumerate(fs.list(base)):
+        if index >= MAX_ENTRIES or time.monotonic() - started > MAX_SECONDS:
+            raise ValueError("폴더 선택 목록의 조사 한도를 초과했습니다. 더 작은 시작 위치를 지정하세요.")
+        path = fs.join(base, entry.name)
+        if fs.is_link(path):
+            continue
+        entries.append({"name": entry.name, "relative_path": path,
+                        "is_directory": entry.kind == "dir"})
     return sorted(entries, key=lambda item: item["name"].casefold())
 
 
 def scan(root: Path, relative: str, *, skip_descendants: Callable[[str, str | None], bool] | None = None) -> dict[str, Any]:
+    fs = LocalFsProvider(root)
     nodes, issues = [], []
     file_state: list[dict[str, Any]] = []
     files = total_entries = 0
@@ -68,40 +72,39 @@ def scan(root: Path, relative: str, *, skip_descendants: Callable[[str, str | No
         identity = ""
         skipped = bool(skip_descendants and skip_descendants(rel, parent))
         try:
-            spdm_storage._assert_safe_existing(path, root)
-            info = path.stat()
-            identity = f"{info.st_dev}:{info.st_ino}"
+            fs.assert_safe(path)
+            info = fs.stat(path, follow_links=True, missing_ok=False)
+            identity = info.item_id
             if not skipped:
-              with os.scandir(path) as iterator:
-                for entry in iterator:
+                for entry in fs.list(path, stat="files"):
                     total_entries += 1
                     if total_entries > MAX_ENTRIES or time.monotonic() - started > MAX_SECONDS:
                         issues.append({"relative_path": rel, "code": "ENTRY_LIMIT", "message": "전체 항목 수 또는 조사 시간 한도를 초과했습니다."})
                         halted = True
                         break
-                    child = Path(entry.path)
-                    child_rel = child.relative_to(root).as_posix()
-                    if spdm_storage._is_reparse(child):
+                    child = fs.join(path, entry.name)
+                    child_rel = child
+                    if fs.is_link(child):
                         issues.append({"relative_path": child_rel, "code": "REPARSE", "message": "연결 폴더·심볼릭 링크는 조사할 수 없습니다."})
-                    elif entry.is_dir(follow_symlinks=False):
+                    elif entry.kind == "dir":
                         if depth >= MAX_DEPTH or len(child_rel) > 1024:
                             issues.append({"relative_path": child_rel, "code": "DEPTH_LIMIT", "message": "폴더 깊이 또는 경로 길이 한도를 초과했습니다."})
                         else:
                             children.append((child, child_rel, depth + 1, rel))
-                    elif entry.is_file(follow_symlinks=False):
+                    elif entry.kind == "file":
                         count += 1
                         files += 1
-                        file_info = entry.stat(follow_symlinks=False)
                         file_state.append({
                             "relative_path": child_rel,
-                            "size": int(file_info.st_size),
-                            "modified_ns": int(getattr(file_info, "st_mtime_ns", file_info.st_mtime * 1_000_000_000)),
+                            "size": int(entry.size),
+                            "modified_ns": int(entry.modified_ns),
                         })
-                        if child.suffix:
-                            extensions.add(child.suffix.lower())
+                        suffix = PurePosixPath(entry.name).suffix
+                        if suffix:
+                            extensions.add(suffix.lower())
         except (OSError, spdm_storage.SpdmStorageError) as error:
             issues.append({"relative_path": rel, "code": "PATH_UNAVAILABLE", "message": str(error)[:200]})
-        node = {"relative_path": rel, "parent_path": parent, "name": path.name, "depth": depth,
+        node = {"relative_path": rel, "parent_path": parent, "name": fs.path(path).name, "depth": depth,
                 "file_count": count, "extensions": sorted(extensions), "identity": identity}
         if skipped:
             node["children_skipped"] = True

@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from ..database_connection import ConnectionLike, rows
 from . import folder_schema_locations, result_registration_paths as paths
+from .storage.local import LocalFsProvider
 
 
 def effective_assignment(schema: dict[str, Any], path_key: str) -> dict[str, Any] | None:
@@ -106,7 +107,7 @@ def _result_candidates(conn: ConnectionLike, root, root_key: str, project_id: st
             # a safe destination, including before any result file is present.
             try:
                 scene_dir = paths._safe_existing(root, parent_path)
-                if scene_dir.is_dir() and not paths.spdm_storage._is_reparse(scene_dir):
+                if LocalFsProvider(root).is_dir(scene_dir) and not LocalFsProvider(root).is_link(scene_dir):
                     destinations.append((parent_path, True))
             except (OSError, paths.ResultRegistrationError):
                 pass
@@ -115,7 +116,7 @@ def _result_candidates(conn: ConnectionLike, root, root_key: str, project_id: st
                 result_path = str(result_assignment.get("relative_path") or result_node.get("relative_path") or "")
                 try:
                     destination = paths._safe_existing(root, result_path)
-                    if destination.is_dir() and not paths.spdm_storage._is_reparse(destination):
+                    if LocalFsProvider(root).is_dir(destination) and not LocalFsProvider(root).is_link(destination):
                         destinations.append((result_path, True))
                 except paths.ResultRegistrationError:
                     continue
@@ -129,7 +130,7 @@ def _result_candidates(conn: ConnectionLike, root, root_key: str, project_id: st
             if result_node is None:
                 try:
                     destination = paths._safe_existing(root, result_path, allow_missing_leaf=True)
-                    if not destination.exists():
+                    if not LocalFsProvider(root).exists(destination):
                         destinations.append((result_path, False))
                 except paths.ResultRegistrationError:
                     pass
@@ -179,7 +180,7 @@ def _result_candidates(conn: ConnectionLike, root, root_key: str, project_id: st
 def _scope_data(conn: ConnectionLike, project_id: str, request_id: str,
                 environment: str) -> tuple[dict[str, Any], Any, str, str]:
     environment = paths._env(environment)
-    root, _root_id, root_key = paths._root(conn)
+    root, _root_id, root_key = paths.storage_context(conn)
     schema = _resolver(conn, root, root_key, project_id, request_id, environment)
     if (str(schema.get("project_id")) != project_id or str(schema.get("request_id")) != request_id or
             str(schema.get("environment")) != environment):
@@ -200,7 +201,7 @@ def _base_scope_data(conn: ConnectionLike, project_id: str, request_id: str,
     ).fetchone()
     if not owner:
         raise paths.ResultRegistrationError("RESULT_CONTEXT_INVALID", "기존 프로젝트와 의뢰의 연결을 확인할 수 없습니다.")
-    root, _root_id, root_key = paths._root(conn)
+    root, _root_id, root_key = paths.storage_context(conn)
     return {"project_id": project_id, "request_id": request_id, "environment": environment,
             "request_relative_path": ""}, root, root_key, environment
 

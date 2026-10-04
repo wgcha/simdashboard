@@ -15,6 +15,7 @@ from ..repositories import semantic_mapping as mapping_repository
 from . import spdm_storage
 from .folder_discovery_plan import build_plan, folded
 from .folder_discovery_scan import browse, normal, root_identity, scan
+from .storage import get_storage_provider
 from .semantic_mapping import semantic_transaction
 
 WRITE_LOCK = RLock()
@@ -53,10 +54,10 @@ def fail(code: str, message: str, status: int = 409):
 
 
 def configured_root(conn):
-    root = spdm_storage.storage_root(conn).root
-    if root is None:
-        fail("SPDM_ROOT_UNSET", "먼저 서버 저장소 경로를 설정하세요.")
-    return root
+    """Physical root of the storage provider (``SPDM_ROOT_UNSET`` 409 when not configured)."""
+    provider = get_storage_provider(conn, on_unset=lambda: HTTPException(
+        409, {"code": "SPDM_ROOT_UNSET", "message": "먼저 서버 저장소 경로를 설정하세요."}))
+    return provider.root
 
 
 def lock_tables(conn):

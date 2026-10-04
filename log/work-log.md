@@ -2,6 +2,12 @@
 
 이 파일은 완료된 개발 작업을 누적 기록한다. 이후 작업은 완료 시 최신 항목을 문서 상단에 추가하며, 변경 범위·검증 결과·남은 확인 사항을 함께 남긴다.
 
+## 2026-10-04 — SPDM 저장소 공급자 1단계(LocalFsProvider) 코드 정리
+
+- `docs/contracts/storage-provider.md`(dfb1dd0) 기준으로 `backend/app/services/storage/{provider,local,__init__}.py`를 추가하고, SPDM 루트 아래 목록·조회·읽기·쓰기를 공급자로 옮겼다. 대상은 서비스 12개(spdm_storage, folder_discovery_scan, folder_auto_discovery, folder_discovery, dashboard_capture, case_finalization, materials_catalog, folder_schema_resolver, folder_request_progress, result_registration_paths·result_registration·result_registration_locations)와 라우터 4개(spdm_storage, semantic_mapping, semantic_review, dashboard)다. reparse·대소문자 충돌 검사, 안정 읽기, 디렉터리 고정, 요청 잠금, no-follow 메타데이터 읽기는 결과·오류 코드·문구를 그대로 provider 모듈로 옮겼다. 모듈별 `_root()` 사본은 `get_storage_provider(conn)`(루트 해석은 `spdm_storage.storage_root` 한 곳)로 대체했다.
+- 쓰기는 구역을 명시한다. FINAL은 `*/Final/`과 그 아래 CAE·Reports·.finalizations, LEGACY는 spdm_storage(`Project_*/WR_*`의 CAE·보고서와 상위 폴더 생성), result_registration_paths(준비·rmdir 보상), result_registration(결과 파일 복사) 호출 모듈만 허용하며 그 밖은 `NOT_ALLOWED_WRITE`다. SIMDASH_IMPORT_ROOT 계열(master_result_refresh·bundle_snapshot·result_bundle_publisher), 시맨틱 샘플 임시 폴더, 앱 데이터는 S5 범위 밖으로 정적 검사 예외 목록에 남겼다.
+- 실제형 합성 트리(USAGE·DISTRIBUTION, 75R9J_PV·PR, mp4·rad·inc·fem, legacy Project_* 업로드)에서 자동 탐색→등록·수집→sync·refresh→진척→Final 미리보기·보고서 업로드·확정→legacy 업로드·다운로드 흐름의 응답·DB 행·파일 트리 비교가 리팩터 전후 동일했고 탐색·동기화 시간 차는 ±20% 안이었다. DuckDB 전체는 전후 모두 10건 실패(알려진 9건과 동시 실행 시 master_result_refresh 시간 경합 1건, 단독 재실행 통과)로 같고, 신규 공급자 단위·정적 경계 검사 26개를 추가했다. Postgres 주요 묶음은 새 DB에서 HEAD와 같은 결과(spdm_storage_workflow·single_request_registration의 기존 seed 의존 실패 동일)였다. OpenAPI·migration·의존성 변화 없음. 시험 4개의 monkeypatch 대상을 `storage.local`로 옮겼다. Windows 전용 경로(디렉터리 고정·잠금·공유 읽기)는 코드 이동만 했고 Windows에서 실행 검증하지 않았다. 독립 검수·Codex Security 스캔은 수행하지 않았다.
+
 ## 2026-10-02 — 소스 업데이트 Git 상태 정리
 
 - 업데이트 로그의 `git-plan` 중단과 Git 사전 검사 코드를 확인했다. `docs/`의 로컬 변경은 허용하지만 미커밋 `log/work-log.md`는 차단 대상이다. 현재 수정 브랜치는 `origin/main`과 같은 커밋이면서 이전 수정 브랜치를 추적해, 미커밋 변경 해결 뒤에도 fast-forward 검사에서 중단될 상태였다.

@@ -738,3 +738,24 @@ def test_chunked_body_over_limit_and_tampered_staged_copy_are_refused(admin_clie
     refused = _confirm(client, ctx, plan["operation_id"], ["html"])
     assert refused.status_code == 422 and refused.json()["detail"]["code"] == "FINALIZATION_REPORT_STAGE_INVALID"
     assert not (root / FINAL / "Reports").exists()
+
+
+def test_completion_marker_temp_cleanup_failure_is_best_effort(admin_client, monkeypatch):
+    """After complete.json is linked, a failed temporary-name cleanup must not fail the operation."""
+    client, root = admin_client
+    ctx = _seed(client, root)
+    plan = _preview(client, ctx)
+    assert _upload(client, ctx, plan["operation_id"], "html", HTML).status_code == 200
+    original_unlink = Path.unlink
+
+    def refuse_marker_temp(path, *args, **kwargs):
+        if path.name.startswith(".complete-"):
+            raise PermissionError("synthetic cleanup failure")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", refuse_marker_temp)
+    done = _confirm(client, ctx, plan["operation_id"], ["html"])
+    assert done.status_code == 200, done.text
+    operation_dir = root / plan["metadata_relative_path"]
+    assert (operation_dir / "complete.json").is_file()
+    assert [path.name for path in operation_dir.iterdir() if path.name.startswith(".complete-")]

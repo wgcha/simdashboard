@@ -7,7 +7,6 @@ is read through ``case_finalization.latest_completed`` (signed records, no hashi
 """
 from __future__ import annotations
 
-import os
 import threading
 import time
 from datetime import datetime, timezone
@@ -178,19 +177,20 @@ def _scene_paths_by_case(scene_paths: list[str], cases: list[dict[str, str]]) ->
 
 def _scene_has_input(root, relative_path: str) -> bool:
     """A ``.rad``/``.fem`` file directly inside the Scene folder (names only, never recursive)."""
-    from . import result_registration_paths, spdm_storage
+    from . import result_registration_paths
+    from .storage.local import LocalFsProvider
+    fs = LocalFsProvider(root)
     path = result_registration_paths._safe_existing(root, relative_path, allow_missing_leaf=True)
-    if not os.path.lexists(path):
+    if not fs.exists(path, follow_links=False):
         return False
-    spdm_storage._assert_safe_existing(path, root)
-    if not path.is_dir():
+    fs.assert_safe(path)
+    if not fs.is_dir(path):
         return False
-    with os.scandir(path) as entries:
-        for index, entry in enumerate(entries):
-            if index >= MAX_SCENE_ENTRIES:
-                break
-            if PurePosixPath(entry.name).suffix.casefold() in INPUT_SUFFIXES and entry.is_file(follow_symlinks=False):
-                return True
+    for index, entry in enumerate(fs.list(path)):
+        if index >= MAX_SCENE_ENTRIES:
+            break
+        if PurePosixPath(entry.name).suffix.casefold() in INPUT_SUFFIXES and entry.kind == "file":
+            return True
     return False
 
 
@@ -212,7 +212,8 @@ def _final_state(conn: ConnectionLike, project_id: str, request_id: str,
 
 
 def compute(conn: ConnectionLike, project_id: str, request_id: str) -> dict[str, Any]:
-    from . import dashboard_capture, spdm_storage
+    from . import dashboard_capture
+    from .storage import get_storage_provider
 
     environment = _live_environment(conn, project_id, request_id)
     if environment is None:
@@ -221,7 +222,8 @@ def compute(conn: ConnectionLike, project_id: str, request_id: str) -> dict[str,
     root = None
     root_error: str | None = None
     try:
-        root = spdm_storage.storage_root(conn).root
+        provider = get_storage_provider(conn)
+        root = provider.root if provider is not None else None
         if root is None:
             root_error = _STORAGE_UNAVAILABLE
     except (ValueError, OSError):

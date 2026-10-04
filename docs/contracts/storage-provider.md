@@ -59,3 +59,24 @@ class Entry:
 4. 실제형 트리에서 자동 탐색→등록→수집→진척→Final 지정→보고서 업로드 흐름의 산출(DB 행, 파일)이 리팩터 전후 동일(비교 스크립트)
 5. 성능: 같은 트리에서 자동 탐색·동기화 1회 소요 시간이 전후 ±20% 이내
 6. 배포 계약 영향 없음(새 의존성·migration 없음)
+
+## 4. 2단계 정리 대상
+
+1단계는 공개 함수 시그니처(`root: Path` 인자, 시험이 직접 호출하는 내부 함수)를 유지하려고 서비스 안에서 `LocalFsProvider(root)`를 직접 만든다. 2단계에서 `get_storage_provider(conn)`로 얻은 공급자를 인자로 넘기도록 정리한다(2026-10-04 기준 69곳, `backend/app/services/` 기준 줄 번호).
+
+- `case_finalization.py` 29곳: 368, 388, 443, 481, 589, 596, 644, 660, 696, 759, 779, 1090, 1113, 1140, 1160, 1181, 1218, 1249, 1295, 1406, 1417, 1460, 1514, 1536, 1569, 1624, 1648, 1757, 1839
+- `result_registration_paths.py` 12곳: 157, 456, 585, 692, 721, 777, 828, 867, 951, 1013, 1033, 1121
+- `spdm_storage.py` 8곳: 97, 120, 220, 244, 623, 722, 753, 835
+- `dashboard_capture.py` 4곳: 58, 63, 91, 195
+- `folder_discovery_scan.py` 4곳: 28, 33, 42, 58
+- `materials_catalog.py` 4곳: 168, 320, 532, 648 (168은 덱 파일 경로 기준 `LocalFsProvider(path.parent)` 읽기)
+- `result_registration_locations.py` 3곳: 110, 119, 133
+- `result_registration.py` 2곳: 243, 948
+- `folder_auto_discovery.py` 1곳: 162 / `folder_request_progress.py` 1곳: 182 / `folder_schema_resolver.py` 1곳: 97
+
+기타 1단계 구현 메모:
+
+- `create_exclusive`는 추가 stat 없이 `None`을 반환한다(§2의 `-> Entry`와 다름).
+- `move_no_overwrite`는 POSIX에서 hardlink만 만들고 임시 이름 정리는 호출부가 기존처럼(엄격 또는 best-effort) 수행한다. Windows는 rename이다.
+- §2 밖의 로컬 보조 메서드: `is_link`, `assert_safe`, `case_collision`, `pin`, `walk`, `rglob`, `resolve`, `read_stable_digest`, `read_small_nofollow`, `list(stat="files")`.
+- 쓰기 호출 모듈 제한: FINAL은 `case_finalization`, LEGACY는 `spdm_storage`·`result_registration_paths`·`result_registration`. FINAL 경로는 비어 있지 않은 의뢰 접두 아래 `Final` 자신과 `Final/(CAE|Reports|.finalizations)/**`이며 `Working` 아래의 `Final`은 제외한다.

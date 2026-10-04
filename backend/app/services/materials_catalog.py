@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import re
 import time
-import os
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -11,6 +10,7 @@ from ..database_connection import ConnectionLike, rows
 from ..parsers.radioss_deck_parser import RadiossDeckParser
 from . import (folder_discovery_environment, folder_schema_hierarchy, folder_discovery_scan, folder_schema_resolver,
                result_registration_paths, spdm_storage)
+from .storage.local import LocalFsProvider
 
 MAX_FILE_BYTES = 64 * 1024 * 1024
 MAX_TOTAL_BYTES = 256 * 1024 * 1024
@@ -107,7 +107,7 @@ def _request_scope(conn: ConnectionLike, request_id: str, environment: str):
     if not row:
         raise MaterialsCatalogError("RESULT_CONTEXT_INVALID", "기존 의뢰를 확인할 수 없습니다.", 404)
     project_id = str(row[0])
-    root, root_id, root_key = result_registration_paths._root(conn)
+    root, root_id, root_key = result_registration_paths.storage_context(conn)
     try:
         locations = folder_schema_resolver.resolve_request_locations(
             conn, project_id, request_id, environment,
@@ -163,6 +163,11 @@ def _candidate_directories(scene: dict[str, Any], scope: dict[str, Any]) -> list
     return unique
 
 
+def _open_deck(path: Path):
+    """Stable reader for one deck file through the storage provider (rooted at its folder)."""
+    return LocalFsProvider(path.parent).open_read(path.name)
+
+
 def _file_roles(path: Path, budget: dict[str, Any] | None = None) -> set[str]:
     name = path.stem.casefold().replace("-", "_").replace(" ", "_")
     roles: set[str] = set()
@@ -171,7 +176,7 @@ def _file_roles(path: Path, budget: dict[str, Any] | None = None) -> set[str]:
     if re.search(r"(?:^|_)(?:mat(?:erial)?s?|props?|curves?|functions?)(?:_|$)", name):
         roles.add("materials")
     try:
-        with spdm_storage.open_stable_reader(path) as stream:
+        with _open_deck(path) as stream:
             scanned = 0
             for raw_line in stream:
                 if budget is not None and time.monotonic() - budget["started"] > folder_discovery_scan.MAX_SECONDS:
@@ -312,24 +317,24 @@ def _candidate_sources(scene: dict[str, Any], root: Path, scope: dict[str, Any],
             directory = result_registration_paths._safe_existing(root, directory_relative, allow_missing_leaf=True)
         except result_registration_paths.ResultRegistrationError as exc:
             raise MaterialsCatalogError(exc.code, str(exc)) from exc
-        if not directory.exists():
+        fs = LocalFsProvider(root)
+        if not fs.exists(directory):
             continue
-        if not directory.is_dir():
+        if not fs.is_dir(directory):
             continue
         deck_files: list[tuple[str, Path, int]] = []
         try:
-            with os.scandir(directory) as entries:
-                for entry in entries:
-                    budget["entries"] += 1
-                    if budget["entries"] > folder_discovery_scan.MAX_ENTRIES or time.monotonic() - budget["started"] > folder_discovery_scan.MAX_SECONDS:
-                        raise MaterialsCatalogError("MATERIALS_CANDIDATE_SCAN_LIMIT", "덱 후보 조사 한도를 초과했습니다.", 413)
-                    path = Path(entry.path)
-                    if spdm_storage._is_reparse(path):
-                        raise MaterialsCatalogError("MATERIALS_PATH_UNSAFE", "덱 후보에 reparse 또는 symbolic link가 있습니다.")
-                    if not entry.is_file(follow_symlinks=False) or path.suffix.casefold() not in _DECK_EXTENSIONS:
-                        continue
-                    relative = path.relative_to(root).as_posix()
-                    deck_files.append((relative, path, path.stat().st_size))
+            for entry in fs.list(directory):
+                budget["entries"] += 1
+                if budget["entries"] > folder_discovery_scan.MAX_ENTRIES or time.monotonic() - budget["started"] > folder_discovery_scan.MAX_SECONDS:
+                    raise MaterialsCatalogError("MATERIALS_CANDIDATE_SCAN_LIMIT", "덱 후보 조사 한도를 초과했습니다.", 413)
+                relative = fs.join(directory, entry.name)
+                path = fs.path(relative)
+                if fs.is_link(relative):
+                    raise MaterialsCatalogError("MATERIALS_PATH_UNSAFE", "덱 후보에 reparse 또는 symbolic link가 있습니다.")
+                if entry.kind != "file" or path.suffix.casefold() not in _DECK_EXTENSIONS:
+                    continue
+                deck_files.append((relative, path, fs.stat(relative, follow_links=True, missing_ok=False).size))
         except MaterialsCatalogError:
             raise
         except (OSError, spdm_storage.SpdmStorageError) as exc:
@@ -521,10 +526,12 @@ def _resolve_scene(conn: ConnectionLike, request_id: str, environment: str,
     selected = by_id_entry or by_path_entry
     assert selected is not None
     try:
-        scene_path = result_registration_paths._safe_existing(root, selected["relative_path"])
+        scene_relative = result_registration_paths._safe_existing(root, selected["relative_path"])
     except result_registration_paths.ResultRegistrationError as exc:
         raise MaterialsCatalogError(exc.code, str(exc)) from exc
-    if not scene_path.is_dir():
+    fs = LocalFsProvider(root)
+    scene_path = fs.path(scene_relative)
+    if not fs.is_dir(scene_relative):
         raise MaterialsCatalogError("MATERIALS_SCENE_INVALID", "선택한 Scene 폴더를 찾을 수 없습니다.", 404)
     return selected, scene_path, scope
 
@@ -577,7 +584,7 @@ def _scan_include_references(path: Path, relative: str, expected_size: int,
     actual_size = 0
     ended = False
     try:
-        with spdm_storage.open_stable_reader(path) as stream:
+        with _open_deck(path) as stream:
             for raw_line in stream:
                 actual_size += len(raw_line)
                 if actual_size > MAX_FILE_BYTES:
@@ -638,11 +645,13 @@ def _include_sources(files: list[tuple[str, Path, int]], root: Path, scope: dict
         if len(sources) >= MAX_INCLUDE_FILES:
             raise MaterialsCatalogError("MATERIALS_INCLUDE_FILE_LIMIT", "덱 include 파일 수가 허용 한도를 초과했습니다.", 413)
         try:
-            path = result_registration_paths._safe_existing(root, relative)
-            spdm_storage._assert_safe_existing(path, root)
-            if not path.is_file():
+            fs = LocalFsProvider(root)
+            checked = result_registration_paths._safe_existing(root, relative)
+            fs.assert_safe(checked)
+            if not fs.is_file(checked):
                 raise MaterialsCatalogError("MATERIALS_INCLUDE_NOT_FILE", "/INCLUDE 대상은 일반 파일이어야 합니다.")
-            size = path.stat().st_size
+            size = fs.stat(checked, follow_links=True, missing_ok=False).size
+            path = fs.path(checked)
         except MaterialsCatalogError:
             raise
         except result_registration_paths.ResultRegistrationError as exc:
@@ -681,7 +690,7 @@ def _parse_scene(selected: dict[str, Any], scene_path: Path, root: Path,
     def stream_lines(path: Path, expected_size: int):
         actual = 0
         try:
-            with spdm_storage.open_stable_reader(path) as stream:
+            with _open_deck(path) as stream:
                 for line in stream:
                     actual += len(line)
                     if actual > MAX_FILE_BYTES:
@@ -720,7 +729,7 @@ def _parse_scene(selected: dict[str, Any], scene_path: Path, root: Path,
 def deck(conn: ConnectionLike, request_id: str, environment: str,
          scene_id: str | None = None, relative_path: str | None = None) -> dict[str, Any]:
     selected, scene_path, scope = _resolve_scene(conn, request_id, environment, scene_id, relative_path)
-    root, root_id, root_key = result_registration_paths._root(conn)
+    root, root_id, root_key = result_registration_paths.storage_context(conn)
     parsed, candidate_warnings, files = _parse_scene(selected, scene_path, root, scope, conn, root_id, root_key)
     return {"request_id": request_id, "environment": scope["environment"], "scene": selected,
             "files": files, "candidate_warnings": candidate_warnings, "deck": parsed}

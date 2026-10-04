@@ -4,7 +4,6 @@ from __future__ import annotations
 import hashlib
 import json
 import mimetypes
-import os
 import re
 import threading
 from datetime import datetime, timezone
@@ -15,6 +14,9 @@ from uuid import uuid4
 from ..database_connection import ConnectionLike, rows
 from ..services import dashboard_capture, folder_discovery_environment, spdm_storage
 from . import usage_source_review
+from .storage import get_storage_provider
+from .storage.local import LocalFsProvider
+from .storage.provider import LEGACY
 
 ENVIRONMENTS = {"USAGE", "DISTRIBUTION"}
 EVALUATIONS = ("Settle", "Wobble", "Horizontal_Force_Angle", "Slope_Angle", "Slope_Angle_360")
@@ -87,7 +89,7 @@ def _scope(conn: ConnectionLike, project_id: str, request_id: str, environment: 
     ).fetchone()
     if not row:
         raise ResultRegistrationError("RESULT_CONTEXT_INVALID", "기존 프로젝트와 의뢰의 연결을 확인할 수 없습니다.")
-    root_key = folder_discovery_environment.root_identity(_root(conn)[0])
+    root_key = folder_discovery_environment.root_identity(storage_context(conn)[0])
     registered = rows(conn.execute(
         "SELECT r.id AS registration_id,g.relative_path,g.role_kind,g.target_id FROM folder_environment_registry g "
         "JOIN folder_environment_registrations r ON r.id=g.registration_id "
@@ -141,34 +143,33 @@ def _scope(conn: ConnectionLike, project_id: str, request_id: str, environment: 
             "request_relative_path": request_folder}
 
 
-def _root(conn: ConnectionLike) -> tuple[Path, str, str]:
-    storage = spdm_storage.storage_root(conn)
-    if storage.root is None:
-        raise ResultRegistrationError("SPDM_ROOT_UNSET", "SPDM 저장소 루트가 설정되지 않았습니다.")
-    root = storage.root
+def storage_context(conn: ConnectionLike) -> tuple[Path, str, str]:
+    """Configured provider root with its ``storage_root_id`` and ``root_key`` (``SPDM_ROOT_UNSET`` when absent)."""
+    provider = get_storage_provider(conn, on_unset=lambda: ResultRegistrationError("SPDM_ROOT_UNSET", "SPDM 저장소 루트가 설정되지 않았습니다."))
+    root = provider.root
     root_id = dashboard_capture._root_id(root)
     root_key = folder_discovery_environment.root_identity(root)
     return root, root_id, root_key
 
 
-def _safe_existing(root: Path, relative: str, *, allow_missing_leaf: bool = False) -> Path:
-    target = root
+def _safe_existing(root: Path, relative: str, *, allow_missing_leaf: bool = False) -> str:
+    """Root-relative path whose existing ancestors are plain folders (no reparse point)."""
+    fs = LocalFsProvider(root)
+    target = ""
     parts = PurePosixPath(relative).parts if relative else ()
     missing = False
     try:
-        spdm_storage._assert_safe_existing(root, root)
+        fs.assert_safe("")
         for index, part in enumerate(parts):
-            target = target / part
+            target = fs.join(target, part)
             if missing:
                 continue
-            try:
-                target.lstat()
-            except FileNotFoundError:
+            if fs.stat(target, follow_links=False, missing_ok=True) is None:
                 if allow_missing_leaf:
                     missing = True
                     continue
                 raise ResultRegistrationError("SPDM_FOLDER_MISSING", "선택한 폴더를 찾을 수 없습니다.")
-            spdm_storage._assert_safe_existing(target, root)
+            fs.assert_safe(target)
         return target
     except ResultRegistrationError:
         raise
@@ -452,7 +453,8 @@ def _validate_registered_schema_parent(conn: ConnectionLike, root: Path, root_ke
         # Confirm the saved chain still names the same physical directories.
         # Changes elsewhere in the scanned tree do not invalidate this parent.
         try:
-            current = _safe_existing(root, scan_root) if scan_root else root
+            fs = LocalFsProvider(root)
+            current = _safe_existing(root, scan_root) if scan_root else ""
             for index, node in enumerate(chain_nodes):
                 expected_path = chain_paths[index]
                 if str(node.get("relative_path", "")) != expected_path or str(node.get("name", "")) != PurePosixPath(expected_path).name:
@@ -460,18 +462,17 @@ def _validate_registered_schema_parent(conn: ConnectionLike, root: Path, root_ke
                     break
                 if index > 0:
                     expected_name = str(node["name"])
-                    with os.scandir(current) as entries:
-                        matches = [entry.name for entry in entries
-                                   if entry.name.casefold() == expected_name.casefold() and entry.is_dir(follow_symlinks=False)]
+                    matches = [entry.name for entry in fs.list(current)
+                               if entry.name.casefold() == expected_name.casefold() and entry.kind == "dir"]
                     if len(matches) != 1 or matches[0] != expected_name:
                         chain_valid = False
                         break
-                    current = current / matches[0]
-                    spdm_storage._assert_safe_existing(current, root)
+                    current = fs.join(current, matches[0])
+                    fs.assert_safe(current)
                 identity = str(node.get("identity") or "")
                 if identity:
-                    stat = current.stat()
-                    if identity != f"{stat.st_dev}:{stat.st_ino}":
+                    stat = fs.stat(current, follow_links=True, missing_ok=False)
+                    if identity != stat.item_id:
                         chain_valid = False
                         break
         except (OSError, spdm_storage.SpdmStorageError, ResultRegistrationError):
@@ -581,7 +582,7 @@ def _trace_path(conn: ConnectionLike, root: Path, root_id: str, root_key: str,
     if len(parts) < len(wr_parts) or tuple(x.casefold() for x in parts[:len(wr_parts)]) != tuple(x.casefold() for x in wr_parts):
         raise ResultRegistrationError("RESULT_PATH_OUTSIDE_REQUEST", "선택한 경로가 연결된 SPDM 의뢰 폴더 아래에 없습니다.")
     target = _safe_existing(root, normalized)
-    if require_directory and not target.is_dir():
+    if require_directory and not LocalFsProvider(root).is_dir(target):
         raise ResultRegistrationError("RESULT_PATH_NOT_DIRECTORY", "선택한 경로가 폴더가 아닙니다.")
     path_nodes: list[dict[str, Any]] = []
     context = _empty_context()
@@ -620,7 +621,7 @@ def _trace_path(conn: ConnectionLike, root: Path, root_id: str, root_key: str,
 
 def targets(conn: ConnectionLike, environment: str, principal_projects: set[str] | None = None) -> dict[str, Any]:
     environment = _env(environment)
-    root, root_id, root_key = _root(conn)
+    root, root_id, root_key = storage_context(conn)
     from .folder_schema_resolver import FolderSchemaError, resolve_request_schema
     from .result_registration_locations import effective_assignment, _result_candidates
 
@@ -688,7 +689,7 @@ def targets(conn: ConnectionLike, environment: str, principal_projects: set[str]
             items.append({**scope, "storage_root_id": root_id, "root_key": root_key,
                           "status": "MISSING", "reason": {"code": exc.code, "message": str(exc)}, "cases": []})
             continue
-        if not wr_path.is_dir():
+        if not LocalFsProvider(root).is_dir(wr_path):
             items.append({**scope, "storage_root_id": root_id, "root_key": root_key,
                           "status": "MISSING", "reason": {"code": "SPDM_FOLDER_UNAVAILABLE",
                           "message": "확정된 의뢰 경로가 폴더가 아닙니다."}, "cases": []})
@@ -717,7 +718,7 @@ def targets(conn: ConnectionLike, environment: str, principal_projects: set[str]
                 continue
             try:
                 case_target = _safe_existing(root, relative)
-                if not case_target.is_dir():
+                if not LocalFsProvider(root).is_dir(case_target):
                     continue
             except ResultRegistrationError:
                 continue
@@ -756,7 +757,7 @@ def targets(conn: ConnectionLike, environment: str, principal_projects: set[str]
 def folders(conn: ConnectionLike, project_id: str, request_id: str, environment: str,
             parent_relative_path: str | None = None) -> dict[str, Any]:
     environment = _env(environment)
-    root, root_id, root_key = _root(conn)
+    root, root_id, root_key = storage_context(conn)
     # The step-02 explorer is driven only by a current Folder Schema snapshot.
     # The legacy trace remains available for immutable drafts and older APIs,
     # but its name-based fallback must not invent selectable context here.
@@ -773,7 +774,7 @@ def folders(conn: ConnectionLike, project_id: str, request_id: str, environment:
              "request_relative_path": str(schema["request_relative_path"])}
     parent = scope["request_relative_path"] if parent_relative_path is None else _relative(parent_relative_path)
     parent_target = _safe_existing(root, parent)
-    if not parent_target.is_dir():
+    if not LocalFsProvider(root).is_dir(parent_target):
         raise ResultRegistrationError("SPDM_FOLDER_UNAVAILABLE", "선택한 경로가 폴더가 아닙니다.")
     wr_parts = PurePosixPath(scope["request_relative_path"]).parts
     parent_parts = PurePosixPath(parent).parts
@@ -824,7 +825,7 @@ def folders(conn: ConnectionLike, project_id: str, request_id: str, environment:
         child_name = str(assignment.get("name") or schema_node.get("name") or PurePosixPath(child_relative).name)
         try:
             child_absolute = _safe_existing(root, child_relative)
-            if not child_absolute.is_dir():
+            if not LocalFsProvider(root).is_dir(child_absolute):
                 continue
         except ResultRegistrationError:
             continue
@@ -863,7 +864,7 @@ def folders(conn: ConnectionLike, project_id: str, request_id: str, environment:
                 else:
                     try:
                         result_target = _safe_existing(root, result_candidate, allow_missing_leaf=True)
-                        if result_target.exists():
+                        if LocalFsProvider(root).exists(result_target):
                             # Existing folders must have an explicit schema
                             # RESULTS role; only a missing standard leaf is a
                             # safe proposal for the folder preparation flow.
@@ -916,7 +917,7 @@ def _role_transition(environment: str, parent_role: str, role: str, name: str) -
 def _preview_target(conn: ConnectionLike, project_id: str, request_id: str, environment: str,
                     parent_relative_path: str, segments: list[dict[str, str]]) -> dict[str, Any]:
     scope = _scope(conn, project_id, request_id, environment)
-    root, root_id, root_key = _root(conn)
+    root, root_id, root_key = storage_context(conn)
     parent_relative_path = _relative(parent_relative_path)
     if _is_final_branch(scope["request_relative_path"], parent_relative_path):
         raise ResultRegistrationError("RESULT_FINAL_BRANCH_BLOCKED", "Final 폴더는 일반 결과 등록 위치로 사용할 수 없습니다.")
@@ -947,11 +948,12 @@ def _preview_target(conn: ConnectionLike, project_id: str, request_id: str, envi
             raise ResultRegistrationError("RESULT_PATH_INVALID", "결과 경로가 너무 깁니다.")
         _owner_conflict(conn, root_id, root_key, current_path, project_id, request_id, scope["environment"])
         parent_relative = PurePosixPath(current_path).parent.as_posix()
+        fs = LocalFsProvider(root)
         parent_dir = _safe_existing(root, parent_relative, allow_missing_leaf=True)
         collisions = {}
-        if parent_dir.is_dir():
+        if fs.is_dir(parent_dir):
             try:
-                collisions = {item.name.casefold(): item.name for item in parent_dir.iterdir()}
+                collisions = {item.name.casefold(): item.name for item in fs.list(parent_dir)}
             except OSError as exc:
                 raise ResultRegistrationError("SPDM_FOLDER_UNAVAILABLE", "결과 폴더의 상위 경로에 접근할 수 없습니다.") from exc
         existed_by_name = name.casefold() in collisions
@@ -959,7 +961,7 @@ def _preview_target(conn: ConnectionLike, project_id: str, request_id: str, envi
         actual_path = f"{parent_relative}/{actual_name}"
         if existed_by_name:
             target = _safe_existing(root, actual_path)
-            if not target.is_dir():
+            if not fs.is_dir(target):
                 raise ResultRegistrationError("RESULT_PATH_CONFLICT", "결과 폴더 경로에 파일이 있습니다.")
         # A confirmed semantic role remains authoritative even when the disk
         # folder is temporarily absent and is being repaired.
@@ -1008,7 +1010,7 @@ def _preview_target(conn: ConnectionLike, project_id: str, request_id: str, envi
 
 def _path_exists(root: Path, relative_path: str) -> bool:
     try:
-        return _safe_existing(root, relative_path).is_dir()
+        return LocalFsProvider(root).is_dir(_safe_existing(root, relative_path))
     except ResultRegistrationError as exc:
         if exc.code == "SPDM_FOLDER_MISSING":
             return False
@@ -1028,22 +1030,23 @@ def _prepare_folders_impl(conn: ConnectionLike, project_id: str, request_id: str
                 "case_relative_path": plan["case_relative_path"], "result_relative_path": result_path,
                 "context": plan["context"], "proposed_paths": plan["proposed_paths"],
                 "created_paths": []}
-    created: list[Path] = []
+    fs = LocalFsProvider(plan["root"])
+    created: list[str] = []
     if missing:
         try:
             for relative in missing:
                 destination = _safe_existing(plan["root"], relative, allow_missing_leaf=True)
-                if destination.exists():
-                    if not destination.is_dir() or spdm_storage._is_reparse(destination):
+                if fs.exists(destination):
+                    if not fs.is_dir(destination) or fs.is_link(destination):
                         raise ResultRegistrationError("RESULT_PATH_CONFLICT", "결과 경로가 안전한 폴더가 아닙니다.")
                     continue
-                destination.mkdir()
+                fs.mkdirs(destination, zone=LEGACY, parents=False, exist_ok=False)
                 created.append(destination)
-                spdm_storage._assert_safe_existing(destination, plan["root"])
+                fs.assert_safe(destination)
         except BaseException:
             for directory in reversed(created):
                 try:
-                    directory.rmdir()
+                    fs.remove(directory, zone=LEGACY, directory=True)
                 except OSError:
                     pass
             raise
@@ -1073,14 +1076,14 @@ def _prepare_folders_impl(conn: ConnectionLike, project_id: str, request_id: str
     except BaseException:
         for directory in reversed(created):
             try:
-                directory.rmdir()
+                fs.remove(directory, zone=LEGACY, directory=True)
             except OSError:
                 pass
         raise
     return {"status": "PREPARED", "created": bool(missing), "created_paths": missing,
             "case_relative_path": plan["case_relative_path"], "result_relative_path": result_path,
             "context": plan["context"], "proposed_paths": plan["proposed_paths"],
-            "_created_absolute_paths": created}
+            "_created_absolute_paths": created, "_created_root": plan["root"]}
 
 
 def prepare_folders(conn: ConnectionLike, project_id: str, request_id: str, environment: str,
@@ -1100,11 +1103,13 @@ def prepare_folders(conn: ConnectionLike, project_id: str, request_id: str, envi
     is_duck = getattr(conn, "backend", None) != "postgresql"
     if is_duck:
         conn.execute("BEGIN TRANSACTION")
-    created: list[Path] = []
+    created: list[str] = []
+    created_root: Path | None = None
     try:
         result = _prepare_folders_impl(conn, project_id, request_id, environment,
                                        parent_relative_path, segments, True, actor)
         created = result.pop("_created_absolute_paths", [])
+        created_root = result.pop("_created_root", None)
         conn.execute("COMMIT")
         return result
     except BaseException:
@@ -1112,9 +1117,11 @@ def prepare_folders(conn: ConnectionLike, project_id: str, request_id: str, envi
             conn.execute("ROLLBACK")
         except Exception:
             pass
-        for directory in reversed(created):
-            try:
-                directory.rmdir()
-            except OSError:
-                pass
+        if created_root is not None:
+            fs = LocalFsProvider(created_root)
+            for directory in reversed(created):
+                try:
+                    fs.remove(directory, zone=LEGACY, directory=True)
+                except OSError:
+                    pass
         raise

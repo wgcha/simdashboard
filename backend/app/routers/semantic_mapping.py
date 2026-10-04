@@ -7,7 +7,7 @@ import base64
 from email import policy
 from email.parser import BytesParser
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 from uuid import uuid4
 
@@ -32,6 +32,7 @@ from ..repositories import semantic_mapping as mapping_repository
 from ..security import write_audit_event
 from ..services import spdm_storage, semantic_sample_uploads as sample_uploads
 from ..services import semantic_result_refresh
+from ..services.storage import LocalFsProvider, get_storage_provider
 from ..services.semantic_mapping import persist_semantic_import, semantic_source_run_id, semantic_transaction
 from .semantic_body_limit import SemanticBodyLimitRoute
 from .semantic_review import record_unresolved_refresh
@@ -480,16 +481,20 @@ async def preview(request: Request) -> dict[str, Any]:
     except Exception as error: raise _error(error) from error
 
 
+def _provider(conn: Any) -> LocalFsProvider:
+    return get_storage_provider(conn, on_unset=lambda: HTTPException(409, {"code": "SPDM_ROOT_UNSET"}))
+
+
 @router.get("/folders")
 def folders(relative_path: str | None, request: Request) -> dict[str, Any]:
     with connect() as conn:
         require_permission(request, SYSTEM_CATALOG_MANAGE, conn=conn)
-        root = spdm_storage.storage_root(conn)
-        if root.root is None: raise HTTPException(409, {"code": "SPDM_ROOT_UNSET"})
-        base = root.root if not relative_path else root.root.joinpath(*spdm_storage._normalise_relative(relative_path).split("/"))
-        spdm_storage._assert_safe_existing(base, root.root)
-        if not base.is_dir(): raise HTTPException(404, {"code": "SPDM_PATH_MISSING"})
-        return {"entries": [{"name": p.name, "relative_path": p.relative_to(root.root).as_posix(), "is_directory": p.is_dir()} for p in sorted(base.iterdir(), key=lambda p: p.name.casefold()) if not spdm_storage._is_reparse(p)]}
+        fs = _provider(conn)
+        base = "" if not relative_path else "/".join(spdm_storage._normalise_relative(relative_path).split("/"))
+        fs.assert_safe(base)
+        if not fs.is_dir(base): raise HTTPException(404, {"code": "SPDM_PATH_MISSING"})
+        children = sorted((fs.join(base, entry.name) for entry in fs.list(base)), key=lambda p: PurePosixPath(p).name.casefold())
+        return {"entries": [{"name": PurePosixPath(p).name, "relative_path": p, "is_directory": fs.is_dir(p)} for p in children if not fs.is_link(p)]}
 
 
 @router.post("/bindings", status_code=201)
@@ -514,10 +519,9 @@ def save_binding(payload: BindingSave, request: Request) -> dict[str, Any]:
             raise HTTPException(422, {"code": "SEMANTIC_RECIPE_SET_INVALID"})
         try: relative_path = spdm_storage._normalise_relative(payload.relative_path)
         except spdm_storage.SpdmStorageError as error: raise _error(error) from error
-        root = spdm_storage.storage_root(conn)
-        if root.root is None: raise HTTPException(409, {"code": "SPDM_ROOT_UNSET"})
-        target_path = root.root.joinpath(*relative_path.split("/")); spdm_storage._assert_safe_existing(target_path, root.root)
-        if not target_path.is_dir(): raise HTTPException(422, {"code": "SPDM_PATH_MISSING"})
+        fs = _provider(conn)
+        target_path = "/".join(relative_path.split("/")); fs.assert_safe(target_path)
+        if not fs.is_dir(target_path): raise HTTPException(422, {"code": "SPDM_PATH_MISSING"})
         path_key = relative_path.casefold()
         legacy = mapping_repository.legacy_binding_paths(conn)
         existing = mapping_repository.semantic_bindings(conn)
@@ -614,26 +618,26 @@ def _refresh_binding_snapshot(binding: dict[str, Any], request: Request) -> dict
             raise HTTPException(409, {"code": "SEMANTIC_BINDING_STALE"})
         if not binding["load_case_id"]: raise HTTPException(422, {"code": "SEMANTIC_BINDING_LOAD_CASE_REQUIRED"})
         require_resource_permission(request, RESULT_IMPORT, "load_case", str(binding["load_case_id"]), conn=conn)
-        root = spdm_storage.storage_root(conn)
-        if root.root is None: raise HTTPException(409, {"code": "SPDM_ROOT_UNSET"})
-        directory = root.root.joinpath(*str(binding["relative_path"]).split("/")); spdm_storage._assert_safe_existing(directory, root.root)
-        if not directory.is_dir(): raise HTTPException(422, {"code": "SPDM_PATH_MISSING"})
+        fs = _provider(conn)
+        directory = "/".join(str(binding["relative_path"]).split("/")); fs.assert_safe(directory)
+        if not fs.is_dir(directory): raise HTTPException(422, {"code": "SPDM_PATH_MISSING"})
         recipes = []
         for recipe_id in _json(binding["recipe_ids_json"]):
             version, definition, snapshot = _version(conn, kind="recipe", ident=recipe_id)
             recipes.append((recipe_id, version, definition, snapshot))
         results=[]; total_bytes = 0
         paths=[]
-        for entry_count, path in enumerate(directory.iterdir(), 1):
+        for entry_count, entry in enumerate(fs.list(directory), 1):
             if entry_count > 5000:
                 raise HTTPException(422, {"code": "SEMANTIC_REFRESH_ENTRY_LIMIT"})
-            if path.is_file() and path.suffix.lower() in {".csv", ".json", ".tsv", ".txt"} and not spdm_storage._is_reparse(path):
+            path = PurePosixPath(fs.join(directory, entry.name))
+            if fs.is_file(str(path)) and path.suffix.lower() in {".csv", ".json", ".tsv", ".txt"} and not fs.is_link(str(path)):
                 paths.append(path)
                 if len(paths) > 500: raise HTTPException(422, {"code": "SEMANTIC_REFRESH_FILE_LIMIT"})
         for path in sorted(paths, key=lambda p: p.name.casefold()):
             content: bytes | None = None
             try:
-                content, _ = spdm_storage.read_stable_bytes(path, max_bytes=sample_uploads.MAX_SAMPLE_BYTES)
+                content = fs.read_stable(str(path), max_bytes=sample_uploads.MAX_SAMPLE_BYTES)
                 total_bytes += len(content)
                 if total_bytes > 128 * 1024 * 1024: raise spdm_storage.SpdmStorageError("SEMANTIC_REFRESH_SIZE_LIMIT", "새로고침 파일 총량이 한도를 초과했습니다.")
                 candidates = []

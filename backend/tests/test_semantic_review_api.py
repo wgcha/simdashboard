@@ -13,6 +13,7 @@ from app.database_connection import connect
 from app.security import hash_password
 from app import database
 from app.services import spdm_storage
+from app.services.storage import local as storage_local
 
 
 def _client() -> TestClient:
@@ -124,7 +125,7 @@ def test_terminal_refresh_uses_confirmed_no_template_provenance_not_new_recipe_l
         result = refreshed.json()["results"][0]
         assert result["status"] == "IMPORTED" and result["run_id"] == confirmed["run_id"]
         assert result["review_available"] is False and result["clear_reason"] == "NO_DISPLAY_TEMPLATE"
-        monkeypatch.setattr(spdm_storage, "read_stable_bytes", lambda *_args, **_kwargs: (_ for _ in ()).throw(spdm_storage.SpdmStorageError("SPDM_FILE_BUSY", "busy")))
+        monkeypatch.setattr(storage_local, "read_stable_bytes", lambda *_args, **_kwargs: (_ for _ in ()).throw(spdm_storage.SpdmStorageError("SPDM_FILE_BUSY", "busy")))
         locked = client.post(f"/api/semantic-mapping/bindings/{binding_id}/refresh")
         assert locked.status_code == 200, locked.text
         locked_result = locked.json()["results"][0]
@@ -344,7 +345,7 @@ def test_terminal_refresh_keeps_completed_item_when_source_is_temporarily_unread
         before_history = client.get(f"/api/semantic-mapping/review-items/{ready['id']}/history").json()["events"]
         def unavailable(*_args, **_kwargs):
             raise spdm_storage.SpdmStorageError("SPDM_FILE_BUSY", "busy")
-        monkeypatch.setattr(spdm_storage, "read_stable_bytes", unavailable)
+        monkeypatch.setattr(storage_local, "read_stable_bytes", unavailable)
         refreshed = client.post(f"/api/semantic-mapping/bindings/{binding_id}/refresh")
         assert refreshed.status_code == 200 and refreshed.json()["results"][0]["status"] == "IMPORTED"
         item = _review_item(client, binding_id)

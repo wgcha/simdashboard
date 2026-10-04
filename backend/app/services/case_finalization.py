@@ -15,7 +15,6 @@ import json
 import os
 import posixpath
 import re
-import stat
 import struct
 import threading
 import time
@@ -31,6 +30,8 @@ from uuid import uuid4
 from ..database_connection import ConnectionLike
 from ..config import security_settings
 from . import dashboard_capture, folder_schema_locations, folder_schema_resolver, materials_catalog, result_registration_paths, spdm_storage
+from .storage.local import LocalFsProvider
+from .storage.provider import FINAL
 
 MAX_FILES = 500
 MAX_TOTAL_BYTES = dashboard_capture.MAX_TOTAL_BYTES
@@ -152,7 +153,7 @@ def _scope(conn: ConnectionLike, project_id: str, request_id: str, environment: 
     """
     try:
         scope = result_registration_paths._scope(conn, project_id, request_id, environment)
-        root, root_id, root_key = result_registration_paths._root(conn)
+        root, root_id, root_key = result_registration_paths.storage_context(conn)
     except result_registration_paths.ResultRegistrationError as exc:
         raise CaseFinalizationError(exc.code, str(exc)) from exc
     case_row = conn.execute(
@@ -364,12 +365,13 @@ def _blocked(path: str, blocked_paths: list[str]) -> bool:
 
 
 def _read_source(root: Path, relative: str) -> tuple[bytes, str]:
+    fs = LocalFsProvider(root)
     try:
         path = result_registration_paths._safe_existing(root, relative)
-        if not path.is_file():
+        if not fs.is_file(path):
             raise CaseFinalizationError("FINALIZATION_SOURCE_MISSING", "수집된 원본 파일을 찾을 수 없습니다.")
-        data, _signature = spdm_storage.read_stable_bytes(path, max_bytes=MAX_FILE_BYTES)
-        spdm_storage._assert_safe_existing(path, root)
+        data = fs.read_stable(path, max_bytes=MAX_FILE_BYTES)
+        fs.assert_safe(path)
         return data, _digest(data)
     except CaseFinalizationError:
         raise
@@ -383,6 +385,7 @@ def _read_source(root: Path, relative: str) -> tuple[bytes, str]:
 
 def _scan_scene_support_files(scope: dict[str, Any]) -> list[str]:
     root: Path = scope["root"]
+    fs = LocalFsProvider(root)
     scene_roots = [str(path) for path in scope["compatible_scene_paths"]]
     found: list[str] = []
     visited = 0
@@ -390,31 +393,29 @@ def _scan_scene_support_files(scope: dict[str, Any]) -> list[str]:
     try:
         for scene_relative in scene_roots:
             scene = result_registration_paths._safe_existing(root, scene_relative)
-            if not scene.is_dir():
+            if not fs.is_dir(scene):
                 continue
-            stack: list[tuple[Path, int]] = [(scene, 0)]
+            stack: list[tuple[str, int]] = [(scene, 0)]
             while stack:
                 directory, depth = stack.pop()
                 if depth > 16:
                     raise CaseFinalizationError("FINALIZATION_DEPTH_LIMIT", "Scene 입력 파일의 폴더 깊이 제한을 초과했습니다.")
-                with os.scandir(directory) as entries:
-                    for entry in entries:
-                        visited += 1
-                        if visited > 20000:
-                            raise CaseFinalizationError("FINALIZATION_SCAN_LIMIT", "Scene 입력 파일 조사 범위를 초과했습니다.")
-                        if entry.name.startswith(".") or entry.name.casefold() in _EXCLUDED_DIRS:
-                            continue
-                        item_path = Path(entry.path)
-                        spdm_storage._assert_safe_existing(item_path, root)
-                        item_relative = item_path.relative_to(root).as_posix()
-                        if _blocked(item_relative, blocked):
-                            continue
-                        if entry.is_dir(follow_symlinks=False):
-                            stack.append((item_path, depth + 1))
-                        elif entry.is_file(follow_symlinks=False) and item_path.suffix.casefold() in DECK_EXTENSIONS | SCENE_REPORT_EXTENSIONS:
-                            found.append(_relative(item_relative))
-                            if len(found) > MAX_FILES:
-                                raise CaseFinalizationError("FINALIZATION_FILE_LIMIT", "최종확정 파일 수 제한을 초과했습니다.")
+                for entry in fs.list(directory):
+                    visited += 1
+                    if visited > 20000:
+                        raise CaseFinalizationError("FINALIZATION_SCAN_LIMIT", "Scene 입력 파일 조사 범위를 초과했습니다.")
+                    if entry.name.startswith(".") or entry.name.casefold() in _EXCLUDED_DIRS:
+                        continue
+                    item_relative = fs.join(directory, entry.name)
+                    fs.assert_safe(item_relative)
+                    if _blocked(item_relative, blocked):
+                        continue
+                    if entry.kind == "dir":
+                        stack.append((item_relative, depth + 1))
+                    elif entry.kind == "file" and PurePosixPath(entry.name).suffix.casefold() in DECK_EXTENSIONS | SCENE_REPORT_EXTENSIONS:
+                        found.append(_relative(item_relative))
+                        if len(found) > MAX_FILES:
+                            raise CaseFinalizationError("FINALIZATION_FILE_LIMIT", "최종확정 파일 수 제한을 초과했습니다.")
         return sorted(set(found), key=str.casefold)
     except spdm_storage.SpdmStorageError as exc:
         raise CaseFinalizationError(exc.code, str(exc)) from exc
@@ -439,13 +440,14 @@ def _include_closure(scope: dict[str, Any], entry_files: list[str]) -> list[str]
         if not any(_under(scene_root, relative) for scene_root in allowed_scene_roots) or _blocked(relative, blocked):
             raise CaseFinalizationError("FINALIZATION_INCLUDE_OUT_OF_SCOPE", f"덱 include 파일이 확정 Scene 범위 밖에 있습니다: {PurePosixPath(relative).name}")
         try:
-            path = result_registration_paths._safe_existing(scope["root"], relative)
-            spdm_storage._assert_safe_existing(path, scope["root"])
-            if not path.is_file() or path.suffix.casefold() not in DECK_EXTENSIONS:
+            fs = LocalFsProvider(scope["root"])
+            checked = result_registration_paths._safe_existing(scope["root"], relative)
+            fs.assert_safe(checked)
+            if not fs.is_file(checked) or PurePosixPath(checked).suffix.casefold() not in DECK_EXTENSIONS:
                 raise CaseFinalizationError("FINALIZATION_INCLUDE_UNSUPPORTED", "include 참조는 확정 Scene 안의 .rad 또는 .inc 파일이어야 합니다.")
-            size = path.stat().st_size
+            size = fs.stat(checked, follow_links=True, missing_ok=False).size
             budget.add_file(size)
-            references = materials_catalog._scan_include_references(path, relative, size, budget)
+            references = materials_catalog._scan_include_references(fs.path(checked), relative, size, budget)
             included.append(relative)
             visited.add(key)
             parse_scope = {"request_relative_path": request_path}
@@ -472,70 +474,14 @@ def _include_closure(scope: dict[str, Any], entry_files: list[str]) -> list[str]
 
 
 @contextmanager
-def _pin_directory_chain(root: Path, directory: Path) -> Iterator[None]:
-    """Pin every existing directory ancestor without allowing Windows rename/reparse swaps."""
-    try:
-        root_path = Path(os.path.abspath(root))
-        directory_path = Path(os.path.abspath(directory))
-        directory_path.relative_to(root_path)
-    except (OSError, ValueError) as exc:
-        raise CaseFinalizationError("FINALIZATION_PATH_UNSAFE", "최종확정 대상 폴더가 SPDM root 밖에 있습니다.") from exc
-    if os.name != "nt":
+def _pin_directory_chain(root: Path, directory: str) -> Iterator[None]:
+    """Pin every existing directory ancestor (storage provider) without allowing Windows rename/reparse swaps."""
+    with ExitStack() as stack:
         try:
-            spdm_storage._assert_safe_existing(directory_path, root_path)
+            stack.enter_context(LocalFsProvider(root).pin(directory))
         except spdm_storage.SpdmStorageError as exc:
             raise CaseFinalizationError(exc.code, str(exc)) from exc
         yield
-        return
-
-    import ctypes
-    from ctypes import wintypes
-
-    class _FileInformation(ctypes.Structure):
-        _fields_ = [
-            ("dwFileAttributes", wintypes.DWORD), ("ftCreationTimeLow", wintypes.DWORD),
-            ("ftCreationTimeHigh", wintypes.DWORD), ("ftLastAccessTimeLow", wintypes.DWORD),
-            ("ftLastAccessTimeHigh", wintypes.DWORD), ("ftLastWriteTimeLow", wintypes.DWORD),
-            ("ftLastWriteTimeHigh", wintypes.DWORD), ("dwVolumeSerialNumber", wintypes.DWORD),
-            ("nFileSizeHigh", wintypes.DWORD), ("nFileSizeLow", wintypes.DWORD),
-            ("nNumberOfLinks", wintypes.DWORD), ("nFileIndexHigh", wintypes.DWORD),
-            ("nFileIndexLow", wintypes.DWORD),
-        ]
-
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
-                                    wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
-    kernel32.CreateFileW.restype = wintypes.HANDLE
-    kernel32.GetFileInformationByHandle.argtypes = [wintypes.HANDLE, ctypes.POINTER(_FileInformation)]
-    kernel32.GetFileInformationByHandle.restype = wintypes.BOOL
-    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
-    kernel32.CloseHandle.restype = wintypes.BOOL
-
-    relative_parts = directory_path.relative_to(root_path).parts
-    chain: list[Path] = [root_path]
-    cursor = root_path
-    for part in relative_parts:
-        cursor = cursor / part
-        chain.append(cursor)
-    handles: list[Any] = []
-    try:
-        for candidate in chain:
-            handle = kernel32.CreateFileW(
-                str(candidate), 0x00000081, 0x00000003, None, 3,
-                0x02000000 | 0x00200000, None,
-            )
-            invalid = ctypes.c_void_p(-1).value
-            if handle == invalid:
-                raise CaseFinalizationError("FINALIZATION_PATH_BUSY", "최종확정 경로를 안전하게 고정할 수 없습니다.")
-            handles.append(handle)
-            info = _FileInformation()
-            if (not kernel32.GetFileInformationByHandle(handle, ctypes.byref(info))
-                    or not info.dwFileAttributes & 0x10 or info.dwFileAttributes & 0x400):
-                raise CaseFinalizationError("FINALIZATION_PATH_UNSAFE", "최종확정 경로에 reparse point 또는 일반 폴더가 아닌 항목이 있습니다.")
-        yield
-    finally:
-        for handle in reversed(handles):
-            kernel32.CloseHandle(handle)
 
 
 def _build_files(scope: dict[str, Any]) -> tuple[list[dict[str, Any]], int]:
@@ -636,101 +582,37 @@ def report_file_names(case_label: str) -> dict[str, str]:
 
 
 @contextmanager
-def _request_lock(path: Path, root: Path) -> Iterator[None]:
-    """Process-wide, OS-released lock; the persistent file is never deleted."""
-    with _pin_directory_chain(root, path.parent):
-        if os.name == "nt":
-            import ctypes
-            import msvcrt
-            from ctypes import wintypes
-
-            class _LockFileInformation(ctypes.Structure):
-                _fields_ = [
-                    ("dwFileAttributes", wintypes.DWORD), ("ftCreationTimeLow", wintypes.DWORD),
-                    ("ftCreationTimeHigh", wintypes.DWORD), ("ftLastAccessTimeLow", wintypes.DWORD),
-                    ("ftLastAccessTimeHigh", wintypes.DWORD), ("ftLastWriteTimeLow", wintypes.DWORD),
-                    ("ftLastWriteTimeHigh", wintypes.DWORD), ("dwVolumeSerialNumber", wintypes.DWORD),
-                    ("nFileSizeHigh", wintypes.DWORD), ("nFileSizeLow", wintypes.DWORD),
-                    ("nNumberOfLinks", wintypes.DWORD), ("nFileIndexHigh", wintypes.DWORD),
-                    ("nFileIndexLow", wintypes.DWORD),
-                ]
-
-            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-            kernel32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
-                                            wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
-            kernel32.CreateFileW.restype = wintypes.HANDLE
-            kernel32.GetFileInformationByHandle.argtypes = [wintypes.HANDLE, ctypes.POINTER(_LockFileInformation)]
-            kernel32.GetFileInformationByHandle.restype = wintypes.BOOL
-            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
-            kernel32.CloseHandle.restype = wintypes.BOOL
-            file_handle = kernel32.CreateFileW(
-                str(path), 0xC0000000, 0x00000003, None, 4,
-                0x00000080 | 0x00200000, None,
-            )
-            invalid = ctypes.c_void_p(-1).value
-            if file_handle == invalid:
-                raise CaseFinalizationError("FINALIZATION_LOCK_UNAVAILABLE", "최종확정 잠금 파일을 안전하게 열 수 없습니다.")
-            info = _LockFileInformation()
-            if (not kernel32.GetFileInformationByHandle(file_handle, ctypes.byref(info))
-                    or info.dwFileAttributes & (0x10 | 0x400) or info.nNumberOfLinks != 1):
-                kernel32.CloseHandle(file_handle)
-                raise CaseFinalizationError("FINALIZATION_LOCK_UNSAFE", "최종확정 잠금 파일이 일반 단일 연결 파일이 아닙니다.")
-            descriptor = msvcrt.open_osfhandle(file_handle, os.O_RDWR)
-        else:
-            flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
-            descriptor = os.open(path, flags, 0o600)
-            info = os.fstat(descriptor)
-            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
-                os.close(descriptor)
-                raise CaseFinalizationError("FINALIZATION_LOCK_UNSAFE", "최종확정 잠금 파일이 일반 단일 연결 파일이 아닙니다.")
-        with os.fdopen(descriptor, "r+b", closefd=True) as handle:
-            handle.seek(0, os.SEEK_END)
-            if handle.tell() == 0:
-                handle.write(b"\0")
-                handle.flush()
-            handle.seek(0)
-            if os.name == "nt":
-                import msvcrt
-                while True:
-                    try:
-                        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-                        break
-                    except OSError:
-                        time.sleep(0.05)
-                try:
-                    yield
-                finally:
-                    handle.seek(0)
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                import fcntl
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-                try:
-                    yield
-                finally:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+def _request_lock(path: str, root: Path) -> Iterator[None]:
+    """Process-wide, OS-released lock (storage provider); the persistent file is never deleted."""
+    with ExitStack() as stack:
+        try:
+            stack.enter_context(LocalFsProvider(root).lock(path, zone=FINAL))
+        except spdm_storage.SpdmStorageError as exc:
+            raise CaseFinalizationError(exc.code, str(exc)) from exc
+        yield
 
 
-def _ensure_dir(root: Path, relative: str) -> Path:
-    current = root
+def _ensure_dir(root: Path, relative: str) -> str:
+    fs = LocalFsProvider(root)
+    current = ""
     with ExitStack() as pins:
         pins.enter_context(_pin_directory_chain(root, current))
         for part in PurePosixPath(_relative(relative)).parts:
             if part != ".finalizations" and not spdm_storage._valid_windows_name(part):
                 raise CaseFinalizationError("FINALIZATION_PATH_INVALID", "최종확정 경로에 사용할 수 없는 이름이 있습니다.")
-            collision = spdm_storage._case_collision(current, part)
-            candidate = collision if collision is not None else current / part
-            if candidate.exists():
+            collision = fs.case_collision(current, part)
+            candidate = collision if collision is not None else fs.join(current, part)
+            if fs.exists(candidate):
                 pins.enter_context(_pin_directory_chain(root, candidate))
-                if not candidate.is_dir():
+                if not fs.is_dir(candidate):
                     raise CaseFinalizationError("FINALIZATION_PATH_CONFLICT", "최종확정 폴더 경로에 파일이 있습니다.")
             else:
                 try:
-                    candidate.mkdir()
+                    fs.mkdirs(candidate, zone=FINAL, parents=False, exist_ok=False)
                 except FileExistsError:
-                    collision = spdm_storage._case_collision(current, part)
+                    collision = fs.case_collision(current, part)
                     candidate = collision if collision is not None else candidate
-                    if not candidate.is_dir():
+                    if not fs.is_dir(candidate):
                         raise CaseFinalizationError("FINALIZATION_PATH_CONFLICT", "최종확정 폴더를 안전하게 만들 수 없습니다.")
                 except OSError as exc:
                     raise _write_failed() from exc
@@ -748,56 +630,20 @@ def _plan_hash(plan: dict[str, Any]) -> str:
     return _digest(_encode({key: value for key, value in plan.items() if key != "plan_signature"}))
 
 
-def _read_json(path: Path, *, status_metadata_budget: list[int] | None = None) -> dict[str, Any] | None:
+def _read_json(root: Path, path: str, *, status_metadata_budget: list[int] | None = None) -> dict[str, Any] | None:
+    def charge(size: int) -> None:
+        if status_metadata_budget is not None:
+            if status_metadata_budget[0] + size > MAX_STATUS_METADATA_BYTES:
+                raise CaseFinalizationError(
+                    "FINALIZATION_STATUS_LIMIT",
+                    f"최종확정 메타데이터 조회 누계가 {MAX_STATUS_METADATA_BYTES // (1024 * 1024)} MiB 제한을 초과했습니다. 이력을 안전하게 판정할 수 없습니다.",
+                )
+            status_metadata_budget[0] += size
+
     try:
-        before = path.lstat()
-        attributes = getattr(before, "st_file_attributes", 0)
-        if (not stat.S_ISREG(before.st_mode)
-                or attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)):
+        payload = LocalFsProvider(root).read_small_nofollow(path, max_bytes=MAX_METADATA_BYTES, before_read=charge)
+        if payload is None:
             return None
-
-        if os.name == "nt":
-            reader = spdm_storage.open_stable_reader(path)
-        else:
-            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-            descriptor = os.open(path, flags)
-            reader = os.fdopen(descriptor, "rb", closefd=True)
-
-        if os.name == "nt":
-            stream_context = reader
-        else:
-            # POSIX open_stable_reader does not use O_NOFOLLOW; keep the
-            # descriptor opened above so a symlink swap cannot redirect it.
-            from contextlib import closing
-            stream_context = closing(reader)
-
-        with stream_context as stream:
-            opened_before = os.fstat(stream.fileno())
-            opened_attributes = getattr(opened_before, "st_file_attributes", 0)
-            if (not stat.S_ISREG(opened_before.st_mode)
-                    or opened_attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
-                    or opened_before.st_size > MAX_METADATA_BYTES):
-                return None
-            if status_metadata_budget is not None:
-                if status_metadata_budget[0] + opened_before.st_size > MAX_STATUS_METADATA_BYTES:
-                    raise CaseFinalizationError(
-                        "FINALIZATION_STATUS_LIMIT",
-                        f"최종확정 메타데이터 조회 누계가 {MAX_STATUS_METADATA_BYTES // (1024 * 1024)} MiB 제한을 초과했습니다. 이력을 안전하게 판정할 수 없습니다.",
-                    )
-                status_metadata_budget[0] += opened_before.st_size
-            payload = stream.read(MAX_METADATA_BYTES + 1)
-            if len(payload) > MAX_METADATA_BYTES:
-                return None
-            opened_after = os.fstat(stream.fileno())
-            after = path.lstat()
-            signature = lambda info: (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
-            after_attributes = getattr(after, "st_file_attributes", 0)
-            if (not stat.S_ISREG(after.st_mode)
-                    or after_attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
-                    or signature(opened_before) != signature(opened_after)
-                    or signature(opened_after) != signature(after)
-                    or len(payload) != opened_after.st_size):
-                return None
         value = json.loads(payload.decode("utf-8"))
         return value if isinstance(value, dict) else None
     except CaseFinalizationError:
@@ -811,14 +657,14 @@ def preview(conn: ConnectionLike, *, project_id: str, request_id: str, environme
     scope = _scope(conn, project_id, request_id, environment, case_id, capture_id)
     final_relative, metadata_relative = _final_paths(scope)
     request_root = result_registration_paths._safe_existing(scope["root"], scope["scope"]["request_relative_path"])
-    if not request_root.is_dir():
+    if not LocalFsProvider(scope["root"]).is_dir(request_root):
         raise CaseFinalizationError("FINALIZATION_REQUEST_FOLDER_INVALID", "확정된 의뢰 폴더를 찾을 수 없습니다.")
     if not spdm_storage._valid_windows_name(scope["case_label"]):
         raise CaseFinalizationError("FINALIZATION_CASE_LABEL_INVALID", "Case 이름을 안전한 Windows 폴더 이름으로 사용할 수 없습니다.")
     report_files = report_file_names(scope["case_label"])
     _ensure_dir(scope["root"], final_relative)
     metadata_dir = _ensure_dir(scope["root"], metadata_relative)
-    lock_path = metadata_dir / ".request.lock"
+    lock_path = f"{metadata_dir}/.request.lock"
     with _request_lock(lock_path, scope["root"]):
         # Re-resolve the current schema after obtaining the request lock.
         scope = _scope(conn, project_id, request_id, environment, case_id, capture_id)
@@ -847,13 +693,11 @@ def preview(conn: ConnectionLike, *, project_id: str, request_id: str, environme
         plan_bytes = _encode(plan)
         if len(plan_bytes) > MAX_METADATA_BYTES:
             raise CaseFinalizationError("FINALIZATION_METADATA_LIMIT", "최종확정 계획이 메타데이터 크기 제한을 초과했습니다.")
-        plan_path = operation_dir / "plan.json"
+        fs = LocalFsProvider(scope["root"])
+        plan_path = fs.join(operation_dir, "plan.json")
         with _pin_directory_chain(scope["root"], operation_dir):
-            spdm_storage._assert_safe_existing(operation_dir, scope["root"])
-            with plan_path.open("xb") as handle:
-                handle.write(plan_bytes)
-                handle.flush()
-                os.fsync(handle.fileno())
+            fs.assert_safe(operation_dir)
+            fs.create_exclusive(plan_path, plan_bytes, zone=FINAL)
         output_paths = _expected_output_paths(plan)
         return {**plan, "plan_sha256": _plan_hash(plan), "can_confirm": bool(files),
                 "output_paths": output_paths,
@@ -910,67 +754,66 @@ def _expected_output_paths(plan: dict[str, Any]) -> dict[str, str]:
     return {category: f"{final_relative}/{category}/{case_label}/{operation_id}" for category in ("CAE", "Reports")}
 
 
-def _copy_one(scope: dict[str, Any], plan: dict[str, Any], item: dict[str, Any], target_root: Path) -> str:
+def _copy_one(scope: dict[str, Any], plan: dict[str, Any], item: dict[str, Any], target_root: str | Path) -> str:
     root: Path = scope["root"]
+    fs = LocalFsProvider(root)
     source = _relative(str(item["source_relative_path"]))
     data, current_hash = _read_source(root, source)
     if current_hash != str(item["sha256"]) or len(data) != int(item["size"]):
         raise CaseFinalizationError("FINALIZATION_SOURCE_STALE", f"미리보기 이후 원본이 바뀌었습니다: {source}")
     relative_path = _relative(str(item["case_relative_path"]))
     parts = PurePosixPath(relative_path).parts
-    parent_relative = target_root.relative_to(root).as_posix()
+    target_relative = target_root if isinstance(target_root, str) else fs.rel(target_root)
+    parent_relative = target_relative
     if len(parts) > 1:
         parent_relative += "/" + "/".join(parts[:-1])
         parent = _ensure_dir(root, parent_relative)
     else:
-        parent = target_root
+        parent = target_relative
     with _pin_directory_chain(root, parent):
         return _publish_copy(root, parent, parts[-1], data, current_hash, plan["operation_id"], relative_path)
 
 
-def _publish_copy(root: Path, parent: Path, filename: str, data: bytes, current_hash: str,
+def _publish_copy(root: Path, parent: str, filename: str, data: bytes, current_hash: str,
                   operation_id: str, relative_path: str) -> str:
-    collision = spdm_storage._case_collision(parent, filename)
-    destination = collision if collision is not None else parent / filename
-    if destination.exists():
-        spdm_storage._assert_safe_existing(destination, root)
+    fs = LocalFsProvider(root)
+    collision = fs.case_collision(parent, filename)
+    destination = collision if collision is not None else fs.join(parent, filename)
+    if fs.exists(destination):
+        fs.assert_safe(destination)
         try:
-            _existing_data, existing_hash = _read_source(root, destination.relative_to(root).as_posix())
+            _existing_data, existing_hash = _read_source(root, destination)
         except CaseFinalizationError:
             raise CaseFinalizationError("FINALIZATION_DESTINATION_CONFLICT", f"기존 최종 파일을 덮어쓰지 않았습니다: {relative_path}")
-        if not destination.is_file() or existing_hash != current_hash:
+        if not fs.is_file(destination) or existing_hash != current_hash:
             raise CaseFinalizationError("FINALIZATION_DESTINATION_CONFLICT", f"기존 최종 파일을 덮어쓰지 않았습니다: {relative_path}")
-        return destination.relative_to(root).as_posix()
-    temporary = parent / f".codex-partial-{operation_id}-{uuid4().hex}"
+        return destination
+    temporary = fs.join(parent, f".codex-partial-{operation_id}-{uuid4().hex}")
     try:
-        with temporary.open("xb") as handle:
-            handle.write(data)
-            handle.flush()
-            os.fsync(handle.fileno())
-        spdm_storage._assert_safe_existing(temporary, root)
+        fs.create_exclusive(temporary, data, zone=FINAL)
+        fs.assert_safe(temporary)
         try:
-            if os.name == "nt":
-                # Windows rename is atomic and refuses to replace an existing destination.
-                os.rename(temporary, destination)
-            else:
-                os.link(temporary, destination)
-                temporary.unlink()
+            # Windows rename is atomic and refuses to replace an existing destination;
+            # POSIX publishes through a hardlink, then removes the temporary name.
+            fs.move_no_overwrite(temporary, destination, zone=FINAL)
+            if os.name != "nt":
+                fs.remove(temporary, zone=FINAL)
         except FileExistsError:
-            collision = spdm_storage._case_collision(parent, filename)
+            collision = fs.case_collision(parent, filename)
             destination = collision if collision is not None else destination
             try:
-                _existing_data, existing_hash = _read_source(root, destination.relative_to(root).as_posix())
+                _existing_data, existing_hash = _read_source(root, destination)
             except CaseFinalizationError:
                 existing_hash = ""
-            if not destination.is_file() or existing_hash != current_hash:
+            if not fs.is_file(destination) or existing_hash != current_hash:
                 raise CaseFinalizationError("FINALIZATION_DESTINATION_CONFLICT", f"기존 최종 파일을 덮어쓰지 않았습니다: {relative_path}")
-        spdm_storage._assert_safe_existing(destination, root)
-        return destination.relative_to(root).as_posix()
+        fs.assert_safe(destination)
+        return destination
     except OSError as exc:
         raise _write_failed() from exc
     finally:
         try:
-            temporary.unlink(missing_ok=True)
+            fs.remove(temporary, zone=FINAL, missing_ok=True)
         except OSError:
             pass
 
@@ -1243,14 +1086,15 @@ def validate_report(report_format: str, upload: BinaryIO) -> dict[str, Any]:
     return {"size": size, "sha256": digest.hexdigest()}
 
 
-def _hash_path(path: Path, root: Path, max_bytes: int) -> tuple[str, int]:
+def _hash_path(path: str, root: Path, max_bytes: int) -> tuple[str, int]:
+    fs = LocalFsProvider(root)
     try:
-        spdm_storage._assert_safe_existing(path, root)
-        if not path.is_file():
+        fs.assert_safe(path)
+        if not fs.is_file(path):
             raise CaseFinalizationError("FINALIZATION_OUTPUT_MISSING", "최종확정 파일을 찾을 수 없습니다.")
         digest = hashlib.sha256()
         size = 0
-        with spdm_storage.open_stable_reader(path) as stream:
+        with fs.open_read(path) as stream:
             while chunk := stream.read(_CHUNK):
                 size += len(chunk)
                 if size > max_bytes:
@@ -1265,61 +1109,63 @@ def _hash_path(path: Path, root: Path, max_bytes: int) -> tuple[str, int]:
         raise CaseFinalizationError("FINALIZATION_SOURCE_UNAVAILABLE", "파일을 안정적으로 읽을 수 없습니다.") from exc
 
 
-def _write_temp(parent: Path, root: Path, source: BinaryIO, operation_id: str, max_bytes: int) -> tuple[Path, str, int]:
-    temporary = parent / f".codex-partial-{operation_id}-{uuid4().hex}"
+def _write_temp(parent: str, root: Path, source: BinaryIO, operation_id: str, max_bytes: int) -> tuple[str, str, int]:
+    fs = LocalFsProvider(root)
+    temporary = fs.join(parent, f".codex-partial-{operation_id}-{uuid4().hex}")
     digest = hashlib.sha256()
     size = 0
+
+    def chunks() -> Iterator[bytes]:
+        nonlocal size
+        while chunk := source.read(_CHUNK):
+            size += len(chunk)
+            if size > max_bytes:
+                raise CaseFinalizationError("FINALIZATION_REPORT_TOO_LARGE", "보고서 파일이 크기 제한을 넘습니다.")
+            digest.update(chunk)
+            yield chunk
+
     try:
-        with temporary.open("xb") as handle:
-            while chunk := source.read(_CHUNK):
-                size += len(chunk)
-                if size > max_bytes:
-                    raise CaseFinalizationError("FINALIZATION_REPORT_TOO_LARGE", "보고서 파일이 크기 제한을 넘습니다.")
-                digest.update(chunk)
-                handle.write(chunk)
-            handle.flush()
-            os.fsync(handle.fileno())
-        spdm_storage._assert_safe_existing(temporary, root)
+        fs.create_exclusive(temporary, chunks(), zone=FINAL)
+        fs.assert_safe(temporary)
     except BaseException:
         try:
-            temporary.unlink(missing_ok=True)
+            fs.remove(temporary, zone=FINAL, missing_ok=True)
         except OSError:
             pass
         raise
     return temporary, digest.hexdigest(), size
 
 
-def _write_signed_metadata(operation_dir: Path, root: Path, name: str, record: dict[str, Any]) -> None:
+def _write_signed_metadata(operation_dir: str, root: Path, name: str, record: dict[str, Any]) -> None:
+    fs = LocalFsProvider(root)
     payload = _encode(record)
     if len(payload) > MAX_METADATA_BYTES:
         raise CaseFinalizationError("FINALIZATION_METADATA_LIMIT", "최종확정 기록이 메타데이터 크기 제한을 초과했습니다.")
-    temporary = operation_dir / f".{name}-{uuid4().hex}.tmp"
+    temporary = fs.join(operation_dir, f".{name}-{uuid4().hex}.tmp")
     with _pin_directory_chain(root, operation_dir):
         try:
-            with temporary.open("xb") as handle:
-                handle.write(payload)
-                handle.flush()
-                os.fsync(handle.fileno())
+            fs.create_exclusive(temporary, payload, zone=FINAL)
             # reports.json is the mutable staging record of an unfinished operation.
-            os.replace(temporary, operation_dir / name)
+            fs.replace(temporary, fs.join(operation_dir, name), zone=FINAL)
         except OSError as exc:
             raise _write_failed() from exc
         finally:
             try:
-                temporary.unlink(missing_ok=True)
+                fs.remove(temporary, zone=FINAL, missing_ok=True)
             except OSError:
                 pass
 
 
-def _read_staged_reports(operation_dir: Path, root: Path, plan: dict[str, Any]) -> dict[str, Any] | None:
-    path = operation_dir / "reports.json"
-    if not os.path.lexists(path):
+def _read_staged_reports(operation_dir: str, root: Path, plan: dict[str, Any]) -> dict[str, Any] | None:
+    fs = LocalFsProvider(root)
+    path = fs.join(operation_dir, "reports.json")
+    if not fs.exists(path, follow_links=False):
         return None
     try:
-        spdm_storage._assert_safe_existing(path, root)
+        fs.assert_safe(path)
     except spdm_storage.SpdmStorageError:
         return None
-    record = _read_json(path)
+    record = _read_json(root, path)
     if (not record or not _verify_signed_record(record, "reports_signature", REPORTS_DOMAIN)
             or record.get("operation_id") != plan.get("operation_id")
             or record.get("plan_sha256") != _plan_hash(plan)
@@ -1332,12 +1178,13 @@ def _load_operation_plan(conn: ConnectionLike, base_scope: dict[str, Any], opera
                          operation_id: str, project_id: str, request_id: str, environment: str,
                          case_id: str, capture_id: str) -> dict[str, Any]:
     root: Path = base_scope["root"]
-    plan_path = operation_dir / "plan.json"
-    if not os.path.lexists(plan_path):
+    fs = LocalFsProvider(root)
+    plan_path = fs.join(operation_dir, "plan.json")
+    if not fs.exists(plan_path, follow_links=False):
         raise CaseFinalizationError("FINALIZATION_PLAN_NOT_FOUND", "미리보기 계획을 찾을 수 없습니다. 새 미리보기를 만드세요.")
-    spdm_storage._assert_safe_existing(operation_dir, root)
-    spdm_storage._assert_safe_existing(plan_path, root)
-    plan = _read_json(plan_path)
+    fs.assert_safe(operation_dir)
+    fs.assert_safe(plan_path)
+    plan = _read_json(root, plan_path)
     if not plan:
         raise CaseFinalizationError("FINALIZATION_PLAN_NOT_FOUND", "미리보기 계획을 찾을 수 없습니다. 새 미리보기를 만드세요.")
     if not _verify_signed_record(plan, "plan_signature", PLAN_DOMAIN):
@@ -1351,7 +1198,7 @@ def _load_operation_plan(conn: ConnectionLike, base_scope: dict[str, Any], opera
         raise CaseFinalizationError("FINALIZATION_OPERATION_SCOPE_MISMATCH", "최종확정 계획이 현재 Case 문맥과 일치하지 않습니다.")
     if plan.get("report_files") != report_file_names(base_scope["case_label"]):
         raise CaseFinalizationError("FINALIZATION_PLAN_CHANGED", "저장된 보고서 이름이 계획과 다릅니다. 새 미리보기를 만드세요.")
-    if os.path.lexists(operation_dir / "complete.json"):
+    if fs.exists(fs.join(operation_dir, "complete.json"), follow_links=False):
         raise CaseFinalizationError("FINALIZATION_ALREADY_COMPLETED", "이미 완료된 Final 지정입니다. 완료된 파일은 바꿀 수 없습니다.")
     return plan
 
@@ -1368,7 +1215,7 @@ def _report_operation(conn: ConnectionLike, *, project_id: str, request_id: str,
     try:
         metadata_dir = result_registration_paths._safe_existing(root, metadata_relative, allow_missing_leaf=True)
         operation_dir = result_registration_paths._safe_existing(root, operation_relative, allow_missing_leaf=True)
-        if not metadata_dir.is_dir() or not operation_dir.is_dir():
+        if not LocalFsProvider(root).is_dir(metadata_dir) or not LocalFsProvider(root).is_dir(operation_dir):
             raise CaseFinalizationError("FINALIZATION_PLAN_NOT_FOUND", "미리보기 계획을 찾을 수 없습니다. 새 미리보기를 만드세요.")
         identity = {"operation_id": operation_id, "project_id": project_id, "request_id": request_id,
                     "environment": environment, "case_id": case_id, "capture_id": capture_id}
@@ -1399,15 +1246,16 @@ def stage_report(conn: ConnectionLike, *, project_id: str, request_id: str, envi
     checked = validate_report(report_format, upload)
     base_scope, root, metadata_dir = target["base_scope"], target["root"], target["metadata_dir"]
     operation_dir, identity, plan = target["operation_dir"], target["identity"], target["plan"]
+    fs = LocalFsProvider(root)
     staging_dir = _ensure_dir(root, f"{target['operation_relative']}/reports")
-    temporary: Path | None = None
+    temporary: str | None = None
     try:
         with _pin_directory_chain(root, staging_dir):
             upload.seek(0)
             temporary, digest, size = _write_temp(staging_dir, root, upload, operation_id, MAX_REPORT_BYTES[report_format])
         if (digest, size) != (checked["sha256"], checked["size"]):
             raise CaseFinalizationError("FINALIZATION_REPORT_UPLOAD_CHANGED", "보고서 업로드가 검사 중에 바뀌었습니다. 다시 올리세요.")
-        with _request_lock(metadata_dir / ".request.lock", root):
+        with _request_lock(f"{metadata_dir}/.request.lock", root):
             plan = _load_operation_plan(conn, base_scope, operation_dir, **identity)
             file_name = plan["report_files"][report_format]
             record = _read_staged_reports(operation_dir, root, plan) or {
@@ -1416,7 +1264,7 @@ def stage_report(conn: ConnectionLike, *, project_id: str, request_id: str, envi
             }
             record = {key: value for key, value in record.items() if key != "reports_signature"}
             with _pin_directory_chain(root, staging_dir):
-                os.replace(temporary, staging_dir / file_name)
+                fs.replace(temporary, fs.join(staging_dir, file_name), zone=FINAL)
                 temporary = None
             history = list(record["history"].get(report_format) or [])
             if digest not in history:
@@ -1433,7 +1281,7 @@ def stage_report(conn: ConnectionLike, *, project_id: str, request_id: str, envi
     finally:
         if temporary is not None:
             try:
-                temporary.unlink(missing_ok=True)
+                fs.remove(temporary, zone=FINAL, missing_ok=True)
             except OSError:
                 pass
     output_paths = _expected_output_paths(plan)
@@ -1442,37 +1290,37 @@ def stage_report(conn: ConnectionLike, *, project_id: str, request_id: str, envi
             "status": "STAGED"}
 
 
-def _publish_report(root: Path, parent: Path, report: dict[str, Any], staged_path: Path,
+def _publish_report(root: Path, parent: str, report: dict[str, Any], staged_path: str,
                     operation_id: str, history: list[str]) -> str:
+    fs = LocalFsProvider(root)
     report_format = str(report["format"])
     cap = MAX_REPORT_BYTES[report_format]
     file_name = str(report["file_name"])
     with _pin_directory_chain(root, parent):
-        collision = spdm_storage._case_collision(parent, file_name)
-        destination = collision if collision is not None else parent / file_name
+        collision = fs.case_collision(parent, file_name)
+        destination = collision if collision is not None else fs.join(parent, file_name)
         replace = False
-        if os.path.lexists(destination):
+        if fs.exists(destination, follow_links=False):
             existing_hash, _size = _hash_path(destination, root, cap)
             if existing_hash == report["sha256"]:
-                return destination.relative_to(root).as_posix()
+                return destination
             if existing_hash not in history:
                 raise CaseFinalizationError("FINALIZATION_DESTINATION_CONFLICT", f"기존 최종 보고서를 덮어쓰지 않았습니다: {file_name}")
             # Only an earlier upload of this same unfinished operation may be replaced.
             replace = True
-        temporary: Path | None = None
+        temporary: str | None = None
         try:
-            spdm_storage._assert_safe_existing(staged_path, root)
-            with spdm_storage.open_stable_reader(staged_path) as source:
+            fs.assert_safe(staged_path)
+            with fs.open_read(staged_path) as source:
                 temporary, digest, size = _write_temp(parent, root, source, operation_id, cap)
             if digest != report["sha256"] or size != report["size"]:
                 raise CaseFinalizationError("FINALIZATION_REPORT_STAGE_INVALID", "올린 보고서가 기록과 다릅니다. 보고서를 다시 올리세요.")
             if replace:
-                os.replace(temporary, destination)
-            elif os.name == "nt":
-                os.rename(temporary, destination)
+                fs.replace(temporary, destination, zone=FINAL)
             else:
-                os.link(temporary, destination)
-                temporary.unlink()
+                fs.move_no_overwrite(temporary, destination, zone=FINAL)
+                if os.name != "nt":
+                    fs.remove(temporary, zone=FINAL)
             temporary = None
         except FileExistsError:
             existing_hash, _size = _hash_path(destination, root, cap)
@@ -1485,11 +1333,11 @@ def _publish_report(root: Path, parent: Path, report: dict[str, Any], staged_pat
         finally:
             if temporary is not None:
                 try:
-                    temporary.unlink(missing_ok=True)
+                    fs.remove(temporary, zone=FINAL, missing_ok=True)
                 except OSError:
                     pass
-        spdm_storage._assert_safe_existing(destination, root)
-        return destination.relative_to(root).as_posix()
+        fs.assert_safe(destination)
+        return destination
 
 
 def _valid_report_records(plan: dict[str, Any], reports: Any) -> bool:
@@ -1555,16 +1403,18 @@ def _plan_sources_valid(conn: ConnectionLike, plan: dict[str, Any], *, project_i
 
 def _shallow_matches(root: Path, relative: str, size: int) -> bool:
     """Existence and recorded size only (status history that is not displayed)."""
+    fs = LocalFsProvider(root)
     path = result_registration_paths._safe_existing(root, relative)
-    spdm_storage._assert_safe_existing(path, root)
-    info = path.lstat()
-    return stat.S_ISREG(info.st_mode) and info.st_size == size
+    fs.assert_safe(path)
+    info = fs.stat(path, follow_links=False, missing_ok=False)
+    return info.kind == "file" and info.size == size
 
 
 def _verify_outputs(scope: dict[str, Any], plan: dict[str, Any], output_paths: dict[str, str],
                     reports: list[dict[str, Any]] | None = None, *, deep: bool = True) -> bool:
     """``deep`` re-hashes every output; otherwise existence and recorded size only."""
     root: Path = scope["root"]
+    fs = LocalFsProvider(root)
     for item in plan["files"]:
         category = str(item["category"])
         if category not in output_paths:
@@ -1584,10 +1434,10 @@ def _verify_outputs(scope: dict[str, Any], plan: dict[str, Any], output_paths: d
                 return False
             continue
         path = result_registration_paths._safe_existing(root, relative)
-        if not path.is_file() or _read_source(root, relative)[1] != item["sha256"]:
+        if not fs.is_file(path) or _read_source(root, relative)[1] != item["sha256"]:
             return False
-        spdm_storage._assert_safe_existing(path, root)
-        if not path.relative_to(base).as_posix():
+        fs.assert_safe(path)
+        if not PurePosixPath(fs.path(path)).relative_to(PurePosixPath(fs.path(base))).as_posix():
             return False
     for report in reports or []:
         relative = f"{output_paths['Reports']}/{report['file_name']}"
@@ -1600,29 +1450,29 @@ def _verify_outputs(scope: dict[str, Any], plan: dict[str, Any], output_paths: d
             return False
     for relative in output_paths.values():
         path = result_registration_paths._safe_existing(root, relative)
-        if not path.is_dir():
+        if not fs.is_dir(path):
             return False
     return True
 
 
 def _reports_directory_entries(root: Path, relative: str, operation_id: str) -> list[tuple[str, bool]]:
     """Entries of this operation's Final/Reports folder, without its own partial temp files."""
+    fs = LocalFsProvider(root)
     try:
         path = result_registration_paths._safe_existing(root, relative, allow_missing_leaf=True)
-        if not os.path.lexists(path):
+        if not fs.exists(path, follow_links=False):
             return []
-        spdm_storage._assert_safe_existing(path, root)
-        if not path.is_dir():
+        fs.assert_safe(path)
+        if not fs.is_dir(path):
             raise CaseFinalizationError("FINALIZATION_REPORTS_UNEXPECTED_FILE", "Final/Reports 보고서 폴더 자리에 다른 항목이 있습니다. 기존 자료를 보존하고 관리자에게 문의하세요.")
         entries: list[tuple[str, bool]] = []
-        with os.scandir(path) as scanned:
-            for entry in scanned:
-                is_file = entry.is_file(follow_symlinks=False)
-                if is_file and entry.name.startswith(f".codex-partial-{operation_id}-"):
-                    continue
-                entries.append((entry.name, is_file))
-                if len(entries) > 2 * len(REPORT_FORMATS):
-                    break
+        for entry in fs.list(path):
+            is_file = entry.kind == "file"
+            if is_file and entry.name.startswith(f".codex-partial-{operation_id}-"):
+                continue
+            entries.append((entry.name, is_file))
+            if len(entries) > 2 * len(REPORT_FORMATS):
+                break
         return entries
     except CaseFinalizationError:
         raise
@@ -1645,7 +1495,7 @@ def _check_reports_before_publish(root: Path, plan: dict[str, Any], operation_id
             raise CaseFinalizationError("FINALIZATION_REPORTS_UNEXPECTED_FILE", f"Final/Reports 보고서 폴더에 이 Final 지정이 만들지 않은 항목이 있습니다: {name}. 기존 자료를 보존하고 관리자에게 문의하세요.")
         if fmt in formats:
             continue  # Replaced or kept by _publish_report under its own history rule.
-        digest, _size = _hash_path(root / relative / name, root, MAX_REPORT_BYTES[fmt])
+        digest, _size = _hash_path(f"{relative}/{name}", root, MAX_REPORT_BYTES[fmt])
         if digest in (history.get(fmt) or []):
             raise CaseFinalizationError("FINALIZATION_REPORT_FORMATS_MISMATCH", f"이전 시도에서 {fmt.upper()} 보고서가 이미 저장되었습니다. {fmt.upper()}를 포함해 다시 시도하세요.")
         raise CaseFinalizationError("FINALIZATION_REPORTS_UNEXPECTED_FILE", f"Final/Reports 보고서 폴더에 이 Final 지정이 만들지 않은 파일이 있습니다: {name}. 기존 자료를 보존하고 관리자에게 문의하세요.")
@@ -1659,53 +1509,54 @@ def _assert_reports_exact(root: Path, plan: dict[str, Any], operation_id: str, r
         raise CaseFinalizationError("FINALIZATION_REPORTS_UNEXPECTED_FILE", "Final/Reports 보고서 폴더의 파일이 기록할 보고서와 다릅니다. 기존 자료를 보존하고 관리자에게 문의하세요.")
 
 
-def _remove_staged_reports(root: Path, operation_dir: Path, plan: dict[str, Any], history: dict[str, Any]) -> None:
+def _remove_staged_reports(root: Path, operation_dir: str, plan: dict[str, Any], history: dict[str, Any]) -> None:
     """After completion, drop this operation's own staged copies (hash in the signed history); best effort."""
-    staging_dir = operation_dir / "reports"
+    fs = LocalFsProvider(root)
+    staging_dir = fs.join(operation_dir, "reports")
     try:
-        if not staging_dir.is_dir():
+        if not fs.is_dir(staging_dir):
             return
         with _pin_directory_chain(root, staging_dir):
             for fmt, name in plan["report_files"].items():
-                path = staging_dir / str(name)
-                if not os.path.lexists(path):
+                path = fs.join(staging_dir, str(name))
+                if not fs.exists(path, follow_links=False):
                     continue
                 try:
                     digest, _size = _hash_path(path, root, MAX_REPORT_BYTES[fmt])
                 except CaseFinalizationError:
                     continue
                 if digest in (history.get(fmt) or []):
-                    path.unlink()
+                    fs.remove(path, zone=FINAL)
     except (OSError, CaseFinalizationError, spdm_storage.SpdmStorageError):
         pass
 
 
 def _cleanup_partial_files(scope: dict[str, Any], output_paths: dict[str, str], operation_id: str) -> None:
     root: Path = scope["root"]
+    fs = LocalFsProvider(root)
     for relative in output_paths.values():
         base = result_registration_paths._safe_existing(root, relative, allow_missing_leaf=True)
-        if not base.is_dir():
+        if not fs.is_dir(base):
             continue
-        for directory, dirs, files in os.walk(base, followlinks=False):
-            directory_path = Path(directory)
-            spdm_storage._assert_safe_existing(directory_path, root)
+        for directory, dirs, files in fs.walk(base):
+            fs.assert_safe(directory)
             safe_dirs = []
             for name in dirs:
-                candidate_dir = directory_path / name
+                candidate_dir = fs.join(directory, name)
                 try:
-                    spdm_storage._assert_safe_existing(candidate_dir, root)
-                    if candidate_dir.is_dir():
+                    fs.assert_safe(candidate_dir)
+                    if fs.is_dir(candidate_dir):
                         safe_dirs.append(name)
                 except spdm_storage.SpdmStorageError:
                     continue
             dirs[:] = safe_dirs
             for name in files:
                 if name.startswith(f".codex-partial-{operation_id}-"):
-                    candidate = directory_path / name
+                    candidate = fs.join(directory, name)
                     try:
-                        with _pin_directory_chain(root, directory_path):
-                            spdm_storage._assert_safe_existing(candidate, root)
-                            candidate.unlink()
+                        with _pin_directory_chain(root, directory):
+                            fs.assert_safe(candidate)
+                            fs.remove(candidate, zone=FINAL)
                     except (OSError, CaseFinalizationError, spdm_storage.SpdmStorageError):
                         pass
 
@@ -1715,16 +1566,17 @@ def _completed_if_valid(conn: ConnectionLike, base_scope: dict[str, Any], *, pro
                         operation_id: str, metadata_relative: str) -> dict[str, Any] | None:
     operation_relative = f"{metadata_relative}/{operation_id}"
     try:
+        fs = LocalFsProvider(base_scope["root"])
         operation_dir = result_registration_paths._safe_existing(base_scope["root"], operation_relative)
-        spdm_storage._assert_safe_existing(operation_dir, base_scope["root"])
-        plan_path = operation_dir / "plan.json"
-        complete_path = operation_dir / "complete.json"
-        if not plan_path.exists() or not complete_path.exists():
+        fs.assert_safe(operation_dir)
+        plan_path = fs.join(operation_dir, "plan.json")
+        complete_path = fs.join(operation_dir, "complete.json")
+        if not fs.exists(plan_path) or not fs.exists(complete_path):
             return None
-        spdm_storage._assert_safe_existing(plan_path, base_scope["root"])
-        spdm_storage._assert_safe_existing(complete_path, base_scope["root"])
-        plan = _read_json(plan_path)
-        complete = _read_json(complete_path)
+        fs.assert_safe(plan_path)
+        fs.assert_safe(complete_path)
+        plan = _read_json(base_scope["root"], plan_path)
+        complete = _read_json(base_scope["root"], complete_path)
         if (not plan or not complete
                 or not _verify_signed_record(plan, "plan_signature", PLAN_DOMAIN)
                 or not _verify_signed_record(complete, "complete_signature", COMPLETE_DOMAIN)):
@@ -1769,10 +1621,11 @@ def confirm(conn: ConnectionLike, *, project_id: str, request_id: str, environme
     formats = [fmt for fmt in REPORT_FORMATS if fmt in set(report_formats)]
     base_scope = _scope_for_status(conn, project_id, request_id, environment, case_id)
     _final_relative, metadata_relative = _final_paths(base_scope)
+    base_fs = LocalFsProvider(base_scope["root"])
     metadata_dir = result_registration_paths._safe_existing(base_scope["root"], metadata_relative, allow_missing_leaf=True)
-    if not metadata_dir.is_dir():
+    if not base_fs.is_dir(metadata_dir):
         raise CaseFinalizationError("FINALIZATION_PLAN_NOT_FOUND", "미리보기 계획을 찾을 수 없습니다. 새 미리보기를 만드세요.")
-    with _request_lock(metadata_dir / ".request.lock", base_scope["root"]):
+    with _request_lock(f"{metadata_dir}/.request.lock", base_scope["root"]):
         completed_record = _completed_if_valid(
             conn, base_scope, project_id=project_id, request_id=request_id,
             environment=environment, case_id=case_id, capture_id=capture_id,
@@ -1783,15 +1636,16 @@ def confirm(conn: ConnectionLike, *, project_id: str, request_id: str, environme
             return completed_record
         operation_relative = f"{metadata_relative}/{operation_id}"
         operation_dir = result_registration_paths._safe_existing(base_scope["root"], operation_relative, allow_missing_leaf=True)
-        if not operation_dir.is_dir():
+        if not base_fs.is_dir(operation_dir):
             raise CaseFinalizationError("FINALIZATION_PLAN_NOT_FOUND", "미리보기 계획을 찾을 수 없습니다. 새 미리보기를 만드세요.")
-        complete_path = operation_dir / "complete.json"
-        if os.path.lexists(complete_path):
+        complete_path = base_fs.join(operation_dir, "complete.json")
+        if base_fs.exists(complete_path, follow_links=False):
             raise CaseFinalizationError("FINALIZATION_MARKER_CONFLICT", "기존 완료 표식과 파일이 일치하지 않습니다. 기존 자료를 보존하고 관리자에게 문의하세요.")
         if not formats:
             raise CaseFinalizationError("FINALIZATION_REPORT_REQUIRED", "PPTX 또는 HTML 보고서를 하나 이상 선택하세요.")
         scope = _scope(conn, project_id, request_id, environment, case_id, capture_id)
         root: Path = scope["root"]
+        fs = LocalFsProvider(root)
         plan = _load_operation_plan(conn, base_scope, operation_dir, operation_id=operation_id,
                                     project_id=project_id, request_id=request_id, environment=environment,
                                     case_id=case_id, capture_id=capture_id)
@@ -1805,7 +1659,7 @@ def confirm(conn: ConnectionLike, *, project_id: str, request_id: str, environme
             if not isinstance(entry, dict) or entry.get("file_name") != plan["report_files"][fmt]:
                 raise CaseFinalizationError("FINALIZATION_REPORT_NOT_STAGED", f"{fmt.upper()} 보고서가 올라가지 않았습니다. 보고서를 다시 올리세요.")
             report = {"format": fmt, "file_name": entry["file_name"], "size": entry.get("size"), "sha256": entry.get("sha256")}
-            staged_path = operation_dir / "reports" / entry["file_name"]
+            staged_path = fs.join(operation_dir, "reports", entry["file_name"])
             try:
                 actual = _hash_path(staged_path, root, MAX_REPORT_BYTES[fmt])
             except CaseFinalizationError as exc:
@@ -1822,7 +1676,7 @@ def confirm(conn: ConnectionLike, *, project_id: str, request_id: str, environme
         # published a report; completing without it would leave an unrecorded file behind.
         _check_reports_before_publish(root, plan, operation_id, formats, history)
         output_paths: dict[str, str] = {}
-        targets: dict[str, Path] = {}
+        targets: dict[str, str] = {}
         relative, path = _target_directory(scope, plan, "CAE")
         output_paths["CAE"], targets["CAE"] = relative, path
         for item in plan["files"]:
@@ -1831,7 +1685,7 @@ def confirm(conn: ConnectionLike, *, project_id: str, request_id: str, environme
         relative, path = _target_directory(scope, plan, "Reports")
         output_paths["Reports"], targets["Reports"] = relative, path
         for report in reports:
-            _publish_report(root, targets["Reports"], report, operation_dir / "reports" / report["file_name"],
+            _publish_report(root, targets["Reports"], report, fs.join(operation_dir, "reports", report["file_name"]),
                             operation_id, list(history.get(report["format"]) or []))
         _cleanup_partial_files(scope, output_paths, operation_id)
         if output_paths != _expected_output_paths(plan) or not _verify_outputs(scope, plan, output_paths, reports):
@@ -1851,26 +1705,20 @@ def confirm(conn: ConnectionLike, *, project_id: str, request_id: str, environme
         completed_bytes = _encode(completed)
         if len(completed_bytes) > MAX_METADATA_BYTES:
             raise CaseFinalizationError("FINALIZATION_METADATA_LIMIT", "최종확정 완료 기록이 메타데이터 크기 제한을 초과했습니다.")
-        temporary = operation_dir / f".complete-{uuid4().hex}.tmp"
+        temporary = fs.join(operation_dir, f".complete-{uuid4().hex}.tmp")
         with _pin_directory_chain(root, operation_dir):
             try:
-                with temporary.open("xb") as handle:
-                    handle.write(completed_bytes)
-                    handle.flush()
-                    os.fsync(handle.fileno())
-                if complete_path.exists():
+                fs.create_exclusive(temporary, completed_bytes, zone=FINAL)
+                if fs.exists(complete_path):
                     raise CaseFinalizationError("FINALIZATION_MARKER_CONFLICT", "완료 표식이 동시에 생성되었습니다. 같은 요청을 다시 확인하세요.")
-                if os.name == "nt":
-                    os.rename(temporary, complete_path)
-                else:
-                    os.link(temporary, complete_path)
+                fs.move_no_overwrite(temporary, complete_path, zone=FINAL)
             except FileExistsError as exc:
                 raise CaseFinalizationError("FINALIZATION_MARKER_CONFLICT", "완료 표식이 동시에 생성되었습니다. 같은 요청을 다시 확인하세요.") from exc
             except OSError as exc:
                 raise _write_failed() from exc
             finally:
                 try:
-                    temporary.unlink(missing_ok=True)
+                    fs.remove(temporary, zone=FINAL, missing_ok=True)
                 except OSError:
                     pass
         _remove_staged_reports(root, operation_dir, plan, history)
@@ -1897,7 +1745,7 @@ def _completed_response(plan: dict[str, Any], completed: dict[str, Any]) -> dict
 
 
 def _status_operation(conn: ConnectionLike, scope: dict[str, Any], project_id: str,
-                     request_id: str, environment: str, operation_dir: Path,
+                     request_id: str, environment: str, operation_dir: str,
                      metadata_budget: list[int],
                      ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, bool, dict[str, Any] | None]:
     """Read one signed operation without letting a malformed sibling hide valid history.
@@ -1906,13 +1754,14 @@ def _status_operation(conn: ConnectionLike, scope: dict[str, Any], project_id: s
     records status actually shows is done by ``status`` (``deep`` argument tuple).
     """
     root: Path = scope["root"]
-    spdm_storage._assert_safe_existing(operation_dir, root)
-    operation_id = operation_dir.name
-    plan_path = operation_dir / "plan.json"
-    if not os.path.lexists(plan_path):
+    fs = LocalFsProvider(root)
+    fs.assert_safe(operation_dir)
+    operation_id = PurePosixPath(operation_dir).name
+    plan_path = fs.join(operation_dir, "plan.json")
+    if not fs.exists(plan_path, follow_links=False):
         return None, None, False, None
-    spdm_storage._assert_safe_existing(plan_path, root)
-    plan = _read_json(plan_path, status_metadata_budget=metadata_budget)
+    fs.assert_safe(plan_path)
+    plan = _read_json(root, plan_path, status_metadata_budget=metadata_budget)
     if not plan or not _verify_signed_record(plan, "plan_signature", PLAN_DOMAIN):
         return None, None, True, None
     final_relative, metadata_relative = _final_paths(scope)
@@ -1955,11 +1804,11 @@ def _status_operation(conn: ConnectionLike, scope: dict[str, Any], project_id: s
         expected_outputs = _expected_output_paths(plan)
     except (CaseFinalizationError, TypeError, ValueError):
         return None, None, True, None
-    complete_path = operation_dir / "complete.json"
-    if not os.path.lexists(complete_path):
+    complete_path = fs.join(operation_dir, "complete.json")
+    if not fs.exists(complete_path, follow_links=False):
         return plan, None, False, None
-    spdm_storage._assert_safe_existing(complete_path, root)
-    completed = _read_json(complete_path, status_metadata_budget=metadata_budget)
+    fs.assert_safe(complete_path)
+    completed = _read_json(root, complete_path, status_metadata_budget=metadata_budget)
     reports = completed.get("reports") if completed else None
     if (not completed or not _verify_signed_record(completed, "complete_signature", COMPLETE_DOMAIN)
             or completed.get("status") != "COMPLETE" or completed.get("operation_id") != operation_id
@@ -1987,16 +1836,18 @@ def _scan_operations(conn: ConnectionLike, scope: dict[str, Any], project_id: st
     candidates: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]] = []
     unverified_count = 0
     metadata_budget = [0]
-    if metadata_dir.is_dir():
+    fs = LocalFsProvider(scope["root"])
+    if fs.is_dir(metadata_dir):
         inspected_items = 0
-        for item in metadata_dir.iterdir():
+        for entry in fs.list(metadata_dir):
+            item = fs.join(metadata_dir, entry.name)
             inspected_items += 1
             if inspected_items > MAX_STATUS_ITEMS:
                 raise CaseFinalizationError(
                     "FINALIZATION_STATUS_LIMIT",
                     f"최종확정 상태 조회 항목이 {MAX_STATUS_ITEMS}개 제한을 초과했습니다. 이력을 안전하게 판정할 수 없습니다.",
                 )
-            if not item.is_dir() or not _OPERATION_ID.fullmatch(item.name):
+            if not fs.is_dir(item) or not _OPERATION_ID.fullmatch(entry.name):
                 continue
             try:
                 plan, completed_record, unverified, deep = _status_operation(
@@ -2077,7 +1928,7 @@ def latest_completed(conn: ConnectionLike, *, project_id: str, request_id: str,
     """
     try:
         scope_info = result_registration_paths._scope(conn, project_id, request_id, environment)
-        root, root_id, root_key = result_registration_paths._root(conn)
+        root, root_id, root_key = result_registration_paths.storage_context(conn)
     except result_registration_paths.ResultRegistrationError as exc:
         raise CaseFinalizationError(exc.code, str(exc)) from exc
     scope = {"root": root, "root_id": root_id, "root_key": root_key, "scope": scope_info,
@@ -2098,7 +1949,7 @@ def _scope_for_status(conn: ConnectionLike, project_id: str, request_id: str,
                       environment: str, case_id: str) -> dict[str, Any]:
     try:
         scope_info = result_registration_paths._scope(conn, project_id, request_id, environment)
-        root, root_id, root_key = result_registration_paths._root(conn)
+        root, root_id, root_key = result_registration_paths.storage_context(conn)
     except result_registration_paths.ResultRegistrationError as exc:
         raise CaseFinalizationError(exc.code, str(exc)) from exc
     row = conn.execute("SELECT project_id,request_id,environment,relative_path,source_name,storage_root_id FROM dashboard_cases WHERE id=?", [case_id]).fetchone()

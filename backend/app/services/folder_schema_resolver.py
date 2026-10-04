@@ -33,6 +33,7 @@ class FolderSchemaError(ValueError):
         self.status_code = status_code
         super().__init__(message)
 from .folder_schema_locations import EnvironmentLocations, resolve_request_locations
+from .storage.local import LocalFsProvider
 
 
 def _decode(value: Any, *, code: str, message: str) -> Any:
@@ -93,15 +94,16 @@ def scan_fingerprints(result: dict[str, Any], root: Path | None = None, *,
             max_file_bytes = 64 * 1024 * 1024 if suffix in {".inc", ".rad"} else 32 * 1024 * 1024
             if size > max_file_bytes:
                 raise FolderSchemaError("FOLDER_SCHEMA_CONTENT_FILE_LIMIT", "내용 fingerprint 대상 파일이 허용 크기를 초과했습니다.", 413)
-            file_path = root.joinpath(*PurePosixPath(relative_path).parts)
+            fs = LocalFsProvider(root)
+            file_path = "/".join(PurePosixPath(relative_path).parts)
             try:
-                spdm_storage._assert_safe_existing(file_path, root)
-                before = file_path.stat()
-                if before.st_size != size or int(before.st_mtime_ns) != modified_ns:
+                fs.assert_safe(file_path)
+                before = fs.stat(file_path, follow_links=True, missing_ok=False)
+                if before.size != size or int(before.modified_ns) != modified_ns:
                     raise FolderSchemaError("FOLDER_SCHEMA_FILE_BUSY", "조사 도중 파일이 변경되었습니다. 작성 완료 후 다시 새로고침하세요.", 409)
                 digest_state = hashlib.sha256()
                 read_size = 0
-                with spdm_storage.open_stable_reader(file_path) as stream:
+                with fs.open_read(file_path) as stream:
                     while chunk := stream.read(1024 * 1024):
                         digest_state.update(chunk)
                         read_size += len(chunk)
@@ -111,9 +113,9 @@ def scan_fingerprints(result: dict[str, Any], root: Path | None = None, *,
                         if (time.monotonic() - started > folder_discovery_scan.MAX_SECONDS
                                 or (deadline is not None and time.monotonic() > deadline)):
                             raise FolderSchemaError("FOLDER_SCHEMA_CONTENT_TIME_LIMIT", "내용 fingerprint 시간 한도를 초과했습니다.", 413)
-                after = file_path.stat()
-                if (read_size != size or after.st_size != size or int(after.st_mtime_ns) != modified_ns
-                        or getattr(after, "st_ino", None) != getattr(before, "st_ino", None)):
+                after = fs.stat(file_path, follow_links=True, missing_ok=False)
+                if (read_size != size or after.size != size or int(after.modified_ns) != modified_ns
+                        or after.item_id.rsplit(":", 1)[-1] != before.item_id.rsplit(":", 1)[-1]):
                     raise FolderSchemaError("FOLDER_SCHEMA_FILE_BUSY", "조사 도중 파일이 변경되었습니다. 작성 완료 후 다시 새로고침하세요.", 409)
                 digest = digest_state.hexdigest()
             except FolderSchemaError:

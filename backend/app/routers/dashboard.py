@@ -156,7 +156,7 @@ def publish(payload: CaptureInput, request: Request):
     with connect() as conn:
         require_resource_permission(request, RESULT_IMPORT, "request", payload.request_id, conn=conn)
         try:
-            root_id = storage._root_id(storage._root(conn))
+            root_id = storage._root_id(storage._provider(conn).root)
             if payload.storage_root_id and payload.storage_root_id != root_id:
                 raise storage.DashboardCaptureError("DASHBOARD_ROOT_ID_INVALID", "저장소가 변경되었습니다. 다시 조사하세요.")
             relative = storage._relative(payload.root_relative_path)

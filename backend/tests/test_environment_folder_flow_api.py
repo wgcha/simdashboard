@@ -995,7 +995,7 @@ def test_case_finalization_pins_output_parent_during_temp_write(tmp_path, monkey
     source = root / "source.inc"
     payload = b"synthetic deck bytes"
     source.write_bytes(payload)
-    target = root / "Final" / "CAE" / "Case" / "version"
+    target = root / "Request" / "Final" / "CAE" / "Case" / "version"
     target.mkdir(parents=True)
     outside = tmp_path / "outside"
     outside.mkdir()
@@ -1031,7 +1031,7 @@ def test_case_finalization_pins_output_parent_during_temp_write(tmp_path, monkey
         assert rename_blocked == [True], "output parent was renameable while the temporary file was opened"
         assert not list(outside.iterdir()), "temporary bytes escaped the configured SPDM root"
         assert operation_error is None, f"safe copy unexpectedly failed: {operation_error}"
-        assert published == "Final/CAE/Case/version/model.inc"
+        assert published == "Request/Final/CAE/Case/version/model.inc"
         assert (target / "model.inc").read_bytes() == payload
     finally:
         if target.is_junction():

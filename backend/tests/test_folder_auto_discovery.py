@@ -448,14 +448,15 @@ def test_one_unreadable_child_does_not_hide_its_siblings(admin_client, monkeypat
     (root / WR2 / "Working").mkdir(parents=True)
     # An unreadable sibling project folder in the same container.
     (root / CONTAINER / "77777_PV" / "[WR-0008]_[사용_환경]").mkdir(parents=True)
-    original = spdm_storage._is_reparse
+    from app.services.storage import local as storage_local
+    original = storage_local._is_reparse
 
     def flaky(path):
         if path.name == "77777_PV":
             raise spdm_storage.SpdmStorageError("SPDM_PATH_UNAVAILABLE", "synthetic")
         return original(path)
 
-    monkeypatch.setattr(spdm_storage, "_is_reparse", flaky)
+    monkeypatch.setattr(storage_local, "_is_reparse", flaky)
     result = _discover(client)
     assert [item["name"] for item in result["created_requests"]] == ["[WR-0002]_[유통_환경]"]
     assert {(item["relative_path"], item["code"]) for item in result["needs_review"]} == {

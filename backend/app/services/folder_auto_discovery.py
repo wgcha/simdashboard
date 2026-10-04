@@ -64,6 +64,7 @@ from ..database_connection import connect
 from . import environment_folder_profiles as depth_profiles
 from . import folder_discovery, folder_discovery_environment as environment_service, spdm_storage
 from .folder_discovery_scan import root_identity
+from .storage.local import LocalFsProvider
 
 MIN_INTERVAL_SECONDS = 60.0
 FORCE_MIN_INTERVAL_SECONDS = 10.0
@@ -158,42 +159,41 @@ class _Lister:
 
     def __init__(self, root: Path):
         self.root = root
+        self.fs = LocalFsProvider(root)
         self.entries = 0
         self.issues: list[dict[str, str]] = []
 
     def children(self, relative: str) -> list[tuple[str, str]]:
-        path = self.root.joinpath(*relative.split("/")) if relative else self.root
+        path = "/".join(relative.split("/")) if relative else ""
         found: list[tuple[str, str]] = []
         try:
-            spdm_storage._assert_safe_existing(path, self.root)
-            with os.scandir(path) as iterator:
-                for entry in iterator:
-                    self.entries += 1
-                    if self.entries > MAX_LISTED_ENTRIES:
-                        self.issues.append({"relative_path": relative, "code": "LIST_LIMIT"})
-                        break
-                    if entry.name.startswith((".", "~$")):
+            self.fs.assert_safe(path)
+            for entry in self.fs.list(path):
+                self.entries += 1
+                if self.entries > MAX_LISTED_ENTRIES:
+                    self.issues.append({"relative_path": relative, "code": "LIST_LIMIT"})
+                    break
+                if entry.name.startswith((".", "~$")):
+                    continue
+                child = self.fs.join(path, entry.name)
+                try:
+                    if self.fs.is_link(child) or entry.kind != "dir":
                         continue
-                    child = Path(entry.path)
-                    try:
-                        if spdm_storage._is_reparse(child) or not entry.is_dir(follow_symlinks=False):
-                            continue
-                    except (OSError, spdm_storage.SpdmStorageError):
-                        # One unreadable child must not hide its siblings.
-                        self.issues.append({"relative_path": child.relative_to(self.root).as_posix(),
-                                            "code": "PATH_UNAVAILABLE"})
-                        continue
-                    found.append((entry.name, child.relative_to(self.root).as_posix()))
+                except (OSError, spdm_storage.SpdmStorageError):
+                    # One unreadable child must not hide its siblings.
+                    self.issues.append({"relative_path": child, "code": "PATH_UNAVAILABLE"})
+                    continue
+                found.append((entry.name, child))
         except (OSError, ValueError, spdm_storage.SpdmStorageError):
             self.issues.append({"relative_path": relative, "code": "PATH_UNAVAILABLE"})
         return sorted(found, key=lambda item: item[1].casefold())
 
     def mtime(self, relative: str) -> int | None:
         try:
-            info = self.root.joinpath(*relative.split("/")).stat()
+            info = self.fs.stat("/".join(relative.split("/")), follow_links=True, missing_ok=False)
         except OSError:
             return None
-        return int(getattr(info, "st_mtime_ns", info.st_mtime * 1_000_000_000))
+        return info.modified_ns
 
 
 def _linked_state(conn, root_key: str) -> dict[str, Any]:

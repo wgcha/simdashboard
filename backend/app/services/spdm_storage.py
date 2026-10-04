@@ -12,8 +12,6 @@ import hashlib
 import json
 import os
 import re
-import stat
-import sys
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -24,6 +22,8 @@ from typing import Any, Iterable, Literal
 from fastapi import HTTPException
 
 from ..database_connection import ConnectionLike, rows
+from .storage.local import LocalFsProvider, prepare_root, resolve_existing_or_none, resolve_root
+from .storage.provider import LEGACY, SpdmStorageError
 
 
 _PROJECT = re.compile(r"^Project_([A-Za-z0-9][A-Za-z0-9._-]*)_([A-Za-z0-9][A-Za-z0-9._-]*)_([A-Za-z0-9][A-Za-z0-9._-]*)$")
@@ -43,12 +43,6 @@ _FOLDER_KINDS: dict[str, tuple[str, ...]] = {
     "reports": (".pdf", ".ppt", ".pptx"),
 }
 _storage_lock = threading.RLock()
-
-
-class SpdmStorageError(ValueError):
-    def __init__(self, code: str, message: str) -> None:
-        self.code = code
-        super().__init__(message)
 
 
 @dataclass(frozen=True)
@@ -98,51 +92,21 @@ def _valid_windows_name(name: str) -> bool:
     )
 
 
-def _is_reparse(path: Path) -> bool:
-    try:
-        info = path.lstat()
-    except OSError as exc:
-        raise SpdmStorageError("SPDM_PATH_UNAVAILABLE", "SPDM 저장 경로를 읽을 수 없습니다.") from exc
-    attributes = getattr(info, "st_file_attributes", 0)
-    return stat.S_ISLNK(info.st_mode) or bool(attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
-
-
-def _assert_safe_existing(path: Path, root: Path) -> None:
-    try:
-        relative = path.relative_to(root)
-    except ValueError as exc:
-        raise SpdmStorageError("SPDM_PATH_ESCAPE", "SPDM 저장 경로가 root 밖입니다.") from exc
-    current = root
-    if _is_reparse(current):
-        raise SpdmStorageError("SPDM_ROOT_UNSAFE", "SPDM root는 reparse point일 수 없습니다.")
-    for part in relative.parts:
-        current = current / part
-        if current.exists() and _is_reparse(current):
-            raise SpdmStorageError("SPDM_PATH_UNSAFE", "SPDM 경로에 reparse point를 사용할 수 없습니다.")
-
-
-def _case_collision(parent: Path, name: str) -> Path | None:
-    if not parent.exists():
-        return None
-    for child in parent.iterdir():
-        if child.name.casefold() == name.casefold():
-            return child
-    return None
-
-
-def _ensure_directory(root: Path, relative: str) -> Path:
-    target = root
+def _ensure_directory(root: Path, relative: str) -> str:
+    """Create the exact folder chain (LEGACY zone); returns the root-relative path."""
+    fs = LocalFsProvider(root)
+    target = ""
     for part in PurePosixPath(relative).parts:
-        _assert_safe_existing(target, root)
-        existing = _case_collision(target, part)
+        fs.assert_safe(target)
+        existing = fs.case_collision(target, part)
         if existing is not None:
-            if existing.name != part or not existing.is_dir() or _is_reparse(existing):
+            if existing.rsplit("/", 1)[-1] != part or not fs.is_dir(existing) or fs.is_link(existing):
                 raise SpdmStorageError("SPDM_PATH_COLLISION", "SPDM 저장 폴더 이름이 충돌하거나 안전하지 않습니다.")
             target = existing
             continue
-        target = target / part
-        target.mkdir()
-    _assert_safe_existing(target, root)
+        target = fs.join(target, part)
+        fs.mkdirs(target, zone=LEGACY, parents=False, exist_ok=False)
+    fs.assert_safe(target)
     return target
 
 
@@ -152,21 +116,8 @@ def _setting(conn: ConnectionLike) -> str | None:
 
 
 def _root_identity(path: Path) -> str:
-    info = path.stat()
-    # st_dev/st_ino comes from the opened filesystem object on Windows too;
-    # retaining the normalized spelling makes accidental UNC/drive remaps
-    # diagnosable without treating a text path as identity by itself.
-    return f"{info.st_dev}:{info.st_ino}:{str(path).casefold()}"
-
-
-def _assert_raw_root_path(path: Path) -> None:
-    if not path.is_absolute():
-        raise SpdmStorageError("SPDM_ROOT_INVALID", "SPDM root는 절대 경로여야 합니다.")
-    current = Path(path.anchor)
-    for part in path.parts[1:]:
-        current = current / part
-        if current.exists() and _is_reparse(current):
-            raise SpdmStorageError("SPDM_ROOT_UNSAFE", "SPDM root 경로에 reparse point를 사용할 수 없습니다.")
+    """Raw root identity (``st_dev:st_ino:<casefold path>``) from the storage provider."""
+    return LocalFsProvider(path).root_identity()
 
 
 def _stored_identity(conn: ConnectionLike) -> str | None:
@@ -197,14 +148,7 @@ def storage_root(conn: ConnectionLike) -> StorageRoot:
     raw = raw_env or persisted
     if not raw:
         return StorageRoot(None, bool(raw_env), False)
-    path = Path(raw).expanduser()
-    _assert_raw_root_path(path)
-    try:
-        resolved = path.resolve(strict=True)
-    except OSError as exc:
-        raise SpdmStorageError("SPDM_ROOT_UNAVAILABLE", "SPDM root를 확인할 수 없습니다.") from exc
-    if not resolved.is_dir() or _is_reparse(resolved):
-        raise SpdmStorageError("SPDM_ROOT_UNSAFE", "SPDM root는 일반 디렉터리여야 합니다.")
+    resolved = resolve_root(raw)
     persisted_identity = _stored_identity(conn)
     current_identity = _root_identity(resolved)
     binding_count = int(conn.execute("SELECT count(*) FROM spdm_storage_bindings").fetchone()[0])
@@ -213,10 +157,7 @@ def storage_root(conn: ConnectionLike) -> StorageRoot:
     if binding_count and persisted_identity != current_identity:
         raise SpdmStorageError("SPDM_ROOT_IDENTITY_DRIFT", "SPDM root의 파일시스템 identity가 변경되었습니다.")
     if raw_env and persisted:
-        try:
-            persisted_path = Path(persisted).expanduser().resolve(strict=True)
-        except OSError:
-            persisted_path = None
+        persisted_path = resolve_existing_or_none(persisted)
         if persisted_path != resolved and conn.execute("SELECT count(*) FROM spdm_storage_bindings").fetchone()[0]:
             raise SpdmStorageError("SPDM_ROOT_BINDING_CONFLICT", "기존 SPDM 연결이 있어 환경 root를 변경할 수 없습니다.")
     return StorageRoot(resolved, bool(raw_env), True)
@@ -225,21 +166,10 @@ def storage_root(conn: ConnectionLike) -> StorageRoot:
 def set_storage_root(conn: ConnectionLike, value: str) -> StorageRoot:
     if os.getenv("SIMDASH_SPDM_ROOT", "").strip():
         raise SpdmStorageError("SPDM_ROOT_LOCKED", "환경 변수로 설정된 SPDM root는 여기서 변경할 수 없습니다.")
-    path = Path(value).expanduser()
-    _assert_raw_root_path(path)
-    try:
-        path.mkdir(parents=True, exist_ok=True)
-        resolved = path.resolve(strict=True)
-    except OSError as exc:
-        raise SpdmStorageError("SPDM_ROOT_UNAVAILABLE", "SPDM root를 준비할 수 없습니다.") from exc
-    if not resolved.is_dir() or _is_reparse(resolved):
-        raise SpdmStorageError("SPDM_ROOT_UNSAFE", "SPDM root는 일반 디렉터리여야 합니다.")
+    resolved = prepare_root(value)
     persisted = _setting(conn)
     if persisted:
-        try:
-            previous = Path(persisted).expanduser().resolve(strict=True)
-        except OSError:
-            previous = None
+        previous = resolve_existing_or_none(persisted)
         if previous != resolved and conn.execute("SELECT count(*) FROM spdm_storage_bindings").fetchone()[0]:
             raise SpdmStorageError("SPDM_ROOT_BINDING_CONFLICT", "기존 SPDM 연결이 있어 root를 변경할 수 없습니다.")
     now = utc_now()
@@ -268,58 +198,79 @@ def rules(binding: dict[str, str] | None = None) -> list[dict[str, Any]]:
     ] + [{"kind": "unknown", "label": "미분류 원본", "folder": "-", "extensions": [], "description": "계약 밖 파일은 보관·다운로드 목록에만 표시하고 해석 결과로 적재하지 않습니다."}]
 
 
+def _child_directories(fs: LocalFsProvider, relative: str) -> list[str]:
+    """Plain (non-link) child folders in listing order: ``is_dir() and not reparse``."""
+    found: list[str] = []
+    for entry in fs.list(relative):
+        child = fs.join(relative, entry.name)
+        if fs.is_dir(child) and not fs.is_link(child):
+            found.append(child)
+    return found
+
+
+def _sorted_children(fs: LocalFsProvider, relative: str) -> list[str]:
+    return sorted(_child_directories(fs, relative), key=lambda item: item.rsplit("/", 1)[-1].casefold())
+
+
+def _name(relative: str) -> str:
+    return relative.rsplit("/", 1)[-1]
+
+
 def candidates(root: Path) -> list[Candidate]:
+    fs = LocalFsProvider(root)
     found: list[Candidate] = []
-    for project_dir in sorted((item for item in root.iterdir() if item.is_dir() and not _is_reparse(item)), key=lambda item: item.name.casefold()):
-        match = _PROJECT.fullmatch(project_dir.name)
+    for project_dir in _sorted_children(fs, ""):
+        match = _PROJECT.fullmatch(_name(project_dir))
         if match is None:
             continue
-        for request_dir in sorted((item for item in project_dir.iterdir() if item.is_dir() and not _is_reparse(item)), key=lambda item: item.name.casefold()):
-            work = _WORK_REQUEST.fullmatch(request_dir.name)
+        for request_dir in _sorted_children(fs, project_dir):
+            work = _WORK_REQUEST.fullmatch(_name(request_dir))
             if work is None:
                 continue
-            cae = request_dir / "CAE"
-            if not cae.is_dir() or _is_reparse(cae):
+            cae = fs.join(request_dir, "CAE")
+            if not fs.is_dir(cae) or fs.is_link(cae):
                 continue
-            for case_dir in sorted((item for item in cae.iterdir() if item.is_dir() and not _is_reparse(item)), key=lambda item: item.name.casefold()):
-                for analysis_dir in sorted((item for item in case_dir.iterdir() if item.is_dir() and not _is_reparse(item)), key=lambda item: item.name.casefold()):
-                    if analysis_dir.name not in _ANALYSES:
+            for case_dir in _sorted_children(fs, cae):
+                for analysis_dir in _sorted_children(fs, case_dir):
+                    if _name(analysis_dir) not in _ANALYSES:
                         continue
-                    for leaf in _analysis_leaves(analysis_dir):
-                        relative = leaf.relative_to(root).as_posix()
-                        found.append(Candidate(relative, project_dir.name, request_dir.name, analysis_dir.name, _analysis_type(analysis_dir.name)))
+                    for relative in _analysis_leaves(fs, analysis_dir):
+                        found.append(Candidate(relative, _name(project_dir), _name(request_dir), _name(analysis_dir), _analysis_type(_name(analysis_dir))))
     return found
 
 
 def _request_parents(root: Path) -> Iterable[tuple[str, str]]:
     """Yield exact Project/WR folders even when CAE has no result leaf yet."""
-    for project_dir in sorted((item for item in root.iterdir() if item.is_dir() and not _is_reparse(item)), key=lambda item: item.name.casefold()):
-        if _PROJECT.fullmatch(project_dir.name) is None:
+    fs = LocalFsProvider(root)
+    for project_dir in _sorted_children(fs, ""):
+        if _PROJECT.fullmatch(_name(project_dir)) is None:
             continue
-        for request_dir in sorted((item for item in project_dir.iterdir() if item.is_dir() and not _is_reparse(item)), key=lambda item: item.name.casefold()):
-            if _WORK_REQUEST.fullmatch(request_dir.name) is not None:
-                yield project_dir.name, request_dir.name
+        for request_dir in _sorted_children(fs, project_dir):
+            if _WORK_REQUEST.fullmatch(_name(request_dir)) is not None:
+                yield _name(project_dir), _name(request_dir)
 
 
-def _analysis_leaves(analysis_dir: Path) -> Iterable[Path]:
+def _analysis_leaves(fs: LocalFsProvider, analysis_dir: str) -> Iterable[str]:
     # A non-drop analysis is itself its stable load-case root.  Descendant
     # ``results``/``solver``/``inputs`` folders are storage categories, never
     # separately discovered load cases.  Drop/Clamping is the one Issue #13
     # exception: its scene identity is exactly series/INDIVIDUAL|CUMULATIVE/
     # Scene below the analysis root.
-    if analysis_dir.name not in {"Drop", "Clamping"}:
+    if _name(analysis_dir) not in {"Drop", "Clamping"}:
         return [analysis_dir]
-    leaves: list[Path] = []
-    for series in analysis_dir.iterdir():
-        if not series.is_dir() or _is_reparse(series):
+    leaves: list[str] = []
+    for series_entry in fs.list(analysis_dir):
+        series = fs.join(analysis_dir, series_entry.name)
+        if not fs.is_dir(series) or fs.is_link(series):
             continue
-        modes = [series] if series.name in {"INDIVIDUAL", "CUMULATIVE"} else [
-            item for item in series.iterdir()
-            if item.is_dir() and not _is_reparse(item) and item.name in {"INDIVIDUAL", "CUMULATIVE"}
+        modes = [series] if series_entry.name in {"INDIVIDUAL", "CUMULATIVE"} else [
+            item for item in (fs.join(series, entry.name) for entry in fs.list(series))
+            if fs.is_dir(item) and not fs.is_link(item) and _name(item) in {"INDIVIDUAL", "CUMULATIVE"}
         ]
         for mode in modes:
-            for scene in mode.iterdir():
-                if scene.is_dir() and not _is_reparse(scene) and _valid_windows_name(scene.name):
+            for scene_entry in fs.list(mode):
+                scene = fs.join(mode, scene_entry.name)
+                if fs.is_dir(scene) and not fs.is_link(scene) and _valid_windows_name(scene_entry.name):
                     leaves.append(scene)
     return leaves
 
@@ -649,151 +600,55 @@ def _report_directory_relative(binding: dict[str, str]) -> str:
     return "/".join((parts[0], parts[1], "보고서", *parts[3:]))
 
 
-def _physical_directory(root: Path, binding: dict[str, str], kind: str) -> Path:
-    relative = _report_directory_relative(binding) if kind == "reports" else f"{binding['relative_path']}/{kind}"
-    return root.joinpath(*PurePosixPath(relative).parts)
+def _physical_relative(binding: dict[str, str], kind: str) -> str:
+    return _report_directory_relative(binding) if kind == "reports" else f"{binding['relative_path']}/{kind}"
 
 
-def _publish_no_replace(staged: Path, destination: Path) -> None:
-    """Atomically publish a same-directory temporary file without replacement."""
-    if sys.platform == "win32":
-        # SMB deployments need not support hardlinks.  On Windows a same-volume
-        # rename fails for an existing destination, unlike POSIX replace().
-        if destination.exists():
-            raise FileExistsError(destination)
-        os.rename(staged, destination)
-        return
-    os.link(staged, destination)
-
-
-@contextmanager
-def open_stable_reader(path: Path):
-    """Open a source only when a Windows writer did not exclude readers.
-
-    Tests may monkeypatch this public seam to model an existing producer handle.
-    A sharing violation is deliberately represented as ``SpdmStorageError``;
-    refresh records PENDING instead of consuming a paused copy.
-    """
-    if os.name != "nt":
-        try:
-            with path.open("rb") as stream:
-                yield stream
-            return
-        except OSError as exc:
-            raise SpdmStorageError("SPDM_FILE_BUSY", "원본 파일 작성 완료를 기다립니다.") from exc
-    import ctypes
-    import msvcrt
-    from ctypes import wintypes
-
-    class _FileInformation(ctypes.Structure):
-        _fields_ = [
-            ("dwFileAttributes", wintypes.DWORD), ("ftCreationTimeLow", wintypes.DWORD),
-            ("ftCreationTimeHigh", wintypes.DWORD), ("ftLastAccessTimeLow", wintypes.DWORD),
-            ("ftLastAccessTimeHigh", wintypes.DWORD), ("ftLastWriteTimeLow", wintypes.DWORD),
-            ("ftLastWriteTimeHigh", wintypes.DWORD), ("dwVolumeSerialNumber", wintypes.DWORD),
-            ("nFileSizeHigh", wintypes.DWORD), ("nFileSizeLow", wintypes.DWORD),
-            ("nNumberOfLinks", wintypes.DWORD), ("nFileIndexHigh", wintypes.DWORD),
-            ("nFileIndexLow", wintypes.DWORD),
-        ]
-
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
-    kernel32.CreateFileW.restype = wintypes.HANDLE
-    kernel32.GetFileInformationByHandle.argtypes = [wintypes.HANDLE, ctypes.POINTER(_FileInformation)]
-    kernel32.GetFileInformationByHandle.restype = wintypes.BOOL
-    kernel32.GetFileType.argtypes = [wintypes.HANDLE]
-    kernel32.GetFileType.restype = wintypes.DWORD
-    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
-    kernel32.CloseHandle.restype = wintypes.BOOL
-    handle = kernel32.CreateFileW(str(path), 0x80000000, 0x00000001, None, 3, 0x80, None)
-    invalid = ctypes.c_void_p(-1).value
-    if handle == invalid:
-        code = ctypes.get_last_error()
-        if code in {32, 33}:
-            raise SpdmStorageError("SPDM_FILE_BUSY", "원본 파일 작성 완료를 기다립니다.")
-        raise SpdmStorageError("SPDM_FILE_UNAVAILABLE", "원본 파일을 읽을 수 없습니다.")
-    information = _FileInformation()
-    if kernel32.GetFileType(handle) != 1 or not kernel32.GetFileInformationByHandle(handle, ctypes.byref(information)) or information.dwFileAttributes & 0x410:
-        kernel32.CloseHandle(handle)
-        raise SpdmStorageError("SPDM_PATH_UNSAFE", "SPDM 원본은 일반 reparse 없는 파일이어야 합니다.")
-    descriptor = msvcrt.open_osfhandle(handle, os.O_RDONLY)
-    try:
-        with os.fdopen(descriptor, "rb", closefd=True) as stream:
-            yield stream
-    except OSError as exc:
-        raise SpdmStorageError("SPDM_FILE_UNAVAILABLE", "원본 파일을 읽을 수 없습니다.") from exc
-
-
-def read_stable_bytes(path: Path, *, max_bytes: int = 512 * 1024 * 1024) -> tuple[bytes, str]:
-    """Capture one bounded byte snapshot through the stable-reader handle."""
-    try:
-        before = path.stat()
-    except OSError as exc:
-        raise SpdmStorageError("SPDM_FILE_UNAVAILABLE", "원본 파일을 읽을 수 없습니다.") from exc
-    digest = hashlib.sha256()
-    payload = bytearray()
-    with open_stable_reader(path) as stream:
-        while True:
-            chunk = stream.read(1024 * 1024)
-            if not chunk:
-                break
-            digest.update(chunk)
-            payload.extend(chunk)
-            if len(payload) > max_bytes:
-                raise SpdmStorageError("SPDM_FILE_TOO_LARGE", "원본 파일은 512 MiB 이하여야 합니다.")
-    try:
-        after = path.stat()
-    except OSError as exc:
-        raise SpdmStorageError("SPDM_FILE_BUSY", "원본 파일 작성 완료를 기다립니다.") from exc
-    if before.st_size != after.st_size or before.st_mtime_ns != after.st_mtime_ns:
-        raise SpdmStorageError("SPDM_FILE_BUSY", "원본 파일 작성 완료를 기다립니다.")
-    return bytes(payload), digest.hexdigest()
-
-
-def _sha256(path: Path) -> tuple[str, int]:
-    payload, checksum = read_stable_bytes(path)
+def _sha256(fs: LocalFsProvider, relative: str) -> tuple[str, int]:
+    payload, checksum = fs.read_stable_digest(relative)
     return checksum, len(payload)
 
 
-def _complete_sidecar(path: Path, checksum: str) -> bool:
-    sidecar = path.with_name(path.name + ".simdashboard-complete.json")
+def _complete_sidecar(fs: LocalFsProvider, relative: str, checksum: str) -> bool:
+    sidecar = relative + ".simdashboard-complete.json"
     try:
-        payload = json.loads(sidecar.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError):
+        with fs.open_read(sidecar) as stream:
+            payload = json.loads(stream.read().decode("utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError, SpdmStorageError):
         return False
     return isinstance(payload, dict) and payload.get("sha256") == checksum and payload.get("state") == "READY"
 
 
 def refresh_binding_files(conn: ConnectionLike, root: Path, binding: dict[str, str]) -> list[dict[str, Any]]:
-    leaf = root.joinpath(*PurePosixPath(binding["relative_path"]).parts)
+    fs = LocalFsProvider(root)
+    leaf = "/".join(PurePosixPath(binding["relative_path"]).parts)
     # An external producer may remove an entire leaf.  Keep its immutable run
     # history and index rows, mark the current artefacts missing, and let a
     # global refresh continue with independent bindings.
-    if not leaf.exists():
+    if not fs.exists(leaf):
         conn.execute(
             "UPDATE spdm_storage_files SET status='MISSING', updated_at=? WHERE load_case_id=?",
             [utc_now(), binding["load_case_id"]],
         )
         return list_files(conn, binding["load_case_id"])
-    _assert_safe_existing(leaf, root)
-    if not leaf.is_dir():
+    fs.assert_safe(leaf)
+    if not fs.is_dir(leaf):
         raise SpdmStorageError("SPDM_BINDING_MISSING", "연결된 SPDM 폴더를 찾을 수 없습니다.")
     observed: set[str] = set()
-    for current, dirs, files in os.walk(leaf, followlinks=False):
-        current_path = Path(current)
-        dirs[:] = [name for name in dirs if not name.startswith('.') and not _is_reparse(current_path / name)]
+    for current, dirs, files in fs.walk(leaf):
+        dirs[:] = [name for name in dirs if not name.startswith('.') and not fs.is_link(fs.join(current, name))]
         for name in files:
             if name.startswith('.') or name.endswith('.simdashboard-complete.json') or name.endswith('.partial') or name.endswith('.tmp'):
                 continue
-            path = current_path / name
-            if _is_reparse(path):
+            path = fs.join(current, name)
+            if fs.is_link(path):
                 continue
-            relative_leaf = path.relative_to(leaf).as_posix()
+            relative_leaf = PurePosixPath(path).relative_to(leaf).as_posix()
             kind = _file_kind(PurePosixPath(relative_leaf))
             status = "READY" if kind is not None else "IGNORED"
             kind = kind or "unknown"
             try:
-                checksum, size = _sha256(path)
+                checksum, size = _sha256(fs, path)
             except SpdmStorageError as error:
                 observed.add(relative_leaf)
                 if error.code == "SPDM_FILE_BUSY":
@@ -801,46 +656,48 @@ def refresh_binding_files(conn: ConnectionLike, root: Path, binding: dict[str, s
                 continue
             observed.add(relative_leaf)
             _upsert_file(conn, binding["load_case_id"], relative_leaf, name, kind, size, checksum, status)
-    report_directory = _physical_directory(root, binding, "reports")
-    if report_directory.is_dir() and not _is_reparse(report_directory):
-        for path in report_directory.rglob("*"):
-            if not path.is_file() or _is_reparse(path) or path.name.startswith('.'):
+    report_directory = _physical_relative(binding, "reports")
+    if fs.is_dir(report_directory) and not fs.is_link(report_directory):
+        for path in fs.rglob(report_directory):
+            name = _name(path)
+            if not fs.is_file(path) or fs.is_link(path) or name.startswith('.'):
                 continue
-            if path.suffix.lower() not in _FOLDER_KINDS["reports"]:
+            if PurePosixPath(name).suffix.lower() not in _FOLDER_KINDS["reports"]:
                 continue
-            relative_leaf = "reports/" + path.relative_to(report_directory).as_posix()
+            relative_leaf = "reports/" + PurePosixPath(path).relative_to(report_directory).as_posix()
             try:
-                checksum, size = _sha256(path)
+                checksum, size = _sha256(fs, path)
             except SpdmStorageError as error:
                 observed.add(relative_leaf)
                 if error.code == "SPDM_FILE_BUSY":
-                    _upsert_file(conn, binding["load_case_id"], relative_leaf, path.name, "reports", 0, "", "PENDING", error.code)
+                    _upsert_file(conn, binding["load_case_id"], relative_leaf, name, "reports", 0, "", "PENDING", error.code)
                 continue
             observed.add(relative_leaf)
-            _upsert_file(conn, binding["load_case_id"], relative_leaf, path.name, "reports", size, checksum, "READY")
+            _upsert_file(conn, binding["load_case_id"], relative_leaf, name, "reports", size, checksum, "READY")
     project_name, work_request_name = _binding_parent(binding)
     shared = (
-        ("project-inputs", root / project_name / "INPUT"),
-        ("request-inputs", root / project_name / work_request_name / "SimCAD"),
-        ("request-test", root / project_name / work_request_name / "TEST"),
+        ("project-inputs", fs.join(project_name, "INPUT")),
+        ("request-inputs", fs.join(project_name, work_request_name, "SimCAD")),
+        ("request-test", fs.join(project_name, work_request_name, "TEST")),
     )
     for prefix, directory in shared:
-        if not directory.is_dir() or _is_reparse(directory):
+        if not fs.is_dir(directory) or fs.is_link(directory):
             continue
-        for path in directory.rglob("*"):
-            if not path.is_file() or _is_reparse(path) or path.name.startswith('.'):
+        for path in fs.rglob(directory):
+            name = _name(path)
+            if not fs.is_file(path) or fs.is_link(path) or name.startswith('.'):
                 continue
-            relative_leaf = f"{prefix}/" + path.relative_to(directory).as_posix()
-            kind = _extension_kind(path) or "unknown"
+            relative_leaf = f"{prefix}/" + PurePosixPath(path).relative_to(directory).as_posix()
+            kind = _extension_kind(Path(name)) or "unknown"
             try:
-                checksum, size = _sha256(path)
+                checksum, size = _sha256(fs, path)
             except SpdmStorageError as error:
                 observed.add(relative_leaf)
                 if error.code == "SPDM_FILE_BUSY":
-                    _upsert_file(conn, binding["load_case_id"], relative_leaf, path.name, kind, 0, "", "PENDING", error.code)
+                    _upsert_file(conn, binding["load_case_id"], relative_leaf, name, kind, 0, "", "PENDING", error.code)
                 continue
             observed.add(relative_leaf)
-            _upsert_file(conn, binding["load_case_id"], relative_leaf, path.name, kind, size, checksum, "READY" if kind != "unknown" else "IGNORED")
+            _upsert_file(conn, binding["load_case_id"], relative_leaf, name, kind, size, checksum, "READY" if kind != "unknown" else "IGNORED")
     for indexed in rows(conn.execute("SELECT id, relative_path FROM spdm_storage_files WHERE load_case_id=?", [binding["load_case_id"]])):
         if str(indexed["relative_path"]) not in observed:
             conn.execute("UPDATE spdm_storage_files SET status='MISSING', updated_at=? WHERE id=?", [utc_now(), indexed["id"]])
@@ -860,26 +717,28 @@ def list_files(conn: ConnectionLike, load_case_id: str) -> list[dict[str, Any]]:
     return [dict(row) for row in rows(conn.execute("SELECT id, name, relative_path, kind, size_bytes AS size, status, run_id, message FROM spdm_storage_files WHERE load_case_id=? ORDER BY relative_path", [load_case_id]))]
 
 
-def safe_file_path(root: Path, binding: dict[str, str], relative_path: str) -> Path:
+def safe_file_path(root: Path, binding: dict[str, str], relative_path: str) -> str:
+    """Root-relative path of one indexed source file (checked: no reparse ancestor, regular file)."""
+    fs = LocalFsProvider(root)
     relative = _normalise_relative(relative_path)
     parts = PurePosixPath(relative).parts
     if parts[0] == "reports":
-        leaf = _physical_directory(root, binding, "reports")
-        target = leaf.joinpath(*parts[1:])
+        leaf = _physical_relative(binding, "reports")
+        target = fs.join(leaf, *parts[1:])
     elif parts[0] in {"project-inputs", "request-inputs", "request-test"}:
         project_name, work_request_name = _binding_parent(binding)
         bases = {
-            "project-inputs": root / project_name / "INPUT",
-            "request-inputs": root / project_name / work_request_name / "SimCAD",
-            "request-test": root / project_name / work_request_name / "TEST",
+            "project-inputs": fs.join(project_name, "INPUT"),
+            "request-inputs": fs.join(project_name, work_request_name, "SimCAD"),
+            "request-test": fs.join(project_name, work_request_name, "TEST"),
         }
         leaf = bases[parts[0]]
-        target = leaf.joinpath(*parts[1:])
+        target = fs.join(leaf, *parts[1:])
     else:
-        leaf = root.joinpath(*PurePosixPath(binding["relative_path"]).parts)
-        target = leaf.joinpath(*parts)
-    _assert_safe_existing(target, root)
-    if not target.is_file():
+        leaf = "/".join(PurePosixPath(binding["relative_path"]).parts)
+        target = fs.join(leaf, *parts)
+    fs.assert_safe(target)
+    if not fs.is_file(target):
         raise SpdmStorageError("SPDM_FILE_MISSING", "원본 파일을 찾을 수 없습니다.")
     return target
 
@@ -891,50 +750,55 @@ def write_upload(root: Path, binding: dict[str, str], kind: Literal["results", "
         raise SpdmStorageError("SPDM_FILENAME_INVALID", "파일 이름이 Windows 파일 규칙에 맞지 않습니다.")
     if Path(filename).suffix.lower() not in _FOLDER_KINDS[kind]:
         raise SpdmStorageError("SPDM_EXTENSION_INVALID", "선택한 종류에 허용되지 않는 확장자입니다.")
+    fs = LocalFsProvider(root)
     with _storage_lock:
         parent_relative = _report_directory_relative(binding) if kind == "reports" else f"{binding['relative_path']}/{kind}"
         parent = _ensure_directory(root, parent_relative)
-        staged = parent / f".simdashboard-upload-{os.urandom(12).hex()}.tmp"
+        staged = fs.join(parent, f".simdashboard-upload-{os.urandom(12).hex()}.tmp")
         digest = hashlib.sha256(); size = 0
+
+        def checked_chunks() -> Iterable[bytes]:
+            nonlocal size
+            for chunk in chunks:
+                if not isinstance(chunk, bytes):
+                    raise SpdmStorageError("SPDM_UPLOAD_INVALID", "업로드 내용이 올바르지 않습니다.")
+                size += len(chunk)
+                if size > 512 * 1024 * 1024:
+                    raise SpdmStorageError("SPDM_FILE_TOO_LARGE", "원본 파일은 512 MiB 이하여야 합니다.")
+                digest.update(chunk)
+                yield chunk
+
         try:
-            with staged.open("xb") as stream:
-                for chunk in chunks:
-                    if not isinstance(chunk, bytes):
-                        raise SpdmStorageError("SPDM_UPLOAD_INVALID", "업로드 내용이 올바르지 않습니다.")
-                    size += len(chunk)
-                    if size > 512 * 1024 * 1024:
-                        raise SpdmStorageError("SPDM_FILE_TOO_LARGE", "원본 파일은 512 MiB 이하여야 합니다.")
-                    digest.update(chunk); stream.write(chunk)
-                stream.flush(); os.fsync(stream.fileno())
+            fs.create_exclusive(staged, checked_chunks(), zone=LEGACY)
             checksum = digest.hexdigest()
             final_name = filename
-            destination = parent / final_name
-            collision = _case_collision(parent, final_name)
+            destination = fs.join(parent, final_name)
+            collision = fs.case_collision(parent, final_name)
             if collision is not None:
-                existing_checksum, _ = _sha256(collision)
+                existing_checksum, _ = _sha256(fs, collision)
                 if existing_checksum == checksum:
                     if kind == "results":
-                        _ensure_ready_marker(collision, checksum)
-                    staged.unlink(missing_ok=True)
-                    return f"{kind}/{collision.name}", checksum, size, True
+                        _ensure_ready_marker(fs, collision, checksum)
+                    fs.remove(staged, zone=LEGACY, missing_ok=True)
+                    return f"{kind}/{_name(collision)}", checksum, size, True
                 final_name = f"{Path(filename).stem}--{checksum[:12]}{Path(filename).suffix}"
-                destination = parent / final_name
-                versioned = _case_collision(parent, final_name)
+                destination = fs.join(parent, final_name)
+                versioned = fs.case_collision(parent, final_name)
                 if versioned is not None:
-                    versioned_checksum, _ = _sha256(versioned)
+                    versioned_checksum, _ = _sha256(fs, versioned)
                     if versioned_checksum != checksum:
                         raise SpdmStorageError("SPDM_FILE_CONFLICT", "같은 이름의 다른 원본 파일이 이미 있습니다.")
-                    staged.unlink(missing_ok=True)
-                    return f"{kind}/{versioned.name}", checksum, size, True
-            _publish_no_replace(staged, destination)
-            staged.unlink(missing_ok=True)
+                    fs.remove(staged, zone=LEGACY, missing_ok=True)
+                    return f"{kind}/{_name(versioned)}", checksum, size, True
+            fs.move_no_overwrite(staged, destination, zone=LEGACY)
+            fs.remove(staged, zone=LEGACY, missing_ok=True)
             if kind == "results":
-                _ensure_ready_marker(destination, checksum)
+                _ensure_ready_marker(fs, destination, checksum)
             return f"{kind}/{final_name}", checksum, size, False
         except SpdmStorageError:
-            staged.unlink(missing_ok=True); raise
+            fs.remove(staged, zone=LEGACY, missing_ok=True); raise
         except OSError as exc:
-            staged.unlink(missing_ok=True)
+            fs.remove(staged, zone=LEGACY, missing_ok=True)
             raise SpdmStorageError("SPDM_FILE_PUBLISH_FAILED", "원본 파일을 SPDM 저장 폴더에 게시하지 못했습니다.") from exc
 
 
@@ -968,7 +832,7 @@ def ingest_ready_results(
             continue
         try:
             path = safe_file_path(root, binding, str(item["relative_path"]))
-            payload, checksum = read_stable_bytes(path, max_bytes=5_000_000)
+            payload, checksum = LocalFsProvider(root).read_stable_digest(path, max_bytes=5_000_000)
             content = payload.decode("utf-8")
             stable_name = f"spdm-{hashlib.sha256(str(item['relative_path']).encode('utf-8')).hexdigest()[:12]}-{Path(str(item['name'])).name}"
             execution = run_manual_import(
@@ -1016,23 +880,22 @@ def ingest_ready_results(
     return outcomes
 
 
-def _ensure_ready_marker(path: Path, checksum: str) -> None:
+def _ensure_ready_marker(fs: LocalFsProvider, relative: str, checksum: str) -> None:
     """Publish the completion marker last, with an injectable recovery seam."""
-    marker = path.with_name(path.name + ".simdashboard-complete.json")
-    if marker.exists():
-        if _complete_sidecar(path, checksum):
+    marker = relative + ".simdashboard-complete.json"
+    if fs.exists(marker):
+        if _complete_sidecar(fs, relative, checksum):
             return
         raise SpdmStorageError("SPDM_RESULT_MARKER_CONFLICT", "결과 완료 marker가 기존 파일과 일치하지 않습니다.")
     payload = json.dumps({"state": "READY", "sha256": checksum}, sort_keys=True).encode("utf-8")
-    staged = marker.with_name(f".simdashboard-marker-{os.urandom(12).hex()}.tmp")
+    staged = fs.join(str(PurePosixPath(marker).parent), f".simdashboard-marker-{os.urandom(12).hex()}.tmp")
     try:
-        with staged.open("xb") as stream:
-            stream.write(payload); stream.flush(); os.fsync(stream.fileno())
-        _publish_no_replace(staged, marker)
+        fs.create_exclusive(staged, payload, zone=LEGACY)
+        fs.move_no_overwrite(staged, marker, zone=LEGACY)
     except FileExistsError:
-        if not _complete_sidecar(path, checksum):
+        if not _complete_sidecar(fs, relative, checksum):
             raise SpdmStorageError("SPDM_RESULT_MARKER_CONFLICT", "결과 완료 marker가 기존 파일과 일치하지 않습니다.")
     except OSError as exc:
         raise SpdmStorageError("SPDM_RESULT_MARKER_PUBLISH_FAILED", "결과 완료 marker를 게시하지 못했습니다.") from exc
     finally:
-        staged.unlink(missing_ok=True)
+        fs.remove(staged, zone=LEGACY, missing_ok=True)
