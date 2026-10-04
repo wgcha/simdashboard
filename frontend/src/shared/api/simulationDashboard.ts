@@ -2,7 +2,9 @@ import { apiFetch } from './auth'
 import { apiErrorFromResponse } from './errors'
 import { apiUrl } from './url'
 import { normalizeResultEnvironments, resultEnvironmentsPath, type RequestResultEnvironments } from './resultEnvironments'
+import { folderProgressPath, normalizeFolderProgress, type RequestFolderProgress } from './folderProgress'
 
+export { folderProgressPath, folderProgressStatusLabel, normalizeFolderProgress, type FolderProgressStatus, type FolderProgressStep, type RequestFolderProgress } from './folderProgress'
 export { keywordEnvironments, normalizeResultEnvironments, resolvedResultEnvironment, resultEnvironmentsPath, type RequestResultEnvironments } from './resultEnvironments'
 
 export type DashboardEnvironment = 'USAGE' | 'DISTRIBUTION'
@@ -37,6 +39,14 @@ export async function requestResultEnvironments(projectId: string, requestId: st
   const response = await apiFetch(apiUrl(resultEnvironmentsPath(projectId, requestId) as never), { signal, headers: { Accept: 'application/json' } })
   if (!response.ok) throw await apiErrorFromResponse(response)
   return normalizeResultEnvironments(await response.json() as Partial<RequestResultEnvironments>)
+}
+
+/** Folder-derived progress for a folder-registered request (folder-request-progress.md §3). */
+export async function requestFolderProgress(projectId: string, requestId: string, signal?: AbortSignal): Promise<RequestFolderProgress> {
+  if (!projectId || !requestId) throw new TypeError('프로젝트와 의뢰를 먼저 선택하세요.')
+  const response = await apiFetch(apiUrl(folderProgressPath(projectId, requestId) as never), { signal, headers: { Accept: 'application/json' } })
+  if (!response.ok) throw await apiErrorFromResponse(response)
+  return normalizeFolderProgress(await response.json() as Partial<RequestFolderProgress>)
 }
 
 async function read<T>(path: string, parameters: Record<string, string | undefined>, signal?: AbortSignal): Promise<T> {

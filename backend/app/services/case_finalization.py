@@ -1977,18 +1977,11 @@ def _status_operation(conn: ConnectionLike, scope: dict[str, Any], project_id: s
     return plan, _completed_response(plan, completed), False, deep
 
 
-def status(conn: ConnectionLike, *, project_id: str, request_id: str, environment: str,
-           case_id: str) -> dict[str, Any]:
-    """Request-wide and selected-Case latest completed records.
-
-    Every completed record is checked for signatures, scope and output existence/size.
-    Only the records status returns (request latest, selected Case latest) are hash
-    verified; a record that fails is counted as unverified and the next newer-to-older
-    candidate is tried, so damaged outputs are never shown as normal while large report
-    history cannot exhaust the per-call verification budget.
-    """
-    scope = _scope_for_status(conn, project_id, request_id, environment, case_id)
-    final_relative, metadata_relative = _final_paths(scope)
+def _scan_operations(conn: ConnectionLike, scope: dict[str, Any], project_id: str, request_id: str,
+                     environment: str, case_id: str | None,
+                     ) -> tuple[list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]], list[dict[str, Any]], int]:
+    """Read every operation folder (signatures, scope, output existence/size); no output hashing."""
+    _final_relative, metadata_relative = _final_paths(scope)
     metadata_dir = result_registration_paths._safe_existing(scope["root"], metadata_relative, allow_missing_leaf=True)
     incomplete: list[dict[str, Any]] = []
     candidates: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]] = []
@@ -2025,6 +2018,23 @@ def status(conn: ConnectionLike, *, project_id: str, request_id: str, environmen
                 incomplete.append({"operation_id": plan["operation_id"], "status": "RETRYABLE",
                                    "capture_id": plan.get("capture_id"), "previewed_at": plan.get("previewed_at")})
     candidates.sort(key=lambda row: str(row[1].get("confirmed_at", "")), reverse=True)
+    return candidates, incomplete, unverified_count
+
+
+def status(conn: ConnectionLike, *, project_id: str, request_id: str, environment: str,
+           case_id: str) -> dict[str, Any]:
+    """Request-wide and selected-Case latest completed records.
+
+    Every completed record is checked for signatures, scope and output existence/size.
+    Only the records status returns (request latest, selected Case latest) are hash
+    verified; a record that fails is counted as unverified and the next newer-to-older
+    candidate is tried, so damaged outputs are never shown as normal while large report
+    history cannot exhaust the per-call verification budget.
+    """
+    scope = _scope_for_status(conn, project_id, request_id, environment, case_id)
+    final_relative, _metadata_relative = _final_paths(scope)
+    candidates, incomplete, unverified_count = _scan_operations(conn, scope, project_id, request_id,
+                                                                environment, case_id)
     verified: dict[str, bool] = {}
     verification_budget = [0]
 
@@ -2054,6 +2064,34 @@ def status(conn: ConnectionLike, *, project_id: str, request_id: str, environmen
             "final_relative_path": final_relative, "latest": latest, "selected_case_latest": selected_case_latest,
             "retryable_operations": sorted(incomplete, key=lambda row: row["previewed_at"], reverse=True),
             "unverified_records": unverified_count}
+
+
+def latest_completed(conn: ConnectionLike, *, project_id: str, request_id: str,
+                     environment: str) -> tuple[dict[str, Any] | None, list[str] | None]:
+    """Request-wide newest completed Final record and the file names in its Reports folder.
+
+    The names are ``None`` when that Reports folder cannot be read; the record still stands.
+
+    Same signed-record, scope and output existence/size checks as ``status`` but no
+    content hashing (folder-request-progress.md P5: names and sizes only, no writes).
+    """
+    try:
+        scope_info = result_registration_paths._scope(conn, project_id, request_id, environment)
+        root, root_id, root_key = result_registration_paths._root(conn)
+    except result_registration_paths.ResultRegistrationError as exc:
+        raise CaseFinalizationError(exc.code, str(exc)) from exc
+    scope = {"root": root, "root_id": root_id, "root_key": root_key, "scope": scope_info,
+             "case_id": None, "case_path": "", "case_label": "", "capture_id": ""}
+    candidates, _incomplete, _unverified = _scan_operations(conn, scope, project_id, request_id,
+                                                            environment, None)
+    if not candidates:
+        return None, []
+    plan, record, _deep = candidates[0]
+    try:
+        entries = _reports_directory_entries(root, _expected_output_paths(plan)["Reports"], str(plan["operation_id"]))
+    except (CaseFinalizationError, OSError):
+        return record, None
+    return record, [name for name, is_file in entries if is_file]
 
 
 def _scope_for_status(conn: ConnectionLike, project_id: str, request_id: str,

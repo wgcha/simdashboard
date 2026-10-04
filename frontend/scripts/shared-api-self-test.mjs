@@ -1,5 +1,6 @@
 import { apiErrorMessage } from '../src/shared/api/errors.ts'
 import { formatServerTime, parseServerTime } from '../src/shared/api/serverTime.ts'
+import { folderProgressPath, folderProgressStatusLabel, normalizeFolderProgress } from '../src/shared/api/folderProgress.ts'
 import { keywordEnvironments, normalizeResultEnvironments, resolvedResultEnvironment, resultEnvironmentsPath } from '../src/shared/api/resultEnvironments.ts'
 import { depthRowEditable, depthRows, errorCode, errorItems, lowerRoleOptions, setDepthRole, sumDeleteCounts, validateLowerLevels, validateUpperLevels } from '../src/shared/api/depthSchemaModel.ts'
 
@@ -79,5 +80,17 @@ assert(none.environments.length === 0 && resolvedResultEnvironment(none) === nul
 
 assert(keywordEnvironments('24-071 사용 낙하').join() === 'USAGE' && keywordEnvironments('유통 진동').join() === 'DISTRIBUTION', 'request keyword picks the sync environment')
 assert(keywordEnvironments('사용 유통').join() === 'USAGE,DISTRIBUTION' && keywordEnvironments('').join() === 'USAGE,DISTRIBUTION', 'unclear keyword syncs both environments')
+
+// Folder request progress (folder-request-progress.md §3).
+assert(folderProgressPath('p 1', 'r/1') === '/api/projects/p%201/requests/r%2F1/folder-progress', 'folder-progress path must encode ids')
+const progress = normalizeFolderProgress({ applicable: true, environment: 'USAGE', completed: 2, total: 5, current_key: 'RESULTS', next_action: '결과 대기 Case 1개', checked_at: '2026-10-04T00:41:00+00:00', steps: [
+  { key: 'REGISTERED', label: '의뢰 등록', status: 'DONE', detail: null }, { key: 'MODELING', label: '해석 모델링', status: 'DONE', detail: 'Case 2/2 입력 있음' },
+  { key: 'RESULTS', label: '해석 결과', status: 'IN_PROGRESS', detail: 'Case 1/2 결과 있음' }, { key: 'FINAL', label: 'Final 지정', status: 'BOGUS', detail: '' }, { key: 'REPORT', label: '보고서', status: 'WAITING', detail: null }] })
+assert(progress.applicable && progress.completed === 2 && progress.total === 5 && progress.current_key === 'RESULTS' && progress.next_action === '결과 대기 Case 1개', 'applicable progress keeps counts and next action')
+assert(progress.steps[3].status === 'WAITING' && progress.steps[3].detail === null && progress.steps[2].detail === 'Case 1/2 결과 있음', 'unknown status is WAITING and empty detail is null')
+assert(!normalizeFolderProgress({ applicable: false, steps: [] }).applicable && !normalizeFolderProgress(null).applicable && !normalizeFolderProgress({ applicable: true }).applicable, 'not applicable or stepless responses keep the legacy overview')
+const finished = normalizeFolderProgress({ applicable: true, current_key: null, next_action: '', steps: [{ key: 'REGISTERED', label: '의뢰 등록', status: 'DONE', detail: null }] })
+assert(finished.current_key === null && finished.next_action === '완료', 'all steps done reads as 완료')
+assert(folderProgressStatusLabel('DONE') === '완료' && folderProgressStatusLabel('IN_PROGRESS') === '진행 중' && folderProgressStatusLabel('WAITING') === '대기', 'status labels follow §4')
 
 console.log('Shared API self-test passed.')

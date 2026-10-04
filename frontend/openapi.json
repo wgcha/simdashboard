@@ -10007,6 +10007,58 @@
         }
       }
     },
+    "/api/projects/{project_id}/requests/{request_id}/folder-progress": {
+      "get": {
+        "tags": [
+          "result-dashboard"
+        ],
+        "summary": "Folder Progress",
+        "description": "Progress of a folder-registered request from SPDM folders and the app DB (folder-request-progress.md §3).",
+        "operationId": "folder_progress_api_projects__project_id__requests__request_id__folder_progress_get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FolderRequestProgress"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/dashboard/finalizations/preview": {
       "post": {
         "tags": [
@@ -15812,6 +15864,136 @@
           "rules"
         ],
         "title": "FolderPreview"
+      },
+      "FolderProgressStep": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "enum": [
+              "REGISTERED",
+              "MODELING",
+              "RESULTS",
+              "FINAL",
+              "REPORT"
+            ],
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "DONE",
+              "IN_PROGRESS",
+              "WAITING"
+            ],
+            "title": "Status"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "status",
+          "detail"
+        ],
+        "title": "FolderProgressStep"
+      },
+      "FolderRequestProgress": {
+        "properties": {
+          "applicable": {
+            "type": "boolean",
+            "title": "Applicable"
+          },
+          "environment": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "USAGE",
+                  "DISTRIBUTION"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Environment"
+          },
+          "completed": {
+            "type": "integer",
+            "title": "Completed"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "current_key": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "REGISTERED",
+                  "MODELING",
+                  "RESULTS",
+                  "FINAL",
+                  "REPORT"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Key"
+          },
+          "next_action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Action"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/FolderProgressStep"
+            },
+            "type": "array",
+            "title": "Steps"
+          },
+          "checked_at": {
+            "type": "string",
+            "title": "Checked At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "applicable",
+          "environment",
+          "completed",
+          "total",
+          "current_key",
+          "next_action",
+          "steps",
+          "checked_at"
+        ],
+        "title": "FolderRequestProgress"
       },
       "FolderRule": {
         "properties": {

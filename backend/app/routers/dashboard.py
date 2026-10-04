@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 from ..database_connection import connect
 from ..modules.access_control import PROJECT_DATA_VIEW, RESULT_IMPORT, SYSTEM_CATALOG_MANAGE, require_permission, require_resource_permission
 from ..security import write_audit_event
-from ..services import dashboard_capture as storage, dashboard_queries as queries
+from ..services import dashboard_capture as storage, dashboard_queries as queries, folder_request_progress
 
 router = APIRouter(prefix="/api/dashboard", tags=["result-dashboard"])
 project_requests_router = APIRouter(tags=["result-dashboard"])
@@ -20,6 +20,24 @@ class ResultEnvironmentCounts(BaseModel):
 class ResultEnvironments(BaseModel):
     environments: list[Literal["USAGE", "DISTRIBUTION"]]
     case_counts: ResultEnvironmentCounts
+
+
+class FolderProgressStep(BaseModel):
+    key: Literal["REGISTERED", "MODELING", "RESULTS", "FINAL", "REPORT"]
+    label: str
+    status: Literal["DONE", "IN_PROGRESS", "WAITING"]
+    detail: str | None
+
+
+class FolderRequestProgress(BaseModel):
+    applicable: bool
+    environment: Literal["USAGE", "DISTRIBUTION"] | None
+    completed: int
+    total: int
+    current_key: Literal["REGISTERED", "MODELING", "RESULTS", "FINAL", "REPORT"] | None
+    next_action: str | None
+    steps: list[FolderProgressStep]
+    checked_at: str
 
 
 class CaptureInput(BaseModel):
@@ -107,6 +125,17 @@ def result_environments(project_id: str, request_id: str, request: Request):
     if found is None:
         raise HTTPException(404, {"code": "REQUEST_NOT_FOUND", "message": "의뢰를 찾을 수 없습니다."})
     return found
+
+
+@project_requests_router.get("/api/projects/{project_id}/requests/{request_id}/folder-progress",
+                             response_model=FolderRequestProgress)
+def folder_progress(project_id: str, request_id: str, request: Request):
+    """Progress of a folder-registered request from SPDM folders and the app DB (folder-request-progress.md §3)."""
+    with connect() as conn:
+        require_resource_permission(request, PROJECT_DATA_VIEW, "request", request_id, conn=conn)
+        if not folder_request_progress.request_in_project(conn, project_id, request_id):
+            raise HTTPException(404, {"code": "REQUEST_NOT_FOUND", "message": "의뢰를 찾을 수 없습니다."})
+        return folder_request_progress.folder_progress(conn, project_id, request_id)
 
 
 @router.post("/scans")

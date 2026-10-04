@@ -26,7 +26,7 @@
 - Case = 의뢰의 `dashboard_cases`(Working 아래 SIMULATION_CASE). Case가 0개면 2·3은 `대기`.
 - 상태: `DONE` / `IN_PROGRESS`(n>0, n<m) / `WAITING`. 앞 단계가 완료되지 않아도 뒤 단계 조건이 충족되면 DONE으로 표시한다(폴더 사실 그대로).
 - 현재 단계 = 첫 번째 DONE이 아닌 단계. "현재 할 일" 문구:
-  - MODELING: `입력 파일 대기 Case k개`
+  - MODELING: `입력 파일 대기 Case k개` (Case가 0개면 `Working에 Case 폴더를 추가하세요`)
   - RESULTS: `결과 대기 Case k개`
   - FINAL: `대표 Case를 Final로 지정하세요`
   - REPORT: `Final 보고서를 저장하세요`
@@ -50,13 +50,13 @@
 
 - `applicable=false`: 폴더 등록이 없는 의뢰(구 방식). 프론트는 기존 작업 항목 화면을 쓴다.
 - 권한: Case 결과 조회와 같은 권한(`PROJECT_DATA_VIEW`).
-- 계산 비용: Scene 폴더 목록과 확장자만 조회(재귀 없음, Scene 바로 아래만). Final 판정은 기존 finalization 읽기 함수를 재사용. 결과는 의뢰별 30초 메모(폴더 동기화 주기와 같음).
+- 계산 비용: Scene 경로는 저장된 폴더 스냅샷·등록 미리보기에서만 얻는다(실시간 트리 스캔 없음). 각 Scene 바로 아래 이름·확장자만 조회(재귀 없음). 저장된 Scene이 없으면 MODELING은 대기와 사유. Final 판정은 기존 finalization 읽기 함수를 재사용. 결과는 의뢰별 30초 메모(폴더 동기화 주기와 같음).
 - SPDM root가 없거나 폴더를 읽을 수 없으면 해당 단계 `detail`에 사유를 넣고 `WAITING`.
 
 ## 4. 화면 (의뢰 개요)
 
 - `applicable=true`이면 기존 단계 표시줄에 위 5단계를 같은 스타일로 그린다. 요약은 `n / 5 단계 완료`, "현재 할 일"은 `next_action`.
-- 수동 시작·완료 버튼과 "작업 이어하기"는 숨기고, 현재 단계에 맞는 화면으로 가는 버튼 1개를 둔다: MODELING·RESULTS → Case 결과, FINAL·REPORT → Case 결과(Final 지정), 완료 → Case 결과.
+- 수동 시작·완료 버튼과 "작업 이어하기"는 숨기고, 현재 단계에 맞는 화면으로 가는 버튼 1개를 둔다: MODELING·RESULTS → Case 결과, FINAL·REPORT → Case 결과(Final 지정 패널은 결과 화면 헤더에 항상 있음), 완료 → Case 결과.
 - 30초마다 다시 조회한다(화면이 보일 때만).
 
 ## 5. Verifier 기준
@@ -66,4 +66,4 @@
 3. Final 지정 후 FINAL DONE, Reports에 pptx/html 저장 후 REPORT DONE
 4. 구 방식 의뢰 → `applicable=false`, 기존 화면 유지
 5. 파일 본문 읽기 0, SPDM 쓰기 0(파일 수·mtime 불변)
-6. 권한(비멤버 거부) 동일
+6. 권한은 Case 결과 조회(`/api/dashboard/catalog`)와 동일

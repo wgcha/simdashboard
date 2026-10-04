@@ -1132,3 +1132,10 @@
 - 원인: 폴더 등록 의뢰는 overview가 없어 `App.tsx` 준비 단계 대체 화면이 변수 카탈로그 등 무관한 페이지까지 가로챔. 사이드바 이동이 이전 쿼리를 그대로 가져가 의뢰가 다시 선택되며 간헐 재현.
 - 변경: 대체 화면은 의뢰 작업 페이지에만, 변수 카탈로그 빈 상태, 페이지 전환 시 의뢰 화면 전용 쿼리 제거. 계약 `docs/contracts/workspace-navigation.md`.
 - 검증: tsc·build·test:api·test:routing·architecture 자체 테스트 통과, check:architecture 기존 4건 외 추가 없음, 신규 e2e 5/5. simulation-dashboard 1건·workspace-routing 2건 실패는 기준 커밋에서도 실패. 독립 Verifier 미투입(저위험 UI 범위).
+
+## 2026-10-04 폴더 등록 의뢰 진척 단계 (폴더 상태 자동 계산)
+
+- 계약: `docs/contracts/folder-request-progress.md`. 등록→모델링(Scene 바로 아래 `.rad`/`.fem`)→결과→Final(대표 Case 1개)→보고서, 의뢰 단위, 수동 입력 없음.
+- 변경: `GET /api/projects/{p}/requests/{r}/folder-progress`(30초 메모, 실시간 스캔 없음, 파일 본문 읽기·SPDM 쓰기 없음), `case_finalization.latest_completed`(읽기 전용, status 동작 불변), 의뢰 개요 단계 표시줄·현재 할 일·Case 결과 버튼.
+- 검증: DuckDB 전체 2040 passed/9 failed(기존 9건), Postgres finalization·progress 통과, 프론트 tsc·build·test:api, e2e folder-request-progress 3/3. request-centric-workspace e2e 4건 실패는 기준 커밋에서도 동일.
+- 독립 검수: Verifier 1회(Blocker: Scene 경로 위해 전체 트리 재스캔 → 저장 스냅샷만 사용으로 수정, Final/보고서 판정 분리). 권한은 catalog와 동일(전사 PROJECT_DATA_VIEW). Codex Security 미실행.

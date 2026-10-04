@@ -7,7 +7,7 @@ import { FocusedRequestOverview } from './FocusedRequestOverview'
 import { WorkflowStepItem } from './WorkflowStepItem'
 import './RequestWorkflowDensity.css'
 const ResponsiveGridLayout = WidthProvider(Responsive) as unknown as React.ComponentType<any>
-export function WorkflowView({ workflows, stageEditMode, layoutEditMode, dashboardLayout, layoutVersion, onDashboardLayoutChange, onStepChange, onAddStep, onDeleteStep, onMoveStep, onOpenAnalysis, activeRequestId, loadCaseReady = true, onOpenData = () => {}, onOpenWorkbench, onSelectRequest }: {
+export function WorkflowView({ workflows, stageEditMode, layoutEditMode, dashboardLayout, layoutVersion, onDashboardLayoutChange, onStepChange, onAddStep, onDeleteStep, onMoveStep, onOpenAnalysis, activeRequestId, loadCaseReady = true, onOpenData = () => {}, onOpenWorkbench, onOpenCaseResults, onSelectRequest }: {
   workflows: Workflow[]
   stageEditMode: boolean
   layoutEditMode: boolean
@@ -23,6 +23,7 @@ export function WorkflowView({ workflows, stageEditMode, layoutEditMode, dashboa
   loadCaseReady?: boolean
   onOpenData?: () => void
   onOpenWorkbench?: (requestId: string) => void
+  onOpenCaseResults?: () => void
   onSelectRequest?: (requestId: string) => void
 }) {
   const [sortKey, setSortKey] = useState<'project' | 'category' | 'product' | 'owner' | 'time'>('time')
@@ -57,7 +58,7 @@ export function WorkflowView({ workflows, stageEditMode, layoutEditMode, dashboa
     const focusedWorkflow = workflows.find((workflow) => workflow.request.id === activeRequestId) ?? ordered[0]
     if (!focusedWorkflow) return <WorkflowPendingState hasWorkflows={false} onOpenData={onOpenData} />
     const otherWorkflows = ordered.filter((workflow) => workflow.request.id !== focusedWorkflow?.request.id)
-    return <FocusedRequestOverview workflow={focusedWorkflow} otherWorkflows={otherWorkflows} onOpenWorkbench={onOpenWorkbench} onOpenAnalysis={onOpenAnalysis} onSelectRequest={onSelectRequest} sortKey={sortKey} onSortChange={setSortKey} />
+    return <FocusedRequestOverview workflow={focusedWorkflow} otherWorkflows={otherWorkflows} onOpenWorkbench={onOpenWorkbench} onOpenAnalysis={onOpenAnalysis} onOpenCaseResults={onOpenCaseResults} onSelectRequest={onSelectRequest} sortKey={sortKey} onSortChange={setSortKey} />
   }
 
   const renderLane = (workflow: Workflow) => {

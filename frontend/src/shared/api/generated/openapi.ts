@@ -3250,6 +3250,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{project_id}/requests/{request_id}/folder-progress": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Folder Progress
+         * @description Progress of a folder-registered request from SPDM folders and the app DB (folder-request-progress.md §3).
+         */
+        get: operations["folder_progress_api_projects__project_id__requests__request_id__folder_progress_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/dashboard/finalizations/preview": {
         parameters: {
             query?: never;
@@ -5072,6 +5092,42 @@ export interface components {
             rules: components["schemas"]["FolderRule"][];
             /** Excluded Paths */
             excluded_paths?: string[];
+        };
+        /** FolderProgressStep */
+        FolderProgressStep: {
+            /**
+             * Key
+             * @enum {string}
+             */
+            key: "REGISTERED" | "MODELING" | "RESULTS" | "FINAL" | "REPORT";
+            /** Label */
+            label: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "DONE" | "IN_PROGRESS" | "WAITING";
+            /** Detail */
+            detail: string | null;
+        };
+        /** FolderRequestProgress */
+        FolderRequestProgress: {
+            /** Applicable */
+            applicable: boolean;
+            /** Environment */
+            environment: ("USAGE" | "DISTRIBUTION") | null;
+            /** Completed */
+            completed: number;
+            /** Total */
+            total: number;
+            /** Current Key */
+            current_key: ("REGISTERED" | "MODELING" | "RESULTS" | "FINAL" | "REPORT") | null;
+            /** Next Action */
+            next_action: string | null;
+            /** Steps */
+            steps: components["schemas"]["FolderProgressStep"][];
+            /** Checked At */
+            checked_at: string;
         };
         /** FolderRule */
         FolderRule: {
@@ -14100,6 +14156,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResultEnvironments"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    folder_progress_api_projects__project_id__requests__request_id__folder_progress_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FolderRequestProgress"];
                 };
             };
             /** @description Validation Error */
