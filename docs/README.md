@@ -14,7 +14,7 @@
 | Case 결과·소재물성 화면·자동 반영·보고서·Final | [Case 결과 흐름 재설계 계획](plans/case-results-workflow-redesign.md) | 위치 정본은 [공용 위치 계약](features/folder-schema-refresh.md), 보고서 형식·HTML 영상 상한은 [Case 결과 보고서](features/case-report.md) |
 | SPDM 폴더·기존 수집 API | [SPDM 연동 계약](spdm-storage-workflow.md) | 경로·확장자는 [저장 계약](storage-folder-and-file-contract.md) |
 | Folder Schema 위치·Refresh | [공용 위치·Refresh 계약](features/folder-schema-refresh.md) | 결과 등록은 [현재 결과 등록 계약](features/result-registration.md), 배포 영향은 [Windows 배포 정책](windows-deployment-policy.md) |
-| 폴더 역할(깊이 스키마)·자동 탐색·등록 삭제 | [깊이 스키마 계약](contracts/depth-schema.md) | 결정 이력은 [결정 기록](decisions.md), 결과 화면 환경 판정은 [환경 자동 판정 계약](contracts/case-results-environment.md), 의뢰 진척은 [폴더 진척 계약](contracts/folder-request-progress.md) |
+| 폴더 역할(깊이 스키마)·자동 탐색·등록 삭제 | [깊이 스키마 계약](contracts/depth-schema.md) | 결정 이력은 [결정 기록](decisions.md), 결과 화면 환경 판정은 [환경 자동 판정 계약](contracts/case-results-environment.md), 의뢰 진척은 [폴더 진척 계약](contracts/folder-request-progress.md), 저장소 접근은 [저장소 공급자 계약](contracts/storage-provider.md) |
 | Working/Final·규칙 편집·최종확정 | [최종확정 계약](features/case-finalization.md), [현재 구현 계획](plans/folder-schema-working-final-implementation.md) | 위치 정본은 [공용 위치 계약](features/folder-schema-refresh.md) |
 | 계정·프로젝트 권한 | [권한 구현 가이드](access-control-and-menu-policy-implementation-guide.md) | 동작 요구는 [권한 명세](access-control-functional-specification.md) |
 | DB·migration·저장 경로 | [DB 통합 가이드](backend-sql-integration-guide.md), [저장 경로 계약](storage-folder-and-file-contract.md) | 현재 구성은 [아키텍처](current-architecture.md), 배포 영향은 [배포 정책](windows-deployment-policy.md) |
