@@ -40,7 +40,7 @@ class ConfirmInput(FinalizationInput):
     report_formats: list[Literal["pptx", "html"]] = Field(default_factory=list, max_length=2)
 
 
-_CONFLICT_CODES = {"FINALIZATION_ALREADY_COMPLETED", "FINALIZATION_NO_CURRENT", "FINALIZATION_REPORT_FORMATS_MISMATCH",
+_CONFLICT_CODES = {"FINALIZATION_ALREADY_COMPLETED", "FINALIZATION_NO_CURRENT", "FINALIZATION_CURRENT_UNVERIFIED", "FINALIZATION_CURRENT_MISSING", "FINALIZATION_REPORT_FORMATS_MISMATCH",
                    "FINALIZATION_REPORTS_UNEXPECTED_FILE", "FINALIZATION_LEGACY_REPORTS_PRESENT",
                    "FINALIZATION_JOB_ACTIVE", "FINALIZATION_PUBLISH_BUSY", "FINALIZATION_SOURCE_BUSY"}
 
@@ -212,6 +212,9 @@ class SummaryRepairInput(BaseModel):
     request_id: str = Field(min_length=1, max_length=128)
     environment: Literal["USAGE", "DISTRIBUTION"]
     case_id: str = Field(min_length=1, max_length=128)
+    # Audited override: allow moving the pointer off a missing current Final and replacing a
+    # Final/current.json that the app did not write (W3 review M1/M2).
+    override: bool = False
 
 
 @router.post("/summary/repair")
@@ -222,13 +225,14 @@ def repair_summary(payload: SummaryRepairInput, request: Request):
         try:
             result = service.repair_summary(conn, project_id=payload.project_id, request_id=payload.request_id,
                                             environment=payload.environment, case_id=payload.case_id,
-                                            actor=request.state.principal.user_id)
+                                            actor=request.state.principal.user_id, override=payload.override)
         except service.CaseFinalizationError as exc:
             raise _error(exc) from exc
         write_audit_event(
             request=request, principal=request.state.principal, status_code=200,
             action="CASE_FINALIZATION_SUMMARY_REPAIRED",
             detail={"project_id": payload.project_id, "request_id": payload.request_id, "environment": payload.environment,
+                    "override": payload.override,
                     "current_final": (result.get("current_final") or {}).get("operation_id")},
             connection=conn,
         )

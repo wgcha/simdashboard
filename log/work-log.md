@@ -1212,3 +1212,12 @@
 - 변경: Case 결과 보기 탭에 `Case 비교`(사용·유통). 2~4개 Case(기본 4개 이하 전부, 초과 시 최신 4개), 기준 Case, 유통은 경로 표시줄 경로를 이름으로 각 Case에 맞춤. 값은 각 Case 최신 결과(`latest:`)를 요약 탭과 같은 API·같은 함수로 읽음(신규 `distributionValues.ts`를 보고서 요약과 공유, 사용은 `usageEvaluations.ts`). 표: Scene 합집합(정확한 이름), Δ 값·%, 행별 최저, Case 최대, 없음 강조, W6 이름 경고 아이콘, 단위 불일치 시 Δ 대신 경고; 사용 다섯 평가 OK/NG 색. 열별 `이 Case를 Final 지정` → 기존 Final 창(`CaseFinalizationPanel`에 `openRequest` prop만 추가). 보고서 창 `Case 비교 포함`(기본 꺼짐) → PPTX 끝 표 슬라이드·HTML 끝 구역, 꺼지면 기존 출력 동일. 백엔드·DB·의존성 변경 없음.
 - 검증: tsc·build·test:routing·test:api 통과, check:architecture 기존 4건만(App.tsx 불변). e2e case-compare 7/7(신규), case-report 11/11, case-finalization 6/6, simulation-dashboard 17/18(폐기된 capture-pin 1건; 4K 레이아웃 검사의 탭 개수 4→5 갱신). 스크린샷 `/tmp/claude-0/w5-case-compare-2560-14pt.png`, `-18pt.png`, `w5-case-compare-usage-2560-18pt.png`.
 - 미수행: 독립 검수, 실제 데이터 확인.
+
+## 2026-10-06 W3 검수 지적 수정과 W7 보고서 A안
+
+- W3 M1: 상태의 `current_final.verification`(SHA256·STAT_SINCE_COMPLETION·SIZE·FAILED·MISSING)·`verified`; 해시 불일치면 `summary.state` CURRENT_UNVERIFIED, 서명 포인터의 Final이 사라졌고 더 새 완료가 없으면 현재 Final을 "없음"(CURRENT_MISSING)으로 두고 이전 Final로 조용히 되돌리지 않음. 갱신(repair)은 현재 Final 전체를 예산 없이 다시 해시해야 진행(409 `FINALIZATION_CURRENT_UNVERIFIED`), 사라진 경우 409 `FINALIZATION_CURRENT_MISSING`, 감사 기록되는 `override: true`로만 남은 최신 Final로 이동. 헤더 경고 표시.
+- W3 M2: 앱이 만들지 않은 `Final/current.json`(다른 내용·형식·16 MiB 초과·링크·폴더)은 바꾸지 않음(`FINALIZATION_SUMMARY_CONFLICT`, 완료 유지, 상태 CONFLICT, 헤더 "요약 파일 충돌(관리자 확인)"). override는 일반 파일만 교체, 링크·폴더는 절대 교체 안 함.
+- W3 L1 요약 16 MiB 읽기 상한·(크기, 수정 시각, 식별자) 캐시, 목록 상한 10,000개, 다른 환경 항목은 서명 포인터·완료 기록에서 재구성. L2 포인터 없으면 완료 시각 하한 = 서명된 complete.json 최댓값. L3 1시간 넘은 `.current.json.<hex>.tmp`만 정리. `designated_by` 개인정보는 SPDM 협의로 남김(문서화).
+- W7: 보고서 창·Final 창 공통 `reportPreferences.ts`·`reportMeta.ts`·`CaseReportFields.tsx`. 업로드 템플릿 레이아웃이면 레이아웃 선택 옆 안내, Final 창 레이아웃 선택(기본 = 사용자·의뢰별 마지막 사용 레이아웃, localStorage try/catch, 없으면 표준), 작성자(표시 이름) 자동 입력·개발단계·검토조건·결론을 PPTX(옵션+표지 하단 상자, 렌더 때만)와 HTML 범위 목록에. 서버·current.json에는 넣지 않음.
+- 검증: 검수자 W3 테스트 이식+확장 7건 포함 `test_case_finalization_current.py` 14 passed; current·copy_jobs·reports·environment flow·storage provider(+boundary)·spdm_storage_workflow·security 170 passed/2 skipped. OpenAPI 재생성(override)·계약 OK. 프론트 tsc·build·test:api, check:architecture 기존 4건만. e2e case-finalization·case-report·case-compare 26/26.
+- 미수행: 독립 재검수, Codex Security(미가용), Windows·SMB, SPDM 형식 협의.

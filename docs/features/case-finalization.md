@@ -85,7 +85,15 @@
   - SPDM은 앱의 HMAC 키를 모르므로 서명 필드는 넣지 않고, 추적용으로 `complete.json`의 SHA-256을 적는다. `summary.state`는 요약 파일의 현재 환경 항목이 현재 Final ID와 그 `complete.json` 해시를 가리키면 OK, 다르면 STALE, 없거나 읽을 수 없으면 MISSING, 완료된 Final이 없으면 NONE.
 - 상태 조회 추가 필드: `current_final`(operation_id, case_id, case_label, case_path, designated_by, designated_at, schema_version, output_paths, verified), `final_history`(최신순 최대 50, `role: CURRENT|PREVIOUS`), `summary`(state, path, final_id).
 - 화면: Case 결과 헤더에 `현재 Final · <Case> · <지정자> · <시각>`, 요약 파일 갱신 필요 표시와 **요약 파일 갱신** 버튼. 이 Case의 마지막 Final이 현재가 아니면 배지가 **이전 Final**. Final 지정 창은 현재 Final이 다른 Case이면 "현재 Final(Case X)을 이전 Final로 바꾸고 이 Case를 Final로 지정합니다" 확인란을 체크해야 확정할 수 있고, 같은 Case면 안내만 보인다. 창에 Final 이력(현재/이전)을 보인다.
-- 알려진 한계: `designated_by`는 사용자 ID다. SPDM 협의 때 이름·필드를 다시 정한다.
+- 검수 반영(2026-10-06, c836593 이후):
+  - **현재 Final 검증:** 상태 조회의 `current_final.verification`은 SHA256·STAT_SINCE_COMPLETION·SIZE·FAILED·MISSING이고 `verified`는 FAILED·MISSING일 때 false다. 이때 `summary.state`는 OK가 아니라 `CURRENT_UNVERIFIED`(해시 불일치)·`CURRENT_MISSING`이며 헤더에 경고를 크게 보인다.
+  - **갱신(repair)은 해시 확인 필수:** 현재 Final의 모든 출력 파일을 예산 없이 동기로 다시 해시하고, 다르면 409 `FINALIZATION_CURRENT_UNVERIFIED`로 요약 파일을 바꾸지 않는다(큰 Final은 요청이 오래 걸릴 수 있음 — W9 측정, 필요하면 작업 스레드로 옮김).
+  - **현재 Final이 사라진 경우:** 서명된 포인터가 가리키는 Final의 기록·출력이 확인되지 않고 그보다 새 완료도 없으면 현재 Final은 "없음"(`missing: true`)으로 표시하고, 더 오래된 Final로 조용히 되돌리지 않는다. 갱신은 409 `FINALIZATION_CURRENT_MISSING`. 관리자가 확인 뒤 `override: true`로 요청하면(감사 기록 `override`) 남아 있는 가장 새 Final로 옮긴다.
+  - **앱이 만들지 않은 `Final/current.json`:** 일반 파일인데 앱 형식이 아니거나(16 MiB 초과 포함) 바로가기·폴더이면 바꾸지 않는다(`FINALIZATION_SUMMARY_CONFLICT`, 완료는 유지, `summary.state` CONFLICT, 헤더 "요약 파일 충돌(관리자 확인)"). `override: true`는 앱 형식이 아닌 일반 파일만 바꿀 수 있고 바로가기·폴더는 절대 바꾸지 않는다.
+  - 요약 파일은 16 MiB까지 읽고 (크기, 수정 시각, 식별자)로 캐시한다. 목록에 넣는 CAE 파일 상한은 10,000개(넘으면 `complete.json`을 가리킴). 다른 환경 항목은 기존 요약에서 복사하지 않고 그 환경의 서명된 포인터와 완료 기록에서 다시 만든다(없으면 뺌).
+  - 포인터가 없으면 다음 완료 시각의 하한은 서명된 `complete.json`들의 가장 늦은 `confirmed_at`이다.
+  - 다음 요약 쓰기 때 1시간 넘은 `.current.json.<32 hex>.tmp`(정확히 이 이름)만 지운다.
+- 알려진 한계·개인정보: `designated_by`는 사용자 ID 그대로이며(이름 아님) SPDM이 읽는 파일에 들어간다. 표시 이름 추가·ID 제외는 SPDM 협의 때 정한다.
 
 ## 기준: 최신 결과
 

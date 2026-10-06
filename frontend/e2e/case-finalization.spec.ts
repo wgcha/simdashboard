@@ -1,3 +1,4 @@
+import { inflateRawSync } from 'node:zlib'
 import { expect, test, type Page, type Route } from '@playwright/test'
 import { loginWorkspace, mockResultEnvironments } from './workspace-test-helpers'
 
@@ -111,7 +112,32 @@ const usagePreview = {
   report_paths: { pptx: `${usageReportsDir}/Usage_Case_report.pptx`, html: `${usageReportsDir}/Usage_Case_report.html` },
 }
 
-type Uploads = Array<{ format: string; query: URLSearchParams; contentType: string; head: string; size: number; text: string }>
+type Uploads = Array<{ format: string; query: URLSearchParams; contentType: string; head: string; size: number; text: string; body: Buffer }>
+
+/** Every slide XML of a PPTX (minimal ZIP reader: central directory + raw deflate). */
+function slideXml(buffer: Buffer) {
+  let end = buffer.length - 22
+  while (end >= 0 && buffer.readUInt32LE(end) !== 0x06054b50) end -= 1
+  const count = buffer.readUInt16LE(end + 10)
+  let offset = buffer.readUInt32LE(end + 16)
+  const slides: string[] = []
+  for (let index = 0; index < count; index += 1) {
+    const method = buffer.readUInt16LE(offset + 10)
+    const compressedSize = buffer.readUInt32LE(offset + 20)
+    const nameLength = buffer.readUInt16LE(offset + 28)
+    const extraLength = buffer.readUInt16LE(offset + 30)
+    const commentLength = buffer.readUInt16LE(offset + 32)
+    const localOffset = buffer.readUInt32LE(offset + 42)
+    const entryName = buffer.toString('utf8', offset + 46, offset + 46 + nameLength)
+    if (/^ppt\/slides\/slide\d+\.xml$/.test(entryName)) {
+      const dataStart = localOffset + 30 + buffer.readUInt16LE(localOffset + 26) + buffer.readUInt16LE(localOffset + 28)
+      const data = buffer.subarray(dataStart, dataStart + compressedSize)
+      slides.push((method === 8 ? inflateRawSync(data) : data).toString('utf8'))
+    }
+    offset += 46 + nameLength + extraLength + commentLength
+  }
+  return slides.join('\n')
+}
 
 async function fulfillJson(route: Route, body: unknown, status = 200) {
   await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
@@ -135,7 +161,11 @@ function jobView(plan: typeof preview, formats: Array<'pptx' | 'html'>, state: J
   }
 }
 
-async function installMocks(page: Page, options: { failFirstUpload?: boolean; multiOption?: boolean; jobStates?: JobState[]; status?: () => Record<string, unknown> } = {}) {
+async function installMocks(page: Page, options: { failFirstUpload?: boolean; multiOption?: boolean; jobStates?: JobState[]; status?: () => Record<string, unknown>; layouts?: unknown[] } = {}) {
+  if (options.layouts) {
+    const layouts = options.layouts
+    await page.route('**/api/report-layouts', (route) => fulfillJson(route, layouts))
+  }
   const uploads: Uploads = []
   const confirms: Array<Record<string, unknown>> = []
   const jobPolls: string[] = []
@@ -177,7 +207,7 @@ async function installMocks(page: Page, options: { failFirstUpload?: boolean; mu
     const url = new URL(request.url())
     const body = request.postDataBuffer() ?? Buffer.alloc(0)
     const format = url.pathname.split('/').pop() ?? ''
-    uploads.push({ format, query: url.searchParams, contentType: request.headers()['content-type'] ?? '', head: body.subarray(0, 15).toString('latin1'), size: body.length, text: format === 'html' ? body.toString('utf8') : '' })
+    uploads.push({ format, query: url.searchParams, contentType: request.headers()['content-type'] ?? '', head: body.subarray(0, 15).toString('latin1'), size: body.length, text: format === 'html' ? body.toString('utf8') : '', body: Buffer.from(body) })
     if (failures > 0) {
       failures -= 1
       return fulfillJson(route, { detail: { code: 'FINALIZATION_REPORT_PPTX_INVALID', message: 'PPTX 보고서를 읽을 수 없습니다.' } }, 422)
@@ -360,6 +390,48 @@ test('현재 Final이 다른 Case면 헤더에 보이고 확인해야 재지정�
   await header.getByRole('button', { name: '요약 파일 갱신', exact: true }).click()
   await expect(page.getByTestId('case-final-summary-repair')).toHaveCount(0, { timeout: 10_000 })
   expect(repairs[0]).toMatchObject({ project_id: 'project-tv-001', request_id: 'request-drop-001', environment: 'DISTRIBUTION', case_id: CASE_ID })
+  expect(errors).toEqual([])
+})
+
+test('Final 보고서는 고른 레이아웃과 보고서 정보를 쓰고 업로드 템플릿 미적용을 레이아웃 옆에 알린다', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 })
+  const errors: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  const base = { coverVariant: 'balanced', sectionOrder: ['series', 'scalar', 'media'], variablePlacements: [], includeMedia: true, description: '' }
+  const standard = { id: 'report-layout-standard', name: '표준', version: 1, ...base, accentColor: '1F6FB2' }
+  const company = { id: 'company-template', name: '회사 템플릿', version: 2, ...base, accentColor: 'C0392B', slideMaster: { backgroundColor: 'F8FBFD', design: 'frame', accentColor: 'C0392B' }, templateSource: 'pptx_upload', templateAssetId: 'template-asset-1', templateBindings: {} }
+  const layouts = [standard, company].map((definition) => ({ id: definition.id, name: definition.name, description: '', version: definition.version, definition, is_system: definition.id === 'report-layout-standard', is_active: true, created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z', updated_by: 'admin' }))
+  const { uploads } = await installMocks(page, { layouts, jobStates: ['COMPLETE'] })
+  const dialog = await openFinal(page)
+  const layoutBox = dialog.getByTestId('case-final-layout')
+  const select = layoutBox.getByRole('combobox', { name: 'PPTX 레이아웃' })
+  await expect(select).toHaveValue('report-layout-standard')
+  await expect(layoutBox.getByTestId('case-report-template-note')).toHaveCount(0)
+  await select.selectOption('company-template')
+  await expect(layoutBox.getByTestId('case-report-template-note')).toContainText('업로드 PPTX 템플릿은 Case 보고서에 적용되지 않습니다')
+  const meta = dialog.getByTestId('case-report-meta')
+  await expect(meta.getByRole('textbox', { name: '작성자' })).not.toHaveValue('')
+  await meta.getByRole('textbox', { name: '작성자' }).fill('김해석')
+  await meta.getByRole('textbox', { name: '개발단계' }).fill('DV 3차')
+  await meta.getByRole('textbox', { name: '검토조건' }).fill('낙하 1.2 m 조건')
+  await meta.getByRole('textbox', { name: '결론' }).fill('기준 만족 W7')
+  await dialog.getByRole('checkbox', { name: /HTML/ }).check()
+  await page.screenshot({ path: `${SHOT_DIR}/case-final-layout-meta-1440.png` })
+  await dialog.getByRole('button', { name: 'Final 지정 확정', exact: true }).click()
+  await expect(page.getByRole('dialog', { name: 'Final 지정 완료' })).toBeVisible({ timeout: 20_000 })
+  const pptx = uploads.find((item) => item.format === 'pptx')!
+  const html = uploads.find((item) => item.format === 'html')!
+  const slides = slideXml(pptx.body)
+  // The chosen layout (its accent colour), rendered natively (no template), with the report information.
+  expect(slides).toContain('C0392B')
+  expect(slides).toContain('김해석')
+  expect(slides).toContain('DV 3차')
+  expect(html.text).toContain('<dt>개발단계</dt><dd>DV 3차</dd>')
+  expect(html.text).toContain('<dt>검토조건</dt><dd>낙하 1.2 m 조건</dd>')
+  expect(html.text).toContain('<dt>결론</dt><dd>기준 만족 W7</dd>')
+  // The choice is remembered for the next Final/보고서 dialog of this request.
+  const remembered = await page.evaluate(() => Object.entries(window.localStorage).filter(([key]) => key.startsWith('vdsim.caseReport.lastLayout.v1:')).map(([, value]) => value))
+  expect(remembered).toEqual(['company-template'])
   expect(errors).toEqual([])
 })
 

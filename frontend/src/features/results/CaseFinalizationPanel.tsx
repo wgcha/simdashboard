@@ -13,6 +13,10 @@ import {
 import type { DashboardEnvironment } from '../../shared/api/simulationDashboard'
 import type { CaseReportFinalScope } from './caseReport/caseReport'
 import { buildFinalReports, type FinalReportFiles } from './caseReport/finalReports'
+import { CaseReportMetaFields, TemplateNotAppliedNotice } from './caseReport/CaseReportFields'
+import { defaultReportLayout, initialReportMeta, rememberReportLayout, usesUploadedTemplate, type CaseReportMeta } from './caseReport/reportPreferences'
+import { reportApi } from '../../shared/api/reportLayouts'
+import type { ReportLayout } from '../../types'
 import './CaseFinalizationPanel.css'
 
 type Props = {
@@ -83,6 +87,10 @@ export function CaseFinalizationPanel(props: Props) {
   const [formats, setFormats] = useState<Record<CaseFinalizationReportFormat, boolean>>({ pptx: true, html: false })
   // W3: re-designating while another Case is the current Final needs an explicit acknowledgement.
   const [replaceAcknowledged, setReplaceAcknowledged] = useState(false)
+  // W7: Final reports use the chosen layout (default: last used in the 보고서 dialog) and report information.
+  const [layouts, setLayouts] = useState<ReportLayout[]>([])
+  const [layoutId, setLayoutId] = useState<string | null>(null)
+  const [meta, setMeta] = useState<CaseReportMeta>(initialReportMeta)
   const [includeVideos, setIncludeVideos] = useState(false)
   const [phase, setPhase] = useState<Phase>('idle')
   const [busy, setBusy] = useState(false)
@@ -192,6 +200,11 @@ export function CaseFinalizationPanel(props: Props) {
       const next = await caseFinalizationApi.preview(input)
       if (token !== generation.current) return
       built.current = null
+      const storedLayouts = await reportApi.layouts().catch(() => [] as ReportLayout[])
+      if (token !== generation.current) return
+      setLayouts(storedLayouts)
+      setLayoutId(defaultReportLayout(storedLayouts, requestId)?.id ?? null)
+      setMeta((current) => current.author ? current : initialReportMeta())
       setPreview(next)
       setScopeAtOpen(reportScope ? structuredClone(reportScope) : null)
       setDialogOpen(true)
@@ -210,10 +223,11 @@ export function CaseFinalizationPanel(props: Props) {
     const operation = { ...input, operation_id: preview.operation_id }
     setBusy(true); setDialogError(''); setNotice('')
     try {
-      const key = `${preview.operation_id}|${chosen.join(',')}|${formats.html && includeVideos ? 'video' : ''}`
+      const key = `${preview.operation_id}|${chosen.join(',')}|${formats.html && includeVideos ? 'video' : ''}|${layoutId ?? ''}|${JSON.stringify(meta)}`
       if (built.current?.key !== key) {
         setPhase('building')
-        built.current = { key, reports: await buildFinalReports(scopeAtOpen, { formats: chosen, includeVideos: formats.html && includeVideos }) }
+        built.current = { key, reports: await buildFinalReports(scopeAtOpen, { formats: chosen, includeVideos: formats.html && includeVideos, layoutId, meta }) }
+        if (formats.pptx && layoutId) rememberReportLayout(requestId, layoutId)
       }
       if (token !== generation.current) return
       const reports = built.current.reports
@@ -303,6 +317,10 @@ export function CaseFinalizationPanel(props: Props) {
       {current?.verification === 'SIZE' && !copying && !failed ? <span className="case-finalization__missing-inline" data-testid="case-final-size-only" title="Final 파일이 커서 이번 조회에서는 존재와 크기만 확인했습니다. 완료 뒤 파일이 바뀌어 내용(해시) 확인 기록과 맞지 않습니다.">크기만 확인</span> : null}
       {current?.verification === 'STAT_SINCE_COMPLETION' && !copying && !failed ? <span className="case-finalization__missing-inline" data-testid="case-final-stat-only" title="Final 파일이 커서 이번 조회에서는 내용(해시)을 다시 읽지 않았습니다. 완료 때 해시를 확인한 뒤 크기·수정 시각이 바뀌지 않았음만 확인했으며, 내용이 같다는 증명은 아닙니다.">완료 후 변경 없음(크기·시각 확인)</span> : null}
       {status?.current_final ? <span className="case-finalization__current" data-testid="case-final-current" title={`현재 Final ${status.current_final.operation_id}\n${status.current_final.case_path}`}>현재 Final · {status.current_final.case_label} · {status.current_final.designated_by ?? '지정자 없음'} · {formatDate(status.current_final.designated_at)}</span> : null}
+      {currentFinal && currentFinal.verified === false ? <span className="case-finalization__message case-finalization__message--error" role="alert" data-testid="case-final-current-unverified">
+        <AlertTriangle size={14} aria-hidden="true" />{currentFinal.missing ? '현재 Final의 기록이나 파일을 찾을 수 없습니다. 관리자에게 문의하세요.' : '현재 Final 파일이 완료 기록과 다릅니다(해시 불일치). 관리자에게 문의하세요.'}
+      </span> : null}
+      {status?.summary?.state === 'CONFLICT' ? <span className="case-finalization__missing-inline" data-testid="case-final-summary-conflict" title={`${status.summary.path}에 앱이 만들지 않은 파일(또는 바로가기)이 있어 덮어쓰지 않았습니다. 관리자가 확인한 뒤 정리하거나 갱신해야 합니다.`}>요약 파일 충돌(관리자 확인)</span> : null}
       {summaryNeedsRepair ? <span className="case-finalization__missing-inline" data-testid="case-final-summary-repair" title={`${status?.summary?.path ?? 'Final/current.json'}이(가) 현재 Final을 가리키지 않습니다.`}>요약 파일 갱신 필요</span> : null}
       {summaryNeedsRepair && canFinalize ? <button type="button" className="case-finalization__retry" disabled={busy} onClick={() => void repairSummary()}><RotateCcw size={13} aria-hidden="true" />요약 파일 갱신</button> : null}
       {failed && !dialogOpen ? <button type="button" className="case-finalization__retry" disabled={!canFinalize || busy} title={failed.error?.message} onClick={() => void retryJob(failed)}><RotateCcw size={13} aria-hidden="true" />재시도</button> : null}
@@ -395,6 +413,11 @@ export function CaseFinalizationPanel(props: Props) {
             <label className="case-finalization__format case-finalization__format--sub" title="이미지 전체 300MB, 영상당 20MB·전체 200MB까지 넣습니다(원본 크기 기준). HTML은 base64로 약 1.33배 커집니다."><input type="checkbox" checked={includeVideos} disabled={!formats.html} onChange={(event) => setIncludeVideos(event.target.checked)} />영상 포함</label>
           </fieldset>
           {!chosen.length && <p className="case-finalization__missing" role="note">PPTX 또는 HTML을 하나 이상 고르세요.</p>}
+          {formats.pptx && layouts.length ? <div className="case-report__layout" data-testid="case-final-layout">
+            <label><span>PPTX 레이아웃</span><select value={layoutId ?? ''} disabled={busy || Boolean(dialogCopying)} onChange={(event) => setLayoutId(event.target.value)}>{layouts.map((item) => <option key={item.id} value={item.id}>{item.name} · v{item.version}</option>)}</select></label>
+            {usesUploadedTemplate(layouts.find((item) => item.id === layoutId)?.definition) ? <TemplateNotAppliedNotice /> : null}
+          </div> : null}
+          <CaseReportMetaFields value={meta} disabled={busy || Boolean(dialogCopying) || !scopeAtOpen} onChange={setMeta} />
         </section>
         {skippedVideos.length > 0 && <p className="case-finalization__missing">HTML에 넣지 못한 영상 {skippedVideos.length}개: {skippedVideos.join(', ')}</p>}
         {skippedImages.length > 0 && <p className="case-finalization__missing">보고서에 넣지 못한 이미지 {skippedImages.length}개: {skippedImages.join(', ')}</p>}

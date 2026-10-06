@@ -21466,6 +21466,11 @@
             "maxLength": 128,
             "minLength": 1,
             "title": "Case Id"
+          },
+          "override": {
+            "type": "boolean",
+            "title": "Override",
+            "default": false
           }
         },
         "type": "object",

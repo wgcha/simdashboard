@@ -6884,6 +6884,11 @@ export interface components {
             environment: "USAGE" | "DISTRIBUTION";
             /** Case Id */
             case_id: string;
+            /**
+             * Override
+             * @default false
+             */
+            override: boolean;
         };
         /** Sync */
         Sync: {

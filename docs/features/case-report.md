@@ -39,6 +39,13 @@ Case 결과 화면 헤더의 `보고서` 버튼으로 현재 선택한 Case 결�
 - 레이아웃 편집(보고서 창): **새 레이아웃으로 저장**만 제공한다. 현재 레이아웃(시스템 레이아웃 포함)의 새 버전 저장과 삭제는 이 창에서 할 수 없고, 저장한 사본에는 템플릿 연결이 남는다. 업로드 템플릿 선택·업로드·출력 원본 선택은 숨기고, 템플릿이 연결된 레이아웃이면 적용되지 않는다는 안내를 보인다. 템플릿 관리는 기존 보고서 화면에서 한다.
 - HTML: 파일 하나로 완결된다. CSS는 문서 안에, 이미지·영상은 data URI로 넣는다. 스크립트를 쓰지 않고, `Content-Security-Policy`(`default-src 'none'; img-src data:; media-src data:; style-src 'unsafe-inline'`)로 외부 참조와 스크립트 실행을 막는다. 업로드한 HTML은 SPDM에 저장만 하고 앱이 페이지로 제공하지 않는다(6단계).
 
+## 보고서 A안 (W7, 2026-10-06)
+
+- **템플릿 미적용 안내:** 고른 레이아웃이 업로드 PPTX 템플릿에 연결돼 있으면(`templateSource: 'pptx_upload'`) 레이아웃 선택 바로 옆에 "업로드 PPTX 템플릿은 Case 보고서에 적용되지 않습니다…"를 항상 보인다(편집 창을 열지 않아도). 보고서 창과 Final 지정 창 모두 같다(`CaseReportFields.tsx`의 `TemplateNotAppliedNotice`).
+- **마지막 사용 레이아웃:** 보고서 창에서 레이아웃을 고르거나 PPTX를 받으면, Final 지정 창에서 Final 보고서를 만들면 그 레이아웃 ID를 브라우저 `localStorage`에 사용자·의뢰별로 기억한다(키 `vdsim.caseReport.lastLayout.v1:<사용자 ID>:<의뢰 ID>`, 읽기·쓰기 실패는 무시). 두 창의 기본값은 기억한 레이아웃(아직 있으면) → 표준(`report-layout-standard`) → 첫 레이아웃이다(`reportPreferences.ts`의 `defaultReportLayout`).
+- **Final 보고서 레이아웃:** Final 지정 창에도 PPTX 레이아웃 선택이 있고, 고른 레이아웃을 `buildFinalReports(..., { layoutId })`로 넘긴다(이전의 표준→첫 레이아웃 고정 선택 대체).
+- **보고서 정보:** 두 창에 작성자(로그인 사용자의 표시 이름으로 미리 채움)와 선택 입력 개발단계·검토조건·결론이 있다. PPTX에는 `ReportExportOptions`의 `author`·`developmentStage`·`reviewConditions`·`reviewConclusion`으로 넘기고, 렌더링할 때만 표지 아래쪽에 값이 있는 항목을 상자로 덧붙인다(`withCaseReportMeta`, 저장한 레이아웃 정의는 바꾸지 않음), HTML에는 값이 있는 항목만 머리 범위 목록(`<dl>`)에 덧붙인다. 서버로는 보고서 파일 안에만 들어가며 `Final/current.json`이나 완료 기록에는 넣지 않는다.
+
 ## 만들기 취소
 
 - 만드는 동안 `취소` 버튼(닫기 자리)과 Esc가 진행 중인 읽기를 `AbortController`로 멈추고 파일을 내려받지 않는다. 만들지 않을 때 Esc는 창을 닫는다.
@@ -80,4 +87,5 @@ Case 결과 화면 헤더의 `보고서` 버튼으로 현재 선택한 Case 결�
 
 ## 검증
 
+- W7 e2e: `case-report.spec.ts`(레이아웃 옆 템플릿 안내, 보고서 정보가 PPTX 슬라이드·HTML 범위 목록에 들어감, 고른 레이아웃 색이 PPTX에 쓰이고 다음 창 기본값), `case-finalization.spec.ts`(Final 창 레이아웃 선택·템플릿 안내·고른 레이아웃 색과 보고서 정보가 올린 PPTX·HTML에 들어감·기억).
 - e2e `frontend/e2e/case-report.spec.ts`: 사용환경 보고서(PPTX·HTML에 다섯 평가 값·OK/NG·이미지·영상), 만드는 중 취소·Esc, 템플릿 연결 레이아웃의 새 레이아웃 저장(POST만, 템플릿 필드 유지)과 PPTX 생성, 엣지 선택 없음 문구, 범위로 열기, 형식 없음 차단, PPTX 하나(zip·`slide1.xml`의 Case·Scene), HTML 하나(data URI 이미지, 기본 영상 없음, `<script>` Scene 이스케이프, 외부 참조 없음), 영상 포함·상한 초과 건너뜀 표시, 두 형식 두 파일, 열린 뒤 선택 변경에도 범위 유지, 2560×1440(배율 1.5) 화면.

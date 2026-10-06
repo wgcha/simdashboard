@@ -229,3 +229,129 @@ def test_summary_is_only_writable_at_its_one_place():
     assert not allows("P/WR/current.json")
     with pytest.raises(storage_provider.StorageError):
         storage_provider.check_write("P/WR/Working/current.json", storage_provider.FINAL, "app.services.case_finalization")
+
+
+# ---------------------------------------------------------------------------
+# W3 review (c836593): ported from the reviewer's test_zz_review_w3.py and extended.
+# ---------------------------------------------------------------------------
+
+def _repair(client, ctx, **extra):
+    return client.post(f"{API}/summary/repair", json={**{k: v for k, v in _body(ctx).items() if k != "capture_id"}, **extra})
+
+
+def test_review_m2_a_users_own_current_json_is_never_replaced(admin_client):
+    client, root = admin_client
+    ctx_a, _ctx_b = _seed_two(client, root)
+    (root / FINAL).mkdir(parents=True, exist_ok=True)
+    (root / SUMMARY).write_text("USER OWN NOTES", encoding="utf-8")
+    record = _designate(client, root, ctx_a)  # the Final itself completes
+    assert (root / SUMMARY).read_text(encoding="utf-8") == "USER OWN NOTES"
+    status = _status(client, ctx_a)
+    assert status["current_final"]["operation_id"] == record["operation_id"] and status["summary"]["state"] == "CONFLICT"
+    refused = _repair(client, ctx_a)
+    assert refused.status_code == 409 and refused.json()["detail"]["code"] == "FINALIZATION_SUMMARY_CONFLICT"
+    assert (root / SUMMARY).read_text(encoding="utf-8") == "USER OWN NOTES"
+    forced = _repair(client, ctx_a, override=True)
+    assert forced.status_code == 200 and forced.json()["summary"]["state"] == "OK"
+    assert _summary(root)["environments"]["DISTRIBUTION"]["final_id"] == record["operation_id"]
+
+
+def test_review_m2_a_linked_current_json_is_never_followed(admin_client, tmp_path, monkeypatch):
+    client, root = admin_client
+    ctx_a, _ctx_b = _seed_two(client, root)
+    victim = tmp_path / "victim.txt"
+    victim.write_text("VICTIM")
+    real = case_finalization._write_summary
+
+    def link_first(*args, **kwargs):
+        if not (root / SUMMARY).is_symlink():
+            (root / SUMMARY).symlink_to(victim)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(case_finalization, "_write_summary", link_first)
+    _designate(client, root, ctx_a)
+    monkeypatch.setattr(case_finalization, "_write_summary", real)
+    assert victim.read_text() == "VICTIM" and (root / SUMMARY).is_symlink()
+    assert _status(client, ctx_a)["summary"]["state"] == "CONFLICT"
+    forced = _repair(client, ctx_a, override=True)  # even the override never replaces a link
+    assert forced.status_code == 409 and forced.json()["detail"]["code"] == "FINALIZATION_SUMMARY_CONFLICT"
+    assert victim.read_text() == "VICTIM"
+
+
+def test_review_m1_repair_refuses_a_damaged_current_final(admin_client):
+    client, root = admin_client
+    ctx_a, _ctx_b = _seed_two(client, root)
+    _designate(client, root, ctx_a)
+    record = _designate(client, root, ctx_a)
+    before = (root / SUMMARY).read_bytes()
+    target = root / record["output_paths"]["CAE"] / record["files"][0]["case_relative_path"]
+    data = target.read_bytes()
+    target.write_bytes(bytes([data[0] ^ 1]) + data[1:])
+    status = _status(client, ctx_a)
+    assert status["current_final"]["operation_id"] == record["operation_id"]
+    assert status["current_final"]["verified"] is False and status["current_final"]["verification"] == "FAILED"
+    assert status["summary"]["state"] == "CURRENT_UNVERIFIED"
+    refused = _repair(client, ctx_a)
+    assert refused.status_code == 409 and refused.json()["detail"]["code"] == "FINALIZATION_CURRENT_UNVERIFIED"
+    assert (root / SUMMARY).read_bytes() == before
+
+
+def test_review_m1_missing_current_final_is_never_silently_replaced_by_an_older_one(admin_client):
+    client, root = admin_client
+    ctx_a, ctx_b = _seed_two(client, root)
+    record_a = _designate(client, root, ctx_a)
+    record_b = _designate(client, root, ctx_b)
+    shutil.rmtree(root / record_b["output_paths"]["CAE"])
+    status = _status(client, ctx_a)
+    assert status["current_final"]["operation_id"] == record_b["operation_id"] and status["current_final"]["missing"] is True
+    assert status["summary"]["state"] == "CURRENT_MISSING"
+    refused = _repair(client, ctx_a)
+    assert refused.status_code == 409 and refused.json()["detail"]["code"] == "FINALIZATION_CURRENT_MISSING"
+    assert _summary(root)["environments"]["DISTRIBUTION"]["final_id"] == record_b["operation_id"]
+    forced = _repair(client, ctx_a, override=True)
+    assert forced.status_code == 200, forced.text
+    assert _summary(root)["environments"]["DISTRIBUTION"]["final_id"] == record_a["operation_id"]
+    assert _status(client, ctx_a)["current_final"]["operation_id"] == record_a["operation_id"]
+
+
+def test_review_l1_other_environment_entries_come_only_from_signed_pointers(admin_client):
+    client, root = admin_client
+    ctx_a, _ctx_b = _seed_two(client, root)
+    _designate(client, root, ctx_a)
+    forged = _summary(root)
+    forged["environments"]["USAGE"] = {"final_id": "f" * 32, "case_label": "forged"}
+    (root / SUMMARY).write_text(json.dumps(forged), encoding="utf-8")
+    _designate(client, root, ctx_a)
+    assert set(_summary(root)["environments"]) == {"DISTRIBUTION"}
+
+
+def test_review_l2_completion_time_floor_without_pointer_comes_from_signed_records(admin_client):
+    client, root = admin_client
+    ctx_a, _ctx_b = _seed_two(client, root)
+    record = _designate(client, root, ctx_a)
+    metadata = f"{FINAL}/.finalizations"
+    complete_path = root / metadata / record["operation_id"] / "complete.json"
+    future = case_finalization._signed_record({**json.loads(complete_path.read_text(encoding="utf-8")),
+                                               "confirmed_at": "2999-01-01T00:00:00.000000Z"},
+                                              "complete_signature", case_finalization.COMPLETE_DOMAIN)
+    complete_path.write_bytes(case_finalization._encode(future))
+    later = case_finalization._next_confirmed_at({"last_confirmed_at": None}, root, metadata)
+    assert later == "2999-01-01T00:00:00.000001Z"
+
+
+def test_review_l3_stale_summary_temp_files_are_cleaned_on_the_next_write(admin_client):
+    import os
+    import time
+    client, root = admin_client
+    ctx_a, _ctx_b = _seed_two(client, root)
+    _designate(client, root, ctx_a)
+    stale = root / FINAL / f".current.json.{'a' * 32}.tmp"
+    fresh = root / FINAL / f".current.json.{'b' * 32}.tmp"
+    other = root / FINAL / ".current.json.notours.tmp"
+    for path in (stale, fresh, other):
+        path.write_bytes(b"x")
+    old = time.time() - 2 * 3600
+    os.utime(stale, (old, old))
+    os.utime(other, (old, old))
+    _designate(client, root, ctx_a)
+    assert not stale.exists() and fresh.exists() and other.exists()

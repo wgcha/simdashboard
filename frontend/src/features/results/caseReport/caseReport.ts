@@ -13,6 +13,7 @@ import { api } from '../../../api'
 import type { ContentSnapshot, ReportExportOptions } from '../../../reportExport'
 import type { Overview, ReportContentItem, ReportElementDefinition, ReportLayoutDefinition, ReportSlideDefinition, ReportSource } from '../../../types'
 import type { CaseCompareReport } from '../caseCompare'
+import { reportMetaRows, type CaseReportMeta } from './reportMeta'
 import { distributionMember, noEdgeSelected, sceneEnvelopes } from '../distributionValues'
 import { USAGE_DIRECTION_LABELS, USAGE_DIRECTIONS, usageCell, usageEvaluationLabel, usageEvaluationRows, usageStatusText } from '../usageEvaluations'
 
@@ -515,6 +516,21 @@ export function prepareCaseReportLayout(layout: ReportLayoutDefinition, source: 
   return { ...base, contentMode: 'one-per-slide', slides: createCaseReportSlides(contents) }
 }
 
+const META_FIELDS: Array<[keyof CaseReportMeta, string, string]> = [
+  ['author', 'author', '작성자'], ['developmentStage', 'development_stage', '개발단계'],
+  ['reviewConditions', 'review_conditions', '검토조건'], ['reviewConclusion', 'review_conclusion', '결론'],
+]
+
+/** W7: non-empty report information as boxes along the bottom of the cover slide (render time only). */
+export function withCaseReportMeta(layout: ReportLayoutDefinition, meta: CaseReportMeta | undefined): ReportLayoutDefinition {
+  const present = META_FIELDS.filter(([field]) => meta?.[field]?.trim())
+  if (!present.length || !layout.slides?.length) return layout
+  const coverIndex = Math.max(0, layout.slides.findIndex((slide) => slide.kind === 'cover'))
+  const width = Math.floor(30 / present.length)
+  const elements = present.map(([, key, label], index) => element(`case-cover-meta-${key}`, 'text', label, [1 + index * width, 16, width - (index === present.length - 1 ? 0 : 1), 2], { source: 'field', key }))
+  return { ...layout, slides: layout.slides.map((slide, index) => index === coverIndex ? { ...slide, elements: [...slide.elements.filter((item) => !item.id.startsWith('case-cover-meta-')), ...elements] } : slide) }
+}
+
 /** Uploaded PPTX templates do not support this report format; render with the visual layout. */
 export function caseReportRenderLayout(layout: ReportLayoutDefinition): ReportLayoutDefinition {
   return { ...layout, templateSource: 'native', templateAssetId: undefined, templateBindings: {} }
@@ -603,6 +619,8 @@ export type CaseReportPptxOptions = {
   /** Images already read for this build (shared with the HTML format). */
   images?: CaseReportLoadedImages
   signal?: AbortSignal
+  /** W7: author and optional 개발단계·검토조건·결론 for the cover/summary. */
+  meta?: CaseReportMeta
 }
 
 /** PPTX through the existing pptxgenjs layout renderer. */
@@ -610,11 +628,12 @@ export async function buildCaseReportPptx(data: CaseReportData, options: CaseRep
   const [reportModule, loaded] = await Promise.all([import('../../../reportExport'), options.images ?? loadCaseReportImages(data, { loadMedia: options.loadMedia, signal: options.signal })])
   if (options.signal?.aborted) throw abortError()
   const contents = buildCaseReportContents(data, loaded.images)
-  const layout = caseReportRenderLayout(prepareCaseReportLayout(options.layout ?? reportModule.DEFAULT_REPORT_LAYOUT, data.source, contents))
+  const layout = withCaseReportMeta(caseReportRenderLayout(prepareCaseReportLayout(options.layout ?? reportModule.DEFAULT_REPORT_LAYOUT, data.source, contents)), options.meta)
   const scopeValue = (label: string) => data.scopeRows.find((row) => row.label === label)?.value ?? ''
   const labels = options.labels ?? { project: scopeValue('프로젝트'), request: scopeValue('의뢰'), loadCase: scopeValue('하중경우') }
   const reviewResult = data.sections.length === 1 ? data.sections[0].empty || data.sections[0].summary.note : scopeValue('범위')
-  const reportOptions: ReportExportOptions = { author: '', developmentStage: '', reportDate: data.generatedLabel, reliabilityName: data.environment === 'USAGE' ? '사용환경 Case 결과' : 'Case 결과', reviewPurpose: labels.request, reviewConditions: '', reviewResult, reviewConclusion: '', reportTitle: data.title }
+  const meta = options.meta
+  const reportOptions: ReportExportOptions = { author: meta?.author.trim() ?? '', developmentStage: meta?.developmentStage.trim() ?? '', reportDate: data.generatedLabel, reliabilityName: data.environment === 'USAGE' ? '사용환경 Case 결과' : 'Case 결과', reviewPurpose: labels.request, reviewConditions: meta?.reviewConditions.trim() ?? '', reviewResult, reviewConclusion: meta?.reviewConclusion.trim() ?? '', reportTitle: data.title }
   return await reportModule.renderReportPptxBlob(caseReportOverview(data, labels), reportOptions, layout, contents)
 }
 
@@ -666,6 +685,8 @@ export type CaseReportHtmlOptions = {
   signal?: AbortSignal
   maxVideoBytes?: number
   maxTotalVideoBytes?: number
+  /** W7: non-empty fields are added to the scope block. */
+  meta?: CaseReportMeta
 }
 
 /**
@@ -682,7 +703,7 @@ export async function buildCaseReportHtml(data: CaseReportData, options: CaseRep
   let usedVideoBytes = 0
   const multi = data.sections.length > 1 || Boolean(data.sections[0]?.heading)
   parts.push(`<!doctype html>\n<html lang="ko">\n<head>\n<meta charset="utf-8">\n<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; media-src data:; style-src 'unsafe-inline'; form-action 'none'; base-uri 'none'">\n<meta name="viewport" content="width=device-width, initial-scale=1">\n<meta name="generator" content="VD Simulation Workbench">\n<title>${escapeHtml(data.title)}</title>\n<style>${HTML_STYLE}</style>\n</head>\n<body>\n<main>\n`)
-  parts.push(`<header><h1>${escapeHtml(data.title)}</h1><p class="meta">생성 ${escapeHtml(data.generatedLabel)}</p><dl>${data.scopeRows.map((row) => `<dt>${escapeHtml(row.label)}</dt><dd>${escapeHtml(row.value)}</dd>`).join('')}</dl></header>\n`)
+  parts.push(`<header><h1>${escapeHtml(data.title)}</h1><p class="meta">생성 ${escapeHtml(data.generatedLabel)}</p><dl>${[...data.scopeRows, ...reportMetaRows(options.meta)].map((row) => `<dt>${escapeHtml(row.label)}</dt><dd>${escapeHtml(row.value)}</dd>`).join('')}</dl></header>\n`)
   for (const [index, section] of data.sections.entries()) {
     const h = multi ? 'h3' : 'h2'
     const anchor = `s${index + 1}`
