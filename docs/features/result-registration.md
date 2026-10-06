@@ -22,11 +22,11 @@
 | 대상 | 이 의뢰 폴더의 `Working` 아래(Working 자신 포함), 존재하는 일반 폴더, 경로 사슬에 링크·reparse 없음, Final·숨김 폴더 아님 | 422 `RESULT_DROP_TARGET_OUTSIDE_REQUEST`·`…_OUTSIDE_WORKING`·`…_TARGET_INVALID`, 409/422 `SPDM_PATH_UNSAFE` 등 |
 | 소유권 | `result_registration_paths._owner_conflict`(다른 의뢰·환경의 Case·경로·연결·등록과 겹치면 거부) | 409 `RESULT_PATH_OWNERSHIP_CONFLICT` |
 | 이름 | 상대 경로만, `/` 구분, `..`·`.`·빈 칸·절대·드라이브·`\`·`<>:"|?*`·제어 문자·끝 마침표/공백·CON 등 예약 이름(COM¹–³·LPT¹–³ 포함)·255자 초과·32단계 초과 금지(요청 전체 거부) | 422 `RESULT_DROP_PATH_INVALID` |
-| 제외(건너뜀) | 실행·스크립트·셸 실행·디스크 이미지 형식(`DROP_BLOCKED_EXTENSIONS` = 등록 차단 목록 + `.scf .url .lnk .library-ms .searchConnector-ms .msc .iso .img .vhd .vhdx .appref-ms .settingcontent-ms .application .wsc .sct .chm .inf .xll .ps1xml .hta .cpl .reg`). 확장자는 끝 마침표·공백을 떼고 마지막 `.` 뒤로 판정(`.bat`처럼 점으로 시작하는 이름 포함, 대소문자 무시). `Thumbs.db`·`desktop.ini`·`.DS_Store`·`~$*`·`.simdash-upload`, 숨김 폴더(`.`·`$`·`~` 시작) 안 | 계획 `skipped`(사유 표시), 남는 것이 없으면 422 `RESULT_DROP_EMPTY` |
-| 깊이(DEPTH_V1) | 새 폴더의 역할은 깊이로 정해진다. 부모와 같은 이름(INDIVIDUAL/INDIVIDUAL), 이 의뢰에서 다른 깊이의 이름(예: Scene 이름이 Run Option 자리에, 기본 RUN_OPTION 이름 INDIVIDUAL·CUMULATIVE 포함), Working·Final 이름은 **차단**(Scene 안 내용 폴더도 Working·Final 이름은 차단). 숫자_로 시작하는 새 이름이 Scene 위 자리에 오면, Scene 위 깊이에 놓이는 파일, W6 비슷한 Scene 이름, 대소문자만 다른 기존 폴더는 **경고** | 계획 `issues[].severity` error/warning |
+| 제외(건너뜀) | 실행·스크립트·셸 실행·디스크 이미지 형식(`DROP_BLOCKED_EXTENSIONS` = 등록 차단 목록 + `.scf .url .lnk .library-ms .searchConnector-ms .msc .iso .img .vhd .vhdx .appref-ms .settingcontent-ms .application .wsc .sct .chm .inf .xll .ps1xml .hta .cpl .reg .msix .appx .ms-appinstaller .diagcab .website .mht .cab .psd1`). 확장자는 끝 마침표·공백을 떼고 마지막 `.` 뒤로 판정(`.bat`처럼 점으로 시작하는 이름 포함, 대소문자 무시). `Thumbs.db`·`desktop.ini`·`.DS_Store`·`~$*`·`.simdash-upload`, 숨김 폴더(`.`·`$`·`~` 시작) 안 | 계획 `skipped`(사유 표시), 남는 것이 없으면 422 `RESULT_DROP_EMPTY` |
+| 깊이(DEPTH_V1) | 새 폴더의 역할은 깊이로 정해진다. 부모와 같은 이름(INDIVIDUAL/INDIVIDUAL), 이 의뢰에서 다른 깊이의 이름(예: Scene 이름이 Run Option 자리에, 기본 RUN_OPTION 이름 INDIVIDUAL·CUMULATIVE 포함), Working·Final 이름은 **차단**(Scene 안 내용 폴더는 이름 제한 없음 — `final`·`Working` 하위 폴더도 허용). 숫자_로 시작하는 새 이름이 Scene 위 자리에 오면, Scene 위 깊이에 놓이는 파일, W6 비슷한 Scene 이름, 대소문자만 다른 기존 폴더는 **경고** | 계획 `issues[].severity` error/warning |
 | 충돌 | 같은 이름(대소문자 무시) 파일이 이미 있거나 폴더 자리에 파일이 있으면 차단. 덮어쓰지 않는다 | 계획 `conflicts`, 시작 409 `RESULT_DROP_PLAN_BLOCKED` |
 | 경로 길이 | 서버 경로와 표시 경로 모두 259자 이하 | `PATH_TOO_LONG` 차단 |
-| 공간 | 남은 공간 − 같은 root의 열린 업로드가 아직 공개하지 않은 바이트(`reserved_bytes`) ≥ 합계 + max(5 %, 1 GiB) | `FREE_SPACE` 차단 |
+| 공간 | 남은 공간 − 같은 root의 열린 업로드가 아직 공개하지 않은 바이트(`reserved_bytes`) ≥ 합계 + max(5 %, 1 GiB). 세션 등록 직전 잠금 안에서 다시 확인 | `FREE_SPACE` 차단, 등록 시 507 `RESULT_DROP_FREE_SPACE` |
 | 동시 업로드 | 열린(업로드 중·일부 공개) 업로드는 사용자당 의뢰마다 2개, 의뢰 전체 6개 | 429 `RESULT_DROP_BUSY` |
 
 파일당·전체 크기 상한은 없다(남은 공간만). 항목 수는 요청당 파일·폴더 각 20,000개.
@@ -50,13 +50,13 @@
 
 ## 5. 쓰기 경계와 공개
 
-- 저장소 공급자의 새 쓰기 구역 `WORKING`(S3 ③): `<프로젝트>/<의뢰>/Working/**` — `Working` 위에 폴더 2단계 이상, `Working` 한 번, `Final`·`.`·`..` 없음. 호출 모듈 `app.services.result_drop_upload`만, 쓰기 함수는 `mkdir_pinned`·`write_chunk`·`rename_no_replace`·`remove`·`set_hidden`만(다른 쓰기는 `NOT_ALLOWED_WRITE`). 서비스는 다시 등록된 의뢰의 Working으로 한정한다.
+- 저장소 공급자의 새 쓰기 구역 `WORKING`(S3 ③): `<프로젝트>/<의뢰>/Working/**` — 첫 `Working` 위에 폴더 2단계 이상, 그 앞에 `Final` 없음, `.`·`..` 없음(Working 안쪽의 `final`·`Working` 이름은 내용으로 허용). 계획·대상 확인·새 폴더 만들기가 같은 규칙을 모든 대상·임시 경로에 미리 적용해 위반을 계획 단계에서 `PATH_NOT_ALLOWED`로 알린다. 호출 모듈 `app.services.result_drop_upload`만, 쓰기 함수는 `mkdir_pinned`·`write_chunk`·`rename_no_replace`·`remove`·`set_hidden`만(다른 쓰기는 `NOT_ALLOWED_WRITE`). 서비스는 다시 등록된 의뢰의 Working으로 한정한다.
 - 임시 위치: `<의뢰>/Working/.simdash-upload/<세션 32hex>/<n>.part`(같은 볼륨, 공개 = 이름 바꾸기). Windows에서는 숨김 속성. 폴더 조사(`folder_discovery_scan.scan`·`browse`)는 이 폴더를 통째로 건너뛰어 노드·파일·지문·자동 동기화에 나타나지 않는다. 이름이 `.`로 시작해 깊이 스키마도 무시한다.
 - 조각 쓰기 `LocalFsProvider.write_chunk`: 상위 사슬 고정·재확인, 링크 없이 연 핸들이 경로의 `lstat`과 같은 단일 연결 일반 파일, 현재 크기 = offset일 때만 쓰고 실패하면 offset으로 되자름. SHA-256은 서버가 받으면서 계산한다(브라우저는 WebCrypto가 있으면 조각 해시를 보냄; HTTP LAN에서는 생략).
 - 같은 이름 확인은 부모 폴더마다 한 번 목록을 읽은 casefold 지도로 한다(계획·완료 각각 새로; 3,000개를 3,000개 있는 폴더에 넣는 계획 약 0.4초).
-- 완료: 받은 크기 재확인 → 의뢰·Working·소유권 재확인 → 모든 대상의 충돌 재확인(있으면 아무것도 쓰지 않음) → 폴더를 얕은 순서로 하나씩 `mkdir_pinned`(고정된 부모 아래, 기존 일반 폴더는 그대로) → 파일마다 `rename_no_replace`(대상이 있으면 공개하지 않고 `conflicts`, 공유 위반은 재시도 후 `busy`). 의뢰별 공개 잠금. 모두 공개되면 세션 폴더를 지운다. 일부만 공개(PARTIAL)되거나 실패하면 이 세션이 만든 폴더 중 비어 있는 것을 지운다(다시 옮기기 때 다시 만듦). 화면은 PARTIAL에서 `나머지 다시 옮기기`·`나머지 중지`를 보여 준다. 그다음 자동 동기화의 기억을 지우고 `sync(force=True)`.
+- 완료: 받은 크기 재확인 → 의뢰·Working·소유권 재확인 → 모든 대상의 충돌 재확인(있으면 아무것도 쓰지 않음) → 폴더를 얕은 순서로 하나씩 `mkdir_pinned`(고정된 부모 아래, 기존 일반 폴더는 그대로) → 파일마다 `rename_no_replace`(대상이 있으면 공개하지 않고 `conflicts`, 공유 위반은 재시도 후 `busy`). 의뢰별 공개 잠금. 모두 공개되면 세션 폴더를 지운다. 일부만 공개(PARTIAL)되면 폴더를 그대로 둔다(요청한 빈 폴더 포함). 실패·중지·만료 때만 이 세션이 만든 폴더 중 비어 있는 것을 지운다. 완료 중 대상 폴더를 읽지 못하면 503 `RESULT_DROP_TARGET_UNAVAILABLE`. 화면은 PARTIAL에서 `나머지 다시 옮기기`·`나머지 중지`를 보여 준다. 그다음 자동 동기화의 기억을 지우고 `sync(force=True)`.
 - 중지·실패: 세션의 `<n>.part`와 빈 세션 폴더만 지운다. 기존 SPDM 파일은 덮어쓰거나 지우지 않는다.
-- 세션은 서버 프로세스 메모리에 있다(새 DB 테이블·migration 없음). 60분 동안 움직임이 없는(업로드 중·일부 공개) 세션은 만료되어 임시 파일과 빈 새 폴더를 지운다. 재시작하면 업로드를 처음부터 다시 하고, 남은 임시 폴더는 같은 의뢰의 다음 업로드가 60분 지난 것만(`<n>.part`만) 정리한다. 화면은 업로드 중 페이지를 닫으면 `keepalive` DELETE로 중지하고, 옮기는 중이면 경고만 한다. 다른 화면으로 가면 업로드를 멈추고 중지한다.
+- 세션은 서버 프로세스 메모리에 있다(새 DB 테이블·migration 없음). 60분 동안 움직임이 없는(업로드 중·일부 공개) 세션은 만료되어 임시 파일과 빈 새 폴더를 지운다. 재시작하면 업로드를 처음부터 다시 하고, 남은 임시 폴더는 같은 의뢰의 다음 업로드가 60분 지난 것만(`<n>.part`만) 정리한다. 화면은 업로드 중이거나 옮기는 중 페이지를 닫으려 하면 `beforeunload`로 확인을 묻고, 실제로 페이지를 떠날 때(`pagehide`) 조각 업로드 중이면 `keepalive` DELETE로 중지한다(옮기는 중이면 중지하지 않음). 다른 화면으로 가면 업로드를 멈추고 중지한다.
 - **백엔드 작업자 1개 필요**: 세션·동시 업로드 제한·공개 잠금이 프로세스별이다. Windows 서비스(WinSW)는 uvicorn 작업자 1개라 맞다. Rocky 8 배포 템플릿은 `UVICORN_WORKERS=2`가 기본(`deploy/rocky8/install.env.example`)이므로 그 환경에서 끌어서 올리기를 쓰려면 `UVICORN_WORKERS=1`로 두거나 세션 저장을 공유 저장소로 옮겨야 한다(미결정, W9). 작업자가 2개면 조각 요청이 다른 작업자로 가서 404가 날 수 있다.
 - 표시 경로: 환경 변수 `SIMDASH_SPDM_DISPLAY_ROOT`(예: `\\fileserver\SPDM`)가 있으면 그 뒤에, 없으면 서버의 SPDM root 경로 뒤에 상대 경로를 붙인다. 서버 경로와 사용자 PC의 공유 경로가 다르면 운영에서 이 값을 `.env`에 둔다.
 

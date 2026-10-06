@@ -420,7 +420,8 @@ def test_review_m1_blocked_extensions_include_dot_leading_and_shell_formats(admi
     project_id, request_id = _seed(client, root)
     blocked = [".bat", ".exe", "evil.scf", "evil.url", "x.library-ms", "x.searchConnector-ms", "x.msc", "x.iso",
                "x.img", "x.vhd", "x.vhdx", "x.appref-ms", "x.settingcontent-ms", "x.application", "x.ps1xml", "x.wsc",
-               "x.sct", "x.chm", "x.EXE", "x.inf", "x.xll", "x.hta", "x.cpl", "x.reg", "x.lnk", ".simdash-upload"]
+               "x.sct", "x.chm", "x.EXE", "x.inf", "x.xll", "x.hta", "x.cpl", "x.reg", "x.lnk", ".simdash-upload",
+               "x.msix", "x.appx", "x.ms-appinstaller", "x.diagcab", "x.website", "x.mht", "x.cab", "x.psd1"]
     allowed = ["x.exe.txt", "result.csv", ".hidden_note.txt"]
     plan = client.post(REG + "/drop-uploads/plan", json=_body(project_id, request_id, f"{OPTION}/2_Face",
                                                                [(name, b"x") for name in blocked + allowed])).json()
@@ -493,8 +494,9 @@ def test_review_l2_working_zone_rule_and_refused_primitives(tmp_path):
     from app.services.storage.provider import StorageError, working_zone_allows
 
     cases = {"Working/x": False, "P/R/Working": False, "P/R/Working/x": True, "P/R/Final/C/Working/x": False,
-             "P/R/WORKING/x": True, "P/R/Working/Final/x": False, "P/Working/x": False,
-             "P/R/Final/../Working/x": False, "P/R/Working/a/Working/x": False, "C/P/R/Working/x/y": True}
+             "P/R/WORKING/x": True, "P/R/Working/Final/x": True, "P/Working/x": False,
+             "P/R/Final/../Working/x": False, "P/R/Working/a/Working/x": True, "C/P/R/Working/x/y": True,
+             "P/R/Final/Working/x": False}
     assert {key: working_zone_allows(key) for key in cases} == cases
     fs = storage_local.LocalFsProvider(tmp_path)
     for call in (lambda: fs.mkdirs("P/R/Working/x", zone="WORKING"),
@@ -547,8 +549,8 @@ def test_review_m2_partial_sessions_do_not_lock_the_request(admin_client, monkey
         result = _complete(client, session["session_id"])
         monkeypatch.setattr(storage_local.LocalFsProvider, "rename_no_replace", real)
         assert (result["state"], result["busy"]) == ("PARTIAL", [f"{name}/x/{CSV}"])
-        # L5: folders this session created and that stayed empty are removed again.
-        assert not (root / OPTION / name).exists() and result["created_folders"] == []
+        # N3: a partial publish keeps the folders (retry and requested empty folders); abort/expiry clean them.
+        assert (root / OPTION / name / "x").is_dir() and len(result["created_folders"]) == 2
         partial.append(session["session_id"])
     # Same user: two open sessions is the per-user limit; another user can still upload.
     third = client.post(REG + "/drop-uploads", json=_body(project_id, request_id, OPTION, [("6_C/" + CSV, CSV_BYTES)]))
@@ -566,6 +568,7 @@ def test_review_m2_partial_sessions_do_not_lock_the_request(admin_client, monkey
     monkeypatch.setattr(result_drop_upload, "SESSION_IDLE_SECONDS", -1)
     assert _start(client, _body(project_id, request_id, OPTION, [("6_E/" + CSV, CSV_BYTES)]))["state"] == "UPLOADING"
     assert not (root / STAGING / partial[1]).exists()
+    assert not (root / OPTION / "6_B").exists()  # L5: expiry removed its still-empty folders
     assert client.get(f"{REG}/drop-uploads/{partial[1]}").status_code == 404
 
 
@@ -590,3 +593,63 @@ def test_review_l4_refused_start_is_audited(admin_client):
         row = conn.execute("SELECT status_code, detail_json FROM audit_events WHERE action='RESULT_DROP_UPLOAD_REFUSED'").fetchone()
     assert row is not None and int(row[0]) == 409
     assert "RESULT_DROP_PLAN_BLOCKED" in str(row[1]) and "DEPTH_ROLE_MISMATCH" in str(row[1])
+
+
+def test_rereview_n1_final_and_working_folders_inside_a_scene_are_content(admin_client):
+    client, root = admin_client
+    project_id, request_id = _seed(client, root)
+    face = f"{OPTION}/2_Face"
+    for name in ("final", "Working"):  # (not also FINAL: a case-insensitive Windows share cannot hold both)
+        (root / face / name).mkdir()
+    # An existing final/Working subfolder as the target, as an intermediate folder, and new ones.
+    files = [("final/a.csv", b"a"), ("Working/b.csv", b"b"), ("Working/sub/c.csv", b"c"), ("new_final/Final/d.csv", b"d")]
+    plan = client.post(REG + "/drop-uploads/plan", json=_body(project_id, request_id, face, files)).json()
+    assert plan["can_upload"] is True, plan["issues"]
+    session = _start(client, _body(project_id, request_id, face, files))
+    _upload_all(client, session, files)
+    assert _complete(client, session["session_id"])["state"] == "PUBLISHED"
+    assert (root / face / "final/a.csv").read_bytes() == b"a" and (root / face / "new_final/Final/d.csv").exists()
+    target = client.post(REG + "/drop-uploads/plan", json=_body(project_id, request_id, f"{face}/final", [("e.csv", b"e")]))
+    assert target.status_code == 200 and target.json()["can_upload"] is True
+    # The request-level Final (and anything not under Working) is still refused at plan time.
+    (root / REQUEST / "Final").mkdir()
+    refused = client.post(REG + "/drop-uploads/plan", json=_body(project_id, request_id, f"{REQUEST}/Final", [("e.csv", b"e")]))
+    assert refused.status_code == 422 and refused.json()["detail"]["code"] == "RESULT_DROP_TARGET_OUTSIDE_WORKING"
+
+
+def test_rereview_n1_zone_violation_is_reported_at_plan_time(admin_client, monkeypatch):
+    client, root = admin_client
+    project_id, request_id = _seed(client, root)
+    monkeypatch.setattr(result_drop_upload, "working_zone_allows", lambda rel: "blocked" not in rel)
+    plan = client.post(REG + "/drop-uploads/plan", json=_body(project_id, request_id, OPTION, [("6_N/blocked.csv", b"x")])).json()
+    assert plan["can_upload"] is False and "PATH_NOT_ALLOWED" in {item["code"] for item in plan["issues"]}
+
+
+def test_rereview_n3_partial_keeps_requested_empty_folder_and_abort_cleans(admin_client, monkeypatch):
+    client, root = admin_client
+    project_id, request_id = _seed(client, root)
+    real = storage_local.LocalFsProvider.rename_no_replace
+    session = _start(client, _body(project_id, request_id, OPTION, [("6_A/" + CSV, CSV_BYTES)], folders=["6_Empty"]))
+    assert _put(client, session["session_id"], 0, 0, CSV_BYTES).status_code == 200
+    monkeypatch.setattr(storage_local.LocalFsProvider, "rename_no_replace",
+                        lambda self, src, dst, *, zone: (_ for _ in ()).throw(PermissionError("sharing")))
+    result = _complete(client, session["session_id"])
+    monkeypatch.setattr(storage_local.LocalFsProvider, "rename_no_replace", real)
+    assert result["state"] == "PARTIAL"
+    assert (root / OPTION / "6_Empty").is_dir() and (root / OPTION / "6_A").is_dir()
+    (root / OPTION / "6_A" / "user.txt").write_bytes(b"explorer")
+    assert client.delete(f"{REG}/drop-uploads/{session['session_id']}").status_code == 200
+    assert not (root / OPTION / "6_Empty").exists()
+    assert (root / OPTION / "6_A" / "user.txt").read_bytes() == b"explorer"
+
+
+def test_rereview_free_space_is_rechecked_when_registering(admin_client, monkeypatch):
+    client, root = admin_client
+    project_id, request_id = _seed(client, root)
+    monkeypatch.setattr(result_drop_upload, "DISK_MARGIN_MIN_BYTES", 0)
+    monkeypatch.setattr(result_drop_upload, "DISK_MARGIN_RATIO", 0.0)
+    free = iter([150, 40])  # plan sees enough, the re-check under the lock does not
+    monkeypatch.setattr(storage_local.LocalFsProvider, "free_bytes", lambda self, rel: next(free))
+    response = client.post(REG + "/drop-uploads", json=_body(project_id, request_id, OPTION, [("6_A/a.bin", b"x" * 100)]))
+    assert response.status_code == 507 and response.json()["detail"]["code"] == "RESULT_DROP_FREE_SPACE"
+    assert not any((root / STAGING).glob("*/*.part"))

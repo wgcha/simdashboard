@@ -138,18 +138,19 @@ def legacy_zone_allows(rel_path: str, caller: str) -> bool:
 
 
 def working_zone_allows(rel_path: str) -> bool:
-    """Strictly below ``<project>/<request>/Working`` (W8; review L2).
+    """Strictly below ``<project>/<request>/Working`` (W8; re-review N1).
 
-    At least two folders above ``Working`` (project, request; upper CONTAINER levels may add
-    more), exactly one ``Working`` segment and no ``Final`` segment anywhere, no ``.``/``..``.
-    The upload service additionally confines every write to the selected request's own
-    ``Working`` folder from the registered binding; this is the provider-level guard.
+    The first ``Working`` segment must have at least two folders above it (project, request;
+    upper CONTAINER levels may add more) and no ``Final`` segment before it; no ``.``/``..``.
+    Names deeper inside Working (a Scene's ``final`` or ``Working`` subfolder) are content and
+    allowed. The upload service additionally confines every write to the selected request's
+    own ``Working`` folder from the registered binding; this is the provider-level guard.
     """
     parts = [part.casefold() for part in _segments(rel_path)]
-    if any(part in {".", ".."} for part in parts) or "final" in parts or parts.count("working") != 1:
+    if any(part in {".", ".."} for part in parts) or "working" not in parts:
         return False
     index = parts.index("working")
-    return index >= 2 and len(parts) > index + 1
+    return index >= 2 and "final" not in parts[:index] and len(parts) > index + 1
 
 
 def check_write(rel_path: str, zone: str, caller: str) -> None:

@@ -386,7 +386,9 @@ def _system_pages(conn, schema: _Schema, e: dict[str, set[str]]) -> list[dict]:
     found = []
     for page_id in pages:
         name = conn.execute("SELECT name FROM dashboards WHERE id=?", [page_id]).fetchone()
-        versions = conn.execute("SELECT count(*), count(*) FILTER (WHERE created_by NOT IN ('system','system-analysis-page-backfill')) "
+        # Authors 'system' / 'system-…' (seed and backfills such as system-video-grid-backfill) are not users.
+        # A NULL author cannot be attributed to a person either, so it counts as system (not "사용자 수정").
+        versions = conn.execute("SELECT count(*), count(*) FILTER (WHERE created_by IS NOT NULL AND created_by NOT LIKE 'system%') "
                                 "FROM dashboard_versions WHERE dashboard_id=?", [page_id]).fetchone() \
             if schema.has("dashboard_versions", "created_by") else (0, 0)
         found.append({"id": page_id, "name": str(name[0]) if name else page_id,

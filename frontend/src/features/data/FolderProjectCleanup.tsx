@@ -109,7 +109,7 @@ export function FolderProjectCleanup({ busy, onDeleted }: Props) {
   const blockers = (confirm?.items ?? []).flatMap((item) => item.blockers.map((blocker) => ({ ...blocker, project: item.name })))
   const blocked = blockers.length > 0 || (confirm?.items ?? []).some((item) => !item.deletable)
   const needsName = (confirm?.items ?? []).filter((item) => item.requires_acknowledgement)
-  const namesTyped = needsName.every((item) => (confirm?.typed[item.project_id] ?? '').trim() === item.name)
+  const namesTyped = needsName.every((item) => (confirm?.typed[item.project_id] ?? '').trim() === item.name.trim())
   const detailRows = Object.entries(totals).sort(([a], [b]) => a.localeCompare(b))
 
   return <article className="folder-environment-card folder-cleanup">

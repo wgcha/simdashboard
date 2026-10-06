@@ -1267,3 +1267,20 @@
 - L3: 같은 root의 열린 업로드가 아직 공개하지 않은 바이트를 남은 공간에서 빼고 계산(`reserved_bytes`). L4: 시작 거부(계획 차단·BUSY·경로 오류) 감사 `RESULT_DROP_UPLOAD_REFUSED`. L5: PARTIAL·실패·중지·만료 시 이 세션이 만든 빈 폴더 삭제. L1: 단일 백엔드 작업자 필요를 문서화 — Windows WinSW는 1개, Rocky 8 템플릿 기본 `UVICORN_WORKERS=2`는 미해결로 기록(배포 설정은 바꾸지 않음).
 - 검증(격리 임시 root·합성 데이터): `test_result_drop_upload.py` 35 passed; drop·storage_provider(+boundary)·folder_auto_sync·new_scene_registration·result_registration_api·case_finalization_copy_jobs·security·openapi_contract 143 passed/1 skipped. OpenAPI 재생성(W4 세션의 미커밋 변경도 함께 반영됨). 프론트 tsc·build·test:api 통과, check:architecture 기존 4건만, e2e `result-drop-upload` 7/7(PARTIAL·열린 업로드 중지 추가).
 - 미수행: 반영 재검수, Windows·SMB 실환경, Rocky 8 다중 작업자 대응 결정.
+
+## 2026-10-07 W8 재검수(49d7865) 지적 수정
+
+- 재검수(수동): 원래 W8 지적 모두 해결 확인, 새 지적 반영.
+- N1(회귀): `working_zone_allows`를 "첫 `Working` 위 2단계 이상, 그 앞에 `Final` 없음, `.`/`..` 없음"으로 완화 — Scene 안의 `final`·`Working` 하위 폴더는 내용으로 허용(계획의 내용 폴더 Working·Final 차단도 제거). 같은 규칙을 대상 확인·계획의 모든 대상/임시 경로·새 폴더 만들기에 미리 적용해 위반은 계획 단계 `PATH_NOT_ALLOWED`(완료 때 늦게 실패하지 않음).
+- N2: 페이지 떠날 때 중지 요청을 `beforeunload`에서 `pagehide`로 옮김(`beforeunload`는 확인 질문만, 취소하면 업로드 계속).
+- N3: PARTIAL에서는 폴더(요청한 빈 폴더 포함)를 지우지 않음. 빈 새 폴더 정리는 실패·중지·만료 때만.
+- N4: 차단 확장자 추가 .msix .appx .ms-appinstaller .diagcab .website .mht .cab .psd1.
+- 기타: 완료 중 대상 폴더 목록 읽기 실패는 503 `RESULT_DROP_TARGET_UNAVAILABLE`; 세션 등록 직전 잠금 안에서 예약 반영 남은 공간 재확인(부족 시 507 `RESULT_DROP_FREE_SPACE`).
+- 검증(격리 임시 root·합성 데이터): drop(신규 `test_rereview_*` 4건 포함 39)·storage_provider(+boundary)·folder_auto_sync·new_scene_registration·result_registration_api·case_finalization_copy_jobs·security·openapi_contract 147 passed/1 skipped(재실행 포함). 프론트 tsc·build, check:architecture 기존 4건만, e2e `result-drop-upload` 7/7.
+- 미수행: 이 수정의 재검수, Windows·SMB 실환경, Rocky 8 다중 작업자 대응 결정.
+
+## 2026-10-07 W4 재검수 N1·N3 (49d7865 이후)
+
+- N1: 시스템 분석 페이지의 "사용자 수정" 버전은 `created_by`가 NULL이 아니고 `system`으로 시작하지 않는 것만 센다(`system-video-grid-backfill` 등 백필은 시스템). NULL 작성자는 사람으로 특정할 수 없어 시스템으로 본다(스키마상 NOT NULL이라 방어 처리). 손대지 않은 Orion은 사유가 `SYSTEM_ANALYSIS_PAGES`뿐이고 USER_DATA가 붙지 않음을 테스트로 고정, 사람이 수정한 버전은 USER_DATA로 집계.
+- N3: 이름 확인은 입력값과 프로젝트 이름 양쪽을 trim해 비교.
+- 검증: `test_project_cleanup.py` 18 passed(DuckDB), 프론트 tsc·build, e2e project-cleanup 2/2.

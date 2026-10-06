@@ -137,6 +137,19 @@ def test_delete_orion_removes_every_reference_and_keeps_others(admin_client):
     # M1: Orion hosts the system analysis pages; deleting it needs the typed-name confirmation.
     assert {page["id"] for page in item["system_pages"]} == project_cleanup.SYSTEM_ANALYSIS_PAGE_IDS
     assert item["requires_acknowledgement"] and "SYSTEM_ANALYSIS_PAGES" in item["acknowledge_reasons"]
+    # N1: a pristine Orion (seed + system backfill versions only) shows no user edits.
+    assert all(page["user_versions"] == 0 for page in item["system_pages"]), item["system_pages"]
+    assert item["acknowledge_reasons"] == ["SYSTEM_ANALYSIS_PAGES"]
+    with connect() as conn:  # backfill authors other than plain 'system' are not users (created_by is NOT NULL)
+        conn.execute("UPDATE dashboard_versions SET created_by='system-video-grid-backfill' WHERE dashboard_id='dashboard-drop-default'")
+    item = _cleanup_preview(client, [ORION])["items"][0]
+    assert all(page["user_versions"] == 0 for page in item["system_pages"]) and "USER_DATA" not in item["acknowledge_reasons"]
+    with connect() as conn:  # a person's edit is counted
+        conn.execute("UPDATE dashboard_versions SET created_by='user-kim' WHERE dashboard_id='dashboard-run-comparison-default'")
+    item = _cleanup_preview(client, [ORION])["items"][0]
+    assert {page["id"]: page["user_versions"] for page in item["system_pages"]}["dashboard-run-comparison-default"] >= 1
+    assert "USER_DATA" in item["acknowledge_reasons"]
+    preview = _cleanup_preview(client, [ORION])
     unconfirmed = _cleanup_delete(client, [ORION], preview["confirm_token"])
     assert unconfirmed.status_code == 409 and unconfirmed.json()["detail"]["code"] == "PROJECT_CLEANUP_CONFIRM_REQUIRED"
     assert unconfirmed.json()["detail"]["project_ids"] == [ORION]

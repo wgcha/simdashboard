@@ -44,7 +44,7 @@ from . import environment_folder_profiles, folder_name_warnings, spdm_storage
 from . import result_registration_paths as paths
 from .result_registration import _BLOCKED_EXTENSIONS
 from .storage.local import LocalFsProvider
-from .storage.provider import UPLOAD_STAGING_DIR, WORKING, StorageError
+from .storage.provider import UPLOAD_STAGING_DIR, WORKING, StorageError, working_zone_allows
 
 CHUNK_BYTES = 8 * 1024 * 1024
 MAX_FILES = 20000
@@ -86,6 +86,8 @@ DROP_BLOCKED_EXTENSIONS = frozenset({
     ".scf", ".url", ".lnk", ".library-ms", ".searchconnector-ms", ".msc", ".iso", ".img", ".vhd", ".vhdx",
     ".appref-ms", ".settingcontent-ms", ".application", ".wsc", ".sct", ".chm", ".inf", ".xll", ".ps1xml",
     ".hta", ".cpl", ".reg",
+    # re-review N4
+    ".msix", ".appx", ".ms-appinstaller", ".diagcab", ".website", ".mht", ".cab", ".psd1",
 })
 _SCENE_LIKE = re.compile(r"^\d+[_\-]")
 _HEX32 = re.compile(r"^[0-9a-f]{32}$")
@@ -243,6 +245,9 @@ def checked_target(conn: ConnectionLike, scope: Scope, target_relative_path: str
     """Existing, owned, link-free folder inside this request's Working tree, and its DEPTH_V1 level."""
     target = paths._relative(target_relative_path)
     level = _target_level(scope, target)
+    if not working_zone_allows(f"{target}/{UPLOAD_STAGING_DIR}"):
+        raise DropUploadError("RESULT_DROP_TARGET_OUTSIDE_WORKING",
+                              "결과는 이 의뢰의 Working 폴더 아래에만 올릴 수 있습니다.", 422)
     fs = LocalFsProvider(scope.root)
     target = paths._safe_existing(scope.root, target)
     info = fs.stat(target, follow_links=False)
@@ -356,10 +361,7 @@ def _depth_findings(scope: Scope, known: dict[str, set[str]], name: str, parent_
     role = _role_at(scope.roles, level)
     folded = name.casefold()
     if role not in _ROLE_BEARING:
-        if folded in {"working", "final"}:
-            return [("DEPTH_REQUEST_FOLDER", "error",
-                     f"'{name}' 이름의 폴더는 Working 아래에 올릴 수 없습니다(의뢰의 Working·Final과 혼동). 이름을 바꾸세요.")]
-        return []
+        return []  # content inside a Scene: any name (also final/Working) is allowed
     found: list[tuple[str, str, str]] = []
     label = ROLE_LABELS.get(role, role)
     parent_label = ROLE_LABELS.get(_role_at(scope.roles, level - 1), "폴더")
@@ -467,7 +469,13 @@ def build_plan(conn: ConnectionLike, project_id: str, request_id: str, environme
                 sibling_cache[parent_rel] = []
         return sibling_cache[parent_rel]
 
+    def zone_check(relative: str, client_path: str) -> None:
+        # Same rule the storage provider enforces at write time (re-review N1): report at plan time.
+        if not working_zone_allows(relative):
+            _issue(issues, "PATH_NOT_ALLOWED", "error", "이 경로에는 쓸 수 없습니다(Working 폴더 밖).", client_path)
+
     def length_check(relative: str, client_path: str) -> None:
+        zone_check(relative, client_path)
         if (len(str(fs.path(relative))) > MAX_PATH_CHARS
                 or len(display_path(base, relative)) > MAX_PATH_CHARS):
             _issue(issues, "PATH_TOO_LONG", "error",
@@ -541,11 +549,9 @@ def build_plan(conn: ConnectionLike, project_id: str, request_id: str, environme
 
     total = sum(int(item["size"]) for item in planned_files)
     margin = _margin(total)
+    zone_check(f"{scope.working_relative_path}/{UPLOAD_STAGING_DIR}/{'0' * 32}/0.part", "(임시 업로드 폴더)")
     reserved = _reserved_bytes(scope.root_key)
-    try:
-        free = max(fs.free_bytes(scope.working_relative_path) - reserved, 0)
-    except OSError:
-        free = None
+    free = _free_after_reservations(fs, scope)
     if free is None:
         _issue(issues, "FREE_SPACE_UNKNOWN", "error", "대상 드라이브의 남은 공간을 확인할 수 없습니다.")
     elif free < total + margin:
@@ -638,6 +644,13 @@ def _reserved_bytes(root_key: str) -> int:
         return sum(item.size for session in _sessions.values()
                    if session.scope.root_key == root_key and session.state in _OPEN_STATES
                    for item in session.files if not item.published)
+
+
+def _free_after_reservations(fs: LocalFsProvider, scope: Scope) -> int | None:
+    try:
+        return max(fs.free_bytes(scope.working_relative_path) - _reserved_bytes(scope.root_key), 0)
+    except OSError:
+        return None
 
 
 def _busy_reason(project_id: str, request_id: str, user_id: str) -> str | None:
@@ -788,6 +801,12 @@ def create_session(conn: ConnectionLike, project_id: str, request_id: str, envir
                        skipped=plan["skipped"], total_bytes=plan["total_bytes"])
     with _create_lock:
         reason = _busy_reason(project_id, request_id, user_id)
+        if reason is None:
+            # Another session may have reserved space since planning (re-review info).
+            free = _free_after_reservations(fs, scope)
+            if free is None or free < plan["required_bytes"]:
+                _remove_staging(session)
+                raise DropUploadError("RESULT_DROP_FREE_SPACE", "다른 업로드가 공간을 예약해 남은 공간이 부족합니다. 잠시 후 다시 시도하세요.", 507)
         if reason is None:
             with _registry_lock:
                 _sessions[session_id] = session
@@ -961,6 +980,9 @@ def complete(conn: ConnectionLike, session_id: str, user_id: str) -> dict[str, A
                         return parent, index.lookup(parent, name)
                     except (FileNotFoundError, NotADirectoryError):
                         return parent, None  # parent folder not created yet
+                    except (OSError, StorageError) as exc:
+                        raise DropUploadError("RESULT_DROP_TARGET_UNAVAILABLE",
+                                              "대상 폴더를 읽을 수 없습니다. 잠시 후 다시 옮기세요.", 503) from exc
 
                 for folder in session.folders:
                     parent, info = existing(folder["relative_path"])
@@ -1005,8 +1027,8 @@ def complete(conn: ConnectionLike, session_id: str, user_id: str) -> dict[str, A
         session.state = "PUBLISHED" if len(published) == len(session.files) else "PARTIAL"
         if session.state == "PUBLISHED":
             _remove_staging(session)
-        else:
-            _remove_empty_created(session)
+        # PARTIAL keeps every folder (also explicitly requested empty ones, re-review N3); empty
+        # created folders are removed only on failure, abort or expiry.
     folder_auto_sync.invalidate(scope.root_key, scope.project_id, scope.request_id, scope.environment)
     try:
         sync = folder_auto_sync.sync(conn, scope.project_id, scope.request_id, scope.environment, str(user_id), force=True)
@@ -1066,6 +1088,8 @@ def create_folder(conn: ConnectionLike, project_id: str, request_id: str, enviro
                               "Scene 폴더 안에는 새 폴더를 만들지 않습니다. 결과 파일은 Scene 폴더에 바로 넣으세요.", 422)
     fs = LocalFsProvider(scope.root)
     relative = f"{parent}/{name}"
+    if not working_zone_allows(relative):
+        raise DropUploadError("RESULT_DROP_FOLDER_LEVEL_INVALID", "이 위치에는 폴더를 만들 수 없습니다(Working 폴더 밖).", 422)
     if len(str(fs.path(relative))) > MAX_PATH_CHARS or len(display_path(display_root(scope.root), relative)) > MAX_PATH_CHARS:
         raise DropUploadError("RESULT_DROP_PATH_TOO_LONG", "경로가 Windows 길이 한도를 넘습니다. 이름을 줄이세요.", 422)
     existing_entry = _DirIndex(fs).lookup(parent, name)

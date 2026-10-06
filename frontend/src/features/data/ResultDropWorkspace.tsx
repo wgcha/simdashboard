@@ -142,15 +142,18 @@ export function ResultDropWorkspace({ embedded = false, contextChanging = false,
   }, [contextChanging, environment, projectId, requestId, treeVersion])
 
   useEffect(() => {
-    const onUnload = (event: BeforeUnloadEvent) => {
+    // beforeunload only asks "leave page?"; the abort is sent when the page is really left
+    // (pagehide), so cancelling the prompt keeps the upload running (re-review N2).
+    const onBeforeUnload = (event: BeforeUnloadEvent) => { if (phaseRef.current) event.preventDefault() }
+    const onPageHide = () => {
       const current = phaseRef.current
-      if (!current) return
-      if (current.phase === 'uploading') resultDropApi.abortOnUnload(current.sessionId)
-      event.preventDefault()
+      if (current?.phase === 'uploading') resultDropApi.abortOnUnload(current.sessionId)
     }
-    window.addEventListener('beforeunload', onUnload)
+    window.addEventListener('beforeunload', onBeforeUnload)
+    window.addEventListener('pagehide', onPageHide)
     return () => {
-      window.removeEventListener('beforeunload', onUnload)
+      window.removeEventListener('beforeunload', onBeforeUnload)
+      window.removeEventListener('pagehide', onPageHide)
       stopRef.current = true // leaving the screen stops a running upload (its loop aborts the session)
     }
   }, [])
