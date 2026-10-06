@@ -268,11 +268,12 @@ export function CaseFinalizationPanel(props: Props) {
     }
   }
 
-  const repairSummary = async () => {
+  const repairSummary = async (override = false) => {
+    if (override && !window.confirm('관리자 강제 갱신: 앱이 만들지 않은 요약 파일을 바꾸거나, 사라진 현재 Final 대신 남아 있는 가장 최근 Final을 현재로 지정합니다. 계속할까요?')) return
     const token = generation.current
     setBusy(true); setError('')
     try {
-      const next = await caseFinalizationApi.repairSummary({ project_id: projectId, request_id: requestId, environment, case_id: caseId })
+      const next = await caseFinalizationApi.repairSummary({ project_id: projectId, request_id: requestId, environment, case_id: caseId, override })
       if (token === generation.current) { setStatus(next); setNotice('Final 요약 파일을 갱신했습니다.') }
     } catch (cause) {
       if (token === generation.current) setError(message(cause, 'Final 요약 파일을 갱신하지 못했습니다.'))
@@ -321,6 +322,7 @@ export function CaseFinalizationPanel(props: Props) {
         <AlertTriangle size={14} aria-hidden="true" />{currentFinal.missing ? '현재 Final의 기록이나 파일을 찾을 수 없습니다. 관리자에게 문의하세요.' : '현재 Final 파일이 완료 기록과 다릅니다(해시 불일치). 관리자에게 문의하세요.'}
       </span> : null}
       {status?.summary?.state === 'CONFLICT' ? <span className="case-finalization__missing-inline" data-testid="case-final-summary-conflict" title={`${status.summary.path}에 앱이 만들지 않은 파일(또는 바로가기)이 있어 덮어쓰지 않았습니다. 관리자가 확인한 뒤 정리하거나 갱신해야 합니다.`}>요약 파일 충돌(관리자 확인)</span> : null}
+      {(status?.summary?.state === 'CONFLICT' || status?.summary?.state === 'CURRENT_MISSING') && status?.can_override_summary ? <button type="button" className="case-finalization__retry" data-testid="case-final-summary-override" disabled={busy} onClick={() => void repairSummary(true)}><RotateCcw size={13} aria-hidden="true" />강제 갱신(관리자)</button> : null}
       {summaryNeedsRepair ? <span className="case-finalization__missing-inline" data-testid="case-final-summary-repair" title={`${status?.summary?.path ?? 'Final/current.json'}이(가) 현재 Final을 가리키지 않습니다.`}>요약 파일 갱신 필요</span> : null}
       {summaryNeedsRepair && canFinalize ? <button type="button" className="case-finalization__retry" disabled={busy} onClick={() => void repairSummary()}><RotateCcw size={13} aria-hidden="true" />요약 파일 갱신</button> : null}
       {failed && !dialogOpen ? <button type="button" className="case-finalization__retry" disabled={!canFinalize || busy} title={failed.error?.message} onClick={() => void retryJob(failed)}><RotateCcw size={13} aria-hidden="true" />재시도</button> : null}

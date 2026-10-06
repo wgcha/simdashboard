@@ -3373,6 +3373,8 @@ export interface paths {
         /**
          * Repair Summary
          * @description W3: rewrite ``Final/current.json`` (and the signed pointer) for the current Final; returns the status.
+         *
+         *     ``override`` needs a global admin. Success and failure are both audited (override flag, error code).
          */
         post: operations["repair_summary_api_dashboard_finalizations_summary_repair_post"];
         delete?: never;

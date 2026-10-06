@@ -171,6 +171,8 @@ export type CaseFinalizationStatus = {
   /** W3: completed Finals of the request + environment, newest first (at most 50). */
   final_history?: CaseFinalizationHistoryItem[]
   /** W3: state of the SPDM summary file (`Final/current.json`). */
+  /** The signed-in user may use the summary repair override (global admin). */
+  can_override_summary?: boolean
   summary?: { state: 'NONE' | 'OK' | 'MISSING' | 'STALE' | 'CONFLICT' | 'CURRENT_UNVERIFIED' | 'CURRENT_MISSING'; path: string; final_id?: string | null }
   unverified_records: number
 }

@@ -1221,3 +1221,10 @@
 - W7: 보고서 창·Final 창 공통 `reportPreferences.ts`·`reportMeta.ts`·`CaseReportFields.tsx`. 업로드 템플릿 레이아웃이면 레이아웃 선택 옆 안내, Final 창 레이아웃 선택(기본 = 사용자·의뢰별 마지막 사용 레이아웃, localStorage try/catch, 없으면 표준), 작성자(표시 이름) 자동 입력·개발단계·검토조건·결론을 PPTX(옵션+표지 하단 상자, 렌더 때만)와 HTML 범위 목록에. 서버·current.json에는 넣지 않음.
 - 검증: 검수자 W3 테스트 이식+확장 7건 포함 `test_case_finalization_current.py` 14 passed; current·copy_jobs·reports·environment flow·storage provider(+boundary)·spdm_storage_workflow·security 170 passed/2 skipped. OpenAPI 재생성(override)·계약 OK. 프론트 tsc·build·test:api, check:architecture 기존 4건만. e2e case-finalization·case-report·case-compare 26/26.
 - 미수행: 독립 재검수, Codex Security(미가용), Windows·SMB, SPDM 형식 협의.
+
+## 2026-10-06 W3 마지막 검수 LOW 3건 (5909b84 이후)
+
+- N1: 요약 파일 갱신 `override: true`는 전역 관리자만(그 외 403 `GLOBAL_ADMIN_REQUIRED`, 폴더 환경 관리자 엔드포인트와 같은 `principal.is_global_admin` 확인). 상태·갱신 응답 `can_override_summary`, 화면은 관리자에게만 CONFLICT·CURRENT_MISSING에서 "강제 갱신(관리자)"(확인 창).
+- N2: 갱신은 요약 파일을 먼저, 서명 포인터를 나중에 써서 요약 쓰기 실패 시 포인터가 움직이지 않음. 성공·실패 모두 감사(override, 오류 코드; 실패는 별도 연결이라 롤백되지 않음).
+- N3: 갱신의 전체 해시를 의뢰 잠금 밖에서 수행(전후 stat 서명 동일), 잠금 안에서 포인터 불변(`FINALIZATION_REPAIR_RETRY`)·stat 서명 불변(`FINALIZATION_CURRENT_UNVERIFIED`) 재확인 후 쓰기. 완료 때 marker는 갱신에 쓰지 않음.
+- 검증: 신규 테스트 3건(`test_rereview_n1~n3`) 포함 current·copy_jobs·reports·security 99 passed. OpenAPI 재생성·계약 OK. 프론트 tsc·build, check:architecture 기존 4건만, e2e case-finalization 8/8(관리자 강제 갱신 테스트 추가).

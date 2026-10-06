@@ -373,6 +373,8 @@ test('현재 Final이 다른 Case면 헤더에 보이고 확인해야 재지정�
   const header = page.locator('.case-finalization')
   await expect(page.getByTestId('case-final-current')).toContainText('현재 Final · Case B · kim')
   await expect(page.getByTestId('case-final-summary-repair')).toContainText('요약 파일 갱신 필요')
+  // The override is a global-admin action: not offered without can_override_summary.
+  await expect(page.getByTestId('case-final-summary-override')).toHaveCount(0)
   const replace = dialog.getByTestId('case-final-replace')
   await expect(replace).toContainText('현재 Final(Case B)을 이전 Final로 바꾸고 이 Case를 Final로 지정합니다')
   await replace.getByText('Final 이력 2건').click()
@@ -391,6 +393,27 @@ test('현재 Final이 다른 Case면 헤더에 보이고 확인해야 재지정�
   await expect(page.getByTestId('case-final-summary-repair')).toHaveCount(0, { timeout: 10_000 })
   expect(repairs[0]).toMatchObject({ project_id: 'project-tv-001', request_id: 'request-drop-001', environment: 'DISTRIBUTION', case_id: CASE_ID })
   expect(errors).toEqual([])
+})
+
+test('요약 파일 충돌은 전역 관리자에게만 강제 갱신을 보이고 확인 후 override로 요청한다', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 })
+  const current = { operation_id: 'b'.repeat(32), case_id: CASE_ID, case_label: 'Case A', case_path: 'R/Working/Case A', designated_by: 'kim', designated_at: '2026-10-05T01:00:00Z', schema_version: 3, output_paths: null, verified: true, verification: 'SHA256', missing: false }
+  let state: 'CONFLICT' | 'OK' = 'CONFLICT'
+  const repairs: Array<Record<string, unknown>> = []
+  const statusBody = () => ({ latest: null, selected_case_latest: null, retryable_operations: [], unverified_records: 0, active_operations: [], current_final: current, final_history: [], summary: { state, path: 'R/Final/current.json', final_id: null }, can_override_summary: true })
+  await installMocks(page, { status: statusBody })
+  await page.route('**/api/dashboard/finalizations/summary/repair', (route) => {
+    repairs.push(route.request().postDataJSON() as Record<string, unknown>)
+    state = 'OK'
+    return fulfillJson(route, statusBody())
+  })
+  await openFinal(page)
+  await page.getByRole('dialog', { name: 'Final 지정 확인' }).getByRole('button', { name: '취소', exact: true }).click()
+  await expect(page.getByTestId('case-final-summary-conflict')).toContainText('요약 파일 충돌')
+  page.once('dialog', (dialog) => void dialog.accept())
+  await page.getByTestId('case-final-summary-override').click()
+  await expect(page.getByTestId('case-final-summary-conflict')).toHaveCount(0, { timeout: 10_000 })
+  expect(repairs).toEqual([expect.objectContaining({ override: true, case_id: CASE_ID })])
 })
 
 test('Final 보고서는 고른 레이아웃과 보고서 정보를 쓰고 업로드 템플릿 미적용을 레이아웃 옆에 알린다', async ({ page }) => {

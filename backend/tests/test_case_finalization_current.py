@@ -355,3 +355,135 @@ def test_review_l3_stale_summary_temp_files_are_cleaned_on_the_next_write(admin_
     os.utime(other, (old, old))
     _designate(client, root, ctx_a)
     assert not stale.exists() and fresh.exists() and other.exists()
+
+
+# ---------------------------------------------------------------------------
+# Last review round (5909b84): N1 override needs a global admin, N2 order + audit, N3 hash outside the lock.
+# ---------------------------------------------------------------------------
+
+def _audits(action: str) -> list[dict]:
+    from app.database_connection import connect
+    with connect() as conn:
+        rows = conn.execute("SELECT status_code, detail_json FROM audit_events WHERE action=? ORDER BY occurred_at", [action]).fetchall()
+    return [{"status": row[0], **(json.loads(row[1]) if isinstance(row[1], str) else (row[1] or {}))} for row in rows]
+
+
+def _power_member_client(ctx):
+    from datetime import datetime, timezone
+    from fastapi.testclient import TestClient
+    from app.database_connection import connect
+    from app.main import app
+    from app.security import hash_password
+    user_id, now = f"power-{uuid4().hex}", datetime.now(timezone.utc).replace(tzinfo=None)
+    with connect() as conn:
+        conn.execute("INSERT INTO users (id,username,password_hash,display_name,legacy_role,is_active,created_at,updated_at,account_status,is_global_admin) "
+                     "VALUES (?,?,?,?,'editor',true,?,?,'ACTIVE',false)", [user_id, user_id, hash_password("synthetic-power-password"), user_id, now, now])
+        conn.execute("INSERT INTO project_memberships (id,project_id,user_id,role,created_by,created_at,updated_by,updated_at) VALUES (?,?,?,'power',?,?,?,?)",
+                     [f"m-{uuid4().hex}", ctx["project_id"], user_id, "synthetic", now, "synthetic", now])
+    client = TestClient(app)
+    client.__enter__()
+    token = client.post("/api/auth/login", json={"username": user_id, "password": "synthetic-power-password"}).json()["access_token"]
+    client.headers["Authorization"] = f"Bearer {token}"
+    return client
+
+
+def test_rereview_n1_override_needs_a_global_admin_and_is_audited(admin_client):
+    client, root = admin_client
+    ctx_a, _ctx_b = _seed_two(client, root)
+    (root / FINAL).mkdir(parents=True, exist_ok=True)
+    (root / SUMMARY).write_text("USER OWN NOTES", encoding="utf-8")
+    _designate(client, root, ctx_a)
+    assert _status(client, ctx_a)["can_override_summary"] is True
+    power = _power_member_client(ctx_a)
+    try:
+        status = power.get(f"{API}/status", params={k: v for k, v in _body(ctx_a).items() if k != "capture_id"})
+        assert status.status_code == 200 and status.json()["can_override_summary"] is False
+        denied = _repair(power, ctx_a, override=True)
+        assert denied.status_code == 403 and denied.json()["detail"]["code"] == "GLOBAL_ADMIN_REQUIRED", denied.text
+        assert (root / SUMMARY).read_text(encoding="utf-8") == "USER OWN NOTES"
+        plain = _repair(power, ctx_a)  # without override the power user may repair, and is refused here on content
+        assert plain.status_code == 409 and plain.json()["detail"]["code"] == "FINALIZATION_SUMMARY_CONFLICT"
+    finally:
+        power.__exit__(None, None, None)
+    failures = _audits("CASE_FINALIZATION_SUMMARY_REPAIR_FAILED")
+    assert [(item["status"], item["code"], item["override"]) for item in failures] == [
+        (403, "GLOBAL_ADMIN_REQUIRED", True), (409, "FINALIZATION_SUMMARY_CONFLICT", False)]
+    assert _repair(client, ctx_a, override=True).status_code == 200
+    assert [(item["status"], item["override"]) for item in _audits("CASE_FINALIZATION_SUMMARY_REPAIRED")] == [(200, True)]
+
+
+def test_rereview_n2_failed_summary_write_never_moves_the_pointer(admin_client, monkeypatch):
+    client, root = admin_client
+    ctx_a, ctx_b = _seed_two(client, root)
+    record_a = _designate(client, root, ctx_a)
+    record_b = _designate(client, root, ctx_b)
+    shutil.rmtree(root / record_b["output_paths"]["CAE"])  # current Final missing -> override moves to A
+    designations = root / FINAL / ".finalizations" / "designations.json"
+    before = designations.read_bytes()
+
+    def refuse(*args, **kwargs):
+        raise case_finalization.CaseFinalizationError("FINALIZATION_WRITE_FAILED", "synthetic")
+
+    monkeypatch.setattr(case_finalization, "_write_summary", refuse)
+    failed = _repair(client, ctx_a, override=True)
+    assert failed.status_code == 503 and failed.json()["detail"]["code"] == "FINALIZATION_WRITE_FAILED"
+    assert designations.read_bytes() == before
+    assert _audits("CASE_FINALIZATION_SUMMARY_REPAIR_FAILED")[-1]["code"] == "FINALIZATION_WRITE_FAILED"
+    monkeypatch.setattr(case_finalization, "_write_summary", _REAL_WRITE_SUMMARY)
+    assert _repair(client, ctx_a, override=True).status_code == 200
+    assert _summary(root)["environments"]["DISTRIBUTION"]["final_id"] == record_a["operation_id"]
+
+
+def test_rereview_n3_hashing_runs_outside_the_request_lock_and_rechecks_under_it(admin_client, monkeypatch):
+    from app.services.storage.local import LocalFsProvider
+    client, root = admin_client
+    ctx_a, _ctx_b = _seed_two(client, root)
+    record = _designate(client, root, ctx_a)
+    (root / SUMMARY).unlink()
+    metadata = f"{FINAL}/.finalizations"
+    real_verify = case_finalization._verify_outputs
+    lock_free: list[bool] = []
+
+    def observe(scope, plan, outputs, reports, *, deep=True):
+        result = real_verify(scope, plan, outputs, reports, deep=deep)
+        try:
+            with LocalFsProvider(root).try_lock(f"{metadata}/.request.lock", zone="FINAL"):
+                lock_free.append(True)
+        except storage_provider.SpdmStorageError:
+            lock_free.append(False)
+        return result
+
+    monkeypatch.setattr(case_finalization, "_verify_outputs", observe)
+    assert _repair(client, ctx_a).status_code == 200
+    assert lock_free and all(lock_free)
+    # An output touched after hashing (same bytes, new mtime) is refused under the lock.
+    (root / SUMMARY).unlink()
+    target = root / record["output_paths"]["CAE"] / record["files"][0]["case_relative_path"]
+
+    def touch_after(scope, plan, outputs, reports, *, deep=True):
+        result = real_verify(scope, plan, outputs, reports, deep=deep)
+        stat = target.stat()
+        import os
+        os.utime(target, ns=(stat.st_atime_ns, stat.st_mtime_ns + 5_000_000))
+        return result
+
+    monkeypatch.setattr(case_finalization, "_verify_outputs", touch_after)
+    refused = _repair(client, ctx_a)
+    assert refused.status_code == 409 and refused.json()["detail"]["code"] == "FINALIZATION_CURRENT_UNVERIFIED"
+    assert not (root / SUMMARY).exists()
+    # The pointer changing while hashing (another completion) asks for a retry.
+    def pointer_changes(scope, plan, outputs, reports, *, deep=True):
+        result = real_verify(scope, plan, outputs, reports, deep=deep)
+        if not deep:
+            return result  # status scans check sizes only; change the pointer during the repair's hashing
+        current = case_finalization._read_designations(root, metadata)
+        bumped = {key: value for key, value in current.items() if key != "designations_signature"}
+        bumped["last_confirmed_at"] = "2999-01-01T00:00:00.000000Z"
+        case_finalization._write_signed_metadata(metadata, root, "designations.json", case_finalization._signed_record(
+            bumped, "designations_signature", case_finalization.DESIGNATIONS_DOMAIN))
+        return result
+
+    monkeypatch.setattr(case_finalization, "_verify_outputs", pointer_changes)
+    retry = _repair(client, ctx_a)
+    assert retry.status_code == 409 and retry.json()["detail"]["code"] == "FINALIZATION_REPAIR_RETRY"
+    assert not (root / SUMMARY).exists()

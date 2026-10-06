@@ -10420,7 +10420,7 @@
           "case-finalization"
         ],
         "summary": "Repair Summary",
-        "description": "W3: rewrite ``Final/current.json`` (and the signed pointer) for the current Final; returns the status.",
+        "description": "W3: rewrite ``Final/current.json`` (and the signed pointer) for the current Final; returns the status.\n\n``override`` needs a global admin. Success and failure are both audited (override flag, error code).",
         "operationId": "repair_summary_api_dashboard_finalizations_summary_repair_post",
         "requestBody": {
           "content": {

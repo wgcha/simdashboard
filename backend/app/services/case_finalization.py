@@ -3380,15 +3380,23 @@ def _current_and_history(scope: dict[str, Any], candidates: list[tuple[dict[str,
                               "final_id": entry.get("final_id") if isinstance(entry, dict) else None}
 
 
+def _repair_signature(root: Path, plan: dict[str, Any], deep: dict[str, Any]) -> str | None:
+    outputs = {**_expected_output_paths(plan), **(deep.get("expected_outputs") or {})}
+    return _output_signature(root, outputs, deep["plan"]["files"], deep.get("reports") or [])
+
+
 def repair_summary(conn: ConnectionLike, *, project_id: str, request_id: str, environment: str,
                    case_id: str, actor: str, override: bool = False) -> dict[str, Any]:
-    """Explicit repair (RESULT_IMPORT): point the summary and pointer at the current Final.
+    """Explicit repair (RESULT_IMPORT; ``override`` is checked for global admin by the router).
 
-    The current Final must re-hash (SHA-256 of every output, no budget; synchronous) or the
-    repair is refused with ``FINALIZATION_CURRENT_UNVERIFIED``. If the signed pointer names a
-    Final whose records/outputs are gone, the repair is refused with ``FINALIZATION_CURRENT_MISSING``
-    instead of moving back to an older Final, unless ``override`` (audited by the router); the
-    override also allows replacing a ``Final/current.json`` that is not ours.
+    1. Without the request lock: choose the current Final (never silently an older one when the
+       pointed one is missing: ``FINALIZATION_CURRENT_MISSING`` unless ``override``) and re-hash
+       every output (SHA-256, no budget; the completion-time marker is not trusted here). The
+       outputs' stat signature (size, mtime, file id) is taken before and after hashing.
+    2. Under the request lock: the pointer must be unchanged (else ``FINALIZATION_REPAIR_RETRY``)
+       and the stat signature unchanged (else ``FINALIZATION_CURRENT_UNVERIFIED``); then the
+       summary is written first and the signed pointer second, so a failed summary write never
+       leaves a moved pointer.
     """
     scope = _scope_for_status(conn, project_id, request_id, environment, case_id)
     root: Path = scope["root"]
@@ -3397,39 +3405,47 @@ def repair_summary(conn: ConnectionLike, *, project_id: str, request_id: str, en
     metadata_dir = result_registration_paths._safe_existing(root, metadata_relative, allow_missing_leaf=True)
     if not LocalFsProvider(root).is_dir(metadata_dir):
         raise CaseFinalizationError("FINALIZATION_NO_CURRENT", "완료된 Final이 없어 요약 파일을 만들 수 없습니다.")
-    with _request_lock(f"{metadata_dir}/.request.lock", root):
-        candidates, _incomplete, _unverified = _scan_operations(conn, scope, project_id, request_id, environment, case_id)
-        designations = _read_designations(root, metadata_dir)
-        pointer = (designations.get("environments") or {}).get(env)
-        target, pointer_missing = _current_target(candidates, pointer if isinstance(pointer, dict) else None)
-        if pointer_missing:
-            if not override:
-                raise CaseFinalizationError(
-                    "FINALIZATION_CURRENT_MISSING",
-                    "현재 Final의 기록이나 파일을 확인할 수 없습니다. 이전 Final로 되돌리지 않았습니다. 관리자가 확인한 뒤 명시적으로 지정하세요.")
-            target = candidates[0] if candidates else None
-        if target is None:
-            raise CaseFinalizationError("FINALIZATION_NO_CURRENT", "완료된 Final이 없어 요약 파일을 만들 수 없습니다.")
-        plan, record, deep = target
-        try:
-            hashed = _verify_outputs(scope, deep["plan"], deep["expected_outputs"], deep["reports"], deep=True)
-        except (CaseFinalizationError, result_registration_paths.ResultRegistrationError,
-                spdm_storage.SpdmStorageError, OSError, TypeError, ValueError, KeyError):
-            hashed = False
-        if not hashed:
+    unverified = CaseFinalizationError(
+        "FINALIZATION_CURRENT_UNVERIFIED",
+        "현재 Final 파일의 해시가 완료 기록과 다르거나 확인 중에 바뀌었습니다. 요약 파일을 바꾸지 않았습니다. 관리자에게 문의하세요.")
+    candidates, _incomplete, _unverified = _scan_operations(conn, scope, project_id, request_id, environment, case_id)
+    designations = _read_designations(root, metadata_dir)
+    pointer = (designations.get("environments") or {}).get(env)
+    target, pointer_missing = _current_target(candidates, pointer if isinstance(pointer, dict) else None)
+    if pointer_missing:
+        if not override:
             raise CaseFinalizationError(
-                "FINALIZATION_CURRENT_UNVERIFIED",
-                "현재 Final 파일의 해시가 완료 기록과 다릅니다. 요약 파일을 바꾸지 않았습니다. 관리자에게 문의하세요.")
-        completed = deep["complete"]
-        position = next(index for index, row in enumerate(candidates) if row[1]["operation_id"] == record["operation_id"])
-        previous_id = candidates[position + 1][1]["operation_id"] if position + 1 < len(candidates) else None
-        if isinstance(pointer, dict) and pointer.get("operation_id") == record["operation_id"]:
-            previous_id = pointer.get("previous_operation_id", previous_id)
-        pointer_record = _pointer_record(designations, env, plan, completed, previous_id)
-        _write_signed_metadata(metadata_dir, root, DESIGNATIONS_FILE, pointer_record)
+                "FINALIZATION_CURRENT_MISSING",
+                "현재 Final의 기록이나 파일을 확인할 수 없습니다. 이전 Final로 되돌리지 않았습니다. 관리자가 확인한 뒤 명시적으로 지정하세요.")
+        target = candidates[0] if candidates else None
+    if target is None:
+        raise CaseFinalizationError("FINALIZATION_NO_CURRENT", "완료된 Final이 없어 요약 파일을 만들 수 없습니다.")
+    plan, record, deep = target
+    before = _repair_signature(root, plan, deep)
+    try:
+        hashed = _verify_outputs(scope, deep["plan"], deep["expected_outputs"], deep["reports"], deep=True)
+    except (CaseFinalizationError, result_registration_paths.ResultRegistrationError,
+            spdm_storage.SpdmStorageError, OSError, TypeError, ValueError, KeyError):
+        hashed = False
+    if not hashed or before is None or _repair_signature(root, plan, deep) != before:
+        raise unverified
+    completed = deep["complete"]
+    position = next(index for index, row in enumerate(candidates) if row[1]["operation_id"] == record["operation_id"])
+    previous_id = candidates[position + 1][1]["operation_id"] if position + 1 < len(candidates) else None
+    if isinstance(pointer, dict) and pointer.get("operation_id") == record["operation_id"]:
+        previous_id = pointer.get("previous_operation_id", previous_id)
+    snapshot = _encode({key: value for key, value in designations.items() if key != "designations_signature"})
+    with _request_lock(f"{metadata_dir}/.request.lock", root):
+        current = _read_designations(root, metadata_dir)
+        if _encode({key: value for key, value in current.items() if key != "designations_signature"}) != snapshot:
+            raise CaseFinalizationError("FINALIZATION_REPAIR_RETRY", "확인하는 동안 다른 Final이 완료되어 상태가 바뀌었습니다. 다시 시도하세요.")
+        if _repair_signature(root, plan, deep) != before:
+            raise unverified
+        pointer_record = _pointer_record(current, env, plan, completed, previous_id)
         view_plan = {**plan, "final_relative_path": final_relative}
-        completed = {**completed, "output_paths": _expected_output_paths(plan)}  # v1 records: current layout
-        _write_summary(root, final_relative, env, _summary_entry(view_plan, completed, previous_id, _digest(_encode(deep["complete"]))),
+        summary_completed = {**completed, "output_paths": _expected_output_paths(plan)}  # v1 records: current layout
+        _write_summary(root, final_relative, env, _summary_entry(view_plan, summary_completed, previous_id, _digest(_encode(completed))),
                        pointer_record, metadata_dir, replace_foreign=override)
+        _write_signed_metadata(metadata_dir, root, DESIGNATIONS_FILE, pointer_record)
     _LOG.info("Final summary repaired by %s for %s/%s (override=%s)", actor, request_id, environment, override)
     return status(conn, project_id=project_id, request_id=request_id, environment=environment, case_id=case_id)
