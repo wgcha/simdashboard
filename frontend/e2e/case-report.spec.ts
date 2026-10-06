@@ -94,7 +94,7 @@ function videoPage(url: URL, options: Options) {
   return {
     contract_version: 1,
     context: { ...distribution(url).context, option_label: 'Individual', load_case_name: 'Drop', run_label: 'Run A' },
-    pagination: { page: 1, page_size: 100, total_items: videos.length, total_pages: 1, has_previous: false, has_next: false },
+    pagination: { page: 1, page_size: 20, total_items: videos.length, total_pages: 1, has_previous: false, has_next: false },
     videos,
   }
 }

@@ -1153,3 +1153,9 @@
 - 검증: DuckDB 전체 9 failed(기존 9건; 신규 실패 2건 `environment_folder_flow_api` Final 경로·0034 seed 비교는 테스트 갱신 후 통과), 관련 백엔드(finalization·progress·auto-discovery·depth_schema·storage_provider·single_request_registration) 통과, Postgres 16 신규 DB(0034 seed 포함)에서 finalization·auto-discovery·progress 72 passed. 프론트 tsc·build·test:api 통과, e2e case-finalization 통과, environment-folder-flow는 기존 실패 1건(desktop and mobile 등록 흐름) 외 통과.
 - 독립 검수: Verifier 1회(Blocker 없음, should-fix 2건 수정 — ① 업그레이드 전 시도가 `Final/Reports/<Case>/<op>`에 보고서를 남긴 작업의 재시도는 `FINALIZATION_LEGACY_REPORTS_PRESENT`(409)로 거부하고 아무것도 쓰지 않음, ② 기존 경로를 문자열 치환 대신 구성요소로 생성(상위 폴더 이름이 `Report`여도 안전)). 수정 후 finalization·progress DuckDB/Postgres 신규 DB 각 52 passed. Codex Security 미실행.
 - 남은 것: 기존 `Final/Reports`는 사용자가 이름을 바꿔야 보고서로 인식.
+
+## 2026-10-06 Final 지정·Case 보고서 영상 목록 422 (이슈 #43 코멘트)
+
+- 원인: `caseReport.ts`가 영상 목록을 `page_size=100`으로 요청, 서버 상한 `VIDEO_PAGE_SIZE_MAX=20` → 422.
+- 수정: 20으로 요청하고 최대 쪽수를 250으로 늘려 상한 5000개 유지. e2e 모의 응답을 20으로 맞춤.
+- 검증: tsc, e2e case-report·case-finalization 15/15.

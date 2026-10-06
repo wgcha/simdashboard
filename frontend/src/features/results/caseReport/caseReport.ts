@@ -285,8 +285,8 @@ export function buildCaseFinalReportData(input: { scope: CaseFinalReportScope; s
 export async function loadCaseReportSources(source: Pick<CaseReportSource, 'runId' | 'captureId' | 'optionId' | 'mode' | 'componentId' | 'basis' | 'edgeKeys' | 'lineIndices'>, signal?: AbortSignal): Promise<{ distribution: DashboardDistribution; videos: DashboardRunVideo[] }> {
   const distributionPromise = simulationDashboardApi.distribution(source.runId, { capture_id: source.captureId, run_option_id: source.optionId || undefined, mode: source.mode, component_id: source.componentId, basis: source.basis as 'DETAIL' | 'REPORTED_SUMMARY', edge_keys: source.edgeKeys, line_indices: source.lineIndices }, signal)
   const videos: DashboardRunVideo[] = []
-  for (let page = 1; page <= 50; page += 1) {
-    const result = await simulationDashboardApi.videos(source.runId, { capture_id: source.captureId, run_option_id: source.optionId || undefined, mode: source.optionId ? undefined : source.mode || undefined, page, page_size: 100 }, signal)
+  for (let page = 1; page <= 250; page += 1) {
+    const result = await simulationDashboardApi.videos(source.runId, { capture_id: source.captureId, run_option_id: source.optionId || undefined, mode: source.optionId ? undefined : source.mode || undefined, page, page_size: 20 }, signal)
     videos.push(...(result.videos ?? []))
     if (!result.pagination.has_next) break
   }

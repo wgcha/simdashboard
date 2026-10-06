@@ -72,7 +72,7 @@ function distribution(optionId = 'option-individual') {
 const videos = {
   contract_version: 1,
   context: { ...distribution().context, option_label: 'Individual', load_case_name: 'Drop', run_label: 'Run A' },
-  pagination: { page: 1, page_size: 100, total_items: 2, total_pages: 1, has_previous: false, has_next: false },
+  pagination: { page: 1, page_size: 20, total_items: 2, total_pages: 1, has_previous: false, has_next: false },
   videos: [
     { video_id: 'v-1', asset_id: 'vid-small', scene_id: 'scene-1', scene_label: '2_Face', title: 'BEHAVIOR_2_Face.mp4', status: 'READY', source_capture_id: 'capture-1' },
     { video_id: 'v-2', asset_id: 'vid-big', scene_id: 'scene-2', scene_label: '3_Face', title: 'BEHAVIOR_3_Face_large.mp4', status: 'READY', source_capture_id: 'capture-2' },
