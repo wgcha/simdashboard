@@ -234,7 +234,41 @@ def _owned_entities(conn, registration: dict, registry: list[tuple], refs: dict)
                 if threshold is None or when is None or when < threshold:
                     continue  # existed before this registration (LINK): preserve (§13.2-4)
             owned[role].add(entity_id)
+    # §13.2-5: the last live registration of a project/request also owns what an already
+    # DELETED registration of the same project/request created, so deleting registrations
+    # one by one leaves no empty project or request behind.
+    for role, table, stamp, key in (("PROJECT", "projects", "created_at", "project_id"),
+                                    ("REQUEST", "analysis_requests", "requested_at", "request_id")):
+        entity_id = registration[key]
+        if not entity_id or entity_id in owned[role] or entity_id in refs["targets"]:
+            continue
+        if _created_by_deleted_registration(conn, key, entity_id, table, stamp):
+            owned[role].add(entity_id)
     return owned["PROJECT"], owned["REQUEST"]
+
+
+def _created_by_deleted_registration(conn, key: str, entity_id: str, table: str, stamp: str) -> bool:
+    found = _select(conn, f"SELECT {stamp} FROM {table} WHERE id=?", [entity_id])
+    if not found:
+        return False
+    entity_created = _as_datetime(found[0][0])
+    list_key = "project_ids" if key == "project_id" else "request_ids"
+    for created_at, raw in _select(conn, "SELECT created_at,created_targets FROM folder_environment_registrations "
+                                         f"WHERE status='DELETED' AND {key}=?", [entity_id]):
+        targets = None
+        if raw:
+            try:
+                targets = json.loads(raw) if isinstance(raw, str) else raw
+            except (TypeError, ValueError):
+                targets = None
+        if isinstance(targets, dict):
+            if entity_id in {str(v) for v in targets.get(list_key) or []}:
+                return True
+            continue
+        registered = _as_datetime(created_at)
+        if registered is not None and entity_created is not None and entity_created >= registered - OWNERSHIP_SLACK:
+            return True
+    return False
 
 
 def _plan(conn, ids: list[str], *, lock: bool = False) -> dict:

@@ -258,7 +258,7 @@ T1과 T2는 병렬, T3·T4·T5는 T2 이후 병렬, T6과 T7은 T0 이후 병렬
 |---|---|
 | D13 | 관리자는 "등록 이력"의 등록을 삭제할 수 있다. 삭제 범위는 **등록 기록 + 폴더 역할 매핑 + 그 등록이 생성한 업무 데이터**(프로젝트·의뢰·Case·캡처·자산·Final 지정 DB 기록 등)다 |
 | D14 | SPDM 폴더·파일은 어떤 경우에도 지우거나 옮기지 않는다(`.finalizations`, Final/CAE·Report 포함) |
-| D15 | 다른 살아 있는 등록, 수동 연결(SPDM 저장소 연결, 레거시 매핑), 등록 이전부터 존재한 엔터티가 참조하는 데이터는 지우지 않는다. 이런 참조가 삭제 대상 행에 걸려 있으면 **전체를 거부(409)**하고 부분 삭제하지 않는다 |
+| D15 | 다른 살아 있는 등록, 수동 연결(SPDM 저장소 연결, 레거시 매핑), 등록 이전부터 존재한 엔터티가 참조하는 데이터는 지우지 않는다. 이런 참조가 삭제 대상 행에 걸려 있으면 **전체를 거부(409)**하고 부분 삭제하지 않는다. **예외(2026-10-06, §16):** 관리자가 프로젝트 정리에서 명시적으로 선택한 프로젝트는 예전 연결 기록(`folder_discovery_registry`, `spdm_storage_*`, `semantic_folder_bindings`)과 등록 이전 데이터까지 함께 지운다 |
 | D16 | 등록 행은 물리 삭제하지 않고 `status=DELETED`로 남긴다(묘비). 감사·이력 추적용이다. 이력 화면은 기본으로 DELETED를 숨긴다 |
 | D17 | 삭제된 등록은 "연결됨"으로 치지 않는다. 같은 의뢰 폴더는 이후 자동 탐색이 **새 깊이 스키마로 다시 등록**할 수 있다(목적: 구 스키마 등록 정리 후 재등록) |
 
@@ -268,6 +268,7 @@ T1과 T2는 병렬, T3·T4·T5는 T2 이후 병렬, T6과 T7은 T0 이후 병렬
 2. 값이 없는 기존 등록(구 스키마)은 추론한다. 엔터티가 이 등록의 registry `target_id`이고, **그 엔터티의 `created_at`이 등록 `created_at` − 5초 이후**이며, 다른 살아 있는(DELETED가 아닌) 등록의 registry가 같은 `target_id`를 가리키지 않으면 소유로 본다.
 3. Case(`dashboard_cases`)는 이 등록의 registry `relative_path`에 해당하고 다른 살아 있는 등록이 참조하지 않으면 소유다. 캡처·자산은 소유 Case의 것이면 함께 삭제한다.
 4. 소유가 아닌 엔터티(LINK된 기존 프로젝트 등)는 남긴다. 그 아래에서 이 등록이 만든 의뢰·Case만 지운다.
+5. (2026-10-06 보완) 지우는 등록이 그 프로젝트·의뢰를 쓰는 **마지막 살아 있는 등록**이면, 이미 DELETED된 같은 프로젝트·의뢰의 등록이 만든 프로젝트·의뢰도 이 등록의 소유로 본다(DELETED 등록의 `created_targets`, 없으면 1·2의 시각 추론). 등록을 하나씩 지워도 빈 프로젝트·의뢰가 남지 않는다.
 
 ### 13.3 삭제 순서 (한 트랜잭션, 자식 먼저, cascade 없음)
 
@@ -363,6 +364,62 @@ T1과 T2는 병렬, T3·T4·T5는 T2 이후 병렬, T6과 T7은 T0 이후 병렬
 
 - 구현: 상위 스키마의 request_level 폴더 중 이름이 `CAD`/`Report`이면 무시 목록(`.`, `~$` 시작 이름과 같은 취급). `ENV_KEYWORD_NONE` 확인 필요를 만들지 않는다.
 - Verifier: (1) Final 지정·보고서 업로드가 `Final/Report/<Case>/<id>/`에 저장되고 진척 REPORT가 그것으로 완료, (2) 기존 `Final/Reports`만 있는 Final 기록은 REPORT 대기, 오류 없음, (3) `75R9J_PV/CAD`, `75R9J_PV/Report`가 있어도 자동 탐색 needs_review 0건, 등록·스캔 영향 없음, (4) 쓰기 구역(StorageProvider FINAL)이 `Final/Report`로 바뀌고 `Final/Reports` 쓰기는 거부
+
+## 16. 프로젝트 정리 (관리자, 2026-10-06)
+
+계획: [운영 정리 계획](../plans/workspace-cleanup.md) §1. 구현: `backend/app/services/project_cleanup.py`, 화면 `FolderProjectCleanup.tsx`(관리 › 폴더 스키마 › **프로젝트 정리** 탭, 전역 관리자만 보임).
+
+### 16.1 대상과 구분
+
+| 구분 | 판정 | 선택 |
+|---|---|---|
+| 데모 | 코드 상수 `DEMO_PROJECT_IDS`(`project-tv-001`, `project-feature-showcase`, `project-d2f8298b56ce`). 이름으로 판정하지 않는다 | 가능 |
+| 등록 없음 | 살아 있는(DELETED가 아닌) 등록이 프로젝트·그 의뢰·그 Case를 참조하지 않음 | 가능 |
+| 등록됨 | 살아 있는 등록이 참조 | 불가. §13 등록 삭제로 안내 |
+
+목록은 의뢰 수, Case·해석 이력 수, **직접 만든 데이터**(시스템 분석 페이지·예제 시드 행을 뺀 분석 페이지, 실행 기록, 배치·PC 실행, 검증, 검토 메모, 결과 등록 초안)를 보여 준다. 직접 만든 데이터가 있는 프로젝트는 경고하고 기본 선택에서 뺀다.
+
+### 16.2 삭제 범위 (선택한 프로젝트 것만, 자식 먼저, cascade 없음)
+
+- 지움: 프로젝트, 의뢰, 하중경우, 해석 이력과 결과(스칼라·시계열·곡선·위치·북마크·검토·메모·메타데이터·가져오기 작업), 작업 단계·항목·계획·유형 지정·결과 레이아웃 스냅샷, 실행 기록(workflow·task·배치·PC 실행과 승인), 검증, 분석 페이지와 버전, Case·캡처·결과 자산, 결과 등록 초안·파일·이벤트·경로·위치 연결, 프로젝트 설정(제품 정보, 멤버십·초대, 품질 기준, 워크스페이스 레이아웃, 결과 프로필, 프로젝트 템플릿, 프로젝트 어휘), 변수 정의, 예전 연결 기록(`folder_discovery_registry` 하위 포함, `spdm_storage_*`, `semantic_folder_bindings`·검토 항목, D15 예외), DELETED 등록의 남은 registry·capture job, 이 프로젝트들만 참조하는 미디어(`media_assets`·`drop_video_assets`와 `asset_blobs`·청크).
+- NULL 처리(행 유지): `folder_environment_scans.project_id/request_id`, DELETED 등록 묘비의 `project_id/request_id`.
+- 남김: SPDM 폴더·파일(D14, 이 모듈은 파일 시스템에 접근하지 않는다), 계정·권한, 감사 기록, 공용 설정(보고서 레이아웃, 의뢰 유형·작업 카탈로그, 메뉴 정책, 가져오기 스키마), 다른 프로젝트도 참조하는 미디어. 예전 `media_assets.file_path`의 파일은 지우지 않는다.
+- 표 전수 조사: `KEEP_COLUMNS`(보존 이유 포함)와 삭제 단계가 모든 프로젝트·의뢰·하중경우·실행·대상 id 컬럼을 분류해야 한다(`tests/test_project_cleanup.py::test_every_reference_column_is_handled_or_kept`).
+- 참고: 시스템 분석 페이지(`dashboard-*-default`)는 Orion 프로젝트에 묶여 있어 Orion을 지우면 함께 사라진다.
+
+### 16.3 차단 (하나라도 있으면 전체 409 `PROJECT_CLEANUP_BLOCKED`, 아무것도 지우지 않음)
+
+`LIVE_REGISTRATION`(등록됨, 살아 있는 등록의 capture job·registry가 대상 Case를 가리킴), `RUNNING_EXECUTION`(대기·실행 중인 배치 시도·디스패치·workflow·task·PC 실행), `PROJECT_TEMPLATE_IN_USE`(지우지 않는 결과 프로필이 프로젝트 템플릿을 사용).
+
+### 16.4 API (전역 관리자 전용, 그 외 403)
+
+| 메서드 | 경로 | 요청 | 응답 |
+|---|---|---|---|
+| GET | `/api/folder-discovery/environments/project-cleanup` | — | `{items:[{project_id, name, category: DEMO\|EMPTY\|REGISTERED, selectable, requests, cases, runs, user_data, user_data_total}], demo_project_ids}` |
+| POST | `…/project-cleanup/preview` | `{project_ids}` (1~200) | `{items:[{project_id, name, category, deletable, counts:{표: 건수}, blockers:[{table,id,reason}], user_data}], totals, confirm_token}`. 없는 id는 404 |
+| POST | `…/project-cleanup/delete` | `{project_ids, confirm_token}` | `{deleted, counts}`. 토큰 불일치 409 `DELETE_PREVIEW_STALE`, 차단 409 `PROJECT_CLEANUP_BLOCKED`(+items) |
+
+- `confirm_token` = 선택 id, 구분, 삭제 대상 id 집합, 표별 건수, 차단 목록의 해시.
+- 실행: `folder_discovery.WRITE_LOCK` 안에서 계획을 다시 계산해 토큰을 비교한다. PostgreSQL은 한 트랜잭션(`projects`·`analysis_requests`·`load_cases`·`folder_environment_registrations` SHARE ROW EXCLUSIVE 잠금). 개발용 DuckDB는 §13과 같이 Case FK 단계마다 커밋한다(재시도 시 수렴).
+- 감사 이벤트 `PROJECT_CLEANUP_DELETED`(`project_ids`, 구분, 표별 건수).
+
+### 16.5 데모 재생성 방지
+
+- 데모 프로젝트를 지우면 기존 키-값 표 `spdm_storage_settings`의 `demo_projects_removed`(JSON 목록)에 기록한다(새 표·migration 없음).
+- `ensure_default_content`(개발용 DuckDB 시작, 명시적 `seed_database.py --mode reference`)는 기록된 데모를 다시 만들지 않는다: Orion 시드·요청 그래프·예제 진화·데모 미디어·Chassis 분석 페이지, 기능 예제 모음. 새 DB(기록 없음)는 지금처럼 데모를 만든다.
+- PostgreSQL 앱 시작과 `update.bat`/`update.ps1`은 예제를 만들지 않는다(테스트로 고정).
+
+### 16.6 화면
+
+목록(체크박스, 등록됨은 비활성) → **미리보기** → 확인 창(합계, 프로젝트별 건수, 표별 건수 펼침, 직접 만든 데이터 경고, "SPDM 폴더·파일은 삭제되지 않습니다", 차단 사유) → **삭제** → 목록·프로젝트 목록 다시 읽기, 삭제된 프로젝트를 보고 있었으면 선택 해제(§13.7과 같은 콜백).
+
+### 16.7 Verifier 기준
+
+1. 데모가 든 DB에서 Orion 삭제 → 모든 표의 텍스트 컬럼에서 Orion 프로젝트·의뢰·하중경우·실행 id 참조 0건(감사 기록 제외), 기능 예제 모음의 참조 수 불변, 공유 미디어 blob 유지, Orion 전용 영상 blob 삭제, SPDM 트리 파일 수·mtime 불변
+2. 등록된 프로젝트 409, 실행 중 작업 409(함께 고른 다른 프로젝트도 그대로), 미리보기 후 변경 시 `DELETE_PREVIEW_STALE`, 비관리자 403
+3. 예전 연결만 있는 프로젝트 정리 → 연결 기록 0건, 조사 이력 행은 NULL로 유지
+4. DuckDB 재시작 후 지운 데모 미재생성, PostgreSQL 시작 시 시드 없음
+5. §13.2-5: 같은 프로젝트의 등록 둘을 하나씩 지우면 프로젝트가 남지 않음
 
 ## 12. 미확정
 

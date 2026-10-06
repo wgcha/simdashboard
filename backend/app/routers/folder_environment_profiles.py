@@ -7,7 +7,8 @@ from pydantic import BaseModel, Field
 from ..database_connection import connect
 from ..security import write_audit_event
 from ..services import (environment_folder_profiles as service, folder_discovery as legacy,
-                        folder_discovery_environment as environment_service, folder_environment_deletion as deletion)
+                        folder_discovery_environment as environment_service, folder_environment_deletion as deletion,
+                        project_cleanup as cleanup)
 from ..services.semantic_mapping import semantic_transaction
 from .folder_discovery_environment import admin
 from .semantic_body_limit import SemanticBodyLimitRoute
@@ -40,6 +41,14 @@ class DeleteTargets(BaseModel):
 
 
 class DeleteConfirm(DeleteTargets):
+    confirm_token: str = Field(min_length=1, max_length=128)
+
+
+class CleanupTargets(BaseModel):
+    project_ids: list[str] = Field(min_length=1, max_length=cleanup.MAX_IDS)
+
+
+class CleanupConfirm(CleanupTargets):
     confirm_token: str = Field(min_length=1, max_length=128)
 
 
@@ -149,6 +158,41 @@ def delete_registrations(payload: DeleteConfirm, request: Request):
             return deletion.delete(conn, payload.registration_ids, payload.confirm_token, principal.user_id, audit)
         except ValueError as exc:
             raise HTTPException(422, {"code": "REGISTRATION_DELETE_INVALID", "message": str(exc)}) from exc
+
+
+# ---- project cleanup (§16, D15 exception) -----------------------------------------
+
+@router.get("/project-cleanup")
+def project_cleanup_candidates(request: Request):
+    with connect() as conn:
+        admin(request, conn)
+        return cleanup.candidates(conn)
+
+
+@router.post("/project-cleanup/preview")
+def project_cleanup_preview(payload: CleanupTargets, request: Request):
+    with connect() as conn:
+        admin(request, conn)
+        try:
+            return cleanup.preview(conn, payload.project_ids)
+        except ValueError as exc:
+            raise HTTPException(422, {"code": "PROJECT_CLEANUP_INVALID", "message": str(exc)}) from exc
+
+
+@router.post("/project-cleanup/delete")
+def project_cleanup_delete(payload: CleanupConfirm, request: Request):
+    principal = request.state.principal
+    with connect() as conn:
+        admin(request, conn)
+
+        def audit(connection, detail):
+            write_audit_event(request=request, principal=principal, status_code=200,
+                              action="PROJECT_CLEANUP_DELETED", detail=detail, connection=connection)
+
+        try:
+            return cleanup.delete(conn, payload.project_ids, payload.confirm_token, audit)
+        except ValueError as exc:
+            raise HTTPException(422, {"code": "PROJECT_CLEANUP_INVALID", "message": str(exc)}) from exc
 
 
 # ---- request reinterpret (§6, D9) --------------------------------------------------

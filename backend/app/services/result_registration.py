@@ -1213,3 +1213,29 @@ def preview_media(conn: ConnectionLike, draft_id: str, relative_path: str) -> di
         raise ResultRegistrationError("RESULT_MEDIA_PREVIEW_UNSUPPORTED", "허용되지 않는 이미지 또는 영상 형식입니다.") from exc
     return {"content": data, "media_type": str(item["media_type"]), "size": int(item["size_bytes"]),
             "filename": PurePosixPath(relative).name, "draft_id": str(row["id"])}
+
+
+def list_drafts(conn: ConnectionLike, project_id: str, request_id: str, environment: str,
+                limit: int = 200) -> dict[str, Any]:
+    """Read-only history of the pre-W8 drafts of one request (no files, no writes)."""
+    environment = paths._env(environment)
+    found = rows(conn.execute(
+        "SELECT id,status,case_relative_path,result_relative_path,manifest_json,case_id,capture_id,mirror_status,"
+        "created_by,approved_by,published_at,created_at,updated_at FROM result_registration_drafts "
+        "WHERE project_id=? AND request_id=? AND environment=? ORDER BY created_at DESC,id DESC LIMIT ?",
+        [project_id, request_id, environment, int(limit) + 1],
+    ))
+    items = []
+    for row in found[:limit]:
+        manifest = _decode(row["manifest_json"]) if row["manifest_json"] is not None else []
+        files = manifest.get("files", []) if isinstance(manifest, dict) else (manifest if isinstance(manifest, list) else [])
+        items.append({
+            "draft_id": str(row["id"]), "status": str(row["status"]),
+            "case_relative_path": str(row["case_relative_path"]), "result_relative_path": str(row["result_relative_path"]),
+            "file_count": len(files), "total_bytes": sum(int(item.get("size") or 0) for item in files if isinstance(item, dict)),
+            "case_id": row.get("case_id"), "capture_id": row.get("capture_id"), "mirror_status": row.get("mirror_status"),
+            "created_by": row.get("created_by"), "approved_by": row.get("approved_by"),
+            "published_at": row.get("published_at"), "created_at": row.get("created_at"), "updated_at": row.get("updated_at"),
+        })
+    return {"project_id": project_id, "request_id": request_id, "environment": environment,
+            "drafts": items, "truncated": len(found) > limit}

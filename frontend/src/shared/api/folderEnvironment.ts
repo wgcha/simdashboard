@@ -79,6 +79,13 @@ export type RegistrationDeletePreviewItem = { registration_id: string; deletable
 export type RegistrationDeletePreview = { items: RegistrationDeletePreviewItem[]; confirm_token: string }
 export type RegistrationDeleteResult = { deleted: string[]; counts: RegistrationDeleteCounts }
 
+// ---- Project cleanup (contract depth-schema §16) ----
+export type ProjectCleanupCategory = 'DEMO' | 'EMPTY' | 'REGISTERED'
+export type ProjectCleanupCandidate = { project_id: string; name: string; category: ProjectCleanupCategory; selectable: boolean; requests: number; cases: number; runs: number; user_data: Record<string, number>; user_data_total: number }
+export type ProjectCleanupPreviewItem = { project_id: string; name: string; category: ProjectCleanupCategory; deletable: boolean; counts: Record<string, number>; blockers: RegistrationDeleteBlocker[]; user_data: Record<string, number> }
+export type ProjectCleanupPreview = { items: ProjectCleanupPreviewItem[]; totals: Record<string, number>; confirm_token: string }
+export type ProjectCleanupResult = { deleted: string[]; counts: Record<string, number> }
+
 // Endpoints added by the depth-schema contract are not in the generated OpenAPI client yet.
 async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await apiFetch(path, init)
@@ -108,6 +115,10 @@ export const folderEnvironmentApi = {
   registrationDeletePreview: (registrationIds: string[]) => requestJson<RegistrationDeletePreview>(apiUrl('/api/folder-discovery/environments/registrations/delete-preview' as never), jsonBody('POST', { registration_ids: registrationIds })),
   /** 409 `REGISTRATION_DELETE_BLOCKED` (detail carries preview items) or `DELETE_PREVIEW_STALE`. */
   deleteRegistrations: (registrationIds: string[], confirmToken: string) => requestJson<RegistrationDeleteResult>(apiUrl('/api/folder-discovery/environments/registrations/delete' as never), jsonBody('POST', { registration_ids: registrationIds, confirm_token: confirmToken })),
+  projectCleanupCandidates: (signal?: AbortSignal) => requestJson<{ items: ProjectCleanupCandidate[] }>(apiUrl('/api/folder-discovery/environments/project-cleanup' as never), { signal }),
+  projectCleanupPreview: (projectIds: string[]) => requestJson<ProjectCleanupPreview>(apiUrl('/api/folder-discovery/environments/project-cleanup/preview' as never), jsonBody('POST', { project_ids: projectIds })),
+  /** 409 `PROJECT_CLEANUP_BLOCKED` (detail carries preview items) or `DELETE_PREVIEW_STALE`. */
+  deleteProjects: (projectIds: string[], confirmToken: string) => requestJson<ProjectCleanupResult>(apiUrl('/api/folder-discovery/environments/project-cleanup/delete' as never), jsonBody('POST', { project_ids: projectIds, confirm_token: confirmToken })),
   scan: async (body: { environment: FolderEnvironment; relative_path: string; project_id?: string; request_id?: string }, signal?: AbortSignal) => unwrapGenerated(await apiClient.POST('/api/folder-discovery/environments/scan', { body, signal })) as FolderEnvironmentScan,
   preview: async (body: { scan_id: string; assignments: FolderAssignment[]; require_usage_review: boolean }, signal?: AbortSignal) => unwrapGenerated(await apiClient.POST('/api/folder-discovery/environments/previews', { body, signal })) as FolderEnvironmentPreview,
   usageReview: async (previewId: string, body: { case_relative_path: string; selection: { json: boolean; video: boolean; image: boolean; csv: boolean }; selected_sources?: Record<string, string>; metric_paths?: Record<string, string[]>; excludes?: Record<string, string>; acknowledge_partial: boolean }) => unwrapGenerated(await apiClient.POST('/api/folder-discovery/environments/previews/{preview_id}/usage-review', { params: { path: { preview_id: previewId } }, body })) as UsageSourceReview,

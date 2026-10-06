@@ -1998,6 +1998,8 @@ def _ensure_canonical_orion_seed(conn: Any) -> None:
     example project must not suppress the canonical reference project.
     """
     has_canonical_orion = conn.execute("SELECT count(*) FROM projects WHERE id='project-tv-001'").fetchone()[0] == 1
+    if not has_canonical_orion and "project-tv-001" in _removed_demo_projects(conn):
+        return  # an administrator removed the example (project cleanup, contract depth-schema §16)
     if not has_canonical_orion:
         conn.execute("BEGIN TRANSACTION")
         try:
@@ -2103,9 +2105,17 @@ def _ensure_orion_request_graph(conn: Any, *, now: datetime | None = None) -> No
         )
 
 
+def _removed_demo_projects(conn: Any) -> set[str]:
+    """Example project ids an administrator removed; their seed is not recreated (depth-schema §16)."""
+    from .services.project_cleanup import removed_demo_projects
+
+    return removed_demo_projects(conn)
+
+
 def ensure_default_content(conn: Any) -> None:
     from .repositories.workbench import ensure_default_workbench_catalog, ensure_seed_legacy_result_layout_assignment, ensure_seed_request_work_plans
 
+    orion_removed = "project-tv-001" in _removed_demo_projects(conn)
     _ensure_canonical_orion_seed(conn)
     _ensure_orion_request_graph(conn)
     # Feature examples are project-producing seed data.  Create them before
@@ -2114,10 +2124,12 @@ def ensure_default_content(conn: Any) -> None:
     # request yet; only canonical examples are required to be populated.
     ensure_feature_examples(conn)
     ensure_local_development_identity(conn)
-    ensure_sample_evolutions(conn)
+    if not orion_removed:
+        ensure_sample_evolutions(conn)
     ensure_project_quality_thresholds(conn)
     ensure_drop_video_widget(conn)
-    ensure_demo_media_storage(conn)
+    if not orion_removed:
+        ensure_demo_media_storage(conn)
     ensure_variable_definitions(conn)
     conn.execute(
         """
@@ -2151,8 +2163,9 @@ def ensure_default_content(conn: Any) -> None:
     }
     encoded_chassis = json.dumps(chassis_layout, ensure_ascii=False)
     now = _iso(datetime.now(timezone.utc))
-    conn.execute("INSERT OR IGNORE INTO dashboards VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", [chassis_layout["id"], "project-tv-001", "request-drop-001", "loadcase-drop-bottom-001", chassis_layout["name"], chassis_layout["description"], 1, encoded_chassis, now])
-    conn.execute("INSERT OR IGNORE INTO dashboard_versions VALUES (?, ?, ?, ?, ?, ?)", [chassis_layout["id"], 1, encoded_chassis, "system", now, True])
+    if not orion_removed:
+        conn.execute("INSERT OR IGNORE INTO dashboards VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", [chassis_layout["id"], "project-tv-001", "request-drop-001", "loadcase-drop-bottom-001", chassis_layout["name"], chassis_layout["description"], 1, encoded_chassis, now])
+        conn.execute("INSERT OR IGNORE INTO dashboard_versions VALUES (?, ?, ?, ?, ?, ?)", [chassis_layout["id"], 1, encoded_chassis, "system", now, True])
     ensure_system_run_comparison_dashboard(conn)
     ensure_system_analysis_page_metadata(conn)
 
@@ -2940,6 +2953,8 @@ def ensure_sample_evolutions(conn: duckdb.DuckDBPyConnection) -> None:
 
 def ensure_feature_examples(conn: duckdb.DuckDBPyConnection) -> None:
     """Seed an additive, idempotent gallery that demonstrates the major product flows."""
+    if "project-feature-showcase" in _removed_demo_projects(conn):
+        return  # an administrator removed the example (project cleanup, contract depth-schema §16)
     expected_request_ids = {
         f"request-showcase-{key}"
         for key in ("compare", "trust", "warning", "review", "multitype", "waiting", "workflow")

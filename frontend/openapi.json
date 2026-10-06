@@ -6884,6 +6884,103 @@
         }
       }
     },
+    "/api/folder-discovery/environments/project-cleanup": {
+      "get": {
+        "tags": [
+          "folder-discovery-environments"
+        ],
+        "summary": "Project Cleanup Candidates",
+        "operationId": "project_cleanup_candidates_api_folder_discovery_environments_project_cleanup_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/folder-discovery/environments/project-cleanup/preview": {
+      "post": {
+        "tags": [
+          "folder-discovery-environments"
+        ],
+        "summary": "Project Cleanup Preview",
+        "operationId": "project_cleanup_preview_api_folder_discovery_environments_project_cleanup_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CleanupTargets"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/folder-discovery/environments/project-cleanup/delete": {
+      "post": {
+        "tags": [
+          "folder-discovery-environments"
+        ],
+        "summary": "Project Cleanup Delete",
+        "operationId": "project_cleanup_delete_api_folder_discovery_environments_project_cleanup_delete_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CleanupConfirm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/requests/{request_id}/reinterpret": {
       "post": {
         "tags": [
@@ -8909,17 +9006,78 @@
         "summary": "Create Draft",
         "operationId": "create_draft_api_result_registration_drafts_post",
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/CreateDraftInput"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "result-registration"
+        ],
+        "summary": "List Legacy Drafts",
+        "description": "Read-only history of drafts made with the pre-W8 registration screen.",
+        "operationId": "list_legacy_drafts_api_result_registration_drafts_get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "request_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
+            }
+          },
+          {
+            "name": "environment",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "enum": [
+                "USAGE",
+                "DISTRIBUTION"
+              ],
+              "type": "string",
+              "title": "Environment"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
@@ -9272,6 +9430,376 @@
               "minLength": 1,
               "maxLength": 1024,
               "title": "Relative Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/result-registration/drop-target": {
+      "get": {
+        "tags": [
+          "result-registration"
+        ],
+        "summary": "Drop Target",
+        "description": "The request's Working tree by DEPTH_V1 level and the paths users see in Explorer.",
+        "operationId": "drop_target_api_result_registration_drop_target_get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "request_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
+            }
+          },
+          {
+            "name": "environment",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "enum": [
+                "USAGE",
+                "DISTRIBUTION"
+              ],
+              "type": "string",
+              "title": "Environment"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/result-registration/drop-target/folders": {
+      "post": {
+        "tags": [
+          "result-registration"
+        ],
+        "summary": "Drop Create Folder",
+        "operationId": "drop_create_folder_api_result_registration_drop_target_folders_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DropFolderInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/result-registration/drop-uploads/plan": {
+      "post": {
+        "tags": [
+          "result-registration"
+        ],
+        "summary": "Drop Plan",
+        "description": "Everything the upload would do, checked before any write (no side effects).",
+        "operationId": "drop_plan_api_result_registration_drop_uploads_plan_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DropPlanInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/result-registration/drop-uploads": {
+      "post": {
+        "tags": [
+          "result-registration"
+        ],
+        "summary": "Drop Create Session",
+        "operationId": "drop_create_session_api_result_registration_drop_uploads_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DropPlanInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/result-registration/drop-uploads/{session_id}": {
+      "get": {
+        "tags": [
+          "result-registration"
+        ],
+        "summary": "Drop Read Session",
+        "operationId": "drop_read_session_api_result_registration_drop_uploads__session_id__get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "result-registration"
+        ],
+        "summary": "Drop Abort",
+        "operationId": "drop_abort_api_result_registration_drop_uploads__session_id__delete",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/result-registration/drop-uploads/{session_id}/files/{index}": {
+      "put": {
+        "tags": [
+          "result-registration"
+        ],
+        "summary": "Drop Upload Chunk",
+        "description": "One chunk (≤ 8 MiB) at ``offset``; ``X-Chunk-SHA256`` is optional (browsers without WebCrypto on HTTP).",
+        "operationId": "drop_upload_chunk_api_result_registration_drop_uploads__session_id__files__index__put",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "index",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Index"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/result-registration/drop-uploads/{session_id}/complete": {
+      "post": {
+        "tags": [
+          "result-registration"
+        ],
+        "summary": "Drop Complete",
+        "operationId": "drop_complete_api_result_registration_drop_uploads__session_id__complete_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
             }
           }
         ],
@@ -14380,6 +14908,49 @@
         ],
         "title": "CentralRun"
       },
+      "CleanupConfirm": {
+        "properties": {
+          "project_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Project Ids"
+          },
+          "confirm_token": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Confirm Token"
+          }
+        },
+        "type": "object",
+        "required": [
+          "project_ids",
+          "confirm_token"
+        ],
+        "title": "CleanupConfirm"
+      },
+      "CleanupTargets": {
+        "properties": {
+          "project_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Project Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "project_ids"
+        ],
+        "title": "CleanupTargets"
+      },
       "ComparisonInput": {
         "properties": {
           "members": {
@@ -15382,6 +15953,143 @@
           "size"
         ],
         "title": "DraftManifestFile"
+      },
+      "DropFile": {
+        "properties": {
+          "relative_path": {
+            "type": "string",
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Relative Path"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Size"
+          },
+          "sha256": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sha256"
+          }
+        },
+        "type": "object",
+        "required": [
+          "relative_path",
+          "size"
+        ],
+        "title": "DropFile"
+      },
+      "DropFolderInput": {
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Project Id"
+          },
+          "request_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Request Id"
+          },
+          "environment": {
+            "type": "string",
+            "enum": [
+              "USAGE",
+              "DISTRIBUTION"
+            ],
+            "title": "Environment"
+          },
+          "parent_relative_path": {
+            "type": "string",
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Parent Relative Path"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "confirm": {
+            "type": "boolean",
+            "title": "Confirm",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "project_id",
+          "request_id",
+          "environment",
+          "parent_relative_path",
+          "name"
+        ],
+        "title": "DropFolderInput"
+      },
+      "DropPlanInput": {
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Project Id"
+          },
+          "request_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Request Id"
+          },
+          "environment": {
+            "type": "string",
+            "enum": [
+              "USAGE",
+              "DISTRIBUTION"
+            ],
+            "title": "Environment"
+          },
+          "target_relative_path": {
+            "type": "string",
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Target Relative Path"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/DropFile"
+            },
+            "type": "array",
+            "maxItems": 20000,
+            "title": "Files"
+          },
+          "folders": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 20000,
+            "title": "Folders"
+          }
+        },
+        "type": "object",
+        "required": [
+          "project_id",
+          "request_id",
+          "environment",
+          "target_relative_path"
+        ],
+        "title": "DropPlanInput"
       },
       "DropVideoEvaluation": {
         "properties": {

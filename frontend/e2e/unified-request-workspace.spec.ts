@@ -71,15 +71,14 @@ async function captureQa(page: Page, filename: string) {
 }
 
 async function stubNoRegistrationTargets(page: Page) {
-  await page.route('**/api/result-registration/targets**', (route) => route.fulfill({
-    status: 200,
+  // W8: the request has no confirmed SPDM folder binding, so there is no Working tree to drop into.
+  await page.route('**/api/result-registration/drop-target**', (route) => route.fulfill({
+    status: 409,
     contentType: 'application/json',
-    body: JSON.stringify({ storage_root_id: 'root-e2e', environment: 'USAGE', targets: [] }),
+    body: JSON.stringify({ detail: { code: 'SPDM_REQUEST_BINDING_REQUIRED', message: 'SPDM 프로젝트·의뢰 폴더 연결을 확인할 수 없습니다. 관리자에게 연결을 요청하세요.' } }),
   }))
-  await page.route('**/api/result-registration/folders**', (route) => route.fulfill({
-    status: 200,
-    contentType: 'application/json',
-    body: JSON.stringify({ storage_root_id: 'root-e2e', nodes: [] }),
+  await page.route('**/api/result-registration/drafts?**', (route) => route.fulfill({
+    status: 200, contentType: 'application/json', body: JSON.stringify({ drafts: [], truncated: false }),
   }))
 }
 
@@ -96,8 +95,9 @@ test('한 의뢰의 네 작업 탭이 같은 헤더와 문맥을 유지하고 �
   await stubNoRegistrationTargets(page)
   await journey(page).getByRole('button', { name: '결과 등록', exact: true }).click()
   await expect(page).toHaveURL(/\/workspace\/data(?:\?|$)/)
-  await expect(page.getByTestId('result-registration-workspace')).toBeVisible()
-  await expect(page.getByLabel('SPDM 해석 Case 선택', { exact: true })).toBeDisabled()
+  await expect(page.getByTestId('result-drop-workspace')).toBeVisible()
+  await expect(page.getByRole('alert').filter({ hasText: 'SPDM 프로젝트·의뢰 폴더 연결' })).toBeVisible()
+  await expect(page.getByTestId('result-drop-zone')).toHaveCount(0)
   await expect(page.getByRole('button', { name: '검수 완료·DB 등록', exact: true })).toHaveCount(0)
   await expect(page.getByRole('button', { name: /새 프로젝트|새 의뢰|새 하중경우 등록/ })).toHaveCount(0)
   await expectUnifiedContext(page, '결과 등록')
@@ -156,8 +156,9 @@ test('하중 경우가 없는 의뢰도 실행과 등록 탭에서 의뢰 문맥
   await expect(page).toHaveURL(/\/workspace\/data(?:\?|$)/)
   await expect(page.getByLabel('의뢰 선택', { exact: true })).toHaveValue('request-showcase-workflow')
   await expect(page.getByLabel('하중 경우 선택', { exact: true })).toHaveCount(0)
-  await expect(page.getByLabel('SPDM 해석 Case 선택', { exact: true })).toBeDisabled()
-  await expect(page.getByRole('button', { name: '업로드하고 자동 검사', exact: true })).toBeDisabled()
+  await expect(page.getByTestId('result-drop-workspace')).toBeVisible()
+  await expect(page.getByTestId('result-drop-zone')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '업로드하고 자동 검사', exact: true })).toHaveCount(0)
   await expect(journey(page).getByRole('button', { name: '결과 등록', exact: true })).toHaveAttribute('aria-current', 'step')
 
   await journey(page).getByRole('button', { name: '결과 검토', exact: true }).click()
@@ -180,7 +181,7 @@ test('일반 사용자는 통합 탭에서 허용된 작업만 열 수 있다', 
   await expect(page.getByLabel('등록 의뢰 선택')).toHaveCount(0)
 })
 
-test('결과 등록 탭은 기존 SPDM 대상을 탐색하고 이전 즉시 가져오기를 호출하지 않는다', async ({ page }) => {
+test('결과 등록 탭은 의뢰의 Working 폴더를 쓰고 이전 즉시 가져오기를 호출하지 않는다', async ({ page }) => {
   await loginWorkspace(page)
   await selectRequestContext(page)
   await stubNoRegistrationTargets(page)
@@ -190,9 +191,9 @@ test('결과 등록 탭은 기존 SPDM 대상을 탐색하고 이전 즉시 가�
     await route.fulfill({ status: 410, json: { detail: 'Legacy registration storage is not used by the staged workflow.' } })
   })
   await journey(page).getByRole('button', { name: '결과 등록', exact: true }).click()
-  await expect(page.getByTestId('result-registration-workspace')).toBeVisible()
+  await expect(page.getByTestId('result-drop-workspace')).toBeVisible()
   await expect(page.getByLabel('결과 등록 환경')).toBeVisible()
-  await expect(page.getByLabel('SPDM 해석 Case 선택')).toBeDisabled()
+  await expect(page.getByTestId('result-drop-zone')).toHaveCount(0)
   await expect(page.getByLabel('하중 경우 선택', { exact: true })).toHaveCount(0)
   await expect(page.getByRole('button', { name: '현재 하중 경우 결과 파일 확인', exact: true })).toHaveCount(0)
   await expect(page.getByRole('button', { name: '검증된 결과 등록', exact: true })).toHaveCount(0)
@@ -246,8 +247,7 @@ for (const viewport of [
     if (viewport.width === 2560) {
       await stubNoRegistrationTargets(page)
       await journey(page).getByRole('button', { name: '결과 등록', exact: true }).click()
-      await expect(page.getByTestId('result-registration-workspace')).toBeVisible()
-      await expect(page.getByLabel('SPDM 해석 Case 선택', { exact: true })).toBeDisabled()
+      await expect(page.getByTestId('result-drop-workspace')).toBeVisible()
       await expectNoDocumentOverflow(page)
       await captureQa(page, 'import-2560.png')
       await sidebar.getByRole('link', { name: '결과 대시보드', exact: true }).click()

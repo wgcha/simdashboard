@@ -1,39 +1,69 @@
-# 결과 등록·검수·가시화 계약
+# 결과 등록 (W8: 폴더 안내 + 끌어서 올리기)
 
-- 기준일: 2026-09-28
-- 상태: 현재 구현 계약. 기능은 구현·관련 격리 검증 완료; 운영 배포는 미실행.
-- 결정·검증 상세: [완료 계획 및 검증 기록](../archive/2026/result-registration-review-plan.md), [작업 로그](../../log/work-log.md)
+- 기준일: 2026-10-06
+- 상태: 현재 구현 계약. 격리 임시 root·합성 데이터로 검증. 독립·보안 검수와 실제 Windows Server 2022·SMB 검증(W9)은 남음.
+- 근거: [개선 로드맵](../plans/improvement-roadmap.md) §4 W8, [Case 결과 흐름 재설계](../plans/case-results-workflow-redesign.md) §8.6, [깊이 스키마](../contracts/depth-schema.md) §3·§5, [저장소 공급자](../contracts/storage-provider.md) S3 ③.
 
-## 사용자 흐름과 한도
+## 1. 결정 (2026-10-06 사용자)
 
-기존 SPDM 프로젝트·의뢰·환경 업무를 선택해 결과를 준비하고, 파일을 격리 업로드한 다음 자동 검사와 사용자 검수를 거쳐 DB에 등록한다. 완료 후 해당 Case 결과로 이동한다. 등록 화면은 프로젝트·의뢰·업무 하중경우를 생성하지 않으며 SPDM 즉시 수집 API를 호출하지 않는다. 없는 업무나 불확실한 경로는 생성·추정하지 않고 안내한다.
+해석자는 대부분 탐색기로 SPDM 공유 폴더에 결과를 직접 복사한다. 대시보드는 30초 안에(`folder_auto_sync`) 바뀐 폴더를 읽고 깊이로 역할을 정한다. 검수는 Final 지정으로 옮겼다. 그래서 결과 등록 화면은 **폴더 안내(A안) + 파일·폴더 끌어서 올리기**만 둔다. 초안·자동 검사·승인은 없다. 나중에 드라이브 탐색 프로그램과 Simcenter SDK가 연결될 예정이라 최소로 유지한다.
 
-대상 선택과 결과 위치 조회는 분리한다. 경로는 읽기 전용으로 표시하며, 후보가 여러 개면 선택한다. 없는 결과용 하위 폴더는 경로를 먼저 보여주고 확인을 받아 준비한다. 기존 Project/WR 상위 폴더는 생성하지 않는다. 사용환경에는 Case와 평가 항목, 유통환경에는 Case·하중경우·Run Case·선택적 Run Option·Scene 문맥을 유지한다.
+## 2. 화면 (`ResultDropWorkspace`)
 
-새 Case가 필요한 경우, 저장 위치에서 실제로 연 폴더를 생성 기준으로 삼는다. 서버는 그 부모 폴더가 선택한 의뢰·환경에 등록된 Folder Schema의 확정 스캔에 포함되는지, 현재 프로필 버전과 실제 폴더 식별자가 일치하는지 확인한다. `WR/Working`을 연 경우 생성 경로는 `WR/Working/<Case>/…`이며 `WR/<Case>/…`로 되돌아가지 않는다. 등록 구조가 없거나 오래됐거나 여러 구조가 충돌하면 생성하지 않고 구조 재확인을 안내한다. 폴더 스키마는 기존 경로와 역할의 근거이며, 아직 없는 Case·하중경우·Run·Scene의 이름은 사용자가 입력하고 생성 전 전체 경로를 확인한다. 기존 Case/Scene 아래 결과 폴더만 준비할 때는 확인된 기존 경로와 역할을 사용한다.
+1. **위치**: 공용 경로 표시줄(유통 Case › 하중경우 › Run Case › Run Option › Scene, 사용 Case › Scene). Working부터 아무 깊이나 고른다(선택하지 않은 깊이는 "여기까지"). 선택한 폴더의 탐색기 경로(UNC/드라이브)를 보여 주고 `경로 복사`(클립보드, HTTP LAN에서는 textarea 복사로 대체)로 탐색기 주소창에 붙여 넣게 한다. 브라우저는 탐색기를 열 수 없다. `새 폴더 만들기`는 선택한 폴더 바로 아래, Scene 깊이까지만 만든다.
+2. **안내**: 깊이 사다리(Working → … → Scene → 결과 파일)에 선택 위치와 "여기 넣을 폴더"를 표시하고, "Run Option 폴더를 통째로 복사하려면 Run Case 폴더 아래에" 같은 규칙과 "30초 안에 자동 반영됩니다"를 보여 준다.
+3. **올리기**: 파일이나 폴더를 끌어 놓거나 `파일 선택`/`폴더 선택`(`webkitdirectory`). 폴더는 `webkitGetAsEntry`로 따라가며 상대 구조와 빈 폴더를 유지한다. 서버 계획(올라갈 상대 경로, 개수, 총 크기, 새로 만들 폴더와 그 깊이 역할, 깊이 경고·차단, 충돌, 제외 파일)을 먼저 보여 주고 `올리기`. 진행률(파일 수·바이트·현재 파일)과 `중지`. 완료 후 폴더 확인(“방금 확인”과 같은 동기화)을 바로 실행하고 Case 결과 링크를 보여 준다.
+4. **이전 등록 초안(읽기 전용)**: §6.
 
-`01 · 대상 선택`의 Case와 `02 · 저장 위치`의 폴더·문맥 후보는 선택 프로젝트·의뢰·환경의 현재 Folder Schema 해석을 사용한다. 경로 이름이나 결과 등록 화면의 기존 trace만으로 분류한 역할은 후보가 되지 않는다. 사용환경은 확정 평가 항목의 결과 위치를 사용한다. **유통환경은 확정 Scene 폴더 자체에 입력과 결과파일을 함께 저장한다.** 별도 `results` 하위 폴더가 없다는 이유로 새 폴더를 요구하지 않는다. 기존 스키마에서 확인된 RESULTS 하위 경로는 호환하며, 미확정·제외 경로는 승격하지 않는다. `현재 결과 위치 연결 저장`, `경로 수정`, `연결 삭제`는 이 결과 위치 연결만 관리하며, 수정 시 현재 프로필·조사와 일치하는 경로만 고를 수 있다. 연결 삭제는 연결 행만 제거하고 SPDM 폴더·파일, 업로드 초안·검수 기록, 기존 capture 결과를 삭제하거나 다시 쓰지 않는다. 연결은 `result_registration_location_links`에 별도 revision과 조사·프로필 provenance를 저장하며, 결과 역할 추적 레지스트리 및 게시 이력과 분리한다. 스키마 확인이 끊겨 선택할 후보가 없더라도 기존 연결은 표시·삭제할 수 있고, 현재 Folder Schema가 유효해지면 그 기준으로 경로를 갱신할 수 있다.
+## 3. 검사 (쓰기 전에 모두)
 
-과거 등록본에는 중간 폴더의 검수 상태가 저장되지 않았을 수 있다. `Working`은 의뢰 직속 작업 영역으로 해석하며, 오래된 등록본에 이 경계 정보가 없다면 Folder Schema에서 해당 환경 경로를 다시 조사·확인·등록해야 한다. 제외한 폴더와 Final 보존 영역은 생성 부모로 사용할 수 없으며, 서버는 구형 등록본에 필요한 확인 정보가 없을 때 `RESULT_FOLDER_SCHEMA_REFRESH_REQUIRED`(409)를 반환한다. 같은 소유권·프로필 버전에서 나중에 등록한 확정 스캔은 구형 등록본의 정보 부족을 해소할 수 있다. 수집 작업의 완료·실패 상태는 폴더 구조 등록의 유효성과 별개로 취급한다. 같은 부모에 대해 명시적인 포함·제외가 서로 다른 등록본이 있으면 임의로 하나를 선택하지 않고 충돌로 차단한다.
+| 항목 | 규칙 | 결과 |
+|---|---|---|
+| 대상 | 이 의뢰 폴더의 `Working` 아래(Working 자신 포함), 존재하는 일반 폴더, 경로 사슬에 링크·reparse 없음, Final·숨김 폴더 아님 | 422 `RESULT_DROP_TARGET_OUTSIDE_REQUEST`·`…_OUTSIDE_WORKING`·`…_TARGET_INVALID`, 409/422 `SPDM_PATH_UNSAFE` 등 |
+| 소유권 | `result_registration_paths._owner_conflict`(다른 의뢰·환경의 Case·경로·연결·등록과 겹치면 거부) | 409 `RESULT_PATH_OWNERSHIP_CONFLICT` |
+| 이름 | 상대 경로만, `/` 구분, `..`·`.`·빈 칸·절대·드라이브·`\`·`<>:"|?*`·제어 문자·끝 마침표/공백·CON 등 예약 이름·255자 초과·32단계 초과 금지(요청 전체 거부) | 422 `RESULT_DROP_PATH_INVALID` |
+| 제외(건너뜀) | 실행 파일·스크립트(`result_registration._BLOCKED_EXTENSIONS`), `Thumbs.db`·`desktop.ini`·`.DS_Store`·`~$*`, 숨김 폴더(`.`·`$`·`~` 시작) 안 | 계획 `skipped`(사유 표시), 남는 것이 없으면 422 `RESULT_DROP_EMPTY` |
+| 깊이(DEPTH_V1) | 새 폴더의 역할은 깊이로 정해진다. 부모와 같은 이름(INDIVIDUAL/INDIVIDUAL), 이 의뢰에서 다른 깊이의 이름(예: Scene 이름이 Run Option 자리에, 기본 RUN_OPTION 이름 INDIVIDUAL·CUMULATIVE 포함), Working·Final 이름은 **차단**. 숫자_로 시작하는 새 이름이 Scene 위 자리에 오면, Scene 위 깊이에 놓이는 파일, W6 비슷한 Scene 이름, 대소문자만 다른 기존 폴더는 **경고** | 계획 `issues[].severity` error/warning |
+| 충돌 | 같은 이름(대소문자 무시) 파일이 이미 있거나 폴더 자리에 파일이 있으면 차단. 덮어쓰지 않는다 | 계획 `conflicts`, 시작 409 `RESULT_DROP_PLAN_BLOCKED` |
+| 경로 길이 | 서버 경로와 표시 경로 모두 259자 이하 | `PATH_TOO_LONG` 차단 |
+| 공간 | 남은 공간 ≥ 합계 + max(5 %, 1 GiB) | `FREE_SPACE` 차단 |
+| 동시 업로드 | 의뢰당 열린 업로드 2개 | 429 `RESULT_DROP_BUSY` |
 
-업로드 원본은 승인 전 정식 Case 수집에서 격리한다. 자동 검사는 항목·값·단위·원본 출처·미디어 연결을 보여주며, 사용자가 검사 결과를 확인하고 게시를 승인한다. 재검사 후 값이나 미디어가 바뀌면 이전 승인은 무효다. 오류는 해결하거나 허용 누락을 명시해야 한다. 제외 파일과 결과 건수·사유를 승인 전에 확인한다. 인식된 결과값과 지원 미디어가 하나도 없으면 부분 등록도 차단한다.
+파일당·전체 크기 상한은 없다(남은 공간만). 항목 수는 요청당 파일·폴더 각 20,000개.
 
-현재 등록 화면 한도는 파일당 32 MiB, 초안당 256 MiB다. 각 게시·폴더 갱신은 독립 수집 버전(capture)으로 저장하고 과거 버전은 보존한다. **Case 결과 화면은 버전을 하나씩 고르지 않는다(2026-10-02 사용자 결정).** Run Option 아래 모든 Scene 폴더를 함께 보여 주며, 각 Scene은 여러 버전 중 가장 최근에 수집된 결과를 사용한다(가상 버전 `latest:<Case>`). 버전 목록은 업데이트 이력으로만 표시한다. 업로드 형식은 제한하지 않으며(실행 파일·스크립트 제외) 대시보드는 CSV·JSON·이미지·영상 등 인식 가능한 형식만 읽는다. 유통환경 결과는 확정 Scene 폴더 자체에 저장하고 `results` 하위 폴더를 제안하지 않는다. 게시 후 Folder Schema 갱신은 Case 폴더 전체 버전도 함께 수집한다.
+## 4. API (`/api/result-registration`, 모두 `result.import` 권한·의뢰 단위)
 
-## 저장·권한·복구
+| 메서드 | 경로 | 요청 | 응답 |
+|---|---|---|---|
+| GET | `/drop-target` | `project_id, request_id, environment` | `working_relative_path, working_display_path, display_root, levels[{level, role, label}], nodes[{relative_path, name, parent_path, level, role, display_path}], truncated, chunk_bytes, blocked_extensions, active_uploads` |
+| POST | `/drop-target/folders` | `{project_id, request_id, environment, parent_relative_path, name, confirm}` | 201 `{relative_path, display_path, level, role, role_label, warnings, sync}`. 422 `RESULT_DROP_FOLDER_NAME_INVALID`·`…_LEVEL_INVALID`(Scene 안)·`…_DEPTH_INVALID`, 409 `…_EXISTS`·`…_NAME_DUPLICATE`(대소문자·구분 기호만 다름)·`…_NAME_WARNING`(`warnings`; `confirm:true`로 다시) |
+| POST | `/drop-uploads/plan` | `{project_id, request_id, environment, target_relative_path, files[{relative_path, size, sha256?}], folders[]}` | 계획(쓰기 없음): `target_*`, `files[{client_index, relative_path, destination_relative_path, size, role}]`, `folders_to_create[{relative_path, client_path, level, role, role_label}]`, `skipped`, `conflicts`, `issues[{code, severity, message, paths, count}]`, `file_count, folder_count, total_bytes, free_bytes, required_bytes, can_upload` |
+| POST | `/drop-uploads` | plan과 같음 | 201 세션 `{session_id, state, chunk_bytes, files[{index, client_index, size, received, complete, published}], …, plan}`. 계획에 오류가 있으면 409 `RESULT_DROP_PLAN_BLOCKED`(`plan` 포함) |
+| GET | `/drop-uploads/{id}` | – | 세션 상태(이어 올릴 `received`) |
+| PUT | `/drop-uploads/{id}/files/{index}?offset=` | 본문 = 조각(≤ 8 MiB, `application/octet-stream`), 선택 헤더 `X-Chunk-SHA256` | `{index, received, size, complete, sha256}`. 409 `RESULT_DROP_OFFSET_MISMATCH`(`expected_offset`), 413 `…_CHUNK_TOO_LARGE`, 422 `…_CHUNK_HASH_MISMATCH`·`…_SIZE_EXCEEDED`·`…_HASH_MISMATCH`(선언한 파일 SHA-256과 다르면 임시 파일을 지우고 0부터) |
+| POST | `/drop-uploads/{id}/complete` | – | `{state: PUBLISHED|PARTIAL, published_files, published_bytes, created_folders, conflicts, busy, skipped, sync{status,…}, cases[{case_relative_path, case_name, case_id}]}`. 409 `RESULT_DROP_INCOMPLETE`·`…_CONFLICT`(그 사이 생긴 파일, 아무것도 공개 안 함)·`…_SCOPE_CHANGED`·`…_STAGING_CHANGED` |
+| DELETE | `/drop-uploads/{id}` | – | 이 세션의 임시 파일만 지움 |
+| GET | `/drafts` | `project_id, request_id, environment` | 이전 초안 목록(읽기 전용) |
 
-기존 `dashboard_cases`, `dashboard_captures`, `dashboard_assets`와 검수 기능을 우선 사용한다. 업로드 초안 원본은 DB 바이너리로 격리하며 DB 백업 대상이다. 승인한 파일 목록·내용 해시·바이트만 게시한다. 주변 폴더의 미검수 파일은 수집하지 않는다.
+세션은 만든 사용자만 볼 수 있다(다른 사용자는 404). 감사: `RESULT_DROP_UPLOAD_STARTED`(대상·파일 수·바이트·폴더 수·제외 수), `RESULT_DROP_UPLOAD_PUBLISHED`/`…_PARTIAL`/`…_FAILED`, `RESULT_DROP_UPLOAD_ABORTED`, `RESULT_DROP_FOLDER_CREATED`.
 
-서버는 결과를 등록할 때 사용자에게 대상 업무의 `result.import` 권한이 있는지와 업무 관계가 유효한지 다시 확인한다. 경로 작업은 저장소 root, Windows 이름·대소문자, root 이탈, reparse/symlink 및 기존 소유권을 검사한다. 다른 업무가 소유한 조상·자손 경로는 무조건 허용하지 않는다.
+## 5. 쓰기 경계와 공개
 
-기존 파일을 덮어쓰거나 삭제하지 않는다. 게시 폴더 준비 요청이 실패하면 그 요청에서 새로 만든 빈 폴더만 보상 정리한다. 이후 업로드·검수·게시 실패는 이미 준비된 폴더를 정리하지 않으며 외부 파일을 건드리지 않는다. DB 게시 성공과 원본 폴더 복사 실패를 구분하며, 성공한 capture는 보존하고 복구 상태를 제공한다. 중복 클릭·재시도는 같은 승인 결과를 중복 등록하지 않는다.
+- 저장소 공급자의 새 쓰기 구역 `WORKING`(S3 ③): `…/<요청>/Working/**`(Final 아래 제외), 호출 모듈 `app.services.result_drop_upload`만. 서비스는 다시 선택한 의뢰의 Working으로 한정한다.
+- 임시 위치: `<의뢰>/Working/.simdash-upload/<세션 32hex>/<n>.part`(같은 볼륨, 공개 = 이름 바꾸기). Windows에서는 숨김 속성. 폴더 조사(`folder_discovery_scan.scan`·`browse`)는 이 폴더를 통째로 건너뛰어 노드·파일·지문·자동 동기화에 나타나지 않는다. 이름이 `.`로 시작해 깊이 스키마도 무시한다.
+- 조각 쓰기 `LocalFsProvider.write_chunk`: 상위 사슬 고정·재확인, 링크 없이 연 핸들이 경로의 `lstat`과 같은 단일 연결 일반 파일, 현재 크기 = offset일 때만 쓰고 실패하면 offset으로 되자름. SHA-256은 서버가 받으면서 계산한다(브라우저는 WebCrypto가 있으면 조각 해시를 보냄; HTTP LAN에서는 생략).
+- 완료: 받은 크기 재확인 → 의뢰·Working·소유권 재확인 → 모든 대상의 충돌 재확인(있으면 아무것도 쓰지 않음) → 폴더를 얕은 순서로 하나씩 `mkdir_pinned`(고정된 부모 아래, 기존 일반 폴더는 그대로) → 파일마다 `rename_no_replace`(대상이 있으면 공개하지 않고 `conflicts`, 공유 위반은 재시도 후 `busy`). 의뢰별 공개 잠금. 모두 공개되면 세션 폴더를 지운다. 그다음 자동 동기화의 기억을 지우고 `sync(force=True)`.
+- 중지·실패: 세션의 `<n>.part`와 빈 세션 폴더만 지운다. 기존 SPDM 파일은 덮어쓰거나 지우지 않는다.
+- 세션은 서버 프로세스 메모리에 있다(새 DB 테이블·migration 없음). 재시작하면 업로드를 처음부터 다시 하고, 남은 임시 폴더는 같은 의뢰의 다음 업로드가 24시간 지난 것만(`<n>.part`만) 정리한다. 유휴 24시간 세션도 정리한다.
+- 표시 경로: 환경 변수 `SIMDASH_SPDM_DISPLAY_ROOT`(예: `\\fileserver\SPDM`)가 있으면 그 뒤에, 없으면 서버의 SPDM root 경로 뒤에 상대 경로를 붙인다. 서버 경로와 사용자 PC의 공유 경로가 다르면 운영에서 이 값을 `.env`에 둔다.
 
-폴더 준비(`folders/prepare`)가 새 폴더를 만들고 자동 Refresh가 성공하면, 응답 문맥은 경로 생성기가 계산한 ID가 아니라 갱신된 Folder Schema 후보의 문맥이다. 초안 업로드는 이 문맥을 그대로 보내므로 `RESULT_CONTEXT_CHANGED`로 막히지 않는다.
+## 6. 이전 등록 초안 (기존 흐름)
 
-확인된 결과 폴더 생성이나 파일 mirror가 성공하면 선택 의뢰·환경의 [Folder Schema Refresh](folder-schema-refresh.md)를 실행한다. Refresh가 실패해도 이미 성공한 DB capture와 사용자 파일은 보존한다. 화면은 등록 성공과 스키마 갱신 실패를 따로 표시하고 scoped Refresh 재시도를 제공한다. 같은 fingerprint의 재시도는 snapshot·capture를 중복 생성하지 않는다.
+W8 이전 화면(대상 선택 → 저장 위치 → 초안 업로드(파일 32 MiB·초안 256 MiB) → 자동 검사 → 검수·승인 → capture 게시·폴더 mirror)은 화면에서 뺐다. 기존 초안·파일·검사·게시 기록과 `result_registration_*` 표는 그대로 보존하고 바꾸지 않는다. 결과 등록 탭 아래 `이전 등록 초안 (읽기 전용)`에서 목록(만든 때·상태·결과 위치·파일 수·Case 결과 링크)만 보여 준다(`GET /drafts`). 기존 초안 API(`/targets`, `/folders`, `/locations`, `/folders/prepare`, `/drafts…`)는 호환을 위해 남아 있으나 화면은 호출하지 않는다. 이 API의 계약·검증 기록은 [보관 계획](../archive/2026/result-registration-review-plan.md)에 있다. 마이그레이션 `0031_result_registration`, `0033_result_registration_location_links`는 그대로다.
 
-## 배포·검증 경계
+## 7. 검증과 남은 위험
 
-배포는 [`Windows 배포 정책`](../windows-deployment-policy.md)을 따른다. 스키마 변경은 배포 단계에서만 수행하며 기존 DB 업데이트 전에 검증한 백업을 만든다. 결과 등록은 additive migration `0031_result_registration`을 사용하고, 편집 가능한 결과 위치 연결은 additive migration `0033_result_registration_location_links`를 사용한다. 사용자 DB·설정·실행 중 서비스와 실제 SPDM 자료는 검증에 사용하지 않았다.
-
-격리 PostgreSQL에서 빈 설치 및 `0030` 기존 DB 업그레이드, 기존 합성 업무·결과·asset 바이너리 보존을 검증했다. 관련 API·권한·중복·재시도·부분 등록, 데스크톱 브라우저 흐름, OpenAPI·프런트 빌드 및 관련 CI를 확인했다. 전체 unit/API 회귀에는 기존 실패와 Windows 실행 제한이 남아 있어 전체 회귀 통과로 간주하지 않는다. Server 2022 폐쇄망 설치·업데이트·재부팅과 운영 배포는 미실행이다. 주요 구현 경로: [등록 API](../../backend/app/routers/result_registration.py), [등록 서비스](../../backend/app/services/result_registration.py), [경로 검증](../../backend/app/services/result_registration_paths.py), [capture 게시](../../backend/app/services/dashboard_capture.py), [등록 화면](../../frontend/src/features/data/ResultRegistrationWorkspace.tsx). 자세한 결과는 보관한 [검증 기록](../archive/2026/result-registration-review-plan.md#8-구현검증-기록)을 본다.
+- 백엔드 `tests/test_result_drop_upload.py`(26): 폴더 구조 보존 → 동기화 후 Scene, 잘못된 깊이 차단, 기존 파일 충돌은 쓰기 전 거부, 업로드 중 생긴 충돌은 아무것도 공개 안 함, 경로 탈출·예약·절대 이름, Working 밖·다른 의뢰 소유 거부, 조각 이어 올리기·조각/파일 해시 불일치, 임시 폴더가 조사·자동 동기화에 안 보임, 링크 거부, 제외 파일, 권한 403, 공간 부족, 동시 업로드 제한·자기 임시 파일만 정리, 새 폴더 깊이·이름 규칙.
+- 프런트 e2e `result-drop-upload.spec.ts`(API 모의), `spdm-storage-workflow.spec.ts`(실제 API로 새 화면·이전 흐름 미호출 확인).
+- 미수행: Windows Server 2022·SMB에서 이름 바꾸기·고정 핸들·숨김 속성·백신 잠금, 수 GB 업로드 시간, 독립·보안 검수(Codex Security 미가용).
+- 알려진 한계: 같은 의뢰를 여러 서버 프로세스로 띄우면 동시 업로드 제한·공개 잠금이 프로세스별이다(현재 배포는 단일 프로세스). POSIX에서는 고정 핸들이 없어 확인과 쓰기 사이의 바꿔치기를 완전히 막지 못한다(W2와 같은 한계, Windows가 대상).

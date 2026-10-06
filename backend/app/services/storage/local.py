@@ -21,7 +21,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO, Callable, Iterable, Iterator, Literal, NamedTuple
 
 from .provider import (
-    FINAL, LEGACY, Entry, SpdmStorageError, StorageError, check_write,
+    FINAL, LEGACY, WORKING, Entry, SpdmStorageError, StorageError, check_write,
 )
 
 _STORAGE_PACKAGE = __name__.rsplit(".", 1)[0]
@@ -908,6 +908,89 @@ class LocalFsProvider:
         self._check(zone, rel_path)
         return try_request_lock(self.path(rel_path), self.root)
 
+    # -- W8 result drop upload (additive) ---------------------------------
+    def mkdir_pinned(self, rel_path: str, *, zone: str) -> bool:
+        """Create one folder below a pinned, re-checked parent chain; ``True`` when it was created.
+
+        An existing plain folder is accepted (``False``); an existing file, link or reparse
+        point is refused (``SPDM_PATH_UNSAFE``). Parents are never created implicitly.
+        """
+        self._check(zone, rel_path)
+        path = self.path(rel_path)
+        with pin_directory_chain(self.root, path.parent):
+            _assert_safe_existing(path.parent, self.root)
+            if _is_reparse(path.parent):
+                raise SpdmStorageError("SPDM_PATH_UNSAFE", "SPDM 경로에 reparse point를 사용할 수 없습니다.")
+            try:
+                path.mkdir()
+            except FileExistsError:
+                info = path.lstat()
+                attributes = getattr(info, "st_file_attributes", 0)
+                if (not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode)
+                        or attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)):
+                    raise SpdmStorageError("SPDM_PATH_UNSAFE", "같은 이름의 파일이나 연결 항목이 있어 폴더를 만들 수 없습니다.")
+                return False
+        return True
+
+    def set_hidden(self, rel_path: str, *, zone: str) -> None:
+        """Best-effort Windows hidden attribute (no-op elsewhere); never raises."""
+        self._check(zone, rel_path)
+        if os.name != "nt":
+            return
+        try:
+            import ctypes
+            ctypes.windll.kernel32.SetFileAttributesW(str(self.path(rel_path)), FILE_ATTRIBUTE_HIDDEN)  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001 - cosmetic only
+            pass
+
+    def write_chunk(self, rel_path: str, offset: int, data: bytes, *, zone: str, fsync: bool = True) -> int:
+        """Write ``data`` at ``offset`` of a regular single-link file and return the new size.
+
+        ``offset == 0`` on a missing file creates it exclusively; otherwise the file must
+        exist and its size must equal ``offset`` (``SPDM_CHUNK_OFFSET``), so a chunk is
+        never written twice or with a gap. The parent chain is pinned and re-checked and
+        the opened handle must be the path's own ``lstat`` entry (no link/reparse swap).
+        A failed write truncates the file back to ``offset``.
+        """
+        self._check(zone, rel_path)
+        if offset < 0:
+            raise SpdmStorageError("SPDM_CHUNK_OFFSET", "조각 위치가 올바르지 않습니다.")
+        path = self.path(rel_path)
+        unsafe = SpdmStorageError("SPDM_PATH_UNSAFE", "임시 업로드 파일이 일반 단일 연결 파일이 아닙니다.")
+        base = os.O_WRONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        with pin_directory_chain(self.root, path.parent):
+            _assert_safe_existing(path.parent, self.root)
+            exists = os.path.lexists(path)
+            if exists and not _regular_no_reparse(path.lstat()):
+                raise unsafe
+            if not exists and offset != 0:
+                raise SpdmStorageError("SPDM_CHUNK_OFFSET", "임시 업로드 파일이 없어 처음부터 다시 보내야 합니다.")
+            descriptor = os.open(path, base | (0 if exists else os.O_CREAT | os.O_EXCL), 0o666)
+            try:
+                opened = os.fstat(descriptor)
+                entry = path.lstat()
+                if (not _regular_no_reparse(opened) or not _regular_no_reparse(entry) or opened.st_nlink != 1
+                        or (opened.st_dev, opened.st_ino) != (entry.st_dev, entry.st_ino)):
+                    raise unsafe
+                if opened.st_size != offset:
+                    raise SpdmStorageError("SPDM_CHUNK_OFFSET", "임시 업로드 파일 크기가 조각 위치와 다릅니다.")
+                os.lseek(descriptor, offset, os.SEEK_SET)
+                try:
+                    view = memoryview(data)
+                    while view:
+                        view = view[os.write(descriptor, view):]
+                    if fsync:
+                        os.fsync(descriptor)
+                except BaseException:
+                    try:
+                        os.ftruncate(descriptor, offset)
+                    except OSError:
+                        pass
+                    raise
+                return offset + len(data)
+            finally:
+                os.close(descriptor)
+
     # -- writes (zone-checked, S3) ---------------------------------------
     def _check(self, zone: str, *rel_paths: str) -> None:
         caller = _caller_module()
@@ -991,7 +1074,7 @@ class LocalFsProvider:
     def remove(self, rel_path: str, *, zone: str, directory: bool = False, missing_ok: bool = False) -> None:
         self._check(zone, rel_path)
         path = self.path(rel_path)
-        if zone != FINAL:
+        if zone not in {FINAL, WORKING}:
             if directory:
                 path.rmdir()
             else:

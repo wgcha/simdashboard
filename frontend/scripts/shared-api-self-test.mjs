@@ -2,6 +2,7 @@ import { apiErrorMessage } from '../src/shared/api/errors.ts'
 import { formatServerTime, parseServerTime } from '../src/shared/api/serverTime.ts'
 import { folderProgressPath, folderProgressStatusLabel, normalizeFolderProgress } from '../src/shared/api/folderProgress.ts'
 import { keywordEnvironments, normalizeResultEnvironments, resolvedResultEnvironment, resultEnvironmentsPath } from '../src/shared/api/resultEnvironments.ts'
+import { chunkRanges, depthRules, dropEntries, dropGuide, entryRelativePath, formatBytes as dropBytes, pickedFromInput, walkEntries } from '../src/shared/api/resultDropModel.ts'
 import { depthRowEditable, depthRows, errorCode, errorItems, lowerRoleOptions, setDepthRole, sumDeleteCounts, validateLowerLevels, validateUpperLevels } from '../src/shared/api/depthSchemaModel.ts'
 
 const validation = { detail: [{ type: 'missing', loc: ['body', 'name'], msg: 'Field required' }] }
@@ -92,5 +93,28 @@ assert(!normalizeFolderProgress({ applicable: false, steps: [] }).applicable && 
 const finished = normalizeFolderProgress({ applicable: true, current_key: null, next_action: '', steps: [{ key: 'REGISTERED', label: '의뢰 등록', status: 'DONE', detail: null }] })
 assert(finished.current_key === null && finished.next_action === '완료', 'all steps done reads as 완료')
 assert(folderProgressStatusLabel('DONE') === '완료' && folderProgressStatusLabel('IN_PROGRESS') === '진행 중' && folderProgressStatusLabel('WAITING') === '대기', 'status labels follow §4')
+
+// W8 결과 등록 drag & drop (result-registration.md).
+const fakeFile = (name, size = 1) => ({ name, size })
+const fileEntry = (fullPath) => ({ isFile: true, isDirectory: false, name: fullPath.split('/').pop(), fullPath, file: (ok) => ok(fakeFile(fullPath.split('/').pop())) })
+const dirEntry = (fullPath, children) => {
+  let served = false
+  return { isFile: false, isDirectory: true, name: fullPath.split('/').pop(), fullPath, createReader: () => ({ readEntries: (ok) => { const batch = served ? [] : children; served = true; ok(batch) } }) }
+}
+const walked = await walkEntries([dirEntry('/CUMULATIVE', [dirEntry('/CUMULATIVE/7_Edge', [fileEntry('/CUMULATIVE/7_Edge/a.csv')]), dirEntry('/CUMULATIVE/9_Empty', [])]), fileEntry('/top.csv')])
+assert(walked.files.map((item) => item.relativePath).join() === 'CUMULATIVE/7_Edge/a.csv,top.csv', 'dropped folders keep their relative structure')
+assert(walked.folders.join() === 'CUMULATIVE/9_Empty', 'empty dropped folders are kept')
+assert(entryRelativePath({ fullPath: '/a/b.csv', name: 'b.csv' }) === 'a/b.csv', 'entry paths are relative')
+assert(pickedFromInput([{ name: 'a.csv', size: 1, webkitRelativePath: 'Run/INDIVIDUAL/a.csv' }, { name: 'b.csv', size: 1 }]).files.map((item) => item.relativePath).join() === 'Run/INDIVIDUAL/a.csv,b.csv', 'folder picker keeps webkitRelativePath')
+const dropped = dropEntries({ items: [{ kind: 'string' }, { kind: 'file', webkitGetAsEntry: () => fileEntry('/x.csv') }], files: [fakeFile('x.csv')] })
+assert(dropped.entries.length === 1 && dropped.files.length === 0, 'drop uses entries when the browser provides them')
+assert(dropEntries({ items: [], files: [fakeFile('x.csv')] }).files.length === 1, 'drop falls back to the file list')
+const distributionRoles = ['WORKING', 'SIMULATION_CASE', 'LOAD_CASE', 'EXECUTION_RUN', 'RUN_OPTION', 'SCENE']
+assert(dropGuide('EXECUTION_RUN', distributionRoles).put === 'Run Option 폴더를 통째로 넣으세요.', 'Run Case takes Run Option folders')
+assert(dropGuide('SCENE', distributionRoles).put.startsWith('결과 파일'), 'Scene takes result files')
+assert(depthRules(distributionRoles).some((rule) => rule.text === 'Run Option 폴더를 통째로 복사하려면 Run Case 폴더 아래에'), 'depth rules name the parent level')
+assert(JSON.stringify(chunkRanges(10, 4)) === '[[0,4],[4,8],[8,10]]' && JSON.stringify(chunkRanges(10, 4, 4)) === '[[4,8],[8,10]]', 'chunks resume from the offset')
+assert(JSON.stringify(chunkRanges(0, 4)) === '[[0,0]]' && chunkRanges(4, 4, 4).length === 0, 'empty files send one empty chunk')
+assert(dropBytes(512) === '512 B' && dropBytes(1536) === '1.5 KB' && dropBytes(3 * 1024 ** 3) === '3.0 GB', 'byte formatting')
 
 console.log('Shared API self-test passed.')

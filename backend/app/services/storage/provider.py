@@ -15,7 +15,9 @@ from typing import BinaryIO, ContextManager, Iterable, Iterator, Literal, Protoc
 
 FINAL = "FINAL"
 LEGACY = "LEGACY"
-WRITE_ZONES = frozenset({FINAL, LEGACY})
+# W8 result drop upload: ``<request>/Working/**`` (folders, staged chunks, published files).
+WORKING = "WORKING"
+WRITE_ZONES = frozenset({FINAL, LEGACY, WORKING})
 
 # Contract error codes (§2).  Legacy callers keep receiving ``SpdmStorageError``
 # with their existing ``SPDM_*``/``FINALIZATION_*`` codes; these codes are used
@@ -28,6 +30,14 @@ LIMIT = "LIMIT"
 
 # S3 ① FINAL zone: written only by the Final designation flow.
 FINAL_WRITER_MODULES = frozenset({"app.services.case_finalization"})
+
+# W8: per-session staging folder directly under ``<request>/Working``. Same volume as the
+# destination (publish = rename). Folder scans/auto-sync skip it entirely (it is never a
+# Case, never part of a fingerprint); it is also a dot-name, ignored by the depth schema.
+UPLOAD_STAGING_DIR = ".simdash-upload"
+
+# S3 ③ WORKING zone: written only by the W8 drag & drop upload (never replaces files).
+WORKING_WRITER_MODULES = frozenset({"app.services.result_drop_upload"})
 
 # S3 ② LEGACY zone: behaviour-preserving writers only, never new callers.
 LEGACY_WRITER_MODULES = frozenset({
@@ -127,8 +137,26 @@ def legacy_zone_allows(rel_path: str, caller: str) -> bool:
     return False
 
 
+def working_zone_allows(rel_path: str) -> bool:
+    """Strictly below a ``Working`` folder that has a non-empty request prefix and no ``Final`` ancestor (W8).
+
+    The upload service additionally confines every write to the selected request's own
+    ``Working`` folder; this is the coarse provider-level guard.
+    """
+    parts = [part.casefold() for part in _segments(rel_path)]
+    for index, part in enumerate(parts):
+        if part != "working" or index == 0:
+            continue
+        if "final" in parts[:index]:
+            return False
+        return len(parts) > index + 1
+    return False
+
+
 def check_write(rel_path: str, zone: str, caller: str) -> None:
     if zone == FINAL and caller in FINAL_WRITER_MODULES and final_zone_allows(rel_path):
+        return
+    if zone == WORKING and caller in WORKING_WRITER_MODULES and working_zone_allows(rel_path):
         return
     if zone == LEGACY and caller in LEGACY_WRITER_MODULES and legacy_zone_allows(rel_path, caller):
         return
@@ -136,7 +164,7 @@ def check_write(rel_path: str, zone: str, caller: str) -> None:
 
 
 __all__ = [
-    "Entry", "FINAL", "FINAL_SUMMARY_FILE", "FINAL_WRITER_MODULES", "LEGACY", "LEGACY_WRITER_MODULES", "NOT_ALLOWED_WRITE", "NOT_FOUND", "FORBIDDEN",
+    "Entry", "FINAL", "FINAL_SUMMARY_FILE", "UPLOAD_STAGING_DIR", "WORKING", "WORKING_WRITER_MODULES", "working_zone_allows", "FINAL_WRITER_MODULES", "LEGACY", "LEGACY_WRITER_MODULES", "NOT_ALLOWED_WRITE", "NOT_FOUND", "FORBIDDEN",
     "UNAVAILABLE", "LIMIT", "SpdmStorageError", "StorageError", "StorageProvider", "WRITE_ZONES",
     "check_write", "final_zone_allows", "legacy_zone_allows", "Iterator",
 ]

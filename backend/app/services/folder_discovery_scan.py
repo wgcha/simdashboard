@@ -8,6 +8,14 @@ from typing import Any, Callable
 
 from . import spdm_storage
 from .storage.local import LocalFsProvider
+from .storage.provider import UPLOAD_STAGING_DIR
+
+_STAGING_FOLDED = UPLOAD_STAGING_DIR.casefold()
+
+
+def _is_upload_staging(entry) -> bool:
+    """W8 drop-upload staging folder: never listed, scanned or fingerprinted."""
+    return entry.kind == "dir" and entry.name.casefold() == _STAGING_FOLDED
 
 MAX_FOLDERS = 5000
 MAX_ENTRIES = 50000
@@ -46,6 +54,8 @@ def browse(root: Path, relative: str) -> list[dict[str, Any]]:
     for index, entry in enumerate(fs.list(base)):
         if index >= MAX_ENTRIES or time.monotonic() - started > MAX_SECONDS:
             raise ValueError("폴더 선택 목록의 조사 한도를 초과했습니다. 더 작은 시작 위치를 지정하세요.")
+        if _is_upload_staging(entry):
+            continue
         path = fs.join(base, entry.name)
         if fs.is_link(path):
             continue
@@ -77,6 +87,8 @@ def scan(root: Path, relative: str, *, skip_descendants: Callable[[str, str | No
             identity = info.item_id
             if not skipped:
                 for entry in fs.list(path, stat="files"):
+                    if _is_upload_staging(entry):
+                        continue
                     total_entries += 1
                     if total_entries > MAX_ENTRIES or time.monotonic() - started > MAX_SECONDS:
                         issues.append({"relative_path": rel, "code": "ENTRY_LIMIT", "message": "전체 항목 수 또는 조사 시간 한도를 초과했습니다."})
