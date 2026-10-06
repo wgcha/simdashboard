@@ -84,8 +84,8 @@ const files = [
   { source_relative_path: 'R/Working/Case A/Drop/Run A/Individual/2_Face/result.csv', case_relative_path: 'Drop/Run A/Individual/2_Face/result.csv', category: 'CAE', source_basis: 'SOURCE_CAPTURE', source_capture_id: 'capture-1', size: 60, sha256: '2'.repeat(64) },
   { source_relative_path: 'R/Working/Case A/Drop/Run A/Individual/3_Face/result.csv', case_relative_path: 'Drop/Run A/Individual/3_Face/result.csv', category: 'CAE', source_basis: 'SOURCE_CAPTURE', source_capture_id: 'capture-2', size: 60, sha256: '3'.repeat(64) },
 ]
-const reportsDir = `R/Final/Reports/Case A/${OPERATION}`
-const usageReportsDir = `U/Final/Reports/Usage Case/${OPERATION}`
+const reportsDir = `R/Final/Report/Case A/${OPERATION}`
+const usageReportsDir = `U/Final/Report/Usage Case/${OPERATION}`
 const preview = {
   schema_version: 2, operation_id: OPERATION, status: 'PREVIEW', project_id: 'project-tv-001', request_id: 'request-drop-001', environment: 'DISTRIBUTION',
   case_id: CASE_ID, case_label: 'Case A', case_path: 'R/Working/Case A', capture_id: CAPTURE_ID, basis: 'LATEST',

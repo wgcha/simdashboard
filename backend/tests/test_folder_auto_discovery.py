@@ -208,7 +208,7 @@ def test_real_tree_layout_registers_without_deviations(admin_client):
         scene = dist / "Working" / case / "Drop" / "85qn80h_ref_organized" / option / "2_Face"
         scene.mkdir(parents=True)
         (scene / CSV).write_bytes(CSV_BYTES)
-    for branch in ("CAE", "Reports"):
+    for branch in ("CAE", "Report"):
         (dist / "Final" / branch / case / FINAL_ID / "Drop" / "85qn80h_ref_organized" / "INDIVIDUAL").mkdir(parents=True)
     (dist / "Final" / "CAD").mkdir()
     (dist / "Final" / ".finalizations" / FINAL_ID).mkdir(parents=True)
@@ -217,9 +217,17 @@ def test_real_tree_layout_registers_without_deviations(admin_client):
     settle.mkdir(parents=True)
     (settle / "75R9J_settle_result.json").write_text('{"Set Tilt Angle @ Settle (deg)": 1.18}', encoding="utf-8")
     (usage / "Final").mkdir()
+    # §15 D22 Verifier 3: project-level CAD/Report manual folders are ignored (any case).
+    (root / "75R9J_PV" / "CAD" / "drawings").mkdir(parents=True)
+    (root / "75R9J_PV" / "report").mkdir()
+    (root / "75R9J_PV" / "report" / "summary.pptx").write_bytes(b"manual")
+    manual_before = sorted(p.relative_to(root).as_posix() for p in (root / "75R9J_PV").rglob("*")
+                           if p.relative_to(root / "75R9J_PV").parts[0] in {"CAD", "report"})
 
     result = _discover(client)
     assert result["needs_review"] == [], result["needs_review"]
+    assert sorted(p.relative_to(root).as_posix() for p in (root / "75R9J_PV").rglob("*")
+                  if p.relative_to(root / "75R9J_PV").parts[0] in {"CAD", "report"}) == manual_before
     assert [item["name"] for item in result["created_projects"]] == ["75R9J_PV"]
     assert {(item["name"], item["environment"]) for item in result["created_requests"]} == {
         ("[WR-0002]_[유통_환경]", "DISTRIBUTION"), ("[WR-0001]_[사용_환경]", "USAGE")}

@@ -18,7 +18,7 @@ export type CaseFinalizationInput = {
 export type CaseFinalizationFile = {
   source_relative_path: string
   case_relative_path: string
-  /** Version 1 records (before 2026-10-03) also used `Reports` for result files. */
+  /** Internal record key (folder is `Final/Report`, §15 D21). Version 1 records (before 2026-10-03) also used it for result files. */
   category: 'CAE' | 'Reports'
   source_basis: 'SOURCE_CAPTURE' | 'CURRENT_CONFIRMED_SCENE' | 'SELECTED_CAPTURE'
   source_capture_id?: string

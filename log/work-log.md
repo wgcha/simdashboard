@@ -1145,3 +1145,11 @@
 - 변경: `GET /api/projects/{p}/requests/{r}/folder-progress`(30초 메모, 실시간 스캔 없음, 파일 본문 읽기·SPDM 쓰기 없음), `case_finalization.latest_completed`(읽기 전용, status 동작 불변), 의뢰 개요 단계 표시줄·현재 할 일·Case 결과 버튼.
 - 검증: DuckDB 전체 2040 passed/9 failed(기존 9건), Postgres finalization·progress 통과, 프론트 tsc·build·test:api, e2e folder-request-progress 3/3. request-centric-workspace e2e 4건 실패는 기준 커밋에서도 동일.
 - 독립 검수: Verifier 1회(Blocker: Scene 경로 위해 전체 트리 재스캔 → 저장 스냅샷만 사용으로 수정, Final/보고서 판정 분리). 권한은 catalog와 동일(전사 PROJECT_DATA_VIEW). Codex Security 미실행.
+
+## 2026-10-06 Final/Report 폴더명 정정(D21)과 프로젝트 CAD/Report 무시(D22)
+
+- 계약: `docs/contracts/depth-schema.md` §15. 역할 키 `FINAL_REPORTS`와 기록의 출력 키 `Reports`는 내부 식별자로 유지, 실제 폴더만 `Final/Report`.
+- 변경: `case_finalization`(쓰기·읽기 경로 `Final/Report`, `Final/Reports`로 서명된 기존 기록은 CAE 출력으로만 유효·보고서 없음으로 표시, v1 결과 미러도 미인식), StorageProvider FINAL 구역 `CAE|Report|.finalizations`(`Reports` 쓰기 거부), 깊이 스키마 `FINAL_BLOCK` 상수 `Report`(해석은 서버 상수만 사용, 0034 seed의 저장값 `Reports`는 읽지 않으므로 migration 없음), Final 아래 `Reports`는 `UNEXPECTED_FINAL_CHILD` 경고. 의뢰 레벨 `CAD`/`Report`(대소문자 무시)는 `resolve_path`·자동 탐색 의뢰 후보·샘플/검사·등록 stale 비교에서 숨김 이름처럼 제외. 프론트 문구 `Final/Report`.
+- 검증: DuckDB 전체 9 failed(기존 9건; 신규 실패 2건 `environment_folder_flow_api` Final 경로·0034 seed 비교는 테스트 갱신 후 통과), 관련 백엔드(finalization·progress·auto-discovery·depth_schema·storage_provider·single_request_registration) 통과, Postgres 16 신규 DB(0034 seed 포함)에서 finalization·auto-discovery·progress 72 passed. 프론트 tsc·build·test:api 통과, e2e case-finalization 통과, environment-folder-flow는 기존 실패 1건(desktop and mobile 등록 흐름) 외 통과.
+- 독립 검수: Verifier 1회(Blocker 없음, should-fix 2건 수정 — ① 업그레이드 전 시도가 `Final/Reports/<Case>/<op>`에 보고서를 남긴 작업의 재시도는 `FINALIZATION_LEGACY_REPORTS_PRESENT`(409)로 거부하고 아무것도 쓰지 않음, ② 기존 경로를 문자열 치환 대신 구성요소로 생성(상위 폴더 이름이 `Report`여도 안전)). 수정 후 finalization·progress DuckDB/Postgres 신규 DB 각 52 passed. Codex Security 미실행.
+- 남은 것: 기존 `Final/Reports`는 사용자가 이름을 바꿔야 보고서로 인식.

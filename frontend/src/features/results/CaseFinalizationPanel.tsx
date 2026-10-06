@@ -242,8 +242,8 @@ export function CaseFinalizationPanel(props: Props) {
             </ul>
           </details> : <p className="case-finalization__empty">확정할 파일이 없습니다.</p>}
         </section>
-        <section className="case-finalization__section" aria-label="Final/Reports">
-          <h4>Final/Reports <span>하나 이상 선택</span></h4>
+        <section className="case-finalization__section" aria-label="Final/Report">
+          <h4>Final/Report <span>하나 이상 선택</span></h4>
           {scopeAtOpen ? <p className="case-finalization__hint" title={reportRange} data-testid="case-final-report-range">보고서 범위: {reportRange}</p> : <p className="case-finalization__missing">이 Case에는 보고서를 만들 결과가 없습니다.</p>}
           <fieldset className="case-finalization__formats" disabled={busy || !scopeAtOpen}>
             <legend className="case-sr-only">보고서 형식</legend>

@@ -302,7 +302,12 @@ def test_depth_schema_migration_seeds_default_set_archives_without_delete(monkey
         validated = profiles.validate_rules(environment, rules)
         assert validated["lower"] == profiles.DEFAULT_LOWER[environment]
         assert validated["upper"] == profiles.DEFAULT_UPPER
-        assert rules["final"] == profiles.FINAL_BLOCK
+        # 0034 seeded the pre-§15 name ``Reports``; the Final block is a server constant
+        # (§4.3) and resolution never reads the stored copy, so no data migration is needed.
+        assert rules["final"] == {**profiles.FINAL_BLOCK, "children": [
+            {**item, "name": "Reports"} if item["role"] == "FINAL_REPORTS" else item
+            for item in profiles.FINAL_BLOCK["children"]]}
+        assert validated["final"] == profiles.FINAL_BLOCK
         assert rules["schema_set_id"] == module.SCHEMA_SET_ID
     output = StringIO()
     context = MigrationContext.configure(dialect_name="postgresql", opts={"as_sql": True, "output_buffer": output})

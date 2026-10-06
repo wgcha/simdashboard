@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import builtins
 import io
+import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -145,7 +146,37 @@ def test_distribution_tree_steps_inputs_partial_results_final_and_report(admin_c
     assert _steps(body)["FINAL"] == ("DONE", None)
     assert _steps(body)["REPORT"] == ("WAITING", "Final 보고서 폴더를 읽을 수 없습니다.")
 
-    # A Final record whose Reports folder holds no pptx/html: FINAL done, REPORT waiting.
+    # §15 D21 Verifier 1: the reports live under Final/Report; Final/Reports is never created.
+    final_dir = root / DIST / "Final"
+    assert sorted(path.name for path in (final_dir / "Report" / plan["case_label"] / plan["operation_id"]).iterdir()) == sorted(
+        plan["report_files"].values())
+    assert not (final_dir / "Reports").exists()
+
+    # §15 D21 Verifier 2: a record signed with the legacy Final/Reports layout still stands
+    # (FINAL done), its Final/Reports folder is not read (REPORT waiting), and nothing errors.
+    metadata = root / plan["metadata_relative_path"]
+    complete = json.loads((metadata / "complete.json").read_bytes())
+    legacy_reports = complete["output_paths"]["Reports"].replace("/Final/Report/", "/Final/Reports/")
+    (root / legacy_reports).parent.mkdir(parents=True)
+    (root / complete["output_paths"]["Reports"]).rename(root / legacy_reports)
+    complete["output_paths"]["Reports"] = legacy_reports
+    (metadata / "complete.json").write_bytes(case_finalization._encode(
+        case_finalization._signed_record(complete, "complete_signature", case_finalization.COMPLETE_DOMAIN)))
+    body = _progress(client, ids)
+    assert _steps(body)["FINAL"] == ("DONE", None) and _steps(body)["REPORT"] == ("WAITING", None)
+    status = client.get("/api/dashboard/finalizations/status",
+                        params={k: v for k, v in ctx.items() if k != "capture_id"})
+    assert status.status_code == 200, status.text
+    latest = status.json()["selected_case_latest"]
+    assert latest["operation_id"] == plan["operation_id"] and latest["reports"] == []
+    assert status.json()["unverified_records"] == 0
+    # Renaming the folder to Final/Report (the user's fix) makes the reports count again.
+    (final_dir / "Report" / plan["case_label"]).rmdir()
+    (final_dir / "Reports").rename(final_dir / "Report")
+    body = _progress(client, ids)
+    assert _steps(body)["FINAL"] == ("DONE", None) and _steps(body)["REPORT"] == ("DONE", None)
+
+    # A Final record whose Final/Report folder holds no pptx/html: FINAL done, REPORT waiting.
     record, _names = None, None
     with connect() as conn:
         record, _names = case_finalization.latest_completed(conn, **ids, environment="DISTRIBUTION")

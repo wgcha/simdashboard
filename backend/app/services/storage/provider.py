@@ -79,7 +79,7 @@ def _segments(rel_path: str) -> list[str]:
 
 
 def final_zone_allows(rel_path: str) -> bool:
-    """``<request>/Final`` itself and ``<request>/Final/(CAE|Reports|.finalizations)/**``.
+    """``<request>/Final`` itself and ``<request>/Final/(CAE|Report|.finalizations)/**`` (§15 D21: not ``Reports``).
 
     The ``Final`` component needs a non-empty request prefix and must not sit
     under a ``Working`` folder; names compare case-insensitively because the
@@ -92,7 +92,7 @@ def final_zone_allows(rel_path: str) -> bool:
         if "working" in parts[:index]:
             return False
         rest = parts[index + 1:]
-        if not rest or rest[0] in {"cae", "reports", ".finalizations"}:
+        if not rest or rest[0] in {"cae", "report", ".finalizations"}:
             return True
     return False
 

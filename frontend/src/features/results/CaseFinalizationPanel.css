@@ -301,7 +301,7 @@
   white-space: nowrap;
 }
 
-/* Stage 6 Final dialog: basis, Final/CAE, Final/Reports sections (desktop). */
+/* Stage 6 Final dialog: basis, Final/CAE, Final/Report sections (desktop). */
 .case-finalization__section {
   display: grid;
   gap: 7px;

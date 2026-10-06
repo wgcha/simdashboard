@@ -21,7 +21,7 @@
 | 2 | MODELING | 해석 모델링 | 모든 Case가 입력 있는 Scene을 1개 이상 가짐 | `Case n/m 입력 있음` |
 | 3 | RESULTS | 해석 결과 | 모든 Case의 Scene 결과 수집 완료(최신 수집이 COMPLETED이고 결과 자산 있음) | `Case n/m 결과 있음` |
 | 4 | FINAL | Final 지정 | 의뢰의 Case 중 1개 이상이 Final 지정 완료(`Final/.finalizations/<id>/complete.json` 존재, 앱이 이미 읽는 방식) | – |
-| 5 | REPORT | 보고서 | 4의 최신 Final 지정에 대해 `Final/Reports/<Case>/<id>/`에 `.pptx` 또는 `.html`이 1개 이상 | – |
+| 5 | REPORT | 보고서 | 4의 최신 Final 지정에 대해 `Final/Report/<Case>/<id>/`에 `.pptx` 또는 `.html`이 1개 이상 | – |
 
 - Case = 의뢰의 `dashboard_cases`(Working 아래 SIMULATION_CASE). Case가 0개면 2·3은 `대기`.
 - 상태: `DONE` / `IN_PROGRESS`(n>0, n<m) / `WAITING`. 앞 단계가 완료되지 않아도 뒤 단계 조건이 충족되면 DONE으로 표시한다(폴더 사실 그대로).
@@ -63,7 +63,7 @@
 
 1. 사용·유통 실제 트리 fixture에서 단계 계산이 표와 일치(입력 없음 → MODELING 진행, `.rad`/`.fem` Scene 바로 아래 → DONE, 하위폴더 속 `.rad`는 무시, `.inc` 무시, 대소문자 무시)
 2. 결과 수집 일부만 완료 → RESULTS `IN_PROGRESS`와 n/m
-3. Final 지정 후 FINAL DONE, Reports에 pptx/html 저장 후 REPORT DONE
+3. Final 지정 후 FINAL DONE, Report에 pptx/html 저장 후 REPORT DONE
 4. 구 방식 의뢰 → `applicable=false`, 기존 화면 유지
 5. 파일 본문 읽기 0, SPDM 쓰기 0(파일 수·mtime 불변)
 6. 권한은 Case 결과 조회(`/api/dashboard/catalog`)와 동일

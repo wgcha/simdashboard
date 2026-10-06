@@ -330,7 +330,8 @@ def _request_candidates(lister: _Lister, schema: dict[str, Any], project_path: s
         for _, relative in level:
             next_level.extend(_visible(lister, relative))
         level = next_level
-    return level
+    # §15 D22: project-level CAD/Report folders are manual work areas, never requests.
+    return [(name, path) for name, path in level if not depth_profiles.is_project_shared_name(name)]
 
 
 def _review(relative_path: str, code: str, reason: str, environment: str | None = None) -> dict[str, Any]:

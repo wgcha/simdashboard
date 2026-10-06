@@ -48,7 +48,7 @@ def dist_tree_paths():
     paths.append(f"{case}/{DIST_TAIL}/2_Face")
     final = f"{DIST}/Final"
     paths += [final, f"{final}/CAD", f"{final}/.finalizations", f"{final}/.finalizations/{FINAL_ID}"]
-    for branch in ("CAE", "Reports"):
+    for branch in ("CAE", "Report"):
         base = f"{final}/{branch}/{DIST_CASE}/{FINAL_ID}"
         paths += [f"{final}/{branch}", f"{final}/{branch}/{DIST_CASE}", base]
         for index in range(len(parts)):
@@ -88,7 +88,7 @@ def test_distribution_real_tree_has_no_deviation_and_matches_standard_roles():
     final = f"{DIST}/Final"
     assert resolved[final]["role_kind"] == "FINAL"
     assert resolved[f"{final}/CAE"]["role_kind"] == "FINAL_CAE"
-    assert resolved[f"{final}/Reports"]["role_kind"] == "FINAL_REPORTS"
+    assert resolved[f"{final}/Report"]["role_kind"] == "FINAL_REPORTS"
     assert resolved[f"{final}/CAD"]["role_kind"] == "FINAL_CAD"
     assert f"{final}/.finalizations" not in resolved and f"{final}/.finalizations/{FINAL_ID}" not in resolved
     base = f"{final}/CAE/{DIST_CASE}"
@@ -139,6 +139,24 @@ def test_working_missing_and_unexpected_children():
     assert codes[f"{DIST}/Final/Other"] == "UNEXPECTED_FINAL_CHILD"
     assert codes[f"{DIST}/Final/CAE/C/not-an-id"] == "FINAL_VERSION_INVALID"
     assert {"UNEXPECTED_FINAL_CHILD", "FINAL_VERSION_INVALID"} <= profiles.WARNING_DEVIATIONS
+
+
+@pytest.mark.unit
+def test_legacy_final_reports_is_unexpected_and_project_cad_report_are_ignored():
+    """§15 D21/D22."""
+    final = f"{DIST}/Final"
+    resolved = by_path(profiles.resolve_tree(
+        [PROJECT, DIST, f"{DIST}/Working", final, f"{final}/Report", f"{final}/Reports", f"{final}/Reports/C",
+         f"{PROJECT}/CAD", f"{PROJECT}/CAD/sub", f"{PROJECT}/report", f"{PROJECT}/REPORT/x"], dist_rules()))
+    assert resolved[f"{final}/Report"]["role_kind"] == "FINAL_REPORTS" and not resolved[f"{final}/Report"]["deviation"]
+    assert resolved[f"{final}/Reports"]["deviation"]["code"] == "UNEXPECTED_FINAL_CHILD"
+    assert resolved[f"{final}/Reports"]["deviation"]["code"] in profiles.WARNING_DEVIATIONS
+    assert resolved[f"{final}/Reports/C"]["status"] == "CONTENT" and not resolved[f"{final}/Reports/C"]["deviation"]
+    assert not any(path.casefold().startswith((f"{PROJECT}/cad".casefold(), f"{PROJECT}/report".casefold()))
+                   for path in resolved)
+    assert [item["name"] for item in profiles.FINAL_BLOCK["children"]] == ["CAE", "Report", "CAD"]
+    # A request folder merely containing the word is still a request.
+    assert profiles.resolve_path([PROJECT, "[WR-0009]_[유통_Report]"], dist_rules())["role_kind"] == "REQUEST"
 
 
 @pytest.mark.unit
@@ -255,7 +273,7 @@ def _build_distribution(root, *, final=True):
     scene.mkdir(parents=True)
     (scene / CSV).write_bytes(CSV_BYTES)
     if final:
-        for branch in ("CAE", "Reports"):
+        for branch in ("CAE", "Report"):
             copy = root / DIST / "Final" / branch / DIST_CASE / FINAL_ID / DIST_TAIL
             copy.mkdir(parents=True)
             (copy / CSV).write_bytes(CSV_BYTES)
@@ -440,6 +458,9 @@ def test_samples_and_run_option_names_and_check(admin_client):
     for name in ("ALL", "individual"):
         (other / name / "Scene").mkdir(parents=True)
     (root / PROJECT / "[WR-0004]_[유통_사용]" / "Working").mkdir(parents=True)
+    # §15 D22: project-level CAD/Report folders are neither sampled nor checked.
+    (root / PROJECT / "CAD" / "Working").mkdir(parents=True)
+    (root / PROJECT / "Report").mkdir()
     with connect() as conn:
         samples = profiles.depth_schema_samples(conn, root, "DISTRIBUTION")
         names = {item["name"].casefold(): item for item in samples["run_option_names"]}
@@ -448,6 +469,7 @@ def test_samples_and_run_option_names_and_check(admin_client):
         assert samples["requests_sampled"] == 2 and samples["levels"][0]["samples"][0]["name"] == "Working"
         upper = profiles.depth_schema_samples(conn, root, "UPPER")
         assert upper["levels"][0]["samples"] == [{"name": PROJECT, "count": 1}]
+        assert {item["name"] for item in upper["levels"][1]["samples"]}.isdisjoint({"CAD", "Report"})
         schema = profiles.get_depth_schema(conn)
         draft = {env: {"lower": item["lower"]} for env, item in schema["environments"].items()}
         checked = profiles.depth_schema_check(conn, root, schema["upper"], draft)

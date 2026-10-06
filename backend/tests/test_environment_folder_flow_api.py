@@ -881,7 +881,7 @@ def test_case_finalization_is_capture_pinned_signed_retryable_and_keeps_existing
                                     "html": "Package_SetCase1_CushionCase1_report.html"}
     assert not any("Private" in item["source_relative_path"] for item in plan["files"])
     assert any(item["source_relative_path"].endswith("review.pdf") for item in plan["files"])
-    assert not (root / "Project_9910_Final" / "WR_9910_SimType3" / "Final" / "Reports" / "Package_SetCase1_CushionCase1").exists()
+    assert not (root / "Project_9910_Final" / "WR_9910_SimType3" / "Final" / "Report" / "Package_SetCase1_CushionCase1").exists()
 
     # Tampered durable plans fail closed before any destination is copied.
     operation_dir = root / plan["metadata_relative_path"]
@@ -932,7 +932,7 @@ def test_case_finalization_is_capture_pinned_signed_retryable_and_keeps_existing
     assert record["status"] == "COMPLETE"
     assert record["counts"]["rad_decks"] == 1 and record["counts"]["inc_decks"] == 1
     assert record["output_paths"]["CAE"].startswith("Project_9910_Final/WR_9910_SimType3/Final/CAE/Package_SetCase1_CushionCase1/")
-    assert record["output_paths"]["Reports"].startswith("Project_9910_Final/WR_9910_SimType3/Final/Reports/Package_SetCase1_CushionCase1/")
+    assert record["output_paths"]["Reports"].startswith("Project_9910_Final/WR_9910_SimType3/Final/Report/Package_SetCase1_CushionCase1/")
     for item in record["files"]:
         destination = root / record["output_paths"][item["category"]] / item["case_relative_path"]
         assert hashlib.sha256(destination.read_bytes()).hexdigest() == item["sha256"]

@@ -211,7 +211,7 @@ FINAL_BLOCK = {
     "fixed": True,
     "children": [
         {"name": "CAE", "role": "FINAL_CAE"},
-        {"name": "Reports", "role": "FINAL_REPORTS"},
+        {"name": "Report", "role": "FINAL_REPORTS"},
         {"name": "CAD", "role": "FINAL_CAD", "below": "CONTENT"},
     ],
     "ignored": [".finalizations"],
@@ -233,7 +233,7 @@ DEVIATION_MESSAGES = {
     "ENV_KEYWORD_NONE": "의뢰 폴더 이름에 '사용' 또는 '유통'이 없어 환경을 정할 수 없습니다.",
     "WORKING_MISSING": "의뢰 폴더 아래에 Working 폴더가 없습니다.",
     "UNEXPECTED_REQUEST_CHILD": "의뢰 폴더 바로 아래에는 Working과 Final만 둘 수 있습니다.",
-    "UNEXPECTED_FINAL_CHILD": "Final 바로 아래에는 CAE, Reports, CAD만 둘 수 있습니다.",
+    "UNEXPECTED_FINAL_CHILD": "Final 바로 아래에는 CAE, Report, CAD만 둘 수 있습니다.",
     "FINAL_VERSION_INVALID": "Final Case 아래 폴더 이름이 Final 지정 ID(32자리 hex) 형식이 아닙니다.",
 }
 BLOCKING_DEVIATIONS = frozenset({"ENV_KEYWORD_BOTH", "ENV_KEYWORD_NONE", "WORKING_MISSING", "UNEXPECTED_REQUEST_CHILD"})
@@ -251,6 +251,15 @@ def is_depth_rules(definition) -> bool:
 def is_ignored_name(name: str) -> bool:
     """§5.1: hidden/system folders are never part of the schema, counts or samples."""
     return str(name).startswith((".", "$", "~"))
+
+
+# §15 D22: project-wide manual work folders at the request level (casefold).
+PROJECT_SHARED_FOLDERS = frozenset({"cad", "report"})
+
+
+def is_project_shared_name(name: str) -> bool:
+    """§15 D22: a request-level ``CAD``/``Report`` folder is ignored like a hidden name."""
+    return str(name).casefold() in PROJECT_SHARED_FOLDERS
 
 
 def keyword_environment(name: str):
@@ -422,6 +431,8 @@ def resolve_path(parts, schema):
         return None
     upper, _project_level, request_level = _depth_parts(schema)
     depth = len(parts)
+    if depth >= request_level and is_project_shared_name(parts[request_level - 1]):
+        return None  # §15 D22: project CAD/Report folders are never interpreted
 
     def node(level, segment, role, status, code=None, environment=None, **extra):
         deviation = {"code": code, "message": DEVIATION_MESSAGES[code]} if code else None
@@ -666,7 +677,8 @@ def _upper_requests(lister, upper):
             next_frontier.extend(_visible_children(lister, path))
         levels[depth] = next_frontier
         frontier = next_frontier
-    return levels, frontier
+    # §15 D22: request-level CAD/Report folders are not request candidates.
+    return levels, [(name, path) for name, path in frontier if not is_project_shared_name(name)]
 
 
 def _level_summary(level, names, truncated=False):
@@ -693,6 +705,8 @@ def depth_schema_samples(conn, root, segment, upper=None):
             children = []
             for _name, path in frontier:
                 children.extend(_visible_children(lister, path))
+            if depth == request_level:
+                children = [(name, path) for name, path in children if not is_project_shared_name(name)]
             if not children:
                 break
             levels.append(_level_summary(depth, [name for name, _ in children]))
