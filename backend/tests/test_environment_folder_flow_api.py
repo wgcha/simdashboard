@@ -994,6 +994,8 @@ def test_case_finalization_is_capture_pinned_signed_retryable_and_keeps_existing
     with monkeypatch.context() as patcher:
         # W2: a record over the hash budget is shown verified by existence and size only.
         patcher.setattr(case_finalization, "MAX_STATUS_VERIFY_BYTES", 0)
+        # Without the completion-time verified marker (review M2) the record is size-checked only.
+        (root / retry_plan["metadata_relative_path"] / "verified.json").unlink()
         limited_bytes = client.get("/api/dashboard/finalizations/status", params={key: value for key, value in body.items() if key != "capture_id"})
         assert limited_bytes.status_code == 200, limited_bytes.text
         assert limited_bytes.json()["latest"]["verification"] == "SIZE"

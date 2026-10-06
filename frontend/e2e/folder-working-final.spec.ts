@@ -71,7 +71,7 @@ test('Final 복사 작업이 진행 중이면 Case 결과 헤더가 새로 열�
   await page.route('**/api/projects/*/requests/*/result-environments', (route) => route.fulfill({ json: { environments: ['DISTRIBUTION'], case_counts: { USAGE: 0, DISTRIBUTION: 1 } } }))
   await page.route('**/api/dashboard/catalog**', (route) => route.fulfill({ json: { environment: 'DISTRIBUTION', cases: [{ id: 'case-final', label: 'Case A' }], captures: [{ id: 'capture-final', label: '수집 1', case_id: 'case-final' }], load_cases: [], execution_runs: [], run_options: [], modes: [], components: [], bases: [] } }))
   await page.route('**/api/dashboard/finalizations/status**', (route) => route.fulfill({ json: completed
-    ? { latest: job('COMPLETE').record, selected_case_latest: job('COMPLETE').record, retryable_operations: [], active_operations: [], unverified_records: 0 }
+    ? { latest: { ...job('COMPLETE').record, verification: 'SIZE' }, selected_case_latest: { ...job('COMPLETE').record, verification: 'SIZE' }, retryable_operations: [], active_operations: [], unverified_records: 0 }
     : { latest: null, selected_case_latest: null, retryable_operations: [{ operation_id: operation, status: 'RETRYABLE', capture_id: 'latest:case-final', previewed_at: '2026-10-05T23:59:00Z', job: job('RUNNING') }], active_operations: [job('RUNNING')], unverified_records: 0 } }))
   await page.route(`**/api/dashboard/finalizations/${operation}/job**`, (route) => {
     polls += 1
@@ -86,6 +86,8 @@ test('Final 복사 작업이 진행 중이면 Case 결과 헤더가 새로 열�
   await expect(status).toHaveAttribute('title', /파일 1\/2 · 2\.00 GB \/ 4\.00 GB/)
   await expect(page.locator('.case-finalization')).toContainText('Final 지정 완료', { timeout: 15_000 })
   await expect(status).toContainText('확정 완료')
+  // Review M2: a record shown with existence/size checks only says so.
+  await expect(page.getByTestId('case-final-size-only')).toContainText('크기만 확인')
   expect(polls).toBeGreaterThanOrEqual(3)
   expect(errors).toEqual([])
 })

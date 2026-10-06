@@ -434,6 +434,9 @@ def test_status_shows_large_records_size_verified_instead_of_failing(admin_clien
     plan = _ready(client, root, ctx)
     assert _confirm(client, ctx, plan["operation_id"], ["html"]).status_code == 200
     monkeypatch.setattr(case_finalization, "MAX_STATUS_VERIFY_BYTES", 0)
+    # With the completion-time verified marker no re-hash is needed at all.
+    assert _status(client, ctx)["selected_case_latest"]["verification"] == "SHA256"
+    (root / plan["metadata_relative_path"] / "verified.json").unlink()
     status = _status(client, ctx)
     assert status["selected_case_latest"]["operation_id"] == plan["operation_id"]
     assert status["selected_case_latest"]["verification"] == "SIZE" and status["unverified_records"] == 0
@@ -576,3 +579,264 @@ def test_try_lock_does_not_wait(final_fs):
         assert busy.value.code == "FINALIZATION_LOCK_BUSY"
     with fs.try_lock("Req/Final/.finalizations/op/.job.lock", zone="FINAL"):
         pass
+
+
+# ---------------------------------------------------------------------------
+# W2 independent review (2026-10-06): attack scenarios, ported from the reviewer's tests.
+# ---------------------------------------------------------------------------
+
+def test_review_h1_staging_folder_swap_never_writes_outside_the_root(admin_client, monkeypatch, tmp_path):
+    import posixpath
+    import shutil
+    client, root = admin_client
+    ctx = _seed(client, root)
+    plan = _ready(client, root, ctx)
+    folders: dict[str, list[str]] = {}
+    for item in plan["files"]:
+        folders.setdefault(posixpath.dirname(item["case_relative_path"]), []).append(item["case_relative_path"])
+    target_dir = next(name for name, names in folders.items() if name and len(names) >= 2)
+    first, second = folders[target_dir][0], folders[target_dir][1]
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (victim / posixpath.basename(second)).write_bytes(b"VICTIM ORIGINAL")
+    real = case_finalization._stage_file
+    swapped = {"done": False}
+
+    def swap_after_first(root_, source_relative, staged_relative, partial_dir, **kwargs):
+        result = real(root_, source_relative, staged_relative, partial_dir, **kwargs)
+        if not swapped["done"] and staged_relative.endswith(first) and "/staging/CAE/" in staged_relative:
+            staged_dir = Path(root_) / posixpath.dirname(staged_relative)
+            shutil.rmtree(staged_dir)
+            staged_dir.symlink_to(victim, target_is_directory=True)
+            swapped["done"] = True
+        return result
+
+    monkeypatch.setattr(case_finalization, "_stage_file", swap_after_first)
+    _start(client, ctx, plan["operation_id"])
+    assert case_finalization_jobs.wait_idle(60)
+    view = _job(client, ctx, plan["operation_id"])
+    assert swapped["done"] and view["state"] == "FAILED", view
+    assert view["error"]["code"] == "FINALIZATION_STAGING_UNSAFE"
+    assert sorted(p.name for p in victim.iterdir()) == [posixpath.basename(second)]
+    assert (victim / posixpath.basename(second)).read_bytes() == b"VICTIM ORIGINAL"
+    assert not (root / plan["output_paths"]["CAE"]).exists()
+
+
+def test_review_l6_staging_safety_is_checked_before_folders_are_created(admin_client, monkeypatch, tmp_path):
+    client, root = admin_client
+    ctx = _seed(client, root)
+    plan = _ready(client, root, ctx)
+    outside = tmp_path / "outside-staging"
+    outside.mkdir()
+    staging = root / plan["metadata_relative_path"] / "staging"
+    real_check = case_finalization._require_disk_space
+
+    def link_staging_when_the_worker_starts(*args, **kwargs):
+        real_check(*args, **kwargs)
+        if threading.current_thread().name.startswith("final-copy-") and not staging.exists():
+            staging.symlink_to(outside, target_is_directory=True)
+
+    monkeypatch.setattr(case_finalization, "_require_disk_space", link_staging_when_the_worker_starts)
+    _start(client, ctx, plan["operation_id"])
+    assert case_finalization_jobs.wait_idle(60)
+    view = _job(client, ctx, plan["operation_id"])
+    assert view["state"] == "FAILED" and view["error"]["code"] == "FINALIZATION_STAGING_UNSAFE", view
+    assert list(outside.iterdir()) == []  # nothing was created through the link
+
+
+def test_review_m1_link_in_staging_is_never_published(admin_client, monkeypatch, tmp_path):
+    client, root = admin_client
+    ctx = _seed(client, root)
+    plan = _ready(client, root, ctx)
+    outside = tmp_path / "outside2"
+    outside.mkdir()
+    (outside / "x.txt").write_text("x")
+    real = case_finalization._verify_staged_cae
+
+    def inject(root_, files, job, progress, paths, hashes, ensured):
+        (Path(root_) / paths["CAE"] / "evil_link").symlink_to(outside, target_is_directory=True)
+        return real(root_, files, job, progress, paths, hashes, ensured)
+
+    monkeypatch.setattr(case_finalization, "_verify_staged_cae", inject)
+    failed = _confirm(client, ctx, plan["operation_id"], ["html"])
+    assert failed.json()["detail"]["code"] == "FINALIZATION_STAGING_UNEXPECTED", failed.text
+    assert not (root / plan["output_paths"]["CAE"]).exists()
+
+
+def test_review_m1_extra_empty_folder_in_staging_is_never_published(admin_client, monkeypatch):
+    client, root = admin_client
+    ctx = _seed(client, root)
+    plan = _ready(client, root, ctx)
+    real = case_finalization._verify_staged_cae
+
+    def inject(root_, files, job, progress, paths, hashes, ensured):
+        (Path(root_) / paths["CAE"] / "unplanned" / "deeper").mkdir(parents=True)
+        return real(root_, files, job, progress, paths, hashes, ensured)
+
+    monkeypatch.setattr(case_finalization, "_verify_staged_cae", inject)
+    failed = _confirm(client, ctx, plan["operation_id"], ["html"])
+    assert failed.json()["detail"]["code"] == "FINALIZATION_STAGING_UNEXPECTED", failed.text
+    assert not (root / plan["output_paths"]["CAE"]).exists()
+
+
+@pytest.mark.parametrize("extra", ["link", "folder"])
+def test_review_m1_adopted_destination_with_link_or_extra_folder_is_rejected(admin_client, monkeypatch, tmp_path, extra):
+    client, root = admin_client
+    ctx = _seed(client, root)
+    plan = _ready(client, root, ctx)
+    real_update = case_finalization._Progress.update
+
+    def crash(self, *, force=False, **fields):
+        if fields.get("published") == ["CAE"]:
+            raise _Crash()
+        return real_update(self, force=force, **fields)
+
+    monkeypatch.setattr(case_finalization._Progress, "update", crash)
+    _start(client, ctx, plan["operation_id"])
+    assert case_finalization_jobs.wait_idle(60)
+    monkeypatch.setattr(case_finalization._Progress, "update", real_update)
+    cae = root / plan["output_paths"]["CAE"]
+    if extra == "link":
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (cae / "evil_link").symlink_to(outside, target_is_directory=True)
+    else:
+        (cae / "empty_extra").mkdir()
+    _job(client, ctx, plan["operation_id"])  # resumes
+    assert case_finalization_jobs.wait_idle(60)
+    view = _job(client, ctx, plan["operation_id"])
+    assert view["state"] == "FAILED" and view["error"]["code"] == "FINALIZATION_DESTINATION_CONFLICT", view
+    assert not (root / plan["metadata_relative_path"] / "complete.json").exists()
+    assert _status(client, ctx)["selected_case_latest"] is None
+
+
+def test_review_m2_tampering_after_staged_verification_is_caught_before_completion(admin_client, monkeypatch):
+    client, root = admin_client
+    ctx = _seed(client, root)
+    plan = _ready(client, root, ctx)
+    real = case_finalization._verify_staged_cae
+
+    def tamper(root_, files, job, progress, paths, hashes, ensured):
+        real(root_, files, job, progress, paths, hashes, ensured)
+        target = Path(root_) / paths["CAE"] / files[0]["case_relative_path"]
+        data = target.read_bytes()
+        target.write_bytes(bytes([data[0] ^ 1]) + data[1:])
+
+    monkeypatch.setattr(case_finalization, "_verify_staged_cae", tamper)
+    failed = _confirm(client, ctx, plan["operation_id"], ["html"])
+    assert failed.json()["detail"]["code"] == "FINALIZATION_OUTPUT_VERIFY_FAILED", failed.text
+    assert not (root / plan["metadata_relative_path"] / "complete.json").exists()
+    assert _status(client, ctx)["selected_case_latest"] is None
+
+
+def test_review_m2_signed_verified_marker_avoids_rehash_until_outputs_change(admin_client, monkeypatch):
+    client, root = admin_client
+    ctx = _seed(client, root)
+    plan = _ready(client, root, ctx)
+    done = _confirm(client, ctx, plan["operation_id"], ["html"])
+    assert done.status_code == 200, done.text
+    assert (root / plan["metadata_relative_path"] / "verified.json").is_file()
+    hashed: list[str] = []
+    real_hash = case_finalization._hash_source
+
+    def counting(root_, relative, **kwargs):
+        hashed.append(relative)
+        return real_hash(root_, relative, **kwargs)
+
+    monkeypatch.setattr(case_finalization, "_hash_source", counting)
+    monkeypatch.setattr(case_finalization, "MAX_STATUS_VERIFY_BYTES", 0)
+    shown = _status(client, ctx)["selected_case_latest"]
+    assert shown["verification"] == "SHA256" and hashed == []
+    # A same-size change updates the mtime: the marker no longer matches.
+    target = root / done.json()["output_paths"]["CAE"] / done.json()["files"][0]["case_relative_path"]
+    data = target.read_bytes()
+    stat = target.stat()
+    target.write_bytes(bytes([data[0] ^ 1]) + data[1:])
+    os.utime(target, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000))
+    assert _status(client, ctx)["selected_case_latest"]["verification"] == "SIZE"
+    monkeypatch.setattr(case_finalization, "MAX_STATUS_VERIFY_BYTES", 1024 ** 3)
+    damaged = _status(client, ctx)
+    assert damaged["selected_case_latest"] is None and damaged["unverified_records"] == 1
+
+
+def test_review_l2_unverifiable_completion_marker_is_not_success(admin_client, monkeypatch):
+    client, root = admin_client
+    ctx = _seed(client, root)
+    plan = _ready(client, root, ctx)
+
+    def crash(self, *args, **kwargs):
+        raise _Crash()
+
+    monkeypatch.setattr(LocalFsProvider, "copy_stream", crash)
+    _start(client, ctx, plan["operation_id"])
+    assert case_finalization_jobs.wait_idle(60)
+    operation_dir = root / plan["metadata_relative_path"]
+    (operation_dir / "complete.json").write_text('{"status":"COMPLETE"}', encoding="utf-8")
+    staged_upload = operation_dir / "reports" / plan["report_files"]["html"]
+    assert staged_upload.is_file()
+    assert case_finalization.run_job(root, plan["metadata_relative_path"]) == "FAILED"
+    assert staged_upload.is_file()  # an unverifiable marker never cleans up uploads
+    progress = _signed_progress(root, plan)
+    assert progress["state"] == "FAILED" and progress["error"]["code"] == "FINALIZATION_COMPLETE_UNVERIFIED"
+
+
+def test_review_l3_invalid_job_records_a_failure_instead_of_resubmitting(admin_client, monkeypatch):
+    client, root = admin_client
+    ctx = _seed(client, root)
+    plan = _ready(client, root, ctx)
+
+    def crash(self, *args, **kwargs):
+        raise _Crash()
+
+    monkeypatch.setattr(LocalFsProvider, "copy_stream", crash)
+    _start(client, ctx, plan["operation_id"])
+    assert case_finalization_jobs.wait_idle(60)
+    plan_path = root / plan["metadata_relative_path"] / "plan.json"
+    tampered = json.loads(plan_path.read_text(encoding="utf-8"))
+    tampered["case_label"] = "other"
+    plan_path.write_text(json.dumps(tampered), encoding="utf-8")
+    assert case_finalization.run_job(root, plan["metadata_relative_path"]) == "INVALID"
+    view = _job(client, ctx, plan["operation_id"])
+    assert view["state"] == "FAILED" and view["error"]["code"] == "FINALIZATION_JOB_INVALID" and view["active"] is False
+
+
+def test_review_l4_oversized_copied_log_fails_clearly(admin_client, monkeypatch):
+    client, root = admin_client
+    ctx = _seed(client, root)
+    plan = _ready(client, root, ctx)
+    real_copy = LocalFsProvider.copy_stream
+    calls: list[str] = []
+
+    def crash_on_second(self, src_rel, dst_rel, **kwargs):
+        calls.append(src_rel)
+        if len(calls) == 2:
+            raise _Crash()
+        return real_copy(self, src_rel, dst_rel, **kwargs)
+
+    monkeypatch.setattr(LocalFsProvider, "copy_stream", crash_on_second)
+    _start(client, ctx, plan["operation_id"])
+    assert case_finalization_jobs.wait_idle(60)
+    monkeypatch.setattr(LocalFsProvider, "copy_stream", real_copy)
+    monkeypatch.setattr(case_finalization, "MAX_COPIED_LOG_BYTES", 16)
+    assert case_finalization.run_job(root, plan["metadata_relative_path"]) == "FAILED"
+    assert _signed_progress(root, plan)["error"]["code"] == "FINALIZATION_METADATA_LIMIT"
+    monkeypatch.setattr(case_finalization, "MAX_COPIED_LOG_BYTES", 1024 ** 3)
+    assert case_finalization.run_job(root, plan["metadata_relative_path"]) == "COMPLETE"
+
+
+def test_review_l5_interrupted_job_is_not_resumed_when_its_case_is_gone(admin_client, monkeypatch):
+    client, root = admin_client
+    ctx = _seed(client, root)
+    plan = _ready(client, root, ctx)
+
+    def crash(self, *args, **kwargs):
+        raise _Crash()
+
+    monkeypatch.setattr(LocalFsProvider, "copy_stream", crash)
+    _start(client, ctx, plan["operation_id"])
+    assert case_finalization_jobs.wait_idle(60)
+    job = json.loads((root / plan["metadata_relative_path"] / "job.json").read_text(encoding="utf-8"))
+    with connect() as conn:
+        assert case_finalization._job_scope_current(conn, root, job) is True
+        assert case_finalization._job_scope_current(conn, root, {**job, "request_id": "gone"}) is False
+        assert case_finalization._job_scope_current(conn, root / "elsewhere", job) is False

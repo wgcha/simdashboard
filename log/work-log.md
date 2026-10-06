@@ -1178,3 +1178,12 @@
 - `AppSidebar.tsx`의 `SIDEBAR_HIDDEN_MENUS`로 새 의뢰·예제 및 참고·변수 카탈로그·프로젝트 결과 구성·작업 유형 관리를 사이드바에서 숨김. 화면·경로·권한 불변, 직접 URL 동작.
 - e2e: access-policy 역할별 노출 검사 3곳을 비노출로 변경, `openWorkspaceRoute` 헬퍼에 숨김 경로의 앱 내 URL 이동 추가. materials-dashboard spec에 result-environments mock 추가(다른 세션 변경 이후 6건 중 5건 실패하던 것 복구, 6/6).
 - 검증: access-policy·project-result-profiles·workbench-demo 11/12(남은 1건 DOE 접수는 기준 커밋에서도 실패), materials 6/6, simulation-dashboard·case-finalization·case-report 33/34(폐기된 capture-pin 1건), 백엔드 169 passed/1 skipped, tsc 통과, check:architecture 기존 4건.
+
+## 2026-10-06 W2 독립 검수 지적 수정 (eee1945 이후)
+
+- H1 임시 폴더 바꿔치기: `_stage_file`이 옮기기·교체·삭제 전에 임시 상위·partial 경로를 고정하고 그 안에서 reparse/링크 재확인(`FINALIZATION_STAGING_UNSAFE`), `ensured` 캐시는 mkdirs 생략에만 사용. `_stage_reports`·`_clear_partial`도 고정·재확인. 저장소 FINAL 구역 `replace`·`remove`가 두 상위 체인 고정+재확인(LEGACY 호출은 기존 동작). L6: `_ensure_staging_dir`가 mkdirs 전에 안전 확인.
+- M1: `lstat` 기반 `_strict_tree`/`_assert_exact_tree` — 검증 후·이름 바꾸기 직전(원본 하위 전체)·채택 대상(`_published_matches`)·공개 후에 링크·reparse·계획에 없는 파일·폴더 거부.
+- M2: 공개 후 CAE·보고서 전체 해시 확인 뒤에만 `complete.json`(확인 전후 stat 서명 동일), 서명된 `verified.json`으로 상태 조회가 stat만으로 SHA256 표시·바뀌면 재해시/SIZE. 헤더 `크기만 확인` 표시, 문서 정정.
+- L2 확인 불가 `complete.json`은 성공 아님(업로드 보관본 유지, `FINALIZATION_COMPLETE_UNVERIFIED`). L3 INVALID/ERROR 시 FAILED 기록. L4 `copied.jsonl` 줄 단위 스트림·1 GiB 초과 시 `FINALIZATION_METADATA_LIMIT`. L5 status/job의 이어하기는 DB 범위(Case·의뢰·root) 재확인 후. L1(POSIX 고정 불가 경쟁)은 문서에 한계로 기록.
+- 검증: 검수자 공격 시나리오를 `test_case_finalization_copy_jobs.py`의 `test_review_*` 12건으로 옮김(수정 전 12건 모두 실패, 수정 후 통과). copy_jobs·reports·environment flow·storage provider(+boundary)·security·folder progress 141 passed/1 skipped(SIZE 기대 2건은 marker 반영해 갱신 후 통과). 프론트 tsc·build, check:architecture 기존 4건만, e2e case-finalization 5/5·folder-working-final Final 2건.
+- 미수행: 실제 Windows·SMB 검증(W9), 재검수, Codex Security(미가용).

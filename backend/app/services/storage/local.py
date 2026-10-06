@@ -16,7 +16,7 @@ import shutil
 import stat
 import sys
 import time
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO, Callable, Iterable, Iterator, Literal, NamedTuple
 
@@ -944,17 +944,54 @@ class LocalFsProvider:
         self._check(zone, src_rel, dst_rel)
         _publish_no_replace(self.path(src_rel), self.path(dst_rel))
 
+    def _guarded_parents(self, *paths: Path):
+        """FINAL zone (W2 review H1): pin each existing parent chain and re-check it inside the pin.
+
+        Windows: the pinned handles refuse a rename/junction swap of any ancestor until the
+        operation is done. POSIX: the ancestors are re-checked for links (a swap between the
+        check and the call remains possible there; Windows is the target platform).
+        """
+        stack = ExitStack()
+        try:
+            for parent in dict.fromkeys(path.parent for path in paths):
+                if not os.path.lexists(parent):
+                    continue
+                stack.enter_context(pin_directory_chain(self.root, parent))
+                _assert_safe_existing(parent, self.root)
+                if _is_reparse(parent):
+                    raise SpdmStorageError("SPDM_PATH_UNSAFE", "SPDM 경로에 reparse point를 사용할 수 없습니다.")
+        except BaseException:
+            stack.close()
+            raise
+        return stack
+
     def replace(self, src_rel: str, dst_rel: str, *, zone: str) -> None:
         self._check(zone, src_rel, dst_rel)
-        os.replace(self.path(src_rel), self.path(dst_rel))
+        source, destination = self.path(src_rel), self.path(dst_rel)
+        if zone != FINAL:
+            os.replace(source, destination)
+            return
+        with self._guarded_parents(source, destination):
+            if os.path.lexists(destination) and (_is_reparse(destination) or os.path.isdir(destination)):
+                raise SpdmStorageError("SPDM_PATH_UNSAFE", "교체할 대상이 일반 파일이 아닙니다.")
+            os.replace(source, destination)
 
     def remove(self, rel_path: str, *, zone: str, directory: bool = False, missing_ok: bool = False) -> None:
         self._check(zone, rel_path)
         path = self.path(rel_path)
-        if directory:
-            path.rmdir()
-        else:
-            path.unlink(missing_ok=missing_ok)
+        if zone != FINAL:
+            if directory:
+                path.rmdir()
+            else:
+                path.unlink(missing_ok=missing_ok)
+            return
+        with self._guarded_parents(path):
+            if directory:
+                if _is_reparse(path):
+                    raise SpdmStorageError("SPDM_PATH_UNSAFE", "SPDM 경로에 reparse point를 사용할 수 없습니다.")
+                path.rmdir()
+            else:
+                path.unlink(missing_ok=missing_ok)
 
     def lock(self, rel_path: str, *, zone: str):
         """Exclusive request lock on a persistent lock file (created when absent)."""
