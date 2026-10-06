@@ -64,7 +64,7 @@ async function json(route: Route, body: unknown, status = 200) {
   await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
 }
 
-async function installApi(page: Page, options: { chunkGate?: Promise<void> } = {}) {
+async function installApi(page: Page, options: { chunkGate?: Promise<void>; partialFirst?: boolean; openSessions?: unknown[] } = {}) {
   const calls = { plans: [] as PlanBody[], chunks: [] as Array<{ index: number; offset: number; body: string; sha: string | null }>, completes: 0, aborts: 0, folders: [] as unknown[] }
   let session: ReturnType<typeof plan> | null = null
   const received = new Map<number, number>()
@@ -74,6 +74,7 @@ async function installApi(page: Page, options: { chunkGate?: Promise<void> } = {
     const path = url.pathname.replace('/api/result-registration', '')
     const method = request.method()
     if (method === 'GET' && path === '/drop-target') return json(route, tree())
+    if (method === 'GET' && path === '/drop-uploads') return json(route, { sessions: options.openSessions ?? [] })
     if (method === 'GET' && path === '/drafts') return json(route, { drafts: [{ draft_id: 'draft-old', status: 'PUBLISHED', case_relative_path: CASE, result_relative_path: SCENE, file_count: 2, total_bytes: 2048, case_id: 'case-a', capture_id: 'capture-old', mirror_status: 'PUBLISHED', created_by: 'e2e', approved_by: 'e2e', published_at: '2026-09-20T09:00:00', created_at: '2026-09-20T08:55:00', updated_at: '2026-09-20T09:00:00' }], truncated: false })
     if (method === 'POST' && path === '/drop-target/folders') {
       const body = request.postDataJSON() as { name: string; confirm: boolean; parent_relative_path: string }
@@ -106,8 +107,10 @@ async function installApi(page: Page, options: { chunkGate?: Promise<void> } = {
     }
     if (method === 'POST' && path.endsWith('/complete')) {
       calls.completes += 1
-      return json(route, { session_id: 'a'.repeat(32), state: 'PUBLISHED', project_id: context.project, request_id: context.request, environment: 'DISTRIBUTION', target_relative_path: session!.target_relative_path, chunk_bytes: 8, file_count: session!.file_count, total_bytes: session!.total_bytes, received_bytes: session!.total_bytes, completed_files: session!.file_count, files: [], folders_to_create: [], skipped: session!.skipped, conflicts: [],
-        published_files: session!.file_count, published_bytes: session!.total_bytes, created_folders: session!.folders_to_create.map((item) => item.relative_path), busy: [],
+      const partial = options.partialFirst && calls.completes === 1
+      const busyFile = session!.files[session!.files.length - 1].relative_path
+      return json(route, { session_id: 'a'.repeat(32), state: partial ? 'PARTIAL' : 'PUBLISHED', project_id: context.project, request_id: context.request, environment: 'DISTRIBUTION', target_relative_path: session!.target_relative_path, chunk_bytes: 8, file_count: session!.file_count, total_bytes: session!.total_bytes, received_bytes: session!.total_bytes, completed_files: session!.file_count, files: [], folders_to_create: [], skipped: session!.skipped, conflicts: [],
+        published_files: partial ? session!.file_count - 1 : session!.file_count, published_bytes: session!.total_bytes, created_folders: session!.folders_to_create.map((item) => item.relative_path), busy: partial ? [busyFile] : [],
         sync: { status: 'REFRESHED', changed: true }, cases: [{ case_relative_path: CASE, case_name: 'CaseA', case_id: 'case-a' }] })
     }
     if (method === 'DELETE') { calls.aborts += 1; return json(route, { session_id: 'a'.repeat(32), state: 'ABORTED' }) }
@@ -299,4 +302,24 @@ test.describe('4K 150% 화면', () => {
     await page.screenshot({ path: `${SHOT_DIR}/w8-depth-warning.png` })
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true)
   })
+})
+
+test('일부만 옮겨지면 나머지 다시 옮기기·중지를 제공하고, 열린 업로드는 중지할 수 있다', async ({ page }) => {
+  const calls = await installApi(page, { partialFirst: true, openSessions: [{ session_id: 'b'.repeat(32), state: 'PARTIAL', user_id: 'other-user', own: false, target_relative_path: OPTION, file_count: 3, total_bytes: 3000, published_files: 2, idle_seconds: 120 }] })
+  await openRegistration(page)
+  const open = page.getByTestId('result-drop-open-sessions')
+  await expect(open).toContainText('다른 사용자(other-user)')
+  await expect(open).toContainText('일부 완료 2/3')
+  await chooseRun(page)
+  await dropTree(page, { 'CUMULATIVE/7_Edge/a.csv': 'x', 'CUMULATIVE/7_Edge/b.csv': 'y' })
+  await page.getByRole('button', { name: '올리기', exact: true }).click()
+  const partial = page.getByTestId('result-drop-partial')
+  await expect(partial).toContainText('사용 중: CUMULATIVE/7_Edge/b.csv')
+  await partial.getByRole('button', { name: '나머지 다시 옮기기', exact: true }).click()
+  await expect(page.getByTestId('result-drop-complete')).toContainText('2개 파일을 올렸습니다')
+  await expect(page.getByTestId('result-drop-partial')).toHaveCount(0)
+  expect(calls.completes).toBe(2)
+  await open.getByRole('button', { name: '중지', exact: true }).click()
+  await expect(page.getByRole('status').filter({ hasText: '업로드를 중지했습니다' })).toBeVisible()
+  expect(calls.aborts).toBe(1)
 })

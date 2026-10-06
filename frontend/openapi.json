@@ -9605,17 +9605,65 @@
         "summary": "Drop Create Session",
         "operationId": "drop_create_session_api_result_registration_drop_uploads_post",
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/DropPlanInput"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "result-registration"
+        ],
+        "summary": "Drop List Sessions",
+        "description": "Open uploads of a request: the caller's own, or all of them for a global admin (who may stop any).",
+        "operationId": "drop_list_sessions_api_result_registration_drop_uploads_get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "request_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
@@ -14924,6 +14972,14 @@
             "maxLength": 128,
             "minLength": 1,
             "title": "Confirm Token"
+          },
+          "acknowledge_data_project_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 200,
+            "title": "Acknowledge Data Project Ids"
           }
         },
         "type": "object",

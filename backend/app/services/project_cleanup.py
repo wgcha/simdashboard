@@ -146,7 +146,7 @@ _STAGES = (
 )
 # name -> (table, column set to NULL, [(match column, entity kind)], extra predicate)
 _NULLS = {
-    "workflow_attempt": ("workflow_runs", "batch_attempt_id", (("id", "workflow_run"),), ""),
+    "workflow_attempt": ("workflow_runs", "batch_attempt_id", (("id", "workflow_run"), ("batch_attempt_id", "attempt")), ""),
     "work_item_demo_run": ("request_work_items", "demo_run_id", (("demo_run_id", "workflow_run"),), ""),
     "scans": [("folder_environment_scans", "project_id", (("project_id", "project"),), ""),
               ("folder_environment_scans", "request_id", (("request_id", "request"),), "")],
@@ -235,6 +235,17 @@ KEEP_COLUMNS = {
     ("semantic_vocabulary_entries", "scope_project_id"): "project-scoped vocabulary is deleted (_entities)",
     ("result_registration_paths", "target_id"): "folder-role mapping row deleted with its project/request",
     ("result_registration_location_links", "schema_target_id"): "location link row deleted with its project/request",
+    # Foreign keys into deleted tables (inventory test L2).
+    ("analysis_runs", "template_execution_id"): "runs of a deleted load case are deleted before its template executions",
+    ("batch_dispatches", "attempt_id"): "dispatches of deleted attempts are deleted first (_entities)",
+    ("media_assets", "blob_id"): "a blob is deleted only when no surviving media row references it",
+    ("drop_video_assets", "blob_id"): "a blob is deleted only when no surviving video row references it",
+    ("managed_local_runs", "grant_id"): "grants of deleted managed runs are deleted after the runs (_entities)",
+    ("project_request_type_result_profiles", "template_id"): "deleted with its project; another project's binding blocks (PROJECT_TEMPLATE_IN_USE)",
+    ("project_request_type_result_profiles", "template_version"): "see project_request_type_result_profiles.template_id",
+    ("request_type_result_profiles", "template_id"): "global binding of a project template blocks (PROJECT_TEMPLATE_IN_USE)",
+    ("request_type_result_profiles", "template_version"): "see request_type_result_profiles.template_id",
+    ("semantic_import_review_items", "binding_id"): "review items of deleted bindings are deleted (_entities)",
 }
 
 
@@ -263,18 +274,39 @@ def _validated_ids(project_ids) -> list[str]:
     return cleaned
 
 
+_IN_CHUNK = 500
+
+
+def _chunks(values) -> list[list[str]]:
+    ordered = sorted(values)
+    return [ordered[start:start + _IN_CHUNK] for start in range(0, len(ordered), _IN_CHUNK)]
+
+
+def _select_in(conn, sql: str, values, *, repeat: int = 1) -> list[tuple]:
+    """Run ``sql`` (with ``{marks}`` placeholders, ``repeat`` times) once per bounded chunk of ``values``."""
+    rows: list[tuple] = []
+    for chunk in _chunks(values):
+        rows += _select(conn, sql.format(marks=_marks(chunk)), chunk * repeat)
+    return rows
+
+
 def _ids(conn, schema: _Schema, table: str, out: str, filters, where: str = "") -> set[str]:
-    """Distinct ``out`` values of rows matching any (column, values) filter."""
-    clauses, args = [], []
-    for column, values in filters:
-        values = sorted(values)
-        if values and schema.has(table, column):
-            clauses.append(f"{column} IN ({_marks(values)})")
-            args.extend(values)
-    if not clauses or not schema.has(table, out):
+    """Distinct ``out`` values of rows matching any (column, values) filter; IN lists are chunked."""
+    if not schema.has(table, out):
         return set()
-    sql = f"SELECT DISTINCT {out} FROM {table} WHERE ({' OR '.join(clauses)})" + (f" AND {where}" if where else "")
-    return {str(row[0]) for row in _select(conn, sql, args) if row[0] is not None}
+    found: set[str] = set()
+    for column, values in filters:
+        if values and schema.has(table, column):
+            sql = f"SELECT DISTINCT {out} FROM {table} WHERE {column} IN ({{marks}})" + (f" AND {where}" if where else "")
+            found |= {str(row[0]) for row in _select_in(conn, sql, values) if row[0] is not None}
+    return found
+
+
+def _count_in(conn, schema: _Schema, table: str, column: str, values) -> int:
+    if not values or not schema.has(table, column):
+        return 0
+    return sum(int(conn.execute(f"SELECT count(*) FROM {table} WHERE {column} IN ({_marks(chunk)})", chunk).fetchone()[0])
+               for chunk in _chunks(values))
 
 
 # ---------------------------------------------------------------------------
@@ -328,6 +360,62 @@ def _user_data(conn, schema: _Schema, entities: dict[str, set[str]]) -> dict[str
     }.items() if value}
 
 
+def _retained(conn, schema: _Schema, e: dict[str, set[str]]) -> dict[str, int]:
+    """Imported/registered data kept so far ("보관 데이터"): results, Cases, legacy links and media."""
+    results = sum(_count_in(conn, schema, table, "analysis_run_id", e.get("run", set()))
+                  for table in ("scalar_results", "time_series_results", "curve_results"))
+    legacy_links = len(e.get("legacy_registry", set())) + len(e.get("binding", set()))
+    for table in ("spdm_storage_bindings", "spdm_storage_project_parents", "spdm_storage_request_parents"):
+        if schema.has(table):
+            where, args = _where((("project_id", "project"), ("request_id", "request"), ("load_case_id", "load_case")), e, schema, table)
+            if where:
+                legacy_links += int(conn.execute(f"SELECT count(*) FROM {table} WHERE {where}", args).fetchone()[0])
+    return {key: value for key, value in {
+        "runs": len(e.get("run", set())),
+        "results": results,
+        "cases": len(e.get("case", set())),
+        "captures": len(e.get("capture", set())),
+        "legacy_links": legacy_links,
+        "media": len(e.get("media_asset", set())) + len(e.get("drop_video", set())),
+    }.items() if value}
+
+
+def _system_pages(conn, schema: _Schema, e: dict[str, set[str]]) -> list[dict]:
+    """System analysis pages hosted by these projects; deleting the project deletes them for every load case."""
+    pages = sorted(e.get("dashboard", set()) & SYSTEM_ANALYSIS_PAGE_IDS)
+    found = []
+    for page_id in pages:
+        name = conn.execute("SELECT name FROM dashboards WHERE id=?", [page_id]).fetchone()
+        versions = conn.execute("SELECT count(*), count(*) FILTER (WHERE created_by NOT IN ('system','system-analysis-page-backfill')) "
+                                "FROM dashboard_versions WHERE dashboard_id=?", [page_id]).fetchone() \
+            if schema.has("dashboard_versions", "created_by") else (0, 0)
+        found.append({"id": page_id, "name": str(name[0]) if name else page_id,
+                      "versions": int(versions[0] or 0), "user_versions": int(versions[1] or 0)})
+    return found
+
+
+def _acknowledgement(category: str, retained: dict, user_data: dict, system_pages: list[dict]) -> list[str]:
+    """Why the administrator must type the project name before deleting (empty: no second confirmation)."""
+    reasons = []
+    if category != "DEMO" and retained:
+        reasons.append("RETAINED_DATA")
+    if user_data or any(page["user_versions"] for page in system_pages):
+        reasons.append("USER_DATA")
+    if system_pages:
+        reasons.append("SYSTEM_ANALYSIS_PAGES")
+    return reasons
+
+
+def _describe(conn, schema: _Schema, category: str, e: dict[str, set[str]]) -> dict:
+    user_data = _user_data(conn, schema, e)
+    retained = _retained(conn, schema, e)
+    system_pages = _system_pages(conn, schema, e)
+    reasons = _acknowledgement(category, retained, user_data, system_pages)
+    return {"user_data": user_data, "user_data_total": sum(user_data.values()),
+            "retained_data": retained, "retained_total": sum(retained.values()),
+            "system_pages": system_pages, "acknowledge_reasons": reasons, "requires_acknowledgement": bool(reasons)}
+
+
 def _entities(conn, schema: _Schema, projects: set[str]) -> dict[str, set[str]]:
     e: dict[str, set[str]] = _children(conn, schema, projects)
     e["load_case"] = _ids(conn, schema, "load_cases", "id", [("request_id", e["request"])])
@@ -368,8 +456,8 @@ def _entities(conn, schema: _Schema, projects: set[str]) -> dict[str, set[str]]:
     seen: set[str] = set()
     while frontier:
         seen |= frontier
-        found = _select(conn, f"SELECT id,target_id FROM folder_discovery_registry WHERE target_id IN ({_marks(sorted(frontier))}) "
-                              f"OR parent_target_id IN ({_marks(sorted(frontier))})", [*sorted(frontier), *sorted(frontier)]) \
+        found = _select_in(conn, "SELECT id,target_id FROM folder_discovery_registry WHERE target_id IN ({marks}) "
+                                 "OR parent_target_id IN ({marks})", frontier, repeat=2) \
             if schema.has("folder_discovery_registry", "parent_target_id") else []
         legacy_rows |= {str(r[0]) for r in found}
         frontier = {str(r[1]) for r in found if r[1] is not None} - seen
@@ -383,13 +471,11 @@ def _entities(conn, schema: _Schema, projects: set[str]) -> dict[str, set[str]]:
     blobs = _ids(conn, schema, "media_assets", "blob_id", [("id", e["media_asset"])])
     blobs |= _ids(conn, schema, "drop_video_assets", "blob_id", [("video_id", e["drop_video"])])
     if blobs:
-        marks = _marks(sorted(blobs))
         if schema.has("media_assets", "blob_id"):
-            shared = _select(conn, f"SELECT id,blob_id FROM media_assets WHERE blob_id IN ({marks})", sorted(blobs))
+            shared = _select_in(conn, "SELECT id,blob_id FROM media_assets WHERE blob_id IN ({marks})", blobs)
             blobs -= {str(blob) for asset, blob in shared if str(asset) not in e["media_asset"]}
         if blobs and schema.has("drop_video_assets", "blob_id"):
-            marks = _marks(sorted(blobs))
-            shared = _select(conn, f"SELECT video_id,blob_id FROM drop_video_assets WHERE blob_id IN ({marks})", sorted(blobs))
+            shared = _select_in(conn, "SELECT video_id,blob_id FROM drop_video_assets WHERE blob_id IN ({marks})", blobs)
             blobs -= {str(blob) for video, blob in shared if str(video) not in e["drop_video"]}
     e["blob"] = blobs
     return e
@@ -401,24 +487,20 @@ def _blockers(conn, schema: _Schema, project_id: str, category: str, e: dict[str
     if category == "REGISTERED":
         # Use registration delete (§13) first; row-level registration details would only repeat this.
         return [{"table": "folder_environment_registrations", "id": project_id, "reason": "LIVE_REGISTRATION"}]
-    live_jobs = _select(conn, "SELECT j.id FROM folder_environment_capture_jobs j JOIN folder_environment_registrations r "
-                              "ON r.id=j.registration_id WHERE r.status<>'DELETED' AND j.id IN "
-                              f"({_marks(sorted(e['capture_job']))})", sorted(e["capture_job"])) if e["capture_job"] else []
+    live_jobs = _select_in(conn, "SELECT j.id FROM folder_environment_capture_jobs j JOIN folder_environment_registrations r "
+                                 "ON r.id=j.registration_id WHERE r.status<>'DELETED' AND j.id IN ({marks})", e["capture_job"])
     found += [{"table": "folder_environment_capture_jobs", "id": str(r[0]), "reason": "LIVE_REGISTRATION"} for r in live_jobs]
-    live_registry = _select(conn, "SELECT g.id FROM folder_environment_registry g JOIN folder_environment_registrations r "
-                                  "ON r.id=g.registration_id WHERE r.status<>'DELETED' AND g.id IN "
-                                  f"({_marks(sorted(e['env_registry']))})", sorted(e["env_registry"])) if e["env_registry"] else []
+    live_registry = _select_in(conn, "SELECT g.id FROM folder_environment_registry g JOIN folder_environment_registrations r "
+                                     "ON r.id=g.registration_id WHERE r.status<>'DELETED' AND g.id IN ({marks})", e["env_registry"])
     found += [{"table": "folder_environment_registry", "id": str(r[0]), "reason": "LIVE_REGISTRATION"} for r in live_registry]
     for table, kind in (("batch_execution_attempts", "attempt"), ("batch_dispatches", "dispatch"),
                         ("workflow_runs", "workflow_run"), ("task_runs", "task_run")):
-        ids = sorted(e[kind])
-        if ids and schema.has(table, "status"):
-            for row_id, status in _select(conn, f"SELECT id,status FROM {table} WHERE id IN ({_marks(ids)})", ids):
+        if e[kind] and schema.has(table, "status"):
+            for row_id, status in _select_in(conn, f"SELECT id,status FROM {table} WHERE id IN ({{marks}})", e[kind]):
                 if str(status or "").upper() in ACTIVE_STATUSES:
                     found.append({"table": table, "id": str(row_id), "reason": "RUNNING_EXECUTION"})
     if e["managed_run"] and schema.has("managed_local_runs", "run_json"):
-        ids = sorted(e["managed_run"])
-        for row_id, raw in _select(conn, f"SELECT id,run_json FROM managed_local_runs WHERE id IN ({_marks(ids)})", ids):
+        for row_id, raw in _select_in(conn, "SELECT id,run_json FROM managed_local_runs WHERE id IN ({marks})", e["managed_run"]):
             try:
                 status = (json.loads(raw) if isinstance(raw, (str, bytes)) else raw or {}).get("status")
             except (TypeError, ValueError, AttributeError):
@@ -454,12 +536,11 @@ def candidates(conn) -> dict:
         project_id = str(project_id)
         e = _entities(conn, schema, {project_id})
         category = _category(project_id, e, live)
-        user_data = _user_data(conn, schema, e)
         items.append({
             "project_id": project_id, "name": str(name or project_id), "category": category,
             "selectable": category != "REGISTERED",
             "requests": len(e["request"]), "cases": len(e["case"]), "runs": len(e["run"]),
-            "user_data": user_data, "user_data_total": sum(user_data.values()),
+            **_describe(conn, schema, category, e),
         })
     return {"items": items, "demo_project_ids": list(DEMO_PROJECT_IDS)}
 
@@ -479,10 +560,13 @@ def _null_specs(name: str) -> list[tuple]:
     return value if isinstance(value, list) else [value]
 
 
-def _plan(conn, ids: list[str]) -> dict:
+def _plan(conn, ids: list[str], *, missing_is_stale: bool = False) -> dict:
     schema = _Schema(conn)
     existing = {str(r[0]): r for r in _select(conn, f"SELECT id,name FROM projects WHERE id IN ({_marks(ids)})", ids)}
     missing = [value for value in ids if value not in existing]
+    if missing and missing_is_stale:  # removed between preview and delete
+        raise HTTPException(409, {"code": "DELETE_PREVIEW_STALE", "ids": missing,
+                                  "message": "미리보기 이후 데이터가 바뀌었습니다. 다시 확인하세요."})
     if missing:
         raise HTTPException(404, {"code": "PROJECT_NOT_FOUND", "message": "정리할 프로젝트를 찾을 수 없습니다.", "ids": missing})
     live = _live_targets(conn, schema)
@@ -505,7 +589,7 @@ def _plan(conn, ids: list[str]) -> dict:
         item["blockers"] = _blockers(conn, schema, item["project_id"], item["category"], e)
         item["deletable"] = not item["blockers"]
         item["counts"] = _counts(conn, schema, e)
-        item["user_data"] = _user_data(conn, schema, e)
+        item.update(_describe(conn, schema, item["category"], e))
     totals = _counts(conn, schema, merged)
     state = {
         "projects": sorted(ids),
@@ -513,6 +597,7 @@ def _plan(conn, ids: list[str]) -> dict:
         "entities": {kind: sorted(values) for kind, values in sorted(merged.items())},
         "counts": totals,
         "blockers": {item["project_id"]: [[b["table"], b["id"], b["reason"]] for b in item["blockers"]] for item in items},
+        "acknowledge": {item["project_id"]: item["acknowledge_reasons"] for item in items},
     }
     token = hashlib.sha256(json.dumps(state, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
     return {"items": items, "totals": totals, "confirm_token": token, "entities": merged, "schema": schema,
@@ -606,9 +691,17 @@ def _remember_demo_removed(conn, deleted: list[str]) -> None:
                  [DEMO_REMOVED_SETTING, json.dumps(merged), stamp])
 
 
-def delete(conn, project_ids, confirm_token: str, audit: Callable[[Any, dict], None] | None = None) -> dict:
-    """Delete the selected projects atomically; see module docstring."""
+def delete(conn, project_ids, confirm_token: str, audit: Callable[[Any, dict], None] | None = None,
+           acknowledged_project_ids=None) -> dict:
+    """Delete the selected projects atomically; see module docstring.
+
+    Projects whose preview has ``requires_acknowledgement`` (non-demo data that was imported or
+    registered, data a person made, system analysis pages) must be listed in
+    ``acknowledged_project_ids`` (the screen asks for the typed project name), else 409
+    ``PROJECT_CLEANUP_CONFIRM_REQUIRED``.
+    """
     ids = _validated_ids(project_ids)
+    acknowledged = {str(value) for value in (acknowledged_project_ids or []) if isinstance(value, str)}
     if not isinstance(confirm_token, str) or not confirm_token:
         raise ValueError("confirm_token이 필요합니다.")
     postgres = _postgres(conn)
@@ -620,13 +713,19 @@ def delete(conn, project_ids, confirm_token: str, audit: Callable[[Any, dict], N
                 # Serialize against registration, discovery and other writers of these parents until commit.
                 conn.execute("LOCK TABLE projects, analysis_requests, load_cases, folder_environment_registrations "
                              "IN SHARE ROW EXCLUSIVE MODE")
-            current = _plan(conn, ids)
+            current = _plan(conn, ids, missing_is_stale=True)
             if current["confirm_token"] != confirm_token:
                 raise HTTPException(409, {"code": "DELETE_PREVIEW_STALE",
                                           "message": "미리보기 이후 데이터가 바뀌었습니다. 다시 확인하세요."})
             if current["blocked"]:
                 raise HTTPException(409, {"code": "PROJECT_CLEANUP_BLOCKED", "items": current["items"],
                                           "message": "등록되었거나 실행 중인 작업이 있어 아무것도 삭제하지 않았습니다."})
+            unconfirmed = [item["project_id"] for item in current["items"]
+                           if item["requires_acknowledgement"] and item["project_id"] not in acknowledged]
+            if unconfirmed:
+                raise HTTPException(409, {"code": "PROJECT_CLEANUP_CONFIRM_REQUIRED", "project_ids": unconfirmed,
+                                          "items": current["items"],
+                                          "message": "보관 데이터가 있는 프로젝트는 이름을 입력해 한 번 더 확인해야 합니다."})
             schema, entities = current["schema"], current["entities"]
             for index, stage in enumerate(_STAGES):
                 _execute(conn, schema, stage, entities)
@@ -638,6 +737,8 @@ def delete(conn, project_ids, confirm_token: str, audit: Callable[[Any, dict], N
             result = {"deleted": ids, "counts": current["totals"]}
             if audit is not None:
                 audit(conn, {"project_ids": ids, "categories": {item["project_id"]: item["category"] for item in current["items"]},
+                             "acknowledged": sorted(acknowledged & set(ids)),
+                             "system_pages": sorted(page["id"] for item in current["items"] for page in item["system_pages"]),
                              "counts": current["totals"]})
             conn.execute("COMMIT")
             return result

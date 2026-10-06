@@ -69,6 +69,7 @@ export type DropCompletion = DropSession & {
 export type DropChunkResult = { index: number; received: number; size: number; complete: boolean; sha256: string | null }
 export type DropFolderCreated = { relative_path: string; display_path: string; level: number; role: string; role_label: string; warnings: string[] }
 export type DropPlanInput = Scope & { target_relative_path: string; files: Array<{ relative_path: string; size: number; sha256?: string | null }>; folders: string[] }
+export type OpenDropSession = { session_id: string; state: string; user_id: string; own: boolean; target_relative_path: string; file_count: number; total_bytes: number; published_files: number; idle_seconds: number }
 export type LegacyDraft = {
   draft_id: string; status: string; case_relative_path: string; result_relative_path: string; file_count: number; total_bytes: number
   case_id: string | null; capture_id: string | null; mirror_status: string | null; created_by: string | null; approved_by: string | null
@@ -108,6 +109,13 @@ export const resultDropApi = {
   },
   abort(sessionId: string) {
     return json<DropSession>(apiUrl('/api/result-registration/drop-uploads/{session_id}', { session_id: sessionId }), { method: 'DELETE' })
+  },
+  openSessions(scope: { project_id: string; request_id: string }, signal?: AbortSignal) {
+    return json<{ sessions: OpenDropSession[] }>(apiUrl('/api/result-registration/drop-uploads', {}, scope), { signal })
+  },
+  /** Fire-and-forget abort while the page unloads (``keepalive`` survives the navigation). */
+  abortOnUnload(sessionId: string) {
+    void apiFetch(apiUrl('/api/result-registration/drop-uploads/{session_id}', { session_id: sessionId }), { method: 'DELETE', keepalive: true }).catch(() => undefined)
   },
   legacyDrafts(scope: Scope, signal?: AbortSignal) {
     return json<{ drafts: LegacyDraft[]; truncated: boolean }>(apiUrl('/api/result-registration/drafts', {}, scope), { signal })

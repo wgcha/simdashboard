@@ -409,3 +409,184 @@ def test_legacy_drafts_are_listed_read_only(admin_client):
                                                     "environment": "DISTRIBUTION"})
     assert response.status_code == 200
     assert response.json()["drafts"] == []
+
+
+# ---------------------------------------------------------------------------
+# Independent review fixes (M1–M3, L2–L5); attack probes ported from the review.
+# ---------------------------------------------------------------------------
+
+def test_review_m1_blocked_extensions_include_dot_leading_and_shell_formats(admin_client):
+    client, root = admin_client
+    project_id, request_id = _seed(client, root)
+    blocked = [".bat", ".exe", "evil.scf", "evil.url", "x.library-ms", "x.searchConnector-ms", "x.msc", "x.iso",
+               "x.img", "x.vhd", "x.vhdx", "x.appref-ms", "x.settingcontent-ms", "x.application", "x.ps1xml", "x.wsc",
+               "x.sct", "x.chm", "x.EXE", "x.inf", "x.xll", "x.hta", "x.cpl", "x.reg", "x.lnk", ".simdash-upload"]
+    allowed = ["x.exe.txt", "result.csv", ".hidden_note.txt"]
+    plan = client.post(REG + "/drop-uploads/plan", json=_body(project_id, request_id, f"{OPTION}/2_Face",
+                                                               [(name, b"x") for name in blocked + allowed])).json()
+    assert sorted(item["relative_path"] for item in plan["files"]) == sorted(allowed)
+    assert {item["relative_path"] for item in plan["skipped"]} == set(blocked)
+    for reserved in ["COM¹.txt", "LPT²", "com³/a.csv", "CON.txt"]:
+        response = client.post(REG + "/drop-uploads/plan", json=_body(project_id, request_id, OPTION, [(reserved, b"x")]))
+        assert response.status_code == 422 and response.json()["detail"]["code"] == "RESULT_DROP_PATH_INVALID", reserved
+    assert result_drop_upload.name_problem("COM¹") == "RESERVED"
+    assert result_drop_upload.extension_of(".bat") == ".bat" and result_drop_upload.extension_of("README") == ""
+
+
+def test_review_foreign_user_cannot_use_a_session_but_admin_can_abort(admin_client):
+    client, root = admin_client
+    project_id, request_id = _seed(client, root)
+    session = _start(client, _body(project_id, request_id, OPTION, [("6_N/" + CSV, CSV_BYTES)]))
+    sid = session["session_id"]
+    for call in (lambda: result_drop_upload.upload_chunk(sid, "intruder", 0, 0, CSV_BYTES),
+                 lambda: result_drop_upload.read_session(sid, "intruder"),
+                 lambda: result_drop_upload.abort(sid, "intruder")):
+        with pytest.raises(result_drop_upload.DropUploadError) as error:
+            call()
+        assert error.value.status == 404
+    assert _put(client, sid, 0, 0, CSV_BYTES).status_code == 200
+    assert result_drop_upload.abort(sid, "some-global-admin", admin=True)["state"] == "ABORTED"
+    assert not (root / STAGING / sid).exists()
+
+
+def test_review_link_swaps_before_complete_never_write_outside(admin_client):
+    client, root = admin_client
+    project_id, request_id = _seed(client, root)
+    outside = root.parent / "outside_swap"
+    outside.mkdir()
+    session = _start(client, _body(project_id, request_id, OPTION, [("6_N/sub/" + CSV, CSV_BYTES)]))
+    assert _put(client, session["session_id"], 0, 0, CSV_BYTES).status_code == 200
+    os.symlink(outside, root / OPTION / "6_N", target_is_directory=True)
+    assert client.post(f"{REG}/drop-uploads/{session['session_id']}/complete").status_code == 409
+    assert list(outside.iterdir()) == []
+
+    outside2 = root.parent / "outside_swap2"
+    outside2.mkdir()
+    session = _start(client, _body(project_id, request_id, OPTION, [("2_Face/new.csv", CSV_BYTES)]))
+    assert _put(client, session["session_id"], 0, 0, CSV_BYTES).status_code == 200
+    face = root / OPTION / "2_Face"
+    face.rename(root / OPTION / "2_Face_moved")
+    os.symlink(outside2, face, target_is_directory=True)
+    assert client.post(f"{REG}/drop-uploads/{session['session_id']}/complete").status_code >= 400
+    assert list(outside2.iterdir()) == []
+
+
+def test_review_staged_part_link_is_refused(admin_client):
+    client, root = admin_client
+    project_id, request_id = _seed(client, root)
+    victim = root.parent / "victim.txt"
+    victim.write_bytes(b"")
+    session = _start(client, _body(project_id, request_id, OPTION, [("6_N/" + CSV, CSV_BYTES)]))
+    part = root / STAGING / session["session_id"] / "0.part"
+    os.symlink(victim, part)
+    assert _put(client, session["session_id"], 0, 0, CSV_BYTES).status_code == 409
+    part.unlink()
+    os.link(victim, part)
+    assert _put(client, session["session_id"], 0, 0, CSV_BYTES).status_code == 409
+    assert victim.read_bytes() == b""
+    response = client.post(REG + "/drop-uploads/plan", json=_body(project_id, request_id, f"{STAGING}/{session['session_id']}",
+                                                                   [("0.part", b"x")]))
+    assert response.status_code == 422
+
+
+def test_review_l2_working_zone_rule_and_refused_primitives(tmp_path):
+    from app.services.storage.provider import StorageError, working_zone_allows
+
+    cases = {"Working/x": False, "P/R/Working": False, "P/R/Working/x": True, "P/R/Final/C/Working/x": False,
+             "P/R/WORKING/x": True, "P/R/Working/Final/x": False, "P/Working/x": False,
+             "P/R/Final/../Working/x": False, "P/R/Working/a/Working/x": False, "C/P/R/Working/x/y": True}
+    assert {key: working_zone_allows(key) for key in cases} == cases
+    fs = storage_local.LocalFsProvider(tmp_path)
+    for call in (lambda: fs.mkdirs("P/R/Working/x", zone="WORKING"),
+                 lambda: fs.create_exclusive("P/R/Working/x", b"", zone="WORKING"),
+                 lambda: fs.replace("P/R/Working/a", "P/R/Working/b", zone="WORKING"),
+                 lambda: fs.move_no_overwrite("P/R/Working/a", "P/R/Working/b", zone="WORKING"),
+                 lambda: fs.append_bytes("P/R/Working/a", b"", zone="WORKING"),
+                 lambda: fs.copy_stream("P/R/Working/a", "P/R/Working/b", zone="WORKING"),
+                 lambda: fs.lock("P/R/Working/a", zone="WORKING")):
+        with pytest.raises(StorageError) as error:
+            call()
+        assert error.value.code == "NOT_ALLOWED_WRITE"
+
+
+def test_review_m3_plan_and_complete_scale_with_large_folders(admin_client):
+    import time
+
+    client, root = admin_client
+    project_id, request_id = _seed(client, root)
+    face = root / OPTION / "2_Face"
+    for index in range(3000):
+        (face / f"e{index}.txt").write_bytes(b"")
+    files = [(f"n{index}.txt", b"") for index in range(3000)]
+    body = _body(project_id, request_id, f"{OPTION}/2_Face", files)
+    started = time.perf_counter()
+    plan = client.post(REG + "/drop-uploads/plan", json=body)
+    elapsed = time.perf_counter() - started
+    assert plan.status_code == 200 and plan.json()["file_count"] == 3000
+    assert elapsed < 1.0, elapsed
+    session = _start(client, body)
+    started = time.perf_counter()
+    result = _complete(client, session["session_id"])  # empty files: created at complete
+    assert result["published_files"] == 3000
+    assert time.perf_counter() - started < 10.0
+
+
+def test_review_m2_partial_sessions_do_not_lock_the_request(admin_client, monkeypatch):
+    client, root = admin_client
+    project_id, request_id = _seed(client, root)
+    real = storage_local.LocalFsProvider.rename_no_replace
+
+    def busy(self, src, dst, *, zone):
+        raise PermissionError("sharing violation")
+
+    partial = []
+    for name in ("6_A", "6_B"):
+        session = _start(client, _body(project_id, request_id, OPTION, [(f"{name}/x/{CSV}", CSV_BYTES)]))
+        assert _put(client, session["session_id"], 0, 0, CSV_BYTES).status_code == 200
+        monkeypatch.setattr(storage_local.LocalFsProvider, "rename_no_replace", busy)
+        result = _complete(client, session["session_id"])
+        monkeypatch.setattr(storage_local.LocalFsProvider, "rename_no_replace", real)
+        assert (result["state"], result["busy"]) == ("PARTIAL", [f"{name}/x/{CSV}"])
+        # L5: folders this session created and that stayed empty are removed again.
+        assert not (root / OPTION / name).exists() and result["created_folders"] == []
+        partial.append(session["session_id"])
+    # Same user: two open sessions is the per-user limit; another user can still upload.
+    third = client.post(REG + "/drop-uploads", json=_body(project_id, request_id, OPTION, [("6_C/" + CSV, CSV_BYTES)]))
+    assert third.status_code == 429 and third.json()["detail"]["code"] == "RESULT_DROP_BUSY"
+    with connect() as conn:
+        other, _plan = result_drop_upload.create_session(
+            conn, project_id, request_id, "DISTRIBUTION", OPTION, [{"relative_path": "6_D/" + CSV, "size": 1}], [], "other-user")
+    listed = client.get(REG + "/drop-uploads", params={"project_id": project_id, "request_id": request_id}).json()["sessions"]
+    assert {item["session_id"] for item in listed} >= set(partial)  # the global admin also sees other-user's
+    assert other["session_id"] in {item["session_id"] for item in listed}
+    # Retrying a PARTIAL session publishes the rest.
+    retried = _complete(client, partial[0])
+    assert retried["state"] == "PUBLISHED" and (root / OPTION / "6_A/x" / CSV).exists()
+    # Idle sessions expire (staging and empty created folders cleaned) and free the slot.
+    monkeypatch.setattr(result_drop_upload, "SESSION_IDLE_SECONDS", -1)
+    assert _start(client, _body(project_id, request_id, OPTION, [("6_E/" + CSV, CSV_BYTES)]))["state"] == "UPLOADING"
+    assert not (root / STAGING / partial[1]).exists()
+    assert client.get(f"{REG}/drop-uploads/{partial[1]}").status_code == 404
+
+
+def test_review_l3_open_sessions_reserve_free_space(admin_client, monkeypatch):
+    client, root = admin_client
+    project_id, request_id = _seed(client, root)
+    monkeypatch.setattr(result_drop_upload, "DISK_MARGIN_MIN_BYTES", 0)
+    monkeypatch.setattr(result_drop_upload, "DISK_MARGIN_RATIO", 0.0)
+    monkeypatch.setattr(storage_local.LocalFsProvider, "free_bytes", lambda self, rel: 150)
+    _start(client, _body(project_id, request_id, OPTION, [("6_A/a.bin", b"x" * 100)]))
+    plan = client.post(REG + "/drop-uploads/plan", json=_body(project_id, request_id, OPTION, [("6_B/b.bin", b"x" * 100)])).json()
+    assert plan["reserved_bytes"] == 100 and plan["free_bytes"] == 50
+    assert plan["can_upload"] is False and plan["issues"][0]["code"] == "FREE_SPACE"
+
+
+def test_review_l4_refused_start_is_audited(admin_client):
+    client, root = admin_client
+    project_id, request_id = _seed(client, root)
+    response = client.post(REG + "/drop-uploads", json=_body(project_id, request_id, RUN, [("2_Face/" + CSV, CSV_BYTES)]))
+    assert response.status_code == 409
+    with connect() as conn:
+        row = conn.execute("SELECT status_code, detail_json FROM audit_events WHERE action='RESULT_DROP_UPLOAD_REFUSED'").fetchone()
+    assert row is not None and int(row[0]) == 409
+    assert "RESULT_DROP_PLAN_BLOCKED" in str(row[1]) and "DEPTH_ROLE_MISMATCH" in str(row[1])

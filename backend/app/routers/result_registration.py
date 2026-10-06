@@ -517,13 +517,32 @@ def drop_create_session(payload: DropPlanInput, request: Request):
                 conn, payload.project_id, payload.request_id, payload.environment, payload.target_relative_path,
                 [item.model_dump() for item in payload.files], payload.folders, request.state.principal.user_id)
         except ResultRegistrationError as exc:
-            raise _drop_error(exc) from exc
+            error = _drop_error(exc)
+            # Review L4: refused starts (blocked plan, busy, invalid paths) are audited too.
+            blocked = (getattr(exc, "extra", {}) or {}).get("plan") or {}
+            _drop_audit(request, "RESULT_DROP_UPLOAD_REFUSED", {
+                "project_id": payload.project_id, "request_id": payload.request_id,
+                "environment": payload.environment, "target": payload.target_relative_path, "code": exc.code,
+                "files": len(payload.files), "bytes": sum(item.size for item in payload.files),
+                "issues": [item.get("code") for item in blocked.get("issues", [])][:20]},
+                status_code=error.status_code)
+            raise error from exc
         _drop_audit(request, "RESULT_DROP_UPLOAD_STARTED", {
             "session_id": session["session_id"], "project_id": payload.project_id, "request_id": payload.request_id,
             "environment": payload.environment, "target": plan["target_relative_path"],
             "files": plan["file_count"], "bytes": plan["total_bytes"], "folders": plan["folder_count"],
             "skipped": len(plan["skipped"])}, conn=conn)
         return {**session, "plan": plan}
+
+
+@router.get("/drop-uploads")
+def drop_list_sessions(request: Request, project_id: str, request_id: str):
+    """Open uploads of a request: the caller's own, or all of them for a global admin (who may stop any)."""
+    with connect() as conn:
+        require_resource_permission(request, RESULT_IMPORT, "request", request_id, conn=conn)
+    principal = request.state.principal
+    return {"sessions": drop_service.open_sessions(project_id, request_id, principal.user_id,
+                                                   admin=bool(getattr(principal, "is_global_admin", False)))}
 
 
 @router.get("/drop-uploads/{session_id}")
@@ -580,11 +599,14 @@ def drop_complete(session_id: str, request: Request):
 def drop_abort(session_id: str, request: Request):
     with connect() as conn:
         scope = _session_access(request, conn, session_id)
+        principal = request.state.principal
+        admin = bool(getattr(principal, "is_global_admin", False))
         try:
-            result = drop_service.abort(session_id, request.state.principal.user_id)
+            result = drop_service.abort(session_id, principal.user_id, admin=admin)
         except ResultRegistrationError as exc:
             raise _drop_error(exc) from exc
         _drop_audit(request, "RESULT_DROP_UPLOAD_ABORTED", {
             "session_id": session_id, **scope, "received_bytes": result["received_bytes"],
-            "files": result["file_count"]}, conn=conn)
+            "files": result["file_count"], "by_admin": admin and scope["owner_user_id"] != principal.user_id},
+            conn=conn)
         return result

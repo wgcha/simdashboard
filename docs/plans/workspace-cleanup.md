@@ -1,7 +1,7 @@
 # 운영 정리 계획: 프로젝트 정리 · 데모 제거 · 사이드바 단순화
 
 - 기준일: 2026-10-06
-- 상태: 3절(사이드바)은 W1로 완료. **1·2절 구현 완료(2026-10-06, W4)** — 계약 [깊이 스키마](../contracts/depth-schema.md) §13.2-5·§16, `backend/app/services/project_cleanup.py`, 화면 `FolderProjectCleanup.tsx`. 남은 것: 독립 최종 검수(4절 6), 실제 서버 실행 전 DB 백업 안내.
+- 상태: 3절(사이드바)은 W1로 완료. **1·2절 구현 완료(2026-10-06, W4)** — 계약 [깊이 스키마](../contracts/depth-schema.md) §13.2-5·§16, `backend/app/services/project_cleanup.py`, 화면 `FolderProjectCleanup.tsx`. 독립 검수(2026-10-06) 지적 H1·M1·M2·L1·L2·L4·L5 반영: 기본 선택은 데모만, 보관 데이터·직접 만든 데이터·시스템 분석 페이지가 있으면 이름 입력 확인(서버 409 `PROJECT_CLEANUP_CONFIRM_REQUIRED`), 시스템 분석 페이지는 migration 없이 경고+확인으로 처리, §13.2-5 상속은 조용히(차단 없이 남김), 외래 키 전수 조사, IN 목록 분할, 데모 복구 방법(계약 §16.5). 남은 것: 재검수, 실제 서버 실행 전 DB 백업 안내.
 - 담당: 미정. 1·2절은 등록 삭제(`backend/app/services/folder_environment_deletion.py`, depth-schema 계약 §13)와 삭제 순서·차단 규칙을 공유하므로, 그 파일을 만든 세션이 §13 확장으로 맡는 것을 기본안으로 한다.
 - 관련 계약: [깊이 스키마 계약](../contracts/depth-schema.md) §13(등록 삭제)·D14·D15, [Windows 배포 정책](../windows-deployment-policy.md)
 

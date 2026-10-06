@@ -1246,3 +1246,24 @@
 - 프론트: `ResultDropWorkspace`(경로 표시줄·경로 복사·새 폴더·깊이 사다리 안내·끌어 놓기/파일·폴더 선택·계획·진행률·중지·완료 링크), `LegacyDraftHistory`, `shared/api/resultDrop.ts`·`resultDropModel.ts`. 이전 `ResultRegistrationWorkspace.tsx` 삭제(API·데이터 보존). OpenAPI 재생성(W4 세션의 project-cleanup 경로도 함께 들어감).
 - 검증(격리 임시 root·합성 데이터): 신규 `test_result_drop_upload.py` 26 passed; storage_provider(+boundary)·folder_auto_sync·new_scene_registration·result_registration_api/paths·folder_discovery·environment_folder_flow_api·case_finalization_copy_jobs·openapi_contract·depth_schema 202 passed/2 skipped. 프론트 tsc·build·test:api·test:routing 통과, check:architecture 기존 4건만(App.tsx 불변). e2e `result-drop-upload` 6/6(신규), `spdm-storage-workflow` 1/1(이전 초안 흐름 12건을 실제 API 확인 1건으로 교체), `unified-request-workspace` 2/8·`ui-density-p4-surfaces` 3/6 — 실패는 기준 커밋 HEAD worktree에서도 같은 테스트가 실패(등록 화면 이전 단계). 스크린샷 `/tmp/claude-0/w8-*.png`(2560×1440, dsf 1.5).
 - 미수행: 독립 검수·보안 검수(경로·쓰기 경계 변경, Codex Security 미가용 — 수동 대체 검수도 아직 안 함), Windows Server 2022·SMB(이름 바꾸기·고정 핸들·숨김 속성·백신 잠금, 수 GB 업로드).
+
+## 2026-10-06 W4 독립 검수 지적 수정 (746a398 이후)
+
+- H1: 기본 선택은 데모만. 목록·미리보기에 보관 데이터(해석 이력, 결과 값 행, Case·캡처, 예전 연결 `spdm_storage_*`·`folder_discovery_registry`·`semantic_folder_bindings`, 미디어) 표시. 데모가 아닌 프로젝트에 보관 데이터가 있거나, 직접 만든 데이터·시스템 분석 페이지가 있으면 확인 창에서 프로젝트 이름 입력을 요구하고 서버도 `acknowledge_data_project_ids`가 없으면 409 `PROJECT_CLEANUP_CONFIRM_REQUIRED`.
+- M1: 시스템 분석 페이지 3개는 `dashboards.project_id` NOT NULL·권한 판정 때문에 migration 없이 다른 곳으로 옮길 수 없음 → 차단 대신 미리보기에 페이지·버전(사용자 수정 버전) 표시 + 이름 확인(`SYSTEM_ANALYSIS_PAGES`). 차단은 데모 삭제 지시와 충돌하고, 빈 설치에는 원래 없는 페이지라 선택.
+- M2: §13.2-5 상속은 상속 대상에 외부 의뢰·Case·차단 참조가 있으면 하지 않음(조용히 남김, 삭제 진행). L1: 엔터티가 DELETED 등록의 `deleted_at` 이후 생성이면 상속 안 함.
+- L2: 외래 키 전수 조사 테스트 추가(PG `pg_constraint`, DuckDB `duckdb_constraints()`). PG에서 11개 컬럼 발견 → 분류, 다른 실행 기록의 `workflow_runs.batch_attempt_id`가 지운 시도를 가리키면 NULL.
+- L4: IN 목록 500개 단위 분할(`_select_in`·`_ids`·`_count_in`), 과대 선택 422, 미리보기 후 사라진 프로젝트는 409 STALE. L5: 데모 복구 절차를 계약 §16.5에 기록.
+- 검증(격리 DB): DuckDB `test_project_cleanup.py` 18·§13 삭제 13·`test_security.py` 3·`test_demo_seed_coherence.py` 7 = 41 passed. 임시 PostgreSQL 16(alembic head+reference seed): cleanup+§13 28 passed/3 skipped(DuckDB 전용), 새 DB에서 `test_security.py` 3 passed(같은 DB에서 cleanup 뒤 실행하면 Orion 시스템 페이지가 없어 1건 실패 — 테스트 순서 문제). 프론트 tsc·build 통과, check:architecture 기존 4건만, e2e project-cleanup 2/2.
+- 미수행: 재검수, Codex Security, 전체 백엔드 스위트, OpenAPI 스냅샷 재생성(W8 변경과 함께 커밋 시).
+
+## 2026-10-07 W8 독립 수동 보안 검수 지적 수정 (746a398 이후)
+
+- 검수: 독립 수동 검수(Codex Security 미가용, 대체 수동 검수), HIGH 없음. 검수자 공격 시험을 `test_result_drop_upload.py`의 `test_review_*` 9건으로 이식.
+- M1: 확장자를 끝 마침표·공백 제거 후 마지막 `.` 뒤로 판정(`.bat` 등 점으로 시작하는 이름 포함, 대소문자 무시), 끌어서 올리기 전용 차단 목록 `DROP_BLOCKED_EXTENSIONS`(등록 목록 + .scf .url .lnk .library-ms .searchConnector-ms .msc .iso .img .vhd .vhdx .appref-ms .settingcontent-ms .application .wsc .sct .chm .inf .xll .ps1xml .hta .cpl .reg), 예약 이름 COM¹–³·LPT¹–³(드롭 코드 지역 확장, `spdm_storage` 전역 불변), `.simdash-upload` 파일 이름 건너뜀.
+- M2: 열린 업로드 제한을 사용자당 의뢰 2개 + 의뢰 전체 6개로, 유휴 만료 60분(일부 공개 포함, 만료 시 임시 파일·빈 새 폴더 정리), 전역 관리자의 다른 사용자 업로드 중지(`DELETE`, 감사 `by_admin`), 열린 업로드 목록 `GET /drop-uploads`. 화면: PARTIAL에서 `나머지 다시 옮기기`·`나머지 중지`, 열린 업로드 목록·중지, 업로드 중 페이지 닫기는 keepalive 중지·옮기는 중은 경고, 화면 이탈 시 중지.
+- M3: 부모 폴더별 casefold 목록 지도(`_DirIndex`)로 계획·완료·새 폴더의 이름 충돌 확인. 3,000개를 3,000개 있는 폴더에 넣는 계획 0.41초(시험은 1초 미만 확인).
+- L2: `WORKING` 구역은 `mkdir_pinned`·`write_chunk`·`rename_no_replace`·`remove`·`set_hidden`만, 다른 쓰기 함수는 `NOT_ALLOWED_WRITE`. `working_zone_allows`는 `Working` 위 2단계 이상·`Working` 한 번·`Final`·`.`·`..` 없음. 이에 맞춰 Scene 안 내용 폴더의 Working·Final 이름도 계획에서 차단.
+- L3: 같은 root의 열린 업로드가 아직 공개하지 않은 바이트를 남은 공간에서 빼고 계산(`reserved_bytes`). L4: 시작 거부(계획 차단·BUSY·경로 오류) 감사 `RESULT_DROP_UPLOAD_REFUSED`. L5: PARTIAL·실패·중지·만료 시 이 세션이 만든 빈 폴더 삭제. L1: 단일 백엔드 작업자 필요를 문서화 — Windows WinSW는 1개, Rocky 8 템플릿 기본 `UVICORN_WORKERS=2`는 미해결로 기록(배포 설정은 바꾸지 않음).
+- 검증(격리 임시 root·합성 데이터): `test_result_drop_upload.py` 35 passed; drop·storage_provider(+boundary)·folder_auto_sync·new_scene_registration·result_registration_api·case_finalization_copy_jobs·security·openapi_contract 143 passed/1 skipped. OpenAPI 재생성(W4 세션의 미커밋 변경도 함께 반영됨). 프론트 tsc·build·test:api 통과, check:architecture 기존 4건만, e2e `result-drop-upload` 7/7(PARTIAL·열린 업로드 중지 추가).
+- 미수행: 반영 재검수, Windows·SMB 실환경, Rocky 8 다중 작업자 대응 결정.

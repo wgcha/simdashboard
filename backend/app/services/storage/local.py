@@ -21,7 +21,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO, Callable, Iterable, Iterator, Literal, NamedTuple
 
 from .provider import (
-    FINAL, LEGACY, WORKING, Entry, SpdmStorageError, StorageError, check_write,
+    FINAL, LEGACY, NOT_ALLOWED_WRITE, WORKING, Entry, SpdmStorageError, StorageError, check_write,
 )
 
 _STORAGE_PACKAGE = __name__.rsplit(".", 1)[0]
@@ -821,6 +821,7 @@ class LocalFsProvider:
         The destination is created exclusively (``FileExistsError``), fsynced, and removed
         again on any failure. ``server_side_copy`` (module seam) is tried first when set.
         """
+        self._refuse_working(zone)
         self._check(zone, dst_rel)
         source = self.path(src_rel)
         destination = self.path(dst_rel)
@@ -879,6 +880,7 @@ class LocalFsProvider:
         as the path's own ``lstat`` entry (no symlink/reparse, same id), which also covers
         Windows where ``O_NOFOLLOW`` does not exist (re-review N2).
         """
+        self._refuse_working(zone)
         self._check(zone, rel_path)
         path = self.path(rel_path)
         unsafe = SpdmStorageError("FINALIZATION_PATH_UNSAFE", "최종확정 기록 파일이 일반 단일 연결 파일이 아닙니다.")
@@ -905,6 +907,7 @@ class LocalFsProvider:
 
     def try_lock(self, rel_path: str, *, zone: str):
         """:meth:`lock` without waiting (``FINALIZATION_LOCK_BUSY``)."""
+        self._refuse_working(zone)
         self._check(zone, rel_path)
         return try_request_lock(self.path(rel_path), self.root)
 
@@ -992,12 +995,21 @@ class LocalFsProvider:
                 os.close(descriptor)
 
     # -- writes (zone-checked, S3) ---------------------------------------
+    @staticmethod
+    def _refuse_working(zone: str) -> None:
+        """W8 review L2: the WORKING zone only creates folders (``mkdir_pinned``), writes staged chunks
+        (``write_chunk``), publishes without replacing (``rename_no_replace``), removes its own staging
+        (``remove``) and sets the hidden attribute; every other write primitive refuses it."""
+        if zone == WORKING:
+            raise StorageError(NOT_ALLOWED_WRITE, "허용된 SPDM 쓰기 구역 밖의 경로입니다.")
+
     def _check(self, zone: str, *rel_paths: str) -> None:
         caller = _caller_module()
         for rel_path in rel_paths:
             check_write(rel_path, zone, caller)
 
     def mkdirs(self, rel_path: str, *, zone: str, parents: bool = True, exist_ok: bool = True) -> None:
+        self._refuse_working(zone)
         self._check(zone, rel_path)
         self.path(rel_path).mkdir(parents=parents, exist_ok=exist_ok)
 
@@ -1008,6 +1020,7 @@ class LocalFsProvider:
         An exception raised by ``data`` while writing propagates and leaves the
         partial file for the caller's cleanup, as before.
         """
+        self._refuse_working(zone)
         self._check(zone, rel_path)
         path = self.path(rel_path)
         if private:
@@ -1036,6 +1049,7 @@ class LocalFsProvider:
 
         POSIX hardlinks (``src`` remains; the caller removes it), Windows renames.
         """
+        self._refuse_working(zone)
         self._check(zone, src_rel, dst_rel)
         _publish_no_replace(self.path(src_rel), self.path(dst_rel))
 
@@ -1061,6 +1075,7 @@ class LocalFsProvider:
         return stack
 
     def replace(self, src_rel: str, dst_rel: str, *, zone: str) -> None:
+        self._refuse_working(zone)
         self._check(zone, src_rel, dst_rel)
         source, destination = self.path(src_rel), self.path(dst_rel)
         if zone != FINAL:
@@ -1090,6 +1105,7 @@ class LocalFsProvider:
 
     def lock(self, rel_path: str, *, zone: str):
         """Exclusive request lock on a persistent lock file (created when absent)."""
+        self._refuse_working(zone)
         self._check(zone, rel_path)
         return request_lock(self.path(rel_path), self.root)
 

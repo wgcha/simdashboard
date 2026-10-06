@@ -3196,7 +3196,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * Drop List Sessions
+         * @description Open uploads of a request: the caller's own, or all of them for a global admin (who may stop any).
+         */
+        get: operations["drop_list_sessions_api_result_registration_drop_uploads_get"];
         put?: never;
         /** Drop Create Session */
         post: operations["drop_create_session_api_result_registration_drop_uploads_post"];
@@ -4769,6 +4773,8 @@ export interface components {
             project_ids: string[];
             /** Confirm Token */
             confirm_token: string;
+            /** Acknowledge Data Project Ids */
+            acknowledge_data_project_ids?: string[];
         };
         /** CleanupTargets */
         CleanupTargets: {
@@ -14325,6 +14331,38 @@ export interface operations {
                 "application/json": components["schemas"]["DropPlanInput"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    drop_list_sessions_api_result_registration_drop_uploads_get: {
+        parameters: {
+            query: {
+                project_id: string;
+                request_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {

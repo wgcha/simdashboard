@@ -84,8 +84,11 @@ def _cleanup_preview(client, ids, status=200):
     return response.json()
 
 
-def _cleanup_delete(client, ids, token):
-    return client.post(ENV + "/project-cleanup/delete", json={"project_ids": ids, "confirm_token": token})
+def _cleanup_delete(client, ids, token, acknowledge=None):
+    body = {"project_ids": ids, "confirm_token": token}
+    if acknowledge is not None:
+        body["acknowledge_data_project_ids"] = acknowledge
+    return client.post(ENV + "/project-cleanup/delete", json=body)
 
 
 def _make_project(conn, *, with_request=True) -> dict[str, str]:
@@ -131,8 +134,14 @@ def test_delete_orion_removes_every_reference_and_keeps_others(admin_client):
     assert item["counts"]["projects"] == 1 and item["counts"]["analysis_requests"] == 2
     assert item["counts"]["dashboards"] == 3 and item["counts"]["load_cases"] >= 1
     assert "asset_blobs" in item["counts"]  # the Orion-only drop videos
+    # M1: Orion hosts the system analysis pages; deleting it needs the typed-name confirmation.
+    assert {page["id"] for page in item["system_pages"]} == project_cleanup.SYSTEM_ANALYSIS_PAGE_IDS
+    assert item["requires_acknowledgement"] and "SYSTEM_ANALYSIS_PAGES" in item["acknowledge_reasons"]
+    unconfirmed = _cleanup_delete(client, [ORION], preview["confirm_token"])
+    assert unconfirmed.status_code == 409 and unconfirmed.json()["detail"]["code"] == "PROJECT_CLEANUP_CONFIRM_REQUIRED"
+    assert unconfirmed.json()["detail"]["project_ids"] == [ORION]
 
-    response = _cleanup_delete(client, [ORION], preview["confirm_token"])
+    response = _cleanup_delete(client, [ORION], preview["confirm_token"], acknowledge=[ORION])
     assert response.status_code == 200, response.text
     assert response.json()["deleted"] == [ORION]
     with connect() as conn:
@@ -273,7 +282,12 @@ def test_legacy_only_project_is_cleaned_with_its_links(admin_client):
     counts = preview["items"][0]["counts"]
     assert counts["folder_discovery_registry"] == 2 and counts["spdm_storage_bindings"] == 1
     assert counts["semantic_folder_bindings"] == 1 and counts["folder_environment_scans.project_id"] == 1
-    assert _cleanup_delete(client, [ids["project"]], preview["confirm_token"]).status_code == 200
+    item = preview["items"][0]
+    assert item["requires_acknowledgement"] and item["acknowledge_reasons"] == ["RETAINED_DATA"]
+    assert item["retained_data"]["legacy_links"] >= 5
+    refused = _cleanup_delete(client, [ids["project"]], preview["confirm_token"], acknowledge=["someone-else"])
+    assert refused.status_code == 409 and refused.json()["detail"]["code"] == "PROJECT_CLEANUP_CONFIRM_REQUIRED"
+    assert _cleanup_delete(client, [ids["project"]], preview["confirm_token"], acknowledge=[ids["project"]]).status_code == 200
     with connect() as conn:
         assert _references(conn, set(ids.values()) | {f"PF-{suffix}"}) == {}
         assert conn.execute("SELECT count(*) FROM folder_environment_scans WHERE id=?", [scan_id]).fetchone()[0] == 1
@@ -287,7 +301,7 @@ def test_duckdb_restart_does_not_recreate_removed_demo(admin_client):
     client, _root = admin_client
     preview = _cleanup_preview(client, [ORION, SHOWCASE])
     assert all(item["deletable"] for item in preview["items"]), preview
-    assert _cleanup_delete(client, [ORION, SHOWCASE], preview["confirm_token"]).status_code == 200
+    assert _cleanup_delete(client, [ORION, SHOWCASE], preview["confirm_token"], acknowledge=[ORION]).status_code == 200
     database.initialize_database()  # development restart on the same file
     with connect() as conn:
         assert conn.execute("SELECT count(*) FROM projects WHERE id IN (?,?)", [ORION, SHOWCASE]).fetchone()[0] == 0
@@ -390,3 +404,124 @@ def test_one_by_one_registration_delete_leaves_no_empty_project(admin_client):
     with connect() as conn:
         assert conn.execute("SELECT count(*) FROM projects WHERE id=?", [project_id]).fetchone()[0] == 0
         assert conn.execute("SELECT count(*) FROM analysis_requests WHERE project_id=?", [project_id]).fetchone()[0] == 0
+
+
+# ---- review fixes (H1, M2, L1, L2, L4) ---------------------------------------------------
+
+def _clone_run(conn, load_case_id: str, run_id: str) -> None:
+    cols = [r[0] for r in conn.execute("SELECT column_name FROM information_schema.columns WHERE table_name='analysis_runs' "
+                                       + ("AND table_schema='public' " if _postgres() else "") + "ORDER BY ordinal_position").fetchall()]
+    src = dict(zip(cols, conn.execute(f"SELECT {','.join(cols)} FROM analysis_runs LIMIT 1").fetchone()))
+    src.update(id=run_id, load_case_id=load_case_id)
+    conn.execute(f"INSERT INTO analysis_runs({','.join(cols)}) VALUES({','.join('?' for _ in cols)})", [src[c] for c in cols])
+    conn.execute("INSERT INTO scalar_results(id,analysis_run_id,variable_key,display_name,value_double,unit,verdict) VALUES(?,?,?,?,?,?,?)",
+                 [f"sr-{run_id}", run_id, "stress", "응력", 1.0, "MPa", "PASS"])
+
+
+def test_legacy_project_with_imported_results_needs_typed_confirmation(admin_client):
+    """H1: imported runs/results count as 보관 데이터, are not 'user data free', and need the name confirmation."""
+    client, _root = admin_client
+    with connect() as conn:
+        ids = _make_project(conn)
+        _clone_run(conn, ids["load_case"], f"run-legacy-{uuid4().hex[:6]}")
+    listed = _candidates(client)[ids["project"]]
+    assert listed["category"] == "EMPTY" and listed["retained_data"] == {"runs": 1, "results": 1}
+    assert listed["requires_acknowledgement"] is True
+    orion = _candidates(client).get(ORION)  # absent on a shared PostgreSQL test DB after the Orion test
+    assert orion is None or orion["requires_acknowledgement"] is True  # system pages
+    preview = _cleanup_preview(client, [ids["project"]])
+    assert _cleanup_delete(client, [ids["project"]], preview["confirm_token"]).json()["detail"]["code"] == "PROJECT_CLEANUP_CONFIRM_REQUIRED"
+    with connect() as conn:
+        assert conn.execute("SELECT count(*) FROM projects WHERE id=?", [ids["project"]]).fetchone()[0] == 1
+    assert _cleanup_delete(client, [ids["project"]], preview["confirm_token"], acknowledge=[ids["project"]]).status_code == 200
+
+
+def test_project_removed_after_preview_is_stale_and_oversized_is_422(admin_client, monkeypatch):
+    client, _root = admin_client
+    with connect() as conn:
+        ids = _make_project(conn, with_request=False)
+    preview = _cleanup_preview(client, [ids["project"]])
+    with connect() as conn:
+        conn.execute("DELETE FROM project_memberships WHERE project_id=?", [ids["project"]])
+        conn.execute("DELETE FROM projects WHERE id=?", [ids["project"]])
+    stale = _cleanup_delete(client, [ids["project"]], preview["confirm_token"])
+    assert stale.status_code == 409 and stale.json()["detail"]["code"] == "DELETE_PREVIEW_STALE", stale.text
+    # Chunked IN lists give the same plan; an oversized selection is a 422, never a 500.
+    full = _cleanup_preview(client, [SHOWCASE])
+    monkeypatch.setattr(project_cleanup, "_IN_CHUNK", 2)
+    chunked = _cleanup_preview(client, [SHOWCASE])
+    assert chunked["totals"] == full["totals"] and chunked["confirm_token"] == full["confirm_token"]
+    monkeypatch.setattr(project_cleanup, "MAX_PARAMS", 5)
+    oversized = client.post(ENV + "/project-cleanup/preview", json={"project_ids": [SHOWCASE]})
+    assert oversized.status_code == 422 and oversized.json()["detail"]["code"] == "PROJECT_CLEANUP_INVALID"
+
+
+def _foreign_keys(conn) -> list[tuple[str, str, str]]:
+    if _postgres():
+        # pg_catalog: information_schema hides constraints of tables the app role does not own.
+        rows = conn.execute(
+            "SELECT c.conrelid::regclass::text, a.attname, c.confrelid::regclass::text FROM pg_constraint c "
+            "JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum = ANY(c.conkey) "
+            "WHERE c.contype='f' AND c.connamespace='public'::regnamespace").fetchall()
+        return [(str(a), str(b), str(c)) for a, b, c in rows]
+    rows = conn.execute("SELECT table_name, constraint_column_names, referenced_table FROM duckdb_constraints() "
+                        "WHERE constraint_type='FOREIGN KEY'").fetchall()
+    return [(str(table), str(column), str(parent)) for table, columns, parent in rows for column in columns]
+
+
+def test_every_foreign_key_into_a_deleted_table_is_classified():
+    """L2: any column with a foreign key to a table cleanup deletes from must be handled or kept with a reason."""
+    handled = project_cleanup.handled_columns()
+    deleted_tables = {table for stage in project_cleanup._STAGES for table, _pairs in stage if not table.startswith("*")}
+    with connect() as conn:
+        keys = _foreign_keys(conn)
+    assert keys, "no foreign keys found: metadata query is broken"
+    unclassified = sorted({f"{table}.{column} -> {parent}" for table, column, parent in keys
+                           if parent in deleted_tables and (table, column) not in handled
+                           and (table, column) not in project_cleanup.KEEP_COLUMNS})
+    assert unclassified == [], "classify in project_cleanup (_STAGES or KEEP_COLUMNS): " + ", ".join(unclassified)
+
+
+def test_inherited_ownership_is_quiet_when_manual_data_was_added(admin_client):
+    """M2: a manual request under the inherited project keeps the project; the last delete still succeeds."""
+    client, root = admin_client
+    _build_usage(root)
+    _build_distribution(root, final=False)
+    _s1, _p1, usage = _register(client, "USAGE")
+    _s2, _p2, dist = _register(client, "DISTRIBUTION")
+    project_id = usage["project_id"]
+    first = _preview(client, [usage["registration_id"]])
+    assert _delete(client, [usage["registration_id"]], first["confirm_token"]).status_code == 200
+    manual = f"request-manual-{uuid4().hex[:6]}"
+    with connect() as conn:
+        conn.execute("INSERT INTO analysis_requests(id,project_id,title,status,owner,requested_at) VALUES(?,?,?,?,?,?)",
+                     [manual, project_id, "수동", "IN_PROGRESS", "u", _now()])
+    last = _preview(client, [dist["registration_id"]])
+    assert last["items"][0]["deletable"] and last["items"][0]["blockers"] == [], last
+    assert last["items"][0]["counts"]["projects"] == 0
+    assert _delete(client, [dist["registration_id"]], last["confirm_token"]).status_code == 200
+    with connect() as conn:
+        assert conn.execute("SELECT count(*) FROM projects WHERE id=?", [project_id]).fetchone()[0] == 1
+        assert conn.execute("SELECT count(*) FROM analysis_requests WHERE id=?", [manual]).fetchone()[0] == 1
+        assert conn.execute("SELECT count(*) FROM analysis_requests WHERE id=?", [dist["request_id"]]).fetchone()[0] == 0
+
+
+@pytest.mark.skipif(os.getenv("ANALYSIS_TEST_POSTGRES") == "1", reason="synthetic tombstone without a preview row (PostgreSQL FK)")
+def test_family_ownership_ignores_entities_created_after_the_tombstone():
+    """L1: a DELETED registration only explains entities that existed before it was deleted."""
+    from datetime import timedelta
+    from app.services import folder_environment_deletion as deletion
+    created = _now()
+    project_id = f"project-family-{uuid4().hex[:6]}"
+    with connect() as conn:
+        conn.execute("INSERT INTO projects(id,name,product_name,description,created_at) VALUES(?,?,?,?,?)",
+                     [project_id, "p", "", "", created])
+        for suffix, deleted_at in (("early", created - timedelta(minutes=5)),):
+            conn.execute("INSERT INTO folder_environment_registrations(id,preview_id,idempotency_key,environment,project_id,request_id,"
+                         "status,created_by,created_at,deleted_at,deleted_by,created_targets) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                         [f"reg-{suffix}-{project_id}", "preview-x", f"k-{suffix}-{project_id}", "USAGE", project_id, None, "DELETED",
+                          "t", created - timedelta(minutes=10), deleted_at, "t", json.dumps({"project_ids": [project_id]})])
+        assert deletion._created_by_deleted_registration(conn, "project_id", project_id, "projects", "created_at") is False
+        conn.execute("UPDATE folder_environment_registrations SET deleted_at=? WHERE project_id=?",
+                     [created + timedelta(minutes=5), project_id])
+        assert deletion._created_by_deleted_registration(conn, "project_id", project_id, "projects", "created_at") is True

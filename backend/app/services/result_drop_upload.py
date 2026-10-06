@@ -23,7 +23,8 @@ Flow
 
 Sessions live in this process (like the Final copy job thread); a server restart
 drops them and their staging folder is removed by a later session of the same
-request once it is older than ``SESSION_IDLE_SECONDS``.
+request once it is older than ``SESSION_IDLE_SECONDS`` (60 min). Requires one backend
+worker process (Windows service: a single uvicorn worker).
 """
 from __future__ import annotations
 
@@ -53,8 +54,11 @@ MAX_SEGMENT_CHARS = 255
 # Explorer and most Windows tools still stop at MAX_PATH; checked for the server
 # path and for the path users see (display root).
 MAX_PATH_CHARS = 259
-MAX_ACTIVE_PER_REQUEST = 2
-SESSION_IDLE_SECONDS = 24 * 3600
+# Open (uploading / partially published) sessions: per user per request, and per request
+# overall, so one user's stuck sessions cannot block the request for others (review M2).
+MAX_ACTIVE_PER_USER = 2
+MAX_ACTIVE_PER_REQUEST = 6
+SESSION_IDLE_SECONDS = 60 * 60
 TREE_NODE_LIMIT = 5000
 KNOWN_NAME_SCAN_LIMIT = 20000
 DISK_MARGIN_RATIO = 0.05
@@ -71,7 +75,18 @@ _ROLE_BEARING = frozenset({"SIMULATION_CASE", "LOAD_CASE", "EXECUTION_RUN", "RUN
 _DEFAULT_KNOWN = {"RUN_OPTION": {"individual", "cumulative"}}
 _SYSTEM_FILES = frozenset({"thumbs.db", "desktop.ini", ".ds_store"})
 _INVALID_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
-_RESERVED = frozenset({*spdm_storage._WINDOWS_RESERVED, "CONIN$", "CONOUT$"})
+# Windows also reserves COM/LPT with superscript digits ¹²³ (local extension; the shared
+# spdm_storage set is left unchanged for its other callers).
+_RESERVED = frozenset({*spdm_storage._WINDOWS_RESERVED, "CONIN$", "CONOUT$",
+                       *(f"{device}{digit}" for device in ("COM", "LPT") for digit in "¹²³")})
+# Drag & drop superset of the registration block list: shell/launch formats, disk images
+# and macro add-ins that Explorer would run or mount from the shared folder (W8 review M1).
+DROP_BLOCKED_EXTENSIONS = frozenset({
+    *_BLOCKED_EXTENSIONS,
+    ".scf", ".url", ".lnk", ".library-ms", ".searchconnector-ms", ".msc", ".iso", ".img", ".vhd", ".vhdx",
+    ".appref-ms", ".settingcontent-ms", ".application", ".wsc", ".sct", ".chm", ".inf", ".xll", ".ps1xml",
+    ".hta", ".cpl", ".reg",
+})
 _SCENE_LIKE = re.compile(r"^\d+[_\-]")
 _HEX32 = re.compile(r"^[0-9a-f]{32}$")
 _PART = re.compile(r"^\d+\.part$")
@@ -126,11 +141,20 @@ def _skip_reason(parts: list[str]) -> str | None:
     name = parts[-1]
     if any(_ignored(part) for part in parts[:-1]):
         return "HIDDEN_FOLDER"
-    if name.casefold() in _SYSTEM_FILES or name.startswith("~$"):
+    if name.casefold() in _SYSTEM_FILES or name.startswith("~$") or name.casefold() == UPLOAD_STAGING_DIR:
         return "SYSTEM_FILE"
-    if PurePosixPath(name).suffix.casefold() in _BLOCKED_EXTENSIONS:
+    if extension_of(name) in DROP_BLOCKED_EXTENSIONS:
         return "BLOCKED_EXTENSION"
     return None
+
+
+def extension_of(name: str) -> str:
+    """``.ext`` (casefolded) after the last dot, also for dot-leading names like ``.bat``; ``""`` without a dot.
+
+    Trailing dots/spaces are stripped first because Windows drops them (``a.exe.`` is ``a.exe``).
+    """
+    stripped = name.rstrip(". ")
+    return "." + stripped.rsplit(".", 1)[-1].casefold() if "." in stripped else ""
 
 
 def _fold(parts: list[str] | tuple[str, ...]) -> str:
@@ -229,6 +253,28 @@ def checked_target(conn: ConnectionLike, scope: Scope, target_relative_path: str
     return target, level
 
 
+class _DirIndex:
+    """One listing per existing parent folder, as a casefold map (W8 review M3).
+
+    ``lookup`` answers "is there already an entry with this name (any case)?" in O(1)
+    instead of re-reading the folder per file. Built fresh for each plan / complete.
+    """
+
+    def __init__(self, fs: LocalFsProvider) -> None:
+        self.fs = fs
+        self._maps: dict[str, dict[str, Any]] = {}
+
+    def lookup(self, parent_rel: str, name: str):
+        """Existing entry (``Entry``) named ``name`` case-insensitively, or ``None``; ``OSError`` when unreadable."""
+        found = self._maps.get(parent_rel)
+        if found is None:
+            found = {}
+            for entry in self.fs.list(parent_rel):
+                found.setdefault(entry.name.casefold(), entry)
+            self._maps[parent_rel] = found
+        return found.get(name.casefold())
+
+
 def _children(fs: LocalFsProvider, relative: str) -> list[str]:
     names = []
     for entry in fs.list(relative):
@@ -288,7 +334,7 @@ def tree(conn: ConnectionLike, project_id: str, request_id: str, environment: st
                    for index, role in enumerate(scope.roles)],
         "nodes": nodes, "truncated": truncated,
         "chunk_bytes": CHUNK_BYTES,
-        "blocked_extensions": sorted(_BLOCKED_EXTENSIONS),
+        "blocked_extensions": sorted(DROP_BLOCKED_EXTENSIONS),
         "active_uploads": _active_count(project_id, request_id),
     }
 
@@ -308,9 +354,12 @@ def _depth_findings(scope: Scope, known: dict[str, set[str]], name: str, parent_
                     level: int) -> list[tuple[str, str, str]]:
     """(code, severity, message) for a new folder ``name`` at ``level`` below ``parent_name``."""
     role = _role_at(scope.roles, level)
-    if role not in _ROLE_BEARING:
-        return []
     folded = name.casefold()
+    if role not in _ROLE_BEARING:
+        if folded in {"working", "final"}:
+            return [("DEPTH_REQUEST_FOLDER", "error",
+                     f"'{name}' 이름의 폴더는 Working 아래에 올릴 수 없습니다(의뢰의 Working·Final과 혼동). 이름을 바꾸세요.")]
+        return []
     found: list[tuple[str, str, str]] = []
     label = ROLE_LABELS.get(role, role)
     parent_label = ROLE_LABELS.get(_role_at(scope.roles, level - 1), "폴더")
@@ -408,6 +457,7 @@ def build_plan(conn: ConnectionLike, project_id: str, request_id: str, environme
     conflicts: list[dict[str, Any]] = []
     new_siblings: dict[str, list[str]] = {}
     sibling_cache: dict[str, list[str]] = {}
+    index = _DirIndex(fs)
 
     def existing_siblings(parent_rel: str) -> list[str]:
         if parent_rel not in sibling_cache:
@@ -432,11 +482,11 @@ def build_plan(conn: ConnectionLike, project_id: str, request_id: str, environme
         entry: dict[str, Any] = {"relative_path": f"{parent['relative_path']}/{name}", "exists": False, "level": level}
         if parent["exists"]:
             try:
-                collision = fs.case_collision(parent["relative_path"], name)
-                info = fs.stat(collision, follow_links=False) if collision else None
+                info = index.lookup(parent["relative_path"], name)
             except (OSError, StorageError):
-                collision, info = None, None
+                info = None
                 _issue(issues, "PATH_UNAVAILABLE", "error", "대상 폴더를 확인할 수 없습니다.", relative_client)
+            collision = f"{parent['relative_path']}/{info.name}" if info is not None else None
             if collision and info is not None:
                 if info.is_link:
                     _issue(issues, "PATH_UNSAFE", "error", "대상 경로에 연결 폴더(링크)가 있어 올릴 수 없습니다.", relative_client)
@@ -474,10 +524,11 @@ def build_plan(conn: ConnectionLike, project_id: str, request_id: str, environme
         destination = f"{parent['relative_path']}/{name}"
         if parent["exists"]:
             try:
-                collision = fs.case_collision(parent["relative_path"], name)
+                info = index.lookup(parent["relative_path"], name)
             except (OSError, StorageError):
-                collision = None
+                info = None
                 _issue(issues, "PATH_UNAVAILABLE", "error", "대상 폴더를 확인할 수 없습니다.", item["relative_path"])
+            collision = f"{parent['relative_path']}/{info.name}" if info is not None else None
             if collision:
                 conflicts.append({"relative_path": item["relative_path"], "destination_relative_path": collision,
                                   "reason": "EXISTS"})
@@ -490,8 +541,9 @@ def build_plan(conn: ConnectionLike, project_id: str, request_id: str, environme
 
     total = sum(int(item["size"]) for item in planned_files)
     margin = _margin(total)
+    reserved = _reserved_bytes(scope.root_key)
     try:
-        free = fs.free_bytes(scope.working_relative_path)
+        free = max(fs.free_bytes(scope.working_relative_path) - reserved, 0)
     except OSError:
         free = None
     if free is None:
@@ -518,7 +570,7 @@ def build_plan(conn: ConnectionLike, project_id: str, request_id: str, environme
                                "role_label": ROLE_LABELS.get(item["role"], item["role"])} for item in folders_to_create],
         "skipped": skipped, "conflicts": conflicts, "issues": ordered,
         "file_count": len(planned_files), "folder_count": len(folders_to_create), "total_bytes": total,
-        "free_bytes": free, "required_bytes": total + margin, "can_upload": can_upload,
+        "free_bytes": free, "reserved_bytes": reserved, "required_bytes": total + margin, "can_upload": can_upload,
     }
     internal = {"scope": scope, "target": target, "files": planned_files, "folders": folders_to_create}
     return public, internal
@@ -570,13 +622,44 @@ _registry_lock = threading.Lock()
 _sessions: dict[str, _Session] = {}
 _publish_locks: dict[tuple[str, str], threading.Lock] = {}
 _OPEN_STATES = {"UPLOADING", "PUBLISHING", "PARTIAL"}
+_create_lock = threading.Lock()
 
 
-def _active_count(project_id: str, request_id: str) -> int:
+def _active_count(project_id: str, request_id: str, user_id: str | None = None) -> int:
     with _registry_lock:
         return sum(1 for item in _sessions.values()
                    if item.scope.project_id == project_id and item.scope.request_id == request_id
-                   and item.state in _OPEN_STATES)
+                   and item.state in _OPEN_STATES and (user_id is None or item.user_id == str(user_id)))
+
+
+def _reserved_bytes(root_key: str) -> int:
+    """Bytes other open sessions on the same root still need (review L3: planned free space is net of them)."""
+    with _registry_lock:
+        return sum(item.size for session in _sessions.values()
+                   if session.scope.root_key == root_key and session.state in _OPEN_STATES
+                   for item in session.files if not item.published)
+
+
+def _busy_reason(project_id: str, request_id: str, user_id: str) -> str | None:
+    if _active_count(project_id, request_id, user_id) >= MAX_ACTIVE_PER_USER:
+        return (f"이 의뢰에서 이미 내 업로드 {MAX_ACTIVE_PER_USER}개가 열려 있습니다. "
+                "끝내거나 중지한 뒤 다시 시도하세요(멈춘 업로드는 60분 뒤 자동 정리).")
+    if _active_count(project_id, request_id) >= MAX_ACTIVE_PER_REQUEST:
+        return f"이 의뢰에서 업로드 {MAX_ACTIVE_PER_REQUEST}개가 진행 중입니다. 끝난 뒤 다시 시도하세요."
+    return None
+
+
+def open_sessions(project_id: str, request_id: str, user_id: str, *, admin: bool) -> list[dict[str, Any]]:
+    """Open sessions of a request: the caller's own, or every one for a global admin."""
+    _expire_sessions()
+    with _registry_lock:
+        found = [item for item in _sessions.values()
+                 if item.scope.project_id == project_id and item.scope.request_id == request_id
+                 and item.state in _OPEN_STATES and (admin or item.user_id == str(user_id))]
+    return [{"session_id": item.id, "state": item.state, "user_id": item.user_id, "own": item.user_id == str(user_id),
+             "target_relative_path": item.target, "file_count": len(item.files), "total_bytes": item.total_bytes,
+             "published_files": sum(1 for file in item.files if file.published),
+             "idle_seconds": int(time.monotonic() - item.touched)} for item in found]
 
 
 def _publish_lock(scope: Scope) -> threading.Lock:
@@ -601,13 +684,31 @@ def _remove_staging(session: _Session) -> None:
             pass  # not empty (another session) or already gone
 
 
+def _remove_empty_created(session: _Session) -> None:
+    """Review L5: folders this session created that are still empty (deepest first). A folder that
+    received anything meanwhile (a published file, an Explorer copy) is not empty and stays."""
+    fs = LocalFsProvider(session.scope.root)
+    kept = []
+    for folder in sorted(session.created_folders, key=lambda value: value.count("/"), reverse=True):
+        try:
+            fs.remove(folder, zone=WORKING, directory=True)
+        except (OSError, StorageError):
+            kept.append(folder)
+    session.created_folders = [folder for folder in session.created_folders if folder in kept]
+
+
 def _expire_sessions() -> None:
+    """Idle sessions (uploading or partially published) expire after ``SESSION_IDLE_SECONDS``."""
     now = time.monotonic()
     with _registry_lock:
-        expired = [key for key, item in _sessions.items() if now - item.touched > SESSION_IDLE_SECONDS]
+        expired = [key for key, item in _sessions.items()
+                   if item.state != "PUBLISHING" and now - item.touched > SESSION_IDLE_SECONDS]
         dropped = [_sessions.pop(key) for key in expired]
     for item in dropped:
-        _remove_staging(item)
+        with item.lock:
+            _remove_staging(item)
+            _remove_empty_created(item)
+            item.state = "EXPIRED"
 
 
 def _clean_orphans(fs: LocalFsProvider, staging_root: str) -> None:
@@ -658,9 +759,9 @@ def create_session(conn: ConnectionLike, project_id: str, request_id: str, envir
                    user_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
     """Validate the whole plan, then open a staging folder. Returns (session view, plan)."""
     _expire_sessions()
-    if _active_count(project_id, request_id) >= MAX_ACTIVE_PER_REQUEST:
-        raise DropUploadError("RESULT_DROP_BUSY",
-                              f"이 의뢰에서 이미 {MAX_ACTIVE_PER_REQUEST}개의 업로드가 진행 중입니다. 끝난 뒤 다시 시도하세요.", 429)
+    reason = _busy_reason(project_id, request_id, user_id)
+    if reason:
+        raise DropUploadError("RESULT_DROP_BUSY", reason, 429)
     plan, internal = build_plan(conn, project_id, request_id, environment, target_relative_path, files, folders)
     if not plan["can_upload"]:
         raise DropUploadError("RESULT_DROP_PLAN_BLOCKED", "올리기 전에 확인할 문제가 있습니다.", 409, plan=plan)
@@ -685,16 +786,14 @@ def create_session(conn: ConnectionLike, project_id: str, request_id: str, envir
     session = _Session(id=session_id, user_id=str(user_id), scope=scope, target=internal["target"],
                        staging=staging, files=session_files, folders=internal["folders"],
                        skipped=plan["skipped"], total_bytes=plan["total_bytes"])
-    with _registry_lock:
-        if sum(1 for item in _sessions.values() if item.scope.request_id == request_id
-               and item.scope.project_id == project_id and item.state in _OPEN_STATES) >= MAX_ACTIVE_PER_REQUEST:
-            busy = True
-        else:
-            busy = False
-            _sessions[session_id] = session
-    if busy:
+    with _create_lock:
+        reason = _busy_reason(project_id, request_id, user_id)
+        if reason is None:
+            with _registry_lock:
+                _sessions[session_id] = session
+    if reason:
         _remove_staging(session)
-        raise DropUploadError("RESULT_DROP_BUSY", "이 의뢰에서 다른 업로드가 진행 중입니다. 끝난 뒤 다시 시도하세요.", 429)
+        raise DropUploadError("RESULT_DROP_BUSY", reason, 429)
     return _session_view(session), plan
 
 
@@ -704,15 +803,16 @@ def session_scope(session_id: str) -> dict[str, str]:
     if session is None:
         raise DropUploadError("RESULT_DROP_SESSION_NOT_FOUND", "업로드를 찾을 수 없습니다. 처음부터 다시 올리세요.", 404)
     return {"project_id": session.scope.project_id, "request_id": session.scope.request_id,
-            "environment": session.scope.environment}
+            "environment": session.scope.environment, "owner_user_id": session.user_id}
 
 
-def _session(session_id: str, user_id: str) -> _Session:
+def _session(session_id: str, user_id: str, *, admin: bool = False) -> _Session:
     with _registry_lock:
         session = _sessions.get(session_id)
-    if session is None or session.user_id != str(user_id):
+    if session is None or (session.user_id != str(user_id) and not admin):
         raise DropUploadError("RESULT_DROP_SESSION_NOT_FOUND", "업로드를 찾을 수 없습니다. 처음부터 다시 올리세요.", 404)
-    session.touched = time.monotonic()
+    if session.user_id == str(user_id):
+        session.touched = time.monotonic()
     return session
 
 
@@ -853,20 +953,26 @@ def complete(conn: ConnectionLike, session_id: str, user_id: str) -> dict[str, A
                         raise DropUploadError("RESULT_DROP_STAGING_CHANGED", "임시 업로드 파일이 바뀌었습니다. 업로드를 중지하고 다시 올리세요.", 409)
                 conflicts = []
                 session.conflicts = []
+                index = _DirIndex(fs)
+
+                def existing(relative: str):
+                    parent, name = relative.rsplit("/", 1)
+                    try:
+                        return parent, index.lookup(parent, name)
+                    except (FileNotFoundError, NotADirectoryError):
+                        return parent, None  # parent folder not created yet
+
                 for folder in session.folders:
-                    info = fs.stat(folder["relative_path"], follow_links=False)
+                    parent, info = existing(folder["relative_path"])
                     if info is not None and (info.kind != "dir" or info.is_link):
                         conflicts.append({"relative_path": folder["client_path"],
-                                          "destination_relative_path": folder["relative_path"],
+                                          "destination_relative_path": f"{parent}/{info.name}",
                                           "reason": "FILE_IN_PLACE_OF_FOLDER"})
                 for item in pending:
-                    parent, name = item.destination.rsplit("/", 1)
-                    if fs.stat(parent, follow_links=False) is None:
-                        continue
-                    collision = fs.case_collision(parent, name)
-                    if collision:
-                        conflicts.append({"relative_path": item.relative_path, "destination_relative_path": collision,
-                                          "reason": "EXISTS"})
+                    parent, info = existing(item.destination)
+                    if info is not None:
+                        conflicts.append({"relative_path": item.relative_path,
+                                          "destination_relative_path": f"{parent}/{info.name}", "reason": "EXISTS"})
                 if conflicts:
                     session.conflicts = conflicts
                     raise DropUploadError("RESULT_DROP_CONFLICT", "올리는 동안 같은 이름의 파일이 생겼습니다. 덮어쓰지 않았습니다.", 409,
@@ -893,11 +999,14 @@ def complete(conn: ConnectionLike, session_id: str, user_id: str) -> dict[str, A
         except BaseException:
             if session.state == "PUBLISHING":
                 session.state = "UPLOADING" if not any(item.published for item in session.files) else "PARTIAL"
+            _remove_empty_created(session)
             raise
         published = [item for item in session.files if item.published]
         session.state = "PUBLISHED" if len(published) == len(session.files) else "PARTIAL"
         if session.state == "PUBLISHED":
             _remove_staging(session)
+        else:
+            _remove_empty_created(session)
     folder_auto_sync.invalidate(scope.root_key, scope.project_id, scope.request_id, scope.environment)
     try:
         sync = folder_auto_sync.sync(conn, scope.project_id, scope.request_id, scope.environment, str(user_id), force=True)
@@ -917,12 +1026,18 @@ def complete(conn: ConnectionLike, session_id: str, user_id: str) -> dict[str, A
     return result
 
 
-def abort(session_id: str, user_id: str) -> dict[str, Any]:
-    session = _session(session_id, user_id)
+def abort(session_id: str, user_id: str, *, admin: bool = False) -> dict[str, Any]:
+    """Stop a session: its own staged files and still-empty created folders are removed.
+
+    The owner may abort; a global admin may abort anyone's session (review M2), so a stuck
+    upload never blocks the request until it expires.
+    """
+    session = _session(session_id, user_id, admin=admin)
     with session.lock:
         if session.state == "PUBLISHING":
             raise DropUploadError("RESULT_DROP_SESSION_BUSY", "파일을 옮기는 중에는 중지할 수 없습니다.", 409)
         _remove_staging(session)
+        _remove_empty_created(session)
         session.state = "ABORTED"
         view = _session_view(session)
     with _registry_lock:
@@ -953,7 +1068,8 @@ def create_folder(conn: ConnectionLike, project_id: str, request_id: str, enviro
     relative = f"{parent}/{name}"
     if len(str(fs.path(relative))) > MAX_PATH_CHARS or len(display_path(display_root(scope.root), relative)) > MAX_PATH_CHARS:
         raise DropUploadError("RESULT_DROP_PATH_TOO_LONG", "경로가 Windows 길이 한도를 넘습니다. 이름을 줄이세요.", 422)
-    existing = fs.case_collision(parent, name)
+    existing_entry = _DirIndex(fs).lookup(parent, name)
+    existing = f"{parent}/{existing_entry.name}" if existing_entry is not None else None
     if existing:
         raise DropUploadError("RESULT_DROP_FOLDER_EXISTS", "같은 이름의 폴더가 이미 있습니다.", 409,
                               relative_path=existing)

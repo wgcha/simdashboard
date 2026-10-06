@@ -81,8 +81,12 @@ export type RegistrationDeleteResult = { deleted: string[]; counts: Registration
 
 // ---- Project cleanup (contract depth-schema §16) ----
 export type ProjectCleanupCategory = 'DEMO' | 'EMPTY' | 'REGISTERED'
-export type ProjectCleanupCandidate = { project_id: string; name: string; category: ProjectCleanupCategory; selectable: boolean; requests: number; cases: number; runs: number; user_data: Record<string, number>; user_data_total: number }
-export type ProjectCleanupPreviewItem = { project_id: string; name: string; category: ProjectCleanupCategory; deletable: boolean; counts: Record<string, number>; blockers: RegistrationDeleteBlocker[]; user_data: Record<string, number> }
+export type ProjectCleanupSystemPage = { id: string; name: string; versions: number; user_versions: number }
+export type ProjectCleanupAcknowledgeReason = 'RETAINED_DATA' | 'USER_DATA' | 'SYSTEM_ANALYSIS_PAGES'
+/** 보관 데이터 (imported/registered results, Cases, legacy links, media), 직접 만든 데이터, hosted system pages. */
+export type ProjectCleanupDataSummary = { user_data: Record<string, number>; user_data_total: number; retained_data: Record<string, number>; retained_total: number; system_pages: ProjectCleanupSystemPage[]; acknowledge_reasons: ProjectCleanupAcknowledgeReason[]; requires_acknowledgement: boolean }
+export type ProjectCleanupCandidate = ProjectCleanupDataSummary & { project_id: string; name: string; category: ProjectCleanupCategory; selectable: boolean; requests: number; cases: number; runs: number }
+export type ProjectCleanupPreviewItem = ProjectCleanupDataSummary & { project_id: string; name: string; category: ProjectCleanupCategory; deletable: boolean; counts: Record<string, number>; blockers: RegistrationDeleteBlocker[] }
 export type ProjectCleanupPreview = { items: ProjectCleanupPreviewItem[]; totals: Record<string, number>; confirm_token: string }
 export type ProjectCleanupResult = { deleted: string[]; counts: Record<string, number> }
 
@@ -117,8 +121,8 @@ export const folderEnvironmentApi = {
   deleteRegistrations: (registrationIds: string[], confirmToken: string) => requestJson<RegistrationDeleteResult>(apiUrl('/api/folder-discovery/environments/registrations/delete' as never), jsonBody('POST', { registration_ids: registrationIds, confirm_token: confirmToken })),
   projectCleanupCandidates: (signal?: AbortSignal) => requestJson<{ items: ProjectCleanupCandidate[] }>(apiUrl('/api/folder-discovery/environments/project-cleanup' as never), { signal }),
   projectCleanupPreview: (projectIds: string[]) => requestJson<ProjectCleanupPreview>(apiUrl('/api/folder-discovery/environments/project-cleanup/preview' as never), jsonBody('POST', { project_ids: projectIds })),
-  /** 409 `PROJECT_CLEANUP_BLOCKED` (detail carries preview items) or `DELETE_PREVIEW_STALE`. */
-  deleteProjects: (projectIds: string[], confirmToken: string) => requestJson<ProjectCleanupResult>(apiUrl('/api/folder-discovery/environments/project-cleanup/delete' as never), jsonBody('POST', { project_ids: projectIds, confirm_token: confirmToken })),
+  /** 409 `PROJECT_CLEANUP_BLOCKED` (detail carries preview items), `PROJECT_CLEANUP_CONFIRM_REQUIRED` or `DELETE_PREVIEW_STALE`. */
+  deleteProjects: (projectIds: string[], confirmToken: string, acknowledgedProjectIds: string[] = []) => requestJson<ProjectCleanupResult>(apiUrl('/api/folder-discovery/environments/project-cleanup/delete' as never), jsonBody('POST', { project_ids: projectIds, confirm_token: confirmToken, acknowledge_data_project_ids: acknowledgedProjectIds })),
   scan: async (body: { environment: FolderEnvironment; relative_path: string; project_id?: string; request_id?: string }, signal?: AbortSignal) => unwrapGenerated(await apiClient.POST('/api/folder-discovery/environments/scan', { body, signal })) as FolderEnvironmentScan,
   preview: async (body: { scan_id: string; assignments: FolderAssignment[]; require_usage_review: boolean }, signal?: AbortSignal) => unwrapGenerated(await apiClient.POST('/api/folder-discovery/environments/previews', { body, signal })) as FolderEnvironmentPreview,
   usageReview: async (previewId: string, body: { case_relative_path: string; selection: { json: boolean; video: boolean; image: boolean; csv: boolean }; selected_sources?: Record<string, string>; metric_paths?: Record<string, string[]>; excludes?: Record<string, string>; acknowledge_partial: boolean }) => unwrapGenerated(await apiClient.POST('/api/folder-discovery/environments/previews/{preview_id}/usage-review', { params: { path: { preview_id: previewId } }, body })) as UsageSourceReview,

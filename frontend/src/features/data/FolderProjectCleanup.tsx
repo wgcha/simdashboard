@@ -7,7 +7,7 @@ type Props = {
   /** Called after a successful delete so the app can re-read projects and drop a deleted selection. */
   onDeleted: (deletedIds: string[]) => void | Promise<void>
 }
-type Confirm = { ids: string[]; preview: ProjectCleanupPreview | null; items: ProjectCleanupPreviewItem[]; error: string; deleting: boolean }
+type Confirm = { ids: string[]; preview: ProjectCleanupPreview | null; items: ProjectCleanupPreviewItem[]; error: string; deleting: boolean; typed: Record<string, string> }
 
 const CATEGORY_LABELS: Record<ProjectCleanupCategory, string> = { DEMO: '데모', EMPTY: '등록 없음', REGISTERED: '등록됨' }
 const USER_DATA_LABELS: Record<string, string> = {
@@ -31,7 +31,16 @@ const BLOCKER_LABELS: Record<string, string> = {
   RUNNING_EXECUTION: '실행 중인 작업이 있습니다.',
   PROJECT_TEMPLATE_IN_USE: '다른 곳에서 쓰는 프로젝트 템플릿이 있습니다.',
 }
+const RETAINED_LABELS: Record<string, string> = {
+  runs: '해석 이력', results: '결과 값', cases: 'Case', captures: '캡처', legacy_links: '예전 연결', media: '미디어',
+}
 const userDataText = (data: Record<string, number>) => Object.entries(data).map(([key, value]) => `${USER_DATA_LABELS[key] ?? key} ${value}`).join(' · ')
+const retainedText = (data: Record<string, number>) => Object.entries(data).map(([key, value]) => `${RETAINED_LABELS[key] ?? key} ${value.toLocaleString('ko-KR')}`).join(' · ')
+const ACK_LABELS: Record<string, string> = {
+  RETAINED_DATA: '가져오거나 등록한 결과·Case·예전 연결이 함께 지워집니다.',
+  USER_DATA: '사람이 직접 만든 데이터가 함께 지워집니다.',
+  SYSTEM_ANALYSIS_PAGES: '모든 하중경우에서 쓰는 시스템 분석 페이지가 이 프로젝트에 묶여 있어 함께 지워지고 다시 만들어지지 않습니다.',
+}
 
 /** 프로젝트 정리 tab (contract depth-schema §16): demo and unregistered projects, preview → confirm → delete. */
 export function FolderProjectCleanup({ busy, onDeleted }: Props) {
@@ -51,9 +60,9 @@ export function FolderProjectCleanup({ busy, onDeleted }: Props) {
         setItems(value.items); setLoaded(true)
         const selectable = value.items.filter((item) => item.selectable)
         if (!preselected.current) {
-          // Default: demo and unregistered projects without data a person created.
+          // Default: demo projects only. Other projects are chosen explicitly (review H1).
           preselected.current = true
-          setSelected(new Set(selectable.filter((item) => item.user_data_total === 0).map((item) => item.project_id)))
+          setSelected(new Set(selectable.filter((item) => item.category === 'DEMO').map((item) => item.project_id)))
         } else setSelected((current) => new Set([...current].filter((id) => selectable.some((item) => item.project_id === id))))
       })
       .catch((error) => { if (!controller.signal.aborted) setNotice(error instanceof Error ? error.message : String(error)) })
@@ -71,7 +80,7 @@ export function FolderProjectCleanup({ busy, onDeleted }: Props) {
   const toggle = (id: string) => setSelected((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next })
   const openPreview = async () => {
     const ids = [...selected]
-    setConfirm({ ids, preview: null, items: [], error: '', deleting: false }); setNotice('')
+    setConfirm({ ids, preview: null, items: [], error: '', deleting: false, typed: {} }); setNotice('')
     try {
       const preview = await service.projectCleanupPreview(ids)
       setConfirm((current) => current && { ...current, preview, items: preview.items })
@@ -81,7 +90,7 @@ export function FolderProjectCleanup({ busy, onDeleted }: Props) {
     if (!confirm?.preview) return
     setConfirm({ ...confirm, deleting: true, error: '' })
     try {
-      const result = await service.deleteProjects(confirm.ids, confirm.preview.confirm_token)
+      const result = await service.deleteProjects(confirm.ids, confirm.preview.confirm_token, needsName.map((item) => item.project_id))
       setConfirm(null); setSelected(new Set()); setReload((value) => value + 1)
       setNotice(`프로젝트 ${result.deleted.length}개를 정리했습니다. SPDM 폴더·파일은 그대로입니다.`)
       await onDeleted(result.deleted)
@@ -90,6 +99,7 @@ export function FolderProjectCleanup({ busy, onDeleted }: Props) {
       const blockedItems = errorItems<ProjectCleanupPreviewItem>(error)
       const text = code === 'DELETE_PREVIEW_STALE' ? '미리보기 이후 데이터가 바뀌었습니다. 닫고 다시 미리보기를 눌러 주세요.'
         : code === 'PROJECT_CLEANUP_BLOCKED' ? '삭제할 수 없는 프로젝트가 있어 아무것도 삭제하지 않았습니다.'
+          : code === 'PROJECT_CLEANUP_CONFIRM_REQUIRED' ? '보관 데이터가 있는 프로젝트는 이름을 입력해 확인해야 합니다. 아무것도 삭제하지 않았습니다.'
           : error instanceof Error ? error.message : '삭제하지 못했습니다.'
       setConfirm((current) => current && { ...current, deleting: false, error: text, items: blockedItems.length ? blockedItems : current.items, preview: code === 'DELETE_PREVIEW_STALE' ? null : current.preview })
     }
@@ -98,7 +108,8 @@ export function FolderProjectCleanup({ busy, onDeleted }: Props) {
   const totals = confirm?.preview?.totals ?? {}
   const blockers = (confirm?.items ?? []).flatMap((item) => item.blockers.map((blocker) => ({ ...blocker, project: item.name })))
   const blocked = blockers.length > 0 || (confirm?.items ?? []).some((item) => !item.deletable)
-  const warned = (confirm?.items ?? []).filter((item) => Object.keys(item.user_data ?? {}).length > 0)
+  const needsName = (confirm?.items ?? []).filter((item) => item.requires_acknowledgement)
+  const namesTyped = needsName.every((item) => (confirm?.typed[item.project_id] ?? '').trim() === item.name)
   const detailRows = Object.entries(totals).sort(([a], [b]) => a.localeCompare(b))
 
   return <article className="folder-environment-card folder-cleanup">
@@ -113,14 +124,15 @@ export function FolderProjectCleanup({ busy, onDeleted }: Props) {
         <button type="button" className="ghost-button folder-danger-button" disabled={busy || !selected.size || Boolean(confirm)} onClick={() => void openPreview()}>미리보기</button>
       </div>
       <table className="folder-cleanup-table" aria-label="정리할 프로젝트">
-        <thead><tr><th scope="col" aria-label="선택" /><th scope="col">이름</th><th scope="col">구분</th><th scope="col">의뢰</th><th scope="col">Case · 이력</th><th scope="col">직접 만든 데이터</th></tr></thead>
+        <thead><tr><th scope="col" aria-label="선택" /><th scope="col">이름</th><th scope="col">구분</th><th scope="col">의뢰</th><th scope="col">Case · 이력</th><th scope="col">보관 데이터</th><th scope="col">직접 만든 데이터</th></tr></thead>
         <tbody>{items.map((item) => <tr key={item.project_id} className={item.selectable ? '' : 'is-disabled'}>
           <td><input type="checkbox" aria-label={`${item.name} 선택`} checked={selected.has(item.project_id)} disabled={busy || !item.selectable} onChange={() => toggle(item.project_id)} /></td>
           <td><strong>{item.name}</strong><small>{item.project_id}</small></td>
           <td><span className={`folder-cleanup-category is-${item.category.toLowerCase()}`}>{CATEGORY_LABELS[item.category]}</span>{!item.selectable && <small>등록 이력에서 삭제</small>}</td>
           <td>{item.requests}</td>
           <td>{item.cases} · {item.runs}</td>
-          <td>{item.user_data_total > 0 ? <span className="folder-cleanup-warning" title="기본 선택에서 제외됨">⚠ {userDataText(item.user_data)}</span> : '—'}</td>
+          <td>{item.retained_total > 0 ? <span className={item.category === 'DEMO' ? '' : 'folder-cleanup-warning'}>{retainedText(item.retained_data)}</span> : '—'}{item.system_pages.length > 0 && <small>시스템 분석 페이지 {item.system_pages.length}개</small>}</td>
+          <td>{item.user_data_total > 0 ? <span className="folder-cleanup-warning">⚠ {userDataText(item.user_data)}</span> : '—'}</td>
         </tr>)}</tbody>
       </table>
     </>}
@@ -134,13 +146,27 @@ export function FolderProjectCleanup({ busy, onDeleted }: Props) {
       {detailRows.length > 0 && <details className="folder-cleanup-details"><summary>표별 삭제 건수 {detailRows.length}개</summary>
         <table aria-label="표별 삭제 건수"><tbody>{detailRows.map(([table, count]) => <tr key={table}><th scope="row">{TABLE_LABELS[table] ?? table}{TABLE_LABELS[table] ? <code>{table}</code> : null}</th><td>{count}</td></tr>)}</tbody></table>
       </details>}
-      {warned.length > 0 && <p className="folder-cleanup-warning" role="note">⚠ 직접 만든 데이터도 함께 지워집니다: {warned.map((item) => `${item.name} (${userDataText(item.user_data)})`).join(', ')}</p>}
+      {needsName.length > 0 && <div className="folder-cleanup-acknowledge" role="group" aria-label="프로젝트 이름 확인">
+        <strong>⚠ 아래 프로젝트는 이름을 입력해야 삭제할 수 있습니다.</strong>
+        {needsName.map((item) => <div key={item.project_id} className="folder-cleanup-acknowledge-item">
+          <p><b>{item.name}</b></p>
+          <ul>{item.acknowledge_reasons.map((reason) => <li key={reason}>{ACK_LABELS[reason] ?? reason}
+            {reason === 'RETAINED_DATA' && ` (${retainedText(item.retained_data)})`}
+            {reason === 'USER_DATA' && item.user_data_total > 0 && ` (${userDataText(item.user_data)})`}
+            {reason === 'SYSTEM_ANALYSIS_PAGES' && <> {item.system_pages.map((page) => `${page.name} (버전 ${page.versions}${page.user_versions ? `, 사용자 수정 ${page.user_versions}` : ''})`).join(', ')}</>}
+          </li>)}</ul>
+          <label><span>확인하려면 프로젝트 이름 <code>{item.name}</code>을(를) 입력하세요</span>
+            <input type="text" aria-label={`${item.name} 이름 입력`} value={confirm.typed[item.project_id] ?? ''} disabled={confirm.deleting} autoComplete="off"
+              onChange={(event) => { const value = event.target.value; setConfirm((current) => current && { ...current, typed: { ...current.typed, [item.project_id]: value } }) }} />
+          </label>
+        </div>)}
+      </div>}
       <p className="folder-delete-keep"><strong>SPDM 폴더·파일은 삭제되지 않습니다.</strong> 계정·감사 기록·공용 설정도 그대로 둡니다.</p>
       {blocked && <div className="folder-delete-blockers" role="alert"><strong>삭제할 수 없습니다</strong><ul>{blockers.map((blocker) => <li key={`${blocker.project}:${blocker.table}:${blocker.id}:${blocker.reason}`}>{blocker.project}: {BLOCKER_LABELS[blocker.reason] ?? blocker.reason} <code>{blocker.table}</code></li>)}{!blockers.length && <li>삭제할 수 없는 프로젝트가 포함되어 있습니다.</li>}</ul></div>}
       {confirm.error && <p role="alert" className="folder-delete-error">{confirm.error}</p>}
       <footer className="folder-environment-footer"><span />
         <button type="button" className="ghost-button" disabled={confirm.deleting} onClick={() => setConfirm(null)}>취소</button>
-        <button type="button" className="primary-button folder-danger-button" disabled={confirm.deleting || !confirm.preview || blocked} onClick={() => void runDelete()}>{confirm.deleting ? '삭제 중…' : '삭제'}</button>
+        <button type="button" className="primary-button folder-danger-button" disabled={confirm.deleting || !confirm.preview || blocked || !namesTyped} onClick={() => void runDelete()}>{confirm.deleting ? '삭제 중…' : '삭제'}</button>
       </footer>
     </dialog>}
   </article>

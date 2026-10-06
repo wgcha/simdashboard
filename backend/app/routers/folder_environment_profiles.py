@@ -50,6 +50,8 @@ class CleanupTargets(BaseModel):
 
 class CleanupConfirm(CleanupTargets):
     confirm_token: str = Field(min_length=1, max_length=128)
+    # Projects whose name the administrator typed (preview `requires_acknowledgement`).
+    acknowledge_data_project_ids: list[str] = Field(default_factory=list, max_length=cleanup.MAX_IDS)
 
 
 def _invalid(exc: ValueError) -> HTTPException:
@@ -190,7 +192,8 @@ def project_cleanup_delete(payload: CleanupConfirm, request: Request):
                               action="PROJECT_CLEANUP_DELETED", detail=detail, connection=connection)
 
         try:
-            return cleanup.delete(conn, payload.project_ids, payload.confirm_token, audit)
+            return cleanup.delete(conn, payload.project_ids, payload.confirm_token, audit,
+                                  acknowledged_project_ids=payload.acknowledge_data_project_ids)
         except ValueError as exc:
             raise HTTPException(422, {"code": "PROJECT_CLEANUP_INVALID", "message": str(exc)}) from exc
 

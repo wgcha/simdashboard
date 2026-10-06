@@ -9,7 +9,7 @@ import { Select } from '../../shared/components/Select'
 import { SearchableSelect } from '../../shared/components/selectionLabels'
 import { ApiError } from '../../shared/api/errors'
 import { requestResultEnvironments, resolvedResultEnvironment } from '../../shared/api/simulationDashboard'
-import { chunkSha256, resultDropApi, type DropCompletion, type DropConflict, type DropEnvironment, type DropPlan, type DropTree } from '../../shared/api/resultDrop'
+import { chunkSha256, resultDropApi, type DropCompletion, type DropConflict, type DropEnvironment, type DropPlan, type DropTree, type OpenDropSession } from '../../shared/api/resultDrop'
 import { ROLE_LABELS, SKIP_REASON_LABELS, chunkRanges, depthRules, dropEntries, dropGuide, formatBytes, pickedFromInput, walkEntries, type PickedItems } from '../../shared/api/resultDropModel'
 import { LegacyDraftHistory } from './LegacyDraftHistory'
 import './DataWorkspace.css'
@@ -87,6 +87,12 @@ export function ResultDropWorkspace({ embedded = false, contextChanging = false,
   const [conflicts, setConflicts] = useState<DropConflict[]>([])
   const [completion, setCompletion] = useState<DropCompletion | null>(null)
   const stopRef = useRef(false)
+  // Upload phase for unload handling: while chunks are sent the session is aborted on unload
+  // (nothing published yet); while files are being published the page only warns.
+  const phaseRef = useRef<{ sessionId: string; phase: 'uploading' | 'publishing' } | null>(null)
+  const [openSessions, setOpenSessions] = useState<OpenDropSession[]>([])
+  const [sessionsVersion, setSessionsVersion] = useState(0)
+  const [partialBusy, setPartialBusy] = useState(false)
   const fileInput = useRef<HTMLInputElement | null>(null)
   const folderInput = useRef<HTMLInputElement | null>(null)
   const scopeKey = `${projectId}:${requestId}:${environment}`
@@ -134,6 +140,29 @@ export function ResultDropWorkspace({ embedded = false, contextChanging = false,
       .finally(() => { if (!controller.signal.aborted) setTreeBusy(false) })
     return () => controller.abort()
   }, [contextChanging, environment, projectId, requestId, treeVersion])
+
+  useEffect(() => {
+    const onUnload = (event: BeforeUnloadEvent) => {
+      const current = phaseRef.current
+      if (!current) return
+      if (current.phase === 'uploading') resultDropApi.abortOnUnload(current.sessionId)
+      event.preventDefault()
+    }
+    window.addEventListener('beforeunload', onUnload)
+    return () => {
+      window.removeEventListener('beforeunload', onUnload)
+      stopRef.current = true // leaving the screen stops a running upload (its loop aborts the session)
+    }
+  }, [])
+  useEffect(() => {
+    setOpenSessions([])
+    if (!projectId || !requestId || contextChanging) return
+    const controller = new AbortController()
+    resultDropApi.openSessions({ project_id: projectId, request_id: requestId }, controller.signal)
+      .then((value) => { if (!controller.signal.aborted) setOpenSessions(value.sessions) })
+      .catch(() => undefined)
+    return () => controller.abort()
+  }, [contextChanging, projectId, requestId, sessionsVersion])
 
   const roles = useMemo(() => tree?.levels.map((level) => level.role) ?? [], [tree])
   const target = chosen.length ? chosen[chosen.length - 1] : tree?.working_relative_path ?? ''
@@ -205,6 +234,7 @@ export function ResultDropWorkspace({ embedded = false, contextChanging = false,
     try {
       const session = await resultDropApi.start(input)
       sessionId = session.session_id
+      phaseRef.current = { sessionId, phase: 'uploading' }
       const state: Progress = { sessionId, fileCount: session.file_count, doneFiles: 0, totalBytes: session.total_bytes, sentBytes: 0, current: '' }
       setProgress({ ...state })
       for (const entry of session.files) {
@@ -233,20 +263,44 @@ export function ResultDropWorkspace({ embedded = false, contextChanging = false,
         }
         state.doneFiles += 1; setProgress({ ...state })
       }
+      phaseRef.current = { sessionId, phase: 'publishing' }
       const done = await resultDropApi.complete(sessionId)
+      phaseRef.current = null
       setCompletion(done); setProgress(null); setPicked(null); setPlan(null); setConflicts(done.conflicts)
       setTreeVersion((value) => value + 1)
+      setSessionsVersion((value) => value + 1)
       void onDataChanged().catch(() => undefined)
     } catch (reason) {
+      phaseRef.current = null
       const stopped = reason instanceof Error && reason.message === 'STOPPED'
       const detail = detailOf(reason)
       if (Array.isArray(detail.conflicts)) setConflicts(detail.conflicts as DropConflict[])
       // Nothing was published: remove this session's staged files (the server never touches others).
       if (sessionId) await resultDropApi.abort(sessionId).catch(() => undefined)
-      setProgress(null)
+      setProgress(null); setSessionsVersion((value) => value + 1)
       setError(stopped ? '업로드를 중지했습니다. 임시 파일은 지웠고 공유 폴더는 바뀌지 않았습니다.' : messageOf(reason, '업로드하지 못했습니다.'))
     }
   }
+
+  // A partially published upload (files locked by another program): publish the rest, or stop it.
+  const retryPartial = async () => {
+    if (!completion) return
+    setPartialBusy(true); setError('')
+    try {
+      const done = await resultDropApi.complete(completion.session_id)
+      setCompletion({ ...done, cases: done.cases.length ? done.cases : completion.cases })
+      setTreeVersion((value) => value + 1)
+    } catch (reason) { setError(messageOf(reason, '다시 옮기지 못했습니다.')) } finally { setPartialBusy(false); setSessionsVersion((value) => value + 1) }
+  }
+  const stopSession = async (sessionId: string) => {
+    setPartialBusy(true); setError('')
+    try {
+      await resultDropApi.abort(sessionId)
+      if (completion?.session_id === sessionId) setCompletion({ ...completion, state: 'ABORTED' })
+      setNotice('업로드를 중지했습니다. 옮기지 못한 임시 파일과 빈 새 폴더를 지웠습니다.')
+    } catch (reason) { setError(messageOf(reason, '중지하지 못했습니다.')) } finally { setPartialBusy(false); setSessionsVersion((value) => value + 1) }
+  }
+  const otherOpen = openSessions.filter((item) => item.session_id !== completion?.session_id && item.session_id !== progress?.sessionId)
 
   const activeProject = projects.find((item) => item.id === projectId)
   const levelSelects = tree ? tree.levels.slice(1).map((level, index) => {
@@ -341,11 +395,24 @@ export function ResultDropWorkspace({ embedded = false, contextChanging = false,
       </div> : null}
       {completion ? <div className="result-drop__done" role="status" data-testid="result-drop-complete">
         <p><CheckCircle2 aria-hidden="true" /><strong>{completion.published_files}개 파일을 올렸습니다</strong>{completion.created_folders.length ? ` · 새 폴더 ${completion.created_folders.length}개` : ''} · {formatBytes(completion.published_bytes)}</p>
-        <p className="result-drop__sync">{completion.sync.status === 'REFRESHED' || completion.sync.status === 'UNCHANGED' ? 'Case 결과에 반영했습니다.' : '폴더 확인이 늦어지고 있습니다. 30초 안에 자동으로 다시 확인합니다.'}{completion.state === 'PARTIAL' ? ' 일부 파일은 올리지 못했습니다.' : ''}</p>
+        <p className="result-drop__sync">{completion.sync.status === 'REFRESHED' || completion.sync.status === 'UNCHANGED' ? 'Case 결과에 반영했습니다.' : '폴더 확인이 늦어지고 있습니다. 30초 안에 자동으로 다시 확인합니다.'}{completion.state === 'PARTIAL' ? ' 일부 파일은 다른 프로그램이 사용 중이거나 같은 이름이 생겨 옮기지 못했습니다.' : ''}{completion.state === 'ABORTED' ? ' 나머지는 중지했습니다.' : ''}</p>
+        {completion.state === 'PARTIAL' ? <div className="result-drop__actions" data-testid="result-drop-partial">
+          <Button size="sm" variant="primary" onClick={() => void retryPartial()} disabled={partialBusy}>나머지 다시 옮기기</Button>
+          <Button size="sm" variant="ghost" onClick={() => void stopSession(completion.session_id)} disabled={partialBusy}><Square aria-hidden="true" />나머지 중지</Button>
+          {completion.busy.length ? <span className="result-drop__muted">사용 중: {completion.busy.slice(0, 5).join(', ')}</span> : null}
+        </div> : null}
         <div className="result-drop__links">{completion.cases.map((item) => <Link key={item.case_relative_path} className="result-drop__link" to={caseResultsHref(projectId, requestId, environment, item.case_id)}>{item.case_name} Case 결과 열기</Link>)}
           {!completion.cases.length ? <Link className="result-drop__link" to={caseResultsHref(projectId, requestId, environment)}>Case 결과 열기</Link> : null}</div>
         {completion.skipped.length ? <p className="result-drop__muted">올리지 않은 파일 {completion.skipped.length}개: {completion.skipped.slice(0, 5).map((item) => item.relative_path).join(', ')}</p> : null}
       </div> : null}
+    </section> : null}
+
+    {otherOpen.length ? <section className="result-drop__card" aria-label="열린 업로드" data-testid="result-drop-open-sessions">
+      <p className="result-drop__muted">끝나지 않은 업로드 {otherOpen.length}개 · 60분 동안 움직임이 없으면 자동으로 정리됩니다.</p>
+      <ul className="result-drop__open">{otherOpen.map((item) => <li key={item.session_id}>
+        <code>{item.target_relative_path}</code><span>{item.own ? '내 업로드' : `다른 사용자(${item.user_id})`} · {item.state === 'PARTIAL' ? `일부 완료 ${item.published_files}/${item.file_count}` : `파일 ${item.file_count}개`} · {formatBytes(item.total_bytes)}</span>
+        <Button size="sm" variant="ghost" onClick={() => void stopSession(item.session_id)} disabled={partialBusy || uploading}>중지</Button>
+      </li>)}</ul>
     </section> : null}
 
     {projectId && requestId ? <LegacyDraftHistory projectId={projectId} requestId={requestId} environment={environment} resultsHref={(caseId) => caseResultsHref(projectId, requestId, environment, caseId)} /> : null}

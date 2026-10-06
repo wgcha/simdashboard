@@ -138,19 +138,18 @@ def legacy_zone_allows(rel_path: str, caller: str) -> bool:
 
 
 def working_zone_allows(rel_path: str) -> bool:
-    """Strictly below a ``Working`` folder that has a non-empty request prefix and no ``Final`` ancestor (W8).
+    """Strictly below ``<project>/<request>/Working`` (W8; review L2).
 
+    At least two folders above ``Working`` (project, request; upper CONTAINER levels may add
+    more), exactly one ``Working`` segment and no ``Final`` segment anywhere, no ``.``/``..``.
     The upload service additionally confines every write to the selected request's own
-    ``Working`` folder; this is the coarse provider-level guard.
+    ``Working`` folder from the registered binding; this is the provider-level guard.
     """
     parts = [part.casefold() for part in _segments(rel_path)]
-    for index, part in enumerate(parts):
-        if part != "working" or index == 0:
-            continue
-        if "final" in parts[:index]:
-            return False
-        return len(parts) > index + 1
-    return False
+    if any(part in {".", ".."} for part in parts) or "final" in parts or parts.count("working") != 1:
+        return False
+    index = parts.index("working")
+    return index >= 2 and len(parts) > index + 1
 
 
 def check_write(rel_path: str, zone: str, caller: str) -> None:
