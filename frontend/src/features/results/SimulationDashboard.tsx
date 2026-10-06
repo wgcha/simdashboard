@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Link } from 'react-router-dom'
 import { AlertTriangle, Expand, Image as ImageIcon, Info, Layers3, Play, RotateCcw, SlidersHorizontal } from 'lucide-react'
@@ -12,9 +12,12 @@ import { SimulationLocationMap } from './SimulationLocationMap'
 import { SimulationResultGraph } from './SimulationResultGraph'
 import { CaseFinalizationPanel } from './CaseFinalizationPanel'
 import { CaseVideoGrid } from './CaseVideoGrid'
+import { FolderNameWarnings, SceneNameWarningIcon, SceneNameWarningProvider } from './FolderNameWarnings'
 import { useCaseHierarchyParams } from '../../shared/hooks/useCaseHierarchyParams'
 import { CaseReportLauncher } from './caseReport/CaseReportLauncher'
 import type { CaseReportFinalScope, CaseReportScope } from './caseReport/caseReport'
+import { CaseCompareView } from './CaseCompareView'
+import type { CaseCompareReport, ComparePath } from './caseCompare'
 import { USAGE_DIRECTION_LABELS, USAGE_DIRECTIONS, usageCell, usageEvaluationLabel, usageEvaluationRows, usageFieldKey, usageMetricStatus, usageStatusText, type UsageMetric } from './usageEvaluations'
 
 type Props = {
@@ -56,9 +59,9 @@ function currentHierarchyChoice(item: DashboardChoice, activeCaptureId: string) 
   return item.capture_id == null || (activeCaptureId !== '' && item.capture_id === activeCaptureId)
 }
 
-type ViewTab = 'summary' | 'compare' | 'video' | 'materials'
+type ViewTab = 'summary' | 'compare' | 'cases' | 'video' | 'materials'
 type CompareView = 'edges' | 'contours' | 'behavior'
-const VIEW_TABS: Array<{ id: ViewTab; label: string }> = [{ id: 'summary', label: '요약' }, { id: 'compare', label: 'Scene 비교' }, { id: 'video', label: '영상' }, { id: 'materials', label: '소재·물성' }]
+const VIEW_TABS: Array<{ id: ViewTab; label: string }> = [{ id: 'summary', label: '요약' }, { id: 'compare', label: 'Scene 비교' }, { id: 'cases', label: 'Case 비교' }, { id: 'video', label: '영상' }, { id: 'materials', label: '소재·물성' }]
 
 function ViewTabs({ tabs, active, onSelect }: { tabs: Array<{ id: ViewTab; label: string }>; active: ViewTab; onSelect: (tab: ViewTab) => void }) {
   const refs = useRef(new Map<ViewTab, HTMLButtonElement>())
@@ -111,6 +114,9 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
   const [lines, setLines] = useState<string[]>(['1', '2', '3', '4'])
   const [comparison, setComparison] = useState<DashboardComparisonMember[]>([])
   const [pathTarget, setPathTarget] = useState<HTMLDivElement | null>(null)
+  // W5: the Case 비교 table while that tab is open (offered in the 보고서 dialog).
+  const [compareReport, setCompareReport] = useState<CaseCompareReport | null>(null)
+  const updateCompareReport = useCallback((next: CaseCompareReport | null) => setCompareReport(next), [])
   const latestCatalogKey = useRef('')
   const loadedCatalogKey = useRef('')
   // A request or environment change drops the previous catalog and local
@@ -218,7 +224,7 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
     setComparison([...comparison, { simulation_case_id: dashboardCaseId, load_case_id: loadCaseId, execution_run_id: runId, run_option_id: optionId, capture_id: activeCaptureId, mode, component_id: componentId, basis }])
   }
 
-  const tabs = VIEW_TABS.filter((item) => tab === 'distribution' || item.id === 'summary' || item.id === 'materials')
+  const tabs = VIEW_TABS.filter((item) => tab === 'distribution' || item.id === 'summary' || item.id === 'cases' || item.id === 'materials')
   const activeView: ViewTab = materialsActive ? 'materials' : tabs.some((item) => item.id === view) ? view : 'summary'
   const selectView = (next: ViewTab) => {
     // `result_environment` is left as is while 소재·물성 is open (materials are
@@ -260,10 +266,15 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
   </details> : null
 
   const componentLabel = componentChoices.find((item) => item.id === componentId)?.label
-  const viewContext = tab === 'distribution' && !materialsActive && (activeView === 'summary' || activeView === 'compare') && componentLabel && basis ? `${componentLabel} · ${basisLabel(basis)}` : ''
+  const viewContext = tab === 'distribution' && !materialsActive && (activeView === 'summary' || activeView === 'compare' || activeView === 'cases') && componentLabel && basis ? `${componentLabel} · ${basisLabel(basis)}` : ''
   const distributionEmpty = catalog?.folder_schema?.status === 'AVAILABLE' && selectedCase?.source === 'FOLDER_SCHEMA' && !selectedCase.capture_count ? '이 Case에는 아직 결과 파일이 없습니다. Scene 폴더에 결과를 넣으면 자동으로 표시됩니다.' : '결과를 불러오는 중입니다.'
   const distribution = (section: 'summary' | 'compare') => <DistributionArea key={`${projectId}:${requestId}`} section={section} compareView={compareView} onCompareView={setCompareView} edges={edges} lines={lines} comparison={comparison} caseId={dashboardCaseId} loadCaseId={loadCaseId} captureId={activeCaptureId} runId={runId} optionId={optionId} mode={mode} componentId={componentId} basis={basis} hasCapturedRun={runChoices.some((item) => item.id === runId && item.capture_id === activeCaptureId)} hasCapturedOption={options.some((item) => item.id === optionId && item.capture_id === activeCaptureId)} emptyContextMessage={distributionEmpty} />
+  const optionChoiceForCompare = options.find((item) => item.id === optionId)
+  const comparePathReady = Boolean(activeCaptureId && runId && mode && componentId && basis && optionChoiceForCompare && runChoices.some((item) => item.id === runId && item.capture_id === activeCaptureId))
+  const comparePath: ComparePath | null = tab === 'distribution' && comparePathReady && (basis === 'DETAIL' || basis === 'REPORTED_SUMMARY') ? { loadCase: loadChoices.find((item) => item.id === loadCaseId)?.label ?? '', run: runChoices.find((item) => item.id === runId)?.label ?? '', option: optionChoiceForCompare?.option_label || optionChoiceForCompare?.label || '', component: componentLabel ?? '', basis, edgeKeys: edges.join(','), lineIndices: lines.join(',') } : null
+  const comparePathRows = comparePath ? [{ label: '하중경우', value: comparePath.loadCase }, { label: 'Run Case', value: comparePath.run }, { label: 'Run Option', value: comparePath.option }, { label: 'Component · 기준', value: `${comparePath.component} · ${basisLabel(comparePath.basis)}` }] : []
   const content = activeView === 'materials' ? renderMaterials?.(pathTarget) ?? null
+    : activeView === 'cases' && catalog ? <CaseCompareView key={`${projectId}:${requestId}:${tab}`} projectId={projectId} requestId={requestId} environment={tab === 'usage' ? 'USAGE' : 'DISTRIBUTION'} catalog={catalog} currentCaseId={selectedCase?.id ?? caseId} path={comparePath} pathHint="Case 경로에서 결과가 있는 하중경우·Run Case·Run Option을 선택하면 같은 경로로 Case를 비교합니다." pathRows={comparePathRows} canFinalize={canRefreshSchema} onReport={updateCompareReport} />
     : tab === 'usage' ? <UsageArea key={`${caseId}:${captureId}:${referenceCaseId}:${referenceCaptureId}`} caseId={dashboardCaseId} captureId={activeCaptureId} referenceCaseId={catalog?.cases.find((item) => item.id === referenceCaseId)?.dashboard_case_id ?? referenceCaseId} referenceCaptureId={referenceCaptureId} />
     : activeView === 'video' ? (runId && !optionId && options.length > 1 ? <State message="Run Option을 선택하세요." /> : activeCaptureId && runId ? <CaseVideoGrid key={`${activeCaptureId}:${runId}:${optionId}`} captureId={activeCaptureId} runId={runId} runOptionId={optionId || undefined} mode={mode || undefined} /> : <State message={distributionEmpty} />)
     : distribution(activeView === 'compare' ? 'compare' : 'summary')
@@ -281,6 +292,7 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
     source: { kind: 'case_usage', projectId, requestId, caseId: dashboardCaseId, captureId: activeCaptureId, referenceCaseId: referenceCaptureId ? referenceDashboardCaseId : '', referenceCaptureId },
     labels: { project: '', request: '', caseLabel: caseText, reference: referenceCaseId ? [caseLabel(referenceCaseId), catalog?.captures.find((item) => item.id === referenceCaptureId)?.label].filter(Boolean).join(' · ') : '' },
   } : null
+  const reportScopeWithCompare: CaseReportScope | null = reportScope && compareReport && activeView === 'cases' && compareReport.environment === (tab === 'usage' ? 'USAGE' : 'DISTRIBUTION') ? { ...reportScope, comparison: compareReport } : reportScope
   // Final designation reports cover the whole Case regardless of the on-screen selection.
   // The Final report always uses the same basis as Final designation: the merged latest
   // result (newest capture per Scene; for usage the newest capture), never a history entry.
@@ -291,7 +303,8 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
   return <section className="simulation-dashboard" data-ui-density="v1" aria-label="SPDM 해석 결과 대시보드">
     <header className="case-results-head">
       {environments?.length === 2 ? <div className="case-env-toggle" role="group" aria-label="결과 환경"><button type="button" aria-pressed={tab === 'usage'} className={tab === 'usage' ? 'active' : ''} onClick={() => setTab('usage')}>사용환경</button><button type="button" aria-pressed={tab === 'distribution'} className={tab === 'distribution' ? 'active' : ''} onClick={() => setTab('distribution')}>유통환경</button></div> : null}
-      <div className="case-results-head__actions">{headerExtra}{catalog ? <CaseReportLauncher scope={reportScope} disabledReason={materialsActive ? '소재·물성 탭에서는 보고서를 만들지 않습니다.' : tab === 'usage' ? '결과가 있는 사용환경 Case를 선택하면 보고서를 만들 수 있습니다.' : '유통환경에서 결과가 있는 Run Case와 Run Option을 선택하면 보고서를 만들 수 있습니다.'} /> : null}{catalog ? <CaseFinalizationPanel projectId={projectId} requestId={requestId} environment={tab === 'usage' ? 'USAGE' : 'DISTRIBUTION'} caseId={dashboardCaseId} captureId={hasCapturedCase ? finalCaptureId : ''} hasCapturedCase={hasCapturedCase} canFinalize={canRefreshSchema} reportScope={finalScope} /> : null}</div>
+      {materialsActive ? null : <FolderNameWarnings warnings={catalog?.name_warnings} />}
+      <div className="case-results-head__actions">{headerExtra}{catalog ? <CaseReportLauncher scope={reportScopeWithCompare} disabledReason={materialsActive ? '소재·물성 탭에서는 보고서를 만들지 않습니다.' : tab === 'usage' ? '결과가 있는 사용환경 Case를 선택하면 보고서를 만들 수 있습니다.' : '유통환경에서 결과가 있는 Run Case와 Run Option을 선택하면 보고서를 만들 수 있습니다.'} /> : null}{catalog ? <CaseFinalizationPanel projectId={projectId} requestId={requestId} environment={tab === 'usage' ? 'USAGE' : 'DISTRIBUTION'} caseId={dashboardCaseId} captureId={hasCapturedCase ? finalCaptureId : ''} hasCapturedCase={hasCapturedCase} canFinalize={canRefreshSchema} reportScope={finalScope} /> : null}</div>
     </header>
     {noResults && !materialsActive ? <State message={NO_RESULTS_MESSAGE} /> : null}
     {catalogError && !catalog && !materialsActive ? <State message={catalogError} error /> : null}
@@ -303,7 +316,7 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
     {!materialsActive && catalog && !catalog.cases.length ? <State message="확정된 Case가 없습니다. 폴더 연결·규칙에서 구조를 확인하세요." /> : null}
     {noResults && !materialsActive ? null : <>
     <div className="case-view-bar"><ViewTabs tabs={tabs} active={activeView} onSelect={selectView} /><div className="case-view-bar__end">{viewContext ? <span className="case-view-context" title={`표시 중: ${viewContext}`}>{viewContext}</span> : null}{displayOptions}</div></div>
-    <div className="case-view-panel" id="case-view-panel" role="tabpanel" aria-labelledby={`case-view-tab-${activeView}`}>{content}</div>
+    <div className="case-view-panel" id="case-view-panel" role="tabpanel" aria-labelledby={`case-view-tab-${activeView}`}><SceneNameWarningProvider warnings={catalog?.name_warnings} runOptionId={optionId}>{content}</SceneNameWarningProvider></div>
     </>}
   </section>
 }
@@ -414,7 +427,7 @@ function EdgePanels({ data, onSelect }: { data: DashboardDistribution; onSelect:
   }
   return <><SceneTable scenes={data.scenes} /><div className="simulation-dashboard__panel-controls"><fieldset><legend>Case 범례</legend><div className="simulation-dashboard__case-actions"><button type="button" onClick={() => setVisible(memberIds)}>전체 선택</button><button type="button" onClick={() => setVisible([])}>전체 해제</button></div>{data.members.map((member, index) => <label key={member.id}><input type="checkbox" checked={visible.includes(member.id)} onChange={() => setVisible((current) => current.includes(member.id) ? current.filter((id) => id !== member.id) : [...current, member.id])} /><i style={{ background: memberColor(member, index) }} />{member.label}</label>)}</fieldset><label>표시 순서<select value={order} onChange={(event) => setOrder(event.target.value as 'scene' | 'case')}><option value="scene">Scene별</option><option value="case">Case별</option></select></label><label>패널 크기<select value={size} onChange={(event) => setSize(event.target.value as 'compact' | 'wide')}><option value="compact">작게</option><option value="wide">크게</option></select></label></div>{members.length ? <div className={`simulation-dashboard__edge-panels ${size}`}>{EDGES.map((edge) => <section key={edge}><header><h3>{edge}</h3></header><SimulationResultGraph chartId={`edge-${edge}`} title={`${edge} 엣지 수준`} points={rows(edge)} members={members} onSelect={onSelect} valueName={edge} /></section>)}</div> : <State message="표시할 Simulation Case가 없습니다. 전체 선택 또는 Case를 선택하세요." />}</>
 }
-function SceneTable({ scenes }: { scenes: DashboardScene[] }) { return <div className="simulation-dashboard__scene-table"><span>Scene 설명</span>{scenes.map((scene) => <div key={scene.id}><b>{scene.scene_sequence_number ?? '순번 미확인'}</b><span>{scene.label}</span><small>{[scene.contact_code, scene.repetition, scene.order_status ? statusText(scene.order_status) : null].filter(Boolean).join(' · ') || '설명 미확인'}</small></div>)}</div> }
+function SceneTable({ scenes }: { scenes: DashboardScene[] }) { return <div className="simulation-dashboard__scene-table"><span>Scene 설명</span>{scenes.map((scene) => <div key={scene.id}><b>{scene.scene_sequence_number ?? '순번 미확인'}</b><span>{scene.label}<SceneNameWarningIcon label={scene.label} /></span><small>{[scene.contact_code, scene.repetition, scene.order_status ? statusText(scene.order_status) : null].filter(Boolean).join(' · ') || '설명 미확인'}</small></div>)}</div> }
 function ContourMatrix({ data, onSelect }: { data: DashboardDistribution; onSelect: (sceneId: string, memberId: string) => void }) {
   const [transpose, setTranspose] = useState(false)
   const rows = transpose ? data.members : data.scenes
@@ -423,10 +436,10 @@ function ContourMatrix({ data, onSelect }: { data: DashboardDistribution; onSele
   return <section className="simulation-dashboard__matrix"><header><div><h3>Scene별 Cell Tmax 마지막 Frame Contour <InfoTip text="최종 프레임 근거가 없는 이미지는 '프레임 미확인'으로 표시합니다. 공통 Scale bar가 확인되지 않아 셀별 원본 범례를 유지합니다." /></h3></div><button type="button" onClick={() => setTranspose(!transpose)}><RotateCcw /> 행/열 전치</button></header><div className="simulation-dashboard__matrix-scroll"><div className="simulation-dashboard__matrix-grid" style={{ gridTemplateColumns: `minmax(220px, .7fr) repeat(${columns.length}, minmax(190px, 1fr))` }}><div className="simulation-dashboard__matrix-header">{transpose ? 'Case' : 'Scene / 자세·충돌'}</div>{columns.map((column) => <div className="simulation-dashboard__matrix-header" key={column.id} title={'design_description' in column ? [column.label, column.design_description].filter(Boolean).join(' · ') : column.label}>{column.label}{'design_description' in column && column.design_description ? <small>{column.design_description}</small> : null}</div>)}{rows.flatMap((row) => [<SceneOrCaseHeader key={`${row.id}-label`} item={row} />, ...columns.map((column) => { const scene = transpose ? column as DashboardScene : row as DashboardScene; const member = transpose ? row as DashboardMember : column as DashboardMember; const cell = cellByContext.get(`${scene.id}:${member.id}`); return <MatrixCell key={cell?.cell_id ?? `${scene.id}:${member.id}`} cellId={cell?.cell_id ?? `${scene.id}:${member.id}`} asset={cell?.asset} status={cell?.status} reason={cell?.reason} value={cell?.value} scaleStatus={cell?.scale_status} showContourMeta onClick={() => onSelect(scene.id, member.id)} /> })])}</div></div></section>
 }
 function SceneOrCaseHeader({ item }: { item: DashboardScene | DashboardMember }) {
-  if ('scene_sequence_number' in item) return <div className="simulation-dashboard__matrix-header simulation-dashboard__scene-context" title={[item.label, item.description].filter(Boolean).join(' · ')}><b>{item.scene_sequence_number ?? '순번 미확인'} · {item.label}</b><small>{[item.description, item.contact_code, item.repetition, item.order_status ? statusText(item.order_status) : null].filter(Boolean).join(' · ') || '자세·충돌 정보 미확인'}</small></div>
+  if ('scene_sequence_number' in item) return <div className="simulation-dashboard__matrix-header simulation-dashboard__scene-context" title={[item.label, item.description].filter(Boolean).join(' · ')}><b>{item.scene_sequence_number ?? '순번 미확인'} · {item.label}<SceneNameWarningIcon label={item.label} /></b><small>{[item.description, item.contact_code, item.repetition, item.order_status ? statusText(item.order_status) : null].filter(Boolean).join(' · ') || '자세·충돌 정보 미확인'}</small></div>
   return <div className="simulation-dashboard__matrix-header" title={[item.label, item.design_description].filter(Boolean).join(' · ')}><b>{item.label}</b>{item.design_description ? <small>{item.design_description}</small> : null}</div>
 }
-function BehaviorMatrix({ data, sceneId, onSelect }: { data: DashboardDistribution; sceneId: string; onSelect: (sceneId: string, memberId: string) => void }) { const scene = data.scenes.find((item) => item.id === sceneId) ?? data.scenes[0]; if (!scene) return <State message="Scene이 없습니다." />; return <section className="simulation-dashboard__matrix"><header><div><h3>Scene별 거동</h3><small>{scene.label}</small></div></header><div className="simulation-dashboard__matrix-scroll"><div className="simulation-dashboard__matrix-grid" style={{ gridTemplateColumns: `minmax(150px,.45fr) repeat(${data.members.length}, minmax(190px, 1fr))` }}><strong>대상</strong>{data.members.map((member) => <strong key={member.id}>{member.label}</strong>)}{ROLES.flatMap((role) => [<strong key={`${role}-label`}>{role}</strong>, ...data.members.map((member) => { const cell = data.behaviors.find((candidate) => candidate.scene_id === scene.id && candidate.member_id === member.id && candidate.subject_role === role); return <MatrixCell key={cell?.cell_id ?? `${scene.id}:${member.id}:${role}`} cellId={cell?.cell_id ?? `${scene.id}:${member.id}:${role}`} asset={cell?.asset} status={cell?.status} reason={cell?.reason} onClick={() => onSelect(scene.id, member.id)} /> })])}</div></div></section> }
+function BehaviorMatrix({ data, sceneId, onSelect }: { data: DashboardDistribution; sceneId: string; onSelect: (sceneId: string, memberId: string) => void }) { const scene = data.scenes.find((item) => item.id === sceneId) ?? data.scenes[0]; if (!scene) return <State message="Scene이 없습니다." />; return <section className="simulation-dashboard__matrix"><header><div><h3>Scene별 거동</h3><small>{scene.label}<SceneNameWarningIcon label={scene.label} /></small></div></header><div className="simulation-dashboard__matrix-scroll"><div className="simulation-dashboard__matrix-grid" style={{ gridTemplateColumns: `minmax(150px,.45fr) repeat(${data.members.length}, minmax(190px, 1fr))` }}><strong>대상</strong>{data.members.map((member) => <strong key={member.id}>{member.label}</strong>)}{ROLES.flatMap((role) => [<strong key={`${role}-label`}>{role}</strong>, ...data.members.map((member) => { const cell = data.behaviors.find((candidate) => candidate.scene_id === scene.id && candidate.member_id === member.id && candidate.subject_role === role); return <MatrixCell key={cell?.cell_id ?? `${scene.id}:${member.id}:${role}`} cellId={cell?.cell_id ?? `${scene.id}:${member.id}:${role}`} asset={cell?.asset} status={cell?.status} reason={cell?.reason} onClick={() => onSelect(scene.id, member.id)} /> })])}</div></div></section> }
 function scopeText(scope?: string | null) { return scope === 'EXTRACTED_SIDES_AND_CORNERS' ? '추출 측면·코너' : scope === 'EXTRACTED_SELECTED_LINES' ? '선택 라인의 추출 측면' : scope === 'SELECTED_SIDE_LINES' || scope === 'SELECTED_EDGE_LINES' ? '선택 엣지·라인' : '집계 범위 미확인' }
 function MatrixCell({ cellId, asset, status, reason, value, scaleStatus, showContourMeta = false, onClick }: { cellId: string; asset?: DashboardAsset | null; status?: string; reason?: string | null; value?: DashboardValue | null; scaleStatus?: string | null; showContourMeta?: boolean; onClick: () => void }) { return <div className="simulation-dashboard__matrix-cell" role="button" tabIndex={0} data-cell-id={cellId} onClick={onClick} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') onClick() }}>{asset ? <Media asset={asset} /> : <span>{missingText(status, reason)}</span>}{showContourMeta ? <div className="simulation-dashboard__matrix-meta"><small>값: {value ? valueText(value) : '값 없음'}</small><small>집계: {value?.basis === 'REPORTED_SUMMARY' ? '원본 요약' : value?.basis === 'DETAIL' ? '상세 추출' : '집계 범위 미확인'} · {scopeText(value?.scope)}</small><small>상태: {statusText(value?.completeness ?? value?.status ?? status)}</small><small title="이미지와 수치의 시간 정합성은 확인되지 않았습니다.">시간 정합성 미확인 · Scale bar {!scaleStatus || scaleStatus === 'UNCONFIRMED' ? '미확인' : statusText(scaleStatus)}</small></div> : null}</div> }
 function SceneDetail({ sceneId, member, lineIndices }: { sceneId: string; member?: DashboardMember; lineIndices: string }) { const [data, setData] = useState<DashboardSceneDetail | null>(null); const [error, setError] = useState(''); const [position, setPosition] = useState('TOP'); const latestKey = useRef('')

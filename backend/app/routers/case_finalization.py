@@ -4,6 +4,8 @@ Flow: ``POST /preview`` (signed plan) -> ``PUT /{operation_id}/reports/{pptx|htm
 (raw body, one request per browser-built report) -> ``POST /confirm`` with
 ``report_formats``. Reports use a separate raw-body upload step bound to the
 operation (no multipart runtime dependency); each request carries one file.
+W2: confirm records a copy job and returns at once (``state`` QUEUED/RUNNING, or
+COMPLETE with ``record``); ``GET /{operation_id}/job`` reports its progress.
 """
 from __future__ import annotations
 
@@ -38,16 +40,19 @@ class ConfirmInput(FinalizationInput):
     report_formats: list[Literal["pptx", "html"]] = Field(default_factory=list, max_length=2)
 
 
-_CONFLICT_CODES = {"FINALIZATION_ALREADY_COMPLETED", "FINALIZATION_REPORT_FORMATS_MISMATCH",
-                   "FINALIZATION_REPORTS_UNEXPECTED_FILE", "FINALIZATION_LEGACY_REPORTS_PRESENT"}
+_CONFLICT_CODES = {"FINALIZATION_ALREADY_COMPLETED", "FINALIZATION_NO_CURRENT", "FINALIZATION_CURRENT_UNVERIFIED", "FINALIZATION_CURRENT_MISSING", "FINALIZATION_REPAIR_RETRY", "FINALIZATION_REPORT_FORMATS_MISMATCH",
+                   "FINALIZATION_REPORTS_UNEXPECTED_FILE", "FINALIZATION_LEGACY_REPORTS_PRESENT",
+                   "FINALIZATION_JOB_ACTIVE", "FINALIZATION_PUBLISH_BUSY", "FINALIZATION_SOURCE_BUSY"}
 
 
 def _error(exc: service.CaseFinalizationError) -> HTTPException:
     if exc.code in {"FINALIZATION_REPORT_TOO_LARGE", "FINALIZATION_OUTPUT_TOO_LARGE"}:
         status = 413
+    elif exc.code == "FINALIZATION_DISK_SPACE":
+        status = 507
     elif exc.code == "FINALIZATION_REPORT_BUSY":
         status = 429
-    elif exc.code == "FINALIZATION_WRITE_FAILED":
+    elif exc.code in {"FINALIZATION_WRITE_FAILED", "FINALIZATION_DISK_UNAVAILABLE"}:
         status = 503
     elif exc.code in _CONFLICT_CODES:
         status = 409
@@ -91,9 +96,10 @@ def confirm(payload: ConfirmInput, request: Request):
         write_audit_event(
             request=request, principal=request.state.principal, status_code=200,
             action="CASE_FINALIZATION_CONFIRMED",
+            # W2: the copy runs in the background; ``state`` is QUEUED/RUNNING (or COMPLETE on a repeat).
             detail={"project_id": payload.project_id, "request_id": payload.request_id,
                     "case_id": payload.case_id, "capture_id": payload.capture_id,
-                    "operation_id": payload.operation_id,
+                    "operation_id": payload.operation_id, "state": result.get("state"),
                     "reports": [{"format": item["format"], "sha256": item["sha256"], "size": item["size"]}
                                 for item in result.get("reports", [])]},
             connection=conn,
@@ -179,7 +185,69 @@ def status(request: Request, project_id: str = Query(min_length=1, max_length=12
     with connect() as conn:
         require_resource_permission(request, PROJECT_DATA_VIEW, "request", request_id, conn=conn)
         try:
-            return service.status(conn, project_id=project_id, request_id=request_id,
-                                  environment=environment, case_id=case_id)
+            result = service.status(conn, project_id=project_id, request_id=request_id,
+                                    environment=environment, case_id=case_id)
         except service.CaseFinalizationError as exc:
             raise _error(exc) from exc
+        # W3: the summary repair override is a global-admin action; the UI shows it only then.
+        return {**result, "can_override_summary": bool(getattr(request.state.principal, "is_global_admin", False))}
+
+
+@router.get("/{operation_id}/job")
+def job_status(request: Request, operation_id: str = Path(pattern=r"^[0-9a-f]{32}$"),
+               project_id: str = Query(min_length=1, max_length=128),
+               request_id: str = Query(min_length=1, max_length=128),
+               environment: Literal["USAGE", "DISTRIBUTION"] = Query(...),
+               case_id: str = Query(min_length=1, max_length=128)):
+    """Copy job progress (W2); an interrupted job is resumed with the same Final ID."""
+    with connect() as conn:
+        require_resource_permission(request, PROJECT_DATA_VIEW, "request", request_id, conn=conn)
+        try:
+            return service.job_status(conn, project_id=project_id, request_id=request_id,
+                                      environment=environment, case_id=case_id, operation_id=operation_id)
+        except service.CaseFinalizationError as exc:
+            raise _error(exc) from exc
+
+
+class SummaryRepairInput(BaseModel):
+    project_id: str = Field(min_length=1, max_length=128)
+    request_id: str = Field(min_length=1, max_length=128)
+    environment: Literal["USAGE", "DISTRIBUTION"]
+    case_id: str = Field(min_length=1, max_length=128)
+    # Audited override: allow moving the pointer off a missing current Final and replacing a
+    # Final/current.json that the app did not write (W3 review M1/M2).
+    override: bool = False
+
+
+@router.post("/summary/repair")
+def repair_summary(payload: SummaryRepairInput, request: Request):
+    """W3: rewrite ``Final/current.json`` (and the signed pointer) for the current Final; returns the status.
+
+    ``override`` needs a global admin. Success and failure are both audited (override flag, error code).
+    """
+    with connect() as conn:
+        require_resource_permission(request, RESULT_IMPORT, "request", payload.request_id, conn=conn)
+        principal = request.state.principal
+        detail = {"project_id": payload.project_id, "request_id": payload.request_id,
+                  "environment": payload.environment, "override": payload.override}
+
+        def audit(status_code: int, action: str, extra: dict) -> None:
+            # A failure is raised afterwards (which rolls back ``conn``): record it on its own connection.
+            write_audit_event(request=request, principal=principal, status_code=status_code, action=action,
+                              detail={**detail, **extra}, connection=conn if status_code == 200 else None)
+
+        if payload.override and not getattr(principal, "is_global_admin", False):
+            audit(403, "CASE_FINALIZATION_SUMMARY_REPAIR_FAILED", {"code": "GLOBAL_ADMIN_REQUIRED"})
+            raise HTTPException(403, {"code": "GLOBAL_ADMIN_REQUIRED",
+                                      "message": "요약 파일 강제 갱신(override)은 전역 관리자만 할 수 있습니다."})
+        try:
+            result = service.repair_summary(conn, project_id=payload.project_id, request_id=payload.request_id,
+                                            environment=payload.environment, case_id=payload.case_id,
+                                            actor=principal.user_id, override=payload.override)
+        except service.CaseFinalizationError as exc:
+            error = _error(exc)
+            audit(error.status_code, "CASE_FINALIZATION_SUMMARY_REPAIR_FAILED", {"code": exc.code})
+            raise error from exc
+        audit(200, "CASE_FINALIZATION_SUMMARY_REPAIRED",
+              {"current_final": (result.get("current_final") or {}).get("operation_id")})
+        return {**result, "can_override_summary": bool(getattr(principal, "is_global_admin", False))}

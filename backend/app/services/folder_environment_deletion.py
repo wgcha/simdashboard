@@ -234,7 +234,76 @@ def _owned_entities(conn, registration: dict, registry: list[tuple], refs: dict)
                 if threshold is None or when is None or when < threshold:
                     continue  # existed before this registration (LINK): preserve (§13.2-4)
             owned[role].add(entity_id)
+    # §13.2-5: the last live registration of a project/request also owns what an already
+    # DELETED registration of the same project/request created, so deleting registrations
+    # one by one leaves no empty project or request behind. Inherited ownership is quiet:
+    # when other data hangs off the inherited entity it is simply kept (no blocker).
+    schema = _Schema(conn)
+    for role, table, stamp, key in (("REQUEST", "analysis_requests", "requested_at", "request_id"),
+                                    ("PROJECT", "projects", "created_at", "project_id")):
+        entity_id = registration[key]
+        if not entity_id or entity_id in owned[role] or entity_id in refs["targets"]:
+            continue
+        if not _created_by_deleted_registration(conn, key, entity_id, table, stamp):
+            continue
+        if role == "REQUEST" and _request_has_foreign_data(conn, schema, entity_id):
+            continue
+        if role == "PROJECT" and _project_has_foreign_data(conn, schema, entity_id, owned["REQUEST"]):
+            continue
+        owned[role].add(entity_id)
     return owned["PROJECT"], owned["REQUEST"]
+
+
+def _request_has_foreign_data(conn, schema: _Schema, request_id: str) -> bool:
+    for table, column, key, _reason in REQUEST_BLOCKERS:
+        if schema.has(table, column, key) and _select(conn, f"SELECT 1 FROM {table} WHERE {column}=? LIMIT 1", [request_id]):
+            return True
+    work_items = [str(r[0]) for r in _select(conn, "SELECT id FROM request_work_items WHERE request_id=?", [request_id])] \
+        if schema.has("request_work_items", "request_id") else []
+    for table, column, key, _reason in WORK_ITEM_BLOCKERS:
+        if work_items and schema.has(table, column, key) and _select(
+                conn, f"SELECT 1 FROM {table} WHERE {column} IN ({_marks(work_items)}) LIMIT 1", work_items):
+            return True
+    return False
+
+
+def _project_has_foreign_data(conn, schema: _Schema, project_id: str, owned_requests: set[str]) -> bool:
+    requests = {str(r[0]) for r in _select(conn, "SELECT id FROM analysis_requests WHERE project_id=?", [project_id])}
+    if requests - owned_requests:
+        return True
+    if any(str(r[0]) not in owned_requests for r in _select(conn, "SELECT request_id FROM dashboard_cases WHERE project_id=?", [project_id])):
+        return True
+    for table, column, key, _reason in PROJECT_BLOCKERS:
+        if schema.has(table, column, key) and _select(conn, f"SELECT 1 FROM {table} WHERE {column}=? LIMIT 1", [project_id]):
+            return True
+    return False
+
+
+def _created_by_deleted_registration(conn, key: str, entity_id: str, table: str, stamp: str) -> bool:
+    found = _select(conn, f"SELECT {stamp} FROM {table} WHERE id=?", [entity_id])
+    if not found:
+        return False
+    entity_created = _as_datetime(found[0][0])
+    list_key = "project_ids" if key == "project_id" else "request_ids"
+    for created_at, raw, deleted_at in _select(conn, "SELECT created_at,created_targets,deleted_at FROM folder_environment_registrations "
+                                                     f"WHERE status='DELETED' AND {key}=?", [entity_id]):
+        tombstoned = _as_datetime(deleted_at)
+        if tombstoned is not None and entity_created is not None and entity_created > tombstoned:
+            continue  # the entity was (re)created after that registration was deleted
+        targets = None
+        if raw:
+            try:
+                targets = json.loads(raw) if isinstance(raw, str) else raw
+            except (TypeError, ValueError):
+                targets = None
+        if isinstance(targets, dict):
+            if entity_id in {str(v) for v in targets.get(list_key) or []}:
+                return True
+            continue
+        registered = _as_datetime(created_at)
+        if registered is not None and entity_created is not None and entity_created >= registered - OWNERSHIP_SLACK:
+            return True
+    return False
 
 
 def _plan(conn, ids: list[str], *, lock: bool = False) -> dict:

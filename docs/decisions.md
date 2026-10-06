@@ -26,3 +26,4 @@
 - 2026-10-04 · SPDM 접근을 StorageProvider 하나로 모으고 1단계는 LocalFsProvider로 동작 불변 정리, 쓰기는 Final/CAE·Reports·.finalizations만 허용. 원격은 사이드카 HTTP 서비스(B안)로 연결 예정 · 알테어원 드라이브 전환 대비 · `docs/contracts/storage-provider.md`
 - 2026-10-06 · Final 보고서 폴더 이름은 `Report`(단수). 기존 `Final/Reports`는 인식하지 않음 · 실제 SPDM 폴더 규칙 정정 · `docs/contracts/depth-schema.md` §15
 - 2026-10-06 · 프로젝트 바로 아래 `CAD`·`Report` 폴더는 사용자 수동 작업 영역으로 탐색·진척에서 제외 · 의뢰 폴더가 아님
+- 2026-10-06 · 관리자 프로젝트 정리: 데모(고정 ID)와 살아 있는 등록이 없는 프로젝트를 미리보기→확인→일괄 삭제, 선택한 프로젝트의 예전 연결 기록도 삭제(D15 예외), SPDM 파일 불변, 지운 데모는 `spdm_storage_settings.demo_projects_removed`로 재생성 방지. 등록 삭제는 마지막 등록이 DELETED 등록이 만든 프로젝트·의뢰까지 소유 · 등록 전부터 있던 프로젝트가 목록에 남던 문제 · `docs/contracts/depth-schema.md` §13.2-5, §16

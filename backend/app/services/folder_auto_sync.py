@@ -214,6 +214,12 @@ def _remember(key, result: dict[str, Any], snapshot_id: str | None, stat_fp: str
                       "snapshot_id": snapshot_id, "stat_fingerprint": stat_fp}
 
 
+def invalidate(root_key: str, project_id: str, request_id: str, environment: str) -> None:
+    """Forget the coalesced result of one scope so the next check scans (W8: after the app wrote files)."""
+    with _state_lock:
+        _memo.pop((root_key, str(project_id), str(request_id), str(environment).upper()), None)
+
+
 def reset_for_tests() -> None:
     with _state_lock:
         _memo.clear()

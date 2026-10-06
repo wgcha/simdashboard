@@ -94,7 +94,7 @@ function videoPage(url: URL, options: Options) {
   return {
     contract_version: 1,
     context: { ...distribution(url).context, option_label: 'Individual', load_case_name: 'Drop', run_label: 'Run A' },
-    pagination: { page: 1, page_size: 100, total_items: videos.length, total_pages: 1, has_previous: false, has_next: false },
+    pagination: { page: 1, page_size: 20, total_items: videos.length, total_pages: 1, has_previous: false, has_next: false },
     videos,
   }
 }
@@ -443,6 +443,8 @@ test('보고서 창의 레이아웃 편집은 새 레이아웃으로만 저장�
   await openCaseResults(page)
   const dialog = await openReport(page)
   await setFormats(dialog, { pptx: true, html: false })
+  // W7: the notice sits next to the layout select, without opening the editor.
+  await expect(dialog.locator('.case-report__layout').getByTestId('case-report-template-note')).toContainText('업로드 PPTX 템플릿은 Case 보고서에 적용되지 않습니다')
   await dialog.getByRole('button', { name: '레이아웃 편집', exact: true }).click()
   const editor = dialog.getByTestId('case-report-layout-editor')
   await expect(editor).toContainText('업로드 PPTX 템플릿은 Case 결과 보고서에 적용되지 않습니다')
@@ -461,6 +463,39 @@ test('보고서 창의 레이아웃 편집은 새 레이아웃으로만 저장�
   const zip = readFileSync(await download.path() as string)
   expect(zipEntry(zip, 'ppt/slides/slide1.xml')).toContain('Case A')
   expect(layoutWrites.map((item) => item.method)).toEqual(['POST'])
+})
+
+test('보고서 정보(작성자·개발단계·검토조건·결론)는 PPTX와 HTML에 들어가고 고른 레이아웃을 다음에 기본값으로 쓴다', async ({ page }) => {
+  const base = { coverVariant: 'balanced', sectionOrder: ['series', 'scalar', 'media'], variablePlacements: [], includeMedia: true, description: '' }
+  const definitions = [{ id: 'report-layout-standard', name: '표준', version: 1, ...base, accentColor: '1F6FB2' }, { id: 'team-layout', name: '팀 레이아웃', version: 4, ...base, accentColor: '2E8B57' }]
+  const layouts: unknown[] = definitions.map((definition) => ({ id: definition.id, name: definition.name, description: '', version: definition.version, definition, is_system: false, is_active: true, created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z', updated_by: 'admin' }))
+  await installMocks(page, { layouts })
+  await openCaseResults(page)
+  let dialog = await openReport(page)
+  await setFormats(dialog, { pptx: true, html: true })
+  const select = dialog.locator('.case-report__layout').getByRole('combobox', { name: 'PPTX 레이아웃' })
+  await expect(select).toHaveValue('report-layout-standard')
+  await select.selectOption('team-layout')
+  await expect(dialog.getByTestId('case-report-template-note')).toHaveCount(0)
+  const meta = dialog.getByTestId('case-report-meta')
+  await expect(meta.getByRole('textbox', { name: '작성자' })).not.toHaveValue('')
+  await meta.getByRole('textbox', { name: '개발단계' }).fill('PV 1차')
+  await meta.getByRole('textbox', { name: '결론' }).fill('결론 W7 보고서')
+  const downloads = await downloadAll(page, dialog, 2)
+  const pptx = downloads.find((item) => item.suggestedFilename().endsWith('.pptx'))!
+  const html = downloads.find((item) => item.suggestedFilename().endsWith('.html'))!
+  const zip = readFileSync(await pptx.path() as string)
+  const slides = Array.from({ length: 12 }, (_, index) => zipEntry(zip, `ppt/slides/slide${index + 1}.xml`) ?? '').join('\n')
+  expect(slides).toContain('PV 1차')
+  expect(slides).toContain('2E8B57')
+  const text = await downloadText(html)
+  expect(text).toContain('<dt>개발단계</dt><dd>PV 1차</dd>')
+  expect(text).toContain('<dt>결론</dt><dd>결론 W7 보고서</dd>')
+  expect(text).not.toContain('<dt>검토조건</dt>')
+  await dialog.getByRole('button', { name: '닫기', exact: true }).last().click()
+  dialog = await openReport(page)
+  await setFormats(dialog, { pptx: true, html: false })
+  await expect(dialog.locator('.case-report__layout').getByRole('combobox', { name: 'PPTX 레이아웃' })).toHaveValue('team-layout')
 })
 
 test('엣지를 모두 끄면 보고서 요약은 요약 탭과 같은 선택 없음 문구를 쓴다', async ({ page }) => {

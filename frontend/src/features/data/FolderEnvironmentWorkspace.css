@@ -135,3 +135,25 @@
 .folder-delete-blockers ul{margin:0;padding-left:18px}
 .folder-delete-blockers code,.folder-delete-error{overflow-wrap:anywhere}
 .folder-delete-error{color:var(--color-danger)}
+/* 프로젝트 정리 tab (contract depth-schema §16) */
+.folder-cleanup-intro{margin:0;color:var(--color-text-muted)}
+.folder-cleanup-table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+.folder-cleanup-table th,.folder-cleanup-table td{padding:6px 8px;border-bottom:1px solid var(--color-border);text-align:left;vertical-align:top}
+.folder-cleanup-table th{font-weight:600;color:var(--color-text-muted)}
+.folder-cleanup-table td small{display:block;color:var(--color-text-muted);overflow-wrap:anywhere}
+.folder-cleanup-table tr.is-disabled td{color:var(--color-text-muted)}
+.folder-cleanup-category{display:inline-block;padding:1px 8px;border-radius:999px;border:1px solid var(--color-border);font-size:.9em}
+.folder-cleanup-category.is-demo{border-color:var(--color-accent,var(--color-border))}
+.folder-cleanup-category.is-registered{opacity:.75}
+.folder-cleanup-warning{color:var(--color-warning,var(--color-danger))}
+.folder-cleanup-preview-list{margin:0;padding-left:18px;max-height:180px;overflow:auto}
+.folder-cleanup-details table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+.folder-cleanup-details th,.folder-cleanup-details td{padding:2px 6px;text-align:left;font-weight:400}
+.folder-cleanup-details td{text-align:right}
+.folder-cleanup-details code{margin-left:6px;font-size:.82em;color:var(--color-text-muted)}
+.folder-cleanup-details{max-height:240px;overflow:auto}
+.folder-cleanup-acknowledge{display:grid;gap:8px;max-height:280px;overflow:auto;padding:10px 12px;border:1px solid var(--color-warning-border,var(--color-warning));border-radius:7px;background:var(--color-warning-surface)}
+.folder-cleanup-acknowledge-item{display:grid;gap:4px}
+.folder-cleanup-acknowledge-item ul{margin:0;padding-left:18px}
+.folder-cleanup-acknowledge-item label{display:grid;gap:4px}
+.folder-cleanup-acknowledge-item input{max-width:420px}

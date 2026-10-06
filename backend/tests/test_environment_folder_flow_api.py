@@ -907,28 +907,48 @@ def test_case_finalization_is_capture_pinned_signed_retryable_and_keeps_existing
     retry_plan = client.post("/api/dashboard/finalizations/preview", json=body)
     assert retry_plan.status_code == 200, retry_plan.text
     retry_plan = retry_plan.json()
-    original_copy = case_finalization._copy_one
+    from app.services import case_finalization_jobs
+    from app.services.spdm_storage import SpdmStorageError
+    from app.services.storage import provider as storage_provider
+    from app.services.storage.local import LocalFsProvider
+    # The wrapper below runs on the stack of this test module (S3 caller check).
+    monkeypatch.setattr(storage_provider, "FINAL_WRITER_MODULES",
+                        frozenset({*storage_provider.FINAL_WRITER_MODULES, __name__}))
+    original_copy = LocalFsProvider.copy_stream
     call_count = 0
 
-    def fail_once(*args, **kwargs):
+    def fail_once(self, *args, **kwargs):
         nonlocal call_count
         call_count += 1
         if call_count == 2:
-            raise case_finalization.CaseFinalizationError("SYNTHETIC_COPY_FAILURE", "synthetic copy failure")
-        return original_copy(*args, **kwargs)
+            raise SpdmStorageError("SYNTHETIC_COPY_FAILURE", "synthetic copy failure")
+        return original_copy(self, *args, **kwargs)
+
+    status_query = {key: value for key, value in body.items() if key != "capture_id"}
+
+    def confirm_and_wait(operation_id):
+        """W2: confirm queues a copy job; wait for the worker and read the job outcome."""
+        started = client.post("/api/dashboard/finalizations/confirm", json={**body, "operation_id": operation_id, "report_formats": ["pptx"]})
+        assert started.status_code == 200, started.text
+        assert case_finalization_jobs.wait_idle(120)
+        job = client.get(f"/api/dashboard/finalizations/{operation_id}/job", params=status_query)
+        assert job.status_code == 200, job.text
+        return job.json()
 
     report_query = {**body}
     staged = client.put(f"/api/dashboard/finalizations/{retry_plan['operation_id']}/reports/pptx",
                         params=report_query, content=synthetic_pptx())
     assert staged.status_code == 200, staged.text
-    monkeypatch.setattr(case_finalization, "_copy_one", fail_once)
-    failed = client.post("/api/dashboard/finalizations/confirm", json={**body, "operation_id": retry_plan["operation_id"], "report_formats": ["pptx"]})
-    assert failed.status_code == 422, failed.text
-    assert client.get("/api/dashboard/finalizations/status", params={key: value for key, value in body.items() if key != "capture_id"}).json()["retryable_operations"]
-    monkeypatch.setattr(case_finalization, "_copy_one", original_copy)
-    confirmed = client.post("/api/dashboard/finalizations/confirm", json={**body, "operation_id": retry_plan["operation_id"], "report_formats": ["pptx"]})
-    assert confirmed.status_code == 200, confirmed.text
-    record = confirmed.json()
+    monkeypatch.setattr(LocalFsProvider, "copy_stream", fail_once)
+    failed = confirm_and_wait(retry_plan["operation_id"])
+    assert failed["state"] == "FAILED" and failed["error"]["code"] == "SYNTHETIC_COPY_FAILURE", failed
+    assert not (root / retry_plan["output_paths"]["CAE"]).exists()
+    retryable = client.get("/api/dashboard/finalizations/status", params=status_query).json()["retryable_operations"]
+    assert retryable and retryable[0]["job"]["state"] == "FAILED"
+    monkeypatch.setattr(LocalFsProvider, "copy_stream", original_copy)
+    confirmed = confirm_and_wait(retry_plan["operation_id"])
+    assert confirmed["state"] == "COMPLETE", confirmed
+    record = confirmed["record"]
     assert record["status"] == "COMPLETE"
     assert record["counts"]["rad_decks"] == 1 and record["counts"]["inc_decks"] == 1
     assert record["output_paths"]["CAE"].startswith("Project_9910_Final/WR_9910_SimType3/Final/CAE/Package_SetCase1_CushionCase1/")
@@ -946,7 +966,7 @@ def test_case_finalization_is_capture_pinned_signed_retryable_and_keeps_existing
     result_csv.unlink()
     repeated = client.post("/api/dashboard/finalizations/confirm", json={**body, "operation_id": retry_plan["operation_id"], "report_formats": ["pptx"]})
     assert repeated.status_code == 200, repeated.text
-    assert repeated.json()["confirmed_at"] == record["confirmed_at"]
+    assert repeated.json()["state"] == "COMPLETE" and repeated.json()["record"]["confirmed_at"] == record["confirmed_at"]
     result_csv.write_bytes(source_bytes)
 
     # Oversized and deeply nested unsigned siblings are reported as unverified
@@ -972,10 +992,13 @@ def test_case_finalization_is_capture_pinned_signed_retryable_and_keeps_existing
         assert limited_items.status_code == 422, limited_items.text
         assert limited_items.json()["detail"]["code"] == "FINALIZATION_STATUS_LIMIT"
     with monkeypatch.context() as patcher:
+        # W2: a record over the hash budget is shown verified by existence and size only.
         patcher.setattr(case_finalization, "MAX_STATUS_VERIFY_BYTES", 0)
+        # Without the completion-time verified marker (review M2) the record is size-checked only.
+        (root / retry_plan["metadata_relative_path"] / "verified.json").unlink()
         limited_bytes = client.get("/api/dashboard/finalizations/status", params={key: value for key, value in body.items() if key != "capture_id"})
-        assert limited_bytes.status_code == 422, limited_bytes.text
-        assert limited_bytes.json()["detail"]["code"] == "FINALIZATION_STATUS_LIMIT"
+        assert limited_bytes.status_code == 200, limited_bytes.text
+        assert limited_bytes.json()["latest"]["verification"] == "SIZE"
 
     original_settings = case_finalization.security_settings
     monkeypatch.setattr(case_finalization, "security_settings", lambda: type("Settings", (), {"secret_key": "rotated-synthetic-key"})())
@@ -987,57 +1010,58 @@ def test_case_finalization_is_capture_pinned_signed_retryable_and_keeps_existing
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows directory-handle sharing semantics")
 def test_case_finalization_pins_output_parent_during_temp_write(tmp_path, monkeypatch):
+    """W2 streaming copy: the partial folder chain stays pinned while the new file is created."""
     from app.services import case_finalization
-    from pathlib import Path
+    from app.services.storage import local as storage_local
 
     root = tmp_path / "spdm-root"
     root.mkdir()
-    source = root / "source.inc"
     payload = b"synthetic deck bytes"
-    source.write_bytes(payload)
-    target = root / "Request" / "Final" / "CAE" / "Case" / "version"
-    target.mkdir(parents=True)
+    (root / "source.inc").write_bytes(payload)
+    operation = "a" * 32
+    base = f"Request/Final/.finalizations/{operation}/staging"
+    partial = root / base / "partial"
+    partial.mkdir(parents=True)
     outside = tmp_path / "outside"
     outside.mkdir()
-    parked = target.with_name("version-parked")
+    parked = partial.with_name("partial-parked")
     rename_blocked: list[bool] = []
-    original_open = Path.open
+    original_create = storage_local._create_new_file
 
-    def attempt_junction_swap(path, *args, **kwargs):
-        if path.name.startswith(".codex-partial-") and not rename_blocked:
+    def attempt_junction_swap(path):
+        if not rename_blocked:
             try:
-                target.rename(parked)
+                partial.rename(parked)
             except OSError:
                 rename_blocked.append(True)
             else:
                 rename_blocked.append(False)
                 import subprocess
-                subprocess.run(["cmd.exe", "/c", "mklink", "/J", str(target), str(outside)],
+                subprocess.run(["cmd.exe", "/c", "mklink", "/J", str(partial), str(outside)],
                                check=True, capture_output=True)
-        return original_open(path, *args, **kwargs)
+        return original_create(path)
 
-    monkeypatch.setattr(Path, "open", attempt_junction_swap)
+    monkeypatch.setattr(storage_local, "_create_new_file", attempt_junction_swap)
     operation_error = None
     try:
         try:
-            published = case_finalization._copy_one(
-                {"root": root}, {"operation_id": "a" * 32},
-                {"source_relative_path": "source.inc", "case_relative_path": "model.inc",
-                 "size": len(payload), "sha256": hashlib.sha256(payload).hexdigest()},
-                target,
+            digest = case_finalization._stage_file(
+                root, "source.inc", f"{base}/CAE/model.inc", f"{base}/partial",
+                expected_size=len(payload), expected_sha256=hashlib.sha256(payload).hexdigest(),
+                expected_modified_ns=None, on_progress=None, ensured=set(),
             )
         except Exception as exc:  # Capture the vulnerable unpinned path's post-write guard failure.
             operation_error = exc
-        assert rename_blocked == [True], "output parent was renameable while the temporary file was opened"
+        assert rename_blocked == [True], "partial folder was renameable while the new file was created"
         assert not list(outside.iterdir()), "temporary bytes escaped the configured SPDM root"
         assert operation_error is None, f"safe copy unexpectedly failed: {operation_error}"
-        assert published == "Request/Final/CAE/Case/version/model.inc"
-        assert (target / "model.inc").read_bytes() == payload
+        assert digest == hashlib.sha256(payload).hexdigest()
+        assert (root / base / "CAE" / "model.inc").read_bytes() == payload
     finally:
-        if target.is_junction():
-            os.rmdir(target)
-        if parked.exists() and not target.exists():
-            parked.rename(target)
+        if partial.is_junction():
+            os.rmdir(partial)
+        if parked.exists() and not partial.exists():
+            parked.rename(partial)
 
 
 def test_saved_profile_revision_is_used_and_old_preview_cannot_apply_after_edit(admin_client):

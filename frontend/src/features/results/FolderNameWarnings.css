@@ -1,0 +1,20 @@
+/* W6 folder name warnings: a compact badge in the Case results header that
+   opens a short list; Scene 비교 marks affected Scenes with a small icon. */
+.case-name-warnings { position:relative; flex:none; }
+.case-name-warnings > summary { display:inline-flex; align-items:center; gap:var(--space-1, 4px); min-height:var(--control-h-sm, 32px); padding:0 var(--space-3, 12px); border:1px solid var(--color-warning-border); border-radius:var(--radius-sm, 4px); background:var(--color-warning-surface); color:var(--color-text); font-weight:700; list-style:none; cursor:pointer; white-space:nowrap; }
+.case-name-warnings--info > summary { border-color:var(--color-border); background:var(--color-surface-interactive); color:var(--color-text); }
+.case-name-warnings > summary::-webkit-details-marker { display:none; }
+.case-name-warnings > summary:focus-visible { outline:2px solid var(--color-focus); outline-offset:2px; }
+.case-name-warnings > summary svg { width:1em; height:1em; flex:none; color:var(--color-warning); }
+.case-name-warnings__panel { position:absolute; top:calc(100% + 6px); left:0; z-index:20; display:grid; gap:var(--space-2, 8px); width:min(46em, 80vw); max-height:min(60vh, 32em); overflow:auto; padding:var(--space-3, 12px); border:1px solid var(--color-border-strong); border-radius:var(--radius-md, 6px); background:var(--color-surface-raised); color:var(--color-text); box-shadow:0 14px 36px var(--color-shadow); }
+.case-name-warnings__note { margin:0; color:var(--color-text-muted); }
+.case-name-warnings__panel > ul { display:grid; gap:var(--space-2, 8px); margin:0; padding:0; list-style:none; }
+.case-name-warnings__panel > ul > li { display:grid; gap:var(--space-1, 4px); padding:var(--space-2, 8px); border-left:3px solid var(--color-warning); background:var(--color-warning-surface); }
+.case-name-warnings__panel > ul > li.is-info { border-left-color:var(--color-border-strong); background:var(--color-surface-interactive); }
+.case-name-warnings__message { display:flex; align-items:flex-start; gap:var(--space-1, 4px); }
+.case-name-warnings__message svg { width:1em; height:1em; flex:none; margin-top:.15em; color:var(--color-warning); }
+.is-info .case-name-warnings__message svg { color:var(--color-text-muted); }
+.case-name-warnings__paths { display:grid; gap:2px; margin:0; padding:0 0 0 1.25em; list-style:none; font-family:var(--font-mono, ui-monospace, monospace); font-size:.9em; color:var(--color-text-muted); }
+.case-name-warnings__paths li { min-width:0; overflow-wrap:anywhere; }
+.case-scene-name-warning { display:inline-flex; margin-left:var(--space-1, 4px); color:var(--color-warning); vertical-align:middle; cursor:help; }
+.case-scene-name-warning svg { width:1em; height:1em; }

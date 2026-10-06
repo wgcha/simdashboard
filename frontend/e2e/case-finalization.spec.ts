@@ -1,3 +1,4 @@
+import { inflateRawSync } from 'node:zlib'
 import { expect, test, type Page, type Route } from '@playwright/test'
 import { loginWorkspace, mockResultEnvironments } from './workspace-test-helpers'
 
@@ -72,7 +73,7 @@ function distribution(optionId = 'option-individual') {
 const videos = {
   contract_version: 1,
   context: { ...distribution().context, option_label: 'Individual', load_case_name: 'Drop', run_label: 'Run A' },
-  pagination: { page: 1, page_size: 100, total_items: 2, total_pages: 1, has_previous: false, has_next: false },
+  pagination: { page: 1, page_size: 20, total_items: 2, total_pages: 1, has_previous: false, has_next: false },
   videos: [
     { video_id: 'v-1', asset_id: 'vid-small', scene_id: 'scene-1', scene_label: '2_Face', title: 'BEHAVIOR_2_Face.mp4', status: 'READY', source_capture_id: 'capture-1' },
     { video_id: 'v-2', asset_id: 'vid-big', scene_id: 'scene-2', scene_label: '3_Face', title: 'BEHAVIOR_3_Face_large.mp4', status: 'READY', source_capture_id: 'capture-2' },
@@ -111,15 +112,65 @@ const usagePreview = {
   report_paths: { pptx: `${usageReportsDir}/Usage_Case_report.pptx`, html: `${usageReportsDir}/Usage_Case_report.html` },
 }
 
-type Uploads = Array<{ format: string; query: URLSearchParams; contentType: string; head: string; size: number; text: string }>
+type Uploads = Array<{ format: string; query: URLSearchParams; contentType: string; head: string; size: number; text: string; body: Buffer }>
+
+/** Every slide XML of a PPTX (minimal ZIP reader: central directory + raw deflate). */
+function slideXml(buffer: Buffer) {
+  let end = buffer.length - 22
+  while (end >= 0 && buffer.readUInt32LE(end) !== 0x06054b50) end -= 1
+  const count = buffer.readUInt16LE(end + 10)
+  let offset = buffer.readUInt32LE(end + 16)
+  const slides: string[] = []
+  for (let index = 0; index < count; index += 1) {
+    const method = buffer.readUInt16LE(offset + 10)
+    const compressedSize = buffer.readUInt32LE(offset + 20)
+    const nameLength = buffer.readUInt16LE(offset + 28)
+    const extraLength = buffer.readUInt16LE(offset + 30)
+    const commentLength = buffer.readUInt16LE(offset + 32)
+    const localOffset = buffer.readUInt32LE(offset + 42)
+    const entryName = buffer.toString('utf8', offset + 46, offset + 46 + nameLength)
+    if (/^ppt\/slides\/slide\d+\.xml$/.test(entryName)) {
+      const dataStart = localOffset + 30 + buffer.readUInt16LE(localOffset + 26) + buffer.readUInt16LE(localOffset + 28)
+      const data = buffer.subarray(dataStart, dataStart + compressedSize)
+      slides.push((method === 8 ? inflateRawSync(data) : data).toString('utf8'))
+    }
+    offset += 46 + nameLength + extraLength + commentLength
+  }
+  return slides.join('\n')
+}
 
 async function fulfillJson(route: Route, body: unknown, status = 200) {
   await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
 }
 
-async function installMocks(page: Page, options: { failFirstUpload?: boolean; multiOption?: boolean } = {}) {
+type JobState = 'RUNNING' | 'FAILED' | 'COMPLETE'
+
+/** W2: confirm queues a background copy job; GET /{id}/job reports it (scripted per test). */
+function jobView(plan: typeof preview, formats: Array<'pptx' | 'html'>, state: JobState | 'QUEUED') {
+  const reports = formats.map((format) => ({ format, file_name: plan.report_files[format], size: 100, sha256: '9'.repeat(64), relative_path: plan.report_paths[format] }))
+  const record = state === 'COMPLETE' ? { ...plan, status: 'COMPLETE', created_by: 'test', confirmed_at: '2026-10-03T00:01:00Z', reports } : null
+  const total = plan.files.reduce((sum, file) => sum + file.size, 0)
+  return {
+    operation_id: plan.operation_id, state, phase: state === 'RUNNING' || state === 'FAILED' ? 'COPYING' : null,
+    files_done: state === 'COMPLETE' ? plan.files.length : 1, files_total: plan.files.length,
+    bytes_done: state === 'COMPLETE' ? total : plan.files[0].size, bytes_total: total,
+    current_file: state === 'RUNNING' ? plan.files[1]?.case_relative_path ?? null : null,
+    error: state === 'FAILED' ? { code: 'FINALIZATION_PUBLISH_BUSY', message: '다른 프로그램이 임시 폴더를 사용하고 있어 Final 폴더로 옮기지 못했습니다.' } : null,
+    attempt: 1, queued_at: '2026-10-03T00:00:30Z', started_at: '2026-10-03T00:00:31Z', updated_at: '2026-10-03T00:00:32Z',
+    case_id: plan.case_id, capture_id: plan.capture_id, reports, output_paths: plan.output_paths, active: state === 'RUNNING', record,
+  }
+}
+
+async function installMocks(page: Page, options: { failFirstUpload?: boolean; multiOption?: boolean; jobStates?: JobState[]; status?: () => Record<string, unknown>; layouts?: unknown[] } = {}) {
+  if (options.layouts) {
+    const layouts = options.layouts
+    await page.route('**/api/report-layouts', (route) => fulfillJson(route, layouts))
+  }
   const uploads: Uploads = []
   const confirms: Array<Record<string, unknown>> = []
+  const jobPolls: string[] = []
+  const script = { states: options.jobStates ?? ['RUNNING', 'COMPLETE'] as JobState[] }
+  let lastConfirm: { plan: typeof preview; formats: Array<'pptx' | 'html'> } = { plan: preview, formats: ['pptx'] }
   const usageCaptures: string[] = []
   let failures = options.failFirstUpload ? 1 : 0
   await page.route('**/api/folder-discovery/environments/sync', (route) => fulfillJson(route, { status: 'UNCHANGED', changed: false, snapshot_id: null, diff: { added: 0, removed: 0, changed: 0 }, code: null, message: null, check_mode: 'QUICK', checked_at: new Date().toISOString(), coalesced: false }))
@@ -140,7 +191,7 @@ async function installMocks(page: Page, options: { failFirstUpload?: boolean; mu
     const url = new URL(route.request().url())
     return fulfillJson(route, url.pathname.endsWith('/videos') ? videos : distribution(url.searchParams.get('run_option_id') ?? undefined))
   })
-  await page.route('**/api/dashboard/finalizations/status**', (route) => fulfillJson(route, { latest: null, selected_case_latest: null, retryable_operations: [], unverified_records: 0 }))
+  await page.route('**/api/dashboard/finalizations/status**', (route) => fulfillJson(route, options.status ? options.status() : { latest: null, selected_case_latest: null, retryable_operations: [], unverified_records: 0 }))
   await page.route('**/api/dashboard/finalizations/preview', (route) => {
     const body = route.request().postDataJSON() as Record<string, string>
     if (body.environment === 'USAGE') {
@@ -156,7 +207,7 @@ async function installMocks(page: Page, options: { failFirstUpload?: boolean; mu
     const url = new URL(request.url())
     const body = request.postDataBuffer() ?? Buffer.alloc(0)
     const format = url.pathname.split('/').pop() ?? ''
-    uploads.push({ format, query: url.searchParams, contentType: request.headers()['content-type'] ?? '', head: body.subarray(0, 15).toString('latin1'), size: body.length, text: format === 'html' ? body.toString('utf8') : '' })
+    uploads.push({ format, query: url.searchParams, contentType: request.headers()['content-type'] ?? '', head: body.subarray(0, 15).toString('latin1'), size: body.length, text: format === 'html' ? body.toString('utf8') : '', body: Buffer.from(body) })
     if (failures > 0) {
       failures -= 1
       return fulfillJson(route, { detail: { code: 'FINALIZATION_REPORT_PPTX_INVALID', message: 'PPTX 보고서를 읽을 수 없습니다.' } }, 422)
@@ -167,11 +218,17 @@ async function installMocks(page: Page, options: { failFirstUpload?: boolean; mu
   await page.route('**/api/dashboard/finalizations/confirm', (route) => {
     const body = route.request().postDataJSON() as Record<string, unknown>
     confirms.push(body)
-    const formats = body.report_formats as Array<'pptx' | 'html'>
-    const plan = body.environment === 'USAGE' ? usagePreview : preview
-    return fulfillJson(route, { ...plan, status: 'COMPLETE', created_by: 'test', confirmed_at: '2026-10-03T00:01:00Z', reports: formats.map((format) => ({ format, file_name: plan.report_files[format], size: 100, sha256: '9'.repeat(64), relative_path: plan.report_paths[format] })) })
+    lastConfirm = { plan: body.environment === 'USAGE' ? usagePreview : preview, formats: body.report_formats as Array<'pptx' | 'html'> }
+    return fulfillJson(route, jobView(lastConfirm.plan, lastConfirm.formats, 'QUEUED'))
   })
-  return { uploads, confirms, usageCaptures }
+  await page.route(`**/api/dashboard/finalizations/${OPERATION}/job**`, (route) => {
+    const url = new URL(route.request().url())
+    expect(url.searchParams.get('capture_id')).toBeNull()
+    jobPolls.push(url.searchParams.get('case_id') ?? '')
+    const state = script.states.length > 1 ? script.states.shift()! : script.states[0]
+    return fulfillJson(route, jobView(lastConfirm.plan, lastConfirm.formats, state))
+  })
+  return { uploads, confirms, usageCaptures, jobPolls, script }
 }
 
 async function openFinal(page: Page) {
@@ -197,7 +254,8 @@ test('Final 지정은 고른 PPTX·HTML을 만들어 형식별로 올린 뒤 확
   // A Scene whose newest capture cannot be used is listed, never replaced by an older capture.
   await expect(dialog.getByTestId('case-final-excluded-scenes')).toContainText('제외되는 Scene 1개')
   await expect(dialog.getByTestId('case-final-excluded-scenes')).toContainText('4_Face · 최신 결과에 확정 위치 정보 없음')
-  await expect(dialog).toContainText('입력·결과 3개')
+  await expect(dialog).toContainText('Scene 폴더 파일 3개')
+  await expect(dialog).toContainText('임시·잠금 파일(~$*, *.tmp)과 숨김·시스템 항목은 복사하지 않습니다.')
   await expect(dialog.getByTestId('case-final-report-range')).toContainText('Case 전체 · 모든 Run Case · Run Option')
   await expect(dialog).not.toContainText('PDF')
   const pptx = dialog.getByRole('checkbox', { name: /PPTX/ })
@@ -247,13 +305,156 @@ test('Final 지정 업로드 오류를 대화상자에 보이고 같은 요청�
   await dialog.getByRole('button', { name: 'Final 지정 확정', exact: true }).click()
   await expect(dialog.getByRole('alert')).toContainText('PPTX 보고서를 읽을 수 없습니다.', { timeout: 20_000 })
   expect(confirms).toHaveLength(0)
-  await dialog.getByRole('button', { name: '다시 시도', exact: true }).click()
+  await dialog.getByRole('button', { name: '재시도', exact: true }).click()
   await expect(page.getByRole('dialog', { name: 'Final 지정 완료' })).toBeVisible({ timeout: 20_000 })
   expect(uploads.map((item) => item.format)).toEqual(['pptx', 'pptx'])
   // The retry re-sends the same bytes for the same operation.
   expect(uploads[1].size).toBe(uploads[0].size)
   expect(confirms).toHaveLength(1)
   expect(confirms[0]).toMatchObject({ operation_id: OPERATION, report_formats: ['pptx'] })
+  expect(errors).toEqual([])
+})
+
+test('Final 복사는 진행률을 보이고 창을 닫아도 계속되며 실패하면 같은 Final ID로 재시도한다', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 })
+  const errors: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  const { confirms, jobPolls, script } = await installMocks(page, { jobStates: ['RUNNING'] })
+  const dialog = await openFinal(page)
+  await dialog.getByRole('button', { name: 'Final 지정 확정', exact: true }).click()
+  const progress = dialog.getByTestId('case-final-job')
+  await expect(progress).toContainText('Final 복사 중 15%', { timeout: 20_000 })
+  await expect(progress).toContainText('파일 1/3')
+  await expect(progress).toContainText('현재: Drop/Run A/Individual/2_Face/result.csv')
+  await expect(progress.getByRole('progressbar', { name: 'Final 복사 진행률' })).toHaveAttribute('aria-valuenow', '15')
+  await expect(dialog).toContainText('창을 닫아도 복사는 계속됩니다.')
+  await page.screenshot({ path: `${SHOT_DIR}/case-final-progress-1440.png` })
+  // Closing the dialog keeps the job; the Case results header keeps showing it.
+  await dialog.getByRole('button', { name: '닫기 (복사 계속)', exact: true }).click()
+  await expect(dialog).not.toBeVisible()
+  const status = page.getByTestId('case-final-status')
+  await expect(status).toContainText('Final 복사 중 15%')
+  const pollsWhileClosed = jobPolls.length
+  await expect.poll(() => jobPolls.length, { timeout: 10_000 }).toBeGreaterThan(pollsWhileClosed)
+  // A failure shows its reason and a retry with the same Final ID and reports.
+  script.states = ['FAILED']
+  await expect(status).toContainText('Final 복사 실패', { timeout: 10_000 })
+  await expect(status).toHaveAttribute('title', /다른 프로그램이 임시 폴더를 사용하고 있어/)
+  script.states = ['COMPLETE']
+  await page.locator('.case-finalization').getByRole('button', { name: '재시도', exact: true }).click()
+  await expect(page.locator('.case-finalization')).toContainText('Final 지정 완료', { timeout: 10_000 })
+  expect(confirms).toHaveLength(2)
+  expect(confirms[1]).toMatchObject({ operation_id: OPERATION, capture_id: CAPTURE_ID, report_formats: ['pptx'] })
+  expect(jobPolls.every((caseId) => caseId === CASE_ID)).toBe(true)
+  expect(errors).toEqual([])
+})
+
+test('현재 Final이 다른 Case면 헤더에 보이고 확인해야 재지정하며 요약 파일 갱신을 요청할 수 있다', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 })
+  const errors: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  const otherFinal = { operation_id: 'b'.repeat(32), case_id: 'case-b', case_label: 'Case B', case_path: 'R/Working/Case B', designated_by: 'kim', designated_at: '2026-10-05T01:00:00Z', schema_version: 3, output_paths: { CAE: `R/Final/CAE/Case B/${'b'.repeat(32)}`, Reports: `R/Final/Report/Case B/${'b'.repeat(32)}` }, verified: true }
+  let summaryState: 'MISSING' | 'OK' = 'MISSING'
+  const repairs: Array<Record<string, unknown>> = []
+  const statusBody = () => ({
+    latest: null, selected_case_latest: null, retryable_operations: [], unverified_records: 0, active_operations: [],
+    current_final: otherFinal,
+    final_history: [{ operation_id: otherFinal.operation_id, case_id: 'case-b', case_label: 'Case B', designated_by: 'kim', designated_at: otherFinal.designated_at, schema_version: 3, role: 'CURRENT' },
+      { operation_id: 'c'.repeat(32), case_id: CASE_ID, case_label: 'Case A', designated_by: 'lee', designated_at: '2026-10-04T01:00:00Z', schema_version: 2, role: 'PREVIOUS' }],
+    summary: { state: summaryState, path: 'R/Final/current.json', final_id: summaryState === 'OK' ? otherFinal.operation_id : null },
+  })
+  const { confirms } = await installMocks(page, { status: statusBody, jobStates: ['COMPLETE'] })
+  await page.route('**/api/dashboard/finalizations/summary/repair', (route) => {
+    repairs.push(route.request().postDataJSON() as Record<string, unknown>)
+    summaryState = 'OK'
+    return fulfillJson(route, statusBody())
+  })
+  const dialog = await openFinal(page)
+  const header = page.locator('.case-finalization')
+  await expect(page.getByTestId('case-final-current')).toContainText('현재 Final · Case B · kim')
+  await expect(page.getByTestId('case-final-summary-repair')).toContainText('요약 파일 갱신 필요')
+  // The override is a global-admin action: not offered without can_override_summary.
+  await expect(page.getByTestId('case-final-summary-override')).toHaveCount(0)
+  const replace = dialog.getByTestId('case-final-replace')
+  await expect(replace).toContainText('현재 Final(Case B)을 이전 Final로 바꾸고 이 Case를 Final로 지정합니다')
+  await replace.getByText('Final 이력 2건').click()
+  await expect(replace.getByRole('list', { name: 'Final 이력' })).toContainText('현재')
+  await expect(replace.getByRole('list', { name: 'Final 이력' })).toContainText('이전')
+  const confirm = dialog.getByRole('button', { name: 'Final 지정 확정', exact: true })
+  await expect(confirm).toBeDisabled()
+  await replace.getByRole('checkbox').check()
+  await expect(confirm).toBeEnabled()
+  await page.screenshot({ path: `${SHOT_DIR}/case-final-replace-1440.png` })
+  await confirm.click()
+  await expect(page.getByRole('dialog', { name: 'Final 지정 완료' })).toBeVisible({ timeout: 20_000 })
+  expect(confirms).toHaveLength(1)
+  await page.getByRole('dialog', { name: 'Final 지정 완료' }).getByRole('button', { name: '닫기', exact: true }).last().click()
+  await header.getByRole('button', { name: '요약 파일 갱신', exact: true }).click()
+  await expect(page.getByTestId('case-final-summary-repair')).toHaveCount(0, { timeout: 10_000 })
+  expect(repairs[0]).toMatchObject({ project_id: 'project-tv-001', request_id: 'request-drop-001', environment: 'DISTRIBUTION', case_id: CASE_ID })
+  expect(errors).toEqual([])
+})
+
+test('요약 파일 충돌은 전역 관리자에게만 강제 갱신을 보이고 확인 후 override로 요청한다', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 })
+  const current = { operation_id: 'b'.repeat(32), case_id: CASE_ID, case_label: 'Case A', case_path: 'R/Working/Case A', designated_by: 'kim', designated_at: '2026-10-05T01:00:00Z', schema_version: 3, output_paths: null, verified: true, verification: 'SHA256', missing: false }
+  let state: 'CONFLICT' | 'OK' = 'CONFLICT'
+  const repairs: Array<Record<string, unknown>> = []
+  const statusBody = () => ({ latest: null, selected_case_latest: null, retryable_operations: [], unverified_records: 0, active_operations: [], current_final: current, final_history: [], summary: { state, path: 'R/Final/current.json', final_id: null }, can_override_summary: true })
+  await installMocks(page, { status: statusBody })
+  await page.route('**/api/dashboard/finalizations/summary/repair', (route) => {
+    repairs.push(route.request().postDataJSON() as Record<string, unknown>)
+    state = 'OK'
+    return fulfillJson(route, statusBody())
+  })
+  await openFinal(page)
+  await page.getByRole('dialog', { name: 'Final 지정 확인' }).getByRole('button', { name: '취소', exact: true }).click()
+  await expect(page.getByTestId('case-final-summary-conflict')).toContainText('요약 파일 충돌')
+  page.once('dialog', (dialog) => void dialog.accept())
+  await page.getByTestId('case-final-summary-override').click()
+  await expect(page.getByTestId('case-final-summary-conflict')).toHaveCount(0, { timeout: 10_000 })
+  expect(repairs).toEqual([expect.objectContaining({ override: true, case_id: CASE_ID })])
+})
+
+test('Final 보고서는 고른 레이아웃과 보고서 정보를 쓰고 업로드 템플릿 미적용을 레이아웃 옆에 알린다', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 })
+  const errors: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  const base = { coverVariant: 'balanced', sectionOrder: ['series', 'scalar', 'media'], variablePlacements: [], includeMedia: true, description: '' }
+  const standard = { id: 'report-layout-standard', name: '표준', version: 1, ...base, accentColor: '1F6FB2' }
+  const company = { id: 'company-template', name: '회사 템플릿', version: 2, ...base, accentColor: 'C0392B', slideMaster: { backgroundColor: 'F8FBFD', design: 'frame', accentColor: 'C0392B' }, templateSource: 'pptx_upload', templateAssetId: 'template-asset-1', templateBindings: {} }
+  const layouts = [standard, company].map((definition) => ({ id: definition.id, name: definition.name, description: '', version: definition.version, definition, is_system: definition.id === 'report-layout-standard', is_active: true, created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z', updated_by: 'admin' }))
+  const { uploads } = await installMocks(page, { layouts, jobStates: ['COMPLETE'] })
+  const dialog = await openFinal(page)
+  const layoutBox = dialog.getByTestId('case-final-layout')
+  const select = layoutBox.getByRole('combobox', { name: 'PPTX 레이아웃' })
+  await expect(select).toHaveValue('report-layout-standard')
+  await expect(layoutBox.getByTestId('case-report-template-note')).toHaveCount(0)
+  await select.selectOption('company-template')
+  await expect(layoutBox.getByTestId('case-report-template-note')).toContainText('업로드 PPTX 템플릿은 Case 보고서에 적용되지 않습니다')
+  const meta = dialog.getByTestId('case-report-meta')
+  await expect(meta.getByRole('textbox', { name: '작성자' })).not.toHaveValue('')
+  await meta.getByRole('textbox', { name: '작성자' }).fill('김해석')
+  await meta.getByRole('textbox', { name: '개발단계' }).fill('DV 3차')
+  await meta.getByRole('textbox', { name: '검토조건' }).fill('낙하 1.2 m 조건')
+  await meta.getByRole('textbox', { name: '결론' }).fill('기준 만족 W7')
+  await dialog.getByRole('checkbox', { name: /HTML/ }).check()
+  await page.screenshot({ path: `${SHOT_DIR}/case-final-layout-meta-1440.png` })
+  await dialog.getByRole('button', { name: 'Final 지정 확정', exact: true }).click()
+  await expect(page.getByRole('dialog', { name: 'Final 지정 완료' })).toBeVisible({ timeout: 20_000 })
+  const pptx = uploads.find((item) => item.format === 'pptx')!
+  const html = uploads.find((item) => item.format === 'html')!
+  const slides = slideXml(pptx.body)
+  // The chosen layout (its accent colour), rendered natively (no template), with the report information.
+  expect(slides).toContain('C0392B')
+  expect(slides).toContain('김해석')
+  expect(slides).toContain('DV 3차')
+  expect(html.text).toContain('<dt>개발단계</dt><dd>DV 3차</dd>')
+  expect(html.text).toContain('<dt>검토조건</dt><dd>낙하 1.2 m 조건</dd>')
+  expect(html.text).toContain('<dt>결론</dt><dd>기준 만족 W7</dd>')
+  // The choice is remembered for the next Final/보고서 dialog of this request.
+  const remembered = await page.evaluate(() => Object.entries(window.localStorage).filter(([key]) => key.startsWith('vdsim.caseReport.lastLayout.v1:')).map(([, value]) => value))
+  expect(remembered).toEqual(['company-template'])
   expect(errors).toEqual([])
 })
 

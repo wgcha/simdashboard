@@ -12,13 +12,17 @@ test('Final 지정 미리보기는 최신 결과 기준과 CAE 파일을 보이�
     { source_relative_path: 'Working/Case A/Drop/Run/INDIVIDUAL/2_Face/result.csv', case_relative_path: 'Drop/Run/INDIVIDUAL/2_Face/result.csv', category: 'CAE', source_basis: 'SOURCE_CAPTURE', source_capture_id: 'capture-final', size: 60, sha256: 'b'.repeat(64) },
   ]
   const completed = { schema_version: 1, operation_id: 'e'.repeat(32), status: 'COMPLETE', case_id: 'case-final', case_label: 'Case A', case_path: 'Working/Case A', capture_id: 'capture-final', basis: 'CAPTURE', scene_sources: [], capture_fingerprint: 'old', folder_schema_snapshot_id: 'schema-final', output_paths: { CAE: 'Final/CAE/Case A/old', Reports: 'Final/Reports/Case A/old' }, files, reports: [], counts: { CAE: 1, Reports: 1, input_decks: 1, rad_decks: 1, inc_decks: 0, results: 1 }, missing: { input_decks: false, rad_decks: false, inc_decks: true, reports: true }, excluded_capture_file_count: 0, created_by: 'test', confirmed_at: '2026-10-01T01:00:00Z' }
+  // Plan version 3 (W2): non-capture files are pinned by size/mtime and hashed while copying.
+  const previewFiles = files.map((file) => file.source_basis === 'CURRENT_CONFIRMED_SCENE' ? { ...file, sha256: null, modified_ns: 1_759_000_000_000_000_000 } : file)
   let previewBody: Record<string, unknown> | null = null
+  // The Case results screen is gated on the request's registered environments (case-results-environment §2).
+  await page.route('**/api/projects/*/requests/*/result-environments', (route) => route.fulfill({ json: { environments: ['DISTRIBUTION'], case_counts: { USAGE: 0, DISTRIBUTION: 1 } } }))
   await page.route('**/api/dashboard/catalog**', (route) => route.fulfill({ json: { environment: 'DISTRIBUTION', cases: [{ id: 'case-final', label: 'Case A' }], captures: [{ id: 'capture-final', label: '수집 1', case_id: 'case-final' }], load_cases: [], execution_runs: [], run_options: [], modes: [], components: [], bases: [] } }))
   // A version-1 record (results under Final/Reports) is still shown as history.
   await page.route('**/api/dashboard/finalizations/status**', (route) => route.fulfill({ json: { latest: completed, selected_case_latest: completed, retryable_operations: [], unverified_records: 0 } }))
   await page.route('**/api/dashboard/finalizations/preview', (route) => {
     previewBody = route.request().postDataJSON()
-    return route.fulfill({ json: { schema_version: 2, operation_id: 'f'.repeat(32), status: 'PREVIEW', project_id: 'project-tv-001', request_id: 'request-drop-001', environment: 'DISTRIBUTION', case_id: 'case-final', case_label: 'Case A', case_path: 'Working/Case A', capture_id: 'latest:case-final', basis: 'LATEST', scene_sources: [{ scene_path: 'Working/Case A/Drop/Run/INDIVIDUAL/2_Face', source_capture_id: 'capture-final' }], capture_fingerprint: 'x', folder_schema_snapshot_id: 'schema-final', scene_paths: ['Working/Case A/Drop/Run/INDIVIDUAL/2_Face'], files, counts: { CAE: 2, input_decks: 1, rad_decks: 1, inc_decks: 0, results: 1, scene_reports: 0 }, missing: { input_decks: false, rad_decks: false, inc_decks: true }, excluded_capture_file_count: 0, previewed_at: '2026-10-02T00:59:00Z', plan_sha256: 'c'.repeat(64), can_confirm: true, output_paths: { CAE: 'Final/CAE/Case A/' + 'f'.repeat(32), Reports: 'Final/Reports/Case A/' + 'f'.repeat(32) }, report_files: { pptx: 'Case_A_report.pptx', html: 'Case_A_report.html' }, report_paths: { pptx: 'Final/Reports/Case A/x/Case_A_report.pptx', html: 'Final/Reports/Case A/x/Case_A_report.html' }, report_limits: { pptx: 67108864, html: 335544320 } } })
+    return route.fulfill({ json: { schema_version: 3, operation_id: 'f'.repeat(32), status: 'PREVIEW', project_id: 'project-tv-001', request_id: 'request-drop-001', environment: 'DISTRIBUTION', case_id: 'case-final', case_label: 'Case A', case_path: 'Working/Case A', capture_id: 'latest:case-final', basis: 'LATEST', scene_sources: [{ scene_path: 'Working/Case A/Drop/Run/INDIVIDUAL/2_Face', source_capture_id: 'capture-final' }], capture_fingerprint: 'x', folder_schema_snapshot_id: 'schema-final', scene_paths: ['Working/Case A/Drop/Run/INDIVIDUAL/2_Face'], files: previewFiles, counts: { CAE: 2, input_decks: 1, rad_decks: 1, inc_decks: 0, results: 1, scene_reports: 0, other_files: 0, total_bytes: 100 }, disk: { required_bytes: 100, margin_bytes: 1073741824, free_bytes: 10 * 1073741824, sufficient: true }, include_unchecked: [], missing: { input_decks: false, rad_decks: false, inc_decks: true }, excluded_capture_file_count: 0, previewed_at: '2026-10-02T00:59:00Z', plan_sha256: 'c'.repeat(64), can_confirm: true, output_paths: { CAE: 'Final/CAE/Case A/' + 'f'.repeat(32), Reports: 'Final/Reports/Case A/' + 'f'.repeat(32) }, report_files: { pptx: 'Case_A_report.pptx', html: 'Case_A_report.html' }, report_paths: { pptx: 'Final/Reports/Case A/x/Case_A_report.pptx', html: 'Final/Reports/Case A/x/Case_A_report.html' }, report_limits: { pptx: 67108864, html: 335544320 } } })
   })
   await loginWorkspace(page)
   await page.goto('/workspace/requests?project=project-tv-001&request=request-drop-001&view=case_results&result_environment=DISTRIBUTION')
@@ -31,6 +35,8 @@ test('Final 지정 미리보기는 최신 결과 기준과 CAE 파일을 보이�
   await expect(dialog).toContainText('model.rad')
   await expect(dialog).toContainText('result.csv')
   await expect(dialog).toContainText('Case_A_report.pptx')
+  await expect(dialog).toContainText('Scene 폴더 파일 2개 · 100 B')
+  await expect(dialog).not.toContainText('남은 공간이 부족합니다')
   // The Final report covers the whole Case, so no on-screen Run Case · Run Option is needed.
   await expect(dialog.getByTestId('case-final-report-range')).toContainText('Case 전체')
   await expect(dialog).not.toContainText('PDF')
@@ -43,6 +49,46 @@ test('Final 지정 미리보기는 최신 결과 기준과 CAE 파일을 보이�
   // Internal capture ids stay out of the visible text; details are in the badge tooltip.
   await expect(page.locator('.case-finalization')).not.toContainText('capture-final')
   await expect(page.locator('.case-finalization__status')).toHaveAttribute('title', /2개 파일/)
+  expect(errors).toEqual([])
+})
+
+test('Final 복사 작업이 진행 중이면 Case 결과 헤더가 새로 열어도 진행률을 보이고 완료를 알린다', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 })
+  const errors: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  const operation = 'd'.repeat(32)
+  const job = (state: 'RUNNING' | 'COMPLETE') => ({
+    operation_id: operation, state, phase: state === 'RUNNING' ? 'VERIFYING' : null, files_done: state === 'RUNNING' ? 1 : 2, files_total: 2,
+    bytes_done: state === 'RUNNING' ? 2 * 1024 ** 3 : 4 * 1024 ** 3, bytes_total: 4 * 1024 ** 3, current_file: state === 'RUNNING' ? 'Drop/Run/INDIVIDUAL/2_Face/result.h3d' : null,
+    error: null, attempt: 2, queued_at: '2026-10-06T00:00:00Z', started_at: '2026-10-06T00:00:01Z', updated_at: '2026-10-06T00:01:00Z',
+    case_id: 'case-final', capture_id: 'latest:case-final', reports: [{ format: 'pptx', file_name: 'Case_A_report.pptx', size: 10, sha256: 'a'.repeat(64) }],
+    output_paths: { CAE: `Final/CAE/Case A/${operation}`, Reports: `Final/Report/Case A/${operation}` }, active: state === 'RUNNING',
+    record: state === 'COMPLETE' ? { schema_version: 3, operation_id: operation, status: 'COMPLETE', case_id: 'case-final', case_label: 'Case A', case_path: 'Working/Case A', capture_id: 'latest:case-final', basis: 'LATEST', scene_sources: [], capture_fingerprint: 'x', folder_schema_snapshot_id: 'schema-final', output_paths: { CAE: `Final/CAE/Case A/${operation}`, Reports: `Final/Report/Case A/${operation}` }, files: [], reports: [{ format: 'pptx', file_name: 'Case_A_report.pptx', size: 10, sha256: 'a'.repeat(64), relative_path: `Final/Report/Case A/${operation}/Case_A_report.pptx` }], counts: { CAE: 2, input_decks: 0, rad_decks: 0, inc_decks: 0, results: 2 }, missing: { input_decks: true, rad_decks: true, inc_decks: true }, excluded_capture_file_count: 0, created_by: 'test', confirmed_at: '2026-10-06T00:02:00Z' } : null,
+  })
+  let polls = 0
+  let completed = false
+  // The Case results screen is gated on the request's registered environments (case-results-environment §2).
+  await page.route('**/api/projects/*/requests/*/result-environments', (route) => route.fulfill({ json: { environments: ['DISTRIBUTION'], case_counts: { USAGE: 0, DISTRIBUTION: 1 } } }))
+  await page.route('**/api/dashboard/catalog**', (route) => route.fulfill({ json: { environment: 'DISTRIBUTION', cases: [{ id: 'case-final', label: 'Case A' }], captures: [{ id: 'capture-final', label: '수집 1', case_id: 'case-final' }], load_cases: [], execution_runs: [], run_options: [], modes: [], components: [], bases: [] } }))
+  await page.route('**/api/dashboard/finalizations/status**', (route) => route.fulfill({ json: completed
+    ? { latest: { ...job('COMPLETE').record, verification: 'SIZE' }, selected_case_latest: { ...job('COMPLETE').record, verification: 'SIZE' }, retryable_operations: [], active_operations: [], unverified_records: 0 }
+    : { latest: null, selected_case_latest: null, retryable_operations: [{ operation_id: operation, status: 'RETRYABLE', capture_id: 'latest:case-final', previewed_at: '2026-10-05T23:59:00Z', job: job('RUNNING') }], active_operations: [job('RUNNING')], unverified_records: 0 } }))
+  await page.route(`**/api/dashboard/finalizations/${operation}/job**`, (route) => {
+    polls += 1
+    completed = polls >= 3
+    return route.fulfill({ json: job(completed ? 'COMPLETE' : 'RUNNING') })
+  })
+  await loginWorkspace(page)
+  await page.goto('/workspace/requests?project=project-tv-001&request=request-drop-001&view=case_results&result_environment=DISTRIBUTION')
+  const status = page.getByTestId('case-final-status')
+  // VERIFYING at 2 of 4 GiB: 60 % + 0.5 x 35 % = 77 %.
+  await expect(status).toContainText('Final 검증 중 77%', { timeout: 15_000 })
+  await expect(status).toHaveAttribute('title', /파일 1\/2 · 2\.00 GB \/ 4\.00 GB/)
+  await expect(page.locator('.case-finalization')).toContainText('Final 지정 완료', { timeout: 15_000 })
+  await expect(status).toContainText('확정 완료')
+  // Review M2: a record shown with existence/size checks only says so.
+  await expect(page.getByTestId('case-final-size-only')).toContainText('크기만 확인')
+  expect(polls).toBeGreaterThanOrEqual(3)
   expect(errors).toEqual([])
 })
 

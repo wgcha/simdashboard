@@ -2,6 +2,12 @@
 
 이 파일은 완료된 개발 작업을 누적 기록한다. 이후 작업은 완료 시 최신 항목을 문서 상단에 추가하며, 변경 범위·검증 결과·남은 확인 사항을 함께 남긴다.
 
+## 2026-10-06 — W6 폴더 이름 경고
+
+- Case 결과 catalog에 추가 필드 `name_warnings: [{kind, severity, message, paths, case_id, run_option_id}]`를 넣었다(`backend/app/services/folder_name_warnings.py`). 이미 읽은 Folder Schema snapshot만 사용하며 폴더 스캔·DB 쓰기·폴더 변경은 없다. 같은 Run Option/Case 아래 대소문자·구분 기호·번호 접미사·한 글자 철자만 다른 Scene, Case 간 Scene 이름 불일치, 깊이 스키마 이탈·UNRESOLVED 노드와 번호로 시작하지 않는 Scene 깊이 폴더를 한국어 문구로 알린다. 계산 오류는 경고만 빈 목록으로 두고 catalog는 그대로 응답한다.
+- 화면: Case 결과 머리줄 "폴더 이름 확인 n건" 배지와 경로 목록(`FolderNameWarnings.tsx`), Scene 비교 탭의 해당 Scene 경고 아이콘. 문서 [폴더 이름 경고](../docs/features/folder-name-warnings.md), 로드맵 W6 완료 표시.
+- 검증: 신규 백엔드 15개 통과(합성 트리 `4_Edge`/`4_edge2`, `2_Face`/`2_face`, Case 간 `6_Corner`/`6_corner`, Run Option 아래 `backup`, 정상 트리), 관련 dashboard·materials·새 Scene 등록·OpenAPI 묶음 76개 통과. tsc·vite build 통과, check:architecture는 기존 4건만 실패. e2e `simulation-dashboard.spec.ts` 17개 통과·기존 1건 실패(폐기된 capture 고정 검사), 신규 2개(2560×1440·배율 1.5·18pt) 포함. `materials-dashboard.spec.ts`는 이 변경 전 코드에서도 6건, 변경 후 5건 실패(결과 환경 없음으로 탭 미표시; 동시 진행 중인 다른 작업 영향 추정, W6 무관). 독립 검수·Codex Security 스캔은 수행하지 않았다(보안 경계 변경 없음). migration·의존성·배포 변경 없음.
+
 ## 2026-10-04 — SPDM 저장소 공급자 1단계(LocalFsProvider) 코드 정리
 
 - `docs/contracts/storage-provider.md`(dfb1dd0) 기준으로 `backend/app/services/storage/{provider,local,__init__}.py`를 추가하고, SPDM 루트 아래 목록·조회·읽기·쓰기를 공급자로 옮겼다. 대상은 서비스 12개(spdm_storage, folder_discovery_scan, folder_auto_discovery, folder_discovery, dashboard_capture, case_finalization, materials_catalog, folder_schema_resolver, folder_request_progress, result_registration_paths·result_registration·result_registration_locations)와 라우터 4개(spdm_storage, semantic_mapping, semantic_review, dashboard)다. reparse·대소문자 충돌 검사, 안정 읽기, 디렉터리 고정, 요청 잠금, no-follow 메타데이터 읽기는 결과·오류 코드·문구를 그대로 provider 모듈로 옮겼다. 모듈별 `_root()` 사본은 `get_storage_provider(conn)`(루트 해석은 `spdm_storage.storage_root` 한 곳)로 대체했다.
@@ -1153,3 +1159,128 @@
 - 검증: DuckDB 전체 9 failed(기존 9건; 신규 실패 2건 `environment_folder_flow_api` Final 경로·0034 seed 비교는 테스트 갱신 후 통과), 관련 백엔드(finalization·progress·auto-discovery·depth_schema·storage_provider·single_request_registration) 통과, Postgres 16 신규 DB(0034 seed 포함)에서 finalization·auto-discovery·progress 72 passed. 프론트 tsc·build·test:api 통과, e2e case-finalization 통과, environment-folder-flow는 기존 실패 1건(desktop and mobile 등록 흐름) 외 통과.
 - 독립 검수: Verifier 1회(Blocker 없음, should-fix 2건 수정 — ① 업그레이드 전 시도가 `Final/Reports/<Case>/<op>`에 보고서를 남긴 작업의 재시도는 `FINALIZATION_LEGACY_REPORTS_PRESENT`(409)로 거부하고 아무것도 쓰지 않음, ② 기존 경로를 문자열 치환 대신 구성요소로 생성(상위 폴더 이름이 `Report`여도 안전)). 수정 후 finalization·progress DuckDB/Postgres 신규 DB 각 52 passed. Codex Security 미실행.
 - 남은 것: 기존 `Final/Reports`는 사용자가 이름을 바꿔야 보고서로 인식.
+
+## 2026-10-06 Final 지정·Case 보고서 영상 목록 422 (이슈 #43 코멘트)
+
+- 원인: `caseReport.ts`가 영상 목록을 `page_size=100`으로 요청, 서버 상한 `VIDEO_PAGE_SIZE_MAX=20` → 422.
+- 수정: 20으로 요청하고 최대 쪽수를 250으로 늘려 상한 5000개 유지. e2e 모의 응답을 20으로 맞춤.
+- 검증: tsc, e2e case-report·case-finalization 15/15.
+
+## 2026-10-06 W2 Final 복사 개편 (조각 복사·상한 제거·임시 폴더 공개·작업 스레드·진행률·이어하기)
+
+- 계약: `docs/features/case-finalization.md`(계획 3 형식). 근거 `docs/plans/improvement-roadmap.md` §4 W2, `docs/plans/case-results-workflow-redesign.md` §8.3.
+- 변경: 저장소 계층에 추가 메서드만(`LocalFsProvider.copy_stream` 8 MiB 조각 복사+SHA-256·서버 측 복사 자리 `server_side_copy`, `hash_stable`, `rename_no_replace`, `append_bytes`, `try_lock`, `list_detailed`, `free_bytes`; 기존 `request_lock` 동작 불변). Final/CAE는 확정 Scene 아래 모든 파일(`~$*`·`*.tmp`·숨김·시스템 제외), CAE 개수·크기 상한 제거, 시작 전 남은 공간(필요량+max(5 %,1 GiB)) 확인 507. `.finalizations/<ID>/staging/{CAE,Report}`에 쓰고 재해시 후 폴더째 이름 바꾸기(대상 비덮어쓰기, 잠금 재시도), `complete.json`은 두 폴더 공개 뒤. 확정은 서명된 `job.json` 등록 후 즉시 응답, 프로세스 내 작업 스레드(동시 2, 같은 의뢰 1), 서명된 `progress.json`·`copied.jsonl`, 시작 시·상태 조회 시 이어하기. `GET /api/dashboard/finalizations/{id}/job` 추가, 상태 조회 `active_operations`·`verification`. Final 창 진행률·창 닫아도 계속·헤더 `Final 복사 중 n%`·실패 사유와 재시도. 새 DB 테이블·migration·의존성 없음.
+- 의도적 차이: 비수집 파일은 미리보기에서 크기·수정 시각으로 고정하고 복사 중 해시를 계산(미리보기는 목록+lstat만). 의뢰 잠금은 복사 내내가 아니라 `complete.json` 쓰기에만 쓰고, 같은 의뢰 직렬화는 작업 대기열·작업 잠금으로 한다. 상태 조회의 해시 예산을 넘는 큰 기록은 존재·크기만 확인하고 `verification: SIZE`.
+- 검증(격리 임시 root·합성 데이터): 백엔드 finalization reports·신규 `test_case_finalization_copy_jobs.py`(18)·environment flow·storage provider·boundary·folder progress 126 passed/1 skipped(Windows 전용 고정 테스트), 앞선 실행에서 depth_schema·registration delete 포함 통과. 전체 백엔드 스위트는 돌리지 않음. OpenAPI 재생성·`check_openapi_contract.py` OK. 프론트 tsc·build·test:routing·test:api 통과, check:architecture 기존 4건만. e2e case-finalization 5/5, folder-working-final Final 2건 통과(나머지 2건 깊이 스키마·Working 계층은 기준 커밋 HEAD에서도 실패 — 별도 worktree로 확인).
+- 미수행: 실제 Windows Server 2022·SMB·HPC(이름 바꾸기 원자성, 백신 잠금, 디렉터리 고정 핸들과 폴더 이름 바꾸기 공존, SMB 디렉터리 캐시의 수정 시각) 검증(W9). 독립 검수·보안 검수 대기(Codex Security 미가용, 수동 대체 검수도 아직 안 함).
+
+## 2026-10-06 W1 사이드바 숨김 (Claude)
+- `AppSidebar.tsx`의 `SIDEBAR_HIDDEN_MENUS`로 새 의뢰·예제 및 참고·변수 카탈로그·프로젝트 결과 구성·작업 유형 관리를 사이드바에서 숨김. 화면·경로·권한 불변, 직접 URL 동작.
+- e2e: access-policy 역할별 노출 검사 3곳을 비노출로 변경, `openWorkspaceRoute` 헬퍼에 숨김 경로의 앱 내 URL 이동 추가. materials-dashboard spec에 result-environments mock 추가(다른 세션 변경 이후 6건 중 5건 실패하던 것 복구, 6/6).
+- 검증: access-policy·project-result-profiles·workbench-demo 11/12(남은 1건 DOE 접수는 기준 커밋에서도 실패), materials 6/6, simulation-dashboard·case-finalization·case-report 33/34(폐기된 capture-pin 1건), 백엔드 169 passed/1 skipped, tsc 통과, check:architecture 기존 4건.
+
+## 2026-10-06 W2 독립 검수 지적 수정 (eee1945 이후)
+
+- H1 임시 폴더 바꿔치기: `_stage_file`이 옮기기·교체·삭제 전에 임시 상위·partial 경로를 고정하고 그 안에서 reparse/링크 재확인(`FINALIZATION_STAGING_UNSAFE`), `ensured` 캐시는 mkdirs 생략에만 사용. `_stage_reports`·`_clear_partial`도 고정·재확인. 저장소 FINAL 구역 `replace`·`remove`가 두 상위 체인 고정+재확인(LEGACY 호출은 기존 동작). L6: `_ensure_staging_dir`가 mkdirs 전에 안전 확인.
+- M1: `lstat` 기반 `_strict_tree`/`_assert_exact_tree` — 검증 후·이름 바꾸기 직전(원본 하위 전체)·채택 대상(`_published_matches`)·공개 후에 링크·reparse·계획에 없는 파일·폴더 거부.
+- M2: 공개 후 CAE·보고서 전체 해시 확인 뒤에만 `complete.json`(확인 전후 stat 서명 동일), 서명된 `verified.json`으로 상태 조회가 stat만으로 SHA256 표시·바뀌면 재해시/SIZE. 헤더 `크기만 확인` 표시, 문서 정정.
+- L2 확인 불가 `complete.json`은 성공 아님(업로드 보관본 유지, `FINALIZATION_COMPLETE_UNVERIFIED`). L3 INVALID/ERROR 시 FAILED 기록. L4 `copied.jsonl` 줄 단위 스트림·1 GiB 초과 시 `FINALIZATION_METADATA_LIMIT`. L5 status/job의 이어하기는 DB 범위(Case·의뢰·root) 재확인 후. L1(POSIX 고정 불가 경쟁)은 문서에 한계로 기록.
+- 검증: 검수자 공격 시나리오를 `test_case_finalization_copy_jobs.py`의 `test_review_*` 12건으로 옮김(수정 전 12건 모두 실패, 수정 후 통과). copy_jobs·reports·environment flow·storage provider(+boundary)·security·folder progress 141 passed/1 skipped(SIZE 기대 2건은 marker 반영해 갱신 후 통과). 프론트 tsc·build, check:architecture 기존 4건만, e2e case-finalization 5/5·folder-working-final Final 2건.
+- 미수행: 실제 Windows·SMB 검증(W9), 재검수, Codex Security(미가용).
+
+## 2026-10-06 W2 재검수 지적 수정 (ac71f73 이후)
+
+- N1: 상태 조회는 해시 예산 안의 표시 기록을 항상 다시 해시(`SHA256`). `verified.json`은 예산 초과 때만 쓰고 별도 표시 `STAT_SINCE_COMPLETION`(헤더 "완료 후 변경 없음(크기·시각 확인)"); 문서에 크기·시각 확인은 내용 동일 증명이 아님을 명시. 검수자 테스트(같은 크기 수정+수정 시각 복원)를 `test_rereview_n1_*`로 이식.
+- N2: `append_bytes`(copied.jsonl) 상위 체인 고정·재확인, 연 핸들과 경로 `lstat`이 같은 일반 파일(링크·reparse 아님, 같은 식별자)일 때만 씀.
+- L5: 시작 시 이어하기도 `_job_scope_current` 통과 작업만(파일 나열은 DB 연결 없이, 범위 확인 때만 연결).
+- L6: 임시 폴더를 한 단계씩, 고정·재확인한 상위 아래에서만 생성.
+- 성능: CAE 읽기 3회(복사·공개 전 해시·공개 후 해시). 공개 후 해시는 `complete.json` 근거라 유지, 공개 전 해시(`VERIFY_STAGED_CONTENT`, 기본 켜짐)는 손상 복사본을 공개 전에 재복사하기 위한 것으로 W9 측정 후 결정 — 문서화.
+- 검증: copy_jobs 33 passed(재검수 이식 N1·N2는 수정 전 실패 확인), reports·environment flow·storage_provider(+boundary)·spdm_storage_workflow·security 123 passed/2 skipped. 프론트 tsc·build, check:architecture 기존 4건만, e2e case-finalization 5/5·folder-working-final Final 2건(나머지 2건은 HEAD에서도 실패). 재검수·Codex Security·W9 실환경 미수행.
+
+## 2026-10-06 W3 현재 Final·재지정·요약 파일
+
+- 계약: `docs/features/case-finalization.md` "현재 Final과 재지정". 근거 roadmap §4 W3, redesign §8.2·§8.3.
+- 규칙: 의뢰·환경당 현재 Final = 의뢰 잠금 안에서 마지막으로 완료를 커밋한 Final. `confirmed_at`을 잠금 안에서 정하고 의뢰별로 단조 증가(서명된 `.finalizations/designations.json`의 마지막 값보다 큼). 동시 지정은 둘 다 완료되고 나중 커밋이 현재, 오래된 완료는 새 포인터를 덮지 않음. 이전 Final 폴더·파일은 그대로(D14).
+- 요약 파일 `Final/current.json`(임시안): 이름은 저장소 계층 상수 `FINAL_SUMMARY_FILE` 하나, FINAL 구역은 이 파일과 `.current.json.<hex>.tmp`만 `Final` 바로 아래 허용. 환경별 항목(Final ID, Case, 지정자·시각, CAE·Report 경로, 보고서, 파일 목록·해시(2만 개 초과 시 서명된 complete.json 가리킴), complete.json SHA-256, 이전 Final ID). complete.json과 같은 잠금 구역에서 임시 파일→이름 바꾸기. 실패해도 Final 완료, 상태 `summary.state` MISSING/STALE → `POST /api/dashboard/finalizations/summary/repair`(RESULT_IMPORT). GET은 쓰지 않음; W3 이전 의뢰는 가장 늦은 완료를 현재로 표시.
+- 상태 API: `current_final`, `final_history`(CURRENT/PREVIOUS), `summary`. 화면: 헤더 현재 Final·요약 파일 갱신, 마지막 Final이 현재가 아니면 "이전 Final" 배지, 다른 Case가 현재면 확인란 필수, 창에 이력.
+- 검증: 신규 `test_case_finalization_current.py` 7 passed; current·copy_jobs·reports·environment flow·storage provider(+boundary)·spdm_storage_workflow·security·folder progress 170 passed/2 skipped(reports의 Final 하위 목록 기대에 current.json 추가 후). OpenAPI 재생성·계약 OK. 프론트 tsc·build·test:api, check:architecture 기존 4건만. e2e case-finalization 6/6(신규 재지정·요약 갱신 포함), folder-working-final Final 2건 통과(깊이 스키마·Working 계층 2건은 HEAD에서도 실패).
+- 미수행: SPDM 형식 협의, 실제 Windows·SMB, 독립·보안 검수(Codex Security 미가용).
+
+## 2026-10-06 W5 Case 비교 화면
+
+- 계약: `docs/features/case-compare.md`. 근거 roadmap §4 W5, redesign §8.1.
+- 변경: Case 결과 보기 탭에 `Case 비교`(사용·유통). 2~4개 Case(기본 4개 이하 전부, 초과 시 최신 4개), 기준 Case, 유통은 경로 표시줄 경로를 이름으로 각 Case에 맞춤. 값은 각 Case 최신 결과(`latest:`)를 요약 탭과 같은 API·같은 함수로 읽음(신규 `distributionValues.ts`를 보고서 요약과 공유, 사용은 `usageEvaluations.ts`). 표: Scene 합집합(정확한 이름), Δ 값·%, 행별 최저, Case 최대, 없음 강조, W6 이름 경고 아이콘, 단위 불일치 시 Δ 대신 경고; 사용 다섯 평가 OK/NG 색. 열별 `이 Case를 Final 지정` → 기존 Final 창(`CaseFinalizationPanel`에 `openRequest` prop만 추가). 보고서 창 `Case 비교 포함`(기본 꺼짐) → PPTX 끝 표 슬라이드·HTML 끝 구역, 꺼지면 기존 출력 동일. 백엔드·DB·의존성 변경 없음.
+- 검증: tsc·build·test:routing·test:api 통과, check:architecture 기존 4건만(App.tsx 불변). e2e case-compare 7/7(신규), case-report 11/11, case-finalization 6/6, simulation-dashboard 17/18(폐기된 capture-pin 1건; 4K 레이아웃 검사의 탭 개수 4→5 갱신). 스크린샷 `/tmp/claude-0/w5-case-compare-2560-14pt.png`, `-18pt.png`, `w5-case-compare-usage-2560-18pt.png`.
+- 미수행: 독립 검수, 실제 데이터 확인.
+
+## 2026-10-06 W3 검수 지적 수정과 W7 보고서 A안
+
+- W3 M1: 상태의 `current_final.verification`(SHA256·STAT_SINCE_COMPLETION·SIZE·FAILED·MISSING)·`verified`; 해시 불일치면 `summary.state` CURRENT_UNVERIFIED, 서명 포인터의 Final이 사라졌고 더 새 완료가 없으면 현재 Final을 "없음"(CURRENT_MISSING)으로 두고 이전 Final로 조용히 되돌리지 않음. 갱신(repair)은 현재 Final 전체를 예산 없이 다시 해시해야 진행(409 `FINALIZATION_CURRENT_UNVERIFIED`), 사라진 경우 409 `FINALIZATION_CURRENT_MISSING`, 감사 기록되는 `override: true`로만 남은 최신 Final로 이동. 헤더 경고 표시.
+- W3 M2: 앱이 만들지 않은 `Final/current.json`(다른 내용·형식·16 MiB 초과·링크·폴더)은 바꾸지 않음(`FINALIZATION_SUMMARY_CONFLICT`, 완료 유지, 상태 CONFLICT, 헤더 "요약 파일 충돌(관리자 확인)"). override는 일반 파일만 교체, 링크·폴더는 절대 교체 안 함.
+- W3 L1 요약 16 MiB 읽기 상한·(크기, 수정 시각, 식별자) 캐시, 목록 상한 10,000개, 다른 환경 항목은 서명 포인터·완료 기록에서 재구성. L2 포인터 없으면 완료 시각 하한 = 서명된 complete.json 최댓값. L3 1시간 넘은 `.current.json.<hex>.tmp`만 정리. `designated_by` 개인정보는 SPDM 협의로 남김(문서화).
+- W7: 보고서 창·Final 창 공통 `reportPreferences.ts`·`reportMeta.ts`·`CaseReportFields.tsx`. 업로드 템플릿 레이아웃이면 레이아웃 선택 옆 안내, Final 창 레이아웃 선택(기본 = 사용자·의뢰별 마지막 사용 레이아웃, localStorage try/catch, 없으면 표준), 작성자(표시 이름) 자동 입력·개발단계·검토조건·결론을 PPTX(옵션+표지 하단 상자, 렌더 때만)와 HTML 범위 목록에. 서버·current.json에는 넣지 않음.
+- 검증: 검수자 W3 테스트 이식+확장 7건 포함 `test_case_finalization_current.py` 14 passed; current·copy_jobs·reports·environment flow·storage provider(+boundary)·spdm_storage_workflow·security 170 passed/2 skipped. OpenAPI 재생성(override)·계약 OK. 프론트 tsc·build·test:api, check:architecture 기존 4건만. e2e case-finalization·case-report·case-compare 26/26.
+- 미수행: 독립 재검수, Codex Security(미가용), Windows·SMB, SPDM 형식 협의.
+
+## 2026-10-06 W3 마지막 검수 LOW 3건 (5909b84 이후)
+
+- N1: 요약 파일 갱신 `override: true`는 전역 관리자만(그 외 403 `GLOBAL_ADMIN_REQUIRED`, 폴더 환경 관리자 엔드포인트와 같은 `principal.is_global_admin` 확인). 상태·갱신 응답 `can_override_summary`, 화면은 관리자에게만 CONFLICT·CURRENT_MISSING에서 "강제 갱신(관리자)"(확인 창).
+- N2: 갱신은 요약 파일을 먼저, 서명 포인터를 나중에 써서 요약 쓰기 실패 시 포인터가 움직이지 않음. 성공·실패 모두 감사(override, 오류 코드; 실패는 별도 연결이라 롤백되지 않음).
+- N3: 갱신의 전체 해시를 의뢰 잠금 밖에서 수행(전후 stat 서명 동일), 잠금 안에서 포인터 불변(`FINALIZATION_REPAIR_RETRY`)·stat 서명 불변(`FINALIZATION_CURRENT_UNVERIFIED`) 재확인 후 쓰기. 완료 때 marker는 갱신에 쓰지 않음.
+- 검증: 신규 테스트 3건(`test_rereview_n1~n3`) 포함 current·copy_jobs·reports·security 99 passed. OpenAPI 재생성·계약 OK. 프론트 tsc·build, check:architecture 기존 4건만, e2e case-finalization 8/8(관리자 강제 갱신 테스트 추가).
+
+## 2026-10-06 W4 프로젝트 정리·데모 제거·등록 삭제 보완
+
+- 계약: `docs/contracts/depth-schema.md` D15 예외, §13.2-5, §16(신규; §14·§15가 이미 있어 16번). 계획 `docs/plans/workspace-cleanup.md` 1·2절, roadmap W4.
+- 백엔드: `services/project_cleanup.py`(신규). 구분 DEMO(고정 ID)/EMPTY(살아 있는 등록 없음)/REGISTERED(선택 불가). 선택 프로젝트의 의뢰·하중경우·해석 이력과 결과·작업·실행(workflow·배치·PC)·검증·분석 페이지·Case·결과 등록·프로젝트 설정·어휘·변수·예전 연결 기록(D15 예외)·전용 미디어 blob을 자식 먼저 삭제, 조사 이력과 DELETED 묘비는 id만 NULL. 차단(LIVE_REGISTRATION·RUNNING_EXECUTION·PROJECT_TEMPLATE_IN_USE)은 전체 409, confirm_token 불일치 409. PostgreSQL 한 트랜잭션+표 잠금, DuckDB는 §13과 같은 FK 단계 커밋. 감사 `PROJECT_CLEANUP_DELETED`. 파일 시스템 접근 없음(정적 테스트). API `GET/POST /api/folder-discovery/environments/project-cleanup[/preview|/delete]`(전역 관리자).
+- 재생성 방지: 데모 삭제 시 `spdm_storage_settings.demo_projects_removed`(JSON). `ensure_default_content`·`_ensure_canonical_orion_seed`·`ensure_feature_examples`가 존중(Orion 지우면 예제 진화·데모 미디어·Chassis 페이지도 생략). 새 DB는 기존처럼 데모 생성. migration 없음.
+- §13 보완: 마지막 살아 있는 등록이 DELETED된 같은 프로젝트·의뢰 등록이 만든 프로젝트·의뢰도 소유(`created_targets`, 없으면 시각 추론).
+- 화면: 관리 › 폴더 스키마 › **프로젝트 정리** 탭(`FolderProjectCleanup.tsx`, 전역 관리자만). 표·기본 선택(직접 만든 데이터 없는 데모·등록 없음)·미리보기 확인 창(합계·프로젝트별·표별 건수, "SPDM 폴더·파일은 삭제되지 않습니다", 차단 사유)·삭제 후 등록 이력과 같은 새로고침 콜백. App.tsx 변경 없음.
+- 검증(격리 임시 DB·합성 데이터): `test_project_cleanup.py` DuckDB 13 passed; 임시 PostgreSQL 16 클러스터(alembic head+reference seed) 11 passed/2 skipped(DuckDB 전용), 같은 PG에서 §13 삭제 테스트 13 passed, reference seed 재실행 후 Orion 미재생성 확인. 관련 회귀 20개 파일 240 passed/4 skipped. 프론트 tsc·build·test:api 통과, check:architecture 기존 4건만, e2e `project-cleanup.spec.ts` 2/2.
+- 미수행·남은 것: 전체 백엔드 2209건 실행(시간상 대상 파일만), OpenAPI 스냅샷 재생성(W8 진행 중 변경과 섞여 커밋 시 `generate:api` 필요), 독립 최종 검수(고위험 데이터 삭제), Codex Security(미가용), 실제 Server 2022·실제 DB 실행. 실제 서버에서 쓰기 전 DB 백업 안내 필요.
+
+## 2026-10-06 W8 결과 등록 축소: 폴더 안내 + 끌어서 올리기
+
+- 결정(사용자): A안(폴더 안내) + 파일·폴더 끌어서 올리기, 초안·자동 검사·승인 없음. 계약 `docs/features/result-registration.md`(재작성, 이전 초안 절 유지), roadmap W8 ✅, `docs/contracts/storage-provider.md` S3 ③.
+- 백엔드: `services/result_drop_upload.py`(신규) — 의뢰 Working 트리(깊이 역할·표시 경로 `SIMDASH_SPDM_DISPLAY_ROOT`), 계획(대상·소유권·링크·Windows 이름·`..`/절대·경로 길이 259·DEPTH_V1 깊이 차단/경고·기존 파일 충돌·공간·실행 파일 제외), 메모리 세션(의뢰당 2개, 24시간), 8 MiB 조각(offset 이어 올리기, 서버 SHA-256, 선택 조각/파일 해시), 완료 시 충돌 재확인 → `mkdir_pinned` → `rename_no_replace`(덮어쓰기 없음) → 자동 동기화 기억 삭제 후 `sync(force)`, 중지 시 자기 `<n>.part`만 정리. 새 폴더 만들기(W6 비슷한 이름 경고·대소문자 중복 차단, Scene 깊이까지). 이전 초안 읽기 전용 목록 `GET /drafts`. 라우터 `/drop-target`, `/drop-target/folders`, `/drop-uploads/plan`, `/drop-uploads`, `/drop-uploads/{id}`(GET·DELETE), `/drop-uploads/{id}/files/{index}`(PUT), `/drop-uploads/{id}/complete`, 모두 `result.import`, 감사 `RESULT_DROP_*`. 저장소: 쓰기 구역 `WORKING`, `LocalFsProvider.mkdir_pinned`·`write_chunk`·`set_hidden`, WORKING 구역 `remove`도 상위 고정. 임시 위치 `Working/.simdash-upload/<세션>/`를 `folder_discovery_scan.scan`·`browse`가 건너뜀. `folder_auto_sync.invalidate` 추가. 새 DB 테이블·migration·의존성 없음.
+- 프론트: `ResultDropWorkspace`(경로 표시줄·경로 복사·새 폴더·깊이 사다리 안내·끌어 놓기/파일·폴더 선택·계획·진행률·중지·완료 링크), `LegacyDraftHistory`, `shared/api/resultDrop.ts`·`resultDropModel.ts`. 이전 `ResultRegistrationWorkspace.tsx` 삭제(API·데이터 보존). OpenAPI 재생성(W4 세션의 project-cleanup 경로도 함께 들어감).
+- 검증(격리 임시 root·합성 데이터): 신규 `test_result_drop_upload.py` 26 passed; storage_provider(+boundary)·folder_auto_sync·new_scene_registration·result_registration_api/paths·folder_discovery·environment_folder_flow_api·case_finalization_copy_jobs·openapi_contract·depth_schema 202 passed/2 skipped. 프론트 tsc·build·test:api·test:routing 통과, check:architecture 기존 4건만(App.tsx 불변). e2e `result-drop-upload` 6/6(신규), `spdm-storage-workflow` 1/1(이전 초안 흐름 12건을 실제 API 확인 1건으로 교체), `unified-request-workspace` 2/8·`ui-density-p4-surfaces` 3/6 — 실패는 기준 커밋 HEAD worktree에서도 같은 테스트가 실패(등록 화면 이전 단계). 스크린샷 `/tmp/claude-0/w8-*.png`(2560×1440, dsf 1.5).
+- 미수행: 독립 검수·보안 검수(경로·쓰기 경계 변경, Codex Security 미가용 — 수동 대체 검수도 아직 안 함), Windows Server 2022·SMB(이름 바꾸기·고정 핸들·숨김 속성·백신 잠금, 수 GB 업로드).
+
+## 2026-10-06 W4 독립 검수 지적 수정 (746a398 이후)
+
+- H1: 기본 선택은 데모만. 목록·미리보기에 보관 데이터(해석 이력, 결과 값 행, Case·캡처, 예전 연결 `spdm_storage_*`·`folder_discovery_registry`·`semantic_folder_bindings`, 미디어) 표시. 데모가 아닌 프로젝트에 보관 데이터가 있거나, 직접 만든 데이터·시스템 분석 페이지가 있으면 확인 창에서 프로젝트 이름 입력을 요구하고 서버도 `acknowledge_data_project_ids`가 없으면 409 `PROJECT_CLEANUP_CONFIRM_REQUIRED`.
+- M1: 시스템 분석 페이지 3개는 `dashboards.project_id` NOT NULL·권한 판정 때문에 migration 없이 다른 곳으로 옮길 수 없음 → 차단 대신 미리보기에 페이지·버전(사용자 수정 버전) 표시 + 이름 확인(`SYSTEM_ANALYSIS_PAGES`). 차단은 데모 삭제 지시와 충돌하고, 빈 설치에는 원래 없는 페이지라 선택.
+- M2: §13.2-5 상속은 상속 대상에 외부 의뢰·Case·차단 참조가 있으면 하지 않음(조용히 남김, 삭제 진행). L1: 엔터티가 DELETED 등록의 `deleted_at` 이후 생성이면 상속 안 함.
+- L2: 외래 키 전수 조사 테스트 추가(PG `pg_constraint`, DuckDB `duckdb_constraints()`). PG에서 11개 컬럼 발견 → 분류, 다른 실행 기록의 `workflow_runs.batch_attempt_id`가 지운 시도를 가리키면 NULL.
+- L4: IN 목록 500개 단위 분할(`_select_in`·`_ids`·`_count_in`), 과대 선택 422, 미리보기 후 사라진 프로젝트는 409 STALE. L5: 데모 복구 절차를 계약 §16.5에 기록.
+- 검증(격리 DB): DuckDB `test_project_cleanup.py` 18·§13 삭제 13·`test_security.py` 3·`test_demo_seed_coherence.py` 7 = 41 passed. 임시 PostgreSQL 16(alembic head+reference seed): cleanup+§13 28 passed/3 skipped(DuckDB 전용), 새 DB에서 `test_security.py` 3 passed(같은 DB에서 cleanup 뒤 실행하면 Orion 시스템 페이지가 없어 1건 실패 — 테스트 순서 문제). 프론트 tsc·build 통과, check:architecture 기존 4건만, e2e project-cleanup 2/2.
+- 미수행: 재검수, Codex Security, 전체 백엔드 스위트, OpenAPI 스냅샷 재생성(W8 변경과 함께 커밋 시).
+
+## 2026-10-07 W8 독립 수동 보안 검수 지적 수정 (746a398 이후)
+
+- 검수: 독립 수동 검수(Codex Security 미가용, 대체 수동 검수), HIGH 없음. 검수자 공격 시험을 `test_result_drop_upload.py`의 `test_review_*` 9건으로 이식.
+- M1: 확장자를 끝 마침표·공백 제거 후 마지막 `.` 뒤로 판정(`.bat` 등 점으로 시작하는 이름 포함, 대소문자 무시), 끌어서 올리기 전용 차단 목록 `DROP_BLOCKED_EXTENSIONS`(등록 목록 + .scf .url .lnk .library-ms .searchConnector-ms .msc .iso .img .vhd .vhdx .appref-ms .settingcontent-ms .application .wsc .sct .chm .inf .xll .ps1xml .hta .cpl .reg), 예약 이름 COM¹–³·LPT¹–³(드롭 코드 지역 확장, `spdm_storage` 전역 불변), `.simdash-upload` 파일 이름 건너뜀.
+- M2: 열린 업로드 제한을 사용자당 의뢰 2개 + 의뢰 전체 6개로, 유휴 만료 60분(일부 공개 포함, 만료 시 임시 파일·빈 새 폴더 정리), 전역 관리자의 다른 사용자 업로드 중지(`DELETE`, 감사 `by_admin`), 열린 업로드 목록 `GET /drop-uploads`. 화면: PARTIAL에서 `나머지 다시 옮기기`·`나머지 중지`, 열린 업로드 목록·중지, 업로드 중 페이지 닫기는 keepalive 중지·옮기는 중은 경고, 화면 이탈 시 중지.
+- M3: 부모 폴더별 casefold 목록 지도(`_DirIndex`)로 계획·완료·새 폴더의 이름 충돌 확인. 3,000개를 3,000개 있는 폴더에 넣는 계획 0.41초(시험은 1초 미만 확인).
+- L2: `WORKING` 구역은 `mkdir_pinned`·`write_chunk`·`rename_no_replace`·`remove`·`set_hidden`만, 다른 쓰기 함수는 `NOT_ALLOWED_WRITE`. `working_zone_allows`는 `Working` 위 2단계 이상·`Working` 한 번·`Final`·`.`·`..` 없음. 이에 맞춰 Scene 안 내용 폴더의 Working·Final 이름도 계획에서 차단.
+- L3: 같은 root의 열린 업로드가 아직 공개하지 않은 바이트를 남은 공간에서 빼고 계산(`reserved_bytes`). L4: 시작 거부(계획 차단·BUSY·경로 오류) 감사 `RESULT_DROP_UPLOAD_REFUSED`. L5: PARTIAL·실패·중지·만료 시 이 세션이 만든 빈 폴더 삭제. L1: 단일 백엔드 작업자 필요를 문서화 — Windows WinSW는 1개, Rocky 8 템플릿 기본 `UVICORN_WORKERS=2`는 미해결로 기록(배포 설정은 바꾸지 않음).
+- 검증(격리 임시 root·합성 데이터): `test_result_drop_upload.py` 35 passed; drop·storage_provider(+boundary)·folder_auto_sync·new_scene_registration·result_registration_api·case_finalization_copy_jobs·security·openapi_contract 143 passed/1 skipped. OpenAPI 재생성(W4 세션의 미커밋 변경도 함께 반영됨). 프론트 tsc·build·test:api 통과, check:architecture 기존 4건만, e2e `result-drop-upload` 7/7(PARTIAL·열린 업로드 중지 추가).
+- 미수행: 반영 재검수, Windows·SMB 실환경, Rocky 8 다중 작업자 대응 결정.
+
+## 2026-10-07 W8 재검수(49d7865) 지적 수정
+
+- 재검수(수동): 원래 W8 지적 모두 해결 확인, 새 지적 반영.
+- N1(회귀): `working_zone_allows`를 "첫 `Working` 위 2단계 이상, 그 앞에 `Final` 없음, `.`/`..` 없음"으로 완화 — Scene 안의 `final`·`Working` 하위 폴더는 내용으로 허용(계획의 내용 폴더 Working·Final 차단도 제거). 같은 규칙을 대상 확인·계획의 모든 대상/임시 경로·새 폴더 만들기에 미리 적용해 위반은 계획 단계 `PATH_NOT_ALLOWED`(완료 때 늦게 실패하지 않음).
+- N2: 페이지 떠날 때 중지 요청을 `beforeunload`에서 `pagehide`로 옮김(`beforeunload`는 확인 질문만, 취소하면 업로드 계속).
+- N3: PARTIAL에서는 폴더(요청한 빈 폴더 포함)를 지우지 않음. 빈 새 폴더 정리는 실패·중지·만료 때만.
+- N4: 차단 확장자 추가 .msix .appx .ms-appinstaller .diagcab .website .mht .cab .psd1.
+- 기타: 완료 중 대상 폴더 목록 읽기 실패는 503 `RESULT_DROP_TARGET_UNAVAILABLE`; 세션 등록 직전 잠금 안에서 예약 반영 남은 공간 재확인(부족 시 507 `RESULT_DROP_FREE_SPACE`).
+- 검증(격리 임시 root·합성 데이터): drop(신규 `test_rereview_*` 4건 포함 39)·storage_provider(+boundary)·folder_auto_sync·new_scene_registration·result_registration_api·case_finalization_copy_jobs·security·openapi_contract 147 passed/1 skipped(재실행 포함). 프론트 tsc·build, check:architecture 기존 4건만, e2e `result-drop-upload` 7/7.
+- 미수행: 이 수정의 재검수, Windows·SMB 실환경, Rocky 8 다중 작업자 대응 결정.
+
+## 2026-10-07 W4 재검수 N1·N3 (49d7865 이후)
+
+- N1: 시스템 분석 페이지의 "사용자 수정" 버전은 `created_by`가 NULL이 아니고 `system`으로 시작하지 않는 것만 센다(`system-video-grid-backfill` 등 백필은 시스템). NULL 작성자는 사람으로 특정할 수 없어 시스템으로 본다(스키마상 NOT NULL이라 방어 처리). 손대지 않은 Orion은 사유가 `SYSTEM_ANALYSIS_PAGES`뿐이고 USER_DATA가 붙지 않음을 테스트로 고정, 사람이 수정한 버전은 USER_DATA로 집계.
+- N3: 이름 확인은 입력값과 프로젝트 이름 양쪽을 trim해 비교.
+- 검증: `test_project_cleanup.py` 18 passed(DuckDB), 프론트 tsc·build, e2e project-cleanup 2/2.

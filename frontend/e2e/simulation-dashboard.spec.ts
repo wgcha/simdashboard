@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { expect, test, type Page, type Route } from '@playwright/test'
-import type { DashboardDistribution } from '../src/shared/api/simulationDashboard'
+import type { DashboardDistribution, DashboardNameWarning } from '../src/shared/api/simulationDashboard'
 import { expectCaseResultsLayout, loginWorkspace, mockResultEnvironments, openWorkspaceRoute, setWorkspaceFontSize } from './workspace-test-helpers'
 
 test.beforeEach(async ({ page }) => {
@@ -224,7 +224,7 @@ test('usage source review preserves independent slope fields and hides raw diagn
   await page.screenshot({ path: join(evidence, 'independent-slope-desktop.png'), fullPage: false })
 })
 
-async function installDashboardMocks(page: Page, options: { slowUsage?: boolean; distribution?: DashboardDistribution } = {}) {
+async function installDashboardMocks(page: Page, options: { slowUsage?: boolean; distribution?: DashboardDistribution; nameWarnings?: DashboardNameWarning[] } = {}) {
   let releaseUsage!: () => void
   const usageGate = new Promise<void>((resolve) => { releaseUsage = resolve })
   // Auto-sync is answered locally so the shared e2e backend does not scan seeded folders between tests.
@@ -236,7 +236,7 @@ async function installDashboardMocks(page: Page, options: { slowUsage?: boolean;
       try { await fulfillJson(route, usageCatalog()) } catch { /* request was aborted by tab switch */ }
       return
     }
-    await fulfillJson(route, distributionCatalog())
+    await fulfillJson(route, { ...distributionCatalog(), name_warnings: options.nameWarnings ?? [] })
   })
   await page.route('**/api/dashboard/distribution/runs/**', (route) => {
     const payload = structuredClone(options.distribution ?? distributionPayload()) as DashboardDistribution
@@ -547,7 +547,8 @@ test('fresh request reaches the Case usage review and clears prior capture conte
 })
 
 async function checkWideLayout(page: Page, screenshot: string) {
-  await expect(page.getByRole('tablist', { name: '결과 보기' }).getByRole('tab')).toHaveCount(4)
+  // 요약 · Scene 비교 · Case 비교(W5) · 영상 · 소재·물성
+  await expect(page.getByRole('tablist', { name: '결과 보기' }).getByRole('tab')).toHaveCount(5)
   await expect(page.getByRole('tab', { name: '요약', exact: true })).toHaveAttribute('aria-selected', 'true')
   await expect(page.getByRole('button', { name: 'Final 지정', exact: true })).toBeVisible()
   // The Case path is one row: every level shares the same vertical band.
@@ -652,4 +653,56 @@ test('a request without Cases keeps folder sync running and loads results once a
   await page.getByRole('button', { name: '지금 확인' }).click()
   await expect(page.getByRole('group', { name: 'Case 경로' })).toContainText('유통환경')
   expect(catalogCalls).toBeGreaterThan(0)
+})
+
+const OPTION_PATH = '75R9J_PV/[WR-0001]_[유통_환경]/Working/Case_A_long_design_description_folder/Drop/85qn80h_ref_organized/INDIVIDUAL'
+const NAME_WARNINGS: DashboardNameWarning[] = [
+  { kind: 'SCENE_NAME_CASE', severity: 'warning', message: "같은 Run Option 아래 Scene 이름 '4_Face_Drop_Scene04', '4_face_drop_scene04'이(가) 대소문자나 구분 기호(_ - 공백)만 다릅니다. 결과가 서로 다른 Scene으로 나뉩니다.", paths: [`${OPTION_PATH}/4_Face_Drop_Scene04`, `${OPTION_PATH}/4_face_drop_scene04`], case_id: CASE_ID, run_option_id: 'option-individual' },
+  { kind: 'CASE_SCENE_MISMATCH', severity: 'warning', message: "Case마다 Scene 이름이 다르게 적혀 있습니다: '6_Face_Drop_Scene06'(Case A), '6_face_Drop_Scene06'(Case B). Case 비교에서 같은 Scene으로 맞춰지지 않습니다.", paths: [`${OPTION_PATH}/6_Face_Drop_Scene06`, '75R9J_PV/[WR-0001]_[유통_환경]/Working/Case_B/Drop/85qn80h_ref_organized/INDIVIDUAL/6_face_Drop_Scene06'], case_id: null, run_option_id: null },
+  { kind: 'UNEXPECTED_FOLDER', severity: 'info', message: "Run Option 아래 'backup' 폴더는 다른 Scene과 달리 번호로 시작하지 않습니다. Scene이 아니면 다른 곳으로 옮기세요.", paths: [`${OPTION_PATH}/backup`], case_id: CASE_ID, run_option_id: 'option-individual' },
+]
+
+test.describe('folder name warnings at 4K 150%', () => {
+  test.use({ viewport: { width: 2560, height: 1440 }, deviceScaleFactor: 1.5 })
+  test('header badge lists the paths and Scene 비교 marks the affected Scenes', async ({ page }) => {
+    await installDashboardMocks(page, { nameWarnings: NAME_WARNINGS })
+    await openResults(page)
+    await chooseDistribution(page)
+    await setWorkspaceFontSize(page, 18)
+    const badge = page.getByTestId('folder-name-warnings')
+    await expect(badge.locator('summary')).toHaveText('폴더 이름 확인 3건')
+    const list = badge.getByRole('region', { name: '폴더 이름 확인 목록' })
+    await expect(list).toBeHidden()
+    await badge.locator('summary').click()
+    await expect(list).toBeVisible()
+    await expect(list.locator(':scope > ul > li')).toHaveCount(3)
+    // Paths are shown from Working with the full path in the tooltip; no internal codes.
+    const path = list.getByRole('listitem').filter({ hasText: 'Working/Case_A_long_design_description_folder/Drop/85qn80h_ref_organized/INDIVIDUAL/4_face_drop_scene04' }).last()
+    await expect(path).toHaveAttribute('title', `${OPTION_PATH}/4_face_drop_scene04`)
+    await expect(list).not.toContainText('SCENE_NAME')
+    await expect(list).not.toContainText('UNEXPECTED')
+    expect(await page.evaluate(() => document.scrollingElement!.scrollWidth <= document.scrollingElement!.clientWidth)).toBe(true)
+    await page.screenshot({ path: '/tmp/claude-0/w6-badge-list-2560-18pt.png', fullPage: false })
+    await badge.locator('summary').click()
+    await expect(list).toBeHidden()
+
+    await openCompare(page, '엣지별 수준')
+    const table = page.locator('.simulation-dashboard__scene-table')
+    await expect(table.getByTestId('scene-name-warning')).toHaveCount(2)
+    await expect(table.locator('> div').nth(3).getByTestId('scene-name-warning')).toHaveAttribute('title', /대소문자나 구분 기호/)
+    await expect(table.locator('> div').nth(5).getByTestId('scene-name-warning')).toHaveAttribute('title', /Case마다 Scene 이름/)
+    await openCompare(page, '컨투어')
+    await expect(page.locator('.simulation-dashboard__scene-context').getByTestId('scene-name-warning')).toHaveCount(2)
+    expect(await page.evaluate(() => document.scrollingElement!.scrollWidth <= document.scrollingElement!.clientWidth)).toBe(true)
+    await page.screenshot({ path: '/tmp/claude-0/w6-scene-compare-2560-18pt.png', fullPage: false })
+  })
+
+  test('a clean catalog shows no badge', async ({ page }) => {
+    await installDashboardMocks(page)
+    await openResults(page)
+    await chooseDistribution(page)
+    await expect(page.getByTestId('folder-name-warnings')).toHaveCount(0)
+    await openCompare(page, '엣지별 수준')
+    await expect(page.getByTestId('scene-name-warning')).toHaveCount(0)
+  })
 })

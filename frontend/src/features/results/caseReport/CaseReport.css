@@ -252,3 +252,64 @@
 @keyframes case-report-spin {
   to { transform: rotate(360deg); }
 }
+
+/* W5: optional "후보 Case 비교" section (frozen Case 비교 table). */
+.case-report__compare {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  cursor: pointer;
+}
+
+.case-report__compare:has(input:disabled) {
+  cursor: default;
+  color: var(--color-text-muted, #536276);
+}
+
+/* W7: template notice and report information fields (shared with the Final dialog) */
+.case-report__template-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0;
+  color: var(--color-warning, #986500);
+  font-size: 12px;
+}
+
+.case-report__meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border, #d7e0ea);
+  border-radius: 8px;
+}
+
+.case-report__meta legend {
+  padding: 0 4px;
+  font-weight: 650;
+}
+
+.case-report__meta label {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.case-report__meta input,
+.case-report__meta textarea {
+  width: 100%;
+  min-height: 30px;
+  padding: 4px 8px;
+  border: 1px solid var(--color-border-strong, #b8cde5);
+  border-radius: 6px;
+  background: var(--color-surface-raised, #fff);
+  color: inherit;
+  font: inherit;
+}
+
+.case-report__meta-wide {
+  grid-column: 1 / -1;
+}

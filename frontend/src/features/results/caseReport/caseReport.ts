@@ -8,10 +8,13 @@
  * Run Case · Run Option. Everything here is independent of React state so the
  * Final designation flow builds and uploads the same files.
  */
-import { simulationDashboardApi, type DashboardAssetBlob, type DashboardCatalog, type DashboardChoice, type DashboardDistribution, type DashboardMember, type DashboardRunVideo, type DashboardValue, type UsageDashboard } from '../../../shared/api/simulationDashboard'
+import { simulationDashboardApi, type DashboardAssetBlob, type DashboardCatalog, type DashboardChoice, type DashboardDistribution, type DashboardRunVideo, type DashboardValue, type UsageDashboard } from '../../../shared/api/simulationDashboard'
 import { api } from '../../../api'
 import type { ContentSnapshot, ReportExportOptions } from '../../../reportExport'
 import type { Overview, ReportContentItem, ReportElementDefinition, ReportLayoutDefinition, ReportSlideDefinition, ReportSource } from '../../../types'
+import type { CaseCompareReport } from '../caseCompare'
+import { reportMetaRows, type CaseReportMeta } from './reportMeta'
+import { distributionMember, noEdgeSelected, sceneEnvelopes } from '../distributionValues'
 import { USAGE_DIRECTION_LABELS, USAGE_DIRECTIONS, usageCell, usageEvaluationLabel, usageEvaluationRows, usageStatusText } from '../usageEvaluations'
 
 export type CaseReportSource = Extract<ReportSource, { kind: 'case_results' }>
@@ -34,8 +37,9 @@ export type CaseReportLabels = {
 export type CaseUsageReportLabels = { project: string; request: string; caseLabel: string; reference: string }
 export type CaseFinalReportLabels = { project: string; request: string; caseLabel: string; component: string }
 
-export type CaseDistributionReportScope = { source: CaseReportSource; labels: CaseReportLabels }
-export type CaseUsageReportScope = { source: CaseUsageReportSource; labels: CaseUsageReportLabels }
+/** `comparison`: the Case 비교 table frozen when the dialog opened (W5); offered as "Case 비교 포함". */
+export type CaseDistributionReportScope = { source: CaseReportSource; labels: CaseReportLabels; comparison?: CaseCompareReport | null }
+export type CaseUsageReportScope = { source: CaseUsageReportSource; labels: CaseUsageReportLabels; comparison?: CaseCompareReport | null }
 export type CaseFinalReportScope = { source: CaseFinalReportSource; labels: CaseFinalReportLabels }
 /** Scope of the on-screen 보고서 button (current selection). */
 export type CaseReportScope = CaseDistributionReportScope | CaseUsageReportScope
@@ -70,6 +74,19 @@ export type CaseReportData = {
   generatedLabel: string
   scopeRows: Array<{ label: string; value: string }>
   sections: CaseReportSection[]
+  /** W5 "후보 Case 비교" (only when the user ticked "Case 비교 포함"). */
+  comparison?: CaseCompareReport
+}
+
+/** The recipe with or without the frozen Case 비교 table; without it the outputs are unchanged. */
+export function withCaseComparison(data: CaseReportData, comparison: CaseCompareReport | null | undefined): CaseReportData {
+  if (!comparison) {
+    if (!data.comparison) return data
+    const { comparison: _omitted, ...rest } = data
+    void _omitted
+    return rest
+  }
+  return { ...data, comparison }
 }
 
 export type CaseReportMediaResult = DashboardAssetBlob
@@ -101,10 +118,6 @@ function sceneNumber(scene: { scene_sequence_number: number | null }) {
   return scene.scene_sequence_number == null ? '순번 미확인' : String(scene.scene_sequence_number)
 }
 
-function reportMember(distribution: DashboardDistribution, caseId: string): DashboardMember | undefined {
-  return distribution.members.find((member) => member.simulation_case_id === caseId) ?? distribution.members[0]
-}
-
 function generatedLabelOf(date: Date) {
   return `${date.getFullYear()}.${pad(date.getMonth() + 1)}.${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
@@ -115,10 +128,9 @@ const filled = (rows: Array<{ label: string; value: string }>) => rows.map((row)
 export function buildDistributionSection(input: { id: string; heading: string; scopeRows: Array<{ label: string; value: string }>; distribution: DashboardDistribution; videos: DashboardRunVideo[]; edgeKeys: string }): CaseReportSection {
   const { distribution, videos } = input
   const prefix = input.id ? `${input.id}:` : ''
-  const member = reportMember(distribution, distribution.context.simulation_case_id ?? '')
+  const member = distributionMember(distribution)
   const memberId = member?.id
-  const noEdgeSelection = !input.edgeKeys.trim() || distribution.status === 'NO_SELECTION' || distribution.series.some((point) => point.status === 'NO_SELECTION')
-  const seriesByScene = new Map(distribution.series.filter((point) => point.member_id === memberId).map((point) => [point.scene_id, point]))
+  const noEdgeSelection = noEdgeSelected(distribution, input.edgeKeys)
   const peaksByScene = new Map<string, DashboardDistribution['edge_peaks']>()
   for (const peak of distribution.edge_peaks) {
     if (peak.member_id !== memberId) continue
@@ -127,13 +139,11 @@ export function buildDistributionSection(input: { id: string; heading: string; s
   const sceneLabel = new Map(distribution.scenes.map((scene) => [scene.id, scene.label]))
 
   let peak: { scene: string; value: number; unit: string | null } | null = null
-  const summaryRows = distribution.scenes.map((scene) => {
-    const point = seriesByScene.get(scene.id)
-    const envelope = noEdgeSelection ? null : point?.selected_edge_envelope ?? point?.value ?? null
-    if (envelope != null && (!peak || envelope > peak.value)) peak = { scene: scene.label, value: envelope, unit: point?.unit ?? null }
+  const summaryRows = sceneEnvelopes(distribution, input.edgeKeys).map(({ scene, value: envelope, unit }) => {
+    if (envelope != null && (!peak || envelope > peak.value)) peak = { scene: scene.label, value: envelope, unit }
     const edgePeaks = (peaksByScene.get(scene.id) ?? []).filter((item) => item.value != null)
     const maxEdge = edgePeaks.reduce<(typeof edgePeaks)[number] | null>((best, item) => !best || (item.value ?? 0) > (best.value ?? 0) ? item : best, null)
-    const envelopeText = noEdgeSelection ? CASE_REPORT_NO_EDGE : valueText(envelope == null ? null : { value: envelope, unit: point?.unit ?? null })
+    const envelopeText = noEdgeSelection ? CASE_REPORT_NO_EDGE : valueText(envelope == null ? null : { value: envelope, unit })
     return [sceneNumber(scene), scene.label, envelopeText, maxEdge ? `${maxEdge.edge} · ${valueText(maxEdge)}` : '값 없음']
   })
   const finalPeak = peak as { scene: string; value: number; unit: string | null } | null
@@ -285,8 +295,8 @@ export function buildCaseFinalReportData(input: { scope: CaseFinalReportScope; s
 export async function loadCaseReportSources(source: Pick<CaseReportSource, 'runId' | 'captureId' | 'optionId' | 'mode' | 'componentId' | 'basis' | 'edgeKeys' | 'lineIndices'>, signal?: AbortSignal): Promise<{ distribution: DashboardDistribution; videos: DashboardRunVideo[] }> {
   const distributionPromise = simulationDashboardApi.distribution(source.runId, { capture_id: source.captureId, run_option_id: source.optionId || undefined, mode: source.mode, component_id: source.componentId, basis: source.basis as 'DETAIL' | 'REPORTED_SUMMARY', edge_keys: source.edgeKeys, line_indices: source.lineIndices }, signal)
   const videos: DashboardRunVideo[] = []
-  for (let page = 1; page <= 50; page += 1) {
-    const result = await simulationDashboardApi.videos(source.runId, { capture_id: source.captureId, run_option_id: source.optionId || undefined, mode: source.optionId ? undefined : source.mode || undefined, page, page_size: 100 }, signal)
+  for (let page = 1; page <= 250; page += 1) {
+    const result = await simulationDashboardApi.videos(source.runId, { capture_id: source.captureId, run_option_id: source.optionId || undefined, mode: source.optionId ? undefined : source.mode || undefined, page, page_size: 20 }, signal)
     videos.push(...(result.videos ?? []))
     if (!result.pagination.has_next) break
   }
@@ -395,7 +405,7 @@ export const allReportImages = (data: CaseReportData) => data.sections.flatMap((
 export const allReportVideos = (data: CaseReportData) => data.sections.flatMap((section) => section.videos)
 
 function coverText(data: CaseReportData) {
-  const lines = data.scopeRows.map((row) => `${row.label}: ${row.value}`)
+  const lines = [...data.scopeRows.map((row) => `${row.label}: ${row.value}`), ...(data.comparison ? [`후보 Case 비교: ${data.comparison.headers.slice(data.comparison.environment === 'USAGE' ? 2 : 1).join(', ')}`] : [])]
   if (data.sections.length === 1 && !data.sections[0].heading) return [...lines, `요약: ${data.sections[0].summary.note}`].join('\n')
   const parts = data.sections.slice(0, 10).map((section) => `· ${section.heading}: ${section.empty || section.summary.note}`)
   const more = data.sections.length > 10 ? [`· 외 ${data.sections.length - 10}개`] : []
@@ -439,7 +449,29 @@ export function buildCaseReportContents(data: CaseReportData, images: Map<string
       data: { text: rows.map((row) => row.join(' · ')).join('\n'), tableHeaders: ['Scene', '영상 파일'], tableRows: rows } satisfies ContentSnapshot,
     })))
   }
+  if (data.comparison) {
+    const comparison = data.comparison
+    const scope = comparison.scopeRows.map((row) => `${row.label}: ${row.value || '없음'}`).join(' · ')
+    items.push(...chunk(comparison.rows, PPTX_TABLE_ROWS).map((rows, index, pages): ReportContentItem => ({
+      contentId: `${CASE_COMPARE_CONTENT_PREFIX}${key}:${index + 1}`, kind: 'case_scene_table', sourceKey: key, title: pageTitle(comparison.title, index, pages.length), defaultPresentation: 'table',
+      data: { text: [scope, comparison.note].filter(Boolean).join('\n'), tableHeaders: comparison.headers, tableRows: rows } satisfies ContentSnapshot,
+    })))
+  }
   return items
+}
+
+/** Content ids of the Case 비교 slides start with this prefix. */
+export const CASE_COMPARE_CONTENT_PREFIX = 'case-compare:'
+const COMPARE_SLIDE_PREFIX = 'slide-case-compare-'
+
+/**
+ * Adds (or removes) the Case 비교 slides at the end of a prepared layout so
+ * ticking "Case 비교 포함" keeps the other slides and any edits to them.
+ */
+export function syncCaseComparisonSlides(layout: ReportLayoutDefinition, contents: ReportContentItem[]): ReportLayoutDefinition {
+  const slides = (layout.slides ?? []).filter((slide) => !slide.id.startsWith(COMPARE_SLIDE_PREFIX))
+  const compare = contents.filter((content) => content.contentId.startsWith(CASE_COMPARE_CONTENT_PREFIX))
+  return { ...layout, slides: [...slides, ...compare.map((content, index) => contentSlide(content, `${COMPARE_SLIDE_PREFIX}${index + 1}`, `compare-${index}`))] }
 }
 
 function element(id: string, type: ReportElementDefinition['type'], label: string, rect: [number, number, number, number], binding: ReportElementDefinition['binding']): ReportElementDefinition {
@@ -455,16 +487,20 @@ export function createCaseReportSlides(contents: ReportContentItem[]): ReportSli
     element('case-cover-date', 'text', '작성날짜', [24, 1, 7, 1], { source: 'field', key: 'report_date' }),
     ...(scope ? [element('case-cover-scope', 'text', scope.title, [1, 4, 30, 12], { source: 'content', contentId: scope.contentId, key: 'body' })] : []),
   ] }
-  return [cover, ...rest.map((content, index): ReportSlideDefinition => {
-    const type: ReportElementDefinition['type'] = content.defaultPresentation === 'card' ? 'scalar-card' : content.defaultPresentation
-    return {
-      id: `slide-case-${index + 1}-${content.kind}`, name: content.title, kind: 'custom', repeat: 'none',
-      elements: [
-        element(`case-title-${index}`, 'title', content.title, [1, 1, 30, 2], { source: 'content', contentId: content.contentId, key: 'title' }),
-        element(`case-body-${index}`, type, content.title, [1, 4, 30, 12], { source: 'content', contentId: content.contentId, key: 'body' }),
-      ],
-    }
-  })]
+  return [cover, ...rest.map((content, index): ReportSlideDefinition => content.contentId.startsWith(CASE_COMPARE_CONTENT_PREFIX)
+    ? contentSlide(content, `${COMPARE_SLIDE_PREFIX}${rest.filter((item, position) => position < index && item.contentId.startsWith(CASE_COMPARE_CONTENT_PREFIX)).length + 1}`, `compare-${index}`)
+    : contentSlide(content, `slide-case-${index + 1}-${content.kind}`, String(index)))]
+}
+
+function contentSlide(content: ReportContentItem, id: string, suffix: string): ReportSlideDefinition {
+  const type: ReportElementDefinition['type'] = content.defaultPresentation === 'card' ? 'scalar-card' : content.defaultPresentation
+  return {
+    id, name: content.title, kind: 'custom', repeat: 'none',
+    elements: [
+      element(`case-title-${suffix}`, 'title', content.title, [1, 1, 30, 2], { source: 'content', contentId: content.contentId, key: 'title' }),
+      element(`case-body-${suffix}`, type, content.title, [1, 4, 30, 12], { source: 'content', contentId: content.contentId, key: 'body' }),
+    ],
+  }
 }
 
 /**
@@ -478,6 +514,21 @@ export function prepareCaseReportLayout(layout: ReportLayoutDefinition, source: 
   const base = { ...layout, sourceScope: source }
   if (!forceDefault && layout.contentMode && sameSource && layout.slides?.length) return base
   return { ...base, contentMode: 'one-per-slide', slides: createCaseReportSlides(contents) }
+}
+
+const META_FIELDS: Array<[keyof CaseReportMeta, string, string]> = [
+  ['author', 'author', '작성자'], ['developmentStage', 'development_stage', '개발단계'],
+  ['reviewConditions', 'review_conditions', '검토조건'], ['reviewConclusion', 'review_conclusion', '결론'],
+]
+
+/** W7: non-empty report information as boxes along the bottom of the cover slide (render time only). */
+export function withCaseReportMeta(layout: ReportLayoutDefinition, meta: CaseReportMeta | undefined): ReportLayoutDefinition {
+  const present = META_FIELDS.filter(([field]) => meta?.[field]?.trim())
+  if (!present.length || !layout.slides?.length) return layout
+  const coverIndex = Math.max(0, layout.slides.findIndex((slide) => slide.kind === 'cover'))
+  const width = Math.floor(30 / present.length)
+  const elements = present.map(([, key, label], index) => element(`case-cover-meta-${key}`, 'text', label, [1 + index * width, 16, width - (index === present.length - 1 ? 0 : 1), 2], { source: 'field', key }))
+  return { ...layout, slides: layout.slides.map((slide, index) => index === coverIndex ? { ...slide, elements: [...slide.elements.filter((item) => !item.id.startsWith('case-cover-meta-')), ...elements] } : slide) }
 }
 
 /** Uploaded PPTX templates do not support this report format; render with the visual layout. */
@@ -568,6 +619,8 @@ export type CaseReportPptxOptions = {
   /** Images already read for this build (shared with the HTML format). */
   images?: CaseReportLoadedImages
   signal?: AbortSignal
+  /** W7: author and optional 개발단계·검토조건·결론 for the cover/summary. */
+  meta?: CaseReportMeta
 }
 
 /** PPTX through the existing pptxgenjs layout renderer. */
@@ -575,11 +628,12 @@ export async function buildCaseReportPptx(data: CaseReportData, options: CaseRep
   const [reportModule, loaded] = await Promise.all([import('../../../reportExport'), options.images ?? loadCaseReportImages(data, { loadMedia: options.loadMedia, signal: options.signal })])
   if (options.signal?.aborted) throw abortError()
   const contents = buildCaseReportContents(data, loaded.images)
-  const layout = caseReportRenderLayout(prepareCaseReportLayout(options.layout ?? reportModule.DEFAULT_REPORT_LAYOUT, data.source, contents))
+  const layout = withCaseReportMeta(caseReportRenderLayout(prepareCaseReportLayout(options.layout ?? reportModule.DEFAULT_REPORT_LAYOUT, data.source, contents)), options.meta)
   const scopeValue = (label: string) => data.scopeRows.find((row) => row.label === label)?.value ?? ''
   const labels = options.labels ?? { project: scopeValue('프로젝트'), request: scopeValue('의뢰'), loadCase: scopeValue('하중경우') }
   const reviewResult = data.sections.length === 1 ? data.sections[0].empty || data.sections[0].summary.note : scopeValue('범위')
-  const reportOptions: ReportExportOptions = { author: '', developmentStage: '', reportDate: data.generatedLabel, reliabilityName: data.environment === 'USAGE' ? '사용환경 Case 결과' : 'Case 결과', reviewPurpose: labels.request, reviewConditions: '', reviewResult, reviewConclusion: '', reportTitle: data.title }
+  const meta = options.meta
+  const reportOptions: ReportExportOptions = { author: meta?.author.trim() ?? '', developmentStage: meta?.developmentStage.trim() ?? '', reportDate: data.generatedLabel, reliabilityName: data.environment === 'USAGE' ? '사용환경 Case 결과' : 'Case 결과', reviewPurpose: labels.request, reviewConditions: meta?.reviewConditions.trim() ?? '', reviewResult, reviewConclusion: meta?.reviewConclusion.trim() ?? '', reportTitle: data.title }
   return await reportModule.renderReportPptxBlob(caseReportOverview(data, labels), reportOptions, layout, contents)
 }
 
@@ -631,6 +685,8 @@ export type CaseReportHtmlOptions = {
   signal?: AbortSignal
   maxVideoBytes?: number
   maxTotalVideoBytes?: number
+  /** W7: non-empty fields are added to the scope block. */
+  meta?: CaseReportMeta
 }
 
 /**
@@ -647,7 +703,7 @@ export async function buildCaseReportHtml(data: CaseReportData, options: CaseRep
   let usedVideoBytes = 0
   const multi = data.sections.length > 1 || Boolean(data.sections[0]?.heading)
   parts.push(`<!doctype html>\n<html lang="ko">\n<head>\n<meta charset="utf-8">\n<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; media-src data:; style-src 'unsafe-inline'; form-action 'none'; base-uri 'none'">\n<meta name="viewport" content="width=device-width, initial-scale=1">\n<meta name="generator" content="VD Simulation Workbench">\n<title>${escapeHtml(data.title)}</title>\n<style>${HTML_STYLE}</style>\n</head>\n<body>\n<main>\n`)
-  parts.push(`<header><h1>${escapeHtml(data.title)}</h1><p class="meta">생성 ${escapeHtml(data.generatedLabel)}</p><dl>${data.scopeRows.map((row) => `<dt>${escapeHtml(row.label)}</dt><dd>${escapeHtml(row.value)}</dd>`).join('')}</dl></header>\n`)
+  parts.push(`<header><h1>${escapeHtml(data.title)}</h1><p class="meta">생성 ${escapeHtml(data.generatedLabel)}</p><dl>${[...data.scopeRows, ...reportMetaRows(options.meta)].map((row) => `<dt>${escapeHtml(row.label)}</dt><dd>${escapeHtml(row.value)}</dd>`).join('')}</dl></header>\n`)
   for (const [index, section] of data.sections.entries()) {
     const h = multi ? 'h3' : 'h2'
     const anchor = `s${index + 1}`
@@ -696,6 +752,10 @@ export async function buildCaseReportHtml(data: CaseReportData, options: CaseRep
       parts.push('</section>\n')
     }
     if (multi) parts.push('</div>\n')
+  }
+  if (data.comparison) {
+    const comparison = data.comparison
+    parts.push(`<section aria-labelledby="case-compare-title" data-section="case-compare"><h2 id="case-compare-title">${escapeHtml(comparison.title)}</h2><dl>${comparison.scopeRows.map((row) => `<dt>${escapeHtml(row.label)}</dt><dd>${escapeHtml(row.value || '없음')}</dd>`).join('')}</dl><p class="peak">${escapeHtml(comparison.note)}</p>${htmlTable(comparison.headers, comparison.rows, comparison.environment === 'USAGE' ? 2 : 1)}</section>\n`)
   }
   parts.push('</main>\n</body>\n</html>\n')
   if (options.signal?.aborted) throw abortError()

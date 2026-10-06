@@ -92,6 +92,16 @@ const USER_MENU_LABELS: Partial<Record<AppSidebarMenuId, string>> = {
   data: '해석 데이터 등록',
 }
 
+// Hidden from the sidebar for the current usage scenario (user decision 2026-10-06).
+// Pages and permissions are unchanged; direct URLs still work. Remove an id to show it again.
+export const SIDEBAR_HIDDEN_MENUS: ReadonlySet<AppSidebarMenuId> = new Set<AppSidebarMenuId>([
+  'intake',
+  'examples',
+  'variables',
+  'project_result_profiles',
+  'workbench_admin',
+])
+
 function groupForMenu(id: string): MenuGroupId | undefined {
   return MENU_GROUP_BY_ID[id as AppSidebarMenuId]
 }
@@ -143,7 +153,7 @@ export function AppSidebar({
   }, [activeGroup])
   const groupedMenus = new Map<MenuGroupId, AppSidebarMenu[]>()
   menus.forEach((menu) => {
-    if (menu.id === 'workbench' || menu.id === 'data' || menu.id === 'help' || menu.id === 'voc') return
+    if (menu.id === 'workbench' || menu.id === 'data' || menu.id === 'help' || menu.id === 'voc' || SIDEBAR_HIDDEN_MENUS.has(menu.id)) return
     const groupId = MENU_GROUP_BY_ID[menu.id]
     const group = groupedMenus.get(groupId)
     if (group) group.push(menu)

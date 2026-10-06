@@ -2364,6 +2364,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/folder-discovery/environments/project-cleanup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Project Cleanup Candidates */
+        get: operations["project_cleanup_candidates_api_folder_discovery_environments_project_cleanup_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/folder-discovery/environments/project-cleanup/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Project Cleanup Preview */
+        post: operations["project_cleanup_preview_api_folder_discovery_environments_project_cleanup_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/folder-discovery/environments/project-cleanup/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Project Cleanup Delete */
+        post: operations["project_cleanup_delete_api_folder_discovery_environments_project_cleanup_delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/requests/{request_id}/reinterpret": {
         parameters: {
             query?: never;
@@ -2948,7 +2999,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * List Legacy Drafts
+         * @description Read-only history of drafts made with the pre-W8 registration screen.
+         */
+        get: operations["list_legacy_drafts_api_result_registration_drafts_get"];
         put?: never;
         /** Create Draft */
         post: operations["create_draft_api_result_registration_drafts_post"];
@@ -3071,6 +3126,139 @@ export interface paths {
         get: operations["draft_media_api_result_registration_drafts__draft_id__media_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/result-registration/drop-target": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Drop Target
+         * @description The request's Working tree by DEPTH_V1 level and the paths users see in Explorer.
+         */
+        get: operations["drop_target_api_result_registration_drop_target_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/result-registration/drop-target/folders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Drop Create Folder */
+        post: operations["drop_create_folder_api_result_registration_drop_target_folders_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/result-registration/drop-uploads/plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Drop Plan
+         * @description Everything the upload would do, checked before any write (no side effects).
+         */
+        post: operations["drop_plan_api_result_registration_drop_uploads_plan_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/result-registration/drop-uploads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Drop List Sessions
+         * @description Open uploads of a request: the caller's own, or all of them for a global admin (who may stop any).
+         */
+        get: operations["drop_list_sessions_api_result_registration_drop_uploads_get"];
+        put?: never;
+        /** Drop Create Session */
+        post: operations["drop_create_session_api_result_registration_drop_uploads_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/result-registration/drop-uploads/{session_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Drop Read Session */
+        get: operations["drop_read_session_api_result_registration_drop_uploads__session_id__get"];
+        put?: never;
+        post?: never;
+        /** Drop Abort */
+        delete: operations["drop_abort_api_result_registration_drop_uploads__session_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/result-registration/drop-uploads/{session_id}/files/{index}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Drop Upload Chunk
+         * @description One chunk (≤ 8 MiB) at ``offset``; ``X-Chunk-SHA256`` is optional (browsers without WebCrypto on HTTP).
+         */
+        put: operations["drop_upload_chunk_api_result_registration_drop_uploads__session_id__files__index__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/result-registration/drop-uploads/{session_id}/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Drop Complete */
+        post: operations["drop_complete_api_result_registration_drop_uploads__session_id__complete_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3335,6 +3523,48 @@ export interface paths {
         get: operations["status_api_dashboard_finalizations_status_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/dashboard/finalizations/{operation_id}/job": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Job Status
+         * @description Copy job progress (W2); an interrupted job is resumed with the same Final ID.
+         */
+        get: operations["job_status_api_dashboard_finalizations__operation_id__job_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/dashboard/finalizations/summary/repair": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Repair Summary
+         * @description W3: rewrite ``Final/current.json`` (and the signed pointer) for the current Final; returns the status.
+         *
+         *     ``override`` needs a global admin. Success and failure are both audited (override flag, error code).
+         */
+        post: operations["repair_summary_api_dashboard_finalizations_summary_repair_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4537,6 +4767,20 @@ export interface components {
              */
             synced_at: string;
         };
+        /** CleanupConfirm */
+        CleanupConfirm: {
+            /** Project Ids */
+            project_ids: string[];
+            /** Confirm Token */
+            confirm_token: string;
+            /** Acknowledge Data Project Ids */
+            acknowledge_data_project_ids?: string[];
+        };
+        /** CleanupTargets */
+        CleanupTargets: {
+            /** Project Ids */
+            project_ids: string[];
+        };
         /** ComparisonInput */
         ComparisonInput: {
             /** Members */
@@ -4888,6 +5132,54 @@ export interface components {
              * @default
              */
             media_type: string;
+        };
+        /** DropFile */
+        DropFile: {
+            /** Relative Path */
+            relative_path: string;
+            /** Size */
+            size: number;
+            /** Sha256 */
+            sha256?: string | null;
+        };
+        /** DropFolderInput */
+        DropFolderInput: {
+            /** Project Id */
+            project_id: string;
+            /** Request Id */
+            request_id: string;
+            /**
+             * Environment
+             * @enum {string}
+             */
+            environment: "USAGE" | "DISTRIBUTION";
+            /** Parent Relative Path */
+            parent_relative_path: string;
+            /** Name */
+            name: string;
+            /**
+             * Confirm
+             * @default false
+             */
+            confirm: boolean;
+        };
+        /** DropPlanInput */
+        DropPlanInput: {
+            /** Project Id */
+            project_id: string;
+            /** Request Id */
+            request_id: string;
+            /**
+             * Environment
+             * @enum {string}
+             */
+            environment: "USAGE" | "DISTRIBUTION";
+            /** Target Relative Path */
+            target_relative_path: string;
+            /** Files */
+            files?: components["schemas"]["DropFile"][];
+            /** Folders */
+            folders?: string[];
         };
         /** DropVideoEvaluation */
         DropVideoEvaluation: {
@@ -6830,6 +7122,25 @@ export interface components {
             /** Source Revision */
             source_revision?: number | null;
             stored_file: components["schemas"]["StorageFileResponse"];
+        };
+        /** SummaryRepairInput */
+        SummaryRepairInput: {
+            /** Project Id */
+            project_id: string;
+            /** Request Id */
+            request_id: string;
+            /**
+             * Environment
+             * @enum {string}
+             */
+            environment: "USAGE" | "DISTRIBUTION";
+            /** Case Id */
+            case_id: string;
+            /**
+             * Override
+             * @default false
+             */
+            override: boolean;
         };
         /** Sync */
         Sync: {
@@ -12197,6 +12508,92 @@ export interface operations {
             };
         };
     };
+    project_cleanup_candidates_api_folder_discovery_environments_project_cleanup_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    project_cleanup_preview_api_folder_discovery_environments_project_cleanup_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CleanupTargets"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    project_cleanup_delete_api_folder_discovery_environments_project_cleanup_delete_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CleanupConfirm"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     reinterpret_api_requests__request_id__reinterpret_post: {
         parameters: {
             query?: never;
@@ -13552,6 +13949,39 @@ export interface operations {
             };
         };
     };
+    list_legacy_drafts_api_result_registration_drafts_get: {
+        parameters: {
+            query: {
+                project_id: string;
+                request_id: string;
+                environment: "USAGE" | "DISTRIBUTION";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     create_draft_api_result_registration_drafts_post: {
         parameters: {
             query?: never;
@@ -13798,6 +14228,301 @@ export interface operations {
             header?: never;
             path: {
                 draft_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    drop_target_api_result_registration_drop_target_get: {
+        parameters: {
+            query: {
+                project_id: string;
+                request_id: string;
+                environment: "USAGE" | "DISTRIBUTION";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    drop_create_folder_api_result_registration_drop_target_folders_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DropFolderInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    drop_plan_api_result_registration_drop_uploads_plan_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DropPlanInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    drop_list_sessions_api_result_registration_drop_uploads_get: {
+        parameters: {
+            query: {
+                project_id: string;
+                request_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    drop_create_session_api_result_registration_drop_uploads_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DropPlanInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    drop_read_session_api_result_registration_drop_uploads__session_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    drop_abort_api_result_registration_drop_uploads__session_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    drop_upload_chunk_api_result_registration_drop_uploads__session_id__files__index__put: {
+        parameters: {
+            query: {
+                offset: number;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+                index: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    drop_complete_api_result_registration_drop_uploads__session_id__complete_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
             };
             cookie?: never;
         };
@@ -14318,6 +15043,75 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    job_status_api_dashboard_finalizations__operation_id__job_get: {
+        parameters: {
+            query: {
+                project_id: string;
+                request_id: string;
+                environment: "USAGE" | "DISTRIBUTION";
+                case_id: string;
+            };
+            header?: never;
+            path: {
+                operation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    repair_summary_api_dashboard_finalizations_summary_repair_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SummaryRepairInput"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

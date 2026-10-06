@@ -7,11 +7,12 @@ import { BLOCKING_DEVIATIONS, deviationLabel } from '../../shared/api/depthSchem
 import { FolderRegistrationResults, roleLabel } from './FolderEnvironmentPanels'
 import { DepthSchemaEditor } from './DepthSchemaEditor'
 import { FolderRegistrationHistory } from './FolderRegistrationHistory'
+import { FolderProjectCleanup } from './FolderProjectCleanup'
 import { defaultUsageReviewDraft, UsageSourceReviewPanel, type UsageReviewDraft } from './UsageSourceReviewPanel'
 import './FolderEnvironmentWorkspace.css'
 
 type Props = { selectedProjectId?: string; selectedRequestId?: string; isGlobalAdmin?: boolean; onComplete?: () => void; onRegistrationsDeleted?: () => void | Promise<void> }
-type Tab = 'connect' | 'profiles' | 'history'
+type Tab = 'connect' | 'profiles' | 'history' | 'cleanup'
 /** §14.2 blocking reasons of a manual (one request) registration. */
 const REQUEST_BLOCK_MESSAGES: Record<string, string> = {
   MULTIPLE_REQUESTS: '의뢰 폴더별로 조사하세요. 여러 의뢰는 자동 탐색이 의뢰별로 등록합니다.',
@@ -72,6 +73,8 @@ export function FolderEnvironmentWorkspace({ selectedProjectId = '', selectedReq
   // DEPTH_V1: roles come from the depth schema; the only edits are EXCLUDE and PROJECT/REQUEST LINK (§6).
   const assign = (patch: Partial<FolderAssignment> | null) => { if (!current) return; setAssignments((values) => { const next = { ...values }; if (patch === null) delete next[current.id]; else next[current.id] = { ...(values[current.id] ?? { node_id: current.id, role_kind: current.role_kind ?? '', target_mode: 'CREATE' as const }), ...patch, propagate_same_level: false, confirm: true }; return next }); if (current.role_kind === 'PROJECT' && patch?.target_id) { setProject(patch.target_id); setRequest('') }; setPreview(null); setRegistration(null) }
   const visibleNodes = useMemo(() => nodes.filter((node) => (!onlyIssues || needsReview(node)) && ![...collapsed].some((parent) => node.relative_path !== parent && node.relative_path.startsWith(`${parent}/`))), [scan, onlyIssues, collapsed, assignments])
+  /** After a registration delete or project cleanup: re-read projects/requests and drop a deleted selection. */
+  const refreshAfterDelete = async () => { const all = await api.projects(); setProjects(all); if (!all.some((item) => item.id === project)) { setProject(''); setRequest('') } else if (project) { const items = await api.requests(project); setRequests(items); if (!items.some((item) => item.id === request)) setRequest('') } setRegistration(null); await onRegistrationsDeleted?.() }
   const showRegistration = (value: FolderEnvironmentRegistration) => { setRegistration(value); setTab('connect'); setStep(3); onComplete?.() }
   const usageCases = preview?.rows.filter((row) => row.role_kind === 'SIMULATION_CASE') ?? []
   const activeUsageCase = usageCases.find((item) => item.relative_path === activeUsageCasePath) ?? usageCases[0]
@@ -89,12 +92,13 @@ export function FolderEnvironmentWorkspace({ selectedProjectId = '', selectedReq
   const jobPanel = registration && <FolderRegistrationResults value={registration} busy={Boolean(busy)} onRefresh={() => void execute('상태 조회 중…', () => service.registration(registration.registration_id), setRegistration)} onRetry={() => void execute('결과 읽는 중…', () => service.retryCapture(registration.registration_id), setRegistration)} />
   return <section className="folder-environment-workspace" data-ui-density="v1">
     <header className="folder-environment-heading"><div><h1>폴더 연결·규칙</h1><p>의뢰 폴더 1개를 조사해 바로 등록합니다. 여러 의뢰는 자동 탐색이 의뢰별로 등록합니다.</p></div><label>환경<select aria-label="폴더 환경" value={environment} disabled={Boolean(busy)} onChange={(event) => { invalidate(); setEnvironment(event.target.value as FolderEnvironment) }}><option value="USAGE">사용환경</option><option value="DISTRIBUTION">유통환경</option></select></label><button type="button" className="ghost-button" disabled={Boolean(busy) || !project || !request} onClick={() => void refresh()}>Refresh</button></header>
-    <nav className="saved-work-tabs" aria-label="폴더 규칙 작업">{([['connect', '폴더 연결'], ['profiles', '저장된 규칙'], ['history', '등록 이력']] as const).map(([key, title]) => <button type="button" key={key} disabled={Boolean(busy)} className={tab === key ? 'active' : ''} aria-current={tab === key ? 'page' : undefined} onClick={() => setTab(key)}>{title}</button>)}</nav>
+    <nav className="saved-work-tabs" aria-label="폴더 규칙 작업">{([['connect', '폴더 연결'], ['profiles', '저장된 규칙'], ['history', '등록 이력'], ...(isGlobalAdmin ? [['cleanup', '프로젝트 정리'] as const] : [])] as const).map(([key, title]) => <button type="button" key={key} disabled={Boolean(busy)} className={tab === key ? 'active' : ''} aria-current={tab === key ? 'page' : undefined} onClick={() => setTab(key)}>{title}</button>)}</nav>
     {notice && <div className="folder-environment-notice info" role="status">{notice}</div>}
     {refreshResult && <details className="folder-environment-card"><summary>Refresh 역할 판정 · {refreshResult.nodes.length}개 폴더</summary><div className="folder-preview-table">{refreshResult.nodes.map((node) => <div className="folder-preview-row folder-preview-row--refresh" key={node.relative_path}><span>{node.relative_path}</span><b>{roleLabel(node.role_kind)}</b><em>{previewStatusLabel(node.status)} · {node.role_basis}</em><DeviationBadge node={node} /></div>)}</div></details>}
     {busy && <p role="status">{busy}</p>}
     {tab === 'profiles' && <DepthSchemaEditor onSaved={() => invalidate()} />}
-    {tab === 'history' && <FolderRegistrationHistory isAdmin={isGlobalAdmin} busy={Boolean(busy)} onOpen={(item) => void execute('이력 조회 중…', () => service.registration(item.registration_id), showRegistration)} onDeleted={async () => { const all = await api.projects(); setProjects(all); if (!all.some((item) => item.id === project)) { setProject(''); setRequest('') } else if (project) { const items = await api.requests(project); setRequests(items); if (!items.some((item) => item.id === request)) setRequest('') } setRegistration(null); await onRegistrationsDeleted?.() }} />}
+    {tab === 'history' && <FolderRegistrationHistory isAdmin={isGlobalAdmin} busy={Boolean(busy)} onOpen={(item) => void execute('이력 조회 중…', () => service.registration(item.registration_id), showRegistration)} onDeleted={refreshAfterDelete} />}
+    {tab === 'cleanup' && isGlobalAdmin && <FolderProjectCleanup busy={Boolean(busy)} onDeleted={refreshAfterDelete} />}
     {tab === 'connect' && <>
       <nav className="folder-steps" aria-label="폴더 연결 단계">{['폴더 선택', '구조 확인', '등록·결과 확인'].map((title, i) => <button type="button" key={title} disabled={Boolean(busy) || (i === 1 && !scan) || (i === 2 && !preview && !registration)} aria-current={step === i + 1 ? 'step' : undefined} className={step === i + 1 ? 'active' : ''} onClick={() => setStep(i + 1)}><b>{i + 1}</b>{title}</button>)}</nav>
       {step === 1 && <article className="folder-environment-card"><div className="folder-environment-form">

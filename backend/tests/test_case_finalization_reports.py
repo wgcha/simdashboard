@@ -16,7 +16,8 @@ from uuid import uuid4
 import pytest
 
 from app.database_connection import connect
-from app.services import case_finalization, dashboard_capture
+from app.routers.case_finalization import _error as route_error
+from app.services import case_finalization, case_finalization_jobs, dashboard_capture
 from tests.test_environment_folder_flow_api import synthetic_pptx
 from tests.test_new_scene_registration import CASE, CSV, CSV_BYTES, ENV, OPTION, REQUEST, _post, admin_client  # noqa: F401
 
@@ -80,8 +81,37 @@ def _upload(client, ctx, operation_id, fmt, data):
                       headers={"Content-Type": "application/octet-stream"})
 
 
+class _Finished:
+    """Final outcome of the background copy job, shaped like the former synchronous response."""
+
+    def __init__(self, status_code: int, body: dict) -> None:
+        self.status_code = status_code
+        self._body = body
+        self.text = json.dumps(body, ensure_ascii=False)
+
+    def json(self) -> dict:
+        return self._body
+
+
+def _job(client, ctx, operation_id):
+    response = client.get(f"{API}/{operation_id}/job", params={k: v for k, v in _body(ctx).items() if k != "capture_id"})
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
 def _confirm(client, ctx, operation_id, formats):
-    return client.post(f"{API}/confirm", json={**_body(ctx), "operation_id": operation_id, "report_formats": formats})
+    """POST /confirm, wait for the copy worker, and return the completed record or the job error."""
+    response = client.post(f"{API}/confirm", json={**_body(ctx), "operation_id": operation_id, "report_formats": formats})
+    if response.status_code != 200:
+        return response
+    assert response.json()["state"] in {"QUEUED", "RUNNING", "COMPLETE"}, response.text
+    assert case_finalization_jobs.wait_idle(120)
+    view = _job(client, ctx, operation_id)
+    if view["state"] == "COMPLETE":
+        return _Finished(200, view["record"])
+    assert view["state"] == "FAILED", view
+    error = case_finalization.CaseFinalizationError(view["error"]["code"], view["error"]["message"])
+    return _Finished(route_error(error).status_code, {"detail": view["error"]})
 
 
 def test_latest_basis_mirrors_scene_files_into_cae_and_stores_only_uploaded_reports(admin_client):
@@ -89,7 +119,7 @@ def test_latest_basis_mirrors_scene_files_into_cae_and_stores_only_uploaded_repo
     ctx = _seed(client, root)
     working_before = _tree(root, exclude_final=True)
     plan = _preview(client, ctx)
-    assert plan["schema_version"] == 2 and plan["basis"] == "LATEST"
+    assert plan["schema_version"] == 3 and plan["basis"] == "LATEST"
     assert len(plan["operation_id"]) == 32 and case_finalization._OPERATION_ID.fullmatch(plan["operation_id"])
     assert {item["scene_path"].rsplit("/", 1)[-1] for item in plan["scene_sources"]} == {"2_Face", "3_Face"}
     assert {item["source_capture_id"] for item in plan["scene_sources"]} == {ctx["_stored"]}
@@ -125,7 +155,8 @@ def test_latest_basis_mirrors_scene_files_into_cae_and_stores_only_uploaded_repo
         ("pptx", hashlib.sha256(pptx).hexdigest()), ("html", hashlib.sha256(HTML).hexdigest())]
     # Nothing outside Final/ was written and Working is unchanged.
     assert _tree(root, exclude_final=True) == working_before
-    assert set(path.name for path in (root / FINAL).iterdir()) == {"CAE", "Report", ".finalizations"}
+    # W3: plus the SPDM summary of the current Final.
+    assert set(path.name for path in (root / FINAL).iterdir()) == {"CAE", "Report", ".finalizations", "current.json"}
 
     status = client.get(f"{API}/status", params={k: v for k, v in _body(ctx).items() if k != "capture_id"})
     assert status.status_code == 200, status.text
@@ -240,16 +271,20 @@ def test_retry_replaces_unfinished_reports_and_completion_is_immutable(admin_cli
     first = synthetic_pptx({"ppt/slides/slide1.xml": b"first"})
     second = synthetic_pptx({"ppt/slides/slide1.xml": b"second"})
     assert _upload(client, ctx, operation, "pptx", first).status_code == 200
-    # The reports are published, then verification fails before completion.
-    original_verify = case_finalization._verify_outputs
-    monkeypatch.setattr(case_finalization, "_verify_outputs", lambda *args, **kwargs: False)
+    # W2: the job fails before anything is published (staged copies only).
+    original_verify = case_finalization._verify_staged_cae
+
+    def fail_verify(*args, **kwargs):
+        raise case_finalization.CaseFinalizationError("FINALIZATION_OUTPUT_VERIFY_FAILED", "synthetic")
+
+    monkeypatch.setattr(case_finalization, "_verify_staged_cae", fail_verify)
     failed = _confirm(client, ctx, operation, ["pptx"])
     assert failed.status_code == 422 and failed.json()["detail"]["code"] == "FINALIZATION_OUTPUT_VERIFY_FAILED"
     report_path = root / plan["report_paths"]["pptx"]
-    assert report_path.read_bytes() == first
+    assert not report_path.parent.exists() and not (root / plan["output_paths"]["CAE"]).exists()
     assert not (root / plan["metadata_relative_path"] / "complete.json").exists()
-    monkeypatch.setattr(case_finalization, "_verify_outputs", original_verify)
-    # Before completion a re-upload may replace this operation's own report.
+    monkeypatch.setattr(case_finalization, "_verify_staged_cae", original_verify)
+    # Before publication a re-upload may replace this operation's own report.
     assert _upload(client, ctx, operation, "pptx", second).status_code == 200
     done = _confirm(client, ctx, operation, ["pptx"])
     assert done.status_code == 200, done.text
@@ -261,7 +296,7 @@ def test_retry_replaces_unfinished_reports_and_completion_is_immutable(admin_cli
     late = _upload(client, ctx, operation, "pptx", first)
     assert late.status_code == 409 and late.json()["detail"]["code"] == "FINALIZATION_ALREADY_COMPLETED"
     assert report_path.read_bytes() == second
-    # A file in Final/Report that this operation did not upload is never overwritten.
+    # A Final/Report folder this operation did not create is never overwritten.
     other = _preview(client, ctx)
     foreign = root / other["report_paths"]["pptx"]
     foreign.parent.mkdir(parents=True)
@@ -271,6 +306,28 @@ def test_retry_replaces_unfinished_reports_and_completion_is_immutable(admin_cli
     assert conflict.status_code == 409 and conflict.json()["detail"]["code"] == "FINALIZATION_DESTINATION_CONFLICT"
     assert foreign.read_bytes() == b"user file"
     assert not (root / other["metadata_relative_path"] / "complete.json").exists()
+
+
+def test_reports_are_fixed_once_the_report_folder_is_published(admin_client, monkeypatch):
+    client, root = admin_client
+    ctx = _seed(client, root)
+    plan = _preview(client, ctx)
+    operation = plan["operation_id"]
+    first = synthetic_pptx({"ppt/slides/slide1.xml": b"first"})
+    assert _upload(client, ctx, operation, "pptx", first).status_code == 200
+    with monkeypatch.context() as patcher:
+        patcher.setattr(case_finalization, "_verify_outputs", lambda *args, **kwargs: False)
+        failed = _confirm(client, ctx, operation, ["pptx"])
+    assert failed.status_code == 422 and failed.json()["detail"]["code"] == "FINALIZATION_OUTPUT_VERIFY_FAILED"
+    assert (root / plan["report_paths"]["pptx"]).read_bytes() == first
+    # The published Report folder cannot take other report bytes any more.
+    assert _upload(client, ctx, operation, "pptx", synthetic_pptx({"ppt/slides/slide1.xml": b"second"})).status_code == 200
+    changed = _confirm(client, ctx, operation, ["pptx"])
+    assert changed.status_code == 409 and changed.json()["detail"]["code"] == "FINALIZATION_REPORT_FORMATS_MISMATCH"
+    assert _upload(client, ctx, operation, "pptx", first).status_code == 200
+    done = _confirm(client, ctx, operation, ["pptx"])
+    assert done.status_code == 200, done.text
+    assert (root / plan["report_paths"]["pptx"]).read_bytes() == first
 
 
 def test_version_one_completed_record_still_verifies_in_status_without_legacy_reports(admin_client):
@@ -418,18 +475,21 @@ def test_unexpected_file_in_operation_reports_folder_blocks_completion_and_is_ke
     reports_dir.mkdir(parents=True)
     stray = reports_dir / "notes.txt"
     stray.write_bytes(b"user notes")
+    # W2: the Report folder is published by renaming; an existing folder is never replaced.
     blocked = _confirm(client, ctx, operation, ["html"])
-    assert blocked.status_code == 409 and blocked.json()["detail"]["code"] == "FINALIZATION_REPORTS_UNEXPECTED_FILE"
+    assert blocked.status_code == 409 and blocked.json()["detail"]["code"] == "FINALIZATION_DESTINATION_CONFLICT"
     assert stray.read_bytes() == b"user notes" and not (root / FINAL / "CAE").exists()
     stray.unlink()
-    # A file appearing while the reports are published is caught before complete.json.
-    original_cleanup = case_finalization._cleanup_partial_files
+    reports_dir.rmdir()
+    # A file appearing right after the Report folder is published is caught before complete.json.
+    original_rename = case_finalization._rename_with_retry
 
-    def cleanup_then_drop(*args, **kwargs):
-        original_cleanup(*args, **kwargs)
-        (reports_dir / f"{CASE_LABEL}_report.pptx").write_bytes(b"not ours")
+    def rename_then_drop(fs, source, destination):
+        original_rename(fs, source, destination)
+        if "/Report/" in destination:
+            (root / destination / f"{CASE_LABEL}_report.pptx").write_bytes(b"not ours")
 
-    monkeypatch.setattr(case_finalization, "_cleanup_partial_files", cleanup_then_drop)
+    monkeypatch.setattr(case_finalization, "_rename_with_retry", rename_then_drop)
     late = _confirm(client, ctx, operation, ["html"])
     assert late.status_code == 409 and late.json()["detail"]["code"] == "FINALIZATION_REPORTS_UNEXPECTED_FILE"
     assert (reports_dir / f"{CASE_LABEL}_report.pptx").read_bytes() == b"not ours"

@@ -9,12 +9,15 @@ writers, which are additionally restricted to their calling modules.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import BinaryIO, ContextManager, Iterable, Iterator, Literal, Protocol
 
 FINAL = "FINAL"
 LEGACY = "LEGACY"
-WRITE_ZONES = frozenset({FINAL, LEGACY})
+# W8 result drop upload: ``<request>/Working/**`` (folders, staged chunks, published files).
+WORKING = "WORKING"
+WRITE_ZONES = frozenset({FINAL, LEGACY, WORKING})
 
 # Contract error codes (§2).  Legacy callers keep receiving ``SpdmStorageError``
 # with their existing ``SPDM_*``/``FINALIZATION_*`` codes; these codes are used
@@ -27,6 +30,14 @@ LIMIT = "LIMIT"
 
 # S3 ① FINAL zone: written only by the Final designation flow.
 FINAL_WRITER_MODULES = frozenset({"app.services.case_finalization"})
+
+# W8: per-session staging folder directly under ``<request>/Working``. Same volume as the
+# destination (publish = rename). Folder scans/auto-sync skip it entirely (it is never a
+# Case, never part of a fingerprint); it is also a dot-name, ignored by the depth schema.
+UPLOAD_STAGING_DIR = ".simdash-upload"
+
+# S3 ③ WORKING zone: written only by the W8 drag & drop upload (never replaces files).
+WORKING_WRITER_MODULES = frozenset({"app.services.result_drop_upload"})
 
 # S3 ② LEGACY zone: behaviour-preserving writers only, never new callers.
 LEGACY_WRITER_MODULES = frozenset({
@@ -78,8 +89,17 @@ def _segments(rel_path: str) -> list[str]:
     return [part for part in rel_path.split("/") if part]
 
 
+# W3: SPDM summary of the current Final, directly in the request's ``Final`` folder.
+# Provisional name until the SPDM agreement (docs/features/case-finalization.md "현재 Final 요약 파일");
+# ``case_finalization`` uses this one constant. Its temporary file is ``.current.json.<32 hex>.tmp``
+# in the same folder (written, then renamed over the summary).
+FINAL_SUMMARY_FILE = "current.json"
+_FINAL_SUMMARY_TEMP = re.compile(r"^\.current\.json\.[0-9a-f]{32}\.tmp$")
+
+
 def final_zone_allows(rel_path: str) -> bool:
-    """``<request>/Final`` itself and ``<request>/Final/(CAE|Report|.finalizations)/**`` (§15 D21: not ``Reports``).
+    """``<request>/Final`` itself and ``<request>/Final/(CAE|Report|.finalizations)/**`` (§15 D21: not ``Reports``),
+    plus exactly ``<request>/Final/current.json`` and its temporary file (W3 summary).
 
     The ``Final`` component needs a non-empty request prefix and must not sit
     under a ``Working`` folder; names compare case-insensitively because the
@@ -93,6 +113,8 @@ def final_zone_allows(rel_path: str) -> bool:
             return False
         rest = parts[index + 1:]
         if not rest or rest[0] in {"cae", "report", ".finalizations"}:
+            return True
+        if len(rest) == 1 and (rest[0] == FINAL_SUMMARY_FILE or _FINAL_SUMMARY_TEMP.fullmatch(rest[0])):
             return True
     return False
 
@@ -115,8 +137,26 @@ def legacy_zone_allows(rel_path: str, caller: str) -> bool:
     return False
 
 
+def working_zone_allows(rel_path: str) -> bool:
+    """Strictly below ``<project>/<request>/Working`` (W8; re-review N1).
+
+    The first ``Working`` segment must have at least two folders above it (project, request;
+    upper CONTAINER levels may add more) and no ``Final`` segment before it; no ``.``/``..``.
+    Names deeper inside Working (a Scene's ``final`` or ``Working`` subfolder) are content and
+    allowed. The upload service additionally confines every write to the selected request's
+    own ``Working`` folder from the registered binding; this is the provider-level guard.
+    """
+    parts = [part.casefold() for part in _segments(rel_path)]
+    if any(part in {".", ".."} for part in parts) or "working" not in parts:
+        return False
+    index = parts.index("working")
+    return index >= 2 and "final" not in parts[:index] and len(parts) > index + 1
+
+
 def check_write(rel_path: str, zone: str, caller: str) -> None:
     if zone == FINAL and caller in FINAL_WRITER_MODULES and final_zone_allows(rel_path):
+        return
+    if zone == WORKING and caller in WORKING_WRITER_MODULES and working_zone_allows(rel_path):
         return
     if zone == LEGACY and caller in LEGACY_WRITER_MODULES and legacy_zone_allows(rel_path, caller):
         return
@@ -124,7 +164,7 @@ def check_write(rel_path: str, zone: str, caller: str) -> None:
 
 
 __all__ = [
-    "Entry", "FINAL", "FINAL_WRITER_MODULES", "LEGACY", "LEGACY_WRITER_MODULES", "NOT_ALLOWED_WRITE", "NOT_FOUND", "FORBIDDEN",
+    "Entry", "FINAL", "FINAL_SUMMARY_FILE", "UPLOAD_STAGING_DIR", "WORKING", "WORKING_WRITER_MODULES", "working_zone_allows", "FINAL_WRITER_MODULES", "LEGACY", "LEGACY_WRITER_MODULES", "NOT_ALLOWED_WRITE", "NOT_FOUND", "FORBIDDEN",
     "UNAVAILABLE", "LIMIT", "SpdmStorageError", "StorageError", "StorageProvider", "WRITE_ZONES",
     "check_write", "final_zone_allows", "legacy_zone_allows", "Iterator",
 ]

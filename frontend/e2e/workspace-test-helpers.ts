@@ -14,6 +14,9 @@ export async function mockResultEnvironments(page: Page, environments: Array<'US
   await page.route('**/api/projects/*/requests/*/result-environments', (route) => route.fulfill({ json: { environments, case_counts: { USAGE: environments.includes('USAGE') ? 1 : 0, DISTRIBUTION: environments.includes('DISTRIBUTION') ? 1 : 0 } } }))
 }
 
+/** Routes hidden from the sidebar (AppSidebar SIDEBAR_HIDDEN_MENUS); opened by in-app URL navigation. */
+const HIDDEN_SIDEBAR_PATHS = new Set(['/workspace/requests/new', '/workspace/admin/work-types', '/workspace/project/result-layouts', '/workspace/catalog/variables', '/workspace/examples'])
+
 /** Navigate through the real sidebar, including its collapsed utility groups. */
 export async function openWorkspaceRoute(page: Page, pathname: string) {
   const sidebar = page.getByRole('complementary', { name: '주 메뉴' })
@@ -37,6 +40,13 @@ export async function openWorkspaceRoute(page: Page, pathname: string) {
     '/workspace/data': '결과 등록',
   }
   const requestTab = embeddedRequestTabs[pathname]
+  if (!requestTab && HIDDEN_SIDEBAR_PATHS.has(pathname)) {
+    // Hidden from the sidebar (SIDEBAR_HIDDEN_MENUS, 2026-10-06) but still reachable by URL:
+    // navigate in-app so client state (font size, theme, login) is kept.
+    await page.evaluate((target) => { window.history.pushState({}, '', target); window.dispatchEvent(new PopStateEvent('popstate')) }, pathname)
+    await expect(page).toHaveURL(new RegExp(`${pathname.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\?|$)`))
+    return
+  }
   if (!requestTab) throw new Error(`No sidebar or request-workspace destination for ${pathname}`)
   const journey = page.getByRole('navigation', { name: '의뢰 작업 여정' })
   if (!(await journey.count())) {

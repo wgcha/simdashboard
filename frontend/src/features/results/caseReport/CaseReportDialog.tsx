@@ -2,7 +2,9 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, Download, LoaderCircle, Settings2 } from 'lucide-react'
 import { reportApi } from '../../../shared/api/reportLayouts'
 import type { ReportLayout, ReportLayoutDefinition } from '../../../types'
-import { buildCaseReportContents, buildCaseReportHtml, buildCaseReportPptx, caseReportFileName, caseReportOverview, loadCaseReport, loadCaseReportImages, prepareCaseReportLayout, type CaseReportData, type CaseReportFormat, type CaseReportScope } from './caseReport'
+import { CaseReportMetaFields, TemplateNotAppliedNotice } from './CaseReportFields'
+import { defaultReportLayout, initialReportMeta, rememberReportLayout, usesUploadedTemplate } from './reportPreferences'
+import { buildCaseReportContents, buildCaseReportHtml, buildCaseReportPptx, caseReportFileName, caseReportOverview, loadCaseReport, loadCaseReportImages, prepareCaseReportLayout, syncCaseComparisonSlides, withCaseComparison, type CaseReportData, type CaseReportFormat, type CaseReportScope } from './caseReport'
 
 const ReportLayoutEditor = lazy(() => import('../../../shared/reports/ReportLayoutEditor').then(({ ReportLayoutEditor: Editor }) => ({ default: Editor })))
 
@@ -37,9 +39,14 @@ export function CaseReportDialog({ scope, onClose }: Props) {
   const [loadError, setLoadError] = useState('')
   const [formats, setFormats] = useState<Record<CaseReportFormat, boolean>>({ pptx: true, html: false })
   const [includeVideos, setIncludeVideos] = useState(false)
+  // W5: the Case 비교 table frozen with the scope; off by default (outputs unchanged).
+  const [includeComparison, setIncludeComparison] = useState(false)
+  const comparison = scope.comparison ?? null
   const [layouts, setLayouts] = useState<ReportLayout[]>([])
   const [layout, setLayout] = useState<ReportLayoutDefinition | null>(null)
   const [editing, setEditing] = useState(false)
+  // W7: author prefilled; 개발단계·검토조건·결론 optional.
+  const [meta, setMeta] = useState(initialReportMeta)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -55,14 +62,22 @@ export function CaseReportDialog({ scope, onClose }: Props) {
     const controller = new AbortController()
     Promise.all([loadCaseReport(scope, { signal: controller.signal }), reportApi.layouts().catch(() => []), import('../../../reportExport')]).then(([recipe, storedLayouts, reportModule]) => {
       if (controller.signal.aborted) return
-      const selected = storedLayouts.find((item) => item.id === 'report-layout-standard')?.definition ?? storedLayouts[0]?.definition ?? reportModule.DEFAULT_REPORT_LAYOUT
+      // W7: the layout last used for this request (per user), else standard.
+      const selected = defaultReportLayout(storedLayouts, scope.source.requestId)?.definition ?? reportModule.DEFAULT_REPORT_LAYOUT
       setLayouts(storedLayouts); setData(recipe)
       setLayout(prepareCaseReportLayout(reportModule.normalizeReportLayout(selected), recipe.source, buildCaseReportContents(recipe), true))
+      setIncludeComparison(false)
     }).catch((reason) => { if (!controller.signal.aborted) setLoadError(errorText(reason, '보고서 자료를 불러오지 못했습니다.')) })
     return () => controller.abort()
   }, [scope])
 
-  const contents = useMemo(() => data ? buildCaseReportContents(data) : [], [data])
+  const reportData = useMemo(() => data ? withCaseComparison(data, includeComparison ? comparison : null) : null, [comparison, data, includeComparison])
+  const contents = useMemo(() => reportData ? buildCaseReportContents(reportData) : [], [reportData])
+  const toggleComparison = (checked: boolean) => {
+    setIncludeComparison(checked)
+    if (!data || !layout) return
+    setLayout(syncCaseComparisonSlides(layout, buildCaseReportContents(withCaseComparison(data, checked ? comparison : null))))
+  }
   const coverLabels = useMemo(() => {
     const value = (label: string) => data?.scopeRows.find((row) => row.label === label)?.value ?? ''
     return { project: value('프로젝트'), request: value('의뢰'), loadCase: value('하중경우') }
@@ -76,7 +91,8 @@ export function CaseReportDialog({ scope, onClose }: Props) {
     const stored = layouts.find((item) => item.id === layoutId)
     if (!stored || !data) return
     const reportModule = await import('../../../reportExport')
-    setLayout(prepareCaseReportLayout(reportModule.normalizeReportLayout(stored.definition), data.source, contents))
+    rememberReportLayout(scope.source.requestId, layoutId)
+    setLayout(syncCaseComparisonSlides(prepareCaseReportLayout(reportModule.normalizeReportLayout(stored.definition), data.source, contents), contents))
   }
   // Only "save as new" from this dialog: the current (possibly system or
   // template-bound) layout is never versioned here, and the saved copy keeps
@@ -92,7 +108,8 @@ export function CaseReportDialog({ scope, onClose }: Props) {
   }
 
   const download = async () => {
-    if (!data || !layout || !chosen.length) return
+    if (!reportData || !layout || !chosen.length) return
+    const data = reportData
     const run = ++generation.current
     controllerRef.current?.abort()
     const controller = new AbortController(); controllerRef.current = controller
@@ -102,13 +119,14 @@ export function CaseReportDialog({ scope, onClose }: Props) {
       let skippedVideos: string[] = []
       // Images are read once and shared by both formats.
       const images = await loadCaseReportImages(data, { signal: controller.signal })
-      if (formats.pptx) files.push({ blob: await buildCaseReportPptx(data, { layout, labels: coverLabels, images, signal: controller.signal }), name: caseReportFileName(data.caseLabel, data.generatedAt, 'pptx') })
+      if (formats.pptx) files.push({ blob: await buildCaseReportPptx(data, { layout, labels: coverLabels, images, meta, signal: controller.signal }), name: caseReportFileName(data.caseLabel, data.generatedAt, 'pptx') })
       if (formats.html) {
-        const html = await buildCaseReportHtml(data, { includeVideos, images, signal: controller.signal })
+        const html = await buildCaseReportHtml(data, { includeVideos, images, meta, signal: controller.signal })
         skippedVideos = html.skippedVideos
         files.push({ blob: html.blob, name: caseReportFileName(data.caseLabel, data.generatedAt, 'html') })
       }
       if (controller.signal.aborted || run !== generation.current) return
+      if (formats.pptx && layouts.some((item) => item.id === layout.id)) rememberReportLayout(scope.source.requestId, layout.id)
       for (const file of files) downloadBlob(file.blob, file.name)
       setSkipped({ videos: skippedVideos, images: images.skipped })
       setNotice(`${files.map((file) => file.name).join(', ')} 다운로드`)
@@ -137,11 +155,14 @@ export function CaseReportDialog({ scope, onClose }: Props) {
         {!chosen.length ? <span className="case-report__hint" role="status">형식을 하나 이상 선택하세요.</span> : null}
         {formats.html ? <p className="case-report__caps">{CAPS_TEXT}</p> : null}
       </fieldset>
+      <label className="case-report__compare" title={comparison ? `${comparison.headers.length - (comparison.environment === 'USAGE' ? 2 : 1)}개 Case · ${comparison.rows.length}행` : 'Case 비교 탭에서 비교할 Case를 고른 뒤 보고서를 열면 넣을 수 있습니다.'}><input type="checkbox" checked={includeComparison} disabled={busy || !comparison || !data} onChange={(event) => toggleComparison(event.target.checked)} />Case 비교 포함{comparison ? null : <span className="case-report__hint">Case 비교 탭에서 열면 넣을 수 있습니다.</span>}</label>
       {formats.pptx && layout ? <div className="case-report__layout">
         <label><span>PPTX 레이아웃</span><select value={layout.id} disabled={busy} onChange={(event) => void selectLayout(event.target.value)}>{layouts.some((item) => item.id === layout.id) ? null : <option value={layout.id}>{layout.name}</option>}{layouts.map((item) => <option key={item.id} value={item.id}>{item.name} · v{item.version}</option>)}</select></label>
+        {usesUploadedTemplate(layout) ? <TemplateNotAppliedNotice /> : null}
         <button type="button" className="case-report__secondary" aria-expanded={editing} disabled={busy} onClick={() => setEditing((current) => !current)}><Settings2 size={15} aria-hidden="true" />{editing ? '편집 닫기' : '레이아웃 편집'}</button>
       </div> : null}
       {formats.pptx && editing && layout && overview ? <div className="case-report__editor" data-testid="case-report-layout-editor"><Suspense fallback={<p className="case-report__hint">편집 화면을 준비하고 있습니다.</p>}><ReportLayoutEditor layout={layout} overview={overview} contents={contents} templates={[]} isSystem={isSystem} restricted={{ templateNote }} onChange={setLayout} onTemplateUpload={() => undefined} onTemplateDelete={() => undefined} onSave={() => void saveAsNew()} onSaveAs={() => void saveAsNew()} onDelete={() => undefined} /></Suspense></div> : null}
+      <CaseReportMetaFields value={meta} disabled={busy} onChange={setMeta} />
       {data ? <p className="case-report__counts" data-testid="case-report-counts">{data.sections.length > 1 ? `구성 ${data.sections.length}개 · ` : ''}{data.environment === 'USAGE' ? `평가 ${data.sections[0]?.summary.rows.length ?? 0}행` : `Scene ${data.sections.reduce((total, section) => total + (section.sceneTable?.rows.length ?? 0), 0)}개`} · 이미지 {data.sections.reduce((total, section) => total + section.images.length, 0)}개 · 영상 {data.sections.reduce((total, section) => total + section.videos.length, 0)}개</p> : !loadError ? <p className="case-report__hint" role="status"><LoaderCircle size={14} className="case-report__spinner" aria-hidden="true" />보고서 자료를 불러오는 중입니다.</p> : null}
       {loadError ? <p className="case-report__message case-report__message--error" role="alert"><AlertTriangle size={14} aria-hidden="true" />{loadError}</p> : null}
       {error ? <p className="case-report__message case-report__message--error" role="alert"><AlertTriangle size={14} aria-hidden="true" />{error}</p> : null}
