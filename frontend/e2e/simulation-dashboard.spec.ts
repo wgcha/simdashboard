@@ -3,9 +3,10 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { expect, test, type Page, type Route } from '@playwright/test'
 import type { DashboardDistribution } from '../src/shared/api/simulationDashboard'
-import { expectCaseResultsLayout, loginWorkspace, openWorkspaceRoute, setWorkspaceFontSize } from './workspace-test-helpers'
+import { expectCaseResultsLayout, loginWorkspace, mockResultEnvironments, openWorkspaceRoute, setWorkspaceFontSize } from './workspace-test-helpers'
 
 test.beforeEach(async ({ page }) => {
+  await mockResultEnvironments(page)
   await page.route('**/api/dashboard/finalizations/status**', (route) => route.fulfill({ json: { latest: null, selected_case_latest: null, retryable_operations: [], unverified_records: 0 } }))
 })
 
@@ -610,4 +611,45 @@ test('tab arrow keys move focus without opening a tab', async ({ page }) => {
   await expect(summary).toHaveAttribute('aria-selected', 'true')
   await page.keyboard.press('Enter')
   await expect(page.getByRole('tab', { name: 'Scene 비교', exact: true })).toHaveAttribute('aria-selected', 'true')
+})
+
+// case-results-environment.md §4: the request's Cases decide the environment.
+test('one registered environment hides the toggle, labels the path and corrects the URL', async ({ page }) => {
+  await installDashboardMocks(page)
+  await page.unroute('**/api/projects/*/requests/*/result-environments')
+  await mockResultEnvironments(page, ['DISTRIBUTION'])
+  const environments: string[] = []
+  page.on('request', (request) => { if (request.url().includes('/api/dashboard/catalog')) environments.push(new URL(request.url()).searchParams.get('environment') ?? '') })
+  await loginWorkspace(page)
+  await page.goto('/workspace/requests?project=project-tv-001&request=request-drop-001&view=case_results&result_environment=USAGE')
+  await expect(page.getByRole('group', { name: 'Case 경로' })).toContainText('유통환경', { timeout: 15_000 })
+  await expect(page.getByRole('group', { name: '결과 환경' })).toHaveCount(0)
+  await expect(page).toHaveURL(/result_environment=DISTRIBUTION/)
+  expect(environments).not.toContain('USAGE')
+})
+
+test('a request without Cases keeps folder sync running and loads results once a Case is registered', async ({ page }) => {
+  await installDashboardMocks(page)
+  await page.unroute('**/api/projects/*/requests/*/result-environments')
+  let registered = false
+  await page.route('**/api/projects/*/requests/*/result-environments', (route) => route.fulfill({ json: registered ? { environments: ['DISTRIBUTION'], case_counts: { USAGE: 0, DISTRIBUTION: 1 } } : { environments: [], case_counts: { USAGE: 0, DISTRIBUTION: 0 } } }))
+  const synced: string[] = []
+  await page.unroute('**/api/folder-discovery/environments/sync')
+  await page.route('**/api/folder-discovery/environments/sync', (route) => {
+    synced.push(String(route.request().postDataJSON()?.environment))
+    // The manual check reports a refreshed snapshot, as when sync registered a new Case.
+    const changed = route.request().postDataJSON()?.force === true
+    if (changed) registered = true
+    return route.fulfill({ json: { status: changed ? 'REFRESHED' : 'UNCHANGED', changed, snapshot_id: changed ? 'snapshot-new' : null, diff: { added: changed ? 1 : 0, removed: 0, changed: 0 }, code: null, message: null, check_mode: 'QUICK', checked_at: new Date().toISOString(), coalesced: false } })
+  })
+  let catalogCalls = 0
+  page.on('request', (request) => { if (request.url().includes('/api/dashboard/catalog')) catalogCalls += 1 })
+  await openResults(page)
+  await expect(page.getByText('이 의뢰에는 아직 등록된 결과가 없습니다. 의뢰 폴더의 Working에 결과를 추가하면 자동 탐색이 등록합니다.')).toBeVisible()
+  await expect(page.getByRole('group', { name: '결과 환경' })).toHaveCount(0)
+  await expect.poll(() => synced.length).toBeGreaterThan(0)
+  expect(catalogCalls).toBe(0)
+  await page.getByRole('button', { name: '지금 확인' }).click()
+  await expect(page.getByRole('group', { name: 'Case 경로' })).toContainText('유통환경')
+  expect(catalogCalls).toBeGreaterThan(0)
 })

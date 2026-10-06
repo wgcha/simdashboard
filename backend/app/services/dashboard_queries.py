@@ -17,6 +17,25 @@ USAGE_KEYS = {
 }
 
 
+RESULT_ENVIRONMENTS = ("USAGE", "DISTRIBUTION")
+
+
+def result_environments(conn, project_id: str, request_id: str) -> dict[str, Any] | None:
+    """Environments of a request's registered Cases (case-results-environment.md §2).
+
+    Returns ``None`` when the request does not exist in the project.
+    """
+    if not conn.execute("SELECT 1 FROM analysis_requests WHERE id=? AND project_id=?", [request_id, project_id]).fetchone():
+        return None
+    counts = dict.fromkeys(RESULT_ENVIRONMENTS, 0)
+    for environment, count in conn.execute(
+            "SELECT environment,count(*) FROM dashboard_cases WHERE project_id=? AND request_id=? GROUP BY environment",
+            [project_id, request_id]).fetchall():
+        if str(environment) in counts:
+            counts[str(environment)] = int(count)
+    return {"environments": [env for env in RESULT_ENVIRONMENTS if counts[env] > 0], "case_counts": counts}
+
+
 def fail(message: str):
     raise DashboardCaptureError("DASHBOARD_CONTEXT_INVALID", message)
 
@@ -56,7 +75,8 @@ def catalog(conn, request_id, environment, project_id=None):
               "bases": [{"id": "REPORTED_SUMMARY", "label": "원본 요약"}, {"id": "DETAIL", "label": "상세 추출값"}]}
     records = conn.execute("""SELECT dc.id,dc.source_name,dc.storage_root_id,dc.relative_path,c.id,c.created_at,c.payload_json
         FROM dashboard_cases dc LEFT JOIN dashboard_captures c ON c.case_id=dc.id
-        WHERE dc.request_id=? AND dc.environment=? ORDER BY dc.source_name,c.created_at DESC""",
+        WHERE dc.request_id=? AND dc.environment=? ORDER BY dc.source_name,c.created_at DESC,c.id DESC""",
+        # Same capture order as get_latest_capture (created_at,id), reversed: one "latest" rule.
         [request_id, environment]).fetchall()
     schema_cases: dict[str, dict[str, Any]] = {}
     current_storage_root_id = None

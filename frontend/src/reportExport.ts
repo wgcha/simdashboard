@@ -10,6 +10,8 @@ export type ReportExportOptions = {
   reviewConditions: string
   reviewResult: string
   reviewConclusion: string
+  /** Overrides the generated `report_title` field (Case 결과 reports). */
+  reportTitle?: string
 }
 
 export type ReportScope = 'open_cell' | 'chassis'
@@ -128,8 +130,10 @@ export function normalizeReportLayout(layout: ReportLayoutDefinition): ReportLay
   }
 }
 
-type ContentSnapshot = {
+export type ContentSnapshot = {
   text?: string
+  /** Pre-loaded image (data URI) with its natural size, used instead of fetching `media`. */
+  image?: { dataUri: string; width?: number; height?: number }
   tableHeaders?: string[]
   tableRows?: string[][]
   chartSeries?: Array<{ name: string; labels: string[]; values: number[] }>
@@ -703,7 +707,7 @@ function gridRect(element: ReportElementDefinition) {
 
 function fieldValue(key: string | undefined, overview: Overview, options: ReportExportOptions) {
   const values: Record<string, string> = {
-    report_title: `${overview.load_case.project_name} 해석 결과 보고서`,
+    report_title: options.reportTitle || `${overview.load_case.project_name} 해석 결과 보고서`,
     project_name: overview.load_case.project_name,
     request_title: overview.load_case.request_title,
     load_case_name: overview.load_case.name,
@@ -870,6 +874,11 @@ async function renderTemplateSlide(pptx: pptxgen, slideDefinition: ReportSlideDe
       continue
     }
     if (element.type === 'image') {
+      const preloaded = element.binding?.source === 'content' ? (content?.data as ContentSnapshot | undefined)?.image : undefined
+      if (preloaded) {
+        slide.addImage({ data: preloaded.dataUri, ...fitRect({ x, y, w, h }, preloaded.width, preloaded.height) })
+        continue
+      }
       const media = (element.binding?.source === 'content' ? (content?.data as ContentSnapshot | undefined)?.media : undefined) ?? context.media ?? overview.media.find((item) => item.metadata?.variable_key === element.binding?.variableKey) ?? overview.media[0]
       if (media && (media.asset_type === 'IMAGE' || media.mime_type.startsWith('image/')) && media.asset_url) {
         try {
@@ -882,8 +891,16 @@ async function renderTemplateSlide(pptx: pptxgen, slideDefinition: ReportSlideDe
   }
 }
 
-export async function exportAnalysisReport(overview: Overview, options: ReportExportOptions, selectedLayout: ReportLayoutDefinition = DEFAULT_REPORT_LAYOUT, contents: ReportContentItem[] = []) {
-  validateReportOptions(options)
+/** Largest rectangle with the image's aspect ratio, centred inside `box`. */
+function fitRect(box: { x: number; y: number; w: number; h: number }, width?: number, height?: number) {
+  if (!width || !height || width <= 0 || height <= 0) return box
+  const scale = Math.min(box.w / width, box.h / height)
+  const w = width * scale
+  const h = height * scale
+  return { x: box.x + (box.w - w) / 2, y: box.y + (box.h - h) / 2, w, h }
+}
+
+async function buildReportDeck(overview: Overview, options: ReportExportOptions, selectedLayout: ReportLayoutDefinition, contents: ReportContentItem[]) {
   const layout: ReportLayoutDefinition = normalizeReportLayout({
     ...selectedLayout,
     accentColor: /^[0-9A-F]{6}$/i.test(selectedLayout.accentColor) ? selectedLayout.accentColor.toUpperCase() : DEFAULT_REPORT_LAYOUT.accentColor,
@@ -892,7 +909,7 @@ export async function exportAnalysisReport(overview: Overview, options: ReportEx
   pptx.layout = 'LAYOUT_WIDE'
   pptx.author = options.author
   pptx.subject = `${overview.load_case.project_name} 해석 결과`
-  pptx.title = `${overview.load_case.project_name} 해석 결과 보고서`
+  pptx.title = options.reportTitle || `${overview.load_case.project_name} 해석 결과 보고서`
   pptx.company = 'VD simulation workbench'
   pptx.theme = {
     headFontFace: 'Noto Sans KR',
@@ -916,7 +933,20 @@ export async function exportAnalysisReport(overview: Overview, options: ReportEx
     }
   }
 
+  return pptx
+}
+
+export async function exportAnalysisReport(overview: Overview, options: ReportExportOptions, selectedLayout: ReportLayoutDefinition = DEFAULT_REPORT_LAYOUT, contents: ReportContentItem[] = []) {
+  validateReportOptions(options)
+  const pptx = await buildReportDeck(overview, options, selectedLayout, contents)
   const filename = reportFilename(overview, options)
   await pptx.writeFile({ fileName: filename, compression: true })
   return filename
+}
+
+/** Same rendering as `exportAnalysisReport`, returned as a Blob without downloading (no cover-field validation). */
+export async function renderReportPptxBlob(overview: Overview, options: ReportExportOptions, selectedLayout: ReportLayoutDefinition = DEFAULT_REPORT_LAYOUT, contents: ReportContentItem[] = []): Promise<Blob> {
+  const pptx = await buildReportDeck(overview, options, selectedLayout, contents)
+  const output = await pptx.write({ outputType: 'blob', compression: true })
+  return output instanceof Blob ? output : new Blob([output as BlobPart], { type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' })
 }

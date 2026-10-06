@@ -82,3 +82,56 @@
 /* Include unclassed history, tree and paging actions in the control scale. */
 .folder-environment-workspace[data-ui-density="v1"] button { min-height:var(--control-h-sm); border-radius:var(--radius-sm); }
 .folder-preview-table{min-width:0}.folder-preview-row{min-width:0;grid-template-columns:minmax(0,2fr) minmax(84px,.7fr) minmax(0,1.4fr) minmax(96px,.75fr);line-height:1.45}.folder-preview-row--refresh{grid-template-columns:minmax(0,2fr) minmax(84px,.7fr) minmax(140px,1fr)}.folder-preview-row>span,.folder-preview-row>b,.folder-preview-row>em,.folder-preview-row>small{min-width:0;overflow-wrap:anywhere}.folder-preview-row--preview>small{grid-column:1/-1;align-self:start}
+/* DEPTH_V1 schema editor, read-only role badges and registration delete (docs/contracts/depth-schema.md §7, §13.7) */
+.depth-schema-table-wrap{min-width:0;overflow-x:auto;border:1px solid var(--color-border);border-radius:7px}
+.depth-schema-table{width:100%;border-collapse:collapse;font-size:var(--text-body,13px)}
+.depth-schema-table>thead>tr>th,.depth-schema-table>tbody>tr>td{padding:8px 12px;border-bottom:1px solid var(--color-border);text-align:start;vertical-align:middle}
+.depth-schema-table>thead>tr>th{background:var(--color-surface-2);color:var(--color-text-muted);font-weight:600;white-space:nowrap}
+.depth-schema-table>tbody>tr:last-child>td{border-bottom:0}
+.depth-schema-table>tbody>tr>td:first-child{width:72px;font-family:var(--font-mono);white-space:nowrap}
+.depth-schema-table>tbody>tr>td:nth-child(3){width:96px;white-space:nowrap}
+.depth-schema-table>tbody>tr>td:last-child{width:clamp(180px,18%,280px)}
+.depth-schema-table>tbody>tr>td:last-child select{width:100%}
+.depth-schema-fixed td{background:var(--color-surface-2);color:var(--color-text-muted)}
+.depth-schema-content td{color:var(--color-text-muted)}
+.depth-schema-muted{color:var(--color-text-muted)}
+.depth-schema-samples{display:flex;flex-wrap:wrap;gap:4px 12px;min-width:0}
+.depth-schema-samples span{overflow-wrap:anywhere}
+.depth-schema-samples b{font-weight:600;color:var(--color-text-muted)}
+.depth-schema-samples em{font-style:normal;color:var(--color-accent)}
+.depth-schema-runoptions{display:grid;gap:4px;max-height:260px;overflow:auto}
+.depth-schema-runoptions table{width:100%;border-collapse:collapse}
+.depth-schema-runoptions th,.depth-schema-runoptions td{padding:3px 8px;border-bottom:1px solid var(--color-border);text-align:start}
+.depth-schema-runoptions th{color:var(--color-text-muted);font-weight:600}
+.depth-schema-errors{margin:0;padding:8px 8px 8px 26px;border-radius:6px;background:var(--color-danger-surface);color:var(--color-danger)}
+.depth-schema-final{display:grid;gap:6px}
+.depth-schema-final summary{cursor:pointer;font-weight:700;color:var(--color-text-strong)}
+.depth-schema-final small{color:var(--color-text-muted)}
+.depth-schema-check{display:grid;gap:6px;padding:10px 12px;border:1px solid var(--color-border);border-radius:7px;background:var(--color-surface-2)}
+.depth-schema-check ul{margin:0;padding-left:18px}
+.depth-schema-check li{overflow-wrap:anywhere}
+.depth-schema-check code{color:var(--color-text-muted)}
+.folder-deviation-badge{display:inline-block;margin-left:6px;padding:1px 6px;border:1px solid currentColor;border-radius:999px;font-style:normal;font-size:var(--text-caption,11px);font-weight:600;white-space:nowrap}
+.folder-deviation-badge.blocking{color:var(--color-danger)}
+.folder-deviation-badge.warning{color:var(--color-warning)}
+.folder-deviation-badge.info{color:var(--color-text-muted)}
+.folder-node-role{display:flex;gap:10px;margin:0}
+.folder-node-role dt{color:var(--color-text-muted)}
+.folder-node-role dd{margin:0}
+.folder-node-detail .folder-node-check{display:flex;align-items:center;gap:6px}
+.folder-history-toolbar{position:static;border-top:0;padding-top:0}
+.folder-history-toolbar label{display:flex;align-items:center;gap:6px}
+.folder-history-item{display:flex;align-items:center;gap:8px;min-width:0}
+.folder-history-item .folder-history-row{flex:1;min-width:0}
+.folder-environment-workspace .folder-danger-button:not(:disabled){border-color:var(--color-danger);color:var(--color-danger)}
+.folder-environment-workspace .primary-button.folder-danger-button:not(:disabled){background:var(--color-danger);color:white}
+.folder-delete-dialog{display:grid;gap:12px;width:min(640px,86vw);padding:20px;border:1px solid var(--color-border);border-radius:12px;background:var(--color-surface-1);color:var(--color-text);box-shadow:0 24px 70px var(--color-shadow)}
+.folder-delete-dialog:not([open]){display:none}
+.folder-delete-dialog::backdrop{background:var(--color-overlay)}
+.folder-delete-dialog h3{margin:0;font-size:var(--text-section,16px);color:var(--color-text-strong)}
+.folder-delete-dialog p{margin:0}
+.folder-delete-totals{font-weight:700;color:var(--color-text-strong)}
+.folder-delete-blockers{display:grid;gap:4px;max-height:240px;overflow:auto;padding:10px 12px;border-radius:7px;background:var(--color-danger-surface);color:var(--color-danger)}
+.folder-delete-blockers ul{margin:0;padding-left:18px}
+.folder-delete-blockers code,.folder-delete-error{overflow-wrap:anywhere}
+.folder-delete-error{color:var(--color-danger)}

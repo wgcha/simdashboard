@@ -39,10 +39,10 @@ export function UsageSourceReviewPanel({ review, draft, onChange, disabled = fal
     change({ excludes })
   }
   return <section className="folder-source-review" aria-label="파일·값 검수">
-    <header><div><h3>파일·값 검수</h3><p>평가별 원본, JSON 키 경로와 값을 확인합니다. 변경 후에는 다시 검수하세요.</p></div><label><input type="checkbox" checked={onlyIssues} onChange={(event) => setOnlyIssues(event.target.checked)} /> 확인 필요만 보기</label></header>
+    <header><div><h3>파일·값 검수</h3><p>Scene별 원본, JSON 키 경로와 값을 확인합니다. 변경 후에는 다시 검수하세요.</p></div><label><input type="checkbox" checked={onlyIssues} onChange={(event) => setOnlyIssues(event.target.checked)} /> 확인 필요만 보기</label></header>
     <fieldset disabled={disabled}><div className="folder-source-review-form">{(['json', 'video', 'image', 'csv'] as const).map((format) => <label key={format}><input type="checkbox" checked={draft.selection[format]} onChange={(event) => change({ selection: { ...draft.selection, [format]: event.target.checked } })} />{format === 'json' ? 'JSON 수치' : format === 'video' ? '영상' : format === 'image' ? '이미지' : 'CSV (고급)'}</label>)}<span>{draft.dirty ? '변경됨 · 다시 검수 필요' : '검수 결과 기준'}</span></div>
     <div className="folder-source-review-summary">선택 {review.entries?.filter((entry) => entry.source).length ?? 0}개 · 제외 {review.excluded_count ?? 0}개 · 확인 필요 {review.blocking_count ?? issues.length}개</div>
-    <div className="folder-source-review-table"><div className="folder-source-review-row heading"><span>평가 / 방향</span><span>선택 파일</span><span>원문 키</span><span>값 · 타입</span><span>상태</span></div>
+    <div className="folder-source-review-table"><div className="folder-source-review-row heading"><span>Scene / 방향</span><span>선택 파일</span><span>원문 키</span><span>값 · 타입</span><span>상태</span></div>
       {rows.filter(({ metric }) => !onlyIssues || !['READY', 'CONFIRMED', 'OK'].includes(metric.status)).map(({ entry, metric }) => {
         const id = metricId(entry, metric); const selectedPath = draft.metricPaths[id] ?? metric.path; const availablePaths = leafPaths(entry.values)
         const source = draft.selectedSources[sourceId(entry)] ?? entry.source ?? ''

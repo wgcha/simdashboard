@@ -12,4 +12,15 @@
 - 2026-10-02 · 사용환경 EVALUATION 역할을 SCENE으로 통합 · 두 환경의 Case 결과·Final 로직 단일화
 - 2026-10-02 · 스키마 저장 시 기존 등록 의뢰는 불변, 의뢰별 수동 "재해석"으로만 적용 · SPDM 결과 연결 변경 위험 통제
 - 2026-10-02 · 의뢰 하위 L1은 이름(Working 필수 / Final 선택)으로 구분하고 Final도 스키마 대상에 포함 · Final 저장물(CAE·Reports) 구조 검증
-- 2026-10-02 · Final 하위 L2: CAE=해석 입출력, Reports=보고서 PPTX/PDF. L3 이하는 `<Case>/<finalization_id>/<Working 미러>` 고정, 결과 판독은 Working만 · 앱이 쓰는 구조라 편집 불필요
+- 2026-10-02 · Final 하위 L2: CAE=해석 입출력, Reports=보고서 PPTX·HTML(PDF 제외). L3 이하는 `<Case>/<finalization_id>/<Working 미러>` 고정, 결과 판독은 Working만 · 앱이 쓰는 구조라 편집 불필요
+- 2026-10-02 · Working 하위 폴더명은 제한하지 않음(RunOption도 INDIVIDUAL·CUMULATIVE 외 허용), 역할은 깊이로만 판정 · 실제 RunOption 이름이 다양함
+- 2026-10-02 · RunOption 레벨은 생략하지 않는 운영 규칙으로 두고 자동 누락 감지는 하지 않음. 스키마 편집기에 L5 폴더명 전체 목록을 표시 · 이름 다양성 수용 + 육안 점검
+- 2026-10-02 · 관리자용 등록 삭제 추가: 등록 기록+매핑+그 등록이 생성한 업무 데이터 삭제, SPDM 파일은 불변, 공유·연결 참조가 있으면 전체 거부 · 구 스키마 등록 정리 후 새 스키마로 재등록
+- 2026-10-02 · 등록 행은 DELETED 묘비로 남기고, 삭제된 등록은 자동 탐색의 '연결됨'에서 제외(재등록 허용) · 감사 추적과 재등록 목적 양립
+- 2026-10-02 · 웹 PDF 생성 보류, 보고서는 PPTX·HTML(하나 이상 선택, HTML 영상 포함은 선택)으로 제공하고 Final/Reports에도 선택한 형식만 저장 · PDF는 사용자가 직접 만들며 웹 구현 없음, LibreOffice 배포 부담 제거 · `docs/plans/case-results-workflow-redesign.md`
+- 2026-10-03 · 등록 1건 = 의뢰 1개. 수동 등록에서 의뢰 2개 이상이면 차단, 의뢰 폴더 조사 시 프로젝트 자동 도출 · 다중 의뢰 등록 시 첫 의뢰에만 묶여 Case 수집 실패, 일괄 등록은 자동 탐색 담당 · `docs/contracts/depth-schema.md` §14
+- 2026-10-03 · Case 결과 환경은 의뢰의 Case로 자동 판정(토글 제거, 라벨 표시, Case 없음은 결과 없음 안내, 혼재 시만 토글) · 한 의뢰에 사용·유통 혼재 금지가 작업 규칙 · `docs/contracts/case-results-environment.md`
+- 2026-10-03 · 프로젝트 "선택" → 내 작업 이동, 의뢰 "선택" → 선택 해제 · 빈 ID API 호출로 Not Found 표시되던 문제
+- 2026-10-04 · 준비 단계 대체 화면은 의뢰 작업 페이지에만 적용, 사이드바 이동 시 의뢰 화면 전용 쿼리 제거(project·request 유지) · 변수 카탈로그 등에서 구 결과 등록 화면이 뜨던 문제 · `docs/contracts/workspace-navigation.md`
+- 2026-10-04 · 폴더 등록 의뢰 진척은 폴더 상태로 자동 계산(등록→모델링→결과→Final→보고서, 의뢰 단위). 모델링은 Scene 폴더 바로 아래 `.rad`/`.fem`, 대표 Case 1개 Final + 보고서로 완료 · 수동 입력 없이 SPDM 원본과 일치 · `docs/contracts/folder-request-progress.md`
+- 2026-10-04 · SPDM 접근을 StorageProvider 하나로 모으고 1단계는 LocalFsProvider로 동작 불변 정리, 쓰기는 Final/CAE·Reports·.finalizations만 허용. 원격은 사이드카 HTTP 서비스(B안)로 연결 예정 · 알테어원 드라이브 전환 대비 · `docs/contracts/storage-provider.md`

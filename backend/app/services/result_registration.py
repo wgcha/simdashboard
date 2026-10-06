@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -13,6 +12,8 @@ from uuid import uuid4
 from ..database_connection import ConnectionLike, rows
 from ..media_policy import validate_media_metadata
 from . import dashboard_capture, result_registration_locations, result_registration_paths as paths, spdm_storage, usage_source_review
+from .storage.local import LocalFsProvider
+from .storage.provider import LEGACY
 
 
 MAX_FILE_BYTES = paths.MAX_FILE_BYTES
@@ -134,7 +135,7 @@ def _current_target(
     expected_context: dict[str, Any] | None = None,
     require_schema_roles: bool = False,
 ) -> dict[str, Any]:
-    root, root_id, root_key = paths._root(conn)
+    root, root_id, root_key = paths.storage_context(conn)
     schema = None
     if require_schema_roles:
         # New drafts follow the same request boundary as step 02. The SPDM
@@ -233,13 +234,13 @@ def _current_target(
         raise ResultRegistrationError("RESULT_CONTEXT_CHANGED", "선택한 결과 폴더의 Simulation Case 문맥이 변경되었습니다.")
     if not result_nodes or result_nodes[-1].get("role_kind") != "RESULTS":
         raise ResultRegistrationError("RESULT_FOLDER_INVALID", "선택한 폴더는 확인된 results 경로여야 합니다.")
-    expected_parent_role = "EVALUATION" if scope["environment"] == "USAGE" else "SCENE"
-    if len(result_nodes) < 2 or result_nodes[-2].get("role_kind") != expected_parent_role:
+    expected_parent_roles = {"EVALUATION", "SCENE"} if scope["environment"] == "USAGE" else {"SCENE"}
+    if len(result_nodes) < 2 or result_nodes[-2].get("role_kind") not in expected_parent_roles:
         raise ResultRegistrationError("RESULT_FOLDER_INVALID", "결과 폴더는 선택한 평가 항목 또는 Scene 바로 아래여야 합니다.")
     if expected_context is not None and _public_context(context) != _public_context(expected_context):
         raise ResultRegistrationError("RESULT_CONTEXT_CHANGED", "검수한 업무 문맥이 현재 경로 연결과 달라졌습니다. 다시 검수하세요.")
     target = paths._safe_existing(root, result_relative_path)
-    if not target.is_dir():
+    if not LocalFsProvider(root).is_dir(target):
         raise ResultRegistrationError("SPDM_FOLDER_UNAVAILABLE", "선택한 결과 경로가 폴더가 아닙니다.")
     paths._owner_conflict(conn, root_id, root_key, case_relative_path, project_id, request_id, scope["environment"])
     paths._owner_conflict(conn, root_id, root_key, result_relative_path, project_id, request_id, scope["environment"])
@@ -306,7 +307,7 @@ def _schema_candidate_context(conn: ConnectionLike, project_id: str, request_id:
     if not result_relative_path:
         return None
     try:
-        root, _root_id, root_key = paths._root(conn)
+        root, _root_id, root_key = paths.storage_context(conn)
         scope, _schema_root, _schema_root_key, _environment = result_registration_locations._scope_data(
             conn, project_id, request_id, environment)
         schema = scope.pop("_schema")
@@ -323,7 +324,7 @@ def _refresh_schema(conn: ConnectionLike, project_id: str, request_id: str,
                     environment: str, actor: str, *, capture_cases: bool = True) -> dict[str, Any]:
     from . import folder_discovery_environment, folder_schema_resolver
 
-    root, _root_id, root_key = paths._root(conn)
+    root, _root_id, root_key = paths.storage_context(conn)
     previous = folder_schema_resolver.active_refresh_snapshot(conn, root_key, project_id, request_id, environment)
     try:
         result = folder_discovery_environment.refresh_scope(
@@ -348,7 +349,7 @@ def reconcile_schema_refresh_failures(conn: ConnectionLike, project_id: str, req
     """Clear stored publication warnings after a later scoped refresh succeeds."""
     from . import folder_discovery_environment, folder_schema_resolver
 
-    root, _root_id, root_key = paths._root(conn)
+    root, _root_id, root_key = paths.storage_context(conn)
     current = folder_schema_resolver.active_refresh_snapshot(conn, root_key, project_id, request_id, environment)
     if not current or str(current["id"]) != snapshot_id:
         return 0
@@ -944,6 +945,7 @@ def _mirror_files(conn: ConnectionLike, row: dict[str, Any], approval: dict[str,
                              result_relative_path=str(row["result_relative_path"]), expected_root_id=str(row["storage_root_id"]),
                              expected_context=row["context_json"] or {})
     root: Path = target["root"]
+    fs = LocalFsProvider(root)
     result_relative = str(row["result_relative_path"])
     paths._lock_path(conn, target["root_key"], result_relative)
     file_by_path = {str(item["relative_path"]).casefold(): item for item in file_rows}
@@ -967,51 +969,36 @@ def _mirror_files(conn: ConnectionLike, row: dict[str, Any], approval: dict[str,
         parent = paths._safe_existing(root, parent_relative)
         for part in parts[:-1]:
             parent_relative = f"{parent_relative}/{part}"
-            candidate = parent / part
-            try:
-                candidate.lstat()
-            except FileNotFoundError:
+            candidate = fs.join(parent, part)
+            if fs.stat(candidate, follow_links=False, missing_ok=True) is None:
                 try:
-                    candidate.mkdir()
+                    fs.mkdirs(candidate, zone=LEGACY, parents=False, exist_ok=False)
                 except FileExistsError:
                     pass
-            spdm_storage._assert_safe_existing(candidate, root)
-            if not candidate.is_dir():
+            fs.assert_safe(candidate)
+            if not fs.is_dir(candidate):
                 return "MIRROR_CONFLICT", {"code": "MIRROR_PATH_CONFLICT", "message": "결과 저장 경로의 하위 항목이 폴더가 아닙니다.", "relative_path": parent_relative}
             parent = candidate
-        destination = parent / parts[-1]
-        try:
-            destination.lstat()
-        except FileNotFoundError:
-            pass
-        else:
-            spdm_storage._assert_safe_existing(destination, root)
-            if not destination.is_file():
+        destination = fs.join(parent, parts[-1])
+        if fs.stat(destination, follow_links=False, missing_ok=True) is not None:
+            fs.assert_safe(destination)
+            if not fs.is_file(destination):
                 return "MIRROR_CONFLICT", {"code": "MIRROR_PATH_CONFLICT", "message": "같은 이름의 결과 저장 항목이 파일이 아닙니다.", "relative_path": full_relative}
-            existing, _ = spdm_storage.read_stable_bytes(destination, max_bytes=MAX_FILE_BYTES)
+            existing = fs.read_stable(destination, max_bytes=MAX_FILE_BYTES)
             if hashlib.sha256(existing).hexdigest() == digest and len(existing) == len(content):
                 reused.append(local)
                 continue
             return "MIRROR_CONFLICT", {"code": "MIRROR_CONFLICT", "message": "같은 이름에 다른 내용의 파일이 있어 원본 폴더에 저장하지 않았습니다.", "relative_path": full_relative}
-        spdm_storage._assert_safe_existing(parent, root)
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-        if hasattr(os, "O_BINARY"):
-            flags |= os.O_BINARY
-        if hasattr(os, "O_NOFOLLOW"):
-            flags |= os.O_NOFOLLOW
+        fs.assert_safe(parent)
         try:
-            descriptor = os.open(destination, flags, 0o600)
-            with os.fdopen(descriptor, "wb") as stream:
-                stream.write(content)
-                stream.flush()
-                os.fsync(stream.fileno())
+            fs.create_exclusive(destination, content, zone=LEGACY, private=True)
             copied.append(local)
         except FileExistsError:
             # A concurrent writer may have won after our preflight. Re-read and
             # reuse only byte-identical content; never overwrite it.
             try:
-                spdm_storage._assert_safe_existing(destination, root)
-                existing, _ = spdm_storage.read_stable_bytes(destination, max_bytes=MAX_FILE_BYTES)
+                fs.assert_safe(destination)
+                existing = fs.read_stable(destination, max_bytes=MAX_FILE_BYTES)
             except Exception:
                 return "MIRROR_CONFLICT", {"code": "MIRROR_PATH_CONFLICT", "message": "결과 저장 경로가 동시에 변경되었습니다.", "relative_path": full_relative}
             if hashlib.sha256(existing).hexdigest() == digest and len(existing) == len(content):
@@ -1103,7 +1090,7 @@ def publish_draft(conn: ConnectionLike, draft_id: str, inspection_revision: str 
         existing_key = rows(conn.execute("SELECT id FROM result_registration_drafts WHERE publish_idempotency_key=?", [idempotency_key]))
         if existing_key and str(existing_key[0]["id"]) != draft_id:
             raise ResultRegistrationError("RESULT_IDEMPOTENCY_CONFLICT", "같은 등록 요청 식별자를 다른 초안에서 사용했습니다.")
-        _root, _root_id, root_key = paths._root(conn)
+        _root, _root_id, root_key = paths.storage_context(conn)
         paths._lock_path(conn, root_key, str(row["case_relative_path"]))
         target = _current_target(conn, project_id=str(row["project_id"]), request_id=str(row["request_id"]),
                                  environment=str(row["environment"]), case_relative_path=str(row["case_relative_path"]),

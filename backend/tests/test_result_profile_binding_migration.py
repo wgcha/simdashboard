@@ -47,7 +47,10 @@ def test_result_profile_migration_chain_and_roundtrip_sql(monkeypatch) -> None:
     revision_15 = script.get_revision("0015_legacy_drop_layout")
     assert revision_14 and revision_14.down_revision == "0013_project_result_profile_menu"
     assert revision_15 and revision_15.down_revision == "0014_result_profile_revs"
-    assert tuple(script.get_heads()) == ("0029_dashboard_captures",)
+    # A single head that descends from these revisions; the exact head is pinned in test_run_identity_migration.
+    heads = script.get_heads()
+    assert len(heads) == 1
+    assert "0015_legacy_drop_layout" in {rev.revision for rev in script.walk_revisions("base", heads[0])}
 
     module = _migration("0014_project_result_profile_binding_revisions.py")
     statements = _Statements()

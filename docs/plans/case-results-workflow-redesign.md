@@ -2,7 +2,7 @@
 
 - 기준일: 2026-10-02
 - 상태: 0~3단계 구현·격리 검증 완료(브랜치 `claude/case-results-redesign`). 4단계 이후 미착수.
-- 결정 사항(사용자 확인 2026-10-02): UI는 **A안(경로 바 + 단일 결과면)**, PDF는 **서버 LibreOffice headless 변환**, 결과 검수는 **Final 지정 시점으로 이동**, 자동 변경 확인 주기는 **30초**.
+- 결정 사항(사용자 확인 2026-10-02): UI는 **A안(경로 바 + 단일 결과면)**, PDF는 **보류**(2026-10-02 23:51 사용자 결정: 회사 PC의 MS Office로 변환, 웹은 PPTX만. 이전 결정인 서버 LibreOffice 변환은 철회), 결과 검수는 **Final 지정 시점으로 이동**, 자동 변경 확인 주기는 **30초**.
 - 대체 범위: [소재물성 계획의 2026-10-02 후속 UI 계획](materials-dashboard-implementation.md#모델-소재물성-계층-선택-ui-개선-계획)은 이 문서로 대체한다. 해당 절의 검증 시나리오는 여기서 계승한다.
 - 기준 계약: [공용 위치·Refresh](../features/folder-schema-refresh.md), [결과 등록](../features/result-registration.md), [최종확정](../features/case-finalization.md), [Windows 배포 정책](../windows-deployment-policy.md)
 
@@ -90,8 +90,8 @@
 | 2 | 자동 반영(진입 + 30초) + 페이지 Refresh 제거 | 합성 폴더에 Scene·파일을 복사하면 30초 안에 화면 반영. 변경 없을 때 capture 미생성. 숨김 탭 중단. 실패 시 마지막 정상 상태 유지. |
 | 3 | A안 화면, 문구 정리, 영상 그리드·소재 탭 통합 | 필수 버튼 2개, 단일 후보 글자 표시, 내부 코드 미노출. 1440/1920·11~18pt·라이트/다크 스크린샷 확인. |
 | 4 | 등록 단순화 | Scene 선택 후 복사 한 화면. 덮어쓰기 거부·경로 경계·권한 회귀. |
-| 5 | Case 보고서 + PDF 변환 + 배포 패키지 | Case 원본 PPTX 값·미디어가 선택 범위와 일치. PDF 변환 성공·시간초과·변환기 없음 경로. Windows 배포 계약 CI. |
-| 6 | Final 지정에 보고서·검사 포함 | Final/Reports에 PPTX·PDF, Final/CAE에 입력·결과. 중복 클릭·부분 실패 재시도 멱등. |
+| 5 | Case 보고서(PPTX·HTML) | 선택 범위와 값·미디어 일치, 형식 하나 이상 선택, HTML 영상 포함 선택·상한. PDF 구현 없음(23:58 결정). |
+| 6 | Final 지정에 보고서·검사 포함 | Final/Reports에 사용자가 고른 PPTX·HTML, Final/CAE에 입력·결과. 중복 클릭·부분 실패 재시도 멱등. |
 
 0~1은 이후 단계의 기반이다. 2와 3은 병행할 수 있다. 5는 배포 변경을 포함하므로 독립 Astra 최종 검수와 변경분 보안 검수(`security-diff-scan`) 대상이다. 2·4·6도 경로·권한 경계를 바꾸므로 같은 검수 대상이다.
 
@@ -99,7 +99,7 @@
 
 - 두 프로젝트·여러 의뢰, 같은 이름의 Case/Scene, 복수 Run/Option, Option 생략, 하중경우 생략, 단일 후보, 덱·결과 없음, Scene만 있고 파일 없음, INC 전용 덱, Part ID가 같은 다른 덱.
 - 자동 반영: 복사 도중(작성 중 파일), 이름 변경·삭제·재생성, 여러 사용자가 같은 의뢰를 열람할 때 중복 실행 없음, 열람 중 의뢰 전환.
-- 보고서·Final: 사용/유통환경, 기본 레이아웃·회사 템플릿, 부분 자료·누락 변수, 생성 중 선택 변경, PDF 한글 글꼴.
+- 보고서·Final: 사용/유통환경, 기본 레이아웃·회사 템플릿, 부분 자료·누락 변수, 생성 중 선택 변경.
 - 실제 사용자 DB·설정·실행 서비스와 `E:\shared` 원본은 테스트 대상이 아니다. 격리 DB와 합성 SPDM root를 사용한다. Server 2022 폐쇄망 설치·업데이트·재부팅은 별도 현장 검증으로 구분해 기록한다.
 
 ## 6. 남은 결정
@@ -140,3 +140,14 @@
 - 독립 검수 지적 반영: 값이 있는 Component 우선 선택(`has_values`), Case 변경 시 이력 선택 초기화, 문제 코드 한글화, 토큰 색상, 긴 이름 줄바꿈·말줄임, 키보드 탭 이동, 소재 탭에서 돌아올 때 환경 복원.
 - 검증: e2e simulation 13 통과(남은 1건은 폐기된 capture-pin 기대), materials 6, case-video-grid 2, folder-working-final 3, 1440/1920×11/18pt·4K 화면 확인, tsc·build·routing 통과, check:architecture 기존 4건만.
 
+### PDF 보류 결정 (2026-10-02 23:51)
+- 회사에 MS Office가 있으므로 웹 프로그램의 PDF 생성은 보류한다. §3.5의 LibreOffice 변환·폐쇄망 패키징은 진행하지 않는다(배포 정책·ADR 변경 없음).
+- 5단계: Case 결과 보고서 PPTX(브라우저 pptxgenjs, 기존 템플릿·편집 재사용) 다운로드만 구현한다.
+- 6단계: Final 지정 시 같은 레시피의 PPTX를 `Final/Reports/<Case>/<Final ID>/`에 저장하고, 입력·결과는 `Final/CAE/<Case>/<Final ID>/<Working 미러>`에 저장한다(DEPTH_V1 D11·D12). 결과 파일을 Reports로 보내던 기존 분류는 CAE로 바꾼다.
+- 중복 의뢰 정리는 다른 세션의 DEPTH_V1 §13(등록 삭제)이 맡는다.
+- 추가 결정(23:56): 보고서는 PPTX와 HTML을 함께 구현하고 사용자가 하나 이상 고른다. HTML 영상 포함은 선택(영상당 보통 1MB 미만; 상한 영상당 20MB·전체 200MB, 넘으면 대표 이미지로 대체). Final/Reports에는 사용자가 고른 PPTX·HTML을 저장하고 PDF는 계약에서 제외한다(depth-schema D11 갱신). 업로드한 HTML은 SPDM에 저장만 하고 앱이 페이지로 제공하지 않는다.
+- 추가 결정(23:58): PDF는 사용자가 PPTX·HTML로 직접 만든다. 웹에는 PDF 관련 구현(변환, 인쇄용 스타일 등)을 하지 않는다. §3.5의 PDF·LibreOffice 내용과 §3.6의 PDF 저장은 폐기한다.
+
+### 6단계 Final 지정 (2026-10-03)
+- Final/CAE에 기준 Scene의 입력·결과 전체(Working 미러), Final/Reports에 사용자가 고른 PPTX·HTML(서버가 이름 결정)만 저장한다. 기준은 화면과 같은 병합 최신 결과(`latest:<Case>`)이고 Scene별 수집본을 서명 계획에 기록한다. 보고서는 확정 ID에 묶인 형식별 업로드 후 확정하며 보고서 없이는 완료되지 않는다. 계약: [최종확정](../features/case-finalization.md).
+- 남은 결정: 사용환경은 보고서 빌더가 없어 Final 지정을 완료할 수 없다.

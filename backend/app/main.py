@@ -46,10 +46,12 @@ from .routers.result_ingestion import router as result_ingestion_router
 from .routers.spdm_storage import router as spdm_storage_router
 from .routers.result_registration import router as result_registration_router
 from .routers.dashboard import router as result_dashboard_router
+from .routers.dashboard import project_requests_router as result_environments_router
 from .routers.case_finalization import router as case_finalization_router
 from .routers.materials import router as materials_router
 from .routers.folder_discovery import router as folder_discovery_router
 from .routers.folder_discovery_environment import router as folder_discovery_environment_router
+from .routers.folder_environment_profiles import requests_router as folder_environment_requests_router
 from .routers.folder_environment_profiles import router as folder_environment_profiles_router
 from .routers.media import router as media_router
 from .routers.managed_local_execution import router as managed_local_execution_router
@@ -126,6 +128,7 @@ app.include_router(semantic_impact_router)
 app.include_router(folder_discovery_router)
 app.include_router(folder_discovery_environment_router)
 app.include_router(folder_environment_profiles_router)
+app.include_router(folder_environment_requests_router)
 app.include_router(semantic_vocabulary_router)
 
 
@@ -329,6 +332,7 @@ app.include_router(result_ingestion_router)
 app.include_router(spdm_storage_router)
 app.include_router(result_registration_router)
 app.include_router(result_dashboard_router)
+app.include_router(result_environments_router)
 app.include_router(case_finalization_router)
 app.include_router(materials_router)
 app.include_router(media_router)

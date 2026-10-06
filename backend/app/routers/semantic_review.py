@@ -18,6 +18,7 @@ from ..repositories import semantic_review as review_repository
 from ..repositories import semantic_mapping as mapping_repository
 from ..security import write_audit_event
 from ..services import spdm_storage
+from ..services.storage import get_storage_provider
 from ..services.semantic_sample_uploads import MAX_SAMPLE_BYTES
 from ..services.semantic_mapping import persist_semantic_import_in_transaction, semantic_source_run_id
 from .semantic_body_limit import SemanticBodyLimitRoute
@@ -156,14 +157,13 @@ def _source(conn: Any, binding: dict[str, Any], relative_path: str) -> bytes:
     if not relative_path or "/" in relative_path or "\\" in relative_path or relative_path in {".", ".."}:
         raise HTTPException(422, {"code": "SEMANTIC_REVIEW_PATH_INVALID"})
     try:
-        root = spdm_storage.storage_root(conn)
-        if root.root is None: raise HTTPException(409, {"code": "SPDM_ROOT_UNSET"})
-        directory = root.root.joinpath(*str(binding["relative_path"]).split("/"))
-        spdm_storage._assert_safe_existing(directory, root.root)
-        path = directory / relative_path
-        spdm_storage._assert_safe_existing(path, root.root)
-        if not path.is_file() or spdm_storage._is_reparse(path): raise HTTPException(422, {"code": "SEMANTIC_REVIEW_SOURCE_MISSING"})
-        return spdm_storage.read_stable_bytes(path, max_bytes=MAX_SAMPLE_BYTES)[0]
+        fs = get_storage_provider(conn, on_unset=lambda: HTTPException(409, {"code": "SPDM_ROOT_UNSET"}))
+        directory = "/".join(str(binding["relative_path"]).split("/"))
+        fs.assert_safe(directory)
+        path = fs.join(directory, relative_path)
+        fs.assert_safe(path)
+        if not fs.is_file(path) or fs.is_link(path): raise HTTPException(422, {"code": "SEMANTIC_REVIEW_SOURCE_MISSING"})
+        return fs.read_stable(path, max_bytes=MAX_SAMPLE_BYTES)
     except spdm_storage.SpdmStorageError as error:
         raise HTTPException(422, {"code": error.code}) from error
 

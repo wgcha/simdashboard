@@ -12,7 +12,7 @@ const nodes = [
 ]
 
 test.describe('환경 폴더 연결', () => {
-  test('수동 역할 확인 후 긴 한국어 경로 미리보기가 상태와 겹치지 않는다', async ({ page }) => {
+  test('깊이 스키마 역할은 읽기 전용이고 편차 배지를 보인 뒤 긴 한국어 경로 미리보기가 상태와 겹치지 않는다', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 1000 })
     const errors: string[] = []
     page.on('pageerror', (error) => errors.push(error.message))
@@ -23,7 +23,9 @@ test.describe('환경 폴더 연결', () => {
     const scenePath = `${casePath}/Drop/${runName}/Individual/2_Face_Drop_Scene01_후면_좌측_상세_장면`
     const nodes = [
       { id: 'n-project', name: 'Project_9301_Preview', relative_path: 'Project_9301_Preview', parent_path: '', depth: 0, allowed_roles: ['PROJECT'], role_kind: 'PROJECT', status: 'CONFIRMED' },
-      { id: 'n-request', name: 'WR_9301_SimType1', relative_path: root, parent_path: 'Project_9301_Preview', depth: 1, allowed_roles: ['REQUEST'], role_kind: null, status: 'UNRESOLVED', message: '선택한 환경과 SimType 폴더가 일치하지 않습니다.' },
+      { id: 'n-request', name: 'WR_9301_SimType1', relative_path: root, parent_path: 'Project_9301_Preview', depth: 1, level: 2, segment: 'UPPER', role_basis: 'DEPTH_SCHEMA', allowed_roles: ['REQUEST'], role_kind: 'REQUEST', status: 'CONFIRMED' },
+      // DEPTH_V1: a warning deviation (non-blocking) is shown as a badge; the role cannot be changed in place.
+      { id: 'n-final-other', name: 'Other', relative_path: `${root}/Final/Other`, parent_path: `${root}/Final`, depth: 3, level: 2, segment: 'FINAL', role_basis: 'DEPTH_SCHEMA', allowed_roles: [], role_kind: null, status: 'UNRESOLVED', deviation: { code: 'UNEXPECTED_FINAL_CHILD', message: 'Final 아래에는 CAE·Reports·CAD만 둘 수 있습니다.' } },
       { id: 'n-case', name: caseName, relative_path: casePath, parent_path: root, depth: 2, allowed_roles: ['SIMULATION_CASE'], role_kind: 'SIMULATION_CASE', status: 'CONFIRMED' },
       { id: 'n-load', name: 'Drop', relative_path: `${casePath}/Drop`, parent_path: casePath, depth: 3, allowed_roles: ['LOAD_CASE'], role_kind: 'LOAD_CASE', status: 'CONFIRMED' },
       { id: 'n-run', name: runName, relative_path: `${casePath}/Drop/${runName}`, parent_path: `${casePath}/Drop`, depth: 4, allowed_roles: ['EXECUTION_RUN'], role_kind: 'EXECUTION_RUN', status: 'CONFIRMED' },
@@ -39,9 +41,10 @@ test.describe('환경 폴더 연결', () => {
     await page.route('**/api/folder-discovery/environments/scan', (route) => route.fulfill({ json: { id: 'scan-preview-long', environment: 'DISTRIBUTION', relative_path: '', status: 'COMPLETE', nodes, issues: [] } }))
     await page.route('**/api/folder-discovery/environments/previews', async (route) => {
       const body = route.request().postDataJSON()
-      expect(body.assignments).toContainEqual(expect.objectContaining({ node_id: 'n-request', role_kind: 'REQUEST', confirm: true }))
-      const plan = nodes.filter((node) => ['PROJECT', 'REQUEST', 'SIMULATION_CASE', 'LOAD_CASE', 'EXECUTION_RUN', 'RUN_OPTION', 'SCENE'].includes(node.id === 'n-request' ? 'REQUEST' : node.role_kind ?? ''))
-        .map((node) => ({ ...node, role_kind: node.id === 'n-request' ? 'REQUEST' : node.role_kind, status: 'CONFIRMED', message: undefined }))
+      // Roles come from the depth schema: nothing was assigned manually.
+      expect(body.assignments).toEqual([])
+      const plan = nodes.filter((node) => ['PROJECT', 'REQUEST', 'SIMULATION_CASE', 'LOAD_CASE', 'EXECUTION_RUN', 'RUN_OPTION', 'SCENE'].includes(node.role_kind ?? ''))
+        .map((node) => ({ ...node, status: 'CONFIRMED' }))
       await route.fulfill({ json: { id: 'preview-long', scan_id: 'scan-preview-long', environment: 'DISTRIBUTION', can_apply: true, rows: plan, summary: { new: 3, existing: 0 }, unresolved_count: 0 } })
     })
     await loginWorkspace(page, 'e2e-admin', '/workspace/catalog/schemas')
@@ -57,15 +60,24 @@ test.describe('환경 폴더 연결', () => {
     await screen.getByRole('button', { name: '조사 시작' }).click()
     await expect(screen).toContainText('구조 확인')
     await screen.locator('.folder-node-button').filter({ hasText: 'WR_9301_SimType1' }).click()
-    await expect(screen).toContainText('선택한 환경과 SimType 폴더가 일치하지 않습니다.')
-    await screen.getByLabel('선택 폴더 역할').selectOption('REQUEST')
-    await expect(screen).not.toContainText('선택한 환경과 SimType 폴더가 일치하지 않습니다.')
+    const detail = screen.locator('.folder-node-detail')
+    await expect(detail.getByLabel('선택 폴더 역할')).toHaveText('의뢰')
+    // Read-only role: no role select remains in the selected-folder detail.
+    await expect(detail.locator('select[aria-label="선택 폴더 역할"]')).toHaveCount(0)
+    await expect(detail).toContainText('L2')
+    const deviated = screen.locator('.folder-node-button').filter({ hasText: 'Other' })
+    await expect(deviated.locator('.folder-deviation-badge.warning')).toHaveText('Final 아래 CAE·Reports·CAD 외 폴더')
+    await deviated.click()
+    await expect(detail.getByLabel('선택 폴더 역할')).toHaveText('확인 필요')
+    await expect(detail.locator('.folder-deviation-badge.warning')).toBeVisible()
+    await expect(detail.getByRole('alert')).toHaveText('Final 아래에는 CAE·Reports·CAD만 둘 수 있습니다.')
+    await expect(detail).toContainText('“저장된 규칙” 탭에서 깊이별 역할을 수정하세요')
     await screen.getByRole('button', { name: '등록 내용 확인' }).click()
     await expect(screen).toContainText('확인 필요 0')
     await expect(screen).toContainText('확정됨')
     await expect(screen).toContainText(caseName)
     await expect(screen).toContainText(runName)
-    await expect(screen).not.toContainText('선택한 환경과 SimType 폴더가 일치하지 않습니다.')
+    await expect(screen.locator('.folder-preview-row--preview').filter({ hasText: 'Final/Other' })).toHaveCount(0)
     const overlaps = async () => screen.locator('.folder-preview-row--preview').evaluateAll((rows) => rows.map((row) => {
       const cells = Array.from(row.querySelectorAll(':scope > span, :scope > b, :scope > em')).map((cell) => cell.getBoundingClientRect())
       return cells.some((left, index) => cells.slice(index + 1).some((right) => Math.min(left.right, right.right) - Math.max(left.left, right.left) > 0.5))
@@ -138,7 +150,8 @@ test.describe('환경 폴더 연결', () => {
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
     await page.screenshot({ path: join(evidence, 'structure-mobile.png'), fullPage: true })
     await screen.locator('.folder-node-button').filter({ hasText: 'Assy_RES_Main' }).click()
-    await expect(screen.getByLabel('선택 폴더 역할')).toBeVisible()
+    await expect(screen.getByLabel('선택 폴더 역할')).toHaveText('해석 Case')
+    await expect(screen.locator('.folder-node-detail select[aria-label="선택 폴더 역할"]')).toHaveCount(0)
     await screen.getByRole('button', { name: '폴더 트리', exact: true }).click()
     await expect(screen.locator('.folder-tree')).toBeVisible()
     await page.setViewportSize({ width: 1366, height: 768 })

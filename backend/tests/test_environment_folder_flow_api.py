@@ -15,6 +15,13 @@ from app.services import dashboard_capture, folder_discovery_environment, folder
 from app.services.folder_schema_locations import EnvironmentLocations
 
 pytestmark = pytest.mark.duckdb_integration
+
+
+@pytest.fixture(autouse=True)
+def _legacy_profiles(isolated_database):
+    """These scenarios use legacy folder layouts: run them as a pre-0034 database."""
+    from tests.legacy_environment_profiles import activate_legacy_profiles
+    activate_legacy_profiles()
 BASE = "/api/folder-discovery/environments"
 
 
@@ -33,36 +40,66 @@ def admin_client(tmp_path, monkeypatch, password_auth_bootstrap_admin):
         yield client, root
 
 
+def synthetic_pptx(extra: dict[str, bytes] | None = None, content_types: bytes | None = None) -> bytes:
+    """Smallest zip the Final report check accepts as PPTX (synthetic, not a real deck)."""
+    import io
+    import zipfile
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", content_types or (
+            b'<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            b'<Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/></Types>'))
+        archive.writestr("ppt/presentation.xml", b"<p:presentation/>")
+        for name, data in (extra or {}).items():
+            archive.writestr(name, data)
+    return buffer.getvalue()
+
+
 def post(client, route, payload):
     response = client.post(BASE + route, json=payload)
     assert response.status_code == 200, response.text
     return response.json()
 
 
+def _profile_call(operation):
+    """Legacy profile editing is HTTP 410 since DEPTH_V1 (§6); these legacy scenarios drive the service."""
+    from fastapi import HTTPException
+    from app.services import environment_folder_profiles
+    from app.services.folder_discovery import WRITE_LOCK
+    from app.services.semantic_mapping import semantic_transaction
+    with connect() as conn:
+        try:
+            with WRITE_LOCK, semantic_transaction(conn):
+                return 200, operation(environment_folder_profiles, conn)
+        except HTTPException as exc:
+            return exc.status_code, exc.detail
+
+
 def test_profile_archive_keeps_revision_and_history_reference_and_rejects_stale_edit(admin_client):
     client, _ = admin_client
-    profile = post(client, "/profiles", {
+    for method, path in (("post", "/profiles"), ("put", "/profiles/x"), ("delete", "/profiles/x?expected_revision=1"),
+                         ("post", "/profiles/from-legacy")):
+        gone = getattr(client, method)(BASE + path, **({"json": {}} if method != "delete" else {}))
+        assert gone.status_code == 410 and gone.json()["detail"]["code"] == "DEPRECATED_USE_DEPTH_SCHEMA", gone.text
+    _, profile = _profile_call(lambda svc, conn: svc.save_profile(conn, **{
         "environment": "DISTRIBUTION", "name": f"archive test {uuid4().hex[:8]}",
         "rules": {"rules": [], "description": "Synthetic archive lifecycle check."},
-    })
-    archived = client.delete(
-        f"{BASE}/profiles/{profile['id']}?expected_revision={profile['revision']}"
-    )
-    assert archived.status_code == 200, archived.text
-    assert archived.json()["revision"] == profile["revision"]
-    assert archived.json()["archived"] is True
+    }))
+    status, archived = _profile_call(lambda svc, conn: svc.archive_profile(conn, profile["id"], profile["revision"]))
+    assert status == 200, archived
+    assert archived["revision"] == profile["revision"]
+    assert archived["archived"] is True
     assert profile["id"] not in {item["id"] for item in client.get(BASE).json()["items"]}
 
     with connect() as conn:
         saved = folder_discovery_environment._profile(conn, profile["id"], "DISTRIBUTION")
         assert saved["revision"] == profile["revision"]
         assert saved["rules"]["profile_metadata"]["archived"] is True
-    stale_edit = client.put(f"{BASE}/profiles/{profile['id']}", json={
-        "environment": "DISTRIBUTION", "name": profile["name"], "rules": {"rules": []},
-        "expected_revision": profile["revision"],
-    })
-    assert stale_edit.status_code == 409
-    assert stale_edit.json()["detail"]["code"] == "ENVIRONMENT_PROFILE_ARCHIVED"
+    status, stale_edit = _profile_call(lambda svc, conn: svc.save_profile(
+        conn, profile_id=profile["id"], environment="DISTRIBUTION", name=profile["name"], rules={"rules": []},
+        expected_revision=profile["revision"]))
+    assert status == 409
+    assert stale_edit["code"] == "ENVIRONMENT_PROFILE_ARCHIVED"
 
 
 def test_schema_scoped_empty_projection_fails_closed_and_legacy_remains_compatible():
@@ -834,11 +871,14 @@ def test_case_finalization_is_capture_pinned_signed_retryable_and_keeps_existing
     plan = plan.json()
     assert plan["counts"]["rad_decks"] == 1
     assert plan["counts"]["inc_decks"] == 1
-    assert plan["counts"]["reports"] == 1
+    assert plan["counts"]["scene_reports"] == 1
     assert plan["counts"]["results"] == 2
     assert added_scene_relative not in plan["scene_paths"]
     assert not any(item["source_relative_path"].startswith(added_scene_relative + "/") for item in plan["files"])
-    assert {item["source_basis"] for item in plan["files"]} == {"SELECTED_CAPTURE", "CURRENT_CONFIRMED_SCENE"}
+    assert {item["source_basis"] for item in plan["files"]} == {"SOURCE_CAPTURE", "CURRENT_CONFIRMED_SCENE"}
+    assert {item["category"] for item in plan["files"]} == {"CAE"}
+    assert plan["report_files"] == {"pptx": "Package_SetCase1_CushionCase1_report.pptx",
+                                    "html": "Package_SetCase1_CushionCase1_report.html"}
     assert not any("Private" in item["source_relative_path"] for item in plan["files"])
     assert any(item["source_relative_path"].endswith("review.pdf") for item in plan["files"])
     assert not (root / "Project_9910_Final" / "WR_9910_SimType3" / "Final" / "Reports" / "Package_SetCase1_CushionCase1").exists()
@@ -849,7 +889,7 @@ def test_case_finalization_is_capture_pinned_signed_retryable_and_keeps_existing
     stored_plan = json.loads(stored_plan_path.read_text(encoding="utf-8"))
     stored_plan["final_relative_path"] = "Elsewhere"
     stored_plan_path.write_text(json.dumps(stored_plan), encoding="utf-8")
-    tampered = client.post("/api/dashboard/finalizations/confirm", json={**body, "operation_id": plan["operation_id"]})
+    tampered = client.post("/api/dashboard/finalizations/confirm", json={**body, "operation_id": plan["operation_id"], "report_formats": ["pptx"]})
     assert tampered.status_code == 409, tampered.text
     assert preserved.read_text(encoding="utf-8") == "keep this"
     stored_plan["final_relative_path"] = plan["final_relative_path"]
@@ -877,12 +917,16 @@ def test_case_finalization_is_capture_pinned_signed_retryable_and_keeps_existing
             raise case_finalization.CaseFinalizationError("SYNTHETIC_COPY_FAILURE", "synthetic copy failure")
         return original_copy(*args, **kwargs)
 
+    report_query = {**body}
+    staged = client.put(f"/api/dashboard/finalizations/{retry_plan['operation_id']}/reports/pptx",
+                        params=report_query, content=synthetic_pptx())
+    assert staged.status_code == 200, staged.text
     monkeypatch.setattr(case_finalization, "_copy_one", fail_once)
-    failed = client.post("/api/dashboard/finalizations/confirm", json={**body, "operation_id": retry_plan["operation_id"]})
+    failed = client.post("/api/dashboard/finalizations/confirm", json={**body, "operation_id": retry_plan["operation_id"], "report_formats": ["pptx"]})
     assert failed.status_code == 422, failed.text
     assert client.get("/api/dashboard/finalizations/status", params={key: value for key, value in body.items() if key != "capture_id"}).json()["retryable_operations"]
     monkeypatch.setattr(case_finalization, "_copy_one", original_copy)
-    confirmed = client.post("/api/dashboard/finalizations/confirm", json={**body, "operation_id": retry_plan["operation_id"]})
+    confirmed = client.post("/api/dashboard/finalizations/confirm", json={**body, "operation_id": retry_plan["operation_id"], "report_formats": ["pptx"]})
     assert confirmed.status_code == 200, confirmed.text
     record = confirmed.json()
     assert record["status"] == "COMPLETE"
@@ -892,13 +936,15 @@ def test_case_finalization_is_capture_pinned_signed_retryable_and_keeps_existing
     for item in record["files"]:
         destination = root / record["output_paths"][item["category"]] / item["case_relative_path"]
         assert hashlib.sha256(destination.read_bytes()).hexdigest() == item["sha256"]
+    assert [path.name for path in (root / record["output_paths"]["Reports"]).iterdir()] == ["Package_SetCase1_CushionCase1_report.pptx"]
+    assert (root / record["output_paths"]["CAE"] / "Drop/Run01/Individual/1_Face_Drop_Scene01_Face1_1st/review.pdf").is_file()
     assert (root / record["output_paths"]["CAE"] / "Drop/Run01/Individual/1_Face_Drop_Scene01_Face1_1st/include.inc").is_file()
     assert preserved.read_text(encoding="utf-8") == "keep this"
 
     # Idempotent retry uses the signed completion record even after the source Scene disappears.
     source_bytes = result_csv.read_bytes()
     result_csv.unlink()
-    repeated = client.post("/api/dashboard/finalizations/confirm", json={**body, "operation_id": retry_plan["operation_id"]})
+    repeated = client.post("/api/dashboard/finalizations/confirm", json={**body, "operation_id": retry_plan["operation_id"], "report_formats": ["pptx"]})
     assert repeated.status_code == 200, repeated.text
     assert repeated.json()["confirmed_at"] == record["confirmed_at"]
     result_csv.write_bytes(source_bytes)
@@ -949,7 +995,7 @@ def test_case_finalization_pins_output_parent_during_temp_write(tmp_path, monkey
     source = root / "source.inc"
     payload = b"synthetic deck bytes"
     source.write_bytes(payload)
-    target = root / "Final" / "CAE" / "Case" / "version"
+    target = root / "Request" / "Final" / "CAE" / "Case" / "version"
     target.mkdir(parents=True)
     outside = tmp_path / "outside"
     outside.mkdir()
@@ -985,7 +1031,7 @@ def test_case_finalization_pins_output_parent_during_temp_write(tmp_path, monkey
         assert rename_blocked == [True], "output parent was renameable while the temporary file was opened"
         assert not list(outside.iterdir()), "temporary bytes escaped the configured SPDM root"
         assert operation_error is None, f"safe copy unexpectedly failed: {operation_error}"
-        assert published == "Final/CAE/Case/version/model.inc"
+        assert published == "Request/Final/CAE/Case/version/model.inc"
         assert (target / "model.inc").read_bytes() == payload
     finally:
         if target.is_junction():
@@ -1000,18 +1046,18 @@ def test_saved_profile_revision_is_used_and_old_preview_cannot_apply_after_edit(
     definition = {"environment": "USAGE", "name": f"Custom usage {uuid4()}", "rules": {"rules": [
         {"role_kind": "SIMULATION_CASE", "parent_role": "REQUEST", "pattern": "Model*", "match_mode": "glob"},
     ]}}
-    profile = post(client, "/profiles", definition)
+    _, profile = _profile_call(lambda svc, conn: svc.save_profile(conn, **definition))
     assert profile["revision"] == 1
     scan = post(client, "/scan", {"environment": "USAGE", "relative_path": "", "profile_id": profile["id"]})
     custom = next(node for node in scan["nodes"] if node["name"] == "Model Custom")
     assert custom["role_kind"] == "SIMULATION_CASE"
     preview = post(client, "/previews", {"scan_id": scan["id"], "assignments": []})
     assert preview["can_apply"], preview
-    updated = client.put(BASE + f"/profiles/{profile['id']}", json={**definition, "expected_revision": 1})
-    assert updated.status_code == 200, updated.text
-    assert updated.json()["revision"] == 2
-    conflict = client.put(BASE + f"/profiles/{profile['id']}", json={**definition, "expected_revision": 1})
-    assert conflict.status_code == 409, conflict.text
+    status, updated = _profile_call(lambda svc, conn: svc.save_profile(conn, profile_id=profile["id"], expected_revision=1, **definition))
+    assert status == 200, updated
+    assert updated["revision"] == 2
+    status, conflict = _profile_call(lambda svc, conn: svc.save_profile(conn, profile_id=profile["id"], expected_revision=1, **definition))
+    assert status == 409, conflict
     stale = client.post(BASE + "/registrations", json={"preview_id": preview["id"], "idempotency_key": f"revision-{uuid4()}", "capture": True})
     assert stale.status_code in (409, 422), stale.text
 
@@ -1023,7 +1069,7 @@ def test_legacy_copy_preserves_original_and_requires_case_review(admin_client):
                 {"depth": 3, "role": "LOAD_CASE", "keyword": "LC_", "delimiter": "_", "code_token": 2, "name_from_token": 3, "analysis_type": "SPDM_CMS"}]
     with connect() as conn:
         conn.execute("INSERT INTO folder_discovery_rules VALUES (?, '', ?, 1, CURRENT_TIMESTAMP, 'test')", [root_identity(root), json.dumps(original)])
-    profile = post(client, "/profiles/from-legacy", {"environment": "USAGE", "name": f"Copied legacy {uuid4()}", "relative_path": ""})
+    _, profile = _profile_call(lambda svc, conn: svc.copy_legacy(conn, "USAGE", f"Copied legacy {uuid4()}", ""))
     assert profile["requires_review"]
     assert [r["role_kind"] for r in profile["rules"]["rules"]] == ["PROJECT"]
     assert len(profile["omitted_rules"]) == 1

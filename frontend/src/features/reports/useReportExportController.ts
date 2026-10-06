@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../../api'
-import { reportApi } from './api'
-import { withReportVariables } from './reportLayoutUtils'
+import { reportApi } from '../../shared/api/reportLayouts'
+import { withReportVariables } from '../../shared/reports/reportLayoutUtils'
 import type { AnalysisRunSummary, DashboardDefinition, DashboardPageSummary, Overview, ReportContentItem, ReportLayout, ReportLayoutDefinition, ReportLayoutVersion, ReportSource, ReportTemplateAsset } from '../../types'
 import type { ReportExportOptions } from '../../reportExport'
 type ComparisonReportContext = {

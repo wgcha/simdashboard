@@ -54,7 +54,11 @@ def test_run_identity_v2_precedes_batch_attempt_identity_head() -> None:
     assert materials_menu and materials_menu.down_revision == "0031_result_registration"
     location_links = script.get_revision("0033_result_registration_location_links")
     assert location_links and location_links.down_revision == "0032_materials_dashboard_menu"
-    assert tuple(script.get_heads()) == ("0033_result_registration_location_links",)
+    depth_schema = script.get_revision("0034_folder_depth_schema")
+    assert depth_schema and depth_schema.down_revision == "0033_result_registration_location_links"
+    registration_delete = script.get_revision("0035_folder_registration_delete")
+    assert registration_delete and registration_delete.down_revision == "0034_folder_depth_schema"
+    assert tuple(script.get_heads()) == ("0035_folder_registration_delete",)
 
 
 def test_result_location_links_migration_widens_alembic_version_before_other_ddl(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -276,3 +280,37 @@ def test_canonical_and_duckdb_bootstrap_schema_include_v2_history_columns() -> N
     assert "CREATE UNIQUE INDEX IF NOT EXISTS ux_workflow_runs_batch_attempt_id" in duckdb
     assert "CREATE UNIQUE INDEX IF NOT EXISTS ux_batch_dispatches_attempt_id" in duckdb
     assert "SET attempt_id = attempt.id" in duckdb
+
+
+def _depth_migration_module():
+    path = BACKEND / "migrations" / "versions" / "0034_folder_depth_schema.py"
+    spec = spec_from_file_location("folder_depth_schema_migration", path)
+    assert spec and spec.loader
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_depth_schema_migration_seeds_default_set_archives_without_delete(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services import environment_folder_profiles as profiles
+
+    module = _depth_migration_module()
+    assert len(module.revision) <= 64
+    # The seeded rows are valid DEPTH_V1 definitions matching the service defaults (§4.2).
+    for environment in ("USAGE", "DISTRIBUTION"):
+        rules = module.default_rules(environment)
+        validated = profiles.validate_rules(environment, rules)
+        assert validated["lower"] == profiles.DEFAULT_LOWER[environment]
+        assert validated["upper"] == profiles.DEFAULT_UPPER
+        assert rules["final"] == profiles.FINAL_BLOCK
+        assert rules["schema_set_id"] == module.SCHEMA_SET_ID
+    output = StringIO()
+    context = MigrationContext.configure(dialect_name="postgresql", opts={"as_sql": True, "output_buffer": output})
+    monkeypatch.setattr(module, "op", Operations(context))
+    module.upgrade()
+    sql = output.getvalue().upper()
+    assert "DELETE FROM" not in sql and "DROP " not in sql and "TRUNCATE" not in sql
+    assert sql.index("INSERT INTO FOLDER_ENVIRONMENT_PROFILES") < sql.index("UPDATE FOLDER_ENVIRONMENT_PROFILES")
+    assert "'\\MEVALUATION\\M', 'SCENE'" in sql
+    with pytest.raises(RuntimeError, match="not supported"):
+        module.downgrade()

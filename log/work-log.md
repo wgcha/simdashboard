@@ -2,6 +2,12 @@
 
 이 파일은 완료된 개발 작업을 누적 기록한다. 이후 작업은 완료 시 최신 항목을 문서 상단에 추가하며, 변경 범위·검증 결과·남은 확인 사항을 함께 남긴다.
 
+## 2026-10-04 — SPDM 저장소 공급자 1단계(LocalFsProvider) 코드 정리
+
+- `docs/contracts/storage-provider.md`(dfb1dd0) 기준으로 `backend/app/services/storage/{provider,local,__init__}.py`를 추가하고, SPDM 루트 아래 목록·조회·읽기·쓰기를 공급자로 옮겼다. 대상은 서비스 12개(spdm_storage, folder_discovery_scan, folder_auto_discovery, folder_discovery, dashboard_capture, case_finalization, materials_catalog, folder_schema_resolver, folder_request_progress, result_registration_paths·result_registration·result_registration_locations)와 라우터 4개(spdm_storage, semantic_mapping, semantic_review, dashboard)다. reparse·대소문자 충돌 검사, 안정 읽기, 디렉터리 고정, 요청 잠금, no-follow 메타데이터 읽기는 결과·오류 코드·문구를 그대로 provider 모듈로 옮겼다. 모듈별 `_root()` 사본은 `get_storage_provider(conn)`(루트 해석은 `spdm_storage.storage_root` 한 곳)로 대체했다.
+- 쓰기는 구역을 명시한다. FINAL은 `*/Final/`과 그 아래 CAE·Reports·.finalizations, LEGACY는 spdm_storage(`Project_*/WR_*`의 CAE·보고서와 상위 폴더 생성), result_registration_paths(준비·rmdir 보상), result_registration(결과 파일 복사) 호출 모듈만 허용하며 그 밖은 `NOT_ALLOWED_WRITE`다. SIMDASH_IMPORT_ROOT 계열(master_result_refresh·bundle_snapshot·result_bundle_publisher), 시맨틱 샘플 임시 폴더, 앱 데이터는 S5 범위 밖으로 정적 검사 예외 목록에 남겼다.
+- 실제형 합성 트리(USAGE·DISTRIBUTION, 75R9J_PV·PR, mp4·rad·inc·fem, legacy Project_* 업로드)에서 자동 탐색→등록·수집→sync·refresh→진척→Final 미리보기·보고서 업로드·확정→legacy 업로드·다운로드 흐름의 응답·DB 행·파일 트리 비교가 리팩터 전후 동일했고 탐색·동기화 시간 차는 ±20% 안이었다. DuckDB 전체는 전후 모두 10건 실패(알려진 9건과 동시 실행 시 master_result_refresh 시간 경합 1건, 단독 재실행 통과)로 같고, 신규 공급자 단위·정적 경계 검사 26개를 추가했다. Postgres 주요 묶음은 새 DB에서 HEAD와 같은 결과(spdm_storage_workflow·single_request_registration의 기존 seed 의존 실패 동일)였다. OpenAPI·migration·의존성 변화 없음. 시험 4개의 monkeypatch 대상을 `storage.local`로 옮겼다. Windows 전용 경로(디렉터리 고정·잠금·공유 읽기)는 코드 이동만 했고 Windows에서 실행 검증하지 않았다. 독립 검수·Codex Security 스캔은 수행하지 않았다.
+
 ## 2026-10-02 — 소스 업데이트 Git 상태 정리
 
 - 업데이트 로그의 `git-plan` 중단과 Git 사전 검사 코드를 확인했다. `docs/`의 로컬 변경은 허용하지만 미커밋 `log/work-log.md`는 차단 대상이다. 현재 수정 브랜치는 `origin/main`과 같은 커밋이면서 이전 수정 브랜치를 추적해, 미커밋 변경 해결 뒤에도 fast-forward 검사에서 중단될 상태였다.
@@ -1078,3 +1084,64 @@
 - 현장(읽기 전용 API 조회): 같은 `75R9J_PV/[WR-0001]_[유통_환경]` 폴더가 두 프로젝트(00:05 기존 등록, 13:31 UTC 관리자 폴더 조사 수동 등록)의 의뢰에 각각 연결되어, 소재 카탈로그의 소유권 검사가 모든 Scene을 조용히 제외했다. Case 결과는 소유권 검사가 없어 표시됐다. 자동 확인(discover)은 원인이 아님(감사 기록 FOLDER_ENVIRONMENT_REGISTERED, 회귀 테스트로 root 이동 후 중복 생성 안 함 확인).
 - 조치: 소재 카탈로그가 제외한 Scene을 `conflicts`로 돌려주고 화면에 "다른 의뢰에도 연결" 안내 표시. 데이터 정리(중복 프로젝트·의뢰 해제)는 앱에 기능이 없어 사용자 결정 대기.
 - 검증: shared_folder_hierarchy·auto_discovery·materials 58 passed, e2e materials 6 passed, tsc 통과.
+
+## 2026-10-03 5단계 Case 보고서(PPTX·HTML) (Claude, 브랜치 claude/case-results-redesign)
+- Case 결과 헤더에 `보고서` 버튼(Final 지정 옆)과 보고서 창 추가. 창을 연 순간의 범위(Case·`latest:<Case>`·하중경우·Run·Option·Component·Basis·엣지/라인)를 `ReportSource` `case_results`로 고정하고 자료를 한 번 읽어 레시피를 만든 뒤 PPTX·HTML로 그린다. 형식은 하나 이상 선택, 둘이면 두 파일. PDF 관련 구현 없음(23:58 결정). 백엔드 변경 없음.
+- PPTX는 기존 pptxgenjs 렌더러·회사 레이아웃·편집 창 재사용(`renderReportPptxBlob` 추가, 표 12행 분할, 영상은 파일 이름). HTML은 단일 파일(인라인 CSS, data URI, 스크립트 없음, CSP로 외부 참조 차단, 모든 문자열 이스케이프). `영상 포함`(기본 꺼짐)은 영상당 20MB·전체 200MB 상한, 넘으면 파일 이름으로 대체하고 창에 목록 표시.
+- 6단계 재사용용 순수 함수: `frontend/src/features/results/caseReport/caseReport.ts`. 문서: [Case 결과 보고서](../docs/features/case-report.md).
+- 구조: 기능 간 import 금지 규칙에 맞추려고 `features/reports/api.ts`를 `shared/api/reportLayouts.ts`로, `ReportLayoutEditor`·`reportLayoutUtils`를 `shared/reports/`로 옮겼다(동작 변경 없음). 미디어는 `simulationDashboardApi.assetBlob`(크기 상한 스트리밍 읽기)로만 읽는다.
+- 기존 버그 수정: Run Option이 둘 이상일 때 사용자가 고른 값이 자동 보정(이전 URL을 본 렌더)으로 지워지던 문제. 빈 값을 빈 값으로 바꾸는 보정을 건너뛴다(`SimulationDashboard` `choose`).
+
+## 2026-10-03 6단계 Final 지정에 보고서·최신 결과 기준 (Claude, 브랜치 claude/case-results-redesign)
+- 경로(DEPTH_V1 D11·D12): 기준 Scene의 입력·결과·이미지·영상·Scene 문서(PDF/PPT/PPTX/XLSX)를 모두 `Final/CAE/<Case>/<확정 ID>/<Working 미러>`로, `Final/Reports/<Case>/<확정 ID>/`에는 앱이 만든 `<Case>_report.pptx|html`만 둔다. 계획 `schema_version` 2. 1 형식 완료 기록(결과가 Reports 미러)은 상태 조회에서 계속 검증·표시한다. 기존 Final 파일은 옮기거나 덮어쓰지 않는다(D14).
+- 기준: `capture_id=latest:<Case>`를 받아 Scene별 최신 수집본(`merge_latest_payload` 규칙)에서 해시 고정 목록을 만들고 Scene별 `source_capture_id`를 서명 계획에 기록. 구체 수집본 ID도 계속 허용. 미리보기 뒤 새 수집본이면 `FINALIZATION_CAPTURE_CHANGED`.
+- 보고서: 브라우저가 5단계 빌더로 만든 파일을 형식별 raw `PUT /api/dashboard/finalizations/{id}/reports/{pptx|html}`로 올린 뒤 `confirm`에 `report_formats`(하나 이상, `FINALIZATION_REPORT_REQUIRED`). multipart 대신 별도 업로드 단계를 택해 새 실행 의존성(python-multipart)을 피했다. 서버가 파일 이름을 정하고 PPTX(zip 구조·매크로·경로 이탈·압축 폭탄, 64 MiB)·HTML(UTF-8·doctype, 320 MiB) 검사, SHA-256·크기를 서명된 `reports.json`·완료 기록에 남긴다. 보고서 실패 시 완료 없음, 완료 전 같은 확정의 보고서 교체 허용, 완료 후 불변(`FINALIZATION_ALREADY_COMPLETED`). Caddy 템플릿 `request_body 512MB`는 요청당이라 HTML 상한을 수용(문서화).
+- 화면: Final 지정 창에 기준(최신 결과·Scene·결과 버전 수), Final/CAE 개수·접이식 목록, Final/Reports 형식 선택(PPTX·HTML·영상 포함), 진행 단계, 오류와 같은 바이트 재시도, 완료 경로·건너뛴 영상. 헤더의 재시도 버튼은 제거(미완료 건수는 배지 툴팁). 문서: [최종확정](../docs/features/case-finalization.md).
+- 검증: 백엔드 신규 `test_case_finalization_reports.py` 15 passed, 관련 모듈 포함 53 passed/1 skipped(Windows 전용 1건 skip), OpenAPI 계약 검사 통과. 프런트 tsc·build·test:routing·test:api 통과, check:architecture 기존 4건만. e2e case-finalization 2·folder-working-final 3·case-report 7 통과, simulation-dashboard 13/14(폐기된 capture-pin 항목).
+- 미실행: 독립 Sol/Astra 검수, `security-diff-scan`(업로드·경로 경계 변경이라 대상), PostgreSQL 프로필, 실제 Windows Server 2022·공유폴더·Caddy 경유 대용량 업로드. 사용환경은 보고서가 없어 Final 지정을 완료할 수 없다(결정 필요).
+
+## 2026-10-03 사용환경 보고서·Final Case 전체 보고서·5단계 검수 반영 (Claude, 브랜치 claude/case-results-redesign)
+- 사용환경 보고서: 같은 빌더에 사용환경 레시피 추가(`ReportSource` `case_usage`). 화면과 같은 "다섯 평가 종합" 행·원문 키·공통/전방/후방 값·상태·OK/NG(+고른 Reference)와 평가별 이미지·영상. 표 로직을 `features/results/usageEvaluations.ts`로 옮겨 화면과 보고서가 공유. 사용환경에서 `보고서`·Final 지정 활성(소재·물성 탭 제외 유지).
+- Final 보고서 범위 = Case 전체: 유통은 카탈로그에서 모든 하중경우›Run Case›Run Option을 모아 구역별로 만들고(`case_final`, `loadCaseFinalSections`), 결과 없는 Option은 `결과 없음`. 화면 선택이 없어도 확정 가능. 헤더 `보고서`는 현재 선택 범위 유지.
+- 5단계 검수: M1 보고서 창은 "새 레이아웃으로 저장"만(시스템·현재 레이아웃 새 버전·삭제 없음), 템플릿 필드는 정의에 유지하고 렌더링 때만 화면 레이아웃으로 대체. L1 템플릿 업로드·선택·출력 원본 숨김+안내. L2 만드는 중 `취소`·Esc 중단. L3 이미지 1회 읽기·공유, 이미지 전체 300MB 상한·건너뜀 목록, 상한은 원본 크기·HTML 약 1.33배 안내. L5 엣지 없음은 `선택 없음`.
+- 검증: tsc·build·test:routing·test:api 통과, check:architecture 기존 4건(App.tsx 1089 증가 없음). e2e case-report 11, case-finalization 4, folder-working-final 3, case-video-grid 2 통과. simulation-dashboard 12/14: 폐기된 capture-pin 항목 1건 실패, `single Run Option` 1건은 전체 실행에서만 실패하고 단독 재실행 통과(불안정). 백엔드·migration·의존성·배포 변경 없음.
+- 미실행: 독립 Sol/Astra 검수, 보안 스캔(보안 경계 변경 없음), Windows Server 2022 검증.
+
+## 2026-10-03 Final 지정 백엔드 보강(독립 검수 지적 반영) (Claude, 브랜치 claude/case-results-redesign)
+- 고아 보고서: 이전 시도가 게시한 형식을 재시도 `report_formats`에서 빼면 복사 전에 409 `FINALIZATION_REPORT_FORMATS_MISMATCH`. 확정 Reports 폴더의 남의 항목은 409 `FINALIZATION_REPORTS_UNEXPECTED_FILE`(보존, 삭제 안 함), `complete.json` 직전에 폴더 = 기록 보고서인지 재확인. 완료 후 이력 해시와 같은 보관본만 정리(`reports.json` 유지, 버린 미리보기 보관본은 그대로).
+- PPTX 검사: `[Content_Types].xml`·모든 `.rels`를 BOM/선언으로 UTF-8/UTF-16 판별 후 표준 파서(DTD·ENTITY 거부, defusedxml 미의존)로 읽음. 매크로·ActiveX·OLE·control·attachedTemplate·외부(`TargetMode=External`) 관계·`ppt/activeX/`·xlsx 외 `ppt/embeddings/` 거부(`FINALIZATION_REPORT_PPTX_ACTIVE_CONTENT`). pptxgenjs 차트 내장 xlsx는 허용하되 내부 재검사. 실제 pptxgenjs 4.0.1 fixture 추가.
+- zip 목록 상한: `zipfile` 생성 전 EOCD·ZIP64 EOCD로 항목 10,000·중앙 목록 4 MiB 초과 거부(검수 재현 60 MB/70만 항목 zip 즉시 거부). 업로드·검사 동시 2건, 초과 429 `FINALIZATION_REPORT_BUSY`.
+- 상태 조회: 모든 기록은 서명·범위·존재·크기, SHA-256은 표시 기록(의뢰 최근·선택 Case 최근)만, 실패 시 다음 기록. 표시되지 않는 과거 기록의 같은 크기 변조는 표시될 때까지 드러나지 않음(문서화한 절충).
+- 업로드는 본문 전에 서명 계획·범위·미완료를 확인. 쓰기·권한 `OSError`는 503 `FINALIZATION_WRITE_FAILED`(임시 파일 정리).
+- 최신 기준: Final의 Scene별 수집본을 `merge_latest_payload`(같은 순서) 결과에서 직접 정함. 최신 수집본이 현재 스키마와 안 맞으면 이전 수집본으로 대체하지 않고 `excluded_scenes`(`NO_CAPTURE`·`CAPTURE_SCHEMA_MISSING`·`CAPTURE_SCHEMA_INCOMPATIBLE`)로 미리보기·창에 표시. Final 보고서 범위도 `latest:<Case>`로 고정(사용환경 포함). 카탈로그 수집본 정렬에 `c.id DESC` 동률 기준 추가.
+- 검증: 백엔드 finalization 42·folder flow·security·OpenAPI·latest results·dashboard queries 합계 87 passed/1 skipped, OpenAPI 계약 검사 통과(응답 스키마 변경 없음, 재생성 불필요). 프런트 tsc·build 통과, check:architecture 기존 4건만, e2e case-finalization 4·folder-working-final 3 통과.
+- 보안 검수: 이 기록은 검수자 수동 검토와 재현 테스트 반영이며 Codex Security 스캔(`security-diff-scan`)을 대신하지 않고, 스캔은 실행하지 않았다. 독립 Sol/Astra 최종 검수, PostgreSQL 프로필, 실제 Windows Server 2022·공유폴더 검증도 미실행. migration·의존성·배포 변경 없음.
+
+## 2026-10-03 깊이 기반 폴더 역할 스키마(DEPTH_V1)와 관리자 등록 삭제 (`d58a77a`)
+
+- 계약: `docs/contracts/depth-schema.md`(D1–D17), 결정: `docs/decisions.md`.
+- 변경: migration 0034(구 프로필 archive, 기본 세트 seed, EVALUATION→SCENE), 0035(DELETED 묘비, created_targets, 앱 역할 DELETE 권한). 자동 탐색은 상위 깊이 BFS·의뢰명 키워드 환경 판정, SimType 규칙 삭제. API: depth-schema GET/PUT/samples/check, 의뢰 재해석, 등록 delete-preview/delete, 구 프로필 CRUD 410. UI: 깊이표 편집기(확인/저장), 역할 읽기 전용+이탈 배지, 재해석 버튼, 등록 이력 다중 선택 삭제.
+- 검증: DuckDB 전체 2021 passed/9 failed(기존 실패: rocky8 root 6, architecture ceiling, postgres_portability, load_case_create_slice), Postgres 16 신규 DB 대상 4개 파일 108 passed, migration 0033→0035 기존 데이터 업그레이드 확인. 프론트 tsc·build·test:api 통과, e2e 미실행.
+- 독립 검수: Verifier 1회(Blocker 없음, 테스트 측 수정 3건 반영). Codex Security 스캔 미실행. 실제 Server 2022 폐쇄망 배포 검증 미실행.
+- 남은 것: DuckDB 삭제는 FK 단계별 커밋(Postgres는 단일 트랜잭션), Final/CAD 용도 미확정.
+
+## 2026-10-03 수동 등록 의뢰 1개 단위, 결과 환경 자동 판정, "선택" 처리
+
+- 원인: 수동 등록에서 Root/프로젝트 수준 조사 시 여러 의뢰가 한 등록에 묶여 첫 의뢰 외 Case가 `CAPTURE_CONTEXT_MISMATCH`. 의뢰 수준 조사는 project_id NULL로 500. 시각은 naive UTC를 현지로 해석해 9시간 차이.
+- 변경: 미리보기·등록에서 의뢰 0개(REQUEST_MISSING)·2개 이상(MULTIPLE_REQUESTS) 차단(등록 시 DB 쓰기 0), 의뢰 수준 조사 시 상위 스키마로 프로젝트 도출, API 시각 UTC 오프셋. `result-environments` API로 Case 결과 환경 자동 판정(라벨, Case 없음 안내+폴더 동기화 유지, 혼재 시 토글), 결과 등록 환경 자동 지정. 프로젝트 "선택"→내 작업, 의뢰 "선택"→선택 해제.
+- 계약: `docs/contracts/depth-schema.md` §14, `docs/contracts/case-results-environment.md`.
+- 검증: DuckDB 전체 2032 passed/9 failed(기존 9건), Postgres 16 신규 파일+삭제 24/24, 프론트 tsc·build·test:api, e2e simulation-dashboard 15/16(실패 1건은 기준 커밋에서도 실패), case-finalization·report·video-grid 17/17.
+- 독립 검수: Verifier 1회(Blocker 1건: Case 없는 의뢰 동기화 중단 → 수정). E5·E6·E7 e2e 없음. Codex Security 스캔 미실행.
+
+## 2026-10-04 사이드바 이동 시 구 결과 등록 화면이 뜨던 문제
+
+- 원인: 폴더 등록 의뢰는 overview가 없어 `App.tsx` 준비 단계 대체 화면이 변수 카탈로그 등 무관한 페이지까지 가로챔. 사이드바 이동이 이전 쿼리를 그대로 가져가 의뢰가 다시 선택되며 간헐 재현.
+- 변경: 대체 화면은 의뢰 작업 페이지에만, 변수 카탈로그 빈 상태, 페이지 전환 시 의뢰 화면 전용 쿼리 제거. 계약 `docs/contracts/workspace-navigation.md`.
+- 검증: tsc·build·test:api·test:routing·architecture 자체 테스트 통과, check:architecture 기존 4건 외 추가 없음, 신규 e2e 5/5. simulation-dashboard 1건·workspace-routing 2건 실패는 기준 커밋에서도 실패. 독립 Verifier 미투입(저위험 UI 범위).
+
+## 2026-10-04 폴더 등록 의뢰 진척 단계 (폴더 상태 자동 계산)
+
+- 계약: `docs/contracts/folder-request-progress.md`. 등록→모델링(Scene 바로 아래 `.rad`/`.fem`)→결과→Final(대표 Case 1개)→보고서, 의뢰 단위, 수동 입력 없음.
+- 변경: `GET /api/projects/{p}/requests/{r}/folder-progress`(30초 메모, 실시간 스캔 없음, 파일 본문 읽기·SPDM 쓰기 없음), `case_finalization.latest_completed`(읽기 전용, status 동작 불변), 의뢰 개요 단계 표시줄·현재 할 일·Case 결과 버튼.
+- 검증: DuckDB 전체 2040 passed/9 failed(기존 9건), Postgres finalization·progress 통과, 프론트 tsc·build·test:api, e2e folder-request-progress 3/3. request-centric-workspace e2e 4건 실패는 기준 커밋에서도 동일.
+- 독립 검수: Verifier 1회(Blocker: Scene 경로 위해 전체 트리 재스캔 → 저장 스냅샷만 사용으로 수정, Final/보고서 판정 분리). 권한은 catalog와 동일(전사 PROJECT_DATA_VIEW). Codex Security 미실행.

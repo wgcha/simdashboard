@@ -65,11 +65,12 @@ def test_walk_does_not_open_unselected_or_nonresult_files(tmp_path, monkeypatch)
     for name in ("settings.json", "model_settle_result.csv", "solver.log", "model_settle_result.json"):
         (folder / name).write_text("{}", encoding="utf-8")
     opened = []
-    original = dashboard_capture.spdm_storage.read_stable_bytes
+    from app.services.storage import local as storage_local
+    original = storage_local.read_stable_bytes
     def track(path, **kwargs):
         opened.append(path.name)
         return original(path, **kwargs)
-    monkeypatch.setattr(dashboard_capture.spdm_storage, "read_stable_bytes", track)
+    monkeypatch.setattr(storage_local, "read_stable_bytes", track)
     files = dashboard_capture._walk(tmp_path, "Case", include_path=lambda path: include_path(path, selection(None)))
     assert opened == ["model_settle_result.json"]
     assert len(files) == 1

@@ -1,5 +1,8 @@
 import { expect, test, type Page, type Route } from '@playwright/test'
-import { loginWorkspace } from './workspace-test-helpers'
+import { loginWorkspace, mockResultEnvironments } from './workspace-test-helpers'
+
+// Mixed-environment request: keeps the 사용환경/유통환경 toggle these specs click (E4).
+test.beforeEach(async ({ page }) => { await mockResultEnvironments(page) })
 
 // Case results "영상" tab: every video of every Scene of the selected Run option (mocked API).
 const CASE_ID = 'case-a'

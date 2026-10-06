@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import mimetypes
-import os
 import re
 from collections import deque
 from datetime import datetime, timezone
@@ -14,6 +13,8 @@ from ..database_connection import ConnectionLike, rows
 from ..domains.dashboard.parser import EVALUATIONS, _pick_usage, build_distribution_scene, fingerprint, parse_scene_name
 from . import spdm_storage
 from . import usage_source_review
+from .storage import get_storage_provider
+from .storage.local import LocalFsProvider
 
 
 MAX_ASSET_BYTES = 32 * 1024 * 1024
@@ -49,39 +50,36 @@ def _relative(value: str) -> str:
     return path.as_posix()
 
 
-def _root(conn: ConnectionLike) -> Path:
-    storage = spdm_storage.storage_root(conn)
-    if storage.root is None:
-        raise DashboardCaptureError("DASHBOARD_ROOT_UNSET", "저장소 루트가 설정되지 않았습니다.")
-    return storage.root
+def _provider(conn: ConnectionLike) -> LocalFsProvider:
+    return get_storage_provider(conn, on_unset=lambda: DashboardCaptureError("DASHBOARD_ROOT_UNSET", "저장소 루트가 설정되지 않았습니다."))
 
 
 def _root_id(root: Path) -> str:
-    return "dashboard-root-" + hashlib.sha256(spdm_storage._root_identity(root).encode()).hexdigest()
+    return "dashboard-root-" + hashlib.sha256(LocalFsProvider(root).root_identity().encode()).hexdigest()
 
 
-def _safe_target(root: Path, relative: str) -> Path:
-    lexical = root.joinpath(*PurePosixPath(relative).parts)
+def _safe_target(root: Path, relative: str) -> str:
+    """Root-relative, strictly resolved Case path (no reparse ancestor, confined to the root)."""
+    fs = LocalFsProvider(root)
+    lexical = "/".join(PurePosixPath(relative).parts)
     try:
-        spdm_storage._assert_safe_existing(lexical, root)  # type: ignore[attr-defined]
+        fs.assert_safe(lexical)
     except Exception as exc:
         if isinstance(exc, spdm_storage.SpdmStorageError):
             raise DashboardCaptureError(exc.code, str(exc)) from exc
         raise
     try:
-        target = lexical.resolve(strict=True)
+        target = fs.resolve(lexical)
     except FileNotFoundError as exc:
         raise DashboardCaptureError("DASHBOARD_SOURCE_MISSING", "원본 폴더를 찾을 수 없습니다.") from exc
     except OSError as exc:
         raise DashboardCaptureError("DASHBOARD_SOURCE_READ_ERROR", "원본 폴더를 읽을 수 없습니다.") from exc
-    try:
-        target.relative_to(root.resolve(strict=True))
     except ValueError as exc:
         raise DashboardCaptureError("DASHBOARD_PATH_ESCAPE", "허용된 저장소 밖의 경로입니다.") from exc
     # Existing SPDM safety helper rejects symlinks/reparse points in every
     # ancestor. It is deliberately called only after relative validation.
     try:
-        spdm_storage._assert_safe_existing(target, root)  # type: ignore[attr-defined]
+        fs.assert_safe(target)
     except Exception as exc:
         if isinstance(exc, spdm_storage.SpdmStorageError):
             raise DashboardCaptureError(exc.code, str(exc)) from exc
@@ -89,11 +87,12 @@ def _safe_target(root: Path, relative: str) -> Path:
     return target
 
 
-def _validate_case_root(root: Path, relative: str, environment: str) -> Path:
+def _validate_case_root(root: Path, relative: str, environment: str) -> str:
+    fs = LocalFsProvider(root)
     target = _safe_target(root, relative)
-    if not target.is_dir():
+    if not fs.is_dir(target):
         raise DashboardCaptureError("DASHBOARD_CASE_INVALID", "capture root는 Simulation Case 폴더여야 합니다.")
-    child_names = {item.name.casefold() for item in target.iterdir() if item.is_dir()}
+    child_names = {entry.name.casefold() for entry in fs.list(target) if fs.is_dir(fs.join(target, entry.name))}
     expected = _USAGE_DIRS if environment == "USAGE" else _DISTRIBUTION_DIRS
     if not child_names.intersection(expected):
         raise DashboardCaptureError("DASHBOARD_CASE_INVALID", "지정한 경로에서 해당 환경의 Simulation Case를 확인할 수 없습니다.")
@@ -104,11 +103,12 @@ def discover_cases(conn: ConnectionLike, relative_path: str = "", environment: s
     """Read-only discovery of Altair One Simulation Case directories."""
     if environment not in {"USAGE", "DISTRIBUTION"}:
         raise DashboardCaptureError("DASHBOARD_ENVIRONMENT_INVALID", "지원하지 않는 대시보드 환경입니다.")
-    root = _root(conn)
+    fs = _provider(conn)
+    root = fs.root
     root_id = _root_id(root)
     base_relative = _relative(relative_path) if relative_path else ""
-    base = _safe_target(root, base_relative) if base_relative else root
-    if not base.is_dir():
+    base = _safe_target(root, base_relative) if base_relative else ""
+    if not fs.is_dir(base):
         raise DashboardCaptureError("DASHBOARD_SOURCE_MISSING", "조사 경로를 찾을 수 없습니다.")
     expected = _USAGE_DIRS if environment == "USAGE" else _DISTRIBUTION_DIRS
     cases: list[dict[str, Any]] = []
@@ -120,39 +120,38 @@ def discover_cases(conn: ConnectionLike, relative_path: str = "", environment: s
         current, depth = queue.popleft()
         try:
             children = []
-            with os.scandir(current) as entries:
-                for entry in entries:
-                    visited += 1
-                    if visited > 20000:
-                        issues.add("SCAN_LIMIT_REACHED")
-                        break
-                    if not entry.name.startswith(".") and entry.is_dir(follow_symlinks=False):
-                        children.append(Path(entry.path))
+            for entry in fs.list(current):
+                visited += 1
+                if visited > 20000:
+                    issues.add("SCAN_LIMIT_REACHED")
+                    break
+                if not entry.name.startswith(".") and entry.kind == "dir":
+                    children.append(fs.join(current, entry.name))
         except OSError:
             issues.add("DIRECTORY_UNAVAILABLE")
             continue
         if visited > 20000:
             break
-        names = {item.name.casefold() for item in children}
+        names = {PurePosixPath(item).name.casefold() for item in children}
         if names.intersection(expected):
-            rel = current.relative_to(root).as_posix()
+            rel = current if current else "."
             if not base_relative:
-                parent_parts = current.relative_to(root).parts
+                parent_parts = PurePosixPath(current).parts
                 request_types = [re.match(r"^WR_[A-Za-z0-9._-]+_SimType([12])$", part, re.IGNORECASE) for part in parent_parts]
                 expected_type = "1" if environment == "USAGE" else "2"
                 if not any(match and match.group(1) == expected_type for match in request_types):
                     continue
-            cases.append({"root_relative_path": rel, "source_name": current.name, "environment": environment, "storage_root_id": root_id})
+            cases.append({"root_relative_path": rel, "source_name": fs.path(current).name, "environment": environment, "storage_root_id": root_id})
             continue
         if depth >= 8:
             if children:
                 issues.add("SCAN_DEPTH_LIMIT")
             continue
-        for child in sorted(children, key=lambda item: item.name.casefold()):
-            if child.name.casefold() in excluded:
+        for child in sorted(children, key=lambda item: PurePosixPath(item).name.casefold()):
+            if PurePosixPath(child).name.casefold() in excluded:
                 continue
             try:
-                spdm_storage._assert_safe_existing(child, root)  # type: ignore[attr-defined]
+                fs.assert_safe(child)
             except spdm_storage.SpdmStorageError:
                 issues.add("UNSAFE_DIRECTORY_SKIPPED")
                 continue
@@ -193,59 +192,63 @@ def _walk(
     include_path=None,
     excluded_files: list[dict[str, str]] | None = None,
 ) -> list[tuple[str, bytes, str]]:
+    fs = LocalFsProvider(root)
     base = _safe_target(root, relative)
     excluded = {"cad", "report", "reports", "final", "validation", "library"}
     allowed = {".csv", ".json", ".jpg", ".jpeg", ".png", ".mp4", ".webm"}
     items, stack = [], [(base, 0)]
     visited = 0
+
+    def signature_of(item: str) -> tuple[int, int, str]:
+        info = fs.stat(item, follow_links=True, missing_ok=False)
+        return int(info.size), int(info.modified_ns), info.item_id.rsplit(":", 1)[-1]
+
     try:
         while stack:
             directory, depth = stack.pop()
             if depth > 16:
                 raise DashboardCaptureError("DASHBOARD_DEPTH_LIMIT", "결과 폴더 깊이 제한을 초과했습니다.")
-            with os.scandir(directory) as entries:
-                for entry in entries:
-                    visited += 1
-                    if visited > 20000:
-                        raise DashboardCaptureError("DASHBOARD_SCAN_LIMIT", "결과 파일 조사 범위를 초과했습니다.")
-                    path = Path(entry.path)
-                    if entry.name.startswith("."):
-                        continue
-                    if entry.name.casefold() in excluded:
-                        if issues is not None:
-                            issues.append(_unprocessed_issue(root, path, "EXCLUDED_DIRECTORY"))
-                        continue
-                    spdm_storage._assert_safe_existing(path, root)
-                    if entry.is_dir(follow_symlinks=False):
-                        stack.append((path, depth + 1))
-                    elif entry.is_file(follow_symlinks=False):
-                        relative_path = path.relative_to(root).as_posix()
-                        if path.suffix.casefold() in allowed and (include_path is None or include_path(relative_path)):
-                            items.append(path)
-                            if len(items) > 10000:
-                                raise DashboardCaptureError("DASHBOARD_CAPTURE_TOO_LARGE", "결과 파일 수 제한을 초과했습니다.")
-                        elif excluded_files is not None:
-                            excluded_files.append({"relative_path": _safe_issue_relative(relative_path), "reason": "FORMAT_OR_PATTERN_EXCLUDED"})
-                        elif issues is not None:
-                            issues.append(_unprocessed_issue(root, path, "UNSUPPORTED_EXTENSION"))
+            for entry in fs.list(directory):
+                visited += 1
+                if visited > 20000:
+                    raise DashboardCaptureError("DASHBOARD_SCAN_LIMIT", "결과 파일 조사 범위를 초과했습니다.")
+                child = fs.join(directory, entry.name)
+                if entry.name.startswith("."):
+                    continue
+                if entry.name.casefold() in excluded:
+                    if issues is not None:
+                        issues.append(_unprocessed_issue(root, fs.path(child), "EXCLUDED_DIRECTORY"))
+                    continue
+                fs.assert_safe(child)
+                if entry.kind == "dir":
+                    stack.append((child, depth + 1))
+                elif entry.kind == "file":
+                    relative_path = child
+                    if PurePosixPath(entry.name).suffix.casefold() in allowed and (include_path is None or include_path(relative_path)):
+                        items.append(child)
+                        if len(items) > 10000:
+                            raise DashboardCaptureError("DASHBOARD_CAPTURE_TOO_LARGE", "결과 파일 수 제한을 초과했습니다.")
+                    elif excluded_files is not None:
+                        excluded_files.append({"relative_path": _safe_issue_relative(relative_path), "reason": "FORMAT_OR_PATTERN_EXCLUDED"})
+                    elif issues is not None:
+                        issues.append(_unprocessed_issue(root, fs.path(child), "UNSUPPORTED_EXTENSION"))
         result, total, signatures = [], 0, []
-        for item in sorted(items, key=lambda path: path.as_posix()):
-            spdm_storage._assert_safe_existing(item, root)
-            if item.stat().st_size > MAX_ASSET_BYTES:
+        for item in sorted(items, key=lambda path: fs.path(path).as_posix()):
+            fs.assert_safe(item)
+            if signature_of(item)[0] > MAX_ASSET_BYTES:
                 raise DashboardCaptureError("DASHBOARD_ASSET_TOO_LARGE", "원본 자산은 32 MiB 이하여야 합니다.")
-            data, _ = spdm_storage.read_stable_bytes(item, max_bytes=min(MAX_ASSET_BYTES, MAX_TOTAL_BYTES - total))
-            spdm_storage._assert_safe_existing(item, root)
-            signature = item.stat()
-            signatures.append((item, signature.st_size, signature.st_mtime_ns, signature.st_ino))
+            data = fs.read_stable(item, max_bytes=min(MAX_ASSET_BYTES, MAX_TOTAL_BYTES - total))
+            fs.assert_safe(item)
+            signature = signature_of(item)
+            signatures.append((item, *signature))
             total += len(data)
             if total > MAX_TOTAL_BYTES:
                 raise DashboardCaptureError("DASHBOARD_CAPTURE_TOO_LARGE", "수집 버전은 256 MiB 이하여야 합니다.")
-            path = item.relative_to(root).as_posix()
-            media_type = mimetypes.guess_type(item.name)[0] or "application/octet-stream"
+            path = item
+            media_type = mimetypes.guess_type(PurePosixPath(item).name)[0] or "application/octet-stream"
             result.append((path, data, media_type))
         for item, size, modified, inode in signatures:
-            current = item.stat()
-            if (current.st_size, current.st_mtime_ns, current.st_ino) != (size, modified, inode):
+            if signature_of(item) != (size, modified, inode):
                 raise DashboardCaptureError("DASHBOARD_SOURCE_CHANGED", "수집 도중 원본이 변경되었습니다. 다시 수집하세요.")
         return result
     except spdm_storage.SpdmStorageError as exc:
@@ -296,7 +299,8 @@ def _schema_allows_file(payload: dict[str, Any], case_relative_path: str, file_r
     if not isinstance(locations, list) or not locations:
         return not _schema_scoped(payload)
     environment = str(payload.get("environment") or "").upper()
-    allowed_roles = {"EVALUATION", "RESULTS"} if environment == "USAGE" else {"SCENE", "RESULTS"}
+    # D8: DEPTH_V1 Usage Scenes replace EVALUATION; legacy captures keep EVALUATION.
+    allowed_roles = {"EVALUATION", "SCENE", "RESULTS"} if environment == "USAGE" else {"SCENE", "RESULTS"}
     case_key = _relative(case_relative_path).casefold().rstrip("/") + "/"
     file_key = _relative(file_relative_path).casefold()
     for location in locations:
@@ -350,7 +354,8 @@ def create_capture(
 ) -> dict[str, Any]:
     _verify_context(conn, str(payload["project_id"]), str(payload["request_id"]))
     relative = _relative(str(payload["root_relative_path"]))
-    root = _root(conn)
+    fs = _provider(conn)
+    root = fs.root
     if storage_root_id := str(payload.get("storage_root_id") or ""):
         if storage_root_id != _root_id(root):
             raise DashboardCaptureError("DASHBOARD_ROOT_ID_INVALID", "설정된 저장소와 storage_root_id가 일치하지 않습니다.")
@@ -361,7 +366,7 @@ def create_capture(
         # It must not scan the Case tree, where unreviewed or concurrent files
         # may have appeared after inspection.
         case_root = _safe_target(root, relative)
-        if not case_root.is_dir():
+        if not fs.is_dir(case_root):
             raise DashboardCaptureError("DASHBOARD_CASE_INVALID", "승인된 Case 폴더를 찾을 수 없습니다.")
         expected = {str(item.get("relative_path")): item for item in (approved_manifest or [])}
         if len(expected) != len(approved_files):

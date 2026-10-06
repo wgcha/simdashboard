@@ -2209,6 +2209,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/folder-discovery/environments/depth-schema": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Depth Schema */
+        get: operations["get_depth_schema_api_folder_discovery_environments_depth_schema_get"];
+        /** Put Depth Schema */
+        put: operations["put_depth_schema_api_folder_discovery_environments_depth_schema_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/folder-discovery/environments/depth-schema/samples": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Depth Schema Samples */
+        post: operations["depth_schema_samples_api_folder_discovery_environments_depth_schema_samples_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/folder-discovery/environments/depth-schema/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Depth Schema Check */
+        post: operations["depth_schema_check_api_folder_discovery_environments_depth_schema_check_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/folder-discovery/environments/profiles": {
         parameters: {
             query?: never;
@@ -2272,6 +2324,57 @@ export interface paths {
         get: operations["history_api_folder_discovery_environments_history_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/folder-discovery/environments/registrations/delete-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Delete Preview */
+        post: operations["delete_preview_api_folder_discovery_environments_registrations_delete_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/folder-discovery/environments/registrations/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Delete Registrations */
+        post: operations["delete_registrations_api_folder_discovery_environments_registrations_delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/requests/{request_id}/reinterpret": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reinterpret */
+        post: operations["reinterpret_api_requests__request_id__reinterpret_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3127,6 +3230,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{project_id}/requests/{request_id}/result-environments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Result Environments
+         * @description Environments of the request's registered Cases (case-results-environment.md §2).
+         */
+        get: operations["result_environments_api_projects__project_id__requests__request_id__result_environments_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{project_id}/requests/{request_id}/folder-progress": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Folder Progress
+         * @description Progress of a folder-registered request from SPDM folders and the app DB (folder-request-progress.md §3).
+         */
+        get: operations["folder_progress_api_projects__project_id__requests__request_id__folder_progress_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/dashboard/finalizations/preview": {
         parameters: {
             query?: never;
@@ -3155,6 +3298,26 @@ export interface paths {
         put?: never;
         /** Confirm */
         post: operations["confirm_api_dashboard_finalizations_confirm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/dashboard/finalizations/{operation_id}/reports/{report_format}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Upload Report
+         * @description Stage one browser-built report (raw body) for an unfinished operation.
+         */
+        put: operations["upload_report_api_dashboard_finalizations__operation_id__reports__report_format__put"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -4438,6 +4601,8 @@ export interface components {
             capture_id: string;
             /** Operation Id */
             operation_id: string;
+            /** Report Formats */
+            report_formats?: ("pptx" | "html")[];
         };
         /** CreateDraftInput */
         CreateDraftInput: {
@@ -4507,6 +4672,18 @@ export interface components {
             /** Sample Content Base64 */
             sample_content_base64?: string | null;
         };
+        /** DeleteConfirm */
+        DeleteConfirm: {
+            /** Registration Ids */
+            registration_ids: string[];
+            /** Confirm Token */
+            confirm_token: string;
+        };
+        /** DeleteTargets */
+        DeleteTargets: {
+            /** Registration Ids */
+            registration_ids: string[];
+        };
         /** DemoRunCreate */
         DemoRunCreate: {
             /** Name */
@@ -4530,6 +4707,42 @@ export interface components {
              * @default 데모 사용자
              */
             created_by: string;
+        };
+        /** DepthSamples */
+        DepthSamples: {
+            /**
+             * Segment
+             * @enum {string}
+             */
+            segment: "UPPER" | "USAGE" | "DISTRIBUTION";
+            /** Upper */
+            upper?: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /** DepthSchemaDraft */
+        DepthSchemaDraft: {
+            /** Upper */
+            upper: {
+                [key: string]: unknown;
+            };
+            /** Environments */
+            environments: {
+                [key: string]: unknown;
+            };
+        };
+        /** DepthSchemaPut */
+        DepthSchemaPut: {
+            /** Expected Schema Set Id */
+            expected_schema_set_id: string;
+            /** Upper */
+            upper: {
+                [key: string]: unknown;
+            };
+            /** Environments */
+            environments: {
+                [key: string]: unknown;
+            };
         };
         /** DetailResponse */
         DetailResponse: {
@@ -4880,6 +5093,42 @@ export interface components {
             /** Excluded Paths */
             excluded_paths?: string[];
         };
+        /** FolderProgressStep */
+        FolderProgressStep: {
+            /**
+             * Key
+             * @enum {string}
+             */
+            key: "REGISTERED" | "MODELING" | "RESULTS" | "FINAL" | "REPORT";
+            /** Label */
+            label: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "DONE" | "IN_PROGRESS" | "WAITING";
+            /** Detail */
+            detail: string | null;
+        };
+        /** FolderRequestProgress */
+        FolderRequestProgress: {
+            /** Applicable */
+            applicable: boolean;
+            /** Environment */
+            environment: ("USAGE" | "DISTRIBUTION") | null;
+            /** Completed */
+            completed: number;
+            /** Total */
+            total: number;
+            /** Current Key */
+            current_key: ("REGISTERED" | "MODELING" | "RESULTS" | "FINAL" | "REPORT") | null;
+            /** Next Action */
+            next_action: string | null;
+            /** Steps */
+            steps: components["schemas"]["FolderProgressStep"][];
+            /** Checked At */
+            checked_at: string;
+        };
         /** FolderRule */
         FolderRule: {
             /** Depth */
@@ -5094,21 +5343,6 @@ export interface components {
             };
             /** Expected Version */
             expected_version?: number | null;
-        };
-        /** LegacyCopy */
-        LegacyCopy: {
-            /**
-             * Environment
-             * @enum {string}
-             */
-            environment: "USAGE" | "DISTRIBUTION";
-            /** Name */
-            name: string;
-            /**
-             * Relative Path
-             * @default
-             */
-            relative_path: string;
         };
         /** LoadCaseCreate */
         LoadCaseCreate: {
@@ -5461,36 +5695,6 @@ export interface components {
              * @default false
              */
             require_usage_review: boolean;
-        };
-        /** Profile */
-        Profile: {
-            /**
-             * Environment
-             * @enum {string}
-             */
-            environment: "USAGE" | "DISTRIBUTION";
-            /** Name */
-            name: string;
-            /** Rules */
-            rules?: {
-                [key: string]: unknown;
-            };
-        };
-        /** ProfileUpdate */
-        ProfileUpdate: {
-            /**
-             * Environment
-             * @enum {string}
-             */
-            environment: "USAGE" | "DISTRIBUTION";
-            /** Name */
-            name: string;
-            /** Rules */
-            rules?: {
-                [key: string]: unknown;
-            };
-            /** Expected Revision */
-            expected_revision: number;
         };
         /** ProjectCreate */
         ProjectCreate: {
@@ -5925,6 +6129,19 @@ export interface components {
             result_config: {
                 [key: string]: unknown;
             };
+        };
+        /** ResultEnvironmentCounts */
+        ResultEnvironmentCounts: {
+            /** Usage */
+            USAGE: number;
+            /** Distribution */
+            DISTRIBUTION: number;
+        };
+        /** ResultEnvironments */
+        ResultEnvironments: {
+            /** Environments */
+            environments: ("USAGE" | "DISTRIBUTION")[];
+            case_counts: components["schemas"]["ResultEnvironmentCounts"];
         };
         /**
          * ResultImportHistoryItem
@@ -11660,7 +11877,27 @@ export interface operations {
             };
         };
     };
-    create_api_folder_discovery_environments_profiles_post: {
+    get_depth_schema_api_folder_discovery_environments_depth_schema_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    put_depth_schema_api_folder_discovery_environments_depth_schema_put: {
         parameters: {
             query?: never;
             header?: never;
@@ -11669,7 +11906,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["Profile"];
+                "application/json": components["schemas"]["DepthSchemaPut"];
             };
         };
         responses: {
@@ -11693,6 +11930,92 @@ export interface operations {
             };
         };
     };
+    depth_schema_samples_api_folder_discovery_environments_depth_schema_samples_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DepthSamples"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    depth_schema_check_api_folder_discovery_environments_depth_schema_check_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DepthSchemaDraft"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_api_folder_discovery_environments_profiles_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     update_api_folder_discovery_environments_profiles__profile_id__put: {
         parameters: {
             query?: never;
@@ -11702,14 +12025,10 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ProfileUpdate"];
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
-            200: {
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11730,9 +12049,7 @@ export interface operations {
     };
     archive_api_folder_discovery_environments_profiles__profile_id__delete: {
         parameters: {
-            query: {
-                expected_revision: number;
-            };
+            query?: never;
             header?: never;
             path: {
                 profile_id: string;
@@ -11742,7 +12059,7 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Successful Response */
-            200: {
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11768,9 +12085,62 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    history_api_folder_discovery_environments_history_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+                include_deleted?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_preview_api_folder_discovery_environments_registrations_delete_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["LegacyCopy"];
+                "application/json": components["schemas"]["DeleteTargets"];
             };
         };
         responses: {
@@ -11794,14 +12164,46 @@ export interface operations {
             };
         };
     };
-    history_api_folder_discovery_environments_history_get: {
+    delete_registrations_api_folder_discovery_environments_registrations_delete_post: {
         parameters: {
-            query?: {
-                limit?: number;
-                offset?: number;
-            };
+            query?: never;
             header?: never;
             path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeleteConfirm"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reinterpret_api_requests__request_id__reinterpret_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
             cookie?: never;
         };
         requestBody?: never;
@@ -13735,6 +14137,70 @@ export interface operations {
             };
         };
     };
+    result_environments_api_projects__project_id__requests__request_id__result_environments_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResultEnvironments"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    folder_progress_api_projects__project_id__requests__request_id__folder_progress_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FolderRequestProgress"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     preview_api_dashboard_finalizations_preview_post: {
         parameters: {
             query?: never;
@@ -13780,6 +14246,44 @@ export interface operations {
                 "application/json": components["schemas"]["ConfirmInput"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_report_api_dashboard_finalizations__operation_id__reports__report_format__put: {
+        parameters: {
+            query: {
+                project_id: string;
+                request_id: string;
+                environment: "USAGE" | "DISTRIBUTION";
+                case_id: string;
+                capture_id: string;
+            };
+            header?: never;
+            path: {
+                operation_id: string;
+                report_format: "pptx" | "html";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {

@@ -89,8 +89,9 @@ def _quick_current(conn, root, root_key: str, project_id: str, request_id: str,
     if not profile or int(profile[0]) != int(previous["profile_revision"]):
         return False, previous["id"], None
     newer_registration = conn.execute(
+        # §13.5: a DELETED registration is never a sync target or a reason to refresh.
         "SELECT 1 FROM folder_environment_registrations WHERE project_id=? AND request_id=? AND environment=? "
-        "AND created_at>? LIMIT 1",
+        "AND status IN ('REGISTERED','CAPTURING','COMPLETED','FAILED') AND created_at>? LIMIT 1",
         [project_id, request_id, environment, previous["created_at"]],
     ).fetchone()
     if newer_registration:

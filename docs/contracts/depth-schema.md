@@ -14,6 +14,8 @@
 |---|---|
 | D1 | 상위 구간(Root→…→프로젝트→의뢰)의 깊이는 관리자가 지정한다. 전역 1개 |
 | D2 | 하위 구간은 표준 깊이를 강제한다. Working 필수, 유통 RunOption 레벨 필수. 이탈하면 "확인 필요" |
+| D2a | Working 하위의 폴더 이름은 제한하지 않는다. RunOption도 INDIVIDUAL·CUMULATIVE 외 이름을 허용한다. 역할은 깊이로만 정한다(이름 규칙 `allowed_names` 없음) |
+| D2b | RunOption 레벨은 생략하지 않는다(운영 규칙). 자동 누락 감지는 두지 않고, 대신 L5(RunOption)에서 발견된 **폴더 이름 전체 목록**을 보여준다. 관리자는 이 목록에서 Scene 이름이 섞였는지 등을 눈으로 확인한다 |
 | D3 | 스키마는 환경별 전역 1개. 프로젝트별 재정의 없음 |
 | D4 | 환경은 의뢰 폴더명 부분일치로 정한다. `사용` → USAGE, `유통` → DISTRIBUTION. 둘 다 있거나 둘 다 없으면 "확인 필요" |
 | D5 | 구형 `WR_x_SimType1|2` 규칙은 삭제한다 |
@@ -22,7 +24,7 @@
 | D8 | 사용환경의 `EVALUATION` 역할을 `SCENE`으로 통합한다. 두 환경 모두 Scene을 쓴다 |
 | D9 | 스키마를 저장해도 기존 등록 의뢰는 변경하지 않는다. 의뢰 화면의 **재해석** 버튼으로만 새 스키마를 적용한다 |
 | D10 | 하위 L1은 **이름으로** 구분한다. `Working`(필수)과 `Final`(선택, Final 지정 후 생성). `Final`도 스키마 대상이다 |
-| D11 | Final 하위 L2는 이름으로 구분한다. `CAE` = 해석 입력·결과 파일, `Reports` = 보고서 기능이 만든 PPTX/PDF. 앱의 SPDM 쓰기는 이 두 폴더로만 한다 |
+| D11 | Final 하위 L2는 이름으로 구분한다. `CAE` = 해석 입력·결과 파일, `Reports` = 보고서 기능이 만든 PPTX·HTML(사용자가 Final 지정 때 하나 이상 선택, PDF는 만들지 않음). 앱의 SPDM 쓰기는 이 두 폴더로만 한다 |
 | D12 | Final/CAE·Reports의 L3 이하는 고정 구조다: `<Case>/<finalization_id>/` 아래에 Working의 Case 이하 구조를 그대로 미러링한다. 관리자 편집 대상이 아니며 UI에 읽기 전용으로 표시한다 |
 
 ## 3. 표준 트리
@@ -37,7 +39,7 @@ Root                                   L0 (역할 없음)
       │  │  └─ <Case>                   L3 SIMULATION_CASE
       │  │     └─ <finalization_id>     L4 FINAL_VERSION  32자리 hex
       │  │        └─ …                  L5~ = Working의 Case 이하 구조 미러 (사용: Scene / 유통: LoadCase/Run/RunOption/Scene)
-      │  ├─ Reports                     L2 FINAL_REPORTS  보고서 PPTX/PDF
+      │  ├─ Reports                     L2 FINAL_REPORTS  보고서 PPTX·HTML
       │  └─ CAD                         L2 FINAL_CAD      하위는 CONTENT (앱 쓰기 없음) — 미확정, §12
       │     └─ <Case>/<finalization_id>/…  CAE와 같은 구조
       └─ Working                       하위 L1 WORKING (이름으로 판정, 필수)
@@ -49,7 +51,7 @@ Root                                   L0 (역할 없음)
          └─ <Case>                     L2 SIMULATION_CASE   예: Package_Model_SetCase3_CushionCase3_조건표시
             └─ <LoadCase>              L3 LOAD_CASE         예: Drop
                └─ <Run>                L4 EXECUTION_RUN     예: 85qn80h_ref_organized
-                  └─ <RunOption>       L5 RUN_OPTION        INDIVIDUAL | CUMULATIVE
+                  └─ <RunOption>       L5 RUN_OPTION        예: INDIVIDUAL, CUMULATIVE (이름 제한 없음)
                      └─ <Scene>        L6 SCENE             예: 2_Face
                         └─ …           CONTENT
 ```
@@ -83,7 +85,7 @@ Root                                   L0 (역할 없음)
       { "level": 2, "role": "SIMULATION_CASE" },
       { "level": 3, "role": "LOAD_CASE" },
       { "level": 4, "role": "EXECUTION_RUN" },
-      { "level": 5, "role": "RUN_OPTION", "allowed_names": ["INDIVIDUAL", "CUMULATIVE"] },
+      { "level": 5, "role": "RUN_OPTION" },
       { "level": 6, "role": "SCENE" }
     ],
     "below_last": "CONTENT"
@@ -111,7 +113,8 @@ USAGE 행은 `environment_keyword: "사용"`, `lower.levels = [WORKING(fixed), S
 | upper | level은 1부터 연속, 최대 8. `PROJECT`와 `REQUEST`가 정확히 1개씩, PROJECT < REQUEST. REQUEST는 마지막 레벨. 나머지는 `CONTAINER` |
 | final | `fixed: true`. 서버 상수이며 PUT으로 변경할 수 없다(요청에 포함되면 무시) |
 | lower 공통 | L1 = `WORKING`(fixed_name). L2 = `SIMULATION_CASE`. 마지막은 `SCENE`. `CONTAINER`는 중간 통과 레벨로만 허용 |
-| DISTRIBUTION | `RUN_OPTION` 필수, `allowed_names`는 비어 있으면 안 됨 |
+| DISTRIBUTION | `RUN_OPTION` 레벨 필수 |
+| 이름 제한 | 레벨 항목에 `allowed_names` 등 이름 조건을 둘 수 없다(있으면 422). 이름으로 판정하는 곳은 하위 L1(Working/Final)과 Final L2(CAE/Reports/CAD)뿐이다 |
 | 역할 집합 | USAGE: PROJECT, REQUEST, WORKING, FINAL, FINAL_CAE, FINAL_REPORTS, FINAL_CAD, FINAL_VERSION, SIMULATION_CASE, SCENE, CONTAINER. DISTRIBUTION: 여기에 LOAD_CASE, EXECUTION_RUN, RUN_OPTION 추가. `EVALUATION`, `RESULTS`, `INPUT`은 새 스키마에서 사용 불가 |
 | keyword | USAGE는 `사용`, DISTRIBUTION은 `유통`으로 고정(편집 불가) |
 
@@ -134,10 +137,10 @@ USAGE 행은 `environment_keyword: "사용"`, `lower.levels = [WORKING(fixed), S
      - k=2: `CAE` → FINAL_CAE, `Reports` → FINAL_REPORTS, `CAD` → FINAL_CAD(이하 CONTENT), `.finalizations` → 무시. 그 외 이름은 `UNEXPECTED_FINAL_CHILD`
      - k=3: SIMULATION_CASE
      - k=4: FINAL_VERSION. 이름이 32자리 hex가 아니면 `FINAL_VERSION_INVALID`
-     - k≥5: Working 하위 구간의 L3 이후 역할을 적용(미러). allowed_names 위반은 Working과 같은 코드
+     - k≥5: Working 하위 구간의 L3 이후 역할을 적용(미러)
      - Final 가지는 **결과 판독 소스가 아니다.** 결과 캡처·Case 결과 화면은 Working만 읽는다. Final 역할은 Final 지정 이력과 대조·표시용이다
    - 의뢰에 Working이 없으면 `WORKING_MISSING`으로 등록을 막는다
-   - 2 ≤ k ≤ n: `lower[k].role`. `allowed_names`가 있는데 이름이 없으면 `NAME_NOT_ALLOWED`
+   - 2 ≤ k ≤ n: `lower[k].role` (이름 무관)
    - k > n: CONTENT (D6)
 5. **가지가 중간에서 끝남**: `info: BRANCH_INCOMPLETE`로 표시하고 이탈로 보지 않는다(D7).
 6. `_interpret`는 프로필 `format == "DEPTH_V1"`이면 `_role`·`resolve_role` 휴리스틱을 호출하지 않는다. legacy 형식은 기존 스냅샷 refresh 전용으로 남긴다.
@@ -156,7 +159,6 @@ USAGE 행은 `environment_keyword: "사용"`, `lower.levels = [WORKING(fixed), S
 | `UNEXPECTED_REQUEST_CHILD` | 의뢰 바로 아래에 Working/Final 이외 폴더 | 차단 |
 | `UNEXPECTED_FINAL_CHILD` | Final 바로 아래에 CAE/Reports/CAD/.finalizations 이외 폴더 | 경고(등록 허용) |
 | `FINAL_VERSION_INVALID` | Final/CAE·Reports/<Case> 아래 폴더명이 finalization id 형식이 아님 | 경고(등록 허용) |
-| `NAME_NOT_ALLOWED` | allowed_names 위반(예: L5에 `ALL`) | 차단 |
 
 ## 6. API
 
@@ -166,10 +168,11 @@ USAGE 행은 `environment_keyword: "사용"`, `lower.levels = [WORKING(fixed), S
 |---|---|---|---|
 | GET | `/api/folder-discovery/environments/depth-schema` | – | `{schema_set_id, upper, environments:{USAGE:{profile_id, environment_keyword, lower, usage_sources}, DISTRIBUTION:{…}}, created_at, created_by}` |
 | PUT | `…/depth-schema` | `{expected_schema_set_id, upper, environments}` | GET과 동일. 경합하면 409 `DEPTH_SCHEMA_CONFLICT` |
-| POST | `…/depth-schema/samples` | `{segment: "UPPER"\|"USAGE"\|"DISTRIBUTION", upper?}` | `{levels:[{level, folder_count, samples:[{name, count}] (≤8), truncated}], requests_sampled}` |
+| POST | `…/depth-schema/samples` | `{segment: "UPPER"\|"USAGE"\|"DISTRIBUTION", upper?}` | `{levels:[{level, folder_count, samples:[{name, count}] (≤8), truncated}], requests_sampled, run_option_names?:[{name, count, request_count}]}` |
 | POST | `…/depth-schema/check` | `{upper, environments}` (초안) | `{by_code:{CODE: count}, examples:[{relative_path, code}] (≤20)}` |
 | POST | `/api/requests/{request_id}/reinterpret` | – | 현재 스키마로 scan → preview → register. 이탈이 있으면 등록하지 않고 이탈 목록을 반환 |
 
+- `run_option_names` (DISTRIBUTION만): L5 위치에서 발견된 폴더 이름의 **전체** 목록(중복 제거, casefold 기준 병합, 개수와 의뢰 수 포함). 샘플 20개 제한을 받지 않고 해당 환경의 모든 의뢰를 대상으로 한다(목록 한도 500, 초과 시 `truncated`).
 - `samples`: 하위 구간은 `upper`로 찾은 해당 환경 의뢰를 최대 20개까지 보고, 의뢰 기준 상대 깊이로 집계한다. 집계는 Working 가지만 대상으로 하고(Final은 고정 구조라 편집 대상 아님), 기존 `_Lister` 한도를 재사용한다.
 - 모든 엔드포인트는 SPDM에 쓰지 않는다(읽기 전용 스캔).
 
@@ -187,7 +190,8 @@ USAGE 행은 `environment_keyword: "사용"`, `lower.levels = [WORKING(fixed), S
 - `FolderEnvironmentPanels.FolderProfileEditor` → `DepthSchemaEditor`로 교체한다.
   - 탭 3개: 상위 구조 / 사용환경 / 유통환경
   - 탭마다 표 1개: `깊이 | 예시 폴더(이름×개수, +N) | 폴더 수 | 역할 select`
-  - Root 행은 표시만 하고, 하위 탭의 L1 Working 행은 잠근다. 하위 탭 아래에 Final 고정 구조(L1 Final / L2 CAE·Reports / L3 Case / L4 버전 / L5~ 미러)를 읽기 전용으로 함께 표시한다. RUN_OPTION 행에만 허용 이름 칩 입력을 둔다.
+  - Root 행은 표시만 하고, 하위 탭의 L1 Working 행은 잠근다. 하위 탭 아래에 Final 고정 구조(L1 Final / L2 CAE·Reports / L3 Case / L4 버전 / L5~ 미러)를 읽기 전용으로 함께 표시한다.
+  - 유통 탭의 RUN_OPTION 행은 예시 대신 **RunOption 이름 전체 목록**(이름 · 폴더 수 · 의뢰 수)을 펼쳐 보여준다. 읽기 전용이다.
   - 탭을 열면 `samples`를 자동 호출한다. 행 수는 샘플 깊이에 맞춰 자동이고, 마지막 행 삭제만 가능하다.
   - 버튼은 **확인**(check 결과를 코드별 건수로 표시)과 **저장** 2개뿐이다.
 - `FolderEnvironmentWorkspace`
@@ -236,7 +240,7 @@ T1과 T2는 병렬, T3·T4·T5는 T2 이후 병렬, T6과 T7은 T0 이후 병렬
 ## 11. Verifier 통과 기준
 
 1. 실제 트리 fixture 2개(유통 `75R9J_PV/[WR-0002]_[유통_환경]`, 사용 `75R9J_PV/[WR-0001]_[사용_환경]`)에서 이탈 0건, 역할이 §3과 일치
-2. 유통 L5에 `ALL` 폴더 → `NAME_NOT_ALLOWED`, 등록 차단
+2. 유통 L5에 `INDIVIDUAL`·`CUMULATIVE` 외 이름(예: `ALL`) → RUN_OPTION으로 정상 판정, 이탈 0건. `samples`의 `run_option_names`에 모든 의뢰의 L5 이름이 빠짐없이 나옴
 3. 의뢰명 키워드 없음/둘 다 → auto-discovery `needs_review`, 등록 없음
 4. Working 없는 의뢰 → `WORKING_MISSING`
 5. Scene 아래 하위폴더 → CONTENT, 이탈 아님
@@ -245,6 +249,110 @@ T1과 T2는 병렬, T3·T4·T5는 T2 이후 병렬, T6과 T7은 T0 이후 병렬
 8. 사용환경 예제 Case를 등록하면 대시보드 "다섯 평가 종합" 표가 9개 슬롯 모두 채워짐(PARTIAL 없음)
 9. 편집기 버튼은 확인·저장 2개
 10. mypy, tsc, pytest, vitest 통과
+
+## 13. 등록 삭제 (관리자)
+
+### 13.1 결정
+
+| # | 결정 |
+|---|---|
+| D13 | 관리자는 "등록 이력"의 등록을 삭제할 수 있다. 삭제 범위는 **등록 기록 + 폴더 역할 매핑 + 그 등록이 생성한 업무 데이터**(프로젝트·의뢰·Case·캡처·자산·Final 지정 DB 기록 등)다 |
+| D14 | SPDM 폴더·파일은 어떤 경우에도 지우거나 옮기지 않는다(`.finalizations`, Final/CAE·Reports 포함) |
+| D15 | 다른 살아 있는 등록, 수동 연결(SPDM 저장소 연결, 레거시 매핑), 등록 이전부터 존재한 엔터티가 참조하는 데이터는 지우지 않는다. 이런 참조가 삭제 대상 행에 걸려 있으면 **전체를 거부(409)**하고 부분 삭제하지 않는다 |
+| D16 | 등록 행은 물리 삭제하지 않고 `status=DELETED`로 남긴다(묘비). 감사·이력 추적용이다. 이력 화면은 기본으로 DELETED를 숨긴다 |
+| D17 | 삭제된 등록은 "연결됨"으로 치지 않는다. 같은 의뢰 폴더는 이후 자동 탐색이 **새 깊이 스키마로 다시 등록**할 수 있다(목적: 구 스키마 등록 정리 후 재등록) |
+
+### 13.2 소유 판정 (무엇이 "이 등록이 생성한" 데이터인가)
+
+1. 신규 등록부터는 `register` 시점에 실제로 INSERT한 엔터티 id를 `folder_environment_registrations.created_targets`(JSON: `{project_ids, request_ids, case_ids}`)에 기록한다. 이 값이 있으면 그대로 쓴다.
+2. 값이 없는 기존 등록(구 스키마)은 추론한다. 엔터티가 이 등록의 registry `target_id`이고, **그 엔터티의 `created_at`이 등록 `created_at` − 5초 이후**이며, 다른 살아 있는(DELETED가 아닌) 등록의 registry가 같은 `target_id`를 가리키지 않으면 소유로 본다.
+3. Case(`dashboard_cases`)는 이 등록의 registry `relative_path`에 해당하고 다른 살아 있는 등록이 참조하지 않으면 소유다. 캡처·자산은 소유 Case의 것이면 함께 삭제한다.
+4. 소유가 아닌 엔터티(LINK된 기존 프로젝트 등)는 남긴다. 그 아래에서 이 등록이 만든 의뢰·Case만 지운다.
+
+### 13.3 삭제 순서 (한 트랜잭션, 자식 먼저, cascade 없음)
+
+`folder_discovery.WRITE_LOCK`과 해당 scope의 자동 동기화 잠금을 잡고, Postgres에서는 대상 등록 행을 `SELECT … FOR UPDATE`한다.
+
+1. `folder_environment_capture_jobs` (해당 등록)
+2. 소유 Case의 Final 지정 DB 기록, `result_registration_*`(case_id/capture_id 참조), `dashboard_assets` → `dashboard_captures` → `dashboard_cases`
+3. `folder_environment_registry` (해당 등록)
+4. 소유 의뢰의 하위 행(`spdm_storage_bindings`, `request_work_plans`, `analysis_request_type_assignments`, `request_result_layout_snapshots`, `semantic_folder_bindings`, load_cases 하위 등 구현 시 FK 전수 조사 결과 전부) → `folder_environment_scans`/`previews`의 request_id·project_id는 NULL 처리(이력 조인 보존) → `analysis_requests`
+5. 소유 프로젝트의 하위 행(`product_information`, `project_memberships`, `project_invitations`, `quality_thresholds`, `project_workspace_layouts(+versions)` 등) → `projects`
+6. 등록 행: `status=DELETED`, `deleted_at`, `deleted_by` 기록
+7. 감사 이벤트 `FOLDER_ENVIRONMENT_REGISTRATION_DELETED`(삭제 건수 요약 포함). `audit_events`는 지우지 않는다
+
+차단 사유가 하나라도 있으면 1~7을 하나도 실행하지 않고 409 `REGISTRATION_DELETE_BLOCKED`와 차단 목록을 반환한다.
+
+### 13.4 마이그레이션 `0035_folder_registration_delete`
+
+- `folder_environment_registrations.status` CHECK에 `DELETED` 추가
+- 컬럼 추가: `deleted_at TIMESTAMP NULL`, `deleted_by TEXT NULL`, `created_targets TEXT NULL`(JSON)
+- `registration()`의 상태 재계산(작업 상태로 덮어쓰기)은 DELETED를 건드리지 않는다
+- Postgres와 DuckDB 둘 다 지원한다
+
+### 13.5 자동 탐색·동기화 영향
+
+- `_linked_state`, 자동 탐색 멱등 키 검사, ADMIN_EXCLUDED 계산, auto_sync 대상 선정에서 DELETED 등록을 제외한다.
+- 자동 탐색 멱등 키는 `auto-discovery-<sha(경로, schema_set_id)>`로 바꾼다. 구 키가 남아 있어도 새 스키마 등록을 막지 않는다.
+- DELETED 등록의 capture job은 재시도·실행 대상이 아니다.
+
+### 13.6 API (전역 관리자 전용)
+
+| 메서드 | 경로 | 요청 | 응답 |
+|---|---|---|---|
+| POST | `/api/folder-discovery/environments/registrations/delete-preview` | `{registration_ids: string[]}` (1~200) | `{items:[{registration_id, deletable, counts:{projects, requests, cases, captures, assets, finalizations, other}, blockers:[{table, id, reason}]}], confirm_token}` |
+| POST | `/api/folder-discovery/environments/registrations/delete` | `{registration_ids, confirm_token}` | `{deleted:[registration_id], counts}`. 차단 시 409 `REGISTRATION_DELETE_BLOCKED`(+preview와 같은 items). 토큰이 현재 상태와 다르면 409 `DELETE_PREVIEW_STALE` |
+| GET | `…/history?include_deleted=false` | 기본 false | 기존 형식 + 항목별 `status`, `deleted_at` |
+
+- `confirm_token` = 대상 id 집합과 삭제 예정 행 id 집합의 해시. preview 이후 상태가 바뀌면 삭제를 거부한다.
+- 요청한 등록 중 하나라도 차단되면 전체 거부한다(원자적).
+- 이미 DELETED인 등록은 건너뛰고 `deleted`에 포함하지 않는다(멱등).
+
+### 13.7 UI (등록 이력 탭)
+
+- 각 행 왼쪽에 체크박스, 목록 위에 **삭제** 버튼 1개(선택이 없으면 비활성)와 "전체 선택" 체크박스를 둔다.
+- 삭제를 누르면 preview를 호출하고, 확인 대화상자에 합계(프로젝트 n · 의뢰 n · Case n · 캡처 n · Final 기록 n)와 "SPDM 폴더·파일은 삭제되지 않습니다"를 표시한다. 차단이 있으면 사유 목록만 보여주고 삭제 버튼을 비활성화한다.
+- 삭제가 끝나면 목록, 프로젝트 목록, 선택 상태를 다시 읽는다. 삭제된 프로젝트·의뢰를 보고 있었다면 선택을 해제한다.
+
+### 13.8 Verifier 기준 (추가)
+
+11. 구 스키마 등록 1건 삭제 → 그 등록이 만든 프로젝트·의뢰·Case·캡처·자산 0건, 등록 행은 DELETED. SPDM 트리의 파일 수·mtime 변화 0
+12. LINK된 기존 프로젝트 아래 등록 삭제 → 프로젝트는 남고 이 등록의 의뢰·Case만 삭제
+13. 다른 살아 있는 등록이 같은 Case를 참조 → 409, 어떤 행도 삭제되지 않음
+14. preview 후 다른 등록 추가 → delete가 `DELETE_PREVIEW_STALE`
+15. 삭제 후 자동 탐색 1회 → 같은 의뢰가 새 깊이 스키마로 재등록됨(DELETED 등록에 막히지 않음)
+16. 비관리자 호출 → 403
+17. Postgres(가능하면)와 DuckDB 양쪽에서 삭제 테스트 통과
+
+## 14. 수동 등록은 의뢰 1개 단위 (2026-10-03)
+
+### 14.1 결정
+
+| # | 결정 |
+|---|---|
+| D18 | 등록 1건 = 의뢰 1개. 수동 등록("폴더 연결")의 미리보기 계획에 REQUEST가 2개 이상이면 `can_apply=false`로 등록을 막는다. 일괄 등록은 자동 탐색이 담당한다 |
+| D19 | 의뢰 폴더를 직접 골라 조사하면 상위 스키마의 PROJECT 깊이 폴더(조사 경로의 조상)를 프로젝트로 자동 도출한다. 기존 업무 연결을 고르지 않았으면 그 폴더로 프로젝트를 만들거나 연결한다 |
+| D20 | 깊이 스키마의 역할 정의는 "저장된 규칙"에서만 한다. 수동 등록 화면은 역할을 바꾸지 않는다(§7, 읽기 전용) |
+
+### 14.2 동작
+
+- `_preview_depth`: 활성 계획(EXCLUDE 제외)의 REQUEST 수를 센다.
+  - 0개: 기존대로(`can_apply=false`, 의뢰 없음).
+  - 2개 이상: `can_apply=false`, 차단 사유 `MULTIPLE_REQUESTS`("의뢰 폴더별로 조사하세요. 여러 의뢰는 자동 탐색이 의뢰별로 등록합니다."), 미리보기 응답에 `request_paths:[...]` 포함.
+- `register`: 방어 검사. 계획의 REQUEST가 1개가 아니면 409 `MULTIPLE_REQUESTS`로 거부하고 아무것도 쓰지 않는다(registry·프로젝트·의뢰 생성 없음).
+- 의뢰 폴더 조사(D19): 조사 경로 깊이가 request_level이면 그 조상 중 project_level 폴더를 계획에 PROJECT 행으로 넣는다(`parent_context` 채움). 조상 깊이가 상위 스키마와 맞지 않으면 `can_apply=false`, 사유 `DEPTH_SCHEMA_REQUEST_LEVEL_MISMATCH`. `analysis_requests.project_id`가 NULL로 들어가는 경로가 없어야 한다(500 제거).
+- Case를 의뢰 밖에서 계획에 넣는 경로가 없으므로 `CAPTURE_CONTEXT_MISMATCH`는 정상 흐름에서 발생하지 않는다.
+
+### 14.3 시각 표기
+
+- 폴더 환경 API(스캔, 미리보기, 등록, 이력, 삭제 결과)의 시각 필드는 UTC 오프셋을 포함한 ISO 8601(`...Z` 또는 `+00:00`)로 반환한다. 저장 형식(naive UTC)은 바꾸지 않는다.
+- 프론트는 오프셋이 없는 시각을 UTC로 해석하는 공용 함수로 표시한다(구 응답·캐시 대비).
+
+### 14.4 Verifier 기준 (추가)
+
+18. Root·프로젝트 수준 조사(의뢰 2개 이상, 사용·유통 각각) → 미리보기 `can_apply=false`, `MULTIPLE_REQUESTS`. 등록 API 직접 호출 시 409, DB 변화 0
+19. 의뢰 폴더 수준 조사(기존 업무 미선택) → 프로젝트 자동 도출, 등록 성공, 모든 Case 결과 읽기 완료(사용·유통 각각). 500 없음
+20. 등록·이력 시각이 KST 화면에서 실제 시각으로 표시(UTC 23:02 → 10.3 오전 8:02)
 
 ## 12. 미확정
 

@@ -17,6 +17,13 @@ from app.security import hash_password
 from app.services import folder_discovery_environment, materials_catalog
 
 pytestmark = pytest.mark.duckdb_integration
+
+
+@pytest.fixture(autouse=True)
+def _legacy_profiles(isolated_database):
+    """These scenarios use legacy folder layouts: run them as a pre-0034 database."""
+    from tests.legacy_environment_profiles import activate_legacy_profiles
+    activate_legacy_profiles()
 BASE = "/api/materials"
 
 
@@ -1053,14 +1060,15 @@ def test_materials_include_rejects_reparse_target(materials_client, monkeypatch)
     include_path.write_text(_parts_deck(), encoding="utf-8")
     (scene_path / "parts.inc").write_text("/INCLUDE\nlinked.inc\n", encoding="utf-8")
     parts_path = scene_path / "parts.inc"
-    real_is_reparse = spdm_storage._is_reparse
+    from app.services.storage import local as storage_local
+    real_is_reparse = storage_local._is_reparse
 
     def mark_include_reparse(path):
         if Path(path) == include_path:
             return True
         return real_is_reparse(path)
 
-    monkeypatch.setattr(spdm_storage, "_is_reparse", mark_include_reparse)
+    monkeypatch.setattr(storage_local, "_is_reparse", mark_include_reparse)
     with pytest.raises(materials_catalog.MaterialsCatalogError) as error:
         materials_catalog._include_sources(
             [(f"{scene_relative}/parts.inc", parts_path, parts_path.stat().st_size)],
