@@ -3361,6 +3361,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/dashboard/finalizations/summary/repair": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Repair Summary
+         * @description W3: rewrite ``Final/current.json`` (and the signed pointer) for the current Final; returns the status.
+         */
+        post: operations["repair_summary_api_dashboard_finalizations_summary_repair_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/materials/catalog": {
         parameters: {
             query?: never;
@@ -6850,6 +6870,20 @@ export interface components {
             /** Source Revision */
             source_revision?: number | null;
             stored_file: components["schemas"]["StorageFileResponse"];
+        };
+        /** SummaryRepairInput */
+        SummaryRepairInput: {
+            /** Project Id */
+            project_id: string;
+            /** Request Id */
+            request_id: string;
+            /**
+             * Environment
+             * @enum {string}
+             */
+            environment: "USAGE" | "DISTRIBUTION";
+            /** Case Id */
+            case_id: string;
         };
         /** Sync */
         Sync: {
@@ -14374,6 +14408,39 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    repair_summary_api_dashboard_finalizations_summary_repair_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SummaryRepairInput"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

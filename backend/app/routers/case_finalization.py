@@ -40,7 +40,7 @@ class ConfirmInput(FinalizationInput):
     report_formats: list[Literal["pptx", "html"]] = Field(default_factory=list, max_length=2)
 
 
-_CONFLICT_CODES = {"FINALIZATION_ALREADY_COMPLETED", "FINALIZATION_REPORT_FORMATS_MISMATCH",
+_CONFLICT_CODES = {"FINALIZATION_ALREADY_COMPLETED", "FINALIZATION_NO_CURRENT", "FINALIZATION_REPORT_FORMATS_MISMATCH",
                    "FINALIZATION_REPORTS_UNEXPECTED_FILE", "FINALIZATION_LEGACY_REPORTS_PRESENT",
                    "FINALIZATION_JOB_ACTIVE", "FINALIZATION_PUBLISH_BUSY", "FINALIZATION_SOURCE_BUSY"}
 
@@ -205,3 +205,31 @@ def job_status(request: Request, operation_id: str = Path(pattern=r"^[0-9a-f]{32
                                       environment=environment, case_id=case_id, operation_id=operation_id)
         except service.CaseFinalizationError as exc:
             raise _error(exc) from exc
+
+
+class SummaryRepairInput(BaseModel):
+    project_id: str = Field(min_length=1, max_length=128)
+    request_id: str = Field(min_length=1, max_length=128)
+    environment: Literal["USAGE", "DISTRIBUTION"]
+    case_id: str = Field(min_length=1, max_length=128)
+
+
+@router.post("/summary/repair")
+def repair_summary(payload: SummaryRepairInput, request: Request):
+    """W3: rewrite ``Final/current.json`` (and the signed pointer) for the current Final; returns the status."""
+    with connect() as conn:
+        require_resource_permission(request, RESULT_IMPORT, "request", payload.request_id, conn=conn)
+        try:
+            result = service.repair_summary(conn, project_id=payload.project_id, request_id=payload.request_id,
+                                            environment=payload.environment, case_id=payload.case_id,
+                                            actor=request.state.principal.user_id)
+        except service.CaseFinalizationError as exc:
+            raise _error(exc) from exc
+        write_audit_event(
+            request=request, principal=request.state.principal, status_code=200,
+            action="CASE_FINALIZATION_SUMMARY_REPAIRED",
+            detail={"project_id": payload.project_id, "request_id": payload.request_id, "environment": payload.environment,
+                    "current_final": (result.get("current_final") or {}).get("operation_id")},
+            connection=conn,
+        )
+        return result

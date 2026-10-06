@@ -155,7 +155,8 @@ def test_latest_basis_mirrors_scene_files_into_cae_and_stores_only_uploaded_repo
         ("pptx", hashlib.sha256(pptx).hexdigest()), ("html", hashlib.sha256(HTML).hexdigest())]
     # Nothing outside Final/ was written and Working is unchanged.
     assert _tree(root, exclude_final=True) == working_before
-    assert set(path.name for path in (root / FINAL).iterdir()) == {"CAE", "Report", ".finalizations"}
+    # W3: plus the SPDM summary of the current Final.
+    assert set(path.name for path in (root / FINAL).iterdir()) == {"CAE", "Report", ".finalizations", "current.json"}
 
     status = client.get(f"{API}/status", params={k: v for k, v in _body(ctx).items() if k != "capture_id"})
     assert status.status_code == 200, status.text

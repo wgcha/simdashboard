@@ -9,6 +9,7 @@ writers, which are additionally restricted to their calling modules.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import BinaryIO, ContextManager, Iterable, Iterator, Literal, Protocol
 
@@ -78,8 +79,17 @@ def _segments(rel_path: str) -> list[str]:
     return [part for part in rel_path.split("/") if part]
 
 
+# W3: SPDM summary of the current Final, directly in the request's ``Final`` folder.
+# Provisional name until the SPDM agreement (docs/features/case-finalization.md "현재 Final 요약 파일");
+# ``case_finalization`` uses this one constant. Its temporary file is ``.current.json.<32 hex>.tmp``
+# in the same folder (written, then renamed over the summary).
+FINAL_SUMMARY_FILE = "current.json"
+_FINAL_SUMMARY_TEMP = re.compile(r"^\.current\.json\.[0-9a-f]{32}\.tmp$")
+
+
 def final_zone_allows(rel_path: str) -> bool:
-    """``<request>/Final`` itself and ``<request>/Final/(CAE|Report|.finalizations)/**`` (§15 D21: not ``Reports``).
+    """``<request>/Final`` itself and ``<request>/Final/(CAE|Report|.finalizations)/**`` (§15 D21: not ``Reports``),
+    plus exactly ``<request>/Final/current.json`` and its temporary file (W3 summary).
 
     The ``Final`` component needs a non-empty request prefix and must not sit
     under a ``Working`` folder; names compare case-insensitively because the
@@ -93,6 +103,8 @@ def final_zone_allows(rel_path: str) -> bool:
             return False
         rest = parts[index + 1:]
         if not rest or rest[0] in {"cae", "report", ".finalizations"}:
+            return True
+        if len(rest) == 1 and (rest[0] == FINAL_SUMMARY_FILE or _FINAL_SUMMARY_TEMP.fullmatch(rest[0])):
             return True
     return False
 
@@ -124,7 +136,7 @@ def check_write(rel_path: str, zone: str, caller: str) -> None:
 
 
 __all__ = [
-    "Entry", "FINAL", "FINAL_WRITER_MODULES", "LEGACY", "LEGACY_WRITER_MODULES", "NOT_ALLOWED_WRITE", "NOT_FOUND", "FORBIDDEN",
+    "Entry", "FINAL", "FINAL_SUMMARY_FILE", "FINAL_WRITER_MODULES", "LEGACY", "LEGACY_WRITER_MODULES", "NOT_ALLOWED_WRITE", "NOT_FOUND", "FORBIDDEN",
     "UNAVAILABLE", "LIMIT", "SpdmStorageError", "StorageError", "StorageProvider", "WRITE_ZONES",
     "check_write", "final_zone_allows", "legacy_zone_allows", "Iterator",
 ]

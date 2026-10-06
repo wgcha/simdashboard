@@ -31,7 +31,7 @@ import unicodedata
 import xml.etree.ElementTree as ElementTree
 import zipfile
 from contextlib import ExitStack, contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO, Callable, Iterator
 from uuid import uuid4
@@ -41,7 +41,7 @@ from ..config import security_settings
 from . import case_finalization_jobs, dashboard_capture, folder_schema_locations, folder_schema_resolver, materials_catalog, result_registration_paths, spdm_storage
 from .storage import local as storage_local
 from .storage.local import LocalFsProvider
-from .storage.provider import FINAL, StorageError
+from .storage.provider import FINAL, FINAL_SUMMARY_FILE, StorageError
 
 _LOG = logging.getLogger(__name__)
 
@@ -83,6 +83,17 @@ JOB_DOMAIN = b"case-finalization:job:v1\0"
 PROGRESS_DOMAIN = b"case-finalization:progress:v1\0"
 COPIED_DOMAIN = b"case-finalization:copied:v1\0"
 VERIFIED_DOMAIN = b"case-finalization:verified:v1\0"
+DESIGNATIONS_DOMAIN = b"case-finalization:designations:v1\0"
+# W3 current Final. Summary for SPDM: ``Final/<SUMMARY_FILE>`` (provisional, one constant in the
+# storage provider so the write zone and this module agree). The signed request-wide pointer the
+# app trusts lives in ``Final/.finalizations/designations.json``.
+SUMMARY_FILE = FINAL_SUMMARY_FILE
+SUMMARY_FORMAT = "simdashboard-final-summary"
+SUMMARY_SCHEMA_VERSION = 1
+# Above this many CAE files the summary points at the signed complete.json instead of listing them.
+SUMMARY_MAX_LISTED_FILES = 20_000
+DESIGNATIONS_FILE = "designations.json"
+MAX_STATUS_HISTORY = 50
 # App-generated reports (stage 5 builders). Order is the display/record order.
 REPORT_FORMATS = ("pptx", "html")
 MAX_REPORT_BYTES = {"pptx": 64 * 1024 * 1024, "html": 320 * 1024 * 1024}
@@ -2322,7 +2333,12 @@ def _execute_job(root: Path, plan: dict[str, Any], job: dict[str, Any], progress
     output_signature = _verify_published(root, plan, completed_files, reports, outputs, progress)
     metadata_dir = posixpath.dirname(operation_dir)
     with _request_lock(f"{metadata_dir}/.request.lock", root):
-        completed = _write_complete(root, plan, job, completed_files, reports, outputs)
+        # W3: completion order is the commit order under the request lock; ``confirmed_at`` is made
+        # strictly increasing per request so the newest completion is always the current Final.
+        designations = _read_designations(root, metadata_dir)
+        completed = _write_complete(root, plan, job, completed_files, reports, outputs,
+                                    confirmed_at=_next_confirmed_at(designations))
+        _designate(root, plan, completed, designations)
     _write_verified_marker(root, operation_dir, completed, output_signature)
     progress.update(state="COMPLETE", phase=None, current_file=None, error=None, force=True)
     _cleanup_after_complete(root, plan, operation_dir)
@@ -2553,7 +2569,7 @@ def _verified_marker_matches(root: Path, operation_dir: str, completed: dict[str
 
 
 def _write_complete(root: Path, plan: dict[str, Any], job: dict[str, Any], completed_files: list[dict[str, Any]],
-                    reports: list[dict[str, Any]], outputs: dict[str, str]) -> dict[str, Any]:
+                    reports: list[dict[str, Any]], outputs: dict[str, str], *, confirmed_at: str | None = None) -> dict[str, Any]:
     fs = LocalFsProvider(root)
     operation_dir = str(plan["metadata_relative_path"])
     complete_path = fs.join(operation_dir, "complete.json")
@@ -2565,7 +2581,7 @@ def _write_complete(root: Path, plan: dict[str, Any], job: dict[str, Any], compl
         "folder_schema_snapshot_id": plan["folder_schema_snapshot_id"],
         "output_paths": outputs, "files": completed_files, "reports": reports,
         "counts": plan["counts"], "missing": plan["missing"],
-        "created_by": job.get("created_by"), "queued_at": job.get("queued_at"), "confirmed_at": _now(),
+        "created_by": job.get("created_by"), "queued_at": job.get("queued_at"), "confirmed_at": confirmed_at or _now(),
     }, "complete_signature", COMPLETE_DOMAIN)
     completed_bytes = _encode(completed)
     if len(completed_bytes) > MAX_PLAN_BYTES:
@@ -2964,12 +2980,17 @@ def status(conn: ConnectionLike, *, project_id: str, request_id: str, environmen
         label = "SIZE" if operation in size_only else "STAT_SINCE_COMPLETION" if operation in stat_only else "SHA256"
         return {**record, "verification": label}
 
+    current_final, history, summary = _current_and_history(scope, candidates, final_relative, str(environment).upper())
+    if current_final is not None:
+        current_final["verified"] = bool(verified.get(current_final["operation_id"], deep_ok(*next(
+            (plan, deep) for plan, record, deep in candidates if record["operation_id"] == current_final["operation_id"]))))
     retryable = sorted(incomplete, key=lambda row: str(row["previewed_at"] or ""), reverse=True)
     active = sorted((row["job"] for row in retryable if row.get("job") and row["job"]["state"] in {"QUEUED", "RUNNING", "FAILED"}),
                     key=lambda job: str(job.get("queued_at") or ""), reverse=True)
     return {"case_id": case_id, "request_id": request_id, "environment": str(environment).upper(),
             "final_relative_path": final_relative, "latest": shown(latest), "selected_case_latest": shown(selected_case_latest),
             "retryable_operations": retryable, "active_operations": active,
+            "current_final": current_final, "final_history": history, "summary": summary,
             "unverified_records": unverified_count}
 
 
@@ -3017,3 +3038,237 @@ def _scope_for_status(conn: ConnectionLike, project_id: str, request_id: str,
     return {"root": root, "root_id": root_id, "root_key": root_key,
             "scope": scope_info, "case_id": case_id, "case_path": _relative(str(row[3])),
             "case_label": str(row[4]), "capture_id": ""}
+
+
+# ---------------------------------------------------------------------------
+# W3: current Final per request + environment, re-designation and SPDM summary file.
+# ---------------------------------------------------------------------------
+#
+# Rule: the current Final of an environment is its completed Final with the latest
+# ``confirmed_at``. ``confirmed_at`` is assigned while holding the request lock right before
+# ``complete.json`` is written and is made strictly increasing per request (``designations.json``
+# keeps the last value), so it is the completion commit order. The summary file and the signed
+# pointer are written in the same locked section and never move back to an older completion.
+
+def _read_designations(root: Path, metadata_relative: str) -> dict[str, Any]:
+    record = _read_signed(root, f"{metadata_relative}/{DESIGNATIONS_FILE}", "designations_signature", DESIGNATIONS_DOMAIN)
+    if not record or record.get("schema_version") != 1 or not isinstance(record.get("environments"), dict):
+        return {"schema_version": 1, "environments": {}, "last_confirmed_at": None}
+    return record
+
+
+def _parse_time(value: Any) -> datetime | None:
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _format_time(value: datetime) -> str:
+    return value.astimezone(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def _next_confirmed_at(designations: dict[str, Any]) -> str:
+    """Now, but strictly after every completion this request recorded (clock steps back safely)."""
+    now = datetime.now(timezone.utc)
+    last = _parse_time(designations.get("last_confirmed_at"))
+    if last is not None and now <= last:
+        now = last + timedelta(microseconds=1)
+    return _format_time(now)
+
+
+def _summary_entry(plan: dict[str, Any], completed: dict[str, Any], previous_id: str | None,
+                   complete_sha256: str | None = None) -> dict[str, Any]:
+    final_relative = str(plan["final_relative_path"])
+    strip = lambda value: str(value)[len(final_relative) + 1:] if str(value).startswith(final_relative + "/") else str(value)  # noqa: E731
+    outputs = completed["output_paths"]
+    operation_id = str(completed["operation_id"])
+    files = completed.get("files") or []
+    complete_record = f".finalizations/{operation_id}/complete.json"
+    entry = {
+        "final_id": operation_id, "environment": completed["environment"],
+        "case_label": plan["case_label"], "case_relative_path": plan["case_path"],
+        "designated_by": completed.get("created_by"), "designated_at": completed["confirmed_at"],
+        "cae_path": strip(outputs["CAE"]), "report_path": strip(outputs["Reports"]),
+        "reports": [{"format": item["format"], "path": f"{strip(outputs['Reports'])}/{item['file_name']}",
+                     "size": item["size"], "sha256": item["sha256"]} for item in completed.get("reports") or []],
+        "files_count": len(files), "total_bytes": sum(int(item.get("size") or 0) for item in files),
+        "complete_record": complete_record, "complete_sha256": complete_sha256 or _digest(_encode(completed)),
+        "previous_final_id": previous_id,
+    }
+    if len(files) <= SUMMARY_MAX_LISTED_FILES:
+        # Paths are relative to ``cae_path``.
+        entry["files"] = [{"path": item["case_relative_path"], "size": item["size"], "sha256": item["sha256"]} for item in files]
+    else:
+        entry["files"] = None
+        entry["files_in"] = complete_record
+    return entry
+
+
+def _read_summary(root: Path, final_relative: str) -> dict[str, Any] | None:
+    payload = LocalFsProvider(root).read_small_nofollow(f"{final_relative}/{SUMMARY_FILE}", max_bytes=MAX_PLAN_BYTES)
+    if payload is None:
+        return None
+    try:
+        value = json.loads(payload.decode("utf-8"))
+    except (ValueError, UnicodeError, RecursionError):
+        return None
+    if not isinstance(value, dict) or value.get("format") != SUMMARY_FORMAT or not isinstance(value.get("environments"), dict):
+        return None
+    return value
+
+
+def _write_summary(root: Path, final_relative: str, environment: str, entry: dict[str, Any]) -> None:
+    """Atomic replace of ``Final/<SUMMARY_FILE>``: temp file in the same folder, fsync, rename over it."""
+    fs = LocalFsProvider(root)
+    existing = _read_summary(root, final_relative) or {}
+    environments = {key: value for key, value in (existing.get("environments") or {}).items()
+                    if key in {"USAGE", "DISTRIBUTION"} and key != environment}
+    environments[environment] = entry
+    document = {"format": SUMMARY_FORMAT, "schema_version": SUMMARY_SCHEMA_VERSION, "generated_at": _now(),
+                "environments": dict(sorted(environments.items()))}
+    payload = json.dumps(document, ensure_ascii=False, indent=1, sort_keys=False).encode("utf-8")
+    if len(payload) > MAX_PLAN_BYTES:
+        raise CaseFinalizationError("FINALIZATION_METADATA_LIMIT", "현재 Final 요약 파일이 크기 제한을 넘습니다.")
+    temporary = f"{final_relative}/.{SUMMARY_FILE}.{uuid4().hex}.tmp"
+    try:
+        with _pin_directory_chain(root, final_relative):
+            fs.assert_safe(final_relative)
+            target = f"{final_relative}/{SUMMARY_FILE}"
+            info = fs.stat(target, follow_links=False, missing_ok=True)
+            if info is not None and (info.kind != "file" or info.is_link):
+                raise CaseFinalizationError("FINALIZATION_SUMMARY_UNSAFE", "현재 Final 요약 파일 자리에 일반 파일이 아닌 항목이 있습니다.")
+            fs.create_exclusive(temporary, payload, zone=FINAL)
+            fs.replace(temporary, target, zone=FINAL)
+    except OSError as exc:
+        raise _write_failed() from exc
+    except StorageError as exc:
+        raise CaseFinalizationError(exc.code, str(exc)) from exc
+    finally:
+        try:
+            fs.remove(temporary, zone=FINAL, missing_ok=True)
+        except (OSError, StorageError):
+            pass
+
+
+def _newest_other_completion(root: Path, metadata_relative: str, environment: str, exclude: str) -> str | None:
+    """DB-free fallback for a request without ``designations.json``: newest signed completion of the environment."""
+    fs = LocalFsProvider(root)
+    best: tuple[str, str] | None = None
+    try:
+        entries = fs.list(metadata_relative)
+    except OSError:
+        return None
+    for entry in entries:
+        if entry.kind != "dir" or entry.is_link or not _OPERATION_ID.fullmatch(entry.name) or entry.name == exclude:
+            continue
+        complete = _read_signed(root, f"{metadata_relative}/{entry.name}/complete.json", "complete_signature",
+                                COMPLETE_DOMAIN, max_bytes=MAX_PLAN_BYTES)
+        if (not complete or complete.get("status") != "COMPLETE" or complete.get("environment") != environment
+                or complete.get("operation_id") != entry.name):
+            continue
+        key = (str(complete.get("confirmed_at") or ""), entry.name)
+        if best is None or key > best:
+            best = key
+    return best[1] if best else None
+
+
+def _designate(root: Path, plan: dict[str, Any], completed: dict[str, Any], designations: dict[str, Any]) -> bool:
+    """Caller holds the request lock. Moves the pointer to ``completed`` and rewrites the summary.
+
+    Never moves it back to an older completion. A failure leaves the Final complete; status then
+    reports the summary as needing repair (``summary.state``). Returns whether the summary was written.
+    """
+    operation_dir = str(plan["metadata_relative_path"])
+    metadata_relative = posixpath.dirname(operation_dir)
+    environment = str(completed["environment"])
+    current = (designations.get("environments") or {}).get(environment) or {}
+    if str(current.get("confirmed_at") or "") >= str(completed["confirmed_at"]):
+        return False  # an older completion never replaces a newer current Final
+    if current.get("operation_id"):
+        previous_id = current["operation_id"]
+    else:
+        previous_id = _newest_other_completion(root, metadata_relative, environment, str(completed["operation_id"]))
+    try:
+        record = {key: value for key, value in designations.items() if key != "designations_signature"}
+        record["environments"] = {**(record.get("environments") or {}), environment: {
+            "operation_id": completed["operation_id"], "case_id": completed["case_id"], "case_label": plan["case_label"],
+            "confirmed_at": completed["confirmed_at"], "complete_sha256": _digest(_encode(completed)),
+            "previous_operation_id": previous_id,
+        }}
+        last = str(record.get("last_confirmed_at") or "")
+        record["last_confirmed_at"] = max(last, str(completed["confirmed_at"]))
+        _write_signed_metadata(metadata_relative, root, DESIGNATIONS_FILE,
+                               _signed_record(record, "designations_signature", DESIGNATIONS_DOMAIN))
+        _write_summary(root, str(plan["final_relative_path"]), environment, _summary_entry(plan, completed, previous_id))
+        return True
+    except (CaseFinalizationError, OSError, StorageError):
+        _LOG.warning("Final %s: current Final summary could not be written", operation_dir, exc_info=True)
+        return False
+
+
+def _current_and_history(scope: dict[str, Any], candidates: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]],
+                         final_relative: str, environment: str) -> tuple[dict[str, Any] | None, list[dict[str, Any]], dict[str, Any]]:
+    """Current Final (newest completion), history flags and the summary file state. Read-only."""
+    summary_path = f"{final_relative}/{SUMMARY_FILE}"
+    if not candidates:
+        return None, [], {"state": "NONE", "path": summary_path}
+    _plan, record, deep = candidates[0]
+    current = {"operation_id": record["operation_id"], "case_id": record["case_id"], "case_label": record["case_label"],
+               "case_path": record["case_path"], "designated_by": record.get("created_by"),
+               "designated_at": record.get("confirmed_at"), "schema_version": record.get("schema_version"),
+               "output_paths": record.get("output_paths")}
+    history = [{"operation_id": item["operation_id"], "case_id": item["case_id"], "case_label": item["case_label"],
+                "designated_by": item.get("created_by"), "designated_at": item.get("confirmed_at"),
+                "schema_version": item.get("schema_version"),
+                "role": "CURRENT" if index == 0 else "PREVIOUS"}
+               for index, (_p, item, _d) in enumerate(candidates[:MAX_STATUS_HISTORY])]
+    summary = _read_summary(scope["root"], final_relative)
+    entry = (summary or {}).get("environments", {}).get(environment) if summary else None
+    if summary is None:
+        state = "MISSING"
+    elif (not isinstance(entry, dict) or entry.get("final_id") != record["operation_id"]
+            or entry.get("complete_sha256") != _digest(_encode(deep["complete"]))):
+        state = "STALE"
+    else:
+        state = "OK"
+    return current, history, {"state": state, "path": summary_path,
+                              "final_id": entry.get("final_id") if isinstance(entry, dict) else None}
+
+
+def repair_summary(conn: ConnectionLike, *, project_id: str, request_id: str, environment: str,
+                   case_id: str, actor: str) -> dict[str, Any]:
+    """Explicit repair (RESULT_IMPORT): point the summary and pointer at the current Final (newest completion)."""
+    scope = _scope_for_status(conn, project_id, request_id, environment, case_id)
+    root: Path = scope["root"]
+    final_relative, metadata_relative = _final_paths(scope)
+    metadata_dir = result_registration_paths._safe_existing(root, metadata_relative, allow_missing_leaf=True)
+    if not LocalFsProvider(root).is_dir(metadata_dir):
+        raise CaseFinalizationError("FINALIZATION_NO_CURRENT", "완료된 Final이 없어 요약 파일을 만들 수 없습니다.")
+    with _request_lock(f"{metadata_dir}/.request.lock", root):
+        candidates, _incomplete, _unverified = _scan_operations(conn, scope, project_id, request_id, environment, case_id)
+        if not candidates:
+            raise CaseFinalizationError("FINALIZATION_NO_CURRENT", "완료된 Final이 없어 요약 파일을 만들 수 없습니다.")
+        plan, _record, deep = candidates[0]
+        completed = deep["complete"]
+        designations = _read_designations(root, metadata_dir)
+        previous_id = candidates[1][1]["operation_id"] if len(candidates) > 1 else None
+        record = {key: value for key, value in designations.items() if key != "designations_signature"}
+        env = str(environment).upper()
+        record["environments"] = {**(record.get("environments") or {}), env: {
+            "operation_id": completed["operation_id"], "case_id": completed["case_id"], "case_label": plan["case_label"],
+            "confirmed_at": completed["confirmed_at"], "complete_sha256": _digest(_encode(completed)),
+            "previous_operation_id": previous_id,
+        }}
+        record["last_confirmed_at"] = max(str(record.get("last_confirmed_at") or ""), str(completed["confirmed_at"]))
+        _write_signed_metadata(metadata_dir, root, DESIGNATIONS_FILE,
+                               _signed_record(record, "designations_signature", DESIGNATIONS_DOMAIN))
+        # Version 1/2 records: summarize with their CAE list as recorded (paths relative to the CAE folder).
+        view_plan = {**plan, "final_relative_path": final_relative}
+        if "Reports" not in (completed.get("output_paths") or {}):
+            completed = {**completed, "output_paths": {**_expected_output_paths(plan)}}
+        _write_summary(root, final_relative, env, _summary_entry(view_plan, {
+            **completed, "files": [item for item in (completed.get("files") or []) if item.get("category") == "CAE"],
+            "reports": completed.get("reports") or []}, previous_id, _digest(_encode(deep["complete"]))))
+    _LOG.info("Final summary repaired by %s for %s/%s", actor, request_id, environment)
+    return status(conn, project_id=project_id, request_id=request_id, environment=environment, case_id=case_id)

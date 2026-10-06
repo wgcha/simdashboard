@@ -135,7 +135,7 @@ function jobView(plan: typeof preview, formats: Array<'pptx' | 'html'>, state: J
   }
 }
 
-async function installMocks(page: Page, options: { failFirstUpload?: boolean; multiOption?: boolean; jobStates?: JobState[] } = {}) {
+async function installMocks(page: Page, options: { failFirstUpload?: boolean; multiOption?: boolean; jobStates?: JobState[]; status?: () => Record<string, unknown> } = {}) {
   const uploads: Uploads = []
   const confirms: Array<Record<string, unknown>> = []
   const jobPolls: string[] = []
@@ -161,7 +161,7 @@ async function installMocks(page: Page, options: { failFirstUpload?: boolean; mu
     const url = new URL(route.request().url())
     return fulfillJson(route, url.pathname.endsWith('/videos') ? videos : distribution(url.searchParams.get('run_option_id') ?? undefined))
   })
-  await page.route('**/api/dashboard/finalizations/status**', (route) => fulfillJson(route, { latest: null, selected_case_latest: null, retryable_operations: [], unverified_records: 0 }))
+  await page.route('**/api/dashboard/finalizations/status**', (route) => fulfillJson(route, options.status ? options.status() : { latest: null, selected_case_latest: null, retryable_operations: [], unverified_records: 0 }))
   await page.route('**/api/dashboard/finalizations/preview', (route) => {
     const body = route.request().postDataJSON() as Record<string, string>
     if (body.environment === 'USAGE') {
@@ -316,6 +316,50 @@ test('Final 복사는 진행률을 보이고 창을 닫아도 계속되며 실�
   expect(confirms).toHaveLength(2)
   expect(confirms[1]).toMatchObject({ operation_id: OPERATION, capture_id: CAPTURE_ID, report_formats: ['pptx'] })
   expect(jobPolls.every((caseId) => caseId === CASE_ID)).toBe(true)
+  expect(errors).toEqual([])
+})
+
+test('현재 Final이 다른 Case면 헤더에 보이고 확인해야 재지정하며 요약 파일 갱신을 요청할 수 있다', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 })
+  const errors: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  const otherFinal = { operation_id: 'b'.repeat(32), case_id: 'case-b', case_label: 'Case B', case_path: 'R/Working/Case B', designated_by: 'kim', designated_at: '2026-10-05T01:00:00Z', schema_version: 3, output_paths: { CAE: `R/Final/CAE/Case B/${'b'.repeat(32)}`, Reports: `R/Final/Report/Case B/${'b'.repeat(32)}` }, verified: true }
+  let summaryState: 'MISSING' | 'OK' = 'MISSING'
+  const repairs: Array<Record<string, unknown>> = []
+  const statusBody = () => ({
+    latest: null, selected_case_latest: null, retryable_operations: [], unverified_records: 0, active_operations: [],
+    current_final: otherFinal,
+    final_history: [{ operation_id: otherFinal.operation_id, case_id: 'case-b', case_label: 'Case B', designated_by: 'kim', designated_at: otherFinal.designated_at, schema_version: 3, role: 'CURRENT' },
+      { operation_id: 'c'.repeat(32), case_id: CASE_ID, case_label: 'Case A', designated_by: 'lee', designated_at: '2026-10-04T01:00:00Z', schema_version: 2, role: 'PREVIOUS' }],
+    summary: { state: summaryState, path: 'R/Final/current.json', final_id: summaryState === 'OK' ? otherFinal.operation_id : null },
+  })
+  const { confirms } = await installMocks(page, { status: statusBody, jobStates: ['COMPLETE'] })
+  await page.route('**/api/dashboard/finalizations/summary/repair', (route) => {
+    repairs.push(route.request().postDataJSON() as Record<string, unknown>)
+    summaryState = 'OK'
+    return fulfillJson(route, statusBody())
+  })
+  const dialog = await openFinal(page)
+  const header = page.locator('.case-finalization')
+  await expect(page.getByTestId('case-final-current')).toContainText('현재 Final · Case B · kim')
+  await expect(page.getByTestId('case-final-summary-repair')).toContainText('요약 파일 갱신 필요')
+  const replace = dialog.getByTestId('case-final-replace')
+  await expect(replace).toContainText('현재 Final(Case B)을 이전 Final로 바꾸고 이 Case를 Final로 지정합니다')
+  await replace.getByText('Final 이력 2건').click()
+  await expect(replace.getByRole('list', { name: 'Final 이력' })).toContainText('현재')
+  await expect(replace.getByRole('list', { name: 'Final 이력' })).toContainText('이전')
+  const confirm = dialog.getByRole('button', { name: 'Final 지정 확정', exact: true })
+  await expect(confirm).toBeDisabled()
+  await replace.getByRole('checkbox').check()
+  await expect(confirm).toBeEnabled()
+  await page.screenshot({ path: `${SHOT_DIR}/case-final-replace-1440.png` })
+  await confirm.click()
+  await expect(page.getByRole('dialog', { name: 'Final 지정 완료' })).toBeVisible({ timeout: 20_000 })
+  expect(confirms).toHaveLength(1)
+  await page.getByRole('dialog', { name: 'Final 지정 완료' }).getByRole('button', { name: '닫기', exact: true }).last().click()
+  await header.getByRole('button', { name: '요약 파일 갱신', exact: true }).click()
+  await expect(page.getByTestId('case-final-summary-repair')).toHaveCount(0, { timeout: 10_000 })
+  expect(repairs[0]).toMatchObject({ project_id: 'project-tv-001', request_id: 'request-drop-001', environment: 'DISTRIBUTION', case_id: CASE_ID })
   expect(errors).toEqual([])
 })
 

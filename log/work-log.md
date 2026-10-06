@@ -1196,3 +1196,12 @@
 - L6: 임시 폴더를 한 단계씩, 고정·재확인한 상위 아래에서만 생성.
 - 성능: CAE 읽기 3회(복사·공개 전 해시·공개 후 해시). 공개 후 해시는 `complete.json` 근거라 유지, 공개 전 해시(`VERIFY_STAGED_CONTENT`, 기본 켜짐)는 손상 복사본을 공개 전에 재복사하기 위한 것으로 W9 측정 후 결정 — 문서화.
 - 검증: copy_jobs 33 passed(재검수 이식 N1·N2는 수정 전 실패 확인), reports·environment flow·storage_provider(+boundary)·spdm_storage_workflow·security 123 passed/2 skipped. 프론트 tsc·build, check:architecture 기존 4건만, e2e case-finalization 5/5·folder-working-final Final 2건(나머지 2건은 HEAD에서도 실패). 재검수·Codex Security·W9 실환경 미수행.
+
+## 2026-10-06 W3 현재 Final·재지정·요약 파일
+
+- 계약: `docs/features/case-finalization.md` "현재 Final과 재지정". 근거 roadmap §4 W3, redesign §8.2·§8.3.
+- 규칙: 의뢰·환경당 현재 Final = 의뢰 잠금 안에서 마지막으로 완료를 커밋한 Final. `confirmed_at`을 잠금 안에서 정하고 의뢰별로 단조 증가(서명된 `.finalizations/designations.json`의 마지막 값보다 큼). 동시 지정은 둘 다 완료되고 나중 커밋이 현재, 오래된 완료는 새 포인터를 덮지 않음. 이전 Final 폴더·파일은 그대로(D14).
+- 요약 파일 `Final/current.json`(임시안): 이름은 저장소 계층 상수 `FINAL_SUMMARY_FILE` 하나, FINAL 구역은 이 파일과 `.current.json.<hex>.tmp`만 `Final` 바로 아래 허용. 환경별 항목(Final ID, Case, 지정자·시각, CAE·Report 경로, 보고서, 파일 목록·해시(2만 개 초과 시 서명된 complete.json 가리킴), complete.json SHA-256, 이전 Final ID). complete.json과 같은 잠금 구역에서 임시 파일→이름 바꾸기. 실패해도 Final 완료, 상태 `summary.state` MISSING/STALE → `POST /api/dashboard/finalizations/summary/repair`(RESULT_IMPORT). GET은 쓰지 않음; W3 이전 의뢰는 가장 늦은 완료를 현재로 표시.
+- 상태 API: `current_final`, `final_history`(CURRENT/PREVIOUS), `summary`. 화면: 헤더 현재 Final·요약 파일 갱신, 마지막 Final이 현재가 아니면 "이전 Final" 배지, 다른 Case가 현재면 확인란 필수, 창에 이력.
+- 검증: 신규 `test_case_finalization_current.py` 7 passed; current·copy_jobs·reports·environment flow·storage provider(+boundary)·spdm_storage_workflow·security·folder progress 170 passed/2 skipped(reports의 Final 하위 목록 기대에 current.json 추가 후). OpenAPI 재생성·계약 OK. 프론트 tsc·build·test:api, check:architecture 기존 4건만. e2e case-finalization 6/6(신규 재지정·요약 갱신 포함), folder-working-final Final 2건 통과(깊이 스키마·Working 계층 2건은 HEAD에서도 실패).
+- 미수행: SPDM 형식 협의, 실제 Windows·SMB, 독립·보안 검수(Codex Security 미가용).

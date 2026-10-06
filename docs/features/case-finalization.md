@@ -52,6 +52,41 @@
 - 한 폴더만 공개된 뒤 실패하면(예: Report 이름 바꾸기 잠금) 완료 기록은 없고, 같은 Final ID 재시도가 나머지를 마저 공개한다. 이미 공개한 CAE는 다시 복사하지 않는다.
 - 버려진 임시 폴더(확정하지 않았거나 실패한 채 다시 시도하지 않은 작업의 `.finalizations/<ID>/staging`)는 자동으로 지우지 않는다. 관리자가 `.finalizations/<ID>/`의 `progress.json`을 확인하고 정리한다(SPDM은 `.finalizations`를 가져가지 않는다).
 
+## 현재 Final과 재지정 (W3, 2026-10-06)
+
+- **의뢰·환경당 현재 Final은 하나**다. 현재 Final = 그 환경에서 완료된 Final 중 `confirmed_at`이 가장 늦은 것. `confirmed_at`은 의뢰 잠금 안에서 `complete.json`을 쓰기 직전에 정하며, 의뢰마다 마지막 값(`designations.json`)보다 반드시 커지게 한다(시계가 뒤로 가도 1 µs 뒤). 따라서 **완료를 마지막으로 커밋한 Final이 현재 Final**이다. 두 지정이 동시에 진행되면 둘 다 복사·완료되고(다른 Final ID, 같은 의뢰는 작업 대기열에서 순서대로), 나중에 완료된 쪽이 현재가 된다. 더 오래된 완료가 더 새 지정을 덮지 않는다(`_designate`가 기록된 `confirmed_at`보다 늦을 때만 바꿈).
+- 같은 Case를 다시 지정해도 새 Final이 현재가 된다. 이전 Final은 이력에 **이전 Final**로 남고 폴더·파일은 옮기거나 지우지 않는다(D14). 이전 형식(1·2·3) 완료 기록도 이력에 표시된다.
+- 앱이 믿는 포인터: `Final/.finalizations/designations.json`(서명, 환경별 현재 Final ID·Case·`confirmed_at`·`complete.json` 해시·이전 Final ID, 의뢰 전체의 마지막 `confirmed_at`). 없거나 서명이 맞지 않으면(W3 이전 의뢰) 상태 조회는 완료 기록에서 가장 늦은 것을 현재로 보이고, 다음 완료가 이전 Final ID를 서명된 완료 기록에서 찾아 적는다.
+- **요약 파일(SPDM용, 임시안):** `Final/current.json`. 이름은 저장소 계층 상수 `FINAL_SUMMARY_FILE` 하나로 정하고(`case_finalization.SUMMARY_FILE`), FINAL 쓰기 구역은 정확히 이 파일과 그 임시 파일 `.current.json.<32 hex>.tmp`만 `Final` 바로 아래에 허용한다. SPDM 협의 후 위치·형식을 바꾸려면 이 상수와 이 절을 함께 바꾼다.
+- 쓰는 때: 새 Final의 `complete.json`을 쓴 같은 의뢰 잠금 구역에서 포인터와 함께 쓴다. 같은 폴더의 임시 파일에 쓰고 fsync한 뒤 이름 바꾸기로 교체한다(원자적, 상위 폴더 고정·링크 확인). 실패해도 Final은 완료 상태로 남고 상태 조회가 **요약 파일 갱신 필요**(`summary.state` MISSING/STALE)를 알린다. 화면의 **요약 파일 갱신**(`POST /summary/repair`, `RESULT_IMPORT`)이 현재 Final로 다시 쓴다. 상태 조회(GET)는 요약 파일·포인터를 쓰지 않는다.
+- 형식(`schema_version` 1):
+
+```json
+{
+ "format": "simdashboard-final-summary", "schema_version": 1, "generated_at": "…Z",
+ "environments": {
+  "DISTRIBUTION": {
+   "final_id": "<32 hex>", "environment": "DISTRIBUTION",
+   "case_label": "<Case>", "case_relative_path": "<SPDM root 기준 Working Case 경로>",
+   "designated_by": "<사용자 ID>", "designated_at": "…Z",
+   "cae_path": "CAE/<Case>/<Final ID>", "report_path": "Report/<Case>/<Final ID>",
+   "reports": [{"format": "pptx", "path": "Report/<Case>/<Final ID>/<Case>_report.pptx", "size": 0, "sha256": "…"}],
+   "files_count": 0, "total_bytes": 0,
+   "files": [{"path": "<cae_path 기준 상대 경로>", "size": 0, "sha256": "…"}],
+   "complete_record": ".finalizations/<Final ID>/complete.json", "complete_sha256": "<complete.json 바이트의 SHA-256>",
+   "previous_final_id": "<32 hex>|null"
+  }
+ }
+}
+```
+
+  - 경로는 모두 이 파일이 있는 `Final` 폴더 기준이다. 환경마다 항목 하나이며 다른 환경 항목은 유지한다.
+  - CAE 파일이 20,000개(`SUMMARY_MAX_LISTED_FILES`)를 넘으면 `files: null`, `files_in: complete_record`로 서명된 `complete.json`(같은 `files` 목록)을 가리킨다.
+  - SPDM은 앱의 HMAC 키를 모르므로 서명 필드는 넣지 않고, 추적용으로 `complete.json`의 SHA-256을 적는다. `summary.state`는 요약 파일의 현재 환경 항목이 현재 Final ID와 그 `complete.json` 해시를 가리키면 OK, 다르면 STALE, 없거나 읽을 수 없으면 MISSING, 완료된 Final이 없으면 NONE.
+- 상태 조회 추가 필드: `current_final`(operation_id, case_id, case_label, case_path, designated_by, designated_at, schema_version, output_paths, verified), `final_history`(최신순 최대 50, `role: CURRENT|PREVIOUS`), `summary`(state, path, final_id).
+- 화면: Case 결과 헤더에 `현재 Final · <Case> · <지정자> · <시각>`, 요약 파일 갱신 필요 표시와 **요약 파일 갱신** 버튼. 이 Case의 마지막 Final이 현재가 아니면 배지가 **이전 Final**. Final 지정 창은 현재 Final이 다른 Case이면 "현재 Final(Case X)을 이전 Final로 바꾸고 이 Case를 Final로 지정합니다" 확인란을 체크해야 확정할 수 있고, 같은 Case면 안내만 보인다. 창에 Final 이력(현재/이전)을 보인다.
+- 알려진 한계: `designated_by`는 사용자 ID다. SPDM 협의 때 이름·필드를 다시 정한다.
+
 ## 기준: 최신 결과
 
 - `capture_id`로 화면과 같은 `latest:<dashboard_case_id>`를 받는다. Scene별 기준 수집본은 화면이 쓰는 `dashboard_capture.merge_latest_payload`를 같은 수집본 순서(`created_at, id`, `get_latest_capture`와 동일)로 직접 호출해 정한다(규칙의 단일 원천, 2026-10-03 보강). 병합된 Scene은 결과·미디어 경로(없으면 같은 수집본 안의 Scene 폴더 이름)로 현재 확정 Scene 경로에 대응시킨다. 사용환경은 가장 최근 수집본 하나다(화면·Final 보고서·Final 기준 모두 `latest:<Case>`).
@@ -73,6 +108,7 @@
 | `PUT /api/dashboard/finalizations/{operation_id}/reports/{pptx\|html}` | 의뢰 `RESULT_IMPORT` | 질의 `project_id, request_id, environment, case_id, capture_id`, 본문은 파일 바이트(raw). 응답 `file_name, size, sha256, report_path, status: STAGED`. 동시 업로드·검사는 프로세스당 2건, 넘으면 기다리지 않고 429 `FINALIZATION_REPORT_BUSY` |
 | `POST /api/dashboard/finalizations/confirm` | 의뢰 `RESULT_IMPORT` | 본문 미리보기 필드 + `operation_id`, `report_formats: ["pptx"\|"html"]`(하나 이상). 응답(W2): 작업 보기 `{operation_id, state, phase, files_done, files_total, bytes_done, bytes_total, current_file, error, attempt, queued_at, started_at, updated_at, case_id, capture_id, reports[], output_paths, active, record}`. 새 작업은 `state: QUEUED/RUNNING`, 이미 완료된 확정은 `state: COMPLETE`와 `record`(서명된 완료 기록). 실행 중인 확정에 다시 보내면 현재 진행을 돌려준다 |
 | `GET /api/dashboard/finalizations/{operation_id}/job` | `PROJECT_DATA_VIEW` | 질의 `project_id, request_id, environment, case_id`. 같은 작업 보기. `job.json`·`progress.json`(작은 파일)만 읽고, 완료되면 `record`. 없거나 범위가 다르면 404 `FINALIZATION_JOB_NOT_FOUND`. 중단된 작업은 이어서 등록 |
+| `POST /api/dashboard/finalizations/summary/repair` | 의뢰 `RESULT_IMPORT` | 본문 `project_id, request_id, environment, case_id`. 현재 Final로 `Final/current.json`·포인터를 다시 쓰고 상태 조회 응답을 돌려준다. 완료된 Final이 없으면 409 `FINALIZATION_NO_CURRENT` (W3) |
 | `GET /api/dashboard/finalizations/status` | `PROJECT_DATA_VIEW` | 의뢰 최근·선택 Case 최근 완료(`verification: SHA256\|SIZE`), 재시도 가능한 계획(각각 `job`), 선택 Case의 복사 작업 `active_operations`(QUEUED·RUNNING·FAILED, 최신순), 확인 필요 기록 수 |
 
 보고서는 multipart 대신 확정 ID에 묶인 별도 raw 업로드 단계로 받는다. 새 실행 의존성(python-multipart)을 피하고 요청마다 파일 하나로 크기 상한을 적용하기 위해서다. 본문을 받기 전에 권한, 그다음 확정 계획(서명된 `plan.json`이 이 범위의 것인지, `complete.json`이 없는지)을 먼저 확인한다. 없는 확정 ID는 404, 범위 불일치 403, 서명 불일치 409, 완료된 확정은 409다.
@@ -111,6 +147,8 @@
 - 새 DB migration·실행 의존성은 없다. Final은 일반 Case 조회·결과 등록·수집 대상이 아니다.
 
 ## 검증
+
+- W3 `backend/tests/test_case_finalization_current.py`: A 지정 → 요약 파일이 A, B 지정 → B·이전 A·A 파일 그대로·이력 현재/이전, 같은 Case 재지정, 먼저 시작했어도 나중에 커밋된 완료가 현재, 오래된 완료가 새 포인터를 덮지 않음·완료 시각 단조 증가, 요약 파일 쓰기 실패 → Final 완료·MISSING → 갱신으로 OK, W3 이전 의뢰(요약·포인터 없음)는 가장 늦은 완료를 현재로 보이고 GET이 아무것도 쓰지 않음·다음 완료가 이전 Final을 찾음, STALE 감지, 요약 파일은 `Final/current.json`(과 그 임시 파일)에만 쓸 수 있음. e2e `case-finalization.spec.ts`: 다른 Case가 현재 Final일 때 헤더 표시·확인란·이력·요약 파일 갱신.
 
 - W2(2026-10-06) `backend/tests/test_case_finalization_copy_jobs.py`: 형식 필터 없이 모든 Scene 파일 복사·임시/잠금/숨김 제외, 320 MiB(희소) 파일을 고정 메모리로 복사(tracemalloc 최대치가 작은 Case와 24 MiB 이내), 남은 공간 부족 507(작업 미등록), 공개 전 대상 폴더 비노출·진행률 형태·복사 중 업로드 409·재확정은 진행 반환, 복사 중 강제 중단(BaseException) 뒤 서버 시작 검색으로 같은 Final ID 이어하기(복사 완료 파일 건너뜀, 반쯤 쓴 파일 삭제·재복사, 해시 동일, Working 불변), 상태 조회로 이어하기, Report 이름 바꾸기 잠금 실패 → 완료 없음·CAE만 공개 → 재시도 시 재복사 없이 완료, 이름 바꾸기와 진행 기록 사이 중단 → 해시 검증 후 받아들임, 남의 대상 폴더 비덮어쓰기(확정 시·이름 바꾸기 시), 복사 중 원본 변경·같은 크기 결과 변경 → `FINALIZATION_SOURCE_STALE`, 손상된 임시 파일 재복사, 큰 기록 `verification: SIZE`, 2 형식 완료 기록 검증, 저장소 기본 기능(`copy_stream`·서버 측 복사 자리·`rename_no_replace`·`try_lock`). 독립 검수 공격 시나리오(같은 파일, `test_review_*` 12건): 임시 폴더 상위를 바로가기로 바꿔치기해도 root 밖에 쓰거나 지우지 않음, 폴더 생성 전 안전 확인, 임시 폴더·채택 대상의 바로가기와 계획에 없는 폴더 거부, 공개 전 검증 뒤 변조를 완료 전에 발견, `verified.json`은 예산 초과 때만 쓰고 `STAT_SINCE_COMPLETION`으로 표시·변경 시 SIZE/확인 필요, 재검수(`test_rereview_*`): 같은 크기 수정+수정 시각 복원도 예산 안에서는 확인 필요로 셈(검수자 테스트 이식), 링크된 `copied.jsonl`에 덧붙이지 않음, 시작 시 이어하기도 DB 범위 확인, 확인할 수 없는 `complete.json` 비완료, 무효 작업 FAILED 기록, `copied.jsonl` 상한 초과 명시적 실패, 범위가 사라진 작업 재등록 안 함. 기존 테스트는 작업 완료를 기다리는 방식으로 갱신했다. Windows 전용 고정 테스트(`test_case_finalization_pins_output_parent_during_temp_write`)는 새 복사 경로로 바꿨으나 Linux에서는 건너뛴다.
 - e2e(W2): `case-finalization.spec.ts`에 진행률·창 닫기 후 헤더 `Final 복사 중 n%`·실패 사유·헤더 재시도, `folder-working-final.spec.ts`에 다시 연 화면의 진행(`Final 검증 중 77%`)과 완료 알림.

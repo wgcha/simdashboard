@@ -79,6 +79,8 @@ export function CaseFinalizationPanel(props: Props) {
   const [preview, setPreview] = useState<CaseFinalizationPreview | null>(null)
   const [scopeAtOpen, setScopeAtOpen] = useState<CaseReportFinalScope | null>(null)
   const [formats, setFormats] = useState<Record<CaseFinalizationReportFormat, boolean>>({ pptx: true, html: false })
+  // W3: re-designating while another Case is the current Final needs an explicit acknowledgement.
+  const [replaceAcknowledged, setReplaceAcknowledged] = useState(false)
   const [includeVideos, setIncludeVideos] = useState(false)
   const [phase, setPhase] = useState<Phase>('idle')
   const [busy, setBusy] = useState(false)
@@ -177,7 +179,7 @@ export function CaseFinalizationPanel(props: Props) {
 
   const makePreview = async () => {
     const token = generation.current
-    setBusy(true); setError(''); setNotice(''); setDialogError(''); setResult(null); setSkippedVideos([]); setSkippedImages([])
+    setBusy(true); setError(''); setNotice(''); setDialogError(''); setResult(null); setSkippedVideos([]); setSkippedImages([]); setReplaceAcknowledged(false)
     try {
       const next = await caseFinalizationApi.preview(input)
       if (token !== generation.current) return
@@ -244,6 +246,19 @@ export function CaseFinalizationPanel(props: Props) {
     }
   }
 
+  const repairSummary = async () => {
+    const token = generation.current
+    setBusy(true); setError('')
+    try {
+      const next = await caseFinalizationApi.repairSummary({ project_id: projectId, request_id: requestId, environment, case_id: caseId })
+      if (token === generation.current) { setStatus(next); setNotice('Final 요약 파일을 갱신했습니다.') }
+    } catch (cause) {
+      if (token === generation.current) setError(message(cause, 'Final 요약 파일을 갱신하지 못했습니다.'))
+    } finally {
+      if (token === generation.current) setBusy(false)
+    }
+  }
+
   const current = status?.selected_case_latest
   const currentCaptureMismatch = Boolean(current && captureId && current.capture_id !== captureId)
   const unverified = status && status.unverified_records > 0 ? `확정 이력 ${status.unverified_records}건의 무결성을 확인하지 못했습니다. 기존 파일은 보존되어 있습니다.` : ''
@@ -254,7 +269,8 @@ export function CaseFinalizationPanel(props: Props) {
   // A failure is worth showing until a newer Final of this Case completes.
   const failed = job?.state === 'FAILED' && (!current || String(job.queued_at ?? '') > String(current.queued_at ?? current.confirmed_at ?? '')) ? job : null
   const dialogJob = preview && job?.operation_id === preview.operation_id ? job : null
-  const badgeText = copying ? jobLabel(copying) : failed ? 'Final 복사 실패' : current ? (currentCaptureMismatch ? '이전 결과로 확정' : '확정 완료') : !hasCapturedCase ? '결과 없음' : status ? '미확정' : error ? '확인 필요' : '확인 중'
+  const isPrevious = Boolean(current && status?.current_final && status.current_final.operation_id !== current.operation_id)
+  const badgeText = copying ? jobLabel(copying) : failed ? 'Final 복사 실패' : current ? (isPrevious ? '이전 Final' : currentCaptureMismatch ? '이전 결과로 확정' : '확정 완료') : !hasCapturedCase ? '결과 없음' : status ? '미확정' : error ? '확인 필요' : '확인 중'
   const copyTitle = copying ? `Final ${copying.operation_id.slice(0, 8)} · 파일 ${copying.files_done}/${copying.files_total} · ${formatBytes(copying.bytes_done)} / ${formatBytes(copying.bytes_total)}${copying.current_file ? `\n현재: ${copying.current_file}` : ''}` : failed ? `Final ${failed.operation_id.slice(0, 8)} 실패: ${failed.error?.message ?? ''}` : ''
   const badgeTitle = [copyTitle, current ? `확정 ${current.operation_id.slice(0, 8)} · ${current.files.length}개 파일${current.reports?.length ? ` · 보고서 ${current.reports.length}개` : ''} · ${formatDate(current.confirmed_at)}` : '', missing.join(' · '), requestLatest, unfinished, unverified].filter(Boolean).join('\n') || undefined
 
@@ -264,7 +280,11 @@ export function CaseFinalizationPanel(props: Props) {
   const excludedScenes = preview?.excluded_scenes ?? []
   const dialogCopying = isRunning(dialogJob) ? dialogJob : null
   const dialogFailed = dialogJob?.state === 'FAILED' ? dialogJob : null
-  const confirmDisabled = !canFinalize || busy || Boolean(dialogCopying) || !preview?.can_confirm || !scopeAtOpen || !chosen.length
+  const currentFinal = status?.current_final ?? null
+  const history = status?.final_history ?? []
+  const replacesOtherCase = Boolean(currentFinal && currentFinal.case_id !== caseId)
+  const summaryNeedsRepair = Boolean(currentFinal && (status?.summary?.state === 'MISSING' || status?.summary?.state === 'STALE'))
+  const confirmDisabled = !canFinalize || busy || Boolean(dialogCopying) || !preview?.can_confirm || !scopeAtOpen || !chosen.length || (replacesOtherCase && !replaceAcknowledged && !result)
   const listedFiles = preview ? preview.files.slice(0, LISTED_FILES) : []
 
   return <>
@@ -274,6 +294,9 @@ export function CaseFinalizationPanel(props: Props) {
       </span>
       {current?.verification === 'SIZE' && !copying && !failed ? <span className="case-finalization__missing-inline" data-testid="case-final-size-only" title="Final 파일이 커서 이번 조회에서는 존재와 크기만 확인했습니다. 완료 뒤 파일이 바뀌어 내용(해시) 확인 기록과 맞지 않습니다.">크기만 확인</span> : null}
       {current?.verification === 'STAT_SINCE_COMPLETION' && !copying && !failed ? <span className="case-finalization__missing-inline" data-testid="case-final-stat-only" title="Final 파일이 커서 이번 조회에서는 내용(해시)을 다시 읽지 않았습니다. 완료 때 해시를 확인한 뒤 크기·수정 시각이 바뀌지 않았음만 확인했으며, 내용이 같다는 증명은 아닙니다.">완료 후 변경 없음(크기·시각 확인)</span> : null}
+      {status?.current_final ? <span className="case-finalization__current" data-testid="case-final-current" title={`현재 Final ${status.current_final.operation_id}\n${status.current_final.case_path}`}>현재 Final · {status.current_final.case_label} · {status.current_final.designated_by ?? '지정자 없음'} · {formatDate(status.current_final.designated_at)}</span> : null}
+      {summaryNeedsRepair ? <span className="case-finalization__missing-inline" data-testid="case-final-summary-repair" title={`${status?.summary?.path ?? 'Final/current.json'}이(가) 현재 Final을 가리키지 않습니다.`}>요약 파일 갱신 필요</span> : null}
+      {summaryNeedsRepair && canFinalize ? <button type="button" className="case-finalization__retry" disabled={busy} onClick={() => void repairSummary()}><RotateCcw size={13} aria-hidden="true" />요약 파일 갱신</button> : null}
       {failed && !dialogOpen ? <button type="button" className="case-finalization__retry" disabled={!canFinalize || busy} title={failed.error?.message} onClick={() => void retryJob(failed)}><RotateCcw size={13} aria-hidden="true" />재시도</button> : null}
       <button type="button" className="case-finalization__trigger" title={canFinalize ? undefined : 'Final 지정 권한이 있는 사용자만 실행할 수 있습니다.'} disabled={!canFinalize || busy || !captureId || !caseId} onClick={() => void makePreview()}>
         {busy && !dialogOpen ? <LoaderCircle size={15} className="case-finalization__spinner" /> : <FileArchive size={15} aria-hidden="true" />}
@@ -299,6 +322,22 @@ export function CaseFinalizationPanel(props: Props) {
         {skippedVideos.length > 0 && <p className="case-finalization__missing">HTML에 넣지 못한 영상 {skippedVideos.length}개(파일 이름으로 표시): {skippedVideos.join(', ')}</p>}
         {skippedImages.length > 0 && <p className="case-finalization__missing">보고서에 넣지 못한 이미지 {skippedImages.length}개: {skippedImages.join(', ')}</p>}
       </div> : <div className="case-finalization__dialog-body">
+        {currentFinal ? <section className="case-finalization__section" aria-label="현재 Final" data-testid="case-final-replace">
+          {replacesOtherCase
+            ? <label className="case-finalization__format"><input type="checkbox" checked={replaceAcknowledged} disabled={busy || Boolean(dialogCopying)} onChange={(event) => setReplaceAcknowledged(event.target.checked)} />현재 Final({currentFinal.case_label})을 이전 Final로 바꾸고 이 Case를 Final로 지정합니다</label>
+            : <p className="case-finalization__hint">이 Case의 현재 Final({formatDate(currentFinal.designated_at)})은 이전 Final이 되고 새 Final이 현재 Final이 됩니다.</p>}
+          <p className="case-finalization__hint">이전 Final 폴더와 파일은 그대로 남습니다.</p>
+          {history.length ? <details className="case-finalization__file-list">
+            <summary>Final 이력 {history.length}건</summary>
+            <ul className="case-finalization__files" aria-label="Final 이력">
+              {history.map((item) => <li key={item.operation_id}>
+                <span className="case-finalization__source-basis">{item.role === 'CURRENT' ? '현재' : '이전'}</span>
+                <span className="case-finalization__file-path" title={item.operation_id}>{item.case_label} · {item.designated_by ?? '-'}</span>
+                <span className="case-finalization__file-size">{formatDate(item.designated_at)}</span>
+              </li>)}
+            </ul>
+          </details> : null}
+        </section> : null}
         <section className="case-finalization__section" aria-label="기준">
           <h4>기준 <span>최신 결과 · Scene {preview.scene_sources.length}개{sourceCount > 1 ? ` · 결과 버전 ${sourceCount}개` : ''}</span></h4>
           <ul className="case-finalization__scenes" aria-label="Scene 기준">

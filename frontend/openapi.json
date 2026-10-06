@@ -10414,6 +10414,46 @@
         }
       }
     },
+    "/api/dashboard/finalizations/summary/repair": {
+      "post": {
+        "tags": [
+          "case-finalization"
+        ],
+        "summary": "Repair Summary",
+        "description": "W3: rewrite ``Final/current.json`` (and the signed pointer) for the current Final; returns the status.",
+        "operationId": "repair_summary_api_dashboard_finalizations_summary_repair_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SummaryRepairInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/materials/catalog": {
       "get": {
         "tags": [
@@ -21398,6 +21438,44 @@
           "stored_file"
         ],
         "title": "StructuredUploadResponse"
+      },
+      "SummaryRepairInput": {
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Project Id"
+          },
+          "request_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Request Id"
+          },
+          "environment": {
+            "type": "string",
+            "enum": [
+              "USAGE",
+              "DISTRIBUTION"
+            ],
+            "title": "Environment"
+          },
+          "case_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Case Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "project_id",
+          "request_id",
+          "environment",
+          "case_id"
+        ],
+        "title": "SummaryRepairInput"
       },
       "Sync": {
         "properties": {

@@ -128,6 +128,28 @@ export type CaseFinalizationJob = {
   record: CaseFinalizationRecord | null
 }
 
+export type CaseFinalizationCurrent = {
+  operation_id: string
+  case_id: string
+  case_label: string
+  case_path: string
+  designated_by: string | null
+  designated_at: string | null
+  schema_version: number
+  output_paths: Record<'CAE' | 'Reports', string> | null
+  verified?: boolean
+}
+
+export type CaseFinalizationHistoryItem = {
+  operation_id: string
+  case_id: string
+  case_label: string
+  designated_by: string | null
+  designated_at: string | null
+  schema_version: number
+  role: 'CURRENT' | 'PREVIOUS'
+}
+
 export type CaseFinalizationStagedReport = { operation_id: string; format: CaseFinalizationReportFormat; file_name: string; size: number; sha256: string; report_path: string; status: 'STAGED' }
 
 export type CaseFinalizationStatus = {
@@ -140,6 +162,12 @@ export type CaseFinalizationStatus = {
   retryable_operations: Array<{ operation_id: string; status: 'RETRYABLE'; capture_id: string; previewed_at: string; job?: CaseFinalizationJob | null }>
   /** Copy jobs of the selected Case (QUEUED/RUNNING/FAILED), newest first. */
   active_operations?: CaseFinalizationJob[]
+  /** W3: the request + environment's current Final (newest completion), any Case. */
+  current_final?: CaseFinalizationCurrent | null
+  /** W3: completed Finals of the request + environment, newest first (at most 50). */
+  final_history?: CaseFinalizationHistoryItem[]
+  /** W3: state of the SPDM summary file (`Final/current.json`). */
+  summary?: { state: 'NONE' | 'OK' | 'MISSING' | 'STALE'; path: string; final_id?: string | null }
   unverified_records: number
 }
 
@@ -161,6 +189,8 @@ export const caseFinalizationApi = {
   },
   /** Records the copy job and returns at once (W2): QUEUED/RUNNING, or COMPLETE with `record` for a finished Final ID. */
   confirm: async (input: CaseFinalizationInput & { operation_id: string; report_formats: CaseFinalizationReportFormat[] }) => unwrapGenerated(await apiClient.POST('/api/dashboard/finalizations/confirm', { body: input })) as CaseFinalizationJob,
+  /** W3: rewrite `Final/current.json` for the current Final (RESULT_IMPORT); returns the status. */
+  repairSummary: async (input: Omit<CaseFinalizationInput, 'capture_id'>) => unwrapGenerated(await apiClient.POST('/api/dashboard/finalizations/summary/repair', { body: input })) as CaseFinalizationStatus,
   /** Copy job progress; polling also resumes a job interrupted by a server restart. */
   job: async (input: Omit<CaseFinalizationInput, 'capture_id'> & { operation_id: string }) => unwrapGenerated(await apiClient.GET('/api/dashboard/finalizations/{operation_id}/job', {
     params: { path: { operation_id: input.operation_id }, query: { project_id: input.project_id, request_id: input.request_id, environment: input.environment, case_id: input.case_id } },

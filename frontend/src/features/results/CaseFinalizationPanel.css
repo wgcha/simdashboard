@@ -475,3 +475,12 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* W3: current Final of the request + environment */
+.case-finalization__current {
+  overflow: hidden;
+  max-width: 360px;
+  color: var(--color-text-muted, #536276);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
