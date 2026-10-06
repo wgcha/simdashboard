@@ -252,3 +252,17 @@
 @keyframes case-report-spin {
   to { transform: rotate(360deg); }
 }
+
+/* W5: optional "후보 Case 비교" section (frozen Case 비교 table). */
+.case-report__compare {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  cursor: pointer;
+}
+
+.case-report__compare:has(input:disabled) {
+  cursor: default;
+  color: var(--color-text-muted, #536276);
+}

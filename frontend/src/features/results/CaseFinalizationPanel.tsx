@@ -26,6 +26,8 @@ type Props = {
   canFinalize: boolean
   /** Final report scope: the whole Case (usage Case, or every Run Case · Run Option); null without results. */
   reportScope: CaseReportFinalScope | null
+  /** W5: each new value opens the Final dialog for this Case (e.g. "이 Case를 Final 지정" in Case 비교). */
+  openRequest?: number
 }
 
 type Phase = 'idle' | 'building' | 'uploading' | 'starting'
@@ -74,7 +76,7 @@ const EXCLUDED_REASON: Record<CaseFinalizationExcludedScene['reason'], string> =
 const message = (cause: unknown, fallback: string) => cause instanceof Error && cause.message ? cause.message : fallback
 
 export function CaseFinalizationPanel(props: Props) {
-  const { projectId, requestId, environment, caseId, captureId, hasCapturedCase, canFinalize, reportScope } = props
+  const { projectId, requestId, environment, caseId, captureId, hasCapturedCase, canFinalize, reportScope, openRequest = 0 } = props
   const [status, setStatus] = useState<CaseFinalizationStatus | null>(null)
   const [preview, setPreview] = useState<CaseFinalizationPreview | null>(null)
   const [scopeAtOpen, setScopeAtOpen] = useState<CaseReportFinalScope | null>(null)
@@ -125,6 +127,12 @@ export function CaseFinalizationPanel(props: Props) {
       if (generation.current === token) generation.current += 1
     }
   }, [refreshStatus, captureId])
+
+  // Declared after the reset above so an open request on mount survives it.
+  useEffect(() => {
+    if (openRequest && canFinalize && caseId && captureId) void makePreview()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openRequest])
 
   useEffect(() => {
     const dialog = dialogRef.current

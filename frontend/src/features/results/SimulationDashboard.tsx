@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Link } from 'react-router-dom'
 import { AlertTriangle, Expand, Image as ImageIcon, Info, Layers3, Play, RotateCcw, SlidersHorizontal } from 'lucide-react'
@@ -16,6 +16,8 @@ import { FolderNameWarnings, SceneNameWarningIcon, SceneNameWarningProvider } fr
 import { useCaseHierarchyParams } from '../../shared/hooks/useCaseHierarchyParams'
 import { CaseReportLauncher } from './caseReport/CaseReportLauncher'
 import type { CaseReportFinalScope, CaseReportScope } from './caseReport/caseReport'
+import { CaseCompareView } from './CaseCompareView'
+import type { CaseCompareReport, ComparePath } from './caseCompare'
 import { USAGE_DIRECTION_LABELS, USAGE_DIRECTIONS, usageCell, usageEvaluationLabel, usageEvaluationRows, usageFieldKey, usageMetricStatus, usageStatusText, type UsageMetric } from './usageEvaluations'
 
 type Props = {
@@ -57,9 +59,9 @@ function currentHierarchyChoice(item: DashboardChoice, activeCaptureId: string) 
   return item.capture_id == null || (activeCaptureId !== '' && item.capture_id === activeCaptureId)
 }
 
-type ViewTab = 'summary' | 'compare' | 'video' | 'materials'
+type ViewTab = 'summary' | 'compare' | 'cases' | 'video' | 'materials'
 type CompareView = 'edges' | 'contours' | 'behavior'
-const VIEW_TABS: Array<{ id: ViewTab; label: string }> = [{ id: 'summary', label: '요약' }, { id: 'compare', label: 'Scene 비교' }, { id: 'video', label: '영상' }, { id: 'materials', label: '소재·물성' }]
+const VIEW_TABS: Array<{ id: ViewTab; label: string }> = [{ id: 'summary', label: '요약' }, { id: 'compare', label: 'Scene 비교' }, { id: 'cases', label: 'Case 비교' }, { id: 'video', label: '영상' }, { id: 'materials', label: '소재·물성' }]
 
 function ViewTabs({ tabs, active, onSelect }: { tabs: Array<{ id: ViewTab; label: string }>; active: ViewTab; onSelect: (tab: ViewTab) => void }) {
   const refs = useRef(new Map<ViewTab, HTMLButtonElement>())
@@ -112,6 +114,9 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
   const [lines, setLines] = useState<string[]>(['1', '2', '3', '4'])
   const [comparison, setComparison] = useState<DashboardComparisonMember[]>([])
   const [pathTarget, setPathTarget] = useState<HTMLDivElement | null>(null)
+  // W5: the Case 비교 table while that tab is open (offered in the 보고서 dialog).
+  const [compareReport, setCompareReport] = useState<CaseCompareReport | null>(null)
+  const updateCompareReport = useCallback((next: CaseCompareReport | null) => setCompareReport(next), [])
   const latestCatalogKey = useRef('')
   const loadedCatalogKey = useRef('')
   // A request or environment change drops the previous catalog and local
@@ -219,7 +224,7 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
     setComparison([...comparison, { simulation_case_id: dashboardCaseId, load_case_id: loadCaseId, execution_run_id: runId, run_option_id: optionId, capture_id: activeCaptureId, mode, component_id: componentId, basis }])
   }
 
-  const tabs = VIEW_TABS.filter((item) => tab === 'distribution' || item.id === 'summary' || item.id === 'materials')
+  const tabs = VIEW_TABS.filter((item) => tab === 'distribution' || item.id === 'summary' || item.id === 'cases' || item.id === 'materials')
   const activeView: ViewTab = materialsActive ? 'materials' : tabs.some((item) => item.id === view) ? view : 'summary'
   const selectView = (next: ViewTab) => {
     // `result_environment` is left as is while 소재·물성 is open (materials are
@@ -261,10 +266,15 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
   </details> : null
 
   const componentLabel = componentChoices.find((item) => item.id === componentId)?.label
-  const viewContext = tab === 'distribution' && !materialsActive && (activeView === 'summary' || activeView === 'compare') && componentLabel && basis ? `${componentLabel} · ${basisLabel(basis)}` : ''
+  const viewContext = tab === 'distribution' && !materialsActive && (activeView === 'summary' || activeView === 'compare' || activeView === 'cases') && componentLabel && basis ? `${componentLabel} · ${basisLabel(basis)}` : ''
   const distributionEmpty = catalog?.folder_schema?.status === 'AVAILABLE' && selectedCase?.source === 'FOLDER_SCHEMA' && !selectedCase.capture_count ? '이 Case에는 아직 결과 파일이 없습니다. Scene 폴더에 결과를 넣으면 자동으로 표시됩니다.' : '결과를 불러오는 중입니다.'
   const distribution = (section: 'summary' | 'compare') => <DistributionArea key={`${projectId}:${requestId}`} section={section} compareView={compareView} onCompareView={setCompareView} edges={edges} lines={lines} comparison={comparison} caseId={dashboardCaseId} loadCaseId={loadCaseId} captureId={activeCaptureId} runId={runId} optionId={optionId} mode={mode} componentId={componentId} basis={basis} hasCapturedRun={runChoices.some((item) => item.id === runId && item.capture_id === activeCaptureId)} hasCapturedOption={options.some((item) => item.id === optionId && item.capture_id === activeCaptureId)} emptyContextMessage={distributionEmpty} />
+  const optionChoiceForCompare = options.find((item) => item.id === optionId)
+  const comparePathReady = Boolean(activeCaptureId && runId && mode && componentId && basis && optionChoiceForCompare && runChoices.some((item) => item.id === runId && item.capture_id === activeCaptureId))
+  const comparePath: ComparePath | null = tab === 'distribution' && comparePathReady && (basis === 'DETAIL' || basis === 'REPORTED_SUMMARY') ? { loadCase: loadChoices.find((item) => item.id === loadCaseId)?.label ?? '', run: runChoices.find((item) => item.id === runId)?.label ?? '', option: optionChoiceForCompare?.option_label || optionChoiceForCompare?.label || '', component: componentLabel ?? '', basis, edgeKeys: edges.join(','), lineIndices: lines.join(',') } : null
+  const comparePathRows = comparePath ? [{ label: '하중경우', value: comparePath.loadCase }, { label: 'Run Case', value: comparePath.run }, { label: 'Run Option', value: comparePath.option }, { label: 'Component · 기준', value: `${comparePath.component} · ${basisLabel(comparePath.basis)}` }] : []
   const content = activeView === 'materials' ? renderMaterials?.(pathTarget) ?? null
+    : activeView === 'cases' && catalog ? <CaseCompareView key={`${projectId}:${requestId}:${tab}`} projectId={projectId} requestId={requestId} environment={tab === 'usage' ? 'USAGE' : 'DISTRIBUTION'} catalog={catalog} currentCaseId={selectedCase?.id ?? caseId} path={comparePath} pathHint="Case 경로에서 결과가 있는 하중경우·Run Case·Run Option을 선택하면 같은 경로로 Case를 비교합니다." pathRows={comparePathRows} canFinalize={canRefreshSchema} onReport={updateCompareReport} />
     : tab === 'usage' ? <UsageArea key={`${caseId}:${captureId}:${referenceCaseId}:${referenceCaptureId}`} caseId={dashboardCaseId} captureId={activeCaptureId} referenceCaseId={catalog?.cases.find((item) => item.id === referenceCaseId)?.dashboard_case_id ?? referenceCaseId} referenceCaptureId={referenceCaptureId} />
     : activeView === 'video' ? (runId && !optionId && options.length > 1 ? <State message="Run Option을 선택하세요." /> : activeCaptureId && runId ? <CaseVideoGrid key={`${activeCaptureId}:${runId}:${optionId}`} captureId={activeCaptureId} runId={runId} runOptionId={optionId || undefined} mode={mode || undefined} /> : <State message={distributionEmpty} />)
     : distribution(activeView === 'compare' ? 'compare' : 'summary')
@@ -282,6 +292,7 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
     source: { kind: 'case_usage', projectId, requestId, caseId: dashboardCaseId, captureId: activeCaptureId, referenceCaseId: referenceCaptureId ? referenceDashboardCaseId : '', referenceCaptureId },
     labels: { project: '', request: '', caseLabel: caseText, reference: referenceCaseId ? [caseLabel(referenceCaseId), catalog?.captures.find((item) => item.id === referenceCaptureId)?.label].filter(Boolean).join(' · ') : '' },
   } : null
+  const reportScopeWithCompare: CaseReportScope | null = reportScope && compareReport && activeView === 'cases' && compareReport.environment === (tab === 'usage' ? 'USAGE' : 'DISTRIBUTION') ? { ...reportScope, comparison: compareReport } : reportScope
   // Final designation reports cover the whole Case regardless of the on-screen selection.
   // The Final report always uses the same basis as Final designation: the merged latest
   // result (newest capture per Scene; for usage the newest capture), never a history entry.
@@ -293,7 +304,7 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
     <header className="case-results-head">
       {environments?.length === 2 ? <div className="case-env-toggle" role="group" aria-label="결과 환경"><button type="button" aria-pressed={tab === 'usage'} className={tab === 'usage' ? 'active' : ''} onClick={() => setTab('usage')}>사용환경</button><button type="button" aria-pressed={tab === 'distribution'} className={tab === 'distribution' ? 'active' : ''} onClick={() => setTab('distribution')}>유통환경</button></div> : null}
       {materialsActive ? null : <FolderNameWarnings warnings={catalog?.name_warnings} />}
-      <div className="case-results-head__actions">{headerExtra}{catalog ? <CaseReportLauncher scope={reportScope} disabledReason={materialsActive ? '소재·물성 탭에서는 보고서를 만들지 않습니다.' : tab === 'usage' ? '결과가 있는 사용환경 Case를 선택하면 보고서를 만들 수 있습니다.' : '유통환경에서 결과가 있는 Run Case와 Run Option을 선택하면 보고서를 만들 수 있습니다.'} /> : null}{catalog ? <CaseFinalizationPanel projectId={projectId} requestId={requestId} environment={tab === 'usage' ? 'USAGE' : 'DISTRIBUTION'} caseId={dashboardCaseId} captureId={hasCapturedCase ? finalCaptureId : ''} hasCapturedCase={hasCapturedCase} canFinalize={canRefreshSchema} reportScope={finalScope} /> : null}</div>
+      <div className="case-results-head__actions">{headerExtra}{catalog ? <CaseReportLauncher scope={reportScopeWithCompare} disabledReason={materialsActive ? '소재·물성 탭에서는 보고서를 만들지 않습니다.' : tab === 'usage' ? '결과가 있는 사용환경 Case를 선택하면 보고서를 만들 수 있습니다.' : '유통환경에서 결과가 있는 Run Case와 Run Option을 선택하면 보고서를 만들 수 있습니다.'} /> : null}{catalog ? <CaseFinalizationPanel projectId={projectId} requestId={requestId} environment={tab === 'usage' ? 'USAGE' : 'DISTRIBUTION'} caseId={dashboardCaseId} captureId={hasCapturedCase ? finalCaptureId : ''} hasCapturedCase={hasCapturedCase} canFinalize={canRefreshSchema} reportScope={finalScope} /> : null}</div>
     </header>
     {noResults && !materialsActive ? <State message={NO_RESULTS_MESSAGE} /> : null}
     {catalogError && !catalog && !materialsActive ? <State message={catalogError} error /> : null}

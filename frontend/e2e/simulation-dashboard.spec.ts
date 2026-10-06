@@ -547,7 +547,8 @@ test('fresh request reaches the Case usage review and clears prior capture conte
 })
 
 async function checkWideLayout(page: Page, screenshot: string) {
-  await expect(page.getByRole('tablist', { name: '결과 보기' }).getByRole('tab')).toHaveCount(4)
+  // 요약 · Scene 비교 · Case 비교(W5) · 영상 · 소재·물성
+  await expect(page.getByRole('tablist', { name: '결과 보기' }).getByRole('tab')).toHaveCount(5)
   await expect(page.getByRole('tab', { name: '요약', exact: true })).toHaveAttribute('aria-selected', 'true')
   await expect(page.getByRole('button', { name: 'Final 지정', exact: true })).toBeVisible()
   // The Case path is one row: every level shares the same vertical band.

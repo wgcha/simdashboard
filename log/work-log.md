@@ -1205,3 +1205,10 @@
 - 상태 API: `current_final`, `final_history`(CURRENT/PREVIOUS), `summary`. 화면: 헤더 현재 Final·요약 파일 갱신, 마지막 Final이 현재가 아니면 "이전 Final" 배지, 다른 Case가 현재면 확인란 필수, 창에 이력.
 - 검증: 신규 `test_case_finalization_current.py` 7 passed; current·copy_jobs·reports·environment flow·storage provider(+boundary)·spdm_storage_workflow·security·folder progress 170 passed/2 skipped(reports의 Final 하위 목록 기대에 current.json 추가 후). OpenAPI 재생성·계약 OK. 프론트 tsc·build·test:api, check:architecture 기존 4건만. e2e case-finalization 6/6(신규 재지정·요약 갱신 포함), folder-working-final Final 2건 통과(깊이 스키마·Working 계층 2건은 HEAD에서도 실패).
 - 미수행: SPDM 형식 협의, 실제 Windows·SMB, 독립·보안 검수(Codex Security 미가용).
+
+## 2026-10-06 W5 Case 비교 화면
+
+- 계약: `docs/features/case-compare.md`. 근거 roadmap §4 W5, redesign §8.1.
+- 변경: Case 결과 보기 탭에 `Case 비교`(사용·유통). 2~4개 Case(기본 4개 이하 전부, 초과 시 최신 4개), 기준 Case, 유통은 경로 표시줄 경로를 이름으로 각 Case에 맞춤. 값은 각 Case 최신 결과(`latest:`)를 요약 탭과 같은 API·같은 함수로 읽음(신규 `distributionValues.ts`를 보고서 요약과 공유, 사용은 `usageEvaluations.ts`). 표: Scene 합집합(정확한 이름), Δ 값·%, 행별 최저, Case 최대, 없음 강조, W6 이름 경고 아이콘, 단위 불일치 시 Δ 대신 경고; 사용 다섯 평가 OK/NG 색. 열별 `이 Case를 Final 지정` → 기존 Final 창(`CaseFinalizationPanel`에 `openRequest` prop만 추가). 보고서 창 `Case 비교 포함`(기본 꺼짐) → PPTX 끝 표 슬라이드·HTML 끝 구역, 꺼지면 기존 출력 동일. 백엔드·DB·의존성 변경 없음.
+- 검증: tsc·build·test:routing·test:api 통과, check:architecture 기존 4건만(App.tsx 불변). e2e case-compare 7/7(신규), case-report 11/11, case-finalization 6/6, simulation-dashboard 17/18(폐기된 capture-pin 1건; 4K 레이아웃 검사의 탭 개수 4→5 갱신). 스크린샷 `/tmp/claude-0/w5-case-compare-2560-14pt.png`, `-18pt.png`, `w5-case-compare-usage-2560-18pt.png`.
+- 미수행: 독립 검수, 실제 데이터 확인.
