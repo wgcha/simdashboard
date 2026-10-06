@@ -39,7 +39,7 @@ class ConfirmInput(FinalizationInput):
 
 
 _CONFLICT_CODES = {"FINALIZATION_ALREADY_COMPLETED", "FINALIZATION_REPORT_FORMATS_MISMATCH",
-                   "FINALIZATION_REPORTS_UNEXPECTED_FILE"}
+                   "FINALIZATION_REPORTS_UNEXPECTED_FILE", "FINALIZATION_LEGACY_REPORTS_PRESENT"}
 
 
 def _error(exc: service.CaseFinalizationError) -> HTTPException:

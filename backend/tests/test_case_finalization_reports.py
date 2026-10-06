@@ -96,7 +96,7 @@ def test_latest_basis_mirrors_scene_files_into_cae_and_stores_only_uploaded_repo
     names = {item["case_relative_path"].rsplit("/", 1)[-1] for item in plan["files"]}
     assert {CSV, "model.rad", "part.inc", "scene_review.pdf", "scene_table.xlsx", "contour.png", "drop.mp4"} <= names
     assert {item["category"] for item in plan["files"]} == {"CAE"}
-    assert plan["report_paths"]["pptx"] == f"{FINAL}/Reports/{CASE_LABEL}/{plan['operation_id']}/{CASE_LABEL}_report.pptx"
+    assert plan["report_paths"]["pptx"] == f"{FINAL}/Report/{CASE_LABEL}/{plan['operation_id']}/{CASE_LABEL}_report.pptx"
     assert plan["can_confirm"] is True
 
     # Client-supplied names/headers are ignored; the server picks the stored name.
@@ -125,7 +125,7 @@ def test_latest_basis_mirrors_scene_files_into_cae_and_stores_only_uploaded_repo
         ("pptx", hashlib.sha256(pptx).hexdigest()), ("html", hashlib.sha256(HTML).hexdigest())]
     # Nothing outside Final/ was written and Working is unchanged.
     assert _tree(root, exclude_final=True) == working_before
-    assert set(path.name for path in (root / FINAL).iterdir()) == {"CAE", "Reports", ".finalizations"}
+    assert set(path.name for path in (root / FINAL).iterdir()) == {"CAE", "Report", ".finalizations"}
 
     status = client.get(f"{API}/status", params={k: v for k, v in _body(ctx).items() if k != "capture_id"})
     assert status.status_code == 200, status.text
@@ -175,7 +175,7 @@ def test_latest_basis_takes_each_scene_from_its_newest_capture(admin_client):
                      [f"capture-synthetic-{uuid4().hex}", row[0], uuid4().hex, row[1], json.dumps(manifest), json.dumps(payload), row[4], row[5] + timedelta(hours=2)])
     late = _confirm(client, ctx, plan["operation_id"], ["pptx"])
     assert late.status_code == 409 and late.json()["detail"]["code"] == "FINALIZATION_CAPTURE_CHANGED"
-    assert not (root / FINAL / "CAE").exists() and not (root / FINAL / "Reports").exists()
+    assert not (root / FINAL / "CAE").exists() and not (root / FINAL / "Report").exists()
 
 
 def test_report_is_required_and_must_be_uploaded_before_anything_is_copied(admin_client):
@@ -186,7 +186,7 @@ def test_report_is_required_and_must_be_uploaded_before_anything_is_copied(admin
     assert missing.status_code == 422 and missing.json()["detail"]["code"] == "FINALIZATION_REPORT_REQUIRED"
     not_staged = _confirm(client, ctx, plan["operation_id"], ["html"])
     assert not_staged.status_code == 422 and not_staged.json()["detail"]["code"] == "FINALIZATION_REPORT_NOT_STAGED"
-    assert not (root / FINAL / "CAE").exists() and not (root / FINAL / "Reports").exists()
+    assert not (root / FINAL / "CAE").exists() and not (root / FINAL / "Report").exists()
     assert not (root / plan["metadata_relative_path"] / "complete.json").exists()
     status = client.get(f"{API}/status", params={k: v for k, v in _body(ctx).items() if k != "capture_id"}).json()
     assert status["selected_case_latest"] is None
@@ -212,7 +212,7 @@ def test_unsafe_or_malformed_reports_are_rejected(admin_client, fmt, data, code)
     assert response.status_code == 422, response.text
     assert response.json()["detail"]["code"] == code
     assert not (root / plan["metadata_relative_path"] / "reports.json").exists()
-    assert not (root / FINAL / "Reports").exists()
+    assert not (root / FINAL / "Report").exists()
 
 
 def test_pptx_without_presentation_part_and_oversize_reports_are_rejected(admin_client, monkeypatch):
@@ -261,7 +261,7 @@ def test_retry_replaces_unfinished_reports_and_completion_is_immutable(admin_cli
     late = _upload(client, ctx, operation, "pptx", first)
     assert late.status_code == 409 and late.json()["detail"]["code"] == "FINALIZATION_ALREADY_COMPLETED"
     assert report_path.read_bytes() == second
-    # A file in Reports that this operation did not upload is never overwritten.
+    # A file in Final/Report that this operation did not upload is never overwritten.
     other = _preview(client, ctx)
     foreign = root / other["report_paths"]["pptx"]
     foreign.parent.mkdir(parents=True)
@@ -273,8 +273,8 @@ def test_retry_replaces_unfinished_reports_and_completion_is_immutable(admin_cli
     assert not (root / other["metadata_relative_path"] / "complete.json").exists()
 
 
-def test_version_one_completed_record_still_verifies_in_status(admin_client):
-    """Records written before stage 6 kept results under Final/Reports; history must stay valid."""
+def test_version_one_completed_record_still_verifies_in_status_without_legacy_reports(admin_client):
+    """Records written before stage 6 kept results under Final/Reports; history stays valid on its CAE outputs."""
     client, root = admin_client
     ctx = _seed(client, root)
     operation = uuid4().hex
@@ -323,8 +323,14 @@ def test_version_one_completed_record_still_verifies_in_status(admin_client):
     latest = status.json()["selected_case_latest"]
     assert latest["operation_id"] == operation and latest["schema_version"] == 1
     assert latest["reports"] == [] and status.json()["unverified_records"] == 0
-    # Damaging an old Final file is reported, never repaired or deleted.
+    # §15 D21: the legacy Final/Reports mirror is not recognized; only the CAE output is shown and checked.
+    assert [item["category"] for item in latest["files"]] == ["CAE"]
+    assert latest["output_paths"]["Reports"] == f"{FINAL}/Report/{CASE_LABEL}/{operation}"
     (root / output_paths["Reports"] / files[1]["case_relative_path"]).write_bytes(b"tampered")
+    unread = client.get(f"{API}/status", params={k: v for k, v in _body(ctx).items() if k != "capture_id"}).json()
+    assert unread["selected_case_latest"]["operation_id"] == operation and unread["unverified_records"] == 0
+    # Damaging an old Final CAE file is reported, never repaired or deleted.
+    (root / output_paths["CAE"] / files[0]["case_relative_path"]).write_bytes(b"tampered")
     damaged = client.get(f"{API}/status", params={k: v for k, v in _body(ctx).items() if k != "capture_id"}).json()
     assert damaged["selected_case_latest"] is None and damaged["unverified_records"] == 1
 
@@ -382,7 +388,7 @@ def test_orphan_report_retry_must_keep_published_formats_and_completion_cleans_s
     failed = _confirm(client, ctx, operation, ["pptx", "html"])
     assert failed.status_code == 422 and failed.json()["detail"]["code"] == "FINALIZATION_OUTPUT_VERIFY_FAILED"
     monkeypatch.setattr(case_finalization, "_verify_outputs", real_verify)
-    reports_dir = root / FINAL / "Reports" / CASE_LABEL / operation
+    reports_dir = root / FINAL / "Report" / CASE_LABEL / operation
     published = sorted(path.name for path in reports_dir.iterdir())
     assert published == [f"{CASE_LABEL}_report.html", f"{CASE_LABEL}_report.pptx"]
     # Dropping a format that is already published would leave an unrecorded report behind.
@@ -408,7 +414,7 @@ def test_unexpected_file_in_operation_reports_folder_blocks_completion_and_is_ke
     plan = _preview(client, ctx)
     operation = plan["operation_id"]
     assert _upload(client, ctx, operation, "html", HTML).status_code == 200
-    reports_dir = root / FINAL / "Reports" / CASE_LABEL / operation
+    reports_dir = root / FINAL / "Report" / CASE_LABEL / operation
     reports_dir.mkdir(parents=True)
     stray = reports_dir / "notes.txt"
     stray.write_bytes(b"user notes")
@@ -737,7 +743,7 @@ def test_chunked_body_over_limit_and_tampered_staged_copy_are_refused(admin_clie
     staged.write_bytes(HTML + b"<script>x</script>")
     refused = _confirm(client, ctx, plan["operation_id"], ["html"])
     assert refused.status_code == 422 and refused.json()["detail"]["code"] == "FINALIZATION_REPORT_STAGE_INVALID"
-    assert not (root / FINAL / "Reports").exists()
+    assert not (root / FINAL / "Report").exists()
 
 
 def test_completion_marker_temp_cleanup_failure_is_best_effort(admin_client, monkeypatch):
@@ -759,3 +765,45 @@ def test_completion_marker_temp_cleanup_failure_is_best_effort(admin_client, mon
     operation_dir = root / plan["metadata_relative_path"]
     assert (operation_dir / "complete.json").is_file()
     assert [path.name for path in operation_dir.iterdir() if path.name.startswith(".complete-")]
+
+
+# ---------------------------------------------------------------------------
+# §15 D21 follow-up (Verifier should-fix 2026-10-06)
+# ---------------------------------------------------------------------------
+
+def test_retry_after_upgrade_refuses_when_legacy_final_reports_holds_this_operations_reports(admin_client):
+    """An older build published into Final/Reports and failed before complete.json."""
+    client, root = admin_client
+    ctx = _seed(client, root)
+    plan = _preview(client, ctx)
+    pptx = synthetic_pptx()
+    assert _upload(client, ctx, plan["operation_id"], "pptx", pptx).status_code == 200
+    legacy = root / FINAL / "Reports" / CASE_LABEL / plan["operation_id"]
+    legacy.mkdir(parents=True)
+    (legacy / f"{CASE_LABEL}_report.pptx").write_bytes(pptx)
+    final_before = sorted(path.relative_to(root).as_posix() for path in (root / FINAL).rglob("*"))
+    refused = _confirm(client, ctx, plan["operation_id"], ["pptx"])
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["detail"]["code"] == "FINALIZATION_LEGACY_REPORTS_PRESENT"
+    assert sorted(path.relative_to(root).as_posix() for path in (root / FINAL).rglob("*")) == final_before
+    assert not (root / FINAL / "CAE").exists() and not (root / FINAL / "Report").exists()
+    assert not (root / plan["metadata_relative_path"] / "complete.json").exists()
+    # Moving the folder away (the user's fix) lets the same operation complete into Final/Report.
+    legacy.rename(root / "moved-legacy-reports")
+    done = _confirm(client, ctx, plan["operation_id"], ["pptx"])
+    assert done.status_code == 200, done.text
+    assert done.json()["output_paths"]["Reports"] == f"{FINAL}/Report/{CASE_LABEL}/{plan['operation_id']}"
+
+
+def test_output_paths_are_built_from_components_when_an_upper_folder_is_named_report():
+    operation = "a" * 32
+    plan = {"operation_id": operation, "case_label": "Case A", "final_relative_path": "SPDM/Report/P/WR/Final"}
+    expected = case_finalization._expected_output_paths(plan)
+    assert expected == {"CAE": f"SPDM/Report/P/WR/Final/CAE/Case A/{operation}",
+                        "Reports": f"SPDM/Report/P/WR/Final/Report/Case A/{operation}"}
+    legacy = case_finalization._legacy_reports_path(plan)
+    assert legacy == f"SPDM/Report/P/WR/Final/Reports/Case A/{operation}"
+    files = [{"category": "CAE"}]
+    assert case_finalization._recorded_outputs(plan, {**expected, "Reports": legacy}, files, [])[1] == {"CAE": expected["CAE"]}
+    wrong = {**expected, "Reports": f"SPDM/Reports/P/WR/Final/Report/Case A/{operation}"}
+    assert case_finalization._recorded_outputs(plan, wrong, files, []) is None

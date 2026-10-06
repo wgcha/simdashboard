@@ -77,7 +77,7 @@ export const DEPTH_DEVIATION_LABELS: Record<string, string> = {
   ENV_KEYWORD_NONE: '의뢰명에 사용·유통 없음',
   WORKING_MISSING: 'Working 폴더 없음',
   UNEXPECTED_REQUEST_CHILD: '의뢰 아래 Working·Final 외 폴더',
-  UNEXPECTED_FINAL_CHILD: 'Final 아래 CAE·Reports·CAD 외 폴더',
+  UNEXPECTED_FINAL_CHILD: 'Final 아래 CAE·Report·CAD 외 폴더',
   FINAL_VERSION_INVALID: 'Final 버전 폴더 이름 형식 아님',
 }
 export const BLOCKING_DEVIATIONS = new Set(['ENV_KEYWORD_BOTH', 'ENV_KEYWORD_NONE', 'WORKING_MISSING', 'UNEXPECTED_REQUEST_CHILD'])

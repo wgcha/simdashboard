@@ -7,7 +7,7 @@ type Tab = DepthSampleSegment
 const TABS: Array<[Tab, string]> = [['UPPER', '상위 구조'], ['USAGE', '사용환경'], ['DISTRIBUTION', '유통환경']]
 const FINAL_STRUCTURE: Array<[string, string, string]> = [
   ['L1', 'Final', 'Final 보관 영역 (이름으로 판정, 선택)'],
-  ['L2', 'CAE · Reports · CAD', 'CAE 해석 파일 · Reports 보고서 · CAD (하위는 내용물)'],
+  ['L2', 'CAE · Report · CAD', 'CAE 해석 파일 · Report 보고서 · CAD (하위는 내용물)'],
   ['L3', '<Case>', '해석 Case'],
   ['L4', '<finalization_id>', 'Final 버전 (32자리 hex)'],
   ['L5~', '…', 'Working의 L3 이후 구조를 그대로 미러'],

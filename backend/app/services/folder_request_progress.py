@@ -196,7 +196,7 @@ def _scene_has_input(root, relative_path: str) -> bool:
 
 def _final_state(conn: ConnectionLike, project_id: str, request_id: str,
                  environment: str) -> tuple[dict[str, Any], dict[str, Any]]:
-    """FINAL from the signed completion record; a Reports-folder failure only affects REPORT."""
+    """FINAL from the signed completion record; a Final/Report folder failure only affects REPORT (§15 D21)."""
     from . import case_finalization
     try:
         record, report_names = case_finalization.latest_completed(

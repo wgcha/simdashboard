@@ -1,8 +1,10 @@
 """Durable, hash-pinned publication of one confirmed Case to Final.
 
 Layout (DEPTH_V1 D11/D12): ``Final/CAE/<Case>/<operation_id>/<Working Case mirror>``
-holds every input and result file of the basis Scenes; ``Final/Reports/<Case>/<operation_id>/``
-holds only the app-generated PPTX/HTML reports uploaded for the operation.
+holds every input and result file of the basis Scenes; ``Final/Report/<Case>/<operation_id>/``
+holds only the app-generated PPTX/HTML reports uploaded for the operation (§15 D21: the folder is
+``Report``; a legacy ``Final/Reports`` folder is never read or written). The output-path key
+``Reports`` is an internal record key and is kept.
 Signed plan/report/complete records live in ``Final/.finalizations/<operation_id>/``.
 """
 from __future__ import annotations
@@ -47,6 +49,9 @@ REPORT_EXTENSIONS = SCENE_REPORT_EXTENSIONS
 DECK_EXTENSIONS = {".rad", ".inc"}
 _OPERATION_ID = re.compile(r"^[0-9a-f]{32}$")
 PLAN_VERSION = 2
+# §15 D21: output-path key -> Final child folder name. ``Reports`` stays the record key.
+OUTPUT_FOLDERS = {"CAE": "CAE", "Reports": "Report"}
+LEGACY_REPORTS_FOLDER = "Reports"
 PLAN_DOMAIN = b"case-finalization:plan:v1\0"
 COMPLETE_DOMAIN = b"case-finalization:complete:v1\0"
 REPORTS_DOMAIN = b"case-finalization:reports:v1\0"
@@ -741,7 +746,7 @@ def _target_directory(scope: dict[str, Any], plan: dict[str, Any], category: str
     case_label = str(plan.get("case_label") or "")
     if not spdm_storage._valid_windows_name(case_label):
         raise CaseFinalizationError("FINALIZATION_CASE_LABEL_INVALID", "Case 이름을 안전한 Windows 폴더 이름으로 사용할 수 없습니다.")
-    relative = f"{plan['final_relative_path']}/{category}/{case_label}/{plan['operation_id']}"
+    relative = f"{plan['final_relative_path']}/{OUTPUT_FOLDERS[category]}/{case_label}/{plan['operation_id']}"
     return relative, _ensure_dir(scope["root"], relative)
 
 
@@ -751,7 +756,33 @@ def _expected_output_paths(plan: dict[str, Any]) -> dict[str, str]:
     final_relative = _relative(str(plan.get("final_relative_path") or ""))
     if not _OPERATION_ID.fullmatch(operation_id) or not spdm_storage._valid_windows_name(case_label):
         raise CaseFinalizationError("FINALIZATION_PLAN_INVALID", "최종확정 계획의 출력 경로가 올바르지 않습니다.")
-    return {category: f"{final_relative}/{category}/{case_label}/{operation_id}" for category in ("CAE", "Reports")}
+    return {category: f"{final_relative}/{folder}/{case_label}/{operation_id}" for category, folder in OUTPUT_FOLDERS.items()}
+
+
+def _legacy_reports_path(plan: dict[str, Any]) -> str:
+    """Pre-§15 D21 ``Final/Reports/<Case>/<operation_id>`` of a plan, built from its components."""
+    _expected_output_paths(plan)  # same component validation
+    final_relative = _relative(str(plan.get("final_relative_path") or ""))
+    return f"{final_relative}/{LEGACY_REPORTS_FOLDER}/{plan['case_label']}/{plan['operation_id']}"
+
+
+def _recorded_outputs(plan: dict[str, Any], recorded: Any, files: list[dict[str, Any]],
+                      reports: Any) -> tuple[dict[str, Any], dict[str, str], Any, dict[str, str]] | None:
+    """(plan view, paths to verify, reports to verify, paths to show) for a completed record.
+
+    Records signed before §15 D21 point their report key at ``Final/Reports``. That
+    folder is not recognized any more: the record still stands on its CAE outputs and
+    shows no reports (version-1 result mirrors under ``Final/Reports`` are dropped too).
+    ``None`` when the signed paths match neither layout.
+    """
+    expected = _expected_output_paths(plan)
+    if recorded == expected:
+        return plan, expected, reports, expected
+    legacy = {**expected, "Reports": _legacy_reports_path(plan)}
+    if recorded != legacy:
+        return None
+    view = {**plan, "files": [item for item in files if isinstance(item, dict) and item.get("category") == "CAE"]}
+    return view, {"CAE": expected["CAE"]}, ([] if isinstance(reports, list) else reports), expected
 
 
 def _copy_one(scope: dict[str, Any], plan: dict[str, Any], item: dict[str, Any], target_root: str | Path) -> str:
@@ -1456,7 +1487,7 @@ def _verify_outputs(scope: dict[str, Any], plan: dict[str, Any], output_paths: d
 
 
 def _reports_directory_entries(root: Path, relative: str, operation_id: str) -> list[tuple[str, bool]]:
-    """Entries of this operation's Final/Reports folder, without its own partial temp files."""
+    """Entries of this operation's Final/Report folder, without its own partial temp files."""
     fs = LocalFsProvider(root)
     try:
         path = result_registration_paths._safe_existing(root, relative, allow_missing_leaf=True)
@@ -1464,7 +1495,7 @@ def _reports_directory_entries(root: Path, relative: str, operation_id: str) -> 
             return []
         fs.assert_safe(path)
         if not fs.is_dir(path):
-            raise CaseFinalizationError("FINALIZATION_REPORTS_UNEXPECTED_FILE", "Final/Reports 보고서 폴더 자리에 다른 항목이 있습니다. 기존 자료를 보존하고 관리자에게 문의하세요.")
+            raise CaseFinalizationError("FINALIZATION_REPORTS_UNEXPECTED_FILE", "Final/Report 보고서 폴더 자리에 다른 항목이 있습니다. 기존 자료를 보존하고 관리자에게 문의하세요.")
         entries: list[tuple[str, bool]] = []
         for entry in fs.list(path):
             is_file = entry.kind == "file"
@@ -1481,7 +1512,7 @@ def _reports_directory_entries(root: Path, relative: str, operation_id: str) -> 
     except spdm_storage.SpdmStorageError as exc:
         raise CaseFinalizationError(exc.code, str(exc)) from exc
     except OSError as exc:
-        raise CaseFinalizationError("FINALIZATION_SOURCE_UNAVAILABLE", "Final/Reports 보고서 폴더를 읽을 수 없습니다.") from exc
+        raise CaseFinalizationError("FINALIZATION_SOURCE_UNAVAILABLE", "Final/Report 보고서 폴더를 읽을 수 없습니다.") from exc
 
 
 def _check_reports_before_publish(root: Path, plan: dict[str, Any], operation_id: str, formats: list[str],
@@ -1492,21 +1523,21 @@ def _check_reports_before_publish(root: Path, plan: dict[str, Any], operation_id
     for name, is_file in _reports_directory_entries(root, relative, operation_id):
         fmt = known.get(name.casefold())
         if not is_file or fmt is None:
-            raise CaseFinalizationError("FINALIZATION_REPORTS_UNEXPECTED_FILE", f"Final/Reports 보고서 폴더에 이 Final 지정이 만들지 않은 항목이 있습니다: {name}. 기존 자료를 보존하고 관리자에게 문의하세요.")
+            raise CaseFinalizationError("FINALIZATION_REPORTS_UNEXPECTED_FILE", f"Final/Report 보고서 폴더에 이 Final 지정이 만들지 않은 항목이 있습니다: {name}. 기존 자료를 보존하고 관리자에게 문의하세요.")
         if fmt in formats:
             continue  # Replaced or kept by _publish_report under its own history rule.
         digest, _size = _hash_path(f"{relative}/{name}", root, MAX_REPORT_BYTES[fmt])
         if digest in (history.get(fmt) or []):
             raise CaseFinalizationError("FINALIZATION_REPORT_FORMATS_MISMATCH", f"이전 시도에서 {fmt.upper()} 보고서가 이미 저장되었습니다. {fmt.upper()}를 포함해 다시 시도하세요.")
-        raise CaseFinalizationError("FINALIZATION_REPORTS_UNEXPECTED_FILE", f"Final/Reports 보고서 폴더에 이 Final 지정이 만들지 않은 파일이 있습니다: {name}. 기존 자료를 보존하고 관리자에게 문의하세요.")
+        raise CaseFinalizationError("FINALIZATION_REPORTS_UNEXPECTED_FILE", f"Final/Report 보고서 폴더에 이 Final 지정이 만들지 않은 파일이 있습니다: {name}. 기존 자료를 보존하고 관리자에게 문의하세요.")
 
 
 def _assert_reports_exact(root: Path, plan: dict[str, Any], operation_id: str, reports: list[dict[str, Any]]) -> None:
-    """Before complete.json: the Reports folder holds exactly the recorded reports (nothing is deleted)."""
+    """Before complete.json: the Final/Report folder holds exactly the recorded reports (nothing is deleted)."""
     entries = _reports_directory_entries(root, _expected_output_paths(plan)["Reports"], operation_id)
     expected = sorted(str(item["file_name"]).casefold() for item in reports)
     if not all(is_file for _name, is_file in entries) or sorted(name.casefold() for name, _ in entries) != expected:
-        raise CaseFinalizationError("FINALIZATION_REPORTS_UNEXPECTED_FILE", "Final/Reports 보고서 폴더의 파일이 기록할 보고서와 다릅니다. 기존 자료를 보존하고 관리자에게 문의하세요.")
+        raise CaseFinalizationError("FINALIZATION_REPORTS_UNEXPECTED_FILE", "Final/Report 보고서 폴더의 파일이 기록할 보고서와 다릅니다. 기존 자료를 보존하고 관리자에게 문의하세요.")
 
 
 def _remove_staged_reports(root: Path, operation_dir: str, plan: dict[str, Any], history: dict[str, Any]) -> None:
@@ -1592,19 +1623,20 @@ def _completed_if_valid(conn: ConnectionLike, base_scope: dict[str, Any], *, pro
         if not _plan_sources_valid(conn, plan, project_id=project_id, request_id=request_id,
                                    environment=environment, case_id=case_id, case_path=base_scope["case_path"]):
             return None
-        expected_outputs = _expected_output_paths(plan)
         reports = complete.get("reports")
+        layout = _recorded_outputs(plan, complete.get("output_paths"), plan.get("files") or [], reports)
         if (complete.get("status") != "COMPLETE" or complete.get("operation_id") != operation_id
                 or complete.get("project_id") != project_id or complete.get("request_id") != request_id
                 or complete.get("environment") != str(environment).upper() or complete.get("case_id") != case_id
                 or complete.get("capture_id") != capture_id or complete.get("files") != plan.get("files")
-                or complete.get("output_paths") != expected_outputs
+                or layout is None
                 or complete.get("plan_sha256") != _plan_hash(plan)
                 or not _valid_report_records(plan, reports)):
             return None
-        if not _verify_outputs(base_scope, plan, expected_outputs, reports):
+        view, verify_paths, verify_reports, shown_paths = layout
+        if not _verify_outputs(base_scope, view, verify_paths, verify_reports):
             return None
-        return _completed_response(plan, complete)
+        return _completed_response(view, {**complete, "output_paths": shown_paths, "reports": verify_reports})
     except (CaseFinalizationError, result_registration_paths.ResultRegistrationError,
             spdm_storage.SpdmStorageError, OSError, TypeError, ValueError, KeyError):
         return None
@@ -1674,6 +1706,12 @@ def confirm(conn: ConnectionLike, *, project_id: str, request_id: str, environme
         history = dict((staged or {}).get("history") or {})
         # Before anything is copied: an earlier attempt of this operation may already have
         # published a report; completing without it would leave an unrecorded file behind.
+        # §15 D21: an attempt by an earlier build may have published into the legacy
+        # Final/Reports folder; completing now would leave those reports unrecorded.
+        if _reports_directory_entries(root, _legacy_reports_path(plan), operation_id):
+            raise CaseFinalizationError(
+                "FINALIZATION_LEGACY_REPORTS_PRESENT",
+                "이전 버전이 Final/Reports에 보고서를 남겼습니다. 폴더를 Final/Report로 옮기거나 정리한 뒤 다시 시도하세요.")
         _check_reports_before_publish(root, plan, operation_id, formats, history)
         output_paths: dict[str, str] = {}
         targets: dict[str, str] = {}
@@ -1681,7 +1719,7 @@ def confirm(conn: ConnectionLike, *, project_id: str, request_id: str, environme
         output_paths["CAE"], targets["CAE"] = relative, path
         for item in plan["files"]:
             _copy_one(scope, plan, item, targets["CAE"])
-        # Reports are published last so a CAE failure leaves nothing in Final/Reports.
+        # Reports are published last so a CAE failure leaves nothing in Final/Report.
         relative, path = _target_directory(scope, plan, "Reports")
         output_paths["Reports"], targets["Reports"] = relative, path
         for report in reports:
@@ -1785,7 +1823,7 @@ def _status_operation(conn: ConnectionLike, scope: dict[str, Any], project_id: s
                                environment=environment, case_id=case_id, case_path=str(case_record[3])):
         return None, None, True, None
     version = plan.get("schema_version")
-    # Version 1 (before 2026-10-03) mirrored results/Scene reports into Final/Reports.
+    # Version 1 (before 2026-10-03) mirrored results/Scene reports into Final/Reports (not recognized since §15 D21).
     categories = {"CAE", "Reports"} if version == 1 else {"CAE"}
     bases = ({"SELECTED_CAPTURE", "CURRENT_CONFIRMED_SCENE"} if version == 1
              else {"SOURCE_CAPTURE", "CURRENT_CONFIRMED_SCENE"})
@@ -1810,20 +1848,23 @@ def _status_operation(conn: ConnectionLike, scope: dict[str, Any], project_id: s
     fs.assert_safe(complete_path)
     completed = _read_json(root, complete_path, status_metadata_budget=metadata_budget)
     reports = completed.get("reports") if completed else None
+    layout = _recorded_outputs(plan, completed.get("output_paths"), files, reports) if completed else None
     if (not completed or not _verify_signed_record(completed, "complete_signature", COMPLETE_DOMAIN)
             or completed.get("status") != "COMPLETE" or completed.get("operation_id") != operation_id
             or completed.get("project_id") != project_id or completed.get("request_id") != request_id
             or completed.get("environment") != str(environment).upper() or completed.get("case_id") != case_id
             or completed.get("capture_id") != plan.get("capture_id") or completed.get("files") != files
-            or completed.get("output_paths") != expected_outputs
+            or layout is None
             or completed.get("plan_sha256") != _plan_hash(plan)
             or not _valid_report_records(plan, reports)):
         return None, None, True, None
-    output_bytes += sum(item["size"] for item in reports or [])
-    if not _verify_outputs(scope, plan, expected_outputs, reports, deep=False):
+    view, verify_paths, verify_reports, shown_paths = layout
+    output_bytes = sum(file["size"] for file in view["files"]) + sum(item["size"] for item in verify_reports or [])
+    if not _verify_outputs(scope, view, verify_paths, verify_reports, deep=False):
         return None, None, True, None
-    deep = {"expected_outputs": expected_outputs, "reports": reports, "output_bytes": output_bytes}
-    return plan, _completed_response(plan, completed), False, deep
+    deep = {"plan": view, "expected_outputs": verify_paths, "reports": verify_reports, "output_bytes": output_bytes}
+    response = _completed_response(view, {**completed, "output_paths": shown_paths, "reports": verify_reports})
+    return plan, response, False, deep
 
 
 def _scan_operations(conn: ConnectionLike, scope: dict[str, Any], project_id: str, request_id: str,
@@ -1900,7 +1941,7 @@ def status(conn: ConnectionLike, *, project_id: str, request_id: str, environmen
                 )
             verification_budget[0] += deep["output_bytes"]
             try:
-                verified[operation_id] = _verify_outputs(scope, plan, deep["expected_outputs"], deep["reports"])
+                verified[operation_id] = _verify_outputs(scope, deep["plan"], deep["expected_outputs"], deep["reports"])
             except (CaseFinalizationError, result_registration_paths.ResultRegistrationError,
                     spdm_storage.SpdmStorageError, OSError, TypeError, ValueError, KeyError):
                 verified[operation_id] = False
@@ -1919,9 +1960,10 @@ def status(conn: ConnectionLike, *, project_id: str, request_id: str, environmen
 
 def latest_completed(conn: ConnectionLike, *, project_id: str, request_id: str,
                      environment: str) -> tuple[dict[str, Any] | None, list[str] | None]:
-    """Request-wide newest completed Final record and the file names in its Reports folder.
+    """Request-wide newest completed Final record and the file names in its ``Final/Report`` folder.
 
-    The names are ``None`` when that Reports folder cannot be read; the record still stands.
+    The names are ``None`` when that folder cannot be read; the record still stands. A legacy
+    ``Final/Reports`` folder is never read (§15 D21), so such a record has no reports.
 
     Same signed-record, scope and output existence/size checks as ``status`` but no
     content hashing (folder-request-progress.md P5: names and sizes only, no writes).

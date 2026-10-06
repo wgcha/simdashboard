@@ -816,11 +816,21 @@ def _interpret_depth(raw, root_key, environment, project_id, request_id, rules, 
     return out
 
 
-def depth_visible_paths(nodes) -> list[str]:
-    """Scan node paths a DEPTH_V1 interpretation keeps (ignored folders removed)."""
-    return [str(node["relative_path"]) for node in nodes
-            if not any(environment_folder_profiles.is_ignored_name(part)
-                       for part in str(node["relative_path"]).split("/") if part)]
+def depth_visible_paths(nodes, rules=None) -> list[str]:
+    """Scan node paths a DEPTH_V1 interpretation keeps (ignored folders removed).
+
+    With ``rules`` the request-level project CAD/Report folders (§15 D22) are
+    removed too, exactly as :func:`_interpret_depth` drops them.
+    """
+    kept = []
+    for node in nodes:
+        parts = [part for part in str(node["relative_path"]).split("/") if part]
+        if any(environment_folder_profiles.is_ignored_name(part) for part in parts):
+            continue
+        if rules is not None and parts and environment_folder_profiles.resolve_path(parts, rules) is None:
+            continue
+        kept.append(str(node["relative_path"]))
+    return kept
 
 
 def is_final_segment(node) -> bool:
@@ -1493,7 +1503,7 @@ def register(conn, preview_id, idempotency_key, capture, principal, root, *, cre
     saved_paths = [item["relative_path"] for item in saved_tree]
     fresh_paths = [item["relative_path"] for item in fresh["nodes"]]
     if environment_folder_profiles.is_depth_rules(scan_rules):
-        fresh_paths = depth_visible_paths(fresh["nodes"])
+        fresh_paths = depth_visible_paths(fresh["nodes"], scan_rules)
     if fresh["status"] != "COMPLETE" or fresh_paths != saved_paths or root_identity(root) != scan_row[0]:
         legacy.fail("ENVIRONMENT_SCAN_STALE", "조사 이후 폴더 구조 또는 저장소가 변경되었습니다. 다시 조사하세요.")
     registration_id = ident("environment-registration")

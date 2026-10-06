@@ -25,7 +25,7 @@ test.describe('환경 폴더 연결', () => {
       { id: 'n-project', name: 'Project_9301_Preview', relative_path: 'Project_9301_Preview', parent_path: '', depth: 0, allowed_roles: ['PROJECT'], role_kind: 'PROJECT', status: 'CONFIRMED' },
       { id: 'n-request', name: 'WR_9301_SimType1', relative_path: root, parent_path: 'Project_9301_Preview', depth: 1, level: 2, segment: 'UPPER', role_basis: 'DEPTH_SCHEMA', allowed_roles: ['REQUEST'], role_kind: 'REQUEST', status: 'CONFIRMED' },
       // DEPTH_V1: a warning deviation (non-blocking) is shown as a badge; the role cannot be changed in place.
-      { id: 'n-final-other', name: 'Other', relative_path: `${root}/Final/Other`, parent_path: `${root}/Final`, depth: 3, level: 2, segment: 'FINAL', role_basis: 'DEPTH_SCHEMA', allowed_roles: [], role_kind: null, status: 'UNRESOLVED', deviation: { code: 'UNEXPECTED_FINAL_CHILD', message: 'Final 아래에는 CAE·Reports·CAD만 둘 수 있습니다.' } },
+      { id: 'n-final-other', name: 'Other', relative_path: `${root}/Final/Other`, parent_path: `${root}/Final`, depth: 3, level: 2, segment: 'FINAL', role_basis: 'DEPTH_SCHEMA', allowed_roles: [], role_kind: null, status: 'UNRESOLVED', deviation: { code: 'UNEXPECTED_FINAL_CHILD', message: 'Final 아래에는 CAE·Report·CAD만 둘 수 있습니다.' } },
       { id: 'n-case', name: caseName, relative_path: casePath, parent_path: root, depth: 2, allowed_roles: ['SIMULATION_CASE'], role_kind: 'SIMULATION_CASE', status: 'CONFIRMED' },
       { id: 'n-load', name: 'Drop', relative_path: `${casePath}/Drop`, parent_path: casePath, depth: 3, allowed_roles: ['LOAD_CASE'], role_kind: 'LOAD_CASE', status: 'CONFIRMED' },
       { id: 'n-run', name: runName, relative_path: `${casePath}/Drop/${runName}`, parent_path: `${casePath}/Drop`, depth: 4, allowed_roles: ['EXECUTION_RUN'], role_kind: 'EXECUTION_RUN', status: 'CONFIRMED' },
@@ -66,11 +66,11 @@ test.describe('환경 폴더 연결', () => {
     await expect(detail.locator('select[aria-label="선택 폴더 역할"]')).toHaveCount(0)
     await expect(detail).toContainText('L2')
     const deviated = screen.locator('.folder-node-button').filter({ hasText: 'Other' })
-    await expect(deviated.locator('.folder-deviation-badge.warning')).toHaveText('Final 아래 CAE·Reports·CAD 외 폴더')
+    await expect(deviated.locator('.folder-deviation-badge.warning')).toHaveText('Final 아래 CAE·Report·CAD 외 폴더')
     await deviated.click()
     await expect(detail.getByLabel('선택 폴더 역할')).toHaveText('확인 필요')
     await expect(detail.locator('.folder-deviation-badge.warning')).toBeVisible()
-    await expect(detail.getByRole('alert')).toHaveText('Final 아래에는 CAE·Reports·CAD만 둘 수 있습니다.')
+    await expect(detail.getByRole('alert')).toHaveText('Final 아래에는 CAE·Report·CAD만 둘 수 있습니다.')
     await expect(detail).toContainText('“저장된 규칙” 탭에서 깊이별 역할을 수정하세요')
     await screen.getByRole('button', { name: '등록 내용 확인' }).click()
     await expect(screen).toContainText('확인 필요 0')
