@@ -24,8 +24,8 @@
 | D8 | 사용환경의 `EVALUATION` 역할을 `SCENE`으로 통합한다. 두 환경 모두 Scene을 쓴다 |
 | D9 | 스키마를 저장해도 기존 등록 의뢰는 변경하지 않는다. 의뢰 화면의 **재해석** 버튼으로만 새 스키마를 적용한다 |
 | D10 | 하위 L1은 **이름으로** 구분한다. `Working`(필수)과 `Final`(선택, Final 지정 후 생성). `Final`도 스키마 대상이다 |
-| D11 | Final 하위 L2는 이름으로 구분한다. `CAE` = 해석 입력·결과 파일, `Reports` = 보고서 기능이 만든 PPTX·HTML(사용자가 Final 지정 때 하나 이상 선택, PDF는 만들지 않음). 앱의 SPDM 쓰기는 이 두 폴더로만 한다 |
-| D12 | Final/CAE·Reports의 L3 이하는 고정 구조다: `<Case>/<finalization_id>/` 아래에 Working의 Case 이하 구조를 그대로 미러링한다. 관리자 편집 대상이 아니며 UI에 읽기 전용으로 표시한다 |
+| D11 | Final 하위 L2는 이름으로 구분한다. `CAE` = 해석 입력·결과 파일, `Report` = 보고서 기능이 만든 PPTX·HTML(사용자가 Final 지정 때 하나 이상 선택, PDF는 만들지 않음). 앱의 SPDM 쓰기는 이 두 폴더로만 한다 |
+| D12 | Final/CAE·Report의 L3 이하는 고정 구조다: `<Case>/<finalization_id>/` 아래에 Working의 Case 이하 구조를 그대로 미러링한다. 관리자 편집 대상이 아니며 UI에 읽기 전용으로 표시한다 |
 
 ## 3. 표준 트리
 
@@ -39,7 +39,7 @@ Root                                   L0 (역할 없음)
       │  │  └─ <Case>                   L3 SIMULATION_CASE
       │  │     └─ <finalization_id>     L4 FINAL_VERSION  32자리 hex
       │  │        └─ …                  L5~ = Working의 Case 이하 구조 미러 (사용: Scene / 유통: LoadCase/Run/RunOption/Scene)
-      │  ├─ Reports                     L2 FINAL_REPORTS  보고서 PPTX·HTML
+      │  ├─ Report                      L2 FINAL_REPORTS  보고서 PPTX·HTML
       │  └─ CAD                         L2 FINAL_CAD      하위는 CONTENT (앱 쓰기 없음) — 미확정, §12
       │     └─ <Case>/<finalization_id>/…  CAE와 같은 구조
       └─ Working                       하위 L1 WORKING (이름으로 판정, 필수)
@@ -94,7 +94,7 @@ Root                                   L0 (역할 없음)
     "fixed": true,
     "children": [
       { "name": "CAE", "role": "FINAL_CAE" },
-      { "name": "Reports", "role": "FINAL_REPORTS" },
+      { "name": "Report", "role": "FINAL_REPORTS" },
       { "name": "CAD", "role": "FINAL_CAD", "below": "CONTENT" }
     ],
     "ignored": [".finalizations"],
@@ -114,7 +114,7 @@ USAGE 행은 `environment_keyword: "사용"`, `lower.levels = [WORKING(fixed), S
 | final | `fixed: true`. 서버 상수이며 PUT으로 변경할 수 없다(요청에 포함되면 무시) |
 | lower 공통 | L1 = `WORKING`(fixed_name). L2 = `SIMULATION_CASE`. 마지막은 `SCENE`. `CONTAINER`는 중간 통과 레벨로만 허용 |
 | DISTRIBUTION | `RUN_OPTION` 레벨 필수 |
-| 이름 제한 | 레벨 항목에 `allowed_names` 등 이름 조건을 둘 수 없다(있으면 422). 이름으로 판정하는 곳은 하위 L1(Working/Final)과 Final L2(CAE/Reports/CAD)뿐이다 |
+| 이름 제한 | 레벨 항목에 `allowed_names` 등 이름 조건을 둘 수 없다(있으면 422). 이름으로 판정하는 곳은 하위 L1(Working/Final)과 Final L2(CAE/Report/CAD)뿐이다 |
 | 역할 집합 | USAGE: PROJECT, REQUEST, WORKING, FINAL, FINAL_CAE, FINAL_REPORTS, FINAL_CAD, FINAL_VERSION, SIMULATION_CASE, SCENE, CONTAINER. DISTRIBUTION: 여기에 LOAD_CASE, EXECUTION_RUN, RUN_OPTION 추가. `EVALUATION`, `RESULTS`, `INPUT`은 새 스키마에서 사용 불가 |
 | keyword | USAGE는 `사용`, DISTRIBUTION은 `유통`으로 고정(편집 불가) |
 
@@ -134,7 +134,7 @@ USAGE 행은 `environment_keyword: "사용"`, `lower.levels = [WORKING(fixed), S
 4. **하위 구간**: k = d − request_level일 때
    - k=1은 **이름으로** 판정(casefold): `Working` → WORKING, `Final` → FINAL. 그 외 이름은 `UNEXPECTED_REQUEST_CHILD`
    - Final 가지 (D11, D12)
-     - k=2: `CAE` → FINAL_CAE, `Reports` → FINAL_REPORTS, `CAD` → FINAL_CAD(이하 CONTENT), `.finalizations` → 무시. 그 외 이름은 `UNEXPECTED_FINAL_CHILD`
+     - k=2: `CAE` → FINAL_CAE, `Report` → FINAL_REPORTS, `CAD` → FINAL_CAD(이하 CONTENT), `.finalizations` → 무시. 그 외 이름은 `UNEXPECTED_FINAL_CHILD`
      - k=3: SIMULATION_CASE
      - k=4: FINAL_VERSION. 이름이 32자리 hex가 아니면 `FINAL_VERSION_INVALID`
      - k≥5: Working 하위 구간의 L3 이후 역할을 적용(미러)
@@ -157,8 +157,8 @@ USAGE 행은 `environment_keyword: "사용"`, `lower.levels = [WORKING(fixed), S
 | `ENV_KEYWORD_NONE` | 의뢰명에 키워드 없음 | 차단 |
 | `WORKING_MISSING` | 의뢰 아래 Working 없음 | 차단 |
 | `UNEXPECTED_REQUEST_CHILD` | 의뢰 바로 아래에 Working/Final 이외 폴더 | 차단 |
-| `UNEXPECTED_FINAL_CHILD` | Final 바로 아래에 CAE/Reports/CAD/.finalizations 이외 폴더 | 경고(등록 허용) |
-| `FINAL_VERSION_INVALID` | Final/CAE·Reports/<Case> 아래 폴더명이 finalization id 형식이 아님 | 경고(등록 허용) |
+| `UNEXPECTED_FINAL_CHILD` | Final 바로 아래에 CAE/Report/CAD/.finalizations 이외 폴더 | 경고(등록 허용) |
+| `FINAL_VERSION_INVALID` | Final/CAE·Report/<Case> 아래 폴더명이 finalization id 형식이 아님 | 경고(등록 허용) |
 
 ## 6. API
 
@@ -190,7 +190,7 @@ USAGE 행은 `environment_keyword: "사용"`, `lower.levels = [WORKING(fixed), S
 - `FolderEnvironmentPanels.FolderProfileEditor` → `DepthSchemaEditor`로 교체한다.
   - 탭 3개: 상위 구조 / 사용환경 / 유통환경
   - 탭마다 표 1개: `깊이 | 예시 폴더(이름×개수, +N) | 폴더 수 | 역할 select`
-  - Root 행은 표시만 하고, 하위 탭의 L1 Working 행은 잠근다. 하위 탭 아래에 Final 고정 구조(L1 Final / L2 CAE·Reports / L3 Case / L4 버전 / L5~ 미러)를 읽기 전용으로 함께 표시한다.
+  - Root 행은 표시만 하고, 하위 탭의 L1 Working 행은 잠근다. 하위 탭 아래에 Final 고정 구조(L1 Final / L2 CAE·Report / L3 Case / L4 버전 / L5~ 미러)를 읽기 전용으로 함께 표시한다.
   - 유통 탭의 RUN_OPTION 행은 예시 대신 **RunOption 이름 전체 목록**(이름 · 폴더 수 · 의뢰 수)을 펼쳐 보여준다. 읽기 전용이다.
   - 탭을 열면 `samples`를 자동 호출한다. 행 수는 샘플 깊이에 맞춰 자동이고, 마지막 행 삭제만 가능하다.
   - 버튼은 **확인**(check 결과를 코드별 건수로 표시)과 **저장** 2개뿐이다.
@@ -245,7 +245,7 @@ T1과 T2는 병렬, T3·T4·T5는 T2 이후 병렬, T6과 T7은 T0 이후 병렬
 4. Working 없는 의뢰 → `WORKING_MISSING`
 5. Scene 아래 하위폴더 → CONTENT, 이탈 아님
 6. 스키마 저장 후 기존 등록 의뢰의 refresh가 정상(revision 오류 없음)이고 역할 불변. 재해석 후에만 변경
-7. Final fixture: `CAE`/`Reports` → FINAL_CAE/FINAL_REPORTS, `<Case>/<id>/Drop/…/INDIVIDUAL` → SIMULATION_CASE/FINAL_VERSION/LOAD_CASE/EXECUTION_RUN/RUN_OPTION, `.finalizations` 무시. Final 하위 파일은 결과 캡처에 포함되지 않음. 모든 신규 엔드포인트에서 SPDM 쓰기 0건
+7. Final fixture: `CAE`/`Report` → FINAL_CAE/FINAL_REPORTS, `<Case>/<id>/Drop/…/INDIVIDUAL` → SIMULATION_CASE/FINAL_VERSION/LOAD_CASE/EXECUTION_RUN/RUN_OPTION, `.finalizations` 무시. Final 하위 파일은 결과 캡처에 포함되지 않음. 모든 신규 엔드포인트에서 SPDM 쓰기 0건
 8. 사용환경 예제 Case를 등록하면 대시보드 "다섯 평가 종합" 표가 9개 슬롯 모두 채워짐(PARTIAL 없음)
 9. 편집기 버튼은 확인·저장 2개
 10. mypy, tsc, pytest, vitest 통과
@@ -257,7 +257,7 @@ T1과 T2는 병렬, T3·T4·T5는 T2 이후 병렬, T6과 T7은 T0 이후 병렬
 | # | 결정 |
 |---|---|
 | D13 | 관리자는 "등록 이력"의 등록을 삭제할 수 있다. 삭제 범위는 **등록 기록 + 폴더 역할 매핑 + 그 등록이 생성한 업무 데이터**(프로젝트·의뢰·Case·캡처·자산·Final 지정 DB 기록 등)다 |
-| D14 | SPDM 폴더·파일은 어떤 경우에도 지우거나 옮기지 않는다(`.finalizations`, Final/CAE·Reports 포함) |
+| D14 | SPDM 폴더·파일은 어떤 경우에도 지우거나 옮기지 않는다(`.finalizations`, Final/CAE·Report 포함) |
 | D15 | 다른 살아 있는 등록, 수동 연결(SPDM 저장소 연결, 레거시 매핑), 등록 이전부터 존재한 엔터티가 참조하는 데이터는 지우지 않는다. 이런 참조가 삭제 대상 행에 걸려 있으면 **전체를 거부(409)**하고 부분 삭제하지 않는다 |
 | D16 | 등록 행은 물리 삭제하지 않고 `status=DELETED`로 남긴다(묘비). 감사·이력 추적용이다. 이력 화면은 기본으로 DELETED를 숨긴다 |
 | D17 | 삭제된 등록은 "연결됨"으로 치지 않는다. 같은 의뢰 폴더는 이후 자동 탐색이 **새 깊이 스키마로 다시 등록**할 수 있다(목적: 구 스키마 등록 정리 후 재등록) |
@@ -353,6 +353,16 @@ T1과 T2는 병렬, T3·T4·T5는 T2 이후 병렬, T6과 T7은 T0 이후 병렬
 18. Root·프로젝트 수준 조사(의뢰 2개 이상, 사용·유통 각각) → 미리보기 `can_apply=false`, `MULTIPLE_REQUESTS`. 등록 API 직접 호출 시 409, DB 변화 0
 19. 의뢰 폴더 수준 조사(기존 업무 미선택) → 프로젝트 자동 도출, 등록 성공, 모든 Case 결과 읽기 완료(사용·유통 각각). 500 없음
 20. 등록·이력 시각이 KST 화면에서 실제 시각으로 표시(UTC 23:02 → 10.3 오전 8:02)
+
+## 15. 폴더명 정정과 프로젝트 공통 폴더 (2026-10-06)
+
+| # | 결정 |
+|---|---|
+| D21 | Final 하위 보고서 폴더 이름은 `Report`(단수)다. 앱은 `Final/Report`만 쓰고 읽는다. 기존에 만들어진 `Final/Reports`는 인식하지 않는다(그 Final 기록은 보고서 없음으로 보임, 필요하면 사용자가 폴더 이름을 바꾼다). 역할 키 `FINAL_REPORTS`는 내부 식별자로 유지한다 |
+| D22 | 프로젝트 폴더 바로 아래의 `CAD`, `Report` 폴더(이름 대소문자 무시)는 사용자 수동 작업 영역이다. 의뢰 후보가 아니며, 자동 탐색·수동 조사·확인 필요·진척 계산에서 모두 제외(무시)한다. 앱은 여기에 쓰지 않는다 |
+
+- 구현: 상위 스키마의 request_level 폴더 중 이름이 `CAD`/`Report`이면 무시 목록(`.`, `~$` 시작 이름과 같은 취급). `ENV_KEYWORD_NONE` 확인 필요를 만들지 않는다.
+- Verifier: (1) Final 지정·보고서 업로드가 `Final/Report/<Case>/<id>/`에 저장되고 진척 REPORT가 그것으로 완료, (2) 기존 `Final/Reports`만 있는 Final 기록은 REPORT 대기, 오류 없음, (3) `75R9J_PV/CAD`, `75R9J_PV/Report`가 있어도 자동 탐색 needs_review 0건, 등록·스캔 영향 없음, (4) 쓰기 구역(StorageProvider FINAL)이 `Final/Report`로 바뀌고 `Final/Reports` 쓰기는 거부
 
 ## 12. 미확정
 

@@ -13,7 +13,7 @@
 3. 사용환경·유통환경은 각자의 폴더 규칙과 Folder Schema를 가진다.
 4. Case 결과에서 요약·Scene 비교·영상·소재물성을 본다.
 5. 레시피(레이아웃·회사 템플릿)와 사용자 편집으로 PPTX/PDF 보고서를 브라우저로 내려받는다.
-6. 여러 Case 중 best를 **Final 지정**하면 `Final/CAE`에 입력·결과, `Final/Reports`에 PPTX(및 PDF) 보고서가 저장된다.
+6. 여러 Case 중 best를 **Final 지정**하면 `Final/CAE`에 입력·결과, `Final/Report`에 PPTX(및 PDF) 보고서가 저장된다.
 
 ## 2. 현재와의 차이
 
@@ -78,7 +78,7 @@
 ### 3.6 Final 지정
 
 - 흐름: `Final 지정` → Case·capture 확인 → 레시피로 보고서 생성(편집 가능) → 검사 결과와 복사 목록 미리보기 → 확정.
-- 확정 시 브라우저가 만든 PPTX를 서버에 올리고, 서버는 PDF 변환 후 두 파일을 `Final/Reports/<Case>/<확정 ID>/`에 저장한다. 해시를 확정 기록에 포함한다. 같은 파일은 사용자에게도 다운로드된다.
+- 확정 시 브라우저가 만든 PPTX를 서버에 올리고, 서버는 PDF 변환 후 두 파일을 `Final/Report/<Case>/<확정 ID>/`에 저장한다. 해시를 확정 기록에 포함한다. 같은 파일은 사용자에게도 다운로드된다.
 - `Final/CAE`(입력·결과)와 기존 확정 기록·HMAC 서명·재시도·멱등 규칙은 [최종확정 계약](../features/case-finalization.md)을 유지한다. 보고서 업로드 실패 시 CAE 복사만으로 완료 처리하지 않는다.
 
 ## 4. 구현 순서와 완료 조건
@@ -91,7 +91,7 @@
 | 3 | A안 화면, 문구 정리, 영상 그리드·소재 탭 통합 | 필수 버튼 2개, 단일 후보 글자 표시, 내부 코드 미노출. 1440/1920·11~18pt·라이트/다크 스크린샷 확인. |
 | 4 | 등록 단순화 | Scene 선택 후 복사 한 화면. 덮어쓰기 거부·경로 경계·권한 회귀. |
 | 5 | Case 보고서(PPTX·HTML) | 선택 범위와 값·미디어 일치, 형식 하나 이상 선택, HTML 영상 포함 선택·상한. PDF 구현 없음(23:58 결정). |
-| 6 | Final 지정에 보고서·검사 포함 | Final/Reports에 사용자가 고른 PPTX·HTML, Final/CAE에 입력·결과. 중복 클릭·부분 실패 재시도 멱등. |
+| 6 | Final 지정에 보고서·검사 포함 | Final/Report에 사용자가 고른 PPTX·HTML, Final/CAE에 입력·결과. 중복 클릭·부분 실패 재시도 멱등. |
 
 0~1은 이후 단계의 기반이다. 2와 3은 병행할 수 있다. 5는 배포 변경을 포함하므로 독립 Astra 최종 검수와 변경분 보안 검수(`security-diff-scan`) 대상이다. 2·4·6도 경로·권한 경계를 바꾸므로 같은 검수 대상이다.
 
@@ -143,11 +143,11 @@
 ### PDF 보류 결정 (2026-10-02 23:51)
 - 회사에 MS Office가 있으므로 웹 프로그램의 PDF 생성은 보류한다. §3.5의 LibreOffice 변환·폐쇄망 패키징은 진행하지 않는다(배포 정책·ADR 변경 없음).
 - 5단계: Case 결과 보고서 PPTX(브라우저 pptxgenjs, 기존 템플릿·편집 재사용) 다운로드만 구현한다.
-- 6단계: Final 지정 시 같은 레시피의 PPTX를 `Final/Reports/<Case>/<Final ID>/`에 저장하고, 입력·결과는 `Final/CAE/<Case>/<Final ID>/<Working 미러>`에 저장한다(DEPTH_V1 D11·D12). 결과 파일을 Reports로 보내던 기존 분류는 CAE로 바꾼다.
+- 6단계: Final 지정 시 같은 레시피의 PPTX를 `Final/Report/<Case>/<Final ID>/`에 저장하고, 입력·결과는 `Final/CAE/<Case>/<Final ID>/<Working 미러>`에 저장한다(DEPTH_V1 D11·D12). 결과 파일을 Reports로 보내던 기존 분류는 CAE로 바꾼다.
 - 중복 의뢰 정리는 다른 세션의 DEPTH_V1 §13(등록 삭제)이 맡는다.
-- 추가 결정(23:56): 보고서는 PPTX와 HTML을 함께 구현하고 사용자가 하나 이상 고른다. HTML 영상 포함은 선택(영상당 보통 1MB 미만; 상한 영상당 20MB·전체 200MB, 넘으면 대표 이미지로 대체). Final/Reports에는 사용자가 고른 PPTX·HTML을 저장하고 PDF는 계약에서 제외한다(depth-schema D11 갱신). 업로드한 HTML은 SPDM에 저장만 하고 앱이 페이지로 제공하지 않는다.
+- 추가 결정(23:56): 보고서는 PPTX와 HTML을 함께 구현하고 사용자가 하나 이상 고른다. HTML 영상 포함은 선택(영상당 보통 1MB 미만; 상한 영상당 20MB·전체 200MB, 넘으면 대표 이미지로 대체). Final/Report에는 사용자가 고른 PPTX·HTML을 저장하고 PDF는 계약에서 제외한다(depth-schema D11 갱신). 업로드한 HTML은 SPDM에 저장만 하고 앱이 페이지로 제공하지 않는다.
 - 추가 결정(23:58): PDF는 사용자가 PPTX·HTML로 직접 만든다. 웹에는 PDF 관련 구현(변환, 인쇄용 스타일 등)을 하지 않는다. §3.5의 PDF·LibreOffice 내용과 §3.6의 PDF 저장은 폐기한다.
 
 ### 6단계 Final 지정 (2026-10-03)
-- Final/CAE에 기준 Scene의 입력·결과 전체(Working 미러), Final/Reports에 사용자가 고른 PPTX·HTML(서버가 이름 결정)만 저장한다. 기준은 화면과 같은 병합 최신 결과(`latest:<Case>`)이고 Scene별 수집본을 서명 계획에 기록한다. 보고서는 확정 ID에 묶인 형식별 업로드 후 확정하며 보고서 없이는 완료되지 않는다. 계약: [최종확정](../features/case-finalization.md).
+- Final/CAE에 기준 Scene의 입력·결과 전체(Working 미러), Final/Report에 사용자가 고른 PPTX·HTML(서버가 이름 결정)만 저장한다. 기준은 화면과 같은 병합 최신 결과(`latest:<Case>`)이고 Scene별 수집본을 서명 계획에 기록한다. 보고서는 확정 ID에 묶인 형식별 업로드 후 확정하며 보고서 없이는 완료되지 않는다. 계약: [최종확정](../features/case-finalization.md).
 - 남은 결정: 사용환경은 보고서 빌더가 없어 Final 지정을 완료할 수 없다.
