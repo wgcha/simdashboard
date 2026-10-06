@@ -79,8 +79,8 @@ export type CaseFinalizationRecord = {
   created_by: string | null
   queued_at?: string | null
   confirmed_at: string
-  /** Status only: `SIZE` when the record was too large for the per-call hash budget (existence and sizes checked). */
-  verification?: 'SHA256' | 'SIZE'
+  /** Status only. `SHA256`: re-hashed now. Over the per-call hash budget: `STAT_SINCE_COMPLETION` (size/mtime/id unchanged since the hash check at completion — not proof of unchanged content) or `SIZE` (existence and sizes only). */
+  verification?: 'SHA256' | 'STAT_SINCE_COMPLETION' | 'SIZE'
 }
 
 export type CaseFinalizationPreview = Omit<CaseFinalizationRecord, 'status' | 'created_by' | 'confirmed_at' | 'reports'> & {

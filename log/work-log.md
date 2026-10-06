@@ -1187,3 +1187,12 @@
 - L2 확인 불가 `complete.json`은 성공 아님(업로드 보관본 유지, `FINALIZATION_COMPLETE_UNVERIFIED`). L3 INVALID/ERROR 시 FAILED 기록. L4 `copied.jsonl` 줄 단위 스트림·1 GiB 초과 시 `FINALIZATION_METADATA_LIMIT`. L5 status/job의 이어하기는 DB 범위(Case·의뢰·root) 재확인 후. L1(POSIX 고정 불가 경쟁)은 문서에 한계로 기록.
 - 검증: 검수자 공격 시나리오를 `test_case_finalization_copy_jobs.py`의 `test_review_*` 12건으로 옮김(수정 전 12건 모두 실패, 수정 후 통과). copy_jobs·reports·environment flow·storage provider(+boundary)·security·folder progress 141 passed/1 skipped(SIZE 기대 2건은 marker 반영해 갱신 후 통과). 프론트 tsc·build, check:architecture 기존 4건만, e2e case-finalization 5/5·folder-working-final Final 2건.
 - 미수행: 실제 Windows·SMB 검증(W9), 재검수, Codex Security(미가용).
+
+## 2026-10-06 W2 재검수 지적 수정 (ac71f73 이후)
+
+- N1: 상태 조회는 해시 예산 안의 표시 기록을 항상 다시 해시(`SHA256`). `verified.json`은 예산 초과 때만 쓰고 별도 표시 `STAT_SINCE_COMPLETION`(헤더 "완료 후 변경 없음(크기·시각 확인)"); 문서에 크기·시각 확인은 내용 동일 증명이 아님을 명시. 검수자 테스트(같은 크기 수정+수정 시각 복원)를 `test_rereview_n1_*`로 이식.
+- N2: `append_bytes`(copied.jsonl) 상위 체인 고정·재확인, 연 핸들과 경로 `lstat`이 같은 일반 파일(링크·reparse 아님, 같은 식별자)일 때만 씀.
+- L5: 시작 시 이어하기도 `_job_scope_current` 통과 작업만(파일 나열은 DB 연결 없이, 범위 확인 때만 연결).
+- L6: 임시 폴더를 한 단계씩, 고정·재확인한 상위 아래에서만 생성.
+- 성능: CAE 읽기 3회(복사·공개 전 해시·공개 후 해시). 공개 후 해시는 `complete.json` 근거라 유지, 공개 전 해시(`VERIFY_STAGED_CONTENT`, 기본 켜짐)는 손상 복사본을 공개 전에 재복사하기 위한 것으로 W9 측정 후 결정 — 문서화.
+- 검증: copy_jobs 33 passed(재검수 이식 N1·N2는 수정 전 실패 확인), reports·environment flow·storage_provider(+boundary)·spdm_storage_workflow·security 123 passed/2 skipped. 프론트 tsc·build, check:architecture 기존 4건만, e2e case-finalization 5/5·folder-working-final Final 2건(나머지 2건은 HEAD에서도 실패). 재검수·Codex Security·W9 실환경 미수행.

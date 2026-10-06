@@ -873,23 +873,35 @@ class LocalFsProvider:
             _rename_no_replace(source, destination)
 
     def append_bytes(self, rel_path: str, data: bytes, *, zone: str, fsync: bool = False) -> None:
-        """Append to a regular single-link file (created when absent), never following a link."""
+        """Append to a regular single-link file (created when absent), never through a link.
+
+        The parent chain is pinned and re-checked; the opened handle must be the same file
+        as the path's own ``lstat`` entry (no symlink/reparse, same id), which also covers
+        Windows where ``O_NOFOLLOW`` does not exist (re-review N2).
+        """
         self._check(zone, rel_path)
         path = self.path(rel_path)
-        flags = (os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0)
-                 | getattr(os, "O_NOFOLLOW", 0))
-        descriptor = os.open(path, flags, 0o666)
-        try:
-            info = os.fstat(descriptor)
-            if not _regular_no_reparse(info) or info.st_nlink != 1:
-                raise SpdmStorageError("FINALIZATION_PATH_UNSAFE", "최종확정 기록 파일이 일반 단일 연결 파일이 아닙니다.")
-            view = memoryview(data)
-            while view:
-                view = view[os.write(descriptor, view):]
-            if fsync:
-                os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
+        unsafe = SpdmStorageError("FINALIZATION_PATH_UNSAFE", "최종확정 기록 파일이 일반 단일 연결 파일이 아닙니다.")
+        with pin_directory_chain(self.root, path.parent):
+            _assert_safe_existing(path.parent, self.root)
+            if os.path.lexists(path) and not _regular_no_reparse(path.lstat()):
+                raise unsafe
+            flags = (os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0)
+                     | getattr(os, "O_NOFOLLOW", 0))
+            descriptor = os.open(path, flags, 0o666)
+            try:
+                opened = os.fstat(descriptor)
+                entry = path.lstat()
+                if (not _regular_no_reparse(opened) or not _regular_no_reparse(entry) or opened.st_nlink != 1
+                        or (opened.st_dev, opened.st_ino) != (entry.st_dev, entry.st_ino)):
+                    raise unsafe
+                view = memoryview(data)
+                while view:
+                    view = view[os.write(descriptor, view):]
+                if fsync:
+                    os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
 
     def try_lock(self, rel_path: str, *, zone: str):
         """:meth:`lock` without waiting (``FINALIZATION_LOCK_BUSY``)."""

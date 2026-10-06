@@ -2107,12 +2107,24 @@ def _ensure_staging_dir(root: Path, relative: str, ensured: set[str]) -> None:
     fs = LocalFsProvider(root)
     _assert_staging_safe(root, relative)
     if relative not in ensured:
-        try:
-            fs.mkdirs(relative, zone=FINAL, parents=True, exist_ok=True)
-        except FileExistsError as exc:
-            raise CaseFinalizationError("FINALIZATION_PATH_CONFLICT", "임시 폴더 자리에 파일이 있습니다.") from exc
-        except OSError as exc:
-            raise _write_failed() from exc
+        # Re-review L6: one level at a time, each created under its pinned, re-checked parent.
+        current = ""
+        for part in PurePosixPath(relative).parts:
+            candidate = fs.join(current, part)
+            if not fs.exists(candidate, follow_links=False):
+                try:
+                    with _pin_directory_chain(root, current):
+                        _assert_staging_safe(root, current)
+                        if current and fs.is_link(current):
+                            raise CaseFinalizationError("FINALIZATION_STAGING_UNSAFE", "임시 폴더 경로에 바로가기(reparse point)가 있습니다.")
+                        fs.mkdirs(candidate, zone=FINAL, parents=False, exist_ok=True)
+                except FileExistsError as exc:
+                    raise CaseFinalizationError("FINALIZATION_PATH_CONFLICT", "임시 폴더 자리에 파일이 있습니다.") from exc
+                except OSError as exc:
+                    raise _write_failed() from exc
+            if fs.is_link(candidate) or not fs.is_dir(candidate):
+                raise CaseFinalizationError("FINALIZATION_STAGING_UNSAFE", "임시 폴더 경로에 바로가기(reparse point)가 있거나 폴더가 아닙니다.")
+            current = candidate
     _assert_staging_safe(root, relative)
     if not fs.is_dir(relative) or fs.is_link(relative):
         raise CaseFinalizationError("FINALIZATION_PATH_CONFLICT", "임시 폴더를 안전하게 만들 수 없습니다.")
@@ -2642,7 +2654,10 @@ def resume_incomplete_jobs(conn: ConnectionLike) -> list[str]:
     for the user's retry.
     """
     targets = _resume_targets(conn)
-    return _resume_in(*targets) if targets else []
+    if not targets:
+        return []
+    root, metadata_dirs = targets
+    return _submit_in_scope(conn, root, _interrupted_jobs(root, metadata_dirs))
 
 
 def _resume_targets(conn: ConnectionLike) -> tuple[Path, list[str]] | None:
@@ -2661,9 +2676,20 @@ def _resume_targets(conn: ConnectionLike) -> tuple[Path, list[str]] | None:
     return root, sorted(metadata_dirs)
 
 
-def _resume_in(root: Path, metadata_dirs: list[str]) -> list[str]:
-    fs = LocalFsProvider(root)
+def _submit_in_scope(conn: ConnectionLike, root: Path, candidates: list[tuple[str, dict[str, Any]]]) -> list[str]:
+    """Re-review L5: startup resumes only jobs whose project/request/Case scope still exists."""
     submitted: list[str] = []
+    for operation_dir, job in candidates:
+        if _job_scope_current(conn, root, job):
+            _submit(root, operation_dir)
+            submitted.append(operation_dir)
+    return submitted
+
+
+def _interrupted_jobs(root: Path, metadata_dirs: list[str]) -> list[tuple[str, dict[str, Any]]]:
+    """QUEUED/RUNNING jobs without ``complete.json`` (filesystem only, no DB connection held)."""
+    fs = LocalFsProvider(root)
+    found: list[tuple[str, dict[str, Any]]] = []
     for metadata_relative in metadata_dirs:
         try:
             metadata_dir = result_registration_paths._safe_existing(root, metadata_relative)
@@ -2680,12 +2706,11 @@ def _resume_in(root: Path, metadata_dirs: list[str]) -> list[str]:
                     continue
                 state = (_read_progress(root, operation_dir, job) or {}).get("state") or "QUEUED"
                 if state in {"QUEUED", "RUNNING"}:
-                    _submit(root, operation_dir)
-                    submitted.append(operation_dir)
+                    found.append((operation_dir, job))
         except (CaseFinalizationError, result_registration_paths.ResultRegistrationError,
                 spdm_storage.SpdmStorageError, OSError):
             continue
-    return submitted
+    return found
 
 
 def start_resume_scan() -> threading.Thread | None:
@@ -2698,7 +2723,13 @@ def start_resume_scan() -> threading.Thread | None:
             from ..database_connection import connect
             with connect() as conn:
                 targets = _resume_targets(conn)
-            resumed = _resume_in(*targets) if targets else []
+            if not targets:
+                return
+            candidates = _interrupted_jobs(*targets)  # filesystem listing without the DB held
+            if not candidates:
+                return
+            with connect() as conn:
+                resumed = _submit_in_scope(conn, targets[0], candidates)
             if resumed:
                 _LOG.info("Resumed %d interrupted Final copy job(s)", len(resumed))
         except Exception:  # noqa: BLE001 - startup must never fail because of this scan
@@ -2893,20 +2924,23 @@ def status(conn: ConnectionLike, *, project_id: str, request_id: str, environmen
                                                                 environment, case_id)
     verified: dict[str, bool] = {}
     size_only: set[str] = set()
+    stat_only: set[str] = set()
     verification_budget = [0]
 
     def deep_ok(plan: dict[str, Any], deep: dict[str, Any]) -> bool:
         nonlocal unverified_count
         operation_id = str(plan["operation_id"])
         if operation_id not in verified:
-            # W2 review M2: outputs unchanged since the hash verification at completion (signed marker).
-            if _verified_marker_matches(scope["root"], deep["operation_dir"], deep["complete"], deep["plan"],
-                                        deep["expected_outputs"], deep["reports"]):
-                verified[operation_id] = True
-                return True
             if verification_budget[0] + deep["output_bytes"] > MAX_STATUS_VERIFY_BYTES:
-                # Existence and recorded sizes were already checked for every record.
-                size_only.add(operation_id)
+                # Over the hash budget only (re-review N1): a record that fits is always re-hashed.
+                # The signed completion marker shows the outputs' size/mtime/id are unchanged since
+                # they were hash-verified; that does not prove the content is unchanged.
+                if _verified_marker_matches(scope["root"], deep["operation_dir"], deep["complete"], deep["plan"],
+                                            deep["expected_outputs"], deep["reports"]):
+                    stat_only.add(operation_id)
+                else:
+                    # Existence and recorded sizes were already checked for every record.
+                    size_only.add(operation_id)
                 verified[operation_id] = True
                 return True
             verification_budget[0] += deep["output_bytes"]
@@ -2926,7 +2960,9 @@ def status(conn: ConnectionLike, *, project_id: str, request_id: str, environmen
     def shown(record: dict[str, Any] | None) -> dict[str, Any] | None:
         if record is None:
             return None
-        return {**record, "verification": "SIZE" if record["operation_id"] in size_only else "SHA256"}
+        operation = record["operation_id"]
+        label = "SIZE" if operation in size_only else "STAT_SINCE_COMPLETION" if operation in stat_only else "SHA256"
+        return {**record, "verification": label}
 
     retryable = sorted(incomplete, key=lambda row: str(row["previewed_at"] or ""), reverse=True)
     active = sorted((row["job"] for row in retryable if row.get("job") and row["job"]["state"] in {"QUEUED", "RUNNING", "FAILED"}),

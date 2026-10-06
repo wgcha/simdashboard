@@ -434,8 +434,8 @@ def test_status_shows_large_records_size_verified_instead_of_failing(admin_clien
     plan = _ready(client, root, ctx)
     assert _confirm(client, ctx, plan["operation_id"], ["html"]).status_code == 200
     monkeypatch.setattr(case_finalization, "MAX_STATUS_VERIFY_BYTES", 0)
-    # With the completion-time verified marker no re-hash is needed at all.
-    assert _status(client, ctx)["selected_case_latest"]["verification"] == "SHA256"
+    # Over budget with the completion-time verified marker: stat-only, labelled as such (re-review N1).
+    assert _status(client, ctx)["selected_case_latest"]["verification"] == "STAT_SINCE_COMPLETION"
     (root / plan["metadata_relative_path"] / "verified.json").unlink()
     status = _status(client, ctx)
     assert status["selected_case_latest"]["operation_id"] == plan["operation_id"]
@@ -746,7 +746,7 @@ def test_review_m2_signed_verified_marker_avoids_rehash_until_outputs_change(adm
     monkeypatch.setattr(case_finalization, "_hash_source", counting)
     monkeypatch.setattr(case_finalization, "MAX_STATUS_VERIFY_BYTES", 0)
     shown = _status(client, ctx)["selected_case_latest"]
-    assert shown["verification"] == "SHA256" and hashed == []
+    assert shown["verification"] == "STAT_SINCE_COMPLETION" and hashed == []
     # A same-size change updates the mtime: the marker no longer matches.
     target = root / done.json()["output_paths"]["CAE"] / done.json()["files"][0]["case_relative_path"]
     data = target.read_bytes()
@@ -840,3 +840,64 @@ def test_review_l5_interrupted_job_is_not_resumed_when_its_case_is_gone(admin_cl
         assert case_finalization._job_scope_current(conn, root, job) is True
         assert case_finalization._job_scope_current(conn, root, {**job, "request_id": "gone"}) is False
         assert case_finalization._job_scope_current(conn, root / "elsewhere", job) is False
+
+
+# ---------------------------------------------------------------------------
+# W2 re-review (ac71f73): N1, N2, L5 (startup), L6.
+# ---------------------------------------------------------------------------
+
+def test_rereview_n1_in_place_edit_with_restored_mtime_is_found_within_budget(admin_client, monkeypatch):
+    """Ported from the reviewer's test_zz_review_marker.py: the marker never replaces a re-hash that fits."""
+    client, root = admin_client
+    ctx = _seed(client, root)
+    plan = _ready(client, root, ctx)
+    _start(client, ctx, plan["operation_id"])
+    assert case_finalization_jobs.wait_idle(60)
+    assert _job(client, ctx, plan["operation_id"])["state"] == "COMPLETE"
+    assert _status(client, ctx)["selected_case_latest"]["verification"] == "SHA256"
+    target = root / plan["output_paths"]["CAE"] / plan["files"][0]["case_relative_path"]
+    stat = target.stat()
+    with open(target, "r+b") as stream:
+        first = stream.read(1)
+        stream.seek(0)
+        stream.write(bytes([first[0] ^ 1]))
+    os.utime(target, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    damaged = _status(client, ctx)
+    assert damaged["selected_case_latest"] is None and damaged["unverified_records"] == 1
+    # Over the budget the stat-only result is labelled as such, never as SHA256.
+    monkeypatch.setattr(case_finalization, "MAX_STATUS_VERIFY_BYTES", 0)
+    shown = _status(client, ctx)["selected_case_latest"]
+    assert shown["verification"] == "STAT_SINCE_COMPLETION"
+
+
+def test_rereview_n2_append_refuses_a_linked_record_file(final_fs, tmp_path):
+    fs, root = final_fs
+    outside = tmp_path / "outside.jsonl"
+    outside.write_bytes(b"keep")
+    (root / "Req/Final/.finalizations/op/copied.jsonl").symlink_to(outside)
+    with pytest.raises(storage_provider.SpdmStorageError):
+        fs.append_bytes("Req/Final/.finalizations/op/copied.jsonl", b"x\n", zone="FINAL")
+    assert outside.read_bytes() == b"keep"
+    fs.append_bytes("Req/Final/.finalizations/op/real.jsonl", b"a\n", zone="FINAL")
+    fs.append_bytes("Req/Final/.finalizations/op/real.jsonl", b"b\n", zone="FINAL", fsync=True)
+    assert (root / "Req/Final/.finalizations/op/real.jsonl").read_bytes() == b"a\nb\n"
+
+
+def test_rereview_l5_startup_resume_checks_the_job_scope(admin_client, monkeypatch):
+    client, root = admin_client
+    ctx = _seed(client, root)
+    plan = _ready(client, root, ctx)
+
+    def crash(self, *args, **kwargs):
+        raise _Crash()
+
+    monkeypatch.setattr(LocalFsProvider, "copy_stream", crash)
+    _start(client, ctx, plan["operation_id"])
+    assert case_finalization_jobs.wait_idle(60)
+    job = json.loads((root / plan["metadata_relative_path"] / "job.json").read_text(encoding="utf-8"))
+    submitted: list[str] = []
+    monkeypatch.setattr(case_finalization, "_submit", lambda root_, operation_dir: submitted.append(operation_dir))
+    with connect() as conn:
+        assert case_finalization._submit_in_scope(conn, root, [(plan["metadata_relative_path"], {**job, "case_id": "gone"})]) == []
+        assert case_finalization.resume_incomplete_jobs(conn) == [plan["metadata_relative_path"]]
+    assert submitted == [plan["metadata_relative_path"]]
