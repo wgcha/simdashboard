@@ -430,3 +430,48 @@
   margin-right: auto;
   color: var(--color-text-muted, #536276);
 }
+
+/* W2: background Final copy progress */
+.case-finalization__status--copying {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--color-accent, #1f5fa8);
+  font-variant-numeric: tabular-nums;
+}
+
+.case-finalization__status--failed {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--color-danger, #b42318);
+}
+
+.case-finalization__bar {
+  overflow: hidden;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--color-surface-interactive, #eef3f8);
+}
+
+.case-finalization__bar > span {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+  background: var(--color-accent, #1f5fa8);
+  transition: width .4s ease;
+}
+
+.case-finalization__job-counts,
+.case-finalization__job-file {
+  margin: 0;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.case-finalization__job-file {
+  overflow: hidden;
+  color: var(--color-text-muted, #536276);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

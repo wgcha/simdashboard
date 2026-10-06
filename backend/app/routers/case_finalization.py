@@ -4,6 +4,8 @@ Flow: ``POST /preview`` (signed plan) -> ``PUT /{operation_id}/reports/{pptx|htm
 (raw body, one request per browser-built report) -> ``POST /confirm`` with
 ``report_formats``. Reports use a separate raw-body upload step bound to the
 operation (no multipart runtime dependency); each request carries one file.
+W2: confirm records a copy job and returns at once (``state`` QUEUED/RUNNING, or
+COMPLETE with ``record``); ``GET /{operation_id}/job`` reports its progress.
 """
 from __future__ import annotations
 
@@ -39,15 +41,18 @@ class ConfirmInput(FinalizationInput):
 
 
 _CONFLICT_CODES = {"FINALIZATION_ALREADY_COMPLETED", "FINALIZATION_REPORT_FORMATS_MISMATCH",
-                   "FINALIZATION_REPORTS_UNEXPECTED_FILE", "FINALIZATION_LEGACY_REPORTS_PRESENT"}
+                   "FINALIZATION_REPORTS_UNEXPECTED_FILE", "FINALIZATION_LEGACY_REPORTS_PRESENT",
+                   "FINALIZATION_JOB_ACTIVE", "FINALIZATION_PUBLISH_BUSY", "FINALIZATION_SOURCE_BUSY"}
 
 
 def _error(exc: service.CaseFinalizationError) -> HTTPException:
     if exc.code in {"FINALIZATION_REPORT_TOO_LARGE", "FINALIZATION_OUTPUT_TOO_LARGE"}:
         status = 413
+    elif exc.code == "FINALIZATION_DISK_SPACE":
+        status = 507
     elif exc.code == "FINALIZATION_REPORT_BUSY":
         status = 429
-    elif exc.code == "FINALIZATION_WRITE_FAILED":
+    elif exc.code in {"FINALIZATION_WRITE_FAILED", "FINALIZATION_DISK_UNAVAILABLE"}:
         status = 503
     elif exc.code in _CONFLICT_CODES:
         status = 409
@@ -91,9 +96,10 @@ def confirm(payload: ConfirmInput, request: Request):
         write_audit_event(
             request=request, principal=request.state.principal, status_code=200,
             action="CASE_FINALIZATION_CONFIRMED",
+            # W2: the copy runs in the background; ``state`` is QUEUED/RUNNING (or COMPLETE on a repeat).
             detail={"project_id": payload.project_id, "request_id": payload.request_id,
                     "case_id": payload.case_id, "capture_id": payload.capture_id,
-                    "operation_id": payload.operation_id,
+                    "operation_id": payload.operation_id, "state": result.get("state"),
                     "reports": [{"format": item["format"], "sha256": item["sha256"], "size": item["size"]}
                                 for item in result.get("reports", [])]},
             connection=conn,
@@ -181,5 +187,21 @@ def status(request: Request, project_id: str = Query(min_length=1, max_length=12
         try:
             return service.status(conn, project_id=project_id, request_id=request_id,
                                   environment=environment, case_id=case_id)
+        except service.CaseFinalizationError as exc:
+            raise _error(exc) from exc
+
+
+@router.get("/{operation_id}/job")
+def job_status(request: Request, operation_id: str = Path(pattern=r"^[0-9a-f]{32}$"),
+               project_id: str = Query(min_length=1, max_length=128),
+               request_id: str = Query(min_length=1, max_length=128),
+               environment: Literal["USAGE", "DISTRIBUTION"] = Query(...),
+               case_id: str = Query(min_length=1, max_length=128)):
+    """Copy job progress (W2); an interrupted job is resumed with the same Final ID."""
+    with connect() as conn:
+        require_resource_permission(request, PROJECT_DATA_VIEW, "request", request_id, conn=conn)
+        try:
+            return service.job_status(conn, project_id=project_id, request_id=request_id,
+                                      environment=environment, case_id=case_id, operation_id=operation_id)
         except service.CaseFinalizationError as exc:
             raise _error(exc) from exc

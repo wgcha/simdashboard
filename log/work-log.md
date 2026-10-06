@@ -2,6 +2,12 @@
 
 이 파일은 완료된 개발 작업을 누적 기록한다. 이후 작업은 완료 시 최신 항목을 문서 상단에 추가하며, 변경 범위·검증 결과·남은 확인 사항을 함께 남긴다.
 
+## 2026-10-06 — W6 폴더 이름 경고
+
+- Case 결과 catalog에 추가 필드 `name_warnings: [{kind, severity, message, paths, case_id, run_option_id}]`를 넣었다(`backend/app/services/folder_name_warnings.py`). 이미 읽은 Folder Schema snapshot만 사용하며 폴더 스캔·DB 쓰기·폴더 변경은 없다. 같은 Run Option/Case 아래 대소문자·구분 기호·번호 접미사·한 글자 철자만 다른 Scene, Case 간 Scene 이름 불일치, 깊이 스키마 이탈·UNRESOLVED 노드와 번호로 시작하지 않는 Scene 깊이 폴더를 한국어 문구로 알린다. 계산 오류는 경고만 빈 목록으로 두고 catalog는 그대로 응답한다.
+- 화면: Case 결과 머리줄 "폴더 이름 확인 n건" 배지와 경로 목록(`FolderNameWarnings.tsx`), Scene 비교 탭의 해당 Scene 경고 아이콘. 문서 [폴더 이름 경고](../docs/features/folder-name-warnings.md), 로드맵 W6 완료 표시.
+- 검증: 신규 백엔드 15개 통과(합성 트리 `4_Edge`/`4_edge2`, `2_Face`/`2_face`, Case 간 `6_Corner`/`6_corner`, Run Option 아래 `backup`, 정상 트리), 관련 dashboard·materials·새 Scene 등록·OpenAPI 묶음 76개 통과. tsc·vite build 통과, check:architecture는 기존 4건만 실패. e2e `simulation-dashboard.spec.ts` 17개 통과·기존 1건 실패(폐기된 capture 고정 검사), 신규 2개(2560×1440·배율 1.5·18pt) 포함. `materials-dashboard.spec.ts`는 이 변경 전 코드에서도 6건, 변경 후 5건 실패(결과 환경 없음으로 탭 미표시; 동시 진행 중인 다른 작업 영향 추정, W6 무관). 독립 검수·Codex Security 스캔은 수행하지 않았다(보안 경계 변경 없음). migration·의존성·배포 변경 없음.
+
 ## 2026-10-04 — SPDM 저장소 공급자 1단계(LocalFsProvider) 코드 정리
 
 - `docs/contracts/storage-provider.md`(dfb1dd0) 기준으로 `backend/app/services/storage/{provider,local,__init__}.py`를 추가하고, SPDM 루트 아래 목록·조회·읽기·쓰기를 공급자로 옮겼다. 대상은 서비스 12개(spdm_storage, folder_discovery_scan, folder_auto_discovery, folder_discovery, dashboard_capture, case_finalization, materials_catalog, folder_schema_resolver, folder_request_progress, result_registration_paths·result_registration·result_registration_locations)와 라우터 4개(spdm_storage, semantic_mapping, semantic_review, dashboard)다. reparse·대소문자 충돌 검사, 안정 읽기, 디렉터리 고정, 요청 잠금, no-follow 메타데이터 읽기는 결과·오류 코드·문구를 그대로 provider 모듈로 옮겼다. 모듈별 `_root()` 사본은 `get_storage_provider(conn)`(루트 해석은 `spdm_storage.storage_root` 한 곳)로 대체했다.
@@ -1159,3 +1165,16 @@
 - 원인: `caseReport.ts`가 영상 목록을 `page_size=100`으로 요청, 서버 상한 `VIDEO_PAGE_SIZE_MAX=20` → 422.
 - 수정: 20으로 요청하고 최대 쪽수를 250으로 늘려 상한 5000개 유지. e2e 모의 응답을 20으로 맞춤.
 - 검증: tsc, e2e case-report·case-finalization 15/15.
+
+## 2026-10-06 W2 Final 복사 개편 (조각 복사·상한 제거·임시 폴더 공개·작업 스레드·진행률·이어하기)
+
+- 계약: `docs/features/case-finalization.md`(계획 3 형식). 근거 `docs/plans/improvement-roadmap.md` §4 W2, `docs/plans/case-results-workflow-redesign.md` §8.3.
+- 변경: 저장소 계층에 추가 메서드만(`LocalFsProvider.copy_stream` 8 MiB 조각 복사+SHA-256·서버 측 복사 자리 `server_side_copy`, `hash_stable`, `rename_no_replace`, `append_bytes`, `try_lock`, `list_detailed`, `free_bytes`; 기존 `request_lock` 동작 불변). Final/CAE는 확정 Scene 아래 모든 파일(`~$*`·`*.tmp`·숨김·시스템 제외), CAE 개수·크기 상한 제거, 시작 전 남은 공간(필요량+max(5 %,1 GiB)) 확인 507. `.finalizations/<ID>/staging/{CAE,Report}`에 쓰고 재해시 후 폴더째 이름 바꾸기(대상 비덮어쓰기, 잠금 재시도), `complete.json`은 두 폴더 공개 뒤. 확정은 서명된 `job.json` 등록 후 즉시 응답, 프로세스 내 작업 스레드(동시 2, 같은 의뢰 1), 서명된 `progress.json`·`copied.jsonl`, 시작 시·상태 조회 시 이어하기. `GET /api/dashboard/finalizations/{id}/job` 추가, 상태 조회 `active_operations`·`verification`. Final 창 진행률·창 닫아도 계속·헤더 `Final 복사 중 n%`·실패 사유와 재시도. 새 DB 테이블·migration·의존성 없음.
+- 의도적 차이: 비수집 파일은 미리보기에서 크기·수정 시각으로 고정하고 복사 중 해시를 계산(미리보기는 목록+lstat만). 의뢰 잠금은 복사 내내가 아니라 `complete.json` 쓰기에만 쓰고, 같은 의뢰 직렬화는 작업 대기열·작업 잠금으로 한다. 상태 조회의 해시 예산을 넘는 큰 기록은 존재·크기만 확인하고 `verification: SIZE`.
+- 검증(격리 임시 root·합성 데이터): 백엔드 finalization reports·신규 `test_case_finalization_copy_jobs.py`(18)·environment flow·storage provider·boundary·folder progress 126 passed/1 skipped(Windows 전용 고정 테스트), 앞선 실행에서 depth_schema·registration delete 포함 통과. 전체 백엔드 스위트는 돌리지 않음. OpenAPI 재생성·`check_openapi_contract.py` OK. 프론트 tsc·build·test:routing·test:api 통과, check:architecture 기존 4건만. e2e case-finalization 5/5, folder-working-final Final 2건 통과(나머지 2건 깊이 스키마·Working 계층은 기준 커밋 HEAD에서도 실패 — 별도 worktree로 확인).
+- 미수행: 실제 Windows Server 2022·SMB·HPC(이름 바꾸기 원자성, 백신 잠금, 디렉터리 고정 핸들과 폴더 이름 바꾸기 공존, SMB 디렉터리 캐시의 수정 시각) 검증(W9). 독립 검수·보안 검수 대기(Codex Security 미가용, 수동 대체 검수도 아직 안 함).
+
+## 2026-10-06 W1 사이드바 숨김 (Claude)
+- `AppSidebar.tsx`의 `SIDEBAR_HIDDEN_MENUS`로 새 의뢰·예제 및 참고·변수 카탈로그·프로젝트 결과 구성·작업 유형 관리를 사이드바에서 숨김. 화면·경로·권한 불변, 직접 URL 동작.
+- e2e: access-policy 역할별 노출 검사 3곳을 비노출로 변경, `openWorkspaceRoute` 헬퍼에 숨김 경로의 앱 내 URL 이동 추가. materials-dashboard spec에 result-environments mock 추가(다른 세션 변경 이후 6건 중 5건 실패하던 것 복구, 6/6).
+- 검증: access-policy·project-result-profiles·workbench-demo 11/12(남은 1건 DOE 접수는 기준 커밋에서도 실패), materials 6/6, simulation-dashboard·case-finalization·case-report 33/34(폐기된 capture-pin 1건), 백엔드 169 passed/1 skipped, tsc 통과, check:architecture 기존 4건.

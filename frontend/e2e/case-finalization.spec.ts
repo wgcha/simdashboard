@@ -117,9 +117,30 @@ async function fulfillJson(route: Route, body: unknown, status = 200) {
   await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
 }
 
-async function installMocks(page: Page, options: { failFirstUpload?: boolean; multiOption?: boolean } = {}) {
+type JobState = 'RUNNING' | 'FAILED' | 'COMPLETE'
+
+/** W2: confirm queues a background copy job; GET /{id}/job reports it (scripted per test). */
+function jobView(plan: typeof preview, formats: Array<'pptx' | 'html'>, state: JobState | 'QUEUED') {
+  const reports = formats.map((format) => ({ format, file_name: plan.report_files[format], size: 100, sha256: '9'.repeat(64), relative_path: plan.report_paths[format] }))
+  const record = state === 'COMPLETE' ? { ...plan, status: 'COMPLETE', created_by: 'test', confirmed_at: '2026-10-03T00:01:00Z', reports } : null
+  const total = plan.files.reduce((sum, file) => sum + file.size, 0)
+  return {
+    operation_id: plan.operation_id, state, phase: state === 'RUNNING' || state === 'FAILED' ? 'COPYING' : null,
+    files_done: state === 'COMPLETE' ? plan.files.length : 1, files_total: plan.files.length,
+    bytes_done: state === 'COMPLETE' ? total : plan.files[0].size, bytes_total: total,
+    current_file: state === 'RUNNING' ? plan.files[1]?.case_relative_path ?? null : null,
+    error: state === 'FAILED' ? { code: 'FINALIZATION_PUBLISH_BUSY', message: '다른 프로그램이 임시 폴더를 사용하고 있어 Final 폴더로 옮기지 못했습니다.' } : null,
+    attempt: 1, queued_at: '2026-10-03T00:00:30Z', started_at: '2026-10-03T00:00:31Z', updated_at: '2026-10-03T00:00:32Z',
+    case_id: plan.case_id, capture_id: plan.capture_id, reports, output_paths: plan.output_paths, active: state === 'RUNNING', record,
+  }
+}
+
+async function installMocks(page: Page, options: { failFirstUpload?: boolean; multiOption?: boolean; jobStates?: JobState[] } = {}) {
   const uploads: Uploads = []
   const confirms: Array<Record<string, unknown>> = []
+  const jobPolls: string[] = []
+  const script = { states: options.jobStates ?? ['RUNNING', 'COMPLETE'] as JobState[] }
+  let lastConfirm: { plan: typeof preview; formats: Array<'pptx' | 'html'> } = { plan: preview, formats: ['pptx'] }
   const usageCaptures: string[] = []
   let failures = options.failFirstUpload ? 1 : 0
   await page.route('**/api/folder-discovery/environments/sync', (route) => fulfillJson(route, { status: 'UNCHANGED', changed: false, snapshot_id: null, diff: { added: 0, removed: 0, changed: 0 }, code: null, message: null, check_mode: 'QUICK', checked_at: new Date().toISOString(), coalesced: false }))
@@ -167,11 +188,17 @@ async function installMocks(page: Page, options: { failFirstUpload?: boolean; mu
   await page.route('**/api/dashboard/finalizations/confirm', (route) => {
     const body = route.request().postDataJSON() as Record<string, unknown>
     confirms.push(body)
-    const formats = body.report_formats as Array<'pptx' | 'html'>
-    const plan = body.environment === 'USAGE' ? usagePreview : preview
-    return fulfillJson(route, { ...plan, status: 'COMPLETE', created_by: 'test', confirmed_at: '2026-10-03T00:01:00Z', reports: formats.map((format) => ({ format, file_name: plan.report_files[format], size: 100, sha256: '9'.repeat(64), relative_path: plan.report_paths[format] })) })
+    lastConfirm = { plan: body.environment === 'USAGE' ? usagePreview : preview, formats: body.report_formats as Array<'pptx' | 'html'> }
+    return fulfillJson(route, jobView(lastConfirm.plan, lastConfirm.formats, 'QUEUED'))
   })
-  return { uploads, confirms, usageCaptures }
+  await page.route(`**/api/dashboard/finalizations/${OPERATION}/job**`, (route) => {
+    const url = new URL(route.request().url())
+    expect(url.searchParams.get('capture_id')).toBeNull()
+    jobPolls.push(url.searchParams.get('case_id') ?? '')
+    const state = script.states.length > 1 ? script.states.shift()! : script.states[0]
+    return fulfillJson(route, jobView(lastConfirm.plan, lastConfirm.formats, state))
+  })
+  return { uploads, confirms, usageCaptures, jobPolls, script }
 }
 
 async function openFinal(page: Page) {
@@ -197,7 +224,8 @@ test('Final 지정은 고른 PPTX·HTML을 만들어 형식별로 올린 뒤 확
   // A Scene whose newest capture cannot be used is listed, never replaced by an older capture.
   await expect(dialog.getByTestId('case-final-excluded-scenes')).toContainText('제외되는 Scene 1개')
   await expect(dialog.getByTestId('case-final-excluded-scenes')).toContainText('4_Face · 최신 결과에 확정 위치 정보 없음')
-  await expect(dialog).toContainText('입력·결과 3개')
+  await expect(dialog).toContainText('Scene 폴더 파일 3개')
+  await expect(dialog).toContainText('임시·잠금 파일(~$*, *.tmp)과 숨김·시스템 항목은 복사하지 않습니다.')
   await expect(dialog.getByTestId('case-final-report-range')).toContainText('Case 전체 · 모든 Run Case · Run Option')
   await expect(dialog).not.toContainText('PDF')
   const pptx = dialog.getByRole('checkbox', { name: /PPTX/ })
@@ -247,13 +275,47 @@ test('Final 지정 업로드 오류를 대화상자에 보이고 같은 요청�
   await dialog.getByRole('button', { name: 'Final 지정 확정', exact: true }).click()
   await expect(dialog.getByRole('alert')).toContainText('PPTX 보고서를 읽을 수 없습니다.', { timeout: 20_000 })
   expect(confirms).toHaveLength(0)
-  await dialog.getByRole('button', { name: '다시 시도', exact: true }).click()
+  await dialog.getByRole('button', { name: '재시도', exact: true }).click()
   await expect(page.getByRole('dialog', { name: 'Final 지정 완료' })).toBeVisible({ timeout: 20_000 })
   expect(uploads.map((item) => item.format)).toEqual(['pptx', 'pptx'])
   // The retry re-sends the same bytes for the same operation.
   expect(uploads[1].size).toBe(uploads[0].size)
   expect(confirms).toHaveLength(1)
   expect(confirms[0]).toMatchObject({ operation_id: OPERATION, report_formats: ['pptx'] })
+  expect(errors).toEqual([])
+})
+
+test('Final 복사는 진행률을 보이고 창을 닫아도 계속되며 실패하면 같은 Final ID로 재시도한다', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 })
+  const errors: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  const { confirms, jobPolls, script } = await installMocks(page, { jobStates: ['RUNNING'] })
+  const dialog = await openFinal(page)
+  await dialog.getByRole('button', { name: 'Final 지정 확정', exact: true }).click()
+  const progress = dialog.getByTestId('case-final-job')
+  await expect(progress).toContainText('Final 복사 중 15%', { timeout: 20_000 })
+  await expect(progress).toContainText('파일 1/3')
+  await expect(progress).toContainText('현재: Drop/Run A/Individual/2_Face/result.csv')
+  await expect(progress.getByRole('progressbar', { name: 'Final 복사 진행률' })).toHaveAttribute('aria-valuenow', '15')
+  await expect(dialog).toContainText('창을 닫아도 복사는 계속됩니다.')
+  await page.screenshot({ path: `${SHOT_DIR}/case-final-progress-1440.png` })
+  // Closing the dialog keeps the job; the Case results header keeps showing it.
+  await dialog.getByRole('button', { name: '닫기 (복사 계속)', exact: true }).click()
+  await expect(dialog).not.toBeVisible()
+  const status = page.getByTestId('case-final-status')
+  await expect(status).toContainText('Final 복사 중 15%')
+  const pollsWhileClosed = jobPolls.length
+  await expect.poll(() => jobPolls.length, { timeout: 10_000 }).toBeGreaterThan(pollsWhileClosed)
+  // A failure shows its reason and a retry with the same Final ID and reports.
+  script.states = ['FAILED']
+  await expect(status).toContainText('Final 복사 실패', { timeout: 10_000 })
+  await expect(status).toHaveAttribute('title', /다른 프로그램이 임시 폴더를 사용하고 있어/)
+  script.states = ['COMPLETE']
+  await page.locator('.case-finalization').getByRole('button', { name: '재시도', exact: true }).click()
+  await expect(page.locator('.case-finalization')).toContainText('Final 지정 완료', { timeout: 10_000 })
+  expect(confirms).toHaveLength(2)
+  expect(confirms[1]).toMatchObject({ operation_id: OPERATION, capture_id: CAPTURE_ID, report_formats: ['pptx'] })
+  expect(jobPolls.every((caseId) => caseId === CASE_ID)).toBe(true)
   expect(errors).toEqual([])
 })
 

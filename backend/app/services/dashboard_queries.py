@@ -1,8 +1,9 @@
 """Project-scoped projections of immutable result captures, never live files."""
 from __future__ import annotations
 
-import math
 import hashlib
+import logging
+import math
 from typing import Any
 
 from .dashboard_capture import DashboardCaptureError, _decode, get_capture
@@ -17,6 +18,7 @@ USAGE_KEYS = {
 }
 
 
+logger = logging.getLogger(__name__)
 RESULT_ENVIRONMENTS = ("USAGE", "DISTRIBUTION")
 
 
@@ -65,12 +67,22 @@ def option_projection(run, capture_id):
     return option_id, label, status
 
 
+def _name_warnings(schema, locations, root_key, environment):
+    """W6 folder name warnings; a fault here must never hide the results."""
+    from .folder_name_warnings import folder_name_warnings
+    try:
+        return folder_name_warnings(schema, locations, root_key, environment)
+    except Exception:  # noqa: BLE001 - advisory only
+        logger.exception("folder name warnings failed")
+        return []
+
+
 def catalog(conn, request_id, environment, project_id=None):
     from . import folder_discovery, folder_discovery_environment, folder_schema_hierarchy, folder_schema_resolver
 
     result = {"contract_version": 1, "environment": environment, "cases": [], "captures": [],
               "load_cases": [], "execution_runs": [], "run_options": [], "modes": [], "components": [],
-              "scenes": [], "final_history": [],
+              "scenes": [], "final_history": [], "name_warnings": [],
               "folder_schema": {"status": "UNAVAILABLE", "diagnostic": None, "snapshot_id": None},
               "bases": [{"id": "REPORTED_SUMMARY", "label": "원본 요약"}, {"id": "DETAIL", "label": "상세 추출값"}]}
     records = conn.execute("""SELECT dc.id,dc.source_name,dc.storage_root_id,dc.relative_path,c.id,c.created_at,c.payload_json
@@ -113,6 +125,7 @@ def catalog(conn, request_id, environment, project_id=None):
         schema_cases.update(projected["cases"])
         for key in ("load_cases", "execution_runs", "run_options", "scenes"):
             result[key].extend(projected[key])
+        result["name_warnings"] = _name_warnings(schema, locations, root_key, environment)
     except folder_schema_resolver.FolderSchemaError as exc:
         result["folder_schema"] = {"status": "UNAVAILABLE",
                                     "diagnostic": {"code": exc.code, "message": str(exc)},

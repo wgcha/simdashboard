@@ -23,7 +23,10 @@ export type CaseFinalizationFile = {
   source_basis: 'SOURCE_CAPTURE' | 'CURRENT_CONFIRMED_SCENE' | 'SELECTED_CAPTURE'
   source_capture_id?: string
   size: number
-  sha256: string
+  /** Plan version 3 (W2): `null` in a preview for files pinned by size/mtime; completed records always carry the hash. */
+  sha256: string | null
+  /** Plan version 3: modification time (ns) the preview pinned for a non-capture file. */
+  modified_ns?: number
 }
 
 export type CaseFinalizationSceneSource = { scene_path: string; source_capture_id: string; source_capture_fingerprint?: string }
@@ -44,6 +47,10 @@ export type CaseFinalizationCounts = {
   inc_decks: number
   results: number
   scene_reports?: number
+  /** Plan version 3 (W2): files that are neither decks, captured results nor Scene documents. */
+  other_files?: number
+  /** Plan version 3: bytes of every CAE file. */
+  total_bytes?: number
   /** Version 1 records only. */
   Reports?: number
   reports?: number
@@ -67,8 +74,13 @@ export type CaseFinalizationRecord = {
   counts: CaseFinalizationCounts
   missing: { input_decks: boolean; rad_decks: boolean; inc_decks: boolean; reports?: boolean }
   excluded_capture_file_count: number
+  /** Decks too large to parse at preview: copied, but their includes were not followed. */
+  include_unchecked?: string[]
   created_by: string | null
+  queued_at?: string | null
   confirmed_at: string
+  /** Status only: `SIZE` when the record was too large for the per-call hash budget (existence and sizes checked). */
+  verification?: 'SHA256' | 'SIZE'
 }
 
 export type CaseFinalizationPreview = Omit<CaseFinalizationRecord, 'status' | 'created_by' | 'confirmed_at' | 'reports'> & {
@@ -85,6 +97,35 @@ export type CaseFinalizationPreview = Omit<CaseFinalizationRecord, 'status' | 'c
   report_files: Record<CaseFinalizationReportFormat, string>
   report_paths: Record<CaseFinalizationReportFormat, string>
   report_limits: Record<CaseFinalizationReportFormat, number>
+  /** Free space on the Final volume (informational; rechecked on confirm and when copying starts). */
+  disk?: { required_bytes: number; margin_bytes: number; free_bytes: number | null; sufficient: boolean }
+}
+
+export type CaseFinalizationJobState = 'QUEUED' | 'RUNNING' | 'FAILED' | 'COMPLETE'
+
+/** Background Final copy job (W2): progress of one Final ID. */
+export type CaseFinalizationJob = {
+  operation_id: string
+  state: CaseFinalizationJobState
+  phase: 'COPYING' | 'VERIFYING' | 'PUBLISHING' | null
+  files_done: number
+  files_total: number
+  bytes_done: number
+  bytes_total: number
+  current_file: string | null
+  error: { code: string; message: string } | null
+  attempt: number | null
+  queued_at: string | null
+  started_at: string | null
+  updated_at: string | null
+  case_id: string | null
+  capture_id: string | null
+  reports: Array<{ format: CaseFinalizationReportFormat; file_name: string; size: number; sha256: string }>
+  output_paths: Record<'CAE' | 'Reports', string> | null
+  /** A worker of this server process runs or queues it. */
+  active: boolean
+  /** The completed record once `state` is COMPLETE. */
+  record: CaseFinalizationRecord | null
 }
 
 export type CaseFinalizationStagedReport = { operation_id: string; format: CaseFinalizationReportFormat; file_name: string; size: number; sha256: string; report_path: string; status: 'STAGED' }
@@ -96,7 +137,9 @@ export type CaseFinalizationStatus = {
   final_relative_path: string
   latest: CaseFinalizationRecord | null
   selected_case_latest: CaseFinalizationRecord | null
-  retryable_operations: Array<{ operation_id: string; status: 'RETRYABLE'; capture_id: string; previewed_at: string }>
+  retryable_operations: Array<{ operation_id: string; status: 'RETRYABLE'; capture_id: string; previewed_at: string; job?: CaseFinalizationJob | null }>
+  /** Copy jobs of the selected Case (QUEUED/RUNNING/FAILED), newest first. */
+  active_operations?: CaseFinalizationJob[]
   unverified_records: number
 }
 
@@ -116,7 +159,12 @@ export const caseFinalizationApi = {
     if (!response.ok) throw await apiErrorFromResponse(response)
     return await response.json() as CaseFinalizationStagedReport
   },
-  confirm: async (input: CaseFinalizationInput & { operation_id: string; report_formats: CaseFinalizationReportFormat[] }) => unwrapGenerated(await apiClient.POST('/api/dashboard/finalizations/confirm', { body: input })) as CaseFinalizationRecord,
+  /** Records the copy job and returns at once (W2): QUEUED/RUNNING, or COMPLETE with `record` for a finished Final ID. */
+  confirm: async (input: CaseFinalizationInput & { operation_id: string; report_formats: CaseFinalizationReportFormat[] }) => unwrapGenerated(await apiClient.POST('/api/dashboard/finalizations/confirm', { body: input })) as CaseFinalizationJob,
+  /** Copy job progress; polling also resumes a job interrupted by a server restart. */
+  job: async (input: Omit<CaseFinalizationInput, 'capture_id'> & { operation_id: string }) => unwrapGenerated(await apiClient.GET('/api/dashboard/finalizations/{operation_id}/job', {
+    params: { path: { operation_id: input.operation_id }, query: { project_id: input.project_id, request_id: input.request_id, environment: input.environment, case_id: input.case_id } },
+  })) as CaseFinalizationJob,
   status: async (input: Omit<CaseFinalizationInput, 'capture_id'>) => unwrapGenerated(await apiClient.GET('/api/dashboard/finalizations/status', {
     params: { query: { project_id: input.project_id, request_id: input.request_id, environment: input.environment, case_id: input.case_id } },
   })) as CaseFinalizationStatus,

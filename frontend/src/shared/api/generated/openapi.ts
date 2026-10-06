@@ -3341,6 +3341,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/dashboard/finalizations/{operation_id}/job": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Job Status
+         * @description Copy job progress (W2); an interrupted job is resumed with the same Final ID.
+         */
+        get: operations["job_status_api_dashboard_finalizations__operation_id__job_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/materials/catalog": {
         parameters: {
             query?: never;
@@ -14315,6 +14335,42 @@ export interface operations {
             };
             header?: never;
             path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    job_status_api_dashboard_finalizations__operation_id__job_get: {
+        parameters: {
+            query: {
+                project_id: string;
+                request_id: string;
+                environment: "USAGE" | "DISTRIBUTION";
+                case_id: string;
+            };
+            header?: never;
+            path: {
+                operation_id: string;
+            };
             cookie?: never;
         };
         requestBody?: never;

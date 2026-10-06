@@ -98,6 +98,9 @@ from .services.drop_video_demo import (
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     initialize_database()
+    # W2: resume Final copy jobs interrupted by a restart (daemon thread, non-blocking).
+    from .services.case_finalization import start_resume_scan
+    start_resume_scan()
     yield
 
 

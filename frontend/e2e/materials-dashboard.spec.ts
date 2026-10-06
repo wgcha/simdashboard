@@ -1,7 +1,7 @@
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { expect, test, type Page } from '@playwright/test'
-import { expectCaseResultsLayout, loginWorkspace, setWorkspaceFontSize } from './workspace-test-helpers'
+import { expectCaseResultsLayout, loginWorkspace, mockResultEnvironments, setWorkspaceFontSize } from './workspace-test-helpers'
 
 const requestId = 'request-showcase-waiting'
 const projectId = 'project-feature-showcase'
@@ -75,6 +75,8 @@ const largeDeck = deckFor(Array.from({ length: 128 }, (_, index) => {
 }))
 
 async function mockMaterialsApi(page: Page) {
+  // The request result environments endpoint (case-results-environment.md) decides which Case results tabs exist.
+  await mockResultEnvironments(page)
   // Auto-sync is answered locally so the shared e2e backend does not scan seeded folders between tests.
   await page.route('**/api/folder-discovery/environments/sync', (route) => route.fulfill({ json: { status: 'UNCHANGED', changed: false, snapshot_id: null, diff: { added: 0, removed: 0, changed: 0 }, code: null, message: null, check_mode: 'QUICK', checked_at: new Date().toISOString(), coalesced: false } }))
   await page.route('**/api/materials/catalog**', (route) => route.fulfill({ json: catalog }))

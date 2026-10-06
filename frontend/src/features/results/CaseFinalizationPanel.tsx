@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, CheckCircle2, FileArchive, LoaderCircle } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, FileArchive, LoaderCircle, RotateCcw } from 'lucide-react'
 import {
   caseFinalizationApi,
   type CaseFinalizationInput,
+  type CaseFinalizationJob,
   type CaseFinalizationPreview,
   type CaseFinalizationRecord,
   type CaseFinalizationReportFormat,
@@ -27,16 +28,36 @@ type Props = {
   reportScope: CaseReportFinalScope | null
 }
 
-type Phase = 'idle' | 'building' | 'uploading' | 'copying'
+type Phase = 'idle' | 'building' | 'uploading' | 'starting'
 
 const FORMATS: CaseFinalizationReportFormat[] = ['pptx', 'html']
-const PHASE_TEXT: Record<Exclude<Phase, 'idle'>, string> = { building: '보고서 만드는 중…', uploading: '보고서 올리는 중…', copying: '파일 복사 중…' }
+const PHASE_TEXT: Record<Exclude<Phase, 'idle'>, string> = { building: '보고서 만드는 중…', uploading: '보고서 올리는 중…', starting: 'Final 복사 시작 중…' }
+/** Job progress polling interval (the server writes progress about once a second). */
+const FINAL_JOB_POLL_MS = 1000
+const MAX_POLL_FAILURES = 5
+const LISTED_FILES = 500
 
 const formatBytes = (bytes: number) => {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
 }
+
+const isRunning = (job: CaseFinalizationJob | null | undefined): job is CaseFinalizationJob => job?.state === 'QUEUED' || job?.state === 'RUNNING'
+
+/** One overall percentage: copy 0–60 %, read-back check 60–95 %, folder rename 95–100 %. */
+const jobPercent = (job: CaseFinalizationJob) => {
+  if (job.state === 'COMPLETE') return 100
+  const ratio = job.bytes_total > 0 ? Math.min(1, job.bytes_done / job.bytes_total) : (job.files_total > 0 ? Math.min(1, job.files_done / job.files_total) : 0)
+  if (job.phase === 'VERIFYING') return Math.floor(60 + ratio * 35)
+  if (job.phase === 'PUBLISHING') return 95
+  if (job.phase === 'COPYING') return Math.floor(ratio * 60)
+  return 0
+}
+
+const JOB_PHASE_TEXT: Record<NonNullable<CaseFinalizationJob['phase']>, string> = { COPYING: '복사', VERIFYING: '검증', PUBLISHING: '공개' }
+const jobLabel = (job: CaseFinalizationJob) => job.state === 'QUEUED' ? 'Final 복사 대기' : `Final ${job.phase ? JOB_PHASE_TEXT[job.phase] : '복사'} 중 ${jobPercent(job)}%`
 
 const formatDate = (value?: string | null) => {
   if (!value) return '시간 정보 없음'
@@ -68,6 +89,8 @@ export function CaseFinalizationPanel(props: Props) {
   const [skippedVideos, setSkippedVideos] = useState<string[]>([])
   const [skippedImages, setSkippedImages] = useState<string[]>([])
   const [dialogOpen, setDialogOpen] = useState(false)
+  const [job, setJob] = useState<CaseFinalizationJob | null>(null)
+  const pollFailures = useRef(0)
   const generation = useRef(0)
   const dialogRef = useRef<HTMLDialogElement>(null)
   // Reports are built once per operation and choice, so a retry uploads the same bytes.
@@ -81,7 +104,11 @@ export function CaseFinalizationPanel(props: Props) {
     }
     try {
       const next = await caseFinalizationApi.status({ project_id: projectId, request_id: requestId, environment, case_id: caseId })
-      if (token === generation.current) setStatus(next)
+      if (token !== generation.current) return
+      setStatus(next)
+      // A copy job started earlier (or in another tab) keeps reporting progress after a reload.
+      const active = next.active_operations?.[0] ?? null
+      setJob((current) => active ?? (isRunning(current) ? current : null))
     } catch (cause) {
       if (token === generation.current) setError(message(cause, '최종확정 상태를 불러오지 못했습니다.'))
     }
@@ -90,7 +117,7 @@ export function CaseFinalizationPanel(props: Props) {
   useEffect(() => {
     const token = ++generation.current
     setStatus(null); setPreview(null); setResult(null); setError(''); setDialogError(''); setNotice('')
-    setDialogOpen(false); setBusy(false); setPhase('idle')
+    setDialogOpen(false); setBusy(false); setPhase('idle'); setJob(null)
     void refreshStatus(token)
     return () => {
       if (generation.current === token) generation.current += 1
@@ -103,6 +130,44 @@ export function CaseFinalizationPanel(props: Props) {
     if (dialogOpen && !dialog.open) dialog.showModal()
     else if (!dialogOpen && dialog.open) dialog.close()
   }, [dialogOpen])
+
+  // Background copy (W2): poll the job until it completes or fails; closing the dialog does not stop it.
+  useEffect(() => {
+    if (!isRunning(job) || !projectId || !requestId || !caseId) return
+    const token = generation.current
+    let stopped = false
+    const timer = window.setTimeout(async () => {
+      try {
+        const next = await caseFinalizationApi.job({ project_id: projectId, request_id: requestId, environment, case_id: caseId, operation_id: job.operation_id })
+        if (stopped || token !== generation.current) return
+        pollFailures.current = 0
+        setJob(next)
+        if (next.state === 'COMPLETE' && next.record) {
+          const record = next.record
+          setResult((current) => current ?? (preview?.operation_id === record.operation_id ? record : null))
+          setNotice(`Final 지정 완료 · CAE ${record.files.length}개 · 보고서 ${record.reports.length}개`)
+          void refreshStatus(token)
+        } else if (next.state === 'FAILED') {
+          setDialogError(next.error?.message || 'Final 복사를 완료하지 못했습니다. 같은 Final ID로 다시 시도할 수 있습니다.')
+        }
+      } catch (cause) {
+        if (stopped || token !== generation.current) return
+        pollFailures.current += 1
+        if (pollFailures.current >= MAX_POLL_FAILURES) setError(message(cause, 'Final 복사 진행 상황을 불러오지 못했습니다.'))
+        else setJob((current) => current ? { ...current } : current)
+      }
+    }, FINAL_JOB_POLL_MS)
+    return () => { stopped = true; window.clearTimeout(timer) }
+  }, [job, projectId, requestId, environment, caseId, preview?.operation_id, refreshStatus])
+
+  const startedJob = (next: CaseFinalizationJob) => {
+    pollFailures.current = 0
+    setJob(next)
+    if (next.state === 'COMPLETE' && next.record) {
+      setResult(next.record)
+      setNotice(`Final 지정 완료 · CAE ${next.record.files.length}개 · 보고서 ${next.record.reports.length}개`)
+    }
+  }
 
   const closeDialog = () => {
     if (busy) return
@@ -151,16 +216,31 @@ export function CaseFinalizationPanel(props: Props) {
         await caseFinalizationApi.uploadReport(operation, format, blob)
         if (token !== generation.current) return
       }
-      setPhase('copying')
-      const record = await caseFinalizationApi.confirm({ ...operation, report_formats: chosen })
+      setPhase('starting')
+      const started = await caseFinalizationApi.confirm({ ...operation, report_formats: chosen })
       if (token !== generation.current) return
-      setResult(record)
-      setNotice(`Final 지정 완료 · CAE ${record.files.length}개 · 보고서 ${record.reports.length}개`)
-      await refreshStatus(token)
+      startedJob(started)
+      if (started.state === 'COMPLETE') await refreshStatus(token)
     } catch (cause) {
       if (token === generation.current) setDialogError(message(cause, 'Final 지정을 완료하지 못했습니다. 같은 요청으로 다시 시도할 수 있습니다.'))
     } finally {
       if (token === generation.current) { setBusy(false); setPhase('idle') }
+    }
+  }
+
+  /** Retry a failed copy job with the same Final ID and its already uploaded reports. */
+  const retryJob = async (target: CaseFinalizationJob) => {
+    const token = generation.current
+    setBusy(true); setError(''); setDialogError(''); setNotice('')
+    try {
+      const started = await caseFinalizationApi.confirm({ ...input, capture_id: target.capture_id || captureId, operation_id: target.operation_id, report_formats: target.reports.map((report) => report.format) })
+      if (token !== generation.current) return
+      startedJob(started)
+      if (started.state === 'COMPLETE') await refreshStatus(token)
+    } catch (cause) {
+      if (token === generation.current) setError(message(cause, 'Final 복사를 다시 시작하지 못했습니다.'))
+    } finally {
+      if (token === generation.current) setBusy(false)
     }
   }
 
@@ -170,20 +250,29 @@ export function CaseFinalizationPanel(props: Props) {
   const missing = [current?.missing.rad_decks ? 'RAD 없음' : '', current?.missing.inc_decks ? 'INC 없음' : ''].filter(Boolean)
   const requestLatest = status?.latest && status.latest.case_id !== caseId ? `의뢰 최근 확정: ${status.latest.case_label} · ${formatDate(status.latest.confirmed_at)}` : ''
   const unfinished = status?.retryable_operations?.length ? `완료되지 않은 Final 지정 ${status.retryable_operations.length}건 (다시 지정하면 새로 만듭니다)` : ''
-  const badgeText = current ? (currentCaptureMismatch ? '이전 결과로 확정' : '확정 완료') : !hasCapturedCase ? '결과 없음' : status ? '미확정' : error ? '확인 필요' : '확인 중'
-  const badgeTitle = [current ? `확정 ${current.operation_id.slice(0, 8)} · ${current.files.length}개 파일${current.reports?.length ? ` · 보고서 ${current.reports.length}개` : ''} · ${formatDate(current.confirmed_at)}` : '', missing.join(' · '), requestLatest, unfinished, unverified].filter(Boolean).join('\n') || undefined
+  const copying = isRunning(job) ? job : null
+  // A failure is worth showing until a newer Final of this Case completes.
+  const failed = job?.state === 'FAILED' && (!current || String(job.queued_at ?? '') > String(current.queued_at ?? current.confirmed_at ?? '')) ? job : null
+  const dialogJob = preview && job?.operation_id === preview.operation_id ? job : null
+  const badgeText = copying ? jobLabel(copying) : failed ? 'Final 복사 실패' : current ? (currentCaptureMismatch ? '이전 결과로 확정' : '확정 완료') : !hasCapturedCase ? '결과 없음' : status ? '미확정' : error ? '확인 필요' : '확인 중'
+  const copyTitle = copying ? `Final ${copying.operation_id.slice(0, 8)} · 파일 ${copying.files_done}/${copying.files_total} · ${formatBytes(copying.bytes_done)} / ${formatBytes(copying.bytes_total)}${copying.current_file ? `\n현재: ${copying.current_file}` : ''}` : failed ? `Final ${failed.operation_id.slice(0, 8)} 실패: ${failed.error?.message ?? ''}` : ''
+  const badgeTitle = [copyTitle, current ? `확정 ${current.operation_id.slice(0, 8)} · ${current.files.length}개 파일${current.reports?.length ? ` · 보고서 ${current.reports.length}개` : ''} · ${formatDate(current.confirmed_at)}` : '', missing.join(' · '), requestLatest, unfinished, unverified].filter(Boolean).join('\n') || undefined
 
   const sourceCount = preview ? new Set(preview.scene_sources.map((item) => item.source_capture_id)).size : 0
   const reportRange = !scopeAtOpen ? '' : scopeAtOpen.source.kind === 'case_usage' ? '사용환경 Case 전체 · 다섯 평가 종합 · 결과 이미지·영상' : 'Case 전체 · 모든 Run Case · Run Option (결과가 없는 항목은 결과 없음으로 표시)'
   const sceneDocs = preview?.counts.scene_reports ?? 0
   const excludedScenes = preview?.excluded_scenes ?? []
-  const confirmDisabled = !canFinalize || busy || !preview?.can_confirm || !scopeAtOpen || !chosen.length
+  const dialogCopying = isRunning(dialogJob) ? dialogJob : null
+  const dialogFailed = dialogJob?.state === 'FAILED' ? dialogJob : null
+  const confirmDisabled = !canFinalize || busy || Boolean(dialogCopying) || !preview?.can_confirm || !scopeAtOpen || !chosen.length
+  const listedFiles = preview ? preview.files.slice(0, LISTED_FILES) : []
 
   return <>
     <div className="case-finalization" role="group" aria-label="Case 최종확정">
-      <span className={`case-finalization__status${current ? ' case-finalization__status--complete' : ''}${currentCaptureMismatch || missing.length || unverified ? ' case-finalization__status--mismatch' : ''}`} title={badgeTitle}>
-        {current ? <CheckCircle2 size={14} aria-hidden="true" /> : null}{badgeText}{missing.length || unverified ? <AlertTriangle size={13} aria-label="확인 필요 항목 있음" /> : null}
+      <span className={`case-finalization__status${current && !copying && !failed ? ' case-finalization__status--complete' : ''}${copying ? ' case-finalization__status--copying' : ''}${failed ? ' case-finalization__status--failed' : ''}${!copying && !failed && (currentCaptureMismatch || missing.length || unverified) ? ' case-finalization__status--mismatch' : ''}`} title={badgeTitle} data-testid="case-final-status" role={copying ? 'status' : undefined}>
+        {copying ? <LoaderCircle size={14} className="case-finalization__spinner" aria-hidden="true" /> : failed ? <AlertTriangle size={13} aria-hidden="true" /> : current ? <CheckCircle2 size={14} aria-hidden="true" /> : null}{badgeText}{!copying && !failed && (missing.length || unverified) ? <AlertTriangle size={13} aria-label="확인 필요 항목 있음" /> : null}
       </span>
+      {failed && !dialogOpen ? <button type="button" className="case-finalization__retry" disabled={!canFinalize || busy} title={failed.error?.message} onClick={() => void retryJob(failed)}><RotateCcw size={13} aria-hidden="true" />재시도</button> : null}
       <button type="button" className="case-finalization__trigger" title={canFinalize ? undefined : 'Final 지정 권한이 있는 사용자만 실행할 수 있습니다.'} disabled={!canFinalize || busy || !captureId || !caseId} onClick={() => void makePreview()}>
         {busy && !dialogOpen ? <LoaderCircle size={15} className="case-finalization__spinner" /> : <FileArchive size={15} aria-hidden="true" />}
         Final 지정
@@ -221,31 +310,36 @@ export function CaseFinalizationPanel(props: Props) {
           </div>}
         </section>
         <section className="case-finalization__section" aria-label="Final/CAE">
-          <h4>Final/CAE <span>입력·결과 {preview.files.length}개</span></h4>
+          <h4>Final/CAE <span>Scene 폴더 파일 {preview.files.length}개{preview.counts.total_bytes !== undefined ? ` · ${formatBytes(preview.counts.total_bytes)}` : ''}</span></h4>
           <div className="case-finalization__counts">
             <span>RAD {preview.counts.rad_decks}</span>
             <span>INC {preview.counts.inc_decks}</span>
             <span>결과 {preview.counts.results}</span>
             {sceneDocs ? <span>Scene 문서 {sceneDocs}</span> : null}
+            {preview.counts.other_files ? <span>기타 {preview.counts.other_files}</span> : null}
           </div>
+          <p className="case-finalization__hint">임시·잠금 파일(~$*, *.tmp)과 숨김·시스템 항목은 복사하지 않습니다.</p>
+          {preview.disk && !preview.disk.sufficient && <p className="case-finalization__missing" role="note">Final 드라이브 남은 공간이 부족합니다(필요 {formatBytes(preview.disk.required_bytes + preview.disk.margin_bytes)}{preview.disk.free_bytes !== null ? ` · 남은 공간 ${formatBytes(preview.disk.free_bytes)}` : ''}).</p>}
+          {preview.include_unchecked?.length ? <p className="case-finalization__hint" title={preview.include_unchecked.join('\n')}>크기가 커서 include 참조를 확인하지 않은 덱 {preview.include_unchecked.length}개 (파일은 복사합니다)</p> : null}
           {preview.missing.rad_decks && <p className="case-finalization__missing">.rad 입력 덱이 없습니다.</p>}
           {preview.missing.inc_decks && <p className="case-finalization__missing">.inc 입력 덱이 없습니다.</p>}
           {preview.excluded_capture_file_count > 0 && <p className="case-finalization__hint">현재 확정 범위 밖의 결과 파일 {preview.excluded_capture_file_count}개는 제외됩니다.</p>}
           {preview.files.length > 0 ? <details className="case-finalization__file-list">
             <summary>파일 {preview.files.length}개 보기</summary>
             <ul className="case-finalization__files">
-              {preview.files.map((file) => <li key={file.case_relative_path}>
+              {listedFiles.map((file) => <li key={file.case_relative_path}>
                 <span className="case-finalization__source-basis">{file.source_basis === 'CURRENT_CONFIRMED_SCENE' ? 'Scene 파일' : '결과'}</span>
                 <span className="case-finalization__file-path" title={file.source_relative_path}>{file.case_relative_path}</span>
                 <span className="case-finalization__file-size">{formatBytes(file.size)}</span>
               </li>)}
+              {preview.files.length > listedFiles.length ? <li className="case-finalization__hint">외 {preview.files.length - listedFiles.length}개</li> : null}
             </ul>
           </details> : <p className="case-finalization__empty">확정할 파일이 없습니다.</p>}
         </section>
         <section className="case-finalization__section" aria-label="Final/Report">
           <h4>Final/Report <span>하나 이상 선택</span></h4>
           {scopeAtOpen ? <p className="case-finalization__hint" title={reportRange} data-testid="case-final-report-range">보고서 범위: {reportRange}</p> : <p className="case-finalization__missing">이 Case에는 보고서를 만들 결과가 없습니다.</p>}
-          <fieldset className="case-finalization__formats" disabled={busy || !scopeAtOpen}>
+          <fieldset className="case-finalization__formats" disabled={busy || Boolean(dialogCopying) || !scopeAtOpen}>
             <legend className="case-sr-only">보고서 형식</legend>
             <label className="case-finalization__format"><input type="checkbox" checked={formats.pptx} onChange={(event) => setFormats((value) => ({ ...value, pptx: event.target.checked }))} />PPTX<code title={preview.report_paths.pptx}>{preview.report_files.pptx}</code></label>
             <label className="case-finalization__format"><input type="checkbox" checked={formats.html} onChange={(event) => setFormats((value) => ({ ...value, html: event.target.checked }))} />HTML<code title={preview.report_paths.html}>{preview.report_files.html}</code></label>
@@ -255,15 +349,22 @@ export function CaseFinalizationPanel(props: Props) {
         </section>
         {skippedVideos.length > 0 && <p className="case-finalization__missing">HTML에 넣지 못한 영상 {skippedVideos.length}개: {skippedVideos.join(', ')}</p>}
         {skippedImages.length > 0 && <p className="case-finalization__missing">보고서에 넣지 못한 이미지 {skippedImages.length}개: {skippedImages.join(', ')}</p>}
+        {dialogJob && dialogJob.state !== 'COMPLETE' && <section className="case-finalization__section case-finalization__job" aria-label="Final 복사 진행" data-testid="case-final-job">
+          <h4>{dialogFailed ? 'Final 복사 실패' : jobLabel(dialogJob)} <span>Final ID {dialogJob.operation_id.slice(0, 8)}</span></h4>
+          <div className="case-finalization__bar" role="progressbar" aria-label="Final 복사 진행률" aria-valuemin={0} aria-valuemax={100} aria-valuenow={jobPercent(dialogJob)}><span style={{ width: `${jobPercent(dialogJob)}%` }} /></div>
+          <p className="case-finalization__job-counts">파일 {dialogJob.files_done}/{dialogJob.files_total} · {formatBytes(dialogJob.bytes_done)} / {formatBytes(dialogJob.bytes_total)}</p>
+          {dialogJob.current_file && dialogCopying ? <p className="case-finalization__job-file" title={dialogJob.current_file}>현재: {dialogJob.current_file}</p> : null}
+          {dialogCopying ? <p className="case-finalization__hint">창을 닫아도 복사는 계속됩니다. 완료 전에는 Final 폴더에 나타나지 않습니다.</p> : null}
+        </section>}
         {dialogError && <p className="case-finalization__dialog-error" role="alert"><AlertTriangle size={14} aria-hidden="true" />{dialogError}</p>}
       </div>}
       <footer className="case-finalization__dialog-actions">
         {phase !== 'idle' && <span className="case-finalization__progress" role="status"><LoaderCircle size={14} className="case-finalization__spinner" aria-hidden="true" />{PHASE_TEXT[phase]}</span>}
-        {result ? <button type="button" className="case-finalization__confirm-button" onClick={closeDialog}>닫기</button> : <>
+        {result ? <button type="button" className="case-finalization__confirm-button" onClick={closeDialog}>닫기</button> : dialogCopying ? <button type="button" className="case-finalization__cancel" onClick={closeDialog}>닫기 (복사 계속)</button> : <>
           <button type="button" className="case-finalization__cancel" disabled={busy} onClick={closeDialog}>취소</button>
           <button type="button" className="case-finalization__confirm-button" disabled={confirmDisabled} onClick={() => void confirmFinal()}>
-            {busy ? <LoaderCircle size={15} className="case-finalization__spinner" /> : <FileArchive size={15} aria-hidden="true" />}
-            {dialogError ? '다시 시도' : 'Final 지정 확정'}
+            {busy ? <LoaderCircle size={15} className="case-finalization__spinner" /> : dialogError || dialogFailed ? <RotateCcw size={15} aria-hidden="true" /> : <FileArchive size={15} aria-hidden="true" />}
+            {dialogError || dialogFailed ? '재시도' : 'Final 지정 확정'}
           </button>
         </>}
       </footer>

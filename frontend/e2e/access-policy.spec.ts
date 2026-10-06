@@ -29,7 +29,8 @@ test('파워 사용자는 의뢰와 결과 편집 메뉴를 본다', async ({ pa
   await page.getByRole('link', { name: '내 작업', exact: true }).click()
   await expect(page.getByRole('navigation', { name: '의뢰 작업 여정' })).toBeVisible()
   await openSidebarUtilities(page)
-  await expect(page.getByRole('link', { name: '새 의뢰', exact: true })).toBeVisible()
+  // 2026-10-06: hidden from the sidebar for the current usage scenario (SIDEBAR_HIDDEN_MENUS); pages stay reachable by URL.
+  await expect(page.getByRole('link', { name: '새 의뢰', exact: true })).toHaveCount(0)
   await expect(page.getByRole('link', { name: '해석 데이터 등록', exact: true })).toHaveCount(0)
   await expect(page.getByRole('navigation', { name: '의뢰 작업 여정' }).getByRole('button', { name: '결과 등록', exact: true })).toBeEnabled()
   await expect(page.getByRole('link', { name: '사용자·프로젝트 권한', exact: true })).toHaveCount(0)
@@ -39,7 +40,8 @@ test('파워 사용자는 의뢰와 결과 편집 메뉴를 본다', async ({ pa
 test('프로젝트 관리자는 프로젝트 권한 메뉴까지만 본다', async ({ page }) => {
   await login(page, 'e2e-project-admin')
   await openSidebarUtilities(page)
-  await expect(page.getByRole('link', { name: '변수 카탈로그', exact: true })).toBeVisible()
+  // 2026-10-06: hidden from the sidebar for the current usage scenario (SIDEBAR_HIDDEN_MENUS); pages stay reachable by URL.
+  await expect(page.getByRole('link', { name: '변수 카탈로그', exact: true })).toHaveCount(0)
   await expect(page.getByRole('link', { name: '사용자·프로젝트 권한', exact: true })).toBeVisible()
   await expect(page.getByRole('link', { name: '권한 및 메뉴 정책', exact: true })).toHaveCount(0)
   await expect(page.getByRole('link', { name: '감사로그', exact: true })).toHaveCount(0)
@@ -55,7 +57,8 @@ test('전역 관리자는 간결한 기본 메뉴에서 설정을 펼쳐 모든 
   await openSidebarUtilities(page)
   await expect(page.getByRole('link', { name: '권한 및 메뉴 정책', exact: true })).toBeVisible()
   await expect(page.getByRole('link', { name: '감사로그', exact: true })).toBeVisible()
-  await expect(page.getByRole('link', { name: '작업 유형 관리', exact: true })).toBeVisible()
+  // 2026-10-06: hidden from the sidebar for the current usage scenario (SIDEBAR_HIDDEN_MENUS); pages stay reachable by URL.
+  await expect(page.getByRole('link', { name: '작업 유형 관리', exact: true })).toHaveCount(0)
 
   await expect(page.getByRole('button', { name: /메뉴 (접기|펼치기)/ })).toHaveCount(0)
   await expect(sidebar.getByRole('link', { name: '내 작업', exact: true })).toBeVisible()
