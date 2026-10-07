@@ -1053,8 +1053,10 @@ def _token_version(token: str) -> Any:
 def _cleanup_orphans() -> int:
     """Server staging cleanup (05 §7; never the drive).  Folders older than a day are removed unless
 
-    * a batch with open items (``PENDING``/``RUNNING``/``BLOCKED``) or a ``PUBLISHING`` Final uses them, or
-    * they belong to a batch waiting for an admin decision (``CONFLICT``/``FAILED`` items) or to an
+    * a batch that can still progress (``summarize`` state ``QUEUED``/``RUNNING``/``PAUSED``) or a
+      ``PUBLISHING`` Final uses them, or
+    * they belong to a batch waiting for an admin decision (``CONFLICT``/``FAILED`` items, or halted by a
+      ``halt_on_error`` item so its later items stay ``PENDING``) or to an
       unfinished Final (``PLANNED``/``STAGED``/``FAILED``, retry keeps its reports) whose last activity is
       younger than ``STAGING_MAX_AGE_SECONDS`` (review #9: such staging no longer stays forever).
     """
@@ -1072,22 +1074,32 @@ def _cleanup_orphans() -> int:
         if not isinstance(known, datetime) or (isinstance(moment, datetime) and moment > known):
             activity[key] = moment
 
+    names = {folder.name[len(STAGING_PREFIX):] for folder in candidates if folder.name.startswith(STAGING_PREFIX)}
+    live: set[str] = set()
+    waiting: set[str] = set()
     with connect() as conn:
-        live = {str(row[0]) for row in conn.execute(
-            "SELECT DISTINCT batch_id FROM drive_upload_queue WHERE state IN ('PENDING','RUNNING','BLOCKED')").fetchall()}
         live |= {str(row[0]) for row in conn.execute(
             "SELECT operation_id FROM finalization_operations WHERE status='PUBLISHING'").fetchall()}
-        for row in conn.execute("SELECT batch_id, max(updated_at) FROM drive_upload_queue "
-                                "WHERE state IN ('CONFLICT','FAILED') GROUP BY batch_id").fetchall():
-            note_activity(row[0], row[1])
-        waiting = set(activity)
+        batches = {name: batch_items(conn, name) for name in names}
+        for name, items in batches.items():
+            if not items:
+                continue
+            summary = summarize(items)
+            if summary["state"] in {"QUEUED", "RUNNING", "PAUSED"}:
+                live.add(name)
+            elif summary["counts"]["FAILED"] or summary["counts"]["CONFLICT"] or summary["counts"]["PENDING"]:
+                # waiting for an admin decision, including a batch halted by a halt_on_error item whose
+                # later items stay PENDING until retried (re-review #1: no longer treated as live forever)
+                waiting.add(name)
+                for item in items:
+                    note_activity(name, item.updated_at)
         for row in conn.execute("SELECT operation_id, updated_at FROM finalization_operations "
                                 "WHERE status IN ('PLANNED','STAGED','FAILED')").fetchall():
-            waiting.add(str(row[0]))
-            note_activity(row[0], row[1])
-        for row in conn.execute("SELECT batch_id, max(updated_at) FROM drive_upload_queue GROUP BY batch_id").fetchall():
-            if str(row[0]) in waiting:
+            if str(row[0]) in names:
+                waiting.add(str(row[0]))
                 note_activity(row[0], row[1])
+                for item in batches.get(str(row[0])) or []:
+                    note_activity(row[0], item.updated_at)
     removed = 0
     for folder in candidates:
         name = folder.name[len(STAGING_PREFIX):] if folder.name.startswith(STAGING_PREFIX) else None

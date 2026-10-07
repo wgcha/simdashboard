@@ -819,6 +819,119 @@ def test_staging_of_stopped_batches_and_unfinished_finals_is_removed_after_the_a
     assert scxw.drive.writes() == writes and staging.exists()
 
 
+def test_staging_of_halted_batches_ages_out_from_their_last_activity(scxw):
+    """Re-review #1: a halt_on_error stop leaves later items PENDING; such a batch waits for an admin, it is not live."""
+    import os
+
+    ctx = _final_ctx(scxw)
+    project_id, request_id = ctx["project_id"], ctx["request_id"]
+    drops = []
+    for scene in (NEW_SCENE, "6_Face"):
+        session = _drop(scxw, project_id, request_id, [(f"{scene}/{CSV}", CSV_BYTES)])
+        scxw.drive.fail_next["mkdirs"] = ErrorCode.FORBIDDEN
+        _complete(scxw, session["session_id"])
+        _settle()
+        assert [row[:2] for row in _items(session["session_id"])] == [("MKDIR", "FAILED"), ("FILE", "PENDING")]
+        drops.append(session["session_id"])
+    finals = []
+    for _ in range(2):
+        operation_id = _preview(scxw, ctx)["operation_id"]
+        _stage(scxw, ctx, operation_id)
+        scxw.drive.fail_next["mkdirs"] = ErrorCode.FORBIDDEN
+        assert _confirm(scxw, ctx, operation_id).status_code == 200
+        _settle()
+        rows = _items(operation_id)
+        assert rows[0][:2] == ("MKDIR", "FAILED") and all(row[1] == "PENDING" for row in rows[1:])
+        assert _job(scxw, ctx, operation_id)["state"] == "FAILED"
+        finals.append(operation_id)
+    open_batch = _drop(scxw, project_id, request_id, [("2_Face/open.csv", b"open\n")])["session_id"]
+    _complete(scxw, open_batch)                                       # queued, not run yet (open, not halted)
+    folders = {name: upload_queue.staging_dir_for(name) for name in (*drops, *finals, open_batch)}
+    two_days = time.time() - 2 * 24 * 3600
+    for folder in folders.values():
+        assert folder.exists()
+        os.utime(folder, (two_days, two_days))
+    stale = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=8)
+    with connect() as conn:
+        for name in (drops[0], finals[0], open_batch):
+            conn.execute("UPDATE drive_upload_queue SET updated_at=? WHERE batch_id=?", [stale, name])
+        conn.execute("UPDATE finalization_operations SET updated_at=? WHERE operation_id=?", [stale, finals[0]])
+    writes = list(scxw.drive.writes())
+    assert upload_queue.sweep(cleanup=True)["staging_removed"] == 2
+    assert not folders[drops[0]].exists() and not folders[finals[0]].exists()
+    assert folders[drops[1]].exists() and folders[finals[1]].exists() and folders[open_batch].exists()
+    assert scxw.drive.writes() == writes
+
+
+def test_final_retry_rewrites_a_removed_staged_plan_from_the_database(scxw):
+    """Re-review #2: staging cleanup removed the stopped Final's folder; retry rebuilds plan.json (same sha256)."""
+    from app.services.storage import server_local
+
+    ctx = _final_ctx(scxw)
+    operation_id = _preview(scxw, ctx)["operation_id"]
+    _stage(scxw, ctx, operation_id)
+    scxw.drive.fail_next["mkdirs"] = ErrorCode.FORBIDDEN
+    assert _confirm(scxw, ctx, operation_id).status_code == 200
+    _settle()
+    assert _job(scxw, ctx, operation_id)["state"] == "FAILED"
+    server_local.remove_tree(upload_queue.staging_dir_for(operation_id))
+    _stage(scxw, ctx, operation_id)
+    with connect() as conn:                                           # a tampered record cannot be satisfied
+        recorded = conn.execute("SELECT sha256 FROM drive_upload_queue WHERE batch_id=? AND dst_name='plan.json'",
+                                [operation_id]).fetchone()[0]
+        conn.execute("UPDATE drive_upload_queue SET sha256=? WHERE batch_id=? AND dst_name='plan.json'",
+                     ["0" * 64, operation_id])
+    refused = _confirm(scxw, ctx, operation_id)
+    assert refused.status_code == 422 and refused.json()["detail"]["code"] == "FINALIZATION_PLAN_STAGE_INVALID", refused.text
+    assert not (upload_queue.staging_dir_for(operation_id) / "plan.json").exists()
+    with connect() as conn:
+        assert conn.execute("SELECT count(*) FROM drive_locks").fetchone()[0] == 0
+        conn.execute("UPDATE drive_upload_queue SET sha256=? WHERE batch_id=? AND dst_name='plan.json'",
+                     [recorded, operation_id])
+    assert _job(scxw, ctx, operation_id)["state"] == "FAILED"
+    retried = _confirm(scxw, ctx, operation_id)
+    assert retried.status_code == 200, retried.text
+    _settle()
+    assert _job(scxw, ctx, operation_id)["state"] == "COMPLETE"
+    plan_file = scxw.path(f"{FINAL}/.finalizations/{operation_id}/plan.json")
+    assert hashlib.sha256(scxw.drive.content(plan_file)).hexdigest() == recorded
+
+
+def test_admin_retry_of_a_failed_final_publishes_with_its_lock_in_one_transaction(scxw):
+    """Re-review #3: the retried Final is PUBLISHING with its lock; a refused retry changes neither."""
+    ctx = _final_ctx(scxw)
+    operation_id = _preview(scxw, ctx)["operation_id"]
+    _stage(scxw, ctx, operation_id)
+    report = scxw.path(f"{FINAL}/Report/{CASE_LABEL}/{operation_id}/{CASE_LABEL}_report.html")
+    scxw.drive.fail_path[("upload_new", report)] = [ErrorCode.FORBIDDEN]
+    assert _confirm(scxw, ctx, operation_id).status_code == 200
+    _settle()
+    assert _job(scxw, ctx, operation_id)["state"] == "FAILED"
+
+    def state() -> tuple:
+        with connect() as conn:
+            status = conn.execute("SELECT status FROM finalization_operations WHERE operation_id=?",
+                                  [operation_id]).fetchone()[0]
+            return status, [str(row[0]) for row in conn.execute("SELECT owner FROM drive_locks").fetchall()]
+
+    with connect() as conn:
+        done_item = conn.execute("SELECT id FROM drive_upload_queue WHERE batch_id=? AND state='DONE' ORDER BY seq LIMIT 1",
+                                 [operation_id]).fetchone()[0]
+        failed_item = conn.execute("SELECT id FROM drive_upload_queue WHERE batch_id=? AND state='FAILED'",
+                                   [operation_id]).fetchone()[0]
+    refused = scxw.client.post(f"/api/admin/drive/queue/{done_item}/retry")
+    assert refused.status_code == 409 and refused.json()["detail"]["code"] == "DRIVE_QUEUE_ITEM_STATE", refused.text
+    assert state() == ("FAILED", [])                                 # lock and status rolled back together
+    scxw.drive.fail_path[("upload_new", report)] = [ErrorCode.FORBIDDEN]
+    assert scxw.client.post(f"/api/admin/drive/queue/{failed_item}/retry").status_code == 200
+    assert state() == ("PUBLISHING", [operation_id])
+    _settle()
+    assert state() == ("FAILED", [])                                 # the finish hook settled it and released the lock
+    assert scxw.client.post(f"/api/admin/drive/queue/{failed_item}/retry").status_code == 200
+    _settle()
+    assert _job(scxw, ctx, operation_id)["state"] == "COMPLETE" and state() == ("COMPLETE", [])
+
+
 def test_a_drop_completion_that_did_not_commit_can_be_completed_again(scxw, monkeypatch):
     """Review #10: the session leaves the registry only after the router committed."""
     from app.routers import result_registration as router

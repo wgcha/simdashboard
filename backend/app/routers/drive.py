@@ -626,7 +626,8 @@ def _queue_action(request: Request, item_id: str, action: str) -> DriveQueueItem
         existing = upload_queue.get_item(conn, item_id)
         if existing is not None and action == "retry" and existing.origin == "finalization" and existing.origin_ref \
                 and existing.state in {"FAILED", "CONFLICT", "BLOCKED", "CANCELLED", "PENDING"}:
-            # A Final batch runs again only while it holds its request lock (review #6).
+            # A Final batch runs again only while it holds its request lock (review #6); the stopped Final
+            # becomes PUBLISHING ("드라이브 반영 중") with the lock in this transaction (re-review #3).
             from ..services import case_finalization_drive
             from ..services.case_finalization import CaseFinalizationError
 
@@ -640,10 +641,6 @@ def _queue_action(request: Request, item_id: str, action: str) -> DriveQueueItem
             raise _fail(404, "DRIVE_QUEUE_ITEM_NOT_FOUND", "대기열 항목을 찾을 수 없습니다.") from None
         except ValueError as error:
             raise _fail(409, "DRIVE_QUEUE_ITEM_STATE", f"이 상태({error})의 항목은 {'다시 시도' if action == 'retry' else '취소'}할 수 없습니다.") from None
-        if item.origin == "finalization" and item.origin_ref and action == "retry":
-            # A stopped Final batch runs again from this item; the Final shows "드라이브 반영 중" again.
-            conn.execute("UPDATE finalization_operations SET status='PUBLISHING', error_code=NULL, error_message=NULL "
-                         "WHERE operation_id=? AND status='FAILED'", [item.origin_ref])
         write_audit_event(request=request, principal=request.state.principal, status_code=200,
                           action="DRIVE_QUEUE_ITEM_RETRIED" if action == "retry" else "DRIVE_QUEUE_ITEM_CANCELLED",
                           detail={"item_id": item_id, "batch_id": item.batch_id, "origin": item.origin,

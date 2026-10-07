@@ -263,7 +263,7 @@
 - **재시작:** 앱 기동 시 `RUNNING`으로 남은 항목은 `PENDING`으로 돌아가고 재시도 전 확인 규칙으로 이어서 실행된다.
 - **결과 기록 실패·정리(sweep):** 드라이브 호출 뒤 결과를 DB에 기록하지 못하면 짧은 연결로 몇 번 다시 기록한다. 그래도 실패하면 행은 `RUNNING`으로 남고, 작업자가 1분마다 돌리는 정리가 이 프로세스에서 실행 중이 아닌 `RUNNING` 항목을 `PENDING`으로 되돌린다(다음 시도는 재시도 전 확인 규칙으로 이미 올라간 파일을 알아본다). 같은 정리가 묶음이 이미 끝났는데 `PUBLISHING`으로 남은 Final의 마무리(완료·실패 판정, 잠금 해제)를 다시 실행한다(마무리 훅 실패, 관리자 취소 뒤 깨우기 유실).
 - **DB 연결:** 작업자는 짧은 연결로 항목을 잡고(`RUNNING`), **연결 없이** 드라이브를 부른 뒤, 짧은 연결로 결과를 기록한다(§8.2와 같은 이유; 시험이 모든 가짜 드라이브 호출 시점에 연결이 없음을 확인).
-- **임시 파일:** 항목이 `DONE`이 되기 전에는 지우지 않는다. Final 묶음은 보고서·`plan.json` 임시 파일을 **묶음 전체가 `DONE`일 때까지** 남긴다(같은 Final ID 재시도). 묶음이 모두 `DONE`이면 `upload-<묶음>` 폴더를 지운다. 기동 시와 그 뒤 1시간마다 하루 지난 `upload-*`·`xfer-*`를 지우되, 열린 항목(`PENDING`·`RUNNING`·`BLOCKED`)이나 `PUBLISHING` Final이 쓰는 것은 남기고, 관리자 판단을 기다리는 묶음(`CONFLICT`·`FAILED` 항목)과 미완료 Final(`PLANNED`·`STAGED`·`FAILED`)의 것은 마지막 활동 후 **7일**까지 남긴다(서버 임시 저장소만, 드라이브는 건드리지 않음). 7일 뒤 재시도하면 보고서·파일을 다시 올려야 한다.
+- **임시 파일:** 항목이 `DONE`이 되기 전에는 지우지 않는다. Final 묶음은 보고서·`plan.json` 임시 파일을 **묶음 전체가 `DONE`일 때까지** 남긴다(같은 Final ID 재시도). 묶음이 모두 `DONE`이면 `upload-<묶음>` 폴더를 지운다. 기동 시와 그 뒤 1시간마다 하루 지난 `upload-*`·`xfer-*`를 지우되, 아직 진행할 수 있는 묶음(묶음 요약 `QUEUED`·`RUNNING`·`PAUSED`)이나 `PUBLISHING` Final이 쓰는 것은 남기고, 관리자 판단을 기다리는 묶음(`CONFLICT`·`FAILED` 항목, 또는 `halt_on_error` 항목이 멈춰 뒤 항목이 `PENDING`으로 남은 정지 묶음)과 미완료 Final(`PLANNED`·`STAGED`·`FAILED`)의 것은 마지막 활동 후 **7일**까지 남긴다(서버 임시 저장소만, 드라이브는 건드리지 않음). 7일 뒤 재시도하면 보고서·파일을 다시 올려야 한다(Final 재시도는 지워진 `plan.json` 임시 파일을 DB `plan_json`에서 다시 만들고, 대기열에 기록된 sha256과 다르면 422 `FINALIZATION_PLAN_STAGE_INVALID`로 멈춘다).
 - **단일 작업자:** 프로세스당 스레드 1개(`dashboard.lock`으로 프로세스도 하나). 묶음은 만든 순서대로, 묶음 안은 `seq` 순서.
 - 묶음 상태: `QUEUED`·`RUNNING`·`PAUSED`(인증 대기)·`DONE`·`PARTIAL`·`CONFLICT`·`FAILED`·`CANCELLED`. 항목 상태: `PENDING`·`RUNNING`·`DONE`·`CONFLICT`·`FAILED`·`BLOCKED`·`CANCELLED`.
 - 관리자 취소는 항목을 `CANCELLED`로 표시만 한다(드라이브 내용 불변). 묶음 마무리(Final 실패 판정·잠금 해제)는 취소가 커밋된 뒤에 실행한다. 다시 시도는 같은 항목을 처음부터(충돌은 드라이브 재확인). Final 묶음 항목의 다시 시도는 의뢰 잠금을 먼저 잡는다(다른 Final이 반영 중이면 409 `FINALIZATION_LOCKED`).
@@ -282,7 +282,7 @@
 
 | 항목 | local 모드 | scx 모드 |
 |---|---|---|
-| 의뢰 잠금 `.request.lock` | 파일 | `drive_locks` 행 `final:<프로젝트>/<의뢰>`(확정부터 묶음이 끝날 때까지, 30분 만료·작업자가 연장). 잠금을 가진 Final이 `PUBLISHING`이면 만료 시각이 지나도(인증 대기로 대기열이 멈춘 경우) 잠금으로 본다. 넘겨받기는 읽은 행이 그대로일 때만(조건부 `UPDATE … RETURNING`, PostgreSQL은 `FOR UPDATE`). 같은 의뢰의 다른 Final 확정·관리자 대기열 다시 시도는 409 `FINALIZATION_LOCKED` |
+| 의뢰 잠금 `.request.lock` | 파일 | `drive_locks` 행 `final:<프로젝트>/<의뢰>`(확정부터 묶음이 끝날 때까지, 30분 만료·작업자가 연장). 잠금을 가진 Final이 `PUBLISHING`이면 만료 시각이 지나도(인증 대기로 대기열이 멈춘 경우) 잠금으로 본다. 넘겨받기는 읽은 행이 그대로일 때만(조건부 `UPDATE … RETURNING`, PostgreSQL은 `FOR UPDATE`). 같은 의뢰의 다른 Final 확정·관리자 대기열 다시 시도는 409 `FINALIZATION_LOCKED`. 관리자 대기열 다시 시도는 잠금을 잡는 같은 트랜잭션에서 `FAILED` Final을 `PUBLISHING`으로 되돌린다(다시 멈추면 마무리 훅이 `FAILED`·잠금 해제, 다시 시도가 거부되면 둘 다 되돌림) |
 | `plan.json` | `.finalizations/<op>/` | `finalization_operations.plan_json`(서명 동일, 파일마다 `version_token` 추가). 확정 때 드라이브 `.finalizations/<op>/plan.json`에 사본 1회(불변) |
 | 보고서 업로드·`reports.json` | `.finalizations/<op>/reports/` | 서버 `upload-<op>/reports/<이름>` + `reports_json`(DB). 확정 전에는 다시 올려 교체 가능, 대기열에 들어간 뒤에는 같은 바이트만 허용 |
 | 원본 → `Final/CAE/<Case>/<op>/…` | 임시 폴더 복사 → 이름 바꾸기 | `COPY` 항목(`copy_within`, 지원하지 않으면 다운로드→업로드) |

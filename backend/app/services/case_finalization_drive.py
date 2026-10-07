@@ -162,11 +162,19 @@ def _acquire_lock(conn: ConnectionLike, scope: str, owner: str) -> None:
 
 
 def acquire_retry_lock(conn: ConnectionLike, operation_id: str) -> None:
-    """Admin queue retry of a Final batch item: the Final takes (or keeps) its request lock first."""
+    """Admin queue retry of a Final batch item: the Final takes (or keeps) its request lock first.
+
+    Re-review #3: a stopped (``FAILED``) Final becomes ``PUBLISHING`` in the same transaction as the lock is
+    taken, so the lock is held under the PUBLISHING rule and the batch finish hook settles it (``FAILED`` and
+    lock released, or ``COMPLETE``) when the retried batch stops again.  The caller's transaction rolls both
+    back together when the retry itself is refused.
+    """
     operation = _operation(conn, operation_id)
     if operation is None or operation["status"] == "COMPLETE":
         return
     _acquire_lock(conn, _lock_scope(operation["project_id"], operation["request_id"]), operation_id)
+    conn.execute("UPDATE finalization_operations SET status='PUBLISHING', error_code=NULL, error_message=NULL, "
+                 "updated_at=? WHERE operation_id=? AND status='FAILED'", [_now_db(), operation_id])
 
 
 def _lock_designations(conn: ConnectionLike, project_id: str, request_id: str) -> None:
@@ -392,6 +400,28 @@ def _queue_items(operation: dict[str, Any], plan: dict[str, Any], reports: list[
     return items
 
 
+def _restore_staged_plan(conn: ConnectionLike, operation: dict[str, Any], plan: dict[str, Any]) -> None:
+    """Retry: rewrite a missing staged ``plan.json`` from ``plan_json`` (re-review #2).
+
+    Staging cleanup may remove a stopped Final's folder; ``cf._encode`` is deterministic, so the rewritten file
+    must match the sha256 the queue item recorded, otherwise the retry stops with a clear error.
+    """
+    operation_dir = str(plan["metadata_relative_path"])
+    for item in upload_queue.batch_items(conn, operation["upload_batch_id"]):
+        if item.kind != "FILE" or item.dst_name != "plan.json" or item.dst_rel_dir != operation_dir or item.state == "DONE":
+            continue
+        path = Path(item.staging_path) if item.staging_path else _staging(operation["operation_id"]) / "plan.json"
+        if server_local.file_exists(path):
+            continue
+        server_local.ensure_dir(path.parent)
+        server_local.write_file(path, cf._encode(plan))
+        size, digest = server_local.file_sha256(path)
+        if digest != item.sha256 or (item.size_bytes is not None and size != int(item.size_bytes)):
+            server_local.discard_file(path)
+            raise Error("FINALIZATION_PLAN_STAGE_INVALID",
+                        "Final 계획 파일을 다시 만들 수 없습니다(기록과 다름). 새로 미리보기 후 다시 지정하세요.")
+
+
 def confirm(conn: ConnectionLike, *, project_id: str, request_id: str, environment: str,
             case_id: str, capture_id: str, operation_id: str, actor: str,
             report_formats: list[str] | tuple[str, ...] = ()) -> dict[str, Any]:
@@ -418,6 +448,7 @@ def confirm(conn: ConnectionLike, *, project_id: str, request_id: str, environme
         uploaded = frozenset(str(item.dst_name) for item in upload_queue.batch_items(conn, operation["upload_batch_id"])
                              if item.kind == "FILE" and item.state == "DONE" and item.dst_rel_dir == reports_dir)
         _staged_reports(operation, formats, uploaded=uploaded)
+        _restore_staged_plan(conn, operation, plan)
         _acquire_lock(conn, _lock_scope(project_id, request_id), operation_id)
         upload_queue.requeue_batch(conn, operation["upload_batch_id"])
         conn.execute("UPDATE finalization_operations SET status='PUBLISHING', error_code=NULL, error_message=NULL, "
