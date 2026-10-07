@@ -128,7 +128,6 @@ class DriveCheckReport(BaseModel):
     finished_at: str
     ok: bool
     steps: list[DriveCheckStep]
-    leftovers: list[str]
     note: str
 
 
@@ -350,8 +349,7 @@ def drive_check(payload: DriveCheckRequest, request: Request) -> DriveCheckRepor
         raise _fail(409, "DRIVE_CHECK_RUNNING", str(error)) from error
     failed = [step["step"] for step in report["steps"] if not step["ok"] and not step["skipped"]]
     write_audit_event(request=request, principal=request.state.principal, status_code=200, action="DRIVE_CHECK_RUN",
-                      detail={"test_folder": folder, "ok": report["ok"], "failed_steps": failed,
-                              "leftovers": report["leftovers"]})
+                      detail={"test_folder": folder, "ok": report["ok"], "failed_steps": failed})
     return DriveCheckReport(**report)
 
 

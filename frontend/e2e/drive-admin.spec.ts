@@ -20,11 +20,11 @@ const REPORT = {
   steps: [
     { step: 'stat_folder', label: '시험 폴더 조회(stat)', ok: true, skipped: false, code: null, latency_ms: 120.5, observations: ['item_id=있음'] },
     { step: 'list_dir', label: '목록 조회(list_dir)', ok: true, skipped: false, code: null, latency_ms: 340.2, observations: ['항목 4개(파일 4, 폴더 0)', '목록의 sha1: 파일 4개 중 0개 (C9)'] },
-    { step: 'upload_conflict', label: '같은 이름 재업로드 → 충돌 확인(C2)', ok: true, skipped: false, code: 'CONFLICT', latency_ms: 80, observations: ['예상대로 CONFLICT(덮어쓰지 않음)'] },
+    { step: 'stat_file', label: '파일 조회(stat)', ok: false, skipped: true, code: null, latency_ms: null, observations: ['8 MiB 이하 파일이 없습니다.'] },
     { step: 'download_to', label: '작은 파일 다운로드(download_to)', ok: false, skipped: true, code: null, latency_ms: null, observations: ['다운로드할 작은 파일이 없습니다.'] },
+    { step: 'health', label: '어댑터 상태(health)', ok: true, skipped: false, code: null, latency_ms: 0.1, observations: ['state=OK, queue_depth=0'] },
   ],
-  leftovers: ['SPDM/Projects/_simdash_test/simdash-check-20261007T010000-abc123.txt'],
-  note: '드라이브에서는 아무것도 지우지 않습니다.',
+  note: '조회 전용 점검입니다. 드라이브에는 아무것도 만들거나 바꾸거나 지우지 않습니다(다운로드한 서버 사본은 삭제).',
 }
 
 async function mockDrive(page: Page, state: { status: typeof BASE_STATUS; user: string | null; requests: Array<{ method: string; path: string; body: string | null }> }) {
@@ -90,8 +90,13 @@ test.describe('SCX 드라이브 관리', () => {
     await dialog.getByRole('button', { name: '점검 실행' }).click()
     const table = dialog.getByRole('table', { name: '드라이브 점검 결과' })
     await expect(table).toBeVisible()
-    await expect(table.locator('tbody tr')).toHaveCount(4)
-    await expect(table.locator('tr[data-step="upload_conflict"]')).toContainText('CONFLICT')
+    await expect(table.locator('tbody tr')).toHaveCount(5)
+    await expect(table.locator('tr[data-step="list_dir"]')).toContainText('목록의 sha1: 파일 4개 중 0개 (C9)')
+    await expect(table.locator('tr[data-step="health"]')).toContainText('성공')
+    for (const writeStep of ['upload_new', 'upload_conflict', 'mkdirs', 'copy_within', 'copy_conflict']) await expect(table.locator(`tr[data-step="${writeStep}"]`)).toHaveCount(0)
+    await expect(dialog.getByTestId('drive-check-note')).toContainText('조회 전용 점검')
+    await expect(dialog).toContainText('아무것도 만들거나 바꾸거나 지우지 않습니다')
+    await expect(dialog).not.toContainText('simdash-check-')
     await expect(table.locator('tr[data-step="download_to"]')).toContainText('건너뜀')
     await expect(dialog).toContainText('점검 통과 · SPDM/Projects/_simdash_test')
     expect(JSON.parse(state.requests.find((item) => item.path.endsWith('/check'))?.body ?? '{}')).toEqual({ test_folder: '_simdash_test' })

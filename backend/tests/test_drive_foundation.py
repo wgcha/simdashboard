@@ -366,35 +366,30 @@ def _registered(client: TestClient, admin: dict[str, str]) -> None:
     assert client.put("/api/admin/drive/credentials", headers=admin, content=_bundle_json()).status_code == 200
 
 
-def test_drive_check_runs_create_only_sequence_and_reports_each_step(fake_drive, password_auth, scx_env):
+def test_drive_check_is_read_only_and_reports_each_step(fake_drive, password_auth, scx_env):
     with TestClient(app) as client:
         admin = _login(client, "drive-admin")
         _registered(client, admin)
-        before = set(fake_drive.nodes)
-        contents = {path: node.content for path, node in fake_drive.nodes.items()}
+        before = {path: (node.content, getattr(node, "modified_at", None)) for path, node in fake_drive.nodes.items()}
         fake_drive.calls.clear()
         response = client.post("/api/admin/drive/check", headers=admin, json={"test_folder": "check"})
         assert response.status_code == 200, response.text
         report = response.json()
     steps = {step["step"]: step for step in report["steps"]}
     assert report["ok"] is True, report
-    assert list(steps) == ["stat_folder", "list_dir", "stat_file", "download_to", "upload_new", "upload_conflict",
-                           "mkdirs", "copy_within", "copy_conflict", "health"]
+    assert list(steps) == ["stat_folder", "list_dir", "stat_file", "download_to", "health"]
+    assert "leftovers" not in report
     assert "항목 4개(파일 4, 폴더 0)" in steps["list_dir"]["observations"]
     assert any("sha1: 파일 4개 중 4개" in item for item in steps["list_dir"]["observations"])
-    assert steps["upload_conflict"]["code"] == "CONFLICT" and steps["upload_conflict"]["ok"] is True
-    assert steps["copy_conflict"]["code"] == "CONFLICT"
+    assert any("modified_at" in item for item in steps["list_dir"]["observations"])
     assert all(step["latency_ms"] is not None for step in report["steps"])
     assert fake_drive.page_calls >= 2                            # 4 entries over page_size 3
-    # nothing pre-existing changed; only simdash-check-* leftovers were added inside the test folder
-    for path in before:
-        assert fake_drive.nodes[path].content == contents[path]
-    added = set(fake_drive.nodes) - before
-    assert added and all(path.startswith("SPDM/Projects/check/simdash-check-") for path in added)
-    assert sorted(report["leftovers"]) == sorted(added)
-    assert {op for op, _rel in fake_drive.calls} <= {"stat", "list_dir", "download_to", "upload_new", "mkdirs", "copy_within"}
+    # read-only: the drive tree is exactly what it was (no new, changed or removed node)
+    after = {path: (node.content, getattr(node, "modified_at", None)) for path, node in fake_drive.nodes.items()}
+    assert after == before
+    assert {op for op, _rel in fake_drive.calls} <= {"stat", "list_dir", "download_to"}
     assert all(rel == "" or rel.startswith("SPDM/Projects/check") for _op, rel in fake_drive.calls)
-    assert not any((scx_env / "staging").iterdir())               # local staging copies removed
+    assert not any((scx_env / "staging").iterdir())               # local staging copy removed
 
 
 def test_drive_check_reports_missing_folder_busy_file_and_bad_paths(fake_drive, password_auth):
@@ -476,6 +471,24 @@ def test_drive_code_never_calls_delete_move_or_overwrite_operations():
             if isinstance(node, ast.Attribute) and node.attr in {"REPLACE", "KEEP_BOTH"}:
                 violations.append(f"{source.name}:{node.lineno} {node.attr}")
     assert violations == []
+
+
+DRIVE_WRITE_METHODS = {"upload_new", "mkdirs", "copy_within"}
+CHECK_READ_METHODS = {"stat", "list_dir", "download_to", "health"}
+
+
+def test_drive_check_calls_no_drive_write_methods():
+    """User decision 2026-10-07: the admin drive check only reads (no upload/mkdirs/copy, no option)."""
+    tree = ast.parse((BACKEND / "app" / "services" / "drive" / "check.py").read_text(encoding="utf-8"))
+    used = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute):
+            assert node.attr not in DRIVE_WRITE_METHODS | FORBIDDEN_CALLS, f"check.py:{node.lineno} {node.attr}"
+            if isinstance(node.value, ast.Name) and node.value.id == "gateway":
+                used.add(node.attr)
+        if isinstance(node, ast.Name):
+            assert node.id not in DRIVE_WRITE_METHODS, f"check.py:{node.lineno} {node.id}"
+    assert used and used <= CHECK_READ_METHODS, used
 
 
 def test_fake_gateway_and_tests_are_not_importable_from_app():

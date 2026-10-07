@@ -1311,3 +1311,11 @@
 - L1: 상태 API 2개는 게이트웨이를 만들지 않고(`existing_gateway()`), 어떤 오류도 200 `UNAVAILABLE`. 연결 시험도 게이트웨이 생성 실패를 결과로 반환. L2: `RecursionError` → 400 고정 문구. L3: `Content-Length` 64 KiB 초과 선거부 + 스트림 상한. L4: 내부는 `LocalTokenBundle`, 어댑터 경계(`load()` 반환)에서만 어댑터 `TokenBundle`; `safe_error_message`가 `Bearer <x>`·`eyJ…`를 가림. 미결: 어댑터 미설치 기동 거부 문구를 `external-wheels` 복사 + `update.bat` 안내로 변경.
 - 검증(격리 임시 DB·합성 데이터·가짜 어댑터): `test_drive_foundation.py` 37 passed(DuckDB, 신규 9건). run_identity_migration·postgres_startup·security·openapi_contract_check·storage_provider_boundary 90 passed, `check_openapi_contract.py` OK(API 스키마 불변 → 프런트 재생성 불필요). 임시 PostgreSQL 16(127.0.0.1:55437, 종료·삭제함): 빈 DB `alembic upgrade head` 후 드라이브 시험 36 passed(DuckDB 전용 1건 제외), 0035에 프로젝트 행을 넣고 0036 업그레이드 — 행 보존, 테이블 1개(`drive_credentials`, `generation` 포함)만 추가.
 - 미수행: 이 수정의 재검수, Codex Security 스캔, 실제 어댑터·Windows·Server 2022. 세대 번호는 서버 시계가 크게 뒤로 가면 삭제 뒤 재등록에서 이전 세대보다 작아질 수 있음(같은 프로세스 안에서는 마지막 발급값으로 보정).
+
+## 2026-10-07 드라이브 점검 조회 전용 전환 (브랜치 `claude/scx-drive`, 미커밋)
+
+- 사용자 결정(20:12 "점검시 조회만 하고 뭘 쓰지는마"): `services/drive/check.py`에서 `upload_new`·재업로드 CONFLICT·`mkdirs`·`copy_within`(+재복사) 단계를 옵션 없이 삭제. 남은 단계: 시험 폴더 stat → list_dir(sha1·modified_at 유무) → 작은 파일 stat → download_to(8 MiB 이하, 서버 사본 삭제) → health.
+- API: `DriveCheckReport.leftovers` 제거(감사 detail에서도 제거), `npm run generate:api`로 `openapi.json`·생성 타입 갱신. UI 안내 문구를 조회 전용으로, 남은 항목 목록 제거.
+- 시험: `test_drive_foundation.py` 38 passed(드라이브 트리 불변·호출 연산 ⊆ stat/list_dir/download_to 확인, 정적 시험 `test_drive_check_calls_no_drive_write_methods` 신규). `check_openapi_contract.py` OK, 프런트 tsc 통과, e2e `drive-admin` 5/5.
+- 문서: `docs/features/scx-drive.md` §5 표·설명, 연동 계획 D7 결정·구현 표. C2·C7은 점검으로 확인하지 않으며 D3에서 전용 시험 공간의 명시적 쓰기 수용 시험으로 남김.
+- 미수행: 독립 검수, 실제 어댑터·드라이브 확인.

@@ -5257,8 +5257,6 @@ export interface components {
             ok: boolean;
             /** Steps */
             steps: components["schemas"]["DriveCheckStep"][];
-            /** Leftovers */
-            leftovers: string[];
             /** Note */
             note: string;
         };

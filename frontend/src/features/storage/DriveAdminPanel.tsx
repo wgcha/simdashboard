@@ -47,7 +47,6 @@ function CheckTable({ report }: { report: DriveCheckReport }) {
         <td>{(step.observations ?? []).join(' · ')}</td>
       </tr>)}</tbody>
     </table>
-    {report.leftovers.length ? <details><summary>시험 폴더에 남은 항목 {report.leftovers.length}개</summary><ul>{report.leftovers.map((item) => <li key={item}>{item}</li>)}</ul></details> : null}
     <small>{report.note}</small>
   </div>
 }
@@ -130,7 +129,7 @@ export function DriveAdminPanel({ onClose }: { onClose: () => void }) {
 
         <section className="drive-admin-section" aria-labelledby="drive-check-title">
           <h3 id="drive-check-title"><RefreshCw aria-hidden="true" /> 드라이브 점검</h3>
-          <p className="drive-admin-note">SPDM 루트 아래 시험 폴더에서 목록·조회·다운로드·덮어쓰기 금지 업로드·폴더 생성·드라이브 안 복사를 차례로 실행합니다. 드라이브에서는 아무것도 지우지 않으며, 점검이 만든 <code>simdash-check-*</code> 항목은 시험 폴더에 남습니다.</p>
+          <p className="drive-admin-note" data-testid="drive-check-note">조회 전용 점검입니다. SPDM 루트 아래 시험 폴더의 폴더 조회·목록 조회·작은 파일 조회·다운로드(8 MiB 이하, 서버 사본은 바로 삭제)·어댑터 상태를 차례로 확인합니다. 드라이브에는 아무것도 만들거나 바꾸거나 지우지 않습니다.</p>
           <div className="drive-admin-actions">
             <label className="drive-admin-folder"><span>시험 폴더 (SPDM 루트 기준)</span>
               <input aria-label="시험 폴더" value={testFolder} placeholder="예: _simdash_test" disabled={Boolean(busy) || !status.drive_root}

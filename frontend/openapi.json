@@ -16316,13 +16316,6 @@
             "type": "array",
             "title": "Steps"
           },
-          "leftovers": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Leftovers"
-          },
           "note": {
             "type": "string",
             "title": "Note"
@@ -16336,7 +16329,6 @@
           "finished_at",
           "ok",
           "steps",
-          "leftovers",
           "note"
         ],
         "title": "DriveCheckReport"

@@ -62,7 +62,7 @@ SPDM 원본이 로컬·공유 폴더에서 **SCX 드라이브(AltairOne Drive)**
 | 토큰 | `DbTokenStore`(Fernet, `key_id`=키 sha256 앞 8자, 키 변경·복호화 실패 → 없음, 워커 스레드 `save()` 자체 연결 즉시 커밋, 마이크로초 보존) |
 | DB | migration `0036_drive_credentials`는 **`drive_credentials`만** 만든다. 위 표의 `drive_source_versions`·`drive_upload_queue`·`drive_locks`·`finalization_operations`는 쓰는 단계(D2·D3)에서 각자 migration으로 추가한다(쓰지 않는 빈 테이블을 미리 배포하지 않음) |
 | API | `/api/admin/drive/{status,credentials,test,check}`(전역 관리자), `/api/drive/status`(로그인 사용자) |
-| 드라이브 점검(D7) | 시험 폴더에서 stat → list_dir → stat → download_to → upload_new ×2(CONFLICT 확인) → mkdirs → copy_within ×2 → health. 드라이브 삭제·이동·덮어쓰기 없음, `simdash-check-*` 남김 |
+| 드라이브 점검(D7) | **조회 전용**(2026-10-07 20:12 결정): 시험 폴더에서 stat → list_dir → stat → download_to(8 MiB 이하, 서버 사본 삭제) → health. 드라이브 쓰기 없음. C2·C7은 D3 쓰기 수용 시험으로 이관 |
 | UI | 저장소 설정 › SCX 드라이브 › 드라이브 관리 대화상자, 전체 상단 배너(60초 조회), `DRIVE_*` 한글 문구 |
 | 시험 | 가짜 어댑터(`backend/tests/drive_fakes.py`, 시험 전용) |
 | 남은 배포 과제(D5) | 외부 wheel 보존 폴더(`external-wheels`, 서버 `state\external-wheels`)로 sync·새 venv 뒤 어댑터 재설치 — 2026-10-07 반영(ADR 0006). 워커 런타임 설치 단계·서비스 환경변수 안내는 남음 |
@@ -120,4 +120,4 @@ SPDM 원본이 로컬·공유 폴더에서 **SCX 드라이브(AltairOne Drive)**
 | D2 현재 Final 요약 | 제안 ①(순번 파일 추가 방식)으로 먼저 구현하고, 이후 SPDM 협의 결과에 맞춘다 |
 | D3 자동 반영 | **자동 반영 주기 60초**(30초 → 60초, local·scx 공통으로 적용), 새 파일·새 Scene은 자동, **기존 파일 내용 변경만 사용자 확인** |
 | D6 어댑터 wheel | 저장소에 넣지 않는다. 사용자가 서버·PC에 따로 복사해 설치하고, 대시보드는 설치된 패키지를 찾는다(없으면 scx 모드 기동 거부, 안내 메시지) |
-| D7 시험 방식 | 실제 어댑터로 사용자가 반복 시험한다. 가짜 드라이브는 자동 회귀 시험용으로만 두고 배포물에는 포함하지 않는다. 실제 환경 점검을 쉽게 하도록 **관리자 "드라이브 점검" 기능**(지정한 시험 폴더에서 목록·조회·다운로드·덮어쓰기 금지 업로드·드라이브 안 복사·폴더 생성을 차례로 실행하고 결과·지연을 표로 보여 줌)을 D0에 추가한다 |
+| D7 시험 방식 | 실제 어댑터로 사용자가 반복 시험한다. 가짜 드라이브는 자동 회귀 시험용으로만 두고 배포물에는 포함하지 않는다. 실제 환경 점검을 쉽게 하도록 **관리자 "드라이브 점검" 기능**(지정한 시험 폴더에서 목록·조회·다운로드를 차례로 실행하고 결과·지연을 표로 보여 줌)을 D0에 추가한다. **2026-10-07 20:12 변경: 점검은 조회만 하고 드라이브에 쓰지 않는다**(업로드·폴더 생성·복사 단계 삭제, 옵션 없음). C2·C7은 D3에서 전용 시험 공간을 쓰는 명시적 쓰기 수용 시험으로 확인한다 |
