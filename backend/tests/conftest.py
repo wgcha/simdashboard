@@ -140,6 +140,15 @@ def password_auth_bootstrap_admin() -> tuple[str, str, str]:
             connection.execute("DELETE FROM users WHERE id=?", [user_id])
 
 
+@pytest.fixture(autouse=True)
+def reset_storage_provider_factory():
+    """D1 review: a test that installs a provider factory (``set_provider_factory``) never leaks it."""
+    from app.services.storage.factory import set_provider_factory
+
+    yield
+    set_provider_factory(None)
+
+
 def _cleanup_disposable_duckdb(database: Path) -> None:
     """Remove only the per-test DuckDB files, leaving test diagnostics intact."""
     for artifact in (database, database.with_name(f"{database.name}.wal")):

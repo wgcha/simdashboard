@@ -7334,6 +7334,176 @@
         }
       }
     },
+    "/api/admin/drive/queue": {
+      "get": {
+        "tags": [
+          "drive"
+        ],
+        "summary": "Queue List",
+        "operationId": "queue_list_api_admin_drive_queue_get",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^(PENDING|RUNNING|DONE|CONFLICT|FAILED|BLOCKED|CANCELLED)$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 1000,
+              "minimum": 1,
+              "default": 200,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DriveQueueList"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/drive/queue/{item_id}/retry": {
+      "post": {
+        "tags": [
+          "drive"
+        ],
+        "summary": "Queue Retry",
+        "description": "Run a FAILED/CONFLICT/BLOCKED/CANCELLED item again (a CONFLICT is re-checked; nothing is overwritten).",
+        "operationId": "queue_retry_api_admin_drive_queue__item_id__retry_post",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Item Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DriveQueueItem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/drive/queue/{item_id}/cancel": {
+      "post": {
+        "tags": [
+          "drive"
+        ],
+        "summary": "Queue Cancel",
+        "description": "Mark a not-yet-done item CANCELLED. Drive content is never deleted; a cancelled Final stays incomplete.",
+        "operationId": "queue_cancel_api_admin_drive_queue__item_id__cancel_post",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Item Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DriveQueueItem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/drive/queue/resume": {
+      "post": {
+        "tags": [
+          "drive"
+        ],
+        "summary": "Queue Resume",
+        "description": "Continue items paused by AUTH_REQUIRED (credential registration does this automatically).",
+        "operationId": "queue_resume_api_admin_drive_queue_resume_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DriveQueueList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/drive/status": {
       "get": {
         "tags": [
@@ -7478,6 +7648,49 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/DriveSourceChangeResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/drive/upload-batches/{batch_id}": {
+      "get": {
+        "tags": [
+          "drive"
+        ],
+        "summary": "Upload Batch",
+        "description": "Progress of one queued drive write batch (result drop publish, folder, Final, summary file).",
+        "operationId": "upload_batch_api_drive_upload_batches__batch_id__get",
+        "parameters": [
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Batch Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DriveUploadBatch"
                 }
               }
             }
@@ -16447,6 +16660,51 @@
         ],
         "title": "DriveAdminStatus"
       },
+      "DriveBatchError": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "target": {
+            "type": "string",
+            "title": "Target"
+          },
+          "state": {
+            "type": "string",
+            "title": "State"
+          },
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "target",
+          "state"
+        ],
+        "title": "DriveBatchError"
+      },
       "DriveCheckReport": {
         "properties": {
           "test_folder": {
@@ -16745,6 +17003,247 @@
           "state"
         ],
         "title": "DriveHealth"
+      },
+      "DriveQueueItem": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "batch_id": {
+            "type": "string",
+            "title": "Batch Id"
+          },
+          "seq": {
+            "type": "integer",
+            "title": "Seq"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "state": {
+            "type": "string",
+            "title": "State"
+          },
+          "target": {
+            "type": "string",
+            "title": "Target"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size"
+          },
+          "attempts": {
+            "type": "integer",
+            "title": "Attempts",
+            "default": 0
+          },
+          "next_attempt_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Attempt At"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message"
+          },
+          "transfer_method": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transfer Method"
+          },
+          "requested_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested By"
+          },
+          "origin": {
+            "type": "string",
+            "title": "Origin"
+          },
+          "origin_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin Ref"
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "environment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Environment"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "batch_id",
+          "seq",
+          "kind",
+          "state",
+          "target",
+          "origin"
+        ],
+        "title": "DriveQueueItem"
+      },
+      "DriveQueueList": {
+        "properties": {
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Counts"
+          },
+          "paused": {
+            "type": "boolean",
+            "title": "Paused"
+          },
+          "worker_running": {
+            "type": "boolean",
+            "title": "Worker Running"
+          },
+          "writes_enabled": {
+            "type": "boolean",
+            "title": "Writes Enabled",
+            "default": false
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DriveQueueItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "counts",
+          "paused",
+          "worker_running",
+          "items"
+        ],
+        "title": "DriveQueueList"
       },
       "DriveSourceChangeDecision": {
         "properties": {
@@ -17052,6 +17551,191 @@
         "title": "DriveTokenObservation",
         "description": "Which ``version_token`` form the drive listings produced (C1/C9: sha1 in listings?)."
       },
+      "DriveUploadBatch": {
+        "properties": {
+          "batch_id": {
+            "type": "string",
+            "title": "Batch Id"
+          },
+          "state": {
+            "type": "string",
+            "title": "State"
+          },
+          "finished": {
+            "type": "boolean",
+            "title": "Finished"
+          },
+          "paused": {
+            "type": "boolean",
+            "title": "Paused"
+          },
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Counts"
+          },
+          "items_total": {
+            "type": "integer",
+            "title": "Items Total"
+          },
+          "files_total": {
+            "type": "integer",
+            "title": "Files Total"
+          },
+          "files_done": {
+            "type": "integer",
+            "title": "Files Done"
+          },
+          "bytes_total": {
+            "type": "integer",
+            "title": "Bytes Total"
+          },
+          "bytes_done": {
+            "type": "integer",
+            "title": "Bytes Done"
+          },
+          "current": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current"
+          },
+          "current_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Kind"
+          },
+          "next_retry_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Retry At"
+          },
+          "errors": {
+            "items": {
+              "$ref": "#/components/schemas/DriveBatchError"
+            },
+            "type": "array",
+            "title": "Errors"
+          },
+          "transfer_methods": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Transfer Methods"
+          },
+          "origin": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin"
+          },
+          "origin_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin Ref"
+          },
+          "requested_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested By"
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "batch_id",
+          "state",
+          "finished",
+          "paused",
+          "counts",
+          "items_total",
+          "files_total",
+          "files_done",
+          "bytes_total",
+          "bytes_done"
+        ],
+        "title": "DriveUploadBatch"
+      },
       "DriveUserStatus": {
         "properties": {
           "mode": {
@@ -17078,6 +17762,11 @@
             "type": "boolean",
             "title": "Writes Available",
             "default": true
+          },
+          "queue_paused": {
+            "type": "boolean",
+            "title": "Queue Paused",
+            "default": false
           }
         },
         "type": "object",

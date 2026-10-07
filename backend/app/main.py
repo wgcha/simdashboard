@@ -103,11 +103,18 @@ async def lifespan(_: FastAPI):
     from .services.drive import gateway as drive_gateway
     drive_gateway.startup()
     # W2: resume Final copy jobs interrupted by a restart (daemon thread, non-blocking).
-    from .services.case_finalization import start_resume_scan
-    start_resume_scan()
+    # scx mode keeps Final state in the DB and resumes through the drive upload queue instead.
+    from .services.drive import reads as drive_reads
+    from .services.drive import upload_queue as drive_upload_queue
+    if not drive_reads.active():
+        from .services.case_finalization import start_resume_scan
+        start_resume_scan()
+    # D3: the single drive upload queue worker (scx mode with SIMDASH_DRIVE_WRITES_ENABLED only).
+    drive_upload_queue.start()
     try:
         yield
     finally:
+        drive_upload_queue.stop()
         drive_gateway.shutdown()
 
 

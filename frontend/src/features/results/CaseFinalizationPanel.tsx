@@ -57,6 +57,8 @@ const isRunning = (job: CaseFinalizationJob | null | undefined): job is CaseFina
 /** One overall percentage: copy 0–60 %, read-back check 60–95 %, folder rename 95–100 %. */
 const jobPercent = (job: CaseFinalizationJob) => {
   if (job.state === 'COMPLETE') return 100
+  // SCX drive (D3): one queue batch; copies, reports, plan copy and complete.json (last).
+  if (job.drive) return job.drive.files_total > 0 ? Math.floor(Math.min(1, job.drive.files_done / job.drive.files_total) * 100) : 0
   const ratio = job.bytes_total > 0 ? Math.min(1, job.bytes_done / job.bytes_total) : (job.files_total > 0 ? Math.min(1, job.files_done / job.files_total) : 0)
   if (job.phase === 'VERIFYING') return Math.floor(60 + ratio * 35)
   if (job.phase === 'PUBLISHING') return 95
@@ -65,7 +67,13 @@ const jobPercent = (job: CaseFinalizationJob) => {
 }
 
 const JOB_PHASE_TEXT: Record<NonNullable<CaseFinalizationJob['phase']>, string> = { COPYING: '복사', VERIFYING: '검증', PUBLISHING: '공개' }
-const jobLabel = (job: CaseFinalizationJob) => job.state === 'QUEUED' ? 'Final 복사 대기' : `Final ${job.phase ? JOB_PHASE_TEXT[job.phase] : '복사'} 중 ${jobPercent(job)}%`
+const jobLabel = (job: CaseFinalizationJob) => {
+  if (job.drive) {
+    if (job.drive.paused) return 'Final 일시 정지(드라이브 인증 필요)'
+    return job.state === 'QUEUED' ? 'Final 드라이브 반영 대기' : `Final 드라이브 반영 중 ${jobPercent(job)}%`
+  }
+  return job.state === 'QUEUED' ? 'Final 복사 대기' : `Final ${job.phase ? JOB_PHASE_TEXT[job.phase] : '복사'} 중 ${jobPercent(job)}%`
+}
 
 const formatDate = (value?: string | null) => {
   if (!value) return '시간 정보 없음'
@@ -321,6 +329,8 @@ export function CaseFinalizationPanel(props: Props) {
       </span>
       {current?.verification === 'SIZE' && !copying && !failed ? <span className="case-finalization__missing-inline" data-testid="case-final-size-only" title="Final 파일이 커서 이번 조회에서는 존재와 크기만 확인했습니다. 완료 뒤 파일이 바뀌어 내용(해시) 확인 기록과 맞지 않습니다.">크기만 확인</span> : null}
       {current?.verification === 'STAT_SINCE_COMPLETION' && !copying && !failed ? <span className="case-finalization__missing-inline" data-testid="case-final-stat-only" title="Final 파일이 커서 이번 조회에서는 내용(해시)을 다시 읽지 않았습니다. 완료 때 해시를 확인한 뒤 크기·수정 시각이 바뀌지 않았음만 확인했으며, 내용이 같다는 증명은 아닙니다.">완료 후 변경 없음(크기·시각 확인)</span> : null}
+      {current?.verification === 'DRIVE_UPLOAD' && !copying && !failed ? <span className="case-finalization__missing-inline" data-testid="case-final-drive-record" title="SCX 드라이브 Final: 업로드 대기열 기록(드라이브 크기·sha1, 마지막에 complete.json)으로 완료를 확인했습니다. 드라이브의 파일 내용은 다시 읽지 않았습니다.">드라이브 반영 기록</span> : null}
+      {status?.summary?.state === 'PENDING' ? <span className="case-finalization__missing-inline" data-testid="case-final-summary-pending" title={`${status.summary.path} 파일을 드라이브 업로드 대기열에서 올리고 있습니다(이전 요약 파일은 그대로 둡니다).`}>요약 파일 드라이브 반영 중</span> : null}
       {status?.current_final ? <span className="case-finalization__current" data-testid="case-final-current" title={`현재 Final ${status.current_final.operation_id}\n${status.current_final.case_path}`}>현재 Final · {status.current_final.case_label} · {status.current_final.designated_by ?? '지정자 없음'} · {formatDate(status.current_final.designated_at)}</span> : null}
       {currentFinal && currentFinal.verified === false ? <span className="case-finalization__message case-finalization__message--error" role="alert" data-testid="case-final-current-unverified">
         <AlertTriangle size={14} aria-hidden="true" />{currentFinal.missing ? '현재 Final의 기록이나 파일을 찾을 수 없습니다. 관리자에게 문의하세요.' : '현재 Final 파일이 완료 기록과 다릅니다(해시 불일치). 관리자에게 문의하세요.'}
@@ -433,7 +443,8 @@ export function CaseFinalizationPanel(props: Props) {
           <div className="case-finalization__bar" role="progressbar" aria-label="Final 복사 진행률" aria-valuemin={0} aria-valuemax={100} aria-valuenow={jobPercent(dialogJob)}><span style={{ width: `${jobPercent(dialogJob)}%` }} /></div>
           <p className="case-finalization__job-counts">파일 {dialogJob.files_done}/{dialogJob.files_total} · {formatBytes(dialogJob.bytes_done)} / {formatBytes(dialogJob.bytes_total)}</p>
           {dialogJob.current_file && dialogCopying ? <p className="case-finalization__job-file" title={dialogJob.current_file}>현재: {dialogJob.current_file}</p> : null}
-          {dialogCopying ? <p className="case-finalization__hint">창을 닫아도 복사는 계속됩니다. 완료 전에는 Final 폴더에 나타나지 않습니다.</p> : null}
+          {dialogCopying && dialogJob.drive?.paused ? <p className="case-finalization__hint" role="alert" data-testid="case-final-drive-paused">드라이브 인증이 필요해 업로드 대기열이 멈췄습니다. 관리자가 토큰을 다시 등록하면 이어서 진행합니다.</p> : null}
+          {dialogCopying ? <p className="case-finalization__hint">{dialogJob.drive ? '창을 닫아도 드라이브 반영은 계속됩니다. complete.json이 마지막에 올라가야 완료입니다(드라이브 파일은 덮어쓰거나 지우지 않습니다).' : '창을 닫아도 복사는 계속됩니다. 완료 전에는 Final 폴더에 나타나지 않습니다.'}</p> : null}
         </section>}
         {dialogError && <p className="case-finalization__dialog-error" role="alert"><AlertTriangle size={14} aria-hidden="true" />{dialogError}</p>}
       </div>}

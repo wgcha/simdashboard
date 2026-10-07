@@ -1,7 +1,7 @@
 """W8 simplified result registration: drag & drop files or whole folders into Working.
 
 Analysts mostly copy results straight into the SPDM share with Explorer; the
-dashboard follows within 30 s (``folder_auto_sync``) and assigns roles by folder
+dashboard follows within 60 s (``folder_auto_sync``) and assigns roles by folder
 depth (DEPTH_V1, docs/contracts/depth-schema.md §3, §5). This module is the
 browser equivalent of that copy, nothing more: no drafts, no automatic checks,
 no approval. Contract: docs/features/result-registration.md.
@@ -25,6 +25,15 @@ Sessions live in this process (like the Final copy job thread); a server restart
 drops them and their staging folder is removed by a later session of the same
 request once it is older than ``SESSION_IDLE_SECONDS`` (60 min). Requires one backend
 worker process (Windows service: a single uvicorn worker).
+
+SCX drive mode (D3, writes enabled): chunks are staged on the **server**
+(``<SIMDASH_SCX_STAGING_DIR>/upload-<session>/<n>.part``, never on the drive) and
+``complete`` queues one drive upload batch (``drive_upload_queue``, batch id = session
+id): ``MKDIR`` for new folders, then ``FILE`` (``upload_new``, new names only) per file.
+Conflicts are refused exactly as in local mode (nothing is renamed or replaced on the
+drive); a name that appears on the drive meanwhile ends that item ``CONFLICT`` (kept
+visible, never overwritten).  The 60 s folder auto-sync picks the files up through
+the D2 read path once the batch is done.  "새 폴더 만들기" queues one ``MKDIR``.
 """
 from __future__ import annotations
 
@@ -35,7 +44,7 @@ import threading
 import time
 import unicodedata
 from dataclasses import dataclass, field
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any
 from uuid import uuid4
 
@@ -43,7 +52,9 @@ from ..database_connection import ConnectionLike
 from . import environment_folder_profiles, folder_name_warnings, spdm_storage
 from . import result_registration_paths as paths
 from .result_registration import _BLOCKED_EXTENSIONS
-from .storage import provider_for_root
+from .drive import reads as drive_reads
+from .drive import upload_queue
+from .storage import provider_for_root, server_local
 from .storage.local import LocalFsProvider
 from .storage.provider import UPLOAD_STAGING_DIR, WORKING, StorageError, working_zone_allows
 
@@ -647,7 +658,16 @@ def _reserved_bytes(root_key: str) -> int:
                    for item in session.files if not item.published)
 
 
+def _drive() -> bool:
+    """SCX drive mode: the SPDM root is on the drive (write endpoints are gated by ``require_drive_writes``)."""
+    return drive_reads.active()
+
+
 def _free_after_reservations(fs: LocalFsProvider, scope: Scope) -> int | None:
+    if _drive():
+        # The drive reports no free space; uploads are staged on the server first.
+        free = server_local.disk_free(upload_queue.staging_dir_for("probe").parent)
+        return None if free is None else max(free - _reserved_bytes(scope.root_key), 0)
     try:
         return max(fs.free_bytes(scope.working_relative_path) - _reserved_bytes(scope.root_key), 0)
     except OSError:
@@ -683,6 +703,9 @@ def _publish_lock(scope: Scope) -> threading.Lock:
 
 def _remove_staging(session: _Session) -> None:
     """Remove only this session's staged ``<n>.part`` files and its (then empty) folder."""
+    if _drive():
+        server_local.remove_tree(Path(session.staging))  # server staging only, never the drive
+        return
     fs = provider_for_root(session.scope.root)
     for item in session.files:
         if item.published:
@@ -701,6 +724,8 @@ def _remove_staging(session: _Session) -> None:
 def _remove_empty_created(session: _Session) -> None:
     """Review L5: folders this session created that are still empty (deepest first). A folder that
     received anything meanwhile (a published file, an Explorer copy) is not empty and stays."""
+    if _drive():
+        return  # nothing is ever removed on the drive (folders are created by the queue only)
     fs = provider_for_root(session.scope.root)
     kept = []
     for folder in sorted(session.created_folders, key=lambda value: value.count("/"), reverse=True):
@@ -785,10 +810,13 @@ def create_session(conn: ConnectionLike, project_id: str, request_id: str, envir
     session_id = uuid4().hex
     staging = f"{staging_root}/{session_id}"
     try:
-        if fs.mkdir_pinned(staging_root, zone=WORKING):
-            fs.set_hidden(staging_root, zone=WORKING)
-        _clean_orphans(fs, staging_root)
-        fs.mkdir_pinned(staging, zone=WORKING)
+        if _drive():
+            staging = str(server_local.ensure_dir(upload_queue.staging_dir_for(session_id)))
+        else:
+            if fs.mkdir_pinned(staging_root, zone=WORKING):
+                fs.set_hidden(staging_root, zone=WORKING)
+            _clean_orphans(fs, staging_root)
+            fs.mkdir_pinned(staging, zone=WORKING)
     except (OSError, StorageError) as exc:
         raise DropUploadError("RESULT_DROP_STAGING_UNAVAILABLE", "임시 업로드 폴더를 만들 수 없습니다.", 409) from exc
     session_files = [
@@ -870,7 +898,13 @@ def upload_chunk(session_id: str, user_id: str, index: int, offset: int, data: b
                                       expected_offset=item.received)
         fs = provider_for_root(session.scope.root)
         try:
-            fs.write_chunk(item.staged, offset, data, zone=WORKING)
+            if _drive():
+                try:
+                    server_local.write_at(Path(item.staged), offset, data)
+                except (ValueError, FileExistsError) as exc:
+                    raise StorageError("SPDM_CHUNK_OFFSET", "staging length differs") from exc
+            else:
+                fs.write_chunk(item.staged, offset, data, zone=WORKING)
         except StorageError as exc:
             if exc.code == "SPDM_CHUNK_OFFSET":
                 raise DropUploadError("RESULT_DROP_STAGING_CHANGED", "임시 업로드 파일이 바뀌었습니다. 업로드를 중지하고 다시 올리세요.", 409) from exc
@@ -884,7 +918,10 @@ def upload_chunk(session_id: str, user_id: str, index: int, offset: int, data: b
             digest = item.hasher.hexdigest()
             if item.expected_sha256 and digest != item.expected_sha256:
                 try:
-                    fs.remove(item.staged, zone=WORKING, missing_ok=True)
+                    if _drive():
+                        server_local.discard_file(Path(item.staged))
+                    else:
+                        fs.remove(item.staged, zone=WORKING, missing_ok=True)
                 except (OSError, StorageError):
                     pass
                 item.received = 0
@@ -939,6 +976,8 @@ def complete(conn: ConnectionLike, session_id: str, user_id: str) -> dict[str, A
     from . import folder_auto_sync
 
     session = _session(session_id, user_id)
+    if _drive():
+        return _complete_drive(conn, session, user_id)
     with session.lock:
         if session.state not in {"UPLOADING", "PARTIAL"}:
             raise DropUploadError("RESULT_DROP_SESSION_CLOSED", "이미 끝났거나 중지한 업로드입니다.", 409)
@@ -1033,7 +1072,7 @@ def complete(conn: ConnectionLike, session_id: str, user_id: str) -> dict[str, A
     folder_auto_sync.invalidate(scope.root_key, scope.project_id, scope.request_id, scope.environment)
     try:
         sync = folder_auto_sync.sync(conn, scope.project_id, scope.request_id, scope.environment, str(user_id), force=True)
-    except Exception:  # noqa: BLE001 - files are published; the 30 s poll retries
+    except Exception:  # noqa: BLE001 - files are published; the 60 s poll retries
         sync = {"status": "FAILED", "code": "FOLDER_SCHEMA_REFRESH_FAILED",
                 "message": "폴더를 확인하지 못했습니다. 1분 안에 다시 확인합니다."}
     result = _session_view(session)
@@ -1047,6 +1086,99 @@ def complete(conn: ConnectionLike, session_id: str, user_id: str) -> dict[str, A
         with _registry_lock:
             _sessions.pop(session.id, None)
     return result
+
+
+def _complete_drive(conn: ConnectionLike, session: _Session, user_id: str) -> dict[str, Any]:
+    """SCX drive: every drive read and check first, then one queued batch (MKDIR…, FILE…); nothing renamed."""
+    with session.lock:
+        if session.state != "UPLOADING":
+            raise DropUploadError("RESULT_DROP_SESSION_CLOSED", "이미 끝났거나 중지한 업로드입니다.", 409)
+        scope = session.scope
+        for item in session.files:
+            if not item.done and item.size == 0:
+                path = Path(item.staged)
+                if not server_local.file_exists(path):
+                    server_local.write_file(path, b"")
+                item.sha256 = hashlib.sha256(b"").hexdigest()
+        missing = [item.relative_path for item in session.files if not item.done]
+        if missing:
+            raise DropUploadError("RESULT_DROP_INCOMPLETE", f"아직 받지 못한 파일이 {len(missing)}개 있습니다.", 409,
+                                  missing=missing[:ISSUE_PATH_LIMIT])
+        current = request_scope(conn, scope.project_id, scope.request_id, scope.environment)
+        if (current.root_key != scope.root_key
+                or current.working_relative_path.casefold() != scope.working_relative_path.casefold()):
+            raise DropUploadError("RESULT_DROP_SCOPE_CHANGED", "업로드 중 의뢰 폴더 연결이 바뀌었습니다. 업로드를 중지하고 다시 올리세요.", 409)
+        checked_target(conn, scope, session.target)
+        for item in session.files:
+            path = Path(item.staged)
+            if not server_local.is_regular_file_inside(path, Path(session.staging)) or server_local.file_size(path) != item.size:
+                raise DropUploadError("RESULT_DROP_STAGING_CHANGED", "임시 업로드 파일이 바뀌었습니다. 업로드를 중지하고 다시 올리세요.", 409)
+        fs = provider_for_root(scope.root)
+        index = _DirIndex(fs)
+        conflicts: list[dict[str, Any]] = []
+
+        def existing(relative: str):
+            parent, name = relative.rsplit("/", 1)
+            try:
+                return parent, index.lookup(parent, name)
+            except (FileNotFoundError, NotADirectoryError):
+                return parent, None
+            except (OSError, StorageError) as exc:
+                raise DropUploadError("RESULT_DROP_TARGET_UNAVAILABLE", "대상 폴더를 읽을 수 없습니다. 잠시 후 다시 옮기세요.", 503) from exc
+
+        for folder in session.folders:
+            parent, info = existing(folder["relative_path"])
+            if info is not None and info.kind != "dir":
+                conflicts.append({"relative_path": folder["client_path"], "destination_relative_path": f"{parent}/{info.name}",
+                                  "reason": "FILE_IN_PLACE_OF_FOLDER"})
+        for item in session.files:
+            parent, info = existing(item.destination)
+            if info is not None:
+                conflicts.append({"relative_path": item.relative_path, "destination_relative_path": f"{parent}/{info.name}",
+                                  "reason": "EXISTS"})
+        if conflicts:
+            session.conflicts = conflicts
+            raise DropUploadError("RESULT_DROP_CONFLICT", "올리는 동안 같은 이름의 파일이 생겼습니다. 덮어쓰지 않았습니다.", 409,
+                                  conflicts=conflicts)
+        cases = _case_links(conn, scope, [item.destination for item in session.files]
+                            + [folder["relative_path"] for folder in session.folders])
+        items: list[dict[str, Any]] = [
+            {"kind": "MKDIR", "dst_rel_dir": folder["relative_path"], "halt_on_error": True}
+            for folder in sorted(session.folders, key=lambda value: (value["level"], value["relative_path"].casefold()))]
+        for item in session.files:
+            parent, name = item.destination.rsplit("/", 1)
+            items.append({"kind": "FILE", "staging_path": item.staged, "dst_rel_dir": parent, "dst_name": name,
+                          "size_bytes": item.size, "sha256": item.sha256, "halt_on_error": False})
+        # Last step of the body: no drive read follows (a read-session rerun never sees a queued session).
+        upload_queue.enqueue(conn, origin="result_drop", origin_ref=session.id, batch_id=session.id,
+                             requested_by=str(user_id), project_id=scope.project_id, request_id=scope.request_id,
+                             environment=scope.environment, items=items)
+        summary = upload_queue.batch_summary(conn, session.id)
+        session.state = "QUEUED"
+    with _registry_lock:
+        _sessions.pop(session.id, None)
+    result = _session_view(session)
+    result.update({
+        "published_files": 0, "published_bytes": 0, "created_folders": [], "busy": [],
+        "queued_files": len(session.files), "queued_bytes": session.total_bytes,
+        "sync": {"status": "QUEUED", "changed": None, "code": None,
+                 "message": "드라이브 반영 대기: 업로드 대기열이 순서대로 올리고, 끝나면 1분 안에 결과에 반영합니다.",
+                 "check_mode": None},
+        "cases": cases, "drive": summary,
+    })
+    return result
+
+
+def on_drive_batch_finished(origin: str, batch_id: str, summary: dict[str, Any]) -> None:
+    """Queue hook: a drop upload batch finished; the next folder auto-sync re-reads the request."""
+    from . import folder_auto_sync
+    from ..database_connection import connect
+
+    with connect() as conn:
+        row = conn.execute("SELECT root_key, project_id, request_id, environment FROM drive_upload_queue "
+                           "WHERE batch_id=? ORDER BY seq LIMIT 1", [batch_id]).fetchone()
+    if row and row[1] and row[2] and row[3]:
+        folder_auto_sync.invalidate(str(row[0]), str(row[1]), str(row[2]), str(row[3]))
 
 
 def abort(session_id: str, user_id: str, *, admin: bool = False) -> dict[str, Any]:
@@ -1113,6 +1245,14 @@ def create_folder(conn: ConnectionLike, project_id: str, request_id: str, enviro
                  for sibling, _kind in similar]
     if warnings and not confirm:
         raise DropUploadError("RESULT_DROP_FOLDER_NAME_WARNING", warnings[0], 409, warnings=warnings)
+    if _drive():
+        batch = upload_queue.enqueue(conn, origin="result_drop", origin_ref=None, requested_by=str(user_id),
+                                     project_id=project_id, request_id=request_id, environment=scope.environment,
+                                     items=[{"kind": "MKDIR", "dst_rel_dir": relative}])
+        return {"relative_path": relative, "display_path": display_path(display_root(scope.root), relative),
+                "level": level, "role": role, "role_label": ROLE_LABELS.get(role, role), "warnings": warnings,
+                "sync": {"status": "QUEUED", "changed": None, "code": None, "message": "드라이브 반영 대기"},
+                "drive": upload_queue.batch_summary(conn, batch)}
     try:
         created = fs.mkdir_pinned(relative, zone=WORKING)
     except (OSError, StorageError) as exc:

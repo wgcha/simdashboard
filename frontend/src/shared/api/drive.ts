@@ -13,6 +13,9 @@ export type DriveSourceChanges = components['schemas']['DriveSourceChanges']
 export type DriveSourceChangeItem = components['schemas']['DriveSourceChangeItem']
 export type DriveSourceChangeResult = components['schemas']['DriveSourceChangeResult']
 export type DriveHealthState = 'OK' | 'DEGRADED' | 'UNAVAILABLE' | 'AUTH_REQUIRED' | 'UNKNOWN'
+export type DriveUploadBatch = components['schemas']['DriveUploadBatch']
+export type DriveQueueList = components['schemas']['DriveQueueList']
+export type DriveQueueItem = components['schemas']['DriveQueueItem']
 
 /** Korean messages for drive error codes (integration 06 §2). */
 export const DRIVE_ERROR_MESSAGES: Record<string, string> = {
@@ -28,7 +31,17 @@ export const DRIVE_ERROR_MESSAGES: Record<string, string> = {
   DRIVE_TIMEOUT: '드라이브 응답이 늦습니다.',
   DRIVE_UNAVAILABLE: '드라이브에 연결할 수 없습니다.',
   DRIVE_INTERNAL: '드라이브 처리 중 오류가 발생했습니다.',
-  DRIVE_WRITE_DISABLED: '드라이브 모드에서는 아직 SPDM 폴더에 쓸 수 없습니다(읽기 전용). 업로드·폴더 만들기·Final 지정은 드라이브 쓰기 단계 이후 사용할 수 있습니다.',
+  DRIVE_WRITE_DISABLED: '드라이브 쓰기가 꺼져 있거나 드라이브 모드에서 쓸 수 없는 기능입니다. 결과는 결과 등록(끌어놓기)으로 올리세요.',
+  DRIVE_STAGING_MISSING: '서버 임시 파일이 없어 올릴 수 없습니다. 다시 올리세요.',
+  DRIVE_ROOT_CHANGED: 'SPDM 루트가 바뀌어 이 항목을 쓰지 않았습니다.',
+  DRIVE_UPLOAD_MISMATCH: '드라이브에 올라간 파일 크기가 다릅니다. 자동으로 다시 확인합니다.',
+  DRIVE_QUEUE_CANCELLED: '관리자가 취소했습니다(드라이브 내용은 그대로입니다).',
+  DRIVE_BATCH_NOT_FOUND: '드라이브 업로드 묶음을 찾을 수 없습니다.',
+  DRIVE_QUEUE_ITEM_NOT_FOUND: '대기열 항목을 찾을 수 없습니다.',
+  DRIVE_QUEUE_ITEM_STATE: '이 상태의 항목에는 할 수 없는 동작입니다.',
+  FINALIZATION_LOCKED: '같은 의뢰의 다른 Final 지정이 드라이브에 반영되고 있습니다. 끝난 뒤 다시 시도하세요.',
+  FINALIZATION_SOURCE_STALE: 'Final 계획 이후 드라이브 원본이 바뀌었습니다. 원본 변경을 확인하고 다시 지정하세요.',
+  FINALIZATION_SOURCE_MISSING: '드라이브 원본 파일을 찾을 수 없습니다.',
   DRIVE_READ_NOT_PREPARED: '드라이브 자료를 아직 준비하지 못했습니다. 잠시 후 다시 시도하세요.',
   DRIVE_SOURCE_CHANGED: '드라이브 원본이 바뀌어 등록된 버전을 다시 읽을 수 없습니다. 원본 변경을 확인하세요.',
   DRIVE_SOURCE_CHANGE_STALE: '확인할 변경 목록이 바뀌었습니다. 다시 불러오세요.',
@@ -102,22 +115,42 @@ export const driveApi = {
   /** [무시]: keep the registered versions. */
   dismissSourceChanges: async (projectId: string, requestId: string, ids?: string[]) => unwrapGenerated(await apiClient.POST('/api/drive/source-changes/dismiss', { body: { project_id: projectId, request_id: requestId, ids: ids ?? null } })) as DriveSourceChangeResult,
   check: async (testFolder: string) => unwrapGenerated(await apiClient.POST('/api/admin/drive/check', { body: { test_folder: testFolder } })) as DriveCheckReport,
+  /** D3: progress of one drive upload batch (result drop publish, folder, Final, summary file). */
+  uploadBatch: async (batchId: string, signal?: AbortSignal) => unwrapGenerated(await apiClient.GET('/api/drive/upload-batches/{batch_id}', { params: { path: { batch_id: batchId } }, signal })) as DriveUploadBatch,
+  /** D3 admin: the drive upload queue (open items and those finished in the last day). */
+  queue: async (state?: string) => unwrapGenerated(await apiClient.GET('/api/admin/drive/queue', { params: { query: state ? { state } : {} } })) as DriveQueueList,
+  retryQueueItem: async (itemId: string) => unwrapGenerated(await apiClient.POST('/api/admin/drive/queue/{item_id}/retry', { params: { path: { item_id: itemId } } })) as DriveQueueItem,
+  /** Marks the item CANCELLED; nothing on the drive is deleted. */
+  cancelQueueItem: async (itemId: string) => unwrapGenerated(await apiClient.POST('/api/admin/drive/queue/{item_id}/cancel', { params: { path: { item_id: itemId } } })) as DriveQueueItem,
+  resumeQueue: async () => unwrapGenerated(await apiClient.POST('/api/admin/drive/queue/resume')) as DriveQueueList,
 }
 
-export type DriveWriteStatus = { scx: boolean; writesAvailable: boolean; writesEnabled: boolean }
+export const DRIVE_BATCH_STATE_LABELS: Record<string, string> = {
+  QUEUED: '드라이브 반영 대기', RUNNING: '드라이브 반영 중', PAUSED: '일시 정지(드라이브 인증 필요)', DONE: '드라이브 반영 완료',
+  PARTIAL: '일부만 반영(충돌·실패 있음)', CONFLICT: '충돌(같은 이름의 다른 파일, 덮어쓰지 않음)', FAILED: '실패', CANCELLED: '취소됨',
+}
+
+export const DRIVE_QUEUE_ITEM_STATE_LABELS: Record<string, string> = {
+  PENDING: '대기', RUNNING: '진행', DONE: '완료', CONFLICT: '충돌', FAILED: '실패', BLOCKED: '인증 대기', CANCELLED: '취소',
+}
+
+export type DriveWriteStatus = { scx: boolean; writesAvailable: boolean; writesEnabled: boolean; queuePaused: boolean }
 
 let driveWriteStatusPromise: Promise<DriveWriteStatus> | null = null
 
-/** Drive mode and write availability (D2: scx mode is read-only). One request per page load; mode changes need a restart. */
+/** Drive mode and write availability (scx: only with "드라이브 쓰기 허용"). One request per page load; mode changes need a restart. */
 export function loadDriveWriteStatus(): Promise<DriveWriteStatus> {
   if (!driveWriteStatusPromise) {
     driveWriteStatusPromise = driveApi.userStatus().then(
-      (status) => ({ scx: status.mode === 'scx', writesAvailable: status.mode !== 'scx' || Boolean(status.writes_available), writesEnabled: Boolean(status.writes_enabled) }),
-      () => { driveWriteStatusPromise = null; return { scx: false, writesAvailable: true, writesEnabled: false } },
+      (status) => ({ scx: status.mode === 'scx', writesAvailable: status.mode !== 'scx' || Boolean(status.writes_available), writesEnabled: Boolean(status.writes_enabled), queuePaused: Boolean(status.queue_paused) }),
+      () => { driveWriteStatusPromise = null; return { scx: false, writesAvailable: true, writesEnabled: false, queuePaused: false } },
     )
   }
   return driveWriteStatusPromise
 }
 
 /** Shown where upload, folder creation or Final actions are disabled in drive read-only mode. */
-export const DRIVE_READ_ONLY_NOTICE = '드라이브 읽기 전용: SCX 드라이브 모드에서는 아직 SPDM 폴더에 쓸 수 없어 업로드·폴더 만들기·Final 지정을 사용할 수 없습니다.'
+export const DRIVE_READ_ONLY_NOTICE = '드라이브 읽기 전용: 관리자가 드라이브 쓰기 허용(SIMDASH_DRIVE_WRITES_ENABLED)을 켜기 전에는 업로드·폴더 만들기·Final 지정을 사용할 수 없습니다.'
+
+/** Storage panel uploads are never available in drive mode (integration 03 8-6: use result registration). */
+export const DRIVE_PANEL_NOTICE = '드라이브 모드에서는 이 화면에서 업로드할 수 없습니다. 결과는 결과 등록(끌어놓기)으로 올리세요.'

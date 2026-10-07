@@ -60,6 +60,10 @@
 - **백엔드 작업자 1개 필요**: 세션·동시 업로드 제한·공개 잠금이 프로세스별이다. Windows 서비스(WinSW)는 uvicorn 작업자 1개라 맞다. Rocky 8 배포 템플릿은 `UVICORN_WORKERS=2`가 기본(`deploy/rocky8/install.env.example`)이므로 그 환경에서 끌어서 올리기를 쓰려면 `UVICORN_WORKERS=1`로 두거나 세션 저장을 공유 저장소로 옮겨야 한다(미결정, W9). 작업자가 2개면 조각 요청이 다른 작업자로 가서 404가 날 수 있다.
 - 표시 경로: 환경 변수 `SIMDASH_SPDM_DISPLAY_ROOT`(예: `\\fileserver\SPDM`)가 있으면 그 뒤에, 없으면 서버의 SPDM root 경로 뒤에 상대 경로를 붙인다. 서버 경로와 사용자 PC의 공유 경로가 다르면 운영에서 이 값을 `.env`에 둔다.
 
+## 5a. SCX 드라이브 모드 (D3, 2026-10-08)
+
+SPDM 루트가 SCX 드라이브이면(`SIMDASH_DRIVE_GATEWAY=scx`) 드라이브 쓰기 허용(`SIMDASH_DRIVE_WRITES_ENABLED`)이 켜져 있을 때만 올릴 수 있다(꺼져 있으면 읽기 전용 안내). 조각은 드라이브가 아니라 **서버 임시 저장소**(`<SIMDASH_SCX_STAGING_DIR>/upload-<세션>/`)에 받고, 완료하면 드라이브 업로드 대기열에 묶음 하나(새 폴더 `mkdirs` → 파일마다 `upload_new`, 새 이름만)를 넣고 `state: QUEUED`로 응답한다. 검사(깊이·이름·충돌 거부)는 위와 같고 남은 공간은 서버 임시 저장소 기준이다. 화면은 대기열 진행(대기·진행·완료·충돌·일시 정지)을 보여 주며, 드라이브에 같은 이름이 생기면 덮어쓰지 않고 그 파일만 충돌로 남긴다. 반영은 묶음 완료 뒤 1분 자동 반영(드라이브 읽기 경로)이 한다. `경로 복사`는 숨긴다(드라이브 경로 표시). `새 폴더 만들기`도 대기열(`mkdirs`)로 만든다. 상세: [SCX 드라이브 기능 안내 §10.3](scx-drive.md#103-결과-등록끌어놓기--integration-05-53-w8).
+
 ## 6. 이전 등록 초안 (기존 흐름)
 
 W8 이전 화면(대상 선택 → 저장 위치 → 초안 업로드(파일 32 MiB·초안 256 MiB) → 자동 검사 → 검수·승인 → capture 게시·폴더 mirror)은 화면에서 뺐다. 기존 초안·파일·검사·게시 기록과 `result_registration_*` 표는 그대로 보존하고 바꾸지 않는다. 결과 등록 탭 아래 `이전 등록 초안 (읽기 전용)`에서 목록(만든 때·상태·결과 위치·파일 수·Case 결과 링크)만 보여 준다(`GET /drafts`). 기존 초안 API(`/targets`, `/folders`, `/locations`, `/folders/prepare`, `/drafts…`)는 호환을 위해 남아 있으나 화면은 호출하지 않는다. 이 API의 계약·검증 기록은 [보관 계획](../archive/2026/result-registration-review-plan.md)에 있다. 마이그레이션 `0031_result_registration`, `0033_result_registration_location_links`는 그대로다.

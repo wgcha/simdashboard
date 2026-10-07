@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 
 import { loadDriveWriteStatus, type DriveWriteStatus } from '../api/drive'
 
-const LOCAL: DriveWriteStatus = { scx: false, writesAvailable: true, writesEnabled: false }
+const LOCAL: DriveWriteStatus = { scx: false, writesAvailable: true, writesEnabled: false, queuePaused: false }
 
 /** Drive write availability for disabling upload/Final actions (local mode: writes available). */
 export function useDriveWriteStatus(): DriveWriteStatus {

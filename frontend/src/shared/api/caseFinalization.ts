@@ -1,3 +1,4 @@
+import type { DriveUploadBatch } from './drive'
 import { apiFetch } from './auth'
 import { apiClient, unwrapGenerated } from './client'
 import { apiErrorFromResponse } from './errors'
@@ -80,7 +81,8 @@ export type CaseFinalizationRecord = {
   queued_at?: string | null
   confirmed_at: string
   /** Status only. `SHA256`: re-hashed now. Over the per-call hash budget: `STAT_SINCE_COMPLETION` (size/mtime/id unchanged since the hash check at completion — not proof of unchanged content) or `SIZE` (existence and sizes only). */
-  verification?: 'SHA256' | 'STAT_SINCE_COMPLETION' | 'SIZE'
+  /** ``DRIVE_UPLOAD``: SCX drive Final (D3), completed through the drive upload queue (record in the DB). */
+  verification?: 'SHA256' | 'STAT_SINCE_COMPLETION' | 'SIZE' | 'DRIVE_UPLOAD'
 }
 
 export type CaseFinalizationPreview = Omit<CaseFinalizationRecord, 'status' | 'created_by' | 'confirmed_at' | 'reports'> & {
@@ -126,6 +128,9 @@ export type CaseFinalizationJob = {
   active: boolean
   /** The completed record once `state` is COMPLETE. */
   record: CaseFinalizationRecord | null
+  /** SCX drive mode (D3): the Final is written by the drive upload queue. */
+  storage?: 'scx'
+  drive?: DriveUploadBatch | null
 }
 
 export type CaseFinalizationCurrent = {
@@ -139,7 +144,7 @@ export type CaseFinalizationCurrent = {
   output_paths: Record<'CAE' | 'Reports', string> | null
   /** false when the current Final's outputs failed re-hashing or its records/outputs are missing. */
   verified?: boolean
-  verification?: 'SHA256' | 'STAT_SINCE_COMPLETION' | 'SIZE' | 'FAILED' | 'MISSING'
+  verification?: 'SHA256' | 'STAT_SINCE_COMPLETION' | 'SIZE' | 'FAILED' | 'MISSING' | 'DRIVE_UPLOAD'
   /** The signed pointer names a Final whose records/outputs can no longer be found. */
   missing?: boolean
 }
@@ -173,8 +178,10 @@ export type CaseFinalizationStatus = {
   /** W3: state of the SPDM summary file (`Final/current.json`). */
   /** The signed-in user may use the summary repair override (global admin). */
   can_override_summary?: boolean
-  summary?: { state: 'NONE' | 'OK' | 'MISSING' | 'STALE' | 'CONFLICT' | 'CURRENT_UNVERIFIED' | 'CURRENT_MISSING'; path: string; final_id?: string | null }
+  /** SCX drive mode: ``PENDING`` while the new designation file is queued (append-only ``designations/<seq>-<id>.json``). */
+  summary?: { state: 'NONE' | 'OK' | 'MISSING' | 'STALE' | 'CONFLICT' | 'CURRENT_UNVERIFIED' | 'CURRENT_MISSING' | 'PENDING'; path: string; final_id?: string | null }
   unverified_records: number
+  storage?: 'scx'
 }
 
 const REPORT_CONTENT_TYPE: Record<CaseFinalizationReportFormat, string> = {

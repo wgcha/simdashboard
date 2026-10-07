@@ -41,6 +41,7 @@ async function mockDrive(page: Page, state: { status: typeof BASE_STATUS; user: 
     if (path.endsWith('/credentials') && request.method() === 'DELETE') { state.status = BASE_STATUS; return route.fulfill({ status: 204, body: '' }) }
     if (path.endsWith('/test')) return route.fulfill({ json: { ok: false, latency_ms: 15, root_identity: null, error: { code: 'DRIVE_AUTH_REQUIRED', message: 'no token registered' } } })
     if (path.endsWith('/check')) return route.fulfill({ json: REPORT })
+    if (path.endsWith('/queue')) return route.fulfill({ json: { counts: {}, paused: false, worker_running: true, writes_enabled: false, items: [] } })
     return route.fulfill({ status: 404, json: { detail: 'unmocked' } })
   })
 }

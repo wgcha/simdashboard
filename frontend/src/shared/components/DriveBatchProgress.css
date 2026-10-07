@@ -1,0 +1,13 @@
+.drive-batch { display:grid; gap:var(--space-1, 4px); padding:var(--space-2, 8px) var(--space-3, 12px); border-radius:var(--radius-sm, 4px); box-shadow:inset 0 0 0 1px var(--color-border); background:var(--color-surface); }
+.drive-batch p { margin:0; display:flex; align-items:center; gap:var(--space-1, 4px); flex-wrap:wrap; }
+.drive-batch p svg { width:1em; height:1em; flex:none; }
+.drive-batch small { color:var(--color-text-muted); }
+.drive-batch code { overflow-wrap:anywhere; }
+.drive-batch--ok p svg { color:var(--color-success, var(--color-accent)); }
+.drive-batch--warn p svg, .drive-batch--bad p svg { color:var(--color-danger, var(--color-accent)); }
+.drive-batch__bar { height:0.6em; overflow:hidden; border-radius:var(--radius-sm, 4px); background:var(--color-surface-interactive); box-shadow:inset 0 0 0 1px var(--color-border); }
+.drive-batch__bar i { display:block; height:100%; background:var(--color-accent); transition:width 0.2s; }
+.drive-batch__errors { margin:0; padding-inline-start:1.25em; }
+.drive-batch__error { color:var(--color-danger, inherit); }
+.drive-batch__spin { animation:drive-batch-spin 1s linear infinite; }
+@keyframes drive-batch-spin { to { transform:rotate(360deg); } }

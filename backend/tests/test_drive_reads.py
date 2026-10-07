@@ -347,11 +347,12 @@ def test_write_endpoints_answer_drive_write_disabled_and_status_reports_it(scx):
     assert not any(op in {"upload_new", "mkdirs", "copy_within"} for op, _ in scx.drive.calls)
 
 
-def test_writes_enabled_setting_is_reported_but_writes_stay_unavailable(scx, monkeypatch):
+def test_writes_enabled_setting_makes_d3_writes_available(scx, monkeypatch):
+    """D3: with "드라이브 쓰기 허용" the drive write path is available (tests/test_drive_writes.py)."""
     monkeypatch.setenv("SIMDASH_DRIVE_WRITES_ENABLED", "true")
     drive_gateway.shutdown()
     status = scx.client.get("/api/drive/status").json()
-    assert (status["writes_enabled"], status["writes_available"]) == (True, False)
+    assert (status["writes_enabled"], status["writes_available"]) == (True, True)
 
 
 def test_source_changes_api_requires_scx_and_a_matching_request(scx, monkeypatch):

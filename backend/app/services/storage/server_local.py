@@ -74,6 +74,99 @@ def file_size(path: Path) -> int:
     return int(path.stat().st_size)
 
 
+def file_exists(path: Path) -> bool:
+    return path.is_file()
+
+
+def write_stream(path: Path, source, *, chunk: int = 1024 * 1024) -> None:
+    """Copy a readable binary stream into a new server staging file (``xb``)."""
+    with path.open("xb") as stream:
+        while block := source.read(chunk):
+            stream.write(block)
+
+
+def ensure_dir(path: Path) -> Path:
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def discard_file(path: Path) -> None:
+    """Delete one server-local staging file (never a drive item); missing is fine."""
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def write_at(path: Path, offset: int, data: bytes) -> int:
+    """Append ``data`` at ``offset`` of a staging file (resumable chunk upload).
+
+    The file must be exactly ``offset`` bytes long (new file at 0); returns the new size.
+    Raises ``ValueError`` when the stored length differs (another writer or a lost chunk).
+    """
+    if offset == 0 and not path.exists():
+        with path.open("xb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        return len(data)
+    with path.open("r+b") as stream:
+        stream.seek(0, os.SEEK_END)
+        if stream.tell() != offset:
+            raise ValueError("staging file length differs from the chunk offset")
+        stream.write(data)
+        stream.flush()
+        os.fsync(stream.fileno())
+        return offset + len(data)
+
+
+def install_file(source: Path, target: Path) -> None:
+    """Move a finished staging file into place on the server (replaces an earlier staged copy)."""
+    os.replace(source, target)
+
+
+def file_sha256(path: Path, *, chunk: int = 8 * 1024 * 1024) -> tuple[int, str]:
+    digest = hashlib.sha256()
+    size = 0
+    with path.open("rb") as stream:
+        while block := stream.read(chunk):
+            size += len(block)
+            digest.update(block)
+    return size, digest.hexdigest()
+
+
+def file_sha1(path: Path, *, chunk: int = 8 * 1024 * 1024) -> str:
+    digest = hashlib.sha1()  # noqa: S324 - drive content fingerprint (contract §2.2 File.sha1), not security
+    with path.open("rb") as stream:
+        while block := stream.read(chunk):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def disk_free(path: Path) -> int | None:
+    try:
+        ensure_dir(path)
+        return int(shutil.disk_usage(path).free)
+    except OSError:
+        return None
+
+
+def old_dirs(parent: Path, prefix: str, max_age_seconds: float) -> list[Path]:
+    cutoff = time.time() - max_age_seconds
+    found: list[Path] = []
+    try:
+        children = list(parent.iterdir())
+    except OSError:
+        return found
+    for child in children:
+        try:
+            if child.is_dir() and child.name.startswith(prefix) and child.stat().st_mtime < cutoff:
+                found.append(child)
+        except OSError:
+            continue
+    return found
+
+
 class BlobStore:
     """Content-addressed store ``<dir>/<sha256[:2]>/<sha256>`` with a size cap (least recently used evicted)."""
 
@@ -145,5 +238,6 @@ class BlobStore:
                 continue
 
 
-__all__ = ["BlobStore", "file_size", "is_regular_file_inside", "make_child_dir", "new_dir", "open_file", "read_file",
-           "remove_old_dirs", "remove_tree", "write_file"]
+__all__ = ["BlobStore", "discard_file", "disk_free", "ensure_dir", "file_exists", "file_sha1", "write_stream", "file_sha256", "file_size",
+           "install_file", "is_regular_file_inside", "make_child_dir", "new_dir", "old_dirs", "open_file", "read_file",
+           "remove_old_dirs", "remove_tree", "write_at", "write_file"]

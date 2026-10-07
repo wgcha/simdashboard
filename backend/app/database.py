@@ -79,6 +79,9 @@ def initialize_database() -> None:
                 "result_registration_events",
                 "drive_credentials",
                 "drive_source_versions",
+                "drive_upload_queue",
+                "drive_locks",
+                "finalization_operations",
             )
             missing = [
                 table_name
@@ -117,6 +120,18 @@ def initialize_database() -> None:
                                           "pending_sha1", "pending_item_id", "pending_detected_at", "review_state",
                                           "reviewed_by", "reviewed_at", "registered_at", "registered_by", "superseded_at",
                                           "source_state", "last_checked_at"},
+                "drive_upload_queue": {"id", "batch_id", "seq", "kind", "root_key", "staging_path", "src_rel",
+                                       "src_version_token", "dst_rel_dir", "dst_name", "size_bytes", "sha256", "state",
+                                       "halt_on_error", "attempts", "next_attempt_at", "last_error_code", "last_error_msg",
+                                       "result_item_id", "result_size", "result_sha1", "transfer_method", "requested_by",
+                                       "origin", "origin_ref", "project_id", "request_id", "environment", "created_at",
+                                       "updated_at", "finished_at"},
+                "drive_locks": {"scope", "owner", "acquired_at", "expires_at"},
+                "finalization_operations": {"operation_id", "root_key", "project_id", "request_id", "environment", "case_id",
+                                            "capture_id", "status", "plan_json", "reports_json", "report_formats",
+                                            "upload_batch_id", "complete_json", "complete_sha256", "confirmed_at",
+                                            "designation_seq", "designation_batch_id", "error_code", "error_message",
+                                            "created_by", "confirmed_by", "created_at", "queued_at", "updated_at"},
             }
             incompatible = []
             for table_name, expected in required_columns.items():
@@ -1246,6 +1261,7 @@ def _initialize_duckdb_legacy() -> None:
         ensure_result_registration_schema(conn)
         ensure_drive_credentials_schema(conn)
         ensure_drive_source_versions_schema(conn)
+        ensure_drive_write_path_schema(conn)
         from .adapters.persistence.dashboard_schema import ensure_dashboard_schema
         ensure_dashboard_schema(conn)
         # Establish the schema before seeding, but defer one-time legacy data
@@ -1528,6 +1544,36 @@ def ensure_drive_source_versions_schema(conn: duckdb.DuckDBPyConnection) -> None
         source_state VARCHAR NOT NULL CHECK (source_state IN ('PRESENT', 'CHANGED', 'MISSING')),
         last_checked_at TIMESTAMP,
         UNIQUE (root_key, rel_path, version_no)
+    )""")
+
+
+def ensure_drive_write_path_schema(conn: duckdb.DuckDBPyConnection) -> None:
+    """Local development equivalent of additive migration 0038 (SCX drive write path, stage D3)."""
+    conn.execute("""CREATE TABLE IF NOT EXISTS drive_upload_queue (
+        id VARCHAR PRIMARY KEY, batch_id VARCHAR NOT NULL, seq INTEGER NOT NULL CHECK (seq >= 0),
+        kind VARCHAR NOT NULL CHECK (kind IN ('FILE', 'MKDIR', 'COPY', 'COMPLETE_MARKER')), root_key VARCHAR NOT NULL,
+        staging_path VARCHAR, src_rel VARCHAR, src_version_token VARCHAR, dst_rel_dir VARCHAR NOT NULL, dst_name VARCHAR,
+        size_bytes BIGINT, sha256 VARCHAR,
+        state VARCHAR NOT NULL CHECK (state IN ('PENDING', 'RUNNING', 'DONE', 'CONFLICT', 'FAILED', 'BLOCKED', 'CANCELLED')),
+        halt_on_error BOOLEAN NOT NULL DEFAULT TRUE, attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at TIMESTAMP,
+        last_error_code VARCHAR, last_error_msg VARCHAR, result_item_id VARCHAR, result_size BIGINT, result_sha1 VARCHAR,
+        transfer_method VARCHAR, requested_by VARCHAR NOT NULL, origin VARCHAR NOT NULL, origin_ref VARCHAR,
+        project_id VARCHAR, request_id VARCHAR, environment VARCHAR, created_at TIMESTAMP NOT NULL,
+        updated_at TIMESTAMP NOT NULL, finished_at TIMESTAMP,
+        UNIQUE (batch_id, seq)
+    )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS drive_locks (
+        scope VARCHAR PRIMARY KEY, owner VARCHAR NOT NULL, acquired_at TIMESTAMP NOT NULL, expires_at TIMESTAMP NOT NULL
+    )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS finalization_operations (
+        operation_id VARCHAR PRIMARY KEY, root_key VARCHAR NOT NULL, project_id VARCHAR NOT NULL,
+        request_id VARCHAR NOT NULL, environment VARCHAR NOT NULL, case_id VARCHAR NOT NULL, capture_id VARCHAR NOT NULL,
+        status VARCHAR NOT NULL CHECK (status IN ('PLANNED', 'STAGED', 'PUBLISHING', 'COMPLETE', 'FAILED')),
+        plan_json VARCHAR NOT NULL, reports_json VARCHAR, report_formats VARCHAR, upload_batch_id VARCHAR,
+        complete_json VARCHAR, complete_sha256 VARCHAR, confirmed_at VARCHAR, designation_seq INTEGER,
+        designation_batch_id VARCHAR, error_code VARCHAR, error_message VARCHAR, created_by VARCHAR NOT NULL,
+        confirmed_by VARCHAR, created_at TIMESTAMP NOT NULL, queued_at TIMESTAMP, updated_at TIMESTAMP NOT NULL,
+        UNIQUE (project_id, request_id, designation_seq)
     )""")
 
 

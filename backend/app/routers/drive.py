@@ -4,6 +4,9 @@
 * ``/api/drive/status`` — any signed-in user; state string and write availability (banner, read-only notice).
 * ``/api/drive/source-changes`` — drive files of a request whose change or removal waits for
   confirmation (stage D2, 05 §4): list (request viewers), accept/dismiss (result import permission).
+* ``/api/drive/upload-batches/{batch_id}`` — progress of one drive upload batch (request viewers, D3).
+* ``/api/admin/drive/queue`` — the drive upload queue (D3): list, retry, cancel, resume after
+  re-authentication.  Cancelling only marks the row; nothing on the drive is deleted.
 
 In ``none`` mode the status endpoints report ``mode: "none"`` and every admin
 write returns 409 ``DRIVE_MODE_DISABLED``.  Token values are never returned,
@@ -36,6 +39,8 @@ from ..services import folder_auto_sync
 from ..services.drive import gateway as drive_gateway
 from ..services.drive import reads as drive_reads
 from ..services.drive import sources as drive_sources
+from ..services.drive import upload_queue
+from ..services.drive import writes as drive_writes
 from ..services.drive.check import CheckAlreadyRunning, run_drive_check
 from ..services.drive.config import DriveSettings, url_host, validate_drive_rel_path
 from ..services.drive.token_store import parse_obtained_at
@@ -109,6 +114,73 @@ class DriveUserStatus(BaseModel):
     state: str | None = None
     writes_enabled: bool = False
     writes_available: bool = True
+    queue_paused: bool = False
+
+
+class DriveQueueItem(BaseModel):
+    id: str
+    batch_id: str
+    seq: int
+    kind: str
+    state: str
+    target: str
+    source: str | None = None
+    size: int | None = None
+    attempts: int = 0
+    next_attempt_at: str | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+    transfer_method: str | None = None
+    requested_by: str | None = None
+    origin: str
+    origin_ref: str | None = None
+    project_id: str | None = None
+    request_id: str | None = None
+    environment: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+    finished_at: str | None = None
+
+
+class DriveQueueList(BaseModel):
+    counts: dict[str, int]
+    paused: bool
+    worker_running: bool
+    writes_enabled: bool = False
+    items: list[DriveQueueItem]
+
+
+class DriveBatchError(BaseModel):
+    id: str
+    target: str
+    state: str
+    code: str | None = None
+    message: str | None = None
+
+
+class DriveUploadBatch(BaseModel):
+    batch_id: str
+    state: str
+    finished: bool
+    paused: bool
+    counts: dict[str, int]
+    items_total: int
+    files_total: int
+    files_done: int
+    bytes_total: int
+    bytes_done: int
+    current: str | None = None
+    current_kind: str | None = None
+    next_retry_at: str | None = None
+    errors: list[DriveBatchError] = Field(default_factory=list)
+    transfer_methods: dict[str, int] = Field(default_factory=dict)
+    origin: str | None = None
+    origin_ref: str | None = None
+    requested_by: str | None = None
+    project_id: str | None = None
+    request_id: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
 
 
 class DriveSourceVersionInfo(BaseModel):
@@ -286,7 +358,7 @@ def _admin_status(settings: DriveSettings) -> DriveAdminStatus:
         credentials=DriveCredentialsMeta(**credentials), credentials_problem=problem, health=DriveHealth(**health),
         worker_version=str(version) if isinstance(version, str) else None,
         token_save_failed_at=saved_failed.isoformat() if saved_failed else None,
-        writes_enabled=settings.writes_enabled, writes_available=False,
+        writes_enabled=settings.writes_enabled, writes_available=drive_writes.writes_available(),
         version_tokens=_token_observation(),
     )
 
@@ -344,6 +416,9 @@ def _register(request: Request, raw: bytes) -> DriveCredentialsSaved:
     actor = request.state.principal.user_id
     store.write(bundle, updated_by=actor)
     drive_gateway.reset_gateway()   # the worker must drop the previous account's in-memory tokens
+    resumed = upload_queue.resume_blocked()   # 05 §5.2: a queue paused by AUTH_REQUIRED continues
+    if resumed:
+        logger.info("SCX drive upload queue resumed after credential registration (%d item(s))", resumed)
     obtained = bundle.obtained_at.isoformat(timespec="microseconds")
     write_audit_event(request=request, principal=request.state.principal, status_code=200,
                       action="DRIVE_CREDENTIALS_REGISTERED",
@@ -433,8 +508,11 @@ def user_status(request: Request) -> DriveUserStatus:
         if not settings.enabled:
             return DriveUserStatus(mode="none")
         credentials, health, _store, _gateway = _scx_snapshot()
+        with connect() as conn:
+            paused = upload_queue.queue_paused(conn)
         return DriveUserStatus(mode="scx", state=_derived_state(credentials, health),
-                               writes_enabled=settings.writes_enabled, writes_available=False)
+                               writes_enabled=settings.writes_enabled,
+                               writes_available=drive_writes.writes_available(), queue_paused=paused)
     except Exception as error:
         logger.warning("SCX drive status unavailable (%s)", type(error).__name__)
         return DriveUserStatus(mode="scx", state="UNAVAILABLE", writes_available=False)
@@ -497,3 +575,74 @@ def accept_source_changes(payload: DriveSourceChangeDecision, request: Request) 
 def dismiss_source_changes(payload: DriveSourceChangeDecision, request: Request) -> DriveSourceChangeResult:
     """[무시]: keep the registered versions; the same drive versions are not asked again."""
     return _decide(request, payload, "dismiss")
+
+
+# --- drive upload queue (stage D3, 05 §5) ------------------------------------------------------
+
+@status_router.get("/upload-batches/{batch_id}", response_model=DriveUploadBatch)
+def upload_batch(request: Request, batch_id: str) -> DriveUploadBatch:
+    """Progress of one queued drive write batch (result drop publish, folder, Final, summary file)."""
+    _require_scx()
+    with connect() as conn:
+        summary = upload_queue.batch_summary(conn, batch_id)
+        if summary is None or not summary.get("request_id"):
+            raise _fail(404, "DRIVE_BATCH_NOT_FOUND", "드라이브 업로드 묶음을 찾을 수 없습니다.")
+        require_resource_permission(request, PROJECT_DATA_VIEW, "request", str(summary["request_id"]), conn=conn)
+    return DriveUploadBatch(**summary)
+
+
+@admin_router.get("/queue", response_model=DriveQueueList)
+def queue_list(request: Request, state: str | None = Query(default=None, pattern="^(PENDING|RUNNING|DONE|CONFLICT|FAILED|BLOCKED|CANCELLED)$"),
+               limit: int = Query(default=200, ge=1, le=1000)) -> DriveQueueList:
+    _require_admin(request)
+    settings = _require_scx()
+    with connect() as conn:
+        listed = upload_queue.admin_list(conn, state=state, limit=limit)
+    return DriveQueueList(**listed, writes_enabled=settings.writes_enabled)
+
+
+def _queue_action(request: Request, item_id: str, action: str) -> DriveQueueItem:
+    _require_admin(request)
+    _require_scx()
+    with connect() as conn:
+        try:
+            item = (upload_queue.retry_item if action == "retry" else upload_queue.cancel_item)(conn, item_id)
+        except LookupError:
+            raise _fail(404, "DRIVE_QUEUE_ITEM_NOT_FOUND", "대기열 항목을 찾을 수 없습니다.") from None
+        except ValueError as error:
+            raise _fail(409, "DRIVE_QUEUE_ITEM_STATE", f"이 상태({error})의 항목은 {'다시 시도' if action == 'retry' else '취소'}할 수 없습니다.") from None
+        if item.origin == "finalization" and item.origin_ref and action == "retry":
+            # A stopped Final batch runs again from this item; the Final shows "드라이브 반영 중" again.
+            conn.execute("UPDATE finalization_operations SET status='PUBLISHING', error_code=NULL, error_message=NULL "
+                         "WHERE operation_id=? AND status='FAILED'", [item.origin_ref])
+        write_audit_event(request=request, principal=request.state.principal, status_code=200,
+                          action="DRIVE_QUEUE_ITEM_RETRIED" if action == "retry" else "DRIVE_QUEUE_ITEM_CANCELLED",
+                          detail={"item_id": item_id, "batch_id": item.batch_id, "origin": item.origin,
+                                  "origin_ref": item.origin_ref, "target": item.target}, connection=conn)
+    upload_queue.wake()
+    return DriveQueueItem(**item.view())
+
+
+@admin_router.post("/queue/{item_id}/retry", response_model=DriveQueueItem)
+def queue_retry(item_id: str, request: Request) -> DriveQueueItem:
+    """Run a FAILED/CONFLICT/BLOCKED/CANCELLED item again (a CONFLICT is re-checked; nothing is overwritten)."""
+    return _queue_action(request, item_id, "retry")
+
+
+@admin_router.post("/queue/{item_id}/cancel", response_model=DriveQueueItem)
+def queue_cancel(item_id: str, request: Request) -> DriveQueueItem:
+    """Mark a not-yet-done item CANCELLED. Drive content is never deleted; a cancelled Final stays incomplete."""
+    return _queue_action(request, item_id, "cancel")
+
+
+@admin_router.post("/queue/resume", response_model=DriveQueueList)
+def queue_resume(request: Request) -> DriveQueueList:
+    """Continue items paused by AUTH_REQUIRED (credential registration does this automatically)."""
+    _require_admin(request)
+    settings = _require_scx()
+    resumed = upload_queue.resume_blocked()
+    write_audit_event(request=request, principal=request.state.principal, status_code=200,
+                      action="DRIVE_QUEUE_RESUMED", detail={"items": resumed})
+    with connect() as conn:
+        listed = upload_queue.admin_list(conn)
+    return DriveQueueList(**listed, writes_enabled=settings.writes_enabled)

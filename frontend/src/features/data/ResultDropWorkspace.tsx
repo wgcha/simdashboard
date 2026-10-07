@@ -11,8 +11,9 @@ import { ApiError } from '../../shared/api/errors'
 import { requestResultEnvironments, resolvedResultEnvironment } from '../../shared/api/simulationDashboard'
 import { chunkSha256, resultDropApi, type DropCompletion, type DropConflict, type DropEnvironment, type DropPlan, type DropTree, type OpenDropSession } from '../../shared/api/resultDrop'
 import { ROLE_LABELS, SKIP_REASON_LABELS, chunkRanges, depthRules, dropEntries, dropGuide, formatBytes, pickedFromInput, walkEntries, type PickedItems } from '../../shared/api/resultDropModel'
-import { DRIVE_READ_ONLY_NOTICE } from '../../shared/api/drive'
+import { DRIVE_READ_ONLY_NOTICE, type DriveUploadBatch } from '../../shared/api/drive'
 import { useDriveWriteStatus } from '../../shared/hooks/useDriveWriteStatus'
+import { DriveBatchProgress } from '../../shared/components/DriveBatchProgress'
 import { LegacyDraftHistory } from './LegacyDraftHistory'
 import './DataWorkspace.css'
 import './ResultDropWorkspace.css'
@@ -177,8 +178,9 @@ export function ResultDropWorkspace({ embedded = false, contextChanging = false,
   const nextRole = roles[roles.indexOf(targetRole) + 1]
   const guide = dropGuide(targetRole, roles)
   const busy = planBusy || Boolean(progress) || folderBusy
-  // SCX drive mode (plan D2) is read-only: no folder creation or upload into the SPDM root.
-  const readOnly = !useDriveWriteStatus().writesAvailable
+  // SCX drive mode: writes need "드라이브 쓰기 허용" (plan D3); uploads then go through the drive upload queue.
+  const driveStatus = useDriveWriteStatus()
+  const readOnly = !driveStatus.writesAvailable
   const uploading = Boolean(progress)
 
   const choose = (levelIndex: number, value: string) => {
@@ -195,7 +197,9 @@ export function ResultDropWorkspace({ embedded = false, contextChanging = false,
     try {
       const created = await resultDropApi.createFolder({ project_id: projectId, request_id: requestId, environment, parent_relative_path: target, name: folderName.trim(), confirm })
       setFolderOpen(false); setFolderName(''); setFolderWarning([])
-      setNotice(`새 ${created.role_label} 폴더를 만들었습니다: ${created.display_path}`)
+      setNotice(created.drive && created.drive.state !== 'DONE'
+        ? `새 ${created.role_label} 폴더를 드라이브에 만드는 중입니다(업로드 대기열): ${created.display_path}`
+        : `새 ${created.role_label} 폴더를 만들었습니다: ${created.display_path}`)
       setChosen((current) => [...current, created.relative_path])
       setTreeVersion((value) => value + 1)
     } catch (reason) {
@@ -289,6 +293,16 @@ export function ResultDropWorkspace({ embedded = false, contextChanging = false,
     }
   }
 
+  // SCX drive (D3): once the queued batch finished, keep its final summary (no re-polling on re-mount) and refresh once.
+  const finishedBatches = useRef(new Set<string>())
+  const driveBatchFinished = useCallback((batch: DriveUploadBatch) => {
+    if (finishedBatches.current.has(batch.batch_id)) return
+    finishedBatches.current.add(batch.batch_id)
+    setCompletion((value) => value?.drive?.batch_id === batch.batch_id ? { ...value, drive: batch } : value)
+    setTreeVersion((value) => value + 1)
+    void onDataChanged().catch(() => undefined)
+  }, [onDataChanged])
+
   // A partially published upload (files locked by another program): publish the rest, or stop it.
   const retryPartial = async () => {
     if (!completion) return
@@ -345,7 +359,8 @@ export function ResultDropWorkspace({ embedded = false, contextChanging = false,
         </HierarchyPath>
         <div className="result-drop__target">
           <code data-testid="result-drop-target-path" title={targetDisplay}>{targetDisplay}</code>
-          <Button size="sm" onClick={() => void copyPath()} disabled={!targetDisplay}><Copy aria-hidden="true" />경로 복사</Button>
+          {/* Drive mode: the path is a drive path, not something to paste into Explorer (plan §3). */}
+          {driveStatus.scx ? null : <Button size="sm" onClick={() => void copyPath()} disabled={!targetDisplay}><Copy aria-hidden="true" />경로 복사</Button>}
           <Button size="sm" variant="ghost" onClick={() => { setFolderOpen((value) => !value); setFolderError(''); setFolderWarning([]) }} disabled={busy || !nextRole || readOnly} title={readOnly ? DRIVE_READ_ONLY_NOTICE : nextRole ? undefined : 'Scene 폴더 안에는 결과 파일을 바로 넣습니다.'}><FolderPlus aria-hidden="true" />새 폴더 만들기</Button>
         </div>
         {notice ? <p className="result-drop__notice" role="status">{notice}</p> : null}
@@ -401,7 +416,14 @@ export function ResultDropWorkspace({ embedded = false, contextChanging = false,
         <p><strong>{progress.doneFiles} / {progress.fileCount} 파일</strong> · {formatBytes(progress.sentBytes)} / {formatBytes(progress.totalBytes)}{progress.current ? <> · <code>{progress.current}</code></> : null}</p>
         <Button size="sm" variant="ghost" onClick={() => { stopRef.current = true }}><Square aria-hidden="true" />중지</Button>
       </div> : null}
-      {completion ? <div className="result-drop__done" role="status" data-testid="result-drop-complete">
+      {completion?.state === 'QUEUED' ? <div className="result-drop__done" data-testid="result-drop-queued">
+        <p><CheckCircle2 aria-hidden="true" /><strong>{completion.queued_files ?? completion.file_count}개 파일을 서버에 받았습니다</strong> · 드라이브 업로드 대기열에 넣었습니다</p>
+        {completion.drive ? <DriveBatchProgress batchId={completion.drive.batch_id} initial={completion.drive} onFinished={driveBatchFinished} /> : null}
+        <p className="result-drop__sync">드라이브에 올라간 뒤 1분 안에 Case 결과에 반영합니다. 같은 이름의 파일이 생기면 덮어쓰지 않고 충돌로 표시합니다.</p>
+        <div className="result-drop__links">{completion.cases.map((item) => <Link key={item.case_relative_path} className="result-drop__link" to={caseResultsHref(projectId, requestId, environment, item.case_id)}>{item.case_name} Case 결과 열기</Link>)}
+          {!completion.cases.length ? <Link className="result-drop__link" to={caseResultsHref(projectId, requestId, environment)}>Case 결과 열기</Link> : null}</div>
+        {completion.skipped.length ? <p className="result-drop__muted">올리지 않은 파일 {completion.skipped.length}개: {completion.skipped.slice(0, 5).map((item) => item.relative_path).join(', ')}</p> : null}
+      </div> : completion ? <div className="result-drop__done" role="status" data-testid="result-drop-complete">
         <p><CheckCircle2 aria-hidden="true" /><strong>{completion.published_files}개 파일을 올렸습니다</strong>{completion.created_folders.length ? ` · 새 폴더 ${completion.created_folders.length}개` : ''} · {formatBytes(completion.published_bytes)}</p>
         <p className="result-drop__sync">{completion.sync.status === 'REFRESHED' || completion.sync.status === 'UNCHANGED' ? 'Case 결과에 반영했습니다.' : '폴더 확인이 늦어지고 있습니다. 1분 안에 자동으로 다시 확인합니다.'}{completion.state === 'PARTIAL' ? ' 일부 파일은 다른 프로그램이 사용 중이거나 같은 이름이 생겨 옮기지 못했습니다.' : ''}{completion.state === 'ABORTED' ? ' 나머지는 중지했습니다.' : ''}</p>
         {completion.state === 'PARTIAL' ? <div className="result-drop__actions" data-testid="result-drop-partial">

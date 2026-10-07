@@ -52,9 +52,11 @@ class DriveSettings:
     max_concurrency: int = 1
     cache_ttl_seconds: float = 30.0
     secret_key: str | None = field(default=None, repr=False)
-    # D2 (scx-drive plan §9 "드라이브 쓰기 허용"): off by default. Stage D2 has no drive write
-    # path at all, so this flag is only reported; stage D3 gates its upload queue on it.
+    # scx-drive plan §9 "드라이브 쓰기 허용": off by default. D3: the upload queue, result drop
+    # uploads and Final designation write to the drive only when this is on.
     writes_enabled: bool = False
+    # 05 §5.2: attempts of one queue item for retryable drive errors before it is FAILED.
+    upload_max_attempts: int = 8
     # 05 §3 server blob store for downloaded files above BLOB_THRESHOLD_BYTES (content-addressed).
     blob_dir: Path = DEFAULT_WORK_DIR / "blobs"
     blob_max_bytes: int = 100 * 1024 ** 3
@@ -206,6 +208,7 @@ def drive_settings() -> DriveSettings:
         cache_ttl_seconds=float(_number("SIMDASH_SCX_CACHE_TTL_SECONDS", 30.0, 0.0, 3600.0, integer=False)),
         secret_key=_fernet_key("SIMDASH_SECRET_ENC_KEY"),
         writes_enabled=_flag("SIMDASH_DRIVE_WRITES_ENABLED"),
+        upload_max_attempts=int(_number("SIMDASH_DRIVE_UPLOAD_MAX_ATTEMPTS", 8, 1, 100, integer=True)),
         blob_dir=_absolute_path("SIMDASH_DRIVE_BLOB_DIR", blob_raw) if (blob_raw := _text("SIMDASH_DRIVE_BLOB_DIR")) else work_dir / "blobs",
         blob_max_bytes=int(_number("SIMDASH_DRIVE_BLOB_MAX_BYTES", 100 * 1024 ** 3, 64 * 1024 ** 2, 2 ** 50, integer=True)),
     )

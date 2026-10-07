@@ -1,6 +1,7 @@
 import { apiFetch } from './auth'
 import { apiErrorFromResponse } from './errors'
 import { apiUrl } from './url'
+import type { DriveUploadBatch } from './drive'
 
 // W8 결과 등록: drag & drop of files or whole folders into the request's Working tree.
 
@@ -46,7 +47,8 @@ export type DropPlan = Scope & {
 export type DropSessionFile = { index: number; client_index: number; relative_path: string; destination_relative_path: string; size: number; received: number; complete: boolean; published: boolean }
 export type DropSession = Scope & {
   session_id: string
-  state: 'UPLOADING' | 'PUBLISHING' | 'PUBLISHED' | 'PARTIAL' | 'ABORTED'
+  /** ``QUEUED``: SCX drive mode, received on the server and queued for the drive (D3). */
+  state: 'UPLOADING' | 'PUBLISHING' | 'PUBLISHED' | 'PARTIAL' | 'ABORTED' | 'QUEUED'
   target_relative_path: string
   chunk_bytes: number
   file_count: number
@@ -65,9 +67,13 @@ export type DropCompletion = DropSession & {
   busy: string[]
   sync: { status?: string | null; changed?: boolean | null; code?: string | null; message?: string | null }
   cases: Array<{ case_relative_path: string; case_name: string; case_id: string | null }>
+  /** SCX drive mode (D3): the queued drive upload batch and its counts. */
+  drive?: DriveUploadBatch | null
+  queued_files?: number
+  queued_bytes?: number
 }
 export type DropChunkResult = { index: number; received: number; size: number; complete: boolean; sha256: string | null }
-export type DropFolderCreated = { relative_path: string; display_path: string; level: number; role: string; role_label: string; warnings: string[] }
+export type DropFolderCreated = { relative_path: string; display_path: string; level: number; role: string; role_label: string; warnings: string[]; drive?: DriveUploadBatch | null }
 export type DropPlanInput = Scope & { target_relative_path: string; files: Array<{ relative_path: string; size: number; sha256?: string | null }>; folders: string[] }
 export type OpenDropSession = { session_id: string; state: string; user_id: string; own: boolean; target_relative_path: string; file_count: number; total_bytes: number; published_files: number; idle_seconds: number }
 export type LegacyDraft = {

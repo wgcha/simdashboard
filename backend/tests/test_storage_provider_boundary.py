@@ -63,6 +63,7 @@ NON_SPDM_MODULES = {
     "services/drive/gateway.py": "SCX worker work dir and dashboard.lock (scx mode)",
     "services/drive/check.py": "SCX drive gateway calls and the server staging folder (drive check)",
     "services/drive/reads.py": "SCX drive gateway calls (stat/list_dir/download_to); local files via storage.server_local",
+    "services/drive/upload_queue.py": "SCX drive gateway calls (stat/mkdirs/copy_within/upload_new/download_to); staging files via storage.server_local",
     "routers/drive.py": "SCX drive gateway calls (admin connection test)",
     "services/import_snapshot_workspace.py": "service-owned snapshot workspace",
     "services/local_helper_distribution.py": "packaged local helper",

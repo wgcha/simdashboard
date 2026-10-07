@@ -96,6 +96,20 @@
   - 다음 요약 쓰기 때 1시간 넘은 `.current.json.<32 hex>.tmp`(정확히 이 이름)만 지운다.
 - 알려진 한계·개인정보: `designated_by`는 사용자 ID 그대로이며(이름 아님) SPDM이 읽는 파일에 들어간다. 표시 이름 추가·ID 제외는 SPDM 협의 때 정한다.
 
+## SCX 드라이브 모드 (D3, 2026-10-08)
+
+`SIMDASH_DRIVE_GATEWAY=scx`에서 SPDM 루트가 드라이브이면 같은 API·화면·응답 형식으로 Final을 지정하되, 드라이브는 이름 바꾸기·교체·삭제가 없으므로 저장 방식이 다르다(`services/case_finalization_drive.py`). 상세는 [SCX 드라이브 기능 안내 §10.4–10.5](scx-drive.md#104-final-지정--integration-05-6).
+
+- **쓰기 허용 필요:** `SIMDASH_DRIVE_WRITES_ENABLED`가 꺼져 있으면 미리보기·보고서·확정·요약 갱신은 409 `DRIVE_WRITE_DISABLED`(화면 "드라이브 읽기 전용").
+- **메타데이터는 DB:** 계획·보고서 기록·완료 기록은 `finalization_operations`(migration `0038`), 의뢰 잠금은 `drive_locks`(`final:<프로젝트>/<의뢰>`, 확정부터 드라이브 반영이 끝날 때까지 — 같은 의뢰의 다른 확정은 409 `FINALIZATION_LOCKED`). 미리보기는 드라이브에 아무것도 쓰지 않는다.
+- **드라이브 쓰기는 업로드 대기열 한 묶음:** 폴더(`mkdirs`) → CAE 파일마다 드라이브 안 복사(`copy_within`, 지원하지 않으면 다운로드→업로드로 대체하고 `transfer_method`에 기록) → 보고서 업로드(`upload_new`) → `.finalizations/<op>/plan.json` 사본 → **`complete.json`을 마지막에**. 확정은 묶음을 등록하고 바로 응답하며, 창·헤더는 "Final 드라이브 반영 중 n%"(파일 단위)를 보인다.
+- **원본 확인:** 계획에 파일별 `version_token`을 고정한다. 확정 때 바뀌었으면 409 `FINALIZATION_SOURCE_STALE`, 복사 직전에 바뀌었으면 그 항목 실패 → 묶음 정지(`complete.json` 없음, 미완료). 드라이브 원본 변경 확인 대기·무시·원본 없음 파일이 Scene에 있으면 미리보기부터 거부한다(화면은 등록 버전을 보이지만 드라이브에는 다른 바이트가 있으므로).
+- **완료 기록:** local과 같은 서명 형식(`schema_version` 3)에 `storage: "scx"`, 파일별 드라이브 `sha1`·`transfer_method`. 수집 결과 파일 외의 `sha256`은 `null`(서버가 내용을 읽지 않음). 상태 조회는 DB 기록으로 판단하며 `verification: "DRIVE_UPLOAD"`(헤더 "드라이브 반영 기록") — 드라이브 파일 해시를 다시 확인하지 않는다.
+- **현재 Final 요약:** `Final/current.json`·`designations.json`을 쓰지 않고, 완료마다 `Final/.finalizations/designations/<순번 8자리>-<Final ID>.json`을 새로 올린다(가장 큰 순번 = 현재, 이전 파일 불변). **요약 파일 갱신**은 현재 Final로 다음 순번 파일을 하나 더 올린다. `summary.state`에 `PENDING`(업로드 대기 중)이 추가된다. SPDM 협의 전 임시안(연동 계획 결정 D2 ①).
+- **실패·재시도:** 묶음 항목이 충돌·실패·취소로 멈추면 Final은 `FAILED`(첫 오류 코드)로 남고 드라이브의 부분 결과는 지우지 않는다. 재시도는 같은 Final ID로 멈춘 항목만 다시 실행한다(이미 복사한 CAE는 다시 복사하지 않음). 드라이브 인증이 필요하면 대기열이 멈추고(헤더 "Final 일시 정지(드라이브 인증 필요)") 토큰 재등록 후 이어서 진행한다. 관리자는 드라이브 관리 › 업로드 대기열에서 항목을 다시 시도·취소할 수 있다(취소해도 드라이브 내용은 그대로).
+- 서버 재시작 때 local 모드의 `.finalizations` 이어하기 검색은 scx에서 하지 않는다(대기열이 `RUNNING` 항목을 이어서 실행).
+- 의뢰 진척(P5)의 Final 단계는 scx에서 DB 완료 기록과 보고서 이름으로 판단한다.
+
 ## 기준: 최신 결과
 
 - `capture_id`로 화면과 같은 `latest:<dashboard_case_id>`를 받는다. Scene별 기준 수집본은 화면이 쓰는 `dashboard_capture.merge_latest_payload`를 같은 수집본 순서(`created_at, id`, `get_latest_capture`와 동일)로 직접 호출해 정한다(규칙의 단일 원천, 2026-10-03 보강). 병합된 Scene은 결과·미디어 경로(없으면 같은 수집본 안의 Scene 폴더 이름)로 현재 확정 Scene 경로에 대응시킨다. 사용환경은 가장 최근 수집본 하나다(화면·Final 보고서·Final 기준 모두 `latest:<Case>`).

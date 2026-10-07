@@ -2555,6 +2555,83 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/drive/queue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Queue List */
+        get: operations["queue_list_api_admin_drive_queue_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/drive/queue/{item_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Queue Retry
+         * @description Run a FAILED/CONFLICT/BLOCKED/CANCELLED item again (a CONFLICT is re-checked; nothing is overwritten).
+         */
+        post: operations["queue_retry_api_admin_drive_queue__item_id__retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/drive/queue/{item_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Queue Cancel
+         * @description Mark a not-yet-done item CANCELLED. Drive content is never deleted; a cancelled Final stays incomplete.
+         */
+        post: operations["queue_cancel_api_admin_drive_queue__item_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/drive/queue/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Queue Resume
+         * @description Continue items paused by AUTH_REQUIRED (credential registration does this automatically).
+         */
+        post: operations["queue_resume_api_admin_drive_queue_resume_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/drive/status": {
         parameters: {
             query?: never;
@@ -2626,6 +2703,26 @@ export interface paths {
          * @description [무시]: keep the registered versions; the same drive versions are not asked again.
          */
         post: operations["dismiss_source_changes_api_drive_source_changes_dismiss_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/drive/upload-batches/{batch_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Upload Batch
+         * @description Progress of one queued drive write batch (result drop publish, folder, Final, summary file).
+         */
+        get: operations["upload_batch_api_drive_upload_batches__batch_id__get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -5316,6 +5413,19 @@ export interface components {
             writes_available: boolean;
             version_tokens?: components["schemas"]["DriveTokenObservation"] | null;
         };
+        /** DriveBatchError */
+        DriveBatchError: {
+            /** Id */
+            id: string;
+            /** Target */
+            target: string;
+            /** State */
+            state: string;
+            /** Code */
+            code?: string | null;
+            /** Message */
+            message?: string | null;
+        };
         /** DriveCheckReport */
         DriveCheckReport: {
             /** Test Folder */
@@ -5410,6 +5520,74 @@ export interface components {
              * @default 0
              */
             in_flight: number;
+        };
+        /** DriveQueueItem */
+        DriveQueueItem: {
+            /** Id */
+            id: string;
+            /** Batch Id */
+            batch_id: string;
+            /** Seq */
+            seq: number;
+            /** Kind */
+            kind: string;
+            /** State */
+            state: string;
+            /** Target */
+            target: string;
+            /** Source */
+            source?: string | null;
+            /** Size */
+            size?: number | null;
+            /**
+             * Attempts
+             * @default 0
+             */
+            attempts: number;
+            /** Next Attempt At */
+            next_attempt_at?: string | null;
+            /** Error Code */
+            error_code?: string | null;
+            /** Error Message */
+            error_message?: string | null;
+            /** Transfer Method */
+            transfer_method?: string | null;
+            /** Requested By */
+            requested_by?: string | null;
+            /** Origin */
+            origin: string;
+            /** Origin Ref */
+            origin_ref?: string | null;
+            /** Project Id */
+            project_id?: string | null;
+            /** Request Id */
+            request_id?: string | null;
+            /** Environment */
+            environment?: string | null;
+            /** Created At */
+            created_at?: string | null;
+            /** Updated At */
+            updated_at?: string | null;
+            /** Finished At */
+            finished_at?: string | null;
+        };
+        /** DriveQueueList */
+        DriveQueueList: {
+            /** Counts */
+            counts: {
+                [key: string]: number;
+            };
+            /** Paused */
+            paused: boolean;
+            /** Worker Running */
+            worker_running: boolean;
+            /**
+             * Writes Enabled
+             * @default false
+             */
+            writes_enabled: boolean;
+            /** Items */
+            items: components["schemas"]["DriveQueueItem"][];
         };
         /** DriveSourceChangeDecision */
         DriveSourceChangeDecision: {
@@ -5535,6 +5713,57 @@ export interface components {
             /** Last At */
             last_at?: string | null;
         };
+        /** DriveUploadBatch */
+        DriveUploadBatch: {
+            /** Batch Id */
+            batch_id: string;
+            /** State */
+            state: string;
+            /** Finished */
+            finished: boolean;
+            /** Paused */
+            paused: boolean;
+            /** Counts */
+            counts: {
+                [key: string]: number;
+            };
+            /** Items Total */
+            items_total: number;
+            /** Files Total */
+            files_total: number;
+            /** Files Done */
+            files_done: number;
+            /** Bytes Total */
+            bytes_total: number;
+            /** Bytes Done */
+            bytes_done: number;
+            /** Current */
+            current?: string | null;
+            /** Current Kind */
+            current_kind?: string | null;
+            /** Next Retry At */
+            next_retry_at?: string | null;
+            /** Errors */
+            errors?: components["schemas"]["DriveBatchError"][];
+            /** Transfer Methods */
+            transfer_methods?: {
+                [key: string]: number;
+            };
+            /** Origin */
+            origin?: string | null;
+            /** Origin Ref */
+            origin_ref?: string | null;
+            /** Requested By */
+            requested_by?: string | null;
+            /** Project Id */
+            project_id?: string | null;
+            /** Request Id */
+            request_id?: string | null;
+            /** Created At */
+            created_at?: string | null;
+            /** Updated At */
+            updated_at?: string | null;
+        };
         /** DriveUserStatus */
         DriveUserStatus: {
             /** Mode */
@@ -5551,6 +5780,11 @@ export interface components {
              * @default true
              */
             writes_available: boolean;
+            /**
+             * Queue Paused
+             * @default false
+             */
+            queue_paused: boolean;
         };
         /** DropFile */
         DropFile: {
@@ -13295,6 +13529,120 @@ export interface operations {
             };
         };
     };
+    queue_list_api_admin_drive_queue_get: {
+        parameters: {
+            query?: {
+                state?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DriveQueueList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    queue_retry_api_admin_drive_queue__item_id__retry_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DriveQueueItem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    queue_cancel_api_admin_drive_queue__item_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DriveQueueItem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    queue_resume_api_admin_drive_queue_resume_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DriveQueueList"];
+                };
+            };
+        };
+    };
     user_status_api_drive_status_get: {
         parameters: {
             query?: never;
@@ -13400,6 +13748,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DriveSourceChangeResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_batch_api_drive_upload_batches__batch_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                batch_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DriveUploadBatch"];
                 };
             };
             /** @description Validation Error */

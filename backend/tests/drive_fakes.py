@@ -13,6 +13,15 @@ modification (``modify_file``: new bytes and time; ``touch``: time only),
 deletion (``delete``), persistent error injection (``fail_always`` per op, e.g.
 BUSY/TIMEOUT/AUTH_REQUIRED) and an ``on_call`` hook so tests can assert the
 calling thread holds no database connection.
+
+Stage D3 additions (write path): ``copy_unsupported`` (``copy_within`` answers
+INTERNAL like a drive without server-side copy, contract C7 unknown),
+``fail_path`` (an error for one operation on one path, consumed per call, e.g.
+TIMEOUT for the second file of a batch), ``lost_response`` (the write lands but
+the call raises, like a timeout after the server accepted the upload) and
+``writes()`` (every write call, for "nothing deleted/overwritten" checks).
+CONFLICT for an existing name is the adapter behaviour (``upload_new`` /
+``copy_within`` never overwrite).
 """
 from __future__ import annotations
 
@@ -153,6 +162,9 @@ class MemoryDrive:
     fail_always: dict[str, ErrorCode] = field(default_factory=dict)
     on_call: Any = None
     sessions: int = 0
+    copy_unsupported: bool = False
+    fail_path: dict[tuple[str, str], list[ErrorCode]] = field(default_factory=dict)
+    lost_response: dict[str, ErrorCode] = field(default_factory=dict)
     _ids: Any = field(default_factory=lambda: itertools.count(1))
     _clock: Any = field(default_factory=lambda: itertools.count(1))
 
@@ -183,6 +195,12 @@ class MemoryDrive:
 
     def downloads(self) -> list[str]:
         return [rel for op, rel in self.calls if op == "download_to"]
+
+    def writes(self) -> list[tuple[str, str]]:
+        return [(op, rel) for op, rel in self.calls if op in {"upload_new", "copy_within", "mkdirs"}]
+
+    def content(self, rel: str) -> bytes:
+        return self.nodes[rel].content
 
     def add_dir(self, rel: str) -> None:
         parts = rel.split("/")
@@ -264,6 +282,9 @@ class FakeWorkerDriveGateway:
         elif loaded is not None and loaded.obtained_at not in (self._sent_obtained_at, self._bundle.obtained_at):
             self._start_session(loaded)
         injected = self.drive.fail_next.pop(op, None) or self.drive.fail_always.get(op)
+        queued = self.drive.fail_path.get((op, rel))
+        if injected is None and queued:
+            injected = queued.pop(0)
         if injected is not None:
             self._fail(injected)
             raise DriveError(injected, f"injected {injected.value}", rel)
@@ -347,18 +368,28 @@ class FakeWorkerDriveGateway:
                               sha256=hashlib.sha256(node.content).hexdigest())
 
     def upload_new(self, local_file: Path, rel_dir: str, *, name: str | None = None) -> DriveEntry:
-        self._session("upload_new", _check_path(rel_dir))
+        target = f"{rel_dir}/{name or Path(local_file).name}" if rel_dir else (name or Path(local_file).name)
+        self._session("upload_new", _check_path(target))
         if self._require(rel_dir).kind != "dir":
             raise DriveError(ErrorCode.INVALID_PATH, "not a folder", rel_dir)
-        target = f"{rel_dir}/{name or Path(local_file).name}" if rel_dir else (name or Path(local_file).name)
         if target in self.drive.nodes:
             raise DriveError(ErrorCode.CONFLICT, "target exists", target)
         self.drive.add_file(target, Path(local_file).read_bytes())
+        self._lost("upload_new", target)
         self._ok()
         return self.drive.entry(target)
 
+    def _lost(self, op: str, rel: str) -> None:
+        lost = self.drive.lost_response.pop(op, None)
+        if lost is not None:
+            self._fail(lost)
+            raise DriveError(lost, f"injected {lost.value} after the write landed", rel)
+
     def copy_within(self, src_rel: str, dst_dir_rel: str, *, new_name: str | None = None) -> DriveEntry:
         self._session("copy_within", _check_path(src_rel))
+        if self.drive.copy_unsupported:
+            self._fail(ErrorCode.INTERNAL)
+            raise DriveError(ErrorCode.INTERNAL, "server-side copy is not supported", src_rel)
         node = self._require(src_rel)
         if self._require(dst_dir_rel).kind != "dir":
             raise DriveError(ErrorCode.INVALID_PATH, "not a folder", dst_dir_rel)
@@ -366,6 +397,7 @@ class FakeWorkerDriveGateway:
         if target in self.drive.nodes:
             raise DriveError(ErrorCode.CONFLICT, "target exists", target)
         self.drive.nodes[target] = replace(self.drive._node(node.kind, node.content))
+        self._lost("copy_within", target)
         self._ok()
         return self.drive.entry(target)
 

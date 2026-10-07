@@ -1,7 +1,7 @@
 # SCX 드라이브 연동 계획 (어댑터 · UI · 브랜치)
 
 - 기준일: 2026-10-07
-- 상태: **결정 반영(2026-10-07 15:40). D0·D1·D2 구현(2026-10-07, 브랜치, 검수 대기)** — 사용 안내는 [SCX 드라이브 기능 안내](../features/scx-drive.md)(D2 읽기 경로 §8), 배포 영향은 [ADR 0006](../adr/0006-scx-drive-adapter-external-wheel.md). D3(쓰기 경로) 이후 구현 전.
+- 상태: **결정 반영(2026-10-07 15:40). D0·D1·D2·D3 구현(2026-10-07~08, 브랜치, 검수 대기)** — 사용 안내는 [SCX 드라이브 기능 안내](../features/scx-drive.md)(D2 읽기 경로 §8, D3 쓰기 경로 §10), 배포 영향은 [ADR 0006](../adr/0006-scx-drive-adapter-external-wheel.md). D4(UI 나머지)·D5(배포·이관)·D6(수용 시험) 남음.
 - 근거: GitHub 이슈 #45 본문과 코멘트(사내 `VD_scx_drive_adapter` 계약 v0.2, integration 00–07), [저장소 계층 계약](../contracts/storage-provider.md), [개선 전체 계획](improvement-roadmap.md)
 - 작업 브랜치: `claude/scx-drive` (main `8db9f66`에서 분기)
 
@@ -96,6 +96,24 @@ SPDM 원본이 로컬·공유 폴더에서 **SCX 드라이브(AltairOne Drive)**
 | UI | 폴더 자동 확인 줄의 `원본 변경 n · 확인 필요 · 원본 없음 m` 배지 → 확인 대화상자(파일별·전체 새 버전 등록/무시). 읽기 전용 안내와 결과 등록 폴더 만들기·올리기, Final 지정·재시도·요약 갱신, 저장소 패널 업로드·새로고침 비활성. 관리 화면에 쓰기 허용 설정·원본 지문 형태 |
 | 시험 | 가짜 게이트웨이 확장(sha1 목록/조회별 유무, `modify_file`·`touch`·`delete`, `fail_always`, 호출 시 연결 보유 감시). `test_drive_reads.py` 18건(DuckDB; 임시 PostgreSQL에서는 DuckDB 전용 1건 건너뜀), e2e `drive-read-path` 2건 |
 | 남은 일 | D3 쓰기 전부, 저장소 패널 다운로드·결과 등록 초안 API의 읽기 세션화, 03 8-3 sha1 체크섬, "사용 중"(BUSY 3회) 배지, 화면 폴더 선택기·대용량 영상 로딩 표시(D4), 실제 드라이브 C1·C9 확인(D6) |
+
+### D3 구현 결과 (2026-10-08)
+
+상세는 [기능 안내 §10](../features/scx-drive.md#10-쓰기-경로-d3).
+
+| 항목 | 결과 |
+|---|---|
+| 쓰기 허용 | `SIMDASH_DRIVE_WRITES_ENABLED`(기본 false): 꺼짐이면 D2와 같이 409 `DRIVE_WRITE_DISABLED`. 켜짐 + SPDM 루트면 결과 등록(끌어놓기·새 폴더)·Final 지정이 드라이브에 쓴다. 결과 등록 초안(폴더 준비·게시·복사 재시도)·저장소 패널(새로고침·연결·업로드)은 scx에서 항상 409(`require_local_writes`) |
+| DB | migration `0038_drive_write_path`(추가 전용, 앱 역할 GRANT): `drive_upload_queue`(04 §2.3 + `root_key`·`src_version_token`·`halt_on_error`·`transfer_method`·`result_*`·범위 열·`CANCELLED` 상태), `drive_locks`(04 §2.4), `finalization_operations`(04 §2.5 + 범위·`report_formats`·`complete_sha256`·`confirmed_at`·`designation_seq`·`designation_batch_id`·오류). DuckDB DDL 동일, PG 기동 필수 테이블·열 |
+| 대기열 | `services/drive/upload_queue.py`: 유일한 드라이브 쓰기 모듈(`mkdirs`·`copy_within`·`upload_new`, 확인 `stat`, 대체 `download_to`). 단일 작업자 스레드(앱 수명), 기동 시 `RUNNING`→`PENDING`. CONFLICT는 `stat` 비교(sha1, 이전 시도 있으면 크기)로 같은 내용만 `DONE`, 아니면 `CONFLICT`. 재시도 전 `stat`, 재시도 가능 오류 30 s→2 m→10 m→30 m→1 h(`SIMDASH_DRIVE_UPLOAD_MAX_ATTEMPTS` 8), `AUTH_REQUIRED`는 `BLOCKED`로 대기열 정지·토큰 등록 시 재개. `halt_on_error` 항목 정지 시 묶음 정지. 드라이브 호출 중 DB 연결 없음. 임시 파일은 `DONE` 뒤 삭제, 하루 지난 고아 정리 |
+| C7 대체 | `copy_within`이 `INTERNAL`(또는 메서드 없음)이면 프로세스 안에 "미지원"을 기록하고 `download_to`→`upload_new`로 대체(`INVALID_PATH`·`FORBIDDEN`은 그 항목만 대체 시도). 항목·완료 기록의 `transfer_method`와 경고 로그 |
+| 결과 등록 | 조각은 서버 `upload-<세션>/`에, 완료는 묶음(MKDIR… → FILE…) 등록 후 `QUEUED` 응답. 충돌 규칙은 local과 같음(이름 바꾸기·덮어쓰기 없음). 새 폴더는 `MKDIR` 묶음 + 20초 대기. 묶음 완료 시 자동 반영 캐시 비움 → 다음 60초 동기화(D2)가 반영 |
+| Final | `services/case_finalization_drive.py`: 계획·보고서·완료 DB, `drive_locks` 의뢰 잠금(묶음 끝까지), 묶음 MKDIR → COPY → 보고서 FILE → `plan.json` → `complete.json`(마지막, 앞 항목 완료 뒤 생성). 파일별 `version_token` 고정(확정·복사 직전 재확인), 원본 변경 확인 대기 파일 거부. 같은 Final ID 재시도는 멈춘 항목만. 상태·진척은 DB, `verification: DRIVE_UPLOAD` |
+| 현재 Final 요약 | 결정 D2 ①: `Final/.finalizations/designations/<8자리 순번>-<Final ID>.json` 추가 전용(완료·요약 갱신마다 새 순번, 가장 큰 순번 = 현재). SPDM 안내는 기능 안내 §10.5 |
+| 수용 보조 | 관리자 점검은 조회 전용 유지. C2·C7은 전용 시험 폴더에서 일반 기능으로 확인하는 수동 절차(기능 안내 §10.6) — 새 자동 쓰기 점검 없음 |
+| UI | 결과 등록 대기열 진행(`DriveBatchProgress`), Final 배지·창 "드라이브 반영 중/일시 정지", "드라이브 반영 기록"·"요약 파일 드라이브 반영 중", 관리 › 업로드 대기열(목록·다시 시도·취소·재개), 저장소 패널은 scx에서 항상 업로드 안내 |
+| D1 검수 낮음 | `result_drop_upload.py` 모듈 설명·주석과 `folder_request_progress.folder_progress` 설명의 30초 → 60초, `tests/conftest.py` 공급자 팩터리 원복 autouse 고정구 |
+| 남은 일 | 실제 드라이브 C1·C2·C7·C9(D6, §10.6 절차), Final 바이트 단위 진척, 결과 등록 초안·저장소 패널의 드라이브 쓰기(계획 없음), SPDM 협의(순번 파일·`sha256` null) |
 
 ## 5. 결정 필요 사항
 

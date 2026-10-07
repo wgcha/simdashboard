@@ -18,7 +18,8 @@ from ..database_connection import connect
 from ..modules.access_control import RESULT_IMPORT, has_permission, require_any_project_permission, require_resource_permission
 from ..security import write_audit_event
 from ..services.drive import reads as drive_reads
-from ..services.drive.writes import require_drive_writes
+from ..services.drive import upload_queue
+from ..services.drive.writes import require_drive_writes, require_local_writes
 from ..services import result_drop_upload as drop_service
 from ..services import result_registration as service
 from ..services import result_registration_locations as location_service
@@ -298,7 +299,7 @@ def delete_result_location(link_id: str, request: Request, project_id: str, requ
             raise _http_error(exc) from exc
 
 
-@router.post("/folders/prepare", dependencies=[Depends(require_drive_writes)])
+@router.post("/folders/prepare", dependencies=[Depends(require_local_writes)])
 def prepare_folders(payload: PrepareFoldersInput, request: Request):
     with connect() as conn:
         require_resource_permission(request, RESULT_IMPORT, "request", payload.request_id, conn=conn)
@@ -371,7 +372,7 @@ def approve_draft(draft_id: str, payload: ApproveDraftInput, request: Request):
             raise _http_error(exc) from exc
 
 
-@router.post("/drafts/{draft_id}/publish", dependencies=[Depends(require_drive_writes)])
+@router.post("/drafts/{draft_id}/publish", dependencies=[Depends(require_local_writes)])
 def publish_draft(draft_id: str, payload: PublishDraftInput, request: Request):
     with connect() as conn:
         _draft_access(request, conn, draft_id)
@@ -382,7 +383,7 @@ def publish_draft(draft_id: str, payload: PublishDraftInput, request: Request):
             raise _http_error(exc) from exc
 
 
-@router.post("/drafts/{draft_id}/mirror/retry", dependencies=[Depends(require_drive_writes)])
+@router.post("/drafts/{draft_id}/mirror/retry", dependencies=[Depends(require_local_writes)])
 def retry_mirror(draft_id: str, request: Request):
     with connect() as conn:
         _draft_access(request, conn, draft_id)
@@ -484,7 +485,11 @@ def drop_target(request: Request, project_id: str, request_id: str,
             raise _drop_error(exc) from exc
 
 
+DRIVE_FOLDER_WAIT_SECONDS = 20.0
+
+
 @router.post("/drop-target/folders", status_code=201, dependencies=[Depends(require_drive_writes)])
+@drive_reads.read_session()
 def drop_create_folder(payload: DropFolderInput, request: Request):
     with connect() as conn:
         require_resource_permission(request, RESULT_IMPORT, "request", payload.request_id, conn=conn)
@@ -494,10 +499,20 @@ def drop_create_folder(payload: DropFolderInput, request: Request):
                                                 user_id=request.state.principal.user_id)
         except ResultRegistrationError as exc:
             raise _drop_error(exc) from exc
-        _drop_audit(request, "RESULT_DROP_FOLDER_CREATED", {
+        _drop_audit(request, "RESULT_DROP_FOLDER_QUEUED" if result.get("drive") else "RESULT_DROP_FOLDER_CREATED", {
             "project_id": payload.project_id, "request_id": payload.request_id, "environment": payload.environment,
             "relative_path": result["relative_path"], "role": result["role"]}, conn=conn)
-        return result
+    if result.get("drive"):
+        # SCX drive (D3): the folder is created by the upload queue; wait briefly without a DB connection.
+        summary = upload_queue.wait_batch(result["drive"]["batch_id"], DRIVE_FOLDER_WAIT_SECONDS)
+        result["drive"] = summary
+        if summary and summary["state"] in {"FAILED", "CONFLICT", "CANCELLED"}:
+            error = (summary.get("errors") or [{}])[0]
+            raise HTTPException(409, {"code": error.get("code") or "RESULT_DROP_FOLDER_FAILED",
+                                      "message": error.get("message") or "드라이브에 폴더를 만들지 못했습니다."})
+        if summary and summary["state"] == "DONE":
+            result["sync"] = {**result["sync"], "status": "CREATED", "message": "드라이브에 폴더를 만들었습니다. 1분 안에 반영합니다."}
+    return result
 
 
 @router.post("/drop-uploads/plan")
@@ -516,6 +531,7 @@ def drop_plan(payload: DropPlanInput, request: Request):
 
 
 @router.post("/drop-uploads", status_code=201, dependencies=[Depends(require_drive_writes)])
+@drive_reads.read_session()
 def drop_create_session(payload: DropPlanInput, request: Request):
     with connect() as conn:
         require_resource_permission(request, RESULT_IMPORT, "request", payload.request_id, conn=conn)
@@ -584,6 +600,7 @@ async def drop_upload_chunk(session_id: str, index: int, request: Request, offse
 
 
 @router.post("/drop-uploads/{session_id}/complete", dependencies=[Depends(require_drive_writes)])
+@drive_reads.read_session()
 def drop_complete(session_id: str, request: Request):
     with connect() as conn:
         scope = _session_access(request, conn, session_id)
@@ -594,12 +611,16 @@ def drop_complete(session_id: str, request: Request):
             _drop_audit(request, "RESULT_DROP_UPLOAD_FAILED", {"session_id": session_id, **scope, "code": exc.code},
                         status_code=error.status_code)
             raise error from exc
-        _drop_audit(request, "RESULT_DROP_UPLOAD_PUBLISHED" if result["state"] == "PUBLISHED" else "RESULT_DROP_UPLOAD_PARTIAL", {
+        action = {"PUBLISHED": "RESULT_DROP_UPLOAD_PUBLISHED", "QUEUED": "RESULT_DROP_UPLOAD_QUEUED"}.get(
+            result["state"], "RESULT_DROP_UPLOAD_PARTIAL")
+        _drop_audit(request, action, {
             "session_id": session_id, **scope, "target": result["target_relative_path"],
             "files": result["published_files"], "bytes": result["published_bytes"],
             "folders_created": len(result["created_folders"]), "conflicts": len(result["conflicts"]),
-            "skipped": len(result["skipped"]), "sync": (result.get("sync") or {}).get("status")}, conn=conn)
-        return result
+            "skipped": len(result["skipped"]), "sync": (result.get("sync") or {}).get("status"),
+            "drive_batch": (result.get("drive") or {}).get("batch_id")}, conn=conn)
+    upload_queue.wake()
+    return result
 
 
 @router.delete("/drop-uploads/{session_id}")

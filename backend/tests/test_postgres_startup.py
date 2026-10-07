@@ -75,6 +75,18 @@ class _PostgresStartupConnection:
                                           "pending_sha1", "pending_item_id", "pending_detected_at", "review_state",
                                           "reviewed_by", "reviewed_at", "registered_at", "registered_by", "superseded_at",
                                           "source_state", "last_checked_at"},
+                "drive_upload_queue": {"id", "batch_id", "seq", "kind", "root_key", "staging_path", "src_rel",
+                                       "src_version_token", "dst_rel_dir", "dst_name", "size_bytes", "sha256", "state",
+                                       "halt_on_error", "attempts", "next_attempt_at", "last_error_code", "last_error_msg",
+                                       "result_item_id", "result_size", "result_sha1", "transfer_method", "requested_by",
+                                       "origin", "origin_ref", "project_id", "request_id", "environment", "created_at",
+                                       "updated_at", "finished_at"},
+                "drive_locks": {"scope", "owner", "acquired_at", "expires_at"},
+                "finalization_operations": {"operation_id", "root_key", "project_id", "request_id", "environment", "case_id",
+                                            "capture_id", "status", "plan_json", "reports_json", "report_formats",
+                                            "upload_batch_id", "complete_json", "complete_sha256", "confirmed_at",
+                                            "designation_seq", "designation_batch_id", "error_code", "error_message",
+                                            "created_by", "confirmed_by", "created_at", "queued_at", "updated_at"},
             }[table]
             return _FakeResult([] if self.missing_column in columns else [(column,) for column in columns])
         raise AssertionError(f"unexpected startup query: {statement}")

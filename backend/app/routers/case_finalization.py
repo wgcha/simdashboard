@@ -6,6 +6,11 @@ Flow: ``POST /preview`` (signed plan) -> ``PUT /{operation_id}/reports/{pptx|htm
 operation (no multipart runtime dependency); each request carries one file.
 W2: confirm records a copy job and returns at once (``state`` QUEUED/RUNNING, or
 COMPLETE with ``record``); ``GET /{operation_id}/job`` reports its progress.
+
+SCX drive mode (D3, ``case_finalization_drive``): the same API and response shapes; plan,
+reports and completion metadata live in the DB and the Final is written through the drive
+upload queue (``copy_within``/``upload_new``, ``complete.json`` last).  Writes need
+``SIMDASH_DRIVE_WRITES_ENABLED`` (else 409 ``DRIVE_WRITE_DISABLED``).
 """
 from __future__ import annotations
 
@@ -21,8 +26,10 @@ from ..database_connection import connect
 from ..modules.access_control import PROJECT_DATA_VIEW, RESULT_IMPORT, require_resource_permission
 from ..security import write_audit_event
 from ..services.drive import reads as drive_reads
+from ..services.drive import upload_queue
 from ..services.drive.writes import require_drive_writes
 from ..services import case_finalization as service
+from ..services import case_finalization_drive as drive_service
 
 router = APIRouter(prefix="/api/dashboard/finalizations", tags=["case-finalization"])
 
@@ -42,7 +49,7 @@ class ConfirmInput(FinalizationInput):
     report_formats: list[Literal["pptx", "html"]] = Field(default_factory=list, max_length=2)
 
 
-_CONFLICT_CODES = {"FINALIZATION_ALREADY_COMPLETED", "FINALIZATION_NO_CURRENT", "FINALIZATION_CURRENT_UNVERIFIED", "FINALIZATION_CURRENT_MISSING", "FINALIZATION_REPAIR_RETRY", "FINALIZATION_REPORT_FORMATS_MISMATCH",
+_CONFLICT_CODES = {"FINALIZATION_LOCKED", "FINALIZATION_ALREADY_COMPLETED", "FINALIZATION_NO_CURRENT", "FINALIZATION_CURRENT_UNVERIFIED", "FINALIZATION_CURRENT_MISSING", "FINALIZATION_REPAIR_RETRY", "FINALIZATION_REPORT_FORMATS_MISMATCH",
                    "FINALIZATION_REPORTS_UNEXPECTED_FILE", "FINALIZATION_LEGACY_REPORTS_PRESENT",
                    "FINALIZATION_JOB_ACTIVE", "FINALIZATION_PUBLISH_BUSY", "FINALIZATION_SOURCE_BUSY"}
 
@@ -67,12 +74,23 @@ def _error(exc: service.CaseFinalizationError) -> HTTPException:
     return HTTPException(status_code=status, detail={"code": exc.code, "message": str(exc)})
 
 
+def _service():
+    """Local file design, or the SCX drive design (D3) when the SPDM root is on the drive."""
+    return drive_service if drive_service.active() else service
+
+
+# scx: preview/confirm resolve the request schema over the whole request tree (Final/CAE copies
+# included), which can take more read-session rounds than a screen query.
+FINAL_READ_ROUNDS = 24
+
+
 @router.post("/preview", dependencies=[Depends(require_drive_writes)])
+@drive_reads.read_session(rounds=FINAL_READ_ROUNDS)
 def preview(payload: FinalizationInput, request: Request):
     with connect() as conn:
         require_resource_permission(request, RESULT_IMPORT, "request", payload.request_id, conn=conn)
         try:
-            result = service.preview(
+            result = _service().preview(
                 conn, project_id=payload.project_id, request_id=payload.request_id,
                 environment=payload.environment, case_id=payload.case_id,
                 capture_id=payload.capture_id, actor=request.state.principal.user_id,
@@ -83,11 +101,12 @@ def preview(payload: FinalizationInput, request: Request):
 
 
 @router.post("/confirm", dependencies=[Depends(require_drive_writes)])
+@drive_reads.read_session(rounds=FINAL_READ_ROUNDS)
 def confirm(payload: ConfirmInput, request: Request):
     with connect() as conn:
         require_resource_permission(request, RESULT_IMPORT, "request", payload.request_id, conn=conn)
         try:
-            result = service.confirm(
+            result = _service().confirm(
                 conn, project_id=payload.project_id, request_id=payload.request_id,
                 environment=payload.environment, case_id=payload.case_id,
                 capture_id=payload.capture_id, operation_id=payload.operation_id,
@@ -106,7 +125,8 @@ def confirm(payload: ConfirmInput, request: Request):
                                 for item in result.get("reports", [])]},
             connection=conn,
         )
-        return result
+    upload_queue.wake()  # scx: the Final batch was queued in the committed transaction
+    return result
 
 
 @router.put("/{operation_id}/reports/{report_format}", dependencies=[Depends(require_drive_writes)])
@@ -130,7 +150,7 @@ async def upload_report(
             require_resource_permission(request, RESULT_IMPORT, "request", request_id, conn=conn)
             try:
                 # Signed plan for this exact scope and no completion marker, before any body is read.
-                service.check_report_target(
+                _service().check_report_target(
                     conn, project_id=project_id, request_id=request_id, environment=environment,
                     case_id=case_id, capture_id=capture_id, operation_id=operation_id,
                 )
@@ -159,7 +179,7 @@ async def upload_report(
             with connect() as conn:
                 require_resource_permission(request, RESULT_IMPORT, "request", request_id, conn=conn)
                 try:
-                    result = service.stage_report(
+                    result = _service().stage_report(
                         conn, project_id=project_id, request_id=request_id, environment=environment,
                         case_id=case_id, capture_id=capture_id, operation_id=operation_id,
                         report_format=report_format, upload=upload, actor=request.state.principal.user_id,
@@ -188,7 +208,7 @@ def status(request: Request, project_id: str = Query(min_length=1, max_length=12
     with connect() as conn:
         require_resource_permission(request, PROJECT_DATA_VIEW, "request", request_id, conn=conn)
         try:
-            result = service.status(conn, project_id=project_id, request_id=request_id,
+            result = _service().status(conn, project_id=project_id, request_id=request_id,
                                     environment=environment, case_id=case_id)
         except service.CaseFinalizationError as exc:
             raise _error(exc) from exc
@@ -206,7 +226,7 @@ def job_status(request: Request, operation_id: str = Path(pattern=r"^[0-9a-f]{32
     with connect() as conn:
         require_resource_permission(request, PROJECT_DATA_VIEW, "request", request_id, conn=conn)
         try:
-            return service.job_status(conn, project_id=project_id, request_id=request_id,
+            return _service().job_status(conn, project_id=project_id, request_id=request_id,
                                       environment=environment, case_id=case_id, operation_id=operation_id)
         except service.CaseFinalizationError as exc:
             raise _error(exc) from exc
@@ -244,7 +264,7 @@ def repair_summary(payload: SummaryRepairInput, request: Request):
             raise HTTPException(403, {"code": "GLOBAL_ADMIN_REQUIRED",
                                       "message": "요약 파일 강제 갱신(override)은 전역 관리자만 할 수 있습니다."})
         try:
-            result = service.repair_summary(conn, project_id=payload.project_id, request_id=payload.request_id,
+            result = _service().repair_summary(conn, project_id=payload.project_id, request_id=payload.request_id,
                                             environment=payload.environment, case_id=payload.case_id,
                                             actor=principal.user_id, override=payload.override)
         except service.CaseFinalizationError as exc:
@@ -253,4 +273,5 @@ def repair_summary(payload: SummaryRepairInput, request: Request):
             raise error from exc
         audit(200, "CASE_FINALIZATION_SUMMARY_REPAIRED",
               {"current_final": (result.get("current_final") or {}).get("operation_id")})
-        return {**result, "can_override_summary": bool(getattr(principal, "is_global_admin", False))}
+    upload_queue.wake()
+    return {**result, "can_override_summary": bool(getattr(principal, "is_global_admin", False))}

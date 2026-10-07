@@ -1,10 +1,10 @@
-import { HardDrive, PlugZap, RefreshCw, ShieldCheck, Trash2, X } from 'lucide-react'
+import { HardDrive, ListChecks, PlugZap, RefreshCw, ShieldCheck, Trash2, X } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Button } from '../../shared/components/Button'
 import {
-  driveApi, driveCodeMessage, driveErrorText, driveStateLabel,
-  type DriveAdminStatus, type DriveCheckReport, type DriveTestResult,
+  DRIVE_QUEUE_ITEM_STATE_LABELS, driveApi, driveCodeMessage, driveErrorText, driveStateLabel,
+  type DriveAdminStatus, type DriveCheckReport, type DriveQueueList, type DriveTestResult,
 } from '../../shared/api/drive'
 import './DriveAdminPanel.css'
 
@@ -58,6 +58,57 @@ function CheckTable({ report }: { report: DriveCheckReport }) {
   </div>
 }
 
+const KIND_TEXT: Record<string, string> = { MKDIR: '폴더', COPY: '드라이브 안 복사', FILE: '업로드', COMPLETE_MARKER: '완료 표시' }
+const ORIGIN_TEXT: Record<string, string> = { result_drop: '결과 등록', finalization: 'Final 지정', final_designation: '현재 Final 요약' }
+const METHOD_TEXT: Record<string, string> = { COPY_WITHIN: 'copy_within', DOWNLOAD_UPLOAD: '다운로드→업로드' }
+
+/** D3 drive upload queue: open items (and those finished in the last day); retry, cancel, resume. */
+function DriveQueueSection({ busy, run }: { busy: string; run: (label: string, action: () => Promise<void>) => Promise<void> }) {
+  const [queue, setQueue] = useState<DriveQueueList | null>(null)
+  const [filter, setFilter] = useState('')
+  const [error, setError] = useState('')
+  const load = useCallback(async () => {
+    try { setQueue(await driveApi.queue(filter || undefined)); setError('') } catch (reason) { setError(driveErrorText(reason, '업로드 대기열을 불러오지 못했습니다.')) }
+  }, [filter])
+  useEffect(() => { void load() }, [load])
+  const act = (label: string, action: () => Promise<unknown>) => void run(label, async () => { await action(); await load() })
+  const counts = queue?.counts ?? {}
+  return <section className="drive-admin-section" aria-labelledby="drive-queue-title" data-testid="drive-queue">
+    <h3 id="drive-queue-title"><ListChecks aria-hidden="true" /> 업로드 대기열</h3>
+    <p className="drive-admin-note">결과 등록·Final 지정이 드라이브에 쓰는 순서입니다(폴더 만들기·드라이브 안 복사·새 파일 올리기만, 덮어쓰기·삭제 없음). 취소는 대기열 항목만 멈추며 드라이브 내용은 지우지 않습니다. 충돌은 같은 이름의 다른 파일이 있다는 뜻이고, 다시 시도하면 드라이브를 다시 확인합니다.</p>
+    {queue && !queue.writes_enabled ? <p className="drive-admin-result warn" role="status">드라이브 쓰기 허용 설정이 꺼져 있어 대기열이 실행되지 않습니다(SIMDASH_DRIVE_WRITES_ENABLED).</p> : null}
+    {queue?.paused ? <p className="drive-admin-result bad" role="alert" data-testid="drive-queue-paused">드라이브 인증이 필요해 대기열이 멈췄습니다. 토큰을 다시 등록하면 이어서 진행합니다.</p> : null}
+    {queue && queue.writes_enabled && !queue.worker_running ? <p className="drive-admin-result warn" role="status">대기열 작업자가 실행 중이 아닙니다. 서비스를 다시 시작하세요.</p> : null}
+    <div className="drive-admin-actions">
+      <label className="drive-admin-folder"><span>상태</span><select aria-label="대기열 상태" value={filter} onChange={(event) => setFilter(event.target.value)}>
+        <option value="">진행 중·최근(1일)</option>
+        {Object.entries(DRIVE_QUEUE_ITEM_STATE_LABELS).map(([value, label]) => <option key={value} value={value}>{label} ({counts[value] ?? 0})</option>)}
+      </select></label>
+      <Button disabled={Boolean(busy)} onClick={() => void load()}><RefreshCw aria-hidden="true" /> 새로고침</Button>
+      <Button disabled={Boolean(busy) || !queue?.paused} onClick={() => act('대기열 재개', () => driveApi.resumeQueue())}>대기열 재개</Button>
+    </div>
+    {error ? <p className="drive-admin-result bad" role="alert">{error}</p> : null}
+    {queue ? <div className="drive-check-report"><table aria-label="업로드 대기열">
+      <thead><tr><th>상태</th><th>기능</th><th>작업</th><th>대상</th><th>시도</th><th>오류</th><th /></tr></thead>
+      <tbody>{queue.items.length ? queue.items.map((item) => <tr key={item.id} data-state={item.state}>
+        <td>{DRIVE_QUEUE_ITEM_STATE_LABELS[item.state] ?? item.state}</td>
+        <td>{ORIGIN_TEXT[item.origin] ?? item.origin}<br /><small>{item.requested_by ?? ''}</small></td>
+        <td>{KIND_TEXT[item.kind] ?? item.kind}{item.transfer_method ? <><br /><small>{METHOD_TEXT[item.transfer_method] ?? item.transfer_method}</small></> : null}</td>
+        <td><code>{item.target}</code></td>
+        <td>{item.attempts}</td>
+        <td title={item.error_message ?? undefined}>{item.error_code ? driveCodeMessage(item.error_code) : ''}</td>
+        <td>
+          {['FAILED', 'CONFLICT', 'BLOCKED', 'CANCELLED'].includes(item.state) ? <Button size="sm" disabled={Boolean(busy)} onClick={() => act('다시 시도', () => driveApi.retryQueueItem(item.id))}>다시 시도</Button> : null}
+          {['PENDING', 'BLOCKED', 'FAILED', 'CONFLICT'].includes(item.state) ? <Button size="sm" variant="ghost" disabled={Boolean(busy)} onClick={() => {
+            if (!window.confirm('이 대기열 항목을 취소할까요? 드라이브에 이미 올라간 내용은 지우지 않습니다. Final 지정 항목이면 그 Final은 완료되지 않습니다.')) return
+            act('취소', () => driveApi.cancelQueueItem(item.id))
+          }}>취소</Button> : null}
+        </td>
+      </tr>) : <tr><td colSpan={7}>표시할 항목이 없습니다.</td></tr>}</tbody>
+    </table></div> : null}
+  </section>
+}
+
 export function DriveAdminPanel({ onClose }: { onClose: () => void }) {
   const [status, setStatus] = useState<DriveAdminStatus | null>(null)
   const [busy, setBusy] = useState('')
@@ -104,7 +155,7 @@ export function DriveAdminPanel({ onClose }: { onClose: () => void }) {
           <div><dt>서버</dt><dd>{status.server_url}</dd></div>
           <div><dt>SPDM 루트</dt><dd>{status.drive_root ? `~/${status.drive_root}` : '미설정'}{status.drive_root_locked ? ' (환경 설정 고정)' : ''}</dd></div>
           <div><dt>워커 버전</dt><dd>{status.worker_version ?? '—'}</dd></div>
-          <div><dt>드라이브 쓰기</dt><dd data-testid="drive-writes">{status.writes_available ? '사용 가능' : '읽기 전용'} · 쓰기 허용 설정 {status.writes_enabled ? '켜짐' : '꺼짐'}<small> (SIMDASH_DRIVE_WRITES_ENABLED, 쓰기는 D3 이후)</small></dd></div>
+          <div><dt>드라이브 쓰기</dt><dd data-testid="drive-writes">{status.writes_available ? '사용 가능' : '읽기 전용'} · 쓰기 허용 설정 {status.writes_enabled ? '켜짐' : '꺼짐'}<small> (SIMDASH_DRIVE_WRITES_ENABLED)</small></dd></div>
           <div><dt>원본 지문</dt><dd data-testid="drive-version-tokens">{tokenKindText(status.version_tokens)}</dd></div>
           <div><dt>공용 계정</dt><dd>{credentials?.present ? `${credentials.account_hint ?? '(이름 없음)'} · 발급 ${stamp(credentials.obtained_at)} · 갱신 ${stamp(credentials.updated_at)} (${credentials.updated_by === 'worker' ? '자동 회전' : credentials.updated_by ?? '—'})` : '등록 안 됨'}</dd></div>
           <div><dt>마지막 성공</dt><dd>{stamp(status.health?.last_success_at)}</dd></div>
@@ -150,7 +201,9 @@ export function DriveAdminPanel({ onClose }: { onClose: () => void }) {
           </div>
           {!status.drive_root ? <small>SIMDASH_SCX_DRIVE_ROOT를 설정한 뒤 사용할 수 있습니다.</small> : null}
           {report ? <CheckTable report={report} /> : null}
+          <p className="drive-admin-note">드라이브 쓰기(덮어쓰기 금지 업로드 C2·드라이브 안 복사 C7)는 이 점검에서 확인하지 않습니다. 쓰기 허용을 켠 뒤 전용 시험 폴더에서 결과 등록·Final 지정으로 확인합니다(기능 안내 §10.6 수용 절차).</p>
         </section>
+        <DriveQueueSection busy={busy} run={run} />
       </>}
     </section>
   </div>

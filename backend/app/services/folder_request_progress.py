@@ -47,7 +47,7 @@ def request_in_project(conn: ConnectionLike, project_id: str, request_id: str) -
 
 
 def folder_progress(conn: ConnectionLike, project_id: str, request_id: str) -> dict[str, Any]:
-    """Memoized (30 s per request) progress; the caller checks request existence and permission."""
+    """Memoized (``MEMO_SECONDS``, 60 s per request) progress; the caller checks request existence and permission."""
     key = (str(project_id), str(request_id))
     current = time.monotonic()
     with _memo_lock:
@@ -197,9 +197,11 @@ def _scene_has_input(root, relative_path: str) -> bool:
 def _final_state(conn: ConnectionLike, project_id: str, request_id: str,
                  environment: str) -> tuple[dict[str, Any], dict[str, Any]]:
     """FINAL from the signed completion record; a Final/Report folder failure only affects REPORT (§15 D21)."""
-    from . import case_finalization
+    from . import case_finalization, case_finalization_drive
+    # SCX drive mode (D3): Final records live in the DB (finalization_operations), not in .finalizations.
+    source = case_finalization_drive if case_finalization_drive.active() else case_finalization
     try:
-        record, report_names = case_finalization.latest_completed(
+        record, report_names = source.latest_completed(
             conn, project_id=project_id, request_id=request_id, environment=environment)
     except (ValueError, OSError, HTTPException):
         return _step("FINAL", "WAITING", _FINAL_UNAVAILABLE), _step("REPORT", "WAITING", _FINAL_UNAVAILABLE)
