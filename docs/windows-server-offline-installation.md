@@ -55,6 +55,7 @@
 | `state/services/`, `state/logs/` | WinSW 서비스 설정과 실행 로그 |
 | `state/current.json` | 상태 확인을 통과한 릴리스와 백업 위치 |
 | `state/recovery-required.json` | 실패 단계와 복구 안내 |
+| `state/external-wheels/` | 선택: 따로 반입한 wheel(SCX 드라이브 어댑터, [ADR 0006](adr/0006-scx-drive-adapter-external-wheel.md)). 설치기가 새 venv마다 `--no-deps --no-index`로 설치하고 `import scx_drive_adapter`를 확인한다. 없거나 비면 건너뛴다 |
 
 서비스 이름은 `SimulationWorkbenchApi`, `SimulationWorkbenchProxy`, bundled 모드의 `SimulationWorkbenchPostgreSQL`이다. 웹/API는 내장 LocalService로 실행한다. owner 자격 증명과 백업은 관리자 전용이며 앱 서비스에 읽기 권한을 주지 않는다. 설정은 업데이트할 때 다시 입력하지 않도록 저장한다. JSON에 직접 넣은 DB 비밀번호는 저장된 설치 설정에서 제거되지만 입력용 원본 JSON은 관리자 책임으로 보호한다.
 

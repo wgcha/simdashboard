@@ -73,7 +73,8 @@ try {
     Set-Location -LiteralPath $Root
     $runtimeModule = Join-Path $Root 'scripts\windows\Runtime.psm1'
     $bootstrapScript = Join-Path $Root 'scripts\windows\bootstrap-runtime.ps1'
-    if (-not (Test-Path -LiteralPath $runtimeModule -PathType Leaf) -or -not (Test-Path -LiteralPath $bootstrapScript -PathType Leaf)) {
+    $externalWheelsModule = Join-Path $Root 'scripts\windows\ExternalWheels.psm1'
+    if (-not (Test-Path -LiteralPath $runtimeModule -PathType Leaf) -or -not (Test-Path -LiteralPath $bootstrapScript -PathType Leaf) -or -not (Test-Path -LiteralPath $externalWheelsModule -PathType Leaf)) {
         throw 'The Windows runtime preparation files are missing. Extract the complete source package and retry.'
     }
 
@@ -111,6 +112,15 @@ try {
         $env:UV_CACHE_DIR = Join-Path $Root '.tools\uv-cache'
         & $projectUv pip sync --python $venvPython (Join-Path $Root 'backend\requirements.lock')
         if ($LASTEXITCODE -ne 0) { throw "Backend dependency installation failed (exit code $LASTEXITCODE)." }
+    }
+
+    # `uv pip sync` removes packages that are not in the lock, including the
+    # separately supplied SCX adapter wheel (ADR 0006).  Reinstall it from the
+    # persistent, gitignored external-wheels folder; absent/empty is a no-op.
+    Invoke-Stage 'Installing external wheels (optional)' {
+        Import-Module (Join-Path $Root 'scripts\windows\ExternalWheels.psm1') -Force
+        $driveMode = Get-ExternalWheelsDriveMode -EnvFiles @((Join-Path $Root '.env'), (Join-Path $Root 'backend\.env'))
+        $null = Install-ExternalWheels -Python $venvPython -WheelDirectory (Join-Path $Root 'external-wheels') -DriveMode $driveMode -Uv (Get-ProjectUv)
     }
 
     Invoke-Stage 'Installing pinned frontend dependencies' {

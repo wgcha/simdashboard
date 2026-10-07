@@ -49,6 +49,9 @@ jobs:
           & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\update-entry-self-test.ps1
           $exitCode = $LASTEXITCODE
           if ($exitCode -ne 0) { exit $exitCode }
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\external-wheels-self-test.ps1
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) { exit $exitCode }
       - name: Verify owned process identity and LAN profile
         run: |
           & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\start-stop-identity-self-test.ps1
@@ -80,7 +83,8 @@ jobs:
             tests/test_prepare_account_deployment.py `
             tests/test_prepare_account_deployment_diagnostics.py `
             tests/test_deployment_media_backup.py `
-            tests/test_windows_web_access.py
+            tests/test_windows_web_access.py `
+            tests/test_windows_external_wheels.py
       - name: Verify persistent media and report-template roots
         working-directory: backend
         run: |

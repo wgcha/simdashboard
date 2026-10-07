@@ -65,7 +65,7 @@ SPDM 원본이 로컬·공유 폴더에서 **SCX 드라이브(AltairOne Drive)**
 | 드라이브 점검(D7) | 시험 폴더에서 stat → list_dir → stat → download_to → upload_new ×2(CONFLICT 확인) → mkdirs → copy_within ×2 → health. 드라이브 삭제·이동·덮어쓰기 없음, `simdash-check-*` 남김 |
 | UI | 저장소 설정 › SCX 드라이브 › 드라이브 관리 대화상자, 전체 상단 배너(60초 조회), `DRIVE_*` 한글 문구 |
 | 시험 | 가짜 어댑터(`backend/tests/drive_fakes.py`, 시험 전용) |
-| 남은 배포 과제(D5) | 소스 `uv pip sync`·폐쇄망 새 venv가 따로 설치한 어댑터 wheel을 지움 → 설치기가 외부 wheel 경로를 받도록 변경 필요(ADR 0006) |
+| 남은 배포 과제(D5) | 외부 wheel 보존 폴더(`external-wheels`, 서버 `state\external-wheels`)로 sync·새 venv 뒤 어댑터 재설치 — 2026-10-07 반영(ADR 0006). 워커 런타임 설치 단계·서비스 환경변수 안내는 남음 |
 
 ## 5. 결정 필요 사항
 

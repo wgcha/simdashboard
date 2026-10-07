@@ -130,6 +130,42 @@ function Invoke-Python([string]$Python, [string]$Script, [string[]]$Arguments = 
         else { $env:PYTHONPATH = $previousPythonPath }
     }
 }
+function Install-ExternalWheels([string]$Python, [string]$WheelDirectory, [string]$DriveMode) {
+    # Local files only (--no-index), no dependency resolution (--no-deps). An
+    # absent or empty folder is a no-op in the default 'none' mode.
+    $scx = $DriveMode.Trim().ToLowerInvariant() -eq 'scx'
+    $wheels = @()
+    if (Test-Path -LiteralPath $WheelDirectory -PathType Container) {
+        if ((Get-Item -LiteralPath $WheelDirectory -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { Fail 'state\external-wheels must be a physical directory.' }
+        $wheels = @(Get-ChildItem -LiteralPath $WheelDirectory -Filter '*.whl' -File -Force | Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } | Sort-Object Name | ForEach-Object { $_.FullName })
+    }
+    if ($wheels.Count -eq 0) {
+        if ($scx) { Fail "SIMDASH_DRIVE_GATEWAY=scx but no adapter wheel was found in $WheelDirectory. Copy vd_scx_drive_adapter-<version>-py3-none-any.whl there once and rerun the installer." }
+        return
+    }
+    Write-Host "Installing $($wheels.Count) external wheel(s) from $WheelDirectory (--no-deps --no-index)."
+    $problem = ''
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $output = @(& $Python -I -m pip --isolated install --no-deps --no-index --force-reinstall --disable-pip-version-check @wheels 2>&1)
+        $code = [int]$LASTEXITCODE
+        foreach ($line in $output) { Write-Host "    $line" }
+        if ($code -ne 0) { $problem = "external wheel installation failed (exit code $code)" }
+        $adapterSupplied = @($wheels | Where-Object { [IO.Path]::GetFileName($_) -match '^vd_scx_drive_adapter-' }).Count -gt 0
+        if (-not $problem -and ($adapterSupplied -or $scx)) {
+            $output = @(& $Python -I -c 'import scx_drive_adapter' 2>&1)
+            $code = [int]$LASTEXITCODE
+            if ($code -ne 0) { foreach ($line in $output) { Write-Host "    $line" }; $problem = "import scx_drive_adapter failed (exit code $code)" }
+            else { Write-Host '  import scx_drive_adapter: OK' }
+        }
+    }
+    finally { $ErrorActionPreference = $previousPreference }
+    if ($problem) {
+        if ($scx) { Fail "SIMDASH_DRIVE_GATEWAY=scx: $problem. Replace the wheel in $WheelDirectory with the adapter release wheel and rerun the installer." }
+        Write-Warning "$problem. SIMDASH_DRIVE_GATEWAY is not scx, so installation continues without it."
+    }
+}
 function Get-OwnedService([string]$Name, [string]$ExpectedExecutable, [string]$ExpectedData = '', [string]$ExpectedAccount = '') {
     if ($Name -notmatch '^[A-Za-z][A-Za-z0-9_-]*$') { Fail 'invalid managed service name.' }
     $record = Get-CimInstance Win32_Service -Filter "Name = '$Name'" -ErrorAction Stop
@@ -388,7 +424,7 @@ for ($ancestor = $InstallRoot; $ancestor; $ancestor = Split-Path -Parent $ancest
 }
 $StateRoot = Join-Path $InstallRoot 'state'
 $ReleasesRoot = Join-Path $InstallRoot 'releases'
-foreach ($path in @($StateRoot, $ReleasesRoot, (Join-Path $StateRoot 'install-settings.json'), (Join-Path $StateRoot '.env'), (Join-Path $StateRoot '.postgres-owner.env'), (Join-Path $StateRoot 'assets'))) {
+foreach ($path in @($StateRoot, $ReleasesRoot, (Join-Path $StateRoot 'install-settings.json'), (Join-Path $StateRoot '.env'), (Join-Path $StateRoot '.postgres-owner.env'), (Join-Path $StateRoot 'assets'), (Join-Path $StateRoot 'external-wheels'))) {
     if ((Test-Path -LiteralPath $path) -and ((Get-Item -LiteralPath $path -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { Fail 'Installed state must contain physical files and directories.' }
 }
 $pgMode = (Get-ConfigValue $cfg 'postgresMode' 'bundled').ToLowerInvariant()
@@ -496,6 +532,9 @@ try {
     Invoke-Tool $python @('-I', '-m', 'pip', '--isolated', 'install', '--no-index', '--only-binary=:all:', '--disable-pip-version-check', '--find-links', (Join-Path $BundleRoot 'runtime\wheelhouse'), '-r', (Join-Path $TargetRelease 'backend\requirements.lock'))
     Invoke-Tool $python @('-I', '-m', 'pip', '--isolated', 'check')
     Invoke-Tool $python @('-I', '-c', 'import fastapi,psycopg,uvicorn,alembic,cryptography,duckdb')
+    # Optional separately supplied wheels (ADR 0006, SCX drive adapter) live in
+    # state\external-wheels so they survive every release; each new venv gets them.
+    Install-ExternalWheels $python (Join-Path $StateRoot 'external-wheels') (Get-EnvValue $stateEnv 'SIMDASH_DRIVE_GATEWAY')
     $env:POSTGRES_BIN = Join-Path $runtimeTarget 'postgresql\bin'
     $env:PYTHONIOENCODING = 'utf-8'
     $caddy = Join-Path $runtimeTarget 'caddy\caddy.exe'

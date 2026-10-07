@@ -59,3 +59,6 @@ deploy/windows/certs/*
 # One-click update process locks.
 .update.lock
 .gitupdate.lock
+# Separately supplied wheels (ADR 0006, SCX drive adapter). Never commit them;
+# setup/update reinstall them after every dependency sync.
+/external-wheels/

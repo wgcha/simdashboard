@@ -32,7 +32,7 @@
 
 ### 선택 런타임: SCX 드라이브 어댑터 (ADR 0006)
 
-`SIMDASH_DRIVE_GATEWAY=scx`에서만 쓰는 사내 어댑터 wheel과 SCX 워커 런타임은 대시보드 패키지에 포함하지 않고 사용자가 따로 반입·설치한다. 기본 `none` 모드의 설치 전제는 바뀌지 않는다. 현재 설치기(`uv pip sync`, 폐쇄망 새 venv)는 따로 설치한 wheel을 지우므로, 설치기가 외부 wheel 경로를 받아 다시 설치하는 단계는 D5에서 ADR·안내·계약 CI와 함께 추가한다. 상세: [ADR 0006](adr/0006-scx-drive-adapter-external-wheel.md), [SCX 드라이브](features/scx-drive.md).
+`SIMDASH_DRIVE_GATEWAY=scx`에서만 쓰는 사내 어댑터 wheel과 SCX 워커 런타임은 대시보드 패키지에 포함하지 않고 사용자가 따로 반입·설치한다. 기본 `none` 모드의 설치 전제는 바뀌지 않는다. lock 동기화(`uv pip sync`)와 폐쇄망 새 venv는 따로 설치한 wheel을 지우므로, 소스 설치·업데이트와 폐쇄망 설치기는 lock 설치 직후마다 보존 폴더(소스: 저장소 루트 `external-wheels\`, 서버: `<설치 루트>\state\external-wheels\`, 둘 다 릴리스 교체·Git 업데이트 대상 밖)의 `*.whl`을 `--no-deps --no-index`로 다시 설치하고 `import scx_drive_adapter`를 확인한다. 폴더가 없거나 비어 있으면 아무것도 하지 않는다. `none` 모드의 실패는 경고, `scx` 모드의 wheel 없음·실패는 설치·업데이트 오류다. 상세: [ADR 0006](adr/0006-scx-drive-adapter-external-wheel.md), [SCX 드라이브](features/scx-drive.md).
 
 ## 변경 종류별 완료 조건
 

@@ -62,6 +62,13 @@ try {
     & $uv pip sync --python $python (Join-Path $Root 'backend\requirements.lock')
     if ($LASTEXITCODE -ne 0) { throw "Backend dependency installation failed (exit code $LASTEXITCODE)." }
 
+    # pip sync removes the separately supplied SCX adapter wheel (ADR 0006).
+    # Reinstall it from the persistent external-wheels folder; absent/empty is a no-op.
+    Write-Step 'Installing external wheels (optional)'
+    Import-Module (Join-Path $Root 'scripts\windows\ExternalWheels.psm1') -Force
+    $driveMode = Get-ExternalWheelsDriveMode -EnvFiles @((Join-Path $Root '.env'), (Join-Path $Root 'backend\.env'))
+    $null = Install-ExternalWheels -Python $python -WheelDirectory (Join-Path $Root 'external-wheels') -DriveMode $driveMode -Uv $uv
+
     Write-Step 'Installing pinned frontend dependencies'
     $pnpm = Get-ProjectPnpm
     Push-Location (Join-Path $Root 'frontend')

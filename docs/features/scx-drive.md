@@ -22,12 +22,18 @@
    powershell -ExecutionPolicy Bypass -File .\install_runtime.ps1 -Python C:\Python311\python.exe -InstallRoot C:\SimDashboard\scx-runtime
    ```
    끝에 출력되는 `SIMDASH_SCX_WORKER_PYTHON=...\venv\Scripts\python.exe` 값을 적어 둔다.
-2. **대시보드 가상환경에 어댑터 wheel만 설치** (의존성 없이; 소스 PC는 `.venv-runtime`, 폐쇄망 서버는 설치 루트의 런타임 venv python)
+2. **어댑터 wheel을 `external-wheels` 폴더에 한 번 복사** (대시보드 가상환경에는 설치 스크립트가 의존성 없이 넣는다)
+   - 소스 PC: 저장소 루트의 `external-wheels\` (`.gitignore` 대상, 업데이트가 건드리지 않는 보호 경로)
+   - 폐쇄망 서버: 설치 루트의 `state\external-wheels\` (예: `C:\ProgramData\SimulationWorkbench\state\external-wheels\`, 릴리스 폴더 밖)
    ```powershell
-   .\.venv-runtime\Scripts\python.exe -m pip install --no-deps <압축 푼 폴더>\wheelhouse\vd_scx_drive_adapter-<버전>-py3-none-any.whl
+   New-Item -ItemType Directory -Force .\external-wheels | Out-Null
+   Copy-Item <압축 푼 폴더>\wheelhouse\vd_scx_drive_adapter-<버전>-py3-none-any.whl .\external-wheels\
    ```
-   `siemens_scx`는 대시보드 가상환경에 **설치하지 않는다**(pydantic·PyJWT 버전 충돌, contract §10.1).
-   **주의:** 소스 설치·업데이트(`setup.ps1`, `update.bat`)는 `uv pip sync backend/requirements.lock`으로 가상환경을 lock과 정확히 맞추므로 lock에 없는 어댑터 wheel을 **지운다.** D5에서 설치기가 외부 wheel 경로를 받도록 바꾸기 전까지는 `update.bat` 뒤마다 이 단계를 다시 하고 대시보드를 재시작한다(scx 모드에서 wheel이 없으면 기동 거부 메시지가 이를 알려 준다). 폐쇄망 설치기도 같다.
+   그다음 소스 PC는 `update.bat`(또는 `deploy.bat`·`setup.ps1`), 서버는 오프라인 설치기를 다시 실행한다. 이 스크립트들은 lock 설치(`uv pip sync`·새 릴리스 venv) **직후마다** 폴더의 `*.whl`을 `--no-deps --no-index`로 설치하고(네트워크 사용 안 함) `import scx_drive_adapter`를 확인해 결과를 출력한다. 그래서 업데이트 뒤 다시 설치할 필요가 없다. 폴더에는 어댑터 버전 하나만 둔다(새 버전으로 바꿀 때 이전 wheel을 지운다).
+   - 폴더가 없거나 비어 있고 `SIMDASH_DRIVE_GATEWAY`가 `none`이면 아무것도 하지 않는다(기본 동작 불변).
+   - `none` 모드에서 wheel 설치·import가 실패하면 경고만 하고 업데이트를 계속한다.
+   - `scx` 모드(`.env` 값 기준)에서 wheel이 없거나 설치·import가 실패하면 설치·업데이트가 그 단계에서 **명확한 오류로 중단**된다. wheel을 넣고 다시 실행한다.
+   `siemens_scx`는 대시보드 가상환경에 **설치하지 않는다**(pydantic·PyJWT 버전 충돌, contract §10.1). SDK wheel을 `external-wheels`에 넣지 않는다.
 3. **암호화 키 만들기** (`AUTH_SECRET_KEY`와 다른 값)
    ```powershell
    .\.venv-runtime\Scripts\python.exe -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"

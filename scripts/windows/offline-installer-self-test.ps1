@@ -15,7 +15,7 @@ $installer = Get-Content -Raw -LiteralPath (Join-Path $root 'deploy\windows\offl
 $builderText = Get-Content -Raw -LiteralPath $builder
 $setupText = Get-Content -Raw -LiteralPath (Join-Path $root 'deploy\windows\offline\bundle-setup.iss')
 if ($setupText -notmatch '(?m)^ArchitecturesInstallIn64BitMode=x64compatible\s*$') { throw 'Installer must launch native x64 PowerShell.' }
-foreach ($needle in @('bundle-manifest.json', 'Windows Server 2022', 'network = ''none''', 'prepare_account_deployment.py', 'upgrade_postgres_schema.py', 'vc_redist.x64.exe', 'windows-password-intranet', '--no-index', 'SimulationWorkbenchApi', 'SimulationWorkbenchProxy')) {
+foreach ($needle in @('bundle-manifest.json', 'Windows Server 2022', 'network = ''none''', 'prepare_account_deployment.py', 'upgrade_postgres_schema.py', 'vc_redist.x64.exe', 'windows-password-intranet', '--no-index', 'SimulationWorkbenchApi', 'SimulationWorkbenchProxy', "Install-ExternalWheels `$python (Join-Path `$StateRoot 'external-wheels')", 'install --no-deps --no-index', 'import scx_drive_adapter')) {
     if ($installer -notmatch [regex]::Escape($needle) -and $builderText -notmatch [regex]::Escape($needle)) { throw "offline contract is missing: $needle" }
 }
 Write-Host 'Windows offline installer contract self-test passed.' -ForegroundColor Green

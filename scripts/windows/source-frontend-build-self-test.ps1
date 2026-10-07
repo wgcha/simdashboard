@@ -21,6 +21,7 @@ function New-Fixture([string]$Name) {
     $root = Join-Path $base 'project'
     New-Item -ItemType Directory -Path (Join-Path $root 'scripts\windows') -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $sourceRoot 'scripts\windows\prepare-source-environment.ps1') -Destination (Join-Path $root 'scripts\windows\prepare-source-environment.ps1')
+    Copy-Item -LiteralPath (Join-Path $sourceRoot 'scripts\windows\ExternalWheels.psm1') -Destination (Join-Path $root 'scripts\windows\ExternalWheels.psm1')
     $tools = Join-Path $root '.tools'
     Write-FixtureFile (Join-Path $tools 'node-fixture-win-x64\node.exe') ''
     Write-FixtureFile (Join-Path $tools 'python\cpython-fixture-windows-x86_64-none\python.exe') ''
@@ -47,6 +48,8 @@ exit /b 1
 '@
     Write-FixtureFile (Join-Path $tools 'uv.cmd') @'
 @echo off
+if not defined WORKBENCH_UV_TEST_LOG exit /b 0
+>>"%WORKBENCH_UV_TEST_LOG%" echo uv %*
 exit /b 0
 '@
     Write-FixtureFile (Join-Path $root '.venv-runtime\Scripts\python.exe') ''
@@ -104,6 +107,29 @@ try {
     Assert-True ((Get-Content -Raw -LiteralPath $persistent.Counter).Trim() -eq '2') 'persistent esbuild sharing violation did not stop at the configured attempt limit'
     Assert-True ($result.Output -match 'persistent Windows esbuild temporary-file sharing violation' -and $result.Output -match 'esbuild-035d9f216ed67b50449a79968cb30a4dd3adbada43d46a1045ed74223fa48b6d') 'exhausted retry diagnostics were not retained'
 
+    # Default: no external-wheels folder means no extra install command.
+    $plain = New-Fixture 'no-external-wheels'
+    $fixtures += $plain
+    $env:WORKBENCH_UV_TEST_LOG = Join-Path $plain.Base 'uv-calls.log'
+    $result = Invoke-Fixture $plain 'retry-once'
+    Assert-True ($result.ExitCode -eq 0) "source preparation without external wheels failed: $($result.Output)"
+    $uvCalls = Get-Content -Raw -LiteralPath $env:WORKBENCH_UV_TEST_LOG
+    Assert-True ($uvCalls -match 'uv pip sync' -and $uvCalls -notmatch 'uv pip install') "absent external-wheels folder must not add an install: $uvCalls"
+
+    # A wheel in the persistent folder is reinstalled after every lock sync,
+    # offline and without dependency resolution.
+    $withWheel = New-Fixture 'external-wheels'
+    $fixtures += $withWheel
+    Write-FixtureFile (Join-Path $withWheel.Root 'external-wheels\fixture_extra-1.0-py3-none-any.whl') 'fixture wheel'
+    $env:WORKBENCH_UV_TEST_LOG = Join-Path $withWheel.Base 'uv-calls.log'
+    $result = Invoke-Fixture $withWheel 'retry-once'
+    Assert-True ($result.ExitCode -eq 0) "source preparation with an external wheel failed: $($result.Output)"
+    $uvCalls = @(Get-Content -LiteralPath $env:WORKBENCH_UV_TEST_LOG)
+    $syncIndex = [array]::FindIndex([string[]]$uvCalls, [Predicate[string]]{ param($line) $line -match 'uv pip sync' })
+    $installIndex = [array]::FindIndex([string[]]$uvCalls, [Predicate[string]]{ param($line) $line -match 'uv pip install .*--no-deps --no-index .*fixture_extra-1\.0-py3-none-any\.whl' })
+    Assert-True ($syncIndex -ge 0 -and $installIndex -gt $syncIndex) "external wheel was not installed offline after the lock sync: $($uvCalls -join ' | ')"
+    Assert-True ($result.Output -match 'Installing 1 external wheel\(s\)') 'external wheel installation was not logged'
+
     Write-Host 'Windows source frontend build self-test passed.' -ForegroundColor Green
     exit 0
 }
@@ -111,6 +137,7 @@ finally {
     Remove-Item Env:WORKBENCH_ESBUILD_FIXTURE_ROOT -ErrorAction SilentlyContinue
     Remove-Item Env:WORKBENCH_ESBUILD_TEST_COUNTER -ErrorAction SilentlyContinue
     Remove-Item Env:WORKBENCH_ESBUILD_TEST_MODE -ErrorAction SilentlyContinue
+    Remove-Item Env:WORKBENCH_UV_TEST_LOG -ErrorAction SilentlyContinue
     $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
     foreach ($fixture in $fixtures) {
         if ($fixture -and (Test-Path -LiteralPath $fixture.Base)) {

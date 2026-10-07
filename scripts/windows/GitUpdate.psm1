@@ -189,7 +189,7 @@ function Test-ProtectedRemotePath {
     if ($lower -in @('deploy/windows/certs/readme.md', 'log/work-log.md')) { return $false }
     if ($lower -match '(^|/)\.git($|/)' -or $lower -match '(^|/)\.tools($|/)' -or $lower -match '(^|/)\.venv[^/]*($|/)' -or $lower -match '(^|/)node_modules($|/)') { return $true }
     if ($lower -match '(^|/)\.env[^/]*$' -or $lower -match '(^|/)\.postgres-owner\.env[^/]*$') { return $true }
-    if ($lower -match '^backend/data($|/)' -or $lower -match '^frontend/dist($|/)' -or $lower -match '^(backups|output|dist|transfer-bundles)($|/)' -or $lower -match '(^|/)\.local-runner($|/)') { return $true }
+    if ($lower -match '^backend/data($|/)' -or $lower -match '^frontend/dist($|/)' -or $lower -match '^(backups|output|dist|transfer-bundles|external-wheels)($|/)' -or $lower -match '(^|/)\.local-runner($|/)') { return $true }
     if ($lower -match '(^|/)(network-settings\.local\.json|\.setup-proxy\.env[^/]*|\.server-pids\.(json|env)|\.windows-deploy-ready\.json[^/]*|\.setup-recovery-required\.json)$') { return $true }
     if ($lower -match '(^|/)(cert|certs|certificate|certificates|runtime|run|logs?)($|/)' -or $lower -match '\.(pem|pfx|p12|key)$') { return $true }
     return $false

@@ -26,6 +26,10 @@ The installation keeps operational settings in
 Use the same install directory for every update. Read failure phase information
 in `state/recovery-required.json`; do not reset an existing DB to bypass a failure.
 
+Optional separately supplied wheels (SCX drive adapter, ADR 0006) go in
+`state\external-wheels\` once; every release installs them offline with
+`--no-deps --no-index`. An absent or empty folder is skipped.
+
 Build source: `scripts/windows/build-offline-bundle.ps1`.
 Full Korean guide: `docs/windows-server-offline-installation.md` in the source
 repository. Follow `docs/windows-deployment-policy.md` for all future development.
