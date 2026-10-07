@@ -1,6 +1,7 @@
 import { RefreshCw } from 'lucide-react'
 import { useState } from 'react'
 import { fetchStorageConfig, refreshStorage, saveStorageConfig } from '../../shared/api/storage'
+import { DriveSettingsEntry } from './DriveAdminPanel'
 
 export function StorageRefreshControl({ onChanged, onMessage, onError }: { onChanged: () => Promise<void>; onMessage: (message: string) => void; onError: (message: string) => void }) {
   const [busy, setBusy] = useState(false)
@@ -37,5 +38,5 @@ export function StorageRefreshControl({ onChanged, onMessage, onError }: { onCha
       onError(reason instanceof Error ? reason.message : '고정 결과 원본 폴더를 새로 확인하지 못했습니다.')
     } finally { setBusy(false) }
   }
-  return <div className="storage-global-actions"><details className="storage-global-settings" onToggle={(event) => { if (event.currentTarget.open) void loadRoot() }}><summary aria-label="고정 결과 원본 폴더 설정">저장소 설정</summary><div><label><span>고정 결과 원본 폴더</span><input value={rootPath} onChange={(event) => setRootPath(event.target.value)} placeholder="서버 결과 원본 root 경로" disabled={rootBusy || rootLocked} /></label><button type="button" onClick={() => void saveRoot()} disabled={rootBusy || rootLocked || !rootPath.trim()}>저장</button>{rootLocked ? <small role="status">환경 설정이 사용하는 경로라 여기서 바꿀 수 없습니다.</small> : rootMessage ? <small role="status">{rootMessage}</small> : null}</div></details><button type="button" className="ghost-button" data-testid="storage-global-refresh" disabled={busy} onClick={() => void run()}><RefreshCw className={busy ? 'storage-spin' : undefined} /> {busy ? '저장 폴더 확인 중' : '저장 폴더 새로고침'}</button></div>
+  return <div className="storage-global-actions"><details className="storage-global-settings" onToggle={(event) => { if (event.currentTarget.open) void loadRoot() }}><summary aria-label="고정 결과 원본 폴더 설정">저장소 설정</summary><div><label><span>고정 결과 원본 폴더</span><input value={rootPath} onChange={(event) => setRootPath(event.target.value)} placeholder="서버 결과 원본 root 경로" disabled={rootBusy || rootLocked} /></label><button type="button" onClick={() => void saveRoot()} disabled={rootBusy || rootLocked || !rootPath.trim()}>저장</button>{rootLocked ? <small role="status">환경 설정이 사용하는 경로라 여기서 바꿀 수 없습니다.</small> : rootMessage ? <small role="status">{rootMessage}</small> : null}<DriveSettingsEntry /></div></details><button type="button" className="ghost-button" data-testid="storage-global-refresh" disabled={busy} onClick={() => void run()}><RefreshCw className={busy ? 'storage-spin' : undefined} /> {busy ? '저장 폴더 확인 중' : '저장 폴더 새로고침'}</button></div>
 }

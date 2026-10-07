@@ -1,4 +1,5 @@
 import type { CSSProperties, ReactNode } from 'react'
+import { DriveStatusBanner } from '../../shared/components/DriveStatusBanner'
 
 type AppShellProps = {
   children: ReactNode
@@ -28,6 +29,7 @@ type AppShellMainProps = {
 export function AppShellMain({ children, topbar }: AppShellMainProps) {
   return <main className="main-shell">
     {topbar}
+    <DriveStatusBanner />
     {children}
   </main>
 }

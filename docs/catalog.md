@@ -35,11 +35,13 @@ PC 개인 실행 환경 지원과 향후 중앙 배치 방향은 [실행 환경 
 | [`adr/0002-persistence-bootstrap-and-api-contract.md`](adr/0002-persistence-bootstrap-and-api-contract.md) | PostgreSQL migration과 OpenAPI 경계 |
 | [`adr/0003-future-report-and-knowledge-protocol.md`](adr/0003-future-report-and-knowledge-protocol.md) | 보고서 구성과 미래 지식 연동 경계 |
 | [`adr/0004-canonical-production-deployment-target.md`](adr/0004-canonical-production-deployment-target.md) | Rocky 8 운영 target과 Windows compatibility profile |
+| [`adr/0006-scx-drive-adapter-external-wheel.md`](adr/0006-scx-drive-adapter-external-wheel.md) | SCX 드라이브 어댑터 wheel·워커 런타임을 패키지 밖 선택 의존성으로 공급 |
 
 ## 기능 계약과 구현 기록
 
 | 기능 | 문서 |
 |---|---|
+| SCX 드라이브 모드 설정·토큰 등록·드라이브 점검(D0) | [`features/scx-drive.md`](features/scx-drive.md) |
 | 개인 회원가입·비밀번호 변경·과거 도우미 설치 구현 | [`personal-onboarding-implementation.md`](personal-onboarding-implementation.md) |
 | 개인 계정 첫 화면·기존 사내 설치 전환 검토와 개발 계획 | [`personal-account-entry-rollout-plan.md`](personal-account-entry-rollout-plan.md) |
 | 개인 계정 최초 관리자·업데이트·검증 기록 | [`personal-account-rollout-runbook.md`](personal-account-rollout-runbook.md) |

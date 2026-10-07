@@ -58,7 +58,9 @@ def test_run_identity_v2_precedes_batch_attempt_identity_head() -> None:
     assert depth_schema and depth_schema.down_revision == "0033_result_registration_location_links"
     registration_delete = script.get_revision("0035_folder_registration_delete")
     assert registration_delete and registration_delete.down_revision == "0034_folder_depth_schema"
-    assert tuple(script.get_heads()) == ("0035_folder_registration_delete",)
+    drive_credentials = script.get_revision("0036_drive_credentials")
+    assert drive_credentials and drive_credentials.down_revision == "0035_folder_registration_delete"
+    assert tuple(script.get_heads()) == ("0036_drive_credentials",)
 
 
 def test_result_location_links_migration_widens_alembic_version_before_other_ddl(monkeypatch: pytest.MonkeyPatch) -> None:

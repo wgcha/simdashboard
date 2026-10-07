@@ -23,7 +23,9 @@ colorama==0.4.6 ; sys_platform == 'win32'
     #   pytest
     #   uvicorn
 cryptography==50.0.0
-    # via pyjwt
+    # via
+    #   -r backend/requirements.txt
+    #   pyjwt
 duckdb==1.5.5
     # via -r backend/requirements.txt
 fastapi==0.115.12

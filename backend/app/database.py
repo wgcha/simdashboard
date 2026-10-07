@@ -77,6 +77,7 @@ def initialize_database() -> None:
                 "result_registration_drafts",
                 "result_registration_files",
                 "result_registration_events",
+                "drive_credentials",
             )
             missing = [
                 table_name
@@ -108,6 +109,7 @@ def initialize_database() -> None:
                 "result_registration_drafts": {"project_id", "request_id", "environment", "case_relative_path", "result_relative_path", "manifest_json", "inspection_json", "approval_json", "capture_id", "status"},
                 "result_registration_files": {"draft_id", "relative_path", "sha256", "size_bytes", "content"},
                 "result_registration_events": {"draft_id", "action", "detail_json", "actor", "occurred_at"},
+                "drive_credentials": {"id", "ciphertext", "key_id", "account_hint", "obtained_at", "updated_by", "updated_at"},
             }
             incompatible = []
             for table_name, expected in required_columns.items():
@@ -1235,6 +1237,7 @@ def _initialize_duckdb_legacy() -> None:
         ensure_folder_discovery_schema(conn)
         ensure_folder_environment_schema(conn)
         ensure_result_registration_schema(conn)
+        ensure_drive_credentials_schema(conn)
         from .adapters.persistence.dashboard_schema import ensure_dashboard_schema
         ensure_dashboard_schema(conn)
         # Establish the schema before seeding, but defer one-time legacy data
@@ -1487,6 +1490,14 @@ def ensure_folder_environment_schema(conn: duckdb.DuckDBPyConnection) -> None:
     ('environment-profile-distribution-default','DISTRIBUTION','기본 유통환경 규칙',1,'{"roles":["PROJECT","REQUEST","SIMULATION_CASE","LOAD_CASE","EXECUTION_RUN","RUN_OPTION"]}',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP) ON CONFLICT(id) DO NOTHING""")
     ensure_folder_depth_schema(conn)
     ensure_folder_registration_delete_schema(conn)
+
+
+def ensure_drive_credentials_schema(conn: duckdb.DuckDBPyConnection) -> None:
+    """Local development equivalent of additive migration 0036 (SCX drive credentials, stage D0)."""
+    conn.execute("""CREATE TABLE IF NOT EXISTS drive_credentials (
+        id VARCHAR PRIMARY KEY CHECK (id = 'scx'), ciphertext BLOB NOT NULL, key_id VARCHAR NOT NULL,
+        account_hint VARCHAR, obtained_at TIMESTAMP NOT NULL, updated_by VARCHAR NOT NULL, updated_at TIMESTAMP NOT NULL
+    )""")
 
 
 def ensure_folder_registration_delete_schema(conn: duckdb.DuckDBPyConnection) -> None:

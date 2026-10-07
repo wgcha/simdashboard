@@ -2484,6 +2484,92 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/drive/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Admin Status */
+        get: operations["admin_status_api_admin_drive_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/drive/credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Put Credentials */
+        put: operations["put_credentials_api_admin_drive_credentials_put"];
+        post?: never;
+        /** Delete Credentials */
+        delete: operations["delete_credentials_api_admin_drive_credentials_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/drive/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Connection Test */
+        post: operations["connection_test_api_admin_drive_test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/drive/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Drive Check */
+        post: operations["drive_check_api_admin_drive_check_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/drive/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** User Status */
+        get: operations["user_status_api_drive_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/health": {
         parameters: {
             query?: never;
@@ -5132,6 +5218,144 @@ export interface components {
              * @default
              */
             media_type: string;
+        };
+        /** DriveAdminStatus */
+        DriveAdminStatus: {
+            /** Mode */
+            mode: string;
+            /** State */
+            state?: string | null;
+            /** Server Url */
+            server_url?: string | null;
+            /** Drive Root */
+            drive_root?: string | null;
+            /**
+             * Drive Root Locked
+             * @default false
+             */
+            drive_root_locked: boolean;
+            credentials?: components["schemas"]["DriveCredentialsMeta"] | null;
+            /** Credentials Problem */
+            credentials_problem?: string | null;
+            health?: components["schemas"]["DriveHealth"] | null;
+            /** Worker Version */
+            worker_version?: string | null;
+            /** Token Save Failed At */
+            token_save_failed_at?: string | null;
+        };
+        /** DriveCheckReport */
+        DriveCheckReport: {
+            /** Test Folder */
+            test_folder: string;
+            /** Drive Path */
+            drive_path: string;
+            /** Started At */
+            started_at: string;
+            /** Finished At */
+            finished_at: string;
+            /** Ok */
+            ok: boolean;
+            /** Steps */
+            steps: components["schemas"]["DriveCheckStep"][];
+            /** Leftovers */
+            leftovers: string[];
+            /** Note */
+            note: string;
+        };
+        /** DriveCheckRequest */
+        DriveCheckRequest: {
+            /** Test Folder */
+            test_folder: string;
+        };
+        /** DriveCheckStep */
+        DriveCheckStep: {
+            /** Step */
+            step: string;
+            /** Label */
+            label: string;
+            /** Ok */
+            ok: boolean;
+            /**
+             * Skipped
+             * @default false
+             */
+            skipped: boolean;
+            /** Code */
+            code?: string | null;
+            /** Latency Ms */
+            latency_ms?: number | null;
+            /** Observations */
+            observations?: string[];
+        };
+        /** DriveCredentialsMeta */
+        DriveCredentialsMeta: {
+            /** Present */
+            present: boolean;
+            /** Account Hint */
+            account_hint?: string | null;
+            /** Obtained At */
+            obtained_at?: string | null;
+            /** Updated By */
+            updated_by?: string | null;
+            /** Updated At */
+            updated_at?: string | null;
+            /** Key Matches */
+            key_matches?: boolean | null;
+        };
+        /** DriveCredentialsSaved */
+        DriveCredentialsSaved: {
+            /** Account Hint */
+            account_hint?: string | null;
+            /** Obtained At */
+            obtained_at: string;
+            test: components["schemas"]["DriveTestResult"];
+        };
+        /** DriveErrorInfo */
+        DriveErrorInfo: {
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+        };
+        /** DriveHealth */
+        DriveHealth: {
+            /** State */
+            state: string;
+            /** Last Success At */
+            last_success_at?: string | null;
+            /** Last Error Code */
+            last_error_code?: string | null;
+            /** Last Error At */
+            last_error_at?: string | null;
+            /** Token Refreshed At */
+            token_refreshed_at?: string | null;
+            /**
+             * Queue Depth
+             * @default 0
+             */
+            queue_depth: number;
+            /**
+             * In Flight
+             * @default 0
+             */
+            in_flight: number;
+        };
+        /** DriveTestResult */
+        DriveTestResult: {
+            /** Ok */
+            ok: boolean;
+            /** Latency Ms */
+            latency_ms?: number | null;
+            /** Root Identity */
+            root_identity?: string | null;
+            error?: components["schemas"]["DriveErrorInfo"] | null;
+        };
+        /** DriveUserStatus */
+        DriveUserStatus: {
+            /** Mode */
+            mode: string;
+            /** State */
+            state?: string | null;
         };
         /** DropFile */
         DropFile: {
@@ -12750,6 +12974,148 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_status_api_admin_drive_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DriveAdminStatus"];
+                };
+            };
+        };
+    };
+    put_credentials_api_admin_drive_credentials_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    server_url: string;
+                    access_token: string;
+                    refresh_token: string;
+                    /** Format: date-time */
+                    obtained_at?: string;
+                    account_hint?: string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DriveCredentialsSaved"];
+                };
+            };
+        };
+    };
+    delete_credentials_api_admin_drive_credentials_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    connection_test_api_admin_drive_test_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DriveTestResult"];
+                };
+            };
+        };
+    };
+    drive_check_api_admin_drive_check_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DriveCheckRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DriveCheckReport"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    user_status_api_drive_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DriveUserStatus"];
                 };
             };
         };

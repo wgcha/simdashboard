@@ -56,6 +56,7 @@ from .routers.folder_environment_profiles import router as folder_environment_pr
 from .routers.media import router as media_router
 from .routers.managed_local_execution import router as managed_local_execution_router
 from .routers.voc import router as voc_router
+from .routers.drive import admin_router as drive_admin_router, status_router as drive_status_router
 from .routers.semantic_mapping import router as semantic_mapping_router
 from .routers.semantic_activation import router as semantic_activation_router
 from .routers.semantic_review import router as semantic_review_router
@@ -98,10 +99,16 @@ from .services.drop_video_demo import (
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     initialize_database()
+    # D0: scx drive mode refuses startup on bad settings, a missing adapter or a second process.
+    from .services.drive import gateway as drive_gateway
+    drive_gateway.startup()
     # W2: resume Final copy jobs interrupted by a restart (daemon thread, non-blocking).
     from .services.case_finalization import start_resume_scan
     start_resume_scan()
-    yield
+    try:
+        yield
+    finally:
+        drive_gateway.shutdown()
 
 
 app = FastAPI(title="Analysis Canvas API", version="0.1.0", lifespan=lifespan)
@@ -133,6 +140,8 @@ app.include_router(folder_discovery_environment_router)
 app.include_router(folder_environment_profiles_router)
 app.include_router(folder_environment_requests_router)
 app.include_router(semantic_vocabulary_router)
+app.include_router(drive_admin_router)
+app.include_router(drive_status_router)
 
 
 def media_storage_mode() -> app_config.MediaStorageMode:

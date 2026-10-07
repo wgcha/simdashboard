@@ -7182,6 +7182,179 @@
         }
       }
     },
+    "/api/admin/drive/status": {
+      "get": {
+        "tags": [
+          "drive"
+        ],
+        "summary": "Admin Status",
+        "operationId": "admin_status_api_admin_drive_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DriveAdminStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/drive/credentials": {
+      "put": {
+        "tags": [
+          "drive"
+        ],
+        "summary": "Put Credentials",
+        "operationId": "put_credentials_api_admin_drive_credentials_put",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DriveCredentialsSaved"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "server_url",
+                  "access_token",
+                  "refresh_token"
+                ],
+                "properties": {
+                  "server_url": {
+                    "type": "string"
+                  },
+                  "access_token": {
+                    "type": "string"
+                  },
+                  "refresh_token": {
+                    "type": "string"
+                  },
+                  "obtained_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "account_hint": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "drive"
+        ],
+        "summary": "Delete Credentials",
+        "operationId": "delete_credentials_api_admin_drive_credentials_delete",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        }
+      }
+    },
+    "/api/admin/drive/test": {
+      "post": {
+        "tags": [
+          "drive"
+        ],
+        "summary": "Connection Test",
+        "operationId": "connection_test_api_admin_drive_test_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DriveTestResult"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/drive/check": {
+      "post": {
+        "tags": [
+          "drive"
+        ],
+        "summary": "Drive Check",
+        "operationId": "drive_check_api_admin_drive_check_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DriveCheckRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DriveCheckReport"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/drive/status": {
+      "get": {
+        "tags": [
+          "drive"
+        ],
+        "summary": "User Status",
+        "operationId": "user_status_api_drive_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DriveUserStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/health": {
       "get": {
         "summary": "Health",
@@ -16009,6 +16182,486 @@
           "size"
         ],
         "title": "DraftManifestFile"
+      },
+      "DriveAdminStatus": {
+        "properties": {
+          "mode": {
+            "type": "string",
+            "title": "Mode"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
+          },
+          "server_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Server Url"
+          },
+          "drive_root": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Drive Root"
+          },
+          "drive_root_locked": {
+            "type": "boolean",
+            "title": "Drive Root Locked",
+            "default": false
+          },
+          "credentials": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DriveCredentialsMeta"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "credentials_problem": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credentials Problem"
+          },
+          "health": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DriveHealth"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "worker_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Worker Version"
+          },
+          "token_save_failed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token Save Failed At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "mode"
+        ],
+        "title": "DriveAdminStatus"
+      },
+      "DriveCheckReport": {
+        "properties": {
+          "test_folder": {
+            "type": "string",
+            "title": "Test Folder"
+          },
+          "drive_path": {
+            "type": "string",
+            "title": "Drive Path"
+          },
+          "started_at": {
+            "type": "string",
+            "title": "Started At"
+          },
+          "finished_at": {
+            "type": "string",
+            "title": "Finished At"
+          },
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/DriveCheckStep"
+            },
+            "type": "array",
+            "title": "Steps"
+          },
+          "leftovers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Leftovers"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "test_folder",
+          "drive_path",
+          "started_at",
+          "finished_at",
+          "ok",
+          "steps",
+          "leftovers",
+          "note"
+        ],
+        "title": "DriveCheckReport"
+      },
+      "DriveCheckRequest": {
+        "properties": {
+          "test_folder": {
+            "type": "string",
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Test Folder"
+          }
+        },
+        "type": "object",
+        "required": [
+          "test_folder"
+        ],
+        "title": "DriveCheckRequest"
+      },
+      "DriveCheckStep": {
+        "properties": {
+          "step": {
+            "type": "string",
+            "title": "Step"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "skipped": {
+            "type": "boolean",
+            "title": "Skipped",
+            "default": false
+          },
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
+          },
+          "latency_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency Ms"
+          },
+          "observations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Observations"
+          }
+        },
+        "type": "object",
+        "required": [
+          "step",
+          "label",
+          "ok"
+        ],
+        "title": "DriveCheckStep"
+      },
+      "DriveCredentialsMeta": {
+        "properties": {
+          "present": {
+            "type": "boolean",
+            "title": "Present"
+          },
+          "account_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Hint"
+          },
+          "obtained_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Obtained At"
+          },
+          "updated_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated By"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "key_matches": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key Matches"
+          }
+        },
+        "type": "object",
+        "required": [
+          "present"
+        ],
+        "title": "DriveCredentialsMeta"
+      },
+      "DriveCredentialsSaved": {
+        "properties": {
+          "account_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Hint"
+          },
+          "obtained_at": {
+            "type": "string",
+            "title": "Obtained At"
+          },
+          "test": {
+            "$ref": "#/components/schemas/DriveTestResult"
+          }
+        },
+        "type": "object",
+        "required": [
+          "obtained_at",
+          "test"
+        ],
+        "title": "DriveCredentialsSaved"
+      },
+      "DriveErrorInfo": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "DriveErrorInfo"
+      },
+      "DriveHealth": {
+        "properties": {
+          "state": {
+            "type": "string",
+            "title": "State"
+          },
+          "last_success_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Success At"
+          },
+          "last_error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error Code"
+          },
+          "last_error_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error At"
+          },
+          "token_refreshed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token Refreshed At"
+          },
+          "queue_depth": {
+            "type": "integer",
+            "title": "Queue Depth",
+            "default": 0
+          },
+          "in_flight": {
+            "type": "integer",
+            "title": "In Flight",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "state"
+        ],
+        "title": "DriveHealth"
+      },
+      "DriveTestResult": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "latency_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency Ms"
+          },
+          "root_identity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Root Identity"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DriveErrorInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "ok"
+        ],
+        "title": "DriveTestResult"
+      },
+      "DriveUserStatus": {
+        "properties": {
+          "mode": {
+            "type": "string",
+            "title": "Mode"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
+          }
+        },
+        "type": "object",
+        "required": [
+          "mode"
+        ],
+        "title": "DriveUserStatus"
       },
       "DropFile": {
         "properties": {

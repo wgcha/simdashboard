@@ -1,7 +1,7 @@
 # SCX 드라이브 연동 계획 (어댑터 · UI · 브랜치)
 
 - 기준일: 2026-10-07
-- 상태: **결정 반영(2026-10-07 15:40), 구현 전.**
+- 상태: **결정 반영(2026-10-07 15:40). D0 구현(2026-10-07, 미커밋 검수 대기)** — 사용 안내는 [SCX 드라이브 기능 안내](../features/scx-drive.md), 배포 영향은 [ADR 0006](../adr/0006-scx-drive-adapter-external-wheel.md). D1 이후 구현 전.
 - 근거: GitHub 이슈 #45 본문과 코멘트(사내 `VD_scx_drive_adapter` 계약 v0.2, integration 00–07), [저장소 계층 계약](../contracts/storage-provider.md), [개선 전체 계획](improvement-roadmap.md)
 - 작업 브랜치: `claude/scx-drive` (main `8db9f66`에서 분기)
 
@@ -53,6 +53,19 @@ SPDM 원본이 로컬·공유 폴더에서 **SCX 드라이브(AltairOne Drive)**
 | D6 | **수용 시험**: 이슈 07의 S0–S3를 테스트용 드라이브 공간에서 수행, 측정 기록 | — | 현장 |
 
 합계 약 17–21일(현장 시험 제외).
+
+### D0 구현 결과 (2026-10-07)
+
+| 항목 | 결과 |
+|---|---|
+| 모드·기동 검사 | `services/drive/config.py`·`gateway.py`: `none` 기본(동작 불변, 어댑터 import 안 함). `scx`에서 필수 설정 누락·형식 오류, 어댑터 미설치, `dashboard.lock` 선점 시 기동 거부. `WorkerDriveGateway` 싱글턴 지연 생성(`drive_root="~"`), lifespan 종료 시 `close()` |
+| 토큰 | `DbTokenStore`(Fernet, `key_id`=키 sha256 앞 8자, 키 변경·복호화 실패 → 없음, 워커 스레드 `save()` 자체 연결 즉시 커밋, 마이크로초 보존) |
+| DB | migration `0036_drive_credentials`는 **`drive_credentials`만** 만든다. 위 표의 `drive_source_versions`·`drive_upload_queue`·`drive_locks`·`finalization_operations`는 쓰는 단계(D2·D3)에서 각자 migration으로 추가한다(쓰지 않는 빈 테이블을 미리 배포하지 않음) |
+| API | `/api/admin/drive/{status,credentials,test,check}`(전역 관리자), `/api/drive/status`(로그인 사용자) |
+| 드라이브 점검(D7) | 시험 폴더에서 stat → list_dir → stat → download_to → upload_new ×2(CONFLICT 확인) → mkdirs → copy_within ×2 → health. 드라이브 삭제·이동·덮어쓰기 없음, `simdash-check-*` 남김 |
+| UI | 저장소 설정 › SCX 드라이브 › 드라이브 관리 대화상자, 전체 상단 배너(60초 조회), `DRIVE_*` 한글 문구 |
+| 시험 | 가짜 어댑터(`backend/tests/drive_fakes.py`, 시험 전용) |
+| 남은 배포 과제(D5) | 소스 `uv pip sync`·폐쇄망 새 venv가 따로 설치한 어댑터 wheel을 지움 → 설치기가 외부 wheel 경로를 받도록 변경 필요(ADR 0006) |
 
 ## 5. 결정 필요 사항
 
