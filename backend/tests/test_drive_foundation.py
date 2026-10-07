@@ -171,7 +171,8 @@ def test_scx_mode_refuses_startup_without_the_adapter_package(scx_env, monkeypat
     with pytest.raises(drive_gateway.DriveStartupError) as caught:
         drive_gateway.startup()
     message = str(caught.value)
-    assert "어댑터 패키지가 설치되지 않았습니다" in message and "pip install --no-deps" in message
+    assert "어댑터 패키지(scx_drive_adapter)가 설치되지 않았습니다" in message
+    assert "external-wheels" in message and "update.bat" in message and "pip install" not in message
     assert "not installed" in message
     with pytest.raises(drive_gateway.DriveStartupError):
         with TestClient(app):
@@ -257,7 +258,9 @@ def test_db_token_store_key_change_or_corruption_loads_none():
 
 def test_db_token_store_save_from_worker_thread_commits_before_returning():
     key = Fernet.generate_key().decode()
-    store = DbTokenStore(key)
+    DbTokenStore(key).write(_bundle(), updated_by="drive-admin")
+    store = DbTokenStore(key).for_gateway()
+    assert store.load() is not None
     rotated = _bundle(refresh_token="rotated-SECRET", obtained_at=datetime(2026, 10, 7, 2, 0, 0, 1, tzinfo=timezone.utc))
     thread = threading.Thread(target=store.save, args=(rotated,))
     thread.start()
@@ -271,6 +274,7 @@ def test_db_token_store_save_failure_is_logged_without_tokens(caplog):
     def broken():
         raise RuntimeError("db down")
     store = DbTokenStore(Fernet.generate_key().decode(), connect_fn=broken)
+    store._loaded_generation = 1          # as if loaded before the database went away
     with caplog.at_level(logging.DEBUG):
         store.save(_bundle())
     assert store.last_save_error_at is not None
@@ -497,13 +501,14 @@ def test_duckdb_bootstrap_creates_drive_credentials_on_existing_database():
         columns = {row[0] for row in conn.execute(
             "SELECT column_name FROM information_schema.columns WHERE table_name='drive_credentials'").fetchall()}
         kept = conn.execute("SELECT name FROM projects WHERE id='drive-upgrade-project'").fetchone()
-    assert columns == {"id", "ciphertext", "key_id", "account_hint", "obtained_at", "updated_by", "updated_at"}
+    assert columns == {"id", "ciphertext", "key_id", "account_hint", "obtained_at", "updated_by", "updated_at", "generation"}
     assert kept == ("keep",)
 
 
 def test_migration_0036_is_additive_and_grants_the_app_role():
     text = (BACKEND / "migrations" / "versions" / "0036_drive_credentials.py").read_text(encoding="utf-8")
     assert "CREATE TABLE IF NOT EXISTS drive_credentials" in text
+    assert "generation BIGINT NOT NULL" in text
     for forbidden in ("DROP TABLE", "DELETE FROM", "TRUNCATE", "ALTER TABLE"):
         assert forbidden not in text
     assert "GRANT SELECT, INSERT, UPDATE, DELETE ON drive_credentials" in text
@@ -523,3 +528,154 @@ def test_drive_status_poll_is_cheap(fake_drive, password_auth):
             assert client.get("/api/drive/status", headers=viewer).status_code == 200
         assert time.perf_counter() - started < 5
         assert fake_drive.calls == []                 # banner polling never calls the drive
+
+
+# --- review fixes: generation fencing (M1) ----------------------------------------------------
+
+def test_worker_save_is_fenced_by_generation_and_never_recreates_a_deleted_row(caplog):
+    caplog.set_level(logging.DEBUG)
+    key = Fernet.generate_key().decode()
+    admin = DbTokenStore(key)
+    first_generation = admin.write(_bundle(), updated_by="drive-admin")
+    worker = admin.for_gateway()
+    assert worker.load() == _bundle() and worker.loaded_generation == first_generation
+    worker.save(_bundle(refresh_token="rot1-SECRET"))
+    assert admin.load_local().refresh_token == "rot1-SECRET" and admin.metadata()["updated_by"] == "worker"
+
+    assert admin.clear() is True
+    worker.save(_bundle(refresh_token="stale-after-delete-SECRET"))      # late rotation from the old chain
+    assert admin.metadata()["present"] is False                         # not resurrected
+    assert worker.last_stale_save_at is not None and admin.last_stale_save_at is not None
+
+    second_generation = admin.write(_bundle(access_token="new-acc-SECRET", refresh_token="new-ref-SECRET"),
+                                    updated_by="drive-admin")
+    assert second_generation > first_generation                         # monotonic across DELETE
+    worker.save(_bundle(refresh_token="stale-after-reregister-SECRET"))
+    assert admin.load_local().refresh_token == "new-ref-SECRET"         # new account not overwritten
+    assert "SCX rotated token not saved" in caplog.text
+    _no_secret(caplog.text)
+
+    fresh = admin.for_gateway()
+    assert fresh.load().refresh_token == "new-ref-SECRET"
+    fresh.save(_bundle(refresh_token="new-rot-SECRET"))
+    assert admin.load_local().refresh_token == "new-rot-SECRET"
+    assert admin.for_gateway().save(_bundle()) is None                  # never loaded → dropped, no exception
+    assert admin.load_local().refresh_token == "new-rot-SECRET"
+
+
+def test_delete_ends_the_in_memory_session_and_late_rotation_cannot_resurrect(fake_drive, password_auth):
+    with TestClient(app) as client:
+        admin = _login(client, "drive-admin")
+        _registered(client, admin)
+        old = drive_gateway.existing_gateway()
+        assert old is not None and old._bundle is not None
+        assert client.delete("/api/admin/drive/credentials", headers=admin).status_code == 204
+        assert old.closed and drive_gateway.existing_gateway() is None
+        failed = client.post("/api/admin/drive/test", headers=admin).json()
+        assert failed["ok"] is False and failed["error"]["code"] == "DRIVE_AUTH_REQUIRED"
+        old.rotate()                                                    # late notification from the old worker
+        assert drive_gateway.token_store().metadata()["present"] is False
+        assert client.get("/api/admin/drive/status", headers=admin).json()["state"] == "AUTH_REQUIRED"
+
+
+def test_fake_worker_keeps_cached_tokens_without_a_reset(fake_drive, password_auth):
+    """Documents why DELETE must reset the gateway: the worker caches tokens in memory."""
+    with TestClient(app) as client:
+        admin = _login(client, "drive-admin")
+        _registered(client, admin)
+        gateway = drive_gateway.existing_gateway()
+        drive_gateway.token_store().clear()                            # row gone, no reset
+        assert gateway.stat("") is not None
+
+
+def test_reregister_is_not_overwritten_by_the_old_chain(fake_drive, password_auth):
+    with TestClient(app) as client:
+        admin = _login(client, "drive-admin")
+        _registered(client, admin)
+        old = drive_gateway.existing_gateway()
+        renewed = client.put("/api/admin/drive/credentials", headers=admin,
+                             content=_bundle_json(access_token="eyJnew.access-SECRET", refresh_token="new-refresh-SECRET",
+                                                  obtained_at="2026-10-07T05:00:00Z", account_hint="other"))
+        assert renewed.status_code == 200 and renewed.json()["test"]["ok"] is True
+        assert old.closed and drive_gateway.existing_gateway() is not old
+        current = drive_gateway.token_store().load_local().refresh_token
+        assert current.startswith("new-refresh-SECRET-r")
+        old.rotate()                                                    # stale rotation from the first account
+        assert drive_gateway.token_store().load_local().refresh_token == current
+        assert drive_gateway.token_store().metadata()["account_hint"] == "other"
+
+
+# --- review fixes: status never 500 / never builds the gateway (L1) -----------------------------
+
+def test_status_endpoints_do_not_build_the_gateway(fake_drive, password_auth):
+    drive_gateway.startup()
+    drive_gateway.token_store().write(_bundle(), updated_by="drive-admin")
+    with TestClient(app) as client:
+        admin, viewer = _login(client, "drive-admin"), _login(client, "drive-viewer")
+        for _ in range(3):
+            assert client.get("/api/drive/status", headers=viewer).json()["state"] == "UNKNOWN"
+            assert client.get("/api/admin/drive/status", headers=admin).json()["state"] == "UNKNOWN"
+        assert drive_gateway.existing_gateway() is None and fake_drive.calls == []
+
+
+def test_status_endpoints_report_unavailable_instead_of_500(fake_drive, password_auth, monkeypatch):
+    with TestClient(app) as client:
+        admin, viewer = _login(client, "drive-admin"), _login(client, "drive-viewer")
+
+        def broken_store():
+            raise drive_gateway.DriveStartupError("adapter missing")
+        monkeypatch.setattr(drive_gateway, "token_store", broken_store)
+        monkeypatch.setattr(drive_gateway, "get_drive_gateway", broken_store)
+        user = client.get("/api/drive/status", headers=viewer)
+        assert user.status_code == 200 and user.json() == {"mode": "scx", "state": "UNAVAILABLE"}
+        status = client.get("/api/admin/drive/status", headers=admin)
+        assert status.status_code == 200 and status.json()["state"] == "UNAVAILABLE"
+        tested = client.post("/api/admin/drive/test", headers=admin)
+        assert tested.status_code == 200 and tested.json()["ok"] is False
+
+
+# --- review fixes: request body hardening (L2, L3) ----------------------------------------------
+
+def test_credentials_body_rejects_deep_nesting_and_oversize(fake_drive, password_auth):
+    with TestClient(app) as client:
+        admin = _login(client, "drive-admin")
+        deep = client.put("/api/admin/drive/credentials", headers=admin, content="[" * 60_000)
+        assert deep.status_code == 400 and deep.json()["detail"]["code"] == "DRIVE_CREDENTIALS_INVALID"
+        assert "JSON을 해석할 수 없습니다" in deep.json()["detail"]["message"]
+        big = _bundle_json(account_hint="x" * (70 * 1024))
+        declared = client.put("/api/admin/drive/credentials", headers=admin, content=big)
+        assert declared.status_code == 400 and "너무 큽니다" in declared.json()["detail"]["message"]
+
+        def chunked():
+            for _ in range(80):
+                yield b"x" * 1024
+        streamed = client.put("/api/admin/drive/credentials", headers=admin, content=chunked())
+        assert streamed.status_code == 400 and "너무 큽니다" in streamed.json()["detail"]["message"]
+        assert drive_gateway.token_store().metadata()["present"] is False
+
+
+# --- review fixes: adapter TokenBundle only at the boundary, message masking (L4) ---------------
+
+def test_adapter_bundle_type_is_used_only_at_the_adapter_boundary(fake_drive):
+    module = sys.modules["scx_drive_adapter"]
+    admin = DbTokenStore(Fernet.generate_key().decode())
+    admin.write(module.TokenBundle(**{field: getattr(_bundle(), field) for field in
+                                      ("server_url", "access_token", "refresh_token", "obtained_at", "account_hint")}),
+                updated_by="drive-admin")
+    assert type(admin.load()) is LocalTokenBundle                       # admin side never sees the adapter type
+    worker = admin.for_gateway(module.TokenBundle)
+    loaded = worker.load()
+    assert type(loaded) is module.TokenBundle                           # the adapter gets its own type
+    worker.save(module.TokenBundle(server_url=SERVER, access_token="a2-SECRET", refresh_token="r2-SECRET",
+                                   obtained_at=datetime(2026, 10, 7, 3, tzinfo=timezone.utc), account_hint=None))
+    stored = worker.load_local()
+    assert type(stored) is LocalTokenBundle and stored.refresh_token == "r2-SECRET"
+    _no_secret(repr(stored))
+
+
+def test_safe_error_message_masks_bearer_and_jwt_like_values():
+    error = RuntimeError(f"401 for Authorization: Bearer {REFRESH} token {ACCESS} done")
+    message = drive_gateway.safe_error_message(error)
+    _no_secret(message)
+    assert "Bearer ***" in message and "done" in message
+    assert drive_gateway.safe_error_message(RuntimeError("x" * 500 + ACCESS)).count("SECRET") == 0

@@ -8,10 +8,17 @@ write returns 409 ``DRIVE_MODE_DISABLED``.  Token values are never returned,
 logged or written to the audit trail.  No handler keeps a database connection
 open while it waits for the drive (the worker may call ``TokenStore.save`` on
 another thread meanwhile).
+
+Status endpoints never return 500 and never build the gateway: they read
+health only from a gateway that an admin action (register/test/check) or a
+later drive feature already built; without one the state is ``UNKNOWN``
+(token present) or ``AUTH_REQUIRED`` (no usable token).  Any failure while
+reading status is reported as ``UNAVAILABLE``.
 """
 from __future__ import annotations
 
 import json
+import logging
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -25,6 +32,8 @@ from ..services.drive import gateway as drive_gateway
 from ..services.drive.check import CheckAlreadyRunning, run_drive_check
 from ..services.drive.config import DriveSettings, url_host, validate_drive_rel_path
 from ..services.drive.token_store import parse_obtained_at
+
+logger = logging.getLogger("app.routers.drive")
 
 admin_router = APIRouter(prefix="/api/admin/drive", tags=["drive"])
 status_router = APIRouter(prefix="/api/drive", tags=["drive"])
@@ -168,16 +177,19 @@ def _derived_state(credentials: dict[str, Any], health: dict[str, Any]) -> str:
     return state
 
 
-def _scx_snapshot() -> tuple[dict[str, Any], dict[str, Any], Any]:
+def _scx_snapshot() -> tuple[dict[str, Any], dict[str, Any], Any, Any]:
+    """Credentials metadata and health without building the gateway (see module docstring)."""
     store = drive_gateway.token_store()
-    gateway = drive_gateway.get_drive_gateway()
+    gateway = drive_gateway.existing_gateway()
     credentials = store.metadata()
-    return credentials, _health(gateway), store
+    health = _health(gateway) if gateway is not None else {"state": "UNAVAILABLE"}
+    return credentials, health, store, gateway
 
 
-def _connection_test(gateway: Any) -> DriveTestResult:
+def _connection_test() -> DriveTestResult:
     started = time.perf_counter()
     try:
+        gateway = drive_gateway.get_drive_gateway()
         gateway.stat("", priority=drive_gateway.priority("INTERACTIVE"))
         identity = gateway.root_identity()
     except Exception as error:
@@ -188,14 +200,21 @@ def _connection_test(gateway: Any) -> DriveTestResult:
 @admin_router.get("/status", response_model=DriveAdminStatus)
 def admin_status(request: Request) -> DriveAdminStatus:
     _require_admin(request)
-    settings = _settings()
-    if not settings.enabled:
-        return DriveAdminStatus(mode="none")
-    credentials, health, store = _scx_snapshot()
+    try:
+        settings = _settings()
+        if not settings.enabled:
+            return DriveAdminStatus(mode="none")
+        return _admin_status(settings)
+    except Exception as error:
+        logger.warning("SCX drive admin status unavailable (%s)", type(error).__name__)
+        return DriveAdminStatus(mode="scx", state="UNAVAILABLE")
+
+
+def _admin_status(settings: DriveSettings) -> DriveAdminStatus:
+    credentials, health, store, gateway = _scx_snapshot()
     problem = store.last_load_problem if credentials.get("present") else "MISSING"
     if credentials.get("key_matches") is False:
         problem = "KEY_CHANGED"
-    gateway = drive_gateway.get_drive_gateway()
     version = getattr(gateway, "worker_version", None)
     saved_failed = store.last_save_error_at
     return DriveAdminStatus(
@@ -213,7 +232,7 @@ def _parse_bundle(raw: bytes, settings: DriveSettings) -> dict[str, Any]:
         raise invalid("토큰 JSON이 너무 큽니다.")
     try:
         payload = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
         raise invalid("토큰 JSON을 해석할 수 없습니다. login 명령이 출력한 JSON 전체를 붙여 넣으세요.") from None
     if not isinstance(payload, dict):
         raise invalid("토큰 JSON은 객체여야 합니다.")
@@ -253,12 +272,13 @@ def _register(request: Request, raw: bytes) -> DriveCredentialsSaved:
     bundle = store.make_bundle(**fields)
     actor = request.state.principal.user_id
     store.write(bundle, updated_by=actor)
+    drive_gateway.reset_gateway()   # the worker must drop the previous account's in-memory tokens
     obtained = bundle.obtained_at.isoformat(timespec="microseconds")
     write_audit_event(request=request, principal=request.state.principal, status_code=200,
                       action="DRIVE_CREDENTIALS_REGISTERED",
                       detail={"account_hint": bundle.account_hint, "obtained_at": obtained,
                               "server_host": settings.server_host, "key_id": store.key_id})
-    test = _connection_test(drive_gateway.get_drive_gateway())
+    test = _connection_test()
     return DriveCredentialsSaved(account_hint=bundle.account_hint, obtained_at=obtained, test=test)
 
 
@@ -267,8 +287,29 @@ def _register(request: Request, raw: bytes) -> DriveCredentialsSaved:
 async def put_credentials(request: Request) -> DriveCredentialsSaved:
     _require_admin(request)
     await run_in_threadpool(_require_scx)
-    raw = await request.body()
+    raw = await _read_capped_body(request)
     return await run_in_threadpool(_register, request, raw)
+
+
+async def _read_capped_body(request: Request) -> bytes:
+    """Reject by Content-Length before reading, then read at most the cap (chunked bodies too)."""
+    too_large = _fail(400, "DRIVE_CREDENTIALS_INVALID", "토큰 JSON이 너무 큽니다.")
+    declared = request.headers.get("content-length")
+    if declared is not None:
+        try:
+            length = int(declared)
+        except ValueError:
+            raise _fail(400, "DRIVE_CREDENTIALS_INVALID", "Content-Length가 올바르지 않습니다.") from None
+        if length > MAX_CREDENTIALS_BODY:
+            raise too_large
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > MAX_CREDENTIALS_BODY:
+            raise too_large
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 @admin_router.delete("/credentials", status_code=204, response_class=Response)
@@ -278,6 +319,7 @@ def delete_credentials(request: Request) -> Response:
     store = drive_gateway.token_store()
     meta = store.metadata()
     existed = store.clear()
+    drive_gateway.reset_gateway()   # the worker must not keep using the deleted tokens from memory
     write_audit_event(request=request, principal=request.state.principal, status_code=204,
                       action="DRIVE_CREDENTIALS_DELETED",
                       detail={"existed": existed, "account_hint": meta.get("account_hint")})
@@ -288,7 +330,7 @@ def delete_credentials(request: Request) -> Response:
 def connection_test(request: Request) -> DriveTestResult:
     _require_admin(request)
     _require_scx()
-    return _connection_test(drive_gateway.get_drive_gateway())
+    return _connection_test()
 
 
 @admin_router.post("/check", response_model=DriveCheckReport)
@@ -316,8 +358,12 @@ def drive_check(payload: DriveCheckRequest, request: Request) -> DriveCheckRepor
 @status_router.get("/status", response_model=DriveUserStatus)
 def user_status(request: Request) -> DriveUserStatus:
     del request  # any signed-in user (SecurityMiddleware)
-    settings = _settings()
-    if not settings.enabled:
-        return DriveUserStatus(mode="none")
-    credentials, health, _store = _scx_snapshot()
-    return DriveUserStatus(mode="scx", state=_derived_state(credentials, health))
+    try:
+        settings = _settings()
+        if not settings.enabled:
+            return DriveUserStatus(mode="none")
+        credentials, health, _store, _gateway = _scx_snapshot()
+        return DriveUserStatus(mode="scx", state=_derived_state(credentials, health))
+    except Exception as error:
+        logger.warning("SCX drive status unavailable (%s)", type(error).__name__)
+        return DriveUserStatus(mode="scx", state="UNAVAILABLE")

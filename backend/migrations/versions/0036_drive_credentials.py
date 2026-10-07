@@ -1,6 +1,8 @@
 """SCX drive shared-account credentials (stage D0, integration 04 §2.1).
 
 One encrypted row (``id='scx'``) holding the Fernet-encrypted TokenBundle JSON.
+``generation`` fences worker token saves: every admin registration writes a
+new, larger value and a worker save only updates the generation it loaded.
 Additive only: no existing table or row is changed.  The table is empty after
 the upgrade and stays unused while ``SIMDASH_DRIVE_GATEWAY=none``.
 """
@@ -27,7 +29,8 @@ def upgrade() -> None:
         account_hint VARCHAR(200),
         obtained_at TIMESTAMP NOT NULL,
         updated_by VARCHAR NOT NULL,
-        updated_at TIMESTAMP NOT NULL
+        updated_at TIMESTAMP NOT NULL,
+        generation BIGINT NOT NULL
     )
     """))
     role = os.getenv("SIM_DASH_APP_ROLE", "simdashboard_app").strip()

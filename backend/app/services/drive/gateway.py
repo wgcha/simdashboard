@@ -18,6 +18,7 @@ from __future__ import annotations
 import importlib
 import logging
 import os
+import re
 import threading
 from dataclasses import dataclass
 from datetime import datetime
@@ -31,10 +32,11 @@ logger = logging.getLogger("app.services.drive")
 
 ADAPTER_MODULE = "scx_drive_adapter"
 ADAPTER_MISSING_MESSAGE = (
-    "SCX 드라이브 어댑터 패키지가 설치되지 않았습니다. 대시보드 가상환경에 어댑터 wheel을 설치하세요: "
-    "python -m pip install --no-deps <vd_scx_drive_adapter-*.whl> "
-    "(SCX drive adapter package 'scx_drive_adapter' is not installed; "
-    "install the adapter wheel into the dashboard venv with: pip install --no-deps <wheel>)"
+    "SCX 드라이브 어댑터 패키지(scx_drive_adapter)가 설치되지 않았습니다. 어댑터 wheel(vd_scx_drive_adapter-*.whl)을 "
+    "external-wheels 폴더(소스 PC: 저장소 루트의 external-wheels\\, 폐쇄망 서버: 설치 루트의 state\\external-wheels\\)에 "
+    "복사한 뒤 update.bat(폐쇄망 서버는 오프라인 설치기)을 다시 실행하세요. "
+    "(SCX drive adapter package 'scx_drive_adapter' is not installed; copy the adapter wheel into the "
+    "external-wheels folder and run update.bat, or the offline installer on the server.)"
 )
 LOCK_HELD_MESSAGE = (
     "다른 대시보드 프로세스가 SCX 워커를 사용 중입니다. scx 모드는 단일 프로세스(uvicorn 작업자 1개)만 허용합니다: {path} "
@@ -130,10 +132,19 @@ def map_drive_error(error: BaseException) -> DriveErrorMapping:
     return DRIVE_ERROR_MAP.get(drive_error_code(error) or "", _FALLBACK)
 
 
+_BEARER = re.compile(r"(?i)\bbearer\s+[^\s\"',;]+")
+_JWT_LIKE = re.compile(r"eyJ[A-Za-z0-9_\-]*(?:\.[A-Za-z0-9_\-]*)*")
+
+
+def mask_secrets(text: str) -> str:
+    """Mask ``Bearer <x>`` and JWT-like ``eyJ...`` substrings (defence in depth)."""
+    return _JWT_LIKE.sub("***", _BEARER.sub("Bearer ***", text))
+
+
 def safe_error_message(error: BaseException) -> str:
-    """Adapter messages are already sanitized (contract §3/§6); bound them anyway."""
+    """Adapter messages are already sanitized (contract §3/§6); mask and bound them anyway."""
     message = getattr(error, "message", None) or str(error) or type(error).__name__
-    return str(message)[:200]
+    return mask_secrets(str(message)[:4096])[:200]
 
 
 def to_storage_error(error: BaseException) -> SpdmStorageError:
@@ -215,6 +226,7 @@ class _State:
         self.adapter: Any = None
         self.process_lock: SingleProcessLock | None = None
         self.gateway: Any = None
+        self.gateway_store: Any = None
         self.token_store: Any = None
 
 
@@ -261,7 +273,7 @@ def startup() -> DriveSettings:
 
 def shutdown() -> None:
     with _state.lock:
-        gateway, _state.gateway = _state.gateway, None
+        gateway, _state.gateway, _state.gateway_store = _state.gateway, None, None
         try:
             if gateway is not None:
                 gateway.close()
@@ -291,7 +303,11 @@ def current_settings() -> DriveSettings:
 
 
 def token_store() -> Any:
-    """The process-wide ``DbTokenStore`` (scx mode), or ``None``."""
+    """The process-wide admin ``DbTokenStore`` (scx mode), or ``None``.
+
+    The gateway gets its own :meth:`DbTokenStore.for_gateway` store (own loaded
+    generation, adapter ``TokenBundle`` at the boundary); see :func:`get_drive_gateway`.
+    """
     settings = current_settings()
     if not settings.enabled:
         return None
@@ -299,13 +315,36 @@ def token_store() -> Any:
         if _state.token_store is None:
             from .token_store import DbTokenStore
 
-            _state.token_store = DbTokenStore(settings.secret_key or "", bundle_factory=_bundle_factory())
+            _state.token_store = DbTokenStore(settings.secret_key or "")
         return _state.token_store
 
 
-def _bundle_factory() -> Any:
-    adapter = _state.adapter
-    return getattr(adapter, "TokenBundle", None) if adapter is not None else None
+def existing_gateway() -> Any | None:
+    """The gateway if one was already built; never builds one (status polling)."""
+    with _state.lock:
+        return _state.gateway
+
+
+def gateway_token_store() -> Any | None:
+    with _state.lock:
+        return _state.gateway_store
+
+
+def reset_gateway() -> None:
+    """Close and drop the gateway so the worker forgets its in-memory tokens.
+
+    Called after the admin deletes or re-registers credentials.  The next
+    :func:`get_drive_gateway` builds a new gateway that loads the current row.
+    A late rotation from the closed gateway is fenced off by the row generation.
+    """
+    with _state.lock:
+        gateway, _state.gateway, _state.gateway_store = _state.gateway, None, None
+    if gateway is None:
+        return
+    try:
+        gateway.close()
+    except Exception:  # message is adapter-sanitized; the old worker is abandoned either way
+        logger.warning("SCX drive gateway close failed during credential change")
 
 
 def get_drive_gateway() -> DriveGatewayLike | None:
@@ -319,7 +358,7 @@ def get_drive_gateway() -> DriveGatewayLike | None:
         if _state.adapter is None or _state.process_lock is None or not _state.process_lock.held:
             startup()
         adapter = _state.adapter
-        store = token_store()
+        store = token_store().for_gateway(getattr(adapter, "TokenBundle", None))
         adapter_config = adapter.AdapterConfig(
             server_url=settings.server_url,
             drive_root="~",
@@ -335,6 +374,7 @@ def get_drive_gateway() -> DriveGatewayLike | None:
             work_dir=settings.work_dir,
         )
         _state.gateway = adapter.WorkerDriveGateway(worker_config, store)
+        _state.gateway_store = store
         return _state.gateway
 
 

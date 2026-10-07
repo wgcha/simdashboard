@@ -109,7 +109,7 @@ def initialize_database() -> None:
                 "result_registration_drafts": {"project_id", "request_id", "environment", "case_relative_path", "result_relative_path", "manifest_json", "inspection_json", "approval_json", "capture_id", "status"},
                 "result_registration_files": {"draft_id", "relative_path", "sha256", "size_bytes", "content"},
                 "result_registration_events": {"draft_id", "action", "detail_json", "actor", "occurred_at"},
-                "drive_credentials": {"id", "ciphertext", "key_id", "account_hint", "obtained_at", "updated_by", "updated_at"},
+                "drive_credentials": {"id", "ciphertext", "key_id", "account_hint", "obtained_at", "updated_by", "updated_at", "generation"},
             }
             incompatible = []
             for table_name, expected in required_columns.items():
@@ -1496,7 +1496,8 @@ def ensure_drive_credentials_schema(conn: duckdb.DuckDBPyConnection) -> None:
     """Local development equivalent of additive migration 0036 (SCX drive credentials, stage D0)."""
     conn.execute("""CREATE TABLE IF NOT EXISTS drive_credentials (
         id VARCHAR PRIMARY KEY CHECK (id = 'scx'), ciphertext BLOB NOT NULL, key_id VARCHAR NOT NULL,
-        account_hint VARCHAR, obtained_at TIMESTAMP NOT NULL, updated_by VARCHAR NOT NULL, updated_at TIMESTAMP NOT NULL
+        account_hint VARCHAR, obtained_at TIMESTAMP NOT NULL, updated_by VARCHAR NOT NULL, updated_at TIMESTAMP NOT NULL,
+        generation BIGINT NOT NULL
     )""")
 
 

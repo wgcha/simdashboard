@@ -3,8 +3,9 @@
 Never imported by ``app/``: tests install it as ``sys.modules["scx_drive_adapter"]``
 so the production lazy import in ``app.services.drive.gateway`` exercises the
 same code path as with the real adapter.  The memory drive simulates
-pagination, CONFLICT, NOT_FOUND, BUSY, AUTH_REQUIRED and refresh-token
-rotation (``TokenStore.save`` on every session creation and refresh).
+pagination, CONFLICT, NOT_FOUND, BUSY, AUTH_REQUIRED, refresh-token
+rotation (``TokenStore.save`` on every session creation and refresh) and the
+worker's in-memory token cache (a deleted row does not end a live session).
 """
 from __future__ import annotations
 
@@ -198,6 +199,7 @@ class FakeWorkerDriveGateway:
         self.token_store = token_store
         self.closed = False
         self._bundle: TokenBundle | None = None
+        self._sent_obtained_at: datetime | None = None
         self._lock = threading.Lock()
         self.last_success_at: datetime | None = None
         self.last_error: tuple[str, datetime] | None = None
@@ -207,25 +209,53 @@ class FakeWorkerDriveGateway:
     # -- session / tokens (contract §4.2: every session creation rotates the refresh token) --
 
     def _session(self, op: str, rel: str) -> None:
+        """Like the real worker: tokens live in memory once a session exists.
+
+        ``load()`` is consulted on every call (the real client polls every
+        ``token_poll_interval_s``), but only a *different registered* bundle is
+        adopted.  A deleted row does not stop an existing in-memory session;
+        only closing the gateway does, which is what the dashboard relies on.
+        """
         if self.closed:
             raise DriveError(ErrorCode.UNAVAILABLE, "gateway closed")
         self.drive.calls.append((op, rel))
         loaded = self.token_store.load()
-        if loaded is None:
-            self._fail(ErrorCode.AUTH_REQUIRED)
-            raise DriveError(ErrorCode.AUTH_REQUIRED, "no token registered")
-        if self._bundle is None or self._bundle.obtained_at != loaded.obtained_at:
-            self.drive.sessions += 1
-            rotated = TokenBundle(server_url=loaded.server_url, access_token=f"{loaded.access_token}-a{self.drive.sessions}",
-                                  refresh_token=f"{loaded.refresh_token}-r{self.drive.sessions}",
-                                  obtained_at=datetime.now(timezone.utc), account_hint=loaded.account_hint)
-            self.token_store.save(rotated)   # synchronous, as the worker notification would
-            self._bundle = rotated
-            self.token_refreshed_at = rotated.obtained_at
+        if loaded is not None and not isinstance(loaded, TokenBundle):
+            raise AssertionError("TokenStore.load() must return the adapter TokenBundle type")
+        if self._bundle is None:
+            if loaded is None:
+                self._fail(ErrorCode.AUTH_REQUIRED)
+                raise DriveError(ErrorCode.AUTH_REQUIRED, "no token registered")
+            self._start_session(loaded)
+        elif loaded is not None and loaded.obtained_at not in (self._sent_obtained_at, self._bundle.obtained_at):
+            self._start_session(loaded)
         injected = self.drive.fail_next.pop(op, None)
         if injected is not None:
             self._fail(injected)
             raise DriveError(injected, f"injected {injected.value}", rel)
+
+    def _start_session(self, loaded: TokenBundle) -> None:
+        # contract §4.2: every session creation rotates the refresh token
+        self._sent_obtained_at = loaded.obtained_at
+        self._bundle = loaded
+        self.rotate()
+
+    def rotate(self) -> TokenBundle:
+        """Refresh the in-memory session and notify ``TokenStore.save`` synchronously.
+
+        Tests also call this on a *closed* gateway to simulate a late ``tokens``
+        notification from the old worker's chain.
+        """
+        assert self._bundle is not None
+        self.drive.sessions += 1
+        current = self._bundle
+        rotated = TokenBundle(server_url=current.server_url, access_token=f"{current.access_token}-a{self.drive.sessions}",
+                              refresh_token=f"{current.refresh_token}-r{self.drive.sessions}",
+                              obtained_at=datetime.now(timezone.utc), account_hint=current.account_hint)
+        self.token_store.save(rotated)   # synchronous, as the worker notification would
+        self._bundle = rotated
+        self.token_refreshed_at = rotated.obtained_at
+        return rotated
 
     def _ok(self) -> None:
         self.last_success_at = datetime.now(timezone.utc)

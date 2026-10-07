@@ -66,7 +66,7 @@
 | 조건 | 메시지 요지 |
 |---|---|
 | 필수 설정 누락·형식 오류 | `SCX 드라이브 설정 오류: <변수> — …` |
-| 어댑터 패키지 없음 | `SCX 드라이브 어댑터 패키지가 설치되지 않았습니다 … python -m pip install --no-deps <…whl>` (영문 병기) |
+| 어댑터 패키지 없음 | `SCX 드라이브 어댑터 패키지(scx_drive_adapter)가 설치되지 않았습니다 … wheel을 external-wheels 폴더에 복사한 뒤 update.bat(폐쇄망 서버는 오프라인 설치기)을 다시 실행` (영문 병기, §2의 2단계) |
 | 다른 대시보드 프로세스가 `<WORK_DIR>\dashboard.lock`을 잡고 있음 | `다른 대시보드 프로세스가 SCX 워커를 사용 중입니다 … 단일 프로세스` — uvicorn `--workers 2` 이상도 여기서 거부된다 |
 
 워커 프로세스는 **첫 드라이브 호출 때** 뜬다(지연 시작). 앱 종료 시 `close()`로 워커를 끝낸다.
@@ -82,11 +82,14 @@
 
 저장 방식(integration 02 §3):
 
-- 테이블 `drive_credentials`(행 1개, `id='scx'`), TokenBundle JSON 전체를 `Fernet(SIMDASH_SECRET_ENC_KEY)`로 암호화. 평문 열은 `account_hint`, `obtained_at`, `updated_by`, `updated_at`, `key_id`(키 sha256 앞 8자)뿐.
+- 테이블 `drive_credentials`(행 1개, `id='scx'`), TokenBundle JSON 전체를 `Fernet(SIMDASH_SECRET_ENC_KEY)`로 암호화. 평문 열은 `account_hint`, `obtained_at`, `updated_by`, `updated_at`, `key_id`(키 sha256 앞 8자), `generation`(등록 세대 번호)뿐.
 - 키가 바뀌거나 복호화가 안 되면 `load()`는 없음으로 처리 → 상태 "재로그인 필요", 화면에 "암호화 키가 바뀌었습니다".
 - SDK는 세션을 만들 때마다 refresh 토큰을 회전시킨다. 워커가 알리는 새 토큰은 `DbTokenStore.save()`가 **자기 DB 연결로 즉시 커밋**한다(`updated_by='worker'`). 저장 실패는 ERROR 로그와 관리 화면 경고로 표시한다.
+- **세대 번호로 낡은 저장 차단**: 관리자 등록(`PUT`)마다 행의 `generation`을 이전 값보다 큰 새 값(이전+1과 현재 시각 µs 중 큰 값 — 삭제 뒤 재등록에도 재사용되지 않음)으로 쓴다. 게이트웨이마다 따로 만드는 토큰 저장소(`DbTokenStore.for_gateway`)는 마지막으로 읽은 세대를 기억하고, 워커의 `save()`는 `UPDATE … WHERE id='scx' AND generation=<읽은 세대>`만 한다(INSERT 없음). 0행이면 토큰 내용 없이 경고 로그만 남기고 버린다. 그래서 삭제 뒤 늦게 도착한 회전 토큰이 행을 되살리거나, 이전 계정의 회전 토큰이 새로 등록한 계정을 덮어쓰지 않는다.
+- **삭제·재등록 시 게이트웨이 초기화**: `DELETE`와 `PUT`은 저장 직후 `WorkerDriveGateway`를 닫고 버린다(워커가 메모리의 이전 토큰을 계속 쓰지 않게). 다음 드라이브 호출이 새 게이트웨이를 만들어 현재 행을 읽는다. 삭제 후 첫 호출은 `AUTH_REQUIRED`.
+- 어댑터에는 경계에서만 어댑터의 `TokenBundle`(repr에 토큰이 보일 수 있음)로 바꿔 넘기고, 대시보드 안에서는 repr이 토큰을 가리는 `LocalTokenBundle`만 쓴다. 오류 문구는 `safe_error_message`가 `Bearer <값>`과 `eyJ…` 형태(JWT)를 한 번 더 가린다.
 - API 응답·로그·감사 기록에 토큰 값을 넣지 않는다. 감사: `DRIVE_CREDENTIALS_REGISTERED`(계정 표시명·발급 시각·서버 호스트·key_id), `DRIVE_CREDENTIALS_DELETED`, `DRIVE_CHECK_RUN`.
-- 새 토큰을 등록하면 워커는 최대 약 10초 안에 받아 간다(`WorkerConfig.token_poll_interval_s`). 등록 직후 연결 시험이 "인증 필요"면 잠시 뒤 다시 시험한다.
+- 새 토큰을 등록하면 게이트웨이를 새로 만들므로 등록 직후 연결 시험부터 새 토큰을 쓴다. 요청 본문은 64 KiB까지만 읽는다(`Content-Length`로 먼저 거부, 스트림도 상한). 너무 깊게 중첩된 JSON도 400 `DRIVE_CREDENTIALS_INVALID`.
 
 ## 5. 드라이브 점검 (결정 D7)
 
@@ -117,6 +120,7 @@
 | `UNKNOWN` (토큰은 있으나 워커가 아직 한 번도 호출되지 않음) | 확인 전 | 없음 |
 
 - 배너는 `GET /api/drive/status`를 60초마다 조회한다(로그인 사용자, 상태 문자열만). none 모드면 첫 응답 후 조회를 멈춘다. 상태 조회는 드라이브를 호출하지 않는다(`health()`만).
+- 상태 조회(`/api/drive/status`, `/api/admin/drive/status`)는 **게이트웨이를 만들지 않는다**. 관리자 동작(토큰 등록·연결 시험·점검)이나 이후 드라이브 기능이 이미 만든 게이트웨이의 `health()`만 읽는다. 그래서 재시작 뒤 첫 드라이브 호출 전에는 토큰이 있으면 `UNKNOWN`(배너 없음)이다. 조회 중 어떤 오류(어댑터·설정·DB)도 500이 아니라 `UNAVAILABLE`로 응답한다(백오프 재생성보다 단순하고, 조회마다 워커를 띄울 수 없음).
 - 오류 코드 한글 문구는 `frontend/src/shared/api/drive.ts`의 `DRIVE_ERROR_MESSAGES`(integration 06 §2).
 
 ## 7. API
@@ -124,8 +128,8 @@
 | 메서드 | 경로 | 권한 | 내용 |
 |---|---|---|---|
 | GET | `/api/admin/drive/status` | 전역 관리자 | 모드·서버·루트·토큰 메타·health·워커 버전·토큰 저장 실패 시각 |
-| PUT | `/api/admin/drive/credentials` | 전역 관리자, scx | TokenBundle JSON → `{account_hint, obtained_at, test}` |
-| DELETE | `/api/admin/drive/credentials` | 전역 관리자, scx | 204 |
+| PUT | `/api/admin/drive/credentials` | 전역 관리자, scx | TokenBundle JSON(64 KiB 이하) → `{account_hint, obtained_at, test}`. 게이트웨이 초기화 |
+| DELETE | `/api/admin/drive/credentials` | 전역 관리자, scx | 204. 게이트웨이 초기화 |
 | POST | `/api/admin/drive/test` | 전역 관리자, scx | `stat("")` + `root_identity()` → `{ok, latency_ms, root_identity, error}` |
 | POST | `/api/admin/drive/check` | 전역 관리자, scx | `{test_folder}` → 단계별 결과 표 |
 | GET | `/api/drive/status` | 로그인 사용자 | `{mode, state}` |
@@ -138,7 +142,7 @@
 |---|---|
 | `backend/app/services/drive/config.py` | 환경변수 읽기·검증, 경로 규칙(contract §1) |
 | `backend/app/services/drive/gateway.py` | 모드별 기동 검사, 어댑터 지연 import, `dashboard.lock`, `WorkerDriveGateway` 싱글턴, 계약 Protocol 사본, `DriveError` → `SpdmStorageError`/HTTP 대응표 |
-| `backend/app/services/drive/token_store.py` | `DbTokenStore` |
+| `backend/app/services/drive/token_store.py` | `DbTokenStore`(관리자용 1개 + 게이트웨이마다 `for_gateway()`), 세대 번호 차단 |
 | `backend/app/services/drive/check.py` | 드라이브 점검 |
 | `backend/app/routers/drive.py` | API |
 | `backend/migrations/versions/0036_drive_credentials.py` | PostgreSQL 테이블(DuckDB는 `database.py`) |

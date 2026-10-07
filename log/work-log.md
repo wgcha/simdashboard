@@ -1303,3 +1303,11 @@
 - 시험: 새 `scripts/windows/external-wheels-self-test.ps1`(CI 등록), `source-frontend-build-self-test.ps1`에 없음/있음(sync 뒤 install 순서) fixture, `offline-installer-self-test.ps1` 계약 문자열, `backend/tests/test_windows_external_wheels.py` 7 passed. Linux pwsh 7.4.6(임시)로 변경 PowerShell 파일 구문 검사 통과, `.cmd` fixture를 sh로 바꾼 동일 시나리오와 설치기 내장 함수 시나리오 통과. Windows PowerShell 5.1·`.cmd` fixture 실행(배포 계약 CI)은 이 환경에서 미실행.
 - 문서: ADR 0006, `docs/features/scx-drive.md` §2(폴더에 한 번 복사), `docs/windows-deployment-policy.md`, `docs/windows-server-offline-installation.md`, `deploy/windows/offline/README.md`, 연동 계획 §남은 과제.
 - 미수행: Windows 실기·Server 2022 폐쇄망 설치/업데이트 검증, 독립 검수. 앱의 어댑터 미설치 기동 거부 문구는 아직 `pip install --no-deps` 안내(폴더 안내로 바꿀지 결정 필요).
+
+## 2026-10-07 SCX 드라이브 D0 독립 검수 지적 수정 (브랜치 `claude/scx-drive`, 미커밋)
+
+- 검수: 독립 수동 검수(지적 M1·L1–L4·미결 1건) 반영. Codex Security 스캔(`security-diff-scan`)이 아니며 스캔은 실행하지 않았다.
+- M1: `drive_credentials.generation BIGINT NOT NULL` 추가(미배포 0036을 제자리 수정, DuckDB DDL·PG 기동 검사 열 동일). 관리자 등록은 이전+1과 현재 µs 중 큰 새 세대를 쓰고, 게이트웨이마다 `DbTokenStore.for_gateway()`로 읽은 세대를 기억해 워커 `save()`는 `UPDATE … WHERE generation=<읽은 세대> RETURNING`만 함(INSERT 없음, 0행이면 토큰 없는 경고 후 버림). `DELETE`·`PUT` 직후 `reset_gateway()`로 게이트웨이를 닫아 워커 메모리 토큰을 버림. 가짜 게이트웨이는 메모리 토큰 캐시(행 삭제만으로는 세션이 끝나지 않음)와 늦은 회전 `rotate()`를 모사.
+- L1: 상태 API 2개는 게이트웨이를 만들지 않고(`existing_gateway()`), 어떤 오류도 200 `UNAVAILABLE`. 연결 시험도 게이트웨이 생성 실패를 결과로 반환. L2: `RecursionError` → 400 고정 문구. L3: `Content-Length` 64 KiB 초과 선거부 + 스트림 상한. L4: 내부는 `LocalTokenBundle`, 어댑터 경계(`load()` 반환)에서만 어댑터 `TokenBundle`; `safe_error_message`가 `Bearer <x>`·`eyJ…`를 가림. 미결: 어댑터 미설치 기동 거부 문구를 `external-wheels` 복사 + `update.bat` 안내로 변경.
+- 검증(격리 임시 DB·합성 데이터·가짜 어댑터): `test_drive_foundation.py` 37 passed(DuckDB, 신규 9건). run_identity_migration·postgres_startup·security·openapi_contract_check·storage_provider_boundary 90 passed, `check_openapi_contract.py` OK(API 스키마 불변 → 프런트 재생성 불필요). 임시 PostgreSQL 16(127.0.0.1:55437, 종료·삭제함): 빈 DB `alembic upgrade head` 후 드라이브 시험 36 passed(DuckDB 전용 1건 제외), 0035에 프로젝트 행을 넣고 0036 업그레이드 — 행 보존, 테이블 1개(`drive_credentials`, `generation` 포함)만 추가.
+- 미수행: 이 수정의 재검수, Codex Security 스캔, 실제 어댑터·Windows·Server 2022. 세대 번호는 서버 시계가 크게 뒤로 가면 삭제 뒤 재등록에서 이전 세대보다 작아질 수 있음(같은 프로세스 안에서는 마지막 발급값으로 보정).
