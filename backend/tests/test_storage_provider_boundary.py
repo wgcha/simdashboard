@@ -1,6 +1,8 @@
 """Static check: direct filesystem calls live only in the storage provider (docs/contracts/storage-provider.md §3.1).
 
-Every module under ``backend/app`` is scanned.  Outside ``app/services/storage`` a call of a
+Every module under ``backend/app`` is scanned.  Providers are obtained only through the storage
+package factory (``provider_for_root`` / ``get_storage_provider``); constructing a provider class
+directly outside the package fails (scx-drive plan D1).  Outside ``app/services/storage`` a call of a
 filesystem primitive fails the test unless the module is listed as non-SPDM (S5: app data,
 upload temp, backups, import root, deployment) or the exact call is an explicit non-SPDM use.
 """
@@ -82,7 +84,7 @@ NON_SPDM_CALLS = Counter({
 
 
 # Calls on a storage provider object are the sanctioned path (``fs.is_dir(...)``).
-PROVIDER_RECEIVER = re.compile(r"^(?:.*\.)?(?:fs|base_fs|provider)$|^LocalFsProvider\(|^get_storage_provider\(")
+PROVIDER_RECEIVER = re.compile(r"^(?:.*\.)?(?:fs|base_fs|provider)$|^provider_for_root\(|^get_storage_provider\(")
 
 
 def _call_name(node: ast.Call) -> str | None:
@@ -149,3 +151,48 @@ def test_spdm_storage_no_longer_carries_filesystem_helpers():
     moved = ("_is_reparse", "_assert_safe_existing", "_case_collision", "open_stable_reader",
              "read_stable_bytes", "_publish_no_replace", "_assert_raw_root_path")
     assert [name for name in moved if hasattr(spdm_storage, name)] == []
+
+
+PROVIDER_CLASSES = frozenset({"LocalFsProvider"})
+
+
+def _direct_provider_constructions() -> list[str]:
+    found: list[str] = []
+    for path in sorted(APP.rglob("*.py")):
+        relative = path.relative_to(APP).as_posix()
+        if relative.startswith(PROVIDER_PACKAGE):
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else None
+            if name in PROVIDER_CLASSES:
+                found.append(f"{relative}:{node.lineno}: {ast.unparse(func)}(...)")
+    return found
+
+
+def test_providers_are_constructed_only_inside_the_storage_package():
+    found = _direct_provider_constructions()
+    assert found == [], "construct providers through app.services.storage.provider_for_root:\n" + "\n".join(found)
+
+
+def test_provider_factory_override_reaches_every_entry_point(tmp_path):
+    from app.services import folder_discovery_scan, storage
+    from app.services.storage import factory
+
+    made: list[Path] = []
+
+    class Marker(storage.LocalFsProvider):
+        def __init__(self, root):
+            made.append(Path(root))
+            super().__init__(root)
+
+    assert type(storage.provider_for_root(tmp_path)) is storage.LocalFsProvider
+    with storage.override_provider_factory(Marker):
+        assert isinstance(storage.provider_for_root(tmp_path), Marker)
+        folder_discovery_scan.root_identity(tmp_path)
+    assert made == [tmp_path, tmp_path]
+    assert factory._factory is None
+    assert type(storage.provider_for_root(tmp_path)) is storage.LocalFsProvider

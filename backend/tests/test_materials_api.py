@@ -15,6 +15,7 @@ from app.database_connection import connect
 from app.main import app
 from app.security import hash_password
 from app.services import folder_discovery_environment, materials_catalog
+from app.services.storage import provider_for_root
 
 pytestmark = pytest.mark.duckdb_integration
 
@@ -858,10 +859,11 @@ def test_materials_checks_result_folder_ownership_before_reading_deck_content(ma
             )
         return original_owner_check(conn, root_id, root_key, relative_path, project_id, owner_request_id, environment)
 
-    def observe_sniff(path, budget=None):
+    def observe_sniff(fs, relative, budget=None):
+        path = fs.path(relative)
         if path.parent == result_path:
             sniffed_result_files.append(path.name)
-        return original_sniff(path, budget)
+        return original_sniff(fs, relative, budget)
 
     monkeypatch.setattr(materials_catalog.result_registration_paths, "_owner_conflict", deny_result_folder)
     monkeypatch.setattr(materials_catalog, "_file_roles", observe_sniff)
@@ -1141,7 +1143,7 @@ def test_materials_include_scan_ignores_references_after_end(tmp_path):
     root, _, relative, path = _direct_include_source(tmp_path)
     path.write_text("/END\n/INCLUDE\nmissing.inc\n", encoding="utf-8")
     references = materials_catalog._scan_include_references(
-        path, relative, path.stat().st_size, materials_catalog._ParseBudget(),
+        provider_for_root(root), relative, path.stat().st_size, materials_catalog._ParseBudget(),
     )
     assert references == []
 

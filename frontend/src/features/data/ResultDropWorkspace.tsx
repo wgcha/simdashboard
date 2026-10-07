@@ -367,7 +367,7 @@ export function ResultDropWorkspace({ embedded = false, contextChanging = false,
         <div className="result-drop__rules">
           <p className="result-drop__put"><strong>{ROLE_LABELS[targetRole] ?? targetRole}</strong>에는 {guide.put}{guide.example ? <small> 예: {guide.example}</small> : null}</p>
           <ul>{depthRules(roles).slice(1).reverse().map((rule) => <li key={rule.role}>{rule.text}</li>)}<li>결과 파일만 복사하려면 Scene 폴더 안에</li></ul>
-          <p className="result-drop__auto"><CheckCircle2 aria-hidden="true" />탐색기로 복사해도, 여기서 올려도 30초 안에 자동 반영됩니다.</p>
+          <p className="result-drop__auto"><CheckCircle2 aria-hidden="true" />탐색기로 복사해도, 여기서 올려도 1분 안에 자동 반영됩니다.</p>
         </div>
       </div>
     </section> : null}
@@ -398,7 +398,7 @@ export function ResultDropWorkspace({ embedded = false, contextChanging = false,
       </div> : null}
       {completion ? <div className="result-drop__done" role="status" data-testid="result-drop-complete">
         <p><CheckCircle2 aria-hidden="true" /><strong>{completion.published_files}개 파일을 올렸습니다</strong>{completion.created_folders.length ? ` · 새 폴더 ${completion.created_folders.length}개` : ''} · {formatBytes(completion.published_bytes)}</p>
-        <p className="result-drop__sync">{completion.sync.status === 'REFRESHED' || completion.sync.status === 'UNCHANGED' ? 'Case 결과에 반영했습니다.' : '폴더 확인이 늦어지고 있습니다. 30초 안에 자동으로 다시 확인합니다.'}{completion.state === 'PARTIAL' ? ' 일부 파일은 다른 프로그램이 사용 중이거나 같은 이름이 생겨 옮기지 못했습니다.' : ''}{completion.state === 'ABORTED' ? ' 나머지는 중지했습니다.' : ''}</p>
+        <p className="result-drop__sync">{completion.sync.status === 'REFRESHED' || completion.sync.status === 'UNCHANGED' ? 'Case 결과에 반영했습니다.' : '폴더 확인이 늦어지고 있습니다. 1분 안에 자동으로 다시 확인합니다.'}{completion.state === 'PARTIAL' ? ' 일부 파일은 다른 프로그램이 사용 중이거나 같은 이름이 생겨 옮기지 못했습니다.' : ''}{completion.state === 'ABORTED' ? ' 나머지는 중지했습니다.' : ''}</p>
         {completion.state === 'PARTIAL' ? <div className="result-drop__actions" data-testid="result-drop-partial">
           <Button size="sm" variant="primary" onClick={() => void retryPartial()} disabled={partialBusy}>나머지 다시 옮기기</Button>
           <Button size="sm" variant="ghost" onClick={() => void stopSession(completion.session_id)} disabled={partialBusy}><Square aria-hidden="true" />나머지 중지</Button>

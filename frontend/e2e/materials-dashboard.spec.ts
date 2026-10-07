@@ -104,7 +104,7 @@ async function openMaterials(page: Page) {
 }
 
 test('소재 탭은 폴더를 자동 확인하고 실패해도 기존 Scene을 유지한다', async ({ page }) => {
-  // Fake timers let the test advance the 30 s poll without waiting for it.
+  // Fake timers let the test advance the 60 s poll without waiting for it.
   await page.clock.install()
   await mockMaterialsApi(page)
   const syncBodies: Array<Record<string, unknown>> = []
@@ -123,11 +123,11 @@ test('소재 탭은 폴더를 자동 확인하고 실패해도 기존 Scene을 �
   expect(syncBodies.at(-1)).toEqual({ project_id: projectId, request_id: requestId, environment: 'DISTRIBUTION', force: false })
   await expect(syncBar).toContainText('방금 확인')
 
-  // The 30 s poll reports a change: catalogs are re-read and a short notice appears.
+  // The 60 s poll reports a change: catalogs are re-read and a short notice appears.
   const catalogsBefore = catalogRequests
   const sentBefore = syncBodies.length
   syncQueue.push(syncResult('REFRESHED', { diff: { added: 1, removed: 0, changed: 0 } }))
-  await page.clock.fastForward(30_000)
+  await page.clock.fastForward(60_000)
   await expect.poll(() => syncBodies.length).toBeGreaterThan(sentBefore)
   await expect(syncBar.getByRole('status')).toContainText('새 결과 반영 · Scene +1')
   await expect.poll(() => catalogRequests).toBeGreaterThan(catalogsBefore)

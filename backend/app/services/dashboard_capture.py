@@ -13,7 +13,7 @@ from ..database_connection import ConnectionLike, rows
 from ..domains.dashboard.parser import EVALUATIONS, _pick_usage, build_distribution_scene, fingerprint, parse_scene_name
 from . import spdm_storage
 from . import usage_source_review
-from .storage import get_storage_provider
+from .storage import get_storage_provider, provider_for_root
 from .storage.local import LocalFsProvider
 
 
@@ -55,12 +55,12 @@ def _provider(conn: ConnectionLike) -> LocalFsProvider:
 
 
 def _root_id(root: Path) -> str:
-    return "dashboard-root-" + hashlib.sha256(LocalFsProvider(root).root_identity().encode()).hexdigest()
+    return "dashboard-root-" + hashlib.sha256(provider_for_root(root).root_identity().encode()).hexdigest()
 
 
 def _safe_target(root: Path, relative: str) -> str:
     """Root-relative, strictly resolved Case path (no reparse ancestor, confined to the root)."""
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     lexical = "/".join(PurePosixPath(relative).parts)
     try:
         fs.assert_safe(lexical)
@@ -88,7 +88,7 @@ def _safe_target(root: Path, relative: str) -> str:
 
 
 def _validate_case_root(root: Path, relative: str, environment: str) -> str:
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     target = _safe_target(root, relative)
     if not fs.is_dir(target):
         raise DashboardCaptureError("DASHBOARD_CASE_INVALID", "capture root는 Simulation Case 폴더여야 합니다.")
@@ -192,7 +192,7 @@ def _walk(
     include_path=None,
     excluded_files: list[dict[str, str]] | None = None,
 ) -> list[tuple[str, bytes, str]]:
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     base = _safe_target(root, relative)
     excluded = {"cad", "report", "reports", "final", "validation", "library"}
     allowed = {".csv", ".json", ".jpg", ".jpeg", ".png", ".mp4", ".webm"}

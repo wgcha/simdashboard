@@ -7,7 +7,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
 from . import spdm_storage
-from .storage.local import LocalFsProvider
+from .storage import provider_for_root
 from .storage.provider import UPLOAD_STAGING_DIR
 
 _STAGING_FOLDED = UPLOAD_STAGING_DIR.casefold()
@@ -33,12 +33,12 @@ def normal(relative: str) -> str:
 
 def root_identity(root: Path) -> str:
     """``root_key``: sha256 of the provider's root identity."""
-    return LocalFsProvider(root).root_key()
+    return provider_for_root(root).root_key()
 
 
 def target(root: Path, relative: str) -> str:
     """Root-relative folder to inspect (checked: no reparse ancestor, a directory)."""
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     path = "/".join(normal(relative).split("/")) if relative else ""
     fs.assert_safe(path)
     if not fs.is_dir(path):
@@ -47,7 +47,7 @@ def target(root: Path, relative: str) -> str:
 
 
 def browse(root: Path, relative: str) -> list[dict[str, Any]]:
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     base = target(root, relative)
     entries = []
     started = time.monotonic()
@@ -65,7 +65,7 @@ def browse(root: Path, relative: str) -> list[dict[str, Any]]:
 
 
 def scan(root: Path, relative: str, *, skip_descendants: Callable[[str, str | None], bool] | None = None) -> dict[str, Any]:
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     nodes, issues = [], []
     file_state: list[dict[str, Any]] = []
     files = total_entries = 0

@@ -12,7 +12,7 @@ from uuid import uuid4
 from ..database_connection import ConnectionLike, rows
 from ..media_policy import validate_media_metadata
 from . import dashboard_capture, result_registration_locations, result_registration_paths as paths, spdm_storage, usage_source_review
-from .storage.local import LocalFsProvider
+from .storage import provider_for_root
 from .storage.provider import LEGACY
 
 
@@ -240,7 +240,7 @@ def _current_target(
     if expected_context is not None and _public_context(context) != _public_context(expected_context):
         raise ResultRegistrationError("RESULT_CONTEXT_CHANGED", "검수한 업무 문맥이 현재 경로 연결과 달라졌습니다. 다시 검수하세요.")
     target = paths._safe_existing(root, result_relative_path)
-    if not LocalFsProvider(root).is_dir(target):
+    if not provider_for_root(root).is_dir(target):
         raise ResultRegistrationError("SPDM_FOLDER_UNAVAILABLE", "선택한 결과 경로가 폴더가 아닙니다.")
     paths._owner_conflict(conn, root_id, root_key, case_relative_path, project_id, request_id, scope["environment"])
     paths._owner_conflict(conn, root_id, root_key, result_relative_path, project_id, request_id, scope["environment"])
@@ -945,7 +945,7 @@ def _mirror_files(conn: ConnectionLike, row: dict[str, Any], approval: dict[str,
                              result_relative_path=str(row["result_relative_path"]), expected_root_id=str(row["storage_root_id"]),
                              expected_context=row["context_json"] or {})
     root: Path = target["root"]
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     result_relative = str(row["result_relative_path"])
     paths._lock_path(conn, target["root_key"], result_relative)
     file_by_path = {str(item["relative_path"]).casefold(): item for item in file_rows}

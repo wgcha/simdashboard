@@ -64,7 +64,7 @@ from ..database_connection import connect
 from . import environment_folder_profiles as depth_profiles
 from . import folder_discovery, folder_discovery_environment as environment_service, spdm_storage
 from .folder_discovery_scan import root_identity
-from .storage.local import LocalFsProvider
+from .storage import provider_for_root
 
 MIN_INTERVAL_SECONDS = 60.0
 FORCE_MIN_INTERVAL_SECONDS = 10.0
@@ -159,7 +159,7 @@ class _Lister:
 
     def __init__(self, root: Path):
         self.root = root
-        self.fs = LocalFsProvider(root)
+        self.fs = provider_for_root(root)
         self.entries = 0
         self.issues: list[dict[str, str]] = []
 

@@ -10,7 +10,7 @@ from ..database_connection import ConnectionLike, rows
 from ..parsers.radioss_deck_parser import RadiossDeckParser
 from . import (folder_discovery_environment, folder_schema_hierarchy, folder_discovery_scan, folder_schema_resolver,
                result_registration_paths, spdm_storage)
-from .storage.local import LocalFsProvider
+from .storage import provider_for_root
 
 MAX_FILE_BYTES = 64 * 1024 * 1024
 MAX_TOTAL_BYTES = 256 * 1024 * 1024
@@ -163,20 +163,20 @@ def _candidate_directories(scene: dict[str, Any], scope: dict[str, Any]) -> list
     return unique
 
 
-def _open_deck(path: Path):
-    """Stable reader for one deck file through the storage provider (rooted at its folder)."""
-    return LocalFsProvider(path.parent).open_read(path.name)
+def _open_deck(fs: Any, relative: str):
+    """Stable reader for one deck file through the configured SPDM root's provider."""
+    return fs.open_read(relative)
 
 
-def _file_roles(path: Path, budget: dict[str, Any] | None = None) -> set[str]:
-    name = path.stem.casefold().replace("-", "_").replace(" ", "_")
+def _file_roles(fs: Any, relative: str, budget: dict[str, Any] | None = None) -> set[str]:
+    name = PurePosixPath(relative).stem.casefold().replace("-", "_").replace(" ", "_")
     roles: set[str] = set()
     if re.search(r"(?:^|_)parts?(?:_|$)", name):
         roles.add("parts")
     if re.search(r"(?:^|_)(?:mat(?:erial)?s?|props?|curves?|functions?)(?:_|$)", name):
         roles.add("materials")
     try:
-        with _open_deck(path) as stream:
+        with _open_deck(fs, relative) as stream:
             scanned = 0
             for raw_line in stream:
                 if budget is not None and time.monotonic() - budget["started"] > folder_discovery_scan.MAX_SECONDS:
@@ -312,12 +312,12 @@ def _candidate_sources(scene: dict[str, Any], root: Path, scope: dict[str, Any],
         "started": time.monotonic(), "entries": 0, "sniff_bytes": 0,
         "owned_directories": {}, "ownership_checks": 0,
     }
+    fs = provider_for_root(root)
     for directory_relative in _candidate_directories(scene, scope):
         try:
             directory = result_registration_paths._safe_existing(root, directory_relative, allow_missing_leaf=True)
         except result_registration_paths.ResultRegistrationError as exc:
             raise MaterialsCatalogError(exc.code, str(exc)) from exc
-        fs = LocalFsProvider(root)
         if not fs.exists(directory):
             continue
         if not fs.is_dir(directory):
@@ -362,7 +362,7 @@ def _candidate_sources(scene: dict[str, Any], root: Path, scope: dict[str, Any],
                 budget["sniff_bytes"] += min(size, _MAX_SNIFF_BYTES)
                 if budget["sniff_bytes"] > _MAX_CANDIDATE_SCAN_BYTES:
                     raise MaterialsCatalogError("MATERIALS_CANDIDATE_SCAN_LIMIT", "덱 후보 내용 조사 한도를 초과했습니다.", 413)
-                roles = _file_roles(path, budget)
+                roles = _file_roles(fs, relative, budget)
                 if time.monotonic() - budget["started"] > folder_discovery_scan.MAX_SECONDS:
                     raise MaterialsCatalogError("MATERIALS_CANDIDATE_SCAN_LIMIT", "덱 후보 내용 조사 한도를 초과했습니다.", 413)
                 item = (relative, path, size)
@@ -529,7 +529,7 @@ def _resolve_scene(conn: ConnectionLike, request_id: str, environment: str,
         scene_relative = result_registration_paths._safe_existing(root, selected["relative_path"])
     except result_registration_paths.ResultRegistrationError as exc:
         raise MaterialsCatalogError(exc.code, str(exc)) from exc
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     scene_path = fs.path(scene_relative)
     if not fs.is_dir(scene_relative):
         raise MaterialsCatalogError("MATERIALS_SCENE_INVALID", "선택한 Scene 폴더를 찾을 수 없습니다.", 404)
@@ -577,14 +577,15 @@ class _ParseBudget:
             raise MaterialsCatalogError("MATERIALS_FUNCTION_POINT_LIMIT", "FUNCT 곡선 점 전체는 500,000개 이하여야 합니다.", 413)
 
 
-def _scan_include_references(path: Path, relative: str, expected_size: int,
-                             budget: _ParseBudget) -> list[str]:
+def _scan_include_references(fs: Any, relative: str, expected_size: int,
+                             budget: _ParseBudget, *, source: str | None = None) -> list[str]:
+    """``relative`` names the file in messages; ``source`` (default ``relative``) is the checked path read."""
     references: list[str] = []
     pending_path = False
     actual_size = 0
     ended = False
     try:
-        with _open_deck(path) as stream:
+        with _open_deck(fs, relative if source is None else source) as stream:
             for raw_line in stream:
                 actual_size += len(raw_line)
                 if actual_size > MAX_FILE_BYTES:
@@ -632,6 +633,7 @@ def _include_sources(files: list[tuple[str, Path, int]], root: Path, scope: dict
     sources: list[tuple[str, Path, int]] = []
     visited: set[str] = set()
     active: set[str] = set()
+    fs = provider_for_root(root)
 
     def visit(relative: str, depth: int) -> None:
         budget.check_time()
@@ -645,7 +647,6 @@ def _include_sources(files: list[tuple[str, Path, int]], root: Path, scope: dict
         if len(sources) >= MAX_INCLUDE_FILES:
             raise MaterialsCatalogError("MATERIALS_INCLUDE_FILE_LIMIT", "덱 include 파일 수가 허용 한도를 초과했습니다.", 413)
         try:
-            fs = LocalFsProvider(root)
             checked = result_registration_paths._safe_existing(root, relative)
             fs.assert_safe(checked)
             if not fs.is_file(checked):
@@ -665,7 +666,7 @@ def _include_sources(files: list[tuple[str, Path, int]], root: Path, scope: dict
         budget.add_file(size)
         sources.append((relative, path, size))
         active.add(key)
-        references = _scan_include_references(path, relative, size, budget)
+        references = _scan_include_references(fs, relative, size, budget, source=checked)
         for include_value in references:
             include_relative = _include_target_relative(scope, relative, include_value)
             visit(include_relative, depth + 1)
@@ -686,11 +687,12 @@ def _parse_scene(selected: dict[str, Any], scene_path: Path, root: Path,
         raise MaterialsCatalogError("MATERIALS_DECK_NOT_FOUND", "씬 우선순위 경로에서 Parts와 Materials 덱을 모두 찾을 수 없습니다.", 404)
     budget = _ParseBudget()
     sources = _include_sources(files, root, scope, budget)
+    fs = provider_for_root(root)
 
     def stream_lines(path: Path, expected_size: int):
         actual = 0
         try:
-            with _open_deck(path) as stream:
+            with _open_deck(fs, fs.rel(path)) as stream:
                 for line in stream:
                     actual += len(line)
                     if actual > MAX_FILE_BYTES:

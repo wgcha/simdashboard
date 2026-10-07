@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { folderEnvironmentApi, type FolderEnvironment, type FolderEnvironmentSync, type FolderEnvironmentSyncStatus } from '../api/folderEnvironment'
 
-export const FOLDER_AUTO_SYNC_INTERVAL_MS = 30_000
+/** Auto-reflect period (60 s, user decision 2026-10-07, scx-drive plan §9 D3; local and scx). */
+export const FOLDER_AUTO_SYNC_INTERVAL_MS = 60_000
 /** Server code for folders that are still being copied. Normal; retried on the next poll. */
 export const FOLDER_SCHEMA_FILE_BUSY = 'FOLDER_SCHEMA_FILE_BUSY'
 

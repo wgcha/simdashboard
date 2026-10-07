@@ -33,7 +33,7 @@ class FolderSchemaError(ValueError):
         self.status_code = status_code
         super().__init__(message)
 from .folder_schema_locations import EnvironmentLocations, resolve_request_locations
-from .storage.local import LocalFsProvider
+from .storage import provider_for_root
 
 
 def _decode(value: Any, *, code: str, message: str) -> Any:
@@ -81,20 +81,20 @@ def scan_fingerprints(result: dict[str, Any], root: Path | None = None, *,
     hashed_files = 0
     total_bytes = 0
     started = time.monotonic()
+    fs = provider_for_root(root) if root is not None else None
     for item in file_state:
         relative_path = str(item.get("relative_path") or "")
         size = int(item.get("size") or 0)
         modified_ns = int(item.get("modified_ns") or 0)
         digest = None
         suffix = Path(relative_path).suffix.casefold()
-        if root is not None and suffix in content_extensions:
+        if fs is not None and suffix in content_extensions:
             hashed_files += 1
             if hashed_files > 10_000:
                 raise FolderSchemaError("FOLDER_SCHEMA_CONTENT_FILE_LIMIT", "내용 fingerprint 파일 수 한도를 초과했습니다.", 413)
             max_file_bytes = 64 * 1024 * 1024 if suffix in {".inc", ".rad"} else 32 * 1024 * 1024
             if size > max_file_bytes:
                 raise FolderSchemaError("FOLDER_SCHEMA_CONTENT_FILE_LIMIT", "내용 fingerprint 대상 파일이 허용 크기를 초과했습니다.", 413)
-            fs = LocalFsProvider(root)
             file_path = "/".join(PurePosixPath(relative_path).parts)
             try:
                 fs.assert_safe(file_path)

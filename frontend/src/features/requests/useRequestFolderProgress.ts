@@ -2,12 +2,12 @@ import { useEffect, useState } from 'react'
 
 import { requestFolderProgress, type RequestFolderProgress } from '../../shared/api/simulationDashboard'
 
-export const FOLDER_PROGRESS_POLL_MS = 30_000
+export const FOLDER_PROGRESS_POLL_MS = 60_000
 
 /**
  * Folder-derived progress of a folder-registered request (folder-request-progress.md §3–4).
  * Returns the progress only when `applicable`; `null` means the legacy work-item overview.
- * Re-checked every 30 s while the document is visible. A failed re-check keeps the last
+ * Re-checked every 60 s (the folder auto-reflect period) while the document is visible. A failed re-check keeps the last
  * answer for the same request; a failed first check keeps the legacy overview.
  * `pending` is true until the first answer for the current request arrives, so the
  * caller can hold back the legacy stepper instead of flashing it.

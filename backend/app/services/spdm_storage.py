@@ -22,6 +22,7 @@ from typing import Any, Iterable, Literal
 from fastapi import HTTPException
 
 from ..database_connection import ConnectionLike, rows
+from .storage import provider_for_root
 from .storage.local import LocalFsProvider, prepare_root, resolve_existing_or_none, resolve_root
 from .storage.provider import LEGACY, SpdmStorageError
 
@@ -94,7 +95,7 @@ def _valid_windows_name(name: str) -> bool:
 
 def _ensure_directory(root: Path, relative: str) -> str:
     """Create the exact folder chain (LEGACY zone); returns the root-relative path."""
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     target = ""
     for part in PurePosixPath(relative).parts:
         fs.assert_safe(target)
@@ -117,7 +118,7 @@ def _setting(conn: ConnectionLike) -> str | None:
 
 def _root_identity(path: Path) -> str:
     """Raw root identity (``st_dev:st_ino:<casefold path>``) from the storage provider."""
-    return LocalFsProvider(path).root_identity()
+    return provider_for_root(path).root_identity()
 
 
 def _stored_identity(conn: ConnectionLike) -> str | None:
@@ -217,7 +218,7 @@ def _name(relative: str) -> str:
 
 
 def candidates(root: Path) -> list[Candidate]:
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     found: list[Candidate] = []
     for project_dir in _sorted_children(fs, ""):
         match = _PROJECT.fullmatch(_name(project_dir))
@@ -241,7 +242,7 @@ def candidates(root: Path) -> list[Candidate]:
 
 def _request_parents(root: Path) -> Iterable[tuple[str, str]]:
     """Yield exact Project/WR folders even when CAE has no result leaf yet."""
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     for project_dir in _sorted_children(fs, ""):
         if _PROJECT.fullmatch(_name(project_dir)) is None:
             continue
@@ -620,7 +621,7 @@ def _complete_sidecar(fs: LocalFsProvider, relative: str, checksum: str) -> bool
 
 
 def refresh_binding_files(conn: ConnectionLike, root: Path, binding: dict[str, str]) -> list[dict[str, Any]]:
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     leaf = "/".join(PurePosixPath(binding["relative_path"]).parts)
     # An external producer may remove an entire leaf.  Keep its immutable run
     # history and index rows, mark the current artefacts missing, and let a
@@ -719,7 +720,7 @@ def list_files(conn: ConnectionLike, load_case_id: str) -> list[dict[str, Any]]:
 
 def safe_file_path(root: Path, binding: dict[str, str], relative_path: str) -> str:
     """Root-relative path of one indexed source file (checked: no reparse ancestor, regular file)."""
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     relative = _normalise_relative(relative_path)
     parts = PurePosixPath(relative).parts
     if parts[0] == "reports":
@@ -750,7 +751,7 @@ def write_upload(root: Path, binding: dict[str, str], kind: Literal["results", "
         raise SpdmStorageError("SPDM_FILENAME_INVALID", "파일 이름이 Windows 파일 규칙에 맞지 않습니다.")
     if Path(filename).suffix.lower() not in _FOLDER_KINDS[kind]:
         raise SpdmStorageError("SPDM_EXTENSION_INVALID", "선택한 종류에 허용되지 않는 확장자입니다.")
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     with _storage_lock:
         parent_relative = _report_directory_relative(binding) if kind == "reports" else f"{binding['relative_path']}/{kind}"
         parent = _ensure_directory(root, parent_relative)
@@ -832,7 +833,7 @@ def ingest_ready_results(
             continue
         try:
             path = safe_file_path(root, binding, str(item["relative_path"]))
-            payload, checksum = LocalFsProvider(root).read_stable_digest(path, max_bytes=5_000_000)
+            payload, checksum = provider_for_root(root).read_stable_digest(path, max_bytes=5_000_000)
             content = payload.decode("utf-8")
             stable_name = f"spdm-{hashlib.sha256(str(item['relative_path']).encode('utf-8')).hexdigest()[:12]}-{Path(str(item['name'])).name}"
             execution = run_manual_import(

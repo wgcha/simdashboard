@@ -1319,3 +1319,13 @@
 - 시험: `test_drive_foundation.py` 38 passed(드라이브 트리 불변·호출 연산 ⊆ stat/list_dir/download_to 확인, 정적 시험 `test_drive_check_calls_no_drive_write_methods` 신규). `check_openapi_contract.py` OK, 프런트 tsc 통과, e2e `drive-admin` 5/5.
 - 문서: `docs/features/scx-drive.md` §5 표·설명, 연동 계획 D7 결정·구현 표. C2·C7은 점검으로 확인하지 않으며 D3에서 전용 시험 공간의 명시적 쓰기 수용 시험으로 남김.
 - 미수행: 독립 검수, 실제 어댑터·드라이브 확인.
+
+## 2026-10-07 SCX 드라이브 D1 공급자 주입 리팩터링·자동 반영 60초 (브랜치 `claude/scx-drive`, 미커밋)
+
+- 주입점: `backend/app/services/storage/factory.py` `provider_for_root(root)`(기본 `LocalFsProvider(root)`, 동작 불변), `set_provider_factory`/`override_provider_factory`(시험용 교체). `get_storage_provider(conn)`도 팩터리를 거친다. `local.provider_for_root`(미사용)는 팩터리로 옮김.
+- 변경: storage 패키지 밖 `LocalFsProvider(` 직접 생성 105회(12개 모듈: case_finalization 53, result_registration_paths 12, result_drop_upload 10, spdm_storage 8, result_registration_locations 5, materials_catalog·dashboard_capture·folder_discovery_scan 각 4, result_registration 2, folder_auto_discovery·folder_schema_resolver·folder_request_progress 각 1) → `provider_for_root(`. 시그니처·쓰기 구역·LEGACY 호출 모듈 검사·고정 쓰기 불변. 형 표기 `LocalFsProvider`는 유지(생성 아님).
+- `materials_catalog`: 덱 파일을 부모 폴더 루트 공급자로 열던 우회 제거 → 설정 루트 공급자 상대 경로(`_open_deck(fs, relative)`, `_file_roles(fs, relative, budget)`, `_scan_include_references(fs, relative, size, budget, source=)`; `case_finalization._include_closure` 호출도 같이). `folder_schema_resolver.scan_fingerprints`는 공급자를 한 번만 생성.
+- 경계 시험: storage 패키지 밖 공급자 클래스 직접 생성 금지, 팩터리 교체 확인(`test_storage_provider_boundary.py` 신규 2건). 수신자 허용 정규식 `LocalFsProvider(` → `provider_for_root(`.
+- 자동 반영 60초(§9 D3, local 포함): 프런트 `FOLDER_AUTO_SYNC_INTERVAL_MS`·`FOLDER_PROGRESS_POLL_MS` 60 000, 서버 `folder_request_progress.MEMO_SECONDS` 60, 결과 등록 안내·`result_drop_upload` 문구 "1분 안에", e2e 기대값(`materials-dashboard` fastForward 60 000, `result-drop-upload` 문구). 서버 합치기 간격(20초/수동 5초)은 그대로. 문서: folder-schema-refresh, result-registration, folder-request-progress 계약, improvement-roadmap, storage-provider 계약 §4 메모, 연동 계획 §4 D1 결과·§9(20:25 결정 행 추가).
+- 검증(격리 임시 DB·합성 데이터): 백엔드 전체 `pytest -q` 2249 passed·14 skipped·11 failed — 11건(architecture_check 1, postgres_portability 1, project_cleanup postgres_startup 1, request_load_case_create_slice 1, rocky8_one_command_deploy 6, system_health_slice 1)은 HEAD 임시 worktree에서도 동일 실패(기존 실패). `check_openapi_contract.py` OK. 프런트 `tsc -b` 통과, `check:architecture`는 기존 4건만, e2e `materials-dashboard`·`result-drop-upload` 13/13.
+- 미수행: 독립 검수(Sol/Astra), Codex Security(보안 경계 변경 없음 — 생성 경로만 바뀜), Windows·Server 2022 실기.

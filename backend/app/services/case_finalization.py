@@ -40,6 +40,7 @@ from ..database_connection import ConnectionLike
 from ..config import security_settings
 from . import case_finalization_jobs, dashboard_capture, folder_schema_locations, folder_schema_resolver, materials_catalog, result_registration_paths, spdm_storage
 from .storage import local as storage_local
+from .storage import provider_for_root
 from .storage.local import LocalFsProvider
 from .storage.provider import FINAL, FINAL_SUMMARY_FILE, StorageError
 
@@ -434,7 +435,7 @@ def _storage_error(exc: spdm_storage.SpdmStorageError, relative: str) -> CaseFin
 
 def _hash_source(root: Path, relative: str, *, on_progress: Callable[[int], None] | None = None) -> tuple[int, str]:
     """(size, sha256) streamed through the stable reader (constant memory)."""
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     try:
         path = result_registration_paths._safe_existing(root, relative)
         if not fs.is_file(path):
@@ -460,7 +461,7 @@ def _skipped_name(name: str, attributes: int) -> bool:
 def _scan_scene_files(scope: dict[str, Any]) -> list[dict[str, Any]]:
     """Every file below the basis Scenes (listing + lstat only; no content read)."""
     root: Path = scope["root"]
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     found: dict[str, dict[str, Any]] = {}
     visited = 0
     blocked = scope["blocked_paths"]
@@ -528,7 +529,7 @@ def _include_closure(scope: dict[str, Any], entry_files: list[str]) -> tuple[lis
         if not any(_under(scene_root, relative) for scene_root in allowed_scene_roots) or _blocked(relative, blocked):
             raise CaseFinalizationError("FINALIZATION_INCLUDE_OUT_OF_SCOPE", f"덱 include 파일이 확정 Scene 범위 밖에 있습니다: {PurePosixPath(relative).name}")
         try:
-            fs = LocalFsProvider(scope["root"])
+            fs = provider_for_root(scope["root"])
             checked = result_registration_paths._safe_existing(scope["root"], relative)
             fs.assert_safe(checked)
             if not fs.is_file(checked) or PurePosixPath(checked).suffix.casefold() not in DECK_EXTENSIONS:
@@ -538,7 +539,7 @@ def _include_closure(scope: dict[str, Any], entry_files: list[str]) -> tuple[lis
             visited.add(key)
             try:
                 budget.add_file(size)
-                references = materials_catalog._scan_include_references(fs.path(checked), relative, size, budget)
+                references = materials_catalog._scan_include_references(fs, relative, size, budget, source=checked)
             except materials_catalog.MaterialsCatalogError as exc:
                 if exc.code not in _UNPARSED_DECK_CODES:
                     raise
@@ -572,7 +573,7 @@ def _pin_directory_chain(root: Path, directory: str) -> Iterator[None]:
     """Pin every existing directory ancestor (storage provider) without allowing Windows rename/reparse swaps."""
     with ExitStack() as stack:
         try:
-            stack.enter_context(LocalFsProvider(root).pin(directory))
+            stack.enter_context(provider_for_root(root).pin(directory))
         except spdm_storage.SpdmStorageError as exc:
             raise CaseFinalizationError(exc.code, str(exc)) from exc
         yield
@@ -580,7 +581,7 @@ def _pin_directory_chain(root: Path, directory: str) -> Iterator[None]:
 
 def _source_stat(root: Path, relative: str) -> tuple[int, int]:
     """(size, mtime ns) of a regular, link-free source file."""
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     try:
         path = result_registration_paths._safe_existing(root, relative)
         info = fs.stat(path, follow_links=False, missing_ok=True)
@@ -709,14 +710,14 @@ def _request_lock(path: str, root: Path) -> Iterator[None]:
     """Process-wide, OS-released lock (storage provider); the persistent file is never deleted."""
     with ExitStack() as stack:
         try:
-            stack.enter_context(LocalFsProvider(root).lock(path, zone=FINAL))
+            stack.enter_context(provider_for_root(root).lock(path, zone=FINAL))
         except spdm_storage.SpdmStorageError as exc:
             raise CaseFinalizationError(exc.code, str(exc)) from exc
         yield
 
 
 def _ensure_dir(root: Path, relative: str) -> str:
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     current = ""
     with ExitStack() as pins:
         pins.enter_context(_pin_directory_chain(root, current))
@@ -765,7 +766,7 @@ def _read_json(root: Path, path: str, *, status_metadata_budget: list[int] | Non
             status_metadata_budget[0] += size
 
     try:
-        payload = LocalFsProvider(root).read_small_nofollow(path, max_bytes=max_bytes, before_read=charge)
+        payload = provider_for_root(root).read_small_nofollow(path, max_bytes=max_bytes, before_read=charge)
         if payload is None:
             return None
         value = json.loads(payload.decode("utf-8"))
@@ -784,7 +785,7 @@ def _disk_check(root: Path, final_relative: str, required: int) -> dict[str, Any
     """Free space on the Final volume against ``required`` + margin (``shutil.disk_usage``)."""
     margin = _disk_margin(required)
     try:
-        free = LocalFsProvider(root).free_bytes(final_relative)
+        free = provider_for_root(root).free_bytes(final_relative)
     except (OSError, spdm_storage.SpdmStorageError):
         free = None
     return {"required_bytes": required, "margin_bytes": margin, "free_bytes": free,
@@ -810,7 +811,7 @@ def preview(conn: ConnectionLike, *, project_id: str, request_id: str, environme
     scope = _scope(conn, project_id, request_id, environment, case_id, capture_id)
     final_relative, metadata_relative = _final_paths(scope)
     request_root = result_registration_paths._safe_existing(scope["root"], scope["scope"]["request_relative_path"])
-    if not LocalFsProvider(scope["root"]).is_dir(request_root):
+    if not provider_for_root(scope["root"]).is_dir(request_root):
         raise CaseFinalizationError("FINALIZATION_REQUEST_FOLDER_INVALID", "확정된 의뢰 폴더를 찾을 수 없습니다.")
     if not spdm_storage._valid_windows_name(scope["case_label"]):
         raise CaseFinalizationError("FINALIZATION_CASE_LABEL_INVALID", "Case 이름을 안전한 Windows 폴더 이름으로 사용할 수 없습니다.")
@@ -847,7 +848,7 @@ def preview(conn: ConnectionLike, *, project_id: str, request_id: str, environme
         plan_bytes = _encode(plan)
         if len(plan_bytes) > MAX_PLAN_BYTES:
             raise CaseFinalizationError("FINALIZATION_METADATA_LIMIT", "최종확정 계획이 메타데이터 크기 제한을 초과했습니다.")
-        fs = LocalFsProvider(scope["root"])
+        fs = provider_for_root(scope["root"])
         plan_path = fs.join(operation_dir, "plan.json")
         with _pin_directory_chain(scope["root"], operation_dir):
             fs.assert_safe(operation_dir)
@@ -1198,7 +1199,7 @@ def validate_report(report_format: str, upload: BinaryIO) -> dict[str, Any]:
 
 
 def _hash_path(path: str, root: Path, max_bytes: int) -> tuple[str, int]:
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     try:
         fs.assert_safe(path)
         if not fs.is_file(path):
@@ -1221,7 +1222,7 @@ def _hash_path(path: str, root: Path, max_bytes: int) -> tuple[str, int]:
 
 
 def _write_temp(parent: str, root: Path, source: BinaryIO, operation_id: str, max_bytes: int) -> tuple[str, str, int]:
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     temporary = fs.join(parent, f".codex-partial-{operation_id}-{uuid4().hex}")
     digest = hashlib.sha256()
     size = 0
@@ -1249,7 +1250,7 @@ def _write_temp(parent: str, root: Path, source: BinaryIO, operation_id: str, ma
 
 def _write_signed_metadata(operation_dir: str, root: Path, name: str, record: dict[str, Any],
                            *, max_bytes: int = MAX_METADATA_BYTES) -> None:
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     payload = _encode(record)
     if len(payload) > max_bytes:
         raise CaseFinalizationError("FINALIZATION_METADATA_LIMIT", "최종확정 기록이 메타데이터 크기 제한을 초과했습니다.")
@@ -1269,7 +1270,7 @@ def _write_signed_metadata(operation_dir: str, root: Path, name: str, record: di
 
 
 def _read_staged_reports(operation_dir: str, root: Path, plan: dict[str, Any]) -> dict[str, Any] | None:
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     path = fs.join(operation_dir, "reports.json")
     if not fs.exists(path, follow_links=False):
         return None
@@ -1290,7 +1291,7 @@ def _load_operation_plan(conn: ConnectionLike, base_scope: dict[str, Any], opera
                          operation_id: str, project_id: str, request_id: str, environment: str,
                          case_id: str, capture_id: str) -> dict[str, Any]:
     root: Path = base_scope["root"]
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     plan_path = fs.join(operation_dir, "plan.json")
     if not fs.exists(plan_path, follow_links=False):
         raise CaseFinalizationError("FINALIZATION_PLAN_NOT_FOUND", "미리보기 계획을 찾을 수 없습니다. 새 미리보기를 만드세요.")
@@ -1327,7 +1328,7 @@ def _report_operation(conn: ConnectionLike, *, project_id: str, request_id: str,
     try:
         metadata_dir = result_registration_paths._safe_existing(root, metadata_relative, allow_missing_leaf=True)
         operation_dir = result_registration_paths._safe_existing(root, operation_relative, allow_missing_leaf=True)
-        if not LocalFsProvider(root).is_dir(metadata_dir) or not LocalFsProvider(root).is_dir(operation_dir):
+        if not provider_for_root(root).is_dir(metadata_dir) or not provider_for_root(root).is_dir(operation_dir):
             raise CaseFinalizationError("FINALIZATION_PLAN_NOT_FOUND", "미리보기 계획을 찾을 수 없습니다. 새 미리보기를 만드세요.")
         identity = {"operation_id": operation_id, "project_id": project_id, "request_id": request_id,
                     "environment": environment, "case_id": case_id, "capture_id": capture_id}
@@ -1358,7 +1359,7 @@ def stage_report(conn: ConnectionLike, *, project_id: str, request_id: str, envi
     checked = validate_report(report_format, upload)
     base_scope, root, metadata_dir = target["base_scope"], target["root"], target["metadata_dir"]
     operation_dir, identity, plan = target["operation_dir"], target["identity"], target["plan"]
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     staging_dir = _ensure_dir(root, f"{target['operation_relative']}/reports")
     temporary: str | None = None
     try:
@@ -1467,7 +1468,7 @@ def _plan_sources_valid(conn: ConnectionLike, plan: dict[str, Any], *, project_i
 
 def _shallow_matches(root: Path, relative: str, size: int) -> bool:
     """Existence and recorded size only (status history that is not displayed)."""
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     path = result_registration_paths._safe_existing(root, relative)
     fs.assert_safe(path)
     info = fs.stat(path, follow_links=False, missing_ok=False)
@@ -1478,7 +1479,7 @@ def _verify_outputs(scope: dict[str, Any], plan: dict[str, Any], output_paths: d
                     reports: list[dict[str, Any]] | None = None, *, deep: bool = True) -> bool:
     """``deep`` re-hashes every output; otherwise existence and recorded size only."""
     root: Path = scope["root"]
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     for item in plan["files"]:
         category = str(item["category"])
         if category not in output_paths:
@@ -1521,7 +1522,7 @@ def _verify_outputs(scope: dict[str, Any], plan: dict[str, Any], output_paths: d
 
 def _reports_directory_entries(root: Path, relative: str, operation_id: str) -> list[tuple[str, bool]]:
     """Entries of this operation's Final/Report folder, without its own partial temp files."""
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     try:
         path = result_registration_paths._safe_existing(root, relative, allow_missing_leaf=True)
         if not fs.exists(path, follow_links=False):
@@ -1550,7 +1551,7 @@ def _reports_directory_entries(root: Path, relative: str, operation_id: str) -> 
 
 def _remove_staged_reports(root: Path, operation_dir: str, plan: dict[str, Any], history: dict[str, Any]) -> None:
     """After completion, drop this operation's own staged copies (hash in the signed history); best effort."""
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     staging_dir = fs.join(operation_dir, "reports")
     try:
         if not fs.is_dir(staging_dir):
@@ -1604,7 +1605,7 @@ def _completed_if_valid(conn: ConnectionLike, base_scope: dict[str, Any], *, pro
     """Signed, in-scope completed record; ``deep`` re-hashes every output, otherwise existence and size."""
     operation_relative = f"{metadata_relative}/{operation_id}"
     try:
-        fs = LocalFsProvider(base_scope["root"])
+        fs = provider_for_root(base_scope["root"])
         operation_dir = result_registration_paths._safe_existing(base_scope["root"], operation_relative)
         fs.assert_safe(operation_dir)
         plan_path = fs.join(operation_dir, "plan.json")
@@ -1668,7 +1669,7 @@ def _job_key(root: Path, relative: str) -> str:
 @contextmanager
 def _operation_lock(root: Path, operation_dir: str) -> Iterator[bool]:
     """Per-operation copy-job lock without waiting: yields ``False`` while a copy job holds it."""
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     try:
         lock = fs.try_lock(_operation_paths(operation_dir)["lock"], zone=FINAL)
         lock.__enter__()
@@ -1685,7 +1686,7 @@ def _operation_lock(root: Path, operation_dir: str) -> Iterator[bool]:
 
 def _read_signed(root: Path, path: str, field: str, domain: bytes, *,
                  max_bytes: int = MAX_METADATA_BYTES) -> dict[str, Any] | None:
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     try:
         if not fs.exists(path, follow_links=False):
             return None
@@ -1771,7 +1772,7 @@ def _copied_line(job: dict[str, Any], case_relative_path: str, size: int, digest
 def _read_copied(root: Path, operation_relative: str, job: dict[str, Any]) -> dict[str, tuple[int, str]]:
     """Signed lines of files already staged by earlier attempts (torn or foreign lines are ignored)."""
     path = _operation_paths(operation_relative)["copied"]
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     copied: dict[str, tuple[int, str]] = {}
     try:
         info = fs.stat(path, follow_links=False, missing_ok=True)
@@ -1889,7 +1890,7 @@ def confirm(conn: ConnectionLike, *, project_id: str, request_id: str, environme
     formats = [fmt for fmt in REPORT_FORMATS if fmt in set(report_formats)]
     base_scope = _scope_for_status(conn, project_id, request_id, environment, case_id)
     _final_relative, metadata_relative = _final_paths(base_scope)
-    base_fs = LocalFsProvider(base_scope["root"])
+    base_fs = provider_for_root(base_scope["root"])
     metadata_dir = result_registration_paths._safe_existing(base_scope["root"], metadata_relative, allow_missing_leaf=True)
     if not base_fs.is_dir(metadata_dir):
         raise CaseFinalizationError("FINALIZATION_PLAN_NOT_FOUND", "미리보기 계획을 찾을 수 없습니다. 새 미리보기를 만드세요.")
@@ -1931,7 +1932,7 @@ def _prepare_job(conn: ConnectionLike, base_scope: dict[str, Any], operation_dir
     scope = _scope(conn, identity["project_id"], identity["request_id"], identity["environment"],
                    identity["case_id"], identity["capture_id"])
     root: Path = scope["root"]
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     plan = _load_operation_plan(conn, base_scope, operation_dir, **identity)
     expected_files, expected_excluded, expected_unchecked = _build_files(scope)
     _verify_plan_scope(plan, scope, operation_id, expected_files, expected_excluded, expected_unchecked)
@@ -2062,7 +2063,7 @@ def _complete_marker_valid(root: Path, plan: dict[str, Any], job: dict[str, Any]
 
 
 def _run_job_locked(root: Path, operation_dir: str) -> str:
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     paths = _operation_paths(operation_dir)
     plan = _read_signed(root, f"{operation_dir}/plan.json", "plan_signature", PLAN_DOMAIN, max_bytes=MAX_PLAN_BYTES)
     job = _read_job(root, operation_dir)
@@ -2107,7 +2108,7 @@ def _run_job_locked(root: Path, operation_dir: str) -> str:
 def _assert_staging_safe(root: Path, relative: str) -> None:
     """Every existing component of a staging path is a plain folder/file (no link/reparse)."""
     try:
-        LocalFsProvider(root).assert_safe(relative)
+        provider_for_root(root).assert_safe(relative)
     except spdm_storage.SpdmStorageError as exc:
         raise CaseFinalizationError("FINALIZATION_STAGING_UNSAFE", "임시 폴더 경로에 바로가기(reparse point)가 있습니다. 관리자에게 문의하세요.") from exc
 
@@ -2118,7 +2119,7 @@ def _ensure_staging_dir(root: Path, relative: str, ensured: set[str]) -> None:
     ``ensured`` only skips ``mkdirs``; callers re-check the chain under a pin before every
     write (review H1). Safety is asserted before anything is created (review L6).
     """
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     _assert_staging_safe(root, relative)
     if relative not in ensured:
         # Re-review L6: one level at a time, each created under its pinned, re-checked parent.
@@ -2153,7 +2154,7 @@ def _stage_file(root: Path, source_relative: str, staged_relative: str, partial_
     The move happens with both staging parent chains pinned (Windows: no rename/junction
     swap possible) and re-checked for links inside the pin (review H1).
     """
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     source = _relative(source_relative)
     try:
         source_path = result_registration_paths._safe_existing(root, source)
@@ -2198,7 +2199,7 @@ def _stage_file(root: Path, source_relative: str, staged_relative: str, partial_
 
 def _clear_partial(root: Path, partial_dir: str) -> None:
     """Partial files of interrupted attempts (always this operation's own; redone from the start)."""
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     with _pin_directory_chain(root, partial_dir):
         _assert_staging_safe(root, partial_dir)
         if fs.is_link(partial_dir):
@@ -2224,7 +2225,7 @@ def _strict_tree(root: Path, base: str) -> tuple[set[str], set[str]]:
     Anything that is not a regular file or a plain folder (symlink, junction/reparse
     point, device, ...) raises ``FINALIZATION_STAGING_UNEXPECTED`` (review M1).
     """
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     unexpected = CaseFinalizationError("FINALIZATION_STAGING_UNEXPECTED", "폴더에 일반 파일·폴더가 아닌 항목(바로가기 등)이 있습니다. 관리자에게 문의하세요.")
     try:
         if fs.is_link(base) or not fs.is_dir(base):
@@ -2261,7 +2262,7 @@ def _assert_exact_tree(root: Path, base: str, case_paths: list[str]) -> None:
 
 def _execute_job(root: Path, plan: dict[str, Any], job: dict[str, Any], progress: _Progress,
                  paths: dict[str, str]) -> None:
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     operation_dir = paths["op"]
     operation_id = str(plan["operation_id"])
     outputs = _expected_output_paths(plan)
@@ -2349,7 +2350,7 @@ def _execute_job(root: Path, plan: dict[str, Any], job: dict[str, Any], progress
 
 def _stage_cae(root: Path, files: list[dict[str, Any]], job: dict[str, Any], progress: _Progress,
                paths: dict[str, str], done: dict[str, tuple[int, str]], hashes: dict[str, str], ensured: set[str]) -> None:
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     progress.update(phase="COPYING", files_done=0, bytes_done=0, force=True)
     _ensure_staging_dir(root, paths["CAE"], ensured)
     for item in files:
@@ -2376,7 +2377,7 @@ def _stage_cae(root: Path, files: list[dict[str, Any]], job: dict[str, Any], pro
 
 def _stage_reports(root: Path, reports: list[dict[str, Any]], progress: _Progress, paths: dict[str, str],
                    ensured: set[str]) -> None:
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     report_dir = paths["Reports"]
     _ensure_staging_dir(root, report_dir, ensured)
     wanted = {str(item["file_name"]).casefold() for item in reports}
@@ -2413,7 +2414,7 @@ def _stage_reports(root: Path, reports: list[dict[str, Any]], progress: _Progres
 def _verify_staged_cae(root: Path, files: list[dict[str, Any]], job: dict[str, Any], progress: _Progress,
                        paths: dict[str, str], hashes: dict[str, str], ensured: set[str]) -> None:
     """Read every staged file back (constant memory) and compare with the pinned/copied hash."""
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     progress.update(phase="VERIFYING", files_done=0, bytes_done=0, current_file=None, force=True)
     expected: set[str] = set()
     for item in files:
@@ -2449,7 +2450,7 @@ def _verify_staged_cae(root: Path, files: list[dict[str, Any]], job: dict[str, A
 def _published_matches(root: Path, plan: dict[str, Any], reports: list[dict[str, Any]], category: str,
                        destination: str, hashes: dict[str, str]) -> bool:
     """An existing destination is this operation's own output: exactly the expected files, hash-verified."""
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     try:
         fs.assert_safe(destination)
         if not fs.is_dir(destination):
@@ -2491,7 +2492,7 @@ def _rename_with_retry(fs: LocalFsProvider, source: str, destination: str) -> No
 def _output_signature(root: Path, output_paths: dict[str, str], files: list[dict[str, Any]],
                       reports: list[dict[str, Any]]) -> str | None:
     """Stat-only identity of every output (path, size, mtime ns, file id); ``None`` when any is missing."""
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     rows = []
     try:
         for relative in ([f"{output_paths['CAE']}/{item['case_relative_path']}" for item in files]
@@ -2525,7 +2526,7 @@ def _verify_published(root: Path, plan: dict[str, Any], completed_files: list[di
     before = _output_signature(root, outputs, completed_files, reports)
     if progress is not None:
         progress.update(phase="PUBLISHING", files_done=0, bytes_done=0, force=True)
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     for item in completed_files:
         relative = f"{outputs['CAE']}/{item['case_relative_path']}"
         try:
@@ -2573,7 +2574,7 @@ def _verified_marker_matches(root: Path, operation_dir: str, completed: dict[str
 
 def _write_complete(root: Path, plan: dict[str, Any], job: dict[str, Any], completed_files: list[dict[str, Any]],
                     reports: list[dict[str, Any]], outputs: dict[str, str], *, confirmed_at: str | None = None) -> dict[str, Any]:
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     operation_dir = str(plan["metadata_relative_path"])
     complete_path = fs.join(operation_dir, "complete.json")
     completed = _signed_record({
@@ -2610,7 +2611,7 @@ def _write_complete(root: Path, plan: dict[str, Any], job: dict[str, Any], compl
 
 def _cleanup_after_complete(root: Path, plan: dict[str, Any], operation_dir: str) -> None:
     """Best effort: this operation's staged report uploads and its (now empty) staging folders."""
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     staged = _read_staged_reports(operation_dir, root, plan)
     _remove_staged_reports(root, operation_dir, plan, dict((staged or {}).get("history") or {}))
     paths = _operation_paths(operation_dir)
@@ -2652,7 +2653,7 @@ def job_status(conn: ConnectionLike, *, project_id: str, request_id: str, enviro
     if (not job or (job.get("project_id"), job.get("request_id"), job.get("environment"), job.get("case_id")) !=
             (project_id, request_id, str(environment).upper(), case_id)):
         raise not_found
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     if fs.exists(fs.join(operation_dir, "complete.json"), follow_links=False):
         record = _completed_if_valid(conn, base_scope, project_id=project_id, request_id=request_id,
                                      environment=environment, case_id=case_id, capture_id=str(job.get("capture_id")),
@@ -2707,7 +2708,7 @@ def _submit_in_scope(conn: ConnectionLike, root: Path, candidates: list[tuple[st
 
 def _interrupted_jobs(root: Path, metadata_dirs: list[str]) -> list[tuple[str, dict[str, Any]]]:
     """QUEUED/RUNNING jobs without ``complete.json`` (filesystem only, no DB connection held)."""
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     found: list[tuple[str, dict[str, Any]]] = []
     for metadata_relative in metadata_dirs:
         try:
@@ -2790,7 +2791,7 @@ def _status_operation(conn: ConnectionLike, scope: dict[str, Any], project_id: s
     records status actually shows is done by ``status`` (``deep`` argument tuple).
     """
     root: Path = scope["root"]
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     fs.assert_safe(operation_dir)
     operation_id = PurePosixPath(operation_dir).name
     plan_path = fs.join(operation_dir, "plan.json")
@@ -2881,7 +2882,7 @@ def _scan_operations(conn: ConnectionLike, scope: dict[str, Any], project_id: st
     candidates: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]] = []
     unverified_count = 0
     metadata_budget = [0]
-    fs = LocalFsProvider(scope["root"])
+    fs = provider_for_root(scope["root"])
     if fs.is_dir(metadata_dir):
         inspected_items = 0
         for entry in fs.list(metadata_dir):
@@ -3076,7 +3077,7 @@ def _format_time(value: datetime) -> str:
 
 def _signed_completions(root: Path, metadata_relative: str) -> list[dict[str, Any]]:
     """Every signed ``complete.json`` of the request (DB-free; used only when the pointer is missing)."""
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     found: list[dict[str, Any]] = []
     try:
         entries = fs.list(metadata_relative)
@@ -3144,7 +3145,7 @@ _SUMMARY_CACHE_LOCK = threading.Lock()
 def _summary_file(root: Path, final_relative: str) -> tuple[str, dict[str, Any] | None]:
     """(state, parsed) of ``Final/<SUMMARY_FILE>``: MISSING, FOREIGN (not ours: link, other file,
     other format, too large) or OURS. Read-only; parsed content is cached by (size, mtime, id)."""
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     relative = f"{final_relative}/{SUMMARY_FILE}"
     try:
         info = fs.stat(relative, follow_links=False, missing_ok=True)
@@ -3199,7 +3200,7 @@ def _entry_from_designation(root: Path, metadata_relative: str, final_relative: 
 
 def _clean_stale_summary_temps(root: Path, final_relative: str) -> None:
     """Review L3: this summary's own temp files older than an hour (exact name pattern only)."""
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     cutoff = time.time_ns() - SUMMARY_TEMP_MAX_AGE_SECONDS * 1_000_000_000
     try:
         for entry, _attributes in fs.list_detailed(final_relative):
@@ -3218,7 +3219,7 @@ def _write_summary(root: Path, final_relative: str, environment: str, entry: dic
     A pre-existing file that is not our summary (other content, link, other format) is never
     replaced (``FINALIZATION_SUMMARY_CONFLICT``) unless ``replace_foreign`` (audited repair override).
     """
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     state, _existing = _summary_file(root, final_relative)
     if state == "FOREIGN" and not replace_foreign:
         raise CaseFinalizationError(
@@ -3403,7 +3404,7 @@ def repair_summary(conn: ConnectionLike, *, project_id: str, request_id: str, en
     final_relative, metadata_relative = _final_paths(scope)
     env = str(environment).upper()
     metadata_dir = result_registration_paths._safe_existing(root, metadata_relative, allow_missing_leaf=True)
-    if not LocalFsProvider(root).is_dir(metadata_dir):
+    if not provider_for_root(root).is_dir(metadata_dir):
         raise CaseFinalizationError("FINALIZATION_NO_CURRENT", "완료된 Final이 없어 요약 파일을 만들 수 없습니다.")
     unverified = CaseFinalizationError(
         "FINALIZATION_CURRENT_UNVERIFIED",

@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from ..database_connection import ConnectionLike, rows
 from . import folder_schema_locations, result_registration_paths as paths
-from .storage.local import LocalFsProvider
+from .storage import provider_for_root
 
 
 def effective_assignment(schema: dict[str, Any], path_key: str) -> dict[str, Any] | None:
@@ -107,7 +107,7 @@ def _result_candidates(conn: ConnectionLike, root, root_key: str, project_id: st
             # a safe destination, including before any result file is present.
             try:
                 scene_dir = paths._safe_existing(root, parent_path)
-                if LocalFsProvider(root).is_dir(scene_dir) and not LocalFsProvider(root).is_link(scene_dir):
+                if provider_for_root(root).is_dir(scene_dir) and not provider_for_root(root).is_link(scene_dir):
                     destinations.append((parent_path, True))
             except (OSError, paths.ResultRegistrationError):
                 pass
@@ -116,7 +116,7 @@ def _result_candidates(conn: ConnectionLike, root, root_key: str, project_id: st
                 result_path = str(result_assignment.get("relative_path") or result_node.get("relative_path") or "")
                 try:
                     destination = paths._safe_existing(root, result_path)
-                    if LocalFsProvider(root).is_dir(destination) and not LocalFsProvider(root).is_link(destination):
+                    if provider_for_root(root).is_dir(destination) and not provider_for_root(root).is_link(destination):
                         destinations.append((result_path, True))
                 except paths.ResultRegistrationError:
                     continue
@@ -130,7 +130,7 @@ def _result_candidates(conn: ConnectionLike, root, root_key: str, project_id: st
             if result_node is None:
                 try:
                     destination = paths._safe_existing(root, result_path, allow_missing_leaf=True)
-                    if not LocalFsProvider(root).exists(destination):
+                    if not provider_for_root(root).exists(destination):
                         destinations.append((result_path, False))
                 except paths.ResultRegistrationError:
                     pass

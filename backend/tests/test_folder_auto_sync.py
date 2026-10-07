@@ -1,4 +1,4 @@
-"""Automatic Folder Schema sync for viewed screens (stage 2, 30 s polling)."""
+"""Automatic Folder Schema sync for viewed screens (stage 2, 60 s polling since 2026-10-07)."""
 from __future__ import annotations
 
 import pytest

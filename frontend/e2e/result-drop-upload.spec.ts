@@ -182,7 +182,7 @@ test('경로 복사는 선택한 폴더의 탐색기 경로를 복사하고 안�
   await expect(guide).toContainText('Run Case에는 Run Option 폴더를 통째로 넣으세요.')
   await expect(guide).toContainText('Run Option 폴더를 통째로 복사하려면 Run Case 폴더 아래에')
   await expect(guide).toContainText('Scene 폴더를 통째로 복사하려면 Run Option 폴더 아래에')
-  await expect(guide).toContainText('30초 안에 자동 반영됩니다')
+  await expect(guide).toContainText('1분 안에 자동 반영됩니다')
   await expect(guide.locator('li.is-current')).toContainText('Run Case')
   await expect(guide.locator('li.is-next')).toContainText('Run Option')
   // Choosing a higher level again drops the deeper selection.

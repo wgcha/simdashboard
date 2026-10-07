@@ -17,7 +17,7 @@ from fastapi import HTTPException
 
 from ..database_connection import ConnectionLike
 
-MEMO_SECONDS = 30.0
+MEMO_SECONDS = 60.0
 INPUT_SUFFIXES = frozenset({".rad", ".fem"})
 REPORT_SUFFIXES = frozenset({".pptx", ".html"})
 # Upper bound of names inspected per Scene folder (stops at the first input file).
@@ -178,8 +178,8 @@ def _scene_paths_by_case(scene_paths: list[str], cases: list[dict[str, str]]) ->
 def _scene_has_input(root, relative_path: str) -> bool:
     """A ``.rad``/``.fem`` file directly inside the Scene folder (names only, never recursive)."""
     from . import result_registration_paths
-    from .storage.local import LocalFsProvider
-    fs = LocalFsProvider(root)
+    from .storage import provider_for_root
+    fs = provider_for_root(root)
     path = result_registration_paths._safe_existing(root, relative_path, allow_missing_leaf=True)
     if not fs.exists(path, follow_links=False):
         return False

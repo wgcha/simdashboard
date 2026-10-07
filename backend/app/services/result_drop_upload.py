@@ -43,6 +43,7 @@ from ..database_connection import ConnectionLike
 from . import environment_folder_profiles, folder_name_warnings, spdm_storage
 from . import result_registration_paths as paths
 from .result_registration import _BLOCKED_EXTENSIONS
+from .storage import provider_for_root
 from .storage.local import LocalFsProvider
 from .storage.provider import UPLOAD_STAGING_DIR, WORKING, StorageError, working_zone_allows
 
@@ -212,7 +213,7 @@ def request_scope(conn: ConnectionLike, project_id: str, request_id: str, enviro
     root, root_id, root_key = paths.storage_context(conn)
     scope = paths._scope(conn, project_id, request_id, environment)
     request_rel = str(scope["request_relative_path"])
-    fs = LocalFsProvider(root)
+    fs = provider_for_root(root)
     try:
         paths._safe_existing(root, request_rel)
         working = next((entry.name for entry in fs.list(request_rel)
@@ -248,7 +249,7 @@ def checked_target(conn: ConnectionLike, scope: Scope, target_relative_path: str
     if not working_zone_allows(f"{target}/{UPLOAD_STAGING_DIR}"):
         raise DropUploadError("RESULT_DROP_TARGET_OUTSIDE_WORKING",
                               "결과는 이 의뢰의 Working 폴더 아래에만 올릴 수 있습니다.", 422)
-    fs = LocalFsProvider(scope.root)
+    fs = provider_for_root(scope.root)
     target = paths._safe_existing(scope.root, target)
     info = fs.stat(target, follow_links=False)
     if info is None or info.kind != "dir" or info.is_link:
@@ -291,7 +292,7 @@ def _children(fs: LocalFsProvider, relative: str) -> list[str]:
 
 def walk_working(scope: Scope, *, limit: int = TREE_NODE_LIMIT) -> tuple[list[dict[str, Any]], bool]:
     """Role-bearing folders of the Working tree (levels 2..last DEPTH_V1 level), breadth first."""
-    fs = LocalFsProvider(scope.root)
+    fs = provider_for_root(scope.root)
     nodes: list[dict[str, Any]] = []
     queue: list[tuple[str, int]] = [(scope.working_relative_path, 1)]
     truncated = False
@@ -410,7 +411,7 @@ def build_plan(conn: ConnectionLike, project_id: str, request_id: str, environme
         raise DropUploadError("RESULT_DROP_TOO_MANY_ITEMS", "한 번에 올릴 수 있는 항목 수를 넘었습니다. 나눠서 올리세요.", 413)
     scope = request_scope(conn, project_id, request_id, environment)
     target, target_level = checked_target(conn, scope, target_relative_path)
-    fs = LocalFsProvider(scope.root)
+    fs = provider_for_root(scope.root)
     base = display_root(scope.root)
     issues: dict[str, dict[str, Any]] = {}
     skipped: list[dict[str, Any]] = []
@@ -682,7 +683,7 @@ def _publish_lock(scope: Scope) -> threading.Lock:
 
 def _remove_staging(session: _Session) -> None:
     """Remove only this session's staged ``<n>.part`` files and its (then empty) folder."""
-    fs = LocalFsProvider(session.scope.root)
+    fs = provider_for_root(session.scope.root)
     for item in session.files:
         if item.published:
             continue
@@ -700,7 +701,7 @@ def _remove_staging(session: _Session) -> None:
 def _remove_empty_created(session: _Session) -> None:
     """Review L5: folders this session created that are still empty (deepest first). A folder that
     received anything meanwhile (a published file, an Explorer copy) is not empty and stays."""
-    fs = LocalFsProvider(session.scope.root)
+    fs = provider_for_root(session.scope.root)
     kept = []
     for folder in sorted(session.created_folders, key=lambda value: value.count("/"), reverse=True):
         try:
@@ -779,7 +780,7 @@ def create_session(conn: ConnectionLike, project_id: str, request_id: str, envir
     if not plan["can_upload"]:
         raise DropUploadError("RESULT_DROP_PLAN_BLOCKED", "올리기 전에 확인할 문제가 있습니다.", 409, plan=plan)
     scope: Scope = internal["scope"]
-    fs = LocalFsProvider(scope.root)
+    fs = provider_for_root(scope.root)
     staging_root = f"{scope.working_relative_path}/{UPLOAD_STAGING_DIR}"
     session_id = uuid4().hex
     staging = f"{staging_root}/{session_id}"
@@ -867,7 +868,7 @@ def upload_chunk(session_id: str, user_id: str, index: int, offset: int, data: b
             if hashlib.sha256(data).hexdigest() != chunk_sha256.lower():
                 raise DropUploadError("RESULT_DROP_CHUNK_HASH_MISMATCH", "조각이 전송 중 바뀌었습니다. 같은 조각을 다시 보내세요.", 422,
                                       expected_offset=item.received)
-        fs = LocalFsProvider(session.scope.root)
+        fs = provider_for_root(session.scope.root)
         try:
             fs.write_chunk(item.staged, offset, data, zone=WORKING)
         except StorageError as exc:
@@ -942,7 +943,7 @@ def complete(conn: ConnectionLike, session_id: str, user_id: str) -> dict[str, A
         if session.state not in {"UPLOADING", "PARTIAL"}:
             raise DropUploadError("RESULT_DROP_SESSION_CLOSED", "이미 끝났거나 중지한 업로드입니다.", 409)
         scope = session.scope
-        fs = LocalFsProvider(scope.root)
+        fs = provider_for_root(scope.root)
         for item in session.files:
             if not item.done and item.size == 0 and not item.published:
                 try:
@@ -1034,7 +1035,7 @@ def complete(conn: ConnectionLike, session_id: str, user_id: str) -> dict[str, A
         sync = folder_auto_sync.sync(conn, scope.project_id, scope.request_id, scope.environment, str(user_id), force=True)
     except Exception:  # noqa: BLE001 - files are published; the 30 s poll retries
         sync = {"status": "FAILED", "code": "FOLDER_SCHEMA_REFRESH_FAILED",
-                "message": "폴더를 확인하지 못했습니다. 30초 안에 다시 확인합니다."}
+                "message": "폴더를 확인하지 못했습니다. 1분 안에 다시 확인합니다."}
     result = _session_view(session)
     result.update({
         "published_files": len(published), "published_bytes": sum(item.size for item in published),
@@ -1086,7 +1087,7 @@ def create_folder(conn: ConnectionLike, project_id: str, request_id: str, enviro
     if role not in _ROLE_BEARING:
         raise DropUploadError("RESULT_DROP_FOLDER_LEVEL_INVALID",
                               "Scene 폴더 안에는 새 폴더를 만들지 않습니다. 결과 파일은 Scene 폴더에 바로 넣으세요.", 422)
-    fs = LocalFsProvider(scope.root)
+    fs = provider_for_root(scope.root)
     relative = f"{parent}/{name}"
     if not working_zone_allows(relative):
         raise DropUploadError("RESULT_DROP_FOLDER_LEVEL_INVALID", "이 위치에는 폴더를 만들 수 없습니다(Working 폴더 밖).", 422)

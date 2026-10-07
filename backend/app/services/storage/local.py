@@ -1110,13 +1110,9 @@ class LocalFsProvider:
         return request_lock(self.path(rel_path), self.root)
 
 
-def provider_for_root(root: Path) -> LocalFsProvider:
-    return LocalFsProvider(root)
-
-
 __all__ = [
     "COPY_CHUNK_BYTES", "CopyResult", "FINAL", "LEGACY", "LocalFsProvider", "StorageError", "SpdmStorageError",
-    "open_stable_reader", "pin_directory_chain", "prepare_root", "provider_for_root", "read_regular_nofollow",
+    "open_stable_reader", "pin_directory_chain", "prepare_root", "read_regular_nofollow",
     "read_stable_bytes", "request_lock", "resolve_existing_or_none", "resolve_root", "server_side_copy",
     "try_request_lock",
 ]
