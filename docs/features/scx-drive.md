@@ -55,6 +55,7 @@
 | `SIMDASH_SCX_DRIVE_ROOT` | SPDM 기능·점검 | — | SPDM 루트, 공용 계정 홈(`~`) 기준 상대 경로(예 `SPDM/Projects`). D2부터 scx 모드의 SPDM 루트는 **이 값뿐**이다(화면의 로컬 루트 설정은 `SPDM_ROOT_LOCKED`로 막고 저장된 로컬 루트 값은 건드리지 않음). 없으면 SPDM 폴더 기능은 "루트 미설정". 화면 폴더 선택기는 D4 |
 | `SIMDASH_DRIVE_WRITES_ENABLED` | — | `false` | **드라이브 쓰기 허용**(사용자 결정 2026-10-07 20:25). 꺼져 있으면 scx 모드는 읽기 전용(D2와 같음). 켜면 업로드 대기열 작업자가 뜨고 결과 등록·Final 지정이 드라이브에 쓴다(§10). 먼저 전용 시험 폴더에서 §10.6 수용 절차로 확인한다. `true/false/1/0/on/off` 외 값은 기동 거부 |
 | `SIMDASH_DRIVE_UPLOAD_MAX_ATTEMPTS` | — | `8` | 대기열 항목 하나의 재시도 가능 오류(BUSY·LOCKED·TIMEOUT·OVERLOADED·UNAVAILABLE) 최대 시도 수(1–100). 넘으면 `FAILED` |
+| `SIMDASH_DRIVE_VERIFY_MAX_BYTES` | — | `2147483648`(2 GiB) | 같은 이름 파일이 드라이브에 있고 sha1로 비교할 수 없을 때 서버로 내려받아 내용(sha256)을 비교하는 크기 상한(0–2^50). 넘으면 비교하지 않고 `CONFLICT`(`SPDM_CONFLICT_UNVERIFIED`, 관리자 판단). 0이면 내려받아 비교하지 않음 |
 | `SIMDASH_DRIVE_BLOB_DIR` | — | `<WORK_DIR>\blobs` | 32 MiB 초과 다운로드 파일의 서버 보관소(내용 sha256 이름, 05 §3). 백업 대상 아님(드라이브에서 다시 받을 수 있음) |
 | `SIMDASH_DRIVE_BLOB_MAX_BYTES` | — | `107374182400`(100 GiB) | 보관소 용량 상한. 넘으면 가장 오래 쓰지 않은 파일부터 지운다(64 MiB 이상) |
 | `SIMDASH_SCX_CA_BUNDLE` | 권장 | — | 사내 CA 번들 pem 절대 경로 |
@@ -248,23 +249,25 @@
 | 종류 | 드라이브 호출 | 비고 |
 |---|---|---|
 | `MKDIR` | `mkdirs` | 이미 있는 폴더는 성공 |
-| `COPY` | `copy_within`(드라이브 안 복사) | 복사 전 원본 `stat`으로 계획 때 `version_token`과 비교(다르면 `FINALIZATION_SOURCE_STALE`, 실패). 드라이브가 복사를 지원하지 않으면(C7 미확인: `INTERNAL` 또는 어댑터에 메서드 없음) 프로세스 안에 기록하고 이후 복사는 `download_to`(서버 `xfer-*` 임시 폴더) → `upload_new`로 대체. `INVALID_PATH`·`FORBIDDEN`은 그 항목만 대체 경로로 다시 시도. 항목의 `transfer_method`(`COPY_WITHIN`/`DOWNLOAD_UPLOAD`)와 경고 로그에 남는다 |
+| `COPY` | `copy_within`(드라이브 안 복사) | 복사 전 원본 `stat`으로 계획 때 `version_token`과 비교(다르면 `FINALIZATION_SOURCE_STALE`, 실패). `INTERNAL`·`INVALID_PATH`·`FORBIDDEN`은 그 항목만 `download_to`(서버 `xfer-*` 임시 폴더) → `upload_new`로 대체한다. `INTERNAL`이 **연속 3번**(서로 1시간 안) 나면 복사 미지원(C7 미확인)으로 보고 1시간 동안 모든 복사를 대체 경로로 보낸 뒤 다시 `copy_within`을 시도한다(어댑터에 메서드가 없으면 프로세스 동안 대체). 대체 경로는 내려받기 전에 서버 임시 공간 여유(1 GiB + 파일 크기)를 확인하고 모자라면 기다린다(`DRIVE_STAGING_FULL`). 항목의 `transfer_method`(`COPY_WITHIN`/`DOWNLOAD_UPLOAD`)와 경고 로그에 남는다 |
 | `FILE` | `upload_new` | 서버 임시 파일(`<SIMDASH_SCX_STAGING_DIR>/upload-<묶음>/…`)을 새 이름으로만 올린다. 올리기 전 임시 파일 sha256을 기록과 비교 |
 | `COMPLETE_MARKER` | `upload_new` | 묶음의 마지막 항목. 내용은 앞 항목이 모두 `DONE`일 때 만든다(Final `complete.json`) |
 
 규칙:
 
-- **덮어쓰기·삭제·이동 없음.** `CONFLICT`(같은 이름 존재)이면 대상을 `stat`해 같은 내용(양쪽 sha1이 있으면 sha1, 없으면 이 항목의 이전 시도가 있었을 때만 크기)이면 `DONE`, 아니면 `CONFLICT`로 멈춘다(화면·관리자에게 표시). sha1이 없고 이전 시도도 없으면 같은 크기여도 `CONFLICT`(보수적).
+- **덮어쓰기·삭제·이동 없음.** `CONFLICT`(같은 이름 존재)이면 대상을 `stat`해 같은 내용이면 `DONE`, 아니면 `CONFLICT`로 멈춘다(화면·관리자에게 표시). 같은 내용 판정: 양쪽 sha1이 있으면 sha1. 한쪽이라도 없으면 **크기만으로는 판정하지 않고** 대상 파일을 서버 `xfer-*` 임시 폴더로 내려받아(DB 연결 없이, 항목 크기까지만) sha256을 서버 임시 파일·계획 sha256과 비교한다(COPY에 계획 sha256이 없으면 원본도 같은 방식으로 내려받아 비교). `SIMDASH_DRIVE_VERIFY_MAX_BYTES`(기본 2 GiB)보다 크면 내려받지 않고 `CONFLICT`(`SPDM_CONFLICT_UNVERIFIED`) — 관리자가 드라이브에서 확인한 뒤 다시 시도·취소한다. 서버 임시 공간이 1 GiB 여유를 남기지 못하면 기다린다(`DRIVE_STAGING_FULL`, 재시도 간격).
 - **재시도 전 확인:** 두 번째 시도부터는 먼저 대상을 `stat`한다(응답을 잃은 업로드가 이미 올라갔을 수 있음 — 같으면 `DONE`, 중복 업로드 없음).
 - **재시도 가능 오류** `BUSY`·`LOCKED`·`TIMEOUT`·`OVERLOADED`·`UNAVAILABLE`: 30초 → 2분 → 10분 → 30분 → 1시간 간격, `SIMDASH_DRIVE_UPLOAD_MAX_ATTEMPTS`(기본 8)회를 넘으면 `FAILED`. 대기 중인 항목 뒤의 같은 묶음 항목은 기다린다(순서 유지).
 - **`AUTH_REQUIRED`**: 항목을 `BLOCKED`로 두고 **대기열 전체를 멈춘다**(`queue_paused`). 관리자가 토큰을 다시 등록하면 자동 재개(또는 관리 화면 "대기열 재개").
 - **묶음 정지:** `halt_on_error` 항목(Final 전부, 결과 등록의 `MKDIR`)이 `FAILED`·`CONFLICT`·`CANCELLED`로 끝나면 그 묶음의 뒤 항목은 실행하지 않는다 — Final은 `complete.json`이 없어 미완료로 판정된다. 이미 드라이브에 쓴 것은 지우지 않는다. 결과 등록의 `FILE`은 서로 독립이라 하나가 충돌해도 나머지는 올린다(묶음 상태 `PARTIAL`).
 - **재시작:** 앱 기동 시 `RUNNING`으로 남은 항목은 `PENDING`으로 돌아가고 재시도 전 확인 규칙으로 이어서 실행된다.
+- **결과 기록 실패·정리(sweep):** 드라이브 호출 뒤 결과를 DB에 기록하지 못하면 짧은 연결로 몇 번 다시 기록한다. 그래도 실패하면 행은 `RUNNING`으로 남고, 작업자가 1분마다 돌리는 정리가 이 프로세스에서 실행 중이 아닌 `RUNNING` 항목을 `PENDING`으로 되돌린다(다음 시도는 재시도 전 확인 규칙으로 이미 올라간 파일을 알아본다). 같은 정리가 묶음이 이미 끝났는데 `PUBLISHING`으로 남은 Final의 마무리(완료·실패 판정, 잠금 해제)를 다시 실행한다(마무리 훅 실패, 관리자 취소 뒤 깨우기 유실).
 - **DB 연결:** 작업자는 짧은 연결로 항목을 잡고(`RUNNING`), **연결 없이** 드라이브를 부른 뒤, 짧은 연결로 결과를 기록한다(§8.2와 같은 이유; 시험이 모든 가짜 드라이브 호출 시점에 연결이 없음을 확인).
-- **임시 파일:** 항목이 `DONE`이 되기 전에는 지우지 않는다. 묶음이 모두 `DONE`이면 `upload-<묶음>` 폴더를 지운다. 기동 시 하루 지난 `upload-*`·`xfer-*` 중 열린 항목·미완료 Final이 쓰지 않는 것을 지운다(서버 임시 저장소만).
+- **임시 파일:** 항목이 `DONE`이 되기 전에는 지우지 않는다. Final 묶음은 보고서·`plan.json` 임시 파일을 **묶음 전체가 `DONE`일 때까지** 남긴다(같은 Final ID 재시도). 묶음이 모두 `DONE`이면 `upload-<묶음>` 폴더를 지운다. 기동 시와 그 뒤 1시간마다 하루 지난 `upload-*`·`xfer-*`를 지우되, 열린 항목(`PENDING`·`RUNNING`·`BLOCKED`)이나 `PUBLISHING` Final이 쓰는 것은 남기고, 관리자 판단을 기다리는 묶음(`CONFLICT`·`FAILED` 항목)과 미완료 Final(`PLANNED`·`STAGED`·`FAILED`)의 것은 마지막 활동 후 **7일**까지 남긴다(서버 임시 저장소만, 드라이브는 건드리지 않음). 7일 뒤 재시도하면 보고서·파일을 다시 올려야 한다.
 - **단일 작업자:** 프로세스당 스레드 1개(`dashboard.lock`으로 프로세스도 하나). 묶음은 만든 순서대로, 묶음 안은 `seq` 순서.
 - 묶음 상태: `QUEUED`·`RUNNING`·`PAUSED`(인증 대기)·`DONE`·`PARTIAL`·`CONFLICT`·`FAILED`·`CANCELLED`. 항목 상태: `PENDING`·`RUNNING`·`DONE`·`CONFLICT`·`FAILED`·`BLOCKED`·`CANCELLED`.
-- 관리자 취소는 항목을 `CANCELLED`로 표시만 한다(드라이브 내용 불변). 다시 시도는 같은 항목을 처음부터(충돌은 드라이브 재확인).
+- 관리자 취소는 항목을 `CANCELLED`로 표시만 한다(드라이브 내용 불변). 묶음 마무리(Final 실패 판정·잠금 해제)는 취소가 커밋된 뒤에 실행한다. 다시 시도는 같은 항목을 처음부터(충돌은 드라이브 재확인). Final 묶음 항목의 다시 시도는 의뢰 잠금을 먼저 잡는다(다른 Final이 반영 중이면 409 `FINALIZATION_LOCKED`).
+- **항목 잡기:** 조건부 `UPDATE … WHERE state='PENDING' RETURNING`으로 자기 잡기를 확인한다.
 
 ### 10.3 결과 등록(끌어놓기) — integration 05 §5.3, W8
 
@@ -279,7 +282,7 @@
 
 | 항목 | local 모드 | scx 모드 |
 |---|---|---|
-| 의뢰 잠금 `.request.lock` | 파일 | `drive_locks` 행 `final:<프로젝트>/<의뢰>`(확정부터 묶음이 끝날 때까지, 30분 만료·작업자가 연장). 같은 의뢰의 다른 Final 확정은 409 `FINALIZATION_LOCKED` |
+| 의뢰 잠금 `.request.lock` | 파일 | `drive_locks` 행 `final:<프로젝트>/<의뢰>`(확정부터 묶음이 끝날 때까지, 30분 만료·작업자가 연장). 잠금을 가진 Final이 `PUBLISHING`이면 만료 시각이 지나도(인증 대기로 대기열이 멈춘 경우) 잠금으로 본다. 넘겨받기는 읽은 행이 그대로일 때만(조건부 `UPDATE … RETURNING`, PostgreSQL은 `FOR UPDATE`). 같은 의뢰의 다른 Final 확정·관리자 대기열 다시 시도는 409 `FINALIZATION_LOCKED` |
 | `plan.json` | `.finalizations/<op>/` | `finalization_operations.plan_json`(서명 동일, 파일마다 `version_token` 추가). 확정 때 드라이브 `.finalizations/<op>/plan.json`에 사본 1회(불변) |
 | 보고서 업로드·`reports.json` | `.finalizations/<op>/reports/` | 서버 `upload-<op>/reports/<이름>` + `reports_json`(DB). 확정 전에는 다시 올려 교체 가능, 대기열에 들어간 뒤에는 같은 바이트만 허용 |
 | 원본 → `Final/CAE/<Case>/<op>/…` | 임시 폴더 복사 → 이름 바꾸기 | `COPY` 항목(`copy_within`, 지원하지 않으면 다운로드→업로드) |
@@ -288,13 +291,15 @@
 | 상태·진척 | 드라이브 스캔·해시 | DB(`finalization_operations` + 대기열). 완료 기록의 `verification`은 `DRIVE_UPLOAD`(드라이브 파일 내용은 다시 읽지 않음) |
 | 정리 삭제 | 앱이 만든 임시만 | 없음(드라이브는 지우지 않음, 서버 임시 파일만) |
 
+**재시도**에서 이미 드라이브에 올라간(`DONE`) 보고서는 서버 임시 파일을 다시 확인하지 않는다(화면의 [재시도]는 보고서를 다시 올리지 않음).
+
 확정 순서: 권한 → 서명 계획·범위 → 드라이브 원본 재확인(읽기 세션: 계획 이후 `version_token`이 바뀐 파일이 있으면 409 `FINALIZATION_SOURCE_STALE`, 원본 변경 확인 대기·무시·원본 없음 파일이 있으면 미리보기부터 거부) → 보고서 해시 확인 → 의뢰 잠금 → 묶음 등록(`MKDIR`… → `COPY`… → 보고서 `FILE` → `plan.json` → `COMPLETE_MARKER`) → 응답(`state: QUEUED`, `drive` 묶음 요약). 묶음이 `DONE`이면 `COMPLETE`, 현재 Final 순번 부여(§10.5), 잠금 해제. 실패·충돌·취소면 `FAILED`(첫 오류 코드), 잠금 해제, `complete.json` 없음(미완료). **재시도**는 같은 Final ID로 멈춘 항목만 다시 실행한다(이미 복사한 CAE는 다시 복사하지 않음).
 
 ### 10.5 현재 Final 요약 — 순번 파일 (결정 D2 ①, SPDM 협의 대상)
 
 드라이브는 교체가 안 되므로 `Final/current.json`(local W3)을 쓰지 않는다. Final이 완료될 때마다 **새 파일을 추가**한다.
 
-- 경로: `<의뢰>/Final/.finalizations/designations/<순번 8자리>-<Final ID>.json` (예 `00000003-4f…e1.json`). 순번은 의뢰마다 1부터 증가(DB `designation_seq`, 의뢰 안 유일).
+- 경로: `<의뢰>/Final/.finalizations/designations/<순번 8자리>-<Final ID>.json` (예 `00000003-4f…e1.json`). 순번은 의뢰마다 1부터 증가(DB `designation_seq`, 의뢰 안 유일). 순번 배정(Final 완료·요약 갱신)은 의뢰마다 직렬화한다(PostgreSQL 트랜잭션 advisory lock, DuckDB는 프로세스 안 연결 직렬화) — 같은 Final의 요약 갱신이 동시에 두 번 와도 순번 파일은 하나만 대기열에 들어간다.
 - **SPDM은 순번이 가장 큰 파일을 현재 요약으로 읽는다.** 같은 순번은 없다. 이전 파일은 그대로 남는다(이력).
 - 내용(형식 `simdashboard-final-summary`, `schema_version` 1, local `current.json`과 같은 환경 항목): `designation_seq`, `final_id`, `environment`(이번 지정의 환경), `environments`(그 시점 환경별 현재 Final 항목: `final_id`·`case_label`·`case_relative_path`·`designated_by`·`designated_at`·`cae_path`·`report_path`·`reports`·`files`(또는 `files_in`)·`complete_record`·`complete_sha256`·`previous_final_id`), `storage: "scx"`. 경로는 `Final` 폴더 기준.
 - 재지정(같은 Case·다른 Case 모두) = 새 순번 파일. **요약 갱신**(`POST /summary/repair`)은 현재 Final로 새 순번 파일을 하나 더 올린다(앞 파일을 고치지 않음). 상태의 `summary.state`: 순번 파일 업로드 완료 `OK`, 대기열 진행 중 `PENDING`, 실패·충돌 `MISSING`(화면 "요약 파일 갱신" 버튼), 완료된 Final 없음 `NONE`.
@@ -333,3 +338,5 @@
 - 큰 Final의 진척은 파일 단위(묶음 항목)로만 보인다(`copy_within` 한 건 안의 바이트 진척 없음).
 - `complete.json`의 비수집 파일 `sha256`은 `null`(드라이브 sha1로 대신). SPDM이 sha256을 요구하면 협의 필요.
 - 순번 파일 방식은 SPDM 협의 전 임시안(결정 D2 ①).
+- **사용자 결정 대기(D3 검수 #11):** 프로젝트 삭제(정리)는 대기열 행·Final 메타를 남기며(`project_cleanup.KEEP_COLUMNS`), **열린 대기열 항목(`PENDING`·`BLOCKED`)을 멈추지 않는다** — 삭제 뒤에도 작업자가 그 프로젝트의 남은 파일·Final을 드라이브에 올리고, Final 마무리 훅은 지워진 의뢰 기준으로 실행된다. 삭제 전에 남은 항목을 취소할지, 삭제가 항목을 `CANCELLED`로 표시할지, 그대로 둘지는 결정 후 반영한다(현재 동작 유지, 관리자는 업로드 대기열에서 해당 항목을 직접 취소할 수 있다).
+- 결과 등록 완료(`complete`)는 라우터 커밋 뒤에 세션을 등록 목록에서 뺀다. 커밋하지 못했으면(묶음 행 없음) 같은 세션으로 다시 완료할 수 있다.

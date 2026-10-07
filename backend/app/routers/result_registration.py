@@ -602,23 +602,29 @@ async def drop_upload_chunk(session_id: str, index: int, request: Request, offse
 @router.post("/drop-uploads/{session_id}/complete", dependencies=[Depends(require_drive_writes)])
 @drive_reads.read_session()
 def drop_complete(session_id: str, request: Request):
-    with connect() as conn:
-        scope = _session_access(request, conn, session_id)
-        try:
-            result = drop_service.complete(conn, session_id, request.state.principal.user_id)
-        except ResultRegistrationError as exc:
-            error = _drop_error(exc)
-            _drop_audit(request, "RESULT_DROP_UPLOAD_FAILED", {"session_id": session_id, **scope, "code": exc.code},
-                        status_code=error.status_code)
-            raise error from exc
-        action = {"PUBLISHED": "RESULT_DROP_UPLOAD_PUBLISHED", "QUEUED": "RESULT_DROP_UPLOAD_QUEUED"}.get(
-            result["state"], "RESULT_DROP_UPLOAD_PARTIAL")
-        _drop_audit(request, action, {
-            "session_id": session_id, **scope, "target": result["target_relative_path"],
-            "files": result["published_files"], "bytes": result["published_bytes"],
-            "folders_created": len(result["created_folders"]), "conflicts": len(result["conflicts"]),
-            "skipped": len(result["skipped"]), "sync": (result.get("sync") or {}).get("status"),
-            "drive_batch": (result.get("drive") or {}).get("batch_id")}, conn=conn)
+    try:
+        with connect() as conn:
+            scope = _session_access(request, conn, session_id)
+            try:
+                result = drop_service.complete(conn, session_id, request.state.principal.user_id)
+            except ResultRegistrationError as exc:
+                error = _drop_error(exc)
+                _drop_audit(request, "RESULT_DROP_UPLOAD_FAILED", {"session_id": session_id, **scope, "code": exc.code},
+                            status_code=error.status_code)
+                raise error from exc
+            action = {"PUBLISHED": "RESULT_DROP_UPLOAD_PUBLISHED", "QUEUED": "RESULT_DROP_UPLOAD_QUEUED"}.get(
+                result["state"], "RESULT_DROP_UPLOAD_PARTIAL")
+            _drop_audit(request, action, {
+                "session_id": session_id, **scope, "target": result["target_relative_path"],
+                "files": result["published_files"], "bytes": result["published_bytes"],
+                "folders_created": len(result["created_folders"]), "conflicts": len(result["conflicts"]),
+                "skipped": len(result["skipped"]), "sync": (result.get("sync") or {}).get("status"),
+                "drive_batch": (result.get("drive") or {}).get("batch_id")}, conn=conn)
+    except BaseException:
+        # SCX drive: a queued session whose transaction did not commit can be completed again.
+        drop_service.after_complete(session_id, committed=False)
+        raise
+    drop_service.after_complete(session_id, committed=True)
     upload_queue.wake()
     return result
 

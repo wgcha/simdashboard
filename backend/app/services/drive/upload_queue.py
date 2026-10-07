@@ -18,9 +18,12 @@ thread of the (single, ``dashboard.lock``) dashboard process:
 Rules (05 §5.2):
 
 * Never delete, move or overwrite on the drive.  ``CONFLICT`` (target exists) is
-  answered by a ``stat`` of the target: the same content (sha1 when both sides
-  have it; size after an attempt of our own that may have landed) is ``DONE``,
-  anything else stops the item as ``CONFLICT`` (visible, admin decides).
+  answered by a ``stat`` of the target: the same content is ``DONE``, anything else
+  stops the item as ``CONFLICT`` (visible, admin decides).  "Same content" is the
+  sha1 when both sides have it; otherwise the target is downloaded into a server
+  ``xfer-`` folder (no DB connection held) and its sha256 compared with the staged
+  file / planned sha256 — never the size alone.  A target above
+  ``SIMDASH_DRIVE_VERIFY_MAX_BYTES`` (default 2 GiB) is not downloaded: ``CONFLICT``.
 * Before a retry the target is ``stat``-ed first (an earlier attempt may have
   landed).  Retryable errors (BUSY, LOCKED, TIMEOUT, OVERLOADED, UNAVAILABLE) back
   off 30 s → 2 m → 10 m → 30 m → 1 h up to ``SIMDASH_DRIVE_UPLOAD_MAX_ATTEMPTS``.
@@ -30,10 +33,16 @@ Rules (05 §5.2):
   ``FAILED``/``CONFLICT``/``CANCELLED`` (a Final never gets its ``complete.json``);
   nothing already written is removed (an incomplete Final has no marker).
 * Restart: rows left ``RUNNING`` become ``PENDING`` and are re-checked with ``stat``.
+  The worker loop repeats this every minute for ``RUNNING`` rows no thread of this
+  process is executing (a failed result recording), and runs the finish hook of
+  ``PUBLISHING`` Finals whose batch already finished (:func:`sweep`).
 * **No DB connection is held while the worker waits on the drive** (each step:
   short connection to claim → drive call without a connection → short connection
   to record the result).
-* Server staging files are deleted only after their item is ``DONE``.
+* Server staging files are deleted only after their item is ``DONE`` (Final batches:
+  only when the whole batch is ``DONE``, so a retry of the same Final ID still has
+  its reports).  Staging of stopped batches / unfinished Finals is removed after
+  ``STAGING_MAX_AGE_SECONDS`` without activity (hourly cleanup; never the drive).
 
 Cancelling an item (admin) only marks the row; drive content is never touched.
 """
@@ -64,10 +73,23 @@ BACKOFF_SECONDS = (30, 120, 600, 1800, 3600)
 # copy_within failures that mean "this drive cannot copy" (C7 unknown): fall back to download → upload.
 COPY_UNSUPPORTED_CODES = frozenset({"INTERNAL"})
 COPY_FALLBACK_CODES = COPY_UNSUPPORTED_CODES | frozenset({"INVALID_PATH", "FORBIDDEN"})
+# INTERNAL may also be a transient server fault: only this many consecutive INTERNALs (each within
+# COPY_FALLBACK_SECONDS of the previous one) switch every copy to download → upload, for
+# COPY_FALLBACK_SECONDS; then copy_within is tried again.  Single INTERNALs fall back for that item only.
+COPY_INTERNAL_STREAK = 3
+COPY_FALLBACK_SECONDS = 3600.0
 TRANSFER_MAX_BYTES = 64 * 1024 ** 3
 IDLE_WAIT_SECONDS = 5.0
 STAGING_PREFIX = "upload-"
 ORPHAN_SECONDS = 24 * 3600
+# Staging of batches waiting for an admin decision (CONFLICT/FAILED) or of unfinished Finals
+# (PLANNED/STAGED/FAILED) is kept this long after their last activity.
+STAGING_MAX_AGE_SECONDS = 7 * 24 * 3600
+SWEEP_SECONDS = 60.0
+CLEANUP_SECONDS = 3600.0
+# Recording an outcome after the drive call is retried (short connections) before the row is
+# left RUNNING for the sweep.
+RECORD_RETRY_DELAYS = (0.5, 2.0, 5.0)
 # Tests turn the background thread off and drive the queue with :func:`run_until_idle`.
 AUTOSTART = True
 # Origins whose module reacts to finished batches / builds just-in-time items.
@@ -86,6 +108,9 @@ ERROR_MESSAGES = {
     "FINALIZATION_SOURCE_STALE": "Final 계획 이후 드라이브 원본이 바뀌었습니다.",
     "FINALIZATION_SOURCE_MISSING": "드라이브 원본 파일을 찾을 수 없습니다.",
     "DRIVE_QUEUE_CANCELLED": "관리자가 취소했습니다(드라이브 내용은 그대로입니다).",
+    "DRIVE_STAGING_FULL": "서버 임시 저장 공간이 부족해 기다립니다. 공간이 생기면 이어서 진행합니다.",
+    "SPDM_CONFLICT_UNVERIFIED": ("같은 이름의 파일이 드라이브에 있고 크기가 커서 내용을 비교하지 않았습니다"
+                                 "(덮어쓰지 않았습니다). 관리자가 확인하세요."),
 }
 
 
@@ -341,9 +366,14 @@ def cancel_item(conn: Any, item_id: str) -> Item:
                  [ERROR_MESSAGES["DRIVE_QUEUE_CANCELLED"], now, now, item_id])
     if (get_item(conn, item_id) or item).state != "CANCELLED":
         raise ValueError("RUNNING")
-    _pending_finish.add(item.batch_id)
-    _after_commit_wake()
+    # The finish hook runs after the caller committed (:func:`request_finish`; the sweep covers a lost call).
     return get_item(conn, item_id)  # type: ignore[return-value]
+
+
+def request_finish(batch_id: str) -> None:
+    """After the caller committed a change of a batch's items (admin cancel): run its finish hook."""
+    _pending_finish.add(str(batch_id))
+    _worker.wake.set()
 
 
 def resume_blocked(conn: Any | None = None) -> int:
@@ -371,12 +401,20 @@ class _Worker:
         self.thread: threading.Thread | None = None
         self.stop = threading.Event()
         self.wake = threading.Event()
+        # copy_within missing in the adapter: download → upload for the process lifetime.
         self.copy_unsupported = False
+        # Consecutive copy_within INTERNALs (review #7) and the global fallback window they opened.
+        self.internal_streak = 0
+        self.internal_last = 0.0
+        self.copy_fallback_until = 0.0
 
 
 _worker = _Worker()
 # Batches whose items were stopped outside the worker (admin cancel): finish hooks run on the worker thread.
 _pending_finish: set[str] = set()
+# Items a thread of this process is executing right now (the sweep never resets those to PENDING).
+_executing: set[str] = set()
+_executing_lock = threading.Lock()
 
 
 def _after_commit_wake() -> None:
@@ -452,17 +490,38 @@ def stop(timeout: float = 10.0) -> None:
         thread.join(timeout)
     with _worker.lock:
         _worker.thread = None
-        _worker.copy_unsupported = False
+        _reset_copy_state()
+
+
+def _reset_copy_state() -> None:
+    _worker.copy_unsupported = False
+    _worker.internal_streak = 0
+    _worker.internal_last = 0.0
+    _worker.copy_fallback_until = 0.0
 
 
 def reset_for_tests() -> None:
     stop()
     _pending_finish.clear()
-    _worker.copy_unsupported = False
+    with _executing_lock:
+        _executing.clear()
+    _reset_copy_state()
 
 
 def _loop() -> None:
+    last_sweep = 0.0
+    last_cleanup = time.monotonic()      # start() already cleaned up
     while not _worker.stop.is_set():
+        moment = time.monotonic()
+        if moment - last_sweep >= SWEEP_SECONDS:
+            last_sweep = moment
+            cleanup = moment - last_cleanup >= CLEANUP_SECONDS
+            if cleanup:
+                last_cleanup = moment
+            try:
+                sweep(cleanup=cleanup)
+            except Exception:  # noqa: BLE001 - retried on the next sweep
+                logger.warning("SCX drive upload queue sweep failed", exc_info=True)
         try:
             worked = process_next()
         except Exception:  # noqa: BLE001 - the worker must survive a DB/drive hiccup
@@ -470,8 +529,39 @@ def _loop() -> None:
             worked = False
         if worked:
             continue
-        _worker.wake.wait(_idle_wait())
+        _worker.wake.wait(min(_idle_wait(), SWEEP_SECONDS))
         _worker.wake.clear()
+
+
+def sweep(*, cleanup: bool = False) -> dict[str, int]:
+    """Periodic repair (worker loop, every ``SWEEP_SECONDS``; no drive call).
+
+    * ``RUNNING`` rows that no thread of this process executes (the result of a drive call could
+      not be recorded) become ``PENDING``; the pre-retry ``stat`` recognises a write that landed.
+    * ``PUBLISHING`` Finals whose batch already finished get their finish hook again (a hook
+      that failed, an admin cancel whose wake-up was lost).
+    * ``cleanup``: server staging cleanup (:func:`_cleanup_orphans`).
+    """
+    if connection_held():
+        raise RuntimeError("the drive upload queue sweep must run without an open database connection")
+    with connect() as conn:
+        running = [str(row[0]) for row in conn.execute("SELECT id FROM drive_upload_queue WHERE state='RUNNING'").fetchall()]
+        with _executing_lock:
+            stale = [item_id for item_id in running if item_id not in _executing]
+        resumed = 0
+        for item_id in stale:
+            if conn.execute("UPDATE drive_upload_queue SET state='PENDING', next_attempt_at=NULL, updated_at=? "
+                            "WHERE id=? AND state='RUNNING' RETURNING id", [_now(), item_id]).fetchone():
+                resumed += 1
+        publishing = [str(row[0]) for row in conn.execute(
+            "SELECT upload_batch_id FROM finalization_operations WHERE status='PUBLISHING' "
+            "AND upload_batch_id IS NOT NULL").fetchall()]
+    if resumed:
+        logger.warning("SCX drive upload queue: %d item(s) left RUNNING resume from PENDING", resumed)
+    for batch_id in publishing:
+        _finish_if_done(batch_id)
+    removed = _cleanup_orphans() if cleanup else 0
+    return {"resumed": resumed, "publishing": len(publishing), "staging_removed": removed}
 
 
 def _idle_wait() -> float:
@@ -510,35 +600,70 @@ def process_next(*, now: datetime | None = None) -> bool:
         _pending_finish.discard(batch_id)
         _finish_if_done(batch_id)
     moment = now or _now()
-    with connect() as conn:
-        if queue_paused(conn):
-            return False
-        row = conn.execute(_CLAIM_SQL, [moment]).fetchone()
-        if row is None:
-            return False
-        item = _item(row)
-        if item.root_key != current_root_key():
-            _record(conn, item, "FAILED", code="DRIVE_ROOT_CHANGED")
-            claimed = False
-        else:
-            conn.execute("UPDATE drive_upload_queue SET state='RUNNING', attempts=attempts+1, updated_at=? "
-                         "WHERE id=? AND state='PENDING'", [_now(), item.id])
-            after = conn.execute("SELECT state, attempts FROM drive_upload_queue WHERE id=?", [item.id]).fetchone()
-            claimed = bool(after) and after[0] == "RUNNING" and int(after[1]) == item.attempts + 1
-            item.attempts += 1
-            if claimed and item.origin == "finalization" and item.origin_ref:
-                conn.execute("UPDATE drive_locks SET expires_at=? WHERE owner=?",
-                             [_now() + timedelta(minutes=30), item.origin_ref])
+    claimed = False
+    item: Item | None = None
+    try:
+        with connect() as conn:
+            if queue_paused(conn):
+                return False
+            row = conn.execute(_CLAIM_SQL, [moment]).fetchone()
+            if row is None:
+                return False
+            item = _item(row)
+            if item.root_key != current_root_key():
+                _record(conn, item, "FAILED", code="DRIVE_ROOT_CHANGED")
+            else:
+                # Review #8: our own claim is verified by the row the conditional UPDATE returns.
+                got = conn.execute("UPDATE drive_upload_queue SET state='RUNNING', attempts=attempts+1, updated_at=? "
+                                   "WHERE id=? AND state='PENDING' RETURNING attempts", [_now(), item.id]).fetchone()
+                claimed = got is not None
+                if claimed:
+                    item.attempts = int(got[0])
+                    item.state = "RUNNING"
+                    with _executing_lock:
+                        _executing.add(item.id)
+                    if item.origin == "finalization" and item.origin_ref:
+                        conn.execute("UPDATE drive_locks SET expires_at=? WHERE owner=?",
+                                     [_now() + timedelta(minutes=30), item.origin_ref])
+    except BaseException:
+        if item is not None:
+            with _executing_lock:
+                _executing.discard(item.id)
+        raise
+    assert item is not None
     if not claimed:
         _finish_if_done(item.batch_id)
         return True
-    outcome = _execute(item)            # drive calls: no DB connection held here
-    with connect() as conn:
-        _apply(conn, item, outcome)
-    if outcome.state == "DONE" and item.staging_path and item.kind in {"FILE", "COMPLETE_MARKER"}:
+    try:
+        outcome = _execute(item)            # drive calls: no DB connection held here
+        _record_outcome(item, outcome)
+    finally:
+        with _executing_lock:
+            _executing.discard(item.id)
+    if (outcome.state == "DONE" and item.staging_path and item.kind in {"FILE", "COMPLETE_MARKER"}
+            and item.origin != "finalization"):
+        # A Final keeps its staging (reports, plan.json) until the whole batch is DONE: a retry of the
+        # same Final ID re-checks its reports (review #2); _finish_if_done removes the folder.
         server_local.discard_file(Path(item.staging_path))
     _finish_if_done(item.batch_id)
     return True
+
+
+def _record_outcome(item: Item, outcome: "_Outcome") -> None:
+    """Record the drive result with short connections, retried; a final failure leaves the row RUNNING
+    (the sweep turns it PENDING and the pre-retry ``stat`` recognises what landed)."""
+    delays = tuple(RECORD_RETRY_DELAYS)
+    for attempt in range(len(delays) + 1):
+        try:
+            with connect() as conn:
+                _apply(conn, item, outcome)
+            return
+        except Exception:  # noqa: BLE001 - DB hiccup after the drive call
+            if attempt >= len(delays):
+                raise
+            logger.warning("SCX drive queue: recording %s of item %s failed; retrying", outcome.state, item.id,
+                           exc_info=True)
+            _worker.stop.wait(delays[attempt])
 
 
 @dataclass
@@ -641,18 +766,73 @@ def _failure(error: BaseException) -> _Outcome:
     return _Outcome("FAILED", _storage_code(code), message)
 
 
-def _same_content(existing: Any, *, size: int | None, sha1: str | None, own_attempt: bool) -> bool:
-    """Is the drive item ``existing`` the content we meant to write (05 §5.2 CONFLICT rule)?"""
+def _staging_has_room(size: int) -> bool:
+    from . import reads
+
+    free = server_local.disk_free(drive_gateway.current_settings().staging_dir)
+    return free is None or free - int(size) >= reads.STAGING_MIN_FREE_BYTES
+
+
+def _download_sha256(gateway: Any, rel: str, size: int) -> tuple[str, str] | "_Outcome":
+    """Download ``rel`` (at most ``size`` bytes) into a fresh ``xfer-`` folder: (sha256, sha1); folder removed."""
+    if not _staging_has_room(size):
+        return _Outcome("RETRY", "DRIVE_STAGING_FULL", ERROR_MESSAGES["DRIVE_STAGING_FULL"])
+    work = server_local.new_dir(drive_gateway.current_settings().staging_dir, "xfer-")
+    try:
+        try:
+            result = gateway.download_to(_drive_path(rel), work, max_bytes=int(size))
+        except Exception as error:  # noqa: BLE001
+            if _code(error) == "LIMIT":           # larger than expected: not the same content
+                return "", ""
+            raise
+        local = Path(result.local_path)
+        return str(result.sha256).lower(), server_local.file_sha1(local)
+    finally:
+        server_local.remove_tree(work)
+
+
+def _existing_outcome(gateway: Any, item: Item, existing: Any, *, size: int | None, sha1: str | None,
+                      sha256: Any = None, method: str | None = None, staging: tuple[str, int, str] | None = None) -> "_Outcome":
+    """Is the drive file ``existing`` (same name as the target) the content we meant to write (05 §5.2)?
+
+    ``DONE`` only when the content is shown to be the same: equal sha1 when both sides have it, else
+    the target is downloaded (bounded by ``size``, server ``xfer-`` staging, no DB connection) and its
+    sha256 compared with ``sha256`` (a value, or a callable computing it lazily).  An equal size alone
+    is never enough (review #1).  A target above ``verify_max_bytes`` stays ``CONFLICT`` for an admin.
+    """
+    def conflict(code: str = "SPDM_CONFLICT") -> _Outcome:
+        return _Outcome("CONFLICT", code, ERROR_MESSAGES[code], method=method, staging=staging)
+
     if existing is None or getattr(existing, "kind", None) != "file":
-        return False
+        return conflict()
     existing_size = getattr(existing, "size", None)
     if size is not None and existing_size is not None and int(existing_size) != int(size):
-        return False
+        return conflict()
     existing_sha1 = str(getattr(existing, "sha1", "") or "").lower() or None
     if existing_sha1 and sha1:
-        return existing_sha1 == sha1.lower()
-    # Without sha1 on one side: only an earlier attempt of this item may explain an equal-size file.
-    return own_attempt and size is not None and existing_size is not None
+        if existing_sha1 == sha1.lower():
+            return _Outcome("DONE", entry=existing, method=method, staging=staging)
+        return conflict()
+    expected_size = size if size is not None else existing_size
+    if expected_size is None:
+        return conflict()
+    if int(expected_size) > drive_gateway.current_settings().verify_max_bytes:
+        return conflict("SPDM_CONFLICT_UNVERIFIED")
+    expected = sha256() if callable(sha256) else sha256
+    if isinstance(expected, _Outcome):
+        expected.method = expected.method or method
+        expected.staging = expected.staging or staging
+        return expected
+    if not expected:
+        return conflict("SPDM_CONFLICT_UNVERIFIED")
+    downloaded = _download_sha256(gateway, item.target, int(expected_size))
+    if isinstance(downloaded, _Outcome):
+        downloaded.method, downloaded.staging = method, staging
+        return downloaded
+    digest, target_sha1 = downloaded
+    if not digest or digest != str(expected).lower():
+        return conflict()
+    return _Outcome("DONE", entry=_with_sha1(existing, target_sha1), method=method, staging=staging)
 
 
 def _execute(item: Item) -> _Outcome:
@@ -701,13 +881,10 @@ def _upload(gateway: Any, item: Item) -> _Outcome:
     path, size, digest, sha1 = staged
     staging_note = (str(path), size, digest) if not item.staging_path else None
     target = _drive_path(item.target)
-    own_attempt = item.attempts > 1
-    if own_attempt:
+    if item.attempts > 1:
         existing = gateway.stat(target)
         if existing is not None:
-            if _same_content(existing, size=size, sha1=sha1, own_attempt=True):
-                return _Outcome("DONE", entry=existing, staging=staging_note)
-            return _Outcome("CONFLICT", "SPDM_CONFLICT", staging=staging_note)
+            return _existing_outcome(gateway, item, existing, size=size, sha1=sha1, sha256=digest, staging=staging_note)
     try:
         entry = gateway.upload_new(path, _drive_path(item.dst_rel_dir), name=item.dst_name)
     except Exception as error:  # noqa: BLE001
@@ -715,10 +892,8 @@ def _upload(gateway: Any, item: Item) -> _Outcome:
             outcome = _failure(error)
             outcome.staging = staging_note
             return outcome
-        existing = gateway.stat(target)
-        if _same_content(existing, size=size, sha1=sha1, own_attempt=own_attempt):
-            return _Outcome("DONE", entry=existing, staging=staging_note)
-        return _Outcome("CONFLICT", "SPDM_CONFLICT", staging=staging_note)
+        return _existing_outcome(gateway, item, gateway.stat(target), size=size, sha1=sha1, sha256=digest,
+                                 staging=staging_note)
     if getattr(entry, "size", None) is not None and int(entry.size) != size:
         return _Outcome("RETRY", "DRIVE_UPLOAD_MISMATCH", ERROR_MESSAGES["DRIVE_UPLOAD_MISMATCH"], staging=staging_note)
     return _Outcome("DONE", entry=entry, staging=staging_note)
@@ -736,49 +911,88 @@ def _copy(gateway: Any, item: Item) -> _Outcome:
         if planned is not None and not live.same_as(planned):
             return _Outcome("FAILED", "FINALIZATION_SOURCE_STALE", f"{ERROR_MESSAGES['FINALIZATION_SOURCE_STALE']} {item.src_rel}")
     target = _drive_path(item.target)
-    own_attempt = item.attempts > 1
-    if own_attempt:
+
+    def source_sha256() -> str | _Outcome | None:
+        """The planned sha256, or the source's (downloaded, bounded) when the plan has none."""
+        if item.sha256:
+            return item.sha256
+        size = live.size if live.size is not None else item.size_bytes
+        if size is None:
+            return None
+        downloaded = _download_sha256(gateway, str(item.src_rel), int(size))
+        return downloaded if isinstance(downloaded, _Outcome) else downloaded[0]
+
+    if item.attempts > 1:
         existing = gateway.stat(target)
         if existing is not None:
-            if _same_content(existing, size=live.size, sha1=live.sha1, own_attempt=True):
-                return _Outcome("DONE", entry=existing)
-            return _Outcome("CONFLICT", "SPDM_CONFLICT")
-    if not _worker.copy_unsupported:
+            return _existing_outcome(gateway, item, existing, size=live.size, sha1=live.sha1, sha256=source_sha256)
+    if _copy_within_allowed():
         try:
             entry = gateway.copy_within(_drive_path(str(item.src_rel)), _drive_path(item.dst_rel_dir), new_name=item.dst_name)
         except (AttributeError, NotImplementedError):
-            _mark_copy_unsupported("copy_within missing")
+            _mark_copy_unsupported("copy_within missing", permanent=True)
         except Exception as error:  # noqa: BLE001
             code = _code(error)
             if code == "CONFLICT":
-                existing = gateway.stat(target)
-                if _same_content(existing, size=live.size, sha1=live.sha1, own_attempt=own_attempt):
-                    return _Outcome("DONE", entry=existing, method="COPY_WITHIN")
-                return _Outcome("CONFLICT", "SPDM_CONFLICT", method="COPY_WITHIN")
+                return _existing_outcome(gateway, item, gateway.stat(target), size=live.size, sha1=live.sha1,
+                                         sha256=source_sha256, method="COPY_WITHIN")
             if code not in COPY_FALLBACK_CODES:
                 outcome = _failure(error)
                 outcome.method = "COPY_WITHIN"
                 return outcome
             if code in COPY_UNSUPPORTED_CODES:
-                _mark_copy_unsupported(code)
+                _note_copy_internal(code)
             else:
                 logger.info("SCX drive copy_within refused (%s) for one item; trying download → upload", code)
         else:
+            _worker.internal_streak = 0
             if live.size is not None and getattr(entry, "size", None) is not None and int(entry.size) != int(live.size):
                 return _Outcome("RETRY", "DRIVE_UPLOAD_MISMATCH", ERROR_MESSAGES["DRIVE_UPLOAD_MISMATCH"], method="COPY_WITHIN")
             return _Outcome("DONE", entry=entry, method="COPY_WITHIN")
     return _download_upload(gateway, item, live)
 
 
-def _mark_copy_unsupported(reason: str) -> None:
-    if not _worker.copy_unsupported:
+def _copy_within_allowed() -> bool:
+    if _worker.copy_unsupported:
+        return False
+    if _worker.copy_fallback_until and time.monotonic() < _worker.copy_fallback_until:
+        return False
+    if _worker.copy_fallback_until:
+        logger.info("SCX drive copy_within fallback window ended; trying copy_within again")
+        _worker.copy_fallback_until = 0.0
+        _worker.internal_streak = 0
+    return True
+
+
+def _note_copy_internal(code: str) -> None:
+    """One copy_within INTERNAL: that item falls back; ``COPY_INTERNAL_STREAK`` in a row switch all copies."""
+    moment = time.monotonic()
+    if _worker.internal_streak and moment - _worker.internal_last > COPY_FALLBACK_SECONDS:
+        _worker.internal_streak = 0
+    _worker.internal_streak += 1
+    _worker.internal_last = moment
+    if _worker.internal_streak >= COPY_INTERNAL_STREAK:
+        _mark_copy_unsupported(f"{code} ×{_worker.internal_streak}")
+    else:
+        logger.info("SCX drive copy_within %s (%d/%d) for one item; trying download → upload", code,
+                    _worker.internal_streak, COPY_INTERNAL_STREAK)
+
+
+def _mark_copy_unsupported(reason: str, *, permanent: bool = False) -> None:
+    if not _worker.copy_unsupported and not _worker.copy_fallback_until:
         logger.warning("SCX drive copy_within unsupported (%s): Final copies fall back to download → upload "
                        "(contract C7; record in the acceptance log)", reason)
-    _worker.copy_unsupported = True
+    if permanent:
+        _worker.copy_unsupported = True
+    else:
+        _worker.copy_fallback_until = time.monotonic() + COPY_FALLBACK_SECONDS
 
 
 def _download_upload(gateway: Any, item: Item, live: Any) -> _Outcome:
     method = "DOWNLOAD_UPLOAD"
+    size = live.size if live.size is not None else item.size_bytes
+    if size is not None and not _staging_has_room(int(size)):
+        return _Outcome("RETRY", "DRIVE_STAGING_FULL", ERROR_MESSAGES["DRIVE_STAGING_FULL"], method=method)
     work = server_local.new_dir(drive_gateway.current_settings().staging_dir, "xfer-")
     try:
         result = gateway.download_to(_drive_path(str(item.src_rel)), work, max_bytes=TRANSFER_MAX_BYTES)
@@ -794,10 +1008,8 @@ def _download_upload(gateway: Any, item: Item, live: Any) -> _Outcome:
                 outcome = _failure(error)
                 outcome.method = method
                 return outcome
-            existing = gateway.stat(_drive_path(item.target))
-            if _same_content(existing, size=int(result.size), sha1=sha1, own_attempt=item.attempts > 1):
-                return _Outcome("DONE", entry=existing, method=method)
-            return _Outcome("CONFLICT", "SPDM_CONFLICT", method=method)
+            return _existing_outcome(gateway, item, gateway.stat(_drive_path(item.target)), size=int(result.size),
+                                     sha1=sha1, sha256=str(result.sha256), method=method)
         return _Outcome("DONE", entry=_with_sha1(entry, sha1), method=method)
     except Exception as error:  # noqa: BLE001
         outcome = _failure(error)
@@ -838,25 +1050,61 @@ def _token_version(token: str) -> Any:
 
 # --- staging cleanup (05 §7) ------------------------------------------------------------------
 
-def _cleanup_orphans() -> None:
-    """Upload staging folders older than a day that no open queue item or Final plan uses."""
+def _cleanup_orphans() -> int:
+    """Server staging cleanup (05 §7; never the drive).  Folders older than a day are removed unless
+
+    * a batch with open items (``PENDING``/``RUNNING``/``BLOCKED``) or a ``PUBLISHING`` Final uses them, or
+    * they belong to a batch waiting for an admin decision (``CONFLICT``/``FAILED`` items) or to an
+      unfinished Final (``PLANNED``/``STAGED``/``FAILED``, retry keeps its reports) whose last activity is
+      younger than ``STAGING_MAX_AGE_SECONDS`` (review #9: such staging no longer stays forever).
+    """
     settings = drive_gateway.current_settings()
     candidates = server_local.old_dirs(settings.staging_dir, STAGING_PREFIX, ORPHAN_SECONDS)
     candidates += server_local.old_dirs(settings.staging_dir, "xfer-", ORPHAN_SECONDS)
     if not candidates:
-        return
+        return 0
+    cutoff = _now() - timedelta(seconds=STAGING_MAX_AGE_SECONDS)
+    activity: dict[str, Any] = {}
+
+    def note_activity(key: Any, moment: Any) -> None:
+        key = str(key)
+        known = activity.get(key)
+        if not isinstance(known, datetime) or (isinstance(moment, datetime) and moment > known):
+            activity[key] = moment
+
     with connect() as conn:
         live = {str(row[0]) for row in conn.execute(
-            "SELECT DISTINCT batch_id FROM drive_upload_queue WHERE state NOT IN ('DONE','CANCELLED')").fetchall()}
+            "SELECT DISTINCT batch_id FROM drive_upload_queue WHERE state IN ('PENDING','RUNNING','BLOCKED')").fetchall()}
         live |= {str(row[0]) for row in conn.execute(
-            "SELECT operation_id FROM finalization_operations WHERE status <> 'COMPLETE'").fetchall()}
+            "SELECT operation_id FROM finalization_operations WHERE status='PUBLISHING'").fetchall()}
+        for row in conn.execute("SELECT batch_id, max(updated_at) FROM drive_upload_queue "
+                                "WHERE state IN ('CONFLICT','FAILED') GROUP BY batch_id").fetchall():
+            note_activity(row[0], row[1])
+        waiting = set(activity)
+        for row in conn.execute("SELECT operation_id, updated_at FROM finalization_operations "
+                                "WHERE status IN ('PLANNED','STAGED','FAILED')").fetchall():
+            waiting.add(str(row[0]))
+            note_activity(row[0], row[1])
+        for row in conn.execute("SELECT batch_id, max(updated_at) FROM drive_upload_queue GROUP BY batch_id").fetchall():
+            if str(row[0]) in waiting:
+                note_activity(row[0], row[1])
+    removed = 0
     for folder in candidates:
         name = folder.name[len(STAGING_PREFIX):] if folder.name.startswith(STAGING_PREFIX) else None
         if name is not None and name in live:
             continue
+        if name is not None and name in waiting:
+            last = activity.get(name)
+            if not isinstance(last, datetime) or last > cutoff:
+                continue
         server_local.remove_tree(folder)
+        removed += 1
+    if removed:
+        logger.info("SCX drive upload queue: removed %d server staging folder(s)", removed)
+    return removed
 
 
 __all__ = ["AUTOSTART", "Item", "admin_list", "wait_batch", "wake", "batch_items", "batch_summary", "cancel_item", "enqueue", "get_item",
            "new_batch_id", "process_next", "queue_paused", "recover_interrupted", "requeue_batch", "resume_blocked",
-           "retry_item", "run_until_idle", "staging_dir_for", "start", "stop", "summarize", "worker_running"]
+           "request_finish", "retry_item", "run_until_idle", "staging_dir_for", "start", "stop", "summarize", "sweep",
+           "worker_running"]

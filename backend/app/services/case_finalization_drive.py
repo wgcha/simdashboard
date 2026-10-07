@@ -121,18 +121,70 @@ def _lock_scope(project_id: str, request_id: str) -> str:
     return f"final:{project_id}/{request_id}"
 
 
+def _for_update(conn: ConnectionLike) -> str:
+    return " FOR UPDATE" if getattr(conn, "backend", "duckdb") == "postgresql" else ""
+
+
+_LOCKED_MESSAGE = "같은 의뢰의 다른 Final 지정이 드라이브에 반영되고 있습니다. 끝난 뒤 다시 시도하세요."
+
+
 def _acquire_lock(conn: ConnectionLike, scope: str, owner: str) -> None:
+    """Take (or refresh) the request's Final lock for ``owner`` in the caller's transaction.
+
+    Review #6: the lock is held while its owner Final is ``PUBLISHING`` even after ``expires_at``
+    (a queue paused for credentials longer than 30 minutes); a takeover is conditional on the row
+    still being the one read (PostgreSQL also locks it ``FOR UPDATE``; DuckDB connections are
+    serialized per process).
+    """
     now = _now_db()
-    row = conn.execute("SELECT owner, expires_at FROM drive_locks WHERE scope=?", [scope]).fetchone()
+    expires = now + timedelta(minutes=LOCK_MINUTES)
+    row = conn.execute("SELECT owner, expires_at FROM drive_locks WHERE scope=?" + _for_update(conn), [scope]).fetchone()
     if row is None:
-        conn.execute("INSERT INTO drive_locks (scope, owner, acquired_at, expires_at) VALUES (?,?,?,?)",
-                     [scope, owner, now, now + timedelta(minutes=LOCK_MINUTES)])
+        conn.execute("INSERT OR IGNORE INTO drive_locks (scope, owner, acquired_at, expires_at) VALUES (?,?,?,?)",
+                     [scope, owner, now, expires])
+        row = conn.execute("SELECT owner, expires_at FROM drive_locks WHERE scope=?" + _for_update(conn), [scope]).fetchone()
+        if row is not None and str(row[0]) == owner:
+            return
+        if row is None:
+            raise Error("FINALIZATION_LOCKED", _LOCKED_MESSAGE)
+    holder, held_until = str(row[0]), row[1]
+    if holder != owner:
+        if isinstance(held_until, datetime) and held_until > now:
+            raise Error("FINALIZATION_LOCKED", _LOCKED_MESSAGE)
+        publishing = conn.execute("SELECT status FROM finalization_operations WHERE operation_id=?", [holder]).fetchone()
+        if publishing is not None and str(publishing[0]) == "PUBLISHING":
+            raise Error("FINALIZATION_LOCKED", _LOCKED_MESSAGE)
+    taken = conn.execute("UPDATE drive_locks SET owner=?, acquired_at=?, expires_at=? WHERE scope=? AND owner=? "
+                         "AND (owner=? OR expires_at<=?) RETURNING scope",
+                         [owner, now, expires, scope, holder, owner, now]).fetchone()
+    if taken is None:
+        raise Error("FINALIZATION_LOCKED", _LOCKED_MESSAGE)
+
+
+def acquire_retry_lock(conn: ConnectionLike, operation_id: str) -> None:
+    """Admin queue retry of a Final batch item: the Final takes (or keeps) its request lock first."""
+    operation = _operation(conn, operation_id)
+    if operation is None or operation["status"] == "COMPLETE":
         return
-    holder, expires = str(row[0]), row[1]
-    if holder != owner and isinstance(expires, datetime) and expires > now:
-        raise Error("FINALIZATION_LOCKED", "같은 의뢰의 다른 Final 지정이 드라이브에 반영되고 있습니다. 끝난 뒤 다시 시도하세요.")
-    conn.execute("UPDATE drive_locks SET owner=?, acquired_at=?, expires_at=? WHERE scope=?",
-                 [owner, now, now + timedelta(minutes=LOCK_MINUTES), scope])
+    _acquire_lock(conn, _lock_scope(operation["project_id"], operation["request_id"]), operation_id)
+
+
+def _lock_designations(conn: ConnectionLike, project_id: str, request_id: str) -> None:
+    """Serialize designation ``seq`` allocation of one request (review #5) until the caller commits.
+
+    PostgreSQL: a transaction advisory lock (same pattern as result registration paths); a
+    concurrent allocation waits, then reads the committed ``MAX``.  DuckDB: connections of the
+    process are serialized already (one ``with connect()`` at a time).
+    """
+    if getattr(conn, "backend", "duckdb") == "postgresql":
+        conn.execute("SELECT pg_advisory_xact_lock(hashtext(?))", [f"final-designation:{project_id}/{request_id}"])
+
+
+def _next_designation_seq(conn: ConnectionLike, project_id: str, request_id: str) -> int:
+    """Next ``designation_seq`` of the request; call after :func:`_lock_designations`."""
+    row = conn.execute("SELECT max(designation_seq) FROM finalization_operations WHERE project_id=? AND request_id=?",
+                       [project_id, request_id]).fetchone()
+    return int(row[0] or 0) + 1
 
 
 def _release_lock(conn: ConnectionLike, owner: str) -> None:
@@ -284,7 +336,9 @@ def stage_report(conn: ConnectionLike, *, project_id: str, request_id: str, envi
 
 # --- confirm ----------------------------------------------------------------------------------
 
-def _staged_reports(operation: dict[str, Any], formats: list[str]) -> list[dict[str, Any]]:
+def _staged_reports(operation: dict[str, Any], formats: list[str], *,
+                    uploaded: frozenset[str] = frozenset()) -> list[dict[str, Any]]:
+    """Staged report records; ``uploaded`` names (queue item already ``DONE``) need no staging file."""
     plan = operation["plan_json"]
     staged = operation["reports_json"] or {}
     reports: list[dict[str, Any]] = []
@@ -293,6 +347,10 @@ def _staged_reports(operation: dict[str, Any], formats: list[str]) -> list[dict[
         if not isinstance(entry, dict) or entry.get("file_name") != plan["report_files"][fmt]:
             raise Error("FINALIZATION_REPORT_NOT_STAGED", f"{fmt.upper()} 보고서가 올라가지 않았습니다. 보고서를 다시 올리세요.")
         path = _staging(operation["operation_id"]) / "reports" / entry["file_name"]
+        if entry["file_name"] in uploaded:
+            reports.append({"format": fmt, "file_name": entry["file_name"], "size": entry["size"],
+                            "sha256": entry["sha256"], "staging_path": str(path)})
+            continue
         try:
             actual = server_local.file_sha256(path)
         except OSError as exc:
@@ -355,7 +413,11 @@ def confirm(conn: ConnectionLike, *, project_id: str, request_id: str, environme
         if list(operation["report_formats"] or []) != formats:
             raise Error("FINALIZATION_REPORT_FORMATS_MISMATCH",
                         "이 Final 지정은 다른 보고서 형식으로 드라이브 반영을 시작했습니다. 같은 형식으로 다시 시도하세요.")
-        _staged_reports(operation, formats)
+        # Reports whose upload is already DONE need no staging file (review #2).
+        reports_dir = cf._expected_output_paths(plan)["Reports"]
+        uploaded = frozenset(str(item.dst_name) for item in upload_queue.batch_items(conn, operation["upload_batch_id"])
+                             if item.kind == "FILE" and item.state == "DONE" and item.dst_rel_dir == reports_dir)
+        _staged_reports(operation, formats, uploaded=uploaded)
         _acquire_lock(conn, _lock_scope(project_id, request_id), operation_id)
         upload_queue.requeue_batch(conn, operation["upload_batch_id"])
         conn.execute("UPDATE finalization_operations SET status='PUBLISHING', error_code=NULL, error_message=NULL, "
@@ -454,17 +516,20 @@ def _finalization_finished(batch_id: str, summary: dict[str, Any]) -> None:
             return
         now = _now_db()
         if summary["state"] == "DONE" and isinstance(operation["complete_json"], dict):
-            seq_row = conn.execute("SELECT max(designation_seq) FROM finalization_operations WHERE project_id=? AND request_id=?",
-                                   [operation["project_id"], operation["request_id"]]).fetchone()
-            seq = int(seq_row[0] or 0) + 1
-            conn.execute("UPDATE finalization_operations SET status='COMPLETE', designation_seq=?, error_code=NULL, "
-                         "error_message=NULL, updated_at=? WHERE operation_id=?", [seq, now, batch_id])
+            _lock_designations(conn, operation["project_id"], operation["request_id"])
+            seq = _next_designation_seq(conn, operation["project_id"], operation["request_id"])
+            if conn.execute("UPDATE finalization_operations SET status='COMPLETE', designation_seq=?, error_code=NULL, "
+                            "error_message=NULL, updated_at=? WHERE operation_id=? AND status<>'COMPLETE' RETURNING operation_id",
+                            [seq, now, batch_id]).fetchone() is None:
+                return      # finished concurrently (sweep and worker)
             _release_lock(conn, batch_id)
             _queue_designation(conn, _operation(conn, batch_id), actor=operation["confirmed_by"] or operation["created_by"])
             return
+        if operation["status"] != "PUBLISHING":
+            return
         error = (summary.get("errors") or [{}])[0]
         conn.execute("UPDATE finalization_operations SET status='FAILED', error_code=?, error_message=?, updated_at=? "
-                     "WHERE operation_id=?",
+                     "WHERE operation_id=? AND status='PUBLISHING'",
                      [error.get("code") or f"FINALIZATION_DRIVE_{summary['state']}", (error.get("message") or "")[:400],
                       now, batch_id])
         _release_lock(conn, batch_id)
@@ -673,15 +738,16 @@ def repair_summary(conn: ConnectionLike, *, project_id: str, request_id: str, en
     del override  # nothing on the drive is replaced in scx mode
     scope = cf._scope_for_status(conn, project_id, request_id, environment, case_id)
     env = str(environment).upper()
+    # Review #5: serialize with other allocations first, then read the current state (a concurrent
+    # repair of the same Final sees the batch the first one queued and queues nothing).
+    _lock_designations(conn, project_id, request_id)
     current = _current_by_environment(conn, project_id, request_id).get(env)
     if current is None or current["root_key"] != scope["root_key"]:
         raise Error("FINALIZATION_NO_CURRENT", "완료된 Final이 없습니다.")
     batch = upload_queue.batch_summary(conn, current["designation_batch_id"]) if current["designation_batch_id"] else None
     if batch is not None and not batch["finished"]:
         return status(conn, project_id=project_id, request_id=request_id, environment=environment, case_id=case_id)
-    seq_row = conn.execute("SELECT max(designation_seq) FROM finalization_operations WHERE project_id=? AND request_id=?",
-                           [project_id, request_id]).fetchone()
-    seq = int(seq_row[0] or 0) + 1
+    seq = _next_designation_seq(conn, project_id, request_id)
     conn.execute("UPDATE finalization_operations SET designation_seq=?, updated_at=? WHERE operation_id=?",
                  [seq, _now_db(), current["operation_id"]])
     _queue_designation(conn, _operation(conn, current["operation_id"]), actor=actor, seq=seq)
@@ -705,5 +771,5 @@ def latest_completed(conn: ConnectionLike, *, project_id: str, request_id: str,
     return record, [str(item["file_name"]) for item in (record or {}).get("reports") or []]
 
 
-__all__ = ["active", "check_report_target", "confirm", "designation_name", "job_status", "latest_completed",
+__all__ = ["acquire_retry_lock", "active", "check_report_target", "confirm", "designation_name", "job_status", "latest_completed",
            "materialize_drive_item", "on_drive_batch_finished", "preview", "repair_summary", "stage_report", "status"]

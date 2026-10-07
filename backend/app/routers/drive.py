@@ -623,6 +623,17 @@ def _queue_action(request: Request, item_id: str, action: str) -> DriveQueueItem
     _require_admin(request)
     _require_scx()
     with connect() as conn:
+        existing = upload_queue.get_item(conn, item_id)
+        if existing is not None and action == "retry" and existing.origin == "finalization" and existing.origin_ref \
+                and existing.state in {"FAILED", "CONFLICT", "BLOCKED", "CANCELLED", "PENDING"}:
+            # A Final batch runs again only while it holds its request lock (review #6).
+            from ..services import case_finalization_drive
+            from ..services.case_finalization import CaseFinalizationError
+
+            try:
+                case_finalization_drive.acquire_retry_lock(conn, existing.origin_ref)
+            except CaseFinalizationError as error:
+                raise _fail(409, error.code, str(error)) from None
         try:
             item = (upload_queue.retry_item if action == "retry" else upload_queue.cancel_item)(conn, item_id)
         except LookupError:
@@ -637,6 +648,9 @@ def _queue_action(request: Request, item_id: str, action: str) -> DriveQueueItem
                           action="DRIVE_QUEUE_ITEM_RETRIED" if action == "retry" else "DRIVE_QUEUE_ITEM_CANCELLED",
                           detail={"item_id": item_id, "batch_id": item.batch_id, "origin": item.origin,
                                   "origin_ref": item.origin_ref, "target": item.target}, connection=conn)
+    if action == "cancel":
+        # After the commit (review #4): the batch's finish hook sees the cancelled item.
+        upload_queue.request_finish(item.batch_id)
     upload_queue.wake()
     return DriveQueueItem(**item.view())
 

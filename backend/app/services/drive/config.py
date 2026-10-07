@@ -57,6 +57,9 @@ class DriveSettings:
     writes_enabled: bool = False
     # 05 §5.2: attempts of one queue item for retryable drive errors before it is FAILED.
     upload_max_attempts: int = 8
+    # D3 review #1: a same-name drive file without sha1 is downloaded (server staging) and compared by
+    # sha256 up to this size; a larger one ends the queue item CONFLICT for an admin decision.
+    verify_max_bytes: int = 2 * 1024 ** 3
     # 05 §3 server blob store for downloaded files above BLOB_THRESHOLD_BYTES (content-addressed).
     blob_dir: Path = DEFAULT_WORK_DIR / "blobs"
     blob_max_bytes: int = 100 * 1024 ** 3
@@ -217,6 +220,7 @@ def drive_settings() -> DriveSettings:
         secret_key=_fernet_key("SIMDASH_SECRET_ENC_KEY"),
         writes_enabled=_flag("SIMDASH_DRIVE_WRITES_ENABLED"),
         upload_max_attempts=int(_number("SIMDASH_DRIVE_UPLOAD_MAX_ATTEMPTS", 8, 1, 100, integer=True)),
+        verify_max_bytes=int(_number("SIMDASH_DRIVE_VERIFY_MAX_BYTES", 2 * 1024 ** 3, 0, 2 ** 50, integer=True)),
         blob_dir=blob_dir,
         blob_max_bytes=int(_number("SIMDASH_DRIVE_BLOB_MAX_BYTES", 100 * 1024 ** 3, 64 * 1024 ** 2, 2 ** 50, integer=True)),
     )

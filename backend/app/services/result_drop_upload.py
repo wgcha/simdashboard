@@ -745,6 +745,8 @@ def _expire_sessions() -> None:
         dropped = [_sessions.pop(key) for key in expired]
     for item in dropped:
         with item.lock:
+            if item.state == "QUEUED":
+                continue        # its staging belongs to the drive upload queue (review #10)
             _remove_staging(item)
             _remove_empty_created(item)
             item.state = "EXPIRED"
@@ -1155,8 +1157,7 @@ def _complete_drive(conn: ConnectionLike, session: _Session, user_id: str) -> di
                              environment=scope.environment, items=items)
         summary = upload_queue.batch_summary(conn, session.id)
         session.state = "QUEUED"
-    with _registry_lock:
-        _sessions.pop(session.id, None)
+    # The session leaves the registry only after the caller committed (review #10: :func:`after_complete`).
     result = _session_view(session)
     result.update({
         "published_files": 0, "published_bytes": 0, "created_folders": [], "busy": [],
@@ -1167,6 +1168,37 @@ def _complete_drive(conn: ConnectionLike, session: _Session, user_id: str) -> di
         "cases": cases, "drive": summary,
     })
     return result
+
+
+def after_complete(session_id: str, *, committed: bool) -> None:
+    """Router hook after the transaction of a drive ``complete`` ended (review #10).
+
+    Committed: the queued session leaves the registry (its staging now belongs to the queue).
+    Not committed (rollback, commit failure): the session can be completed again unless the batch
+    exists after all (DuckDB statements are not rolled back); then it leaves the registry too.
+    """
+    from ..database_connection import connect
+
+    with _registry_lock:
+        session = _sessions.get(session_id)
+    if session is None or session.state != "QUEUED":
+        return
+    queued = committed
+    if not committed:
+        try:
+            with connect() as conn:
+                queued = upload_queue.batch_summary(conn, session_id) is not None
+        except Exception:  # noqa: BLE001 - unknown: keep the session closed; it expires with its staging kept
+            return
+    with session.lock:
+        if session.state != "QUEUED":
+            return
+        if not queued:
+            session.state = "UPLOADING"
+            session.touched = time.monotonic()
+            return
+    with _registry_lock:
+        _sessions.pop(session_id, None)
 
 
 def on_drive_batch_finished(origin: str, batch_id: str, summary: dict[str, Any]) -> None:

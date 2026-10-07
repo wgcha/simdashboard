@@ -17,6 +17,7 @@ import sys
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -413,7 +414,8 @@ def test_copy_within_unsupported_falls_back_to_download_and_upload(scxw):
     assert {item["transfer_method"] for item in complete["files"]} == {"DOWNLOAD_UPLOAD"}
     mirrored = scxw.path(f"{FINAL}/CAE/{CASE_LABEL}/{plan['operation_id']}/Drop/85qn80h_ref_organized/INDIVIDUAL/3_Face/part.inc")
     assert scxw.drive.content(mirrored) == b"3_Face include\n"
-    assert sum(1 for op, _ in scxw.drive.calls if op == "copy_within") == 1   # detected once, then fallback only
+    # three INTERNALs in a row switch to the fallback (review #7), then fallback only
+    assert sum(1 for op, _ in scxw.drive.calls if op == "copy_within") == upload_queue.COPY_INTERNAL_STREAK
     assert not list(drive_gateway.current_settings().staging_dir.glob("xfer-*"))
 
 
@@ -530,6 +532,322 @@ def test_request_progress_reads_final_state_from_the_db(scxw):
         record, names = case_finalization_drive.latest_completed(conn, project_id=ctx["project_id"],
                                                                  request_id=ctx["request_id"], environment="DISTRIBUTION")
     assert record["status"] == "COMPLETE" and names == [f"{CASE_LABEL}_report.html"]
+
+
+# --- D3 independent review fixes ---------------------------------------------------------------------
+
+def test_same_size_file_without_sha1_after_an_own_attempt_is_compared_by_content(scxw):
+    """Review #1: never DONE on size alone — the target is downloaded and its sha256 compared."""
+    project_id, request_id = _register(scxw)
+    session = _drop(scxw, project_id, request_id, [("2_Face/same.csv", b"AAAA\n"), ("2_Face/twin.csv", b"CCCC\n")])
+    other, twin = scxw.path(f"{OPTION}/2_Face/same.csv"), scxw.path(f"{OPTION}/2_Face/twin.csv")
+    scxw.drive.fail_path[("upload_new", other)] = [ErrorCode.TIMEOUT]
+    scxw.drive.fail_path[("upload_new", twin)] = [ErrorCode.TIMEOUT]
+    _complete(scxw, session["session_id"])
+    _settle()
+    assert [state for _k, state, *_ in _items(session["session_id"])][-2:] == ["PENDING", "PENDING"]
+    scxw.drive.add_file(other, b"BBBB\n")            # someone else: different content, same size
+    scxw.drive.add_file(twin, b"CCCC\n")             # someone else: the very same bytes
+    scxw.drive.stat_has_sha1 = False                 # C1/C9: drive stat without sha1
+    _settle(now=_later())
+    states = {target.rsplit("/", 1)[-1]: state for _k, state, target, _m, _a in _items(session["session_id"])}
+    assert states == {"same.csv": "CONFLICT", "twin.csv": "DONE"}, states
+    assert scxw.drive.content(other) == b"BBBB\n"   # never overwritten
+    assert set(scxw.drive.downloads()) >= {other, twin}
+    with connect() as conn:
+        sha1 = conn.execute("SELECT result_sha1 FROM drive_upload_queue WHERE batch_id=? AND dst_name='twin.csv'",
+                            [session["session_id"]]).fetchone()[0]
+    assert sha1 == hashlib.sha1(b"CCCC\n").hexdigest()
+    assert not list(drive_gateway.current_settings().staging_dir.glob("xfer-*"))
+
+
+def test_same_name_file_above_the_verify_limit_needs_an_admin_decision(scxw, monkeypatch):
+    project_id, request_id = _register(scxw)
+    session = _drop(scxw, project_id, request_id, [("2_Face/big.csv", b"0123456789\n")])
+    target = scxw.path(f"{OPTION}/2_Face/big.csv")
+    _complete(scxw, session["session_id"])
+    scxw.drive.add_file(target, b"0123456789\n")
+    scxw.drive.stat_has_sha1 = False
+    settings = drive_gateway.current_settings()
+    monkeypatch.setattr(drive_gateway, "current_settings", lambda: replace(settings, verify_max_bytes=4))
+    _settle()
+    batch = _batch(scxw, session["session_id"])
+    assert batch["errors"][0]["code"] == "SPDM_CONFLICT_UNVERIFIED" and _items(session["session_id"])[-1][1] == "CONFLICT"
+    assert target not in scxw.drive.downloads()
+
+
+def test_final_retry_after_the_reports_were_uploaded_needs_no_new_report(scxw):
+    """Review #2: plan.json fails after the report is DONE; the panel's retry (no re-staging) completes."""
+    ctx = _final_ctx(scxw)
+    plan = _preview(scxw, ctx)
+    operation_id = plan["operation_id"]
+    _stage(scxw, ctx, operation_id)
+    plan_json = scxw.path(f"{FINAL}/.finalizations/{operation_id}/plan.json")
+    scxw.drive.fail_path[("upload_new", plan_json)] = [ErrorCode.FORBIDDEN]
+    assert _confirm(scxw, ctx, operation_id).status_code == 200
+    _settle()
+    assert _job(scxw, ctx, operation_id)["state"] == "FAILED"
+    report = upload_queue.staging_dir_for(operation_id) / "reports" / f"{CASE_LABEL}_report.html"
+    assert report.exists()                          # a Final keeps its staging until the batch is DONE
+    report.unlink()                                 # even without it: the uploaded report is not re-checked
+    retried = _confirm(scxw, ctx, operation_id)
+    assert retried.status_code == 200, retried.text
+    _settle()
+    assert _job(scxw, ctx, operation_id)["state"] == "COMPLETE"
+    assert not upload_queue.staging_dir_for(operation_id).exists()
+    reports = [rel for op, rel in scxw.drive.calls if op == "upload_new" and rel.endswith("_report.html")]
+    assert len(reports) == 1                        # uploaded once
+
+
+def test_a_failed_result_recording_is_retried_and_a_lost_one_is_swept_back(scxw, monkeypatch):
+    """Review #3: the DB write after a drive call fails — retried; still failing → RUNNING → sweep → stat → DONE."""
+    monkeypatch.setattr(upload_queue, "RECORD_RETRY_DELAYS", (0.0, 0.0))
+    project_id, request_id = _register(scxw)
+    session = _drop(scxw, project_id, request_id, [("2_Face/hiccup.csv", b"hiccup\n"), ("2_Face/lost2.csv", b"lost\n")])
+    _complete(scxw, session["session_id"])
+    real = upload_queue._apply
+    failures = {"left": 1}
+
+    def flaky(conn, item, outcome):
+        if item.kind == "FILE" and failures["left"]:
+            failures["left"] -= 1
+            raise RuntimeError("db hiccup after the drive call")
+        return real(conn, item, outcome)
+
+    monkeypatch.setattr(upload_queue, "_apply", flaky)
+    assert upload_queue.process_next() and upload_queue.process_next()     # MKDIR?, first FILE (one retry)
+    _settle()
+    assert all(state == "DONE" for _k, state, *_ in _items(session["session_id"]))
+    session = _drop(scxw, project_id, request_id, [("2_Face/stuck.csv", b"stuck\n")])
+    _complete(scxw, session["session_id"])
+    failures["left"] = 99
+    with pytest.raises(RuntimeError):
+        _settle()
+    assert _items(session["session_id"])[-1][1] == "RUNNING"
+    failures["left"] = 0
+    assert upload_queue.sweep()["resumed"] == 1
+    _settle(now=_later())
+    target = scxw.path(f"{OPTION}/2_Face/stuck.csv")
+    assert _items(session["session_id"])[-1][1] == "DONE"
+    assert sum(1 for op, rel in scxw.drive.calls if op == "upload_new" and rel == target) == 1   # stat, no re-upload
+
+
+def test_a_failed_finish_hook_is_completed_by_the_sweep(scxw, monkeypatch):
+    from app.services import case_finalization_drive
+
+    ctx = _final_ctx(scxw)
+    plan = _preview(scxw, ctx)
+    _stage(scxw, ctx, plan["operation_id"])
+    assert _confirm(scxw, ctx, plan["operation_id"]).status_code == 200
+    real = case_finalization_drive._finalization_finished
+
+    def broken(*args):
+        raise RuntimeError("DB down while finishing")
+
+    monkeypatch.setattr(case_finalization_drive, "_finalization_finished", broken)
+    _settle()
+    assert _job(scxw, ctx, plan["operation_id"])["state"] == "RUNNING"
+    monkeypatch.setattr(case_finalization_drive, "_finalization_finished", real)
+    assert upload_queue.sweep()["publishing"] == 1
+    assert _job(scxw, ctx, plan["operation_id"])["state"] == "COMPLETE"
+    with connect() as conn:
+        assert conn.execute("SELECT count(*) FROM drive_locks").fetchone()[0] == 0
+
+
+def test_admin_cancel_runs_the_finish_hook_only_after_commit(scxw):
+    """Review #4: cancel_item registers nothing; the router asks for the finish hook after its commit."""
+    ctx = _final_ctx(scxw)
+    plan = _preview(scxw, ctx)
+    operation_id = plan["operation_id"]
+    _stage(scxw, ctx, operation_id)
+    scxw.drive.fail_next["mkdirs"] = ErrorCode.AUTH_REQUIRED
+    assert _confirm(scxw, ctx, operation_id).status_code == 200
+    _settle()
+    with connect() as conn:
+        blocked = conn.execute("SELECT id FROM drive_upload_queue WHERE batch_id=? AND state='BLOCKED'",
+                               [operation_id]).fetchone()[0]
+        upload_queue.cancel_item(conn, blocked)
+        conn.execute("UPDATE drive_upload_queue SET state='BLOCKED' WHERE id=?", [blocked])   # "rolled back"
+    assert operation_id not in upload_queue._pending_finish
+    cancelled = scxw.client.post(f"/api/admin/drive/queue/{blocked}/cancel")
+    assert cancelled.status_code == 200, cancelled.text
+    assert operation_id in upload_queue._pending_finish
+    _settle()
+    job = _job(scxw, ctx, operation_id)
+    assert job["state"] == "FAILED" and job["drive"]["state"] == "CANCELLED", job
+    with connect() as conn:
+        assert conn.execute("SELECT count(*) FROM drive_locks").fetchone()[0] == 0
+
+
+def test_concurrent_summary_repairs_queue_one_designation_file(scxw):
+    """Review #5: designation seq allocation is serialized per request."""
+    import threading
+
+    from app.services import case_finalization_drive
+
+    ctx = _final_ctx(scxw)
+    plan = _designate(scxw, ctx)
+    errors: list[BaseException] = []
+    barrier = threading.Barrier(2)
+
+    def repair() -> None:
+        try:
+            barrier.wait(10)
+            with connect() as conn:
+                case_finalization_drive.repair_summary(conn, project_id=ctx["project_id"], request_id=ctx["request_id"],
+                                                       environment="DISTRIBUTION", case_id=ctx["case_id"], actor="tester")
+        except BaseException as error:  # noqa: BLE001
+            errors.append(error)
+
+    threads = [threading.Thread(target=repair) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(60)
+    assert errors == []
+    with connect() as conn:
+        batches = conn.execute("SELECT count(DISTINCT batch_id) FROM drive_upload_queue WHERE origin='final_designation' "
+                               "AND origin_ref=?", [plan["operation_id"]]).fetchone()[0]
+    assert batches == 2                              # the first designation + one repair
+    _settle()
+    names = sorted(rel.rsplit("/", 1)[-1] for rel in scxw.drive.nodes if "/designations/" in rel)
+    assert names == [f"00000001-{plan['operation_id']}.json", f"00000002-{plan['operation_id']}.json"]
+
+
+def test_the_final_lock_is_held_while_its_final_is_publishing(scxw):
+    """Review #6: an expired lock of a PUBLISHING (paused) Final is not taken over; admin retry needs the lock."""
+    ctx = _final_ctx(scxw)
+    first, second = _preview(scxw, ctx), _preview(scxw, ctx)
+    _stage(scxw, ctx, first["operation_id"])
+    _stage(scxw, ctx, second["operation_id"])
+    scxw.drive.fail_next["mkdirs"] = ErrorCode.FORBIDDEN
+    assert _confirm(scxw, ctx, first["operation_id"]).status_code == 200
+    _settle()
+    assert _job(scxw, ctx, first["operation_id"])["state"] == "FAILED"
+    scxw.drive.fail_next["mkdirs"] = ErrorCode.AUTH_REQUIRED
+    assert _confirm(scxw, ctx, second["operation_id"]).status_code == 200
+    _settle()
+    assert _job(scxw, ctx, second["operation_id"])["drive"]["state"] == "PAUSED"
+    with connect() as conn:   # 31 minutes later, credentials not registered yet
+        conn.execute("UPDATE drive_locks SET expires_at=?", [datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=1)])
+        failed_item = conn.execute("SELECT id FROM drive_upload_queue WHERE batch_id=? AND state='FAILED'",
+                                   [first["operation_id"]]).fetchone()[0]
+    locked = _confirm(scxw, ctx, first["operation_id"])
+    assert locked.status_code == 409 and locked.json()["detail"]["code"] == "FINALIZATION_LOCKED", locked.text
+    admin = scxw.client.post(f"/api/admin/drive/queue/{failed_item}/retry")
+    assert admin.status_code == 409 and admin.json()["detail"]["code"] == "FINALIZATION_LOCKED", admin.text
+    assert scxw.client.put("/api/admin/drive/credentials", content=_bundle()).status_code == 200
+    _settle()
+    assert _job(scxw, ctx, second["operation_id"])["state"] == "COMPLETE"
+    retried = scxw.client.post(f"/api/admin/drive/queue/{failed_item}/retry")
+    assert retried.status_code == 200, retried.text
+    _settle()
+    assert _job(scxw, ctx, first["operation_id"])["state"] == "COMPLETE"
+    status = _status(scxw, ctx)
+    assert status["current_final"]["operation_id"] == first["operation_id"]
+    with connect() as conn:
+        assert conn.execute("SELECT count(*) FROM drive_locks").fetchone()[0] == 0
+
+
+def test_a_single_copy_within_internal_falls_back_for_that_item_only(scxw):
+    """Review #7: one INTERNAL is not "unsupported"; three in a row switch to download → upload."""
+    ctx = _final_ctx(scxw)
+    plan = _preview(scxw, ctx)
+    first = plan["files"][0]["source_relative_path"]
+    scxw.drive.fail_path[("copy_within", scxw.path(first))] = [ErrorCode.INTERNAL]
+    _stage(scxw, ctx, plan["operation_id"])
+    assert _confirm(scxw, ctx, plan["operation_id"]).status_code == 200
+    _settle()
+    job = _job(scxw, ctx, plan["operation_id"])
+    assert job["state"] == "COMPLETE" and job["drive"]["transfer_methods"] == {"DOWNLOAD_UPLOAD": 1, "COPY_WITHIN": len(plan["files"]) - 1}, job
+    assert upload_queue._worker.copy_fallback_until == 0.0 and not upload_queue._worker.copy_unsupported
+
+
+def test_fallback_download_waits_when_server_staging_is_full(scxw, monkeypatch):
+    from app.services.storage import server_local
+
+    ctx = _final_ctx(scxw)
+    scxw.drive.copy_unsupported = True
+    plan = _preview(scxw, ctx)
+    _stage(scxw, ctx, plan["operation_id"])
+    assert _confirm(scxw, ctx, plan["operation_id"]).status_code == 200
+    downloads = len(scxw.drive.downloads())
+    with monkeypatch.context() as patched:
+        patched.setattr(server_local, "disk_free", lambda path: 1024)
+        _settle()
+    waiting = [row for row in _items(plan["operation_id"]) if row[0] == "COPY" and row[1] == "PENDING"]
+    assert waiting and len(scxw.drive.downloads()) == downloads     # nothing downloaded without room
+    with connect() as conn:
+        codes = {row[0] for row in conn.execute("SELECT last_error_code FROM drive_upload_queue WHERE batch_id=? AND kind='COPY' "
+                                                "AND last_error_code IS NOT NULL", [plan["operation_id"]]).fetchall()}
+    assert codes == {"DRIVE_STAGING_FULL"}
+    _settle(now=_later())
+    assert _job(scxw, ctx, plan["operation_id"])["state"] == "COMPLETE"
+
+
+def test_staging_of_stopped_batches_and_unfinished_finals_is_removed_after_the_age_limit(scxw):
+    """Review #9: hourly cleanup; never the drive."""
+    import os
+
+    ctx = _final_ctx(scxw)
+    old_final = _preview(scxw, ctx)["operation_id"]
+    new_final = _preview(scxw, ctx)["operation_id"]
+    _stage(scxw, ctx, old_final)
+    _stage(scxw, ctx, new_final)
+    project_id, request_id = ctx["project_id"], ctx["request_id"]
+    session = _drop(scxw, project_id, request_id, [("2_Face/keep.csv", b"mine\n")])
+    _complete(scxw, session["session_id"])
+    scxw.drive.add_file(scxw.path(f"{OPTION}/2_Face/keep.csv"), b"theirs\n")
+    _settle()
+    assert _items(session["session_id"])[-1][1] == "CONFLICT"
+    staging = drive_gateway.current_settings().staging_dir
+    folders = {name: upload_queue.staging_dir_for(name) for name in (old_final, new_final, session["session_id"])}
+    two_days = time.time() - 2 * 24 * 3600
+    for folder in folders.values():
+        assert folder.exists()
+        os.utime(folder, (two_days, two_days))
+    stale = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=8)
+    with connect() as conn:
+        conn.execute("UPDATE finalization_operations SET updated_at=? WHERE operation_id=?", [stale, old_final])
+    writes = list(scxw.drive.writes())
+    assert upload_queue.sweep(cleanup=True)["staging_removed"] == 1
+    assert not folders[old_final].exists() and folders[new_final].exists() and folders[session["session_id"]].exists()
+    with connect() as conn:
+        conn.execute("UPDATE drive_upload_queue SET updated_at=? WHERE batch_id=?", [stale, session["session_id"]])
+    assert upload_queue.sweep(cleanup=True)["staging_removed"] == 1
+    assert not folders[session["session_id"]].exists() and folders[new_final].exists()
+    assert scxw.drive.writes() == writes and staging.exists()
+
+
+def test_a_drop_completion_that_did_not_commit_can_be_completed_again(scxw, monkeypatch):
+    """Review #10: the session leaves the registry only after the router committed."""
+    from app.routers import result_registration as router
+
+    project_id, request_id = _register(scxw)
+    session = _drop(scxw, project_id, request_id, [("2_Face/commit.csv", b"commit\n")])
+    real = router._drop_audit
+
+    def failing(request, action, detail, **kwargs):
+        if action == "RESULT_DROP_UPLOAD_QUEUED":
+            kwargs["conn"].execute("DELETE FROM drive_upload_queue WHERE batch_id=?", [session["session_id"]])  # rollback
+            raise RuntimeError("commit failed")
+        return real(request, action, detail, **kwargs)
+
+    monkeypatch.setattr(router, "_drop_audit", failing)
+    with pytest.raises(RuntimeError):
+        scxw.client.post(f"{REG}/drop-uploads/{session['session_id']}/complete")
+    monkeypatch.setattr(router, "_drop_audit", real)
+    assert result_drop_upload.read_session(session["session_id"], _user_id(scxw))["state"] == "UPLOADING"
+    result = _complete(scxw, session["session_id"])
+    assert result["state"] == "QUEUED"
+    _settle()
+    assert scxw.drive.content(scxw.path(f"{OPTION}/2_Face/commit.csv")) == b"commit\n"
+    gone = scxw.client.post(f"{REG}/drop-uploads/{session['session_id']}/complete")
+    assert gone.status_code == 404
+
+
+def _user_id(scxw) -> str:
+    return scxw.client.get("/api/auth/me").json()["id"]
 
 
 # --- gates and static rules --------------------------------------------------------------------------
