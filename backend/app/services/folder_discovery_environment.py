@@ -665,6 +665,7 @@ def refresh_scope(conn, root, project_id: str, request_id: str, environment: str
     except BaseException:
         conn.execute("ROLLBACK")
         raise
+    drive_reads.after_commit()   # SCX drive (L1): the snapshot is durable; later misses fail, never repeat the body
     return {**_refresh_result(snapshot_id, "REFRESHED", not revision_only_unchanged, schema,
                               structure_fingerprint, content_fingerprint, diff, location_projection),
             "stat_fingerprint": quick_fingerprint}
@@ -1560,47 +1561,50 @@ def register(conn, preview_id, idempotency_key, capture, principal, root, *, cre
     except BaseException:
         conn.execute("ROLLBACK")
         raise
-    if capture:
-        try:
-            location_projection = _registration_location_projection(
-                conn, root, str(project_id), str(request_id), str(scan_row[2]),
-                str(preview_row[0]), preview_saved,
-            )
-        except Exception as exc:
-            error_code = _capture_context_error_code(exc)
-            _logger.warning(
-                "Environment capture projection failed registration_id=%s error_type=%s error_code=%s",
-                registration_id, type(exc).__name__, error_code,
-            )
-            conn.execute(
-                "UPDATE folder_environment_capture_jobs SET status='FAILED',error_code=?,updated_at=? "
-                "WHERE registration_id=? AND status IN ('PENDING','RUNNING')",
-                [error_code, now(), registration_id],
-            )
-            return registration(conn, registration_id)
-        for entry in [r for r in plan_rows if r["role_kind"] == "SIMULATION_CASE"]:
-            case_id = dashboard_capture._case_id(dashboard_capture._root_id(root), entry["relative_path"])
-            job_id = conn.execute("SELECT id FROM folder_environment_capture_jobs WHERE registration_id=? AND case_id=?", [registration_id, case_id]).fetchone()[0]
-            conn.execute("BEGIN TRANSACTION")
+    # SCX drive (L1): the registration is durable; a capture read the session lacks now fails its
+    # job (retryable, DRIVE_READ_NOT_PREPARED) instead of repeating the endpoint.
+    with drive_reads.committed_phase():
+        if capture:
             try:
-                conn.execute("UPDATE folder_environment_capture_jobs SET status='RUNNING',updated_at=? WHERE id=?", [now(), job_id])
-                if not conn.execute("SELECT 1 FROM dashboard_cases WHERE id=?", [case_id]).fetchone():
-                    _record_created_case(conn, registration_id, case_id)
-                capture_payload = _case_capture_payload(
-                    root, location_projection.schema, location_projection, entry["relative_path"],
-                    preview_saved.get("usage_reviews", {}).get(entry["relative_path"]),
+                location_projection = _registration_location_projection(
+                    conn, root, str(project_id), str(request_id), str(scan_row[2]),
+                    str(preview_row[0]), preview_saved,
                 )
-                outcome = dashboard_capture.create_capture(conn, capture_payload, actor=actor)
-                conn.execute("UPDATE folder_environment_capture_jobs SET status='COMPLETED',capture_id=?,updated_at=? WHERE id=?", [outcome["id"], now(), job_id])
-                conn.execute("COMMIT")
-            except dashboard_capture.DashboardCaptureError as exc:
-                conn.execute("ROLLBACK")
+            except Exception as exc:
+                error_code = _capture_context_error_code(exc)
+                _logger.warning(
+                    "Environment capture projection failed registration_id=%s error_type=%s error_code=%s",
+                    registration_id, type(exc).__name__, error_code,
+                )
+                conn.execute(
+                    "UPDATE folder_environment_capture_jobs SET status='FAILED',error_code=?,updated_at=? "
+                    "WHERE registration_id=? AND status IN ('PENDING','RUNNING')",
+                    [error_code, now(), registration_id],
+                )
+                return registration(conn, registration_id)
+            for entry in [r for r in plan_rows if r["role_kind"] == "SIMULATION_CASE"]:
+                case_id = dashboard_capture._case_id(dashboard_capture._root_id(root), entry["relative_path"])
+                job_id = conn.execute("SELECT id FROM folder_environment_capture_jobs WHERE registration_id=? AND case_id=?", [registration_id, case_id]).fetchone()[0]
                 conn.execute("BEGIN TRANSACTION")
-                conn.execute("UPDATE folder_environment_capture_jobs SET status='FAILED',error_code=?,updated_at=? WHERE id=?", [exc.code, now(), job_id])
-                conn.execute("COMMIT")
-            except BaseException:
-                conn.execute("ROLLBACK")
-                raise
+                try:
+                    conn.execute("UPDATE folder_environment_capture_jobs SET status='RUNNING',updated_at=? WHERE id=?", [now(), job_id])
+                    if not conn.execute("SELECT 1 FROM dashboard_cases WHERE id=?", [case_id]).fetchone():
+                        _record_created_case(conn, registration_id, case_id)
+                    capture_payload = _case_capture_payload(
+                        root, location_projection.schema, location_projection, entry["relative_path"],
+                        preview_saved.get("usage_reviews", {}).get(entry["relative_path"]),
+                    )
+                    outcome = dashboard_capture.create_capture(conn, capture_payload, actor=actor)
+                    conn.execute("UPDATE folder_environment_capture_jobs SET status='COMPLETED',capture_id=?,updated_at=? WHERE id=?", [outcome["id"], now(), job_id])
+                    conn.execute("COMMIT")
+                except dashboard_capture.DashboardCaptureError as exc:
+                    conn.execute("ROLLBACK")
+                    conn.execute("BEGIN TRANSACTION")
+                    conn.execute("UPDATE folder_environment_capture_jobs SET status='FAILED',error_code=?,updated_at=? WHERE id=?", [exc.code, now(), job_id])
+                    conn.execute("COMMIT")
+                except BaseException:
+                    conn.execute("ROLLBACK")
+                    raise
     return registration(conn, registration_id)
 
 
@@ -1726,41 +1730,44 @@ def retry(conn, registration_id, job_ids, principal=None, root=None):
                     [error_code, now(), *[job["id"] for job in jobs]],
                 )
             return registration(conn, registration_id)
-        for job in jobs:
-            case = conn.execute("SELECT project_id,request_id,relative_path,environment,storage_root_id FROM dashboard_cases WHERE id=?", [job["case_id"]]).fetchone()
-            if not case:
-                registration_row = conn.execute("SELECT project_id,request_id,environment FROM folder_environment_registrations WHERE id=?", [registration_id]).fetchone()
-                entry = next((row for row in plan_rows if row.get("role_kind") == "SIMULATION_CASE" and dashboard_capture._case_id(dashboard_capture._root_id(root), row["relative_path"]) == job["case_id"]), None)
-                if not registration_row or not entry:
+        # SCX drive (L1): from the first job commit on, a read miss fails that job (retryable,
+        # DRIVE_READ_NOT_PREPARED) instead of repeating the endpoint; the steps before only re-mark jobs.
+        with drive_reads.committed_phase():
+            for job in jobs:
+                case = conn.execute("SELECT project_id,request_id,relative_path,environment,storage_root_id FROM dashboard_cases WHERE id=?", [job["case_id"]]).fetchone()
+                if not case:
+                    registration_row = conn.execute("SELECT project_id,request_id,environment FROM folder_environment_registrations WHERE id=?", [registration_id]).fetchone()
+                    entry = next((row for row in plan_rows if row.get("role_kind") == "SIMULATION_CASE" and dashboard_capture._case_id(dashboard_capture._root_id(root), row["relative_path"]) == job["case_id"]), None)
+                    if not registration_row or not entry:
+                        conn.execute("UPDATE folder_environment_capture_jobs SET status='FAILED',error_code='CAPTURE_CONTEXT_MISSING',updated_at=? WHERE id=?", [now(), job["id"]]); continue
+                    case = (entry.get("project_id") or registration_row[0], entry.get("request_id") or registration_row[1], entry["relative_path"], registration_row[2], dashboard_capture._root_id(root))
+                else:
+                    entry = next((row for row in plan_rows if row.get("role_kind") == "SIMULATION_CASE" and row["relative_path"] == case[2]), None)
+                if not entry:
                     conn.execute("UPDATE folder_environment_capture_jobs SET status='FAILED',error_code='CAPTURE_CONTEXT_MISSING',updated_at=? WHERE id=?", [now(), job["id"]]); continue
-                case = (entry.get("project_id") or registration_row[0], entry.get("request_id") or registration_row[1], entry["relative_path"], registration_row[2], dashboard_capture._root_id(root))
-            else:
-                entry = next((row for row in plan_rows if row.get("role_kind") == "SIMULATION_CASE" and row["relative_path"] == case[2]), None)
-            if not entry:
-                conn.execute("UPDATE folder_environment_capture_jobs SET status='FAILED',error_code='CAPTURE_CONTEXT_MISSING',updated_at=? WHERE id=?", [now(), job["id"]]); continue
-            conn.execute("BEGIN TRANSACTION")
-            try:
-                conn.execute("UPDATE folder_environment_capture_jobs SET status='RUNNING',updated_at=? WHERE id=?", [now(), job["id"]])
-                if not conn.execute("SELECT 1 FROM dashboard_cases WHERE id=?", [job["case_id"]]).fetchone():
-                    _record_created_case(conn, registration_id, job["case_id"])
-                payload = _case_capture_payload(
-                    root, location_projection.schema, location_projection,
-                    entry["relative_path"],
-                    saved_preview.get("usage_reviews", {}).get(entry["relative_path"]),
-                )
-                result = dashboard_capture.create_capture(conn, payload, actor=principal.user_id)
-                conn.execute("UPDATE folder_environment_capture_jobs SET status='COMPLETED',capture_id=?,updated_at=? WHERE id=?", [result["id"], now(), job["id"]])
-                conn.execute("COMMIT")
-            except dashboard_capture.DashboardCaptureError as exc:
-                conn.execute("ROLLBACK")
                 conn.execute("BEGIN TRANSACTION")
-                conn.execute("UPDATE folder_environment_capture_jobs SET status='FAILED',error_code=?,updated_at=? WHERE id=?", [exc.code, now(), job["id"]])
-                conn.execute("COMMIT")
-            except Exception:
-                conn.execute("ROLLBACK")
-                conn.execute("BEGIN TRANSACTION")
-                conn.execute("UPDATE folder_environment_capture_jobs SET status='FAILED',error_code=?,updated_at=? WHERE id=?", ["CAPTURE_UNEXPECTED_ERROR", now(), job["id"]])
-                conn.execute("COMMIT")
+                try:
+                    conn.execute("UPDATE folder_environment_capture_jobs SET status='RUNNING',updated_at=? WHERE id=?", [now(), job["id"]])
+                    if not conn.execute("SELECT 1 FROM dashboard_cases WHERE id=?", [job["case_id"]]).fetchone():
+                        _record_created_case(conn, registration_id, job["case_id"])
+                    payload = _case_capture_payload(
+                        root, location_projection.schema, location_projection,
+                        entry["relative_path"],
+                        saved_preview.get("usage_reviews", {}).get(entry["relative_path"]),
+                    )
+                    result = dashboard_capture.create_capture(conn, payload, actor=principal.user_id)
+                    conn.execute("UPDATE folder_environment_capture_jobs SET status='COMPLETED',capture_id=?,updated_at=? WHERE id=?", [result["id"], now(), job["id"]])
+                    conn.execute("COMMIT")
+                except dashboard_capture.DashboardCaptureError as exc:
+                    conn.execute("ROLLBACK")
+                    conn.execute("BEGIN TRANSACTION")
+                    conn.execute("UPDATE folder_environment_capture_jobs SET status='FAILED',error_code=?,updated_at=? WHERE id=?", [exc.code, now(), job["id"]])
+                    conn.execute("COMMIT")
+                except Exception:
+                    conn.execute("ROLLBACK")
+                    conn.execute("BEGIN TRANSACTION")
+                    conn.execute("UPDATE folder_environment_capture_jobs SET status='FAILED',error_code=?,updated_at=? WHERE id=?", ["CAPTURE_UNEXPECTED_ERROR", now(), job["id"]])
+                    conn.execute("COMMIT")
     return registration(conn, registration_id)
 
 

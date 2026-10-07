@@ -11,12 +11,13 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 import threading
 import time
 import uuid
 from pathlib import Path
-from typing import BinaryIO
+from typing import BinaryIO, Iterable, Iterator
 
 
 def new_dir(parent: Path, prefix: str) -> Path:
@@ -167,16 +168,60 @@ def old_dirs(parent: Path, prefix: str, max_age_seconds: float) -> list[Path]:
     return found
 
 
-class BlobStore:
-    """Content-addressed store ``<dir>/<sha256[:2]>/<sha256>`` with a size cap (least recently used evicted)."""
+_BLOB_NAME = re.compile(r"[0-9a-f]{64}")
+_BLOB_FOLDER = re.compile(r"[0-9a-f]{2}")
 
-    def __init__(self, directory: Path, max_bytes: int) -> None:
+
+def _inside(path: Path, base: Path) -> bool:
+    try:
+        return path == base or path.is_relative_to(base)
+    except ValueError:
+        return False
+
+
+def _canonical(path: Path) -> Path:
+    try:
+        return Path(os.path.realpath(path))
+    except OSError:
+        return Path(os.path.abspath(path))
+
+
+def blob_dir_conflict(directory: Path, *, reserved: Iterable[Path] = (), outside: Iterable[Path] = ()) -> str | None:
+    """Why ``directory`` cannot hold the blob store, or ``None`` (L2).
+
+    Eviction deletes files there, so it must not be (or contain) another server
+    area (``reserved``: work and staging folders) nor lie inside one whose
+    contents are removed wholesale (``outside``: the staging folder).
+    """
+    target = _canonical(directory)
+    for area in reserved:
+        if _inside(_canonical(area), target):
+            return f"{area} 폴더와 같거나 그 상위 폴더입니다"
+    for area in outside:
+        if _inside(target, _canonical(area)):
+            return f"{area} 폴더 안에 있습니다"
+    return None
+
+
+class BlobStore:
+    """Content-addressed store ``<dir>/<sha256[:2]>/<sha256>`` with a size cap (least recently used evicted).
+
+    Only files named like a blob (64 lower-case hex digits) in the folder named
+    by their first two digits are ever considered for eviction; anything else
+    found in the folder is left alone.
+    """
+
+    def __init__(self, directory: Path, max_bytes: int, *, reserved: Iterable[Path] = (),
+                 outside: Iterable[Path] = ()) -> None:
+        conflict = blob_dir_conflict(directory, reserved=reserved, outside=outside)
+        if conflict is not None:
+            raise ValueError(f"SIMDASH_DRIVE_BLOB_DIR({directory})가 {conflict}.")
         self.directory = directory
         self.max_bytes = max_bytes
         self._lock = threading.Lock()
 
     def _path(self, sha256: str) -> Path:
-        if len(sha256) != 64 or any(ch not in "0123456789abcdef" for ch in sha256):
+        if not _BLOB_NAME.fullmatch(sha256):
             raise ValueError("invalid sha256")
         return self.directory / sha256[:2] / sha256
 
@@ -186,7 +231,7 @@ class BlobStore:
             path = self._path(str(sha256).lower())
         except ValueError:
             return None
-        if not path.is_file():
+        if not path.is_file() or path.is_symlink():
             return None
         digest = hashlib.sha256()
         with path.open("rb") as stream:
@@ -218,10 +263,27 @@ class BlobStore:
             self._evict()
         return path
 
+    def _blobs(self) -> Iterator[Path]:
+        try:
+            folders = list(self.directory.iterdir())
+        except OSError:
+            return
+        for folder in folders:
+            if not _BLOB_FOLDER.fullmatch(folder.name) or folder.is_symlink() or not folder.is_dir():
+                continue
+            try:
+                children = list(folder.iterdir())
+            except OSError:
+                continue
+            for path in children:
+                if _BLOB_NAME.fullmatch(path.name) and path.name[:2] == folder.name and not path.is_symlink() \
+                        and path.is_file():
+                    yield path
+
     def _evict(self) -> None:
         files: list[tuple[float, int, Path]] = []
         total = 0
-        for path in self.directory.glob("*/*"):
+        for path in self._blobs():
             try:
                 info = path.stat()
             except OSError:
@@ -238,6 +300,6 @@ class BlobStore:
                 continue
 
 
-__all__ = ["BlobStore", "discard_file", "disk_free", "ensure_dir", "file_exists", "file_sha1", "write_stream", "file_sha256", "file_size",
+__all__ = ["BlobStore", "blob_dir_conflict", "discard_file", "disk_free", "ensure_dir", "file_exists", "file_sha1", "write_stream", "file_sha256", "file_size",
            "install_file", "is_regular_file_inside", "make_child_dir", "new_dir", "old_dirs", "open_file", "read_file",
            "remove_old_dirs", "remove_tree", "write_at", "write_file"]

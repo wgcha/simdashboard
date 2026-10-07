@@ -370,6 +370,19 @@ _ALL_COLUMNS = sorted({
     "path_key", "schema_parent_path", "schema_role_kind", "schema_scan_id", "schema_profile_id", "schema_profile_revision",
     "case_relative_path", "result_relative_path", "inspection_json", "approval_json", "draft_id", "size_bytes", "action",
     "detail_json", "actor", "occurred_at",
+    # SCX drive tables (migrations 0036–0038)
+    "id", "ciphertext", "key_id", "account_hint", "obtained_at", "updated_by", "updated_at", "generation",
+    "rel_path", "version_no", "item_id", "modified_at", "sha1", "version_token", "content_stored", "stored_path",
+    "pending_version_token", "pending_size_bytes", "pending_modified_at", "pending_sha1", "pending_item_id",
+    "pending_detected_at", "review_state", "reviewed_by", "reviewed_at", "registered_at", "registered_by",
+    "superseded_at", "source_state", "last_checked_at",
+    "batch_id", "seq", "kind", "staging_path", "src_rel", "src_version_token", "dst_rel_dir", "dst_name", "state",
+    "halt_on_error", "attempts", "next_attempt_at", "last_error_code", "last_error_msg", "result_item_id",
+    "result_size", "result_sha1", "transfer_method", "requested_by", "origin", "origin_ref", "created_at", "finished_at",
+    "scope", "owner", "acquired_at", "expires_at",
+    "operation_id", "plan_json", "reports_json", "report_formats", "upload_batch_id", "complete_json",
+    "complete_sha256", "confirmed_at", "designation_seq", "designation_batch_id", "error_code", "error_message",
+    "created_by", "confirmed_by", "queued_at",
 })
 
 

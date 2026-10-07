@@ -6,7 +6,8 @@ of a path has ``superseded_at IS NULL``.
 
 Auto-reflect rule in scx mode (plan §9 D3, user decision 2026-10-07):
 
-* a **new** file (no current row) is registered automatically (version 1), so
+* a **new** file (no current row) is registered automatically (the next
+  ``version_no``: 1, or n+1 when a confirmed removal came back), so
   new files and new Scenes appear with the next 60 s sync, as in local mode;
 * a **changed** existing file (its drive ``version_token`` differs from the
   registered one) is not applied: the row becomes ``review_state='PENDING'``
@@ -14,6 +15,10 @@ Auto-reflect rule in scx mode (plan §9 D3, user decision 2026-10-07):
   registered version (``reads`` overlay) until a user accepts it
   (``accept``: a new row ``version_no+1``, the old one superseded) or dismisses
   it (``dismiss``: ``IGNORED`` for that drive version; a later change asks again);
+* a file whose drive version differs from its registered row before a sync
+  classified it (review ``NONE``) is also read at its registered version
+  (``reads.effective_version``, fail closed: no unreviewed drive content is
+  captured between a drive change and the next sync);
 * a file **gone** from the drive is ``source_state='MISSING'``; nothing in the
   DB is deleted and the registered version stays visible.  Accepting a
   MISSING row confirms the removal (the row is superseded, the next sync drops
@@ -36,7 +41,7 @@ from typing import Any, Iterable
 from ...database_connection import ConnectionLike, connect, connection_held, rows
 from ..storage.provider import SpdmStorageError
 from . import reads
-from .reads import Accepted, Version, epoch_us, version_of
+from .reads import Accepted, Version, epoch_us, normal_sha1, version_of
 
 AUTO_ACTOR = "auto-sync"
 MAX_SCOPE_FILES = 50_000
@@ -75,7 +80,7 @@ def _iso(value: Any) -> str | None:
 def row_version(row: dict[str, Any]) -> Version:
     size = row.get("size_bytes")
     return Version(token=str(row["version_token"]), size=int(size) if size is not None else None,
-                   modified_us=epoch_us(row.get("modified_at")), sha1=row.get("sha1") or None,
+                   modified_us=epoch_us(row.get("modified_at")), sha1=normal_sha1(row.get("sha1")),
                    item_id=row.get("item_id") or None)
 
 
@@ -84,21 +89,43 @@ def pending_version(row: dict[str, Any]) -> Version | None:
         return None
     size = row.get("pending_size_bytes")
     return Version(token=str(row["pending_version_token"]), size=int(size) if size is not None else None,
-                   modified_us=epoch_us(row.get("pending_modified_at")), sha1=row.get("pending_sha1") or None,
+                   modified_us=epoch_us(row.get("pending_modified_at")), sha1=normal_sha1(row.get("pending_sha1")),
                    item_id=row.get("pending_item_id") or None)
 
 
 # --- reads for the provider overlay -----------------------------------------------------------
 
+_ACCEPTED_COLUMNS = "rel_path,version_token,size_bytes,modified_at,sha1,item_id,sha256,stored_path,source_state,review_state"
+
+
+def _accepted(row: dict[str, Any], *, scoped: bool = True) -> Accepted:
+    return Accepted(rel_path=str(row["rel_path"]), version=row_version(row), sha256=row.get("sha256"),
+                    stored_path=row.get("stored_path"), source_state=str(row["source_state"]),
+                    review_state=str(row["review_state"]), scoped=scoped)
+
+
 def load_overlay(conn: ConnectionLike, root_key: str) -> dict[str, Accepted]:
     found = rows(conn.execute(
-        "SELECT rel_path,version_token,size_bytes,modified_at,sha1,item_id,sha256,stored_path,source_state,review_state "
-        "FROM drive_source_versions WHERE root_key=? AND superseded_at IS NULL "
+        f"SELECT {_ACCEPTED_COLUMNS} FROM drive_source_versions WHERE root_key=? AND superseded_at IS NULL "
         "AND (review_state<>'NONE' OR source_state='MISSING')", [root_key]))
-    return {str(row["rel_path"]): Accepted(rel_path=str(row["rel_path"]), version=row_version(row),
-                                          sha256=row.get("sha256"), stored_path=row.get("stored_path"),
-                                          source_state=str(row["source_state"]), review_state=str(row["review_state"]))
-            for row in found}
+    return {str(row["rel_path"]): _accepted(row) for row in found}
+
+
+def load_registered(conn: ConnectionLike, root_key: str, rel_paths: list[str]) -> dict[str, Accepted]:
+    """Current registered versions of ``rel_paths`` (any review state).
+
+    The read path compares them with the live drive entries: a file whose drive
+    version differs from its registered one is not applied before a sync has
+    classified it (M2, fail closed).  ``scoped`` marks rows of classified
+    request folders (project/request ids set by the classification).
+    """
+    if not rel_paths:
+        return {}
+    marks = ",".join("?" for _ in rel_paths)
+    found = rows(conn.execute(
+        f"SELECT {_ACCEPTED_COLUMNS},request_id FROM drive_source_versions WHERE root_key=? AND superseded_at IS NULL "
+        f"AND rel_path IN ({marks})", [root_key, *rel_paths]))
+    return {str(row["rel_path"]): _accepted(row, scoped=row.get("request_id") is not None) for row in found}
 
 
 def current_row(conn: ConnectionLike, root_key: str, rel_path: str) -> dict[str, Any] | None:
@@ -122,18 +149,39 @@ def _in_db(conn: ConnectionLike, sha256: str) -> bool:
                              [sha256]).fetchone())
 
 
-def _insert(conn: ConnectionLike, root_key: str, rel: str, version: Version, *, version_no: int,
+def _next_version_no(conn: ConnectionLike, root_key: str, rel: str) -> int:
+    row = conn.execute("SELECT COALESCE(MAX(version_no),0) FROM drive_source_versions WHERE root_key=? AND rel_path=?",
+                       [root_key, rel]).fetchone()
+    return int(row[0] or 0) + 1 if row else 1
+
+
+def _insert(conn: ConnectionLike, root_key: str, rel: str, version: Version, *,
             scope_ids: tuple[str, str] | None, actor: str, sha256: str | None = None, stored_path: str | None = None,
-            content_stored: bool = False) -> None:
-    now = _now()
+            content_stored: bool = False) -> bool:
+    """Register ``version`` as the current row of ``rel`` with the next ``version_no`` (M1).
+
+    A path can come back after its removal was confirmed (its last row is
+    superseded), so the number is ``MAX(version_no)+1``, never a fixed 1.
+    Returns ``False`` when another writer registered a current row meanwhile
+    (the file is tracked either way); raises when the row could not be stored.
+    """
     project_id, request_id = scope_ids or (None, None)
-    conn.execute(
-        "INSERT INTO drive_source_versions(id,root_key,rel_path,version_no,project_id,request_id,item_id,size_bytes,"
-        "modified_at,sha1,sha256,version_token,content_stored,stored_path,review_state,registered_at,registered_by,"
-        "source_state,last_checked_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,'NONE',?,?,'PRESENT',?) ON CONFLICT DO NOTHING",
-        [f"drive-source-{uuid.uuid4().hex}", root_key, rel, version_no, project_id, request_id, version.item_id,
-         version.size, _stamp(version.modified_us), version.sha1, sha256, version.token, content_stored, stored_path,
-         now, actor, now])
+    for _attempt in range(3):
+        if current_row(conn, root_key, rel) is not None:
+            return False
+        now = _now()
+        row_id = f"drive-source-{uuid.uuid4().hex}"
+        conn.execute(
+            "INSERT INTO drive_source_versions(id,root_key,rel_path,version_no,project_id,request_id,item_id,size_bytes,"
+            "modified_at,sha1,sha256,version_token,content_stored,stored_path,review_state,registered_at,registered_by,"
+            "source_state,last_checked_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,'NONE',?,?,'PRESENT',?) ON CONFLICT DO NOTHING",
+            [row_id, root_key, rel, _next_version_no(conn, root_key, rel), project_id, request_id, version.item_id,
+             version.size, _stamp(version.modified_us), version.sha1, sha256, version.token, content_stored, stored_path,
+             now, actor, now])
+        if conn.execute("SELECT 1 FROM drive_source_versions WHERE id=?", [row_id]).fetchone():
+            return True
+    raise DriveSourceError("DRIVE_SOURCE_VERSION_CONFLICT",
+                           "드라이브 원본 버전을 기록하지 못했습니다(동시 갱신). 다시 시도하세요.")
 
 
 def record_downloads(conn: ConnectionLike, root_key: str, downloads: Iterable[Any],
@@ -149,7 +197,7 @@ def record_downloads(conn: ConnectionLike, root_key: str, downloads: Iterable[An
         if row is None:
             if PurePosixPath(record.rel_path).suffix.casefold() not in RELEVANT_SUFFIXES:
                 continue
-            _insert(conn, root_key, record.rel_path, record.version, version_no=1, scope_ids=scope_ids,
+            _insert(conn, root_key, record.rel_path, record.version, scope_ids=scope_ids,
                     actor=AUTO_ACTOR, sha256=record.sha256, stored_path=record.stored_path, content_stored=stored)
             continue
         if not row_version(row).same_as(record.version):
@@ -285,8 +333,7 @@ def classify_request(session: reads.DriveReadSession, project_id: str, request_i
             conn.execute("BEGIN TRANSACTION")
             try:
                 for rel, live in inserts:
-                    _insert(conn, session.root_key, rel, live, version_no=1, scope_ids=session.scope_ids,
-                            actor=AUTO_ACTOR)
+                    _insert(conn, session.root_key, rel, live, scope_ids=session.scope_ids, actor=AUTO_ACTOR)
                 for row_id, fields in updates:
                     assignments = ",".join(f"{name}=?" for name in fields)
                     conn.execute(f"UPDATE drive_source_versions SET {assignments} WHERE id=?", [*fields.values(), row_id])
@@ -367,13 +414,54 @@ def _selected(conn: ConnectionLike, root_key: str, project_id: str, request_id: 
     return chosen
 
 
-def accept(conn: ConnectionLike, root_key: str, project_id: str, request_id: str, ids: list[str] | None,
-           actor: str) -> dict[str, Any]:
-    """[새 버전 등록]: register the pending drive version as ``version_no+1`` (old row kept, superseded).
+def accept_candidates(conn: ConnectionLike, root_key: str, project_id: str, request_id: str,
+                      ids: list[str] | None) -> list[dict[str, Any]]:
+    """Rows an accept would decide (scope checked); the router verifies their drive versions next."""
+    _request_scope(conn, root_key, project_id, request_id)
+    return _selected(conn, root_key, project_id, request_id, ids, ("PENDING", "IGNORED", "MISSING"))
 
-    The content is read and captured by the next sync of the request (the
-    caller invalidates the sync memo), which downloads only the accepted files.
-    A MISSING row is confirmed as removed (superseded, no new row).
+
+_STALE_MESSAGE = "드라이브 원본이 확인 이후 다시 바뀌었습니다. 변경 목록을 다시 불러오세요."
+
+
+def verify_pending(found: list[dict[str, Any]]) -> dict[str, Any]:
+    """Download each pending drive version once and record its sha256 (05 §4); no DB connection held.
+
+    Returns ``{row id: reads.DownloadRecord}``.  The download checks that the
+    drive still holds exactly the pending version (else the change is stale).
+    Files above the read limit are never read by the dashboard and are not
+    downloaded (no sha256 recorded for them).
+    """
+    if connection_held():
+        raise RuntimeError("pending versions must be verified without an open database connection")
+    verified: dict[str, Any] = {}
+    for row in found:
+        pending = pending_version(row)
+        if row["source_state"] == "MISSING" or pending is None:
+            continue
+        if pending.size is not None and pending.size > reads.MAX_FILE_BYTES:
+            continue
+        try:
+            verified[str(row["id"])] = reads.fetch_version(str(row["rel_path"]), pending)
+        except SpdmStorageError as error:
+            if error.code in {"SPDM_FILE_BUSY", "SPDM_NOT_FOUND"}:
+                raise DriveSourceError("DRIVE_SOURCE_CHANGE_STALE", _STALE_MESSAGE) from None
+            from .gateway import storage_http_status
+
+            raise DriveSourceError(error.code, str(error), storage_http_status(error.code)) from None
+    return verified
+
+
+def accept(conn: ConnectionLike, root_key: str, project_id: str, request_id: str, ids: list[str] | None,
+           actor: str, verified: dict[str, Any] | None = None) -> dict[str, Any]:
+    """[새 버전 등록]: register the pending drive version as the next ``version_no`` (old row kept, superseded).
+
+    ``verified`` (from :func:`verify_pending`) carries the sha256 of the pending
+    version as downloaded; with it the new row records the content hash, and a
+    row whose pending version changed since the download is refused as stale.
+    The content is captured by the next sync of the request (the caller
+    invalidates the sync memo).  A MISSING row is confirmed as removed
+    (superseded, no new row).
     """
     _request_scope(conn, root_key, project_id, request_id)
     chosen = _selected(conn, root_key, project_id, request_id, ids, ("PENDING", "IGNORED", "MISSING"))
@@ -388,8 +476,16 @@ def accept(conn: ConnectionLike, root_key: str, project_id: str, request_id: str
             if row["source_state"] == "MISSING" or pending is None:
                 removed += 1
                 continue
-            _insert(conn, root_key, str(row["rel_path"]), pending, version_no=int(row["version_no"]) + 1,
-                    scope_ids=(project_id, request_id), actor=actor)
+            record = verified.get(str(row["id"])) if verified is not None else None
+            if verified is not None and record is None and not (pending.size is not None and pending.size > reads.MAX_FILE_BYTES):
+                raise DriveSourceError("DRIVE_SOURCE_CHANGE_STALE", _STALE_MESSAGE)
+            if record is not None and record.version.token != pending.token:
+                raise DriveSourceError("DRIVE_SOURCE_CHANGE_STALE", _STALE_MESSAGE)
+            sha256 = record.sha256 if record is not None else None
+            if not _insert(conn, root_key, str(row["rel_path"]), pending, scope_ids=(project_id, request_id), actor=actor,
+                           sha256=sha256, stored_path=record.stored_path if record is not None else None,
+                           content_stored=bool(sha256 and _in_db(conn, sha256))):
+                raise DriveSourceError("DRIVE_SOURCE_CHANGE_STALE", _STALE_MESSAGE)
             accepted_count += 1
         conn.execute("COMMIT")
     except BaseException:
@@ -416,5 +512,6 @@ def dismiss(conn: ConnectionLike, root_key: str, project_id: str, request_id: st
     return {"dismissed": len(chosen), **summary(conn, root_key, project_id, request_id)}
 
 
-__all__ = ["AUTO_ACTOR", "DriveSourceError", "accept", "classify_request", "current_row", "dismiss", "list_changes",
-           "load_overlay", "record_downloads", "registered_content", "row_version", "summary"]
+__all__ = ["AUTO_ACTOR", "DriveSourceError", "accept", "accept_candidates", "classify_request", "current_row", "dismiss", "list_changes",
+           "load_overlay", "load_registered", "record_downloads", "registered_content", "row_version", "summary",
+           "verify_pending"]

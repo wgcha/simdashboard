@@ -195,6 +195,14 @@ def drive_settings() -> DriveSettings:
     work_dir = _absolute_path("SIMDASH_SCX_WORK_DIR", work_raw) if work_raw else DEFAULT_WORK_DIR
     staging_raw = _text("SIMDASH_SCX_STAGING_DIR")
     staging_dir = _absolute_path("SIMDASH_SCX_STAGING_DIR", staging_raw) if staging_raw else work_dir / "staging"
+    blob_raw = _text("SIMDASH_DRIVE_BLOB_DIR")
+    blob_dir = _absolute_path("SIMDASH_DRIVE_BLOB_DIR", blob_raw) if blob_raw else work_dir / "blobs"
+    from ..storage.server_local import blob_dir_conflict
+
+    conflict = blob_dir_conflict(blob_dir, reserved=(work_dir, staging_dir), outside=(staging_dir,))
+    if conflict is not None:
+        # L2: blob eviction deletes files, so its folder never overlaps the work or staging folders.
+        raise DriveConfigError("SIMDASH_DRIVE_BLOB_DIR", f"작업·임시 폴더와 겹칠 수 없습니다({conflict}).")
     return DriveSettings(
         mode="scx",
         worker_python=worker_python,
@@ -209,6 +217,6 @@ def drive_settings() -> DriveSettings:
         secret_key=_fernet_key("SIMDASH_SECRET_ENC_KEY"),
         writes_enabled=_flag("SIMDASH_DRIVE_WRITES_ENABLED"),
         upload_max_attempts=int(_number("SIMDASH_DRIVE_UPLOAD_MAX_ATTEMPTS", 8, 1, 100, integer=True)),
-        blob_dir=_absolute_path("SIMDASH_DRIVE_BLOB_DIR", blob_raw) if (blob_raw := _text("SIMDASH_DRIVE_BLOB_DIR")) else work_dir / "blobs",
+        blob_dir=blob_dir,
         blob_max_bytes=int(_number("SIMDASH_DRIVE_BLOB_MAX_BYTES", 100 * 1024 ** 3, 64 * 1024 ** 2, 2 ** 50, integer=True)),
     )

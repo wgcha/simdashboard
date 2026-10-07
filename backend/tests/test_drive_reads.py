@@ -250,6 +250,7 @@ def test_changed_file_waits_for_confirmation_and_accept_registers_version_two(sc
 
     accepted = scx.post("/api/drive/source-changes/accept", {"project_id": project_id, "request_id": request_id})
     assert (accepted["accepted"], accepted["pending_changes"]) == (1, 0)
+    assert _versions(scx, f"2_Face/{CSV}")[1][4], "accept records the verified sha256 (L4)"
     applied = _sync(scx, project_id, request_id)
     assert (applied["status"], applied["changed"]) == ("REFRESHED", True), applied
     assert _latest_asset(request_id, "2_Face") == CHANGED_BYTES
@@ -329,6 +330,261 @@ def test_busy_download_is_retried_by_the_next_sync(scx):
     scx.drive.busy_paths.clear()
     assert _sync(scx, project_id, request_id)["status"] == "REFRESHED"
     assert "8_Busy" in _scenes(scx, request_id)
+
+
+# --- review fixes (D2 independent review: M1, M2, L1–L5) ----------------------------------------
+
+def _root_key(scx: Scx) -> str:
+    return DriveRoot(scx.root, "scx.example.test").root_key()
+
+
+def _assets_with(request_id: str, content: bytes) -> int:
+    with connect() as conn:
+        found = conn.execute(
+            "SELECT a.content FROM dashboard_assets a JOIN dashboard_captures c ON c.id=a.capture_id "
+            "JOIN dashboard_cases d ON d.id=c.case_id WHERE d.request_id=?", [request_id]).fetchall()
+    return sum(1 for row in found if row[0] is not None and bytes(row[0]) == content)
+
+
+def test_file_back_after_confirmed_removal_is_tracked_again(scx):
+    """M1: delete → sync → accept MISSING → re-add → sync → modify → sync asks again (never applied silently)."""
+    project_id, request_id = _register(scx)
+    _sync(scx, project_id, request_id)
+    target = scx.path(f"{OPTION}/3_Face/{CSV}")
+    scx.drive.delete(scx.path(f"{OPTION}/3_Face"))
+    assert _sync(scx, project_id, request_id)["drive"]["missing"] == 1
+    removed = scx.post("/api/drive/source-changes/accept", {"project_id": project_id, "request_id": request_id})
+    assert removed["removed"] == 1
+    _sync(scx, project_id, request_id)
+    scx.add(f"{OPTION}/3_Face/{CSV}")
+    back = _sync(scx, project_id, request_id)
+    assert back["drive"]["new_files"] == 1, back
+    versions = _versions(scx, f"3_Face/{CSV}")
+    assert [(row[0], row[2], row[3]) for row in versions] == [(1, "MISSING", False), (2, "PRESENT", True)]
+    scx.drive.modify_file(target, CHANGED_BYTES)
+    changed = _sync(scx, project_id, request_id)
+    assert changed["drive"]["pending_changes"] == 1 and changed["status"] == "UNCHANGED", changed
+    assert _versions(scx, f"3_Face/{CSV}")[-1][:3] == (2, "PENDING", "CHANGED")
+    assert _assets_with(request_id, CHANGED_BYTES) == 0
+
+
+def test_version_rows_take_the_next_number_and_never_vanish(scx):
+    """M1: the version insert uses MAX(version_no)+1 and reports a row it could not store."""
+    from app.services.drive import sources
+    from app.services.drive.reads import Version
+
+    root_key = _root_key(scx)
+    version = Version(token="t:1:2", size=1, modified_us=2, sha1=None)
+    with connect() as conn:
+        assert sources._insert(conn, root_key, "P/R/a.csv", version, scope_ids=None, actor="t")
+        conn.execute("UPDATE drive_source_versions SET superseded_at=CURRENT_TIMESTAMP WHERE root_key=?", [root_key])
+        assert sources._insert(conn, root_key, "P/R/a.csv", version, scope_ids=None, actor="t")
+        assert not sources._insert(conn, root_key, "P/R/a.csv", version, scope_ids=None, actor="t")   # current row exists
+        numbers = [row[0] for row in conn.execute("SELECT version_no FROM drive_source_versions WHERE root_key=? "
+                                                  "ORDER BY version_no", [root_key]).fetchall()]
+    assert numbers == [1, 2]
+
+
+def test_manual_capture_before_the_next_sync_keeps_the_registered_version(scx):
+    """M2: a drive change no sync has classified yet is not captured (fail closed)."""
+    project_id, request_id = _register(scx)
+    _sync(scx, project_id, request_id)
+    scx.drive.modify_file(scx.path(f"{OPTION}/2_Face/{CSV}"), CHANGED_BYTES)
+    downloads = len(scx.drive.downloads())
+    response = scx.client.post("/api/dashboard/captures", json={
+        "project_id": project_id, "request_id": request_id, "root_relative_path": CASE, "environment": "DISTRIBUTION"})
+    assert response.status_code == 200, response.text
+    assert _latest_asset(request_id, "2_Face") == CSV_BYTES
+    assert _assets_with(request_id, CHANGED_BYTES) == 0
+    assert f"{scx.root}/{OPTION}/2_Face/{CSV}" not in scx.drive.downloads()[downloads:]
+    assert _sync(scx, project_id, request_id)["drive"]["pending_changes"] == 1
+
+
+def test_capture_retry_before_the_next_sync_never_reads_the_unreviewed_change(scx):
+    """M2: capture retry between a drive change and the next sync."""
+    for scene in ("2_Face", "3_Face"):
+        scx.add(f"{OPTION}/{scene}/{CSV}")
+    busy = scx.path(f"{OPTION}/3_Face/{CSV}")
+    scx.drive.busy_paths.add(busy)
+    scan = scx.post(ENV + "/scan", {"environment": "DISTRIBUTION", "relative_path": ""})
+    preview = scx.post(ENV + "/previews", {"scan_id": scan["id"], "assignments": []})
+    registered = scx.post(ENV + "/registrations", {"preview_id": preview["id"], "idempotency_key": f"d2-{uuid.uuid4()}",
+                                                  "capture": True})
+    assert {job["status"] for job in registered["capture_jobs"]} == {"FAILED"}, registered
+    scx.drive.busy_paths.clear()
+    project_id, request_id = registered["project_id"], registered["request_id"]
+    _sync(scx, project_id, request_id)       # classifies the request folder (rows of every result file)
+    scx.drive.modify_file(scx.path(f"{OPTION}/2_Face/{CSV}"), CHANGED_BYTES)
+    retried = scx.post(f"{ENV}/registrations/{registered['registration_id']}/capture/retry", {})
+    jobs = retried["capture_jobs"]
+    assert _assets_with(request_id, CHANGED_BYTES) == 0
+    # the registered version was never captured (its bytes are nowhere on the server): fail closed, retryable
+    assert [(job["status"], job["error_code"]) for job in jobs] == [("FAILED", drive_reads.SOURCE_CHANGED)], jobs
+    assert _sync(scx, project_id, request_id)["drive"]["pending_changes"] == 1
+
+
+def test_refresh_fails_when_the_drive_folder_cannot_be_classified(scx):
+    """M2: /refresh does not read unclassified drive files when classification fails."""
+    project_id, request_id = _register(scx)
+    _sync(scx, project_id, request_id)
+    snapshots = _snapshots(request_id)
+    scx.drive.modify_file(scx.path(f"{OPTION}/2_Face/{CSV}"), CHANGED_BYTES)
+    scx.drive.fail_always["list_dir"] = ErrorCode.TIMEOUT
+    payload = {"project_id": project_id, "request_id": request_id, "environment": "DISTRIBUTION"}
+    failed = scx.client.post(ENV + "/refresh", json=payload)
+    assert failed.status_code == 504 and failed.json()["detail"]["code"] == "DRIVE_TIMEOUT", failed.text
+    assert _snapshots(request_id) == snapshots and _assets_with(request_id, CHANGED_BYTES) == 0
+    with connect() as conn:
+        audit = conn.execute("SELECT detail_json FROM audit_events WHERE action='FOLDER_ENVIRONMENT_REFRESH_FAILED' "
+                             "ORDER BY occurred_at DESC LIMIT 1").fetchone()
+    assert audit and "DRIVE_TIMEOUT" in str(audit[0])
+    scx.drive.fail_always.clear()
+    refreshed = scx.post(ENV + "/refresh", payload)   # classified now: the change waits for confirmation
+    assert refreshed["status"] in {"UNCHANGED", "REFRESHED"} and _assets_with(request_id, CHANGED_BYTES) == 0
+    assert _versions(scx, f"2_Face/{CSV}")[0][:2] == (1, "PENDING")
+
+
+def test_a_read_miss_after_a_commit_fails_instead_of_repeating_the_body(scx):
+    """L1: inside ``committed_phase``/after ``after_commit`` a miss is DRIVE_READ_NOT_PREPARED, the body runs once."""
+    scx.add("A/one.csv", b"1")
+    root = spdm_storage.drive_storage_root().root
+    rounds = []
+
+    def body():
+        rounds.append(1)
+        with connect():
+            with drive_reads.committed_phase():
+                provider_for_root(root).list("A")
+
+    with pytest.raises(SpdmStorageError) as refused:
+        drive_reads.run(body)
+    assert refused.value.code == drive_reads.NOT_PREPARED and rounds == [1]
+    rounds.clear()
+
+    def body_after_commit():
+        rounds.append(1)
+        drive_reads.after_commit()
+        with connect():
+            provider_for_root(root).list("A")
+
+    with pytest.raises(SpdmStorageError):
+        drive_reads.run(body_after_commit)
+    assert rounds == [1]
+
+
+def test_blob_store_evicts_only_its_own_blobs_and_refuses_overlapping_folders(tmp_path, monkeypatch):
+    """L2: foreign files are never evicted; the blob folder cannot be (or contain) the work/staging folders."""
+    import hashlib
+    import os
+    import time
+
+    from app.services.drive.config import DriveConfigError, drive_settings
+    from app.services.storage.server_local import BlobStore
+
+    store_dir = tmp_path / "blobs"
+    foreign = [store_dir / "ab" / "not-a-blob.txt", store_dir / "zz" / ("a" * 64), store_dir / "ab" / ("c" * 64)]
+    for path in foreign:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"x" * 1000)
+        os.utime(path, (time.time() - 100, time.time() - 100))
+    old = b"o" * 1500
+    old_path = store_dir / hashlib.sha256(old).hexdigest()[:2] / hashlib.sha256(old).hexdigest()
+    old_path.parent.mkdir(parents=True, exist_ok=True)
+    old_path.write_bytes(old)
+    os.utime(old_path, (time.time() - 50, time.time() - 50))
+    data = b"y" * 2000
+    source = tmp_path / "src.bin"
+    source.write_bytes(data)
+    BlobStore(store_dir, max_bytes=2500).put(source, hashlib.sha256(data).hexdigest())
+    assert all(path.exists() for path in foreign) and not old_path.exists()
+    work = tmp_path / "work"
+    for bad, kwargs in ((work, {}), (tmp_path, {}), (work / "staging" / "blobs", {})):
+        with pytest.raises(ValueError):
+            BlobStore(bad, 10 ** 9, reserved=(work, work / "staging"), outside=(work / "staging",), **kwargs)
+    BlobStore(work / "blobs", 10 ** 9, reserved=(work, work / "staging"), outside=(work / "staging",))
+    for name, value in {"SIMDASH_DRIVE_GATEWAY": "scx", "SIMDASH_SCX_WORKER_PYTHON": sys.executable,
+                        "SIMDASH_SCX_SERVER_URL": SERVER, "SIMDASH_SCX_CLIENT_NAME": "test-client",
+                        "SIMDASH_SECRET_ENC_KEY": Fernet.generate_key().decode(), "SIMDASH_SCX_WORK_DIR": str(work),
+                        "SIMDASH_DRIVE_BLOB_DIR": str(work)}.items():
+        monkeypatch.setenv(name, value)
+    with pytest.raises(DriveConfigError) as refused:
+        drive_settings()
+    assert refused.value.args and "SIMDASH_DRIVE_BLOB_DIR" in str(refused.value.args[0]) + str(refused.value)
+
+
+def test_read_session_staging_has_one_byte_budget_and_a_free_space_floor(scx, monkeypatch):
+    """L3: a session stops downloading at its staging budget or when the staging disk runs low."""
+    from app.services.storage import server_local
+
+    scx.add("A/one.csv", b"1" * 100)
+    scx.add("A/two.csv", b"2" * 100)
+    root = spdm_storage.drive_storage_root().root
+
+    def read_all():
+        with connect():
+            fs = provider_for_root(root)
+            return [fs.read_stable(f"A/{entry.name}") for entry in fs.list("A")]
+
+    monkeypatch.setattr(drive_reads, "SESSION_STAGING_MAX_BYTES", 150)
+    with pytest.raises(SpdmStorageError) as full:
+        drive_reads.run(read_all)
+    assert full.value.code == drive_reads.STAGING_FULL
+    monkeypatch.setattr(drive_reads, "SESSION_STAGING_MAX_BYTES", 10 ** 9)
+    monkeypatch.setattr(server_local, "disk_free", lambda _path: drive_reads.STAGING_MIN_FREE_BYTES + 50)
+    with pytest.raises(SpdmStorageError) as low:
+        drive_reads.run(read_all)
+    assert low.value.code == drive_reads.STAGING_FULL
+    monkeypatch.setattr(server_local, "disk_free", lambda _path: None)
+    assert drive_reads.run(read_all) == [b"1" * 100, b"2" * 100]
+
+
+def test_accept_downloads_and_records_the_pending_version_or_refuses_a_newer_one(scx):
+    """L4: [새 버전 등록] verifies the pending drive version and records its sha256 at once."""
+    import hashlib
+
+    project_id, request_id = _register(scx)
+    _sync(scx, project_id, request_id)
+    target = scx.path(f"{OPTION}/2_Face/{CSV}")
+    scx.drive.modify_file(target, CHANGED_BYTES)
+    assert _sync(scx, project_id, request_id)["drive"]["pending_changes"] == 1
+    scx.drive.modify_file(target, CHANGED_BYTES + b"AGAIN,1,1,1,1\n")   # changed again before the decision
+    stale = scx.client.post("/api/drive/source-changes/accept", json={"project_id": project_id, "request_id": request_id})
+    assert stale.status_code == 409 and stale.json()["detail"]["code"] == "DRIVE_SOURCE_CHANGE_STALE", stale.text
+    assert [row[:4] for row in _versions(scx, f"2_Face/{CSV}")] == [(1, "PENDING", "CHANGED", True)]
+    scx.drive.modify_file(target, CHANGED_BYTES)
+    _sync(scx, project_id, request_id)
+    accepted = scx.post("/api/drive/source-changes/accept", {"project_id": project_id, "request_id": request_id})
+    assert accepted["accepted"] == 1
+    versions = _versions(scx, f"2_Face/{CSV}")
+    assert versions[-1][:4] == (2, "NONE", "PRESENT", True)
+    assert versions[-1][4] == hashlib.sha256(CHANGED_BYTES).hexdigest()   # before any sync read it
+
+
+def test_version_of_normalises_sha1_values():
+    """L5: sha1 is lower-case 40 hex digits or None (PG VARCHAR(40) and DuckDB alike)."""
+    from types import SimpleNamespace
+
+    upper = "A" * 40
+    assert drive_reads.version_of(SimpleNamespace(sha1=upper, size=3, modified_at=None)).sha1 == "a" * 40
+    for bad in ("xyz", "a" * 41, "g" * 40, ""):
+        version = drive_reads.version_of(SimpleNamespace(sha1=bad, size=3, modified_at=None))
+        assert version.sha1 is None and version.token.startswith("t:3:")
+
+
+def test_registered_content_never_lands_outside_the_session_folder(scx, tmp_path):
+    """Info: the local file name of a registered version comes from a DB path; unsafe names are refused."""
+    from app.services.drive.reads import Accepted, DriveReadSession, Version
+
+    staging = tmp_path / "session"
+    staging.mkdir()
+    session = DriveReadSession(spdm_root=scx.root, root_key=_root_key(scx), staging=staging)
+    for rel in ("A/..\\x.csv", "A/c:x.csv", "A/../x.csv"):
+        session.overlay[rel] = Accepted(rel_path=rel, version=Version(token="t:1:1", size=1, modified_us=1, sha1=None),
+                                        sha256="0" * 64, stored_path=None, source_state="CHANGED", review_state="PENDING")
+        with pytest.raises(SpdmStorageError) as refused:
+            drive_reads._old_content(session, rel)
+        assert refused.value.code == drive_reads.SOURCE_CHANGED
+    assert list(staging.iterdir()) == []
 
 
 # --- write availability -------------------------------------------------------------------------

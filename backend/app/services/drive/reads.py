@@ -26,6 +26,14 @@ How callers keep that rule without restructuring every service:
 * Outside a session, a drive read on a thread that holds a connection raises
   ``SpdmStorageError("DRIVE_READ_NOT_PREPARED")``; without a connection it
   calls the drive directly.
+* After a body committed writes (:func:`after_commit`, :func:`committed_phase`)
+  a miss is ``DRIVE_READ_NOT_PREPARED`` instead of a repeat of the body.
+* Files are read at their **registered** version whenever the live drive
+  version differs from the current ``drive_source_versions`` row of a
+  classified request folder, also before a sync has classified the change
+  (:func:`effective_version`; fail closed).
+* One staging byte budget per session and a free-space floor
+  (``SESSION_STAGING_MAX_BYTES``, ``STAGING_MIN_FREE_BYTES``).
 
 Downloads go to ``<SIMDASH_SCX_STAGING_DIR>/<session>/`` and are deleted when the
 session ends (05 §2 download → register → delete).  Files above
@@ -42,6 +50,7 @@ import functools
 import hashlib
 import inspect
 import logging
+import re
 import threading
 import time
 from contextlib import contextmanager
@@ -71,12 +80,17 @@ CONTENT_PREFETCH_MAX_BYTES = 512 * 1024 * 1024
 CONTENT_PREFETCH_FILE_BYTES = 64 * 1024 * 1024
 # What a dashboard capture reads (dashboard_capture._walk): result values and media up to 32 MiB.
 CAPTURE_SUFFIXES = frozenset({".csv", ".json", ".jpg", ".jpeg", ".png", ".mp4", ".webm"})
+# L3: bytes one read session may hold in its staging folder, and free space kept on that disk.
+SESSION_STAGING_MAX_BYTES = 2 * 1024 * 1024 * 1024
+STAGING_MIN_FREE_BYTES = 1024 * 1024 * 1024
+REGISTERED_QUERY_CHUNK = 400
 DECK_SUFFIXES = frozenset({".inc", ".rad"})
 SKIPPED_CAPTURE_DIRS = frozenset({"cad", "report", "reports", "final", "validation", "library"})
 ORPHAN_SECONDS = 24 * 3600
 
 NOT_PREPARED = "DRIVE_READ_NOT_PREPARED"
 SOURCE_CHANGED = "DRIVE_SOURCE_CHANGED"
+STAGING_FULL = "DRIVE_STAGING_FULL"
 
 
 class DriveReadMiss(BaseException):
@@ -130,6 +144,17 @@ class Version:
         return self.token == other.token
 
 
+_SHA1 = re.compile(r"[0-9a-f]{40}")
+
+
+def normal_sha1(value: Any) -> str | None:
+    """Lower-case sha1 hex, or ``None`` unless it is exactly 40 hex digits (PG ``VARCHAR(40)`` = DuckDB)."""
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    return text if _SHA1.fullmatch(text) else None
+
+
 def make_token(sha1: str | None, size: int | None, modified_us: int | None) -> str:
     """``sha1:<hex>:<size>`` when the drive gives sha1, else ``t:<size>:<mtime µs>`` ('?' when unknown)."""
     if sha1:
@@ -138,8 +163,7 @@ def make_token(sha1: str | None, size: int | None, modified_us: int | None) -> s
 
 
 def version_of(entry: Any) -> Version:
-    sha1 = getattr(entry, "sha1", None) or None
-    sha1 = str(sha1).lower() if sha1 else None
+    sha1 = normal_sha1(getattr(entry, "sha1", None))
     size = getattr(entry, "size", None)
     size = int(size) if size is not None else None
     modified_us = epoch_us(getattr(entry, "modified_at", None))
@@ -193,6 +217,7 @@ class Accepted:
     stored_path: str | None
     source_state: str
     review_state: str
+    scoped: bool = True   # the row belongs to a request folder that syncs classify (project/request ids set)
 
 
 @dataclass
@@ -227,6 +252,10 @@ class DriveReadSession:
     overlay: dict[str, Accepted] = field(default_factory=dict)
     downloads: list[DownloadRecord] = field(default_factory=list)
     prepared_scopes: set[str] = field(default_factory=set)
+    registered: dict[str, Accepted] = field(default_factory=dict)       # current rows of checked files (M2)
+    registered_checked: set[str] = field(default_factory=set)
+    staged_bytes: int = 0
+    committed: bool = False
     final_round: bool = False
     rounds: int = 0
     ephemeral: bool = False
@@ -294,7 +323,38 @@ def _need(session: DriveReadSession | None, kind: str, rel: str, token: str | No
         raise SpdmStorageError(NOT_PREPARED, "드라이브 자료를 아직 준비하지 못했습니다. 잠시 후 다시 시도하세요.")
     if session.final_round:
         raise SpdmStorageError(NOT_PREPARED, "드라이브 자료를 준비하지 못했습니다(조회 횟수 한도). 잠시 후 다시 시도하세요.")
+    if session.committed:
+        # L1: the body already committed writes; repeating it is not safe.  The caller records a
+        # retryable failure (e.g. a capture job FAILED with this code) instead.
+        raise SpdmStorageError(NOT_PREPARED, "드라이브 자료를 미리 준비하지 못했습니다. 다시 시도하세요.")
     raise DriveReadMiss(kind, rel, token)
+
+
+@contextmanager
+def committed_phase() -> Iterator[None]:
+    """:func:`after_commit` for one block (a body that registers several requests resets it after each)."""
+    session = current_session()
+    if session is None:
+        yield
+        return
+    previous = session.committed
+    session.committed = True
+    try:
+        yield
+    finally:
+        session.committed = previous
+
+
+def after_commit() -> None:
+    """Mark the current read session: the body has committed writes (L1).
+
+    From here on a read the session lacks raises ``DRIVE_READ_NOT_PREPARED``
+    instead of :class:`DriveReadMiss`, so ``run`` never repeats a body whose
+    first part is already durable.  No-op outside a read session (local mode).
+    """
+    session = current_session()
+    if session is not None:
+        session.committed = True
 
 
 def run(body: Callable[[], T], *, prepare: Callable[[DriveReadSession], None] | None = None,
@@ -314,6 +374,7 @@ def run(body: Callable[[], T], *, prepare: Callable[[DriveReadSession], None] | 
         load_overlay(session)
         if prepare is not None:
             prepare(session)
+        _load_listed_registered(session)
         attempts = max(1, int(rounds))
         for attempt in range(attempts):
             session.rounds = attempt + 1
@@ -324,6 +385,7 @@ def run(body: Callable[[], T], *, prepare: Callable[[DriveReadSession], None] | 
                 if connection_held():
                     raise RuntimeError("drive read miss escaped while a database connection was still open") from None
                 _fulfil(session, miss)
+                _load_listed_registered(session)
                 continue
             _record_downloads(session)
             return result
@@ -475,11 +537,85 @@ def load_overlay(session: DriveReadSession) -> None:
         raise RuntimeError("overlay must be loaded without an open database connection")
     with connect() as conn:
         session.overlay = sources.load_overlay(conn, session.root_key)
+    session.registered.clear()
+    session.registered_checked.clear()
 
 
 def accepted(rel: str) -> Accepted | None:
     session = current_session()
     return session.overlay.get(rel) if session is not None else None
+
+
+def _registrable(rel: str) -> bool:
+    from .sources import RELEVANT_SUFFIXES
+
+    return PurePosixPath(rel).suffix.casefold() in RELEVANT_SUFFIXES
+
+
+def _load_registered(session: DriveReadSession, rels: list[str]) -> None:
+    """Current registered rows of ``rels`` into the session (short DB connection; never with one held)."""
+    from . import sources
+
+    wanted = sorted({rel for rel in rels if rel not in session.registered_checked})
+    if not wanted:
+        return
+    if connection_held():
+        raise RuntimeError("registered versions must be loaded without an open database connection")
+    with connect() as conn:
+        for start in range(0, len(wanted), REGISTERED_QUERY_CHUNK):
+            chunk = wanted[start:start + REGISTERED_QUERY_CHUNK]
+            session.registered.update(sources.load_registered(conn, session.root_key, chunk))
+    session.registered_checked.update(wanted)
+
+
+def _listed_files(session: DriveReadSession) -> list[str]:
+    found = []
+    for folder, entries in session.listings.items():
+        for entry in entries:
+            if getattr(entry, "kind", None) == "file":
+                rel = f"{folder}/{entry.name}" if folder else str(entry.name)
+                if rel not in session.registered_checked and _registrable(rel):
+                    found.append(rel)
+    for rel, entry in session.stats.items():
+        if entry is not None and getattr(entry, "kind", None) == "file" and rel not in session.registered_checked \
+                and _registrable(rel):
+            found.append(rel)
+    return found
+
+
+def _load_listed_registered(session: DriveReadSession) -> None:
+    """Registered rows of every file the session has listed so far (one batch, no extra round)."""
+    if not connection_held():
+        _load_registered(session, _listed_files(session))
+
+
+def registered(rel: str) -> Accepted | None:
+    """Registered current version of ``rel`` whose live drive state must not be applied unseen (M2).
+
+    Only rows of classified request folders count (``scoped``); files nobody
+    classifies (no request scope) are read live as before.  Fail closed: with
+    a DB connection held and the row not loaded yet this is a read miss.
+    """
+    session = current_session()
+    if session is not None:
+        item = session.overlay.get(rel)
+        if item is not None:
+            return item
+    if not _registrable(rel):
+        return None
+    if session is None:
+        if connection_held():
+            raise SpdmStorageError(NOT_PREPARED, "드라이브 자료를 아직 준비하지 못했습니다. 잠시 후 다시 시도하세요.")
+        from . import sources
+
+        with connect() as conn:
+            found = sources.load_registered(conn, _root_key(), [rel])
+        return found.get(rel)
+    if rel not in session.registered_checked:
+        if connection_held():
+            _need(session, "registered", rel)
+        _load_registered(session, [rel, *_listed_files(session)])
+    return session.registered.get(rel)
 
 
 def overlay_below(rel: str) -> list[Accepted]:
@@ -543,7 +679,7 @@ def _recorded_blob(session: DriveReadSession, rel: str, version: Version) -> Loc
     if not row or not row.get("stored_path") or not row.get("sha256"):
         return None
     recorded = Version(token=str(row["version_token"]), size=row.get("size_bytes"),
-                       modified_us=epoch_us(row.get("modified_at")), sha1=row.get("sha1"))
+                       modified_us=epoch_us(row.get("modified_at")), sha1=normal_sha1(row.get("sha1")))
     if not recorded.same_as(version):
         return None
     path = blob_store().find(str(row["sha256"]))
@@ -559,6 +695,7 @@ def _download(session: DriveReadSession, spdm_root: str, rel: str, version: Vers
         if reused is not None:
             session.files[key] = reused
             return reused
+    _reserve_staging(session, int(version.size or 0))
     target = session.next_dir()
     result = _call(lambda gateway: gateway.download_to(drive_path(spdm_root, rel), target,
                                                        max_bytes=max_bytes, priority=_priority(session)))
@@ -573,8 +710,10 @@ def _download(session: DriveReadSession, spdm_root: str, rel: str, version: Vers
     sha256 = str(result.sha256).lower()
     stored: str | None = None
     copy = LocalCopy(path=local, sha256=sha256, size=size)
+    session.staged_bytes += size
     if size > BLOB_THRESHOLD_BYTES:
         blob = blob_store().put(local, sha256)
+        session.staged_bytes -= size   # moved out of the session folder into the blob store
         copy = LocalCopy(path=blob, sha256=sha256, size=size, blob=True)
         stored = str(blob)
     session.files[key] = copy
@@ -582,12 +721,43 @@ def _download(session: DriveReadSession, spdm_root: str, rel: str, version: Vers
     return copy
 
 
+def _staging_room(session: DriveReadSession, size: int) -> bool:
+    if session.staged_bytes + size > SESSION_STAGING_MAX_BYTES:
+        return False
+    free = server_local.disk_free(session.staging)
+    return free is None or free - size >= STAGING_MIN_FREE_BYTES
+
+
+def _reserve_staging(session: DriveReadSession, size: int) -> None:
+    """L3: one staging byte budget per read session and a free-space floor on the staging disk."""
+    if not _staging_room(session, size):
+        raise SpdmStorageError(STAGING_FULL, "서버 임시 저장 공간이 부족해 드라이브 파일을 받을 수 없습니다. 잠시 후 다시 시도하세요.")
+
+
+def fetch_version(rel: str, version: Version, *, max_bytes: int = MAX_FILE_BYTES) -> DownloadRecord:
+    """Download ``rel`` at exactly ``version`` (no DB connection held) and return its sha256 (accept, L4).
+
+    Raises ``SPDM_FILE_BUSY`` when the drive no longer holds that version.
+    Files above the blob threshold stay in the blob store (``stored_path``).
+    """
+    if connection_held():
+        raise RuntimeError("drive download while the thread holds a database connection")
+    rel = check_rel(rel)
+    with _ephemeral_session() as session:
+        copy = _download(session, session.spdm_root, rel, version, max_bytes)
+        return DownloadRecord(rel_path=rel, version=version, sha256=copy.sha256, size=copy.size,
+                              stored_path=str(copy.path) if copy.blob else None)
+
+
 def _old_content(session: DriveReadSession, rel: str) -> LocalCopy:
     """Content of the registered version of a file whose drive copy changed or disappeared."""
-    item = session.overlay.get(rel)
+    item = session.overlay.get(rel) or session.registered.get(rel)
     changed = SpdmStorageError(SOURCE_CHANGED, "드라이브 원본이 바뀌어 등록된 버전을 다시 읽을 수 없습니다. 원본 변경을 확인하세요.")
     if item is None or not item.sha256:
         raise changed
+    name = PurePosixPath(rel).name
+    if not name or name in {".", ".."} or "\\" in rel or ":" in rel or ".." in rel.split("/"):
+        raise changed   # the local file name comes from a DB value: never a path outside the session folder
     key = (rel, item.version.token)
     path = blob_store().find(item.sha256)
     if path is not None:
@@ -600,8 +770,10 @@ def _old_content(session: DriveReadSession, rel: str) -> LocalCopy:
         data = sources.registered_content(conn, item.sha256)
     if data is None or hashlib.sha256(data).hexdigest() != item.sha256:
         raise changed
-    target = session.next_dir() / PurePosixPath(rel).name
+    _reserve_staging(session, len(data))
+    target = session.next_dir() / name
     server_local.write_file(target, data)
+    session.staged_bytes += len(data)
     copy = LocalCopy(path=target, sha256=item.sha256, size=len(data))
     session.files[key] = copy
     return copy
@@ -624,6 +796,8 @@ def _fulfil(session: DriveReadSession, miss: DriveReadMiss) -> None:
             session.errors[("content", miss.rel)] = error
     elif miss.kind == "content":
         _prefetch_content(session, miss.rel)
+    elif miss.kind == "registered":
+        _load_registered(session, [miss.rel, *_listed_files(session)])
     elif miss.kind == "scopes":
         for scope in miss.rel.split("\n"):
             prefetch_content(session, scope)
@@ -668,10 +842,21 @@ def _prefetch_tree(session: DriveReadSession, rel: str) -> None:
 def effective_version(rel: str, entry: Any) -> tuple[Version, bool]:
     """(version the dashboard uses, masked).  Masked = registered version differs from the live one."""
     live = version_of(entry)
-    item = accepted(rel)
-    if item is None or item.version.same_as(live):
+    item = registered(rel)
+    if item is None or not item.scoped or item.version.same_as(live):
         return live, False
     return item.version, True
+
+
+def unapplied(rel: str) -> bool:
+    """True when the drive bytes of ``rel`` are not the registered version the dashboard shows."""
+    if accepted(rel) is not None:
+        return True
+    session = current_session()
+    raw = raw_entry(session.spdm_root if session is not None else str(_settings().spdm_root or ""), rel)
+    if raw is None or getattr(raw, "kind", None) != "file":
+        return False
+    return effective_version(rel, raw)[1]
 
 
 def _cached_files_below(session: DriveReadSession, base: str) -> Iterator[tuple[str, Any]]:
@@ -702,9 +887,12 @@ def _prefetch_content(session: DriveReadSession, rel: str) -> None:
         if entry is None:
             session.errors[("content", rel)] = SpdmStorageError("SPDM_NOT_FOUND", "드라이브에서 항목을 찾을 수 없습니다.")
             return
-    version, _masked = effective_version(rel, entry)
+    version, masked = effective_version(rel, entry)
     try:
-        _download(session, session.spdm_root, rel, version, MAX_FILE_BYTES)
+        if masked:
+            _old_content(session, rel)
+        else:
+            _download(session, session.spdm_root, rel, version, MAX_FILE_BYTES)
     except SpdmStorageError as error:
         session.errors[("content", rel)] = error
         return
@@ -733,6 +921,8 @@ def _prefetch_content(session: DriveReadSession, rel: str) -> None:
             continue
         if ("content", path) in session.errors:
             continue
+        if not _staging_room(session, size):
+            break
         budget_files -= 1
         budget_bytes -= size
         try:
@@ -780,7 +970,7 @@ def prefetch_content(session: DriveReadSession, scope: str, *, max_bytes: int = 
         if (version.size or 0) > BLOB_THRESHOLD_BYTES or (path, version.token) in session.files:
             continue
         budget -= version.size or 0
-        if budget < 0:
+        if budget < 0 or not _staging_room(session, version.size or 0):
             break
         try:
             if masked:
@@ -812,7 +1002,7 @@ def prefetch_values(session: DriveReadSession, folder: str, *, max_file_bytes: i
         if (version.size or 0) > max_file_bytes or (path, version.token) in session.files:
             continue
         budget -= version.size or 0
-        if budget < 0:
+        if budget < 0 or not _staging_room(session, version.size or 0):
             break
         try:
             _old_content(session, path) if masked else _download(session, session.spdm_root, path, version, MAX_FILE_BYTES)
@@ -840,7 +1030,7 @@ def require_content(scopes: Any) -> None:
             prefetch_content(session, scope)
             session.prepared_scopes.add(scope)
         return
-    if session.final_round:
+    if session.final_round or session.committed:
         return   # the reads themselves report what is missing
     raise DriveReadMiss("scopes", "\n".join(wanted))
 
@@ -869,12 +1059,14 @@ def blob_store() -> BlobStore:
     settings = _settings()
     with _blob_lock:
         if _blob is None or _blob.directory != settings.blob_dir or _blob.max_bytes != settings.blob_max_bytes:
-            _blob = BlobStore(settings.blob_dir, settings.blob_max_bytes)
+            _blob = BlobStore(settings.blob_dir, settings.blob_max_bytes,
+                              reserved=(settings.work_dir, settings.staging_dir), outside=(settings.staging_dir,))
         return _blob
 
 
 __all__ = [
-    "Accepted", "BLOB_THRESHOLD_BYTES", "DriveReadMiss", "DriveReadSession", "LocalCopy", "NOT_PREPARED",
+    "Accepted", "BLOB_THRESHOLD_BYTES", "DriveReadMiss", "after_commit", "committed_phase", "fetch_version", "normal_sha1", "registered",
+    "unapplied", "DriveReadSession", "LocalCopy", "NOT_PREPARED",
     "SOURCE_CHANGED", "Version", "accepted", "active", "blob_store", "check_rel", "content", "current_session",
     "drive_path", "effective_version", "epoch_us", "listing", "load_overlay", "local_copy_sha256", "make_token",
     "open_stream", "overlay_below", "prefetch_content", "prefetch_values", "raw_entry", "read_bytes", "read_session", "require_content",

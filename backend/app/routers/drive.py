@@ -547,11 +547,29 @@ def source_changes(request: Request, project_id: str = Query(min_length=1, max_l
 def _decide(request: Request, payload: DriveSourceChangeDecision, action: str) -> DriveSourceChangeResult:
     root_key = _source_root_key()
     actor = request.state.principal.user_id
+    ids, verified = payload.ids, None
+    if action == "accept":
+        # 05 §4: download each pending version once (no DB connection held) and record its sha256;
+        # only the rows checked here are accepted (a change that appears meanwhile waits).
+        with connect() as conn:
+            require_resource_permission(request, RESULT_IMPORT, "request", payload.request_id, conn=conn)
+            try:
+                found = drive_sources.accept_candidates(conn, root_key, payload.project_id, payload.request_id, payload.ids)
+            except drive_sources.DriveSourceError as error:
+                raise _source_error(error) from error
+        ids = [str(row["id"]) for row in found]
+        try:
+            verified = drive_sources.verify_pending(found)
+        except drive_sources.DriveSourceError as error:
+            raise _source_error(error) from error
     with connect() as conn:
         require_resource_permission(request, RESULT_IMPORT, "request", payload.request_id, conn=conn)
         try:
-            decide = drive_sources.accept if action == "accept" else drive_sources.dismiss
-            result = decide(conn, root_key, payload.project_id, payload.request_id, payload.ids, actor)
+            if action == "accept":
+                result = drive_sources.accept(conn, root_key, payload.project_id, payload.request_id, ids, actor,
+                                              verified=verified)
+            else:
+                result = drive_sources.dismiss(conn, root_key, payload.project_id, payload.request_id, ids, actor)
         except drive_sources.DriveSourceError as error:
             raise _source_error(error) from error
         write_audit_event(request=request, principal=request.state.principal, status_code=200,

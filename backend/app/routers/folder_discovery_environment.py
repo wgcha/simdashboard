@@ -7,6 +7,7 @@ from ..security import write_audit_event
 from ..modules.access_control import PROJECT_DATA_VIEW, RESULT_IMPORT, SYSTEM_CATALOG_MANAGE, require_permission, require_resource_permission
 from ..services import (dashboard_capture, folder_auto_discovery, folder_auto_sync, folder_discovery as legacy,
                         folder_discovery_environment as service, result_registration)
+from ..services.drive import gateway as drive_gateway
 from ..services.drive import reads as drive_reads
 from ..services.drive import sources as drive_sources
 from .semantic_body_limit import SemanticBodyLimitRoute
@@ -109,14 +110,30 @@ def discover(request: Request, payload: Discover | None = None):
     return folder_auto_discovery.visible_result(
         result, is_global_admin=bool(getattr(access.principal, "is_global_admin", False)))
 def _classify_for_refresh(session, payload: "Refresh", request: Request) -> None:
-    """scx: record new/changed/missing drive files of the request before a manual refresh (05 §4)."""
-    key = (session.root_key, payload.project_id, payload.request_id, payload.environment)
+    """scx: record new/changed/missing drive files of the request before a manual refresh (05 §4).
+
+    Fail closed (M2): when the drive folder cannot be classified the refresh is
+    refused with that error instead of reading drive files nobody compared.
+    """
+    with connect() as conn:
+        require_resource_permission(request, RESULT_IMPORT, "request", payload.request_id, conn=conn)
+    key = (session.root_key, payload.project_id, payload.request_id, str(payload.environment).upper())
     try:
         with folder_auto_sync._drive_lock(key):   # not concurrently with the auto-sync of the same request
             drive_sources.classify_request(session, payload.project_id, payload.request_id, payload.environment,
                                            request.state.principal.user_id)
-    except (ValueError, OSError):
-        pass   # drive or scope problem: the refresh itself reports it with its own error code
+    except (ValueError, OSError) as exc:
+        code = str(getattr(exc, "code", "") or "DRIVE_SOURCE_CLASSIFY_FAILED")
+        status_code = getattr(exc, "status_code", None)
+        if not isinstance(status_code, int):
+            status_code = drive_gateway.storage_http_status(code, 422 if isinstance(exc, ValueError) else 503)
+        message = str(exc) if isinstance(exc, ValueError) else "드라이브 원본을 확인하지 못했습니다. 잠시 후 다시 시도하세요."
+        with connect() as conn:
+            write_audit_event(request=request, principal=request.state.principal, status_code=status_code,
+                              action="FOLDER_ENVIRONMENT_REFRESH_FAILED",
+                              detail={"project_id": payload.project_id, "request_id": payload.request_id,
+                                      "environment": payload.environment, "code": code}, connection=conn)
+        raise HTTPException(status_code, {"code": code, "message": message}) from exc
 @router.post("/refresh")
 @drive_reads.read_session(prepare=_classify_for_refresh)
 def refresh(payload: Refresh, request: Request):

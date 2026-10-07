@@ -148,10 +148,10 @@ def _drive_files(scope: dict[str, Any]) -> tuple[list[dict[str, Any]], int, list
     pinned = []
     for item in files:
         source = str(item["source_relative_path"])
-        accepted = drive_reads.accepted(source)
-        if accepted is not None:
-            # A pending/ignored change or a deleted source: the drive holds other bytes than the
-            # registered version the screens show, and copy_within would copy the drive bytes.
+        if drive_reads.unapplied(source):
+            # A pending/ignored change, a deleted source or a drive change no sync has classified yet:
+            # the drive holds other bytes than the registered version the screens show, and
+            # copy_within would copy the drive bytes.
             raise Error("FINALIZATION_SOURCE_STALE",
                         f"드라이브 원본 변경 확인이 필요한 파일이 있어 Final을 만들 수 없습니다(원본 변경 확인 후 다시 지정): {source}")
         entry = fs.stat(source)

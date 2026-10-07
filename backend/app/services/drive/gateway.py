@@ -132,6 +132,14 @@ def map_drive_error(error: BaseException) -> DriveErrorMapping:
     return DRIVE_ERROR_MAP.get(drive_error_code(error) or "", _FALLBACK)
 
 
+_STORAGE_STATUS = {mapping.storage_code: mapping.http_status for mapping in DRIVE_ERROR_MAP.values()}
+
+
+def storage_http_status(storage_code: str, default: int = 503) -> int:
+    """HTTP status of a drive ``SpdmStorageError`` code (integration 06 §2 table); ``default`` otherwise."""
+    return _STORAGE_STATUS.get(str(storage_code), default)
+
+
 _BEARER = re.compile(r"(?i)\bbearer\s+[^\s\"',;]+")
 _JWT_LIKE = re.compile(r"eyJ[A-Za-z0-9_\-]*(?:\.[A-Za-z0-9_\-]*)*")
 
