@@ -7,6 +7,8 @@ from ..security import write_audit_event
 from ..modules.access_control import PROJECT_DATA_VIEW, RESULT_IMPORT, SYSTEM_CATALOG_MANAGE, require_permission, require_resource_permission
 from ..services import (dashboard_capture, folder_auto_discovery, folder_auto_sync, folder_discovery as legacy,
                         folder_discovery_environment as service, result_registration)
+from ..services.drive import reads as drive_reads
+from ..services.drive import sources as drive_sources
 from .semantic_body_limit import SemanticBodyLimitRoute
 
 router = APIRouter(prefix="/api/folder-discovery/environments", tags=["folder-discovery-environments"], route_class=SemanticBodyLimitRoute)
@@ -49,6 +51,7 @@ def scoped(request, conn, request_id):
 def list_profiles(request: Request):
     with connect() as conn: admin(request, conn); return service.profiles(conn)
 @router.post("/scan")
+@drive_reads.read_session()
 def scan(payload: Scan, request: Request):
     with connect() as conn:
         admin(request, conn); scoped(request, conn, payload.request_id)
@@ -60,20 +63,30 @@ def sync(payload: Sync, request: Request):
 
     No client path is accepted; the server re-reads only the selected request's
     confirmed folder scope. Checks are coalesced per scope (see folder_auto_sync).
+    SCX drive mode: the drive is read without a DB connection held, changed
+    files wait for confirmation and the result carries ``drive`` counts.
     """
     with connect() as conn:
         require_resource_permission(request, PROJECT_DATA_VIEW, "request", payload.request_id, conn=conn)
         if not folder_auto_sync.request_in_project(conn, payload.project_id, payload.request_id):
             raise HTTPException(404, {"code": "FOLDER_SCHEMA_SCOPE_MISMATCH", "message": "프로젝트와 의뢰 문맥이 일치하지 않습니다."})
-        result = folder_auto_sync.sync(conn, payload.project_id, payload.request_id, payload.environment,
-                                       request.state.principal.user_id, force=payload.force)
-        if not result.get("coalesced") and result["status"] in {"REFRESHED", "CONFLICT"}:
-            write_audit_event(request=request, principal=request.state.principal, status_code=200,
-                              action="FOLDER_ENVIRONMENT_AUTO_SYNCED" if result["status"] == "REFRESHED" else "FOLDER_ENVIRONMENT_REFRESH_CONFLICT",
-                              detail={"snapshot_id": result.get("snapshot_id"), "project_id": payload.project_id,
-                                      "request_id": payload.request_id, "environment": payload.environment,
-                                      "status": result["status"], "force": payload.force}, connection=conn)
-        return result
+        if not drive_reads.active():
+            result = folder_auto_sync.sync(conn, payload.project_id, payload.request_id, payload.environment,
+                                           request.state.principal.user_id, force=payload.force)
+            _sync_audit(request, payload, result, conn)
+            return result
+    result = folder_auto_sync.sync_drive(payload.project_id, payload.request_id, payload.environment,
+                                         request.state.principal.user_id, force=payload.force)
+    with connect() as conn:
+        _sync_audit(request, payload, result, conn)
+    return result
+def _sync_audit(request, payload: Sync, result: dict, conn) -> None:
+    if not result.get("coalesced") and result["status"] in {"REFRESHED", "CONFLICT"}:
+        write_audit_event(request=request, principal=request.state.principal, status_code=200,
+                          action="FOLDER_ENVIRONMENT_AUTO_SYNCED" if result["status"] == "REFRESHED" else "FOLDER_ENVIRONMENT_REFRESH_CONFLICT",
+                          detail={"snapshot_id": result.get("snapshot_id"), "project_id": payload.project_id,
+                                  "request_id": payload.request_id, "environment": payload.environment,
+                                  "status": result["status"], "force": payload.force}, connection=conn)
 @router.post("/discover")
 def discover(request: Request, payload: Discover | None = None):
     """Register new SPDM project/request folders found under the storage root (screens poll this).
@@ -95,7 +108,17 @@ def discover(request: Request, payload: Discover | None = None):
                           detail=folder_auto_discovery.audit_detail(result))
     return folder_auto_discovery.visible_result(
         result, is_global_admin=bool(getattr(access.principal, "is_global_admin", False)))
+def _classify_for_refresh(session, payload: "Refresh", request: Request) -> None:
+    """scx: record new/changed/missing drive files of the request before a manual refresh (05 §4)."""
+    key = (session.root_key, payload.project_id, payload.request_id, payload.environment)
+    try:
+        with folder_auto_sync._drive_lock(key):   # not concurrently with the auto-sync of the same request
+            drive_sources.classify_request(session, payload.project_id, payload.request_id, payload.environment,
+                                           request.state.principal.user_id)
+    except (ValueError, OSError):
+        pass   # drive or scope problem: the refresh itself reports it with its own error code
 @router.post("/refresh")
+@drive_reads.read_session(prepare=_classify_for_refresh)
 def refresh(payload: Refresh, request: Request):
     with connect() as conn:
         require_resource_permission(request, RESULT_IMPORT, "request", payload.request_id, conn=conn)
@@ -125,12 +148,14 @@ def refresh(payload: Refresh, request: Request):
                                       "environment": payload.environment, "code": code}, connection=conn)
             raise HTTPException(status_code, {"code": code, "message": str(exc)}) from exc
 @router.post("/previews")
+@drive_reads.read_session()
 def preview(payload: Preview, request: Request):
     with connect() as conn:
         admin(request, conn)
         try: return service.preview(conn, payload.scan_id, [x.model_dump() for x in payload.assignments], request.state.principal.user_id, payload.require_usage_review)
         except ValueError as exc: raise HTTPException(422, {"code":"ENVIRONMENT_PREVIEW_INVALID", "message":str(exc)}) from exc
 @router.post("/previews/{preview_id}/usage-review")
+@drive_reads.read_session()
 def usage_review(preview_id: str, payload: UsageReview, request: Request):
     with connect() as conn:
         admin(request, conn)
@@ -144,6 +169,7 @@ def usage_review(preview_id: str, payload: UsageReview, request: Request):
         except ValueError as exc:
             raise HTTPException(422, {"code":"USAGE_SOURCE_REVIEW_INVALID", "message":str(exc)}) from exc
 @router.post("/registrations")
+@drive_reads.read_session()
 def register(payload: Register, request: Request):
     with connect() as conn:
         admin(request, conn)
@@ -159,6 +185,7 @@ def status(registration_id: str, request: Request):
     with connect() as conn:
         admin(request, conn); scoped(request, conn, service.registration_context(conn, registration_id)["request_id"]); return service.registration(conn, registration_id)
 @router.post("/registrations/{registration_id}/capture/retry")
+@drive_reads.read_session()
 def retry(registration_id: str, payload: Retry, request: Request):
     with connect() as conn:
         admin(request, conn); scoped(request, conn, service.registration_context(conn, registration_id)["request_id"])

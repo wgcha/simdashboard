@@ -63,3 +63,15 @@
 .request-case-results__deviations ul { display: grid; gap: 4px; margin: 0; padding-left: 18px; }
 .request-case-results__deviations li { display: flex; flex-wrap: wrap; gap: var(--space-2, 8px); overflow-wrap: anywhere; }
 .request-case-results__deviations code { color: var(--color-text-muted); }
+.request-case-results__drive-changes {
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--color-warning-border);
+  border-radius: 999px;
+  color: var(--color-warning);
+  background: var(--color-warning-surface);
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}

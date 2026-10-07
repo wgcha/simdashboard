@@ -15,6 +15,7 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from ..database_connection import rows
 from . import dashboard_capture
+from .drive import reads as drive_reads
 from . import environment_folder_profiles
 from . import folder_discovery as legacy
 from . import spdm_storage
@@ -609,6 +610,12 @@ def refresh_scope(conn, root, project_id: str, request_id: str, environment: str
         "schema": schema,
     }
     encoded_snapshot = json.dumps(snapshot, ensure_ascii=False)
+    if capture_cases and not revision_only_unchanged:
+        # SCX drive (D2): download the Cases' capture files before the snapshot transaction (no-op locally).
+        drive_reads.require_content([
+            str(node.get("relative_path") or "") for node in scoped_nodes
+            if node.get("role_kind") == "SIMULATION_CASE" and node.get("status") == "CONFIRMED"
+            and not is_final_segment(node)])
     created_at = now()
     if previous and previous.get("created_at") and previous["created_at"] >= created_at:
         from datetime import timedelta
@@ -1508,6 +1515,10 @@ def register(conn, preview_id, idempotency_key, capture, principal, root, *, cre
         legacy.fail("ENVIRONMENT_SCAN_STALE", "조사 이후 폴더 구조 또는 저장소가 변경되었습니다. 다시 조사하세요.")
     registration_id = ident("environment-registration")
     preview_saved = preview_data(preview_row[1]); plan_rows = preview_saved["rows"]
+    if capture:
+        # SCX drive (D2): download every Case's capture files before the registration commits, so
+        # the capture phase after the commit never has to wait for the drive (no-op in local mode).
+        drive_reads.require_content([r["relative_path"] for r in plan_rows if r["role_kind"] == "SIMULATION_CASE"])
     if preview_saved.get("require_usage_review"):
         for entry in (item for item in plan_rows if item["role_kind"] == "SIMULATION_CASE"):
             _validated_usage_review(root, entry["relative_path"], preview_saved.get("usage_reviews", {}).get(entry["relative_path"]))
@@ -1663,6 +1674,17 @@ def retry(conn, registration_id, job_ids, principal=None, root=None):
     context = registration(conn, registration_id)
     if context["status"] == "DELETED":
         legacy.fail("ENVIRONMENT_REGISTRATION_DELETED", "삭제된 등록은 다시 캡처할 수 없습니다.")
+    if principal is not None and root is not None and drive_reads.current_session() is not None:
+        # SCX drive (D2): capture files first, before any job row changes (local mode: no session, skipped).
+        retry_cases = rows(conn.execute(
+            "SELECT DISTINCT c.relative_path FROM folder_environment_capture_jobs j JOIN dashboard_cases c ON c.id=j.case_id "
+            "WHERE j.registration_id=? AND j.status IN ('FAILED','PENDING')", [registration_id]))
+        replay_rows = conn.execute(
+            "SELECT p.rows_json FROM folder_environment_registrations r JOIN folder_environment_previews p ON p.id=r.preview_id "
+            "WHERE r.id=?", [registration_id]).fetchone()
+        planned = [item["relative_path"] for item in (preview_data(replay_rows[0])["rows"] if replay_rows else [])
+                   if item.get("role_kind") == "SIMULATION_CASE"]
+        drive_reads.require_content([str(item["relative_path"]) for item in retry_cases] + planned)
     query = "UPDATE folder_environment_capture_jobs SET status='PENDING',error_code=NULL,updated_at=? WHERE registration_id=? AND status IN ('FAILED','PENDING')"
     args = [now(), registration_id]
     if job_ids:

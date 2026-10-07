@@ -1,0 +1,16 @@
+/* SCX drive source changes (plan D2). Desktop-only layout. */
+.drive-changes-backdrop { position: fixed; inset: 0; z-index: 60; display: flex; align-items: flex-start; justify-content: center; padding: 48px 24px; overflow: auto; background: var(--color-overlay); }
+.drive-changes-dialog { width: min(1040px, 100%); display: grid; gap: var(--space-3); padding: var(--space-5); border: 1px solid var(--color-border); border-radius: var(--radius-lg); color: var(--color-text); background: var(--color-surface-raised); box-shadow: 0 18px 44px var(--color-shadow); }
+.drive-changes-heading { display: flex; align-items: center; gap: var(--space-3); }
+.drive-changes-heading h2 { flex: 1; margin: 0; font-size: 18px; color: var(--color-text-strong); }
+.drive-changes-note { margin: 0; color: var(--color-text-muted); font-size: 13px; }
+.drive-changes-error { margin: 0; color: var(--color-danger); font-weight: 700; }
+.drive-changes-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.drive-changes-table th, .drive-changes-table td { padding: 6px 8px; border-bottom: 1px solid var(--color-border); text-align: left; vertical-align: middle; }
+.drive-changes-table th { color: var(--color-text-muted); font-weight: 600; }
+.drive-changes-table code { display: inline-block; max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+.drive-changes-state { white-space: nowrap; font-weight: 700; }
+.drive-changes-state--changed { color: var(--color-warning); }
+.drive-changes-state--missing { color: var(--color-danger); }
+.drive-changes-actions { display: flex; gap: var(--space-2); justify-content: flex-end; white-space: nowrap; }
+.drive-changes-footer { display: flex; gap: var(--space-2); justify-content: flex-end; }

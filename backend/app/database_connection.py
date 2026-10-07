@@ -34,6 +34,25 @@ _media_engine_url: str | None = None
 _media_engine_pool: PostgresPoolSettings | None = None
 _engine_lock = Lock()
 
+# Connections the current thread holds open (``with connect()``/``media_connect()``).
+# SCX drive reads must never wait on the drive while a thread holds a connection:
+# the drive worker's token notification opens its own connection (DuckDB lock,
+# PostgreSQL pool) and the drive client would wait for it (scx-drive plan D2).
+_held = local()
+
+
+def connection_held() -> bool:
+    """True while the calling thread is inside an open database connection context."""
+    return int(getattr(_held, "depth", 0) or 0) > 0
+
+
+def _hold() -> None:
+    _held.depth = int(getattr(_held, "depth", 0) or 0) + 1
+
+
+def _unhold() -> None:
+    _held.depth = max(0, int(getattr(_held, "depth", 0) or 0) - 1)
+
 
 class _SerializedDuckDBManager:
     """Bound DuckDB to one open file handle per process at a time.
@@ -101,6 +120,7 @@ class SerializedDuckDBConnection:
         if self._connection is not None:
             raise RuntimeError("DuckDB 연결 context는 재사용할 수 없습니다.")
         self._connection = _duckdb_manager.acquire(self._path)
+        _hold()
         return self
 
     def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
@@ -110,6 +130,7 @@ class SerializedDuckDBConnection:
             _duckdb_manager.release()
         finally:
             self._connection = None
+            _unhold()
 
     def _active(self) -> duckdb.DuckDBPyConnection:
         if self._connection is None:
@@ -249,6 +270,7 @@ class PostgresConnection:
 
     def __enter__(self) -> "PostgresConnection":
         self._connection = self._engine.connect()
+        _hold()
         return self
 
     def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
@@ -260,8 +282,11 @@ class PostgresConnection:
             else:
                 self._connection.rollback()
         finally:
-            self._connection.close()
-            self._connection = None
+            try:
+                self._connection.close()
+            finally:
+                self._connection = None
+                _unhold()
 
     def execute(self, statement: str, parameters: Any | None = None):
         if self._connection is None:

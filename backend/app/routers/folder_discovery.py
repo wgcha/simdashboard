@@ -10,6 +10,7 @@ from ..database_connection import connect
 from ..modules.access_control import SYSTEM_CATALOG_MANAGE, require_permission
 from ..security import write_audit_event
 from ..services import folder_discovery as svc, spdm_storage
+from ..services.drive import reads as drive_reads
 from ..services.semantic_mapping import semantic_transaction
 from .semantic_body_limit import SemanticBodyLimitRoute
 
@@ -90,6 +91,7 @@ def path_error(error):
 
 
 @router.get("/browse")
+@drive_reads.read_session()
 def browse(request: Request, relative_path: str = Query(default="", max_length=1024)):
     with connect() as conn:
         authorize(request, conn)
@@ -128,6 +130,7 @@ def put_catalog(payload: FolderCatalogUpdate, request: Request):
 
 
 @router.post("/scan")
+@drive_reads.read_session()
 def scan(payload: FolderScan, request: Request):
     with connect() as conn:
         authorize(request, conn)
@@ -144,6 +147,7 @@ def scan(payload: FolderScan, request: Request):
 
 
 @router.post("/preview")
+@drive_reads.read_session()
 def preview(payload: FolderPreview, request: Request):
     with connect() as conn:
         authorize(request, conn)
@@ -157,6 +161,7 @@ def preview(payload: FolderPreview, request: Request):
 
 
 @router.post("/apply")
+@drive_reads.read_session()
 def apply(payload: FolderApply, request: Request):
     with connect() as conn:
         authorize(request, conn)

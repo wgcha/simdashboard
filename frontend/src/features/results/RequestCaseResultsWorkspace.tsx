@@ -8,6 +8,7 @@ import { folderEnvironmentApi, type DepthDeviationItem } from '../../shared/api/
 import { deviationLabel } from '../../shared/api/depthSchemaModel'
 import { keywordEnvironments } from '../../shared/api/simulationDashboard'
 import { useRequestResultEnvironments } from './useRequestResultEnvironments'
+import { DriveSourceChangesDialog } from './DriveSourceChangesDialog'
 import './RequestCaseResultsWorkspace.css'
 
 type Props = { projectId: string; requestId: string; /** Request (folder) name; its 사용/유통 keyword picks the sync environment before any Case exists. */ requestName?: string; canManageFolders?: boolean; canRefreshSchema?: boolean; canReinterpret?: boolean; activeTab?: 'case_results' | 'materials'; refreshToken?: number }
@@ -19,6 +20,15 @@ function syncLabel(sync: ReturnType<typeof useFolderAutoSync>, now: number): { t
   if (sync.lastCheckedAt === null) return { text: '확인 중…', tone: 'busy' }
   const minutes = Math.floor(Math.max(0, now - sync.lastCheckedAt) / 60_000)
   return { text: minutes < 1 ? '방금 확인' : `최신 · ${minutes}분 전`, tone: 'ok' }
+}
+
+/** SCX drive mode (plan D2): changed or missing drive sources waiting for a decision. */
+function driveAttention(sync: ReturnType<typeof useFolderAutoSync>): { text: string; title: string } | null {
+  const drive = sync.lastResult?.drive
+  if (!drive) return null
+  const parts = [drive.pending_changes ? `원본 변경 ${drive.pending_changes} · 확인 필요` : '', drive.missing ? `원본 없음 ${drive.missing}` : ''].filter(Boolean)
+  if (!parts.length) return null
+  return { text: parts.join(' · '), title: '드라이브에서 바뀌거나 사라진 등록 파일이 있습니다. 확인 전까지 등록된 버전을 보여 줍니다.' }
 }
 
 function changeNotice(diff: { added: number; removed: number; changed: number } | undefined) {
@@ -45,6 +55,7 @@ export function RequestCaseResultsWorkspace({ projectId, requestId, requestName 
   const [reinterpreting, setReinterpreting] = useState(false)
   const [reinterpretToken, setReinterpretToken] = useState(0)
   const [deviations, setDeviations] = useState<{ message: string; items: DepthDeviationItem[] } | null>(null)
+  const [driveChangesOpen, setDriveChangesOpen] = useState(false)
   useEffect(() => { setDeviations(null) }, [projectId, requestId])
   // D9: saving a depth schema never changes registered requests; only this explicit action re-applies it.
   const reinterpret = async () => {
@@ -75,17 +86,20 @@ export function RequestCaseResultsWorkspace({ projectId, requestId, requestName 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sync.revision])
   const label = syncLabel(sync, now)
+  const attention = driveAttention(sync)
   // App's operational token and the auto-sync revision both only grow, so their sum changes whenever either does.
   const dashboardToken = refreshToken + sync.revision + reinterpretToken
   const syncStatus = <div className="request-case-results__sync" role="group" aria-label="폴더 자동 확인">
     {notice ? <span className="request-case-results__notice" role="status">{notice}</span> : null}
     <span className={`request-case-results__status request-case-results__status--${label.tone}`} title={label.title} aria-live="polite">{label.text}</span>
+    {attention ? <button type="button" className="request-case-results__drive-changes" data-testid="drive-changes-badge" title={attention.title} onClick={() => setDriveChangesOpen(true)}>{attention.text}</button> : null}
     <button type="button" className="request-case-results__check" aria-label="지금 확인" title="지금 확인" disabled={sync.busy || !projectId || !requestId} onClick={sync.checkNow}><RotateCw aria-hidden="true" /></button>
     {canReinterpret ? <button type="button" className="request-case-results__reinterpret" title="현재 깊이 스키마로 이 의뢰를 다시 해석" disabled={reinterpreting || !requestId} onClick={() => void reinterpret()}>{reinterpreting ? '재해석 중…' : '재해석'}</button> : null}
   </div>
   // One tabbed page for both routes: the 소재·물성 tab renders the materials
   // dashboard inside the Case results page and shares its path row.
   return <div className="request-case-results">
+    {driveChangesOpen ? <DriveSourceChangesDialog projectId={projectId} requestId={requestId} canDecide={canRefreshSchema} onClose={() => setDriveChangesOpen(false)} onDecided={sync.checkNow} /> : null}
     {deviations ? <div className="request-case-results__deviations" role="alert">
       <div><strong>{deviations.message}</strong><button type="button" aria-label="닫기" onClick={() => setDeviations(null)}>×</button></div>
       {deviations.items.length ? <ul>{deviations.items.map((item, index) => <li key={`${item.code}:${item.relative_path ?? index}`}><b>{deviationLabel(item.code)}</b>{item.relative_path ? <code>{item.relative_path}</code> : null}{item.message ? <span>{item.message}</span> : null}</li>)}</ul> : null}

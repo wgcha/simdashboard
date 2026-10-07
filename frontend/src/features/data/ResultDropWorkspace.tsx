@@ -11,6 +11,8 @@ import { ApiError } from '../../shared/api/errors'
 import { requestResultEnvironments, resolvedResultEnvironment } from '../../shared/api/simulationDashboard'
 import { chunkSha256, resultDropApi, type DropCompletion, type DropConflict, type DropEnvironment, type DropPlan, type DropTree, type OpenDropSession } from '../../shared/api/resultDrop'
 import { ROLE_LABELS, SKIP_REASON_LABELS, chunkRanges, depthRules, dropEntries, dropGuide, formatBytes, pickedFromInput, walkEntries, type PickedItems } from '../../shared/api/resultDropModel'
+import { DRIVE_READ_ONLY_NOTICE } from '../../shared/api/drive'
+import { useDriveWriteStatus } from '../../shared/hooks/useDriveWriteStatus'
 import { LegacyDraftHistory } from './LegacyDraftHistory'
 import './DataWorkspace.css'
 import './ResultDropWorkspace.css'
@@ -175,6 +177,8 @@ export function ResultDropWorkspace({ embedded = false, contextChanging = false,
   const nextRole = roles[roles.indexOf(targetRole) + 1]
   const guide = dropGuide(targetRole, roles)
   const busy = planBusy || Boolean(progress) || folderBusy
+  // SCX drive mode (plan D2) is read-only: no folder creation or upload into the SPDM root.
+  const readOnly = !useDriveWriteStatus().writesAvailable
   const uploading = Boolean(progress)
 
   const choose = (levelIndex: number, value: string) => {
@@ -216,7 +220,7 @@ export function ResultDropWorkspace({ embedded = false, contextChanging = false,
   }
   const onDrop = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault(); setDragging(false)
-    if (busy || !tree) return
+    if (busy || !tree || readOnly) return
     const { entries, files } = dropEntries(event.dataTransfer)
     void (entries.length ? walkEntries(entries) : Promise.resolve(pickedFromInput(files)))
       .then(planFor)
@@ -342,7 +346,7 @@ export function ResultDropWorkspace({ embedded = false, contextChanging = false,
         <div className="result-drop__target">
           <code data-testid="result-drop-target-path" title={targetDisplay}>{targetDisplay}</code>
           <Button size="sm" onClick={() => void copyPath()} disabled={!targetDisplay}><Copy aria-hidden="true" />경로 복사</Button>
-          <Button size="sm" variant="ghost" onClick={() => { setFolderOpen((value) => !value); setFolderError(''); setFolderWarning([]) }} disabled={busy || !nextRole} title={nextRole ? undefined : 'Scene 폴더 안에는 결과 파일을 바로 넣습니다.'}><FolderPlus aria-hidden="true" />새 폴더 만들기</Button>
+          <Button size="sm" variant="ghost" onClick={() => { setFolderOpen((value) => !value); setFolderError(''); setFolderWarning([]) }} disabled={busy || !nextRole || readOnly} title={readOnly ? DRIVE_READ_ONLY_NOTICE : nextRole ? undefined : 'Scene 폴더 안에는 결과 파일을 바로 넣습니다.'}><FolderPlus aria-hidden="true" />새 폴더 만들기</Button>
         </div>
         {notice ? <p className="result-drop__notice" role="status">{notice}</p> : null}
         {folderOpen && nextRole ? <form className="result-drop__new-folder" onSubmit={(event) => { event.preventDefault(); void createFolder(folderWarning.length > 0) }}>
@@ -380,9 +384,10 @@ export function ResultDropWorkspace({ embedded = false, contextChanging = false,
         <UploadCloud aria-hidden="true" />
         <p><strong>{targetDisplay.split(/[\\/]/).pop()}</strong>({ROLE_LABELS[targetRole] ?? targetRole})에 파일이나 폴더를 끌어 놓으세요.</p>
         <small>실행 파일·스크립트({tree.blocked_extensions.slice(0, 6).join(' ')} …)는 올리지 않습니다. 같은 이름 파일은 덮어쓰지 않습니다.</small>
+        {readOnly ? <p className="result-drop__readonly" role="note" data-testid="drive-read-only">{DRIVE_READ_ONLY_NOTICE}</p> : null}
         <div className="result-drop__pick">
-          <Button size="sm" onClick={() => fileInput.current?.click()} disabled={busy}><FilePlus2 aria-hidden="true" />파일 선택</Button>
-          <Button size="sm" onClick={() => folderInput.current?.click()} disabled={busy}><FolderInput aria-hidden="true" />폴더 선택</Button>
+          <Button size="sm" onClick={() => fileInput.current?.click()} disabled={busy || readOnly} title={readOnly ? DRIVE_READ_ONLY_NOTICE : undefined}><FilePlus2 aria-hidden="true" />파일 선택</Button>
+          <Button size="sm" onClick={() => folderInput.current?.click()} disabled={busy || readOnly} title={readOnly ? DRIVE_READ_ONLY_NOTICE : undefined}><FolderInput aria-hidden="true" />폴더 선택</Button>
           <input ref={fileInput} type="file" multiple hidden aria-label="올릴 파일 선택" onChange={onPick} />
           <input ref={folderInput} type="file" multiple hidden aria-label="올릴 폴더 선택" onChange={onPick} {...{ webkitdirectory: '' }} />
         </div>

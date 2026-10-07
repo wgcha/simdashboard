@@ -78,6 +78,7 @@ def initialize_database() -> None:
                 "result_registration_files",
                 "result_registration_events",
                 "drive_credentials",
+                "drive_source_versions",
             )
             missing = [
                 table_name
@@ -110,6 +111,12 @@ def initialize_database() -> None:
                 "result_registration_files": {"draft_id", "relative_path", "sha256", "size_bytes", "content"},
                 "result_registration_events": {"draft_id", "action", "detail_json", "actor", "occurred_at"},
                 "drive_credentials": {"id", "ciphertext", "key_id", "account_hint", "obtained_at", "updated_by", "updated_at", "generation"},
+                "drive_source_versions": {"id", "root_key", "rel_path", "version_no", "project_id", "request_id", "item_id",
+                                          "size_bytes", "modified_at", "sha1", "sha256", "version_token", "content_stored",
+                                          "stored_path", "pending_version_token", "pending_size_bytes", "pending_modified_at",
+                                          "pending_sha1", "pending_item_id", "pending_detected_at", "review_state",
+                                          "reviewed_by", "reviewed_at", "registered_at", "registered_by", "superseded_at",
+                                          "source_state", "last_checked_at"},
             }
             incompatible = []
             for table_name, expected in required_columns.items():
@@ -1238,6 +1245,7 @@ def _initialize_duckdb_legacy() -> None:
         ensure_folder_environment_schema(conn)
         ensure_result_registration_schema(conn)
         ensure_drive_credentials_schema(conn)
+        ensure_drive_source_versions_schema(conn)
         from .adapters.persistence.dashboard_schema import ensure_dashboard_schema
         ensure_dashboard_schema(conn)
         # Establish the schema before seeding, but defer one-time legacy data
@@ -1498,6 +1506,28 @@ def ensure_drive_credentials_schema(conn: duckdb.DuckDBPyConnection) -> None:
         id VARCHAR PRIMARY KEY CHECK (id = 'scx'), ciphertext BLOB NOT NULL, key_id VARCHAR NOT NULL,
         account_hint VARCHAR, obtained_at TIMESTAMP NOT NULL, updated_by VARCHAR NOT NULL, updated_at TIMESTAMP NOT NULL,
         generation BIGINT NOT NULL
+    )""")
+
+
+def ensure_drive_source_versions_schema(conn: duckdb.DuckDBPyConnection) -> None:
+    """Local development equivalent of additive migration 0037 (SCX drive source versions, stage D2).
+
+    DuckDB has no partial indexes; "one current row per path" is kept by the writers
+    (``services/drive/sources.py``) and the version unique key.
+    """
+    conn.execute("""CREATE TABLE IF NOT EXISTS drive_source_versions (
+        id VARCHAR PRIMARY KEY, root_key VARCHAR NOT NULL, rel_path VARCHAR NOT NULL,
+        version_no INTEGER NOT NULL CHECK (version_no >= 1), project_id VARCHAR, request_id VARCHAR, item_id VARCHAR,
+        size_bytes BIGINT, modified_at TIMESTAMP, sha1 VARCHAR, sha256 VARCHAR, version_token VARCHAR NOT NULL,
+        content_stored BOOLEAN NOT NULL DEFAULT FALSE, stored_path VARCHAR, pending_version_token VARCHAR,
+        pending_size_bytes BIGINT, pending_modified_at TIMESTAMP, pending_sha1 VARCHAR, pending_item_id VARCHAR,
+        pending_detected_at TIMESTAMP,
+        review_state VARCHAR NOT NULL DEFAULT 'NONE' CHECK (review_state IN ('NONE', 'PENDING', 'IGNORED')),
+        reviewed_by VARCHAR, reviewed_at TIMESTAMP, registered_at TIMESTAMP NOT NULL, registered_by VARCHAR,
+        superseded_at TIMESTAMP,
+        source_state VARCHAR NOT NULL CHECK (source_state IN ('PRESENT', 'CHANGED', 'MISSING')),
+        last_checked_at TIMESTAMP,
+        UNIQUE (root_key, rel_path, version_no)
     )""")
 
 

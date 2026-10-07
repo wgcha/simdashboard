@@ -21,6 +21,13 @@ function stamp(value: string | null | undefined): string {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString('ko-KR', { hour12: false })
 }
 
+const TOKEN_KIND_TEXT: Record<string, string> = { sha1: 'sha1(목록에 포함)', size_mtime: '크기·수정 시각(목록에 sha1 없음)', mixed: '혼합(일부 파일만 sha1)' }
+
+function tokenKindText(observed: DriveAdminStatus['version_tokens']) {
+  if (!observed?.last_kind) return '아직 목록 조회 없음'
+  return `${TOKEN_KIND_TEXT[observed.last_kind] ?? observed.last_kind} · sha1 ${observed.sha1_files ?? 0} / 크기·시각 ${observed.size_mtime_files ?? 0}`
+}
+
 export function DriveStateBadge({ state }: { state: string | null | undefined }) {
   const tone = state === 'OK' ? 'ok' : state === 'DEGRADED' ? 'warn' : state === 'UNKNOWN' || !state ? 'idle' : 'bad'
   return <span className={`drive-state-badge drive-state-${tone}`} data-testid="drive-state-badge" data-state={state ?? ''}>{driveStateLabel(state)}</span>
@@ -97,6 +104,8 @@ export function DriveAdminPanel({ onClose }: { onClose: () => void }) {
           <div><dt>서버</dt><dd>{status.server_url}</dd></div>
           <div><dt>SPDM 루트</dt><dd>{status.drive_root ? `~/${status.drive_root}` : '미설정'}{status.drive_root_locked ? ' (환경 설정 고정)' : ''}</dd></div>
           <div><dt>워커 버전</dt><dd>{status.worker_version ?? '—'}</dd></div>
+          <div><dt>드라이브 쓰기</dt><dd data-testid="drive-writes">{status.writes_available ? '사용 가능' : '읽기 전용'} · 쓰기 허용 설정 {status.writes_enabled ? '켜짐' : '꺼짐'}<small> (SIMDASH_DRIVE_WRITES_ENABLED, 쓰기는 D3 이후)</small></dd></div>
+          <div><dt>원본 지문</dt><dd data-testid="drive-version-tokens">{tokenKindText(status.version_tokens)}</dd></div>
           <div><dt>공용 계정</dt><dd>{credentials?.present ? `${credentials.account_hint ?? '(이름 없음)'} · 발급 ${stamp(credentials.obtained_at)} · 갱신 ${stamp(credentials.updated_at)} (${credentials.updated_by === 'worker' ? '자동 회전' : credentials.updated_by ?? '—'})` : '등록 안 됨'}</dd></div>
           <div><dt>마지막 성공</dt><dd>{stamp(status.health?.last_success_at)}</dd></div>
           <div><dt>마지막 오류</dt><dd>{status.health?.last_error_code ? `${status.health.last_error_code} · ${stamp(status.health.last_error_at)}` : '—'}</dd></div>

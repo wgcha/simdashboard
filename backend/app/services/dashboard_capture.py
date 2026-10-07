@@ -169,8 +169,9 @@ def _safe_issue_path(root: Path, path: Path) -> str:
     helper only makes that safe relative representation explicit.
     """
     try:
-        value = path.relative_to(root).as_posix()
-    except ValueError:
+        # A drive root (scx mode) is not a path; its provider paths sit below ``root.virtual``.
+        value = path.relative_to(getattr(root, "virtual", root)).as_posix()
+    except (ValueError, TypeError):
         value = path.name
     return _safe_issue_relative(value)
 
@@ -192,6 +193,10 @@ def _walk(
     include_path=None,
     excluded_files: list[dict[str, str]] | None = None,
 ) -> list[tuple[str, bytes, str]]:
+    from .drive import reads as drive_reads
+
+    # SCX drive (D2): have the Case's capture files downloaded before reading (no-op in local mode).
+    drive_reads.require_content([relative])
     fs = provider_for_root(root)
     base = _safe_target(root, relative)
     excluded = {"cad", "report", "reports", "final", "validation", "library"}

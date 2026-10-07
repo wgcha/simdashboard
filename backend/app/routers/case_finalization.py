@@ -13,13 +13,15 @@ from contextlib import ExitStack
 from tempfile import SpooledTemporaryFile
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Path, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from ..database_connection import connect
 from ..modules.access_control import PROJECT_DATA_VIEW, RESULT_IMPORT, require_resource_permission
 from ..security import write_audit_event
+from ..services.drive import reads as drive_reads
+from ..services.drive.writes import require_drive_writes
 from ..services import case_finalization as service
 
 router = APIRouter(prefix="/api/dashboard/finalizations", tags=["case-finalization"])
@@ -65,7 +67,7 @@ def _error(exc: service.CaseFinalizationError) -> HTTPException:
     return HTTPException(status_code=status, detail={"code": exc.code, "message": str(exc)})
 
 
-@router.post("/preview")
+@router.post("/preview", dependencies=[Depends(require_drive_writes)])
 def preview(payload: FinalizationInput, request: Request):
     with connect() as conn:
         require_resource_permission(request, RESULT_IMPORT, "request", payload.request_id, conn=conn)
@@ -80,7 +82,7 @@ def preview(payload: FinalizationInput, request: Request):
         return result
 
 
-@router.post("/confirm")
+@router.post("/confirm", dependencies=[Depends(require_drive_writes)])
 def confirm(payload: ConfirmInput, request: Request):
     with connect() as conn:
         require_resource_permission(request, RESULT_IMPORT, "request", payload.request_id, conn=conn)
@@ -107,7 +109,7 @@ def confirm(payload: ConfirmInput, request: Request):
         return result
 
 
-@router.put("/{operation_id}/reports/{report_format}")
+@router.put("/{operation_id}/reports/{report_format}", dependencies=[Depends(require_drive_writes)])
 async def upload_report(
     request: Request,
     operation_id: str = Path(pattern=r"^[0-9a-f]{32}$"),
@@ -178,6 +180,7 @@ async def upload_report(
 
 
 @router.get("/status")
+@drive_reads.read_session()
 def status(request: Request, project_id: str = Query(min_length=1, max_length=128),
            request_id: str = Query(min_length=1, max_length=128),
            environment: Literal["USAGE", "DISTRIBUTION"] = Query(...),
@@ -219,7 +222,7 @@ class SummaryRepairInput(BaseModel):
     override: bool = False
 
 
-@router.post("/summary/repair")
+@router.post("/summary/repair", dependencies=[Depends(require_drive_writes)])
 def repair_summary(payload: SummaryRepairInput, request: Request):
     """W3: rewrite ``Final/current.json`` (and the signed pointer) for the current Final; returns the status.
 

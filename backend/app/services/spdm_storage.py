@@ -23,6 +23,7 @@ from fastapi import HTTPException
 
 from ..database_connection import ConnectionLike, rows
 from .storage import provider_for_root
+from .storage.drive import DriveRoot, drive_root_from_settings
 from .storage.local import LocalFsProvider, prepare_root, resolve_existing_or_none, resolve_root
 from .storage.provider import LEGACY, SpdmStorageError
 
@@ -48,9 +49,32 @@ _storage_lock = threading.RLock()
 
 @dataclass(frozen=True)
 class StorageRoot:
-    root: Path | None
+    root: Path | DriveRoot | None
     locked: bool
     configured: bool
+
+
+def _drive_settings():
+    """scx drive settings when ``SIMDASH_DRIVE_GATEWAY=scx`` (D2: the SPDM root is on the drive), else ``None``."""
+    from .drive import gateway as drive_gateway
+    from .drive.config import drive_mode
+
+    if drive_mode() != "scx":
+        return None
+    return drive_gateway.current_settings()
+
+
+def drive_storage_root() -> StorageRoot | None:
+    """scx mode: the drive SPDM root (``SIMDASH_SCX_DRIVE_ROOT``); ``None`` in none mode.
+
+    Needs no database and no drive call (the root identity is path based, see ``DriveRoot``).
+    """
+    settings = _drive_settings()
+    if settings is None:
+        return None
+    if not settings.spdm_root:
+        return StorageRoot(None, True, False)
+    return StorageRoot(drive_root_from_settings(settings), True, True)
 
 
 @dataclass(frozen=True)
@@ -144,6 +168,11 @@ def _lock_root_identity(conn: ConnectionLike, root: Path) -> None:
 
 
 def storage_root(conn: ConnectionLike) -> StorageRoot:
+    drive_root = drive_storage_root()
+    if drive_root is not None:
+        # scx mode (D2): the SPDM root is SIMDASH_SCX_DRIVE_ROOT on the drive; the local
+        # root settings are kept untouched for a later switch back (plan §9 D5).
+        return drive_root
     raw_env = os.getenv("SIMDASH_SPDM_ROOT", "").strip()
     persisted = _setting(conn)
     raw = raw_env or persisted
@@ -165,6 +194,8 @@ def storage_root(conn: ConnectionLike) -> StorageRoot:
 
 
 def set_storage_root(conn: ConnectionLike, value: str) -> StorageRoot:
+    if _drive_settings() is not None:
+        raise SpdmStorageError("SPDM_ROOT_LOCKED", "드라이브 모드에서는 SPDM 루트를 SIMDASH_SCX_DRIVE_ROOT 환경변수로 정합니다.")
     if os.getenv("SIMDASH_SPDM_ROOT", "").strip():
         raise SpdmStorageError("SPDM_ROOT_LOCKED", "환경 변수로 설정된 SPDM root는 여기서 변경할 수 없습니다.")
     resolved = prepare_root(value)

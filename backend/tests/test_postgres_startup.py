@@ -69,6 +69,12 @@ class _PostgresStartupConnection:
                 "result_registration_files": {"draft_id", "relative_path", "sha256", "size_bytes", "content"},
                 "result_registration_events": {"draft_id", "action", "detail_json", "actor", "occurred_at"},
                 "drive_credentials": {"id", "ciphertext", "key_id", "account_hint", "obtained_at", "updated_by", "updated_at", "generation"},
+                "drive_source_versions": {"id", "root_key", "rel_path", "version_no", "project_id", "request_id", "item_id",
+                                          "size_bytes", "modified_at", "sha1", "sha256", "version_token", "content_stored",
+                                          "stored_path", "pending_version_token", "pending_size_bytes", "pending_modified_at",
+                                          "pending_sha1", "pending_item_id", "pending_detected_at", "review_state",
+                                          "reviewed_by", "reviewed_at", "registered_at", "registered_by", "superseded_at",
+                                          "source_state", "last_checked_at"},
             }[table]
             return _FakeResult([] if self.missing_column in columns else [(column,) for column in columns])
         raise AssertionError(f"unexpected startup query: {statement}")

@@ -1,7 +1,9 @@
 """SCX drive administration and status API (integration 02 §2/§4, plan D0/D7).
 
 * ``/api/admin/drive/*`` — global administrators only.
-* ``/api/drive/status`` — any signed-in user; state string only (banner).
+* ``/api/drive/status`` — any signed-in user; state string and write availability (banner, read-only notice).
+* ``/api/drive/source-changes`` — drive files of a request whose change or removal waits for
+  confirmation (stage D2, 05 §4): list (request viewers), accept/dismiss (result import permission).
 
 In ``none`` mode the status endpoints report ``mode: "none"`` and every admin
 write returns 409 ``DRIVE_MODE_DISABLED``.  Token values are never returned,
@@ -23,15 +25,21 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
+from ..database_connection import connect
+from ..modules.access_control import PROJECT_DATA_VIEW, RESULT_IMPORT, require_resource_permission
 from ..security import write_audit_event
+from ..services import folder_auto_sync
 from ..services.drive import gateway as drive_gateway
+from ..services.drive import reads as drive_reads
+from ..services.drive import sources as drive_sources
 from ..services.drive.check import CheckAlreadyRunning, run_drive_check
 from ..services.drive.config import DriveSettings, url_host, validate_drive_rel_path
 from ..services.drive.token_store import parse_obtained_at
+from ..services.storage.drive import drive_root_from_settings
 
 logger = logging.getLogger("app.routers.drive")
 
@@ -71,6 +79,15 @@ class DriveHealth(BaseModel):
     in_flight: int = 0
 
 
+class DriveTokenObservation(BaseModel):
+    """Which ``version_token`` form the drive listings produced (C1/C9: sha1 in listings?)."""
+
+    last_kind: str | None = None
+    sha1_files: int = 0
+    size_mtime_files: int = 0
+    last_at: str | None = None
+
+
 class DriveAdminStatus(BaseModel):
     mode: str
     state: str | None = None
@@ -82,11 +99,58 @@ class DriveAdminStatus(BaseModel):
     health: DriveHealth | None = None
     worker_version: str | None = None
     token_save_failed_at: str | None = None
+    writes_enabled: bool = False
+    writes_available: bool = True
+    version_tokens: DriveTokenObservation | None = None
 
 
 class DriveUserStatus(BaseModel):
     mode: str
     state: str | None = None
+    writes_enabled: bool = False
+    writes_available: bool = True
+
+
+class DriveSourceVersionInfo(BaseModel):
+    size: int | None = None
+    modified_at: str | None = None
+    token_kind: str | None = None
+    registered_at: str | None = None
+
+
+class DriveSourceChangeItem(BaseModel):
+    id: str
+    relative_path: str
+    kind: str                       # CHANGED | MISSING
+    review_state: str               # PENDING | IGNORED | NONE (MISSING without decision)
+    version_no: int
+    registered: DriveSourceVersionInfo
+    drive: DriveSourceVersionInfo | None = None
+    detected_at: str | None = None
+
+
+class DriveSourceChanges(BaseModel):
+    project_id: str
+    request_id: str
+    items: list[DriveSourceChangeItem]
+    pending_changes: int = 0
+    missing: int = 0
+    ignored: int = 0
+
+
+class DriveSourceChangeDecision(BaseModel):
+    project_id: str = Field(min_length=1, max_length=128)
+    request_id: str = Field(min_length=1, max_length=128)
+    ids: list[str] | None = Field(default=None, max_length=5000)
+
+
+class DriveSourceChangeResult(BaseModel):
+    accepted: int = 0
+    removed: int = 0
+    dismissed: int = 0
+    pending_changes: int = 0
+    missing: int = 0
+    ignored: int = 0
 
 
 class DriveErrorInfo(BaseModel):
@@ -222,7 +286,15 @@ def _admin_status(settings: DriveSettings) -> DriveAdminStatus:
         credentials=DriveCredentialsMeta(**credentials), credentials_problem=problem, health=DriveHealth(**health),
         worker_version=str(version) if isinstance(version, str) else None,
         token_save_failed_at=saved_failed.isoformat() if saved_failed else None,
+        writes_enabled=settings.writes_enabled, writes_available=False,
+        version_tokens=_token_observation(),
     )
+
+
+def _token_observation() -> DriveTokenObservation:
+    observed = drive_reads.token_observation()
+    return DriveTokenObservation(last_kind=observed.get("last_kind"), sha1_files=int(observed.get("sha1") or 0),
+                                 size_mtime_files=int(observed.get("size_mtime") or 0), last_at=observed.get("last_at"))
 
 
 def _parse_bundle(raw: bytes, settings: DriveSettings) -> dict[str, Any]:
@@ -361,7 +433,67 @@ def user_status(request: Request) -> DriveUserStatus:
         if not settings.enabled:
             return DriveUserStatus(mode="none")
         credentials, health, _store, _gateway = _scx_snapshot()
-        return DriveUserStatus(mode="scx", state=_derived_state(credentials, health))
+        return DriveUserStatus(mode="scx", state=_derived_state(credentials, health),
+                               writes_enabled=settings.writes_enabled, writes_available=False)
     except Exception as error:
         logger.warning("SCX drive status unavailable (%s)", type(error).__name__)
-        return DriveUserStatus(mode="scx", state="UNAVAILABLE")
+        return DriveUserStatus(mode="scx", state="UNAVAILABLE", writes_available=False)
+
+
+# --- pending drive source changes (stage D2, 05 §4) -------------------------------------------
+
+def _source_root_key() -> str:
+    settings = _require_scx()
+    if not settings.spdm_root:
+        raise _fail(409, "DRIVE_ROOT_NOT_SET", "SIMDASH_SCX_DRIVE_ROOT(SPDM 루트)가 설정되지 않았습니다.")
+    return drive_root_from_settings(settings).root_key()
+
+
+def _source_error(error: drive_sources.DriveSourceError) -> HTTPException:
+    return _fail(error.status_code, error.code, str(error))
+
+
+@status_router.get("/source-changes", response_model=DriveSourceChanges)
+def source_changes(request: Request, project_id: str = Query(min_length=1, max_length=128),
+                   request_id: str = Query(min_length=1, max_length=128)) -> DriveSourceChanges:
+    """Changed or missing drive sources of one request, registered version vs. drive (no drive call)."""
+    root_key = _source_root_key()
+    with connect() as conn:
+        require_resource_permission(request, PROJECT_DATA_VIEW, "request", request_id, conn=conn)
+        try:
+            return DriveSourceChanges(**drive_sources.list_changes(conn, root_key, project_id, request_id))
+        except drive_sources.DriveSourceError as error:
+            raise _source_error(error) from error
+
+
+def _decide(request: Request, payload: DriveSourceChangeDecision, action: str) -> DriveSourceChangeResult:
+    root_key = _source_root_key()
+    actor = request.state.principal.user_id
+    with connect() as conn:
+        require_resource_permission(request, RESULT_IMPORT, "request", payload.request_id, conn=conn)
+        try:
+            decide = drive_sources.accept if action == "accept" else drive_sources.dismiss
+            result = decide(conn, root_key, payload.project_id, payload.request_id, payload.ids, actor)
+        except drive_sources.DriveSourceError as error:
+            raise _source_error(error) from error
+        write_audit_event(request=request, principal=request.state.principal, status_code=200,
+                          action="DRIVE_SOURCE_CHANGES_ACCEPTED" if action == "accept" else "DRIVE_SOURCE_CHANGES_DISMISSED",
+                          detail={"project_id": payload.project_id, "request_id": payload.request_id,
+                                  "ids": payload.ids, **{key: value for key, value in result.items()
+                                                         if key in {"accepted", "removed", "dismissed"}}},
+                          connection=conn)
+    # the next sync of this request applies the accepted versions (downloads only those files)
+    folder_auto_sync.invalidate_request(root_key, payload.project_id, payload.request_id)
+    return DriveSourceChangeResult(**result)
+
+
+@status_router.post("/source-changes/accept", response_model=DriveSourceChangeResult)
+def accept_source_changes(payload: DriveSourceChangeDecision, request: Request) -> DriveSourceChangeResult:
+    """[새 버전 등록]: register the drive versions (all of the request, or ``ids``); old versions are kept."""
+    return _decide(request, payload, "accept")
+
+
+@status_router.post("/source-changes/dismiss", response_model=DriveSourceChangeResult)
+def dismiss_source_changes(payload: DriveSourceChangeDecision, request: Request) -> DriveSourceChangeResult:
+    """[무시]: keep the registered versions; the same drive versions are not asked again."""
+    return _decide(request, payload, "dismiss")

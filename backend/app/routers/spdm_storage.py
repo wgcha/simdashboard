@@ -7,13 +7,15 @@ import tempfile
 from typing import Any, Literal
 from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from ..database_connection import connect, rows
 from ..modules.access_control import PROJECT_DATA_VIEW, RESULT_IMPORT, SYSTEM_CATALOG_MANAGE, require_permission, require_resource_permission
 from ..security import write_audit_event
+from ..services.drive import reads as drive_reads
+from ..services.drive.writes import require_drive_writes
 from ..services import spdm_storage
 from ..services.storage import LocalFsProvider, get_storage_provider
 from ..schemas.api import ResultImportResponse
@@ -188,6 +190,7 @@ def update_storage_config(payload: StorageConfigUpdate, request: Request) -> dic
 
 
 @router.get("/storage/folders", response_model=StorageFoldersResponse)
+@drive_reads.read_session()
 def list_storage_folders(request: Request) -> dict[str, Any]:
     with connect() as conn:
         require_permission(request, SYSTEM_CATALOG_MANAGE, conn=conn)
@@ -197,7 +200,7 @@ def list_storage_folders(request: Request) -> dict[str, Any]:
     return {"folders": folders}
 
 
-@router.post("/storage/refresh", response_model=StorageGlobalRefreshResponse)
+@router.post("/storage/refresh", response_model=StorageGlobalRefreshResponse, dependencies=[Depends(require_drive_writes)])
 def refresh_storage(request: Request) -> dict[str, Any]:
     with connect() as conn:
         require_permission(request, SYSTEM_CATALOG_MANAGE, conn=conn)
@@ -214,6 +217,7 @@ def refresh_storage(request: Request) -> dict[str, Any]:
 
 
 @router.get("/load-cases/{load_case_id}/storage", response_model=StorageLoadCaseResponse)
+@drive_reads.read_session()
 def get_load_case_storage(load_case_id: str, request: Request) -> dict[str, Any]:
     with connect() as conn:
         require_resource_permission(request, PROJECT_DATA_VIEW, "load_case", load_case_id, conn=conn)
@@ -233,7 +237,7 @@ def get_load_case_storage(load_case_id: str, request: Request) -> dict[str, Any]
     }
 
 
-@router.put("/load-cases/{load_case_id}/storage", response_model=StorageBindingUpdateResponse)
+@router.put("/load-cases/{load_case_id}/storage", response_model=StorageBindingUpdateResponse, dependencies=[Depends(require_drive_writes)])
 def bind_load_case_storage(load_case_id: str, payload: StorageBindingUpdate, request: Request) -> dict[str, Any]:
     with connect() as conn:
         require_resource_permission(request, RESULT_IMPORT, "load_case", load_case_id, conn=conn)
@@ -256,7 +260,7 @@ def refresh_load_case_storage(load_case_id: str, request: Request) -> dict[str, 
     return result
 
 
-@router.post("/load-cases/{load_case_id}/storage/upload", response_model=StructuredUploadResponse)
+@router.post("/load-cases/{load_case_id}/storage/upload", response_model=StructuredUploadResponse, dependencies=[Depends(require_drive_writes)])
 def upload_structured_result(load_case_id: str, payload: StructuredUpload, request: Request) -> dict[str, Any]:
     if not payload.filename.lower().endswith((".csv", ".json")):
         raise HTTPException(422, detail={"code": "SPDM_EXTENSION_INVALID", "message": "구조화 결과는 CSV 또는 JSON만 등록할 수 있습니다."})
@@ -279,6 +283,7 @@ def upload_structured_result(load_case_id: str, payload: StructuredUpload, reque
 
 @router.put(
     "/load-cases/{load_case_id}/storage/files",
+    dependencies=[Depends(require_drive_writes)],
     response_model=RawUploadResponse,
     openapi_extra={"requestBody": {"required": True, "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}}},
 )

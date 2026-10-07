@@ -63,6 +63,7 @@ from fastapi import HTTPException
 from ..database_connection import connect
 from . import environment_folder_profiles as depth_profiles
 from . import folder_discovery, folder_discovery_environment as environment_service, spdm_storage
+from .drive import reads as drive_reads
 from .folder_discovery_scan import root_identity
 from .storage import provider_for_root
 
@@ -601,16 +602,23 @@ def discover(*, force: bool = False, connection_factory=None) -> dict[str, Any]:
         cached = remembered()
         if cached:
             return cached
-        with (connection_factory or connect)() as conn:
-            try:
-                root = folder_discovery.configured_root(conn)
-            except HTTPException as exc:
-                detail = exc.detail if isinstance(exc.detail, dict) else {}
-                # Not silent: administrators see why nothing is discovered.
-                return {**_empty("ROOT_UNSET"), "coalesced": False,
-                        "needs_review": [_review("", "SPDM_ROOT_UNSET", str(
-                            detail.get("message") or "SPDM 저장소 루트가 설정되지 않아 자동 탐색을 하지 않았습니다."))]}
-            result = {**_discover(conn, root), "status": "CHECKED"}
+        def run_once() -> dict[str, Any]:
+            with (connection_factory or connect)() as conn:
+                try:
+                    root = folder_discovery.configured_root(conn)
+                except HTTPException as exc:
+                    detail = exc.detail if isinstance(exc.detail, dict) else {}
+                    # Not silent: administrators see why nothing is discovered.
+                    return {**_empty("ROOT_UNSET"), "coalesced": False,
+                            "needs_review": [_review("", "SPDM_ROOT_UNSET", str(
+                                detail.get("message") or "SPDM 저장소 루트가 설정되지 않아 자동 탐색을 하지 않았습니다."))]}
+                return {**_discover(conn, root), "status": "CHECKED"}
+
+        # SCX drive (D2): listings and capture files are fetched between rounds without a DB
+        # connection; a round repeats only reads and idempotent steps (local mode: one plain call).
+        result = drive_reads.run(run_once, priority="BACKGROUND")
+        if result.get("status") != "CHECKED":
+            return result
         with _state_lock:
             _memo.update(at=time.monotonic(), result=result)
         return result

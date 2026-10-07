@@ -17,6 +17,7 @@ from ..modules.access_control import RESULT_IMPORT, require_resource_permission
 from ..repositories import semantic_review as review_repository
 from ..repositories import semantic_mapping as mapping_repository
 from ..security import write_audit_event
+from ..services.drive import reads as drive_reads
 from ..services import spdm_storage
 from ..services.storage import get_storage_provider
 from ..services.semantic_sample_uploads import MAX_SAMPLE_BYTES
@@ -366,6 +367,7 @@ def history(item_id: str, request: Request, limit: int = 100) -> dict[str, Any]:
 
 
 @router.post("/review-items/{item_id}/revalidate", response_model=ReviewRevalidateResponse)
+@drive_reads.read_session()
 def revalidate(item_id: str, payload: RevalidateBody, request: Request) -> dict[str, Any]:
     with connect() as conn:
         item = _record(conn, item_id)
@@ -430,6 +432,7 @@ def revalidate(item_id: str, payload: RevalidateBody, request: Request) -> dict[
 
 
 @router.post("/review-items/{item_id}/confirm", response_model=ReviewConfirmResponse)
+@drive_reads.read_session()
 def confirm(item_id: str, payload: ConfirmBody, request: Request) -> dict[str, Any]:
     with connect() as conn:
         item = _record(conn, item_id)
@@ -489,6 +492,7 @@ def confirm(item_id: str, payload: ConfirmBody, request: Request) -> dict[str, A
 
 
 @router.post("/review-items/{item_id}/reopen", response_model=ReviewItemResponse)
+@drive_reads.read_session()
 def reopen(item_id: str, payload: ReopenBody, request: Request) -> dict[str, Any]:
     """Begin an explicit new review cycle while retaining the prior Run link."""
     with connect() as conn:

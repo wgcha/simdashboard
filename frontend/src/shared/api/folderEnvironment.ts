@@ -40,6 +40,16 @@ export type FolderEnvironmentSync = {
   check_mode: 'QUICK' | 'FULL'
   checked_at: string
   coalesced: boolean
+  /** SCX drive mode only (plan D2): drive files waiting for confirmation and the version token form. */
+  drive?: FolderEnvironmentDriveSync | null
+}
+export type FolderEnvironmentDriveSync = {
+  pending_changes: number
+  missing: number
+  ignored: number
+  new_files?: number
+  /** 'sha1' | 'size_mtime' | 'mixed' (C1/C9: whether drive listings carry sha1). */
+  token_kind?: string | null
 }
 /** Response of automatic SPDM project/request folder discovery (OpenAPI declares it untyped). */
 export type FolderDiscoveryResult = {

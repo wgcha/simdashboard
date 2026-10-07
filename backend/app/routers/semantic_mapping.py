@@ -30,6 +30,7 @@ from ..domains.semantic_mapping.engine import (
 from ..modules.access_control import PROJECT_DATA_VIEW, RESULT_IMPORT, SYSTEM_CATALOG_MANAGE, require_permission, require_resource_permission
 from ..repositories import semantic_mapping as mapping_repository
 from ..security import write_audit_event
+from ..services.drive import reads as drive_reads
 from ..services import spdm_storage, semantic_sample_uploads as sample_uploads
 from ..services import semantic_result_refresh
 from ..services.storage import LocalFsProvider, get_storage_provider
@@ -486,6 +487,7 @@ def _provider(conn: Any) -> LocalFsProvider:
 
 
 @router.get("/folders")
+@drive_reads.read_session()
 def folders(relative_path: str | None, request: Request) -> dict[str, Any]:
     with connect() as conn:
         require_permission(request, SYSTEM_CATALOG_MANAGE, conn=conn)
@@ -498,6 +500,7 @@ def folders(relative_path: str | None, request: Request) -> dict[str, Any]:
 
 
 @router.post("/bindings", status_code=201)
+@drive_reads.read_session()
 def save_binding(payload: BindingSave, request: Request) -> dict[str, Any]:
     with connect() as conn, semantic_transaction(conn):
         require_permission(request, SYSTEM_CATALOG_MANAGE, conn=conn)
@@ -717,7 +720,16 @@ def _assert_binding_snapshot(conn: Any, snapshot: dict[str, Any], *, lock: bool 
         raise HTTPException(409, {"code": "SEMANTIC_BINDING_STALE"})
 
 
+def _prefetch_binding_sources(session, binding_ids: list[str]) -> None:
+    """scx (D2): download the value files of the bindings' folders before a refresh (it imports file by file)."""
+    with connect() as conn:
+        folders = [str(row["relative_path"]) for row in (mapping_repository.binding(conn, ident) for ident in binding_ids) if row]
+    for folder in folders:
+        drive_reads.prefetch_values(session, "/".join(folder.split("/")))
+
+
 @router.post("/bindings/{binding_id}/refresh")
+@drive_reads.read_session(rounds=1, prepare=lambda session, binding_id, request: _prefetch_binding_sources(session, [binding_id]))
 def refresh_binding(binding_id: str, request: Request) -> dict[str, Any]:
     with connect() as conn:
         binding = mapping_repository.binding(conn, binding_id)
@@ -726,7 +738,14 @@ def refresh_binding(binding_id: str, request: Request) -> dict[str, Any]:
     return _refresh_binding_snapshot(binding, request)
 
 
+def _prefetch_load_case_sources(session, load_case_id: str, request: Request) -> None:
+    with connect() as conn:
+        snapshots = semantic_result_refresh.load_case_binding_snapshots(conn, load_case_id)
+    _prefetch_binding_sources(session, [str(item["id"]) for item in snapshots])
+
+
 @router.post("/load-cases/{load_case_id}/results/refresh")
+@drive_reads.read_session(rounds=1, prepare=_prefetch_load_case_sources)
 def refresh_load_case_results(load_case_id: str, request: Request) -> dict[str, Any]:
     """Refresh every exact load-case result binding and pin the chosen run."""
     with connect() as conn:

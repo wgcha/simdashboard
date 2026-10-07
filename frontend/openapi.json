@@ -6154,7 +6154,7 @@
           "folder-discovery-environments"
         ],
         "summary": "Sync",
-        "description": "Keep a viewed request in step with its SPDM folders (screens poll this).\n\nNo client path is accepted; the server re-reads only the selected request's\nconfirmed folder scope. Checks are coalesced per scope (see folder_auto_sync).",
+        "description": "Keep a viewed request in step with its SPDM folders (screens poll this).\n\nNo client path is accepted; the server re-reads only the selected request's\nconfirmed folder scope. Checks are coalesced per scope (see folder_auto_sync).\nSCX drive mode: the drive is read without a DB connection held, changed\nfiles wait for confirmation and the result carries ``drive`` counts.",
         "operationId": "sync_api_folder_discovery_environments_sync_post",
         "requestBody": {
           "content": {
@@ -7348,6 +7348,146 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/DriveUserStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/drive/source-changes": {
+      "get": {
+        "tags": [
+          "drive"
+        ],
+        "summary": "Source Changes",
+        "description": "Changed or missing drive sources of one request, registered version vs. drive (no drive call).",
+        "operationId": "source_changes_api_drive_source_changes_get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "request_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "title": "Request Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DriveSourceChanges"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/drive/source-changes/accept": {
+      "post": {
+        "tags": [
+          "drive"
+        ],
+        "summary": "Accept Source Changes",
+        "description": "[새 버전 등록]: register the drive versions (all of the request, or ``ids``); old versions are kept.",
+        "operationId": "accept_source_changes_api_drive_source_changes_accept_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DriveSourceChangeDecision"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DriveSourceChangeResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/drive/source-changes/dismiss": {
+      "post": {
+        "tags": [
+          "drive"
+        ],
+        "summary": "Dismiss Source Changes",
+        "description": "[무시]: keep the registered versions; the same drive versions are not asked again.",
+        "operationId": "dismiss_source_changes_api_drive_source_changes_dismiss_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DriveSourceChangeDecision"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DriveSourceChangeResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -16279,6 +16419,26 @@
               }
             ],
             "title": "Token Save Failed At"
+          },
+          "writes_enabled": {
+            "type": "boolean",
+            "title": "Writes Enabled",
+            "default": false
+          },
+          "writes_available": {
+            "type": "boolean",
+            "title": "Writes Available",
+            "default": true
+          },
+          "version_tokens": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DriveTokenObservation"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -16586,6 +16746,228 @@
         ],
         "title": "DriveHealth"
       },
+      "DriveSourceChangeDecision": {
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Project Id"
+          },
+          "request_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Request Id"
+          },
+          "ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 5000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "project_id",
+          "request_id"
+        ],
+        "title": "DriveSourceChangeDecision"
+      },
+      "DriveSourceChangeItem": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "relative_path": {
+            "type": "string",
+            "title": "Relative Path"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "review_state": {
+            "type": "string",
+            "title": "Review State"
+          },
+          "version_no": {
+            "type": "integer",
+            "title": "Version No"
+          },
+          "registered": {
+            "$ref": "#/components/schemas/DriveSourceVersionInfo"
+          },
+          "drive": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DriveSourceVersionInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "detected_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detected At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "relative_path",
+          "kind",
+          "review_state",
+          "version_no",
+          "registered"
+        ],
+        "title": "DriveSourceChangeItem"
+      },
+      "DriveSourceChangeResult": {
+        "properties": {
+          "accepted": {
+            "type": "integer",
+            "title": "Accepted",
+            "default": 0
+          },
+          "removed": {
+            "type": "integer",
+            "title": "Removed",
+            "default": 0
+          },
+          "dismissed": {
+            "type": "integer",
+            "title": "Dismissed",
+            "default": 0
+          },
+          "pending_changes": {
+            "type": "integer",
+            "title": "Pending Changes",
+            "default": 0
+          },
+          "missing": {
+            "type": "integer",
+            "title": "Missing",
+            "default": 0
+          },
+          "ignored": {
+            "type": "integer",
+            "title": "Ignored",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "title": "DriveSourceChangeResult"
+      },
+      "DriveSourceChanges": {
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "title": "Project Id"
+          },
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DriveSourceChangeItem"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "pending_changes": {
+            "type": "integer",
+            "title": "Pending Changes",
+            "default": 0
+          },
+          "missing": {
+            "type": "integer",
+            "title": "Missing",
+            "default": 0
+          },
+          "ignored": {
+            "type": "integer",
+            "title": "Ignored",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "project_id",
+          "request_id",
+          "items"
+        ],
+        "title": "DriveSourceChanges"
+      },
+      "DriveSourceVersionInfo": {
+        "properties": {
+          "size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size"
+          },
+          "modified_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Modified At"
+          },
+          "token_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token Kind"
+          },
+          "registered_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Registered At"
+          }
+        },
+        "type": "object",
+        "title": "DriveSourceVersionInfo"
+      },
       "DriveTestResult": {
         "properties": {
           "ok": {
@@ -16631,6 +17013,45 @@
         ],
         "title": "DriveTestResult"
       },
+      "DriveTokenObservation": {
+        "properties": {
+          "last_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Kind"
+          },
+          "sha1_files": {
+            "type": "integer",
+            "title": "Sha1 Files",
+            "default": 0
+          },
+          "size_mtime_files": {
+            "type": "integer",
+            "title": "Size Mtime Files",
+            "default": 0
+          },
+          "last_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last At"
+          }
+        },
+        "type": "object",
+        "title": "DriveTokenObservation",
+        "description": "Which ``version_token`` form the drive listings produced (C1/C9: sha1 in listings?)."
+      },
       "DriveUserStatus": {
         "properties": {
           "mode": {
@@ -16647,6 +17068,16 @@
               }
             ],
             "title": "State"
+          },
+          "writes_enabled": {
+            "type": "boolean",
+            "title": "Writes Enabled",
+            "default": false
+          },
+          "writes_available": {
+            "type": "boolean",
+            "title": "Writes Available",
+            "default": true
           }
         },
         "type": "object",

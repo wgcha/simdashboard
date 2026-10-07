@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 from ..database_connection import connect
 from ..security import write_audit_event
+from ..services.drive import reads as drive_reads
 from ..services import (environment_folder_profiles as service, folder_discovery as legacy,
                         folder_discovery_environment as environment_service, folder_environment_deletion as deletion,
                         project_cleanup as cleanup)
@@ -85,6 +86,7 @@ def put_depth_schema(payload: DepthSchemaPut, request: Request):
 
 
 @router.post("/depth-schema/samples")
+@drive_reads.read_session()
 def depth_schema_samples(payload: DepthSamples, request: Request):
     with connect() as conn:
         admin(request, conn)
@@ -95,6 +97,7 @@ def depth_schema_samples(payload: DepthSamples, request: Request):
 
 
 @router.post("/depth-schema/check")
+@drive_reads.read_session()
 def depth_schema_check(payload: DepthSchemaDraft, request: Request):
     with connect() as conn:
         admin(request, conn)

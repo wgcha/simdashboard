@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 from ..database_connection import connect
 from ..modules.access_control import PROJECT_DATA_VIEW, RESULT_IMPORT, SYSTEM_CATALOG_MANAGE, require_permission, require_resource_permission
 from ..security import write_audit_event
+from ..services.drive import reads as drive_reads
 from ..services import dashboard_capture as storage, dashboard_queries as queries, folder_request_progress
 
 router = APIRouter(prefix="/api/dashboard", tags=["result-dashboard"])
@@ -129,6 +130,7 @@ def result_environments(project_id: str, request_id: str, request: Request):
 
 @project_requests_router.get("/api/projects/{project_id}/requests/{request_id}/folder-progress",
                              response_model=FolderRequestProgress)
+@drive_reads.read_session()
 def folder_progress(project_id: str, request_id: str, request: Request):
     """Progress of a folder-registered request from SPDM folders and the app DB (folder-request-progress.md §3)."""
     with connect() as conn:
@@ -139,6 +141,7 @@ def folder_progress(project_id: str, request_id: str, request: Request):
 
 
 @router.post("/scans")
+@drive_reads.read_session()
 def scan(payload: ScanInput, request: Request):
     with connect() as conn:
         # Unbound discovery follows the existing storage administration policy.
@@ -152,6 +155,7 @@ def scan(payload: ScanInput, request: Request):
 
 
 @router.post("/captures")
+@drive_reads.read_session()
 def publish(payload: CaptureInput, request: Request):
     with connect() as conn:
         require_resource_permission(request, RESULT_IMPORT, "request", payload.request_id, conn=conn)

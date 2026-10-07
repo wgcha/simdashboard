@@ -62,6 +62,8 @@ class Entry:
 
 ## 4. 2단계 정리 대상
 
+> 2026-10-07 D2: scx 모드의 SPDM 루트는 `DriveRoot`이고 `provider_for_root`가 읽기 전용 `DriveStorageProvider`(`storage/drive.py`)를 돌려준다. 같은 메서드 이름을 쓰되 쓰기는 모두 `DRIVE_WRITE_DISABLED`, 링크 없음, `pin` 무동작, `etag`=`version_token`, 내용 지문용 `content_token()` 추가. 드라이브 읽기는 DB 연결을 쥔 채 기다리지 않는다([기능 안내 §8.2](../features/scx-drive.md#8-읽기-경로-d2)). 서버 임시 저장소·보관소 파일 조작은 `storage/server_local.py`.
+>
 > 2026-10-07 D1([SCX 드라이브 계획](../plans/scx-drive-integration.md) §4): 아래 직접 생성은 모두 `storage.provider_for_root(root)`(단일 팩터리, 지금은 `LocalFsProvider`)로 바꿨고, storage 패키지 밖 직접 생성은 경계 시험이 막는다. 공급자를 인자로 넘기는 시그니처 정리는 D2·D3에서 필요한 곳만 한다. 아래 목록은 이력이다.
 
 1단계는 공개 함수 시그니처(`root: Path` 인자, 시험이 직접 호출하는 내부 함수)를 유지하려고 서비스 안에서 `LocalFsProvider(root)`를 직접 만든다. 2단계에서 `get_storage_provider(conn)`로 얻은 공급자를 인자로 넘기도록 정리한다(2026-10-04 기준 69곳, `backend/app/services/` 기준 줄 번호).

@@ -8,7 +8,7 @@ from tempfile import SpooledTemporaryFile
 from typing import Any, Literal
 from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.routing import APIRoute
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
@@ -17,6 +17,8 @@ from starlette.concurrency import run_in_threadpool
 from ..database_connection import connect
 from ..modules.access_control import RESULT_IMPORT, has_permission, require_any_project_permission, require_resource_permission
 from ..security import write_audit_event
+from ..services.drive import reads as drive_reads
+from ..services.drive.writes import require_drive_writes
 from ..services import result_drop_upload as drop_service
 from ..services import result_registration as service
 from ..services import result_registration_locations as location_service
@@ -221,6 +223,7 @@ async def _multipart_files(request: Request) -> list[tuple[str, bytes]]:
 
 
 @router.get("/targets")
+@drive_reads.read_session()
 def list_targets(request: Request, environment: Literal["USAGE", "DISTRIBUTION"]):
     with connect() as conn:
         project_ids = service.target_project_ids(conn)
@@ -234,6 +237,7 @@ def list_targets(request: Request, environment: Literal["USAGE", "DISTRIBUTION"]
 
 
 @router.get("/folders")
+@drive_reads.read_session()
 def list_folders(request: Request, project_id: str, request_id: str,
                  environment: Literal["USAGE", "DISTRIBUTION"],
                  parent_relative_path: str | None = Query(default=None, max_length=2048)):
@@ -246,6 +250,7 @@ def list_folders(request: Request, project_id: str, request_id: str,
 
 
 @router.get("/locations")
+@drive_reads.read_session()
 def list_result_locations(request: Request, project_id: str, request_id: str,
                           environment: Literal["USAGE", "DISTRIBUTION"]):
     with connect() as conn:
@@ -293,7 +298,7 @@ def delete_result_location(link_id: str, request: Request, project_id: str, requ
             raise _http_error(exc) from exc
 
 
-@router.post("/folders/prepare")
+@router.post("/folders/prepare", dependencies=[Depends(require_drive_writes)])
 def prepare_folders(payload: PrepareFoldersInput, request: Request):
     with connect() as conn:
         require_resource_permission(request, RESULT_IMPORT, "request", payload.request_id, conn=conn)
@@ -366,7 +371,7 @@ def approve_draft(draft_id: str, payload: ApproveDraftInput, request: Request):
             raise _http_error(exc) from exc
 
 
-@router.post("/drafts/{draft_id}/publish")
+@router.post("/drafts/{draft_id}/publish", dependencies=[Depends(require_drive_writes)])
 def publish_draft(draft_id: str, payload: PublishDraftInput, request: Request):
     with connect() as conn:
         _draft_access(request, conn, draft_id)
@@ -377,7 +382,7 @@ def publish_draft(draft_id: str, payload: PublishDraftInput, request: Request):
             raise _http_error(exc) from exc
 
 
-@router.post("/drafts/{draft_id}/mirror/retry")
+@router.post("/drafts/{draft_id}/mirror/retry", dependencies=[Depends(require_drive_writes)])
 def retry_mirror(draft_id: str, request: Request):
     with connect() as conn:
         _draft_access(request, conn, draft_id)
@@ -467,6 +472,7 @@ def list_legacy_drafts(request: Request, project_id: str, request_id: str,
 
 
 @router.get("/drop-target")
+@drive_reads.read_session()
 def drop_target(request: Request, project_id: str, request_id: str,
                 environment: Literal["USAGE", "DISTRIBUTION"]):
     """The request's Working tree by DEPTH_V1 level and the paths users see in Explorer."""
@@ -478,7 +484,7 @@ def drop_target(request: Request, project_id: str, request_id: str,
             raise _drop_error(exc) from exc
 
 
-@router.post("/drop-target/folders", status_code=201)
+@router.post("/drop-target/folders", status_code=201, dependencies=[Depends(require_drive_writes)])
 def drop_create_folder(payload: DropFolderInput, request: Request):
     with connect() as conn:
         require_resource_permission(request, RESULT_IMPORT, "request", payload.request_id, conn=conn)
@@ -495,6 +501,7 @@ def drop_create_folder(payload: DropFolderInput, request: Request):
 
 
 @router.post("/drop-uploads/plan")
+@drive_reads.read_session()
 def drop_plan(payload: DropPlanInput, request: Request):
     """Everything the upload would do, checked before any write (no side effects)."""
     with connect() as conn:
@@ -508,7 +515,7 @@ def drop_plan(payload: DropPlanInput, request: Request):
         return plan
 
 
-@router.post("/drop-uploads", status_code=201)
+@router.post("/drop-uploads", status_code=201, dependencies=[Depends(require_drive_writes)])
 def drop_create_session(payload: DropPlanInput, request: Request):
     with connect() as conn:
         require_resource_permission(request, RESULT_IMPORT, "request", payload.request_id, conn=conn)
@@ -555,7 +562,7 @@ def drop_read_session(session_id: str, request: Request):
         raise _drop_error(exc) from exc
 
 
-@router.put("/drop-uploads/{session_id}/files/{index}", openapi_extra={"requestBody": {"required": True, "content": {
+@router.put("/drop-uploads/{session_id}/files/{index}", dependencies=[Depends(require_drive_writes)], openapi_extra={"requestBody": {"required": True, "content": {
     "application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}}})
 async def drop_upload_chunk(session_id: str, index: int, request: Request, offset: int = Query(ge=0)):
     """One chunk (≤ 8 MiB) at ``offset``; ``X-Chunk-SHA256`` is optional (browsers without WebCrypto on HTTP)."""
@@ -576,7 +583,7 @@ async def drop_upload_chunk(session_id: str, index: int, request: Request, offse
         raise _drop_error(exc) from exc
 
 
-@router.post("/drop-uploads/{session_id}/complete")
+@router.post("/drop-uploads/{session_id}/complete", dependencies=[Depends(require_drive_writes)])
 def drop_complete(session_id: str, request: Request):
     with connect() as conn:
         scope = _session_access(request, conn, session_id)

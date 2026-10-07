@@ -119,7 +119,8 @@ def test_none_mode_is_unchanged_and_never_imports_the_adapter(password_auth, mon
     with TestClient(app) as client:
         admin, viewer = _login(client, "drive-admin"), _login(client, "drive-viewer")
         assert client.get("/api/admin/drive/status", headers=admin).json()["mode"] == "none"
-        assert client.get("/api/drive/status", headers=viewer).json() == {"mode": "none", "state": None}
+        assert client.get("/api/drive/status", headers=viewer).json() == {"mode": "none", "state": None,
+                                                                          "writes_enabled": False, "writes_available": True}
         for method, path, kwargs in (("PUT", "/api/admin/drive/credentials", {"content": _bundle_json()}),
                                      ("DELETE", "/api/admin/drive/credentials", {}),
                                      ("POST", "/api/admin/drive/test", {}),
@@ -307,7 +308,8 @@ def test_credentials_register_validate_test_delete_without_echoing_tokens(fake_d
         status = client.get("/api/admin/drive/status", headers=admin).json()
         assert status["mode"] == "scx" and status["state"] == "AUTH_REQUIRED"
         assert status["credentials"]["present"] is False and status["drive_root_locked"] is True
-        assert client.get("/api/drive/status", headers=viewer).json() == {"mode": "scx", "state": "AUTH_REQUIRED"}
+        assert client.get("/api/drive/status", headers=viewer).json() == {"mode": "scx", "state": "AUTH_REQUIRED",
+                                                                          "writes_enabled": False, "writes_available": False}
         bodies = []
         for body, fragment in ((_bundle_json(server_url="https://evil.example.test/"), "호스트"),
                                (_bundle_json(access_token=""), "access_token"),
@@ -335,7 +337,7 @@ def test_credentials_register_validate_test_delete_without_echoing_tokens(fake_d
         assert status.json()["worker_version"] == "0.2.0-fake"
         bodies.append(status.text)
         user = client.get("/api/drive/status", headers=viewer)
-        assert user.json() == {"mode": "scx", "state": "OK"}
+        assert user.json() == {"mode": "scx", "state": "OK", "writes_enabled": False, "writes_available": False}
         deleted = client.delete("/api/admin/drive/credentials", headers=admin)
         assert deleted.status_code == 204
         failed = client.post("/api/admin/drive/test", headers=admin).json()
@@ -640,7 +642,8 @@ def test_status_endpoints_report_unavailable_instead_of_500(fake_drive, password
         monkeypatch.setattr(drive_gateway, "token_store", broken_store)
         monkeypatch.setattr(drive_gateway, "get_drive_gateway", broken_store)
         user = client.get("/api/drive/status", headers=viewer)
-        assert user.status_code == 200 and user.json() == {"mode": "scx", "state": "UNAVAILABLE"}
+        assert user.status_code == 200 and user.json() == {"mode": "scx", "state": "UNAVAILABLE",
+                                                                "writes_enabled": False, "writes_available": False}
         status = client.get("/api/admin/drive/status", headers=admin)
         assert status.status_code == 200 and status.json()["state"] == "UNAVAILABLE"
         tested = client.post("/api/admin/drive/test", headers=admin)

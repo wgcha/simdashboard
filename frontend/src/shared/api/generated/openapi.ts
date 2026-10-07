@@ -2073,6 +2073,8 @@ export interface paths {
          *
          *     No client path is accepted; the server re-reads only the selected request's
          *     confirmed folder scope. Checks are coalesced per scope (see folder_auto_sync).
+         *     SCX drive mode: the drive is read without a DB connection held, changed
+         *     files wait for confirmation and the result carries ``drive`` counts.
          */
         post: operations["sync_api_folder_discovery_environments_sync_post"];
         delete?: never;
@@ -2564,6 +2566,66 @@ export interface paths {
         get: operations["user_status_api_drive_status_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/drive/source-changes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Source Changes
+         * @description Changed or missing drive sources of one request, registered version vs. drive (no drive call).
+         */
+        get: operations["source_changes_api_drive_source_changes_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/drive/source-changes/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accept Source Changes
+         * @description [새 버전 등록]: register the drive versions (all of the request, or ``ids``); old versions are kept.
+         */
+        post: operations["accept_source_changes_api_drive_source_changes_accept_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/drive/source-changes/dismiss": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dismiss Source Changes
+         * @description [무시]: keep the registered versions; the same drive versions are not asked again.
+         */
+        post: operations["dismiss_source_changes_api_drive_source_changes_dismiss_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5242,6 +5304,17 @@ export interface components {
             worker_version?: string | null;
             /** Token Save Failed At */
             token_save_failed_at?: string | null;
+            /**
+             * Writes Enabled
+             * @default false
+             */
+            writes_enabled: boolean;
+            /**
+             * Writes Available
+             * @default true
+             */
+            writes_available: boolean;
+            version_tokens?: components["schemas"]["DriveTokenObservation"] | null;
         };
         /** DriveCheckReport */
         DriveCheckReport: {
@@ -5338,6 +5411,100 @@ export interface components {
              */
             in_flight: number;
         };
+        /** DriveSourceChangeDecision */
+        DriveSourceChangeDecision: {
+            /** Project Id */
+            project_id: string;
+            /** Request Id */
+            request_id: string;
+            /** Ids */
+            ids?: string[] | null;
+        };
+        /** DriveSourceChangeItem */
+        DriveSourceChangeItem: {
+            /** Id */
+            id: string;
+            /** Relative Path */
+            relative_path: string;
+            /** Kind */
+            kind: string;
+            /** Review State */
+            review_state: string;
+            /** Version No */
+            version_no: number;
+            registered: components["schemas"]["DriveSourceVersionInfo"];
+            drive?: components["schemas"]["DriveSourceVersionInfo"] | null;
+            /** Detected At */
+            detected_at?: string | null;
+        };
+        /** DriveSourceChangeResult */
+        DriveSourceChangeResult: {
+            /**
+             * Accepted
+             * @default 0
+             */
+            accepted: number;
+            /**
+             * Removed
+             * @default 0
+             */
+            removed: number;
+            /**
+             * Dismissed
+             * @default 0
+             */
+            dismissed: number;
+            /**
+             * Pending Changes
+             * @default 0
+             */
+            pending_changes: number;
+            /**
+             * Missing
+             * @default 0
+             */
+            missing: number;
+            /**
+             * Ignored
+             * @default 0
+             */
+            ignored: number;
+        };
+        /** DriveSourceChanges */
+        DriveSourceChanges: {
+            /** Project Id */
+            project_id: string;
+            /** Request Id */
+            request_id: string;
+            /** Items */
+            items: components["schemas"]["DriveSourceChangeItem"][];
+            /**
+             * Pending Changes
+             * @default 0
+             */
+            pending_changes: number;
+            /**
+             * Missing
+             * @default 0
+             */
+            missing: number;
+            /**
+             * Ignored
+             * @default 0
+             */
+            ignored: number;
+        };
+        /** DriveSourceVersionInfo */
+        DriveSourceVersionInfo: {
+            /** Size */
+            size?: number | null;
+            /** Modified At */
+            modified_at?: string | null;
+            /** Token Kind */
+            token_kind?: string | null;
+            /** Registered At */
+            registered_at?: string | null;
+        };
         /** DriveTestResult */
         DriveTestResult: {
             /** Ok */
@@ -5348,12 +5515,42 @@ export interface components {
             root_identity?: string | null;
             error?: components["schemas"]["DriveErrorInfo"] | null;
         };
+        /**
+         * DriveTokenObservation
+         * @description Which ``version_token`` form the drive listings produced (C1/C9: sha1 in listings?).
+         */
+        DriveTokenObservation: {
+            /** Last Kind */
+            last_kind?: string | null;
+            /**
+             * Sha1 Files
+             * @default 0
+             */
+            sha1_files: number;
+            /**
+             * Size Mtime Files
+             * @default 0
+             */
+            size_mtime_files: number;
+            /** Last At */
+            last_at?: string | null;
+        };
         /** DriveUserStatus */
         DriveUserStatus: {
             /** Mode */
             mode: string;
             /** State */
             state?: string | null;
+            /**
+             * Writes Enabled
+             * @default false
+             */
+            writes_enabled: boolean;
+            /**
+             * Writes Available
+             * @default true
+             */
+            writes_available: boolean;
         };
         /** DropFile */
         DropFile: {
@@ -13114,6 +13311,104 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DriveUserStatus"];
+                };
+            };
+        };
+    };
+    source_changes_api_drive_source_changes_get: {
+        parameters: {
+            query: {
+                project_id: string;
+                request_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DriveSourceChanges"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    accept_source_changes_api_drive_source_changes_accept_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DriveSourceChangeDecision"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DriveSourceChangeResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    dismiss_source_changes_api_drive_source_changes_dismiss_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DriveSourceChangeDecision"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DriveSourceChangeResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

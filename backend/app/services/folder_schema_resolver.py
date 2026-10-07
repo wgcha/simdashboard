@@ -96,6 +96,16 @@ def scan_fingerprints(result: dict[str, Any], root: Path | None = None, *,
             if size > max_file_bytes:
                 raise FolderSchemaError("FOLDER_SCHEMA_CONTENT_FILE_LIMIT", "내용 fingerprint 대상 파일이 허용 크기를 초과했습니다.", 413)
             file_path = "/".join(PurePosixPath(relative_path).parts)
+            content_token = getattr(fs, "content_token", None)
+            if content_token is not None:
+                # SCX drive (D2): the drive version_token (sha1, else size+time) stands for the
+                # content; periodic checks never download files (integration 03 §4 no. 3).
+                try:
+                    digest = "drive:" + str(content_token(file_path))
+                except spdm_storage.SpdmStorageError as exc:
+                    raise FolderSchemaError(exc.code, str(exc), 409 if exc.code == "SPDM_FILE_BUSY" else 422) from exc
+                content.append((_fold(relative_path), size, modified_ns, digest))
+                continue
             try:
                 fs.assert_safe(file_path)
                 before = fs.stat(file_path, follow_links=True, missing_ok=False)

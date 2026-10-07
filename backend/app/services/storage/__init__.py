@@ -12,6 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable
 
+from .drive import DriveRoot, DriveStorageProvider
 from .factory import override_provider_factory, provider_for_root, set_provider_factory
 from .local import LocalFsProvider
 from .provider import (
@@ -36,12 +37,12 @@ def get_storage_provider(conn, *, on_unset: Callable[[], BaseException] | None =
     return provider_for_root(root)
 
 
-def provider_root(provider: LocalFsProvider) -> Path:
+def provider_root(provider: LocalFsProvider) -> Path | DriveRoot:
     return provider.root
 
 
 __all__ = [
-    "Entry", "FINAL", "LEGACY", "LocalFsProvider", "NOT_ALLOWED_WRITE", "SpdmStorageError", "StorageError",
+    "DriveRoot", "DriveStorageProvider", "Entry", "FINAL", "LEGACY", "LocalFsProvider", "NOT_ALLOWED_WRITE", "SpdmStorageError", "StorageError",
     "StorageProvider", "get_storage_provider", "override_provider_factory", "provider_for_root", "provider_root",
     "set_provider_factory",
 ]

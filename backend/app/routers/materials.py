@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from ..database_connection import connect
 from ..modules.access_control import PROJECT_DATA_VIEW, require_resource_permission
+from ..services.drive import reads as drive_reads
 from ..services import materials_catalog as service
 from ..services import result_registration_paths, spdm_storage
 
@@ -26,6 +27,7 @@ def _raise_error(exc: Exception) -> None:
 
 
 @router.get("/catalog")
+@drive_reads.read_session()
 def materials_catalog(request: Request, request_id: str = Query(min_length=1, max_length=128),
                       environment: Literal["DISTRIBUTION"] = "DISTRIBUTION"):
     with connect() as conn:
@@ -38,6 +40,7 @@ def materials_catalog(request: Request, request_id: str = Query(min_length=1, ma
 
 
 @router.get("/deck")
+@drive_reads.read_session()
 def materials_deck(request: Request, request_id: str = Query(min_length=1, max_length=128),
                    environment: Literal["DISTRIBUTION"] = "DISTRIBUTION",
                    scene_id: str | None = Query(default=None, max_length=256),

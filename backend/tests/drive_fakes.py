@@ -6,6 +6,13 @@ same code path as with the real adapter.  The memory drive simulates
 pagination, CONFLICT, NOT_FOUND, BUSY, AUTH_REQUIRED, refresh-token
 rotation (``TokenStore.save`` on every session creation and refresh) and the
 worker's in-memory token cache (a deleted row does not end a live session).
+
+Stage D2 additions: sha1 present/absent per call kind (``list_has_sha1`` /
+``stat_has_sha1``; the real drive's C1/C9 behaviour is unknown), file
+modification (``modify_file``: new bytes and time; ``touch``: time only),
+deletion (``delete``), persistent error injection (``fail_always`` per op, e.g.
+BUSY/TIMEOUT/AUTH_REQUIRED) and an ``on_call`` hook so tests can assert the
+calling thread holds no database connection.
 """
 from __future__ import annotations
 
@@ -137,20 +144,45 @@ class MemoryDrive:
 
     page_size: int = 3
     list_has_sha1: bool = True
+    stat_has_sha1: bool = True
     nodes: dict[str, _Node] = field(default_factory=dict)
     calls: list[tuple[str, str]] = field(default_factory=list)
     page_calls: int = 0
     busy_paths: set[str] = field(default_factory=set)
     fail_next: dict[str, ErrorCode] = field(default_factory=dict)
+    fail_always: dict[str, ErrorCode] = field(default_factory=dict)
+    on_call: Any = None
     sessions: int = 0
     _ids: Any = field(default_factory=lambda: itertools.count(1))
+    _clock: Any = field(default_factory=lambda: itertools.count(1))
 
     def __post_init__(self) -> None:
         self.nodes.setdefault("", self._node("dir"))
 
+    def _now(self) -> datetime:
+        return datetime(2026, 10, 7, tzinfo=timezone.utc) + timedelta(seconds=next(self._clock), microseconds=123)
+
     def _node(self, kind: Literal["file", "dir"], content: bytes = b"") -> _Node:
-        now = datetime(2026, 10, 7, tzinfo=timezone.utc) + timedelta(seconds=next(self._ids))
+        now = self._now()
         return _Node(kind=kind, item_id=f"item-{next(self._ids)}", created_at=now, modified_at=now, content=content)
+
+    def modify_file(self, rel: str, content: bytes) -> None:
+        """Overwrite an existing file in place (another SPDM user saving a new version)."""
+        node = self.nodes[rel]
+        node.content = content
+        node.modified_at = self._now()
+
+    def touch(self, rel: str) -> None:
+        """New modification time, same bytes (a copy tool re-writing an identical file)."""
+        self.nodes[rel].modified_at = self._now()
+
+    def delete(self, rel: str) -> None:
+        """Remove a file or a whole folder (done on the drive by someone else)."""
+        for path in [path for path in self.nodes if path == rel or path.startswith(rel + "/")]:
+            del self.nodes[path]
+
+    def downloads(self) -> list[str]:
+        return [rel for op, rel in self.calls if op == "download_to"]
 
     def add_dir(self, rel: str) -> None:
         parts = rel.split("/")
@@ -166,7 +198,7 @@ class MemoryDrive:
     def entry(self, rel: str, *, listing: bool = False) -> DriveEntry:
         node = self.nodes[rel]
         sha1 = hashlib.sha1(node.content).hexdigest() if node.kind == "file" else None
-        if listing and not self.list_has_sha1:
+        if (listing and not self.list_has_sha1) or (not listing and not self.stat_has_sha1):
             sha1 = None
         size = len(node.content) if node.kind == "file" else None
         token = f"sha1:{sha1}:{size}" if sha1 else f"t:{size if size is not None else '?'}:{int(node.modified_at.timestamp() * 1e6)}"
@@ -219,6 +251,8 @@ class FakeWorkerDriveGateway:
         if self.closed:
             raise DriveError(ErrorCode.UNAVAILABLE, "gateway closed")
         self.drive.calls.append((op, rel))
+        if self.drive.on_call is not None:
+            self.drive.on_call(op, rel)
         loaded = self.token_store.load()
         if loaded is not None and not isinstance(loaded, TokenBundle):
             raise AssertionError("TokenStore.load() must return the adapter TokenBundle type")
@@ -229,7 +263,7 @@ class FakeWorkerDriveGateway:
             self._start_session(loaded)
         elif loaded is not None and loaded.obtained_at not in (self._sent_obtained_at, self._bundle.obtained_at):
             self._start_session(loaded)
-        injected = self.drive.fail_next.pop(op, None)
+        injected = self.drive.fail_next.pop(op, None) or self.drive.fail_always.get(op)
         if injected is not None:
             self._fail(injected)
             raise DriveError(injected, f"injected {injected.value}", rel)

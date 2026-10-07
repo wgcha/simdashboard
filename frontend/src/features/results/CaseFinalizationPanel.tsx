@@ -16,6 +16,8 @@ import { buildFinalReports, type FinalReportFiles } from './caseReport/finalRepo
 import { CaseReportMetaFields, TemplateNotAppliedNotice } from './caseReport/CaseReportFields'
 import { defaultReportLayout, initialReportMeta, rememberReportLayout, usesUploadedTemplate, type CaseReportMeta } from './caseReport/reportPreferences'
 import { reportApi } from '../../shared/api/reportLayouts'
+import { DRIVE_READ_ONLY_NOTICE } from '../../shared/api/drive'
+import { useDriveWriteStatus } from '../../shared/hooks/useDriveWriteStatus'
 import type { ReportLayout } from '../../types'
 import './CaseFinalizationPanel.css'
 
@@ -81,6 +83,8 @@ const message = (cause: unknown, fallback: string) => cause instanceof Error && 
 
 export function CaseFinalizationPanel(props: Props) {
   const { projectId, requestId, environment, caseId, captureId, hasCapturedCase, canFinalize, reportScope, openRequest = 0 } = props
+  // SCX drive mode (plan D2) is read-only: Final designation writes to the SPDM root.
+  const driveReadOnly = !useDriveWriteStatus().writesAvailable
   const [status, setStatus] = useState<CaseFinalizationStatus | null>(null)
   const [preview, setPreview] = useState<CaseFinalizationPreview | null>(null)
   const [scopeAtOpen, setScopeAtOpen] = useState<CaseReportFinalScope | null>(null)
@@ -322,11 +326,12 @@ export function CaseFinalizationPanel(props: Props) {
         <AlertTriangle size={14} aria-hidden="true" />{currentFinal.missing ? '현재 Final의 기록이나 파일을 찾을 수 없습니다. 관리자에게 문의하세요.' : '현재 Final 파일이 완료 기록과 다릅니다(해시 불일치). 관리자에게 문의하세요.'}
       </span> : null}
       {status?.summary?.state === 'CONFLICT' ? <span className="case-finalization__missing-inline" data-testid="case-final-summary-conflict" title={`${status.summary.path}에 앱이 만들지 않은 파일(또는 바로가기)이 있어 덮어쓰지 않았습니다. 관리자가 확인한 뒤 정리하거나 갱신해야 합니다.`}>요약 파일 충돌(관리자 확인)</span> : null}
-      {(status?.summary?.state === 'CONFLICT' || status?.summary?.state === 'CURRENT_MISSING') && status?.can_override_summary ? <button type="button" className="case-finalization__retry" data-testid="case-final-summary-override" disabled={busy} onClick={() => void repairSummary(true)}><RotateCcw size={13} aria-hidden="true" />강제 갱신(관리자)</button> : null}
+      {(status?.summary?.state === 'CONFLICT' || status?.summary?.state === 'CURRENT_MISSING') && status?.can_override_summary ? <button type="button" className="case-finalization__retry" data-testid="case-final-summary-override" disabled={busy || driveReadOnly} onClick={() => void repairSummary(true)}><RotateCcw size={13} aria-hidden="true" />강제 갱신(관리자)</button> : null}
       {summaryNeedsRepair ? <span className="case-finalization__missing-inline" data-testid="case-final-summary-repair" title={`${status?.summary?.path ?? 'Final/current.json'}이(가) 현재 Final을 가리키지 않습니다.`}>요약 파일 갱신 필요</span> : null}
-      {summaryNeedsRepair && canFinalize ? <button type="button" className="case-finalization__retry" disabled={busy} onClick={() => void repairSummary()}><RotateCcw size={13} aria-hidden="true" />요약 파일 갱신</button> : null}
-      {failed && !dialogOpen ? <button type="button" className="case-finalization__retry" disabled={!canFinalize || busy} title={failed.error?.message} onClick={() => void retryJob(failed)}><RotateCcw size={13} aria-hidden="true" />재시도</button> : null}
-      <button type="button" className="case-finalization__trigger" title={canFinalize ? undefined : 'Final 지정 권한이 있는 사용자만 실행할 수 있습니다.'} disabled={!canFinalize || busy || !captureId || !caseId} onClick={() => void makePreview()}>
+      {summaryNeedsRepair && canFinalize ? <button type="button" className="case-finalization__retry" disabled={busy || driveReadOnly} onClick={() => void repairSummary()}><RotateCcw size={13} aria-hidden="true" />요약 파일 갱신</button> : null}
+      {failed && !dialogOpen ? <button type="button" className="case-finalization__retry" disabled={driveReadOnly || !canFinalize || busy} title={failed.error?.message} onClick={() => void retryJob(failed)}><RotateCcw size={13} aria-hidden="true" />재시도</button> : null}
+      {driveReadOnly ? <span className="case-finalization__missing-inline" data-testid="case-final-drive-read-only" title={DRIVE_READ_ONLY_NOTICE}>드라이브 읽기 전용</span> : null}
+      <button type="button" className="case-finalization__trigger" title={driveReadOnly ? DRIVE_READ_ONLY_NOTICE : canFinalize ? undefined : 'Final 지정 권한이 있는 사용자만 실행할 수 있습니다.'} disabled={driveReadOnly || !canFinalize || busy || !captureId || !caseId} onClick={() => void makePreview()}>
         {busy && !dialogOpen ? <LoaderCircle size={15} className="case-finalization__spinner" /> : <FileArchive size={15} aria-hidden="true" />}
         Final 지정
       </button>

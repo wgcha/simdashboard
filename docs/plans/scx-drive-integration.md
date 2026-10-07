@@ -1,7 +1,7 @@
 # SCX 드라이브 연동 계획 (어댑터 · UI · 브랜치)
 
 - 기준일: 2026-10-07
-- 상태: **결정 반영(2026-10-07 15:40). D0 구현(2026-10-07, 미커밋 검수 대기)** — 사용 안내는 [SCX 드라이브 기능 안내](../features/scx-drive.md), 배포 영향은 [ADR 0006](../adr/0006-scx-drive-adapter-external-wheel.md). D1 이후 구현 전.
+- 상태: **결정 반영(2026-10-07 15:40). D0·D1·D2 구현(2026-10-07, 브랜치, 검수 대기)** — 사용 안내는 [SCX 드라이브 기능 안내](../features/scx-drive.md)(D2 읽기 경로 §8), 배포 영향은 [ADR 0006](../adr/0006-scx-drive-adapter-external-wheel.md). D3(쓰기 경로) 이후 구현 전.
 - 근거: GitHub 이슈 #45 본문과 코멘트(사내 `VD_scx_drive_adapter` 계약 v0.2, integration 00–07), [저장소 계층 계약](../contracts/storage-provider.md), [개선 전체 계획](improvement-roadmap.md)
 - 작업 브랜치: `claude/scx-drive` (main `8db9f66`에서 분기)
 
@@ -78,6 +78,24 @@ SPDM 원본이 로컬·공유 폴더에서 **SCX 드라이브(AltairOne Drive)**
 | `folder_schema_resolver` | 파일마다 만들던 공급자를 `scan_fingerprints` 한 번으로 |
 | 경계 시험 | `test_storage_provider_boundary.py`: storage 패키지 밖 공급자 클래스 직접 생성 시 실패, 팩터리 교체가 `provider_for_root`·서비스 호출에 닿는지 확인 |
 | 자동 반영 주기 | §9 D3에 따라 local 모드도 60초: 화면 `FOLDER_AUTO_SYNC_INTERVAL_MS`·`FOLDER_PROGRESS_POLL_MS` 60 000, 서버 진척 메모 `MEMO_SECONDS` 60, 안내 문구 "1분 안에". 서버 합치기 간격(20초/5초)은 그대로 |
+
+### D2 구현 결과 (2026-10-07)
+
+상세는 [기능 안내 §8](../features/scx-drive.md#8-읽기-경로-d2).
+
+| 항목 | 결과 |
+|---|---|
+| 공급자 | `storage/drive.py` `DriveRoot`·`DriveStorageProvider`. scx 모드의 `spdm_storage.storage_root()`는 `SIMDASH_SCX_DRIVE_ROOT`의 `DriveRoot`를 돌려주고 `provider_for_root`가 드라이브 공급자를 만든다(local 모드 불변). 읽기는 `list_dir`·`stat`·`download_to`만, 쓰기 메서드는 모두 `DRIVE_WRITE_DISABLED`. `root_identity`는 경로 기준 `scx:<host>:/<루트>`(integration 03 §5의 항목 id 대신 — 루트가 환경변수로 고정되고, 연결을 쥔 호출부에서 드라이브 호출 없이 계산해야 함) |
+| 연결 규칙 | `database_connection.connection_held()` 추적. 읽기 세션(`drive/reads.py` `run`, 라우트 데코레이터 `read_session`): 연결을 쥔 채 없는 자료를 찾으면 `DriveReadMiss`로 연결을 닫고 연결 없이 받은 뒤 본문 재실행(최대 8회). 쓰기 뒤 읽는 흐름(등록 캡처·재시도·새로고침 캡처)은 쓰기 전에 `require_content`. 세션 밖 연결 보유 중 읽기는 `DRIVE_READ_NOT_PREPARED`. 32개 화면 API·자동 탐색·자동 반영을 감쌈 |
+| 파일 흐름 | 세션별 `staging/read-<id>/`에 받고 끝나면 삭제(05 §2), 32 MiB 초과는 서버 보관소(`SIMDASH_DRIVE_BLOB_DIR`, sha256 이름, 100 GiB 상한 LRU, 05 §3). 내용 지문은 `version_token`으로 대체해 변경 없는 자동 반영은 다운로드 0회(S2-5 시험) |
+| version_token | sha1 있으면 `sha1:<hex>:<size>`, 없으면 `t:<size>:<µs>`. 비교는 양쪽 sha1이면 sha1, 아니면 크기·시각 → 등록 sha256과 내용 비교. C1·C9 미확인이라 둘 다 지원하고 관찰 형태를 관리 상태 `version_tokens`·자동 반영 `drive.token_kind`·로그에 기록 |
+| DB | migration `0037_drive_source_versions`(추가 전용, 앱 역할 GRANT, 현재 행 부분 유일 색인), DuckDB DDL 동일(부분 색인 없음 — 작성 코드와 버전 유일 키로 유지), PG 기동 필수 테이블·열 검사 |
+| 자동 반영(§9 D3) | 60초 `/sync`(scx): 의뢰별 드라이브 잠금 → 분류(새 파일·새 Scene 자동 버전 1, 기존 파일 변경은 `PENDING`, 삭제는 `MISSING`) → 기존 빠른 확인·새로고침(등록 버전 기준 보기) → `drive` 개수. 변경 대기·무시·원본 없음 파일은 등록 버전으로 계속 보이고 내용은 보관소·DB에서 꺼냄. local 모드 동작 불변 |
+| 원본 변경 API | `GET /api/drive/source-changes`(의뢰 조회 권한), `POST …/accept`·`…/dismiss`(의뢰 `result.import`, 전역 관리자 포함, 감사 기록). 새 버전 등록은 `version_no+1` 추가·이전 행 보존, 다음 자동 반영이 그 파일만 받아 캡처 |
+| 쓰기 허용 설정 | `SIMDASH_DRIVE_WRITES_ENABLED`(기본 false) — 상태 API·관리 화면 표시만, D2 쓰기는 항상 불가. 쓰기 API(결과 등록 폴더·업로드·복사, Final 지정·보고서·요약, 저장소 패널 연결·업로드)는 scx에서 409 `DRIVE_WRITE_DISABLED` |
+| UI | 폴더 자동 확인 줄의 `원본 변경 n · 확인 필요 · 원본 없음 m` 배지 → 확인 대화상자(파일별·전체 새 버전 등록/무시). 읽기 전용 안내와 결과 등록 폴더 만들기·올리기, Final 지정·재시도·요약 갱신, 저장소 패널 업로드·새로고침 비활성. 관리 화면에 쓰기 허용 설정·원본 지문 형태 |
+| 시험 | 가짜 게이트웨이 확장(sha1 목록/조회별 유무, `modify_file`·`touch`·`delete`, `fail_always`, 호출 시 연결 보유 감시). `test_drive_reads.py` 18건(DuckDB; 임시 PostgreSQL에서는 DuckDB 전용 1건 건너뜀), e2e `drive-read-path` 2건 |
+| 남은 일 | D3 쓰기 전부, 저장소 패널 다운로드·결과 등록 초안 API의 읽기 세션화, 03 8-3 sha1 체크섬, "사용 중"(BUSY 3회) 배지, 화면 폴더 선택기·대용량 영상 로딩 표시(D4), 실제 드라이브 C1·C9 확인(D6) |
 
 ## 5. 결정 필요 사항
 

@@ -173,6 +173,8 @@ KEEP_COLUMNS = {
     ("workflow_runs", "request_type_version"): "catalog reference of a deleted run row",
     ("analysis_requests", "requested_at"): "timestamp column",
     ("folder_environment_registrations", "created_targets"): "tombstone JSON history (D16); ids there are not live links",
+    ("drive_source_versions", "project_id"): "SCX drive file version history keyed by root_key+path; scope label re-assigned by the next sync",
+    ("drive_source_versions", "request_id"): "SCX drive file version history keyed by root_key+path; scope label re-assigned by the next sync",
     ("folder_discovery_registry", "parent_target_id"): "closure in _entities deletes every row below a deleted target",
     ("folder_discovery_registry", "target_id"): "closure in _entities deletes every row targeting a deleted entity",
     ("folder_environment_registry", "target_id"): "rows of DELETED registrations targeting deleted entities are deleted",

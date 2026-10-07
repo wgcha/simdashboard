@@ -3,8 +3,10 @@
 Code outside this package never constructs ``LocalFsProvider`` itself; it calls
 ``provider_for_root(root)`` (or ``get_storage_provider(conn)``, which resolves the
 configured root first).  Today the factory returns ``LocalFsProvider(root)``
-(no behaviour change); stage D2 makes it return the drive provider in ``scx``
-mode.  Tests replace the factory with ``set_provider_factory`` or the
+for a local root.  Stage D2: in ``scx`` mode the configured SPDM root is a
+:class:`~.drive.DriveRoot` (``spdm_storage.storage_root``), for which the factory
+returns the read-only :class:`~.drive.DriveStorageProvider`; server-local roots
+(staging, blob store, import roots) are never drive roots.  Tests replace the factory with ``set_provider_factory`` or the
 ``override_provider_factory`` context manager.
 """
 from __future__ import annotations
@@ -13,6 +15,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
+from .drive import DriveRoot, DriveStorageProvider
 from .local import LocalFsProvider
 
 ProviderFactory = Callable[[Path], Any]
@@ -20,8 +23,10 @@ ProviderFactory = Callable[[Path], Any]
 _factory: ProviderFactory | None = None
 
 
-def provider_for_root(root: Path | str) -> LocalFsProvider:
+def provider_for_root(root: Path | str | DriveRoot) -> LocalFsProvider:
     """Provider for an already-resolved SPDM root (the only constructor seam)."""
+    if isinstance(root, DriveRoot):
+        return DriveStorageProvider(root)  # type: ignore[return-value]
     factory = _factory
     if factory is None:
         return LocalFsProvider(root)

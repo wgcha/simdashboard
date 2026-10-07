@@ -166,3 +166,4 @@
   .storage-files-list article { grid-template-columns:20px minmax(0,1fr); gap:7px; }
   .storage-files-list article>b,.storage-files-list article>span,.storage-files-list article>a { grid-column:2; justify-self:start; }
 }
+.storage-drive-read-only { margin: 0; padding: 8px 12px; border: 1px solid var(--color-warning-border); border-radius: var(--radius-md, 6px); color: var(--color-warning); background: var(--color-warning-surface); font-size: 13px; font-weight: 600; }

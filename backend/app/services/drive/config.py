@@ -52,6 +52,12 @@ class DriveSettings:
     max_concurrency: int = 1
     cache_ttl_seconds: float = 30.0
     secret_key: str | None = field(default=None, repr=False)
+    # D2 (scx-drive plan §9 "드라이브 쓰기 허용"): off by default. Stage D2 has no drive write
+    # path at all, so this flag is only reported; stage D3 gates its upload queue on it.
+    writes_enabled: bool = False
+    # 05 §3 server blob store for downloaded files above BLOB_THRESHOLD_BYTES (content-addressed).
+    blob_dir: Path = DEFAULT_WORK_DIR / "blobs"
+    blob_max_bytes: int = 100 * 1024 ** 3
 
     @property
     def enabled(self) -> bool:
@@ -133,6 +139,18 @@ def validate_drive_rel_path(value: str, *, allow_empty: bool) -> str:
     return text
 
 
+def _flag(name: str) -> bool:
+    raw = _text(name)
+    if raw is None:
+        return False
+    value = raw.casefold()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise DriveConfigError(name, "true 또는 false여야 합니다.")
+
+
 def _fernet_key(name: str) -> str:
     value = _required(name)
     try:
@@ -187,4 +205,7 @@ def drive_settings() -> DriveSettings:
         max_concurrency=int(_number("SIMDASH_SCX_MAX_CONCURRENCY", 1, 1, 8, integer=True)),
         cache_ttl_seconds=float(_number("SIMDASH_SCX_CACHE_TTL_SECONDS", 30.0, 0.0, 3600.0, integer=False)),
         secret_key=_fernet_key("SIMDASH_SECRET_ENC_KEY"),
+        writes_enabled=_flag("SIMDASH_DRIVE_WRITES_ENABLED"),
+        blob_dir=_absolute_path("SIMDASH_DRIVE_BLOB_DIR", blob_raw) if (blob_raw := _text("SIMDASH_DRIVE_BLOB_DIR")) else work_dir / "blobs",
+        blob_max_bytes=int(_number("SIMDASH_DRIVE_BLOB_MAX_BYTES", 100 * 1024 ** 3, 64 * 1024 ** 2, 2 ** 50, integer=True)),
     )
