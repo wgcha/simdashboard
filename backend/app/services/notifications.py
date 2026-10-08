@@ -7,7 +7,10 @@ Contract: ``docs/features/notifications.md``.  Table ``notifications`` (migratio
   with the connection that records the event, before that transaction commits,
   so a notification exists exactly when its event does.  Writing is DB-only (no
   drive or file access) and never raises: a failure is logged, and on
-  PostgreSQL a savepoint keeps the caller's transaction usable.
+  PostgreSQL a savepoint keeps the caller's transaction usable.  The helpers
+  run their recipient, title and count queries inside the same savepoint and
+  ``try`` (:func:`_guarded`), so a failing helper query cannot abort the event
+  transaction either.  (DuckDB, local development only, has no savepoints.)
 * **Recipients** (:func:`recipients`): ACTIVE users only.  Project events go to
   the request's project members (and explicitly named users such as the user
   who started the work) that hold the event's permission in that project
@@ -16,10 +19,14 @@ Contract: ``docs/features/notifications.md``.  Table ``notifications`` (migratio
   (they started the work) or the event is administrative (queue paused).
 * **Dedupe**: while an unread row with the same ``(user_id, dedupe_key)``
   exists, a repeat is skipped, or with ``coalesce`` updates that row in place
-  (title, body, time) so one unread notification summarises the repeats.
+  (title, body, time) so one unread notification summarises the repeats.  The
+  key is truncated to 300 characters before the lookup.  On PostgreSQL the
+  unique partial index ``notifications_unread_dedupe`` (migration 0041) and
+  ``ON CONFLICT DO NOTHING`` close the race of two concurrent transactions.
 * **Retention**: rows older than :data:`RETENTION_DAYS` are hidden on read and
-  deleted on the next insert for that user; at most :data:`MAX_PER_USER` rows
-  are kept per user (oldest deleted first).
+  deleted once per :func:`emit` for the users written; at most
+  :data:`MAX_PER_USER` rows are kept per user (oldest deleted first).
+  Recipients beyond :data:`MAX_RECIPIENTS` are cut (logged).
 """
 from __future__ import annotations
 
@@ -27,7 +34,7 @@ import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 from urllib.parse import urlencode
 
 from ..access_policy import PROJECT_DATA_VIEW, RESULT_IMPORT, Permission, permissions_for
@@ -138,20 +145,17 @@ def recipients(conn: Any, *, project_id: str | None = None, permission: Permissi
             if permission not in granted:
                 continue
         allowed.append(user_id)
+    if len(allowed) > MAX_RECIPIENTS:
+        logger.warning("notification recipients cut from %d to %d (project %s)", len(allowed), MAX_RECIPIENTS, project_id)
     return allowed[:MAX_RECIPIENTS]
 
 
 # --- writing --------------------------------------------------------------------------------------
 
-def emit(conn: Any, user_ids: Iterable[str], *, type: str, title: str, body: str = "", severity: str = "INFO",
-         link: str | None = None, project_id: str | None = None, request_id: str | None = None,
-         dedupe_key: str | None = None, coalesce: bool = False) -> int:
-    """Write one notification per user in the caller's transaction; returns the rows written.
+def _guarded(conn: Any, label: str, work: Callable[[], int]) -> int:
+    """Run ``work`` (recipient/title queries + writes) so that no failure reaches the event transaction.
 
-    Never raises (a notification must not undo the event it describes)."""
-    users = sorted({str(value) for value in user_ids if value})
-    if not users:
-        return 0
+    On PostgreSQL a savepoint wraps the whole work and is rolled back on any error (review L6)."""
     postgres = getattr(conn, "backend", "") == "postgresql"
     if postgres:
         try:
@@ -160,59 +164,103 @@ def emit(conn: Any, user_ids: Iterable[str], *, type: str, title: str, body: str
             logger.warning("notification savepoint failed; notification skipped", exc_info=True)
             return 0
     try:
-        written = _emit(conn, users, type=type, title=title, body=body, severity=severity, link=link,
-                        project_id=project_id, request_id=request_id, dedupe_key=dedupe_key, coalesce=coalesce)
+        written = int(work() or 0)
         if postgres:
             conn.execute("RELEASE SAVEPOINT simdash_notify")
         return written
     except Exception:  # noqa: BLE001 - logged; the event itself stays recorded
-        logger.warning("notification %s could not be written", type, exc_info=True)
+        logger.warning("notification %s could not be written", label, exc_info=True)
         if postgres:
             try:
                 conn.execute("ROLLBACK TO SAVEPOINT simdash_notify")
+                conn.execute("RELEASE SAVEPOINT simdash_notify")
             except Exception:  # noqa: BLE001
                 logger.warning("notification savepoint rollback failed", exc_info=True)
         return 0
 
 
+def emit(conn: Any, user_ids: Iterable[str], *, type: str, title: str, body: str = "", severity: str = "INFO",
+         link: str | None = None, project_id: str | None = None, request_id: str | None = None,
+         dedupe_key: str | None = None, coalesce: bool = False) -> int:
+    """Write one notification per user in the caller's transaction; returns the rows written.
+
+    Never raises (a notification must not undo the event it describes)."""
+    def work() -> int:
+        users = sorted({str(value) for value in user_ids if value})
+        return _emit(conn, users, type=type, title=title, body=body, severity=severity, link=link,
+                     project_id=project_id, request_id=request_id, dedupe_key=dedupe_key, coalesce=coalesce)
+    return _guarded(conn, type, work)
+
+
+def _chunks(values: list[Any], size: int = 200) -> Iterable[list[Any]]:
+    for start in range(0, len(values), size):
+        yield values[start:start + size]
+
+
 def _emit(conn: Any, users: list[str], *, type: str, title: str, body: str, severity: str, link: str | None,
           project_id: str | None, request_id: str | None, dedupe_key: str | None, coalesce: bool) -> int:
+    if not users:
+        return 0
     if type not in TYPES:
         raise ValueError(f"unknown notification type {type}")
     if severity not in SEVERITIES:
         raise ValueError(f"unknown notification severity {severity}")
     now = _now()
     title, body = str(title)[:200], (str(body)[:1000] or None)
+    key = dedupe_key[:300] if dedupe_key else None   # review L8: the stored (truncated) key is looked up
+    postgres = getattr(conn, "backend", "") == "postgresql"
     written = 0
-    for user_id in users:
-        if dedupe_key:
-            existing = conn.execute("SELECT id FROM notifications WHERE user_id=? AND dedupe_key=? AND read_at IS NULL "
-                                    "ORDER BY created_at DESC LIMIT 1", [user_id, dedupe_key]).fetchone()
-            if existing is not None:
-                if coalesce:
-                    conn.execute("UPDATE notifications SET title=?, body=?, severity=?, link=?, created_at=? WHERE id=?",
-                                 [title, body, severity, link, now, existing[0]])
-                    written += 1
-                continue
-        conn.execute(f"INSERT INTO notifications ({_COLUMNS}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                     [f"nt-{uuid.uuid4().hex}", user_id, type, severity, title, body, link, project_id, request_id,
-                      dedupe_key[:300] if dedupe_key else None, now, None])
-        written += 1
-        _prune(conn, user_id, now)
+    fresh = list(users)
+    if key:
+        existing: dict[str, str] = {}
+        for chunk in _chunks(users):
+            marks = ",".join("?" for _ in chunk)
+            for user_id, row_id in conn.execute(
+                    f"SELECT user_id, id FROM notifications WHERE dedupe_key=? AND read_at IS NULL AND user_id IN ({marks}) "
+                    "ORDER BY created_at", [key, *chunk]).fetchall():
+                existing[str(user_id)] = str(row_id)   # newest wins (ascending order)
+        fresh = [user_id for user_id in users if user_id not in existing]
+        if coalesce and existing:
+            ids = sorted(existing.values())
+            for chunk in _chunks(ids):
+                conn.execute(f"UPDATE notifications SET title=?, body=?, severity=?, link=?, created_at=? "
+                             f"WHERE id IN ({','.join('?' for _ in chunk)})", [title, body, severity, link, now, *chunk])
+            written += len(ids)
+    # Review L7: one multi-row INSERT per chunk; ON CONFLICT closes the concurrent-unread race (PostgreSQL).
+    for chunk in _chunks(fresh, 100):
+        values = []
+        for user_id in chunk:
+            values += [f"nt-{uuid.uuid4().hex}", user_id, type, severity, title, body, link, project_id, request_id,
+                       key, now, None]
+        placeholders = ",".join("(?,?,?,?,?,?,?,?,?,?,?,?)" for _ in chunk)
+        if postgres and key:
+            inserted = conn.execute(f"INSERT INTO notifications ({_COLUMNS}) VALUES {placeholders} "
+                                    "ON CONFLICT DO NOTHING RETURNING id", values).fetchall()
+            written += len(inserted)
+        else:
+            conn.execute(f"INSERT INTO notifications ({_COLUMNS}) VALUES {placeholders}", values)
+            written += len(chunk)
+    if fresh:
+        _prune(conn, fresh, now)
     return written
 
 
-def _prune(conn: Any, user_id: str, now: datetime) -> None:
-    conn.execute("DELETE FROM notifications WHERE user_id=? AND created_at<?", [user_id, now - timedelta(days=RETENTION_DAYS)])
-    count = int(conn.execute("SELECT count(*) FROM notifications WHERE user_id=?", [user_id]).fetchone()[0])
-    if count <= MAX_PER_USER:
-        return
-    old = [str(row[0]) for row in conn.execute(
-        "SELECT id FROM notifications WHERE user_id=? ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
-        [user_id, count - MAX_PER_USER, MAX_PER_USER]).fetchall()]
-    for start in range(0, len(old), 200):
-        chunk = old[start:start + 200]
-        conn.execute(f"DELETE FROM notifications WHERE id IN ({','.join('?' for _ in chunk)})", chunk)
+def _prune(conn: Any, users: list[str], now: datetime) -> None:
+    """Retention for the users just written, once per emit (review L7)."""
+    cutoff = now - timedelta(days=RETENTION_DAYS)
+    over: list[tuple[str, int]] = []
+    for chunk in _chunks(users):
+        marks = ",".join("?" for _ in chunk)
+        conn.execute(f"DELETE FROM notifications WHERE created_at<? AND user_id IN ({marks})", [cutoff, *chunk])
+        over += [(str(row[0]), int(row[1])) for row in conn.execute(
+            f"SELECT user_id, count(*) FROM notifications WHERE user_id IN ({marks}) GROUP BY user_id HAVING count(*)>?",
+            [*chunk, MAX_PER_USER]).fetchall()]
+    for user_id, count in over:
+        old = [str(row[0]) for row in conn.execute(
+            "SELECT id FROM notifications WHERE user_id=? ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
+            [user_id, count - MAX_PER_USER, MAX_PER_USER]).fetchall()]
+        for chunk in _chunks(old):
+            conn.execute(f"DELETE FROM notifications WHERE id IN ({','.join('?' for _ in chunk)})", chunk)
 
 
 # --- reading --------------------------------------------------------------------------------------
@@ -280,12 +328,24 @@ def _project_of(conn: Any, request_id: str | None) -> str | None:
     return str(row[0]) if row and row[0] else None
 
 
+def _send(conn: Any, user_ids: Iterable[str | None], **fields: Any) -> int:
+    """:func:`_emit` for a helper already running inside :func:`_guarded`."""
+    users = sorted({str(value) for value in user_ids if value})
+    fields.setdefault("body", "")
+    fields.setdefault("severity", "INFO")
+    for name in ("link", "project_id", "request_id", "dedupe_key"):
+        fields.setdefault(name, None)
+    fields.setdefault("coalesce", False)
+    return _emit(conn, users, **fields)
+
+
 def drive_queue_paused(conn: Any) -> int:
     """AUTH_REQUIRED stopped the drive upload queue (global admins)."""
-    return emit(conn, recipients(conn, permission=None, members=False, admins=True), type="DRIVE_QUEUE_PAUSED",
-                severity="WARNING", title="드라이브 업로드 대기열이 멈췄습니다",
-                body="드라이브 인증이 필요합니다. 공용 계정 토큰을 다시 등록하면 대기열이 이어서 진행됩니다.",
-                link=ADMIN_DRIVE_LINK, dedupe_key="drive-queue-paused")
+    return _guarded(conn, "DRIVE_QUEUE_PAUSED", lambda: _send(
+        conn, recipients(conn, permission=None, members=False, admins=True), type="DRIVE_QUEUE_PAUSED",
+        severity="WARNING", title="드라이브 업로드 대기열이 멈췄습니다",
+        body="드라이브 인증이 필요합니다. 공용 계정 토큰을 다시 등록하면 대기열이 이어서 진행됩니다.",
+        link=ADMIN_DRIVE_LINK, dedupe_key="drive-queue-paused"))
 
 
 _UPLOAD_TEXT = {
@@ -307,63 +367,74 @@ def drive_upload_finished(conn: Any, summary: dict[str, Any]) -> int:
         return 0      # a new-folder batch: the screen already waited for it
     project_id, request_id = summary.get("project_id"), summary.get("request_id")
     severity, title, body = _UPLOAD_TEXT[state]
-    name = _request_title(conn, request_id)
-    users = recipients(conn, project_id=project_id, members=False, include=[summary.get("requested_by")])
-    return emit(conn, users, type="DRIVE_UPLOAD", severity=severity, title=title + (f" · {name}" if name else ""),
-                body=body.format(done=done, total=total), link=request_link(project_id, request_id),
-                project_id=project_id, request_id=request_id,
-                dedupe_key=f"drive-upload:{summary.get('batch_id')}:{state}")
+
+    def work() -> int:
+        name = _request_title(conn, request_id)
+        users = recipients(conn, project_id=project_id, members=False, include=[summary.get("requested_by")])
+        return _send(conn, users, type="DRIVE_UPLOAD", severity=severity, title=title + (f" · {name}" if name else ""),
+                     body=body.format(done=done, total=total), link=request_link(project_id, request_id),
+                     project_id=project_id, request_id=request_id,
+                     dedupe_key=f"drive-upload:{summary.get('batch_id')}:{state}")
+    return _guarded(conn, "DRIVE_UPLOAD", work)
 
 
 def final_finished(conn: Any, operation: dict[str, Any], *, completed: bool, error_code: str | None = None) -> int:
     """A drive Final completed or failed (the designating user + request members)."""
     project_id, request_id = operation.get("project_id"), operation.get("request_id")
     actor = operation.get("confirmed_by") or operation.get("created_by")
-    name = _request_title(conn, request_id)
     plan = operation.get("plan_json") if isinstance(operation.get("plan_json"), dict) else {}
     case = str(plan.get("case_label") or plan.get("case_relative_path") or operation.get("case_id") or "")
-    users = recipients(conn, project_id=project_id, include=[actor])
-    if completed:
-        return emit(conn, users, type="FINAL", severity="SUCCESS", title=f"Final 지정 완료 · {name}",
-                    body=(f"{case} 결과를 Final로 지정했습니다." if case else "Final 지정이 드라이브에 반영되었습니다."),
-                    link=request_link(project_id, request_id), project_id=project_id, request_id=request_id,
-                    dedupe_key=f"final:{operation.get('operation_id')}:COMPLETE")
-    return emit(conn, users, type="FINAL", severity="ERROR", title=f"Final 지정 실패 · {name}",
-                body=f"Final 드라이브 반영이 멈췄습니다({error_code or '오류'}). 다시 시도하거나 관리자에게 문의하세요.",
-                link=request_link(project_id, request_id), project_id=project_id, request_id=request_id,
-                dedupe_key=f"final:{operation.get('operation_id')}:FAILED")
+
+    def work() -> int:
+        name = _request_title(conn, request_id)
+        users = recipients(conn, project_id=project_id, include=[actor])
+        if completed:
+            return _send(conn, users, type="FINAL", severity="SUCCESS", title=f"Final 지정 완료 · {name}",
+                         body=(f"{case} 결과를 Final로 지정했습니다." if case else "Final 지정이 드라이브에 반영되었습니다."),
+                         link=request_link(project_id, request_id), project_id=project_id, request_id=request_id,
+                         dedupe_key=f"final:{operation.get('operation_id')}:COMPLETE")
+        return _send(conn, users, type="FINAL", severity="ERROR", title=f"Final 지정 실패 · {name}",
+                     body=f"Final 드라이브 반영이 멈췄습니다({error_code or '오류'}). 다시 시도하거나 관리자에게 문의하세요.",
+                     link=request_link(project_id, request_id), project_id=project_id, request_id=request_id,
+                     dedupe_key=f"final:{operation.get('operation_id')}:FAILED")
+    return _guarded(conn, "FINAL", work)
 
 
 def final_summary_repair_needed(conn: Any, operation: dict[str, Any], state: str) -> int:
     """The current-Final summary file upload stopped: someone with result import must run "요약 파일 갱신"."""
     project_id, request_id = operation.get("project_id"), operation.get("request_id")
     actor = operation.get("confirmed_by") or operation.get("created_by")
-    users = recipients(conn, project_id=project_id, permission=RESULT_IMPORT, include=[actor])
-    return emit(conn, users, type="FINAL_SUMMARY", severity="WARNING",
-                title=f"Final 요약 파일 갱신 필요 · {_request_title(conn, request_id)}",
-                body=f"현재 Final 요약 파일을 드라이브에 올리지 못했습니다({state}). 결과 화면에서 '요약 파일 갱신'을 실행하세요.",
-                link=request_link(project_id, request_id), project_id=project_id, request_id=request_id,
-                dedupe_key=f"final-summary:{request_id}", coalesce=True)
+    return _guarded(conn, "FINAL_SUMMARY", lambda: _send(
+        conn, recipients(conn, project_id=project_id, permission=RESULT_IMPORT, include=[actor]), type="FINAL_SUMMARY",
+        severity="WARNING", title=f"Final 요약 파일 갱신 필요 · {_request_title(conn, request_id)}",
+        body=f"현재 Final 요약 파일을 드라이브에 올리지 못했습니다({state}). 결과 화면에서 '요약 파일 갱신'을 실행하세요.",
+        link=request_link(project_id, request_id), project_id=project_id, request_id=request_id,
+        dedupe_key=f"final-summary:{request_id}", coalesce=True))
 
 
 def drive_sources_changed(conn: Any, project_id: str, request_id: str, *, changed: int, missing: int) -> int:
     """A sync recorded drive changes waiting for confirmation and/or MISSING sources (users with result import)."""
-    written = 0
-    users = recipients(conn, project_id=project_id, permission=RESULT_IMPORT) if (changed or missing) else []
-    name = _request_title(conn, request_id)
-    if changed:
-        written += emit(conn, users, type="DRIVE_SOURCE_CHANGED", severity="WARNING",
-                        title=f"원본 변경 확인 필요 · {name}",
-                        body=f"드라이브에서 바뀐 결과 파일 {changed}개가 확인을 기다립니다. 확인 전까지 등록된 버전을 표시합니다.",
-                        link=request_link(project_id, request_id), project_id=project_id, request_id=request_id,
-                        dedupe_key=f"drive-source-changed:{request_id}", coalesce=True)
-    if missing:
-        written += emit(conn, users, type="DRIVE_SOURCE_MISSING", severity="WARNING",
-                        title=f"원본 파일 없음 · {name}",
-                        body=f"드라이브에서 결과 파일 {missing}개를 찾을 수 없습니다. 등록된 버전은 그대로 보입니다.",
-                        link=request_link(project_id, request_id), project_id=project_id, request_id=request_id,
-                        dedupe_key=f"drive-source-missing:{request_id}", coalesce=True)
-    return written
+    if not changed and not missing:
+        return 0
+
+    def work() -> int:
+        written = 0
+        users = recipients(conn, project_id=project_id, permission=RESULT_IMPORT)
+        name = _request_title(conn, request_id)
+        if changed:
+            written += _send(conn, users, type="DRIVE_SOURCE_CHANGED", severity="WARNING",
+                             title=f"원본 변경 확인 필요 · {name}",
+                             body=f"드라이브에서 바뀐 결과 파일 {changed}개가 확인을 기다립니다. 확인 전까지 등록된 버전을 표시합니다.",
+                             link=request_link(project_id, request_id), project_id=project_id, request_id=request_id,
+                             dedupe_key=f"drive-source-changed:{request_id}", coalesce=True)
+        if missing:
+            written += _send(conn, users, type="DRIVE_SOURCE_MISSING", severity="WARNING",
+                             title=f"원본 파일 없음 · {name}",
+                             body=f"드라이브에서 결과 파일 {missing}개를 찾을 수 없습니다. 등록된 버전은 그대로 보입니다.",
+                             link=request_link(project_id, request_id), project_id=project_id, request_id=request_id,
+                             dedupe_key=f"drive-source-missing:{request_id}", coalesce=True)
+        return written
+    return _guarded(conn, "DRIVE_SOURCE", work)
 
 
 def new_results(conn: Any, project_id: str, request_id: str, environment: str, *, cases: int, scenes: int,
@@ -373,27 +444,30 @@ def new_results(conn: Any, project_id: str, request_id: str, environment: str, *
         return 0
     parts = [f"Case {cases}개" if cases else "", f"Scene {scenes}개" if scenes else ""]
     environment_label = {"USAGE": "사용환경", "DISTRIBUTION": "유통환경"}.get(str(environment).upper(), str(environment))
-    return emit(conn, recipients(conn, project_id=project_id), type="NEW_RESULTS", severity="INFO",
-                title=f"새 결과 반영 · {_request_title(conn, request_id)}",
-                body=f"{environment_label}: 새 {', '.join(part for part in parts if part)}가 결과 화면에 반영되었습니다.",
-                link=request_link(project_id, request_id), project_id=project_id, request_id=request_id,
-                dedupe_key=f"new-results:{snapshot_id}")
+    return _guarded(conn, "NEW_RESULTS", lambda: _send(
+        conn, recipients(conn, project_id=project_id), type="NEW_RESULTS", severity="INFO",
+        title=f"새 결과 반영 · {_request_title(conn, request_id)}",
+        body=f"{environment_label}: 새 {', '.join(part for part in parts if part)}가 결과 화면에 반영되었습니다.",
+        link=request_link(project_id, request_id), project_id=project_id, request_id=request_id,
+        dedupe_key=f"new-results:{snapshot_id}"))
 
 
 def capture_failed(conn: Any, registration_id: str, actor: str | None = None) -> int:
     """Capture jobs of a folder registration failed (the registering user + users with result import)."""
-    row = conn.execute("SELECT project_id, request_id, created_by FROM folder_environment_registrations WHERE id=?",
-                       [registration_id]).fetchone()
-    if not row:
-        return 0
-    project_id, request_id = (str(row[0]) if row[0] else None), (str(row[1]) if row[1] else None)
-    failed = int(conn.execute("SELECT count(*) FROM folder_environment_capture_jobs WHERE registration_id=? "
-                              "AND status='FAILED'", [registration_id]).fetchone()[0])
-    if not failed:
-        return 0
-    users = recipients(conn, project_id=project_id, permission=RESULT_IMPORT, include=[actor, row[2]])
-    return emit(conn, users, type="CAPTURE_FAILED", severity="ERROR",
-                title=f"결과 캡처 실패 · {_request_title(conn, request_id)}",
-                body=f"등록한 폴더의 Case {failed}개 결과를 읽지 못했습니다. 결과 등록 화면에서 다시 캡처하세요.",
-                link=request_link(project_id, request_id), project_id=project_id, request_id=request_id,
-                dedupe_key=f"capture-failed:{registration_id}", coalesce=True)
+    def work() -> int:
+        row = conn.execute("SELECT project_id, request_id, created_by FROM folder_environment_registrations WHERE id=?",
+                           [registration_id]).fetchone()
+        if not row:
+            return 0
+        project_id, request_id = (str(row[0]) if row[0] else None), (str(row[1]) if row[1] else None)
+        failed = int(conn.execute("SELECT count(*) FROM folder_environment_capture_jobs WHERE registration_id=? "
+                                  "AND status='FAILED'", [registration_id]).fetchone()[0])
+        if not failed:
+            return 0
+        users = recipients(conn, project_id=project_id, permission=RESULT_IMPORT, include=[actor, row[2]])
+        return _send(conn, users, type="CAPTURE_FAILED", severity="ERROR",
+                     title=f"결과 캡처 실패 · {_request_title(conn, request_id)}",
+                     body=f"등록한 폴더의 Case {failed}개 결과를 읽지 못했습니다. 결과 등록 화면에서 다시 캡처하세요.",
+                     link=request_link(project_id, request_id), project_id=project_id, request_id=request_id,
+                     dedupe_key=f"capture-failed:{registration_id}", coalesce=True)
+    return _guarded(conn, "CAPTURE_FAILED", work)

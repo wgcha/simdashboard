@@ -37,8 +37,9 @@
 
 - **같은 트랜잭션**: 이벤트를 기록하는 코드가 그 연결로, 커밋 전에 `notifications.emit`(종류별 도우미)을 부른다 — 대기열 결과 기록(`upload_queue._apply`, 관리자 취소, 루트 변경 실패), Final 마무리(`case_finalization_drive._finalization_finished`)·요약 묶음 마무리 훅, 원본 분류 트랜잭션(`drive.sources.classify_request`), 새로고침 스냅숏 트랜잭션(`folder_discovery_environment.refresh_scope(notify_new_results=True)`, 자동 반영만), 캡처 작업 `FAILED` 기록. 알림 쓰기는 **DB만** 쓴다(드라이브·파일 접근 없음, 정적 시험).
 - **실패해도 이벤트는 유지**: `emit`은 예외를 내지 않는다. PostgreSQL은 `SAVEPOINT`로 알림 쓰기만 되돌리고 경고 로그를 남긴다.
-- **중복**: 같은 `(user_id, dedupe_key)`의 읽지 않은 행이 있으면 새로 만들지 않는다. "합침" 종류는 그 행의 제목·본문·시각을 갱신해 최신 상태 하나만 보인다. 읽은 뒤 같은 일이 다시 생기면 새 알림이 생긴다.
-- **보관**: 90일(`RETENTION_DAYS`) 지난 행은 조회에서 숨기고 그 사용자의 다음 알림 기록 때 지운다. 사용자당 최신 1,000건(`MAX_PER_USER`)만 남긴다. 한 이벤트의 수신자는 최대 500명.
+- **중복**: 같은 `(user_id, dedupe_key)`의 읽지 않은 행이 있으면 새로 만들지 않는다(키는 300자로 자른 값으로 찾는다; PostgreSQL은 읽지 않은 행의 고유 부분 색인 `notifications_unread_dedupe`와 `ON CONFLICT DO NOTHING`으로 동시 트랜잭션 경합도 막는다, migration 0041). "합침" 종류는 그 행의 제목·본문·시각을 갱신해 최신 상태 하나만 보인다. 읽은 뒤 같은 일이 다시 생기면 새 알림이 생긴다.
+- **보관**: 90일(`RETENTION_DAYS`) 지난 행은 조회에서 숨기고 그 사용자의 다음 알림 기록 때 지운다(알림 한 번 기록에 한 번, 새로 쓴 사용자 전체를 묶어서; 넣기도 여러 행 한 문장). 사용자당 최신 1,000건(`MAX_PER_USER`)만 남긴다. 한 이벤트의 수신자는 최대 500명(넘으면 잘라 내고 경고 로그).
+- **이벤트 보호**: 수신자·의뢰 제목·개수 조회도 기록과 같은 savepoint·`try` 안에서 실행한다(`_guarded`). 그 조회가 실패해도 알림만 빠지고 이벤트 트랜잭션은 계속된다(PostgreSQL). DuckDB 개발 DB에는 savepoint가 없다.
 - **프로젝트 정리**: 알림은 파생된 사용자 표시 자료이므로 프로젝트 정리(`project_cleanup`)가 삭제하는 프로젝트·의뢰의 행(`project_id` 또는 `request_id` 일치)을 함께 지운다(`_STAGE_LEAVES`). 계정 삭제 정리는 이번 범위 밖(기존 계정 정리 정책을 따름).
 
 ## 4. API
@@ -53,7 +54,7 @@
 
 ## 5. DB (migration `0040_notifications`)
 
-`notifications(id PK, user_id, type, severity CHECK, title, body, link, project_id, request_id, dedupe_key, created_at, read_at)`, 색인 `(user_id, created_at)`·`(user_id, dedupe_key)`·`(project_id, request_id)`. 추가만 하는 migration(기존 표·행 변경 없음), 앱 역할 `SELECT/INSERT/UPDATE/DELETE` 권한(0036–0039와 같은 방식), PostgreSQL 기동 시 필수 표·열 검사에 포함. DuckDB 개발 DB는 기동 때 같은 표를 만든다(색인 없음). `project_id`·`request_id`는 외래 키 없는 표시용 값이다.
+`notifications(id PK, user_id, type, severity CHECK, title, body, link, project_id, request_id, dedupe_key, created_at, read_at)`, 색인 `(user_id, created_at)`·`(user_id, dedupe_key)`·`(project_id, request_id)`. 추가만 하는 migration(기존 표·행 변경 없음), 앱 역할 `SELECT/INSERT/UPDATE/DELETE` 권한(0036–0039와 같은 방식), PostgreSQL 기동 시 필수 표·열 검사에 포함. DuckDB 개발 DB는 기동 때 같은 표와 같은 색인 3개를 만든다(부분 색인은 없음). Migration `0041_folder_link_reservations`는 읽지 않은 행 고유 부분 색인 `notifications_unread_dedupe (user_id, dedupe_key) WHERE read_at IS NULL AND dedupe_key IS NOT NULL`을 추가한다 — 기존 행에 읽지 않은 중복이 있으면 행을 바꾸지 않고 색인만 건너뛴다(NOTICE; 앱은 조회 기반 중복 처리로 계속 동작). `project_id`·`request_id`는 외래 키 없는 표시용 값이다.
 
 ## 6. 전체 글자 크기 조절 숨김
 
@@ -61,5 +62,5 @@
 
 ## 7. 검증
 
-- 백엔드 `tests/test_notifications.py`: 수신자(ACTIVE·구성원·역할 권한·전역 관리자), 중복·합침, 보관(90일·사용자당 상한), API(자기 행만·필터·읽음), 가짜 드라이브 어댑터로 업로드 완료/일부 완료·대기열 일시 정지·Final 완료/실패·요약 파일 충돌·원본 변경/없음·자동 반영 새 Scene·캡처 실패, 프로젝트 정리 삭제, migration·DuckDB 부트스트랩.
+- 백엔드 `tests/test_notifications.py`: 수신자(ACTIVE·구성원·역할 권한·전역 관리자), 중복·합침, 보관(90일·사용자당 상한), API(자기 행만·필터·읽음), 가짜 드라이브 어댑터로 업로드 완료/일부 완료·대기열 일시 정지·Final 완료/실패·요약 파일 충돌·원본 변경/없음·자동 반영 새 Scene·캡처 실패, 프로젝트 정리 삭제, migration·DuckDB 부트스트랩, 검수 수정(도우미 조회 실패의 savepoint 격리 L6, emit당 한 번 보관 정리 L7, 잘린 중복 키 조회·수신자 잘림 로그 L8, DuckDB 색인).
 - e2e `frontend/e2e/notifications.spec.ts`: 아이콘·배지·드롭다운·관련 화면 이동·페이지 필터·읽음, 실제 API 빈 목록, 글자 크기 버튼 숨김과 저장값 적용.

@@ -454,6 +454,8 @@ class StructureInput(BaseModel):
     new_request_folder: NewRequestFolder | None = None
     case_names: list[str] = Field(default_factory=list, max_length=structure_service.MAX_CASES)
     confirm: bool = False
+    # The user saw the warning that the chosen folder's WR key differs from the request's (review M1).
+    confirm_other_wr: bool = False
 
 
 def _drop_error(exc: ResultRegistrationError) -> HTTPException:
@@ -562,10 +564,11 @@ def drop_create_structure(payload: StructureInput, request: Request):
                 conn, payload.project_id, payload.request_id, payload.environment,
                 request_relative_path=payload.request_relative_path,
                 new_request_folder=payload.new_request_folder.model_dump() if payload.new_request_folder else None,
-                case_names=payload.case_names, confirm=payload.confirm, user_id=request.state.principal.user_id)
+                case_names=payload.case_names, confirm=payload.confirm, user_id=request.state.principal.user_id,
+                confirm_other_wr=payload.confirm_other_wr)
         except ResultRegistrationError as exc:
             error = _drop_error(exc)
-            if exc.code != "RESULT_STRUCTURE_NAME_WARNING":
+            if exc.code not in {"RESULT_STRUCTURE_NAME_WARNING", "RESULT_STRUCTURE_OTHER_WR"}:
                 _drop_audit(request, "RESULT_STRUCTURE_REFUSED", {**detail, "code": exc.code}, status_code=error.status_code)
             raise error from exc
         if result["created"] or result.get("queued"):

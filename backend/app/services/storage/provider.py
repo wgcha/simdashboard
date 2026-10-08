@@ -10,6 +10,8 @@ writers, which are additionally restricted to their calling modules.
 from __future__ import annotations
 
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import BinaryIO, ContextManager, Iterable, Iterator, Literal, Protocol
 
@@ -44,6 +46,28 @@ WORKING_WRITER_MODULES = frozenset({"app.services.result_drop_upload", "app.serv
 
 # S3 ④ SKELETON zone: written only by "폴더 구조 만들기" (result_folder_structure, mkdir_pinned only).
 SKELETON_WRITER_MODULES = frozenset({"app.services.result_folder_structure"})
+
+# Per-module operation allowlist (review L3): a (module, zone) pair listed here may only use the named
+# provider primitives. "폴더 구조 만들기" creates folders and nothing else, in both of its zones.
+WRITER_OPERATIONS: dict[tuple[str, str], frozenset[str]] = {
+    ("app.services.result_folder_structure", WORKING): frozenset({"mkdir_pinned"}),
+    ("app.services.result_folder_structure", SKELETON): frozenset({"mkdir_pinned"}),
+}
+
+# Review L4: the SKELETON zone is depth-aware. The writer states the current depth schema's request
+# depth (number of segments of a request folder path, DEPTH_V1 upper levels) for the duration of its
+# writes; without it every SKELETON write is refused.
+_SKELETON_REQUEST_DEPTH: ContextVar[int | None] = ContextVar("skeleton_request_depth", default=None)
+
+
+@contextmanager
+def skeleton_request_depth(depth: int) -> Iterator[None]:
+    """Allow SKELETON writes at exactly this request depth (and its ``Working``) inside the block."""
+    token = _SKELETON_REQUEST_DEPTH.set(int(depth))
+    try:
+        yield
+    finally:
+        _SKELETON_REQUEST_DEPTH.reset(token)
 _ENVIRONMENT_KEYWORDS = ("사용", "유통")
 
 # S3 ② LEGACY zone: behaviour-preserving writers only, never new callers.
@@ -160,13 +184,17 @@ def working_zone_allows(rel_path: str) -> bool:
     return index >= 2 and "final" not in parts[:index] and len(parts) > index + 1
 
 
-def skeleton_zone_allows(rel_path: str) -> bool:
+def skeleton_zone_allows(rel_path: str, request_depth: int | None = None) -> bool:
     """An environment request folder or exactly its ``Working`` folder (S3 ④).
 
     Request folder: at least one folder above it (project), its name carries exactly one of the
     environment keywords ``사용``/``유통`` (depth schema D4) and no segment is ``Working``/``Final``.
     ``Working``: the last segment, at least two folders above it, none of them ``Working``/``Final``.
     Never ``.``/``..`` or hidden (``.``/``$``/``~``) segments.
+
+    With ``request_depth`` (segments of a request folder path under the current depth schema) the
+    request folder must sit at exactly that depth and ``Working`` directly below such a folder
+    (review L4). The provider check always passes the writer's declared depth.
     """
     raw = _segments(rel_path)
     parts = [part.casefold() for part in raw]
@@ -175,26 +203,36 @@ def skeleton_zone_allows(rel_path: str) -> bool:
     if any(part in {"working", "final"} for part in parts[:-1]):
         return False
     if parts[-1] == "working":
+        if request_depth is not None:
+            return len(parts) == request_depth + 1 and request_depth >= 2
         return len(parts) >= 3
     if parts[-1] == "final":
+        return False
+    if request_depth is not None and len(parts) != request_depth:
         return False
     return sum(keyword in raw[-1] for keyword in _ENVIRONMENT_KEYWORDS) == 1
 
 
-def check_write(rel_path: str, zone: str, caller: str) -> None:
+def check_write(rel_path: str, zone: str, caller: str, operation: str | None = None) -> None:
+    allowed = WRITER_OPERATIONS.get((caller, zone))
+    if allowed is not None and operation not in allowed:
+        raise StorageError(NOT_ALLOWED_WRITE, "허용된 SPDM 쓰기 구역 밖의 경로입니다.")
+    if zone == SKELETON:
+        depth = _SKELETON_REQUEST_DEPTH.get()
+        if depth is not None and caller in SKELETON_WRITER_MODULES and skeleton_zone_allows(rel_path, depth):
+            return
+        raise StorageError(NOT_ALLOWED_WRITE, "허용된 SPDM 쓰기 구역 밖의 경로입니다.")
     if zone == FINAL and caller in FINAL_WRITER_MODULES and final_zone_allows(rel_path):
         return
     if zone == WORKING and caller in WORKING_WRITER_MODULES and working_zone_allows(rel_path):
         return
     if zone == LEGACY and caller in LEGACY_WRITER_MODULES and legacy_zone_allows(rel_path, caller):
         return
-    if zone == SKELETON and caller in SKELETON_WRITER_MODULES and skeleton_zone_allows(rel_path):
-        return
     raise StorageError(NOT_ALLOWED_WRITE, "허용된 SPDM 쓰기 구역 밖의 경로입니다.")
 
 
 __all__ = [
-    "Entry", "FINAL", "FINAL_SUMMARY_FILE", "SKELETON", "SKELETON_WRITER_MODULES", "skeleton_zone_allows", "UPLOAD_STAGING_DIR", "WORKING", "WORKING_WRITER_MODULES", "working_zone_allows", "FINAL_WRITER_MODULES", "LEGACY", "LEGACY_WRITER_MODULES", "NOT_ALLOWED_WRITE", "NOT_FOUND", "FORBIDDEN",
+    "Entry", "FINAL", "FINAL_SUMMARY_FILE", "SKELETON", "SKELETON_WRITER_MODULES", "skeleton_zone_allows", "skeleton_request_depth", "WRITER_OPERATIONS", "UPLOAD_STAGING_DIR", "WORKING", "WORKING_WRITER_MODULES", "working_zone_allows", "FINAL_WRITER_MODULES", "LEGACY", "LEGACY_WRITER_MODULES", "NOT_ALLOWED_WRITE", "NOT_FOUND", "FORBIDDEN",
     "UNAVAILABLE", "LIMIT", "SpdmStorageError", "StorageError", "StorageProvider", "WRITE_ZONES",
     "check_write", "final_zone_allows", "legacy_zone_allows", "Iterator",
 ]

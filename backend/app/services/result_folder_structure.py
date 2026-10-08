@@ -22,13 +22,22 @@ Rules
     ``Final`` is never touched. Existing folders are reported (``existing``), never renamed,
     deleted or overwritten; a re-run is idempotent.
   * Case names: the W8 "새 폴더 만들기" name rules and the depth checks of the Case level.
-  * Ownership: a folder linked to another request/environment is refused
-    (``result_registration_paths._owner_conflict``).
+  * Ownership: a folder linked to another request/environment, or parented to another request in
+    SPDM, is refused (``result_registration_paths._owner_conflict``). A folder whose WR key belongs
+    to another dashboard request of the project (its title/note key or its linked/parented folders)
+    is always refused; any other folder whose WR key differs from this request's key (or has none)
+    needs ``confirm_other_wr`` (the dialog shows the warning first).
+  * Depth: the request folder sits at the depth schema's request depth and ``Working`` directly
+    below it (``skeleton_zone_allows(…, request_depth)``; the provider enforces the same depth while
+    ``skeleton_request_depth`` is active). Proposed paths longer than the Windows limit are refused.
   * SCX drive mode: the folders are ``MKDIR`` items of one drive upload batch (``mkdirs`` is
     idempotent); requires drive writes (router gate).
   * A request folder not yet linked to this request is reserved for it in the folder auto-discovery
-    (``folder_auto_discovery.reserve_link``), so the discovery registers it as a LINK to the selected
-    request instead of a new request: right after the write (local) or after the batch (drive).
+    (``folder_auto_discovery.reserve_link``, table ``folder_link_reservations``, migration 0041), so
+    the discovery registers it as a LINK to the selected request instead of a new request: right after
+    the write (local) or after the batch (drive). An unexpired reservation for another request is
+    refused (``RESULT_STRUCTURE_RESERVED``); the reservation is dropped again when the local creation
+    fails or the drive batch ends FAILED/CONFLICT/CANCELLED.
 """
 from __future__ import annotations
 
@@ -48,7 +57,8 @@ from . import result_drop_upload as drop
 from . import result_registration_paths as paths
 from .drive import upload_queue
 from .storage import provider_for_root
-from .storage.provider import SKELETON, WORKING, StorageError, skeleton_zone_allows, working_zone_allows
+from .storage.provider import (SKELETON, WORKING, StorageError, skeleton_request_depth, skeleton_zone_allows,
+                               working_zone_allows)
 
 ORIGIN = "result_structure"
 MAX_CASES = 100
@@ -70,6 +80,13 @@ def _wr_key(value: str | None) -> str | None:
     """Casefolded WR key of a request folder name or title (``[WR-0001]_[유통_환경]`` → ``0001``)."""
     match = _WR_KEY.match(str(value or "").strip())
     return match.group(1).casefold() if match else None
+
+
+def _identity_key(title: str | None, note: str | None) -> str | None:
+    """WR key of a dashboard request from its title, else from the "폴더 의뢰번호:" note."""
+    note = str(note or "")
+    folder_number = note[len(_NOTE_PREFIX):].strip() if note.startswith(_NOTE_PREFIX) else ""
+    return _wr_key(title) or _wr_key(folder_number)
 
 
 def _keyword(name: str) -> tuple[str | None, str | None]:
@@ -97,10 +114,11 @@ class _Context:
         roles = [item["role"] for item in self.schema["upper"]["levels"]]
         self.project_level, self.request_level = roles.index("PROJECT") + 1, len(roles)
         self.linked = self._linked_requests()
+        self.other_keys = self._other_request_keys()
         self.project_folders = self._project_folders()
         self.lister = folder_auto_discovery._Lister(self.root)
-        self.candidates = self._candidates()
         self.key = self._request_key()
+        self.candidates = self._candidates()
 
     # -- links ------------------------------------------------------------------------------
     def _linked_requests(self) -> dict[str, str]:
@@ -119,6 +137,25 @@ class _Context:
             if environment:
                 found.setdefault(environment, str(path))
         return found
+
+    def _other_request_keys(self) -> set[str]:
+        """WR keys claimed by the project's other dashboard requests (title/note, linked and parented folders)."""
+        keys: set[str] = set()
+        for title, note in self.conn.execute("SELECT title, overall_note FROM analysis_requests WHERE project_id=? AND id<>?",
+                                             [self.project_id, self.request_id]).fetchall():
+            keys.add(_identity_key(title, note) or "")
+        marks = ",".join("?" for _ in ACTIVE_STATUSES)
+        paths_ = [row[0] for row in self.conn.execute(
+            "SELECT g.relative_path FROM folder_environment_registry g "
+            "JOIN folder_environment_registrations r ON r.id=g.registration_id "
+            f"WHERE g.root_key=? AND g.role_kind='REQUEST' AND r.project_id=? AND r.request_id<>? AND r.status IN ({marks})",
+            [self.root_key, self.project_id, self.request_id, *ACTIVE_STATUSES]).fetchall()]
+        paths_ += [row[0] for row in self.conn.execute(
+            "SELECT request_folder FROM spdm_storage_request_parents WHERE project_id=? AND request_id<>?",
+            [self.project_id, self.request_id]).fetchall()]
+        keys |= {_wr_key(PurePosixPath(str(path)).name) or "" for path in paths_}
+        keys.discard("")
+        return keys
 
     def _project_folders(self) -> list[str]:
         found: list[str] = []
@@ -157,10 +194,16 @@ class _Context:
                 linked_env = next((env for env, linked in self.linked.items() if linked.casefold() == path.casefold()), None)
                 owner = "THIS" if linked_env else (
                     "OTHER" if paths._has_owner_conflict(self.conn, self.root_id, self.root_key, path, self.project_id,
-                                                         self.request_id, environment or "USAGE") else None)
+                                                         self.request_id, environment or "USAGE")
+                    or folder_auto_discovery.reserved_by_other(self.conn, self.root_key, path, self.project_id,
+                                                               self.request_id) else None)
+                wr_key = _wr_key(name)
                 out.append({"relative_path": path, "name": name, "parent_relative_path": str(PurePosixPath(path).parent),
                             "environment": environment, "keyword_code": code, "owner": owner,
-                            "linked_environment": linked_env, "wr_key": _wr_key(name)})
+                            "linked_environment": linked_env, "wr_key": wr_key,
+                            # The WR key of another dashboard request of this project: never offered.
+                            "wr_other_request": bool(not linked_env and wr_key and wr_key != self.key
+                                                     and wr_key in self.other_keys)})
         return out
 
     def _request_key(self) -> str | None:
@@ -168,8 +211,7 @@ class _Context:
             key = _wr_key(PurePosixPath(path).name)
             if key:
                 return key
-        note = self.note[len(_NOTE_PREFIX):].strip() if self.note.startswith(_NOTE_PREFIX) else ""
-        return _wr_key(self.title) or _wr_key(note)
+        return _identity_key(self.title, self.note)
 
     # -- per environment ----------------------------------------------------------------------
     def display(self, relative: str) -> str:
@@ -205,7 +247,8 @@ class _Context:
             return None
         name = unicodedata.normalize("NFC", name)
         relative = f"{parent}/{name}"
-        if (drop.name_problem(name) or _keyword(name)[0] != environment or not skeleton_zone_allows(relative)
+        if (drop.name_problem(name) or _keyword(name)[0] != environment
+                or not skeleton_zone_allows(relative, self.request_level)
                 or any(item["name"].casefold() == name.casefold() for item in self.candidates)):
             return None
         return {"parent_relative_path": parent, "name": name, "relative_path": relative, "display_path": self.display(relative)}
@@ -300,7 +343,8 @@ def overview(conn: ConnectionLike, project_id: str, request_id: str, *, environm
     return {
         "project_id": project_id, "request_id": request_id, "wr_key": ctx.key,
         "project_folders": [{"relative_path": path, "display_path": ctx.display(path)} for path in ctx.project_folders],
-        "candidates": [{key: item[key] for key in ("relative_path", "name", "environment", "keyword_code", "owner", "linked_environment")}
+        "candidates": [{key: item[key] for key in ("relative_path", "name", "environment", "keyword_code", "owner", "linked_environment",
+                                                   "wr_key", "wr_other_request")}
                        | {"display_path": ctx.display(item["relative_path"]), "wr_match": bool(ctx.key and item["wr_key"] == ctx.key)}
                        for item in ctx.candidates],
         "environments": environments, "max_cases": MAX_CASES, "drive": drop._drive(),
@@ -369,7 +413,7 @@ def _check_names(ctx: _Context, environment: str, request_path: str, working: st
 
 def create(conn: ConnectionLike, project_id: str, request_id: str, environment: str, *,
            request_relative_path: str | None, new_request_folder: dict[str, str] | None, case_names: list[str],
-           confirm: bool, user_id: str) -> dict[str, Any]:
+           confirm: bool, user_id: str, confirm_other_wr: bool = False) -> dict[str, Any]:
     """Create (local) or queue (drive) the skeleton of one environment; never renames or overwrites."""
     environment = paths._env(environment)
     ctx = _Context(conn, project_id, request_id)
@@ -401,6 +445,15 @@ def create(conn: ConnectionLike, project_id: str, request_id: str, environment: 
                              f"'{item['name']}'은(는) 다른 환경의 의뢰 폴더입니다. 이름에 '{KEYWORDS[environment]}'가 있는 폴더를 고르세요.", 422)
             if item["linked_environment"] or item["owner"] == "OTHER" or (linked and linked.casefold() != request_path.casefold()):
                 raise _error("RESULT_PATH_OWNERSHIP_CONFLICT", "선택한 폴더는 다른 의뢰나 환경에 연결되어 있습니다.", 409)
+            # Review M1: the folder's WR key decides whose request folder it is.
+            if item["wr_other_request"]:
+                raise _error("RESULT_PATH_OWNERSHIP_CONFLICT",
+                             f"'{item['name']}'의 의뢰번호는 이 프로젝트의 다른 의뢰에 속합니다. 그 의뢰에서 만드세요.", 409)
+            if not (ctx.key and item["wr_key"] == ctx.key) and not confirm_other_wr:
+                message = (f"'{item['name']}'의 의뢰번호({item['wr_key'] or '없음'})가 이 의뢰"
+                           f"({ctx.key or '의뢰번호 없음'})와 다릅니다. 이 의뢰의 폴더가 맞는지 확인하세요.")
+                raise _error("RESULT_STRUCTURE_OTHER_WR", message, 409, warnings=[message],
+                             folder_wr_key=item["wr_key"], request_wr_key=ctx.key)
             if item["environment"] is None:
                 warnings.append(f"'{item['name']}'에는 환경 키워드('{KEYWORDS[environment]}')가 없어 대시보드가 자동으로 읽지 못합니다. "
                                 "SPDM에서 이름을 바꾸거나 관리자에게 연결을 요청하세요.")
@@ -408,6 +461,9 @@ def create(conn: ConnectionLike, project_id: str, request_id: str, environment: 
     else:
         raise _error("RESULT_STRUCTURE_TARGET_INVALID", "의뢰 폴더를 고르세요.", 422)
     paths._owner_conflict(conn, ctx.root_id, ctx.root_key, request_path, project_id, request_id, environment)
+    if folder_auto_discovery.reserved_by_other(conn, ctx.root_key, request_path, project_id, request_id):
+        raise _error("RESULT_STRUCTURE_RESERVED", "이 폴더는 다른 의뢰의 폴더 구조 만들기로 연결을 기다리고 있습니다.", 409)
+    _check_lengths(ctx, request_path)
     working = None if create_request else _working_name(ctx.fs, request_path)
     working = working or "Working"
     existing = [] if create_request else _child_dirs(ctx.fs, f"{request_path}/{working}")
@@ -418,7 +474,8 @@ def create(conn: ConnectionLike, project_id: str, request_id: str, environment: 
     if warnings and not confirm:
         raise _error("RESULT_STRUCTURE_NAME_WARNING", warnings[0], 409, warnings=warnings)
     working_path = f"{request_path}/{working}"
-    if not skeleton_zone_allows(working_path) or (create_request and not skeleton_zone_allows(request_path)):
+    if (not skeleton_zone_allows(working_path, ctx.request_level)
+            or (create_request and not skeleton_zone_allows(request_path, ctx.request_level))):
         raise _error("RESULT_STRUCTURE_TARGET_INVALID", "이 위치에는 폴더를 만들 수 없습니다.", 422)
     folded_existing = {name.casefold(): name for name in existing}
     plan: list[tuple[str, str, str]] = []  # (relative_path, role, zone)
@@ -438,7 +495,12 @@ def create(conn: ConnectionLike, project_id: str, request_id: str, environment: 
     # The folder auto-discovery must register this folder as the selected request (not a new one).
     link_needed = (not ctx.linked.get(environment) and _keyword(PurePosixPath(request_path).name)[0] == environment)
     if link_needed and plan:
-        folder_auto_discovery.reserve_link(ctx.root_key, request_path, project_id, request_id, environment)
+        try:
+            folder_auto_discovery.reserve_link(conn, ctx.root_key, request_path, project_id, request_id, environment,
+                                               created_by=str(user_id))
+        except folder_auto_discovery.LinkReserved as exc:
+            raise _error("RESULT_STRUCTURE_RESERVED", "이 폴더는 다른 의뢰의 폴더 구조 만들기로 연결을 기다리고 있습니다.",
+                         409) from exc
     result: dict[str, Any] = {
         "project_id": project_id, "request_id": request_id, "environment": environment,
         "request_relative_path": request_path, "request_display_path": ctx.display(request_path),
@@ -459,9 +521,13 @@ def create(conn: ConnectionLike, project_id: str, request_id: str, environment: 
         return result
     for relative, role, zone in plan:
         try:
-            made = ctx.fs.mkdir_pinned(relative, zone=zone)
+            with skeleton_request_depth(ctx.request_level):
+                made = ctx.fs.mkdir_pinned(relative, zone=zone)
         except (OSError, StorageError) as exc:
             result["failed"] = {"relative_path": relative, "role": role}
+            if link_needed:  # review L2: no reservation outlives a failed creation
+                folder_auto_discovery.drop_link(conn, ctx.root_key, request_path, project_id=project_id,
+                                                request_id=request_id)
             raise _error("RESULT_STRUCTURE_FAILED", f"폴더를 만들지 못했습니다: {PurePosixPath(relative).name}", 409,
                          created=result["created"], failed=relative) from exc
         (result["created"] if made else result["existing"]).append(
@@ -474,6 +540,16 @@ def create(conn: ConnectionLike, project_id: str, request_id: str, environment: 
             sync = {"status": "FAILED"}
         result["sync"] = {key: sync.get(key) for key in ("status", "changed", "code", "message")}
     return result
+
+
+def _check_lengths(ctx: _Context, request_path: str) -> None:
+    """Review L5: the request folder and its ``Working`` must fit the Windows path limit (Case names are checked per name)."""
+    base = drop.display_root(ctx.root)
+    for relative in (request_path, f"{request_path}/Working"):
+        if (len(str(ctx.fs.path(relative))) > drop.MAX_PATH_CHARS
+                or len(drop.display_path(base, relative)) > drop.MAX_PATH_CHARS):
+            raise _error("RESULT_STRUCTURE_PATH_TOO_LONG",
+                         "의뢰 폴더 경로가 Windows 길이 한도를 넘습니다. SPDM에서 짧은 이름의 폴더를 만드세요.", 422)
 
 
 def link_now(result: dict[str, Any], *, connection_factory=None) -> dict[str, Any]:
@@ -506,11 +582,23 @@ def on_drive_batch_finished(origin: str, batch_id: str, summary: dict[str, Any])
     from ..database_connection import connect
 
     with connect() as conn:
-        row = conn.execute("SELECT root_key, project_id, request_id, environment FROM drive_upload_queue "
+        row = conn.execute("SELECT root_key, project_id, request_id, environment, dst_rel_dir FROM drive_upload_queue "
                            "WHERE batch_id=? ORDER BY seq LIMIT 1", [batch_id]).fetchone()
+        if row and row[1] and row[2] and str(summary.get("state") or "") not in {"DONE", "PARTIAL"}:
+            # Review L2: the skeleton did not reach the drive (FAILED/CONFLICT/CANCELLED): drop this
+            # request's reservation so the folder is not linked behind a failed creation.
+            folder_auto_discovery.drop_link(conn, str(row[0]), _request_of(str(row[4] or "")),
+                                            project_id=str(row[1]), request_id=str(row[2]))
     if row and row[1] and row[2] and row[3]:
         folder_auto_sync.invalidate(str(row[0]), str(row[1]), str(row[2]), str(row[3]))
     _kick_discovery()
+
+
+def _request_of(relative: str) -> str:
+    """Request folder of a queued skeleton item (the path itself, or the part above its ``Working``)."""
+    parts = [part for part in relative.split("/") if part]
+    folded = [part.casefold() for part in parts]
+    return "/".join(parts[:folded.index("working")] if "working" in folded else parts)
 
 
 def _kick_discovery() -> None:

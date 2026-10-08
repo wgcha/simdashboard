@@ -9,13 +9,15 @@ const PROJECT = 'P1'
 const DIST = `${PROJECT}/[WR-0001]_[유통_환경]`
 const USAGE_NEW = '[WR-0001]_[사용_환경]'
 const PLAIN = `${PROJECT}/[WR-0001]_plain`
+const FOREIGN = `${PROJECT}/[WR-0009]_[사용_환경]`
+const OTHER_REQUEST = `${PROJECT}/[WR-0002]_[사용_환경]`
 const DISPLAY = '\\\\fileserver\\SPDM'
 const display = (relative: string) => `${DISPLAY}\\${relative.replaceAll('/', '\\')}`
 const SCX_READ_ONLY = { mode: 'scx', state: 'OK', writes_enabled: false, writes_available: false, queue_paused: false }
 const SCX_WRITABLE = { ...SCX_READ_ONLY, writes_enabled: true, writes_available: true }
 const BATCH = 'c'.repeat(32)
 
-type Body = { environment: 'USAGE' | 'DISTRIBUTION'; request_relative_path: string | null; new_request_folder: { parent_relative_path: string; name: string } | null; case_names: string[]; confirm: boolean }
+type Body = { environment: 'USAGE' | 'DISTRIBUTION'; request_relative_path: string | null; new_request_folder: { parent_relative_path: string; name: string } | null; case_names: string[]; confirm: boolean; confirm_other_wr?: boolean }
 
 async function json(route: Route, body: unknown, status = 200) {
   await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
@@ -26,8 +28,10 @@ function overview() {
     project_id: context.project, request_id: context.request, wr_key: '0001', max_cases: 100, drive: false,
     project_folders: [{ relative_path: PROJECT, display_path: display(PROJECT) }],
     candidates: [
-      { relative_path: DIST, name: DIST.split('/')[1], display_path: display(DIST), environment: 'DISTRIBUTION', keyword_code: null, owner: 'THIS', linked_environment: 'DISTRIBUTION', wr_match: true },
-      { relative_path: PLAIN, name: PLAIN.split('/')[1], display_path: display(PLAIN), environment: null, keyword_code: 'ENV_KEYWORD_NONE', owner: null, linked_environment: null, wr_match: true },
+      { relative_path: DIST, name: DIST.split('/')[1], display_path: display(DIST), environment: 'DISTRIBUTION', keyword_code: null, owner: 'THIS', linked_environment: 'DISTRIBUTION', wr_match: true, wr_key: '0001', wr_other_request: false },
+      { relative_path: PLAIN, name: PLAIN.split('/')[1], display_path: display(PLAIN), environment: null, keyword_code: 'ENV_KEYWORD_NONE', owner: null, linked_environment: null, wr_match: true, wr_key: '0001', wr_other_request: false },
+      { relative_path: FOREIGN, name: FOREIGN.split('/')[1], display_path: display(FOREIGN), environment: 'USAGE', keyword_code: null, owner: null, linked_environment: null, wr_match: false, wr_key: '0009', wr_other_request: false },
+      { relative_path: OTHER_REQUEST, name: OTHER_REQUEST.split('/')[1], display_path: display(OTHER_REQUEST), environment: 'USAGE', keyword_code: null, owner: null, linked_environment: null, wr_match: false, wr_key: '0002', wr_other_request: true },
     ],
     environments: [
       { environment: 'USAGE', keyword: '사용', status: 'MISSING', folder: null, choices: [], case_suggestions: [],
@@ -87,12 +91,17 @@ async function installApi(page: Page, options: { drive?: 'read-only' | 'writable
         value.environments[0] = { ...value.environments[0], status: 'SELECTED', proposal: null,
           folder: { relative_path: PLAIN, name: PLAIN.split('/')[1], display_path: display(PLAIN), environment: null, keyword_code: 'ENV_KEYWORD_NONE', linked: false, owner: null, working_exists: false, working_name: 'Working', existing_cases: [] } } as never
       }
+      if (url.searchParams.get('request_relative_path') === FOREIGN) {
+        value.environments[0] = { ...value.environments[0], status: 'SELECTED', proposal: null,
+          folder: { relative_path: FOREIGN, name: FOREIGN.split('/')[1], display_path: display(FOREIGN), environment: 'USAGE', keyword_code: null, linked: false, owner: null, working_exists: false, working_name: 'Working', existing_cases: [] } } as never
+      }
       return json(route, value)
     }
     if (method === 'POST' && path === '/drop-target/structure') {
       const body = request.postDataJSON() as Body
       calls.creates.push(body)
       if (body.case_names.includes('CON')) return json(route, { detail: { code: 'RESULT_STRUCTURE_NAME_INVALID', message: '쓸 수 없는 Case 이름이 1개 있습니다.', problems: [{ name: 'CON', message: '쓸 수 없는 문자나 이름입니다.' }] } }, 422)
+      if (body.request_relative_path === FOREIGN && !body.confirm_other_wr) return json(route, { detail: { code: 'RESULT_STRUCTURE_OTHER_WR', message: "'[WR-0009]_[사용_환경]'의 의뢰번호(0009)가 이 의뢰(0001)와 다릅니다.", warnings: ['다름'] } }, 409)
       if (body.case_names.includes('Assy_case1x') && !body.confirm) return json(route, { detail: { code: 'RESULT_STRUCTURE_NAME_WARNING', message: '비슷한 이름', warnings: ["'Assy_case1x'은(는) 같은 위치의 'Assy_Case1'와 거의 같은 이름입니다."] } }, 409)
       return json(route, created(body, options.drive === 'writable'))
     }
@@ -166,6 +175,26 @@ test('키워드 없는 의뢰 폴더를 직접 고르면 경고를 확인한 뒤
   await dialog.getByRole('button', { name: '그래도 만들기' }).click()
   await expect(usage.getByTestId('result-structure-done-USAGE')).toBeVisible()
   expect(calls.creates.map((body) => [body.request_relative_path, body.confirm])).toEqual([[PLAIN, false], [PLAIN, true]])
+})
+
+test('의뢰번호가 다른 폴더는 경고를 확인해야 만들고 다른 의뢰의 의뢰번호 폴더는 고를 수 없다', async ({ page }) => {
+  const calls = await installApi(page)
+  const dialog = await openDialog(page)
+  const usage = dialog.getByTestId('result-structure-USAGE')
+  const select = usage.getByLabel('사용환경 의뢰 폴더')
+  await expect(select.locator('option', { hasText: '[WR-0002]' })).toHaveCount(0)
+  await select.selectOption(FOREIGN)
+  const warning = usage.getByTestId('result-structure-other-wr-USAGE')
+  await expect(warning).toContainText('의뢰번호(0009)가 이 의뢰(0001)와 다릅니다')
+  await usage.getByLabel('사용환경 폴더 만들기').check()
+  await dialog.getByRole('checkbox', { name: '유통환경 폴더 만들기' }).uncheck()
+  await usage.getByRole('textbox', { name: '사용환경 Case 1', exact: true }).fill('Assy_Case1')
+  await dialog.getByRole('button', { name: '만들기', exact: true }).click()
+  await expect(usage.getByRole('alert').filter({ hasText: '이 의뢰(0001)와 다릅니다' })).toBeVisible()
+  await warning.getByLabel('사용환경 의뢰번호가 다른 폴더 확인').check()
+  await dialog.getByRole('button', { name: '만들기', exact: true }).click()
+  await expect(usage.getByTestId('result-structure-done-USAGE')).toBeVisible()
+  expect(calls.creates.map((body) => [body.request_relative_path, body.confirm_other_wr])).toEqual([[FOREIGN, false], [FOREIGN, true]])
 })
 
 test('드라이브 쓰기 허용이 꺼져 있으면 읽기 전용 안내를 보이고 만들지 않는다', async ({ page }) => {

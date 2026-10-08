@@ -2,6 +2,15 @@
 
 이 파일은 완료된 개발 작업을 누적 기록한다. 이후 작업은 완료 시 최신 항목을 문서 상단에 추가하며, 변경 범위·검증 결과·남은 확인 사항을 함께 남긴다.
 
+## 2026-10-09 — 폴더 구조 만들기·알림 검수 수정(M1–M3, L1–L8), migration 0041
+
+- M1: 고른 의뢰 폴더의 WR 키가 이 프로젝트의 다른 대시보드 의뢰(제목·`폴더 의뢰번호:` 메모·연결/상위 연결 폴더) 키면 항상 409 `RESULT_PATH_OWNERSHIP_CONFLICT`, 그 밖에 WR 키가 다르거나 없으면 `confirm_other_wr` 없이는 409 `RESULT_STRUCTURE_OTHER_WR`(창: 경고 + `확인했습니다` 확인란, 다른 의뢰 WR 폴더는 목록 제외). M2: `_owner_conflict`가 다른 (프로젝트, 의뢰)의 `spdm_storage_request_parents` 행을 소유로 본다(후보 `owner: OTHER`). W8 끌어서 올리기 회귀 통과.
+- M3/L1/L2: 링크 예약을 프로세스 메모리에서 표 `folder_link_reservations`(migration `0041_folder_link_reservations`, 추가만, 앱 역할 권한·기동 필수 표 검사, DuckDB 동등 스키마, 프로젝트 정리 대상)로 옮겼다. 다른 의뢰의 만료되지 않은 예약은 409 `RESULT_STRUCTURE_RESERVED`, 로컬 실패·드라이브 묶음 FAILED/CONFLICT/CANCELLED면 예약 삭제.
+- L3: 공급자 `WRITER_OPERATIONS`로 `result_folder_structure`는 `WORKING`·`SKELETON`에서 `mkdir_pinned`만. L4: `skeleton_zone_allows(path, request_depth)`와 `skeleton_request_depth` 선언(없으면 SKELETON 쓰기 거부). L5: 의뢰 폴더·`Working` 경로 259자 초과 422 `RESULT_STRUCTURE_PATH_TOO_LONG`.
+- 알림 L6–L8: 도우미의 수신자·제목·개수 조회를 기록과 같은 savepoint·`try`(`_guarded`) 안으로, 보관 정리는 emit당 한 번·여러 행 INSERT, 중복 키는 300자로 자른 값으로 조회, PostgreSQL은 읽지 않은 행 고유 부분 색인 `notifications_unread_dedupe` + `ON CONFLICT DO NOTHING`(기존 행에 읽지 않은 중복이 있으면 행 변경 없이 색인 생략), 수신자 500명 잘림 경고 로그. DuckDB `ensure_notifications_schema`도 색인 3개를 만든다.
+- 검증: pytest(`--basetemp /tmp/claude-0/fx`) test_result_folder_structure 18·test_notifications 23·test_result_drop_upload·test_folder_auto_discovery·test_storage_provider*·test_project_cleanup·test_run_identity_migration·test_postgres_startup 합계 218+23 통과, test_drive_writes 38 통과. `generate:api`·`check_openapi_contract` OK·`tsc -b` 통과. e2e result-folder-structure(5)·notifications(4) 통과. 임시 PostgreSQL 16(`/tmp` 데이터 디렉터리)에서 빈 DB → head, 0040+데이터 → 0041(중복 있음: 색인 생략·데이터 해시 동일 / 중복 없음: 색인 생성·데이터 해시 동일), downgrade·재upgrade, 앱 코드 예약 ON CONFLICT·알림 ON CONFLICT·동시 경합·도우미 실패 후 이벤트 커밋 확인 뒤 서버 중지·삭제.
+- 검수는 수동 diff 검수만 했다(Codex Security 미실행). DuckDB(개발 전용)는 savepoint가 없어 명시 트랜잭션 안의 알림 DB 오류는 이벤트 트랜잭션을 되돌릴 수 있다. Windows Server 2022 폐쇄망 설치·업데이트 검증은 수행하지 않았다.
+
 ## 2026-10-06 — W6 폴더 이름 경고
 
 - Case 결과 catalog에 추가 필드 `name_warnings: [{kind, severity, message, paths, case_id, run_option_id}]`를 넣었다(`backend/app/services/folder_name_warnings.py`). 이미 읽은 Folder Schema snapshot만 사용하며 폴더 스캔·DB 쓰기·폴더 변경은 없다. 같은 Run Option/Case 아래 대소문자·구분 기호·번호 접미사·한 글자 철자만 다른 Scene, Case 간 Scene 이름 불일치, 깊이 스키마 이탈·UNRESOLVED 노드와 번호로 시작하지 않는 Scene 깊이 폴더를 한국어 문구로 알린다. 계산 오류는 경고만 빈 목록으로 두고 catalog는 그대로 응답한다.

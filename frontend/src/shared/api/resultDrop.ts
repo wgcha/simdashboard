@@ -90,6 +90,10 @@ export type StructureFolder = {
 export type StructureCandidate = {
   relative_path: string; name: string; display_path: string; environment: DropEnvironment | null; keyword_code: string | null
   owner: 'THIS' | 'OTHER' | null; linked_environment: DropEnvironment | null; wr_match: boolean
+  /** WR key of the folder name (casefolded), or null. */
+  wr_key: string | null
+  /** The WR key belongs to another dashboard request of this project: never offered (the server refuses it). */
+  wr_other_request: boolean
 }
 export type StructureProposal = { parent_relative_path: string; name: string; relative_path: string; display_path: string }
 export type StructureEnvironment = {
@@ -117,6 +121,8 @@ export type StructureInput = {
   new_request_folder?: { parent_relative_path: string; name: string } | null
   case_names: string[]
   confirm: boolean
+  /** The user confirmed a folder whose WR key differs from the request's (RESULT_STRUCTURE_OTHER_WR otherwise). */
+  confirm_other_wr?: boolean
 }
 export type StructureItem = { relative_path: string; role: 'REQUEST' | 'WORKING' | 'SIMULATION_CASE'; name: string }
 export type StructureResult = {

@@ -54,7 +54,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -103,39 +103,82 @@ _retry_memo: dict[tuple[str, str, str], dict[str, Any]] = {}
 _exclusion_cache: dict[str, Any] = {}
 # "폴더 구조 만들기" (result_folder_structure): a request folder whose skeleton was just created
 # for an existing dashboard request is registered as a LINK to that request instead of a new
-# request. (root_key, casefolded path) -> {project_id, request_id, environment, until}. In-process
-# only; after a restart the folder is registered by the ordinary rules.
+# request. Reservations live in ``folder_link_reservations`` (migration 0041; review M3), so every
+# worker process sees them and they survive a restart; ``expires_at`` bounds them.
 PENDING_LINK_SECONDS = 24 * 3600.0
-_pending_links: dict[tuple[str, str], dict[str, Any]] = {}
 
 
-def reserve_link(root_key: str, request_path: str, project_id: str, request_id: str, environment: str,
-                 *, seconds: float = PENDING_LINK_SECONDS) -> None:
-    """Register ``request_path`` (once it can be) as the existing request ``request_id`` of ``environment``."""
-    with _state_lock:
-        _pending_links[(root_key, request_path.casefold())] = {
-            "project_id": str(project_id), "request_id": str(request_id), "environment": str(environment),
-            "until": time.monotonic() + seconds}
+class LinkReserved(ValueError):
+    """An unexpired reservation of the folder belongs to another request (review L1)."""
+
+    def __init__(self, reservation: dict[str, Any]) -> None:
+        self.reservation = reservation
+        super().__init__("folder reserved for another request")
 
 
-def pending_link(root_key: str, request_path: str) -> dict[str, Any] | None:
-    key = (root_key, request_path.casefold())
-    with _state_lock:
-        found = _pending_links.get(key)
-        if found and found["until"] < time.monotonic():
-            _pending_links.pop(key, None)
-            return None
-        return dict(found) if found else None
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-def _drop_link(root_key: str, request_path: str) -> None:
-    with _state_lock:
-        _pending_links.pop((root_key, request_path.casefold()), None)
+def _path_key(request_path: str) -> str:
+    return "/".join(part.casefold() for part in str(request_path).split("/") if part)
+
+
+def _reservation(conn, root_key: str, path_key: str) -> dict[str, Any] | None:
+    row = conn.execute("SELECT project_id, request_id, environment, created_by, expires_at FROM folder_link_reservations "
+                       "WHERE root_key=? AND path_key=? AND expires_at>?", [root_key, path_key, _utc_now()]).fetchone()
+    if not row:
+        return None
+    return {"project_id": str(row[0]), "request_id": str(row[1]), "environment": str(row[2]),
+            "created_by": str(row[3]), "expires_at": row[4]}
+
+
+def reserve_link(conn, root_key: str, request_path: str, project_id: str, request_id: str, environment: str,
+                 *, created_by: str, seconds: float = PENDING_LINK_SECONDS) -> None:
+    """Register ``request_path`` (once it can be) as the existing request ``request_id`` of ``environment``.
+
+    Written in the caller's transaction. Raises :class:`LinkReserved` when an unexpired reservation of
+    the same folder belongs to another (project, request, environment); an expired one is replaced.
+    """
+    now = _utc_now()
+    key = _path_key(request_path)
+    conn.execute("DELETE FROM folder_link_reservations WHERE root_key=? AND path_key=? AND expires_at<=?",
+                 [root_key, key, now])
+    conn.execute("INSERT INTO folder_link_reservations (root_key, path_key, project_id, request_id, environment, "
+                 "created_by, created_at, expires_at) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT (root_key, path_key) DO NOTHING",
+                 [root_key, key, str(project_id), str(request_id), str(environment), str(created_by), now,
+                  now + timedelta(seconds=seconds)])
+    found = _reservation(conn, root_key, key)
+    if found and (found["project_id"], found["request_id"], found["environment"]) != (str(project_id), str(request_id), str(environment)):
+        raise LinkReserved(found)
+    conn.execute("UPDATE folder_link_reservations SET expires_at=? WHERE root_key=? AND path_key=?",
+                 [now + timedelta(seconds=seconds), root_key, key])
+
+
+def reserved_by_other(conn, root_key: str, request_path: str, project_id: str, request_id: str) -> dict[str, Any] | None:
+    """The unexpired reservation of ``request_path`` when it belongs to another request (read only)."""
+    found = _reservation(conn, root_key, _path_key(request_path))
+    if found and (found["project_id"], found["request_id"]) != (str(project_id), str(request_id)):
+        return found
+    return None
+
+
+def pending_link(conn, root_key: str, request_path: str) -> dict[str, Any] | None:
+    return _reservation(conn, root_key, _path_key(request_path))
+
+
+def drop_link(conn, root_key: str, request_path: str, *, project_id: str | None = None,
+              request_id: str | None = None) -> None:
+    """Remove the reservation of ``request_path`` (only this request's one when ``request_id`` is given)."""
+    where, params = "root_key=? AND path_key=?", [root_key, _path_key(request_path)]
+    if project_id is not None and request_id is not None:
+        where += " AND project_id=? AND request_id=?"
+        params += [str(project_id), str(request_id)]
+    conn.execute(f"DELETE FROM folder_link_reservations WHERE {where}", params)
 
 
 def reset_for_tests() -> None:
     with _state_lock:
-        _pending_links.clear()
         _memo.clear()
         _review_memo.clear()
         _retry_memo.clear()
@@ -515,7 +558,7 @@ def _discover(conn, root) -> dict[str, Any]:
         unlinked = [(name, path) for name, path in candidates if path.casefold() not in linked["requests"]]
         if not unlinked:
             continue
-        pending = {path.casefold(): link for _, path in unlinked if (link := pending_link(root_key, path))}
+        pending = {path.casefold(): link for _, path in unlinked if (link := pending_link(conn, root_key, path))}
         if not project_targets and pending:
             project_targets = {next(iter(pending.values()))["project_id"]}
         if not project_targets and project_name.strip().casefold() in linked["unlinked_project_names"]:
@@ -589,7 +632,7 @@ def _discover(conn, root) -> dict[str, Any]:
             registered = outcome["registration"]
             project_id, request_id = str(registered["project_id"]), str(registered["request_id"])
             if request_target:
-                _drop_link(root_key, request_path)
+                drop_link(conn, root_key, request_path)
             if outcome["project_created"]:
                 created_projects.append({"id": project_id, "name": project_name})
             project_targets = {project_id}

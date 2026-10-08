@@ -11,8 +11,8 @@ import './ResultStructureDialog.css'
 const ENV_LABELS: Record<DropEnvironment, string> = { USAGE: '사용환경', DISTRIBUTION: '유통환경' }
 const NEW = '__new__'
 type Row = { id: number; name: string; source?: 'REGISTERED' | 'FOLDER' }
-type EnvForm = { enabled: boolean; target: string; rows: Row[] }
-type Outcome = { result?: StructureResult; error?: string; problems?: Array<{ name: string; message: string }>; warnings?: string[] }
+type EnvForm = { enabled: boolean; target: string; rows: Row[]; confirmOtherWr: boolean }
+type Outcome = { result?: StructureResult; error?: string; problems?: Array<{ name: string; message: string }>; warnings?: string[]; otherWr?: boolean }
 
 let rowId = 0
 const row = (name = '', source?: Row['source']): Row => ({ id: ++rowId, name, source })
@@ -28,7 +28,7 @@ function messageOf(reason: unknown, fallback: string) {
 function formFor(entry: StructureEnvironment): EnvForm {
   const target = entry.folder?.relative_path ?? (entry.proposal ? NEW : '')
   const rows = entry.case_suggestions.map((item) => row(item.name, item.source))
-  return { enabled: Boolean(entry.folder) && entry.status !== 'SELECTED', target, rows: rows.length ? rows : [row()] }
+  return { enabled: Boolean(entry.folder) && entry.status !== 'SELECTED', target, rows: rows.length ? rows : [row()], confirmOtherWr: false }
 }
 const LINK_TEXT: Record<string, string> = {
   LINKED: '이 의뢰에 연결되어 있습니다. Case 결과에 반영합니다.',
@@ -75,7 +75,7 @@ export function ResultStructureDialog({ projectId, requestId, readOnly, onClose,
   }
   // Choosing another existing folder re-reads its Working and Case folders (prefill follows the folder).
   const chooseTarget = async (environment: DropEnvironment, target: string) => {
-    update(environment, (form) => ({ ...form, target }))
+    update(environment, (form) => ({ ...form, target, confirmOtherWr: false }))
     if (!target || target === NEW) return
     try {
       const value = await resultDropApi.structure({ project_id: projectId, request_id: requestId, environment, request_relative_path: target })
@@ -101,6 +101,7 @@ export function ResultStructureDialog({ projectId, requestId, readOnly, onClose,
       try {
         const result = await resultDropApi.createStructure({
           project_id: projectId, request_id: requestId, environment: entry.environment, case_names: names, confirm,
+          confirm_other_wr: form.confirmOtherWr,
           request_relative_path: form.target === NEW ? null : form.target,
           new_request_folder: form.target === NEW && entry.proposal ? { parent_relative_path: entry.proposal.parent_relative_path, name: entry.proposal.name } : null,
         })
@@ -108,7 +109,9 @@ export function ResultStructureDialog({ projectId, requestId, readOnly, onClose,
         created = created || result.created.length > 0 || Boolean(result.queued?.length)
       } catch (reason) {
         const detail = detailOf(reason)
-        if (detail.code === 'RESULT_STRUCTURE_NAME_WARNING' && Array.isArray(detail.warnings)) {
+        if (detail.code === 'RESULT_STRUCTURE_OTHER_WR') {
+          next[entry.environment] = { error: messageOf(reason, '의뢰번호가 다른 폴더입니다.'), otherWr: true }
+        } else if (detail.code === 'RESULT_STRUCTURE_NAME_WARNING' && Array.isArray(detail.warnings)) {
           next[entry.environment] = { warnings: detail.warnings as string[] }
           warned = true
         } else {
@@ -140,6 +143,7 @@ export function ResultStructureDialog({ projectId, requestId, readOnly, onClose,
           onToggle={(enabled) => update(entry.environment, (form) => ({ ...form, enabled }))}
           onTarget={(target) => void chooseTarget(entry.environment, target)}
           onRows={(rows) => update(entry.environment, (form) => ({ ...form, rows }))}
+          onConfirmOtherWr={(value) => update(entry.environment, (form) => ({ ...form, confirmOtherWr: value }))}
           onBatchFinished={batchFinished} />)}
       </div> : null}
       <footer className="result-structure__foot">
@@ -152,19 +156,22 @@ export function ResultStructureDialog({ projectId, requestId, readOnly, onClose,
   </div>
 }
 
-function EnvironmentSection({ entry, overview, form, outcome, busy, onToggle, onTarget, onRows, onBatchFinished }: {
+function EnvironmentSection({ entry, overview, form, outcome, busy, onToggle, onTarget, onRows, onConfirmOtherWr, onBatchFinished }: {
   entry: StructureEnvironment; overview: StructureOverview; form?: EnvForm; outcome?: Outcome; busy: boolean
-  onToggle: (enabled: boolean) => void; onTarget: (target: string) => void; onRows: (rows: Row[]) => void; onBatchFinished: (batch: DriveUploadBatch) => void
+  onToggle: (enabled: boolean) => void; onTarget: (target: string) => void; onRows: (rows: Row[]) => void
+  onConfirmOtherWr: (value: boolean) => void; onBatchFinished: (batch: DriveUploadBatch) => void
 }) {
   if (!form) return null
   const label = ENV_LABELS[entry.environment]
-  const options = overview.candidates.filter((item) => item.owner !== 'OTHER' && (!item.linked_environment || item.linked_environment === entry.environment)
+  const options = overview.candidates.filter((item) => item.owner !== 'OTHER' && !item.wr_other_request && (!item.linked_environment || item.linked_environment === entry.environment)
     && item.keyword_code !== 'ENV_KEYWORD_BOTH' && (item.environment === null || item.environment === entry.environment))
   const isNew = form.target === NEW
   const folder = !isNew && entry.folder?.relative_path === form.target ? entry.folder : null
   const existing = new Set((folder?.existing_cases ?? []).map((name) => name.toLowerCase()))
   const chosen = options.find((item) => item.relative_path === form.target)
   const noKeyword = chosen ? chosen.environment === null : false
+  // A folder not linked to this request whose WR key differs from the request's needs an explicit confirmation.
+  const otherWr = Boolean(chosen && !chosen.wr_match && !folder?.linked) || Boolean(outcome?.otherWr)
   const display = isNew ? entry.proposal?.display_path : (folder?.display_path ?? chosen?.display_path)
   const working = folder?.working_name ?? 'Working'
   const problemOf = new Map((outcome?.problems ?? []).map((item) => [item.name, item.message]))
@@ -186,6 +193,11 @@ function EnvironmentSection({ entry, overview, form, outcome, busy, onToggle, on
     {!entry.proposal && entry.status === 'MISSING' ? <p className="result-structure__muted">의뢰번호로 새 의뢰 폴더 이름을 정하지 못했습니다. SPDM에서 의뢰 폴더를 만든 뒤 다시 여세요.</p> : null}
     {isNew && entry.proposal ? <p className="result-structure__new" data-testid={`result-structure-new-${entry.environment}`}>새 의뢰 폴더 <code>{entry.proposal.name}</code>을(를) 프로젝트 폴더 <code>{entry.proposal.parent_relative_path}</code> 아래에 만듭니다. 이름을 확인하세요.</p> : null}
     {noKeyword ? <p className="result-structure__warning" role="note"><AlertTriangle aria-hidden="true" />이 폴더 이름에는 '{entry.keyword}'가 없어 대시보드가 자동으로 읽지 못합니다. 이름은 바꾸지 않습니다.</p> : null}
+    {otherWr ? <div className="result-structure__warning" role="note" data-testid={`result-structure-other-wr-${entry.environment}`}>
+      <AlertTriangle aria-hidden="true" />
+      <span>이 폴더의 의뢰번호({chosen?.wr_key ?? '없음'})가 이 의뢰({overview.wr_key ?? '의뢰번호 없음'})와 다릅니다. 이 의뢰의 폴더가 맞을 때만 만드세요. 만들면 이 의뢰에 연결됩니다.</span>
+      <label><input type="checkbox" checked={form.confirmOtherWr} disabled={busy} onChange={(event) => onConfirmOtherWr(event.target.checked)} aria-label={`${label} 의뢰번호가 다른 폴더 확인`} /> 확인했습니다</label>
+    </div> : null}
     {display ? <code className="result-structure__path" title={display}>{display}</code> : null}
     <div className="result-structure__tree" aria-label={`${label} 만들 폴더`}>
       <p><b>{working}</b> <small>{folder?.working_exists ? '이미 있음' : '새로 만듦'}</small></p>

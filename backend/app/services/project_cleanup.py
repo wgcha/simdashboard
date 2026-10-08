@@ -137,6 +137,8 @@ _STAGE_LEAVES = (
     ("analysis_template_versions", (("project_id", "project"),)),
     # Derived, user-facing notifications (migration 0040) go with their project/request.
     ("notifications", (("project_id", "project"), ("request_id", "request"))),
+    # "폴더 구조 만들기" link reservations (migration 0041) of a deleted project/request.
+    ("folder_link_reservations", (("project_id", "project"), ("request_id", "request"))),
 )
 _STAGES = (
     _STAGE_LEAVES,

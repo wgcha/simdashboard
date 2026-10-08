@@ -7892,6 +7892,11 @@ export interface components {
              * @default false
              */
             confirm: boolean;
+            /**
+             * Confirm Other Wr
+             * @default false
+             */
+            confirm_other_wr: boolean;
         };
         /** StructuredUpload */
         StructuredUpload: {

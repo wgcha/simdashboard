@@ -367,6 +367,97 @@ def test_migration_0040_is_additive_and_grants_the_app_role():
     assert 'GRANT SELECT, INSERT, UPDATE, DELETE ON {table} TO "{role}"' in upgrade
 
 
+def test_migration_0041_is_additive_with_grants_and_a_guarded_unique_unread_index():
+    text = (BACKEND / "migrations" / "versions" / "0041_folder_link_reservations.py").read_text(encoding="utf-8")
+    upgrade = text.split("def upgrade", 1)[1].split("def downgrade", 1)[0]
+    assert "CREATE TABLE IF NOT EXISTS folder_link_reservations" in upgrade
+    assert "PRIMARY KEY (root_key, path_key)" in upgrade
+    assert not re.search(r"DROP\s|ALTER\s+TABLE|DELETE\s+FROM|UPDATE\s+\w+\s+SET|TRUNCATE", upgrade, re.IGNORECASE)
+    assert 'GRANT SELECT, INSERT, UPDATE, DELETE ON {table} TO "{role}"' in upgrade
+    # The unique unread index is created only when no unread duplicates exist (no row is changed).
+    assert "HAVING count(*) > 1" in upgrade and "WHERE read_at IS NULL AND dedupe_key IS NOT NULL" in upgrade
+
+
+def test_helper_query_failures_stay_inside_the_notification_savepoint(monkeypatch):
+    statements: list[str] = []
+
+    class FakeConn:
+        backend = "postgresql"
+
+        def execute(self, sql, params=None):
+            statements.append(sql.split()[0] + (" " + sql.split()[1] if sql.startswith(("ROLLBACK", "RELEASE")) else ""))
+            if sql.startswith("SELECT title FROM analysis_requests"):
+                raise RuntimeError("helper query failed")
+            return self
+
+        def fetchall(self):
+            return []
+
+        def fetchone(self):
+            return None
+
+    monkeypatch.setattr(notifications, "recipients", lambda *args, **kwargs: (statements.append("RECIPIENTS"), ["u1"])[1])
+    summary = {"state": "FAILED", "files_total": 2, "files_done": 1, "project_id": "p", "request_id": "r", "batch_id": "b"}
+    assert notifications.drive_upload_finished(FakeConn(), summary) == 0
+    assert statements[0] == "SAVEPOINT" and statements[-2:] == ["ROLLBACK TO", "RELEASE SAVEPOINT"]
+    statements.clear()
+    monkeypatch.setattr(notifications, "recipients", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("x")))
+    assert notifications.new_results(FakeConn(), "p", "r", "USAGE", cases=1, scenes=0, snapshot_id="s") == 0
+    assert notifications.capture_failed(FakeConn(), "reg") == 0
+    assert statements.count("SAVEPOINT") == 2 and statements.count("ROLLBACK TO") == 1  # capture_failed: no row, no error
+
+
+def test_helper_failure_on_duckdb_returns_zero_and_keeps_the_connection_usable(monkeypatch):
+    def broken(conn, request_id):
+        conn.execute("SELECT title FROM no_such_table")
+    monkeypatch.setattr(notifications, "_request_title", broken)
+    with connect() as conn:
+        user = _user(conn, "helper")
+        assert notifications.final_finished(conn, {"project_id": None, "request_id": "r", "created_by": user,
+                                                   "operation_id": "op"}, completed=True) == 0
+        assert conn.execute("SELECT count(*) FROM notifications WHERE user_id=?", [user]).fetchone()[0] == 0
+
+
+def test_retention_runs_once_per_emit_and_inserts_are_batched(monkeypatch):
+    calls: list[list[str]] = []
+    original = notifications._prune
+    monkeypatch.setattr(notifications, "_prune", lambda conn, users, now: (calls.append(list(users)), original(conn, users, now)))
+    with connect() as conn:
+        users = [_user(conn, f"batch{index}") for index in range(3)]
+        assert notifications.emit(conn, users, type="NEW_RESULTS", title="x", dedupe_key="batch") == 3
+        assert notifications.emit(conn, users, type="NEW_RESULTS", title="x", dedupe_key="batch") == 0
+    assert calls == [sorted(users)]
+    assert all(len(_rows(user)) == 1 for user in users)
+
+
+def test_long_dedupe_keys_are_looked_up_truncated_and_cut_recipients_are_logged(monkeypatch, caplog):
+    key = "k" * 400
+    with connect() as conn:
+        user, second = _user(conn, "long"), _user(conn, "long2")
+        assert notifications.emit(conn, [user], type="DRIVE_UPLOAD", title="A", dedupe_key=key) == 1
+        assert notifications.emit(conn, [user], type="DRIVE_UPLOAD", title="B", dedupe_key=key) == 0
+        assert notifications.emit(conn, [user], type="DRIVE_UPLOAD", title="C", dedupe_key=key + "x", coalesce=True) == 1
+        monkeypatch.setattr(notifications, "MAX_RECIPIENTS", 1)
+        with caplog.at_level("WARNING", logger="app.services.notifications"):
+            cut = notifications.recipients(conn, permission=None, members=False, include=[user, second])
+    assert [(row["title"], len(row["dedupe_key"])) for row in _rows(user)] == [("C", 300)]
+    assert cut == sorted([user, second])[:1] and "recipients cut from 2 to 1" in caplog.text
+
+
+def test_duckdb_bootstrap_creates_the_notification_indexes_and_reservation_table():
+    from app import database
+    with connect() as conn:
+        database.ensure_notifications_schema(conn)
+        database.ensure_folder_link_reservations_schema(conn)
+        indexes = {row[0] for row in conn.execute(
+            "SELECT index_name FROM duckdb_indexes() WHERE table_name='notifications'").fetchall()}
+        columns = {row[0] for row in conn.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name='folder_link_reservations'").fetchall()}
+    assert {"notifications_user_created", "notifications_user_dedupe", "notifications_scope"} <= indexes
+    assert columns == {"root_key", "path_key", "project_id", "request_id", "environment", "created_by", "created_at",
+                       "expires_at"}
+
+
 def test_duckdb_bootstrap_adds_the_notifications_table_to_an_existing_database():
     from app import database
     with connect() as conn:

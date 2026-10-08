@@ -84,6 +84,7 @@ def initialize_database() -> None:
                 "finalization_operations",
                 "materials_deck_cache",
                 "notifications",
+                "folder_link_reservations",
             )
             missing = [
                 table_name
@@ -139,6 +140,8 @@ def initialize_database() -> None:
                                          "error_code", "error_message", "parse_seconds", "created_at", "updated_at"},
                 "notifications": {"id", "user_id", "type", "severity", "title", "body", "link", "project_id",
                                   "request_id", "dedupe_key", "created_at", "read_at"},
+                "folder_link_reservations": {"root_key", "path_key", "project_id", "request_id", "environment",
+                                             "created_by", "created_at", "expires_at"},
             }
             incompatible = []
             for table_name, expected in required_columns.items():
@@ -1271,6 +1274,7 @@ def _initialize_duckdb_legacy() -> None:
         ensure_drive_write_path_schema(conn)
         ensure_materials_deck_cache_schema(conn)
         ensure_notifications_schema(conn)
+        ensure_folder_link_reservations_schema(conn)
         from .adapters.persistence.dashboard_schema import ensure_dashboard_schema
         ensure_dashboard_schema(conn)
         # Establish the schema before seeding, but defer one-time legacy data
@@ -1606,6 +1610,20 @@ def ensure_notifications_schema(conn: duckdb.DuckDBPyConnection) -> None:
         severity VARCHAR NOT NULL CHECK (severity IN ('INFO', 'SUCCESS', 'WARNING', 'ERROR')),
         title VARCHAR NOT NULL, body VARCHAR, link VARCHAR, project_id VARCHAR, request_id VARCHAR,
         dedupe_key VARCHAR, created_at TIMESTAMP NOT NULL, read_at TIMESTAMP
+    )""")
+    # Same lookup indexes as migration 0040. DuckDB has no partial index, so the unread dedupe of
+    # migration 0041 stays lookup-based here (single process).
+    conn.execute("CREATE INDEX IF NOT EXISTS notifications_user_created ON notifications (user_id, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS notifications_user_dedupe ON notifications (user_id, dedupe_key)")
+    conn.execute("CREATE INDEX IF NOT EXISTS notifications_scope ON notifications (project_id, request_id)")
+
+
+def ensure_folder_link_reservations_schema(conn: duckdb.DuckDBPyConnection) -> None:
+    """Local development equivalent of additive migration 0041 ("폴더 구조 만들기" link reservations)."""
+    conn.execute("""CREATE TABLE IF NOT EXISTS folder_link_reservations (
+        root_key VARCHAR NOT NULL, path_key VARCHAR NOT NULL, project_id VARCHAR NOT NULL, request_id VARCHAR NOT NULL,
+        environment VARCHAR NOT NULL CHECK (environment IN ('USAGE', 'DISTRIBUTION')), created_by VARCHAR NOT NULL,
+        created_at TIMESTAMP NOT NULL, expires_at TIMESTAMP NOT NULL, PRIMARY KEY (root_key, path_key)
     )""")
 
 

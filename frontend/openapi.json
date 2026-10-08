@@ -24272,6 +24272,11 @@
             "type": "boolean",
             "title": "Confirm",
             "default": false
+          },
+          "confirm_other_wr": {
+            "type": "boolean",
+            "title": "Confirm Other Wr",
+            "default": false
           }
         },
         "type": "object",

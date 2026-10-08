@@ -243,7 +243,13 @@ def _owner_conflict(conn: ConnectionLike, root_id: str, root_key: str, relative_
     if any((str(item["project_id"]), str(item["request_id"])) != (project_id, request_id) and
            overlaps(str(item["relative_path"])) for item in bindings):
         raise ResultRegistrationError("RESULT_PATH_OWNERSHIP_CONFLICT", "선택한 폴더가 다른 의뢰의 기존 결과 경로와 겹칩니다.")
-    semantic = rows(conn.execute("SELECT project_id,request_id,relative_path FROM semantic_folder_bindings"))
+    # SPDM request parents (review M2): a request folder parented to another (project, request) is that
+    # request's folder for every environment; overlapping it is a conflict like a binding.
+    parents = rows(conn.execute("SELECT project_id,request_id,request_folder FROM spdm_storage_request_parents"))
+    if any((str(item["project_id"]), str(item["request_id"])) != (project_id, request_id) and
+           overlaps(str(item["request_folder"])) for item in parents):
+        raise ResultRegistrationError("RESULT_PATH_OWNERSHIP_CONFLICT", "선택한 폴더가 다른 의뢰의 SPDM 의뢰 폴더와 겹칩니다.")
+    semantic =rows(conn.execute("SELECT project_id,request_id,relative_path FROM semantic_folder_bindings"))
     if any(str(item["project_id"]) != project_id and overlaps(str(item["relative_path"])) or
            (item.get("request_id") is not None and str(item["request_id"]) != request_id and overlaps(str(item["relative_path"])))
            for item in semantic):

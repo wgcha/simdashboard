@@ -68,7 +68,9 @@ def test_run_identity_v2_precedes_batch_attempt_identity_head() -> None:
     assert deck_cache and deck_cache.down_revision == "0038_drive_write_path"
     notifications = script.get_revision("0040_notifications")
     assert notifications and notifications.down_revision == "0039_materials_deck_cache"
-    assert tuple(script.get_heads()) == ("0040_notifications",)
+    reservations = script.get_revision("0041_folder_link_reservations")
+    assert reservations and reservations.down_revision == "0040_notifications"
+    assert tuple(script.get_heads()) == ("0041_folder_link_reservations",)
 
 
 def test_result_location_links_migration_widens_alembic_version_before_other_ddl(monkeypatch: pytest.MonkeyPatch) -> None:

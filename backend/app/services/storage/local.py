@@ -1004,12 +1004,14 @@ class LocalFsProvider:
             raise StorageError(NOT_ALLOWED_WRITE, "허용된 SPDM 쓰기 구역 밖의 경로입니다.")
 
     def _check(self, zone: str, *rel_paths: str) -> None:
-        if zone == SKELETON and sys._getframe(1).f_code.co_name != "mkdir_pinned":
+        operation = sys._getframe(1).f_code.co_name
+        if zone == SKELETON and operation != "mkdir_pinned":
             # S3 ④: the request skeleton zone only creates folders below a pinned parent.
             raise StorageError(NOT_ALLOWED_WRITE, "허용된 SPDM 쓰기 구역 밖의 경로입니다.")
         caller = _caller_module()
         for rel_path in rel_paths:
-            check_write(rel_path, zone, caller)
+            # Review L3: per-module operation allowlist (provider.WRITER_OPERATIONS).
+            check_write(rel_path, zone, caller, operation)
 
     def mkdirs(self, rel_path: str, *, zone: str, parents: bool = True, exist_ok: bool = True) -> None:
         self._refuse_working(zone)
