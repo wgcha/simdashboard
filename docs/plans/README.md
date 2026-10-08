@@ -2,6 +2,8 @@
 
 여기에는 구현이나 운영 검증이 실제로 남아 있는 계획만 둔다. 완료된 계획은 [보관 문서](../archive/README.md)에서 찾는다.
 
+- [PhysicsAI 플랫폼 연결 계획](physicsai-integration.md): `wgcha/physicsai-platform`(같은 서버 `/physicsai/`, 대시보드 로그인 공유)과의 연결. 데이터셋 내보내기 manifest v1, 실행 딥링크, 예측 표시, 운영 공존(ADR 0007 예정). 계획만, 사용자 결정 대기.
+
 - [SCX 드라이브 연동 계획](scx-drive-integration.md): 이슈 #45 어댑터 계약 기반 `DriveStorageProvider`·토큰·업로드 대기열·Final 재설계·UI, 브랜치 `claude/scx-drive`. D0(기반) 구현, D1 이후 진행 전.
 
 - **[개선 전체 계획 (최종본)](improvement-roadmap.md): 남은 개선의 정본.** 사이드바 숨김, Final 복사 개편(상한 제거·조각 복사·작업 스레드), 현재 Final·재지정, 프로젝트 정리, Case 비교, 이름 경고, 보고서 A안, 등록 축소, 실제 환경 검증. 아래 개별 계획과 다르면 이 문서를 따른다.

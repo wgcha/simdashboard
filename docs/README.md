@@ -21,6 +21,7 @@
 | 계정·프로젝트 권한 | [권한 구현 가이드](access-control-and-menu-policy-implementation-guide.md) | 동작 요구는 [권한 명세](access-control-functional-specification.md) |
 | DB·migration·저장 경로 | [DB 통합 가이드](backend-sql-integration-guide.md), [저장 경로 계약](storage-folder-and-file-contract.md) | 현재 구성은 [아키텍처](current-architecture.md), 배포 영향은 [배포 정책](windows-deployment-policy.md) |
 | 미완료 개발 계획 | [현재 계획 목록](plans/README.md) | 계획 문서가 요구할 때만 관련 기능·정책 문서를 확인 |
+| PhysicsAI 플랫폼 연결(로그인 공유·데이터셋 내보내기·예측 표시·같은 서버 배포) | [PhysicsAI 연결 계획](plans/physicsai-integration.md) | 파일 인계는 [최종확정](features/case-finalization.md)·[저장소 공급자](contracts/storage-provider.md), 배포 영향은 [배포 정책](windows-deployment-policy.md) |
 | 문서 정리·갱신 | [문서 관리 정책](policies/documentation.md) | 공통 프로젝트 규칙은 [`../AGENTS.md`](../AGENTS.md) |
 
 ## 현재 공통 기준

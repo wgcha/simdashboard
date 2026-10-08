@@ -2,6 +2,12 @@
 
 이 파일은 완료된 개발 작업을 누적 기록한다. 이후 작업은 완료 시 최신 항목을 문서 상단에 추가하며, 변경 범위·검증 결과·남은 확인 사항을 함께 남긴다.
 
+## 2026-10-09 — PhysicsAI 플랫폼 연결 기술 계획(문서만)
+
+- `wgcha/physicsai-platform`(HEAD `dec451e`)의 README·AGENTS·계약 `platform.md`·결정·E2E 체크리스트·설정 예시·openapi·`auth.py`를 읽고 [PhysicsAI 연결 계획](../docs/plans/physicsai-integration.md)을 작성했다. PhysicsAI는 이미 같은 서버 `/physicsai/`·대시보드 쿠키 introspection(`/api/auth/me`, `/api/projects`)으로 설계되어 1차에는 대시보드 코드 변경이 필요 없다. 계획: P0 인증 계약 시험·manifest v1, P1 Final → `<ai_root>/_exchange/dashboard/<export_id>/` 데이터셋 내보내기(새 쓰기 구역 EXPORT), P2 딥링크, P3 PREDICT `dashboard_ref`와 예측 참고 표시, P4 운영 공존 ADR 0007(Caddy include·PG·포트). 공유 DB·서비스 토큰·SCX 어댑터 공유는 채택하지 않음.
+- 발견: PhysicsAI 기본 `dashboard_internal_url`(:8000)과 폐쇄망 설치 `apiPort`(예 18080) 불일치, 대시보드 서비스 LocalService 전용 vs PhysicsAI 워커 콘솔 실행(U11), scx Final 완료 기록의 sha256 부재(sha1만).
+- 코드·DB·배포 변경 없음. 시험 미실행(문서 작업). 결정 9건(§6) 사용자 확인 대기.
+
 ## 2026-10-09 — 폴더 구조 만들기·알림 검수 수정(M1–M3, L1–L8), migration 0041
 
 - M1: 고른 의뢰 폴더의 WR 키가 이 프로젝트의 다른 대시보드 의뢰(제목·`폴더 의뢰번호:` 메모·연결/상위 연결 폴더) 키면 항상 409 `RESULT_PATH_OWNERSHIP_CONFLICT`, 그 밖에 WR 키가 다르거나 없으면 `confirm_other_wr` 없이는 409 `RESULT_STRUCTURE_OTHER_WR`(창: 경고 + `확인했습니다` 확인란, 다른 의뢰 WR 폴더는 목록 제외). M2: `_owner_conflict`가 다른 (프로젝트, 의뢰)의 `spdm_storage_request_parents` 행을 소유로 본다(후보 `owner: OTHER`). W8 끌어서 올리기 회귀 통과.
