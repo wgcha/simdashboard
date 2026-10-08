@@ -18,5 +18,11 @@
 *.png binary
 *.jpg binary
 *.jpeg binary
+*.pptx binary
+*.potx binary
+*.docx binary
+*.xlsx binary
+*.zip binary
+*.whl binary
 *.woff binary
 *.woff2 binary
