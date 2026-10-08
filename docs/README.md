@@ -12,6 +12,7 @@
 | 배포·업데이트 | [Windows 배포 정책](windows-deployment-policy.md) | [설치·업데이트 시나리오](windows-deployment-scenarios.md), 폐쇄망이면 [패키지 설치](windows-server-offline-installation.md) |
 | 대시보드 조회·비교 | [대시보드 기능 안내](dashboard/README.md) | 등록 방식 변경은 [결과 등록 계약](features/result-registration.md) |
 | Case 결과·소재물성 화면·자동 반영·보고서·Final | [Case 결과 흐름 재설계 계획](plans/case-results-workflow-redesign.md) | 위치 정본은 [공용 위치 계약](features/folder-schema-refresh.md), 보고서 형식·HTML 영상 상한은 [Case 결과 보고서](features/case-report.md), 폴더 이름 경고는 [폴더 이름 경고](features/folder-name-warnings.md), Case 여러 개 비교는 [Case 비교](features/case-compare.md), 사용환경 소재(OptiStruct)는 [사용환경 소재](features/materials-optistruct.md) |
+| 알림(상단 알림 아이콘·알림 페이지·이벤트별 수신자)·전체 글자 크기 조절 숨김 | [알림 기능 안내](features/notifications.md) | DB 변경은 [배포 정책](windows-deployment-policy.md), 드라이브 이벤트는 [SCX 드라이브 기능 안내](features/scx-drive.md) |
 | SCX 드라이브 연동(어댑터 설치·토큰·드라이브 점검·읽기·쓰기 대기열·쓰기 수용 절차) | [SCX 드라이브 기능 안내](features/scx-drive.md) | 단계·결정은 [연동 계획](plans/scx-drive-integration.md), 배포 영향은 [ADR 0006](adr/0006-scx-drive-adapter-external-wheel.md) |
 | SPDM 폴더·기존 수집 API | [SPDM 연동 계약](spdm-storage-workflow.md) | 경로·확장자는 [저장 계약](storage-folder-and-file-contract.md) |
 | Folder Schema 위치·Refresh | [공용 위치·Refresh 계약](features/folder-schema-refresh.md) | 결과 등록은 [현재 결과 등록 계약](features/result-registration.md), 배포 영향은 [Windows 배포 정책](windows-deployment-policy.md) |

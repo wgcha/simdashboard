@@ -1,5 +1,6 @@
 import type { CSSProperties, ReactNode } from 'react'
 import { DriveStatusBanner } from '../../shared/components/DriveStatusBanner'
+import { NotificationBell } from '../../features/notifications/NotificationBell'
 
 type AppShellProps = {
   children: ReactNode
@@ -42,6 +43,6 @@ type AppTopbarProps = {
 export function AppTopbar({ actions, breadcrumb }: AppTopbarProps) {
   return <header className="topbar">
     <div className="breadcrumb">{breadcrumb}</div>
-    <div className="top-actions">{actions}</div>
+    <div className="top-actions"><NotificationBell />{actions}</div>
   </header>
 }

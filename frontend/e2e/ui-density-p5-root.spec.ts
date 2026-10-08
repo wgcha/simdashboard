@@ -2,18 +2,18 @@ import { expect, test, type Page } from '@playwright/test'
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { WORKSPACE_ROUTES } from '../src/features/navigation/workspaceRouteRegistry'
-import { loginWorkspace, openWorkspaceRoute } from './workspace-test-helpers'
+import { loginWorkspace, openWorkspaceRoute, setWorkspaceFontSize } from './workspace-test-helpers'
 
 const routeHeadings: Record<string, string> = {
   portfolio: '결과 대시보드', workbench_admin: '작업 유형 관리',
   project_result_profiles: '프로젝트 결과 구성', schemas: '폴더 연결·규칙', variables: '변수 카탈로그',
   templates: '모델링 템플릿', access_admin: '사용자·프로젝트 권한', menu_policy_admin: '권한 및 좌측 메뉴 정책',
   audit_admin: '감사로그', examples: '기능 예제 갤러리', help: 'VD simulation workbench 사용 도움말', voc: 'VOC 게시판',
+  notifications: '알림',
 }
 
-async function setFont(page: Page, from: number, to: number) {
-  const button = page.getByRole('button', { name: to > from ? '전체 글자 크기 늘리기' : '전체 글자 크기 줄이기', exact: true })
-  for (let i = 0; i < Math.abs(to - from); i++) await button.click()
+async function setFont(page: Page, _from: number, to: number) {
+  await setWorkspaceFontSize(page, to)
   await expect.poll(() => page.locator('html').evaluate(e => parseFloat(getComputedStyle(e).fontSize))).toBeCloseTo(to * 4 / 3, 1)
 }
 

@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test'
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
-import { loginWorkspace, openWorkspaceRoute } from './workspace-test-helpers'
+import { loginWorkspace, openWorkspaceRoute, setWorkspaceFontSize } from './workspace-test-helpers'
 
 for (const viewport of [
   { width: 1366, height: 768 },
@@ -51,13 +51,7 @@ for (const viewport of [
       }
     }
 
-    const sidebar = page.getByRole('complementary', { name: '주 메뉴' })
-    if (viewport.width <= 620) await sidebar.getByRole('button', { name: '메뉴 열기', exact: true }).click()
-    for (let step = 0; step < 4; step += 1) {
-      await sidebar.getByRole('button', { name: '전체 글자 크기 늘리기', exact: true }).click()
-    }
-    await expect(sidebar.getByRole('button', { name: '전체 글자 크기 늘리기', exact: true })).toBeDisabled()
-    if (viewport.width <= 620) await sidebar.getByRole('button', { name: '메뉴 닫기', exact: true }).click()
+    await setWorkspaceFontSize(page, 18)
     await expect(page.locator('.app-shell')).toHaveCSS('--ui-font-size', '18pt')
     await expect(page.locator('.app-shell')).toHaveCSS('font-size', '24px')
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)

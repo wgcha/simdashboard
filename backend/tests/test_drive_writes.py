@@ -205,6 +205,49 @@ def test_new_folder_is_created_through_the_queue(scxw, monkeypatch):
     assert scxw.drive.nodes[scxw.path(f"{OPTION}/9_Face")].kind == "dir"
 
 
+def test_folder_structure_is_queued_on_the_drive_idempotent_and_linked(scxw, monkeypatch):
+    """"폴더 구조 만들기" in scx mode: MKDIR items of one batch, existing folders kept, link after the batch."""
+    from app.services import folder_auto_discovery, result_folder_structure
+
+    project_id, request_id = _register(scxw)
+    kicked: list[bool] = []
+    monkeypatch.setattr(result_folder_structure, "_kick_discovery", lambda: kicked.append(True))
+    monkeypatch.setattr(upload_queue, "wait_batch", lambda batch_id, timeout, **_: (_settle(), _summary(batch_id))[1])
+    monkeypatch.setattr(folder_auto_discovery, "FORCE_MIN_INTERVAL_SECONDS", 0.0)
+    folder_auto_discovery.reset_for_tests()
+    overview = scxw.client.get(REG + "/drop-target/structure", params={"project_id": project_id, "request_id": request_id})
+    assert overview.status_code == 200, overview.text
+    usage = next(item for item in overview.json()["environments"] if item["environment"] == "USAGE")
+    proposal = usage["proposal"]
+    assert usage["status"] == "MISSING" and proposal["name"] == "[WR-0001]_[사용_환경]"
+    body = {"project_id": project_id, "request_id": request_id, "environment": "USAGE",
+            "new_request_folder": {"parent_relative_path": proposal["parent_relative_path"], "name": proposal["name"]},
+            "case_names": ["Assy_Case1"]}
+    response = scxw.client.post(REG + "/drop-target/structure", json=body)
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["drive"]["state"] == "DONE" and [item["role"] for item in result["queued"]] == [
+        "REQUEST", "WORKING", "SIMULATION_CASE"]
+    usage_folder = proposal["relative_path"]
+    assert scxw.drive.nodes[scxw.path(f"{usage_folder}/Working/Assy_Case1")].kind == "dir"
+    assert kicked == [True] and result["link"]["status"] == "PENDING"
+    found = folder_auto_discovery.discover(force=True)
+    assert [(item["environment"], item["id"], item["linked"]) for item in found["created_requests"]] == [
+        ("USAGE", request_id, True)], found
+    # Re-run: everything exists, nothing is queued; the distribution Case folder is reported as existing.
+    again = scxw.client.post(REG + "/drop-target/structure", json={
+        "project_id": project_id, "request_id": request_id, "environment": "USAGE",
+        "request_relative_path": usage_folder, "case_names": ["Assy_Case1"]})
+    assert again.status_code == 200, again.text
+    assert again.json()["drive"] is None and again.json()["created"] == [] and again.json()["link"]["status"] == "LINKED"
+    assert {op for op, _ in scxw.drive.calls if op in {"upload_new", "copy_within"}} == set()
+    # Drive writes off: the endpoint answers DRIVE_WRITE_DISABLED (read-only notice on the screen).
+    monkeypatch.setenv("SIMDASH_DRIVE_WRITES_ENABLED", "false")
+    drive_gateway.shutdown()
+    refused = scxw.client.post(REG + "/drop-target/structure", json={**body, "case_names": ["Assy_Case2"]})
+    assert refused.status_code == 409 and refused.json()["detail"]["code"] == "DRIVE_WRITE_DISABLED", refused.text
+
+
 def _summary(batch_id: str) -> dict | None:
     with connect() as conn:
         return upload_queue.batch_summary(conn, batch_id)

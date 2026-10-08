@@ -101,10 +101,41 @@ _memo: dict[str, Any] = {}
 _review_memo: dict[tuple[str, str, str], dict[str, Any]] = {}
 _retry_memo: dict[tuple[str, str, str], dict[str, Any]] = {}
 _exclusion_cache: dict[str, Any] = {}
+# "폴더 구조 만들기" (result_folder_structure): a request folder whose skeleton was just created
+# for an existing dashboard request is registered as a LINK to that request instead of a new
+# request. (root_key, casefolded path) -> {project_id, request_id, environment, until}. In-process
+# only; after a restart the folder is registered by the ordinary rules.
+PENDING_LINK_SECONDS = 24 * 3600.0
+_pending_links: dict[tuple[str, str], dict[str, Any]] = {}
+
+
+def reserve_link(root_key: str, request_path: str, project_id: str, request_id: str, environment: str,
+                 *, seconds: float = PENDING_LINK_SECONDS) -> None:
+    """Register ``request_path`` (once it can be) as the existing request ``request_id`` of ``environment``."""
+    with _state_lock:
+        _pending_links[(root_key, request_path.casefold())] = {
+            "project_id": str(project_id), "request_id": str(request_id), "environment": str(environment),
+            "until": time.monotonic() + seconds}
+
+
+def pending_link(root_key: str, request_path: str) -> dict[str, Any] | None:
+    key = (root_key, request_path.casefold())
+    with _state_lock:
+        found = _pending_links.get(key)
+        if found and found["until"] < time.monotonic():
+            _pending_links.pop(key, None)
+            return None
+        return dict(found) if found else None
+
+
+def _drop_link(root_key: str, request_path: str) -> None:
+    with _state_lock:
+        _pending_links.pop((root_key, request_path.casefold()), None)
 
 
 def reset_for_tests() -> None:
     with _state_lock:
+        _pending_links.clear()
         _memo.clear()
         _review_memo.clear()
         _retry_memo.clear()
@@ -341,7 +372,8 @@ def _review(relative_path: str, code: str, reason: str, environment: str | None 
 
 def _register_request(conn, root, root_key: str, project_name: str, project_path: str,
                       siblings: list[str], request_path: str, environment: str,
-                      project_targets: set[str], key: str, deadline: float) -> dict[str, Any]:
+                      project_targets: set[str], key: str, deadline: float,
+                      request_target: str | None = None) -> dict[str, Any]:
     """Run scan -> preview -> registration for one new request folder.
 
     Roles come from the depth schema only. The preview carries just the
@@ -376,6 +408,10 @@ def _register_request(conn, root, root_key: str, project_name: str, project_path
     if project_targets:
         assignments.append({"node_id": project_node["id"], "role_kind": "PROJECT", "confirm": True,
                             "target_mode": "LINK", "target_id": next(iter(project_targets))})
+    if request_target:
+        # A skeleton created for an existing request ("폴더 구조 만들기"): link instead of creating one.
+        assignments.append({"node_id": request_node["id"], "role_kind": "REQUEST", "confirm": True,
+                            "target_mode": "LINK", "target_id": request_target})
     sibling_keys = {path.casefold() for path in siblings}
     for node in scanned["nodes"]:
         if node["relative_path"].casefold() in sibling_keys:
@@ -479,6 +515,9 @@ def _discover(conn, root) -> dict[str, Any]:
         unlinked = [(name, path) for name, path in candidates if path.casefold() not in linked["requests"]]
         if not unlinked:
             continue
+        pending = {path.casefold(): link for _, path in unlinked if (link := pending_link(root_key, path))}
+        if not project_targets and pending:
+            project_targets = {next(iter(pending.values()))["project_id"]}
         if not project_targets and project_name.strip().casefold() in linked["unlinked_project_names"]:
             needs_review.append(_review(project_path, "PROJECT_NAME_EXISTS",
                                         "같은 이름의 프로젝트가 이미 있습니다. 폴더 조사에서 기존 프로젝트에 연결하세요."))
@@ -520,8 +559,12 @@ def _discover(conn, root) -> dict[str, Any]:
                 break
             attempts += 1
             siblings = [path for path in all_paths if path.casefold() != folded]
+            link = pending.get(folded)
+            request_target = (link["request_id"] if link and link["environment"] == environment
+                              and link["project_id"] in project_targets else None)
             outcome = _register_request(conn, root, root_key, project_name, project_path, siblings,
-                                        request_path, environment, project_targets, key, deadline)
+                                        request_path, environment, project_targets, key, deadline,
+                                        request_target=request_target)
             if outcome.get("deferred"):
                 stopped = True
                 break
@@ -545,6 +588,8 @@ def _discover(conn, root) -> dict[str, Any]:
                 _retry_memo.pop(memo_key, None)
             registered = outcome["registration"]
             project_id, request_id = str(registered["project_id"]), str(registered["request_id"])
+            if request_target:
+                _drop_link(root_key, request_path)
             if outcome["project_created"]:
                 created_projects.append({"id": project_id, "name": project_name})
             project_targets = {project_id}
@@ -553,7 +598,8 @@ def _discover(conn, root) -> dict[str, Any]:
             linked["keys"].add(key)
             known.add(identity)
             created_requests.append({"id": request_id, "name": outcome["request_name"],
-                                     "environment": environment, "project_id": project_id})
+                                     "environment": environment, "project_id": project_id,
+                                     "linked": bool(request_target)})
     for issue in lister.issues:
         needs_review.append(_review(issue["relative_path"], issue["code"], _ISSUE_REASONS.get(issue["code"], "")))
     return {"created_projects": created_projects, "created_requests": created_requests,

@@ -118,7 +118,8 @@ def test_frontend_menu_registry_matches_server_definitions_exactly():
         r"\{ id: '([^']+)', page: '[^']+', path: '[^']+', label: '[^']+', breadcrumb: \{[^}]+\}, requiredPermission: '([^']+)', contextKind: '([^']+)', navigationKind: '[^']+' \}",
         source,
     )
-    assert [entry for entry in entries if entry[0] != "local_pc"] == [
+    # local_pc (legacy) and notifications (top bar bell, every ACTIVE account) are not menu-policy entries.
+    assert [entry for entry in entries if entry[0] not in {"local_pc", "notifications"}] == [
         (definition.id, definition.required_permission, definition.context_kind)
         for definition in MENU_DEFINITIONS
     ]

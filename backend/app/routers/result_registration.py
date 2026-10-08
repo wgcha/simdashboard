@@ -21,6 +21,7 @@ from ..services.drive import reads as drive_reads
 from ..services.drive import upload_queue
 from ..services.drive.writes import require_drive_writes, require_local_writes
 from ..services import result_drop_upload as drop_service
+from ..services import result_folder_structure as structure_service
 from ..services import result_registration as service
 from ..services import result_registration_locations as location_service
 from ..services.result_registration_paths import ResultRegistrationError
@@ -439,6 +440,22 @@ class DropFolderInput(BaseModel):
     confirm: bool = False
 
 
+class NewRequestFolder(BaseModel):
+    parent_relative_path: str = Field(min_length=1, max_length=2048)
+    name: str = Field(min_length=1, max_length=255)
+
+
+class StructureInput(BaseModel):
+    """"폴더 구조 만들기": one environment's request folder → Working → Case folders."""
+    project_id: str = Field(min_length=1, max_length=128)
+    request_id: str = Field(min_length=1, max_length=128)
+    environment: Literal["USAGE", "DISTRIBUTION"]
+    request_relative_path: str | None = Field(default=None, max_length=2048)
+    new_request_folder: NewRequestFolder | None = None
+    case_names: list[str] = Field(default_factory=list, max_length=structure_service.MAX_CASES)
+    confirm: bool = False
+
+
 def _drop_error(exc: ResultRegistrationError) -> HTTPException:
     if isinstance(exc, drop_service.DropUploadError):
         return HTTPException(exc.status, {"code": exc.code, "message": str(exc), **exc.extra})
@@ -513,6 +530,54 @@ def drop_create_folder(payload: DropFolderInput, request: Request):
         if summary and summary["state"] == "DONE":
             result["sync"] = {**result["sync"], "status": "CREATED", "message": "드라이브에 폴더를 만들었습니다. 1분 안에 반영합니다."}
     return result
+
+
+@router.get("/drop-target/structure")
+@drive_reads.read_session()
+def drop_structure(request: Request, project_id: str, request_id: str,
+                   environment: Literal["USAGE", "DISTRIBUTION"] | None = None,
+                   request_relative_path: str | None = Query(default=None, max_length=2048)):
+    """Request folders per environment for "폴더 구조 만들기" (found, linked, proposed) and Case name suggestions."""
+    with connect() as conn:
+        require_resource_permission(request, RESULT_IMPORT, "request", request_id, conn=conn)
+        try:
+            return structure_service.overview(conn, project_id, request_id, environment=environment,
+                                              request_relative_path=request_relative_path)
+        except ResultRegistrationError as exc:
+            raise _drop_error(exc) from exc
+
+
+@router.post("/drop-target/structure", dependencies=[Depends(require_drive_writes)])
+@drive_reads.read_session()
+def drop_create_structure(payload: StructureInput, request: Request):
+    """Create (or queue on the drive) the empty request folder, Working and Case folders; existing ones are kept."""
+    detail = {"project_id": payload.project_id, "request_id": payload.request_id, "environment": payload.environment,
+              "request_relative_path": payload.request_relative_path,
+              "new_request_folder": payload.new_request_folder.name if payload.new_request_folder else None,
+              "cases": len(payload.case_names)}
+    with connect() as conn:
+        require_resource_permission(request, RESULT_IMPORT, "request", payload.request_id, conn=conn)
+        try:
+            result = structure_service.create(
+                conn, payload.project_id, payload.request_id, payload.environment,
+                request_relative_path=payload.request_relative_path,
+                new_request_folder=payload.new_request_folder.model_dump() if payload.new_request_folder else None,
+                case_names=payload.case_names, confirm=payload.confirm, user_id=request.state.principal.user_id)
+        except ResultRegistrationError as exc:
+            error = _drop_error(exc)
+            if exc.code != "RESULT_STRUCTURE_NAME_WARNING":
+                _drop_audit(request, "RESULT_STRUCTURE_REFUSED", {**detail, "code": exc.code}, status_code=error.status_code)
+            raise error from exc
+        if result["created"] or result.get("queued"):
+            _drop_audit(request, "RESULT_STRUCTURE_QUEUED" if result.get("drive") else "RESULT_STRUCTURE_CREATED", {
+                **detail, "request_relative_path": result["request_relative_path"],
+                "created": [item["relative_path"] for item in result.get("queued") or result["created"]][:50],
+                "batch_id": (result.get("drive") or {}).get("batch_id")}, conn=conn)
+    if result.get("drive"):
+        # SCX drive (D3): the folders are created by the upload queue; wait briefly without a DB connection.
+        result["drive"] = upload_queue.wait_batch(result["drive"]["batch_id"], DRIVE_FOLDER_WAIT_SECONDS)
+        return result
+    return structure_service.link_now(result)
 
 
 @router.post("/drop-uploads/plan")

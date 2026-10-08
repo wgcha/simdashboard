@@ -17,7 +17,10 @@ FINAL = "FINAL"
 LEGACY = "LEGACY"
 # W8 result drop upload: ``<request>/Working/**`` (folders, staged chunks, published files).
 WORKING = "WORKING"
-WRITE_ZONES = frozenset({FINAL, LEGACY, WORKING})
+# Result folder structure: the request skeleton above the Case level — an environment request
+# folder (``…/<name with exactly one 사용/유통 keyword>``) and its ``Working`` folder. Folders only.
+SKELETON = "SKELETON"
+WRITE_ZONES = frozenset({FINAL, LEGACY, WORKING, SKELETON})
 
 # Contract error codes (§2).  Legacy callers keep receiving ``SpdmStorageError``
 # with their existing ``SPDM_*``/``FINALIZATION_*`` codes; these codes are used
@@ -37,7 +40,11 @@ FINAL_WRITER_MODULES = frozenset({"app.services.case_finalization"})
 UPLOAD_STAGING_DIR = ".simdash-upload"
 
 # S3 ③ WORKING zone: written only by the W8 drag & drop upload (never replaces files).
-WORKING_WRITER_MODULES = frozenset({"app.services.result_drop_upload"})
+WORKING_WRITER_MODULES = frozenset({"app.services.result_drop_upload", "app.services.result_folder_structure"})
+
+# S3 ④ SKELETON zone: written only by "폴더 구조 만들기" (result_folder_structure, mkdir_pinned only).
+SKELETON_WRITER_MODULES = frozenset({"app.services.result_folder_structure"})
+_ENVIRONMENT_KEYWORDS = ("사용", "유통")
 
 # S3 ② LEGACY zone: behaviour-preserving writers only, never new callers.
 LEGACY_WRITER_MODULES = frozenset({
@@ -153,6 +160,27 @@ def working_zone_allows(rel_path: str) -> bool:
     return index >= 2 and "final" not in parts[:index] and len(parts) > index + 1
 
 
+def skeleton_zone_allows(rel_path: str) -> bool:
+    """An environment request folder or exactly its ``Working`` folder (S3 ④).
+
+    Request folder: at least one folder above it (project), its name carries exactly one of the
+    environment keywords ``사용``/``유통`` (depth schema D4) and no segment is ``Working``/``Final``.
+    ``Working``: the last segment, at least two folders above it, none of them ``Working``/``Final``.
+    Never ``.``/``..`` or hidden (``.``/``$``/``~``) segments.
+    """
+    raw = _segments(rel_path)
+    parts = [part.casefold() for part in raw]
+    if len(parts) < 2 or any(part in {"", ".", ".."} or part.startswith((".", "$", "~")) for part in parts):
+        return False
+    if any(part in {"working", "final"} for part in parts[:-1]):
+        return False
+    if parts[-1] == "working":
+        return len(parts) >= 3
+    if parts[-1] == "final":
+        return False
+    return sum(keyword in raw[-1] for keyword in _ENVIRONMENT_KEYWORDS) == 1
+
+
 def check_write(rel_path: str, zone: str, caller: str) -> None:
     if zone == FINAL and caller in FINAL_WRITER_MODULES and final_zone_allows(rel_path):
         return
@@ -160,11 +188,13 @@ def check_write(rel_path: str, zone: str, caller: str) -> None:
         return
     if zone == LEGACY and caller in LEGACY_WRITER_MODULES and legacy_zone_allows(rel_path, caller):
         return
+    if zone == SKELETON and caller in SKELETON_WRITER_MODULES and skeleton_zone_allows(rel_path):
+        return
     raise StorageError(NOT_ALLOWED_WRITE, "허용된 SPDM 쓰기 구역 밖의 경로입니다.")
 
 
 __all__ = [
-    "Entry", "FINAL", "FINAL_SUMMARY_FILE", "UPLOAD_STAGING_DIR", "WORKING", "WORKING_WRITER_MODULES", "working_zone_allows", "FINAL_WRITER_MODULES", "LEGACY", "LEGACY_WRITER_MODULES", "NOT_ALLOWED_WRITE", "NOT_FOUND", "FORBIDDEN",
+    "Entry", "FINAL", "FINAL_SUMMARY_FILE", "SKELETON", "SKELETON_WRITER_MODULES", "skeleton_zone_allows", "UPLOAD_STAGING_DIR", "WORKING", "WORKING_WRITER_MODULES", "working_zone_allows", "FINAL_WRITER_MODULES", "LEGACY", "LEGACY_WRITER_MODULES", "NOT_ALLOWED_WRITE", "NOT_FOUND", "FORBIDDEN",
     "UNAVAILABLE", "LIMIT", "SpdmStorageError", "StorageError", "StorageProvider", "WRITE_ZONES",
     "check_write", "final_zone_allows", "legacy_zone_allows", "Iterator",
 ]

@@ -1,11 +1,10 @@
 import { expect, test, type Page, type Locator } from '@playwright/test'
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
-import { loginWorkspace, openWorkspaceRoute } from './workspace-test-helpers'
+import { loginWorkspace, openWorkspaceRoute, setWorkspaceFontSize } from './workspace-test-helpers'
 
-async function fontSize(page: Page, from: number, to: number) {
-  const control = page.getByRole('button', { name: to > from ? '전체 글자 크기 늘리기' : '전체 글자 크기 줄이기', exact: true })
-  for (let n = 0; n < Math.abs(to - from); n++) await control.click()
+async function fontSize(page: Page, _from: number, to: number) {
+  await setWorkspaceFontSize(page, to)
 }
 
 async function checkSurface(page: Page, root: Locator, heading: string, pt: number) {

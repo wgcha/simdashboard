@@ -385,6 +385,8 @@ _ALL_COLUMNS = sorted({
     "created_by", "confirmed_by", "queued_at",
     # materials parse cache (migration 0039)
     "solver", "parser_version", "deck_json", "dependencies_json", "blob_sha256", "parse_seconds",
+    # notifications (migration 0040)
+    "user_id", "type", "severity", "title", "body", "link", "dedupe_key", "read_at",
 })
 
 

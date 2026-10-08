@@ -56,6 +56,7 @@ from .routers.folder_environment_profiles import router as folder_environment_pr
 from .routers.media import router as media_router
 from .routers.managed_local_execution import router as managed_local_execution_router
 from .routers.voc import router as voc_router
+from .routers.notifications import router as notifications_router
 from .routers.drive import admin_router as drive_admin_router, status_router as drive_status_router
 from .routers.semantic_mapping import router as semantic_mapping_router
 from .routers.semantic_activation import router as semantic_activation_router
@@ -149,6 +150,7 @@ app.include_router(folder_environment_requests_router)
 app.include_router(semantic_vocabulary_router)
 app.include_router(drive_admin_router)
 app.include_router(drive_status_router)
+app.include_router(notifications_router)
 
 
 def media_storage_mode() -> app_config.MediaStorageMode:

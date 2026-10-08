@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent } from 'react'
-import { AlertTriangle, CheckCircle2, Copy, FilePlus2, FolderInput, FolderPlus, LoaderCircle, Square, UploadCloud } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Copy, FilePlus2, FolderInput, FolderPlus, FolderTree, LoaderCircle, Square, UploadCloud } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { api } from '../../api'
 import type { AnalysisRequest, Project } from '../../types'
@@ -15,6 +15,7 @@ import { DRIVE_READ_ONLY_NOTICE, type DriveUploadBatch } from '../../shared/api/
 import { useDriveWriteStatus } from '../../shared/hooks/useDriveWriteStatus'
 import { DriveBatchProgress } from '../../shared/components/DriveBatchProgress'
 import { LegacyDraftHistory } from './LegacyDraftHistory'
+import { ResultStructureDialog } from './ResultStructureDialog'
 import './DataWorkspace.css'
 import './ResultDropWorkspace.css'
 
@@ -96,6 +97,7 @@ export function ResultDropWorkspace({ embedded = false, contextChanging = false,
   const [openSessions, setOpenSessions] = useState<OpenDropSession[]>([])
   const [sessionsVersion, setSessionsVersion] = useState(0)
   const [partialBusy, setPartialBusy] = useState(false)
+  const [structureOpen, setStructureOpen] = useState(false)
   const fileInput = useRef<HTMLInputElement | null>(null)
   const folderInput = useRef<HTMLInputElement | null>(null)
   const scopeKey = `${projectId}:${requestId}:${environment}`
@@ -321,6 +323,11 @@ export function ResultDropWorkspace({ embedded = false, contextChanging = false,
       setNotice('업로드를 중지했습니다. 옮기지 못한 임시 파일과 빈 새 폴더를 지웠습니다.')
     } catch (reason) { setError(messageOf(reason, '중지하지 못했습니다.')) } finally { setPartialBusy(false); setSessionsVersion((value) => value + 1) }
   }
+  // "폴더 구조 만들기" created folders: re-read the Working tree and the request's data.
+  const structureCreated = useCallback(() => {
+    setTreeVersion((value) => value + 1)
+    void onDataChanged().catch(() => undefined)
+  }, [onDataChanged])
   const otherOpen = openSessions.filter((item) => item.session_id !== completion?.session_id && item.session_id !== progress?.sessionId)
 
   const activeProject = projects.find((item) => item.id === projectId)
@@ -347,10 +354,12 @@ export function ResultDropWorkspace({ embedded = false, contextChanging = false,
     <section className="result-drop__card" aria-labelledby="result-drop-location-title">
       <header className="result-drop__head">
         <div><span>01 · 위치</span><h3 id="result-drop-location-title">넣을 폴더 선택</h3></div>
+        <Button size="sm" variant="ghost" onClick={() => setStructureOpen(true)} disabled={!projectId || !requestId || busy} title="환경별 의뢰 폴더 아래에 Working과 Case 폴더를 만듭니다."><FolderTree aria-hidden="true" />폴더 구조 만들기</Button>
         <label className="result-drop__env"><span>환경</span><Select controlSize="sm" aria-label="결과 등록 환경" value={environment} disabled={busy || Boolean(lockedEnvironment)} title={lockedEnvironment ? '의뢰에 등록된 Case의 환경으로 정했습니다.' : undefined} onChange={(event) => setEnvironment(event.target.value as DropEnvironment)}><option value="DISTRIBUTION">유통환경</option><option value="USAGE">사용환경</option></Select></label>
       </header>
       {treeBusy ? <p className="result-drop__state" role="status"><LoaderCircle className="result-drop__spin" aria-hidden="true" /> 의뢰 폴더를 확인하는 중</p> : null}
       {treeError ? <p className="result-drop__error" role="alert"><AlertTriangle aria-hidden="true" />{treeError}</p> : null}
+      {treeError ? <p className="result-drop__muted">SPDM이 의뢰 폴더만 만들었다면 <b>폴더 구조 만들기</b>로 Working과 Case 폴더를 만드세요.</p> : null}
       {!projectId || !requestId ? <p className="result-drop__state">{activeProject ? '의뢰를 선택하세요.' : '프로젝트와 의뢰를 선택하세요.'}</p> : null}
       {tree ? <>
         <HierarchyPath label="결과 등록 위치" className="result-drop__path">
@@ -445,6 +454,7 @@ export function ResultDropWorkspace({ embedded = false, contextChanging = false,
       </li>)}</ul>
     </section> : null}
 
+    {structureOpen && projectId && requestId ? <ResultStructureDialog projectId={projectId} requestId={requestId} readOnly={readOnly} onClose={() => setStructureOpen(false)} onCreated={structureCreated} /> : null}
     {projectId && requestId ? <LegacyDraftHistory projectId={projectId} requestId={requestId} environment={environment} resultsHref={(caseId) => caseResultsHref(projectId, requestId, environment, caseId)} /> : null}
   </section>
 }

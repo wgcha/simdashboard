@@ -43,6 +43,7 @@ PC 개인 실행 환경 지원과 향후 중앙 배치 방향은 [실행 환경 
 |---|---|
 | SCX 드라이브 모드 설정·토큰 등록·드라이브 점검(D0) | [`features/scx-drive.md`](features/scx-drive.md) |
 | 사용환경 소재·물성(OptiStruct 입력 위치·백그라운드 분석·캐시) | [`features/materials-optistruct.md`](features/materials-optistruct.md) |
+| 알림(상단 알림 아이콘·알림 페이지·이벤트·수신자·보관) | [`features/notifications.md`](features/notifications.md) |
 | 개인 회원가입·비밀번호 변경·과거 도우미 설치 구현 | [`personal-onboarding-implementation.md`](personal-onboarding-implementation.md) |
 | 개인 계정 첫 화면·기존 사내 설치 전환 검토와 개발 계획 | [`personal-account-entry-rollout-plan.md`](personal-account-entry-rollout-plan.md) |
 | 개인 계정 최초 관리자·업데이트·검증 기록 | [`personal-account-rollout-runbook.md`](personal-account-rollout-runbook.md) |

@@ -39,6 +39,7 @@ import { createClientId } from './shared/identity/clientId'
 import { BootstrapWorkspaceShell } from './features/bootstrap/BootstrapWorkspaceShell'
 import { NoAvailableWorkspaceMenu } from './features/bootstrap/NoAvailableWorkspaceMenu'
 import { VocRoute } from './app/workspace/VocRoute'
+import { NotificationsRoute } from './app/workspace/NotificationsRoute'
 import { ChangePasswordDialog } from './features/auth/ChangePasswordDialog'
 import type { InitialWorkspace } from './features/bootstrap/loadInitialWorkspace'
 import { useWorkspaceBootstrap } from './features/bootstrap/useWorkspaceBootstrap'
@@ -46,7 +47,7 @@ import { AppShell, AppShellMain, AppTopbar } from './app/shell/AppShell'
 import { AppSidebar } from './app/shell/AppSidebar'
 import { ProjectSetupState } from './app/workspace/ProjectSetupState'
 import { loadWorkspacePreferences, saveWorkspacePreference, type WorkspaceTheme } from './app/preferences/workspacePreferences'
-import { useWorkspaceDocumentFontSize, workspaceFontSizeStyle } from './app/preferences/workspaceFontSizeStyle'
+import { useWorkspaceDocumentFontSize, useWorkspaceFontSizeStorageSync, workspaceFontSizeStyle } from './app/preferences/workspaceFontSizeStyle'
 import { CASE_RESULTS_VIEW, caseResultsContext, isCaseResultsView } from './app/routing/caseResultsRouting'; import { useWorkspaceNavigation } from './app/routing/useWorkspaceNavigation'; import { useWorkspaceContextRestore } from './app/routing/useWorkspaceContextRestore'; import { isRequestScopedPage, scopeWorkspaceContext, usesBootstrapFallback } from './app/routing/workspaceNavigationPolicy'
 import { pageView, preferredPage, visiblePages, type ActiveView } from './features/analysis/pageSelection'
 import { DEFAULT_PORTFOLIO_LAYOUT, DEFAULT_WORKFLOW_DASHBOARD_LAYOUT, loadPortfolioLayout, loadWorkflowDashboardLayout } from './features/layouts/layoutDefaults'
@@ -82,7 +83,7 @@ function App() {
   const { authCheckFailed, authError, authMode, authReady, authRequired, authUser, expire, login: handleLogin, logout: authLogout, refreshAccess, registrationEnabled, retryAuth, setupReason, setupRequired } = useAuthSession({
     onAccessChanged: (_user, policy) => { setMenuPolicy(policy); setMenuPolicyReady(true) },
     onAccessRefreshFailed: () => { setMenuPolicy(null); setMenuPolicyReady(true) } })
-  useWorkspaceDocumentFontSize(authReady && !authCheckFailed && !setupRequired && authUser?.account_status !== 'PENDING' && (!authRequired || authUser?.account_status === 'ACTIVE'), uiFontSize)
+  useWorkspaceDocumentFontSize(authReady && !authCheckFailed && !setupRequired && authUser?.account_status !== 'PENDING' && (!authRequired || authUser?.account_status === 'ACTIVE'), uiFontSize); useWorkspaceFontSizeStorageSync(setUiFontSize)
   const [overview, setOverview] = useState<Overview | null>(null)
   const [projects, setProjects] = useState<Project[]>([])
   const [requests, setRequests] = useState<AnalysisRequest[]>([])
@@ -875,8 +876,9 @@ function App() {
   if (authUser?.account_status === 'PENDING') {
     return <ApprovalPendingScreen displayName={authUser.display_name} onLogout={() => void logout()} />
   }
+  if (workspacePage === 'notifications' && menuPolicyReady && authUser?.account_status === 'ACTIVE') return <NotificationsRoute authMode={authMode} user={authUser} menus={visibleMenus} databaseBackend={databaseBackend} theme={theme} fontSize={uiFontSize} onThemeChange={setTheme} onLogout={() => void logout()} onNavigate={enterWorkspace} />
   if (workspacePage === 'voc' && menuPolicyReady && authUser?.account_status === 'ACTIVE' && allowedPages.has('voc')) {
-    return <VocRoute authMode={authMode} user={authUser} menus={visibleMenus} databaseBackend={databaseBackend} theme={theme} fontSize={uiFontSize} onFontSizeChange={setUiFontSize} onThemeChange={setTheme} onLogout={() => void logout()} onNavigate={enterWorkspace} />
+    return <VocRoute authMode={authMode} user={authUser} menus={visibleMenus} databaseBackend={databaseBackend} theme={theme} fontSize={uiFontSize} onThemeChange={setTheme} onLogout={() => void logout()} onNavigate={enterWorkspace} />
   }
   if ((workspaceBootstrap.status === 'idle' || workspaceBootstrap.status === 'loading') && !isPersonalOnlyAccount(authUser)) {
     return <div className="full-state"><LoaderCircle className="spin" /> 데이터와 레이아웃을 준비하고 있습니다.</div>
@@ -960,14 +962,11 @@ function App() {
         accountKey={authUser?.id}
         authMode={authMode}
         databaseBackend={databaseBackend}
-        fontSize={uiFontSize}
         menus={visibleMenus}
         signedIn={Boolean(authUser)}
         theme={theme}
         userBadge={authUser ? authUser.is_global_admin ? 'GLOBAL ADMIN' : authUser.memberships.find((item) => item.project_id === selectedProjectId)?.role.toUpperCase() ?? 'NONMEMBER' : undefined}
         userDisplayName={authUser?.display_name}
-        onDecreaseFontSize={() => setUiFontSize((value) => Math.max(11, value - 1))}
-        onIncreaseFontSize={() => setUiFontSize((value) => Math.min(18, value + 1))}
         onLogout={() => void logout()}
         onNavigate={enterWorkspace}
         onPreloadPage={preloadWorkspaceRouteModule}

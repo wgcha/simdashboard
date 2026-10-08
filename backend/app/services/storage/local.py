@@ -21,7 +21,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO, Callable, Iterable, Iterator, Literal, NamedTuple
 
 from .provider import (
-    FINAL, LEGACY, NOT_ALLOWED_WRITE, WORKING, Entry, SpdmStorageError, StorageError, check_write,
+    FINAL, LEGACY, NOT_ALLOWED_WRITE, SKELETON, WORKING, Entry, SpdmStorageError, StorageError, check_write,
 )
 
 _STORAGE_PACKAGE = __name__.rsplit(".", 1)[0]
@@ -1004,6 +1004,9 @@ class LocalFsProvider:
             raise StorageError(NOT_ALLOWED_WRITE, "허용된 SPDM 쓰기 구역 밖의 경로입니다.")
 
     def _check(self, zone: str, *rel_paths: str) -> None:
+        if zone == SKELETON and sys._getframe(1).f_code.co_name != "mkdir_pinned":
+            # S3 ④: the request skeleton zone only creates folders below a pinned parent.
+            raise StorageError(NOT_ALLOWED_WRITE, "허용된 SPDM 쓰기 구역 밖의 경로입니다.")
         caller = _caller_module()
         for rel_path in rel_paths:
             check_write(rel_path, zone, caller)

@@ -27,6 +27,7 @@ const expectedPaths = {
   examples: '/workspace/examples',
   help: '/workspace/help',
   voc: '/workspace/voc',
+  notifications: '/workspace/notifications',
 }
 
 const paths = new Set()

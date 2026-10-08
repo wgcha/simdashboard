@@ -90,6 +90,8 @@ class _PostgresStartupConnection:
                 "materials_deck_cache": {"id", "root_key", "rel_path", "solver", "parser_version", "fingerprint",
                                          "size_bytes", "status", "deck_json", "dependencies_json", "blob_sha256",
                                          "error_code", "error_message", "parse_seconds", "created_at", "updated_at"},
+                "notifications": {"id", "user_id", "type", "severity", "title", "body", "link", "project_id",
+                                  "request_id", "dedupe_key", "created_at", "read_at"},
             }[table]
             return _FakeResult([] if self.missing_column in columns else [(column,) for column in columns])
         raise AssertionError(f"unexpected startup query: {statement}")

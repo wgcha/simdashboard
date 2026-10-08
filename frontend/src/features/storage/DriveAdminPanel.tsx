@@ -59,7 +59,7 @@ function CheckTable({ report }: { report: DriveCheckReport }) {
 }
 
 const KIND_TEXT: Record<string, string> = { MKDIR: '폴더', COPY: '드라이브 안 복사', FILE: '업로드', COMPLETE_MARKER: '완료 표시' }
-const ORIGIN_TEXT: Record<string, string> = { result_drop: '결과 등록', finalization: 'Final 지정', final_designation: '현재 Final 요약' }
+const ORIGIN_TEXT: Record<string, string> = { result_drop: '결과 등록', result_structure: '폴더 구조 만들기', finalization: 'Final 지정', final_designation: '현재 Final 요약' }
 const METHOD_TEXT: Record<string, string> = { COPY_WITHIN: 'copy_within', DOWNLOAD_UPLOAD: '다운로드→업로드' }
 
 /** D3 drive upload queue: open items (and those finished in the last day); retry, cancel, resume. */

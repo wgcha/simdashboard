@@ -19,8 +19,6 @@ type WorkspaceShellLayoutProps = {
   topbarBreadcrumb: ReactNode
   user: AuthUser | null
   userBadge?: string
-  onDecreaseFontSize: () => void
-  onIncreaseFontSize: () => void
   onLogout: () => void
   onNavigate: (id: MenuId) => void
   onPreloadPage: (id: MenuId) => void
@@ -39,8 +37,6 @@ export function WorkspaceShellLayout({
   topbarBreadcrumb,
   user,
   userBadge,
-  onDecreaseFontSize,
-  onIncreaseFontSize,
   onLogout,
   onNavigate,
   onPreloadPage,
@@ -52,14 +48,11 @@ export function WorkspaceShellLayout({
       accountKey={user?.id}
       authMode={authMode}
       databaseBackend={databaseBackend}
-      fontSize={fontSize}
       menus={menus}
       signedIn={Boolean(user)}
       theme={theme}
       userBadge={userBadge}
       userDisplayName={user?.display_name}
-      onDecreaseFontSize={onDecreaseFontSize}
-      onIncreaseFontSize={onIncreaseFontSize}
       onLogout={onLogout}
       onNavigate={onNavigate as (id: AppSidebarMenuId) => void}
       onPreloadPage={onPreloadPage as (id: AppSidebarMenuId) => void}

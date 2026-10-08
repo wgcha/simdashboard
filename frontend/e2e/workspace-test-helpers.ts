@@ -23,6 +23,13 @@ export async function openWorkspaceRoute(page: Page, pathname: string) {
   await expect(sidebar).toBeVisible()
   const mobileMenu = sidebar.getByRole('button', { name: '메뉴 열기', exact: true })
   if (await mobileMenu.isVisible()) await mobileMenu.click()
+  if (pathname === '/workspace/notifications') {
+    // Not a sidebar menu: the top bar bell → 모두 보기 (2026-10-08).
+    await page.getByTestId('notification-bell').first().click()
+    await page.getByRole('dialog', { name: '최근 알림' }).getByRole('button', { name: '모두 보기', exact: true }).click()
+    await expect(page).toHaveURL(/\/workspace\/notifications(\?|$)/)
+    return
+  }
   const link = sidebar.locator(`a[href="${pathname}"], a[href^="${pathname}?"]`)
   if (pathname === '/workspace/overview' || pathname === '/workspace/requests') {
     await expect(link).toHaveCount(1)
@@ -78,15 +85,19 @@ export async function loginWorkspace(page: Page, username = 'e2e-admin', pathnam
   await expect(page.getByRole('complementary', { name: '주 메뉴' })).toBeVisible()
 }
 
-/** Set the global font size (11–18 pt) with the sidebar buttons. */
+export const WORKSPACE_FONT_SIZE_STORAGE_KEY = 'simdashboard.workspace.font-size-pt.v1'
+
+/**
+ * Set the global font size (11–18 pt). The sidebar buttons are hidden (user decision 2026-10-08):
+ * write the stored preference and announce it like another tab would (``storage`` event); the
+ * app applies it without a reload, so layout checks still measure the same session.
+ */
 export async function setWorkspaceFontSize(page: Page, points: number) {
-  for (let step = 0; step < 8; step++) {
-    const current = (await page.locator('.app-shell').evaluate((element) => getComputedStyle(element).getPropertyValue('--ui-font-size'))).trim()
-    const value = Number.parseFloat(current)
-    if (value === points) return
-    await page.getByRole('button', { name: value < points ? '전체 글자 크기 늘리기' : '전체 글자 크기 줄이기', exact: true }).click()
-  }
-  await expect(page.locator('.app-shell')).toHaveCSS('--ui-font-size', `${points}pt`)
+  await page.evaluate(({ key, value }) => {
+    window.localStorage.setItem(key, String(value))
+    window.dispatchEvent(new StorageEvent('storage', { key, newValue: String(value), storageArea: window.localStorage }))
+  }, { key: WORKSPACE_FONT_SIZE_STORAGE_KEY, value: points })
+  await expect.poll(() => page.evaluate(() => document.documentElement.style.getPropertyValue('--ui-font-size'))).toBe(`${points}pt`)
 }
 
 type Box = { x: number; y: number; width: number; height: number }

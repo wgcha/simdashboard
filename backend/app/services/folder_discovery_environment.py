@@ -22,6 +22,7 @@ from . import spdm_storage
 from .folder_discovery_scan import MAX_SECONDS, relevant_content_fingerprint, root_identity, scan, stat_fingerprint
 from .environment_folder_profiles import resolve_role
 from . import usage_source_review
+from . import notifications
 
 ENVIRONMENTS = ("USAGE", "DISTRIBUTION")
 ROLES = {
@@ -256,8 +257,11 @@ def profile_rules(conn, profile_id: str):
 
 
 def refresh_scope(conn, root, project_id: str, request_id: str, environment: str,
-                  actor: str, *, capture_cases: bool = True) -> dict:
-    """Rescan one request and atomically activate its canonical Folder Schema snapshot."""
+                  actor: str, *, capture_cases: bool = True, notify_new_results: bool = False) -> dict:
+    """Rescan one request and atomically activate its canonical Folder Schema snapshot.
+
+    ``notify_new_results`` (auto-sync): new Cases/Scenes compared with the previous active
+    snapshot become one notification for the request's members in the snapshot transaction."""
     from . import folder_schema_resolver as resolver
 
     environment = str(environment).upper()
@@ -661,6 +665,10 @@ def refresh_scope(conn, root, project_id: str, request_id: str, environment: str
                 "폴더 새로고침 중 결과 캡처를 완료하지 못해 이전 스냅샷을 유지했습니다.",
                 422,
             )
+        if notify_new_results and previous and not revision_only_unchanged:
+            cases, scenes = _new_result_nodes(diff_baseline_nodes, scoped_nodes, resolver)
+            notifications.new_results(conn, project_id, request_id, environment, cases=cases, scenes=scenes,
+                                      snapshot_id=snapshot_id)
         conn.execute("COMMIT")
     except BaseException:
         conn.execute("ROLLBACK")
@@ -689,6 +697,16 @@ def _newer_depth_registration(conn, root_key, project_id, request_id, environmen
             or not environment_folder_profiles.is_depth_rules(decoded(found[2]))):
         return None
     return str(found[0])
+
+
+def _new_result_nodes(previous_nodes: list[dict], current_nodes: list[dict], resolver) -> tuple[int, int]:
+    """(new confirmed Cases, new Scenes/evaluations) of a refresh; Final copies never count."""
+    def keys(nodes: list[dict], kinds: set[str]) -> set[str]:
+        return {resolver._fold(str(node.get("relative_path") or "")) for node in nodes
+                if node.get("role_kind") in kinds and node.get("status") == "CONFIRMED" and not is_final_segment(node)}
+    cases = keys(current_nodes, {"SIMULATION_CASE"}) - keys(previous_nodes, {"SIMULATION_CASE"})
+    scenes = keys(current_nodes, {"SCENE", "EVALUATION"}) - keys(previous_nodes, {"SCENE", "EVALUATION"})
+    return len(cases), len(scenes)
 
 
 def _refresh_diff(previous_nodes: list[dict], current_nodes: list[dict], resolver) -> dict[str, int]:
@@ -1581,6 +1599,7 @@ def register(conn, preview_id, idempotency_key, capture, principal, root, *, cre
                     "WHERE registration_id=? AND status IN ('PENDING','RUNNING')",
                     [error_code, now(), registration_id],
                 )
+                notifications.capture_failed(conn, registration_id, actor)
                 return registration(conn, registration_id)
             for entry in [r for r in plan_rows if r["role_kind"] == "SIMULATION_CASE"]:
                 case_id = dashboard_capture._case_id(dashboard_capture._root_id(root), entry["relative_path"])
@@ -1601,6 +1620,7 @@ def register(conn, preview_id, idempotency_key, capture, principal, root, *, cre
                     conn.execute("ROLLBACK")
                     conn.execute("BEGIN TRANSACTION")
                     conn.execute("UPDATE folder_environment_capture_jobs SET status='FAILED',error_code=?,updated_at=? WHERE id=?", [exc.code, now(), job_id])
+                    notifications.capture_failed(conn, registration_id, actor)
                     conn.execute("COMMIT")
                 except BaseException:
                     conn.execute("ROLLBACK")
@@ -1710,6 +1730,7 @@ def retry(conn, registration_id, job_ids, principal=None, root=None):
             if jobs:
                 marks = ",".join("?" for _ in jobs)
                 conn.execute(f"UPDATE folder_environment_capture_jobs SET status='FAILED',error_code='ENVIRONMENT_PROFILE_STALE',updated_at=? WHERE id IN ({marks})", [now(), *[job["id"] for job in jobs]])
+                notifications.capture_failed(conn, registration_id, principal.user_id)
             return registration(conn, registration_id)
         try:
             location_projection = _registration_location_projection(
@@ -1729,6 +1750,7 @@ def retry(conn, registration_id, job_ids, principal=None, root=None):
                     f"WHERE id IN ({marks}) AND status='PENDING'",
                     [error_code, now(), *[job["id"] for job in jobs]],
                 )
+                notifications.capture_failed(conn, registration_id, principal.user_id)
             return registration(conn, registration_id)
         # SCX drive (L1): from the first job commit on, a read miss fails that job (retryable,
         # DRIVE_READ_NOT_PREPARED) instead of repeating the endpoint; the steps before only re-mark jobs.
@@ -1739,12 +1761,14 @@ def retry(conn, registration_id, job_ids, principal=None, root=None):
                     registration_row = conn.execute("SELECT project_id,request_id,environment FROM folder_environment_registrations WHERE id=?", [registration_id]).fetchone()
                     entry = next((row for row in plan_rows if row.get("role_kind") == "SIMULATION_CASE" and dashboard_capture._case_id(dashboard_capture._root_id(root), row["relative_path"]) == job["case_id"]), None)
                     if not registration_row or not entry:
-                        conn.execute("UPDATE folder_environment_capture_jobs SET status='FAILED',error_code='CAPTURE_CONTEXT_MISSING',updated_at=? WHERE id=?", [now(), job["id"]]); continue
+                        conn.execute("UPDATE folder_environment_capture_jobs SET status='FAILED',error_code='CAPTURE_CONTEXT_MISSING',updated_at=? WHERE id=?", [now(), job["id"]])
+                        notifications.capture_failed(conn, registration_id, principal.user_id); continue
                     case = (entry.get("project_id") or registration_row[0], entry.get("request_id") or registration_row[1], entry["relative_path"], registration_row[2], dashboard_capture._root_id(root))
                 else:
                     entry = next((row for row in plan_rows if row.get("role_kind") == "SIMULATION_CASE" and row["relative_path"] == case[2]), None)
                 if not entry:
-                    conn.execute("UPDATE folder_environment_capture_jobs SET status='FAILED',error_code='CAPTURE_CONTEXT_MISSING',updated_at=? WHERE id=?", [now(), job["id"]]); continue
+                    conn.execute("UPDATE folder_environment_capture_jobs SET status='FAILED',error_code='CAPTURE_CONTEXT_MISSING',updated_at=? WHERE id=?", [now(), job["id"]])
+                    notifications.capture_failed(conn, registration_id, principal.user_id); continue
                 conn.execute("BEGIN TRANSACTION")
                 try:
                     conn.execute("UPDATE folder_environment_capture_jobs SET status='RUNNING',updated_at=? WHERE id=?", [now(), job["id"]])
@@ -1762,11 +1786,13 @@ def retry(conn, registration_id, job_ids, principal=None, root=None):
                     conn.execute("ROLLBACK")
                     conn.execute("BEGIN TRANSACTION")
                     conn.execute("UPDATE folder_environment_capture_jobs SET status='FAILED',error_code=?,updated_at=? WHERE id=?", [exc.code, now(), job["id"]])
+                    notifications.capture_failed(conn, registration_id, principal.user_id)
                     conn.execute("COMMIT")
                 except Exception:
                     conn.execute("ROLLBACK")
                     conn.execute("BEGIN TRANSACTION")
                     conn.execute("UPDATE folder_environment_capture_jobs SET status='FAILED',error_code=?,updated_at=? WHERE id=?", ["CAPTURE_UNEXPECTED_ERROR", now(), job["id"]])
+                    notifications.capture_failed(conn, registration_id, principal.user_id)
                     conn.execute("COMMIT")
     return registration(conn, registration_id)
 

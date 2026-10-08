@@ -41,6 +41,7 @@ from typing import Any, Iterable
 from ...database_connection import ConnectionLike, connect, connection_held, rows
 from ..storage.provider import SpdmStorageError
 from . import reads
+from .. import notifications
 from .reads import Accepted, Version, epoch_us, normal_sha1, version_of
 
 AUTO_ACTOR = "auto-sync"
@@ -323,6 +324,8 @@ def classify_request(session: reads.DriveReadSession, project_id: str, request_i
             continue
         updates.append((str(row["id"]), {"source_state": "MISSING", "last_checked_at": now}))
 
+    newly_pending = any(fields.get("review_state") == "PENDING" for _row_id, fields in updates)
+    newly_missing = any(fields.get("source_state") == "MISSING" for _row_id, fields in updates)
     with connect() as conn:
         relabel = bool(conn.execute(
             "SELECT 1 FROM drive_source_versions WHERE root_key=? AND superseded_at IS NULL AND substr(rel_path,1,?)=? "
@@ -344,6 +347,12 @@ def classify_request(session: reads.DriveReadSession, project_id: str, request_i
                              "AND (project_id IS NULL OR request_id IS NULL OR project_id<>? OR request_id<>?)",
                              [project_id, request_id, session.root_key, len(request_path) + 1, request_path.rstrip("/") + "/",
                               project_id, request_id])
+                if newly_pending or newly_missing:
+                    counts = summary(conn, session.root_key, str(project_id), str(request_id))
+                    notifications.drive_sources_changed(
+                        conn, str(project_id), str(request_id),
+                        changed=counts["pending_changes"] if newly_pending else 0,
+                        missing=counts["missing"] if newly_missing else 0)
                 conn.execute("COMMIT")
             except BaseException:
                 conn.execute("ROLLBACK")

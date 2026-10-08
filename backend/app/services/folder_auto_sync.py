@@ -181,7 +181,7 @@ def _check_scope(conn, root, root_key: str, key, project_id: str, request_id: st
             return {**result, "coalesced": False}
         with folder_discovery.WRITE_LOCK:
             refreshed = folder_discovery_environment.refresh_scope(
-                conn, root, project_id, request_id, environment, actor)
+                conn, root, project_id, request_id, environment, actor, notify_new_results=True)
             refreshed_fp = refreshed.get("stat_fingerprint")
             if (refreshed.get("status") == "UNCHANGED" and refreshed.get("snapshot_id") and refreshed_fp):
                 _store_quick_fingerprint(conn, str(refreshed["snapshot_id"]), str(refreshed_fp))

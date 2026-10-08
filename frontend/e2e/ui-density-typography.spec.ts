@@ -1,15 +1,10 @@
 import { expect, test, type Page } from '@playwright/test'
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
-import { loginWorkspace, openWorkspaceRoute } from './workspace-test-helpers'
+import { loginWorkspace, openWorkspaceRoute, setWorkspaceFontSize } from './workspace-test-helpers'
 
-async function setFont(page: Page, current: number, target: number, mobile: boolean) {
-  const sidebar = page.getByRole('complementary', { name: '주 메뉴' })
-  if (mobile) await sidebar.getByRole('button', { name: '메뉴 열기', exact: true }).click()
-  const button = sidebar.getByRole('button', { name: target < current ? '전체 글자 크기 줄이기' : '전체 글자 크기 늘리기', exact: true })
-  for (let i = 0; i < Math.abs(target - current); i++) await button.click()
-  if (target === 11 || target === 18) await expect(button).toBeDisabled()
-  if (mobile) await sidebar.getByRole('button', { name: '메뉴 닫기', exact: true }).click()
+async function setFont(page: Page, _current: number, target: number, _mobile: boolean) {
+  await setWorkspaceFontSize(page, target)
 }
 
 for (const width of [1366, 1920]) {

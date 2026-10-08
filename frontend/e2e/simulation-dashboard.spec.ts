@@ -439,7 +439,7 @@ test('chart modes preserve missing and unordered scenes and expanded charts clos
   const numericTicks = (await summary.locator('.recharts-xAxis .recharts-cartesian-axis-tick-value').allTextContents()).filter((label) => /^\d+$/.test(label)).map(Number)
   expect(numericTicks).toEqual([...numericTicks].sort((left, right) => left - right))
   expect(new Set(numericTicks).size).toBe(numericTicks.length)
-  for (let step = 0; step < 4; step++) await page.getByRole('button', { name: '전체 글자 크기 늘리기', exact: true }).click()
+  await setWorkspaceFontSize(page, 18)
   await expect(page.locator('.app-shell')).toHaveCSS('--ui-font-size', '18pt')
   await page.getByRole('button', { name: 'Scene별 엣지 최대응력 그래프 확대', exact: true }).click()
   await expect(page.getByRole('dialog')).toBeVisible()

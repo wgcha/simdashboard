@@ -82,6 +82,57 @@ export type LegacyDraft = {
   published_at: string | null; created_at: string | null; updated_at: string | null
 }
 
+// "폴더 구조 만들기": request folder → Working → Case folders per environment (result-registration.md §2a).
+export type StructureFolder = {
+  relative_path: string; name: string; display_path: string; environment: DropEnvironment | null; keyword_code: string | null
+  linked: boolean; owner: 'THIS' | 'OTHER' | null; working_exists: boolean; working_name: string; existing_cases: string[]
+}
+export type StructureCandidate = {
+  relative_path: string; name: string; display_path: string; environment: DropEnvironment | null; keyword_code: string | null
+  owner: 'THIS' | 'OTHER' | null; linked_environment: DropEnvironment | null; wr_match: boolean
+}
+export type StructureProposal = { parent_relative_path: string; name: string; relative_path: string; display_path: string }
+export type StructureEnvironment = {
+  environment: DropEnvironment
+  keyword: string
+  /** LINKED: linked to this request · FOUND: one matching folder · SELECTED: chosen by the user · AMBIGUOUS · MISSING */
+  status: 'LINKED' | 'FOUND' | 'SELECTED' | 'AMBIGUOUS' | 'MISSING'
+  folder: StructureFolder | null
+  choices: string[]
+  proposal: StructureProposal | null
+  /** Prefill: the request's registered Cases of this environment (REGISTERED) and Case folders already there (FOLDER). */
+  case_suggestions: Array<{ name: string; source: 'REGISTERED' | 'FOLDER'; exists: boolean }>
+}
+export type StructureOverview = {
+  project_id: string; request_id: string; wr_key: string | null
+  project_folders: Array<{ relative_path: string; display_path: string }>
+  candidates: StructureCandidate[]
+  environments: StructureEnvironment[]
+  max_cases: number
+  drive: boolean
+}
+export type StructureInput = {
+  project_id: string; request_id: string; environment: DropEnvironment
+  request_relative_path?: string | null
+  new_request_folder?: { parent_relative_path: string; name: string } | null
+  case_names: string[]
+  confirm: boolean
+}
+export type StructureItem = { relative_path: string; role: 'REQUEST' | 'WORKING' | 'SIMULATION_CASE'; name: string }
+export type StructureResult = {
+  environment: DropEnvironment
+  request_relative_path: string
+  request_display_path: string
+  working_relative_path: string
+  created: StructureItem[]
+  existing: StructureItem[]
+  queued?: StructureItem[]
+  warnings: string[]
+  drive: DriveUploadBatch | null
+  link: { status: 'LINKED' | 'PENDING' | 'NONE' | 'REVIEW'; code?: string | null; message?: string | null }
+  sync: { status?: string | null } | null
+}
+
 async function json<T>(url: string, init: RequestInit = {}): Promise<T> {
   const response = await apiFetch(url, init)
   if (!response.ok) throw await apiErrorFromResponse(response)
@@ -122,6 +173,12 @@ export const resultDropApi = {
   /** Fire-and-forget abort while the page unloads (``keepalive`` survives the navigation). */
   abortOnUnload(sessionId: string) {
     void apiFetch(apiUrl('/api/result-registration/drop-uploads/{session_id}', { session_id: sessionId }), { method: 'DELETE', keepalive: true }).catch(() => undefined)
+  },
+  structure(scope: { project_id: string; request_id: string; environment?: DropEnvironment; request_relative_path?: string }, signal?: AbortSignal) {
+    return json<StructureOverview>(apiUrl('/api/result-registration/drop-target/structure', {}, scope), { signal })
+  },
+  createStructure(input: StructureInput) {
+    return json<StructureResult>(apiUrl('/api/result-registration/drop-target/structure'), post(input))
   },
   legacyDrafts(scope: Scope, signal?: AbortSignal) {
     return json<{ drafts: LegacyDraft[]; truncated: boolean }>(apiUrl('/api/result-registration/drafts', {}, scope), { signal })

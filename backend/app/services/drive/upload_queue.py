@@ -61,6 +61,7 @@ from typing import Any, Iterable
 from ...database_connection import connect, connection_held
 from ..storage import server_local
 from . import gateway as drive_gateway
+from .. import notifications
 
 logger = logging.getLogger("app.services.drive.upload_queue")
 
@@ -97,6 +98,7 @@ _ORIGIN_MODULES = {
     "finalization": "app.services.case_finalization_drive",
     "final_designation": "app.services.case_finalization_drive",
     "result_drop": "app.services.result_drop_upload",
+    "result_structure": "app.services.result_folder_structure",
 }
 
 ERROR_MESSAGES = {
@@ -366,6 +368,7 @@ def cancel_item(conn: Any, item_id: str) -> Item:
                  [ERROR_MESSAGES["DRIVE_QUEUE_CANCELLED"], now, now, item_id])
     if (get_item(conn, item_id) or item).state != "CANCELLED":
         raise ValueError("RUNNING")
+    _notify_batch_finished(conn, item.batch_id)
     # The finish hook runs after the caller committed (:func:`request_finish`; the sweep covers a lost call).
     return get_item(conn, item_id)  # type: ignore[return-value]
 
@@ -612,6 +615,7 @@ def process_next(*, now: datetime | None = None) -> bool:
             item = _item(row)
             if item.root_key != current_root_key():
                 _record(conn, item, "FAILED", code="DRIVE_ROOT_CHANGED")
+                _notify_batch_finished(conn, item.batch_id)
             else:
                 # Review #8: our own claim is verified by the row the conditional UPDATE returns.
                 got = conn.execute("UPDATE drive_upload_queue SET state='RUNNING', attempts=attempts+1, updated_at=? "
@@ -685,6 +689,27 @@ def _record(conn: Any, item: Item, state: str, *, code: str | None = None, messa
 
 
 def _apply(conn: Any, item: Item, outcome: _Outcome) -> None:
+    """Record ``outcome`` and, in the same transaction, the notifications it causes."""
+    paused_before = queue_paused(conn) if outcome.state == "BLOCKED" else True
+    _apply_outcome(conn, item, outcome)
+    if not paused_before:
+        notifications.drive_queue_paused(conn)
+    if outcome.state in {"DONE", *STOP_STATES} or (outcome.state == "RETRY" and item.attempts
+                                                     >= drive_gateway.current_settings().upload_max_attempts):
+        _notify_batch_finished(conn, item.batch_id)
+
+
+def _notify_batch_finished(conn: Any, batch_id: str) -> None:
+    """A finished result drop batch notifies the user who started it (Finals: ``case_finalization_drive``)."""
+    items = batch_items(conn, batch_id)
+    if not items or items[0].origin != "result_drop":
+        return
+    summary = summarize(items)
+    if summary["finished"]:
+        notifications.drive_upload_finished(conn, summary)
+
+
+def _apply_outcome(conn: Any, item: Item, outcome: _Outcome) -> None:
     now = _now()
     settings = drive_gateway.current_settings()
     if outcome.staging is not None:

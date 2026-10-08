@@ -1,0 +1,37 @@
+/* 결과 등록 "폴더 구조 만들기" dialog. Desktop-only layout. */
+.result-structure-backdrop { position:fixed; inset:0; z-index:60; display:flex; align-items:flex-start; justify-content:center; padding:48px 24px; overflow:auto; background:var(--color-overlay); }
+.result-structure { width:min(1040px, 100%); display:grid; gap:var(--space-3, 12px); padding:var(--space-5, 24px); border:1px solid var(--color-border); border-radius:var(--radius-lg); color:var(--color-text); background:var(--color-surface-raised); box-shadow:0 18px 44px var(--color-shadow); }
+.result-structure__head { display:flex; align-items:flex-start; gap:var(--space-3, 12px); }
+.result-structure__head > svg { flex:none; width:1.6em; height:1.6em; margin-top:2px; color:var(--color-accent); }
+.result-structure__head > div { flex:1; min-width:0; }
+.result-structure__head h2 { margin:0; font-size:var(--text-section); color:var(--color-text-strong); }
+.result-structure__head p { margin:var(--space-1, 4px) 0 0; color:var(--color-text-muted); }
+.result-structure__envs { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:var(--space-3, 12px); }
+.result-structure__env { display:grid; align-content:start; gap:var(--space-2, 8px); min-width:0; padding:var(--space-3, 12px); border:1px solid var(--color-border); border-radius:var(--radius-md, 8px); background:var(--color-surface-interactive); }
+.result-structure__env.is-on { border-color:var(--color-accent); }
+.result-structure__env > header { display:flex; flex-wrap:wrap; align-items:baseline; gap:var(--space-2, 8px); }
+.result-structure__toggle { display:inline-flex; align-items:center; gap:var(--space-2, 8px); }
+.result-structure__field { display:grid; gap:2px; color:var(--color-text-muted); font-size:var(--text-caption, 12px); }
+.result-structure__path { display:block; padding:var(--space-1, 4px) var(--space-2, 8px); overflow:hidden; border:1px solid var(--color-border); border-radius:var(--radius-sm, 4px); text-overflow:ellipsis; white-space:nowrap; }
+.result-structure__new { margin:0; }
+.result-structure__tree { display:grid; gap:var(--space-1, 4px); padding-left:var(--space-3, 12px); border-left:3px solid var(--color-border-strong); }
+.result-structure__tree p { margin:0; }
+.result-structure__tree ul { display:grid; gap:var(--space-1, 4px); margin:0; padding:0 0 0 var(--space-4, 16px); list-style:none; }
+.result-structure__tree li { display:flex; flex-wrap:wrap; align-items:center; gap:var(--space-2, 8px); }
+.result-structure__tree li input { flex:1 1 16em; min-width:0; min-height:var(--control-h-sm, 32px); padding:0 var(--space-2, 8px); border:1px solid var(--color-border-strong); border-radius:var(--radius-sm, 4px); background:var(--color-surface-raised); color:var(--color-text); font:inherit; }
+.result-structure__tree li.is-error input { border-color:var(--color-danger); }
+.result-structure__tag { color:var(--color-text-muted); font-size:var(--text-caption, 12px); white-space:nowrap; }
+.result-structure__problem { flex-basis:100%; color:var(--color-danger); font-size:var(--text-caption, 12px); }
+.result-structure__muted { margin:0; color:var(--color-text-muted); }
+.result-structure__readonly { margin:0; padding:var(--space-2, 8px) var(--space-3, 12px); border:1px solid var(--color-warning-border); border-radius:var(--radius-sm, 4px); background:var(--color-warning-surface); }
+.result-structure__error, .result-structure__warning { display:flex; align-items:flex-start; gap:var(--space-2, 8px); margin:0; padding:var(--space-2, 8px) var(--space-3, 12px); border:1px solid var(--color-danger-border); border-radius:var(--radius-sm, 4px); background:var(--color-danger-surface); }
+.result-structure__warning { border-color:var(--color-warning-border); background:var(--color-warning-surface); }
+.result-structure__error svg, .result-structure__warning svg { flex:none; width:1.1em; height:1.1em; margin-top:0.15em; }
+.result-structure__done { display:grid; gap:var(--space-1, 4px); }
+.result-structure__done p { display:flex; align-items:center; gap:var(--space-2, 8px); margin:0; }
+.result-structure__done svg { color:var(--color-success); }
+.result-structure__done ul { margin:0; padding-left:1.2em; }
+.result-structure__foot { display:flex; align-items:center; justify-content:flex-end; gap:var(--space-2, 8px); }
+.result-structure__foot > span { flex:1; }
+.result-structure__spin { width:1em; height:1em; animation:result-structure-spin 1s linear infinite; vertical-align:-0.15em; }
+@keyframes result-structure-spin { to { transform:rotate(360deg); } }

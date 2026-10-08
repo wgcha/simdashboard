@@ -83,6 +83,7 @@ def initialize_database() -> None:
                 "drive_locks",
                 "finalization_operations",
                 "materials_deck_cache",
+                "notifications",
             )
             missing = [
                 table_name
@@ -136,6 +137,8 @@ def initialize_database() -> None:
                 "materials_deck_cache": {"id", "root_key", "rel_path", "solver", "parser_version", "fingerprint",
                                          "size_bytes", "status", "deck_json", "dependencies_json", "blob_sha256",
                                          "error_code", "error_message", "parse_seconds", "created_at", "updated_at"},
+                "notifications": {"id", "user_id", "type", "severity", "title", "body", "link", "project_id",
+                                  "request_id", "dedupe_key", "created_at", "read_at"},
             }
             incompatible = []
             for table_name, expected in required_columns.items():
@@ -1267,6 +1270,7 @@ def _initialize_duckdb_legacy() -> None:
         ensure_drive_source_versions_schema(conn)
         ensure_drive_write_path_schema(conn)
         ensure_materials_deck_cache_schema(conn)
+        ensure_notifications_schema(conn)
         from .adapters.persistence.dashboard_schema import ensure_dashboard_schema
         ensure_dashboard_schema(conn)
         # Establish the schema before seeding, but defer one-time legacy data
@@ -1592,6 +1596,16 @@ def ensure_materials_deck_cache_schema(conn: duckdb.DuckDBPyConnection) -> None:
         dependencies_json VARCHAR NOT NULL, blob_sha256 VARCHAR, error_code VARCHAR, error_message VARCHAR,
         parse_seconds DOUBLE, created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL,
         UNIQUE (root_key, rel_path, solver)
+    )""")
+
+
+def ensure_notifications_schema(conn: duckdb.DuckDBPyConnection) -> None:
+    """Local development equivalent of additive migration 0040 (per-user notifications)."""
+    conn.execute("""CREATE TABLE IF NOT EXISTS notifications (
+        id VARCHAR PRIMARY KEY, user_id VARCHAR NOT NULL, type VARCHAR NOT NULL,
+        severity VARCHAR NOT NULL CHECK (severity IN ('INFO', 'SUCCESS', 'WARNING', 'ERROR')),
+        title VARCHAR NOT NULL, body VARCHAR, link VARCHAR, project_id VARCHAR, request_id VARCHAR,
+        dedupe_key VARCHAR, created_at TIMESTAMP NOT NULL, read_at TIMESTAMP
     )""")
 
 

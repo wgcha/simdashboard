@@ -14,6 +14,20 @@
 2. **안내**: 깊이 사다리(Working → … → Scene → 결과 파일)에 선택 위치와 "여기 넣을 폴더"를 표시하고, "Run Option 폴더를 통째로 복사하려면 Run Case 폴더 아래에" 같은 규칙과 "1분 안에 자동 반영됩니다"를 보여 준다.
 3. **올리기**: 파일이나 폴더를 끌어 놓거나 `파일 선택`/`폴더 선택`(`webkitdirectory`). 폴더는 `webkitGetAsEntry`로 따라가며 상대 구조와 빈 폴더를 유지한다. 서버 계획(올라갈 상대 경로, 개수, 총 크기, 새로 만들 폴더와 그 깊이 역할, 깊이 경고·차단, 충돌, 제외 파일)을 먼저 보여 주고 `올리기`. 진행률(파일 수·바이트·현재 파일)과 `중지`. 완료 후 폴더 확인(“방금 확인”과 같은 동기화)을 바로 실행하고 Case 결과 링크를 보여 준다.
 4. **이전 등록 초안(읽기 전용)**: §6.
+5. **폴더 구조 만들기**: §2a.
+
+## 2a. 폴더 구조 만들기 (2026-10-08 사용자)
+
+SCX 환경에서 SPDM은 프로젝트·의뢰 폴더만 만든다. 의뢰 폴더에 `Working`이 없으면 대시보드는 그 폴더를 등록하지 않는다(깊이 스키마 `WORKING_MISSING`). 결과 등록 화면 위치 카드의 `폴더 구조 만들기`(창)는 선택한 의뢰의 **환경별** 의뢰 폴더 아래에 빈 폴더 `Working`과 `Working/<Case>`를 만든다. 그 아래(Scene·하중경우·Run 등)는 해석자가 만든다.
+
+- **의뢰 폴더 찾기**(환경마다): 이 의뢰에 연결된 그 환경 폴더(`LINKED`) → 없으면 의뢰의 프로젝트 폴더(연결된 PROJECT·SPDM 상위 연결) 아래 의뢰 깊이 폴더 중 의뢰번호(WR 키)가 같고 이름에 그 환경 키워드(`사용`/`유통`, D4)가 있는 폴더(하나면 `FOUND`, 여러 개면 `AMBIGUOUS` — 사용자가 고름) → 없으면 `MISSING`. 창은 프로젝트 아래 다른 의뢰 폴더도 목록으로 보여 사용자가 직접 고르게 한다(키워드 없는 폴더는 "대시보드가 자동으로 읽지 못함" 경고를 확인한 뒤 허용, 다른 환경 키워드·둘 다 있는 폴더·다른 의뢰/환경에 연결된 폴더는 거부). 이름은 바꾸지 않는다.
+- **새 의뢰 폴더**(`MISSING`): 같은 의뢰번호의 다른 환경 폴더 이름에서 키워드만 바꾼 형제 이름(`[WR-0001]_[유통_환경]` → `[WR-0001]_[사용_환경]`), 형제가 없으면 의뢰 제목의 WR 토큰으로 `<WR>_[사용_환경]`을 제안한다. 창은 정확한 이름과 위치를 먼저 보여 주고, 서버는 보낸 이름이 다시 계산한 제안과 같을 때만 만든다(다르면 409 `RESULT_STRUCTURE_PROPOSAL_CHANGED`). 제안할 수 없으면(의뢰번호 없음·중간 CONTAINER 깊이에 형제 없음) 만들지 않는다.
+- **Case 이름 미리 채우기**: 이 의뢰·환경의 등록된 Case 이름(`dashboard_cases.source_name` + 유효한 등록의 `SIMULATION_CASE` 폴더 이름, "등록된 Case")과 그 폴더 `Working` 아래 이미 있는 Case 폴더("이미 있음"). 줄 추가·빼기로 고친다(최대 100개). 의뢰 계획·작업 항목·하중경우(`load_cases`)는 Case 이름이 아니라 쓰지 않는다.
+- **이름 검사**(쓰기 전 모두): W8 새 폴더와 같은 Windows 이름 규칙(§3 이름), `. $ ~` 시작 금지, 목록 안 중복(대소문자 무시), Case 깊이 검사(`Working`·`Final` 이름, 이 의뢰의 다른 깊이 이름 → 오류), 대소문자·구분 기호만 다른 기존 폴더 → 오류, 비슷한 이름 → 경고(확인 후 `그래도 만들기`), 경로 259자. 오류는 이름별로 422 `RESULT_STRUCTURE_NAME_INVALID`(`problems`)로 한 번에 알리고 아무것도 만들지 않는다.
+- **쓰기**: 의뢰 폴더(새로 만들 때) → `Working`(없을 때) → Case 순서로 `mkdir_pinned`(고정된 부모 아래, 기존 일반 폴더는 그대로). 의뢰 폴더·`Working`은 저장소 공급자 구역 `SKELETON`(S3 ④), Case는 `WORKING`. 이미 있는 폴더는 `existing`("이미 있음")으로 알리고 이름 바꾸기·삭제·덮어쓰기는 없다. 다시 실행해도 같다(멱등). `Final`은 건드리지 않는다. SPDM root 밖에는 만들지 않는다.
+- **SCX 드라이브 모드**: 드라이브 쓰기 허용이 꺼져 있으면 409 `DRIVE_WRITE_DISABLED`(창에 읽기 전용 안내, `만들기` 비활성). 켜져 있으면 만들 폴더를 업로드 대기열 묶음 하나의 `MKDIR` 항목(`mkdirs`, 이미 있으면 성공; 출처 `result_structure`)으로 넣고 최대 20초 기다린 뒤 응답한다. 창은 `DriveBatchProgress`로 진행을 보여 준다.
+- **대시보드 반영**: 이미 이 의뢰에 연결된 폴더면 바로 폴더 확인(`sync(force)`). 연결되지 않은 의뢰 폴더(키워드가 맞는 것)는 폴더 자동 탐색에 "이 의뢰로 연결" 예약(`folder_auto_discovery.reserve_link`, 프로세스 메모리, 24시간)을 남긴다. 자동 탐색은 그 폴더를 새 의뢰가 아니라 **선택한 의뢰의 LINK**로 등록한다(로컬: 만든 직후 강제 탐색, 결과 `link.status = LINKED`; 드라이브: 묶음이 끝나면 강제 탐색, 그 전에는 `PENDING`). 서버가 재시작되면 예약이 사라져 일반 규칙(새 의뢰)으로 등록된다. 키워드 없는 폴더는 연결하지 않는다(`NONE`).
+- 권한: `result.import`(의뢰 단위, W8과 같음). 감사: `RESULT_STRUCTURE_CREATED`(로컬)·`RESULT_STRUCTURE_QUEUED`(드라이브, 묶음 ID)·`RESULT_STRUCTURE_REFUSED`(코드). 새 DB 테이블·migration 없음.
 
 ## 3. 검사 (쓰기 전에 모두)
 
@@ -45,8 +59,10 @@
 | POST | `/drop-uploads/{id}/complete` | – | `{state: PUBLISHED|PARTIAL, published_files, published_bytes, created_folders, conflicts, busy, skipped, sync{status,…}, cases[{case_relative_path, case_name, case_id}]}`. 409 `RESULT_DROP_INCOMPLETE`·`…_CONFLICT`(그 사이 생긴 파일, 아무것도 공개 안 함)·`…_SCOPE_CHANGED`·`…_STAGING_CHANGED` |
 | DELETE | `/drop-uploads/{id}` | – | 이 세션의 임시 파일과 이 세션이 만든 빈 폴더만 지움. 만든 사용자 또는 전역 관리자(감사 `by_admin`) |
 | GET | `/drafts` | `project_id, request_id, environment` | 이전 초안 목록(읽기 전용) |
+| GET | `/drop-target/structure` | `project_id, request_id`, 선택 `environment`+`request_relative_path`(그 폴더로 다시 읽기) | `{wr_key, project_folders[], candidates[{relative_path, name, display_path, environment, keyword_code, owner: THIS|OTHER|null, linked_environment, wr_match}], environments[{environment, keyword, status: LINKED|FOUND|SELECTED|AMBIGUOUS|MISSING, folder{…, working_exists, existing_cases}, choices, proposal{parent_relative_path, name, relative_path, display_path}, case_suggestions[{name, source: REGISTERED|FOLDER, exists}]}], max_cases, drive}` (§2a, 쓰기 없음) |
+| POST | `/drop-target/structure` | `{project_id, request_id, environment, request_relative_path? \| new_request_folder{parent_relative_path, name}?, case_names[], confirm}` | 200 `{request_relative_path, request_display_path, working_relative_path, created[{relative_path, role: REQUEST|WORKING|SIMULATION_CASE, name}], existing[…], queued?[…], warnings, drive, link{status: LINKED|PENDING|NONE|REVIEW}, sync}`. 422 `RESULT_STRUCTURE_NAME_INVALID`(`problems`)·`…_TARGET_INVALID`·`…_TOO_MANY`, 409 `…_NAME_WARNING`(`warnings`; `confirm:true`)·`…_PROPOSAL_CHANGED`·`RESULT_PATH_OWNERSHIP_CONFLICT`·`DRIVE_WRITE_DISABLED` |
 
-세션은 만든 사용자만 쓸 수 있다(다른 사용자는 404, 전역 관리자는 중지만). 감사: `RESULT_DROP_UPLOAD_REFUSED`(시작 거부: 코드·계획 문제 코드), `RESULT_DROP_UPLOAD_STARTED`(대상·파일 수·바이트·폴더 수·제외 수), `RESULT_DROP_UPLOAD_PUBLISHED`/`…_PARTIAL`/`…_FAILED`, `RESULT_DROP_UPLOAD_ABORTED`, `RESULT_DROP_FOLDER_CREATED`.
+세션은 만든 사용자만 쓸 수 있다(다른 사용자는 404, 전역 관리자는 중지만). 감사: `RESULT_DROP_UPLOAD_REFUSED`(시작 거부: 코드·계획 문제 코드), `RESULT_DROP_UPLOAD_STARTED`(대상·파일 수·바이트·폴더 수·제외 수), `RESULT_DROP_UPLOAD_PUBLISHED`/`…_PARTIAL`/`…_FAILED`, `RESULT_DROP_UPLOAD_ABORTED`, `RESULT_DROP_FOLDER_CREATED`, `RESULT_STRUCTURE_CREATED`/`…_QUEUED`/`…_REFUSED`(§2a).
 
 ## 5. 쓰기 경계와 공개
 
@@ -71,6 +87,7 @@ W8 이전 화면(대상 선택 → 저장 위치 → 초안 업로드(파일 32 
 ## 7. 검증과 남은 위험
 
 - 백엔드 `tests/test_result_drop_upload.py`(26): 폴더 구조 보존 → 동기화 후 Scene, 잘못된 깊이 차단, 기존 파일 충돌은 쓰기 전 거부, 업로드 중 생긴 충돌은 아무것도 공개 안 함, 경로 탈출·예약·절대 이름, Working 밖·다른 의뢰 소유 거부, 조각 이어 올리기·조각/파일 해시 불일치, 임시 폴더가 조사·자동 동기화에 안 보임, 링크 거부, 제외 파일, 권한 403, 공간 부족, 동시 업로드 제한·자기 임시 파일만 정리, 새 폴더 깊이·이름 규칙.
-- 프런트 e2e `result-drop-upload.spec.ts`(API 모의), `spdm-storage-workflow.spec.ts`(실제 API로 새 화면·이전 흐름 미호출 확인).
+- 백엔드 `tests/test_result_folder_structure.py`(8: 연결 폴더·제안·미리 채우기, 멱등 재실행, 제안 이름 확인 후 새 의뢰 폴더 → 선택한 의뢰로 LINK 등록(새 의뢰 없음), 잘못된 이름 422·쓰기 없음, 명시 선택·키워드 없는 폴더 확인·다른 의뢰 폴더 409, 권한 403, `SKELETON` 구역 규칙·다른 쓰기 함수·다른 모듈 거부), `tests/test_drive_writes.py::test_folder_structure_is_queued_on_the_drive_idempotent_and_linked`(가짜 드라이브: `MKDIR` 묶음, 묶음 뒤 LINK 등록, 재실행 무쓰기, 쓰기 꺼짐 409).
+- 프런트 e2e `result-folder-structure.spec.ts`(창: 미리 채우기·줄 추가/빼기·새 폴더 이름 확인·이름 오류·경고 확인·읽기 전용·드라이브 진행), `result-drop-upload.spec.ts`(API 모의), `spdm-storage-workflow.spec.ts`(실제 API로 새 화면·이전 흐름 미호출 확인).
 - 독립 수동 보안 검수(2026-10-06, HIGH 없음)의 M1–M3·L1–L5를 반영했다(Codex Security는 미가용, 수동 검수로 대체). 반영 재검수와 Windows Server 2022·SMB(이름 바꾸기·고정 핸들·숨김 속성·백신 잠금, 수 GB 업로드)는 미수행.
 - 알려진 한계: 작업자 여러 개(위 Rocky 8 기본값)에서는 동작하지 않는다. POSIX에서는 고정 핸들이 없어 확인과 쓰기 사이의 바꿔치기를 완전히 막지 못한다(W2와 같은 한계, Windows가 대상).

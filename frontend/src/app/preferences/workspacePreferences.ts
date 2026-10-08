@@ -12,6 +12,9 @@ const STORAGE_KEYS = {
   uiFontSize: 'simdashboard.workspace.font-size-pt.v1',
 } as const
 
+/** localStorage key of the global font size (the sidebar buttons are hidden; tests and other tabs write it). */
+export const WORKSPACE_FONT_SIZE_STORAGE_KEY = STORAGE_KEYS.uiFontSize
+
 const LEGACY_KEYS = {
   theme: 'vd-workbench-theme',
   uiFontSize: 'vd-workbench-font-size-pt',

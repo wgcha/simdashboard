@@ -3,7 +3,7 @@ import { mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
-import { loginWorkspace } from './workspace-test-helpers'
+import { loginWorkspace, setWorkspaceFontSize } from './workspace-test-helpers'
 
 const context = {
   project: 'project-feature-showcase',
@@ -235,7 +235,7 @@ for (const viewport of [
     const originalFontSize = await shell.evaluate((element) => getComputedStyle(element).getPropertyValue('--ui-font-size').trim())
     const originalJourneyFontPixels = Number.parseFloat(await journeyButton.evaluate((element) => getComputedStyle(element).fontSize))
     expect(originalFontSize).toBe('14pt')
-    await sidebar.getByRole('button', { name: '전체 글자 크기 늘리기' }).click()
+    await setWorkspaceFontSize(page, 15)
     const increasedFontSize = await shell.evaluate((element) => getComputedStyle(element).getPropertyValue('--ui-font-size').trim())
     const increasedJourneyFontPixels = Number.parseFloat(await journeyButton.evaluate((element) => getComputedStyle(element).fontSize))
     expect(increasedFontSize).toBe('15pt')

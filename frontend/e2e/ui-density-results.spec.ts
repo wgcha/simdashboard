@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test'
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import type { PortfolioOverview } from '../src/types'
-import { loginWorkspace } from './workspace-test-helpers'
+import { loginWorkspace, setWorkspaceFontSize } from './workspace-test-helpers'
 
 test('P2 result pagination handles boundaries and resets after size, search, project and filter changes', async ({ page }) => {
   // Each boundary reloads the real authenticated shell; allow Windows cold starts.
@@ -96,10 +96,7 @@ test('P2 result controls stay readable in both themes and at mobile 18pt', async
       }
     }
   }
-  const sidebar = page.getByRole('complementary', { name: '주 메뉴' })
-  await sidebar.getByRole('button', { name: '메뉴 열기', exact: true }).click()
-  for (let i = 0; i < 4; i++) await sidebar.getByRole('button', { name: '전체 글자 크기 늘리기' }).click()
-  await sidebar.getByRole('button', { name: '메뉴 닫기', exact: true }).click()
+  await setWorkspaceFontSize(page, 18)
   await expect(page.locator('.app-shell')).toHaveCSS('font-size', '24px')
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   const pageSize = dashboard.getByLabel('결과 목록 페이지 크기', { exact: true })

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import {
   Activity,
   BarChart3,
+  Bell,
   BookOpen,
   Box,
   ClipboardPlus,
@@ -11,7 +12,6 @@ import {
   GripVertical,
   LayoutDashboard,
   LogOut,
-  Minus,
   Monitor,
   PanelLeftClose,
   PanelLeftOpen,
@@ -44,6 +44,7 @@ const MENU_ICONS = {
   access_admin: Users,
   menu_policy_admin: ShieldCheck,
   audit_admin: ScrollText,
+  notifications: Bell,
 } satisfies Record<string, ComponentType>
 
 export type AppSidebarMenuId = keyof typeof MENU_ICONS
@@ -79,6 +80,7 @@ const MENU_GROUP_BY_ID: Record<AppSidebarMenuId, MenuGroupId> = {
   access_admin: 'administration',
   menu_policy_admin: 'administration',
   audit_admin: 'administration',
+  notifications: 'overview',
   examples: 'support',
   help: 'support',
   voc: 'support',
@@ -100,6 +102,8 @@ export const SIDEBAR_HIDDEN_MENUS: ReadonlySet<AppSidebarMenuId> = new Set<AppSi
   'variables',
   'project_result_profiles',
   'workbench_admin',
+  // Opened from the top bar bell (2026-10-08), never a sidebar entry.
+  'notifications',
 ])
 
 function groupForMenu(id: string): MenuGroupId | undefined {
@@ -111,14 +115,11 @@ type AppSidebarProps = {
   accountKey?: string
   authMode?: 'disabled' | 'password' | 'oidc'
   databaseBackend: 'duckdb' | 'postgresql'
-  fontSize: number
   menus: readonly AppSidebarMenu[]
   signedIn: boolean
   theme: 'dark' | 'light'
   userBadge?: string
   userDisplayName?: string
-  onDecreaseFontSize: () => void
-  onIncreaseFontSize: () => void
   onLogout: () => void
   onNavigate: (id: AppSidebarMenuId) => void
   onPreloadPage: (id: AppSidebarMenuId) => void
@@ -130,14 +131,11 @@ export function AppSidebar({
   accountKey,
   authMode = 'disabled',
   databaseBackend,
-  fontSize,
   menus,
   signedIn,
   theme,
   userBadge,
   userDisplayName,
-  onDecreaseFontSize,
-  onIncreaseFontSize,
   onLogout,
   onNavigate,
   onPreloadPage,
@@ -198,14 +196,9 @@ export function AppSidebar({
       {menus.find((menu) => menu.id === 'voc') && renderMenuLink(menus.find((menu) => menu.id === 'voc')!, 'nav-link-standalone nav-link-help')}
     </nav>
     <div className="sidebar-foot">
-      <div className="global-font-control" aria-label="전체 글자 크기 조절">
-        <span className="sidebar-label">글자 크기</span>
-        <button type="button" aria-label="전체 글자 크기 줄이기" onClick={onDecreaseFontSize} disabled={fontSize <= 11}><Minus /></button>
-        <output>{fontSize}pt</output>
-        <button type="button" aria-label="전체 글자 크기 늘리기" onClick={onIncreaseFontSize} disabled={fontSize >= 18}><Plus /></button>
-      </div>
+      {/* Global font-size buttons are hidden (user decision 2026-10-08); the stored size still applies. */}
       {signedIn && <div className="signed-user"><strong>{userDisplayName}</strong><span>{userBadge}</span></div>}
-      <details className="sidebar-settings"><summary><Settings2 /> <span>환경설정</span><Plus className="nav-group-caret" aria-hidden="true" /></summary><div className="sidebar-settings-body"><span className="system-pill"><span className="live-dot" /> {databaseBackend === 'postgresql' ? '서버 연결' : '로컬 연결'}</span><small>화면 글자 크기와 메뉴를 조정합니다.</small>{signedIn && authMode === 'password' && <ChangePasswordDialog key={accountKey ?? 'account'} theme={theme} />}</div></details>
+      <details className="sidebar-settings"><summary><Settings2 /> <span>환경설정</span><Plus className="nav-group-caret" aria-hidden="true" /></summary><div className="sidebar-settings-body"><span className="system-pill"><span className="live-dot" /> {databaseBackend === 'postgresql' ? '서버 연결' : '로컬 연결'}</span><small>계정과 연결 상태를 확인합니다.</small>{signedIn && authMode === 'password' && <ChangePasswordDialog key={accountKey ?? 'account'} theme={theme} />}</div></details>
       {signedIn && <button onClick={onLogout}><LogOut /><span>로그아웃</span></button>}
     </div>
   </aside>

@@ -43,6 +43,7 @@ from typing import Any, BinaryIO
 from ..database_connection import ConnectionLike, connect
 from . import case_finalization as cf
 from . import result_registration_paths, spdm_storage
+from . import notifications
 from .drive import gateway as drive_gateway
 from .drive import reads as drive_reads
 from .drive import upload_queue
@@ -538,6 +539,16 @@ def materialize_drive_item(item: upload_queue.Item) -> tuple[str, int, str]:
 def on_drive_batch_finished(origin: str, batch_id: str, summary: dict[str, Any]) -> None:
     if origin == "finalization":
         _finalization_finished(batch_id, summary)
+    elif origin == "final_designation" and summary.get("state") in {"FAILED", "CONFLICT", "CANCELLED", "PARTIAL"}:
+        _designation_stopped(summary)
+
+
+def _designation_stopped(summary: dict[str, Any]) -> None:
+    """The current-Final summary file did not reach the drive: notify (status shows ``summary.state=MISSING``)."""
+    with connect() as conn:
+        operation = _operation(conn, str(summary.get("origin_ref") or ""))
+        if operation is not None:
+            notifications.final_summary_repair_needed(conn, operation, str(summary.get("state")))
 
 
 def _finalization_finished(batch_id: str, summary: dict[str, Any]) -> None:
@@ -555,15 +566,18 @@ def _finalization_finished(batch_id: str, summary: dict[str, Any]) -> None:
                 return      # finished concurrently (sweep and worker)
             _release_lock(conn, batch_id)
             _queue_designation(conn, _operation(conn, batch_id), actor=operation["confirmed_by"] or operation["created_by"])
+            notifications.final_finished(conn, operation, completed=True)
             return
         if operation["status"] != "PUBLISHING":
             return
         error = (summary.get("errors") or [{}])[0]
-        conn.execute("UPDATE finalization_operations SET status='FAILED', error_code=?, error_message=?, updated_at=? "
-                     "WHERE operation_id=? AND status='PUBLISHING'",
-                     [error.get("code") or f"FINALIZATION_DRIVE_{summary['state']}", (error.get("message") or "")[:400],
-                      now, batch_id])
+        code = error.get("code") or f"FINALIZATION_DRIVE_{summary['state']}"
+        failed = conn.execute("UPDATE finalization_operations SET status='FAILED', error_code=?, error_message=?, updated_at=? "
+                              "WHERE operation_id=? AND status='PUBLISHING' RETURNING operation_id",
+                              [code, (error.get("message") or "")[:400], now, batch_id]).fetchone()
         _release_lock(conn, batch_id)
+        if failed is not None:
+            notifications.final_finished(conn, operation, completed=False, error_code=code)
 
 
 # --- current Final summary: append-only designation files ---------------------------------------

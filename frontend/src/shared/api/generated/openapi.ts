@@ -2729,6 +2729,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Notifications */
+        get: operations["list_notifications_api_notifications_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/notifications/unread-count": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Unread Count */
+        get: operations["unread_count_api_notifications_unread_count_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/notifications/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark Read */
+        post: operations["mark_read_api_notifications_read_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/health": {
         parameters: {
             query?: never;
@@ -3408,6 +3459,30 @@ export interface paths {
         put?: never;
         /** Drop Create Folder */
         post: operations["drop_create_folder_api_result_registration_drop_target_folders_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/result-registration/drop-target/structure": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Drop Structure
+         * @description Request folders per environment for "폴더 구조 만들기" (found, linked, proposed) and Case name suggestions.
+         */
+        get: operations["drop_structure_api_result_registration_drop_target_structure_get"];
+        put?: never;
+        /**
+         * Drop Create Structure
+         * @description Create (or queue on the drive) the empty request folder, Working and Case folders; existing ones are kept.
+         */
+        post: operations["drop_create_structure_api_result_registration_drop_target_structure_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6571,6 +6646,87 @@ export interface components {
             /** Command */
             command: string;
         };
+        /** NewRequestFolder */
+        NewRequestFolder: {
+            /** Parent Relative Path */
+            parent_relative_path: string;
+            /** Name */
+            name: string;
+        };
+        /** NotificationItem */
+        NotificationItem: {
+            /** Id */
+            id: string;
+            /** Type */
+            type: string;
+            /** Type Label */
+            type_label: string;
+            /**
+             * Severity
+             * @enum {string}
+             */
+            severity: "INFO" | "SUCCESS" | "WARNING" | "ERROR";
+            /** Title */
+            title: string;
+            /** Body */
+            body?: string | null;
+            /** Link */
+            link?: string | null;
+            /** Project Id */
+            project_id?: string | null;
+            /** Request Id */
+            request_id?: string | null;
+            /** Created At */
+            created_at?: string | null;
+            /** Read At */
+            read_at?: string | null;
+            /** Read */
+            read: boolean;
+        };
+        /** NotificationList */
+        NotificationList: {
+            /** Items */
+            items: components["schemas"]["NotificationItem"][];
+            /** Total */
+            total: number;
+            /** Unread Count */
+            unread_count: number;
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Types */
+            types: components["schemas"]["NotificationType"][];
+        };
+        /** NotificationReadInput */
+        NotificationReadInput: {
+            /** Ids */
+            ids?: string[] | null;
+            /**
+             * All
+             * @default false
+             */
+            all: boolean;
+        };
+        /** NotificationReadResult */
+        NotificationReadResult: {
+            /** Updated */
+            updated: number;
+            /** Unread Count */
+            unread_count: number;
+        };
+        /** NotificationType */
+        NotificationType: {
+            /** Type */
+            type: string;
+            /** Label */
+            label: string;
+        };
+        /** NotificationUnreadCount */
+        NotificationUnreadCount: {
+            /** Unread Count */
+            unread_count: number;
+        };
         /** PairingCreate */
         PairingCreate: {
             /** Device Id */
@@ -7711,6 +7867,31 @@ export interface components {
             files: components["schemas"]["StorageFileResponse"][];
             /** Results */
             results: components["schemas"]["StorageResultResponse"][];
+        };
+        /**
+         * StructureInput
+         * @description "폴더 구조 만들기": one environment's request folder → Working → Case folders.
+         */
+        StructureInput: {
+            /** Project Id */
+            project_id: string;
+            /** Request Id */
+            request_id: string;
+            /**
+             * Environment
+             * @enum {string}
+             */
+            environment: "USAGE" | "DISTRIBUTION";
+            /** Request Relative Path */
+            request_relative_path?: string | null;
+            new_request_folder?: components["schemas"]["NewRequestFolder"] | null;
+            /** Case Names */
+            case_names?: string[];
+            /**
+             * Confirm
+             * @default false
+             */
+            confirm: boolean;
         };
         /** StructuredUpload */
         StructuredUpload: {
@@ -13792,6 +13973,93 @@ export interface operations {
             };
         };
     };
+    list_notifications_api_notifications_get: {
+        parameters: {
+            query?: {
+                unread_only?: boolean;
+                type?: string | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    unread_count_api_notifications_unread_count_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationUnreadCount"];
+                };
+            };
+        };
+    };
+    mark_read_api_notifications_read_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotificationReadInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationReadResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     health_api_health_get: {
         parameters: {
             query?: never;
@@ -15339,6 +15607,73 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    drop_structure_api_result_registration_drop_target_structure_get: {
+        parameters: {
+            query: {
+                project_id: string;
+                request_id: string;
+                environment?: ("USAGE" | "DISTRIBUTION") | null;
+                request_relative_path?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    drop_create_structure_api_result_registration_drop_target_structure_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StructureInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };

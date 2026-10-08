@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test'
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 
-import { loginWorkspace } from './workspace-test-helpers'
+import { loginWorkspace, setWorkspaceFontSize } from './workspace-test-helpers'
 
 const profile = { id: 'usage-default', environment: 'USAGE', name: '사용환경 기본', revision: 1, rules: { rules: [{ role_kind: 'SIMULATION_CASE', parent_role: 'REQUEST', pattern: 'Assy*', match_mode: 'glob' }] }, active: true }
 const nodes = [
@@ -20,11 +20,8 @@ const depthSchema = {
   },
 }
 
-async function setFont(page: Page, current: number, target: number) {
-  const sidebar = page.getByRole('complementary', { name: '주 메뉴' })
-  const increase = sidebar.getByRole('button', { name: '전체 글자 크기 늘리기', exact: true })
-  for (let value = current; value < target; value += 1) await increase.click()
-  if (target === 18) await expect(increase).toBeDisabled()
+async function setFont(page: Page, _current: number, target: number) {
+  await setWorkspaceFontSize(page, target)
 }
 
 async function mockFolderSurfaces(page: Page) {

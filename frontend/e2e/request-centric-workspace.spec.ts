@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test'
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import type { Overview } from '../src/types'
-import { loginWorkspace, openWorkspaceRoute } from './workspace-test-helpers'
+import { loginWorkspace, openWorkspaceRoute, setWorkspaceFontSize } from './workspace-test-helpers'
 
 async function selectComparisonRequest(page: Page) {
   await page.getByLabel('프로젝트 선택', { exact: true }).selectOption('project-feature-showcase')
@@ -160,7 +160,7 @@ test('모바일과 큰 글자에서도 의뢰 선택과 다음 행동이 화면 
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true)
   await capture(page, 'request-overview-mobile.png')
   await page.setViewportSize({ width: 1280, height: 900 })
-  await page.getByRole('button', { name: '전체 글자 크기 늘리기' }).click()
+  await setWorkspaceFontSize(page, 15)
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true)
   await expect(page.getByText('현재 할 일', { exact: true })).toBeVisible()
 })

@@ -3,7 +3,7 @@ import { useBlocker, useLocation, useNavigate } from 'react-router-dom'
 
 import type { AuthUser } from '../../auth'
 import type { MenuId, WorkspacePage } from '../../features/auth/access'
-import { dashboardEntryForNavigation, WORKSPACE_ROUTES_BY_ID, workspacePathForPage, workspaceRouteForPathname, type DashboardEntry } from '../../features/navigation/workspaceRouteRegistry'
+import { dashboardEntryForNavigation, MENU_POLICY_FREE_PAGES, WORKSPACE_ROUTES_BY_ID, workspacePathForPage, workspaceRouteForPathname, type DashboardEntry } from '../../features/navigation/workspaceRouteRegistry'
 import { resolveBlockedNavigation } from './navigationState'
 import { preloadWorkspaceRouteModule } from './workspaceRouteModules'
 import { searchForPageChange } from './workspaceNavigationPolicy'
@@ -105,7 +105,7 @@ export function useWorkspaceNavigation({
     if (!authUser || authUser.account_status !== 'ACTIVE') return
     if (personalOnly) {
       const fallbackPath = workspacePathForPage('portfolio')!
-      if (isWorkspaceIndex || workspacePage !== 'portfolio') navigate(fallbackPath, { replace: true })
+      if (isWorkspaceIndex || (workspacePage !== 'portfolio' && !MENU_POLICY_FREE_PAGES.has(workspacePage))) navigate(fallbackPath, { replace: true })
       return
     }
     if (!menuPolicyReady) return
@@ -129,7 +129,7 @@ export function useWorkspaceNavigation({
         return
       }
     }
-    if (allowedPages.has(matchedWorkspaceRoute.page)) return
+    if (allowedPages.has(matchedWorkspaceRoute.page) || MENU_POLICY_FREE_PAGES.has(matchedWorkspaceRoute.page)) return
     if (!fallbackPath && matchedWorkspaceRoute.page !== 'local_pc') return
     onNotice('현재 권한으로 열 수 없는 화면입니다. 허용된 첫 화면으로 이동했습니다.')
     navigate(fallbackPath ?? workspacePathForPage('portfolio')!, { replace: true })

@@ -135,6 +135,8 @@ _STAGE_LEAVES = (
     ("project_workspace_layouts", (("project_id", "project"),)),
     ("project_request_type_result_profiles", (("project_id", "project"),)),
     ("analysis_template_versions", (("project_id", "project"),)),
+    # Derived, user-facing notifications (migration 0040) go with their project/request.
+    ("notifications", (("project_id", "project"), ("request_id", "request"))),
 )
 _STAGES = (
     _STAGE_LEAVES,

@@ -11,16 +11,14 @@ type Props = {
   databaseBackend: 'duckdb' | 'postgresql'
   theme: 'dark' | 'light'
   fontSize: number
-  onFontSizeChange: (size: number) => void
   onThemeChange: (theme: 'dark' | 'light') => void
   onLogout: () => void
   onNavigate: (page: MenuId) => void
 }
 
 /** Company feedback is independent of project and result bootstrap state. */
-export function VocRoute({ authMode, user, menus, databaseBackend, theme, fontSize, onFontSizeChange, onThemeChange, onLogout, onNavigate }: Props) {
+export function VocRoute({ authMode, user, menus, databaseBackend, theme, fontSize, onThemeChange, onLogout, onNavigate }: Props) {
   return <WorkspaceShellLayout activePage="voc" user={user} menus={menus} databaseBackend={databaseBackend} theme={theme} fontSize={fontSize} authMode={authMode}
-    onDecreaseFontSize={() => onFontSizeChange(Math.max(11, fontSize - 1))} onIncreaseFontSize={() => onFontSizeChange(Math.min(18, fontSize + 1))}
     onLogout={onLogout} onNavigate={onNavigate} onPreloadPage={preloadWorkspaceRouteModule}
     topbarBreadcrumb={<><span>지원</span><b>/</b><strong>VOC 게시판</strong></>}
     actions={<div className="theme-switch" role="group" aria-label="화면 테마 선택"><button type="button" aria-pressed={theme === 'light'} onClick={() => onThemeChange('light')}>라이트</button><button type="button" aria-pressed={theme === 'dark'} onClick={() => onThemeChange('dark')}>다크</button></div>}>
