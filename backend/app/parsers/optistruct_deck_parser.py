@@ -18,11 +18,12 @@ pass a stream and an ``open_include`` callback.
 """
 from __future__ import annotations
 
+import math
 import re
 import time
 from contextlib import AbstractContextManager, ExitStack
 from dataclasses import dataclass, field
-from typing import Any, BinaryIO, Callable, Iterable
+from typing import Any, BinaryIO, Callable, Iterable, Iterator
 
 PARSER_VERSION = "optistruct-1"
 
@@ -39,7 +40,9 @@ SKIP_PREFIXES: tuple[bytes, ...] = tuple(word.encode("ascii") for word in (
 _INCLUDE_LINE = re.compile(rb"^INCLUDE(?:\s|$)", re.I)
 _HMNAME = re.compile(r"^\$HMNAME\s+([A-Za-z_]+)\s+(-?\d+)\s*\"([^\"]*)\"(.*)$")
 _HM_COMP_REST = re.compile(r"^\s*(-?\d+)\s*\"([^\"]*)\"\s*(-?\d+)?")
-_HM_STAR = re.compile(r"^\$\*\s*(Component|Property|Material|Curve|Table)\s*:\s*(-?\d+)\s+name\s*:\s*(.*?)\s*$", re.I)
+# ``(.*)$`` plus ``rstrip`` instead of a lazy ``(.*?)\s*$``: the lazy form is quadratic on long blank tails.
+_HM_STAR = re.compile(r"^\$\*\s*(Component|Property|Material|Curve|Table)\s*:\s*(-?\d+)\s+name\s*:(.*)$", re.I)
+_COMMENT_MATCH_CHARS = 1024
 _NASTRAN_EXPONENT = re.compile(r"^([+-]?(?:\d+\.?\d*|\.\d+))([+-]\d+)$")
 
 PROPERTY_CARDS = frozenset({"PSHELL", "PSOLID", "PBEAM", "PBEAML", "PBAR", "PBARL", "PBUSH", "PCOMP", "PCOMPG",
@@ -51,6 +54,14 @@ KEPT_CARDS = PROPERTY_CARDS | MATERIAL_CARDS | TABLE_CARDS
 _MATERIAL_EXTENSIONS = frozenset({"MATS1", "MATT1", "MATT8", "MATT9"})
 _MAX_UNKNOWN_KINDS = 200
 _PROGRESS_LINES = 1 << 16
+_PROGRESS_BYTES = 8 * 1024 * 1024      # progress/deadline also every 8 MiB (long lines)
+MAX_LINE_BYTES = 64 * 1024             # one physical line; a real bulk line is ≤ 80 (free field: a few hundred)
+MAX_CARD_LINES = 250_000               # one kept card incl. continuation lines (a 2M-point TABLES1 is ~500k lines)
+MAX_CARD_BYTES = 32 * 1024 * 1024
+MAX_KEPT_BYTES = 512 * 1024 * 1024     # all kept cards of one parse (memory bound, not the file size)
+MAX_COMPONENTS = 500_000
+MAX_FUNCTION_USES = 10_000             # table uses (incl. TABLEST temperature tables) of one deck
+_ASSEMBLY_CHECK_EVERY = 256
 
 # Logical field names after the card name (Nastran field 2 onward).
 _LAYOUTS: dict[str, tuple[str, ...]] = {
@@ -95,7 +106,16 @@ class OptiStructParseError(ValueError):
 
 
 def nastran_float(text: str | None) -> float | None:
-    """Nastran real: ``1.5``, ``1.5E3``, ``1.5D3``, ``3.3-9`` (= 3.3E-9), ``1.+5``; ``None`` for blank/non-numbers."""
+    """Nastran real: ``1.5``, ``1.5E3``, ``1.5D3``, ``3.3-9`` (= 3.3E-9), ``1.+5``; ``None`` for blank/non-numbers.
+
+    Non-finite values (``NaN``, ``Inf``, overflow such as ``1.+999``) are not numbers here: they would break the
+    cached JSON (``allow_nan=False``).  :meth:`OptiStructDeckParser._keep` warns about them per card.
+    """
+    value = _raw_float(text)
+    return value if value is not None and math.isfinite(value) else None
+
+
+def _raw_float(text: str | None) -> float | None:
     if text is None:
         return None
     value = text.strip()
@@ -126,7 +146,7 @@ def nastran_value(text: str | None) -> int | float | str | None:
     value = text.strip()
     if not value:
         return None
-    if re.fullmatch(r"[+-]?\d+", value):
+    if len(value) <= 30 and re.fullmatch(r"[+-]?\d+", value):   # longer digit runs stay text (int() limits)
         return int(value)
     number = nastran_float(value)
     return number if number is not None else value
@@ -139,6 +159,49 @@ def _decode_text(raw: bytes) -> str:
         except UnicodeDecodeError:
             continue
     return raw.decode("latin-1")
+
+
+def _physical_lines(stream: Iterable[bytes] | BinaryIO) -> Iterator[bytes]:
+    """Lines of at most :data:`MAX_LINE_BYTES` (a file is read with a bounded ``readline``, never a whole line)."""
+    readline = getattr(stream, "readline", None)
+    if callable(readline):
+        limit = MAX_LINE_BYTES + 1
+        while True:
+            raw = readline(limit)
+            if not raw:
+                return
+            if len(raw) > MAX_LINE_BYTES and not raw.endswith(b"\n"):
+                raise _line_too_long()
+            yield raw
+    for raw in stream:
+        if len(raw) > MAX_LINE_BYTES + 2:
+            raise _line_too_long()
+        yield raw
+
+
+def _line_too_long() -> OptiStructParseError:
+    return OptiStructParseError("MATERIALS_LINE_TOO_LONG",
+                                f"입력 파일에 {MAX_LINE_BYTES // 1024} KiB보다 긴 줄이 있어 분석하지 않았습니다.", 413)
+
+
+def _head(raw: bytes, limit: int) -> bytes:
+    """``raw[:limit]`` without splitting a trailing UTF-8 sequence."""
+    if len(raw) <= limit:
+        return raw
+    for cut in range(limit, max(limit - 4, 0), -1):
+        try:
+            raw[:cut].decode("utf-8")
+            return raw[:cut]
+        except UnicodeDecodeError:
+            continue
+    return raw[:limit]
+
+
+def _is_non_finite(text: str) -> bool:
+    if not text or not text.strip():
+        return False
+    value = _raw_float(text)
+    return value is not None and not math.isfinite(value)
 
 
 def _line_fields(line: str, first: bool) -> list[str]:
@@ -162,6 +225,14 @@ class _Card:
     file: str
     line: int
     lines: list[str] = field(default_factory=list)
+    size: int = 0
+
+    def add(self, text: str) -> None:
+        self.lines.append(text)
+        self.size += len(text)
+        if len(self.lines) > MAX_CARD_LINES or self.size > MAX_CARD_BYTES:
+            raise OptiStructParseError("MATERIALS_CARD_TOO_LARGE",
+                                       f"{self.keyword} 카드({self.file}:{self.line})가 허용 크기를 초과했습니다.", 413)
 
     @property
     def source(self) -> dict[str, Any]:
@@ -210,9 +281,10 @@ class OptiStructDeckParser:
         self._stats = _Stats()
         self._total_hint = 0
         self._table_points = 0
+        self._kept_bytes = 0
 
     # -- reading -----------------------------------------------------------------------------
-    def parse(self, stream: Iterable[bytes], filename: str, size: int | None = None) -> dict[str, Any]:
+    def parse(self, stream: Iterable[bytes] | BinaryIO, filename: str, size: int | None = None) -> dict[str, Any]:
         started = time.monotonic()
         self._total_hint = int(size or 0)
         self._files.append({"file": filename, "size_bytes": size, "depth": 0})
@@ -231,7 +303,7 @@ class OptiStructDeckParser:
         if self._on_progress is not None:
             self._on_progress(self._stats.bytes, max(self._total_hint, self._stats.bytes))
 
-    def _read(self, stream: Iterable[bytes], filename: str, depth: int) -> None:
+    def _read(self, stream: Iterable[bytes] | BinaryIO, filename: str, depth: int) -> None:
         key = filename.casefold()
         if key in self._active:
             raise OptiStructParseError("MATERIALS_INCLUDE_CYCLE", "INCLUDE 파일 사이에 순환 참조가 있습니다.")
@@ -240,11 +312,13 @@ class OptiStructDeckParser:
         skip = SKIP_PREFIXES
         current: _Card | None = None
         number = 0
-        for raw in stream:
+        next_progress = stats.bytes + _PROGRESS_BYTES
+        for raw in _physical_lines(stream):
             number += 1
             stats.lines += 1
             stats.bytes += len(raw)
-            if not number & (_PROGRESS_LINES - 1):
+            if not number & (_PROGRESS_LINES - 1) or stats.bytes >= next_progress:
+                next_progress = stats.bytes + _PROGRESS_BYTES
                 self._progress()
             if raw.startswith(skip):
                 stats.skipped_lines += 1
@@ -259,7 +333,7 @@ class OptiStructDeckParser:
                 continue
             if first in (b"+", b"*", b",") or raw.startswith(b"        ") or first == b"\t":
                 if current is not None and raw.strip():
-                    current.lines.append(raw.decode("latin-1"))
+                    current.add(raw.decode("latin-1"))
                 continue
             stripped = raw.strip()
             if not stripped:
@@ -275,7 +349,8 @@ class OptiStructDeckParser:
             words = head.split()
             keyword = words[0].rstrip("*").upper() if words else ""
             if keyword in KEPT_CARDS:
-                current = _Card(keyword, filename, number, [text])
+                current = _Card(keyword, filename, number)
+                current.add(text)
             elif keyword == "ENDDATA":
                 break
             elif keyword and (keyword in self._unknown or len(self._unknown) < _MAX_UNKNOWN_KINDS):
@@ -287,8 +362,16 @@ class OptiStructDeckParser:
 
     def _keep(self, card: _Card) -> None:
         self._stats.kept_cards += 1
+        self._kept_bytes += card.size
+        if self._kept_bytes > MAX_KEPT_BYTES:
+            raise OptiStructParseError("MATERIALS_KEPT_SIZE_LIMIT", "속성·재료·표 카드 전체가 허용 크기를 초과했습니다.", 413)
         fields = card.fields()
         identifier = fields[0].strip() if fields else ""
+        invalid = [text.strip() for text in fields if _is_non_finite(text)]
+        if invalid:
+            self._warn("OPTISTRUCT_FIELD_INVALID",
+                       f"{card.keyword} {identifier}에 유한하지 않은 실수(NaN·Inf·범위 초과)가 있어 빈 값으로 읽었습니다.",
+                       card.source, values=invalid[:10])
         if card.keyword == "PELAS":
             self._extra.append(card)
             return
@@ -314,14 +397,15 @@ class OptiStructDeckParser:
         self._cards[key] = card
 
     def _comment(self, raw: bytes) -> None:
-        text = _decode_text(raw).rstrip("\r\n")
+        # Names live in the first few hundred characters; never run the regexes over a long tail.
+        text = _decode_text(_head(raw, _COMMENT_MATCH_CHARS * 4)).rstrip("\r\n")[:_COMMENT_MATCH_CHARS]
         match = _HMNAME.match(text)
         if match is not None:
             kind, identifier, name, rest = match.group(1).upper(), match.group(2), match.group(3), match.group(4)
             if kind == "COMP":
                 comp = _HM_COMP_REST.match(rest)
                 if identifier not in self._components:
-                    self._component_order.append(identifier)
+                    self._new_component(identifier)
                 self._components[identifier] = {
                     "id": identifier, "name": name,
                     "property_id": comp.group(1) if comp else None,
@@ -334,15 +418,20 @@ class OptiStructDeckParser:
         star = _HM_STAR.match(text)
         if star is not None:
             kind = star.group(1).upper()
-            identifier, name = star.group(2), star.group(3)
+            identifier, name = star.group(2), star.group(3).strip()
             if kind == "COMPONENT":
                 if identifier not in self._components:
-                    self._component_order.append(identifier)
+                    self._new_component(identifier)
                     self._components[identifier] = {"id": identifier, "name": name, "property_id": None,
                                                     "property_name": None, "property_type_code": None}
             else:
                 slot = {"PROPERTY": "PROP", "MATERIAL": "MAT"}.get(kind, "CURVE")
                 self._hm_names.setdefault((slot, identifier), name)
+
+    def _new_component(self, identifier: str) -> None:
+        if len(self._component_order) >= MAX_COMPONENTS:
+            raise OptiStructParseError("MATERIALS_COMPONENT_LIMIT", "HyperMesh 컴포넌트 수가 허용 한도를 초과했습니다.", 413)
+        self._component_order.append(identifier)
 
     def _include(self, raw: bytes, filename: str, number: int, depth: int) -> None:
         text = _decode_text(raw).rstrip("\r\n")
@@ -466,6 +555,8 @@ class OptiStructDeckParser:
                     thickness = sum(thicknesses)
                     if str(raw.get("LAM", "")).upper() == "SYM":
                         thickness *= 2
+                    if not math.isfinite(thickness):     # a sum of huge finite plies can overflow
+                        thickness = None
                 material_id = next((str(ply["MID"]) for ply in plies if ply.get("MID")), None)
         elif keyword == "PELAS":
             entries = []
@@ -589,7 +680,16 @@ class OptiStructDeckParser:
         materials: list[dict[str, Any]] = []
         functions: list[dict[str, Any]] = []
         nonlinear: list[tuple[_Card, dict[str, Any], dict[str, str]]] = []
+        ticks = 0
+
+        def tick() -> None:
+            nonlocal ticks
+            ticks += 1
+            if self._check is not None and not ticks % _ASSEMBLY_CHECK_EVERY:
+                self._check()
+
         for key in self._order:
+            tick()
             card = self._cards[key]
             group = key[0]
             if group == "PROP":
@@ -602,6 +702,7 @@ class OptiStructDeckParser:
                 fields, raw = self._named(card, card.fields())
                 nonlinear.append((card, fields, raw))
         for card in self._extra:
+            tick()
             properties.extend(self._property(card))
 
         property_by_id: dict[str, dict[str, Any]] = {}
@@ -614,23 +715,54 @@ class OptiStructDeckParser:
         material_by_id = {item["id"]: item for item in materials}
         function_by_id = {item["id"]: item for item in functions}
 
+        use_count = 0
+
         def use(function_id: str | None, owner_type: str, owner_id: str, role: str, source: dict[str, Any],
                 x_unit: str | None = None, y_unit: str | None = None) -> None:
+            """Record one owner's use of a table and, for TABLEST, of its temperature tables.
+
+            Iterative with one visited set per (owner, role): a table reached twice (diamond, self or cycle
+            reference) is recorded once, so a crafted chain of doubling TABLEST cards stays linear.  The
+            nested role is ``<role> · 온도 <T>`` with the innermost temperature (it never grows with depth).
+            """
+            nonlocal use_count
             if not function_id:
                 return
-            function = function_by_id.get(function_id)
-            if function is None:
-                self._warn("MATERIAL_FUNCTION_REFERENCE_UNRESOLVED",
-                           f"{owner_type} {owner_id}가 없는 표 {function_id}를 참조합니다.", source, target_id=function_id)
-                return
-            function["uses"].append({"function_id": function_id, "owner_type": owner_type, "owner_id": owner_id,
-                                     "role": role, "x_unit": x_unit or function.get("x_label"),
-                                     "y_unit": y_unit or function.get("y_label")})
-            for nested in function.get("fields", {}).get("temperature_tables", []) or []:
-                use(str(nested.get("table_id") or ""), owner_type, owner_id, f"{role} · 온도 {nested.get('temperature')}",
-                    source)
+            visited: set[str] = set()
+            pending: list[tuple[str, str]] = [(function_id, role)]
+            while pending:
+                current_id, current_role = pending.pop()
+                if current_id in visited:
+                    continue
+                visited.add(current_id)
+                tick()
+                function = function_by_id.get(current_id)
+                if function is None:
+                    self._warn("MATERIAL_FUNCTION_REFERENCE_UNRESOLVED",
+                               f"{owner_type} {owner_id}가 없는 표 {current_id}를 참조합니다.", source, target_id=current_id)
+                    continue
+                use_count += 1
+                if use_count > MAX_FUNCTION_USES:
+                    raise OptiStructParseError("MATERIALS_FUNCTION_USE_LIMIT",
+                                               f"표 참조가 {MAX_FUNCTION_USES:,}개를 넘어 분석을 멈췄습니다.", 413)
+                function["uses"].append({"function_id": current_id, "owner_type": owner_type, "owner_id": owner_id,
+                                         "role": current_role, "x_unit": x_unit or function.get("x_label"),
+                                         "y_unit": y_unit or function.get("y_label")})
+                nested_items = function.get("fields", {}).get("temperature_tables", []) or []
+                for nested in reversed(nested_items):
+                    target = str(nested.get("table_id") or "")
+                    if not target:
+                        continue
+                    if target in visited:
+                        if target == current_id or target == function_id:
+                            self._warn("OPTISTRUCT_TABLE_REFERENCE_CYCLE",
+                                       f"TABLEST {current_id}가 표 {target}를 다시 참조해 한 번만 연결했습니다.",
+                                       function.get("source"), target_id=target)
+                        continue
+                    pending.append((target, f"{role} · 온도 {nested.get('temperature')}"))
 
         for card, fields, raw in nonlinear:
+            tick()
             identifier = card.fields()[0].strip()
             material = material_by_id.get(identifier)
             if material is None:
@@ -672,6 +804,7 @@ class OptiStructDeckParser:
                 self._warn("OPTISTRUCT_COMPONENTS_FROM_PROPERTIES",
                            "HyperMesh 컴포넌트 주석($HMNAME COMP)이 없어 Property마다 한 행으로 표시합니다.", None)
         for entry in entries:
+            tick()
             property_id = entry.get("property_id")
             prop = property_by_id.get(str(property_id)) if property_id else None
             material_id = prop.get("material_id") if prop else None

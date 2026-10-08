@@ -1442,3 +1442,15 @@
 - e2e 환경 주의: 이 VM에서 로그인 직후 첫 화면 준비가 5초를 넘어 여러 spec이 로그인 단계에서 실패한다. HEAD 사본(`git archive`)으로 같은 spec을 돌려도 같은 현상(case-compare 4/7 실패, request-centric 10/17 실패 — 공통 결정적 실패 46·64·86·223·236·265·279행 포함)으로 이번 변경과 무관.
 - e2e 재실행(다른 실행·pytest 없이, 기대 대기 임시 20초 — 설정 원복): `result-folder-structure` 4/4·`result-drop-upload` 7/7·`ui-density-width`·`ui-density-typography`·`ui-density-results` 통과, `case-compare`·`materials-dashboard` 전부 통과. 남은 실패 9건(`ui-density-folders` 2, `ui-density-p4-surfaces` intake 2, `ui-density-p5-root` 2 — `/workspace/materials` 사이드바 경로 없음, `unified-request-workspace` 85·122·136행)은 HEAD 사본에서 같은 조건으로 동일하게 실패(기존).
 - 미수행·남은 위험: 독립 검수(Sol/Astra — DB migration·권한 기반 수신자), Codex Security `security-diff-scan`(새 API — 자기 행만 읽기·쓰기), Windows Server 2022 폐쇄망 설치/업데이트, local 모드 Final 알림, 계정 삭제 시 알림 정리.
+
+## 2026-10-09 OptiStruct 소재 독립 검수 지적 반영 (claude/scx-drive, 미커밋)
+
+- 대상: `parsers/optistruct_deck_parser.py`, `services/optistruct_materials.py`, `services/materials_catalog.py`(사용환경 덱 조회), 프런트 `shared/api/materials.ts`·`MaterialsDashboard.tsx`(실패 안내 한 줄), `docs/features/materials-optistruct.md`. 검수는 독립 수동 검수 지적의 수정이며 Codex Security 스캔이 아니다.
+- H1: `_assemble.use()`를 반복 탐색 + (소유자, 역할)별 방문 집합으로 바꿈(같은 표 한 번, 자기·순환 참조 알림 `OPTISTRUCT_TABLE_REFERENCE_CYCLE`), 중첩 역할 문자열은 깊이와 무관, 전체 연결 1만 개 초과 시 413 `MATERIALS_FUNCTION_USE_LIMIT`, 조립 중 256단위로 `check()`(시간 한도).
+- M1: `nastran_float`은 유한 값만(NaN·Inf·`1.+999` → None), 카드별 `OPTISTRUCT_FIELD_INVALID` 알림, 30자리 초과 정수는 문자열, 층 두께 합 overflow → None. `_store`는 `allow_nan=False`, READY 직렬화 실패는 FAILED로 저장.
+- M2: 파일은 `readline(64 KiB+1)`로 읽고 긴 줄은 413 `MATERIALS_LINE_TOO_LONG`(반복자 입력도 길이 검사), 보존 카드 25만 줄·32 MiB(`MATERIALS_CARD_TOO_LARGE`), 보존 카드 합계 512 MiB, 컴포넌트 50만 개 한도, 진행·시간 확인을 65,536줄 또는 8 MiB마다.
+- M3: `_HM_STAR`를 `(.*)$`+`strip`으로, 주석은 앞 1,024자만 정규식에 넣음.
+- L1: 일시 오류(`SpdmStorageError` 중 `SPDM_FILE_TOO_LARGE`·`SPDM_PATH_INVALID` 외, `OSError`)는 DB에 FAILED로 저장하지 않고 메모리 1분(`analysis.transient=true`) 후 재대기. 실패 저장에도 INCLUDE 의존성 기록.
+- L2: 대기 작업은 읽기·내려받기 전에 `describe()` 지문을 비교해 바뀌었으면 멈춤. L3: [다시 분석] 파일당 60초 1회(`analysis.retry_after_seconds`). L4: `INSERT … ON CONFLICT (root_key, rel_path, solver) DO UPDATE`. L5: 사용환경 덱 조회의 입력 파일 해석을 20초 기억(권한 검사는 매 요청, retry·파일 없음은 새로 해석). L6: 내려받기 직전·직후 시간 확인 + 내려받기 자체는 게이트웨이 시간 제한이라는 점 문서화(`content()`에 기한 인자 없음). L7: 없는 INCLUDE도 `missing` 의존성으로 기록.
+- 검증(격리 basetemp `/tmp/claude-0/ox`, `/tmp/claude-0/ox2`, 합성 데이터·가짜 어댑터): `test_materials_optistruct.py` 40 passed(신규 16: 30단 배증 TABLEST 2초 이내·자기 참조·연결 한도, 비유한 실수 7종·JSON 안전, 긴 줄·64 MiB 무개행 줄·카드 한도, 바이트 기준 시간 확인, 1 MB 공백 주석 1초 이내, 없는 INCLUDE 추가 시 재분석, 일시 오류 미저장·재대기, 폴링 해석 재사용, 재시도 제한, 실패 의존성 무효화, 드라이브 지문 불일치 작업 무다운로드), `test_materials_api.py`+`test_drive_reads.py` 64 passed. `check_openapi_contract.py` OK(응답 모델 변경 없음 — generate:api 불필요), 프런트 `tsc -b` 통과.
+- 미수행·남은 위험: 독립 재검수(Sol/Astra), Codex Security `security-diff-scan` 미실행, PostgreSQL은 임시 PG 16 인스턴스(종료·삭제)에서 0039 표 정의에 같은 upsert 문 2회 실행 → 1행·갱신만 확인(앱 연결 계층 경유 시험은 아님), 드라이브 내려받기 중 시간 한도 미적용, 재시도·일시 오류 기억은 프로세스 메모리(재시작 시 초기화), 실제 1 GB 덱·Windows Server 2022 미검증.

@@ -131,6 +131,10 @@ export type MaterialsAnalysis = {
   error_code: string | null
   error_message: string | null
   cached: boolean
+  /** FAILED by a storage/drive hiccup: not cached, the next view after about a minute analyses again. */
+  transient: boolean
+  /** Set when a retry was refused (one retry per file per minute). */
+  retry_after_seconds: number | null
 }
 export type MaterialsDeckResponse = {
   scene: MaterialsScene
@@ -258,6 +262,7 @@ function analysis(value: unknown): MaterialsAnalysis | null {
     bytes_done: finite(item.bytes_done) ?? 0, bytes_total: finite(item.bytes_total) ?? 0, progress: finite(item.progress) ?? 0,
     queue_position: finite(item.queue_position) ?? 0, parse_seconds: finite(item.parse_seconds), parsed_at: optionalText(item.parsed_at),
     error_code: optionalText(item.error_code), error_message: optionalText(item.error_message), cached: item.cached === true,
+    transient: item.transient === true, retry_after_seconds: finite(item.retry_after_seconds),
   }
 }
 

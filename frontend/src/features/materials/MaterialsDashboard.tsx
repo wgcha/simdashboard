@@ -46,6 +46,8 @@ function AnalysisState({ analysis, onRetry }: { analysis: MaterialsAnalysis; onR
       <AlertTriangle /><strong>입력 파일을 분석하지 못했습니다.</strong>
       <span title={analysis.relative_path}>{file} · {analysis.error_message ?? analysis.error_code ?? '원인 미상'}</span>
       <button type="button" onClick={onRetry}><RotateCw /> 다시 분석</button>
+      {analysis.retry_after_seconds ? <small>다시 분석은 파일마다 1분에 한 번입니다. {analysis.retry_after_seconds}초 뒤에 다시 누르세요.</small>
+        : analysis.transient ? <small>저장소·드라이브 일시 오류라 결과를 저장하지 않았습니다. 잠시 뒤 다시 열면 다시 분석합니다.</small> : null}
     </div>
   }
   const percent = Math.round(Math.min(1, Math.max(0, analysis.progress)) * 100)

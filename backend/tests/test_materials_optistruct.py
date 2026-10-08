@@ -209,6 +209,122 @@ def test_time_and_size_guards_abort_the_parse():
     assert error.value.code == "MATERIALS_PARSE_TIME_LIMIT"
 
 
+# --- review fixes: hostile decks ----------------------------------------------------------------
+
+def _tablest_chain(count: int) -> str:
+    """MATS1 → TABLEST 1 → TABLEST 2 (twice) → … → TABLES1 <count+1>: 2**count paths without dedupe."""
+    lines = [f"{'MAT1':<8}{1:>8}{1000.0:>8}", f"{'MATS1':<8}{1:>8}{1:>8}{'PLASTIC':>8}"]
+    for index in range(1, count + 1):
+        lines.append(f"{'TABLEST':<8}{index:>8}")
+        lines.append(f"{'+':<8}{20.0:>8}{index + 1:>8}{80.0:>8}{index + 1:>8}{'ENDT':>8}")
+    lines.append(f"{'TABLES1':<8}{count + 1:>8}")
+    lines.append(f"{'+':<8}{0.0:>8}{100.0:>8}{0.1:>8}{150.0:>8}{'ENDT':>8}")
+    return "\n".join(lines) + "\n"
+
+
+@pytest.mark.unit
+def test_tablest_doubling_chain_is_linear_and_deduplicated():
+    started = time.perf_counter()
+    deck = parse_optistruct_text(_tablest_chain(30))
+    assert time.perf_counter() - started < 2.0
+    tables = {item["id"]: item for item in deck["functions"]}
+    assert len(tables) == 31
+    assert all(len(item["uses"]) == 1 for item in tables.values())            # each table once per owner/role
+    assert len(deck["function_uses"]) == 31
+    assert tables["1"]["uses"][0]["role"] == "MATS1 PLASTIC"
+    assert tables["31"]["uses"][0]["role"].startswith("MATS1 PLASTIC · 온도 ")  # role does not grow with depth
+    assert tables["31"]["uses"][0]["role"].count("온도") == 1
+
+
+@pytest.mark.unit
+def test_tablest_self_reference_and_use_limit(monkeypatch):
+    text = (f"{'MAT1':<8}{1:>8}{1000.0:>8}\n{'MATS1':<8}{1:>8}{5:>8}{'PLASTIC':>8}\n"
+            f"{'TABLEST':<8}{5:>8}\n{'+':<8}{20.0:>8}{5:>8}{'ENDT':>8}\n")
+    deck = parse_optistruct_text(text)
+    assert len(deck["functions"][0]["uses"]) == 1
+    assert "OPTISTRUCT_TABLE_REFERENCE_CYCLE" in {item["code"] for item in deck["warnings"]}
+
+    from app.parsers import optistruct_deck_parser
+    monkeypatch.setattr(optistruct_deck_parser, "MAX_FUNCTION_USES", 10)
+    with pytest.raises(OptiStructParseError) as error:
+        parse_optistruct_text(_tablest_chain(12))
+    assert error.value.code == "MATERIALS_FUNCTION_USE_LIMIT" and error.value.status_code == 413
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("text", ["nan", "NaN", "inf", "-Infinity", "1.+999", "1e999", "1.5D999"])
+def test_nastran_float_rejects_non_finite(text):
+    assert nastran_float(text) is None
+
+
+@pytest.mark.unit
+def test_non_finite_fields_warn_and_keep_the_deck_json_safe():
+    import json
+
+    text = (f"{'MAT1':<8}{1:>8}{'NaN':>8}{'':>8}{0.3:>8}{'1.+999':>8}\n"
+            f"{'PSHELL':<8}{2:>8}{1:>8}{'inf':>8}\n"
+            f"{'PCOMP':<8}{3:>8}\n{'+':<8}{1:>8}{'1.+308':>8}{0.0:>8}{'YES':>8}{1:>8}{'1.+308':>8}{0.0:>8}{'YES':>8}\n"
+            f"{'TABLES1':<8}{4:>8}\n{'+':<8}{0.0:>8}{'nan':>8}{0.1:>8}{150.0:>8}{'ENDT':>8}\n")
+    deck = parse_optistruct_text(text)
+    json.dumps(deck, allow_nan=False)                                          # would raise on NaN/Infinity
+    material = deck["materials"][0]
+    assert material["representative_e"] is None and material["density"]["value"] is None
+    props = {item["id"]: item for item in deck["properties"]}
+    assert props["2"]["thickness"] is None and props["3"]["thickness"] is None   # 1e308 + 1e308 overflows
+    assert deck["functions"][0]["points"] == [{"x": 0.1, "y": 150.0}]
+    invalid = [item for item in deck["warnings"] if item["code"] == "OPTISTRUCT_FIELD_INVALID"]
+    assert {item["line"] for item in invalid} == {1, 2, 5}
+
+
+@pytest.mark.unit
+def test_long_lines_and_oversized_cards_fail_fast(monkeypatch):
+    import io
+
+    from app.parsers import optistruct_deck_parser
+
+    long_line = b"$ " + b"x" * (70 * 1024) + b"\n"
+    for stream in (io.BytesIO(b"MAT1           1   1.0\n" + long_line), iter([b"MAT1           1   1.0\n", long_line])):
+        with pytest.raises(OptiStructParseError) as error:
+            OptiStructDeckParser().parse(stream, "x.fem")
+        assert error.value.code == "MATERIALS_LINE_TOO_LONG"
+    # A single 64 MiB line without a newline is never read whole.
+    started = time.perf_counter()
+    with pytest.raises(OptiStructParseError):
+        OptiStructDeckParser().parse(io.BytesIO(b"GRID" + b" " * (64 * 1024 * 1024)), "x.fem")
+    assert time.perf_counter() - started < 2.0
+
+    monkeypatch.setattr(optistruct_deck_parser, "MAX_CARD_LINES", 100)
+    text = "TABLES1        7\n" + "".join(f"+       {i:>8}{i:>8}\n" for i in range(200))
+    with pytest.raises(OptiStructParseError) as error:
+        parse_optistruct_text(text)
+    assert error.value.code == "MATERIALS_CARD_TOO_LARGE"
+
+
+@pytest.mark.unit
+def test_deadline_is_checked_by_bytes_not_only_by_line_count():
+    import io
+
+    calls = []
+    data = (b"$ " + b"y" * 60_000 + b"\n") * 300                                  # ~18 MB in 300 lines
+    OptiStructDeckParser(check=lambda: calls.append(1)).parse(io.BytesIO(data), "x.fem", len(data))
+    assert len(calls) >= 3                                                        # every 8 MiB + the end
+
+
+@pytest.mark.unit
+def test_name_comment_regex_is_linear_on_long_blank_tails():
+    from app.parsers.optistruct_deck_parser import _HM_STAR
+
+    line = "$* Material: 12 name: Steel" + " " * 1_000_000 + "x"
+    started = time.perf_counter()
+    match = _HM_STAR.match(line)
+    assert match is not None and match.group(3).strip().startswith("Steel")
+    assert _HM_STAR.match("$* Material: 12 name:" + " " * 1_000_000) is not None
+    parser = OptiStructDeckParser()
+    parser._comment(("$* Material: 13 name:   Alu   " + " " * 1_000_000 + "\n").encode())
+    assert time.perf_counter() - started < 1.0
+    assert parser._hm_names[("MAT", "13")] == "Alu"
+
+
 # --- API: local SPDM root ---------------------------------------------------------------------
 
 SCENES = f"{USAGE}/Working/{USAGE_CASE}"
@@ -329,11 +445,101 @@ def test_usage_include_change_invalidates_and_failures_need_retry(admin_client, 
     retried = _deck(client, request_id, scene["scene_id"], retry="true")
     assert retried["analysis"]["status"] in {"QUEUED", "RUNNING"}
     assert optistruct_materials.wait_idle(60) and len(parse_counter) == 4
+    # L3: a second retry within a minute is refused (the cached failure is shown with a wait hint).
+    again = _deck(client, request_id, scene["scene_id"], retry="true")
+    assert again["analysis"]["status"] == "FAILED" and again["analysis"]["retry_after_seconds"] >= 1
+    assert optistruct_materials.wait_idle(60) and len(parse_counter) == 4
+    # L1: the failed parse recorded its INCLUDE dependencies, so fixing the include re-parses without a retry.
+    with connect() as conn:
+        row = optistruct_materials.load_row(conn, provider_for_root(root).root_key(), f"{SCENES}/Settle/model.fem")
+    assert row["status"] == "FAILED" and f"{SCENES}/Settle/inc/mats.inc" in row["dependencies_json"]
+    include.write_text("MAT1           7  3000.00\n", encoding="utf-8")
+    os.utime(include, ns=(time.time_ns(), time.time_ns() + 9_000_000))
+    fixed = _ready(client, request_id, scene["scene_id"])
+    assert fixed["deck"]["materials"][0]["representative_e"] == 3000.0 and len(parse_counter) == 5
 
     monkeypatch.setenv("SIMDASH_OPTISTRUCT_MAX_BYTES", str(1024 * 1024))
     (settle / "model.fem").write_bytes(b"$" * (1024 * 1024 + 10) + b"\n")
     too_large = _deck(client, request_id, scene["scene_id"], status=413)
     assert too_large["detail"]["code"] == "MATERIALS_FILE_SIZE_LIMIT"
+
+
+@pytest.mark.duckdb_integration
+def test_usage_missing_include_added_later_invalidates_the_cache(admin_client, parse_counter):
+    client, root = admin_client
+    _build_usage(root)
+    settle = root / SCENES / "Settle"
+    (settle / "model.fem").write_text("PSHELL        11       7     2.0\nINCLUDE 'later.inc'\n", encoding="utf-8")
+    _, _, registered = _register(client, "USAGE")
+    _, request_id = _ids(registered)
+    scene = next(item for item in _catalog(client, request_id)["scenes"] if item["label"] == "Settle")
+    body = _ready(client, request_id, scene["scene_id"])
+    assert body["deck"]["materials"] == [] and "MATERIALS_INCLUDE_NOT_FOUND" in {
+        item["code"] for item in body["deck"]["warnings"]}
+    assert [item["relative_path"] for item in body["files"]] == [f"{SCENES}/Settle/model.fem"]
+    assert _deck(client, request_id, scene["scene_id"])["analysis"]["cached"] is True
+    (settle / "later.inc").write_text("MAT1           7  1000.0\n", encoding="utf-8")
+    added = _ready(client, request_id, scene["scene_id"])
+    assert [item["id"] for item in added["deck"]["materials"]] == ["7"] and len(parse_counter) == 2
+
+
+@pytest.mark.duckdb_integration
+def test_usage_transient_storage_failure_is_not_cached(admin_client, parse_counter, monkeypatch):
+    from app.services.storage.provider import SpdmStorageError
+
+    client, root = admin_client
+    _build_usage(root)
+    (root / SCENES / "Settle" / "model.fem").write_text("MAT1           2   1.0\n", encoding="utf-8")
+    _, _, registered = _register(client, "USAGE")
+    _, request_id = _ids(registered)
+    scene = next(item for item in _catalog(client, request_id)["scenes"] if item["label"] == "Settle")
+    original = optistruct_materials._parse
+    failures = {"left": 2}
+
+    def flaky(state, deadline, limit, dependencies):
+        if failures["left"]:
+            failures["left"] -= 1
+            raise SpdmStorageError("DRIVE_STAGING_FULL", "staging full")
+        return original(state, deadline, limit, dependencies)
+
+    monkeypatch.setattr(optistruct_materials, "_parse", flaky)
+    failed = _ready(client, request_id, scene["scene_id"])
+    assert failed["analysis"]["status"] == "FAILED" and failed["analysis"]["transient"] is True
+    assert failed["analysis"]["error_code"] == "DRIVE_STAGING_FULL" and failed["analysis"]["cached"] is False
+    with connect() as conn:
+        assert optistruct_materials.load_row(conn, provider_for_root(root).root_key(), f"{SCENES}/Settle/model.fem") is None
+    # Within the back-off the failure is shown without a new parse; a retry runs again (and fails again).
+    assert _deck(client, request_id, scene["scene_id"])["analysis"]["transient"] is True and len(parse_counter) == 1
+    assert _deck(client, request_id, scene["scene_id"], retry="true")["analysis"]["status"] in {"QUEUED", "RUNNING"}
+    assert optistruct_materials.wait_idle(60) and len(parse_counter) == 2
+    # After the back-off the next view re-queues by itself.
+    monkeypatch.setattr(optistruct_materials, "TRANSIENT_BACKOFF_SECONDS", 0.0)
+    with optistruct_materials._lock:
+        for item in optistruct_materials._transient.values():
+            item["until"] = 0.0
+    body = _ready(client, request_id, scene["scene_id"])
+    assert body["analysis"]["status"] == "READY" and len(parse_counter) == 3
+
+
+@pytest.mark.duckdb_integration
+def test_usage_polling_reuses_the_resolved_input(admin_client, parse_counter, monkeypatch):
+    from app.services import materials_catalog
+
+    client, root = admin_client
+    _build_usage(root)
+    (root / SCENES / "Settle" / "model.fem").write_text("MAT1           2   1.0\n", encoding="utf-8")
+    _, _, registered = _register(client, "USAGE")
+    _, request_id = _ids(registered)
+    scene = next(item for item in _catalog(client, request_id)["scenes"] if item["label"] == "Settle")
+    calls = []
+    original = materials_catalog._resolve_scene
+    monkeypatch.setattr(materials_catalog, "_resolve_scene", lambda *args: calls.append(1) or original(*args))
+    _ready(client, request_id, scene["scene_id"])
+    for _ in range(3):
+        assert _deck(client, request_id, scene["scene_id"])["analysis"]["status"] == "READY"
+    assert len(calls) == 1
+    _deck(client, request_id, scene["scene_id"], retry="true")                     # a retry always resolves
+    assert len(calls) == 2
 
 
 @pytest.mark.duckdb_integration
@@ -409,3 +615,16 @@ def test_drive_usage_materials_download_once_and_reuse_the_blob(scx, parse_count
     changed = _ready(scx.client, request_id, scene["scene_id"])
     assert "901" in {item["id"] for item in changed["deck"]["materials"]}
     assert len([rel for op, rel in scx.drive.calls if op == "download_to" and rel.endswith("model.fem")]) == 2
+
+    # L2: a queued job whose drive version is stale stops before downloading and stores nothing.
+    root_key = DriveRoot(scx.root, "scx.example.test").root_key()
+    with connect() as conn:
+        before = optistruct_materials.load_row(conn, root_key, f"{case}/Settle/model.fem")
+    stale = optistruct_materials.JobSpec(key="stale", root=DriveRoot(scx.root, "scx.example.test"), root_key=root_key,
+                                         rel_path=f"{case}/Settle/model.fem", fingerprint="drive:stale-version",
+                                         size=len(model), request_relative_path=USAGE)
+    optistruct_materials.run_job(optistruct_materials.JobState(spec=stale))
+    assert len([rel for op, rel in scx.drive.calls if op == "download_to" and rel.endswith("model.fem")]) == 2
+    with connect() as conn:
+        after = optistruct_materials.load_row(conn, root_key, f"{case}/Settle/model.fem")
+    assert after["updated_at"] == before["updated_at"] and after["status"] == "READY"

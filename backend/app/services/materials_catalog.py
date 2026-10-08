@@ -8,6 +8,7 @@ folder, else directly inside its Case folder; parsed in the background and cache
 from __future__ import annotations
 
 import re
+import threading
 import time
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -825,15 +826,66 @@ def _parse_scene(selected: dict[str, Any], scene_path: Path, root: Path,
     return parsed, warnings, [{"relative_path": relative, "size_bytes": size} for relative, _, size in sources]
 
 
+# Polling a running OptiStruct parse (every 1.5 s) must not rescan the whole catalog each time: the resolved
+# input file of a (root, request, scene) is kept for a short time.  The router still checks the caller's
+# permission on every request; folder ownership changes apply after at most the TTL; a retry always resolves.
+_USAGE_RESOLUTION_TTL_SECONDS = 20.0
+_USAGE_RESOLUTION_MAX = 512
+_usage_resolutions: dict[tuple[str, str, str, str], tuple[float, dict[str, Any]]] = {}
+_usage_resolutions_lock = threading.Lock()
+
+
+def _usage_resolution_key(root_key: str, request_id: str, scene_id: str | None,
+                          relative_path: str | None) -> tuple[str, str, str, str]:
+    return (root_key, request_id, scene_id or "", relative_path or "")
+
+
+def _usage_resolution_get(key: tuple[str, str, str, str]) -> dict[str, Any] | None:
+    with _usage_resolutions_lock:
+        found = _usage_resolutions.get(key)
+        if found is None:
+            return None
+        if found[0] <= time.monotonic():
+            _usage_resolutions.pop(key, None)
+            return None
+        return found[1]
+
+
+def _usage_resolution_put(key: tuple[str, str, str, str], value: dict[str, Any]) -> None:
+    now = time.monotonic()
+    with _usage_resolutions_lock:
+        if len(_usage_resolutions) >= _USAGE_RESOLUTION_MAX:
+            for stale in [item for item, (until, _) in _usage_resolutions.items() if until <= now]:
+                _usage_resolutions.pop(stale, None)
+            while len(_usage_resolutions) >= _USAGE_RESOLUTION_MAX:
+                _usage_resolutions.pop(next(iter(_usage_resolutions)))
+        _usage_resolutions[key] = (now + _USAGE_RESOLUTION_TTL_SECONDS, value)
+
+
+def reset_usage_resolutions() -> None:
+    with _usage_resolutions_lock:
+        _usage_resolutions.clear()
+
+
 def _usage_deck(conn: ConnectionLike, request_id: str, selected: dict[str, Any], scope: dict[str, Any],
-                retry: bool) -> dict[str, Any]:
+                retry: bool, *, resolution_key: tuple[str, str, str, str] | None = None) -> dict[str, Any]:
     root, root_id, root_key = result_registration_paths.storage_context(conn)
     _, files, warnings = _usage_candidates(selected, root, scope, conn=conn, root_id=root_id, root_key=root_key)
     if not files:
         raise MaterialsCatalogError("MATERIALS_DECK_NOT_FOUND",
                                     "Scene 또는 Case 폴더 바로 아래에서 OptiStruct 입력 파일(.fem)을 찾을 수 없습니다.", 404)
+    resolved = {"selected": selected, "environment": scope["environment"], "rel": files[0], "warnings": warnings,
+                "request_relative_path": scope["request_relative_path"]}
+    result = _usage_deck_resolved(conn, request_id, root, root_key, resolved, retry)
+    if resolution_key is not None:
+        _usage_resolution_put(resolution_key, resolved)
+    return result
+
+
+def _usage_deck_resolved(conn: ConnectionLike, request_id: str, root: Path, root_key: str, resolved: dict[str, Any],
+                         retry: bool) -> dict[str, Any]:
     fs = provider_for_root(root)
-    rel = files[0]
+    rel = resolved["rel"]
     try:
         entry = fs.stat(rel, follow_links=False, missing_ok=False)
     except (OSError, spdm_storage.SpdmStorageError) as exc:
@@ -841,22 +893,36 @@ def _usage_deck(conn: ConnectionLike, request_id: str, selected: dict[str, Any],
     try:
         analysis, parsed, file_list = optistruct_materials.deck_status(
             conn, root=root, root_key=root_key, rel_path=rel, entry=entry,
-            request_relative_path=scope["request_relative_path"], resolve_include=_resolve_optistruct_include,
+            request_relative_path=resolved["request_relative_path"], resolve_include=_resolve_optistruct_include,
             retry=retry,
         )
     except OptiStructParseError as exc:
         raise MaterialsCatalogError(exc.code, str(exc), exc.status_code) from exc
     if parsed is not None:
         parsed = {key: value for key, value in parsed.items() if key not in {"includes"}}
-    return {"request_id": request_id, "environment": scope["environment"], "scene": selected, "files": file_list,
-            "candidate_warnings": warnings, "analysis": analysis, "deck": parsed}
+    return {"request_id": request_id, "environment": resolved["environment"], "scene": resolved["selected"],
+            "files": file_list, "candidate_warnings": resolved["warnings"], "analysis": analysis, "deck": parsed}
 
 
 def deck(conn: ConnectionLike, request_id: str, environment: str,
          scene_id: str | None = None, relative_path: str | None = None, *, retry: bool = False) -> dict[str, Any]:
+    resolution_key = None
+    if str(environment).upper() == "USAGE":
+        root, _, root_key = result_registration_paths.storage_context(conn)
+        resolution_key = _usage_resolution_key(root_key, request_id, scene_id, relative_path)
+        cached = None if retry else _usage_resolution_get(resolution_key)
+        if cached is not None:
+            try:
+                fs = provider_for_root(root)
+                if fs.exists(cached["rel"]):
+                    return _usage_deck_resolved(conn, request_id, root, root_key, cached, retry)
+            except (MaterialsCatalogError, OSError, spdm_storage.SpdmStorageError):
+                pass
+            with _usage_resolutions_lock:      # stale (file gone or unreadable): resolve again below
+                _usage_resolutions.pop(resolution_key, None)
     selected, scene_path, scope = _resolve_scene(conn, request_id, environment, scene_id, relative_path)
     if scope["environment"] == "USAGE":
-        return _usage_deck(conn, request_id, selected, scope, retry)
+        return _usage_deck(conn, request_id, selected, scope, retry, resolution_key=resolution_key)
     root, root_id, root_key = result_registration_paths.storage_context(conn)
     parsed, candidate_warnings, files = _parse_scene(selected, scene_path, root, scope, conn, root_id, root_key)
     return {"request_id": request_id, "environment": scope["environment"], "scene": selected,

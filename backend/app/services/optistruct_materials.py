@@ -25,7 +25,7 @@ import threading
 import time
 import uuid
 from collections import deque
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
@@ -47,6 +47,11 @@ DEFAULT_MAX_INPUT_BYTES = 2 * 1024 ** 3
 DEFAULT_MAX_PARSE_SECONDS = 1800
 MAX_CONCURRENT = 1
 _ERROR_MESSAGE_LIMIT = 400
+RETRY_INTERVAL_SECONDS = 60.0          # explicit [다시 분석] at most once per file per minute (process-wide)
+TRANSIENT_BACKOFF_SECONDS = 60.0       # a storage/drive hiccup is shown, not cached, and re-queued after this
+# Storage errors that are a property of the file version (cached as FAILED like a parse error); every other
+# SpdmStorageError (staging full, drive timeout/unavailable, busy file …) and OSError is transient.
+_PERMANENT_STORAGE_CODES = frozenset({"SPDM_FILE_TOO_LARGE", "SPDM_PATH_INVALID"})
 
 
 def max_input_bytes() -> int:
@@ -99,20 +104,23 @@ def _store(*, root_key: str, rel_path: str, fp: str, size: int | None, status: s
            dependencies: list[dict[str, Any]], blob_sha256: str | None, error_code: str | None,
            error_message: str | None, seconds: float | None) -> None:
     now = _now()
-    payload = json.dumps(deck, ensure_ascii=False, separators=(",", ":")) if deck is not None else None
-    deps = json.dumps(dependencies, ensure_ascii=False, separators=(",", ":"))
+    # allow_nan=False: NaN/Infinity is not JSON and would make every later response fail (ValueError here
+    # instead; run_job then stores FAILED).
+    payload = json.dumps(deck, ensure_ascii=False, separators=(",", ":"), allow_nan=False) if deck is not None else None
+    deps = json.dumps(dependencies, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
     message = (error_message or "")[:_ERROR_MESSAGE_LIMIT] or None
     with connect() as conn:
-        existing = conn.execute("SELECT id FROM materials_deck_cache WHERE root_key=? AND rel_path=? AND solver=?",
-                                [root_key, rel_path, SOLVER]).fetchone()
-        values = [PARSER_VERSION, fp, size, status, payload, deps, blob_sha256, error_code, message, seconds, now]
-        if existing:
-            conn.execute("UPDATE materials_deck_cache SET parser_version=?,fingerprint=?,size_bytes=?,status=?,deck_json=?,"
-                         "dependencies_json=?,blob_sha256=?,error_code=?,error_message=?,parse_seconds=?,updated_at=? "
-                         "WHERE id=?", [*values, existing[0]])
-        else:
-            conn.execute(f"INSERT INTO materials_deck_cache({_COLUMNS}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                         [f"mdc-{uuid.uuid4().hex}", root_key, rel_path, SOLVER, *values[:-1], now, now])
+        # One statement (PostgreSQL and DuckDB): two workers or processes finishing the same file never race
+        # a SELECT-then-INSERT into the unique (root_key, rel_path, solver) constraint.
+        conn.execute(
+            f"INSERT INTO materials_deck_cache({_COLUMNS}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT (root_key, rel_path, solver) DO UPDATE SET parser_version=excluded.parser_version,"
+            "fingerprint=excluded.fingerprint,size_bytes=excluded.size_bytes,status=excluded.status,"
+            "deck_json=excluded.deck_json,dependencies_json=excluded.dependencies_json,"
+            "blob_sha256=excluded.blob_sha256,error_code=excluded.error_code,error_message=excluded.error_message,"
+            "parse_seconds=excluded.parse_seconds,updated_at=excluded.updated_at",
+            [f"mdc-{uuid.uuid4().hex}", root_key, rel_path, SOLVER, PARSER_VERSION, fp, size, status, payload, deps,
+             blob_sha256, error_code, message, seconds, now, now])
 
 
 # --- background jobs (in process, like case_finalization_jobs) ------------------------------
@@ -144,6 +152,12 @@ _lock = threading.Condition()
 _queue: deque[str] = deque()
 _jobs: dict[str, JobState] = {}
 _running: set[str] = set()
+_transient: dict[str, dict[str, Any]] = {}     # file key → last transient failure (not cached in the DB)
+_last_retry: dict[str, float] = {}             # file key → monotonic time of the last accepted retry
+
+
+def file_key(root_key: str, rel_path: str) -> str:
+    return f"{root_key}:{rel_path.casefold()}"
 
 
 def job_key(root_key: str, rel_path: str, fp: str) -> str:
@@ -208,6 +222,8 @@ def reset_for_tests() -> None:
     with _lock:
         _queue.clear()
         _jobs.clear()
+        _transient.clear()
+        _last_retry.clear()
 
 
 # --- the parse ------------------------------------------------------------------------------
@@ -215,9 +231,10 @@ def reset_for_tests() -> None:
 class _Reader:
     """Opens files of one root for one job (local stable reader, or drive content through the read session)."""
 
-    def __init__(self, spec: JobSpec, limit: int) -> None:
+    def __init__(self, spec: JobSpec, limit: int, check: Callable[[], None] | None = None) -> None:
         self.spec = spec
         self.limit = limit
+        self.check = check or (lambda: None)
         self.drive = isinstance(spec.root, DriveRoot)
         self.fs = provider_for_root(spec.root)
         self.blob_sha256: str | None = None
@@ -233,6 +250,9 @@ class _Reader:
     @contextmanager
     def reading(self, rel: str, *, main: bool = False) -> Iterator[tuple[Any, int, str]]:
         size, fp = self.describe(rel)
+        if main and fp != self.spec.fingerprint:
+            # A queued job whose file changed meanwhile: stop before reading (drive: before downloading).
+            raise OptiStructParseError("MATERIALS_FILE_CHANGED", "분석 대기 중 입력 파일이 바뀌었습니다. 다시 분석합니다.", 409)
         if size > self.limit:
             raise OptiStructParseError("MATERIALS_FILE_SIZE_LIMIT", _size_message(self.limit), 413)
         if not self.drive:
@@ -257,7 +277,11 @@ class _Reader:
             if path is not None:
                 self.blob_sha256 = self.spec.blob_sha256
         if path is None:
+            # The download itself is bounded by the drive gateway's own timeouts, not MAX_SECONDS (content() takes
+            # no deadline); the deadline is checked right before and right after it.
+            self.check()
             copy = drive_reads.content(spdm_root, rel, version, masked=masked, max_bytes=self.limit)
+            self.check()
             path = copy.path
             if main and copy.blob:
                 self.blob_sha256 = copy.sha256
@@ -269,14 +293,16 @@ def _size_message(limit: int) -> str:
     return f"OptiStruct 입력 파일(INCLUDE 포함)은 {limit / 1024 ** 3:.1f} GiB 이하여야 합니다."
 
 
-def _parse(state: JobState, deadline: float, limit: int) -> tuple[dict[str, Any], list[dict[str, Any]], str | None]:
+def _parse(state: JobState, deadline: float, limit: int,
+           dependencies: list[dict[str, Any]]) -> tuple[dict[str, Any], str | None]:
+    """Parse ``state.spec``; ``dependencies`` (INCLUDE files read or missing) is filled even when this raises."""
     spec = state.spec
-    reader = _Reader(spec, limit)
-    dependencies: list[dict[str, Any]] = []
 
     def check() -> None:
         if time.monotonic() > deadline:
             raise OptiStructParseError("MATERIALS_PARSE_TIME_LIMIT", "입력 파일 분석 시간이 한도를 초과했습니다.", 413)
+
+    reader = _Reader(spec, limit, check)
 
     def progress(done: int, total: int) -> None:
         if done > limit:
@@ -292,51 +318,82 @@ def _parse(state: JobState, deadline: float, limit: int) -> tuple[dict[str, Any]
         target = spec.resolve_include(spec.request_relative_path, including, value)
         if len(dependencies) >= 500:
             raise OptiStructParseError("MATERIALS_INCLUDE_FILE_LIMIT", "INCLUDE 파일 수가 허용 한도를 초과했습니다.", 413)
-        with reader.reading(target) as (stream, size, fp):
-            dependencies.append({"rel_path": target, "fingerprint": fp, "size_bytes": size})
+        stack = ExitStack()
+        try:
+            stream, size, fp = stack.enter_context(reader.reading(target))
+        except OptiStructParseError as error:
+            if error.code == "MATERIALS_INCLUDE_NOT_FOUND":
+                # Recorded so that creating the file later invalidates the cached result.
+                dependencies.append({"rel_path": target, "fingerprint": None, "size_bytes": None, "missing": True})
+            raise
+        dependencies.append({"rel_path": target, "fingerprint": fp, "size_bytes": size})
+        with stack:
             yield stream, target, size
 
-    with reader.reading(spec.rel_path, main=True) as (stream, size, fp):
-        if fp != spec.fingerprint:
-            raise OptiStructParseError("MATERIALS_FILE_CHANGED", "분석 대기 중 입력 파일이 바뀌었습니다. 다시 분석합니다.", 409)
+    with reader.reading(spec.rel_path, main=True) as (stream, size, _fp):
         parser = OptiStructDeckParser(open_include=open_include, on_progress=progress, check=check)
         result = parser.parse(stream, spec.rel_path, size)
-    return result, dependencies, reader.blob_sha256
+    return result, reader.blob_sha256
+
+
+def _is_transient(error: BaseException) -> bool:
+    if isinstance(error, OptiStructParseError):
+        return False
+    if isinstance(error, SpdmStorageError):
+        return getattr(error, "code", None) not in _PERMANENT_STORAGE_CODES
+    return isinstance(error, OSError)
 
 
 def run_job(state: JobState) -> None:
-    """Parse ``state.spec`` without a DB connection, then store READY or FAILED (one short connection)."""
+    """Parse ``state.spec`` without a DB connection, then store READY or FAILED (one short connection).
+
+    Transient storage/drive failures are not stored: they are kept in memory for
+    ``TRANSIENT_BACKOFF_SECONDS`` (shown as FAILED, then re-queued by the next view).
+    """
     spec = state.spec
     started = time.monotonic()
     deadline = started + max_parse_seconds()
     limit = max_input_bytes()
+    dependencies: list[dict[str, Any]] = []
+
+    def failed(code: str, message: str) -> None:
+        _store(root_key=spec.root_key, rel_path=spec.rel_path, fp=spec.fingerprint, size=spec.size, status="FAILED",
+               deck=None, dependencies=dependencies, blob_sha256=None, error_code=code, error_message=message,
+               seconds=round(time.monotonic() - started, 3))
+
     try:
-        result, dependencies, blob = drive_reads.run(lambda: _parse(state, deadline, limit), rounds=1,
-                                                     priority="BACKGROUND")
-    except (OptiStructParseError, SpdmStorageError) as error:
-        code = getattr(error, "code", "MATERIALS_PARSE_FAILED")
+        result, blob = drive_reads.run(lambda: _parse(state, deadline, limit, dependencies), rounds=1,
+                                       priority="BACKGROUND")
+    except (OptiStructParseError, SpdmStorageError, OSError) as error:
+        code = getattr(error, "code", None) or "MATERIALS_SCAN_INCOMPLETE"
         if code == "MATERIALS_FILE_CHANGED":
             return   # the next view sees the new fingerprint and queues a fresh parse
-        _store(root_key=spec.root_key, rel_path=spec.rel_path, fp=spec.fingerprint, size=spec.size, status="FAILED",
-               deck=None, dependencies=[], blob_sha256=None, error_code=code, error_message=str(error),
-               seconds=round(time.monotonic() - started, 3))
-        return
-    except OSError as error:
-        _store(root_key=spec.root_key, rel_path=spec.rel_path, fp=spec.fingerprint, size=spec.size, status="FAILED",
-               deck=None, dependencies=[], blob_sha256=None, error_code="MATERIALS_SCAN_INCOMPLETE",
-               error_message=f"입력 파일을 읽을 수 없습니다: {error.__class__.__name__}",
-               seconds=round(time.monotonic() - started, 3))
+        if _is_transient(error):
+            message = (str(error) if isinstance(error, SpdmStorageError)
+                       else f"입력 파일을 읽을 수 없습니다: {error.__class__.__name__}")
+            _LOG.warning("OptiStruct parse interrupted (not cached): %s %s", spec.rel_path, code)
+            with _lock:
+                _transient[file_key(spec.root_key, spec.rel_path)] = {
+                    "fingerprint": spec.fingerprint, "error_code": code, "error_message": message[:_ERROR_MESSAGE_LIMIT],
+                    "until": time.monotonic() + TRANSIENT_BACKOFF_SECONDS}
+            return
+        failed(code, str(error))
         return
     except Exception as error:  # noqa: BLE001 - recorded so the screen does not poll forever
         _LOG.exception("OptiStruct parse failed: %s", spec.rel_path)
-        _store(root_key=spec.root_key, rel_path=spec.rel_path, fp=spec.fingerprint, size=spec.size, status="FAILED",
-               deck=None, dependencies=[], blob_sha256=None, error_code="MATERIALS_PARSE_FAILED",
-               error_message=f"입력 파일 분석 중 오류가 발생했습니다: {error.__class__.__name__}",
-               seconds=round(time.monotonic() - started, 3))
+        failed("MATERIALS_PARSE_FAILED", f"입력 파일 분석 중 오류가 발생했습니다: {error.__class__.__name__}")
         return
     seconds = round(time.monotonic() - started, 3)
-    _store(root_key=spec.root_key, rel_path=spec.rel_path, fp=spec.fingerprint, size=spec.size, status="READY",
-           deck=result, dependencies=dependencies, blob_sha256=blob, error_code=None, error_message=None, seconds=seconds)
+    try:
+        _store(root_key=spec.root_key, rel_path=spec.rel_path, fp=spec.fingerprint, size=spec.size, status="READY",
+               deck=result, dependencies=dependencies, blob_sha256=blob, error_code=None, error_message=None,
+               seconds=seconds)
+    except ValueError:   # not JSON-serialisable (e.g. a non-finite number that slipped through)
+        _LOG.exception("OptiStruct parse result not storable: %s", spec.rel_path)
+        failed("MATERIALS_PARSE_FAILED", "분석 결과를 저장할 수 없습니다(잘못된 수치).")
+        return
+    with _lock:
+        _transient.pop(file_key(spec.root_key, spec.rel_path), None)
     _LOG.info("OptiStruct materials parsed: %s (%d bytes, %.1f s)", spec.rel_path, spec.size, seconds)
 
 
@@ -351,6 +408,10 @@ def _dependencies_fresh(fs: Any, dependencies: list[dict[str, Any]]) -> bool:
             entry = fs.stat(rel, follow_links=False, missing_ok=True)
         except (OSError, SpdmStorageError):
             return False
+        if item.get("missing"):
+            if entry is not None and entry.kind == "file":   # the missing INCLUDE file appeared
+                return False
+            continue
         if entry is None or entry.kind != "file" or fingerprint(entry) != item.get("fingerprint"):
             return False
     return True
@@ -360,7 +421,7 @@ def _analysis(status: str, *, rel_path: str, size: int, **extra: Any) -> dict[st
     payload = {"solver": SOLVER, "status": status, "relative_path": rel_path, "size_bytes": size,
                "max_bytes": max_input_bytes(), "bytes_done": 0, "bytes_total": size, "progress": 0.0,
                "queue_position": 0, "parse_seconds": None, "parsed_at": None, "error_code": None,
-               "error_message": None, "cached": False}
+               "error_message": None, "cached": False, "transient": False, "retry_after_seconds": None}
     payload.update(extra)
     total = payload.get("bytes_total") or 0
     if status == "READY":
@@ -368,6 +429,20 @@ def _analysis(status: str, *, rel_path: str, size: int, **extra: Any) -> dict[st
     elif total:
         payload["progress"] = round(min(1.0, float(payload.get("bytes_done") or 0) / float(total)), 4)
     return payload
+
+
+def _accept_retry(key: str) -> tuple[bool, int | None]:
+    """(accepted, seconds to wait): one explicit retry per file per ``RETRY_INTERVAL_SECONDS``."""
+    now = time.monotonic()
+    with _lock:
+        last = _last_retry.get(key)
+        if last is not None and now - last < RETRY_INTERVAL_SECONDS:
+            return False, max(1, int(RETRY_INTERVAL_SECONDS - (now - last) + 0.999))
+        _last_retry[key] = now
+        if len(_last_retry) > 4096:   # bounded: drop entries older than the interval
+            for stale in [item for item, at in _last_retry.items() if now - at >= RETRY_INTERVAL_SECONDS]:
+                _last_retry.pop(stale, None)
+        return True, None
 
 
 def deck_status(conn: ConnectionLike, *, root: Any, root_key: str, rel_path: str, entry: Any,
@@ -382,7 +457,17 @@ def deck_status(conn: ConnectionLike, *, root: Any, root_key: str, rel_path: str
     row = load_row(conn, root_key, rel_path)
     files = [{"relative_path": rel_path, "size_bytes": size}]
     key = job_key(root_key, rel_path, fp)
+    fkey = file_key(root_key, rel_path)
     running = job_state(key)
+    retry_after: int | None = None
+
+    def wants_retry() -> bool:
+        nonlocal retry_after
+        if not retry:
+            return False
+        accepted, retry_after = _accept_retry(fkey)
+        return accepted
+
     if row and row.get("fingerprint") == fp and row.get("parser_version") == PARSER_VERSION and running is None:
         try:
             dependencies = json.loads(row.get("dependencies_json") or "[]")
@@ -390,17 +475,29 @@ def deck_status(conn: ConnectionLike, *, root: Any, root_key: str, rel_path: str
             dependencies = None
         if isinstance(dependencies, list) and _dependencies_fresh(provider_for_root(root), dependencies):
             files += [{"relative_path": str(item.get("rel_path")), "size_bytes": item.get("size_bytes")}
-                      for item in dependencies]
+                      for item in dependencies if not item.get("missing")]
             parsed_at = row.get("updated_at")
             common = {"parse_seconds": row.get("parse_seconds"), "cached": True,
                       "parsed_at": parsed_at.isoformat() if hasattr(parsed_at, "isoformat") else parsed_at}
             if row.get("status") == "READY" and row.get("deck_json"):
                 deck = json.loads(row["deck_json"])
                 return _analysis("READY", rel_path=rel_path, size=size, bytes_done=size, **common), deck, files
-            if row.get("status") == "FAILED" and not retry:
+            if row.get("status") == "FAILED" and not wants_retry():
                 return _analysis("FAILED", rel_path=rel_path, size=size, error_code=row.get("error_code"),
-                                 error_message=row.get("error_message"), **common), None, files
+                                 error_message=row.get("error_message"), retry_after_seconds=retry_after,
+                                 **common), None, files
     if running is None:
+        with _lock:
+            transient = _transient.get(fkey)
+            if transient is not None and (transient["fingerprint"] != fp or transient["until"] <= time.monotonic()):
+                _transient.pop(fkey, None)
+                transient = None
+        if transient is not None and not wants_retry():
+            return _analysis("FAILED", rel_path=rel_path, size=size, error_code=transient["error_code"],
+                             error_message=transient["error_message"], transient=True,
+                             retry_after_seconds=retry_after), None, files
+        with _lock:
+            _transient.pop(fkey, None)
         blob = row.get("blob_sha256") if row and row.get("fingerprint") == fp else None
         running = submit(JobSpec(key=key, root=root, root_key=root_key, rel_path=rel_path, fingerprint=fp, size=size,
                                  request_relative_path=request_relative_path, blob_sha256=blob,
@@ -413,6 +510,6 @@ def is_input_name(name: str) -> bool:
     return PurePosixPath(name).suffix.casefold() in INPUT_SUFFIXES
 
 
-__all__ = ["DEFAULT_MAX_INPUT_BYTES", "INPUT_SUFFIXES", "JobSpec", "SOLVER", "deck_status", "fingerprint",
+__all__ = ["DEFAULT_MAX_INPUT_BYTES", "INPUT_SUFFIXES", "JobSpec", "SOLVER", "deck_status", "file_key", "fingerprint",
            "is_input_name", "job_state", "load_row", "max_input_bytes", "max_parse_seconds", "reset_for_tests",
            "run_job", "submit", "wait_idle"]
