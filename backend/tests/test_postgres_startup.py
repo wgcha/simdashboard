@@ -87,6 +87,9 @@ class _PostgresStartupConnection:
                                             "upload_batch_id", "complete_json", "complete_sha256", "confirmed_at",
                                             "designation_seq", "designation_batch_id", "error_code", "error_message",
                                             "created_by", "confirmed_by", "created_at", "queued_at", "updated_at"},
+                "materials_deck_cache": {"id", "root_key", "rel_path", "solver", "parser_version", "fingerprint",
+                                         "size_bytes", "status", "deck_json", "dependencies_json", "blob_sha256",
+                                         "error_code", "error_message", "parse_seconds", "created_at", "updated_at"},
             }[table]
             return _FakeResult([] if self.missing_column in columns else [(column,) for column in columns])
         raise AssertionError(f"unexpected startup query: {statement}")

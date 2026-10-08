@@ -137,7 +137,27 @@ export type ContentSnapshot = {
   tableHeaders?: string[]
   tableRows?: string[][]
   chartSeries?: Array<{ name: string; labels: string[]; values: number[] }>
+  /** Native charts (one or a 2-column grid) with axis titles, units, series names and notes (Case 결과 보고서). */
+  charts?: ReportChartSpec[]
+  /** Embedded video (data URI, mp4) with an optional PNG poster; rendered by an `image` element. */
+  video?: { dataUri: string; poster?: string; width?: number; height?: number }
   media?: Overview['media'][number]
+}
+
+/**
+ * One native chart. `bar`: clustered columns over `categories`. `scatter`: XY
+ * lines, each series with its own numeric `x` (merged onto one X axis when
+ * rendered; gaps are spanned). `empty` replaces the chart with a message.
+ */
+export type ReportChartSpec = {
+  title: string
+  kind: 'bar' | 'scatter'
+  categories?: string[]
+  series: Array<{ name: string; color?: string; values: Array<number | null>; x?: number[] }>
+  xTitle?: string
+  yTitle?: string
+  notes?: string[]
+  empty?: string
 }
 
 const widgetPresentation: Record<string, ReportContentItem['defaultPresentation']> = {
@@ -836,6 +856,11 @@ async function renderTemplateSlide(pptx: pptxgen, slideDefinition: ReportSlideDe
       continue
     }
     if (element.type === 'chart') {
+      const contentCharts = element.binding?.source === 'content' ? (content?.data as ContentSnapshot | undefined)?.charts : undefined
+      if (contentCharts?.length) {
+        addChartGrid(pptx, slide, contentCharts, { x, y, w, h })
+        continue
+      }
       const contentSeries = element.binding?.source === 'content' ? (content?.data as ContentSnapshot | undefined)?.chartSeries : undefined
       if (contentSeries?.length) {
         slide.addChart(pptx.ChartType.line, contentSeries, {
@@ -874,6 +899,11 @@ async function renderTemplateSlide(pptx: pptxgen, slideDefinition: ReportSlideDe
       continue
     }
     if (element.type === 'image') {
+      const video = element.binding?.source === 'content' ? (content?.data as ContentSnapshot | undefined)?.video : undefined
+      if (video) {
+        slide.addMedia({ type: 'video', data: video.dataUri, ...(video.poster ? { cover: video.poster } : {}), ...fitRect({ x, y, w, h }, video.width, video.height) })
+        continue
+      }
       const preloaded = element.binding?.source === 'content' ? (content?.data as ContentSnapshot | undefined)?.image : undefined
       if (preloaded) {
         slide.addImage({ data: preloaded.dataUri, ...fitRect({ x, y, w, h }, preloaded.width, preloaded.height) })
@@ -886,9 +916,78 @@ async function renderTemplateSlide(pptx: pptxgen, slideDefinition: ReportSlideDe
           if (!response.ok) throw new Error(`HTTP ${response.status}`)
           slide.addImage({ data: await blobToDataUri(await response.blob()), x, y, w, h })
         } catch { addEmptyElement(slide, element, '이미지를 불러오지 못했습니다.') }
+      } else if (content && element.binding?.source === 'content') {
+        // Content media that could not be included (size cap, read error, format): say why.
+        addEmptyElement(slide, element, ((content.data as ContentSnapshot | undefined)?.text ?? content.title).replace(/\s*\n\s*/g, ' · '))
       } else addEmptyElement(slide, element, '대표 이미지를 등록해 주세요.')
     }
   }
+}
+
+/** Light-theme chart series colours (`--color-chart-series-1..5`) and a few extra hues. */
+const CHART_PALETTE = ['0369A1', 'BE123C', '047857', 'A16207', '6D28D9', '0E7490', 'C2410C', '4D7C0F']
+
+/** PowerPoint colour of a series: hex as is, `var(--color-chart-series-N)` mapped to the palette, else by position. */
+export function reportChartColor(value: string | undefined, index: number) {
+  const hex = value?.replace('#', '').toUpperCase()
+  if (hex && /^[0-9A-F]{6}$/.test(hex)) return hex
+  const variable = value?.match(/--color-chart-series-(\d+)/)
+  if (variable) return CHART_PALETTE[(Number(variable[1]) - 1 + CHART_PALETTE.length) % CHART_PALETTE.length]
+  return CHART_PALETTE[index % CHART_PALETTE.length]
+}
+
+/** Merges per-series XY points onto one sorted X axis (blank where a series has no point at that X). */
+export function scatterChartData(chart: Pick<ReportChartSpec, 'series'>) {
+  const xs = [...new Set(chart.series.flatMap((series) => series.x ?? []))].sort((a, b) => a - b)
+  const position = new Map(xs.map((value, index) => [value, index]))
+  return {
+    x: xs,
+    series: chart.series.map((series) => {
+      const values = new Array<number | null>(xs.length).fill(null)
+      ;(series.x ?? []).forEach((value, index) => { const y = series.values[index]; if (y != null) values[position.get(value)!] = y })
+      return { name: series.name, values }
+    }),
+  }
+}
+
+/** One native chart, or a 2-column grid of charts, inside `box`; notes go under each chart. */
+function addChartGrid(pptx: pptxgen, slide: pptxgen.Slide, charts: ReportChartSpec[], box: { x: number; y: number; w: number; h: number }) {
+  const columns = charts.length > 1 ? 2 : 1
+  const rows = Math.ceil(charts.length / columns)
+  const gap = 0.15
+  const cellW = (box.w - gap * (columns - 1)) / columns
+  const cellH = (box.h - gap * (rows - 1)) / rows
+  charts.forEach((chart, index) => {
+    const cell = { x: box.x + (index % columns) * (cellW + gap), y: box.y + Math.floor(index / columns) * (cellH + gap), w: cellW, h: cellH }
+    const notes = (chart.notes ?? []).filter(Boolean)
+    const noteH = notes.length ? Math.min(cell.h * 0.3, 0.14 * notes.length + 0.06) : 0
+    const area = { ...cell, h: cell.h - noteH }
+    const colored = chart.series.map((series, position) => ({ ...series, color: reportChartColor(series.color, position) }))
+    const series = colored.filter((item) => item.values.some((value) => value != null))
+    if (chart.empty || !series.length) {
+      slide.addShape('rect', { ...area, fill: { color: 'F8FBFD', transparency: 100 }, line: { color: 'D6E4EC', width: 0.8 } })
+      slide.addText(chart.title, { x: area.x + 0.08, y: area.y + 0.06, w: area.w - 0.16, h: 0.26, fontFace: 'Noto Sans KR', fontSize: 10, bold: true, color: COLORS.ink, margin: 0, fit: 'shrink' })
+      slide.addText(chart.empty || '표시할 값이 없습니다.', { x: area.x + 0.08, y: area.y + area.h / 2 - 0.14, w: area.w - 0.16, h: 0.28, fontFace: 'Noto Sans KR', fontSize: 8, color: COLORS.muted, align: 'center', margin: 0, fit: 'shrink' })
+    } else {
+      const common: pptxgen.IChartOpts = {
+        ...area, showTitle: true, title: chart.title, titleFontSize: 10, titleFontFace: 'Noto Sans KR', titleColor: COLORS.ink,
+        showLegend: true, legendPos: 'b', legendFontSize: 8, legendFontFace: 'Noto Sans KR',
+        showCatAxisTitle: Boolean(chart.xTitle), catAxisTitle: chart.xTitle, catAxisTitleFontSize: 8,
+        showValAxisTitle: Boolean(chart.yTitle), valAxisTitle: chart.yTitle, valAxisTitleFontSize: 8,
+        catAxisLabelFontSize: 7, valAxisLabelFontSize: 7, chartColors: series.map((item) => item.color),
+        valGridLine: { color: 'E3EAF0', size: 0.5 }, catGridLine: { style: 'none' },
+      }
+      if (chart.kind === 'bar') {
+        slide.addChart(pptx.ChartType.bar, series.map((item) => ({ name: item.name, labels: chart.categories ?? [], values: item.values as number[] })), { ...common, barDir: 'col', barGrouping: 'clustered', barGapWidthPct: 60 })
+      } else {
+        const merged = scatterChartData({ series })
+        slide.addChart(pptx.ChartType.scatter, [{ name: chart.xTitle || 'X', values: merged.x }, ...merged.series.map((item) => ({ name: item.name, values: item.values as number[] }))], {
+          ...common, lineSize: 1.5, lineDataSymbol: merged.x.length > 60 ? 'none' : 'circle', lineDataSymbolSize: 4, displayBlanksAs: 'span',
+        })
+      }
+    }
+    if (notes.length) slide.addText(notes.join('\n'), { x: cell.x, y: cell.y + cell.h - noteH, w: cell.w, h: noteH, fontFace: 'Noto Sans KR', fontSize: 7, color: COLORS.muted, margin: 0, valign: 'top', fit: 'shrink' })
+  })
 }
 
 /** Largest rectangle with the image's aspect ratio, centred inside `box`. */

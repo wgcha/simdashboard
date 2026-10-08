@@ -100,8 +100,10 @@ DESIGNATIONS_FILE = "designations.json"
 MAX_STATUS_HISTORY = 50
 # App-generated reports (stage 5 builders). Order is the display/record order.
 REPORT_FORMATS = ("pptx", "html")
-MAX_REPORT_BYTES = {"pptx": 64 * 1024 * 1024, "html": 320 * 1024 * 1024}
-MAX_PPTX_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
+# PPTX may embed images (≤300 MB) and mp4 videos (Case 보고서 "영상 포함"); the browser keeps the
+# videos within this limit. 480 MiB stays below the 512 MB request cap of the intranet proxies.
+MAX_REPORT_BYTES = {"pptx": 480 * 1024 * 1024, "html": 320 * 1024 * 1024}
+MAX_PPTX_UNCOMPRESSED_BYTES = 640 * 1024 * 1024
 MAX_PPTX_ENTRIES = 10_000
 MAX_PPTX_RATIO = 200
 MAX_CONTENT_TYPES_BYTES = 1024 * 1024

@@ -1,4 +1,4 @@
-"""Read-only Radioss materials catalog for request-owned scenes."""
+"""Read-only solver materials catalog for request-owned scenes (distribution: Radioss, usage: OptiStruct)."""
 from __future__ import annotations
 
 from typing import Literal
@@ -29,7 +29,7 @@ def _raise_error(exc: Exception) -> None:
 @router.get("/catalog")
 @drive_reads.read_session()
 def materials_catalog(request: Request, request_id: str = Query(min_length=1, max_length=128),
-                      environment: Literal["DISTRIBUTION"] = "DISTRIBUTION"):
+                      environment: Literal["DISTRIBUTION", "USAGE"] = "DISTRIBUTION"):
     with connect() as conn:
         require_resource_permission(request, PROJECT_DATA_VIEW, "request", request_id, conn=conn)
         try:
@@ -42,13 +42,14 @@ def materials_catalog(request: Request, request_id: str = Query(min_length=1, ma
 @router.get("/deck")
 @drive_reads.read_session()
 def materials_deck(request: Request, request_id: str = Query(min_length=1, max_length=128),
-                   environment: Literal["DISTRIBUTION"] = "DISTRIBUTION",
+                   environment: Literal["DISTRIBUTION", "USAGE"] = "DISTRIBUTION",
                    scene_id: str | None = Query(default=None, max_length=256),
-                   relative_path: str | None = Query(default=None, max_length=2048)):
+                   relative_path: str | None = Query(default=None, max_length=2048),
+                   retry: bool = Query(default=False, description="USAGE: re-run a FAILED OptiStruct parse")):
     with connect() as conn:
         require_resource_permission(request, PROJECT_DATA_VIEW, "request", request_id, conn=conn)
         try:
-            return service.deck(conn, request_id, environment, scene_id, relative_path)
+            return service.deck(conn, request_id, environment, scene_id, relative_path, retry=retry)
         except (service.MaterialsCatalogError, result_registration_paths.ResultRegistrationError,
                 spdm_storage.SpdmStorageError) as exc:
             _raise_error(exc)

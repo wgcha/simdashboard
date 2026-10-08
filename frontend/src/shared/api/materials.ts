@@ -2,7 +2,7 @@ import { apiFetch } from './auth'
 import { apiErrorFromResponse } from './errors'
 import { apiUrl } from './url'
 
-export type MaterialsEnvironment = 'DISTRIBUTION'
+export type MaterialsEnvironment = 'DISTRIBUTION' | 'USAGE'
 export type MaterialsSource = { file: string | null; line: number | null }
 export type MaterialsScene = {
   scene_id: string
@@ -94,6 +94,8 @@ export type MaterialsCurveUse = {
 }
 export type MaterialsFunction = {
   id: string
+  /** Source card: FUNCT (Radioss) or TABLES1/TABLEMD/TABLED1 (OptiStruct). */
+  card: string | null
   title: string | null
   points: Array<{ x: number; y: number }>
   uses: MaterialsCurveUse[]
@@ -101,7 +103,9 @@ export type MaterialsFunction = {
   source: MaterialsSource | null
 }
 export type MaterialsWarning = { code: string; message: string; source: MaterialsSource | null }
+export type MaterialsSolver = 'RADIOSS' | 'OPTISTRUCT'
 export type MaterialsDeck = {
+  solver: MaterialsSolver
   parts: MaterialsPart[]
   properties: MaterialsProperty[]
   materials: MaterialsMaterial[]
@@ -112,11 +116,29 @@ export type MaterialsDeck = {
     work: { mass: string | null; length: string | null; time: string | null }
   }
 }
+/** Usage environment: background parse state of the OptiStruct input (absent for distribution). */
+export type MaterialsAnalysisStatus = 'QUEUED' | 'RUNNING' | 'READY' | 'FAILED'
+export type MaterialsAnalysis = {
+  status: MaterialsAnalysisStatus
+  relative_path: string
+  size_bytes: number | null
+  bytes_done: number
+  bytes_total: number
+  progress: number
+  queue_position: number
+  parse_seconds: number | null
+  parsed_at: string | null
+  error_code: string | null
+  error_message: string | null
+  cached: boolean
+}
 export type MaterialsDeckResponse = {
   scene: MaterialsScene
   files: Array<{ relative_path: string; size_bytes: number | null }>
   candidate_warnings: Array<{ code: string; relative_paths: string[] }>
-  deck: MaterialsDeck
+  analysis: MaterialsAnalysis | null
+  /** null while a usage-environment parse is queued, running or failed. */
+  deck: MaterialsDeck | null
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -227,10 +249,40 @@ function parseCatalog(value: unknown): MaterialsCatalog {
   return { request_id: optionalText(payload.request_id), environment: optionalText(payload.environment), scenes, hierarchy: hierarchy(payload.hierarchy), conflicts }
 }
 
+function analysis(value: unknown): MaterialsAnalysis | null {
+  const item = record(value)
+  const status = item?.status
+  if (!item || (status !== 'QUEUED' && status !== 'RUNNING' && status !== 'READY' && status !== 'FAILED')) return null
+  return {
+    status, relative_path: optionalText(item.relative_path) ?? '', size_bytes: finite(item.size_bytes),
+    bytes_done: finite(item.bytes_done) ?? 0, bytes_total: finite(item.bytes_total) ?? 0, progress: finite(item.progress) ?? 0,
+    queue_position: finite(item.queue_position) ?? 0, parse_seconds: finite(item.parse_seconds), parsed_at: optionalText(item.parsed_at),
+    error_code: optionalText(item.error_code), error_message: optionalText(item.error_message), cached: item.cached === true,
+  }
+}
+
+function deckFiles(payload: Record<string, unknown>) {
+  return rows(payload.files).flatMap((value) => {
+    const item = record(value)
+    return item && typeof item.relative_path === 'string' ? [{ relative_path: item.relative_path, size_bytes: finite(item.size_bytes) }] : []
+  })
+}
+
+function candidateWarnings(payload: Record<string, unknown>) {
+  return rows(payload.candidate_warnings).flatMap((value) => {
+    const item = record(value)
+    return item && typeof item.code === 'string' ? [{ code: item.code, relative_paths: rows(item.relative_paths).filter((path): path is string => typeof path === 'string') }] : []
+  })
+}
+
 function parseDeck(value: unknown): MaterialsDeckResponse {
   const payload = record(value)
   const rawDeck = record(payload?.deck)
   const parsedScene = scene(payload?.scene)
+  const parsedAnalysis = analysis(payload?.analysis)
+  if (payload && parsedScene && parsedAnalysis && parsedAnalysis.status !== 'READY') {
+    return { scene: parsedScene, files: deckFiles(payload), candidate_warnings: candidateWarnings(payload), analysis: parsedAnalysis, deck: null }
+  }
   if (!payload || !rawDeck || !parsedScene) throw new Error('소재 덱 응답 형식이 올바르지 않습니다.')
 
   const parts = rows(rawDeck.parts).flatMap((value): MaterialsPart[] => {
@@ -290,7 +342,7 @@ function parseDeck(value: unknown): MaterialsDeckResponse {
         x_unit: optionalText(use.x_unit), y_unit: optionalText(use.y_unit),
       }] : []
     })
-    return [{ id: itemId, title: optionalText(item.title), points, uses, point_count: finite(item.point_count) ?? points.length, source: source(item.source) }]
+    return [{ id: itemId, card: optionalText(item.card), title: optionalText(item.title), points, uses, point_count: finite(item.point_count) ?? points.length, source: source(item.source) }]
   })
   const warnings = rows(rawDeck.warnings).flatMap((value): MaterialsWarning[] => {
     const item = record(value)
@@ -304,15 +356,13 @@ function parseDeck(value: unknown): MaterialsDeckResponse {
   }
   return {
     scene: parsedScene,
-    files: rows(payload.files).flatMap((value) => {
-      const item = record(value)
-      return item && typeof item.relative_path === 'string' ? [{ relative_path: item.relative_path, size_bytes: finite(item.size_bytes) }] : []
-    }),
-    candidate_warnings: rows(payload.candidate_warnings).flatMap((value) => {
-      const item = record(value)
-      return item && typeof item.code === 'string' ? [{ code: item.code, relative_paths: rows(item.relative_paths).filter((path): path is string => typeof path === 'string') }] : []
-    }),
-    deck: { parts, properties, materials, functions, warnings, unit_system: { input: unitGroup(unitSystem?.input), work: unitGroup(unitSystem?.work) } },
+    files: deckFiles(payload),
+    candidate_warnings: candidateWarnings(payload),
+    analysis: parsedAnalysis,
+    deck: {
+      solver: rawDeck.solver === 'OPTISTRUCT' ? 'OPTISTRUCT' : 'RADIOSS',
+      parts, properties, materials, functions, warnings, unit_system: { input: unitGroup(unitSystem?.input), work: unitGroup(unitSystem?.work) },
+    },
   }
 }
 
@@ -327,8 +377,9 @@ export const materialsApi = {
     const query = new URLSearchParams({ request_id: requestId, environment })
     return parseCatalog(await requestJson(`/api/materials/catalog?${query}`, signal))
   },
-  async deck(requestId: string, sceneId: string, environment: MaterialsEnvironment, signal?: AbortSignal) {
+  async deck(requestId: string, sceneId: string, environment: MaterialsEnvironment, signal?: AbortSignal, retry = false) {
     const query = new URLSearchParams({ request_id: requestId, scene_id: sceneId, environment })
+    if (retry) query.set('retry', 'true')
     return parseDeck(await requestJson(`/api/materials/deck?${query}`, signal))
   },
 }

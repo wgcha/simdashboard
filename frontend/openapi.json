@@ -11580,7 +11580,10 @@
             "in": "query",
             "required": false,
             "schema": {
-              "const": "DISTRIBUTION",
+              "enum": [
+                "DISTRIBUTION",
+                "USAGE"
+              ],
               "type": "string",
               "default": "DISTRIBUTION",
               "title": "Environment"
@@ -11633,7 +11636,10 @@
             "in": "query",
             "required": false,
             "schema": {
-              "const": "DISTRIBUTION",
+              "enum": [
+                "DISTRIBUTION",
+                "USAGE"
+              ],
               "type": "string",
               "default": "DISTRIBUTION",
               "title": "Environment"
@@ -11672,6 +11678,18 @@
               ],
               "title": "Relative Path"
             }
+          },
+          {
+            "name": "retry",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "USAGE: re-run a FAILED OptiStruct parse",
+              "default": false,
+              "title": "Retry"
+            },
+            "description": "USAGE: re-run a FAILED OptiStruct parse"
           }
         ],
         "responses": {

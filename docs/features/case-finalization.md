@@ -142,13 +142,13 @@
 
 | 형식 | 상한 | 검사 |
 |---|---|---|
-| PPTX | 64 MiB | zip 시작 바이트. `zipfile`이 목록을 읽기 전에 EOCD·ZIP64 EOCD를 직접 읽어 항목 10,000개·중앙 목록 4 MiB 초과를 거부(`FINALIZATION_REPORT_PPTX_TOO_MANY_ENTRIES`). `[Content_Types].xml`·`ppt/presentation.xml` 존재. `[Content_Types].xml`과 모든 `.rels`(각 1 MiB, 합계 16 MiB)는 BOM·XML 선언으로 UTF-8/UTF-16을 판별해 표준 라이브러리 파서로 읽고 DTD·ENTITY와 다른 인코딩은 거부(새 의존성 없음, defusedxml 미사용). 매크로 거부(`FINALIZATION_REPORT_PPTX_MACRO`: `vbaProject`·`vbaData` 항목, `macroEnabled`·`vbaProject` 형식, vbaProject 관계). 앱이 만들지 않는 실행 가능 내용 거부(`FINALIZATION_REPORT_PPTX_ACTIVE_CONTENT`): `ppt/activeX/`, `ppt/embeddings/`의 `.xlsx` 외 항목, ActiveX·OLE 형식, `oleObject`·`control`·`activeXControl*`·`attachedTemplate` 등 관계, `TargetMode="External"` 관계 전부, `ppt/embeddings/*.xlsx`가 아닌 `package` 관계. pptxgenjs 차트의 내장 통합문서(`ppt/embeddings/*.xlsx`, 16 MiB)는 허용하되 그 안의 매크로·ActiveX·내장 항목을 다시 거부. 절대 경로·`..`·`\`·`:`·중복 항목·암호화 항목 거부, 압축 해제 합계 512 MiB와 1 MiB 넘는 항목의 압축률 200배 상한 |
+| PPTX | 480 MiB(2026-10-08, 이전 64 MiB) | zip 시작 바이트. `zipfile`이 목록을 읽기 전에 EOCD·ZIP64 EOCD를 직접 읽어 항목 10,000개·중앙 목록 4 MiB 초과를 거부(`FINALIZATION_REPORT_PPTX_TOO_MANY_ENTRIES`). `[Content_Types].xml`·`ppt/presentation.xml` 존재. `[Content_Types].xml`과 모든 `.rels`(각 1 MiB, 합계 16 MiB)는 BOM·XML 선언으로 UTF-8/UTF-16을 판별해 표준 라이브러리 파서로 읽고 DTD·ENTITY와 다른 인코딩은 거부(새 의존성 없음, defusedxml 미사용). 매크로 거부(`FINALIZATION_REPORT_PPTX_MACRO`: `vbaProject`·`vbaData` 항목, `macroEnabled`·`vbaProject` 형식, vbaProject 관계). 앱이 만들지 않는 실행 가능 내용 거부(`FINALIZATION_REPORT_PPTX_ACTIVE_CONTENT`): `ppt/activeX/`, `ppt/embeddings/`의 `.xlsx` 외 항목, ActiveX·OLE 형식, `oleObject`·`control`·`activeXControl*`·`attachedTemplate` 등 관계, `TargetMode="External"` 관계 전부, `ppt/embeddings/*.xlsx`가 아닌 `package` 관계. pptxgenjs 차트의 내장 통합문서(`ppt/embeddings/*.xlsx`, 16 MiB)는 허용하되 그 안의 매크로·ActiveX·내장 항목을 다시 거부. 절대 경로·`..`·`\`·`:`·중복 항목·암호화 항목 거부, 압축 해제 합계 640 MiB와 1 MiB 넘는 항목의 압축률 200배 상한 |
 | HTML | 320 MiB | UTF-8 엄격 디코딩, BOM·공백 뒤 `<!doctype html`(대소문자 무관)로 시작, NUL 거부. 저장만 하고 앱이 페이지로 제공하지 않는다 |
 
 - 빈 파일은 `FINALIZATION_REPORT_EMPTY`, 상한 초과는 413 `FINALIZATION_REPORT_TOO_LARGE`(선언 길이·실제 수신 모두 검사).
-- 요청 크기: 앱(uvicorn)에는 본문 상한이 없고 라우트가 형식별 상한으로 끊는다. 인트라넷 Caddy 템플릿(`deploy/windows/Caddyfile.intranet.template`)의 `request_body max_size 512MB`는 요청 하나당이라 HTML 320 MiB도 통과한다. 이 값을 줄이면 HTML 영상 포함 보고서 업로드가 실패한다.
+- 요청 크기: 앱(uvicorn)에는 본문 상한이 없고 라우트가 형식별 상한으로 끊는다. 인트라넷 Caddy 템플릿(`deploy/windows/Caddyfile.intranet.template`)의 `request_body max_size 512MB`는 요청 하나당이라 HTML 320 MiB·PPTX 480 MiB(약 503 MB)도 통과한다. 이 값을 줄이면 HTML 영상 포함 보고서 업로드가 실패한다.
 - **CAE 복사 상한 없음(W2):** 파일 수·파일 크기·전체 크기 상한(이전 32 MiB·256 MiB·500개)을 없앴다. 대신 시작 전 남은 공간을 확인한다. 안전 상한으로 Scene 폴더 탐색 항목 500,000개·깊이 32, include 덱 5,000개, `plan.json`·`complete.json` 각 64 MiB(파일 약 20만 개 수준), `copied.jsonl` 1 GiB를 둔다(`FINALIZATION_SCAN_LIMIT`·`FINALIZATION_DEPTH_LIMIT`·`FINALIZATION_INCLUDE_LIMIT`·`FINALIZATION_METADATA_LIMIT`).
-- 보고서 상한·검사(PPTX 64 MiB, HTML 320 MiB)는 그대로다.
+- 보고서 상한·검사: PPTX 480 MiB, HTML 320 MiB. PPTX 상한은 Case 보고서가 이미지(≤300MB)와 mp4 영상(`영상 포함`, ≤200MB)을 넣게 되면서 2026-10-08에 64 → 480 MiB(압축 해제 512 → 640 MiB)로 올렸다. 인트라넷 프록시의 요청 상한(Caddy `512MB`, nginx `512m`) 아래라 배포 설정은 바꾸지 않는다. 브라우저는 미리보기의 `report_limits`에서 이미지 크기와 여유 16 MiB를 뺀 만큼만 영상을 넣는다(`finalVideoBudget`). 동영상 관계(`video`·`media`)와 `ppt/media/*.mp4`, 차트 통합문서는 기존 검사로 허용된다.
 
 ## 멱등·재시도·불변
 

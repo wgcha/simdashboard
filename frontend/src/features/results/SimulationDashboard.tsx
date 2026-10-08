@@ -33,7 +33,8 @@ type Props = {
   /** Rendered at the right of the header row (folder sync status). */
   headerExtra?: ReactNode
   /** Materials tab content; it renders its own path bar into `pathTarget`. */
-  renderMaterials?: (pathTarget: HTMLElement | null) => ReactNode
+  /** 소재·물성 tab content for the current environment (usage: OptiStruct, distribution: Radioss). */
+  renderMaterials?: (pathTarget: HTMLElement | null, environment: DashboardEnvironment) => ReactNode
 }
 type Tab = 'usage' | 'distribution'
 const SCHEMA_CONTEXT = '__folder_schema__'
@@ -85,17 +86,18 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
   // changes push a history entry, automatic repairs replace it.
   const { get: getParam, caseId, loadCaseId, runId, optionId, update: updateParams } = useCaseHierarchyParams()
   const materialsActive = activeTab === 'materials'
-  // Materials decks exist only in the distribution environment.
+  // 소재·물성 follows the current environment (usage: OptiStruct input, distribution: Radioss deck).
   // E2: one registered environment wins over the URL; the toggle remains only for both (E4).
   const environments = resultEnvironments === undefined ? (['USAGE', 'DISTRIBUTION'] as DashboardEnvironment[]) : resultEnvironments
   const resolvedEnvironment = environments?.length === 1 ? environments[0] : null
   const noResults = environments?.length === 0
-  const tab: Tab = materialsActive || (resolvedEnvironment ? resolvedEnvironment === 'DISTRIBUTION' : getParam('result_environment') === 'DISTRIBUTION') ? 'distribution' : 'usage'
+  const tab: Tab = (resolvedEnvironment ? resolvedEnvironment === 'DISTRIBUTION' : getParam('result_environment') === 'DISTRIBUTION') ? 'distribution' : 'usage'
   // §3.5: no catalog while the environment is pending or the request has no Cases.
   const catalogReady = Boolean(environments?.length)
   const captureId = getParam('capture')
   const clearedPath = { case: null, capture: null, case_load: null, case_run: null, case_option: null, scene: null, part: null }
-  const setTab = (next: Tab) => { if (next !== tab || materialsActive) updateParams({ result_environment: next === 'usage' ? 'USAGE' : 'DISTRIBUTION', ...(next !== tab ? clearedPath : {}), ...(materialsActive ? { resultTab: null } : {}) }) }
+  // Switching the environment keeps the open view (소재·물성 included) and clears the path of the other environment.
+  const setTab = (next: Tab) => { if (next !== tab) updateParams({ result_environment: next === 'usage' ? 'USAGE' : 'DISTRIBUTION', ...clearedPath }) }
   const setCaseId = (value: string) => updateParams({ case: value || null })
   const setCaptureId = (value: string) => updateParams({ capture: value || null })
   const setLoadCaseId = (value: string) => updateParams({ case_load: value || null })
@@ -125,7 +127,7 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
   const catalogScope = useRef(`${projectId}:${requestId}:${tab}`)
   useEffect(() => { setComparison([]) }, [projectId, requestId])
   // §3.2: correct the URL to the resolved environment without a history entry.
-  useEffect(() => { if (resolvedEnvironment && !materialsActive && getParam('result_environment') !== resolvedEnvironment) updateParams({ result_environment: resolvedEnvironment }, { replace: true }) }, [getParam, materialsActive, resolvedEnvironment, updateParams])
+  useEffect(() => { if (resolvedEnvironment && getParam('result_environment') !== resolvedEnvironment) updateParams({ result_environment: resolvedEnvironment }, { replace: true }) }, [getParam, resolvedEnvironment, updateParams])
 
   useEffect(() => {
     const controller = new AbortController(); const key = `${projectId}:${requestId}:${tab}`; latestCatalogKey.current = key
@@ -227,14 +229,14 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
   const tabs = VIEW_TABS.filter((item) => tab === 'distribution' || item.id === 'summary' || item.id === 'cases' || item.id === 'materials')
   const activeView: ViewTab = materialsActive ? 'materials' : tabs.some((item) => item.id === view) ? view : 'summary'
   const selectView = (next: ViewTab) => {
-    // `result_environment` is left as is while 소재·물성 is open (materials are
-    // always distribution), so leaving returns to the environment the user came from.
+    // 소재·물성 uses the current `result_environment` and never changes it, so
+    // leaving returns to the same environment.
     if (next === 'materials') {
       if (!materialsActive) updateParams({ resultTab: 'materials' })
       return
     }
     setView(next)
-    if (materialsActive) updateParams({ resultTab: null, ...(getParam('result_environment') ? {} : { result_environment: 'DISTRIBUTION' }) })
+    if (materialsActive) updateParams({ resultTab: null })
   }
 
   const pathBar = catalog && !materialsActive ? <HierarchyPath label="Case 경로" className="case-path-bar" trailing={tab === 'distribution' ? <div className="case-scene-chips" role="list" aria-label="Scene 목록">{sceneSummary.length ? sceneSummary.map((item) => <span role="listitem" key={item.label} className={`case-scene-chip${item.hasResult ? ' case-scene-chip--result' : ''}`} title={`${item.title} · ${item.hasResult ? '결과 있음' : '결과 없음'}`}><i aria-hidden="true" />{item.label}<span className="case-sr-only">{item.hasResult ? ' 결과' : ' 결과 없음'}</span></span>) : null}</div> : undefined}>
@@ -273,7 +275,7 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
   const comparePathReady = Boolean(activeCaptureId && runId && mode && componentId && basis && optionChoiceForCompare && runChoices.some((item) => item.id === runId && item.capture_id === activeCaptureId))
   const comparePath: ComparePath | null = tab === 'distribution' && comparePathReady && (basis === 'DETAIL' || basis === 'REPORTED_SUMMARY') ? { loadCase: loadChoices.find((item) => item.id === loadCaseId)?.label ?? '', run: runChoices.find((item) => item.id === runId)?.label ?? '', option: optionChoiceForCompare?.option_label || optionChoiceForCompare?.label || '', component: componentLabel ?? '', basis, edgeKeys: edges.join(','), lineIndices: lines.join(',') } : null
   const comparePathRows = comparePath ? [{ label: '하중경우', value: comparePath.loadCase }, { label: 'Run Case', value: comparePath.run }, { label: 'Run Option', value: comparePath.option }, { label: 'Component · 기준', value: `${comparePath.component} · ${basisLabel(comparePath.basis)}` }] : []
-  const content = activeView === 'materials' ? renderMaterials?.(pathTarget) ?? null
+  const content = activeView === 'materials' ? renderMaterials?.(pathTarget, tab === 'usage' ? 'USAGE' : 'DISTRIBUTION') ?? null
     : activeView === 'cases' && catalog ? <CaseCompareView key={`${projectId}:${requestId}:${tab}`} projectId={projectId} requestId={requestId} environment={tab === 'usage' ? 'USAGE' : 'DISTRIBUTION'} catalog={catalog} currentCaseId={selectedCase?.id ?? caseId} path={comparePath} pathHint="Case 경로에서 결과가 있는 하중경우·Run Case·Run Option을 선택하면 같은 경로로 Case를 비교합니다." pathRows={comparePathRows} canFinalize={canRefreshSchema} onReport={updateCompareReport} />
     : tab === 'usage' ? <UsageArea key={`${caseId}:${captureId}:${referenceCaseId}:${referenceCaptureId}`} caseId={dashboardCaseId} captureId={activeCaptureId} referenceCaseId={catalog?.cases.find((item) => item.id === referenceCaseId)?.dashboard_case_id ?? referenceCaseId} referenceCaptureId={referenceCaptureId} />
     : activeView === 'video' ? (runId && !optionId && options.length > 1 ? <State message="Run Option을 선택하세요." /> : activeCaptureId && runId ? <CaseVideoGrid key={`${activeCaptureId}:${runId}:${optionId}`} captureId={activeCaptureId} runId={runId} runOptionId={optionId || undefined} mode={mode || undefined} /> : <State message={distributionEmpty} />)

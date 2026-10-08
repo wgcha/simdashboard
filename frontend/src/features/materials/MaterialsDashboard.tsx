@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { Download, Search, RotateCw, Box, Layers, AlertTriangle, ChevronLeft, ChevronRight } from 'lucide-react'
 import {
   materialsApi,
+  type MaterialsAnalysis,
   type MaterialsCatalog,
   type MaterialsDeck,
   type MaterialsEnvironment,
@@ -27,6 +28,33 @@ type Props = {
   embedded?: boolean
   /** Where the embedded path bar is rendered so it sits in the shared path row. */
   pathTarget?: HTMLElement | null
+  /** Result environment of the Case results page; standalone use reads `result_environment`. */
+  environment?: MaterialsEnvironment
+}
+
+const ENVIRONMENT_LABEL: Record<MaterialsEnvironment, string> = { USAGE: '사용환경', DISTRIBUTION: '유통환경' }
+const ANALYSIS_POLL_MS = 1500
+
+function megabytes(value: number | null | undefined): string {
+  return value == null ? '—' : `${new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 0 }).format(value / 1024 / 1024)} MB`
+}
+
+function AnalysisState({ analysis, onRetry }: { analysis: MaterialsAnalysis; onRetry: () => void }) {
+  const file = analysis.relative_path.split('/').pop() ?? analysis.relative_path
+  if (analysis.status === 'FAILED') {
+    return <div className="materials-table-state materials-analysis materials-analysis--failed" role="alert">
+      <AlertTriangle /><strong>입력 파일을 분석하지 못했습니다.</strong>
+      <span title={analysis.relative_path}>{file} · {analysis.error_message ?? analysis.error_code ?? '원인 미상'}</span>
+      <button type="button" onClick={onRetry}><RotateCw /> 다시 분석</button>
+    </div>
+  }
+  const percent = Math.round(Math.min(1, Math.max(0, analysis.progress)) * 100)
+  return <div className="materials-table-state materials-analysis" role="status" aria-live="polite">
+    <strong>{analysis.status === 'QUEUED' ? `분석 대기 중${analysis.queue_position ? ` · ${analysis.queue_position}번째` : ''}` : `분석 중 · ${percent}%`}</strong>
+    <progress max={100} value={analysis.status === 'QUEUED' ? undefined : percent} aria-label="입력 파일 분석 진행률" />
+    <span title={analysis.relative_path}>{file} · {megabytes(analysis.bytes_done)} / {megabytes(analysis.bytes_total || analysis.size_bytes)}</span>
+    <small>큰 OptiStruct 입력 파일은 처음 한 번만 분석하고, 파일이 바뀌기 전까지 저장된 결과를 사용합니다.</small>
+  </div>
 }
 
 type SortKey = 'part' | 'material' | 'property' | 'thickness' | 'density'
@@ -103,7 +131,7 @@ function FieldTable({ title, fields, rawFields, source }: { title: string; field
 
 function CurveCard({ curve, uses }: { curve: MaterialsFunction; uses: MaterialsFunction['uses'] }) {
   const points = curve.points.filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
-  if (!points.length) return <article className="materials-curve-card"><header><strong>FUNCT {curve.id}</strong><span>{curve.title ?? '이름 없음'}</span></header><p>표시할 점이 없습니다. 출처: {sourceLabel(curve.source)}</p></article>
+  if (!points.length) return <article className="materials-curve-card"><header><strong>{curve.card ?? 'FUNCT'} {curve.id}</strong><span>{curve.title ?? '이름 없음'}</span></header><p>표시할 점이 없습니다. 출처: {sourceLabel(curve.source)}</p></article>
   let minX = points[0].x, maxX = points[0].x, minY = points[0].y, maxY = points[0].y
   points.forEach((point) => { minX = Math.min(minX, point.x); maxX = Math.max(maxX, point.x); minY = Math.min(minY, point.y); maxY = Math.max(maxY, point.y) })
   const xRange = maxX - minX || 1, yRange = maxY - minY || 1
@@ -111,7 +139,7 @@ function CurveCard({ curve, uses }: { curve: MaterialsFunction; uses: MaterialsF
   const coords = plotPoints.map((point) => `${30 + ((point.x - minX) / xRange) * 570},${150 - ((point.y - minY) / yRange) * 132}`).join(' ')
   const firstUse = uses[0]
   return <article className="materials-curve-card">
-    <header><strong>FUNCT {curve.id}</strong><span title={curve.title ?? undefined}>{curve.title ?? `${curve.point_count}개 점`}</span></header>
+    <header><strong>{curve.card ?? 'FUNCT'} {curve.id}</strong><span title={curve.title ?? undefined}>{curve.title ?? `${curve.point_count}개 점`}</span></header>
     <div className="materials-curve-units">{firstUse?.role ?? '참조 함수'} · X: {firstUse?.x_unit ?? '원본 단위'} · Y: {firstUse?.y_unit ?? '원본 단위'} · 전체 {curve.point_count}점{plotPoints.length < points.length ? ` · 극값 포함 ${plotPoints.length}점 표시` : ''}</div>
     <svg viewBox="0 0 620 180" role="img" aria-label={`함수 ${curve.id} 곡선`}>
       <path className="materials-curve-axis" d="M30 12 V150 H600" />
@@ -155,7 +183,7 @@ function MaterialsDetails({ part, material, property, deck }: { part: MaterialsP
     <header className="materials-detail-heading">
       <span>선택 Part</span>
       <h2 title={part.title ?? undefined}>{part.title || `Part ${part.id}`}</h2>
-      <code>/{`PART/${part.id}`}</code>
+      <code>{deck.solver === 'OPTISTRUCT' ? `COMP ${part.id}` : `/PART/${part.id}`}</code>
     </header>
     <section className="materials-detail-section materials-reference-summary">
       <header><h3>참조 상태</h3><small title={sourceLabel(part.source)}>{sourceLabel(part.source)}</small></header>
@@ -170,7 +198,7 @@ function MaterialsDetails({ part, material, property, deck }: { part: MaterialsP
       <section className="materials-detail-section">
         <header><h3>Material · {material.subtype ?? '유형 미상'} / {material.id}</h3><small title={sourceLabel(material.source)}>{sourceLabel(material.source)}</small></header>
         <div className="materials-density-grid">
-          <div><span>원본 RHO_I</span><strong title={material.density?.raw ?? undefined}>{material.density?.raw ?? '—'}</strong><small>{material.density?.unit ?? '원본 단위 미상'}</small></div>
+          <div><span>{deck.solver === 'OPTISTRUCT' ? '원본 RHO' : '원본 RHO_I'}</span><strong title={material.density?.raw ?? undefined}>{material.density?.raw ?? '—'}</strong><small>{material.density?.unit ?? '원본 단위 미상'}</small></div>
           <div><span>환산 밀도</span><strong>{numberLabel(material.density?.converted_value ?? null)}</strong><small>{material.density?.converted_unit ?? '환산 불가'}</small></div>
           <div><span>대표 탄성계수</span><strong>{numberLabel(material.representative_e)}</strong><small>추출 대표값 · 단위 정보 없음</small></div>
           <div><span>Material ID</span><strong>{material.id}</strong><small>{material.law_id == null ? material.subtype ?? 'LAW 미지정' : `LAW ${material.law_id}`}</small></div>
@@ -229,13 +257,16 @@ function materialsPath(catalog: MaterialsCatalog | null, path: { caseId: string;
   return { cases, loads, runs, options, scenes, ready, flat }
 }
 
-export function MaterialsDashboard({ requestId, refreshToken = 0, embedded = false, pathTarget = null }: Props) {
+export function MaterialsDashboard({ requestId, refreshToken = 0, embedded = false, pathTarget = null, environment: environmentProp }: Props) {
   const hierarchyParams = useCaseHierarchyParams()
   const { caseId, loadCaseId, runId, optionId, get: getParam, update: updateParams, select: selectLevel } = hierarchyParams
   const [catalogState, setCatalogState] = useState<{ requestId: string; value: MaterialsCatalog } | null>(null)
   // Ignore a catalog that belongs to the previous request until the new one arrives.
   const catalog = catalogState?.requestId === requestId ? catalogState.value : null
   const [deck, setDeck] = useState<MaterialsDeck | null>(null)
+  const [analysis, setAnalysis] = useState<MaterialsAnalysis | null>(null)
+  const [pollToken, setPollToken] = useState(0)
+  const retryNext = useRef(false)
   const [loadingCatalog, setLoadingCatalog] = useState(false)
   const [loadingDeck, setLoadingDeck] = useState(false)
   const [error, setError] = useState('')
@@ -244,7 +275,10 @@ export function MaterialsDashboard({ requestId, refreshToken = 0, embedded = fal
   const loadedDeckKey = useRef('')
   const [sort, setSort] = useState<{ key: SortKey; direction: 'asc' | 'desc' }>({ key: 'part', direction: 'asc' })
   const [page, setPage] = useState(0)
-  const environment: MaterialsEnvironment = 'DISTRIBUTION'
+  const legacyEnvironment = getParam('environment')
+  const urlEnvironment = getParam('result_environment') || legacyEnvironment
+  const environment: MaterialsEnvironment = environmentProp ?? (urlEnvironment === 'USAGE' ? 'USAGE' : 'DISTRIBUTION')
+  const environmentLabel = ENVIRONMENT_LABEL[environment]
   const selectedSceneId = getParam('scene')
   const selectedPartId = getParam('part')
   const filter = getParam('filter')
@@ -254,10 +288,11 @@ export function MaterialsDashboard({ requestId, refreshToken = 0, embedded = fal
   const updateQuery = (patch: Record<string, string | null>, replace = true) => updateParams(patch, { replace })
   const chooseLevel = (level: HierarchyLevel, value: string) => selectLevel(level, value)
 
+  // Old links used `environment`; keep its value as `result_environment` (the shared page key).
   useEffect(() => {
-    if (!getParam('environment')) return
-    updateParams({ environment: null }, { replace: true })
-  }, [getParam, updateParams])
+    if (!legacyEnvironment) return
+    updateParams({ environment: null, ...(getParam('result_environment') || (legacyEnvironment !== 'USAGE' && legacyEnvironment !== 'DISTRIBUTION') ? {} : { result_environment: legacyEnvironment }) }, { replace: true })
+  }, [getParam, legacyEnvironment, updateParams])
 
   useEffect(() => {
     if (!requestId) {
@@ -332,25 +367,39 @@ export function MaterialsDashboard({ requestId, refreshToken = 0, embedded = fal
       deckKey.current = ''
       loadedDeckKey.current = ''
       setDeck(null)
+      setAnalysis(null)
       setLoadingDeck(false)
       return
     }
     const controller = new AbortController()
-    const key = `${requestId}:${selectedScene.scene_id}`
+    const key = `${environment}:${requestId}:${selectedScene.scene_id}`
     deckKey.current = key
-    // Re-reading the same Scene (auto-sync) keeps the visible deck until the new one arrives.
+    // Re-reading the same Scene (auto-sync, analysis polling) keeps the visible deck until the new one arrives.
     if (loadedDeckKey.current !== key) {
       setLoadingDeck(true)
       setDeck(null)
+      setAnalysis(null)
     }
     setError('')
-    materialsApi.deck(requestId, selectedScene.scene_id, environment, controller.signal).then((value) => {
-      if (!controller.signal.aborted && deckKey.current === key) { loadedDeckKey.current = key; setDeck(value.deck) }
+    const retry = retryNext.current
+    retryNext.current = false
+    let timer = 0
+    materialsApi.deck(requestId, selectedScene.scene_id, environment, controller.signal, retry).then((value) => {
+      if (controller.signal.aborted || deckKey.current !== key) return
+      loadedDeckKey.current = key
+      setAnalysis(value.analysis)
+      // Usage: a queued or running parse answers without a deck; ask again shortly.
+      if (value.deck || value.analysis?.status === 'FAILED') setDeck(value.deck)
+      if (!value.deck && (value.analysis?.status === 'QUEUED' || value.analysis?.status === 'RUNNING')) {
+        timer = window.setTimeout(() => setPollToken((token) => token + 1), ANALYSIS_POLL_MS)
+      }
     }).catch((reason: unknown) => {
       if (!controller.signal.aborted && deckKey.current === key) setError(reason instanceof Error ? reason.message : '선택한 씬의 소재 덱을 읽지 못했습니다.')
     }).finally(() => { if (!controller.signal.aborted && deckKey.current === key) setLoadingDeck(false) })
-    return () => controller.abort()
-  }, [requestId, selectedScene?.scene_id, selectedScene?.has_deck, environment, refreshToken, manualRefresh])
+    return () => { controller.abort(); window.clearTimeout(timer) }
+  }, [requestId, selectedScene?.scene_id, selectedScene?.has_deck, environment, refreshToken, manualRefresh, pollToken])
+  const retryAnalysis = () => { retryNext.current = true; setManualRefresh((value) => value + 1) }
+  const analysisPending = Boolean(analysis && analysis.status !== 'READY' && !deck)
 
   const materialById = useMemo(() => new Map((deck?.materials ?? []).map((item) => [item.id, item])), [deck])
   const propertyById = useMemo(() => new Map((deck?.properties ?? []).map((item) => [item.id, item])), [deck])
@@ -419,19 +468,20 @@ export function MaterialsDashboard({ requestId, refreshToken = 0, embedded = fal
       </div> : null
   return <div className={`materials-dashboard${embedded ? ' materials-dashboard--embedded' : ''}`} data-ui-density="v1">
     {embedded ? (pathTarget ? createPortal(pathBar, pathTarget) : pathBar) : <header className="materials-page-head">
-      <div><span>RADioss STARTER DECK</span><h1>모델 소재·물성</h1><p>Part 참조를 따라 Material, Property, Failure 모델과 함수 곡선을 살펴봅니다.</p></div>
+      <div><span>{environment === 'USAGE' ? 'OPTISTRUCT INPUT · 사용환경' : 'RADioss STARTER DECK'}</span><h1>모델 소재·물성</h1><p>Part 참조를 따라 Material, Property, Failure 모델과 함수 곡선을 살펴봅니다.</p></div>
       {pathBar}
     </header>}
 
     {error && <div className="materials-error" role="alert"><AlertTriangle /><span>{error}</span><button type="button" onClick={() => setManualRefresh((value) => value + 1)}><RotateCw /> 다시 불러오기</button></div>}
-    {!requestId ? <div className="materials-empty-state"><Box /><strong>의뢰를 선택하면 소재 덱을 조회합니다.</strong><span>조회 권한이 있는 의뢰만 목록에 표시됩니다.</span></div> : loadingCatalog && !catalog ? <div className="materials-empty-state" role="status">유통환경 덱 위치를 불러오고 있습니다…</div> : error && !catalog ? <div className="materials-empty-state"><AlertTriangle /><strong>조회 실패</strong><span>오류를 확인하고 다시 불러오세요.</span></div> : catalog && !catalog.scenes.length && catalog.conflicts.length ? <div className="materials-empty-state"><AlertTriangle /><strong>Scene 폴더 {catalog.conflicts.length}개가 다른 의뢰에도 연결되어 소재를 읽지 않았습니다.</strong><span title={catalog.conflicts.map((item) => item.relative_path).join('\n')}>같은 폴더를 두 의뢰에 등록했는지 관리자 폴더 조사에서 확인하세요. {catalog.conflicts[0].message}</span></div> : catalog && !catalog.scenes.length ? <div className="materials-empty-state"><Layers /><strong>이 의뢰에서 확인된 덱 위치가 없습니다.</strong><span>의뢰의 유통환경 결과 폴더를 확인하세요.</span></div> : !selectedScene ? <div className="materials-empty-state"><Layers /><strong>{path.ready && !path.scenes.length ? '선택한 경로에 Scene이 없습니다.' : '경로와 Scene을 선택하면 소재 덱을 조회합니다.'}</strong><span>Case → 하중경우 → Run Case → Run Option → Scene 순서로 선택하세요.</span></div> : !selectedScene.has_deck ? <div className="materials-empty-state"><Box /><strong>선택한 위치에서 Parts와 Materials 덱을 찾지 못했습니다.</strong><span title={selectedScene.relative_path}>{selectedScene.relative_path}</span></div> : <div className="materials-workspace">
+    {!requestId ? <div className="materials-empty-state"><Box /><strong>의뢰를 선택하면 소재 덱을 조회합니다.</strong><span>조회 권한이 있는 의뢰만 목록에 표시됩니다.</span></div> : loadingCatalog && !catalog ? <div className="materials-empty-state" role="status">{environmentLabel} 덱 위치를 불러오고 있습니다…</div> : error && !catalog ? <div className="materials-empty-state"><AlertTriangle /><strong>조회 실패</strong><span>오류를 확인하고 다시 불러오세요.</span></div> : catalog && !catalog.scenes.length && catalog.conflicts.length ? <div className="materials-empty-state"><AlertTriangle /><strong>Scene 폴더 {catalog.conflicts.length}개가 다른 의뢰에도 연결되어 소재를 읽지 않았습니다.</strong><span title={catalog.conflicts.map((item) => item.relative_path).join('\n')}>같은 폴더를 두 의뢰에 등록했는지 관리자 폴더 조사에서 확인하세요. {catalog.conflicts[0].message}</span></div> : catalog && !catalog.scenes.length ? <div className="materials-empty-state"><Layers /><strong>이 의뢰에서 확인된 덱 위치가 없습니다.</strong><span>의뢰의 {environmentLabel} 결과 폴더를 확인하세요.</span></div> : !selectedScene ? <div className="materials-empty-state"><Layers /><strong>{path.ready && !path.scenes.length ? '선택한 경로에 Scene이 없습니다.' : '경로와 Scene을 선택하면 소재 덱을 조회합니다.'}</strong><span>{environment === 'USAGE' ? 'Case → Scene 순서로 선택하세요.' : 'Case → 하중경우 → Run Case → Run Option → Scene 순서로 선택하세요.'}</span></div> : !selectedScene.has_deck ? <div className="materials-empty-state"><Box /><strong>{environment === 'USAGE' ? '선택한 Scene·Case 폴더 바로 아래에서 OptiStruct 입력 파일(.fem)을 찾지 못했습니다.' : '선택한 위치에서 Parts와 Materials 덱을 찾지 못했습니다.'}</strong><span title={selectedScene.relative_path}>{selectedScene.relative_path}</span></div> : <div className="materials-workspace">
       <section className="materials-list-panel" aria-label="Part 목록">
         <div className="materials-list-toolbar">
           <label className="materials-search"><Search /><input aria-label="Part 검색" placeholder="Part, Material, Property 검색" value={filter} onChange={(event) => updateQuery({ filter: event.target.value || null }, true)} /></label>
           <strong>{visibleParts.length.toLocaleString()} / {(deck?.parts.length ?? 0).toLocaleString()} Parts</strong>
           <button type="button" className="materials-export-button" disabled={!visibleParts.length} onClick={() => downloadCsv(visibleParts, materialById, propertyById, selectedScene, requestId, deck?.unit_system.input.length ?? null)}><Download /> CSV</button>
         </div>
-        {loadingDeck ? <div className="materials-table-state" role="status">선택한 덱 위치를 분석하고 있습니다…</div> : deck && !deck.parts.length ? <div className="materials-table-state">파싱된 Part가 없습니다.</div> : <>
+        {analysis && analysis.status === 'READY' && deck?.solver === 'OPTISTRUCT' ? <div className="materials-analysis-source" title={analysis.relative_path}>OptiStruct · {analysis.relative_path.split('/').pop()} · {megabytes(analysis.size_bytes)}{analysis.parse_seconds != null ? ` · 분석 ${numberLabel(analysis.parse_seconds)}초` : ''}{analysis.cached ? ' · 저장된 결과' : ''}</div> : null}
+        {analysisPending && analysis ? <AnalysisState analysis={analysis} onRetry={retryAnalysis} /> : loadingDeck ? <div className="materials-table-state" role="status">선택한 덱 위치를 분석하고 있습니다…</div> : deck && !deck.parts.length ? <div className="materials-table-state">파싱된 Part가 없습니다.</div> : <>
           <div className="materials-table-scroll">
             <table className="materials-part-table">
               <colgroup><col className="materials-col-part" /><col className="materials-col-material" /><col className="materials-col-property" /><col className="materials-col-thickness" /><col className="materials-col-density" /></colgroup>
@@ -456,7 +506,7 @@ export function MaterialsDashboard({ requestId, refreshToken = 0, embedded = fal
         </>}
         {deck?.warnings.length ? <details className="materials-warning-list"><summary><AlertTriangle /> 파서 알림 {deck.warnings.length}건</summary><ul>{deck.warnings.map((warning, index) => <li key={`${warning.code}-${index}`}><code>{warning.code}</code> {warning.message} <small>{sourceLabel(warning.source)}</small></li>)}</ul></details> : null}
       </section>
-      {selectedPart && deck ? <MaterialsDetails part={selectedPart} material={selectedPart.material_id ? materialById.get(selectedPart.material_id) : undefined} property={selectedPart.property_id ? propertyById.get(selectedPart.property_id) : undefined} deck={deck} /> : <aside className="materials-detail-empty"><strong>{loadingDeck ? '상세 정보를 불러오고 있습니다.' : visibleParts.length ? 'Part를 선택하세요.' : filter ? '검색 결과가 없습니다.' : '선택한 씬에 Part가 없습니다.'}</strong><span>선택한 Part의 참조와 물성을 여기에 표시합니다.</span></aside>}
+      {selectedPart && deck ? <MaterialsDetails part={selectedPart} material={selectedPart.material_id ? materialById.get(selectedPart.material_id) : undefined} property={selectedPart.property_id ? propertyById.get(selectedPart.property_id) : undefined} deck={deck} /> : <aside className="materials-detail-empty"><strong>{loadingDeck || analysisPending ? '상세 정보를 불러오고 있습니다.' : visibleParts.length ? 'Part를 선택하세요.' : filter ? '검색 결과가 없습니다.' : '선택한 씬에 Part가 없습니다.'}</strong><span>선택한 Part의 참조와 물성을 여기에 표시합니다.</span></aside>}
     </div>}
   </div>
 }

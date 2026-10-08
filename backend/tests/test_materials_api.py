@@ -874,12 +874,17 @@ def test_materials_checks_result_folder_ownership_before_reading_deck_content(ma
     assert sniffed_result_files == []
 
 
-def test_materials_api_is_distribution_only(materials_client):
+def test_materials_usage_reads_only_the_usage_schema_of_the_request(materials_client):
+    """USAGE is accepted (OptiStruct, test_materials_optistruct.py) but never falls back to the distribution
+    schema: this request has only a distribution scan, so USAGE has no locations; other environments are rejected."""
     client, _, _, request_id, _, scene_relative, _, _ = materials_client
     catalog = client.get(BASE + "/catalog", params={"request_id": request_id, "environment": "USAGE"})
     deck = client.get(BASE + "/deck", params={"request_id": request_id,
                                                 "environment": "USAGE", "relative_path": scene_relative})
-    assert catalog.status_code == deck.status_code == 422
+    assert catalog.status_code == deck.status_code == 409
+    assert catalog.json()["detail"]["code"] == deck.json()["detail"]["code"]
+    other = client.get(BASE + "/catalog", params={"request_id": request_id, "environment": "FINAL"})
+    assert other.status_code == 422
 
 
 def test_materials_rejects_cross_request_non_scene_and_traversal_paths(materials_client):

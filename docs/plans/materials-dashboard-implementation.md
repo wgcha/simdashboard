@@ -2,6 +2,7 @@
 
 - 상태: 1~3단계 구현·격리 검증 완료, 4단계 사용자 확인 대기 · 2026-09-29
 - 요구 출처: GitHub [#34](https://github.com/wgcha/simdashboard/issues/34) (사양), [#35](https://github.com/wgcha/simdashboard/issues/35) (parts 발췌), [#36](https://github.com/wgcha/simdashboard/issues/36) (eps 발췌), [#37](https://github.com/wgcha/simdashboard/issues/37) (plast 발췌), [#38](https://github.com/wgcha/simdashboard/issues/38) (축약 테스트 덱)
+- 사용환경(OptiStruct `.fem`) 소재는 [사용환경 소재](../features/materials-optistruct.md)가 정본이다(2026-10-08, 소재 탭은 현재 결과 환경을 따른다).
 - 범위: 읽기 전용 Radioss Starter Deck 목록·상세 조회. Part Shape Image, 편집, 외부 카탈로그 연동, 모바일 전용 UI는 제외한다.
 
 ## 확정할 동작

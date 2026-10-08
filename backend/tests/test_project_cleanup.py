@@ -383,6 +383,8 @@ _ALL_COLUMNS = sorted({
     "operation_id", "plan_json", "reports_json", "report_formats", "upload_batch_id", "complete_json",
     "complete_sha256", "confirmed_at", "designation_seq", "designation_batch_id", "error_code", "error_message",
     "created_by", "confirmed_by", "queued_at",
+    # materials parse cache (migration 0039)
+    "solver", "parser_version", "deck_json", "dependencies_json", "blob_sha256", "parse_seconds",
 })
 
 

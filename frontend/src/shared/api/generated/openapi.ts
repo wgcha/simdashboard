@@ -16175,7 +16175,7 @@ export interface operations {
         parameters: {
             query: {
                 request_id: string;
-                environment?: "DISTRIBUTION";
+                environment?: "DISTRIBUTION" | "USAGE";
             };
             header?: never;
             path?: never;
@@ -16207,9 +16207,11 @@ export interface operations {
         parameters: {
             query: {
                 request_id: string;
-                environment?: "DISTRIBUTION";
+                environment?: "DISTRIBUTION" | "USAGE";
                 scene_id?: string | null;
                 relative_path?: string | null;
+                /** @description USAGE: re-run a FAILED OptiStruct parse */
+                retry?: boolean;
             };
             header?: never;
             path?: never;

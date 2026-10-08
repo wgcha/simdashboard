@@ -518,6 +518,32 @@ def test_real_pptxgenjs_report_passes_validation():
     assert generated.startswith(b"PK\x03\x04") and _validate(generated) is None
 
 
+def test_pptxgenjs_report_with_native_charts_and_embedded_video_passes_validation():
+    """Case 보고서: scatter/bar charts (embedded .xlsx) and an mp4 video (addMedia with a PNG cover) stay accepted."""
+    import shutil
+    import subprocess
+    frontend = Path(__file__).resolve().parents[2] / "frontend"
+    module = frontend / "node_modules" / "pptxgenjs" / "dist" / "pptxgen.cjs.js"
+    node = shutil.which("node")
+    if not node or not module.is_file():
+        pytest.skip("node/pptxgenjs not available")
+    png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+    script = (
+        "const P=require(process.argv[1]);(async()=>{const p=new P();p.layout='LAYOUT_WIDE';"
+        "const s=p.addSlide();s.addChart(p.ChartType.scatter,[{name:'X',values:[0,1,2]},{name:'L1',values:[1,null,3]},{name:'L2',values:[2,2.5,null]}],"
+        "{x:0.5,y:0.5,w:6,h:4,showLegend:true,showCatAxisTitle:true,catAxisTitle:'ref_coord',showValAxisTitle:true,valAxisTitle:'MPa',displayBlanksAs:'span',lineDataSymbol:'none'});"
+        "s.addChart(p.ChartType.bar,[{name:'TOP',labels:['1','2'],values:[1,null]}],{x:6.8,y:0.5,w:6,h:4,barDir:'col'});"
+        f"const v=p.addSlide();v.addMedia({{type:'video',data:'data:video/mp4;base64,AAAAGGZ0eXBtcDQyAAAAAG1wNDJpc29t',cover:'data:image/png;base64,{png}',x:1,y:1,w:6,h:4}});"
+        "process.stdout.write(await p.write({outputType:'nodebuffer'}));})();"
+    )
+    generated = subprocess.run([node, "-e", script, str(module)], capture_output=True, timeout=60, check=True).stdout
+    with zipfile.ZipFile(io.BytesIO(generated)) as archive:
+        names = archive.namelist()
+    assert any(name.startswith("ppt/charts/chart") for name in names)
+    assert any(name.startswith("ppt/media/") and name.endswith(".mp4") for name in names)
+    assert _validate(generated) is None
+
+
 @pytest.mark.parametrize(("extra", "content_types", "code"), [
     # Content types decoded by BOM/declaration (UTF-16), not as UTF-8 with replacement.
     ({}, ('<?xml version="1.0" encoding="UTF-16"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'

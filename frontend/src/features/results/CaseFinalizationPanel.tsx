@@ -235,10 +235,10 @@ export function CaseFinalizationPanel(props: Props) {
     const operation = { ...input, operation_id: preview.operation_id }
     setBusy(true); setDialogError(''); setNotice('')
     try {
-      const key = `${preview.operation_id}|${chosen.join(',')}|${formats.html && includeVideos ? 'video' : ''}|${layoutId ?? ''}|${JSON.stringify(meta)}`
+      const key = `${preview.operation_id}|${chosen.join(',')}|${includeVideos ? 'video' : ''}|${layoutId ?? ''}|${JSON.stringify(meta)}`
       if (built.current?.key !== key) {
         setPhase('building')
-        built.current = { key, reports: await buildFinalReports(scopeAtOpen, { formats: chosen, includeVideos: formats.html && includeVideos, layoutId, meta }) }
+        built.current = { key, reports: await buildFinalReports(scopeAtOpen, { formats: chosen, includeVideos, layoutId, meta, reportLimits: preview.report_limits }) }
         if (formats.pptx && layoutId) rememberReportLayout(requestId, layoutId)
       }
       if (token !== generation.current) return
@@ -362,7 +362,7 @@ export function CaseFinalizationPanel(props: Props) {
             {result.reports.map((report) => <li key={report.format}><span className="case-finalization__file-kind">{report.format.toUpperCase()}</span><code title={report.relative_path}>{report.relative_path}</code><span className="case-finalization__file-size">{formatBytes(report.size)}</span></li>)}
           </ul>
         </section>
-        {skippedVideos.length > 0 && <p className="case-finalization__missing">HTML에 넣지 못한 영상 {skippedVideos.length}개(파일 이름으로 표시): {skippedVideos.join(', ')}</p>}
+        {skippedVideos.length > 0 && <p className="case-finalization__missing">보고서에 넣지 못한 영상 {skippedVideos.length}개(파일 이름으로 표시): {skippedVideos.join(', ')}</p>}
         {skippedImages.length > 0 && <p className="case-finalization__missing">보고서에 넣지 못한 이미지 {skippedImages.length}개: {skippedImages.join(', ')}</p>}
       </div> : <div className="case-finalization__dialog-body">
         {currentFinal ? <section className="case-finalization__section" aria-label="현재 Final" data-testid="case-final-replace">
@@ -427,7 +427,7 @@ export function CaseFinalizationPanel(props: Props) {
             <legend className="case-sr-only">보고서 형식</legend>
             <label className="case-finalization__format"><input type="checkbox" checked={formats.pptx} onChange={(event) => setFormats((value) => ({ ...value, pptx: event.target.checked }))} />PPTX<code title={preview.report_paths.pptx}>{preview.report_files.pptx}</code></label>
             <label className="case-finalization__format"><input type="checkbox" checked={formats.html} onChange={(event) => setFormats((value) => ({ ...value, html: event.target.checked }))} />HTML<code title={preview.report_paths.html}>{preview.report_files.html}</code></label>
-            <label className="case-finalization__format case-finalization__format--sub" title="이미지 전체 300MB, 영상당 20MB·전체 200MB까지 넣습니다(원본 크기 기준). HTML은 base64로 약 1.33배 커집니다."><input type="checkbox" checked={includeVideos} disabled={!formats.html} onChange={(event) => setIncludeVideos(event.target.checked)} />영상 포함</label>
+            <label className="case-finalization__format case-finalization__format--sub" title="이미지 전체 300MB, 영상당 20MB·전체 200MB까지 넣습니다(원본 크기 기준, 보고서 업로드 상한 안에서). PPTX는 PowerPoint에서 재생되는 mp4만 넣고, HTML은 base64로 약 1.33배 커집니다."><input type="checkbox" checked={includeVideos} disabled={!chosen.length} onChange={(event) => setIncludeVideos(event.target.checked)} />영상 포함</label>
           </fieldset>
           {!chosen.length && <p className="case-finalization__missing" role="note">PPTX 또는 HTML을 하나 이상 고르세요.</p>}
           {formats.pptx && layouts.length ? <div className="case-report__layout" data-testid="case-final-layout">
@@ -436,7 +436,7 @@ export function CaseFinalizationPanel(props: Props) {
           </div> : null}
           <CaseReportMetaFields value={meta} disabled={busy || Boolean(dialogCopying) || !scopeAtOpen} onChange={setMeta} />
         </section>
-        {skippedVideos.length > 0 && <p className="case-finalization__missing">HTML에 넣지 못한 영상 {skippedVideos.length}개: {skippedVideos.join(', ')}</p>}
+        {skippedVideos.length > 0 && <p className="case-finalization__missing">보고서에 넣지 못한 영상 {skippedVideos.length}개: {skippedVideos.join(', ')}</p>}
         {skippedImages.length > 0 && <p className="case-finalization__missing">보고서에 넣지 못한 이미지 {skippedImages.length}개: {skippedImages.join(', ')}</p>}
         {dialogJob && dialogJob.state !== 'COMPLETE' && <section className="case-finalization__section case-finalization__job" aria-label="Final 복사 진행" data-testid="case-final-job">
           <h4>{dialogFailed ? 'Final 복사 실패' : jobLabel(dialogJob)} <span>Final ID {dialogJob.operation_id.slice(0, 8)}</span></h4>

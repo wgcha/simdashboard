@@ -82,6 +82,7 @@ def initialize_database() -> None:
                 "drive_upload_queue",
                 "drive_locks",
                 "finalization_operations",
+                "materials_deck_cache",
             )
             missing = [
                 table_name
@@ -132,6 +133,9 @@ def initialize_database() -> None:
                                             "upload_batch_id", "complete_json", "complete_sha256", "confirmed_at",
                                             "designation_seq", "designation_batch_id", "error_code", "error_message",
                                             "created_by", "confirmed_by", "created_at", "queued_at", "updated_at"},
+                "materials_deck_cache": {"id", "root_key", "rel_path", "solver", "parser_version", "fingerprint",
+                                         "size_bytes", "status", "deck_json", "dependencies_json", "blob_sha256",
+                                         "error_code", "error_message", "parse_seconds", "created_at", "updated_at"},
             }
             incompatible = []
             for table_name, expected in required_columns.items():
@@ -1262,6 +1266,7 @@ def _initialize_duckdb_legacy() -> None:
         ensure_drive_credentials_schema(conn)
         ensure_drive_source_versions_schema(conn)
         ensure_drive_write_path_schema(conn)
+        ensure_materials_deck_cache_schema(conn)
         from .adapters.persistence.dashboard_schema import ensure_dashboard_schema
         ensure_dashboard_schema(conn)
         # Establish the schema before seeding, but defer one-time legacy data
@@ -1574,6 +1579,19 @@ def ensure_drive_write_path_schema(conn: duckdb.DuckDBPyConnection) -> None:
         designation_batch_id VARCHAR, error_code VARCHAR, error_message VARCHAR, created_by VARCHAR NOT NULL,
         confirmed_by VARCHAR, created_at TIMESTAMP NOT NULL, queued_at TIMESTAMP, updated_at TIMESTAMP NOT NULL,
         UNIQUE (project_id, request_id, designation_seq)
+    )""")
+
+
+def ensure_materials_deck_cache_schema(conn: duckdb.DuckDBPyConnection) -> None:
+    """Local development equivalent of additive migration 0039 (solver input parse cache)."""
+    conn.execute("""CREATE TABLE IF NOT EXISTS materials_deck_cache (
+        id VARCHAR PRIMARY KEY, root_key VARCHAR NOT NULL, rel_path VARCHAR NOT NULL,
+        solver VARCHAR NOT NULL CHECK (solver IN ('OPTISTRUCT')), parser_version VARCHAR NOT NULL,
+        fingerprint VARCHAR NOT NULL, size_bytes BIGINT,
+        status VARCHAR NOT NULL CHECK (status IN ('READY', 'FAILED')), deck_json VARCHAR,
+        dependencies_json VARCHAR NOT NULL, blob_sha256 VARCHAR, error_code VARCHAR, error_message VARCHAR,
+        parse_seconds DOUBLE, created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL,
+        UNIQUE (root_key, rel_path, solver)
     )""")
 
 

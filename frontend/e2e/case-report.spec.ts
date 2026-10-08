@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { inflateRawSync } from 'node:zlib'
 import { expect, test, type Download, type Page, type Route } from '@playwright/test'
 import { loginWorkspace, mockResultEnvironments } from './workspace-test-helpers'
@@ -17,7 +17,7 @@ const PEAK_SCENE = '2_Face_Drop_Scene02'
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAQAAAADCAIAAAA7ljmRAAAAEElEQVR4nGPQqDgBRww4OQBBxhDhzXmo9QAAAABJRU5ErkJggg==', 'base64')
 const SHOT_DIR = '/tmp/claude-0'
 
-type Options = { twoOptions?: boolean; bigVideo?: boolean; slowImage?: Promise<void>; layouts?: unknown[]; layoutWrites?: Array<{ method: string; body: Record<string, unknown> }> }
+type Options = { twoOptions?: boolean; bigVideo?: boolean; slowImage?: Promise<void>; layouts?: unknown[]; layoutWrites?: Array<{ method: string; body: Record<string, unknown> }>; linePoints?: boolean; animatedContour?: boolean }
 
 const USAGE_CASE = 'usage-case'
 const USAGE_CAPTURE = 'latest:usage-case'
@@ -65,7 +65,7 @@ function catalog(options: Options) {
   }
 }
 
-function distribution(url: URL) {
+function distribution(url: URL, options: Options = {}) {
   const optionId = url.searchParams.get('run_option_id') ?? 'option-individual'
   const member = { id: 'member-a', label: 'Case A', simulation_case_id: CASE_ID, load_case_id: 'load-drop', execution_run_id: RUN_ID, run_option_id: optionId, mode: url.searchParams.get('mode') ?? MODE, capture_id: CAPTURE_ID, component_id: 'C23', basis: 'DETAIL' }
   const labels = ['1_Face_Drop_Scene01', PEAK_SCENE, SCRIPT_SCENE]
@@ -80,10 +80,24 @@ function distribution(url: URL) {
     scenes,
     edge_peaks: scenes.flatMap((scene, index) => edges.map((edge, edgeIndex) => ({ value: envelope[index] - edgeIndex, unit: 'MPa', unit_status: 'CONFIRMED', completeness: 'FULL', status: 'READY', basis: 'DETAIL', scope: 'SELECTED_EDGE_LINES', edge, scene_id: scene.id, member_id: member.id }))),
     series: scenes.map((scene, index) => ({ id: `series-${scene.id}`, value: envelope[index], unit: 'MPa', status: 'READY', completeness: 'FULL', basis: 'DETAIL', scene_id: scene.id, scene_sequence_number: index + 1, member_id: member.id, edge: 'TOP', selected_edge_envelope: envelope[index] })),
-    contours: scenes.map((scene, index) => ({ cell_id: `cell-${scene.id}`, scene_id: scene.id, member_id: member.id, status: index === 0 ? 'READY' : 'MISSING', reason: null, asset: index === 0 ? { asset_id: 'img-1', kind: 'IMAGE', status: 'READY', title: 'Contour_Scene01.png', frame_role: 'FINAL_FRAME' } : null })),
+    contours: scenes.map((scene, index) => index === 1 && options.animatedContour
+      ? { cell_id: `cell-${scene.id}`, scene_id: scene.id, member_id: member.id, status: 'READY', reason: null, asset: { asset_id: 'vid-contour', kind: 'VIDEO', status: 'READY', title: 'Contour_Scene02.mp4', frame_role: 'UNKNOWN' } }
+      : { cell_id: `cell-${scene.id}`, scene_id: scene.id, member_id: member.id, status: index === 0 ? 'READY' : 'MISSING', reason: null, asset: index === 0 ? { asset_id: 'img-1', kind: 'IMAGE', status: 'READY', title: 'Contour_Scene01.png', frame_role: 'FINAL_FRAME' } : null }),
     behaviors: [],
     quality_issues: [],
   }
+}
+
+/** Scene 상세 line values: with `linePoints`, L1/L2 per position; scene-1 TOP L1 has 2,500 points (LTTB). */
+function sceneDetail(url: URL, options: Options) {
+  const sceneId = decodeURIComponent(url.pathname.split('/').pop() ?? '')
+  const position = url.searchParams.get('position') ?? 'TOP'
+  const big = sceneId === 'scene-1' && position === 'TOP'
+  const line_points = options.linePoints ? [
+    ...Array.from({ length: big ? 2500 : 5 }, (_, index) => ({ ref_coord: index, value: 10 + Math.sin(index / 7) * 5, line_index: 1, status: 'READY' })),
+    ...Array.from({ length: 5 }, (_, index) => ({ ref_coord: index + 0.5, value: 8 + index, line_index: 2, status: 'READY' })),
+  ] : []
+  return { context: distribution(url).context, scene: { id: sceneId, label: sceneId, scene_sequence_number: 1, scenario_number: 1 }, edge_peaks: [], line_points, assets: [], quality_issues: [] }
 }
 
 function videoPage(url: URL, options: Options) {
@@ -126,13 +140,14 @@ async function installMocks(page: Page, options: Options = {}) {
       return route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ detail: 'unexpected layout write' }) })
     })
   }
-  await page.route('**/api/dashboard/distribution/scenes/**', (route) => fulfillJson(route, { context: distribution(new URL(route.request().url())).context, scene: { id: 'scene-1', label: 'scene-1' }, edge_peaks: [], line_points: [], assets: [], quality_issues: [] }))
+  await page.route('**/api/dashboard/distribution/scenes/**', (route) => fulfillJson(route, sceneDetail(new URL(route.request().url()), options)))
   await page.route('**/api/dashboard/assets/**', (route) => {
     const id = decodeURIComponent(new URL(route.request().url()).pathname.split('/').pop() ?? '')
     if (id === 'img-1' && options.slowImage) return options.slowImage.then(() => route.fulfill({ status: 200, contentType: 'image/png', body: PNG })).catch(() => undefined)
     if (id === 'img-1' || id === 'img-usage') return route.fulfill({ status: 200, contentType: 'image/png', body: PNG })
     if (id === 'vid-usage') return route.fulfill({ status: 200, contentType: 'video/mp4', body: Buffer.from('synthetic-usage-mp4') })
     if (id === 'vid-small') return route.fulfill({ status: 200, contentType: 'video/mp4', body: Buffer.from('synthetic-mp4-bytes') })
+    if (id === 'vid-contour') return route.fulfill({ status: 200, contentType: 'video/mp4', body: Buffer.from('synthetic-contour-mp4') })
     if (id === 'vid-big') return route.fulfill({ status: 200, contentType: 'video/mp4', body: Buffer.alloc(21 * 1024 * 1024, 1) })
     return route.fulfill({ status: 404, body: '' })
   })
@@ -140,7 +155,7 @@ async function installMocks(page: Page, options: Options = {}) {
     const url = new URL(route.request().url())
     if (url.pathname.endsWith('/videos')) return fulfillJson(route, videoPage(url, options))
     distributionRequests.push(url)
-    return fulfillJson(route, distribution(url))
+    return fulfillJson(route, distribution(url, options))
   })
   return distributionRequests
 }
@@ -232,8 +247,10 @@ test('보고서 버튼은 Case 범위로 열리고 형식이 없으면 다운로
   await expect(dialog.locator('.case-report__scope')).toContainText('C23 · 상세 추출값')
   await expect(dialog).not.toContainText('PDF')
   const videos = dialog.getByRole('checkbox', { name: '영상 포함', exact: true })
-  await expect(videos).toBeDisabled()
+  // PPTX embeds mp4 videos too, so the option is on whenever a format is chosen.
+  await expect(videos).toBeEnabled()
   await setFormats(dialog, { pptx: false, html: false })
+  await expect(videos).toBeDisabled()
   await expect(dialog.getByRole('button', { name: '다운로드', exact: true })).toBeDisabled()
   await expect(dialog).toContainText('형식을 하나 이상 선택하세요.')
   await setFormats(dialog, { pptx: false, html: true })
@@ -379,7 +396,7 @@ test('사용환경 보고서는 다섯 평가 종합 값과 결과 이미지·�
   await expect(dialog).toHaveAttribute('data-environment', 'USAGE')
   await expect(dialog).toHaveAttribute('data-capture-id', USAGE_CAPTURE)
   await expect(dialog.locator('.case-report__scope')).toContainText('사용환경')
-  await expect(dialog.getByTestId('case-report-counts')).toContainText('평가 6행 · 이미지 1개 · 영상 1개')
+  await expect(dialog.getByTestId('case-report-counts')).toContainText('평가 6행 · 그래프 4개 · 이미지 1개 · 영상 1개')
   await setFormats(dialog, { pptx: true, html: true })
   await dialog.getByRole('checkbox', { name: '영상 포함', exact: true }).check()
   const downloads = await downloadAll(page, dialog, 2)
@@ -510,4 +527,74 @@ test('엣지를 모두 끄면 보고서 요약은 요약 탭과 같은 선택 �
   const html = await downloadText(download)
   expect(html).toContain('선택 없음: 표시 옵션에서 엣지를 하나 이상 선택하세요.')
   expect(html).toMatch(/<td class="num">선택 없음<\/td>/)
+})
+
+/** Entry names of a ZIP (central directory). */
+function zipNames(buffer: Buffer) {
+  let end = buffer.length - 22
+  while (end >= 0 && buffer.readUInt32LE(end) !== 0x06054b50) end -= 1
+  const names: string[] = []
+  let offset = buffer.readUInt32LE(end + 16)
+  for (let index = 0; index < buffer.readUInt16LE(end + 10); index += 1) {
+    const nameLength = buffer.readUInt16LE(offset + 28)
+    names.push(buffer.toString('utf8', offset + 46, offset + 46 + nameLength))
+    offset += 46 + nameLength + buffer.readUInt16LE(offset + 30) + buffer.readUInt16LE(offset + 32)
+  }
+  return names
+}
+
+test('PPTX에는 화면의 그래프가 편집 가능한 차트로, 영상 포함이면 mp4·애니메이션 컨투어가 재생 영상으로 들어간다', async ({ page }) => {
+  await installMocks(page, { linePoints: true, animatedContour: true })
+  await openCaseResults(page)
+  const dialog = await openReport(page)
+  // 요약 1 + 엣지별 수준 4 + Scene 상세 3 Scene × 4 위치.
+  await expect(dialog.getByTestId('case-report-counts')).toContainText('그래프 17개')
+  await setFormats(dialog, { pptx: true, html: false })
+  await dialog.getByRole('checkbox', { name: '영상 포함', exact: true }).check()
+  const [download] = await downloadAll(page, dialog, 1)
+  mkdirSync(SHOT_DIR, { recursive: true })
+  await download.saveAs(`${SHOT_DIR}/case-report-charts-video.pptx`)
+  const zip = readFileSync(await download.path() as string)
+  const names = zipNames(zip)
+  const charts = names.filter((name) => /^ppt\/charts\/chart\d+\.xml$/.test(name))
+  expect(charts).toHaveLength(17)
+  const chartXml = charts.map((name) => zipEntry(zip, name) ?? '')
+  expect(chartXml.filter((xml) => xml.includes('<c:barChart>'))).toHaveLength(5)
+  expect(chartXml.filter((xml) => xml.includes('<c:scatterChart>'))).toHaveLength(12)
+  expect(chartXml.some((xml) => xml.includes('Scene별 엣지 최대응력') && xml.includes('선택 엣지 최대응력 (MPa)') && xml.includes('Scene (순번)'))).toBe(true)
+  expect(chartXml.some((xml) => xml.includes('TOP 엣지 수준'))).toBe(true)
+  expect(chartXml.some((xml) => xml.includes('ref_coord (기준 좌표)') && xml.includes('<c:v>L1</c:v>') && xml.includes('<c:v>L2</c:v>'))).toBe(true)
+  // Each chart keeps its data in an embedded workbook (editable in PowerPoint).
+  expect(names.filter((name) => /^ppt\/embeddings\/.+\.xlsx$/.test(name))).toHaveLength(17)
+  const slides = names.filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name)).map((name) => zipEntry(zip, name) ?? '')
+  expect(slides.some((xml) => xml.includes('원본 2,500점 → 2,000점(LTTB 축약)'))).toBe(true)
+  // Videos: Scene video and the animated contour as playable media (no still image of the contour).
+  expect(names.filter((name) => /^ppt\/media\/.+\.mp4$/.test(name))).toHaveLength(2)
+  expect(slides.filter((xml) => xml.includes('videoFile'))).toHaveLength(2)
+  expect(slides.some((xml) => xml.includes('컨투어 영상'))).toBe(true)
+  // The static contour image is in the deck.
+  const contourSlide = slides.find((xml) => xml.includes('1_Face_Drop_Scene01 · 컨투어'))
+  expect(contourSlide).toContain('<p:pic>')
+  await expect(dialog.getByTestId('case-report-skipped')).toHaveCount(0)
+})
+
+test('HTML 그래프는 스크립트 없는 SVG이고, 영상을 넣지 않으면 애니메이션 컨투어는 첫 프레임 이미지 자리로 들어간다', async ({ page }) => {
+  await installMocks(page, { linePoints: true, animatedContour: true })
+  await openCaseResults(page)
+  const dialog = await openReport(page)
+  await setFormats(dialog, { pptx: false, html: true })
+  const [download] = await downloadAll(page, dialog, 1)
+  const html = await downloadText(download)
+  mkdirSync(SHOT_DIR, { recursive: true })
+  writeFileSync(`${SHOT_DIR}/case-report-charts.html`, html)
+  expect((html.match(/<svg /g) ?? []).length).toBe(17)
+  expect(html).toContain('Scene별 엣지 최대응력')
+  expect(html).toContain('ref_coord (기준 좌표)')
+  expect(html).toContain('원본 2,500점 → 2,000점(LTTB 축약)')
+  expect(html).not.toMatch(/<script/i)
+  expect(html).not.toMatch(/https?:\/\/|url\(/)
+  expect(html).not.toContain('<video')
+  // Synthetic bytes cannot be decoded: the contour is listed and shown as a placeholder.
+  expect(html).toContain('Contour_Scene02.mp4 · 첫 프레임')
+  await expect(dialog.getByTestId('case-report-skipped-images')).toContainText('Contour_Scene02.mp4')
 })

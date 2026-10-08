@@ -45,7 +45,7 @@ export function RequestCaseResultsWorkspace({ projectId, requestId, requestName 
   // E3: without Cases the folder sync still runs (it is what registers new Cases into this
   // request), for the request-name keyword environment, or both when the keyword is unclear.
   const pendingEnvironments = environments?.length === 0 ? keywordEnvironments(requestName) : null
-  const environment = pendingEnvironments ? pendingEnvironments[0] : environments?.length === 1 ? environments[0] : activeTab === 'materials' ? 'DISTRIBUTION' : searchParams.get('result_environment') === 'DISTRIBUTION' ? 'DISTRIBUTION' : 'USAGE'
+  const environment = pendingEnvironments ? pendingEnvironments[0] : environments?.length === 1 ? environments[0] : searchParams.get('result_environment') === 'DISTRIBUTION' ? 'DISTRIBUTION' : 'USAGE'
   const sync = useFolderAutoSync({ projectId, requestId, environment, enabled: environments !== null })
   const secondSync = useFolderAutoSync({ projectId, requestId, environment: 'DISTRIBUTION', enabled: pendingEnvironments?.length === 2 })
   const syncRevision = sync.revision + secondSync.revision
@@ -105,6 +105,6 @@ export function RequestCaseResultsWorkspace({ projectId, requestId, requestName 
       {deviations.items.length ? <ul>{deviations.items.map((item, index) => <li key={`${item.code}:${item.relative_path ?? index}`}><b>{deviationLabel(item.code)}</b>{item.relative_path ? <code>{item.relative_path}</code> : null}{item.message ? <span>{item.message}</span> : null}</li>)}</ul> : null}
     </div> : null}
     <SimulationDashboard projectId={projectId} requestId={requestId} canManageFolders={canManageFolders} canRefreshSchema={canRefreshSchema} refreshToken={dashboardToken} activeTab={activeTab} resultEnvironments={environments} headerExtra={environments ? syncStatus : null}
-      renderMaterials={(pathTarget) => <MaterialsDashboard projectId={projectId} requestId={requestId} refreshToken={dashboardToken} embedded pathTarget={pathTarget} />} />
+      renderMaterials={(pathTarget, materialsEnvironment) => <MaterialsDashboard projectId={projectId} requestId={requestId} environment={materialsEnvironment} refreshToken={dashboardToken} embedded pathTarget={pathTarget} />} />
   </div>
 }

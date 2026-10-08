@@ -95,6 +95,9 @@ async function openMaterials(page: Page) {
   await expect.poll(() => new URL(page.url()).searchParams.get('request')).toBe(requestId)
   // 소재·물성 is a tab inside Case 결과 (no separate journey button).
   await page.getByRole('navigation', { name: '의뢰 작업 여정' }).getByRole('button', { name: 'Case 결과', exact: true }).click()
+  // These scenarios read a distribution (Radioss) deck: 소재·물성 follows the Case results environment.
+  await page.getByRole('group', { name: '결과 환경' }).getByRole('button', { name: '유통환경' }).click()
+  await expect.poll(() => new URL(page.url()).searchParams.get('result_environment')).toBe('DISTRIBUTION')
   await page.getByRole('tab', { name: '소재·물성', exact: true }).click()
   await expect(page).toHaveURL(/\/workspace\/requests\?.*view=case_results.*resultTab=materials/)
   await expect(page.getByRole('tab', { name: '소재·물성', exact: true })).toHaveAttribute('aria-selected', 'true')
@@ -282,4 +285,133 @@ test('소재·물성 탭은 1440·1920 화면과 11·18pt에서 가로 스크롤
       await page.screenshot({ path: join(tmpdir(), `materials-${width}-${points}pt.png`), fullPage: false })
     }
   }
+})
+
+const usageCatalog = {
+  request_id: requestId,
+  environment: 'USAGE',
+  scenes: [
+    { scene_id: 'usage-settle', label: 'Settle', relative_path: 'usage/Case_A/Settle', hierarchy: {}, kind: 'SCENE', has_deck: true, case_id: 'usage-case', load_case_id: '', execution_run_id: '', run_option_id: '' },
+    { scene_id: 'usage-wobble', label: 'Wobble', relative_path: 'usage/Case_A/Wobble', hierarchy: {}, kind: 'SCENE', has_deck: false, case_id: 'usage-case', load_case_id: '', execution_run_id: '', run_option_id: '' },
+  ],
+  hierarchy: { cases: [{ id: 'usage-case', label: 'Assy_RES_Model_SetCase1', relative_path: 'usage/Case_A' }], load_cases: [], execution_runs: [], run_options: [] },
+  conflicts: [],
+}
+
+const optistructDeck = {
+  solver: 'OPTISTRUCT',
+  parts: [
+    { id: '2', title: 'open_cell', property_id: '16', material_id: '9', thickness: 1.0, raw_fields: { 'HyperMesh 컴포넌트': 'open_cell' }, source: null },
+    { id: '13', title: 'cover_rear', property_id: '53', material_id: '50250', thickness: 1.9, raw_fields: {}, source: null },
+  ],
+  properties: [
+    { id: '16', subtype: 'PSHELL', title: 'Glass_1.0T', fields: { MID1: 9, T: 1.0 }, raw_fields: { MID1: '9', T: '1.0' }, thickness: 1.0, thickness_display: '1', source: { file: 'usage/Case_A/Settle/model.fem', line: 109 } },
+    { id: '53', subtype: 'PSHELL', title: 'PCABSED20_1.9t', fields: { MID1: 50250, T: 1.9 }, raw_fields: {}, thickness: 1.9, thickness_display: '1.9', source: { file: 'usage/Case_A/Settle/model.fem', line: 115 } },
+  ],
+  materials: [
+    { id: '9', subtype: 'MAT1', title: 'Glass', fields: { E: 64500, NU: 0.3, RHO: 3.3e-9 }, raw_fields: { RHO: '3.3-9' }, density: { raw: '3.3-9', value: 3.3e-9, unit: 't/mm^3 (추정)', converted_value: 3.3, converted_unit: 'g/cm^3' }, representative_e: 64500, law_id: null, failures: [], source: { file: 'usage/Case_A/Settle/model.fem', line: 153 } },
+    { id: '50250', subtype: 'MAT1', title: 'PC+ABS+ED20', fields: { E: 4534, NU: 0.36, 'MATS1.TID': 61065 }, raw_fields: {}, density: { raw: '1.1-9', value: 1.1e-9, unit: 't/mm^3 (추정)', converted_value: 1.1, converted_unit: 'g/cm^3' }, representative_e: 4534, law_id: null, failures: [], source: { file: 'usage/Case_A/Settle/model.fem', line: 167 } },
+  ],
+  functions: [{ id: '61065', card: 'TABLEMD', title: 'M36_PC+ABS+ED20', points: [{ x: 0, y: 27.4 }, { x: 0.01, y: 50.2 }, { x: 0.2, y: 54 }], point_count: 3, uses: [{ owner_type: 'material', owner_id: '50250', role: 'MATS1 응력-변형률', x_unit: '2열(소성 변형률로 추정)', y_unit: '1열(응력으로 추정)' }], source: { file: 'usage/Case_A/Settle/model.fem', line: 290 } }],
+  warnings: [{ code: 'OPTISTRUCT_UNITS_INFERRED', message: 'OptiStruct 입력에는 단위 카드가 없어 밀도 크기로 mm·t·s 단위계를 추정했습니다.', file: null, line: null }],
+  unit_system: { input: { mass: 't', length: 'mm', time: 's' }, work: { mass: 't', length: 'mm', time: 's' } },
+}
+
+function usageAnalysis(status: string, extra: Record<string, unknown> = {}) {
+  return { solver: 'OPTISTRUCT', status, relative_path: 'usage/Case_A/Settle/model.fem', size_bytes: 800 * 1024 * 1024, max_bytes: 2 * 1024 ** 3, bytes_done: 0, bytes_total: 800 * 1024 * 1024, progress: 0, queue_position: 0, parse_seconds: null, parsed_at: null, error_code: null, error_message: null, cached: false, ...extra }
+}
+
+test('사용환경 Case 결과의 소재·물성은 사용환경을 유지하고 OptiStruct 분석 진행을 보여 준다', async ({ page }) => {
+  await mockResultEnvironments(page, ['USAGE', 'DISTRIBUTION'])
+  await page.route('**/api/folder-discovery/environments/sync', (route) => route.fulfill({ json: { status: 'UNCHANGED', changed: false, snapshot_id: null, diff: { added: 0, removed: 0, changed: 0 }, code: null, message: null, check_mode: 'QUICK', checked_at: new Date().toISOString(), coalesced: false } }))
+  const catalogEnvironments: string[] = []
+  await page.route('**/api/materials/catalog**', (route) => {
+    const environment = new URL(route.request().url()).searchParams.get('environment') ?? ''
+    catalogEnvironments.push(environment)
+    return route.fulfill({ json: environment === 'USAGE' ? usageCatalog : catalog })
+  })
+  const deckQueries: URLSearchParams[] = []
+  const usageSteps = [usageAnalysis('QUEUED', { queue_position: 1 }), usageAnalysis('RUNNING', { bytes_done: 300 * 1024 * 1024, progress: 0.375 })]
+  await page.route('**/api/materials/deck**', (route) => {
+    const query = new URL(route.request().url()).searchParams
+    deckQueries.push(query)
+    if (query.get('environment') !== 'USAGE') {
+      const scene = catalog.scenes.find((item) => item.scene_id === query.get('scene_id')) ?? catalog.scenes[0]
+      return route.fulfill({ json: { scene, files: [], candidate_warnings: [], deck: smallDeck } })
+    }
+    const scene = usageCatalog.scenes[0]
+    const next = usageSteps.shift()
+    if (next) return route.fulfill({ json: { scene, files: [{ relative_path: scene.relative_path + '/model.fem', size_bytes: 800 * 1024 * 1024 }], candidate_warnings: [], analysis: next, deck: null } })
+    return route.fulfill({ json: { scene, files: [{ relative_path: scene.relative_path + '/model.fem', size_bytes: 800 * 1024 * 1024 }], candidate_warnings: [], analysis: usageAnalysis('READY', { bytes_done: 800 * 1024 * 1024, progress: 1, parse_seconds: 8.4, cached: false }), deck: optistructDeck } })
+  })
+
+  await loginWorkspace(page)
+  await page.getByLabel('프로젝트 선택', { exact: true }).selectOption(projectId)
+  await page.getByLabel('의뢰 선택', { exact: true }).selectOption(requestId)
+  await page.getByRole('navigation', { name: '의뢰 작업 여정' }).getByRole('button', { name: 'Case 결과', exact: true }).click()
+  const toggle = page.getByRole('group', { name: '결과 환경' })
+  await toggle.getByRole('button', { name: '사용환경' }).click()
+  await expect(toggle.getByRole('button', { name: '사용환경' })).toHaveAttribute('aria-pressed', 'true')
+  await page.getByRole('tab', { name: '소재·물성', exact: true }).click()
+  await expect(page.getByRole('tab', { name: '소재·물성', exact: true })).toHaveAttribute('aria-selected', 'true')
+  // Opening 소재·물성 keeps 사용환경 (before the fix it switched to 유통환경).
+  await expect(toggle.getByRole('button', { name: '사용환경' })).toHaveAttribute('aria-pressed', 'true')
+  await expect.poll(() => new URL(page.url()).searchParams.get('result_environment')).not.toBe('DISTRIBUTION')
+  await expect.poll(() => catalogEnvironments.at(-1)).toBe('USAGE')
+  expect(catalogEnvironments).not.toContain('DISTRIBUTION')
+
+  const path = page.getByRole('group', { name: '소재 덱 경로' })
+  await path.getByLabel('Scene', { exact: true }).selectOption('usage-settle')
+  await expect(page.getByRole('status').filter({ hasText: '분석' }).first()).toBeVisible()
+  await expect(page.getByText('분석 중 · 38%')).toBeVisible()
+  await expect(page.getByText('2 / 2 Parts')).toBeVisible({ timeout: 10_000 })
+  expect(deckQueries.every((query) => query.get('environment') === 'USAGE')).toBe(true)
+  await expect(page.locator('.materials-analysis-source')).toContainText('OptiStruct · model.fem · 800 MB')
+  await page.locator('.materials-part-table tbody tr').filter({ hasText: 'cover_rear' }).click()
+  const details = page.locator('.materials-detail-panel')
+  await expect(details).toContainText('COMP 13')
+  await expect(details).toContainText('Material · MAT1 / 50250')
+  await expect(details).toContainText('TABLEMD 61065')
+  await expect(details).toContainText('원본 RHO')
+  if (process.env.MATERIALS_SCREENSHOT_PATH) await page.screenshot({ path: process.env.MATERIALS_SCREENSHOT_PATH.replace(/\.png$/, '-usage.png'), fullPage: false })
+
+  // Leaving 소재·물성 returns to the same environment.
+  await page.getByRole('tab', { name: '요약', exact: true }).click()
+  await expect.poll(() => new URL(page.url()).searchParams.get('resultTab')).toBeNull()
+  await expect(toggle.getByRole('button', { name: '사용환경' })).toHaveAttribute('aria-pressed', 'true')
+  await expect.poll(() => new URL(page.url()).searchParams.get('result_environment')).not.toBe('DISTRIBUTION')
+
+  // Switching the environment inside 소재·물성 keeps the tab and reads the distribution catalog.
+  await page.getByRole('tab', { name: '소재·물성', exact: true }).click()
+  await toggle.getByRole('button', { name: '유통환경' }).click()
+  await expect(page.getByRole('tab', { name: '소재·물성', exact: true })).toHaveAttribute('aria-selected', 'true')
+  await expect.poll(() => catalogEnvironments.at(-1)).toBe('DISTRIBUTION')
+})
+
+test('사용환경 입력 파일 분석 실패는 원인과 다시 분석을 보여 준다', async ({ page }) => {
+  await mockResultEnvironments(page, ['USAGE'])
+  await page.route('**/api/folder-discovery/environments/sync', (route) => route.fulfill({ json: { status: 'UNCHANGED', changed: false, snapshot_id: null, diff: { added: 0, removed: 0, changed: 0 }, code: null, message: null, check_mode: 'QUICK', checked_at: new Date().toISOString(), coalesced: false } }))
+  await page.route('**/api/materials/catalog**', (route) => route.fulfill({ json: usageCatalog }))
+  const retries: string[] = []
+  await page.route('**/api/materials/deck**', (route) => {
+    const query = new URL(route.request().url()).searchParams
+    retries.push(query.get('retry') ?? '')
+    const scene = usageCatalog.scenes[0]
+    const analysis = query.get('retry') === 'true'
+      ? usageAnalysis('READY', { progress: 1, parse_seconds: 1.2 })
+      : usageAnalysis('FAILED', { error_code: 'MATERIALS_INCLUDE_CYCLE', error_message: 'INCLUDE 파일 사이에 순환 참조가 있습니다.', cached: true })
+    return route.fulfill({ json: { scene, files: [], candidate_warnings: [], analysis, deck: analysis.status === 'READY' ? optistructDeck : null } })
+  })
+  await loginWorkspace(page)
+  await page.getByLabel('프로젝트 선택', { exact: true }).selectOption(projectId)
+  await page.getByLabel('의뢰 선택', { exact: true }).selectOption(requestId)
+  await page.getByRole('navigation', { name: '의뢰 작업 여정' }).getByRole('button', { name: 'Case 결과', exact: true }).click()
+  await page.getByRole('tab', { name: '소재·물성', exact: true }).click()
+  await page.getByRole('group', { name: '소재 덱 경로' }).getByLabel('Scene', { exact: true }).selectOption('usage-settle')
+  const failure = page.locator('.materials-analysis--failed')
+  await expect(failure).toContainText('입력 파일을 분석하지 못했습니다.')
+  await expect(failure).toContainText('순환 참조')
+  await failure.getByRole('button', { name: '다시 분석' }).click()
+  await expect(page.getByText('2 / 2 Parts')).toBeVisible()
+  expect(retries).toContain('true')
 })

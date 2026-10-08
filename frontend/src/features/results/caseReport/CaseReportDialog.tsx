@@ -4,13 +4,13 @@ import { reportApi } from '../../../shared/api/reportLayouts'
 import type { ReportLayout, ReportLayoutDefinition } from '../../../types'
 import { CaseReportMetaFields, TemplateNotAppliedNotice } from './CaseReportFields'
 import { defaultReportLayout, initialReportMeta, rememberReportLayout, usesUploadedTemplate } from './reportPreferences'
-import { buildCaseReportContents, buildCaseReportHtml, buildCaseReportPptx, caseReportFileName, caseReportOverview, loadCaseReport, loadCaseReportImages, prepareCaseReportLayout, syncCaseComparisonSlides, withCaseComparison, type CaseReportData, type CaseReportFormat, type CaseReportScope } from './caseReport'
+import { buildCaseReportContents, buildCaseReportHtml, buildCaseReportPptx, caseReportFileName, caseReportOverview, loadCaseReport, loadCaseReportImages, loadCaseReportVideos, prepareCaseReportLayout, skippedVideoNames, syncCaseComparisonSlides, withCaseComparison, type CaseReportData, type CaseReportFormat, type CaseReportScope } from './caseReport'
 
 const ReportLayoutEditor = lazy(() => import('../../../shared/reports/ReportLayoutEditor').then(({ ReportLayoutEditor: Editor }) => ({ default: Editor })))
 
 type Props = { scope: CaseReportScope; onClose: () => void }
 
-const CAPS_TEXT = '이미지 전체 300MB, 영상당 20MB·전체 200MB까지 넣습니다(원본 크기 기준). HTML은 base64로 약 1.33배 커집니다.'
+const CAPS_TEXT = '이미지 전체 300MB, 영상당 20MB·전체 200MB까지 넣습니다(원본 크기 기준). PPTX는 PowerPoint에서 재생되는 mp4만 넣고, HTML은 base64로 약 1.33배 커집니다.'
 
 function errorText(reason: unknown, fallback: string) { return reason instanceof Error && reason.message ? reason.message : fallback }
 
@@ -72,11 +72,18 @@ export function CaseReportDialog({ scope, onClose }: Props) {
   }, [scope])
 
   const reportData = useMemo(() => data ? withCaseComparison(data, includeComparison ? comparison : null) : null, [comparison, data, includeComparison])
-  const contents = useMemo(() => reportData ? buildCaseReportContents(reportData) : [], [reportData])
+  const contents = useMemo(() => reportData ? buildCaseReportContents(reportData, undefined, { includeVideos }) : [], [includeVideos, reportData])
   const toggleComparison = (checked: boolean) => {
     setIncludeComparison(checked)
     if (!data || !layout) return
-    setLayout(syncCaseComparisonSlides(layout, buildCaseReportContents(withCaseComparison(data, checked ? comparison : null))))
+    setLayout(syncCaseComparisonSlides(layout, buildCaseReportContents(withCaseComparison(data, checked ? comparison : null), undefined, { includeVideos })))
+  }
+  // Video slides come and go with "영상 포함": the slide set is rebuilt for the new content set.
+  const toggleVideos = (checked: boolean) => {
+    setIncludeVideos(checked)
+    if (!reportData || !layout) return
+    const next = buildCaseReportContents(reportData, undefined, { includeVideos: checked })
+    setLayout(syncCaseComparisonSlides(prepareCaseReportLayout(layout, reportData.source, next), next))
   }
   const coverLabels = useMemo(() => {
     const value = (label: string) => data?.scopeRows.find((row) => row.label === label)?.value ?? ''
@@ -116,13 +123,17 @@ export function CaseReportDialog({ scope, onClose }: Props) {
     setBusy(true); setError(''); setNotice(''); setSkipped({ videos: [], images: [] })
     try {
       const files: Array<{ blob: Blob; name: string }> = []
-      let skippedVideos: string[] = []
-      // Images are read once and shared by both formats.
-      const images = await loadCaseReportImages(data, { signal: controller.signal })
-      if (formats.pptx) files.push({ blob: await buildCaseReportPptx(data, { layout, labels: coverLabels, images, meta, signal: controller.signal }), name: caseReportFileName(data.caseLabel, data.generatedAt, 'pptx') })
+      const skippedVideos: string[] = []
+      // Images and videos are read once and shared by both formats.
+      const images = await loadCaseReportImages(data, { signal: controller.signal, includeVideos })
+      const videos = includeVideos ? await loadCaseReportVideos(data, { signal: controller.signal, posters: formats.pptx }) : undefined
+      if (formats.pptx) {
+        files.push({ blob: await buildCaseReportPptx(data, { layout, labels: coverLabels, images, videos, includeVideos, meta, signal: controller.signal }), name: caseReportFileName(data.caseLabel, data.generatedAt, 'pptx') })
+        if (videos) skippedVideos.push(...skippedVideoNames(data, videos, 'pptx').map((item) => formats.html && item.endsWith('mp4)이 아님') ? `${item} (PPTX)` : item))
+      }
       if (formats.html) {
-        const html = await buildCaseReportHtml(data, { includeVideos, images, meta, signal: controller.signal })
-        skippedVideos = html.skippedVideos
+        const html = await buildCaseReportHtml(data, { includeVideos, images, videos, meta, signal: controller.signal })
+        for (const item of html.skippedVideos) if (!skippedVideos.includes(item)) skippedVideos.push(item)
         files.push({ blob: html.blob, name: caseReportFileName(data.caseLabel, data.generatedAt, 'html') })
       }
       if (controller.signal.aborted || run !== generation.current) return
@@ -151,9 +162,9 @@ export function CaseReportDialog({ scope, onClose }: Props) {
         <legend>형식</legend>
         <label><input type="checkbox" checked={formats.pptx} disabled={busy} onChange={(event) => setFormats((current) => ({ ...current, pptx: event.target.checked }))} />PPTX</label>
         <label><input type="checkbox" checked={formats.html} disabled={busy} onChange={(event) => setFormats((current) => ({ ...current, html: event.target.checked }))} />HTML</label>
-        <label className="case-report__videos" title={CAPS_TEXT}><input type="checkbox" checked={includeVideos} disabled={busy || !formats.html} onChange={(event) => setIncludeVideos(event.target.checked)} />영상 포함</label>
+        <label className="case-report__videos" title={CAPS_TEXT}><input type="checkbox" checked={includeVideos} disabled={busy || !chosen.length} onChange={(event) => toggleVideos(event.target.checked)} />영상 포함</label>
         {!chosen.length ? <span className="case-report__hint" role="status">형식을 하나 이상 선택하세요.</span> : null}
-        {formats.html ? <p className="case-report__caps">{CAPS_TEXT}</p> : null}
+        {includeVideos || formats.html ? <p className="case-report__caps">{CAPS_TEXT}</p> : null}
       </fieldset>
       <label className="case-report__compare" title={comparison ? `${comparison.headers.length - (comparison.environment === 'USAGE' ? 2 : 1)}개 Case · ${comparison.rows.length}행` : 'Case 비교 탭에서 비교할 Case를 고른 뒤 보고서를 열면 넣을 수 있습니다.'}><input type="checkbox" checked={includeComparison} disabled={busy || !comparison || !data} onChange={(event) => toggleComparison(event.target.checked)} />Case 비교 포함{comparison ? null : <span className="case-report__hint">Case 비교 탭에서 열면 넣을 수 있습니다.</span>}</label>
       {formats.pptx && layout ? <div className="case-report__layout">
@@ -163,13 +174,13 @@ export function CaseReportDialog({ scope, onClose }: Props) {
       </div> : null}
       {formats.pptx && editing && layout && overview ? <div className="case-report__editor" data-testid="case-report-layout-editor"><Suspense fallback={<p className="case-report__hint">편집 화면을 준비하고 있습니다.</p>}><ReportLayoutEditor layout={layout} overview={overview} contents={contents} templates={[]} isSystem={isSystem} restricted={{ templateNote }} onChange={setLayout} onTemplateUpload={() => undefined} onTemplateDelete={() => undefined} onSave={() => void saveAsNew()} onSaveAs={() => void saveAsNew()} onDelete={() => undefined} /></Suspense></div> : null}
       <CaseReportMetaFields value={meta} disabled={busy} onChange={setMeta} />
-      {data ? <p className="case-report__counts" data-testid="case-report-counts">{data.sections.length > 1 ? `구성 ${data.sections.length}개 · ` : ''}{data.environment === 'USAGE' ? `평가 ${data.sections[0]?.summary.rows.length ?? 0}행` : `Scene ${data.sections.reduce((total, section) => total + (section.sceneTable?.rows.length ?? 0), 0)}개`} · 이미지 {data.sections.reduce((total, section) => total + section.images.length, 0)}개 · 영상 {data.sections.reduce((total, section) => total + section.videos.length, 0)}개</p> : !loadError ? <p className="case-report__hint" role="status"><LoaderCircle size={14} className="case-report__spinner" aria-hidden="true" />보고서 자료를 불러오는 중입니다.</p> : null}
+      {data ? <p className="case-report__counts" data-testid="case-report-counts">{data.sections.length > 1 ? `구성 ${data.sections.length}개 · ` : ''}{data.environment === 'USAGE' ? `평가 ${data.sections[0]?.summary.rows.length ?? 0}행` : `Scene ${data.sections.reduce((total, section) => total + (section.sceneTable?.rows.length ?? 0), 0)}개`} · 그래프 {data.sections.reduce((total, section) => total + section.chartGroups.reduce((sum, group) => sum + group.charts.length, 0), 0)}개 · 이미지 {data.sections.reduce((total, section) => total + section.images.length, 0)}개 · 영상 {data.sections.reduce((total, section) => total + section.videos.length, 0)}개</p> : !loadError ? <p className="case-report__hint" role="status"><LoaderCircle size={14} className="case-report__spinner" aria-hidden="true" />보고서 자료를 불러오는 중입니다.</p> : null}
       {loadError ? <p className="case-report__message case-report__message--error" role="alert"><AlertTriangle size={14} aria-hidden="true" />{loadError}</p> : null}
       {error ? <p className="case-report__message case-report__message--error" role="alert"><AlertTriangle size={14} aria-hidden="true" />{error}</p> : null}
       {notice ? <p className="case-report__message" role="status">{notice}</p> : null}
       {busy ? <p className="case-report__hint" role="status" data-testid="case-report-building"><LoaderCircle size={14} className="case-report__spinner" aria-hidden="true" />보고서를 만드는 중입니다. 취소하거나 Esc를 누르면 멈춥니다.</p> : null}
       {skipped.images.length ? <div className="case-report__skipped" role="status" data-testid="case-report-skipped-images"><strong>용량 제한 등으로 넣지 못한 이미지 {skipped.images.length}개</strong><ul>{skipped.images.map((item, index) => <li key={`${index}:${item}`} title={item}>{item}</li>)}</ul></div> : null}
-      {skipped.videos.length ? <div className="case-report__skipped" role="status" data-testid="case-report-skipped"><strong>용량 제한 등으로 HTML에 넣지 못한 영상 {skipped.videos.length}개</strong><ul>{skipped.videos.map((item, index) => <li key={`${index}:${item}`} title={item}>{item}</li>)}</ul></div> : null}
+      {skipped.videos.length ? <div className="case-report__skipped" role="status" data-testid="case-report-skipped"><strong>용량 제한·형식 등으로 넣지 못한 영상 {skipped.videos.length}개(파일 이름으로 표시)</strong><ul>{skipped.videos.map((item, index) => <li key={`${index}:${item}`} title={item}>{item}</li>)}</ul></div> : null}
     </div>
     <footer className="case-report__actions">
       {busy ? <button type="button" className="case-report__secondary" onClick={cancelBuild}>취소</button> : <button type="button" className="case-report__secondary" onClick={close}>닫기</button>}

@@ -398,3 +398,12 @@
   background: transparent;
 }
 .case-path-slot .materials-hierarchy { margin-bottom: var(--space-3); }
+
+/* Usage environment: background OptiStruct parse state (desktop). */
+.materials-analysis { flex-direction: column; }
+.materials-analysis strong { color: var(--color-text); }
+.materials-analysis progress { width: min(360px, 80%); height: 8px; }
+.materials-analysis small { max-width: 52ch; }
+.materials-analysis--failed svg { color: var(--color-danger, #b42318); }
+.materials-analysis button { display: inline-flex; align-items: center; gap: var(--space-1); }
+.materials-analysis-source { padding: 0 var(--space-3) var(--space-2); color: var(--color-text-muted); font-size: 0.8125rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

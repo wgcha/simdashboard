@@ -1,4 +1,10 @@
-"""Bounded, read-only access to Radioss materials stored in distribution results."""
+"""Bounded, read-only access to solver materials stored in request results.
+
+Distribution environment: Radioss Starter decks (``.rad``/``.inc``), parsed per request.
+Usage environment: one OptiStruct input file (``.fem``) directly inside the Scene
+folder, else directly inside its Case folder; parsed in the background and cached
+(``optistruct_materials``) because the file is 500–1000 MB.
+"""
 from __future__ import annotations
 
 import re
@@ -7,9 +13,10 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from ..database_connection import ConnectionLike, rows
+from ..parsers.optistruct_deck_parser import OptiStructParseError
 from ..parsers.radioss_deck_parser import RadiossDeckParser
 from . import (folder_discovery_environment, folder_schema_hierarchy, folder_discovery_scan, folder_schema_resolver,
-               result_registration_paths, spdm_storage)
+               optistruct_materials, result_registration_paths, spdm_storage)
 from .storage import provider_for_root
 
 MAX_FILE_BYTES = 64 * 1024 * 1024
@@ -28,6 +35,12 @@ _MAX_SNIFF_BYTES = 1024 * 1024
 _MAX_CANDIDATE_SCAN_BYTES = 32 * 1024 * 1024
 _INCLUDE_DIRECTIVE = re.compile(r"^/INCLUDE(?:/(?P<slash>.*)|[ \t]+(?P<space>.*))?[ \t]*$", re.I)
 _MATERIALS_ENVIRONMENT = "DISTRIBUTION"
+_MATERIALS_ENVIRONMENTS = frozenset({"DISTRIBUTION", "USAGE"})
+# Folder Schema levels a Scene must sit under, per environment (usage: Case/Scene only).
+_REQUIRED_HIERARCHY = {
+    "DISTRIBUTION": ("simulation_case", "load_case", "execution_run"),
+    "USAGE": ("simulation_case",),
+}
 _MAX_OWNERSHIP_CHECKS = 256
 
 
@@ -101,8 +114,9 @@ def _include_target_relative(scope: dict[str, Any], including_relative: str, inc
 
 
 def _request_scope(conn: ConnectionLike, request_id: str, environment: str):
-    if str(environment).upper() != _MATERIALS_ENVIRONMENT:
-        raise MaterialsCatalogError("MATERIALS_ENVIRONMENT_UNSUPPORTED", "소재 덱은 유통환경에서만 조회할 수 있습니다.")
+    environment = str(environment).upper()
+    if environment not in _MATERIALS_ENVIRONMENTS:
+        raise MaterialsCatalogError("MATERIALS_ENVIRONMENT_UNSUPPORTED", "소재 덱은 사용환경·유통환경에서만 조회할 수 있습니다.")
     row = conn.execute("SELECT project_id,title FROM analysis_requests WHERE id=?", [request_id]).fetchone()
     if not row:
         raise MaterialsCatalogError("RESULT_CONTEXT_INVALID", "기존 의뢰를 확인할 수 없습니다.", 404)
@@ -118,7 +132,7 @@ def _request_scope(conn: ConnectionLike, request_id: str, environment: str):
     scope = {
         "project_id": project_id,
         "request_id": request_id,
-        "environment": _MATERIALS_ENVIRONMENT,
+        "environment": environment,
         "request_name": str(row[1] or ""),
         "request_relative_path": schema["request_relative_path"],
         "schema": schema,
@@ -391,6 +405,84 @@ def _candidate_sources(scene: dict[str, Any], root: Path, scope: dict[str, Any],
     return None, [], []
 
 
+def _usage_candidates(scene: dict[str, Any], root: Path, scope: dict[str, Any],
+                      budget: dict[str, Any] | None = None, *, conn: ConnectionLike,
+                      root_id: str, root_key: str) -> tuple[str | None, list[str], list[dict[str, Any]]]:
+    """Usage rule: ``.fem`` files directly in the Scene folder, else directly in its Case folder.
+
+    Names only (no content sniffing, no recursion); several files in the chosen
+    folder → the first by name, with ``MATERIALS_MULTIPLE_SOLVER_INPUTS``.
+    """
+    budget = budget if budget is not None else {
+        "started": time.monotonic(), "entries": 0, "sniff_bytes": 0, "owned_directories": {}, "ownership_checks": 0,
+    }
+    fs = provider_for_root(root)
+    directories = [str(scene["relative_path"])]
+    case = (scene.get("hierarchy") or {}).get("simulation_case")
+    if isinstance(case, dict) and case.get("relative_path"):
+        directories.append(str(case["relative_path"]))
+    request_parts = tuple(part.casefold() for part in PurePosixPath(scope["request_relative_path"]).parts)
+    seen: set[str] = set()
+    for value in directories:
+        directory_relative = result_registration_paths._relative(value)
+        if directory_relative.casefold() in seen:
+            continue
+        seen.add(directory_relative.casefold())
+        parts = tuple(part.casefold() for part in PurePosixPath(directory_relative).parts)
+        if parts[:len(request_parts)] != request_parts or len(parts) <= len(request_parts):
+            raise MaterialsCatalogError("MATERIALS_PATH_OUTSIDE_REQUEST", "소재 탐색 후보가 의뢰 폴더 밖입니다.")
+        try:
+            directory = result_registration_paths._safe_existing(root, directory_relative, allow_missing_leaf=True)
+        except result_registration_paths.ResultRegistrationError as exc:
+            raise MaterialsCatalogError(exc.code, str(exc)) from exc
+        if not fs.exists(directory) or not fs.is_dir(directory):
+            continue
+        names: list[str] = []
+        try:
+            for item in fs.list(directory):
+                budget["entries"] += 1
+                if budget["entries"] > folder_discovery_scan.MAX_ENTRIES or time.monotonic() - budget["started"] > folder_discovery_scan.MAX_SECONDS:
+                    raise MaterialsCatalogError("MATERIALS_CANDIDATE_SCAN_LIMIT", "덱 후보 조사 한도를 초과했습니다.", 413)
+                if item.kind == "file" and optistruct_materials.is_input_name(item.name):
+                    if item.is_link or fs.is_link(fs.join(directory, item.name)):
+                        raise MaterialsCatalogError("MATERIALS_PATH_UNSAFE", "덱 후보에 reparse 또는 symbolic link가 있습니다.")
+                    names.append(item.name)
+        except MaterialsCatalogError:
+            raise
+        except (OSError, spdm_storage.SpdmStorageError) as exc:
+            raise MaterialsCatalogError("MATERIALS_SCAN_INCOMPLETE", "덱 후보 폴더를 읽을 수 없습니다.") from exc
+        if not names:
+            continue
+        directory_key = directory_relative.casefold()
+        ownership_cache = budget.setdefault("owned_directories", {})
+        if directory_key in ownership_cache:
+            owned = ownership_cache[directory_key]
+        else:
+            budget["ownership_checks"] = int(budget.get("ownership_checks", 0)) + 1
+            if budget["ownership_checks"] > _MAX_OWNERSHIP_CHECKS:
+                raise MaterialsCatalogError("MATERIALS_OWNERSHIP_SCAN_LIMIT", "소유권을 확인할 덱 후보 폴더 수가 허용 한도를 초과했습니다.", 413)
+            owned = _candidate_is_owned(conn, root, root_id, root_key, scope, directory_relative)
+            ownership_cache[directory_key] = owned
+        if not owned:
+            continue
+        names.sort(key=str.casefold)
+        files = [fs.join(directory, name) for name in names]
+        warnings = [{"code": "MATERIALS_MULTIPLE_SOLVER_INPUTS", "relative_paths": files}] if len(files) > 1 else []
+        return directory_relative, files, warnings
+    return None, [], []
+
+
+def _resolve_optistruct_include(request_relative_path: str, including_relative: str, include_value: str) -> str:
+    """INCLUDE path → root-relative path inside the request (relative to the including file; ``\\`` → ``/``)."""
+    value = include_value.strip().replace("\\", "/")
+    if len(value) >= 2 and value[1] == ":":
+        raise OptiStructParseError("MATERIALS_INCLUDE_INVALID", "INCLUDE 절대 경로(드라이브 문자)는 읽지 않습니다.")
+    try:
+        return _include_target_relative({"request_relative_path": request_relative_path}, including_relative, value)
+    except MaterialsCatalogError as exc:
+        raise OptiStructParseError(exc.code, str(exc), exc.status_code) from exc
+
+
 def _catalog_items(conn: ConnectionLike, root: Path, root_id: str, root_key: str,
                    scope: dict[str, Any], schema: dict[str, Any],
                    conflicts: list[dict[str, str]] | None = None) -> list[dict[str, Any]]:
@@ -413,7 +505,7 @@ def _catalog_items(conn: ConnectionLike, root: Path, root_id: str, root_key: str
         if role == "SCENE" and not _schema_scene_role(node):
             continue
         hierarchy = node.get("hierarchy", {})
-        required = ("simulation_case", "load_case", "execution_run")
+        required = _REQUIRED_HIERARCHY[scope["environment"]]
         if any(not isinstance(hierarchy.get(key), dict) for key in required):
             continue
         if role == "RESULTS":
@@ -457,9 +549,14 @@ def _catalog_items(conn: ConnectionLike, root: Path, root_id: str, root_key: str
             "input_paths": list(location.get("input_paths") or []),
             "result_paths": list(location.get("result_paths") or []),
         }
-        _, candidate_files, _ = _candidate_sources(
-            entry, root, scope, budget, conn=conn, root_id=root_id, root_key=root_key,
-        )
+        if scope["environment"] == "USAGE":
+            _, candidate_files, _ = _usage_candidates(
+                entry, root, scope, budget, conn=conn, root_id=root_id, root_key=root_key,
+            )
+        else:
+            _, candidate_files, _ = _candidate_sources(
+                entry, root, scope, budget, conn=conn, root_id=root_id, root_key=root_key,
+            )
         entry["has_deck"] = bool(candidate_files)
         items.append(entry)
     items.sort(key=lambda item: (item["label"].casefold(), item["relative_path"].casefold()))
@@ -728,9 +825,38 @@ def _parse_scene(selected: dict[str, Any], scene_path: Path, root: Path,
     return parsed, warnings, [{"relative_path": relative, "size_bytes": size} for relative, _, size in sources]
 
 
+def _usage_deck(conn: ConnectionLike, request_id: str, selected: dict[str, Any], scope: dict[str, Any],
+                retry: bool) -> dict[str, Any]:
+    root, root_id, root_key = result_registration_paths.storage_context(conn)
+    _, files, warnings = _usage_candidates(selected, root, scope, conn=conn, root_id=root_id, root_key=root_key)
+    if not files:
+        raise MaterialsCatalogError("MATERIALS_DECK_NOT_FOUND",
+                                    "Scene 또는 Case 폴더 바로 아래에서 OptiStruct 입력 파일(.fem)을 찾을 수 없습니다.", 404)
+    fs = provider_for_root(root)
+    rel = files[0]
+    try:
+        entry = fs.stat(rel, follow_links=False, missing_ok=False)
+    except (OSError, spdm_storage.SpdmStorageError) as exc:
+        raise MaterialsCatalogError("MATERIALS_SCAN_INCOMPLETE", "입력 파일 정보를 읽을 수 없습니다.") from exc
+    try:
+        analysis, parsed, file_list = optistruct_materials.deck_status(
+            conn, root=root, root_key=root_key, rel_path=rel, entry=entry,
+            request_relative_path=scope["request_relative_path"], resolve_include=_resolve_optistruct_include,
+            retry=retry,
+        )
+    except OptiStructParseError as exc:
+        raise MaterialsCatalogError(exc.code, str(exc), exc.status_code) from exc
+    if parsed is not None:
+        parsed = {key: value for key, value in parsed.items() if key not in {"includes"}}
+    return {"request_id": request_id, "environment": scope["environment"], "scene": selected, "files": file_list,
+            "candidate_warnings": warnings, "analysis": analysis, "deck": parsed}
+
+
 def deck(conn: ConnectionLike, request_id: str, environment: str,
-         scene_id: str | None = None, relative_path: str | None = None) -> dict[str, Any]:
+         scene_id: str | None = None, relative_path: str | None = None, *, retry: bool = False) -> dict[str, Any]:
     selected, scene_path, scope = _resolve_scene(conn, request_id, environment, scene_id, relative_path)
+    if scope["environment"] == "USAGE":
+        return _usage_deck(conn, request_id, selected, scope, retry)
     root, root_id, root_key = result_registration_paths.storage_context(conn)
     parsed, candidate_warnings, files = _parse_scene(selected, scene_path, root, scope, conn, root_id, root_key)
     return {"request_id": request_id, "environment": scope["environment"], "scene": selected,

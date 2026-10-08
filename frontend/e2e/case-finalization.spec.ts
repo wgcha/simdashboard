@@ -264,10 +264,12 @@ test('Final 지정은 고른 PPTX·HTML을 만들어 형식별로 올린 뒤 확
   const confirm = dialog.getByRole('button', { name: 'Final 지정 확정', exact: true })
   await expect(pptx).toBeChecked()
   await expect(html).not.toBeChecked()
-  await expect(withVideos).toBeDisabled()
+  // PPTX embeds mp4 videos too: the option follows "at least one format".
+  await expect(withVideos).toBeEnabled()
   // At least one format is required.
   await pptx.uncheck()
   await expect(confirm).toBeDisabled()
+  await expect(withVideos).toBeDisabled()
   await expect(dialog).toContainText('하나 이상 고르세요')
   await pptx.check()
   await html.check()

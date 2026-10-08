@@ -9,6 +9,8 @@
  * Final designation flow builds and uploads the same files.
  */
 import { simulationDashboardApi, type DashboardAssetBlob, type DashboardCatalog, type DashboardChoice, type DashboardDistribution, type DashboardRunVideo, type DashboardValue, type UsageDashboard } from '../../../shared/api/simulationDashboard'
+import { chartSvg, distributionChartGroups, SCENE_DETAIL_POSITIONS, usageChartGroups, type CaseReportChartGroup, type CaseReportSceneDetail } from './caseReportCharts'
+import { captureFirstFrame } from './caseReportMedia'
 import { api } from '../../../api'
 import type { ContentSnapshot, ReportExportOptions } from '../../../reportExport'
 import type { Overview, ReportContentItem, ReportElementDefinition, ReportLayoutDefinition, ReportSlideDefinition, ReportSource } from '../../../types'
@@ -46,8 +48,10 @@ export type CaseReportScope = CaseDistributionReportScope | CaseUsageReportScope
 /** Scope of the Final designation report (whole Case). */
 export type CaseReportFinalScope = CaseUsageReportScope | CaseFinalReportScope
 
-export type CaseReportImage = { id: string; assetId: string; scene: string; kind: '컨투어' | '거동' | '결과'; title: string }
-export type CaseReportVideo = { id: string; assetId: string; scene: string; fileName: string }
+/** `animated`: the asset is a video (animated contour); without videos its first frame is the image. */
+export type CaseReportImage = { id: string; assetId: string; scene: string; kind: '컨투어' | '거동' | '결과'; title: string; animated?: boolean }
+/** `kind`: '컨투어' for an animated contour (otherwise a Scene/evaluation video). */
+export type CaseReportVideo = { id: string; assetId: string; scene: string; fileName: string; kind?: '컨투어' }
 export type CaseReportTable = { title: string; headers: string[]; rows: string[][]; numericFrom: number }
 export type CaseReportSection = {
   /** '' for a single-section report (keeps stage-5 content ids). */
@@ -60,6 +64,8 @@ export type CaseReportSection = {
   empty: string
   summary: CaseReportTable & { note: string }
   sceneTable: CaseReportTable | null
+  /** The charts the screen shows for this result (요약·엣지별 수준·Scene 상세, or 사용환경 평가별 값). */
+  chartGroups: CaseReportChartGroup[]
   images: CaseReportImage[]
   videos: CaseReportVideo[]
 }
@@ -125,7 +131,7 @@ function generatedLabelOf(date: Date) {
 const filled = (rows: Array<{ label: string; value: string }>) => rows.map((row) => ({ ...row, value: row.value || '없음' }))
 
 /** One section from a distribution result (same values as the 요약·Scene 비교 tabs). */
-export function buildDistributionSection(input: { id: string; heading: string; scopeRows: Array<{ label: string; value: string }>; distribution: DashboardDistribution; videos: DashboardRunVideo[]; edgeKeys: string }): CaseReportSection {
+export function buildDistributionSection(input: { id: string; heading: string; scopeRows: Array<{ label: string; value: string }>; distribution: DashboardDistribution; videos: DashboardRunVideo[]; edgeKeys: string; sceneDetails?: CaseReportSceneDetail[] }): CaseReportSection {
   const { distribution, videos } = input
   const prefix = input.id ? `${input.id}:` : ''
   const member = distributionMember(distribution)
@@ -152,11 +158,22 @@ export function buildDistributionSection(input: { id: string; heading: string; s
     const description = [scene.description, scene.contact_code, scene.repetition].filter(Boolean).join(' · ') || '설명 미확인'
     return [sceneNumber(scene), scene.label, description, ...EDGES.map((edge) => valueText(peaks.find((item) => item.edge === edge)))]
   })
+  // Same cells as the 컨투어·거동 matrices: the Case's member, a matched asset whose status is READY
+  // (an asset without a status counts as READY, like the screen, which shows any matched asset).
+  const ready = <T extends { member_id: string; asset?: DashboardDistribution['contours'][number]['asset'] }>(cell: T) => cell.member_id === memberId && Boolean(cell.asset?.asset_id) && (cell.asset!.status ?? 'READY') === 'READY'
+  const contours = distribution.contours.filter(ready)
+  const animated = contours.filter((cell) => cell.asset!.kind === 'VIDEO')
+  const fileOf = (title: string | null | undefined, fallback: string) => title || fallback
   const images: CaseReportImage[] = [
-    ...distribution.contours.filter((cell) => cell.member_id === memberId && cell.asset && cell.asset.kind !== 'VIDEO' && cell.asset.status === 'READY')
-      .map((cell) => ({ id: `${prefix}contour:${cell.cell_id}`, assetId: cell.asset!.asset_id, scene: sceneLabel.get(cell.scene_id) ?? cell.scene_id, kind: '컨투어' as const, title: cell.asset!.title || '컨투어' })),
-    ...distribution.behaviors.filter((cell) => cell.member_id === memberId && cell.asset && cell.asset.kind !== 'VIDEO' && cell.asset.status === 'READY')
+    ...contours.map((cell) => ({ id: `${prefix}contour:${cell.cell_id}`, assetId: cell.asset!.asset_id, scene: sceneLabel.get(cell.scene_id) ?? cell.scene_id, kind: '컨투어' as const, title: cell.asset!.kind === 'VIDEO' ? `${fileOf(cell.asset!.title, '컨투어 영상')} · 첫 프레임` : fileOf(cell.asset!.title, '컨투어'), ...(cell.asset!.kind === 'VIDEO' ? { animated: true } : {}) })),
+    ...distribution.behaviors.filter((cell) => ready(cell) && cell.asset!.kind !== 'VIDEO')
       .map((cell) => ({ id: `${prefix}behavior:${cell.cell_id}`, assetId: cell.asset!.asset_id, scene: sceneLabel.get(cell.scene_id) ?? cell.scene_id, kind: '거동' as const, title: `${cell.subject_role === 'UNKNOWN' ? '거동' : cell.subject_role} 거동` })),
+  ]
+  // Animated contours are videos too; the Run video list may hold the same asset, listed once as 컨투어.
+  const contourAssets = new Set(animated.map((cell) => cell.asset!.asset_id))
+  const reportVideos: CaseReportVideo[] = [
+    ...videos.filter((video) => !contourAssets.has(video.asset_id)).map((video) => ({ id: `${prefix}${video.video_id}`, assetId: video.asset_id, scene: video.scene_label, fileName: video.title })),
+    ...animated.map((cell) => ({ id: `${prefix}contour-video:${cell.cell_id}`, assetId: cell.asset!.asset_id, scene: sceneLabel.get(cell.scene_id) ?? cell.scene_id, fileName: fileOf(cell.asset!.title, '컨투어 영상'), kind: '컨투어' as const })),
   ]
   return {
     id: input.id,
@@ -171,14 +188,15 @@ export function buildDistributionSection(input: { id: string; heading: string; s
       note: noEdgeSelection ? NO_EDGE_NOTE : finalPeak ? `최대 ${valueText({ value: finalPeak.value, unit: finalPeak.unit })} · ${finalPeak.scene}` : '값 없음',
     },
     sceneTable: { title: 'Scene 비교 · 엣지별 최대응력', headers: ['순번', 'Scene', '자세·충돌', ...EDGES], rows: sceneRows, numericFrom: 3 },
+    chartGroups: distributionChartGroups({ prefix, distribution, edgeKeys: input.edgeKeys, sceneDetails: input.sceneDetails }),
     images,
-    videos: videos.map((video) => ({ id: `${prefix}${video.video_id}`, assetId: video.asset_id, scene: video.scene_label, fileName: video.title })),
+    videos: reportVideos,
   }
 }
 
 /** Section without results: shown as `결과 없음` instead of blocking the report. */
 export function emptySection(id: string, heading: string, scopeRows: Array<{ label: string; value: string }>, text = CASE_REPORT_NO_RESULT): CaseReportSection {
-  return { id, heading, scopeRows: filled(scopeRows), empty: text, summary: { title: '요약', headers: [], rows: [], numericFrom: Number.POSITIVE_INFINITY, note: text }, sceneTable: null, images: [], videos: [] }
+  return { id, heading, scopeRows: filled(scopeRows), empty: text, summary: { title: '요약', headers: [], rows: [], numericFrom: Number.POSITIVE_INFINITY, note: text }, sceneTable: null, chartGroups: [], images: [], videos: [] }
 }
 
 /** The 사용환경 "다섯 평가 종합" table and the evaluations' media, as the screen shows them. */
@@ -208,13 +226,14 @@ export function buildUsageSection(usage: UsageDashboard, withReference: boolean)
     empty: '',
     summary: { title: '다섯 평가 종합', headers: ['평가', '원문 키', '공통', '전방', '후방', ...(withReference ? ['Reference'] : [])], rows, numericFrom: 2, note: `평가 상태: ${usageStatusText(usage)}` },
     sceneTable: null,
+    chartGroups: usageChartGroups(usage, withReference),
     images,
     videos,
   }
 }
 
 /** Builds the format-independent recipe for the on-screen 유통환경 selection. Pure. */
-export function buildCaseReportData(input: { scope: CaseDistributionReportScope; distribution: DashboardDistribution; videos: DashboardRunVideo[]; generatedAt: Date }): CaseReportData {
+export function buildCaseReportData(input: { scope: CaseDistributionReportScope; distribution: DashboardDistribution; videos: DashboardRunVideo[]; sceneDetails?: CaseReportSceneDetail[]; generatedAt: Date }): CaseReportData {
   const { scope, distribution, videos, generatedAt } = input
   const { labels, source } = scope
   const generatedLabel = generatedLabelOf(generatedAt)
@@ -236,7 +255,7 @@ export function buildCaseReportData(input: { scope: CaseDistributionReportScope;
       { label: 'Component · 기준', value: [labels.component, labels.basis].filter(Boolean).join(' · ') },
       { label: '생성 일시', value: generatedLabel },
     ]),
-    sections: [buildDistributionSection({ id: '', heading: '', scopeRows: [], distribution, videos, edgeKeys: source.edgeKeys })],
+    sections: [buildDistributionSection({ id: '', heading: '', scopeRows: [], distribution, videos, edgeKeys: source.edgeKeys, sceneDetails: input.sceneDetails })],
   }
 }
 
@@ -291,8 +310,39 @@ export function buildCaseFinalReportData(input: { scope: CaseFinalReportScope; s
   }
 }
 
+const SCENE_DETAIL_CONCURRENCY = 4
+
+/**
+ * Scene 상세 (TOP/BOT/LH/RH line values) of every Scene of the Case's member, as
+ * the screen reads it on a Scene click. A failed read becomes an empty chart
+ * with the reason (abort still aborts the build).
+ */
+export async function loadCaseReportSceneDetails(distribution: DashboardDistribution, lineIndices: string, signal?: AbortSignal): Promise<CaseReportSceneDetail[]> {
+  const member = distributionMember(distribution)
+  if (!member) return []
+  const jobs = distribution.scenes.flatMap((scene) => SCENE_DETAIL_POSITIONS.map((position) => ({ sceneId: scene.id, position })))
+  const results: CaseReportSceneDetail[] = new Array(jobs.length)
+  let next = 0
+  const worker = async () => {
+    while (next < jobs.length) {
+      const index = next++
+      const job = jobs[index]
+      if (signal?.aborted) throw abortError()
+      try {
+        const detail = await simulationDashboardApi.sceneDetail(job.sceneId, { execution_run_id: member.execution_run_id, capture_id: member.capture_id, run_option_id: member.run_option_id, mode: member.mode, component_id: member.component_id, basis: member.basis, line_indices: lineIndices, position: job.position }, signal)
+        results[index] = { ...job, detail }
+      } catch (reason) {
+        if (signal?.aborted) throw reason
+        results[index] = { ...job, detail: null, error: reason instanceof Error && reason.message ? reason.message : '읽기 오류' }
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(SCENE_DETAIL_CONCURRENCY, jobs.length) }, worker))
+  return results
+}
+
 /** Loads everything the recipe needs for the fixed distribution scope through the typed API client. */
-export async function loadCaseReportSources(source: Pick<CaseReportSource, 'runId' | 'captureId' | 'optionId' | 'mode' | 'componentId' | 'basis' | 'edgeKeys' | 'lineIndices'>, signal?: AbortSignal): Promise<{ distribution: DashboardDistribution; videos: DashboardRunVideo[] }> {
+export async function loadCaseReportSources(source: Pick<CaseReportSource, 'runId' | 'captureId' | 'optionId' | 'mode' | 'componentId' | 'basis' | 'edgeKeys' | 'lineIndices'>, signal?: AbortSignal): Promise<{ distribution: DashboardDistribution; videos: DashboardRunVideo[]; sceneDetails: CaseReportSceneDetail[] }> {
   const distributionPromise = simulationDashboardApi.distribution(source.runId, { capture_id: source.captureId, run_option_id: source.optionId || undefined, mode: source.mode, component_id: source.componentId, basis: source.basis as 'DETAIL' | 'REPORTED_SUMMARY', edge_keys: source.edgeKeys, line_indices: source.lineIndices }, signal)
   const videos: DashboardRunVideo[] = []
   for (let page = 1; page <= 250; page += 1) {
@@ -300,7 +350,8 @@ export async function loadCaseReportSources(source: Pick<CaseReportSource, 'runI
     videos.push(...(result.videos ?? []))
     if (!result.pagination.has_next) break
   }
-  return { distribution: await distributionPromise, videos }
+  const distribution = await distributionPromise
+  return { distribution, videos, sceneDetails: await loadCaseReportSceneDetails(distribution, source.lineIndices, signal) }
 }
 
 /** Project and request names for the cover (falls back to the given labels). */
@@ -325,7 +376,7 @@ export async function loadCaseReport(scope: CaseReportScope, options: { signal?:
   }
   const [sources, names] = await Promise.all([loadCaseReportSources(source, options.signal), namesPromise])
   const labels = { ...scope.labels as CaseReportLabels, project: names.project || scope.labels.project, request: names.request || scope.labels.request }
-  return buildCaseReportData({ scope: { source, labels }, distribution: sources.distribution, videos: sources.videos, generatedAt })
+  return buildCaseReportData({ scope: { source, labels }, distribution: sources.distribution, videos: sources.videos, sceneDetails: sources.sceneDetails, generatedAt })
 }
 
 const uniqueChoices = <T extends DashboardChoice>(items: T[]) => Array.from(new Map(items.map((item) => [item.id, item])).values())
@@ -366,7 +417,7 @@ export async function loadCaseFinalSections(source: CaseFinalReportSource, prefe
         const scopeRows = [{ label: 'Component · 기준', value: hasData ? [component!.label, basisLabel(basis!.id)].join(' · ') : '' }]
         if (!hasData) { sections.push(emptySection(id, heading, scopeRows)); continue }
         const loaded = await loadCaseReportSources({ runId: run.id, captureId: capture, optionId: option.id, mode, componentId: component!.id, basis: basis!.id, edgeKeys: source.edgeKeys, lineIndices: source.lineIndices }, signal)
-        sections.push(buildDistributionSection({ id, heading, scopeRows, distribution: loaded.distribution, videos: loaded.videos, edgeKeys: source.edgeKeys }))
+        sections.push(buildDistributionSection({ id, heading, scopeRows, distribution: loaded.distribution, videos: loaded.videos, edgeKeys: source.edgeKeys, sceneDetails: loaded.sceneDetails }))
       }
     }
   }
@@ -412,8 +463,27 @@ function coverText(data: CaseReportData) {
   return [...lines, '구성:', ...parts, ...more].join('\n')
 }
 
-/** PPTX content items (one per slide); tables are paginated. */
-export function buildCaseReportContents(data: CaseReportData, images: Map<string, ContentSnapshot['image']> = new Map()): ReportContentItem[] {
+export type CaseReportContentOptions = {
+  /** Videos (and animated contours) embedded: one slide per video; animated contours are not shown as still images. */
+  includeVideos?: boolean
+  /** Videos read for this build (PPTX embeds mp4 only). */
+  videos?: CaseReportLoadedVideos
+}
+
+/** Why a video is not embedded in the PPTX ('' when it is). */
+export function pptxVideoReason(video: CaseReportVideo, options: CaseReportContentOptions) {
+  if (!options.includeVideos) return '포함 안 함'
+  const loaded = options.videos?.videos.get(video.id)
+  if (loaded) return loaded.mime === 'video/mp4' ? '' : 'PowerPoint 호환 형식(mp4)이 아님'
+  return options.videos?.skipped.find((item) => item.id === video.id)?.reason ?? '읽지 않음'
+}
+
+/**
+ * PPTX content items (one per slide); tables are paginated. The content set
+ * (ids and presentations) depends only on the recipe and `includeVideos`, never
+ * on what could be read, so a prepared layout stays valid for the build.
+ */
+export function buildCaseReportContents(data: CaseReportData, images: Map<string, ContentSnapshot['image']> = new Map(), options: CaseReportContentOptions = {}): ReportContentItem[] {
   const key = `${data.source.caseId}:${data.source.captureId}`
   const pageTitle = (title: string, index: number, total: number) => total > 1 ? `${title} (${index + 1}/${total})` : title
   const items: ReportContentItem[] = [{ contentId: `case:${key}:scope`, kind: 'case_scope', sourceKey: key, title: '보고서 범위', defaultPresentation: 'text', data: { text: coverText(data) } satisfies ContentSnapshot }]
@@ -430,6 +500,12 @@ export function buildCaseReportContents(data: CaseReportData, images: Map<string
       contentId: `${base}:summary:${index + 1}`, kind: 'case_summary', sourceKey: key, title: pageTitle(named(section.summary.title), index, pages.length), defaultPresentation: rows.length ? 'table' : 'text',
       data: { text: rows.length ? section.summary.note : '표시할 결과가 없습니다.', tableHeaders: section.summary.headers, tableRows: rows } satisfies ContentSnapshot,
     })))
+    const [summaryChart, ...otherCharts] = section.chartGroups
+    const chartItem = (group: CaseReportChartGroup): ReportContentItem => ({
+      contentId: `case:${key}:${group.id}`, kind: 'case_chart', sourceKey: key, title: named(group.title), defaultPresentation: 'chart',
+      data: { charts: group.charts, text: group.charts.map((chart) => chart.title).join('\n') } satisfies ContentSnapshot,
+    })
+    if (summaryChart) items.push(chartItem(summaryChart))
     if (section.sceneTable) {
       const table = section.sceneTable
       items.push(...chunk(table.rows, PPTX_TABLE_ROWS).map((rows, index, pages): ReportContentItem => ({
@@ -437,16 +513,28 @@ export function buildCaseReportContents(data: CaseReportData, images: Map<string
         data: { tableHeaders: table.headers, tableRows: rows } satisfies ContentSnapshot,
       })))
     }
-    items.push(...section.images.map((image): ReportContentItem => {
+    items.push(...otherCharts.map(chartItem))
+    items.push(...section.images.filter((image) => !(image.animated && options.includeVideos)).map((image): ReportContentItem => {
       const loaded = images.get(image.id)
       return {
-        contentId: `${base}:image:${image.id}`, kind: 'case_image', sourceKey: image.assetId, title: named(`${image.scene} · ${image.kind}`), defaultPresentation: loaded ? 'image' : 'text',
-        data: { image: loaded, text: loaded ? image.title : `${image.title}\n이미지를 넣지 못했습니다.` } satisfies ContentSnapshot,
+        contentId: `${base}:image:${image.id}`, kind: 'case_image', sourceKey: image.assetId, title: named(`${image.scene} · ${image.kind}`), defaultPresentation: 'image',
+        data: { image: loaded, text: loaded ? image.title : `${image.title}\n${image.animated ? '첫 프레임을 만들지 못했습니다.' : '이미지를 넣지 못했습니다.'}` } satisfies ContentSnapshot,
       }
     }))
-    items.push(...chunk(section.videos.map((video) => [video.scene, video.fileName]), PPTX_TABLE_ROWS).map((rows, index, pages): ReportContentItem => ({
+    if (options.includeVideos) {
+      items.push(...section.videos.map((video): ReportContentItem => {
+        const loaded = options.videos?.videos.get(video.id)
+        const reason = pptxVideoReason(video, options)
+        return {
+          contentId: `${base}:video:${video.id}`, kind: 'case_video', sourceKey: video.assetId, title: named(`${video.scene} · ${video.kind === '컨투어' ? '컨투어 영상' : '영상'}`), defaultPresentation: 'image',
+          data: { video: loaded && !reason ? { dataUri: loaded.dataUri, poster: loaded.poster, width: loaded.width, height: loaded.height } : undefined, text: reason ? `${video.fileName}\n영상을 넣지 못했습니다: ${reason}` : video.fileName } satisfies ContentSnapshot,
+        }
+      }))
+    }
+    const videoRows = section.videos.map((video) => [video.scene, video.kind === '컨투어' ? `${video.fileName} (컨투어)` : video.fileName, ...(options.includeVideos ? [pptxVideoReason(video, options) || '포함'] : [])])
+    items.push(...chunk(videoRows, PPTX_TABLE_ROWS).map((rows, index, pages): ReportContentItem => ({
       contentId: `${base}:videos:${index + 1}`, kind: 'case_videos', sourceKey: key, title: pageTitle(named('영상 목록'), index, pages.length), defaultPresentation: 'table',
-      data: { text: rows.map((row) => row.join(' · ')).join('\n'), tableHeaders: ['Scene', '영상 파일'], tableRows: rows } satisfies ContentSnapshot,
+      data: { text: rows.map((row) => row.join(' · ')).join('\n'), tableHeaders: ['Scene', '영상 파일', ...(options.includeVideos ? ['PPTX'] : [])], tableRows: rows } satisfies ContentSnapshot,
     })))
   }
   if (data.comparison) {
@@ -471,7 +559,10 @@ const COMPARE_SLIDE_PREFIX = 'slide-case-compare-'
 export function syncCaseComparisonSlides(layout: ReportLayoutDefinition, contents: ReportContentItem[]): ReportLayoutDefinition {
   const slides = (layout.slides ?? []).filter((slide) => !slide.id.startsWith(COMPARE_SLIDE_PREFIX))
   const compare = contents.filter((content) => content.contentId.startsWith(CASE_COMPARE_CONTENT_PREFIX))
-  return { ...layout, slides: [...slides, ...compare.map((content, index) => contentSlide(content, `${COMPARE_SLIDE_PREFIX}${index + 1}`, `compare-${index}`))] }
+  // The other slides keep their signature state: only a layout in sync before stays in sync.
+  const signature = caseReportContentSignature(contents)
+  const inSync = [signature, caseReportContentSignature(contents.filter((content) => !content.contentId.startsWith(CASE_COMPARE_CONTENT_PREFIX)))].includes(layout.contentSignature ?? '')
+  return { ...layout, contentSignature: inSync ? signature : layout.contentSignature, slides: [...slides, ...compare.map((content, index) => contentSlide(content, `${COMPARE_SLIDE_PREFIX}${index + 1}`, `compare-${index}`))] }
 }
 
 function element(id: string, type: ReportElementDefinition['type'], label: string, rect: [number, number, number, number], binding: ReportElementDefinition['binding']): ReportElementDefinition {
@@ -511,9 +602,22 @@ function contentSlide(content: ReportContentItem, id: string, suffix: string): R
  */
 export function prepareCaseReportLayout(layout: ReportLayoutDefinition, source: CaseReportDataSource, contents: ReportContentItem[], forceDefault = false): ReportLayoutDefinition {
   const sameSource = JSON.stringify(layout.sourceScope) === JSON.stringify(source)
-  const base = { ...layout, sourceScope: source }
-  if (!forceDefault && layout.contentMode && sameSource && layout.slides?.length) return base
+  const contentSignature = caseReportContentSignature(contents)
+  const base = { ...layout, sourceScope: source, contentSignature }
+  // Slides are reused only for the same scope AND the same content set (charts, images,
+  // videos); a layout saved before the content changed is rebuilt, not left stale.
+  if (!forceDefault && layout.contentMode && sameSource && layout.contentSignature === contentSignature && layout.slides?.length) return base
   return { ...base, contentMode: 'one-per-slide', slides: createCaseReportSlides(contents) }
+}
+
+/** Short deterministic signature of the content ids and presentations (FNV-1a). */
+export function caseReportContentSignature(contents: ReportContentItem[]) {
+  let hash = 0x811c9dc5
+  for (const character of contents.map((content) => `${content.contentId}|${content.defaultPresentation}`).join('\n')) {
+    hash ^= character.charCodeAt(0)
+    hash = Math.imul(hash, 0x01000193) >>> 0
+  }
+  return `v1:${contents.length}:${hash.toString(16).padStart(8, '0')}`
 }
 
 const META_FIELDS: Array<[keyof CaseReportMeta, string, string]> = [
@@ -582,13 +686,17 @@ async function imageSize(blob: Blob): Promise<{ width?: number; height?: number 
   } catch { return {} }
 }
 
-/** Images read once per build and shared by both formats. */
-export type CaseReportLoadedImages = { images: Map<string, NonNullable<ContentSnapshot['image']>>; skipped: string[] }
+/** Images read once per build and shared by both formats. `usedBytes`: raw bytes read (budgets of the Final upload). */
+export type CaseReportLoadedImages = { images: Map<string, NonNullable<ContentSnapshot['image']>>; skipped: string[]; usedBytes?: number }
 
 const imageName = (image: CaseReportImage) => `${image.scene} · ${image.kind} · ${image.title}`
 
-/** Reads every report image once (per-image 30 MB, total 300 MB raw); others are listed as skipped. */
-export async function loadCaseReportImages(data: CaseReportData, options: { loadMedia?: CaseReportMediaLoader; signal?: AbortSignal; maxImageBytes?: number; maxTotalImageBytes?: number } = {}): Promise<CaseReportLoadedImages> {
+/**
+ * Reads every report image once (per-image 30 MB, total 300 MB raw); others are listed as skipped.
+ * An animated contour is read as a video (≤ 20 MB) and its first frame becomes the image; with
+ * `includeVideos` it is embedded as a video instead and not read here.
+ */
+export async function loadCaseReportImages(data: CaseReportData, options: { loadMedia?: CaseReportMediaLoader; signal?: AbortSignal; maxImageBytes?: number; maxTotalImageBytes?: number; includeVideos?: boolean } = {}): Promise<CaseReportLoadedImages> {
   const loadMedia = options.loadMedia ?? caseReportMediaLoader
   const perImage = options.maxImageBytes ?? CASE_REPORT_IMAGE_MAX_BYTES
   const totalCap = options.maxTotalImageBytes ?? CASE_REPORT_IMAGE_TOTAL_MAX_BYTES
@@ -596,11 +704,20 @@ export async function loadCaseReportImages(data: CaseReportData, options: { load
   const skipped: string[] = []
   let used = 0
   for (const image of allReportImages(data)) {
+    if (image.animated && options.includeVideos) continue
     if (options.signal?.aborted) throw abortError()
     const remaining = totalCap - used
     try {
-      const result = remaining > 0 ? await loadMedia(image.assetId, { maxBytes: Math.min(perImage, remaining), signal: options.signal }) : { status: 'TOO_LARGE' as const, size: 0 }
+      const cap = Math.min(image.animated ? CASE_REPORT_VIDEO_MAX_BYTES : perImage, remaining)
+      const result = remaining > 0 ? await loadMedia(image.assetId, { maxBytes: cap, signal: options.signal }) : { status: 'TOO_LARGE' as const, size: 0 }
       if (result.status !== 'OK') { skipped.push(imageName(image)); continue }
+      if (image.animated) {
+        const frame = await captureFirstFrame(new Blob([result.blob], { type: mediaType(result.blob, image.title, 'video') }), { signal: options.signal })
+        if (!frame) { skipped.push(`${imageName(image)} (첫 프레임을 만들지 못함)`); continue }
+        used += frame.dataUri.length * 0.75
+        images.set(image.id, frame)
+        continue
+      }
       used += result.blob.size
       images.set(image.id, { dataUri: await safeDataUri(result.blob, image.title, 'image'), ...(await imageSize(result.blob)) })
     } catch (reason) {
@@ -608,7 +725,55 @@ export async function loadCaseReportImages(data: CaseReportData, options: { load
       skipped.push(imageName(image))
     }
   }
-  return { images, skipped }
+  return { images, skipped, usedBytes: Math.round(used) }
+}
+
+export type CaseReportLoadedVideo = { dataUri: string; mime: string; poster?: string; width?: number; height?: number }
+/** Videos read once per build and shared by both formats; `skipped` carries the reason (size cap, read error). */
+export type CaseReportLoadedVideos = { videos: Map<string, CaseReportLoadedVideo>; skipped: Array<{ id: string; name: string; reason: string }>; usedBytes: number }
+
+export const caseReportVideoName = (video: CaseReportVideo) => `${video.scene} · ${video.kind === '컨투어' ? '컨투어 · ' : ''}${video.fileName}`
+
+/**
+ * Reads every report video once (per video 20 MB, total 200 MB raw, or less via
+ * `maxTotalVideoBytes`). `posters`: the first frame (PNG) for the PPTX cover.
+ */
+export async function loadCaseReportVideos(data: CaseReportData, options: { loadMedia?: CaseReportMediaLoader; signal?: AbortSignal; maxVideoBytes?: number; maxTotalVideoBytes?: number; posters?: boolean } = {}): Promise<CaseReportLoadedVideos> {
+  const loadMedia = options.loadMedia ?? caseReportMediaLoader
+  const perVideo = options.maxVideoBytes ?? CASE_REPORT_VIDEO_MAX_BYTES
+  const totalCap = options.maxTotalVideoBytes ?? CASE_REPORT_VIDEO_TOTAL_MAX_BYTES
+  const videos = new Map<string, CaseReportLoadedVideo>()
+  const skipped: CaseReportLoadedVideos['skipped'] = []
+  const mb = (bytes: number) => `${Math.round(bytes / (1024 * 1024))}MB`
+  let used = 0
+  for (const video of allReportVideos(data)) {
+    if (options.signal?.aborted) throw abortError()
+    const remaining = totalCap - used
+    try {
+      const result = remaining > 0 ? await loadMedia(video.assetId, { maxBytes: Math.min(perVideo, remaining), signal: options.signal }) : { status: 'TOO_LARGE' as const, size: 0 }
+      if (result.status !== 'OK') {
+        skipped.push({ id: video.id, name: caseReportVideoName(video), reason: result.size > perVideo ? `영상당 ${mb(perVideo)} 초과` : `전체 영상 ${mb(totalCap)} 초과` })
+        continue
+      }
+      used += result.blob.size
+      const mime = mediaType(result.blob, video.fileName, 'video')
+      const typed = new Blob([result.blob], { type: mime })
+      const poster = options.posters ? await captureFirstFrame(typed, { signal: options.signal }) : null
+      videos.set(video.id, { dataUri: await blobToDataUri(typed), mime, ...(poster ? { poster: poster.dataUri, width: poster.width, height: poster.height } : {}) })
+    } catch (reason) {
+      if (options.signal?.aborted) throw reason
+      skipped.push({ id: video.id, name: caseReportVideoName(video), reason: '읽기 오류' })
+    }
+  }
+  return { videos, skipped, usedBytes: used }
+}
+
+/** Videos not embedded in the given format, as `<Scene · 파일> — <사유>` (the dialog lists them). */
+export function skippedVideoNames(data: CaseReportData, videos: CaseReportLoadedVideos, format: CaseReportFormat) {
+  return allReportVideos(data).flatMap((video) => {
+    const reason = format === 'pptx' ? pptxVideoReason(video, { includeVideos: true, videos }) : videos.videos.has(video.id) ? '' : videos.skipped.find((item) => item.id === video.id)?.reason ?? '읽기 오류'
+    return reason ? [`${caseReportVideoName(video)} — ${reason}`] : []
+  })
 }
 
 export type CaseReportPptxOptions = {
@@ -621,13 +786,19 @@ export type CaseReportPptxOptions = {
   signal?: AbortSignal
   /** W7: author and optional 개발단계·검토조건·결론 for the cover/summary. */
   meta?: CaseReportMeta
+  /** Embed mp4 videos (and animated contours) with `addMedia`; others are listed with the reason. */
+  includeVideos?: boolean
+  /** Videos already read for this build (shared with the HTML format). */
+  videos?: CaseReportLoadedVideos
 }
 
-/** PPTX through the existing pptxgenjs layout renderer. */
+/** PPTX through the existing pptxgenjs layout renderer (charts are native, editable PowerPoint charts). */
 export async function buildCaseReportPptx(data: CaseReportData, options: CaseReportPptxOptions = {}): Promise<Blob> {
-  const [reportModule, loaded] = await Promise.all([import('../../../reportExport'), options.images ?? loadCaseReportImages(data, { loadMedia: options.loadMedia, signal: options.signal })])
+  const [reportModule, loaded] = await Promise.all([import('../../../reportExport'), options.images ?? loadCaseReportImages(data, { loadMedia: options.loadMedia, signal: options.signal, includeVideos: options.includeVideos })])
   if (options.signal?.aborted) throw abortError()
-  const contents = buildCaseReportContents(data, loaded.images)
+  const videos = options.includeVideos ? options.videos ?? await loadCaseReportVideos(data, { loadMedia: options.loadMedia, signal: options.signal, posters: true }) : undefined
+  if (options.signal?.aborted) throw abortError()
+  const contents = buildCaseReportContents(data, loaded.images, { includeVideos: options.includeVideos, videos })
   const layout = withCaseReportMeta(caseReportRenderLayout(prepareCaseReportLayout(options.layout ?? reportModule.DEFAULT_REPORT_LAYOUT, data.source, contents)), options.meta)
   const scopeValue = (label: string) => data.scopeRows.find((row) => row.label === label)?.value ?? ''
   const labels = options.labels ?? { project: scopeValue('프로젝트'), request: scopeValue('의뢰'), loadCase: scopeValue('하중경우') }
@@ -670,6 +841,9 @@ figcaption strong{color:var(--ink)}
 .file{padding:18px 12px;border:1px dashed var(--line);border-radius:4px;color:var(--muted);overflow-wrap:anywhere}
 .empty{margin:0;color:var(--muted)}
 .no-result{margin:0;padding:14px 12px;border:1px dashed var(--line);border-radius:6px;color:var(--muted);font-weight:600}
+.chart-group{margin:0 0 16px}.chart-title{margin:0 0 8px;font-weight:600}
+.charts{display:grid;grid-template-columns:repeat(auto-fill,minmax(480px,1fr));gap:12px}
+figure.chart{background:#fff}figure.chart svg{display:block;width:100%;height:auto}
 `
 
 function htmlTable(headers: string[], rows: string[][], numericFrom = Number.POSITIVE_INFINITY) {
@@ -682,6 +856,8 @@ export type CaseReportHtmlOptions = {
   loadMedia?: CaseReportMediaLoader
   /** Images already read for this build (shared with the PPTX format). */
   images?: CaseReportLoadedImages
+  /** Videos already read for this build (shared with the PPTX format). */
+  videos?: CaseReportLoadedVideos
   signal?: AbortSignal
   maxVideoBytes?: number
   maxTotalVideoBytes?: number
@@ -697,10 +873,9 @@ export async function buildCaseReportHtml(data: CaseReportData, options: CaseRep
   const loadMedia = options.loadMedia ?? caseReportMediaLoader
   const perVideo = options.maxVideoBytes ?? CASE_REPORT_VIDEO_MAX_BYTES
   const totalCap = options.maxTotalVideoBytes ?? CASE_REPORT_VIDEO_TOTAL_MAX_BYTES
-  const loaded = options.images ?? await loadCaseReportImages(data, { loadMedia, signal: options.signal })
+  const loaded = options.images ?? await loadCaseReportImages(data, { loadMedia, signal: options.signal, includeVideos: options.includeVideos })
+  const videos = options.includeVideos ? options.videos ?? await loadCaseReportVideos(data, { loadMedia, signal: options.signal, maxVideoBytes: perVideo, maxTotalVideoBytes: totalCap }) : undefined
   const parts: BlobPart[] = []
-  const skippedVideos: string[] = []
-  let usedVideoBytes = 0
   const multi = data.sections.length > 1 || Boolean(data.sections[0]?.heading)
   parts.push(`<!doctype html>\n<html lang="ko">\n<head>\n<meta charset="utf-8">\n<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; media-src data:; style-src 'unsafe-inline'; form-action 'none'; base-uri 'none'">\n<meta name="viewport" content="width=device-width, initial-scale=1">\n<meta name="generator" content="VD Simulation Workbench">\n<title>${escapeHtml(data.title)}</title>\n<style>${HTML_STYLE}</style>\n</head>\n<body>\n<main>\n`)
   parts.push(`<header><h1>${escapeHtml(data.title)}</h1><p class="meta">생성 ${escapeHtml(data.generatedLabel)}</p><dl>${[...data.scopeRows, ...reportMetaRows(options.meta)].map((row) => `<dt>${escapeHtml(row.label)}</dt><dd>${escapeHtml(row.value)}</dd>`).join('')}</dl></header>\n`)
@@ -713,14 +888,24 @@ export async function buildCaseReportHtml(data: CaseReportData, options: CaseRep
     } else {
       parts.push(`<section aria-labelledby="${anchor}-summary"><${h} id="${anchor}-summary">${escapeHtml(section.summary.title)}</${h}><p class="peak">${escapeHtml(section.summary.note)}</p>${htmlTable(section.summary.headers, section.summary.rows, section.summary.numericFrom)}</section>\n`)
       if (section.sceneTable) parts.push(`<section aria-labelledby="${anchor}-scenes"><${h} id="${anchor}-scenes">${escapeHtml(section.sceneTable.title)}</${h}>${htmlTable(section.sceneTable.headers, section.sceneTable.rows, section.sceneTable.numericFrom)}</section>\n`)
+      if (section.chartGroups.length) {
+        parts.push(`<section aria-labelledby="${anchor}-charts" data-section="charts"><${h} id="${anchor}-charts">그래프</${h}>`)
+        for (const group of section.chartGroups) {
+          parts.push(`<div class="chart-group"><p class="chart-title">${escapeHtml(group.title)}</p><div class="charts">`)
+          for (const chart of group.charts) parts.push(`<figure class="chart">${chartSvg(chart)}${chart.notes?.length ? `<figcaption>${chart.notes.map(escapeHtml).join('<br>')}</figcaption>` : ''}</figure>`)
+          parts.push('</div></div>')
+        }
+        parts.push('</section>\n')
+      }
+      const sectionImages = section.images.filter((image) => !(image.animated && options.includeVideos))
       parts.push(`<section aria-labelledby="${anchor}-images"><${h} id="${anchor}-images">결과 이미지</${h}>`)
-      if (!section.images.length) parts.push('<p class="empty">결과 이미지가 없습니다.</p>')
+      if (!sectionImages.length) parts.push('<p class="empty">결과 이미지가 없습니다.</p>')
       else {
         parts.push('<div class="media">')
-        for (const image of section.images) {
+        for (const image of sectionImages) {
           const dataUri = loaded.images.get(image.id)?.dataUri
           const caption = `<figcaption><strong>${escapeHtml(image.scene)}</strong> · ${escapeHtml(image.kind)} · ${escapeHtml(image.title)}</figcaption>`
-          parts.push(dataUri ? `<figure><img src="${dataUri}" alt="${escapeHtml(`${image.scene} ${image.kind}`)}">${caption}</figure>` : `<figure><div class="file">용량 제한 또는 읽기 오류로 이미지를 넣지 못했습니다.</div>${caption}</figure>`)
+          parts.push(dataUri ? `<figure><img src="${dataUri}" alt="${escapeHtml(`${image.scene} ${image.kind}`)}">${caption}</figure>` : `<figure><div class="file">${image.animated ? '애니메이션 컨투어의 첫 프레임을 만들지 못했습니다.' : '용량 제한 또는 읽기 오류로 이미지를 넣지 못했습니다.'}</div>${caption}</figure>`)
         }
         parts.push('</div>')
       }
@@ -729,22 +914,11 @@ export async function buildCaseReportHtml(data: CaseReportData, options: CaseRep
       else {
         parts.push('<div class="media">')
         for (const video of section.videos) {
-          const caption = `<figcaption><strong>${escapeHtml(video.scene)}</strong> · ${escapeHtml(video.fileName)}</figcaption>`
-          let embedded = ''
-          if (options.includeVideos) {
-            const remaining = totalCap - usedVideoBytes
-            try {
-              const result = remaining > 0 ? await loadMedia(video.assetId, { maxBytes: Math.min(perVideo, remaining), signal: options.signal }) : { status: 'TOO_LARGE' as const, size: 0 }
-              if (result.status === 'OK') {
-                usedVideoBytes += result.blob.size
-                embedded = `<video controls preload="metadata" src="${await safeDataUri(result.blob, video.fileName, 'video')}" aria-label="${escapeHtml(`${video.scene} ${video.fileName}`)}"></video>`
-              } else skippedVideos.push(`${video.scene} · ${video.fileName}`)
-            } catch (reason) {
-              if (options.signal?.aborted) throw reason
-              skippedVideos.push(`${video.scene} · ${video.fileName}`)
-            }
-          }
-          const note = options.includeVideos ? '용량 제한 또는 읽기 오류로 영상을 포함하지 않았습니다.' : '영상 파일은 보고서에 포함하지 않았습니다.'
+          const caption = `<figcaption><strong>${escapeHtml(video.scene)}</strong> · ${video.kind === '컨투어' ? '컨투어 영상 · ' : ''}${escapeHtml(video.fileName)}</figcaption>`
+          const loadedVideo = videos?.videos.get(video.id)
+          const embedded = loadedVideo ? `<video controls preload="metadata" src="${loadedVideo.dataUri}" aria-label="${escapeHtml(`${video.scene} ${video.fileName}`)}"></video>` : ''
+          const reason = videos?.skipped.find((item) => item.id === video.id)?.reason
+          const note = options.includeVideos ? `${reason ? `${reason}로 ` : '용량 제한 또는 읽기 오류로 '}영상을 포함하지 않았습니다.` : '영상 파일은 보고서에 포함하지 않았습니다.'
           parts.push(`<figure>${embedded || `<div class="file">${escapeHtml(video.fileName)}<br>${note}</div>`}${caption}</figure>`)
         }
         parts.push('</div>')
@@ -759,5 +933,5 @@ export async function buildCaseReportHtml(data: CaseReportData, options: CaseRep
   }
   parts.push('</main>\n</body>\n</html>\n')
   if (options.signal?.aborted) throw abortError()
-  return { blob: new Blob(parts, { type: 'text/html;charset=utf-8' }), skippedVideos, skippedImages: loaded.skipped }
+  return { blob: new Blob(parts, { type: 'text/html;charset=utf-8' }), skippedVideos: videos ? skippedVideoNames(data, videos, 'html') : [], skippedImages: loaded.skipped }
 }
