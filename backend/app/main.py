@@ -61,6 +61,7 @@ from .routers.semantic_activation import router as semantic_activation_router
 from .routers.semantic_review import router as semantic_review_router
 from .routers.semantic_impact import router as semantic_impact_router
 from .routers.semantic_vocabulary import router as semantic_vocabulary_router
+from .adapters.http.routers.physicsai_link import router as physicsai_link_router
 from .adapters.http.routers.projects import router as projects_router
 from .adapters.http.routers.reports import router as reports_router
 from .adapters.http.routers.report_templates import router as report_templates_router
@@ -144,6 +145,7 @@ def media_storage_mode() -> app_config.MediaStorageMode:
 app.include_router(system_health_router)
 app.include_router(feature_examples_router)
 app.include_router(projects_router)
+app.include_router(physicsai_link_router)
 app.include_router(import_schemas_router)
 app.include_router(portfolio_router)
 

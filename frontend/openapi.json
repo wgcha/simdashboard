@@ -7288,6 +7288,24 @@
         }
       }
     },
+    "/api/integrations/physicsai": {
+      "get": {
+        "summary": "Get Physicsai Link",
+        "operationId": "get_physicsai_link_api_integrations_physicsai_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PhysicsAiLinkResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/import-schemas": {
       "get": {
         "summary": "List Import Schemas",
@@ -18377,6 +18395,36 @@
           "available"
         ],
         "title": "PendingReviewItems"
+      },
+      "PhysicsAiLinkResponse": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "base_path": {
+            "type": "string",
+            "title": "Base Path"
+          },
+          "spdm_root": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spdm Root"
+          }
+        },
+        "type": "object",
+        "required": [
+          "enabled",
+          "base_path"
+        ],
+        "title": "PhysicsAiLinkResponse",
+        "description": "PhysicsAI 연동 링크 표시 상태. ``spdm_root``는 켜져 있고 root가 설정된 경우에만 값이 있다."
       },
       "PrepareFoldersInput": {
         "properties": {

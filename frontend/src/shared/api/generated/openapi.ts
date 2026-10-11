@@ -2539,6 +2539,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/integrations/physicsai": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Physicsai Link */
+        get: operations["get_physicsai_link_api_integrations_physicsai_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/import-schemas": {
         parameters: {
             query?: never;
@@ -5954,6 +5971,18 @@ export interface components {
             count: number | null;
             /** Available */
             available: boolean;
+        };
+        /**
+         * PhysicsAiLinkResponse
+         * @description PhysicsAI 연동 링크 표시 상태. ``spdm_root``는 켜져 있고 root가 설정된 경우에만 값이 있다.
+         */
+        PhysicsAiLinkResponse: {
+            /** Enabled */
+            enabled: boolean;
+            /** Base Path */
+            base_path: string;
+            /** Spdm Root */
+            spdm_root?: string | null;
         };
         /** PrepareFoldersInput */
         PrepareFoldersInput: {
@@ -12849,6 +12878,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_physicsai_link_api_integrations_physicsai_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PhysicsAiLinkResponse"];
                 };
             };
         };

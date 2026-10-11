@@ -2,6 +2,12 @@
 
 이 파일은 완료된 개발 작업을 누적 기록한다. 이후 작업은 완료 시 최신 항목을 문서 상단에 추가하며, 변경 범위·검증 결과·남은 확인 사항을 함께 남긴다.
 
+## 2026-10-11 — PhysicsAI 연동(D1·D5·D8·D9, D2~D4 계약 시험)
+
+- 플래그 `SIMDASH_PHYSICSAI_ENABLED`(기본 off)와 `GET /api/integrations/physicsai`(`{enabled, base_path, spdm_root}`, 꺼지면 root 미반환)를 추가하고 OpenAPI·생성 client를 갱신했다. 사이드바 "AI 예측"(`/physicsai/`, 새 창)과 Case 결과 머리줄 "AI 학습 데이터로 보내기"(`/physicsai/import?spdm_path=<인코딩 절대경로>&project_id=`)는 플래그가 켜졌을 때만 보인다. 메뉴 정책 DB·migration 변경 없음.
+- Caddy: 수동 템플릿은 `import physicsai*.caddy`(파일 있을 때만), 오프라인 설치기는 설정 JSON `physicsaiEnabled`·`physicsaiPort`(8100)·`physicsaiFrontendRoot`로 라우트와 `.env` 플래그를 쓴다. 문서 [PhysicsAI 연동 안내](../docs/physicsai-integration.md).
+- 검증: 신규 백엔드 시험(D2 쿠키·D3 `/api/auth/me` Bearer·D4 비멤버 `/api/projects`·플래그, Caddy 렌더링) 통과, Caddy 2.8.4로 템플릿·설치기 렌더 결과 validate와 라우팅(가짜 백엔드) 확인, `test:api`·`tsc -b` 통과. Windows Server 2022 실제 설치·업데이트와 Windows 배포 계약 CI는 미수행.
+
 ## 2026-10-06 — W6 폴더 이름 경고
 
 - Case 결과 catalog에 추가 필드 `name_warnings: [{kind, severity, message, paths, case_id, run_option_id}]`를 넣었다(`backend/app/services/folder_name_warnings.py`). 이미 읽은 Folder Schema snapshot만 사용하며 폴더 스캔·DB 쓰기·폴더 변경은 없다. 같은 Run Option/Case 아래 대소문자·구분 기호·번호 접미사·한 글자 철자만 다른 Scene, Case 간 Scene 이름 불일치, 깊이 스키마 이탈·UNRESOLVED 노드와 번호로 시작하지 않는 Scene 깊이 폴더를 한국어 문구로 알린다. 계산 오류는 경고만 빈 목록으로 두고 catalog는 그대로 응답한다.

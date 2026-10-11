@@ -17,6 +17,7 @@ import { useCaseHierarchyParams } from '../../shared/hooks/useCaseHierarchyParam
 import { CaseReportLauncher } from './caseReport/CaseReportLauncher'
 import type { CaseReportFinalScope, CaseReportScope } from './caseReport/caseReport'
 import { CaseCompareView } from './CaseCompareView'
+import { PhysicsAiImportLink } from './PhysicsAiImportLink'
 import type { CaseCompareReport, ComparePath } from './caseCompare'
 import { USAGE_DIRECTION_LABELS, USAGE_DIRECTIONS, usageCell, usageEvaluationLabel, usageEvaluationRows, usageFieldKey, usageMetricStatus, usageStatusText, type UsageMetric } from './usageEvaluations'
 
@@ -281,6 +282,8 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
 
   // The report dialog copies this scope when it opens (later changes do not reach it).
   const optionChoice = options.find((item) => item.id === optionId)
+  // D8: the deepest selected SPDM folder (usage: Case; distribution: Run Option → Run Case → 하중경우 → Case).
+  const aiSourcePath = materialsActive ? null : tab === 'usage' ? selectedCase?.relative_path : optionChoice?.relative_path || runChoices.find((item) => item.id === runId)?.relative_path || loadChoices.find((item) => item.id === loadCaseId)?.relative_path || selectedCase?.relative_path
   const reportReady = tab === 'distribution' && !materialsActive && Boolean(activeCaptureId && runId && mode && componentId && basis && (optionId || !options.length)) && runChoices.some((item) => item.id === runId && item.capture_id === activeCaptureId)
   const referenceDashboardCaseId = catalog?.cases.find((item) => item.id === referenceCaseId)?.dashboard_case_id ?? referenceCaseId
   const usageReady = tab === 'usage' && !materialsActive && Boolean(dashboardCaseId && activeCaptureId) && Boolean(referenceCaseId) === Boolean(referenceCaptureId)
@@ -304,7 +307,7 @@ export function SimulationDashboard({ projectId, requestId, canManageFolders = f
     <header className="case-results-head">
       {environments?.length === 2 ? <div className="case-env-toggle" role="group" aria-label="결과 환경"><button type="button" aria-pressed={tab === 'usage'} className={tab === 'usage' ? 'active' : ''} onClick={() => setTab('usage')}>사용환경</button><button type="button" aria-pressed={tab === 'distribution'} className={tab === 'distribution' ? 'active' : ''} onClick={() => setTab('distribution')}>유통환경</button></div> : null}
       {materialsActive ? null : <FolderNameWarnings warnings={catalog?.name_warnings} />}
-      <div className="case-results-head__actions">{headerExtra}{catalog ? <CaseReportLauncher scope={reportScopeWithCompare} disabledReason={materialsActive ? '소재·물성 탭에서는 보고서를 만들지 않습니다.' : tab === 'usage' ? '결과가 있는 사용환경 Case를 선택하면 보고서를 만들 수 있습니다.' : '유통환경에서 결과가 있는 Run Case와 Run Option을 선택하면 보고서를 만들 수 있습니다.'} /> : null}{catalog ? <CaseFinalizationPanel projectId={projectId} requestId={requestId} environment={tab === 'usage' ? 'USAGE' : 'DISTRIBUTION'} caseId={dashboardCaseId} captureId={hasCapturedCase ? finalCaptureId : ''} hasCapturedCase={hasCapturedCase} canFinalize={canRefreshSchema} reportScope={finalScope} /> : null}</div>
+      <div className="case-results-head__actions">{headerExtra}{catalog ? <PhysicsAiImportLink projectId={projectId} relativePath={aiSourcePath} /> : null}{catalog ? <CaseReportLauncher scope={reportScopeWithCompare} disabledReason={materialsActive ? '소재·물성 탭에서는 보고서를 만들지 않습니다.' : tab === 'usage' ? '결과가 있는 사용환경 Case를 선택하면 보고서를 만들 수 있습니다.' : '유통환경에서 결과가 있는 Run Case와 Run Option을 선택하면 보고서를 만들 수 있습니다.'} /> : null}{catalog ? <CaseFinalizationPanel projectId={projectId} requestId={requestId} environment={tab === 'usage' ? 'USAGE' : 'DISTRIBUTION'} caseId={dashboardCaseId} captureId={hasCapturedCase ? finalCaptureId : ''} hasCapturedCase={hasCapturedCase} canFinalize={canRefreshSchema} reportScope={finalScope} /> : null}</div>
     </header>
     {noResults && !materialsActive ? <State message={NO_RESULTS_MESSAGE} /> : null}
     {catalogError && !catalog && !materialsActive ? <State message={catalogError} error /> : null}

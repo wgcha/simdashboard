@@ -14,5 +14,8 @@
   "tlsCertificate": "",
   "tlsKey": "",
   "serviceAccount": "NT AUTHORITY\\LOCAL SERVICE",
-  "installRoot": "C:\\ProgramData\\SimulationWorkbench"
+  "installRoot": "C:\\ProgramData\\SimulationWorkbench",
+  "physicsaiEnabled": false,
+  "physicsaiPort": 8100,
+  "physicsaiFrontendRoot": ""
 }
