@@ -13,6 +13,7 @@ from pathlib import PurePath
 from typing import Any
 
 from .reader_v2 import (
+    INPUT_V2_MAX_BYTES,  # noqa: F401  re-exported for callers and tests
     LEGACY_CSV_FIELD_LIMIT,
     ReaderV2Error,
     json_pointer_get,

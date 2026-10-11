@@ -941,7 +941,8 @@ def _upload(gateway: Any, item: Item) -> _Outcome:
     if item.attempts > 1:
         existing = gateway.stat(target)
         if existing is not None:
-            return _existing_outcome(gateway, item, existing, size=size, sha1=sha1, sha256=digest, staging=staging_note)
+            return _existing_outcome(gateway, item, existing, size=None if _after_mismatch(item) else size, sha1=sha1,
+                                     sha256=digest, staging=staging_note)
     try:
         entry = gateway.upload_new(path, _drive_path(item.dst_rel_dir), name=item.dst_name)
     except Exception as error:  # noqa: BLE001
@@ -952,10 +953,13 @@ def _upload(gateway: Any, item: Item) -> _Outcome:
         return _existing_outcome(gateway, item, gateway.stat(target), size=size, sha1=sha1, sha256=digest,
                                  staging=staging_note)
     if getattr(entry, "size", None) is not None and int(entry.size) != size:
-        # The drive reports another size than we sent: decide by content (sha1 when both sides have it,
-        # else a bounded download and sha256), never by the size alone.
-        return _existing_outcome(gateway, item, gateway.stat(target), size=None, sha1=sha1, sha256=digest,
-                                 staging=staging_note)
+        # The drive reports another size than we sent.  A stat that is missing or still shows another
+        # size may be the drive catching up: retry first (DRIVE_UPLOAD_MISMATCH, never CONFLICT); the
+        # retry decides by content (sha1 when both sides have it, else a bounded download and sha256).
+        after = gateway.stat(target)
+        if _still_mismatched(after, size):
+            return _Outcome("RETRY", "DRIVE_UPLOAD_MISMATCH", ERROR_MESSAGES["DRIVE_UPLOAD_MISMATCH"], staging=staging_note)
+        return _existing_outcome(gateway, item, after, size=None, sha1=sha1, sha256=digest, staging=staging_note)
     return _Outcome("DONE", entry=entry, staging=staging_note)
 
 
@@ -985,7 +989,8 @@ def _copy(gateway: Any, item: Item) -> _Outcome:
     if item.attempts > 1:
         existing = gateway.stat(target)
         if existing is not None:
-            return _existing_outcome(gateway, item, existing, size=live.size, sha1=live.sha1, sha256=source_sha256)
+            return _existing_outcome(gateway, item, existing, size=None if _after_mismatch(item) else live.size,
+                                     sha1=live.sha1, sha256=source_sha256)
     if _copy_within_allowed():
         try:
             entry = gateway.copy_within(_drive_path(str(item.src_rel)), _drive_path(item.dst_rel_dir), new_name=item.dst_name)
@@ -1007,11 +1012,29 @@ def _copy(gateway: Any, item: Item) -> _Outcome:
         else:
             _worker.internal_streak = 0
             if live.size is not None and getattr(entry, "size", None) is not None and int(entry.size) != int(live.size):
-                # size differs from the source: decide by content (sha1, else bounded download + sha256)
-                return _existing_outcome(gateway, item, gateway.stat(target), size=None, sha1=live.sha1,
+                # size differs from the source: retry while the target stat is missing or still differs
+                # (DRIVE_UPLOAD_MISMATCH); otherwise / on the retry decide by content (sha1, else sha256)
+                after = gateway.stat(target)
+                if _still_mismatched(after, int(live.size)):
+                    return _Outcome("RETRY", "DRIVE_UPLOAD_MISMATCH", ERROR_MESSAGES["DRIVE_UPLOAD_MISMATCH"],
+                                    method="COPY_WITHIN")
+                return _existing_outcome(gateway, item, after, size=None, sha1=live.sha1,
                                          sha256=source_sha256, method="COPY_WITHIN")
             return _Outcome("DONE", entry=entry, method="COPY_WITHIN")
     return _download_upload(gateway, item, live)
+
+
+def _still_mismatched(entry: Any, size: int) -> bool:
+    """The target stat right after a size mismatch is missing or still shows another size."""
+    if entry is None:
+        return True
+    reported = getattr(entry, "size", None)
+    return reported is not None and int(reported) != int(size)
+
+
+def _after_mismatch(item: Item) -> bool:
+    """A retry after ``DRIVE_UPLOAD_MISMATCH`` decides by content, not by the (unreliable) size."""
+    return item.last_error_code == "DRIVE_UPLOAD_MISMATCH"
 
 
 def _copy_within_allowed() -> bool:

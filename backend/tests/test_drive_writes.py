@@ -407,6 +407,79 @@ def test_upload_reported_with_another_size_is_decided_by_content(scxw, monkeypat
     assert not list(drive_gateway.current_settings().staging_dir.glob("xfer-*"))
 
 
+def _queue_errors(scxw, name: str) -> list[tuple]:
+    root_key = DriveRoot(scxw.root, "scx.example.test").root_key()
+    with connect() as conn:
+        return [tuple(row) for row in conn.execute(
+            "SELECT state, last_error_code, attempts FROM drive_upload_queue WHERE root_key=? AND dst_name=? ORDER BY seq",
+            [root_key, name]).fetchall()]
+
+
+@pytest.mark.parametrize("first_stat", ["missing", "still_mismatched"])
+def test_upload_mismatch_confirmed_by_the_first_stat_retries_and_the_retry_decides_by_content(scxw, monkeypatch, first_stat):
+    """L4: a post-upload stat that is missing or still shows the other size is RETRY DRIVE_UPLOAD_MISMATCH, never CONFLICT."""
+    from drive_fakes import FakeWorkerDriveGateway
+
+    project_id, request_id = _register(scxw)
+    session = _drop(scxw, project_id, request_id, [("2_Face/lag.csv", b"lag\n")])
+    _complete(scxw, session["session_id"])
+    upload, stat = FakeWorkerDriveGateway.upload_new, FakeWorkerDriveGateway.stat
+    lies = {"left": 0}
+
+    def misreported(self, local_file, rel_dir, *, name=None):
+        entry = upload(self, local_file, rel_dir, name=name)
+        if entry.name == "lag.csv":
+            lies["left"] = 1
+            return replace(entry, size=int(entry.size) + 7)
+        return entry
+
+    def lagging(self, rel_path, **kwargs):
+        entry = stat(self, rel_path, **kwargs)
+        if rel_path.endswith("/lag.csv") and lies["left"]:
+            lies["left"] -= 1
+            return None if first_stat == "missing" else replace(entry, size=int(entry.size) + 7)
+        return entry
+
+    monkeypatch.setattr(FakeWorkerDriveGateway, "upload_new", misreported)
+    monkeypatch.setattr(FakeWorkerDriveGateway, "stat", lagging)
+    _settle()
+    assert _queue_errors(scxw, "lag.csv") == [("PENDING", "DRIVE_UPLOAD_MISMATCH", 1)]
+    _settle(now=_later())
+    assert [row[0] for row in _queue_errors(scxw, "lag.csv")] == ["DONE"]
+    assert scxw.drive.content(scxw.path(f"{OPTION}/2_Face/lag.csv")) == b"lag\n"
+
+
+def test_copy_within_mismatch_confirmed_by_the_first_stat_retries_before_the_content_check(scxw, monkeypatch):
+    from drive_fakes import FakeWorkerDriveGateway
+
+    ctx = _final_ctx(scxw)
+    copy, stat = FakeWorkerDriveGateway.copy_within, FakeWorkerDriveGateway.stat
+    lied: dict[str, int] = {}
+
+    def misreported(self, src_rel, dst_dir_rel, *, new_name=None):
+        entry = copy(self, src_rel, dst_dir_rel, new_name=new_name)
+        if not lied and src_rel.endswith("/3_Face/part.inc"):
+            lied[f"{dst_dir_rel}/{new_name or entry.name}"] = 1
+            return replace(entry, size=int(entry.size) + 3)
+        return entry
+
+    def lagging(self, rel_path, **kwargs):
+        entry = stat(self, rel_path, **kwargs)
+        if lied.get(rel_path):
+            lied[rel_path] = 0
+            return replace(entry, size=int(entry.size) + 3)
+        return entry
+
+    monkeypatch.setattr(FakeWorkerDriveGateway, "copy_within", misreported)
+    monkeypatch.setattr(FakeWorkerDriveGateway, "stat", lagging)
+    plan = _designate(scxw, ctx)
+    assert ("PENDING", "DRIVE_UPLOAD_MISMATCH", 1) in _queue_errors(scxw, "part.inc")
+    assert _job(scxw, ctx, plan["operation_id"])["state"] != "COMPLETE"
+    _settle(now=_later())
+    assert _job(scxw, ctx, plan["operation_id"])["state"] == "COMPLETE"
+    assert {row[0] for row in _queue_errors(scxw, "part.inc")} == {"DONE"}
+
+
 def test_hourly_cleanup_never_removes_the_xfer_folder_of_a_running_transfer(scxw):
     import os
 

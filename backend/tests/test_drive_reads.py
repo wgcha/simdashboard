@@ -777,3 +777,106 @@ def test_ephemeral_session_left_in_another_context_still_removes_its_staging(scx
     assert drive_reads.current_session() is None or drive_reads.current_session() is session
     drive_reads._session_var.set(None)
     assert _staging_leftovers() == []
+
+
+def _bind_leaf(scx: Scx, project_id: str, request_id: str, leaf: str, files: dict[str, bytes]) -> dict[str, str]:
+    """A storage binding of ``leaf`` with indexed files (``files`` already on the drive or added here)."""
+    from app.services.spdm_storage import _upsert_file
+
+    load_case_id = f"loadcase-m1-{uuid.uuid4().hex[:8]}"
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    ids: dict[str, str] = {}
+    with connect() as conn:
+        conn.execute("INSERT INTO load_cases VALUES (?, ?, ?, ?, ?, ?, ?)",
+                     [load_case_id, request_id, "M1 download", "DROP", "COMPLETED", json.dumps({}), now])
+        conn.execute("INSERT INTO spdm_storage_bindings(load_case_id, project_id, request_id, relative_path, created_at, "
+                     "updated_at) VALUES (?, ?, ?, ?, ?, ?)", [load_case_id, project_id, request_id, leaf, now, now])
+        for relative, content in files.items():
+            _upsert_file(conn, load_case_id, relative, relative.rsplit("/", 1)[-1], "solver", len(content),
+                         hashlib.sha256(content).hexdigest(), "READY")
+            ids[relative] = str(conn.execute("SELECT id FROM spdm_storage_files WHERE load_case_id=? AND relative_path=?",
+                                             [load_case_id, relative]).fetchone()[0])
+    return ids
+
+
+def _all_versions(scx: Scx) -> list[tuple]:
+    root_key = DriveRoot(scx.root, "scx.example.test").root_key()
+    with connect() as conn:
+        return [tuple(row) for row in conn.execute(
+            "SELECT rel_path, version_no, review_state, source_state, sha256, superseded_at FROM drive_source_versions "
+            "WHERE root_key=? ORDER BY rel_path, version_no", [root_key]).fetchall()]
+
+
+def test_storage_download_records_no_source_version_and_leaves_registered_rows_unchanged(scx):
+    """M1: a GET download never writes drive_source_versions (never-seen CSV or an already registered one)."""
+    project_id, request_id = _register(scx)
+    leaf = f"{OPTION}/2_Face"
+    fresh = b"a,b\n1,2\n"
+    scx.add(f"{leaf}/never_seen.csv", fresh)
+    ids = _bind_leaf(scx, project_id, request_id, leaf, {"never_seen.csv": fresh, CSV: CSV_BYTES})
+    before = _all_versions(scx)
+    assert any(row[0].endswith(f"2_Face/{CSV}") for row in before)
+    assert not any(row[0].endswith("never_seen.csv") for row in before)
+    for relative, content in (("never_seen.csv", fresh), (CSV, CSV_BYTES)):
+        response = scx.client.get(f"/api/storage/files/{ids[relative]}/download")
+        assert response.status_code == 200 and response.content == content
+    assert _all_versions(scx) == before
+    assert _staging_leftovers() == []
+
+
+def test_storage_download_keeps_free_space_on_the_staging_disk(scx, monkeypatch):
+    """L2: export_copy keeps STAGING_MIN_FREE_BYTES free and maps a full disk to DRIVE_STAGING_FULL (503)."""
+    import errno
+
+    from app.services.storage import server_local
+
+    project_id, request_id = _register(scx)
+    file_id = _bind_storage_file(scx, project_id, request_id, b"q" * 4096)
+    staging = drive_gateway.current_settings().staging_dir
+    real_free = server_local.disk_free
+    # the session download (read-<id>/) has room; only the export copy beside it does not
+    monkeypatch.setattr(server_local, "disk_free",
+                        lambda path: 10 if Path(path) == Path(staging) else real_free(path))
+    response = scx.client.get(f"/api/storage/files/{file_id}/download")
+    assert response.status_code == 503 and response.json()["detail"]["code"] == drive_reads.STAGING_FULL
+    assert _staging_leftovers() == []
+    monkeypatch.setattr(server_local, "disk_free", real_free)
+
+    def no_space(*_args, **_kwargs):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    for target, attribute in ((drive_reads.tempfile, "mkstemp"), (drive_reads.shutil, "copyfileobj")):
+        with monkeypatch.context() as patch:
+            patch.setattr(target, attribute, no_space)
+            response = scx.client.get(f"/api/storage/files/{file_id}/download")
+        assert response.status_code == 503 and response.json()["detail"]["code"] == drive_reads.STAGING_FULL, attribute
+        assert _staging_leftovers() == []
+    assert scx.client.get(f"/api/storage/files/{file_id}/download").status_code == 200
+
+
+def test_temp_file_response_removes_the_file_when_sending_fails(tmp_path):
+    """L3: the server copy is removed even when the send raises (client gone), with the same headers."""
+    import asyncio
+
+    from app.routers.spdm_storage import _TempFileResponse
+
+    copy = tmp_path / "download-x"
+    copy.write_bytes(b"payload")
+    response = _TempFileResponse(copy, media_type="application/octet-stream",
+                                 headers={"Content-Disposition": "attachment; filename=download"})
+    sent: list[dict] = []
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        sent.append(message)
+        if message["type"] == "http.response.body":
+            raise OSError("client disconnected")
+
+    scope = {"type": "http", "method": "GET", "headers": [], "path": "/", "query_string": b""}
+    with pytest.raises(OSError):
+        asyncio.run(response(scope, receive, send))
+    assert not copy.exists()
+    start = next(message for message in sent if message["type"] == "http.response.start")
+    assert (b"content-disposition", b"attachment; filename=download") in start["headers"]

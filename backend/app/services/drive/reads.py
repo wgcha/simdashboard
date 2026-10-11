@@ -46,6 +46,7 @@ Nothing here writes to the drive; the only drive calls are ``list_dir``,
 from __future__ import annotations
 
 import contextvars
+import errno
 import functools
 import hashlib
 import inspect
@@ -451,6 +452,10 @@ def _ephemeral_session() -> Iterator[DriveReadSession]:
         _close_session(temporary)
 
 
+ephemeral_session = _ephemeral_session
+"""Public name: a temporary read session (review overlay, no recording) for a route that holds no connection."""
+
+
 # --- live drive calls (never with a DB connection) ---------------------------------------------
 
 def drive_path(spdm_root: str, rel: str) -> str:
@@ -685,25 +690,53 @@ def open_stream(spdm_root: str, rel: str, version: Version, *, masked: bool, max
             yield stream
 
 
-def export_copy(spdm_root: str, rel: str, version: Version, *, masked: bool, max_bytes: int) -> Path:
+def export_copy(spdm_root: str, rel: str, version: Version | None = None, *, masked: bool = False, max_bytes: int,
+                resolve: Callable[[], tuple[Version, bool]] | None = None) -> Path:
     """Copy of ``rel`` at ``version`` in a fresh server file ``<staging>/download-*`` (the caller removes it).
 
     For responses that outlive the request context (a download body): the read
     session is entered and left here, on the request thread, so nothing of it
-    leaks into the framework's copied contexts.  A day-old leftover is removed by
-    :func:`_cleanup_orphans`.
+    leaks into the framework's copied contexts.  ``resolve`` (instead of
+    ``version``) picks the version inside that session, so the review overlay
+    applies.  Nothing is recorded in ``drive_source_versions``.  The staging
+    disk keeps ``STAGING_MIN_FREE_BYTES`` free; a full disk is ``DRIVE_STAGING_FULL``.
+    A day-old leftover is removed by :func:`_cleanup_orphans`.
     """
-    handle, name = tempfile.mkstemp(prefix=EXPORT_PREFIX, dir=str(_settings().staging_dir))
-    target = Path(name)
-    try:
-        with os.fdopen(handle, "wb") as out, _ephemeral_session():
-            copy = content(spdm_root, rel, version, masked=masked, max_bytes=max_bytes)
-            with server_local.open_file(copy.path) as stream:
+    with _ephemeral_session():
+        if resolve is not None:
+            version, masked = resolve()
+        if version is None:
+            raise ValueError("export_copy needs a version or a resolver")
+        copy = content(spdm_root, rel, version, masked=masked, max_bytes=max_bytes)
+        staging = Path(_settings().staging_dir)
+        free = server_local.disk_free(staging)
+        if free is not None and free - copy.size < STAGING_MIN_FREE_BYTES:
+            raise _staging_full()
+        try:
+            handle, name = tempfile.mkstemp(prefix=EXPORT_PREFIX, dir=str(staging))
+        except OSError as exc:
+            raise (_staging_full() if exc.errno in _DISK_FULL_ERRNOS else exc) from exc
+        target = Path(name)
+        try:
+            with os.fdopen(handle, "wb") as out, server_local.open_file(copy.path) as stream:
                 shutil.copyfileobj(stream, out, 1024 * 1024)
-    except BaseException:
-        server_local.discard_file(target)
-        raise
+        except OSError as exc:
+            server_local.discard_file(target)
+            if exc.errno in _DISK_FULL_ERRNOS:
+                raise _staging_full() from exc
+            raise
+        except BaseException:
+            server_local.discard_file(target)
+            raise
     return target
+
+
+_DISK_FULL_ERRNOS = frozenset(code for code in (getattr(errno, "ENOSPC", None), getattr(errno, "EDQUOT", None),
+                                                getattr(errno, "EFBIG", None)) if code is not None)
+
+
+def _staging_full() -> SpdmStorageError:
+    return SpdmStorageError(STAGING_FULL, "서버 임시 저장 공간이 부족해 드라이브 파일을 받을 수 없습니다. 잠시 후 다시 시도하세요.")
 
 
 def local_copy_sha256(spdm_root: str, rel: str, version: Version, *, masked: bool, max_bytes: int) -> tuple[int, str]:
@@ -772,7 +805,7 @@ def _staging_room(session: DriveReadSession, size: int) -> bool:
 def _reserve_staging(session: DriveReadSession, size: int) -> None:
     """L3: one staging byte budget per read session and a free-space floor on the staging disk."""
     if not _staging_room(session, size):
-        raise SpdmStorageError(STAGING_FULL, "서버 임시 저장 공간이 부족해 드라이브 파일을 받을 수 없습니다. 잠시 후 다시 시도하세요.")
+        raise _staging_full()
 
 
 def fetch_version(rel: str, version: Version, *, max_bytes: int = MAX_FILE_BYTES) -> DownloadRecord:
@@ -1107,7 +1140,7 @@ def blob_store() -> BlobStore:
 
 __all__ = [
     "Accepted", "BLOB_THRESHOLD_BYTES", "DriveReadMiss", "after_commit", "committed_phase", "fetch_version", "normal_sha1", "registered",
-    "unapplied", "DriveReadSession", "LocalCopy", "NOT_PREPARED",
+    "unapplied", "ephemeral_session", "DriveReadSession", "LocalCopy", "NOT_PREPARED",
     "SOURCE_CHANGED", "Version", "accepted", "active", "blob_store", "check_rel", "content", "current_session",
     "drive_path", "effective_version", "epoch_us", "listing", "load_overlay", "local_copy_sha256", "make_token",
     "open_stream", "overlay_below", "prefetch_content", "prefetch_values", "raw_entry", "read_bytes", "read_session", "require_content",

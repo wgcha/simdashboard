@@ -10,7 +10,6 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
-from starlette.background import BackgroundTask
 
 from ..database_connection import connect
 from ..modules.access_control import PROJECT_DATA_VIEW, RESULT_IMPORT, SYSTEM_CATALOG_MANAGE, require_permission, require_resource_permission
@@ -131,6 +130,23 @@ class StructuredUploadResponse(ResultImportResponse):
 
 def _error(error: spdm_storage.SpdmStorageError, status: int = 422) -> HTTPException:
     return HTTPException(status, detail={"code": error.code, "message": str(error)})
+
+
+_RETRYABLE_DRIVE_CODES = frozenset({drive_reads.STAGING_FULL, drive_reads.NOT_PREPARED})
+
+
+class _TempFileResponse(FileResponse):
+    """A FileResponse of a server temp file that is always removed after the send ends.
+
+    ``background`` tasks do not run when the client disconnects or sending raises, so the
+    removal sits in ``finally`` around the whole send instead.
+    """
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            server_local.discard_file(Path(self.path))
 
 
 def _provider(conn: Any) -> LocalFsProvider:
@@ -318,7 +334,6 @@ async def upload_raw_file(
 
 
 @router.get("/storage/files/{file_id}/download")
-@drive_reads.read_session()
 def download_storage_file(file_id: str, request: Request):
     with connect() as conn:
         located = spdm_storage.file_locator(conn, file_id)
@@ -327,25 +342,29 @@ def download_storage_file(file_id: str, request: Request):
         load_case_id, relative_path, name = located["load_case_id"], located["relative_path"], located["name"]
         require_resource_permission(request, PROJECT_DATA_VIEW, "load_case", load_case_id, conn=conn)
         fs = _provider(conn); binding = _binding(conn, load_case_id)
-        try:
-            path = spdm_storage.safe_file_path(fs.root, binding, relative_path)
-        except spdm_storage.SpdmStorageError as error:
-            raise _error(error, 404) from error
+        if not isinstance(fs, DriveStorageProvider):
+            try:
+                path = spdm_storage.safe_file_path(fs.root, binding, relative_path)
+            except spdm_storage.SpdmStorageError as error:
+                raise _error(error, 404) from error
     # An RFC 5987 value works for Unicode names and cannot inject a header from
     # an externally-created storage filename.
     disposition = "attachment; filename=download; filename*=UTF-8''" + quote(name, safe="")
     if isinstance(fs, DriveStorageProvider):
-        # Starlette runs the chunks of a StreamingResponse generator in copied contexts, so a drive
-        # read session entered here could not be left inside the generator (its ContextVar token
-        # belongs to this context) and its staging folder would leak.  The drive copy is made on
-        # this thread, in its own read session, and the server file is served and then removed.
+        # M1: a GET never records drive_source_versions, so no recording read session
+        # (read_session) here.  The permission/metadata connection above is closed; the path
+        # check and the drive copy run on this thread in one ephemeral read session (review
+        # overlay applied, nothing recorded).  Starlette runs response bodies in copied contexts,
+        # so the session is left here and only the server copy is served; it is removed after
+        # the send, also when the client disconnects or sending fails.
         try:
-            fs.assert_safe(path)
-            copy = fs.export_copy(path)
+            with drive_reads.ephemeral_session():
+                path = spdm_storage.safe_file_path(fs.root, binding, relative_path)
+                fs.assert_safe(path)
+                copy = fs.export_copy(path)
         except spdm_storage.SpdmStorageError as error:
-            raise _error(error, 404) from error
-        return FileResponse(copy, media_type="application/octet-stream", headers={"Content-Disposition": disposition},
-                            background=BackgroundTask(server_local.discard_file, copy))
+            raise _error(error, 503 if error.code in _RETRYABLE_DRIVE_CODES else 404) from error
+        return _TempFileResponse(copy, media_type="application/octet-stream", headers={"Content-Disposition": disposition})
     try:
         fs.assert_safe(path)
         reader_context = fs.open_read(path)

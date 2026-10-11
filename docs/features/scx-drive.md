@@ -172,7 +172,7 @@
 ### 8.3 다운로드 → 등록 → 삭제, 서버 보관소 (05 §2–3)
 
 - 세션마다 `<SIMDASH_SCX_STAGING_DIR>/read-<id>/`를 만들고 파일마다 하위 폴더에 받는다. 세션 하나의 임시 바이트 한도는 2 GiB이고 임시 디스크 여유가 1 GiB 아래로 내려가면 받지 않는다(`DRIVE_STAGING_FULL`; 미리 받기는 한도에서 멈춘다. 검수 L3). 받은 뒤 `stat` 기준 버전과 비교해 다르면 `SPDM_FILE_BUSY`(다음 확인에서 다시). 세션이 끝나면(성공·실패 무관) 폴더를 지운다. 세션을 다른 실행 문맥에서 닫게 되어도(프레임워크가 응답 본문을 복사된 문맥에서 실행) 오류 없이 폴더를 지운다. 하루 지난 `read-*` 폴더와 `download-*` 파일은 한 시간에 한 번 정리한다.
-- 저장소 패널 파일 다운로드(`GET /api/storage/files/{id}/download`): scx 모드에서는 요청 처리 중에 읽기 세션으로 드라이브 파일을 서버 임시 파일(`<SIMDASH_SCX_STAGING_DIR>/download-*`, DB 연결 없이)로 받은 뒤 그 파일을 응답으로 보내고 응답이 끝나면 지운다(파일 이름·헤더는 로컬 모드와 같음). 로컬 모드는 그대로 스트리밍한다.
+- 저장소 패널 파일 다운로드(`GET /api/storage/files/{id}/download`): scx 모드에서는 권한·파일 정보 조회의 DB 연결을 닫은 뒤, 요청 처리 중에 기록하지 않는 임시 읽기 세션(원본 변경 확인 대기 상태 반영, `drive_source_versions`에 행을 만들거나 바꾸지 않음)으로 드라이브 파일을 서버 임시 파일(`<SIMDASH_SCX_STAGING_DIR>/download-*`, DB 연결 없이)로 받은 뒤 그 파일을 응답으로 보내고 응답이 끝나면 지운다(클라이언트가 끊기거나 전송 중 오류가 나도 지움; 파일 이름·헤더는 로컬 모드와 같음). 사본을 만들기 전에 임시 디스크 여유가 1 GiB + 파일 크기 이상인지 확인하고, 모자라거나 디스크가 가득 차면(`ENOSPC` 등) 503 `DRIVE_STAGING_FULL`로 답하고 사본을 남기지 않는다. 로컬 모드는 그대로 스트리밍한다.
 - 32 MiB 초과 파일은 지우지 않고 **서버 보관소**(`SIMDASH_DRIVE_BLOB_DIR/<sha256 앞 2자>/<sha256>`)로 옮긴다. 같은 버전을 다시 읽을 때는 보관소 파일의 sha256을 확인해 그대로 쓴다(프로세스마다 파일별로 처음 한 번 전체 해시를 확인하고, 그 뒤에는 크기·수정 시각(ns)이 확인 때와 같으면 다시 해시하지 않는다. 다르면 다시 해시하고 어긋나면 지운다). 용량 상한을 넘으면 오래 안 쓴 것부터 지운다 — 지우는 대상은 `<64자리 hex>` 이름이 `<앞 2자>` 폴더 안에 있는 파일뿐이고 다른 파일은 건드리지 않는다. 보관소 폴더가 작업·임시 폴더와 같거나 그 상위이거나 임시 폴더 안이면 기동을 거부한다(`SIMDASH_DRIVE_BLOB_DIR`, 검수 L2).
 - 세션이 성공하면 받은 파일의 sha256·보관 경로를 `drive_source_versions`에 기록한다(처음 읽은 파일은 새 버전 행 생성).
 - **사용환경 소재(OptiStruct `.fem`, 500–1000 MB)**: 일반 읽기 한도 512 MiB와 별개로 `SIMDASH_OPTISTRUCT_MAX_BYTES`(기본 2 GiB)까지 받는다. 요청 스레드는 내려받지 않고, 백그라운드 분석 작업이 DB 연결 없이 자기 읽기 세션(`drive_reads.run`, 우선순위 BACKGROUND)으로 **한 번** 받아 보관소로 옮긴다(세션 임시 한도 2 GiB·여유 1 GiB 규칙 그대로). 분석 결과는 `materials_deck_cache`(migration 0039)에 `drive:<version_token>` 지문과 보관소 sha256으로 남아, 버전이 같으면 다시 받지도 분석하지도 않고, 분석기 버전만 바뀌면 보관소 파일을 다시 쓴다. `.fem`은 `drive_source_versions` 대상 확장자가 아니어서 원본 변경 확인(§8.4) 없이 현재 드라이브 버전을 읽는다. 자세한 규칙은 [사용환경 소재](materials-optistruct.md).
@@ -259,7 +259,7 @@
 
 규칙:
 
-- **올린 뒤 크기 불일치:** `upload_new`·`copy_within`이 돌려준 크기가 보낸(원본) 크기와 다르면 크기만으로 실패 처리하지 않고 대상을 `stat`해 아래 같은 내용 판정(sha1, 없으면 내려받아 sha256)으로 `DONE` 또는 `CONFLICT`를 정한다.
+- **올린 뒤 크기 불일치:** `upload_new`·`copy_within`이 돌려준 크기가 보낸(원본) 크기와 다르면 크기만으로 실패 처리하지 않고 대상을 `stat`한다. 그 `stat`이 없거나 여전히 다른 크기면 드라이브 반영 지연으로 보고 `CONFLICT`가 아니라 재시도(`RETRY`, `DRIVE_UPLOAD_MISMATCH`)로 기록한다. `stat`이 맞는 크기를 보이거나 재시도 때(`DRIVE_UPLOAD_MISMATCH` 다음 시도)는 크기가 아니라 아래 같은 내용 판정(sha1, 없으면 내려받아 sha256)으로 `DONE` 또는 `CONFLICT`를 정한다. 재시도 횟수를 다 쓰면 `FAILED`(`DRIVE_UPLOAD_MISMATCH`).
 - **덮어쓰기·삭제·이동 없음.** `CONFLICT`(같은 이름 존재)이면 대상을 `stat`해 같은 내용이면 `DONE`, 아니면 `CONFLICT`로 멈춘다(화면·관리자에게 표시). 같은 내용 판정: 양쪽 sha1이 있으면 sha1. 한쪽이라도 없으면 **크기만으로는 판정하지 않고** 대상 파일을 서버 `xfer-*` 임시 폴더로 내려받아(DB 연결 없이, 항목 크기까지만) sha256을 서버 임시 파일·계획 sha256과 비교한다(COPY에 계획 sha256이 없으면 원본도 같은 방식으로 내려받아 비교). `SIMDASH_DRIVE_VERIFY_MAX_BYTES`(기본 2 GiB)보다 크면 내려받지 않고 `CONFLICT`(`SPDM_CONFLICT_UNVERIFIED`) — 관리자가 드라이브에서 확인한 뒤 다시 시도·취소한다. 서버 임시 공간이 1 GiB 여유를 남기지 못하면 기다린다(`DRIVE_STAGING_FULL`, 재시도 간격).
 - **재시도 전 확인:** 두 번째 시도부터는 먼저 대상을 `stat`한다(응답을 잃은 업로드가 이미 올라갔을 수 있음 — 같으면 `DONE`, 중복 업로드 없음).
 - **재시도 가능 오류** `BUSY`·`LOCKED`·`TIMEOUT`·`OVERLOADED`·`UNAVAILABLE`: 30초 → 2분 → 10분 → 30분 → 1시간 간격, `SIMDASH_DRIVE_UPLOAD_MAX_ATTEMPTS`(기본 8)회를 넘으면 `FAILED`. 대기 중인 항목 뒤의 같은 묶음 항목은 기다린다(순서 유지).

@@ -295,8 +295,7 @@ class DriveStorageProvider:
         from ..drive import reads
 
         rel = self._rel(rel_path)
-        version, masked = self._file_version(rel)
-        return reads.export_copy(self.root.spdm_root, rel, version, masked=masked, max_bytes=512 * 1024 * 1024)
+        return reads.export_copy(self.root.spdm_root, rel, resolve=lambda: self._file_version(rel), max_bytes=512 * 1024 * 1024)
 
     def read_small_nofollow(self, rel_path: str, *, max_bytes: int, before_read=None) -> bytes | None:
         try:
