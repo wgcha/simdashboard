@@ -33,6 +33,14 @@ https://__REPLACE_SERVER_NAME__ {
         reverse_proxy 127.0.0.1:__REPLACE_API_PORT__
     }
 
+    # Optional PhysicsAI routes (default off; docs/physicsai-integration.md).
+    # Place PhysicsAI's deploy/caddy/physicsai.caddy next to this Caddyfile to
+    # turn on /physicsai/api/* (reverse proxy, port PHYSICSAI_PORT, default
+    # 8100) and /physicsai/* (static files, PHYSICSAI_FRONTEND_ROOT). Without a
+    # matching file this glob import adds nothing. It stays before the
+    # catch-all handle below; /api/* above does not match /physicsai/api/*.
+    import physicsai*.caddy
+
     # The remaining non-file routes are the single-page application.
     handle {
         try_files {path} /index.html

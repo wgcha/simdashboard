@@ -242,6 +242,14 @@ class SelectionMetadataResponse(BaseModel):
     relative_path: str | None = None
 
 
+class PhysicsAiLinkResponse(BaseModel):
+    """PhysicsAI 연동 링크 표시 상태. ``spdm_root``는 켜져 있고 root가 설정된 경우에만 값이 있다."""
+
+    enabled: bool
+    base_path: str
+    spdm_root: str | None = None
+
+
 class ProjectSelectionResponse(BaseModel):
     id: str
     name: str

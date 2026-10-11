@@ -413,6 +413,14 @@ if ($https) {
     if ($serverName -eq '_') { Fail 'HTTPS requires the hostname covered by the supplied certificate.' }
     Require-File $cert 'TLS certificate'; Require-File $key 'TLS key'
 }
+# Optional PhysicsAI routes (default off; docs/physicsai-integration.md).
+$physicsaiEnabled = (Get-ConfigValue $cfg 'physicsaiEnabled' 'false').Trim().ToLowerInvariant() -in @('true', '1', 'yes', 'on')
+$physicsaiPort = [int](Get-ConfigValue $cfg 'physicsaiPort' 8100)
+$physicsaiFrontendRoot = Get-ConfigValue $cfg 'physicsaiFrontendRoot'
+if ($physicsaiEnabled) {
+    if ($physicsaiPort -lt 1024 -or $physicsaiPort -gt 65535 -or $physicsaiPort -in @($apiPort, $webPort, $pgPort)) { Fail 'physicsaiPort must be a valid port distinct from the API/web/PostgreSQL ports.' }
+    if ($physicsaiFrontendRoot -notmatch '^[A-Za-z]:\\.+' -or $physicsaiFrontendRoot -match '["{}\x00-\x1f]') { Fail 'physicsaiFrontendRoot must be the absolute local PhysicsAI frontend\dist path.' }
+}
 $settingsPath = Join-Path $StateRoot 'install-settings.json'
 if (Test-Path -LiteralPath $settingsPath -PathType Leaf) {
     $knownSettings = Read-Json $settingsPath
@@ -511,6 +519,7 @@ try {
     New-Item -ItemType Directory -Path $assets, $logs -Force | Out-Null
     Set-PrivateAcl $assets $serviceAccount -Recurse; Set-PrivateAcl $logs $serviceAccount -Recurse
     Set-EnvValue $stateEnv 'SIMDASH_ASSETS_ROOT' $assets
+    Set-EnvValue $stateEnv 'SIMDASH_PHYSICSAI_ENABLED' $(if ($physicsaiEnabled) { 'true' } else { 'false' })
     $phase = 'stop-services'
     Stop-ManagedServices
     $appStopped = $true
@@ -579,6 +588,22 @@ try {
     $siteAddress = if ($serverName -eq '_') { "${scheme}://:$webPort" } else { "${scheme}://${serverName}:$webPort" }
     $staticRoot = (Join-Path $TargetRelease 'frontend\dist').Replace('\','/')
     $caddyConfig = Join-Path $StateRoot 'Caddyfile'
+    $physicsaiRoutes = ''
+    if ($physicsaiEnabled) {
+        $physicsaiStatic = $physicsaiFrontendRoot.Replace('\','/')
+        $physicsaiRoutes = @"
+    redir /physicsai /physicsai/ 308
+    handle /physicsai/api/* {
+        reverse_proxy 127.0.0.1:$physicsaiPort
+    }
+    handle /physicsai/* {
+        root * "$physicsaiStatic"
+        uri strip_prefix /physicsai
+        try_files {path} /index.html
+        file_server
+    }
+"@
+    }
     $caddyText = @"
 {
     admin off
@@ -598,6 +623,7 @@ $tlsLine
         try_files {path} /index.html
         file_server
     }
+$physicsaiRoutes
 }
 "@
     [IO.File]::WriteAllText($caddyConfig, $caddyText, (New-Object Text.UTF8Encoding($false)))

@@ -3,6 +3,7 @@ import { formatServerTime, parseServerTime } from '../src/shared/api/serverTime.
 import { folderProgressPath, folderProgressStatusLabel, normalizeFolderProgress } from '../src/shared/api/folderProgress.ts'
 import { keywordEnvironments, normalizeResultEnvironments, resolvedResultEnvironment, resultEnvironmentsPath } from '../src/shared/api/resultEnvironments.ts'
 import { chunkRanges, depthRules, dropEntries, dropGuide, entryRelativePath, formatBytes as dropBytes, pickedFromInput, walkEntries } from '../src/shared/api/resultDropModel.ts'
+import { joinSpdmPath, normalizePhysicsAiLink, physicsAiImportHref, PHYSICSAI_LINK_OFF } from '../src/shared/api/physicsaiLinkModel.ts'
 import { depthRowEditable, depthRows, errorCode, errorItems, lowerRoleOptions, setDepthRole, sumDeleteCounts, validateLowerLevels, validateUpperLevels } from '../src/shared/api/depthSchemaModel.ts'
 
 const validation = { detail: [{ type: 'missing', loc: ['body', 'name'], msg: 'Field required' }] }
@@ -116,5 +117,19 @@ assert(depthRules(distributionRoles).some((rule) => rule.text === 'Run Option Ìè
 assert(JSON.stringify(chunkRanges(10, 4)) === '[[0,4],[4,8],[8,10]]' && JSON.stringify(chunkRanges(10, 4, 4)) === '[[4,8],[8,10]]', 'chunks resume from the offset')
 assert(JSON.stringify(chunkRanges(0, 4)) === '[[0,0]]' && chunkRanges(4, 4, 4).length === 0, 'empty files send one empty chunk')
 assert(dropBytes(512) === '512 B' && dropBytes(1536) === '1.5 KB' && dropBytes(3 * 1024 ** 3) === '3.0 GB', 'byte formatting')
+
+// PhysicsAI link (docs/physicsai-integration.md, PhysicsAI phase2 ¬ß12.7 D8): off by default, absolute SPDM path, same-origin base.
+assert(normalizePhysicsAiLink(null).enabled === false && normalizePhysicsAiLink({ enabled: 'true' }).enabled === false, 'unknown link payload must be off')
+assert(normalizePhysicsAiLink({ enabled: false, base_path: '/physicsai/', spdm_root: 'E:\\SPDM' }).spdmRoot === null, 'disabled link must not keep the SPDM root')
+assert(normalizePhysicsAiLink({ enabled: true, base_path: 'https://evil.example/', spdm_root: 'E:\\SPDM' }).basePath === '/physicsai/', 'base path must stay same-origin')
+assert(normalizePhysicsAiLink({ enabled: true, base_path: '//evil.example/x', spdm_root: null }).basePath === '/physicsai/', 'protocol-relative base path must be rejected')
+assert(joinSpdmPath('E:\\SPDM\\', 'PRJ01/WR_1/Working/Case_0012/Opt A') === 'E:\\SPDM\\PRJ01\\WR_1\\Working\\Case_0012\\Opt A', 'drive root must join with backslashes')
+assert(joinSpdmPath('\\\\spdm\\master', 'PRJ01/Case') === '\\\\spdm\\master\\PRJ01\\Case', 'UNC root must join with backslashes')
+assert(joinSpdmPath('/srv/spdm/', 'PRJ01/Case') === '/srv/spdm/PRJ01/Case', 'posix root must join with slashes')
+assert(joinSpdmPath('E:\\SPDM', '../etc') === null && joinSpdmPath('E:\\SPDM', '/abs') === null && joinSpdmPath('E:\\SPDM', 'C:/x') === null && joinSpdmPath('E:\\SPDM', '') === null && joinSpdmPath(null, 'a') === null, 'unsafe or empty paths must not produce a link')
+const aiLink = normalizePhysicsAiLink({ enabled: true, base_path: '/physicsai/', spdm_root: 'E:\\SPDM' })
+assert(physicsAiImportHref(aiLink, 'PRJ 01/Case&1', 'project-1') === '/physicsai/import?spdm_path=' + encodeURIComponent('E:\\SPDM\\PRJ 01\\Case&1') + '&project_id=project-1', 'import link must URL-encode the absolute SPDM path')
+assert(physicsAiImportHref(PHYSICSAI_LINK_OFF, 'PRJ01/Case', 'project-1') === null, 'flag off must hide the import link')
+assert(physicsAiImportHref({ ...aiLink, spdmRoot: null }, 'PRJ01/Case', 'project-1') === null, 'missing SPDM root must hide the import link')
 
 console.log('Shared API self-test passed.')

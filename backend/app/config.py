@@ -399,3 +399,15 @@ def directory_settings() -> DirectorySettings:
         result_limit=result_limit,
         allow_insecure_localhost=allow_insecure_localhost,
     )
+
+
+PHYSICSAI_BASE_PATH = "/physicsai/"
+
+
+def physicsai_link_enabled() -> bool:
+    """PhysicsAI 연동 링크 표시 여부(``SIMDASH_PHYSICSAI_ENABLED``, 기본 off).
+
+    PhysicsAI가 같은 Caddy 뒤에 설치된 서버에서만 켠다. 꺼져 있으면 메뉴·버튼을
+    숨기고 SPDM root도 응답하지 않는다(docs/physicsai-integration.md).
+    """
+    return os.getenv("SIMDASH_PHYSICSAI_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}

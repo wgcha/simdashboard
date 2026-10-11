@@ -48,6 +48,7 @@ def main():
         "tlsLine": "",
         "staticRoot": args.frontend.resolve().as_posix(),
         "apiPort": str(api.server_port),
+        "physicsaiRoutes": "",
     }.items():
         config = config.replace("$" + name, value)
     threading.Thread(target=api.serve_forever, daemon=True).start()
