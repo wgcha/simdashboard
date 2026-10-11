@@ -320,6 +320,112 @@ def test_restart_resumes_running_items_and_the_worker_thread_finishes_them(scxw,
     assert scxw.drive.content(scxw.path(f"{OPTION}/2_Face/restart.csv")) == b"restart\n"
 
 
+def test_stop_during_a_drive_call_leaves_the_item_running_and_waits_for_it(scxw, monkeypatch):
+    """M1: a failure caused by the shutdown itself is not recorded as FAILED; stop() waits for the
+    in-flight item (up to the in-flight bound) and the restart resumes it from PENDING."""
+    import threading
+
+    from drive_fakes import DriveError
+
+    project_id, request_id = _register(scxw)
+    session = _drop(scxw, project_id, request_id, [("2_Face/stop.csv", b"stop\n")])
+    _complete(scxw, session["session_id"])
+    inside = threading.Event()
+    guard = scxw.drive.on_call
+
+    def slow_upload(op: str, rel: str) -> None:
+        guard(op, rel)
+        if op == "upload_new":
+            inside.set()
+            # the drive call is cut off by the shutdown (gateway closing under the worker)
+            assert upload_queue._worker.stop.wait(10), "stop() never came"
+            raise DriveError(ErrorCode.INTERNAL, "connection closed during shutdown")
+
+    scxw.drive.on_call = slow_upload
+    monkeypatch.setattr(upload_queue, "AUTOSTART", True)
+    assert upload_queue.start() is True
+    assert inside.wait(20), "the worker never reached upload_new"
+    started = time.monotonic()
+    upload_queue.stop(timeout=0.05, inflight_timeout=30.0)      # idle bound tiny: the in-flight bound is what waits
+    assert time.monotonic() - started < 20
+    assert upload_queue.worker_running() is False
+    states = [state for _kind, state, target, *_ in _items(session["session_id"]) if target.endswith("stop.csv")]
+    assert states == ["RUNNING"]                                  # not FAILED: left for the restart
+    assert scxw.path(f"{OPTION}/2_Face/stop.csv") not in scxw.drive.nodes
+    scxw.drive.on_call = guard
+    assert upload_queue.recover_interrupted() == 1               # next start: RUNNING → PENDING
+    _settle()
+    assert _summary(session["session_id"])["state"] == "DONE"
+    assert scxw.drive.content(scxw.path(f"{OPTION}/2_Face/stop.csv")) == b"stop\n"
+
+
+def test_stop_waits_for_a_slow_in_flight_item_beyond_the_idle_bound(scxw, monkeypatch):
+    """M1: stop() lets an item in the middle of a slow drive call finish (in-flight bound), then records DONE."""
+    import threading
+
+    project_id, request_id = _register(scxw)
+    session = _drop(scxw, project_id, request_id, [("2_Face/slow.csv", b"slow\n")])
+    _complete(scxw, session["session_id"])
+    inside = threading.Event()
+    guard = scxw.drive.on_call
+
+    def slow_upload(op: str, rel: str) -> None:
+        guard(op, rel)
+        if op == "upload_new":
+            inside.set()
+            time.sleep(1.0)                                  # a slow but successful drive call
+
+    scxw.drive.on_call = slow_upload
+    monkeypatch.setattr(upload_queue, "AUTOSTART", True)
+    assert upload_queue.start() is True
+    assert inside.wait(20), "the worker never reached upload_new"
+    upload_queue.stop(timeout=0.05, inflight_timeout=30.0)
+    scxw.drive.on_call = guard
+    assert upload_queue.worker_running() is False
+    states = [state for _kind, state, target, *_ in _items(session["session_id"]) if target.endswith("slow.csv")]
+    assert states == ["DONE"]
+    assert scxw.drive.content(scxw.path(f"{OPTION}/2_Face/slow.csv")) == b"slow\n"
+
+
+def test_upload_reported_with_another_size_is_decided_by_content(scxw, monkeypatch):
+    """A size reported differently after upload_new is verified by content (sha), not marked failed by size."""
+    from drive_fakes import FakeWorkerDriveGateway
+
+    project_id, request_id = _register(scxw)
+    session = _drop(scxw, project_id, request_id, [("2_Face/size.csv", b"size\n")])
+    _complete(scxw, session["session_id"])
+    original = FakeWorkerDriveGateway.upload_new
+
+    def misreported(self, local_file, rel_dir, *, name=None):
+        entry = original(self, local_file, rel_dir, name=name)
+        return replace(entry, size=int(entry.size) + 7)
+
+    monkeypatch.setattr(FakeWorkerDriveGateway, "upload_new", misreported)
+    _settle()
+    states = [state for _kind, state, target, *_ in _items(session["session_id"]) if target.endswith("size.csv")]
+    assert states == ["DONE"]
+    assert not list(drive_gateway.current_settings().staging_dir.glob("xfer-*"))
+
+
+def test_hourly_cleanup_never_removes_the_xfer_folder_of_a_running_transfer(scxw):
+    import os
+
+    staging = drive_gateway.current_settings().staging_dir
+    active = upload_queue._new_xfer_dir()
+    orphan = upload_queue._new_xfer_dir()
+    upload_queue._remove_xfer_dir(orphan)
+    orphan.mkdir()                                           # a crash leftover: not registered as active
+    two_days = time.time() - 2 * 24 * 3600
+    for folder in (active, orphan):
+        os.utime(folder, (two_days, two_days))
+    try:
+        upload_queue.sweep(cleanup=True)
+        assert active.exists() and not orphan.exists()
+    finally:
+        upload_queue._remove_xfer_dir(active)
+    assert not list(staging.glob("xfer-*"))
+
+
 def test_admin_queue_lists_retries_and_cancels_without_touching_the_drive(scxw):
     project_id, request_id = _register(scxw)
     session = _drop(scxw, project_id, request_id, [("2_Face/adm.csv", b"mine\n")])

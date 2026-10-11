@@ -436,7 +436,6 @@ def publish_result_bundle(
             captured.cleanup()
         raise ResultBundlePublishError("RESULT_BUNDLE_SOURCE_INVALID") from exc
 
-    marker_bytes: bytes | None = None
     if check_only:
         try:
             marker = build_ready_marker(
@@ -446,11 +445,10 @@ def publish_result_bundle(
                 entry_count=len(captured.entries),
                 published_at=_clock_text(clock),
             )
-            marker_bytes = serialize_ready_marker(marker)
+            serialize_ready_marker(marker)          # check mode: the marker must serialize
         except Exception as exc:
             captured.cleanup()
             raise ResultBundlePublishError("RESULT_BUNDLE_MARKER_INVALID") from exc
-        del marker_bytes
         try:
             parent_fd, final_name, descriptors = _open_publication_parent(root, relative, create=False)
             try:

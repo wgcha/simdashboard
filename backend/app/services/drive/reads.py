@@ -50,7 +50,10 @@ import functools
 import hashlib
 import inspect
 import logging
+import os
 import re
+import shutil
+import tempfile
 import threading
 import time
 from contextlib import contextmanager
@@ -266,6 +269,8 @@ class DriveReadSession:
         return server_local.make_child_dir(self.staging, f"d{self._counter:05d}")
 
 
+EXPORT_PREFIX = "download-"   # server copies handed to a response (export_copy)
+
 _session_var: contextvars.ContextVar[DriveReadSession | None] = contextvars.ContextVar("drive_read_session", default=None)
 
 
@@ -304,6 +309,20 @@ def _close_session(session: DriveReadSession) -> None:
     server_local.remove_tree(session.staging)
 
 
+def _leave_session(token: contextvars.Token) -> None:
+    """Undo ``_session_var.set``; never raises, so the staging folder is always removed afterwards.
+
+    A context manager entered in one context and exited in another (a generator
+    whose chunks a framework runs in copied contexts) cannot ``reset`` its token
+    (``ValueError: Token was created in a different Context``); the variable is
+    then cleared in the current context instead.
+    """
+    try:
+        _session_var.reset(token)
+    except (ValueError, RuntimeError):
+        _session_var.set(None)
+
+
 _orphan_lock = threading.Lock()
 _orphan_checked = 0.0
 
@@ -316,6 +335,7 @@ def _cleanup_orphans() -> None:
             return
         _orphan_checked = time.monotonic()
     server_local.remove_old_dirs(_settings().staging_dir, "read-", ORPHAN_SECONDS)
+    server_local.remove_old_files(_settings().staging_dir, EXPORT_PREFIX, ORPHAN_SECONDS)
 
 
 def _need(session: DriveReadSession | None, kind: str, rel: str, token: str | None = None):
@@ -391,7 +411,7 @@ def run(body: Callable[[], T], *, prepare: Callable[[DriveReadSession], None] | 
             return result
         raise RuntimeError("unreachable: the final round never raises DriveReadMiss")
     finally:
-        _session_var.reset(token)
+        _leave_session(token)
         _close_session(session)
 
 
@@ -427,7 +447,7 @@ def _ephemeral_session() -> Iterator[DriveReadSession]:
         load_overlay(temporary)
         yield temporary
     finally:
-        _session_var.reset(token)
+        _leave_session(token)
         _close_session(temporary)
 
 
@@ -663,6 +683,27 @@ def open_stream(spdm_root: str, rel: str, version: Version, *, masked: bool, max
         copy = content(spdm_root, rel, version, masked=masked, max_bytes=max_bytes)
         with server_local.open_file(copy.path) as stream:
             yield stream
+
+
+def export_copy(spdm_root: str, rel: str, version: Version, *, masked: bool, max_bytes: int) -> Path:
+    """Copy of ``rel`` at ``version`` in a fresh server file ``<staging>/download-*`` (the caller removes it).
+
+    For responses that outlive the request context (a download body): the read
+    session is entered and left here, on the request thread, so nothing of it
+    leaks into the framework's copied contexts.  A day-old leftover is removed by
+    :func:`_cleanup_orphans`.
+    """
+    handle, name = tempfile.mkstemp(prefix=EXPORT_PREFIX, dir=str(_settings().staging_dir))
+    target = Path(name)
+    try:
+        with os.fdopen(handle, "wb") as out, _ephemeral_session():
+            copy = content(spdm_root, rel, version, masked=masked, max_bytes=max_bytes)
+            with server_local.open_file(copy.path) as stream:
+                shutil.copyfileobj(stream, out, 1024 * 1024)
+    except BaseException:
+        server_local.discard_file(target)
+        raise
+    return target
 
 
 def local_copy_sha256(spdm_root: str, rel: str, version: Version, *, masked: bool, max_bytes: int) -> tuple[int, str]:

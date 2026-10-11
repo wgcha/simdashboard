@@ -51,6 +51,21 @@ def remove_old_dirs(parent: Path, prefix: str, max_age_seconds: float) -> None:
             continue
 
 
+def remove_old_files(parent: Path, prefix: str, max_age_seconds: float) -> None:
+    """Remove regular ``prefix*`` files in ``parent`` older than ``max_age_seconds`` (crash leftovers)."""
+    cutoff = time.time() - max_age_seconds
+    try:
+        children = list(parent.iterdir())
+    except OSError:
+        return
+    for child in children:
+        try:
+            if child.name.startswith(prefix) and child.is_file() and not child.is_symlink() and child.stat().st_mtime < cutoff:
+                child.unlink()
+        except OSError:
+            continue
+
+
 def is_regular_file_inside(path: Path, base: Path) -> bool:
     try:
         return path.resolve().is_relative_to(base.resolve()) and path.is_file() and not path.is_symlink()
@@ -219,6 +234,9 @@ class BlobStore:
         self.directory = directory
         self.max_bytes = max_bytes
         self._lock = threading.Lock()
+        # sha256 → (size, mtime_ns) of the file when it was last hashed and found intact.  A blob is
+        # re-hashed once per process start and whenever its size or mtime changed since (M3).
+        self._verified: dict[str, tuple[int, int]] = {}
 
     def _path(self, sha256: str) -> Path:
         if not _BLOB_NAME.fullmatch(sha256):
@@ -233,18 +251,34 @@ class BlobStore:
             return None
         if not path.is_file() or path.is_symlink():
             return None
-        digest = hashlib.sha256()
-        with path.open("rb") as stream:
-            while chunk := stream.read(1024 * 1024):
-                digest.update(chunk)
-        if digest.hexdigest() != path.name:
-            path.unlink(missing_ok=True)
+        try:
+            info = path.stat()
+        except OSError:
             return None
+        with self._lock:
+            known = self._verified.get(path.name)
+        if known != (info.st_size, info.st_mtime_ns):
+            digest = hashlib.sha256()
+            with path.open("rb") as stream:
+                while chunk := stream.read(1024 * 1024):
+                    digest.update(chunk)
+            if digest.hexdigest() != path.name:
+                with self._lock:
+                    self._verified.pop(path.name, None)
+                path.unlink(missing_ok=True)
+                return None
+        self._touch(path)
+        return path
+
+    def _touch(self, path: Path) -> None:
+        """Mark ``path`` used (eviction order) and remember its verified (size, mtime_ns)."""
         try:
             os.utime(path)
+            info = path.stat()
         except OSError:
-            pass
-        return path
+            return
+        with self._lock:
+            self._verified[path.name] = (info.st_size, info.st_mtime_ns)
 
     def put(self, source: Path, sha256: str) -> Path:
         """Move ``source`` (a staging file whose sha256 is known) into the store."""
@@ -261,6 +295,7 @@ class BlobStore:
                 shutil.copyfile(source, path)
                 source.unlink(missing_ok=True)
             self._evict()
+        self._touch(path)
         return path
 
     def _blobs(self) -> Iterator[Path]:
@@ -302,4 +337,4 @@ class BlobStore:
 
 __all__ = ["BlobStore", "blob_dir_conflict", "discard_file", "disk_free", "ensure_dir", "file_exists", "file_sha1", "write_stream", "file_sha256", "file_size",
            "install_file", "is_regular_file_inside", "make_child_dir", "new_dir", "old_dirs", "open_file", "read_file",
-           "remove_old_dirs", "remove_tree", "write_at", "write_file"]
+           "remove_old_dirs", "remove_old_files", "remove_tree", "write_at", "write_file"]

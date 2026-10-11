@@ -4,6 +4,18 @@ import { DRIVE_BATCH_STATE_LABELS, driveApi, driveCodeMessage, driveErrorText, t
 import './DriveBatchProgress.css'
 
 const POLL_MS = 2000
+/** While the queue waits (paused for authentication, or a retry scheduled in the future) nothing changes quickly. */
+const IDLE_POLL_MS = 15000
+
+export function nextPollDelay(batch: DriveUploadBatch, now = Date.now()): number | null {
+  if (batch.finished) return null
+  if (batch.paused) return IDLE_POLL_MS
+  if (batch.next_retry_at) {
+    const retryAt = Date.parse(batch.next_retry_at)
+    if (Number.isFinite(retryAt) && retryAt > now) return Math.min(IDLE_POLL_MS, Math.max(POLL_MS, retryAt - now))
+  }
+  return POLL_MS
+}
 
 function bytes(value: number) {
   if (value < 1024) return `${value} B`
@@ -12,7 +24,8 @@ function bytes(value: number) {
   return `${(value / (1024 * 1024 * 1024)).toFixed(2)} GB`
 }
 
-/** Progress of one SCX drive upload batch (D3 queue): polls until it finished, then calls ``onFinished`` once. */
+/** Progress of one SCX drive upload batch (D3 queue): polls until it finished (2 s while active, 15 s while
+ *  paused or waiting for a scheduled retry), then calls ``onFinished`` once. */
 export function DriveBatchProgress({ batchId, initial, onFinished }: { batchId: string; initial?: DriveUploadBatch | null; onFinished?: (batch: DriveUploadBatch) => void }) {
   const [batch, setBatch] = useState<DriveUploadBatch | null>(initial ?? null)
   const [error, setError] = useState('')
@@ -28,18 +41,21 @@ export function DriveBatchProgress({ batchId, initial, onFinished }: { batchId: 
     const controller = new AbortController()
     let timer = 0
     const poll = async () => {
+      let delay = POLL_MS
       try {
         const next = await driveApi.uploadBatch(batchId, controller.signal)
         setBatch(next); setError('')
-        if (next.finished) {
+        const wait = nextPollDelay(next)
+        if (wait === null) {
           if (!finished.current) { finished.current = true; notify.current?.(next) }
           return
         }
+        delay = wait
       } catch (reason) {
         if (controller.signal.aborted) return
         setError(driveErrorText(reason, '드라이브 반영 상태를 불러오지 못했습니다.'))
       }
-      timer = window.setTimeout(() => void poll(), POLL_MS)
+      timer = window.setTimeout(() => void poll(), delay)
     }
     void poll()
     return () => { controller.abort(); window.clearTimeout(timer) }

@@ -72,7 +72,7 @@ from ..modules.access_control import (
     require_permission,
     require_resource_permission,
 )
-from ..database_connection import connect, rows
+from ..database_connection import connect
 from ..repositories.workbench import WorkbenchRepository
 from ..schemas.api import DashboardDefinition
 from ..schemas.workbench import AnalysisTemplateVersionCreate, BatchDispatchCreate, BatchProfileInput, DemoRunCreate, RequestTypeAssignmentInput, RequestTypeVersionCreate, ResultLayoutMaterializeInput, ResultProfileInput, TaskTypeVersionCreate, WorkItemAssigneeUpdate, WorkItemComplete, WorkItemProgress, WorkItemStart

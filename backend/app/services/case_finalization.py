@@ -2844,7 +2844,7 @@ def _status_operation(conn: ConnectionLike, scope: dict[str, Any], project_id: s
     if legacy and sum(file["size"] for file in files) > MAX_LEGACY_TOTAL_BYTES:
         return None, None, True, None
     try:
-        expected_outputs = _expected_output_paths(plan)
+        _expected_output_paths(plan)          # validates the plan's output paths
     except (CaseFinalizationError, TypeError, ValueError):
         return None, None, True, None
     complete_path = fs.join(operation_dir, "complete.json")

@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import tempfile
 from dataclasses import dataclass
-from typing import Any, BinaryIO, Callable, Iterator, Protocol
+from typing import BinaryIO, Callable, Iterator, Protocol
 from urllib.parse import quote
 
 from fastapi import Request

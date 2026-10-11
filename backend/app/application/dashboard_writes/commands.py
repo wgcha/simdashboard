@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime, timezone
-from typing import Any
 from uuid import uuid4
 
 from ...domains.dashboard_writes.errors import (
@@ -17,7 +16,7 @@ from ...domains.dashboard_writes.errors import (
     SystemDashboardVersionError,
 )
 from ...domains.dashboard_writes.policies import SYSTEM_ANALYSIS_PAGE_IDS, analysis_page_meta
-from ...domains.dashboard_writes.ports import DashboardWriteRepository, DashboardWriteRepositoryProvider
+from ...domains.dashboard_writes.ports import DashboardWriteRepositoryProvider
 
 
 AuthorizeResource = Callable[[str, object], None]

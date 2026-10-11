@@ -8,9 +8,12 @@ call happened while the calling thread held a database connection.
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
+import logging
 import sys
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -512,6 +515,38 @@ def test_blob_store_evicts_only_its_own_blobs_and_refuses_overlapping_folders(tm
     assert refused.value.args and "SIMDASH_DRIVE_BLOB_DIR" in str(refused.value.args[0]) + str(refused.value)
 
 
+def test_blob_store_rehashes_once_per_process_and_again_only_when_the_file_changed(tmp_path, monkeypatch):
+    """M3: ``find`` hashes a blob on first use and after a size/mtime change; a corrupt blob is discarded."""
+    import hashlib
+    import os
+
+    from app.services.storage import server_local
+    from app.services.storage.server_local import BlobStore
+
+    data = b"b" * 4096
+    digest = hashlib.sha256(data).hexdigest()
+    store = BlobStore(tmp_path / "blobs", max_bytes=10 ** 9)
+    source = tmp_path / "src.bin"
+    source.write_bytes(data)
+    stored = store.put(source, digest)
+    hashed = []
+    real = hashlib.sha256
+
+    class Counting:
+        def __init__(self) -> None:
+            self._inner = real(); hashed.append(1)
+        def update(self, chunk): self._inner.update(chunk)
+        def hexdigest(self): return self._inner.hexdigest()
+
+    monkeypatch.setattr(server_local.hashlib, "sha256", Counting)
+    fresh = BlobStore(tmp_path / "blobs", max_bytes=10 ** 9)   # a new process: nothing verified yet
+    assert fresh.find(digest) == stored and len(hashed) == 1
+    assert fresh.find(digest) == stored and len(hashed) == 1   # unchanged size/mtime: no second hash
+    stored.write_bytes(b"c" * 4096)                            # same size, new mtime and content
+    assert fresh.find(digest) is None and len(hashed) == 2 and not stored.exists()
+    assert fresh.find(digest) is None
+
+
 def test_read_session_staging_has_one_byte_budget_and_a_free_space_floor(scx, monkeypatch):
     """L3: a session stops downloading at its staging budget or when the staging disk runs low."""
     from app.services.storage import server_local
@@ -677,3 +712,68 @@ def test_duckdb_bootstrap_adds_drive_source_versions_to_an_existing_database():
     assert {"root_key", "rel_path", "version_no", "version_token", "pending_version_token", "review_state",
             "source_state", "superseded_at", "sha256", "stored_path"} <= columns
     assert kept == ("keep",)
+
+
+# --- storage panel download (H1: response bodies outlive the request context) ------------------
+
+def _staging_leftovers() -> list[str]:
+    staging = drive_gateway.current_settings().staging_dir
+    return sorted(child.name for child in staging.iterdir()
+                  if child.name.startswith(("read-", drive_reads.EXPORT_PREFIX)))
+
+
+def _bind_storage_file(scx: Scx, project_id: str, request_id: str, content: bytes) -> str:
+    """A storage panel binding and one indexed solver file of a load case (rows only; the file is on the drive)."""
+    import json as _json
+
+    from app.services.spdm_storage import _upsert_file
+
+    leaf = f"{REQUEST}/Working/Bound_Case"
+    scx.add(f"{leaf}/solver/model.h3d", content)
+    load_case_id = f"loadcase-h1-{uuid.uuid4().hex[:8]}"
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    with connect() as conn:
+        conn.execute("INSERT INTO load_cases VALUES (?, ?, ?, ?, ?, ?, ?)",
+                     [load_case_id, request_id, "H1 download", "DROP", "COMPLETED", _json.dumps({}), now])
+        conn.execute("INSERT INTO spdm_storage_bindings(load_case_id, project_id, request_id, relative_path, created_at, "
+                     "updated_at) VALUES (?, ?, ?, ?, ?, ?)", [load_case_id, project_id, request_id, leaf, now, now])
+        _upsert_file(conn, load_case_id, "solver/model.h3d", "model.h3d", "solver", len(content),
+                     hashlib.sha256(content).hexdigest(), "READY")
+        file_id = conn.execute("SELECT id FROM spdm_storage_files WHERE load_case_id=?", [load_case_id]).fetchone()[0]
+    return str(file_id)
+
+
+def test_storage_download_in_scx_mode_streams_a_server_copy_and_leaves_no_staging(scx, caplog):
+    project_id, request_id = _register(scx)
+    payload = bytes(range(256)) * 9000          # 2.3 MB: several response chunks
+    file_id = _bind_storage_file(scx, project_id, request_id, payload)
+    assert _staging_leftovers() == []
+    with caplog.at_level(logging.ERROR):
+        with scx.client.stream("GET", f"/api/storage/files/{file_id}/download") as response:
+            assert response.status_code == 200
+            chunks = list(response.iter_bytes(chunk_size=256 * 1024))
+    assert b"".join(chunks) == payload and len(chunks) > 1
+    assert "filename*=UTF-8''model.h3d" in response.headers["content-disposition"]
+    assert [record for record in caplog.records if record.levelno >= logging.ERROR] == []
+    assert _staging_leftovers() == []          # no read-<id>/ session folder and no download-* copy left behind
+    # a second download (the content is now in the session cache path again) behaves the same
+    again = scx.client.get(f"/api/storage/files/{file_id}/download")
+    assert again.status_code == 200 and again.content == payload
+    assert _staging_leftovers() == []
+    assert scx.client.get("/api/storage/files/missing-id/download").status_code == 404
+
+
+def test_ephemeral_session_left_in_another_context_still_removes_its_staging(scx):
+    """A read session entered in one context and left in a copied one (a framework running a
+    generator's chunks elsewhere) must not raise and must still remove ``read-<id>/``."""
+    import contextvars
+
+    assert drive_reads.current_session() is None and not connection_held()
+    manager = drive_reads._ephemeral_session()
+    session = manager.__enter__()
+    assert session.staging.is_dir() and drive_reads.current_session() is session
+    contextvars.copy_context().run(manager.__exit__, None, None, None)
+    assert not session.staging.exists()
+    assert drive_reads.current_session() is None or drive_reads.current_session() is session
+    drive_reads._session_var.set(None)
+    assert _staging_leftovers() == []

@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import shutil
 from contextlib import asynccontextmanager
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -14,9 +13,7 @@ from fastapi.responses import FileResponse
 from . import config as app_config
 from .modules.access_control import (
     PROJECT_DATA_VIEW,
-    REPORT_EXPORT,
     REQUEST_CREATE,
-    RESULT_IMPORT,
     WORKFLOW_EDIT,
     require_permission,
     require_resource_permission,
@@ -91,9 +88,7 @@ from .adapters.http.routers.dashboard_writes import history_router as dashboard_
 from .adapters.http.routers.dashboard_writes import save_router as dashboard_save_router
 from .services.drop_video_demo import (
     DROP_VIDEO_DEMO_BY_ID,
-    DROP_VIDEO_DEMO_SCENES,
     DROP_VIDEO_SOURCE_DIR,
-    probe_mp4,
 )
 
 

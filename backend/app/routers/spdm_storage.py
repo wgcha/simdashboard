@@ -8,16 +8,17 @@ from typing import Any, Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
 
-from ..database_connection import connect, rows
+from ..database_connection import connect
 from ..modules.access_control import PROJECT_DATA_VIEW, RESULT_IMPORT, SYSTEM_CATALOG_MANAGE, require_permission, require_resource_permission
 from ..security import write_audit_event
 from ..services.drive import reads as drive_reads
 from ..services.drive.writes import require_local_writes
 from ..services import spdm_storage
-from ..services.storage import LocalFsProvider, get_storage_provider
+from ..services.storage import DriveStorageProvider, LocalFsProvider, get_storage_provider, server_local
 from ..schemas.api import ResultImportResponse
 
 
@@ -317,6 +318,7 @@ async def upload_raw_file(
 
 
 @router.get("/storage/files/{file_id}/download")
+@drive_reads.read_session()
 def download_storage_file(file_id: str, request: Request):
     with connect() as conn:
         located = spdm_storage.file_locator(conn, file_id)
@@ -329,6 +331,21 @@ def download_storage_file(file_id: str, request: Request):
             path = spdm_storage.safe_file_path(fs.root, binding, relative_path)
         except spdm_storage.SpdmStorageError as error:
             raise _error(error, 404) from error
+    # An RFC 5987 value works for Unicode names and cannot inject a header from
+    # an externally-created storage filename.
+    disposition = "attachment; filename=download; filename*=UTF-8''" + quote(name, safe="")
+    if isinstance(fs, DriveStorageProvider):
+        # Starlette runs the chunks of a StreamingResponse generator in copied contexts, so a drive
+        # read session entered here could not be left inside the generator (its ContextVar token
+        # belongs to this context) and its staging folder would leak.  The drive copy is made on
+        # this thread, in its own read session, and the server file is served and then removed.
+        try:
+            fs.assert_safe(path)
+            copy = fs.export_copy(path)
+        except spdm_storage.SpdmStorageError as error:
+            raise _error(error, 404) from error
+        return FileResponse(copy, media_type="application/octet-stream", headers={"Content-Disposition": disposition},
+                            background=BackgroundTask(server_local.discard_file, copy))
     try:
         fs.assert_safe(path)
         reader_context = fs.open_read(path)
@@ -341,7 +358,4 @@ def download_storage_file(file_id: str, request: Request):
                 yield chunk
         finally:
             reader_context.__exit__(None, None, None)
-    # An RFC 5987 value works for Unicode names and cannot inject a header from
-    # an externally-created storage filename.
-    disposition = "attachment; filename=download; filename*=UTF-8''" + quote(name, safe="")
     return StreamingResponse(stream_file(), media_type="application/octet-stream", headers={"Content-Disposition": disposition})

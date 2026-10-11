@@ -166,11 +166,8 @@ class _Context:
             [self.root_key, self.project_id, *ACTIVE_STATUSES]).fetchall()
         rows += self.conn.execute("SELECT project_folder FROM spdm_storage_project_parents WHERE project_id=?",
                                   [self.project_id]).fetchall()
-        try:
-            rows += self.conn.execute("SELECT relative_path FROM folder_discovery_registry WHERE root_key=? "
-                                      "AND role_kind='PROJECT' AND target_id=?", [self.root_key, self.project_id]).fetchall()
-        except Exception:  # noqa: BLE001 - legacy table missing on a minimal schema
-            pass
+        rows += self.conn.execute("SELECT relative_path FROM folder_discovery_registry WHERE root_key=? "
+                                  "AND role_kind='PROJECT' AND target_id=?", [self.root_key, self.project_id]).fetchall()
         for path in self.linked.values():
             parts = PurePosixPath(path).parts
             if len(parts) >= self.request_level:

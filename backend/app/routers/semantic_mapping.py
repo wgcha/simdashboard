@@ -7,7 +7,7 @@ import base64
 from email import policy
 from email.parser import BytesParser
 from datetime import datetime, timezone
-from pathlib import Path, PurePosixPath
+from pathlib import PurePosixPath
 from typing import Any
 from uuid import uuid4
 
@@ -317,7 +317,7 @@ def save_configuration(payload: ConfigurationSave, request: Request) -> dict[str
             else:
                 prior = mapping_repository.previous_recipe_sample(conn, payload.recipe.id) if payload.recipe.id else None
                 if prior:
-                    filename, digest, content = str(prior[0]), str(prior[1]), bytes(prior[2])
+                    filename, content = str(prior[0]), bytes(prior[2])
                     parsed = preview_recipe(recipe_definition, definitions, filename, content)
                 else:
                     content = None
@@ -576,7 +576,7 @@ def _import(conn: Any, request: Request, filename: str, content: bytes, recipe_i
     except Exception as error: raise _error(error) from error
     if any(widget.get("status") not in {"READY", "NO_VALUE"} for widget in widgets):
         raise HTTPException(422, {"code": "SEMANTIC_WIDGET_INPUT_INVALID", "widgets": widgets})
-    digest = hashlib.sha256(content).hexdigest(); now = _now()
+    digest = hashlib.sha256(content).hexdigest()
     reuse_legacy = template_id is not None and mapping_repository.has_legacy_provenance(
         conn, load_case_id=load_case_id, recipe_id=recipe_id, recipe_version=recipe_version,
         template_id=template_id, template_version=template_version, source_sha256=digest,

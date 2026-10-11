@@ -91,6 +91,9 @@ CLEANUP_SECONDS = 3600.0
 # Recording an outcome after the drive call is retried (short connections) before the row is
 # left RUNNING for the sweep.
 RECORD_RETRY_DELAYS = (0.5, 2.0, 5.0)
+# stop(): how long an item in the middle of a drive call may finish before the gateway is shut down.
+STOP_INFLIGHT_SECONDS = 60.0
+WORKER_THREAD_NAME = "drive-upload-queue"
 # Tests turn the background thread off and drive the queue with :func:`run_until_idle`.
 AUTOSTART = True
 # Origins whose module reacts to finished batches / builds just-in-time items.
@@ -479,18 +482,35 @@ def start() -> bool:
         except Exception:  # noqa: BLE001 - startup continues; the loop retries the DB later
             logger.warning("SCX drive upload queue recovery failed", exc_info=True)
         _worker.stop.clear()
-        _worker.thread = threading.Thread(target=_loop, name="drive-upload-queue", daemon=True)
+        _worker.thread = threading.Thread(target=_loop, name=WORKER_THREAD_NAME, daemon=True)
         _worker.thread.start()
         return True
 
 
-def stop(timeout: float = 10.0) -> None:
+def stop(timeout: float = 10.0, *, inflight_timeout: float | None = None) -> None:
+    """Stop the worker: ``timeout`` for an idle worker, up to ``inflight_timeout`` (default
+    ``STOP_INFLIGHT_SECONDS``) while an item is in the middle of a drive call.
+
+    A drive call that fails because the process is shutting down is not recorded as
+    ``FAILED`` (:func:`process_next`): the row stays ``RUNNING`` and
+    :func:`recover_interrupted` makes it ``PENDING`` on the next start.
+    """
     with _worker.lock:
         thread = _worker.thread
         _worker.stop.set()
         _worker.wake.set()
     if thread is not None:
         thread.join(timeout)
+        if thread.is_alive():
+            with _executing_lock:
+                busy = bool(_executing)
+            bound = STOP_INFLIGHT_SECONDS if inflight_timeout is None else inflight_timeout
+            if busy and bound > timeout:
+                logger.info("SCX drive upload queue: waiting up to %.0f s for the in-flight item", bound - timeout)
+                thread.join(bound - timeout)
+            if thread.is_alive():
+                logger.warning("SCX drive upload queue worker did not stop in time; its item stays RUNNING and "
+                               "resumes from PENDING after the restart")
     with _worker.lock:
         _worker.thread = None
         _reset_copy_state()
@@ -640,6 +660,13 @@ def process_next(*, now: datetime | None = None) -> bool:
         return True
     try:
         outcome = _execute(item)            # drive calls: no DB connection held here
+        if _stopping_worker() and outcome.state in {"FAILED", "RETRY"}:
+            # The process is shutting down (main.py stop → gateway shutdown): a failure now may be the
+            # shutdown itself, so it is not recorded.  The row stays RUNNING; recover_interrupted() makes
+            # it PENDING on the next start and the pre-retry stat recognises a write that landed.
+            logger.info("SCX drive upload queue: item %s %s during shutdown is left RUNNING for the restart",
+                        item.id, outcome.state)
+            return False
         _record_outcome(item, outcome)
     finally:
         with _executing_lock:
@@ -651,6 +678,11 @@ def process_next(*, now: datetime | None = None) -> bool:
         server_local.discard_file(Path(item.staging_path))
     _finish_if_done(item.batch_id)
     return True
+
+
+def _stopping_worker() -> bool:
+    """True on the worker thread after :func:`stop` was called (never for tests' direct ``process_next``)."""
+    return _worker.stop.is_set() and threading.current_thread().name == WORKER_THREAD_NAME
 
 
 def _record_outcome(item: Item, outcome: "_Outcome") -> None:
@@ -802,7 +834,7 @@ def _download_sha256(gateway: Any, rel: str, size: int) -> tuple[str, str] | "_O
     """Download ``rel`` (at most ``size`` bytes) into a fresh ``xfer-`` folder: (sha256, sha1); folder removed."""
     if not _staging_has_room(size):
         return _Outcome("RETRY", "DRIVE_STAGING_FULL", ERROR_MESSAGES["DRIVE_STAGING_FULL"])
-    work = server_local.new_dir(drive_gateway.current_settings().staging_dir, "xfer-")
+    work = _new_xfer_dir()
     try:
         try:
             result = gateway.download_to(_drive_path(rel), work, max_bytes=int(size))
@@ -813,7 +845,7 @@ def _download_sha256(gateway: Any, rel: str, size: int) -> tuple[str, str] | "_O
         local = Path(result.local_path)
         return str(result.sha256).lower(), server_local.file_sha1(local)
     finally:
-        server_local.remove_tree(work)
+        _remove_xfer_dir(work)
 
 
 def _existing_outcome(gateway: Any, item: Item, existing: Any, *, size: int | None, sha1: str | None,
@@ -920,7 +952,10 @@ def _upload(gateway: Any, item: Item) -> _Outcome:
         return _existing_outcome(gateway, item, gateway.stat(target), size=size, sha1=sha1, sha256=digest,
                                  staging=staging_note)
     if getattr(entry, "size", None) is not None and int(entry.size) != size:
-        return _Outcome("RETRY", "DRIVE_UPLOAD_MISMATCH", ERROR_MESSAGES["DRIVE_UPLOAD_MISMATCH"], staging=staging_note)
+        # The drive reports another size than we sent: decide by content (sha1 when both sides have it,
+        # else a bounded download and sha256), never by the size alone.
+        return _existing_outcome(gateway, item, gateway.stat(target), size=None, sha1=sha1, sha256=digest,
+                                 staging=staging_note)
     return _Outcome("DONE", entry=entry, staging=staging_note)
 
 
@@ -972,7 +1007,9 @@ def _copy(gateway: Any, item: Item) -> _Outcome:
         else:
             _worker.internal_streak = 0
             if live.size is not None and getattr(entry, "size", None) is not None and int(entry.size) != int(live.size):
-                return _Outcome("RETRY", "DRIVE_UPLOAD_MISMATCH", ERROR_MESSAGES["DRIVE_UPLOAD_MISMATCH"], method="COPY_WITHIN")
+                # size differs from the source: decide by content (sha1, else bounded download + sha256)
+                return _existing_outcome(gateway, item, gateway.stat(target), size=None, sha1=live.sha1,
+                                         sha256=source_sha256, method="COPY_WITHIN")
             return _Outcome("DONE", entry=entry, method="COPY_WITHIN")
     return _download_upload(gateway, item, live)
 
@@ -1018,7 +1055,7 @@ def _download_upload(gateway: Any, item: Item, live: Any) -> _Outcome:
     size = live.size if live.size is not None else item.size_bytes
     if size is not None and not _staging_has_room(int(size)):
         return _Outcome("RETRY", "DRIVE_STAGING_FULL", ERROR_MESSAGES["DRIVE_STAGING_FULL"], method=method)
-    work = server_local.new_dir(drive_gateway.current_settings().staging_dir, "xfer-")
+    work = _new_xfer_dir()
     try:
         result = gateway.download_to(_drive_path(str(item.src_rel)), work, max_bytes=TRANSFER_MAX_BYTES)
         if item.sha256 and str(result.sha256).lower() != item.sha256.lower():
@@ -1041,7 +1078,25 @@ def _download_upload(gateway: Any, item: Item, live: Any) -> _Outcome:
         outcome.method = method
         return outcome
     finally:
-        server_local.remove_tree(work)
+        _remove_xfer_dir(work)
+
+
+_xfer_lock = threading.Lock()
+_xfer_active: set[Path] = set()      # xfer-* folders of transfers in progress (never cleaned up as orphans)
+XFER_PREFIX = "xfer-"
+
+
+def _new_xfer_dir() -> Path:
+    work = server_local.new_dir(drive_gateway.current_settings().staging_dir, XFER_PREFIX)
+    with _xfer_lock:
+        _xfer_active.add(work)
+    return work
+
+
+def _remove_xfer_dir(work: Path) -> None:
+    with _xfer_lock:
+        _xfer_active.discard(work)
+    server_local.remove_tree(work)
 
 
 @dataclass(frozen=True)
@@ -1087,7 +1142,11 @@ def _cleanup_orphans() -> int:
     """
     settings = drive_gateway.current_settings()
     candidates = server_local.old_dirs(settings.staging_dir, STAGING_PREFIX, ORPHAN_SECONDS)
-    candidates += server_local.old_dirs(settings.staging_dir, "xfer-", ORPHAN_SECONDS)
+    with _xfer_lock:
+        active = set(_xfer_active)
+    # an xfer-* folder of a transfer still running (a day-long download of a huge Final) is never an orphan
+    candidates += [folder for folder in server_local.old_dirs(settings.staging_dir, XFER_PREFIX, ORPHAN_SECONDS)
+                   if folder not in active]
     if not candidates:
         return 0
     cutoff = _now() - timedelta(seconds=STAGING_MAX_AGE_SECONDS)

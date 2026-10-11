@@ -44,7 +44,6 @@ from ..database_connection import ConnectionLike, connect
 from . import case_finalization as cf
 from . import result_registration_paths, spdm_storage
 from . import notifications
-from .drive import gateway as drive_gateway
 from .drive import reads as drive_reads
 from .drive import upload_queue
 from .storage import provider_for_root, server_local
@@ -803,7 +802,7 @@ def latest_completed(conn: ConnectionLike, *, project_id: str, request_id: str,
                      environment: str) -> tuple[dict[str, Any] | None, list[str] | None]:
     """Request progress (P5): newest completed Final and its report file names, from the DB."""
     try:
-        _scope_info = result_registration_paths._scope(conn, project_id, request_id, environment)
+        result_registration_paths._scope(conn, project_id, request_id, environment)   # validates the scope
         _root, _root_id, root_key = result_registration_paths.storage_context(conn)
     except result_registration_paths.ResultRegistrationError as exc:
         raise Error(exc.code, str(exc)) from exc

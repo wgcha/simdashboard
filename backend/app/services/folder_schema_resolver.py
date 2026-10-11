@@ -13,7 +13,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from ..database_connection import ConnectionLike, rows
-from . import (environment_folder_profiles, folder_discovery, folder_discovery_environment,
+from . import (environment_folder_profiles, folder_discovery_environment,
                folder_discovery_scan, spdm_storage)
 
 _APPLIED_STATUSES = ("REGISTERED", "CAPTURING", "COMPLETED", "FAILED")
@@ -32,7 +32,7 @@ class FolderSchemaError(ValueError):
         self.code = code
         self.status_code = status_code
         super().__init__(message)
-from .folder_schema_locations import EnvironmentLocations, resolve_request_locations
+from .folder_schema_locations import resolve_request_locations as resolve_request_locations  # re-exported
 from .storage import provider_for_root
 
 

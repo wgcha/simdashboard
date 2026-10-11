@@ -25,10 +25,10 @@
 ## 3. 분석 방식 (결정 b)
 
 - 입력은 500–1000 MB 한 파일이다. **요청은 분석하지 않는다.** `materials_deck_cache`(root_key, rel_path, solver)를 보고, 저장된 지문·분석기 버전·INCLUDE 파일 지문이 모두 같으면 그 결과를 돌려준다(`analysis.cached=true`).
-- 다르면 백그라운드 작업을 하나 넣고 `analysis.status=QUEUED|RUNNING`, 진행 바이트를 돌려준다. 화면은 1.5초마다 다시 묻고 "분석 대기 중 / 분석 중 · n%"를 보여 준다. 작업은 프로세스당 1개씩 순서대로 돈다.
+- 다르면 백그라운드 작업을 하나 넣고 `analysis.status=QUEUED|RUNNING`, 진행 바이트를 돌려준다. 화면은 1.5초마다 다시 묻고 "분석 대기 중 / 분석 중 · n%"를 보여 준다. 작업은 프로세스당 1개씩 순서대로 돈다. 대기열은 프로세스당 32개까지이며, 가득 차면 새 파일은 넣지 않고 `QUEUED`(대기 순번 33)로 답해 화면의 다음 조회가 다시 넣는다(화면 표시는 같음).
 - 지문: 로컬은 `local:<크기>:<수정 시각 ns>`, 드라이브는 `drive:<version_token>`. 분석기 버전(`PARSER_VERSION`)이 바뀌어도 다시 분석한다.
 - 실패(`FAILED`)도 같은 지문과 그때까지 읽은 INCLUDE 의존성으로 저장한다. 같은 파일을 다시 열면 원인을 보여 주고 **[다시 분석]**(`retry=true`)으로 다시 돈다. INCLUDE 파일이 바뀌어도 저장된 실패는 무효가 된다. 다시 분석은 **파일마다 1분에 한 번**(프로세스 기준)이며, 그 안의 재요청은 저장된 실패와 `analysis.retry_after_seconds`를 돌려준다.
-- **일시 오류는 저장하지 않는다**: 드라이브·스테이징·잠긴 파일 등 `SpdmStorageError`(파일 고유 오류 `SPDM_FILE_TOO_LARGE`·`SPDM_PATH_INVALID` 제외)와 `OSError`는 메모리에만 1분 두고 `FAILED`+`analysis.transient=true`로 보여 준다. 1분 뒤 다음 조회가 다시 넣고, [다시 분석]으로 바로 다시 돌릴 수도 있다.
+- **일시 오류는 저장하지 않는다**: 드라이브·스테이징·잠긴 파일 등 `SpdmStorageError`(파일 고유 오류 `SPDM_FILE_TOO_LARGE`·`SPDM_PATH_INVALID` 제외)와 `OSError`는 메모리에만 1분 두고 `FAILED`+`analysis.transient=true`로 보여 준다. 1분 뒤 다음 조회가 다시 넣고, [다시 분석]으로 바로 다시 돌릴 수도 있다. 메모리의 일시 오류·[다시 분석] 시각 기록은 1시간이 지나면 지운다.
 - 분석 중 파일이 바뀌면 저장하지 않고 다음 조회가 새 지문으로 다시 넣는다. 대기 중에 파일이 바뀐 작업은 읽기(드라이브는 내려받기) 전에 지문을 비교해 멈춘다.
 - 저장은 `INSERT … ON CONFLICT (root_key, rel_path, solver) DO UPDATE` 한 문장(PostgreSQL·DuckDB 공통)이다. 결과 JSON은 `allow_nan=False`로 만들며, 그래도 직렬화할 수 없으면 `MATERIALS_PARSE_FAILED`로 저장한다.
 - 폴링 부담: 사용환경 `deck` 조회는 (root, 의뢰, scene_id, relative_path)별로 찾은 입력 파일을 **20초** 기억해, 1.5초 폴링마다 카탈로그 전체(후보 폴더·소유권)를 다시 훑지 않는다. 권한 검사는 매 요청 그대로이고, 폴더 소유권·후보 파일 변경은 최대 20초 늦게 반영된다. `retry=true`와 파일이 사라진 경우는 항상 새로 찾는다.

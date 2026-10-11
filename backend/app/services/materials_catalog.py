@@ -16,7 +16,7 @@ from typing import Any
 from ..database_connection import ConnectionLike, rows
 from ..parsers.optistruct_deck_parser import OptiStructParseError
 from ..parsers.radioss_deck_parser import RadiossDeckParser
-from . import (folder_discovery_environment, folder_schema_hierarchy, folder_discovery_scan, folder_schema_resolver,
+from . import (folder_schema_hierarchy, folder_discovery_scan, folder_schema_resolver,
                optistruct_materials, result_registration_paths, spdm_storage)
 from .storage import provider_for_root
 
@@ -147,7 +147,6 @@ def _candidate_directories(scene: dict[str, Any], scope: dict[str, Any]) -> list
     scene_path = str(scene["relative_path"])
     if scene.get("kind") == "RESULTS":
         return [scene_path]
-    schema = scope["schema"]
     hierarchy = scene.get("hierarchy", {})
     option = hierarchy.get("run_option")
     execution = hierarchy.get("execution_run")

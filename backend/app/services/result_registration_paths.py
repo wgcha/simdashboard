@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import mimetypes
 import re
 import threading
 from datetime import datetime, timezone
@@ -13,7 +12,6 @@ from uuid import uuid4
 
 from ..database_connection import ConnectionLike, rows
 from ..services import dashboard_capture, folder_discovery_environment, spdm_storage
-from . import usage_source_review
 from .storage import get_storage_provider, provider_for_root
 from .storage.provider import LEGACY
 
@@ -656,8 +654,8 @@ def targets(conn: ConnectionLike, environment: str, principal_projects: set[str]
         [environment])))
     if identities:
         names = rows(conn.execute(
-            f"SELECT p.id AS project_id,p.name AS project_name,a.id AS request_id,a.title AS request_name "
-            f"FROM projects p JOIN analysis_requests a ON a.project_id=p.id"
+            "SELECT p.id AS project_id,p.name AS project_name,a.id AS request_id,a.title AS request_name "
+            "FROM projects p JOIN analysis_requests a ON a.project_id=p.id"
         ))
         records = [item for item in names if (str(item["project_id"]), str(item["request_id"])) in identities]
     items: list[dict[str, Any]] = []

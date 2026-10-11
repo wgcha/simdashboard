@@ -5,7 +5,6 @@ from contextlib import contextmanager
 from typing import Any, Callable
 
 from ...database_connection import ConnectionLike, connect
-from ...domains.drop_videos.ports import DropVideoRepository
 from ...repositories.media_repository import list_drop_videos as list_media_drop_videos
 
 

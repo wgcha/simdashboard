@@ -49,6 +49,8 @@ SPDM이 저장소 root에 만든 새 프로젝트·의뢰 폴더는 관리자 �
 
 권한: `project.data.view`(모든 활성 계정의 회사 권한, 프로젝트·의뢰 목록 조회와 같은 권한)로 호출하며 클라이언트 경로를 받지 않는다. 무엇인가 생성된 경우에만 `FOLDER_ENVIRONMENT_AUTO_DISCOVERED` 감사 기록을 남긴다. 화면은 새 항목이 있을 때 프로젝트 목록과 현재 선택 프로젝트의 의뢰 목록만 다시 읽고 선택은 바꾸지 않으며, 401/403이면 새로고침 전까지 확인을 멈춘다. 새 프로젝트·의뢰는 기존 규칙대로 모든 활성 계정의 목록에 보이며, 쓰기 작업은 전역 관리자 또는 이후 지정된 프로젝트 멤버만 가능하다. 한계: 서버 프로세스가 여러 개면 합치기·backoff는 프로세스별이고 중복 생성은 등록 멱등 키 UNIQUE가 막는다.
 
+끄기: `SIMDASH_AUTO_DISCOVERY=0`(또는 `false`/`off`/`no`; `folder_auto_discovery.enabled()`)이면 `discover`는 아무것도 등록하지 않는다. 격리된 e2e 실행기가 자기 fixture 폴더가 등록되지 않도록 쓰는 값이며, 배포는 기본값(켜짐)을 둔다(`.env.example` 주석 참고).
+
 ## scoped Refresh와 실패
 
 `POST /api/folder-discovery/environments/refresh`는 `project_id`, `request_id`, `environment`를 받아 해당 의뢰 경계만 조사한다. 현재 storage root와 프로필 revision을 확인하고 제한된 scan, 구조·내용 fingerprint, 역할 판정을 마친 뒤 정상 snapshot을 활성화한다. 같은 fingerprint의 재시도는 기존 snapshot을 재사용한다. 내용이 바뀌어 capture가 새로 필요하면 과거 capture를 수정하지 않고 새 버전으로 보존한다. 내용 바이트 해시는 `.csv`, `.json`, `.jpg`, `.jpeg`, `.png`, `.mp4`, `.webm`, `.inc`, `.rad`에 적용한다. 그 외 확장자는 경로·크기·수정 시각으로 변화를 판정하므로 크기와 수정 시각이 모두 같게 바뀐 내용은 탐지하지 못할 수 있다.

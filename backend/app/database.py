@@ -11,7 +11,7 @@ from typing import Any
 import duckdb
 
 from .config import database_settings
-from .database_connection import ConnectionLike, connect, rows
+from .database_connection import ConnectionLike, connect, rows as rows  # rows: re-exported (app.database.rows)
 
 
 def initialize_database() -> None:

@@ -1,7 +1,7 @@
 """Automatic Folder Schema sync for screens that are being viewed.
 
 The Case results and materials screens call this when they open and then about
-every 30 seconds while visible. Users copy files straight into the SPDM share,
+every 60 seconds while visible. Users copy files straight into the SPDM share,
 so the screens must follow the folders without a manual Refresh button.
 
 Two levels keep the periodic check cheap:
@@ -162,8 +162,6 @@ def sync(conn, project_id: str, request_id: str, environment: str, actor: str, *
 def _check_scope(conn, root, root_key: str, key, project_id: str, request_id: str, environment: str, actor: str,
                  memo: dict[str, Any]) -> dict[str, Any]:
     """One check of a request scope; the caller holds the scope lock."""
-    from . import folder_schema_resolver as resolver
-
     snapshot_id = None
     try:
         current, snapshot_id, quick_fp = _quick_current(

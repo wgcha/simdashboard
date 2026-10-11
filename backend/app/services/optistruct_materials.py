@@ -46,6 +46,8 @@ INPUT_SUFFIXES = frozenset({".fem"})
 DEFAULT_MAX_INPUT_BYTES = 2 * 1024 ** 3
 DEFAULT_MAX_PARSE_SECONDS = 1800
 MAX_CONCURRENT = 1
+MAX_QUEUE = 32                         # waiting parses per process; beyond it a view is told QUEUED (not added) and asks again
+STATE_MAX_AGE_SECONDS = 3600.0         # in-memory transient failures / retry stamps older than this are pruned
 _ERROR_MESSAGE_LIMIT = 400
 RETRY_INTERVAL_SECONDS = 60.0          # explicit [다시 분석] at most once per file per minute (process-wide)
 TRANSIENT_BACKOFF_SECONDS = 60.0       # a storage/drive hiccup is shown, not cached, and re-queued after this
@@ -174,15 +176,29 @@ def job_state(key: str) -> dict[str, Any] | None:
                 "queue_position": (list(_queue).index(key) + 1) if key in _queue else 0}
 
 
-def submit(spec: JobSpec) -> dict[str, Any]:
+def submit(spec: JobSpec) -> dict[str, Any] | None:
+    """Queue a parse; ``None`` when the queue is full (not added: the caller answers QUEUED and the view
+    asks again on its next poll, so the queue and memory stay bounded)."""
     with _lock:
+        _prune_locked()
         if spec.key not in _jobs:
+            if len(_queue) >= MAX_QUEUE:
+                return None
             _jobs[spec.key] = JobState(spec=spec, bytes_total=spec.size)
             _queue.append(spec.key)
             _dispatch_locked()
     state = job_state(spec.key)
     assert state is not None
     return state
+
+
+def _prune_locked() -> None:
+    """Drop expired transient failures and retry stamps (bounded memory; the caller holds ``_lock``)."""
+    now = time.monotonic()
+    for key in [key for key, item in _transient.items() if item["until"] + STATE_MAX_AGE_SECONDS <= now]:
+        _transient.pop(key, None)
+    for key in [key for key, at in _last_retry.items() if now - at >= STATE_MAX_AGE_SECONDS]:
+        _last_retry.pop(key, None)
 
 
 def _dispatch_locked() -> None:
@@ -439,6 +455,7 @@ def _accept_retry(key: str) -> tuple[bool, int | None]:
         if last is not None and now - last < RETRY_INTERVAL_SECONDS:
             return False, max(1, int(RETRY_INTERVAL_SECONDS - (now - last) + 0.999))
         _last_retry[key] = now
+        _prune_locked()
         if len(_last_retry) > 4096:   # bounded: drop entries older than the interval
             for stale in [item for item, at in _last_retry.items() if now - at >= RETRY_INTERVAL_SECONDS]:
                 _last_retry.pop(stale, None)
@@ -502,6 +519,9 @@ def deck_status(conn: ConnectionLike, *, root: Any, root_key: str, rel_path: str
         running = submit(JobSpec(key=key, root=root, root_key=root_key, rel_path=rel_path, fingerprint=fp, size=size,
                                  request_relative_path=request_relative_path, blob_sha256=blob,
                                  resolve_include=resolve_include))
+        if running is None:
+            # bounded queue: shown as waiting behind the full queue (same screen state); the view's poll submits again
+            return _analysis("QUEUED", rel_path=rel_path, size=size, queue_position=MAX_QUEUE + 1), None, files
     return _analysis(running["status"], rel_path=rel_path, size=size, bytes_done=running["bytes_done"],
                      bytes_total=running["bytes_total"], queue_position=running["queue_position"]), None, files
 

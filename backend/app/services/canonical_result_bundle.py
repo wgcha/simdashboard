@@ -175,9 +175,9 @@ def parse_ready_marker_bytes(payload: bytes) -> ReadyMarkerV1:
     if not isinstance(raw, dict):
         raise _marker_error("MALFORMED", "readiness marker는 JSON 객체여야 합니다.")
     actual = frozenset(raw)
-    if unknown := actual - _MARKER_FIELDS:
+    if actual - _MARKER_FIELDS:
         raise _marker_error("UNKNOWN_FIELD", "readiness marker에 허용되지 않은 필드가 있습니다.")
-    if missing := _MARKER_FIELDS - actual:
+    if _MARKER_FIELDS - actual:
         raise _marker_error("MISSING_FIELD", "readiness marker 필드가 누락되었습니다.")
     marker = ReadyMarkerV1(**raw)
     _validate_marker(marker)

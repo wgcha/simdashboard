@@ -18,7 +18,7 @@ import sys
 import time
 from contextlib import ExitStack, contextmanager
 from pathlib import Path, PurePosixPath
-from typing import Any, BinaryIO, Callable, Iterable, Iterator, Literal, NamedTuple
+from typing import Any, Callable, Iterable, Iterator, Literal, NamedTuple
 
 from .provider import (
     FINAL, LEGACY, NOT_ALLOWED_WRITE, SKELETON, WORKING, Entry, SpdmStorageError, StorageError, check_write,

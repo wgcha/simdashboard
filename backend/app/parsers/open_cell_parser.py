@@ -1,5 +1,5 @@
 import csv
-from typing import Dict, List, Any
+from typing import Dict, Any
 from pathlib import Path
 
 class OpenCellParser:

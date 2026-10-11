@@ -20,8 +20,7 @@ from __future__ import annotations
 
 import hashlib
 from contextlib import contextmanager, nullcontext
-from datetime import datetime, timezone
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Iterator, Literal
 
 from .provider import Entry, SpdmStorageError
@@ -286,6 +285,18 @@ class DriveStorageProvider:
         version, masked = self._file_version(rel)
         with reads.open_stream(self.root.spdm_root, rel, version, masked=masked, max_bytes=512 * 1024 * 1024) as stream:
             yield stream
+
+    def export_copy(self, rel_path: str) -> Path:
+        """Server copy of the file (``<staging>/download-*``) for a response body; the caller removes it.
+
+        Unlike :meth:`open_read`, no read session stays open after this returns, so the
+        copy can be served after the request context ended (Starlette file responses).
+        """
+        from ..drive import reads
+
+        rel = self._rel(rel_path)
+        version, masked = self._file_version(rel)
+        return reads.export_copy(self.root.spdm_root, rel, version, masked=masked, max_bytes=512 * 1024 * 1024)
 
     def read_small_nofollow(self, rel_path: str, *, max_bytes: int, before_read=None) -> bytes | None:
         try:

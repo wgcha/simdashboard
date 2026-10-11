@@ -354,8 +354,8 @@ def update_link(conn: ConnectionLike, link_id: str, project_id: str, request_id:
     ).fetchone()
     if not current_row:
         raise paths.ResultRegistrationError("RESULT_LOCATION_LINK_NOT_FOUND", "저장한 결과 위치 연결을 찾을 수 없습니다.")
-    current_root_key, current_path, current_key, current_revision = (
-        str(current_row[0]), str(current_row[1]), str(current_row[2]), int(current_row[3]))
+    current_root_key, current_path, current_revision = (
+        str(current_row[0]), str(current_row[1]), int(current_row[3]))
     if current_revision != expected_revision:
         raise paths.ResultRegistrationError("RESULT_LOCATION_LINK_STALE", "다른 화면에서 연결을 수정했습니다. 목록을 새로 고친 뒤 다시 시도하세요.")
     candidate = _find_candidate(candidates, normalized)

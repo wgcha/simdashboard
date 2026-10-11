@@ -387,7 +387,6 @@ def revalidate(item_id: str, payload: RevalidateBody, request: Request) -> dict[
         digest = hashlib.sha256(content).hexdigest()
         if digest != item.get("source_sha256"):
             _stale_and_raise(conn, item_id, payload.expected_revision, "SEMANTIC_REVIEW_SOURCE_STALE", request.state.principal.user_id)
-        candidates = _json(item["candidates"]) if item.get("candidates") is not None else []
         recipe_id, version = payload.recipe_id or item.get("selected_recipe_id"), payload.recipe_version or item.get("selected_recipe_version")
         if (payload.recipe_id is None) != (payload.recipe_version is None):
             raise HTTPException(422, {"code": "SEMANTIC_REVIEW_RECIPE_REQUIRED"})

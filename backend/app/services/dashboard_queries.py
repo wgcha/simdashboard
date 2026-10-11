@@ -6,7 +6,7 @@ import logging
 import math
 from typing import Any
 
-from .dashboard_capture import DashboardCaptureError, _decode, get_capture
+from .dashboard_capture import DashboardCaptureError, _decode
 
 EDGES = {"LEFT": "LH", "RIGHT": "RH", "TOP": "TOP", "BOTTOM": "BOT"}
 USAGE_KEYS = {

@@ -25,6 +25,10 @@ export function NotificationBell() {
   const [error, setError] = useState('')
   const [unavailable, setUnavailable] = useState(false)
   const root = useRef<HTMLDivElement>(null)
+  // The poll/focus effect reads the dropdown state through a ref so it is not torn down and
+  // re-created (with a fresh interval) every time the dropdown opens or closes.
+  const openRef = useRef(open)
+  openRef.current = open
 
   const refreshCount = useCallback(async () => {
     try {
@@ -49,7 +53,7 @@ export function NotificationBell() {
     void refreshCount()
     const timer = window.setInterval(() => { if (document.visibilityState !== 'hidden') void refreshCount() }, NOTIFICATION_POLL_MS)
     const onFocus = () => { void refreshCount() }
-    const onChanged = () => { void refreshCount(); if (open) void loadRecent() }
+    const onChanged = () => { void refreshCount(); if (openRef.current) void loadRecent() }
     window.addEventListener('focus', onFocus)
     window.addEventListener(NOTIFICATIONS_CHANGED_EVENT, onChanged)
     return () => {
@@ -57,7 +61,7 @@ export function NotificationBell() {
       window.removeEventListener('focus', onFocus)
       window.removeEventListener(NOTIFICATIONS_CHANGED_EVENT, onChanged)
     }
-  }, [loadRecent, open, refreshCount])
+  }, [loadRecent, refreshCount])
 
   useEffect(() => {
     if (!open) return

@@ -12,9 +12,9 @@ from fastapi import HTTPException
 
 from ..database_connection import rows
 from ..repositories import semantic_mapping as mapping_repository
-from . import spdm_storage
+from . import spdm_storage  # noqa: F401 - used as folder_discovery.spdm_storage
 from .folder_discovery_plan import build_plan, folded
-from .folder_discovery_scan import browse, normal, root_identity, scan
+from .folder_discovery_scan import normal, root_identity, scan
 from .storage import get_storage_provider
 from .semantic_mapping import semantic_transaction
 

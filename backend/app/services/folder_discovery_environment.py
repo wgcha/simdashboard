@@ -11,6 +11,7 @@ import re
 import time
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
+from typing import Any
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from ..database_connection import rows
@@ -904,7 +905,7 @@ def _interpret(raw, root_key, environment, project_id, request_id, rules=None, *
                                        "final_relative_path": anchor}
     for source in raw:
         node = dict(source); parent = context.get(node["parent_path"], {})
-        name = node["name"]; folded = name.casefold()
+        name = node["name"]
         working_path = parent.get("working_relative_path")
         working_level = (len([part for part in str(node.get("relative_path") or "").split("/") if part])
                          - len([part for part in str(working_path or "").split("/") if part])) if working_path else None

@@ -356,6 +356,34 @@ def _ready(client, request_id, scene_id, **extra):
     return body
 
 
+@pytest.mark.unit
+def test_parse_queue_is_bounded_and_in_memory_state_expires(monkeypatch):
+    """A full queue does not grow (the view sees QUEUED and asks again); transient failures and retry stamps are pruned."""
+    optistruct_materials.reset_for_tests()
+    monkeypatch.setattr(optistruct_materials, "MAX_CONCURRENT", 0)      # nothing runs: the queue only fills
+    monkeypatch.setattr(optistruct_materials, "MAX_QUEUE", 2)
+    specs = [optistruct_materials.JobSpec(key=f"k{i}", root=None, root_key="r", rel_path=f"{i}.fem", fingerprint="fp",
+                                          size=10, request_relative_path="req") for i in range(3)]
+    try:
+        first, second = optistruct_materials.submit(specs[0]), optistruct_materials.submit(specs[1])
+        assert first["queue_position"] == 1 and second["queue_position"] == 2
+        assert optistruct_materials.submit(specs[2]) is None                       # bounded
+        assert optistruct_materials.submit(specs[1])["queue_position"] == 2        # already queued: unchanged
+        now = time.monotonic()
+        with optistruct_materials._lock:
+            optistruct_materials._transient["old"] = {"fingerprint": "fp", "error_code": "X", "error_message": "m",
+                                                      "until": now - optistruct_materials.STATE_MAX_AGE_SECONDS - 1}
+            optistruct_materials._transient["fresh"] = {"fingerprint": "fp", "error_code": "X", "error_message": "m",
+                                                        "until": now + 10}
+            optistruct_materials._last_retry["stale"] = now - optistruct_materials.STATE_MAX_AGE_SECONDS - 1
+        assert optistruct_materials._accept_retry("f") == (True, None)
+        assert set(optistruct_materials._transient) == {"fresh"} and "stale" not in optistruct_materials._last_retry
+    finally:
+        with optistruct_materials._lock:
+            optistruct_materials._queue.clear(); optistruct_materials._jobs.clear()
+            optistruct_materials._transient.clear(); optistruct_materials._last_retry.clear()
+
+
 @pytest.fixture
 def parse_counter(monkeypatch):
     optistruct_materials.reset_for_tests()

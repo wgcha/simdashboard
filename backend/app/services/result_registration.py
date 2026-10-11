@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from ..database_connection import ConnectionLike, rows
 from ..media_policy import validate_media_metadata
-from . import dashboard_capture, result_registration_locations, result_registration_paths as paths, spdm_storage, usage_source_review
+from . import dashboard_capture, result_registration_locations, result_registration_paths as paths, usage_source_review
 from .storage import provider_for_root
 from .storage.provider import LEGACY
 
@@ -347,7 +347,7 @@ def reconcile_schema_refresh_failures(conn: ConnectionLike, project_id: str, req
                                       environment: str, snapshot_id: str, status: str,
                                       actor: str) -> int:
     """Clear stored publication warnings after a later scoped refresh succeeds."""
-    from . import folder_discovery_environment, folder_schema_resolver
+    from . import folder_schema_resolver
 
     root, _root_id, root_key = paths.storage_context(conn)
     current = folder_schema_resolver.active_refresh_snapshot(conn, root_key, project_id, request_id, environment)
@@ -511,7 +511,7 @@ def upload_files(conn: ConnectionLike, draft_id: str, files: list[tuple[str, byt
         if row["status"] not in _MUTABLE_DRAFT_STATES:
             raise ResultRegistrationError("RESULT_DRAFT_IMMUTABLE", "승인되어 등록이 시작된 초안은 파일을 변경할 수 없습니다.")
         context = row["context_json"] or {}
-        target = _current_target(conn, project_id=str(row["project_id"]), request_id=str(row["request_id"]),
+        _current_target(conn, project_id=str(row["project_id"]), request_id=str(row["request_id"]),
                                  environment=str(row["environment"]), case_relative_path=str(row["case_relative_path"]),
                                  result_relative_path=str(row["result_relative_path"]), expected_root_id=str(row["storage_root_id"]),
                                  expected_context=context)
@@ -1005,7 +1005,7 @@ def _mirror_files(conn: ConnectionLike, row: dict[str, Any], approval: dict[str,
                 reused.append(local)
                 continue
             return "MIRROR_CONFLICT", {"code": "MIRROR_CONFLICT", "message": "같은 이름에 다른 내용의 파일이 있어 원본 폴더에 저장하지 않았습니다.", "relative_path": full_relative}
-        except OSError as exc:
+        except OSError:
             return "MIRROR_FAILED", {"code": "MIRROR_WRITE_FAILED", "message": "DB 등록은 완료됐지만 SPDM 폴더에 원본을 저장하지 못했습니다.",
                                       "relative_path": full_relative}
     return "PUBLISHED", {"copied": copied, "reused": reused}

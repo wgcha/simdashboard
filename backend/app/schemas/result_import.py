@@ -1,7 +1,7 @@
 from datetime import datetime
 from enum import Enum
 from typing import Any, List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 class ResultType(str, Enum):
     OPEN_CELL_STRESS = "OPEN_CELL_STRESS"
