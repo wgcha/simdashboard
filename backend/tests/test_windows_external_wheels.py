@@ -80,3 +80,18 @@ def test_windows_contract_ci_runs_the_self_test() -> None:
     workflow = _read(".github/workflows/windows-deployment-contract.yml")
     assert "scripts\\windows\\external-wheels-self-test.ps1" in workflow
     assert "tests/test_windows_external_wheels.py" in workflow
+
+
+def test_backend_processes_write_utf8_logs() -> None:
+    """Issue #51: Korean log text was mojibake in uvicorn-error.log (cp949 console code page)."""
+    start = _read("start.ps1")
+    assert "$env:PYTHONUTF8 = '1'" in start and "$env:PYTHONIOENCODING = 'utf-8'" in start
+    assert start.index("$env:PYTHONUTF8 = '1'") < start.index("'app.main:app'") < start.index("$env:PYTHONUTF8 = $previousPythonUtf8")
+    installer = _read("deploy/windows/offline/install.ps1")
+    api_line = next(line for line in installer.splitlines() if "$pythonPathLine = if ($Name -eq 'SimulationWorkbenchApi')" in line)
+    assert '<env name="PYTHONUTF8" value="1" />' in api_line and '<env name="PYTHONIOENCODING" value="utf-8" />' in api_line
+    for self_test, needle in (("scripts/windows/start-stop-identity-self-test.ps1", "PYTHONUTF8"),
+                              ("scripts/windows/offline-installer-self-test.ps1", 'name="PYTHONUTF8"')):
+        assert needle in _read(self_test)
+    assert "Get-Content -Encoding UTF8" in _read("docs/features/scx-drive.md")
+    assert "PYTHONUTF8" in _read("docs/windows-deployment-policy.md")

@@ -63,6 +63,9 @@
 | `SIMDASH_SCX_STAGING_DIR` | — | `<WORK_DIR>\staging` | 다운로드·업로드 임시 저장소. 대시보드 서비스 계정만 접근 |
 | `SIMDASH_SCX_MAX_CONCURRENCY` | — | `1` | 워커 동시 SDK 호출 수(1–8) |
 | `SIMDASH_SCX_CACHE_TTL_SECONDS` | — | `30` | 어댑터 목록·조회 캐시(0–3600초) |
+| `SIMDASH_DRIVE_SCAN_MAX_SECONDS` | — | `180` | 드라이브 폴더 조사 시간 상한(15–3600초). 의뢰 폴더 미리 목록 읽기·조사·내용 지문에 적용. local 모드는 15초 그대로. 범위 밖·숫자 아님은 경고 로그 후 기본값 |
+| `SIMDASH_DRIVE_SCAN_MAX_ENTRIES` | — | `200000` | 드라이브 폴더 조사 전체 항목 수 상한(1000–2000000). local 50000 |
+| `SIMDASH_DRIVE_SCAN_MAX_FOLDERS` | — | `20000` | 드라이브 폴더 조사 폴더 수·미리 목록 읽기 수 상한(100–200000). local 5000 |
 
 어댑터 `AdapterConfig.drive_root`는 항상 `~`로 넘긴다. SPDM 루트는 대시보드가 그 아래 상대 경로로 관리한다(integration 03 §5).
 
@@ -208,6 +211,14 @@
 - **큰 자산:** 드라이브 모드의 수집은 32 MiB를 넘는 영상·이미지를 내려받지 않고 `UNPROCESSED_FILE:…:ASSET_TOO_LARGE` 품질 이슈로 남긴 채 나머지 결과를 수집한다(전에는 Case 수집 전체가 `DASHBOARD_ASSET_TOO_LARGE`로 실패). local 모드와 파일·값 검수 경로는 그대로 거부한다.
 - 일부 단계만 있는 구조(빈 Case, 빈 평가 폴더, Case 바로 아래 파일)도 있는 Case·Scene을 그대로 보여 준다(회귀 시험 `tests/test_drive_usage_sync.py`).
 
+이슈 #51 후속(2026-10-12, `FOLDER_SCHEMA_SCAN_INCOMPLETE` "최근 폴더 조사가 완료되지 않았습니다"가 60초마다 반복):
+
+- **원인:** 읽기 세션 안의 폴더 조사는 연결을 쥔 채 드라이브를 기다리지 않으려고 빠진 목록을 회차마다(한 회차에 4단계·600개) 받아 다시 실행한다(최대 8회). 큰 의뢰 폴더의 수동 "다시 조사"가 회차를 다 써 `DRIVE_READ_NOT_PREPARED` → 조사 항목 `PATH_UNAVAILABLE` → `INCOMPLETE`로 저장됐고, 이 저장 조사가 의뢰에 연결된 최신 조사가 되어 활성 스냅샷이 아직 없는 의뢰의 모든 새로고침을 영구히 막았다. 첫 새로고침은 또 등록 조사 범위(프로젝트 전체, 형제 의뢰 포함)를 다시 조사해 같은 한도에 걸릴 수 있었다.
+- **미리 목록 읽기:** `POST …/environments/scan`(수동 조사)은 조사 전에 대상 폴더 트리 전체를 연결 없이 목록으로 받아 둔다(`drive.reads.prefetch_subtree`, 위 `SIMDASH_DRIVE_SCAN_MAX_*` 상한). 상한에 걸려 남은 폴더는 기존 회차 방식으로 받는다. 60초 동기화는 분류 단계가 이미 의뢰 트리(Final 보관 내용 제외)를 연결 없이 모두 읽으므로 추가로 읽지 않는다(매분 Final 전체를 다시 읽는 부하를 피함).
+- **저장된 INCOMPLETE 조사:** 등록·역할 근거는 COMPLETE 조사만 쓰므로 INCOMPLETE 저장 조사는 환경 규칙(프로필)만 제공하고 새로고침을 막지 않는다. 판단은 **현재 의뢰 범위 조사**로 하며, 그것이 COMPLETE이면 진행해 활성 스냅샷을 만든다(이후 새로고침은 스냅샷 기준). 저장 조사 행은 고치지 않는다. 현재 조사가 INCOMPLETE일 때만 실패하고 로그에 첫 조사 항목(`issues=PATH_UNAVAILABLE:<경로>, …`)을 남긴다.
+- **의뢰 범위 재조사:** 저장 조사가 의뢰보다 위(프로젝트)에서 시작했으면 현재 조사는 의뢰 폴더만 한다(역할은 경로 깊이로 정해져 결과가 같다). local 모드도 같다(형제 의뢰의 접근 불가 폴더가 이 의뢰를 막던 문제).
+- **부분 구조는 반영하지 않음(결정):** 한 하위 트리만 조사하지 못한 INCOMPLETE 조사로 나머지 Scene을 반영하는 것은 하지 않는다. 조사하지 못한 트리가 "없어진 것"으로 읽혀 등록 자료를 지우거나 덮을 위험이 있고, 드라이브에는 연결 폴더(`REPARSE`)가 없으며 깊이 64 한도(`DEPTH_LIMIT`)는 실제로 생기지 않아 이득이 작다. 대신 실패 로그에 원인 항목과 경로를 남긴다.
+
 ### 8.6 화면 (데스크톱)
 
 - Case 결과·소재 탭의 폴더 자동 확인 줄: `원본 변경 n · 확인 필요 · 원본 없음 m` 배지 → **드라이브 원본 변경** 대화상자(파일·상태·등록 버전·드라이브 값, 파일별/전체 [새 버전 등록]·[무시], 권한이 없으면 목록만).
@@ -235,6 +246,8 @@
 
 - `worker.log`는 어댑터가 작업자를 `subprocess.Popen`으로 시작하면서 stderr를 버리거나(`DEVNULL`) 물려받게(`None`) 둘 때 대시보드가 그 stderr를 파이프로 받아 기록한다(`drive/worker_log.py`; 어댑터 모듈의 `subprocess`만 바꾸며 다른 프로세스에는 영향 없음). 어댑터가 stderr를 직접 읽으면 손대지 않는다. 어댑터가 다른 방식으로 작업자를 띄우면 이 파일은 생기지 않는다 — 그때는 어댑터 쪽 로그를 본다.
 - 응답 코드 읽기: `FOLDER_SCHEMA_*`는 폴더 구조·규칙 문제(메시지가 원인), `DRIVE_*`/`SPDM_*`는 드라이브 호출 문제(위 읽기 로그의 같은 시각 줄), `DRIVE_READ_NOT_PREPARED`는 읽기 세션 회차(8회)를 넘긴 경우다.
+- 조사 미완료(`FOLDER_SCHEMA_SCAN_INCOMPLETE`)는 같은 줄 끝에 `issues=<코드>:<경로>, …`(처음 3개와 나머지 수)를 붙인다. 수동 조사가 미완료로 저장되면 `WARNING Folder scan INCOMPLETE: path=… issues=…`(로거 `app.services.folder_discovery_environment`). `SCAN_LIMIT`·`ENTRY_LIMIT`는 위 `SIMDASH_DRIVE_SCAN_MAX_*`, `PATH_UNAVAILABLE`은 같은 시각의 드라이브 읽기 로그를 본다.
+- **로그 인코딩:** 서버 로그(`uvicorn.log`·`uvicorn-error.log`, 오프라인 설치 서비스 로그)는 UTF-8이다(`start.ps1`과 오프라인 설치의 API 서비스가 `PYTHONUTF8=1`·`PYTHONIOENCODING=utf-8`로 백엔드를 띄움). 한국어 메시지는 `Get-Content -Encoding UTF8 backend\uvicorn-error.log -Tail 200`(실시간은 `-Wait` 추가)으로 읽는다. 인코딩 없이 `Get-Content`(Windows PowerShell 5.1 기본 cp949)로 읽거나 이 변경 전에 쓴 줄은 `�ֱ� ���� …`처럼 깨져 보인다.
 - 관리 › 드라이브 관리 › **드라이브 점검**은 조회 전용(stat·list·작은 파일 download)이라 통과해도 동기화 실패 원인(구조·크기 한도·수집)은 위 로그로 확인한다.
 
 ## 9. 코드 위치와 경계

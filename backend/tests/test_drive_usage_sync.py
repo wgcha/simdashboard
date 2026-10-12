@@ -138,6 +138,126 @@ def test_local_mode_keeps_the_content_fingerprint_bound(tmp_path):
     assert refused.value.code == "FOLDER_SCHEMA_CONTENT_FILE_LIMIT"
 
 
+# --- 1b. scan limits on a slow drive (issue #51 follow-up) ------------------------------------------
+
+def _rescan(scx: Scx, project_id: str, request_id: str, request: str) -> dict:
+    """The manual "의뢰 폴더 다시 조사" (stored scan linked to the request)."""
+    return scx.post(ENV + "/scan", {"environment": "USAGE", "relative_path": request,
+                                    "project_id": project_id, "request_id": request_id})
+
+
+def test_incomplete_stored_rescan_no_longer_blocks_every_sync(scxw, monkeypatch, caplog):
+    """Field case: on a slow drive a manual re-scan ran out of read-session rounds (each round lists only a
+    few levels), was stored INCOMPLETE as the latest scan linked to the request and then failed every 60 s
+    sync with FOLDER_SCHEMA_SCAN_INCOMPLETE ("최근 폴더 조사가 완료되지 않았습니다")."""
+    from app.services import folder_discovery_scan
+
+    project_id, request_id, request = _usage_request(scxw, monkeypatch)
+    for index in range(10):
+        scxw.add(f"{request}/Working/Assy_Slow_{index}/Slope_Angle/{CSV}", CSV_BYTES)
+    monkeypatch.setattr(drive_reads, "LIST_PREFETCH_DEPTH", 0)     # one folder per round, as on a big tree
+    monkeypatch.setattr(drive_reads, "LIST_PREFETCH_MAX", 1)
+    scxw.drive.call_delay_s["list_dir"] = 0.02
+    monkeypatch.setattr(folder_discovery_scan, "DRIVE_DEFAULT_MAX_SECONDS", 0.01, raising=False)   # up-front listing cut short
+    caplog.set_level(logging.INFO)
+    stored = _rescan(scxw, project_id, request_id, request)
+    assert stored["status"] == "INCOMPLETE", stored
+    assert {item["code"] for item in stored["issues"]} == {"PATH_UNAVAILABLE"}, stored["issues"]
+    assert any("Folder scan INCOMPLETE" in record.getMessage() and "PATH_UNAVAILABLE:" in record.getMessage()
+               for record in caplog.records), "the incomplete scan names its first issues"
+
+    # The stored INCOMPLETE scan only supplies the profile now; the current request scan is complete.
+    synced = _usage_sync(scxw, project_id, request_id)
+    assert synced["status"] == "REFRESHED", synced
+    labels = {item["label"]: item["match_status"] for item in _catalog(scxw, request_id)["cases"]}
+    assert len(labels) == 10 and set(labels.values()) == {"CAPTURED"}, labels
+    with connect() as conn:                  # the stored record is kept as it was (nothing rewritten)
+        status = conn.execute("SELECT status FROM folder_environment_scans WHERE id=?", [stored["id"]]).fetchone()[0]
+    assert status == "INCOMPLETE"
+    assert _usage_sync(scxw, project_id, request_id)["status"] == "UNCHANGED"
+
+    # With the drive bound (default 180 s) the scan route lists the whole tree first: no rounds run out.
+    monkeypatch.setattr(folder_discovery_scan, "DRIVE_DEFAULT_MAX_SECONDS", 180)
+    again = _rescan(scxw, project_id, request_id, request)
+    assert (again["status"], again["issues"]) == ("COMPLETE", []), again
+    scxw.drive.call_delay_s.clear()
+
+
+def test_incomplete_current_scan_logs_its_first_issues(caplog):
+    from app.services import folder_schema_resolver as resolver
+
+    folder_auto_sync.reset_for_tests()
+    caplog.set_level(logging.WARNING, logger="app.services.folder_auto_sync")
+    issues = [{"relative_path": f"P/R/Working/C{index}", "code": "PATH_UNAVAILABLE", "message": "x"} for index in range(5)]
+    error = resolver.FolderSchemaError("FOLDER_SCHEMA_SCAN_INCOMPLETE", "현재 의뢰 폴더를 모두 확인할 수 없습니다.", 422,
+                                       issues=issues)
+    assert folder_auto_sync.log_outcome("p", "r", "USAGE", {"status": "FAILED", "code": error.code,
+                                                             "message": str(error)}, error)
+    [line] = [record.getMessage() for record in caplog.records]
+    assert "issues=PATH_UNAVAILABLE:P/R/Working/C0, PATH_UNAVAILABLE:P/R/Working/C1, PATH_UNAVAILABLE:P/R/Working/C2 (+2)" in line
+    folder_auto_sync.reset_for_tests()
+
+
+def test_scan_prefetch_is_authorised_before_any_drive_listing(scxw, monkeypatch):
+    from fastapi import HTTPException
+
+    from app.routers import folder_discovery_environment as environment_router
+
+    def refuse(request, conn):
+        raise HTTPException(403, {"code": "GLOBAL_ADMIN_REQUIRED", "message": "x"})
+
+    monkeypatch.setattr(environment_router, "admin", refuse)
+    before = len([call for call in scxw.drive.calls if call[0] == "list_dir"])
+    response = scxw.client.post(ENV + "/scan", json={"environment": "USAGE", "relative_path": ""})
+    assert response.status_code == 403, response.text
+    assert len([call for call in scxw.drive.calls if call[0] == "list_dir"]) == before
+
+
+def test_drive_scan_limits_are_larger_and_configurable(scxw, monkeypatch):
+    from app.services import folder_discovery_scan
+    from app.services.storage import provider_for_root
+    from app.services.spdm_storage import storage_root
+
+    with connect() as conn:
+        root = storage_root(conn).root
+    fs = provider_for_root(root)
+    limits = folder_discovery_scan.limits_for(fs)
+    assert (limits.max_seconds, limits.max_entries, limits.max_folders) == (180, 200_000, 20_000)
+    monkeypatch.setenv("SIMDASH_DRIVE_SCAN_MAX_SECONDS", "600")
+    monkeypatch.setenv("SIMDASH_DRIVE_SCAN_MAX_ENTRIES", "500000")
+    monkeypatch.setenv("SIMDASH_DRIVE_SCAN_MAX_FOLDERS", "50000")
+    limits = folder_discovery_scan.limits_for(fs)
+    assert (limits.max_seconds, limits.max_entries, limits.max_folders) == (600, 500_000, 50_000)
+    monkeypatch.setenv("SIMDASH_DRIVE_SCAN_MAX_SECONDS", "3")          # below 15: default, never 3 s
+    monkeypatch.setenv("SIMDASH_DRIVE_SCAN_MAX_ENTRIES", "many")
+    limits = folder_discovery_scan.limits_for(fs)
+    assert (limits.max_seconds, limits.max_entries) == (180, 200_000)
+
+
+def test_local_scan_limits_are_unchanged(tmp_path, monkeypatch):
+    from app.services import folder_discovery_scan
+    from app.services.storage import provider_for_root
+
+    monkeypatch.setenv("SIMDASH_DRIVE_SCAN_MAX_SECONDS", "600")       # drive settings do not apply locally
+    limits = folder_discovery_scan.limits_for(provider_for_root(tmp_path))
+    assert (limits.max_seconds, limits.max_entries, limits.max_folders) == (15, 50_000, 5_000)
+
+
+def test_first_refresh_rescans_only_the_request_not_its_siblings(scxw, monkeypatch):
+    """The registration scan covers the whole project; the first refresh re-scanned all of it, so an
+    unreadable or slow sibling request made this request's refresh INCOMPLETE."""
+    project_id, request_id, request = _usage_request(scxw, monkeypatch)
+    scxw.add(f"{request}/Working/Assy_Own/Slope_Angle/{CSV}", CSV_BYTES)
+    sibling = f"{request.split('/')[0]}/WR-00000802_사용 환경 시뮬레이션/Working"
+    scxw.drive.add_dir(scxw.path(sibling))
+    scxw.drive.fail_path[("list_dir", scxw.path(sibling))] = [ErrorCode.FORBIDDEN] * 50
+    synced = _usage_sync(scxw, project_id, request_id)
+    assert synced["status"] == "REFRESHED", synced
+    assert "Assy_Own" in {item["label"] for item in _catalog(scxw, request_id)["cases"]}
+    assert not any(rel == scxw.path(sibling) for op, rel in scxw.drive.calls if op == "list_dir")
+    scxw.drive.fail_path.clear()
+
+
 # --- 2. logging -----------------------------------------------------------------------------------------
 
 def test_failed_sync_logs_one_warning_per_scope_and_code(scxw, monkeypatch, caplog):

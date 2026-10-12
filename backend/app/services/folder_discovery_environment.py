@@ -20,7 +20,7 @@ from .drive import reads as drive_reads
 from . import environment_folder_profiles
 from . import folder_discovery as legacy
 from . import spdm_storage
-from .folder_discovery_scan import MAX_SECONDS, relevant_content_fingerprint, root_identity, scan, stat_fingerprint
+from .folder_discovery_scan import issue_summary, limits_for_root, relevant_content_fingerprint, root_identity, scan, stat_fingerprint
 from .environment_folder_profiles import resolve_role
 from . import usage_source_review
 from . import notifications
@@ -361,13 +361,16 @@ def refresh_scope(conn, root, project_id: str, request_id: str, environment: str
             )
             previous_schema = {**previous_schema, "confirmed_roles": prior_confirmed}
 
-    refresh_deadline = time.monotonic() + MAX_SECONDS
+    refresh_deadline = time.monotonic() + limits_for_root(root).max_seconds
     try:
         fresh = scan(root, request_path, skip_descendants=scan_skip_for_rules(profile["rules"], request_path))
     except (OSError, ValueError, spdm_storage.SpdmStorageError) as exc:
         raise resolver.FolderSchemaError("FOLDER_SCHEMA_SCAN_UNAVAILABLE", "현재 의뢰 폴더를 안전하게 조사할 수 없습니다.", 422) from exc
     if fresh.get("status") != "COMPLETE":
-        raise resolver.FolderSchemaError("FOLDER_SCHEMA_SCAN_INCOMPLETE", "현재 의뢰 폴더를 모두 확인할 수 없습니다.", 422)
+        # Partial trees are not activated (issue #51 decision, docs/features/scx-drive.md §8.8): an
+        # unscanned subtree would read as removed. The issues are logged by the sync caller.
+        raise resolver.FolderSchemaError("FOLDER_SCHEMA_SCAN_INCOMPLETE", "현재 의뢰 폴더를 모두 확인할 수 없습니다.", 422,
+                                         issues=fresh.get("issues"))
     content_entries: list = []
     depth_rules = environment_folder_profiles.is_depth_rules(profile["rules"])
     # DEPTH_V1 reads the Final branch for its roles, but Final is never a
@@ -801,6 +804,10 @@ def save_scan(conn, root, relative_path: str, environment: str, profile_id: str 
     result = scan(root, relative_path, skip_descendants=_skip_with_boundaries(scan_skip_for_rules(profile["rules"], request_path), skip_paths))
     nodes = _interpret(result["nodes"], root_key, environment, project_id, request_id,
                        profile["rules"], seed_request_path=request_path)
+    if result["status"] != "COMPLETE":
+        _logger.warning("Folder scan INCOMPLETE: path=%s environment=%s project=%s request=%s issues=%s",
+                        relative_path or ".", environment, project_id or "-", request_id or "-",
+                        issue_summary(result["issues"]))
     scan_id = ident("environment-scan")
     created_at = now()
     conn.execute("INSERT INTO folder_environment_scans(id,root_key,relative_path,environment,profile_id,profile_revision,project_id,request_id,status,tree_json,issues_json,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
