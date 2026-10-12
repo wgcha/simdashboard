@@ -381,6 +381,13 @@ def get_drive_gateway() -> DriveGatewayLike | None:
             adapter=adapter_config,
             work_dir=settings.work_dir,
         )
+        # Issue #51: keep the worker's stderr in <work_dir>/worker.log (rotating, redacted).
+        from . import worker_log
+
+        try:
+            worker_log.install(adapter, settings.work_dir)
+        except Exception:  # noqa: BLE001 - diagnostics must never stop the drive
+            logger.warning("SCX worker stderr capture could not be installed", exc_info=True)
         _state.gateway = adapter.WorkerDriveGateway(worker_config, store)
         _state.gateway_store = store
         return _state.gateway

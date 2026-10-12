@@ -27,6 +27,7 @@ not detected; a later change or a manual Refresh in the folder screen picks it u
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import time
 from datetime import datetime, timezone
@@ -38,6 +39,11 @@ from .folder_discovery_scan import root_identity, scan, stat_fingerprint
 
 MIN_INTERVAL_SECONDS = 20.0
 FORCE_MIN_INTERVAL_SECONDS = 5.0
+# A FAILED/CONFLICT outcome is logged once per scope and code in this window (the screens poll every 60 s).
+LOG_INTERVAL_SECONDS = 600.0
+
+logger = logging.getLogger(__name__)
+_logged: dict[tuple[str, str, str, str], float] = {}
 
 _state_lock = threading.Lock()
 _scope_locks: dict[tuple[str, str, str, str], threading.Lock] = {}
@@ -201,12 +207,15 @@ def _check_scope(conn, root, root_key: str, key, project_id: str, request_id: st
         # Remember the fingerprint of the exact scan the refresh used, never a
         # second scan: a copy finishing in between must not be marked current.
         _remember(key, result, refreshed.get("snapshot_id") if not conflict else snapshot_id, refreshed_fp)
+        if conflict:
+            log_outcome(project_id, request_id, environment, result)
         return {**result, "coalesced": False}
     except (ValueError, OSError, spdm_storage.SpdmStorageError) as exc:
         # FolderSchemaError is a ValueError. A file still being copied
         # (FOLDER_SCHEMA_FILE_BUSY) lands here and is retried next poll.
         result = _failed(exc, snapshot_id)
         _remember(key, result, None, None)
+        log_outcome(project_id, request_id, environment, result, exc)
         return {**result, "coalesced": False}
 
 
@@ -218,6 +227,45 @@ def _failed(exc: BaseException, snapshot_id: str | None) -> dict[str, Any]:
                    message=str(exc) if isinstance(exc, resolver.FolderSchemaError)
                    else "폴더를 확인하지 못했습니다. 잠시 후 다시 확인합니다.",
                    mode="FULL")
+
+
+def _cause(exc: BaseException | None) -> str:
+    """``Type: message`` of the exception and its underlying cause (sanitized, bounded)."""
+    from .drive.gateway import safe_error_message
+
+    if exc is None:
+        return "-"
+    parts = [f"{type(exc).__name__}: {safe_error_message(exc)}"]
+    inner = exc.__cause__ or exc.__context__
+    if inner is not None and inner is not exc:
+        parts.append(f"{type(inner).__name__}: {safe_error_message(inner)}")
+    return " <- ".join(parts)
+
+
+def log_outcome(project_id: str, request_id: str, environment: str, result: dict[str, Any],
+                exc: BaseException | None = None, *, source: str = "sync") -> bool:
+    """One WARNING line for a FAILED/CONFLICT sync or refresh, at most once per scope and code per window.
+
+    Returns whether a line was written.  Nothing secret is logged: messages go through
+    ``drive.gateway.safe_error_message`` (bearer/JWT masking, 200 characters).
+    """
+    status = str(result.get("status") or "")
+    if status not in {"FAILED", "CONFLICT"}:
+        return False
+    code = str(result.get("code") or status)
+    log_key = (str(project_id), str(request_id), str(environment).upper(), code)
+    now = time.monotonic()
+    with _state_lock:
+        last = _logged.get(log_key)
+        if last is not None and now - last < LOG_INTERVAL_SECONDS:
+            return False
+        _logged[log_key] = now
+    from .drive.gateway import mask_secrets
+
+    logger.warning("Folder %s %s: project=%s request=%s environment=%s code=%s message=%s cause=%s",
+                   source, status, project_id, request_id, str(environment).upper(), code,
+                   mask_secrets(str(result.get("message") or ""))[:200], _cause(exc))
+    return True
 
 
 def sync_drive(project_id: str, request_id: str, environment: str, actor: str, *,
@@ -279,6 +327,7 @@ def sync_drive(project_id: str, request_id: str, environment: str, actor: str, *
         except (ValueError, OSError, spdm_storage.SpdmStorageError) as exc:
             result = {**_failed(exc, None), "coalesced": False}
             _remember(key, result, None, None)
+            log_outcome(project_id, request_id, environment, result, exc)
             return result
         with _state_lock:
             if key in _memo:
@@ -323,3 +372,4 @@ def reset_for_tests() -> None:
         _memo.clear()
         _scope_locks.clear()
         _drive_locks.clear()
+        _logged.clear()

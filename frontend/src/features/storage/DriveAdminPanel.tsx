@@ -4,7 +4,7 @@ import { createPortal } from 'react-dom'
 import { Button } from '../../shared/components/Button'
 import {
   DRIVE_QUEUE_ITEM_STATE_LABELS, driveApi, driveCodeMessage, driveErrorText, driveStateLabel,
-  type DriveAdminStatus, type DriveCheckReport, type DriveQueueList, type DriveTestResult,
+  type DriveAdminStatus, type DriveCheckReport, type DriveQueueBulkResult, type DriveQueueList, type DriveTestResult,
 } from '../../shared/api/drive'
 import './DriveAdminPanel.css'
 
@@ -62,20 +62,69 @@ const KIND_TEXT: Record<string, string> = { MKDIR: '폴더', COPY: '드라이브
 const ORIGIN_TEXT: Record<string, string> = { result_drop: '결과 등록', result_structure: '폴더 구조 만들기', finalization: 'Final 지정', final_designation: '현재 Final 요약' }
 const METHOD_TEXT: Record<string, string> = { COPY_WITHIN: 'copy_within', DOWNLOAD_UPLOAD: '다운로드→업로드' }
 
-/** D3 drive upload queue: open items (and those finished in the last day); retry, cancel, resume. */
+const CANCELLABLE = ['PENDING', 'BLOCKED', 'FAILED', 'CONFLICT']
+const TERMINAL = ['DONE', 'CANCELLED', 'FAILED', 'CONFLICT']
+const NO_DRIVE_DELETE = '드라이브에 이미 올라간 파일·폴더는 지우지 않습니다.'
+
+function bulkText(action: string, result: DriveQueueBulkResult): string {
+  const skipped = result.skipped.length
+  const reasons = [...new Set(result.skipped.map((item) => driveCodeMessage(item.code)))].join(' ')
+  return `${action} ${result.affected.length}개${skipped ? ` · 건너뜀 ${skipped}개(${reasons})` : ''}${result.staging_removed ? ` · 서버 임시 파일 ${result.staging_removed}곳 정리` : ''}`
+}
+
+/** D3 drive upload queue: open items (and those finished in the last day); retry, cancel, resume, list editing. */
 function DriveQueueSection({ busy, run }: { busy: string; run: (label: string, action: () => Promise<void>) => Promise<void> }) {
   const [queue, setQueue] = useState<DriveQueueList | null>(null)
   const [filter, setFilter] = useState('')
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const [selected, setSelected] = useState<Set<string>>(() => new Set())
+  // "전체 선택": every item of the current filter (also those beyond the shown rows) for 선택 취소.
+  const [allOfFilter, setAllOfFilter] = useState(false)
   const load = useCallback(async () => {
-    try { setQueue(await driveApi.queue(filter || undefined)); setError('') } catch (reason) { setError(driveErrorText(reason, '업로드 대기열을 불러오지 못했습니다.')) }
+    try {
+      const listed = await driveApi.queue(filter || undefined)
+      setQueue(listed); setError('')
+      const shown = new Set(listed.items.map((item) => item.id))
+      setSelected((current) => new Set([...current].filter((id) => shown.has(id))))
+    } catch (reason) { setError(driveErrorText(reason, '업로드 대기열을 불러오지 못했습니다.')) }
   }, [filter])
   useEffect(() => { void load() }, [load])
+  useEffect(() => { setSelected(new Set()); setAllOfFilter(false) }, [filter])
   const act = (label: string, action: () => Promise<unknown>) => void run(label, async () => { await action(); await load() })
+  const bulk = (label: string, action: () => Promise<DriveQueueBulkResult>) => void run(label, async () => {
+    setNotice('')
+    const result = await action()
+    setNotice(bulkText(label, result)); setSelected(new Set()); setAllOfFilter(false)
+    await load()
+  })
   const counts = queue?.counts ?? {}
+  const items = queue?.items ?? []
+  const chosen = items.filter((item) => selected.has(item.id))
+  const cancellable = chosen.filter((item) => CANCELLABLE.includes(item.state))
+  const removable = chosen.filter((item) => TERMINAL.includes(item.state))
+  const everyShown = items.length > 0 && items.every((item) => selected.has(item.id))
+  const toggle = (id: string, on: boolean) => {
+    setAllOfFilter(false)
+    setSelected((current) => { const next = new Set(current); if (on) next.add(id); else next.delete(id); return next })
+  }
+  const toggleAll = (on: boolean) => { setSelected(on ? new Set(items.map((item) => item.id)) : new Set()); setAllOfFilter(on) }
+  const cancelSelected = () => {
+    const scope = allOfFilter ? `현재 목록 조건(${filter ? DRIVE_QUEUE_ITEM_STATE_LABELS[filter] ?? filter : '진행 중·최근'})의 취소할 수 있는 항목 전부` : `선택한 항목 ${cancellable.length}개`
+    if (!window.confirm(`${scope}를 취소할까요? ${NO_DRIVE_DELETE} Final 지정 항목이면 그 Final은 완료되지 않습니다.`)) return
+    bulk('선택 취소', () => allOfFilter ? driveApi.bulkCancelQueue({ allFilter: filter || null }) : driveApi.bulkCancelQueue({ ids: cancellable.map((item) => item.id) }))
+  }
+  const purgeSelected = () => {
+    if (!window.confirm(`선택한 완료·취소·실패·충돌 항목 ${removable.length}개를 대기열 목록에서 지울까요? 서버 임시 파일도 정리합니다. ${NO_DRIVE_DELETE} 진행 중인 항목이 있는 묶음과 완료되지 않은 Final 지정 항목은 지우지 않습니다.`)) return
+    bulk('목록에서 지우기', () => driveApi.purgeQueue({ ids: removable.map((item) => item.id) }))
+  }
+  const purgeFinished = () => {
+    if (!window.confirm(`완료·취소 항목 ${(counts.DONE ?? 0) + (counts.CANCELLED ?? 0)}개를 모두 대기열 목록에서 지울까요? 서버 임시 파일도 정리합니다. ${NO_DRIVE_DELETE}`)) return
+    bulk('완료·취소 항목 지우기', () => driveApi.purgeQueue({ states: ['DONE', 'CANCELLED'] }))
+  }
   return <section className="drive-admin-section" aria-labelledby="drive-queue-title" data-testid="drive-queue">
     <h3 id="drive-queue-title"><ListChecks aria-hidden="true" /> 업로드 대기열</h3>
-    <p className="drive-admin-note">결과 등록·Final 지정이 드라이브에 쓰는 순서입니다(폴더 만들기·드라이브 안 복사·새 파일 올리기만, 덮어쓰기·삭제 없음). 취소는 대기열 항목만 멈추며 드라이브 내용은 지우지 않습니다. 충돌은 같은 이름의 다른 파일이 있다는 뜻이고, 다시 시도하면 드라이브를 다시 확인합니다.</p>
+    <p className="drive-admin-note">결과 등록·Final 지정이 드라이브에 쓰는 순서입니다(폴더 만들기·드라이브 안 복사·새 파일 올리기만, 덮어쓰기·삭제 없음). 취소는 대기열 항목만 멈추며 드라이브 내용은 지우지 않습니다. 충돌은 같은 이름의 다른 파일이 있다는 뜻이고, 다시 시도하면 드라이브를 다시 확인합니다. 목록에서 지우기는 끝난 항목의 기록과 서버 임시 파일만 지웁니다.</p>
     {queue && !queue.writes_enabled ? <p className="drive-admin-result warn" role="status">드라이브 쓰기 허용 설정이 꺼져 있어 대기열이 실행되지 않습니다(SIMDASH_DRIVE_WRITES_ENABLED).</p> : null}
     {queue?.paused ? <p className="drive-admin-result bad" role="alert" data-testid="drive-queue-paused">드라이브 인증이 필요해 대기열이 멈췄습니다. 토큰을 다시 등록하면 이어서 진행합니다.</p> : null}
     {queue && queue.writes_enabled && !queue.worker_running ? <p className="drive-admin-result warn" role="status">대기열 작업자가 실행 중이 아닙니다. 서비스를 다시 시작하세요.</p> : null}
@@ -87,10 +136,21 @@ function DriveQueueSection({ busy, run }: { busy: string; run: (label: string, a
       <Button disabled={Boolean(busy)} onClick={() => void load()}><RefreshCw aria-hidden="true" /> 새로고침</Button>
       <Button disabled={Boolean(busy) || !queue?.paused} onClick={() => act('대기열 재개', () => driveApi.resumeQueue())}>대기열 재개</Button>
     </div>
+    <div className="drive-admin-actions" data-testid="drive-queue-bulk">
+      <span className="drive-admin-note">{allOfFilter ? '현재 조건 전체 선택' : `선택 ${chosen.length}개`}</span>
+      <Button size="sm" disabled={Boolean(busy) || (!allOfFilter && !cancellable.length)} onClick={cancelSelected}>선택 취소</Button>
+      <Button size="sm" disabled={Boolean(busy) || !removable.length} onClick={purgeSelected}><Trash2 aria-hidden="true" /> 목록에서 지우기</Button>
+      <Button size="sm" variant="ghost" disabled={Boolean(busy) || !((counts.DONE ?? 0) + (counts.CANCELLED ?? 0))} onClick={purgeFinished}>완료·취소 항목 모두 지우기</Button>
+    </div>
+    {notice ? <p className="drive-admin-result ok" role="status" data-testid="drive-queue-notice">{notice}</p> : null}
     {error ? <p className="drive-admin-result bad" role="alert">{error}</p> : null}
     {queue ? <div className="drive-check-report"><table aria-label="업로드 대기열">
-      <thead><tr><th>상태</th><th>기능</th><th>작업</th><th>대상</th><th>시도</th><th>오류</th><th /></tr></thead>
-      <tbody>{queue.items.length ? queue.items.map((item) => <tr key={item.id} data-state={item.state}>
+      <thead><tr>
+        <th><input type="checkbox" aria-label="전체 선택(현재 목록 조건)" checked={everyShown} disabled={!items.length} onChange={(event) => toggleAll(event.target.checked)} /></th>
+        <th>상태</th><th>기능</th><th>작업</th><th>대상</th><th>시도</th><th>오류</th><th />
+      </tr></thead>
+      <tbody>{items.length ? items.map((item) => <tr key={item.id} data-state={item.state} data-id={item.id}>
+        <td><input type="checkbox" aria-label={`선택: ${item.target}`} checked={selected.has(item.id)} onChange={(event) => toggle(item.id, event.target.checked)} /></td>
         <td>{DRIVE_QUEUE_ITEM_STATE_LABELS[item.state] ?? item.state}</td>
         <td>{ORIGIN_TEXT[item.origin] ?? item.origin}<br /><small>{item.requested_by ?? ''}</small></td>
         <td>{KIND_TEXT[item.kind] ?? item.kind}{item.transfer_method ? <><br /><small>{METHOD_TEXT[item.transfer_method] ?? item.transfer_method}</small></> : null}</td>
@@ -99,12 +159,12 @@ function DriveQueueSection({ busy, run }: { busy: string; run: (label: string, a
         <td title={item.error_message ?? undefined}>{item.error_code ? driveCodeMessage(item.error_code) : ''}</td>
         <td>
           {['FAILED', 'CONFLICT', 'BLOCKED', 'CANCELLED'].includes(item.state) ? <Button size="sm" disabled={Boolean(busy)} onClick={() => act('다시 시도', () => driveApi.retryQueueItem(item.id))}>다시 시도</Button> : null}
-          {['PENDING', 'BLOCKED', 'FAILED', 'CONFLICT'].includes(item.state) ? <Button size="sm" variant="ghost" disabled={Boolean(busy)} onClick={() => {
-            if (!window.confirm('이 대기열 항목을 취소할까요? 드라이브에 이미 올라간 내용은 지우지 않습니다. Final 지정 항목이면 그 Final은 완료되지 않습니다.')) return
+          {CANCELLABLE.includes(item.state) ? <Button size="sm" variant="ghost" disabled={Boolean(busy)} onClick={() => {
+            if (!window.confirm(`이 대기열 항목을 취소할까요? ${NO_DRIVE_DELETE} Final 지정 항목이면 그 Final은 완료되지 않습니다.`)) return
             act('취소', () => driveApi.cancelQueueItem(item.id))
           }}>취소</Button> : null}
         </td>
-      </tr>) : <tr><td colSpan={7}>표시할 항목이 없습니다.</td></tr>}</tbody>
+      </tr>) : <tr><td colSpan={8}>표시할 항목이 없습니다.</td></tr>}</tbody>
     </table></div> : null}
   </section>
 }

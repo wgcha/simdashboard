@@ -126,6 +126,85 @@ test.describe('SCX 드라이브 관리', () => {
   })
 })
 
+test.describe('업로드 대기열 목록 편집', () => {
+  test('항목을 골라 취소하고 끝난 항목을 목록에서 지운다(드라이브 파일은 그대로)', async ({ page }) => {
+    await page.setViewportSize({ width: 1600, height: 1000 })
+    const errors: string[] = []
+    page.on('pageerror', (error) => errors.push(error.message))
+    const item = (id: string, state: string, target: string) => ({
+      id, batch_id: `b-${id}`, seq: 0, kind: 'MKDIR', state, target, source: null, size: null, attempts: 1, next_attempt_at: null,
+      error_code: state === 'FAILED' ? 'DRIVE_NOT_FOUND' : null, error_message: null, transfer_method: null, requested_by: 'e2e-admin',
+      origin: 'result_drop', origin_ref: null, project_id: null, request_id: null, environment: null,
+      created_at: '2026-10-12T01:00:00+00:00', updated_at: '2026-10-12T01:00:00+00:00', finished_at: null,
+    })
+    let items = [item('q1', 'PENDING', 'P/R/Working/A'), item('q2', 'FAILED', 'P/R/Working/B'), item('q3', 'DONE', 'P/R/Working/C'), item('q4', 'CANCELLED', 'P/R/Working/D')]
+    const posted: Array<{ path: string; body: unknown }> = []
+    const list = () => {
+      const counts: Record<string, number> = {}
+      for (const entry of items) counts[entry.state] = (counts[entry.state] ?? 0) + 1
+      return { counts, paused: false, worker_running: true, writes_enabled: true, items }
+    }
+    await page.route('**/api/drive/status', (route) => route.fulfill({ json: { mode: 'scx', state: 'OK' } }))
+    await page.route('**/api/admin/drive/**', async (route) => {
+      const request = route.request()
+      const path = new URL(request.url()).pathname
+      if (path.endsWith('/status')) return route.fulfill({ json: OK_STATUS })
+      if (path.endsWith('/queue')) return route.fulfill({ json: list() })
+      const body = request.postDataJSON() as { ids?: string[]; states?: string[]; all_filter?: unknown }
+      posted.push({ path, body })
+      if (path.endsWith('/queue/bulk-cancel')) {
+        const ids = body.ids ?? []
+        items = items.map((entry) => ids.includes(entry.id) && ['PENDING', 'FAILED', 'BLOCKED', 'CONFLICT'].includes(entry.state) ? { ...entry, state: 'CANCELLED' } : entry)
+        return route.fulfill({ json: { affected: ids, skipped: [], staging_removed: 0, queue: list() } })
+      }
+      if (path.endsWith('/queue/purge')) {
+        const ids = body.ids ?? items.filter((entry) => (body.states ?? []).includes(entry.state)).map((entry) => entry.id)
+        items = items.filter((entry) => !ids.includes(entry.id))
+        return route.fulfill({ json: { affected: ids, skipped: [{ id: 'q9', code: 'DRIVE_QUEUE_BATCH_OPEN', state: 'DONE' }], staging_removed: 1, queue: list() } })
+      }
+      return route.fulfill({ status: 404, json: { detail: 'unmocked' } })
+    })
+    const dialog = await openDriveDialog(page)
+    const queue = dialog.getByTestId('drive-queue')
+    const table = queue.getByRole('table', { name: '업로드 대기열' })
+    await expect(table.locator('tbody tr')).toHaveCount(4)
+    const bulkBar = queue.getByTestId('drive-queue-bulk')
+    await expect(bulkBar.getByRole('button', { name: '선택 취소' })).toBeDisabled()
+    await expect(bulkBar.getByRole('button', { name: '목록에서 지우기' })).toBeDisabled()
+
+    await table.getByLabel('선택: P/R/Working/A').check()
+    await table.getByLabel('선택: P/R/Working/B').check()
+    await expect(bulkBar).toContainText('선택 2개')
+    const cancelPrompts: string[] = []
+    page.once('dialog', (prompt) => { cancelPrompts.push(prompt.message()); void prompt.accept() })
+    await bulkBar.getByRole('button', { name: '선택 취소' }).click()
+    await expect(queue.getByTestId('drive-queue-notice')).toContainText('선택 취소 2개')
+    expect(cancelPrompts[0]).toContain('드라이브에 이미 올라간 파일·폴더는 지우지 않습니다')
+    expect(posted.at(-1)).toEqual({ path: '/api/admin/drive/queue/bulk-cancel', body: { ids: ['q1', 'q2'] } })
+    await expect(table.locator('tr[data-id="q1"]')).toHaveAttribute('data-state', 'CANCELLED')
+
+    await table.getByLabel('전체 선택(현재 목록 조건)').check()
+    await expect(bulkBar).toContainText('현재 조건 전체 선택')
+    const purgePrompts: string[] = []
+    page.once('dialog', (prompt) => { purgePrompts.push(prompt.message()); void prompt.accept() })
+    await bulkBar.getByRole('button', { name: '목록에서 지우기' }).click()
+    await expect(queue.getByTestId('drive-queue-notice')).toContainText('목록에서 지우기 4개 · 건너뜀 1개')
+    await expect(queue.getByTestId('drive-queue-notice')).toContainText('서버 임시 파일 1곳 정리')
+    expect(purgePrompts[0]).toContain('드라이브에 이미 올라간 파일·폴더는 지우지 않습니다')
+    expect((posted.at(-1)?.body as { ids: string[] }).ids.sort()).toEqual(['q1', 'q2', 'q3', 'q4'])
+    await expect(table.locator('tbody tr')).toHaveCount(1)
+    await expect(table).toContainText('표시할 항목이 없습니다.')
+
+    items = [item('q5', 'DONE', 'P/R/Working/E'), item('q6', 'PENDING', 'P/R/Working/F')]
+    await queue.getByRole('button', { name: '새로고침' }).click()
+    page.once('dialog', (prompt) => void prompt.accept())
+    await bulkBar.getByRole('button', { name: '완료·취소 항목 모두 지우기' }).click()
+    await expect(table.locator('tbody tr')).toHaveCount(1)
+    expect(posted.at(-1)).toEqual({ path: '/api/admin/drive/queue/purge', body: { states: ['DONE', 'CANCELLED'] } })
+    expect(errors).toEqual([])
+  })
+})
+
 test.describe('드라이브 상태 배너', () => {
   for (const [state, text] of [['AUTH_REQUIRED', '드라이브 인증이 필요합니다. 관리자에게 문의하세요.'], ['UNAVAILABLE', '드라이브 연결이 원활하지 않습니다']] as const) {
     test(`${state}이면 일반 사용자에게 상단 배너를 보여 준다`, async ({ page }) => {

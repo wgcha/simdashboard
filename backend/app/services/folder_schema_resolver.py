@@ -82,6 +82,7 @@ def scan_fingerprints(result: dict[str, Any], root: Path | None = None, *,
     total_bytes = 0
     started = time.monotonic()
     fs = provider_for_root(root) if root is not None else None
+    content_token = getattr(fs, "content_token", None) if fs is not None else None
     for item in file_state:
         relative_path = str(item.get("relative_path") or "")
         size = int(item.get("size") or 0)
@@ -93,10 +94,11 @@ def scan_fingerprints(result: dict[str, Any], root: Path | None = None, *,
             if hashed_files > 10_000:
                 raise FolderSchemaError("FOLDER_SCHEMA_CONTENT_FILE_LIMIT", "내용 fingerprint 파일 수 한도를 초과했습니다.", 413)
             max_file_bytes = 64 * 1024 * 1024 if suffix in {".inc", ".rad"} else 32 * 1024 * 1024
-            if size > max_file_bytes:
+            # SCX drive: the version token stands for the content and nothing is read, so the
+            # read-size bound does not apply (issue #51: a result video above 32 MiB failed every sync).
+            if size > max_file_bytes and content_token is None:
                 raise FolderSchemaError("FOLDER_SCHEMA_CONTENT_FILE_LIMIT", "내용 fingerprint 대상 파일이 허용 크기를 초과했습니다.", 413)
             file_path = "/".join(PurePosixPath(relative_path).parts)
-            content_token = getattr(fs, "content_token", None)
             if content_token is not None:
                 # SCX drive (D2): the drive version_token (sha1, else size+time) stands for the
                 # content; periodic checks never download files (integration 03 §4 no. 3).

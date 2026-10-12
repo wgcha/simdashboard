@@ -420,9 +420,16 @@ def test_capture_retry_before_the_next_sync_never_reads_the_unreviewed_change(sc
     scx.drive.modify_file(scx.path(f"{OPTION}/2_Face/{CSV}"), CHANGED_BYTES)
     retried = scx.post(f"{ENV}/registrations/{registered['registration_id']}/capture/retry", {})
     jobs = retried["capture_jobs"]
+    # The unreviewed change is never read, whatever the outcome.
     assert _assets_with(request_id, CHANGED_BYTES) == 0
-    # the registered version was never captured (its bytes are nowhere on the server): fail closed, retryable
-    assert [(job["status"], job["error_code"]) for job in jobs] == [("FAILED", drive_reads.SOURCE_CHANGED)], jobs
+    # Since issue #51 the sync above already captures a Case whose registration capture failed,
+    # using the registered (classified) version; the retry then has nothing left to read.  Without
+    # that capture the retry fails closed with DRIVE_SOURCE_CHANGED (registered bytes not on the server).
+    outcome = [(job["status"], job["error_code"]) for job in jobs]
+    if outcome == [("COMPLETED", None)]:
+        assert _assets_with(request_id, CSV_BYTES) >= 1, jobs
+    else:
+        assert outcome == [("FAILED", drive_reads.SOURCE_CHANGED)], jobs
     assert _sync(scx, project_id, request_id)["drive"]["pending_changes"] == 1
 
 

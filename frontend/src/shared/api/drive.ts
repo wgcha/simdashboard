@@ -16,6 +16,7 @@ export type DriveHealthState = 'OK' | 'DEGRADED' | 'UNAVAILABLE' | 'AUTH_REQUIRE
 export type DriveUploadBatch = components['schemas']['DriveUploadBatch']
 export type DriveQueueList = components['schemas']['DriveQueueList']
 export type DriveQueueItem = components['schemas']['DriveQueueItem']
+export type DriveQueueBulkResult = components['schemas']['DriveQueueBulkResult']
 
 /** Korean messages for drive error codes (integration 06 §2). */
 export const DRIVE_ERROR_MESSAGES: Record<string, string> = {
@@ -41,6 +42,10 @@ export const DRIVE_ERROR_MESSAGES: Record<string, string> = {
   DRIVE_BATCH_NOT_FOUND: '드라이브 업로드 묶음을 찾을 수 없습니다.',
   DRIVE_QUEUE_ITEM_NOT_FOUND: '대기열 항목을 찾을 수 없습니다.',
   DRIVE_QUEUE_ITEM_STATE: '이 상태의 항목에는 할 수 없는 동작입니다.',
+  DRIVE_QUEUE_BATCH_OPEN: '같은 묶음에 아직 진행 중인 항목이 있어 지우지 않았습니다.',
+  DRIVE_QUEUE_FINAL_ACTIVE: '완료되지 않은 Final 지정의 항목이라 지우지 않았습니다(다시 시도에 필요).',
+  DRIVE_QUEUE_SELECTION_INVALID: '선택한 항목 또는 목록 조건 중 하나만 보내야 합니다.',
+  DRIVE_QUEUE_PURGE_STATE: '완료·취소·실패·충돌 상태만 목록에서 지울 수 있습니다.',
   FINALIZATION_LOCKED: '같은 의뢰의 다른 Final 지정이 드라이브에 반영되고 있습니다. 끝난 뒤 다시 시도하세요.',
   FINALIZATION_SOURCE_STALE: 'Final 계획 이후 드라이브 원본이 바뀌었습니다. 원본 변경을 확인하고 다시 지정하세요.',
   FINALIZATION_SOURCE_MISSING: '드라이브 원본 파일을 찾을 수 없습니다.',
@@ -125,6 +130,14 @@ export const driveApi = {
   /** Marks the item CANCELLED; nothing on the drive is deleted. */
   cancelQueueItem: async (itemId: string) => unwrapGenerated(await apiClient.POST('/api/admin/drive/queue/{item_id}/cancel', { params: { path: { item_id: itemId } } })) as DriveQueueItem,
   resumeQueue: async () => unwrapGenerated(await apiClient.POST('/api/admin/drive/queue/resume')) as DriveQueueList,
+  /** Cancel the selected open items, or every open item of the list filter (``allFilter``). Drive files stay. */
+  bulkCancelQueue: async (selection: { ids: string[] } | { allFilter: string | null }) => unwrapGenerated(await apiClient.POST('/api/admin/drive/queue/bulk-cancel', {
+    body: 'ids' in selection ? { ids: selection.ids } : { all_filter: { state: selection.allFilter } },
+  })) as DriveQueueBulkResult,
+  /** Remove finished rows (and their server staging) from the queue list; drive files are never deleted. */
+  purgeQueue: async (selection: { ids: string[] } | { states: string[] }) => unwrapGenerated(await apiClient.POST('/api/admin/drive/queue/purge', {
+    body: 'ids' in selection ? { ids: selection.ids } : { states: selection.states },
+  })) as DriveQueueBulkResult,
 }
 
 export const DRIVE_BATCH_STATE_LABELS: Record<string, string> = {

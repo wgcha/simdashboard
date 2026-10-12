@@ -241,7 +241,13 @@ def _walk(
         for item in sorted(items, key=lambda path: fs.path(path).as_posix()):
             fs.assert_safe(item)
             if signature_of(item)[0] > MAX_ASSET_BYTES:
-                raise DashboardCaptureError("DASHBOARD_ASSET_TOO_LARGE", "원본 자산은 32 MiB 이하여야 합니다.")
+                # Issue #51 (SCX drive): one large result video must not hide the Case's other
+                # results; it is reported as unprocessed and left out of this capture (never
+                # downloaded).  Local mode keeps refusing the capture.
+                if issues is None or not drive_reads.active():
+                    raise DashboardCaptureError("DASHBOARD_ASSET_TOO_LARGE", "원본 자산은 32 MiB 이하여야 합니다.")
+                issues.append(_unprocessed_issue(root, fs.path(item), "ASSET_TOO_LARGE"))
+                continue
             data = fs.read_stable(item, max_bytes=min(MAX_ASSET_BYTES, MAX_TOTAL_BYTES - total))
             fs.assert_safe(item)
             signature = signature_of(item)

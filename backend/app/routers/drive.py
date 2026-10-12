@@ -150,6 +150,39 @@ class DriveQueueList(BaseModel):
     items: list[DriveQueueItem]
 
 
+QUEUE_STATE_PATTERN = "^(PENDING|RUNNING|DONE|CONFLICT|FAILED|BLOCKED|CANCELLED)$"
+
+
+class DriveQueueFilter(BaseModel):
+    """The admin list filter the selection was made in (``state`` empty: the default view)."""
+    state: str | None = Field(default=None, pattern=QUEUE_STATE_PATTERN)
+
+
+class DriveQueueBulkCancelInput(BaseModel):
+    """Exactly one of ``ids`` (selected rows) or ``all_filter`` (every row of that list filter)."""
+    ids: list[str] | None = Field(default=None, max_length=upload_queue.BULK_MAX_ITEMS)
+    all_filter: DriveQueueFilter | None = None
+
+
+class DriveQueuePurgeInput(BaseModel):
+    """Exactly one of ``ids`` or ``states`` (every finished row in those states)."""
+    ids: list[str] | None = Field(default=None, max_length=upload_queue.BULK_MAX_ITEMS)
+    states: list[str] | None = Field(default=None, max_length=4)
+
+
+class DriveQueueSkipped(BaseModel):
+    id: str
+    code: str
+    state: str | None = None
+
+
+class DriveQueueBulkResult(BaseModel):
+    affected: list[str]
+    skipped: list[DriveQueueSkipped]
+    staging_removed: int = 0
+    queue: DriveQueueList
+
+
 class DriveBatchError(BaseModel):
     id: str
     target: str
@@ -662,6 +695,72 @@ def queue_retry(item_id: str, request: Request) -> DriveQueueItem:
 def queue_cancel(item_id: str, request: Request) -> DriveQueueItem:
     """Mark a not-yet-done item CANCELLED. Drive content is never deleted; a cancelled Final stays incomplete."""
     return _queue_action(request, item_id, "cancel")
+
+
+def _bulk_ids(conn, ids: list[str] | None, *, state: str | None = None, states: list[str] | None = None,
+              use_filter: bool = False) -> list[str]:
+    if use_filter:
+        return upload_queue.filter_ids(conn, state=state, states=states)
+    return [str(value) for value in (ids or [])]
+
+
+def _queue_view(settings: DriveSettings) -> DriveQueueList:
+    with connect() as conn:
+        listed = upload_queue.admin_list(conn)
+    return DriveQueueList(**listed, writes_enabled=settings.writes_enabled)
+
+
+@admin_router.post("/queue/bulk-cancel", response_model=DriveQueueBulkResult)
+def queue_bulk_cancel(payload: DriveQueueBulkCancelInput, request: Request) -> DriveQueueBulkResult:
+    """Cancel the selected (or all filtered) open items, as the single cancel does. Drive files are never deleted."""
+    _require_admin(request)
+    settings = _require_scx()
+    if (payload.ids is None) == (payload.all_filter is None):
+        raise _fail(422, "DRIVE_QUEUE_SELECTION_INVALID", "취소할 항목(ids) 또는 목록 조건(all_filter) 중 하나만 보내세요.")
+    with connect() as conn:
+        ids = _bulk_ids(conn, payload.ids, state=payload.all_filter.state if payload.all_filter else None,
+                        states=list(upload_queue.CANCELLABLE_STATES), use_filter=payload.all_filter is not None)
+        result = upload_queue.bulk_cancel(conn, ids)
+        cancelled = result["cancelled"]
+        write_audit_event(request=request, principal=request.state.principal, status_code=200,
+                          action="DRIVE_QUEUE_BULK_CANCELLED",
+                          detail={"count": len(cancelled), "skipped": len(result["skipped"]),
+                                  "all_filter": payload.all_filter.model_dump() if payload.all_filter else None,
+                                  "item_ids": [item.id for item in cancelled][:200],
+                                  "batches": result["batches"][:200]}, connection=conn)
+    for batch_id in result["batches"]:
+        # After the commit (review #4): each batch's finish hook (Final lock release) sees the cancelled items.
+        upload_queue.request_finish(batch_id)
+    upload_queue.wake()
+    return DriveQueueBulkResult(affected=[item.id for item in cancelled],
+                                skipped=[DriveQueueSkipped(**entry) for entry in result["skipped"]],
+                                queue=_queue_view(settings))
+
+
+@admin_router.post("/queue/purge", response_model=DriveQueueBulkResult)
+def queue_purge(payload: DriveQueuePurgeInput, request: Request) -> DriveQueueBulkResult:
+    """Remove finished rows (DONE/CANCELLED/FAILED/CONFLICT) and their server staging. Drive files are never deleted."""
+    _require_admin(request)
+    settings = _require_scx()
+    if (payload.ids is None) == (payload.states is None):
+        raise _fail(422, "DRIVE_QUEUE_SELECTION_INVALID", "지울 항목(ids) 또는 상태(states) 중 하나만 보내세요.")
+    states = [state for state in (payload.states or []) if state in upload_queue.TERMINAL_STATES]
+    if payload.states is not None and len(states) != len(payload.states):
+        raise _fail(422, "DRIVE_QUEUE_PURGE_STATE", "완료·취소·실패·충돌 상태만 목록에서 지울 수 있습니다.")
+    with connect() as conn:
+        # ``states``: every row in those states, not only the default view's last day
+        ids = upload_queue.ids_in_states(conn, states) if payload.states is not None else list(payload.ids or [])
+        result = upload_queue.purge(conn, ids)
+        purged = result["purged"]
+        write_audit_event(request=request, principal=request.state.principal, status_code=200,
+                          action="DRIVE_QUEUE_PURGED",
+                          detail={"count": len(purged), "skipped": len(result["skipped"]), "states": states or None,
+                                  "item_ids": [item.id for item in purged][:200],
+                                  "batches": sorted({item.batch_id for item in purged})[:200]}, connection=conn)
+    removed = upload_queue.remove_purged_staging(result["cleanup"])
+    return DriveQueueBulkResult(affected=[item.id for item in purged],
+                                skipped=[DriveQueueSkipped(**entry) for entry in result["skipped"]],
+                                staging_removed=removed, queue=_queue_view(settings))
 
 
 @admin_router.post("/queue/resume", response_model=DriveQueueList)

@@ -647,10 +647,19 @@ def refresh_scope(conn, root, project_id: str, request_id: str, environment: str
                     continue  # D12: Final copies are never captured as results.
                 case_path = str(case_node.get("relative_path") or "")
                 case_id = dashboard_capture._case_id(storage_root_id, case_path)
-                if not conn.execute(
-                    "SELECT 1 FROM dashboard_cases WHERE id=? AND project_id=? AND request_id=? AND environment=?",
-                    [case_id, project_id, request_id, environment],
-                ).fetchone():
+                owner = conn.execute(
+                    "SELECT project_id,request_id,environment FROM dashboard_cases WHERE id=?", [case_id],
+                ).fetchone()
+                if owner is not None and (str(owner[0]), str(owner[1]), str(owner[2])) != (
+                        str(project_id), str(request_id), environment):
+                    continue   # the path belongs to another request scope
+                # Issue #51 (SCX drive): a Case folder that appeared after the registration (a
+                # request registered with an empty Working, filled by hand on the drive) is
+                # captured by this refresh once it holds result files.  Its capture failing never
+                # blocks the snapshot: the Case stays visible without results and the next folder
+                # change tries again.  Local mode keeps capturing registered Cases only.
+                new_case = owner is None
+                if new_case and not (drive_reads.active() and _has_result_files(fresh, case_path)):
                     continue
                 try:
                     dashboard_capture.create_capture(
@@ -659,7 +668,13 @@ def refresh_scope(conn, root, project_id: str, request_id: str, environment: str
                         actor=actor,
                     )
                 except dashboard_capture.DashboardCaptureError as exc:
-                    capture_errors.append(exc.code)
+                    if not new_case:
+                        capture_errors.append(exc.code)
+                        continue
+                    conn.execute("DELETE FROM dashboard_cases WHERE id=? AND NOT EXISTS "
+                                 "(SELECT 1 FROM dashboard_captures WHERE case_id=?)", [case_id, case_id])
+                    _logger.warning("Folder refresh could not capture new Case %s of request %s/%s %s: %s",
+                                   case_path, project_id, request_id, environment, exc.code)
         if capture_errors:
             raise resolver.FolderSchemaError(
                 "FOLDER_SCHEMA_CAPTURE_FAILED",
@@ -678,6 +693,14 @@ def refresh_scope(conn, root, project_id: str, request_id: str, environment: str
     return {**_refresh_result(snapshot_id, "REFRESHED", not revision_only_unchanged, schema,
                               structure_fingerprint, content_fingerprint, diff, location_projection),
             "stat_fingerprint": quick_fingerprint}
+
+
+def _has_result_files(fresh: dict, case_path: str) -> bool:
+    """Whether the scan saw a capturable result file (values, media) below ``case_path``."""
+    prefix = case_path.casefold().rstrip("/") + "/"
+    return any(str(item.get("relative_path") or "").casefold().startswith(prefix)
+               and PurePosixPath(str(item.get("relative_path") or "")).suffix.casefold() in drive_reads.CAPTURE_SUFFIXES
+               for item in fresh.get("file_state") or [])
 
 
 def _newer_depth_registration(conn, root_key, project_id, request_id, environment, previous) -> str | None:
