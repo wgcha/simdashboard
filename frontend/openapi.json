@@ -21977,6 +21977,18 @@
           },
           "case_counts": {
             "$ref": "#/components/schemas/ResultEnvironmentCounts"
+          },
+          "folder_environments": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "USAGE",
+                "DISTRIBUTION"
+              ]
+            },
+            "type": "array",
+            "title": "Folder Environments",
+            "default": []
           }
         },
         "type": "object",

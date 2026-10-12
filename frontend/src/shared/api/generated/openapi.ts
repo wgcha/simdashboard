@@ -7243,6 +7243,11 @@ export interface components {
             /** Environments */
             environments: ("USAGE" | "DISTRIBUTION")[];
             case_counts: components["schemas"]["ResultEnvironmentCounts"];
+            /**
+             * Folder Environments
+             * @default []
+             */
+            folder_environments: ("USAGE" | "DISTRIBUTION")[];
         };
         /**
          * ResultImportHistoryItem

@@ -249,7 +249,8 @@ def test_result_environments_counts_order_empty_and_not_found(admin_client):
     project_id, request_id = registered["project_id"], registered["request_id"]
     response = client.get(_environments_url(project_id, request_id))
     assert response.status_code == 200, response.text
-    assert response.json() == {"environments": ["USAGE"], "case_counts": {"USAGE": 1, "DISTRIBUTION": 0}}
+    assert response.json() == {"environments": ["USAGE"], "case_counts": {"USAGE": 1, "DISTRIBUTION": 0},
+                               "folder_environments": ["USAGE"]}
     # Legacy mixed request (E4): both environments, USAGE first.
     with connect() as conn:
         for index in range(2):
@@ -258,7 +259,20 @@ def test_result_environments_counts_order_empty_and_not_found(admin_client):
                          [f"mixed-case-{uuid4().hex}", project_id, request_id, "synthetic-root", f"mixed/{index}",
                           "DISTRIBUTION", f"mixed-{index}", "{}", datetime.now(timezone.utc).replace(tzinfo=None)])
     mixed = client.get(_environments_url(project_id, request_id)).json()
-    assert mixed == {"environments": ["USAGE", "DISTRIBUTION"], "case_counts": {"USAGE": 1, "DISTRIBUTION": 2}}
+    assert mixed == {"environments": ["USAGE", "DISTRIBUTION"], "case_counts": {"USAGE": 1, "DISTRIBUTION": 2},
+                     "folder_environments": ["USAGE"]}
+    # A folder-registered request without Cases still reports its folder environment, so
+    # result registration does not default a USAGE request to DISTRIBUTION (issue #51).
+    folder_only = f"folder-only-request-{uuid4().hex[:8]}"
+    with connect() as conn:
+        conn.execute("INSERT INTO analysis_requests(id,project_id,title,status,owner,requested_at,due_at,overall_note) "
+                     "VALUES(?,?,'folder only','READY','test',CURRENT_TIMESTAMP,NULL,'')", [folder_only, project_id])
+        conn.execute("INSERT INTO folder_environment_registrations(id,preview_id,idempotency_key,environment,project_id,"
+                     "request_id,status,created_by,created_at) VALUES(?,?,?,'USAGE',?,?,'COMPLETED','test',CURRENT_TIMESTAMP)",
+                     [f"reg-{uuid4().hex[:8]}", "preview-x", f"idem-{uuid4().hex}", project_id, folder_only])
+    no_cases = client.get(_environments_url(project_id, folder_only)).json()
+    assert no_cases == {"environments": [], "case_counts": {"USAGE": 0, "DISTRIBUTION": 0},
+                        "folder_environments": ["USAGE"]}
     # A request without Cases.
     empty_id = f"empty-request-{uuid4().hex[:8]}"
     with connect() as conn:
@@ -266,7 +280,8 @@ def test_result_environments_counts_order_empty_and_not_found(admin_client):
                      "VALUES(?,?,'empty','READY','test',CURRENT_TIMESTAMP,NULL,'')", [empty_id, project_id])
     empty = client.get(_environments_url(project_id, empty_id))
     assert empty.status_code == 200 and empty.json() == {"environments": [],
-                                                        "case_counts": {"USAGE": 0, "DISTRIBUTION": 0}}
+                                                        "case_counts": {"USAGE": 0, "DISTRIBUTION": 0},
+                                                        "folder_environments": []}
     assert client.get(_environments_url(project_id, "missing-request")).status_code == 404
     assert client.get(_environments_url("other-project", request_id)).status_code == 404
 

@@ -1,7 +1,7 @@
 import { apiErrorMessage } from '../src/shared/api/errors.ts'
 import { formatServerTime, parseServerTime } from '../src/shared/api/serverTime.ts'
 import { folderProgressPath, folderProgressStatusLabel, normalizeFolderProgress } from '../src/shared/api/folderProgress.ts'
-import { keywordEnvironments, normalizeResultEnvironments, resolvedResultEnvironment, resultEnvironmentsPath } from '../src/shared/api/resultEnvironments.ts'
+import { folderDefaultEnvironment, keywordEnvironments, normalizeResultEnvironments, resolvedResultEnvironment, resultEnvironmentsPath } from '../src/shared/api/resultEnvironments.ts'
 import { chunkRanges, depthRules, dropEntries, dropGuide, entryRelativePath, formatBytes as dropBytes, pickedFromInput, walkEntries } from '../src/shared/api/resultDropModel.ts'
 import { depthRowEditable, depthRows, errorCode, errorItems, lowerRoleOptions, setDepthRole, sumDeleteCounts, validateLowerLevels, validateUpperLevels } from '../src/shared/api/depthSchemaModel.ts'
 
@@ -76,6 +76,8 @@ assert(resultEnvironmentsPath('p 1', 'r/1') === '/api/projects/p%201/requests/r%
 const both = normalizeResultEnvironments({ environments: ['DISTRIBUTION', 'USAGE', 'OTHER'], case_counts: { USAGE: 2, DISTRIBUTION: 1 } })
 assert(both.environments.join() === 'USAGE,DISTRIBUTION' && resolvedResultEnvironment(both) === null, 'two environments keep the toggle, in USAGE, DISTRIBUTION order')
 assert(resolvedResultEnvironment(normalizeResultEnvironments({ environments: ['DISTRIBUTION'], case_counts: { USAGE: 0, DISTRIBUTION: 3 } })) === 'DISTRIBUTION', 'one environment is resolved')
+assert(folderDefaultEnvironment(normalizeResultEnvironments({ environments: [], case_counts: { USAGE: 0, DISTRIBUTION: 0 }, folder_environments: ['USAGE'] })) === 'USAGE', 'a request without Cases defaults to its folder environment (issue #51)')
+assert(folderDefaultEnvironment(normalizeResultEnvironments({ environments: [], case_counts: { USAGE: 0, DISTRIBUTION: 0 } })) === null, 'no folder environment, no default')
 const none = normalizeResultEnvironments({ environments: [], case_counts: { USAGE: 0, DISTRIBUTION: 0 } })
 assert(none.environments.length === 0 && resolvedResultEnvironment(none) === null && none.case_counts.USAGE === 0, 'no Cases resolve to no environment')
 

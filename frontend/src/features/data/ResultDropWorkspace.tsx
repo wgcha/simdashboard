@@ -9,6 +9,7 @@ import { Select } from '../../shared/components/Select'
 import { SearchableSelect } from '../../shared/components/selectionLabels'
 import { ApiError } from '../../shared/api/errors'
 import { requestResultEnvironments, resolvedResultEnvironment } from '../../shared/api/simulationDashboard'
+import { folderDefaultEnvironment } from '../../shared/api/resultEnvironments'
 import { chunkSha256, resultDropApi, type DropCompletion, type DropConflict, type DropEnvironment, type DropPlan, type DropTree, type OpenDropSession } from '../../shared/api/resultDrop'
 import { ROLE_LABELS, SKIP_REASON_LABELS, chunkRanges, depthRules, dropEntries, dropGuide, formatBytes, pickedFromInput, walkEntries, type PickedItems } from '../../shared/api/resultDropModel'
 import { DRIVE_READ_ONLY_NOTICE, type DriveUploadBatch } from '../../shared/api/drive'
@@ -127,7 +128,10 @@ export function ResultDropWorkspace({ embedded = false, contextChanging = false,
       if (controller.signal.aborted) return
       const resolved = resolvedResultEnvironment(value)
       setLockedEnvironment(resolved)
-      if (resolved) setEnvironment(resolved)
+      // No Cases yet: start from the environment the request folder is registered for
+      // (e.g. a USAGE request must not default to DISTRIBUTION); the user may still change it.
+      const fallback = resolved ?? folderDefaultEnvironment(value)
+      if (fallback) setEnvironment(fallback)
     }).catch(() => undefined)
     return () => controller.abort()
   }, [projectId, requestId])
