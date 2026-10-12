@@ -122,6 +122,7 @@ class DbTokenStore:
         self._status = status if status is not None else StoreStatus()
         self._loaded_generation: int | None = None
         self._captured: list[LocalTokenBundle] | None = None
+        self._capture_strict = True
         self._capture_event = threading.Event()
 
     def for_gateway(self, adapter_bundle_type: Any | None = None) -> "DbTokenStore":
@@ -228,11 +229,14 @@ class DbTokenStore:
             logger.error("SCX token save failed: the worker sent an unreadable token bundle")
             return
         captured = self._captured
+        strict = captured is not None and self._capture_strict
         if captured is not None:
             captured.append(local)
             self._capture_event.set()
         generation = self._loaded_generation
         if generation is None:
+            if captured is not None:
+                return   # first registration by re-login: the request handler writes a new generation itself
             self._dropped("no registered token was loaded by this gateway")
             return
         try:
@@ -241,8 +245,11 @@ class DbTokenStore:
             now = datetime.now(timezone.utc).replace(tzinfo=None)
             with self._lock, self._connect() as conn:
                 connected = _connected_account(conn)
-                if local.account_hint and connected and not same_account(local.account_hint, connected):
-                    self._dropped("the token belongs to another account than the connected account")
+                other = bool(local.account_hint) and not same_account(local.account_hint, connected)
+                if connected and (other or (strict and not local.account_hint)):
+                    # Re-login of another (or an unnamed) account: saved only by the request handler after
+                    # the admin confirmed the change.  Expected, so not reported as a stale save.
+                    logger.warning("SCX token not saved: it is not the connected account (confirmation required)")
                     return
                 updated = conn.execute(
                     "UPDATE drive_credentials SET ciphertext=?, account_hint=?, obtained_at=?, updated_by=?, updated_at=? "
@@ -268,10 +275,16 @@ class DbTokenStore:
     # -- Re-login (issue #50) ---------------------------------------------------------------------
 
     @contextmanager
-    def capturing(self) -> Iterator[list[LocalTokenBundle]]:
-        """Collect every bundle the worker hands to :meth:`save` while the block runs."""
+    def capturing(self, *, strict: bool = True) -> Iterator[list[LocalTokenBundle]]:
+        """Collect every bundle the worker hands to :meth:`save` while the block runs.
+
+        Same-account bundles are still persisted into the loaded generation (a rotated refresh
+        token must not be lost if the request fails later).  ``strict`` (account login) also
+        refuses a bundle without ``account_hint`` while a connected account exists; ``refresh_now``
+        keeps the token chain and therefore the account, so it is not strict."""
         captured: list[LocalTokenBundle] = []
         self._capture_event.clear()
+        self._capture_strict = strict
         self._captured = captured
         try:
             yield captured
@@ -295,10 +308,11 @@ class DbTokenStore:
 
     # -- Admin helpers ---------------------------------------------------------------------------
 
-    def write(self, bundle: Any, *, updated_by: str, connected_account: str | None = None) -> int:
+    def write(self, bundle: Any, *, updated_by: str, remember_account: bool = False) -> int:
         """Admin registration: replace the row with a new, larger generation; returns it.
 
-        ``connected_account`` (when given) becomes the remembered "연결 계정" in the same transaction."""
+        ``remember_account``: the bundle's ``account_hint`` becomes the remembered "연결 계정" in the
+        same transaction (a bundle without one clears it, so later rotations are not refused)."""
         local = self.to_local(bundle)
         ciphertext = self._fernet.encrypt(bundle_to_json(local))
         obtained_at = _utc(local.obtained_at).replace(tzinfo=None)
@@ -315,13 +329,16 @@ class DbTokenStore:
                 "updated_by=excluded.updated_by, updated_at=excluded.updated_at, generation=excluded.generation",
                 [ROW_ID, ciphertext, self._key_id, local.account_hint, obtained_at, updated_by, now, generation],
             )
-            if connected_account and connected_account.strip():
+            hint = (local.account_hint or "").strip()
+            if remember_account and hint:
                 conn.execute(
                     "INSERT INTO drive_connected_account(id,account_hint,updated_by,updated_at) VALUES (?,?,?,?) "
                     "ON CONFLICT (id) DO UPDATE SET account_hint=excluded.account_hint, updated_by=excluded.updated_by, "
                     "updated_at=excluded.updated_at",
-                    [ROW_ID, connected_account.strip()[:200], updated_by, now],
+                    [ROW_ID, hint[:200], updated_by, now],
                 )
+            elif remember_account:
+                conn.execute("DELETE FROM drive_connected_account WHERE id=?", [ROW_ID])
             if getattr(conn, "backend", "") == "postgresql":
                 conn.execute("COMMIT")
         return generation

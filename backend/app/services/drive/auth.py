@@ -24,7 +24,7 @@ import logging
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any
 
@@ -259,7 +259,7 @@ def _call(name: str, *args: Any) -> AuthResult:
             result = method(*args)
             captured: list[LocalTokenBundle] = []
         else:
-            with store.capturing() as captured:
+            with store.capturing(strict=name == "login_password") as captured:
                 result = method(*args)
                 if not (result is not None and not isinstance(result, dict) and getattr(result, "access_token", None)) \
                         and not captured:
@@ -291,7 +291,18 @@ def _record_error(code: str) -> None:
 
 
 def refresh_now() -> AuthResult:
-    return _call("refresh_now")
+    """``refresh_now`` keeps the stored refresh-token chain, hence the account: an adapter that leaves
+    ``account_hint`` empty is treated as the connected account (a *different* name is still checked)."""
+    result = _call("refresh_now")
+    if not (result.bundle.account_hint or "").strip():
+        store = drive_gateway.token_store()
+        try:
+            connected = store.connected_account() if store is not None else None
+        except Exception:  # noqa: BLE001
+            connected = None
+        if connected:
+            result = AuthResult(replace(result.bundle, account_hint=connected), result.expires_at)
+    return result
 
 
 def login_password(username: str, password: str) -> AuthResult:
@@ -309,6 +320,14 @@ def record_success(result: AuthResult) -> None:
         _status.last_error_code = None
         _status.last_error_at = None
         _status.auto_attempted_at = None   # a new AUTH_REQUIRED episode may try refresh_now again
+
+
+def record_registered() -> None:
+    """Token paste (PUT /credentials): earlier re-login errors no longer apply."""
+    with _status.lock:
+        _status.last_error_code = None
+        _status.last_error_at = None
+        _status.auto_attempted_at = None
 
 
 def record_failure(code: str) -> None:

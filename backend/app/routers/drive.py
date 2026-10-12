@@ -496,8 +496,9 @@ def _register(request: Request, raw: bytes, confirm: bool = False) -> DriveCrede
                           detail={"account_hint": bundle.account_hint, "result": error.code})
         raise _auth_fail(error) from None
     actor = request.state.principal.user_id
-    store.write(bundle, updated_by=actor, connected_account=bundle.account_hint)
+    store.write(bundle, updated_by=actor, remember_account=True)
     drive_gateway.reset_gateway()   # the worker must drop the previous account's in-memory tokens
+    drive_auth.record_registered()
     _after_reauth()   # 05 §5.2: a queue paused by AUTH_REQUIRED continues
     obtained = bundle.obtained_at.isoformat(timespec="microseconds")
     write_audit_event(request=request, principal=request.state.principal, status_code=200,
@@ -775,6 +776,8 @@ LOGIN_SCHEMA = {
     },
 }
 LOOPBACK_HOSTS = {"127.0.0.1", "::1"}
+# Failures raised before the worker reached the HPC SSO: they do not use up a login attempt.
+NOT_AN_SSO_ATTEMPT = frozenset({"DRIVE_ADAPTER_UPDATE_REQUIRED", "DRIVE_MODE_DISABLED", "DRIVE_UNAVAILABLE"})
 PROXY_HEADERS = ("x-forwarded-for", "x-forwarded-proto", "x-forwarded-host", "forwarded")
 
 
@@ -847,7 +850,7 @@ def _apply_relogin(request: Request, result: drive_auth.AuthResult, *, confirm: 
             gateway_store.detach()
         drive_gateway.reset_gateway()
         raise
-    generation = store.write(bundle, updated_by=request.state.principal.user_id, connected_account=bundle.account_hint)
+    generation = store.write(bundle, updated_by=request.state.principal.user_id, remember_account=True)
     if gateway_store is not None and drive_gateway.gateway_token_store() is gateway_store:
         gateway_store.adopt_generation(generation)   # the worker already uses these tokens: no reset
     drive_auth.record_success(result)
@@ -875,6 +878,10 @@ def _reconnect(request: Request, confirm: bool) -> DriveReloginResult:
     if not store.metadata().get("present"):
         _relogin_audit(request, "DRIVE_RECONNECT_FAILED", 409, result="DRIVE_CREDENTIALS_MISSING", received=None)
         raise _fail(409, "DRIVE_CREDENTIALS_MISSING", "저장된 토큰이 없습니다. 계정으로 로그인하거나 토큰을 붙여 넣으세요.")
+    caps, supported, _error = drive_auth.capabilities()
+    if supported and not caps.get("refresh"):
+        _relogin_audit(request, "DRIVE_RECONNECT_FAILED", 409, result="AUTH_METHOD_UNSUPPORTED", received=None)
+        raise _fail(409, "AUTH_METHOD_UNSUPPORTED", "이 어댑터는 저장된 토큰으로 다시 연결하는 기능을 지원하지 않습니다. 계정으로 로그인하세요.")
     if not drive_auth.operation_lock.acquire(blocking=False):
         raise _fail(409, "DRIVE_AUTH_BUSY", "다른 재연결이 진행 중입니다. 잠시 후 다시 시도하세요.")
     received: str | None = None
@@ -943,19 +950,23 @@ def _login(request: Request, raw: bytes) -> DriveReloginResult:
             raise drive_auth.DriveAuthError(409, "DRIVE_AUTH_BUSY", "다른 재연결이 진행 중입니다. 잠시 후 다시 시도하세요.")
         try:
             attempt = drive_auth.limiter.take(settings.login_max_attempts)
-            drive_gateway.get_drive_gateway()
-            gateway_store = drive_gateway.gateway_token_store()
             try:
+                drive_gateway.get_drive_gateway()
+                gateway_store = drive_gateway.gateway_token_store()
                 result = drive_auth.login_password(username, password)
             except drive_auth.DriveAuthError as error:
-                if error.code == "DRIVE_ADAPTER_UPDATE_REQUIRED":
-                    drive_auth.limiter.refund(attempt)
+                if error.code in NOT_AN_SSO_ATTEMPT:
+                    drive_auth.limiter.refund(attempt)   # the SSO never saw this attempt
+                raise
+            except drive_gateway.DriveStartupError:
+                drive_auth.limiter.refund(attempt)
                 raise
             finally:
                 del password   # the only reference left; nothing else ever held it
+            # The SSO accepted ID and password: no lockout risk any more, whatever happens next.
+            drive_auth.limiter.clear()
             received = result.bundle.account_hint
             outcome = _apply_relogin(request, result, confirm=confirm, gateway_store=gateway_store)
-            drive_auth.limiter.clear()
         finally:
             drive_auth.operation_lock.release()
     except drive_auth.DriveAuthError as error:
